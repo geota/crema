@@ -1,0 +1,23 @@
+# Crema — `de1-core` Rust workspace.
+#
+# Sans-IO core: protocol codecs, domain model, shot state machine. No Bluetooth,
+# no UI, no file I/O. See ../docs/ for the design.
+[workspace]
+resolver = "3"
+members = ["de1-protocol"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.85"
+license = "GPL-3.0-or-later"
+authors = ["Adrian Maceiras"]
+
+# Lints applied to every member crate; each opts in with `[lints] workspace = true`.
+# Lint *groups* take priority -1 so specific lints (priority 0) can override them.
+[workspace.lints.rust]
+unsafe_code = "forbid"
+future_incompatible = { level = "warn", priority = -1 }
+nonstandard_style = { level = "deny", priority = -1 }
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }

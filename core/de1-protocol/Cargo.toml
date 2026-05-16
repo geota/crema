@@ -1,0 +1,15 @@
+[package]
+name = "de1-protocol"
+version = "0.1.0"
+description = "DE1 espresso machine Bluetooth LE protocol codecs and packet types"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+# Derive macro for the crate error type (chapter 4 of the best-practices guide).
+thiserror = "2"
+
+[lints]
+workspace = true
