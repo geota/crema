@@ -3,6 +3,14 @@
 version = 4
 
 [[package]]
+name = "de1-domain"
+version = "0.1.0"
+dependencies = [
+ "de1-protocol",
+ "thiserror",
+]
+
+[[package]]
 name = "de1-protocol"
 version = "0.1.0"
 dependencies = [

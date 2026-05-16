@@ -1,14 +1,14 @@
 [package]
-name = "de1-protocol"
+name = "de1-domain"
 version = "0.1.0"
-description = "DE1 espresso machine Bluetooth LE protocol codecs and packet types"
+description = "DE1 espresso domain model — profiles, shot logic"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 
 [dependencies]
-# Derive macro for the crate error type.
+de1-protocol = { path = "../de1-protocol" }
 thiserror.workspace = true
 
 [lints]
