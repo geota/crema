@@ -1,0 +1,376 @@
+//! The espresso [`Profile`] model and its assembly into protocol packets.
+
+use de1_protocol::{
+    ExtensionFrame, FrameFlags, SHOT_FRAME_LEN, SHOT_HEADER_LEN, ShotFrame, ShotHeader, ShotTail,
+};
+
+use crate::error::DomainError;
+
+/// The most steps a profile may have — the DE1's frame-index limit.
+const MAX_STEPS: usize = 32;
+
+/// Which quantity a step holds at its target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pump {
+    /// Pressure priority — the step targets a pressure in bar.
+    Pressure,
+    /// Flow priority — the step targets a flow rate in mL/s.
+    Flow,
+}
+
+/// How a step moves to its target value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Transition {
+    /// Jump straight to the target.
+    Fast,
+    /// Ramp smoothly to the target.
+    Smooth,
+}
+
+/// Which temperature a step regulates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TempSensor {
+    /// The basket (group head) temperature.
+    Basket,
+    /// The mix temperature (disables showerhead compensation).
+    Mix,
+}
+
+/// The metric an exit condition watches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExitMetric {
+    /// Watch pressure (bar).
+    Pressure,
+    /// Watch flow (mL/s).
+    Flow,
+}
+
+/// The direction of an exit comparison.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Compare {
+    /// Exit when the metric rises above the threshold.
+    Over,
+    /// Exit when the metric falls below the threshold.
+    Under,
+}
+
+/// An early-exit condition: leave the step before its duration elapses.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ExitCondition {
+    /// Which metric to watch.
+    pub metric: ExitMetric,
+    /// Whether to exit above or below the threshold.
+    pub compare: Compare,
+    /// The threshold value (bar or mL/s, per `metric`).
+    pub threshold: f32,
+}
+
+/// An advanced limiter capping the step's non-priority quantity.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Limiter {
+    /// The limit — flow if the step is pressure-priority, or vice versa.
+    pub value: f32,
+    /// Tolerance band around the limit.
+    pub range: f32,
+}
+
+/// One step of an espresso [`Profile`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProfileStep {
+    /// Human-readable step name (e.g. "preinfusion").
+    pub name: String,
+    /// Whether the step holds pressure or flow.
+    pub pump: Pump,
+    /// Target value — bar (pressure) or mL/s (flow), per `pump`.
+    pub target: f32,
+    /// Target temperature, °C.
+    pub temperature_c: f32,
+    /// Which temperature sensor the step regulates.
+    pub temp_sensor: TempSensor,
+    /// How the step transitions to its target.
+    pub transition: Transition,
+    /// Maximum step duration, seconds.
+    pub duration_seconds: f32,
+    /// Optional early-exit condition.
+    pub exit: Option<ExitCondition>,
+    /// Per-step dispensed-volume limit, mL, range 0–1023 (0 = no limit).
+    pub volume_limit_ml: u16,
+    /// Optional advanced max-flow-or-pressure limiter.
+    pub limiter: Option<Limiter>,
+}
+
+impl ProfileStep {
+    /// Map this step to a protocol [`ShotFrame`] at the given frame index.
+    fn to_shot_frame(&self, index: u8) -> ShotFrame {
+        ShotFrame {
+            index,
+            flags: FrameFlags {
+                flow_priority: matches!(self.pump, Pump::Flow),
+                do_compare: self.exit.is_some(),
+                compare_greater: matches!(
+                    self.exit,
+                    Some(ExitCondition {
+                        compare: Compare::Over,
+                        ..
+                    })
+                ),
+                compare_flow: matches!(
+                    self.exit,
+                    Some(ExitCondition {
+                        metric: ExitMetric::Flow,
+                        ..
+                    })
+                ),
+                target_mix_temp: matches!(self.temp_sensor, TempSensor::Mix),
+                interpolate: matches!(self.transition, Transition::Smooth),
+                // The legacy app always sets IgnoreLimit: the header limits are
+                // advisory, and the per-step limiter is the real control.
+                ignore_limit: true,
+            },
+            set_value: self.target,
+            temperature: self.temperature_c,
+            duration_seconds: self.duration_seconds,
+            trigger_value: self.exit.map_or(0.0, |exit| exit.threshold),
+            max_volume_ml: self.volume_limit_ml,
+        }
+    }
+}
+
+/// An espresso profile — an ordered recipe of [`ProfileStep`]s plus the
+/// machine-level parameters needed to run it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Profile {
+    /// Profile title.
+    pub title: String,
+    /// Free-text notes.
+    pub notes: String,
+    /// The ordered steps. Must number 1–32 to [`assemble`](Profile::assemble).
+    pub steps: Vec<ProfileStep>,
+    /// How many leading steps count as preinfusion.
+    pub preinfuse_step_count: u8,
+    /// Minimum pressure for flow-priority steps, bar.
+    pub minimum_pressure: f32,
+    /// Maximum flow for pressure-priority steps, mL/s.
+    pub maximum_flow: f32,
+    /// Whole-shot dispensed-volume limit, mL, range 0–1023 (0 = no limit).
+    pub max_total_volume_ml: u16,
+}
+
+impl Profile {
+    /// Assemble this profile into the protocol packets the DE1 expects.
+    ///
+    /// # Errors
+    ///
+    /// - [`DomainError::NoSteps`] if the profile has no steps.
+    /// - [`DomainError::TooManySteps`] if it has more than 32.
+    pub fn assemble(&self) -> Result<AssembledProfile, DomainError> {
+        let count = self.steps.len();
+        if count == 0 {
+            return Err(DomainError::NoSteps);
+        }
+        if count > MAX_STEPS {
+            return Err(DomainError::TooManySteps { count });
+        }
+        // `count` is 1..=32, so this `as` conversion cannot truncate.
+        let frame_count = count as u8;
+
+        let header = ShotHeader {
+            frame_count,
+            preinfuse_frame_count: self.preinfuse_step_count,
+            minimum_pressure: self.minimum_pressure,
+            maximum_flow: self.maximum_flow,
+        };
+
+        let mut frames = Vec::with_capacity(count);
+        let mut extension_frames = Vec::new();
+        // `0u8..` zipped with at most 32 steps never overflows the index.
+        for (index, step) in (0u8..).zip(&self.steps) {
+            frames.push(step.to_shot_frame(index));
+            if let Some(limiter) = step.limiter {
+                extension_frames.push(ExtensionFrame {
+                    index,
+                    max_flow_or_pressure: limiter.value,
+                    max_fop_range: limiter.range,
+                });
+            }
+        }
+
+        Ok(AssembledProfile {
+            header,
+            frames,
+            extension_frames,
+            tail: ShotTail {
+                frame_count,
+                max_total_volume_ml: self.max_total_volume_ml,
+            },
+        })
+    }
+}
+
+/// A [`Profile`] assembled into protocol packets, ready to upload.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AssembledProfile {
+    /// The profile header.
+    pub header: ShotHeader,
+    /// The normal frames, one per step, in order.
+    pub frames: Vec<ShotFrame>,
+    /// Extension frames, one per step that has a limiter.
+    pub extension_frames: Vec<ExtensionFrame>,
+    /// The closing tail frame.
+    pub tail: ShotTail,
+}
+
+impl AssembledProfile {
+    /// The encoded `HeaderWrite` packet.
+    pub fn header_packet(&self) -> [u8; SHOT_HEADER_LEN] {
+        self.header.encode()
+    }
+
+    /// The encoded `FrameWrite` packets in upload order: normal frames, then
+    /// extension frames, then the tail (protocol §5.6).
+    pub fn frame_packets(&self) -> Vec<[u8; SHOT_FRAME_LEN]> {
+        let mut packets = Vec::with_capacity(self.frames.len() + self.extension_frames.len() + 1);
+        packets.extend(self.frames.iter().map(ShotFrame::encode));
+        packets.extend(self.extension_frames.iter().map(ExtensionFrame::encode));
+        packets.push(self.tail.encode());
+        packets
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A minimal pressure step, for tests to tweak.
+    fn step(name: &str, pump: Pump) -> ProfileStep {
+        ProfileStep {
+            name: name.to_string(),
+            pump,
+            target: 9.0,
+            temperature_c: 92.0,
+            temp_sensor: TempSensor::Basket,
+            transition: Transition::Fast,
+            duration_seconds: 20.0,
+            exit: None,
+            volume_limit_ml: 0,
+            limiter: None,
+        }
+    }
+
+    /// A profile wrapping the given steps.
+    fn profile(steps: Vec<ProfileStep>) -> Profile {
+        Profile {
+            title: "Test".to_string(),
+            notes: String::new(),
+            steps,
+            preinfuse_step_count: 1,
+            minimum_pressure: 1.0,
+            maximum_flow: 6.0,
+            max_total_volume_ml: 0,
+        }
+    }
+
+    #[test]
+    fn assembles_header_and_tail_with_the_step_count() {
+        let assembled = profile(vec![step("a", Pump::Pressure), step("b", Pump::Pressure)])
+            .assemble()
+            .unwrap();
+        assert_eq!(assembled.header.frame_count, 2);
+        assert_eq!(assembled.tail.frame_count, 2);
+        assert_eq!(assembled.frames.len(), 2);
+    }
+
+    #[test]
+    fn a_flow_step_sets_flow_priority() {
+        let assembled = profile(vec![step("flow", Pump::Flow)]).assemble().unwrap();
+        assert!(assembled.frames[0].flags.flow_priority);
+        assert_eq!(assembled.frames[0].set_value, 9.0);
+    }
+
+    #[test]
+    fn a_pressure_step_does_not_set_flow_priority() {
+        let assembled = profile(vec![step("pressure", Pump::Pressure)])
+            .assemble()
+            .unwrap();
+        assert!(!assembled.frames[0].flags.flow_priority);
+    }
+
+    #[test]
+    fn an_exit_condition_maps_to_compare_flags_and_trigger() {
+        let mut s = step("pour", Pump::Pressure);
+        s.exit = Some(ExitCondition {
+            metric: ExitMetric::Flow,
+            compare: Compare::Over,
+            threshold: 2.5,
+        });
+        let frame = profile(vec![s]).assemble().unwrap().frames.remove(0);
+        assert!(frame.flags.do_compare);
+        assert!(frame.flags.compare_greater);
+        assert!(frame.flags.compare_flow);
+        assert_eq!(frame.trigger_value, 2.5);
+    }
+
+    #[test]
+    fn a_step_without_an_exit_has_no_compare_flag() {
+        let frame = profile(vec![step("a", Pump::Pressure)])
+            .assemble()
+            .unwrap()
+            .frames
+            .remove(0);
+        assert!(!frame.flags.do_compare);
+        assert_eq!(frame.trigger_value, 0.0);
+    }
+
+    #[test]
+    fn the_mix_sensor_sets_target_mix_temp() {
+        let mut s = step("a", Pump::Pressure);
+        s.temp_sensor = TempSensor::Mix;
+        assert!(
+            profile(vec![s]).assemble().unwrap().frames[0]
+                .flags
+                .target_mix_temp
+        );
+    }
+
+    #[test]
+    fn a_limiter_produces_an_extension_frame() {
+        let mut s = step("limited", Pump::Pressure);
+        s.limiter = Some(Limiter {
+            value: 8.0,
+            range: 0.5,
+        });
+        let assembled = profile(vec![s]).assemble().unwrap();
+        assert_eq!(assembled.extension_frames.len(), 1);
+        assert_eq!(assembled.extension_frames[0].index, 0);
+        assert_eq!(assembled.extension_frames[0].max_flow_or_pressure, 8.0);
+    }
+
+    #[test]
+    fn frame_packets_are_ordered_frames_then_extensions_then_tail() {
+        let mut s = step("a", Pump::Pressure);
+        s.limiter = Some(Limiter {
+            value: 8.0,
+            range: 0.5,
+        });
+        let assembled = profile(vec![s, step("b", Pump::Pressure)])
+            .assemble()
+            .unwrap();
+        // 2 normal frames + 1 extension frame + 1 tail
+        assert_eq!(assembled.frame_packets().len(), 4);
+        assert_eq!(assembled.header_packet().len(), SHOT_HEADER_LEN);
+    }
+
+    #[test]
+    fn an_empty_profile_is_rejected() {
+        assert_eq!(profile(vec![]).assemble(), Err(DomainError::NoSteps));
+    }
+
+    #[test]
+    fn a_profile_with_too_many_steps_is_rejected() {
+        let steps = (0..33).map(|_| step("x", Pump::Pressure)).collect();
+        assert_eq!(
+            profile(steps).assemble(),
+            Err(DomainError::TooManySteps { count: 33 })
+        );
+    }
+}

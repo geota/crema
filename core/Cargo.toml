@@ -4,7 +4,7 @@
 # no UI, no file I/O. See ../docs/ for the design.
 [workspace]
 resolver = "3"
-members = ["de1-protocol", "de1-scale"]
+members = ["de1-protocol", "de1-scale", "de1-domain"]
 
 [workspace.package]
 edition = "2024"
@@ -21,3 +21,7 @@ nonstandard_style = { level = "deny", priority = -1 }
 
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
+
+# Dependencies shared across member crates.
+[workspace.dependencies]
+thiserror = "2"
