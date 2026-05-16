@@ -24,6 +24,7 @@ Espresso DE1 tablet app. Architecture is **locked**; this folder is the design r
 | 03 | [pyDE1 & reference-impl evaluation](03-pyde1-evaluation.md) | Done — 3 web items unverified |
 | 04 | [MVP scope](04-mvp-scope.md) | Draft 2 |
 | 05 | [Extension / plugin architecture](05-plugin-architecture.md) | Shelved — no plugin architecture |
+| 06 | [Coffee scale BLE protocol reference](06-scale-protocols.md) | Done — implemented in `core/de1-scale` |
 
 ## Next: Phase 0 spikes
 

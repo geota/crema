@@ -1,0 +1,13 @@
+[package]
+name = "de1-scale"
+version = "0.1.0"
+description = "Bluetooth LE codecs for the coffee scales supported by Crema"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true
