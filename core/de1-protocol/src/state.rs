@@ -5,6 +5,7 @@ use crate::error::ProtocolError;
 /// DE1 top-level machine state. Discriminants match the firmware `MachineState`
 /// enum (see protocol §4.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(u8)]
 pub enum MachineState {
     Sleep = 0,
@@ -89,6 +90,7 @@ impl TryFrom<u8> for MachineState {
 /// DE1 substate. Discriminants match the firmware enum (see protocol §4.2):
 /// `0..=20` are operational substates, `200..=217` are error codes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(u8)]
 pub enum SubState {
     Ready = 0,
@@ -219,6 +221,7 @@ pub const STATE_INFO_LEN: usize = 2;
 /// The DE1 state notification (`cuuid_0E` / `A00E`): a top-level state plus a
 /// substate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct StateInfo {
     /// Top-level machine state.
     pub state: MachineState,
