@@ -8,12 +8,25 @@
 //! **Decoding is total** — every raw value maps to some `f32`.
 //!
 //! **Encoding clamps** its input to the format's representable range and
-//! saturates, so the returned raw value always fits its integer type. The
-//! legacy Tcl instead clamps the *input* to a round bound (e.g. 16.0 for U8P4),
-//! which rounds one past the byte maximum and silently wraps; for every value
-//! that occurs in practice (pressures/flows/temperatures well within range) the
-//! two agree exactly. Encoders are needed by the write paths (RequestedState,
-//! profile upload) and are included here to keep this primitive layer complete.
+//! saturates, so the returned raw value always fits its integer type.
+//!
+//! ## Deliberate, audited deviation from the legacy Tcl
+//!
+//! The legacy encoders clamp the *input* to a round bound — `16` (`U8P4`),
+//! `128` (`U8P1`), `256` (`U8P0` and `U16P8`), `65536` (`S32P16`) — each of
+//! which, once scaled, lands one step past the target integer's maximum and
+//! silently wraps to `0`. Crema instead clamps to the true representable
+//! maximum ([`U8P4_MAX`] = `255/16`, [`U8P1_MAX`] = `255/2`, [`U8P0_MAX`],
+//! [`U16P8_MAX`] = `65535/256`, [`S32P16_MAX`]/[`S32P16_MIN`]) and saturates.
+//!
+//! For every value that occurs in practice — pressures, flows and temperatures
+//! well within range — the two produce **identical bytes**; they differ only
+//! for out-of-range inputs the firmware never receives, where Crema saturates
+//! rather than wrapping. (`F8_1_7` is unaffected: its `127` clamp matches the
+//! legacy.) Verified against `binary.tcl` in the 2026-05-17 scalar audit.
+//!
+//! Encoders are needed by the write paths (RequestedState, profile upload) and
+//! are included here to keep this primitive layer complete.
 
 /// Largest value [`u8p4_encode`] can represent (`255 / 16`).
 pub const U8P4_MAX: f32 = 255.0 / 16.0;
