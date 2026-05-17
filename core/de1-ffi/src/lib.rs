@@ -132,9 +132,15 @@ impl CremaBridge {
         self.core().connect_scale(&advertised_name)
     }
 
-    /// Arm automatic shot-stop at a weight (grams) and/or volume (mL) target.
-    pub fn arm_auto_stop(&self, weight_g: Option<f32>, volume_ml: Option<f32>) {
-        self.core().arm_auto_stop(weight_g, volume_ml);
+    /// Arm automatic shot-stop at a weight (grams), volume (mL), and/or
+    /// max-shot-time (seconds) target.
+    pub fn arm_auto_stop(
+        &self,
+        weight_g: Option<f32>,
+        volume_ml: Option<f32>,
+        max_time: Option<f32>,
+    ) {
+        self.core().arm_auto_stop(weight_g, volume_ml, max_time);
     }
 
     /// Disarm automatic shot-stop.

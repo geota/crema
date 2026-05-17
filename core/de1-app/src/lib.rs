@@ -87,10 +87,19 @@ impl CremaCore {
 
     /// Arm automatic shot-stop. A `None` target disables that mode; the
     /// [`AutoStop`] is constructed when the next shot starts flowing.
-    pub fn arm_auto_stop(&mut self, weight_g: Option<f32>, volume_ml: Option<f32>) {
+    ///
+    /// `max_time` is a shot-duration limit in seconds (legacy
+    /// `espresso_max_time`); it stops the shot regardless of weight or volume.
+    pub fn arm_auto_stop(
+        &mut self,
+        weight_g: Option<f32>,
+        volume_ml: Option<f32>,
+        max_time: Option<f32>,
+    ) {
         self.auto_stop_targets = Some(StopTargets {
             weight_g,
             volume_ml,
+            max_time,
         });
     }
 
@@ -477,7 +486,7 @@ mod tests {
     fn an_armed_weight_target_triggers_a_stop_and_command() {
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC");
-        core.arm_auto_stop(Some(30.0), None);
+        core.arm_auto_stop(Some(30.0), None, None);
         // Start a shot already in a flowing phase: arms the AutoStop at t = 0.
         core.on_notification(Source::De1State, &[4, 5], 0);
         // A 35 g reading well past the 5 s arming delay crosses the 30 g target.
@@ -492,6 +501,19 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn an_armed_max_time_target_stops_the_shot() {
+        let mut core = CremaCore::new();
+        core.arm_auto_stop(None, None, Some(30.0));
+        // Start a shot in a flowing phase: arms the AutoStop at t = 0.
+        core.on_notification(Source::De1State, &[4, 5], 0);
+        // A telemetry sample past the 30 s limit trips the time-based stop.
+        let out = core.on_notification(Source::De1ShotSample, &SAMPLE, 31_000);
+        assert!(out.events.contains(&Event::StopTriggered {
+            reason: StopReason::MaxTime,
+        }));
     }
 
     #[test]

@@ -160,6 +160,8 @@ export enum StopReason {
 	Weight = "Weight",
 	/** The volume target (SAV) was reached. */
 	Volume = "Volume",
+	/** The maximum shot time was reached (legacy `espresso_max_time`). */
+	MaxTime = "MaxTime",
 }
 
 /**
