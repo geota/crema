@@ -3,9 +3,7 @@ name = "de1-ffi"
 version = "0.1.0"
 description = "Crema UniFFI bridge — exposes the de1-app core to the Android (Kotlin) shell"
 edition.workspace = true
-# Higher than the workspace's 1.85: uniffi's dependency tree (wit-bindgen)
-# requires Rust 1.87.
-rust-version = "1.87"
+rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 
