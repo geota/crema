@@ -125,12 +125,19 @@ impl CremaCore {
     /// connected or the scale does not support tare.
     pub fn tare_scale(&mut self) -> CoreOutput {
         let mut out = CoreOutput::default();
+        self.push_tare_command(&mut out);
+        out
+    }
+
+    /// Append a tare-scale [`Command`] to `out`, if a scale is connected and
+    /// supports tare. Shared by [`tare_scale`](Self::tare_scale) and the
+    /// automatic tare at shot start.
+    fn push_tare_command(&mut self, out: &mut CoreOutput) {
         if let Some(scale) = &mut self.scale
             && let Some(data) = scale.tare()
         {
             out.commands.push(Command::WriteScale { data });
         }
-        out
     }
 
     /// Feed a raw GATT notification: `data` is the characteristic's bytes and
@@ -252,6 +259,9 @@ impl CremaCore {
             ShotEvent::Started => {
                 self.shot_started_ms = Some(now_ms);
                 self.flow.reset();
+                // Auto-tare the connected scale so the cup starts from zero,
+                // mirroring the legacy app's tare-at-shot-start behaviour.
+                self.push_tare_command(out);
                 out.events.push(Event::ShotStarted);
             }
             ShotEvent::PhaseChanged(phase) => {
@@ -514,6 +524,32 @@ mod tests {
         assert!(out.events.contains(&Event::StopTriggered {
             reason: StopReason::MaxTime,
         }));
+    }
+
+    #[test]
+    fn a_shot_start_auto_tares_a_connected_scale() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC");
+        let out = core.on_notification(Source::De1State, &[4, 5], 1_000);
+        assert!(out.events.contains(&Event::ShotStarted));
+        // The shot start emits a tare-scale command for the connected scale.
+        assert!(
+            out.commands
+                .iter()
+                .any(|c| matches!(c, Command::WriteScale { .. }))
+        );
+    }
+
+    #[test]
+    fn a_shot_start_without_a_scale_emits_no_tare() {
+        let mut core = CremaCore::new();
+        let out = core.on_notification(Source::De1State, &[4, 5], 1_000);
+        assert!(out.events.contains(&Event::ShotStarted));
+        assert!(
+            !out.commands
+                .iter()
+                .any(|c| matches!(c, Command::WriteScale { .. }))
+        );
     }
 
     #[test]
