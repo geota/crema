@@ -204,6 +204,41 @@ mod tests {
     }
 
     #[test]
+    fn write_encodes_to_the_exact_wire_bytes() {
+        // A temperature-write: DE1 reported 92.5, true value 93.0.
+        let packet = Calibration::write(CalTarget::Temperature, 92.5, 93.0).encode();
+        assert_eq!(
+            packet,
+            [
+                // WriteKey magic 0xCAFEF00D, big-endian.
+                0xCA, 0xFE, 0xF0, 0x0D, //
+                0x01, // command = Write
+                0x02, // target = Temperature
+                // de1_reported 92.5 as S32P16: 92.5 * 65536 = 0x005C8000.
+                0x00, 0x5C, 0x80, 0x00, //
+                // measured 93.0 as S32P16: 93.0 * 65536 = 0x005D0000.
+                0x00, 0x5D, 0x00, 0x00,
+            ]
+        );
+    }
+
+    #[test]
+    fn read_request_encodes_to_the_exact_wire_bytes() {
+        // A read request carries the read magic and zeroed value fields.
+        let packet = Calibration::read_request(CalTarget::Flow).encode();
+        assert_eq!(
+            packet,
+            [
+                0x00, 0x00, 0x00, 0x01, // WriteKey magic = 1 (read)
+                0x00, // command = ReadCurrent
+                0x00, // target = Flow
+                0x00, 0x00, 0x00, 0x00, // de1_reported = 0.0
+                0x00, 0x00, 0x00, 0x00, // measured = 0.0
+            ]
+        );
+    }
+
+    #[test]
     fn calibration_round_trips() {
         let cal = Calibration::write(CalTarget::Temperature, 92.5, 93.0);
         assert_eq!(Calibration::decode(&cal.encode()), Ok(cal));
