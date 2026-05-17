@@ -62,8 +62,16 @@ data class EventTelemetryInner (
 data class EventScaleReadingInner (
 	/// Robust current weight, grams.
 	val weight_g: Float,
-	/// Robust mass-flow rate, grams per second.
-	val flow_g_per_s: Float
+	/// Robust mass-flow rate, grams per second — the core's own estimate
+	/// from the weight series, available for every supported scale.
+	val flow_g_per_s: Float,
+	/// The scale's own native mass-flow rate, grams per second, when the
+	/// scale reports one (the Bookoo does); `None` otherwise. Distinct
+	/// from the core-computed `flow_g_per_s` — surfaced as raw data.
+	val device_flow_g_per_s: Float? = null,
+	/// The scale's own built-in-timer reading, milliseconds, when the
+	/// scale reports one (the Bookoo does); `None` otherwise.
+	val device_timer_ms: UInt? = null
 )
 
 /// Generated type representing the anonymous struct variant `WaterLevel` of the `Event` Rust enum

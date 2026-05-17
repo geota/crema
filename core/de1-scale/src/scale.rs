@@ -24,6 +24,25 @@ pub struct ScaleUuids {
     pub command_write: &'static str,
 }
 
+/// One decoded scale notification.
+///
+/// Every scale reports a `weight_g`. A few scales report more in the same
+/// notification: the Bookoo carries a native mass-flow rate and its own
+/// built-in timer. Those extra fields are `Option` — `None` for the scales
+/// that do not report them.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScaleReading {
+    /// Weight, grams.
+    pub weight_g: f32,
+    /// Scale-reported mass-flow rate, grams per second — `None` for scales
+    /// that do not report a native flow rate. This is the device's own value,
+    /// distinct from any flow the core estimates from the weight series.
+    pub flow_g_per_s: Option<f32>,
+    /// Scale-reported built-in-timer reading, milliseconds — `None` for scales
+    /// that do not report a timer in their weight notification.
+    pub timer_ms: Option<u32>,
+}
+
 /// A timer command a scale may support.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TimerCommand {
@@ -287,6 +306,33 @@ impl Scale {
         }
     }
 
+    /// Decode a scale notification into a [`ScaleReading`].
+    ///
+    /// Like [`parse_weight`](Self::parse_weight) but also carries any extra
+    /// fields the scale reports in the same notification — the Bookoo's native
+    /// flow rate and built-in timer. For every other scale `flow_g_per_s` and
+    /// `timer_ms` are `None`. Returns `None` if the bytes are not (yet) a
+    /// complete reading.
+    pub fn parse_reading(&mut self, data: &[u8]) -> Option<ScaleReading> {
+        if let Inner::Bookoo = &self.inner {
+            // The Bookoo's 20-byte notification carries weight, native flow
+            // and the built-in timer in one packet.
+            if let Some(packet) = bookoo::parse_packet(data) {
+                return Some(ScaleReading {
+                    weight_g: packet.weight_g,
+                    flow_g_per_s: Some(packet.flow_g_per_s),
+                    timer_ms: Some(packet.timer_ms),
+                });
+            }
+            // Fall through to the weight-only path for any non-20-byte frame.
+        }
+        self.parse_weight(data).map(|weight_g| ScaleReading {
+            weight_g,
+            flow_g_per_s: None,
+            timer_ms: None,
+        })
+    }
+
     /// Build a tare command to write to the [command characteristic](ScaleUuids).
     /// Returns `None` if the scale has no software tare (see
     /// [`supports_tare`](Self::supports_tare)).
@@ -400,6 +446,37 @@ mod tests {
         let mut bookoo = Scale::from_label("Bookoo").unwrap();
         let packet = [0, 0, 0, 0, 0, 0, b'+', 0x00, 0x07, 0xD0];
         assert_eq!(bookoo.parse_weight(&packet), Some(20.0));
+    }
+
+    #[test]
+    fn parse_reading_carries_bookoo_native_flow_and_timer() {
+        let mut bookoo = Scale::from_label("Bookoo").unwrap();
+        // A real 20-byte capture: weight 492.60 g, flow raw 0x312F, timer 0.
+        let packet: Vec<u8> = (0.."030b000000012b00c06c2b312f64009601000048".len())
+            .step_by(2)
+            .map(|i| {
+                u8::from_str_radix(
+                    &"030b000000012b00c06c2b312f64009601000048"[i..i + 2],
+                    16,
+                )
+                .unwrap()
+            })
+            .collect();
+        let reading = bookoo.parse_reading(&packet).expect("20-byte packet");
+        assert!((reading.weight_g - 492.60).abs() < 0.001);
+        assert_eq!(reading.flow_g_per_s, Some(125.91));
+        assert_eq!(reading.timer_ms, Some(0));
+    }
+
+    #[test]
+    fn parse_reading_leaves_flow_and_timer_none_for_a_weight_only_scale() {
+        let mut decent = Scale::from_label("Decent Scale").unwrap();
+        // Decent weight frame: type byte 0xCE, weight 0x07D0 = 2000 -> 200.0 g.
+        let frame = [0x03, 0xCE, 0x07, 0xD0, 0x00, 0x00, 0x00];
+        let reading = decent.parse_reading(&frame).expect("a weight packet");
+        assert_eq!(reading.weight_g, 200.0);
+        assert_eq!(reading.flow_g_per_s, None);
+        assert_eq!(reading.timer_ms, None);
     }
 
     #[test]

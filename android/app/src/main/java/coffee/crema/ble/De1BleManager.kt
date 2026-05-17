@@ -1,49 +1,61 @@
 package coffee.crema.ble
 
-import android.annotation.SuppressLint
-import android.bluetooth.BluetoothDevice
-import android.bluetooth.BluetoothGatt
-import android.bluetooth.BluetoothGattCallback
-import android.bluetooth.BluetoothGattCharacteristic
-import android.bluetooth.BluetoothGattDescriptor
-import android.bluetooth.BluetoothProfile
-import android.content.Context
-import android.os.Build
 import android.util.Log
 import coffee.crema.core.CremaBridge
 import coffee.crema.core.NotificationSource
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import java.util.ArrayDeque
+import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.merge
+import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.launch
 
 /**
- * Minimal `BluetoothGatt`-based BLE manager for the Crema Android app.
+ * BLE manager for a DE1 espresso machine, on top of [BleTransport].
  *
  * Responsibilities — and nothing more:
- *  1. Connect to a DE1 [BluetoothDevice], discover services.
- *  2. Subscribe to the StateInfo and ShotSample notify characteristics.
+ *  1. Connect to a DE1 via [BleTransport], which discovers services.
+ *  2. Observe the StateInfo and ShotSample notify characteristics.
  *  3. On every notification, hand the raw bytes to [CremaBridge.onNotification]
  *     and forward the returned JSON `CoreOutput` string to [onCoreOutput].
  *
  * Device discovery is not this manager's job: the shared [BleScanner] runs the
- * one app-wide scan and hands a matched DE1 to [connect]. The "is this a DE1"
- * name rule still belongs with the device — see [isDe1Name].
+ * one app-wide scan and hands a matched DE1 [BleTransport.DeviceHandle] to
+ * [connect]. The "is this a DE1" name rule still belongs with the device — see
+ * [isDe1Name].
  *
- * This began as Phase-0 proof-of-concept code: it serialises GATT operations
- * through a tiny hand-rolled queue (Android's GATT stack only tolerates one
- * outstanding descriptor/characteristic operation at a time) and does no
- * reconnection, bonding, or MTU negotiation yet. Hardening the BLE layer into a
- * proper, tested component is the next step.
+ * The hand-rolled `BluetoothGatt` callback ladder and one-outstanding-op
+ * subscribe queue this class used to carry are gone: [BleTransport]
+ * (Nordic-backed) serialises GATT operations and enables CCCDs itself.
  *
- * Threading: all callbacks arrive on a binder thread; the bridge call and the
- * [onCoreOutput] dispatch happen there. [CremaBridge] is internally `Mutex`-
- * guarded, so concurrent calls are safe; UI consumers must hop to the main
- * thread themselves.
+ * ## Lossless, ordered notifications
+ *
+ * StateInfo and ShotSample are [merge]d into ONE collected flow and consumed
+ * on one coroutine, so a DE1's notifications are processed strictly in arrival
+ * order — they are never split into independently-collected flows that could
+ * reorder. [BleTransport.observe] is lossless and non-conflating, and each
+ * [BleTransport.Notification] is arrival-stamped inside the transport, so the
+ * Rust core sees every ShotSample with a faithful timestamp.
+ *
+ * Threading: notifications are collected on [scope] (a background dispatcher);
+ * the bridge call and [onCoreOutput] dispatch happen there. [CremaBridge] is
+ * internally `Mutex`-guarded, so concurrent calls are safe; UI consumers must
+ * hop to the main thread themselves.
  */
 class De1BleManager(
-    private val context: Context,
+    private val transport: BleTransport,
     private val bridge: CremaBridge,
+    /**
+     * The session-wide BLE recorder, shared with [ScaleBleManager] and owned by
+     * [coffee.crema.ui.MainViewModel]. A connection counter inside it opens one
+     * capture file when the first device connects and closes it when the last
+     * disconnects, so a DE1-and-scale session lands in ONE interleaved file.
+     */
+    private val recorder: BleSessionRecorder,
     /** Called with each raw JSON `CoreOutput` string the core returns. */
     private val onCoreOutput: (String) -> Unit,
     /** Called with human-readable status transitions for the UI log. */
@@ -54,19 +66,22 @@ class De1BleManager(
     private val _state = MutableStateFlow(State.IDLE)
     val state: StateFlow<State> = _state.asStateFlow()
 
-    private var gatt: BluetoothGatt? = null
+    /** The manager's coroutine scope; connection + observation jobs run here. */
+    private val scope = CoroutineScope(SupervisorJob())
+
+    /** The connected DE1, or null when not connected. */
+    private var device: BleTransport.DeviceHandle? = null
+
+    /** The job collecting the merged StateInfo + ShotSample stream. */
+    private var observeJob: Job? = null
 
     /**
-     * Records the live BLE session to a file for offline replay through the
-     * Rust core. A debug aid: it never crashes the app if file IO fails.
+     * Whether this manager currently holds a slot in the shared [recorder]'s
+     * connection counter. Set when [recorder.open] is called and cleared by the
+     * matching [recorder.close], so the two stay exactly balanced no matter
+     * which path — success, connect failure, or [disconnect] — releases it.
      */
-    private val recorder = BleSessionRecorder(context)
-
-    /** Pending CCCD subscriptions; processed one at a time (see [subscribeNext]). */
-    private val subscribeQueue = ArrayDeque<BluetoothGattCharacteristic>()
-
-    /** A clock the core uses to age telemetry. SystemClock-based monotonic ms. */
-    private fun nowMs(): Long = android.os.SystemClock.elapsedRealtime()
+    private var recording = false
 
     // ---- Connect ----------------------------------------------------------
 
@@ -83,152 +98,83 @@ class De1BleManager(
 
     /**
      * Connect to a DE1 the shared [BleScanner] has matched. This is the
-     * scanner's `onFound` entry point — discovery happens upstream; this manager
-     * owns only the GATT connection from here on.
+     * scanner's `onFound` entry point — discovery happens upstream; this
+     * manager owns the connection and the notification observation from here.
      */
-    @SuppressLint("MissingPermission")
-    fun connect(device: BluetoothDevice) {
+    fun connect(device: BleTransport.DeviceHandle) {
+        this.device = device
         _state.value = State.CONNECTING
         onStatus("Connecting…")
-        gatt = device.connectGatt(
-            context,
-            /* autoConnect = */ false,
-            gattCallback,
-            BluetoothDevice.TRANSPORT_LE,
-        )
+        scope.launch {
+            try {
+                // BleTransport.connect suspends until connected AND services
+                // are discovered.
+                transport.connect(device)
+                _state.value = State.DISCOVERING
+                onStatus("Connected — discovering services…")
+
+                // Join the shared session recording; if this connection opened
+                // the capture file, surface its path once so the user can find
+                // it. A later scale connection appends to the same file.
+                recording = true
+                recorder.open()?.let { onStatus("Recording session to $it") }
+
+                _state.value = State.SUBSCRIBING
+                onStatus("Subscribing to StateInfo + ShotSample…")
+                startObserving(device)
+
+                _state.value = State.READY
+                onStatus("Ready — receiving DE1 notifications")
+            } catch (e: Exception) {
+                Log.w(TAG, "DE1 connect failed", e)
+                onStatus("Connection failed: ${e.message}")
+                _state.value = State.DISCONNECTED
+                // Leave the shared recording only if this connection had joined
+                // it (a failure during transport.connect never opened it).
+                if (recording) {
+                    recording = false
+                    recorder.close()
+                }
+            }
+        }
     }
 
-    @SuppressLint("MissingPermission")
     fun disconnect() {
-        recorder.stop()
-        gatt?.disconnect()
-        gatt?.close()
-        gatt = null
-        subscribeQueue.clear()
+        val d = device
+        // Leave the shared recording; the capture file closes only once the
+        // last device (DE1 or scale) has disconnected.
+        if (recording) {
+            recording = false
+            recorder.close()
+        }
+        observeJob?.cancel()
+        observeJob = null
+        device = null
+        if (d != null) {
+            scope.launch { transport.disconnect(d) }
+        }
         bridge.reset()
         _state.value = State.DISCONNECTED
         onStatus("Disconnected")
     }
 
-    // ---- GATT callbacks ---------------------------------------------------
+    // ---- Observation ------------------------------------------------------
 
-    private val gattCallback = object : BluetoothGattCallback() {
-
-        @SuppressLint("MissingPermission")
-        override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
-            when (newState) {
-                BluetoothProfile.STATE_CONNECTED -> {
-                    onStatus("Connected — discovering services…")
-                    _state.value = State.DISCOVERING
-                    // Begin recording the session for offline replay; surface
-                    // the capture file path once so the user can find it.
-                    recorder.start()
-                    recorder.filePath?.let { onStatus("Recording session to $it") }
-                    g.discoverServices()
-                }
-                BluetoothProfile.STATE_DISCONNECTED -> {
-                    onStatus("Connection lost (status $status)")
-                    _state.value = State.DISCONNECTED
-                    recorder.stop()
-                    g.close()
-                    if (gatt === g) gatt = null
-                }
-            }
-        }
-
-        @SuppressLint("MissingPermission")
-        override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
-            if (status != BluetoothGatt.GATT_SUCCESS) {
-                onStatus("Service discovery failed (status $status)")
-                return
-            }
-            val service = g.getService(De1Uuids.SERVICE)
-            if (service == null) {
-                onStatus("DE1 GATT service not found on device")
-                disconnect()
-                return
-            }
-            // Queue the two notify characteristics the app observes.
-            subscribeQueue.clear()
-            listOf(De1Uuids.STATE_INFO, De1Uuids.SHOT_SAMPLE).forEach { uuid ->
-                val ch = service.getCharacteristic(uuid)
-                if (ch != null) {
-                    subscribeQueue.add(ch)
-                } else {
-                    onStatus("Characteristic $uuid missing")
-                }
-            }
-            _state.value = State.SUBSCRIBING
-            onStatus("Subscribing to StateInfo + ShotSample…")
-            subscribeNext(g)
-        }
-
-        override fun onDescriptorWrite(
-            g: BluetoothGatt,
-            descriptor: BluetoothGattDescriptor,
-            status: Int,
-        ) {
-            // One CCCD write completed; advance the queue.
-            if (status != BluetoothGatt.GATT_SUCCESS) {
-                onStatus("CCCD write failed (status $status)")
-            }
-            subscribeNext(g)
-        }
-
-        // API 33+ delivers the value as a parameter.
-        override fun onCharacteristicChanged(
-            g: BluetoothGatt,
-            characteristic: BluetoothGattCharacteristic,
-            value: ByteArray,
-        ) {
-            handleNotification(characteristic.uuid, value)
-        }
-
-        // API <33 path — read the value off the characteristic. This overrides
-        // the 2-arg callback, deprecated since API 33 — intentional, it is the
-        // only callback the framework calls on API 31/32 (the Teclast).
-        // DEPRECATION covers `characteristic.value`; OVERRIDE_DEPRECATION covers
-        // overriding the deprecated callback itself.
-        @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
-        override fun onCharacteristicChanged(
-            g: BluetoothGatt,
-            characteristic: BluetoothGattCharacteristic,
-        ) {
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
-                val value = characteristic.value ?: ByteArray(0)
-                handleNotification(characteristic.uuid, value)
-            }
-        }
-    }
-
-    // ---- Subscription queue ----------------------------------------------
-
-    @SuppressLint("MissingPermission")
-    private fun subscribeNext(g: BluetoothGatt) {
-        val ch = subscribeQueue.poll()
-        if (ch == null) {
-            _state.value = State.READY
-            onStatus("Ready — receiving DE1 notifications")
-            return
-        }
-        // Enable local notification dispatch, then write the remote CCCD.
-        g.setCharacteristicNotification(ch, true)
-        val cccd = ch.getDescriptor(De1Uuids.CCCD)
-        if (cccd == null) {
-            onStatus("CCCD missing on ${ch.uuid}; skipping")
-            subscribeNext(g)
-            return
-        }
-        val enable = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            g.writeDescriptor(cccd, enable)
-        } else {
-            @Suppress("DEPRECATION")
-            run {
-                cccd.value = enable
-                g.writeDescriptor(cccd)
-            }
-        }
+    /**
+     * Observe StateInfo and ShotSample as ONE merged, ordered stream.
+     *
+     * [merge] interleaves the two characteristic flows into a single flow
+     * collected on one coroutine: a DE1's notifications are therefore consumed
+     * strictly in arrival order, never split into independently-collected
+     * flows that could reorder. Each [BleTransport.Notification] is already
+     * arrival-stamped inside the transport.
+     */
+    private fun startObserving(device: BleTransport.DeviceHandle) {
+        val stateInfo = transport.observe(device, De1Uuids.SERVICE, De1Uuids.STATE_INFO)
+        val shotSample = transport.observe(device, De1Uuids.SERVICE, De1Uuids.SHOT_SAMPLE)
+        observeJob = merge(stateInfo, shotSample)
+            .onEach { handleNotification(it) }
+            .launchIn(scope)
     }
 
     // ---- Core integration -------------------------------------------------
@@ -237,22 +183,23 @@ class De1BleManager(
      * The FFI/BLE seam: raw GATT bytes -> [CremaBridge] -> JSON `CoreOutput`
      * -> UI.
      */
-    private fun handleNotification(charUuid: java.util.UUID, data: ByteArray) {
-        val source = when (charUuid) {
+    private fun handleNotification(notification: BleTransport.Notification) {
+        val source = when (notification.characteristic) {
             De1Uuids.STATE_INFO -> NotificationSource.DE1_STATE
             De1Uuids.SHOT_SAMPLE -> NotificationSource.DE1_SHOT_SAMPLE
             De1Uuids.WATER_LEVELS -> NotificationSource.DE1_WATER_LEVELS
             else -> {
-                Log.w(TAG, "Notification from unmapped characteristic $charUuid")
+                Log.w(TAG, "Notification from unmapped characteristic ${notification.characteristic}")
                 return
             }
         }
-        // Stamp once: the same value goes to the recorder and the core, so a
-        // replayed capture decodes identically to the live session.
-        val tMs = nowMs()
-        recorder.recordInbound(source, data, tMs)
+        // The timestamp was stamped at delivery inside the transport; the same
+        // value goes to the recorder and the core, so a replayed capture
+        // decodes identically to the live session.
+        val tMs = notification.atMs
+        recorder.recordInbound(source, notification.data, tMs)
         // CremaBridge.onNotification returns the CoreOutput as a JSON string.
-        val json = bridge.onNotification(source, data, tMs.toULong())
+        val json = bridge.onNotification(source, notification.data, tMs.toULong())
         onCoreOutput(json)
     }
 

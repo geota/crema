@@ -60,7 +60,18 @@ android {
 // AGP 9 removed the `kotlinOptions {}` block from `android {}`. The Kotlin JVM
 // target now comes from the built-in Kotlin integration, which defaults
 // `kotlin.compilerOptions.jvmTarget` to `android.compileOptions.targetCompatibility`
-// (VERSION_17 above), so no explicit `kotlin {}` block is needed.
+// (VERSION_17 above).
+kotlin {
+    compilerOptions {
+        // The Nordic Kotlin-BLE-Library 2.0.0-alphaNN artifacts are compiled
+        // with a pre-release Kotlin compiler. By default the Kotlin compiler
+        // refuses pre-release-compiled classes ("was compiled by a pre-release
+        // version of Kotlin and cannot be loaded"); this flag opts in to
+        // accepting them. Tied to depending on a Nordic alpha — drop this when
+        // Nordic ships a stable release built against a released Kotlin.
+        freeCompilerArgs.add("-Xskip-prerelease-check")
+    }
+}
 
 dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2026.04.01")
@@ -87,6 +98,24 @@ dependencies {
     // The de1-app `CoreOutput` JSON is deserialized with kotlinx.serialization.
     // The generated `core/bindings/crema-core.kt` types are @Serializable.
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
+
+    // Nordic Kotlin-BLE-Library (central role) — the BLE stack behind
+    // `NordicBleTransport`. The hand-rolled `BluetoothGatt` layer was migrated
+    // onto this in the `ble-nordic-migration` work.
+    //
+    // This is a `2.0.0-alphaNN` release: the API is NOT stable. The version is
+    // pinned exactly; bump deliberately and re-verify `NordicBleTransport`
+    // against the new alpha. `client-android` already pulls `client-core-*`,
+    // `core`, `core-android`, and `environment-android` transitively, but the
+    // three modules the app uses directly are declared explicitly for clarity.
+    //   - core               : ConnectionState and other shared types
+    //   - client-android     : CentralManager.native, Peripheral, scanning
+    //   - environment-android: NativeAndroidEnvironment (must be close()d)
+    // Server / advertiser modules are intentionally NOT included.
+    val nordicBle = "2.0.0-alpha19"
+    implementation("no.nordicsemi.kotlin.ble:core:$nordicBle")
+    implementation("no.nordicsemi.kotlin.ble:client-android:$nordicBle")
+    implementation("no.nordicsemi.kotlin.ble:environment-android:$nordicBle")
 }
 
 // ---------------------------------------------------------------------------

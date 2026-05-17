@@ -1,8 +1,15 @@
 # Crema BLE Capture Library
 
-Recorded DE1 Bluetooth sessions, kept as **replayable fixtures** — a real
-machine's byte traffic, frozen, so the Rust core's decode logic can be validated
-and regression-tested with no DE1 and no Bluetooth.
+Recorded DE1 and Bookoo-scale Bluetooth sessions, kept as **replayable
+fixtures** — a real machine's byte traffic, frozen, so the Rust core's decode
+logic can be validated and regression-tested with no DE1, no scale, and no
+Bluetooth.
+
+A session with a DE1 and/or a scale connected produces ONE interleaved capture
+file: the recorder is shared, and a connection counter opens the file when the
+first device connects and closes it when the last disconnects. Replaying that
+file reconstructs the whole timeline through a single `CremaCore`, which matters
+for scale-aware behaviour like shot-start auto-tare.
 
 ## Capture format
 
@@ -15,20 +22,28 @@ JSON Lines — one BLE message per line, no header:
 - `t` — millisecond timestamp. On the device this is `SystemClock.elapsedRealtime()`
   — the same clock value fed to `CremaBridge.onNotification`, so a replay ages
   telemetry exactly as the live session did.
-- `dir` — `in` = a notification received from the DE1; `out` = a command written
-  to it.
+- `dir` — `in` = a notification received from a device (DE1 or scale); `out` =
+  a command written to one.
 - `src` — for `in`, the `NotificationSource` (`DE1_STATE`, `DE1_SHOT_SAMPLE`,
-  `DE1_WATER_LEVELS`); for `out`, a short characteristic label.
+  `DE1_WATER_LEVELS`, `SCALE_WEIGHT`); for `out`, a short characteristic label —
+  e.g. `SCALE_COMMAND` for a Bookoo tare/timer write.
 - `hex` — the raw payload bytes, lowercase hex, no separators.
+
+Scale traffic shares the format: `SCALE_WEIGHT` is an inbound weight
+notification, `SCALE_COMMAND` an outbound tare/timer write. A capture records no
+scale-connection event, so when `replay.rs` meets the first `SCALE_WEIGHT` line
+it connects a Bookoo scale on the core itself before decoding it.
 
 The recorder is `android/app/src/main/java/coffee/crema/ble/BleSessionRecorder.kt`.
 
 ## Recording a session
 
-The Android app records automatically: every DE1 connection writes
-`session-<timestamp>.jsonl` into `getExternalFilesDir(null)/captures/`, and the
-in-app status log prints the exact path on connect. Pull it off the device into
-this folder:
+The Android app records automatically: connecting a DE1 and/or a scale opens one
+`session-<timestamp>.jsonl` in `getExternalFilesDir(null)/captures/` (on the
+first device connect), and the in-app status log prints the exact path once. The
+file closes when the last device disconnects, so DE1 and scale traffic for a
+session land interleaved in the same file. Pull it off the device into this
+folder:
 
 ```sh
 adb pull /sdcard/Android/data/coffee.crema/files/captures/session-<stamp>.jsonl \

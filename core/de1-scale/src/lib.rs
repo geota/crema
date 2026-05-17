@@ -10,7 +10,8 @@
 //!
 //! [`Scale`] is the unifying abstraction over every protocol here. Identify a
 //! scale from its BLE advertised name with [`Scale::identify`], then drive it
-//! through [`Scale::parse_weight`], [`Scale::tare`] and [`Scale::timer`].
+//! through [`Scale::parse_reading`] (or [`Scale::parse_weight`] for weight
+//! alone), [`Scale::tare`] and [`Scale::timer`].
 //!
 //! The per-scale modules ([`bookoo`], [`acaia`], …) hold the concrete codecs
 //! and are public for direct use or testing. Most expose a stateless
@@ -32,4 +33,4 @@ pub mod smartchef;
 pub mod solo_barista;
 pub mod varia_aku;
 
-pub use scale::{Scale, ScaleUuids, TimerCommand};
+pub use scale::{Scale, ScaleReading, ScaleUuids, TimerCommand};

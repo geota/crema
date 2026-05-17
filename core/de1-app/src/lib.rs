@@ -351,21 +351,23 @@ impl CremaCore {
         let Some(scale) = &mut self.scale else {
             return;
         };
-        let Some(weight_g) = scale.parse_weight(data) else {
+        let Some(reading) = scale.parse_reading(data) else {
             return;
         };
         // A fresh reading re-arms the lost-scale watchdog.
         self.last_scale_weight_ms = Some(now_ms);
         self.scale_stale_reported = false;
-        let estimate = self.flow.update(weight_g, now_ms);
+        let estimate = self.flow.update(reading.weight_g, now_ms);
         out.events.push(Event::ScaleReading {
             weight_g: estimate.weight_g,
             flow_g_per_s: estimate.flow_g_per_s,
+            device_flow_g_per_s: reading.flow_g_per_s,
+            device_timer_ms: reading.timer_ms,
         });
         let reason = self
             .auto_stop
             .as_mut()
-            .and_then(|stop| stop.on_weight(weight_g, now_ms));
+            .and_then(|stop| stop.on_weight(reading.weight_g, now_ms));
         Self::push_stop(reason, out);
     }
 
