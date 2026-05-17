@@ -30,6 +30,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import coffee.crema.ble.De1BleManager
+import coffee.crema.ble.ScaleBleManager
 
 /**
  * The app's current single screen: a Connect button and a live readout of the
@@ -47,13 +48,21 @@ class MainActivity : ComponentActivity() {
         Manifest.permission.BLUETOOTH_CONNECT,
     )
 
+    /**
+     * Action to run once BLE permissions are granted. Set by [withBlePermission]
+     * before the launcher fires, so the same launcher serves both the DE1 and
+     * the scale connect buttons.
+     */
+    private var pendingPermissionAction: (() -> Unit)? = null
+
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
     ) { grants ->
         if (grants.values.all { it }) {
-            viewModel.connect()
+            pendingPermissionAction?.invoke()
         }
         // If denied, the UI status simply stays "Idle"; the user can retry.
+        pendingPermissionAction = null
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -63,23 +72,27 @@ class MainActivity : ComponentActivity() {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     MainScreen(
                         viewModel = viewModel,
-                        onConnect = ::requestConnect,
+                        onConnect = { withBlePermission(viewModel::connect) },
                         onDisconnect = viewModel::disconnect,
+                        onConnectScale = { withBlePermission(viewModel::connectScale) },
+                        onDisconnectScale = viewModel::disconnectScale,
+                        onTareScale = viewModel::tareScale,
                     )
                 }
             }
         }
     }
 
-    /** Request BLE permissions if needed, then scan + connect. */
-    private fun requestConnect() {
+    /** Request BLE permissions if needed, then run [action] (scan + connect). */
+    private fun withBlePermission(action: () -> Unit) {
         val missing = blePermissions.any {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
         }
         if (missing) {
+            pendingPermissionAction = action
             permissionLauncher.launch(blePermissions)
         } else {
-            viewModel.connect()
+            action()
         }
     }
 }
@@ -89,6 +102,9 @@ private fun MainScreen(
     viewModel: MainViewModel,
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
+    onConnectScale: () -> Unit,
+    onDisconnectScale: () -> Unit,
+    onTareScale: () -> Unit,
 ) {
     val ui by viewModel.ui.collectAsState()
 
@@ -124,6 +140,14 @@ private fun MainScreen(
             ) { Text("Disconnect") }
         }
 
+        ScaleSection(
+            scaleState = ui.scaleState,
+            scaleWeightG = ui.scaleWeightG,
+            onConnectScale = onConnectScale,
+            onDisconnectScale = onDisconnectScale,
+            onTareScale = onTareScale,
+        )
+
         ReadoutCard(
             bleState = ui.bleState.name,
             status = ui.status,
@@ -144,6 +168,55 @@ private fun MainScreen(
                     fontFamily = FontFamily.Monospace,
                 )
             }
+        }
+    }
+}
+
+/**
+ * The scale section: a Connect button, a live weight readout, and a Tare
+ * button. The scale connection is independent of the DE1 — it works with or
+ * without a machine connected.
+ */
+@Composable
+private fun ScaleSection(
+    scaleState: ScaleBleManager.State,
+    scaleWeightG: Float?,
+    onConnectScale: () -> Unit,
+    onDisconnectScale: () -> Unit,
+    onTareScale: () -> Unit,
+) {
+    val scaleConnected = scaleState == ScaleBleManager.State.READY ||
+        scaleState == ScaleBleManager.State.CONNECTING ||
+        scaleState == ScaleBleManager.State.DISCOVERING ||
+        scaleState == ScaleBleManager.State.SUBSCRIBING ||
+        scaleState == ScaleBleManager.State.SCANNING
+    val scaleReady = scaleState == ScaleBleManager.State.READY
+
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text("Scale", style = MaterialTheme.typography.titleMedium)
+            Field("Weight", scaleWeightG?.let { "%.1f g".format(it) } ?: "—")
+
+            Button(
+                onClick = onConnectScale,
+                enabled = !scaleConnected,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Connect scale") }
+
+            OutlinedButton(
+                onClick = onDisconnectScale,
+                enabled = scaleConnected,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Disconnect scale") }
+
+            OutlinedButton(
+                onClick = onTareScale,
+                enabled = scaleReady,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Tare") }
         }
     }
 }

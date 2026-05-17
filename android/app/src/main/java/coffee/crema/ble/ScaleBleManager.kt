@@ -18,30 +18,37 @@ import kotlinx.coroutines.flow.asStateFlow
 import java.util.ArrayDeque
 
 /**
- * Minimal `BluetoothGatt`-based BLE manager for the Crema Android app.
+ * Minimal `BluetoothGatt`-based BLE manager for a Bookoo coffee scale.
  *
- * Responsibilities — and nothing more:
- *  1. Connect to a DE1 [BluetoothDevice], discover services.
- *  2. Subscribe to the StateInfo and ShotSample notify characteristics.
- *  3. On every notification, hand the raw bytes to [CremaBridge.onNotification]
- *     and forward the returned JSON `CoreOutput` string to [onCoreOutput].
+ * A close sibling of [De1BleManager] — same threading model, same one-
+ * outstanding-GATT-op subscribe queue, same API-33-aware notification and
+ * write branches. Responsibilities:
+ *  1. Connect to a Bookoo scale [BluetoothDevice], discover services, and tell
+ *     the core which scale it is via [CremaBridge.connectScale] so the core
+ *     selects the right codec.
+ *  2. Subscribe to the weight-notify characteristic ([ScaleUuids.WEIGHT_NOTIFY]).
+ *  3. On every weight notification, hand the raw bytes to
+ *     [CremaBridge.onNotification] and forward the returned JSON `CoreOutput`
+ *     string to [onCoreOutput].
+ *  4. Write tare / timer commands to [ScaleUuids.COMMAND] via [writeCommand].
  *
  * Device discovery is not this manager's job: the shared [BleScanner] runs the
- * one app-wide scan and hands a matched DE1 to [connect]. The "is this a DE1"
- * name rule still belongs with the device — see [isDe1Name].
+ * one app-wide scan and hands a matched scale to [connect]. The "is this a
+ * Bookoo" name rule still belongs with the device — see [isBookooName].
  *
- * This began as Phase-0 proof-of-concept code: it serialises GATT operations
- * through a tiny hand-rolled queue (Android's GATT stack only tolerates one
- * outstanding descriptor/characteristic operation at a time) and does no
- * reconnection, bonding, or MTU negotiation yet. Hardening the BLE layer into a
- * proper, tested component is the next step.
+ * Unlike [De1BleManager] this manager does no session recording — that is a
+ * deliberate later follow-up.
+ *
+ * The scale connection is independent of the DE1: a user can connect a scale
+ * with or without a DE1. Two simultaneous `BluetoothGatt` connections are fine,
+ * and [CremaBridge] is internally `Mutex`-guarded, so both managers feeding it
+ * concurrently is safe.
  *
  * Threading: all callbacks arrive on a binder thread; the bridge call and the
- * [onCoreOutput] dispatch happen there. [CremaBridge] is internally `Mutex`-
- * guarded, so concurrent calls are safe; UI consumers must hop to the main
+ * [onCoreOutput] dispatch happen there. UI consumers must hop to the main
  * thread themselves.
  */
-class De1BleManager(
+class ScaleBleManager(
     private val context: Context,
     private val bridge: CremaBridge,
     /** Called with each raw JSON `CoreOutput` string the core returns. */
@@ -56,11 +63,8 @@ class De1BleManager(
 
     private var gatt: BluetoothGatt? = null
 
-    /**
-     * Records the live BLE session to a file for offline replay through the
-     * Rust core. A debug aid: it never crashes the app if file IO fails.
-     */
-    private val recorder = BleSessionRecorder(context)
+    /** The scale's command characteristic, resolved after service discovery. */
+    private var commandCharacteristic: BluetoothGattCharacteristic? = null
 
     /** Pending CCCD subscriptions; processed one at a time (see [subscribeNext]). */
     private val subscribeQueue = ArrayDeque<BluetoothGattCharacteristic>()
@@ -70,6 +74,9 @@ class De1BleManager(
 
     // ---- Connect ----------------------------------------------------------
 
+    /** The advertised name of the device being connected, for [CremaBridge.connectScale]. */
+    private var pendingAdvertisedName: String? = null
+
     /**
      * Move the manager into [State.SCANNING]. Called by the owner when it hands
      * the discovery request to the shared [BleScanner], so the connection-status
@@ -78,18 +85,22 @@ class De1BleManager(
      */
     fun markScanning() {
         _state.value = State.SCANNING
-        onStatus("Scanning for a DE1…")
+        onStatus("Scanning for a Bookoo scale…")
     }
 
     /**
-     * Connect to a DE1 the shared [BleScanner] has matched. This is the
+     * Connect to a Bookoo scale the shared [BleScanner] has matched. This is the
      * scanner's `onFound` entry point — discovery happens upstream; this manager
-     * owns only the GATT connection from here on.
+     * owns only the GATT connection from here on. [advertisedName] is the name
+     * the scanner resolved from the advertisement / scan-response; it is passed
+     * to [CremaBridge.connectScale] to pick the codec. `device.name` is not used
+     * — it can be null until the connection completes.
      */
     @SuppressLint("MissingPermission")
-    fun connect(device: BluetoothDevice) {
+    fun connect(device: BluetoothDevice, advertisedName: String) {
         _state.value = State.CONNECTING
-        onStatus("Connecting…")
+        pendingAdvertisedName = advertisedName
+        onStatus("Connecting to scale…")
         gatt = device.connectGatt(
             context,
             /* autoConnect = */ false,
@@ -100,14 +111,14 @@ class De1BleManager(
 
     @SuppressLint("MissingPermission")
     fun disconnect() {
-        recorder.stop()
         gatt?.disconnect()
         gatt?.close()
         gatt = null
+        commandCharacteristic = null
+        pendingAdvertisedName = null
         subscribeQueue.clear()
-        bridge.reset()
         _state.value = State.DISCONNECTED
-        onStatus("Disconnected")
+        onStatus("Scale disconnected")
     }
 
     // ---- GATT callbacks ---------------------------------------------------
@@ -118,18 +129,14 @@ class De1BleManager(
         override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
             when (newState) {
                 BluetoothProfile.STATE_CONNECTED -> {
-                    onStatus("Connected — discovering services…")
+                    onStatus("Scale connected — discovering services…")
                     _state.value = State.DISCOVERING
-                    // Begin recording the session for offline replay; surface
-                    // the capture file path once so the user can find it.
-                    recorder.start()
-                    recorder.filePath?.let { onStatus("Recording session to $it") }
                     g.discoverServices()
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
-                    onStatus("Connection lost (status $status)")
+                    onStatus("Scale connection lost (status $status)")
                     _state.value = State.DISCONNECTED
-                    recorder.stop()
+                    commandCharacteristic = null
                     g.close()
                     if (gatt === g) gatt = null
                 }
@@ -139,27 +146,41 @@ class De1BleManager(
         @SuppressLint("MissingPermission")
         override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
             if (status != BluetoothGatt.GATT_SUCCESS) {
-                onStatus("Service discovery failed (status $status)")
+                onStatus("Scale service discovery failed (status $status)")
                 return
             }
-            val service = g.getService(De1Uuids.SERVICE)
+            val service = g.getService(ScaleUuids.SERVICE)
             if (service == null) {
-                onStatus("DE1 GATT service not found on device")
+                onStatus("Bookoo GATT service not found on device")
                 disconnect()
                 return
             }
-            // Queue the two notify characteristics the app observes.
-            subscribeQueue.clear()
-            listOf(De1Uuids.STATE_INFO, De1Uuids.SHOT_SAMPLE).forEach { uuid ->
-                val ch = service.getCharacteristic(uuid)
-                if (ch != null) {
-                    subscribeQueue.add(ch)
+            // Identify the scale with the core so it selects the right codec.
+            val advertisedName = pendingAdvertisedName
+            if (advertisedName != null) {
+                val label = runCatching { bridge.connectScale(advertisedName) }
+                    .getOrNull()
+                if (label != null) {
+                    onStatus("Core recognised scale: $label")
                 } else {
-                    onStatus("Characteristic $uuid missing")
+                    onStatus("Core did not recognise scale '$advertisedName'")
                 }
             }
+            // Resolve the command characteristic for later tare / timer writes.
+            commandCharacteristic = service.getCharacteristic(ScaleUuids.COMMAND)
+            if (commandCharacteristic == null) {
+                onStatus("Scale command characteristic ${ScaleUuids.COMMAND} missing")
+            }
+            // Queue the weight-notify characteristic the app observes.
+            subscribeQueue.clear()
+            val notify = service.getCharacteristic(ScaleUuids.WEIGHT_NOTIFY)
+            if (notify != null) {
+                subscribeQueue.add(notify)
+            } else {
+                onStatus("Scale weight characteristic ${ScaleUuids.WEIGHT_NOTIFY} missing")
+            }
             _state.value = State.SUBSCRIBING
-            onStatus("Subscribing to StateInfo + ShotSample…")
+            onStatus("Subscribing to scale weight…")
             subscribeNext(g)
         }
 
@@ -170,7 +191,7 @@ class De1BleManager(
         ) {
             // One CCCD write completed; advance the queue.
             if (status != BluetoothGatt.GATT_SUCCESS) {
-                onStatus("CCCD write failed (status $status)")
+                onStatus("Scale CCCD write failed (status $status)")
             }
             subscribeNext(g)
         }
@@ -208,12 +229,12 @@ class De1BleManager(
         val ch = subscribeQueue.poll()
         if (ch == null) {
             _state.value = State.READY
-            onStatus("Ready — receiving DE1 notifications")
+            onStatus("Ready — receiving scale weight")
             return
         }
         // Enable local notification dispatch, then write the remote CCCD.
         g.setCharacteristicNotification(ch, true)
-        val cccd = ch.getDescriptor(De1Uuids.CCCD)
+        val cccd = ch.getDescriptor(ScaleUuids.CCCD)
         if (cccd == null) {
             onStatus("CCCD missing on ${ch.uuid}; skipping")
             subscribeNext(g)
@@ -231,6 +252,45 @@ class De1BleManager(
         }
     }
 
+    // ---- Command write ----------------------------------------------------
+
+    /**
+     * Write [data] to the Bookoo command characteristic ([ScaleUuids.COMMAND]).
+     *
+     * Used for tare (and, later, timer) commands. The exact bytes come from the
+     * Rust core via a `Command.WriteScale`; this manager owns no protocol.
+     * Returns true if the write was dispatched, false if the scale is not
+     * connected or the characteristic is unavailable.
+     */
+    @SuppressLint("MissingPermission")
+    fun writeCommand(data: ByteArray): Boolean {
+        val g = gatt
+        val ch = commandCharacteristic
+        if (g == null || ch == null) {
+            onStatus("Cannot write scale command — scale not connected")
+            return false
+        }
+        // API-33-aware characteristic write, mirroring the descriptor-write
+        // branch in [subscribeNext]: the 3-arg form on API 33+, the deprecated
+        // value-then-write form on API 31/32.
+        val ok = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            g.writeCharacteristic(
+                ch,
+                data,
+                BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT,
+            ) == BluetoothGatt.GATT_SUCCESS
+        } else {
+            @Suppress("DEPRECATION")
+            run {
+                ch.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                ch.value = data
+                g.writeCharacteristic(ch)
+            }
+        }
+        if (!ok) onStatus("Scale command write was rejected")
+        return ok
+    }
+
     // ---- Core integration -------------------------------------------------
 
     /**
@@ -238,38 +298,30 @@ class De1BleManager(
      * -> UI.
      */
     private fun handleNotification(charUuid: java.util.UUID, data: ByteArray) {
-        val source = when (charUuid) {
-            De1Uuids.STATE_INFO -> NotificationSource.DE1_STATE
-            De1Uuids.SHOT_SAMPLE -> NotificationSource.DE1_SHOT_SAMPLE
-            De1Uuids.WATER_LEVELS -> NotificationSource.DE1_WATER_LEVELS
-            else -> {
-                Log.w(TAG, "Notification from unmapped characteristic $charUuid")
-                return
-            }
+        if (charUuid != ScaleUuids.WEIGHT_NOTIFY) {
+            Log.w(TAG, "Notification from unmapped characteristic $charUuid")
+            return
         }
-        // Stamp once: the same value goes to the recorder and the core, so a
-        // replayed capture decodes identically to the live session.
-        val tMs = nowMs()
-        recorder.recordInbound(source, data, tMs)
         // CremaBridge.onNotification returns the CoreOutput as a JSON string.
-        val json = bridge.onNotification(source, data, tMs.toULong())
+        val json = bridge.onNotification(
+            NotificationSource.SCALE_WEIGHT,
+            data,
+            nowMs().toULong(),
+        )
         onCoreOutput(json)
     }
 
     companion object {
-        private const val TAG = "De1BleManager"
+        private const val TAG = "ScaleBleManager"
 
         /**
-         * Whether a scanned advertisement name identifies a DE1. The DE1
-         * advertises a name starting "DE1"; some units advertise "BENGLE". This
-         * mirrors the legacy de1app discovery rule in `bluetooth.tcl`
-         * (`de1_ble_handler`). The shared [BleScanner] stays device-agnostic, so
-         * this — the "is this a DE1" rule — lives with the DE1 manager.
+         * Whether a scanned advertisement name identifies a Bookoo scale. The
+         * scale advertises a name starting "BOOKOO_SC"; the core then identifies
+         * the exact model from the full advertised name. The shared [BleScanner]
+         * stays device-agnostic, so this — the "is this a Bookoo" rule — lives
+         * with the scale manager.
          */
-        fun isDe1Name(name: String): Boolean {
-            val upper = name.uppercase()
-            return upper.startsWith(De1Uuids.ADVERTISED_NAME_PREFIX) ||
-                upper.startsWith("BENGLE")
-        }
+        fun isBookooName(name: String): Boolean =
+            name.uppercase().startsWith(ScaleUuids.BOOKOO_NAME_PREFIX)
     }
 }

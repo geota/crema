@@ -2,10 +2,13 @@ package coffee.crema.ui
 
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
+import coffee.crema.core.Command
 import coffee.crema.core.CoreOutput
 import coffee.crema.core.CremaBridge
 import coffee.crema.core.Event
+import coffee.crema.ble.BleScanner
 import coffee.crema.ble.De1BleManager
+import coffee.crema.ble.ScaleBleManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -14,6 +17,8 @@ import kotlinx.serialization.json.Json
 /** A flat snapshot of everything the current screen shows. */
 data class MainUiState(
     val bleState: De1BleManager.State = De1BleManager.State.IDLE,
+    /** Coarse state of the scale connection. */
+    val scaleState: ScaleBleManager.State = ScaleBleManager.State.IDLE,
     /** Most recent status line (scan / connect / error transitions). */
     val status: String = "Idle",
     /** Latest decoded machine state + substate, or null before the first one. */
@@ -22,6 +27,8 @@ data class MainUiState(
     val shotPhase: String? = null,
     /** Latest telemetry sample, pre-formatted. */
     val telemetry: String? = null,
+    /** Latest scale weight in grams, or null before the first reading. */
+    val scaleWeightG: Float? = null,
     /** A rolling event log, newest first. */
     val eventLog: List<String> = emptyList(),
 )
@@ -44,7 +51,29 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _ui = MutableStateFlow(MainUiState())
     val ui: StateFlow<MainUiState> = _ui.asStateFlow()
 
+    /**
+     * The one app-wide BLE scanner, shared by both managers. A single
+     * unfiltered scan dispatches each result by advertised-name match to
+     * whichever device currently wants to connect — see [connect] / [connectScale].
+     */
+    private val bleScanner = BleScanner(
+        context = app,
+        onStatus = { line -> _ui.value = _ui.value.copy(status = line) },
+    )
+
     private val ble = De1BleManager(
+        context = app,
+        bridge = bridge,
+        onCoreOutput = ::onCoreOutputJson,
+        onStatus = { line -> _ui.value = _ui.value.copy(status = line) },
+    )
+
+    /**
+     * The Bookoo scale connection. Shares the one [bridge] with [ble]: the core
+     * is internally `Mutex`-guarded, so both managers feeding it concurrently
+     * is safe. Its `CoreOutput` goes through the same [onCoreOutputJson] path.
+     */
+    private val scale = ScaleBleManager(
         context = app,
         bridge = bridge,
         onCoreOutput = ::onCoreOutputJson,
@@ -59,12 +88,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Called from the UI once the BLE runtime permissions have been granted. */
     fun connect() {
         _ui.value = _ui.value.copy(eventLog = emptyList())
-        ble.startScan()
+        // Show "scanning" on the connection-status UI while the shared scanner
+        // hunts; the scanner's onFound hands the matched DE1 to ble.connect.
+        ble.markScanning()
+        bleScanner.scanFor(SCAN_LABEL_DE1, De1BleManager::isDe1Name) { device, _ ->
+            ble.connect(device)
+        }
         // Reflect the manager's state as it advances.
         observeBleState()
     }
 
     fun disconnect() {
+        // Drop any outstanding scan want too — the user may disconnect mid-scan.
+        bleScanner.cancel(SCAN_LABEL_DE1)
         ble.disconnect()
         _ui.value = _ui.value.copy(
             bleState = De1BleManager.State.DISCONNECTED,
@@ -74,11 +110,45 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         )
     }
 
+    /** Scan for and connect to a Bookoo scale. Independent of the DE1. */
+    fun connectScale() {
+        scale.markScanning()
+        bleScanner.scanFor(SCAN_LABEL_SCALE, ScaleBleManager::isBookooName) { device, name ->
+            scale.connect(device, name)
+        }
+        observeBleState()
+    }
+
+    fun disconnectScale() {
+        bleScanner.cancel(SCAN_LABEL_SCALE)
+        scale.disconnect()
+        _ui.value = _ui.value.copy(
+            scaleState = ScaleBleManager.State.DISCONNECTED,
+            scaleWeightG = null,
+        )
+    }
+
+    /**
+     * Tare the connected scale. Asks the core for the tare bytes, then routes
+     * the resulting `Command.WriteScale` through the shared command path so the
+     * exact same code handles a manual tare and the core's auto-tare.
+     */
+    fun tareScale() {
+        val raw = runCatching { bridge.tareScale() }.getOrElse {
+            appendLog("Tare failed: ${it.message}")
+            return
+        }
+        onCoreOutputJson(raw)
+    }
+
     private fun observeBleState() {
-        // The manager exposes a StateFlow; for now its current value is polled
-        // whenever a status line lands. Collecting it in a coroutine is a
-        // follow-up; the value is folded in here on each call.
-        _ui.value = _ui.value.copy(bleState = ble.state.value)
+        // The managers expose StateFlows; for now their current values are
+        // polled whenever a status line lands. Collecting them in coroutines is
+        // a follow-up; the values are folded in here on each call.
+        _ui.value = _ui.value.copy(
+            bleState = ble.state.value,
+            scaleState = scale.state.value,
+        )
     }
 
     /**
@@ -99,6 +169,30 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // Reflect current BLE state too.
         observeBleState()
         output.events.forEach(::applyEvent)
+        output.commands.forEach(::executeCommand)
+    }
+
+    /**
+     * Centralised command execution: every `CoreOutput` — from the DE1 manager
+     * AND the scale manager — funnels its `commands` here. This single path
+     * makes both the manual Tare button and the core's automatic shot-start
+     * auto-tare work, because both surface as a [Command.WriteScale].
+     */
+    private fun executeCommand(command: Command) {
+        when (command) {
+            is Command.WriteScale -> {
+                // The core hands over the exact bytes as a List<UByte>.
+                val bytes = command.content.data
+                    .map { it.toByte() }
+                    .toByteArray()
+                scale.writeCommand(bytes)
+            }
+            is Command.WriteCharacteristic -> {
+                // DE1 characteristic writes are not yet routed from here; the
+                // app does not currently drive machine control. Left for a
+                // follow-up so this stays a single, complete command sink.
+            }
+        }
     }
 
     private fun applyEvent(event: Event) {
@@ -126,9 +220,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 _ui.value = _ui.value.copy(telemetry = line)
                 // Telemetry is high-rate; do not flood the log with it.
             }
-            is Event.ScaleReading ->
-                appendLog("Scale: %.1fg @ %.2fg/s".format(
-                    event.content.weight_g, event.content.flow_g_per_s))
+            is Event.ScaleReading -> {
+                val r = event.content
+                _ui.value = _ui.value.copy(scaleWeightG = r.weight_g)
+                // Weight is high-rate; do not flood the log with every reading.
+            }
             is Event.WaterLevel ->
                 appendLog("Water level: %.0fmm".format(event.content.level_mm))
             is Event.StopTriggered ->
@@ -147,7 +243,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 appendLog("Steam clog suspected: ${event.content.reason.string}")
             is Event.SteamEcoModeChanged ->
                 appendLog("Steam eco mode: ${event.content.eco}")
-            is Event.ScaleStale -> appendLog("Scale stale")
+            is Event.ScaleStale -> {
+                _ui.value = _ui.value.copy(scaleWeightG = null)
+                appendLog("Scale stale")
+            }
             is Event.DecodeError ->
                 appendLog("Decode error: ${event.content.message}")
         }
@@ -164,10 +263,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     override fun onCleared() {
         super.onCleared()
+        bleScanner.cancel(SCAN_LABEL_DE1)
+        bleScanner.cancel(SCAN_LABEL_SCALE)
         ble.disconnect()
+        scale.disconnect()
     }
 
     private companion object {
         const val MAX_LOG_LINES = 200
+
+        /** [BleScanner] want labels — one per device the app discovers. */
+        const val SCAN_LABEL_DE1 = "DE1"
+        const val SCAN_LABEL_SCALE = "Scale"
     }
 }
