@@ -39,10 +39,12 @@ use typeshare::typeshare;
 /// seconds — the legacy `steam_eco_delay_seconds` default (`machine.tcl:34`).
 pub const STEAM_ECO_DELAY_SECONDS: u64 = 600;
 
-/// Number of recorded samples skipped at the start of a session before
-/// clog analysis — steam pressure is high by design at the start of a session,
-/// so the first ~2 s (20 samples at 10 Hz) is trimmed (`machine.tcl:1199`).
-pub const STEAM_CLOG_TRIM_SAMPLES: usize = 20;
+/// Number of recorded samples skipped at the start of a session before clog
+/// analysis — steam pressure is high by design at the start. The legacy
+/// (`machine.tcl:1199`) deletes sample indices `0..=20` — 21 samples (~2.1 s
+/// at 10 Hz); its own comment says "20", but the index list deletes one more.
+/// This matches the actual legacy behaviour.
+pub const STEAM_CLOG_TRIM_SAMPLES: usize = 21;
 
 /// Minimum recorded sample count for clog analysis to run. A shorter session
 /// is treated as a brief purge and skipped (`machine.tcl:1173`).
@@ -436,7 +438,8 @@ mod tests {
 
     #[test]
     fn sustained_over_pressure_reports_a_clog() {
-        // 20 trimmed + 11 over-pressure samples: one past the trigger of 10.
+        // STEAM_CLOG_TRIM_SAMPLES trimmed, then 11 over-pressure samples —
+        // one past the trigger of 10.
         let mut samples = vec![
             SteamSample {
                 pressure_bar: 2.0,
