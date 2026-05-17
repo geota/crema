@@ -228,4 +228,39 @@ mod tests {
         assert!(events.is_empty());
         assert!(!monitor.is_session_in_progress());
     }
+
+    /// `WaterMonitor` deliberately records no per-frame telemetry — unlike
+    /// `ShotMonitor`/`SteamMonitor` it has no `on_sample` and no sample series.
+    /// A long-running session that receives many `StateInfo` updates must
+    /// therefore keep a fixed footprint: one optional `WaterInProgress`, never
+    /// a growing buffer. This test pins that intent.
+    #[test]
+    fn a_long_session_accumulates_no_telemetry_buffer() {
+        let mut monitor = WaterMonitor::new();
+        let started = monitor.on_state_info(state(MachineState::HotWater, SubState::Pouring), 0);
+        assert_eq!(
+            started,
+            vec![WaterEvent::Started(WaterSessionKind::HotWater)]
+        );
+
+        // Pump in a long stream of repeated in-state updates — the kind of
+        // tick rate a real pour would produce over many seconds.
+        for tick in 1..=10_000u64 {
+            let events =
+                monitor.on_state_info(state(MachineState::HotWater, SubState::Pouring), tick);
+            // Steady-state updates are silent: no per-sample event is emitted.
+            assert!(events.is_empty(), "an in-state update must emit nothing");
+        }
+
+        // The monitor still holds exactly one in-progress session and no
+        // sample series — its size is a single `Option<WaterInProgress>`.
+        assert!(monitor.is_session_in_progress());
+        assert_eq!(monitor.session_kind(), Some(WaterSessionKind::HotWater));
+
+        // The completed record carries only kind + duration, never samples.
+        let done = monitor.on_state_info(state(MachineState::Idle, SubState::Ready), 10_001);
+        let record = completed_record(done);
+        assert_eq!(record.kind, WaterSessionKind::HotWater);
+        assert_eq!(record.duration_ms, 10_001);
+    }
 }
