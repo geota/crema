@@ -17,18 +17,21 @@
 //! - [`StateInfo`] — the machine state / substate packet (`cuuid_0E`).
 //! - [`profile`] — the espresso profile upload codec (`cuuid_0F` / `cuuid_10`).
 //! - [`command`] — command and settings packets (`cuuid_02` / `0B` / `11`).
+//! - [`mmr`] — the memory-mapped register read/write codec (`cuuid_05` / `06`).
 //!
 //! `unsafe` is forbidden crate-wide via the workspace lint table.
 
 pub mod command;
 pub mod error;
 pub mod fixed_point;
+pub mod mmr;
 pub mod profile;
 pub mod shot_sample;
 pub mod state;
 
 pub use command::{ShotSettings, WaterLevels, requested_state};
 pub use error::ProtocolError;
+pub use mmr::{MMR_PACKET_LEN, MmrReadReply, MmrRegister};
 pub use profile::{
     ExtensionFrame, FrameFlags, SHOT_FRAME_LEN, SHOT_HEADER_LEN, ShotFrame, ShotHeader, ShotTail,
 };
