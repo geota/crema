@@ -29,5 +29,5 @@ pub use profile::{
     AssembledProfile, Compare, ExitCondition, ExitMetric, Limiter, Profile, ProfileStep, Pump,
     TempSensor, Transition,
 };
-pub use shot::{ShotEvent, ShotMonitor, ShotPhase, ShotRecord, TimedSample};
+pub use shot::{ShotEvent, ShotMetrics, ShotMonitor, ShotPhase, ShotRecord, TimedSample};
 pub use stop::{AutoStop, StopConfig, StopReason, StopTargets};

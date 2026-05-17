@@ -67,6 +67,58 @@ pub struct ShotRecord {
     pub samples: Vec<TimedSample>,
 }
 
+/// Summary metrics derived from a [`ShotRecord`]'s recorded telemetry.
+///
+/// These are computed from the sample series alone — no scale or barista
+/// input — so they describe what the machine measured during the shot.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ShotMetrics {
+    /// Highest group pressure observed, bar.
+    pub peak_pressure_bar: f32,
+    /// Highest group flow observed, mL/s.
+    pub peak_flow_ml_per_s: f32,
+    /// Total water dispensed, mL — the group flow integrated over time.
+    pub total_water_ml: f32,
+    /// Shot duration, seconds (from [`ShotRecord::duration_ms`]).
+    pub duration_s: f32,
+}
+
+impl ShotRecord {
+    /// Compute summary [`ShotMetrics`] from the recorded telemetry.
+    ///
+    /// Peak pressure and flow are the maxima over all samples; total water is
+    /// the trapezoidal integral of group flow (mL/s) over the elapsed time of
+    /// the sample series. A record with no samples yields all-zero metrics
+    /// except [`duration_s`](ShotMetrics::duration_s).
+    pub fn metrics(&self) -> ShotMetrics {
+        let mut peak_pressure_bar = 0.0f32;
+        let mut peak_flow_ml_per_s = 0.0f32;
+        let mut total_water_ml = 0.0f32;
+        let mut prev: Option<&TimedSample> = None;
+
+        for timed in &self.samples {
+            peak_pressure_bar = peak_pressure_bar.max(timed.sample.group_pressure);
+            peak_flow_ml_per_s = peak_flow_ml_per_s.max(timed.sample.group_flow);
+            if let Some(prev) = prev
+                && timed.elapsed_ms > prev.elapsed_ms
+            {
+                // Trapezoidal rule: average flow over the interval × duration.
+                let dt_s = (timed.elapsed_ms - prev.elapsed_ms) as f32 / 1000.0;
+                let avg_flow = (prev.sample.group_flow + timed.sample.group_flow) / 2.0;
+                total_water_ml += avg_flow * dt_s;
+            }
+            prev = Some(timed);
+        }
+
+        ShotMetrics {
+            peak_pressure_bar,
+            peak_flow_ml_per_s,
+            total_water_ml,
+            duration_s: self.duration_ms as f32 / 1000.0,
+        }
+    }
+}
+
 /// A notable change observed by a [`ShotMonitor`].
 #[derive(Debug, Clone, PartialEq)]
 pub enum ShotEvent {
@@ -273,5 +325,44 @@ mod tests {
         assert_eq!(record.samples[0].elapsed_ms, 200); // 1200 - 1000
         assert_eq!(record.samples[1].elapsed_ms, 2000); // 3000 - 1000
         assert!(!monitor.is_shot_in_progress());
+    }
+
+    /// A `TimedSample` at `elapsed_ms` carrying the given pressure and flow.
+    fn timed(elapsed_ms: u64, group_pressure: f32, group_flow: f32) -> TimedSample {
+        let mut sample = sample(0);
+        sample.group_pressure = group_pressure;
+        sample.group_flow = group_flow;
+        TimedSample { elapsed_ms, sample }
+    }
+
+    #[test]
+    fn metrics_report_peaks_water_and_duration() {
+        let record = ShotRecord {
+            duration_ms: 30_000,
+            samples: vec![
+                timed(0, 1.0, 0.0),
+                timed(1_000, 9.0, 2.0),
+                timed(2_000, 6.0, 2.0),
+            ],
+        };
+        let metrics = record.metrics();
+        assert_eq!(metrics.peak_pressure_bar, 9.0);
+        assert_eq!(metrics.peak_flow_ml_per_s, 2.0);
+        // Trapezoidal: 0..1 s avg 1.0 -> 1.0 mL; 1..2 s avg 2.0 -> 2.0 mL.
+        assert_eq!(metrics.total_water_ml, 3.0);
+        assert_eq!(metrics.duration_s, 30.0);
+    }
+
+    #[test]
+    fn metrics_of_an_empty_record_are_zero_except_duration() {
+        let record = ShotRecord {
+            duration_ms: 5_000,
+            samples: vec![],
+        };
+        let metrics = record.metrics();
+        assert_eq!(metrics.peak_pressure_bar, 0.0);
+        assert_eq!(metrics.peak_flow_ml_per_s, 0.0);
+        assert_eq!(metrics.total_water_ml, 0.0);
+        assert_eq!(metrics.duration_s, 5.0);
     }
 }
