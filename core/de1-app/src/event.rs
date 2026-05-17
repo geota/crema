@@ -1,25 +1,26 @@
-//! FFI value types: the input discriminator [`Source`] and the observed-output
-//! envelope [`CoreOutput`] of [`Event`]s.
+//! FFI value types: the input discriminator [`Source`], the observed [`Event`]s
+//! and [`Command`]s the core emits, and the [`CoreOutput`] envelope.
 
-use de1_domain::ShotPhase;
+use de1_domain::{ShotPhase, StopReason};
 use de1_protocol::{MachineState, SubState};
 use serde::{Deserialize, Serialize};
 
 use crate::error::AppError;
 
-/// Which DE1 GATT characteristic an incoming notification came from.
+/// Which BLE characteristic an incoming notification came from.
 ///
 /// The shell maps each subscribed characteristic UUID to a `Source` before
 /// calling [`CremaCore::on_notification`](crate::CremaCore::on_notification).
-/// `#[non_exhaustive]`: more sources (water level, scale weight, …) arrive in
-/// later increments.
+/// `#[non_exhaustive]`: more sources (water level, …) arrive in later increments.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Source {
-    /// The machine state / substate characteristic (`cuuid_0E`).
+    /// The DE1 machine state / substate characteristic (`cuuid_0E`).
     De1State,
-    /// The shot-telemetry characteristic (`cuuid_0D`).
+    /// The DE1 shot-telemetry characteristic (`cuuid_0D`).
     De1ShotSample,
+    /// The connected scale's weight notification.
+    ScaleWeight,
 }
 
 /// Something the core observed that the UI may want to react to.
@@ -60,6 +61,19 @@ pub enum Event {
         /// Group-head temperature, °C.
         head_temp: f32,
     },
+    /// A weight reading arrived from the scale, smoothed by the flow estimator.
+    ScaleReading {
+        /// Robust current weight, grams.
+        weight_g: f32,
+        /// Robust mass-flow rate, grams per second.
+        flow_g_per_s: f32,
+    },
+    /// Auto-stop decided the shot should end. The accompanying [`Command`]
+    /// carries the actual stop write.
+    StopTriggered {
+        /// Why the shot was stopped.
+        reason: StopReason,
+    },
     /// The espresso shot finished.
     ShotCompleted {
         /// Total shot duration, milliseconds.
@@ -74,17 +88,50 @@ pub enum Event {
     },
 }
 
-/// The result of feeding the core one input: everything it observed.
+/// A writable DE1 GATT characteristic. The shell maps this to a UUID.
 ///
-/// A `commands` field — writes the shell should perform — will join this
-/// envelope once the core can drive the machine (see
-/// `docs/08-ffi-and-web-scope.md`). The struct is `#[non_exhaustive]` so that
-/// addition is not a breaking change for the bridge crates.
+/// `#[non_exhaustive]`: profile-upload and MMR targets arrive later.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum WriteTarget {
+    /// The DE1 `RequestedState` characteristic (`cuuid_02`).
+    De1RequestedState,
+}
+
+/// A BLE write the shell should perform on the core's behalf.
+///
+/// The core owns the protocol, so a command carries the exact bytes; the shell
+/// only needs a characteristic-UUID map, no protocol logic.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type")]
+#[non_exhaustive]
+pub enum Command {
+    /// Write `data` to a DE1 GATT characteristic.
+    WriteCharacteristic {
+        /// Which characteristic to write.
+        target: WriteTarget,
+        /// The bytes to write.
+        data: Vec<u8>,
+    },
+    /// Write `data` to the connected scale's command characteristic.
+    WriteScale {
+        /// The bytes to write.
+        data: Vec<u8>,
+    },
+}
+
+/// The result of feeding the core one input: what it observed (`events`) and
+/// what it wants the shell to do (`commands`).
+///
+/// `#[non_exhaustive]` so further fields can be added without breaking the
+/// bridge crates.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct CoreOutput {
     /// The events observed, in order.
     pub events: Vec<Event>,
+    /// BLE writes the shell should perform, in order.
+    pub commands: Vec<Command>,
 }
 
 impl CoreOutput {
