@@ -194,6 +194,37 @@ mod tests {
     }
 
     #[test]
+    fn shot_settings_encode_to_the_expected_bytes() {
+        let settings = ShotSettings {
+            steam_flags: 0,
+            steam_temp_c: 150.0,
+            steam_timeout_s: 120.0,
+            hot_water_temp_c: 85.0,
+            hot_water_volume_ml: 200.0,
+            hot_water_timeout_s: 30.0,
+            espresso_volume_ml: 36.0,
+            group_temp_c: 92.0,
+        };
+        // Bytes 0–6 are U8P0 (the integer value verbatim): 0, 150, 120, 85,
+        // 200, 30, 36. Bytes 7–8 are the U16P8 group temp: 92*256 = 0x5C00.
+        assert_eq!(
+            settings.encode(),
+            [0x00, 0x96, 0x78, 0x55, 0xC8, 0x1E, 0x24, 0x5C, 0x00]
+        );
+    }
+
+    #[test]
+    fn shot_settings_encode_preserves_nonzero_steam_flags() {
+        // The steam-flag byte is passed through verbatim — it must land in
+        // wire byte 0 untouched.
+        let settings = ShotSettings {
+            steam_flags: 0xA5,
+            ..ShotSettings::default()
+        };
+        assert_eq!(settings.encode()[0], 0xA5);
+    }
+
+    #[test]
     fn shot_settings_rejects_a_short_packet() {
         assert!(ShotSettings::decode(&[0; 8]).is_err());
     }
