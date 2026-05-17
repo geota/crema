@@ -8,6 +8,7 @@ version = "0.1.0"
 dependencies = [
  "de1-domain",
  "de1-protocol",
+ "de1-scale",
  "serde",
  "serde_json",
  "thiserror",

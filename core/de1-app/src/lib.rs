@@ -4,72 +4,153 @@
 //! crates wrap (`de1-ffi` for Android via UniFFI, `de1-wasm` for the web via
 //! wasm-bindgen).
 //!
-//! [`CremaCore`] decodes the DE1's BLE notifications, drives the
-//! [`ShotMonitor`](de1_domain::ShotMonitor) state machine, and reports
-//! [`Event`]s in a [`CoreOutput`] envelope. It is sans-IO and holds no clock —
-//! every method takes a monotonic `now_ms` from the shell.
+//! [`CremaCore`] decodes the DE1's and the scale's BLE notifications, drives
+//! the [`ShotMonitor`](de1_domain::ShotMonitor) state machine and the
+//! [`AutoStop`](de1_domain::AutoStop) controller, and reports [`Event`]s and
+//! [`Command`]s in a [`CoreOutput`] envelope. It is sans-IO and holds no clock
+//! — every notification carries a monotonic `now_ms` from the shell.
 //!
-//! See `docs/08-ffi-and-web-scope.md` for the bridge design. This is cut 1:
-//! observation of a DE1 shot. Scale weight, auto-stop, and machine-driving
-//! commands arrive in later increments.
+//! See `docs/08-ffi-and-web-scope.md` for the bridge design.
 
 pub mod error;
 pub mod event;
 
 pub use error::AppError;
-pub use event::{CoreOutput, Event, Source};
+pub use event::{Command, CoreOutput, Event, Source, WriteTarget};
 
-use de1_domain::{ShotEvent, ShotMonitor};
-use de1_protocol::{ShotSample, StateInfo};
+use de1_domain::{
+    AutoStop, FlowAlgorithm, FlowEstimator, ShotEvent, ShotMonitor, ShotPhase, StopConfig,
+    StopReason, StopTargets,
+};
+use de1_protocol::{MachineState, ShotSample, StateInfo, requested_state};
+use de1_scale::Scale;
+
+/// The legacy `stop_weight_before_seconds` setting default — the user-tunable
+/// part of the SAW look-ahead.
+const STOP_WEIGHT_BEFORE_SECONDS: f32 = 0.15;
+/// Scale sensor lag assumed when no scale is connected — a representative value
+/// across the supported scales.
+const DEFAULT_SCALE_LAG_SECONDS: f32 = 0.38;
 
 /// The headless Crema application core.
 ///
 /// One `CremaCore` tracks one machine session. The FFI bridges wrap it behind
 /// a mutex; the type itself uses ordinary `&mut self` methods so it stays
 /// plain, testable Rust.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct CremaCore {
     monitor: ShotMonitor,
     last_state: Option<StateInfo>,
-    /// Timestamp the in-progress shot began — used to stamp telemetry elapsed
-    /// time. `None` when no shot is in progress.
+    /// Timestamp the in-progress shot began — stamps telemetry elapsed time.
+    /// `None` when no shot is in progress.
     shot_started_ms: Option<u64>,
+    /// The connected scale's codec, once identified.
+    scale: Option<Scale>,
+    /// Smooths the scale stream into weight + flow for display.
+    flow: FlowEstimator,
+    /// Auto-stop targets armed by the shell; the [`AutoStop`] itself is built
+    /// when the shot first reaches a flowing phase.
+    auto_stop_targets: Option<StopTargets>,
+    /// The live auto-stop controller, for the duration of one shot.
+    auto_stop: Option<AutoStop>,
+}
+
+impl Default for CremaCore {
+    fn default() -> CremaCore {
+        CremaCore::new()
+    }
 }
 
 impl CremaCore {
     /// Create a core in the idle state.
     pub fn new() -> CremaCore {
-        CremaCore::default()
+        CremaCore {
+            monitor: ShotMonitor::new(),
+            last_state: None,
+            shot_started_ms: None,
+            scale: None,
+            flow: FlowEstimator::new(FlowAlgorithm::default()),
+            auto_stop_targets: None,
+            auto_stop: None,
+        }
+    }
+
+    /// Identify and connect a scale from its BLE advertised name. Returns
+    /// whether the name matched a supported scale.
+    pub fn connect_scale(&mut self, advertised_name: &str) -> bool {
+        self.scale = Scale::identify(advertised_name);
+        self.scale.is_some()
+    }
+
+    /// Arm automatic shot-stop. A `None` target disables that mode; the
+    /// [`AutoStop`] is constructed when the next shot starts flowing.
+    pub fn arm_auto_stop(&mut self, weight_g: Option<f32>, volume_ml: Option<f32>) {
+        self.auto_stop_targets = Some(StopTargets {
+            weight_g,
+            volume_ml,
+        });
+    }
+
+    /// Disarm automatic shot-stop, including any controller already running.
+    pub fn disarm_auto_stop(&mut self) {
+        self.auto_stop_targets = None;
+        self.auto_stop = None;
+    }
+
+    /// Build a [`Command`] that asks the DE1 to enter `state` — e.g.
+    /// [`MachineState::Espresso`] to start a shot, [`MachineState::Idle`] to
+    /// stop one or wake from sleep.
+    pub fn request_machine_state(&self, state: MachineState) -> CoreOutput {
+        let mut out = CoreOutput::default();
+        out.commands.push(Command::WriteCharacteristic {
+            target: WriteTarget::De1RequestedState,
+            data: vec![requested_state(state)],
+        });
+        out
+    }
+
+    /// Build a [`Command`] that tares the connected scale. Empty if no scale is
+    /// connected or the scale does not support tare.
+    pub fn tare_scale(&mut self) -> CoreOutput {
+        let mut out = CoreOutput::default();
+        if let Some(scale) = &mut self.scale {
+            if let Some(data) = scale.tare() {
+                out.commands.push(Command::WriteScale { data });
+            }
+        }
+        out
     }
 
     /// Feed a raw GATT notification: `data` is the characteristic's bytes and
     /// `now_ms` a monotonic millisecond timestamp from the shell.
     pub fn on_notification(&mut self, source: Source, data: &[u8], now_ms: u64) -> CoreOutput {
-        let mut events = Vec::new();
+        let mut out = CoreOutput::default();
         match source {
-            Source::De1State => self.handle_state(data, now_ms, &mut events),
-            Source::De1ShotSample => self.handle_sample(data, now_ms, &mut events),
+            Source::De1State => self.handle_state(data, now_ms, &mut out),
+            Source::De1ShotSample => self.handle_sample(data, now_ms, &mut out),
+            Source::ScaleWeight => self.handle_scale_weight(data, now_ms, &mut out),
         }
-        CoreOutput { events }
+        out
     }
 
-    /// Feed a periodic clock tick. Reserved for time-driven logic such as the
-    /// stop-at-weight lead-time countdown; currently a no-op.
+    /// Feed a periodic clock tick. Reserved for time-driven logic; currently a
+    /// no-op (auto-stop acts on the notification streams).
     pub fn on_tick(&mut self, _now_ms: u64) -> CoreOutput {
         CoreOutput::default()
     }
 
-    /// Discard all session state — e.g. on disconnect.
+    /// Discard all session state — e.g. on disconnect. The connected scale and
+    /// armed auto-stop targets are cleared too.
     pub fn reset(&mut self) {
         *self = CremaCore::new();
     }
 
     /// Decode and process a `StateInfo` notification.
-    fn handle_state(&mut self, data: &[u8], now_ms: u64, events: &mut Vec<Event>) {
+    fn handle_state(&mut self, data: &[u8], now_ms: u64, out: &mut CoreOutput) {
         let info = match StateInfo::parse(data) {
             Ok(info) => info,
             Err(e) => {
-                events.push(Event::DecodeError {
+                out.events.push(Event::DecodeError {
                     message: e.to_string(),
                 });
                 return;
@@ -77,34 +158,39 @@ impl CremaCore {
         };
         if self.last_state != Some(info) {
             self.last_state = Some(info);
-            events.push(Event::MachineStateChanged {
+            out.events.push(Event::MachineStateChanged {
                 state: info.state,
                 substate: info.substate,
             });
         }
         for event in self.monitor.on_state_info(info, now_ms) {
-            self.map_shot_event(event, now_ms, events);
+            self.map_shot_event(event, now_ms, out);
         }
     }
 
     /// Decode and process a `ShotSample` telemetry notification.
-    fn handle_sample(&mut self, data: &[u8], now_ms: u64, events: &mut Vec<Event>) {
+    fn handle_sample(&mut self, data: &[u8], now_ms: u64, out: &mut CoreOutput) {
         let sample = match ShotSample::parse(data) {
             Ok(sample) => sample,
             Err(e) => {
-                events.push(Event::DecodeError {
+                out.events.push(Event::DecodeError {
                     message: e.to_string(),
                 });
                 return;
             }
         };
         for event in self.monitor.on_sample(&sample, now_ms) {
-            self.map_shot_event(event, now_ms, events);
+            self.map_shot_event(event, now_ms, out);
         }
+        let reason = self
+            .auto_stop
+            .as_mut()
+            .and_then(|stop| stop.on_sample(&sample, now_ms));
+        Self::push_stop(reason, out);
         let elapsed_ms = self
             .shot_started_ms
             .map_or(0, |start| now_ms.saturating_sub(start));
-        events.push(Event::Telemetry {
+        out.events.push(Event::Telemetry {
             elapsed_ms,
             group_pressure: sample.group_pressure,
             group_flow: sample.group_flow,
@@ -112,23 +198,88 @@ impl CremaCore {
         });
     }
 
-    /// Translate a domain [`ShotEvent`] into FFI [`Event`]s, tracking the
-    /// shot-start timestamp used to stamp telemetry elapsed time.
-    fn map_shot_event(&mut self, event: ShotEvent, now_ms: u64, events: &mut Vec<Event>) {
+    /// Decode and process a scale weight notification.
+    fn handle_scale_weight(&mut self, data: &[u8], now_ms: u64, out: &mut CoreOutput) {
+        let Some(scale) = &mut self.scale else {
+            return;
+        };
+        let Some(weight_g) = scale.parse_weight(data) else {
+            return;
+        };
+        let estimate = self.flow.update(weight_g, now_ms);
+        out.events.push(Event::ScaleReading {
+            weight_g: estimate.weight_g,
+            flow_g_per_s: estimate.flow_g_per_s,
+        });
+        let reason = self
+            .auto_stop
+            .as_mut()
+            .and_then(|stop| stop.on_weight(weight_g, now_ms));
+        Self::push_stop(reason, out);
+    }
+
+    /// Translate a domain [`ShotEvent`] into FFI [`Event`]s, maintaining the
+    /// shot-start timestamp and the auto-stop lifecycle.
+    fn map_shot_event(&mut self, event: ShotEvent, now_ms: u64, out: &mut CoreOutput) {
         match event {
             ShotEvent::Started => {
                 self.shot_started_ms = Some(now_ms);
-                events.push(Event::ShotStarted);
+                self.flow.reset();
+                out.events.push(Event::ShotStarted);
             }
-            ShotEvent::PhaseChanged(phase) => events.push(Event::ShotPhaseChanged { phase }),
-            ShotEvent::FrameChanged(frame) => events.push(Event::ShotFrameChanged { frame }),
+            ShotEvent::PhaseChanged(phase) => {
+                self.arm_auto_stop_if_flowing(phase, now_ms);
+                out.events.push(Event::ShotPhaseChanged { phase });
+            }
+            ShotEvent::FrameChanged(frame) => out.events.push(Event::ShotFrameChanged { frame }),
             ShotEvent::Completed(record) => {
                 self.shot_started_ms = None;
-                events.push(Event::ShotCompleted {
+                self.auto_stop = None;
+                out.events.push(Event::ShotCompleted {
                     duration_ms: record.duration_ms,
                     sample_count: record.samples.len() as u32,
                 });
             }
+        }
+    }
+
+    /// Construct the [`AutoStop`] the first time the shot reaches a flowing
+    /// phase, so its arming delay counts from flow start, not heating start.
+    fn arm_auto_stop_if_flowing(&mut self, phase: ShotPhase, now_ms: u64) {
+        if self.auto_stop.is_some() {
+            return;
+        }
+        if !matches!(phase, ShotPhase::Preinfusion | ShotPhase::Pouring) {
+            return;
+        }
+        if let Some(targets) = self.auto_stop_targets {
+            self.auto_stop = Some(AutoStop::new(targets, self.stop_config(), now_ms));
+        }
+    }
+
+    /// The [`StopConfig`] for a new [`AutoStop`] — the legacy four-term SAW
+    /// lead, using the connected scale's sensor lag.
+    fn stop_config(&self) -> StopConfig {
+        let scale_lag = self
+            .scale
+            .as_ref()
+            .map_or(DEFAULT_SCALE_LAG_SECONDS, Scale::sensor_lag_seconds);
+        StopConfig::with_legacy_lead(
+            STOP_WEIGHT_BEFORE_SECONDS,
+            scale_lag,
+            FlowAlgorithm::TheilSen,
+        )
+    }
+
+    /// Push a [`StopReason`], when one occurred, as a [`Event::StopTriggered`]
+    /// plus the [`Command`] that actually stops the machine.
+    fn push_stop(reason: Option<StopReason>, out: &mut CoreOutput) {
+        if let Some(reason) = reason {
+            out.events.push(Event::StopTriggered { reason });
+            out.commands.push(Command::WriteCharacteristic {
+                target: WriteTarget::De1RequestedState,
+                data: vec![requested_state(MachineState::Idle)],
+            });
         }
     }
 }
@@ -144,6 +295,22 @@ mod tests {
         0x12, 0x34, 0x90, 0x00, 0x28, 0x00, 0x5C, 0x80, 0x00, 0x58, 0x00, 0x5A, 0x00, 0x5D, 0x00,
         0x60, 0x40, 0x03, 0x96,
     ];
+
+    /// A Bookoo weight packet reporting `centigrams` hundredths of a gram.
+    fn bookoo_packet(centigrams: u32) -> [u8; 10] {
+        [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            b'+',
+            (centigrams >> 16) as u8,
+            (centigrams >> 8) as u8,
+            centigrams as u8,
+        ]
+    }
 
     #[test]
     fn entering_espresso_emits_state_change_and_shot_start() {
@@ -212,7 +379,8 @@ mod tests {
     #[test]
     fn on_tick_is_currently_a_no_op() {
         let mut core = CremaCore::new();
-        assert!(core.on_tick(1_000).events.is_empty());
+        let out = core.on_tick(1_000);
+        assert!(out.events.is_empty() && out.commands.is_empty());
     }
 
     #[test]
@@ -226,18 +394,84 @@ mod tests {
     }
 
     #[test]
+    fn connect_scale_identifies_a_known_scale() {
+        let mut core = CremaCore::new();
+        assert!(core.connect_scale("BOOKOO_SC 1234"));
+        assert!(!core.connect_scale("Some Random Device"));
+    }
+
+    #[test]
+    fn a_scale_weight_notification_emits_a_reading() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC");
+        let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(2_000), 1_000);
+        assert!(
+            out.events
+                .iter()
+                .any(|e| matches!(e, Event::ScaleReading { .. }))
+        );
+    }
+
+    #[test]
+    fn a_scale_weight_with_no_scale_connected_is_ignored() {
+        let mut core = CremaCore::new();
+        let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(2_000), 1_000);
+        assert!(out.events.is_empty());
+    }
+
+    #[test]
+    fn request_machine_state_emits_a_write_command() {
+        let core = CremaCore::new();
+        let out = core.request_machine_state(MachineState::Idle);
+        assert!(matches!(
+            out.commands.first(),
+            Some(Command::WriteCharacteristic {
+                target: WriteTarget::De1RequestedState,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn tare_scale_emits_a_write_only_when_a_scale_is_connected() {
+        let mut core = CremaCore::new();
+        assert!(core.tare_scale().commands.is_empty());
+        core.connect_scale("BOOKOO_SC");
+        let out = core.tare_scale();
+        assert!(matches!(
+            out.commands.first(),
+            Some(Command::WriteScale { .. })
+        ));
+    }
+
+    #[test]
+    fn an_armed_weight_target_triggers_a_stop_and_command() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC");
+        core.arm_auto_stop(Some(30.0), None);
+        // Start a shot already in a flowing phase: arms the AutoStop at t = 0.
+        core.on_notification(Source::De1State, &[4, 5], 0);
+        // A 35 g reading well past the 5 s arming delay crosses the 30 g target.
+        let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(3_500), 6_000);
+        assert!(out.events.contains(&Event::StopTriggered {
+            reason: StopReason::Weight,
+        }));
+        assert!(matches!(
+            out.commands.first(),
+            Some(Command::WriteCharacteristic {
+                target: WriteTarget::De1RequestedState,
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn core_output_round_trips_through_json() {
         let output = CoreOutput {
-            events: vec![
-                Event::ShotStarted,
-                Event::Telemetry {
-                    elapsed_ms: 2_500,
-                    group_pressure: 6.0,
-                    group_flow: 2.0,
-                    head_temp: 92.0,
-                },
-                Event::ShotFrameChanged { frame: 3 },
-            ],
+            events: vec![Event::ShotStarted, Event::ShotFrameChanged { frame: 3 }],
+            commands: vec![Command::WriteScale {
+                data: vec![1, 2, 3],
+            }],
         };
         let json = output.to_json().unwrap();
         let parsed: CoreOutput = serde_json::from_str(&json).unwrap();
