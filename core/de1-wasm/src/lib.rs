@@ -11,7 +11,7 @@
 //! `unsafe_code = "forbid"` lint (see `Cargo.toml`).
 
 use de1_app::{CoreOutput, CremaCore, Source};
-use de1_protocol::MachineState;
+use de1_protocol::{MachineState, ShotSettings};
 use wasm_bindgen::prelude::*;
 
 /// Which BLE characteristic an incoming notification came from — mirrors
@@ -127,9 +127,10 @@ impl CremaBridge {
         self.core.reset();
     }
 
-    /// Identify and connect a scale from its BLE advertised name. Returns
-    /// whether the name matched a supported scale.
-    pub fn connect_scale(&mut self, advertised_name: String) -> bool {
+    /// Identify and connect a scale from its BLE advertised name. Returns the
+    /// connected scale's display label, or `undefined` if the name matched no
+    /// supported scale.
+    pub fn connect_scale(&mut self, advertised_name: String) -> Option<String> {
         self.core.connect_scale(&advertised_name)
     }
 
@@ -158,6 +159,42 @@ impl CremaBridge {
     /// Build a [`CoreOutput`] (JSON) whose command tares the connected scale.
     pub fn tare_scale(&mut self) -> String {
         json(self.core.tare_scale())
+    }
+
+    /// Write the DE1's steam / hot-water settings. The fields are passed as
+    /// individual scalars — [`de1_protocol::ShotSettings`] is not (and should
+    /// not be) wasm-bindgen-annotated, so the bridge builds it here. Returns a
+    /// JSON-encoded [`CoreOutput`] whose command applies the settings (with
+    /// the legacy hot-water volume override when a scale is connected).
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_steam_hotwater_settings(
+        &mut self,
+        steam_flags: u8,
+        steam_temp_c: f32,
+        steam_timeout_s: f32,
+        hot_water_temp_c: f32,
+        hot_water_volume_ml: f32,
+        hot_water_timeout_s: f32,
+        espresso_volume_ml: f32,
+        group_temp_c: f32,
+    ) -> String {
+        let settings = ShotSettings {
+            steam_flags,
+            steam_temp_c,
+            steam_timeout_s,
+            hot_water_temp_c,
+            hot_water_volume_ml,
+            hot_water_timeout_s,
+            espresso_volume_ml,
+            group_temp_c,
+        };
+        json(self.core.set_steam_hotwater_settings(settings))
+    }
+
+    /// Enable or disable steam eco mode (the legacy `eco_steam` setting).
+    /// Returns a JSON-encoded [`CoreOutput`].
+    pub fn enable_steam_eco_mode(&mut self, enabled: bool, now_ms: f64) -> String {
+        json(self.core.enable_steam_eco_mode(enabled, now_ms as u64))
     }
 
     /// The standard DE1 profiles Crema ships built in, as a JSON array string.
@@ -200,8 +237,35 @@ mod tests {
     #[test]
     fn connect_scale_identifies_a_known_scale() {
         let mut bridge = CremaBridge::new();
-        assert!(bridge.connect_scale("BOOKOO_SC".to_owned()));
-        assert!(!bridge.connect_scale("Not A Scale".to_owned()));
+        assert_eq!(
+            bridge.connect_scale("BOOKOO_SC".to_owned()),
+            Some("Bookoo".to_owned())
+        );
+        assert_eq!(bridge.connect_scale("Not A Scale".to_owned()), None);
+    }
+
+    /// Apply representative steam / hot-water settings to `bridge`.
+    fn set_steam_settings(bridge: &mut CremaBridge) -> String {
+        bridge.set_steam_hotwater_settings(0, 150.0, 120.0, 85.0, 50.0, 30.0, 36.0, 92.0)
+    }
+
+    #[test]
+    fn set_steam_hotwater_settings_produces_a_write_command() {
+        let mut bridge = CremaBridge::new();
+        let json = set_steam_settings(&mut bridge);
+        assert!(json.contains("\"commands\""));
+        assert!(json.contains("WriteCharacteristic"));
+        assert!(json.contains("De1ShotSettings"));
+    }
+
+    #[test]
+    fn enable_steam_eco_mode_returns_core_output_json() {
+        let mut bridge = CremaBridge::new();
+        set_steam_settings(&mut bridge);
+        bridge.enable_steam_eco_mode(true, 0.0);
+        // After the idle delay a tick engages eco mode and rewrites the target.
+        let json = bridge.on_tick(600_000.0);
+        assert!(json.contains("SteamEcoModeChanged"));
     }
 
     #[test]

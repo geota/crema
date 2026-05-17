@@ -19,17 +19,15 @@ pub use error::AppError;
 pub use event::{Command, CoreOutput, Event, Source, WriteTarget};
 
 use de1_domain::{
-    AutoStop, FlowAlgorithm, FlowEstimator, ShotEvent, ShotMonitor, ShotPhase, SteamEvent,
-    SteamMonitor, StopConfig, StopReason, StopTargets, WaterEvent, WaterMonitor,
+    AutoStop, FlowAlgorithm, FlowEstimator, STOP_WEIGHT_BEFORE_SECONDS, ShotEvent, ShotMonitor,
+    ShotPhase, SteamEvent, SteamMonitor, StopConfig, StopReason, StopTargets, WaterEvent,
+    WaterMonitor,
 };
 use de1_protocol::{
     MachineState, ShotSample, ShotSettings, StateInfo, WaterLevels, requested_state,
 };
 use de1_scale::Scale;
 
-/// The legacy `stop_weight_before_seconds` setting default — the user-tunable
-/// part of the SAW look-ahead.
-const STOP_WEIGHT_BEFORE_SECONDS: f32 = 0.15;
 /// Scale sensor lag assumed when no scale is connected — a representative value
 /// across the supported scales.
 const DEFAULT_SCALE_LAG_SECONDS: f32 = 0.38;
@@ -112,11 +110,12 @@ impl CremaCore {
         }
     }
 
-    /// Identify and connect a scale from its BLE advertised name. Returns
-    /// whether the name matched a supported scale.
-    pub fn connect_scale(&mut self, advertised_name: &str) -> bool {
+    /// Identify and connect a scale from its BLE advertised name. Returns the
+    /// connected scale's display label (`Scale::label`), or `None` if the name
+    /// matched no supported scale.
+    pub fn connect_scale(&mut self, advertised_name: &str) -> Option<String> {
         self.scale = Scale::identify(advertised_name);
-        self.scale.is_some()
+        self.scale.as_ref().map(|scale| scale.label().to_owned())
     }
 
     /// Arm automatic shot-stop. A `None` target disables that mode; the
@@ -334,6 +333,8 @@ impl CremaCore {
             .as_mut()
             .and_then(|stop| stop.on_sample(&sample, now_ms));
         Self::push_stop(reason, out);
+        // Cast to u32: a session's elapsed time never approaches u32::MAX ms
+        // (~49 days), so the narrowing cannot truncate in practice.
         let elapsed_ms = self
             .shot_started_ms
             .map_or(0, |start| now_ms.saturating_sub(start)) as u32;
@@ -403,6 +404,7 @@ impl CremaCore {
                 self.shot_started_ms = None;
                 self.auto_stop = None;
                 out.events.push(Event::ShotCompleted {
+                    // A session never exceeds u32::MAX ms, so this cannot truncate.
                     duration_ms: record.duration_ms as u32,
                     sample_count: record.samples.len() as u32,
                 });
@@ -419,6 +421,7 @@ impl CremaCore {
             WaterEvent::Completed(record) => {
                 out.events.push(Event::WaterSessionCompleted {
                     kind: record.kind,
+                    // A session never exceeds u32::MAX ms, so this cannot truncate.
                     duration_ms: record.duration_ms as u32,
                 });
             }
@@ -433,6 +436,7 @@ impl CremaCore {
             SteamEvent::Started => out.events.push(Event::SteamSessionStarted),
             SteamEvent::Completed(record) => {
                 out.events.push(Event::SteamSessionCompleted {
+                    // A session never exceeds u32::MAX ms, so this cannot truncate.
                     duration_ms: record.duration_ms as u32,
                     sample_count: record.samples.len() as u32,
                 });
@@ -637,8 +641,13 @@ mod tests {
     #[test]
     fn connect_scale_identifies_a_known_scale() {
         let mut core = CremaCore::new();
-        assert!(core.connect_scale("BOOKOO_SC 1234"));
-        assert!(!core.connect_scale("Some Random Device"));
+        // A matched scale returns its display label.
+        assert_eq!(
+            core.connect_scale("BOOKOO_SC 1234"),
+            Some("Bookoo".to_owned())
+        );
+        // An unrecognised name returns None.
+        assert_eq!(core.connect_scale("Some Random Device"), None);
     }
 
     #[test]

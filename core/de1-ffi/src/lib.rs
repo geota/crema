@@ -13,7 +13,7 @@
 use std::sync::{Mutex, MutexGuard};
 
 use de1_app::{CoreOutput, CremaCore, Source};
-use de1_protocol::MachineState;
+use de1_protocol::{MachineState, ShotSettings};
 
 uniffi::setup_scaffolding!();
 
@@ -81,6 +81,46 @@ impl From<MachineRequest> for MachineState {
     }
 }
 
+/// The DE1's steam / hot-water settings, mirrored across the FFI boundary.
+///
+/// [`de1_protocol::ShotSettings`] is not (and should not be) UniFFI-annotated,
+/// so this bridge-local record marshals it; the bridge builds the protocol
+/// type from it inside [`CremaBridge::set_steam_hotwater_settings`].
+#[derive(uniffi::Record)]
+pub struct SteamHotWaterSettings {
+    /// Steam-control flag bits (the legacy app writes 0).
+    pub steam_flags: u8,
+    /// Target steam temperature, °C.
+    pub steam_temp_c: f32,
+    /// Steam timeout, seconds.
+    pub steam_timeout_s: f32,
+    /// Target hot-water temperature, °C.
+    pub hot_water_temp_c: f32,
+    /// Hot-water volume, mL.
+    pub hot_water_volume_ml: f32,
+    /// Hot-water maximum time, seconds.
+    pub hot_water_timeout_s: f32,
+    /// Typical espresso volume, mL.
+    pub espresso_volume_ml: f32,
+    /// Espresso group target temperature, °C.
+    pub group_temp_c: f32,
+}
+
+impl From<SteamHotWaterSettings> for ShotSettings {
+    fn from(s: SteamHotWaterSettings) -> ShotSettings {
+        ShotSettings {
+            steam_flags: s.steam_flags,
+            steam_temp_c: s.steam_temp_c,
+            steam_timeout_s: s.steam_timeout_s,
+            hot_water_temp_c: s.hot_water_temp_c,
+            hot_water_volume_ml: s.hot_water_volume_ml,
+            hot_water_timeout_s: s.hot_water_timeout_s,
+            espresso_volume_ml: s.espresso_volume_ml,
+            group_temp_c: s.group_temp_c,
+        }
+    }
+}
+
 /// The Crema core, exposed to the Kotlin shell.
 ///
 /// Methods that produce a [`CoreOutput`] return it as a JSON string; the shell
@@ -135,9 +175,10 @@ impl CremaBridge {
         self.core().reset();
     }
 
-    /// Identify and connect a scale from its BLE advertised name. Returns
-    /// whether the name matched a supported scale.
-    pub fn connect_scale(&self, advertised_name: String) -> bool {
+    /// Identify and connect a scale from its BLE advertised name. Returns the
+    /// connected scale's display label, or `None` if the name matched no
+    /// supported scale.
+    pub fn connect_scale(&self, advertised_name: String) -> Option<String> {
         self.core().connect_scale(&advertised_name)
     }
 
@@ -166,6 +207,19 @@ impl CremaBridge {
     /// Build a [`CoreOutput`] (JSON) whose command tares the connected scale.
     pub fn tare_scale(&self) -> String {
         json(self.core().tare_scale())
+    }
+
+    /// Write the DE1's steam / hot-water settings. Returns a JSON-encoded
+    /// [`CoreOutput`] whose command applies them (with the legacy hot-water
+    /// volume override when a scale is connected).
+    pub fn set_steam_hotwater_settings(&self, settings: SteamHotWaterSettings) -> String {
+        json(self.core().set_steam_hotwater_settings(settings.into()))
+    }
+
+    /// Enable or disable steam eco mode (the legacy `eco_steam` setting).
+    /// Returns a JSON-encoded [`CoreOutput`].
+    pub fn enable_steam_eco_mode(&self, enabled: bool, now_ms: u64) -> String {
+        json(self.core().enable_steam_eco_mode(enabled, now_ms))
     }
 
     /// The standard DE1 profiles Crema ships built in, as a JSON array string.
@@ -210,8 +264,44 @@ mod tests {
     #[test]
     fn connect_scale_identifies_a_known_scale() {
         let bridge = CremaBridge::new();
-        assert!(bridge.connect_scale("BOOKOO_SC".to_owned()));
-        assert!(!bridge.connect_scale("Not A Scale".to_owned()));
+        assert_eq!(
+            bridge.connect_scale("BOOKOO_SC".to_owned()),
+            Some("Bookoo".to_owned())
+        );
+        assert_eq!(bridge.connect_scale("Not A Scale".to_owned()), None);
+    }
+
+    /// A `SteamHotWaterSettings` with representative values.
+    fn steam_settings() -> SteamHotWaterSettings {
+        SteamHotWaterSettings {
+            steam_flags: 0,
+            steam_temp_c: 150.0,
+            steam_timeout_s: 120.0,
+            hot_water_temp_c: 85.0,
+            hot_water_volume_ml: 50.0,
+            hot_water_timeout_s: 30.0,
+            espresso_volume_ml: 36.0,
+            group_temp_c: 92.0,
+        }
+    }
+
+    #[test]
+    fn set_steam_hotwater_settings_produces_a_write_command() {
+        let bridge = CremaBridge::new();
+        let json = bridge.set_steam_hotwater_settings(steam_settings());
+        assert!(json.contains("\"commands\""));
+        assert!(json.contains("WriteCharacteristic"));
+        assert!(json.contains("De1ShotSettings"));
+    }
+
+    #[test]
+    fn enable_steam_eco_mode_returns_core_output_json() {
+        let bridge = CremaBridge::new();
+        bridge.set_steam_hotwater_settings(steam_settings());
+        bridge.enable_steam_eco_mode(true, 0);
+        // After the idle delay a tick engages eco mode and rewrites the target.
+        let json = bridge.on_tick(600_000);
+        assert!(json.contains("SteamEcoModeChanged"));
     }
 
     #[test]
