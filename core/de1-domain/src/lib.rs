@@ -8,6 +8,8 @@
 //!   `de1-protocol` upload packets.
 //! - [`profile_import`] — importers for the legacy DE1-app profile formats
 //!   (v2 JSON and the original Tcl-dictionary `.tcl` files).
+//! - [`builtin`] — the standard DE1 profiles, vendored and shipped as built-in
+//!   Crema [`Profile`]s ("batteries included").
 //! - [`shot`] — the [`ShotMonitor`] state machine, which observes a shot and
 //!   records it.
 //! - [`water`] — the [`WaterMonitor`] state machine, the sibling of
@@ -19,6 +21,7 @@
 //! - [`flow`] — [`FlowEstimator`], robust weight/mass-flow estimation for SAW.
 //! - [`filter`] — [`MedianFilter`], for smoothing a vibration-noisy signal.
 
+pub mod builtin;
 pub mod error;
 pub mod filter;
 pub mod flow;
@@ -30,6 +33,7 @@ pub mod steam;
 pub mod stop;
 pub mod water;
 
+pub use builtin::{BUILTIN_PROFILE_COUNT, builtin_profiles};
 pub use error::{DomainError, ImportError};
 pub use filter::MedianFilter;
 pub use flow::{Estimate, FlowAlgorithm, FlowEstimator};

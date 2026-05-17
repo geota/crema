@@ -159,6 +159,14 @@ impl CremaBridge {
     pub fn tare_scale(&mut self) -> String {
         json(self.core.tare_scale())
     }
+
+    /// The standard DE1 profiles Crema ships built in, as a JSON array string.
+    ///
+    /// Each element is a `Profile`; the shell parses the array into its own
+    /// profile type, consistent with the rest of the JSON-string surface.
+    pub fn builtin_profiles_json(&self) -> String {
+        self.core.builtin_profiles_json()
+    }
 }
 
 /// Serialize a [`CoreOutput`] to JSON for the shell. `CoreOutput` is flat plain
@@ -194,6 +202,14 @@ mod tests {
         let mut bridge = CremaBridge::new();
         assert!(bridge.connect_scale("BOOKOO_SC".to_owned()));
         assert!(!bridge.connect_scale("Not A Scale".to_owned()));
+    }
+
+    #[test]
+    fn builtin_profiles_json_returns_a_profile_array() {
+        let bridge = CremaBridge::new();
+        let json = bridge.builtin_profiles_json();
+        assert!(json.starts_with('['));
+        assert!(json.contains("\"steps\""));
     }
 
     #[test]
