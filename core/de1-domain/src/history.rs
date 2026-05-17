@@ -226,4 +226,75 @@ mod tests {
     fn from_json_rejects_malformed_input() {
         assert!(StoredShot::from_json("not json").is_err());
     }
+
+    #[test]
+    fn from_json_preserves_the_format_version() {
+        let shot = StoredShot::new(1_700_000_000_000, sample_record());
+        let json = shot.to_json().unwrap();
+        let parsed = StoredShot::from_json(&json).unwrap();
+        assert_eq!(parsed.format_version, STORED_SHOT_FORMAT_VERSION);
+    }
+
+    /// Policy: `format_version` is a plain field with no custom validation, so
+    /// a stored shot stamped with a *different* version still deserializes —
+    /// this is deliberate, so a future reader can branch on the version rather
+    /// than failing outright on data it could otherwise migrate.
+    #[test]
+    fn from_json_accepts_an_unknown_future_format_version() {
+        let shot = StoredShot::new(1_700_000_000_000, sample_record());
+        let json = shot.to_json().unwrap();
+        // Re-stamp the version field to one this build does not know.
+        let future = json.replace(
+            &format!("\"format_version\": {STORED_SHOT_FORMAT_VERSION}"),
+            "\"format_version\": 9999",
+        );
+        assert_ne!(future, json, "the version field must have been rewritten");
+        let parsed = StoredShot::from_json(&future).unwrap();
+        // The reader gets the raw version and can branch on it.
+        assert_eq!(parsed.format_version, 9999);
+        // Every other field survives intact.
+        assert_eq!(parsed.record, shot.record);
+        assert_eq!(parsed.recorded_at_unix_ms, shot.recorded_at_unix_ms);
+    }
+
+    #[test]
+    fn from_json_accepts_an_older_format_version() {
+        let shot = StoredShot::new(1_700_000_000_000, sample_record());
+        let json = shot.to_json().unwrap();
+        let older = json.replace(
+            &format!("\"format_version\": {STORED_SHOT_FORMAT_VERSION}"),
+            "\"format_version\": 0",
+        );
+        let parsed = StoredShot::from_json(&older).unwrap();
+        assert_eq!(parsed.format_version, 0);
+    }
+
+    #[test]
+    fn from_json_still_rejects_a_structurally_invalid_shot() {
+        // A future version does not excuse a missing required field: dropping
+        // `record` must still fail, so a stale reader cannot silently accept
+        // garbage just because the version is unfamiliar.
+        let bad = r#"{"format_version": 9999, "recorded_at_unix_ms": 0,
+            "profile": null, "stop_reason": null, "metadata": {}}"#;
+        assert!(StoredShot::from_json(bad).is_err());
+    }
+
+    #[test]
+    fn a_collection_of_shots_round_trips_through_json() {
+        let shots = vec![
+            StoredShot::new(1_700_000_000_000, sample_record())
+                .with_stop_reason(StopReason::Weight),
+            StoredShot::new(1_700_000_060_000, sample_record())
+                .with_stop_reason(StopReason::MaxTime)
+                .with_metadata(ShotMetadata {
+                    rating: Some(5),
+                    ..ShotMetadata::default()
+                }),
+            StoredShot::new(1_700_000_120_000, sample_record()),
+        ];
+        let json = serde_json::to_string(&shots).unwrap();
+        let parsed: Vec<StoredShot> = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, shots);
+        assert_eq!(parsed.len(), 3);
+    }
 }
