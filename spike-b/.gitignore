@@ -1,0 +1,11 @@
+# Generated locally — see README "The Gradle wrapper".
+/gradlew
+/gradlew.bat
+/gradle/wrapper/gradle-wrapper.jar
+
+# Build / IDE artifacts (also covered by the repo-root .gitignore).
+.gradle/
+build/
+local.properties
+.cxx/
+*.apk
