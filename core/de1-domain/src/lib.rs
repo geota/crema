@@ -20,6 +20,7 @@
 //! - [`stop`] — [`AutoStop`], the stop-at-weight / stop-at-volume controller.
 //! - [`flow`] — [`FlowEstimator`], robust weight/mass-flow estimation for SAW.
 //! - [`filter`] — [`MedianFilter`], for smoothing a vibration-noisy signal.
+//! - [`session`] — [`SessionTimer`], the timing core shared by the monitors.
 
 pub mod builtin;
 pub mod error;
@@ -28,6 +29,7 @@ pub mod flow;
 pub mod history;
 pub mod profile;
 pub mod profile_import;
+pub mod session;
 pub mod shot;
 pub mod steam;
 pub mod stop;
@@ -43,9 +45,13 @@ pub use profile::{
     TempSensor, Transition,
 };
 pub use profile_import::{import_legacy_tcl, import_v2_json};
-pub use shot::{ShotEvent, ShotMetrics, ShotMonitor, ShotPhase, ShotRecord, TimedSample};
-pub use steam::{
-    STEAM_ECO_DELAY_SECONDS, SteamClogReason, SteamEvent, SteamMonitor, SteamRecord, SteamSample,
+pub use session::SessionTimer;
+pub use shot::{
+    MAX_SHOT_SAMPLES, ShotEvent, ShotMetrics, ShotMonitor, ShotPhase, ShotRecord, TimedSample,
 };
-pub use stop::{AutoStop, StopConfig, StopReason, StopTargets};
+pub use steam::{
+    MAX_STEAM_SAMPLES, STEAM_ECO_DELAY_SECONDS, SteamClogReason, SteamEvent, SteamMonitor,
+    SteamRecord, SteamSample,
+};
+pub use stop::{AutoStop, STOP_WEIGHT_BEFORE_SECONDS, StopConfig, StopReason, StopTargets};
 pub use water::{WaterEvent, WaterMonitor, WaterRecord, WaterSessionKind};

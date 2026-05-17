@@ -15,6 +15,8 @@
 use de1_protocol::{MachineState, StateInfo};
 use typeshare::typeshare;
 
+use crate::session::SessionTimer;
+
 /// Which kind of water-dispensing session the DE1 is running.
 #[typeshare]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -55,11 +57,12 @@ pub enum WaterEvent {
     Completed(WaterRecord),
 }
 
-/// In-progress hot-water / flush session accumulation.
+/// In-progress hot-water / flush session accumulation. The session timing
+/// lives in a shared [`SessionTimer`]; this holds only the session kind.
 #[derive(Debug)]
 struct WaterInProgress {
     kind: WaterSessionKind,
-    started_ms: u64,
+    timer: SessionTimer,
 }
 
 /// Observes the DE1's notification stream and tracks one hot-water or flush
@@ -104,10 +107,10 @@ impl WaterMonitor {
         if let Some(session) = &self.session
             && new_kind != Some(session.kind)
         {
-            let session = self.session.take().expect("checked Some above");
+            let mut session = self.session.take().expect("checked Some above");
             events.push(WaterEvent::Completed(WaterRecord {
                 kind: session.kind,
-                duration_ms: now_ms.saturating_sub(session.started_ms),
+                duration_ms: session.timer.finish(now_ms).unwrap_or(0),
             }));
         }
 
@@ -116,10 +119,9 @@ impl WaterMonitor {
         if let Some(kind) = new_kind
             && self.session.is_none()
         {
-            self.session = Some(WaterInProgress {
-                kind,
-                started_ms: now_ms,
-            });
+            let mut timer = SessionTimer::new();
+            timer.start(now_ms);
+            self.session = Some(WaterInProgress { kind, timer });
             events.push(WaterEvent::Started(kind));
         }
         events
