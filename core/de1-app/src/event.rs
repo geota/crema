@@ -92,6 +92,10 @@ pub enum Event {
         /// Number of telemetry samples recorded.
         sample_count: u32,
     },
+    /// The connected scale stopped reporting weight — no reading has arrived
+    /// for roughly a second. Emitted once per stale episode; a fresh reading
+    /// re-arms it.
+    ScaleStale,
     /// An incoming notification could not be decoded.
     DecodeError {
         /// Human-readable description of the failure.

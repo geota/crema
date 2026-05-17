@@ -68,6 +68,12 @@ export type Event =
 	/** Number of telemetry samples recorded. */
 	sample_count: number;
 }}
+	/**
+	 * The connected scale stopped reporting weight — no reading has arrived
+	 * for roughly a second. Emitted once per stale episode; a fresh reading
+	 * re-arms it.
+	 */
+	| { type: "ScaleStale", content?: undefined }
 	/** An incoming notification could not be decoded. */
 	| { type: "DecodeError", content: {
 	/** Human-readable description of the failure. */

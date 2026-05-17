@@ -34,6 +34,9 @@ const DEFAULT_SCALE_LAG_SECONDS: f32 = 0.38;
 /// Millimetres added to the DE1's reported tank level — the legacy
 /// `water_level_mm_correction` (`machine.tcl`).
 const WATER_LEVEL_MM_CORRECTION: f32 = 5.0;
+/// How long the scale may go without reporting weight before it is considered
+/// stale — the legacy app warns after roughly one second of silence.
+const SCALE_STALE_TIMEOUT_MS: u64 = 1_000;
 
 /// The headless Crema application core.
 ///
@@ -56,6 +59,12 @@ pub struct CremaCore {
     auto_stop_targets: Option<StopTargets>,
     /// The live auto-stop controller, for the duration of one shot.
     auto_stop: Option<AutoStop>,
+    /// Timestamp of the most recent scale-weight reading, for the lost-scale
+    /// watchdog. `None` until the connected scale reports once.
+    last_scale_weight_ms: Option<u64>,
+    /// Whether an [`Event::ScaleStale`] has already been emitted for the
+    /// current stale episode — cleared by the next fresh reading.
+    scale_stale_reported: bool,
 }
 
 impl Default for CremaCore {
@@ -75,6 +84,8 @@ impl CremaCore {
             flow: FlowEstimator::new(FlowAlgorithm::default()),
             auto_stop_targets: None,
             auto_stop: None,
+            last_scale_weight_ms: None,
+            scale_stale_reported: false,
         }
     }
 
@@ -153,10 +164,20 @@ impl CremaCore {
         out
     }
 
-    /// Feed a periodic clock tick. Reserved for time-driven logic; currently a
-    /// no-op (auto-stop acts on the notification streams).
-    pub fn on_tick(&mut self, _now_ms: u64) -> CoreOutput {
-        CoreOutput::default()
+    /// Feed a periodic clock tick. Drives the lost-scale watchdog: if a scale
+    /// is connected but has not reported weight for [`SCALE_STALE_TIMEOUT_MS`],
+    /// emit [`Event::ScaleStale`] once per stale episode.
+    pub fn on_tick(&mut self, now_ms: u64) -> CoreOutput {
+        let mut out = CoreOutput::default();
+        if self.scale.is_some()
+            && !self.scale_stale_reported
+            && let Some(last) = self.last_scale_weight_ms
+            && now_ms.saturating_sub(last) >= SCALE_STALE_TIMEOUT_MS
+        {
+            self.scale_stale_reported = true;
+            out.events.push(Event::ScaleStale);
+        }
+        out
     }
 
     /// Discard all session state — e.g. on disconnect. The connected scale and
@@ -226,6 +247,9 @@ impl CremaCore {
         let Some(weight_g) = scale.parse_weight(data) else {
             return;
         };
+        // A fresh reading re-arms the lost-scale watchdog.
+        self.last_scale_weight_ms = Some(now_ms);
+        self.scale_stale_reported = false;
         let estimate = self.flow.update(weight_g, now_ms);
         out.events.push(Event::ScaleReading {
             weight_g: estimate.weight_g,
@@ -414,10 +438,44 @@ mod tests {
     }
 
     #[test]
-    fn on_tick_is_currently_a_no_op() {
+    fn on_tick_does_nothing_without_a_connected_scale() {
         let mut core = CremaCore::new();
-        let out = core.on_tick(1_000);
+        let out = core.on_tick(1_000_000);
         assert!(out.events.is_empty() && out.commands.is_empty());
+    }
+
+    #[test]
+    fn on_tick_does_nothing_before_the_scale_first_reports() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC");
+        // No reading yet — the watchdog has nothing to time against.
+        let out = core.on_tick(1_000_000);
+        assert!(out.events.is_empty());
+    }
+
+    #[test]
+    fn on_tick_emits_scale_stale_once_per_stale_episode() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC");
+        core.on_notification(Source::ScaleWeight, &bookoo_packet(2_000), 1_000);
+        // Within the timeout: no warning yet.
+        assert!(core.on_tick(1_500).events.is_empty());
+        // Past the 1 s timeout: ScaleStale fires.
+        assert!(core.on_tick(2_100).events.contains(&Event::ScaleStale));
+        // Still stale on the next tick, but the warning is not repeated.
+        assert!(!core.on_tick(3_000).events.contains(&Event::ScaleStale));
+    }
+
+    #[test]
+    fn a_fresh_scale_reading_re_arms_the_watchdog() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC");
+        core.on_notification(Source::ScaleWeight, &bookoo_packet(2_000), 1_000);
+        assert!(core.on_tick(2_500).events.contains(&Event::ScaleStale));
+        // A new reading re-arms the watchdog; staleness can be reported again.
+        core.on_notification(Source::ScaleWeight, &bookoo_packet(2_100), 3_000);
+        assert!(core.on_tick(3_500).events.is_empty());
+        assert!(core.on_tick(4_100).events.contains(&Event::ScaleStale));
     }
 
     #[test]
