@@ -143,6 +143,21 @@ impl CremaCore {
         self.auto_stop = None;
     }
 
+    /// The standard DE1 profiles Crema ships built in, as a JSON array string.
+    ///
+    /// Every profile is a [`Profile`](de1_domain::Profile) (already serde),
+    /// imported once from the verbatim-vendored legacy `*.tcl` files; see
+    /// [`de1_domain::builtin_profiles`]. The shell parses the JSON into its own
+    /// profile type, consistent with the rest of the JSON-string FFI surface.
+    ///
+    /// This is a pure read of compile-time data: it touches no machine session
+    /// state, so it does not return a [`CoreOutput`]. Serialization of a
+    /// `Vec<Profile>` is plain data and infallible in practice.
+    pub fn builtin_profiles_json(&self) -> String {
+        serde_json::to_string(de1_domain::builtin_profiles())
+            .expect("built-in profiles are plain data and always serialize")
+    }
+
     /// Build a [`Command`] that asks the DE1 to enter `state` — e.g.
     /// [`MachineState::Espresso`] to start a shot, [`MachineState::Idle`] to
     /// stop one or wake from sleep.
@@ -905,6 +920,20 @@ mod tests {
             out.events
                 .contains(&Event::SteamEcoModeChanged { eco: false })
         );
+    }
+
+    #[test]
+    fn builtin_profiles_json_is_a_non_empty_profile_array() {
+        let core = CremaCore::new();
+        let json = core.builtin_profiles_json();
+        // It parses back into the same Vec<Profile> the domain crate ships.
+        let parsed: Vec<de1_domain::Profile> = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.len(), de1_domain::BUILTIN_PROFILE_COUNT);
+        assert!(!parsed.is_empty());
+        // Every shipped profile is uploadable to a DE1.
+        for profile in &parsed {
+            assert!(profile.assemble().is_ok());
+        }
     }
 
     #[test]
