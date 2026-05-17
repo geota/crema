@@ -138,13 +138,11 @@ impl ShotMonitor {
         }
 
         // A shot ends when the machine leaves the Espresso state.
-        if !in_espresso {
-            if let Some(shot) = self.shot.take() {
-                events.push(ShotEvent::Completed(ShotRecord {
-                    duration_ms: now_ms.saturating_sub(shot.started_ms),
-                    samples: shot.samples,
-                }));
-            }
+        if !in_espresso && let Some(shot) = self.shot.take() {
+            events.push(ShotEvent::Completed(ShotRecord {
+                duration_ms: now_ms.saturating_sub(shot.started_ms),
+                samples: shot.samples,
+            }));
         }
         events
     }
