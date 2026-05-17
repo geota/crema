@@ -1,0 +1,207 @@
+//! Persistable shot history.
+//!
+//! The core is sans-IO, so it does not write files — but the *format* of a
+//! stored shot is domain knowledge, so it is defined and versioned here. A
+//! [`StoredShot`] wraps a completed [`ShotRecord`] with the context needed to
+//! make sense of it later: the profile pulled, why it stopped, a wall-clock
+//! timestamp, and the barista's journal notes.
+//!
+//! [`StoredShot::to_json`] / [`StoredShot::from_json`] give a stable,
+//! human-readable serialization; the shell decides where the bytes live — a
+//! file per shot, a database, an upload.
+
+use serde::{Deserialize, Serialize};
+
+use crate::error::DomainError;
+use crate::profile::Profile;
+use crate::shot::ShotRecord;
+use crate::stop::StopReason;
+
+/// Schema version stamped into every [`StoredShot`]. Bump it when the stored
+/// shape changes incompatibly; readers branch on [`StoredShot::format_version`].
+pub const STORED_SHOT_FORMAT_VERSION: u32 = 1;
+
+/// Barista-supplied journal metadata for a shot. Every field is optional — a
+/// shot can be stored with none of it and annotated afterwards.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct ShotMetadata {
+    /// Dry coffee dose, grams.
+    pub dose_in_g: Option<f32>,
+    /// Weight in the cup, grams.
+    pub yield_out_g: Option<f32>,
+    /// Bean / roaster description.
+    pub beans: Option<String>,
+    /// Grinder setting used.
+    pub grinder_setting: Option<String>,
+    /// Free-form tasting notes.
+    pub notes: Option<String>,
+    /// Personal rating, 1–5.
+    pub rating: Option<u8>,
+}
+
+impl ShotMetadata {
+    /// The brew ratio (yield ÷ dose), if both weights are recorded and the
+    /// dose is positive.
+    pub fn brew_ratio(&self) -> Option<f32> {
+        match (self.dose_in_g, self.yield_out_g) {
+            (Some(dose), Some(yield_out)) if dose > 0.0 => Some(yield_out / dose),
+            _ => None,
+        }
+    }
+}
+
+/// A completed shot persisted to history: the telemetry plus everything
+/// needed to interpret it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StoredShot {
+    /// Schema version — see [`STORED_SHOT_FORMAT_VERSION`].
+    pub format_version: u32,
+    /// When the shot was pulled, Unix epoch milliseconds. The core has no
+    /// clock; the shell supplies this.
+    pub recorded_at_unix_ms: u64,
+    /// The profile pulled, if known.
+    pub profile: Option<Profile>,
+    /// Why the shot stopped, if an [`AutoStop`](crate::AutoStop) drove it.
+    pub stop_reason: Option<StopReason>,
+    /// Barista journal metadata.
+    pub metadata: ShotMetadata,
+    /// The recorded telemetry.
+    pub record: ShotRecord,
+}
+
+impl StoredShot {
+    /// Wrap a freshly completed `record` for storage, stamped with the current
+    /// [`STORED_SHOT_FORMAT_VERSION`] and `recorded_at_unix_ms`. Profile, stop
+    /// reason, and metadata start empty — attach them with the `with_*` setters.
+    pub fn new(recorded_at_unix_ms: u64, record: ShotRecord) -> StoredShot {
+        StoredShot {
+            format_version: STORED_SHOT_FORMAT_VERSION,
+            recorded_at_unix_ms,
+            profile: None,
+            stop_reason: None,
+            metadata: ShotMetadata::default(),
+            record,
+        }
+    }
+
+    /// Attach the profile that was pulled.
+    #[must_use]
+    pub fn with_profile(mut self, profile: Profile) -> StoredShot {
+        self.profile = Some(profile);
+        self
+    }
+
+    /// Attach the reason the shot stopped.
+    #[must_use]
+    pub fn with_stop_reason(mut self, reason: StopReason) -> StoredShot {
+        self.stop_reason = Some(reason);
+        self
+    }
+
+    /// Attach barista journal metadata.
+    #[must_use]
+    pub fn with_metadata(mut self, metadata: ShotMetadata) -> StoredShot {
+        self.metadata = metadata;
+        self
+    }
+
+    /// Serialize to pretty JSON — a stable, human-readable format the shell
+    /// can persist wherever it likes.
+    ///
+    /// # Errors
+    ///
+    /// [`DomainError::Serialization`] if serialization fails (it should not
+    /// for a well-formed `StoredShot`).
+    pub fn to_json(&self) -> Result<String, DomainError> {
+        serde_json::to_string_pretty(self).map_err(|e| DomainError::Serialization(e.to_string()))
+    }
+
+    /// Parse a [`StoredShot`] from JSON produced by [`to_json`](Self::to_json).
+    ///
+    /// # Errors
+    ///
+    /// [`DomainError::Serialization`] if `json` is malformed or does not match
+    /// the schema.
+    pub fn from_json(json: &str) -> Result<StoredShot, DomainError> {
+        serde_json::from_str(json).map_err(|e| DomainError::Serialization(e.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::shot::TimedSample;
+    use de1_protocol::ShotSample;
+
+    /// A one-sample shot record for round-trip tests.
+    fn sample_record() -> ShotRecord {
+        ShotRecord {
+            duration_ms: 27_000,
+            samples: vec![TimedSample {
+                elapsed_ms: 1_000,
+                sample: ShotSample {
+                    sample_time: 100,
+                    group_pressure: 6.0,
+                    group_flow: 2.1,
+                    head_temp: 92.3,
+                    mix_temp: 88.0,
+                    set_mix_temp: 92.0,
+                    set_head_temp: 92.0,
+                    set_group_pressure: 6.0,
+                    set_group_flow: 0.0,
+                    frame_number: 2,
+                    steam_temp: 0.0,
+                },
+            }],
+        }
+    }
+
+    #[test]
+    fn new_stamps_the_current_format_version() {
+        let shot = StoredShot::new(1_700_000_000_000, sample_record());
+        assert_eq!(shot.format_version, STORED_SHOT_FORMAT_VERSION);
+        assert!(shot.profile.is_none());
+        assert!(shot.stop_reason.is_none());
+    }
+
+    #[test]
+    fn stored_shot_round_trips_through_json() {
+        let shot = StoredShot::new(1_700_000_000_000, sample_record())
+            .with_stop_reason(StopReason::Weight)
+            .with_metadata(ShotMetadata {
+                dose_in_g: Some(18.0),
+                yield_out_g: Some(40.5),
+                beans: Some("washed Ethiopia".to_owned()),
+                grinder_setting: Some("3.2".to_owned()),
+                notes: None,
+                rating: Some(4),
+            });
+        let json = shot.to_json().unwrap();
+        assert_eq!(StoredShot::from_json(&json), Ok(shot));
+    }
+
+    #[test]
+    fn brew_ratio_divides_yield_by_dose() {
+        let meta = ShotMetadata {
+            dose_in_g: Some(18.0),
+            yield_out_g: Some(45.0),
+            ..ShotMetadata::default()
+        };
+        assert_eq!(meta.brew_ratio(), Some(2.5));
+    }
+
+    #[test]
+    fn brew_ratio_is_none_without_both_weights() {
+        assert_eq!(ShotMetadata::default().brew_ratio(), None);
+        let dose_only = ShotMetadata {
+            dose_in_g: Some(18.0),
+            ..ShotMetadata::default()
+        };
+        assert_eq!(dose_only.brew_ratio(), None);
+    }
+
+    #[test]
+    fn from_json_rejects_malformed_input() {
+        assert!(StoredShot::from_json("not json").is_err());
+    }
+}

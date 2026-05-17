@@ -8,8 +8,10 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
-de1-protocol = { path = "../de1-protocol" }
+de1-protocol = { path = "../de1-protocol", features = ["serde"] }
 thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true

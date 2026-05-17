@@ -10,6 +10,13 @@ authors.workspace = true
 [dependencies]
 # Derive macro for the crate error type.
 thiserror.workspace = true
+# Optional: `serde` derives on packet types, behind the `serde` feature.
+serde = { workspace = true, optional = true }
+
+[features]
+# Adds `serde::{Serialize, Deserialize}` to packet types — enabled by de1-domain
+# for shot-history persistence.
+serde = ["dep:serde"]
 
 [lints]
 workspace = true
