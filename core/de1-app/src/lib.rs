@@ -19,8 +19,8 @@ pub use error::AppError;
 pub use event::{Command, CoreOutput, Event, Source, WriteTarget};
 
 use de1_domain::{
-    AutoStop, FlowAlgorithm, FlowEstimator, ShotEvent, ShotMonitor, ShotPhase, StopConfig,
-    StopReason, StopTargets, WaterEvent, WaterMonitor,
+    AutoStop, FlowAlgorithm, FlowEstimator, ShotEvent, ShotMonitor, ShotPhase, SteamEvent,
+    SteamMonitor, StopConfig, StopReason, StopTargets, WaterEvent, WaterMonitor,
 };
 use de1_protocol::{
     MachineState, ShotSample, ShotSettings, StateInfo, WaterLevels, requested_state,
@@ -43,6 +43,9 @@ const SCALE_STALE_TIMEOUT_MS: u64 = 1_000;
 /// asks for far more water than wanted so the scale's weight-based stop is what
 /// cuts off the pour (`binary.tcl` `return_de1_packed_steam_hotwater_settings`).
 const HOT_WATER_STOP_ON_SCALE_ML: f32 = 250.0;
+/// The legacy `steam_eco_temperature` default (°C): the lower steam target the
+/// machine drops to after a long idle period (`machine.tcl:33`).
+const STEAM_ECO_TEMPERATURE_C: f32 = 136.0;
 
 /// The headless Crema application core.
 ///
@@ -54,6 +57,14 @@ pub struct CremaCore {
     monitor: ShotMonitor,
     /// Tracks hot-water and flush sessions, the sibling of `monitor`.
     water: WaterMonitor,
+    /// Tracks steam sessions, eco mode, and steam-clog detection.
+    steam: SteamMonitor,
+    /// The most recent steam / hot-water [`ShotSettings`] supplied by the
+    /// shell, retained so eco-mode transitions can rewrite the steam target.
+    /// `None` until [`set_steam_hotwater_settings`](Self::set_steam_hotwater_settings).
+    steam_hotwater_settings: Option<ShotSettings>,
+    /// The eco-mode steam target temperature, °C.
+    steam_eco_temp_c: f32,
     last_state: Option<StateInfo>,
     /// Timestamp the in-progress shot began — stamps telemetry elapsed time.
     /// `None` when no shot is in progress.
@@ -87,6 +98,9 @@ impl CremaCore {
         CremaCore {
             monitor: ShotMonitor::new(),
             water: WaterMonitor::new(),
+            steam: SteamMonitor::new(),
+            steam_hotwater_settings: None,
+            steam_eco_temp_c: STEAM_ECO_TEMPERATURE_C,
             last_state: None,
             shot_started_ms: None,
             scale: None,
@@ -153,17 +167,48 @@ impl CremaCore {
     ///
     /// Returns the effective settings written, so the shell can see the
     /// applied hot-water volume.
-    pub fn set_steam_hotwater_settings(&self, settings: ShotSettings) -> CoreOutput {
+    ///
+    /// The supplied settings are retained so a later eco-mode transition can
+    /// rewrite the steam target temperature on the same baseline.
+    pub fn set_steam_hotwater_settings(&mut self, settings: ShotSettings) -> CoreOutput {
         let mut settings = settings;
         if self.scale.is_some() {
             settings.hot_water_volume_ml = HOT_WATER_STOP_ON_SCALE_ML;
         }
+        self.steam_hotwater_settings = Some(settings.clone());
         let mut out = CoreOutput::default();
         out.commands.push(Command::WriteCharacteristic {
             target: WriteTarget::De1ShotSettings,
-            data: settings.encode().to_vec(),
+            data: self
+                .steam_settings_for_eco(self.steam.is_eco_mode())
+                .encode()
+                .to_vec(),
         });
         out
+    }
+
+    /// Enable or disable steam eco mode (the legacy `eco_steam` setting). When
+    /// enabled, the steam target drops to the eco temperature after the
+    /// machine has been idle for the eco delay; see
+    /// [`SteamMonitor`](de1_domain::SteamMonitor). Disabling it while engaged
+    /// restores the normal steam target immediately.
+    pub fn enable_steam_eco_mode(&mut self, enabled: bool, now_ms: u64) -> CoreOutput {
+        let mut out = CoreOutput::default();
+        for event in self.steam.on_eco_enabled(enabled, now_ms) {
+            self.map_steam_event(event, &mut out);
+        }
+        out
+    }
+
+    /// The steam / hot-water [`ShotSettings`] to write, with the steam target
+    /// temperature set for the given eco state. Falls back to a representative
+    /// default when no settings have been supplied yet.
+    fn steam_settings_for_eco(&self, eco: bool) -> ShotSettings {
+        let mut settings = self.steam_hotwater_settings.clone().unwrap_or_default();
+        if eco {
+            settings.steam_temp_c = self.steam_eco_temp_c;
+        }
+        settings
     }
 
     /// Build a [`Command`] that tares the connected scale. Empty if no scale is
@@ -198,9 +243,10 @@ impl CremaCore {
         out
     }
 
-    /// Feed a periodic clock tick. Drives the lost-scale watchdog: if a scale
+    /// Feed a periodic clock tick. Drives the lost-scale watchdog (if a scale
     /// is connected but has not reported weight for [`SCALE_STALE_TIMEOUT_MS`],
-    /// emit [`Event::ScaleStale`] once per stale episode.
+    /// emit [`Event::ScaleStale`] once per stale episode) and the steam
+    /// eco-mode transition.
     pub fn on_tick(&mut self, now_ms: u64) -> CoreOutput {
         let mut out = CoreOutput::default();
         if self.scale.is_some()
@@ -210,6 +256,9 @@ impl CremaCore {
         {
             self.scale_stale_reported = true;
             out.events.push(Event::ScaleStale);
+        }
+        for event in self.steam.on_tick(now_ms) {
+            self.map_steam_event(event, &mut out);
         }
         out
     }
@@ -244,6 +293,9 @@ impl CremaCore {
         for event in self.water.on_state_info(info, now_ms) {
             Self::map_water_event(event, out);
         }
+        for event in self.steam.on_state_info(info, now_ms) {
+            self.map_steam_event(event, out);
+        }
     }
 
     /// Decode and process a `ShotSample` telemetry notification.
@@ -260,6 +312,8 @@ impl CremaCore {
         for event in self.monitor.on_sample(&sample, now_ms) {
             self.map_shot_event(event, now_ms, out);
         }
+        // Record steam telemetry while a steam session is in progress.
+        self.steam.on_sample(&sample, now_ms);
         let reason = self
             .auto_stop
             .as_mut()
@@ -351,6 +405,31 @@ impl CremaCore {
                 out.events.push(Event::WaterSessionCompleted {
                     kind: record.kind,
                     duration_ms: record.duration_ms as u32,
+                });
+            }
+        }
+    }
+
+    /// Translate a domain [`SteamEvent`] into FFI [`Event`]s. An eco-mode
+    /// change also emits the [`Command`] that rewrites the DE1's steam target
+    /// temperature.
+    fn map_steam_event(&mut self, event: SteamEvent, out: &mut CoreOutput) {
+        match event {
+            SteamEvent::Started => out.events.push(Event::SteamSessionStarted),
+            SteamEvent::Completed(record) => {
+                out.events.push(Event::SteamSessionCompleted {
+                    duration_ms: record.duration_ms as u32,
+                    sample_count: record.samples.len() as u32,
+                });
+            }
+            SteamEvent::ClogSuspected(reason) => {
+                out.events.push(Event::SteamClogSuspected { reason });
+            }
+            SteamEvent::EcoModeChanged(eco) => {
+                out.events.push(Event::SteamEcoModeChanged { eco });
+                out.commands.push(Command::WriteCharacteristic {
+                    target: WriteTarget::De1ShotSettings,
+                    data: self.steam_settings_for_eco(eco).encode().to_vec(),
                 });
             }
         }
@@ -700,7 +779,7 @@ mod tests {
 
     #[test]
     fn set_steam_hotwater_settings_writes_the_user_volume_without_a_scale() {
-        let core = CremaCore::new();
+        let mut core = CremaCore::new();
         let out = core.set_steam_hotwater_settings(hotwater_settings(50.0));
         let Some(Command::WriteCharacteristic { target, data }) = out.commands.first() else {
             panic!("expected a WriteCharacteristic command");
@@ -721,6 +800,111 @@ mod tests {
         // With a scale connected the volume is bumped to 250 mL so the scale's
         // weight stop is what ends the pour.
         assert_eq!(data[4], 250);
+    }
+
+    #[test]
+    fn entering_steam_emits_a_steam_session_started() {
+        let mut core = CremaCore::new();
+        // Steam (5) / Steaming (7).
+        let out = core.on_notification(Source::De1State, &[5, 7], 1_000);
+        assert!(out.events.contains(&Event::SteamSessionStarted));
+    }
+
+    #[test]
+    fn a_full_steam_session_emits_started_then_completed() {
+        let mut core = CremaCore::new();
+        core.on_notification(Source::De1State, &[5, 7], 1_000);
+        let out = core.on_notification(Source::De1State, &[2, 0], 6_000);
+        assert!(out.events.contains(&Event::SteamSessionCompleted {
+            duration_ms: 5_000,
+            sample_count: 0,
+        }));
+    }
+
+    #[test]
+    fn a_steam_session_records_telemetry_samples() {
+        let mut core = CremaCore::new();
+        core.on_notification(Source::De1State, &[5, 7], 0);
+        // SAMPLE carries group_pressure 9.0 — the steam monitor records it.
+        core.on_notification(Source::De1ShotSample, &SAMPLE, 100);
+        core.on_notification(Source::De1ShotSample, &SAMPLE, 200);
+        let out = core.on_notification(Source::De1State, &[2, 0], 3_000);
+        assert!(out.events.contains(&Event::SteamSessionCompleted {
+            duration_ms: 3_000,
+            sample_count: 2,
+        }));
+    }
+
+    #[test]
+    fn a_clogged_steam_session_emits_a_clog_suspected_event() {
+        let mut core = CremaCore::new();
+        core.on_notification(Source::De1State, &[5, 7], 0);
+        // SAMPLE has group_pressure 9.0 (over the 8 bar threshold). Feed enough
+        // samples that, after the 20-sample trim, the over-pressure count
+        // exceeds the trigger of 10.
+        for _ in 0..40 {
+            core.on_notification(Source::De1ShotSample, &SAMPLE, 100);
+        }
+        let out = core.on_notification(Source::De1State, &[2, 0], 5_000);
+        assert!(out.events.iter().any(|e| matches!(
+            e,
+            Event::SteamClogSuspected {
+                reason: de1_domain::SteamClogReason::OverPressure,
+            }
+        )));
+    }
+
+    #[test]
+    fn steam_eco_mode_engages_on_tick_and_writes_the_eco_temperature() {
+        let mut core = CremaCore::new();
+        core.set_steam_hotwater_settings(hotwater_settings(50.0));
+        core.enable_steam_eco_mode(true, 0);
+        // Before the 600 s idle delay: nothing.
+        assert!(core.on_tick(599_000).events.is_empty());
+        // At the delay: eco mode engages and rewrites the steam target.
+        let out = core.on_tick(600_000);
+        assert!(
+            out.events
+                .contains(&Event::SteamEcoModeChanged { eco: true })
+        );
+        let Some(Command::WriteCharacteristic { target, data }) = out.commands.first() else {
+            panic!("expected a WriteCharacteristic command");
+        };
+        assert_eq!(*target, WriteTarget::De1ShotSettings);
+        // Byte 1 is the steam temperature (u8p0): the 136 °C eco target.
+        assert_eq!(data[1], 136);
+    }
+
+    #[test]
+    fn disabling_steam_eco_mode_restores_the_normal_target() {
+        let mut core = CremaCore::new();
+        core.set_steam_hotwater_settings(hotwater_settings(50.0));
+        core.enable_steam_eco_mode(true, 0);
+        core.on_tick(600_000); // engages eco mode
+        let out = core.enable_steam_eco_mode(false, 700_000);
+        assert!(
+            out.events
+                .contains(&Event::SteamEcoModeChanged { eco: false })
+        );
+        let Some(Command::WriteCharacteristic { data, .. }) = out.commands.first() else {
+            panic!("expected a WriteCharacteristic command");
+        };
+        // Back to the user's normal 150 °C steam target.
+        assert_eq!(data[1], 150);
+    }
+
+    #[test]
+    fn a_steam_session_disengages_eco_mode() {
+        let mut core = CremaCore::new();
+        core.set_steam_hotwater_settings(hotwater_settings(50.0));
+        core.enable_steam_eco_mode(true, 0);
+        core.on_tick(600_000); // engages eco mode
+        // Steaming is activity: it disengages eco mode.
+        let out = core.on_notification(Source::De1State, &[5, 7], 601_000);
+        assert!(
+            out.events
+                .contains(&Event::SteamEcoModeChanged { eco: false })
+        );
     }
 
     #[test]

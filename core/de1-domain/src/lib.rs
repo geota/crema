@@ -10,6 +10,8 @@
 //!   records it.
 //! - [`water`] — the [`WaterMonitor`] state machine, the sibling of
 //!   [`ShotMonitor`] for hot-water and flush sessions.
+//! - [`steam`] — the [`SteamMonitor`] state machine, the sibling for steam
+//!   sessions, eco mode, and steam-clog detection.
 //! - [`history`] — [`StoredShot`], a completed shot persisted to history.
 //! - [`stop`] — [`AutoStop`], the stop-at-weight / stop-at-volume controller.
 //! - [`flow`] — [`FlowEstimator`], robust weight/mass-flow estimation for SAW.
@@ -21,6 +23,7 @@ pub mod flow;
 pub mod history;
 pub mod profile;
 pub mod shot;
+pub mod steam;
 pub mod stop;
 pub mod water;
 
@@ -33,5 +36,8 @@ pub use profile::{
     TempSensor, Transition,
 };
 pub use shot::{ShotEvent, ShotMetrics, ShotMonitor, ShotPhase, ShotRecord, TimedSample};
+pub use steam::{
+    STEAM_ECO_DELAY_SECONDS, SteamClogReason, SteamEvent, SteamMonitor, SteamRecord, SteamSample,
+};
 pub use stop::{AutoStop, StopConfig, StopReason, StopTargets};
 pub use water::{WaterEvent, WaterMonitor, WaterRecord, WaterSessionKind};

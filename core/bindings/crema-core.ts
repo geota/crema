@@ -83,6 +83,31 @@ export type Event =
 	/** Total session duration, milliseconds. */
 	duration_ms: number;
 }}
+	/** A steam session began (the DE1 entered the `Steam` state). */
+	| { type: "SteamSessionStarted", content?: undefined }
+	/** A steam session finished. */
+	| { type: "SteamSessionCompleted", content: {
+	/** Total session duration, milliseconds. */
+	duration_ms: number;
+	/** Number of steam telemetry samples recorded. */
+	sample_count: number;
+}}
+	/**
+	 * The just-finished steam session's telemetry suggests a clogged steam
+	 * wand. Accompanies the [`Event::SteamSessionCompleted`] for the session.
+	 */
+	| { type: "SteamClogSuspected", content: {
+	/** Which threshold the steam telemetry tripped. */
+	reason: SteamClogReason;
+}}
+	/**
+	 * Steam eco mode engaged or disengaged. When it changes, an accompanying
+	 * [`Command`] rewrites the DE1's steam target temperature.
+	 */
+	| { type: "SteamEcoModeChanged", content: {
+	/** `true` when the steam target dropped to the lower eco temperature. */
+	eco: boolean;
+}}
 	/**
 	 * The connected scale stopped reporting weight — no reading has arrived
 	 * for roughly a second. Emitted once per stale episode; a fresh reading
@@ -173,6 +198,14 @@ export enum ShotPhase {
 	Pouring = "Pouring",
 	/** Ending — flow has stopped and the group is draining. */
 	Ending = "Ending",
+}
+
+/** Why a steam-clog warning was raised — which threshold the telemetry tripped. */
+export enum SteamClogReason {
+	/** Steam pressure ran too high for too long — a clogged steam wand. */
+	OverPressure = "OverPressure",
+	/** Steam temperature ran too hot for too long. */
+	OverTemperature = "OverTemperature",
 }
 
 /** Why [`AutoStop`] decided to end the shot. */
