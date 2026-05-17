@@ -27,6 +27,8 @@ pub enum NotificationSource {
     De1ShotSample,
     /// The connected scale's weight notification.
     ScaleWeight,
+    /// The DE1 water-tank level characteristic.
+    De1WaterLevels,
 }
 
 impl From<NotificationSource> for Source {
@@ -35,6 +37,7 @@ impl From<NotificationSource> for Source {
             NotificationSource::De1State => Source::De1State,
             NotificationSource::De1ShotSample => Source::De1ShotSample,
             NotificationSource::ScaleWeight => Source::ScaleWeight,
+            NotificationSource::De1WaterLevels => Source::De1WaterLevels,
         }
     }
 }

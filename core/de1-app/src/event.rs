@@ -22,6 +22,8 @@ pub enum Source {
     De1ShotSample,
     /// The connected scale's weight notification.
     ScaleWeight,
+    /// The DE1 water-tank level characteristic (`cuuid_11`).
+    De1WaterLevels,
 }
 
 /// Something the core observed that the UI may want to react to.
@@ -69,6 +71,13 @@ pub enum Event {
         weight_g: f32,
         /// Robust mass-flow rate, grams per second.
         flow_g_per_s: f32,
+    },
+    /// The DE1 reported its water-tank level.
+    WaterLevel {
+        /// Current tank level, mm — includes the legacy +5 mm sensor correction.
+        level_mm: f32,
+        /// Refill threshold, mm; a refill is wanted at or below it.
+        refill_threshold_mm: f32,
     },
     /// Auto-stop decided the shot should end. The accompanying [`Command`]
     /// carries the actual stop write.

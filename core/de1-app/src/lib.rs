@@ -22,7 +22,7 @@ use de1_domain::{
     AutoStop, FlowAlgorithm, FlowEstimator, ShotEvent, ShotMonitor, ShotPhase, StopConfig,
     StopReason, StopTargets,
 };
-use de1_protocol::{MachineState, ShotSample, StateInfo, requested_state};
+use de1_protocol::{MachineState, ShotSample, StateInfo, WaterLevels, requested_state};
 use de1_scale::Scale;
 
 /// The legacy `stop_weight_before_seconds` setting default — the user-tunable
@@ -31,6 +31,9 @@ const STOP_WEIGHT_BEFORE_SECONDS: f32 = 0.15;
 /// Scale sensor lag assumed when no scale is connected — a representative value
 /// across the supported scales.
 const DEFAULT_SCALE_LAG_SECONDS: f32 = 0.38;
+/// Millimetres added to the DE1's reported tank level — the legacy
+/// `water_level_mm_correction` (`machine.tcl`).
+const WATER_LEVEL_MM_CORRECTION: f32 = 5.0;
 
 /// The headless Crema application core.
 ///
@@ -129,6 +132,7 @@ impl CremaCore {
             Source::De1State => self.handle_state(data, now_ms, &mut out),
             Source::De1ShotSample => self.handle_sample(data, now_ms, &mut out),
             Source::ScaleWeight => self.handle_scale_weight(data, now_ms, &mut out),
+            Source::De1WaterLevels => self.handle_water_levels(data, &mut out),
         }
         out
     }
@@ -216,6 +220,20 @@ impl CremaCore {
             .as_mut()
             .and_then(|stop| stop.on_weight(weight_g, now_ms));
         Self::push_stop(reason, out);
+    }
+
+    /// Decode and process a `WaterLevels` notification, applying the legacy
+    /// +5 mm sensor correction to the reported tank level.
+    fn handle_water_levels(&self, data: &[u8], out: &mut CoreOutput) {
+        match WaterLevels::decode(data) {
+            Ok(levels) => out.events.push(Event::WaterLevel {
+                level_mm: levels.current_mm + WATER_LEVEL_MM_CORRECTION,
+                refill_threshold_mm: levels.refill_threshold_mm,
+            }),
+            Err(e) => out.events.push(Event::DecodeError {
+                message: e.to_string(),
+            }),
+        }
     }
 
     /// Translate a domain [`ShotEvent`] into FFI [`Event`]s, maintaining the
@@ -417,6 +435,17 @@ mod tests {
         let mut core = CremaCore::new();
         let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(2_000), 1_000);
         assert!(out.events.is_empty());
+    }
+
+    #[test]
+    fn a_water_level_notification_applies_the_5mm_correction() {
+        let mut core = CremaCore::new();
+        // WaterLevels packet: current 100 mm, refill threshold 70 mm.
+        let out = core.on_notification(Source::De1WaterLevels, &[0x64, 0x00, 0x46, 0x00], 0);
+        assert!(out.events.contains(&Event::WaterLevel {
+            level_mm: 105.0,
+            refill_threshold_mm: 70.0,
+        }));
     }
 
     #[test]
