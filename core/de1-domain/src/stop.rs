@@ -24,6 +24,9 @@ pub struct StopTargets {
     pub weight_g: Option<f32>,
     /// Stop when this volume has been dispensed, mL (SAV).
     pub volume_ml: Option<f32>,
+    /// Stop when the shot has run this long, seconds (legacy `espresso_max_time`,
+    /// default 60 s).
+    pub max_time: Option<f32>,
 }
 
 /// Tuning for the [`AutoStop`] predictor.
@@ -100,6 +103,8 @@ pub enum StopReason {
     Weight,
     /// The volume target (SAV) was reached.
     Volume,
+    /// The maximum shot time was reached (legacy `espresso_max_time`).
+    MaxTime,
 }
 
 /// Decides when to stop a shot, from the scale and telemetry streams.
@@ -147,6 +152,21 @@ impl AutoStop {
         now_ms.saturating_sub(self.started_ms) >= self.config.arming_delay_ms
     }
 
+    /// Check the max-shot-time target against the elapsed time. Returns
+    /// [`StopReason::MaxTime`] the first time the shot has run too long.
+    ///
+    /// Unlike SAW/SAV this is not gated by the arming delay — a `max_time`
+    /// shorter than `arming_delay_ms` would otherwise never fire.
+    fn check_max_time(&mut self, now_ms: u64) -> Option<StopReason> {
+        let max_time_s = self.targets.max_time?;
+        let elapsed_s = now_ms.saturating_sub(self.started_ms) as f32 / 1000.0;
+        if elapsed_s >= max_time_s {
+            self.triggered = true;
+            return Some(StopReason::MaxTime);
+        }
+        None
+    }
+
     /// Feed a raw scale-weight reading (grams). The reading passes through the
     /// flow estimator; SAW projects the robust weight forward along the flow
     /// and returns [`StopReason::Weight`] the first time it reaches the target.
@@ -155,6 +175,10 @@ impl AutoStop {
             return None;
         }
         let estimate = self.flow.update(grams, now_ms);
+
+        if let Some(reason) = self.check_max_time(now_ms) {
+            return Some(reason);
+        }
 
         let target = self.targets.weight_g?;
         if !self.is_armed(now_ms) {
@@ -185,6 +209,10 @@ impl AutoStop {
             self.dispensed_volume_ml += sample.group_flow * dt_s;
         }
         self.last_sample_ms = Some(now_ms);
+
+        if let Some(reason) = self.check_max_time(now_ms) {
+            return Some(reason);
+        }
 
         let target = self.targets.volume_ml?;
         if !self.is_armed(now_ms) {
@@ -235,6 +263,7 @@ mod tests {
         let targets = StopTargets {
             weight_g: Some(36.0),
             volume_ml: None,
+            max_time: None,
         };
         let mut stop = AutoStop::new(targets, immediate_config(), 0);
         assert_eq!(stop.on_weight(35.0, 1000), None);
@@ -246,6 +275,7 @@ mod tests {
         let targets = StopTargets {
             weight_g: Some(36.0),
             volume_ml: None,
+            max_time: None,
         };
         let config = StopConfig {
             weight_lead_seconds: 1.0,
@@ -263,6 +293,7 @@ mod tests {
         let targets = StopTargets {
             weight_g: Some(36.0),
             volume_ml: None,
+            max_time: None,
         };
         let config = StopConfig {
             arming_delay_ms: 5_000,
@@ -278,6 +309,7 @@ mod tests {
         let targets = StopTargets {
             weight_g: Some(36.0),
             volume_ml: None,
+            max_time: None,
         };
         let mut stop = AutoStop::new(targets, immediate_config(), 0);
         // A slow ramp whose trend sits near 32 g — comfortably under target.
@@ -299,6 +331,7 @@ mod tests {
         let targets = StopTargets {
             weight_g: Some(36.0),
             volume_ml: None,
+            max_time: None,
         };
         let config = StopConfig {
             flow_algorithm: FlowAlgorithm::OffsetMedian,
@@ -316,6 +349,7 @@ mod tests {
         let targets = StopTargets {
             weight_g: None,
             volume_ml: Some(36.0),
+            max_time: None,
         };
         let mut stop = AutoStop::new(targets, immediate_config(), 0);
         // First sample establishes the integration baseline.
@@ -332,6 +366,7 @@ mod tests {
         let targets = StopTargets {
             weight_g: Some(36.0),
             volume_ml: None,
+            max_time: None,
         };
         let mut stop = AutoStop::new(targets, immediate_config(), 0);
         assert_eq!(stop.on_weight(40.0, 1000), Some(StopReason::Weight));
@@ -344,6 +379,7 @@ mod tests {
         let targets = StopTargets {
             weight_g: None,
             volume_ml: None,
+            max_time: None,
         };
         let mut stop = AutoStop::new(targets, immediate_config(), 0);
         assert_eq!(stop.on_weight(999.0, 1000), None);
@@ -356,6 +392,7 @@ mod tests {
         let targets = StopTargets {
             weight_g: None,
             volume_ml: None,
+            max_time: None,
         };
         let mut stop = AutoStop::new(targets, immediate_config(), 0);
         stop.on_sample(&sample_with_flow(2.0), 0);
@@ -369,6 +406,62 @@ mod tests {
         let config = StopConfig::with_legacy_lead(0.15, 0.50, FlowAlgorithm::TheilSen);
         assert!((config.weight_lead_seconds - 0.75).abs() < 1e-6);
         assert_eq!(config.flow_algorithm, FlowAlgorithm::TheilSen);
+    }
+
+    #[test]
+    fn max_time_stops_the_shot_via_on_weight() {
+        let targets = StopTargets {
+            weight_g: None,
+            volume_ml: None,
+            max_time: Some(30.0),
+        };
+        let mut stop = AutoStop::new(targets, immediate_config(), 0);
+        assert_eq!(stop.on_weight(10.0, 29_000), None);
+        assert_eq!(stop.on_weight(10.0, 30_000), Some(StopReason::MaxTime));
+    }
+
+    #[test]
+    fn max_time_stops_the_shot_via_on_sample() {
+        let targets = StopTargets {
+            weight_g: None,
+            volume_ml: None,
+            max_time: Some(60.0),
+        };
+        let mut stop = AutoStop::new(targets, immediate_config(), 1_000);
+        assert_eq!(stop.on_sample(&sample_with_flow(2.0), 30_000), None);
+        assert_eq!(
+            stop.on_sample(&sample_with_flow(2.0), 61_000),
+            Some(StopReason::MaxTime)
+        );
+    }
+
+    #[test]
+    fn max_time_ignores_the_arming_delay() {
+        // A max_time shorter than the arming delay must still fire.
+        let targets = StopTargets {
+            weight_g: None,
+            volume_ml: None,
+            max_time: Some(2.0),
+        };
+        let config = StopConfig {
+            arming_delay_ms: 5_000,
+            ..immediate_config()
+        };
+        let mut stop = AutoStop::new(targets, config, 0);
+        assert_eq!(stop.on_weight(10.0, 2_000), Some(StopReason::MaxTime));
+    }
+
+    #[test]
+    fn max_time_fires_only_once() {
+        let targets = StopTargets {
+            weight_g: None,
+            volume_ml: None,
+            max_time: Some(10.0),
+        };
+        let mut stop = AutoStop::new(targets, immediate_config(), 0);
+        assert_eq!(stop.on_weight(10.0, 10_000), Some(StopReason::MaxTime));
+        assert_eq!(stop.on_weight(10.0, 20_000), None);
+        assert!(stop.has_triggered());
     }
 
     #[test]

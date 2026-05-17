@@ -260,6 +260,9 @@ enum class StopReason(val string: String) {
 	/// The volume target (SAV) was reached.
 	@SerialName("Volume")
 	Volume("Volume"),
+	/// The maximum shot time was reached (legacy `espresso_max_time`).
+	@SerialName("MaxTime")
+	MaxTime("MaxTime"),
 }
 
 /// DE1 substate. Discriminants match the firmware enum (see protocol §4.2):
