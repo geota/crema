@@ -4,7 +4,7 @@
 # no UI, no file I/O. See ../docs/ for the design.
 [workspace]
 resolver = "3"
-members = ["de1-protocol", "de1-scale", "de1-domain"]
+members = ["de1-protocol", "de1-scale", "de1-domain", "de1-app"]
 
 [workspace.package]
 edition = "2024"

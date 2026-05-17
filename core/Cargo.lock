@@ -3,6 +3,17 @@
 version = 4
 
 [[package]]
+name = "de1-app"
+version = "0.1.0"
+dependencies = [
+ "de1-domain",
+ "de1-protocol",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "de1-domain"
 version = "0.1.0"
 dependencies = [

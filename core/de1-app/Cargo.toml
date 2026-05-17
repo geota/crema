@@ -1,0 +1,18 @@
+[package]
+name = "de1-app"
+version = "0.1.0"
+description = "Crema headless application core — the FFI-agnostic facade"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+de1-protocol = { path = "../de1-protocol", features = ["serde"] }
+de1-domain = { path = "../de1-domain" }
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true
