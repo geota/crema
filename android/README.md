@@ -104,19 +104,29 @@ migration end to end.
 ### One-time setup
 
 ```sh
-# Rust target for arm64 Android
-rustup target add aarch64-linux-android
-
-# Point Gradle at the SDK + NDK. Create android/local.properties:
-#   sdk.dir=/Users/<you>/Library/Android/sdk
-#   ndk.dir=/Users/<you>/Library/Android/sdk/ndk/<version>
-# (local.properties is git-ignored; Android Studio writes sdk.dir for you.)
+rustup target add aarch64-linux-android   # Rust target for arm64 Android
 ```
 
-The `net.mullvad.rust-android` plugin shells out to `cargo` with the NDK
-linker; it locates the NDK from `ndk.dir` / `ANDROID_NDK_HOME` / the SDK's
-`ndk/` directory. `cargo-ndk` as a separate CLI is **not** required when using
-the plugin (it is the plugin's job).
+Create `android/local.properties` — git-ignored, per-machine config:
+
+```properties
+# SDK location — Android Studio writes this for you.
+sdk.dir=/Users/<you>/Library/Android/sdk
+
+# Absolute paths to cargo / rustc / python. REQUIRED for IDE builds: a Gradle
+# build launched from Android Studio does NOT inherit your shell PATH, so it
+# cannot find rustup's ~/.cargo/bin or a pyenv `python`. The
+# net.mullvad.rust-android plugin and the generateUniffiBindings task read
+# these. A CLI `./gradlew` build — which has your shell PATH — can omit them.
+rust.cargoCommand=/Users/<you>/.cargo/bin/cargo
+rust.rustcCommand=/Users/<you>/.cargo/bin/rustc
+rust.pythonCommand=/usr/bin/python3
+```
+
+The `net.mullvad.rust-android` plugin shells out to `cargo` (with the NDK
+linker) and a Python linker-wrapper script. The NDK is located via the
+`ndkVersion` pinned in `app/build.gradle.kts`; `cargo-ndk` as a separate CLI
+is **not** required — the plugin does that job.
 
 ---
 
@@ -158,7 +168,8 @@ This runs, in order:
 2. **`generateUniffiBindings`** — runs `de1-ffi`'s bundled `uniffi-bindgen`
    binary against the freshly built `.so` and writes the Kotlin bindings to
    `app/build/generated/uniffi/coffee/crema/core/de1_ffi.kt`. That directory is
-   on the `main` source set, so the bindings compile as ordinary Kotlin.
+   registered on each variant's Kotlin sources via the AGP 9 Variant API
+   (`addGeneratedSourceDirectory`), so the bindings compile as ordinary Kotlin.
 3. The Kotlin/Compose app compiles and links against the bindings; the `.so`
    is packaged into the APK.
 
