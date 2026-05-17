@@ -176,11 +176,11 @@ impl AutoStop {
             return None;
         }
         // Integrate flow (mL/s) over the interval since the last sample.
-        if let Some(then) = self.last_sample_ms {
-            if now_ms > then {
-                let dt_s = (now_ms - then) as f32 / 1000.0;
-                self.dispensed_volume_ml += sample.group_flow * dt_s;
-            }
+        if let Some(then) = self.last_sample_ms
+            && now_ms > then
+        {
+            let dt_s = (now_ms - then) as f32 / 1000.0;
+            self.dispensed_volume_ml += sample.group_flow * dt_s;
         }
         self.last_sample_ms = Some(now_ms);
 

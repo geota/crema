@@ -113,10 +113,10 @@ impl CremaCore {
     /// connected or the scale does not support tare.
     pub fn tare_scale(&mut self) -> CoreOutput {
         let mut out = CoreOutput::default();
-        if let Some(scale) = &mut self.scale {
-            if let Some(data) = scale.tare() {
-                out.commands.push(Command::WriteScale { data });
-            }
+        if let Some(scale) = &mut self.scale
+            && let Some(data) = scale.tare()
+        {
+            out.commands.push(Command::WriteScale { data });
         }
         out
     }
