@@ -4,6 +4,7 @@
 use de1_domain::{ShotPhase, StopReason};
 use de1_protocol::{MachineState, SubState};
 use serde::{Deserialize, Serialize};
+use typeshare::typeshare;
 
 use crate::error::AppError;
 
@@ -25,10 +26,11 @@ pub enum Source {
 
 /// Something the core observed that the UI may want to react to.
 ///
-/// Serialized with an internal `"type"` tag — a JSON event reads
-/// `{"type":"ShotStarted"}` or `{"type":"Telemetry","elapsed_ms":…}`.
+/// Serialized adjacently tagged — a JSON event reads `{"type":"ShotStarted"}`
+/// or `{"type":"Telemetry","content":{"elapsed_ms":…}}`.
+#[typeshare]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type")]
+#[serde(tag = "type", content = "content")]
 #[non_exhaustive]
 pub enum Event {
     /// The DE1's machine state or substate changed.
@@ -53,7 +55,7 @@ pub enum Event {
     /// A telemetry sample arrived from the DE1.
     Telemetry {
         /// Milliseconds since the shot began; `0` if no shot is in progress.
-        elapsed_ms: u64,
+        elapsed_ms: u32,
         /// Group pressure, bar.
         group_pressure: f32,
         /// Group flow, mL/s.
@@ -77,7 +79,7 @@ pub enum Event {
     /// The espresso shot finished.
     ShotCompleted {
         /// Total shot duration, milliseconds.
-        duration_ms: u64,
+        duration_ms: u32,
         /// Number of telemetry samples recorded.
         sample_count: u32,
     },
@@ -91,6 +93,7 @@ pub enum Event {
 /// A writable DE1 GATT characteristic. The shell maps this to a UUID.
 ///
 /// `#[non_exhaustive]`: profile-upload and MMR targets arrive later.
+#[typeshare]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum WriteTarget {
@@ -102,8 +105,9 @@ pub enum WriteTarget {
 ///
 /// The core owns the protocol, so a command carries the exact bytes; the shell
 /// only needs a characteristic-UUID map, no protocol logic.
+#[typeshare]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type")]
+#[serde(tag = "type", content = "content")]
 #[non_exhaustive]
 pub enum Command {
     /// Write `data` to a DE1 GATT characteristic.
@@ -125,6 +129,7 @@ pub enum Command {
 ///
 /// `#[non_exhaustive]` so further fields can be added without breaking the
 /// bridge crates.
+#[typeshare]
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct CoreOutput {

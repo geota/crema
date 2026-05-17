@@ -1,9 +1,11 @@
 //! `StateInfo` packet (`cuuid_0E` / `A00E`) and the machine state enums.
 
 use crate::error::ProtocolError;
+use typeshare::typeshare;
 
 /// DE1 top-level machine state. Discriminants match the firmware `MachineState`
 /// enum (see protocol §4.1).
+#[typeshare]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(u8)]
@@ -89,6 +91,7 @@ impl TryFrom<u8> for MachineState {
 
 /// DE1 substate. Discriminants match the firmware enum (see protocol §4.2):
 /// `0..=20` are operational substates, `200..=217` are error codes.
+#[typeshare]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(u8)]

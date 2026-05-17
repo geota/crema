@@ -12,6 +12,7 @@ authors.workspace = true
 thiserror.workspace = true
 # Optional: `serde` derives on packet types, behind the `serde` feature.
 serde = { workspace = true, optional = true }
+typeshare = "1.0.5"
 
 [features]
 # Adds `serde::{Serialize, Deserialize}` to packet types — enabled by de1-domain

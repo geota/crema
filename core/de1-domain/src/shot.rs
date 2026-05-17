@@ -7,8 +7,10 @@
 //! will build on this.
 
 use de1_protocol::{MachineState, ShotSample, StateInfo, SubState};
+use typeshare::typeshare;
 
 /// Where an espresso shot is in its lifecycle.
+#[typeshare]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum ShotPhase {
     /// No espresso shot in progress.

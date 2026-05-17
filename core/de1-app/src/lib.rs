@@ -189,7 +189,7 @@ impl CremaCore {
         Self::push_stop(reason, out);
         let elapsed_ms = self
             .shot_started_ms
-            .map_or(0, |start| now_ms.saturating_sub(start));
+            .map_or(0, |start| now_ms.saturating_sub(start)) as u32;
         out.events.push(Event::Telemetry {
             elapsed_ms,
             group_pressure: sample.group_pressure,
@@ -236,7 +236,7 @@ impl CremaCore {
                 self.shot_started_ms = None;
                 self.auto_stop = None;
                 out.events.push(Event::ShotCompleted {
-                    duration_ms: record.duration_ms,
+                    duration_ms: record.duration_ms as u32,
                     sample_count: record.samples.len() as u32,
                 });
             }

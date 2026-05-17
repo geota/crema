@@ -13,6 +13,7 @@
 //! integrates the telemetry group flow into a dispensed volume.
 
 use de1_protocol::ShotSample;
+use typeshare::typeshare;
 
 use crate::flow::{FlowAlgorithm, FlowEstimator};
 
@@ -92,6 +93,7 @@ impl StopConfig {
 }
 
 /// Why [`AutoStop`] decided to end the shot.
+#[typeshare]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum StopReason {
     /// The weight target (SAW) was reached.
