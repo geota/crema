@@ -1,4 +1,4 @@
-package coffee.crema.spikeb.ble
+package coffee.crema.ble
 
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
@@ -25,7 +25,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import java.util.ArrayDeque
 
 /**
- * Minimal `BluetoothGatt`-based BLE manager for Spike B.
+ * Minimal `BluetoothGatt`-based BLE manager for the Crema Android app.
  *
  * Responsibilities — and nothing more:
  *  1. Scan for a DE1 by the [De1Uuids.SERVICE] advertised service UUID.
@@ -34,11 +34,11 @@ import java.util.ArrayDeque
  *  4. On every notification, hand the raw bytes to [CremaBridge.onNotification]
  *     and forward the returned JSON `CoreOutput` string to [onCoreOutput].
  *
- * This is throwaway spike code: it serialises GATT operations through a tiny
- * hand-rolled queue (Android's GATT stack only tolerates one outstanding
- * descriptor/characteristic operation at a time) and does no reconnection,
- * bonding, MTU negotiation, or scale handling. The real app's BLE layer will
- * be a proper, tested component.
+ * This began as Phase-0 proof-of-concept code: it serialises GATT operations
+ * through a tiny hand-rolled queue (Android's GATT stack only tolerates one
+ * outstanding descriptor/characteristic operation at a time) and does no
+ * reconnection, bonding, MTU negotiation, or scale handling yet. Hardening the
+ * BLE layer into a proper, tested component is the next step.
  *
  * Threading: all callbacks arrive on a binder thread; the bridge call and the
  * [onCoreOutput] dispatch happen there. [CremaBridge] is internally `Mutex`-
@@ -185,7 +185,7 @@ class De1BleManager(
                 disconnect()
                 return
             }
-            // Queue the two notify characteristics Spike B observes.
+            // Queue the two notify characteristics the app observes.
             subscribeQueue.clear()
             listOf(De1Uuids.STATE_INFO, De1Uuids.SHOT_SAMPLE).forEach { uuid ->
                 val ch = service.getCharacteristic(uuid)
@@ -267,8 +267,8 @@ class De1BleManager(
     // ---- Core integration -------------------------------------------------
 
     /**
-     * The seam Spike B exists to prove: raw GATT bytes -> [CremaBridge] ->
-     * JSON `CoreOutput` -> UI.
+     * The FFI/BLE seam: raw GATT bytes -> [CremaBridge] -> JSON `CoreOutput`
+     * -> UI.
      */
     private fun handleNotification(charUuid: java.util.UUID, data: ByteArray) {
         val source = when (charUuid) {

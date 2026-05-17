@@ -2,5 +2,5 @@
 <resources>
     <!-- Compose supplies the real theming; this is just a Material 3 base so
          the manifest has a valid android:theme to reference. -->
-    <style name="Theme.SpikeB" parent="android:Theme.Material.NoActionBar" />
+    <style name="Theme.Crema" parent="android:Theme.Material.NoActionBar" />
 </resources>

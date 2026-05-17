@@ -1,29 +1,30 @@
-# Crema · Spike B
+# Crema Android
 
-A **Phase-0 throwaway proof-of-concept** Android project. It is **not** the real
-Crema app. Its only job is to prove the toolchain path end to end:
+The **Crema Android app** — the native Android shell of the Crema project.
+
+It **began** as the Phase-0 FFI/BLE proof-of-concept (originally "Spike B"),
+whose only job was to prove the toolchain path end to end:
 
 ```
 cargo-ndk  →  Android .so  →  UniFFI-generated Kotlin  →  Compose app  →  live BLE to a real DE1
 ```
 
-If Spike B connects to a DE1 and shows machine state, shot phase, and telemetry
-decoded **by the Rust core** (not by Kotlin), the FFI-to-real-BLE seam is
-de-risked and the real Android shell can be built with confidence.
-
-Phase-0 Spike A — the protocol parsing and sans-IO core — is already done. This
-is Spike B: the integration spike.
+That seam — raw GATT bytes decoded **by the Rust core** (not by Kotlin) into
+machine state, shot phase, and telemetry — is now de-risked, and this project
+has been promoted from a throwaway spike into the real app. The Phase-0 screen
+(`Connect to DE1` + a live readout) is still here as the first working surface;
+the architecture below records where it grows from.
 
 ---
 
-## What it does
+## What it does today
 
 1. `de1-ffi` (the UniFFI bridge crate in `../core/`) is compiled to a native
    `libde1_ffi.so` for `arm64-v8a`.
 2. UniFFI generates Kotlin bindings (`CremaBridge`, the input enums) from that
    `.so`.
-3. A minimal `BluetoothGatt` BLE manager scans for a DE1 by its GATT service
-   UUID, connects, and subscribes to the `StateInfo` and `ShotSample` notify
+3. A `BluetoothGatt` BLE manager scans for a DE1 by its GATT service UUID,
+   connects, and subscribes to the `StateInfo` and `ShotSample` notify
    characteristics.
 4. Every BLE notification's raw bytes are passed to
    `CremaBridge.onNotification(source, data, nowMs)`. The bridge returns a
@@ -32,14 +33,49 @@ is Spike B: the integration spike.
    `core/bindings/crema-core.kt`) and the decoded `Event`s are shown live in a
    Jetpack Compose screen.
 
-It does **not** drive the machine, handle scales, reconnect, or persist
-anything. Those are out of scope for a toolchain spike.
+It does **not** yet drive the machine, handle scales, reconnect, or persist
+anything — those are the next steps, not omissions of principle.
+
+---
+
+## Structure
+
+The app is **one `:app` module producing one APK** that runs on both phone and
+tablet. There are **no** separate per-form-factor views, modules, or APKs.
+
+Adaptive UI is achieved by **window size classes** — `WindowSizeClass` via
+`currentWindowAdaptiveInfo()` — and **Material 3 Adaptive** scaffolds
+(`NavigationSuiteScaffold`, `ListDetailPaneScaffold`). Each screen is **authored
+once** and re-flows by size class:
+
+- **Compact** (phone) — single pane, bottom navigation.
+- **Medium / Expanded** (tablet) — navigation rail or drawer, list-detail panes
+  shown side by side.
+
+Primary target is the **Teclast P25T tablet** (Expanded / Medium); the **Pixel
+phone** (Compact) is the secondary target. Both are arm64.
+
+Package layout under `coffee.crema`:
+
+```
+coffee.crema/
+  core/      — UniFFI-binding wrappers + the CoreOutput JSON model types
+  ble/       — BluetoothGatt BLE manager + DE1 GATT UUIDs
+  ui/        — Compose entry point, theme, and size-class-adaptive shared UI
+  feature/…  — per-feature screens (added as features land; none yet)
+```
+
+The UniFFI-generated `de1_ffi.kt` lands in `coffee.crema.core` (set in
+`de1-ffi/uniffi.toml`) and shares that package with the typeshare-generated
+model types — the two are complementary and intentionally co-located.
 
 ---
 
 ## Target hardware
 
-- **Teclast P25T tablet, Android 12 (API 31)** — `minSdk 31`, `targetSdk 36`.
+- **Teclast P25T tablet, Android 12 (API 31)** — primary. `minSdk 31`,
+  `targetSdk 36`.
+- **Pixel phone** — secondary (Compact size class).
 - A real **Decent Espresso DE1** machine, powered on and in BLE range.
 - Android 12+ uses the `BLUETOOTH_SCAN` + `BLUETOOTH_CONNECT` runtime
   permissions (not the legacy `BLUETOOTH` / location permissions); the app
@@ -65,7 +101,7 @@ anything. Those are out of scope for a toolchain spike.
 # Rust target for arm64 Android
 rustup target add aarch64-linux-android
 
-# Point Gradle at the SDK + NDK. Create spike-b/local.properties:
+# Point Gradle at the SDK + NDK. Create android/local.properties:
 #   sdk.dir=/Users/<you>/Library/Android/sdk
 #   ndk.dir=/Users/<you>/Library/Android/sdk/ndk/<version>
 # (local.properties is git-ignored; Android Studio writes sdk.dir for you.)
@@ -84,7 +120,7 @@ The Gradle **wrapper JAR is binary** and is intentionally **not committed** in
 this scaffold. Generate it once, locally, before the first build:
 
 ```sh
-cd spike-b
+cd android
 gradle wrapper --gradle-version 8.11.1
 ```
 
@@ -99,10 +135,10 @@ for you.
 
 ## Build & run
 
-With a DE1 powered on and the tablet connected over ADB:
+With a DE1 powered on and the tablet (or phone) connected over ADB:
 
 ```sh
-cd spike-b
+cd android
 ./gradlew :app:installDebug
 ```
 
@@ -118,8 +154,8 @@ This runs, in order:
 3. The Kotlin/Compose app compiles and links against the bindings; the `.so`
    is packaged into the APK.
 
-Then launch the app on the tablet and tap **Connect to DE1**. Grant the
-Bluetooth permissions when prompted.
+Then launch the app and tap **Connect to DE1**. Grant the Bluetooth permissions
+when prompted.
 
 ### Manual fallback (no rust-android plugin)
 
@@ -129,14 +165,14 @@ If the Gradle plugin misbehaves, the same two steps can be done by hand:
 # 1. Build the .so (requires `cargo install cargo-ndk`)
 cd core
 cargo ndk --target aarch64-linux-android --platform 31 \
-    --output-dir ../spike-b/app/src/main/jniLibs \
+    --output-dir ../android/app/src/main/jniLibs \
     -- build --package de1-ffi --release
 
 # 2. Generate the Kotlin bindings
 cargo run --package de1-ffi --bin uniffi-bindgen -- generate \
     --library target/aarch64-linux-android/release/libde1_ffi.so \
     --language kotlin \
-    --out-dir ../spike-b/app/src/main/java
+    --out-dir ../android/app/src/main/java
 ```
 
 If you go this route, drop the `org.mozilla.rust-android-gradle` plugin and the
@@ -145,7 +181,7 @@ make sure the generated `.so` and `.kt` are not double-added.
 
 ---
 
-## What success looks like
+## What a healthy run looks like
 
 1. Tapping **Connect** → status moves `SCANNING → CONNECTING → DISCOVERING →
    SUBSCRIBING → READY`.
@@ -157,12 +193,9 @@ make sure the generated `.so` and `.kt` are not double-added.
 4. The **Decoded events** log shows `ShotStarted`, `ShotPhaseChanged`,
    `ShotCompleted`, etc.
 
-If all four happen, the spike has proven the full path and the real Android
-shell can proceed.
-
-A `DecodeError` event in the log is *also* a success signal for the seam — it
-means a malformed packet reached the core and the core surfaced it cleanly
-rather than crashing.
+A `DecodeError` event in the log is **not** a failure of the seam — it means a
+malformed packet reached the core and the core surfaced it cleanly rather than
+crashing.
 
 ---
 
@@ -186,7 +219,7 @@ From `docs/02-ble-protocol.md` §1. All share the base
 ## Project layout
 
 ```
-spike-b/
+android/
   settings.gradle.kts            — Gradle project, includes :app
   build.gradle.kts               — root: plugin versions
   gradle.properties              — JVM args, AndroidX
@@ -196,34 +229,40 @@ spike-b/
     build.gradle.kts             — Android + Compose + Rust/UniFFI integration
     src/main/
       AndroidManifest.xml        — BLUETOOTH_SCAN / BLUETOOTH_CONNECT
-      java/coffee/crema/spikeb/
-        MainActivity.kt          — Compose UI: Connect button + live readout
-        SpikeViewModel.kt        — owns CremaBridge, parses JSON CoreOutput
-        CremaCoreTypes.kt        — copy of core/bindings/crema-core.kt (CoreOutput
+      java/coffee/crema/
+        core/
+          CremaCoreTypes.kt      — copy of core/bindings/crema-core.kt (CoreOutput
                                    JSON types). Generated artifact, do not edit.
         ble/
           De1Uuids.kt            — DE1 GATT service + characteristic UUIDs
           De1BleManager.kt       — scan / connect / subscribe / feed the core
+        ui/
+          MainActivity.kt        — Compose entry point: Connect button + readout
+          MainViewModel.kt       — owns CremaBridge, parses JSON CoreOutput
       res/values/                — strings, theme
 ```
 
 The UniFFI-generated `de1_ffi.kt` is **not** checked in — it is regenerated
-into `app/build/generated/uniffi/` on every build.
+into `app/build/generated/uniffi/coffee/crema/core/` on every build.
 
 ---
 
-## Known limitations / risks (Spike B is throwaway)
+## Known limitations / next steps
 
-- **GATT op serialisation** is a tiny hand-rolled queue. Real Android BLE needs
-  a robust serialised command queue; the real app must not copy this.
+These are carryovers from the Phase-0 proof-of-concept that the real app must
+address before it ships:
+
+- **GATT op serialisation** is a tiny hand-rolled queue. A robust serialised
+  command queue is needed before the BLE layer is production-grade.
 - **No reconnection, bonding, or MTU negotiation.** The DE1's 19-byte
-  `ShotSample` fits in the default 23-byte ATT MTU, so MTU is not an issue here.
-- **`SpikeViewModel` mirrors BLE state by polling** the manager's `StateFlow`
-  on each callback rather than collecting it in a coroutine — adequate for a
-  spike, wrong for production.
-- **`CremaCoreTypes.kt` is vendored.** The real app should consume
-  `core/bindings/crema-core.kt` from a shared location, not copy it.
+  `ShotSample` fits in the default 23-byte ATT MTU, so MTU is not urgent — but
+  reconnection is.
+- **`MainViewModel` mirrors BLE state by polling** the manager's `StateFlow` on
+  each callback rather than collecting it in a coroutine — fine as a stopgap,
+  to be replaced with proper collection.
+- **`CremaCoreTypes.kt` is vendored.** It should be consumed from
+  `core/bindings/crema-core.kt` via a shared location, not hand-synced.
 - **Scale support is absent.** `CremaBridge.connectScale` / `tareScale` exist
-  but Spike B does not exercise them.
+  but are not yet exercised.
 - The DE1 advertised-name filter is lenient (accepts unnamed advertisements)
   because the service-UUID scan filter already does the real narrowing.
