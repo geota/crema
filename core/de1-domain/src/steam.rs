@@ -35,6 +35,19 @@
 use de1_protocol::{MachineState, ShotSample, StateInfo, SubState};
 use typeshare::typeshare;
 
+use crate::session::SessionTimer;
+
+/// Hard cap on the number of steam telemetry samples retained for one session.
+///
+/// A session ends when the DE1 leaves the `Steam` state — an untrusted signal
+/// from the peer — so without a cap a buggy or hostile DE1 could stream
+/// samples indefinitely and grow the heap without bound. The cap is sized far
+/// beyond any real session: ~1 hour of telemetry at 10 Hz. A real steam
+/// session is at most a couple of minutes, so a genuine session is never
+/// truncated; once the cap is reached further samples are simply dropped (no
+/// panic, no reallocation).
+pub const MAX_STEAM_SAMPLES: usize = 36_000;
+
 /// How long the machine must be idle (not steaming) before eco mode engages,
 /// seconds — the legacy `steam_eco_delay_seconds` default (`machine.tcl:34`).
 pub const STEAM_ECO_DELAY_SECONDS: u64 = 600;
@@ -149,10 +162,11 @@ pub enum SteamEvent {
     EcoModeChanged(bool),
 }
 
-/// In-progress steam session accumulation.
-#[derive(Debug)]
+/// In-progress steam session accumulation. The session timing lives in a
+/// shared [`SessionTimer`]; this holds only what is steam-specific.
+#[derive(Debug, Default)]
 struct SteamInProgress {
-    started_ms: u64,
+    timer: SessionTimer,
     samples: Vec<SteamSample>,
 }
 
@@ -255,9 +269,9 @@ impl SteamMonitor {
         self.puffing = in_steam && info.substate == SubState::Puffing;
 
         // A session ends when the machine leaves the Steam state.
-        if !in_steam && let Some(session) = self.session.take() {
+        if !in_steam && let Some(mut session) = self.session.take() {
             let record = SteamRecord {
-                duration_ms: now_ms.saturating_sub(session.started_ms),
+                duration_ms: session.timer.finish(now_ms).unwrap_or(0),
                 samples: session.samples,
             };
             let clog = record.clog_analysis();
@@ -271,10 +285,9 @@ impl SteamMonitor {
         // A session starts when the machine enters the Steam state. Steaming
         // is activity, so it disengages eco mode and re-arms the idle clock.
         if in_steam && self.session.is_none() {
-            self.session = Some(SteamInProgress {
-                started_ms: now_ms,
-                samples: Vec::new(),
-            });
+            let mut session = SteamInProgress::default();
+            session.timer.start(now_ms);
+            self.session = Some(session);
             self.last_steam_ms = Some(now_ms);
             events.push(SteamEvent::Started);
             if self.eco_mode {
@@ -290,10 +303,14 @@ impl SteamMonitor {
     /// other samples are ignored.
     pub fn on_sample(&mut self, sample: &ShotSample, _now_ms: u64) {
         if let Some(session) = &mut self.session {
-            session.samples.push(SteamSample {
-                pressure_bar: sample.group_pressure,
-                steam_temp_c: sample.steam_temp,
-            });
+            // Drop samples past the cap so an over-long stream cannot grow the
+            // heap without bound; see [`MAX_STEAM_SAMPLES`].
+            if session.samples.len() < MAX_STEAM_SAMPLES {
+                session.samples.push(SteamSample {
+                    pressure_bar: sample.group_pressure,
+                    steam_temp_c: sample.steam_temp,
+                });
+            }
         }
     }
 
@@ -407,6 +424,19 @@ mod tests {
         // Leaving the Steam state clears the puffing flag.
         monitor.on_state_info(state(MachineState::Idle, SubState::Ready), 3_000);
         assert!(!monitor.is_puffing());
+    }
+
+    #[test]
+    fn the_sample_buffer_is_capped() {
+        let mut monitor = SteamMonitor::new();
+        monitor.on_state_info(state(MachineState::Steam, SubState::Steaming), 0);
+        // Feed well past the cap: the excess samples are dropped, not retained.
+        for _ in 0..MAX_STEAM_SAMPLES + 100 {
+            monitor.on_sample(&steam_sample(2.0, 150.0), 100);
+        }
+        let done = monitor.on_state_info(state(MachineState::Idle, SubState::Ready), 1_000);
+        let record = completed_record(&done);
+        assert_eq!(record.samples.len(), MAX_STEAM_SAMPLES);
     }
 
     /// A `SteamRecord` of `count` samples all carrying `pressure` and `temp`.

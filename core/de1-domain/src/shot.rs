@@ -9,6 +9,19 @@
 use de1_protocol::{MachineState, ShotSample, StateInfo, SubState};
 use typeshare::typeshare;
 
+use crate::session::SessionTimer;
+
+/// Hard cap on the number of telemetry samples retained for one shot.
+///
+/// A shot ends when the DE1 leaves the `Espresso` state — an untrusted signal
+/// from the peer — so without a cap a buggy or hostile DE1 could stream
+/// samples indefinitely and grow the heap without bound. The cap is sized far
+/// beyond any real session: ~1 hour of telemetry at 10 Hz. A real espresso
+/// shot is at most a few minutes, so a genuine shot is never truncated; once
+/// the cap is reached further samples are simply dropped (no panic, no
+/// reallocation).
+pub const MAX_SHOT_SAMPLES: usize = 36_000;
+
 /// Where an espresso shot is in its lifecycle.
 #[typeshare]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
@@ -132,10 +145,11 @@ pub enum ShotEvent {
     Completed(ShotRecord),
 }
 
-/// In-progress shot accumulation.
-#[derive(Debug)]
+/// In-progress shot accumulation. The session timing lives in a shared
+/// [`SessionTimer`]; this holds only what is shot-specific.
+#[derive(Debug, Default)]
 struct ShotInProgress {
-    started_ms: u64,
+    timer: SessionTimer,
     last_frame: Option<u8>,
     samples: Vec<TimedSample>,
 }
@@ -177,11 +191,9 @@ impl ShotMonitor {
 
         // A shot starts when the machine enters the Espresso state.
         if in_espresso && self.shot.is_none() {
-            self.shot = Some(ShotInProgress {
-                started_ms: now_ms,
-                last_frame: None,
-                samples: Vec::new(),
-            });
+            let mut shot = ShotInProgress::default();
+            shot.timer.start(now_ms);
+            self.shot = Some(shot);
             events.push(ShotEvent::Started);
         }
 
@@ -192,9 +204,9 @@ impl ShotMonitor {
         }
 
         // A shot ends when the machine leaves the Espresso state.
-        if !in_espresso && let Some(shot) = self.shot.take() {
+        if !in_espresso && let Some(mut shot) = self.shot.take() {
             events.push(ShotEvent::Completed(ShotRecord {
-                duration_ms: now_ms.saturating_sub(shot.started_ms),
+                duration_ms: shot.timer.finish(now_ms).unwrap_or(0),
                 samples: shot.samples,
             }));
         }
@@ -212,10 +224,14 @@ impl ShotMonitor {
                 shot.last_frame = Some(sample.frame_number);
                 events.push(ShotEvent::FrameChanged(sample.frame_number));
             }
-            shot.samples.push(TimedSample {
-                elapsed_ms: now_ms.saturating_sub(shot.started_ms),
-                sample: sample.clone(),
-            });
+            // Drop samples past the cap so an over-long stream cannot grow the
+            // heap without bound; see [`MAX_SHOT_SAMPLES`].
+            if shot.samples.len() < MAX_SHOT_SAMPLES {
+                shot.samples.push(TimedSample {
+                    elapsed_ms: shot.timer.elapsed_ms(now_ms),
+                    sample: sample.clone(),
+                });
+            }
         }
         events
     }
@@ -351,6 +367,19 @@ mod tests {
         // Trapezoidal: 0..1 s avg 1.0 -> 1.0 mL; 1..2 s avg 2.0 -> 2.0 mL.
         assert_eq!(metrics.total_water_ml, 3.0);
         assert_eq!(metrics.duration_s, 30.0);
+    }
+
+    #[test]
+    fn the_sample_buffer_is_capped() {
+        let mut monitor = ShotMonitor::new();
+        monitor.on_state_info(state(MachineState::Espresso, SubState::Pouring), 0);
+        // Feed well past the cap: the excess samples are dropped, not retained.
+        for _ in 0..MAX_SHOT_SAMPLES + 100 {
+            monitor.on_sample(&sample(0), 1_000);
+        }
+        let done = monitor.on_state_info(state(MachineState::Idle, SubState::Ready), 2_000);
+        let record = completed_record(done);
+        assert_eq!(record.samples.len(), MAX_SHOT_SAMPLES);
     }
 
     #[test]

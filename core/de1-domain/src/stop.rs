@@ -24,8 +24,10 @@ pub struct StopTargets {
     pub weight_g: Option<f32>,
     /// Stop when this volume has been dispensed, mL (SAV).
     pub volume_ml: Option<f32>,
-    /// Stop when the shot has run this long, seconds (legacy `espresso_max_time`,
-    /// default 60 s).
+    /// Stop when the shot has run this long, seconds (the legacy
+    /// `espresso_max_time`). This type has no `Default`; the legacy app's
+    /// `espresso_max_time` setting itself defaults to 60 s, but a `StopTargets`
+    /// has no time limit unless one is set here, and `None` disables the mode.
     pub max_time: Option<f32>,
 }
 
@@ -51,13 +53,18 @@ impl Default for StopConfig {
     /// defaults to [`FlowAlgorithm::TheilSen`].
     fn default() -> StopConfig {
         StopConfig {
-            weight_lead_seconds: 0.15,
+            weight_lead_seconds: STOP_WEIGHT_BEFORE_SECONDS,
             weight_offset_g: 0.0,
             arming_delay_ms: 5_000,
             flow_algorithm: FlowAlgorithm::TheilSen,
         }
     }
 }
+
+/// The legacy `stop_weight_before_seconds` setting default — the user-tunable
+/// part of the SAW look-ahead (the canonical home for this constant; the
+/// `de1-app` facade references it rather than re-declaring its own).
+pub const STOP_WEIGHT_BEFORE_SECONDS: f32 = 0.15;
 
 /// The DE1's own contribution to the SAW look-ahead — the legacy
 /// `saw::_lag_time_de1` constant.
