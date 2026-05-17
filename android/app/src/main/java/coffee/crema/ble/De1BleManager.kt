@@ -221,8 +221,12 @@ class De1BleManager(
             handleNotification(characteristic.uuid, value)
         }
 
-        // API <33 path — read the value off the characteristic.
-        @Suppress("DEPRECATION")
+        // API <33 path — read the value off the characteristic. This overrides
+        // the 2-arg callback, deprecated since API 33 — intentional, it is the
+        // only callback the framework calls on API 31/32 (the Teclast).
+        // DEPRECATION covers `characteristic.value`; OVERRIDE_DEPRECATION covers
+        // overriding the deprecated callback itself.
+        @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
         override fun onCharacteristicChanged(
             g: BluetoothGatt,
             characteristic: BluetoothGattCharacteristic,

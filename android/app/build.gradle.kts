@@ -162,6 +162,10 @@ abstract class GenerateUniffiBindings : DefaultTask() {
             commandLine(
                 cargoCommand.get(), "run", "--package", "de1-ffi", "--bin", "uniffi-bindgen", "--",
                 "generate",
+                // Skip uniffi-bindgen's ktlint auto-format step: ktlint is not
+                // installed, and a build/-dir generated file needs no formatting.
+                // Without this, the build prints a "ktlint: No such file" warning.
+                "--no-format",
                 "--library", library.get().asFile.absolutePath,
                 "--language", "kotlin",
                 "--out-dir", outDir.absolutePath,
