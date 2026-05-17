@@ -1,0 +1,28 @@
+[package]
+name = "de1-ffi"
+version = "0.1.0"
+description = "Crema UniFFI bridge — exposes the de1-app core to the Android (Kotlin) shell"
+edition.workspace = true
+# Higher than the workspace's 1.85: uniffi's dependency tree (wit-bindgen)
+# requires Rust 1.87.
+rust-version = "1.87"
+license.workspace = true
+authors.workspace = true
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+de1-app = { path = "../de1-app" }
+de1-protocol = { path = "../de1-protocol" }
+uniffi = { version = "0.31.1", features = ["cli"] }
+
+# This crate intentionally does NOT use `[lints] workspace = true`: UniFFI's
+# generated FFI scaffolding requires `unsafe`, which the workspace lint table
+# forbids. The lints below mirror the workspace's, minus `unsafe_code`.
+[lints.rust]
+future_incompatible = { level = "warn", priority = -1 }
+nonstandard_style = { level = "deny", priority = -1 }
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }

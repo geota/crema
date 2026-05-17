@@ -1,0 +1,3 @@
+# UniFFI binding-generator configuration.
+[bindings.kotlin]
+package_name = "coffee.crema.core"
