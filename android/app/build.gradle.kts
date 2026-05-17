@@ -11,16 +11,16 @@ plugins {
 }
 
 android {
-    namespace = "coffee.crema.spikeb"
+    namespace = "coffee.crema"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "coffee.crema.spikeb"
-        // Teclast P25T tablet runs Android 12 (API 31).
+        applicationId = "coffee.crema"
+        // Teclast P25T tablet runs Android 12 (API 31); also the phone floor.
         minSdk = 31
         targetSdk = 36
         versionCode = 1
-        versionName = "0.1-spike"
+        versionName = "0.1"
     }
 
     buildTypes {
@@ -89,15 +89,15 @@ dependencies {
 // resulting `libde1_ffi.so` into jniLibs so it ships in the APK. The plugin
 // shells out to `cargo` + the NDK linker; `cargo-ndk` itself is not required
 // when using this plugin, but the NDK and the Rust target must be installed
-// (see spike-b/README.md).
+// (see android/README.md).
 cargo {
     // Path from this module to the Rust workspace member.
     module = "../../core/de1-ffi"
     libname = "de1_ffi"
-    // Teclast P25T is arm64. arm64-v8a is the only ABI Spike B needs; add
-    // "x86_64" here if you also want to run it on an emulator.
+    // Teclast P25T and the Pixel phone are both arm64. arm64-v8a is the only
+    // ABI needed for real hardware; add "x86_64" here to also run on an emulator.
     targets = listOf("arm64")
-    // Spike B is a debug-only spike; "debug" keeps the build fast.
+    // "debug" keeps the build fast; switch to "release" for shippable APKs.
     profile = "debug"
     // The crate is part of a Cargo workspace; build just this package.
     extraCargoBuildArguments = listOf("--package", "de1-ffi")

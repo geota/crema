@@ -1,4 +1,4 @@
-package coffee.crema.spikeb.ble
+package coffee.crema.ble
 
 import java.util.UUID
 
@@ -9,7 +9,7 @@ import java.util.UUID
  * Bluetooth-SIG base UUID `0000xxxx-0000-1000-8000-00805F9B34FB` with a 16-bit
  * value in the `xxxx` slot (`A000`..`A012`).
  *
- * Spike B only needs the two notify characteristics — `StateInfo` and
+ * The app currently uses the two notify characteristics — `StateInfo` and
  * `ShotSample` — plus `RequestedState` for the (optional) machine-control
  * write path. The rest are listed for completeness / future use.
  */

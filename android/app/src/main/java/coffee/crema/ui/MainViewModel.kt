@@ -1,18 +1,18 @@
-package coffee.crema.spikeb
+package coffee.crema.ui
 
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import coffee.crema.core.CoreOutput
 import coffee.crema.core.CremaBridge
 import coffee.crema.core.Event
-import coffee.crema.spikeb.ble.De1BleManager
+import coffee.crema.ble.De1BleManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.json.Json
 
-/** A flat snapshot of everything Spike B's UI shows. */
-data class SpikeUiState(
+/** A flat snapshot of everything the current screen shows. */
+data class MainUiState(
     val bleState: De1BleManager.State = De1BleManager.State.IDLE,
     /** Most recent status line (scan / connect / error transitions). */
     val status: String = "Idle",
@@ -28,21 +28,21 @@ data class SpikeUiState(
 
 /**
  * Owns the [CremaBridge] and the [De1BleManager], parses the JSON `CoreOutput`
- * the bridge returns, and projects decoded [Event]s into [SpikeUiState].
+ * the bridge returns, and projects decoded [Event]s into [MainUiState].
  *
- * This is the spike's "everything else" — the real app will split connection,
- * core ownership, and per-screen state properly. Here it is one class so the
- * end-to-end path is readable top to bottom.
+ * Carried over from the Phase-0 proof-of-concept: connection, core ownership,
+ * and per-screen state are still folded into one class so the end-to-end path
+ * is readable top to bottom. Splitting these into proper layers is future work.
  */
-class SpikeViewModel(app: Application) : AndroidViewModel(app) {
+class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private val json = Json { ignoreUnknownKeys = true }
 
     /** The Rust core, behind the UniFFI bridge. */
     private val bridge: CremaBridge = CremaBridge()
 
-    private val _ui = MutableStateFlow(SpikeUiState())
-    val ui: StateFlow<SpikeUiState> = _ui.asStateFlow()
+    private val _ui = MutableStateFlow(MainUiState())
+    val ui: StateFlow<MainUiState> = _ui.asStateFlow()
 
     private val ble = De1BleManager(
         context = app,
@@ -53,8 +53,7 @@ class SpikeViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         // Mirror the BLE manager's coarse state into the UI snapshot.
-        // (Collected without a scope helper to keep the spike dependency-light;
-        //  StateFlow is cold-safe to read once here for the initial value.)
+        // (Read once here for the initial value; see observeBleState below.)
     }
 
     /** Called from the UI once the BLE runtime permissions have been granted. */
@@ -76,14 +75,14 @@ class SpikeViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun observeBleState() {
-        // The manager exposes a StateFlow; the cheapest correct hookup in a
-        // spike is to poll its current value whenever a status line lands.
-        // For simplicity the value is also folded in here on each call.
+        // The manager exposes a StateFlow; for now its current value is polled
+        // whenever a status line lands. Collecting it in a coroutine is a
+        // follow-up; the value is folded in here on each call.
         _ui.value = _ui.value.copy(bleState = ble.state.value)
     }
 
     /**
-     * The heart of Spike B: a JSON `CoreOutput` string came back from
+     * The FFI/BLE seam: a JSON `CoreOutput` string came back from
      * [CremaBridge.onNotification]. Deserialize it and fold its [Event]s into
      * the UI state.
      *

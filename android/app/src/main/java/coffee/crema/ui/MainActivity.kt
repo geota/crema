@@ -1,4 +1,4 @@
-package coffee.crema.spikeb
+package coffee.crema.ui
 
 import android.Manifest
 import android.content.pm.PackageManager
@@ -29,15 +29,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
-import coffee.crema.spikeb.ble.De1BleManager
+import coffee.crema.ble.De1BleManager
 
 /**
- * Spike B's single screen: a Connect button and a live readout of the events
- * the Rust core decodes from the DE1's BLE notifications.
+ * The app's current single screen: a Connect button and a live readout of the
+ * events the Rust core decodes from the DE1's BLE notifications. This is the
+ * Phase-0 FFI/BLE proof-of-concept screen; future screens re-flow by window
+ * size class (see README "Structure").
  */
 class MainActivity : ComponentActivity() {
 
-    private val viewModel: SpikeViewModel by viewModels()
+    private val viewModel: MainViewModel by viewModels()
 
     /** Android-12 BLE runtime permissions. */
     private val blePermissions = arrayOf(
@@ -59,7 +61,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    SpikeScreen(
+                    MainScreen(
                         viewModel = viewModel,
                         onConnect = ::requestConnect,
                         onDisconnect = viewModel::disconnect,
@@ -83,8 +85,8 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-private fun SpikeScreen(
-    viewModel: SpikeViewModel,
+private fun MainScreen(
+    viewModel: MainViewModel,
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
 ) {
@@ -96,9 +98,9 @@ private fun SpikeScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("Crema · Spike B", style = MaterialTheme.typography.headlineSmall)
+        Text("Crema", style = MaterialTheme.typography.headlineSmall)
         Text(
-            "Phase-0 toolchain spike: cargo-ndk → UniFFI → Compose → live DE1 BLE.",
+            "Phase-0 FFI/BLE path: cargo-ndk → UniFFI → Compose → live DE1 BLE.",
             style = MaterialTheme.typography.bodySmall,
         )
 
