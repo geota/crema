@@ -46,6 +46,11 @@ pub const HEARTBEAT: [u8; 7] = [0xEF, 0xDD, 0x00, 0x02, 0x00, 0x02, 0x00];
 const METADATA_LEN: usize = 5;
 /// Minimum bytes needed before a frame's metadata can be read.
 const MIN_MESSAGE_LEN: usize = 6;
+/// Sanity cap on the receive buffer. A complete Acaia frame is at most ~75
+/// bytes (5 metadata + a 64-byte max payload + a little slack), so a buffer
+/// that grows past this is a hostile or desynced stream that will never
+/// assemble a frame — it is dropped rather than retained unboundedly.
+const MAX_BUFFER_LEN: usize = 256;
 
 /// Stateful decoder for the Acaia framed protocol.
 ///
@@ -81,6 +86,12 @@ impl AcaiaDecoder {
     /// frame has been decoded, otherwise `None` (more data may be needed).
     pub fn push(&mut self, data: &[u8]) -> Option<f32> {
         self.buffer.extend_from_slice(data);
+        // A buffer past the sanity cap is a hostile or desynced stream that
+        // will never assemble a frame — drop the stale partial buffer.
+        if self.buffer.len() > MAX_BUFFER_LEN {
+            self.buffer.clear();
+            return None;
+        }
         if self.buffer.len() < MIN_MESSAGE_LEN {
             return None;
         }
@@ -187,5 +198,20 @@ mod tests {
     fn ignores_a_buffer_with_no_header() {
         let mut d = AcaiaDecoder::new();
         assert_eq!(d.push(&[0x01, 0x02, 0x03, 0x04, 0x05, 0x06]), None);
+    }
+
+    #[test]
+    fn a_hostile_oversized_stream_is_dropped_not_retained() {
+        let mut d = AcaiaDecoder::new();
+        // A header followed by a length claiming far more than will ever
+        // arrive keeps the decoder waiting; a hostile peer then floods bytes.
+        // The buffer must not grow without bound — it is cleared past the cap.
+        d.push(&[0xEF, 0xDD, 12, 0xFF, 5]); // Weight metadata, length 255
+        for _ in 0..20 {
+            assert_eq!(d.push(&[0u8; 64]), None);
+        }
+        assert!(d.buffer.len() <= MAX_BUFFER_LEN);
+        // After the drop the decoder still works for a fresh, valid frame.
+        assert_eq!(d.push(&weight_frame(180, 0)), Some(18.0));
     }
 }
