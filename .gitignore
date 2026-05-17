@@ -10,7 +10,6 @@ local.properties
 .cxx/
 *.apk
 *.aab
-captures/
 
 # IDE
 .idea/
