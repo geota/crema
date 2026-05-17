@@ -13,6 +13,11 @@ plugins {
 android {
     namespace = "coffee.crema"
     compileSdk = 36
+    // Pinned to the NDK installed via the SDK Manager ("NDK (Side by side)").
+    // AGP's built-in default NDK version differs, so without an explicit pin
+    // Gradle looks for a version that isn't installed and fails with
+    // "NDK is not installed". Update this if you install a different NDK.
+    ndkVersion = "30.0.14904198"
 
     defaultConfig {
         applicationId = "coffee.crema"
