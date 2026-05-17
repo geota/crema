@@ -31,4 +31,7 @@ pub enum ProtocolError {
     /// [`CalTarget`](crate::CalTarget).
     #[error("unknown CalTarget byte: {0}")]
     UnknownCalTarget(u8),
+    /// A firmware-frame upload offset did not fit the 24-bit address field.
+    #[error("firmware offset out of 24-bit range: {0:#x}")]
+    FirmwareOffsetOutOfRange(u32),
 }
