@@ -63,6 +63,32 @@ mod tests {
     }
 
     #[test]
+    fn decodes_a_zero_weight() {
+        assert_eq!(parse_weight(&[0x10, 0x00, 0x00]), Some(0.0));
+    }
+
+    #[test]
+    fn decodes_the_signed_extremes() {
+        // 0xFF 0x7F -> little-endian 0x7FFF = i16::MAX -> 3276.7 g.
+        assert_eq!(parse_weight(&[0x10, 0xFF, 0x7F]), Some(3276.7));
+        // 0x00 0x80 -> little-endian 0x8000 = i16::MIN -> -3276.8 g.
+        assert_eq!(parse_weight(&[0x10, 0x00, 0x80]), Some(-3276.8));
+    }
+
+    #[test]
+    fn ignores_the_marker_byte() {
+        // Byte 0 is only a marker; any value decodes the same weight.
+        assert_eq!(parse_weight(&[0x00, 0xC8, 0x00]), Some(20.0));
+        assert_eq!(parse_weight(&[0xFF, 0xC8, 0x00]), Some(20.0));
+    }
+
+    #[test]
+    fn accepts_a_packet_at_the_exact_minimum_length() {
+        // Exactly three bytes is the boundary — two bytes is rejected below.
+        assert_eq!(parse_weight(&[0x10, 0xC8, 0x00]), Some(20.0));
+    }
+
+    #[test]
     fn rejects_a_short_packet() {
         assert_eq!(parse_weight(&[0x10, 0xC8]), None);
     }

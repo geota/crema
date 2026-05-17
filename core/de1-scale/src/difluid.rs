@@ -53,7 +53,45 @@ mod tests {
     }
 
     #[test]
+    fn decodes_a_zero_weight() {
+        // An all-zero payload is a valid zero reading.
+        assert_eq!(parse_weight(&[0u8; 19]), Some(0.0));
+    }
+
+    #[test]
+    fn accepts_a_packet_at_the_exact_minimum_length() {
+        // Exactly 19 bytes is the boundary — one fewer is rejected.
+        let packet = [0u8; 19];
+        assert_eq!(parse_weight(&packet), Some(0.0));
+    }
+
+    #[test]
+    fn decodes_a_large_unsigned_weight() {
+        // The codec reads bytes 5–8 as an unsigned big-endian u32: a value
+        // with the top bit set stays positive (no two's-complement sign).
+        let mut packet = [0u8; 19];
+        packet[5] = 0x80;
+        let raw = 0x8000_0000u32;
+        assert_eq!(parse_weight(&packet), Some(raw as f32 / 10.0));
+    }
+
+    #[test]
     fn rejects_a_short_packet() {
         assert_eq!(parse_weight(&[0u8; 18]), None);
+    }
+
+    /// The Difluid protocol has no sign field — bytes 5–8 are an unsigned
+    /// `u32`, so a negative weight cannot be represented and the largest count
+    /// `0xFFFFFFFF` decodes as a large positive number rather than wrapping.
+    #[test]
+    fn the_protocol_cannot_represent_a_negative_weight() {
+        let mut packet = [0u8; 19];
+        packet[5] = 0xFF;
+        packet[6] = 0xFF;
+        packet[7] = 0xFF;
+        packet[8] = 0xFF;
+        let decoded = parse_weight(&packet).unwrap();
+        assert!(decoded > 0.0, "an all-ones payload must decode as positive");
+        assert_eq!(decoded, u32::MAX as f32 / 10.0);
     }
 }

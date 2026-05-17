@@ -60,8 +60,50 @@ mod tests {
     }
 
     #[test]
+    fn decodes_a_zero_weight() {
+        let packet = [0xAA, 0x09, 0x41, 0, 0, 0, 0, 0x00, 0x00];
+        assert_eq!(parse_weight(&packet), Some(0.0));
+    }
+
+    #[test]
+    fn decodes_the_maximum_unsigned_magnitude() {
+        // Bytes 7–8 are an unsigned little-endian u16: 0xFFFF -> 6553.5 g.
+        let packet = [0xAA, 0x09, 0x41, 0, 0, 0, 0, 0xFF, 0xFF];
+        assert_eq!(parse_weight(&packet), Some(6553.5));
+    }
+
+    #[test]
+    fn treats_only_a_sign_byte_of_one_as_negative() {
+        // The sign rule is `data[6] == 1`; any other value is positive.
+        let two = [0xAA, 0x09, 0x41, 0, 0, 0, 2, 0xB4, 0x00];
+        assert_eq!(parse_weight(&two), Some(18.0));
+        let high = [0xAA, 0x09, 0x41, 0, 0, 0, 0xFF, 0xB4, 0x00];
+        assert_eq!(parse_weight(&high), Some(18.0));
+    }
+
+    #[test]
     fn rejects_a_frame_with_a_bad_header() {
         let packet = [0x00, 0x09, 0x41, 0, 0, 0, 0, 0xB4, 0x00];
         assert_eq!(parse_weight(&packet), None);
+    }
+
+    #[test]
+    fn rejects_a_frame_with_a_wrong_length_byte() {
+        // The header is AA 09 41; a length byte other than 0x09 is not weight.
+        let packet = [0xAA, 0x08, 0x41, 0, 0, 0, 0, 0xB4, 0x00];
+        assert_eq!(parse_weight(&packet), None);
+    }
+
+    #[test]
+    fn rejects_a_frame_with_a_wrong_type_byte() {
+        // The third header byte 0x41 marks a weight frame; 0x42 does not.
+        let packet = [0xAA, 0x09, 0x42, 0, 0, 0, 0, 0xB4, 0x00];
+        assert_eq!(parse_weight(&packet), None);
+    }
+
+    #[test]
+    fn rejects_a_short_packet() {
+        // A correct weight header but only eight bytes — one short of the minimum.
+        assert_eq!(parse_weight(&[0xAA, 0x09, 0x41, 0, 0, 0, 0, 0xB4]), None);
     }
 }

@@ -44,9 +44,35 @@ mod tests {
         f
     }
 
+    /// Build a weight frame for an arbitrary signed milligram value with a
+    /// correct XOR checksum.
+    fn frame_for(milligrams: i32) -> [u8; 10] {
+        let mg = milligrams.to_le_bytes();
+        let mut f = [b'W', mg[0], mg[1], mg[2], mg[3], 0, 0, 0, 0, 0];
+        f[9] = f[1..9].iter().fold(0u8, |acc, &b| acc ^ b);
+        f
+    }
+
     #[test]
     fn decodes_milligrams_to_grams() {
         assert_eq!(parse_weight(&frame()), Some(18.0));
+    }
+
+    #[test]
+    fn decodes_a_negative_weight() {
+        // -18000 mg is a signed little-endian i32 -> -18.0 g.
+        assert_eq!(parse_weight(&frame_for(-18_000)), Some(-18.0));
+    }
+
+    #[test]
+    fn decodes_a_zero_weight() {
+        assert_eq!(parse_weight(&frame_for(0)), Some(0.0));
+    }
+
+    #[test]
+    fn rejects_a_short_packet() {
+        // One byte short of the 10-byte minimum, header and checksum aside.
+        assert_eq!(parse_weight(&[b'W', 0, 0, 0, 0, 0, 0, 0, 0]), None);
     }
 
     #[test]
