@@ -18,9 +18,11 @@
 //! - [`profile`] — the espresso profile upload codec (`cuuid_0F` / `cuuid_10`).
 //! - [`command`] — command and settings packets (`cuuid_02` / `0B` / `11`).
 //! - [`mmr`] — the memory-mapped register read/write codec (`cuuid_05` / `06`).
+//! - [`calibration`] — sensor calibration packets (`cuuid_12`).
 //!
 //! `unsafe` is forbidden crate-wide via the workspace lint table.
 
+pub mod calibration;
 pub mod command;
 pub mod error;
 pub mod fixed_point;
@@ -29,6 +31,7 @@ pub mod profile;
 pub mod shot_sample;
 pub mod state;
 
+pub use calibration::{CALIBRATION_LEN, CalCommand, CalTarget, Calibration};
 pub use command::{ShotSettings, WaterLevels, requested_state};
 pub use error::ProtocolError;
 pub use mmr::{MMR_PACKET_LEN, MmrReadReply, MmrRegister};

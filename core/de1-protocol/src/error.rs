@@ -23,4 +23,12 @@ pub enum ProtocolError {
     /// A substate byte did not match any known [`SubState`](crate::SubState).
     #[error("unknown SubState byte: {0}")]
     UnknownSubState(u8),
+    /// A calibration command byte did not match any known
+    /// [`CalCommand`](crate::CalCommand).
+    #[error("unknown CalCommand byte: {0}")]
+    UnknownCalCommand(u8),
+    /// A calibration target byte did not match any known
+    /// [`CalTarget`](crate::CalTarget).
+    #[error("unknown CalTarget byte: {0}")]
+    UnknownCalTarget(u8),
 }
