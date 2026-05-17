@@ -127,6 +127,12 @@ sealed class Event {
 	@Serializable
 	@SerialName("ShotCompleted")
 	data class ShotCompleted(val content: EventShotCompletedInner): Event()
+	/// The connected scale stopped reporting weight — no reading has arrived
+	/// for roughly a second. Emitted once per stale episode; a fresh reading
+	/// re-arms it.
+	@Serializable
+	@SerialName("ScaleStale")
+	object ScaleStale: Event()
 	/// An incoming notification could not be decoded.
 	@Serializable
 	@SerialName("DecodeError")
