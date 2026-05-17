@@ -78,7 +78,10 @@ dependencies {
 
     // UniFFI's generated Kotlin depends on JNA for the FFI calls and on
     // kotlinx-coroutines (its runtime helpers reference it).
-    implementation("net.java.dev.jna:jna:5.15.0@aar")
+    // 5.17.0 is the first JNA whose Android libjnidispatch.so is built with
+    // 16 KB ELF page alignment — required by Android 15+ / API 36+ devices and
+    // emulators (16 KB memory pages). Older JNA fails to dlopen on them.
+    implementation("net.java.dev.jna:jna:5.17.0@aar")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 
     // The de1-app `CoreOutput` JSON is deserialized with kotlinx.serialization.
@@ -98,6 +101,12 @@ cargo {
     // Path from this module to the Rust workspace member.
     module = "../../core/de1-ffi"
     libname = "de1_ffi"
+    // de1-ffi is a Cargo *workspace member*, so `cargo` writes build output to
+    // the workspace target dir (core/target), NOT <module>/target. The plugin
+    // defaults to <module>/target to find the compiled .so to stage into the
+    // APK; point it at the real workspace target or libde1_ffi.so never gets
+    // packaged and the app crashes at load with UnsatisfiedLinkError.
+    targetDirectory = "../../core/target"
     // Teclast P25T and the Pixel phone are both arm64. arm64-v8a is the only
     // ABI needed for real hardware; add "x86_64" here to also run on an emulator.
     targets = listOf("arm64")
