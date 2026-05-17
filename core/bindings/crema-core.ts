@@ -43,8 +43,22 @@ export type Event =
 	| { type: "ScaleReading", content: {
 	/** Robust current weight, grams. */
 	weight_g: number;
-	/** Robust mass-flow rate, grams per second. */
+	/**
+	 * Robust mass-flow rate, grams per second — the core's own estimate
+	 * from the weight series, available for every supported scale.
+	 */
 	flow_g_per_s: number;
+	/**
+	 * The scale's own native mass-flow rate, grams per second, when the
+	 * scale reports one (the Bookoo does); `None` otherwise. Distinct
+	 * from the core-computed `flow_g_per_s` — surfaced as raw data.
+	 */
+	device_flow_g_per_s?: number;
+	/**
+	 * The scale's own built-in-timer reading, milliseconds, when the
+	 * scale reports one (the Bookoo does); `None` otherwise.
+	 */
+	device_timer_ms?: number;
 }}
 	/** The DE1 reported its water-tank level. */
 	| { type: "WaterLevel", content: {

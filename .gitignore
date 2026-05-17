@@ -20,3 +20,10 @@ local.properties
 # OS
 .DS_Store
 Thumbs.db
+
+# Debug / exploration artifacts — logcat dumps, bug reports, loose captures.
+# Recorded captures meant to be kept belong in captures/, not the repo root.
+/bugreport/
+/*-logs.txt
+/bt-gatt.txt
+/session-*.jsonl

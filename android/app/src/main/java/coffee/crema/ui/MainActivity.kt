@@ -143,6 +143,8 @@ private fun MainScreen(
         ScaleSection(
             scaleState = ui.scaleState,
             scaleWeightG = ui.scaleWeightG,
+            scaleFlowGPerS = ui.scaleFlowGPerS,
+            scaleTimerMs = ui.scaleTimerMs,
             onConnectScale = onConnectScale,
             onDisconnectScale = onDisconnectScale,
             onTareScale = onTareScale,
@@ -176,11 +178,17 @@ private fun MainScreen(
  * The scale section: a Connect button, a live weight readout, and a Tare
  * button. The scale connection is independent of the DE1 — it works with or
  * without a machine connected.
+ *
+ * `scaleFlowGPerS` / `scaleTimerMs` are the scale's own native readings — only
+ * populated for scales that report them (the Bookoo); shown as raw data
+ * alongside the weight.
  */
 @Composable
 private fun ScaleSection(
     scaleState: ScaleBleManager.State,
     scaleWeightG: Float?,
+    scaleFlowGPerS: Float?,
+    scaleTimerMs: Long?,
     onConnectScale: () -> Unit,
     onDisconnectScale: () -> Unit,
     onTareScale: () -> Unit,
@@ -199,6 +207,8 @@ private fun ScaleSection(
         ) {
             Text("Scale", style = MaterialTheme.typography.titleMedium)
             Field("Weight", scaleWeightG?.let { "%.1f g".format(it) } ?: "—")
+            Field("Flow", scaleFlowGPerS?.let { "%.1f g/s".format(it) } ?: "—")
+            Field("Timer", scaleTimerMs?.let { "%.1f s".format(it / 1000.0) } ?: "—")
 
             Button(
                 onClick = onConnectScale,

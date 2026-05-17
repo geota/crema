@@ -69,8 +69,16 @@ pub enum Event {
     ScaleReading {
         /// Robust current weight, grams.
         weight_g: f32,
-        /// Robust mass-flow rate, grams per second.
+        /// Robust mass-flow rate, grams per second — the core's own estimate
+        /// from the weight series, available for every supported scale.
         flow_g_per_s: f32,
+        /// The scale's own native mass-flow rate, grams per second, when the
+        /// scale reports one (the Bookoo does); `None` otherwise. Distinct
+        /// from the core-computed `flow_g_per_s` — surfaced as raw data.
+        device_flow_g_per_s: Option<f32>,
+        /// The scale's own built-in-timer reading, milliseconds, when the
+        /// scale reports one (the Bookoo does); `None` otherwise.
+        device_timer_ms: Option<u32>,
     },
     /// The DE1 reported its water-tank level.
     WaterLevel {

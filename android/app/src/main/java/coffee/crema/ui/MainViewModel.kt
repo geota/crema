@@ -7,7 +7,9 @@ import coffee.crema.core.CoreOutput
 import coffee.crema.core.CremaBridge
 import coffee.crema.core.Event
 import coffee.crema.ble.BleScanner
+import coffee.crema.ble.BleSessionRecorder
 import coffee.crema.ble.De1BleManager
+import coffee.crema.ble.NordicBleTransport
 import coffee.crema.ble.ScaleBleManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -29,6 +31,17 @@ data class MainUiState(
     val telemetry: String? = null,
     /** Latest scale weight in grams, or null before the first reading. */
     val scaleWeightG: Float? = null,
+    /**
+     * Latest scale-reported native mass-flow rate in g/s, or null — only
+     * scales that report their own flow (the Bookoo) populate this; it is
+     * distinct from the core-computed flow.
+     */
+    val scaleFlowGPerS: Float? = null,
+    /**
+     * Latest scale-reported built-in-timer reading in milliseconds, or null —
+     * only scales with a built-in timer (the Bookoo) populate this.
+     */
+    val scaleTimerMs: Long? = null,
     /** A rolling event log, newest first. */
     val eventLog: List<String> = emptyList(),
 )
@@ -52,18 +65,37 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val ui: StateFlow<MainUiState> = _ui.asStateFlow()
 
     /**
+     * The app-wide BLE transport — the one Nordic-backed [NordicBleTransport].
+     * Created once here and [NordicBleTransport.close]d from [onCleared]; it
+     * owns the Nordic `Environment` (a broadcast receiver that must be closed).
+     * The scanner and both managers sit on top of it.
+     */
+    private val bleTransport = NordicBleTransport(app)
+
+    /**
      * The one app-wide BLE scanner, shared by both managers. A single
      * unfiltered scan dispatches each result by advertised-name match to
      * whichever device currently wants to connect — see [connect] / [connectScale].
      */
     private val bleScanner = BleScanner(
-        context = app,
+        transport = bleTransport,
         onStatus = { line -> _ui.value = _ui.value.copy(status = line) },
     )
 
+    /**
+     * The one session-wide BLE recorder, shared by both managers. A connection
+     * counter inside it opens a single capture file when the first device (DE1
+     * or scale) connects and closes it when the last disconnects, so a session
+     * with both devices produces ONE interleaved file that replays through a
+     * single `CremaCore` — important for scale-aware behaviour like shot-start
+     * auto-tare.
+     */
+    private val bleRecorder = BleSessionRecorder(app)
+
     private val ble = De1BleManager(
-        context = app,
+        transport = bleTransport,
         bridge = bridge,
+        recorder = bleRecorder,
         onCoreOutput = ::onCoreOutputJson,
         onStatus = { line -> _ui.value = _ui.value.copy(status = line) },
     )
@@ -72,10 +104,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * The Bookoo scale connection. Shares the one [bridge] with [ble]: the core
      * is internally `Mutex`-guarded, so both managers feeding it concurrently
      * is safe. Its `CoreOutput` goes through the same [onCoreOutputJson] path.
+     * It also shares the one [bleRecorder] so its weight notifications and
+     * tare/timer writes land in the same interleaved capture file as the DE1's.
      */
     private val scale = ScaleBleManager(
-        context = app,
+        transport = bleTransport,
         bridge = bridge,
+        recorder = bleRecorder,
         onCoreOutput = ::onCoreOutputJson,
         onStatus = { line -> _ui.value = _ui.value.copy(status = line) },
     )
@@ -125,6 +160,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _ui.value = _ui.value.copy(
             scaleState = ScaleBleManager.State.DISCONNECTED,
             scaleWeightG = null,
+            scaleFlowGPerS = null,
+            scaleTimerMs = null,
         )
     }
 
@@ -222,7 +259,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
             is Event.ScaleReading -> {
                 val r = event.content
-                _ui.value = _ui.value.copy(scaleWeightG = r.weight_g)
+                _ui.value = _ui.value.copy(
+                    scaleWeightG = r.weight_g,
+                    scaleFlowGPerS = r.device_flow_g_per_s,
+                    scaleTimerMs = r.device_timer_ms?.toLong(),
+                )
                 // Weight is high-rate; do not flood the log with every reading.
             }
             is Event.WaterLevel ->
@@ -267,6 +308,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         bleScanner.cancel(SCAN_LABEL_SCALE)
         ble.disconnect()
         scale.disconnect()
+        // Close the Nordic environment last — it unregisters the Bluetooth
+        // broadcast receiver and tears down the central manager. The managers'
+        // disconnect() calls above are fire-and-forget coroutines; closing the
+        // transport also cancels its scope, so any in-flight disconnect ends.
+        bleTransport.close()
     }
 
     private companion object {
