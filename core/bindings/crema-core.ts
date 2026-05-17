@@ -69,6 +69,21 @@ export type Event =
 	sample_count: number;
 }}
 	/**
+	 * A hot-water or flush session began (the DE1 entered the `HotWater` or
+	 * `HotWaterRinse` state).
+	 */
+	| { type: "WaterSessionStarted", content: {
+	/** Whether this is a hot-water pour or a flush. */
+	kind: WaterSessionKind;
+}}
+	/** A hot-water or flush session finished. */
+	| { type: "WaterSessionCompleted", content: {
+	/** Whether this was a hot-water pour or a flush. */
+	kind: WaterSessionKind;
+	/** Total session duration, milliseconds. */
+	duration_ms: number;
+}}
+	/**
 	 * The connected scale stopped reporting weight — no reading has arrived
 	 * for roughly a second. Emitted once per stale episode; a fresh reading
 	 * re-arms it.
@@ -234,6 +249,14 @@ export enum SubState {
 	ErrorNoAc = "ErrorNoAc",
 }
 
+/** Which kind of water-dispensing session the DE1 is running. */
+export enum WaterSessionKind {
+	/** A hot-water pour (DE1 `HotWater` state). */
+	HotWater = "HotWater",
+	/** A group-head flush / rinse (DE1 `HotWaterRinse` state). */
+	Flush = "Flush",
+}
+
 /**
  * A writable DE1 GATT characteristic. The shell maps this to a UUID.
  * 
@@ -242,5 +265,7 @@ export enum SubState {
 export enum WriteTarget {
 	/** The DE1 `RequestedState` characteristic (`cuuid_02`). */
 	De1RequestedState = "De1RequestedState",
+	/** The DE1 steam / hot-water `ShotSettings` characteristic (`cuuid_0B`). */
+	De1ShotSettings = "De1ShotSettings",
 }
 

@@ -77,6 +77,22 @@ data class EventShotCompletedInner (
 	val sample_count: UInt
 )
 
+/// Generated type representing the anonymous struct variant `WaterSessionStarted` of the `Event` Rust enum
+@Serializable
+data class EventWaterSessionStartedInner (
+	/// Whether this is a hot-water pour or a flush.
+	val kind: WaterSessionKind
+)
+
+/// Generated type representing the anonymous struct variant `WaterSessionCompleted` of the `Event` Rust enum
+@Serializable
+data class EventWaterSessionCompletedInner (
+	/// Whether this was a hot-water pour or a flush.
+	val kind: WaterSessionKind,
+	/// Total session duration, milliseconds.
+	val duration_ms: UInt
+)
+
 /// Generated type representing the anonymous struct variant `DecodeError` of the `Event` Rust enum
 @Serializable
 data class EventDecodeErrorInner (
@@ -127,6 +143,15 @@ sealed class Event {
 	@Serializable
 	@SerialName("ShotCompleted")
 	data class ShotCompleted(val content: EventShotCompletedInner): Event()
+	/// A hot-water or flush session began (the DE1 entered the `HotWater` or
+	/// `HotWaterRinse` state).
+	@Serializable
+	@SerialName("WaterSessionStarted")
+	data class WaterSessionStarted(val content: EventWaterSessionStartedInner): Event()
+	/// A hot-water or flush session finished.
+	@Serializable
+	@SerialName("WaterSessionCompleted")
+	data class WaterSessionCompleted(val content: EventWaterSessionCompletedInner): Event()
 	/// The connected scale stopped reporting weight — no reading has arrived
 	/// for roughly a second. Emitted once per stale episode; a fresh reading
 	/// re-arms it.
@@ -373,6 +398,17 @@ enum class SubState(val string: String) {
 	ErrorNoAc("ErrorNoAc"),
 }
 
+/// Which kind of water-dispensing session the DE1 is running.
+@Serializable
+enum class WaterSessionKind(val string: String) {
+	/// A hot-water pour (DE1 `HotWater` state).
+	@SerialName("HotWater")
+	HotWater("HotWater"),
+	/// A group-head flush / rinse (DE1 `HotWaterRinse` state).
+	@SerialName("Flush")
+	Flush("Flush"),
+}
+
 /// A writable DE1 GATT characteristic. The shell maps this to a UUID.
 /// 
 /// `#[non_exhaustive]`: profile-upload and MMR targets arrive later.
@@ -381,5 +417,8 @@ enum class WriteTarget(val string: String) {
 	/// The DE1 `RequestedState` characteristic (`cuuid_02`).
 	@SerialName("De1RequestedState")
 	De1RequestedState("De1RequestedState"),
+	/// The DE1 steam / hot-water `ShotSettings` characteristic (`cuuid_0B`).
+	@SerialName("De1ShotSettings")
+	De1ShotSettings("De1ShotSettings"),
 }
 

@@ -20,9 +20,11 @@ pub use event::{Command, CoreOutput, Event, Source, WriteTarget};
 
 use de1_domain::{
     AutoStop, FlowAlgorithm, FlowEstimator, ShotEvent, ShotMonitor, ShotPhase, StopConfig,
-    StopReason, StopTargets,
+    StopReason, StopTargets, WaterEvent, WaterMonitor,
 };
-use de1_protocol::{MachineState, ShotSample, StateInfo, WaterLevels, requested_state};
+use de1_protocol::{
+    MachineState, ShotSample, ShotSettings, StateInfo, WaterLevels, requested_state,
+};
 use de1_scale::Scale;
 
 /// The legacy `stop_weight_before_seconds` setting default — the user-tunable
@@ -37,6 +39,10 @@ const WATER_LEVEL_MM_CORRECTION: f32 = 5.0;
 /// How long the scale may go without reporting weight before it is considered
 /// stale — the legacy app warns after roughly one second of silence.
 const SCALE_STALE_TIMEOUT_MS: u64 = 1_000;
+/// Hot-water volume (mL) requested when a scale is connected: the legacy app
+/// asks for far more water than wanted so the scale's weight-based stop is what
+/// cuts off the pour (`binary.tcl` `return_de1_packed_steam_hotwater_settings`).
+const HOT_WATER_STOP_ON_SCALE_ML: f32 = 250.0;
 
 /// The headless Crema application core.
 ///
@@ -46,6 +52,8 @@ const SCALE_STALE_TIMEOUT_MS: u64 = 1_000;
 #[derive(Debug)]
 pub struct CremaCore {
     monitor: ShotMonitor,
+    /// Tracks hot-water and flush sessions, the sibling of `monitor`.
+    water: WaterMonitor,
     last_state: Option<StateInfo>,
     /// Timestamp the in-progress shot began — stamps telemetry elapsed time.
     /// `None` when no shot is in progress.
@@ -78,6 +86,7 @@ impl CremaCore {
     pub fn new() -> CremaCore {
         CremaCore {
             monitor: ShotMonitor::new(),
+            water: WaterMonitor::new(),
             last_state: None,
             shot_started_ms: None,
             scale: None,
@@ -128,6 +137,31 @@ impl CremaCore {
         out.commands.push(Command::WriteCharacteristic {
             target: WriteTarget::De1RequestedState,
             data: vec![requested_state(state)],
+        });
+        out
+    }
+
+    /// Build a [`Command`] that writes the DE1's steam / hot-water
+    /// [`ShotSettings`] (`cuuid_0B`).
+    ///
+    /// The caller supplies the user's configured settings. When a scale is
+    /// connected the hot-water volume is overridden to
+    /// [`HOT_WATER_STOP_ON_SCALE_ML`]: the legacy app asks for far more water
+    /// than wanted so the scale's weight-based stop is what cuts the pour off,
+    /// since a weight stop is more accurate than the DE1's volume estimate
+    /// (`binary.tcl` `return_de1_packed_steam_hotwater_settings`).
+    ///
+    /// Returns the effective settings written, so the shell can see the
+    /// applied hot-water volume.
+    pub fn set_steam_hotwater_settings(&self, settings: ShotSettings) -> CoreOutput {
+        let mut settings = settings;
+        if self.scale.is_some() {
+            settings.hot_water_volume_ml = HOT_WATER_STOP_ON_SCALE_ML;
+        }
+        let mut out = CoreOutput::default();
+        out.commands.push(Command::WriteCharacteristic {
+            target: WriteTarget::De1ShotSettings,
+            data: settings.encode().to_vec(),
         });
         out
     }
@@ -206,6 +240,9 @@ impl CremaCore {
         }
         for event in self.monitor.on_state_info(info, now_ms) {
             self.map_shot_event(event, now_ms, out);
+        }
+        for event in self.water.on_state_info(info, now_ms) {
+            Self::map_water_event(event, out);
         }
     }
 
@@ -299,6 +336,21 @@ impl CremaCore {
                 out.events.push(Event::ShotCompleted {
                     duration_ms: record.duration_ms as u32,
                     sample_count: record.samples.len() as u32,
+                });
+            }
+        }
+    }
+
+    /// Translate a domain [`WaterEvent`] into FFI [`Event`]s.
+    fn map_water_event(event: WaterEvent, out: &mut CoreOutput) {
+        match event {
+            WaterEvent::Started(kind) => {
+                out.events.push(Event::WaterSessionStarted { kind });
+            }
+            WaterEvent::Completed(record) => {
+                out.events.push(Event::WaterSessionCompleted {
+                    kind: record.kind,
+                    duration_ms: record.duration_ms as u32,
                 });
             }
         }
@@ -608,6 +660,67 @@ mod tests {
                 .iter()
                 .any(|c| matches!(c, Command::WriteScale { .. }))
         );
+    }
+
+    /// A `ShotSettings` with a placeholder hot-water volume; other fields are
+    /// representative defaults.
+    fn hotwater_settings(hot_water_volume_ml: f32) -> de1_protocol::ShotSettings {
+        de1_protocol::ShotSettings {
+            steam_flags: 0,
+            steam_temp_c: 150.0,
+            steam_timeout_s: 120.0,
+            hot_water_temp_c: 85.0,
+            hot_water_volume_ml,
+            hot_water_timeout_s: 30.0,
+            espresso_volume_ml: 36.0,
+            group_temp_c: 92.0,
+        }
+    }
+
+    #[test]
+    fn entering_hot_water_emits_a_water_session_started() {
+        let mut core = CremaCore::new();
+        let out = core.on_notification(Source::De1State, &[6, 5], 1_000);
+        assert!(out.events.contains(&Event::WaterSessionStarted {
+            kind: de1_domain::WaterSessionKind::HotWater,
+        }));
+    }
+
+    #[test]
+    fn a_full_flush_session_emits_started_then_completed() {
+        let mut core = CremaCore::new();
+        // HotWaterRinse (15) — a flush.
+        core.on_notification(Source::De1State, &[15, 5], 1_000);
+        let out = core.on_notification(Source::De1State, &[2, 0], 5_000);
+        assert!(out.events.contains(&Event::WaterSessionCompleted {
+            kind: de1_domain::WaterSessionKind::Flush,
+            duration_ms: 4_000,
+        }));
+    }
+
+    #[test]
+    fn set_steam_hotwater_settings_writes_the_user_volume_without_a_scale() {
+        let core = CremaCore::new();
+        let out = core.set_steam_hotwater_settings(hotwater_settings(50.0));
+        let Some(Command::WriteCharacteristic { target, data }) = out.commands.first() else {
+            panic!("expected a WriteCharacteristic command");
+        };
+        assert_eq!(*target, WriteTarget::De1ShotSettings);
+        // Byte 4 is the hot-water volume (u8p0): the user's 50 mL is unchanged.
+        assert_eq!(data[4], 50);
+    }
+
+    #[test]
+    fn set_steam_hotwater_settings_requests_250ml_when_a_scale_is_connected() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC");
+        let out = core.set_steam_hotwater_settings(hotwater_settings(50.0));
+        let Some(Command::WriteCharacteristic { data, .. }) = out.commands.first() else {
+            panic!("expected a WriteCharacteristic command");
+        };
+        // With a scale connected the volume is bumped to 250 mL so the scale's
+        // weight stop is what ends the pour.
+        assert_eq!(data[4], 250);
     }
 
     #[test]

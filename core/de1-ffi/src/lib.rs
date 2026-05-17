@@ -55,6 +55,12 @@ pub enum MachineRequest {
     Steam,
     /// Start hot water.
     HotWater,
+    /// Start a group-head flush / rinse.
+    Flush,
+    /// Start a descale cycle.
+    Descale,
+    /// Start a cleaning cycle.
+    Clean,
     /// Advance to the next espresso frame.
     SkipToNext,
 }
@@ -67,6 +73,9 @@ impl From<MachineRequest> for MachineState {
             MachineRequest::Espresso => MachineState::Espresso,
             MachineRequest::Steam => MachineState::Steam,
             MachineRequest::HotWater => MachineState::HotWater,
+            MachineRequest::Flush => MachineState::HotWaterRinse,
+            MachineRequest::Descale => MachineState::Descale,
+            MachineRequest::Clean => MachineState::Clean,
             MachineRequest::SkipToNext => MachineState::SkipToNext,
         }
     }
@@ -195,5 +204,21 @@ mod tests {
         let bridge = CremaBridge::new();
         assert!(bridge.connect_scale("BOOKOO_SC".to_owned()));
         assert!(!bridge.connect_scale("Not A Scale".to_owned()));
+    }
+
+    #[test]
+    fn machine_request_maps_to_the_expected_states() {
+        assert_eq!(
+            MachineState::from(MachineRequest::Flush),
+            MachineState::HotWaterRinse
+        );
+        assert_eq!(
+            MachineState::from(MachineRequest::Descale),
+            MachineState::Descale
+        );
+        assert_eq!(
+            MachineState::from(MachineRequest::Clean),
+            MachineState::Clean
+        );
     }
 }

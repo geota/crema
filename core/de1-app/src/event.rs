@@ -1,7 +1,7 @@
 //! FFI value types: the input discriminator [`Source`], the observed [`Event`]s
 //! and [`Command`]s the core emits, and the [`CoreOutput`] envelope.
 
-use de1_domain::{ShotPhase, StopReason};
+use de1_domain::{ShotPhase, StopReason, WaterSessionKind};
 use de1_protocol::{MachineState, SubState};
 use serde::{Deserialize, Serialize};
 use typeshare::typeshare;
@@ -92,6 +92,19 @@ pub enum Event {
         /// Number of telemetry samples recorded.
         sample_count: u32,
     },
+    /// A hot-water or flush session began (the DE1 entered the `HotWater` or
+    /// `HotWaterRinse` state).
+    WaterSessionStarted {
+        /// Whether this is a hot-water pour or a flush.
+        kind: WaterSessionKind,
+    },
+    /// A hot-water or flush session finished.
+    WaterSessionCompleted {
+        /// Whether this was a hot-water pour or a flush.
+        kind: WaterSessionKind,
+        /// Total session duration, milliseconds.
+        duration_ms: u32,
+    },
     /// The connected scale stopped reporting weight — no reading has arrived
     /// for roughly a second. Emitted once per stale episode; a fresh reading
     /// re-arms it.
@@ -112,6 +125,8 @@ pub enum Event {
 pub enum WriteTarget {
     /// The DE1 `RequestedState` characteristic (`cuuid_02`).
     De1RequestedState,
+    /// The DE1 steam / hot-water `ShotSettings` characteristic (`cuuid_0B`).
+    De1ShotSettings,
 }
 
 /// A BLE write the shell should perform on the core's behalf.
