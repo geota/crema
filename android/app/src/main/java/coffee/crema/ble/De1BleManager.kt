@@ -10,12 +10,10 @@ import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
 import android.bluetooth.le.ScanCallback
-import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.os.Build
-import android.os.ParcelUuid
 import android.util.Log
 import coffee.crema.core.CremaBridge
 import coffee.crema.core.NotificationSource
@@ -65,6 +63,12 @@ class De1BleManager(
     private var gatt: BluetoothGatt? = null
     private var scanning = false
 
+    /**
+     * Records the live BLE session to a file for offline replay through the
+     * Rust core. A debug aid: it never crashes the app if file IO fails.
+     */
+    private val recorder = BleSessionRecorder(context)
+
     /** Pending CCCD subscriptions; processed one at a time (see [subscribeNext]). */
     private val subscribeQueue = ArrayDeque<BluetoothGattCharacteristic>()
 
@@ -82,9 +86,6 @@ class De1BleManager(
         }
         if (scanning) return
 
-        val filter = ScanFilter.Builder()
-            .setServiceUuid(ParcelUuid(De1Uuids.SERVICE))
-            .build()
         val settings = ScanSettings.Builder()
             .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
             .build()
@@ -92,7 +93,11 @@ class De1BleManager(
         scanning = true
         _state.value = State.SCANNING
         onStatus("Scanning for a DE1…")
-        scanner.startScan(listOf(filter), settings, scanCallback)
+        // The DE1 does not reliably advertise its 128-bit GATT service UUID, so
+        // a service-UUID ScanFilter never matches it. Scan unfiltered and match
+        // the advertised name instead — the same discovery rule the legacy
+        // de1app uses (bluetooth.tcl `de1_ble_handler`).
+        scanner.startScan(null, settings, scanCallback)
     }
 
     @SuppressLint("MissingPermission")
@@ -105,11 +110,20 @@ class De1BleManager(
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
             val device = result.device
-            val name = runCatching { deviceName(device) }.getOrNull() ?: "(unnamed)"
-            Log.i(TAG, "Scan hit: $name / ${device.address}")
-            // The service-UUID filter already narrows this to DE1s; the name
-            // prefix is a belt-and-braces check.
-            if (name.startsWith(De1Uuids.ADVERTISED_NAME_PREFIX) || name == "(unnamed)") {
+            // Prefer the name carried in the advertisement / scan-response;
+            // fall back to the device's cached name.
+            val name = result.scanRecord?.deviceName
+                ?: runCatching { deviceName(device) }.getOrNull()
+            // Debug: log every advertisement seen — including nameless ones and
+            // their advertised service UUIDs — so a DE1 that is absent, asleep,
+            // or advertising an unexpected name is visible in Logcat.
+            val services = result.scanRecord?.serviceUuids?.joinToString() ?: "none"
+            Log.d(
+                TAG,
+                "Scan saw: name=${name ?: "(none)"} addr=${device.address} " +
+                    "rssi=${result.rssi} services=[$services]",
+            )
+            if (name != null && isDe1Name(name)) {
                 onStatus("Found DE1: $name (${device.address})")
                 stopScan()
                 connect(device)
@@ -125,6 +139,16 @@ class De1BleManager(
 
     @SuppressLint("MissingPermission")
     private fun deviceName(device: BluetoothDevice): String? = device.name
+
+    /**
+     * Whether a scanned advertisement name identifies a DE1. The DE1 advertises
+     * a name starting "DE1"; some units advertise "BENGLE". This mirrors the
+     * legacy de1app discovery rule in `bluetooth.tcl` (`de1_ble_handler`).
+     */
+    private fun isDe1Name(name: String): Boolean {
+        val upper = name.uppercase()
+        return upper.startsWith(De1Uuids.ADVERTISED_NAME_PREFIX) || upper.startsWith("BENGLE")
+    }
 
     // ---- Connect ----------------------------------------------------------
 
@@ -143,6 +167,7 @@ class De1BleManager(
     @SuppressLint("MissingPermission")
     fun disconnect() {
         stopScan()
+        recorder.stop()
         gatt?.disconnect()
         gatt?.close()
         gatt = null
@@ -162,11 +187,16 @@ class De1BleManager(
                 BluetoothProfile.STATE_CONNECTED -> {
                     onStatus("Connected — discovering services…")
                     _state.value = State.DISCOVERING
+                    // Begin recording the session for offline replay; surface
+                    // the capture file path once so the user can find it.
+                    recorder.start()
+                    recorder.filePath?.let { onStatus("Recording session to $it") }
                     g.discoverServices()
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
                     onStatus("Connection lost (status $status)")
                     _state.value = State.DISCONNECTED
+                    recorder.stop()
                     g.close()
                     if (gatt === g) gatt = null
                 }
@@ -284,8 +314,12 @@ class De1BleManager(
                 return
             }
         }
+        // Stamp once: the same value goes to the recorder and the core, so a
+        // replayed capture decodes identically to the live session.
+        val tMs = nowMs()
+        recorder.recordInbound(source, data, tMs)
         // CremaBridge.onNotification returns the CoreOutput as a JSON string.
-        val json = bridge.onNotification(source, data, nowMs().toULong())
+        val json = bridge.onNotification(source, data, tMs.toULong())
         onCoreOutput(json)
     }
 
