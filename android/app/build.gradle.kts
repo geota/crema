@@ -1,3 +1,4 @@
+import java.util.Properties
 import javax.inject.Inject
 import org.gradle.process.ExecOperations
 
@@ -135,6 +136,12 @@ abstract class GenerateUniffiBindings : DefaultTask() {
     @get:Internal
     abstract val workspaceDir: DirectoryProperty
 
+    /// Path to the `cargo` executable — set from `rust.cargoCommand` in
+    /// `local.properties` so IDE-launched builds (no `~/.cargo/bin` on PATH)
+    /// still resolve it; falls back to bare `cargo` for PATH-based CLI builds.
+    @get:Internal
+    abstract val cargoCommand: Property<String>
+
     /// The compiled cdylib `uniffi-bindgen` reads metadata from.
     @get:Internal
     abstract val library: RegularFileProperty
@@ -153,7 +160,7 @@ abstract class GenerateUniffiBindings : DefaultTask() {
         execOps.exec {
             workingDir = workspaceDir.get().asFile
             commandLine(
-                "cargo", "run", "--package", "de1-ffi", "--bin", "uniffi-bindgen", "--",
+                cargoCommand.get(), "run", "--package", "de1-ffi", "--bin", "uniffi-bindgen", "--",
                 "generate",
                 "--library", library.get().asFile.absolutePath,
                 "--language", "kotlin",
@@ -163,10 +170,23 @@ abstract class GenerateUniffiBindings : DefaultTask() {
     }
 }
 
+// The `net.mullvad.rust-android` plugin resolves `cargo` from `rust.cargoCommand`
+// in local.properties (an absolute path, so IDE-launched builds without
+// ~/.cargo/bin on PATH still work). The bindgen task below is a hand-written
+// task, not part of the plugin, so it must read the same value itself.
+val localProperties = Properties().apply {
+    val file = rootProject.file("local.properties")
+    if (file.exists()) {
+        file.inputStream().use { load(it) }
+    }
+}
+val cargoExecutable: String = localProperties.getProperty("rust.cargoCommand") ?: "cargo"
+
 val generateUniffiBindings =
     tasks.register<GenerateUniffiBindings>("generateUniffiBindings") {
         description = "Generate UniFFI Kotlin bindings for de1-ffi."
         group = "rust"
+        cargoCommand.set(cargoExecutable)
         crateSource.set(layout.projectDirectory.dir("../../core/de1-ffi/src"))
         workspaceDir.set(layout.projectDirectory.dir("../../core"))
         library.set(
