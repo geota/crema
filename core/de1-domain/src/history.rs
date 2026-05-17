@@ -37,6 +37,12 @@ pub struct ShotMetadata {
     pub notes: Option<String>,
     /// Personal rating, 1–5.
     pub rating: Option<u8>,
+    /// Total dissolved solids in the beverage, percent — typically from a
+    /// refractometer reading.
+    pub tds: Option<f32>,
+    /// Extraction yield, percent — the fraction of the dry dose extracted into
+    /// the cup.
+    pub extraction_yield: Option<f32>,
 }
 
 impl ShotMetadata {
@@ -175,9 +181,25 @@ mod tests {
                 grinder_setting: Some("3.2".to_owned()),
                 notes: None,
                 rating: Some(4),
+                tds: Some(9.1),
+                extraction_yield: Some(20.5),
             });
         let json = shot.to_json().unwrap();
         assert_eq!(StoredShot::from_json(&json), Ok(shot));
+    }
+
+    #[test]
+    fn metadata_carries_tds_and_extraction_yield() {
+        let meta = ShotMetadata {
+            tds: Some(8.7),
+            extraction_yield: Some(21.3),
+            ..ShotMetadata::default()
+        };
+        assert_eq!(meta.tds, Some(8.7));
+        assert_eq!(meta.extraction_yield, Some(21.3));
+        // Defaults leave the new fields unset.
+        assert_eq!(ShotMetadata::default().tds, None);
+        assert_eq!(ShotMetadata::default().extraction_yield, None);
     }
 
     #[test]
