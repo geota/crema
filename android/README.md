@@ -90,10 +90,16 @@ model types — the two are complementary and intentionally co-located.
 | **Android Studio** (Ladybug or newer) or the Android command-line tools | Provides the SDK + an APK install path |
 | **Android SDK** API 36 | `compileSdk` / `targetSdk` |
 | **Android NDK** r26+ | Install via the SDK Manager ("NDK (Side by side)"). Note the version. |
-| **JDK 17** | Required by Android Gradle Plugin 8.7 |
+| **JDK 17** | Required by Android Gradle Plugin 9.x and Gradle 9.x |
 | **Rust** stable (≥ 1.95, edition 2024 — see `core/rust-toolchain`) | `rustup` |
 | **Android Rust target** | `rustup target add aarch64-linux-android` |
-| **Gradle 8.11+** | Only needed once, to generate the wrapper — see below |
+| **Gradle 9.3+** | Only needed once, to generate the wrapper — see below |
+
+The build toolchain is **Gradle 9.3.1 / Android Gradle Plugin 9.1.1 /
+Kotlin 2.2.20**, and the Rust crate is built by the **Mullvad fork** of the
+rust-android plugin (`net.mullvad.rust-android` 0.10.1). A first successful
+on-device build (`./gradlew :app:installDebug`) validates this toolchain
+migration end to end.
 
 ### One-time setup
 
@@ -107,7 +113,7 @@ rustup target add aarch64-linux-android
 # (local.properties is git-ignored; Android Studio writes sdk.dir for you.)
 ```
 
-The `org.mozilla.rust-android-gradle` plugin shells out to `cargo` with the NDK
+The `net.mullvad.rust-android` plugin shells out to `cargo` with the NDK
 linker; it locates the NDK from `ndk.dir` / `ANDROID_NDK_HOME` / the SDK's
 `ndk/` directory. `cargo-ndk` as a separate CLI is **not** required when using
 the plugin (it is the plugin's job).
@@ -121,7 +127,7 @@ this scaffold. Generate it once, locally, before the first build:
 
 ```sh
 cd android
-gradle wrapper --gradle-version 8.11.1
+gradle wrapper --gradle-version 9.3.1
 ```
 
 This produces `gradlew`, `gradlew.bat`, and `gradle/wrapper/gradle-wrapper.jar`.
@@ -144,8 +150,10 @@ cd android
 
 This runs, in order:
 
-1. **`cargoBuild`** — the rust-android plugin compiles `de1-ffi` to
-   `libde1_ffi.so` for `arm64-v8a` and stages it in the APK's `jniLibs`.
+1. **`cargoBuild`** — the `net.mullvad.rust-android` plugin compiles `de1-ffi`
+   to `libde1_ffi.so` for `arm64-v8a` and writes it to
+   `app/build/rustJniLibs/android/`. AGP's `merge*JniLibFolders` tasks depend
+   on `cargoBuild` and pick that directory up so the `.so` ships in the APK.
    (Configured in `app/build.gradle.kts`, `cargo { … }` block.)
 2. **`generateUniffiBindings`** — runs `de1-ffi`'s bundled `uniffi-bindgen`
    binary against the freshly built `.so` and writes the Kotlin bindings to
@@ -175,7 +183,7 @@ cargo run --package de1-ffi --bin uniffi-bindgen -- generate \
     --out-dir ../android/app/src/main/java
 ```
 
-If you go this route, drop the `org.mozilla.rust-android-gradle` plugin and the
+If you go this route, drop the `net.mullvad.rust-android` plugin and the
 `cargo { }` / `generateUniffiBindings` blocks from `app/build.gradle.kts`, and
 make sure the generated `.so` and `.kt` are not double-added.
 
@@ -224,7 +232,7 @@ android/
   build.gradle.kts               — root: plugin versions
   gradle.properties              — JVM args, AndroidX
   gradle/wrapper/
-    gradle-wrapper.properties     — pinned Gradle 8.11.1 (jar generated locally)
+    gradle-wrapper.properties     — pinned Gradle 9.3.1 (jar generated locally)
   app/
     build.gradle.kts             — Android + Compose + Rust/UniFFI integration
     src/main/
