@@ -1,0 +1,10 @@
+# typeshare configuration — generates Kotlin and TypeScript type definitions
+# for the JSON `CoreOutput` surface from the `#[typeshare]`-annotated Rust types.
+#
+# Generate with `core/generate-bindings.sh`.
+
+[kotlin]
+package = "coffee.crema.core"
+module_name = "core"
+
+[typescript]
