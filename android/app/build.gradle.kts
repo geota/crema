@@ -1,3 +1,6 @@
+import javax.inject.Inject
+import org.gradle.process.ExecOperations
+
 plugins {
     id("com.android.application")
     // AGP 9 has built-in Kotlin support — the `org.jetbrains.kotlin.android`
@@ -48,14 +51,6 @@ android {
         compose = true
     }
 
-    // The generated UniFFI bindings land in build/generated/uniffi; add that
-    // tree to the main source set so they compile as ordinary Kotlin.
-    sourceSets {
-        getByName("main") {
-            java.srcDir(layout.buildDirectory.dir("generated/uniffi"))
-        }
-    }
-
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
     }
@@ -93,12 +88,11 @@ dependencies {
 // ---------------------------------------------------------------------------
 // Rust / NDK integration — net.mullvad.rust-android (Mullvad fork)
 // ---------------------------------------------------------------------------
-// This compiles the `de1-ffi` cdylib for the listed Android ABIs. The plugin's
-// `cargoBuild` task writes the resulting `libde1_ffi.so` into
-// build/rustJniLibs/android/<abi>/; the JNI wiring below feeds that directory
-// into AGP's `merge*JniLibFolders` tasks so it ships in the APK. The plugin
-// shells out to `cargo` + the NDK linker; the NDK and the Rust target must be
-// installed (see android/README.md).
+// `cargoBuild` compiles the `de1-ffi` cdylib for the listed Android ABIs and
+// writes `libde1_ffi.so` into build/rustJniLibs/android/<abi>/. The wiring
+// below feeds that directory into AGP's `merge*JniLibFolders` tasks so it
+// ships in the APK. The NDK and the Rust target must be installed (see
+// android/README.md).
 cargo {
     // Path from this module to the Rust workspace member.
     module = "../../core/de1-ffi"
@@ -112,52 +106,87 @@ cargo {
     extraCargoBuildArguments = listOf("--package", "de1-ffi")
 }
 
-// Generate the UniFFI Kotlin bindings from the built cdylib.
-//
-// `de1-ffi` ships a `uniffi-bindgen` binary (src/bin/uniffi-bindgen.rs). We run
-// it against the arm64 cdylib the `cargoBuild` task just produced — UniFFI
-// reads the exported metadata from any build of the library. The Mullvad fork
-// still drives `cargo` for the host build, so the workspace `target/` artifact
-// at the path below is still produced.
-val uniffiOutDir = layout.buildDirectory.dir("generated/uniffi")
-
-val generateUniffiBindings by tasks.registering(Exec::class) {
-    description = "Generate UniFFI Kotlin bindings for de1-ffi."
-    group = "rust"
-
-    val workspaceDir = file("../../core")
-    // The arm64 cdylib produced by the `cargoBuild` task.
-    val soFile = file("../../core/target/aarch64-linux-android/debug/libde1_ffi.so")
-
-    inputs.dir(file("../../core/de1-ffi/src"))
-    outputs.dir(uniffiOutDir)
-
-    doFirst { uniffiOutDir.get().asFile.mkdirs() }
-
-    workingDir = workspaceDir
-    commandLine(
-        "cargo", "run", "--package", "de1-ffi", "--bin", "uniffi-bindgen", "--",
-        "generate",
-        "--library", soFile.absolutePath,
-        "--language", "kotlin",
-        "--out-dir", uniffiOutDir.get().asFile.absolutePath,
-    )
-}
-
-// Wire the tasks. The Mullvad fork's documented pattern is to depend AGP's
-// per-variant `merge*JniLibFolders` tasks on `cargoBuild` and register the
-// plugin's output dir (build/rustJniLibs/android) as an input so the freshly
-// built `.so` is packaged into the APK.
+// Depend AGP's per-variant `merge*JniLibFolders` tasks on `cargoBuild` and
+// register the plugin's output dir as an input so the freshly built `.so` is
+// packaged into the APK.
 val rustJniLibsDir = layout.buildDirectory.dir("rustJniLibs/android").get()
 tasks.matching { it.name.matches(Regex("merge.*JniLibFolders")) }.configureEach {
     inputs.dir(rustJniLibsDir)
     dependsOn("cargoBuild")
 }
 
-// cargoBuild (the Rust build) -> generate bindings -> Kotlin compile.
-tasks.matching { it.name == "cargoBuild" || it.name.startsWith("cargoBuild") }
-    .configureEach { finalizedBy(generateUniffiBindings) }
+// ---------------------------------------------------------------------------
+// UniFFI Kotlin bindings — generated at build time from the de1-ffi cdylib
+// ---------------------------------------------------------------------------
+// `de1-ffi` ships a `uniffi-bindgen` binary. This task runs it against the
+// arm64 cdylib `cargoBuild` produced (UniFFI reads the exported metadata from
+// the compiled library) and emits the Kotlin bindings into an OutputDirectory.
+//
+// AGP 9 no longer accepts a `Provider` in `sourceSets { ... srcDir(...) }` for
+// generated code — the Variant API's `addGeneratedSourceDirectory` is the
+// supported path. It also auto-wires each variant's Kotlin compile to depend
+// on this task, so no manual `dependsOn` on the compile is needed.
+abstract class GenerateUniffiBindings : DefaultTask() {
+    /// The de1-ffi crate source — re-run binding generation when it changes.
+    @get:InputDirectory
+    abstract val crateSource: DirectoryProperty
 
-tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
-    dependsOn(generateUniffiBindings)
+    /// The Cargo workspace root; `cargo run` executes from here.
+    @get:Internal
+    abstract val workspaceDir: DirectoryProperty
+
+    /// The compiled cdylib `uniffi-bindgen` reads metadata from.
+    @get:Internal
+    abstract val library: RegularFileProperty
+
+    /// Where the generated Kotlin lands.
+    @get:OutputDirectory
+    abstract val outputDirectory: DirectoryProperty
+
+    @get:Inject
+    abstract val execOps: ExecOperations
+
+    @TaskAction
+    fun generate() {
+        val outDir = outputDirectory.get().asFile
+        outDir.mkdirs()
+        execOps.exec {
+            workingDir = workspaceDir.get().asFile
+            commandLine(
+                "cargo", "run", "--package", "de1-ffi", "--bin", "uniffi-bindgen", "--",
+                "generate",
+                "--library", library.get().asFile.absolutePath,
+                "--language", "kotlin",
+                "--out-dir", outDir.absolutePath,
+            )
+        }
+    }
+}
+
+val generateUniffiBindings =
+    tasks.register<GenerateUniffiBindings>("generateUniffiBindings") {
+        description = "Generate UniFFI Kotlin bindings for de1-ffi."
+        group = "rust"
+        crateSource.set(layout.projectDirectory.dir("../../core/de1-ffi/src"))
+        workspaceDir.set(layout.projectDirectory.dir("../../core"))
+        library.set(
+            layout.projectDirectory.file(
+                "../../core/target/aarch64-linux-android/debug/libde1_ffi.so",
+            ),
+        )
+        outputDirectory.set(layout.buildDirectory.dir("generated/uniffi"))
+        // uniffi-bindgen reads the cdylib that the rust plugin's cargoBuild
+        // produces, so the Rust build must run first.
+        dependsOn("cargoBuild")
+    }
+
+// Register the generated bindings on every variant's Kotlin source set via the
+// AGP 9 Variant API (the supported replacement for `sourceSets { srcDir(...) }`).
+androidComponents {
+    onVariants { variant ->
+        variant.sources.kotlin?.addGeneratedSourceDirectory(
+            generateUniffiBindings,
+            GenerateUniffiBindings::outputDirectory,
+        )
+    }
 }
