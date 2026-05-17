@@ -19,7 +19,8 @@
 //! - [`history`] — [`StoredShot`], a completed shot persisted to history.
 //! - [`stop`] — [`AutoStop`], the stop-at-weight / stop-at-volume controller.
 //! - [`flow`] — [`FlowEstimator`], robust weight/mass-flow estimation for SAW.
-//! - [`filter`] — [`MedianFilter`], for smoothing a vibration-noisy signal.
+//! - [`filter`] — [`median`](filter::median) computation, for smoothing a
+//!   vibration-noisy signal.
 //! - [`session`] — [`SessionTimer`], the timing core shared by the monitors.
 
 pub mod builtin;
@@ -37,7 +38,6 @@ pub mod water;
 
 pub use builtin::{BUILTIN_PROFILE_COUNT, builtin_profiles};
 pub use error::{DomainError, ImportError};
-pub use filter::MedianFilter;
 pub use flow::{Estimate, FlowAlgorithm, FlowEstimator};
 pub use history::{STORED_SHOT_FORMAT_VERSION, ShotMetadata, StoredShot};
 pub use profile::{
