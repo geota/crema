@@ -9,7 +9,7 @@
 use de1_protocol::{MachineState, ShotSample, StateInfo, SubState};
 
 /// Where an espresso shot is in its lifecycle.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum ShotPhase {
     /// No espresso shot in progress.
     #[default]
@@ -44,7 +44,7 @@ impl ShotPhase {
 }
 
 /// A telemetry sample tagged with its time since the shot began.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct TimedSample {
     /// Milliseconds since the shot started.
     pub elapsed_ms: u64,
@@ -57,7 +57,7 @@ pub struct TimedSample {
 /// The samples span the whole `Espresso` machine state, including the heating
 /// phase before flow; consumers can use the [`ShotEvent::PhaseChanged`] stream
 /// to locate flow-start.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ShotRecord {
     /// Total shot duration, milliseconds.
     pub duration_ms: u64,

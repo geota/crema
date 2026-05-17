@@ -8,6 +8,7 @@
 //!   `de1-protocol` upload packets.
 //! - [`shot`] — the [`ShotMonitor`] state machine, which observes a shot and
 //!   records it.
+//! - [`history`] — [`StoredShot`], a completed shot persisted to history.
 //! - [`stop`] — [`AutoStop`], the stop-at-weight / stop-at-volume controller.
 //! - [`flow`] — [`FlowEstimator`], robust weight/mass-flow estimation for SAW.
 //! - [`filter`] — [`MedianFilter`], for smoothing a vibration-noisy signal.
@@ -15,6 +16,7 @@
 pub mod error;
 pub mod filter;
 pub mod flow;
+pub mod history;
 pub mod profile;
 pub mod shot;
 pub mod stop;
@@ -22,6 +24,7 @@ pub mod stop;
 pub use error::DomainError;
 pub use filter::MedianFilter;
 pub use flow::{Estimate, FlowAlgorithm, FlowEstimator};
+pub use history::{STORED_SHOT_FORMAT_VERSION, ShotMetadata, StoredShot};
 pub use profile::{
     AssembledProfile, Compare, ExitCondition, ExitMetric, Limiter, Profile, ProfileStep, Pump,
     TempSensor, Transition,

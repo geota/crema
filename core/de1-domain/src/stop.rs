@@ -92,7 +92,7 @@ impl StopConfig {
 }
 
 /// Why [`AutoStop`] decided to end the shot.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum StopReason {
     /// The weight target (SAW) was reached.
     Weight,

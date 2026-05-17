@@ -13,4 +13,7 @@ pub enum DomainError {
         /// The number of steps the rejected profile had.
         count: usize,
     },
+    /// Serializing or deserializing a [`StoredShot`](crate::StoredShot) failed.
+    #[error("shot serialization failed: {0}")]
+    Serialization(String),
 }

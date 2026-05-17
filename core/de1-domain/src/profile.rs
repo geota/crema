@@ -10,7 +10,7 @@ use crate::error::DomainError;
 const MAX_STEPS: usize = 32;
 
 /// Which quantity a step holds at its target.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Pump {
     /// Pressure priority — the step targets a pressure in bar.
     Pressure,
@@ -19,7 +19,7 @@ pub enum Pump {
 }
 
 /// How a step moves to its target value.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Transition {
     /// Jump straight to the target.
     Fast,
@@ -28,7 +28,7 @@ pub enum Transition {
 }
 
 /// Which temperature a step regulates.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum TempSensor {
     /// The basket (group head) temperature.
     Basket,
@@ -37,7 +37,7 @@ pub enum TempSensor {
 }
 
 /// The metric an exit condition watches.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ExitMetric {
     /// Watch pressure (bar).
     Pressure,
@@ -46,7 +46,7 @@ pub enum ExitMetric {
 }
 
 /// The direction of an exit comparison.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Compare {
     /// Exit when the metric rises above the threshold.
     Over,
@@ -55,7 +55,7 @@ pub enum Compare {
 }
 
 /// An early-exit condition: leave the step before its duration elapses.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ExitCondition {
     /// Which metric to watch.
     pub metric: ExitMetric,
@@ -66,7 +66,7 @@ pub struct ExitCondition {
 }
 
 /// An advanced limiter capping the step's non-priority quantity.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Limiter {
     /// The limit — flow if the step is pressure-priority, or vice versa.
     pub value: f32,
@@ -75,7 +75,7 @@ pub struct Limiter {
 }
 
 /// One step of an espresso [`Profile`].
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ProfileStep {
     /// Human-readable step name (e.g. "preinfusion").
     pub name: String,
@@ -138,7 +138,7 @@ impl ProfileStep {
 
 /// An espresso profile — an ordered recipe of [`ProfileStep`]s plus the
 /// machine-level parameters needed to run it.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Profile {
     /// Profile title.
     pub title: String,
