@@ -111,6 +111,30 @@ pub enum MmrRegister {
     FlushFlowRate,
     /// Hot-water flow rate.
     HotWaterFlowRate,
+    /// Hot-water dispense phase-1 flow rate.
+    Phase1FlowRate,
+    /// Hot-water dispense phase-2 flow rate.
+    Phase2FlowRate,
+    /// Hot-water idle temperature, °C.
+    HotWaterIdleTemp,
+    /// Group head control mode.
+    GhcMode,
+    /// Seconds of high-flow steam at the start of a steam cycle.
+    SteamHighFlowStart,
+    /// Mains heater voltage.
+    HeaterVoltage,
+    /// Espresso warmup timeout.
+    EspressoWarmupTimeout,
+    /// Calibration flow multiplier (`int(1000 * multiplier)`).
+    CalibrationFlowMultiplier,
+    /// Flush timeout (`int(10 * seconds)`).
+    FlushTimeout,
+    /// USB charger on (1 = tablet USB charging enabled).
+    UsbChargerOn,
+    /// Feature-flag bitmask (e.g. the `UserNotPresent` flag).
+    FeatureFlags,
+    /// Cup-warmer temperature (Bengle models only).
+    CupWarmerTemp,
 }
 
 impl MmrRegister {
@@ -126,6 +150,18 @@ impl MmrRegister {
             MmrRegister::RefillKit => 0x80_385C,
             MmrRegister::FlushFlowRate => 0x80_3840,
             MmrRegister::HotWaterFlowRate => 0x80_384C,
+            MmrRegister::Phase1FlowRate => 0x80_3810,
+            MmrRegister::Phase2FlowRate => 0x80_3814,
+            MmrRegister::HotWaterIdleTemp => 0x80_3818,
+            MmrRegister::GhcMode => 0x80_3820,
+            MmrRegister::SteamHighFlowStart => 0x80_382C,
+            MmrRegister::HeaterVoltage => 0x80_3834,
+            MmrRegister::EspressoWarmupTimeout => 0x80_3838,
+            MmrRegister::CalibrationFlowMultiplier => 0x80_383C,
+            MmrRegister::FlushTimeout => 0x80_3848,
+            MmrRegister::UsbChargerOn => 0x80_3854,
+            MmrRegister::FeatureFlags => 0x80_3858,
+            MmrRegister::CupWarmerTemp => 0x80_3874,
         }
     }
 }
@@ -184,5 +220,52 @@ mod tests {
     #[test]
     fn read_reply_rejects_a_short_packet() {
         assert!(MmrReadReply::decode(&[0u8; 10]).is_err());
+    }
+
+    #[test]
+    fn newly_added_registers_have_documented_addresses() {
+        assert_eq!(MmrRegister::Phase1FlowRate.address(), 0x80_3810);
+        assert_eq!(MmrRegister::Phase2FlowRate.address(), 0x80_3814);
+        assert_eq!(MmrRegister::HotWaterIdleTemp.address(), 0x80_3818);
+        assert_eq!(MmrRegister::GhcMode.address(), 0x80_3820);
+        assert_eq!(MmrRegister::SteamHighFlowStart.address(), 0x80_382C);
+        assert_eq!(MmrRegister::HeaterVoltage.address(), 0x80_3834);
+        assert_eq!(MmrRegister::EspressoWarmupTimeout.address(), 0x80_3838);
+        assert_eq!(MmrRegister::CalibrationFlowMultiplier.address(), 0x80_383C);
+        assert_eq!(MmrRegister::FlushTimeout.address(), 0x80_3848);
+        assert_eq!(MmrRegister::UsbChargerOn.address(), 0x80_3854);
+        assert_eq!(MmrRegister::FeatureFlags.address(), 0x80_3858);
+        assert_eq!(MmrRegister::CupWarmerTemp.address(), 0x80_3874);
+    }
+
+    #[test]
+    fn all_register_addresses_lie_in_the_documented_mmr_window() {
+        let regs = [
+            MmrRegister::FirmwareVersion,
+            MmrRegister::GhcInfo,
+            MmrRegister::TankTempThreshold,
+            MmrRegister::FanThreshold,
+            MmrRegister::SerialNumber,
+            MmrRegister::SteamFlow,
+            MmrRegister::RefillKit,
+            MmrRegister::FlushFlowRate,
+            MmrRegister::HotWaterFlowRate,
+            MmrRegister::Phase1FlowRate,
+            MmrRegister::Phase2FlowRate,
+            MmrRegister::HotWaterIdleTemp,
+            MmrRegister::GhcMode,
+            MmrRegister::SteamHighFlowStart,
+            MmrRegister::HeaterVoltage,
+            MmrRegister::EspressoWarmupTimeout,
+            MmrRegister::CalibrationFlowMultiplier,
+            MmrRegister::FlushTimeout,
+            MmrRegister::UsbChargerOn,
+            MmrRegister::FeatureFlags,
+            MmrRegister::CupWarmerTemp,
+        ];
+        for reg in regs {
+            // All known registers sit in the 24-bit memory-mapped window.
+            assert!(reg.address() <= 0xFF_FFFF, "{reg:?} address out of range");
+        }
     }
 }
