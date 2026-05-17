@@ -46,6 +46,13 @@ export type Event =
 	/** Robust mass-flow rate, grams per second. */
 	flow_g_per_s: number;
 }}
+	/** The DE1 reported its water-tank level. */
+	| { type: "WaterLevel", content: {
+	/** Current tank level, mm — includes the legacy +5 mm sensor correction. */
+	level_mm: number;
+	/** Refill threshold, mm; a refill is wanted at or below it. */
+	refill_threshold_mm: number;
+}}
 	/**
 	 * Auto-stop decided the shot should end. The accompanying [`Command`]
 	 * carries the actual stop write.

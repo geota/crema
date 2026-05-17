@@ -52,6 +52,15 @@ data class EventScaleReadingInner (
 	val flow_g_per_s: Float
 )
 
+/// Generated type representing the anonymous struct variant `WaterLevel` of the `Event` Rust enum
+@Serializable
+data class EventWaterLevelInner (
+	/// Current tank level, mm — includes the legacy +5 mm sensor correction.
+	val level_mm: Float,
+	/// Refill threshold, mm; a refill is wanted at or below it.
+	val refill_threshold_mm: Float
+)
+
 /// Generated type representing the anonymous struct variant `StopTriggered` of the `Event` Rust enum
 @Serializable
 data class EventStopTriggeredInner (
@@ -105,6 +114,10 @@ sealed class Event {
 	@Serializable
 	@SerialName("ScaleReading")
 	data class ScaleReading(val content: EventScaleReadingInner): Event()
+	/// The DE1 reported its water-tank level.
+	@Serializable
+	@SerialName("WaterLevel")
+	data class WaterLevel(val content: EventWaterLevelInner): Event()
 	/// Auto-stop decided the shot should end. The accompanying [`Command`]
 	/// carries the actual stop write.
 	@Serializable
