@@ -48,9 +48,39 @@ mod tests {
     }
 
     #[test]
+    fn decodes_a_zero_weight() {
+        let packet = [0x00, 0x01, 0x03, 0x00, 0x00, 0x00, 0x00];
+        assert_eq!(parse_weight(&packet), Some(0.0));
+    }
+
+    #[test]
+    fn decodes_the_maximum_magnitude() {
+        // The magnitude is a 20-bit field (high nibble of byte 3 is the sign):
+        // 0x0FFFFF = 1048575 counts of 0.01 g.
+        let packet = [0x00, 0x01, 0x03, 0x0F, 0xFF, 0xFF, 0x00];
+        assert_eq!(parse_weight(&packet), Some(0x0F_FFFF as f32 / 100.0));
+        // Same magnitude with the sign nibble set.
+        let neg = [0x00, 0x01, 0x03, 0x1F, 0xFF, 0xFF, 0x00];
+        assert_eq!(parse_weight(&neg), Some(-(0x0F_FFFF as f32) / 100.0));
+    }
+
+    #[test]
+    fn rejects_a_frame_with_a_wrong_length_byte() {
+        // A weight frame must have length byte 0x03; 0x04 is not a weight frame.
+        let packet = [0x00, 0x01, 0x04, 0x00, 0x07, 0x08, 0x00];
+        assert_eq!(parse_weight(&packet), None);
+    }
+
+    #[test]
     fn rejects_a_non_weight_frame() {
         // command 0x85 is a battery frame, not weight.
         let packet = [0x00, 0x85, 0x01, 0x00, 0x00, 0x00, 0x00];
         assert_eq!(parse_weight(&packet), None);
+    }
+
+    #[test]
+    fn rejects_a_short_packet() {
+        // A correct weight header but only six bytes — one short of the minimum.
+        assert_eq!(parse_weight(&[0x00, 0x01, 0x03, 0x00, 0x07, 0x08]), None);
     }
 }

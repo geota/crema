@@ -40,6 +40,31 @@ mod tests {
     }
 
     #[test]
+    fn treats_byte_three_at_the_threshold_as_positive() {
+        // The sign rule is `data[3] > 10`: a value of exactly 10 is positive.
+        assert_eq!(parse_weight(&[0, 0, 0, 10, 0, 0x00, 0xB4]), Some(18.0));
+    }
+
+    #[test]
+    fn decodes_a_zero_weight() {
+        assert_eq!(parse_weight(&[0, 0, 0, 0, 0, 0x00, 0x00]), Some(0.0));
+    }
+
+    #[test]
+    fn decodes_the_maximum_unsigned_magnitude() {
+        // Bytes 5–6 are an unsigned big-endian u16: 0xFFFF = 65535 -> 6553.5 g.
+        assert_eq!(parse_weight(&[0, 0, 0, 0, 0, 0xFF, 0xFF]), Some(6553.5));
+        // Same magnitude with the sign flag set negates it.
+        assert_eq!(parse_weight(&[0, 0, 0, 11, 0, 0xFF, 0xFF]), Some(-6553.5));
+    }
+
+    #[test]
+    fn accepts_a_packet_at_the_exact_minimum_length() {
+        // Exactly seven bytes is the boundary — six bytes is rejected below.
+        assert_eq!(parse_weight(&[0, 0, 0, 0, 0, 0x00, 0xB4]), Some(18.0));
+    }
+
+    #[test]
     fn rejects_a_short_packet() {
         assert_eq!(parse_weight(&[0, 0, 0, 0, 0, 0]), None);
     }

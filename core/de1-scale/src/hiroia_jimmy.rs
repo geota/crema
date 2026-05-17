@@ -52,6 +52,48 @@ mod tests {
     }
 
     #[test]
+    fn decodes_a_zero_weight() {
+        assert_eq!(parse_weight(&[0, 0, 0, 0, 0x00, 0x00, 0x00]), Some(0.0));
+    }
+
+    #[test]
+    fn treats_the_value_just_below_the_sign_threshold_as_positive() {
+        // 0x7FFFFF is the largest value below 0x800000 -> positive.
+        assert_eq!(
+            parse_weight(&[0, 0, 0, 0, 0xFF, 0xFF, 0x7F]),
+            Some(0x7F_FFFF as f32 / 10.0)
+        );
+    }
+
+    #[test]
+    fn treats_the_value_at_the_sign_threshold_as_negative() {
+        // 0x800000 is the first value the codec reads as negative; the legacy
+        // formula `-(0xFFFFFF - raw)` makes it -0x7FFFFF counts.
+        assert_eq!(
+            parse_weight(&[0, 0, 0, 0, 0x00, 0x00, 0x80]),
+            Some(-(0x7F_FFFF as f32) / 10.0)
+        );
+    }
+
+    /// The parser performs no header validation, so a non-weight status
+    /// notification is (incorrectly) decoded as weight — documented in the
+    /// module-level caution. This test pins that known behaviour.
+    #[test]
+    fn does_not_validate_the_header() {
+        // An arbitrary 4-byte header is ignored; bytes 4–6 still decode.
+        assert_eq!(
+            parse_weight(&[0xDE, 0xAD, 0xBE, 0xEF, 0xB4, 0x00, 0x00]),
+            Some(18.0)
+        );
+    }
+
+    #[test]
+    fn accepts_a_packet_at_the_exact_minimum_length() {
+        // Exactly seven bytes is the boundary — six bytes is rejected below.
+        assert_eq!(parse_weight(&[0, 0, 0, 0, 0xB4, 0x00, 0x00]), Some(18.0));
+    }
+
+    #[test]
     fn rejects_a_short_packet() {
         assert_eq!(parse_weight(&[0, 0, 0, 0, 0, 0]), None);
     }
