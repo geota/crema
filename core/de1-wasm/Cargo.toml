@@ -1,0 +1,26 @@
+[package]
+name = "de1-wasm"
+version = "0.1.0"
+description = "Crema wasm-bindgen bridge — exposes the de1-app core to the web shell"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+de1-app = { path = "../de1-app" }
+de1-protocol = { path = "../de1-protocol" }
+wasm-bindgen = "0.2.121"
+
+# Like de1-ffi, this crate intentionally does NOT use `[lints] workspace = true`:
+# wasm-bindgen's generated binding glue requires `unsafe`, which the workspace
+# lint table forbids. The lints below mirror the workspace's, minus that one.
+[lints.rust]
+future_incompatible = { level = "warn", priority = -1 }
+nonstandard_style = { level = "deny", priority = -1 }
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
