@@ -1,7 +1,7 @@
 //! FFI value types: the input discriminator [`Source`], the observed [`Event`]s
 //! and [`Command`]s the core emits, and the [`CoreOutput`] envelope.
 
-use de1_domain::{ShotPhase, StopReason, WaterSessionKind};
+use de1_domain::{ShotPhase, SteamClogReason, StopReason, WaterSessionKind};
 use de1_protocol::{MachineState, SubState};
 use serde::{Deserialize, Serialize};
 use typeshare::typeshare;
@@ -104,6 +104,27 @@ pub enum Event {
         kind: WaterSessionKind,
         /// Total session duration, milliseconds.
         duration_ms: u32,
+    },
+    /// A steam session began (the DE1 entered the `Steam` state).
+    SteamSessionStarted,
+    /// A steam session finished.
+    SteamSessionCompleted {
+        /// Total session duration, milliseconds.
+        duration_ms: u32,
+        /// Number of steam telemetry samples recorded.
+        sample_count: u32,
+    },
+    /// The just-finished steam session's telemetry suggests a clogged steam
+    /// wand. Accompanies the [`Event::SteamSessionCompleted`] for the session.
+    SteamClogSuspected {
+        /// Which threshold the steam telemetry tripped.
+        reason: SteamClogReason,
+    },
+    /// Steam eco mode engaged or disengaged. When it changes, an accompanying
+    /// [`Command`] rewrites the DE1's steam target temperature.
+    SteamEcoModeChanged {
+        /// `true` when the steam target dropped to the lower eco temperature.
+        eco: bool,
     },
     /// The connected scale stopped reporting weight — no reading has arrived
     /// for roughly a second. Emitted once per stale episode; a fresh reading

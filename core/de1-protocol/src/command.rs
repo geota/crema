@@ -81,6 +81,23 @@ pub struct ShotSettings {
     pub group_temp_c: f32,
 }
 
+impl Default for ShotSettings {
+    /// Representative defaults, mirroring the legacy app's steam / hot-water
+    /// settings: 150 °C steam, 85 °C / 200 mL hot water, 92 °C group.
+    fn default() -> ShotSettings {
+        ShotSettings {
+            steam_flags: 0,
+            steam_temp_c: 150.0,
+            steam_timeout_s: 120.0,
+            hot_water_temp_c: 85.0,
+            hot_water_volume_ml: 200.0,
+            hot_water_timeout_s: 30.0,
+            espresso_volume_ml: 36.0,
+            group_temp_c: 92.0,
+        }
+    }
+}
+
 impl ShotSettings {
     /// Encode to the 9-byte `ShotSettings` packet.
     pub fn encode(&self) -> [u8; SHOT_SETTINGS_LEN] {

@@ -93,6 +93,29 @@ data class EventWaterSessionCompletedInner (
 	val duration_ms: UInt
 )
 
+/// Generated type representing the anonymous struct variant `SteamSessionCompleted` of the `Event` Rust enum
+@Serializable
+data class EventSteamSessionCompletedInner (
+	/// Total session duration, milliseconds.
+	val duration_ms: UInt,
+	/// Number of steam telemetry samples recorded.
+	val sample_count: UInt
+)
+
+/// Generated type representing the anonymous struct variant `SteamClogSuspected` of the `Event` Rust enum
+@Serializable
+data class EventSteamClogSuspectedInner (
+	/// Which threshold the steam telemetry tripped.
+	val reason: SteamClogReason
+)
+
+/// Generated type representing the anonymous struct variant `SteamEcoModeChanged` of the `Event` Rust enum
+@Serializable
+data class EventSteamEcoModeChangedInner (
+	/// `true` when the steam target dropped to the lower eco temperature.
+	val eco: Boolean
+)
+
 /// Generated type representing the anonymous struct variant `DecodeError` of the `Event` Rust enum
 @Serializable
 data class EventDecodeErrorInner (
@@ -152,6 +175,24 @@ sealed class Event {
 	@Serializable
 	@SerialName("WaterSessionCompleted")
 	data class WaterSessionCompleted(val content: EventWaterSessionCompletedInner): Event()
+	/// A steam session began (the DE1 entered the `Steam` state).
+	@Serializable
+	@SerialName("SteamSessionStarted")
+	object SteamSessionStarted: Event()
+	/// A steam session finished.
+	@Serializable
+	@SerialName("SteamSessionCompleted")
+	data class SteamSessionCompleted(val content: EventSteamSessionCompletedInner): Event()
+	/// The just-finished steam session's telemetry suggests a clogged steam
+	/// wand. Accompanies the [`Event::SteamSessionCompleted`] for the session.
+	@Serializable
+	@SerialName("SteamClogSuspected")
+	data class SteamClogSuspected(val content: EventSteamClogSuspectedInner): Event()
+	/// Steam eco mode engaged or disengaged. When it changes, an accompanying
+	/// [`Command`] rewrites the DE1's steam target temperature.
+	@Serializable
+	@SerialName("SteamEcoModeChanged")
+	data class SteamEcoModeChanged(val content: EventSteamEcoModeChangedInner): Event()
 	/// The connected scale stopped reporting weight — no reading has arrived
 	/// for roughly a second. Emitted once per stale episode; a fresh reading
 	/// re-arms it.
@@ -280,6 +321,17 @@ enum class ShotPhase(val string: String) {
 	/// Ending — flow has stopped and the group is draining.
 	@SerialName("Ending")
 	Ending("Ending"),
+}
+
+/// Why a steam-clog warning was raised — which threshold the telemetry tripped.
+@Serializable
+enum class SteamClogReason(val string: String) {
+	/// Steam pressure ran too high for too long — a clogged steam wand.
+	@SerialName("OverPressure")
+	OverPressure("OverPressure"),
+	/// Steam temperature ran too hot for too long.
+	@SerialName("OverTemperature")
+	OverTemperature("OverTemperature"),
 }
 
 /// Why [`AutoStop`] decided to end the shot.
