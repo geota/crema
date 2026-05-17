@@ -327,4 +327,60 @@ mod tests {
             MachineState::Clean
         );
     }
+
+    /// Every `NotificationSource` the FFI enum can name — used to fuzz the
+    /// bridge against malformed input on every characteristic.
+    fn every_source() -> [NotificationSource; 4] {
+        [
+            NotificationSource::De1State,
+            NotificationSource::De1ShotSample,
+            NotificationSource::ScaleWeight,
+            NotificationSource::De1WaterLevels,
+        ]
+    }
+
+    #[test]
+    fn on_notification_does_not_panic_on_an_empty_slice() {
+        for source in every_source() {
+            let bridge = CremaBridge::new();
+            // A scale is connected so the ScaleWeight decode path is exercised
+            // rather than being skipped for want of a scale.
+            bridge.connect_scale("BOOKOO_SC".to_owned());
+            let out = bridge.on_notification(source, Vec::new(), 1_000);
+            // The bridge must always return a well-formed CoreOutput envelope.
+            let parsed: serde_json::Value =
+                serde_json::from_str(&out).expect("bridge returned malformed JSON");
+            assert!(parsed.get("events").is_some());
+            assert!(parsed.get("commands").is_some());
+        }
+    }
+
+    #[test]
+    fn on_notification_does_not_panic_on_garbage_bytes() {
+        let garbage = vec![0xFF, 0x00, 0xAB, 0xCD, 0xEF, 0x13, 0x37];
+        for source in every_source() {
+            let bridge = CremaBridge::new();
+            bridge.connect_scale("BOOKOO_SC".to_owned());
+            let out = bridge.on_notification(source, garbage.clone(), 2_000);
+            let parsed: serde_json::Value =
+                serde_json::from_str(&out).expect("bridge returned malformed JSON");
+            assert!(parsed["events"].is_array());
+        }
+    }
+
+    #[test]
+    fn on_notification_reports_a_decode_error_for_a_truncated_state_packet() {
+        let bridge = CremaBridge::new();
+        // A one-byte StateInfo packet cannot be decoded — the bridge must
+        // surface a DecodeError event, not panic or drop the input silently.
+        let out = bridge.on_notification(NotificationSource::De1State, vec![0x01], 1_000);
+        assert!(out.contains("DecodeError"));
+    }
+
+    #[test]
+    fn on_notification_reports_a_decode_error_for_a_truncated_water_levels_packet() {
+        let bridge = CremaBridge::new();
+        let out = bridge.on_notification(NotificationSource::De1WaterLevels, vec![0x00], 1_000);
+        assert!(out.contains("DecodeError"));
+    }
 }

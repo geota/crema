@@ -15,6 +15,9 @@ de1-app = { path = "../de1-app" }
 de1-protocol = { path = "../de1-protocol" }
 uniffi = { version = "0.31.1", features = ["cli"] }
 
+[dev-dependencies]
+serde_json = { workspace = true }
+
 # This crate intentionally does NOT use `[lints] workspace = true`: UniFFI's
 # generated FFI scaffolding requires `unsafe`, which the workspace lint table
 # forbids. The lints below mirror the workspace's, minus `unsafe_code`.

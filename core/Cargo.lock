@@ -234,6 +234,7 @@ version = "0.1.0"
 dependencies = [
  "de1-app",
  "de1-protocol",
+ "serde_json",
  "uniffi",
 ]
 
@@ -256,6 +257,7 @@ version = "0.1.0"
 dependencies = [
  "de1-app",
  "de1-protocol",
+ "serde_json",
  "wasm-bindgen",
 ]
 
