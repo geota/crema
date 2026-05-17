@@ -240,6 +240,32 @@ impl Scale {
         )
     }
 
+    /// The scale's sensor lag, in seconds — the delay between coffee landing
+    /// in the cup and the scale reporting the new weight. It is one term of
+    /// the SAW (stop-at-weight) stop-early prediction.
+    ///
+    /// Values are from the legacy app (`device_scale.tcl`), itself derived
+    /// from James Hoffmann's scale-latency measurements plus BLE delay.
+    pub fn sensor_lag_seconds(&self) -> f32 {
+        match &self.inner {
+            Inner::HiroiaJimmy => 0.25,
+            Inner::Felicita | Inner::Bookoo | Inner::AtomheartEclair => 0.50,
+            // The legacy switch has no `acaiapyxis` arm (a Pyxis would hit the
+            // 0.38 default); the Pyxis is physically an Acaia, so it shares the
+            // Acaia sensor lag here — a deliberate correction of that gap.
+            Inner::AcaiaGen1(_) | Inner::AcaiaPyxis(_) => 0.69,
+            // Decent, Skale, and the scales without a dedicated entry take the
+            // legacy 0.38 s default.
+            Inner::Decent { .. }
+            | Inner::Skale
+            | Inner::EurekaPrecisa
+            | Inner::SoloBarista
+            | Inner::Difluid
+            | Inner::Smartchef
+            | Inner::VariaAku => 0.38,
+        }
+    }
+
     /// Decode a weight notification into grams.
     ///
     /// Takes `&mut self` because framed protocols (Acaia) buffer bytes across
@@ -416,5 +442,29 @@ mod tests {
         let uuids = Scale::from_label("Bookoo").unwrap().uuids();
         assert_eq!(uuids.service, bookoo::SERVICE_UUID);
         assert_eq!(uuids.command_write, bookoo::COMMAND_UUID);
+    }
+
+    #[test]
+    fn sensor_lag_matches_the_per_scale_table() {
+        assert_eq!(
+            Scale::from_label("Hiroia Jimmy")
+                .unwrap()
+                .sensor_lag_seconds(),
+            0.25
+        );
+        assert_eq!(
+            Scale::from_label("Bookoo").unwrap().sensor_lag_seconds(),
+            0.50
+        );
+        assert_eq!(
+            Scale::from_label("Acaia Pyxis")
+                .unwrap()
+                .sensor_lag_seconds(),
+            0.69
+        );
+        assert_eq!(
+            Scale::from_label("Skale II").unwrap().sensor_lag_seconds(),
+            0.38
+        );
     }
 }
