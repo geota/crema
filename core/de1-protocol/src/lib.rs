@@ -19,12 +19,14 @@
 //! - [`command`] — command and settings packets (`cuuid_02` / `0B` / `11`).
 //! - [`mmr`] — the memory-mapped register read/write codec (`cuuid_05` / `06`).
 //! - [`calibration`] — sensor calibration packets (`cuuid_12`).
+//! - [`firmware`] — the firmware OTA update codec (`cuuid_09` / `06`).
 //!
 //! `unsafe` is forbidden crate-wide via the workspace lint table.
 
 pub mod calibration;
 pub mod command;
 pub mod error;
+pub mod firmware;
 pub mod fixed_point;
 pub mod mmr;
 pub mod profile;
@@ -34,6 +36,10 @@ pub mod state;
 pub use calibration::{CALIBRATION_LEN, CalCommand, CalTarget, Calibration};
 pub use command::{ShotSettings, WaterLevels, requested_state};
 pub use error::ProtocolError;
+pub use firmware::{
+    FIRMWARE_FRAME_DATA_LEN, FIRMWARE_FRAME_LEN, FIRST_ERROR_NONE, FIRST_ERROR_REQUEST,
+    FW_MAP_REQUEST_LEN, FWMapRequest, firmware_write_frame,
+};
 pub use mmr::{MMR_PACKET_LEN, MmrReadReply, MmrRegister};
 pub use profile::{
     ExtensionFrame, FrameFlags, SHOT_FRAME_LEN, SHOT_HEADER_LEN, ShotFrame, ShotHeader, ShotTail,
