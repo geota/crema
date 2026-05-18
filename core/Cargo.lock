@@ -250,6 +250,10 @@ dependencies = [
 [[package]]
 name = "de1-scale"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "typeshare",
+]
 
 [[package]]
 name = "de1-wasm"

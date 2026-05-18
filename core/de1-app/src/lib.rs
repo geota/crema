@@ -26,7 +26,7 @@ use de1_domain::{
 use de1_protocol::{
     MachineState, ShotSample, ShotSettings, StateInfo, WaterLevels, requested_state,
 };
-use de1_scale::Scale;
+use de1_scale::{Scale, ScaleCapabilities, bookoo};
 
 /// Scale sensor lag assumed when no scale is connected — a representative value
 /// across the supported scales.
@@ -116,6 +116,16 @@ impl CremaCore {
     pub fn connect_scale(&mut self, advertised_name: &str) -> Option<String> {
         self.scale = Scale::identify(advertised_name);
         self.scale.as_ref().map(|scale| scale.label().to_owned())
+    }
+
+    /// What the connected scale can do beyond reporting a bare weight — see
+    /// [`ScaleCapabilities`]. `None` when no scale is connected.
+    ///
+    /// The shell reads this to drive capability-gated configuration UI: Crema
+    /// is capability-driven, never device-driven, so the shell never branches
+    /// on the concrete scale model.
+    pub fn scale_capabilities(&self) -> Option<ScaleCapabilities> {
+        self.scale.as_ref().map(Scale::capabilities)
     }
 
     /// Arm automatic shot-stop. A `None` target disables that mode; the
@@ -242,6 +252,116 @@ impl CremaCore {
         {
             out.commands.push(Command::WriteScale { data });
         }
+    }
+
+    /// Build a [`Command`] that sets the connected scale's beeper volume.
+    ///
+    /// `level` is the requested volume step; it is clamped to the connected
+    /// scale's [`ScaleCapabilities::volume`] `[min, max]` bounds before the
+    /// command is built. Capability-gated, not device-gated: the command is
+    /// emitted only when the connected scale exposes a settable volume (its
+    /// `volume` capability is `Some`). The result is empty when no scale is
+    /// connected or the scale cannot set its volume. Modelled on
+    /// [`tare_scale`](Self::tare_scale).
+    pub fn set_scale_volume(&mut self, level: u8) -> CoreOutput {
+        let mut out = CoreOutput::default();
+        if let Some(scale) = &self.scale
+            && let Some(range) = scale.capabilities().volume
+        {
+            let level = level.clamp(range.min, range.max);
+            out.commands.push(Command::WriteScale {
+                data: bookoo::set_volume(level).to_vec(),
+            });
+        }
+        out
+    }
+
+    /// Build a [`Command`] that sets the connected scale's auto-standby
+    /// timeout, in minutes.
+    ///
+    /// `minutes` is clamped to the connected scale's
+    /// [`ScaleCapabilities::standby_minutes`] `[min, max]` bounds before the
+    /// command is built. Capability-gated, not device-gated: the command is
+    /// emitted only when the connected scale exposes a configurable
+    /// auto-standby (its `standby_minutes` capability is `Some`). The result is
+    /// empty otherwise. Modelled on [`set_scale_volume`](Self::set_scale_volume).
+    pub fn set_scale_standby_minutes(&mut self, minutes: u8) -> CoreOutput {
+        let mut out = CoreOutput::default();
+        if let Some(scale) = &self.scale
+            && let Some(range) = scale.capabilities().standby_minutes
+        {
+            let minutes = minutes.clamp(range.min, range.max);
+            out.commands.push(Command::WriteScale {
+                data: bookoo::set_standby_minutes(minutes).to_vec(),
+            });
+        }
+        out
+    }
+
+    /// Build a [`Command`] that enables or disables the connected scale's
+    /// flow smoothing.
+    ///
+    /// Capability-gated, not device-gated: the command is emitted only when
+    /// the connected scale's [`ScaleCapabilities::flow_smoothing`] is `true`.
+    /// The result is empty otherwise. Modelled on
+    /// [`set_scale_volume`](Self::set_scale_volume).
+    pub fn set_scale_flow_smoothing(&mut self, enabled: bool) -> CoreOutput {
+        let mut out = CoreOutput::default();
+        if let Some(scale) = &self.scale
+            && scale.capabilities().flow_smoothing
+        {
+            out.commands.push(Command::WriteScale {
+                data: bookoo::set_flow_smoothing(enabled).to_vec(),
+            });
+        }
+        out
+    }
+
+    /// Build a [`Command`] that enables or disables the connected scale's
+    /// anti-mistouch.
+    ///
+    /// Capability-gated, not device-gated: the command is emitted only when
+    /// the connected scale's [`ScaleCapabilities::anti_mistouch`] is `true`.
+    /// The result is empty otherwise. Modelled on
+    /// [`set_scale_volume`](Self::set_scale_volume).
+    pub fn set_scale_anti_mistouch(&mut self, enabled: bool) -> CoreOutput {
+        let mut out = CoreOutput::default();
+        if let Some(scale) = &self.scale
+            && scale.capabilities().anti_mistouch
+        {
+            out.commands.push(Command::WriteScale {
+                data: bookoo::set_anti_mistouch(enabled).to_vec(),
+            });
+        }
+        out
+    }
+
+    /// Build the [`Command`]s that switch the connected scale to display mode
+    /// `mode_id`.
+    ///
+    /// Capability-gated, not device-gated: the commands are emitted only when
+    /// the connected scale exposes switchable modes (its
+    /// [`ScaleCapabilities::modes`] is non-empty) **and** `mode_id` is one of
+    /// the listed modes. The result is empty otherwise.
+    ///
+    /// Selecting a mode is three writes — the target mode is enabled first,
+    /// then the other two are disabled, so a mode is always enabled mid-
+    /// sequence (see [`bookoo::select_mode`]). All three are pushed onto
+    /// `CoreOutput::commands` **in order**; the shell must perform them in that
+    /// order.
+    pub fn set_scale_mode(&mut self, mode_id: u8) -> CoreOutput {
+        let mut out = CoreOutput::default();
+        if let Some(scale) = &self.scale
+            && scale.capabilities().modes.iter().any(|m| m.id == mode_id)
+            && let Some(mode) = bookoo_mode_from_id(mode_id)
+        {
+            for command in bookoo::select_mode(mode) {
+                out.commands.push(Command::WriteScale {
+                    data: command.to_vec(),
+                });
+            }
+        }
+        out
     }
 
     /// Feed a raw GATT notification: `data` is the characteristic's bytes and
@@ -497,6 +617,21 @@ impl CremaCore {
     }
 }
 
+/// Map a scale mode `id` (the wire value carried in [`ScaleCapabilities`]'
+/// `modes`) to the [`bookoo::BookooMode`] the command builder expects.
+///
+/// Returns `None` for an unknown `id`. The capability list is the source of
+/// truth for which ids are valid; this is the final guard that the id is one
+/// the Bookoo protocol actually understands.
+fn bookoo_mode_from_id(id: u8) -> Option<bookoo::BookooMode> {
+    match id {
+        0 => Some(bookoo::BookooMode::FlowRate),
+        1 => Some(bookoo::BookooMode::Timer),
+        2 => Some(bookoo::BookooMode::Auto),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -705,6 +840,195 @@ mod tests {
             out.commands.first(),
             Some(Command::WriteScale { .. })
         ));
+    }
+
+    #[test]
+    fn scale_capabilities_is_none_without_a_connected_scale() {
+        let core = CremaCore::new();
+        assert!(core.scale_capabilities().is_none());
+    }
+
+    #[test]
+    fn scale_capabilities_reports_a_bookoo_as_first_class() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC");
+        let caps = core.scale_capabilities().expect("a connected scale");
+        assert!(caps.volume.is_some());
+        assert!(caps.reports_flow);
+        assert!(caps.reports_timer);
+    }
+
+    #[test]
+    fn scale_capabilities_reports_a_weight_only_scale_as_having_none() {
+        let mut core = CremaCore::new();
+        core.connect_scale("Decent Scale ABC");
+        let caps = core.scale_capabilities().expect("a connected scale");
+        assert!(caps.volume.is_none());
+        assert!(!caps.reports_flow);
+        assert!(!caps.reports_timer);
+    }
+
+    #[test]
+    fn set_scale_volume_emits_a_write_for_a_capable_scale() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC");
+        let out = core.set_scale_volume(3);
+        assert!(matches!(
+            out.commands.first(),
+            Some(Command::WriteScale { .. })
+        ));
+    }
+
+    #[test]
+    fn set_scale_volume_clamps_the_level_to_the_capability_range() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC");
+        // An out-of-range request clamps to the Bookoo's volume max of 5
+        // before the command bytes are built.
+        let Some(Command::WriteScale { data: clamped }) =
+            core.set_scale_volume(99).commands.into_iter().next()
+        else {
+            panic!("expected a WriteScale command");
+        };
+        let Some(Command::WriteScale { data: at_max }) =
+            core.set_scale_volume(5).commands.into_iter().next()
+        else {
+            panic!("expected a WriteScale command");
+        };
+        assert_eq!(clamped, at_max);
+    }
+
+    #[test]
+    fn set_scale_volume_emits_nothing_without_a_scale() {
+        let mut core = CremaCore::new();
+        assert!(core.set_scale_volume(3).commands.is_empty());
+    }
+
+    #[test]
+    fn set_scale_volume_emits_nothing_for_a_weight_only_scale() {
+        let mut core = CremaCore::new();
+        // A weight-only scale has no `volume` capability — the command is
+        // capability-gated, so nothing is emitted.
+        core.connect_scale("Decent Scale ABC");
+        assert!(core.set_scale_volume(3).commands.is_empty());
+    }
+
+    #[test]
+    fn set_scale_standby_minutes_emits_a_write_for_a_capable_scale() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC");
+        let out = core.set_scale_standby_minutes(15);
+        assert!(matches!(
+            out.commands.first(),
+            Some(Command::WriteScale { .. })
+        ));
+    }
+
+    #[test]
+    fn set_scale_standby_minutes_clamps_to_the_capability_range() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC");
+        // An out-of-range request clamps to the Bookoo's 5..=30 minute range.
+        let Some(Command::WriteScale { data: clamped }) =
+            core.set_scale_standby_minutes(99).commands.into_iter().next()
+        else {
+            panic!("expected a WriteScale command");
+        };
+        let Some(Command::WriteScale { data: at_max }) =
+            core.set_scale_standby_minutes(30).commands.into_iter().next()
+        else {
+            panic!("expected a WriteScale command");
+        };
+        assert_eq!(clamped, at_max);
+    }
+
+    #[test]
+    fn set_scale_standby_minutes_emits_nothing_for_a_weight_only_scale() {
+        let mut core = CremaCore::new();
+        core.connect_scale("Decent Scale ABC");
+        assert!(core.set_scale_standby_minutes(15).commands.is_empty());
+    }
+
+    #[test]
+    fn set_scale_flow_smoothing_emits_a_write_for_a_capable_scale() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC");
+        assert!(matches!(
+            core.set_scale_flow_smoothing(true).commands.first(),
+            Some(Command::WriteScale { .. })
+        ));
+    }
+
+    #[test]
+    fn set_scale_flow_smoothing_emits_nothing_for_a_weight_only_scale() {
+        let mut core = CremaCore::new();
+        core.connect_scale("Decent Scale ABC");
+        assert!(core.set_scale_flow_smoothing(true).commands.is_empty());
+        assert!(core.set_scale_flow_smoothing(true).commands.is_empty());
+    }
+
+    #[test]
+    fn set_scale_anti_mistouch_emits_a_write_for_a_capable_scale() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC");
+        assert!(matches!(
+            core.set_scale_anti_mistouch(false).commands.first(),
+            Some(Command::WriteScale { .. })
+        ));
+    }
+
+    #[test]
+    fn set_scale_anti_mistouch_emits_nothing_for_a_weight_only_scale() {
+        let mut core = CremaCore::new();
+        core.connect_scale("Decent Scale ABC");
+        assert!(core.set_scale_anti_mistouch(true).commands.is_empty());
+    }
+
+    #[test]
+    fn set_scale_mode_emits_three_writes_in_order_for_a_capable_scale() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC");
+        // Selecting a mode is three writes (target on, then the other two off).
+        let out = core.set_scale_mode(1);
+        assert_eq!(out.commands.len(), 3);
+        let bytes: Vec<Vec<u8>> = out
+            .commands
+            .into_iter()
+            .map(|c| {
+                let Command::WriteScale { data } = c else {
+                    panic!("expected a WriteScale command");
+                };
+                data
+            })
+            .collect();
+        // Order must match bookoo::select_mode(Timer): Timer on, FlowRate off,
+        // Auto off.
+        let expected: Vec<Vec<u8>> = bookoo::select_mode(bookoo::BookooMode::Timer)
+            .iter()
+            .map(|c| c.to_vec())
+            .collect();
+        assert_eq!(bytes, expected);
+    }
+
+    #[test]
+    fn set_scale_mode_emits_nothing_for_an_unknown_mode_id() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC");
+        // 7 is not a listed Bookoo mode — capability-gated, so nothing emitted.
+        assert!(core.set_scale_mode(7).commands.is_empty());
+    }
+
+    #[test]
+    fn set_scale_mode_emits_nothing_for_a_weight_only_scale() {
+        let mut core = CremaCore::new();
+        core.connect_scale("Decent Scale ABC");
+        assert!(core.set_scale_mode(0).commands.is_empty());
+    }
+
+    #[test]
+    fn set_scale_mode_emits_nothing_without_a_scale() {
+        let mut core = CremaCore::new();
+        assert!(core.set_scale_mode(0).commands.is_empty());
     }
 
     #[test]

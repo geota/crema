@@ -8,6 +8,15 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+# Optional: `serde` derives on the public capability descriptor, behind the
+# `serde` feature — enabled by de1-app for the JSON FFI surface.
+serde = { workspace = true, optional = true }
+typeshare = "1.0.5"
+
+[features]
+# Adds `serde::{Serialize, Deserialize}` to [`ScaleCapabilities`] — enabled by
+# de1-app so the capability descriptor crosses the JSON FFI boundary.
+serde = ["dep:serde"]
 
 [lints]
 workspace = true
