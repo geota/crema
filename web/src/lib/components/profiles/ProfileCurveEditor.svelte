@@ -255,21 +255,22 @@
 				aria-valuemin={0}
 				aria-valuemax={Y_MAX}
 			>
-				<!-- A wide invisible hit target makes the dot easy to grab. -->
+				<!-- A wide invisible hit target keeps the small dot easy to grab. -->
 				<circle cx={d.x} cy={d.y} r="16" fill="transparent" />
+				{#if activeSegId === d.id}
+					<!-- Soft copper halo marks the active dot without bulk. -->
+					<circle cx={d.x} cy={d.y} r="9" fill="rgba(193,116,75,0.16)" />
+				{/if}
+				<!-- One slim handle: a punched node on the curve when idle, a
+				     solid copper dot when active. -->
 				<circle
+					class="pe-dot-handle"
 					cx={d.x}
 					cy={d.y}
-					r="9"
-					fill="var(--espresso-950)"
-					stroke={activeSegId === d.id ? 'var(--copper-500)' : 'rgba(244,237,224,0.7)'}
-					stroke-width={activeSegId === d.id ? 2.5 : 1.5}
-				/>
-				<circle
-					cx={d.x}
-					cy={d.y}
-					r="3"
-					fill={activeSegId === d.id ? 'var(--copper-400)' : 'rgba(244,237,224,0.9)'}
+					r={activeSegId === d.id ? 5 : 4}
+					fill={activeSegId === d.id ? 'var(--copper-400)' : 'var(--espresso-900)'}
+					stroke={activeSegId === d.id ? 'var(--espresso-900)' : 'rgba(244,237,224,0.5)'}
+					stroke-width="1.5"
 				/>
 			</g>
 		{/each}
@@ -347,8 +348,8 @@
 	.pe-dot:focus-visible {
 		outline: none;
 	}
-	.pe-dot:focus-visible circle:nth-child(2) {
+	.pe-dot:focus-visible .pe-dot-handle {
 		stroke: var(--copper-400);
-		stroke-width: 2.5;
+		stroke-width: 2;
 	}
 </style>
