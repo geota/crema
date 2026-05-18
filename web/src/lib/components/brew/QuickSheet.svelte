@@ -13,7 +13,7 @@
 	 * machine is marked `// TODO: wire to DE1 control`.
 	 */
 	import type { BrewParamState } from './brew-params.svelte';
-	import type { FavoriteProfile } from './favorites';
+	import type { CremaProfile } from '$lib/profiles';
 	import FavoritesStrip from './FavoritesStrip.svelte';
 	import DoseGrindStepper from './DoseGrindStepper.svelte';
 	import YieldRatioStepper from './YieldRatioStepper.svelte';
@@ -25,7 +25,8 @@
 	let {
 		params,
 		profileName,
-		favorite,
+		pinnedProfiles,
+		selectedProfileId,
 		running,
 		open,
 		onSelectFavorite,
@@ -36,14 +37,16 @@
 		params: BrewParamState;
 		/** The active profile's display name (for the header pill). */
 		profileName: string;
-		/** The selected favorite's id. */
-		favorite: string;
+		/** The pinned profiles shown as favorite chips. */
+		pinnedProfiles: readonly CremaProfile[];
+		/** The active profile's id (the highlighted chip), or `null`. */
+		selectedProfileId: string | null;
 		/** Whether an extraction is in progress — flips the big button to danger-red. */
 		running: boolean;
 		/** Whether the sheet is docked open; when false it slides away. */
 		open: boolean;
 		/** Called when a favorite chip is picked. */
-		onSelectFavorite: (profile: FavoriteProfile) => void;
+		onSelectFavorite: (profile: CremaProfile) => void;
 		/** Called when the Start / Stop button is pressed. */
 		onToggleRun: () => void;
 		/** Called to dismiss the sheet (Close button or scrim tap). */
@@ -87,7 +90,11 @@
 		</div>
 	</div>
 
-	<FavoritesStrip {favorite} onSelect={onSelectFavorite} />
+	<FavoritesStrip
+		profiles={pinnedProfiles}
+		selectedId={selectedProfileId}
+		onSelect={onSelectFavorite}
+	/>
 
 	<div class="qsheet-g-grid is-six">
 		<DoseGrindStepper {params} />

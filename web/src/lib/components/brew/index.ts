@@ -20,4 +20,3 @@ export { default as QSparkline } from './QSparkline.svelte';
 export { default as QSplitLabel } from './QSplitLabel.svelte';
 
 export { BrewParamState, DEFAULT_BREW_PARAMS, type BrewParams } from './brew-params.svelte';
-export { SAMPLE_FAVORITES, type FavoriteProfile } from './favorites';

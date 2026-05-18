@@ -20,8 +20,8 @@
 	 */
 	import type { UiSnapshot } from '$lib/state';
 	import { ShotPhase } from '$lib/core/crema-core';
+	import { getProfileStore, preinfuseSeconds, type CremaProfile } from '$lib/profiles';
 	import { BrewParamState } from './brew-params.svelte';
-	import { SAMPLE_FAVORITES, type FavoriteProfile } from './favorites';
 	import ExtractionTimer from './ExtractionTimer.svelte';
 	import ChannelReadout from './ChannelReadout.svelte';
 	import LiveChart from './LiveChart.svelte';
@@ -34,8 +34,26 @@
 		ui: UiSnapshot;
 	} = $props();
 
-	// ── Quick Sheet local control state (UI-only) ────────────────────────
-	/** The Quick Sheet's local parameter model — never reaches the machine. */
+	// ── Profile library (real — the lib/profiles store) ──────────────────
+	/** The shared profile library — the source of pinned favorites + active. */
+	const profileStore = getProfileStore();
+	void profileStore.ensureLoaded();
+
+	/** The real pinned profiles, shown as favorite chips in the Quick Sheet. */
+	const pinnedProfiles = $derived(profileStore.all.filter((p) => p.pinned));
+	/** The profile marked active on the Profiles page, or `undefined`. */
+	const activeProfile = $derived(
+		profileStore.activeId ? profileStore.get(profileStore.activeId) : undefined
+	);
+
+	// ── Quick Sheet local control state ──────────────────────────────────
+	/**
+	 * The Quick Sheet's parameter model. Its dose / yield / temp / pre-infusion
+	 * are initialised from the active profile (the `$effect` below) so the
+	 * header, the ratio readout and the steppers all agree; the steppers may
+	 * then edit it locally. The CONTROL side never reaches the machine in this
+	 * porting step — see the `// TODO: wire to DE1 control` notes.
+	 */
 	const params = new BrewParamState();
 	/**
 	 * Whether the Quick Sheet is docked open. Starts hidden — the dashboard is
@@ -43,8 +61,6 @@
 	 * button or a scrim tap dismisses it again.
 	 */
 	let quickSheetOpen = $state(false);
-	/** The selected favorite profile id. */
-	let favoriteId = $state(SAMPLE_FAVORITES[0].id);
 	/**
 	 * Local "running" flag for the Start / Stop button. UI-only — the design's
 	 * brew-control surface is a stub here. The displayed shot state below comes
@@ -52,10 +68,30 @@
 	 */
 	let manualRunning = $state(false);
 
-	/** The selected favorite profile (placeholder data — see `favorites.ts`). */
-	const favorite = $derived(
-		SAMPLE_FAVORITES.find((f) => f.id === favoriteId) ?? SAMPLE_FAVORITES[0]
-	);
+	/**
+	 * Seed the local Quick Sheet params from a profile's targets — dose, yield,
+	 * brew temperature and pre-infusion (the first segment's seconds).
+	 */
+	function paramsFromProfile(profile: CremaProfile): void {
+		params.set('dose', profile.dose);
+		params.set('yield', profile.yieldG);
+		params.set('brewTemp', profile.brewTemp);
+		params.set('preinf', preinfuseSeconds(profile.segments));
+	}
+
+	// Initialise the params whenever the active profile changes — this bridges
+	// the external library store into the local param model, so the header /
+	// ratio / steppers stay in sync with whatever profile is active. Keyed on
+	// the profile id so it fires once per active-profile change, not on every
+	// stepper edit.
+	let lastSeededId: string | undefined;
+	$effect(() => {
+		const profile = activeProfile;
+		if (profile && profile.id !== lastSeededId) {
+			lastSeededId = profile.id;
+			paramsFromProfile(profile);
+		}
+	});
 
 	const p = $derived(params.current);
 
@@ -65,9 +101,11 @@
 	/**
 	 * The header profile name. The Profiles page can mark a profile "active"
 	 * (UI-level — see `lib/profiles`); when it has, that name wins. Otherwise
-	 * the locally-selected favorite name is shown.
+	 * the snapshot's mirror of it, then a neutral fallback.
 	 */
-	const profileName = $derived(ui.activeProfileName ?? favorite.name);
+	const profileName = $derived(
+		activeProfile?.name ?? ui.activeProfileName ?? 'No profile selected'
+	);
 
 	// ── Real telemetry (the DISPLAY side — wired to lib/state) ───────────
 	/** The latest 4-channel sample, or null when no telemetry has arrived. */
@@ -106,15 +144,17 @@
 	);
 
 	// ── Quick Sheet callbacks ────────────────────────────────────────────
-	/** Apply a picked favorite to the local Quick Sheet params. */
-	function selectFavorite(profile: FavoriteProfile): void {
-		favoriteId = profile.id;
-		// Pull the profile's parameters into the local model. UI-only — see the
-		// `// TODO: wire to DE1 control` note in `brew-params`.
-		params.set('dose', profile.dose);
-		params.set('yield', profile.yield);
-		params.set('brewTemp', profile.brewTemp);
-		params.set('preinf', profile.preinf);
+	/**
+	 * Pick a favorite profile — mark it active in the library store and pull
+	 * its targets into the local Quick Sheet params. Marking it active also
+	 * drives the header name and the `$effect` seeding above.
+	 */
+	function selectFavorite(profile: CremaProfile): void {
+		profileStore.setActive(profile.id);
+		// Seed the params immediately so the steppers reflect the pick without
+		// waiting for the active-profile effect to settle.
+		lastSeededId = profile.id;
+		paramsFromProfile(profile);
 	}
 
 	/** Toggle the local running flag — the brew-control stub. */
@@ -234,7 +274,8 @@
 		<QuickSheet
 			{params}
 			{profileName}
-			favorite={favoriteId}
+			{pinnedProfiles}
+			selectedProfileId={profileStore.activeId}
 			running={manualRunning}
 			open={quickSheetOpen}
 			onSelectFavorite={selectFavorite}

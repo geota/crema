@@ -31,6 +31,17 @@
 	const prefs = $derived(settings.current);
 	const history = getHistoryStore();
 
+	/** The allowed Visualizer privacy values — the `StSegment` option set. */
+	type VisualizerPrivacy = 'public' | 'unlisted' | 'private';
+	const PRIVACY_VALUES: readonly VisualizerPrivacy[] = ['public', 'unlisted', 'private'];
+
+	/** Narrow an `StSegment` value to a {@link VisualizerPrivacy}, or `null`. */
+	function asPrivacy(v: string): VisualizerPrivacy | null {
+		return (PRIVACY_VALUES as readonly string[]).includes(v)
+			? (v as VisualizerPrivacy)
+			: null;
+	}
+
 	// TODO: the Visualizer link needs the visualizer.coffee service (OAuth +
 	// upload API). The shell has no network/account layer, so the connection is
 	// local UI state only — it starts disconnected and "Sign in" is a stub.
@@ -149,11 +160,10 @@
 					{ value: 'unlisted', label: 'Unlisted' },
 					{ value: 'private', label: 'Private' }
 				]}
-				onChange={(v) =>
-					settings.set(
-						'visualizerPrivacy',
-						v as 'public' | 'unlisted' | 'private'
-					)}
+				onChange={(v) => {
+					const privacy = asPrivacy(v);
+					if (privacy) settings.set('visualizerPrivacy', privacy);
+				}}
 			/>
 		{/snippet}
 	</StRow>

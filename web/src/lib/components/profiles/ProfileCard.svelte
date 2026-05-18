@@ -202,6 +202,7 @@
 		display: flex;
 		flex-direction: column;
 		gap: 14px;
+		overflow: hidden;
 		transition: all var(--dur-1) var(--ease);
 	}
 	.pp-card:hover {

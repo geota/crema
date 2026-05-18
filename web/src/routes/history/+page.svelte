@@ -71,14 +71,18 @@
 	const weekCount = $derived(
 		shots.filter((s) => Date.now() - s.completedAt < 7 * dayMs).length
 	);
-	/** Mean brew ratio (yield ÷ a nominal 18 g dose) across the history. */
-	const avgRatio = $derived.by(() => {
+	/**
+	 * Mean yield weight (grams) across the history. Reported as a weight, not a
+	 * ratio: `ShotRecord` carries no dose, so a `yield ÷ dose` ratio would have
+	 * to assume one fixed dose and mislead for every other.
+	 */
+	const avgYield = $derived.by(() => {
 		const yields = shots
 			.map((s) => s.finalWeightG ?? s.peakWeightG)
 			.filter((y): y is number => y != null && y > 0);
 		if (yields.length === 0) return null;
-		const mean = yields.reduce((a, y) => a + y / 18, 0) / yields.length;
-		return mean.toFixed(2);
+		const mean = yields.reduce((a, y) => a + y, 0) / yields.length;
+		return mean.toFixed(1);
 	});
 	/** Mean shot duration, seconds. */
 	const avgTime = $derived.by(() => {
@@ -154,8 +158,10 @@
 				<div class="hi-stat-val"><span>{shots.length}</span><em>shots</em></div>
 			</div>
 			<div class="hi-stat">
-				<div class="hi-stat-label">Avg ratio</div>
-				<div class="hi-stat-val"><span>{avgRatio ? '1:' + avgRatio : '—'}</span></div>
+				<div class="hi-stat-label">Avg yield</div>
+				<div class="hi-stat-val">
+					<span>{avgYield ?? '—'}</span>{#if avgYield != null}<em>g</em>{/if}
+				</div>
 			</div>
 			<div class="hi-stat">
 				<div class="hi-stat-label">Avg time</div>
@@ -307,34 +313,7 @@
 		color: rgba(244, 237, 224, 0.35);
 	}
 
-	/* st-btn ported from the design's settings kit. */
-	.st-btn {
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
-		padding: 7px 12px;
-		border-radius: var(--radius-sm);
-		font-family: var(--font-sans);
-		font-size: 12px;
-		cursor: pointer;
-		transition: all var(--dur-1) var(--ease);
-		border: 1px solid transparent;
-	}
-	.st-btn i {
-		font-size: 13px;
-	}
-	.st-btn:disabled {
-		opacity: 0.4;
-		cursor: not-allowed;
-	}
-	.st-btn-secondary {
-		background: rgba(244, 237, 224, 0.04);
-		border-color: rgba(244, 237, 224, 0.1);
-		color: var(--ink-50);
-	}
-	.st-btn-secondary:hover:not(:disabled) {
-		background: rgba(244, 237, 224, 0.08);
-	}
+	/* The .st-btn family is shared globally — see dashboard.css. */
 
 	/* Stats strip */
 	.hi-stats {

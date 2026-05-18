@@ -82,6 +82,10 @@
 		pulseTimer = setTimeout(() => (tarePulse = false), 600);
 	}
 
+	// Cancel a pending tare-flash timeout if the component is torn down before
+	// it fires — otherwise the callback runs against a destroyed component.
+	$effect(() => () => clearTimeout(pulseTimer));
+
 	/** Connect / re-pair a scale — a Web-Bluetooth gesture handler. */
 	function repair(): void {
 		void app?.connectScale();
@@ -168,6 +172,46 @@
 	/** Format the hero readout — one decimal, leading sign for negatives. */
 	const heroSign = $derived(weightG != null && weightG < 0 ? '-' : '');
 	const heroNum = $derived(weightG != null ? Math.abs(weightG).toFixed(1) : '–');
+
+	// ── Activity log ─────────────────────────────────────────────────────
+	/** One parsed activity-log row. */
+	interface ActivityRow {
+		/** The `HH:MM:SS` timestamp slice. */
+		time: string;
+		/** The event message. */
+		detail: string;
+		/** A milestone — shot start/complete, connect — drawn brighter. */
+		highlight: boolean;
+		/** Routine state-transition noise — drawn dimmer. */
+		muted: boolean;
+	}
+
+	/**
+	 * Parse the shared `eventLog` (`"HH:MM:SS  <message>"`, newest-first) into
+	 * rows. The log strings are free-form, so there is no reliable categorical
+	 * event keyword to lift into a separate uppercase column — instead each row
+	 * is tagged `highlight` (a milestone) or `muted` (routine state noise) so
+	 * the feed reads at a glance without inventing structure the data lacks.
+	 */
+	const activityRows = $derived.by<ActivityRow[]>(() =>
+		eventLog.slice(0, 14).map((line) => {
+			const sp = line.indexOf('  ');
+			const time = sp > 0 ? line.slice(0, sp) : '';
+			const detail = sp > 0 ? line.slice(sp + 2) : line;
+			const d = detail.toLowerCase();
+			const highlight =
+				d.includes('shot started') ||
+				d.includes('shot complete') ||
+				d.includes('auto-stop') ||
+				d.includes('steam session');
+			const muted =
+				d.startsWith('machinestate ->') ||
+				d.startsWith('shot phase ->') ||
+				d.startsWith('shot frame ->') ||
+				d.includes('scale stale');
+			return { time, detail, highlight, muted };
+		})
+	);
 </script>
 
 <svelte:head>
@@ -386,14 +430,13 @@
 
 		<div class="sc-activity">
 			<div class="sc-activity-head">Recent activity</div>
-			{#if eventLog.length === 0}
+			{#if activityRows.length === 0}
 				<div class="sc-activity-empty">No activity yet — connect a scale to begin.</div>
 			{:else}
-				{#each eventLog.slice(0, 14) as line, i (i)}
-					{@const sp = line.indexOf('  ')}
-					<div class="sc-arow">
-						<div class="sc-arow-t">{sp > 0 ? line.slice(0, sp) : ''}</div>
-						<div class="sc-arow-detail">{sp > 0 ? line.slice(sp + 2) : line}</div>
+				{#each activityRows as row, i (i)}
+					<div class="sc-arow" class:is-hl={row.highlight} class:is-muted={row.muted}>
+						<div class="sc-arow-t">{row.time}</div>
+						<div class="sc-arow-detail">{row.detail}</div>
 					</div>
 				{/each}
 			{/if}
@@ -455,34 +498,8 @@
 		box-shadow: 0 0 0 2.5px rgba(107, 140, 95, 0.2);
 	}
 
-	/* Buttons — st-btn / st-segment ported from the design's settings kit. */
-	.st-btn {
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
-		padding: 7px 12px;
-		border-radius: var(--radius-sm);
-		font-family: var(--font-sans);
-		font-size: 12px;
-		cursor: pointer;
-		transition: all var(--dur-1) var(--ease);
-		border: 1px solid transparent;
-	}
-	.st-btn i {
-		font-size: 13px;
-	}
-	.st-btn:disabled {
-		opacity: 0.4;
-		cursor: not-allowed;
-	}
-	.st-btn-secondary {
-		background: rgba(244, 237, 224, 0.04);
-		border-color: rgba(244, 237, 224, 0.1);
-		color: var(--ink-50);
-	}
-	.st-btn-secondary:hover:not(:disabled) {
-		background: rgba(244, 237, 224, 0.08);
-	}
+	/* st-segment ported from the design's settings kit. The .st-btn family
+	   is shared globally — see dashboard.css. */
 	.st-segment {
 		display: inline-flex;
 		background: rgba(244, 237, 224, 0.04);
@@ -773,8 +790,12 @@
 		grid-template-columns: 64px 1fr;
 		gap: 12px;
 		align-items: baseline;
-		padding: 8px 0;
+		padding: 8px 0 8px 10px;
 		border-bottom: 1px solid rgba(244, 237, 224, 0.04);
+		/* A 2px rail on the row's leading edge — neutral by default; a
+		   milestone row lights it copper, routine noise leaves it transparent. */
+		border-left: 2px solid transparent;
+		transition: border-color var(--dur-1) var(--ease);
 	}
 	.sc-arow:last-child {
 		border-bottom: 0;
@@ -790,6 +811,22 @@
 		font-size: 12px;
 		color: var(--ink-50);
 		word-break: break-word;
+	}
+	/* Milestone rows — shot start/complete, auto-stop, steam — read brighter
+	   with a copper rail so the eye lands on them first. */
+	.sc-arow.is-hl {
+		border-left-color: var(--copper-500);
+	}
+	.sc-arow.is-hl .sc-arow-detail {
+		color: var(--copper-400);
+		font-weight: 500;
+	}
+	/* Routine state-transition noise recedes — dim text, no rail. */
+	.sc-arow.is-muted .sc-arow-detail {
+		color: rgba(244, 237, 224, 0.45);
+	}
+	.sc-arow.is-muted .sc-arow-t {
+		color: rgba(244, 237, 224, 0.28);
 	}
 	.sc-activity-empty {
 		padding: 20px 0;
