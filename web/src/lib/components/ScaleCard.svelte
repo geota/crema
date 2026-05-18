@@ -21,11 +21,20 @@
 
 	const ui = $derived(app.state.current);
 
-	/** True while a scale is connected or in any connecting/handshake phase. */
+	/**
+	 * True while a scale is connected, in a connecting/handshake phase, or
+	 * auto-reconnecting. `reconnecting` counts as connected so Disconnect stays
+	 * enabled (it cancels the backoff loop) and Connect stays disabled.
+	 */
 	const scaleConnected = $derived(
-		(['connecting', 'subscribing', 'ready'] as ScaleState[]).includes(ui.scaleState)
+		(['connecting', 'subscribing', 'ready', 'reconnecting'] as ScaleState[]).includes(
+			ui.scaleState
+		)
 	);
-	/** Tare + config controls are live only when the scale is fully READY. */
+	/**
+	 * Tare + config controls are live only when the scale is fully READY —
+	 * never while `reconnecting`, since GATT writes would just fail mid-outage.
+	 */
 	const scaleReady = $derived(ui.scaleState === 'ready');
 
 	const caps = $derived(ui.scaleCapabilities);
