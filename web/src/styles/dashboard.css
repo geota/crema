@@ -33,7 +33,9 @@
 	display: flex;
 	justify-content: space-between;
 	align-items: center;
-	padding: 18px 32px;
+	/* Shared page-header rhythm — see --page-pad-* in app.css. The header
+	   block sits at the same left / top origin as every other route. */
+	padding: var(--page-pad-top) var(--page-pad-x) 18px;
 	border-bottom: 1px solid rgba(244, 237, 224, 0.06);
 }
 .crema-dash-head-l {

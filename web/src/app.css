@@ -15,3 +15,16 @@
 @import 'tailwindcss';
 @import './styles/tokens.css';
 @import './styles/dashboard.css';
+
+/* ── Shared page-header rhythm ────────────────────────────────────────────
+   The five route screens were each ported independently and drifted: every
+   page set its own outer padding, so the page-header title (eyebrow + title)
+   landed at a different left / top origin on each route — switching tabs
+   visibly shifted it. These tokens fix one origin for the page-header block;
+   every route anchors its header to them so the title stays put. */
+:root {
+	/* Horizontal inset of the page-header block from the content edge. */
+	--page-pad-x: 40px;
+	/* Vertical inset of the page-header block from the content top. */
+	--page-pad-top: 32px;
+}

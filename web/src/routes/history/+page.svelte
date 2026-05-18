@@ -244,7 +244,8 @@
 		display: flex;
 		flex-direction: column;
 		min-height: 100vh;
-		padding: 28px 40px 40px;
+		/* Shared page-header rhythm — see --page-pad-* in app.css. */
+		padding: var(--page-pad-top) var(--page-pad-x) 40px;
 		gap: 20px;
 		overflow-y: auto;
 	}

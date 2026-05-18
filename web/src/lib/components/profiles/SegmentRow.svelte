@@ -153,8 +153,20 @@
 <style>
 	.pe-seg {
 		display: grid;
-		grid-template-columns: 30px 1.2fr 0.9fr 0.7fr 0.9fr 1.3fr 32px;
-		gap: 12px;
+		/* The design's row was display-only — static value text fit in narrow
+		   columns. This port makes every cell an editable input, so the small
+		   columns get honest content-sized minima (a number input + unit, a
+		   select) instead of thin fractional shares that truncated. The name
+		   and exit-when fields take the remaining flexible space. */
+		grid-template-columns:
+			28px
+			minmax(150px, 1.6fr)
+			minmax(96px, 0.8fr)
+			minmax(88px, 0.7fr)
+			minmax(96px, 0.8fr)
+			minmax(140px, 1.4fr)
+			32px;
+		gap: 14px;
 		align-items: center;
 		padding: 10px 14px;
 		background: var(--espresso-900);
@@ -181,8 +193,11 @@
 		display: flex;
 		flex-direction: column;
 		gap: 2px;
+		min-width: 0;
 	}
 	.pe-seg-name-input {
+		width: 100%;
+		min-width: 0;
 		background: transparent;
 		border: 0;
 		border-bottom: 1px solid transparent;
@@ -199,6 +214,7 @@
 	}
 	.pe-seg-mode-select,
 	.pe-seg-ramp-select {
+		max-width: 100%;
 		background: transparent;
 		border: 0;
 		font-family: var(--font-sans);
@@ -206,6 +222,9 @@
 		cursor: pointer;
 		outline: 0;
 		padding: 0;
+	}
+	.pe-seg-ramp-select {
+		width: 100%;
 	}
 	.pe-seg-mode-select {
 		font-size: 9px;
@@ -241,7 +260,9 @@
 		color: rgba(244, 237, 224, 0.5);
 	}
 	.pe-seg-numinput {
-		width: 44px;
+		/* Wide enough for a 3-digit value plus the number-spinner; the cell's
+		   minmax min keeps the input + unit from being clipped. */
+		width: 58px;
 		background: rgba(244, 237, 224, 0.04);
 		border: 1px solid rgba(244, 237, 224, 0.08);
 		border-radius: 4px;
@@ -249,7 +270,7 @@
 		font-variant-numeric: tabular-nums;
 		font-size: 13px;
 		color: var(--ink-50);
-		padding: 2px 4px;
+		padding: 3px 6px;
 		outline: 0;
 		transition: border-color var(--dur-1) var(--ease);
 	}
