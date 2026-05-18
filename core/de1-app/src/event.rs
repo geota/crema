@@ -79,6 +79,25 @@ pub enum Event {
         /// The scale's own built-in-timer reading, milliseconds, when the
         /// scale reports one (the Bookoo does); `None` otherwise.
         device_timer_ms: Option<u32>,
+        /// The scale's live beeper-volume setting `0..=5`, when the scale
+        /// echoes its settings in the weight notification (the Bookoo does);
+        /// `None` otherwise. Lets a settings control display the real value.
+        device_volume: Option<u8>,
+        /// The scale's live auto-standby timeout, minutes, when the scale
+        /// echoes its settings (the Bookoo does); `None` otherwise.
+        device_standby_minutes: Option<u8>,
+        /// The scale's live battery charge percentage, when the scale reports
+        /// it (the Bookoo does); `None` otherwise.
+        device_battery_percent: Option<u8>,
+        /// Whether the scale's flow smoothing is on, when the scale echoes its
+        /// settings in the weight notification (the Bookoo does); `None`
+        /// otherwise. Lets a settings toggle reflect the real on/off state.
+        device_flow_smoothing: Option<bool>,
+        /// The scale's live auto-stop mode id (`0` = Flow-Stop, `1` =
+        /// Cup-Removal), when the scale echoes its settings in the weight
+        /// notification (the Bookoo does); `None` otherwise. Lets a settings
+        /// selector reflect the real current mode.
+        device_auto_stop: Option<u8>,
     },
     /// The DE1 reported its water-tank level.
     WaterLevel {

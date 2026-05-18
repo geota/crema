@@ -57,7 +57,26 @@ data class EventScaleReadingInner (
 	val device_flow_g_per_s: Float? = null,
 	/// The scale's own built-in-timer reading, milliseconds, when the
 	/// scale reports one (the Bookoo does); `None` otherwise.
-	val device_timer_ms: UInt? = null
+	val device_timer_ms: UInt? = null,
+	/// The scale's live beeper-volume setting `0..=5`, when the scale
+	/// echoes its settings in the weight notification (the Bookoo does);
+	/// `None` otherwise. Lets a settings control display the real value.
+	val device_volume: UByte? = null,
+	/// The scale's live auto-standby timeout, minutes, when the scale
+	/// echoes its settings (the Bookoo does); `None` otherwise.
+	val device_standby_minutes: UByte? = null,
+	/// The scale's live battery charge percentage, when the scale reports
+	/// it (the Bookoo does); `None` otherwise.
+	val device_battery_percent: UByte? = null,
+	/// Whether the scale's flow smoothing is on, when the scale echoes its
+	/// settings in the weight notification (the Bookoo does); `None`
+	/// otherwise. Lets a settings toggle reflect the real on/off state.
+	val device_flow_smoothing: Boolean? = null,
+	/// The scale's live auto-stop mode id (`0` = Flow-Stop, `1` =
+	/// Cup-Removal), when the scale echoes its settings in the weight
+	/// notification (the Bookoo does); `None` otherwise. Lets a settings
+	/// selector reflect the real current mode.
+	val device_auto_stop: UByte? = null
 )
 
 /// Generated type representing the anonymous struct variant `WaterLevel` of the `Event` Rust enum
@@ -322,6 +341,9 @@ data class ScaleCapabilities (
 	val flow_smoothing: Boolean,
 	/// The scale accepts a command to toggle anti-mistouch.
 	val anti_mistouch: Boolean,
+	/// The scale accepts a command to select its auto-stop mode (the Bookoo's
+	/// flow-stop / cup-removal setting).
+	val auto_stop: Boolean,
 	/// The selectable display/behaviour modes the scale exposes — empty when
 	/// the scale has no switchable modes. Each entry carries the mode's wire
 	/// `id` and a display `name`.

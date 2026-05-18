@@ -279,6 +279,27 @@ impl CremaBridge {
         json(self.core().set_scale_mode(mode_id))
     }
 
+    /// Build a [`CoreOutput`] (JSON) whose command selects the connected
+    /// scale's auto-stop mode (`0` = flow-stop, `1` = cup-removal).
+    ///
+    /// Capability-gated: the command is present only when the connected scale
+    /// supports an auto-stop-mode setting and `mode_id` is in range. An
+    /// out-of-range `mode_id` yields an empty `CoreOutput`. Wired exactly like
+    /// [`set_scale_volume`](Self::set_scale_volume).
+    pub fn set_scale_auto_stop(&self, mode_id: u8) -> String {
+        json(self.core().set_scale_auto_stop(mode_id))
+    }
+
+    /// Build a [`CoreOutput`] (JSON) whose command queries the connected
+    /// scale's settings (the scale answers with a `03 0e …` notification).
+    ///
+    /// Capability-gated: the command is present only when the connected scale
+    /// exposes a configurable setting. Empty otherwise. Wired exactly like
+    /// [`tare_scale`](Self::tare_scale).
+    pub fn query_scale_settings(&self) -> String {
+        json(self.core().query_scale_settings())
+    }
+
     /// Write the DE1's steam / hot-water settings. Returns a JSON-encoded
     /// [`CoreOutput`] whose command applies them (with the legacy hot-water
     /// volume override when a scale is connected).
@@ -354,7 +375,7 @@ mod tests {
         let json = bridge.scale_capabilities().expect("a connected scale");
         let caps: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(caps["volume"]["min"], 0);
-        assert_eq!(caps["volume"]["max"], 5);
+        assert_eq!(caps["volume"]["max"], 3);
         assert_eq!(caps["reports_flow"], true);
         assert_eq!(caps["reports_timer"], true);
     }
@@ -428,7 +449,45 @@ mod tests {
         bridge.connect_scale("BOOKOO_SC".to_owned());
         let json = bridge.set_scale_mode(1);
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed["commands"].as_array().unwrap().len(), 3);
+        // Three mode writes plus the appended 0x0f settings query.
+        assert_eq!(parsed["commands"].as_array().unwrap().len(), 4);
+    }
+
+    #[test]
+    fn set_scale_auto_stop_produces_a_write_scale_command_for_a_capable_scale() {
+        let bridge = CremaBridge::new();
+        bridge.connect_scale("BOOKOO_SC".to_owned());
+        let json = bridge.set_scale_auto_stop(1);
+        assert!(json.contains("WriteScale"));
+    }
+
+    #[test]
+    fn set_scale_auto_stop_produces_no_command_for_an_out_of_range_mode_id() {
+        let bridge = CremaBridge::new();
+        bridge.connect_scale("BOOKOO_SC".to_owned());
+        let json = bridge.set_scale_auto_stop(9);
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(parsed["commands"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn query_scale_settings_produces_a_write_scale_command_for_a_capable_scale() {
+        let bridge = CremaBridge::new();
+        bridge.connect_scale("BOOKOO_SC".to_owned());
+        let json = bridge.query_scale_settings();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let commands = parsed["commands"].as_array().unwrap();
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0]["type"], "WriteScale");
+    }
+
+    #[test]
+    fn query_scale_settings_produces_no_command_for_a_weight_only_scale() {
+        let bridge = CremaBridge::new();
+        bridge.connect_scale("Decent Scale ABC".to_owned());
+        let json = bridge.query_scale_settings();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(parsed["commands"].as_array().unwrap().is_empty());
     }
 
     #[test]
@@ -440,6 +499,7 @@ mod tests {
             bridge.set_scale_flow_smoothing(true),
             bridge.set_scale_anti_mistouch(true),
             bridge.set_scale_mode(0),
+            bridge.set_scale_auto_stop(0),
         ] {
             let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
             assert!(parsed["commands"].as_array().unwrap().is_empty());

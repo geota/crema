@@ -254,6 +254,36 @@ impl CremaCore {
         }
     }
 
+    /// Append a settings-query [`Command`] (`bookoo::QUERY_SETTINGS`, command
+    /// `0x0f`) to `out`. The scale answers with a `03 0e …` notification.
+    ///
+    /// Called after a config write so the query reflects the post-change
+    /// state; the caller has already established that the connected scale
+    /// accepts the config command, so the query is unconditionally appended.
+    fn push_query_settings_command(out: &mut CoreOutput) {
+        out.commands.push(Command::WriteScale {
+            data: bookoo::QUERY_SETTINGS.to_vec(),
+        });
+    }
+
+    /// Build a [`Command`] that queries the connected scale's settings
+    /// (`bookoo::QUERY_SETTINGS`, command `0x0f`).
+    ///
+    /// Capability-gated, not device-gated: the query is emitted only when the
+    /// connected scale exposes a configurable setting (its
+    /// [`ScaleCapabilities::volume`] is `Some` — the same gate the config
+    /// methods use). The result is empty when no scale is connected or the
+    /// scale is weight-only. The scale answers with a `03 0e …` notification.
+    pub fn query_scale_settings(&self) -> CoreOutput {
+        let mut out = CoreOutput::default();
+        if let Some(scale) = &self.scale
+            && scale.capabilities().volume.is_some()
+        {
+            Self::push_query_settings_command(&mut out);
+        }
+        out
+    }
+
     /// Build a [`Command`] that sets the connected scale's beeper volume.
     ///
     /// `level` is the requested volume step; it is clamped to the connected
@@ -272,6 +302,7 @@ impl CremaCore {
             out.commands.push(Command::WriteScale {
                 data: bookoo::set_volume(level).to_vec(),
             });
+            Self::push_query_settings_command(&mut out);
         }
         out
     }
@@ -294,6 +325,7 @@ impl CremaCore {
             out.commands.push(Command::WriteScale {
                 data: bookoo::set_standby_minutes(minutes).to_vec(),
             });
+            Self::push_query_settings_command(&mut out);
         }
         out
     }
@@ -313,6 +345,7 @@ impl CremaCore {
             out.commands.push(Command::WriteScale {
                 data: bookoo::set_flow_smoothing(enabled).to_vec(),
             });
+            Self::push_query_settings_command(&mut out);
         }
         out
     }
@@ -332,6 +365,7 @@ impl CremaCore {
             out.commands.push(Command::WriteScale {
                 data: bookoo::set_anti_mistouch(enabled).to_vec(),
             });
+            Self::push_query_settings_command(&mut out);
         }
         out
     }
@@ -360,6 +394,30 @@ impl CremaCore {
                     data: command.to_vec(),
                 });
             }
+            Self::push_query_settings_command(&mut out);
+        }
+        out
+    }
+
+    /// Build a [`Command`] that selects the connected scale's auto-stop mode.
+    ///
+    /// `mode_id` is the wire value of the desired mode (`0` = flow-stop,
+    /// `1` = cup-removal). Capability-gated, not device-gated: the command is
+    /// emitted only when the connected scale's [`ScaleCapabilities::auto_stop`]
+    /// is `true` **and** `mode_id` maps to a known [`bookoo::AutoStopMode`].
+    /// An unconnected scale, a scale without the capability, or an
+    /// out-of-range `mode_id` all yield an empty [`CoreOutput`]. Modelled on
+    /// [`set_scale_mode`](Self::set_scale_mode).
+    pub fn set_scale_auto_stop(&mut self, mode_id: u8) -> CoreOutput {
+        let mut out = CoreOutput::default();
+        if let Some(scale) = &self.scale
+            && scale.capabilities().auto_stop
+            && let Some(mode) = bookoo_auto_stop_from_id(mode_id)
+        {
+            out.commands.push(Command::WriteScale {
+                data: bookoo::set_auto_stop_mode(mode).to_vec(),
+            });
+            Self::push_query_settings_command(&mut out);
         }
         out
     }
@@ -483,6 +541,11 @@ impl CremaCore {
             flow_g_per_s: estimate.flow_g_per_s,
             device_flow_g_per_s: reading.flow_g_per_s,
             device_timer_ms: reading.timer_ms,
+            device_volume: reading.volume,
+            device_standby_minutes: reading.standby_minutes,
+            device_battery_percent: reading.battery_percent,
+            device_flow_smoothing: reading.flow_smoothing,
+            device_auto_stop: reading.auto_stop,
         });
         let reason = self
             .auto_stop
@@ -628,6 +691,19 @@ fn bookoo_mode_from_id(id: u8) -> Option<bookoo::BookooMode> {
         0 => Some(bookoo::BookooMode::FlowRate),
         1 => Some(bookoo::BookooMode::Timer),
         2 => Some(bookoo::BookooMode::Auto),
+        _ => None,
+    }
+}
+
+/// Map an auto-stop-mode `id` to the [`bookoo::AutoStopMode`] the command
+/// builder expects (`0` = flow-stop, `1` = cup-removal).
+///
+/// Returns `None` for an out-of-range `id`, the final guard that the id is one
+/// the Bookoo protocol actually understands.
+fn bookoo_auto_stop_from_id(id: u8) -> Option<bookoo::AutoStopMode> {
+    match id {
+        0 => Some(bookoo::AutoStopMode::FlowStop),
+        1 => Some(bookoo::AutoStopMode::CupRemoval),
         _ => None,
     }
 }
@@ -988,9 +1064,10 @@ mod tests {
     fn set_scale_mode_emits_three_writes_in_order_for_a_capable_scale() {
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC");
-        // Selecting a mode is three writes (target on, then the other two off).
+        // Selecting a mode is three writes (target on, then the other two off),
+        // followed by the appended 0x0f settings query.
         let out = core.set_scale_mode(1);
-        assert_eq!(out.commands.len(), 3);
+        assert_eq!(out.commands.len(), 4);
         let bytes: Vec<Vec<u8>> = out
             .commands
             .into_iter()
@@ -1001,11 +1078,12 @@ mod tests {
                 data
             })
             .collect();
-        // Order must match bookoo::select_mode(Timer): Timer on, FlowRate off,
-        // Auto off.
+        // First three must match bookoo::select_mode(Timer): Timer on,
+        // FlowRate off, Auto off — then the settings query.
         let expected: Vec<Vec<u8>> = bookoo::select_mode(bookoo::BookooMode::Timer)
             .iter()
             .map(|c| c.to_vec())
+            .chain(std::iter::once(bookoo::QUERY_SETTINGS.to_vec()))
             .collect();
         assert_eq!(bytes, expected);
     }
@@ -1029,6 +1107,161 @@ mod tests {
     fn set_scale_mode_emits_nothing_without_a_scale() {
         let mut core = CremaCore::new();
         assert!(core.set_scale_mode(0).commands.is_empty());
+    }
+
+    #[test]
+    fn set_scale_auto_stop_emits_a_write_for_a_capable_scale() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC");
+        assert!(matches!(
+            core.set_scale_auto_stop(1).commands.first(),
+            Some(Command::WriteScale { .. })
+        ));
+    }
+
+    #[test]
+    fn set_scale_auto_stop_maps_each_mode_id_to_its_command() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC");
+        let Some(Command::WriteScale { data: flow_stop }) =
+            core.set_scale_auto_stop(0).commands.into_iter().next()
+        else {
+            panic!("expected a WriteScale command");
+        };
+        assert_eq!(
+            flow_stop,
+            bookoo::set_auto_stop_mode(bookoo::AutoStopMode::FlowStop)
+        );
+        let Some(Command::WriteScale { data: cup_removal }) =
+            core.set_scale_auto_stop(1).commands.into_iter().next()
+        else {
+            panic!("expected a WriteScale command");
+        };
+        assert_eq!(
+            cup_removal,
+            bookoo::set_auto_stop_mode(bookoo::AutoStopMode::CupRemoval)
+        );
+    }
+
+    #[test]
+    fn set_scale_auto_stop_emits_nothing_for_an_out_of_range_mode_id() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC");
+        // 2 is not a valid auto-stop mode — rejected gracefully, empty output.
+        assert!(core.set_scale_auto_stop(2).commands.is_empty());
+    }
+
+    #[test]
+    fn set_scale_auto_stop_emits_nothing_for_a_weight_only_scale() {
+        let mut core = CremaCore::new();
+        core.connect_scale("Decent Scale ABC");
+        assert!(core.set_scale_auto_stop(0).commands.is_empty());
+    }
+
+    #[test]
+    fn set_scale_auto_stop_emits_nothing_without_a_scale() {
+        let mut core = CremaCore::new();
+        assert!(core.set_scale_auto_stop(0).commands.is_empty());
+    }
+
+    /// The `WriteScale` data of the last command in `out`, or panics.
+    fn last_write_scale(out: &CoreOutput) -> &[u8] {
+        let Some(Command::WriteScale { data }) = out.commands.last() else {
+            panic!("expected a trailing WriteScale command");
+        };
+        data
+    }
+
+    #[test]
+    fn set_scale_volume_appends_a_settings_query_after_the_config_write() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC");
+        let out = core.set_scale_volume(3);
+        // Config write, then the 0x0f settings query.
+        assert_eq!(out.commands.len(), 2);
+        assert_eq!(last_write_scale(&out), bookoo::QUERY_SETTINGS);
+    }
+
+    #[test]
+    fn set_scale_standby_minutes_appends_a_settings_query() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC");
+        let out = core.set_scale_standby_minutes(15);
+        assert_eq!(out.commands.len(), 2);
+        assert_eq!(last_write_scale(&out), bookoo::QUERY_SETTINGS);
+    }
+
+    #[test]
+    fn set_scale_flow_smoothing_appends_a_settings_query() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC");
+        let out = core.set_scale_flow_smoothing(true);
+        assert_eq!(out.commands.len(), 2);
+        assert_eq!(last_write_scale(&out), bookoo::QUERY_SETTINGS);
+    }
+
+    #[test]
+    fn set_scale_anti_mistouch_appends_a_settings_query() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC");
+        let out = core.set_scale_anti_mistouch(false);
+        assert_eq!(out.commands.len(), 2);
+        assert_eq!(last_write_scale(&out), bookoo::QUERY_SETTINGS);
+    }
+
+    #[test]
+    fn set_scale_auto_stop_appends_a_settings_query() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC");
+        let out = core.set_scale_auto_stop(1);
+        // Config write, then the 0x0f settings query.
+        assert_eq!(out.commands.len(), 2);
+        assert_eq!(last_write_scale(&out), bookoo::QUERY_SETTINGS);
+    }
+
+    #[test]
+    fn set_scale_mode_appends_a_settings_query_after_the_three_writes() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC");
+        let out = core.set_scale_mode(1);
+        // Three mode writes, then the 0x0f settings query.
+        assert_eq!(out.commands.len(), 4);
+        assert_eq!(last_write_scale(&out), bookoo::QUERY_SETTINGS);
+    }
+
+    #[test]
+    fn set_scale_methods_append_no_query_for_a_weight_only_scale() {
+        let mut core = CremaCore::new();
+        core.connect_scale("Decent Scale ABC");
+        // An unsupported scale emits nothing at all — not even the query.
+        assert!(core.set_scale_volume(3).commands.is_empty());
+        assert!(core.set_scale_standby_minutes(15).commands.is_empty());
+        assert!(core.set_scale_flow_smoothing(true).commands.is_empty());
+        assert!(core.set_scale_anti_mistouch(true).commands.is_empty());
+        assert!(core.set_scale_mode(0).commands.is_empty());
+        assert!(core.set_scale_auto_stop(0).commands.is_empty());
+    }
+
+    #[test]
+    fn query_scale_settings_emits_the_query_for_a_bookoo() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC");
+        let out = core.query_scale_settings();
+        assert_eq!(out.commands.len(), 1);
+        assert_eq!(last_write_scale(&out), bookoo::QUERY_SETTINGS);
+    }
+
+    #[test]
+    fn query_scale_settings_emits_nothing_for_a_weight_only_scale() {
+        let mut core = CremaCore::new();
+        core.connect_scale("Decent Scale ABC");
+        assert!(core.query_scale_settings().commands.is_empty());
+    }
+
+    #[test]
+    fn query_scale_settings_emits_nothing_without_a_scale() {
+        let core = CremaCore::new();
+        assert!(core.query_scale_settings().commands.is_empty());
     }
 
     #[test]

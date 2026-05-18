@@ -59,6 +59,35 @@ export type Event =
 	 * scale reports one (the Bookoo does); `None` otherwise.
 	 */
 	device_timer_ms?: number;
+	/**
+	 * The scale's live beeper-volume setting `0..=5`, when the scale
+	 * echoes its settings in the weight notification (the Bookoo does);
+	 * `None` otherwise. Lets a settings control display the real value.
+	 */
+	device_volume?: number;
+	/**
+	 * The scale's live auto-standby timeout, minutes, when the scale
+	 * echoes its settings (the Bookoo does); `None` otherwise.
+	 */
+	device_standby_minutes?: number;
+	/**
+	 * The scale's live battery charge percentage, when the scale reports
+	 * it (the Bookoo does); `None` otherwise.
+	 */
+	device_battery_percent?: number;
+	/**
+	 * Whether the scale's flow smoothing is on, when the scale echoes its
+	 * settings in the weight notification (the Bookoo does); `None`
+	 * otherwise. Lets a settings toggle reflect the real on/off state.
+	 */
+	device_flow_smoothing?: boolean;
+	/**
+	 * The scale's live auto-stop mode id (`0` = Flow-Stop, `1` =
+	 * Cup-Removal), when the scale echoes its settings in the weight
+	 * notification (the Bookoo does); `None` otherwise. Lets a settings
+	 * selector reflect the real current mode.
+	 */
+	device_auto_stop?: number;
 }}
 	/** The DE1 reported its water-tank level. */
 	| { type: "WaterLevel", content: {
@@ -243,6 +272,11 @@ export interface ScaleCapabilities {
 	flow_smoothing: boolean;
 	/** The scale accepts a command to toggle anti-mistouch. */
 	anti_mistouch: boolean;
+	/**
+	 * The scale accepts a command to select its auto-stop mode (the Bookoo's
+	 * flow-stop / cup-removal setting).
+	 */
+	auto_stop: boolean;
 	/**
 	 * The selectable display/behaviour modes the scale exposes — empty when
 	 * the scale has no switchable modes. Each entry carries the mode's wire

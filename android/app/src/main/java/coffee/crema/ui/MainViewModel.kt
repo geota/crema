@@ -18,20 +18,24 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.json.Json
 
 /**
- * Default scale beeper-volume step shown when a volume-capable scale connects.
- * The scale's true current volume is not read back in this slice (it needs the
- * `0x0f` settings decode), so the control starts here and is write-only. The
- * control's actual range is taken from the scale's `ScaleCapabilities.volume`
- * descriptor; this default is only the starting step.
+ * Default scale beeper-volume step shown before the first live reading.
+ *
+ * The scale's true volume is decoded live from every Bookoo weight
+ * notification (`Event.ScaleReading.device_volume`) and projected into
+ * [MainUiState.scaleVolume] as soon as it arrives — this default is only the
+ * fallback step the control shows in the brief window before that first
+ * reading. The control's range is taken from `ScaleCapabilities.volume`.
  */
 const val DEFAULT_SCALE_VOLUME: Int = 3
 
 /**
- * Default scale auto-standby timeout (minutes) shown when a standby-capable
- * scale connects. Like the volume default this is write-only for this slice —
- * the scale's true value is not read back (it needs the `0x0f` settings
- * decode). The control's actual range comes from the scale's
- * `ScaleCapabilities.standby_minutes` descriptor; this is only the starting step.
+ * Default scale auto-standby timeout (minutes) shown before the first live
+ * reading.
+ *
+ * Like [DEFAULT_SCALE_VOLUME], this is only the fallback shown until the first
+ * `Event.ScaleReading.device_standby_minutes` arrives, after which the control
+ * tracks the scale's real value. The range comes from
+ * `ScaleCapabilities.standby_minutes`.
  */
 const val DEFAULT_SCALE_STANDBY_MINUTES: Int = 15
 
@@ -69,23 +73,51 @@ data class MainUiState(
      */
     val scaleCapabilities: ScaleCapabilities? = null,
     /**
-     * The scale beeper-volume step (0..5) the UI currently shows. Write-only
-     * for this slice: the scale's actual current volume is not read back (that
-     * needs the `0x0f` settings decode, not yet implemented), so this starts
-     * at a sensible default and tracks only what the user last set.
+     * The scale beeper-volume step (0..5) the UI currently shows.
+     *
+     * Two-way: it follows the scale's live value, decoded from every Bookoo
+     * weight notification (`Event.ScaleReading.device_volume`), and is also
+     * updated optimistically the moment the user changes the control — the
+     * stream then catches up. Starts at [DEFAULT_SCALE_VOLUME] until the first
+     * reading arrives.
      */
     val scaleVolume: Int = DEFAULT_SCALE_VOLUME,
     /**
      * The scale auto-standby timeout (minutes) the UI currently shows.
-     * Write-only for this slice, like [scaleVolume] — the scale's actual value
-     * is not read back. Starts at [DEFAULT_SCALE_STANDBY_MINUTES].
+     *
+     * Two-way like [scaleVolume]: it follows the scale's live value
+     * (`Event.ScaleReading.device_standby_minutes`) and is updated
+     * optimistically on user change. Starts at [DEFAULT_SCALE_STANDBY_MINUTES].
      */
     val scaleStandbyMinutes: Int = DEFAULT_SCALE_STANDBY_MINUTES,
     /**
-     * Whether the scale's flow smoothing toggle is shown as on. Write-only —
-     * the scale's actual state is not read back; starts off.
+     * The scale's battery charge percentage, or null before the first reading
+     * (or for a scale that does not report it). Read-only — only the Bookoo
+     * reports a battery level, decoded from its weight notification.
+     */
+    val scaleBatteryPercent: Int? = null,
+    /**
+     * Whether the scale's flow smoothing toggle is shown as on.
+     *
+     * Two-way like [scaleVolume]: the Bookoo echoes its real flow-smoothing
+     * state in every weight notification (`Event.ScaleReading.device_flow_smoothing`),
+     * so the toggle follows that live value; it is also updated optimistically
+     * the moment the user flips the control, after which the stream confirms
+     * it. Starts off until the first reading arrives.
      */
     val scaleFlowSmoothing: Boolean = false,
+    /**
+     * The scale's currently selected auto-stop mode id (`0` = Flow-Stop, `1` =
+     * Cup-Removal), or `null` until the first reading arrives (or for a scale
+     * that does not report it).
+     *
+     * Two-way like [scaleFlowSmoothing]: the Bookoo echoes its real auto-stop
+     * mode in every weight notification (`Event.ScaleReading.device_auto_stop`),
+     * so the selector highlights that live value; it is also updated
+     * optimistically the moment the user picks a mode, after which the stream
+     * confirms it.
+     */
+    val scaleAutoStop: Int? = null,
     /**
      * Whether the scale's anti-mistouch toggle is shown as on. Write-only —
      * the scale's actual state is not read back; starts off.
@@ -217,6 +249,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             scaleVolume = DEFAULT_SCALE_VOLUME,
             scaleStandbyMinutes = DEFAULT_SCALE_STANDBY_MINUTES,
             scaleFlowSmoothing = false,
+            scaleAutoStop = null,
             scaleAntiMistouch = false,
         )
     }
@@ -228,6 +261,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *
      * Capability-driven, never device-driven: the UI never branches on the
      * concrete scale model, only on the capability flags.
+     *
+     * Also fires a baseline settings query at connect time: the core emits a
+     * `Command.WriteScale` carrying the scale's `0x0f` settings-query command
+     * (capability-gated — empty for a weight-only scale), routed through the
+     * shared command path so the scale's `03 0e` settings response lands in
+     * the capture.
      */
     private fun refreshScaleCapabilities() {
         val capsJson = runCatching { bridge.scaleCapabilities() }.getOrNull()
@@ -237,6 +276,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }.getOrNull()
         }
         _ui.value = _ui.value.copy(scaleCapabilities = caps)
+
+        val queryRaw = runCatching { bridge.queryScaleSettings() }.getOrElse {
+            appendLog("Query scale settings failed: ${it.message}")
+            return
+        }
+        onCoreOutputJson(queryRaw)
     }
 
     /**
@@ -249,7 +294,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * an out-of-range value is harmless either way. The core only emits a
      * command for a scale whose capabilities include a settable `volume`, so
      * this is capability-gated end to end. The UI's shown volume is updated
-     * optimistically (the value is not read back).
+     * optimistically; the live `Event.ScaleReading.device_volume` stream then
+     * catches up and confirms the scale's real value.
      */
     fun setScaleVolume(level: Int) {
         val range = _ui.value.scaleCapabilities?.volume
@@ -277,7 +323,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * `ScaleCapabilities.standby_minutes` `[min, max]` bounds; the core clamps
      * again, so an out-of-range value is harmless. Capability-gated end to end:
      * the core emits a command only for a scale that exposes a configurable
-     * auto-standby. The UI's shown value is updated optimistically.
+     * auto-standby. The UI's shown value is updated optimistically; the live
+     * `Event.ScaleReading.device_standby_minutes` stream then catches up.
      */
     fun setScaleStandbyMinutes(minutes: Int) {
         val range = _ui.value.scaleCapabilities?.standby_minutes
@@ -301,7 +348,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * the command bytes, then routes the resulting `Command.WriteScale` through
      * the shared command path. Capability-gated: the core emits a command only
      * for a scale that supports flow smoothing. The UI's shown toggle is
-     * updated optimistically (the value is not read back).
+     * updated optimistically; the live `Event.ScaleReading.device_flow_smoothing`
+     * stream then catches up and confirms the scale's real state.
      */
     fun setScaleFlowSmoothing(enabled: Boolean) {
         _ui.value = _ui.value.copy(scaleFlowSmoothing = enabled)
@@ -346,6 +394,27 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             bridge.setScaleMode(modeId.toUByte())
         }.getOrElse {
             appendLog("Set mode failed: ${it.message}")
+            return
+        }
+        onCoreOutputJson(raw)
+    }
+
+    /**
+     * Select the connected scale's auto-stop mode ([modeId]: 0 = flow-stop,
+     * 1 = cup-removal). Asks the core for the command bytes, then routes the
+     * resulting `Command.WriteScale` through the shared command path.
+     * Capability-gated end to end: the core emits a command only for a scale
+     * that supports an auto-stop-mode setting and only for an in-range
+     * [modeId]. The UI's shown selection is updated optimistically; the live
+     * `Event.ScaleReading.device_auto_stop` stream then catches up and confirms
+     * the scale's real mode.
+     */
+    fun setScaleAutoStop(modeId: Int) {
+        _ui.value = _ui.value.copy(scaleAutoStop = modeId)
+        val raw = runCatching {
+            bridge.setScaleAutoStop(modeId.toUByte())
+        }.getOrElse {
+            appendLog("Set auto-stop failed: ${it.message}")
             return
         }
         onCoreOutputJson(raw)
@@ -445,10 +514,24 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
             is Event.ScaleReading -> {
                 val r = event.content
+                // The Bookoo echoes its live settings in every weight
+                // notification. Project them into the config controls so they
+                // show the scale's real current state — `device_*` is null for
+                // scales that do not report a setting, in which case the
+                // control keeps its last value.
                 _ui.value = _ui.value.copy(
                     scaleWeightG = r.weight_g,
                     scaleFlowGPerS = r.device_flow_g_per_s,
                     scaleTimerMs = r.device_timer_ms?.toLong(),
+                    scaleVolume = r.device_volume?.toInt() ?: _ui.value.scaleVolume,
+                    scaleStandbyMinutes = r.device_standby_minutes?.toInt()
+                        ?: _ui.value.scaleStandbyMinutes,
+                    scaleBatteryPercent = r.device_battery_percent?.toInt()
+                        ?: _ui.value.scaleBatteryPercent,
+                    scaleFlowSmoothing = r.device_flow_smoothing
+                        ?: _ui.value.scaleFlowSmoothing,
+                    scaleAutoStop = r.device_auto_stop?.toInt()
+                        ?: _ui.value.scaleAutoStop,
                 )
                 // Weight is high-rate; do not flood the log with every reading.
             }
