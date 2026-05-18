@@ -1,9 +1,16 @@
-@import 'tailwindcss';
+/* Crema web — global stylesheet.
 
-/* daisyUI 5 is registered as a CSS plugin (no JS/Tailwind config file in v4).
-   The `coffee` theme is thematically apt for an espresso app — warm browns on
-   a dark base. It is set as the only (and default) theme, so the document
-   renders under it without a `data-theme` attribute. */
-@plugin "daisyui" {
-	themes: coffee --default;
-}
+   Tailwind v4 stays for utility classes (`@tailwindcss/vite` resolves
+   `@import "tailwindcss"`). daisyUI has been dropped in favour of the Crema
+   design system's own CSS kit.
+
+   The design tokens — the single source of truth for colour, type, spacing,
+   radii, shadows and motion — are pulled in from `styles/tokens.css`, which
+   also carries the Google Fonts (Newsreader, Hanken Grotesk, JetBrains Mono)
+   and Phosphor icon-font `@import`s. It defines the `:root` custom
+   properties, the `[data-theme="dark"]` overrides, the `.t-*` type-role
+   classes and the `html` / `body` defaults, so the whole app renders under
+   the design system. */
+
+@import 'tailwindcss';
+@import './styles/tokens.css';
