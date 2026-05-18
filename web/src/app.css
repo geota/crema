@@ -1,5 +1,9 @@
 @import 'tailwindcss';
 
 /* daisyUI 5 is registered as a CSS plugin (no JS/Tailwind config file in v4).
-   Themes can be tuned later via `@plugin "daisyui" { themes: ... }`. */
-@plugin "daisyui";
+   The `coffee` theme is thematically apt for an espresso app — warm browns on
+   a dark base. It is set as the only (and default) theme, so the document
+   renders under it without a `data-theme` attribute. */
+@plugin "daisyui" {
+	themes: coffee --default;
+}
