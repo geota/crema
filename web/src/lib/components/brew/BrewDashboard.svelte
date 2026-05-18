@@ -38,11 +38,11 @@
 	/** The Quick Sheet's local parameter model — never reaches the machine. */
 	const params = new BrewParamState();
 	/**
-	 * Whether the Quick Sheet is docked open. Starts open (the design's
-	 * variant-G look); the sheet's Close button and scrim dismiss it, and the
-	 * header's QuickPill brings it back.
+	 * Whether the Quick Sheet is docked open. Starts hidden — the dashboard is
+	 * the primary view; the header's QuickPill opens the sheet, and its Close
+	 * button or a scrim tap dismisses it again.
 	 */
-	let quickSheetOpen = $state(true);
+	let quickSheetOpen = $state(false);
 	/** The selected favorite profile id. */
 	let favoriteId = $state(SAMPLE_FAVORITES[0].id);
 	/**
