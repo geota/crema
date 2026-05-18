@@ -6,22 +6,23 @@
    Import once at the document root; everything else references these vars.
    ============================================================================ */
 
-/* ---- Fonts ---------------------------------------------------------------
-   All three families load from Google Fonts. If you mirror the project for
-   offline use, drop matching .woff2 files into /fonts/ and replace these
-   @import URLs with @font-face declarations.
-   -------------------------------------------------------------------------- */
-@import url('https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&family=Hanken+Grotesk:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
-
 /* ---- Phosphor icons ------------------------------------------------------
-   The design renders icons as <i class="ph ph-…"> / ph-duotone. Pulled from
-   the jsDelivr CDN for now; self-hosting the .woff2 / .css for offline use is
-   a later polish item (mirror into /fonts/, same as the Google Fonts note
-   above). Regular + duotone weights cover every icon the design uses.
+   The design renders icons as <i class="ph ph-…"> / ph-duotone / ph-fill.
+   Sourced from the `@phosphor-icons/web` npm package and imported locally so
+   Vite bundles and fingerprints the icon fonts. (A *remote* @import nested in
+   this file is hoisted below other rules when the stylesheet is bundled,
+   becomes an invalid mid-sheet @import, and is dropped — which is why the
+   icons went missing.) Regular + duotone + fill cover every icon used.
    -------------------------------------------------------------------------- */
-@import url('https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/regular/style.css');
-@import url('https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/duotone/style.css');
-@import url('https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/fill/style.css');
+@import '@phosphor-icons/web/regular';
+@import '@phosphor-icons/web/duotone';
+@import '@phosphor-icons/web/fill';
+
+/* ---- Fonts ---------------------------------------------------------------
+   Newsreader / Hanken Grotesk / JetBrains Mono load via a <link> in app.html
+   (a <head> link is immune to the @import-ordering pitfall above). Self-
+   hosting the .woff2 files for true offline use is a later polish item.
+   -------------------------------------------------------------------------- */
 
 :root {
   /* ========================================================================
