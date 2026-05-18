@@ -14,7 +14,8 @@
  */
 
 import type { Event, ScaleCapabilities } from '$lib/core';
-import type { De1State } from '$lib/ble/de1';
+import type { De1State, De1Diagnostics } from '$lib/ble/de1';
+import { EMPTY_DE1_DIAGNOSTICS } from '$lib/ble/de1';
 import type { ScaleState } from '$lib/ble/scale';
 
 /** Default scale beeper-volume step shown before the first live reading. */
@@ -127,6 +128,16 @@ export interface UiSnapshot {
 
 	/** The active profile's display name, or `null` when none is selected. */
 	readonly activeProfileName: string | null;
+
+	// ---- DE1 connection diagnostics --------------------------------------
+	//
+	// Proof, after a connect, that the device the chooser selected is genuinely
+	// a DE1: the selected device's name + id, whether the `A000` service and
+	// the three DE1 characteristics resolved (`gattVerified`), and a live
+	// notification tally so the Machine settings panel can show data flowing.
+
+	/** The DE1 connection-diagnostics snapshot, folded in from `De1Manager`. */
+	readonly de1Diagnostics: De1Diagnostics;
 }
 
 /** The initial snapshot — every default matches the Android `MainUiState`. */
@@ -156,7 +167,8 @@ export const INITIAL_SNAPSHOT: UiSnapshot = {
 	shotTelemetry: [],
 	shotInProgress: false,
 	shotElapsedMs: 0,
-	activeProfileName: null
+	activeProfileName: null,
+	de1Diagnostics: EMPTY_DE1_DIAGNOSTICS
 };
 
 /**

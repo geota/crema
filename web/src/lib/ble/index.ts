@@ -16,5 +16,11 @@ export {
 	type BleNotification,
 	type NotificationSink
 } from './transport';
-export { De1Manager, type De1State, type De1ManagerCallbacks } from './de1';
+export {
+	De1Manager,
+	EMPTY_DE1_DIAGNOSTICS,
+	type De1State,
+	type De1ManagerCallbacks,
+	type De1Diagnostics
+} from './de1';
 export { ScaleManager, type ScaleState, type ScaleManagerCallbacks } from './scale';

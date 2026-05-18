@@ -16,7 +16,7 @@
  */
 
 import { loadCore, type Command, type CoreOutput, type CremaCore } from '$lib/core';
-import { De1Manager, ScaleManager } from '$lib/ble';
+import { De1Manager, EMPTY_DE1_DIAGNOSTICS, ScaleManager } from '$lib/ble';
 import { getHistoryStore } from '$lib/history';
 import { CremaUiState, DEFAULT_SCALE_STANDBY_MINUTES, DEFAULT_SCALE_VOLUME } from './ui-state.svelte';
 
@@ -34,8 +34,15 @@ export class CremaApp {
 	constructor(private readonly core: CremaCore) {
 		this.de1 = new De1Manager(core, {
 			onCoreOutput: (output) => this.applyCoreOutput(output),
-			onStatus: (line) => this.state.patch({ status: line }),
-			onState: (de1State) => this.state.patch({ de1State })
+			// A DE1 status line is both the live status and an event-log entry,
+			// so the connect's step-by-step diagnostics land in the log.
+			onStatus: (line) => {
+				this.state.patch({ status: line });
+				this.state.log(line);
+			},
+			onState: (de1State) => this.state.patch({ de1State }),
+			// The connection-diagnostics snapshot — fold it straight in.
+			onDiagnostics: (de1Diagnostics) => this.state.patch({ de1Diagnostics })
 		});
 		this.scale = new ScaleManager(core, {
 			onCoreOutput: (output) => this.applyCoreOutput(output),
@@ -120,7 +127,8 @@ export class CremaApp {
 			latestTelemetry: null,
 			shotTelemetry: [],
 			shotInProgress: false,
-			shotElapsedMs: 0
+			shotElapsedMs: 0,
+			de1Diagnostics: EMPTY_DE1_DIAGNOSTICS
 		});
 		await this.de1.connect();
 	}
@@ -135,7 +143,8 @@ export class CremaApp {
 			latestTelemetry: null,
 			shotTelemetry: [],
 			shotInProgress: false,
-			shotElapsedMs: 0
+			shotElapsedMs: 0,
+			de1Diagnostics: EMPTY_DE1_DIAGNOSTICS
 		});
 	}
 

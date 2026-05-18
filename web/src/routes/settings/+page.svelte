@@ -43,11 +43,15 @@
 	import AdvancedSection from '$lib/components/settings/sections/AdvancedSection.svelte';
 	import AboutSection from '$lib/components/settings/sections/AboutSection.svelte';
 
+	import { INITIAL_SNAPSHOT } from '$lib/state';
+
 	const ctx = getCremaAppContext();
 	/** The shared orchestrator, or `null` while the wasm core loads. */
 	const app = $derived(ctx().app);
+	/** The live UI snapshot — drives the Machine section's connection panel. */
+	const snapshot = $derived(app?.state.current ?? INITIAL_SNAPSHOT);
 	/** The DE1's coarse connection state — drives the Machine section. */
-	const de1State = $derived(app?.state.current.de1State ?? 'idle');
+	const de1State = $derived(snapshot.de1State);
 
 	// Constructing the settings store applies the persisted theme to <html>.
 	getSettingsStore();
@@ -102,7 +106,7 @@
 		<!-- Right content pane -->
 		<div class="st-content">
 			{#if active === 'machine'}
-				<MachineSection {app} {de1State} />
+				<MachineSection {app} {de1State} {snapshot} />
 			{:else if active === 'brew'}
 				<BrewDefaultsSection />
 			{:else if active === 'water'}

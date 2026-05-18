@@ -15,8 +15,22 @@
 	 * placeholders. The firmware-update block, Rename, Forget-device, and the
 	 * peripherals list need DE1 / extra-BLE-device support the shell does not
 	 * have; each is marked with a `// TODO`.
+	 *
+	 * ## DE1 connection diagnostics
+	 *
+	 * The "Connection diagnostics" group is the real proof a connected device
+	 * is genuinely a DE1. A DE1's Nordic nRF5x BLE module can show in the
+	 * browser chooser under a generic name ("nRF5x"), so the name alone is not
+	 * proof. The panel surfaces the structural evidence from `lib/state`'s
+	 * `de1Diagnostics`: the selected device's name + id, a "GATT verified"
+	 * indicator (true only once the `A000` service and the StateInfo /
+	 * ShotSample / WaterLevels characteristics resolved), the live decoded
+	 * machine state, and a ticking notification count. A valid machine state
+	 * plus a rising count is unambiguous proof; a non-DE1 device fails GATT
+	 * verification (the connect itself would have failed at the failing step,
+	 * named in the event log).
 	 */
-	import type { CremaApp } from '$lib/state';
+	import type { CremaApp, UiSnapshot } from '$lib/state';
 	import type { De1State } from '$lib/ble';
 	import { getSettingsStore } from '$lib/settings';
 	import StSectionHead from '../StSectionHead.svelte';
@@ -27,10 +41,17 @@
 	import StButton from '../StButton.svelte';
 	import StStatusDot from '../StStatusDot.svelte';
 
-	let { app, de1State }: { app: CremaApp | null; de1State: De1State } = $props();
+	let {
+		app,
+		de1State,
+		snapshot
+	}: { app: CremaApp | null; de1State: De1State; snapshot: UiSnapshot } = $props();
 
 	const settings = getSettingsStore();
 	const prefs = $derived(settings.current);
+
+	/** The DE1 connection-diagnostics snapshot — proof the device is a DE1. */
+	const diag = $derived(snapshot.de1Diagnostics);
 
 	/** A DE1 link counts as up once connecting through ready / reconnecting. */
 	const connected = $derived(
@@ -62,6 +83,28 @@
 	function disconnect(): void {
 		void app?.disconnectDe1();
 	}
+
+	/** Live "data is flowing" — at least one DE1 notification received. */
+	const dataFlowing = $derived(diag.notificationCount > 0);
+
+	/**
+	 * The notification-count line — the running total plus, once the first
+	 * notification has arrived, how long ago the last one landed.
+	 */
+	const notificationsLabel = $derived.by(() => {
+		if (diag.notificationCount === 0) {
+			return connected ? 'Waiting for first notification…' : 'No notifications';
+		}
+		let line = `${diag.notificationCount} received`;
+		if (diag.lastNotificationAtMs !== null) {
+			const ageMs = Math.max(0, performance.now() - diag.lastNotificationAtMs);
+			line += `, last ${(ageMs / 1000).toFixed(1)}s ago`;
+		}
+		return line;
+	});
+
+	/** The decoded machine state + substate, or a placeholder before the first. */
+	const machineStateLabel = $derived(snapshot.machineState ?? '— (no StateInfo yet)');
 
 	function updateFirmware(): void {
 		// TODO: the DE1 firmware-update path needs a BLE write channel the shell
@@ -194,6 +237,57 @@
 	</StRow>
 </StGroup>
 
+<StGroup
+	title="DE1 connection diagnostics"
+	sub="Proof the connected device is genuinely a DE1. A DE1's Nordic nRF5x module can appear in the chooser as a generic name, so this verifies the GATT layout and shows live data flowing."
+>
+	<StRow title="Connection state" sub="The coarse DE1 link state.">
+		{#snippet control()}
+			<StStatusDot ok={connected} label={stateLabel} />
+		{/snippet}
+	</StRow>
+	<StRow
+		title="Selected device"
+		sub="The name and browser device id of the device the chooser picked."
+	>
+		{#snippet control()}
+			<span class="st-diag-mono">
+				{diag.deviceName ?? '—'}
+			</span>
+		{/snippet}
+		{#snippet hint()}
+			<span class="st-diag-id">{diag.deviceId ?? 'no device'}</span>
+		{/snippet}
+	</StRow>
+	<StRow
+		title="DE1 GATT verified"
+		sub="True once service A000 and the StateInfo (A00E), ShotSample (A00D) and WaterLevels (A011) characteristics resolved. A non-DE1 board fails here."
+	>
+		{#snippet control()}
+			<StStatusDot
+				ok={diag.gattVerified}
+				label={diag.gattVerified ? 'Verified DE1' : 'Not verified'}
+			/>
+		{/snippet}
+	</StRow>
+	<StRow
+		title="Machine state"
+		sub="The live decoded DE1 state and substate, from the StateInfo notification stream."
+	>
+		{#snippet control()}
+			<span class="st-diag-mono">{machineStateLabel}</span>
+		{/snippet}
+	</StRow>
+	<StRow
+		title="Notifications received"
+		sub="DE1 notifications decoded since connecting — a rising count is live proof the device is streaming valid DE1 data."
+	>
+		{#snippet control()}
+			<StStatusDot ok={dataFlowing} label={notificationsLabel} />
+		{/snippet}
+	</StRow>
+</StGroup>
+
 <StGroup title="Peripherals" sub="Bluetooth devices Crema can talk to.">
 	<!-- TODO: a peripheral registry (grinder / tamper) is not in the shell;
 	     the scale's live state lives on the Scale page. Faithful UI only. -->
@@ -219,3 +313,22 @@
 		{/snippet}
 	</StRow>
 </StGroup>
+
+<style>
+	/* Diagnostics value cells — mono so the device id and decoded machine
+	   state read as data, consistent with the design's mono usage. */
+	.st-diag-mono {
+		font-family: var(--font-mono);
+		font-size: 12px;
+		color: var(--ink-50);
+		font-variant-numeric: tabular-nums;
+	}
+	.st-diag-id {
+		font-family: var(--font-mono);
+		font-size: 10px;
+		color: rgba(244, 237, 224, 0.4);
+		word-break: break-all;
+		max-width: 220px;
+		display: inline-block;
+	}
+</style>

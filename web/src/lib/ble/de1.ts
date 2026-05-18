@@ -23,6 +23,12 @@ import type { CremaCore, NotificationSource } from '$lib/core';
 import { De1Uuids } from './de1-uuids';
 import { BleDevice, requestDevice, type ConnState } from './transport';
 
+/** The three `NotificationSource`s the DE1's characteristics route to. */
+type De1NotificationSource = Extract<
+	NotificationSource,
+	'De1State' | 'De1ShotSample' | 'De1WaterLevels'
+>;
+
 /** Coarse state of the DE1 connection — mirrors the Android manager's enum. */
 export type De1State =
 	| 'idle'
@@ -33,6 +39,47 @@ export type De1State =
 	| 'disconnected'
 	| 'failed';
 
+/**
+ * The connection-diagnostics snapshot folded into the UI state — proof, after
+ * a connect, that the device the chooser selected is genuinely a DE1.
+ *
+ * The DE1's BLE module is a Nordic nRF5x chip and can appear in the chooser
+ * under a generic name like "nRF5x" — name alone is not proof. The proof is
+ * structural: a real DE1's GATT has the `A000` service with the StateInfo,
+ * ShotSample and WaterLevels characteristics, and a non-DE1 board fails
+ * service / characteristic resolution. `gattVerified` is `true` only once all
+ * four have resolved; `notificationCount` ticking upward is live proof the
+ * device is streaming decodable DE1 data.
+ */
+export interface De1Diagnostics {
+	/** The selected device's advertised / chosen name, or `null` pre-connect. */
+	readonly deviceName: string | null;
+	/** The browser's opaque per-origin device id, or `null` pre-connect. */
+	readonly deviceId: string | null;
+	/**
+	 * `true` once the `A000` service and all three DE1 characteristics
+	 * (StateInfo / ShotSample / WaterLevels) resolved and subscribed — the
+	 * structural proof the connected device is a DE1.
+	 */
+	readonly gattVerified: boolean;
+	/** Count of DE1 notifications received since the connect began. */
+	readonly notificationCount: number;
+	/**
+	 * `performance.now()` timestamp of the most recent DE1 notification, or
+	 * `null` before the first one — drives the "data is flowing" indicator.
+	 */
+	readonly lastNotificationAtMs: number | null;
+}
+
+/** The pre-connect / disconnected diagnostics snapshot. */
+export const EMPTY_DE1_DIAGNOSTICS: De1Diagnostics = {
+	deviceName: null,
+	deviceId: null,
+	gattVerified: false,
+	notificationCount: 0,
+	lastNotificationAtMs: null
+};
+
 /** Callbacks the manager reports up to the orchestrator. */
 export interface De1ManagerCallbacks {
 	/** A raw `CoreOutput` is ready to be folded into state. */
@@ -41,6 +88,8 @@ export interface De1ManagerCallbacks {
 	onStatus: (line: string) => void;
 	/** The coarse connection state advanced. */
 	onState: (state: De1State) => void;
+	/** The connection-diagnostics snapshot changed — fold it into UI state. */
+	onDiagnostics: (diagnostics: De1Diagnostics) => void;
 }
 
 /**
@@ -50,6 +99,23 @@ export interface De1ManagerCallbacks {
 export class De1Manager {
 	private device: BleDevice | null = null;
 
+	/**
+	 * The live connection-diagnostics snapshot. Mutated through {@link patchDiagnostics}
+	 * so every change is published to the orchestrator via `onDiagnostics`.
+	 */
+	private diagnostics: De1Diagnostics = EMPTY_DE1_DIAGNOSTICS;
+
+	/**
+	 * Per-source notification tallies since the current connect began. Kept
+	 * separately from the published {@link diagnostics} so the manager can
+	 * report a per-characteristic breakdown and a running total.
+	 */
+	private notificationCounts: Record<De1NotificationSource, number> = {
+		De1State: 0,
+		De1ShotSample: 0,
+		De1WaterLevels: 0
+	};
+
 	constructor(
 		private readonly core: CremaCore,
 		private readonly callbacks: De1ManagerCallbacks
@@ -58,6 +124,12 @@ export class De1Manager {
 	/** The current GATT link state, for the connection card. */
 	get connectionState(): ConnState {
 		return this.device?.connectionState ?? 'disconnected';
+	}
+
+	/** Patch the diagnostics snapshot and publish it to the orchestrator. */
+	private patchDiagnostics(partial: Partial<De1Diagnostics>): void {
+		this.diagnostics = { ...this.diagnostics, ...partial };
+		this.callbacks.onDiagnostics(this.diagnostics);
 	}
 
 	/**
@@ -70,13 +142,26 @@ export class De1Manager {
 	 */
 	async connect(): Promise<void> {
 		this.callbacks.onState('connecting');
+		// Start each connect from a clean diagnostics slate.
+		this.patchDiagnostics(EMPTY_DE1_DIAGNOSTICS);
+		this.notificationCounts = { De1State: 0, De1ShotSample: 0, De1WaterLevels: 0 };
+		// `step` names the diagnostics stage in flight, so a thrown error can be
+		// attributed precisely — "DE1 service A000" vs. a specific characteristic
+		// — which is how the user learns a non-DE1 device was selected.
+		let step = 'device chooser';
 		this.callbacks.onStatus('Requesting a DE1…');
 		try {
 			const device = await requestDevice({
-				filters: De1Uuids.NAME_PREFIXES.map((namePrefix) => ({ namePrefix })),
+				// filters: De1Uuids.NAME_PREFIXES.map((namePrefix) => ({ namePrefix })),
+				acceptAllDevices: true,
 				optionalServices: [De1Uuids.SERVICE]
 			});
 			this.device = device;
+			// Record and surface exactly which device the chooser selected — the
+			// name (which a DE1's Nordic module may show as "nRF5x") and the
+			// browser's opaque per-origin device id.
+			this.patchDiagnostics({ deviceName: device.name, deviceId: device.id });
+			this.callbacks.onStatus(`Selected device: ${device.name} (id ${device.id})`);
 			// A terminal disconnect — a user-initiated `disconnect()` or the
 			// auto-reconnect loop giving up after exhausting its attempts.
 			device.onDisconnected(() => {
@@ -94,8 +179,10 @@ export class De1Manager {
 				this.callbacks.onStatus('Reconnected — receiving DE1 notifications');
 			});
 
+			step = 'GATT connect';
 			this.callbacks.onStatus(`Connecting to ${device.name}…`);
 			await device.connectGatt();
+			this.callbacks.onStatus('GATT connected');
 
 			// One sink for all three characteristics — preserves arrival order.
 			device.setSink((notification) => {
@@ -103,25 +190,58 @@ export class De1Manager {
 				if (source === null) {
 					return;
 				}
+				// Count the notification per source and stamp the arrival — live
+				// proof the device is streaming decodable DE1 data.
+				this.notificationCounts[source] += 1;
+				const total =
+					this.notificationCounts.De1State +
+					this.notificationCounts.De1ShotSample +
+					this.notificationCounts.De1WaterLevels;
+				this.patchDiagnostics({
+					notificationCount: total,
+					lastNotificationAtMs: notification.atMs
+				});
 				void this.core
 					.onNotification(source, notification.data, notification.atMs)
 					.then(this.callbacks.onCoreOutput);
 			});
 
 			this.callbacks.onState('subscribing');
-			this.callbacks.onStatus('Subscribing to StateInfo + ShotSample…');
 			// Subscribe in series — Web Bluetooth serialises GATT ops anyway,
-			// and the device's shared sink keeps cross-characteristic order.
+			// and the device's shared sink keeps cross-characteristic order. Each
+			// subscribe resolves the `A000` service then the characteristic, so a
+			// failure here is the structural tell that the device is not a DE1.
+			step = 'DE1 service A000';
+			this.callbacks.onStatus('Resolving DE1 service A000…');
+			step = 'StateInfo characteristic A00E';
 			await device.startNotifications(De1Uuids.SERVICE, De1Uuids.STATE_INFO);
-			await device.startNotifications(De1Uuids.SERVICE, De1Uuids.SHOT_SAMPLE);
-			await device.startNotifications(De1Uuids.SERVICE, De1Uuids.WATER_LEVELS);
+			this.callbacks.onStatus('DE1 service A000 resolved ✓');
+			this.callbacks.onStatus('StateInfo A00E subscribed ✓');
 
+			step = 'ShotSample characteristic A00D';
+			await device.startNotifications(De1Uuids.SERVICE, De1Uuids.SHOT_SAMPLE);
+			this.callbacks.onStatus('ShotSample A00D subscribed ✓');
+
+			step = 'WaterLevels characteristic A011';
+			await device.startNotifications(De1Uuids.SERVICE, De1Uuids.WATER_LEVELS);
+			this.callbacks.onStatus('WaterLevels A011 subscribed ✓');
+
+			// All four GATT objects resolved — the device is verified as a DE1.
+			this.patchDiagnostics({ gattVerified: true });
 			this.callbacks.onState('ready');
+			this.callbacks.onStatus(
+				'DE1 GATT verified ✓ — A000 + StateInfo/ShotSample/WaterLevels resolved'
+			);
 			this.callbacks.onStatus('Ready — receiving DE1 notifications');
 		} catch (error) {
 			this.device = null;
+			this.patchDiagnostics({ gattVerified: false });
 			this.callbacks.onState('failed');
-			this.callbacks.onStatus(`DE1 connection failed: ${describe(error)}`);
+			// Name the failed step — a service / characteristic failure means the
+			// selected device is almost certainly NOT a DE1.
+			this.callbacks.onStatus(
+				`DE1 connection failed at "${step}": ${describe(error)}`
+			);
 		}
 	}
 
@@ -130,6 +250,10 @@ export class De1Manager {
 		this.device?.disconnect();
 		this.device = null;
 		await this.core.reset();
+		// Clear the diagnostics — the device is gone, so its name / id / GATT
+		// verification / notification tally no longer hold.
+		this.patchDiagnostics(EMPTY_DE1_DIAGNOSTICS);
+		this.notificationCounts = { De1State: 0, De1ShotSample: 0, De1WaterLevels: 0 };
 		this.callbacks.onState('disconnected');
 		this.callbacks.onStatus('DE1 disconnected');
 	}
@@ -139,7 +263,7 @@ export class De1Manager {
  * Map a DE1 characteristic UUID to its core `NotificationSource`. Returns
  * `null` for an unmapped characteristic, which is dropped.
  */
-function sourceFor(characteristicUuid: string): NotificationSource | null {
+function sourceFor(characteristicUuid: string): De1NotificationSource | null {
 	switch (characteristicUuid) {
 		case De1Uuids.STATE_INFO:
 			return 'De1State';
