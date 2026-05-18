@@ -467,6 +467,11 @@
 .qsheet-scrim {
 	position: absolute;
 	inset: 0;
+	/* The scrim is a <button> (tap-to-close) — reset the default chrome. */
+	margin: 0;
+	padding: 0;
+	border: 0;
+	cursor: pointer;
 	background: rgba(21, 17, 13, 0.6);
 	backdrop-filter: blur(4px);
 	z-index: 9;

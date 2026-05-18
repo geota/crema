@@ -37,6 +37,12 @@
 	// ── Quick Sheet local control state (UI-only) ────────────────────────
 	/** The Quick Sheet's local parameter model — never reaches the machine. */
 	const params = new BrewParamState();
+	/**
+	 * Whether the Quick Sheet is docked open. Starts open (the design's
+	 * variant-G look); the sheet's Close button and scrim dismiss it, and the
+	 * header's QuickPill brings it back.
+	 */
+	let quickSheetOpen = $state(true);
 	/** The selected favorite profile id. */
 	let favoriteId = $state(SAMPLE_FAVORITES[0].id);
 	/**
@@ -133,6 +139,13 @@
 				</div>
 			</div>
 			<div class="crema-dash-head-r">
+				{#if !quickSheetOpen}
+					<!-- QuickPill — reopens the docked Quick Sheet once it's closed. -->
+					<button class="qcpill is-dark" onclick={() => (quickSheetOpen = true)}>
+						<i class="ph ph-sliders-horizontal" aria-hidden="true"></i>
+						<span>Quick Controls</span>
+					</button>
+				{/if}
 				<!-- TODO: wire to DE1 control — Edit / Switch need the profile model. -->
 				<button class="crema-btn crema-btn-secondaryDark crema-btn-sm">
 					<i class="ph ph-pencil-simple" aria-hidden="true"></i>
@@ -201,7 +214,7 @@
 				</div>
 				<div class="crema-chart">
 					{#if hasData}
-						<LiveChart series={ui.shotTelemetry} height={220} />
+						<LiveChart series={ui.shotTelemetry} height={quickSheetOpen ? 220 : 280} />
 					{:else}
 						<!-- Clean empty state — no shot data buffered yet. -->
 						<div class="crema-chart-empty">
@@ -223,8 +236,10 @@
 			{profileName}
 			favorite={favoriteId}
 			running={manualRunning}
+			open={quickSheetOpen}
 			onSelectFavorite={selectFavorite}
 			onToggleRun={toggleRun}
+			onClose={() => (quickSheetOpen = false)}
 		/>
 	</div>
 </div>
