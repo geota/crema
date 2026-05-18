@@ -1,0 +1,372 @@
+/* ============================================================================
+   Crema Design System — Tokens
+   colors_and_type.css
+
+   Single source of truth for color, type, spacing, radii, shadows, motion.
+   Import once at the document root; everything else references these vars.
+   ============================================================================ */
+
+/* ---- Fonts ---------------------------------------------------------------
+   All three families load from Google Fonts. If you mirror the project for
+   offline use, drop matching .woff2 files into /fonts/ and replace these
+   @import URLs with @font-face declarations.
+   -------------------------------------------------------------------------- */
+@import url('https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&family=Hanken+Grotesk:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+/* ---- Phosphor icons ------------------------------------------------------
+   The design renders icons as <i class="ph ph-…"> / ph-duotone. Pulled from
+   the jsDelivr CDN for now; self-hosting the .woff2 / .css for offline use is
+   a later polish item (mirror into /fonts/, same as the Google Fonts note
+   above). Regular + duotone weights cover every icon the design uses.
+   -------------------------------------------------------------------------- */
+@import url('https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/regular/style.css');
+@import url('https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.1/src/duotone/style.css');
+
+:root {
+  /* ========================================================================
+     COLOR — raw scales
+     ======================================================================== */
+
+  /* Espresso — warm near-blacks. Pulled toward brown, not blue. Used for
+     dark surfaces and inverted chrome. */
+  --espresso-950: #15110D; /* Page background (dark mode hero) */
+  --espresso-900: #1F1813; /* Card / panel on dark */
+  --espresso-850: #281F18; /* Hovered card */
+  --espresso-800: #2F251D; /* Subtle dividers, raised chip on dark */
+  --espresso-700: #3A2E25; /* Strong divider, disabled track */
+  --espresso-600: #5A4938; /* Muted icon on dark */
+
+  /* Paper — warm off-whites. The "crema" foam color sits in this ramp. */
+  --paper-50:  #FAF7F1; /* Page background (light mode hero) */
+  --paper-100: #F4EDE0; /* Subtle surface tint */
+  --paper-200: #ECDFC8; /* Hover surface, chip */
+  --paper-300: #E8D9BC; /* The crema. Brand foam color. */
+  --paper-400: #D9C7A4; /* Stronger crema, used as accent surface */
+
+  /* Ink — warm neutrals for text and hairlines. Never pure black. */
+  --ink-950: #100C08;
+  --ink-900: #1F1812; /* Primary text on light */
+  --ink-700: #4A3F33; /* Secondary text on light */
+  --ink-500: #7A6A57; /* Tertiary text, meta */
+  --ink-300: #A89677; /* Disabled text on light */
+  --ink-100: #E8DCC4; /* Primary text on dark */
+  --ink-50:  #F4EDE0; /* High-emphasis text on dark */
+
+  /* Copper — the single brand accent. */
+  --copper-300: #E0A375;
+  --copper-400: #D08C56;
+  --copper-500: #C7763B; /* Brand primary */
+  --copper-600: #A55F2A;
+  --copper-700: #82481C;
+
+  /* Telemetry — one hue per data channel. Locked. */
+  --tel-pressure:    #D89030;
+  --tel-pressure-15: #D8903026;
+  --tel-flow:        #4A6FA5;
+  --tel-flow-15:     #4A6FA526;
+  --tel-temp:        #C44E3F;
+  --tel-temp-15:     #C44E3F26;
+  --tel-weight:      #6B8C5F;
+  --tel-weight-15:   #6B8C5F26;
+
+  /* Semantic (light surface defaults) */
+  --success: #5C8A4C;
+  --warning: #C7873B;
+  --danger:  #B84A3A;
+  --info:    #4A6FA5;
+
+  /* ========================================================================
+     COLOR — semantic aliases (use these in components, not raw scales)
+     ======================================================================== */
+
+  --bg-page:        var(--paper-50);
+  --bg-surface:     #FFFFFA;            /* Card on light */
+  --bg-surface-2:   var(--paper-100);   /* Hovered card */
+  --bg-sunken:      var(--paper-100);   /* Form input field bg */
+  --bg-inverse:     var(--espresso-950);
+
+  --fg-1:           var(--ink-900);     /* Primary text */
+  --fg-2:           var(--ink-700);     /* Secondary */
+  --fg-3:           var(--ink-500);     /* Tertiary / meta */
+  --fg-disabled:    var(--ink-300);
+  --fg-accent:      var(--copper-600);  /* Copper text on light */
+  --fg-on-accent:   var(--paper-50);    /* Text on copper button */
+
+  --hairline:       rgba(31, 24, 18, 0.08); /* 1px borders on light */
+  --hairline-strong:rgba(31, 24, 18, 0.16);
+
+  /* ========================================================================
+     TYPOGRAPHY
+     ======================================================================== */
+
+  --font-serif:  'Newsreader', 'Charter', 'Iowan Old Style', Georgia, serif;
+  --font-sans:   'Hanken Grotesk', 'Söhne', 'Helvetica Neue', system-ui, sans-serif;
+  --font-mono:   'JetBrains Mono', 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', monospace;
+
+  /* Scale — 1.2 ratio anchored at 16px. */
+  --text-xs:   11px;
+  --text-sm:   13px;
+  --text-md:   15px;
+  --text-base: 16px;
+  --text-lg:   19px;
+  --text-xl:   23px;
+  --text-2xl:  28px;
+  --text-3xl:  34px;
+  --text-4xl:  44px;
+  --text-5xl:  56px;
+  --text-6xl:  72px;
+  --text-7xl:  96px; /* Timer / large telemetry numerals */
+
+  /* Weights */
+  --w-light:    300;
+  --w-regular:  400;
+  --w-medium:   500;
+  --w-semibold: 600;
+  --w-bold:     700;
+
+  /* Line heights */
+  --lh-tight:   1.05;
+  --lh-snug:    1.2;
+  --lh-normal:  1.45;
+  --lh-relaxed: 1.6;
+
+  /* Tracking */
+  --track-tight:  -0.015em;
+  --track-normal:  0;
+  --track-wide:    0.04em;
+  --track-allcaps: 0.10em;
+
+  /* ========================================================================
+     SPACING — 4px base
+     ======================================================================== */
+  --space-0:  0;
+  --space-1:  4px;
+  --space-2:  8px;
+  --space-3:  12px;
+  --space-4:  16px;
+  --space-5:  20px;
+  --space-6:  24px;
+  --space-8:  32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+  --space-20: 80px;
+  --space-24: 96px;
+
+  /* ========================================================================
+     RADII
+     ======================================================================== */
+  --radius-xs:   4px;  /* chips, tags, table cells */
+  --radius-sm:   8px;  /* buttons, inputs, small cards */
+  --radius-md:  12px;  /* cards, panels */
+  --radius-lg:  16px;  /* hero cards, modals */
+  --radius-xl:  24px;  /* sheets */
+  --radius-pill: 999px;
+
+  /* ========================================================================
+     SHADOWS — warm-brown casts on light, near-none on dark
+     ======================================================================== */
+  --shadow-sm:
+    0 1px 2px rgba(31, 24, 18, 0.04),
+    0 1px 1px rgba(31, 24, 18, 0.03);
+  --shadow-md:
+    0 2px 4px rgba(31, 24, 18, 0.04),
+    0 8px 16px rgba(31, 24, 18, 0.06);
+  --shadow-lg:
+    0 4px 8px rgba(31, 24, 18, 0.05),
+    0 16px 32px rgba(31, 24, 18, 0.08),
+    0 32px 64px rgba(31, 24, 18, 0.06);
+  --shadow-focus: 0 0 0 2px var(--bg-page), 0 0 0 4px var(--copper-500);
+
+  /* Dark-mode elevation: inset top highlight, no bottom shadow */
+  --inset-highlight: inset 0 1px 0 rgba(244, 237, 224, 0.04);
+
+  /* ========================================================================
+     MOTION
+     ======================================================================== */
+  --ease:        cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-in:     cubic-bezier(0.5, 0, 0.75, 0);
+  --dur-1: 120ms; /* hover, press */
+  --dur-2: 200ms; /* toggle, chip, tab */
+  --dur-3: 320ms; /* panel, sheet, modal */
+  --dur-4: 500ms; /* chart interpolation */
+
+  /* ========================================================================
+     LAYOUT
+     ======================================================================== */
+  --edge-mobile:  16px;
+  --edge-tablet:  24px;
+  --edge-desktop: 32px;
+
+  --topbar-h: 56px;
+  --bottombar-h: 88px;
+}
+
+/* ============================================================================
+   Dark-mode (inverted surfaces) — opt-in via [data-theme="dark"] on any
+   ancestor. The Dashboard view sets this by default.
+   ============================================================================ */
+[data-theme="dark"] {
+  --bg-page:      var(--espresso-950);
+  --bg-surface:   var(--espresso-900);
+  --bg-surface-2: var(--espresso-850);
+  --bg-sunken:    var(--espresso-900);
+  --bg-inverse:   var(--paper-50);
+
+  --fg-1:         var(--ink-50);
+  --fg-2:         var(--ink-100);
+  --fg-3:         #B8A689;
+  --fg-disabled:  var(--espresso-600);
+  --fg-accent:    var(--copper-400);
+  --fg-on-accent: var(--ink-900);
+
+  --hairline:        rgba(244, 237, 224, 0.08);
+  --hairline-strong: rgba(244, 237, 224, 0.16);
+
+  --shadow-sm: var(--inset-highlight);
+  --shadow-md: var(--inset-highlight);
+  --shadow-lg: var(--inset-highlight);
+}
+
+/* ============================================================================
+   Semantic type roles — use these classes for consistent set-text.
+   Components should *not* re-declare font / size / leading themselves;
+   they should pick a role and override only what's exceptional.
+   ============================================================================ */
+
+.t-display {
+  font-family: var(--font-serif);
+  font-weight: var(--w-regular);
+  font-size: var(--text-5xl);
+  line-height: var(--lh-tight);
+  letter-spacing: var(--track-tight);
+  font-optical-sizing: auto;
+  color: var(--fg-1);
+}
+
+.t-h1 {
+  font-family: var(--font-serif);
+  font-weight: var(--w-regular);
+  font-size: var(--text-4xl);
+  line-height: var(--lh-tight);
+  letter-spacing: var(--track-tight);
+  color: var(--fg-1);
+}
+
+.t-h2 {
+  font-family: var(--font-serif);
+  font-weight: var(--w-regular);
+  font-size: var(--text-3xl);
+  line-height: var(--lh-snug);
+  letter-spacing: var(--track-tight);
+  color: var(--fg-1);
+}
+
+.t-h3 {
+  font-family: var(--font-sans);
+  font-weight: var(--w-semibold);
+  font-size: var(--text-xl);
+  line-height: var(--lh-snug);
+  color: var(--fg-1);
+}
+
+.t-h4 {
+  font-family: var(--font-sans);
+  font-weight: var(--w-semibold);
+  font-size: var(--text-lg);
+  line-height: var(--lh-snug);
+  color: var(--fg-1);
+}
+
+.t-body {
+  font-family: var(--font-sans);
+  font-weight: var(--w-regular);
+  font-size: var(--text-base);
+  line-height: var(--lh-normal);
+  color: var(--fg-1);
+}
+
+.t-body-sm {
+  font-family: var(--font-sans);
+  font-weight: var(--w-regular);
+  font-size: var(--text-sm);
+  line-height: var(--lh-normal);
+  color: var(--fg-2);
+}
+
+.t-meta {
+  font-family: var(--font-sans);
+  font-weight: var(--w-medium);
+  font-size: var(--text-xs);
+  line-height: var(--lh-normal);
+  color: var(--fg-3);
+}
+
+/* All-caps eyebrow — channel labels, section eyebrows */
+.t-eyebrow {
+  font-family: var(--font-sans);
+  font-weight: var(--w-semibold);
+  font-size: var(--text-xs);
+  line-height: 1;
+  letter-spacing: var(--track-allcaps);
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+
+/* Telemetry numeric — always mono, always tabular */
+.t-readout {
+  font-family: var(--font-mono);
+  font-weight: var(--w-medium);
+  font-size: var(--text-3xl);
+  line-height: 1;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum", "zero";
+  color: var(--fg-1);
+}
+
+.t-readout-lg {
+  font-family: var(--font-mono);
+  font-weight: var(--w-medium);
+  font-size: var(--text-6xl);
+  line-height: 1;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum", "zero";
+}
+
+.t-readout-xl {
+  font-family: var(--font-mono);
+  font-weight: var(--w-medium);
+  font-size: var(--text-7xl);
+  line-height: 1;
+  letter-spacing: -0.035em;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum", "zero";
+}
+
+/* Inline code / small mono — for paths, IDs, raw values inside copy */
+.t-code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ============================================================================
+   Document defaults — apply once at app root.
+   ============================================================================ */
+html, body {
+  margin: 0;
+  padding: 0;
+}
+body {
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  line-height: var(--lh-normal);
+  color: var(--fg-1);
+  background: var(--bg-page);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+* { box-sizing: border-box; }

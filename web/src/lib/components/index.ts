@@ -11,3 +11,6 @@ export { default as ModeSelector } from './ModeSelector.svelte';
 export { default as AutoStopSelector } from './AutoStopSelector.svelte';
 export { default as ScaleCard } from './ScaleCard.svelte';
 export { default as ReadoutCard } from './ReadoutCard.svelte';
+
+/** App shell — the fixed left nav rail. */
+export { default as CremaSidebar } from './CremaSidebar.svelte';
