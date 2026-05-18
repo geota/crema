@@ -59,6 +59,13 @@
 
 	/** Final (or peak) yield weight, grams, for the yield metric. */
 	const yieldG = $derived(shot.finalWeightG ?? shot.peakWeightG);
+
+	/**
+	 * The always-5-glyph star string — filled glyphs for the rating, empty for
+	 * the rest. An unrated shot (`rating === 0`) shows five empty stars, so the
+	 * column keeps a consistent rhythm rather than collapsing to a lone dash.
+	 */
+	const starString = $derived(stars(shot.rating));
 </script>
 
 <button class="hi-row" class:is-active={active} {onclick}>
@@ -88,7 +95,13 @@
 		</div>
 		<div class="hi-row-metric-l">yield</div>
 	</div>
-	<div class="hi-row-stars">{shot.rating > 0 ? stars(shot.rating) : '–'}</div>
+	<div
+		class="hi-row-stars"
+		class:is-unrated={shot.rating <= 0}
+		aria-label="{Math.max(0, Math.min(5, Math.round(shot.rating)))} of 5 stars"
+	>
+		{starString}
+	</div>
 </button>
 
 <style>
@@ -185,5 +198,9 @@
 		color: var(--copper-400);
 		letter-spacing: -1px;
 		white-space: nowrap;
+	}
+	/* An unrated shot still shows five (dim) glyphs, keeping the column rhythm. */
+	.hi-row-stars.is-unrated {
+		color: rgba(244, 237, 224, 0.25);
 	}
 </style>

@@ -21,6 +21,7 @@
 	 * shows this with a "Duplicate" heading.
 	 */
 	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import {
 		getProfileStore,
 		blankProfile,
@@ -51,63 +52,81 @@
 	void store.ensureLoaded();
 
 	/**
-	 * `mode` is a route-fixed prop — it never changes for the life of the
-	 * component (each route renders the editor with a literal `mode`). Capture
-	 * it once so the `$state` initialisers below read a plain value.
+	 * Whether the `?duplicate=1` flag is set — read reactively from the route
+	 * URL rather than imperatively off `window.location`.
 	 */
-	// svelte-ignore state_referenced_locally
-	const initialMode = mode;
+	const duplicateFlag = $derived(page.url.searchParams.get('duplicate') === '1');
+
+	/**
+	 * The **loaded baseline** — the profile the editor opens on, before any
+	 * edits. Derived (not synchronised through `$effect`) so it tracks the
+	 * route inputs cleanly:
+	 *
+	 *  - `new` mode: a fresh blank custom profile.
+	 *  - `edit` mode, library not yet loaded: `undefined` (the grid shows a
+	 *    loading state).
+	 *  - `edit` mode, loaded: the source profile, deep-copied; a built-in or a
+	 *    `?duplicate=1` arrival is forked into a fresh custom copy.
+	 *  - `edit` mode, unknown id: a blank custom profile (treated as a create).
+	 *
+	 * Keyed off `store.loaded`, `sourceId` and `duplicateFlag` — change any and
+	 * the baseline (and, when not yet edited, the `draft` below) recomputes.
+	 */
+	const baseline = $derived.by<CremaProfile | undefined>(() => {
+		if (mode === 'new') return blankProfile();
+		if (!store.loaded) return undefined;
+		const src = sourceId ? store.get(sourceId) : undefined;
+		if (!src) return blankProfile();
+		const duplicating = src.source === 'builtin' || duplicateFlag;
+		return duplicating
+			? duplicateProfile(src)
+			: { ...src, segments: src.segments.map((s) => ({ ...s })) };
+	});
+
+	/**
+	 * Whether the source id in `edit` mode resolved to a profile already in the
+	 * library. False for `/profiles/new` and for an unknown id — both of which
+	 * are saving a brand-new entry.
+	 */
+	const sourceResolved = $derived(
+		mode === 'edit' && store.loaded && sourceId != null && store.get(sourceId) != null
+	);
 
 	/**
 	 * Whether the editor is saving a *new* library entry rather than updating
 	 * one. True for `/profiles/new`, and true when editing a built-in or when
 	 * the `?duplicate=1` flag is set — built-ins are read-only, so editing one
-	 * forks a custom copy.
+	 * forks a custom copy. An unknown id also reads as a create.
+	 *
+	 * `duplicateDraft()` may flip this true on an in-editor duplicate; that
+	 * local override wins until the route inputs change.
 	 */
-	let isCreate = $state(initialMode === 'new');
+	let isCreateOverride = $state<boolean | null>(null);
+	const isCreate = $derived(
+		isCreateOverride ?? (!sourceResolved || baseline?.source !== 'custom')
+	);
 
-	/** The editable draft profile. */
-	let draft = $state<CremaProfile>(blankProfile());
+	/**
+	 * The editable draft profile. It starts as a `$derived` mirror of the
+	 * loaded {@link baseline}; the first edit reassigns it to a plain value
+	 * (Svelte 5.25+ permits reassigning a `$derived`), after which the draft is
+	 * the editor's own state and no longer tracks the baseline. `discard()`
+	 * reassigns it back to a fresh copy of the baseline.
+	 */
+	let draft = $derived.by<CremaProfile>(() => baseline ?? blankProfile());
+	/**
+	 * The explicitly-selected segment id, or `null` to fall back to the
+	 * draft's second (or first) segment — see {@link activeSegId}.
+	 */
+	let selectedSegId = $state<string | null>(null);
 	/** The id of the selected segment, highlighted in the curve. */
-	let activeSegId = $state<string | null>(null);
+	const activeSegId = $derived(
+		selectedSegId ?? draft.segments[1]?.id ?? draft.segments[0]?.id ?? null
+	);
 	/** Whether the draft differs from its loaded baseline (dirty flag). */
 	let dirty = $state(false);
-	/** Set once the draft has been initialised, so the grid does not flash. */
-	let ready = $state(initialMode === 'new');
-
-	/** Snapshot of the draft as loaded — for the Discard action. */
-	let baseline: CremaProfile = $state.snapshot(blankProfile());
-
-	// In `edit` mode the source profile may not be in the store yet (the
-	// built-in load is async). Resolve it once the library is loaded.
-	$effect(() => {
-		if (mode !== 'edit' || ready || !store.loaded) return;
-		const src = sourceId ? store.get(sourceId) : undefined;
-		if (!src) {
-			// Unknown id — fall back to a blank new profile.
-			isCreate = true;
-			draft = blankProfile();
-		} else {
-			const duplicating =
-				src.source === 'builtin' ||
-				new URLSearchParams(window.location.search).get('duplicate') === '1';
-			isCreate = duplicating;
-			draft = duplicating
-				? duplicateProfile(src)
-				: { ...src, segments: src.segments.map((s) => ({ ...s })) };
-		}
-		baseline = $state.snapshot(draft);
-		activeSegId = draft.segments[1]?.id ?? draft.segments[0]?.id ?? null;
-		ready = true;
-	});
-
-	// For `new` mode, set the initial selected segment immediately.
-	$effect(() => {
-		if (mode === 'new' && activeSegId == null && draft.segments.length > 0) {
-			activeSegId = draft.segments[1]?.id ?? draft.segments[0].id;
-			baseline = $state.snapshot(draft);
-		}
-	});
+	/** Set once the loaded baseline is resolved, so the grid does not flash. */
+	const ready = $derived(baseline != null);
 
 	/** The heading reflects what saving will do. */
 	const heading = $derived(
@@ -155,7 +174,7 @@
 			temperatureC: last?.temperatureC ?? draft.brewTemp
 		};
 		draft = { ...draft, segments: [...draft.segments, seg] };
-		activeSegId = seg.id;
+		selectedSegId = seg.id;
 		dirty = true;
 	}
 
@@ -163,7 +182,7 @@
 	function deleteSegment(id: string): void {
 		if (draft.segments.length <= 1) return;
 		draft = { ...draft, segments: draft.segments.filter((s) => s.id !== id) };
-		if (activeSegId === id) activeSegId = draft.segments[0]?.id ?? null;
+		if (activeSegId === id) selectedSegId = draft.segments[0]?.id ?? null;
 		dirty = true;
 	}
 
@@ -171,7 +190,7 @@
 	function resetSegments(): void {
 		const fresh = blankProfile().segments;
 		draft = { ...draft, segments: fresh };
-		activeSegId = fresh[1]?.id ?? fresh[0].id;
+		selectedSegId = fresh[1]?.id ?? fresh[0].id;
 		dirty = true;
 	}
 
@@ -194,14 +213,17 @@
 	/** Discard edits — revert the draft to its loaded baseline. */
 	function discard(): void {
 		if (dirty && !confirm('Discard all changes to this profile?')) return;
-		draft = { ...baseline, segments: baseline.segments.map((s) => ({ ...s })) };
+		const base = baseline ?? blankProfile();
+		draft = { ...base, segments: base.segments.map((s) => ({ ...s })) };
+		isCreateOverride = null;
+		selectedSegId = null;
 		dirty = false;
 	}
 
 	/** Duplicate the current draft into a brand-new profile draft. */
 	function duplicateDraft(): void {
 		draft = duplicateProfile(draft);
-		isCreate = true;
+		isCreateOverride = true;
 		dirty = true;
 	}
 
@@ -397,7 +419,7 @@
 					<ProfileCurveEditor
 						segments={draft.segments}
 						{activeSegId}
-						onSelect={(id) => (activeSegId = id)}
+						onSelect={(id) => (selectedSegId = id)}
 						onEdit={editSegment}
 						width={720}
 						height={300}
@@ -417,7 +439,7 @@
 								{seg}
 								index={i}
 								active={activeSegId === seg.id}
-								onSelect={() => (activeSegId = seg.id)}
+								onSelect={() => (selectedSegId = seg.id)}
 								onEdit={(p) => editSegment(seg.id, p)}
 								onDelete={() => deleteSegment(seg.id)}
 							/>
@@ -443,7 +465,9 @@
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
-		padding: 18px 32px;
+		/* Shared page-header rhythm — see --page-pad-* in app.css — so the
+		   header sits where every other route's does (no jump on navigation). */
+		padding: var(--page-pad-top) var(--page-pad-x) 18px;
 		border-bottom: 1px solid rgba(244, 237, 224, 0.05);
 		flex: 0 0 auto;
 		gap: 16px;
@@ -552,14 +576,14 @@
 		}
 	}
 	.pe-left {
-		padding: 28px 32px;
+		padding: 28px var(--page-pad-x);
 		border-right: 1px solid rgba(244, 237, 224, 0.05);
 		display: flex;
 		flex-direction: column;
 		gap: 28px;
 	}
 	.pe-right {
-		padding: 28px 32px;
+		padding: 28px var(--page-pad-x);
 		display: flex;
 		flex-direction: column;
 		gap: 22px;

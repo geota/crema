@@ -31,8 +31,16 @@
 		height?: number;
 	} = $props();
 
-	/** The time window, seconds. */
-	const WINDOW = 60;
+	/**
+	 * The time window, seconds. Starts at 60 s and grows to the shot's length
+	 * so a long pull is never clipped — the same adaptive behaviour as
+	 * `StaticShotChart`.
+	 */
+	const windowSec = $derived(
+		series.length > 0
+			? Math.max(60, series[series.length - 1].elapsedMs / 1000)
+			: 60
+	);
 
 	/** Resolve a CSS custom property to a concrete colour string. */
 	function cssVar(name: string): string {
@@ -118,7 +126,7 @@
 	let chart: uPlot | null = null;
 	let resizeObs: ResizeObserver | null = null;
 
-	function buildOpts(w: number, h: number): uPlot.Options {
+	function buildOpts(w: number, h: number, win: number): uPlot.Options {
 		const gridColor = 'rgba(244,237,224,0.05)';
 		const labelColor = 'rgba(244,237,224,0.35)';
 		return {
@@ -128,7 +136,7 @@
 			cursor: { show: false },
 			legend: { show: false },
 			scales: {
-				x: { time: false, range: [0, WINDOW] },
+				x: { time: false, range: [0, win] },
 				pressure: { range: [0, 12] },
 				flow: { range: [0, 8] },
 				temp: { range: [85, 100] },
@@ -141,8 +149,12 @@
 					grid: { stroke: gridColor, width: 1, dash: [2, 4] },
 					ticks: { show: false },
 					font: '11px "JetBrains Mono", monospace',
-					values: (_u, splits) => splits.map((v) => (v === 0 ? '' : `${v}s`)),
-					splits: () => [10, 20, 30, 40, 50]
+					values: (_u, splits) =>
+						splits.map((v) => (v === 0 ? '' : `${Math.round(v)}s`)),
+					splits: (u) => {
+						const max = (u.scales.x.range as unknown as [number, number])[1];
+						return [0.2, 0.4, 0.6, 0.8].map((p) => Math.round(max * p));
+					}
 				},
 				{
 					scale: 'pressure',
@@ -198,7 +210,11 @@
 	$effect(() => {
 		const w = Math.max(1, plotEl.clientWidth);
 		const h = Math.max(1, untrack(() => height));
-		chart = new uPlot(buildOpts(w, h), toData(untrack(() => series)), plotEl);
+		chart = new uPlot(
+			buildOpts(w, h, untrack(() => windowSec)),
+			toData(untrack(() => series)),
+			plotEl
+		);
 
 		resizeObs = new ResizeObserver((entries) => {
 			const cr = entries[0].contentRect;
@@ -214,10 +230,14 @@
 		};
 	});
 
-	// Push new telemetry into the existing chart instance.
+	// Push new telemetry into the existing chart instance and grow the x-window
+	// to the shot's length so a long pull is never clipped.
 	$effect(() => {
 		const data = toData(series);
-		chart?.setData(data);
+		const win = windowSec;
+		if (!chart) return;
+		chart.setData(data, false);
+		chart.setScale('x', { min: 0, max: win });
 	});
 
 	// React to a height prop change without rebuilding the whole chart.

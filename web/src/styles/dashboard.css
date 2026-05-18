@@ -253,7 +253,9 @@
 	font-size: 18px;
 	font-weight: 600;
 	background: var(--copper-500);
-	color: var(--paper-50);
+	/* Dark ink on copper — unified with every other copper control
+	   (.pp-btn-primary, .qchip.is-active, .sc-tare). */
+	color: #1a120c;
 	padding: 18px 36px;
 	border-radius: 999px;
 	border: none;
@@ -263,6 +265,8 @@
 }
 .crema-bigbtn.running {
 	background: var(--danger);
+	/* Light ink on the darker danger red keeps the running state legible. */
+	color: var(--paper-50);
 	box-shadow: 0 8px 24px rgba(184, 74, 58, 0.3);
 }
 .crema-bigbtn:hover {
@@ -810,4 +814,39 @@
 	display: flex;
 	align-items: center;
 	gap: 8px;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   Settings-kit button  (.st-btn)
+
+   Ported from the design's settings kit. The Settings route scopes its own
+   copy under `.st-content`; the Scale and History routes (and `StButton`)
+   share this global definition so the rule lives in exactly one place.
+   ════════════════════════════════════════════════════════════════════════ */
+.st-btn {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 7px 12px;
+	border-radius: var(--radius-sm);
+	font-family: var(--font-sans);
+	font-size: 12px;
+	cursor: pointer;
+	transition: all var(--dur-1) var(--ease);
+	border: 1px solid transparent;
+}
+.st-btn i {
+	font-size: 13px;
+}
+.st-btn:disabled {
+	opacity: 0.4;
+	cursor: not-allowed;
+}
+.st-btn-secondary {
+	background: rgba(244, 237, 224, 0.04);
+	border-color: rgba(244, 237, 224, 0.1);
+	color: var(--ink-50);
+}
+.st-btn-secondary:hover:not(:disabled) {
+	background: rgba(244, 237, 224, 0.08);
 }

@@ -4,22 +4,25 @@
 	 * ported from the design's `FavoritesStrip` in `web-dashboard-v2.jsx`.
 	 *
 	 * An inline fuzzy search filters the list; left / right arrows nudge the
-	 * horizontal scroll and disable at the ends. The profile data is the
-	 * placeholder `SAMPLE_FAVORITES` set (see `favorites.ts`) — the real
-	 * library lands when the core exposes a profile model.
+	 * horizontal scroll and disable at the ends. The strip shows the **real**
+	 * pinned profiles from the `lib/profiles` library store — the caller passes
+	 * them in, already filtered to `pinned` (see `BrewDashboard`).
 	 */
 	import type { Attachment } from 'svelte/attachments';
 	import QSparkline from './QSparkline.svelte';
-	import { SAMPLE_FAVORITES, type FavoriteProfile } from './favorites';
+	import { ratioLabel, sparkShape, type CremaProfile } from '$lib/profiles';
 
 	let {
-		favorite,
+		profiles,
+		selectedId,
 		onSelect
 	}: {
-		/** The selected favorite's id. */
-		favorite: string;
-		/** Called with the chosen favorite. */
-		onSelect: (profile: FavoriteProfile) => void;
+		/** The pinned profiles to show as favorite chips. */
+		profiles: readonly CremaProfile[];
+		/** The active profile's id (the highlighted chip), or `null`. */
+		selectedId: string | null;
+		/** Called with the chosen profile. */
+		onSelect: (profile: CremaProfile) => void;
 	} = $props();
 
 	/** The live search query. */
@@ -30,12 +33,13 @@
 	let canScrollLeft = $state(false);
 	let canScrollRight = $state(false);
 
-	/** Filtered list: the full sample set when searching, all of it otherwise. */
+	/** Filtered list: the full pinned set when searching, all of it otherwise. */
 	const items = $derived.by(() => {
 		const q = query.trim().toLowerCase();
-		if (q === '') return SAMPLE_FAVORITES;
-		return SAMPLE_FAVORITES.filter(
-			(p) => p.name.toLowerCase().includes(q) || p.bean.toLowerCase().includes(q)
+		if (q === '') return profiles;
+		return profiles.filter(
+			(p) =>
+				p.name.toLowerCase().includes(q) || p.bean.toLowerCase().includes(q)
 		);
 	});
 
@@ -52,13 +56,14 @@
 	}
 
 	/**
-	 * Attachment on the scroll container: captures the element, syncs the
-	 * arrow state on mount and on resize, and re-syncs when the filtered list
-	 * changes (the `items.length` read makes the attachment reactive to it).
+	 * Attachment on the scroll container: a *one-time* element capture plus the
+	 * `ResizeObserver` set-up / tear-down. It deliberately does **not** read the
+	 * item list — re-measuring when the list changes is the separate `$effect`
+	 * below, so a search keystroke does not tear the observer down and rebuild
+	 * it on every character.
 	 */
 	const trackScroll: Attachment<HTMLDivElement> = (el) => {
 		scrollEl = el;
-		void items.length;
 		syncArrows();
 		const observer = new ResizeObserver(syncArrows);
 		observer.observe(el);
@@ -67,6 +72,14 @@
 			scrollEl = null;
 		};
 	};
+
+	// Re-measure the arrows whenever the rendered list changes (a search
+	// filters it, or the pinned set updates). This is list-dependent state, so
+	// it lives here rather than in the element-lifecycle attachment above.
+	$effect(() => {
+		void items.length;
+		syncArrows();
+	});
 
 	/** Nudge the strip one card-group left (`-1`) or right (`+1`). */
 	function nudge(dir: number): void {
@@ -97,21 +110,29 @@
 		{#each items as profile (profile.id)}
 			<button
 				class="qfstrip-item"
-				class:is-active={favorite === profile.id}
+				class:is-active={selectedId === profile.id}
 				onclick={() => onSelect(profile)}
 			>
 				<QSparkline
-					shape={profile.shape}
+					shape={sparkShape(profile.segments)}
 					width={28}
 					height={14}
-					color={favorite === profile.id ? 'var(--copper-400)' : 'rgba(244,237,224,0.55)'}
+					color={selectedId === profile.id
+						? 'var(--copper-400)'
+						: 'rgba(244,237,224,0.55)'}
 				/>
-				<span class="qfstrip-name">{profile.name}</span>
-				<span class="qfstrip-ratio">{profile.ratio}</span>
+				<span class="qfstrip-name">{profile.name || 'Untitled profile'}</span>
+				<span class="qfstrip-ratio">{ratioLabel(profile)}</span>
 			</button>
 		{/each}
 		{#if items.length === 0}
-			<div class="qfstrip-empty">No profiles match "{query}"</div>
+			<div class="qfstrip-empty">
+				{#if profiles.length === 0}
+					No pinned profiles — pin one from the Profiles page
+				{:else}
+					No profiles match "{query}"
+				{/if}
+			</div>
 		{/if}
 	</div>
 	<button
