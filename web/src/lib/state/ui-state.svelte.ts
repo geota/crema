@@ -118,6 +118,15 @@ export interface UiSnapshot {
 	readonly shotInProgress: boolean;
 	/** Elapsed time of the current/last shot, ms — `latestTelemetry.elapsedMs`. */
 	readonly shotElapsedMs: number;
+
+	// ---- Active profile (Task 3 — the Profiles library) ------------------
+	//
+	// The profile the user marked "active" on the Profiles page — the one the
+	// Brew dashboard's header reflects. UI-level only: marking a profile active
+	// does NOT upload it to the DE1 (the core has no profile-upload path yet).
+
+	/** The active profile's display name, or `null` when none is selected. */
+	readonly activeProfileName: string | null;
 }
 
 /** The initial snapshot — every default matches the Android `MainUiState`. */
@@ -146,7 +155,8 @@ export const INITIAL_SNAPSHOT: UiSnapshot = {
 	latestTelemetry: null,
 	shotTelemetry: [],
 	shotInProgress: false,
-	shotElapsedMs: 0
+	shotElapsedMs: 0,
+	activeProfileName: null
 };
 
 /**
