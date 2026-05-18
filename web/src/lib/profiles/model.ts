@@ -66,8 +66,8 @@ export interface CremaProfile {
 	bean: string;
 	/** Free-text notes. */
 	notes: string;
-	/** Roast level. */
-	roast: Roast;
+	/** Roast level, or `null` when no roast is clearly known. */
+	roast: Roast | null;
 	/** Custom user tags (Guest, Daily, names…). */
 	tags: string[];
 	/** Pinned to the Quick Controls favorites strip. */
@@ -176,21 +176,30 @@ export function segmentToStep(seg: ProfileSegment): ProfileStep {
 	};
 }
 
-/** A roast guess for an adapted built-in, from its brew temperature. */
-function roastFromTemp(temp: number): Roast {
-	if (temp >= 93) return 'light';
-	if (temp <= 90.5) return 'dark';
-	return 'medium';
+/**
+ * Infer a roast for an adapted built-in **only** from an explicit roast word
+ * in its name (case-insensitive). If the name carries no clear roast word the
+ * roast is left unset (`null`) — roast is never guessed from anything else.
+ */
+function roastFromName(name: string): Roast | null {
+	const n = name.toLowerCase();
+	// `very dark` is covered by the `dark` substring; `french` / `italian`
+	// roasts are conventionally dark.
+	if (/\b(dark|french|italian)\b/.test(n)) return 'dark';
+	if (/\b(medium|med)\b/.test(n)) return 'medium';
+	if (/\b(light|blonde|nordic)\b/.test(n)) return 'light';
+	return null;
 }
 
 /**
  * Adapt a core built-in {@link Profile} into a library {@link CremaProfile}.
  *
  * The core `Profile` has no library metadata (bean, roast, tags, dose…), so
- * those are synthesised: bean is left blank, roast is guessed from the warmest
- * step temperature, dose / yield default to a sane 18 g / 36 g, and the brew
- * temperature is the profile's mean step temperature. The result is read-only
- * — editing a built-in duplicates it to a custom profile (see `store.ts`).
+ * those are synthesised: bean is left blank, roast is inferred only from an
+ * explicit roast word in the profile name and otherwise left unset (`null`),
+ * dose / yield default to a sane 18 g / 36 g, and the brew temperature is the
+ * profile's mean step temperature. The result is read-only — editing a
+ * built-in duplicates it to a custom profile (see `store.ts`).
  */
 export function fromCoreProfile(profile: Profile, index: number): CremaProfile {
 	const segments = profile.steps.map(segmentFromStep);
@@ -203,7 +212,7 @@ export function fromCoreProfile(profile: Profile, index: number): CremaProfile {
 		name: profile.title,
 		bean: '',
 		notes: profile.notes,
-		roast: roastFromTemp(Math.max(...temps, meanTemp)),
+		roast: roastFromName(profile.title),
 		tags: ['Built-in'],
 		pinned: false,
 		lastUsed: null,
@@ -287,7 +296,7 @@ export function blankProfile(): CremaProfile {
 		name: '',
 		bean: '',
 		notes: '',
-		roast: 'medium',
+		roast: null,
 		tags: [],
 		pinned: false,
 		lastUsed: null,
