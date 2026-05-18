@@ -327,6 +327,28 @@ export interface ScaleCapabilities {
 }
 
 /**
+ * The BLE UUIDs a scale's transport layer needs.
+ * 
+ * `Clone` but not `Copy`: three string slices (48 bytes) exceed the size
+ * where implicit copies are a sensible default.
+ * 
+ * `#[typeshare]` + serde `Serialize` (behind the `serde` feature): the web
+ * shell needs these UUIDs to know which Web Bluetooth characteristics to
+ * subscribe to, so they cross the JSON bridge boundary.
+ */
+export interface ScaleUuids {
+	/** GATT service UUID. */
+	service: string;
+	/** Characteristic weight notifications arrive on. */
+	weight_notify: string;
+	/**
+	 * Characteristic commands are written to — equal to `weight_notify` for
+	 * scales that use a single characteristic for both.
+	 */
+	command_write: string;
+}
+
+/**
  * DE1 top-level machine state. Discriminants match the firmware `MachineState`
  * enum (see protocol §4.1).
  */

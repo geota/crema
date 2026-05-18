@@ -26,7 +26,7 @@ use de1_domain::{
 use de1_protocol::{
     MachineState, ShotSample, ShotSettings, StateInfo, WaterLevels, requested_state,
 };
-use de1_scale::{Scale, ScaleCapabilities, bookoo};
+use de1_scale::{Scale, ScaleCapabilities, ScaleUuids, bookoo};
 
 /// Scale sensor lag assumed when no scale is connected — a representative value
 /// across the supported scales.
@@ -137,6 +137,15 @@ impl CremaCore {
     /// on the concrete scale model.
     pub fn scale_capabilities(&self) -> Option<ScaleCapabilities> {
         self.scale.as_ref().map(Scale::capabilities)
+    }
+
+    /// The connected scale's BLE service and characteristic UUIDs — see
+    /// [`ScaleUuids`]. `None` when no scale is connected.
+    ///
+    /// The web shell reads this to know which Web Bluetooth characteristics
+    /// to subscribe to for weight notifications and command writes.
+    pub fn scale_uuids(&self) -> Option<ScaleUuids> {
+        self.scale.as_ref().map(Scale::uuids)
     }
 
     /// Arm automatic shot-stop. A `None` target disables that mode; the
