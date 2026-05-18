@@ -1,5 +1,7 @@
 //! The unifying [`Scale`] abstraction over every supported scale protocol.
 
+use typeshare::typeshare;
+
 use crate::acaia::{self, AcaiaDecoder};
 use crate::{
     atomheart_eclair, bookoo, decent_scale, difluid, eureka_precisa, felicita, hiroia_jimmy, skale,
@@ -41,6 +43,83 @@ pub struct ScaleReading {
     /// Scale-reported built-in-timer reading, milliseconds — `None` for scales
     /// that do not report a timer in their weight notification.
     pub timer_ms: Option<u32>,
+}
+
+/// The inclusive `[min, max]` bounds of a ranged scale setting.
+///
+/// A ranged setting (the beeper volume, the auto-standby timeout) carries its
+/// real bounds rather than a bare "supported" flag, so the shell can render a
+/// control over `[min, max]` directly — no normalization, no per-model
+/// hardcoding. The step is implied `1`: every supported ranged setting takes a
+/// whole-number value.
+#[typeshare]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct RangeCapability {
+    /// The smallest value the setting accepts.
+    pub min: u8,
+    /// The largest value the setting accepts.
+    pub max: u8,
+}
+
+/// One selectable display/behaviour mode a scale exposes.
+///
+/// A "first-class" scale (the Bookoo) lets the user switch the active display
+/// mode; this descriptor carries each mode's wire `id` and a human-readable
+/// `name`, so the shell renders one control per mode without per-model
+/// hardcoding. The shell passes the `id` straight back to `set_scale_mode`.
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct ModeInfo {
+    /// The mode's wire identifier — passed back unchanged to select this mode.
+    pub id: u8,
+    /// A human-readable name for the mode, suitable for a button label.
+    pub name: String,
+}
+
+/// What a connected scale can do, beyond reporting a bare weight.
+///
+/// Crema is **capability-driven, never device-driven**: the app reads this
+/// descriptor and conditionally enables features, so it never branches on a
+/// concrete scale model. A plain weight-only scale has every field absent /
+/// `false` / empty; a "first-class" scale (the Bookoo today) sets the
+/// capabilities it supports.
+///
+/// Ranged settings carry their real `[min, max]` bounds as a
+/// [`RangeCapability`] (`None` = the scale does not expose that setting), so
+/// the shell renders a control over the actual range. Toggle settings stay a
+/// plain `bool` — there is nothing to parameterize. The selectable display
+/// modes are a `Vec<ModeInfo>` (empty = no mode support).
+///
+/// `#[non_exhaustive]`: more capabilities are added here as later slices land,
+/// without breaking callers — a new field is purely additive.
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
+pub struct ScaleCapabilities {
+    /// The scale reports its own native mass-flow rate in its weight
+    /// notification (surfaced as `ScaleReading::flow_g_per_s`).
+    pub reports_flow: bool,
+    /// The scale reports its own built-in-timer reading in its weight
+    /// notification (surfaced as `ScaleReading::timer_ms`).
+    pub reports_timer: bool,
+    /// The bounds of the scale's settable beeper volume — `None` when the
+    /// scale's volume is not settable. `min` is the quietest step (`0` =
+    /// silent), `max` the loudest.
+    pub volume: Option<RangeCapability>,
+    /// The bounds of the scale's auto-standby timeout, in minutes — `None`
+    /// when the scale has no configurable auto-standby.
+    pub standby_minutes: Option<RangeCapability>,
+    /// The scale accepts a command to toggle flow smoothing.
+    pub flow_smoothing: bool,
+    /// The scale accepts a command to toggle anti-mistouch.
+    pub anti_mistouch: bool,
+    /// The selectable display/behaviour modes the scale exposes — empty when
+    /// the scale has no switchable modes. Each entry carries the mode's wire
+    /// `id` and a display `name`.
+    pub modes: Vec<ModeInfo>,
 }
 
 /// A timer command a scale may support.
@@ -257,6 +336,58 @@ impl Scale {
                 | Inner::HiroiaJimmy
                 | Inner::VariaAku
         )
+    }
+
+    /// What this scale can do beyond reporting a bare weight — see
+    /// [`ScaleCapabilities`].
+    ///
+    /// The app drives feature gating off this descriptor rather than off the
+    /// concrete scale model: Crema is capability-driven, never device-driven.
+    /// Weight-only scales return [`ScaleCapabilities::default`] (all `false`);
+    /// the Bookoo, a "first-class" scale, reports the capabilities it supports.
+    pub fn capabilities(&self) -> ScaleCapabilities {
+        match &self.inner {
+            // The Bookoo carries native flow and a built-in timer in its
+            // weight notification, and exposes a settable beeper volume
+            // (0 = silent), a configurable auto-standby timeout, flow
+            // smoothing / anti-mistouch toggles, and three switchable
+            // display modes.
+            Inner::Bookoo => ScaleCapabilities {
+                reports_flow: true,
+                reports_timer: true,
+                volume: Some(RangeCapability { min: 0, max: 5 }),
+                standby_minutes: Some(RangeCapability { min: 5, max: 30 }),
+                flow_smoothing: true,
+                anti_mistouch: true,
+                modes: vec![
+                    ModeInfo {
+                        id: bookoo::BookooMode::FlowRate.index(),
+                        name: "Flow Rate".to_owned(),
+                    },
+                    ModeInfo {
+                        id: bookoo::BookooMode::Timer.index(),
+                        name: "Timer".to_owned(),
+                    },
+                    ModeInfo {
+                        id: bookoo::BookooMode::Auto.index(),
+                        name: "Auto".to_owned(),
+                    },
+                ],
+            },
+            // Every other supported scale is weight-only for this slice.
+            Inner::Decent { .. }
+            | Inner::Skale
+            | Inner::Felicita
+            | Inner::AcaiaGen1(_)
+            | Inner::AcaiaPyxis(_)
+            | Inner::AtomheartEclair
+            | Inner::EurekaPrecisa
+            | Inner::SoloBarista
+            | Inner::Difluid
+            | Inner::Smartchef
+            | Inner::HiroiaJimmy
+            | Inner::VariaAku => ScaleCapabilities::default(),
+        }
     }
 
     /// The scale's sensor lag, in seconds — the delay between coffee landing
@@ -503,6 +634,55 @@ mod tests {
         assert!(!smartchef.supports_timer());
         assert_eq!(smartchef.tare(), None);
         assert_eq!(smartchef.timer(TimerCommand::Start), None);
+    }
+
+    #[test]
+    fn bookoo_reports_first_class_capabilities() {
+        let bookoo = Scale::from_label("Bookoo").unwrap();
+        let caps = bookoo.capabilities();
+        assert!(caps.reports_flow);
+        assert!(caps.reports_timer);
+        assert_eq!(caps.volume, Some(RangeCapability { min: 0, max: 5 }));
+        assert_eq!(
+            caps.standby_minutes,
+            Some(RangeCapability { min: 5, max: 30 })
+        );
+        assert!(caps.flow_smoothing);
+        assert!(caps.anti_mistouch);
+        assert_eq!(
+            caps.modes,
+            vec![
+                ModeInfo { id: 0, name: "Flow Rate".to_owned() },
+                ModeInfo { id: 1, name: "Timer".to_owned() },
+                ModeInfo { id: 2, name: "Auto".to_owned() },
+            ]
+        );
+    }
+
+    #[test]
+    fn weight_only_scales_report_no_capabilities() {
+        // Every non-Bookoo scale is weight-only for this slice.
+        for label in [
+            "Decent Scale",
+            "Skale II",
+            "Felicita Arc",
+            "Acaia",
+            "Acaia Pyxis",
+            "Atomheart Eclair",
+            "Eureka Precisa",
+            "Solo Barista",
+            "Difluid Microbalance",
+            "Smartchef",
+            "Hiroia Jimmy",
+            "Varia Aku",
+        ] {
+            let caps = Scale::from_label(label).unwrap().capabilities();
+            assert_eq!(
+                caps,
+                ScaleCapabilities::default(),
+                "{label} should report no capabilities"
+            );
+        }
     }
 
     #[test]

@@ -272,6 +272,76 @@ data class CoreOutput (
 	val commands: List<Command>
 )
 
+/// One selectable display/behaviour mode a scale exposes.
+/// 
+/// A "first-class" scale (the Bookoo) lets the user switch the active display
+/// mode; this descriptor carries each mode's wire `id` and a human-readable
+/// `name`, so the shell renders one control per mode without per-model
+/// hardcoding. The shell passes the `id` straight back to `set_scale_mode`.
+@Serializable
+data class ModeInfo (
+	/// The mode's wire identifier — passed back unchanged to select this mode.
+	val id: UByte,
+	/// A human-readable name for the mode, suitable for a button label.
+	val name: String
+)
+
+/// The inclusive `[min, max]` bounds of a ranged scale setting.
+/// 
+/// A ranged setting (the beeper volume, the auto-standby timeout) carries its
+/// real bounds rather than a bare "supported" flag, so the shell can render a
+/// control over `[min, max]` directly — no normalization, no per-model
+/// hardcoding. The step is implied `1`: every supported ranged setting takes a
+/// whole-number value.
+@Serializable
+data class RangeCapability (
+	/// The smallest value the setting accepts.
+	val min: UByte,
+	/// The largest value the setting accepts.
+	val max: UByte
+)
+
+/// What a connected scale can do, beyond reporting a bare weight.
+/// 
+/// Crema is **capability-driven, never device-driven**: the app reads this
+/// descriptor and conditionally enables features, so it never branches on a
+/// concrete scale model. A plain weight-only scale has every field absent /
+/// `false` / empty; a "first-class" scale (the Bookoo today) sets the
+/// capabilities it supports.
+/// 
+/// Ranged settings carry their real `[min, max]` bounds as a
+/// [`RangeCapability`] (`None` = the scale does not expose that setting), so
+/// the shell renders a control over the actual range. Toggle settings stay a
+/// plain `bool` — there is nothing to parameterize. The selectable display
+/// modes are a `Vec<ModeInfo>` (empty = no mode support).
+/// 
+/// `#[non_exhaustive]`: more capabilities are added here as later slices land,
+/// without breaking callers — a new field is purely additive.
+@Serializable
+data class ScaleCapabilities (
+	/// The scale reports its own native mass-flow rate in its weight
+	/// notification (surfaced as `ScaleReading::flow_g_per_s`).
+	val reports_flow: Boolean,
+	/// The scale reports its own built-in-timer reading in its weight
+	/// notification (surfaced as `ScaleReading::timer_ms`).
+	val reports_timer: Boolean,
+	/// The bounds of the scale's settable beeper volume — `None` when the
+	/// scale's volume is not settable. `min` is the quietest step (`0` =
+	/// silent), `max` the loudest.
+	val volume: RangeCapability? = null,
+	/// The bounds of the scale's auto-standby timeout, in minutes — `None`
+	/// when the scale has no configurable auto-standby.
+	val standby_minutes: RangeCapability? = null,
+	/// The scale accepts a command to toggle flow smoothing.
+	val flow_smoothing: Boolean,
+	/// The scale accepts a command to toggle anti-mistouch.
+	val anti_mistouch: Boolean,
+	/// The selectable display/behaviour modes the scale exposes — empty when
+	/// the scale has no switchable modes. Each entry carries the mode's wire
+	/// `id` and a display `name`.
+	val modes: List<ModeInfo>
+)
+
 /// DE1 top-level machine state. Discriminants match the firmware `MachineState`
 /// enum (see protocol §4.1).
 @Serializable

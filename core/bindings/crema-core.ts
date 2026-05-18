@@ -169,6 +169,89 @@ export interface CoreOutput {
 }
 
 /**
+ * One selectable display/behaviour mode a scale exposes.
+ * 
+ * A "first-class" scale (the Bookoo) lets the user switch the active display
+ * mode; this descriptor carries each mode's wire `id` and a human-readable
+ * `name`, so the shell renders one control per mode without per-model
+ * hardcoding. The shell passes the `id` straight back to `set_scale_mode`.
+ */
+export interface ModeInfo {
+	/** The mode's wire identifier — passed back unchanged to select this mode. */
+	id: number;
+	/** A human-readable name for the mode, suitable for a button label. */
+	name: string;
+}
+
+/**
+ * The inclusive `[min, max]` bounds of a ranged scale setting.
+ * 
+ * A ranged setting (the beeper volume, the auto-standby timeout) carries its
+ * real bounds rather than a bare "supported" flag, so the shell can render a
+ * control over `[min, max]` directly — no normalization, no per-model
+ * hardcoding. The step is implied `1`: every supported ranged setting takes a
+ * whole-number value.
+ */
+export interface RangeCapability {
+	/** The smallest value the setting accepts. */
+	min: number;
+	/** The largest value the setting accepts. */
+	max: number;
+}
+
+/**
+ * What a connected scale can do, beyond reporting a bare weight.
+ * 
+ * Crema is **capability-driven, never device-driven**: the app reads this
+ * descriptor and conditionally enables features, so it never branches on a
+ * concrete scale model. A plain weight-only scale has every field absent /
+ * `false` / empty; a "first-class" scale (the Bookoo today) sets the
+ * capabilities it supports.
+ * 
+ * Ranged settings carry their real `[min, max]` bounds as a
+ * [`RangeCapability`] (`None` = the scale does not expose that setting), so
+ * the shell renders a control over the actual range. Toggle settings stay a
+ * plain `bool` — there is nothing to parameterize. The selectable display
+ * modes are a `Vec<ModeInfo>` (empty = no mode support).
+ * 
+ * `#[non_exhaustive]`: more capabilities are added here as later slices land,
+ * without breaking callers — a new field is purely additive.
+ */
+export interface ScaleCapabilities {
+	/**
+	 * The scale reports its own native mass-flow rate in its weight
+	 * notification (surfaced as `ScaleReading::flow_g_per_s`).
+	 */
+	reports_flow: boolean;
+	/**
+	 * The scale reports its own built-in-timer reading in its weight
+	 * notification (surfaced as `ScaleReading::timer_ms`).
+	 */
+	reports_timer: boolean;
+	/**
+	 * The bounds of the scale's settable beeper volume — `None` when the
+	 * scale's volume is not settable. `min` is the quietest step (`0` =
+	 * silent), `max` the loudest.
+	 */
+	volume?: RangeCapability;
+	/**
+	 * The bounds of the scale's auto-standby timeout, in minutes — `None`
+	 * when the scale has no configurable auto-standby.
+	 */
+	standby_minutes?: RangeCapability;
+	/** The scale accepts a command to toggle flow smoothing. */
+	flow_smoothing: boolean;
+	/** The scale accepts a command to toggle anti-mistouch. */
+	anti_mistouch: boolean;
+	/**
+	 * The selectable display/behaviour modes the scale exposes — empty when
+	 * the scale has no switchable modes. Each entry carries the mode's wire
+	 * `id` and a display `name`.
+	 */
+	modes: ModeInfo[];
+}
+
+/**
  * DE1 top-level machine state. Discriminants match the firmware `MachineState`
  * enum (see protocol §4.1).
  */

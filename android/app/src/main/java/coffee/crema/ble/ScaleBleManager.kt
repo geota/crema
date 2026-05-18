@@ -72,6 +72,13 @@ class ScaleBleManager(
     private val onCoreOutput: (String) -> Unit,
     /** Called with human-readable status transitions for the UI log. */
     private val onStatus: (String) -> Unit,
+    /**
+     * Called once the core has identified the connected scale, so the owner
+     * can read the scale's [CremaBridge.scaleCapabilities] and drive
+     * capability-gated UI. Not called when the core did not recognise the
+     * scale. Runs on [scope] (a background dispatcher).
+     */
+    private val onScaleIdentified: () -> Unit = {},
 ) {
     enum class State { IDLE, SCANNING, CONNECTING, DISCOVERING, SUBSCRIBING, READY, DISCONNECTED }
 
@@ -136,6 +143,9 @@ class ScaleBleManager(
                 val label = runCatching { bridge.connectScale(advertisedName) }.getOrNull()
                 if (label != null) {
                     onStatus("Core recognised scale: $label")
+                    // The core now knows the scale's codec; let the owner read
+                    // its capabilities and render capability-gated config UI.
+                    onScaleIdentified()
                 } else {
                     onStatus("Core did not recognise scale '$advertisedName'")
                 }

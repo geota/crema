@@ -13,6 +13,7 @@ crate-type = ["cdylib", "lib"]
 [dependencies]
 de1-app = { path = "../de1-app" }
 de1-protocol = { path = "../de1-protocol" }
+serde_json = { workspace = true }
 uniffi = { version = "0.31.1", features = ["cli"] }
 
 [dev-dependencies]

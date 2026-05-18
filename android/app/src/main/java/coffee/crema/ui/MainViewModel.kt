@@ -6,6 +6,7 @@ import coffee.crema.core.Command
 import coffee.crema.core.CoreOutput
 import coffee.crema.core.CremaBridge
 import coffee.crema.core.Event
+import coffee.crema.core.ScaleCapabilities
 import coffee.crema.ble.BleScanner
 import coffee.crema.ble.BleSessionRecorder
 import coffee.crema.ble.De1BleManager
@@ -15,6 +16,24 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.json.Json
+
+/**
+ * Default scale beeper-volume step shown when a volume-capable scale connects.
+ * The scale's true current volume is not read back in this slice (it needs the
+ * `0x0f` settings decode), so the control starts here and is write-only. The
+ * control's actual range is taken from the scale's `ScaleCapabilities.volume`
+ * descriptor; this default is only the starting step.
+ */
+const val DEFAULT_SCALE_VOLUME: Int = 3
+
+/**
+ * Default scale auto-standby timeout (minutes) shown when a standby-capable
+ * scale connects. Like the volume default this is write-only for this slice —
+ * the scale's true value is not read back (it needs the `0x0f` settings
+ * decode). The control's actual range comes from the scale's
+ * `ScaleCapabilities.standby_minutes` descriptor; this is only the starting step.
+ */
+const val DEFAULT_SCALE_STANDBY_MINUTES: Int = 15
 
 /** A flat snapshot of everything the current screen shows. */
 data class MainUiState(
@@ -42,6 +61,36 @@ data class MainUiState(
      * only scales with a built-in timer (the Bookoo) populate this.
      */
     val scaleTimerMs: Long? = null,
+    /**
+     * What the connected scale can do beyond reporting a bare weight, or null
+     * before a scale is connected / identified. The UI gates configuration
+     * controls on this descriptor — Crema is capability-driven, never
+     * device-driven, so the UI never branches on the concrete scale model.
+     */
+    val scaleCapabilities: ScaleCapabilities? = null,
+    /**
+     * The scale beeper-volume step (0..5) the UI currently shows. Write-only
+     * for this slice: the scale's actual current volume is not read back (that
+     * needs the `0x0f` settings decode, not yet implemented), so this starts
+     * at a sensible default and tracks only what the user last set.
+     */
+    val scaleVolume: Int = DEFAULT_SCALE_VOLUME,
+    /**
+     * The scale auto-standby timeout (minutes) the UI currently shows.
+     * Write-only for this slice, like [scaleVolume] — the scale's actual value
+     * is not read back. Starts at [DEFAULT_SCALE_STANDBY_MINUTES].
+     */
+    val scaleStandbyMinutes: Int = DEFAULT_SCALE_STANDBY_MINUTES,
+    /**
+     * Whether the scale's flow smoothing toggle is shown as on. Write-only —
+     * the scale's actual state is not read back; starts off.
+     */
+    val scaleFlowSmoothing: Boolean = false,
+    /**
+     * Whether the scale's anti-mistouch toggle is shown as on. Write-only —
+     * the scale's actual state is not read back; starts off.
+     */
+    val scaleAntiMistouch: Boolean = false,
     /** A rolling event log, newest first. */
     val eventLog: List<String> = emptyList(),
 )
@@ -113,6 +162,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         recorder = bleRecorder,
         onCoreOutput = ::onCoreOutputJson,
         onStatus = { line -> _ui.value = _ui.value.copy(status = line) },
+        onScaleIdentified = ::refreshScaleCapabilities,
     )
 
     init {
@@ -162,7 +212,143 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             scaleWeightG = null,
             scaleFlowGPerS = null,
             scaleTimerMs = null,
+            // Drop the capabilities so the config UI hides until the next scale.
+            scaleCapabilities = null,
+            scaleVolume = DEFAULT_SCALE_VOLUME,
+            scaleStandbyMinutes = DEFAULT_SCALE_STANDBY_MINUTES,
+            scaleFlowSmoothing = false,
+            scaleAntiMistouch = false,
         )
+    }
+
+    /**
+     * Read the connected scale's [ScaleCapabilities] from the core and fold
+     * them into the UI snapshot. Called by [ScaleBleManager] once the core has
+     * identified the scale; the UI gates configuration controls on the result.
+     *
+     * Capability-driven, never device-driven: the UI never branches on the
+     * concrete scale model, only on the capability flags.
+     */
+    private fun refreshScaleCapabilities() {
+        val capsJson = runCatching { bridge.scaleCapabilities() }.getOrNull()
+        val caps = capsJson?.let {
+            runCatching {
+                json.decodeFromString(ScaleCapabilities.serializer(), it)
+            }.getOrNull()
+        }
+        _ui.value = _ui.value.copy(scaleCapabilities = caps)
+    }
+
+    /**
+     * Set the connected scale's beeper volume to [level]. Asks the core for the
+     * command bytes, then routes the resulting `Command.WriteScale` through the
+     * shared command path — the same path as Tare and the core's auto-tare.
+     *
+     * The requested level is clamped to the connected scale's
+     * `ScaleCapabilities.volume` `[min, max]` bounds; the core clamps again, so
+     * an out-of-range value is harmless either way. The core only emits a
+     * command for a scale whose capabilities include a settable `volume`, so
+     * this is capability-gated end to end. The UI's shown volume is updated
+     * optimistically (the value is not read back).
+     */
+    fun setScaleVolume(level: Int) {
+        val range = _ui.value.scaleCapabilities?.volume
+        val clamped = if (range != null) {
+            level.coerceIn(range.min.toInt(), range.max.toInt())
+        } else {
+            level
+        }
+        _ui.value = _ui.value.copy(scaleVolume = clamped)
+        val raw = runCatching {
+            bridge.setScaleVolume(clamped.toUByte())
+        }.getOrElse {
+            appendLog("Set volume failed: ${it.message}")
+            return
+        }
+        onCoreOutputJson(raw)
+    }
+
+    /**
+     * Set the connected scale's auto-standby timeout to [minutes]. Asks the
+     * core for the command bytes, then routes the resulting `Command.WriteScale`
+     * through the shared command path — the same path as volume and Tare.
+     *
+     * The requested value is clamped to the connected scale's
+     * `ScaleCapabilities.standby_minutes` `[min, max]` bounds; the core clamps
+     * again, so an out-of-range value is harmless. Capability-gated end to end:
+     * the core emits a command only for a scale that exposes a configurable
+     * auto-standby. The UI's shown value is updated optimistically.
+     */
+    fun setScaleStandbyMinutes(minutes: Int) {
+        val range = _ui.value.scaleCapabilities?.standby_minutes
+        val clamped = if (range != null) {
+            minutes.coerceIn(range.min.toInt(), range.max.toInt())
+        } else {
+            minutes
+        }
+        _ui.value = _ui.value.copy(scaleStandbyMinutes = clamped)
+        val raw = runCatching {
+            bridge.setScaleStandbyMinutes(clamped.toUByte())
+        }.getOrElse {
+            appendLog("Set standby failed: ${it.message}")
+            return
+        }
+        onCoreOutputJson(raw)
+    }
+
+    /**
+     * Enable or disable the connected scale's flow smoothing. Asks the core for
+     * the command bytes, then routes the resulting `Command.WriteScale` through
+     * the shared command path. Capability-gated: the core emits a command only
+     * for a scale that supports flow smoothing. The UI's shown toggle is
+     * updated optimistically (the value is not read back).
+     */
+    fun setScaleFlowSmoothing(enabled: Boolean) {
+        _ui.value = _ui.value.copy(scaleFlowSmoothing = enabled)
+        val raw = runCatching {
+            bridge.setScaleFlowSmoothing(enabled)
+        }.getOrElse {
+            appendLog("Set flow smoothing failed: ${it.message}")
+            return
+        }
+        onCoreOutputJson(raw)
+    }
+
+    /**
+     * Enable or disable the connected scale's anti-mistouch. Asks the core for
+     * the command bytes, then routes the resulting `Command.WriteScale` through
+     * the shared command path. Capability-gated: the core emits a command only
+     * for a scale that supports anti-mistouch. The UI's shown toggle is updated
+     * optimistically (the value is not read back).
+     */
+    fun setScaleAntiMistouch(enabled: Boolean) {
+        _ui.value = _ui.value.copy(scaleAntiMistouch = enabled)
+        val raw = runCatching {
+            bridge.setScaleAntiMistouch(enabled)
+        }.getOrElse {
+            appendLog("Set anti-mistouch failed: ${it.message}")
+            return
+        }
+        onCoreOutputJson(raw)
+    }
+
+    /**
+     * Switch the connected scale to display mode [modeId]. Asks the core for
+     * the command bytes, then routes the result through the shared command
+     * path. Switching a mode is **three** `Command.WriteScale` entries; the
+     * core emits them in order and [onCoreOutputJson]'s `commands.forEach`
+     * loop preserves that order, so all three reach `ScaleBleManager` in
+     * sequence. Capability-gated: the core emits commands only for a scale that
+     * exposes switchable modes and only for a listed [modeId].
+     */
+    fun setScaleMode(modeId: Int) {
+        val raw = runCatching {
+            bridge.setScaleMode(modeId.toUByte())
+        }.getOrElse {
+            appendLog("Set mode failed: ${it.message}")
+            return
+        }
+        onCoreOutputJson(raw)
     }
 
     /**

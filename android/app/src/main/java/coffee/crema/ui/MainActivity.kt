@@ -9,11 +9,14 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.weight
+import androidx.compose.ui.Alignment
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
@@ -21,16 +24,20 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager
+import coffee.crema.core.ModeInfo
+import coffee.crema.core.RangeCapability
 
 /**
  * The app's current single screen: a Connect button and a live readout of the
@@ -77,6 +84,11 @@ class MainActivity : ComponentActivity() {
                         onConnectScale = { withBlePermission(viewModel::connectScale) },
                         onDisconnectScale = viewModel::disconnectScale,
                         onTareScale = viewModel::tareScale,
+                        onSetScaleVolume = viewModel::setScaleVolume,
+                        onSetScaleStandbyMinutes = viewModel::setScaleStandbyMinutes,
+                        onSetScaleFlowSmoothing = viewModel::setScaleFlowSmoothing,
+                        onSetScaleAntiMistouch = viewModel::setScaleAntiMistouch,
+                        onSetScaleMode = viewModel::setScaleMode,
                     )
                 }
             }
@@ -105,6 +117,11 @@ private fun MainScreen(
     onConnectScale: () -> Unit,
     onDisconnectScale: () -> Unit,
     onTareScale: () -> Unit,
+    onSetScaleVolume: (Int) -> Unit,
+    onSetScaleStandbyMinutes: (Int) -> Unit,
+    onSetScaleFlowSmoothing: (Boolean) -> Unit,
+    onSetScaleAntiMistouch: (Boolean) -> Unit,
+    onSetScaleMode: (Int) -> Unit,
 ) {
     val ui by viewModel.ui.collectAsState()
 
@@ -145,9 +162,23 @@ private fun MainScreen(
             scaleWeightG = ui.scaleWeightG,
             scaleFlowGPerS = ui.scaleFlowGPerS,
             scaleTimerMs = ui.scaleTimerMs,
+            volumeRange = ui.scaleCapabilities?.volume,
+            scaleVolume = ui.scaleVolume,
+            standbyRange = ui.scaleCapabilities?.standby_minutes,
+            scaleStandbyMinutes = ui.scaleStandbyMinutes,
+            flowSmoothingSupported = ui.scaleCapabilities?.flow_smoothing == true,
+            scaleFlowSmoothing = ui.scaleFlowSmoothing,
+            antiMistouchSupported = ui.scaleCapabilities?.anti_mistouch == true,
+            scaleAntiMistouch = ui.scaleAntiMistouch,
+            modes = ui.scaleCapabilities?.modes ?: emptyList(),
             onConnectScale = onConnectScale,
             onDisconnectScale = onDisconnectScale,
             onTareScale = onTareScale,
+            onSetScaleVolume = onSetScaleVolume,
+            onSetScaleStandbyMinutes = onSetScaleStandbyMinutes,
+            onSetScaleFlowSmoothing = onSetScaleFlowSmoothing,
+            onSetScaleAntiMistouch = onSetScaleAntiMistouch,
+            onSetScaleMode = onSetScaleMode,
         )
 
         ReadoutCard(
@@ -175,13 +206,21 @@ private fun MainScreen(
 }
 
 /**
- * The scale section: a Connect button, a live weight readout, and a Tare
- * button. The scale connection is independent of the DE1 — it works with or
- * without a machine connected.
+ * The scale section: a Connect button, a live weight readout, a Tare button,
+ * and any capability-gated configuration controls. The scale connection is
+ * independent of the DE1 — it works with or without a machine connected.
  *
  * `scaleFlowGPerS` / `scaleTimerMs` are the scale's own native readings — only
  * populated for scales that report them (the Bookoo); shown as raw data
  * alongside the weight.
+ *
+ * Configuration controls are **capability-gated, never device-gated**: each
+ * control renders only when its capability is present in the core's
+ * `ScaleCapabilities` — the volume / standby steppers when their range is
+ * non-null and over exactly that scale-reported `[min, max]` range, the flow-
+ * smoothing / anti-mistouch toggles when their flag is set, the mode buttons
+ * when the scale lists any modes. The UI never branches on the concrete scale
+ * model — a weight-only scale simply shows no configuration controls.
  */
 @Composable
 private fun ScaleSection(
@@ -189,9 +228,42 @@ private fun ScaleSection(
     scaleWeightG: Float?,
     scaleFlowGPerS: Float?,
     scaleTimerMs: Long?,
+    /**
+     * The connected scale's settable beeper-volume bounds, or null when the
+     * scale's volume is not settable — the volume control is gated on this.
+     */
+    volumeRange: RangeCapability?,
+    /** The volume step the control currently shows; write-only. */
+    scaleVolume: Int,
+    /**
+     * The connected scale's auto-standby-timeout bounds (minutes), or null
+     * when the scale has no configurable auto-standby — the standby control is
+     * gated on this.
+     */
+    standbyRange: RangeCapability?,
+    /** The standby timeout (minutes) the control currently shows; write-only. */
+    scaleStandbyMinutes: Int,
+    /** Whether the scale supports flow smoothing — gates the toggle. */
+    flowSmoothingSupported: Boolean,
+    /** The flow-smoothing toggle state currently shown; write-only. */
+    scaleFlowSmoothing: Boolean,
+    /** Whether the scale supports anti-mistouch — gates the toggle. */
+    antiMistouchSupported: Boolean,
+    /** The anti-mistouch toggle state currently shown; write-only. */
+    scaleAntiMistouch: Boolean,
+    /**
+     * The scale's selectable display modes — empty when the scale has no
+     * switchable modes; the mode buttons are gated on this being non-empty.
+     */
+    modes: List<ModeInfo>,
     onConnectScale: () -> Unit,
     onDisconnectScale: () -> Unit,
     onTareScale: () -> Unit,
+    onSetScaleVolume: (Int) -> Unit,
+    onSetScaleStandbyMinutes: (Int) -> Unit,
+    onSetScaleFlowSmoothing: (Boolean) -> Unit,
+    onSetScaleAntiMistouch: (Boolean) -> Unit,
+    onSetScaleMode: (Int) -> Unit,
 ) {
     val scaleConnected = scaleState == ScaleBleManager.State.READY ||
         scaleState == ScaleBleManager.State.CONNECTING ||
@@ -227,6 +299,171 @@ private fun ScaleSection(
                 enabled = scaleReady,
                 modifier = Modifier.fillMaxWidth(),
             ) { Text("Tare") }
+
+            // Capability-gated: a volume-capable scale (the Bookoo) shows the
+            // beep-volume stepper over its own reported range; a weight-only
+            // scale has no `volume` capability and shows nothing here.
+            if (volumeRange != null) {
+                ConfigStepper(
+                    label = "Beep volume",
+                    value = scaleVolume,
+                    range = volumeRange.min.toInt()..volumeRange.max.toInt(),
+                    enabled = scaleReady,
+                    onSetValue = onSetScaleVolume,
+                )
+            }
+
+            // Capability-gated: shown only for a scale that exposes a
+            // configurable auto-standby timeout, over its reported range.
+            if (standbyRange != null) {
+                ConfigStepper(
+                    label = "Standby (min)",
+                    value = scaleStandbyMinutes,
+                    range = standbyRange.min.toInt()..standbyRange.max.toInt(),
+                    enabled = scaleReady,
+                    onSetValue = onSetScaleStandbyMinutes,
+                )
+            }
+
+            // Capability-gated: shown only for a scale that supports the
+            // flow-smoothing toggle.
+            if (flowSmoothingSupported) {
+                ConfigToggle(
+                    label = "Flow smoothing",
+                    checked = scaleFlowSmoothing,
+                    enabled = scaleReady,
+                    onCheckedChange = onSetScaleFlowSmoothing,
+                )
+            }
+
+            // Capability-gated: shown only for a scale that supports the
+            // anti-mistouch toggle.
+            if (antiMistouchSupported) {
+                ConfigToggle(
+                    label = "Anti-mistouch",
+                    checked = scaleAntiMistouch,
+                    enabled = scaleReady,
+                    onCheckedChange = onSetScaleAntiMistouch,
+                )
+            }
+
+            // Capability-gated: a row of mode buttons, one per scale-reported
+            // mode; shown only when the scale lists any switchable modes.
+            if (modes.isNotEmpty()) {
+                ModeSelector(
+                    modes = modes,
+                    enabled = scaleReady,
+                    onSetMode = onSetScaleMode,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * A `−` / `+` stepper for a whole-number scale setting (beep volume,
+ * auto-standby timeout) over the scale-reported [range] (`min..max`).
+ * Write-only for this slice: the scale's true current value is not read back
+ * (that needs the `0x0f` settings decode), so [value] reflects only what the
+ * user last set and starts at a sensible default.
+ *
+ * Each tap calls [onSetValue] with the new step, which the view model forwards
+ * to the matching core setter; the `−` / `+` buttons disable at the range ends
+ * so [onSetValue] is only ever called with an in-[range] value.
+ */
+@Composable
+private fun ConfigStepper(
+    label: String,
+    value: Int,
+    range: IntRange,
+    enabled: Boolean,
+    onSetValue: (Int) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(label, style = MaterialTheme.typography.labelSmall)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedButton(
+                onClick = { onSetValue(value - 1) },
+                enabled = enabled && value > range.first,
+            ) { Text("−") }
+            Text(
+                "$value",
+                style = MaterialTheme.typography.titleMedium,
+                fontFamily = FontFamily.Monospace,
+                modifier = Modifier.weight(1f),
+                textAlign = TextAlign.Center,
+            )
+            OutlinedButton(
+                onClick = { onSetValue(value + 1) },
+                enabled = enabled && value < range.last,
+            ) { Text("+") }
+        }
+    }
+}
+
+/**
+ * A labelled on/off toggle for a boolean scale setting (flow smoothing,
+ * anti-mistouch). Write-only for this slice: the scale's true state is not
+ * read back, so [checked] reflects only what the user last set. Each change
+ * calls [onCheckedChange], which the view model forwards to the matching core
+ * setter.
+ */
+@Composable
+private fun ConfigToggle(
+    label: String,
+    checked: Boolean,
+    enabled: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.weight(1f),
+        )
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            enabled = enabled,
+        )
+    }
+}
+
+/**
+ * A row of buttons, one per scale-reported display [modes] entry, each
+ * labelled with the mode's name. Tapping a button calls [onSetMode] with the
+ * mode's `id`, which the view model forwards to the core's `setScaleMode` —
+ * which yields three ordered `WriteScale` commands. No "currently active"
+ * highlight: the scale's active mode is not read back (that needs the `0x0f`
+ * settings decode).
+ */
+@Composable
+private fun ModeSelector(
+    modes: List<ModeInfo>,
+    enabled: Boolean,
+    onSetMode: (Int) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text("Mode", style = MaterialTheme.typography.labelSmall)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            modes.forEach { mode ->
+                OutlinedButton(
+                    onClick = { onSetMode(mode.id.toInt()) },
+                    enabled = enabled,
+                    modifier = Modifier.weight(1f),
+                ) { Text(mode.name) }
+            }
         }
     }
 }
