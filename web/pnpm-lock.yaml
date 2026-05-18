@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@phosphor-icons/web':
+        specifier: ^2.1.2
+        version: 2.1.2
       bits-ui:
         specifier: ^2.18.1
         version: 2.18.1(@internationalized/date@3.12.1)(@sveltejs/kit@2.60.1(@sveltejs/vite-plugin-svelte@7.1.2(svelte@5.55.7)(vite@8.0.13(@types/node@25.8.0)(jiti@2.7.0)(terser@5.47.1)))(svelte@5.55.7)(typescript@6.0.3)(vite@8.0.13(@types/node@25.8.0)(jiti@2.7.0)(terser@5.47.1)))(svelte@5.55.7)
@@ -613,6 +616,9 @@ packages:
 
   '@oxc-project/types@0.130.0':
     resolution: {integrity: sha512-ibD2usx9JRu7f5pu2tMKMI4cpA4NgXJQoYRP4pQ7Pxmn1l6k/53qWtQWZayhYy3X4QZkt90Ot+mJEaeXouio6Q==}
+
+  '@phosphor-icons/web@2.1.2':
+    resolution: {integrity: sha512-rPAR9o/bEcp4Cw4DEeZHXf+nlGCMNGkNDRizYHM47NLxz9vvEHp/Tt6FMK1NcWadzw/pFDPnRBGi/ofRya958A==}
 
   '@polka/url@1.0.0-next.29':
     resolution: {integrity: sha512-wwQAWhWSuHaag8c4q/KN/vCoeOJYshAIvMQwD4GpSb3OiZklFfvAgmj0VCBBImRpuF/aFgIRzllXlVX93Jevww==}
@@ -2977,6 +2983,8 @@ snapshots:
     optional: true
 
   '@oxc-project/types@0.130.0': {}
+
+  '@phosphor-icons/web@2.1.2': {}
 
   '@polka/url@1.0.0-next.29': {}
 
