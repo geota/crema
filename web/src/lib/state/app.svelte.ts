@@ -17,6 +17,7 @@
 
 import { loadCore, type Command, type CoreOutput, type CremaCore } from '$lib/core';
 import { De1Manager, ScaleManager } from '$lib/ble';
+import { getHistoryStore } from '$lib/history';
 import { CremaUiState, DEFAULT_SCALE_STANDBY_MINUTES, DEFAULT_SCALE_VOLUME } from './ui-state.svelte';
 
 /**
@@ -58,10 +59,24 @@ export class CremaApp {
 	 * funnel every notification and action passes through. Mirrors the Android
 	 * shell's `onCoreOutputJson` (minus the JSON parse, which the core facade
 	 * already does): events first, then commands, both in order.
+	 *
+	 * On a `ShotCompleted` event it also snapshots the just-finished shot into
+	 * the persistent `lib/history` store — the core itself does not keep shot
+	 * history, so the shell records its own. The `ShotCompleted` fold keeps the
+	 * buffered `shotTelemetry` series intact, so reading `state.current` right
+	 * after the fold yields the complete series to persist.
 	 */
 	private applyCoreOutput(output: CoreOutput): void {
 		for (const event of output.events) {
 			this.state.applyEvent(event);
+			if (event.type === 'ShotCompleted') {
+				const snapshot = this.state.current;
+				getHistoryStore().record({
+					durationMs: event.content.duration_ms,
+					profileName: snapshot.activeProfileName,
+					series: snapshot.shotTelemetry
+				});
+			}
 		}
 		for (const command of output.commands) {
 			void this.executeCommand(command);
