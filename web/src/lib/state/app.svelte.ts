@@ -97,14 +97,31 @@ export class CremaApp {
 
 	/** Connect a DE1 — call from a button handler (Web Bluetooth gesture). */
 	async connectDe1(): Promise<void> {
-		this.state.patch({ eventLog: [], machineState: null, shotPhase: null, telemetry: null });
+		this.state.patch({
+			eventLog: [],
+			machineState: null,
+			shotPhase: null,
+			telemetry: null,
+			latestTelemetry: null,
+			shotTelemetry: [],
+			shotInProgress: false,
+			shotElapsedMs: 0
+		});
 		await this.de1.connect();
 	}
 
 	/** Disconnect the DE1 and clear its readout fields. */
 	async disconnectDe1(): Promise<void> {
 		await this.de1.disconnect();
-		this.state.patch({ machineState: null, shotPhase: null, telemetry: null });
+		this.state.patch({
+			machineState: null,
+			shotPhase: null,
+			telemetry: null,
+			latestTelemetry: null,
+			shotTelemetry: [],
+			shotInProgress: false,
+			shotElapsedMs: 0
+		});
 	}
 
 	// ---- Scale actions ----------------------------------------------------

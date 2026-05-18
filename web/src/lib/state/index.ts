@@ -12,6 +12,8 @@ export {
 	DEFAULT_SCALE_VOLUME,
 	DEFAULT_SCALE_STANDBY_MINUTES,
 	MAX_LOG_LINES,
-	type UiSnapshot
+	MAX_TELEMETRY_SAMPLES,
+	type UiSnapshot,
+	type TelemetrySample
 } from './ui-state.svelte';
 export { CremaApp, createCremaApp } from './app.svelte';
