@@ -73,6 +73,15 @@ export class ScaleManager {
 	/** The connected scale's GATT UUIDs, learned from the core after connect. */
 	private uuids: ScaleUuids | null = null;
 
+	/**
+	 * Serializes scale command writes. Web Bluetooth permits only one GATT
+	 * operation at a time and rejects an overlapping one with "GATT operation
+	 * already in progress" — and a single core action (mode selection) emits
+	 * three `WriteScale` commands. Every {@link writeScale} chains onto this
+	 * promise so writes run strictly one after another, in call order.
+	 */
+	private writeQueue: Promise<void> = Promise.resolve();
+
 	constructor(
 		private readonly core: CremaCore,
 		private readonly callbacks: ScaleManagerCallbacks
@@ -185,6 +194,18 @@ export class ScaleManager {
 	 * connected — mirrors the Android manager's defensive `writeCommand`.
 	 */
 	async writeScale(data: Uint8Array): Promise<void> {
+		// Chain onto the write queue so writes never overlap a GATT operation.
+		// The chain assignment below is synchronous, so a burst of writeScale
+		// calls — e.g. the three-command mode sequence dispatched in one
+		// `applyCoreOutput` loop — enqueues in call order and runs serially.
+		const run = this.writeQueue.then(() => this.doWriteScale(data));
+		// The `catch` keeps the chain alive if one write rejects.
+		this.writeQueue = run.catch(() => {});
+		return run;
+	}
+
+	/** Perform a single scale command write. Serialized by {@link writeScale}. */
+	private async doWriteScale(data: Uint8Array): Promise<void> {
 		const device = this.device;
 		const uuids = this.uuids;
 		if (device === null || uuids === null) {
