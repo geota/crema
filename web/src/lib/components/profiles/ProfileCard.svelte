@@ -82,7 +82,9 @@
 		</div>
 
 		<div class="pp-card-tags">
-			<span class="pp-card-roast">{profile.roast}</span>
+			{#if profile.roast != null}
+				<span class="pp-card-roast">{profile.roast}</span>
+			{/if}
 			{#each profile.tags as t (t)}
 				<span class="pp-card-tag">{t}</span>
 			{/each}

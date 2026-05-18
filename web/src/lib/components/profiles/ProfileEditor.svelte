@@ -284,7 +284,8 @@
 								<button
 									class="pe-tag"
 									class:is-active={draft.roast === r}
-									onclick={() => patch({ roast: r })}>{r}</button
+									onclick={() => patch({ roast: draft.roast === r ? null : r })}
+									>{r}</button
 								>
 							{/each}
 						</div>
