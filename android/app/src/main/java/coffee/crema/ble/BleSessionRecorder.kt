@@ -31,10 +31,11 @@ import java.util.Locale
  *    same monotonic value passed to [coffee.crema.core.CremaBridge.onNotification].
  *  - `dir` — `"in"` is a notification received from a device (DE1 or scale);
  *    `"out"` is a command written to one.
- *  - `src` — for `dir:"in"`, usually a [NotificationSource] enum name
- *    (`DE1_STATE`, `DE1_SHOT_SAMPLE`, `DE1_WATER_LEVELS`, `SCALE_WEIGHT`), but
- *    an arbitrary string is allowed for inbound traffic the core does not model
- *    (e.g. `SCALE_FF12` for Bookoo command-characteristic notifications); for
+ *  - `src` — for `dir:"in"`, a [NotificationSource] enum name (`DE1_STATE`,
+ *    `DE1_SHOT_SAMPLE`, `DE1_WATER_LEVELS`, `SCALE_WEIGHT`) or the `SCALE_FF12`
+ *    label for Bookoo command-characteristic notifications (the replay tool
+ *    maps it to the `SCALE_COMMAND` source); an arbitrary string is still
+ *    allowed for any future inbound traffic the core does not model; for
  *    `dir:"out"`, a short label for the characteristic (e.g. `SCALE_COMMAND`
  *    for a tare/timer write).
  *  - `hex` — raw bytes, lowercase hex, no separators.
@@ -141,9 +142,10 @@ class BleSessionRecorder(private val context: Context) {
      * Append one `dir:"in"` line for a notification received from a device,
      * tagged with an arbitrary [src] label rather than a [NotificationSource].
      *
-     * This exists for inbound traffic the Rust core does not (yet) model — e.g.
-     * notifications from the Bookoo command characteristic `ff12`, recorded as
-     * `src:"SCALE_FF12"` purely for reverse-engineering. The capture line is
+     * This is used for notifications from the Bookoo command characteristic
+     * `ff12`, recorded as `src:"SCALE_FF12"`; the replay tool maps that label
+     * to the core's `SCALE_COMMAND` source. It also remains available for any
+     * future inbound traffic the core does not model. The capture line is
      * otherwise identical to the [NotificationSource]-typed overload, which now
      * delegates here. [tMs] must be the same `elapsedRealtime()` timestamp the
      * notification was stamped with at delivery.

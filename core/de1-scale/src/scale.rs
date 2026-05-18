@@ -502,6 +502,33 @@ impl Scale {
         })
     }
 
+    /// Decode a notification from the scale's *command* characteristic into a
+    /// [`bookoo::CommandResponse`].
+    ///
+    /// Some scales' command characteristic also has the NOTIFY property and the
+    /// scale pushes structured responses back on it — the Bookoo answers a
+    /// settings / serial query there. Only the Bookoo decodes such a frame
+    /// today; every weight-only scale returns `None`, as does the Bookoo for a
+    /// frame that is not a recognised command response.
+    pub fn parse_command_response(&self, data: &[u8]) -> Option<bookoo::CommandResponse> {
+        match &self.inner {
+            Inner::Bookoo => bookoo::parse_command_response(data),
+            // No other supported scale models a command-channel response.
+            Inner::Decent { .. }
+            | Inner::Skale
+            | Inner::Felicita
+            | Inner::AcaiaGen1(_)
+            | Inner::AcaiaPyxis(_)
+            | Inner::AtomheartEclair
+            | Inner::EurekaPrecisa
+            | Inner::SoloBarista
+            | Inner::Difluid
+            | Inner::Smartchef
+            | Inner::HiroiaJimmy
+            | Inner::VariaAku => None,
+        }
+    }
+
     /// Build a tare command to write to the [command characteristic](ScaleUuids).
     /// Returns `None` if the scale has no software tare (see
     /// [`supports_tare`](Self::supports_tare)).
@@ -692,6 +719,38 @@ mod tests {
         assert_eq!(reading.battery_percent, None);
         assert_eq!(reading.flow_smoothing, None);
         assert_eq!(reading.auto_stop, None);
+    }
+
+    #[test]
+    fn bookoo_parses_a_command_channel_serial_response() {
+        let bookoo = Scale::from_label("Bookoo").unwrap();
+        // A real 03 0c serial response: anti-mistouch on.
+        let hex = "030c008d534e32343030643636613839653701ce";
+        let frame: Vec<u8> = (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+            .collect();
+        assert_eq!(
+            bookoo.parse_command_response(&frame),
+            Some(bookoo::CommandResponse::Serial {
+                firmware_version: 141,
+                serial: "SN2400d66a89e7".to_owned(),
+                anti_mistouch: true,
+            })
+        );
+    }
+
+    #[test]
+    fn a_weight_only_scale_parses_no_command_channel_response() {
+        let decent = Scale::from_label("Decent Scale").unwrap();
+        // The same 03 0e settings frame the Bookoo decodes — a weight-only
+        // scale models no command channel, so it returns None.
+        let hex = "030e02040000000000000000000000000000000b";
+        let frame: Vec<u8> = (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+            .collect();
+        assert_eq!(decent.parse_command_response(&frame), None);
     }
 
     #[test]

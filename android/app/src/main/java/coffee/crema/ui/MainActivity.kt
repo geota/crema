@@ -160,6 +160,9 @@ private fun MainScreen(
 
         ScaleSection(
             scaleState = ui.scaleState,
+            scaleName = ui.scaleName,
+            scaleFirmware = ui.scaleFirmware,
+            scaleSerial = ui.scaleSerial,
             scaleWeightG = ui.scaleWeightG,
             scaleFlowGPerS = ui.scaleFlowGPerS,
             scaleTimerMs = ui.scaleTimerMs,
@@ -173,6 +176,7 @@ private fun MainScreen(
             antiMistouchSupported = ui.scaleCapabilities?.anti_mistouch == true,
             scaleAntiMistouch = ui.scaleAntiMistouch,
             modes = ui.scaleCapabilities?.modes ?: emptyList(),
+            scaleActiveMode = ui.scaleActiveMode,
             autoStopSupported = ui.scaleCapabilities?.auto_stop == true,
             scaleAutoStop = ui.scaleAutoStop,
             onConnectScale = onConnectScale,
@@ -228,15 +232,33 @@ private fun MainScreen(
  * set. The UI never branches on the concrete scale model — a weight-only
  * scale simply shows no configuration controls.
  *
- * The volume / standby steppers, the flow-smoothing toggle and the auto-stop
- * selector are **two-way**: `scaleVolume` / `scaleStandbyMinutes` /
- * `scaleFlowSmoothing` / `scaleAutoStop` follow the scale's live values
- * (decoded from every Bookoo weight notification) so the controls reflect the
- * real device state — the auto-stop selector highlights the live current mode.
+ * Every configuration control is **two-way**: `scaleVolume` /
+ * `scaleStandbyMinutes` / `scaleFlowSmoothing` / `scaleAutoStop` follow the
+ * scale's live values decoded from every Bookoo weight notification, while
+ * `scaleAntiMistouch` and `scaleActiveMode` follow the scale's `ff12` command
+ * channel (the `03 0c` / `03 0e` responses surfaced as `Event.ScaleConfig`).
+ * So the controls reflect the real device state — the mode and auto-stop
+ * selectors highlight the live current mode.
  */
 @Composable
 private fun ScaleSection(
     scaleState: ScaleBleManager.State,
+    /**
+     * The connected scale's BLE advertised name, or null when no scale is
+     * connected — shown as the scale card's header so the card is titled with
+     * the actual device.
+     */
+    scaleName: String?,
+    /**
+     * The connected scale's firmware version, pre-formatted `"M.m.p"`, or null
+     * until the scale's serial response arrives — shown as a raw readout.
+     */
+    scaleFirmware: String?,
+    /**
+     * The connected scale's serial number, or null until the scale's serial
+     * response arrives — shown as a raw readout.
+     */
+    scaleSerial: String?,
     scaleWeightG: Float?,
     scaleFlowGPerS: Float?,
     scaleTimerMs: Long?,
@@ -266,13 +288,19 @@ private fun ScaleSection(
     scaleFlowSmoothing: Boolean,
     /** Whether the scale supports anti-mistouch — gates the toggle. */
     antiMistouchSupported: Boolean,
-    /** The anti-mistouch toggle state currently shown; write-only. */
+    /** The anti-mistouch toggle state currently shown; tracks the live value. */
     scaleAntiMistouch: Boolean,
     /**
      * The scale's selectable display modes — empty when the scale has no
      * switchable modes; the mode buttons are gated on this being non-empty.
      */
     modes: List<ModeInfo>,
+    /**
+     * The active display-mode id currently selected on the scale, or null
+     * until the first `ff12` settings response arrives; tracks the scale's
+     * live value so the mode selector highlights the real current mode.
+     */
+    scaleActiveMode: Int?,
     /** Whether the scale supports an auto-stop-mode setting — gates the selector. */
     autoStopSupported: Boolean,
     /**
@@ -303,11 +331,16 @@ private fun ScaleSection(
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text("Scale", style = MaterialTheme.typography.titleMedium)
+            // The card is titled with the connected scale's advertised name
+            // once known, falling back to a plain "Scale" before connect.
+            Text(scaleName ?: "Scale", style = MaterialTheme.typography.titleMedium)
             Field("Weight", scaleWeightG?.let { "%.1f g".format(it) } ?: "—")
             Field("Flow", scaleFlowGPerS?.let { "%.1f g/s".format(it) } ?: "—")
             Field("Timer", scaleTimerMs?.let { "%.1f s".format(it / 1000.0) } ?: "—")
             Field("Battery", scaleBatteryPercent?.let { "$it %" } ?: "—")
+            // The scale's identity from its connect-time serial response.
+            Field("Firmware", scaleFirmware ?: "—")
+            Field("Serial", scaleSerial ?: "—")
 
             Button(
                 onClick = onConnectScale,
@@ -379,6 +412,7 @@ private fun ScaleSection(
             if (modes.isNotEmpty()) {
                 ModeSelector(
                     modes = modes,
+                    selectedMode = scaleActiveMode,
                     enabled = scaleReady,
                     onSetMode = onSetScaleMode,
                 )
@@ -444,10 +478,10 @@ private fun ConfigStepper(
 
 /**
  * A labelled on/off toggle for a boolean scale setting (flow smoothing,
- * anti-mistouch). Write-only for this slice: the scale's true state is not
- * read back, so [checked] reflects only what the user last set. Each change
- * calls [onCheckedChange], which the view model forwards to the matching core
- * setter.
+ * anti-mistouch). Two-way: [checked] tracks the scale's live value (flow
+ * smoothing from the weight stream, anti-mistouch from the `ff12` command
+ * channel) and is updated optimistically on a user change. Each change calls
+ * [onCheckedChange], which the view model forwards to the matching core setter.
  */
 @Composable
 private fun ConfigToggle(
@@ -478,13 +512,18 @@ private fun ConfigToggle(
  * A row of buttons, one per scale-reported display [modes] entry, each
  * labelled with the mode's name. Tapping a button calls [onSetMode] with the
  * mode's `id`, which the view model forwards to the core's `setScaleMode` —
- * which yields three ordered `WriteScale` commands. No "currently active"
- * highlight: the scale's active mode is not read back (that needs the `0x0f`
- * settings decode).
+ * which yields three ordered `WriteScale` commands.
+ *
+ * Two-way: the scale reports its active display mode on its `ff12` command
+ * channel (the `03 0e` settings response), so [selectedMode] tracks that real
+ * value and the matching button is highlighted (filled) while the others stay
+ * outlined. A tap still issues the write; the live `ScaleConfig` stream then
+ * confirms it.
  */
 @Composable
 private fun ModeSelector(
     modes: List<ModeInfo>,
+    selectedMode: Int?,
     enabled: Boolean,
     onSetMode: (Int) -> Unit,
 ) {
@@ -495,11 +534,22 @@ private fun ModeSelector(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             modes.forEach { mode ->
-                OutlinedButton(
-                    onClick = { onSetMode(mode.id.toInt()) },
-                    enabled = enabled,
-                    modifier = Modifier.weight(1f),
-                ) { Text(mode.name) }
+                val id = mode.id.toInt()
+                // The mode the scale reports as active is highlighted with a
+                // filled button; the others stay outlined.
+                if (id == selectedMode) {
+                    Button(
+                        onClick = { onSetMode(id) },
+                        enabled = enabled,
+                        modifier = Modifier.weight(1f),
+                    ) { Text(mode.name) }
+                } else {
+                    OutlinedButton(
+                        onClick = { onSetMode(id) },
+                        enabled = enabled,
+                        modifier = Modifier.weight(1f),
+                    ) { Text(mode.name) }
+                }
             }
         }
     }

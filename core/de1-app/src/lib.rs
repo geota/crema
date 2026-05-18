@@ -82,6 +82,13 @@ pub struct CremaCore {
     /// Whether an [`Event::ScaleStale`] has already been emitted for the
     /// current stale episode — cleared by the next fresh reading.
     scale_stale_reported: bool,
+    /// Whether the one-shot connect-time scale-config queries (`0x0a` serial /
+    /// `0x0f` settings) have already been issued for the connected scale.
+    /// There is no scale-connected notification, so the queries are emitted on
+    /// the first weight notification from a capability-bearing scale; this
+    /// flag keeps that a single emission. Cleared by [`reset`](Self::reset)
+    /// and by [`connect_scale`](Self::connect_scale).
+    scale_config_queried: bool,
 }
 
 impl Default for CremaCore {
@@ -107,6 +114,7 @@ impl CremaCore {
             auto_stop: None,
             last_scale_weight_ms: None,
             scale_stale_reported: false,
+            scale_config_queried: false,
         }
     }
 
@@ -115,6 +123,9 @@ impl CremaCore {
     /// matched no supported scale.
     pub fn connect_scale(&mut self, advertised_name: &str) -> Option<String> {
         self.scale = Scale::identify(advertised_name);
+        // A newly connected scale has not yet been asked for its serial /
+        // settings; re-arm the one-shot connect-time queries.
+        self.scale_config_queried = false;
         self.scale.as_ref().map(|scale| scale.label().to_owned())
     }
 
@@ -264,6 +275,41 @@ impl CremaCore {
         out.commands.push(Command::WriteScale {
             data: bookoo::QUERY_SETTINGS.to_vec(),
         });
+    }
+
+    /// Append a serial-query [`Command`] (`bookoo::QUERY_SERIAL`, command
+    /// `0x0a`) to `out`. The scale answers with a `03 0c …` notification on its
+    /// command characteristic, carrying the live anti-mistouch state.
+    fn push_query_serial_command(out: &mut CoreOutput) {
+        out.commands.push(Command::WriteScale {
+            data: bookoo::QUERY_SERIAL.to_vec(),
+        });
+    }
+
+    /// Emit the one-shot connect-time scale-config queries the first time a
+    /// capability-bearing scale reports weight.
+    ///
+    /// There is no dedicated scale-connected notification, so the queries ride
+    /// on the first weight notification: the `0x0a` serial query (anti-mistouch
+    /// state) and the `0x0f` settings query (active / enabled modes) are pushed
+    /// once, so the shell's anti-mistouch toggle and mode selector show live
+    /// state immediately. Capability-gated like
+    /// [`query_scale_settings`](Self::query_scale_settings) — a weight-only
+    /// scale (no `volume` capability) issues nothing — and guarded by
+    /// `scale_config_queried` so it fires exactly once per connection.
+    fn push_connect_queries_once(&mut self, out: &mut CoreOutput) {
+        if self.scale_config_queried {
+            return;
+        }
+        if let Some(scale) = &self.scale
+            && scale.capabilities().volume.is_some()
+        {
+            Self::push_query_serial_command(out);
+            Self::push_query_settings_command(out);
+        }
+        // Mark the one-shot done even for a weight-only scale, so the
+        // capability check is not repeated on every weight notification.
+        self.scale_config_queried = true;
     }
 
     /// Build a [`Command`] that queries the connected scale's settings
@@ -430,6 +476,7 @@ impl CremaCore {
             Source::De1State => self.handle_state(data, now_ms, &mut out),
             Source::De1ShotSample => self.handle_sample(data, now_ms, &mut out),
             Source::ScaleWeight => self.handle_scale_weight(data, now_ms, &mut out),
+            Source::ScaleCommand => self.handle_scale_command(data, &mut out),
             Source::De1WaterLevels => self.handle_water_levels(data, &mut out),
         }
         out
@@ -535,6 +582,10 @@ impl CremaCore {
         // A fresh reading re-arms the lost-scale watchdog.
         self.last_scale_weight_ms = Some(now_ms);
         self.scale_stale_reported = false;
+        // The first weight notification stands in for a scale-connected hook:
+        // fire the one-shot serial / settings queries so the anti-mistouch
+        // state and active mode are fetched as soon as the scale is reporting.
+        self.push_connect_queries_once(out);
         let estimate = self.flow.update(reading.weight_g, now_ms);
         out.events.push(Event::ScaleReading {
             weight_g: estimate.weight_g,
@@ -552,6 +603,48 @@ impl CremaCore {
             .as_mut()
             .and_then(|stop| stop.on_weight(reading.weight_g, now_ms));
         Self::push_stop(reason, out);
+    }
+
+    /// Decode and process a notification from the scale's *command*
+    /// characteristic (the Bookoo's `ff12` channel).
+    ///
+    /// The scale pushes its serial / settings responses back on the channel
+    /// commands are written to; this decodes one such frame into an
+    /// [`Event::ScaleConfig`]. A frame that is not a recognised command
+    /// response — including every frame from a scale that models no command
+    /// channel — is silently dropped (it is not a decode failure, just traffic
+    /// the core does not model).
+    fn handle_scale_command(&mut self, data: &[u8], out: &mut CoreOutput) {
+        let Some(scale) = &self.scale else {
+            return;
+        };
+        let Some(response) = scale.parse_command_response(data) else {
+            return;
+        };
+        let event = match response {
+            bookoo::CommandResponse::Serial {
+                firmware_version,
+                serial,
+                anti_mistouch,
+            } => Event::ScaleConfig {
+                anti_mistouch: Some(anti_mistouch),
+                active_mode: None,
+                enabled_modes: None,
+                serial: Some(serial),
+                firmware_version: Some(firmware_version),
+            },
+            bookoo::CommandResponse::Settings {
+                active_mode,
+                enabled_modes,
+            } => Event::ScaleConfig {
+                anti_mistouch: None,
+                active_mode: Some(active_mode),
+                enabled_modes: Some(enabled_modes),
+                serial: None,
+                firmware_version: None,
+            },
+        };
+        out.events.push(event);
     }
 
     /// Decode and process a `WaterLevels` notification, applying the legacy
@@ -880,6 +973,128 @@ mod tests {
         let mut core = CremaCore::new();
         let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(2_000), 1_000);
         assert!(out.events.is_empty());
+    }
+
+    /// Decode a lowercase-hex string with no separators into bytes.
+    fn hex(s: &str) -> Vec<u8> {
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn a_scale_command_serial_response_emits_a_scale_config_event() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC");
+        // A real 03 0c serial response: fw 1.4.1, anti-mistouch on.
+        let frame = hex("030c008d534e32343030643636613839653701ce");
+        let out = core.on_notification(Source::ScaleCommand, &frame, 1_000);
+        assert!(out.events.contains(&Event::ScaleConfig {
+            anti_mistouch: Some(true),
+            active_mode: None,
+            enabled_modes: None,
+            serial: Some("SN2400d66a89e7".to_owned()),
+            firmware_version: Some(141),
+        }));
+    }
+
+    #[test]
+    fn a_scale_command_settings_response_emits_a_scale_config_event() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC");
+        // A real 03 0e settings response: Auto active, only Auto enabled.
+        let frame = hex("030e02040000000000000000000000000000000b");
+        let out = core.on_notification(Source::ScaleCommand, &frame, 1_000);
+        assert!(out.events.contains(&Event::ScaleConfig {
+            anti_mistouch: None,
+            active_mode: Some(2),
+            enabled_modes: Some(0b100),
+            serial: None,
+            firmware_version: None,
+        }));
+    }
+
+    #[test]
+    fn a_scale_command_notification_with_no_scale_connected_is_ignored() {
+        let mut core = CremaCore::new();
+        let frame = hex("030c008d534e32343030643636613839653701ce");
+        let out = core.on_notification(Source::ScaleCommand, &frame, 1_000);
+        assert!(out.events.is_empty());
+    }
+
+    #[test]
+    fn an_unrecognised_scale_command_frame_is_dropped_silently() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC");
+        // A 03 0b weight-notification frame is not a command response — it is
+        // dropped without a DecodeError, as it is not modelled here.
+        let frame = hex("030b000000012b0000002b0000640096010000fa");
+        let out = core.on_notification(Source::ScaleCommand, &frame, 1_000);
+        assert!(out.events.is_empty());
+    }
+
+    #[test]
+    fn the_first_weight_notification_issues_the_connect_time_queries() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC");
+        // The first weight notification stands in for a connect hook: it must
+        // emit the 0x0a serial query and the 0x0f settings query, once.
+        let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(2_000), 1_000);
+        let writes: Vec<&[u8]> = out
+            .commands
+            .iter()
+            .filter_map(|c| match c {
+                Command::WriteScale { data } => Some(data.as_slice()),
+                Command::WriteCharacteristic { .. } => None,
+            })
+            .collect();
+        assert!(writes.contains(&bookoo::QUERY_SERIAL.as_slice()));
+        assert!(writes.contains(&bookoo::QUERY_SETTINGS.as_slice()));
+    }
+
+    #[test]
+    fn the_connect_time_queries_are_issued_only_once() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC");
+        core.on_notification(Source::ScaleWeight, &bookoo_packet(2_000), 1_000);
+        // A second weight notification must not re-issue the connect queries.
+        let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(2_100), 2_000);
+        assert!(
+            !out.commands
+                .iter()
+                .any(|c| matches!(c, Command::WriteScale { .. }))
+        );
+    }
+
+    #[test]
+    fn the_connect_time_queries_are_re_armed_by_a_fresh_connect() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC");
+        core.on_notification(Source::ScaleWeight, &bookoo_packet(2_000), 1_000);
+        // Reconnecting a scale re-arms the one-shot queries.
+        core.connect_scale("BOOKOO_SC");
+        let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(2_100), 2_000);
+        assert!(
+            out.commands
+                .iter()
+                .any(|c| matches!(c, Command::WriteScale { .. }))
+        );
+    }
+
+    #[test]
+    fn a_weight_only_scale_issues_no_connect_time_queries() {
+        let mut core = CremaCore::new();
+        // A weight-only scale has no configurable settings — the connect-time
+        // queries are capability-gated, so nothing is emitted.
+        core.connect_scale("Decent Scale ABC");
+        let frame = [0x03, 0xCE, 0x07, 0xD0, 0x00, 0x00, 0x00];
+        let out = core.on_notification(Source::ScaleWeight, &frame, 1_000);
+        assert!(
+            !out.commands
+                .iter()
+                .any(|c| matches!(c, Command::WriteScale { .. }))
+        );
     }
 
     #[test]
@@ -1276,13 +1491,16 @@ mod tests {
         assert!(out.events.contains(&Event::StopTriggered {
             reason: StopReason::Weight,
         }));
-        assert!(matches!(
-            out.commands.first(),
-            Some(Command::WriteCharacteristic {
+        // The same first weight notification also rides the connect-time scale
+        // queries, so the stop write is not necessarily commands[0] — assert it
+        // is present rather than first.
+        assert!(out.commands.iter().any(|c| matches!(
+            c,
+            Command::WriteCharacteristic {
                 target: WriteTarget::De1RequestedState,
                 ..
-            })
-        ));
+            }
+        )));
     }
 
     #[test]

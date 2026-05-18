@@ -22,6 +22,10 @@ pub enum Source {
     De1ShotSample,
     /// The connected scale's weight notification.
     ScaleWeight,
+    /// The connected scale's *command* characteristic notification — the
+    /// channel commands are written to, which on the Bookoo (`ff12`) also
+    /// notifies: the scale pushes its serial / settings responses back on it.
+    ScaleCommand,
     /// The DE1 water-tank level characteristic (`cuuid_11`).
     De1WaterLevels,
 }
@@ -157,6 +161,35 @@ pub enum Event {
     /// for roughly a second. Emitted once per stale episode; a fresh reading
     /// re-arms it.
     ScaleStale,
+    /// The connected scale reported its dynamic configuration on its command
+    /// characteristic (the Bookoo's `ff12` channel).
+    ///
+    /// The scale answers a serial query (`0x0a`, also echoed after every
+    /// anti-mistouch write) with the `anti_mistouch` state plus its `serial`
+    /// and `firmware_version`; it answers a settings query (`0x0f`) with the
+    /// `active_mode` index and `enabled_modes` bitmask. Any one notification
+    /// carries only one response type, so the fields the other response would
+    /// fill are `None` — the shell folds in whichever fields are present and
+    /// keeps its last value for the rest, the two-way pattern the Bookoo's
+    /// weight-stream settings already use.
+    ScaleConfig {
+        /// The scale's live anti-mistouch state — `Some` only for a `03 0c`
+        /// serial response, `None` for a `03 0e` settings response.
+        anti_mistouch: Option<bool>,
+        /// The scale's active display-mode index (`0` = Flow-Rate, `1` =
+        /// Timer, `2` = Auto) — `Some` only for a `03 0e` settings response.
+        active_mode: Option<u8>,
+        /// The scale's enabled-modes bitmask (bit `n` set when mode `n` is
+        /// enabled) — `Some` only for a `03 0e` settings response.
+        enabled_modes: Option<u8>,
+        /// The scale's serial number — `Some` only for a `03 0c` serial
+        /// response.
+        serial: Option<String>,
+        /// The scale's firmware version, encoded `major × 100 + minor × 10 +
+        /// patch` (e.g. `141` is firmware 1.4.1) — `Some` only for a `03 0c`
+        /// serial response.
+        firmware_version: Option<u16>,
+    },
     /// An incoming notification could not be decoded.
     DecodeError {
         /// Human-readable description of the failure.

@@ -30,9 +30,11 @@ import kotlinx.coroutines.runBlocking
  *     string to [onCoreOutput].
  *  4. Write tare / timer commands to [ScaleUuids.COMMAND] via [writeCommand].
  *  5. Also observe the command characteristic ([ScaleUuids.COMMAND], `ff12`),
- *     which the GATT dump shows has the NOTIFY property: whatever the scale
- *     pushes back on it is captured for reverse-engineering — recorded as a
- *     `SCALE_FF12` `dir:"in"` line and logged — but never fed to the core.
+ *     which the GATT dump shows has the NOTIFY property: the scale pushes its
+ *     serial / settings responses back on it. Each such notification is
+ *     recorded as a `SCALE_FF12` `dir:"in"` line AND fed to the core under the
+ *     [NotificationSource.SCALE_COMMAND] source, so the core decodes it into an
+ *     `Event.ScaleConfig`.
  *
  * Device discovery is not this manager's job: the shared [BleScanner] runs the
  * one app-wide scan and hands a matched scale to [connect]. The "is this a
@@ -77,8 +79,14 @@ class ScaleBleManager(
      * can read the scale's [CremaBridge.scaleCapabilities] and drive
      * capability-gated UI. Not called when the core did not recognise the
      * scale. Runs on [scope] (a background dispatcher).
+     *
+     * The argument is the scale's BLE advertised name (e.g.
+     * `"BOOKOO_SC 502158"`) — the one the shared [BleScanner] resolved and
+     * this manager passed to [CremaBridge.connectScale]. The owner surfaces it
+     * in the scale card; it is the device's identity before the core's `0x0a`
+     * connect query returns the firmware / serial.
      */
-    private val onScaleIdentified: () -> Unit = {},
+    private val onScaleIdentified: (advertisedName: String) -> Unit = {},
 ) {
     enum class State { IDLE, SCANNING, CONNECTING, DISCOVERING, SUBSCRIBING, READY, DISCONNECTED }
 
@@ -145,7 +153,9 @@ class ScaleBleManager(
                     onStatus("Core recognised scale: $label")
                     // The core now knows the scale's codec; let the owner read
                     // its capabilities and render capability-gated config UI.
-                    onScaleIdentified()
+                    // The advertised name goes along so the owner can show the
+                    // scale's identity in the card right away.
+                    onScaleIdentified(advertisedName)
                 } else {
                     onStatus("Core did not recognise scale '$advertisedName'")
                 }
@@ -155,12 +165,12 @@ class ScaleBleManager(
                 // Observe BOTH Bookoo characteristics on the 0ffe service:
                 //  - WEIGHT_NOTIFY (ff11) — the live weight stream the core
                 //    decodes; this is the real product path.
-                //  - COMMAND (ff12) — the command channel. The app only WRITES
-                //    tare/timer commands to it, but the GATT dump shows ff12
-                //    also has the NOTIFY property, so the scale can send data
-                //    back (acks, battery, firmware — unknown). We subscribe
-                //    purely to CAPTURE whatever it sends, for reverse-
-                //    engineering; ff12 notifications are NOT fed to the core.
+                //  - COMMAND (ff12) — the command channel. The app WRITES
+                //    tare/timer/query commands to it, and the GATT dump shows
+                //    ff12 also has the NOTIFY property: the scale pushes its
+                //    serial / settings responses back on it. Those inbound
+                //    notifications are recorded AND fed to the core under the
+                //    SCALE_COMMAND source — see handleCommandNotification.
                 // The two streams are merged into one collected flow so
                 // per-device notification ordering is preserved — see
                 // BleTransport.observe's contract.
@@ -260,7 +270,7 @@ class ScaleBleManager(
      *  - [ScaleUuids.WEIGHT_NOTIFY] (`ff11`) — the live weight stream: record
      *    it as a `SCALE_WEIGHT` `dir:"in"` line and feed it to the core.
      *  - [ScaleUuids.COMMAND] (`ff12`) — see [handleCommandNotification]:
-     *    capture-only, never fed to the core.
+     *    record it as a `SCALE_FF12` `dir:"in"` line and feed it to the core.
      */
     private fun handleNotification(notification: BleTransport.Notification) {
         when (notification.characteristic) {
@@ -290,21 +300,31 @@ class ScaleBleManager(
     }
 
     /**
-     * Command-characteristic (`ff12`) path: capture-only.
+     * Command-characteristic (`ff12`) path: record AND drive the core.
      *
      * The Bookoo `ff12` characteristic also has the NOTIFY property, so the
-     * scale can push data back on the channel the app otherwise only writes to
-     * (command acks, battery, firmware — unknown). We subscribe purely to
-     * record whatever it sends for reverse-engineering: each notification is
-     * written to the capture file as a `dir:"in"` line with the distinct
-     * `src:"SCALE_FF12"` label and logged to Logcat. It is deliberately NOT
-     * passed to [CremaBridge.onNotification] — the core models no `ff12`
-     * source, so feeding it there would be meaningless (or an error).
+     * scale pushes its serial / settings responses back on the channel the app
+     * otherwise only writes commands to (a `03 0c` serial frame carrying the
+     * live anti-mistouch state, a `03 0e` settings frame carrying the active
+     * display mode). Each notification is recorded to the capture file as a
+     * `dir:"in"` line with the distinct `src:"SCALE_FF12"` label, then — exactly
+     * like the [handleWeightNotification] path — handed to
+     * [CremaBridge.onNotification] under the [NotificationSource.SCALE_COMMAND]
+     * source so the core decodes it into an `Event.ScaleConfig`. The same
+     * delivery timestamp goes to the recorder and the core, so a replayed
+     * capture decodes identically to the live session.
      */
     private fun handleCommandNotification(notification: BleTransport.Notification) {
         val tMs = notification.atMs
         recorder.recordInbound(FF12_SRC, notification.data, tMs)
         Log.d(TAG, "$FF12_SRC notification: ${notification.data.toHex()}")
+        // CremaBridge.onNotification returns the CoreOutput as a JSON string.
+        val json = bridge.onNotification(
+            NotificationSource.SCALE_COMMAND,
+            notification.data,
+            tMs.toULong(),
+        )
+        onCoreOutput(json)
     }
 
     companion object {
@@ -312,9 +332,10 @@ class ScaleBleManager(
 
         /**
          * Capture `src` label for inbound notifications from the Bookoo command
-         * characteristic (`ff12`). Distinct from the core's `SCALE_WEIGHT`
-         * source so the replay tool can recognise it as informational-only
-         * traffic the core does not model.
+         * characteristic (`ff12`). Distinct from the `SCALE_WEIGHT` label so the
+         * replay tool can route it to the core's [NotificationSource.SCALE_COMMAND]
+         * source — the channel that carries the scale's serial / settings
+         * responses.
          */
         private const val FF12_SRC = "SCALE_FF12"
 
