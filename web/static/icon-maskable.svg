@@ -1,0 +1,9 @@
+<!-- Crema maskable app icon — placeholder art (later polish item per docs/09
+     step 7). The "C" arc sits inside the inner 80% "safe zone" so platform
+     masks (circle, squircle, rounded square) never clip it; the coffee-toned
+     fill bleeds to all four edges. The glyph is a vector path — no font. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="#20161e" />
+  <path d="M 335 196 A 96 96 0 1 0 335 316"
+        fill="none" stroke="#e9c8a5" stroke-width="48" stroke-linecap="round" />
+</svg>
