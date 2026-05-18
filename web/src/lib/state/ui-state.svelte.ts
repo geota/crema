@@ -319,4 +319,13 @@ export class CremaUiState {
 	patch(partial: Partial<UiSnapshot>): void {
 		this.current = { ...this.current, ...partial };
 	}
+
+	/**
+	 * Append a one-off line to the event log for something that is not a core
+	 * `Event` — e.g. an outgoing command write. Same newest-first 200-line cap
+	 * and `HH:mm:ss` stamp as event-driven log lines.
+	 */
+	log(line: string): void {
+		this.current = { ...this.current, eventLog: appendLog(this.current.eventLog, line) };
+	}
 }

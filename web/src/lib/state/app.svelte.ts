@@ -77,9 +77,15 @@ export class CremaApp {
 	 */
 	private async executeCommand(command: Command): Promise<void> {
 		switch (command.type) {
-			case 'WriteScale':
-				await this.scale.writeScale(new Uint8Array(command.content.data));
+			case 'WriteScale': {
+				const data = new Uint8Array(command.content.data);
+				// Log the outgoing write so the on-screen event log shows the
+				// whole ff12 round-trip — the write, then the scale's response.
+				const hex = [...data].map((b) => b.toString(16).padStart(2, '0')).join('');
+				this.state.log(`→ scale write ${hex}`);
+				await this.scale.writeScale(data);
 				break;
+			}
 			case 'WriteCharacteristic':
 				// DE1 machine control is not driven by the shell — no-op,
 				// mirroring the Android shell's command sink.
