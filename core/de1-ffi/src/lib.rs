@@ -228,6 +228,20 @@ impl CremaBridge {
         })
     }
 
+    /// The connected scale's BLE service and characteristic UUIDs, as a
+    /// JSON-encoded `ScaleUuids` object — or `None` when no scale is connected.
+    ///
+    /// The shell deserializes the JSON into the `typeshare`-generated
+    /// `ScaleUuids` type to know which GATT characteristics to subscribe to.
+    /// Returned as a JSON string, consistent with the rest of the bridge's
+    /// JSON surface; wired exactly like [`scale_capabilities`](Self::scale_capabilities).
+    pub fn scale_uuids(&self) -> Option<String> {
+        self.core().scale_uuids().map(|uuids| {
+            serde_json::to_string(&uuids)
+                .expect("ScaleUuids is plain data and always serializes")
+        })
+    }
+
     /// Build a [`CoreOutput`] (JSON) whose command sets the connected scale's
     /// beep volume to `level`.
     ///

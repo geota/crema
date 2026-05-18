@@ -15,7 +15,13 @@ const DECENT_TARE_COUNTER_INIT: u8 = 253;
 ///
 /// `Clone` but not `Copy`: three string slices (48 bytes) exceed the size
 /// where implicit copies are a sensible default.
+///
+/// `#[typeshare]` + serde `Serialize` (behind the `serde` feature): the web
+/// shell needs these UUIDs to know which Web Bluetooth characteristics to
+/// subscribe to, so they cross the JSON bridge boundary.
+#[typeshare]
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ScaleUuids {
     /// GATT service UUID.
     pub service: &'static str,

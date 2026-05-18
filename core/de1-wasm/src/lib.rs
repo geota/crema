@@ -165,6 +165,112 @@ impl CremaBridge {
         json(self.core.tare_scale())
     }
 
+    /// What the currently-connected scale can do beyond reporting a bare
+    /// weight, as a JSON-encoded `ScaleCapabilities` object — or `undefined`
+    /// when no scale is connected.
+    ///
+    /// The shell parses the JSON into the `typeshare`-generated
+    /// `ScaleCapabilities` type and drives capability-gated configuration UI
+    /// off it: Crema is capability-driven, never device-driven. Returned as a
+    /// JSON string, consistent with the rest of the bridge's JSON surface.
+    pub fn scale_capabilities(&self) -> Option<String> {
+        self.core.scale_capabilities().map(|caps| {
+            serde_json::to_string(&caps)
+                .expect("ScaleCapabilities is plain data and always serializes")
+        })
+    }
+
+    /// The connected scale's BLE service and characteristic UUIDs, as a
+    /// JSON-encoded `ScaleUuids` object — or `undefined` when no scale is
+    /// connected.
+    ///
+    /// The shell parses the JSON into the `typeshare`-generated `ScaleUuids`
+    /// type to know which Web Bluetooth characteristics to subscribe to for
+    /// weight notifications and command writes. Returned as a JSON string,
+    /// consistent with the rest of the bridge's JSON surface.
+    pub fn scale_uuids(&self) -> Option<String> {
+        self.core.scale_uuids().map(|uuids| {
+            serde_json::to_string(&uuids)
+                .expect("ScaleUuids is plain data and always serializes")
+        })
+    }
+
+    /// Build a [`CoreOutput`] (JSON) whose command queries the connected
+    /// scale's settings (the scale answers with a `03 0e …` notification).
+    ///
+    /// Capability-gated: the command is present only when the connected scale
+    /// exposes a configurable setting. Empty otherwise. Wired exactly like
+    /// [`tare_scale`](Self::tare_scale).
+    pub fn query_scale_settings(&self) -> String {
+        json(self.core.query_scale_settings())
+    }
+
+    /// Build a [`CoreOutput`] (JSON) whose command sets the connected scale's
+    /// beep volume to `level`.
+    ///
+    /// `level` is clamped to the connected scale's `ScaleCapabilities::volume`
+    /// `[min, max]` bounds. Capability-gated: the command is present only when
+    /// the connected scale exposes a settable volume. Empty otherwise. Wired
+    /// exactly like [`tare_scale`](Self::tare_scale).
+    pub fn set_scale_volume(&mut self, level: u8) -> String {
+        json(self.core.set_scale_volume(level))
+    }
+
+    /// Build a [`CoreOutput`] (JSON) whose command sets the connected scale's
+    /// auto-standby timeout to `minutes`.
+    ///
+    /// `minutes` is clamped to the connected scale's
+    /// `ScaleCapabilities::standby_minutes` `[min, max]` bounds. Capability-
+    /// gated: the command is present only when the connected scale exposes a
+    /// configurable auto-standby. Empty otherwise. Wired exactly like
+    /// [`set_scale_volume`](Self::set_scale_volume).
+    pub fn set_scale_standby_minutes(&mut self, minutes: u8) -> String {
+        json(self.core.set_scale_standby_minutes(minutes))
+    }
+
+    /// Build a [`CoreOutput`] (JSON) whose command enables or disables the
+    /// connected scale's flow smoothing.
+    ///
+    /// Capability-gated: the command is present only when the connected scale
+    /// supports flow smoothing. Empty otherwise. Wired exactly like
+    /// [`set_scale_volume`](Self::set_scale_volume).
+    pub fn set_scale_flow_smoothing(&mut self, enabled: bool) -> String {
+        json(self.core.set_scale_flow_smoothing(enabled))
+    }
+
+    /// Build a [`CoreOutput`] (JSON) whose command enables or disables the
+    /// connected scale's anti-mistouch.
+    ///
+    /// Capability-gated: the command is present only when the connected scale
+    /// supports anti-mistouch. Empty otherwise. Wired exactly like
+    /// [`set_scale_volume`](Self::set_scale_volume).
+    pub fn set_scale_anti_mistouch(&mut self, enabled: bool) -> String {
+        json(self.core.set_scale_anti_mistouch(enabled))
+    }
+
+    /// Build a [`CoreOutput`] (JSON) whose commands switch the connected scale
+    /// to display mode `mode_id`.
+    ///
+    /// Capability-gated: the commands are present only when the connected
+    /// scale exposes switchable modes and `mode_id` is one of the listed
+    /// modes. Switching a mode is **three** `WriteScale` commands, emitted in
+    /// order — the shell must perform them in that order. Empty otherwise.
+    /// Wired exactly like [`set_scale_volume`](Self::set_scale_volume).
+    pub fn set_scale_mode(&mut self, mode_id: u8) -> String {
+        json(self.core.set_scale_mode(mode_id))
+    }
+
+    /// Build a [`CoreOutput`] (JSON) whose command selects the connected
+    /// scale's auto-stop mode (`0` = flow-stop, `1` = cup-removal).
+    ///
+    /// Capability-gated: the command is present only when the connected scale
+    /// supports an auto-stop-mode setting and `mode_id` is in range. An
+    /// out-of-range `mode_id` yields an empty `CoreOutput`. Wired exactly like
+    /// [`set_scale_volume`](Self::set_scale_volume).
+    pub fn set_scale_auto_stop(&mut self, mode_id: u8) -> String {
+        json(self.core.set_scale_auto_stop(mode_id))
+    }
+
     /// Write the DE1's steam / hot-water settings. The fields are passed as
     /// individual scalars — [`de1_protocol::ShotSettings`] is not (and should
     /// not be) wasm-bindgen-annotated, so the bridge builds it here. Returns a
@@ -278,6 +384,89 @@ mod tests {
         let json = bridge.builtin_profiles_json();
         assert!(json.starts_with('['));
         assert!(json.contains("\"steps\""));
+    }
+
+    #[test]
+    fn scale_capabilities_is_none_without_a_connected_scale() {
+        let bridge = CremaBridge::new();
+        assert!(bridge.scale_capabilities().is_none());
+    }
+
+    #[test]
+    fn scale_capabilities_reports_a_bookoo_as_first_class() {
+        let mut bridge = CremaBridge::new();
+        bridge.connect_scale("BOOKOO_SC".to_owned());
+        let json = bridge.scale_capabilities().expect("a connected scale");
+        let caps: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(caps["volume"]["min"], 0);
+        assert_eq!(caps["volume"]["max"], 3);
+        assert_eq!(caps["reports_flow"], true);
+        assert_eq!(caps["reports_timer"], true);
+    }
+
+    #[test]
+    fn scale_uuids_is_none_without_a_connected_scale() {
+        let bridge = CremaBridge::new();
+        assert!(bridge.scale_uuids().is_none());
+    }
+
+    #[test]
+    fn scale_uuids_reports_the_connected_scales_gatt_uuids() {
+        let mut bridge = CremaBridge::new();
+        bridge.connect_scale("BOOKOO_SC".to_owned());
+        let json = bridge.scale_uuids().expect("a connected scale");
+        let uuids: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(uuids["service"].is_string());
+        assert!(uuids["weight_notify"].is_string());
+        assert!(uuids["command_write"].is_string());
+    }
+
+    #[test]
+    fn set_scale_volume_produces_a_write_scale_command_for_a_capable_scale() {
+        let mut bridge = CremaBridge::new();
+        bridge.connect_scale("BOOKOO_SC".to_owned());
+        let json = bridge.set_scale_volume(3);
+        assert!(json.contains("\"commands\""));
+        assert!(json.contains("WriteScale"));
+    }
+
+    #[test]
+    fn set_scale_mode_produces_three_write_scale_commands_for_a_capable_scale() {
+        let mut bridge = CremaBridge::new();
+        bridge.connect_scale("BOOKOO_SC".to_owned());
+        let json = bridge.set_scale_mode(1);
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        // Three mode writes plus the appended 0x0f settings query.
+        assert_eq!(parsed["commands"].as_array().unwrap().len(), 4);
+    }
+
+    #[test]
+    fn query_scale_settings_produces_a_write_scale_command_for_a_capable_scale() {
+        let mut bridge = CremaBridge::new();
+        bridge.connect_scale("BOOKOO_SC".to_owned());
+        let json = bridge.query_scale_settings();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let commands = parsed["commands"].as_array().unwrap();
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0]["type"], "WriteScale");
+    }
+
+    #[test]
+    fn scale_config_methods_produce_no_command_for_a_weight_only_scale() {
+        let mut bridge = CremaBridge::new();
+        bridge.connect_scale("Decent Scale ABC".to_owned());
+        for json in [
+            bridge.set_scale_volume(3),
+            bridge.set_scale_standby_minutes(15),
+            bridge.set_scale_flow_smoothing(true),
+            bridge.set_scale_anti_mistouch(true),
+            bridge.set_scale_mode(0),
+            bridge.set_scale_auto_stop(0),
+            bridge.query_scale_settings(),
+        ] {
+            let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+            assert!(parsed["commands"].as_array().unwrap().is_empty());
+        }
     }
 
     #[test]

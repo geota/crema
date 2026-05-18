@@ -399,6 +399,25 @@ data class ScaleCapabilities (
 	val modes: List<ModeInfo>
 )
 
+/// The BLE UUIDs a scale's transport layer needs.
+///
+/// `Clone` but not `Copy`: three string slices (48 bytes) exceed the size
+/// where implicit copies are a sensible default.
+///
+/// `#[typeshare]` + serde `Serialize` (behind the `serde` feature): the web
+/// shell needs these UUIDs to know which Web Bluetooth characteristics to
+/// subscribe to, so they cross the JSON bridge boundary.
+@Serializable
+data class ScaleUuids (
+	/// GATT service UUID.
+	val service: String,
+	/// Characteristic weight notifications arrive on.
+	val weight_notify: String,
+	/// Characteristic commands are written to — equal to `weight_notify` for
+	/// scales that use a single characteristic for both.
+	val command_write: String
+)
+
 /// DE1 top-level machine state. Discriminants match the firmware `MachineState`
 /// enum (see protocol §4.1).
 @Serializable
