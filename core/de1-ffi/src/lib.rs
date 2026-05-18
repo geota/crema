@@ -27,6 +27,9 @@ pub enum NotificationSource {
     De1ShotSample,
     /// The connected scale's weight notification.
     ScaleWeight,
+    /// The connected scale's command-characteristic notification (the Bookoo's
+    /// `ff12` serial / settings responses).
+    ScaleCommand,
     /// The DE1 water-tank level characteristic.
     De1WaterLevels,
 }
@@ -37,6 +40,7 @@ impl From<NotificationSource> for Source {
             NotificationSource::De1State => Source::De1State,
             NotificationSource::De1ShotSample => Source::De1ShotSample,
             NotificationSource::ScaleWeight => Source::ScaleWeight,
+            NotificationSource::ScaleCommand => Source::ScaleCommand,
             NotificationSource::De1WaterLevels => Source::De1WaterLevels,
         }
     }
@@ -565,11 +569,12 @@ mod tests {
 
     /// Every `NotificationSource` the FFI enum can name — used to fuzz the
     /// bridge against malformed input on every characteristic.
-    fn every_source() -> [NotificationSource; 4] {
+    fn every_source() -> [NotificationSource; 5] {
         [
             NotificationSource::De1State,
             NotificationSource::De1ShotSample,
             NotificationSource::ScaleWeight,
+            NotificationSource::ScaleCommand,
             NotificationSource::De1WaterLevels,
         ]
     }

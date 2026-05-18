@@ -164,6 +164,27 @@ data class EventDecodeErrorInner (
 	val message: String
 )
 
+/// Generated type representing the anonymous struct variant `ScaleConfig` of the `Event` Rust enum
+@Serializable
+data class EventScaleConfigInner (
+	/// The scale's live anti-mistouch state — `Some` only for a `03 0c`
+	/// serial response, `None` for a `03 0e` settings response.
+	val anti_mistouch: Boolean? = null,
+	/// The scale's active display-mode index (`0` = Flow-Rate, `1` =
+	/// Timer, `2` = Auto) — `Some` only for a `03 0e` settings response.
+	val active_mode: UByte? = null,
+	/// The scale's enabled-modes bitmask (bit `n` set when mode `n` is
+	/// enabled) — `Some` only for a `03 0e` settings response.
+	val enabled_modes: UByte? = null,
+	/// The scale's serial number — `Some` only for a `03 0c` serial
+	/// response.
+	val serial: String? = null,
+	/// The scale's firmware version, encoded `major × 100 + minor × 10 +
+	/// patch` (e.g. `141` is firmware 1.4.1) — `Some` only for a `03 0c`
+	/// serial response.
+	val firmware_version: UShort? = null
+)
+
 /// Something the core observed that the UI may want to react to.
 /// 
 /// Serialized adjacently tagged — a JSON event reads `{"type":"ShotStarted"}`
@@ -240,6 +261,20 @@ sealed class Event {
 	@Serializable
 	@SerialName("ScaleStale")
 	object ScaleStale: Event()
+	/// The connected scale reported its dynamic configuration on its command
+	/// characteristic (the Bookoo's `ff12` channel).
+	///
+	/// The scale answers a serial query (`0x0a`, also echoed after every
+	/// anti-mistouch write) with the `anti_mistouch` state plus its `serial`
+	/// and `firmware_version`; it answers a settings query (`0x0f`) with the
+	/// `active_mode` index and `enabled_modes` bitmask. Any one notification
+	/// carries only one response type, so the fields the other response would
+	/// fill are `None` — the shell folds in whichever fields are present and
+	/// keeps its last value for the rest, the two-way pattern the Bookoo's
+	/// weight-stream settings already use.
+	@Serializable
+	@SerialName("ScaleConfig")
+	data class ScaleConfig(val content: EventScaleConfigInner): Event()
 	/// An incoming notification could not be decoded.
 	@Serializable
 	@SerialName("DecodeError")

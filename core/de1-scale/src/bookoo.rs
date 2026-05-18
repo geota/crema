@@ -434,6 +434,99 @@ pub fn parse_packet(data: &[u8]) -> Option<BookooPacket> {
     })
 }
 
+/// A decoded response from the Bookoo `ff12` command characteristic.
+///
+/// The `ff12` channel — which the app otherwise only *writes* commands to —
+/// also has the NOTIFY property, and the scale pushes two 20-byte response
+/// frames back on it, distinguished by their `[0-1]` header:
+///
+/// - **`03 0c`** ([`CommandResponse::Serial`]) — the reply to a `0x0a`
+///   ([`QUERY_SERIAL`]) query, and to every `0x10` ([`set_anti_mistouch`])
+///   write. Carries the firmware version, the 14-byte ASCII serial number, and
+///   the live anti-mistouch state.
+/// - **`03 0e`** ([`CommandResponse::Settings`]) — the reply to a `0x0f`
+///   ([`QUERY_SETTINGS`]) query. Carries the active display-mode index and the
+///   enabled-modes bitmask.
+///
+/// Both frames are 20 bytes with `[19]` an XOR checksum of `[0..=18]`, the same
+/// scheme as the weight notification — see [`parse_command_response`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommandResponse {
+    /// A `03 0c` serial-number response, returned by a [`QUERY_SERIAL`] query
+    /// and echoed after every [`set_anti_mistouch`] write.
+    Serial {
+        /// Firmware version, byte `[2-3]` (u16 big-endian). The encoding is
+        /// `major × 100 + minor × 10 + patch` — e.g. firmware 1.4.1 is
+        /// `0x008d` = `141`.
+        firmware_version: u16,
+        /// The scale's serial number, decoded from the 14 ASCII bytes
+        /// `[4-17]`. Trailing NUL / whitespace padding is trimmed.
+        serial: String,
+        /// The scale's live anti-mistouch state, byte `[18]` (`0` / `1`).
+        anti_mistouch: bool,
+    },
+    /// A `03 0e` settings response, returned by a [`QUERY_SETTINGS`] query.
+    Settings {
+        /// The active display-mode index, byte `[2]` — `0` = Flow-Rate,
+        /// `1` = Timer, `2` = Auto (the [`BookooMode`] discriminants).
+        active_mode: u8,
+        /// The enabled-modes bitmask, byte `[3]` — a 3-bit mask, bit `n` set
+        /// when the [`BookooMode`] of index `n` is enabled.
+        enabled_modes: u8,
+    },
+}
+
+/// `[0-1]` header of a `03 0c` serial-number command response.
+const RESPONSE_HEADER_SERIAL: [u8; 2] = [0x03, 0x0C];
+/// `[0-1]` header of a `03 0e` settings command response.
+const RESPONSE_HEADER_SETTINGS: [u8; 2] = [0x03, 0x0E];
+
+/// Decode a 20-byte Bookoo `ff12` command-characteristic notification into a
+/// [`CommandResponse`].
+///
+/// Returns `None` for anything that is not exactly [`FULL_PACKET_LEN`] bytes,
+/// for a frame whose `[0-1]` header is neither of the two known responses, or
+/// for a frame whose `[19]` XOR checksum (over `[0..=18]`) does not match — the
+/// same checksum scheme [`parse_packet`] uses, here applied strictly because a
+/// command response carries no field a corrupt frame could still surface.
+pub fn parse_command_response(data: &[u8]) -> Option<CommandResponse> {
+    if data.len() != FULL_PACKET_LEN {
+        return None;
+    }
+    // The checksum byte [19] is an XOR of every preceding byte.
+    let checksum = data[..FULL_PACKET_LEN - 1].iter().fold(0_u8, |a, &b| a ^ b);
+    if checksum != data[FULL_PACKET_LEN - 1] {
+        return None;
+    }
+
+    match [data[0], data[1]] {
+        RESPONSE_HEADER_SERIAL => {
+            let firmware_version = (u16::from(data[2]) << 8) | u16::from(data[3]);
+            // Bytes [4-17] are the 14-byte ASCII serial; drop trailing NUL /
+            // whitespace padding and any non-ASCII byte defensively.
+            let serial: String = data[4..18]
+                .iter()
+                .copied()
+                .take_while(|&b| b != 0)
+                .filter(|b| b.is_ascii())
+                .map(char::from)
+                .collect::<String>()
+                .trim()
+                .to_owned();
+            Some(CommandResponse::Serial {
+                firmware_version,
+                serial,
+                anti_mistouch: data[18] != 0,
+            })
+        }
+        RESPONSE_HEADER_SETTINGS => Some(CommandResponse::Settings {
+            active_mode: data[2],
+            enabled_modes: data[3],
+        }),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -721,6 +814,75 @@ mod tests {
     fn query_constants_match_the_captured_bytes() {
         assert_eq!(QUERY_SERIAL, hex6("030a0a000003"));
         assert_eq!(QUERY_SETTINGS, hex6("030a0f000006"));
+    }
+
+    #[test]
+    fn parse_command_response_decodes_a_serial_response_with_anti_mistouch_on() {
+        // Real 03 0c response: fw 1.4.1 (0x008d = 141), serial "SN2400d66a89e7",
+        // [18] = 0x01 -> anti-mistouch on.
+        let frame = hex20("030c008d534e32343030643636613839653701ce");
+        let response = parse_command_response(&frame).expect("a 03 0c response");
+        assert_eq!(
+            response,
+            CommandResponse::Serial {
+                firmware_version: 141,
+                serial: "SN2400d66a89e7".to_owned(),
+                anti_mistouch: true,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_command_response_decodes_a_serial_response_with_anti_mistouch_off() {
+        // Same 03 0c response with [18] = 0x00 -> anti-mistouch off; the
+        // checksum [19] flips from 0xce to 0xcf accordingly.
+        let frame = hex20("030c008d534e32343030643636613839653700cf");
+        let response = parse_command_response(&frame).expect("a 03 0c response");
+        assert_eq!(
+            response,
+            CommandResponse::Serial {
+                firmware_version: 141,
+                serial: "SN2400d66a89e7".to_owned(),
+                anti_mistouch: false,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_command_response_decodes_a_settings_response() {
+        // Real 03 0e response: [2] = 0x02 -> Auto active, [3] = 0x04 -> only
+        // the Auto mode (bit 2) enabled.
+        let frame = hex20("030e02040000000000000000000000000000000b");
+        let response = parse_command_response(&frame).expect("a 03 0e response");
+        assert_eq!(
+            response,
+            CommandResponse::Settings {
+                active_mode: 2,
+                enabled_modes: 0b100,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_command_response_rejects_a_wrong_length_frame() {
+        assert_eq!(parse_command_response(&[0; 19]), None);
+        assert_eq!(parse_command_response(&[0; 21]), None);
+    }
+
+    #[test]
+    fn parse_command_response_rejects_an_unknown_header() {
+        // A 03 0b weight-notification header is not a command response.
+        let frame = hex20("030b000000012b0000002b0000640096010000fa");
+        assert_eq!(parse_command_response(&frame), None);
+    }
+
+    #[test]
+    fn parse_command_response_rejects_a_corrupt_checksum() {
+        // A command response carries no field a corrupt frame could still
+        // surface, so a checksum mismatch rejects the frame outright.
+        let mut frame = hex20("030e02040000000000000000000000000000000b");
+        frame[19] ^= 0xFF;
+        assert_eq!(parse_command_response(&frame), None);
     }
 
     #[test]

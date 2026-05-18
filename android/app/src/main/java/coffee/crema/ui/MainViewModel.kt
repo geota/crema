@@ -97,6 +97,29 @@ data class MainUiState(
      */
     val scaleBatteryPercent: Int? = null,
     /**
+     * The connected scale's BLE advertised name (e.g. `"BOOKOO_SC 502158"`),
+     * or null when no scale is connected. Captured on connect from the name
+     * the scanner resolved off the peripheral's advertisement; cleared on
+     * [MainViewModel.disconnectScale]. Read-only — it is the device's BLE
+     * identity, not a configurable setting.
+     */
+    val scaleName: String? = null,
+    /**
+     * The connected scale's firmware version, pre-formatted `"M.m.p"` (e.g.
+     * `"1.4.1"`), or null until the scale's `03 0c` serial response arrives
+     * (or for a scale that does not report it). Read-only — decoded from
+     * `Event.ScaleConfig.firmware_version`, the `u16` the Bookoo answers its
+     * connect-time `0x0a` query with, encoded `major × 100 + minor × 10 +
+     * patch`.
+     */
+    val scaleFirmware: String? = null,
+    /**
+     * The connected scale's serial number, or null until the scale's `03 0c`
+     * serial response arrives (or for a scale that does not report one).
+     * Read-only — taken straight from `Event.ScaleConfig.serial`.
+     */
+    val scaleSerial: String? = null,
+    /**
      * Whether the scale's flow smoothing toggle is shown as on.
      *
      * Two-way like [scaleVolume]: the Bookoo echoes its real flow-smoothing
@@ -119,10 +142,28 @@ data class MainUiState(
      */
     val scaleAutoStop: Int? = null,
     /**
-     * Whether the scale's anti-mistouch toggle is shown as on. Write-only —
-     * the scale's actual state is not read back; starts off.
+     * Whether the scale's anti-mistouch toggle is shown as on.
+     *
+     * Two-way like [scaleFlowSmoothing]: the Bookoo reports its real
+     * anti-mistouch state on its `ff12` command channel — in the `03 0c` serial
+     * response to a connect-time query and after every anti-mistouch write
+     * (`Event.ScaleConfig.anti_mistouch`) — so the toggle follows that live
+     * value; it is also updated optimistically the moment the user flips the
+     * control, after which the response confirms it. Starts off until the
+     * first `ScaleConfig` arrives.
      */
     val scaleAntiMistouch: Boolean = false,
+    /**
+     * The scale's active display-mode index (`0` = Flow-Rate, `1` = Timer,
+     * `2` = Auto), or `null` until the first `ff12` settings response arrives.
+     *
+     * Two-way like [scaleAutoStop]: the Bookoo reports its active mode on its
+     * `ff12` command channel in the `03 0e` settings response
+     * (`Event.ScaleConfig.active_mode`), so the mode selector highlights that
+     * live value; it is also updated optimistically the moment the user picks
+     * a mode, after which the response confirms it.
+     */
+    val scaleActiveMode: Int? = null,
     /** A rolling event log, newest first. */
     val eventLog: List<String> = emptyList(),
 )
@@ -251,6 +292,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             scaleFlowSmoothing = false,
             scaleAutoStop = null,
             scaleAntiMistouch = false,
+            scaleActiveMode = null,
+            // Drop the scale's identity so the card clears for the next scale.
+            scaleBatteryPercent = null,
+            scaleName = null,
+            scaleFirmware = null,
+            scaleSerial = null,
         )
     }
 
@@ -262,20 +309,28 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * Capability-driven, never device-driven: the UI never branches on the
      * concrete scale model, only on the capability flags.
      *
+     * [advertisedName] is the scale's BLE name the scanner resolved — captured
+     * into [MainUiState.scaleName] here so the scale card shows the device's
+     * identity immediately, before the core's `0x0a` connect query returns the
+     * firmware / serial.
+     *
      * Also fires a baseline settings query at connect time: the core emits a
      * `Command.WriteScale` carrying the scale's `0x0f` settings-query command
      * (capability-gated — empty for a weight-only scale), routed through the
      * shared command path so the scale's `03 0e` settings response lands in
      * the capture.
      */
-    private fun refreshScaleCapabilities() {
+    private fun refreshScaleCapabilities(advertisedName: String) {
         val capsJson = runCatching { bridge.scaleCapabilities() }.getOrNull()
         val caps = capsJson?.let {
             runCatching {
                 json.decodeFromString(ScaleCapabilities.serializer(), it)
             }.getOrNull()
         }
-        _ui.value = _ui.value.copy(scaleCapabilities = caps)
+        _ui.value = _ui.value.copy(
+            scaleCapabilities = caps,
+            scaleName = advertisedName,
+        )
 
         val queryRaw = runCatching { bridge.queryScaleSettings() }.getOrElse {
             appendLog("Query scale settings failed: ${it.message}")
@@ -388,8 +443,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * loop preserves that order, so all three reach `ScaleBleManager` in
      * sequence. Capability-gated: the core emits commands only for a scale that
      * exposes switchable modes and only for a listed [modeId].
+     *
+     * The UI's shown active mode is updated optimistically; the live
+     * `Event.ScaleConfig.active_mode` stream (the scale's `03 0e` settings
+     * response) then catches up and confirms the scale's real mode.
      */
     fun setScaleMode(modeId: Int) {
+        _ui.value = _ui.value.copy(scaleActiveMode = modeId)
         val raw = runCatching {
             bridge.setScaleMode(modeId.toUByte())
         }.getOrElse {
@@ -557,9 +617,58 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 _ui.value = _ui.value.copy(scaleWeightG = null)
                 appendLog("Scale stale")
             }
+            is Event.ScaleConfig -> {
+                val c = event.content
+                // The Bookoo's `ff12` command channel reports its dynamic
+                // config: a `03 0c` serial response carries anti_mistouch (plus
+                // serial / firmware), a `03 0e` settings response carries
+                // active_mode. Any one notification fills only one set, so the
+                // other fields are null — fold in whatever is present and keep
+                // the last value for the rest, the same two-way pattern the
+                // weight-stream settings use.
+                _ui.value = _ui.value.copy(
+                    scaleAntiMistouch = c.anti_mistouch ?: _ui.value.scaleAntiMistouch,
+                    scaleActiveMode = c.active_mode?.toInt() ?: _ui.value.scaleActiveMode,
+                    // The `03 0c` serial response carries firmware + serial;
+                    // the `03 0e` settings response leaves both null — fold in
+                    // whatever is present and keep the last value otherwise.
+                    scaleFirmware = c.firmware_version?.let { formatFirmware(it.toInt()) }
+                        ?: _ui.value.scaleFirmware,
+                    scaleSerial = c.serial ?: _ui.value.scaleSerial,
+                )
+                when {
+                    c.anti_mistouch != null ->
+                        appendLog(
+                            "Scale config: anti-mistouch=${c.anti_mistouch}" +
+                                (c.serial?.let { ", serial=$it" } ?: "") +
+                                (c.firmware_version?.let {
+                                    ", fw=${formatFirmware(it.toInt())}"
+                                } ?: ""),
+                        )
+                    c.active_mode != null ->
+                        appendLog(
+                            "Scale config: active mode=${c.active_mode}, " +
+                                "enabled modes=${c.enabled_modes}",
+                        )
+                }
+            }
             is Event.DecodeError ->
                 appendLog("Decode error: ${event.content.message}")
         }
+    }
+
+    /**
+     * Format the Bookoo's `u16` firmware version into a `"M.m.p"` string.
+     *
+     * The scale encodes its version as `major × 100 + minor × 10 + patch`
+     * (e.g. `141` is firmware `1.4.1`), so the three components peel off with
+     * `n / 100`, `(n / 10) % 10`, and `n % 10`.
+     */
+    private fun formatFirmware(encoded: Int): String {
+        val major = encoded / 100
+        val minor = (encoded / 10) % 10
+        val patch = encoded % 10
+        return "$major.$minor.$patch"
     }
 
     private fun appendLog(line: String) {

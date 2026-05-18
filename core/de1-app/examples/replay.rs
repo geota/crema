@@ -22,22 +22,22 @@
 //!  - `t`   — millisecond timestamp (Android `SystemClock.elapsedRealtime()`).
 //!  - `dir` — `"in"` is a notification received from the DE1; `"out"` is a
 //!    command written to it.
-//!  - `src` — for `dir:"in"`, usually a `NotificationSource` enum name
-//!    (`DE1_STATE`, `DE1_SHOT_SAMPLE`, `DE1_WATER_LEVELS`, `SCALE_WEIGHT`), but
-//!    an arbitrary string is allowed for inbound traffic the core does not
-//!    model (e.g. `SCALE_FF12`); for `dir:"out"`, a short label (e.g.
-//!    `SCALE_COMMAND` for a tare/timer write).
+//!  - `src` — for `dir:"in"`, a `NotificationSource` enum name (`DE1_STATE`,
+//!    `DE1_SHOT_SAMPLE`, `DE1_WATER_LEVELS`, `SCALE_WEIGHT`, `SCALE_FF12`); an
+//!    arbitrary string is still allowed for any future inbound traffic the core
+//!    does not model; for `dir:"out"`, a short label (e.g. `SCALE_COMMAND` for
+//!    a tare/timer write).
 //!  - `hex` — raw bytes, lowercase hex, no separators.
 //!
 //! The Android recorder (`BleSessionRecorder.kt`) writes the same format; keep
 //! the two in sync.
 //!
-//! Only `dir:"in"` lines with a `src` the core models are fed through it. A
-//! `dir:"in"` line whose `src` is unrecognised (e.g. `SCALE_FF12`, Bookoo
-//! command-characteristic notifications captured only for reverse-engineering)
-//! is treated as informational and printed like a `dir:"out"` line — never fed
-//! to the core. A final summary reports lines read, events decoded, and decode
-//! errors.
+//! Only `dir:"in"` lines with a `src` the core models are fed through it —
+//! `SCALE_FF12` (the Bookoo command characteristic) is now one of them, so its
+//! serial / settings responses decode into `ScaleConfig` events. A `dir:"in"`
+//! line whose `src` is unrecognised is treated as informational and printed
+//! like a `dir:"out"` line — never fed to the core. A final summary reports
+//! lines read, events decoded, and decode errors.
 //!
 //! ## Scale captures
 //!
@@ -211,6 +211,7 @@ fn source_from_name(name: &str) -> Option<Source> {
         "DE1_SHOT_SAMPLE" => Some(Source::De1ShotSample),
         "DE1_WATER_LEVELS" => Some(Source::De1WaterLevels),
         "SCALE_WEIGHT" => Some(Source::ScaleWeight),
+        "SCALE_FF12" => Some(Source::ScaleCommand),
         _ => None,
     }
 }
