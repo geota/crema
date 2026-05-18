@@ -55,7 +55,14 @@
 			for (const t of p.tags) counts.set(t, (counts.get(t) ?? 0) + 1);
 		}
 		return [...counts.entries()]
-			.map(([label, count]) => ({ id: `t:${label}`, label, count }))
+			.map(([tag, count]) => ({
+				id: `t:${tag}`,
+				// Display label is title-cased so a stored tag like `tea` reads
+				// consistently next to `Built-in` in the facet strip; the filter
+				// still keys on the raw tag string via `id`.
+				label: tag.charAt(0).toUpperCase() + tag.slice(1),
+				count
+			}))
 			.sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
 	});
 

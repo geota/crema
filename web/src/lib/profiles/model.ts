@@ -177,17 +177,99 @@ export function segmentToStep(seg: ProfileSegment): ProfileStep {
 }
 
 /**
- * Infer a roast for an adapted built-in **only** from an explicit roast word
- * in its name (case-insensitive). If the name carries no clear roast word the
- * roast is left unset (`null`) — roast is never guessed from anything else.
+ * Built-in profiles whose title is the leaf of a `Tea/` or `Tea portafilter/`
+ * group. The core's `Profile` JSON carries **no** `beverage_type` field (it is
+ * only `title` / `notes` / `steps` / …), so tea is detected from the title
+ * prefix — the one reliable signal the built-in corpus actually exposes.
  */
-function roastFromName(name: string): Roast | null {
-	const n = name.toLowerCase();
-	// `very dark` is covered by the `dark` substring; `french` / `italian`
-	// roasts are conventionally dark.
-	if (/\b(dark|french|italian)\b/.test(n)) return 'dark';
-	if (/\b(medium|med)\b/.test(n)) return 'medium';
-	if (/\b(light|blonde|nordic)\b/.test(n)) return 'light';
+function isTeaProfile(title: string): boolean {
+	const t = title.toLowerCase();
+	return t.startsWith('tea/') || t.startsWith('tea portafilter/');
+}
+
+/**
+ * Built-in profiles whose title is the leaf of a non-coffee utility group —
+ * cleaning, calibration / leak tests, or steam-only. These never have a roast.
+ */
+function isUtilityProfile(title: string): boolean {
+	const t = title.toLowerCase();
+	return (
+		t.startsWith('cleaning/') ||
+		t.startsWith('test/') ||
+		t.startsWith('ghc/') ||
+		t === 'steam only'
+	);
+}
+
+/**
+ * Explicit roast overrides keyed by **exact built-in title**. Used where the
+ * title + notes heuristic in {@link roastFromProfile} would mis-read a profile
+ * — typically because the notes mention roast comparatively ("works from
+ * lighter to darker roasts") rather than prescriptively. Accuracy first.
+ */
+const ROAST_OVERRIDES: Record<string, Roast | null> = {
+	// Adaptive / "wide grind range" profiles: notes name *both* light and dark
+	// roasts to describe their span, so no single roast applies.
+	'Gagné/Adaptive Shot 92C v1.0': null,
+	'Easy blooming - active pressure decline': null,
+	'Adaptive v2': null,
+	'I got your back': null,
+	// Turbo profiles target high-extraction grinders, not a roast level.
+	TurboBloom: null,
+	TurboTurbo: null,
+	'Extractamundo Dos!': null
+};
+
+/**
+ * Ordered roast phrases, most-specific first. Each maps a phrase that may
+ * appear in a profile's title or notes to a roast level. "medium to dark" must
+ * be tested before the bare "dark" / "medium" words so a range resolves to its
+ * dominant end the same way a barista would read it.
+ */
+const ROAST_PHRASES: ReadonlyArray<readonly [RegExp, Roast]> = [
+	// Explicit prescriptive ranges — resolve to the end the notes lead with.
+	[/\bmedium[\s-]*to[\s-]*dark\b/, 'dark'],
+	[/\bmedium[\s-]*dark\b/, 'dark'],
+	[/\bdark[\s-]*to[\s-]*medium\b/, 'dark'],
+	[/\bmedium[\s-]*to[\s-]*light\b/, 'light'],
+	[/\bmedium[\s-]*light\b/, 'light'],
+	[/\blight[\s-]*to[\s-]*medium\b/, 'light'],
+	// Single prescriptive roast words / phrases.
+	[/\b(?:very[\s-]+)?dark[\s-]+roast(?:ed|s)?\b/, 'dark'],
+	[/\b(?:a\s+)?dark[\s-]+roast\b/, 'dark'],
+	[/\bdark[\s-]+roasted\b/, 'dark'],
+	[/\bmedium[\s-]+roast(?:ed|s)?\b/, 'medium'],
+	[/\b(?:light(?:ly)?)[\s-]+roast(?:ed|s)?\b/, 'light']
+];
+
+/**
+ * Classify a built-in profile's roast by reading its **title and notes**
+ * together (case-insensitive). Tea / cleaning / calibration / pour-over /
+ * steam profiles have no roast and resolve to `null`; espresso profiles
+ * resolve from an explicit roast phrase, or `null` when the notes never
+ * commit to one. An explicit {@link ROAST_OVERRIDES} entry always wins — it
+ * is the escape hatch for profiles the phrase heuristic mis-reads.
+ *
+ * Roast stays **optional**: `null` means "no roast clearly known", never
+ * "medium by default".
+ */
+function roastFromProfile(profile: Profile): Roast | null {
+	if (profile.title in ROAST_OVERRIDES) return ROAST_OVERRIDES[profile.title];
+	// Non-coffee and pour-over profiles never carry a roast.
+	if (isTeaProfile(profile.title) || isUtilityProfile(profile.title)) {
+		return null;
+	}
+	const text = `${profile.title}\n${profile.notes}`.toLowerCase();
+	for (const [phrase, roast] of ROAST_PHRASES) {
+		if (phrase.test(text)) return roast;
+	}
+	// Titled roast hints used by the A-Flow family (`default-dark`,
+	// `default-very-dark`, `default-medium`) — these carry the roast in the
+	// title slug, not in the notes.
+	const title = profile.title.toLowerCase();
+	if (/\bvery[\s-]*dark\b|\bdefault-dark\b/.test(title)) return 'dark';
+	if (/\bdefault-medium\b/.test(title)) return 'medium';
+	if (/\bdefault-light\b/.test(title)) return 'light';
 	return null;
 }
 
@@ -195,25 +277,28 @@ function roastFromName(name: string): Roast | null {
  * Adapt a core built-in {@link Profile} into a library {@link CremaProfile}.
  *
  * The core `Profile` has no library metadata (bean, roast, tags, dose…), so
- * those are synthesised: bean is left blank, roast is inferred only from an
- * explicit roast word in the profile name and otherwise left unset (`null`),
- * dose / yield default to a sane 18 g / 36 g, and the brew temperature is the
- * profile's mean step temperature. The result is read-only — editing a
- * built-in duplicates it to a custom profile (see `store.ts`).
+ * those are synthesised: bean is left blank, roast is classified from the
+ * profile's title **and** notes ({@link roastFromProfile}) and otherwise left
+ * unset (`null`), tea profiles pick up a `'tea'` tag, dose / yield default to
+ * a sane 18 g / 36 g, and the brew temperature is the profile's mean step
+ * temperature. The result is read-only — editing a built-in duplicates it to
+ * a custom profile (see `store.ts`).
  */
 export function fromCoreProfile(profile: Profile, index: number): CremaProfile {
 	const segments = profile.steps.map(segmentFromStep);
 	const temps = profile.steps.map((s) => s.temperature_c).filter((t) => t > 0);
 	const meanTemp =
 		temps.length > 0 ? temps.reduce((a, t) => a + t, 0) / temps.length : 92;
+	const tags = ['Built-in'];
+	if (isTeaProfile(profile.title)) tags.push('tea');
 	return {
 		id: `builtin:${index}`,
 		source: 'builtin',
 		name: profile.title,
 		bean: '',
 		notes: profile.notes,
-		roast: roastFromName(profile.title),
-		tags: ['Built-in'],
+		roast: roastFromProfile(profile),
+		tags,
 		pinned: false,
 		lastUsed: null,
 		dose: 18,
