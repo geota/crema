@@ -32,7 +32,9 @@ export const De1Uuids = {
 
 	/**
 	 * The DE1 advertises with a name beginning "DE1"; some units advertise
-	 * "BENGLE". Web Bluetooth's `requestDevice` filters on these name prefixes.
+	 * "BENGLE". Its Nordic nRF5x BLE module can also surface under the chip's
+	 * default name "nRF5x" — kept as a prefix for now so the chooser still
+	 * scopes to the DE1. `requestDevice` filters on these name prefixes.
 	 */
-	NAME_PREFIXES: ['DE1', 'BENGLE'] as const
+	NAME_PREFIXES: ['DE1', 'BENGLE', 'nRF5x'] as const
 } as const;
