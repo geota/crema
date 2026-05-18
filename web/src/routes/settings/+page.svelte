@@ -144,7 +144,10 @@
 	.st-nav {
 		background: var(--espresso-950);
 		border-right: 1px solid rgba(244, 237, 224, 0.05);
-		padding: 28px 20px 20px;
+		/* Shared page-header rhythm — the "Preferences" header block sits at
+		   the same left / top origin as every other route's title. See
+		   --page-pad-* in app.css. */
+		padding: var(--page-pad-top) 20px 20px var(--page-pad-x);
 		display: flex;
 		flex-direction: column;
 		gap: 14px;
@@ -204,7 +207,9 @@
 	.st-nav-item.is-active::before {
 		content: '';
 		position: absolute;
-		left: -20px;
+		/* Pull the marker to the nav column's left edge — matches the nav's
+		   left padding (--page-pad-x). */
+		left: calc(-1 * var(--page-pad-x));
 		top: 8px;
 		bottom: 8px;
 		width: 2px;

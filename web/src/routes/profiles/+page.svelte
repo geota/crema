@@ -261,7 +261,8 @@
 		align-items: flex-end;
 		justify-content: space-between;
 		gap: 24px;
-		padding: 32px 40px 18px;
+		/* Shared page-header rhythm — see --page-pad-* in app.css. */
+		padding: var(--page-pad-top) var(--page-pad-x) 18px;
 		flex: 0 0 auto;
 	}
 	.pp-head-l {
@@ -367,7 +368,7 @@
 		justify-content: space-between;
 		align-items: center;
 		gap: 24px;
-		padding: 0 40px 16px;
+		padding: 0 var(--page-pad-x) 16px;
 		border-bottom: 1px solid rgba(244, 237, 224, 0.05);
 	}
 	.pp-tags {
@@ -472,7 +473,7 @@
 		display: grid;
 		grid-template-columns: repeat(3, minmax(0, 1fr));
 		gap: 18px;
-		padding: 24px 40px 40px;
+		padding: 24px var(--page-pad-x) 40px;
 	}
 	@media (max-width: 1100px) {
 		.pp-grid {
