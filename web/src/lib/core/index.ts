@@ -24,6 +24,90 @@
 import type { CoreOutput, ScaleCapabilities, ScaleUuids } from './crema-core';
 
 /**
+ * Which quantity a profile step holds at its target — mirrors the core's
+ * `Pump` enum (serde-serialised as the bare variant name).
+ */
+export type ProfilePump = 'Pressure' | 'Flow';
+
+/** How a profile step moves to its target — mirrors the core's `Transition`. */
+export type ProfileTransition = 'Fast' | 'Smooth';
+
+/** Which temperature sensor a step regulates — mirrors `TempSensor`. */
+export type ProfileTempSensor = 'Basket' | 'Mix';
+
+/** The metric an exit condition watches — mirrors `ExitMetric`. */
+export type ProfileExitMetric = 'Pressure' | 'Flow';
+
+/** The direction of an exit comparison — mirrors `Compare`. */
+export type ProfileCompare = 'Over' | 'Under';
+
+/** An early-exit condition on a step — mirrors the core's `ExitCondition`. */
+export interface ProfileExit {
+	/** Which metric to watch. */
+	metric: ProfileExitMetric;
+	/** Exit above (`Over`) or below (`Under`) the threshold. */
+	compare: ProfileCompare;
+	/** The threshold value, bar or mL/s per `metric`. */
+	threshold: number;
+}
+
+/** An advanced max-flow-or-pressure limiter — mirrors the core's `Limiter`. */
+export interface ProfileLimiter {
+	/** The limit value. */
+	value: number;
+	/** Tolerance band around the limit. */
+	range: number;
+}
+
+/** One step of an espresso {@link Profile} — mirrors the core's `ProfileStep`. */
+export interface ProfileStep {
+	/** Human-readable step name. */
+	name: string;
+	/** Whether the step holds pressure or flow. */
+	pump: ProfilePump;
+	/** Target value — bar (pressure) or mL/s (flow), per `pump`. */
+	target: number;
+	/** Target temperature, °C. */
+	temperature_c: number;
+	/** Which temperature sensor the step regulates. */
+	temp_sensor: ProfileTempSensor;
+	/** How the step transitions to its target. */
+	transition: ProfileTransition;
+	/** Maximum step duration, seconds. */
+	duration_seconds: number;
+	/** Optional early-exit condition. */
+	exit: ProfileExit | null;
+	/** Per-step dispensed-volume limit, mL (0 = no limit). */
+	volume_limit_ml: number;
+	/** Optional advanced limiter. */
+	limiter: ProfileLimiter | null;
+}
+
+/**
+ * An espresso profile — the JSON shape the wasm bridge's
+ * `builtin_profiles_json()` produces (one element of its array). A faithful
+ * mirror of the core's `de1_domain::Profile`; defined here rather than in the
+ * typeshare-generated `crema-core.ts` because `Profile` is not a `#[typeshare]`
+ * type — it only crosses the bridge as a JSON string.
+ */
+export interface Profile {
+	/** Profile title. */
+	title: string;
+	/** Free-text notes. */
+	notes: string;
+	/** The ordered steps (1–32). */
+	steps: ProfileStep[];
+	/** How many leading steps count as preinfusion. */
+	preinfuse_step_count: number;
+	/** Minimum pressure for flow-priority steps, bar. */
+	minimum_pressure: number;
+	/** Maximum flow for pressure-priority steps, mL/s. */
+	maximum_flow: number;
+	/** Whole-shot dispensed-volume limit, mL (0 = no limit). */
+	max_total_volume_ml: number;
+}
+
+/**
  * Which BLE characteristic an incoming notification came from. A plain string
  * union mirroring the wasm `NotificationSource` enum — the facade maps it to
  * the wasm enum internally so callers never import a wasm type.
@@ -84,6 +168,13 @@ export interface CremaCore {
 	setScaleMode(modeId: number): Promise<CoreOutput>;
 	/** Build a `CoreOutput` whose command selects the scale auto-stop mode. */
 	setScaleAutoStop(modeId: number): Promise<CoreOutput>;
+	/**
+	 * The standard DE1 profiles Crema ships built in, as a parsed array of
+	 * {@link Profile}. The bridge returns a JSON-string of `Profile[]` (the
+	 * "Option S" encoding); this method parses it. The list is read-only — the
+	 * built-in corpus is fixed at compile time in the core.
+	 */
+	builtinProfiles(): Promise<Profile[]>;
 }
 
 /**
@@ -167,6 +258,9 @@ export async function loadCore(): Promise<CremaCore> {
 		},
 		async setScaleAutoStop(modeId) {
 			return parseOutput(bridge.set_scale_auto_stop(modeId));
+		},
+		async builtinProfiles() {
+			return JSON.parse(bridge.builtin_profiles_json()) as Profile[];
 		}
 	};
 }

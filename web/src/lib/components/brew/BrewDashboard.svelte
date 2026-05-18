@@ -56,8 +56,12 @@
 	// ── Header meta ──────────────────────────────────────────────────────
 	/** Live yield-to-dose ratio for the header / target cards. */
 	const ratio = $derived((p.yield / p.dose).toFixed(2));
-	/** The header profile name — the selected favorite. */
-	const profileName = $derived(favorite.name);
+	/**
+	 * The header profile name. The Profiles page can mark a profile "active"
+	 * (UI-level — see `lib/profiles`); when it has, that name wins. Otherwise
+	 * the locally-selected favorite name is shown.
+	 */
+	const profileName = $derived(ui.activeProfileName ?? favorite.name);
 
 	// ── Real telemetry (the DISPLAY side — wired to lib/state) ───────────
 	/** The latest 4-channel sample, or null when no telemetry has arrived. */
