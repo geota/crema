@@ -243,6 +243,16 @@ export class BleDevice {
 	}
 
 	/**
+	 * The browser's opaque, per-origin stable identifier for this device — the
+	 * `BluetoothDevice.id`. Distinct from the advertised name (which a DE1's
+	 * Nordic module may show as "nRF5x"); surfaced in the connection
+	 * diagnostics so the user can pin down exactly which device was selected.
+	 */
+	get id(): string {
+		return this.device.id;
+	}
+
+	/**
 	 * Register the single sink every notification on this device dispatches
 	 * to. One sink per device preserves cross-characteristic arrival order —
 	 * the web equivalent of the Android managers merging characteristic flows.
