@@ -29,6 +29,7 @@ export type De1State =
 	| 'connecting'
 	| 'subscribing'
 	| 'ready'
+	| 'reconnecting'
 	| 'disconnected'
 	| 'failed';
 
@@ -76,9 +77,21 @@ export class De1Manager {
 				optionalServices: [De1Uuids.SERVICE]
 			});
 			this.device = device;
+			// A terminal disconnect — a user-initiated `disconnect()` or the
+			// auto-reconnect loop giving up after exhausting its attempts.
 			device.onDisconnected(() => {
 				this.callbacks.onState('disconnected');
 				this.callbacks.onStatus('DE1 disconnected');
+			});
+			// The transport's auto-reconnect backoff loop reports each attempt
+			// and the eventual recovery; surface both to the UI.
+			device.onReconnectAttempt((attempt) => {
+				this.callbacks.onState('reconnecting');
+				this.callbacks.onStatus(`Reconnecting to DE1… (attempt ${attempt})`);
+			});
+			device.onReconnected(() => {
+				this.callbacks.onState('ready');
+				this.callbacks.onStatus('Reconnected — receiving DE1 notifications');
 			});
 
 			this.callbacks.onStatus(`Connecting to ${device.name}…`);

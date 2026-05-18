@@ -40,11 +40,16 @@
 	const ui = $derived(app?.state.current ?? null);
 
 	/**
-	 * True while a DE1 is connected or mid-handshake — the Android shell's
-	 * `connected` rule: Connect disables, Disconnect enables.
+	 * True while a DE1 is connected, mid-handshake, or auto-reconnecting — the
+	 * Android shell's `connected` rule: Connect disables, Disconnect enables.
+	 * `reconnecting` counts as connected so the user keeps a working Disconnect
+	 * (which cancels the backoff loop) and cannot start a duplicate connect.
 	 */
 	const de1Connected = $derived(
-		ui !== null && (['connecting', 'subscribing', 'ready'] as De1State[]).includes(ui.de1State)
+		ui !== null &&
+			(['connecting', 'subscribing', 'ready', 'reconnecting'] as De1State[]).includes(
+				ui.de1State
+			)
 	);
 </script>
 

@@ -42,6 +42,11 @@ export class CremaApp {
 			onState: (scaleState) => this.state.patch({ scaleState }),
 			onScaleIdentified: (advertisedName) => {
 				void this.refreshScaleCapabilities(advertisedName);
+			},
+			// After the auto-reconnect loop recovers the scale link, re-fire the
+			// settings query so the config read-back refreshes from the device.
+			onReconnected: () => {
+				void this.core.queryScaleSettings().then((output) => this.applyCoreOutput(output));
 			}
 		});
 	}

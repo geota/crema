@@ -45,6 +45,7 @@ export type ScaleState =
 	| 'connecting'
 	| 'subscribing'
 	| 'ready'
+	| 'reconnecting'
 	| 'disconnected'
 	| 'failed';
 
@@ -61,6 +62,12 @@ export interface ScaleManagerCallbacks {
 	 * — the orchestrator surfaces it and reads `core.scaleCapabilities()`.
 	 */
 	onScaleIdentified: (advertisedName: string) => void;
+	/**
+	 * The auto-reconnect loop recovered the scale link — GATT back up,
+	 * notifications replayed. Lets the orchestrator re-run a settings query so
+	 * the config read-back refreshes after the outage.
+	 */
+	onReconnected: () => void;
 }
 
 /**
@@ -72,15 +79,6 @@ export class ScaleManager {
 
 	/** The connected scale's GATT UUIDs, learned from the core after connect. */
 	private uuids: ScaleUuids | null = null;
-
-	/**
-	 * Serializes scale command writes. Web Bluetooth permits only one GATT
-	 * operation at a time and rejects an overlapping one with "GATT operation
-	 * already in progress" — and a single core action (mode selection) emits
-	 * three `WriteScale` commands. Every {@link writeScale} chains onto this
-	 * promise so writes run strictly one after another, in call order.
-	 */
-	private writeQueue: Promise<void> = Promise.resolve();
 
 	constructor(
 		private readonly core: CremaCore,
@@ -108,9 +106,23 @@ export class ScaleManager {
 				optionalServices: [BOOKOO_SERVICE_UUID]
 			});
 			this.device = device;
+			// A terminal disconnect — a user-initiated `disconnect()` or the
+			// auto-reconnect loop giving up after exhausting its attempts.
 			device.onDisconnected(() => {
 				this.callbacks.onState('disconnected');
 				this.callbacks.onStatus('Scale disconnected');
+			});
+			// The transport's auto-reconnect backoff loop reports each attempt
+			// and the eventual recovery; surface both to the UI. On recovery,
+			// the manager re-fires a settings query so the read-back refreshes.
+			device.onReconnectAttempt((attempt) => {
+				this.callbacks.onState('reconnecting');
+				this.callbacks.onStatus(`Reconnecting to scale… (attempt ${attempt})`);
+			});
+			device.onReconnected(() => {
+				this.callbacks.onState('ready');
+				this.callbacks.onStatus('Reconnected — receiving scale weight');
+				this.callbacks.onReconnected();
 			});
 
 			this.callbacks.onStatus(`Connecting to ${device.name}…`);
@@ -192,20 +204,15 @@ export class ScaleManager {
 	 * The exact bytes come from the core via a `Command.WriteScale`; this
 	 * manager owns no protocol. A no-op (with a status line) when no scale is
 	 * connected — mirrors the Android manager's defensive `writeCommand`.
+	 *
+	 * No write-specific queue is needed here: `BleDevice` funnels every GATT
+	 * operation — writes included — through its per-device serial queue, and
+	 * `enqueue` fixes order synchronously. So a burst of `writeScale` calls
+	 * made in one synchronous stretch (the three-command mode sequence the
+	 * orchestrator dispatches in a single `applyCoreOutput` loop) still runs
+	 * strictly in call order, with no overlap against any other GATT op.
 	 */
 	async writeScale(data: Uint8Array): Promise<void> {
-		// Chain onto the write queue so writes never overlap a GATT operation.
-		// The chain assignment below is synchronous, so a burst of writeScale
-		// calls — e.g. the three-command mode sequence dispatched in one
-		// `applyCoreOutput` loop — enqueues in call order and runs serially.
-		const run = this.writeQueue.then(() => this.doWriteScale(data));
-		// The `catch` keeps the chain alive if one write rejects.
-		this.writeQueue = run.catch(() => {});
-		return run;
-	}
-
-	/** Perform a single scale command write. Serialized by {@link writeScale}. */
-	private async doWriteScale(data: Uint8Array): Promise<void> {
 		const device = this.device;
 		const uuids = this.uuids;
 		if (device === null || uuids === null) {

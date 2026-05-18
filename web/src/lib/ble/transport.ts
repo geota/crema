@@ -22,11 +22,45 @@
  * Android transport's `elapsedRealtime()` arrival stamp and the
  * `performance.now()` clock the core expects.
  *
- * `ConnState` mirrors the Android transport's coarse flat enum.
+ * ## Robustness patterns borrowed from `blu` / Nordic's BLE library
+ *
+ * Two robustness patterns are folded into {@link BleDevice}, both internal to
+ * the transport so the managers stay simple:
+ *
+ *  1. **A single serial GATT operation queue.** Web Bluetooth permits only ONE
+ *     in-flight GATT operation per device and rejects an overlapping one with
+ *     "GATT operation already in progress". Every GATT call — `gatt.connect()`,
+ *     `getPrimaryService` / `getCharacteristic`, `startNotifications`, `write`
+ *     — funnels through {@link BleDevice}'s per-device {@link GattQueue}, so
+ *     bursts (the scale's three-command mode sequence) never collide. The
+ *     queue is per `BleDevice`: the DE1 and the scale are independent devices
+ *     with independent queues.
+ *
+ *  2. **Auto-reconnect with exponential backoff.** Borrowed from Nordic's
+ *     auto-reconnect. {@link BleDevice} records its subscription set — every
+ *     (service, characteristic) pair passed to `startNotifications` — and
+ *     distinguishes a deliberate {@link BleDevice.disconnect} from an
+ *     unexpected `gattserverdisconnected`. On an unexpected drop it runs a
+ *     bounded backoff loop that reconnects GATT, re-resolves the
+ *     characteristics, replays the subscriptions, and re-attaches the sink —
+ *     no user gesture needed, since `device.gatt.connect()` works on the same
+ *     `BluetoothDevice` for the page session.
+ *
+ * `ConnState` mirrors the Android transport's coarse flat enum, plus a
+ * `reconnecting` value the backoff loop drives.
  */
 
-/** Coarse connection state — connected-or-not plus the failure case. */
-export type ConnState = 'disconnected' | 'connecting' | 'connected' | 'failed';
+/**
+ * Coarse connection state — connected-or-not, the failure case, and the
+ * `reconnecting` value driven by the auto-reconnect backoff loop. The managers
+ * map this onto their own state enums and the UI's enabled rules.
+ */
+export type ConnState =
+	| 'disconnected'
+	| 'connecting'
+	| 'connected'
+	| 'reconnecting'
+	| 'failed';
 
 /** One characteristic-value notification, arrival-stamped at delivery. */
 export interface BleNotification {
@@ -41,12 +75,70 @@ export interface BleNotification {
 /** A sink for a device's notifications — invoked in strict arrival order. */
 export type NotificationSink = (notification: BleNotification) => void;
 
+/** A (service, characteristic) pair the device has subscribed to. */
+interface Subscription {
+	readonly serviceUuid: string;
+	readonly characteristicUuid: string;
+}
+
+/** First reconnect-backoff delay, in milliseconds. Doubles each attempt. */
+const RECONNECT_BASE_DELAY_MS = 500;
+
+/** Reconnect-backoff ceiling, in milliseconds — the delay never exceeds this. */
+const RECONNECT_MAX_DELAY_MS = 30_000;
+
+/**
+ * How many reconnect attempts to make before giving up. With a base of 500 ms
+ * doubling to a 30 s cap, eight attempts span roughly two minutes of retrying
+ * — long enough to ride out a brief outage, short enough that a UI showing
+ * "reconnecting" is not stuck forever.
+ */
+const RECONNECT_MAX_ATTEMPTS = 8;
+
+/**
+ * A strictly-serial async operation queue.
+ *
+ * Web Bluetooth allows one in-flight GATT operation per device; this queue
+ * makes that guarantee structural. {@link enqueue} appends an operation and
+ * returns a promise for its result; the queued operation does not start until
+ * every earlier one has settled (resolved *or* rejected — one failure must not
+ * stall the queue). Enqueuing is **synchronous**: the moment {@link enqueue}
+ * returns, the operation's place in line is fixed, so a burst of calls made in
+ * one synchronous stretch (e.g. the scale's three-command mode sequence) runs
+ * in strict call order.
+ */
+class GattQueue {
+	/** The tail of the chain — the promise the next operation waits on. */
+	private tail: Promise<unknown> = Promise.resolve();
+
+	/**
+	 * Append `operation` to the queue. Returns a promise that settles with the
+	 * operation's result. The operation starts only once all earlier ones have
+	 * settled; a rejection in an earlier operation does not stall later ones.
+	 */
+	enqueue<T>(operation: () => Promise<T>): Promise<T> {
+		// Chain onto the tail; `.then(operation, operation)` runs `operation`
+		// whether the previous link resolved or rejected, so one failed GATT
+		// call cannot deadlock the queue.
+		const result = this.tail.then(operation, operation);
+		// Advance the tail synchronously, swallowing rejections so the *next*
+		// enqueue waits only for completion, not for success. Callers still see
+		// the real rejection through `result`.
+		this.tail = result.then(
+			() => undefined,
+			() => undefined
+		);
+		return result;
+	}
+}
+
 /**
  * A live connection to one BLE device, over Web Bluetooth GATT.
  *
  * Created by {@link requestDevice}. Owns its `BluetoothDevice`, GATT server,
- * and the shared `characteristicvaluechanged` listener. `connectionState`
- * tracks the link; `disconnect()` is idempotent.
+ * the shared `characteristicvaluechanged` listener, a per-device serial GATT
+ * operation queue, and an auto-reconnect backoff loop. `connectionState`
+ * tracks the link; `disconnect()` is idempotent and suppresses reconnect.
  */
 export class BleDevice {
 	/** Coarse link state — read by the managers to drive their UI state. */
@@ -55,10 +147,42 @@ export class BleDevice {
 	/** The single sink every notification on this device is dispatched to. */
 	private sink: NotificationSink | null = null;
 
-	/** Characteristics subscribed via {@link startNotifications}, by UUID. */
+	/** Characteristics resolved via {@link getCharacteristic}, by UUID. */
 	private readonly characteristics = new Map<string, BluetoothRemoteGATTCharacteristic>();
 
-	/** The bound `characteristicvaluechanged` handler — one per device. */
+	/**
+	 * Per-device serial GATT operation queue. Every GATT call — connect,
+	 * service / characteristic resolution, notification subscribe, write —
+	 * funnels through this so two operations never overlap.
+	 */
+	private readonly gattQueue = new GattQueue();
+
+	/**
+	 * The device's subscription set — every (service, characteristic) pair
+	 * passed to {@link startNotifications}. Recorded so the auto-reconnect loop
+	 * can replay them after a drop. A `Map` keyed by characteristic UUID keeps
+	 * it de-duplicated.
+	 */
+	private readonly subscriptions = new Map<string, Subscription>();
+
+	/**
+	 * `true` once {@link disconnect} has been called — a *deliberate* teardown.
+	 * Suppresses the auto-reconnect loop: a user-initiated disconnect must stay
+	 * disconnected. An unexpected `gattserverdisconnected` leaves this `false`,
+	 * which is what arms the reconnect.
+	 */
+	private userDisconnected = false;
+
+	/** `true` while the auto-reconnect backoff loop is running. */
+	private reconnecting = false;
+
+	/**
+	 * The bound `characteristicvaluechanged` handler — one per device.
+	 *
+	 * Re-used across reconnects: the listener is attached per characteristic in
+	 * {@link startNotifications}, and after a reconnect the characteristics are
+	 * re-resolved (fresh objects) and the listener re-attached.
+	 */
 	private readonly onValueChanged = (event: Event): void => {
 		const target = event.target as BluetoothRemoteGATTCharacteristic;
 		const value = target.value;
@@ -75,12 +199,36 @@ export class BleDevice {
 		});
 	};
 
+	/**
+	 * Handler for the device's `gattserverdisconnected` event.
+	 *
+	 * The link dropped. If {@link disconnect} caused it the drop is expected —
+	 * settle on `disconnected` and notify listeners. Otherwise it is an
+	 * *unexpected* drop: enter `reconnecting` and arm the backoff loop, which
+	 * runs without a user gesture.
+	 */
 	private readonly onGattDisconnected = (): void => {
-		this.connectionState = 'disconnected';
-		this.onDisconnectedListeners.forEach((listener) => listener());
+		if (this.userDisconnected) {
+			this.connectionState = 'disconnected';
+			this.notifyDisconnected();
+			return;
+		}
+		// Unexpected drop — if a reconnect loop is already running, let it be.
+		if (this.reconnecting) {
+			return;
+		}
+		this.connectionState = 'reconnecting';
+		this.notifyStateChanged();
+		void this.runReconnectLoop();
 	};
 
 	private readonly onDisconnectedListeners = new Set<() => void>();
+
+	private readonly onStateChangedListeners = new Set<(state: ConnState) => void>();
+
+	private readonly onReconnectAttemptListeners = new Set<(attempt: number) => void>();
+
+	private readonly onReconnectedListeners = new Set<() => void>();
 
 	constructor(
 		/** The underlying Web Bluetooth device. */
@@ -98,23 +246,73 @@ export class BleDevice {
 	 * Register the single sink every notification on this device dispatches
 	 * to. One sink per device preserves cross-characteristic arrival order —
 	 * the web equivalent of the Android managers merging characteristic flows.
+	 * The sink is retained across reconnects and re-attached automatically.
 	 */
 	setSink(sink: NotificationSink): void {
 		this.sink = sink;
 	}
 
-	/** Register a callback for an unexpected GATT disconnect. */
+	/**
+	 * Register a callback for a *terminal* disconnect — either a user-initiated
+	 * {@link disconnect} or auto-reconnect giving up after exhausting its
+	 * attempts. Not fired for a transient drop that the backoff loop recovers.
+	 */
 	onDisconnected(listener: () => void): void {
 		this.onDisconnectedListeners.add(listener);
 	}
 
 	/**
+	 * Register a callback for every {@link connectionState} transition — lets
+	 * a manager surface `reconnecting` without polling.
+	 */
+	onStateChanged(listener: (state: ConnState) => void): void {
+		this.onStateChangedListeners.add(listener);
+	}
+
+	/**
+	 * Register a callback fired at the start of each reconnect attempt, with
+	 * the 1-based attempt number — drives a "Reconnecting… (attempt N)" line.
+	 */
+	onReconnectAttempt(listener: (attempt: number) => void): void {
+		this.onReconnectAttemptListeners.add(listener);
+	}
+
+	/**
+	 * Register a callback fired once after the auto-reconnect loop has fully
+	 * recovered the link — GATT back up, subscriptions replayed. Lets a manager
+	 * re-run any post-connect work (e.g. a scale settings query).
+	 */
+	onReconnected(listener: () => void): void {
+		this.onReconnectedListeners.add(listener);
+	}
+
+	/**
 	 * Connect the GATT server. Resolves once connected; rejects on failure.
 	 * The `requestDevice` chooser already happened in {@link requestDevice}.
+	 *
+	 * The `gatt.connect()` call is queued so it cannot overlap any other GATT
+	 * operation on this device.
 	 */
 	async connectGatt(): Promise<void> {
 		this.connectionState = 'connecting';
+		this.notifyStateChanged();
 		try {
+			await this.connectGattRaw();
+			this.connectionState = 'connected';
+			this.notifyStateChanged();
+		} catch (error) {
+			this.connectionState = 'failed';
+			this.notifyStateChanged();
+			throw error;
+		}
+	}
+
+	/**
+	 * The raw queued `gatt.connect()` — used by both {@link connectGatt} and
+	 * the reconnect loop, so it does not touch {@link connectionState} itself.
+	 */
+	private connectGattRaw(): Promise<void> {
+		return this.gattQueue.enqueue(async () => {
 			const gatt = this.device.gatt;
 			if (gatt === undefined) {
 				throw new Error('Device exposes no GATT server');
@@ -122,15 +320,29 @@ export class BleDevice {
 			if (!gatt.connected) {
 				await gatt.connect();
 			}
-			this.connectionState = 'connected';
-		} catch (error) {
-			this.connectionState = 'failed';
-			throw error;
-		}
+		});
 	}
 
-	/** Resolve a characteristic of `serviceUuid`, caching it for later writes. */
-	async getCharacteristic(
+	/**
+	 * Resolve a characteristic of `serviceUuid`, caching it for later writes.
+	 * The service / characteristic lookups are queued so they cannot overlap
+	 * another GATT operation on this device.
+	 */
+	getCharacteristic(
+		serviceUuid: string,
+		characteristicUuid: string
+	): Promise<BluetoothRemoteGATTCharacteristic> {
+		return this.gattQueue.enqueue(() =>
+			this.resolveCharacteristic(serviceUuid, characteristicUuid)
+		);
+	}
+
+	/**
+	 * Resolve and cache a characteristic. The body of {@link getCharacteristic}
+	 * and the reconnect-time replay — kept un-queued so the reconnect loop can
+	 * call it from inside its own single queued step without self-deadlocking.
+	 */
+	private async resolveCharacteristic(
 		serviceUuid: string,
 		characteristicUuid: string
 	): Promise<BluetoothRemoteGATTCharacteristic> {
@@ -148,9 +360,30 @@ export class BleDevice {
 	 * Subscribe to notifications on a characteristic. Web Bluetooth enables the
 	 * CCCD as a side effect of `startNotifications()`. Every value-change
 	 * routes to the device's single sink — see {@link setSink}.
+	 *
+	 * The pair is recorded in the subscription set so the auto-reconnect loop
+	 * can replay it after a drop. The whole resolve-attach-subscribe sequence
+	 * runs as one queued GATT step.
 	 */
 	async startNotifications(serviceUuid: string, characteristicUuid: string): Promise<void> {
-		const characteristic = await this.getCharacteristic(serviceUuid, characteristicUuid);
+		await this.gattQueue.enqueue(() =>
+			this.subscribeRaw(serviceUuid, characteristicUuid)
+		);
+		// Record only after a successful subscribe, so a failed attempt is not
+		// replayed on reconnect. Keyed by characteristic UUID — de-duplicated.
+		this.subscriptions.set(characteristicUuid.toLowerCase(), {
+			serviceUuid,
+			characteristicUuid
+		});
+	}
+
+	/**
+	 * Resolve a characteristic, attach the value-change listener, and enable
+	 * notifications. The un-queued body of {@link startNotifications}, also
+	 * called by the reconnect loop's replay.
+	 */
+	private async subscribeRaw(serviceUuid: string, characteristicUuid: string): Promise<void> {
+		const characteristic = await this.resolveCharacteristic(serviceUuid, characteristicUuid);
 		characteristic.addEventListener('characteristicvaluechanged', this.onValueChanged);
 		await characteristic.startNotifications();
 	}
@@ -158,25 +391,139 @@ export class BleDevice {
 	/**
 	 * Write `data` to a characteristic. Used for scale command writes; the
 	 * exact bytes come from the core via `Command.WriteScale`.
+	 *
+	 * The whole resolve-then-write is one queued GATT step, so a burst of
+	 * writes (the scale's three-command mode sequence) runs strictly serially
+	 * and cannot collide with a notification subscribe or a reconnect.
 	 */
-	async write(serviceUuid: string, characteristicUuid: string, data: Uint8Array): Promise<void> {
-		let characteristic = this.characteristics.get(characteristicUuid.toLowerCase());
-		if (characteristic === undefined) {
-			characteristic = await this.getCharacteristic(serviceUuid, characteristicUuid);
-		}
-		// `writeValueWithResponse` is the equivalent of the Android transport's
-		// acknowledged write; copy into a fresh buffer for a clean ArrayBuffer.
-		await characteristic.writeValueWithResponse(data.slice().buffer);
+	write(serviceUuid: string, characteristicUuid: string, data: Uint8Array): Promise<void> {
+		return this.gattQueue.enqueue(async () => {
+			let characteristic = this.characteristics.get(characteristicUuid.toLowerCase());
+			if (characteristic === undefined) {
+				characteristic = await this.resolveCharacteristic(
+					serviceUuid,
+					characteristicUuid
+				);
+			}
+			// `writeValueWithResponse` is the equivalent of the Android
+			// transport's acknowledged write; copy into a fresh buffer for a
+			// clean ArrayBuffer.
+			await characteristic.writeValueWithResponse(data.slice().buffer);
+		});
 	}
 
-	/** Disconnect the GATT server and drop the device's listeners. Idempotent. */
+	/**
+	 * Disconnect the GATT server and drop the device's listeners. Idempotent.
+	 *
+	 * Marks the teardown *deliberate*, which suppresses the auto-reconnect loop
+	 * — a user-initiated disconnect must stay disconnected.
+	 */
 	disconnect(): void {
+		this.userDisconnected = true;
+		this.reconnecting = false;
 		const gatt = this.device.gatt;
 		if (gatt !== undefined && gatt.connected) {
 			gatt.disconnect();
 		}
 		this.connectionState = 'disconnected';
+		this.notifyStateChanged();
 	}
+
+	/**
+	 * The auto-reconnect backoff loop — Nordic's auto-reconnect, ported.
+	 *
+	 * Runs after an *unexpected* drop. Each attempt waits an exponentially
+	 * growing delay (≈500 ms, doubling, capped at 30 s), then reconnects GATT,
+	 * clears the stale characteristic cache, re-resolves and replays every
+	 * recorded subscription, and re-stamps the link `connected`. The sink is
+	 * untouched — it is replayed implicitly because the re-attached listeners
+	 * dispatch to the same `sink` field.
+	 *
+	 * After {@link RECONNECT_MAX_ATTEMPTS} failed attempts it gives up to a
+	 * terminal `failed` state and fires the disconnect listeners, so the UI is
+	 * never stuck showing "reconnecting" forever.
+	 */
+	private async runReconnectLoop(): Promise<void> {
+		this.reconnecting = true;
+		for (let attempt = 1; attempt <= RECONNECT_MAX_ATTEMPTS; attempt++) {
+			// A deliberate disconnect during the wait aborts the loop.
+			if (this.userDisconnected) {
+				this.reconnecting = false;
+				return;
+			}
+			const delay = Math.min(
+				RECONNECT_BASE_DELAY_MS * 2 ** (attempt - 1),
+				RECONNECT_MAX_DELAY_MS
+			);
+			await sleep(delay);
+			if (this.userDisconnected) {
+				this.reconnecting = false;
+				return;
+			}
+			this.notifyReconnectAttempt(attempt);
+			try {
+				await this.reconnectAndReplay();
+				// Recovered.
+				this.reconnecting = false;
+				this.connectionState = 'connected';
+				this.notifyStateChanged();
+				this.notifyReconnected();
+				return;
+			} catch {
+				// This attempt failed — fall through to the next iteration.
+				// A `userDisconnected` flip between attempts is caught at the
+				// top of the loop.
+			}
+		}
+		// Exhausted every attempt — give up to a terminal state so the UI is
+		// not stuck "reconnecting". Treated like a final disconnect.
+		this.reconnecting = false;
+		this.connectionState = 'failed';
+		this.notifyStateChanged();
+		this.notifyDisconnected();
+	}
+
+	/**
+	 * One reconnect attempt: reconnect GATT, then re-resolve and replay every
+	 * recorded subscription. The characteristic cache is dropped first because
+	 * its `BluetoothRemoteGATTCharacteristic` objects are stale after a drop.
+	 *
+	 * All GATT work goes through the queue, so a reconnect cannot collide with
+	 * a write that a manager issued before noticing the drop.
+	 */
+	private async reconnectAndReplay(): Promise<void> {
+		await this.connectGattRaw();
+		// The cached characteristics belong to the dead GATT session.
+		this.characteristics.clear();
+		// Replay subscriptions in their recorded order; each is one queued step
+		// so they never overlap.
+		for (const sub of this.subscriptions.values()) {
+			await this.gattQueue.enqueue(() =>
+				this.subscribeRaw(sub.serviceUuid, sub.characteristicUuid)
+			);
+		}
+	}
+
+	private notifyDisconnected(): void {
+		this.onDisconnectedListeners.forEach((listener) => listener());
+	}
+
+	private notifyStateChanged(): void {
+		this.onStateChangedListeners.forEach((listener) => listener(this.connectionState));
+	}
+
+	private notifyReconnectAttempt(attempt: number): void {
+		this.onReconnectAttemptListeners.forEach((listener) => listener(attempt));
+	}
+
+	private notifyReconnected(): void {
+		this.onReconnectedListeners.forEach((listener) => listener());
+	}
+}
+
+/** Resolve after `ms` milliseconds — the reconnect loop's backoff wait. */
+function sleep(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /** `true` when the running browser exposes the Web Bluetooth API. */
