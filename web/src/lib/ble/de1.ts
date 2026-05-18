@@ -151,9 +151,18 @@ export class De1Manager {
 		let step = 'device chooser';
 		this.callbacks.onStatus('Requesting a DE1…');
 		try {
+			// Scope the chooser instead of listing every device: match the DE1
+			// by the A000 service it offers (the recommended Web Bluetooth
+			// practice), OR by the DE1 / BENGLE name prefix as a fallback —
+			// `filters` is an OR-list. The DE1 reliably advertises its name but
+			// may not advertise the A000 service UUID, so the name entries keep
+			// discovery working either way; `optionalServices` grants A000
+			// access once connected regardless of which filter matched.
 			const device = await requestDevice({
-				// filters: De1Uuids.NAME_PREFIXES.map((namePrefix) => ({ namePrefix })),
-				acceptAllDevices: true,
+				filters: [
+					{ services: [De1Uuids.SERVICE] },
+					...De1Uuids.NAME_PREFIXES.map((namePrefix) => ({ namePrefix }))
+				],
 				optionalServices: [De1Uuids.SERVICE]
 			});
 			this.device = device;
