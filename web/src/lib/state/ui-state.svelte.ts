@@ -27,6 +27,32 @@ export const DEFAULT_SCALE_STANDBY_MINUTES = 15;
 export const MAX_LOG_LINES = 200;
 
 /**
+ * Cap on the buffered shot-telemetry series. At the DE1's ~25 Hz sample rate
+ * this holds a little over a minute of samples — longer than any shot — so the
+ * cap only ever trims a runaway session, never a real one.
+ */
+export const MAX_TELEMETRY_SAMPLES = 2000;
+
+/**
+ * One decoded telemetry sample, the structured form the dashboard renders.
+ * `Event::Telemetry` carries the DE1 channels; the scale weight is folded in
+ * from the most recent `ScaleReading` so a sample is a complete 4-channel
+ * snapshot at a point in time.
+ */
+export interface TelemetrySample {
+	/** Milliseconds since the shot began; `0` when no shot is in progress. */
+	readonly elapsedMs: number;
+	/** Group pressure, bar. */
+	readonly pressure: number;
+	/** Group flow, mL/s. */
+	readonly flow: number;
+	/** Group-head temperature, °C. */
+	readonly temp: number;
+	/** Latest scale weight at this instant, grams, or `null` if no scale. */
+	readonly weightG: number | null;
+}
+
+/**
  * A plain, immutable snapshot of the 21 UI fields — the shape `applyEvent`
  * folds over. `CremaUiState` holds one of these in a `$state` rune.
  */
@@ -73,6 +99,25 @@ export interface UiSnapshot {
 	readonly scaleActiveMode: number | null;
 	/** A rolling event log, newest first. */
 	readonly eventLog: readonly string[];
+
+	// ---- Structured telemetry (Task 3 — the brew dashboard) --------------
+	//
+	// `telemetry` above keeps the Android-parity pre-formatted line for the POC
+	// readout. The fields below are the *structured* form the brew dashboard
+	// renders — the latest 4-channel values and the buffered shot series.
+
+	/** Latest structured telemetry sample, or `null` before the first one. */
+	readonly latestTelemetry: TelemetrySample | null;
+	/**
+	 * The buffered shot-telemetry series — one sample per `Telemetry` event,
+	 * oldest first. Reset on `ShotStarted` and on a machine→idle transition;
+	 * the `LiveChart` plots it directly.
+	 */
+	readonly shotTelemetry: readonly TelemetrySample[];
+	/** Whether a shot is currently in progress (between Started and Completed). */
+	readonly shotInProgress: boolean;
+	/** Elapsed time of the current/last shot, ms — `latestTelemetry.elapsedMs`. */
+	readonly shotElapsedMs: number;
 }
 
 /** The initial snapshot — every default matches the Android `MainUiState`. */
@@ -97,7 +142,11 @@ export const INITIAL_SNAPSHOT: UiSnapshot = {
 	scaleAutoStop: null,
 	scaleAntiMistouch: false,
 	scaleActiveMode: null,
-	eventLog: []
+	eventLog: [],
+	latestTelemetry: null,
+	shotTelemetry: [],
+	shotInProgress: false,
+	shotElapsedMs: 0
 };
 
 /**
@@ -132,14 +181,31 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 	switch (event.type) {
 		case 'MachineStateChanged': {
 			const machineState = `${event.content.state} / ${event.content.substate}`;
+			// A drop to a resting state (Idle / Sleep) ends any session — clear
+			// the buffered series so the dashboard returns to its empty state.
+			const resting =
+				event.content.state === 'Idle' ||
+				event.content.state === 'Sleep' ||
+				event.content.state === 'SchedIdle' ||
+				event.content.state === 'GoingToSleep';
 			return {
 				...snapshot,
 				machineState,
+				...(resting
+					? { shotTelemetry: [], shotInProgress: false, shotElapsedMs: 0 }
+					: null),
 				eventLog: appendLog(snapshot.eventLog, `MachineState -> ${machineState}`)
 			};
 		}
 		case 'ShotStarted':
-			return { ...snapshot, eventLog: appendLog(snapshot.eventLog, 'Shot started') };
+			// A new shot begins — clear the buffered series and arm the timer.
+			return {
+				...snapshot,
+				shotTelemetry: [],
+				shotInProgress: true,
+				shotElapsedMs: 0,
+				eventLog: appendLog(snapshot.eventLog, 'Shot started')
+			};
 		case 'ShotPhaseChanged': {
 			const phase = event.content.phase;
 			return {
@@ -159,7 +225,27 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 			const line =
 				`t=${Math.round(t.elapsed_ms)}ms  P=${t.group_pressure.toFixed(1)}bar  ` +
 				`flow=${t.group_flow.toFixed(1)}mL/s  head=${t.head_temp.toFixed(1)}°C`;
-			return { ...snapshot, telemetry: line };
+			// Build the structured sample, folding in the latest scale weight so
+			// every sample is a complete 4-channel snapshot.
+			const sample: TelemetrySample = {
+				elapsedMs: t.elapsed_ms,
+				pressure: t.group_pressure,
+				flow: t.group_flow,
+				temp: t.head_temp,
+				weightG: snapshot.scaleWeightG
+			};
+			// Append to the series; only buffer while a shot is in progress so
+			// idle-state telemetry never grows the chart. Cap the length.
+			const series = snapshot.shotInProgress
+				? [...snapshot.shotTelemetry, sample].slice(-MAX_TELEMETRY_SAMPLES)
+				: snapshot.shotTelemetry;
+			return {
+				...snapshot,
+				telemetry: line,
+				latestTelemetry: sample,
+				shotTelemetry: series,
+				shotElapsedMs: t.elapsed_ms
+			};
 		}
 		case 'ScaleReading': {
 			const r = event.content;
@@ -192,8 +278,11 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				eventLog: appendLog(snapshot.eventLog, `Auto-stop: ${event.content.reason}`)
 			};
 		case 'ShotCompleted':
+			// The shot ended — stop the timer, but keep the buffered series so
+			// the finished curve stays on screen until the next shot or idle.
 			return {
 				...snapshot,
+				shotInProgress: false,
 				eventLog: appendLog(
 					snapshot.eventLog,
 					`Shot completed: ${event.content.duration_ms}ms, ` +
