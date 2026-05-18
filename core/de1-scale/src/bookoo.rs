@@ -97,16 +97,17 @@
 //! 0x04 TIMER_START            start the timer
 //! 0x05 TIMER_STOP             stop the timer
 //! 0x06 TIMER_RESET            reset the timer
-//! 0x08 toggle_0x08            TENTATIVE — flow-smoothing or anti-mistouch
+//! 0x08 set_flow_smoothing    flow smoothing on/off, p1 = 0|1
 //! 0x0A QUERY_SERIAL           query serial number (scale replies 03 0c …)
-//! 0x0B toggle_0x0b            TENTATIVE — probably auto-stop mode
+//! 0x0B set_auto_stop_mode     auto-stop mode, p1 = 0|1 (see AutoStopMode)
 //! 0x0E set_mode_enabled       enable/disable a display mode, p1 = mode index
 //! 0x0F QUERY_SETTINGS         query settings (scale replies 03 0e …)
-//! 0x10 toggle_0x10            TENTATIVE — flow-smoothing or anti-mistouch
+//! 0x10 set_anti_mistouch      anti-mistouch on/off, p1 = 0|1
 //! ```
 //!
-//! Commands `0x08`, `0x0B` and `0x10` are single-boolean toggles whose feature
-//! mapping is **not yet confirmed** — see each builder's doc comment.
+//! Commands `0x08`, `0x0B` and `0x10` are single-byte settings whose feature
+//! mapping was confirmed against a Bluetooth-HCI capture of the official BOOKOO
+//! app with a known action order — see each builder's doc comment.
 
 /// GATT service UUID.
 pub const SERVICE_UUID: &str = "00000ffe-0000-1000-8000-00805f9b34fb";
@@ -193,38 +194,82 @@ pub const fn set_standby_minutes(minutes: u8) -> [u8; 6] {
 }
 
 /// Command: enable or disable one of the scale's display modes.
+///
+/// `0x0E` toggles modes *individually*; the scale keeps at least one mode
+/// enabled at all times. To switch the *active* mode, use [`select_mode`].
 #[must_use]
 pub const fn set_mode_enabled(mode: BookooMode, enabled: bool) -> [u8; 6] {
     command(0x0E, mode.index(), enabled as u8)
 }
 
-/// Command `0x08` — a single-boolean toggle.
+/// The ordered command sequence that switches the scale to a single active
+/// display mode.
 ///
-/// **Tentative.** `0x08` is one of *flow-smoothing* or *anti-mistouch*; the
-/// capture did not establish which of `0x08`/`0x10` is which. The feature
-/// mapping is pending a hardware retest — only the wire format is confirmed.
+/// Command `0x0E` only enables/disables modes *individually*, and the scale
+/// requires **at least one mode enabled at all times**. Selecting a mode is
+/// therefore three writes, and the order matters: the target is enabled
+/// *first*, then the other two are disabled — so an enabled mode always exists,
+/// even mid-sequence. Send the three commands in the returned order.
 #[must_use]
-pub const fn toggle_0x08(enabled: bool) -> [u8; 6] {
+pub const fn select_mode(target: BookooMode) -> [[u8; 6]; 3] {
+    let (a, b) = match target {
+        BookooMode::FlowRate => (BookooMode::Timer, BookooMode::Auto),
+        BookooMode::Timer => (BookooMode::FlowRate, BookooMode::Auto),
+        BookooMode::Auto => (BookooMode::FlowRate, BookooMode::Timer),
+    };
+    [
+        set_mode_enabled(target, true),
+        set_mode_enabled(a, false),
+        set_mode_enabled(b, false),
+    ]
+}
+
+/// Command `0x08` — enable or disable *flow smoothing*.
+///
+/// The feature mapping (`0x08` = flow smoothing) was confirmed against a
+/// Bluetooth-HCI capture of the official BOOKOO app with a known action order.
+#[must_use]
+pub const fn set_flow_smoothing(enabled: bool) -> [u8; 6] {
     command(0x08, enabled as u8, 0x00)
 }
 
-/// Command `0x0B` — a single-boolean toggle.
+/// The scale's auto-stop mode, set with [`set_auto_stop_mode`] (command `0x0B`).
 ///
-/// **Tentative.** `0x0B` is *probably* auto-stop mode, but this was not
-/// confirmed by the capture and is pending a hardware retest. Only the wire
-/// format is confirmed.
-#[must_use]
-pub const fn toggle_0x0b(enabled: bool) -> [u8; 6] {
-    command(0x0B, enabled as u8, 0x00)
+/// A two-state setting; the wire form is `0x0B <p1>` with `p1` from the
+/// discriminant below. Both values are confirmed against a capture of the
+/// official BOOKOO app, cross-checked with the scale's reported current state:
+/// `0x0B 00` = Flow-Stop, `0x0B 01` = Cup-Removal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutoStopMode {
+    /// Flow-Stop auto-stop (`p1 = 0`): stop timing when the flow rate hits 0.
+    FlowStop = 0,
+    /// Cup-removal auto-stop (`p1 = 1`): stop timing when the cup is removed.
+    CupRemoval = 1,
 }
 
-/// Command `0x10` — a single-boolean toggle.
+impl AutoStopMode {
+    /// The `p1` byte the scale uses for this mode in command `0x0B`.
+    #[must_use]
+    pub const fn p1(self) -> u8 {
+        self as u8
+    }
+}
+
+/// Command `0x0B` — select the scale's auto-stop mode.
 ///
-/// **Tentative.** `0x10` is one of *flow-smoothing* or *anti-mistouch*; the
-/// capture did not establish which of `0x08`/`0x10` is which. The feature
-/// mapping is pending a hardware retest — only the wire format is confirmed.
+/// Confirmed against a Bluetooth-HCI capture of the official BOOKOO app with a
+/// known action order. See [`AutoStopMode`] for the two states.
 #[must_use]
-pub const fn toggle_0x10(enabled: bool) -> [u8; 6] {
+pub const fn set_auto_stop_mode(mode: AutoStopMode) -> [u8; 6] {
+    command(0x0B, mode.p1(), 0x00)
+}
+
+/// Command `0x10` — enable or disable *anti-mistouch*.
+///
+/// The feature mapping (`0x10` = anti-mistouch) was confirmed against a
+/// Bluetooth-HCI capture of the official BOOKOO app with a known action order.
+#[must_use]
+pub const fn set_anti_mistouch(enabled: bool) -> [u8; 6] {
     command(0x10, enabled as u8, 0x00)
 }
 
@@ -502,13 +547,41 @@ mod tests {
     }
 
     #[test]
-    fn tentative_toggles_match_the_captured_bytes() {
-        assert_eq!(toggle_0x08(true), hex6("030a08010000"));
-        assert_eq!(toggle_0x08(false), hex6("030a08000001"));
-        assert_eq!(toggle_0x0b(true), hex6("030a0b010003"));
-        assert_eq!(toggle_0x0b(false), hex6("030a0b000002"));
-        assert_eq!(toggle_0x10(true), hex6("030a10010018"));
-        assert_eq!(toggle_0x10(false), hex6("030a10000019"));
+    fn select_mode_enables_the_target_before_disabling_the_others() {
+        // Target on first, then the other two off — never zero modes enabled.
+        assert_eq!(
+            select_mode(BookooMode::Timer),
+            [
+                hex6("030a0e010107"), // Timer    -> on
+                hex6("030a0e000007"), // FlowRate -> off
+                hex6("030a0e020005"), // Auto     -> off
+            ]
+        );
+    }
+
+    #[test]
+    fn set_flow_smoothing_matches_the_captured_bytes() {
+        assert_eq!(set_flow_smoothing(true), hex6("030a08010000"));
+        assert_eq!(set_flow_smoothing(false), hex6("030a08000001"));
+    }
+
+    #[test]
+    fn set_auto_stop_mode_matches_the_captured_bytes() {
+        // 0x0B 00 = Flow-Stop, 0x0B 01 = Cup-Removal (confirmed by capture).
+        assert_eq!(
+            set_auto_stop_mode(AutoStopMode::FlowStop),
+            hex6("030a0b000002")
+        );
+        assert_eq!(
+            set_auto_stop_mode(AutoStopMode::CupRemoval),
+            hex6("030a0b010003")
+        );
+    }
+
+    #[test]
+    fn set_anti_mistouch_matches_the_captured_bytes() {
+        assert_eq!(set_anti_mistouch(true), hex6("030a10010018"));
+        assert_eq!(set_anti_mistouch(false), hex6("030a10000019"));
     }
 
     #[test]
