@@ -27,3 +27,6 @@ Thumbs.db
 /*-logs.txt
 /bt-gatt.txt
 /session-*.jsonl
+
+# Claude Code agent worktrees
+.claude/worktrees/

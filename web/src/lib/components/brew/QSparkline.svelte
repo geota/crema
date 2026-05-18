@@ -58,6 +58,13 @@
 	/**
 	 * `QSparkline` — the tiny pressure-curve thumbnail used in favorite chips,
 	 * ported from the design's `QSparkline` in `quick-controls.jsx`. Pure SVG.
+	 *
+	 * The path is drawn in a fixed `100 × 100` user-space `viewBox`; the SVG
+	 * itself is sized by CSS (`width`/`height` props become the box) and uses
+	 * `preserveAspectRatio="none"` *intentionally* — these are decorative
+	 * silhouettes, so stretching the curve to fill the chip is the desired
+	 * behaviour and avoids the letterboxing the old fixed-attr SVG produced
+	 * inside flex containers of a different aspect ratio.
 	 */
 	let {
 		shape = 'rao',
@@ -67,36 +74,40 @@
 	}: {
 		/** Which named curve to draw. */
 		shape?: SparkShape;
-		/** SVG width, px. */
+		/** Rendered width, px (the CSS box, not the path's user space). */
 		width?: number;
-		/** SVG height, px. */
+		/** Rendered height, px (the CSS box, not the path's user space). */
 		height?: number;
 		/** Stroke colour. */
 		color?: string;
 	} = $props();
 
-	/** The SVG path `d` for the chosen shape, scaled to `width × height`. */
+	/** Fixed user space the path is authored in — decoupled from the CSS box. */
+	const VB = 100;
+
+	/** The SVG path `d` for the chosen shape, in the fixed `VB × VB` viewBox. */
 	const path = $derived(
 		(SHAPES[shape] ?? SHAPES.classic)
 			.map(
 				([x, y], i) =>
-					`${i === 0 ? 'M' : 'L'} ${(x * width).toFixed(1)} ${((1 - y) * height).toFixed(1)}`
+					`${i === 0 ? 'M' : 'L'} ${(x * VB).toFixed(2)} ${((1 - y) * VB).toFixed(2)}`
 			)
 			.join(' ')
 	);
+
 </script>
 
 <svg
-	viewBox="0 0 {width} {height}"
-	{width}
-	{height}
-	style="display:block;overflow:visible"
+	viewBox="0 0 {VB} {VB}"
+	style="display:block;width:{width}px;height:{height}px;overflow:visible"
+	preserveAspectRatio="none"
 	aria-hidden="true"
 >
 	<path
 		d={path}
 		stroke={color}
 		stroke-width="1.4"
+		vector-effect="non-scaling-stroke"
 		fill="none"
 		stroke-linecap="round"
 		stroke-linejoin="round"
