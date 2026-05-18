@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.weight
 import androidx.compose.ui.Alignment
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -89,6 +88,7 @@ class MainActivity : ComponentActivity() {
                         onSetScaleFlowSmoothing = viewModel::setScaleFlowSmoothing,
                         onSetScaleAntiMistouch = viewModel::setScaleAntiMistouch,
                         onSetScaleMode = viewModel::setScaleMode,
+                        onSetScaleAutoStop = viewModel::setScaleAutoStop,
                     )
                 }
             }
@@ -122,6 +122,7 @@ private fun MainScreen(
     onSetScaleFlowSmoothing: (Boolean) -> Unit,
     onSetScaleAntiMistouch: (Boolean) -> Unit,
     onSetScaleMode: (Int) -> Unit,
+    onSetScaleAutoStop: (Int) -> Unit,
 ) {
     val ui by viewModel.ui.collectAsState()
 
@@ -162,6 +163,7 @@ private fun MainScreen(
             scaleWeightG = ui.scaleWeightG,
             scaleFlowGPerS = ui.scaleFlowGPerS,
             scaleTimerMs = ui.scaleTimerMs,
+            scaleBatteryPercent = ui.scaleBatteryPercent,
             volumeRange = ui.scaleCapabilities?.volume,
             scaleVolume = ui.scaleVolume,
             standbyRange = ui.scaleCapabilities?.standby_minutes,
@@ -171,6 +173,8 @@ private fun MainScreen(
             antiMistouchSupported = ui.scaleCapabilities?.anti_mistouch == true,
             scaleAntiMistouch = ui.scaleAntiMistouch,
             modes = ui.scaleCapabilities?.modes ?: emptyList(),
+            autoStopSupported = ui.scaleCapabilities?.auto_stop == true,
+            scaleAutoStop = ui.scaleAutoStop,
             onConnectScale = onConnectScale,
             onDisconnectScale = onDisconnectScale,
             onTareScale = onTareScale,
@@ -179,6 +183,7 @@ private fun MainScreen(
             onSetScaleFlowSmoothing = onSetScaleFlowSmoothing,
             onSetScaleAntiMistouch = onSetScaleAntiMistouch,
             onSetScaleMode = onSetScaleMode,
+            onSetScaleAutoStop = onSetScaleAutoStop,
         )
 
         ReadoutCard(
@@ -210,17 +215,24 @@ private fun MainScreen(
  * and any capability-gated configuration controls. The scale connection is
  * independent of the DE1 — it works with or without a machine connected.
  *
- * `scaleFlowGPerS` / `scaleTimerMs` are the scale's own native readings — only
- * populated for scales that report them (the Bookoo); shown as raw data
- * alongside the weight.
+ * `scaleFlowGPerS` / `scaleTimerMs` / `scaleBatteryPercent` are the scale's own
+ * native readings — only populated for scales that report them (the Bookoo);
+ * shown as raw data alongside the weight.
  *
  * Configuration controls are **capability-gated, never device-gated**: each
  * control renders only when its capability is present in the core's
  * `ScaleCapabilities` — the volume / standby steppers when their range is
  * non-null and over exactly that scale-reported `[min, max]` range, the flow-
  * smoothing / anti-mistouch toggles when their flag is set, the mode buttons
- * when the scale lists any modes. The UI never branches on the concrete scale
- * model — a weight-only scale simply shows no configuration controls.
+ * when the scale lists any modes, the auto-stop selector when `auto_stop` is
+ * set. The UI never branches on the concrete scale model — a weight-only
+ * scale simply shows no configuration controls.
+ *
+ * The volume / standby steppers, the flow-smoothing toggle and the auto-stop
+ * selector are **two-way**: `scaleVolume` / `scaleStandbyMinutes` /
+ * `scaleFlowSmoothing` / `scaleAutoStop` follow the scale's live values
+ * (decoded from every Bookoo weight notification) so the controls reflect the
+ * real device state — the auto-stop selector highlights the live current mode.
  */
 @Composable
 private fun ScaleSection(
@@ -229,11 +241,16 @@ private fun ScaleSection(
     scaleFlowGPerS: Float?,
     scaleTimerMs: Long?,
     /**
+     * The scale's battery charge percentage, or null when it does not report
+     * one — shown as a raw readout in the scale card.
+     */
+    scaleBatteryPercent: Int?,
+    /**
      * The connected scale's settable beeper-volume bounds, or null when the
      * scale's volume is not settable — the volume control is gated on this.
      */
     volumeRange: RangeCapability?,
-    /** The volume step the control currently shows; write-only. */
+    /** The volume step the control shows; tracks the scale's live value. */
     scaleVolume: Int,
     /**
      * The connected scale's auto-standby-timeout bounds (minutes), or null
@@ -241,11 +258,11 @@ private fun ScaleSection(
      * gated on this.
      */
     standbyRange: RangeCapability?,
-    /** The standby timeout (minutes) the control currently shows; write-only. */
+    /** The standby timeout (minutes) the control shows; tracks the live value. */
     scaleStandbyMinutes: Int,
     /** Whether the scale supports flow smoothing — gates the toggle. */
     flowSmoothingSupported: Boolean,
-    /** The flow-smoothing toggle state currently shown; write-only. */
+    /** The flow-smoothing toggle state currently shown; tracks the live value. */
     scaleFlowSmoothing: Boolean,
     /** Whether the scale supports anti-mistouch — gates the toggle. */
     antiMistouchSupported: Boolean,
@@ -256,6 +273,14 @@ private fun ScaleSection(
      * switchable modes; the mode buttons are gated on this being non-empty.
      */
     modes: List<ModeInfo>,
+    /** Whether the scale supports an auto-stop-mode setting — gates the selector. */
+    autoStopSupported: Boolean,
+    /**
+     * The auto-stop mode id currently selected on the scale (`0` = Flow-Stop,
+     * `1` = Cup-Removal), or null until the first reading arrives; tracks the
+     * scale's live value so the selector highlights the real current mode.
+     */
+    scaleAutoStop: Int?,
     onConnectScale: () -> Unit,
     onDisconnectScale: () -> Unit,
     onTareScale: () -> Unit,
@@ -264,6 +289,7 @@ private fun ScaleSection(
     onSetScaleFlowSmoothing: (Boolean) -> Unit,
     onSetScaleAntiMistouch: (Boolean) -> Unit,
     onSetScaleMode: (Int) -> Unit,
+    onSetScaleAutoStop: (Int) -> Unit,
 ) {
     val scaleConnected = scaleState == ScaleBleManager.State.READY ||
         scaleState == ScaleBleManager.State.CONNECTING ||
@@ -281,6 +307,7 @@ private fun ScaleSection(
             Field("Weight", scaleWeightG?.let { "%.1f g".format(it) } ?: "—")
             Field("Flow", scaleFlowGPerS?.let { "%.1f g/s".format(it) } ?: "—")
             Field("Timer", scaleTimerMs?.let { "%.1f s".format(it / 1000.0) } ?: "—")
+            Field("Battery", scaleBatteryPercent?.let { "$it %" } ?: "—")
 
             Button(
                 onClick = onConnectScale,
@@ -354,6 +381,16 @@ private fun ScaleSection(
                     modes = modes,
                     enabled = scaleReady,
                     onSetMode = onSetScaleMode,
+                )
+            }
+
+            // Capability-gated: a two-option auto-stop-mode selector; shown
+            // only for a scale that supports the auto-stop-mode setting.
+            if (autoStopSupported) {
+                AutoStopSelector(
+                    enabled = scaleReady,
+                    selectedMode = scaleAutoStop,
+                    onSetMode = onSetScaleAutoStop,
                 )
             }
         }
@@ -463,6 +500,51 @@ private fun ModeSelector(
                     enabled = enabled,
                     modifier = Modifier.weight(1f),
                 ) { Text(mode.name) }
+            }
+        }
+    }
+}
+
+/**
+ * A two-option selector for the scale's auto-stop mode — Flow-Stop (`id = 0`)
+ * or Cup-Removal (`id = 1`). Tapping a button calls [onSetMode] with that id,
+ * which the view model forwards to the core's `setScaleAutoStop`.
+ *
+ * Two-way: the scale echoes its live auto-stop mode in every weight
+ * notification, so [selectedMode] tracks that real value and the matching
+ * button is highlighted (filled) while the others stay outlined. A tap still
+ * issues the write; the live stream then confirms it.
+ */
+@Composable
+private fun AutoStopSelector(
+    enabled: Boolean,
+    selectedMode: Int?,
+    onSetMode: (Int) -> Unit,
+) {
+    // id -> label; the order matches the AutoStopMode discriminants.
+    val options = listOf(0 to "Flow-Stop", 1 to "Cup-Removal")
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text("Auto-stop", style = MaterialTheme.typography.labelSmall)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            options.forEach { (id, label) ->
+                // The mode the scale reports as current is highlighted with a
+                // filled button; the others stay outlined.
+                if (id == selectedMode) {
+                    Button(
+                        onClick = { onSetMode(id) },
+                        enabled = enabled,
+                        modifier = Modifier.weight(1f),
+                    ) { Text(label) }
+                } else {
+                    OutlinedButton(
+                        onClick = { onSetMode(id) },
+                        enabled = enabled,
+                        modifier = Modifier.weight(1f),
+                    ) { Text(label) }
+                }
             }
         }
     }

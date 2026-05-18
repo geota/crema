@@ -20,12 +20,42 @@
 //! [7-9]   weight, 24-bit big-endian, in units of 0.01 g
 //! [10]    "flow indicator" byte — 0x2b ('+') or 0x2d ('-'); see INDICATOR
 //! [11-12] flow rate, 16-bit big-endian; see FLOW
-//! [13]    constant 0x64  (battery %? — always 100 in the capture)
-//! [14]    constant 0x00
-//! [15-16] constant 0x96 0x01
-//! [17-18] constant 0x00 0x00
+//! [13-18] live scale settings; see SETTINGS below
 //! [19]    checksum: XOR of bytes [0..=18] (verified: 0 mismatches / 606)
 //! ```
+//!
+//! ## SETTINGS bytes `[13]`–`[18]`
+//!
+//! Bytes `[13]`–`[18]` are **not** constant — they carry the scale's *live
+//! settings*, echoed in every weight notification. An earlier revision of this
+//! doc called them constant, because the capture it was decoded from never
+//! changed a setting. The corrected map was verified by diffing a capture
+//! (`session-20260517-215049.jsonl`) against a known action order — the
+//! official BOOKOO app stepping volume, then standby, then two on/off toggles:
+//!
+//! ```text
+//! [13]    battery %        — assumed; constant 0x64 (100) in every capture
+//! [14-15] standby timeout  — u16 big-endian, in units of 0.1 min
+//!                            (standby_minutes = value / 10): e.g. 0x0096 = 150
+//!                            -> 15 min, 0x012C = 300 -> 30 min
+//! [16]    beeper volume    — 0..=5, tracks the set_volume (0x02) command
+//! [17]    flow smoothing   — boolean (0/1); CONFIRMED. A capture with a known
+//!                            action order showed this byte flipping 0->1 when
+//!                            flow smoothing was turned on and 1->0 when it was
+//!                            turned off, in lockstep with set_flow_smoothing
+//!                            (0x08). Exposed as `flow_smoothing: bool`.
+//! [18]    auto-stop mode (0/1) — CONFIRMED. 0 = Flow-Stop, 1 = Cup-Removal.
+//!                            This byte matches the `p1` of every set_auto_stop
+//!                            (0x0B) write in the official-app HCI snoop (5/5,
+//!                            both directions), so the scale echoes its live
+//!                            auto-stop mode here. Exposed raw as `auto_stop`.
+//! ```
+//!
+//! [`BookooPacket`] surfaces `[13]` as `battery_percent`, `[14-15]` as
+//! `standby_minutes`, `[16]` as `volume`, `[17]` as the confirmed
+//! `flow_smoothing` bool, and `[18]` as the confirmed `auto_stop` mode byte.
+//! Byte `[5]` (constant `0x01` in every capture) is now the only unidentified
+//! weight byte.
 //!
 //! ## INDICATOR bytes `[6]` and `[10]`
 //!
@@ -302,6 +332,34 @@ pub struct BookooPacket {
     pub flow_indicator: u8,
     /// Scale-timer reading in milliseconds, bytes `[2-4]` (24-bit big-endian).
     pub timer_ms: u32,
+    /// Battery charge percentage, byte `[13]`.
+    ///
+    /// **Assumed mapping.** Byte `[13]` is `0x64` (100) in every capture
+    /// available, so the battery interpretation has never been observed
+    /// changing — see the module docs.
+    pub battery_percent: u8,
+    /// Auto-standby timeout in minutes, decoded from bytes `[14-15]`.
+    ///
+    /// Bytes `[14-15]` are a 16-bit big-endian value in units of 0.1 min;
+    /// this field is that value divided by 10 (e.g. `0x012C` = 300 -> 30 min).
+    pub standby_minutes: u8,
+    /// Beeper volume `0..=5`, byte `[16]` — the scale's live volume setting.
+    pub volume: u8,
+    /// Whether flow smoothing is on, byte `[17]`.
+    ///
+    /// **Confirmed.** A capture with a known action order showed this byte
+    /// flipping `0`→`1` when flow smoothing was turned on and `1`→`0` when it
+    /// was turned off, in lockstep with [`set_flow_smoothing`]. See the module
+    /// docs.
+    pub flow_smoothing: bool,
+    /// The scale's live auto-stop mode, raw byte `[18]` (`0` / `1`).
+    ///
+    /// **Confirmed.** `0` = Flow-Stop, `1` = Cup-Removal. This byte matches the
+    /// `p1` of every [`set_auto_stop_mode`] (`0x0B`) write in the official-app
+    /// HCI snoop (5/5, both directions), so the scale echoes its live auto-stop
+    /// mode here. Exposed as the raw mode id to match [`AutoStopMode`]. See the
+    /// module docs.
+    pub auto_stop: u8,
     /// Whether the trailing checksum byte `[19]` matched the XOR of `[0..=18]`.
     pub checksum_ok: bool,
 }
@@ -351,6 +409,12 @@ pub fn parse_packet(data: &[u8]) -> Option<BookooPacket> {
 
     let flow_raw = (u16::from(data[11]) << 8) | u16::from(data[12]);
 
+    // Bytes [14-15] are a 16-bit big-endian standby timeout in units of
+    // 0.1 min; the scale only ever sets whole minutes, so dividing by 10
+    // yields a u8 in the documented 5..=30 range.
+    let standby_raw = (u16::from(data[14]) << 8) | u16::from(data[15]);
+    let standby_minutes = (standby_raw / 10) as u8;
+
     // The checksum byte [19] is an XOR of every preceding byte.
     let checksum = data[..FULL_PACKET_LEN - 1].iter().fold(0_u8, |a, &b| a ^ b);
 
@@ -361,6 +425,11 @@ pub fn parse_packet(data: &[u8]) -> Option<BookooPacket> {
         flow_g_per_s: f32::from(flow_raw) / 100.0,
         flow_indicator: data[10],
         timer_ms,
+        battery_percent: data[13],
+        standby_minutes,
+        volume: data[16],
+        flow_smoothing: data[17] != 0,
+        auto_stop: data[18],
         checksum_ok: checksum == data[FULL_PACKET_LEN - 1],
     })
 }
@@ -468,6 +537,70 @@ mod tests {
         assert!((p.weight_g - 281.79).abs() < 0.001, "weight {}", p.weight_g);
         assert_eq!(p.flow_raw, 0xA426);
         assert_eq!(p.flow_indicator, b'+');
+        assert!(p.checksum_ok);
+    }
+
+    #[test]
+    fn decodes_live_settings_from_a_standby_15_packet() {
+        // Real capture packet whose [14-15] = 0x0096 = 150 -> 15 min standby.
+        // Bytes [13-18] = 64 0096 01 00 00: battery 100, vol 1, flow smoothing
+        // off, auto-stop mode 0 (Flow-Stop).
+        let packet = hex20("030b000000012b0000002b0000640096010000fa");
+        let p = parse_packet(&packet).expect("20-byte packet");
+        assert_eq!(p.battery_percent, 100);
+        assert_eq!(p.standby_minutes, 15);
+        assert_eq!(p.volume, 1);
+        assert!(!p.flow_smoothing);
+        assert_eq!(p.auto_stop, 0);
+        assert!(p.checksum_ok);
+    }
+
+    #[test]
+    fn decodes_live_settings_from_a_standby_30_packet() {
+        // Real capture packet (session-20260517-215049): [14-15] = 0x012C =
+        // 300 -> 30 min standby; [16] = 0x03 volume; [17]/[18] = 00/01.
+        let packet = hex20("030b000000012b0000002b000264012c03000140");
+        let p = parse_packet(&packet).expect("20-byte packet");
+        assert_eq!(p.battery_percent, 100);
+        assert_eq!(p.standby_minutes, 30);
+        assert_eq!(p.volume, 3);
+        assert!(!p.flow_smoothing);
+        assert_eq!(p.auto_stop, 1);
+        assert!(p.checksum_ok);
+    }
+
+    #[test]
+    fn decodes_live_settings_from_a_standby_16_volume_3_packet() {
+        // Real capture packet: [14-15] = 0x00A0 = 160 -> 16 min standby.
+        let packet = hex20("030b000000012b0000002b00026400a0030001cd");
+        let p = parse_packet(&packet).expect("20-byte packet");
+        assert_eq!(p.standby_minutes, 16);
+        assert_eq!(p.volume, 3);
+        assert!(p.checksum_ok);
+    }
+
+    #[test]
+    fn decodes_a_packet_where_flow_smoothing_is_on() {
+        // Real capture packet recorded right after set_flow_smoothing(true):
+        // [13-18] = 64 012C 03 01 01 — the [17] flow-smoothing byte flipped to
+        // 1, confirming the [17] = flow-smoothing mapping.
+        let packet = hex20("030b000000012b0000002b000064012c03010143");
+        let p = parse_packet(&packet).expect("20-byte packet");
+        assert_eq!(p.standby_minutes, 30);
+        assert_eq!(p.volume, 3);
+        assert!(p.flow_smoothing);
+        assert_eq!(p.auto_stop, 1);
+        assert!(p.checksum_ok);
+    }
+
+    #[test]
+    fn decodes_volume_0_from_a_real_capture() {
+        // Real capture packet with volume 0 and a 10-minute standby
+        // ([14-15] = 0x0064 = 100 -> 10 min).
+        let packet = hex20("030b000000012b0000002b000064006400000108");
+        let p = parse_packet(&packet).expect("20-byte packet");
+        assert_eq!(p.standby_minutes, 10);
+        assert_eq!(p.volume, 0);
         assert!(p.checksum_ok);
     }
 

@@ -29,9 +29,10 @@ pub struct ScaleUuids {
 /// One decoded scale notification.
 ///
 /// Every scale reports a `weight_g`. A few scales report more in the same
-/// notification: the Bookoo carries a native mass-flow rate and its own
-/// built-in timer. Those extra fields are `Option` — `None` for the scales
-/// that do not report them.
+/// notification: the Bookoo carries a native mass-flow rate, its own built-in
+/// timer, and its live settings (beeper volume, auto-standby timeout, battery
+/// charge, flow smoothing). Those extra fields are `Option` — `None` for the
+/// scales that do not report them.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ScaleReading {
     /// Weight, grams.
@@ -43,6 +44,26 @@ pub struct ScaleReading {
     /// Scale-reported built-in-timer reading, milliseconds — `None` for scales
     /// that do not report a timer in their weight notification.
     pub timer_ms: Option<u32>,
+    /// The scale's live beeper-volume setting `0..=5` — `None` for scales that
+    /// do not echo their settings in the weight notification. Only the Bookoo
+    /// reports this; it lets a settings control display the real value.
+    pub volume: Option<u8>,
+    /// The scale's live auto-standby timeout, in minutes — `None` for scales
+    /// that do not echo their settings. Only the Bookoo reports this.
+    pub standby_minutes: Option<u8>,
+    /// The scale's live battery charge percentage — `None` for scales that do
+    /// not report it. Only the Bookoo reports this (an *assumed* decode of one
+    /// byte; see [`bookoo::BookooPacket::battery_percent`]).
+    pub battery_percent: Option<u8>,
+    /// Whether the scale's flow smoothing is on — `None` for scales that do
+    /// not echo their settings. Only the Bookoo reports this; it lets a
+    /// settings toggle reflect the real on/off state.
+    pub flow_smoothing: Option<bool>,
+    /// The scale's live auto-stop mode id — `None` for scales that do not echo
+    /// their settings. Only the Bookoo reports this (`0` = Flow-Stop, `1` =
+    /// Cup-Removal); it lets a settings selector reflect the real current mode.
+    /// Kept as a raw mode id (not a bool) to match `set_scale_auto_stop`.
+    pub auto_stop: Option<u8>,
 }
 
 /// The inclusive `[min, max]` bounds of a ranged scale setting.
@@ -116,6 +137,9 @@ pub struct ScaleCapabilities {
     pub flow_smoothing: bool,
     /// The scale accepts a command to toggle anti-mistouch.
     pub anti_mistouch: bool,
+    /// The scale accepts a command to select its auto-stop mode (the Bookoo's
+    /// flow-stop / cup-removal setting).
+    pub auto_stop: bool,
     /// The selectable display/behaviour modes the scale exposes — empty when
     /// the scale has no switchable modes. Each entry carries the mode's wire
     /// `id` and a display `name`.
@@ -350,15 +374,19 @@ impl Scale {
             // The Bookoo carries native flow and a built-in timer in its
             // weight notification, and exposes a settable beeper volume
             // (0 = silent), a configurable auto-standby timeout, flow
-            // smoothing / anti-mistouch toggles, and three switchable
-            // display modes.
+            // smoothing / anti-mistouch toggles, an auto-stop-mode setting,
+            // and three switchable display modes.
             Inner::Bookoo => ScaleCapabilities {
                 reports_flow: true,
                 reports_timer: true,
-                volume: Some(RangeCapability { min: 0, max: 5 }),
+                // The hardware accepts volume 0..=5, but levels 4-5 are not
+                // perceptibly louder than 3 (confirmed against the official
+                // app) — so the exposed range is deliberately clamped to 0..=3.
+                volume: Some(RangeCapability { min: 0, max: 3 }),
                 standby_minutes: Some(RangeCapability { min: 5, max: 30 }),
                 flow_smoothing: true,
                 anti_mistouch: true,
+                auto_stop: true,
                 modes: vec![
                     ModeInfo {
                         id: bookoo::BookooMode::FlowRate.index(),
@@ -446,13 +474,18 @@ impl Scale {
     /// complete reading.
     pub fn parse_reading(&mut self, data: &[u8]) -> Option<ScaleReading> {
         if let Inner::Bookoo = &self.inner {
-            // The Bookoo's 20-byte notification carries weight, native flow
-            // and the built-in timer in one packet.
+            // The Bookoo's 20-byte notification carries weight, native flow,
+            // the built-in timer and its live settings in one packet.
             if let Some(packet) = bookoo::parse_packet(data) {
                 return Some(ScaleReading {
                     weight_g: packet.weight_g,
                     flow_g_per_s: Some(packet.flow_g_per_s),
                     timer_ms: Some(packet.timer_ms),
+                    volume: Some(packet.volume),
+                    standby_minutes: Some(packet.standby_minutes),
+                    battery_percent: Some(packet.battery_percent),
+                    flow_smoothing: Some(packet.flow_smoothing),
+                    auto_stop: Some(packet.auto_stop),
                 });
             }
             // Fall through to the weight-only path for any non-20-byte frame.
@@ -461,6 +494,11 @@ impl Scale {
             weight_g,
             flow_g_per_s: None,
             timer_ms: None,
+            volume: None,
+            standby_minutes: None,
+            battery_percent: None,
+            flow_smoothing: None,
+            auto_stop: None,
         })
     }
 
@@ -597,6 +635,46 @@ mod tests {
         assert!((reading.weight_g - 492.60).abs() < 0.001);
         assert_eq!(reading.flow_g_per_s, Some(125.91));
         assert_eq!(reading.timer_ms, Some(0));
+        // The same packet's [13-18] = 64 0096 01 00 00: live settings.
+        assert_eq!(reading.volume, Some(1));
+        assert_eq!(reading.standby_minutes, Some(15));
+        assert_eq!(reading.battery_percent, Some(100));
+        // [17] = 0x00 -> flow smoothing off.
+        assert_eq!(reading.flow_smoothing, Some(false));
+        // [18] = 0x00 -> auto-stop mode 0 (Flow-Stop).
+        assert_eq!(reading.auto_stop, Some(0));
+    }
+
+    #[test]
+    fn parse_reading_carries_bookoo_live_settings_from_a_real_capture() {
+        let mut bookoo = Scale::from_label("Bookoo").unwrap();
+        // Real capture packet: [16] volume 3, [14-15] 0x012C -> 30 min standby.
+        let hex = "030b000000012b0000002b000264012c03000140";
+        let packet: Vec<u8> = (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+            .collect();
+        let reading = bookoo.parse_reading(&packet).expect("20-byte packet");
+        assert_eq!(reading.volume, Some(3));
+        assert_eq!(reading.standby_minutes, Some(30));
+        assert_eq!(reading.battery_percent, Some(100));
+        assert_eq!(reading.flow_smoothing, Some(false));
+        // [18] = 0x01 -> auto-stop mode 1 (Cup-Removal).
+        assert_eq!(reading.auto_stop, Some(1));
+    }
+
+    #[test]
+    fn parse_reading_carries_bookoo_flow_smoothing_on_from_a_real_capture() {
+        let mut bookoo = Scale::from_label("Bookoo").unwrap();
+        // Real capture packet recorded after set_flow_smoothing(true):
+        // [17] = 0x01 -> flow smoothing on.
+        let hex = "030b000000012b0000002b000064012c03010143";
+        let packet: Vec<u8> = (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+            .collect();
+        let reading = bookoo.parse_reading(&packet).expect("20-byte packet");
+        assert_eq!(reading.flow_smoothing, Some(true));
     }
 
     #[test]
@@ -608,6 +686,12 @@ mod tests {
         assert_eq!(reading.weight_g, 200.0);
         assert_eq!(reading.flow_g_per_s, None);
         assert_eq!(reading.timer_ms, None);
+        // A weight-only scale reports no live settings.
+        assert_eq!(reading.volume, None);
+        assert_eq!(reading.standby_minutes, None);
+        assert_eq!(reading.battery_percent, None);
+        assert_eq!(reading.flow_smoothing, None);
+        assert_eq!(reading.auto_stop, None);
     }
 
     #[test]
@@ -642,13 +726,14 @@ mod tests {
         let caps = bookoo.capabilities();
         assert!(caps.reports_flow);
         assert!(caps.reports_timer);
-        assert_eq!(caps.volume, Some(RangeCapability { min: 0, max: 5 }));
+        assert_eq!(caps.volume, Some(RangeCapability { min: 0, max: 3 }));
         assert_eq!(
             caps.standby_minutes,
             Some(RangeCapability { min: 5, max: 30 })
         );
         assert!(caps.flow_smoothing);
         assert!(caps.anti_mistouch);
+        assert!(caps.auto_stop);
         assert_eq!(
             caps.modes,
             vec![
