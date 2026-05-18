@@ -94,7 +94,7 @@
 		<i class="ph ph-caret-left" aria-hidden="true"></i>
 	</button>
 	<div class="qfstrip" {@attach trackScroll} onscroll={syncArrows}>
-		{#each items as profile, i (profile.id)}
+		{#each items as profile (profile.id)}
 			<button
 				class="qfstrip-item"
 				class:is-active={favorite === profile.id}
@@ -108,9 +108,6 @@
 				/>
 				<span class="qfstrip-name">{profile.name}</span>
 				<span class="qfstrip-ratio">{profile.ratio}</span>
-				{#if query === '' && i < 5}
-					<span class="qfstrip-key">{i + 1}</span>
-				{/if}
 			</button>
 		{/each}
 		{#if items.length === 0}

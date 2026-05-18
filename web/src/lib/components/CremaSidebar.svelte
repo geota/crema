@@ -80,7 +80,6 @@
 			>
 				<i class={'ph-duotone ph-' + it.icon} aria-hidden="true"></i>
 				<span>{it.label}</span>
-				<span class="kbd">{it.kbd}</span>
 			</a>
 		{/each}
 		<div style="flex: 1 1 auto"></div>
@@ -182,14 +181,6 @@
 		width: 2px;
 		background: var(--copper-500);
 		border-radius: 0 2px 2px 0;
-	}
-	.cside-item .kbd {
-		position: absolute;
-		top: 8px;
-		right: 14px;
-		font-family: var(--font-mono);
-		font-size: 9px;
-		color: rgba(244, 237, 224, 0.3);
 	}
 	.cside-bottom {
 		display: flex;
