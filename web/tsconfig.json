@@ -9,7 +9,11 @@
 		"skipLibCheck": true,
 		"sourceMap": true,
 		"strict": true,
-		"moduleResolution": "bundler"
+		"moduleResolution": "bundler",
+		// The Web Bluetooth API is not in TypeScript's standard DOM lib;
+		// `@types/web-bluetooth` supplies `navigator.bluetooth` and the
+		// `Bluetooth*` GATT types the `$lib/ble` layer depends on.
+		"types": ["@types/web-bluetooth"]
 	}
 	// Path aliases ($lib etc.) and other options are managed by SvelteKit;
 	// see .svelte-kit/tsconfig.json for the generated base config.
