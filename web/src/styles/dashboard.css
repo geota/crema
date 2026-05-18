@@ -752,22 +752,6 @@
 	font-size: 11px;
 	color: rgba(244, 237, 224, 0.5);
 }
-.qfstrip-key {
-	width: 16px;
-	height: 16px;
-	border-radius: 4px;
-	background: rgba(244, 237, 224, 0.08);
-	font-family: var(--font-mono);
-	font-size: 9px;
-	color: rgba(244, 237, 224, 0.6);
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-}
-.qfstrip-item.is-active .qfstrip-key {
-	background: var(--copper-500);
-	color: #1a120c;
-}
 .qfstrip-empty {
 	font-family: var(--font-sans);
 	font-size: 12px;
