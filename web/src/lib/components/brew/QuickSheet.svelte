@@ -27,8 +27,10 @@
 		profileName,
 		favorite,
 		running,
+		open,
 		onSelectFavorite,
-		onToggleRun
+		onToggleRun,
+		onClose
 	}: {
 		/** The shared Quick Sheet parameter store. */
 		params: BrewParamState;
@@ -38,19 +40,30 @@
 		favorite: string;
 		/** Whether an extraction is in progress — flips the big button to danger-red. */
 		running: boolean;
+		/** Whether the sheet is docked open; when false it slides away. */
+		open: boolean;
 		/** Called when a favorite chip is picked. */
 		onSelectFavorite: (profile: FavoriteProfile) => void;
 		/** Called when the Start / Stop button is pressed. */
 		onToggleRun: () => void;
+		/** Called to dismiss the sheet (Close button or scrim tap). */
+		onClose: () => void;
 	} = $props();
 
 	const p = $derived(params.current);
 </script>
 
-<!-- The scrim sits behind the docked sheet; both are always `is-open` here
-     since the Quick Sheet is permanently docked in variant G. -->
-<div class="qsheet-scrim is-open"></div>
-<div class="qsheet is-v2 is-open is-onerow">
+<!-- The scrim dims the dashboard behind the open sheet; tapping it — or the
+     header's Close — dismisses the sheet. When closed both slide / fade away
+     (the CSS base state) and the dashboard's QuickPill brings it back. -->
+<button
+	type="button"
+	class="qsheet-scrim"
+	class:is-open={open}
+	aria-label="Close Quick Controls"
+	onclick={onClose}
+></button>
+<div class="qsheet is-v2 is-onerow" class:is-open={open}>
 	<div class="qsheet-v2-head">
 		<div class="qsheet-v2-title-block">
 			<div class="qsheet-v2-title">Quick Controls</div>
@@ -68,8 +81,7 @@
 			<button class="qsheet-cta" onclick={() => params.reset()}>
 				<i class="ph ph-arrow-counter-clockwise" aria-hidden="true"></i> Reset
 			</button>
-			<!-- The sheet is permanently docked in variant G — Close is decorative. -->
-			<button class="qsheet-cta">
+			<button class="qsheet-cta" onclick={onClose}>
 				<i class="ph ph-x" aria-hidden="true"></i> Close
 			</button>
 		</div>
