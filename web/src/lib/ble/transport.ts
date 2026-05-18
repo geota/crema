@@ -151,6 +151,20 @@ export class BleDevice {
 	private readonly characteristics = new Map<string, BluetoothRemoteGATTCharacteristic>();
 
 	/**
+	 * Characteristic objects the `characteristicvaluechanged` listener is
+	 * already attached to.
+	 *
+	 * `addEventListener` only de-duplicates an *identical* (object, type,
+	 * handler) triple — and after a reconnect the characteristic is re-resolved
+	 * to a fresh object, so the de-dup does not apply. Without this set the
+	 * reconnect loop's subscription replay would attach the listener a second
+	 * time to a characteristic that survived as the same object across the
+	 * replay, delivering every packet twice. Tracked by object identity so a
+	 * post-reconnect fresh object is correctly treated as not-yet-listening.
+	 */
+	private readonly listenerAttached = new WeakSet<BluetoothRemoteGATTCharacteristic>();
+
+	/**
 	 * Per-device serial GATT operation queue. Every GATT call — connect,
 	 * service / characteristic resolution, notification subscribe, write —
 	 * funnels through this so two operations never overlap.
@@ -394,7 +408,15 @@ export class BleDevice {
 	 */
 	private async subscribeRaw(serviceUuid: string, characteristicUuid: string): Promise<void> {
 		const characteristic = await this.resolveCharacteristic(serviceUuid, characteristicUuid);
-		characteristic.addEventListener('characteristicvaluechanged', this.onValueChanged);
+		// Attach the value-change listener at most once per characteristic
+		// object. A re-subscribe of an already-subscribed characteristic — the
+		// reconnect loop replaying the same object, or a manager subscribing the
+		// same characteristic twice — must not double up the listener, or every
+		// packet would be delivered twice.
+		if (!this.listenerAttached.has(characteristic)) {
+			characteristic.addEventListener('characteristicvaluechanged', this.onValueChanged);
+			this.listenerAttached.add(characteristic);
+		}
 		await characteristic.startNotifications();
 	}
 

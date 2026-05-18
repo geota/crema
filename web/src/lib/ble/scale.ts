@@ -99,6 +99,12 @@ export class ScaleManager {
 	 */
 	async connect(): Promise<void> {
 		this.callbacks.onState('connecting');
+		// Tear down any previous device first. Without this a re-connect leaks
+		// the old `BleDevice` — its `gattserverdisconnected` handler and every
+		// characteristic value-change listener stay bound, and its auto-reconnect
+		// loop may still be armed.
+		this.device?.disconnect();
+		this.device = null;
 		this.callbacks.onStatus('Requesting a scale…');
 		try {
 			const device = await requestDevice({
@@ -156,7 +162,15 @@ export class ScaleManager {
 				}
 				void this.core
 					.onNotification(source, notification.data, notification.atMs)
-					.then(this.callbacks.onCoreOutput);
+					.then(this.callbacks.onCoreOutput)
+					.catch((error: unknown) => {
+						// A rejection here — a wasm panic or a bad-packet JSON
+						// parse error — would otherwise silently kill the
+						// notification pipeline. Surface it instead.
+						this.callbacks.onStatus(
+							`Scale notification processing failed: ${describe(error)}`
+						);
+					});
 			});
 
 			this.callbacks.onState('subscribing');

@@ -142,6 +142,12 @@ export class De1Manager {
 	 */
 	async connect(): Promise<void> {
 		this.callbacks.onState('connecting');
+		// Tear down any previous device first. Without this a re-connect leaks
+		// the old `BleDevice` — its `gattserverdisconnected` handler and every
+		// characteristic value-change listener stay bound, and its auto-reconnect
+		// loop may still be armed.
+		this.device?.disconnect();
+		this.device = null;
 		// Start each connect from a clean diagnostics slate.
 		this.patchDiagnostics(EMPTY_DE1_DIAGNOSTICS);
 		this.notificationCounts = { De1State: 0, De1ShotSample: 0, De1WaterLevels: 0 };
@@ -149,6 +155,10 @@ export class De1Manager {
 		// attributed precisely — "DE1 service A000" vs. a specific characteristic
 		// — which is how the user learns a non-DE1 device was selected.
 		let step = 'device chooser';
+		// Hoisted out of the `try` so the `catch` can disconnect this exact
+		// device — nulling `this.device` alone would leave the transport's
+		// auto-reconnect loop running on it.
+		let device: BleDevice | null = null;
 		this.callbacks.onStatus('Requesting a DE1…');
 		try {
 			// Scope the chooser instead of listing every device: match the DE1
@@ -158,7 +168,7 @@ export class De1Manager {
 			// may not advertise the A000 service UUID, so the name entries keep
 			// discovery working either way; `optionalServices` grants A000
 			// access once connected regardless of which filter matched.
-			const device = await requestDevice({
+			device = await requestDevice({
 				filters: [
 					{ services: [De1Uuids.SERVICE] },
 					...De1Uuids.NAME_PREFIXES.map((namePrefix) => ({ namePrefix }))
@@ -212,7 +222,15 @@ export class De1Manager {
 				});
 				void this.core
 					.onNotification(source, notification.data, notification.atMs)
-					.then(this.callbacks.onCoreOutput);
+					.then(this.callbacks.onCoreOutput)
+					.catch((error: unknown) => {
+						// A rejection here — a wasm panic or a bad-packet JSON
+						// parse error — would otherwise silently kill the
+						// notification pipeline. Surface it instead.
+						this.callbacks.onStatus(
+							`DE1 notification processing failed: ${describe(error)}`
+						);
+					});
 			});
 
 			this.callbacks.onState('subscribing');
@@ -243,6 +261,10 @@ export class De1Manager {
 			);
 			this.callbacks.onStatus('Ready — receiving DE1 notifications');
 		} catch (error) {
+			// Disconnect the local device reference before nulling it — nulling
+			// alone leaves the transport's auto-reconnect backoff loop running on
+			// a half-dead device.
+			device?.disconnect();
 			this.device = null;
 			this.patchDiagnostics({ gattVerified: false });
 			this.callbacks.onState('failed');

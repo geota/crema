@@ -5,7 +5,7 @@
  * there is no server, and (per the project's framing) there is no Crema
  * account either — so `localStorage` is the right home for user preferences.
  * This store mirrors `lib/profiles` and `lib/history`: a Svelte 5 `$state`
- * class, the same `readJson` / `writeJson` helpers, a single versioned key.
+ * class, the shared `$lib/utils/storage` helpers, a single versioned key.
  *
  * What lives here are **app preferences only** — units, theme, sound/haptic
  * cues, brew defaults, display density, advanced toggles. None of it is a
@@ -17,6 +17,8 @@
  * The store is a Svelte 5 `$state` class; obtain the singleton with
  * {@link getSettingsStore}. It loads synchronously from `localStorage`.
  */
+
+import { readJson, writeJson } from '$lib/utils/storage';
 
 /** localStorage key for the bundle of app preferences ({@link Settings}). */
 const SETTINGS_KEY = 'crema.settings.v1';
@@ -150,28 +152,6 @@ export const DEFAULT_SETTINGS: Settings = {
 	smoothPressure: true,
 	showDebugPanel: false
 };
-
-/** Read + parse a localStorage value, falling back to `fallback` on any error. */
-function readJson<T>(key: string, fallback: T): T {
-	if (typeof localStorage === 'undefined') return fallback;
-	try {
-		const raw = localStorage.getItem(key);
-		return raw == null ? fallback : (JSON.parse(raw) as T);
-	} catch {
-		return fallback;
-	}
-}
-
-/** Write a JSON value to localStorage, swallowing quota / availability errors. */
-function writeJson(key: string, value: unknown): void {
-	if (typeof localStorage === 'undefined') return;
-	try {
-		localStorage.setItem(key, JSON.stringify(value));
-	} catch {
-		// Static PWA with no server — a write failure is non-fatal; the live
-		// in-memory state still reflects the change for this session.
-	}
-}
 
 /**
  * Apply the persisted theme to the document — sets (or, for the default dark,
