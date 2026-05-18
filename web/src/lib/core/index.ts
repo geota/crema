@@ -178,14 +178,34 @@ export interface CremaCore {
 }
 
 /**
+ * The memoized core-load promise. The wasm bundle and its `CremaBridge` are a
+ * process-wide singleton: `loadCore()` is called from more than one place (the
+ * orchestrator's `createCremaApp` and `ProfileStore.ensureLoaded`), and each
+ * must get the *same* `CremaCore` instance — two independent `CremaBridge`es
+ * would mean two divergent core sessions. Caching the `Promise` here, rather
+ * than the resolved value, also collapses concurrent first calls onto one
+ * in-flight load.
+ */
+let corePromise: Promise<CremaCore> | undefined;
+
+/**
  * Load the wasm core and return the async facade.
  *
  * Dynamic-imports the `de1-wasm` bundle, `await`s its async `init()`, and
  * constructs a `CremaBridge`. The bundle is `--target web`: its default export
  * is the async `init()`, and `CremaBridge` / `NotificationSource` are named
- * exports. Call once at app start.
+ * exports.
+ *
+ * Memoized: every call returns the same `Promise<CremaCore>`, so the whole app
+ * shares one `CremaBridge` instance.
  */
-export async function loadCore(): Promise<CremaCore> {
+export function loadCore(): Promise<CremaCore> {
+	if (!corePromise) corePromise = createCore();
+	return corePromise;
+}
+
+/** The actual one-time wasm load + facade construction, memoized by {@link loadCore}. */
+async function createCore(): Promise<CremaCore> {
 	const wasm = await import('$lib/wasm/de1_wasm.js');
 	await wasm.default();
 	const bridge = new wasm.CremaBridge();

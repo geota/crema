@@ -117,10 +117,17 @@ export class CremaApp {
 
 	// ---- DE1 actions ------------------------------------------------------
 
-	/** Connect a DE1 — call from a button handler (Web Bluetooth gesture). */
+	/**
+	 * Connect a DE1 — call from a button handler (Web Bluetooth gesture).
+	 *
+	 * The shared `eventLog` is deliberately *not* cleared here: it is shared
+	 * between DE1 and scale events, so wiping it on a DE1 connect would discard
+	 * in-progress scale entries. None of `connectDe1` / `disconnectDe1` /
+	 * `connectScale` / `disconnectScale` touches the log — a single device's
+	 * lifecycle never erases the other device's history.
+	 */
 	async connectDe1(): Promise<void> {
 		this.state.patch({
-			eventLog: [],
 			machineState: null,
 			shotPhase: null,
 			telemetry: null,

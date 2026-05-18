@@ -24,6 +24,7 @@
  */
 
 import { loadCore } from '$lib/core';
+import { readJson, writeJson } from '$lib/utils/storage';
 import {
 	fromCoreProfile,
 	type CremaProfile
@@ -50,28 +51,6 @@ interface BuiltinOverride {
 	lastUsed: string | null;
 }
 
-/** Read + parse a localStorage value, falling back to `fallback` on any error. */
-function readJson<T>(key: string, fallback: T): T {
-	if (typeof localStorage === 'undefined') return fallback;
-	try {
-		const raw = localStorage.getItem(key);
-		return raw == null ? fallback : (JSON.parse(raw) as T);
-	} catch {
-		return fallback;
-	}
-}
-
-/** Write a JSON value to localStorage, swallowing quota / availability errors. */
-function writeJson(key: string, value: unknown): void {
-	if (typeof localStorage === 'undefined') return;
-	try {
-		localStorage.setItem(key, JSON.stringify(value));
-	} catch {
-		// Static PWA with no server — a write failure is non-fatal; the live
-		// in-memory state still reflects the change for this session.
-	}
-}
-
 /**
  * The reactive profile library. One instance per app — {@link getProfileStore}.
  */
@@ -89,8 +68,14 @@ export class ProfileStore {
 	/** Whether the built-in load has finished (drives the grid's loading state). */
 	loaded = $state(false);
 
-	/** A guard so the async built-in load runs exactly once. */
-	private loadStarted = false;
+	/**
+	 * The in-flight (or settled) built-in load promise — the atomic guard so the
+	 * async load runs exactly once. Storing the `Promise` itself, rather than a
+	 * boolean, closes the race where two synchronous callers both observe a
+	 * not-yet-started load: the first caller assigns it, every later caller sees
+	 * the same promise and awaits it.
+	 */
+	private loadPromise: Promise<void> | undefined;
 
 	/**
 	 * The full library — built-ins (with user overrides folded in) followed by
@@ -111,11 +96,16 @@ export class ProfileStore {
 
 	/**
 	 * Kick off the one-time built-in load. Safe to call repeatedly — only the
-	 * first call does work. Resolves once the built-ins are in `all`.
+	 * first call does work; every call returns the same promise. Resolves once
+	 * the built-ins are in `all`.
 	 */
-	async ensureLoaded(): Promise<void> {
-		if (this.loadStarted) return;
-		this.loadStarted = true;
+	ensureLoaded(): Promise<void> {
+		if (!this.loadPromise) this.loadPromise = this._load();
+		return this.loadPromise;
+	}
+
+	/** The actual one-time built-in load, memoized by {@link ensureLoaded}. */
+	private async _load(): Promise<void> {
 		try {
 			const core = await loadCore();
 			const profiles = await core.builtinProfiles();

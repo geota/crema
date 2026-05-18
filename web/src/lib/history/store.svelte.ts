@@ -4,8 +4,8 @@
  * Backs the `/history` library: the list of past shots, their stored curves,
  * and the editable tasting-notes / star rating. Crema's web shell is a static,
  * client-only PWA — there is no server — so `localStorage` is the store, the
- * same choice (and the same `readJson` / `writeJson` helpers, mirrored here)
- * the profile library makes.
+ * same choice (and the shared `$lib/utils/storage` helpers) the profile
+ * library makes.
  *
  * Records arrive one way: the orchestrator calls {@link HistoryStore.record}
  * from its `ShotCompleted` handler with a snapshot of the just-finished shot
@@ -18,6 +18,7 @@
  */
 
 import type { TelemetrySample } from '$lib/state';
+import { readJson, writeJson } from '$lib/utils/storage';
 import { shotId, type ShotRecord } from './model';
 
 /** localStorage key for the recorded shots (a `ShotRecord[]`, newest first). */
@@ -30,28 +31,6 @@ const HISTORY_KEY = 'crema.history.v1';
  * localStorage quota.
  */
 const MAX_RECORDS = 300;
-
-/** Read + parse a localStorage value, falling back to `fallback` on any error. */
-function readJson<T>(key: string, fallback: T): T {
-	if (typeof localStorage === 'undefined') return fallback;
-	try {
-		const raw = localStorage.getItem(key);
-		return raw == null ? fallback : (JSON.parse(raw) as T);
-	} catch {
-		return fallback;
-	}
-}
-
-/** Write a JSON value to localStorage, swallowing quota / availability errors. */
-function writeJson(key: string, value: unknown): void {
-	if (typeof localStorage === 'undefined') return;
-	try {
-		localStorage.setItem(key, JSON.stringify(value));
-	} catch {
-		// Static PWA with no server — a write failure is non-fatal; the live
-		// in-memory state still reflects the change for this session.
-	}
-}
 
 /**
  * The inputs the orchestrator hands to {@link HistoryStore.record} when a shot
