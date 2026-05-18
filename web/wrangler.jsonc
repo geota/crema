@@ -1,0 +1,11 @@
+{
+	// Cloudflare Pages config for the Crema web shell.
+	// Deploy with: pnpm build && wrangler pages deploy
+	// The custom domain is attached in the Cloudflare dashboard, so the app's
+	// base path stays "/".
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "crema-web",
+	"compatibility_date": "2026-05-18",
+	// adapter-static emits the static SPA into web/build (see svelte.config.js).
+	"pages_build_output_dir": "build"
+}

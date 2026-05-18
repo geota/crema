@@ -1,0 +1,5 @@
+@import 'tailwindcss';
+
+/* daisyUI 5 is registered as a CSS plugin (no JS/Tailwind config file in v4).
+   Themes can be tuned later via `@plugin "daisyui" { themes: ... }`. */
+@plugin "daisyui";
