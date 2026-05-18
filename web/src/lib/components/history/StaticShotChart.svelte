@@ -3,13 +3,14 @@
 	 * `StaticShotChart` — a static render of a stored shot's 4-channel telemetry
 	 * curve, for the History page's `ShotDetail`.
 	 *
-	 * It reuses the **same SVG approach** as the live `brew/LiveChart`: one
-	 * polyline per channel (pressure / flow / temp / weight), each on its own
-	 * fixed Y range, the same per-channel hues and the same grid. The only
-	 * difference from the live chart is that there is no animated "now" marker
-	 * or end dots — a finished shot is drawn whole — and the time window
-	 * stretches to fit the recorded shot's actual length.
+	 * uPlot spike: the static counterpart of `brew/LiveChart`. Same four
+	 * per-channel uPlot scales (pressure / flow / temp / weight) and the same
+	 * `--tel-*` hues, but a finished shot is drawn whole — no now-marker or
+	 * end-dots — and the x window stretches to the recorded shot's length.
 	 */
+	import { untrack } from 'svelte';
+	import uPlot from 'uplot';
+	import 'uplot/dist/uPlot.min.css';
 	import type { TelemetrySample } from '$lib/state';
 
 	let {
@@ -22,92 +23,131 @@
 		height?: number;
 	} = $props();
 
-	// ── Geometry ─────────────────────────────────────────────────────────
-	const W = 1200;
-	const H = $derived(height);
-	const padX = 24;
-	const padY = 18;
-	const innerW = W - padX * 2;
-	const innerH = $derived(H - padY * 2);
-
 	/** The time window, seconds — the recorded shot's length, min 28 s. */
 	const windowSec = $derived(
-		series.length > 0
-			? Math.max(28, series[series.length - 1].elapsedMs / 1000)
-			: 28
+		series.length > 0 ? Math.max(28, series[series.length - 1].elapsedMs / 1000) : 28
 	);
 
-	/** Map a time (s) to an x coordinate. */
-	const xScale = (t: number): number => padX + (t / windowSec) * innerW;
-	/** Map a value to a y coordinate within `[vmin, vmax]`. */
-	const yScale = (v: number, vmin: number, vmax: number): number =>
-		padY + innerH - ((v - vmin) / (vmax - vmin)) * innerH;
-
-	/**
-	 * Build an SVG path over the series for one channel. `pick` reads the
-	 * channel value; samples whose value is `null` are skipped.
-	 */
-	function buildPath(
-		pick: (s: TelemetrySample) => number | null,
-		vmin: number,
-		vmax: number
-	): string {
-		let d = '';
-		let started = false;
-		for (const sample of series) {
-			const v = pick(sample);
-			if (v == null) {
-				started = false;
-				continue;
-			}
-			const x = xScale(sample.elapsedMs / 1000).toFixed(1);
-			const y = yScale(v, vmin, vmax).toFixed(1);
-			d += `${started ? 'L' : 'M'} ${x} ${y} `;
-			started = true;
-		}
-		return d.trim();
+	/** Resolve a CSS custom property to a concrete colour string. */
+	function cssVar(name: string): string {
+		if (typeof window === 'undefined') return '#888';
+		return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || '#888';
 	}
 
-	// Per-channel paths — the same Y ranges as the live LiveChart.
-	const pressurePath = $derived(buildPath((s) => s.pressure, 0, 12));
-	const flowPath = $derived(buildPath((s) => s.flow, 0, 8));
-	const tempPath = $derived(buildPath((s) => s.temp, 85, 100));
-	const weightPath = $derived(buildPath((s) => s.weightG, 0, 50));
+	/** Build the [x, pressure, flow, temp, weight] column arrays uPlot wants. */
+	function toData(samples: readonly TelemetrySample[]): uPlot.AlignedData {
+		const xs: number[] = [];
+		const pressure: (number | null)[] = [];
+		const flow: (number | null)[] = [];
+		const temp: (number | null)[] = [];
+		const weight: (number | null)[] = [];
+		for (const s of samples) {
+			xs.push(s.elapsedMs / 1000);
+			pressure.push(s.pressure ?? null);
+			flow.push(s.flow ?? null);
+			temp.push(s.temp ?? null);
+			weight.push(s.weightG ?? null);
+		}
+		return [xs, pressure, flow, temp, weight];
+	}
 
-	/** Time gridlines at sensible intervals across the window. */
-	const ticks = $derived(
-		[0.2, 0.4, 0.6, 0.8].map((p) => Math.round(windowSec * p))
-	);
+	let plotEl: HTMLDivElement;
+	let chart: uPlot | null = null;
+	let resizeObs: ResizeObserver | null = null;
+
+	function buildOpts(w: number, h: number, win: number): uPlot.Options {
+		const gridColor = 'rgba(244,237,224,0.05)';
+		const labelColor = 'rgba(244,237,224,0.35)';
+		return {
+			width: w,
+			height: h,
+			padding: [8, 8, 0, 8],
+			cursor: { show: false },
+			legend: { show: false },
+			scales: {
+				x: { time: false, range: [0, win] },
+				pressure: { range: [0, 12] },
+				flow: { range: [0, 8] },
+				temp: { range: [85, 100] },
+				weight: { range: [0, 50] }
+			},
+			axes: [
+				{
+					scale: 'x',
+					stroke: labelColor,
+					grid: { stroke: gridColor, width: 1, dash: [2, 4] },
+					ticks: { show: false },
+					font: '11px "JetBrains Mono", monospace',
+					values: (_u, splits) => splits.map((v) => (v === 0 ? '' : `${Math.round(v)}s`)),
+					splits: () => [0.2, 0.4, 0.6, 0.8].map((p) => Math.round(win * p))
+				},
+				{
+					scale: 'pressure',
+					show: false,
+					grid: { stroke: gridColor, width: 1 },
+					splits: (u) => {
+						const [min, max] = u.scales.pressure.range as unknown as [number, number];
+						return [0.2, 0.4, 0.6, 0.8].map((p) => min + (max - min) * p);
+					}
+				}
+			],
+			series: [
+				{},
+				{ scale: 'pressure', stroke: () => cssVar('--tel-pressure'), width: 2.6, points: { show: false } },
+				{ scale: 'flow', stroke: () => cssVar('--tel-flow'), width: 2.2, points: { show: false } },
+				{ scale: 'temp', stroke: () => cssVar('--tel-temp'), width: 2.2, points: { show: false } },
+				{ scale: 'weight', stroke: () => cssVar('--tel-weight'), width: 2.2, points: { show: false } }
+			]
+		};
+	}
+
+	// Create the chart once on mount; `series`/`windowSec`/`height` are read
+	// untracked so a prop change updates the live instance (effect below)
+	// instead of rebuilding it.
+	$effect(() => {
+		const w = Math.max(1, plotEl.clientWidth);
+		chart = new uPlot(
+			buildOpts(w, untrack(() => height), untrack(() => windowSec)),
+			toData(untrack(() => series)),
+			plotEl
+		);
+
+		resizeObs = new ResizeObserver((entries) => {
+			const cr = entries[0].contentRect;
+			chart?.setSize({ width: Math.max(1, cr.width), height });
+		});
+		resizeObs.observe(plotEl);
+
+		return () => {
+			resizeObs?.disconnect();
+			resizeObs = null;
+			chart?.destroy();
+			chart = null;
+		};
+	});
+
+	// Re-apply data + x-window when the stored shot changes.
+	$effect(() => {
+		const data = toData(series);
+		const win = windowSec;
+		if (!chart) return;
+		chart.setData(data, false);
+		chart.setScale('x', { min: 0, max: win });
+	});
 </script>
 
-<svg
-	viewBox="0 0 {W} {H}"
-	preserveAspectRatio="none"
-	style="display:block;width:100%;height:100%"
+<div
+	class="staticchart"
+	style="height:{height}px"
+	bind:this={plotEl}
 	aria-label="Stored shot telemetry chart"
->
-	<!-- grid -->
-	<g stroke="rgba(244,237,224,0.05)" stroke-width="1">
-		{#each [0.2, 0.4, 0.6, 0.8] as p (p)}
-			<line x1={padX} x2={W - padX} y1={padY + innerH * p} y2={padY + innerH * p} />
-		{/each}
-		{#each ticks as t (t)}
-			<line y1={padY} y2={H - padY} x1={xScale(t)} x2={xScale(t)} stroke-dasharray="2 4" />
-		{/each}
-	</g>
+></div>
 
-	<!-- time labels -->
-	<g fill="rgba(244,237,224,0.35)" font-family="JetBrains Mono, monospace" font-size="11">
-		{#each ticks as t (t)}
-			<text x={xScale(t)} y={H - 3} text-anchor="middle">{t}s</text>
-		{/each}
-	</g>
-
-	{#if series.length > 0}
-		<!-- channels -->
-		<path d={tempPath} stroke="var(--tel-temp)" stroke-width="2.2" fill="none" />
-		<path d={weightPath} stroke="var(--tel-weight)" stroke-width="2.2" fill="none" />
-		<path d={flowPath} stroke="var(--tel-flow)" stroke-width="2.2" fill="none" />
-		<path d={pressurePath} stroke="var(--tel-pressure)" stroke-width="2.6" fill="none" />
-	{/if}
-</svg>
+<style>
+	.staticchart {
+		width: 100%;
+	}
+	.staticchart :global(.u-wrap) {
+		margin: 0 auto;
+	}
+</style>
