@@ -18,7 +18,7 @@
 	<QSplitLabel
 		options={[
 			{ id: 'dose', label: 'Dose' },
-			{ id: 'grind', label: 'Grind', meta: 'log only' }
+			{ id: 'grind', label: 'Grind' }
 		]}
 		value={p.doseGrindMode}
 		onChange={(v) => params.set('doseGrindMode', v as 'dose' | 'grind')}
