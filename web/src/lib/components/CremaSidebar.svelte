@@ -140,6 +140,13 @@
 	      (the global rule styles `<button class="cside-item">`). */
 	.cside {
 		position: fixed;
+		/* The primary nav must always be the topmost UI element. Without an
+		   explicit z-index the rail loses to viewport-fixed overlays — most
+		   notably the ProfileCard overflow-menu scrim (`.pp-menu-scrim`,
+		   z-index 20) — which silently swallows clicks on the rail and is the
+		   "half my clicks do nothing" bug. The scrims top out at 31, so 50 is
+		   comfortably above with room for future flyouts. */
+		z-index: 50;
 	}
 	.cside-item {
 		text-decoration: none;
