@@ -8,6 +8,5 @@ export { default as ProfilePreview } from './ProfilePreview.svelte';
 export { default as ProfileEditor } from './ProfileEditor.svelte';
 export { default as ProfileCurveEditor } from './ProfileCurveEditor.svelte';
 export { default as SegmentRow } from './SegmentRow.svelte';
-export { default as SegmentAdvanced } from './SegmentAdvanced.svelte';
 export { default as TagInput } from './TagInput.svelte';
 export { default as PeNumber } from './PeNumber.svelte';
