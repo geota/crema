@@ -19,6 +19,7 @@ export {
 	MAX_LOG_LINES,
 	MAX_TELEMETRY_SAMPLES,
 	type UiSnapshot,
+	type LogLine,
 	type TelemetrySample,
 	type De1MachineInfo,
 	type De1Calibration,

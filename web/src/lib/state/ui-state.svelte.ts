@@ -6,7 +6,11 @@
  * A flat snapshot of everything the screen shows. The Android shell models it
  * as an immutable `data class` inside a `StateFlow`; the web shell models it
  * as a `$state`-backed class — assigning a field re-renders any view that
- * reads it. The 21 fields and their defaults match Android one-for-one.
+ * reads it. The original POC fields trace back to the Android `MainUiState`,
+ * but the web snapshot has since grown well beyond it — the brew-dashboard
+ * telemetry, the active profile, the DE1 diagnostics / firmware / MMR / idle
+ * read-paths and the capture-replay status are all web-only — so it is no
+ * longer a one-for-one mirror of any Android type.
  *
  * The folding (`applyEvent`) is exported as a **pure function** over a plain
  * snapshot so it can be unit-tested without a rune runtime — `CremaUiState`
@@ -26,6 +30,24 @@ export const DEFAULT_SCALE_STANDBY_MINUTES = 15;
 
 /** Cap on the rolling event log — newest-first, oldest dropped past this. */
 export const MAX_LOG_LINES = 200;
+
+/**
+ * One entry in the rolling event log. The `id` is a process-wide monotonic
+ * counter — a *stable* key the UI can `{#each}` on. The log is a newest-first,
+ * prepended list, so an index key would re-bind every row on each new entry;
+ * the `id` does not, and never repeats.
+ */
+export interface LogLine {
+	/** Process-wide monotonic id — stable across prepends, never reused. */
+	readonly id: number;
+	/** The `HH:mm:ss` timestamp the line was logged at. */
+	readonly time: string;
+	/** The log message. */
+	readonly text: string;
+}
+
+/** The monotonic source for {@link LogLine.id} — bumped once per logged line. */
+let nextLogId = 0;
 
 /**
  * Cap on the buffered shot-telemetry series. At the DE1's ~25 Hz sample rate
@@ -64,7 +86,7 @@ export interface TelemetrySample {
 }
 
 /**
- * A plain, immutable snapshot of the 21 UI fields — the shape `applyEvent`
+ * A plain, immutable snapshot of every UI field — the shape `applyEvent`
  * folds over. `CremaUiState` holds one of these in a `$state` rune.
  */
 export interface UiSnapshot {
@@ -108,8 +130,8 @@ export interface UiSnapshot {
 	readonly scaleAntiMistouch: boolean;
 	/** The scale's active display-mode index (0/1/2), or null (two-way). */
 	readonly scaleActiveMode: number | null;
-	/** A rolling event log, newest first. */
-	readonly eventLog: readonly string[];
+	/** A rolling event log, newest first. See {@link LogLine}. */
+	readonly eventLog: readonly LogLine[];
 
 	/**
 	 * The DE1 water-tank level in mm — the raw depth the tank sensor reports,
@@ -344,13 +366,16 @@ const TANK_MM_TO_ML: readonly number[] = [
 /**
  * Convert a DE1 tank-level reading (mm, see {@link UiSnapshot.waterLevelMm})
  * to the tank's water volume in mL via {@link TANK_MM_TO_ML}. Returns `null`
- * for a missing reading; a depth past the table's range clamps to the 2058 mL
- * ceiling — matching the de1app / DSx behaviour.
+ * for a missing reading; the depth is clamped to the table's range — a depth
+ * past the top reads as the 2058 mL full ceiling, a negative depth (a sensor
+ * glitch) as the 0 mL empty floor — matching the de1app / DSx behaviour.
  */
 export function waterTankMl(mm: number | null | undefined): number | null {
 	if (mm == null || !Number.isFinite(mm)) return null;
 	const i = Math.trunc(mm);
-	return i >= 0 && i < TANK_MM_TO_ML.length ? TANK_MM_TO_ML[i] : 2058;
+	if (i < 0) return TANK_MM_TO_ML[0];
+	if (i >= TANK_MM_TO_ML.length) return TANK_MM_TO_ML[TANK_MM_TO_ML.length - 1];
+	return TANK_MM_TO_ML[i];
 }
 
 /**
@@ -446,12 +471,14 @@ export function puckResistance(pressure: number, flow: number): number | null {
 }
 
 /**
- * Prepend a timestamped line to the log, capping it at {@link MAX_LOG_LINES}.
- * Newest-first, exactly like the Android shell's `appendLog`.
+ * Prepend a timestamped {@link LogLine} to the log, capping it at
+ * {@link MAX_LOG_LINES}. Newest-first, like the Android shell's `appendLog`;
+ * each line carries a monotonic {@link LogLine.id} so a prepended-list UI can
+ * key on a stable id rather than the shifting array index.
  */
-function appendLog(log: readonly string[], line: string): readonly string[] {
+function appendLog(log: readonly LogLine[], text: string): readonly LogLine[] {
 	const time = new Date().toLocaleTimeString('en-GB', { hour12: false });
-	return [`${time}  ${line}`, ...log].slice(0, MAX_LOG_LINES);
+	return [{ id: nextLogId++, time, text }, ...log].slice(0, MAX_LOG_LINES);
 }
 
 /**

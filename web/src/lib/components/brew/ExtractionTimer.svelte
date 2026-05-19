@@ -29,8 +29,12 @@
 			.toString()
 			.padStart(2, '0')
 	);
-	/** Single tenths digit. */
-	const frac = $derived((seconds % 1).toFixed(1).slice(2));
+	/**
+	 * Single tenths digit — floored, not rounded. `toFixed(1)` would round
+	 * (e.g. 4.97 → ".0") and so disagree with the floored `ss` above; flooring
+	 * the tenths keeps the two in lock-step.
+	 */
+	const frac = $derived(Math.floor((seconds % 1) * 10).toString());
 </script>
 
 <div class="crema-timer">
