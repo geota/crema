@@ -3,9 +3,11 @@
 	 * `StMaintenanceCard` — one maintenance metric card (filter / descale /
 	 * backflush). Ported from the design's `MaintenanceCard`.
 	 *
-	 * UI-only: real filter-life / descale tracking would need the DE1's water
-	 * counters, which the shell does not expose. The figures shown are the
-	 * design's placeholders; "Mark complete" is a stub.
+	 * A pure presentational component: every figure is passed in as a prop.
+	 * `WaterSection` feeds it the real, derived readouts from the
+	 * `lib/maintenance` store (which integrates the DE1's group flow into a
+	 * persisted litre counter), and wires "Mark complete" to the store's
+	 * rebaseline actions.
 	 */
 	let {
 		icon,

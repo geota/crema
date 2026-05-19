@@ -31,7 +31,7 @@
 	let q = $state('');
 	/** The active profile filter — `all` or a profile name. */
 	let filterProfile = $state('all');
-	/** The active range selector — UI-only for now. */
+	/** The active date-range filter — `30d` keeps only the last 30 days. */
 	let range = $state<'30d' | 'all'>('all');
 	/** The selected shot's id. */
 	let selectedId = $state<string | null>(null);
