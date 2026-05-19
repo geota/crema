@@ -40,6 +40,14 @@
 
 	/** The target unit follows the segment mode. */
 	const unit = $derived(seg.mode === 'pressure' ? 'bar' : 'ml/s');
+
+	/** A compact read-out of the structured exit condition, or an em-dash. */
+	const exitSummary = $derived.by(() => {
+		if (!seg.exit) return '—';
+		const op = seg.exit.compare === 'over' ? '>' : '<';
+		const u = seg.exit.metric === 'pressure' ? 'bar' : 'ml/s';
+		return `${seg.exit.metric} ${op} ${seg.exit.threshold} ${u}`;
+	});
 </script>
 
 <div
@@ -108,13 +116,11 @@
 
 	<div class="pe-seg-field pe-seg-field-exit">
 		<div class="pe-seg-field-label">Exit when</div>
-		<input
-			class="pe-seg-exit-input"
-			value={seg.exitAt ?? ''}
-			placeholder="—"
-			onclick={(e) => e.stopPropagation()}
-			oninput={(e) => onEdit({ exitAt: e.currentTarget.value.trim() || null })}
-		/>
+		<!-- A read-only summary of the structured exit condition; it is edited in
+		     the advanced panel the editor renders for the selected segment. -->
+		<div class="pe-seg-exit-summary" class:is-set={seg.exit != null}>
+			{exitSummary}
+		</div>
 	</div>
 
 	<button
@@ -205,21 +211,22 @@
 		font-weight: 600;
 		color: rgba(244, 237, 224, 0.4);
 	}
-	.pe-seg-exit-input {
+	.pe-seg-exit-summary {
 		background: rgba(244, 237, 224, 0.04);
 		border: 1px solid rgba(244, 237, 224, 0.08);
 		border-radius: 4px;
 		font-family: var(--font-mono);
 		font-size: 11px;
-		color: rgba(244, 237, 224, 0.7);
-		padding: 3px 6px;
+		color: rgba(244, 237, 224, 0.35);
+		padding: 4px 6px;
 		width: 100%;
 		min-width: 0;
-		outline: 0;
-		transition: border-color var(--dur-1) var(--ease);
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
 	}
-	.pe-seg-exit-input:focus {
-		border-color: var(--copper-500);
+	.pe-seg-exit-summary.is-set {
+		color: rgba(244, 237, 224, 0.7);
 	}
 	.pe-seg-del {
 		width: 30px;
