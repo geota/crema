@@ -584,7 +584,7 @@
 .cside-status-dot {
   width: 8px; height: 8px;
   border-radius: 50%;
-  background: var(--success, var(--success));
+  background: var(--success);
   box-shadow: 0 0 0 2px rgba(107,140,95,0.18);
 }
 .cside-status-dot.off { background: rgba(var(--tint-rgb), 0.2); box-shadow: none; }
@@ -682,7 +682,7 @@
   background: rgba(var(--tint-rgb), 0.3);
 }
 .qc-pop-dot.is-on {
-  background: var(--success, var(--success));
+  background: var(--success);
   box-shadow: 0 0 0 2px rgba(107,140,95,0.22);
 }
 .qc-pop-row-scanning {
@@ -1159,13 +1159,47 @@
   font-size: 10px;
   letter-spacing: var(--track-allcaps);
   text-transform: uppercase;
-  color: var(--success, var(--success));
+  color: var(--success);
   margin-left: 8px;
   display: inline-flex; align-items: center; gap: 5px;
 }
 .qsheet-d-readout-meta::before {
   content: '';
   width: 6px; height: 6px; border-radius: 50%;
-  background: var(--success, var(--success));
+  background: var(--success);
   box-shadow: 0 0 0 2px rgba(107,140,95,0.18);
+}
+
+/* ============================================================================
+   Responsive — the docked Quick Sheet (variant G) defaults to a 4/5/6-up
+   control grid sized for a landscape tablet. On narrower tablet widths a
+   6-up row crushes each control, so step the column count down; in portrait
+   the strip search row stacks above the rail.
+   ============================================================================ */
+
+/* Tablet landscape and narrower — cap the Quick Sheet at 4 columns so the
+   five- and six-control modes stay legible. */
+@media (max-width: 1024px) {
+  .qsheet-g-grid.is-five,
+  .qsheet-g-grid.is-six {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 16px;
+  }
+}
+
+/* Tablet portrait — three control columns, and the favourites strip's inline
+   search drops onto its own row above the scroller. */
+@media (max-width: 820px) {
+  .qsheet-g-grid.is-four,
+  .qsheet-g-grid.is-five,
+  .qsheet-g-grid.is-six {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 14px;
+  }
+  .qfstrip-wrap {
+    grid-template-columns: 28px 1fr 28px;
+  }
+  .qfstrip-search-inline {
+    grid-column: 1 / -1;
+  }
 }
