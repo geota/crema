@@ -138,6 +138,32 @@ export interface UiSnapshot {
 
 	/** The DE1 connection-diagnostics snapshot, folded in from `De1Manager`. */
 	readonly de1Diagnostics: De1Diagnostics;
+
+	// ---- Capture replay (developer tool) ---------------------------------
+	//
+	// State for the Settings → Advanced "Replay a capture" developer control:
+	// playing a recorded BLE capture file back through the core so a shot can
+	// be watched with no live machine. Purely UI-level; never persisted.
+
+	/** The current capture-replay status, or `null` when no replay has run. */
+	readonly replay: ReplayStatus | null;
+}
+
+/** Where a {@link ReplayStatus} is in its lifecycle. */
+export type ReplayPhase = 'running' | 'done' | 'cancelled' | 'error';
+
+/** The progress / outcome of a capture replay — drives the Advanced dev control. */
+export interface ReplayStatus {
+	/** Lifecycle phase. */
+	readonly phase: ReplayPhase;
+	/** The replayed file's name, for display. */
+	readonly fileName: string;
+	/** Events delivered so far. */
+	readonly done: number;
+	/** Total replayable events in the capture. */
+	readonly total: number;
+	/** A human-readable message — the error text on `phase === 'error'`. */
+	readonly message: string;
 }
 
 /** The initial snapshot — every default matches the Android `MainUiState`. */
@@ -168,7 +194,8 @@ export const INITIAL_SNAPSHOT: UiSnapshot = {
 	shotInProgress: false,
 	shotElapsedMs: 0,
 	activeProfileName: null,
-	de1Diagnostics: EMPTY_DE1_DIAGNOSTICS
+	de1Diagnostics: EMPTY_DE1_DIAGNOSTICS,
+	replay: null
 };
 
 /**

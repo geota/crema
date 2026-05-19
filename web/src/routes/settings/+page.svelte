@@ -118,7 +118,7 @@
 			{:else if active === 'sharing'}
 				<SharingSection />
 			{:else if active === 'advanced'}
-				<AdvancedSection />
+				<AdvancedSection {app} />
 			{:else if active === 'about'}
 				<AboutSection />
 			{/if}
