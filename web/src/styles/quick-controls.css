@@ -185,7 +185,7 @@
   background: var(--copper-500); border-color: var(--copper-500); color: var(--fg-on-accent);
 }
 .qsheet-scrim {
-  position: absolute; inset: 0; background: rgba(21,17,13,0.6);
+  position: absolute; inset: 0; background: rgba(var(--scrim-rgb), 0.6);
   backdrop-filter: blur(4px);
   z-index: 9;
   opacity: 0; pointer-events: none;

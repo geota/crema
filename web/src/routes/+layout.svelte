@@ -80,9 +80,9 @@
 {/if}
 
 <style>
-	/* The content area clears the fixed 72px sidebar rail. */
+	/* The content area clears the fixed side rail (--sidebar-w wide). */
 	.shell-content {
-		padding-left: 72px;
+		padding-left: var(--sidebar-w);
 		min-height: 100vh;
 	}
 
