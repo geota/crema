@@ -61,15 +61,18 @@
   --copper-600: #A55F2A;
   --copper-700: #82481C;
 
-  /* Telemetry — one hue per data channel. Locked. */
-  --tel-pressure:    #D89030;
-  --tel-pressure-15: #D8903026;
+  /* Telemetry — one hue per data channel. Pressure and weight are swapped
+     vs. the handoff at the project's request: pressure is the sage green,
+     weight the amber. Every chart reads these via var(), so the swap here
+     applies app-wide. */
+  --tel-pressure:    #6B8C5F;
+  --tel-pressure-15: #6B8C5F26;
   --tel-flow:        #4A6FA5;
   --tel-flow-15:     #4A6FA526;
   --tel-temp:        #C44E3F;
   --tel-temp-15:     #C44E3F26;
-  --tel-weight:      #6B8C5F;
-  --tel-weight-15:   #6B8C5F26;
+  --tel-weight:      #D89030;
+  --tel-weight-15:   #D8903026;
 
   /* Semantic (light surface defaults) */
   --success: #5C8A4C;

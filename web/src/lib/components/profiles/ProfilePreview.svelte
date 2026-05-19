@@ -131,8 +131,8 @@
 	/** The horizontal gridline ratios. */
 	const gridlines = [0.25, 0.5, 0.75];
 
-	/** Channel colors — pressure warms slightly on the active card. */
-	const pressureColor = $derived(active ? '#E5A65A' : 'var(--tel-pressure, #D89030)');
+	/** Channel colors — pressure brightens slightly on the active card. */
+	const pressureColor = $derived(active ? '#8BAA82' : 'var(--tel-pressure, #6B8C5F)');
 	const flowColor = 'var(--tel-flow, #4A6FA5)';
 	const tempColor = 'var(--tel-temp, #C44E3F)';
 </script>
