@@ -35,6 +35,7 @@
 	} from '$lib/profiles';
 	import ProfileCurveEditor from './ProfileCurveEditor.svelte';
 	import SegmentRow from './SegmentRow.svelte';
+	import SegmentAdvanced from './SegmentAdvanced.svelte';
 	import TagInput from './TagInput.svelte';
 	import PeNumber from './PeNumber.svelte';
 
@@ -170,8 +171,11 @@
 			target: last?.target ?? 6,
 			ramp: 'smooth',
 			time: 6,
-			exitAt: null,
-			temperatureC: last?.temperatureC ?? draft.brewTemp
+			exit: null,
+			temperatureC: last?.temperatureC ?? draft.brewTemp,
+			tempSensor: last?.tempSensor ?? 'basket',
+			volumeLimitMl: 0,
+			limiter: null
 		};
 		draft = { ...draft, segments: [...draft.segments, seg] };
 		selectedSegId = seg.id;
@@ -359,6 +363,50 @@
 				</div>
 
 				<div class="pe-section">
+					<div class="pe-section-title">Limits</div>
+					<div class="pe-grid">
+						<PeNumber
+							label="Min pressure"
+							value={draft.minimumPressure}
+							step={0.1}
+							unit="bar"
+							min={0}
+							max={12}
+							onChange={(v) => patch({ minimumPressure: v })}
+						/>
+						<PeNumber
+							label="Max flow"
+							value={draft.maximumFlow}
+							step={0.1}
+							unit="ml/s"
+							min={0}
+							max={12}
+							onChange={(v) => patch({ maximumFlow: v })}
+						/>
+						<PeNumber
+							label="Max total volume"
+							value={draft.maxTotalVolumeMl}
+							step={5}
+							unit="mL"
+							min={0}
+							max={1023}
+							digits={0}
+							onChange={(v) => patch({ maxTotalVolumeMl: Math.round(v) })}
+						/>
+						<PeNumber
+							label="Preinfuse steps"
+							value={draft.preinfuseStepCount}
+							step={1}
+							unit=""
+							min={0}
+							max={draft.segments.length}
+							digits={0}
+							onChange={(v) => patch({ preinfuseStepCount: Math.round(v) })}
+						/>
+					</div>
+				</div>
+
+				<div class="pe-section">
 					<div class="pe-section-title">Behaviour</div>
 					<button
 						class="pe-tog"
@@ -433,6 +481,16 @@
 								onEdit={(p) => editSegment(seg.id, p)}
 								onDelete={() => deleteSegment(seg.id)}
 							/>
+							<!-- The advanced per-segment fields (temperature, exit
+							     condition, volume limit, limiter, temp sensor) expand
+							     inline beneath the selected row, so the row stays compact. -->
+							{#if activeSegId === seg.id}
+								<SegmentAdvanced
+									{seg}
+									index={i}
+									onEdit={(p) => editSegment(seg.id, p)}
+								/>
+							{/if}
 						{/each}
 					</div>
 				</div>

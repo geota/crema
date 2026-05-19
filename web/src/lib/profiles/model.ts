@@ -30,6 +30,39 @@ export type SegmentRamp = 'smooth' | 'fast';
 /** Whether a segment targets a pressure (bar) or a flow (mL/s). */
 export type SegmentMode = 'pressure' | 'flow';
 
+/** Which metric an exit condition watches. */
+export type ExitMetric = 'pressure' | 'flow';
+
+/** The direction of an exit comparison. */
+export type ExitCompare = 'over' | 'under';
+
+/** Which temperature sensor a segment regulates. */
+export type TempSensor = 'basket' | 'mix';
+
+/**
+ * A structured early-exit condition on a segment — leave the segment before
+ * its duration elapses. Maps to the core's `ExitCondition`.
+ */
+export interface SegmentExit {
+	/** Which metric to watch. */
+	metric: ExitMetric;
+	/** Exit when the metric rises above (`over`) or falls below (`under`). */
+	compare: ExitCompare;
+	/** The threshold value (bar or mL/s, per `metric`). */
+	threshold: number;
+}
+
+/**
+ * An advanced limiter capping the segment's non-priority quantity. Maps to the
+ * core's `Limiter` (which assembles into an extension frame).
+ */
+export interface SegmentLimiter {
+	/** The limit — flow if the segment is pressure-priority, or vice versa. */
+	value: number;
+	/** Tolerance band around the limit. */
+	range: number;
+}
+
 /**
  * One segment of the working pressure profile — the design's segment shape
  * (`DEFAULT_SEGMENTS` in `profile-edit-page.jsx`), with the extra fields
@@ -48,10 +81,16 @@ export interface ProfileSegment {
 	ramp: SegmentRamp;
 	/** Segment duration, seconds. */
 	time: number;
-	/** Human-readable early-exit description, or null. */
-	exitAt: string | null;
+	/** Structured early-exit condition, or null when the segment has none. */
+	exit: SegmentExit | null;
 	/** Target temperature, °C — round-trips the core step. */
 	temperatureC: number;
+	/** Which temperature sensor the segment regulates. */
+	tempSensor: TempSensor;
+	/** Per-segment dispensed-volume limit, mL, range 0–1023 (0 = no limit). */
+	volumeLimitMl: number;
+	/** Advanced max-flow-or-pressure limiter, or null when unused. */
+	limiter: SegmentLimiter | null;
 }
 
 /**
@@ -86,6 +125,14 @@ export interface CremaProfile {
 	stopOnWeight: boolean;
 	/** Zero the scale automatically when the shot begins. */
 	autoTare: boolean;
+	/** How many leading segments count as preinfusion — core `preinfuse_step_count`. */
+	preinfuseStepCount: number;
+	/** Minimum pressure for flow-priority segments, bar — core `minimum_pressure`. */
+	minimumPressure: number;
+	/** Maximum flow for pressure-priority segments, mL/s — core `maximum_flow`. */
+	maximumFlow: number;
+	/** Whole-shot dispensed-volume limit, mL, 0–1023 (0 = no limit). */
+	maxTotalVolumeMl: number;
 	/** The ordered pressure / flow segments. */
 	segments: ProfileSegment[];
 }
@@ -140,13 +187,19 @@ export function sparkShape(segments: readonly ProfileSegment[]): SparkShape {
 
 /** Map a core `ProfileStep` into a working {@link ProfileSegment}. */
 function segmentFromStep(step: ProfileStep, index: number): ProfileSegment {
-	let exitAt: string | null = null;
-	if (step.exit) {
-		const unit = step.exit.metric === 'Pressure' ? 'bar' : 'ml/s';
-		const op = step.exit.compare === 'Over' ? '>' : '<';
-		const metric = step.exit.metric === 'Pressure' ? 'pressure' : 'flow';
-		exitAt = `${metric} ${op} ${step.exit.threshold} ${unit}`;
-	}
+	// The core enums are PascalCase (`Pressure` / `Over` / `Mix`); the shell
+	// model is lowercase — translate each on the way in, as `pump` / `transition`
+	// already do.
+	const exit: SegmentExit | null = step.exit
+		? {
+				metric: step.exit.metric === 'Pressure' ? 'pressure' : 'flow',
+				compare: step.exit.compare === 'Over' ? 'over' : 'under',
+				threshold: step.exit.threshold
+			}
+		: null;
+	const limiter: SegmentLimiter | null = step.limiter
+		? { value: step.limiter.value, range: step.limiter.range }
+		: null;
 	return {
 		id: `s${index + 1}`,
 		name: step.name || `Step ${index + 1}`,
@@ -154,8 +207,11 @@ function segmentFromStep(step: ProfileStep, index: number): ProfileSegment {
 		target: step.target,
 		ramp: step.transition === 'Smooth' ? 'smooth' : 'fast',
 		time: Math.round(step.duration_seconds),
-		exitAt,
-		temperatureC: step.temperature_c
+		exit,
+		temperatureC: step.temperature_c,
+		tempSensor: step.temp_sensor === 'Mix' ? 'mix' : 'basket',
+		volumeLimitMl: step.volume_limit_ml,
+		limiter
 	};
 }
 
@@ -166,15 +222,20 @@ export function segmentToStep(seg: ProfileSegment): ProfileStep {
 		pump: seg.mode === 'flow' ? 'Flow' : 'Pressure',
 		target: seg.target,
 		temperature_c: seg.temperatureC,
-		temp_sensor: 'Basket',
+		temp_sensor: seg.tempSensor === 'mix' ? 'Mix' : 'Basket',
 		transition: seg.ramp === 'smooth' ? 'Smooth' : 'Fast',
 		duration_seconds: seg.time,
-		// The shell edits the human exit label only; the structured exit
-		// condition is dropped on the round-trip (built-ins keep theirs in
-		// `core-types`-land, custom profiles do not set machine exit gates yet).
-		exit: null,
-		volume_limit_ml: 0,
-		limiter: null
+		// The structured exit condition round-trips losslessly — the lowercase
+		// shell enums map back to the core's PascalCase variants.
+		exit: seg.exit
+			? {
+					metric: seg.exit.metric === 'pressure' ? 'Pressure' : 'Flow',
+					compare: seg.exit.compare === 'over' ? 'Over' : 'Under',
+					threshold: seg.exit.threshold
+				}
+			: null,
+		volume_limit_ml: seg.volumeLimitMl,
+		limiter: seg.limiter ? { value: seg.limiter.value, range: seg.limiter.range } : null
 	};
 }
 
@@ -307,6 +368,10 @@ export function fromCoreProfile(profile: Profile, index: number): CremaProfile {
 		brewTemp: Math.round(meanTemp * 2) / 2,
 		stopOnWeight: true,
 		autoTare: true,
+		preinfuseStepCount: profile.preinfuse_step_count,
+		minimumPressure: profile.minimum_pressure,
+		maximumFlow: profile.maximum_flow,
+		maxTotalVolumeMl: profile.max_total_volume_ml,
 		segments
 	};
 }
@@ -321,10 +386,12 @@ export function toCoreProfile(p: CremaProfile): Profile {
 		title: p.name,
 		notes: p.notes,
 		steps: p.segments.map(segmentToStep),
-		preinfuse_step_count: p.segments.length > 0 ? 1 : 0,
-		minimum_pressure: 1,
-		maximum_flow: 6,
-		max_total_volume_ml: 0
+		// Clamp the preinfuse count to the actual segment range — a profile can
+		// never count more leading preinfusion steps than it has segments.
+		preinfuse_step_count: Math.min(p.preinfuseStepCount, p.segments.length),
+		minimum_pressure: p.minimumPressure,
+		maximum_flow: p.maximumFlow,
+		max_total_volume_ml: p.maxTotalVolumeMl
 	};
 }
 
@@ -338,8 +405,11 @@ export function defaultSegments(): ProfileSegment[] {
 			target: 4.0,
 			ramp: 'smooth',
 			time: 8,
-			exitAt: 'flow > 4 ml/s',
-			temperatureC: 92
+			exit: { metric: 'flow', compare: 'over', threshold: 4 },
+			temperatureC: 92,
+			tempSensor: 'basket',
+			volumeLimitMl: 0,
+			limiter: null
 		},
 		{
 			id: 's2',
@@ -348,8 +418,11 @@ export function defaultSegments(): ProfileSegment[] {
 			target: 9.0,
 			ramp: 'smooth',
 			time: 4,
-			exitAt: null,
-			temperatureC: 92
+			exit: null,
+			temperatureC: 92,
+			tempSensor: 'basket',
+			volumeLimitMl: 0,
+			limiter: null
 		},
 		{
 			id: 's3',
@@ -358,8 +431,11 @@ export function defaultSegments(): ProfileSegment[] {
 			target: 9.0,
 			ramp: 'fast',
 			time: 12,
-			exitAt: null,
-			temperatureC: 92
+			exit: null,
+			temperatureC: 92,
+			tempSensor: 'basket',
+			volumeLimitMl: 0,
+			limiter: null
 		},
 		{
 			id: 's4',
@@ -368,8 +444,11 @@ export function defaultSegments(): ProfileSegment[] {
 			target: 6.0,
 			ramp: 'smooth',
 			time: 8,
-			exitAt: 'weight ≥ target',
-			temperatureC: 92
+			exit: null,
+			temperatureC: 92,
+			tempSensor: 'basket',
+			volumeLimitMl: 0,
+			limiter: null
 		}
 	];
 }
@@ -390,6 +469,10 @@ export function blankProfile(): CremaProfile {
 		brewTemp: 93,
 		stopOnWeight: true,
 		autoTare: true,
+		preinfuseStepCount: 1,
+		minimumPressure: 0,
+		maximumFlow: 6,
+		maxTotalVolumeMl: 0,
 		segments: defaultSegments()
 	};
 }
