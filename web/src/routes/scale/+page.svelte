@@ -45,9 +45,9 @@
 	/** The connected scale's advertised name, or a placeholder. */
 	const scaleName = $derived(snap?.scaleName ?? (connected ? 'Scale' : 'No scale'));
 	/** The latest scale weight, grams, or `null` before the first reading. */
-	const weightG = $derived(snap?.scaleWeightG ?? null);
+	const weightG = $derived(snap?.scaleWeight ?? null);
 	/** The scale's battery charge, %, or `null`. */
-	const battery = $derived(snap?.scaleBatteryPercent ?? null);
+	const battery = $derived(snap?.scaleBattery ?? null);
 	/** The scale's firmware version string, or `null`. */
 	const firmware = $derived(snap?.scaleFirmware ?? null);
 	/** The scale's serial number, or `null`. */
@@ -59,9 +59,9 @@
 
 	// ── Decoded-but-unshown scale data (F1) ──────────────────────────────
 	/** The scale's own built-in-timer reading, ms, or `null` when not reported. */
-	const timerMs = $derived(snap?.scaleTimerMs ?? null);
+	const timerMs = $derived(snap?.scaleTimer ?? null);
 	/** The scale's own native mass-flow rate, g/s, or `null` when not reported. */
-	const deviceFlow = $derived(snap?.scaleFlowGPerS ?? null);
+	const deviceFlow = $derived(snap?.scaleFlow ?? null);
 	/** The built-in timer formatted `M:SS`, or a dash before the first reading. */
 	const timerLabel = $derived.by(() => {
 		if (timerMs == null) return '–';

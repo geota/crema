@@ -87,9 +87,9 @@ export class HistoryStore {
 		let peakPressure = 0;
 		let peakTemp = 0;
 		for (const s of series) {
-			if (s.weightG != null) {
-				if (peakWeight == null || s.weightG > peakWeight) peakWeight = s.weightG;
-				finalWeight = s.weightG;
+			if (s.weight != null) {
+				if (peakWeight == null || s.weight > peakWeight) peakWeight = s.weight;
+				finalWeight = s.weight;
 			}
 			if (s.pressure > peakPressure) peakPressure = s.pressure;
 			if (s.temp > peakTemp) peakTemp = s.temp;

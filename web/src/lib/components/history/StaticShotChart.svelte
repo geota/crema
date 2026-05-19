@@ -48,11 +48,11 @@
 		const temp: (number | null)[] = [];
 		const weight: (number | null)[] = [];
 		for (const s of samples) {
-			xs.push(s.elapsedMs / 1000);
+			xs.push(s.elapsed / 1000);
 			pressure.push(s.pressure ?? null);
 			flow.push(s.flow ?? null);
 			temp.push(s.temp == null ? null : s.temp / 10);
-			weight.push(s.weightG == null ? null : s.weightG / 10);
+			weight.push(s.weight == null ? null : s.weight / 10);
 		}
 		return [xs, pressure, flow, temp, weight];
 	}

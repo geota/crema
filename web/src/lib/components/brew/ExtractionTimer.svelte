@@ -5,7 +5,7 @@
 	 * class names.
 	 *
 	 * Wired to real data: `seconds` is the live shot elapsed time from
-	 * `lib/state` (`shotElapsedMs / 1000`); `step` is the current shot phase.
+	 * `lib/state` (`shotElapsed / 1000`); `step` is the current shot phase.
 	 */
 	let {
 		seconds,

@@ -133,7 +133,7 @@
 	/** The latest 4-channel sample, or null when no telemetry has arrived. */
 	const tel = $derived(ui.latestTelemetry);
 	/** Shot elapsed time, seconds — live; resets to 0 between shots. */
-	const elapsedSec = $derived(ui.shotElapsedMs / 1000);
+	const elapsedSec = $derived(ui.shotElapsed / 1000);
 	/** The just-finished shot's summary, or null. */
 	const lastShot = $derived(ui.completedShot);
 	/** Show the Last-shot card once a shot has finished, until the next starts. */
@@ -172,7 +172,7 @@
 	const steamTempM = $derived(convertTemp(tel?.steamTemp, prefs.tempUnit));
 
 	/** Live weight (g) — from the scale stream, independent of shot state. */
-	const weight = $derived(ui.scaleWeightG);
+	const weight = $derived(ui.scaleWeight);
 	/** Weight readout, in the chosen weight unit. */
 	const weightM = $derived(convertWeight(weight, prefs.weightUnit));
 	/**
@@ -203,7 +203,7 @@
 	 * depth (mm) mapped through the de1app tank-geometry table, or `null`
 	 * before the first reading.
 	 */
-	const waterMl = $derived(waterTankMl(ui.waterLevelMm));
+	const waterMl = $derived(waterTankMl(ui.waterLevel));
 	/** The water-tank volume formatted in the chosen volume unit. */
 	const convertVolumeText = (ml: number | null): string => {
 		const m = convertVolume(ml, prefs.volumeUnit);
@@ -211,7 +211,7 @@
 	};
 	/** Whether the tank is near the DE1's refill threshold — the E2 cue. */
 	const refillSoon = $derived(
-		waterRefillSoon(ui.waterLevelMm, ui.waterRefillThresholdMm)
+		waterRefillSoon(ui.waterLevel, ui.waterRefillThreshold)
 	);
 
 	// ── Quick Sheet callbacks ────────────────────────────────────────────
