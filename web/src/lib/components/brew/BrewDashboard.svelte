@@ -239,7 +239,7 @@
 					     Sheet is closed; the open sheet would overlap them. -->
 					{#if !quickSheetOpen}
 						<PhaseIndicatorCard seconds={elapsedSec} preinf={p.preinf} />
-						<BeanContextCard profile={activeProfile} grind={p.grind} />
+						<BeanContextCard grind={p.grind} />
 					{/if}
 				</div>
 			</div>

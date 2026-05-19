@@ -4,11 +4,13 @@
 	 * `ProfileCard` in `profiles-page.jsx`.
 	 *
 	 * Structure (per SCREENS.md §3): a header row (the "Active" pill + the pin
-	 * star), the `ProfilePreview` 3-curve mini-chart, the serif name + bean ·
-	 * last-used line, roast + custom-tag chips, a 4-up metric grid, the notes
-	 * (2-line clamp), and the action row (Load on Brew, duplicate, edit,
-	 * overflow). All real data — the profile is a `CremaProfile` from the
-	 * library store.
+	 * star), the `ProfilePreview` 3-curve mini-chart, the serif name + last-used
+	 * line, roast + custom-tag chips, a 4-up metric grid, the notes (2-line
+	 * clamp), and the action row (Load on Brew, duplicate, edit, overflow). All
+	 * real data — the profile is a `CremaProfile` from the library store.
+	 *
+	 * The card carries no bean line: a bag of coffee is not profile-scoped (see
+	 * `$lib/bean`), so the meta line shows only the relative last-used time.
 	 */
 	import ProfilePreview from './ProfilePreview.svelte';
 	import {
@@ -75,7 +77,7 @@
 	<div class="pp-card-body">
 		<div class="pp-card-name">{profile.name || 'Untitled profile'}</div>
 		<div class="pp-card-bean">
-			{profile.bean || (profile.source === 'builtin' ? 'Built-in profile' : 'No bean set')}
+			{profile.source === 'builtin' ? 'Built-in profile' : 'Custom profile'}
 			· {profile.lastUsed ?? 'never used'}
 		</div>
 

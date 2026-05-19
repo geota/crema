@@ -11,8 +11,12 @@
  * uploaded to the DE1 — see the `// TODO` in `store.ts`).
  *
  * A `CremaProfile` additionally carries the **library** metadata the cards and
- * editor need (bean, roast, custom tags, pinned, last-used) which the core's
+ * editor need (roast, custom tags, pinned, last-used) which the core's
  * `Profile` has no field for — those are shell-only and live in localStorage.
+ *
+ * Note `roast` is **recipe-suitability** metadata (which roast a recipe is
+ * tuned for — it drives the Profiles page Light/Med/Dark filter), not bean
+ * identity. The bag of coffee you are actually pulling lives in `$lib/bean`.
  */
 
 import type { Profile, ProfileStep, SparkShape } from './core-types';
@@ -62,11 +66,9 @@ export interface CremaProfile {
 	source: 'builtin' | 'custom';
 	/** Display name (serif). */
 	name: string;
-	/** Bean / origin. */
-	bean: string;
 	/** Free-text notes. */
 	notes: string;
-	/** Roast level, or `null` when no roast is clearly known. */
+	/** Roast level the recipe is tuned for, or `null` when not clearly known. */
 	roast: Roast | null;
 	/** Custom user tags (Guest, Daily, names…). */
 	tags: string[];
@@ -276,13 +278,13 @@ function roastFromProfile(profile: Profile): Roast | null {
 /**
  * Adapt a core built-in {@link Profile} into a library {@link CremaProfile}.
  *
- * The core `Profile` has no library metadata (bean, roast, tags, dose…), so
- * those are synthesised: bean is left blank, roast is classified from the
- * profile's title **and** notes ({@link roastFromProfile}) and otherwise left
- * unset (`null`), tea profiles pick up a `'tea'` tag, dose / yield default to
- * a sane 18 g / 36 g, and the brew temperature is the profile's mean step
- * temperature. The result is read-only — editing a built-in duplicates it to
- * a custom profile (see `store.ts`).
+ * The core `Profile` has no library metadata (roast, tags, dose…), so those
+ * are synthesised: roast is classified from the profile's title **and** notes
+ * ({@link roastFromProfile}) and otherwise left unset (`null`), tea profiles
+ * pick up a `'tea'` tag, dose / yield default to a sane 18 g / 36 g, and the
+ * brew temperature is the profile's mean step temperature. The result is
+ * read-only — editing a built-in duplicates it to a custom profile (see
+ * `store.ts`).
  */
 export function fromCoreProfile(profile: Profile, index: number): CremaProfile {
 	const segments = profile.steps.map(segmentFromStep);
@@ -295,7 +297,6 @@ export function fromCoreProfile(profile: Profile, index: number): CremaProfile {
 		id: `builtin:${index}`,
 		source: 'builtin',
 		name: profile.title,
-		bean: '',
 		notes: profile.notes,
 		roast: roastFromProfile(profile),
 		tags,
@@ -379,7 +380,6 @@ export function blankProfile(): CremaProfile {
 		id: uid('custom'),
 		source: 'custom',
 		name: '',
-		bean: '',
 		notes: '',
 		roast: null,
 		tags: [],

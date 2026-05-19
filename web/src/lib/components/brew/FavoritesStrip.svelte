@@ -37,10 +37,7 @@
 	const items = $derived.by(() => {
 		const q = query.trim().toLowerCase();
 		if (q === '') return profiles;
-		return profiles.filter(
-			(p) =>
-				p.name.toLowerCase().includes(q) || p.bean.toLowerCase().includes(q)
-		);
+		return profiles.filter((p) => p.name.toLowerCase().includes(q));
 	});
 
 	/**

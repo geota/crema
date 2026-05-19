@@ -279,16 +279,6 @@
 
 				<div class="pe-section">
 					<div class="pe-field">
-						<label class="t-eyebrow" for="pe-bean">Bean</label>
-						<input
-							id="pe-bean"
-							class="pe-input"
-							value={draft.bean}
-							placeholder="Bean name or origin"
-							oninput={(e) => patch({ bean: e.currentTarget.value })}
-						/>
-					</div>
-					<div class="pe-field">
 						<label class="t-eyebrow" for="pe-notes">Notes</label>
 						<textarea
 							id="pe-notes"

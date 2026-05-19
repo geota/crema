@@ -13,7 +13,24 @@
  * live `LiveChart` draws an in-progress one.
  */
 
+import type { Roast } from '$lib/profiles';
 import type { TelemetrySample } from '$lib/state';
+
+/**
+ * A snapshot of the current bean at the moment a shot was pulled. Stored on
+ * the {@link ShotRecord} so a later change to the current bean cannot rewrite
+ * history — days-off-roast is derived from `roastedOn` against the shot's own
+ * `completedAt`. Optional: a shot recorded before this field existed (or with
+ * no bean logged) simply has none.
+ */
+export interface ShotBean {
+	/** Bean name / origin when the shot was pulled. */
+	readonly name: string;
+	/** Roast level when the shot was pulled, or `null`. */
+	readonly roastLevel: Roast | null;
+	/** ISO `yyyy-mm-dd` roast date when the shot was pulled, or `null`. */
+	readonly roastedOn: string | null;
+}
 
 /** A short id for a stored shot — `crypto.randomUUID` if present. */
 export function shotId(): string {
@@ -47,6 +64,12 @@ export interface ShotRecord {
 	readonly peakTemp: number;
 	/** The buffered telemetry series — what the curve chart redraws from. */
 	readonly series: readonly TelemetrySample[];
+	/**
+	 * A snapshot of the current bean when the shot was pulled, or `null` when
+	 * no bean was logged. Pre-existing records have no `bean` — treat it as
+	 * optional everywhere it is read.
+	 */
+	readonly bean?: ShotBean | null;
 	/** User star rating 0–5; `0` means unrated. Editable. */
 	rating: number;
 	/** User tasting notes. Editable. */
