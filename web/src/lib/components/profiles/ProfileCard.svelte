@@ -15,7 +15,6 @@
 	import ProfilePreview from './ProfilePreview.svelte';
 	import {
 		ratioLabel,
-		sparkShape,
 		preinfuseSeconds,
 		type CremaProfile
 	} from '$lib/profiles';
@@ -45,7 +44,6 @@
 		onDelete: (id: string) => void;
 	} = $props();
 
-	const shape = $derived(sparkShape(profile.segments));
 	const ratio = $derived(ratioLabel(profile));
 	const preinf = $derived(preinfuseSeconds(profile.segments));
 	/** Built-in profiles cannot be deleted — the overflow menu hides Delete. */
@@ -72,7 +70,7 @@
 		</button>
 	</div>
 
-	<ProfilePreview id={profile.id} {shape} {preinf} {active} />
+	<ProfilePreview id={profile.id} segments={profile.segments} {active} />
 
 	<div class="pp-card-body">
 		<div class="pp-card-name">{profile.name || 'Untitled profile'}</div>

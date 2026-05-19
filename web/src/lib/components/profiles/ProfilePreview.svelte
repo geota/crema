@@ -1,63 +1,15 @@
 <script lang="ts" module>
 	/**
-	 * `ProfilePreview` — the 3-curve profile-card mini-chart, ported from
-	 * `ProfilePreview` in `profiles-page.jsx`.
+	 * `ProfilePreview` — the profile-card mini-chart.
 	 *
-	 * A decorative illustration of a profile's *shape* — pressure, flow and
-	 * temperature curves with gradient fills, a shaded pre-infusion band, a
-	 * 9-bar target hairline and channel-label chips. It is **not** real
-	 * telemetry: the curves come from a fixed silhouette table keyed on the
-	 * profile's classified {@link SparkShape}. Hand-crafted SVG by design — the
-	 * look depends on the gradient fills, so it stays SVG (uPlot is only for
-	 * real telemetry charts).
+	 * The **real** profile graph: the pressure curve and a damped "estimated
+	 * flow" ghost are computed from the profile's own segments via
+	 * `sampleCurve` (the same sampler the curve editor uses), and the
+	 * per-segment temperature is drawn as a step. Plus the design's chrome — a
+	 * shaded pre-infusion band, a 9-bar target hairline, faint gridlines,
+	 * gradient fills and channel-label chips. Hand-crafted SVG: one tiny
+	 * static chart per card, so SVG beats a uPlot instance per card.
 	 */
-
-	/** One profile shape's pressure / flow / temp control points, normalised. */
-	interface ShapeCurves {
-		/** Pressure points — `[time 0..1, value 0..1]`, 1.0 ≈ 12 bar. */
-		p: [number, number][];
-		/** Flow points — `[time 0..1, value 0..1]`, 1.0 ≈ 6 mL/s. */
-		f: [number, number][];
-		/** Temperature points — `[time 0..1, value 0..1]`. */
-		t: [number, number][];
-	}
-
-	/**
-	 * Each profile shape defines pressure + flow + temp paths in normalised
-	 * `[time 0..1, value 0..1]` coords. Verbatim from `profiles-page.jsx`.
-	 */
-	const SHAPES: Record<SparkShape, ShapeCurves> = {
-		rao: {
-			p: [[0, 0.05], [0.12, 0.45], [0.22, 0.92], [0.32, 0.82], [0.55, 0.74], [0.78, 0.66], [1, 0.58]],
-			f: [[0, 0], [0.12, 0.1], [0.25, 0.38], [0.45, 0.55], [0.7, 0.62], [0.9, 0.6], [1, 0.55]],
-			t: [[0, 0.42], [0.15, 0.46], [0.35, 0.5], [0.6, 0.52], [0.85, 0.5], [1, 0.48]]
-		},
-		blooming: {
-			p: [[0, 0.04], [0.18, 0.18], [0.3, 0.55], [0.5, 0.85], [0.72, 0.82], [0.88, 0.74], [1, 0.66]],
-			f: [[0, 0], [0.18, 0.05], [0.32, 0.18], [0.55, 0.45], [0.78, 0.58], [0.92, 0.6], [1, 0.58]],
-			t: [[0, 0.34], [0.2, 0.38], [0.4, 0.42], [0.65, 0.44], [0.9, 0.43], [1, 0.42]]
-		},
-		decline: {
-			p: [[0, 0.1], [0.12, 0.78], [0.22, 0.96], [0.38, 0.92], [0.6, 0.82], [0.82, 0.7], [1, 0.5]],
-			f: [[0, 0], [0.12, 0.12], [0.25, 0.35], [0.5, 0.55], [0.72, 0.62], [0.88, 0.65], [1, 0.62]],
-			t: [[0, 0.38], [0.15, 0.42], [0.4, 0.46], [0.65, 0.46], [0.9, 0.44], [1, 0.42]]
-		},
-		classic: {
-			p: [[0, 0.08], [0.15, 0.84], [0.3, 0.9], [0.55, 0.9], [0.78, 0.88], [0.92, 0.86], [1, 0.78]],
-			f: [[0, 0], [0.15, 0.18], [0.3, 0.42], [0.55, 0.55], [0.78, 0.6], [0.92, 0.62], [1, 0.62]],
-			t: [[0, 0.48], [0.2, 0.52], [0.45, 0.55], [0.7, 0.56], [0.92, 0.55], [1, 0.54]]
-		},
-		turbo: {
-			p: [[0, 0.15], [0.1, 0.65], [0.22, 0.7], [0.45, 0.7], [0.68, 0.7], [0.88, 0.7], [1, 0.68]],
-			f: [[0, 0], [0.1, 0.32], [0.22, 0.55], [0.45, 0.7], [0.68, 0.78], [0.88, 0.8], [1, 0.8]],
-			t: [[0, 0.38], [0.15, 0.42], [0.4, 0.44], [0.65, 0.44], [0.9, 0.42], [1, 0.4]]
-		},
-		cold: {
-			p: [[0, 0.06], [0.22, 0.22], [0.4, 0.42], [0.6, 0.55], [0.78, 0.62], [0.92, 0.62], [1, 0.6]],
-			f: [[0, 0], [0.22, 0.04], [0.42, 0.18], [0.62, 0.36], [0.8, 0.5], [0.92, 0.55], [1, 0.55]],
-			t: [[0, 0.18], [0.2, 0.22], [0.4, 0.24], [0.65, 0.24], [0.9, 0.22], [1, 0.2]]
-		}
-	};
 
 	// Geometry — the design's fixed 300×108 viewbox + margins.
 	const W = 300;
@@ -67,66 +19,107 @@
 	const CH = H - M.t - M.b;
 
 	/**
-	 * Smooth a normalised point list into an SVG path via Catmull-Rom-to-Bézier
-	 * — verbatim from `profiles-page.jsx`'s `toPath`.
+	 * A straight-segment SVG path through the points. The curve shape is
+	 * already baked into the dense `sampleCurve` samples, so no extra
+	 * smoothing is applied — that would distort the real curve.
 	 */
-	function toPath(pts: [number, number][]): string {
-		const P = pts.map(([x, y]): [number, number] => [M.l + x * CW, M.t + (1 - y) * CH]);
-		let d = `M ${P[0][0].toFixed(1)} ${P[0][1].toFixed(1)}`;
-		for (let i = 0; i < P.length - 1; i++) {
-			const p0 = P[i - 1] ?? P[i];
-			const p1 = P[i];
-			const p2 = P[i + 1];
-			const p3 = P[i + 2] ?? p2;
-			const c1x = p1[0] + (p2[0] - p0[0]) / 6;
-			const c1y = p1[1] + (p2[1] - p0[1]) / 6;
-			const c2x = p2[0] - (p3[0] - p1[0]) / 6;
-			const c2y = p2[1] - (p3[1] - p1[1]) / 6;
-			d += ` C ${c1x.toFixed(1)} ${c1y.toFixed(1)}, ${c2x.toFixed(1)} ${c2y.toFixed(1)}, ${p2[0].toFixed(1)} ${p2[1].toFixed(1)}`;
+	function polyPath(pts: readonly [number, number][]): string {
+		if (pts.length === 0) return '';
+		let d = `M ${pts[0][0].toFixed(1)} ${pts[0][1].toFixed(1)}`;
+		for (let i = 1; i < pts.length; i++) {
+			d += ` L ${pts[i][0].toFixed(1)} ${pts[i][1].toFixed(1)}`;
 		}
 		return d;
 	}
 
 	/** Close a stroke path down to the baseline for the gradient fill. */
-	function areaPath(pts: [number, number][]): string {
-		const stroke = toPath(pts);
-		const lastX = M.l + pts[pts.length - 1][0] * CW;
-		const firstX = M.l + pts[0][0] * CW;
-		const baseY = M.t + CH;
-		return `${stroke} L ${lastX.toFixed(1)} ${baseY.toFixed(1)} L ${firstX.toFixed(1)} ${baseY.toFixed(1)} Z`;
+	function areaPath(pts: readonly [number, number][]): string {
+		if (pts.length === 0) return '';
+		const baseY = (M.t + CH).toFixed(1);
+		return `${polyPath(pts)} L ${pts[pts.length - 1][0].toFixed(1)} ${baseY} L ${pts[0][0].toFixed(1)} ${baseY} Z`;
 	}
 </script>
 
 <script lang="ts">
-	import type { SparkShape } from '$lib/components/brew/QSparkline.svelte';
+	import {
+		sampleCurve,
+		totalTime,
+		preinfuseSeconds,
+		sparkShape,
+		type ProfileSegment
+	} from '$lib/profiles';
 
 	let {
 		id,
-		shape,
-		preinf,
+		segments,
 		active = false
 	}: {
 		/** The owning profile's id — namespaces the gradient `<defs>`. */
 		id: string;
-		/** The classified curve silhouette. */
-		shape: SparkShape;
-		/** Leading pre-infusion seconds — drives the shaded band + axis label. */
-		preinf: number;
+		/** The profile's segments — the real curve is computed from these. */
+		segments: ProfileSegment[];
 		/** Whether the owning card is the active profile (warmer accent). */
 		active?: boolean;
 	} = $props();
 
-	/** The curve control points for this shape. */
-	const curves = $derived(SHAPES[shape] ?? SHAPES.classic);
+	/** Flow-ghost damping — matches the curve editor's `dampFlow`. */
+	function dampFlow(target: number): number {
+		return Math.min(4, target * 0.35 + 0.5);
+	}
 
+	/** Total shot time — the x extent (≥ 1 s to avoid a zero-width axis). */
+	const total = $derived(Math.max(1, totalTime(segments)));
+	/** Leading pre-infusion seconds — drives the shaded band + axis label. */
+	const preinf = $derived(preinfuseSeconds(segments));
+	/** A coarse silhouette name for the top-right meta tag. */
+	const shape = $derived(sparkShape(segments));
 	/** A unique-per-profile gradient id prefix. */
 	const fid = $derived(`pp-grad-${id}`);
 
-	const pressureStroke = $derived(toPath(curves.p));
-	const pressureArea = $derived(areaPath(curves.p));
-	const flowStroke = $derived(toPath(curves.f));
-	const flowArea = $derived(areaPath(curves.f));
-	const tempStroke = $derived(toPath(curves.t));
+	/** Time (s) → SVG x. */
+	function sx(t: number): number {
+		return M.l + (t / total) * CW;
+	}
+	/** A bar / flow value on the 0–12 scale → SVG y. */
+	function syBar(v: number): number {
+		return M.t + (1 - Math.min(12, Math.max(0, v)) / 12) * CH;
+	}
+	/**
+	 * A temperature (°C) → SVG y. 80–105 °C is kept to the upper band so the
+	 * temp line reads as a context strip and doesn't fight the pressure sweep.
+	 */
+	function syTemp(c: number): number {
+		const f = Math.min(1, Math.max(0, (c - 80) / 25));
+		return M.t + (1 - (0.58 + f * 0.37)) * CH;
+	}
+
+	/** The real pressure curve, scaled to the viewbox. */
+	const pressurePts = $derived.by<[number, number][]>(() => {
+		const s = sampleCurve(segments);
+		return s.time.map((t, i) => [sx(t), syBar(s.value[i])]);
+	});
+	/** The damped "estimated flow" ghost, scaled to the viewbox. */
+	const flowPts = $derived.by<[number, number][]>(() => {
+		const s = sampleCurve(segments, dampFlow);
+		return s.time.map((t, i) => [sx(t), syBar(s.value[i])]);
+	});
+	/** The per-segment temperature, as a stepped polyline. */
+	const tempPts = $derived.by<[number, number][]>(() => {
+		const out: [number, number][] = [];
+		let t = 0;
+		for (const seg of segments) {
+			const y = syTemp(seg.temperatureC);
+			out.push([sx(t), y], [sx(t + seg.time), y]);
+			t += seg.time;
+		}
+		return out;
+	});
+
+	const pressureStroke = $derived(polyPath(pressurePts));
+	const pressureArea = $derived(areaPath(pressurePts));
+	const flowStroke = $derived(polyPath(flowPts));
+	const flowArea = $derived(areaPath(flowPts));
+	const tempStroke = $derived(polyPath(tempPts));
 
 	/** Pre-infusion zone — `preinf` seconds, visual span capped at 30 s. */
 	const preinfFrac = $derived(Math.min(preinf / 30, 0.45));
