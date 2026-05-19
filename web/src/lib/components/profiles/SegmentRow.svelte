@@ -234,16 +234,18 @@
 	<div class="pe-seg-exit">
 		<div class="pe-seg-exit-head">
 			{@render togLabel('Exit', exitOn, toggleExit)}
+			<div class="pe-seg-ctl" class:is-off={!exitOn}>
+				<QSplitLabel
+					options={[
+						{ id: 'pressure', label: 'Pressure' },
+						{ id: 'flow', label: 'Flow' }
+					]}
+					value={exitView.metric}
+					onChange={(m) => patchExit({ metric: m as SegmentExit['metric'] })}
+				/>
+			</div>
 		</div>
 		<div class="pe-seg-ctl" class:is-off={!exitOn}>
-			<QSplitLabel
-				options={[
-					{ id: 'pressure', label: 'Pressure' },
-					{ id: 'flow', label: 'Flow' }
-				]}
-				value={exitView.metric}
-				onChange={(m) => patchExit({ metric: m as SegmentExit['metric'] })}
-			/>
 			<QStepper
 				value={exitView.threshold}
 				unit={exitUnit}
@@ -322,12 +324,12 @@
 			minmax(104px, 0.8fr)
 			minmax(128px, 0.95fr)
 			minmax(112px, 0.85fr)
-			minmax(150px, 1fr)
+			minmax(170px, 1.05fr)
 			minmax(262px, 1.5fr)
 			32px;
 		gap: 12px;
 		align-items: start;
-		min-width: 1180px;
+		min-width: 1200px;
 		padding: 10px 14px;
 		background: var(--espresso-900);
 		border: 1px solid rgba(244, 237, 224, 0.05);
@@ -448,6 +450,7 @@
 	.pe-seg-exit-head {
 		display: flex;
 		align-items: center;
+		gap: 8px;
 		min-height: 16px;
 	}
 	/* The over/under comparator — a `>` / `<` symbol left of the threshold,
