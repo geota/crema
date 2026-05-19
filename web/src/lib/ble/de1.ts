@@ -20,6 +20,7 @@
  */
 
 import type { CremaCore, NotificationSource } from '$lib/core';
+import { getCaptureRecorder } from '$lib/capture';
 import { describeError } from '$lib/utils/error';
 import { De1Uuids } from './de1-uuids';
 import { BleDevice, requestDevice, type ConnState } from './transport';
@@ -218,6 +219,9 @@ export class De1Manager {
 					notificationCount: total,
 					lastNotificationAtMs: notification.atMs
 				});
+				// Tee the raw bytes into the capture recorder so the orchestrator
+				// can persist a replayable JSONL slice on each ShotCompleted.
+				getCaptureRecorder().record(source, notification.data, notification.atMs);
 				void this.core
 					.onNotification(source, notification.data, notification.atMs)
 					.then(this.callbacks.onCoreOutput)
@@ -265,10 +269,14 @@ export class De1Manager {
 					De1Uuids.SERVICE,
 					De1Uuids.VERSION
 				);
+				// One `now` so the capture entry and the core see the same
+				// timestamp — keeps the recorded `t` aligned with the core's clock.
+				const now = performance.now();
+				getCaptureRecorder().record('De1Version', versionBytes, now);
 				const output = await this.core.onNotification(
 					'De1Version',
 					versionBytes,
-					performance.now()
+					now
 				);
 				this.callbacks.onCoreOutput(output);
 				this.callbacks.onStatus('DE1 firmware version read ✓');

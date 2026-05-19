@@ -13,7 +13,6 @@ export {
 	shotId,
 	ratioLabel,
 	stars,
-	shotJsonl,
 	shotFilename
 } from './model';
 

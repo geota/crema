@@ -74,11 +74,13 @@ export class HistoryStore {
 	 * prepends the new record (newest first), caps the list and persists.
 	 *
 	 * A series with no samples — a shot that ended before any telemetry — is
-	 * dropped: there is nothing to draw and nothing useful to keep.
+	 * dropped: there is nothing to draw and nothing useful to keep. Returns the
+	 * newly-created record (so the caller can key per-shot side effects like
+	 * the IndexedDB capture store), or `null` when the shot was dropped.
 	 */
-	record(completion: ShotCompletion): void {
+	record(completion: ShotCompletion): ShotRecord | null {
 		const series = completion.series;
-		if (series.length === 0) return;
+		if (series.length === 0) return null;
 
 		let peakWeight: number | null = null;
 		let finalWeight: number | null = null;
@@ -110,6 +112,7 @@ export class HistoryStore {
 		};
 		this.shots = [record, ...this.shots].slice(0, MAX_RECORDS);
 		this.persist();
+		return record;
 	}
 
 	/** Update a shot's tasting notes and persist. */

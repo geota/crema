@@ -20,6 +20,7 @@ import { MachineState } from '$lib/core/crema-core';
 import { De1Manager, EMPTY_DE1_DIAGNOSTICS, ScaleManager } from '$lib/ble';
 import { getBeanStore } from '$lib/bean';
 import { getHistoryStore } from '$lib/history';
+import { getCaptureRecorder, getCaptureStore } from '$lib/capture';
 import { getProfileStore } from '$lib/profiles';
 import { getMaintenanceStore } from '$lib/maintenance';
 import { parseCaptureFile, replayEvents, ReplayAbortedError } from '$lib/replay';
@@ -72,6 +73,14 @@ const CLEARED_DE1_READOUT = {
 const MAX_TELEMETRY_GAP_S = 2;
 
 /**
+ * How far before `ShotStarted` to begin the persisted capture slice. The
+ * Idle→Espresso `MachineStateChanged` arrives a moment before `ShotStarted`;
+ * including those entries means a replayed capture produces a clean shot. A
+ * generous window (the rolling buffer is in-memory and the slice is small).
+ */
+const CAPTURE_LEAD_MS = 15_000;
+
+/**
  * The DE1 top-level states whose group flow counts toward the water-filter /
  * descale counters: an espresso shot and the two hot-water modes (hot water +
  * its rinse). Steam draws no water through the group, and idle / sleep / cal
@@ -115,6 +124,13 @@ export class CremaApp {
 	 */
 	private lastTelemetryAtMs: number | null = null;
 
+	/**
+	 * `performance.now()` of the most recent `ShotStarted` event, or `null`
+	 * before the first / between shots. Used by `ShotCompleted` to slice the
+	 * rolling BLE-capture buffer for the IndexedDB capture store.
+	 */
+	private shotStartedAtMs: number | null = null;
+
 	constructor(private readonly core: CremaCore) {
 		this.de1 = new De1Manager(core, {
 			onCoreOutput: (output) => this.applyCoreOutput(output),
@@ -141,6 +157,32 @@ export class CremaApp {
 				void this.core.queryScaleSettings().then((output) => this.applyCoreOutput(output));
 			}
 		});
+		// Best-effort: ask the browser for persistent storage (so IndexedDB
+		// captures aren't evicted under disk pressure), and garbage-collect
+		// any captures whose ShotRecord no longer exists. Fire and forget —
+		// neither is on the critical path of app readiness.
+		void this.bootCaptureStore();
+	}
+
+	/**
+	 * One-shot capture-store housekeeping at app construction: request
+	 * persistent storage, then drop captures whose `ShotRecord` has been
+	 * evicted from the history cap (or deleted by the user) since last load.
+	 */
+	private async bootCaptureStore(): Promise<void> {
+		if (typeof navigator !== 'undefined') {
+			try {
+				await navigator.storage?.persist?.();
+			} catch {
+				// Best-effort — a refusal is fine.
+			}
+		}
+		try {
+			const ids = new Set(getHistoryStore().all.map((s) => s.id));
+			await getCaptureStore().pruneTo(ids);
+		} catch {
+			// The captures DB may not be openable (private mode etc.) — fine.
+		}
 	}
 
 	// ---- CoreOutput plumbing ----------------------------------------------
@@ -174,6 +216,11 @@ export class CremaApp {
 				}
 				this.lastTelemetryAtMs = now;
 			}
+			if (event.type === 'ShotStarted') {
+				// Mark the shot's start so ShotCompleted can slice the raw BLE
+				// capture (with a lead-in) for the IndexedDB capture store.
+				this.shotStartedAtMs = performance.now();
+			}
 			if (event.type === 'ShotCompleted') {
 				const snapshot = this.state.current;
 				// Stamp a snapshot of the current bean onto the record, so a later
@@ -189,7 +236,7 @@ export class CremaApp {
 				const activeProfile = profiles.activeId
 					? profiles.get(profiles.activeId)
 					: undefined;
-				getHistoryStore().record({
+				const record = getHistoryStore().record({
 					durationMs: event.content.duration_ms,
 					profileName: snapshot.activeProfileName,
 					doseG: activeProfile?.dose ?? null,
@@ -204,6 +251,24 @@ export class CremaApp {
 								}
 							: null
 				});
+				// Persist the just-finished shot's raw BLE capture (a slice of
+				// the recorder's rolling buffer, scoped from a short lead-in
+				// before ShotStarted through completion) under the new record's
+				// id, so the ShotDetail "Download" can export a JSONL capture
+				// that drops into Advanced → Replay. Skipped during a replay —
+				// the recorder has no entries for replayed shots (the replay
+				// driver feeds the core directly, bypassing the BLE managers),
+				// so a put would persist a mismatched slice.
+				if (record && this.shotStartedAtMs !== null && this.replayAbort === null) {
+					const slice = getCaptureRecorder().slice(
+						this.shotStartedAtMs - CAPTURE_LEAD_MS,
+						performance.now()
+					);
+					if (slice.length > 0) {
+						void getCaptureStore().put(record.id, slice);
+					}
+				}
+				this.shotStartedAtMs = null;
 			}
 		}
 		for (const command of output.commands) {
