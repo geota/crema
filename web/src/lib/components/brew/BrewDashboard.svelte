@@ -238,7 +238,11 @@
 					<!-- Phase + Bean cards only fit the left column when the Quick
 					     Sheet is closed; the open sheet would overlap them. -->
 					{#if !quickSheetOpen}
-						<PhaseIndicatorCard seconds={elapsedSec} preinf={p.preinf} />
+						<PhaseIndicatorCard
+							seconds={elapsedSec}
+							frame={ui.shotFrame}
+							segments={activeProfile?.segments}
+						/>
 						<BeanContextCard grind={p.grind} />
 					{/if}
 				</div>

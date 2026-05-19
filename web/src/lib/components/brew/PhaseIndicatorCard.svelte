@@ -4,76 +4,85 @@
 	 * ported from `PhaseIndicatorCard` in `web-dashboard-v2.jsx`. Reuses the
 	 * `.crema-phase*` classes from `web-kit.css`.
 	 *
-	 * A synthetic four-phase model (Pre-infusion → Pressure ramp → Hold →
-	 * Decline) drawn as a segmented progress track. It is **display-only** and
-	 * derived from the live shot elapsed time plus the pre-infusion target — the
-	 * core does not yet expose per-phase boundaries, so the ramp / hold / decline
-	 * splits are the design's fixed synthetic durations.
+	 * The track is the **active profile's frames**: one segment per profile
+	 * segment, its width proportional to the segment's duration. The DE1
+	 * reports which frame it is executing via `Event::ShotFrameChanged`, folded
+	 * into `UiSnapshot.shotFrame`; that index drives the active segment, and the
+	 * live shot elapsed time fills the active segment's progress bar.
+	 *
+	 * Falls back to a neutral single-segment track when no profile is active.
 	 *
 	 * Only mounted on the resting Brew dashboard (Quick Sheet closed) — when the
 	 * sheet is open it would overlap the docked panel.
 	 */
+	import { totalTime, type ProfileSegment } from '$lib/profiles';
+
 	let {
 		seconds,
-		preinf = 8
+		frame,
+		segments
 	}: {
 		/** Live shot elapsed time, seconds. */
 		seconds: number;
-		/** Pre-infusion duration target, seconds — the first phase's length. */
-		preinf?: number;
+		/** Zero-based index of the profile frame the DE1 is executing. */
+		frame: number;
+		/**
+		 * The active profile's segments — one track segment each. `undefined`
+		 * when no profile is active, in which case a neutral placeholder shows.
+		 */
+		segments?: readonly ProfileSegment[];
 	} = $props();
 
-	/** A single phase in the synthetic shot model. */
-	interface Phase {
-		id: 'preinf' | 'ramp' | 'hold' | 'decline';
-		label: string;
-		tick: string;
-		start: number;
-		end: number;
+	/** The shot's total time across all segments, seconds — the track's span. */
+	const total = $derived(segments && segments.length > 0 ? totalTime(segments) : 1);
+
+	/** A short tick caption for a segment — its name, trimmed for the strip. */
+	function tickFor(seg: ProfileSegment, i: number): string {
+		return seg.name?.trim() || `Frame ${i + 1}`;
 	}
 
-	/** Typical shot length used purely for the progress visual. */
-	const TOTAL = 32;
-
-	/** The four phases, their boundaries keyed off the pre-infusion target. */
-	const phases = $derived<Phase[]>([
-		{ id: 'preinf', label: 'Pre-infusion', tick: 'Pre-inf', start: 0, end: preinf },
-		{ id: 'ramp', label: 'Pressure ramp', tick: 'Ramp', start: preinf, end: preinf + 4 },
-		{ id: 'hold', label: 'Hold', tick: 'Hold', start: preinf + 4, end: preinf + 18 },
-		{ id: 'decline', label: 'Decline', tick: 'Decline', start: preinf + 18, end: TOTAL }
-	]);
-
-	/** Clamp the elapsed time into the visual window. */
-	const t = $derived(Math.max(0, Math.min(seconds, TOTAL)));
-	/** The phase currently in progress (the last one once past TOTAL). */
-	const active = $derived(
-		phases.find((p) => t >= p.start && t < p.end) ?? phases[phases.length - 1]
-	);
-
-	/** Track-segment geometry — width %, fill % and past/active flags. */
-	const segments = $derived(
-		phases.map((ph) => {
-			const span = ph.end - ph.start;
-			const within = Math.max(0, Math.min(t, ph.end) - ph.start);
-			return {
-				id: ph.id,
-				tick: ph.tick,
-				widthPct: (span / TOTAL) * 100,
+	/**
+	 * Track-segment geometry — start time, width %, fill % and past/active
+	 * flags. The active segment is the one the DE1 reports via `frame`; its
+	 * fill follows the elapsed time within the segment's own time window.
+	 */
+	const tracks = $derived.by(() => {
+		if (!segments || segments.length === 0) {
+			return [
+				{ id: 'none', tick: 'No profile', widthPct: 100, fillPct: 0, isActive: true, isPast: false }
+			];
+		}
+		const t = Math.max(0, seconds);
+		// Clamp the reported frame into the segment range.
+		const activeIdx = Math.max(0, Math.min(frame, segments.length - 1));
+		let start = 0;
+		return segments.map((seg, i) => {
+			const span = seg.time;
+			const within = Math.max(0, Math.min(t, start + span) - start);
+			const out = {
+				id: seg.id,
+				tick: tickFor(seg, i),
+				widthPct: total > 0 ? (span / total) * 100 : 0,
 				fillPct: span > 0 ? Math.min(100, (within / span) * 100) : 0,
-				isActive: active.id === ph.id,
-				isPast: t >= ph.end
+				isActive: i === activeIdx,
+				isPast: i < activeIdx
 			};
-		})
-	);
+			start += span;
+			return out;
+		});
+	});
+
+	/** The active segment's label, for the card head. */
+	const activeLabel = $derived(tracks.find((s) => s.isActive)?.tick ?? 'Ready');
 </script>
 
 <div class="crema-target crema-phase">
 	<div class="crema-phase-head">
 		<div class="t-eyebrow">Phase</div>
-		<div class="crema-phase-name">{active.label}</div>
+		<div class="crema-phase-name">{activeLabel}</div>
 	</div>
 	<div class="crema-phase-track">
-		{#each segments as seg (seg.id)}
+		{#each tracks as seg (seg.id)}
 			<div
 				class="crema-phase-seg"
 				class:is-active={seg.isActive}
@@ -85,7 +94,7 @@
 		{/each}
 	</div>
 	<div class="crema-phase-ticks">
-		{#each segments as seg (seg.id)}
+		{#each tracks as seg (seg.id)}
 			<span class="crema-phase-tick" class:is-active={seg.isActive}>{seg.tick}</span>
 		{/each}
 	</div>
