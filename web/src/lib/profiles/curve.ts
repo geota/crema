@@ -206,12 +206,22 @@ export function sampleCurve(
 			time.push(t + STEP_EPS, t + s.time);
 			value.push(target, target);
 		} else {
-			// A cubic ease — the same smoothstep the Bézier `curvePath` traced.
+			// A cubic Bézier — the *same* curve the old SVG `curvePath` drew:
+			// control points at 40 % / 60 % of the time span, flat at the
+			// start / end value, so it eases in and out with horizontal
+			// tangents. Sampled into SMOOTH_STEPS chords for uPlot's line path.
+			const dt = s.time;
+			const c0x = t + dt * 0.4;
+			const c1x = t + dt * 0.6;
 			for (let i = 1; i <= SMOOTH_STEPS; i++) {
 				const u = i / SMOOTH_STEPS;
-				const ease = u * u * (3 - 2 * u);
-				time.push(t + u * s.time);
-				value.push(prev + (target - prev) * ease);
+				const m = 1 - u;
+				const b0 = m * m * m;
+				const b1 = 3 * m * m * u;
+				const b2 = 3 * m * u * u;
+				const b3 = u * u * u;
+				time.push(b0 * t + b1 * c0x + b2 * c1x + b3 * (t + dt));
+				value.push((b0 + b1) * prev + (b2 + b3) * target);
 			}
 		}
 		t += s.time;
