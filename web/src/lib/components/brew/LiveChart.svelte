@@ -34,16 +34,8 @@
 		series: readonly TelemetrySample[];
 	} = $props();
 
-	/**
-	 * The time window, seconds. Starts at 60 s and grows to the shot's length
-	 * so a long pull is never clipped — the same adaptive behaviour as
-	 * `StaticShotChart`.
-	 */
-	const windowSec = $derived(
-		series.length > 0
-			? Math.max(60, series[series.length - 1].elapsedMs / 1000)
-			: 60
-	);
+	/** The default x-window, seconds, before any telemetry has arrived. */
+	const BASE_WINDOW_SEC = 60;
 
 	/** Resolve a CSS custom property to a concrete colour string. */
 	function cssVar(name: string): string {
@@ -150,7 +142,7 @@
 		return out;
 	}
 
-	function buildOpts(w: number, h: number, win: number): uPlot.Options {
+	function buildOpts(w: number, h: number): uPlot.Options {
 		const gridColor = 'rgba(244,237,224,0.05)';
 		const labelColor = 'rgba(244,237,224,0.35)';
 		const yFont = '11px "JetBrains Mono", monospace';
@@ -161,7 +153,18 @@
 			cursor: { show: false },
 			legend: { show: false },
 			scales: {
-				x: { time: false, range: [0, win] },
+				// The x-window starts at 60 s and grows to the shot's length —
+				// a pull past a minute simply extends the axis to the right
+				// rather than clipping. Data-driven, like the y scale below.
+				x: {
+					time: false,
+					range: (_u, _min, dataMax) => [
+						0,
+						Number.isFinite(dataMax)
+							? Math.max(BASE_WINDOW_SEC, Math.ceil(dataMax))
+							: BASE_WINDOW_SEC
+					]
+				},
 				// One shared scale for all four channels. The top floats from 10
 				// upward so a mid-shot flow / pressure spike grows both axes.
 				y: {
@@ -180,7 +183,7 @@
 					grid: { stroke: gridColor, width: 1, dash: [2, 4] },
 					ticks: { show: false },
 					font: '11px "JetBrains Mono", monospace',
-					splits: (u) => timeSplits((u.scales.x.max ?? win) as number),
+					splits: (u) => timeSplits((u.scales.x.max ?? BASE_WINDOW_SEC) as number),
 					values: (_u, splits) => splits.map((v) => `${v}s`)
 				},
 				{
@@ -250,11 +253,7 @@
 	$effect(() => {
 		const w = Math.max(1, plotEl.clientWidth);
 		const h = Math.max(1, plotEl.clientHeight);
-		chart = new uPlot(
-			buildOpts(w, h, untrack(() => windowSec)),
-			toData(untrack(() => series)),
-			plotEl
-		);
+		chart = new uPlot(buildOpts(w, h), toData(untrack(() => series)), plotEl);
 
 		// Track the panel's live width AND height so the chart fills it and
 		// follows the Quick Sheet docking in / out.
@@ -275,14 +274,13 @@
 		};
 	});
 
-	// Push new telemetry into the existing chart instance and grow the x-window
-	// to the shot's length so a long pull is never clipped.
+	// Push new telemetry into the existing chart instance. `setData` re-runs
+	// the x/y `range` callbacks, so the x-window auto-grows past 60 s and the
+	// y-axis auto-grows with the data — no manual `setScale` needed.
 	$effect(() => {
 		const data = toData(series);
-		const win = windowSec;
 		if (!chart) return;
-		chart.setData(data, false);
-		chart.setScale('x', { min: 0, max: win });
+		chart.setData(data);
 	});
 </script>
 
