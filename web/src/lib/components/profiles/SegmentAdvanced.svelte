@@ -3,16 +3,16 @@
 	 * `SegmentAdvanced` — the advanced-settings panel for the **selected**
 	 * segment, rendered inline beneath the segment list.
 	 *
-	 * `SegmentRow` stays a compact 7-column row; the per-segment fields a DE1
-	 * profile supports beyond the row's common columns (temperature, structured
-	 * exit condition, volume limit, advanced limiter, temp sensor) live here so
-	 * the row never has to grow. Editing a field applies a partial patch to the
-	 * same segment model the row and the curve editor share.
+	 * The common per-segment fields — name, mode, target, time, temperature,
+	 * temp sensor, ramp — live on `SegmentRow` itself. This panel holds only
+	 * the rest of what a DE1 profile step supports: the per-step volume limit,
+	 * the structured exit condition, and the advanced limiter. Editing a field
+	 * applies a partial patch to the same segment model the row and the curve
+	 * editor share.
 	 *
 	 * The controls are the quick-controls primitives — `QStepper` for the
-	 * numeric fields and `QSplitLabel` for the metric / compare / sensor
-	 * toggles — and the `.qmini-tog` pill for the exit / limiter enable
-	 * switches, matching the editor's existing visual language.
+	 * numeric fields and `QSplitLabel` for the metric / compare toggles — and
+	 * the `.qmini-tog` pill for the exit / limiter enable switches.
 	 */
 	import type { ProfileSegment, SegmentExit, SegmentLimiter } from '$lib/profiles';
 	import QStepper from '$lib/components/brew/QStepper.svelte';
@@ -67,46 +67,17 @@
 		<span class="pe-adv-head-name">{seg.name}</span>
 	</div>
 
-	<div class="pe-adv-grid">
-		<!-- Temperature -->
-		<div class="pe-adv-field">
-			<div class="pe-adv-label">Temperature</div>
-			<QStepper
-				value={seg.temperatureC}
-				unit="°C"
-				min={80}
-				max={105}
-				step={0.5}
-				onChange={(v) => onEdit({ temperatureC: v })}
-			/>
-		</div>
-
-		<!-- Temp sensor -->
-		<div class="pe-adv-field">
-			<div class="pe-adv-label">Temp sensor</div>
-			<QSplitLabel
-				options={[
-					{ id: 'basket', label: 'Basket' },
-					{ id: 'mix', label: 'Mix' }
-				]}
-				value={seg.tempSensor}
-				onChange={(s) => onEdit({ tempSensor: s as ProfileSegment['tempSensor'] })}
-			/>
-		</div>
-
-		<!-- Volume limit -->
-		<div class="pe-adv-field">
-			<div class="pe-adv-label">Volume limit</div>
-			<QStepper
-				value={seg.volumeLimitMl}
-				unit="mL"
-				min={0}
-				max={1023}
-				step={5}
-				onChange={(v) => onEdit({ volumeLimitMl: Math.round(v) })}
-			/>
-			<div class="pe-adv-hint">0 = no limit</div>
-		</div>
+	<!-- Volume limit -->
+	<div class="pe-adv-field pe-adv-vol">
+		<div class="pe-adv-label">Volume limit <span class="pe-adv-hint">0 = none</span></div>
+		<QStepper
+			value={seg.volumeLimitMl}
+			unit="mL"
+			min={0}
+			max={1023}
+			step={5}
+			onChange={(v) => onEdit({ volumeLimitMl: Math.round(v) })}
+		/>
 	</div>
 
 	<!-- Exit condition -->
@@ -161,7 +132,7 @@
 			<span class="pe-adv-tog-title">Advanced limiter</span>
 		</button>
 		{#if seg.limiter}
-			<div class="pe-adv-row">
+			<div class="pe-adv-row is-two">
 				<div class="pe-adv-field">
 					<div class="pe-adv-label">Limit value</div>
 					<QStepper
@@ -193,8 +164,8 @@
 	.pe-adv {
 		display: flex;
 		flex-direction: column;
-		gap: 14px;
-		padding: 14px;
+		gap: 12px;
+		padding: 12px 14px;
 		background: rgba(193, 116, 75, 0.04);
 		border: 1px solid var(--copper-500);
 		border-radius: var(--radius-sm);
@@ -217,21 +188,23 @@
 		font-weight: 500;
 		color: var(--ink-50);
 	}
-	.pe-adv-grid {
-		display: grid;
-		grid-template-columns: repeat(3, 1fr);
-		gap: 12px;
-	}
 	.pe-adv-row {
 		display: grid;
 		grid-template-columns: repeat(3, 1fr);
 		gap: 12px;
+	}
+	.pe-adv-row.is-two {
+		grid-template-columns: repeat(2, minmax(0, 160px));
 	}
 	.pe-adv-field {
 		display: flex;
 		flex-direction: column;
 		gap: 4px;
 		min-width: 0;
+	}
+	/* The lone volume-limit field — keep it stepper-width, not full-bleed. */
+	.pe-adv-vol {
+		max-width: 200px;
 	}
 	.pe-adv-label {
 		font-family: var(--font-sans);
@@ -240,17 +213,23 @@
 		text-transform: uppercase;
 		font-weight: 600;
 		color: rgba(244, 237, 224, 0.4);
+		display: flex;
+		gap: 6px;
+		align-items: baseline;
 	}
 	.pe-adv-hint {
 		font-family: var(--font-sans);
-		font-size: 10px;
-		color: rgba(244, 237, 224, 0.35);
+		font-size: 9px;
+		letter-spacing: 0;
+		text-transform: none;
+		font-weight: 400;
+		color: rgba(244, 237, 224, 0.3);
 	}
 	.pe-adv-block {
 		display: flex;
 		flex-direction: column;
 		gap: 10px;
-		padding-top: 12px;
+		padding-top: 10px;
 		border-top: 1px solid rgba(244, 237, 224, 0.06);
 	}
 	.pe-adv-tog {
