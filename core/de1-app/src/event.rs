@@ -2,7 +2,7 @@
 //! and [`Command`]s the core emits, and the [`CoreOutput`] envelope.
 
 use de1_domain::{ShotPhase, SteamClogReason, StopReason, WaterSessionKind};
-use de1_protocol::{MachineState, SubState};
+use de1_protocol::{CalCommand, CalTarget, MachineState, MmrRegister, SubState};
 use serde::{Deserialize, Serialize};
 use typeshare::typeshare;
 
@@ -30,6 +30,12 @@ pub enum Source {
     De1WaterLevels,
     /// The DE1 version characteristic (`cuuid_01`) — BLE + firmware versions.
     De1Version,
+    /// The DE1 `ReadFromMMR` characteristic (`cuuid_05`) — the memory-mapped
+    /// register window answers a read request with a notification here.
+    De1MmrRead,
+    /// The DE1 `Calibration` characteristic (`cuuid_12`) — sensor calibration
+    /// reads (current vs. factory) answer here.
+    De1Calibration,
 }
 
 /// Something the core observed that the UI may want to react to.
@@ -207,6 +213,31 @@ pub enum Event {
         /// A human-readable firmware label, e.g. `"FW 1.4.142 (API 4)"`.
         firmware_string: String,
     },
+    /// A DE1 memory-mapped register was read back. Emitted when a
+    /// `ReadFromMMR` reply decodes to a register Crema models; one event per
+    /// register the reply carries.
+    MmrValue {
+        /// Which register this value is for.
+        register: MmrRegister,
+        /// The register's raw 32-bit value, little-endian. Some registers are
+        /// scaled (e.g. `CalibrationFlowMultiplier` is `int(1000 ×
+        /// multiplier)`); the raw word is surfaced and the reader scales it.
+        value: u32,
+    },
+    /// A DE1 sensor calibration was read back from the `Calibration`
+    /// characteristic — the current (in-use) or factory calibration for one
+    /// sensor.
+    Calibration {
+        /// Which sensor the calibration applies to.
+        target: CalTarget,
+        /// Whether this is the current (in-use) or the factory calibration —
+        /// [`CalCommand::ReadCurrent`] or [`CalCommand::ReadFactory`].
+        command: CalCommand,
+        /// The value the DE1's sensor reported at calibration time.
+        de1_reported: f32,
+        /// The externally-measured true value the DE1 was calibrated against.
+        measured: f32,
+    },
     /// An incoming notification could not be decoded.
     DecodeError {
         /// Human-readable description of the failure.
@@ -216,7 +247,7 @@ pub enum Event {
 
 /// A writable DE1 GATT characteristic. The shell maps this to a UUID.
 ///
-/// `#[non_exhaustive]`: profile-upload and MMR targets arrive later.
+/// `#[non_exhaustive]`: profile-upload targets arrive later.
 #[typeshare]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -225,6 +256,12 @@ pub enum WriteTarget {
     De1RequestedState,
     /// The DE1 steam / hot-water `ShotSettings` characteristic (`cuuid_0B`).
     De1ShotSettings,
+    /// The DE1 `ReadFromMMR` characteristic (`cuuid_05`) — an MMR read request
+    /// is *written* here; the DE1 answers on the same characteristic's notify.
+    De1MmrRequest,
+    /// The DE1 `Calibration` characteristic (`cuuid_12`) — a calibration read
+    /// request is *written* here; the DE1 answers on the same characteristic.
+    De1Calibration,
 }
 
 /// A BLE write the shell should perform on the core's behalf.

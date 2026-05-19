@@ -213,6 +213,39 @@ export type Event =
 	/** A human-readable firmware label, e.g. `"FW 1.4.142 (API 4)"`. */
 	firmware_string: string;
 }}
+	/**
+	 * A DE1 memory-mapped register was read back. Emitted when a
+	 * `ReadFromMMR` reply decodes to a register Crema models; one event per
+	 * register the reply carries.
+	 */
+	| { type: "MmrValue", content: {
+	/** Which register this value is for. */
+	register: MmrRegister;
+	/**
+	 * The register's raw 32-bit value, little-endian. Some registers are
+	 * scaled (e.g. `CalibrationFlowMultiplier` is `int(1000 ×
+	 * multiplier)`); the raw word is surfaced and the reader scales it.
+	 */
+	value: number;
+}}
+	/**
+	 * A DE1 sensor calibration was read back from the `Calibration`
+	 * characteristic — the current (in-use) or factory calibration for one
+	 * sensor.
+	 */
+	| { type: "Calibration", content: {
+	/** Which sensor the calibration applies to. */
+	target: CalTarget;
+	/**
+	 * Whether this is the current (in-use) or the factory calibration —
+	 * [`CalCommand::ReadCurrent`] or [`CalCommand::ReadFactory`].
+	 */
+	command: CalCommand;
+	/** The value the DE1's sensor reported at calibration time. */
+	de1_reported: number;
+	/** The externally-measured true value the DE1 was calibrated against. */
+	measured: number;
+}}
 	/** An incoming notification could not be decoded. */
 	| { type: "DecodeError", content: {
 	/** Human-readable description of the failure. */
@@ -363,6 +396,28 @@ export interface ScaleUuids {
 	command_write: string;
 }
 
+/** What a calibration packet asks the DE1 to do. */
+export enum CalCommand {
+	/** Read the calibration currently in use. */
+	ReadCurrent = "ReadCurrent",
+	/** Write a new calibration. */
+	Write = "Write",
+	/** Reset the sensor to its factory calibration. */
+	ResetToFactory = "ResetToFactory",
+	/** Read the factory calibration. */
+	ReadFactory = "ReadFactory",
+}
+
+/** Which sensor a calibration applies to. */
+export enum CalTarget {
+	/** The flow-rate sensor. */
+	Flow = "Flow",
+	/** The pressure sensor. */
+	Pressure = "Pressure",
+	/** The temperature sensor. */
+	Temperature = "Temperature",
+}
+
 /**
  * DE1 top-level machine state. Discriminants match the firmware `MachineState`
  * enum (see protocol §4.1).
@@ -393,6 +448,58 @@ export enum MachineState {
 	AirPurge = "AirPurge",
 	/** Scheduled-wake idle; firmware v1293 and later only. */
 	SchedIdle = "SchedIdle",
+}
+
+/**
+ * Known MMR register addresses.
+ * 
+ * This covers the registers Crema reads or writes; `docs/02-ble-protocol.md`
+ * §6.3 has the full map. [`address`](Self::address) gives the raw 24-bit
+ * address to pass to [`read_request`] / [`write_request`].
+ */
+export enum MmrRegister {
+	/** Firmware build number. */
+	FirmwareVersion = "FirmwareVersion",
+	/** Group Head Controller info bitmask (bit 0: present, bit 1: active). */
+	GhcInfo = "GhcInfo",
+	/** Tank desired water-temperature threshold, °C. */
+	TankTempThreshold = "TankTempThreshold",
+	/** Fan-on temperature threshold, °C. */
+	FanThreshold = "FanThreshold",
+	/** Machine serial number. */
+	SerialNumber = "SerialNumber",
+	/** Steam flow rate. */
+	SteamFlow = "SteamFlow",
+	/** Refill-kit presence. */
+	RefillKit = "RefillKit",
+	/** Flush flow rate. */
+	FlushFlowRate = "FlushFlowRate",
+	/** Hot-water flow rate. */
+	HotWaterFlowRate = "HotWaterFlowRate",
+	/** Hot-water dispense phase-1 flow rate. */
+	Phase1FlowRate = "Phase1FlowRate",
+	/** Hot-water dispense phase-2 flow rate. */
+	Phase2FlowRate = "Phase2FlowRate",
+	/** Hot-water idle temperature, °C. */
+	HotWaterIdleTemp = "HotWaterIdleTemp",
+	/** Group head control mode. */
+	GhcMode = "GhcMode",
+	/** Seconds of high-flow steam at the start of a steam cycle. */
+	SteamHighFlowStart = "SteamHighFlowStart",
+	/** Mains heater voltage. */
+	HeaterVoltage = "HeaterVoltage",
+	/** Espresso warmup timeout. */
+	EspressoWarmupTimeout = "EspressoWarmupTimeout",
+	/** Calibration flow multiplier (`int(1000 * multiplier)`). */
+	CalibrationFlowMultiplier = "CalibrationFlowMultiplier",
+	/** Flush timeout (`int(10 * seconds)`). */
+	FlushTimeout = "FlushTimeout",
+	/** USB charger on (1 = tablet USB charging enabled). */
+	UsbChargerOn = "UsbChargerOn",
+	/** Feature-flag bitmask (e.g. the `UserNotPresent` flag). */
+	FeatureFlags = "FeatureFlags",
+	/** Cup-warmer temperature (Bengle models only). */
+	CupWarmerTemp = "CupWarmerTemp",
 }
 
 /** Where an espresso shot is in its lifecycle. */
@@ -502,12 +609,22 @@ export enum WaterSessionKind {
 /**
  * A writable DE1 GATT characteristic. The shell maps this to a UUID.
  * 
- * `#[non_exhaustive]`: profile-upload and MMR targets arrive later.
+ * `#[non_exhaustive]`: profile-upload targets arrive later.
  */
 export enum WriteTarget {
 	/** The DE1 `RequestedState` characteristic (`cuuid_02`). */
 	De1RequestedState = "De1RequestedState",
 	/** The DE1 steam / hot-water `ShotSettings` characteristic (`cuuid_0B`). */
 	De1ShotSettings = "De1ShotSettings",
+	/**
+	 * The DE1 `ReadFromMMR` characteristic (`cuuid_05`) — an MMR read request
+	 * is *written* here; the DE1 answers on the same characteristic's notify.
+	 */
+	De1MmrRequest = "De1MmrRequest",
+	/**
+	 * The DE1 `Calibration` characteristic (`cuuid_12`) — a calibration read
+	 * request is *written* here; the DE1 answers on the same characteristic.
+	 */
+	De1Calibration = "De1Calibration",
 }
 

@@ -24,7 +24,8 @@ use de1_domain::{
     WaterMonitor,
 };
 use de1_protocol::{
-    MachineState, ShotSample, ShotSettings, StateInfo, Version, WaterLevels, requested_state,
+    CalTarget, Calibration, MachineState, MmrReadReply, MmrRegister, ShotSample, ShotSettings,
+    StateInfo, Version, WaterLevels, mmr, requested_state,
 };
 use de1_scale::{Scale, ScaleCapabilities, ScaleUuids, bookoo};
 
@@ -195,6 +196,55 @@ impl CremaCore {
         out.commands.push(Command::WriteCharacteristic {
             target: WriteTarget::De1RequestedState,
             data: vec![requested_state(state)],
+        });
+        out
+    }
+
+    /// Build a [`CoreOutput`] whose command reads one DE1 memory-mapped
+    /// register.
+    ///
+    /// MMR is request/reply: the command writes a one-word `ReadFromMMR`
+    /// request to [`WriteTarget::De1MmrRequest`]; the DE1 answers with a
+    /// notification on the [`Source::De1MmrRead`] characteristic, which
+    /// [`handle_mmr_read`](Self::handle_mmr_read) turns into an
+    /// [`Event::MmrValue`]. Shaped like
+    /// [`query_scale_settings`](Self::query_scale_settings).
+    pub fn read_mmr(&self, register: MmrRegister) -> CoreOutput {
+        let mut out = CoreOutput::default();
+        out.commands.push(Command::WriteCharacteristic {
+            target: WriteTarget::De1MmrRequest,
+            data: mmr::read_request(register.address(), 1).to_vec(),
+        });
+        out
+    }
+
+    /// Build a [`CoreOutput`] whose command reads `target`'s current (in-use)
+    /// sensor calibration.
+    ///
+    /// Request/reply, like [`read_mmr`](Self::read_mmr): the command writes a
+    /// [`Calibration`] read request to [`WriteTarget::De1Calibration`]; the
+    /// DE1 answers on the [`Source::De1Calibration`] characteristic, decoded
+    /// by [`handle_calibration`](Self::handle_calibration) into an
+    /// [`Event::Calibration`].
+    pub fn read_calibration(&self, target: CalTarget) -> CoreOutput {
+        let mut out = CoreOutput::default();
+        out.commands.push(Command::WriteCharacteristic {
+            target: WriteTarget::De1Calibration,
+            data: Calibration::read_request(target).encode().to_vec(),
+        });
+        out
+    }
+
+    /// Build a [`CoreOutput`] whose command reads `target`'s factory sensor
+    /// calibration — the calibration the machine shipped with, distinct from
+    /// the current (in-use) one [`read_calibration`](Self::read_calibration)
+    /// returns. The reply is an [`Event::Calibration`] with
+    /// [`CalCommand::ReadFactory`](de1_protocol::CalCommand::ReadFactory).
+    pub fn read_factory_calibration(&self, target: CalTarget) -> CoreOutput {
+        let mut out = CoreOutput::default();
+        out.commands.push(Command::WriteCharacteristic {
+            target: WriteTarget::De1Calibration,
+            data: Calibration::read_factory_request(target).encode().to_vec(),
         });
         out
     }
@@ -488,6 +538,8 @@ impl CremaCore {
             Source::ScaleCommand => self.handle_scale_command(data, &mut out),
             Source::De1WaterLevels => self.handle_water_levels(data, &mut out),
             Source::De1Version => self.handle_version(data, &mut out),
+            Source::De1MmrRead => Self::handle_mmr_read(data, &mut out),
+            Source::De1Calibration => Self::handle_calibration(data, &mut out),
         }
         out
     }
@@ -686,6 +738,62 @@ impl CremaCore {
             Err(e) => out.events.push(Event::DecodeError {
                 message: e.to_string(),
             }),
+        }
+    }
+
+    /// Decode and process a `ReadFromMMR` reply — the DE1's answer to an MMR
+    /// read request issued by [`read_mmr`](Self::read_mmr).
+    ///
+    /// A reply carries up to four consecutive 32-bit words from the register
+    /// window. Crema's read requests ask for one word at a known register, so
+    /// only the first word is interpreted: it is mapped back to its
+    /// [`MmrRegister`] by the echoed address and emitted as an
+    /// [`Event::MmrValue`]. A reply for an address Crema does not model is
+    /// dropped silently — not a decode failure, just an unmodelled register.
+    fn handle_mmr_read(data: &[u8], out: &mut CoreOutput) {
+        let reply = match MmrReadReply::decode(data) {
+            Ok(reply) => reply,
+            Err(e) => {
+                out.events.push(Event::DecodeError {
+                    message: e.to_string(),
+                });
+                return;
+            }
+        };
+        if let Some(register) = MmrRegister::from_address(reply.address)
+            && let Some(value) = reply.word(0)
+        {
+            out.events.push(Event::MmrValue { register, value });
+        }
+    }
+
+    /// Decode and process a `Calibration` reply — the DE1's answer to a
+    /// calibration read request issued by
+    /// [`read_calibration`](Self::read_calibration).
+    ///
+    /// Only a read reply (`ReadCurrent` / `ReadFactory`) is surfaced as an
+    /// [`Event::Calibration`]; a `Write` / `ResetToFactory` echo carries no
+    /// new information and is dropped.
+    fn handle_calibration(data: &[u8], out: &mut CoreOutput) {
+        let cal = match Calibration::decode(data) {
+            Ok(cal) => cal,
+            Err(e) => {
+                out.events.push(Event::DecodeError {
+                    message: e.to_string(),
+                });
+                return;
+            }
+        };
+        if matches!(
+            cal.command,
+            de1_protocol::CalCommand::ReadCurrent | de1_protocol::CalCommand::ReadFactory
+        ) {
+            out.events.push(Event::Calibration {
+                target: cal.target,
+                command: cal.command,
+                de1_reported: cal.de1_reported,
+                measured: cal.measured,
+            });
         }
     }
 
@@ -1157,6 +1265,124 @@ mod tests {
     fn a_truncated_version_notification_emits_a_decode_error() {
         let mut core = CremaCore::new();
         let out = core.on_notification(Source::De1Version, &[0x04, 0x0A], 0);
+        assert!(
+            out.events
+                .iter()
+                .any(|e| matches!(e, Event::DecodeError { .. }))
+        );
+    }
+
+    #[test]
+    fn read_mmr_emits_a_read_request_write() {
+        let core = CremaCore::new();
+        let out = core.read_mmr(MmrRegister::SerialNumber);
+        // The command writes a one-word ReadFromMMR request — Len byte 0, then
+        // the big-endian register address — to the MMR-request characteristic.
+        assert!(matches!(
+            out.commands.first(),
+            Some(Command::WriteCharacteristic {
+                target: WriteTarget::De1MmrRequest,
+                data,
+            }) if data[0] == 0 && data[1..4] == [0x80, 0x38, 0x30]
+        ));
+    }
+
+    #[test]
+    fn an_mmr_reply_emits_an_mmr_value_event() {
+        let mut core = CremaCore::new();
+        // A ReadFromMMR reply for the firmware-version register (0x800010),
+        // first word = 1352, little-endian.
+        let mut packet = [0u8; de1_protocol::MMR_PACKET_LEN];
+        packet[1..4].copy_from_slice(&[0x80, 0x00, 0x10]);
+        packet[4..8].copy_from_slice(&1352u32.to_le_bytes());
+        let out = core.on_notification(Source::De1MmrRead, &packet, 0);
+        assert!(out.events.iter().any(|e| matches!(
+            e,
+            Event::MmrValue {
+                register: MmrRegister::FirmwareVersion,
+                value: 1352,
+            }
+        )));
+    }
+
+    #[test]
+    fn an_mmr_reply_for_an_unmodelled_register_is_dropped() {
+        let mut core = CremaCore::new();
+        // Address 0x000000 is not a register Crema models — no event, and it
+        // is not a decode error either.
+        let packet = [0u8; de1_protocol::MMR_PACKET_LEN];
+        let out = core.on_notification(Source::De1MmrRead, &packet, 0);
+        assert!(out.events.is_empty());
+    }
+
+    #[test]
+    fn a_truncated_mmr_reply_emits_a_decode_error() {
+        let mut core = CremaCore::new();
+        let out = core.on_notification(Source::De1MmrRead, &[0x00, 0x80], 0);
+        assert!(
+            out.events
+                .iter()
+                .any(|e| matches!(e, Event::DecodeError { .. }))
+        );
+    }
+
+    #[test]
+    fn read_calibration_emits_a_read_request_write() {
+        let core = CremaCore::new();
+        let out = core.read_calibration(CalTarget::Pressure);
+        assert!(matches!(
+            out.commands.first(),
+            Some(Command::WriteCharacteristic {
+                target: WriteTarget::De1Calibration,
+                ..
+            })
+        ));
+        let out = core.read_factory_calibration(CalTarget::Flow);
+        assert!(matches!(
+            out.commands.first(),
+            Some(Command::WriteCharacteristic {
+                target: WriteTarget::De1Calibration,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn a_calibration_reply_emits_a_calibration_event() {
+        let mut core = CremaCore::new();
+        // A ReadCurrent reply for the temperature sensor: DE1 reported 92.5.
+        let packet = Calibration {
+            command: de1_protocol::CalCommand::ReadCurrent,
+            target: CalTarget::Temperature,
+            de1_reported: 92.5,
+            measured: 0.0,
+        }
+        .encode();
+        let out = core.on_notification(Source::De1Calibration, &packet, 0);
+        assert!(out.events.iter().any(|e| matches!(
+            e,
+            Event::Calibration {
+                target: CalTarget::Temperature,
+                command: de1_protocol::CalCommand::ReadCurrent,
+                de1_reported,
+                ..
+            } if (*de1_reported - 92.5).abs() < 1e-3
+        )));
+    }
+
+    #[test]
+    fn a_calibration_write_echo_emits_no_event() {
+        let mut core = CremaCore::new();
+        // A Write echo carries no new readable information — it is dropped.
+        let packet = Calibration::write(CalTarget::Flow, 1.0, 1.05).encode();
+        let out = core.on_notification(Source::De1Calibration, &packet, 0);
+        assert!(out.events.is_empty());
+    }
+
+    #[test]
+    fn a_truncated_calibration_notification_emits_a_decode_error() {
+        let mut core = CremaCore::new();
+        let out = core.on_notification(Source::De1Calibration, &[0x00; 5], 0);
         assert!(
             out.events
                 .iter()
