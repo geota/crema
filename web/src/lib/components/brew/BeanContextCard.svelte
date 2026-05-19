@@ -187,6 +187,10 @@
 		font-size: 12px;
 		padding: 7px 9px;
 		outline: 0;
+		/* `type="date"` renders its text + calendar-picker icon from the
+		   browser's color-scheme; without this the native control is dark
+		   ink on the brown field. `dark` flips it to light-on-dark. */
+		color-scheme: dark;
 	}
 	.bean-input:focus {
 		border-color: rgba(244, 237, 224, 0.25);
