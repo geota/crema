@@ -10,7 +10,7 @@
 	 * Share are stubs (`// TODO`).
 	 */
 	import type { ShotRecord } from '$lib/history';
-	import { ratioLabel } from '$lib/history';
+	import { ratioLabel, shotJsonl, shotFilename } from '$lib/history';
 	import { daysOffRoast, roastBand } from '$lib/bean';
 	import { getSettingsStore, convertWeight, convertTemp, convertPressure } from '$lib/settings';
 	import StaticShotChart from './StaticShotChart.svelte';
@@ -95,6 +95,21 @@
 		onRatingChange(shot.rating === n ? 0 : n);
 	}
 
+	/**
+	 * Download this shot's telemetry as a JSON Lines (`.jsonl`) file — one
+	 * sample per line, spanning exactly the shot start → stop (see
+	 * {@link shotJsonl}).
+	 */
+	function download(): void {
+		const blob = new Blob([shotJsonl(shot)], { type: 'application/x-ndjson' });
+		const url = URL.createObjectURL(blob);
+		const a = document.createElement('a');
+		a.href = url;
+		a.download = shotFilename(shot);
+		a.click();
+		URL.revokeObjectURL(url);
+	}
+
 	// TODO: Load-on-Brew / Save-as-profile / Share-to-Visualizer have no core
 	// backing yet — the core exposes no profile-upload path and there is no
 	// Visualizer integration. Stubbed.
@@ -126,6 +141,9 @@
 			{/if}
 		</div>
 		<div class="hi-detail-actions">
+			<button class="st-btn st-btn-secondary" onclick={download}>
+				<i class="ph ph-download-simple" aria-hidden="true"></i> Download
+			</button>
 			<button class="st-btn st-btn-secondary" onclick={loadOnBrew}>
 				<i class="ph ph-coffee" aria-hidden="true"></i> Load on Brew
 			</button>

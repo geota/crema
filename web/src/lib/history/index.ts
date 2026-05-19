@@ -12,7 +12,9 @@ export {
 	type ShotBean,
 	shotId,
 	ratioLabel,
-	stars
+	stars,
+	shotJsonl,
+	shotFilename
 } from './model';
 
 export {

@@ -104,3 +104,23 @@ export function stars(rating: number): string {
 	const n = Math.max(0, Math.min(5, Math.round(rating)));
 	return '★'.repeat(n) + '☆'.repeat(5 - n);
 }
+
+/**
+ * Serialize a shot's telemetry as JSON Lines — one {@link TelemetrySample}
+ * object per line. The series is already exactly the shot's span: the live
+ * buffer is cleared at `ShotStarted` and snapshotted at `ShotCompleted`, so
+ * the file is trimmed to shot start → stop by construction.
+ */
+export function shotJsonl(record: ShotRecord): string {
+	return record.series.map((s) => JSON.stringify(s)).join('\n') + '\n';
+}
+
+/** A timestamped `.jsonl` filename for a downloaded shot. */
+export function shotFilename(record: ShotRecord): string {
+	const d = new Date(record.completedAt);
+	const p = (n: number): string => String(n).padStart(2, '0');
+	const stamp =
+		`${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}` +
+		`-${p(d.getHours())}${p(d.getMinutes())}`;
+	return `crema-shot-${stamp}.jsonl`;
+}
