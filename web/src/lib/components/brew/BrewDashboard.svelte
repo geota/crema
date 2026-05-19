@@ -18,7 +18,7 @@
 	 * driving the machine is a separate net-new feature (see the `// TODO: wire
 	 * to DE1 control` markers in `QuickSheet.svelte` and `brew-params`).
 	 */
-	import type { UiSnapshot } from '$lib/state';
+	import { waterTankMl, type UiSnapshot } from '$lib/state';
 	import { ShotPhase } from '$lib/core/crema-core';
 	import { getProfileStore, preinfuseSeconds, type CremaProfile } from '$lib/profiles';
 	import { BrewParamState } from './brew-params.svelte';
@@ -150,6 +150,12 @@
 	const yieldPct = $derived(
 		weight == null ? 0 : Math.min(100, (weight / p.yield) * 100)
 	);
+	/**
+	 * Water-tank volume (mL) for the foot readout — the DE1's `WaterLevel`
+	 * depth (mm) mapped through the de1app tank-geometry table, or `null`
+	 * before the first reading.
+	 */
+	const waterMl = $derived(waterTankMl(ui.waterLevelMm));
 
 	// ── Quick Sheet callbacks ────────────────────────────────────────────
 	/**
@@ -292,12 +298,15 @@
 				<span class="t-eyebrow">Scale</span>
 				<span>{scaleConnected ? `${scaleName} · ${fmt(weight)} g` : 'Not paired'}</span>
 				<span class="crema-foot-divider"></span>
-				<!-- TODO: wire to DE1 control — group / steam / water readouts need
-				     the machine's structured temperatures, which the core does not
+				<!-- TODO: wire to DE1 control — the group / steam readouts need the
+				     machine's structured temperatures, which the core does not
 				     surface yet; these are the design's representative values. -->
 				<span class="t-eyebrow">Group</span><span>93.2 °C</span>
 				<span class="t-eyebrow">Steam</span><span>148 °C</span>
-				<span class="t-eyebrow">Water</span><span>OK</span>
+				<!-- Water tank: real `WaterLevel` telemetry, the sensor depth
+				     converted to a tank volume in mL (see `waterTankMl`). -->
+				<span class="t-eyebrow">Water</span>
+				<span>{waterMl == null ? '—' : `${waterMl} mL`}</span>
 			</div>
 			<!-- TODO: wire to DE1 control — starting / stopping a shot is a net-new
 			     feature; today this only flips the local `running` flag. -->

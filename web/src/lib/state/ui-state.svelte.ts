@@ -101,6 +101,13 @@ export interface UiSnapshot {
 	/** A rolling event log, newest first. */
 	readonly eventLog: readonly string[];
 
+	/**
+	 * The DE1 water-tank level in mm — the raw depth the tank sensor reports,
+	 * or `null` before the first `WaterLevel` notification. Convert to a tank
+	 * volume for display with {@link waterTankMl}.
+	 */
+	readonly waterLevelMm: number | null;
+
 	// ---- Structured telemetry (Task 3 — the brew dashboard) --------------
 	//
 	// `telemetry` above keeps the Android-parity pre-formatted line for the POC
@@ -189,6 +196,7 @@ export const INITIAL_SNAPSHOT: UiSnapshot = {
 	scaleAntiMistouch: false,
 	scaleActiveMode: null,
 	eventLog: [],
+	waterLevelMm: null,
 	latestTelemetry: null,
 	shotTelemetry: [],
 	shotInProgress: false,
@@ -197,6 +205,33 @@ export const INITIAL_SNAPSHOT: UiSnapshot = {
 	de1Diagnostics: EMPTY_DE1_DIAGNOSTICS,
 	replay: null
 };
+
+/**
+ * The DE1 tank-level → volume lookup table — mL of water in the tank at each
+ * integer mm of sensor depth. Ported verbatim from the de1app's
+ * `water_tank_level_to_milliliters` (`de1plus/vars.tcl`), the same table the
+ * DSx skin uses: the DE1 protocol only reports a depth (mm), so the tank's
+ * (non-linear) geometry has to be looked up. Index 0..67 → 0..2058 mL.
+ */
+const TANK_MM_TO_ML: readonly number[] = [
+	0, 16, 43, 70, 97, 124, 151, 179, 206, 233, 261, 288, 316, 343, 371, 398,
+	426, 453, 481, 509, 537, 564, 592, 620, 648, 676, 704, 732, 760, 788, 816,
+	844, 872, 900, 929, 957, 985, 1013, 1042, 1070, 1104, 1138, 1172, 1207,
+	1242, 1277, 1312, 1347, 1382, 1417, 1453, 1488, 1523, 1559, 1594, 1630,
+	1665, 1701, 1736, 1772, 1808, 1843, 1879, 1915, 1951, 1986, 2022, 2058
+];
+
+/**
+ * Convert a DE1 tank-level reading (mm, see {@link UiSnapshot.waterLevelMm})
+ * to the tank's water volume in mL via {@link TANK_MM_TO_ML}. Returns `null`
+ * for a missing reading; a depth past the table's range clamps to the 2058 mL
+ * ceiling — matching the de1app / DSx behaviour.
+ */
+export function waterTankMl(mm: number | null | undefined): number | null {
+	if (mm == null || !Number.isFinite(mm)) return null;
+	const i = Math.trunc(mm);
+	return i >= 0 && i < TANK_MM_TO_ML.length ? TANK_MM_TO_ML[i] : 2058;
+}
 
 /**
  * Format the Bookoo's `u16` firmware version into a `"M.m.p"` string. The
@@ -318,6 +353,7 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 		case 'WaterLevel':
 			return {
 				...snapshot,
+				waterLevelMm: event.content.level_mm,
 				eventLog: appendLog(
 					snapshot.eventLog,
 					`Water level: ${Math.round(event.content.level_mm)}mm`
