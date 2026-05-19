@@ -111,6 +111,12 @@ export interface UiSnapshot {
 	 * volume for display with {@link waterTankMl}.
 	 */
 	readonly waterLevelMm: number | null;
+	/**
+	 * The DE1 water-tank refill threshold in mm — a refill is wanted at or
+	 * below it. `null` before the first `WaterLevel` notification. Drives the
+	 * "refill soon" cue (E2).
+	 */
+	readonly waterRefillThresholdMm: number | null;
 
 	// ---- Structured telemetry (Task 3 — the brew dashboard) --------------
 	//
@@ -215,6 +221,7 @@ export const INITIAL_SNAPSHOT: UiSnapshot = {
 	scaleActiveMode: null,
 	eventLog: [],
 	waterLevelMm: null,
+	waterRefillThresholdMm: null,
 	latestTelemetry: null,
 	shotTelemetry: [],
 	shotInProgress: false,
@@ -251,6 +258,26 @@ export function waterTankMl(mm: number | null | undefined): number | null {
 	if (mm == null || !Number.isFinite(mm)) return null;
 	const i = Math.trunc(mm);
 	return i >= 0 && i < TANK_MM_TO_ML.length ? TANK_MM_TO_ML[i] : 2058;
+}
+
+/**
+ * The mm of headroom above the refill threshold at or below which a "refill
+ * soon" cue is shown (E2) — the tank is close to, but not yet at, the DE1's
+ * own refill point.
+ */
+const REFILL_SOON_MARGIN_MM = 5;
+
+/**
+ * Whether the tank is low enough to warrant a "refill soon" cue — the level
+ * is within {@link REFILL_SOON_MARGIN_MM} of (or already below) the DE1's
+ * refill threshold. `false` when either reading is missing.
+ */
+export function waterRefillSoon(
+	levelMm: number | null | undefined,
+	thresholdMm: number | null | undefined
+): boolean {
+	if (levelMm == null || thresholdMm == null) return false;
+	return levelMm <= thresholdMm + REFILL_SOON_MARGIN_MM;
 }
 
 /**
@@ -378,6 +405,7 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 			return {
 				...snapshot,
 				waterLevelMm: event.content.level_mm,
+				waterRefillThresholdMm: event.content.refill_threshold_mm,
 				eventLog: appendLog(
 					snapshot.eventLog,
 					`Water level: ${Math.round(event.content.level_mm)}mm`

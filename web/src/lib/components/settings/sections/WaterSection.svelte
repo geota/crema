@@ -5,18 +5,35 @@
 	 *
 	 * ## Real vs. stubbed
 	 *
-	 * **UI-only** — real filter / descale tracking needs the DE1's water-volume
-	 * counters, which the web shell does not expose; the maintenance cards show
-	 * the design's placeholder figures and "Mark complete" is a stub. The
-	 * water-chemistry inputs are faithful UI; they are not app preferences the
-	 * rest of the app reads, so they are kept as local state with a `// TODO`.
+	 * **Real** — the maintenance cards are driven by `$lib/maintenance`: the
+	 * DE1 has no water-volume counter, so the shell integrates group flow over
+	 * time (the de1app's approach) into a persisted litre total. The filter
+	 * capacity, litres-since-descale and hours-since-backflush all derive from
+	 * that counter plus the stored intervals; "Mark complete" rebaselines the
+	 * relevant counter.
+	 *
+	 * **UI-only** — the water-chemistry inputs are faithful UI; they are not
+	 * app preferences the rest of the app reads, so they are kept as local
+	 * state with a `// TODO`.
 	 */
+	import { getMaintenanceStore } from '$lib/maintenance';
 	import StSectionHead from '../StSectionHead.svelte';
 	import StGroup from '../StGroup.svelte';
 	import StRow from '../StRow.svelte';
 	import StSegment from '../StSegment.svelte';
 	import StValueChip from '../StValueChip.svelte';
 	import StMaintenanceCard from '../StMaintenanceCard.svelte';
+
+	const maintenance = getMaintenanceStore();
+	/** The derived filter / descale / backflush readouts — reactive. */
+	const readout = $derived(maintenance.readout);
+	/** The persisted maintenance state — for the intervals and last-done dates. */
+	const m = $derived(maintenance.current);
+
+	/** Format a Unix-ms timestamp as a short `18 May` date. */
+	function shortDate(ms: number): string {
+		return new Date(ms).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+	}
 
 	// TODO: water chemistry is not yet wired into a store the app reads; local
 	// state only, so the segment / chips feel real while previewing the IA.
@@ -35,29 +52,34 @@
 	<StMaintenanceCard
 		icon="funnel"
 		title="Water filter"
-		state="Replace in 12 days"
-		stateOk={true}
-		metric="74%"
+		state={readout.filterOk
+			? `${Math.round(readout.filterPercent)}% capacity left`
+			: 'Replace now'}
+		stateOk={readout.filterOk}
+		metric={`${Math.round(readout.filterPercent)}%`}
 		metricLabel="capacity left"
-		detail="3.4 L pulled this week · last replaced 18 May"
+		detail={`${readout.filterUsedLitres.toFixed(1)} L of ${m.filterCapacityLitres} L used · last replaced ${shortDate(m.filterAtMs)}`}
+		onComplete={() => maintenance.markFilterReplaced()}
 	/>
 	<StMaintenanceCard
 		icon="snowflake"
 		title="Descale cycle"
-		state="Overdue by 4 days"
-		stateOk={false}
-		metric="142 L"
+		state={readout.descaleOk ? 'On schedule' : 'Descale due'}
+		stateOk={readout.descaleOk}
+		metric={`${readout.descaleSinceLitres.toFixed(0)} L`}
 		metricLabel="since last descale"
-		detail="Threshold: 120 L · last descaled 14 Mar"
+		detail={`Threshold: ${m.descaleIntervalLitres} L · last descaled ${shortDate(m.descaleAtMs)}`}
+		onComplete={() => maintenance.markDescaled()}
 	/>
 	<StMaintenanceCard
 		icon="sparkle"
 		title="Backflush"
-		state="Due tomorrow"
-		stateOk={true}
-		metric="48 hr"
+		state={readout.backflushOk ? 'On schedule' : 'Backflush due'}
+		stateOk={readout.backflushOk}
+		metric={`${readout.backflushSinceHours} hr`}
 		metricLabel="since last cycle"
-		detail="Recommended every 48 hr of active shots"
+		detail={`Recommended every ${m.backflushIntervalHours} hr · last done ${shortDate(m.backflushAtMs)}`}
+		onComplete={() => maintenance.markBackflushed()}
 	/>
 </div>
 

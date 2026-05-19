@@ -20,6 +20,7 @@ import { De1Manager, EMPTY_DE1_DIAGNOSTICS, ScaleManager } from '$lib/ble';
 import { getBeanStore } from '$lib/bean';
 import { getHistoryStore } from '$lib/history';
 import { getProfileStore } from '$lib/profiles';
+import { getMaintenanceStore } from '$lib/maintenance';
 import { parseCaptureFile, replayEvents, ReplayAbortedError } from '$lib/replay';
 import { CremaUiState, DEFAULT_SCALE_STANDBY_MINUTES, DEFAULT_SCALE_VOLUME } from './ui-state.svelte';
 
@@ -45,6 +46,13 @@ export class CremaApp {
 	 * replay is running. {@link cancelReplay} aborts it.
 	 */
 	private replayAbort: AbortController | null = null;
+
+	/**
+	 * `performance.now()` of the previous `Telemetry` event, or `null` before
+	 * the first — the wall-clock anchor the water-accumulation integral (E1)
+	 * uses for its Δt. Reset on disconnect so a stale gap is never integrated.
+	 */
+	private lastTelemetryAtMs: number | null = null;
 
 	constructor(private readonly core: CremaCore) {
 		this.de1 = new De1Manager(core, {
@@ -91,6 +99,19 @@ export class CremaApp {
 	private applyCoreOutput(output: CoreOutput): void {
 		for (const event of output.events) {
 			this.state.applyEvent(event);
+			if (event.type === 'Telemetry') {
+				// Water accumulation (E1): integrate the DE1's group flow over
+				// the wall-clock gap since the previous telemetry sample, the
+				// de1app's `volume += GroupFlow × Δt` approach. The gap is
+				// capped at 2 s — the DE1 streams telemetry at ~25 Hz, so a
+				// larger gap is a stall / reconnect, not real dispensing.
+				const now = performance.now();
+				if (this.lastTelemetryAtMs !== null) {
+					const deltaS = Math.min(2, (now - this.lastTelemetryAtMs) / 1000);
+					getMaintenanceStore().accumulate(event.content.group_flow, deltaS);
+				}
+				this.lastTelemetryAtMs = now;
+			}
 			if (event.type === 'ShotCompleted') {
 				const snapshot = this.state.current;
 				// Stamp a snapshot of the current bean onto the record, so a later
@@ -181,6 +202,9 @@ export class CremaApp {
 	/** Disconnect the DE1 and clear its readout fields. */
 	async disconnectDe1(): Promise<void> {
 		await this.de1.disconnect();
+		// Drop the telemetry wall-clock anchor — the next connect must not
+		// integrate the (arbitrarily long) gap across the disconnect.
+		this.lastTelemetryAtMs = null;
 		this.state.patch({
 			machineState: null,
 			shotPhase: null,
