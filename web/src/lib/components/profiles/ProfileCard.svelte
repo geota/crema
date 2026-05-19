@@ -70,7 +70,7 @@
 		</button>
 	</div>
 
-	<ProfilePreview id={profile.id} segments={profile.segments} {active} />
+	<ProfilePreview segments={profile.segments} {active} />
 
 	<div class="pp-card-body">
 		<div class="pp-card-name">{profile.name || 'Untitled profile'}</div>

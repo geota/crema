@@ -1,272 +1,297 @@
-<script lang="ts" module>
+<script lang="ts">
 	/**
 	 * `ProfilePreview` — the profile-card mini-chart.
 	 *
-	 * The **real** profile graph: the pressure curve and a damped "estimated
-	 * flow" ghost are computed from the profile's own segments via
-	 * `sampleCurve` (the same sampler the curve editor uses), and the
-	 * per-segment temperature is drawn as a step. Plus the design's chrome — a
-	 * shaded pre-infusion band, a 9-bar target hairline, faint gridlines,
-	 * gradient fills and channel-label chips. Hand-crafted SVG: one tiny
-	 * static chart per card, so SVG beats a uPlot instance per card.
+	 * A live uPlot instance, rendered like the Brew `LiveChart`: a dashed time
+	 * grid, faint horizontal bar lines, a left bar / ml·s axis and a right °C
+	 * axis. The pressure curve, the damped "estimated flow" ghost and the
+	 * per-segment temperature step are computed from the profile's own segments
+	 * via `sampleCurve` — the same sampler the curve editor uses. Pressure and
+	 * flow carry a soft top-down gradient fill.
+	 *
+	 * One uPlot instance per card is cheap, but a gridful constructed in a
+	 * single frame would hitch on first paint — so each chart is built lazily,
+	 * only once its card scrolls within `MOUNT_MARGIN` of the viewport.
 	 */
-
-	// Geometry — the design's fixed 300×108 viewbox + margins.
-	const W = 300;
-	const H = 108;
-	const M = { t: 16, r: 14, b: 14, l: 14 };
-	const CW = W - M.l - M.r;
-	const CH = H - M.t - M.b;
-
-	/**
-	 * A straight-segment SVG path through the points. The curve shape is
-	 * already baked into the dense `sampleCurve` samples, so no extra
-	 * smoothing is applied — that would distort the real curve.
-	 */
-	function polyPath(pts: readonly [number, number][]): string {
-		if (pts.length === 0) return '';
-		let d = `M ${pts[0][0].toFixed(1)} ${pts[0][1].toFixed(1)}`;
-		for (let i = 1; i < pts.length; i++) {
-			d += ` L ${pts[i][0].toFixed(1)} ${pts[i][1].toFixed(1)}`;
-		}
-		return d;
-	}
-
-	/** Close a stroke path down to the baseline for the gradient fill. */
-	function areaPath(pts: readonly [number, number][]): string {
-		if (pts.length === 0) return '';
-		const baseY = (M.t + CH).toFixed(1);
-		return `${polyPath(pts)} L ${pts[pts.length - 1][0].toFixed(1)} ${baseY} L ${pts[0][0].toFixed(1)} ${baseY} Z`;
-	}
-</script>
-
-<script lang="ts">
-	import {
-		sampleCurve,
-		totalTime,
-		preinfuseSeconds,
-		sparkShape,
-		type ProfileSegment
-	} from '$lib/profiles';
+	import { untrack } from 'svelte';
+	import uPlot from 'uplot';
+	import 'uplot/dist/uPlot.min.css';
+	import { sampleCurve, preinfuseSeconds, type ProfileSegment } from '$lib/profiles';
 
 	let {
-		id,
 		segments,
 		active = false
 	}: {
-		/** The owning profile's id — namespaces the gradient `<defs>`. */
-		id: string;
 		/** The profile's segments — the real curve is computed from these. */
 		segments: ProfileSegment[];
-		/** Whether the owning card is the active profile (warmer accent). */
+		/** Whether the owning card is the active profile (warmer box tint). */
 		active?: boolean;
 	} = $props();
+
+	/** Build a chart once its card scrolls within this margin of the viewport. */
+	const MOUNT_MARGIN = '300px';
+
+	/** The temperature axis range, °C — matches the curve editor. */
+	const TEMP_MIN = 80;
+	const TEMP_MAX = 105;
+	/** A stepped path — temperature holds across a segment, then jumps. */
+	const tempStepPath = uPlot.paths.stepped?.({ align: 1 });
+
+	/** Leading pre-infusion seconds — shown as the top-right chip. */
+	const preinf = $derived(preinfuseSeconds(segments));
+
+	/** Resolve a CSS custom property to a concrete colour string. */
+	function cssVar(name: string): string {
+		if (typeof window === 'undefined') return '#888';
+		return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || '#888';
+	}
 
 	/** Flow-ghost damping — matches the curve editor's `dampFlow`. */
 	function dampFlow(target: number): number {
 		return Math.min(4, target * 0.35 + 0.5);
 	}
 
-	/** Total shot time — the x extent (≥ 1 s to avoid a zero-width axis). */
-	const total = $derived(Math.max(1, totalTime(segments)));
-	/** Leading pre-infusion seconds — drives the shaded band + axis label. */
-	const preinf = $derived(preinfuseSeconds(segments));
-	/** A coarse silhouette name for the top-right meta tag. */
-	const shape = $derived(sparkShape(segments));
-	/** A unique-per-profile gradient id prefix. */
-	const fid = $derived(`pp-grad-${id}`);
-
-	/** Time (s) → SVG x. */
-	function sx(t: number): number {
-		return M.l + (t / total) * CW;
-	}
-	/** A bar / flow value on the 0–12 scale → SVG y. */
-	function syBar(v: number): number {
-		return M.t + (1 - Math.min(12, Math.max(0, v)) / 12) * CH;
-	}
-	/**
-	 * A temperature (°C) → SVG y. 80–105 °C is kept to the upper band so the
-	 * temp line reads as a context strip and doesn't fight the pressure sweep.
-	 */
-	function syTemp(c: number): number {
-		const f = Math.min(1, Math.max(0, (c - 80) / 25));
-		return M.t + (1 - (0.58 + f * 0.37)) * CH;
-	}
-
-	/** The real pressure curve, scaled to the viewbox. */
-	const pressurePts = $derived.by<[number, number][]>(() => {
-		const s = sampleCurve(segments);
-		return s.time.map((t, i) => [sx(t), syBar(s.value[i])]);
-	});
-	/** The damped "estimated flow" ghost, scaled to the viewbox. */
-	const flowPts = $derived.by<[number, number][]>(() => {
-		const s = sampleCurve(segments, dampFlow);
-		return s.time.map((t, i) => [sx(t), syBar(s.value[i])]);
-	});
-	/** The per-segment temperature, as a stepped polyline. */
-	const tempPts = $derived.by<[number, number][]>(() => {
-		const out: [number, number][] = [];
+	/** The target temperature of the segment a given elapsed time falls in. */
+	function tempAt(segs: readonly ProfileSegment[], x: number): number {
 		let t = 0;
-		for (const seg of segments) {
-			const y = syTemp(seg.temperatureC);
-			out.push([sx(t), y], [sx(t + seg.time), y]);
-			t += seg.time;
+		for (const s of segs) {
+			if (x < t + s.time) return s.temperatureC;
+			t += s.time;
 		}
+		return segs[segs.length - 1]?.temperatureC ?? 93;
+	}
+
+	/**
+	 * uPlot's column arrays. Flow is column 1 and pressure column 2 so pressure
+	 * — the hero curve — draws its line and fill *on top of* the flow ghost.
+	 */
+	function toData(segs: readonly ProfileSegment[]): uPlot.AlignedData {
+		const pressure = sampleCurve(segs);
+		const flow = sampleCurve(segs, dampFlow);
+		const temp = pressure.time.map((x) => tempAt(segs, x));
+		return [pressure.time, flow.value, pressure.value, temp];
+	}
+
+	/** Round-numbered second marks — every 5 s, or 10 s on a long shot. */
+	function timeSplits(max: number): number[] {
+		const step = max > 30 ? 10 : 5;
+		const out: number[] = [];
+		for (let t = step; t < max; t += step) out.push(t);
 		return out;
+	}
+
+	/**
+	 * A soft top-down gradient fill for a channel — its colour at `topHexAlpha`
+	 * fading to clear at the baseline. `cssVar` resolves to a 6-digit hex, so an
+	 * 8-digit `#RRGGBBAA` stop just appends the alpha byte.
+	 */
+	function fillFor(varName: string, topHexAlpha: string) {
+		return (u: uPlot): CanvasGradient | string => {
+			const c = cssVar(varName);
+			if (!/^#[0-9a-fA-F]{6}$/.test(c)) return c;
+			const g = u.ctx.createLinearGradient(0, u.bbox.top, 0, u.bbox.top + u.bbox.height);
+			g.addColorStop(0, c + topHexAlpha);
+			g.addColorStop(1, c + '00');
+			return g;
+		};
+	}
+
+	function buildOpts(w: number, h: number): uPlot.Options {
+		const gridColor = 'rgba(244,237,224,0.05)';
+		const labelColor = 'rgba(244,237,224,0.3)';
+		const font = '9px "JetBrains Mono", monospace';
+		return {
+			width: w,
+			height: h,
+			padding: [14, 4, 2, 2],
+			cursor: { show: false },
+			legend: { show: false },
+			scales: {
+				// 0 → total shot time; a one-second floor avoids a zero-width axis.
+				x: {
+					time: false,
+					range: (_u, _min, dataMax) => [0, Math.max(1, Number.isFinite(dataMax) ? dataMax : 1)]
+				},
+				// A fixed 0–12 bar / ml·s scale — the design's grid max.
+				y: { range: () => [0, 12] },
+				// Temperature on its own scale + right axis.
+				temp: { range: () => [TEMP_MIN, TEMP_MAX] }
+			},
+			axes: [
+				{
+					scale: 'x',
+					stroke: labelColor,
+					grid: { stroke: gridColor, width: 1, dash: [2, 4] },
+					ticks: { show: false },
+					font,
+					size: 22,
+					splits: (u) => timeSplits((u.scales.x.max ?? 1) as number),
+					values: (_u, splits) => splits.map((v) => `${v}s`)
+				},
+				{
+					// Left axis — bar (pressure) / ml·s (flow).
+					scale: 'y',
+					side: 3,
+					stroke: labelColor,
+					grid: { stroke: gridColor, width: 1 },
+					ticks: { show: false },
+					font,
+					size: 26,
+					splits: () => [0, 3, 6, 9, 12],
+					values: (_u, splits) => splits.map((v) => `${v}`)
+				},
+				{
+					// Right axis — °C (temperature).
+					scale: 'temp',
+					side: 1,
+					stroke: labelColor,
+					grid: { show: false },
+					ticks: { show: false },
+					font,
+					size: 30,
+					splits: () => [80, 90, 100],
+					values: (_u, splits) => splits.map((v) => `${v}°`)
+				}
+			],
+			series: [
+				{},
+				{
+					// The damped "estimated flow" ghost — dashed, light fill.
+					scale: 'y',
+					stroke: () => cssVar('--tel-flow'),
+					fill: fillFor('--tel-flow', '24'),
+					width: 1.4,
+					dash: [3, 3],
+					points: { show: false }
+				},
+				{
+					// The pressure curve — the hero line, soft gradient fill.
+					scale: 'y',
+					stroke: () => cssVar('--tel-pressure'),
+					fill: fillFor('--tel-pressure', '4D'),
+					width: 2.4,
+					points: { show: false }
+				},
+				{
+					// The per-segment temperature — a stepped line, right °C axis.
+					scale: 'temp',
+					stroke: () => cssVar('--tel-temp'),
+					width: 1.6,
+					paths: tempStepPath,
+					points: { show: false }
+				}
+			]
+		};
+	}
+
+	let boxEl: HTMLDivElement;
+	let plotEl = $state<HTMLDivElement>();
+	let chart: uPlot | null = null;
+	let resizeObs: ResizeObserver | null = null;
+	/** Flips true once the card nears the viewport — gates chart construction. */
+	let mounted = $state(false);
+
+	// Arm the chart lazily: build uPlot only once the card scrolls into reach,
+	// so a gridful of profiles doesn't construct every chart in one frame.
+	$effect(() => {
+		if (mounted) return;
+		const io = new IntersectionObserver(
+			(entries) => {
+				if (entries.some((e) => e.isIntersecting)) {
+					mounted = true;
+					io.disconnect();
+				}
+			},
+			{ rootMargin: MOUNT_MARGIN }
+		);
+		io.observe(boxEl);
+		return () => io.disconnect();
 	});
 
-	const pressureStroke = $derived(polyPath(pressurePts));
-	const pressureArea = $derived(areaPath(pressurePts));
-	const flowStroke = $derived(polyPath(flowPts));
-	const flowArea = $derived(areaPath(flowPts));
-	const tempStroke = $derived(polyPath(tempPts));
+	// Build the chart once armed. `segments` is read untracked so an edit feeds
+	// the live instance (effect below) instead of tearing it down and rebuilding.
+	$effect(() => {
+		if (!mounted || !plotEl) return;
+		const el = plotEl;
+		const w = Math.max(1, el.clientWidth);
+		const h = Math.max(1, el.clientHeight);
+		chart = new uPlot(buildOpts(w, h), toData(untrack(() => segments)), el);
 
-	/** Pre-infusion zone — `preinf` seconds, visual span capped at 30 s. */
-	const preinfFrac = $derived(Math.min(preinf / 30, 0.45));
-	const preinfX2 = $derived(M.l + preinfFrac * CW);
+		// Track the card's live width / height so the chart always fills its box.
+		resizeObs = new ResizeObserver((entries) => {
+			const cr = entries[0].contentRect;
+			chart?.setSize({ width: Math.max(1, cr.width), height: Math.max(1, cr.height) });
+		});
+		resizeObs.observe(el);
 
-	/** 9-bar target hairline — 9/12 of the pressure scale. */
-	const targetY = M.t + (1 - 9 / 12) * CH;
+		return () => {
+			resizeObs?.disconnect();
+			resizeObs = null;
+			chart?.destroy();
+			chart = null;
+		};
+	});
 
-	/** The horizontal gridline ratios. */
-	const gridlines = [0.25, 0.5, 0.75];
-
-	/** Channel colors — pressure brightens slightly on the active card. */
-	const pressureColor = $derived(active ? '#8BAA82' : 'var(--tel-pressure, #6B8C5F)');
-	const flowColor = 'var(--tel-flow, #4A6FA5)';
-	const tempColor = 'var(--tel-temp, #C44E3F)';
+	// Feed segment edits into the live chart. `setData` re-runs the x / y `range`
+	// callbacks, so the axes track the profile's length and shape.
+	$effect(() => {
+		const data = toData(segments);
+		chart?.setData(data);
+	});
 </script>
 
-<div class="pp-preview" class:is-active={active}>
-	<svg
-		viewBox="0 0 {W} {H}"
-		preserveAspectRatio="xMidYMid meet"
-		width="100%"
-		height="100%"
-		shape-rendering="geometricPrecision"
-	>
-		<defs>
-			<linearGradient id="{fid}-p" x1="0" y1="0" x2="0" y2="1">
-				<stop offset="0%" stop-color={pressureColor} stop-opacity="0.32" />
-				<stop offset="100%" stop-color={pressureColor} stop-opacity="0" />
-			</linearGradient>
-			<linearGradient id="{fid}-f" x1="0" y1="0" x2="0" y2="1">
-				<stop offset="0%" stop-color={flowColor} stop-opacity="0.22" />
-				<stop offset="100%" stop-color={flowColor} stop-opacity="0" />
-			</linearGradient>
-		</defs>
+<div class="pp-preview" class:is-active={active} bind:this={boxEl}>
+	{#if mounted}
+		<div class="pp-preview-plot" bind:this={plotEl}></div>
+	{/if}
 
-		<!-- Pre-infusion shaded band -->
-		{#if preinfFrac > 0.01}
-			<rect
-				x={M.l}
-				y={M.t}
-				width={preinfX2 - M.l}
-				height={CH}
-				fill="rgba(244,237,224,0.045)"
-			/>
-		{/if}
-
-		<!-- Subtle horizontal hairlines at 25 / 50 / 75% of the pressure axis -->
-		{#each gridlines as t (t)}
-			<line
-				x1={M.l}
-				y1={M.t + (1 - t) * CH}
-				x2={W - M.r}
-				y2={M.t + (1 - t) * CH}
-				stroke="rgba(244,237,224,0.045)"
-				stroke-width="1"
-			/>
-		{/each}
-
-		<!-- 9-bar target dotted line -->
-		<line
-			x1={M.l}
-			y1={targetY}
-			x2={W - M.r}
-			y2={targetY}
-			stroke="rgba(244,237,224,0.18)"
-			stroke-width="1"
-			stroke-dasharray="2 3"
-		/>
-
-		<!-- Areas -->
-		<path d={flowArea} fill="url(#{fid}-f)" />
-		<path d={pressureArea} fill="url(#{fid}-p)" />
-
-		<!-- Strokes -->
-		<path
-			d={flowStroke}
-			stroke={flowColor}
-			stroke-width="1.4"
-			fill="none"
-			stroke-linecap="round"
-			stroke-linejoin="round"
-			opacity="0.85"
-			vector-effect="non-scaling-stroke"
-		/>
-		<path
-			d={tempStroke}
-			stroke={tempColor}
-			stroke-width="1.2"
-			fill="none"
-			stroke-linecap="round"
-			stroke-linejoin="round"
-			opacity="0.7"
-			stroke-dasharray="3 2"
-			vector-effect="non-scaling-stroke"
-		/>
-		<path
-			d={pressureStroke}
-			stroke={pressureColor}
-			stroke-width="1.8"
-			fill="none"
-			stroke-linecap="round"
-			stroke-linejoin="round"
-			vector-effect="non-scaling-stroke"
-		/>
-
-		<!-- Pre-infusion left-edge marker -->
-		{#if preinfFrac > 0.01}
-			<line
-				x1={preinfX2}
-				y1={M.t}
-				x2={preinfX2}
-				y2={M.t + CH}
-				stroke="rgba(244,237,224,0.18)"
-				stroke-width="1"
-				stroke-dasharray="1 2"
-			/>
-		{/if}
-	</svg>
-
-	<!-- Channel legend (top-left) -->
+	<!-- Channel legend (top-left) — the preview's only legend, so it stays. -->
 	<div class="pp-preview-legend">
-		<span class="pp-preview-chip" style="--c:{pressureColor}">
+		<span class="pp-preview-chip" style="--c:var(--tel-pressure)">
 			<i></i><span>Pressure</span>
 		</span>
-		<span class="pp-preview-chip" style="--c:{flowColor}">
+		<span class="pp-preview-chip" style="--c:var(--tel-flow)">
 			<i></i><span>Flow</span>
 		</span>
-		<span class="pp-preview-chip pp-preview-chip-dashed" style="--c:{tempColor}">
+		<span class="pp-preview-chip pp-preview-chip-dashed" style="--c:var(--tel-temp)">
 			<i></i><span>Temp</span>
 		</span>
 	</div>
 
-	<!-- Meta (top-right) -->
-	<div class="pp-preview-meta">
-		<span class="pp-preview-shape">{shape}</span>
-	</div>
-
-	<!-- Axis ticks (bottom) -->
-	<div class="pp-preview-axis">
-		{#if preinf > 0}
-			<span
-				class="pp-preview-preinf"
-				style="width:{(preinfFrac * 100).toFixed(1)}%"
-			>
-				pre-infusion · {preinf}s
-			</span>
-		{/if}
-	</div>
+	<!-- Pre-infusion (top-right) — "Pre-inf" matches the card's metric label. -->
+	{#if preinf > 0}
+		<div class="pp-preview-corner">Pre-inf · {preinf}s</div>
+	{/if}
 </div>
+
+<style>
+	/* The handoff sized this box at a fixed 132 px tall and letterboxed an SVG
+	   inside it. The uPlot canvas fills the box exactly, so the box now carries
+	   a fixed aspect ratio instead — full card width, proportionally taller. */
+	.pp-preview {
+		height: auto;
+		aspect-ratio: 11 / 5;
+	}
+	/* uPlot mounts here and fills the box; the legend / chip overlay on top. */
+	.pp-preview-plot {
+		position: absolute;
+		inset: 0;
+	}
+	.pp-preview-plot :global(.uplot),
+	.pp-preview-plot :global(.u-wrap) {
+		width: 100%;
+	}
+	/* Top-right pre-infusion chip — same terse style as the channel chips. */
+	.pp-preview-corner {
+		position: absolute;
+		top: 8px;
+		right: 12px;
+		font-family: var(--font-sans);
+		font-size: 9px;
+		font-weight: 600;
+		letter-spacing: var(--track-allcaps, 0.08em);
+		text-transform: uppercase;
+		color: rgba(244, 237, 224, 0.4);
+		pointer-events: none;
+	}
+</style>
