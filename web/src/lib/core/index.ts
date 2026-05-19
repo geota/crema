@@ -105,6 +105,12 @@ export interface Profile {
 	maximum_flow: number;
 	/** Whole-shot dispensed-volume limit, mL (0 = no limit). */
 	max_total_volume_ml: number;
+	/**
+	 * Desired final shot weight, grams (0 = no target). App-side metadata —
+	 * the DE1 protocol has no target-weight field; it only round-trips
+	 * through JSON. Mirrors the legacy `final_desired_shot_weight`.
+	 */
+	target_weight: number;
 }
 
 /**

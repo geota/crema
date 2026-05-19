@@ -7,6 +7,8 @@
 //! - **v2 JSON** ([`import_v2_json`]) — the modern format. A JSON object with a
 //!   `steps` array; each step already carries pump/transition/exit/limiter
 //!   fields. Maps step-for-step. This is the primary, highest-value path.
+//!   [`export_v2_json`] is its inverse, emitting the same shape so a profile
+//!   round-trips faithfully.
 //! - **Legacy Tcl-dict** ([`import_legacy_tcl`]) — the original flat
 //!   `key value` Tcl-dictionary format (the `*.tcl` files in the legacy
 //!   `profiles/` directory). An *advanced* (`settings_2c`) Tcl profile carries
@@ -164,6 +166,147 @@ fn v2_step_to_profile_step(step: &V2Step) -> Result<ProfileStep, ImportError> {
         volume_limit_ml: clamp_volume(step.volume.as_f32()),
         limiter,
     })
+}
+
+// ---------------------------------------------------------------------------
+// v2 JSON export
+// ---------------------------------------------------------------------------
+
+/// One step of a v2 JSON profile, in the shape this module emits.
+///
+/// The inverse of [`V2Step`]: numeric fields are bare JSON numbers (which
+/// [`import_v2_json`] accepts), and the field names and enum spellings match
+/// what the importer reads, so the output is faithfully re-importable.
+#[derive(serde::Serialize)]
+struct V2StepOut {
+    name: String,
+    temperature: f32,
+    /// `"coffee"` (basket) or `"water"` (mix).
+    sensor: &'static str,
+    /// `"pressure"` or `"flow"`.
+    pump: &'static str,
+    /// `"fast"` or `"smooth"`.
+    transition: &'static str,
+    pressure: f32,
+    flow: f32,
+    seconds: f32,
+    volume: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    exit: Option<V2ExitOut>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    limiter: Option<V2LimiterOut>,
+}
+
+/// The early-exit object of an emitted v2 JSON step.
+#[derive(serde::Serialize)]
+struct V2ExitOut {
+    /// `"pressure"` or `"flow"`.
+    #[serde(rename = "type")]
+    kind: &'static str,
+    /// `"over"` or `"under"`.
+    condition: &'static str,
+    value: f32,
+}
+
+/// The advanced limiter object of an emitted v2 JSON step.
+#[derive(serde::Serialize)]
+struct V2LimiterOut {
+    value: f32,
+    range: f32,
+}
+
+/// A whole v2 JSON profile, in the shape this module emits.
+#[derive(serde::Serialize)]
+struct V2ProfileOut {
+    title: String,
+    notes: String,
+    /// Constant `"advanced"` — every Crema [`Profile`] is a multi-step profile.
+    #[serde(rename = "type")]
+    kind: &'static str,
+    /// Constant `2` — the v2 schema version.
+    version: u8,
+    steps: Vec<V2StepOut>,
+    target_weight: f32,
+    target_volume: f32,
+    target_volume_count_start: u8,
+}
+
+/// Export a Crema [`Profile`] as a legacy **v2 JSON** profile string.
+///
+/// The inverse of [`import_v2_json`]: the emitted JSON uses the v2 schema's
+/// field names and enum spellings, so feeding the result back through
+/// [`import_v2_json`] reconstructs an equal [`Profile`].
+///
+/// The per-step `target` is written into both the `pressure` and `flow`
+/// fields' slot — only the field matching the step's `pump` carries the
+/// value, the other is `0.0` — exactly as [`v2_step_to_profile_step`] reads
+/// them back.
+///
+/// This is infallible: an in-memory [`Profile`] always serializes, so a plain
+/// [`String`] is returned rather than a `Result`.
+pub fn export_v2_json(profile: &Profile) -> String {
+    let steps = profile.steps.iter().map(step_to_v2).collect();
+
+    let out = V2ProfileOut {
+        title: profile.title.clone(),
+        notes: profile.notes.clone(),
+        kind: "advanced",
+        version: 2,
+        steps,
+        target_weight: profile.target_weight,
+        // Crema's whole-shot volume limit is the legacy `target_volume`.
+        target_volume: f32::from(profile.max_total_volume_ml),
+        target_volume_count_start: profile.preinfuse_step_count,
+    };
+
+    // A struct of plain scalars and strings always serializes; the legacy app
+    // pretty-prints its profiles, so do the same for human-readable output.
+    serde_json::to_string_pretty(&out).unwrap_or_default()
+}
+
+/// Convert one [`ProfileStep`] into its emitted v2 JSON step.
+fn step_to_v2(step: &ProfileStep) -> V2StepOut {
+    // Only the field matching the pump priority carries the target value.
+    let (pressure, flow) = match step.pump {
+        Pump::Pressure => (step.target, 0.0),
+        Pump::Flow => (0.0, step.target),
+    };
+
+    V2StepOut {
+        name: step.name.clone(),
+        temperature: step.temperature_c,
+        sensor: match step.temp_sensor {
+            TempSensor::Basket => "coffee",
+            TempSensor::Mix => "water",
+        },
+        pump: match step.pump {
+            Pump::Pressure => "pressure",
+            Pump::Flow => "flow",
+        },
+        transition: match step.transition {
+            Transition::Fast => "fast",
+            Transition::Smooth => "smooth",
+        },
+        pressure,
+        flow,
+        seconds: step.duration_seconds,
+        volume: step.volume_limit_ml,
+        exit: step.exit.map(|exit| V2ExitOut {
+            kind: match exit.metric {
+                ExitMetric::Pressure => "pressure",
+                ExitMetric::Flow => "flow",
+            },
+            condition: match exit.compare {
+                Compare::Over => "over",
+                Compare::Under => "under",
+            },
+            value: exit.threshold,
+        }),
+        limiter: step.limiter.map(|limiter| V2LimiterOut {
+            value: limiter.value,
+            range: limiter.range,
+        }),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -614,10 +757,12 @@ fn finish_profile(
     // `preinfuse` is now <= 32, so this cast cannot truncate.
     let preinfuse_step_count = preinfuse as u8;
 
-    // Crema's whole-shot volume limit comes from the legacy target volume; a
-    // target weight has no protocol-level field, so it is not carried here.
-    let _ = target_weight;
+    // Crema's whole-shot volume limit comes from the legacy target volume.
     let max_total_volume_ml = clamp_volume(target_volume);
+
+    // A negative target weight is meaningless; clamp it to "no target" so the
+    // field is always a sane non-negative gram value.
+    let target_weight = target_weight.max(0.0);
 
     Ok(Profile {
         title,
@@ -629,6 +774,9 @@ fn finish_profile(
         minimum_pressure: 0.0,
         maximum_flow: 0.0,
         max_total_volume_ml,
+        // App-side metadata: the legacy `final_desired_shot_weight`. It has no
+        // protocol field, so it only needs to survive serde round-trips.
+        target_weight,
     })
 }
 
@@ -1053,6 +1201,84 @@ mod tests {
             import_v2_json(json),
             Err(ImportError::UnknownValue("pump", "wishful".to_string()))
         );
+    }
+
+    #[test]
+    fn v2_json_carries_the_target_weight() {
+        // `V2_ADVANCED` declares `"target_weight": "36"`.
+        let p = import_v2_json(V2_ADVANCED).unwrap();
+        assert_eq!(p.target_weight, 36.0);
+    }
+
+    // -- v2 JSON export / round-trip --------------------------------------
+
+    #[test]
+    fn export_v2_json_round_trips_an_advanced_profile() {
+        // import -> export -> import must reconstruct an equal `Profile`,
+        // exercising exit, limiter, per-step volume and a non-zero
+        // target_weight in one go.
+        let original = import_v2_json(V2_ADVANCED).unwrap();
+        let exported = export_v2_json(&original);
+        let reimported = import_v2_json(&exported).unwrap();
+        assert_eq!(reimported, original);
+    }
+
+    #[test]
+    fn export_v2_json_round_trips_the_mix_sensor() {
+        // A step on the Mix temperature sensor must survive the round trip
+        // (it is emitted as `"sensor": "water"`).
+        let json = r#"{
+            "title": "Mix", "notes": "", "target_weight": 40,
+            "steps": [
+                { "name": "mix step", "temperature": 90, "sensor": "water",
+                  "pump": "pressure", "transition": "smooth",
+                  "pressure": 6, "seconds": 25, "volume": 250,
+                  "exit": { "type": "flow", "condition": "under", "value": 1.5 } }
+            ]
+        }"#;
+        let original = import_v2_json(json).unwrap();
+        assert_eq!(original.steps[0].temp_sensor, TempSensor::Mix);
+        assert_eq!(original.steps[0].volume_limit_ml, 250);
+        let reimported = import_v2_json(&export_v2_json(&original)).unwrap();
+        assert_eq!(reimported, original);
+        assert_eq!(reimported.steps[0].temp_sensor, TempSensor::Mix);
+    }
+
+    #[test]
+    fn export_v2_json_preserves_a_non_zero_target_weight() {
+        // A profile whose only distinguishing feature is its target weight
+        // must keep it across the round trip.
+        let original = import_v2_json(V2_ADVANCED).unwrap();
+        assert!(original.target_weight > 0.0);
+        let reimported = import_v2_json(&export_v2_json(&original)).unwrap();
+        assert_eq!(reimported.target_weight, original.target_weight);
+    }
+
+    #[test]
+    fn export_v2_json_round_trips_a_builtin_profile() {
+        // A representative built-in profile (which uses exits, limiters and
+        // volume limits) round-trips through the exporter unchanged.
+        let builtin = crate::builtin_profiles()
+            .iter()
+            .find(|p| p.title == "Best practice")
+            .or_else(|| crate::builtin_profiles().first())
+            .expect("at least one built-in profile");
+        let reimported = import_v2_json(&export_v2_json(builtin)).unwrap();
+        assert_eq!(&reimported, builtin);
+    }
+
+    #[test]
+    fn export_v2_json_round_trips_every_builtin_profile() {
+        // The whole vendored corpus survives import_v2_json(export_v2_json(p)).
+        for builtin in crate::builtin_profiles() {
+            let reimported = import_v2_json(&export_v2_json(builtin))
+                .unwrap_or_else(|e| panic!("re-import of {:?} failed: {e}", builtin.title));
+            assert_eq!(
+                &reimported, builtin,
+                "round trip changed profile {:?}",
+                builtin.title,
+            );
+        }
     }
 
     #[test]

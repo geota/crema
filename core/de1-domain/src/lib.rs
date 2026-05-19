@@ -7,7 +7,8 @@
 //! - [`profile`] — the [`Profile`] recipe model and its assembly into the
 //!   `de1-protocol` upload packets.
 //! - [`profile_import`] — importers for the legacy DE1-app profile formats
-//!   (v2 JSON and the original Tcl-dictionary `.tcl` files).
+//!   (v2 JSON and the original Tcl-dictionary `.tcl` files), plus a v2 JSON
+//!   exporter.
 //! - [`builtin`] — the standard DE1 profiles, vendored and shipped as built-in
 //!   Crema [`Profile`]s ("batteries included").
 //! - [`shot`] — the [`ShotMonitor`] state machine, which observes a shot and
@@ -44,7 +45,7 @@ pub use profile::{
     AssembledProfile, Compare, ExitCondition, ExitMetric, Limiter, Profile, ProfileStep, Pump,
     TempSensor, Transition,
 };
-pub use profile_import::{import_legacy_tcl, import_v2_json};
+pub use profile_import::{export_v2_json, import_legacy_tcl, import_v2_json};
 pub use session::SessionTimer;
 pub use shot::{
     MAX_SHOT_SAMPLES, ShotEvent, ShotMetrics, ShotMonitor, ShotPhase, ShotRecord, TimedSample,
