@@ -2,20 +2,25 @@
 	/**
 	 * `LiveChart` — the 4-channel telemetry chart.
 	 *
-	 * A canvas uPlot chart: each of the four channels (pressure / flow / temp /
-	 * weight) lives on its own uPlot **scale** with a fixed range, so no
-	 * anchor-series hack is needed. The dashed pressure-goal line is a fifth
-	 * series on the pressure scale.
+	 * ## Two axes, one scale
 	 *
-	 * A small draw-hook plugin paints the design's chrome that uPlot's hidden
-	 * y-axes cannot: the four horizontal grid lines (behind the series, via the
-	 * `drawClear` hook) and, on top, the solid faded now-marker line plus a
-	 * per-channel end-dot. uPlot's own x-axis still renders the dashed vertical
-	 * grid and the elapsed-second labels.
+	 * The four channels share **one** uPlot y-scale so the two axes stay locked
+	 * exactly 10× apart:
+	 *
+	 * - pressure (bar) and flow (ml/s) plot at their raw value;
+	 * - temperature (°C) and weight (g) plot at value ÷ 10.
+	 *
+	 * The **left** axis labels the scale as-is (≈ 1–10, bar / ml·s); the
+	 * **right** axis labels the same ticks ×10 (≈ 10–100, °C / g). The scale's
+	 * `range` callback grows the top from 10 to whatever the data needs, so a
+	 * mid-shot flow or pressure spike to 11–13 simply lifts both axes together.
+	 *
+	 * uPlot's left axis draws the horizontal grid; a small draw-hook plugin adds
+	 * the solid faded now-marker and a per-channel end-dot. The x-axis renders
+	 * the dashed vertical grid and round-numbered elapsed-second labels.
 	 *
 	 * The chart fills its container — a `ResizeObserver` feeds the panel's live
-	 * width *and* height into `uplot.setSize()`, so it tracks the panel as the
-	 * Quick Sheet docks and never distorts the way the old SVG did.
+	 * width *and* height into `uplot.setSize()`.
 	 */
 	import { untrack } from 'svelte';
 	import uPlot from 'uplot';
@@ -56,7 +61,12 @@
 		return 9;
 	}
 
-	/** Build the [x, pressure, flow, temp, weight, goal] column arrays uPlot wants. */
+	/**
+	 * Build the [x, pressure, flow, temp, weight, goal] column arrays uPlot
+	 * wants. Pressure and flow keep their raw value; temperature and weight are
+	 * divided by 10 so they ride the shared scale (and read back ×10 on the
+	 * right axis).
+	 */
 	function toData(samples: readonly TelemetrySample[]): uPlot.AlignedData {
 		const xs: number[] = [];
 		const pressure: (number | null)[] = [];
@@ -69,48 +79,25 @@
 			xs.push(t);
 			pressure.push(s.pressure ?? null);
 			flow.push(s.flow ?? null);
-			temp.push(s.temp ?? null);
-			weight.push(s.weightG ?? null);
+			temp.push(s.temp == null ? null : s.temp / 10);
+			weight.push(s.weightG == null ? null : s.weightG / 10);
 			goal.push(goalAt(t));
 		}
 		return [xs, pressure, flow, temp, weight, goal];
 	}
 
-	/** The four channel end-dots: [data column, scale, colour var, radius]. */
-	const DOTS: readonly [number, string, string, number][] = [
-		[1, 'pressure', '--tel-pressure', 4],
-		[2, 'flow', '--tel-flow', 3],
-		[3, 'temp', '--tel-temp', 3],
-		[4, 'weight', '--tel-weight', 3]
+	/** The four channel end-dots: [data column, colour var, radius]. */
+	const DOTS: readonly [number, string, number][] = [
+		[1, '--tel-pressure', 4],
+		[2, '--tel-flow', 3],
+		[3, '--tel-temp', 3],
+		[4, '--tel-weight', 3]
 	];
 
-	/**
-	 * uPlot draw plugin: the horizontal grid (behind the series) plus the
-	 * now-marker line and per-channel end-dots (on top).
-	 */
-	function chromePlugin(): uPlot.Plugin {
+	/** uPlot draw plugin: the now-marker line and per-channel end-dots. */
+	function markerPlugin(): uPlot.Plugin {
 		return {
 			hooks: {
-				// Behind the series: four horizontal grid lines, matching the
-				// design's `[0.2, 0.4, 0.6, 0.8]` delimiters. uPlot's y-axes are
-				// hidden, so their grid never renders — we paint it ourselves.
-				drawClear: (u: uPlot) => {
-					const ctx = u.ctx;
-					const { left, top, width, height } = u.bbox;
-					ctx.save();
-					ctx.setLineDash([]);
-					ctx.strokeStyle = 'rgba(244,237,224,0.05)';
-					ctx.lineWidth = devicePixelRatio;
-					for (const p of [0.2, 0.4, 0.6, 0.8]) {
-						const y = Math.round(top + height * p) + 0.5;
-						ctx.beginPath();
-						ctx.moveTo(left, y);
-						ctx.lineTo(left + width, y);
-						ctx.stroke();
-					}
-					ctx.restore();
-				},
-				// On top: the now-marker line and the per-channel end-dots.
 				draw: (u: uPlot) => {
 					const n = u.data[0].length;
 					if (n === 0) return;
@@ -134,11 +121,12 @@
 					ctx.stroke();
 					ctx.globalAlpha = 1;
 
-					// One end-dot per channel, sitting on the now-marker.
-					for (const [col, scale, varName, r] of DOTS) {
+					// One end-dot per channel, sitting on the now-marker. Every
+					// channel rides the shared 'y' scale.
+					for (const [col, varName, r] of DOTS) {
 						const v = u.data[col][n - 1];
 						if (v == null) continue;
-						const cy = u.valToPos(v as number, scale, true);
+						const cy = u.valToPos(v as number, 'y', true);
 						ctx.beginPath();
 						ctx.fillStyle = cssVar(varName);
 						ctx.arc(cx, cy, r * devicePixelRatio, 0, Math.PI * 2);
@@ -165,18 +153,23 @@
 	function buildOpts(w: number, h: number, win: number): uPlot.Options {
 		const gridColor = 'rgba(244,237,224,0.05)';
 		const labelColor = 'rgba(244,237,224,0.35)';
+		const yFont = '11px "JetBrains Mono", monospace';
 		return {
 			width: w,
 			height: h,
-			padding: [8, 8, 4, 8],
+			padding: [8, 4, 4, 4],
 			cursor: { show: false },
 			legend: { show: false },
 			scales: {
 				x: { time: false, range: [0, win] },
-				pressure: { range: [0, 12] },
-				flow: { range: [0, 8] },
-				temp: { range: [85, 100] },
-				weight: { range: [0, 50] }
+				// One shared scale for all four channels. The top floats from 10
+				// upward so a mid-shot flow / pressure spike grows both axes.
+				y: {
+					range: (_u, _min, dataMax) => [
+						0,
+						Number.isFinite(dataMax) ? Math.max(10, Math.ceil(dataMax)) : 10
+					]
+				}
 			},
 			axes: [
 				{
@@ -187,43 +180,65 @@
 					font: '11px "JetBrains Mono", monospace',
 					splits: (u) => timeSplits((u.scales.x.max ?? win) as number),
 					values: (_u, splits) => splits.map((v) => `${v}s`)
+				},
+				{
+					// Left axis: the scale value as-is — bar (pressure) / ml·s (flow).
+					scale: 'y',
+					side: 3,
+					stroke: labelColor,
+					grid: { stroke: gridColor, width: 1 },
+					ticks: { show: false },
+					font: yFont,
+					size: 34,
+					values: (_u, splits) => splits.map((v) => `${v}`)
+				},
+				{
+					// Right axis: the same ticks ×10 — °C (temp) / g (weight).
+					scale: 'y',
+					side: 1,
+					stroke: labelColor,
+					grid: { show: false },
+					ticks: { show: false },
+					font: yFont,
+					size: 38,
+					values: (_u, splits) => splits.map((v) => `${v * 10}`)
 				}
 			],
 			series: [
 				{},
 				{
-					scale: 'pressure',
+					scale: 'y',
 					stroke: () => cssVar('--tel-pressure'),
 					width: 2.6,
 					points: { show: false }
 				},
 				{
-					scale: 'flow',
+					scale: 'y',
 					stroke: () => cssVar('--tel-flow'),
 					width: 2.2,
 					points: { show: false }
 				},
 				{
-					scale: 'temp',
+					scale: 'y',
 					stroke: () => cssVar('--tel-temp'),
 					width: 2.2,
 					points: { show: false }
 				},
 				{
-					scale: 'weight',
+					scale: 'y',
 					stroke: () => cssVar('--tel-weight'),
 					width: 2.2,
 					points: { show: false }
 				},
 				{
-					scale: 'pressure',
+					scale: 'y',
 					stroke: 'rgba(244,237,224,0.28)',
 					width: 1.5,
 					dash: [4, 4],
 					points: { show: false }
 				}
 			],
-			plugins: [chromePlugin()]
+			plugins: [markerPlugin()]
 		};
 	}
 
