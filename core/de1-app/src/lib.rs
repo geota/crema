@@ -24,7 +24,7 @@ use de1_domain::{
     WaterMonitor,
 };
 use de1_protocol::{
-    MachineState, ShotSample, ShotSettings, StateInfo, WaterLevels, requested_state,
+    MachineState, ShotSample, ShotSettings, StateInfo, Version, WaterLevels, requested_state,
 };
 use de1_scale::{Scale, ScaleCapabilities, ScaleUuids, bookoo};
 
@@ -487,6 +487,7 @@ impl CremaCore {
             Source::ScaleWeight => self.handle_scale_weight(data, now_ms, &mut out),
             Source::ScaleCommand => self.handle_scale_command(data, &mut out),
             Source::De1WaterLevels => self.handle_water_levels(data, &mut out),
+            Source::De1Version => self.handle_version(data, &mut out),
         }
         out
     }
@@ -577,6 +578,8 @@ impl CremaCore {
             group_pressure: sample.group_pressure,
             group_flow: sample.group_flow,
             head_temp: sample.head_temp,
+            mix_temp: sample.mix_temp,
+            steam_temp: sample.steam_temp,
         });
     }
 
@@ -663,6 +666,22 @@ impl CremaCore {
             Ok(levels) => out.events.push(Event::WaterLevel {
                 level_mm: levels.current_mm + WATER_LEVEL_MM_CORRECTION,
                 refill_threshold_mm: levels.refill_threshold_mm,
+            }),
+            Err(e) => out.events.push(Event::DecodeError {
+                message: e.to_string(),
+            }),
+        }
+    }
+
+    /// Decode and process a `Version` notification — the DE1's BLE-interface
+    /// and CPU-board firmware versions.
+    fn handle_version(&self, data: &[u8], out: &mut CoreOutput) {
+        match Version::decode(data) {
+            Ok(version) => out.events.push(Event::Firmware {
+                fw_release: version.fw.release,
+                fw_commits: version.fw.commits,
+                fw_api_version: version.fw.api_version,
+                firmware_string: version.firmware_string(),
             }),
             Err(e) => out.events.push(Event::DecodeError {
                 message: e.to_string(),
@@ -1115,6 +1134,34 @@ mod tests {
             level_mm: 105.0,
             refill_threshold_mm: 70.0,
         }));
+    }
+
+    #[test]
+    fn a_version_notification_emits_a_firmware_event() {
+        let mut core = CremaCore::new();
+        // 18-byte Version packet: BLE then FW block, each
+        // `APIVersion u8 | Release u8 | Commits u16 | Changes u8 | Sha u32`.
+        let packet = [
+            0x04, 0x0A, 0x00, 0x0A, 0x02, 0xDE, 0xAD, 0xBE, 0xEF, // BLE block
+            0x04, 0x0A, 0x00, 0x8E, 0x05, 0x12, 0x34, 0x56, 0x78, // FW block
+        ];
+        let out = core.on_notification(Source::De1Version, &packet, 0);
+        assert!(
+            out.events
+                .iter()
+                .any(|e| matches!(e, Event::Firmware { fw_commits: 142, .. }))
+        );
+    }
+
+    #[test]
+    fn a_truncated_version_notification_emits_a_decode_error() {
+        let mut core = CremaCore::new();
+        let out = core.on_notification(Source::De1Version, &[0x04, 0x0A], 0);
+        assert!(
+            out.events
+                .iter()
+                .any(|e| matches!(e, Event::DecodeError { .. }))
+        );
     }
 
     #[test]

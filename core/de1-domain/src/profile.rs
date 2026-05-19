@@ -165,6 +165,19 @@ pub struct Profile {
     /// (e.g. the embedded `builtin.json`) still deserialize.
     #[serde(default)]
     pub target_weight: f32,
+    /// Recommended dry coffee dose in grams (0.0 = unspecified).
+    ///
+    /// App-side metadata only — like [`target_weight`](Self::target_weight) the
+    /// DE1 protocol has no dose field, so this never reaches
+    /// [`assemble`](Profile::assemble). It exists so a profile round-trips
+    /// faithfully through JSON and a profile card can show its real dose
+    /// instead of a hardcoded default. Mirrors the legacy DE1-app
+    /// `profile_grinder_dose_weight`.
+    ///
+    /// `#[serde(default)]` so profiles serialized before this field existed
+    /// (e.g. the embedded `builtin.json`) still deserialize.
+    #[serde(default)]
+    pub dose: f32,
 }
 
 impl Profile {
@@ -279,6 +292,7 @@ mod tests {
             maximum_flow: 6.0,
             max_total_volume_ml: 0,
             target_weight: 0.0,
+            dose: 0.0,
         }
     }
 

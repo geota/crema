@@ -102,6 +102,9 @@ struct V2Profile {
     /// starts after them).
     #[serde(default)]
     target_volume_count_start: Scalar,
+    /// Recommended dry coffee dose, grams — the legacy `grinder_dose_weight`.
+    #[serde(default)]
+    grinder_dose_weight: Scalar,
 }
 
 /// Import a legacy **v2 JSON** profile into a Crema [`Profile`].
@@ -128,6 +131,7 @@ pub fn import_v2_json(json: &str) -> Result<Profile, ImportError> {
         raw.target_volume_count_start.as_u16(),
         raw.target_weight.as_f32(),
         raw.target_volume.as_f32(),
+        raw.grinder_dose_weight.as_f32(),
     )
 }
 
@@ -229,6 +233,8 @@ struct V2ProfileOut {
     target_weight: f32,
     target_volume: f32,
     target_volume_count_start: u8,
+    /// The recommended dry coffee dose, grams — the legacy `grinder_dose_weight`.
+    grinder_dose_weight: f32,
 }
 
 /// Export a Crema [`Profile`] as a legacy **v2 JSON** profile string.
@@ -257,6 +263,7 @@ pub fn export_v2_json(profile: &Profile) -> String {
         // Crema's whole-shot volume limit is the legacy `target_volume`.
         target_volume: f32::from(profile.max_total_volume_ml),
         target_volume_count_start: profile.preinfuse_step_count,
+        grinder_dose_weight: profile.dose,
     };
 
     // A struct of plain scalars and strings always serializes; the legacy app
@@ -360,6 +367,7 @@ pub fn import_legacy_tcl(tcl: &str) -> Result<Profile, ImportError> {
         dict.get_f32("final_desired_shot_volume_advanced")
             .or_else(|| dict.get_f32("final_desired_shot_volume"))
             .unwrap_or(0.0),
+        dict.get_f32("grinder_dose_weight").unwrap_or(0.0),
     )
 }
 
@@ -744,6 +752,7 @@ fn finish_profile(
     preinfuse_step_count: u16,
     target_weight: f32,
     target_volume: f32,
+    dose: f32,
 ) -> Result<Profile, ImportError> {
     if steps.is_empty() {
         return Err(ImportError::NoSteps);
@@ -763,6 +772,8 @@ fn finish_profile(
     // A negative target weight is meaningless; clamp it to "no target" so the
     // field is always a sane non-negative gram value.
     let target_weight = target_weight.max(0.0);
+    // Likewise a negative dose is meaningless; clamp it to "unspecified".
+    let dose = dose.max(0.0);
 
     Ok(Profile {
         title,
@@ -777,6 +788,9 @@ fn finish_profile(
         // App-side metadata: the legacy `final_desired_shot_weight`. It has no
         // protocol field, so it only needs to survive serde round-trips.
         target_weight,
+        // App-side metadata: the legacy `grinder_dose_weight`. Like
+        // `target_weight` it has no protocol field.
+        dose,
     })
 }
 
@@ -1208,6 +1222,43 @@ mod tests {
         // `V2_ADVANCED` declares `"target_weight": "36"`.
         let p = import_v2_json(V2_ADVANCED).unwrap();
         assert_eq!(p.target_weight, 36.0);
+    }
+
+    #[test]
+    fn v2_json_carries_the_grinder_dose_weight() {
+        let json = r#"{
+            "title": "Dosed", "notes": "", "grinder_dose_weight": "18.5",
+            "steps": [
+                { "name": "pour", "temperature": 92, "sensor": "coffee",
+                  "pump": "pressure", "transition": "fast",
+                  "pressure": 9, "seconds": 25, "volume": 0 }
+            ]
+        }"#;
+        let p = import_v2_json(json).unwrap();
+        assert_eq!(p.dose, 18.5);
+    }
+
+    #[test]
+    fn v2_json_defaults_dose_to_zero_when_absent() {
+        let p = import_v2_json(V2_ADVANCED).unwrap();
+        assert_eq!(p.dose, 0.0);
+    }
+
+    #[test]
+    fn export_v2_json_round_trips_a_non_zero_dose() {
+        let json = r#"{
+            "title": "Dosed", "notes": "", "grinder_dose_weight": 20,
+            "steps": [
+                { "name": "pour", "temperature": 92, "sensor": "coffee",
+                  "pump": "pressure", "transition": "fast",
+                  "pressure": 9, "seconds": 25, "volume": 0 }
+            ]
+        }"#;
+        let original = import_v2_json(json).unwrap();
+        assert_eq!(original.dose, 20.0);
+        let reimported = import_v2_json(&export_v2_json(&original)).unwrap();
+        assert_eq!(reimported, original);
+        assert_eq!(reimported.dose, 20.0);
     }
 
     // -- v2 JSON export / round-trip --------------------------------------

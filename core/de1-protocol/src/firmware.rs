@@ -22,7 +22,7 @@
 //! See `docs/02-ble-protocol.md` §6.2.
 
 use crate::error::ProtocolError;
-use crate::fixed_point::{u24p0_decode, u24p0_encode};
+use crate::fixed_point::{f8_1_7_decode, u24p0_decode, u24p0_encode};
 
 /// Wire length of a [`FWMapRequest`] packet (`maprequest_spec`).
 pub const FW_MAP_REQUEST_LEN: usize = 7;
@@ -171,6 +171,81 @@ pub fn firmware_write_frame(
     Ok(packet)
 }
 
+/// Wire length of a [`Version`] packet (`version_spec`).
+pub const VERSION_LEN: usize = 18;
+
+/// One firmware block of a [`Version`] reply — the BLE API firmware and the CPU
+/// firmware share this layout (`version_spec`, `binary.tcl:425`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct VersionBlock {
+    /// API version of this firmware block.
+    pub api_version: u8,
+    /// Release number, decoded from the DE1's `F8_1_7` one-byte format.
+    pub release: f32,
+    /// Number of commits since the tagged release.
+    pub commits: u16,
+    /// Number of uncommitted changes.
+    pub changes: u8,
+    /// Build SHA, a 32-bit value conventionally shown in hex.
+    pub sha: u32,
+}
+
+/// A decoded DE1 `Version` characteristic reply (`cuuid_01` / `A001`).
+///
+/// The packet is two [`VersionBlock`]s back to back: the BLE-interface firmware
+/// then the CPU-board firmware. The Machine settings panel reads
+/// [`firmware_string`](Self::firmware_string) for a display label.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct Version {
+    /// The BLE-interface firmware block.
+    pub ble: VersionBlock,
+    /// The CPU-board firmware block.
+    pub fw: VersionBlock,
+}
+
+impl Version {
+    /// Decode a `Version` packet (18-byte big-endian layout). Trailing bytes
+    /// are ignored.
+    ///
+    /// # Errors
+    ///
+    /// [`ProtocolError::PacketTooShort`] if `data` is shorter than
+    /// [`VERSION_LEN`].
+    pub fn decode(data: &[u8]) -> Result<Version, ProtocolError> {
+        if data.len() < VERSION_LEN {
+            return Err(ProtocolError::PacketTooShort {
+                packet: "Version",
+                expected: VERSION_LEN,
+                got: data.len(),
+            });
+        }
+        // Each block is `APIVersion u8 | Release u8 | Commits u16 | Changes u8
+        // | Sha u32`, 9 bytes — see `version_spec` (`binary.tcl:425`).
+        let block = |o: usize| VersionBlock {
+            api_version: data[o],
+            release: f8_1_7_decode(data[o + 1]),
+            commits: u16::from_be_bytes([data[o + 2], data[o + 3]]),
+            changes: data[o + 4],
+            sha: u32::from_be_bytes([data[o + 5], data[o + 6], data[o + 7], data[o + 8]]),
+        };
+        Ok(Version {
+            ble: block(0),
+            fw: block(9),
+        })
+    }
+
+    /// A human-readable firmware label, e.g. `"FW 1.4.142 (API 4)"` — built
+    /// from the CPU firmware block, mirroring the legacy `de1_version_string`.
+    pub fn firmware_string(&self) -> String {
+        format!(
+            "FW {:.1}.{}.{} (API {})",
+            self.fw.release, self.fw.changes, self.fw.commits, self.fw.api_version
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -274,5 +349,56 @@ mod tests {
         );
         // The largest 24-bit offset is accepted.
         assert!(firmware_write_frame(0xFF_FFFF, &[]).is_ok());
+    }
+
+    /// An 18-byte `Version` packet: BLE block API=4, release=1.0, commits=10,
+    /// changes=2, sha=0xDEADBEEF; FW block API=4, release=1.0, commits=142,
+    /// changes=5, sha=0x12345678.
+    fn version_packet() -> [u8; VERSION_LEN] {
+        [
+            0x04, 0x0A, 0x00, 0x0A, 0x02, 0xDE, 0xAD, 0xBE, 0xEF, // BLE block
+            0x04, 0x0A, 0x00, 0x8E, 0x05, 0x12, 0x34, 0x56, 0x78, // FW block
+        ]
+    }
+
+    #[test]
+    fn version_decodes_both_firmware_blocks() {
+        let v = Version::decode(&version_packet()).unwrap();
+        assert_eq!(v.ble.api_version, 4);
+        assert_eq!(v.ble.release, f8_1_7_decode(0x0A));
+        assert_eq!(v.ble.commits, 10);
+        assert_eq!(v.ble.changes, 2);
+        assert_eq!(v.ble.sha, 0xDEAD_BEEF);
+        assert_eq!(v.fw.api_version, 4);
+        assert_eq!(v.fw.commits, 142);
+        assert_eq!(v.fw.changes, 5);
+        assert_eq!(v.fw.sha, 0x1234_5678);
+    }
+
+    #[test]
+    fn version_ignores_trailing_bytes() {
+        let mut buf = version_packet().to_vec();
+        buf.push(0xFF);
+        assert!(Version::decode(&buf).is_ok());
+    }
+
+    #[test]
+    fn version_rejects_a_short_packet() {
+        assert_eq!(
+            Version::decode(&[0u8; 7]),
+            Err(ProtocolError::PacketTooShort {
+                packet: "Version",
+                expected: VERSION_LEN,
+                got: 7,
+            }),
+        );
+    }
+
+    #[test]
+    fn version_firmware_string_uses_the_cpu_block() {
+        let v = Version::decode(&version_packet()).unwrap();
+        let s = v.firmware_string();
+        assert!(s.contains("142")); // FW commits
+        assert!(s.contains("API 4"));
     }
 }

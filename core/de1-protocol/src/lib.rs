@@ -38,7 +38,7 @@ pub use command::{ShotSettings, WaterLevels, requested_state};
 pub use error::ProtocolError;
 pub use firmware::{
     FIRMWARE_FRAME_DATA_LEN, FIRMWARE_FRAME_LEN, FIRST_ERROR_NONE, FIRST_ERROR_REQUEST,
-    FW_MAP_REQUEST_LEN, FWMapRequest, firmware_write_frame,
+    FW_MAP_REQUEST_LEN, FWMapRequest, VERSION_LEN, Version, VersionBlock, firmware_write_frame,
 };
 pub use mmr::{MMR_PACKET_LEN, MmrReadReply, MmrRegister};
 pub use profile::{
