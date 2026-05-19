@@ -195,8 +195,8 @@ impl Profile {
         if count > MAX_STEPS {
             return Err(DomainError::TooManySteps { count });
         }
-        // `count` is 1..=32, so this `as` conversion cannot truncate.
-        let frame_count = count as u8;
+        // `count` is 1..=MAX_STEPS (32), checked above, so this fits a u8.
+        let frame_count = u8::try_from(count).unwrap_or(u8::MAX);
 
         let header = ShotHeader {
             frame_count,

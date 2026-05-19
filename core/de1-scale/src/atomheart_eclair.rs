@@ -2,6 +2,11 @@
 //!
 //! See `docs/06-scale-protocols.md` §7.
 
+// Raw integer weight fields are decoded into `f32` grams; precision loss past
+// 2^23 is inherent to representing a wire reading as the codec's `f32` weight,
+// not a defect, so the precision-loss lint is allowed module-wide here.
+#![allow(clippy::cast_precision_loss)]
+
 /// GATT service UUID.
 pub const SERVICE_UUID: &str = "b905eaea-2e63-0e04-7582-7913f10d8f81";
 /// Characteristic the scale notifies weight on.

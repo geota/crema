@@ -12,6 +12,12 @@
 //! [`AutoStop::on_weight`] is enough; the estimator does the smoothing. SAV
 //! integrates the telemetry group flow into a dispensed volume.
 
+// `u64` millisecond elapsed times are divided into `f32` seconds for the
+// rate/look-ahead arithmetic; that time-to-float conversion loses precision
+// past the f32 mantissa — harmless for a shot's span — so the precision-loss
+// lint is allowed module-wide here.
+#![allow(clippy::cast_precision_loss)]
+
 use de1_protocol::ShotSample;
 use typeshare::typeshare;
 

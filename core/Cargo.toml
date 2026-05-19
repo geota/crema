@@ -21,6 +21,12 @@ nonstandard_style = { level = "deny", priority = -1 }
 
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
+# Numeric casts that can silently lose data: a count narrowed to a smaller
+# integer, or an integer-to-float conversion that drops precision. Each site
+# is either converted to a checked `try_from` or `#[allow]`ed with a comment
+# explaining why the cast is sound.
+cast_possible_truncation = "deny"
+cast_precision_loss = "deny"
 
 # Dependencies shared across member crates.
 [workspace.dependencies]

@@ -6,6 +6,11 @@
 //! header, so any status notification is treated as weight. Header semantics
 //! should be confirmed against real hardware.
 
+// Raw integer weight fields are decoded into `f32` grams; precision loss past
+// 2^23 is inherent to representing a wire reading as the codec's `f32` weight,
+// not a defect, so the precision-loss lint is allowed module-wide here.
+#![allow(clippy::cast_precision_loss)]
+
 /// GATT service UUID.
 pub const SERVICE_UUID: &str = "06c31822-8682-4744-9211-febc93e3bece";
 /// Characteristic the scale notifies weight on.

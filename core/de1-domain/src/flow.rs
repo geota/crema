@@ -12,6 +12,12 @@
 //! The algorithm is a runtime choice, so the shell can expose it as an admin
 //! option and the two can be compared on identical input.
 
+// This module turns `u64` millisecond timestamps and `f32` weights into
+// `f64`/`f32` rate arithmetic. Such time-to-float conversions inherently lose
+// precision past the float mantissa — harmless for the millisecond spans a
+// shot covers — so the truncation/precision lints are allowed module-wide.
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+
 use std::collections::VecDeque;
 
 use crate::filter::median;

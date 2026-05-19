@@ -32,7 +32,8 @@ pub const MMR_DATA_LEN: usize = 16;
 /// `word_count` is clamped to `1..=256`.
 pub fn read_request(address: u32, word_count: u16) -> [u8; MMR_PACKET_LEN] {
     let mut packet = [0u8; MMR_PACKET_LEN];
-    packet[0] = (word_count.clamp(1, 256) - 1) as u8;
+    // `word_count.clamp(1, 256) - 1` is in `0..=255`, so it always fits a u8.
+    packet[0] = u8::try_from(word_count.clamp(1, 256) - 1).unwrap_or(u8::MAX);
     packet[1..4].copy_from_slice(&u24p0_encode(address));
     packet
 }
@@ -42,8 +43,9 @@ pub fn read_request(address: u32, word_count: u16) -> [u8; MMR_PACKET_LEN] {
 /// wire `Len` byte is the number of data bytes written.
 pub fn write_request(address: u32, data: &[u8]) -> [u8; MMR_PACKET_LEN] {
     let mut packet = [0u8; MMR_PACKET_LEN];
+    // `len` is capped at MMR_DATA_LEN (16) by the `min` above — fits a u8.
     let len = data.len().min(MMR_DATA_LEN);
-    packet[0] = len as u8;
+    packet[0] = u8::try_from(len).unwrap_or(u8::MAX);
     packet[1..4].copy_from_slice(&u24p0_encode(address));
     packet[4..4 + len].copy_from_slice(&data[..len]);
     packet
@@ -240,7 +242,7 @@ mod tests {
     #[test]
     fn write_request_truncates_oversized_data() {
         let packet = write_request(0x80_3830, &[0xFF; 32]);
-        assert_eq!(packet[0], MMR_DATA_LEN as u8);
+        assert_eq!(usize::from(packet[0]), MMR_DATA_LEN);
         assert_eq!(&packet[4..], &[0xFF; MMR_DATA_LEN]);
     }
 

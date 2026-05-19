@@ -139,6 +139,11 @@
 //! mapping was confirmed against a Bluetooth-HCI capture of the official BOOKOO
 //! app with a known action order — see each builder's doc comment.
 
+// The 24-bit raw weight fields are decoded into `f32` grams; representing a
+// wire reading as the codec's `f32` weight is inherent to the format, not a
+// defect, so the precision-loss lint is allowed module-wide here.
+#![allow(clippy::cast_precision_loss)]
+
 /// GATT service UUID.
 pub const SERVICE_UUID: &str = "00000ffe-0000-1000-8000-00805f9b34fb";
 /// Characteristic the scale notifies weight on.
@@ -410,10 +415,11 @@ pub fn parse_packet(data: &[u8]) -> Option<BookooPacket> {
     let flow_raw = (u16::from(data[11]) << 8) | u16::from(data[12]);
 
     // Bytes [14-15] are a 16-bit big-endian standby timeout in units of
-    // 0.1 min; the scale only ever sets whole minutes, so dividing by 10
-    // yields a u8 in the documented 5..=30 range.
+    // 0.1 min; the scale only ever sets whole minutes in the documented
+    // 5..=30 range, so dividing by 10 yields a small u8. A malformed packet
+    // outside that range saturates rather than wrapping.
     let standby_raw = (u16::from(data[14]) << 8) | u16::from(data[15]);
-    let standby_minutes = (standby_raw / 10) as u8;
+    let standby_minutes = u8::try_from(standby_raw / 10).unwrap_or(u8::MAX);
 
     // The checksum byte [19] is an XOR of every preceding byte.
     let checksum = data[..FULL_PACKET_LEN - 1].iter().fold(0_u8, |a, &b| a ^ b);

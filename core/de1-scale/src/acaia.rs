@@ -8,6 +8,11 @@
 //! gen1 and Pyxis share this protocol; they differ only in their UUIDs (and,
 //! in the shell, their connection handshake).
 
+// Raw integer weight fields are decoded into `f32` grams; precision loss past
+// 2^23 is inherent to representing a wire reading as the codec's `f32` weight,
+// not a defect, so the precision-loss lint is allowed module-wide here.
+#![allow(clippy::cast_precision_loss)]
+
 // --- gen1 / IPS UUIDs ---
 
 /// gen1: GATT service UUID.
