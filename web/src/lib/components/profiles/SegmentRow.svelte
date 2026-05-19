@@ -3,23 +3,24 @@
 	 * `SegmentRow` — one editable row of the segment list, ported from
 	 * `SegmentRow` in `profile-edit-page.jsx`.
 	 *
-	 * The design's row was display-only; here every field edits the same
-	 * segment model the curve editor drags — editing a row's target / time
-	 * moves the curve's dot, and vice versa. Clicking the row selects the
-	 * segment (highlighting it in the curve).
-	 *
 	 * Every per-segment field a DE1 profile supports lives on this single
 	 * (wide) row. The controls are the quick-controls primitives: `QSplitLabel`
-	 * split toggles (Type / Ramp / Temp-sensor / Exit metric), `QStepper`s for
-	 * the numbers.
+	 * split toggles, `QStepper`s for the numbers.
+	 *
+	 * ## Layout
+	 *
+	 * Each field is a uniform **cell** — a fixed-size box (`.pe-seg-cell`,
+	 * invisible by default) holding a label pinned to the top and an input
+	 * pinned to the bottom. The Max + Tolerance pair is the *visible* variant
+	 * of that same box (`.is-grouped`), so it lines up with the rest instead
+	 * of needing layout hacks: every label sits on one line, every input bar
+	 * on another, all bars equal width.
 	 *
 	 * ## Optional groups
 	 *
 	 * Volume, Exit and the Max limiter are optional. Each is gated by a
-	 * **toggle-label** — a dotted-chip label (`togLabel`) that turns the group
-	 * on / off; while off the group's controls render dimmed. This one
-	 * affordance replaces the old per-group mini-toggle and the dim-at-zero
-	 * convention, so every disable-able group works the same way.
+	 * **toggle-label** — a dotted copper chip doubling as the label — that
+	 * turns the group on / off; while off its controls dim.
 	 */
 	import type {
 		ProfileSegment,
@@ -121,8 +122,8 @@
 
 <!--
 	The toggle-label — a dotted chip that enables / disables an optional group.
-	Filled copper dot when on; hollow when off. Stays full-opacity even when its
-	group is dimmed, so it can always be seen and clicked.
+	Filled copper dot when on; hollow when off. Stays full-opacity even while
+	its group is dimmed, so it can always be seen and clicked.
 -->
 {#snippet togLabel(text: string, on: boolean, toggle: () => void)}
 	<button class="pe-seg-tog" class:on type="button" onclick={toggle}>
@@ -170,110 +171,135 @@
 		/>
 	</div>
 
-	<div class="pe-seg-field">
-		<div class="pe-seg-field-label">Target</div>
-		<QStepper
-			value={seg.target}
-			{unit}
-			min={0}
-			max={12}
-			step={0.1}
-			onChange={(v) => onEdit({ target: v })}
-		/>
+	<!-- Target -->
+	<div class="pe-seg-cell">
+		<div class="pe-seg-cell-body">
+			<div class="pe-seg-label">Target</div>
+			<div class="pe-seg-cell-input">
+				<QStepper
+					value={seg.target}
+					{unit}
+					min={0}
+					max={12}
+					step={0.1}
+					onChange={(v) => onEdit({ target: v })}
+				/>
+			</div>
+		</div>
 	</div>
 
-	<div class="pe-seg-field">
-		<div class="pe-seg-field-label">Time</div>
-		<QStepper
-			value={seg.time}
-			unit="s"
-			min={1}
-			max={60}
-			step={1}
-			onChange={(v) => onEdit({ time: Math.round(v) })}
-		/>
+	<!-- Time -->
+	<div class="pe-seg-cell">
+		<div class="pe-seg-cell-body">
+			<div class="pe-seg-label">Time</div>
+			<div class="pe-seg-cell-input">
+				<QStepper
+					value={seg.time}
+					unit="s"
+					min={1}
+					max={60}
+					step={1}
+					onChange={(v) => onEdit({ time: Math.round(v) })}
+				/>
+			</div>
+		</div>
 	</div>
 
-	<div class="pe-seg-field">
-		<QSplitLabel
-			prefix="Temp"
-			options={[
-				{ id: 'basket', label: 'Basket' },
-				{ id: 'mix', label: 'Mix' }
-			]}
-			value={seg.tempSensor}
-			onChange={(s) => onEdit({ tempSensor: s as ProfileSegment['tempSensor'] })}
-		/>
-		<QStepper
-			value={seg.temperatureC}
-			unit="°C"
-			min={80}
-			max={105}
-			step={0.5}
-			onChange={(v) => onEdit({ temperatureC: v })}
-		/>
+	<!-- Temp -->
+	<div class="pe-seg-cell">
+		<div class="pe-seg-cell-body">
+			<div class="pe-seg-label-row">
+				<QSplitLabel
+					prefix="Temp"
+					options={[
+						{ id: 'basket', label: 'Basket' },
+						{ id: 'mix', label: 'Mix' }
+					]}
+					value={seg.tempSensor}
+					onChange={(s) => onEdit({ tempSensor: s as ProfileSegment['tempSensor'] })}
+				/>
+			</div>
+			<div class="pe-seg-cell-input">
+				<QStepper
+					value={seg.temperatureC}
+					unit="°C"
+					min={80}
+					max={105}
+					step={0.5}
+					onChange={(v) => onEdit({ temperatureC: v })}
+				/>
+			</div>
+		</div>
 	</div>
 
 	<!-- Volume limit — gated by its toggle-label; dimmed while off. -->
-	<div class="pe-seg-field">
-		{@render togLabel('Volume', volumeOn, toggleVolume)}
-		<div class="pe-seg-ctl" class:is-off={!volumeOn}>
-			<QStepper
-				value={seg.volumeLimitMl}
-				unit="mL"
-				min={0}
-				max={1023}
-				step={5}
-				onChange={(v) => onEdit({ volumeLimitMl: Math.round(v) })}
-			/>
+	<div class="pe-seg-cell">
+		<div class="pe-seg-cell-body">
+			<div class="pe-seg-label-row">
+				{@render togLabel('Volume', volumeOn, toggleVolume)}
+			</div>
+			<div class="pe-seg-cell-input" class:is-off={!volumeOn}>
+				<QStepper
+					value={seg.volumeLimitMl}
+					unit="mL"
+					min={0}
+					max={1023}
+					step={5}
+					onChange={(v) => onEdit({ volumeLimitMl: Math.round(v) })}
+				/>
+			</div>
 		</div>
 	</div>
 
 	<!-- Exit condition — the over/under comparison renders as a `>` / `<`
 	     symbol left of the threshold value, the way a unit sits to its right. -->
-	<div class="pe-seg-exit">
-		<div class="pe-seg-exit-head">
-			{@render togLabel('Exit', exitOn, toggleExit)}
-			<div class="pe-seg-ctl" class:is-off={!exitOn}>
-				<QSplitLabel
-					options={[
-						{ id: 'pressure', label: 'Pressure' },
-						{ id: 'flow', label: 'Flow' }
-					]}
-					value={exitView.metric}
-					onChange={(m) => patchExit({ metric: m as SegmentExit['metric'] })}
-				/>
+	<div class="pe-seg-cell">
+		<div class="pe-seg-cell-body">
+			<div class="pe-seg-label-row">
+				{@render togLabel('Exit', exitOn, toggleExit)}
+				<div class="pe-seg-dim" class:is-off={!exitOn}>
+					<QSplitLabel
+						options={[
+							{ id: 'pressure', label: 'Pressure' },
+							{ id: 'flow', label: 'Flow' }
+						]}
+						value={exitView.metric}
+						onChange={(m) => patchExit({ metric: m as SegmentExit['metric'] })}
+					/>
+				</div>
 			</div>
-		</div>
-		<div class="pe-seg-ctl" class:is-off={!exitOn}>
-			<QStepper
-				value={exitView.threshold}
-				unit={exitUnit}
-				min={0}
-				max={12}
-				step={0.1}
-				onChange={(v) => patchExit({ threshold: v })}
-			>
-				{#snippet prefix()}
-					<button
-						class="pe-seg-cmp"
-						type="button"
-						aria-label="Toggle over / under"
-						onclick={flipCompare}
-					>
-						{exitView.compare === 'over' ? '>' : '<'}
-					</button>
-				{/snippet}
-			</QStepper>
+			<div class="pe-seg-cell-input" class:is-off={!exitOn}>
+				<QStepper
+					value={exitView.threshold}
+					unit={exitUnit}
+					min={0}
+					max={12}
+					step={0.1}
+					onChange={(v) => patchExit({ threshold: v })}
+				>
+					{#snippet prefix()}
+						<button
+							class="pe-seg-cmp"
+							type="button"
+							aria-label="Toggle over / under"
+							onclick={flipCompare}
+						>
+							{exitView.compare === 'over' ? '>' : '<'}
+						</button>
+					{/snippet}
+				</QStepper>
+			</div>
 		</div>
 	</div>
 
-	<!-- Limiter — Max + Tolerance side by side, wrapped in a copper-tinted box
-	     so they read as one group; gated by the Max toggle-label. -->
-	<div class="pe-seg-max">
-		<div class="pe-seg-max-pair">
-			{@render togLabel('Max', limiterOn, toggleLimiter)}
-			<div class="pe-seg-ctl" class:is-off={!limiterOn}>
+	<!-- Limiter — the visible variant of the cell box: Max + Tolerance side
+	     by side in a copper-tinted frame; gated by the Max toggle-label. -->
+	<div class="pe-seg-cell is-grouped">
+		<div class="pe-seg-cell-body">
+			<div class="pe-seg-label-row">
+				{@render togLabel('Max', limiterOn, toggleLimiter)}
+			</div>
+			<div class="pe-seg-cell-input" class:is-off={!limiterOn}>
 				<QStepper
 					value={limiterView.value}
 					unit={limiterUnit}
@@ -284,9 +310,9 @@
 				/>
 			</div>
 		</div>
-		<div class="pe-seg-max-pair">
-			<div class="pe-seg-field-label">Tolerance</div>
-			<div class="pe-seg-ctl" class:is-off={!limiterOn}>
+		<div class="pe-seg-cell-body">
+			<div class="pe-seg-label">Tolerance</div>
+			<div class="pe-seg-cell-input" class:is-off={!limiterOn}>
 				<QStepper
 					value={limiterView.range}
 					unit=""
@@ -315,17 +341,18 @@
 <style>
 	.pe-seg {
 		display: grid;
-		/* # · name(+Type+Ramp) · Target · Time · Temp+sensor · Volume · Exit ·
-		   Max+Tolerance · ⌫. The row is wide; its container scrolls. */
+		/* # · name(+Type+Ramp) · Target · Time · Temp · Volume · Exit ·
+		   Max+Tolerance · ⌫. The five single field columns are an equal fixed
+		   width; the Max box is two of them. The row is wide — it scrolls. */
 		grid-template-columns:
 			28px
-			minmax(150px, 1fr)
-			repeat(5, 140px)
-			306px
+			minmax(132px, 0.6fr)
+			repeat(5, 160px)
+			320px
 			32px;
 		gap: 12px;
 		align-items: start;
-		min-width: 1320px;
+		min-width: 1420px;
 		padding: 10px 14px;
 		background: var(--espresso-900);
 		border: 1px solid rgba(244, 237, 224, 0.05);
@@ -346,7 +373,7 @@
 		font-size: 11px;
 		color: rgba(244, 237, 224, 0.4);
 		text-align: center;
-		padding-top: 6px;
+		padding-top: 8px;
 	}
 	.pe-seg-name {
 		display: flex;
@@ -371,42 +398,71 @@
 	.pe-seg-name-input:focus {
 		border-bottom-color: rgba(244, 237, 224, 0.2);
 	}
-	.pe-seg-field {
+
+	/* The uniform field box. Invisible by default (transparent border); the
+	   limiter cell makes it visible with `.is-grouped`. Every cell is the
+	   same size, so its label (top) and input (bottom) line up across the
+	   whole row — the visible Max box and the invisible ones are one shape. */
+	.pe-seg-cell {
 		display: flex;
-		flex-direction: column;
-		gap: 4px;
+		gap: 12px;
+		height: 68px;
+		padding: 7px;
+		box-sizing: border-box;
+		border: 1px solid transparent;
+		border-radius: var(--radius-sm);
 		min-width: 0;
 	}
-	.pe-seg-field-label {
+	.pe-seg-cell.is-grouped {
+		background: rgba(193, 116, 75, 0.05);
+		border-color: rgba(193, 116, 75, 0.22);
+	}
+	.pe-seg-cell-body {
+		flex: 1;
+		display: flex;
+		flex-direction: column;
+		min-width: 0;
+	}
+	/* The input bar — pinned to the bottom of the cell, so every bar in the
+	   row sits on the same line and is the same width. */
+	.pe-seg-cell-input {
+		margin-top: auto;
+		transition: opacity var(--dur-1) var(--ease);
+	}
+
+	/* Label rows — all a fixed height with vertically-centred content, so
+	   every label (plain, split-toggle or chip) lines up. */
+	.pe-seg-label,
+	.pe-seg-label-row,
+	.pe-seg-tog {
+		height: 18px;
+		display: flex;
+		align-items: center;
+	}
+	.pe-seg-label-row {
+		gap: 8px;
+	}
+	.pe-seg-label {
 		font-family: var(--font-sans);
 		font-size: 9px;
 		letter-spacing: var(--track-allcaps);
 		text-transform: uppercase;
 		font-weight: 600;
 		color: rgba(244, 237, 224, 0.4);
-		height: 18px;
+	}
+	/* A dimmable inline wrapper — the Exit metric while the group is off. */
+	.pe-seg-dim {
 		display: flex;
 		align-items: center;
-	}
-
-	/* The dimmable control wrapper — used for every optional group's controls
-	   while its toggle-label is off. The toggle-label sits outside it and
-	   stays full-opacity so it can always be clicked to re-enable. */
-	.pe-seg-ctl {
-		display: flex;
-		flex-direction: column;
-		gap: 4px;
-		min-width: 0;
 		transition: opacity var(--dur-1) var(--ease);
 	}
-	.pe-seg-ctl.is-off {
+	.pe-seg-dim.is-off,
+	.pe-seg-cell-input.is-off {
 		opacity: 0.4;
 	}
 
 	/* The toggle-label chip — a dotted enable switch doubling as the label. */
 	.pe-seg-tog {
-		display: inline-flex;
-		align-items: center;
 		gap: 5px;
 		background: transparent;
 		border: 0;
@@ -418,7 +474,6 @@
 		text-transform: uppercase;
 		font-weight: 600;
 		color: rgba(244, 237, 224, 0.3);
-		height: 18px;
 	}
 	.pe-seg-tog.on {
 		color: rgba(244, 237, 224, 0.6);
@@ -429,6 +484,7 @@
 		border-radius: 50%;
 		border: 1px solid rgba(244, 237, 224, 0.3);
 		box-sizing: border-box;
+		flex: 0 0 7px;
 		transition: all var(--dur-1) var(--ease);
 	}
 	.pe-seg-tog.on .pe-seg-tog-dot {
@@ -436,19 +492,6 @@
 		border-color: var(--copper-500);
 	}
 
-	/* Exit column — toggle-label over the metric split-label and threshold. */
-	.pe-seg-exit {
-		display: flex;
-		flex-direction: column;
-		gap: 4px;
-		min-width: 0;
-	}
-	.pe-seg-exit-head {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		height: 18px;
-	}
 	/* The over/under comparator — a `>` / `<` symbol left of the threshold,
 	   rendered into the QStepper value box like a leading unit. */
 	.pe-seg-cmp {
@@ -467,32 +510,10 @@
 		color: var(--copper-300);
 	}
 
-	/* Max column — the limiter's Max + Tolerance steppers side by side,
-	   wrapped in a subtly copper-tinted bordered box so they read as a unit. */
-	.pe-seg-max {
-		display: flex;
-		gap: 10px;
-		min-width: 0;
-		padding: 7px;
-		/* Pull the box up so its inner labels and steppers line up with the
-		   plain columns — the negative margin cancels the box's own padding
-		   and border, which would otherwise push the content down. */
-		margin-top: -8px;
-		background: rgba(193, 116, 75, 0.05);
-		border: 1px solid rgba(193, 116, 75, 0.22);
-		border-radius: var(--radius-sm);
-	}
-	.pe-seg-max-pair {
-		display: flex;
-		flex-direction: column;
-		gap: 4px;
-		min-width: 0;
-		flex: 1;
-	}
-
 	.pe-seg-del {
 		width: 30px;
 		height: 30px;
+		margin-top: 7px;
 		background: transparent;
 		border: 0;
 		color: rgba(244, 237, 224, 0.4);
@@ -507,18 +528,19 @@
 	}
 
 	/* Trim the quick-controls primitives to the compact segment-row context.
-	   The QSplitLabel toggles shrink to the size of a field label — small,
-	   left-aligned, uppercase — so Type / Ramp / Temp read as labels. */
+	   The QSplitLabel toggles shrink to field-label size and centre their
+	   content (overriding the baseline alignment) so a split-toggle label
+	   lines up with a plain label and a chip. */
 	.pe-seg :global(.qsplit) {
 		font-size: 9px;
 		gap: 6px;
 		height: 18px;
+		align-items: center;
 	}
 	.pe-seg :global(.qsplit-prefix) {
 		color: rgba(244, 237, 224, 0.4);
 	}
-	/* Every stepper bar fills its (equal-width) column, so all the bars are
-	   the same width and line up. */
+	/* Every stepper bar fills its (equal-width) cell. */
 	.pe-seg :global(.qcs) {
 		width: 100%;
 	}
