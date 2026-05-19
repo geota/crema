@@ -94,17 +94,35 @@
 		params.set('preinf', preinfuseSeconds(profile.segments));
 	}
 
+	/**
+	 * Seed the local Quick Sheet dose / yield from the Settings brew defaults —
+	 * the fallback when no profile is active (D2). The yield is `dose × ratio`
+	 * (the `defaultRatio` is the `x` in `1:x`).
+	 */
+	function paramsFromSettings(): void {
+		params.set('dose', prefs.defaultDoseG);
+		params.set('yield', prefs.defaultDoseG * prefs.defaultRatio);
+		params.set('brewTemp', prefs.defaultBrewTempC);
+		params.set('preinf', prefs.defaultPreinfusionS);
+	}
+
 	// Initialise the params whenever the active profile changes — this bridges
 	// the external library store into the local param model, so the header /
 	// ratio / steppers stay in sync with whatever profile is active. Keyed on
 	// the profile id so it fires once per active-profile change, not on every
-	// stepper edit.
+	// stepper edit. With no active profile the Settings brew defaults seed it
+	// instead (D2) — the sentinel `'settings'` so that path also fires once.
 	let lastSeededId: string | undefined;
 	$effect(() => {
 		const profile = activeProfile;
-		if (profile && profile.id !== lastSeededId) {
-			lastSeededId = profile.id;
-			paramsFromProfile(profile);
+		if (profile) {
+			if (profile.id !== lastSeededId) {
+				lastSeededId = profile.id;
+				paramsFromProfile(profile);
+			}
+		} else if (lastSeededId !== 'settings') {
+			lastSeededId = 'settings';
+			paramsFromSettings();
 		}
 	});
 
@@ -316,6 +334,9 @@
 						<LiveChart
 							series={ui.shotTelemetry}
 							goalSegments={activeProfile?.segments}
+							showFlowCurve={prefs.showFlowCurve}
+							smoothPressure={prefs.smoothPressure}
+							telemetryRateHz={prefs.telemetryRateHz}
 						/>
 					{:else}
 						<!-- Clean empty state — no shot data buffered yet. -->

@@ -10,9 +10,12 @@
 	 * `app.disconnectDe1()`. Auto-connect-on-launch and the telemetry rate are
 	 * persisted app preferences in `lib/settings`.
 	 *
-	 * **UI-only** — the shell exposes no DE1 firmware version, MAC, or group
-	 * temperature, so those read "—" until connected and are otherwise
-	 * placeholders. The firmware-update block, Rename, Forget-device, and the
+	 * **Real** — the machine card's Firmware line shows the DE1's decoded
+	 * firmware label (`Event::Firmware`, folded into `UiSnapshot.de1Firmware`);
+	 * the BLE line shows the Web Bluetooth device id from the connection
+	 * diagnostics; the Group line shows the live mix ("group") temperature.
+	 *
+	 * **UI-only** — the firmware-*update* block, Rename, Forget-device, and the
 	 * peripherals list need DE1 / extra-BLE-device support the shell does not
 	 * have; each is marked with a `// TODO`.
 	 *
@@ -32,7 +35,7 @@
 	 */
 	import type { CremaApp, UiSnapshot } from '$lib/state';
 	import type { De1State } from '$lib/ble';
-	import { getSettingsStore } from '$lib/settings';
+	import { getSettingsStore, formatTemp } from '$lib/settings';
 	import StSectionHead from '../StSectionHead.svelte';
 	import StGroup from '../StGroup.svelte';
 	import StRow from '../StRow.svelte';
@@ -106,6 +109,16 @@
 	/** The decoded machine state + substate, or a placeholder before the first. */
 	const machineStateLabel = $derived(snapshot.machineState ?? '— (no StateInfo yet)');
 
+	// ── Machine card meta (D4) ────────────────────────────────────────────
+	/** The DE1's decoded firmware label, or a dash before the version arrives. */
+	const firmwareLabel = $derived(snapshot.de1Firmware ?? '—');
+	/** The Web Bluetooth device id of the connected DE1, or a dash. */
+	const bleLabel = $derived(diag.deviceId ?? '—');
+	/** The live group ("mix") temperature, in the chosen unit, or a dash. */
+	const groupLabel = $derived(
+		formatTemp(snapshot.latestTelemetry?.mixTemp ?? null, prefs.tempUnit)
+	);
+
 	function updateFirmware(): void {
 		// TODO: the DE1 firmware-update path needs a BLE write channel the shell
 		// does not expose. Stubbed until the core gains a firmware-upload command.
@@ -160,11 +173,12 @@
 			{connected ? 'DE1 · Crema Bar' : 'No machine connected'}
 		</div>
 		<div class="st-machinecard-meta">
-			<!-- The shell exposes no DE1 firmware / MAC / group temp — "—" until
-			     the core surfaces them. -->
-			<span>Firmware <strong>—</strong></span>
-			<span>BLE —</span>
-			<span>Group —</span>
+			<!-- D4: Firmware is the DE1's decoded version label; BLE is the Web
+			     Bluetooth device id; Group is the live mix temperature. All read
+			     "—" until the DE1 is connected and the data arrives. -->
+			<span>Firmware <strong>{firmwareLabel}</strong></span>
+			<span class="st-machinecard-ble">BLE {bleLabel}</span>
+			<span>Group {groupLabel}</span>
 		</div>
 		<div class="st-machinecard-actions">
 			{#if connected}
@@ -330,5 +344,13 @@
 		word-break: break-all;
 		max-width: 220px;
 		display: inline-block;
+	}
+	/* The Web Bluetooth device id can be a long opaque string — clamp it so
+	   the machine-card meta row keeps its rhythm. */
+	.st-machinecard-ble {
+		max-width: 180px;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 </style>
