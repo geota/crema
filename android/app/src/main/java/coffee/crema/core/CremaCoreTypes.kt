@@ -16,6 +16,7 @@
  * Gradle copy task — rather than keeping a hand-synced duplicate.
  */
 
+
 package coffee.crema.core
 
 import kotlinx.serialization.Serializable
@@ -48,7 +49,7 @@ data class EventShotFrameChangedInner (
 @Serializable
 data class EventTelemetryInner (
 	/// Milliseconds since the shot began; `0` if no shot is in progress.
-	val elapsed_ms: UInt,
+	val elapsed: UInt,
 	/// Group pressure, bar.
 	val group_pressure: Float,
 	/// Group flow, mL/s.
@@ -65,27 +66,27 @@ data class EventTelemetryInner (
 @Serializable
 data class EventScaleReadingInner (
 	/// Robust current weight, grams.
-	val weight_g: Float,
+	val weight: Float,
 	/// Robust mass-flow rate, grams per second — the core's own estimate
 	/// from the weight series, available for every supported scale.
-	val flow_g_per_s: Float,
+	val flow: Float,
 	/// The scale's own native mass-flow rate, grams per second, when the
 	/// scale reports one (the Bookoo does); `None` otherwise. Distinct
-	/// from the core-computed `flow_g_per_s` — surfaced as raw data.
-	val device_flow_g_per_s: Float? = null,
+	/// from the core-computed `flow` — surfaced as raw data.
+	val device_flow: Float? = null,
 	/// The scale's own built-in-timer reading, milliseconds, when the
 	/// scale reports one (the Bookoo does); `None` otherwise.
-	val device_timer_ms: UInt? = null,
+	val device_timer: UInt? = null,
 	/// The scale's live beeper-volume setting `0..=5`, when the scale
 	/// echoes its settings in the weight notification (the Bookoo does);
 	/// `None` otherwise. Lets a settings control display the real value.
 	val device_volume: UByte? = null,
 	/// The scale's live auto-standby timeout, minutes, when the scale
 	/// echoes its settings (the Bookoo does); `None` otherwise.
-	val device_standby_minutes: UByte? = null,
+	val device_standby: UByte? = null,
 	/// The scale's live battery charge percentage, when the scale reports
 	/// it (the Bookoo does); `None` otherwise.
-	val device_battery_percent: UByte? = null,
+	val device_battery: UByte? = null,
 	/// Whether the scale's flow smoothing is on, when the scale echoes its
 	/// settings in the weight notification (the Bookoo does); `None`
 	/// otherwise. Lets a settings toggle reflect the real on/off state.
@@ -101,9 +102,9 @@ data class EventScaleReadingInner (
 @Serializable
 data class EventWaterLevelInner (
 	/// Current tank level, mm — includes the legacy +5 mm sensor correction.
-	val level_mm: Float,
+	val level: Float,
 	/// Refill threshold, mm; a refill is wanted at or below it.
-	val refill_threshold_mm: Float
+	val refill_threshold: Float
 )
 
 /// Generated type representing the anonymous struct variant `StopTriggered` of the `Event` Rust enum
@@ -117,7 +118,7 @@ data class EventStopTriggeredInner (
 @Serializable
 data class EventShotCompletedInner (
 	/// Total shot duration, milliseconds.
-	val duration_ms: UInt,
+	val duration: UInt,
 	/// Number of telemetry samples recorded.
 	val sample_count: UInt
 )
@@ -135,14 +136,14 @@ data class EventWaterSessionCompletedInner (
 	/// Whether this was a hot-water pour or a flush.
 	val kind: WaterSessionKind,
 	/// Total session duration, milliseconds.
-	val duration_ms: UInt
+	val duration: UInt
 )
 
 /// Generated type representing the anonymous struct variant `SteamSessionCompleted` of the `Event` Rust enum
 @Serializable
 data class EventSteamSessionCompletedInner (
 	/// Total session duration, milliseconds.
-	val duration_ms: UInt,
+	val duration: UInt,
 	/// Number of steam telemetry samples recorded.
 	val sample_count: UInt
 )
@@ -230,7 +231,12 @@ data class EventDecodeErrorInner (
 /// Something the core observed that the UI may want to react to.
 /// 
 /// Serialized adjacently tagged — a JSON event reads `{"type":"ShotStarted"}`
-/// or `{"type":"Telemetry","content":{"elapsed_ms":…}}`.
+/// or `{"type":"Telemetry","content":{"elapsed":…}}`.
+/// 
+/// Numeric fields stay as flat scalars (`u32`, `f32`) so they cross the FFI
+/// boundary as plain numbers — `Duration` does not transmit through typeshare
+/// to TS / Kotlin. The unit each scalar carries is documented in its
+/// doc-comment.
 @Serializable
 sealed class Event {
 	/// The DE1's machine state or substate changed.

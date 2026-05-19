@@ -6,7 +6,12 @@
  * Something the core observed that the UI may want to react to.
  * 
  * Serialized adjacently tagged — a JSON event reads `{"type":"ShotStarted"}`
- * or `{"type":"Telemetry","content":{"elapsed_ms":…}}`.
+ * or `{"type":"Telemetry","content":{"elapsed":…}}`.
+ * 
+ * Numeric fields stay as flat scalars (`u32`, `f32`) so they cross the FFI
+ * boundary as plain numbers — `Duration` does not transmit through typeshare
+ * to TS / Kotlin. The unit each scalar carries is documented in its
+ * doc-comment.
  */
 export type Event = 
 	/** The DE1's machine state or substate changed. */
@@ -31,7 +36,7 @@ export type Event =
 	/** A telemetry sample arrived from the DE1. */
 	| { type: "Telemetry", content: {
 	/** Milliseconds since the shot began; `0` if no shot is in progress. */
-	elapsed_ms: number;
+	elapsed: number;
 	/** Group pressure, bar. */
 	group_pressure: number;
 	/** Group flow, mL/s. */
@@ -46,23 +51,23 @@ export type Event =
 	/** A weight reading arrived from the scale, smoothed by the flow estimator. */
 	| { type: "ScaleReading", content: {
 	/** Robust current weight, grams. */
-	weight_g: number;
+	weight: number;
 	/**
 	 * Robust mass-flow rate, grams per second — the core's own estimate
 	 * from the weight series, available for every supported scale.
 	 */
-	flow_g_per_s: number;
+	flow: number;
 	/**
 	 * The scale's own native mass-flow rate, grams per second, when the
 	 * scale reports one (the Bookoo does); `None` otherwise. Distinct
-	 * from the core-computed `flow_g_per_s` — surfaced as raw data.
+	 * from the core-computed `flow` — surfaced as raw data.
 	 */
-	device_flow_g_per_s?: number;
+	device_flow?: number;
 	/**
 	 * The scale's own built-in-timer reading, milliseconds, when the
 	 * scale reports one (the Bookoo does); `None` otherwise.
 	 */
-	device_timer_ms?: number;
+	device_timer?: number;
 	/**
 	 * The scale's live beeper-volume setting `0..=5`, when the scale
 	 * echoes its settings in the weight notification (the Bookoo does);
@@ -73,12 +78,12 @@ export type Event =
 	 * The scale's live auto-standby timeout, minutes, when the scale
 	 * echoes its settings (the Bookoo does); `None` otherwise.
 	 */
-	device_standby_minutes?: number;
+	device_standby?: number;
 	/**
 	 * The scale's live battery charge percentage, when the scale reports
 	 * it (the Bookoo does); `None` otherwise.
 	 */
-	device_battery_percent?: number;
+	device_battery?: number;
 	/**
 	 * Whether the scale's flow smoothing is on, when the scale echoes its
 	 * settings in the weight notification (the Bookoo does); `None`
@@ -96,9 +101,9 @@ export type Event =
 	/** The DE1 reported its water-tank level. */
 	| { type: "WaterLevel", content: {
 	/** Current tank level, mm — includes the legacy +5 mm sensor correction. */
-	level_mm: number;
+	level: number;
 	/** Refill threshold, mm; a refill is wanted at or below it. */
-	refill_threshold_mm: number;
+	refill_threshold: number;
 }}
 	/**
 	 * Auto-stop decided the shot should end. The accompanying [`Command`]
@@ -111,7 +116,7 @@ export type Event =
 	/** The espresso shot finished. */
 	| { type: "ShotCompleted", content: {
 	/** Total shot duration, milliseconds. */
-	duration_ms: number;
+	duration: number;
 	/** Number of telemetry samples recorded. */
 	sample_count: number;
 }}
@@ -128,14 +133,14 @@ export type Event =
 	/** Whether this was a hot-water pour or a flush. */
 	kind: WaterSessionKind;
 	/** Total session duration, milliseconds. */
-	duration_ms: number;
+	duration: number;
 }}
 	/** A steam session began (the DE1 entered the `Steam` state). */
 	| { type: "SteamSessionStarted", content?: undefined }
 	/** A steam session finished. */
 	| { type: "SteamSessionCompleted", content: {
 	/** Total session duration, milliseconds. */
-	duration_ms: number;
+	duration: number;
 	/** Number of steam telemetry samples recorded. */
 	sample_count: number;
 }}
