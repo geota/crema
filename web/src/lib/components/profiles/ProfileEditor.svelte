@@ -459,8 +459,6 @@
 						{activeSegId}
 						onSelect={(id) => (selectedSegId = id)}
 						onEdit={editSegment}
-						width={720}
-						height={300}
 					/>
 				</div>
 

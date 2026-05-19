@@ -155,6 +155,63 @@ export function flowGhostPath(
 }
 
 /**
+ * A densely-sampled `[time, value]` pair list for one curve — what uPlot's
+ * single linear-path series plots. {@link sampleCurve} produces these.
+ */
+export interface CurveSamples {
+	/** Elapsed times, seconds, strictly ascending. */
+	time: number[];
+	/** The curve's value at each {@link time}. */
+	value: number[];
+}
+
+/** How many interpolation points a `smooth` ramp contributes. */
+const SMOOTH_STEPS = 24;
+
+/**
+ * Densely sample a segment list into `[time, value]` columns for uPlot.
+ *
+ * uPlot's per-series path renderer can't mix smooth and stepped ramps in one
+ * line, so the shape is baked into the data instead: a `fast` ramp emits a
+ * vertical step (two points at the boundary time, the old then the new value),
+ * and a `smooth` ramp emits {@link SMOOTH_STEPS} points along the same cubic
+ * ease the SVG `curvePath` drew (the symmetric smoothstep `3u² − 2u³`). The
+ * result is a single linear-path series that renders the right shape.
+ *
+ * `damp` rescales every target before sampling — the flow ghost curve passes
+ * the design's `target → min(4, target·0.35 + 0.5)` damping here.
+ */
+export function sampleCurve(
+	segments: readonly ProfileSegment[],
+	damp?: (target: number) => number
+): CurveSamples {
+	const time: number[] = [0];
+	const value: number[] = [0];
+	let t = 0;
+	let prev = 0;
+	for (const s of segments) {
+		const target = damp ? damp(s.target) : s.target;
+		if (s.ramp === 'fast') {
+			// A vertical step: jump to the target at the segment start, hold it
+			// across the segment's duration.
+			time.push(t, t + s.time);
+			value.push(target, target);
+		} else {
+			// A cubic ease — the same smoothstep the Bézier `curvePath` traced.
+			for (let i = 1; i <= SMOOTH_STEPS; i++) {
+				const u = i / SMOOTH_STEPS;
+				const ease = u * u * (3 - 2 * u);
+				time.push(t + u * s.time);
+				value.push(prev + (target - prev) * ease);
+			}
+		}
+		t += s.time;
+		prev = target;
+	}
+	return { time, value };
+}
+
+/**
  * Map a dragged boundary-dot position back onto a segment edit.
  *
  * Dragging the dot for segment `index` changes two things, exactly as a DE1

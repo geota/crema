@@ -38,6 +38,7 @@ export {
 	PAD_Y,
 	type CurveGeometry,
 	type BoundaryDot,
+	type CurveSamples,
 	geometry,
 	xFor,
 	yFor,
@@ -47,5 +48,6 @@ export {
 	boundaryDots,
 	activeBand,
 	flowGhostPath,
+	sampleCurve,
 	svgToSegment
 } from './curve';
