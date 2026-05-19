@@ -31,6 +31,7 @@
 		Y_MAX,
 		type ProfileSegment
 	} from '$lib/profiles';
+	import { theme } from '$lib/theme.svelte';
 
 	let {
 		segments,
@@ -127,12 +128,12 @@
 					if (bandSpan) {
 						const x0 = u.valToPos(bandSpan[0], 'x', true);
 						const x1 = u.valToPos(bandSpan[1], 'x', true);
-						ctx.fillStyle = 'rgba(193,116,75,0.06)';
+						ctx.fillStyle = cssVar('--chart-band');
 						ctx.fillRect(x0, top, x1 - x0, bot - top);
 					}
 
 					// Fixed bar marks — the design's 0 / 3 / 6 / 9 / 12 grid.
-					ctx.strokeStyle = 'rgba(var(--tint-rgb), 0.05)';
+					ctx.strokeStyle = cssVar('--chart-grid');
 					ctx.lineWidth = 1;
 					for (const v of [0, 3, 6, 9, 12]) {
 						const y = Math.round(u.valToPos(v, 'y', true)) + 0.5;
@@ -164,8 +165,9 @@
 	});
 
 	function buildOpts(w: number, h: number): uPlot.Options {
-		const gridColor = 'rgba(var(--tint-rgb), 0.05)';
-		const labelColor = 'rgba(var(--tint-rgb), 0.35)';
+		// Canvas strokes can't resolve `var()` — resolve the chart tokens here.
+		const gridColor = cssVar('--chart-grid');
+		const labelColor = cssVar('--chart-axis-label');
 		const font = '11px "JetBrains Mono", monospace';
 		return {
 			width: w,
@@ -358,6 +360,22 @@
 	$effect(() => {
 		void bandSpan;
 		chart?.redraw(false);
+	});
+
+	// Repaint on theme flip — axis/grid colours are baked into `buildOpts` at
+	// creation, so rebuild the instance against the new tokens, then re-sync
+	// the drag handles to the fresh geometry.
+	$effect(() => {
+		theme.current;
+		untrack(() => {
+			const el = plotEl;
+			if (!el || !chart) return;
+			const w = Math.max(1, el.clientWidth);
+			const h = Math.max(1, el.clientHeight);
+			chart.destroy();
+			chart = new uPlot(buildOpts(w, h), toData(segments), el);
+			syncHandles();
+		});
 	});
 
 	/**

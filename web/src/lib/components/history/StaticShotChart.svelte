@@ -14,6 +14,7 @@
 	import uPlot from 'uplot';
 	import 'uplot/dist/uPlot.min.css';
 	import type { TelemetrySample } from '$lib/state';
+	import { theme } from '$lib/theme.svelte';
 
 	let {
 		series,
@@ -65,7 +66,7 @@
 					const { left, top, width, height: h } = u.bbox;
 					ctx.save();
 					ctx.setLineDash([]);
-					ctx.strokeStyle = 'rgba(var(--tint-rgb), 0.05)';
+					ctx.strokeStyle = cssVar('--chart-grid');
 					ctx.lineWidth = devicePixelRatio;
 					for (const p of [0.2, 0.4, 0.6, 0.8]) {
 						const y = Math.round(top + h * p) + 0.5;
@@ -96,8 +97,9 @@
 	}
 
 	function buildOpts(w: number, h: number): uPlot.Options {
-		const gridColor = 'rgba(var(--tint-rgb), 0.05)';
-		const labelColor = 'rgba(var(--tint-rgb), 0.35)';
+		// Canvas strokes can't resolve `var()` — resolve the chart tokens here.
+		const gridColor = cssVar('--chart-grid');
+		const labelColor = cssVar('--chart-axis-label');
 		const yFont = '11px "JetBrains Mono", monospace';
 		return {
 			width: w,
@@ -229,6 +231,18 @@
 	// React to a height prop change without rebuilding the chart.
 	$effect(() => {
 		chart?.setSize({ width: chart.width, height });
+	});
+
+	// Repaint on theme flip — axis/grid colours are baked into `buildOpts` at
+	// creation, so rebuild the instance against the new tokens.
+	$effect(() => {
+		theme.current;
+		untrack(() => {
+			const el = plotEl;
+			if (!el || !chart) return;
+			chart.destroy();
+			chart = new uPlot(buildOpts(Math.max(1, el.clientWidth), height), toData(series), el);
+		});
 	});
 </script>
 
