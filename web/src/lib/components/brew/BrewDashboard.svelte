@@ -18,7 +18,7 @@
 	 * driving the machine is a separate net-new feature (see the `// TODO: wire
 	 * to DE1 control` markers in `QuickSheet.svelte` and `brew-params`).
 	 */
-	import { waterTankMl, type UiSnapshot } from '$lib/state';
+	import { waterTankMl, waterRefillSoon, type UiSnapshot } from '$lib/state';
 	import { ShotPhase } from '$lib/core/crema-core';
 	import {
 		getSettingsStore,
@@ -209,6 +209,10 @@
 		const m = convertVolume(ml, prefs.volumeUnit);
 		return m.unit ? `${m.value} ${m.unit}` : m.value;
 	};
+	/** Whether the tank is near the DE1's refill threshold — the E2 cue. */
+	const refillSoon = $derived(
+		waterRefillSoon(ui.waterLevelMm, ui.waterRefillThresholdMm)
+	);
 
 	// ── Quick Sheet callbacks ────────────────────────────────────────────
 	/**
@@ -378,9 +382,13 @@
 				>
 				<!-- Water tank: real `WaterLevel` telemetry, the sensor depth
 				     converted to a tank volume in mL (see `waterTankMl`), then
-				     to the Settings volume unit (D1). -->
+				     to the Settings volume unit (D1). A "refill soon" cue (E2)
+				     shows when the level nears the DE1's refill threshold. -->
 				<span class="t-eyebrow">Water</span>
-				<span>{convertVolumeText(waterMl)}</span>
+				<span style:color={refillSoon ? 'var(--warning)' : undefined}>
+					{convertVolumeText(waterMl)}{#if refillSoon}
+						· refill soon{/if}
+				</span>
 			</div>
 			<!-- TODO: wire to DE1 control — starting / stopping a shot is a net-new
 			     feature; today this only flips the local `running` flag. -->

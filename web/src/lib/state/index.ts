@@ -9,6 +9,7 @@ export {
 	applyEvent,
 	formatFirmware,
 	waterTankMl,
+	waterRefillSoon,
 	INITIAL_SNAPSHOT,
 	DEFAULT_SCALE_VOLUME,
 	DEFAULT_SCALE_STANDBY_MINUTES,
