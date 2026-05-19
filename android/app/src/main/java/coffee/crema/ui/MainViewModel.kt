@@ -2,6 +2,7 @@ package coffee.crema.ui
 
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
 import coffee.crema.core.Command
 import coffee.crema.core.CoreOutput
 import coffee.crema.core.CremaBridge
@@ -15,6 +16,7 @@ import coffee.crema.ble.ScaleBleManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 
 /**
@@ -239,8 +241,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     )
 
     init {
-        // Mirror the BLE manager's coarse state into the UI snapshot.
-        // (Read once here for the initial value; see observeBleState below.)
+        // Collect the managers' coarse connection-state flows so the UI
+        // snapshot updates promptly when either advances — rather than only
+        // when an unrelated event happens to call observeBleState().
+        viewModelScope.launch {
+            ble.state.collect { state ->
+                _ui.value = _ui.value.copy(bleState = state)
+            }
+        }
+        viewModelScope.launch {
+            scale.state.collect { state ->
+                _ui.value = _ui.value.copy(scaleState = state)
+            }
+        }
     }
 
     /** Called from the UI once the BLE runtime permissions have been granted. */
@@ -252,8 +265,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         bleScanner.scanFor(SCAN_LABEL_DE1, De1BleManager::isDe1Name) { device, _ ->
             ble.connect(device)
         }
-        // Reflect the manager's state as it advances.
-        observeBleState()
+        // The manager's state flow is collected in `init`; markScanning() above
+        // already pushed the new state, so no manual reflection is needed here.
     }
 
     fun disconnect() {
@@ -274,7 +287,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         bleScanner.scanFor(SCAN_LABEL_SCALE, ScaleBleManager::isBookooName) { device, name ->
             scale.connect(device, name)
         }
-        observeBleState()
     }
 
     fun disconnectScale() {
@@ -493,16 +505,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         onCoreOutputJson(raw)
     }
 
-    private fun observeBleState() {
-        // The managers expose StateFlows; for now their current values are
-        // polled whenever a status line lands. Collecting them in coroutines is
-        // a follow-up; the values are folded in here on each call.
-        _ui.value = _ui.value.copy(
-            bleState = ble.state.value,
-            scaleState = scale.state.value,
-        )
-    }
-
     /**
      * The FFI/BLE seam: a JSON `CoreOutput` string came back from
      * [CremaBridge.onNotification]. Deserialize it and fold its [Event]s into
@@ -518,8 +520,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             appendLog("JSON parse error: ${it.message}")
             return
         }
-        // Reflect current BLE state too.
-        observeBleState()
         output.events.forEach(::applyEvent)
         output.commands.forEach(::executeCommand)
     }
@@ -529,6 +529,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * AND the scale manager — funnels its `commands` here. This single path
      * makes both the manual Tare button and the core's automatic shot-start
      * auto-tare work, because both surface as a [Command.WriteScale].
+     *
+     * A scale write is dispatched on [viewModelScope]: `writeCommand` is a
+     * `suspend fun`, so it awaits the BLE write on a coroutine rather than
+     * blocking the BLE binder thread this may be called from.
      */
     private fun executeCommand(command: Command) {
         when (command) {
@@ -537,7 +541,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 val bytes = command.content.data
                     .map { it.toByte() }
                     .toByteArray()
-                scale.writeCommand(bytes)
+                viewModelScope.launch { scale.writeCommand(bytes) }
             }
             is Command.WriteCharacteristic -> {
                 // DE1 characteristic writes are not yet routed from here; the
@@ -654,6 +658,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
             is Event.DecodeError ->
                 appendLog("Decode error: ${event.content.message}")
+            // The version / MMR / calibration read paths have no UI yet —
+            // log them so the data is visible until a screen consumes it.
+            is Event.Firmware ->
+                appendLog("Firmware: ${event.content.firmware_string}")
+            is Event.MmrValue ->
+                appendLog(
+                    "MMR ${event.content.register}: ${event.content.value}",
+                )
+            is Event.Calibration ->
+                appendLog(
+                    "Calibration ${event.content.target} " +
+                        "(${event.content.command})",
+                )
         }
     }
 
