@@ -10,8 +10,8 @@ pub const SHOT_SAMPLE_LEN: usize = 19;
 /// shot (see protocol §3).
 ///
 /// Temperatures are °C, pressure is bar, flow is mL/s. This type is `Clone` but
-/// deliberately not `Copy`: at ~44 bytes it exceeds the size where implicit
-/// copies are a good default — pass it by reference.
+/// deliberately not `Copy`: it is large enough (a dozen fields) that implicit
+/// copies are not a good default — pass it by reference.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ShotSample {
