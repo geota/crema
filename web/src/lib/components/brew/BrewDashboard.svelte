@@ -175,6 +175,15 @@
 	const weight = $derived(ui.scaleWeightG);
 	/** Weight readout, in the chosen weight unit. */
 	const weightM = $derived(convertWeight(weight, prefs.weightUnit));
+	/**
+	 * The weight feeding the Yield / Ratio cards: live during a shot, then held
+	 * at the last shot's final yield once it completes — so those cards read as
+	 * the shot's result rather than the drifting scale. The 4-up WEIGHT readout
+	 * and the foot keep the live `weight`.
+	 */
+	const shotWeight = $derived(showLastShot && lastShot ? lastShot.yieldG : weight);
+	/** Yield / Ratio weight in the chosen weight unit. */
+	const shotWeightM = $derived(convertWeight(shotWeight, prefs.weightUnit));
 	/** Brew-temperature target, in the chosen temperature unit. */
 	const brewTempTarget = $derived(convertTemp(p.brewTemp, prefs.tempUnit));
 	/** Yield target, in the chosen weight unit. */
@@ -187,7 +196,7 @@
 	const scaleName = $derived(ui.scaleName ?? 'Scale');
 	/** Yield progress as a 0..100 % bar width. */
 	const yieldPct = $derived(
-		weight == null ? 0 : Math.min(100, (weight / p.yield) * 100)
+		shotWeight == null ? 0 : Math.min(100, (shotWeight / p.yield) * 100)
 	);
 	/**
 	 * Water-tank volume (mL) for the foot readout — the DE1's `WaterLevel`
@@ -265,7 +274,7 @@
 					<div class="crema-target">
 						<div class="t-eyebrow">Yield</div>
 						<div class="crema-target-val">
-							<span>{weightM.value}</span> / {yieldTarget.value}<span
+							<span>{shotWeightM.value}</span> / {yieldTarget.value}<span
 								class="crema-target-unit">{yieldTarget.unit}</span
 							>
 						</div>
@@ -276,7 +285,7 @@
 					<div class="crema-target">
 						<div class="t-eyebrow">Ratio</div>
 						<div class="crema-target-val">
-							<span>1:{weight == null ? '—' : (weight / p.dose).toFixed(2)}</span>
+							<span>1:{shotWeight == null ? '—' : (shotWeight / p.dose).toFixed(2)}</span>
 							<span class="crema-target-unit"> · target 1:{ratio}</span>
 						</div>
 					</div>
