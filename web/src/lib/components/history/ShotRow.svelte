@@ -120,7 +120,7 @@
 		border-radius: var(--radius-sm);
 		cursor: pointer;
 		text-align: left;
-		color: var(--ink-50);
+		color: var(--fg-1);
 		transition: background var(--dur-1) var(--ease);
 	}
 	.hi-row:hover {
@@ -139,7 +139,7 @@
 		font-family: var(--font-mono);
 		font-variant-numeric: tabular-nums;
 		font-size: 12px;
-		color: var(--ink-50);
+		color: var(--fg-1);
 	}
 	.hi-row-time-d {
 		font-family: var(--font-sans);
@@ -161,7 +161,7 @@
 		font-family: var(--font-sans);
 		font-size: 13px;
 		font-weight: 500;
-		color: var(--ink-50);
+		color: var(--fg-1);
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;
@@ -181,7 +181,7 @@
 		font-family: var(--font-mono);
 		font-variant-numeric: tabular-nums;
 		font-size: 13px;
-		color: var(--ink-50);
+		color: var(--fg-1);
 	}
 	.hi-row-metric-val em {
 		font-style: normal;

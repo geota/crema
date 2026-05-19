@@ -234,7 +234,7 @@
 		cursor: pointer;
 	}
 	.bean-edit-done:hover {
-		color: var(--ink-50);
+		color: var(--fg-1);
 	}
 
 	.bean-edit {
@@ -252,7 +252,7 @@
 		background: rgba(var(--tint-rgb), 0.04);
 		border: 1px solid rgba(var(--tint-rgb), 0.12);
 		border-radius: var(--radius-sm);
-		color: var(--ink-50);
+		color: var(--fg-1);
 		font-family: var(--font-sans);
 		font-size: 12px;
 		padding: 7px 9px;

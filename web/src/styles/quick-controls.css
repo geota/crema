@@ -32,7 +32,7 @@
   width: 36px; flex: 0 0 36px;
   border: 0; border-radius: 6px;
   background: rgba(var(--tint-rgb), 0.08);
-  color: var(--ink-50);
+  color: var(--fg-1);
   cursor: pointer;
   display: flex; align-items: center; justify-content: center;
   font-size: 14px;
@@ -50,7 +50,7 @@
 .qcs-num {
   font-size: 22px;
   font-weight: 500;
-  color: var(--ink-50);
+  color: var(--fg-1);
   letter-spacing: -0.01em;
 }
 .qcs-unit {
@@ -108,7 +108,7 @@
 .qcpill.is-dark {
   background: rgba(var(--tint-rgb), 0.05);
   border-color: rgba(var(--tint-rgb), 0.10);
-  color: var(--ink-50);
+  color: var(--fg-1);
 }
 .qcpill.is-dark:hover { background: rgba(var(--tint-rgb), 0.08); }
 .qcpill.is-open {
@@ -142,7 +142,7 @@
   font-family: var(--font-serif);
   font-size: 22px;
   letter-spacing: -0.01em;
-  color: var(--ink-50);
+  color: var(--fg-1);
 }
 .qsheet-sub {
   font-family: var(--font-sans);
@@ -178,7 +178,7 @@
   padding: 9px 16px; border-radius: var(--radius-sm);
   background: transparent;
   border: 1px solid rgba(var(--tint-rgb), 0.12);
-  color: var(--ink-50);
+  color: var(--fg-1);
   cursor: pointer;
 }
 .qsheet-cta.is-primary {
@@ -225,7 +225,7 @@
 .qbtarget-val {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
-  color: var(--ink-50);
+  color: var(--fg-1);
 }
 .qbtarget i { font-size: 12px; opacity: 0.4; }
 
@@ -273,7 +273,7 @@
   cursor: pointer;
   transition: all var(--dur-1) var(--ease);
   text-align: left;
-  color: var(--ink-50);
+  color: var(--fg-1);
 }
 .qfav:hover { border-color: rgba(var(--tint-rgb), 0.15); transform: translateY(-1px); }
 .qfav.is-active {

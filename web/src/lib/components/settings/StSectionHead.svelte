@@ -15,7 +15,7 @@
 	{#if eyebrow}
 		<div class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">{eyebrow}</div>
 	{/if}
-	<div class="st-shead-title">{title}</div>
+	<div class="t-page-title st-shead-title">{title}</div>
 	{#if sub}
 		<div class="st-shead-sub">{sub}</div>
 	{/if}

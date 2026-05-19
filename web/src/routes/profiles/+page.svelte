@@ -149,7 +149,7 @@
 	<div class="pp-head">
 		<div class="pp-head-l">
 			<div class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Library</div>
-			<div class="pp-title">Profiles</div>
+			<div class="t-page-title pp-title">Profiles</div>
 			<div class="pp-sub">
 				{#if store.loaded}
 					{profiles.length} saved · {pinnedCount} pinned to favorites
@@ -255,7 +255,7 @@
 <style>
 	.pp-page {
 		background: var(--bg-page);
-		color: var(--ink-50);
+		color: var(--fg-1);
 		display: flex;
 		flex-direction: column;
 		min-height: 100vh;
@@ -276,11 +276,9 @@
 		flex-direction: column;
 		gap: 4px;
 	}
+	/* Page title uses the shared .t-page-title role; only the layout nudge
+	   is screen-specific. */
 	.pp-title {
-		font-family: var(--font-serif);
-		font-size: 40px;
-		letter-spacing: -0.02em;
-		color: var(--ink-50);
 		margin-top: 2px;
 	}
 	.pp-sub {
@@ -318,7 +316,7 @@
 		background: transparent;
 		border: 0;
 		outline: 0;
-		color: var(--ink-50);
+		color: var(--fg-1);
 		font-family: var(--font-sans);
 		font-size: 13px;
 		padding: 9px 8px;
@@ -354,7 +352,7 @@
 	.pp-btn-secondary {
 		background: rgba(var(--tint-rgb), 0.04);
 		border-color: rgba(var(--tint-rgb), 0.1);
-		color: var(--ink-50);
+		color: var(--fg-1);
 	}
 	.pp-btn-secondary:hover {
 		background: rgba(var(--tint-rgb), 0.07);
@@ -398,10 +396,10 @@
 		white-space: nowrap;
 	}
 	.pp-tag:hover {
-		color: var(--ink-50);
+		color: var(--fg-1);
 	}
 	.pp-tag.is-active {
-		color: var(--ink-50);
+		color: var(--fg-1);
 		background: rgba(var(--tint-rgb), 0.06);
 	}
 	.pp-tag-count {
@@ -464,10 +462,10 @@
 		transition: color var(--dur-1) var(--ease);
 	}
 	.pp-sort-opt:hover {
-		color: var(--ink-50);
+		color: var(--fg-1);
 	}
 	.pp-sort-opt.is-active {
-		color: var(--ink-50);
+		color: var(--fg-1);
 		text-decoration: underline;
 		text-decoration-color: var(--copper-500);
 		text-decoration-thickness: 1.5px;
@@ -510,7 +508,7 @@
 		background: transparent;
 		border: 1px dashed rgba(var(--tint-rgb), 0.15);
 		border-radius: var(--radius-lg, 14px);
-		color: var(--ink-50);
+		color: var(--fg-1);
 		cursor: pointer;
 		min-height: 320px;
 		padding: 24px;

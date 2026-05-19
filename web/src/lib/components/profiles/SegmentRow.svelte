@@ -495,7 +495,7 @@
 		border-bottom: 1px solid transparent;
 		font-family: var(--font-sans);
 		font-size: 13px;
-		color: var(--ink-50);
+		color: var(--fg-1);
 		padding: 1px 0;
 		outline: 0;
 		transition: border-color var(--dur-1) var(--ease);

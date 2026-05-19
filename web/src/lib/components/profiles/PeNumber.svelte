@@ -87,7 +87,7 @@
 		border: 0;
 		border-radius: 5px;
 		background: rgba(var(--tint-rgb), 0.06);
-		color: var(--ink-50);
+		color: var(--fg-1);
 		cursor: pointer;
 		display: flex;
 		align-items: center;
@@ -109,7 +109,7 @@
 		font-family: var(--font-mono);
 		font-variant-numeric: tabular-nums;
 		font-size: 20px;
-		color: var(--ink-50);
+		color: var(--fg-1);
 	}
 	.pe-num-unit {
 		font-size: 11px;

@@ -496,7 +496,7 @@
 <style>
 	.pe-page {
 		background: var(--bg-page);
-		color: var(--ink-50);
+		color: var(--fg-1);
 		display: flex;
 		flex-direction: column;
 		min-height: 100vh;
@@ -526,7 +526,7 @@
 		background: rgba(var(--tint-rgb), 0.04);
 		border: 1px solid rgba(var(--tint-rgb), 0.08);
 		border-radius: var(--radius-pill);
-		color: var(--ink-50);
+		color: var(--fg-1);
 		font-family: var(--font-sans);
 		font-size: 12px;
 		padding: 7px 14px;
@@ -553,7 +553,7 @@
 		padding: 8px 10px;
 	}
 	.pe-btn-text:hover:not(:disabled) {
-		color: var(--ink-50);
+		color: var(--fg-1);
 	}
 	.pe-btn-text:disabled {
 		opacity: 0.4;
@@ -581,7 +581,7 @@
 	.pp-btn-secondary {
 		background: rgba(var(--tint-rgb), 0.04);
 		border-color: rgba(var(--tint-rgb), 0.1);
-		color: var(--ink-50);
+		color: var(--fg-1);
 	}
 	.pp-btn-secondary:hover {
 		background: rgba(var(--tint-rgb), 0.07);
@@ -641,7 +641,7 @@
 		font-size: 26px;
 		letter-spacing: -0.015em;
 		line-height: 1.2;
-		color: var(--ink-50);
+		color: var(--fg-1);
 		padding: 4px 0 8px;
 		width: 100%;
 		min-width: 0;
@@ -673,7 +673,7 @@
 		font-family: var(--font-serif);
 		font-size: 18px;
 		letter-spacing: -0.01em;
-		color: var(--ink-50);
+		color: var(--fg-1);
 	}
 	.pe-section-sub {
 		font-family: var(--font-sans);
@@ -701,7 +701,7 @@
 		border-radius: var(--radius-sm);
 		font-family: var(--font-sans);
 		font-size: 13px;
-		color: var(--ink-50);
+		color: var(--fg-1);
 		padding: 9px 12px;
 		outline: 0;
 		transition: border-color var(--dur-1) var(--ease);
@@ -750,7 +750,7 @@
 		gap: 10px;
 		font-family: var(--font-sans);
 		font-size: 13px;
-		color: var(--ink-50);
+		color: var(--fg-1);
 		cursor: pointer;
 		padding: 4px 0;
 		background: transparent;
@@ -856,7 +856,7 @@
 		transition: all var(--dur-1) var(--ease);
 	}
 	.pe-btn-ghost:hover {
-		color: var(--ink-50);
+		color: var(--fg-1);
 		border-color: rgba(var(--tint-rgb), 0.18);
 	}
 	.pe-btn-ghost i {

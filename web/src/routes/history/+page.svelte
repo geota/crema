@@ -115,7 +115,7 @@
 	<div class="hi-head">
 		<div>
 			<div class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Library</div>
-			<div class="hi-title">Shot history</div>
+			<div class="t-page-title hi-title">Shot history</div>
 			<div class="hi-sub">
 				{shots.length}
 				{shots.length === 1 ? 'shot' : 'shots'} on this device
@@ -256,7 +256,7 @@
 <style>
 	.hi-page {
 		background: var(--bg-page);
-		color: var(--ink-50);
+		color: var(--fg-1);
 		display: flex;
 		flex-direction: column;
 		min-height: 100vh;
@@ -273,11 +273,9 @@
 		justify-content: space-between;
 		gap: 24px;
 	}
+	/* Page title uses the shared .t-page-title role; only the layout nudge
+	   is screen-specific. */
 	.hi-title {
-		font-family: var(--font-serif);
-		font-size: 36px;
-		letter-spacing: -0.02em;
-		color: var(--ink-50);
 		margin-top: 2px;
 	}
 	.hi-sub {
@@ -314,7 +312,7 @@
 		background: transparent;
 		border: 0;
 		outline: 0;
-		color: var(--ink-50);
+		color: var(--fg-1);
 		font-family: var(--font-sans);
 		font-size: 12px;
 		padding: 8px 6px;
@@ -355,7 +353,7 @@
 		font-family: var(--font-mono);
 		font-variant-numeric: tabular-nums;
 		font-size: 22px;
-		color: var(--ink-50);
+		color: var(--fg-1);
 		letter-spacing: -0.01em;
 	}
 	.hi-stat-val em {
@@ -396,10 +394,10 @@
 		white-space: nowrap;
 	}
 	.pp-tag:hover {
-		color: var(--ink-50);
+		color: var(--fg-1);
 	}
 	.pp-tag.is-active {
-		color: var(--ink-50);
+		color: var(--fg-1);
 		background: rgba(var(--tint-rgb), 0.06);
 	}
 	.pp-tag-count {
@@ -432,10 +430,10 @@
 		transition: color var(--dur-1) var(--ease);
 	}
 	.pp-sort-opt:hover {
-		color: var(--ink-50);
+		color: var(--fg-1);
 	}
 	.pp-sort-opt.is-active {
-		color: var(--ink-50);
+		color: var(--fg-1);
 		text-decoration: underline;
 		text-decoration-color: var(--copper-500);
 		text-decoration-thickness: 1.5px;
@@ -509,7 +507,7 @@
 	.hi-empty-title {
 		font-family: var(--font-serif);
 		font-size: 22px;
-		color: var(--ink-50);
+		color: var(--fg-1);
 	}
 	.hi-empty-sub {
 		font-family: var(--font-sans);

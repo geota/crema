@@ -140,7 +140,7 @@
 		transition: all var(--dur-1) var(--ease);
 	}
 	.pe-tag-add:hover {
-		color: var(--ink-50);
+		color: var(--fg-1);
 		border-color: rgba(var(--tint-rgb), 0.4);
 	}
 	.pe-tag-add i {
@@ -151,7 +151,7 @@
 		border: 1px solid var(--copper-500);
 		outline: 0;
 		border-radius: var(--radius-pill);
-		color: var(--ink-50);
+		color: var(--fg-1);
 		font-family: var(--font-sans);
 		font-size: 11px;
 		padding: 5px 12px;

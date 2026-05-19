@@ -133,7 +133,7 @@
 	   design's `St*` markup. */
 	.st-page {
 		background: var(--bg-page);
-		color: var(--ink-50);
+		color: var(--fg-1);
 		display: flex;
 		min-height: 100vh;
 		overflow-y: auto;
@@ -167,7 +167,7 @@
 		font-family: var(--font-serif);
 		font-size: 26px;
 		letter-spacing: -0.015em;
-		color: var(--ink-50);
+		color: var(--fg-1);
 		margin-top: 2px;
 	}
 	.st-nav-items {
@@ -194,7 +194,7 @@
 	}
 	.st-nav-item:hover {
 		background: rgba(var(--tint-rgb), 0.03);
-		color: var(--ink-50);
+		color: var(--fg-1);
 	}
 	.st-nav-item i {
 		font-size: 16px;
@@ -203,7 +203,7 @@
 	}
 	.st-nav-item.is-active {
 		background: rgba(var(--tint-rgb), 0.05);
-		color: var(--ink-50);
+		color: var(--fg-1);
 	}
 	.st-nav-item.is-active i {
 		color: var(--copper-400);
@@ -248,11 +248,9 @@
 		padding-bottom: 18px;
 		border-bottom: 1px solid rgba(var(--tint-rgb), 0.05);
 	}
+	/* Section title uses the shared .t-page-title role; only the layout
+	   nudge is screen-specific. */
 	:global(.st-content .st-shead-title) {
-		font-family: var(--font-serif);
-		font-size: 34px;
-		letter-spacing: -0.02em;
-		color: var(--ink-50);
 		margin-top: 2px;
 	}
 	:global(.st-content .st-shead-sub) {
@@ -312,7 +310,7 @@
 	:global(.st-content .st-row-title) {
 		font-family: var(--font-sans);
 		font-size: 13px;
-		color: var(--ink-50);
+		color: var(--fg-1);
 		font-weight: 500;
 	}
 	:global(.st-content .st-row-sub) {
@@ -342,7 +340,7 @@
 		background: rgba(var(--tint-rgb), 0.04);
 		border: 1px solid rgba(var(--tint-rgb), 0.1);
 		border-radius: var(--radius-sm);
-		color: var(--ink-50);
+		color: var(--fg-1);
 		font-family: var(--font-sans);
 		font-size: 12px;
 		padding: 6px 28px 6px 12px;
@@ -410,7 +408,7 @@
 	:global(.st-content .st-btn-secondary) {
 		background: rgba(var(--tint-rgb), 0.04);
 		border-color: rgba(var(--tint-rgb), 0.1);
-		color: var(--ink-50);
+		color: var(--fg-1);
 	}
 	:global(.st-content .st-btn-secondary:hover:not(:disabled)) {
 		background: rgba(var(--tint-rgb), 0.08);
@@ -439,7 +437,7 @@
 		background: rgba(var(--tint-rgb), 0.04);
 		border: 1px solid rgba(var(--tint-rgb), 0.1);
 		border-radius: var(--radius-sm);
-		color: var(--ink-50);
+		color: var(--fg-1);
 		font-family: var(--font-mono);
 		font-variant-numeric: tabular-nums;
 		font-size: 13px;
@@ -461,7 +459,7 @@
 		background: rgba(var(--tint-rgb), 0.06);
 		border: 1px solid var(--copper-500);
 		border-radius: var(--radius-sm);
-		color: var(--ink-50);
+		color: var(--fg-1);
 		font-family: var(--font-mono);
 		font-variant-numeric: tabular-nums;
 		font-size: 13px;
@@ -474,7 +472,7 @@
 		gap: 8px;
 		font-family: var(--font-sans);
 		font-size: 12px;
-		color: var(--ink-50);
+		color: var(--fg-1);
 	}
 	:global(.st-content .st-statusdot-d) {
 		width: 8px;
@@ -516,7 +514,7 @@
 		font-family: var(--font-serif);
 		font-size: 22px;
 		letter-spacing: -0.01em;
-		color: var(--ink-50);
+		color: var(--fg-1);
 	}
 	:global(.st-content .st-machinecard-meta) {
 		display: flex;
@@ -527,7 +525,7 @@
 		color: rgba(var(--tint-rgb), 0.5);
 	}
 	:global(.st-content .st-machinecard-meta strong) {
-		color: var(--ink-50);
+		color: var(--fg-1);
 		font-weight: 500;
 	}
 	:global(.st-content .st-machinecard-actions) {
@@ -548,7 +546,7 @@
 	:global(.st-content .st-machinecard-fw-ver) {
 		font-family: var(--font-sans);
 		font-size: 13px;
-		color: var(--ink-50);
+		color: var(--fg-1);
 		font-weight: 500;
 	}
 	:global(.st-content .st-machinecard-fw-notes) {
@@ -590,7 +588,7 @@
 		font-weight: 600;
 		letter-spacing: var(--track-allcaps);
 		text-transform: uppercase;
-		color: var(--ink-50);
+		color: var(--fg-1);
 	}
 	:global(.st-content .st-maint-state) {
 		font-family: var(--font-sans);
@@ -608,7 +606,7 @@
 		font-family: var(--font-mono);
 		font-variant-numeric: tabular-nums;
 		font-size: 22px;
-		color: var(--ink-50);
+		color: var(--fg-1);
 		margin-top: 4px;
 	}
 	:global(.st-content .st-maint-metric em) {
@@ -630,7 +628,7 @@
 		background: transparent;
 		border: 1px solid rgba(var(--tint-rgb), 0.1);
 		border-radius: var(--radius-sm);
-		color: var(--ink-50);
+		color: var(--fg-1);
 		font-family: var(--font-sans);
 		font-size: 11px;
 		padding: 6px 10px;
@@ -667,7 +665,7 @@
 		font-family: var(--font-serif);
 		font-size: 22px;
 		letter-spacing: -0.01em;
-		color: var(--ink-50);
+		color: var(--fg-1);
 		margin-top: 2px;
 	}
 	:global(.st-content .st-visualizer-meta) {
@@ -678,7 +676,7 @@
 		margin-top: 4px;
 	}
 	:global(.st-content .st-visualizer-meta strong) {
-		color: var(--ink-50);
+		color: var(--fg-1);
 		font-weight: 500;
 	}
 	:global(.st-content .st-visualizer-meta-row) {
@@ -730,7 +728,7 @@
 		font-family: var(--font-sans);
 		font-size: 13px;
 		font-weight: 600;
-		color: var(--ink-50);
+		color: var(--fg-1);
 	}
 	:global(.st-content .st-otherint-sub) {
 		font-family: var(--font-sans);
@@ -770,7 +768,7 @@
 	:global(.st-content .st-about-line strong) {
 		font-family: var(--font-serif);
 		font-size: 18px;
-		color: var(--ink-50);
+		color: var(--fg-1);
 		letter-spacing: -0.01em;
 		font-weight: 500;
 	}

@@ -251,7 +251,7 @@
 		font-family: var(--font-serif);
 		font-size: 24px;
 		letter-spacing: -0.01em;
-		color: var(--ink-50);
+		color: var(--fg-1);
 		margin-top: 2px;
 	}
 	.hi-detail-sub {
@@ -291,7 +291,7 @@
 	.st-btn-secondary {
 		background: rgba(var(--tint-rgb), 0.04);
 		border-color: rgba(var(--tint-rgb), 0.1);
-		color: var(--ink-50);
+		color: var(--fg-1);
 	}
 	.st-btn-secondary:hover {
 		background: rgba(var(--tint-rgb), 0.08);
@@ -348,7 +348,7 @@
 		font-family: var(--font-mono);
 		font-variant-numeric: tabular-nums;
 		font-size: 15px;
-		color: var(--ink-50);
+		color: var(--fg-1);
 	}
 	.hi-metric-v em {
 		font-style: normal;
@@ -408,13 +408,13 @@
 		gap: 4px;
 	}
 	.hi-notes-edit:hover {
-		color: var(--ink-50);
+		color: var(--fg-1);
 	}
 	.hi-notes-body {
 		font-family: var(--font-sans);
 		font-size: 13px;
 		line-height: 1.55;
-		color: var(--ink-50);
+		color: var(--fg-1);
 	}
 	.hi-notes-body.is-empty {
 		color: rgba(var(--tint-rgb), 0.4);
@@ -425,7 +425,7 @@
 		background: rgba(var(--tint-rgb), 0.04);
 		border: 1px solid rgba(var(--tint-rgb), 0.12);
 		border-radius: var(--radius-sm);
-		color: var(--ink-50);
+		color: var(--fg-1);
 		font-family: var(--font-sans);
 		font-size: 13px;
 		line-height: 1.55;
