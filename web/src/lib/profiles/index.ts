@@ -19,6 +19,7 @@ export {
 	type Roast,
 	uid,
 	ratioLabel,
+	relativeLastUsed,
 	totalTime,
 	preinfuseSeconds,
 	sparkShape,

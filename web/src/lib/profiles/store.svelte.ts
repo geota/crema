@@ -181,7 +181,11 @@ export class ProfileStore {
 
 	/**
 	 * Mark a profile "active" — the one shown on the Brew dashboard header.
-	 * Persists the id and stamps a "just now" last-used label on the profile.
+	 * Persists the id and stamps a real last-used timestamp on the profile.
+	 *
+	 * `lastUsed` holds an ISO-8601 instant; {@link relativeLastUsed} formats it
+	 * relatively for display. (Legacy records may hold the old `'just now'`
+	 * label — the formatter falls back gracefully.)
 	 *
 	 * This is UI-level only: it does **not** write the profile to the DE1.
 	 * Uploading a profile to the machine needs the DE1 profile-upload path,
@@ -194,8 +198,8 @@ export class ProfileStore {
 		this.activeId = id;
 		writeJson(ACTIVE_KEY, id);
 		if (id == null) return;
-		// Stamp "just now" as the last-used label.
-		const stamp = 'just now';
+		// Stamp the current instant as the last-used timestamp (ISO-8601).
+		const stamp = new Date().toISOString();
 		if (id.startsWith('builtin:')) {
 			const base = this.builtins.find((b) => b.id === id);
 			if (!base) return;

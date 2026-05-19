@@ -148,6 +148,36 @@ export function ratioLabel(p: Pick<CremaProfile, 'dose' | 'yieldG'>): string {
 	return `1:${(p.yieldG / p.dose).toFixed(1)}`;
 }
 
+/**
+ * Format a profile's `lastUsed` value into a relative label, e.g.
+ * `just now` / `3h ago` / `2d ago` / `never used`.
+ *
+ * `lastUsed` holds an ISO-8601 instant (stamped by `ProfileStore.setActive`).
+ * `null` → `never used`. A non-parseable string — e.g. a legacy `'just now'`
+ * label persisted before this field stored timestamps — is returned as-is.
+ */
+export function relativeLastUsed(
+	lastUsed: string | null,
+	asOf: number = Date.now()
+): string {
+	if (lastUsed == null) return 'never used';
+	const when = Date.parse(lastUsed);
+	if (Number.isNaN(when)) return lastUsed;
+	const deltaMs = Math.max(0, asOf - when);
+	const min = Math.floor(deltaMs / 60_000);
+	if (min < 1) return 'just now';
+	if (min < 60) return `${min}m ago`;
+	const hours = Math.floor(min / 60);
+	if (hours < 24) return `${hours}h ago`;
+	const days = Math.floor(hours / 24);
+	if (days < 7) return `${days}d ago`;
+	const weeks = Math.floor(days / 7);
+	if (weeks < 5) return `${weeks}w ago`;
+	const months = Math.floor(days / 30);
+	if (months < 12) return `${months}mo ago`;
+	return `${Math.floor(days / 365)}y ago`;
+}
+
 /** Total shot time across all segments, seconds. */
 export function totalTime(segments: readonly ProfileSegment[]): number {
 	return segments.reduce((a, s) => a + s.time, 0);
@@ -359,7 +389,10 @@ export function fromCoreProfile(profile: Profile, index: number): CremaProfile {
 		tags,
 		pinned: false,
 		lastUsed: null,
-		dose: 18,
+		// The dose is the profile's own `dose` (the legacy
+		// `profile_grinder_dose_weight`); fall back to a neutral 18 g for a
+		// profile that carries none.
+		dose: profile.dose > 0 ? profile.dose : 18,
 		// The yield target is the profile's DE1 `target_weight`; fall back to a
 		// neutral default for a profile that carries none.
 		yieldG: profile.target_weight > 0 ? profile.target_weight : 36,
@@ -392,7 +425,9 @@ export function toCoreProfile(p: CremaProfile): Profile {
 		maximum_flow: 0,
 		max_total_volume_ml: p.maxTotalVolumeMl,
 		// The yield target round-trips as the DE1 profile's `target_weight`.
-		target_weight: p.yieldG
+		target_weight: p.yieldG,
+		// The dose round-trips as the DE1 profile's `dose` field.
+		dose: p.dose
 	};
 }
 
