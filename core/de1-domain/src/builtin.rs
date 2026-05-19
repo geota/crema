@@ -47,11 +47,15 @@ pub const BUILTIN_PROFILE_COUNT: usize = 88;
 /// for the rest of the process. The returned slice is in a stable order (the
 /// source `*.tcl` files sorted by file name at generation time).
 ///
-/// This accessor is **infallible** — it returns no [`Result`] and never panics
-/// into the caller. The embedded corpus is known to deserialize (enforced by
-/// the crate's tests); were it ever to fail, an empty slice is returned.
+/// This accessor takes no [`Result`]: `builtin.json` is a compile-time-embedded
+/// asset, so a parse failure is a build/source bug, not a runtime condition.
+/// It is caught by the crate's tests; in the field the `expect` below would
+/// fire deterministically rather than silently yielding an empty corpus.
 pub fn builtin_profiles() -> &'static [Profile] {
-    BUILTIN.get_or_init(|| serde_json::from_str(BUILTIN_JSON).unwrap_or_default())
+    BUILTIN.get_or_init(|| {
+        serde_json::from_str(BUILTIN_JSON)
+            .expect("builtin.json is a compile-time asset and must parse")
+    })
 }
 
 #[cfg(test)]
