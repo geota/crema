@@ -80,7 +80,10 @@
 		};
 	}
 
-	let plotEl: HTMLDivElement;
+	// `bind:this` target read inside the create `$effect` — `$state` so the
+	// effect re-runs once the element is attached. `chart` / `resizeObs` are
+	// purely imperative handles, so they stay plain `let`.
+	let plotEl = $state<HTMLDivElement>();
 	let chart: uPlot | null = null;
 	let resizeObs: ResizeObserver | null = null;
 
@@ -185,21 +188,27 @@
 		};
 	}
 
-	// Create the chart once on mount; `series` is read untracked so a prop
-	// change updates the live instance (effect below) instead of rebuilding it.
+	// Create the chart once on mount; `series` / `height` are read untracked so
+	// a prop change updates the live instance (effects below) instead of
+	// rebuilding it.
 	$effect(() => {
-		const w = Math.max(1, plotEl.clientWidth);
-		chart = new uPlot(
-			buildOpts(w, untrack(() => height)),
-			toData(untrack(() => series)),
-			plotEl
-		);
+		// Read the `bind:this` target tracked so the effect runs once the
+		// element is attached; everything after is `untrack`ed.
+		const el = plotEl;
+		if (!el) return;
+		untrack(() => {
+			const w = Math.max(1, el.clientWidth);
+			chart = new uPlot(buildOpts(w, height), toData(series), el);
 
-		resizeObs = new ResizeObserver((entries) => {
-			const cr = entries[0].contentRect;
-			chart?.setSize({ width: Math.max(1, cr.width), height });
+			// The callback re-reads the current `height` prop rather than
+			// closing over the value captured at observer-creation — a height
+			// change must not be reverted by the next resize.
+			resizeObs = new ResizeObserver((entries) => {
+				const cr = entries[0].contentRect;
+				chart?.setSize({ width: Math.max(1, cr.width), height });
+			});
+			resizeObs.observe(el);
 		});
-		resizeObs.observe(plotEl);
 
 		return () => {
 			resizeObs?.disconnect();

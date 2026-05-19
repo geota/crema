@@ -184,7 +184,10 @@
 		};
 	}
 
-	let boxEl: HTMLDivElement;
+	// Both `bind:this` targets are read inside an `$effect` (the Intersection
+	// observer / the chart build), so both are `$state` — the effects must
+	// re-run once the elements are attached.
+	let boxEl = $state<HTMLDivElement>();
 	let plotEl = $state<HTMLDivElement>();
 	let chart: uPlot | null = null;
 	let resizeObs: ResizeObserver | null = null;
@@ -194,7 +197,7 @@
 	// Arm the chart lazily: build uPlot only once the card scrolls into reach,
 	// so a gridful of profiles doesn't construct every chart in one frame.
 	$effect(() => {
-		if (mounted) return;
+		if (mounted || !boxEl) return;
 		const io = new IntersectionObserver(
 			(entries) => {
 				if (entries.some((e) => e.isIntersecting)) {

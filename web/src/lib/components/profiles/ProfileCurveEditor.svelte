@@ -251,7 +251,10 @@
 		};
 	}
 
-	let plotEl: HTMLDivElement;
+	// `bind:this` target read inside the create `$effect` — `$state` so the
+	// effect re-runs once the element is attached. `chart` / `resizeObs` are
+	// purely imperative handles, so they stay plain `let`.
+	let plotEl = $state<HTMLDivElement>();
 	let chart: uPlot | null = null;
 	let resizeObs: ResizeObserver | null = null;
 
@@ -281,7 +284,7 @@
 	 * CSS-coordinate origin, which is what left the handles off the curve.
 	 */
 	function syncHandles(): void {
-		if (!chart) {
+		if (!chart || !plotEl) {
 			handles = [];
 			return;
 		}
@@ -305,23 +308,31 @@
 
 	// Create the chart once. `segments` is read untracked so a model edit feeds
 	// the live instance (the effect below) rather than tearing uPlot down.
+	// `syncHandles()` also reads `segments`, so it too must be `untrack`ed —
+	// without it a segment edit would re-run this whole effect and rebuild the
+	// uPlot instance, matching the `toData` guard above it.
 	$effect(() => {
-		const w = Math.max(1, plotEl.clientWidth);
-		const h = Math.max(1, plotEl.clientHeight);
-		const initial = untrack(() => segments);
-		chart = new uPlot(buildOpts(w, h), toData(initial), plotEl);
-		syncHandles();
-
-		// uPlot redraws on resize and `setData`; reposition the handles each time.
-		resizeObs = new ResizeObserver((entries) => {
-			const cr = entries[0].contentRect;
-			chart?.setSize({
-				width: Math.max(1, cr.width),
-				height: Math.max(1, cr.height)
-			});
+		// Read the `bind:this` target tracked so the effect runs once the
+		// element is attached; everything after is `untrack`ed.
+		const el = plotEl;
+		if (!el) return;
+		untrack(() => {
+			const w = Math.max(1, el.clientWidth);
+			const h = Math.max(1, el.clientHeight);
+			chart = new uPlot(buildOpts(w, h), toData(segments), el);
 			syncHandles();
+
+			// uPlot redraws on resize and `setData`; reposition the handles each time.
+			resizeObs = new ResizeObserver((entries) => {
+				const cr = entries[0].contentRect;
+				chart?.setSize({
+					width: Math.max(1, cr.width),
+					height: Math.max(1, cr.height)
+				});
+				syncHandles();
+			});
+			resizeObs.observe(el);
 		});
-		resizeObs.observe(plotEl);
 
 		return () => {
 			resizeObs?.disconnect();

@@ -68,25 +68,52 @@ export const DEFAULT_BREW_PARAMS: BrewParams = {
 };
 
 /**
- * The reactive Quick Sheet parameter store — a `$state`-backed `BrewParams`.
+ * The brew-target subset a profile (or the Settings brew defaults) seeds — the
+ * fields the active profile / D2 fallback owns. The remaining `BrewParams`
+ * fields (mode toggles, steam, hot water) are pure UI defaults the seed never
+ * touches.
+ */
+export type BrewParamSeed = Pick<BrewParams, 'dose' | 'yield' | 'brewTemp' | 'preinf'>;
+
+/**
+ * The reactive Quick Sheet parameter store — a `$derived`-backed `BrewParams`.
  *
- * A component creates one, binds the steppers to its fields via {@link set},
- * and can {@link reset} it to the defaults. Purely local; the DE1 never sees
- * these values in this porting step.
+ * It is constructed with a *seed* getter (the active profile's targets, or the
+ * Settings brew defaults when no profile is active). `current` is a `$derived`
+ * mirror of that seed merged onto {@link DEFAULT_BREW_PARAMS}; a stepper edit
+ * (`set` / `reset`) reassigns the `$derived` to a plain value, after which the
+ * params are the component's own state. When the seed inputs genuinely change
+ * — a different profile, an edited Settings default — the `$derived` re-runs
+ * and re-seeds, exactly the reassignable-`$derived` pattern `ProfileEditor`'s
+ * `draft` uses. This is why there is no hand-rolled "already seeded" sentinel:
+ * the seed is a pure `$derived`, so it cannot go stale or stop tracking after
+ * the first seed the way the old `lastSeededId`-gated `$effect` did.
  */
 export class BrewParamState {
-	/** The live parameter set — reactive; assigning a field re-renders readers. */
-	current = $state<BrewParams>({ ...DEFAULT_BREW_PARAMS });
+	/**
+	 * The live parameter set. Starts as a `$derived` over the seed getter; a
+	 * `set` / `reset` reassigns it (Svelte 5.25+ permits reassigning a
+	 * `$derived`), after which it tracks the component, not the seed, until a
+	 * seed input changes and the `$derived` body re-runs.
+	 */
+	current = $derived.by<BrewParams>(() => ({ ...DEFAULT_BREW_PARAMS, ...this.seed() }));
+
+	/**
+	 * @param seed A getter for the current brew-target seed. Read inside the
+	 *   `current` `$derived`, so it must touch reactive state to track changes.
+	 */
+	constructor(private readonly seed: () => BrewParamSeed) {}
 
 	/** Set one parameter — the steppers' `onChange`. */
 	set<K extends keyof BrewParams>(key: K, value: BrewParams[K]): void {
 		// TODO: wire to DE1 control — today this updates only local UI state;
 		// pushing a changed parameter to the machine is a later net-new feature.
+		// Reassigning the `$derived` overrides the seed with a local edit.
 		this.current = { ...this.current, [key]: value };
 	}
 
-	/** Restore every parameter to its default — the sheet's "Reset" action. */
+	/** Restore the params to the current seed — the sheet's "Reset" action. */
 	reset(): void {
-		this.current = { ...DEFAULT_BREW_PARAMS };
+		this.current = { ...DEFAULT_BREW_PARAMS, ...this.seed() };
 	}
 }

@@ -27,8 +27,10 @@
 
 	/** The live search query. */
 	let query = $state('');
-	/** The scroll container — captured by the attachment for the nudge buttons. */
-	let scrollEl: HTMLDivElement | null = null;
+	// The scroll container — captured by the attachment for the nudge buttons.
+	// `$state` because it is read inside the list-change `$effect` below: the
+	// effect must re-run once the element is captured.
+	let scrollEl = $state<HTMLDivElement | null>(null);
 	/** Whether the strip can scroll further left / right. */
 	let canScrollLeft = $state(false);
 	let canScrollRight = $state(false);

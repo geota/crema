@@ -229,7 +229,10 @@
 		};
 	}
 
-	let plotEl: HTMLDivElement;
+	// `bind:this` target read inside the create `$effect` — `$state` so the
+	// effect re-runs once the element is attached. `chart` / `resizeObs` are
+	// purely imperative handles, so they stay plain `let`.
+	let plotEl = $state<HTMLDivElement>();
 	let chart: uPlot | null = null;
 	let resizeObs: ResizeObserver | null = null;
 
@@ -346,24 +349,33 @@
 		};
 	}
 
-	// Create the chart once on mount. `series` is read untracked so a telemetry
-	// tick doesn't tear down and rebuild the whole uPlot instance — the effect
-	// below feeds updates into the live instance instead.
+	// Create the chart once on mount. The whole opts + initial-data construction
+	// is `untrack`ed: `toData` transitively reads `series`, `telemetryRateHz`,
+	// `showFlowCurve` and `smoothPressure`, so without `untrack` toggling any of
+	// those settings (or switching profile) would tear down and rebuild the
+	// entire uPlot instance. Creation must depend on nothing reactive — the
+	// `$derived` data + `setData` effect below own every live update instead.
 	$effect(() => {
-		const w = Math.max(1, plotEl.clientWidth);
-		const h = Math.max(1, plotEl.clientHeight);
-		chart = new uPlot(buildOpts(w, h), toData(untrack(() => series)), plotEl);
+		// Read the `bind:this` target tracked so the effect runs once the
+		// element is attached; everything after is `untrack`ed.
+		const el = plotEl;
+		if (!el) return;
+		untrack(() => {
+			const w = Math.max(1, el.clientWidth);
+			const h = Math.max(1, el.clientHeight);
+			chart = new uPlot(buildOpts(w, h), toData(series), el);
 
-		// Track the panel's live width AND height so the chart fills it and
-		// follows the Quick Sheet docking in / out.
-		resizeObs = new ResizeObserver((entries) => {
-			const cr = entries[0].contentRect;
-			chart?.setSize({
-				width: Math.max(1, cr.width),
-				height: Math.max(1, cr.height)
+			// Track the panel's live width AND height so the chart fills it and
+			// follows the Quick Sheet docking in / out.
+			resizeObs = new ResizeObserver((entries) => {
+				const cr = entries[0].contentRect;
+				chart?.setSize({
+					width: Math.max(1, cr.width),
+					height: Math.max(1, cr.height)
+				});
 			});
+			resizeObs.observe(el);
 		});
-		resizeObs.observe(plotEl);
 
 		return () => {
 			resizeObs?.disconnect();
@@ -373,13 +385,19 @@
 		};
 	});
 
+	/**
+	 * The plotted column data — re-derives whenever the buffered series or any
+	 * telemetry-display setting (`telemetryRateHz`, `showFlowCurve`,
+	 * `smoothPressure`) changes. Kept as a `$derived` so the `setData` effect
+	 * below depends only on this value, never on the chart-creation path.
+	 */
+	const data = $derived(toData(series));
+
 	// Push new telemetry into the existing chart instance. `setData` re-runs
 	// the x/y `range` callbacks, so the x-window auto-grows past 60 s and the
 	// y-axis auto-grows with the data — no manual `setScale` needed.
 	$effect(() => {
-		const data = toData(series);
-		if (!chart) return;
-		chart.setData(data);
+		chart?.setData(data);
 	});
 </script>
 
