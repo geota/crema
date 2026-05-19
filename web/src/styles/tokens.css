@@ -100,6 +100,10 @@
   --hairline:       rgba(31, 24, 18, 0.08); /* 1px borders on light */
   --hairline-strong:rgba(31, 24, 18, 0.16);
 
+  /* Modal / flyout scrim — a dark dim in both themes (a scrim darkens the
+     page behind a sheet regardless of theme). Alpha is set per use site. */
+  --scrim-rgb: 21, 17, 13;
+
   /* Tint base — the RGB triplet used for opacity-based fills (faint surface
      washes, dividers, scrollbar thumbs, inset highlights). Flips per theme so
      `rgba(var(--tint-rgb), X)` reads correctly in both light and dark. On
