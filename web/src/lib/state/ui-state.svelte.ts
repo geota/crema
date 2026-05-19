@@ -49,6 +49,10 @@ export interface TelemetrySample {
 	readonly flow: number;
 	/** Group-head temperature, °C. */
 	readonly temp: number;
+	/** Mix temperature, °C — the DE1's blended "group" water temperature. */
+	readonly mixTemp: number;
+	/** Steam-heater temperature, °C. */
+	readonly steamTemp: number;
 	/** Latest scale weight at this instant, grams, or `null` if no scale. */
 	readonly weightG: number | null;
 }
@@ -146,6 +150,14 @@ export interface UiSnapshot {
 	/** The DE1 connection-diagnostics snapshot, folded in from `De1Manager`. */
 	readonly de1Diagnostics: De1Diagnostics;
 
+	// ---- DE1 firmware (doc 10, D4 — the Machine settings card) -----------
+	//
+	// The DE1's CPU-board firmware label, decoded from the version
+	// characteristic and folded in from `Event::Firmware`. Read-only.
+
+	/** The DE1 firmware label, e.g. `"FW 1.4.142 (API 4)"`, or `null`. */
+	readonly de1Firmware: string | null;
+
 	// ---- Capture replay (developer tool) ---------------------------------
 	//
 	// State for the Settings → Advanced "Replay a capture" developer control:
@@ -203,6 +215,7 @@ export const INITIAL_SNAPSHOT: UiSnapshot = {
 	shotElapsedMs: 0,
 	activeProfileName: null,
 	de1Diagnostics: EMPTY_DE1_DIAGNOSTICS,
+	de1Firmware: null,
 	replay: null
 };
 
@@ -318,6 +331,8 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				pressure: t.group_pressure,
 				flow: t.group_flow,
 				temp: t.head_temp,
+				mixTemp: t.mix_temp,
+				steamTemp: t.steam_temp,
 				weightG: snapshot.scaleWeightG
 			};
 			// Append to the series; only buffer while a shot is in progress so
@@ -467,6 +482,17 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 			}
 			return next;
 		}
+		case 'Firmware':
+			// The DE1 reported its firmware versions — surface the label on the
+			// Machine settings card. Logged once; it arrives at connect time.
+			return {
+				...snapshot,
+				de1Firmware: event.content.firmware_string,
+				eventLog: appendLog(
+					snapshot.eventLog,
+					`DE1 firmware: ${event.content.firmware_string}`
+				)
+			};
 		case 'DecodeError':
 			return {
 				...snapshot,
