@@ -537,10 +537,12 @@
 	   The QSplitLabel toggles shrink to field-label size and centre their
 	   content (overriding the baseline alignment) so a split-toggle label
 	   lines up with a plain label and a chip. */
+	/* No forced height — the split-toggle sizes to its content and is centred
+	   by `.pe-seg-label-row`, exactly like a plain label span or a chip, so
+	   "Temp" sits at the same height as "Target" / "Time". */
 	.pe-seg :global(.qsplit) {
 		font-size: 9px;
 		gap: 6px;
-		height: 18px;
 		align-items: center;
 	}
 	.pe-seg :global(.qsplit-prefix) {
