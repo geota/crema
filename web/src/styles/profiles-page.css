@@ -288,16 +288,16 @@
   margin-top: 2px;
   height: 132px;
   background:
-    radial-gradient(120% 80% at 50% 100%, rgba(199,118,59,0.06) 0%, transparent 60%),
+    radial-gradient(120% 80% at 50% 100%, rgba(var(--copper-rgb), 0.06) 0%, transparent 60%),
     var(--bg-page);
   border: 1px solid rgba(var(--tint-rgb), 0.05);
   border-radius: 10px;
   overflow: hidden;
 }
 .pp-preview.is-active {
-  border-color: rgba(199,118,59,0.25);
+  border-color: rgba(var(--copper-rgb), 0.25);
   background:
-    radial-gradient(120% 80% at 50% 100%, rgba(199,118,59,0.10) 0%, transparent 60%),
+    radial-gradient(120% 80% at 50% 100%, rgba(var(--copper-rgb), 0.10) 0%, transparent 60%),
     var(--bg-page);
 }
 .pp-preview svg { display: block; width: 100%; height: 100%; }

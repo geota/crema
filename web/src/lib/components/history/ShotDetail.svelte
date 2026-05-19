@@ -272,30 +272,8 @@
 		justify-content: flex-end;
 	}
 
-	/* st-btn ported from the design's settings kit. */
-	.st-btn {
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
-		padding: 7px 12px;
-		border-radius: var(--radius-sm);
-		font-family: var(--font-sans);
-		font-size: 12px;
-		cursor: pointer;
-		transition: all var(--dur-1) var(--ease);
-		border: 1px solid transparent;
-	}
-	.st-btn i {
-		font-size: 13px;
-	}
-	.st-btn-secondary {
-		background: rgba(var(--tint-rgb), 0.04);
-		border-color: rgba(var(--tint-rgb), 0.1);
-		color: var(--fg-1);
-	}
-	.st-btn-secondary:hover {
-		background: rgba(var(--tint-rgb), 0.08);
-	}
+	/* .st-btn / .st-btn-secondary come from the global settings kit
+	   (styles/settings-page.css) — no scoped re-declaration needed. */
 
 	.hi-chart {
 		background: var(--bg-page);
