@@ -27,6 +27,7 @@
 	import 'uplot/dist/uPlot.min.css';
 	import type { TelemetrySample } from '$lib/state';
 	import { sampleCurve, type ProfileSegment } from '$lib/profiles';
+	import { theme } from '$lib/theme.svelte';
 
 	let {
 		series,
@@ -245,8 +246,11 @@
 	}
 
 	function buildOpts(w: number, h: number): uPlot.Options {
-		const gridColor = 'rgba(var(--tint-rgb), 0.05)';
-		const labelColor = 'rgba(var(--tint-rgb), 0.35)';
+		// Canvas strokes can't resolve `var()` — resolve the chart tokens to
+		// concrete colours here. `cssVar` re-reads on every rebuild, so a theme
+		// flip (which triggers `redraw()` below) picks up the new values.
+		const gridColor = cssVar('--chart-grid');
+		const labelColor = cssVar('--chart-axis-label');
 		const yFont = '11px "JetBrains Mono", monospace';
 		return {
 			width: w,
@@ -339,7 +343,7 @@
 				},
 				{
 					scale: 'y',
-					stroke: 'rgba(var(--tint-rgb), 0.28)',
+					stroke: () => cssVar('--chart-axis-label'),
 					width: 1.5,
 					dash: [4, 4],
 					points: { show: false }
@@ -398,6 +402,22 @@
 	// y-axis auto-grows with the data — no manual `setScale` needed.
 	$effect(() => {
 		chart?.setData(data);
+	});
+
+	// Repaint on theme flip. Axis/grid colours are baked into `buildOpts` at
+	// creation, so a `redraw()` alone won't refresh them — rebuild the instance
+	// in place against the new tokens. `series` etc. are read untracked so this
+	// effect depends only on `theme.current`.
+	$effect(() => {
+		theme.current;
+		untrack(() => {
+			const el = plotEl;
+			if (!el || !chart) return;
+			const w = Math.max(1, el.clientWidth);
+			const h = Math.max(1, el.clientHeight);
+			chart.destroy();
+			chart = new uPlot(buildOpts(w, h), data, el);
+		});
 	});
 </script>
 

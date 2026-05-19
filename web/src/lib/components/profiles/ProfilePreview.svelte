@@ -17,6 +17,7 @@
 	import uPlot from 'uplot';
 	import 'uplot/dist/uPlot.min.css';
 	import { sampleCurve, preinfuseSeconds, type ProfileSegment } from '$lib/profiles';
+	import { theme } from '$lib/theme.svelte';
 
 	let {
 		segments,
@@ -97,8 +98,9 @@
 	}
 
 	function buildOpts(w: number, h: number): uPlot.Options {
-		const gridColor = 'rgba(var(--tint-rgb), 0.05)';
-		const labelColor = 'rgba(var(--tint-rgb), 0.3)';
+		// Canvas strokes can't resolve `var()` — resolve the chart tokens here.
+		const gridColor = cssVar('--chart-grid');
+		const labelColor = cssVar('--chart-axis-label');
 		const font = '9px "JetBrains Mono", monospace';
 		return {
 			width: w,
@@ -240,6 +242,20 @@
 	$effect(() => {
 		const data = toData(segments);
 		chart?.setData(data);
+	});
+
+	// Repaint on theme flip — axis/grid colours are baked into `buildOpts` at
+	// creation, so rebuild the instance against the new tokens.
+	$effect(() => {
+		theme.current;
+		untrack(() => {
+			const el = plotEl;
+			if (!el || !chart) return;
+			const w = Math.max(1, el.clientWidth);
+			const h = Math.max(1, el.clientHeight);
+			chart.destroy();
+			chart = new uPlot(buildOpts(w, h), toData(segments), el);
+		});
 	});
 </script>
 
