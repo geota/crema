@@ -14,7 +14,6 @@ import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 
 /**
  * BLE manager for a Bookoo coffee scale, on top of [BleTransport].
@@ -233,21 +232,18 @@ class ScaleBleManager(
      * Returns true if the write was dispatched and completed, false if the
      * scale is not connected or the write failed.
      *
-     * The call is synchronous to the caller (it blocks the calling thread on
-     * the underlying suspend write) so the existing `Command.WriteScale`
-     * routing in `MainViewModel` — which is not a coroutine — keeps its
-     * boolean-returning shape unchanged.
+     * This is a `suspend fun`: it awaits the transport's suspend write on the
+     * caller's coroutine instead of blocking a thread, so it must never be run
+     * on the BLE binder thread (a `runBlocking` there risks an ANR).
      */
-    fun writeCommand(data: ByteArray): Boolean {
+    suspend fun writeCommand(data: ByteArray): Boolean {
         val d = device
         if (d == null) {
             onStatus("Cannot write scale command — scale not connected")
             return false
         }
         return runCatching {
-            runBlocking {
-                transport.write(d, ScaleUuids.SERVICE, ScaleUuids.COMMAND, data)
-            }
+            transport.write(d, ScaleUuids.SERVICE, ScaleUuids.COMMAND, data)
             // Record the write as a dir:"out" SCALE_COMMAND line so tare/timer
             // writes appear in the interleaved capture. Stamp it with the same
             // elapsedRealtime() clock the recorder and inbound lines use.
