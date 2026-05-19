@@ -16,9 +16,7 @@
 	 *
 	 * Until a shot has been pulled the page shows a genuine empty state.
 	 *
-	 * **Stubbed** — Export, Compare and Save-as-profile are `// TODO`s; the
-	 * range selector is UI-only (every recorded shot is shown — the shell does
-	 * not yet prune by date).
+	 * **Stubbed** — Export, Compare and Save-as-profile are `// TODO`s.
 	 */
 	import { getHistoryStore } from '$lib/history';
 	import { ShotRow, ShotDetail } from '$lib/components/history';
@@ -38,6 +36,9 @@
 	/** The selected shot's id. */
 	let selectedId = $state<string | null>(null);
 
+	/** Milliseconds in a day — shared by the range filter and the stats. */
+	const dayMs = 24 * 60 * 60 * 1000;
+
 	/** Distinct profile names across the history, for the filter chips. */
 	const profilesInUse = $derived([
 		...new Set(shots.map((s) => s.profileName).filter((n): n is string => !!n))
@@ -46,7 +47,10 @@
 	/** The filtered shot list the list pane renders. */
 	const filtered = $derived.by(() => {
 		const query = q.trim().toLowerCase();
+		// The "Last 30 days" range cuts off shots older than the window.
+		const cutoff = range === '30d' ? Date.now() - 30 * dayMs : null;
 		return shots.filter((s) => {
+			if (cutoff != null && s.completedAt < cutoff) return false;
 			if (filterProfile !== 'all' && s.profileName !== filterProfile) return false;
 			if (query === '') return true;
 			return (
@@ -62,7 +66,6 @@
 	);
 
 	// ── Stats ────────────────────────────────────────────────────────────
-	const dayMs = 24 * 60 * 60 * 1000;
 	/** Shots pulled today. */
 	const todayCount = $derived(
 		shots.filter((s) => Date.now() - s.completedAt < dayMs).length
