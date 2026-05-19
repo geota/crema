@@ -37,15 +37,19 @@
 	let {
 		seg,
 		index,
+		count,
 		active = false,
 		onSelect,
 		onEdit,
-		onDelete
+		onDelete,
+		onReorder
 	}: {
 		/** The segment this row edits. */
 		seg: ProfileSegment;
 		/** Zero-based position, for the row number. */
 		index: number;
+		/** Total number of segments — bounds the row-number input. */
+		count: number;
 		/** Whether this segment is the selected one. */
 		active?: boolean;
 		/** Select this segment. */
@@ -54,10 +58,53 @@
 		onEdit: (patch: Partial<ProfileSegment>) => void;
 		/** Delete this segment. */
 		onDelete: () => void;
+		/** Move the segment `id` to `toIndex` — drag-reorder + number edit. */
+		onReorder: (id: string, toIndex: number) => void;
 	} = $props();
 
 	/** The target unit follows the segment mode. */
 	const unit = $derived(seg.mode === 'pressure' ? 'bar' : 'ml/s');
+
+	// ── Reorder ─────────────────────────────────────────────────────────
+	//
+	// Two ways to reorder: drag the row by its grip handle, or type a new
+	// position into the row-number input — both route through `onReorder`,
+	// which slides the other segments along.
+
+	/** The dataTransfer key carrying the dragged segment's id. */
+	const DRAG_KEY = 'application/x-crema-segment';
+	/** The row element — used as the drag image. */
+	let rowEl: HTMLDivElement;
+	/** True while a dragged segment hovers this row — shows the drop line. */
+	let dropTarget = $state(false);
+
+	/** Begin dragging this segment (from the grip handle). */
+	function onDragStart(e: DragEvent): void {
+		if (!e.dataTransfer) return;
+		e.dataTransfer.setData(DRAG_KEY, seg.id);
+		e.dataTransfer.effectAllowed = 'move';
+		e.dataTransfer.setDragImage(rowEl, 24, 20);
+	}
+	/** Allow a drop here and show the indicator. */
+	function onDragOver(e: DragEvent): void {
+		if (!e.dataTransfer?.types.includes(DRAG_KEY)) return;
+		e.preventDefault();
+		e.dataTransfer.dropEffect = 'move';
+		dropTarget = true;
+	}
+	/** Drop a dragged segment onto this row's position. */
+	function onDrop(e: DragEvent): void {
+		e.preventDefault();
+		dropTarget = false;
+		const id = e.dataTransfer?.getData(DRAG_KEY);
+		if (id && id !== seg.id) onReorder(id, index);
+	}
+	/** Reorder this segment from the 1-based row-number input. */
+	function onNumCommit(raw: string): void {
+		const n = Number(raw);
+		if (!Number.isFinite(n)) return;
+		onReorder(seg.id, Math.min(count, Math.max(1, Math.round(n))) - 1);
+	}
 
 	// ── Volume limit ────────────────────────────────────────────────────
 	/** Whether the per-step volume limit is set. */
@@ -126,12 +173,40 @@
 <div
 	class="pe-seg"
 	class:is-active={active}
+	class:is-drop-target={dropTarget}
 	role="button"
 	tabindex="0"
+	bind:this={rowEl}
 	onclick={onSelect}
 	onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && onSelect()}
+	ondragover={onDragOver}
+	ondragleave={() => (dropTarget = false)}
+	ondrop={onDrop}
 >
-	<div class="pe-seg-num">{index + 1}</div>
+	<!-- Position: a grip handle to drag-reorder, and an editable 1-based
+	     number — typing a new position slides the other segments along. -->
+	<div class="pe-seg-pos">
+		<button
+			class="pe-seg-grip"
+			type="button"
+			draggable="true"
+			aria-label="Drag to reorder segment"
+			title="Drag to reorder"
+			ondragstart={onDragStart}
+			onclick={(e) => e.stopPropagation()}
+		>
+			<i class="ph ph-dots-six-vertical" aria-hidden="true"></i>
+		</button>
+		<input
+			class="pe-seg-num"
+			type="text"
+			inputmode="numeric"
+			value={index + 1}
+			aria-label="Segment position"
+			onclick={(e) => e.stopPropagation()}
+			onchange={(e) => onNumCommit(e.currentTarget.value)}
+		/>
+	</div>
 
 	<!-- Name, with the Type and Ramp toggles stacked beneath it. -->
 	<div class="pe-seg-name">
@@ -354,12 +429,57 @@
 		border-color: var(--copper-500);
 		background: rgba(193, 116, 75, 0.06);
 	}
+	/* A dragged segment will land at the top of this row. */
+	.pe-seg.is-drop-target {
+		box-shadow: inset 0 2px 0 var(--copper-500);
+	}
+
+	/* Position column — grip handle stacked over the editable number. */
+	.pe-seg-pos {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 3px;
+	}
+	.pe-seg-grip {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 22px;
+		height: 15px;
+		padding: 0;
+		background: transparent;
+		border: 0;
+		border-radius: 4px;
+		color: rgba(244, 237, 224, 0.35);
+		cursor: grab;
+		font-size: 13px;
+		transition: all var(--dur-1) var(--ease);
+	}
+	.pe-seg-grip:hover {
+		color: rgba(244, 237, 224, 0.7);
+		background: rgba(244, 237, 224, 0.06);
+	}
+	.pe-seg-grip:active {
+		cursor: grabbing;
+	}
 	.pe-seg-num {
+		width: 26px;
+		padding: 2px 0;
+		background: transparent;
+		border: 0;
+		border-bottom: 1px solid transparent;
 		font-family: var(--font-mono);
 		font-variant-numeric: tabular-nums;
-		font-size: 11px;
-		color: rgba(244, 237, 224, 0.4);
+		font-size: 12px;
+		color: rgba(244, 237, 224, 0.55);
 		text-align: center;
+		outline: 0;
+		transition: border-color var(--dur-1) var(--ease);
+	}
+	.pe-seg-num:hover,
+	.pe-seg-num:focus {
+		border-bottom-color: rgba(244, 237, 224, 0.25);
 	}
 	.pe-seg-name {
 		display: flex;
