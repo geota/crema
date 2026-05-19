@@ -24,6 +24,13 @@ export const De1Uuids = {
 	/** `cuuid_01` / `A001` — Version: the BLE + firmware version block (Read). */
 	VERSION: short('a001'),
 
+	/**
+	 * `cuuid_05` / `A005` — ReadFromMMR: the memory-mapped register window. A
+	 * read request is *written* to it and the DE1 answers with a notification
+	 * on the same characteristic (request/reply).
+	 */
+	MMR_READ: short('a005'),
+
 	/** `cuuid_0D` / `A00D` — ShotSample: the ~4-10 Hz telemetry notify stream. */
 	SHOT_SAMPLE: short('a00d'),
 
@@ -32,6 +39,13 @@ export const De1Uuids = {
 
 	/** `cuuid_11` / `A011` — WaterLevels: 4-byte tank level notify. */
 	WATER_LEVELS: short('a011'),
+
+	/**
+	 * `cuuid_12` / `A012` — Calibration: sensor calibration. A read request is
+	 * *written* to it and the DE1 answers with a notification on the same
+	 * characteristic (request/reply).
+	 */
+	CALIBRATION: short('a012'),
 
 	/**
 	 * The DE1 advertises with a name beginning "DE1"; some units advertise

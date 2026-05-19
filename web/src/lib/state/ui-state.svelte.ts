@@ -13,7 +13,7 @@
  * then just applies the returned snapshot.
  */
 
-import type { Event, ScaleCapabilities } from '$lib/core';
+import type { Event, ScaleCapabilities, MmrRegister, CalTarget } from '$lib/core';
 import type { De1State, De1Diagnostics } from '$lib/ble/de1';
 import { EMPTY_DE1_DIAGNOSTICS } from '$lib/ble/de1';
 import type { ScaleState } from '$lib/ble/scale';
@@ -55,6 +55,12 @@ export interface TelemetrySample {
 	readonly steamTemp: number;
 	/** Latest scale weight at this instant, grams, or `null` if no scale. */
 	readonly weightG: number | null;
+	/**
+	 * Puck resistance — `pressure / flow²`, the de1app/DSx derived "resistance"
+	 * metric (R4). `null` when flow is too low to divide by meaningfully, so a
+	 * reader can skip the noisy near-zero-flow region. Units are bar / (mL/s)².
+	 */
+	readonly resistance: number | null;
 }
 
 /**
@@ -170,6 +176,54 @@ export interface UiSnapshot {
 	/** The DE1 firmware label, e.g. `"FW 1.4.142 (API 4)"`, or `null`. */
 	readonly de1Firmware: string | null;
 
+	// ---- DE1 diagnostics — READ side of doc 11 (R1, R3, R5) --------------
+	//
+	// Plumbing only: these fields land the MMR registers, sensor calibration
+	// and machine-error text in the snapshot. NO component reads them yet —
+	// the "Machine diagnostics screen" and "Error banner" are the deferred UI
+	// half of doc 11.
+
+	/**
+	 * The DE1's memory-mapped diagnostic registers (R1) — serial number,
+	 * model / variant, board revision, fan / tank thresholds, flow rates and
+	 * so on. Filled in one register at a time as `MmrValue` events arrive;
+	 * empty until the first MMR read. See {@link De1MachineInfo}.
+	 */
+	readonly de1MachineInfo: De1MachineInfo;
+	/**
+	 * The DE1's sensor calibration (R3) — current vs. factory pressure, flow
+	 * and temperature calibration. Filled in as `Calibration` events arrive.
+	 */
+	readonly de1Calibration: De1Calibration;
+	/**
+	 * Readable text for the machine's current error substate (R5), or `null`
+	 * when the machine is healthy. Set from `MachineStateChanged` whenever the
+	 * substate is one of the DE1's `Error*` fault codes; cleared on any
+	 * non-error substate. The deferred UI surfaces it as an error banner.
+	 */
+	readonly machineError: string | null;
+
+	// ---- Idle / session timers — READ side of doc 11 (R6) ----------------
+	//
+	// Derived in the state layer from event timestamps; no core change. The
+	// raw `performance.now()`-style timestamps are stored — a reader computes
+	// "time since" against the current clock. NO component reads them yet.
+
+	/**
+	 * Timestamp (ms, the event clock) the most recent shot completed, or
+	 * `null` if no shot has finished this session. "Time since last shot" is
+	 * `now - lastShotCompletedAtMs`.
+	 */
+	readonly lastShotCompletedAtMs: number | null;
+	/** Duration of the most recent completed shot, ms, or `null`. */
+	readonly lastShotDurationMs: number | null;
+	/**
+	 * Timestamp (ms, the event clock) the machine last entered a resting state
+	 * (Idle / Sleep), or `null` before the first such transition. Idle-elapsed
+	 * is `now - idleSinceMs`.
+	 */
+	readonly idleSinceMs: number | null;
+
 	// ---- Capture replay (developer tool) ---------------------------------
 	//
 	// State for the Settings → Advanced "Replay a capture" developer control:
@@ -179,6 +233,39 @@ export interface UiSnapshot {
 	/** The current capture-replay status, or `null` when no replay has run. */
 	readonly replay: ReplayStatus | null;
 }
+
+/**
+ * The DE1's memory-mapped diagnostic registers (R1) — the raw 32-bit value of
+ * every {@link MmrRegister} that has been read back since the last connect, or
+ * `undefined` for one not yet read.
+ *
+ * The values are surfaced **raw**: some registers are scaled (e.g.
+ * `CalibrationFlowMultiplier` is `int(1000 × multiplier)`, `FlushTimeout` is
+ * `int(10 × seconds)`), and a register like `GhcInfo` or `FeatureFlags` is a
+ * bitmask — the eventual diagnostics screen (deferred) decodes each field for
+ * display. A `Partial` because registers fill in one reply at a time.
+ */
+export type De1MachineInfo = Partial<Record<MmrRegister, number>>;
+
+/**
+ * One DE1 sensor's calibration (R3) — the current (in-use) and factory
+ * calibration values, each `null` until that calibration has been read back.
+ */
+export interface SensorCalibration {
+	/** The current (in-use) calibration: the value the sensor reported. */
+	readonly current: number | null;
+	/** The factory calibration the machine shipped with. */
+	readonly factory: number | null;
+}
+
+/**
+ * The DE1's sensor calibration (R3) — one {@link SensorCalibration} per
+ * sensor, filled in as `Calibration` events arrive.
+ */
+export type De1Calibration = Partial<Record<CalTarget, SensorCalibration>>;
+
+/** The empty calibration snapshot — before any calibration has been read. */
+export const EMPTY_DE1_CALIBRATION: De1Calibration = {};
 
 /** Where a {@link ReplayStatus} is in its lifecycle. */
 export type ReplayPhase = 'running' | 'done' | 'cancelled' | 'error';
@@ -230,6 +317,12 @@ export const INITIAL_SNAPSHOT: UiSnapshot = {
 	activeProfileName: null,
 	de1Diagnostics: EMPTY_DE1_DIAGNOSTICS,
 	de1Firmware: null,
+	de1MachineInfo: {},
+	de1Calibration: EMPTY_DE1_CALIBRATION,
+	machineError: null,
+	lastShotCompletedAtMs: null,
+	lastShotDurationMs: null,
+	idleSinceMs: null,
 	replay: null
 };
 
@@ -292,6 +385,67 @@ export function formatFirmware(encoded: number): string {
 }
 
 /**
+ * Readable text for every DE1 error substate (R5) — keyed by the `SubState`
+ * variant name the core emits in `MachineStateChanged`. The DE1's ~18 firmware
+ * fault codes (`Error*`, discriminant ≥ 200) each map to a one-line
+ * explanation; a non-error substate is absent from the map. Ported from the
+ * legacy de1app `de1plus/machine.tcl` substate table, with the bare
+ * `Error_NoAC`-style labels expanded into human-readable sentences.
+ */
+const MACHINE_ERROR_TEXT: Readonly<Record<string, string>> = {
+	ErrorNaN: 'Firmware error: a calculation produced an invalid number (NaN).',
+	ErrorInf: 'Firmware error: a calculation produced an infinite value.',
+	ErrorGeneric: 'The machine reported a generic firmware error.',
+	ErrorAcc: 'Accelerometer not responding — the machine may have been moved or tipped.',
+	ErrorTSensor: 'A temperature sensor failed or is reading out of range.',
+	ErrorPSensor: 'The pressure sensor failed or is reading out of range.',
+	ErrorWLevel: 'The water-level sensor failed or is reading out of range.',
+	ErrorDip: 'The DIP switches forced the machine into an error state.',
+	ErrorAssertion: 'Firmware error: an internal assertion failed.',
+	ErrorUnsafe: 'Firmware error: an unsafe value was assigned.',
+	ErrorInvalidParm: 'Firmware error: an invalid parameter was supplied.',
+	ErrorFlash: 'The machine could not access its internal flash storage.',
+	ErrorOom: 'Firmware error: the machine ran out of memory.',
+	ErrorDeadline: 'Firmware error: a realtime deadline was missed.',
+	ErrorHiCurrent: 'Heater current too high — the machine shut down for safety.',
+	ErrorLoCurrent: 'Heater current too low — check the mains power supply.',
+	ErrorBootFill: 'The boot pressure test failed — the machine may be out of water.',
+	ErrorNoAc: 'The front power switch is off — turn the machine on at the switch.'
+};
+
+/**
+ * Readable text for an error substate (R5), or `null` for a healthy
+ * (non-error) substate. `substate` is the bare `SubState` variant name the
+ * core emits — an unknown name (a substate added to the firmware but not yet
+ * to {@link MACHINE_ERROR_TEXT}) also yields `null`.
+ */
+export function machineErrorText(substate: string | null | undefined): string | null {
+	if (substate == null) return null;
+	return MACHINE_ERROR_TEXT[substate] ?? null;
+}
+
+/**
+ * The minimum group flow (mL/s) below which {@link puckResistance} returns
+ * `null`. At trickle flow `pressure / flow²` explodes into meaningless spikes,
+ * so the de1app/DSx resistance metric is only defined once water is actually
+ * moving through the puck.
+ */
+const MIN_FLOW_FOR_RESISTANCE = 0.2;
+
+/**
+ * The de1app/DSx puck-resistance metric (R4): `pressure / flow²`, in
+ * bar / (mL/s)². Returns `null` when `flow` is at or below
+ * {@link MIN_FLOW_FOR_RESISTANCE} — the value is only meaningful while water
+ * is moving through the puck. Computed in the state layer from the telemetry
+ * sample the core already delivers; no core change is needed.
+ */
+export function puckResistance(pressure: number, flow: number): number | null {
+	if (!Number.isFinite(pressure) || !Number.isFinite(flow)) return null;
+	if (flow <= MIN_FLOW_FOR_RESISTANCE) return null;
+	return pressure / (flow * flow);
+}
+
+/**
  * Prepend a timestamped line to the log, capping it at {@link MAX_LOG_LINES}.
  * Newest-first, exactly like the Android shell's `appendLog`.
  */
@@ -323,10 +477,19 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				event.content.state === 'Sleep' ||
 				event.content.state === 'SchedIdle' ||
 				event.content.state === 'GoingToSleep';
+			// R5 — readable error text for an Error* substate, null when healthy.
+			const machineError = machineErrorText(event.content.substate);
+			// R6 — stamp when the machine first entered a resting state, so an
+			// idle-elapsed readout can count up from it. Only re-stamp on the
+			// transition *into* rest, not on every notification while resting.
+			const enteringRest = resting && snapshot.idleSinceMs === null;
 			return {
 				...snapshot,
 				machineState,
+				machineError,
 				...(resting ? { shotInProgress: false } : null),
+				...(enteringRest ? { idleSinceMs: performance.now() } : null),
+				...(resting ? null : { idleSinceMs: null }),
 				eventLog: appendLog(snapshot.eventLog, `MachineState -> ${machineState}`)
 			};
 		}
@@ -369,7 +532,8 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				temp: t.head_temp,
 				mixTemp: t.mix_temp,
 				steamTemp: t.steam_temp,
-				weightG: snapshot.scaleWeightG
+				weightG: snapshot.scaleWeightG,
+				resistance: puckResistance(t.group_pressure, t.group_flow)
 			};
 			// Append to the series; only buffer while a shot is in progress so
 			// idle-state telemetry never grows the chart. Cap the length.
@@ -419,9 +583,13 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 		case 'ShotCompleted':
 			// The shot ended — stop the timer, but keep the buffered series so
 			// the finished curve stays on screen until the next shot or idle.
+			// R6 — record when it finished and how long it ran so an idle screen
+			// can show "time since last shot" and the last-shot duration.
 			return {
 				...snapshot,
 				shotInProgress: false,
+				lastShotCompletedAtMs: performance.now(),
+				lastShotDurationMs: event.content.duration_ms,
 				eventLog: appendLog(
 					snapshot.eventLog,
 					`Shot completed: ${event.content.duration_ms}ms, ` +
@@ -530,6 +698,46 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 					`DE1 firmware: ${event.content.firmware_string}`
 				)
 			};
+		case 'MmrValue':
+			// R1 — a memory-mapped diagnostic register was read back. Store the
+			// raw value under its register; the deferred diagnostics screen
+			// decodes scaled / bitmask registers for display.
+			return {
+				...snapshot,
+				de1MachineInfo: {
+					...snapshot.de1MachineInfo,
+					[event.content.register]: event.content.value
+				},
+				eventLog: appendLog(
+					snapshot.eventLog,
+					`MMR ${event.content.register} = ${event.content.value}`
+				)
+			};
+		case 'Calibration': {
+			// R3 — a sensor calibration was read back. A ReadFactory reply fills
+			// the `factory` slot, a ReadCurrent reply the `current` slot; the
+			// other slot keeps whatever it already held.
+			const c = event.content;
+			const prior = snapshot.de1Calibration[c.target] ?? {
+				current: null,
+				factory: null
+			};
+			const isFactory = c.command === 'ReadFactory';
+			return {
+				...snapshot,
+				de1Calibration: {
+					...snapshot.de1Calibration,
+					[c.target]: {
+						current: isFactory ? prior.current : c.de1_reported,
+						factory: isFactory ? c.de1_reported : prior.factory
+					}
+				},
+				eventLog: appendLog(
+					snapshot.eventLog,
+					`Calibration ${c.target} (${c.command}): ${c.de1_reported}`
+				)
+			};
+		}
 		case 'DecodeError':
 			return {
 				...snapshot,
