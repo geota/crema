@@ -40,7 +40,11 @@ data class EventTelemetryInner (
 	/// Group flow, mL/s.
 	val group_flow: Float,
 	/// Group-head temperature, °C.
-	val head_temp: Float
+	val head_temp: Float,
+	/// Mix temperature, °C — the DE1's blended "group" water temperature.
+	val mix_temp: Float,
+	/// Steam-heater temperature, °C.
+	val steam_temp: Float
 )
 
 /// Generated type representing the anonymous struct variant `ScaleReading` of the `Event` Rust enum
@@ -164,6 +168,19 @@ data class EventScaleConfigInner (
 	val firmware_version: UShort? = null
 )
 
+/// Generated type representing the anonymous struct variant `Firmware` of the `Event` Rust enum
+@Serializable
+data class EventFirmwareInner (
+	/// The CPU-board firmware's release number.
+	val fw_release: Float,
+	/// The CPU-board firmware's commits-since-release count.
+	val fw_commits: UShort,
+	/// The CPU-board firmware's API version.
+	val fw_api_version: UByte,
+	/// A human-readable firmware label, e.g. `"FW 1.4.142 (API 4)"`.
+	val firmware_string: String
+)
+
 /// Generated type representing the anonymous struct variant `DecodeError` of the `Event` Rust enum
 @Serializable
 data class EventDecodeErrorInner (
@@ -261,6 +278,10 @@ sealed class Event {
 	@Serializable
 	@SerialName("ScaleConfig")
 	data class ScaleConfig(val content: EventScaleConfigInner): Event()
+	/// The DE1 reported its BLE-interface and CPU-board firmware versions.
+	@Serializable
+	@SerialName("Firmware")
+	data class Firmware(val content: EventFirmwareInner): Event()
 	/// An incoming notification could not be decoded.
 	@Serializable
 	@SerialName("DecodeError")
