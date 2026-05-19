@@ -165,9 +165,11 @@
 				// One shared scale for all four channels. The top floats from 10
 				// upward so a mid-shot flow / pressure spike grows both axes.
 				y: {
+					// A hair of headroom (+0.3) keeps a peak that lands on a round
+					// number off the very top edge — so its dot never half-clips.
 					range: (_u, _min, dataMax) => [
 						0,
-						Number.isFinite(dataMax) ? Math.max(10, Math.ceil(dataMax)) : 10
+						Number.isFinite(dataMax) ? Math.max(10, Math.ceil(dataMax + 0.3)) : 10
 					]
 				}
 			},
