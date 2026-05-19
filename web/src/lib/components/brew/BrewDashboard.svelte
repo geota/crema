@@ -274,7 +274,10 @@
 				</div>
 				<div class="crema-chart">
 					{#if hasData}
-						<LiveChart series={ui.shotTelemetry} />
+						<LiveChart
+							series={ui.shotTelemetry}
+							goalSegments={activeProfile?.segments}
+						/>
 					{:else}
 						<!-- Clean empty state — no shot data buffered yet. -->
 						<div class="crema-chart-empty">
@@ -298,11 +301,12 @@
 				<span class="t-eyebrow">Scale</span>
 				<span>{scaleConnected ? `${scaleName} · ${fmt(weight)} g` : 'Not paired'}</span>
 				<span class="crema-foot-divider"></span>
-				<!-- TODO: wire to DE1 control — the group / steam readouts need the
-				     machine's structured temperatures, which the core does not
-				     surface yet; these are the design's representative values. -->
-				<span class="t-eyebrow">Group</span><span>93.2 °C</span>
-				<span class="t-eyebrow">Steam</span><span>148 °C</span>
+				<!-- Group / steam temperatures: real telemetry. The DE1's
+				     blended "group" water temperature is `ShotSample.mix_temp`;
+				     the steam-heater temperature is `steam_temp`. Both arrive on
+				     every `Telemetry` event (see `applyEvent`). -->
+				<span class="t-eyebrow">Group</span><span>{fmt(tel?.mixTemp)} °C</span>
+				<span class="t-eyebrow">Steam</span><span>{fmt(tel?.steamTemp)} °C</span>
 				<!-- Water tank: real `WaterLevel` telemetry, the sensor depth
 				     converted to a tank volume in mL (see `waterTankMl`). -->
 				<span class="t-eyebrow">Water</span>

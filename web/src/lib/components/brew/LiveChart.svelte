@@ -26,12 +26,20 @@
 	import uPlot from 'uplot';
 	import 'uplot/dist/uPlot.min.css';
 	import type { TelemetrySample } from '$lib/state';
+	import { sampleCurve, type ProfileSegment } from '$lib/profiles';
 
 	let {
-		series
+		series,
+		goalSegments
 	}: {
 		/** The buffered shot-telemetry series, oldest first. */
 		series: readonly TelemetrySample[];
+		/**
+		 * The active profile's segments — the goal line is the pressure target
+		 * curve sampled from these. `undefined` when no profile is active, in
+		 * which case the goal series is omitted.
+		 */
+		goalSegments?: readonly ProfileSegment[];
 	} = $props();
 
 	/** The default x-window, seconds, before any telemetry has arrived. */
@@ -44,13 +52,41 @@
 	}
 
 	/**
-	 * The static, illustrative pressure-goal line: a 3-bar pre-infusion floor
-	 * ramping to 9 bar. Purely cosmetic until the profile model lands.
+	 * The pressure-goal line, sampled from the active profile's segments. Only
+	 * pressure-priority segments contribute a target; a flow-priority segment
+	 * holds the previous pressure target (the DE1 has no pressure goal there).
+	 * Returns `null` when no profile is active so the goal series is dropped.
 	 */
-	function goalAt(t: number): number {
-		if (t < 8) return 3;
-		if (t < 11) return 3 + ((t - 8) / 3) * 6;
-		return 9;
+	const goalCurve = $derived.by(() => {
+		if (!goalSegments || goalSegments.length === 0) return null;
+		// Sample only the pressure target: a flow-priority segment damps to the
+		// last pressure value so the goal line holds flat through it.
+		let lastPressure = 0;
+		const pressureSegments = goalSegments.map((s) => {
+			if (s.mode === 'pressure') {
+				lastPressure = s.target;
+				return s;
+			}
+			return { ...s, target: lastPressure };
+		});
+		return sampleCurve(pressureSegments);
+	});
+
+	/** The goal pressure at elapsed time `t`, linearly interpolated. */
+	function goalAt(t: number): number | null {
+		const c = goalCurve;
+		if (!c || c.time.length === 0) return null;
+		if (t <= c.time[0]) return c.value[0];
+		const last = c.time.length - 1;
+		if (t >= c.time[last]) return c.value[last];
+		for (let i = 1; i <= last; i++) {
+			if (t <= c.time[i]) {
+				const span = c.time[i] - c.time[i - 1];
+				const u = span === 0 ? 0 : (t - c.time[i - 1]) / span;
+				return c.value[i - 1] + u * (c.value[i] - c.value[i - 1]);
+			}
+		}
+		return c.value[last];
 	}
 
 	/**
@@ -65,7 +101,7 @@
 		const flow: (number | null)[] = [];
 		const temp: (number | null)[] = [];
 		const weight: (number | null)[] = [];
-		const goal: number[] = [];
+		const goal: (number | null)[] = [];
 		for (const s of samples) {
 			const t = s.elapsedMs / 1000;
 			xs.push(t);
