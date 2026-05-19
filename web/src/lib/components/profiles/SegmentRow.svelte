@@ -8,13 +8,13 @@
 	 * moves the curve's dot, and vice versa. Clicking the row selects the
 	 * segment (highlighting it in the curve).
 	 *
-	 * The controls are the quick-controls primitives: `QSplitLabel` split
-	 * toggles for the mode (Pressure | Flow), temp sensor (Basket | Mix) and
-	 * ramp (Smooth | Fast), and `QStepper`s for Ramp / Target / Time / Temp /
-	 * Volume. The temp sensor sits on the column's label line, to the right of
-	 * "Temp", matching the quick-controls split-label-over-stepper layout. The
-	 * structured exit condition and the limiter live in `SegmentAdvanced`, the
-	 * panel the editor renders beneath the selected row.
+	 * The controls are the quick-controls primitives. The Type (Pressure |
+	 * Flow), Ramp (Smooth | Fast) and Temp-sensor (Basket | Mix) toggles are
+	 * `QSplitLabel`s with a category prefix — small, left-aligned label rows
+	 * the size of a field label; Type and Ramp stack under the segment name.
+	 * Target / Time / Temp / Volume are `QStepper`s. The structured exit
+	 * condition and the limiter live in `SegmentAdvanced`, the panel the
+	 * editor renders beneath the selected row.
 	 */
 	import type { ProfileSegment, SegmentRamp } from '$lib/profiles';
 	import QStepper from '$lib/components/brew/QStepper.svelte';
@@ -56,6 +56,7 @@
 >
 	<div class="pe-seg-num">{index + 1}</div>
 
+	<!-- Name, with the Type and Ramp toggles stacked beneath it. -->
 	<div class="pe-seg-name">
 		<input
 			class="pe-seg-name-input"
@@ -65,6 +66,7 @@
 			oninput={(e) => onEdit({ name: e.currentTarget.value })}
 		/>
 		<QSplitLabel
+			prefix="Type"
 			options={[
 				{ id: 'pressure', label: 'Pressure' },
 				{ id: 'flow', label: 'Flow' }
@@ -72,11 +74,8 @@
 			value={seg.mode}
 			onChange={(m) => onEdit({ mode: m as ProfileSegment['mode'] })}
 		/>
-	</div>
-
-	<div class="pe-seg-field">
-		<div class="pe-seg-field-label">Ramp</div>
 		<QSplitLabel
+			prefix="Ramp"
 			options={[
 				{ id: 'smooth', label: 'Smooth' },
 				{ id: 'fast', label: 'Fast' }
@@ -111,17 +110,15 @@
 	</div>
 
 	<div class="pe-seg-field">
-		<div class="pe-seg-field-head">
-			<span class="pe-seg-field-label">Temp</span>
-			<QSplitLabel
-				options={[
-					{ id: 'basket', label: 'Basket' },
-					{ id: 'mix', label: 'Mix' }
-				]}
-				value={seg.tempSensor}
-				onChange={(s) => onEdit({ tempSensor: s as ProfileSegment['tempSensor'] })}
-			/>
-		</div>
+		<QSplitLabel
+			prefix="Temp"
+			options={[
+				{ id: 'basket', label: 'Basket' },
+				{ id: 'mix', label: 'Mix' }
+			]}
+			value={seg.tempSensor}
+			onChange={(s) => onEdit({ tempSensor: s as ProfileSegment['tempSensor'] })}
+		/>
 		<QStepper
 			value={seg.temperatureC}
 			unit="°C"
@@ -161,17 +158,16 @@
 <style>
 	.pe-seg {
 		display: grid;
-		/* # · name+mode · Ramp · Target · Time · Temp+sensor · Volume · ⌫.
-		   Every cell is an editable control; the QStepper / QSplitLabel columns
-		   get control-sized minima and the name field takes the slack. */
+		/* # · name(+Type+Ramp) · Target · Time · Temp+sensor · Volume · ⌫.
+		   The QStepper columns get control-sized minima; the name field — which
+		   also stacks the Type and Ramp toggles — takes the slack. */
 		grid-template-columns:
 			28px
-			minmax(140px, 1.3fr)
-			minmax(104px, 0.7fr)
-			minmax(116px, 0.85fr)
-			minmax(108px, 0.8fr)
-			minmax(128px, 0.95fr)
-			minmax(116px, 0.85fr)
+			minmax(150px, 1.5fr)
+			minmax(116px, 0.95fr)
+			minmax(108px, 0.85fr)
+			minmax(130px, 1fr)
+			minmax(116px, 0.9fr)
 			32px;
 		gap: 12px;
 		align-items: start;
@@ -231,15 +227,6 @@
 	.pe-seg-field.is-off {
 		opacity: 0.4;
 	}
-	/* The Temp column's label line carries the Basket | Mix toggle on its
-	   right, matching the quick-controls split-label-over-stepper layout. */
-	.pe-seg-field-head {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 8px;
-		min-height: 18px;
-	}
 	.pe-seg-field-label {
 		font-family: var(--font-sans);
 		font-size: 9px;
@@ -247,7 +234,7 @@
 		text-transform: uppercase;
 		font-weight: 600;
 		color: rgba(244, 237, 224, 0.4);
-		min-height: 18px;
+		min-height: 16px;
 		display: flex;
 		align-items: center;
 	}
@@ -267,9 +254,19 @@
 		background: rgba(217, 119, 87, 0.08);
 	}
 
-	/* Trim the quick-controls primitives to the compact segment-row context —
-	   the canonical stepper number (22px) and buttons (36px) are sized for the
-	   wide Quick Sheet; a list row wants the design's tighter variant. */
+	/* Trim the quick-controls primitives to the compact segment-row context.
+	   The QSplitLabel toggles shrink to the size of a field label — small,
+	   left-aligned, uppercase — so Type / Ramp / Temp read as labels. */
+	.pe-seg :global(.qsplit) {
+		font-size: 9px;
+		gap: 6px;
+		min-height: 16px;
+	}
+	.pe-seg :global(.qsplit-prefix) {
+		color: rgba(244, 237, 224, 0.4);
+	}
+	/* The canonical stepper (22px digits, 36px buttons) is sized for the wide
+	   Quick Sheet; a list row wants the design's tighter variant. */
 	.pe-seg :global(.qcs-row) {
 		padding: 3px;
 		gap: 3px;
