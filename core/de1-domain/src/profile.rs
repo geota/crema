@@ -154,6 +154,17 @@ pub struct Profile {
     pub maximum_flow: f32,
     /// Whole-shot dispensed-volume limit, mL, range 0–1023 (0 = no limit).
     pub max_total_volume_ml: u16,
+    /// Desired final shot weight in grams (0.0 = no target).
+    ///
+    /// App-side metadata only — the DE1 protocol has no target-weight frame
+    /// field, so this never reaches [`assemble`](Profile::assemble); it exists
+    /// purely so a profile round-trips faithfully through JSON. Mirrors the
+    /// legacy DE1-app `final_desired_shot_weight`.
+    ///
+    /// `#[serde(default)]` so profiles serialized before this field existed
+    /// (e.g. the embedded `builtin.json`) still deserialize.
+    #[serde(default)]
+    pub target_weight: f32,
 }
 
 impl Profile {
@@ -267,6 +278,7 @@ mod tests {
             minimum_pressure: 1.0,
             maximum_flow: 6.0,
             max_total_volume_ml: 0,
+            target_weight: 0.0,
         }
     }
 
