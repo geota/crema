@@ -169,6 +169,15 @@ export interface CurveSamples {
 const SMOOTH_STEPS = 24;
 
 /**
+ * The tiny time offset a `fast` step jumps over. A fast ramp's value should
+ * change *at* the segment boundary, but a point exactly on the boundary time
+ * collides with the previous segment's end point; nudging it by `STEP_EPS`
+ * keeps the sampled x column strictly increasing so uPlot renders a clean,
+ * near-vertical step instead of collapsing the two same-x points.
+ */
+const STEP_EPS = 1e-3;
+
+/**
  * Densely sample a segment list into `[time, value]` columns for uPlot.
  *
  * uPlot's per-series path renderer can't mix smooth and stepped ramps in one
@@ -192,9 +201,9 @@ export function sampleCurve(
 	for (const s of segments) {
 		const target = damp ? damp(s.target) : s.target;
 		if (s.ramp === 'fast') {
-			// A vertical step: jump to the target at the segment start, hold it
-			// across the segment's duration.
-			time.push(t, t + s.time);
+			// A near-vertical step: jump to the target a hair *after* the
+			// segment start (see STEP_EPS), then hold it across the duration.
+			time.push(t + STEP_EPS, t + s.time);
 			value.push(target, target);
 		} else {
 			// A cubic ease — the same smoothstep the Bézier `curvePath` traced.

@@ -63,21 +63,18 @@
 	const total = $derived(totalTime(segments));
 
 	/**
-	 * Build uPlot's `[x, pressure, flow]` column arrays. Both curves are
-	 * sampled on their own time grid, then merged onto one shared, sorted x
-	 * column (uPlot needs every series aligned to a single x array) — a missing
-	 * sample on one curve becomes a `null` so uPlot interpolates across it.
+	 * Build uPlot's `[x, pressure, flow]` column arrays. `sampleCurve` samples
+	 * on a time grid set purely by the segments and their ramps — the `damp`
+	 * function only rescales the *values* — so the pressure and flow samples
+	 * share an identical, strictly-increasing time column and feed uPlot
+	 * directly. (An earlier merge-and-dedupe collapsed the two same-x points a
+	 * fast step needs; `sampleCurve` now offsets the step by `STEP_EPS` so the
+	 * column stays strictly increasing and the step survives intact.)
 	 */
 	function toData(segs: readonly ProfileSegment[]): uPlot.AlignedData {
 		const pressure = sampleCurve(segs);
 		const flow = sampleCurve(segs, dampFlow);
-		// One sorted, de-duplicated set of all sample times.
-		const xs = [...new Set([...pressure.time, ...flow.time])].sort((a, b) => a - b);
-		const pAt = new Map(pressure.time.map((t, i) => [t, pressure.value[i]]));
-		const fAt = new Map(flow.time.map((t, i) => [t, flow.value[i]]));
-		const pCol = xs.map((t) => pAt.get(t) ?? null);
-		const fCol = xs.map((t) => fAt.get(t) ?? null);
-		return [xs, pCol, fCol];
+		return [pressure.time, pressure.value, flow.value];
 	}
 
 	/** Round-numbered second marks — every 5 s, or 10 s on a long shot. */
@@ -233,22 +230,31 @@
 	/**
 	 * Recompute every handle's screen position from the current chart geometry.
 	 * Each handle sits at a segment's *end* — cumulative time on x, target on y.
-	 * `valToPos(..., false)` returns CSS pixels relative to the plotting area,
-	 * which the absolutely-positioned overlay divs use directly.
+	 *
+	 * Position is computed in **device pixels** from the uPlot canvas
+	 * (`valToPos(…, true)`), then converted to CSS pixels and offset by the
+	 * canvas's own rect within the plot wrap. Measuring the canvas rect is
+	 * robust to the axis insets and any wrap offset — no guessing uPlot's
+	 * CSS-coordinate origin, which is what left the handles off the curve.
 	 */
 	function syncHandles(): void {
 		if (!chart) {
 			handles = [];
 			return;
 		}
+		const cRect = chart.ctx.canvas.getBoundingClientRect();
+		const wRect = plotEl.getBoundingClientRect();
+		const dpr = window.devicePixelRatio || 1;
+		const offX = cRect.left - wRect.left;
+		const offY = cRect.top - wRect.top;
 		const out: Handle[] = [];
 		let t = 0;
 		for (const s of segments) {
 			t += s.time;
 			out.push({
 				id: s.id,
-				x: chart.valToPos(t, 'x', false),
-				y: chart.valToPos(Math.min(Y_MAX, Math.max(0, s.target)), 'y', false)
+				x: offX + chart.valToPos(t, 'x', true) / dpr,
+				y: offY + chart.valToPos(Math.min(Y_MAX, Math.max(0, s.target)), 'y', true) / dpr
 			});
 		}
 		handles = out;
@@ -309,10 +315,12 @@
 		if (!chart) return null;
 		const index = segments.findIndex((s) => s.id === id);
 		if (index < 0) return null;
-		const rect = plotEl.getBoundingClientRect();
-		// `posToVal` wants a CSS-pixel coordinate relative to the plotting area.
-		const cumTime = chart.posToVal(event.clientX - rect.left, 'x');
-		const value = chart.posToVal(event.clientY - rect.top, 'y');
+		// The exact inverse of `syncHandles`: map the pointer through
+		// `posToVal` in device pixels, measured from the canvas rect.
+		const cRect = chart.ctx.canvas.getBoundingClientRect();
+		const dpr = window.devicePixelRatio || 1;
+		const cumTime = chart.posToVal((event.clientX - cRect.left) * dpr, 'x', true);
+		const value = chart.posToVal((event.clientY - cRect.top) * dpr, 'y', true);
 		const startTime = segments.slice(0, index).reduce((a, s) => a + s.time, 0);
 		const time = Math.min(60, Math.max(1, Math.round((cumTime - startTime) * 2) / 2));
 		const target = Math.min(Y_MAX, Math.max(0, Math.round(value * 10) / 10));
@@ -468,9 +476,6 @@
 	.pe-curve-plot {
 		width: 100%;
 		height: 100%;
-	}
-	.pe-curve-plot :global(.u-wrap) {
-		margin: 0 auto;
 	}
 	/* One drag handle, absolutely placed over the canvas at its segment end. */
 	.pe-handle {
