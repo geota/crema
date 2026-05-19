@@ -28,6 +28,8 @@ pub enum Source {
     ScaleCommand,
     /// The DE1 water-tank level characteristic (`cuuid_11`).
     De1WaterLevels,
+    /// The DE1 version characteristic (`cuuid_01`) — BLE + firmware versions.
+    De1Version,
 }
 
 /// Something the core observed that the UI may want to react to.
@@ -68,6 +70,10 @@ pub enum Event {
         group_flow: f32,
         /// Group-head temperature, °C.
         head_temp: f32,
+        /// Mix temperature, °C — the DE1's blended "group" water temperature.
+        mix_temp: f32,
+        /// Steam-heater temperature, °C.
+        steam_temp: f32,
     },
     /// A weight reading arrived from the scale, smoothed by the flow estimator.
     ScaleReading {
@@ -189,6 +195,17 @@ pub enum Event {
         /// patch` (e.g. `141` is firmware 1.4.1) — `Some` only for a `03 0c`
         /// serial response.
         firmware_version: Option<u16>,
+    },
+    /// The DE1 reported its BLE-interface and CPU-board firmware versions.
+    Firmware {
+        /// The CPU-board firmware's release number.
+        fw_release: f32,
+        /// The CPU-board firmware's commits-since-release count.
+        fw_commits: u16,
+        /// The CPU-board firmware's API version.
+        fw_api_version: u8,
+        /// A human-readable firmware label, e.g. `"FW 1.4.142 (API 4)"`.
+        firmware_string: String,
     },
     /// An incoming notification could not be decoded.
     DecodeError {
