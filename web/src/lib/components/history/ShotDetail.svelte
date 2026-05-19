@@ -10,7 +10,8 @@
 	 * Share are stubs (`// TODO`).
 	 */
 	import type { ShotRecord } from '$lib/history';
-	import { ratioLabel, shotJsonl, shotFilename } from '$lib/history';
+	import { ratioLabel, shotFilename } from '$lib/history';
+	import { getCaptureStore, captureJsonl } from '$lib/capture';
 	import { daysOffRoast, roastBand } from '$lib/bean';
 	import { getSettingsStore, convertWeight, convertTemp, convertPressure } from '$lib/settings';
 	import StaticShotChart from './StaticShotChart.svelte';
@@ -32,6 +33,27 @@
 	let editing = $state(false);
 	/** The draft notes text while editing. */
 	let draft = $state('');
+	/**
+	 * Whether a raw-BLE capture is stored for the selected shot — gates the
+	 * Download button. The capture store is IndexedDB-async; the effect below
+	 * checks existence whenever the selected shot changes and writes the
+	 * result here.
+	 */
+	let captureAvailable = $state(false);
+	$effect(() => {
+		// Capture the id at effect start so a stale promise can't overwrite a
+		// later shot's flag (rapid history-row clicks).
+		const id = shot.id;
+		captureAvailable = false;
+		void getCaptureStore()
+			.has(id)
+			.then((has) => {
+				if (id === shot.id) captureAvailable = has;
+			})
+			.catch(() => {
+				if (id === shot.id) captureAvailable = false;
+			});
+	});
 
 	/** Date + time caption, e.g. `May 18 · 14:36`. */
 	const stamp = $derived.by(() => {
@@ -96,12 +118,17 @@
 	}
 
 	/**
-	 * Download this shot's telemetry as a JSON Lines (`.jsonl`) file — one
-	 * sample per line, spanning exactly the shot start → stop (see
-	 * {@link shotJsonl}).
+	 * Download this shot's raw BLE capture as a JSON Lines (`.jsonl`) file —
+	 * one `{t, dir, src, hex}` notification per line, the same format the
+	 * Advanced → Replay tool consumes. Wired to {@link captureJsonl} on the
+	 * IndexedDB-backed `$lib/capture` store. Shots recorded before the capture
+	 * recorder existed (or pulled with no BLE link) have no capture; the
+	 * button is disabled in that case.
 	 */
-	function download(): void {
-		const blob = new Blob([shotJsonl(shot)], { type: 'application/x-ndjson' });
+	async function download(): Promise<void> {
+		const entries = await getCaptureStore().get(shot.id);
+		if (!entries || entries.length === 0) return;
+		const blob = new Blob([captureJsonl(entries)], { type: 'application/x-ndjson' });
 		const url = URL.createObjectURL(blob);
 		const a = document.createElement('a');
 		a.href = url;
@@ -141,7 +168,14 @@
 			{/if}
 		</div>
 		<div class="hi-detail-actions">
-			<button class="st-btn st-btn-secondary" onclick={download}>
+			<button
+				class="st-btn st-btn-secondary"
+				onclick={download}
+				disabled={!captureAvailable}
+				title={captureAvailable
+					? 'Download a replayable JSONL capture of this shot'
+					: 'No replayable capture for this shot — only shots pulled since the capture recorder shipped have one'}
+			>
 				<i class="ph ph-download-simple" aria-hidden="true"></i> Download
 			</button>
 			<button class="st-btn st-btn-secondary" onclick={loadOnBrew}>
