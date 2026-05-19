@@ -209,8 +209,8 @@
 	<div class="pe-seg-cell">
 		<div class="pe-seg-cell-body">
 			<div class="pe-seg-label-row">
+				<span class="pe-seg-label">Temp</span>
 				<QSplitLabel
-					prefix="Temp"
 					options={[
 						{ id: 'basket', label: 'Basket' },
 						{ id: 'mix', label: 'Mix' }
