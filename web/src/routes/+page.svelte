@@ -27,3 +27,17 @@
 </svelte:head>
 
 <BrewDashboard {ui} />
+
+<style>
+	/* The Brew dashboard is a fixed full-height layout: the header / main /
+	   foot bands fill the viewport and the docked Quick Sheet is absolutely
+	   positioned against `.qcontain` (which already sets `overflow: hidden`).
+	   Pin it to the viewport height so `.crema-dash`'s `flex: 1` main band and
+	   the bottom-pinned `.crema-dash-foot` resolve correctly. */
+	:global(.shell-content:has(.qcontain)) {
+		height: 100vh;
+	}
+	:global(.qcontain) {
+		height: 100vh;
+	}
+</style>

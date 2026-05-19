@@ -4,6 +4,7 @@
  */
 
 export { default as ProfileCard } from './ProfileCard.svelte';
+export { default as ProfilePreview } from './ProfilePreview.svelte';
 export { default as ProfileEditor } from './ProfileEditor.svelte';
 export { default as ProfileCurveEditor } from './ProfileCurveEditor.svelte';
 export { default as SegmentRow } from './SegmentRow.svelte';

@@ -3,10 +3,11 @@
 	 * `QuickSheet` — the docked Quick Sheet, variant G, ported from the
 	 * `variant === 'g'` path of `WebQDashV2` in `web-dashboard-v2.jsx`.
 	 *
-	 * Header (serif title, profile pill, Save / Reset / Close), the
-	 * `FavoritesStrip`, the one-row six-card body (Dose|Grind · Yield · Brew
-	 * Temp · Steam · Hot Water · Pre-Infuse|Flush), and the footer (the two
-	 * mini-toggles plus the big copper Start / Stop button).
+	 * Header (serif title, Save / Reset / Close — no profile chip; the profile
+	 * already sits in the dash header), the `FavoritesStrip`, the one-row
+	 * six-card body (Dose|Grind · Yield · Brew Temp · Steam · Hot Water ·
+	 * Pre-Infuse|Flush), and the footer (just the two mini-toggles — the big
+	 * Start button lives on the dash-foot, which stays visible behind the sheet).
 	 *
 	 * The whole brew-CONTROL surface is **UI-only** in this porting step — the
 	 * core treats the DE1 as read-only. Every action that would reach the
@@ -24,31 +25,22 @@
 
 	let {
 		params,
-		profileName,
 		pinnedProfiles,
 		selectedProfileId,
-		running,
 		open,
 		onSelectFavorite,
-		onToggleRun,
 		onClose
 	}: {
 		/** The shared Quick Sheet parameter store. */
 		params: BrewParamState;
-		/** The active profile's display name (for the header pill). */
-		profileName: string;
 		/** The pinned profiles shown as favorite chips. */
 		pinnedProfiles: readonly CremaProfile[];
 		/** The active profile's id (the highlighted chip), or `null`. */
 		selectedProfileId: string | null;
-		/** Whether an extraction is in progress — flips the big button to danger-red. */
-		running: boolean;
 		/** Whether the sheet is docked open; when false it slides away. */
 		open: boolean;
 		/** Called when a favorite chip is picked. */
 		onSelectFavorite: (profile: CremaProfile) => void;
-		/** Called when the Start / Stop button is pressed. */
-		onToggleRun: () => void;
 		/** Called to dismiss the sheet (Close button or scrim tap). */
 		onClose: () => void;
 	} = $props();
@@ -70,11 +62,6 @@
 	<div class="qsheet-v2-head">
 		<div class="qsheet-v2-title-block">
 			<div class="qsheet-v2-title">Quick Controls</div>
-			<div class="qsheet-v2-profile">
-				<i class="ph-fill ph-star" style="color:var(--copper-400);font-size:12px" aria-hidden="true"
-				></i>
-				<span>Profile · </span><strong>{profileName}</strong>
-			</div>
 		</div>
 		<div class="qsheet-v2-actions">
 			<!-- TODO: wire to DE1 control — saving a preset needs the profile model. -->
@@ -130,11 +117,5 @@
 				<span>Auto-tare</span>
 			</label>
 		</div>
-		<!-- TODO: wire to DE1 control — starting / stopping a shot is a net-new
-		     feature; today this only flips the local `running` flag. -->
-		<button class="crema-bigbtn" class:running onclick={onToggleRun}>
-			<i class={'ph-fill ph-' + (running ? 'stop' : 'play')} aria-hidden="true"></i>
-			<span>{running ? 'Stop extraction' : 'Start extraction'}</span>
-		</button>
 	</div>
 </div>
