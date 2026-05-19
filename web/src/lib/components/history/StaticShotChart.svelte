@@ -3,10 +3,12 @@
 	 * `StaticShotChart` — a static render of a stored shot's 4-channel telemetry
 	 * curve, for the History page's `ShotDetail`.
 	 *
-	 * uPlot spike: the static counterpart of `brew/LiveChart`. Same four
-	 * per-channel uPlot scales (pressure / flow / temp / weight) and the same
-	 * `--tel-*` hues, but a finished shot is drawn whole — no now-marker or
-	 * end-dots — and the x window stretches to the recorded shot's length.
+	 * The static counterpart of `brew/LiveChart`: the same two locked y-axes
+	 * (left ≈ 0–10 bar / ml·s, right ≈ 0–100 °C / g — pressure & flow plot
+	 * raw, temperature & weight at value ÷ 10 on a shared scale), the same
+	 * horizontal grid and round-numbered x labels. A finished shot is drawn
+	 * whole, so there is no now-marker and no end-dots; the x-window fits the
+	 * recorded shot's length.
 	 */
 	import { untrack } from 'svelte';
 	import uPlot from 'uplot';
@@ -15,7 +17,7 @@
 
 	let {
 		series,
-		height = 240
+		height = 360
 	}: {
 		/** The stored shot-telemetry series, oldest first. */
 		series: readonly TelemetrySample[];
@@ -23,10 +25,8 @@
 		height?: number;
 	} = $props();
 
-	/** The time window, seconds — the recorded shot's length, min 28 s. */
-	const windowSec = $derived(
-		series.length > 0 ? Math.max(28, series[series.length - 1].elapsedMs / 1000) : 28
-	);
+	/** The default x-window, seconds, for a very short recorded shot. */
+	const BASE_WINDOW_SEC = 30;
 
 	/** Resolve a CSS custom property to a concrete colour string. */
 	function cssVar(name: string): string {
@@ -34,7 +34,12 @@
 		return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || '#888';
 	}
 
-	/** Build the [x, pressure, flow, temp, weight] column arrays uPlot wants. */
+	/**
+	 * Build the [x, pressure, flow, temp, weight] column arrays uPlot wants.
+	 * Pressure and flow keep their raw value; temperature and weight are
+	 * divided by 10 so they ride the shared scale (read back ×10 on the right
+	 * axis) — identical to `LiveChart`.
+	 */
 	function toData(samples: readonly TelemetrySample[]): uPlot.AlignedData {
 		const xs: number[] = [];
 		const pressure: (number | null)[] = [];
@@ -45,31 +50,76 @@
 			xs.push(s.elapsedMs / 1000);
 			pressure.push(s.pressure ?? null);
 			flow.push(s.flow ?? null);
-			temp.push(s.temp ?? null);
-			weight.push(s.weightG ?? null);
+			temp.push(s.temp == null ? null : s.temp / 10);
+			weight.push(s.weightG == null ? null : s.weightG / 10);
 		}
 		return [xs, pressure, flow, temp, weight];
+	}
+
+	/** uPlot plugin: the four horizontal grid lines, behind the series. */
+	function gridPlugin(): uPlot.Plugin {
+		return {
+			hooks: {
+				drawClear: (u: uPlot) => {
+					const ctx = u.ctx;
+					const { left, top, width, height: h } = u.bbox;
+					ctx.save();
+					ctx.setLineDash([]);
+					ctx.strokeStyle = 'rgba(244,237,224,0.05)';
+					ctx.lineWidth = devicePixelRatio;
+					for (const p of [0.2, 0.4, 0.6, 0.8]) {
+						const y = Math.round(top + h * p) + 0.5;
+						ctx.beginPath();
+						ctx.moveTo(left, y);
+						ctx.lineTo(left + width, y);
+						ctx.stroke();
+					}
+					ctx.restore();
+				}
+			}
+		};
 	}
 
 	let plotEl: HTMLDivElement;
 	let chart: uPlot | null = null;
 	let resizeObs: ResizeObserver | null = null;
 
-	function buildOpts(w: number, h: number, win: number): uPlot.Options {
+	/** Round-numbered second marks inside the window — design uses 10 s steps. */
+	function timeSplits(max: number): number[] {
+		const incr = max <= 90 ? 10 : max <= 180 ? 20 : 30;
+		const out: number[] = [];
+		for (let t = incr; t < max; t += incr) out.push(t);
+		return out;
+	}
+
+	function buildOpts(w: number, h: number): uPlot.Options {
 		const gridColor = 'rgba(244,237,224,0.05)';
 		const labelColor = 'rgba(244,237,224,0.35)';
+		const yFont = '11px "JetBrains Mono", monospace';
 		return {
 			width: w,
 			height: h,
-			padding: [8, 8, 0, 8],
+			padding: [8, 4, 4, 4],
 			cursor: { show: false },
 			legend: { show: false },
 			scales: {
-				x: { time: false, range: [0, win] },
-				pressure: { range: [0, 12] },
-				flow: { range: [0, 8] },
-				temp: { range: [85, 100] },
-				weight: { range: [0, 50] }
+				// The x-window fits the recorded shot's length.
+				x: {
+					time: false,
+					range: (_u, _min, dataMax) => [
+						0,
+						Number.isFinite(dataMax)
+							? Math.max(BASE_WINDOW_SEC, Math.ceil(dataMax))
+							: BASE_WINDOW_SEC
+					]
+				},
+				// One shared scale for all four channels — see `toData`.
+				y: {
+					range: (_u, _min, dataMax) => [
+						0,
+						Number.isFinite(dataMax) ? Math.max(10, Math.ceil(dataMax + 0.3)) : 10
+					]
+				}
 			},
 			axes: [
 				{
@@ -77,37 +127,70 @@
 					stroke: labelColor,
 					grid: { stroke: gridColor, width: 1, dash: [2, 4] },
 					ticks: { show: false },
-					font: '11px "JetBrains Mono", monospace',
-					values: (_u, splits) => splits.map((v) => (v === 0 ? '' : `${Math.round(v)}s`)),
-					splits: () => [0.2, 0.4, 0.6, 0.8].map((p) => Math.round(win * p))
+					font: yFont,
+					splits: (u) => timeSplits((u.scales.x.max ?? BASE_WINDOW_SEC) as number),
+					values: (_u, splits) => splits.map((v) => `${v}s`)
 				},
 				{
-					scale: 'pressure',
-					show: false,
+					// Left axis: the scale value as-is — bar (pressure) / ml·s (flow).
+					scale: 'y',
+					side: 3,
+					stroke: labelColor,
 					grid: { stroke: gridColor, width: 1 },
-					splits: (u) => {
-						const [min, max] = u.scales.pressure.range as unknown as [number, number];
-						return [0.2, 0.4, 0.6, 0.8].map((p) => min + (max - min) * p);
-					}
+					ticks: { show: false },
+					font: yFont,
+					size: 34,
+					values: (_u, splits) => splits.map((v) => `${v}`)
+				},
+				{
+					// Right axis: the same ticks ×10 — °C (temp) / g (weight).
+					scale: 'y',
+					side: 1,
+					stroke: labelColor,
+					grid: { show: false },
+					ticks: { show: false },
+					font: yFont,
+					size: 38,
+					values: (_u, splits) => splits.map((v) => `${v * 10}`)
 				}
 			],
 			series: [
 				{},
-				{ scale: 'pressure', stroke: () => cssVar('--tel-pressure'), width: 2.6, points: { show: false } },
-				{ scale: 'flow', stroke: () => cssVar('--tel-flow'), width: 2.2, points: { show: false } },
-				{ scale: 'temp', stroke: () => cssVar('--tel-temp'), width: 2.2, points: { show: false } },
-				{ scale: 'weight', stroke: () => cssVar('--tel-weight'), width: 2.2, points: { show: false } }
-			]
+				{
+					scale: 'y',
+					stroke: () => cssVar('--tel-pressure'),
+					width: 2.6,
+					points: { show: false }
+				},
+				{
+					scale: 'y',
+					stroke: () => cssVar('--tel-flow'),
+					width: 2.2,
+					points: { show: false }
+				},
+				{
+					scale: 'y',
+					stroke: () => cssVar('--tel-temp'),
+					width: 2.2,
+					points: { show: false }
+				},
+				{
+					scale: 'y',
+					stroke: () => cssVar('--tel-weight'),
+					width: 2.2,
+					points: { show: false }
+				}
+			],
+			plugins: [gridPlugin()]
 		};
 	}
 
-	// Create the chart once on mount; `series`/`windowSec`/`height` are read
-	// untracked so a prop change updates the live instance (effect below)
-	// instead of rebuilding it.
+	// Create the chart once on mount; `series` is read untracked so a prop
+	// change updates the live instance (effect below) instead of rebuilding it.
 	$effect(() => {
 		const w = Math.max(1, plotEl.clientWidth);
 		chart = new uPlot(
-			buildOpts(w, untrack(() => height), untrack(() => windowSec)),
+			buildOpts(w, untrack(() => height)),
 			toData(untrack(() => series)),
 			plotEl
 		);
@@ -126,13 +209,17 @@
 		};
 	});
 
-	// Re-apply data + x-window when the stored shot changes.
+	// Re-apply data when the stored shot changes — `setData` re-runs the x/y
+	// `range` callbacks, so both axes refit the new shot.
 	$effect(() => {
 		const data = toData(series);
-		const win = windowSec;
 		if (!chart) return;
-		chart.setData(data, false);
-		chart.setScale('x', { min: 0, max: win });
+		chart.setData(data);
+	});
+
+	// React to a height prop change without rebuilding the chart.
+	$effect(() => {
+		chart?.setSize({ width: chart.width, height });
 	});
 </script>
 

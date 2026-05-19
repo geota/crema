@@ -100,7 +100,7 @@
 
 	<!-- Chart -->
 	<div class="hi-chart">
-		<StaticShotChart series={shot.series} height={240} />
+		<StaticShotChart series={shot.series} height={380} />
 		<div class="hi-chart-legend">
 			<span><i class="hi-leg" style="background:var(--tel-pressure)"></i>Pressure</span>
 			<span><i class="hi-leg" style="background:var(--tel-flow)"></i>Flow</span>
