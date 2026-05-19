@@ -618,6 +618,64 @@ mod tests {
     }
 
     #[test]
+    fn mmr_reg_mirror_covers_every_mmr_register() {
+        // `MmrReg` is a hand-maintained mirror of `MmrRegister`. This builds
+        // one `MmrReg` per `MmrRegister` variant — the match is exhaustive, so
+        // adding a core register without a mirror variant fails to compile —
+        // then asserts the mirror maps back to the same register, name and
+        // count, catching any drift at `cargo test`.
+        let mirror: Vec<(MmrReg, MmrRegister)> = MmrRegister::ALL
+            .into_iter()
+            .map(|core_reg| {
+                let mirror = match core_reg {
+                    MmrRegister::FirmwareVersion => MmrReg::FirmwareVersion,
+                    MmrRegister::GhcInfo => MmrReg::GhcInfo,
+                    MmrRegister::TankTempThreshold => MmrReg::TankTempThreshold,
+                    MmrRegister::FanThreshold => MmrReg::FanThreshold,
+                    MmrRegister::SerialNumber => MmrReg::SerialNumber,
+                    MmrRegister::SteamFlow => MmrReg::SteamFlow,
+                    MmrRegister::RefillKit => MmrReg::RefillKit,
+                    MmrRegister::FlushFlowRate => MmrReg::FlushFlowRate,
+                    MmrRegister::HotWaterFlowRate => MmrReg::HotWaterFlowRate,
+                    MmrRegister::Phase1FlowRate => MmrReg::Phase1FlowRate,
+                    MmrRegister::Phase2FlowRate => MmrReg::Phase2FlowRate,
+                    MmrRegister::HotWaterIdleTemp => MmrReg::HotWaterIdleTemp,
+                    MmrRegister::GhcMode => MmrReg::GhcMode,
+                    MmrRegister::SteamHighFlowStart => MmrReg::SteamHighFlowStart,
+                    MmrRegister::HeaterVoltage => MmrReg::HeaterVoltage,
+                    MmrRegister::EspressoWarmupTimeout => MmrReg::EspressoWarmupTimeout,
+                    MmrRegister::CalibrationFlowMultiplier => MmrReg::CalibrationFlowMultiplier,
+                    MmrRegister::FlushTimeout => MmrReg::FlushTimeout,
+                    MmrRegister::UsbChargerOn => MmrReg::UsbChargerOn,
+                    MmrRegister::FeatureFlags => MmrReg::FeatureFlags,
+                    MmrRegister::CupWarmerTemp => MmrReg::CupWarmerTemp,
+                };
+                (mirror, core_reg)
+            })
+            .collect();
+        // One mirror variant per core register — no extras, none missing.
+        assert_eq!(mirror.len(), MmrRegister::ALL.len());
+        // Each mirror round-trips back to the register it was built from.
+        for (mirror_reg, core_reg) in mirror {
+            assert_eq!(MmrRegister::from(mirror_reg), core_reg);
+        }
+    }
+
+    #[test]
+    fn cal_sensor_mirror_covers_every_cal_target() {
+        // As `mmr_reg_mirror_covers_every_mmr_register`, for `CalSensor` /
+        // `CalTarget`: the exhaustive match fails to compile on drift.
+        for target in [CalTarget::Flow, CalTarget::Pressure, CalTarget::Temperature] {
+            let mirror = match target {
+                CalTarget::Flow => CalSensor::Flow,
+                CalTarget::Pressure => CalSensor::Pressure,
+                CalTarget::Temperature => CalSensor::Temperature,
+            };
+            assert_eq!(CalTarget::from(mirror), target);
+        }
+    }
+
+    #[test]
     fn machine_request_maps_to_the_expected_states() {
         assert_eq!(
             MachineState::from(MachineRequest::Flush),
