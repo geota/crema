@@ -14,6 +14,7 @@ export { default as ExtractionTimer } from './ExtractionTimer.svelte';
 export { default as ChannelReadout } from './ChannelReadout.svelte';
 export { default as PhaseIndicatorCard } from './PhaseIndicatorCard.svelte';
 export { default as BeanContextCard } from './BeanContextCard.svelte';
+export { default as LastShotCard } from './LastShotCard.svelte';
 export { default as LiveChart } from './LiveChart.svelte';
 export { default as FavoritesStrip } from './FavoritesStrip.svelte';
 export { default as QStepper } from './QStepper.svelte';

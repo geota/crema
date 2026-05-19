@@ -21,6 +21,7 @@ export {
 	type UiSnapshot,
 	type LogLine,
 	type TelemetrySample,
+	type CompletedShot,
 	type De1MachineInfo,
 	type De1Calibration,
 	type SensorCalibration,
