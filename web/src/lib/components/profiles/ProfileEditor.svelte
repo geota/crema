@@ -588,7 +588,7 @@
 	/* Body */
 	.pe-body {
 		display: grid;
-		grid-template-columns: 380px 1fr;
+		grid-template-columns: 440px 1fr;
 		flex: 1 1 auto;
 	}
 	@media (max-width: 980px) {
@@ -756,14 +756,14 @@
 		margin-top: 2px;
 	}
 
-	/* Number grid — fixed 145px columns (not `1fr`). `1fr` is really
+	/* Number grid — fixed 175px columns (not `1fr`). `1fr` is really
 	   `minmax(auto, 1fr)`, so a long nowrap label like "Max total volume"
 	   widens its track and shifts the gutter; fixed columns keep every box
 	   the same width and the column gutter at the same X in every section.
-	   145 + 10 + 145 = 300 = the `.pe-left` content width. */
+	   175 + 10 + 175 = 360 = the `.pe-left` content width. */
 	.pe-grid {
 		display: grid;
-		grid-template-columns: 145px 145px;
+		grid-template-columns: 175px 175px;
 		gap: 10px;
 	}
 	/* The Ratio read-out matches a `.pe-num` box: same padding and gap, an
