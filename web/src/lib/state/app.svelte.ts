@@ -18,7 +18,14 @@
 import { loadCore, type Command, type CoreOutput, type CremaCore } from '$lib/core';
 import { De1Manager, EMPTY_DE1_DIAGNOSTICS, ScaleManager } from '$lib/ble';
 import { getHistoryStore } from '$lib/history';
+import { parseCaptureFile, replayEvents, ReplayAbortedError } from '$lib/replay';
 import { CremaUiState, DEFAULT_SCALE_STANDBY_MINUTES, DEFAULT_SCALE_VOLUME } from './ui-state.svelte';
+
+/** Options for {@link CremaApp.replayCapture}. */
+export interface ReplayCaptureOptions {
+	/** Playback speed multiplier — `1` is real time. Defaults to `1`. */
+	readonly speed?: number;
+}
 
 /**
  * The orchestrator. One instance per app. The screen reads {@link state} and
@@ -30,6 +37,12 @@ export class CremaApp {
 
 	private readonly de1: De1Manager;
 	private readonly scale: ScaleManager;
+
+	/**
+	 * The abort controller for an in-progress capture replay, or `null` when no
+	 * replay is running. {@link cancelReplay} aborts it.
+	 */
+	private replayAbort: AbortController | null = null;
 
 	constructor(private readonly core: CremaCore) {
 		this.de1 = new De1Manager(core, {
@@ -257,6 +270,163 @@ export class CremaApp {
 		this.state.patch({ scaleAutoStop: modeId });
 		this.applyCoreOutput(await this.core.setScaleAutoStop(modeId));
 	}
+
+	// ---- Capture replay (developer tool) ----------------------------------
+
+	/**
+	 * Replay a recorded BLE capture file through the core — a developer/admin
+	 * tool that lets a previously-exported shot be watched in the web UI with no
+	 * live machine.
+	 *
+	 * The file is parsed into inbound notifications (see `lib/replay`), the core
+	 * is `reset()` so the replay starts from a clean session, and each event is
+	 * fed through `core.onNotification(source, bytes, t)` with its captured
+	 * timestamp — exactly the path a live notification takes. Every resulting
+	 * `CoreOutput` funnels through {@link applyCoreOutput}, so the UI fills just
+	 * as it would from a real device: telemetry into the `LiveChart`, the timer
+	 * and readouts, and `ShotCompleted` into the History store.
+	 *
+	 * The replay is paced at real time by the events' timestamps (see
+	 * `replayEvents`); `opts.speed` scales the pace. Progress and outcome are
+	 * exposed on `state.current.replay`; {@link cancelReplay} stops it.
+	 *
+	 * Only one replay runs at a time — a second call while one is in progress is
+	 * ignored. The replay does not interact with any live BLE connection: it
+	 * resets the core, so a connected device's session would be discarded — it
+	 * is strictly an offline diagnostic.
+	 */
+	async replayCapture(file: File, opts: ReplayCaptureOptions = {}): Promise<void> {
+		if (this.replayAbort) return;
+
+		const abort = new AbortController();
+		this.replayAbort = abort;
+
+		let parsed;
+		try {
+			parsed = await parseCaptureFile(file);
+		} catch (error) {
+			this.replayAbort = null;
+			this.state.patch({
+				replay: {
+					phase: 'error',
+					fileName: file.name,
+					done: 0,
+					total: 0,
+					message: `Could not read capture: ${describeError(error)}`
+				}
+			});
+			return;
+		}
+
+		if (parsed.events.length === 0) {
+			this.replayAbort = null;
+			this.state.patch({
+				replay: {
+					phase: 'error',
+					fileName: file.name,
+					done: 0,
+					total: 0,
+					message: 'No replayable notifications found in this capture.'
+				}
+			});
+			return;
+		}
+
+		// Start from a clean core session so the replayed shot is not blended
+		// with any prior (or live) session's state.
+		await this.core.reset();
+		this.state.patch({
+			machineState: null,
+			shotPhase: null,
+			telemetry: null,
+			latestTelemetry: null,
+			shotTelemetry: [],
+			shotInProgress: false,
+			shotElapsedMs: 0,
+			replay: {
+				phase: 'running',
+				fileName: file.name,
+				done: 0,
+				total: parsed.events.length,
+				message: `Replaying ${parsed.events.length} events from ${file.name}…`
+			}
+		});
+
+		try {
+			await replayEvents(
+				parsed.events,
+				async (event) => {
+					// Feed the raw bytes straight through the core, exactly as a
+					// live notification would arrive — then fold the output.
+					const output = await this.core.onNotification(
+						event.source,
+						event.data,
+						event.t
+					);
+					this.applyCoreOutput(output);
+				},
+				{
+					speed: opts.speed,
+					signal: abort.signal,
+					onProgress: (index, total) => {
+						this.state.patch({
+							replay: {
+								phase: 'running',
+								fileName: file.name,
+								done: index + 1,
+								total,
+								message: `Replaying ${file.name} — ${index + 1} / ${total}`
+							}
+						});
+					}
+				}
+			);
+			this.state.patch({
+				replay: {
+					phase: 'done',
+					fileName: file.name,
+					done: parsed.events.length,
+					total: parsed.events.length,
+					message: `Replay finished — ${parsed.events.length} events from ${file.name}.`
+				}
+			});
+		} catch (error) {
+			if (error instanceof ReplayAbortedError) {
+				const status = this.state.current.replay;
+				this.state.patch({
+					replay: {
+						phase: 'cancelled',
+						fileName: file.name,
+						done: status?.done ?? 0,
+						total: parsed.events.length,
+						message: `Replay cancelled — ${status?.done ?? 0} / ${parsed.events.length} events.`
+					}
+				});
+			} else {
+				this.state.patch({
+					replay: {
+						phase: 'error',
+						fileName: file.name,
+						done: this.state.current.replay?.done ?? 0,
+						total: parsed.events.length,
+						message: `Replay failed: ${describeError(error)}`
+					}
+				});
+			}
+		} finally {
+			this.replayAbort = null;
+		}
+	}
+
+	/** Cancel an in-progress capture replay, if one is running. */
+	cancelReplay(): void {
+		this.replayAbort?.abort();
+	}
+}
+
+/** Best-effort human-readable text for an unknown thrown value. */
+function describeError(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
 }
 
 /**

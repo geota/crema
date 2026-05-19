@@ -14,7 +14,13 @@
 	 * **UI-only** — Home Assistant, the webhook and API-token actions need a
 	 * network layer the shell lacks; factory reset is destructive and gated
 	 * behind a confirm. Each is marked with a `// TODO`.
+	 *
+	 * **Developer** — "Replay a capture" is a real developer/admin tool: it
+	 * feeds a recorded BLE capture file back through the core, so an exported
+	 * shot plays out in the Brew dashboard and lands in History with no live
+	 * machine. See `CremaApp.replayCapture`.
 	 */
+	import type { CremaApp } from '$lib/state';
 	import { getSettingsStore } from '$lib/settings';
 	import StSectionHead from '../StSectionHead.svelte';
 	import StGroup from '../StGroup.svelte';
@@ -22,8 +28,29 @@
 	import StToggle from '../StToggle.svelte';
 	import StButton from '../StButton.svelte';
 
+	/** The shared orchestrator, or `null` while the wasm core is still loading. */
+	let { app }: { app: CremaApp | null } = $props();
+
 	const settings = getSettingsStore();
 	const prefs = $derived(settings.current);
+
+	// ---- Capture replay (developer tool) ---------------------------------
+
+	/** The live replay status from the shared UI state, or `null` if none. */
+	const replay = $derived(app?.state.current.replay ?? null);
+	/** Whether a replay is currently in progress — gates the picker / Cancel. */
+	const replayRunning = $derived(replay?.phase === 'running');
+
+	/**
+	 * Handle a chosen capture file: hand it to `app.replayCapture`, then clear
+	 * the input so picking the same file again re-fires the `change` event.
+	 */
+	function onCaptureChosen(event: Event): void {
+		const input = event.currentTarget as HTMLInputElement;
+		const file = input.files?.[0];
+		input.value = '';
+		if (file && app) void app.replayCapture(file);
+	}
 
 	// TODO: Home Assistant MQTT bridge needs a network layer; local UI only.
 	let homeAssistant = $state(false);
@@ -140,6 +167,59 @@
 	</StRow>
 </StGroup>
 
+<StGroup title="Developer">
+	<StRow
+		title="Replay a capture"
+		sub="Load a recorded BLE capture (.jsonl) and play it back through the core — the shot fills the Brew dashboard and lands in History with no live machine. After starting, open Brew or History to watch it play out."
+	>
+		{#snippet control()}
+			<div class="rp-control">
+				<label class="st-btn st-btn-secondary rp-pick" class:rp-disabled={!app || replayRunning}>
+					<i class="ph ph-upload-simple" aria-hidden="true"></i>
+					<span>Choose file…</span>
+					<input
+						type="file"
+						accept=".jsonl,.json"
+						class="rp-input"
+						disabled={!app || replayRunning}
+						onchange={onCaptureChosen}
+					/>
+				</label>
+				{#if replayRunning}
+					<StButton
+						label="Cancel"
+						icon="x"
+						variant="danger"
+						onClick={() => app?.cancelReplay()}
+					/>
+				{/if}
+			</div>
+		{/snippet}
+		{#snippet hint()}
+			{#if replay}
+				<span
+					class="rp-status"
+					class:rp-status-run={replay.phase === 'running'}
+					class:rp-status-ok={replay.phase === 'done'}
+					class:rp-status-err={replay.phase === 'error'}
+				>
+					{#if replay.phase === 'running'}
+						Replaying {replay.fileName} — {replay.done} / {replay.total}
+					{:else if replay.phase === 'done'}
+						Done — {replay.total} events from {replay.fileName}. Open Brew or History to watch.
+					{:else if replay.phase === 'cancelled'}
+						Cancelled — {replay.done} / {replay.total} events.
+					{:else}
+						{replay.message}
+					{/if}
+				</span>
+			{:else}
+				Developer tool — for testing without a DE1.
+			{/if}
+		{/snippet}
+	</StRow>
+</StGroup>
+
 <StGroup title="Reset">
 	<StRow
 		title="Reset preferences"
@@ -164,3 +244,37 @@
 		{/snippet}
 	</StRow>
 </StGroup>
+
+<style>
+	/* ── Capture-replay developer control ──────────────────────────────────
+	   The file picker is a native <input type="file"> hidden inside a <label>
+	   styled as an StButton, so it matches the settings kit; the visible
+	   chrome is the label. */
+	.rp-control {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+	}
+	.rp-pick {
+		cursor: pointer;
+	}
+	.rp-input {
+		display: none;
+	}
+	.rp-disabled {
+		opacity: 0.4;
+		cursor: not-allowed;
+	}
+	.rp-status {
+		font-variant-numeric: tabular-nums;
+	}
+	.rp-status-run {
+		color: var(--copper-400);
+	}
+	.rp-status-ok {
+		color: #6b8c5f;
+	}
+	.rp-status-err {
+		color: #ed8d8d;
+	}
+</style>

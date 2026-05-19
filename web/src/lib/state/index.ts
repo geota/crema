@@ -14,6 +14,8 @@ export {
 	MAX_LOG_LINES,
 	MAX_TELEMETRY_SAMPLES,
 	type UiSnapshot,
-	type TelemetrySample
+	type TelemetrySample,
+	type ReplayStatus,
+	type ReplayPhase
 } from './ui-state.svelte';
-export { CremaApp, createCremaApp } from './app.svelte';
+export { CremaApp, createCremaApp, type ReplayCaptureOptions } from './app.svelte';
