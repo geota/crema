@@ -236,12 +236,14 @@ impl Version {
         })
     }
 
-    /// A human-readable firmware label, e.g. `"FW 1.4.142 (API 4)"` — built
-    /// from the CPU firmware block, mirroring the legacy `de1_version_string`.
+    /// A human-readable firmware label, e.g. `"FW 1.0.142 (API 4)"` — built
+    /// from the CPU firmware block: `FW {release}.{commits} (API {api})`. The
+    /// legacy `de1_version_string` also shows the uncommitted-`changes` count,
+    /// but that is build noise, not a release identity, so it is omitted here.
     pub fn firmware_string(&self) -> String {
         format!(
-            "FW {:.1}.{}.{} (API {})",
-            self.fw.release, self.fw.changes, self.fw.commits, self.fw.api_version
+            "FW {:.1}.{} (API {})",
+            self.fw.release, self.fw.commits, self.fw.api_version
         )
     }
 }
@@ -397,8 +399,8 @@ mod tests {
     #[test]
     fn version_firmware_string_uses_the_cpu_block() {
         let v = Version::decode(&version_packet()).unwrap();
-        let s = v.firmware_string();
-        assert!(s.contains("142")); // FW commits
-        assert!(s.contains("API 4"));
+        // FW block: release 0x0A = 1.0, commits 142, API 4. The `changes`
+        // count (5) is intentionally not part of the label.
+        assert_eq!(v.firmware_string(), "FW 1.0.142 (API 4)");
     }
 }
