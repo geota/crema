@@ -45,4 +45,15 @@
 		display: flex;
 		flex-direction: column;
 	}
+
+	/* The handoff CSS anchors the Quick Controls sheet at `bottom: 96px` — its
+	   bottom edge lands at the top of the dash-foot. We dock it flush to the
+	   page bottom instead (`bottom: 0`), so the sheet sits lower and reaches
+	   less far up the dashboard. The closed transform is just the sheet's own
+	   height; `.qsheet.is-open` (higher specificity, from the design CSS)
+	   still wins to slide it back to `translateY(0)`. */
+	:global(.qsheet) {
+		bottom: 0;
+		transform: translateY(100%);
+	}
 </style>
