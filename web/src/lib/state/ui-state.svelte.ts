@@ -86,21 +86,21 @@ export interface TelemetrySample {
 }
 
 /**
- * A frozen snapshot of the just-finished shot's end state. Captured on
- * `Event::ShotCompleted` and held until the next `ShotStarted`, so the Brew
- * dashboard's readouts can "stick" at the shot's final pressure / flow /
- * temperature / weight / timer / phase instead of following the idle telemetry
- * the DE1 keeps streaming once the shot is over.
+ * A summary of the just-finished shot — its duration, yield and peak pressure
+ * / temperature. Captured on `Event::ShotCompleted` and held until the next
+ * `ShotStarted`, so the Brew dashboard can show a "Last shot" card after the
+ * shot ends. The live readouts are *not* frozen — temperature in particular
+ * is the machine's warmed-up signal and must stay live.
  */
 export interface CompletedShot {
-	/** The shot's final telemetry sample — frozen pressure / flow / temp / weight. */
-	readonly sample: TelemetrySample | null;
 	/** Authoritative shot duration, ms (the `Event::ShotCompleted` duration). */
 	readonly durationMs: number;
-	/** The shot's last reported phase, or `null`. */
-	readonly phase: string | null;
-	/** The shot's last profile-frame index. */
-	readonly frame: number;
+	/** Final yield — scale weight at shot end, grams, or `null` if no scale. */
+	readonly yieldG: number | null;
+	/** Peak group pressure reached during the shot, bar. */
+	readonly peakPressure: number;
+	/** Peak group-head temperature reached during the shot, °C. */
+	readonly peakTemp: number;
 }
 
 /**
@@ -189,11 +189,10 @@ export interface UiSnapshot {
 	 */
 	readonly shotFrame: number;
 	/**
-	 * A frozen snapshot of the last finished shot, or `null` when none has
-	 * finished since the last start / connect. While set and no new shot is in
-	 * progress, the Brew dashboard shows these frozen values instead of live
-	 * telemetry — the readouts stay put after the shot ends. Cleared on
-	 * `ShotStarted` and on connect / disconnect.
+	 * A summary of the last finished shot, or `null` when none has finished
+	 * since the last start / connect. While set and no new shot is in progress,
+	 * the Brew dashboard shows a "Last shot" card; the live readouts stay live
+	 * throughout. Cleared on `ShotStarted` and on connect / disconnect.
 	 */
 	readonly completedShot: CompletedShot | null;
 
@@ -549,7 +548,7 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 		}
 		case 'ShotStarted':
 			// A new shot begins — clear the buffered series, drop the previous
-			// shot's frozen readouts, and arm the timer.
+			// shot's summary, and arm the timer.
 			return {
 				...snapshot,
 				shotTelemetry: [],
@@ -636,22 +635,29 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				...snapshot,
 				eventLog: appendLog(snapshot.eventLog, `Auto-stop: ${event.content.reason}`)
 			};
-		case 'ShotCompleted':
+		case 'ShotCompleted': {
 			// The shot ended — stop the timer, but keep the buffered series so
 			// the finished curve stays on screen until the next shot or idle.
-			// Freeze the shot's end state into `completedShot` so the dashboard
-			// readouts stick at their final values rather than following the
-			// idle telemetry the DE1 keeps streaming once the shot is over.
+			// Summarise the shot into `completedShot` (duration, yield, peaks)
+			// so the dashboard can show a "Last shot" card until the next pull.
 			// R6 — record when it finished and how long it ran so an idle screen
 			// can show "time since last shot" and the last-shot duration.
+			let peakPressure = 0;
+			let peakTemp = 0;
+			let yieldG: number | null = null;
+			for (const s of snapshot.shotTelemetry) {
+				if (s.pressure > peakPressure) peakPressure = s.pressure;
+				if (s.temp > peakTemp) peakTemp = s.temp;
+				if (s.weightG != null) yieldG = s.weightG;
+			}
 			return {
 				...snapshot,
 				shotInProgress: false,
 				completedShot: {
-					sample: snapshot.latestTelemetry,
 					durationMs: event.content.duration_ms,
-					phase: snapshot.shotPhase,
-					frame: snapshot.shotFrame
+					yieldG,
+					peakPressure,
+					peakTemp
 				},
 				lastShotCompletedAtMs: performance.now(),
 				lastShotDurationMs: event.content.duration_ms,
@@ -661,6 +667,7 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 						`${event.content.sample_count} samples`
 				)
 			};
+		}
 		case 'WaterSessionStarted':
 			return {
 				...snapshot,
