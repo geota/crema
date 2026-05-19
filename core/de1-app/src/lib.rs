@@ -253,23 +253,17 @@ impl CremaCore {
     /// [`ShotSettings`] (`cuuid_0B`).
     ///
     /// The caller supplies the user's configured settings. When a scale is
-    /// connected the hot-water volume is overridden to
-    /// [`HOT_WATER_STOP_ON_SCALE_ML`]: the legacy app asks for far more water
-    /// than wanted so the scale's weight-based stop is what cuts the pour off,
-    /// since a weight stop is more accurate than the DE1's volume estimate
-    /// (`binary.tcl` `return_de1_packed_steam_hotwater_settings`).
+    /// connected the hot-water volume on the wire is overridden so the scale's
+    /// weight-based stop cuts the pour off — see
+    /// [`steam_settings_for_eco`](Self::steam_settings_for_eco).
     ///
-    /// Returns the effective settings written, so the shell can see the
-    /// applied hot-water volume.
-    ///
-    /// The supplied settings are retained so a later eco-mode transition can
-    /// rewrite the steam target temperature on the same baseline.
+    /// The supplied settings are retained *unmodified* so a later eco-mode
+    /// transition can rewrite the steam target on the same baseline; the
+    /// scale-connected hot-water override is applied only when building the
+    /// wire packet (see [`steam_settings_for_eco`](Self::steam_settings_for_eco))
+    /// so it does not stick after the scale disconnects.
     pub fn set_steam_hotwater_settings(&mut self, settings: ShotSettings) -> CoreOutput {
-        let mut settings = settings;
-        if self.scale.is_some() {
-            settings.hot_water_volume_ml = HOT_WATER_STOP_ON_SCALE_ML;
-        }
-        self.steam_hotwater_settings = Some(settings.clone());
+        self.steam_hotwater_settings = Some(settings);
         let mut out = CoreOutput::default();
         out.commands.push(Command::WriteCharacteristic {
             target: WriteTarget::De1ShotSettings,
@@ -297,10 +291,21 @@ impl CremaCore {
     /// The steam / hot-water [`ShotSettings`] to write, with the steam target
     /// temperature set for the given eco state. Falls back to a representative
     /// default when no settings have been supplied yet.
+    ///
+    /// When a scale is connected the hot-water volume is overridden to
+    /// [`HOT_WATER_STOP_ON_SCALE_ML`]: the legacy app asks for far more water
+    /// than wanted so the scale's weight-based stop is what cuts the pour off,
+    /// since a weight stop is more accurate than the DE1's volume estimate
+    /// (`binary.tcl` `return_de1_packed_steam_hotwater_settings`). The override
+    /// is applied here, on the wire packet, rather than to the stored user
+    /// settings, so it lifts as soon as the scale disconnects.
     fn steam_settings_for_eco(&self, eco: bool) -> ShotSettings {
         let mut settings = self.steam_hotwater_settings.clone().unwrap_or_default();
         if eco {
             settings.steam_temp_c = self.steam_eco_temp_c;
+        }
+        if self.scale.is_some() {
+            settings.hot_water_volume_ml = HOT_WATER_STOP_ON_SCALE_ML;
         }
         settings
     }
@@ -1883,6 +1888,24 @@ mod tests {
         // With a scale connected the volume is bumped to 250 mL so the scale's
         // weight stop is what ends the pour.
         assert_eq!(data[4], 250);
+    }
+
+    #[test]
+    fn steam_hotwater_volume_override_lifts_when_the_scale_disconnects() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC");
+        // The user configures 50 mL while a scale is connected.
+        core.set_steam_hotwater_settings(hotwater_settings(50.0));
+        // The scale disconnects (an unrecognised name clears `scale`).
+        assert_eq!(core.connect_scale("Some Random Device"), None);
+        // An eco transition rewrites the settings; the hot-water volume must
+        // now be the user's original 50 mL, not the 250 mL scale override.
+        core.enable_steam_eco_mode(true, 0);
+        let out = core.on_tick(600_000);
+        let Some(Command::WriteCharacteristic { data, .. }) = out.commands.first() else {
+            panic!("expected a WriteCharacteristic command");
+        };
+        assert_eq!(data[4], 50);
     }
 
     #[test]
