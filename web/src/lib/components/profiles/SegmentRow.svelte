@@ -73,8 +73,8 @@
 
 	/** The dataTransfer key carrying the dragged segment's id. */
 	const DRAG_KEY = 'application/x-crema-segment';
-	/** The row element — used as the drag image. */
-	let rowEl: HTMLDivElement;
+	/** The row element — used as the drag image. `$state` per the `bind:this` convention. */
+	let rowEl = $state<HTMLDivElement>();
 	/** True while a dragged segment hovers this row — shows the drop line. */
 	let dropTarget = $state(false);
 
@@ -83,7 +83,7 @@
 		if (!e.dataTransfer) return;
 		e.dataTransfer.setData(DRAG_KEY, seg.id);
 		e.dataTransfer.effectAllowed = 'move';
-		e.dataTransfer.setDragImage(rowEl, 24, 20);
+		if (rowEl) e.dataTransfer.setDragImage(rowEl, 24, 20);
 	}
 	/** Allow a drop here and show the indicator. */
 	function onDragOver(e: DragEvent): void {

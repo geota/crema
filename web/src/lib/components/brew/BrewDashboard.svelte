@@ -28,7 +28,7 @@
 		convertVolume
 	} from '$lib/settings';
 	import { getProfileStore, preinfuseSeconds, type CremaProfile } from '$lib/profiles';
-	import { BrewParamState } from './brew-params.svelte';
+	import { BrewParamState, type BrewParamSeed } from './brew-params.svelte';
 	import ExtractionTimer from './ExtractionTimer.svelte';
 	import ChannelReadout from './ChannelReadout.svelte';
 	import PhaseIndicatorCard from './PhaseIndicatorCard.svelte';
@@ -63,13 +63,40 @@
 
 	// ── Quick Sheet local control state ──────────────────────────────────
 	/**
-	 * The Quick Sheet's parameter model. Its dose / yield / temp / pre-infusion
-	 * are initialised from the active profile (the `$effect` below) so the
-	 * header, the ratio readout and the steppers all agree; the steppers may
-	 * then edit it locally. The CONTROL side never reaches the machine in this
-	 * porting step — see the `// TODO: wire to DE1 control` notes.
+	 * The brew-target seed for the Quick Sheet params — a pure `$derived`. When
+	 * a profile is active its dose / yield / brew temp / pre-infusion win; with
+	 * no active profile the Settings brew defaults seed it instead (D2 — the
+	 * yield is `dose × ratio`, the `defaultRatio` being the `x` in `1:x`).
+	 *
+	 * This is the seed `BrewParamState` mirrors: a stepper edit reassigns the
+	 * param `$derived` away from this seed, and a genuine seed change (a
+	 * different profile, an edited Settings default) re-seeds it — no sentinel,
+	 * no state-syncing `$effect`.
 	 */
-	const params = new BrewParamState();
+	const paramSeed = $derived.by<BrewParamSeed>(() => {
+		if (activeProfile) {
+			return {
+				dose: activeProfile.dose,
+				yield: activeProfile.yieldG,
+				brewTemp: activeProfile.brewTemp,
+				preinf: preinfuseSeconds(activeProfile.segments)
+			};
+		}
+		return {
+			dose: prefs.defaultDoseG,
+			yield: prefs.defaultDoseG * prefs.defaultRatio,
+			brewTemp: prefs.defaultBrewTempC,
+			preinf: prefs.defaultPreinfusionS
+		};
+	});
+	/**
+	 * The Quick Sheet's parameter model. Its dose / yield / temp / pre-infusion
+	 * track {@link paramSeed} so the header, the ratio readout and the steppers
+	 * all agree; the steppers may then edit it locally. The CONTROL side never
+	 * reaches the machine in this porting step — see the `// TODO: wire to DE1
+	 * control` notes.
+	 */
+	const params = new BrewParamState(() => paramSeed);
 	/**
 	 * Whether the Quick Sheet is docked open. Starts hidden — the dashboard is
 	 * the primary view; the header's QuickPill opens the sheet, and its Close
@@ -82,49 +109,6 @@
 	 * from real telemetry instead.
 	 */
 	let manualRunning = $state(false);
-
-	/**
-	 * Seed the local Quick Sheet params from a profile's targets — dose, yield,
-	 * brew temperature and pre-infusion (the first segment's seconds).
-	 */
-	function paramsFromProfile(profile: CremaProfile): void {
-		params.set('dose', profile.dose);
-		params.set('yield', profile.yieldG);
-		params.set('brewTemp', profile.brewTemp);
-		params.set('preinf', preinfuseSeconds(profile.segments));
-	}
-
-	/**
-	 * Seed the local Quick Sheet dose / yield from the Settings brew defaults —
-	 * the fallback when no profile is active (D2). The yield is `dose × ratio`
-	 * (the `defaultRatio` is the `x` in `1:x`).
-	 */
-	function paramsFromSettings(): void {
-		params.set('dose', prefs.defaultDoseG);
-		params.set('yield', prefs.defaultDoseG * prefs.defaultRatio);
-		params.set('brewTemp', prefs.defaultBrewTempC);
-		params.set('preinf', prefs.defaultPreinfusionS);
-	}
-
-	// Initialise the params whenever the active profile changes — this bridges
-	// the external library store into the local param model, so the header /
-	// ratio / steppers stay in sync with whatever profile is active. Keyed on
-	// the profile id so it fires once per active-profile change, not on every
-	// stepper edit. With no active profile the Settings brew defaults seed it
-	// instead (D2) — the sentinel `'settings'` so that path also fires once.
-	let lastSeededId: string | undefined;
-	$effect(() => {
-		const profile = activeProfile;
-		if (profile) {
-			if (profile.id !== lastSeededId) {
-				lastSeededId = profile.id;
-				paramsFromProfile(profile);
-			}
-		} else if (lastSeededId !== 'settings') {
-			lastSeededId = 'settings';
-			paramsFromSettings();
-		}
-	});
 
 	const p = $derived(params.current);
 
@@ -216,16 +200,13 @@
 
 	// ── Quick Sheet callbacks ────────────────────────────────────────────
 	/**
-	 * Pick a favorite profile — mark it active in the library store and pull
-	 * its targets into the local Quick Sheet params. Marking it active also
-	 * drives the header name and the `$effect` seeding above.
+	 * Pick a favorite profile — mark it active in the library store. The active
+	 * profile feeds {@link paramSeed}, so the header, the ratio readout and the
+	 * steppers re-seed reactively; there is no imperative pre-set to keep in
+	 * sync.
 	 */
 	function selectFavorite(profile: CremaProfile): void {
 		profileStore.setActive(profile.id);
-		// Seed the params immediately so the steppers reflect the pick without
-		// waiting for the active-profile effect to settle.
-		lastSeededId = profile.id;
-		paramsFromProfile(profile);
 	}
 
 	/** Toggle the local running flag — the brew-control stub. */
