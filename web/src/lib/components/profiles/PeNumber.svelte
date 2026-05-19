@@ -59,6 +59,10 @@
 		display: flex;
 		flex-direction: column;
 		gap: 6px;
+		/* Fixed height so every editor number box is identical regardless of
+		   which section's grid it sits in — the Ratio read-out matches it. */
+		height: 76px;
+		box-sizing: border-box;
 		padding: 12px;
 		background: rgba(244, 237, 224, 0.03);
 		border: 1px solid rgba(244, 237, 224, 0.06);

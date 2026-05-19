@@ -756,10 +756,14 @@
 		margin-top: 2px;
 	}
 
-	/* Number grid */
+	/* Number grid — fixed 145px columns (not `1fr`). `1fr` is really
+	   `minmax(auto, 1fr)`, so a long nowrap label like "Max total volume"
+	   widens its track and shifts the gutter; fixed columns keep every box
+	   the same width and the column gutter at the same X in every section.
+	   145 + 10 + 145 = 300 = the `.pe-left` content width. */
 	.pe-grid {
 		display: grid;
-		grid-template-columns: 1fr 1fr;
+		grid-template-columns: 145px 145px;
 		gap: 10px;
 	}
 	/* The Ratio read-out matches a `.pe-num` box: same padding and gap, an
@@ -770,6 +774,10 @@
 		display: flex;
 		flex-direction: column;
 		gap: 6px;
+		/* Same fixed height as `.pe-num`, so every box in the Targets and
+		   Limits grids is identical regardless of its grid row. */
+		height: 76px;
+		box-sizing: border-box;
 		padding: 12px;
 		background: rgba(244, 237, 224, 0.03);
 		border: 1px solid rgba(244, 237, 224, 0.06);
