@@ -319,17 +319,13 @@
 		   Max+Tolerance · ⌫. The row is wide; its container scrolls. */
 		grid-template-columns:
 			28px
-			minmax(150px, 1.3fr)
-			minmax(112px, 0.85fr)
-			minmax(104px, 0.8fr)
-			minmax(128px, 0.95fr)
-			minmax(112px, 0.85fr)
-			minmax(170px, 1.05fr)
-			minmax(262px, 1.5fr)
+			minmax(150px, 1fr)
+			repeat(5, 140px)
+			306px
 			32px;
 		gap: 12px;
 		align-items: start;
-		min-width: 1200px;
+		min-width: 1320px;
 		padding: 10px 14px;
 		background: var(--espresso-900);
 		border: 1px solid rgba(244, 237, 224, 0.05);
@@ -388,7 +384,7 @@
 		text-transform: uppercase;
 		font-weight: 600;
 		color: rgba(244, 237, 224, 0.4);
-		min-height: 16px;
+		height: 18px;
 		display: flex;
 		align-items: center;
 	}
@@ -422,7 +418,7 @@
 		text-transform: uppercase;
 		font-weight: 600;
 		color: rgba(244, 237, 224, 0.3);
-		min-height: 16px;
+		height: 18px;
 	}
 	.pe-seg-tog.on {
 		color: rgba(244, 237, 224, 0.6);
@@ -451,7 +447,7 @@
 		display: flex;
 		align-items: center;
 		gap: 8px;
-		min-height: 16px;
+		height: 18px;
 	}
 	/* The over/under comparator — a `>` / `<` symbol left of the threshold,
 	   rendered into the QStepper value box like a leading unit. */
@@ -477,7 +473,11 @@
 		display: flex;
 		gap: 10px;
 		min-width: 0;
-		padding: 6px 8px;
+		padding: 7px;
+		/* Pull the box up so its inner labels and steppers line up with the
+		   plain columns — the negative margin cancels the box's own padding
+		   and border, which would otherwise push the content down. */
+		margin-top: -8px;
 		background: rgba(193, 116, 75, 0.05);
 		border: 1px solid rgba(193, 116, 75, 0.22);
 		border-radius: var(--radius-sm);
@@ -512,10 +512,15 @@
 	.pe-seg :global(.qsplit) {
 		font-size: 9px;
 		gap: 6px;
-		min-height: 16px;
+		height: 18px;
 	}
 	.pe-seg :global(.qsplit-prefix) {
 		color: rgba(244, 237, 224, 0.4);
+	}
+	/* Every stepper bar fills its (equal-width) column, so all the bars are
+	   the same width and line up. */
+	.pe-seg :global(.qcs) {
+		width: 100%;
 	}
 	/* The canonical stepper (22px digits, 36px buttons) is sized for the wide
 	   Quick Sheet; a list row wants the design's tighter variant. */
