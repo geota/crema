@@ -18,6 +18,8 @@ pub mod event;
 pub use error::AppError;
 pub use event::{Command, CoreOutput, Event, Source, WriteTarget};
 
+use std::time::Duration;
+
 use de1_domain::{
     AutoStop, FlowAlgorithm, FlowEstimator, STOP_WEIGHT_BEFORE_SECONDS, ShotEvent, ShotMonitor,
     ShotPhase, SteamEvent, SteamMonitor, StopConfig, StopReason, StopTargets, WaterEvent,
@@ -37,7 +39,7 @@ const DEFAULT_SCALE_LAG_SECONDS: f32 = 0.38;
 const WATER_LEVEL_MM_CORRECTION: f32 = 5.0;
 /// How long the scale may go without reporting weight before it is considered
 /// stale — the legacy app warns after roughly one second of silence.
-const SCALE_STALE_TIMEOUT_MS: u64 = 1_000;
+const SCALE_STALE_TIMEOUT: Duration = Duration::from_secs(1);
 /// Hot-water volume (mL) requested when a scale is connected: the legacy app
 /// asks for far more water than wanted so the scale's weight-based stop is what
 /// cuts off the pour (`binary.tcl` `return_de1_packed_steam_hotwater_settings`).
@@ -45,6 +47,20 @@ const HOT_WATER_STOP_ON_SCALE_ML: f32 = 250.0;
 /// The legacy `steam_eco_temperature` default (°C): the lower steam target the
 /// machine drops to after a long idle period (`machine.tcl:33`).
 const STEAM_ECO_TEMPERATURE_C: f32 = 136.0;
+
+/// Convert a shell-supplied `now_ms` (the FFI-friendly `u64` ms) to the
+/// internal [`Duration`] every monitor and helper uses. Centralised here so
+/// the conversion has one home, and so any rounding policy stays consistent.
+fn ms_to_duration(now_ms: u64) -> Duration {
+    Duration::from_millis(now_ms)
+}
+
+/// Saturating conversion of a [`Duration`] back to `u32` ms for an FFI event
+/// field. A real session never approaches `u32::MAX` ms (~49 days); the
+/// checked conversion saturates rather than wrapping if it somehow did.
+fn duration_to_u32_ms(d: Duration) -> u32 {
+    u32::try_from(d.as_millis()).unwrap_or(u32::MAX)
+}
 
 /// The headless Crema application core.
 ///
@@ -63,11 +79,11 @@ pub struct CremaCore {
     /// `None` until [`set_steam_hotwater_settings`](Self::set_steam_hotwater_settings).
     steam_hotwater_settings: Option<ShotSettings>,
     /// The eco-mode steam target temperature, °C.
-    steam_eco_temp_c: f32,
+    steam_eco_temp: f32,
     last_state: Option<StateInfo>,
     /// Timestamp the in-progress shot began — stamps telemetry elapsed time.
     /// `None` when no shot is in progress.
-    shot_started_ms: Option<u64>,
+    shot_started: Option<Duration>,
     /// The connected scale's codec, once identified.
     scale: Option<Scale>,
     /// Smooths the scale stream into weight + flow for display.
@@ -79,7 +95,7 @@ pub struct CremaCore {
     auto_stop: Option<AutoStop>,
     /// Timestamp of the most recent scale-weight reading, for the lost-scale
     /// watchdog. `None` until the connected scale reports once.
-    last_scale_weight_ms: Option<u64>,
+    last_scale_weight: Option<Duration>,
     /// Whether an [`Event::ScaleStale`] has already been emitted for the
     /// current stale episode — cleared by the next fresh reading.
     scale_stale_reported: bool,
@@ -106,14 +122,14 @@ impl CremaCore {
             water: WaterMonitor::new(),
             steam: SteamMonitor::new(),
             steam_hotwater_settings: None,
-            steam_eco_temp_c: STEAM_ECO_TEMPERATURE_C,
+            steam_eco_temp: STEAM_ECO_TEMPERATURE_C,
             last_state: None,
-            shot_started_ms: None,
+            shot_started: None,
             scale: None,
             flow: FlowEstimator::new(FlowAlgorithm::default()),
             auto_stop_targets: None,
             auto_stop: None,
-            last_scale_weight_ms: None,
+            last_scale_weight: None,
             scale_stale_reported: false,
             scale_config_queried: false,
         }
@@ -152,8 +168,11 @@ impl CremaCore {
     /// Arm automatic shot-stop. A `None` target disables that mode; the
     /// [`AutoStop`] is constructed when the next shot starts flowing.
     ///
-    /// `max_time` is a shot-duration limit in seconds (legacy
-    /// `espresso_max_time`); it stops the shot regardless of weight or volume.
+    /// `weight_g` (grams) and `volume_ml` (mL) keep their unit-suffixed names
+    /// at the FFI boundary so the shell's call sites stay self-documenting;
+    /// they flow into the internal [`StopTargets`] (`weight`, `volume`) which
+    /// names its fields without the suffix. `max_time` is a shot-duration
+    /// limit in seconds (legacy `espresso_max_time`).
     pub fn arm_auto_stop(
         &mut self,
         weight_g: Option<f32>,
@@ -161,8 +180,8 @@ impl CremaCore {
         max_time: Option<f32>,
     ) {
         self.auto_stop_targets = Some(StopTargets {
-            weight_g,
-            volume_ml,
+            weight: weight_g,
+            volume: volume_ml,
             max_time,
         });
     }
@@ -281,8 +300,9 @@ impl CremaCore {
     /// [`SteamMonitor`](de1_domain::SteamMonitor). Disabling it while engaged
     /// restores the normal steam target immediately.
     pub fn enable_steam_eco_mode(&mut self, enabled: bool, now_ms: u64) -> CoreOutput {
+        let now = ms_to_duration(now_ms);
         let mut out = CoreOutput::default();
-        for event in self.steam.on_eco_enabled(enabled, now_ms) {
+        for event in self.steam.on_eco_enabled(enabled, now) {
             self.map_steam_event(event, &mut out);
         }
         out
@@ -302,7 +322,7 @@ impl CremaCore {
     fn steam_settings_for_eco(&self, eco: bool) -> ShotSettings {
         let mut settings = self.steam_hotwater_settings.clone().unwrap_or_default();
         if eco {
-            settings.steam_temp_c = self.steam_eco_temp_c;
+            settings.steam_temp_c = self.steam_eco_temp;
         }
         if self.scale.is_some() {
             settings.hot_water_volume_ml = HOT_WATER_STOP_ON_SCALE_ML;
@@ -534,12 +554,18 @@ impl CremaCore {
 
     /// Feed a raw GATT notification: `data` is the characteristic's bytes and
     /// `now_ms` a monotonic millisecond timestamp from the shell.
+    ///
+    /// `now_ms` stays `u64` at the FFI surface — that is the type the JS /
+    /// Kotlin shells naturally pass — and is converted to a [`Duration`] once
+    /// here, then handed to the internal handlers and monitors that all speak
+    /// `Duration`.
     pub fn on_notification(&mut self, source: Source, data: &[u8], now_ms: u64) -> CoreOutput {
+        let now = ms_to_duration(now_ms);
         let mut out = CoreOutput::default();
         match source {
-            Source::De1State => self.handle_state(data, now_ms, &mut out),
-            Source::De1ShotSample => self.handle_sample(data, now_ms, &mut out),
-            Source::ScaleWeight => self.handle_scale_weight(data, now_ms, &mut out),
+            Source::De1State => self.handle_state(data, now, &mut out),
+            Source::De1ShotSample => self.handle_sample(data, now, &mut out),
+            Source::ScaleWeight => self.handle_scale_weight(data, now, &mut out),
             Source::ScaleCommand => self.handle_scale_command(data, &mut out),
             Source::De1WaterLevels => self.handle_water_levels(data, &mut out),
             Source::De1Version => self.handle_version(data, &mut out),
@@ -550,20 +576,21 @@ impl CremaCore {
     }
 
     /// Feed a periodic clock tick. Drives the lost-scale watchdog (if a scale
-    /// is connected but has not reported weight for [`SCALE_STALE_TIMEOUT_MS`],
+    /// is connected but has not reported weight for [`SCALE_STALE_TIMEOUT`],
     /// emit [`Event::ScaleStale`] once per stale episode) and the steam
     /// eco-mode transition.
     pub fn on_tick(&mut self, now_ms: u64) -> CoreOutput {
+        let now = ms_to_duration(now_ms);
         let mut out = CoreOutput::default();
         if self.scale.is_some()
             && !self.scale_stale_reported
-            && let Some(last) = self.last_scale_weight_ms
-            && now_ms.saturating_sub(last) >= SCALE_STALE_TIMEOUT_MS
+            && let Some(last) = self.last_scale_weight
+            && now.saturating_sub(last) >= SCALE_STALE_TIMEOUT
         {
             self.scale_stale_reported = true;
             out.events.push(Event::ScaleStale);
         }
-        for event in self.steam.on_tick(now_ms) {
+        for event in self.steam.on_tick(now) {
             self.map_steam_event(event, &mut out);
         }
         out
@@ -576,7 +603,7 @@ impl CremaCore {
     }
 
     /// Decode and process a `StateInfo` notification.
-    fn handle_state(&mut self, data: &[u8], now_ms: u64, out: &mut CoreOutput) {
+    fn handle_state(&mut self, data: &[u8], now: Duration, out: &mut CoreOutput) {
         let info = match StateInfo::parse(data) {
             Ok(info) => info,
             Err(e) => {
@@ -593,19 +620,19 @@ impl CremaCore {
                 substate: info.substate,
             });
         }
-        for event in self.monitor.on_state_info(info, now_ms) {
-            self.map_shot_event(event, now_ms, out);
+        for event in self.monitor.on_state_info(info, now) {
+            self.map_shot_event(event, now, out);
         }
-        for event in self.water.on_state_info(info, now_ms) {
+        for event in self.water.on_state_info(info, now) {
             Self::map_water_event(event, out);
         }
-        for event in self.steam.on_state_info(info, now_ms) {
+        for event in self.steam.on_state_info(info, now) {
             self.map_steam_event(event, out);
         }
     }
 
     /// Decode and process a `ShotSample` telemetry notification.
-    fn handle_sample(&mut self, data: &[u8], now_ms: u64, out: &mut CoreOutput) {
+    fn handle_sample(&mut self, data: &[u8], now: Duration, out: &mut CoreOutput) {
         let sample = match ShotSample::parse(data) {
             Ok(sample) => sample,
             Err(e) => {
@@ -615,26 +642,24 @@ impl CremaCore {
                 return;
             }
         };
-        for event in self.monitor.on_sample(&sample, now_ms) {
-            self.map_shot_event(event, now_ms, out);
+        for event in self.monitor.on_sample(&sample, now) {
+            self.map_shot_event(event, now, out);
         }
         // Record steam telemetry while a steam session is in progress.
-        self.steam.on_sample(&sample, now_ms);
+        self.steam.on_sample(&sample, now);
         let reason = self
             .auto_stop
             .as_mut()
-            .and_then(|stop| stop.on_sample(&sample, now_ms));
+            .and_then(|stop| stop.on_sample(&sample, now));
         Self::push_stop(reason, out);
-        // Narrow to u32: a session's elapsed time never approaches u32::MAX ms
-        // (~49 days); a checked conversion saturates rather than wrapping if it
-        // somehow did.
-        let elapsed_ms = u32::try_from(
-            self.shot_started_ms
-                .map_or(0, |start| now_ms.saturating_sub(start)),
-        )
-        .unwrap_or(u32::MAX);
+        // `Event::Telemetry.elapsed` is `u32` milliseconds — what the FFI
+        // surface carries — so convert the `Duration` once at this boundary.
+        let elapsed = duration_to_u32_ms(
+            self.shot_started
+                .map_or(Duration::ZERO, |start| now.saturating_sub(start)),
+        );
         out.events.push(Event::Telemetry {
-            elapsed_ms,
+            elapsed,
             group_pressure: sample.group_pressure,
             group_flow: sample.group_flow,
             head_temp: sample.head_temp,
@@ -644,7 +669,7 @@ impl CremaCore {
     }
 
     /// Decode and process a scale weight notification.
-    fn handle_scale_weight(&mut self, data: &[u8], now_ms: u64, out: &mut CoreOutput) {
+    fn handle_scale_weight(&mut self, data: &[u8], now: Duration, out: &mut CoreOutput) {
         let Some(scale) = &mut self.scale else {
             return;
         };
@@ -652,28 +677,28 @@ impl CremaCore {
             return;
         };
         // A fresh reading re-arms the lost-scale watchdog.
-        self.last_scale_weight_ms = Some(now_ms);
+        self.last_scale_weight = Some(now);
         self.scale_stale_reported = false;
         // The first weight notification stands in for a scale-connected hook:
         // fire the one-shot serial / settings queries so the anti-mistouch
         // state and active mode are fetched as soon as the scale is reporting.
         self.push_connect_queries_once(out);
-        let estimate = self.flow.update(reading.weight_g, now_ms);
+        let estimate = self.flow.update(reading.weight_g, now);
         out.events.push(Event::ScaleReading {
-            weight_g: estimate.weight_g,
-            flow_g_per_s: estimate.flow_g_per_s,
-            device_flow_g_per_s: reading.flow_g_per_s,
-            device_timer_ms: reading.timer_ms,
+            weight: estimate.weight,
+            flow: estimate.flow,
+            device_flow: reading.flow_g_per_s,
+            device_timer: reading.timer_ms,
             device_volume: reading.volume,
-            device_standby_minutes: reading.standby_minutes,
-            device_battery_percent: reading.battery_percent,
+            device_standby: reading.standby_minutes,
+            device_battery: reading.battery_percent,
             device_flow_smoothing: reading.flow_smoothing,
             device_auto_stop: reading.auto_stop,
         });
         let reason = self
             .auto_stop
             .as_mut()
-            .and_then(|stop| stop.on_weight(reading.weight_g, now_ms));
+            .and_then(|stop| stop.on_weight(reading.weight_g, now));
         Self::push_stop(reason, out);
     }
 
@@ -724,8 +749,8 @@ impl CremaCore {
     fn handle_water_levels(&self, data: &[u8], out: &mut CoreOutput) {
         match WaterLevels::decode(data) {
             Ok(levels) => out.events.push(Event::WaterLevel {
-                level_mm: levels.current_mm + WATER_LEVEL_MM_CORRECTION,
-                refill_threshold_mm: levels.refill_threshold_mm,
+                level: levels.current_mm + WATER_LEVEL_MM_CORRECTION,
+                refill_threshold: levels.refill_threshold_mm,
             }),
             Err(e) => out.events.push(Event::DecodeError {
                 message: e.to_string(),
@@ -807,10 +832,10 @@ impl CremaCore {
 
     /// Translate a domain [`ShotEvent`] into FFI [`Event`]s, maintaining the
     /// shot-start timestamp and the auto-stop lifecycle.
-    fn map_shot_event(&mut self, event: ShotEvent, now_ms: u64, out: &mut CoreOutput) {
+    fn map_shot_event(&mut self, event: ShotEvent, now: Duration, out: &mut CoreOutput) {
         match event {
             ShotEvent::Started => {
-                self.shot_started_ms = Some(now_ms);
+                self.shot_started = Some(now);
                 self.flow.reset();
                 // Auto-tare the connected scale so the cup starts from zero,
                 // mirroring the legacy app's tare-at-shot-start behaviour.
@@ -818,17 +843,18 @@ impl CremaCore {
                 out.events.push(Event::ShotStarted);
             }
             ShotEvent::PhaseChanged(phase) => {
-                self.arm_auto_stop_if_flowing(phase, now_ms);
+                self.arm_auto_stop_if_flowing(phase, now);
                 out.events.push(Event::ShotPhaseChanged { phase });
             }
             ShotEvent::FrameChanged(frame) => out.events.push(Event::ShotFrameChanged { frame }),
             ShotEvent::Completed(record) => {
-                self.shot_started_ms = None;
+                self.shot_started = None;
                 self.auto_stop = None;
-                // A session never exceeds u32::MAX ms / samples; the checked
-                // conversions saturate rather than wrapping if one somehow did.
+                // `record.duration_ms` is u64 ms (the persisted shape from
+                // de1-domain); narrow to the u32 ms the FFI carries.
+                let duration = u32::try_from(record.duration_ms).unwrap_or(u32::MAX);
                 out.events.push(Event::ShotCompleted {
-                    duration_ms: u32::try_from(record.duration_ms).unwrap_or(u32::MAX),
+                    duration,
                     sample_count: u32::try_from(record.samples.len()).unwrap_or(u32::MAX),
                 });
             }
@@ -844,9 +870,7 @@ impl CremaCore {
             WaterEvent::Completed(record) => {
                 out.events.push(Event::WaterSessionCompleted {
                     kind: record.kind,
-                    // A session never exceeds u32::MAX ms; the checked
-                    // conversion saturates rather than wrapping if it did.
-                    duration_ms: u32::try_from(record.duration_ms).unwrap_or(u32::MAX),
+                    duration: duration_to_u32_ms(record.duration),
                 });
             }
         }
@@ -859,10 +883,8 @@ impl CremaCore {
         match event {
             SteamEvent::Started => out.events.push(Event::SteamSessionStarted),
             SteamEvent::Completed(record) => {
-                // A session never exceeds u32::MAX ms / samples; the checked
-                // conversions saturate rather than wrapping if one somehow did.
                 out.events.push(Event::SteamSessionCompleted {
-                    duration_ms: u32::try_from(record.duration_ms).unwrap_or(u32::MAX),
+                    duration: duration_to_u32_ms(record.duration),
                     sample_count: u32::try_from(record.samples.len()).unwrap_or(u32::MAX),
                 });
             }
@@ -881,7 +903,7 @@ impl CremaCore {
 
     /// Construct the [`AutoStop`] the first time the shot reaches a flowing
     /// phase, so its arming delay counts from flow start, not heating start.
-    fn arm_auto_stop_if_flowing(&mut self, phase: ShotPhase, now_ms: u64) {
+    fn arm_auto_stop_if_flowing(&mut self, phase: ShotPhase, now: Duration) {
         if self.auto_stop.is_some() {
             return;
         }
@@ -889,7 +911,7 @@ impl CremaCore {
             return;
         }
         if let Some(targets) = self.auto_stop_targets {
-            self.auto_stop = Some(AutoStop::new(targets, self.stop_config(), now_ms));
+            self.auto_stop = Some(AutoStop::new(targets, self.stop_config(), now));
         }
     }
 
@@ -1015,10 +1037,10 @@ mod tests {
             .iter()
             .find(|e| matches!(e, Event::Telemetry { .. }))
             .expect("a Telemetry event");
-        let Event::Telemetry { elapsed_ms, .. } = telemetry else {
+        let Event::Telemetry { elapsed, .. } = telemetry else {
             unreachable!("filtered for Telemetry");
         };
-        assert_eq!(*elapsed_ms, 2_500);
+        assert_eq!(*elapsed, 2_500);
     }
 
     #[test]
@@ -1028,7 +1050,7 @@ mod tests {
         assert!(
             out.events
                 .iter()
-                .any(|e| matches!(e, Event::Telemetry { elapsed_ms: 0, .. }))
+                .any(|e| matches!(e, Event::Telemetry { elapsed: 0, .. }))
         );
     }
 
@@ -1253,8 +1275,8 @@ mod tests {
         // WaterLevels packet: current 100 mm, refill threshold 70 mm.
         let out = core.on_notification(Source::De1WaterLevels, &[0x64, 0x00, 0x46, 0x00], 0);
         assert!(out.events.contains(&Event::WaterLevel {
-            level_mm: 105.0,
-            refill_threshold_mm: 70.0,
+            level: 105.0,
+            refill_threshold: 70.0,
         }));
     }
 
@@ -1870,7 +1892,7 @@ mod tests {
         let out = core.on_notification(Source::De1State, &[2, 0], 5_000);
         assert!(out.events.contains(&Event::WaterSessionCompleted {
             kind: de1_domain::WaterSessionKind::Flush,
-            duration_ms: 4_000,
+            duration: 4_000,
         }));
     }
 
@@ -1931,7 +1953,7 @@ mod tests {
         core.on_notification(Source::De1State, &[5, 7], 1_000);
         let out = core.on_notification(Source::De1State, &[2, 0], 6_000);
         assert!(out.events.contains(&Event::SteamSessionCompleted {
-            duration_ms: 5_000,
+            duration: 5_000,
             sample_count: 0,
         }));
     }
@@ -1945,7 +1967,7 @@ mod tests {
         core.on_notification(Source::De1ShotSample, &SAMPLE, 200);
         let out = core.on_notification(Source::De1State, &[2, 0], 3_000);
         assert!(out.events.contains(&Event::SteamSessionCompleted {
-            duration_ms: 3_000,
+            duration: 3_000,
             sample_count: 2,
         }));
     }
