@@ -19,7 +19,7 @@
 
 import type { TelemetrySample } from '$lib/state';
 import { readJson, writeJson } from '$lib/utils/storage';
-import { shotId, type ShotRecord } from './model';
+import { shotId, type ShotBean, type ShotRecord } from './model';
 
 /** localStorage key for the recorded shots (a `ShotRecord[]`, newest first). */
 const HISTORY_KEY = 'crema.history.v1';
@@ -43,6 +43,8 @@ export interface ShotCompletion {
 	profileName: string | null;
 	/** The buffered telemetry series snapshotted at shot completion. */
 	series: readonly TelemetrySample[];
+	/** A snapshot of the current bean at shot completion, or `null`. */
+	bean: ShotBean | null;
 }
 
 /** The reactive shot-history library. One instance per app — {@link getHistoryStore}. */
@@ -99,6 +101,7 @@ export class HistoryStore {
 			peakPressure,
 			peakTemp,
 			series: [...series],
+			bean: completion.bean,
 			rating: 0,
 			notes: ''
 		};

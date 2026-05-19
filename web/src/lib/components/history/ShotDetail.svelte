@@ -11,6 +11,7 @@
 	 */
 	import type { ShotRecord } from '$lib/history';
 	import { ratioLabel } from '$lib/history';
+	import { daysOffRoast } from '$lib/bean';
 	import StaticShotChart from './StaticShotChart.svelte';
 
 	let {
@@ -41,6 +42,18 @@
 
 	/** Final (or peak) yield, grams. */
 	const yieldG = $derived(shot.finalWeightG ?? shot.peakWeightG);
+
+	/**
+	 * The bean caption — the snapshotted bean name plus its days-off-roast,
+	 * derived from the shot's own `completedAt` so it is stable. `null` for a
+	 * shot recorded with no bean (including pre-existing records).
+	 */
+	const beanLine = $derived.by(() => {
+		const bean = shot.bean;
+		if (!bean) return null;
+		const days = daysOffRoast(bean.roastedOn, shot.completedAt);
+		return days != null ? `${bean.name} · ${days}d off roast` : bean.name;
+	});
 
 	/** Open the notes editor, seeding the draft from the current notes. */
 	function startEdit(): void {
@@ -84,6 +97,9 @@
 				{(shot.durationMs / 1000).toFixed(0)} s
 				{#if yieldG != null}· {yieldG.toFixed(1)} g · {ratioLabel(shot)}{/if}
 			</div>
+			{#if beanLine}
+				<div class="hi-detail-sub hi-detail-bean">{beanLine}</div>
+			{/if}
 		</div>
 		<div class="hi-detail-actions">
 			<button class="st-btn st-btn-secondary" onclick={loadOnBrew}>
@@ -221,6 +237,10 @@
 		font-size: 12px;
 		color: rgba(244, 237, 224, 0.55);
 		margin-top: 4px;
+	}
+	.hi-detail-bean {
+		margin-top: 2px;
+		color: var(--copper-300);
 	}
 	.hi-detail-actions {
 		display: flex;

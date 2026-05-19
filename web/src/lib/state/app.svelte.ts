@@ -17,6 +17,7 @@
 
 import { loadCore, type Command, type CoreOutput, type CremaCore } from '$lib/core';
 import { De1Manager, EMPTY_DE1_DIAGNOSTICS, ScaleManager } from '$lib/ble';
+import { getBeanStore } from '$lib/bean';
 import { getHistoryStore } from '$lib/history';
 import { parseCaptureFile, replayEvents, ReplayAbortedError } from '$lib/replay';
 import { CremaUiState, DEFAULT_SCALE_STANDBY_MINUTES, DEFAULT_SCALE_VOLUME } from './ui-state.svelte';
@@ -91,10 +92,21 @@ export class CremaApp {
 			this.state.applyEvent(event);
 			if (event.type === 'ShotCompleted') {
 				const snapshot = this.state.current;
+				// Stamp a snapshot of the current bean onto the record, so a later
+				// bean change cannot rewrite history. An unlogged bean (blank name)
+				// stores `null` — the History UI treats the bean as optional.
+				const bean = getBeanStore().current;
 				getHistoryStore().record({
 					durationMs: event.content.duration_ms,
 					profileName: snapshot.activeProfileName,
-					series: snapshot.shotTelemetry
+					series: snapshot.shotTelemetry,
+					bean: bean.name.trim()
+						? {
+								name: bean.name.trim(),
+								roastLevel: bean.roastLevel,
+								roastedOn: bean.roastedOn
+							}
+						: null
 				});
 			}
 		}

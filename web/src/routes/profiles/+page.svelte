@@ -81,7 +81,6 @@
 			if (query === '') return true;
 			return (
 				p.name.toLowerCase().includes(query) ||
-				p.bean.toLowerCase().includes(query) ||
 				p.notes.toLowerCase().includes(query) ||
 				p.tags.some((t) => t.toLowerCase().includes(query))
 			);

@@ -9,6 +9,7 @@
 
 export {
 	type ShotRecord,
+	type ShotBean,
 	shotId,
 	ratioLabel,
 	stars
