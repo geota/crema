@@ -88,6 +88,48 @@ export function daysOffRoast(
 	return Math.max(0, days);
 }
 
+/** A bean's rest verdict against the ideal window for its roast band. */
+export type Freshness = 'best' | 'ok' | 'bad';
+
+/**
+ * Per-band rest windows, in days off roast. `green` is the `[low, high]`
+ * best window; `okHigh` is the upper bound of the still-drinkable fading
+ * window — past it the bean is stale. Below the green window the bean also
+ * only rates `ok` (still too gassy / unstable).
+ *
+ * The windows differ because degassing tracks bean density: darker beans are
+ * porous and degas fast (earliest, shortest window); light roasts are dense,
+ * hold CO₂ longest, and need the most rest.
+ *
+ *  - Dark   — best 4–10, ok 0–3 / 11–14, bad 15+.
+ *  - Medium — best 6–14, ok 0–5 / 15–21, bad 22+.
+ *  - Light  — best 10–24, ok 0–9 / 25–35, bad 36+.
+ */
+const REST_WINDOW: Readonly<
+	Record<Roast, { green: readonly [number, number]; okHigh: number }>
+> = {
+	dark: { green: [4, 10], okHigh: 14 },
+	medium: { green: [6, 14], okHigh: 21 },
+	light: { green: [10, 24], okHigh: 35 }
+};
+
+/**
+ * Rate how a bean's `days` off roast sits against the ideal rest window for
+ * its roast `band` (see {@link REST_WINDOW}) — drives the bean card's status
+ * dot. `best` inside the green window, `bad` past `okHigh`, `ok` either side
+ * in between. Returns `null` when the band or the day count is unknown.
+ */
+export function roastFreshness(
+	band: Roast | null,
+	days: number | null
+): Freshness | null {
+	if (band == null || days == null) return null;
+	const w = REST_WINDOW[band];
+	if (days >= w.green[0] && days <= w.green[1]) return 'best';
+	if (days > w.okHigh) return 'bad';
+	return 'ok';
+}
+
 /**
  * Leniently migrate a value persisted under the **old** bean shape
  * (`{ name, roastedOn, roastLevel: 'light'|'medium'|'dark'|null }`) — or any
