@@ -20,6 +20,13 @@
 	 */
 	import { waterTankMl, type UiSnapshot } from '$lib/state';
 	import { ShotPhase } from '$lib/core/crema-core';
+	import {
+		getSettingsStore,
+		convertWeight,
+		convertTemp,
+		convertPressure,
+		convertVolume
+	} from '$lib/settings';
 	import { getProfileStore, preinfuseSeconds, type CremaProfile } from '$lib/profiles';
 	import { BrewParamState } from './brew-params.svelte';
 	import ExtractionTimer from './ExtractionTimer.svelte';
@@ -40,6 +47,12 @@
 	/** The shared profile library — the source of pinned favorites + active. */
 	const profileStore = getProfileStore();
 	void profileStore.ensureLoaded();
+
+	// ── Unit preferences (real — the lib/settings store) ─────────────────
+	/** The shared app-preferences store — drives every readout's display unit. */
+	const settings = getSettingsStore();
+	/** The live preference bundle — reactive; a unit change re-renders readouts. */
+	const prefs = $derived(settings.current);
 
 	/** The real pinned profiles, shown as favorite chips in the Quick Sheet. */
 	const pinnedProfiles = $derived(profileStore.all.filter((p) => p.pinned));
@@ -138,8 +151,25 @@
 	const fmt = (v: number | null | undefined, digits = 1): string =>
 		v == null ? '—' : v.toFixed(digits);
 
+	// Unit-aware channel measurements — all driven by the Settings unit prefs
+	// so a unit change in Settings re-renders every readout at once (D1).
+	/** Pressure readout, in the chosen pressure unit. */
+	const pressureM = $derived(convertPressure(tel?.pressure, prefs.pressureUnit));
+	/** Group-head temperature readout, in the chosen temperature unit. */
+	const tempM = $derived(convertTemp(tel?.temp, prefs.tempUnit));
+	/** Mix ("group") temperature readout, in the chosen temperature unit. */
+	const mixTempM = $derived(convertTemp(tel?.mixTemp, prefs.tempUnit));
+	/** Steam-heater temperature readout, in the chosen temperature unit. */
+	const steamTempM = $derived(convertTemp(tel?.steamTemp, prefs.tempUnit));
+
 	/** Live weight (g) — from the scale stream, independent of shot state. */
 	const weight = $derived(ui.scaleWeightG);
+	/** Weight readout, in the chosen weight unit. */
+	const weightM = $derived(convertWeight(weight, prefs.weightUnit));
+	/** Brew-temperature target, in the chosen temperature unit. */
+	const brewTempTarget = $derived(convertTemp(p.brewTemp, prefs.tempUnit));
+	/** Yield target, in the chosen weight unit. */
+	const yieldTarget = $derived(convertWeight(p.yield, prefs.weightUnit));
 	/** Whether a scale is connected — drives the foot's "Scale" cluster. */
 	const scaleConnected = $derived(
 		ui.scaleState === 'ready' || ui.scaleState === 'subscribing'
@@ -156,6 +186,11 @@
 	 * before the first reading.
 	 */
 	const waterMl = $derived(waterTankMl(ui.waterLevelMm));
+	/** The water-tank volume formatted in the chosen volume unit. */
+	const convertVolumeText = (ml: number | null): string => {
+		const m = convertVolume(ml, prefs.volumeUnit);
+		return m.unit ? `${m.value} ${m.unit}` : m.value;
+	};
 
 	// ── Quick Sheet callbacks ────────────────────────────────────────────
 	/**
@@ -220,8 +255,8 @@
 					<div class="crema-target">
 						<div class="t-eyebrow">Yield</div>
 						<div class="crema-target-val">
-							<span>{fmt(weight)}</span> / {p.yield.toFixed(1)}<span class="crema-target-unit"
-								>g</span
+							<span>{weightM.value}</span> / {yieldTarget.value}<span
+								class="crema-target-unit">{yieldTarget.unit}</span
 							>
 						</div>
 						<div class="crema-target-bar">
@@ -251,8 +286,8 @@
 				<div class="crema-readouts">
 					<ChannelReadout
 						label="PRESSURE"
-						value={fmt(tel?.pressure)}
-						unit="bar"
+						value={pressureM.value}
+						unit={pressureM.unit || 'bar'}
 						color="var(--tel-pressure)"
 					/>
 					<ChannelReadout
@@ -263,17 +298,17 @@
 					/>
 					<ChannelReadout
 						label="TEMP"
-						value={fmt(tel?.temp)}
-						unit="°C"
+						value={tempM.value}
+						unit={tempM.unit || '°C'}
 						color="var(--tel-temp)"
-						target={p.brewTemp.toFixed(1)}
+						target={brewTempTarget.value}
 					/>
 					<ChannelReadout
 						label="WEIGHT"
-						value={fmt(weight)}
-						unit="g"
+						value={weightM.value}
+						unit={weightM.unit || 'g'}
 						color="var(--tel-weight)"
-						target={p.yield.toFixed(1)}
+						target={yieldTarget.value}
 					/>
 				</div>
 				<div class="crema-chart">
@@ -303,18 +338,28 @@
 		<div class="crema-dash-foot is-split">
 			<div class="crema-foot-meta">
 				<span class="t-eyebrow">Scale</span>
-				<span>{scaleConnected ? `${scaleName} · ${fmt(weight)} g` : 'Not paired'}</span>
+				<span
+					>{scaleConnected
+						? `${scaleName} · ${weightM.value}${weightM.unit ? ` ${weightM.unit}` : ''}`
+						: 'Not paired'}</span
+				>
 				<span class="crema-foot-divider"></span>
 				<!-- Group / steam temperatures: real telemetry. The DE1's
 				     blended "group" water temperature is `ShotSample.mix_temp`;
 				     the steam-heater temperature is `steam_temp`. Both arrive on
-				     every `Telemetry` event (see `applyEvent`). -->
-				<span class="t-eyebrow">Group</span><span>{fmt(tel?.mixTemp)} °C</span>
-				<span class="t-eyebrow">Steam</span><span>{fmt(tel?.steamTemp)} °C</span>
+				     every `Telemetry` event (see `applyEvent`). Display unit
+				     follows the Settings temperature preference (D1). -->
+				<span class="t-eyebrow">Group</span><span
+					>{mixTempM.value}{mixTempM.unit ? ` ${mixTempM.unit}` : ''}</span
+				>
+				<span class="t-eyebrow">Steam</span><span
+					>{steamTempM.value}{steamTempM.unit ? ` ${steamTempM.unit}` : ''}</span
+				>
 				<!-- Water tank: real `WaterLevel` telemetry, the sensor depth
-				     converted to a tank volume in mL (see `waterTankMl`). -->
+				     converted to a tank volume in mL (see `waterTankMl`), then
+				     to the Settings volume unit (D1). -->
 				<span class="t-eyebrow">Water</span>
-				<span>{waterMl == null ? '—' : `${waterMl} mL`}</span>
+				<span>{convertVolumeText(waterMl)}</span>
 			</div>
 			<!-- TODO: wire to DE1 control — starting / stopping a shot is a net-new
 			     feature; today this only flips the local `running` flag. -->

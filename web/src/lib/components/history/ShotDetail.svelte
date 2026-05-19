@@ -12,6 +12,7 @@
 	import type { ShotRecord } from '$lib/history';
 	import { ratioLabel } from '$lib/history';
 	import { daysOffRoast, roastBand } from '$lib/bean';
+	import { getSettingsStore, convertWeight, convertTemp, convertPressure } from '$lib/settings';
 	import StaticShotChart from './StaticShotChart.svelte';
 
 	let {
@@ -42,6 +43,17 @@
 
 	/** Final (or peak) yield, grams. */
 	const yieldG = $derived(shot.finalWeightG ?? shot.peakWeightG);
+
+	// Unit-aware metric readouts — driven by the Settings unit prefs (D1).
+	const settings = getSettingsStore();
+	/** Yield in the chosen weight unit. */
+	const yieldM = $derived(convertWeight(yieldG, settings.current.weightUnit));
+	/** Peak weight in the chosen weight unit. */
+	const peakWeightM = $derived(convertWeight(shot.peakWeightG, settings.current.weightUnit));
+	/** Peak pressure in the chosen pressure unit. */
+	const peakPressureM = $derived(convertPressure(shot.peakPressure, settings.current.pressureUnit));
+	/** Peak temperature in the chosen temperature unit. */
+	const peakTempM = $derived(convertTemp(shot.peakTemp, settings.current.tempUnit));
 
 	/**
 	 * The bean caption — the snapshotted bean type (with roaster and roast
@@ -107,7 +119,7 @@
 			<div class="hi-detail-title">{shot.profileName ?? 'Untitled shot'}</div>
 			<div class="hi-detail-sub">
 				{(shot.durationMs / 1000).toFixed(0)} s
-				{#if yieldG != null}· {yieldG.toFixed(1)} g · {ratioLabel(shot)}{/if}
+				{#if yieldG != null}· {yieldM.value} {yieldM.unit} · {ratioLabel(shot)}{/if}
 			</div>
 			{#if beanLine}
 				<div class="hi-detail-sub hi-detail-bean">{beanLine}</div>
@@ -145,21 +157,19 @@
 		</div>
 		<div class="hi-metric">
 			<div class="hi-metric-l">Peak bar</div>
-			<div class="hi-metric-v">{shot.peakPressure.toFixed(1)}<em>bar</em></div>
+			<div class="hi-metric-v">{peakPressureM.value}<em>{peakPressureM.unit || 'bar'}</em></div>
 		</div>
 		<div class="hi-metric">
 			<div class="hi-metric-l">Peak temp</div>
-			<div class="hi-metric-v">{shot.peakTemp.toFixed(1)}<em>°C</em></div>
+			<div class="hi-metric-v">{peakTempM.value}<em>{peakTempM.unit || '°C'}</em></div>
 		</div>
 		<div class="hi-metric">
 			<div class="hi-metric-l">Peak wt</div>
-			<div class="hi-metric-v">
-				{shot.peakWeightG != null ? shot.peakWeightG.toFixed(1) : '–'}<em>g</em>
-			</div>
+			<div class="hi-metric-v">{peakWeightM.value}<em>{peakWeightM.unit || 'g'}</em></div>
 		</div>
 		<div class="hi-metric">
 			<div class="hi-metric-l">Yield</div>
-			<div class="hi-metric-v">{yieldG != null ? yieldG.toFixed(1) : '–'}<em>g</em></div>
+			<div class="hi-metric-v">{yieldM.value}<em>{yieldM.unit || 'g'}</em></div>
 		</div>
 		<div class="hi-metric">
 			<div class="hi-metric-l">Ratio</div>

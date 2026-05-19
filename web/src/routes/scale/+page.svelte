@@ -12,12 +12,14 @@
 	 *
 	 * **Real** — the scale is well-supported by the core, so this page is wired
 	 * for real. The weight hero, battery, firmware, serial, name and connection
-	 * status all read `lib/state`'s `UiSnapshot`. Tare calls `app.tareScale()`;
+	 * status all read `lib/state`'s `UiSnapshot`; the hero is formatted in the
+	 * Settings weight unit. The hero's sub-line shows the scale's own decoded
+	 * built-in timer and native flow rate. Tare calls `app.tareScale()`;
 	 * Re-pair calls `app.connectScale()`. The Quick-settings controls that map
 	 * onto real scale capabilities — flow-smoothing, auto-sleep (↔ standby),
-	 * volume, anti-mistouch, mode, auto-stop — drive `CremaApp`'s two-way config
-	 * setters, gated on `scaleCapabilities`. The recent-activity log is the
-	 * shared `UiSnapshot.eventLog`.
+	 * beeper volume, anti-mistouch, mode, auto-stop — drive `CremaApp`'s two-way
+	 * config setters, gated on `scaleCapabilities`. The recent-activity log is
+	 * the shared `UiSnapshot.eventLog`.
 	 *
 	 * **UI-only** — Reset-peak and Start-timer have no core backing; the design's
 	 * dose target and the brew-behaviour toggles (auto-tare / stop-on-weight)
@@ -25,9 +27,11 @@
 	 */
 	import { getCremaAppContext } from '$lib/shell/app-context';
 	import { getProfileStore } from '$lib/profiles';
+	import { getSettingsStore, convertWeight } from '$lib/settings';
 
 	const ctx = getCremaAppContext();
 	const profiles = getProfileStore();
+	const settings = getSettingsStore();
 
 	/** The shared orchestrator, or `null` while the wasm core loads. */
 	const app = $derived(ctx().app);
@@ -52,6 +56,28 @@
 	const caps = $derived(snap?.scaleCapabilities ?? null);
 	/** The shared event log — the recent-activity feed. */
 	const eventLog = $derived(snap?.eventLog ?? []);
+
+	// ── Decoded-but-unshown scale data (F1) ──────────────────────────────
+	/** The scale's own built-in-timer reading, ms, or `null` when not reported. */
+	const timerMs = $derived(snap?.scaleTimerMs ?? null);
+	/** The scale's own native mass-flow rate, g/s, or `null` when not reported. */
+	const deviceFlow = $derived(snap?.scaleFlowGPerS ?? null);
+	/** The built-in timer formatted `M:SS`, or a dash before the first reading. */
+	const timerLabel = $derived.by(() => {
+		if (timerMs == null) return '–';
+		const totalS = Math.floor(timerMs / 1000);
+		const m = Math.floor(totalS / 60);
+		const s = totalS % 60;
+		return `${m}:${s.toString().padStart(2, '0')}`;
+	});
+
+	// ── Beeper volume (F2) ───────────────────────────────────────────────
+	/** The scale's live beeper-volume step — two-way through `CremaApp`. */
+	const scaleVolume = $derived(snap?.scaleVolume ?? 0);
+	/** Set the scale's beeper volume by step (two-way; stream-confirmed). */
+	function setVolume(level: number): void {
+		if (caps?.volume) app?.setScaleVolume(level);
+	}
 
 	/** A human label for the coarse connection state. */
 	const statusLabel = $derived(
@@ -169,9 +195,18 @@
 		timerRunning = !timerRunning;
 	}
 
-	/** Format the hero readout — one decimal, leading sign for negatives. */
+	// Format the hero readout in the chosen weight unit (D1) — leading sign
+	// for negatives, the magnitude converted, the unit label from the prefs.
+	/** The hero readout's sign prefix. */
 	const heroSign = $derived(weightG != null && weightG < 0 ? '-' : '');
-	const heroNum = $derived(weightG != null ? Math.abs(weightG).toFixed(1) : '–');
+	/** The hero readout's magnitude, in the chosen weight unit. */
+	const heroMeasure = $derived(
+		convertWeight(weightG != null ? Math.abs(weightG) : null, settings.current.weightUnit)
+	);
+	/** The hero readout's numeric string. */
+	const heroNum = $derived(heroMeasure.value);
+	/** The hero readout's unit label. */
+	const heroUnit = $derived(heroMeasure.unit || 'g');
 
 	// ── Activity log ─────────────────────────────────────────────────────
 	/** One parsed activity-log row. */
@@ -259,10 +294,23 @@
 			<div class="sc-readout-num" class:is-tare={tarePulse}>
 				<span class="sc-sign">{heroSign}</span>
 				<span>{heroNum}</span>
-				<span class="sc-unit">g</span>
+				<span class="sc-unit">{heroUnit}</span>
 			</div>
 			<div class="sc-readout-sub">
-				{connected ? 'live' : 'no scale connected'}
+				{#if connected}
+					<!-- F1: the scale's own decoded timer + native flow rate. The
+					     core surfaces both on every ScaleReading; the polished page
+					     never showed them. -->
+					<span>live</span>
+					<span class="sc-sub-sep">·</span>
+					<span>timer {timerLabel}</span>
+					{#if deviceFlow != null}
+						<span class="sc-sub-sep">·</span>
+						<span>{deviceFlow.toFixed(1)} g/s</span>
+					{/if}
+				{:else}
+					no scale connected
+				{/if}
 			</div>
 		</div>
 
@@ -378,6 +426,25 @@
 					aria-label="Auto-sleep"
 				></button>
 			</div>
+
+			<!-- Beeper volume ↔ volume RangeCapability (F2 — real capability).
+			     The polished page dropped this control; the volume range and
+			     the live `scaleVolume` are already wired in state. -->
+			{#if caps?.volume}
+				<div class="sc-set-row">
+					<div>
+						<div class="sc-set-title">Beeper volume</div>
+						<div class="sc-set-sub">How loud the scale's button / target tones are.</div>
+					</div>
+					<div class="st-segment">
+						{#each Array.from( { length: caps.volume.max - caps.volume.min + 1 }, (_, i) => caps.volume!.min + i ) as step (step)}
+							<button class:is-active={scaleVolume === step} onclick={() => setVolume(step)}
+								>{step}</button
+							>
+						{/each}
+					</div>
+				</div>
+			{/if}
 
 			<!-- Display mode (real capability — when the scale exposes modes) -->
 			{#if caps && caps.modes.length > 0}
@@ -577,6 +644,10 @@
 		text-transform: uppercase;
 		color: rgba(244, 237, 224, 0.4);
 		margin-top: 18px;
+	}
+	.sc-sub-sep {
+		color: rgba(244, 237, 224, 0.2);
+		margin: 0 2px;
 	}
 
 	.sc-actions {
