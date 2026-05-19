@@ -189,6 +189,23 @@
 		dirty = true;
 	}
 
+	/**
+	 * Move a segment to a new position, sliding the rest along — drives both
+	 * drag-to-reorder and the editable row number. `toIndex` is clamped to the
+	 * valid range, so setting a segment to position N simply lands it at N.
+	 */
+	function moveSegment(id: string, toIndex: number): void {
+		const segs = [...draft.segments];
+		const from = segs.findIndex((s) => s.id === id);
+		if (from < 0) return;
+		const to = Math.max(0, Math.min(segs.length - 1, Math.trunc(toIndex)));
+		if (to === from) return;
+		const [moved] = segs.splice(from, 1);
+		segs.splice(to, 0, moved);
+		draft = { ...draft, segments: segs };
+		dirty = true;
+	}
+
 	/** Reset the segments to a fresh default list. */
 	function resetSegments(): void {
 		const fresh = blankProfile().segments;
@@ -463,10 +480,12 @@
 							<SegmentRow
 								{seg}
 								index={i}
+								count={draft.segments.length}
 								active={activeSegId === seg.id}
 								onSelect={() => (selectedSegId = seg.id)}
 								onEdit={(p) => editSegment(seg.id, p)}
 								onDelete={() => deleteSegment(seg.id)}
+								onReorder={moveSegment}
 							/>
 						{/each}
 					</div>
