@@ -625,11 +625,14 @@ impl CremaCore {
             .as_mut()
             .and_then(|stop| stop.on_sample(&sample, now_ms));
         Self::push_stop(reason, out);
-        // Cast to u32: a session's elapsed time never approaches u32::MAX ms
-        // (~49 days), so the narrowing cannot truncate in practice.
-        let elapsed_ms = self
-            .shot_started_ms
-            .map_or(0, |start| now_ms.saturating_sub(start)) as u32;
+        // Narrow to u32: a session's elapsed time never approaches u32::MAX ms
+        // (~49 days); a checked conversion saturates rather than wrapping if it
+        // somehow did.
+        let elapsed_ms = u32::try_from(
+            self.shot_started_ms
+                .map_or(0, |start| now_ms.saturating_sub(start)),
+        )
+        .unwrap_or(u32::MAX);
         out.events.push(Event::Telemetry {
             elapsed_ms,
             group_pressure: sample.group_pressure,
@@ -822,10 +825,11 @@ impl CremaCore {
             ShotEvent::Completed(record) => {
                 self.shot_started_ms = None;
                 self.auto_stop = None;
+                // A session never exceeds u32::MAX ms / samples; the checked
+                // conversions saturate rather than wrapping if one somehow did.
                 out.events.push(Event::ShotCompleted {
-                    // A session never exceeds u32::MAX ms, so this cannot truncate.
-                    duration_ms: record.duration_ms as u32,
-                    sample_count: record.samples.len() as u32,
+                    duration_ms: u32::try_from(record.duration_ms).unwrap_or(u32::MAX),
+                    sample_count: u32::try_from(record.samples.len()).unwrap_or(u32::MAX),
                 });
             }
         }
@@ -840,8 +844,9 @@ impl CremaCore {
             WaterEvent::Completed(record) => {
                 out.events.push(Event::WaterSessionCompleted {
                     kind: record.kind,
-                    // A session never exceeds u32::MAX ms, so this cannot truncate.
-                    duration_ms: record.duration_ms as u32,
+                    // A session never exceeds u32::MAX ms; the checked
+                    // conversion saturates rather than wrapping if it did.
+                    duration_ms: u32::try_from(record.duration_ms).unwrap_or(u32::MAX),
                 });
             }
         }
@@ -854,10 +859,11 @@ impl CremaCore {
         match event {
             SteamEvent::Started => out.events.push(Event::SteamSessionStarted),
             SteamEvent::Completed(record) => {
+                // A session never exceeds u32::MAX ms / samples; the checked
+                // conversions saturate rather than wrapping if one somehow did.
                 out.events.push(Event::SteamSessionCompleted {
-                    // A session never exceeds u32::MAX ms, so this cannot truncate.
-                    duration_ms: record.duration_ms as u32,
-                    sample_count: record.samples.len() as u32,
+                    duration_ms: u32::try_from(record.duration_ms).unwrap_or(u32::MAX),
+                    sample_count: u32::try_from(record.samples.len()).unwrap_or(u32::MAX),
                 });
             }
             SteamEvent::ClogSuspected(reason) => {
@@ -955,6 +961,9 @@ mod tests {
     ];
 
     /// A Bookoo weight packet reporting `centigrams` hundredths of a gram.
+    // The three `as u8` casts are a standard big-endian byte split — each
+    // shifted byte is masked to 8 bits by the cast, which is the intent.
+    #[allow(clippy::cast_possible_truncation)]
     fn bookoo_packet(centigrams: u32) -> [u8; 10] {
         [
             0,

@@ -6,6 +6,12 @@
 //! notable [`ShotEvent`]s. SAW / SAV (stop-at-weight / stop-at-volume) logic
 //! will build on this.
 
+// `u64` millisecond elapsed times are divided into `f32` seconds for the
+// recorded shot metrics; that time-to-float conversion loses precision past
+// the f32 mantissa — harmless for a shot's span — so the precision-loss lint
+// is allowed module-wide here.
+#![allow(clippy::cast_precision_loss)]
+
 use de1_protocol::{MachineState, ShotSample, StateInfo, SubState};
 use typeshare::typeshare;
 

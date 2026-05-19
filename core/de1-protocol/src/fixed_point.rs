@@ -28,6 +28,13 @@
 //! Encoders are needed by the write paths (RequestedState, profile upload) and
 //! are included here to keep this primitive layer complete.
 
+// Every numeric cast in this module is a bounded fixed-point conversion:
+// the `*_encode` casts follow a `clamp(..).round()` into the target integer's
+// exact range, and the integer-to-`f32` casts are decoding raw packet fields
+// whose precision loss past 2^23 is inherent to the wire format, not a bug.
+// The truncation/precision lints are therefore allowed module-wide here.
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+
 /// Largest value [`u8p4_encode`] can represent (`255 / 16`).
 pub const U8P4_MAX: f32 = 255.0 / 16.0;
 /// Largest value [`u8p1_encode`] can represent (`255 / 2`).

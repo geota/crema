@@ -164,7 +164,8 @@ pub fn firmware_write_frame(
         return Err(ProtocolError::FirmwareOffsetOutOfRange(offset));
     }
     let mut packet = [0u8; FIRMWARE_FRAME_LEN];
-    packet[0] = FIRMWARE_FRAME_DATA_LEN as u8;
+    // FIRMWARE_FRAME_DATA_LEN is the compile-time constant 16 — fits a u8.
+    packet[0] = u8::try_from(FIRMWARE_FRAME_DATA_LEN).unwrap_or(u8::MAX);
     packet[1..4].copy_from_slice(&u24p0_encode(offset));
     let len = chunk.len().min(FIRMWARE_FRAME_DATA_LEN);
     packet[4..4 + len].copy_from_slice(&chunk[..len]);

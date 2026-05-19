@@ -350,11 +350,13 @@ pub fn import_legacy_tcl(tcl: &str) -> Result<Profile, ImportError> {
     };
 
     // An advanced Tcl profile records the preinfusion count directly; a
-    // converted simple profile sets it from its generated leading steps.
+    // converted simple profile sets it from its generated leading steps. The
+    // value is a small step count; clamp before the cast so it fits a u16.
+    #[allow(clippy::cast_possible_truncation)]
     let count_start = dict
         .get("final_desired_shot_volume_advanced_count_start")
         .and_then(|s| s.trim().parse::<f32>().ok())
-        .map_or(0, |v| v as u16);
+        .map_or(0, |v| v.clamp(0.0, f32::from(u16::MAX)).round() as u16);
 
     finish_profile(
         title,
@@ -761,10 +763,11 @@ fn finish_profile(
         return Err(ImportError::TooManySteps { count: steps.len() });
     }
 
-    // `preinfuse_step_count` can never exceed the step count.
-    let preinfuse = preinfuse_step_count.min(steps.len() as u16);
-    // `preinfuse` is now <= 32, so this cast cannot truncate.
-    let preinfuse_step_count = preinfuse as u8;
+    // `preinfuse_step_count` can never exceed the step count, which is
+    // <= MAX_STEPS (checked above) so it fits a u16 and then a u8.
+    let step_count = u16::try_from(steps.len()).unwrap_or(u16::MAX);
+    let preinfuse = preinfuse_step_count.min(step_count);
+    let preinfuse_step_count = u8::try_from(preinfuse).unwrap_or(u8::MAX);
 
     // Crema's whole-shot volume limit comes from the legacy target volume.
     let max_total_volume_ml = clamp_volume(target_volume);
@@ -849,10 +852,11 @@ fn parse_exit(kind: &str, condition: &str, threshold: f32) -> Result<ExitConditi
 
 /// Clamp a legacy volume value into Crema's `0..=1023` mL field.
 fn clamp_volume(volume: f32) -> u16 {
-    if volume <= 0.0 {
-        0
-    } else {
-        (volume.round() as u32).min(1023) as u16
+    // Clamped to `0.0..=1023.0` before the cast, so the rounded value always
+    // fits a u16 — the truncation lint is allowed for this provably-safe cast.
+    #[allow(clippy::cast_possible_truncation)]
+    {
+        volume.clamp(0.0, 1023.0).round() as u16
     }
 }
 
@@ -889,10 +893,12 @@ impl Scalar {
 
     /// The value rounded to a non-negative `u16` (for count-like fields).
     fn as_u16(&self) -> u16 {
-        if self.0 <= 0.0 {
-            0
-        } else {
-            (self.0.round() as u32).min(u16::MAX as u32) as u16
+        // Clamped to `0.0..=u16::MAX` before the cast, so the rounded value
+        // always fits a u16 — the truncation lint is allowed for this
+        // provably-safe cast.
+        #[allow(clippy::cast_possible_truncation)]
+        {
+            self.0.clamp(0.0, f32::from(u16::MAX)).round() as u16
         }
     }
 }
@@ -913,6 +919,9 @@ impl<'de> serde::Deserialize<'de> for Scalar {
         }
 
         match Raw::deserialize(deserializer)? {
+            // The profile model is `f32` throughout; narrowing a JSON `f64`
+            // to it at the deserialization boundary is intentional.
+            #[allow(clippy::cast_possible_truncation)]
             Raw::Num(n) => Ok(Scalar(n as f32)),
             Raw::Str(s) => {
                 let trimmed = s.trim();
