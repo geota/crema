@@ -9,11 +9,12 @@
 	 * segment (highlighting it in the curve).
 	 *
 	 * The controls are the quick-controls primitives: `QSplitLabel` split
-	 * toggles for the mode (Pressure | Flow) and temp sensor (Basket | Mix)
-	 * and ramp (Smooth | Fast), and `QStepper`s (− / value+unit / +) for the
-	 * Target, Time and Temp fields. The remaining per-segment fields (volume
-	 * limit, exit condition, limiter) live in `SegmentAdvanced`, the panel the
-	 * editor renders beneath the selected row.
+	 * toggles for the mode (Pressure | Flow), temp sensor (Basket | Mix) and
+	 * ramp (Smooth | Fast), and `QStepper`s for Ramp / Target / Time / Temp /
+	 * Volume. The temp sensor sits on the column's label line, to the right of
+	 * "Temp", matching the quick-controls split-label-over-stepper layout. The
+	 * structured exit condition and the limiter live in `SegmentAdvanced`, the
+	 * panel the editor renders beneath the selected row.
 	 */
 	import type { ProfileSegment, SegmentRamp } from '$lib/profiles';
 	import QStepper from '$lib/components/brew/QStepper.svelte';
@@ -74,6 +75,18 @@
 	</div>
 
 	<div class="pe-seg-field">
+		<div class="pe-seg-field-label">Ramp</div>
+		<QSplitLabel
+			options={[
+				{ id: 'smooth', label: 'Smooth' },
+				{ id: 'fast', label: 'Fast' }
+			]}
+			value={seg.ramp}
+			onChange={(r) => onEdit({ ramp: r as SegmentRamp })}
+		/>
+	</div>
+
+	<div class="pe-seg-field">
 		<div class="pe-seg-field-label">Target</div>
 		<QStepper
 			value={seg.target}
@@ -98,7 +111,17 @@
 	</div>
 
 	<div class="pe-seg-field">
-		<div class="pe-seg-field-label">Temp</div>
+		<div class="pe-seg-field-head">
+			<span class="pe-seg-field-label">Temp</span>
+			<QSplitLabel
+				options={[
+					{ id: 'basket', label: 'Basket' },
+					{ id: 'mix', label: 'Mix' }
+				]}
+				value={seg.tempSensor}
+				onChange={(s) => onEdit({ tempSensor: s as ProfileSegment['tempSensor'] })}
+			/>
+		</div>
 		<QStepper
 			value={seg.temperatureC}
 			unit="°C"
@@ -107,25 +130,18 @@
 			step={0.5}
 			onChange={(v) => onEdit({ temperatureC: v })}
 		/>
-		<QSplitLabel
-			options={[
-				{ id: 'basket', label: 'Basket' },
-				{ id: 'mix', label: 'Mix' }
-			]}
-			value={seg.tempSensor}
-			onChange={(s) => onEdit({ tempSensor: s as ProfileSegment['tempSensor'] })}
-		/>
 	</div>
 
-	<div class="pe-seg-field">
-		<div class="pe-seg-field-label">Ramp</div>
-		<QSplitLabel
-			options={[
-				{ id: 'smooth', label: 'Smooth' },
-				{ id: 'fast', label: 'Fast' }
-			]}
-			value={seg.ramp}
-			onChange={(r) => onEdit({ ramp: r as SegmentRamp })}
+	<!-- Volume limit — dimmed at 0 to read as "off"; bump it up to enable. -->
+	<div class="pe-seg-field" class:is-off={seg.volumeLimitMl === 0}>
+		<div class="pe-seg-field-label">Volume</div>
+		<QStepper
+			value={seg.volumeLimitMl}
+			unit="mL"
+			min={0}
+			max={1023}
+			step={5}
+			onChange={(v) => onEdit({ volumeLimitMl: Math.round(v) })}
 		/>
 	</div>
 
@@ -145,18 +161,19 @@
 <style>
 	.pe-seg {
 		display: grid;
-		/* Every cell is an editable control. Target / Time / Temp hold a
-		   QStepper; the mode / sensor / ramp columns a QSplitLabel split
-		   toggle — control-sized minima; the name field takes the slack. */
+		/* # · name+mode · Ramp · Target · Time · Temp+sensor · Volume · ⌫.
+		   Every cell is an editable control; the QStepper / QSplitLabel columns
+		   get control-sized minima and the name field takes the slack. */
 		grid-template-columns:
 			28px
-			minmax(150px, 1.4fr)
-			minmax(122px, 0.9fr)
-			minmax(112px, 0.9fr)
-			minmax(122px, 0.9fr)
-			minmax(116px, 0.8fr)
+			minmax(140px, 1.3fr)
+			minmax(104px, 0.7fr)
+			minmax(116px, 0.85fr)
+			minmax(108px, 0.8fr)
+			minmax(128px, 0.95fr)
+			minmax(116px, 0.85fr)
 			32px;
-		gap: 14px;
+		gap: 12px;
 		align-items: start;
 		padding: 10px 14px;
 		background: var(--espresso-900);
@@ -209,6 +226,20 @@
 		gap: 4px;
 		min-width: 0;
 	}
+	/* Dimmed "off" state — used by the Volume column when its limit is 0. The
+	   stepper stays clickable so bumping it up re-enables the limit. */
+	.pe-seg-field.is-off {
+		opacity: 0.4;
+	}
+	/* The Temp column's label line carries the Basket | Mix toggle on its
+	   right, matching the quick-controls split-label-over-stepper layout. */
+	.pe-seg-field-head {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 8px;
+		min-height: 18px;
+	}
 	.pe-seg-field-label {
 		font-family: var(--font-sans);
 		font-size: 9px;
@@ -216,6 +247,9 @@
 		text-transform: uppercase;
 		font-weight: 600;
 		color: rgba(244, 237, 224, 0.4);
+		min-height: 18px;
+		display: flex;
+		align-items: center;
 	}
 	.pe-seg-del {
 		width: 30px;
