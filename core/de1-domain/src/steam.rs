@@ -32,6 +32,8 @@
 //! `SteamMonitor` exposes [`is_puffing`](SteamMonitor::is_puffing) for the
 //! shell and leaves the tap handling to the firmware.
 
+use std::time::Duration;
+
 use de1_protocol::{MachineState, ShotSample, StateInfo, SubState};
 use typeshare::typeshare;
 
@@ -100,16 +102,16 @@ pub enum SteamClogReason {
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SteamSample {
     /// Group pressure, bar.
-    pub pressure_bar: f32,
+    pub pressure: f32,
     /// Steam heater temperature, °C.
-    pub steam_temp_c: f32,
+    pub steam_temp: f32,
 }
 
 /// A completed steam session — its duration and recorded steam telemetry.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SteamRecord {
-    /// Total session duration, milliseconds.
-    pub duration_ms: u64,
+    /// Total session duration.
+    pub duration: Duration,
     /// Every steam telemetry sample collected during the session, in order.
     pub samples: Vec<SteamSample>,
 }
@@ -134,7 +136,7 @@ impl SteamRecord {
 
         let over_pressure = trimmed
             .iter()
-            .filter(|s| s.pressure_bar > STEAM_OVER_PRESSURE_THRESHOLD_BAR)
+            .filter(|s| s.pressure > STEAM_OVER_PRESSURE_THRESHOLD_BAR)
             .count();
         if over_pressure > STEAM_OVER_PRESSURE_COUNT_TRIGGER {
             return Some(SteamClogReason::OverPressure);
@@ -142,7 +144,7 @@ impl SteamRecord {
 
         let over_temp = trimmed
             .iter()
-            .filter(|s| s.steam_temp_c > STEAM_OVER_TEMP_THRESHOLD_C)
+            .filter(|s| s.steam_temp > STEAM_OVER_TEMP_THRESHOLD_C)
             .count();
         if over_temp > STEAM_OVER_TEMP_COUNT_TRIGGER {
             return Some(SteamClogReason::OverTemperature);
@@ -180,7 +182,7 @@ struct SteamInProgress {
 /// time, plus the time-driven eco-mode state.
 ///
 /// Sans-IO: it holds no clock and performs no I/O. The shell supplies a
-/// monotonic `now_ms` with each notification and each [`on_tick`](Self::on_tick).
+/// monotonic `now` with each notification and each [`on_tick`](Self::on_tick).
 #[derive(Debug)]
 pub struct SteamMonitor {
     /// The session currently being recorded, if any.
@@ -193,10 +195,10 @@ pub struct SteamMonitor {
     /// Timestamp the machine was last steaming (session start or end), against
     /// which the eco-mode idle delay is measured. `None` until the first
     /// session, the eco timer being un-armed before any steaming.
-    last_steam_ms: Option<u64>,
-    /// Eco-mode idle delay, milliseconds — [`STEAM_ECO_DELAY_SECONDS`] by
-    /// default; configurable via [`with_eco_delay`](Self::with_eco_delay).
-    eco_delay_ms: u64,
+    last_steam: Option<Duration>,
+    /// Eco-mode idle delay — [`STEAM_ECO_DELAY_SECONDS`] by default;
+    /// configurable via [`with_eco_delay`](Self::with_eco_delay).
+    eco_delay: Duration,
     /// Whether eco mode is enabled at all (the legacy `eco_steam` setting).
     eco_enabled: bool,
 }
@@ -214,8 +216,8 @@ impl SteamMonitor {
             session: None,
             puffing: false,
             eco_mode: false,
-            last_steam_ms: None,
-            eco_delay_ms: STEAM_ECO_DELAY_SECONDS * 1_000,
+            last_steam: None,
+            eco_delay: Duration::from_secs(STEAM_ECO_DELAY_SECONDS),
             eco_enabled: false,
         }
     }
@@ -224,7 +226,7 @@ impl SteamMonitor {
     /// it while eco mode is engaged disengages it on the next
     /// [`on_tick`](Self::on_tick); [`on_eco_enabled`](Self::on_eco_enabled)
     /// returns the event directly.
-    pub fn on_eco_enabled(&mut self, enabled: bool, now_ms: u64) -> Vec<SteamEvent> {
+    pub fn on_eco_enabled(&mut self, enabled: bool, now: Duration) -> Vec<SteamEvent> {
         let was_enabled = self.eco_enabled;
         self.eco_enabled = enabled;
         let mut events = Vec::new();
@@ -237,7 +239,7 @@ impl SteamMonitor {
         // edge: re-arming while eco is already enabled would silently push the
         // pending eco transition further out.
         if enabled && !was_enabled {
-            self.last_steam_ms = Some(now_ms);
+            self.last_steam = Some(now);
         }
         events
     }
@@ -245,7 +247,7 @@ impl SteamMonitor {
     /// Override the eco-mode idle delay. The default is
     /// [`STEAM_ECO_DELAY_SECONDS`].
     pub fn with_eco_delay(mut self, delay_seconds: u64) -> SteamMonitor {
-        self.eco_delay_ms = delay_seconds * 1_000;
+        self.eco_delay = Duration::from_secs(delay_seconds);
         self
     }
 
@@ -265,14 +267,14 @@ impl SteamMonitor {
         self.eco_mode
     }
 
-    /// Feed a [`StateInfo`] notification. `now_ms` is a monotonic millisecond
-    /// timestamp supplied by the shell.
+    /// Feed a [`StateInfo`] notification. `now` is a monotonic timestamp
+    /// supplied by the shell (a [`Duration`] from a shell-chosen epoch).
     ///
     /// Returns the events this update produced — empty if nothing notable
     /// changed. A session ending runs clog analysis, so the returned vector
     /// may carry a [`SteamEvent::ClogSuspected`] after the
     /// [`SteamEvent::Completed`].
-    pub fn on_state_info(&mut self, info: StateInfo, now_ms: u64) -> Vec<SteamEvent> {
+    pub fn on_state_info(&mut self, info: StateInfo, now: Duration) -> Vec<SteamEvent> {
         let mut events = Vec::new();
         let in_steam = info.state == MachineState::Steam;
         self.puffing = in_steam && info.substate == SubState::Puffing;
@@ -280,7 +282,7 @@ impl SteamMonitor {
         // A session ends when the machine leaves the Steam state.
         if !in_steam && let Some(mut session) = self.session.take() {
             let record = SteamRecord {
-                duration_ms: session.timer.finish(now_ms).unwrap_or(0),
+                duration: session.timer.finish(now).unwrap_or(Duration::ZERO),
                 samples: session.samples,
             };
             let clog = record.clog_analysis();
@@ -288,16 +290,16 @@ impl SteamMonitor {
             if let Some(reason) = clog {
                 events.push(SteamEvent::ClogSuspected(reason));
             }
-            self.last_steam_ms = Some(now_ms);
+            self.last_steam = Some(now);
         }
 
         // A session starts when the machine enters the Steam state. Steaming
         // is activity, so it disengages eco mode and re-arms the idle clock.
         if in_steam && self.session.is_none() {
             let mut session = SteamInProgress::default();
-            session.timer.start(now_ms);
+            session.timer.start(now);
             self.session = Some(session);
-            self.last_steam_ms = Some(now_ms);
+            self.last_steam = Some(now);
             events.push(SteamEvent::Started);
             if self.eco_mode {
                 self.eco_mode = false;
@@ -310,14 +312,14 @@ impl SteamMonitor {
     /// Feed a [`ShotSample`] telemetry notification. The steam pressure and
     /// temperature are recorded only while a steam session is in progress;
     /// other samples are ignored.
-    pub fn on_sample(&mut self, sample: &ShotSample, _now_ms: u64) {
+    pub fn on_sample(&mut self, sample: &ShotSample, _now: Duration) {
         if let Some(session) = &mut self.session {
             // Drop samples past the cap so an over-long stream cannot grow the
             // heap without bound; see [`MAX_STEAM_SAMPLES`].
             if session.samples.len() < MAX_STEAM_SAMPLES {
                 session.samples.push(SteamSample {
-                    pressure_bar: sample.group_pressure,
-                    steam_temp_c: sample.steam_temp,
+                    pressure: sample.group_pressure,
+                    steam_temp: sample.steam_temp,
                 });
             }
         }
@@ -329,13 +331,13 @@ impl SteamMonitor {
     /// is emitted once.
     ///
     /// Returns the events this tick produced — empty if nothing changed.
-    pub fn on_tick(&mut self, now_ms: u64) -> Vec<SteamEvent> {
+    pub fn on_tick(&mut self, now: Duration) -> Vec<SteamEvent> {
         let mut events = Vec::new();
         if self.eco_enabled
             && !self.eco_mode
             && self.session.is_none()
-            && let Some(last) = self.last_steam_ms
-            && now_ms.saturating_sub(last) >= self.eco_delay_ms
+            && let Some(last) = self.last_steam
+            && now.saturating_sub(last) >= self.eco_delay
         {
             self.eco_mode = true;
             events.push(SteamEvent::EcoModeChanged(true));
@@ -348,16 +350,21 @@ impl SteamMonitor {
 mod tests {
     use super::*;
 
+    /// Helper: a `Duration` of `ms` milliseconds.
+    fn ms(ms: u64) -> Duration {
+        Duration::from_millis(ms)
+    }
+
     fn state(state: MachineState, substate: SubState) -> StateInfo {
         StateInfo { state, substate }
     }
 
     /// A telemetry sample carrying the given steam pressure and temperature;
     /// other fields zeroed.
-    fn steam_sample(pressure_bar: f32, steam_temp_c: f32) -> ShotSample {
+    fn steam_sample(pressure: f32, steam_temp: f32) -> ShotSample {
         ShotSample {
             sample_time: 0,
-            group_pressure: pressure_bar,
+            group_pressure: pressure,
             group_flow: 0.0,
             head_temp: 0.0,
             mix_temp: 0.0,
@@ -366,7 +373,7 @@ mod tests {
             set_group_pressure: 0.0,
             set_group_flow: 0.0,
             frame_number: 0,
-            steam_temp: steam_temp_c,
+            steam_temp,
         }
     }
 
@@ -384,7 +391,7 @@ mod tests {
     #[test]
     fn entering_steam_starts_a_session() {
         let mut monitor = SteamMonitor::new();
-        let events = monitor.on_state_info(state(MachineState::Steam, SubState::Steaming), 1_000);
+        let events = monitor.on_state_info(state(MachineState::Steam, SubState::Steaming), ms(1_000));
         assert_eq!(events, vec![SteamEvent::Started]);
         assert!(monitor.is_session_in_progress());
     }
@@ -392,8 +399,8 @@ mod tests {
     #[test]
     fn a_repeated_steam_state_does_not_re_start_the_session() {
         let mut monitor = SteamMonitor::new();
-        monitor.on_state_info(state(MachineState::Steam, SubState::Steaming), 1_000);
-        let events = monitor.on_state_info(state(MachineState::Steam, SubState::Steaming), 2_000);
+        monitor.on_state_info(state(MachineState::Steam, SubState::Steaming), ms(1_000));
+        let events = monitor.on_state_info(state(MachineState::Steam, SubState::Steaming), ms(2_000));
         assert!(events.is_empty());
         assert!(monitor.is_session_in_progress());
     }
@@ -401,10 +408,10 @@ mod tests {
     #[test]
     fn a_full_steam_session_yields_a_record_with_duration() {
         let mut monitor = SteamMonitor::new();
-        monitor.on_state_info(state(MachineState::Steam, SubState::Steaming), 1_000);
-        let done = monitor.on_state_info(state(MachineState::Idle, SubState::Ready), 9_500);
+        monitor.on_state_info(state(MachineState::Steam, SubState::Steaming), ms(1_000));
+        let done = monitor.on_state_info(state(MachineState::Idle, SubState::Ready), ms(9_500));
         let record = completed_record(&done);
-        assert_eq!(record.duration_ms, 8_500); // 9500 - 1000
+        assert_eq!(record.duration, ms(8_500)); // 9500 - 1000
         assert!(!monitor.is_session_in_progress());
     }
 
@@ -412,38 +419,38 @@ mod tests {
     fn samples_are_recorded_only_during_a_session() {
         let mut monitor = SteamMonitor::new();
         // No session yet: this sample is dropped.
-        monitor.on_sample(&steam_sample(2.0, 150.0), 500);
-        monitor.on_state_info(state(MachineState::Steam, SubState::Steaming), 1_000);
-        monitor.on_sample(&steam_sample(3.0, 155.0), 1_100);
-        monitor.on_sample(&steam_sample(4.0, 160.0), 1_200);
-        let done = monitor.on_state_info(state(MachineState::Idle, SubState::Ready), 2_000);
+        monitor.on_sample(&steam_sample(2.0, 150.0), ms(500));
+        monitor.on_state_info(state(MachineState::Steam, SubState::Steaming), ms(1_000));
+        monitor.on_sample(&steam_sample(3.0, 155.0), ms(1_100));
+        monitor.on_sample(&steam_sample(4.0, 160.0), ms(1_200));
+        let done = monitor.on_state_info(state(MachineState::Idle, SubState::Ready), ms(2_000));
         let record = completed_record(&done);
         assert_eq!(record.samples.len(), 2);
-        assert_eq!(record.samples[0].pressure_bar, 3.0);
-        assert_eq!(record.samples[1].steam_temp_c, 160.0);
+        assert_eq!(record.samples[0].pressure, 3.0);
+        assert_eq!(record.samples[1].steam_temp, 160.0);
     }
 
     #[test]
     fn the_puffing_substate_is_tracked_for_the_two_tap_stop() {
         let mut monitor = SteamMonitor::new();
-        monitor.on_state_info(state(MachineState::Steam, SubState::Steaming), 1_000);
+        monitor.on_state_info(state(MachineState::Steam, SubState::Steaming), ms(1_000));
         assert!(!monitor.is_puffing());
-        monitor.on_state_info(state(MachineState::Steam, SubState::Puffing), 2_000);
+        monitor.on_state_info(state(MachineState::Steam, SubState::Puffing), ms(2_000));
         assert!(monitor.is_puffing());
         // Leaving the Steam state clears the puffing flag.
-        monitor.on_state_info(state(MachineState::Idle, SubState::Ready), 3_000);
+        monitor.on_state_info(state(MachineState::Idle, SubState::Ready), ms(3_000));
         assert!(!monitor.is_puffing());
     }
 
     #[test]
     fn the_sample_buffer_is_capped() {
         let mut monitor = SteamMonitor::new();
-        monitor.on_state_info(state(MachineState::Steam, SubState::Steaming), 0);
+        monitor.on_state_info(state(MachineState::Steam, SubState::Steaming), ms(0));
         // Feed well past the cap: the excess samples are dropped, not retained.
         for _ in 0..MAX_STEAM_SAMPLES + 100 {
-            monitor.on_sample(&steam_sample(2.0, 150.0), 100);
+            monitor.on_sample(&steam_sample(2.0, 150.0), ms(100));
         }
-        let done = monitor.on_state_info(state(MachineState::Idle, SubState::Ready), 1_000);
+        let done = monitor.on_state_info(state(MachineState::Idle, SubState::Ready), ms(1_000));
         let record = completed_record(&done);
         assert_eq!(record.samples.len(), MAX_STEAM_SAMPLES);
     }
@@ -451,11 +458,11 @@ mod tests {
     /// A `SteamRecord` of `count` samples all carrying `pressure` and `temp`.
     fn record_of(count: usize, pressure: f32, temp: f32) -> SteamRecord {
         SteamRecord {
-            duration_ms: 0,
+            duration: Duration::ZERO,
             samples: vec![
                 SteamSample {
-                    pressure_bar: pressure,
-                    steam_temp_c: temp,
+                    pressure,
+                    steam_temp: temp,
                 };
                 count
             ],
@@ -481,20 +488,20 @@ mod tests {
         // one past the trigger of 10.
         let mut samples = vec![
             SteamSample {
-                pressure_bar: 2.0,
-                steam_temp_c: 150.0,
+                pressure: 2.0,
+                steam_temp: 150.0,
             };
             STEAM_CLOG_TRIM_SAMPLES
         ];
         samples.extend(vec![
             SteamSample {
-                pressure_bar: 12.0,
-                steam_temp_c: 150.0,
+                pressure: 12.0,
+                steam_temp: 150.0,
             };
             STEAM_OVER_PRESSURE_COUNT_TRIGGER + 1
         ]);
         let record = SteamRecord {
-            duration_ms: 0,
+            duration: Duration::ZERO,
             samples,
         };
         assert_eq!(record.clog_analysis(), Some(SteamClogReason::OverPressure));
@@ -505,20 +512,20 @@ mod tests {
         // High pressure only in the trimmed start region: not a clog.
         let mut samples = vec![
             SteamSample {
-                pressure_bar: 12.0,
-                steam_temp_c: 150.0,
+                pressure: 12.0,
+                steam_temp: 150.0,
             };
             STEAM_CLOG_TRIM_SAMPLES
         ];
         samples.extend(vec![
             SteamSample {
-                pressure_bar: 2.0,
-                steam_temp_c: 150.0,
+                pressure: 2.0,
+                steam_temp: 150.0,
             };
             40
         ]);
         let record = SteamRecord {
-            duration_ms: 0,
+            duration: Duration::ZERO,
             samples,
         };
         assert_eq!(record.clog_analysis(), None);
@@ -529,20 +536,20 @@ mod tests {
         // Exactly the trigger count, not "more than": no warning.
         let mut samples = vec![
             SteamSample {
-                pressure_bar: 2.0,
-                steam_temp_c: 150.0,
+                pressure: 2.0,
+                steam_temp: 150.0,
             };
             STEAM_CLOG_TRIM_SAMPLES
         ];
         samples.extend(vec![
             SteamSample {
-                pressure_bar: 12.0,
-                steam_temp_c: 150.0,
+                pressure: 12.0,
+                steam_temp: 150.0,
             };
             STEAM_OVER_PRESSURE_COUNT_TRIGGER
         ]);
         let record = SteamRecord {
-            duration_ms: 0,
+            duration: Duration::ZERO,
             samples,
         };
         assert_eq!(record.clog_analysis(), None);
@@ -552,20 +559,20 @@ mod tests {
     fn sustained_over_temperature_reports_a_clog() {
         let mut samples = vec![
             SteamSample {
-                pressure_bar: 2.0,
-                steam_temp_c: 150.0,
+                pressure: 2.0,
+                steam_temp: 150.0,
             };
             STEAM_CLOG_TRIM_SAMPLES
         ];
         samples.extend(vec![
             SteamSample {
-                pressure_bar: 2.0,
-                steam_temp_c: 200.0,
+                pressure: 2.0,
+                steam_temp: 200.0,
             };
             STEAM_OVER_TEMP_COUNT_TRIGGER + 1
         ]);
         let record = SteamRecord {
-            duration_ms: 0,
+            duration: Duration::ZERO,
             samples,
         };
         assert_eq!(
@@ -577,49 +584,49 @@ mod tests {
     #[test]
     fn a_completed_clogged_session_emits_clog_suspected() {
         let mut monitor = SteamMonitor::new();
-        monitor.on_state_info(state(MachineState::Steam, SubState::Steaming), 0);
+        monitor.on_state_info(state(MachineState::Steam, SubState::Steaming), ms(0));
         // 20 trimmed startup samples, then a sustained over-pressure run.
         for _ in 0..STEAM_CLOG_TRIM_SAMPLES {
-            monitor.on_sample(&steam_sample(2.0, 150.0), 0);
+            monitor.on_sample(&steam_sample(2.0, 150.0), ms(0));
         }
         for _ in 0..STEAM_OVER_PRESSURE_COUNT_TRIGGER + 1 {
-            monitor.on_sample(&steam_sample(12.0, 150.0), 0);
+            monitor.on_sample(&steam_sample(12.0, 150.0), ms(0));
         }
-        let events = monitor.on_state_info(state(MachineState::Idle, SubState::Ready), 5_000);
+        let events = monitor.on_state_info(state(MachineState::Idle, SubState::Ready), ms(5_000));
         assert!(events.contains(&SteamEvent::ClogSuspected(SteamClogReason::OverPressure)));
     }
 
     #[test]
     fn eco_mode_engages_after_the_idle_delay() {
         let mut monitor = SteamMonitor::new().with_eco_delay(600);
-        monitor.on_eco_enabled(true, 0);
+        monitor.on_eco_enabled(true, ms(0));
         // Before the delay: no change.
-        assert!(monitor.on_tick(599_000).is_empty());
+        assert!(monitor.on_tick(ms(599_000)).is_empty());
         assert!(!monitor.is_eco_mode());
         // At the delay: eco mode engages.
-        let events = monitor.on_tick(600_000);
+        let events = monitor.on_tick(ms(600_000));
         assert_eq!(events, vec![SteamEvent::EcoModeChanged(true)]);
         assert!(monitor.is_eco_mode());
         // It engages only once.
-        assert!(monitor.on_tick(700_000).is_empty());
+        assert!(monitor.on_tick(ms(700_000)).is_empty());
     }
 
     #[test]
     fn eco_mode_does_not_engage_when_disabled() {
         let mut monitor = SteamMonitor::new().with_eco_delay(600);
         // eco mode never enabled.
-        assert!(monitor.on_tick(10_000_000).is_empty());
+        assert!(monitor.on_tick(ms(10_000_000)).is_empty());
         assert!(!monitor.is_eco_mode());
     }
 
     #[test]
     fn steaming_disengages_eco_mode() {
         let mut monitor = SteamMonitor::new().with_eco_delay(600);
-        monitor.on_eco_enabled(true, 0);
-        monitor.on_tick(600_000);
+        monitor.on_eco_enabled(true, ms(0));
+        monitor.on_tick(ms(600_000));
         assert!(monitor.is_eco_mode());
         // A steam session is activity: it disengages eco mode.
-        let events = monitor.on_state_info(state(MachineState::Steam, SubState::Steaming), 601_000);
+        let events = monitor.on_state_info(state(MachineState::Steam, SubState::Steaming), ms(601_000));
         assert!(events.contains(&SteamEvent::EcoModeChanged(false)));
         assert!(!monitor.is_eco_mode());
     }
@@ -627,23 +634,23 @@ mod tests {
     #[test]
     fn eco_mode_re_engages_after_a_session_and_a_fresh_idle_delay() {
         let mut monitor = SteamMonitor::new().with_eco_delay(600);
-        monitor.on_eco_enabled(true, 0);
+        monitor.on_eco_enabled(true, ms(0));
         // Steam at t = 100 s, ending at t = 110 s: the idle clock restarts.
-        monitor.on_state_info(state(MachineState::Steam, SubState::Steaming), 100_000);
-        monitor.on_state_info(state(MachineState::Idle, SubState::Ready), 110_000);
+        monitor.on_state_info(state(MachineState::Steam, SubState::Steaming), ms(100_000));
+        monitor.on_state_info(state(MachineState::Idle, SubState::Ready), ms(110_000));
         // 600 s after the session ended, eco mode engages again.
-        assert!(monitor.on_tick(700_000).is_empty());
-        let events = monitor.on_tick(710_000);
+        assert!(monitor.on_tick(ms(700_000)).is_empty());
+        let events = monitor.on_tick(ms(710_000));
         assert_eq!(events, vec![SteamEvent::EcoModeChanged(true)]);
     }
 
     #[test]
     fn disabling_eco_mode_disengages_it() {
         let mut monitor = SteamMonitor::new().with_eco_delay(600);
-        monitor.on_eco_enabled(true, 0);
-        monitor.on_tick(600_000);
+        monitor.on_eco_enabled(true, ms(0));
+        monitor.on_tick(ms(600_000));
         assert!(monitor.is_eco_mode());
-        let events = monitor.on_eco_enabled(false, 700_000);
+        let events = monitor.on_eco_enabled(false, ms(700_000));
         assert_eq!(events, vec![SteamEvent::EcoModeChanged(false)]);
         assert!(!monitor.is_eco_mode());
     }
@@ -651,22 +658,22 @@ mod tests {
     #[test]
     fn re_enabling_eco_mode_does_not_delay_a_pending_transition() {
         let mut monitor = SteamMonitor::new().with_eco_delay(600);
-        monitor.on_eco_enabled(true, 0);
+        monitor.on_eco_enabled(true, ms(0));
         // A redundant enable partway through the idle delay must not re-arm
         // the idle clock and push the transition out.
-        monitor.on_eco_enabled(true, 300_000);
+        monitor.on_eco_enabled(true, ms(300_000));
         // Eco still engages 600 s after the *original* enable, not 900 s.
-        let events = monitor.on_tick(600_000);
+        let events = monitor.on_tick(ms(600_000));
         assert_eq!(events, vec![SteamEvent::EcoModeChanged(true)]);
     }
 
     #[test]
     fn eco_mode_does_not_engage_during_an_active_session() {
         let mut monitor = SteamMonitor::new().with_eco_delay(600);
-        monitor.on_eco_enabled(true, 0);
-        monitor.on_state_info(state(MachineState::Steam, SubState::Steaming), 1_000);
+        monitor.on_eco_enabled(true, ms(0));
+        monitor.on_state_info(state(MachineState::Steam, SubState::Steaming), ms(1_000));
         // A very long session: eco mode must not engage while steaming.
-        assert!(monitor.on_tick(10_000_000).is_empty());
+        assert!(monitor.on_tick(ms(10_000_000)).is_empty());
         assert!(!monitor.is_eco_mode());
     }
 }

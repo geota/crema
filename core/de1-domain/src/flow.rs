@@ -19,6 +19,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use std::collections::VecDeque;
+use std::time::Duration;
 
 use crate::filter::median;
 
@@ -35,9 +36,9 @@ const WINDOW: usize = SAMPLES_FOR_ESTIMATE + SAMPLES_FOR_MEDIAN_ENDS - 1;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Estimate {
     /// Robust current weight, grams.
-    pub weight_g: f32,
+    pub weight: f32,
     /// Robust mass-flow rate, grams per second.
-    pub flow_g_per_s: f32,
+    pub flow: f32,
 }
 
 /// Which algorithm a [`FlowEstimator`] uses.
@@ -62,6 +63,10 @@ pub enum FlowAlgorithm {
 pub struct FlowEstimator {
     algorithm: FlowAlgorithm,
     /// `(time_ms, weight_g)`, newest at the back, capped at [`WINDOW`].
+    ///
+    /// Time is stored as raw `u64` ms — the cheapest representation for the
+    /// inner numeric loops (`as f64` for slope/centre arithmetic). The public
+    /// API uses [`Duration`] and converts at the boundary.
     samples: VecDeque<(u64, f32)>,
 }
 
@@ -85,14 +90,19 @@ impl FlowEstimator {
     }
 
     /// Feed a scale-weight reading and return the current [`Estimate`].
-    pub fn update(&mut self, weight_g: f32, now_ms: u64) -> Estimate {
-        self.samples.push_back((now_ms, weight_g));
+    ///
+    /// `weight` is grams; `now` is a monotonic timestamp from the shell. The
+    /// pairwise-slope and centre arithmetic the algorithms run is cheaper on
+    /// raw `u64` ms — the boundary converts once and the loops stay tight.
+    pub fn update(&mut self, weight: f32, now: Duration) -> Estimate {
+        let now_ms = u64::try_from(now.as_millis()).unwrap_or(u64::MAX);
+        self.samples.push_back((now_ms, weight));
         while self.samples.len() > WINDOW {
             self.samples.pop_front();
         }
         match self.algorithm {
-            FlowAlgorithm::OffsetMedian => self.offset_median_estimate(weight_g),
-            FlowAlgorithm::TheilSen => self.theil_sen_estimate(weight_g),
+            FlowAlgorithm::OffsetMedian => self.offset_median_estimate(weight),
+            FlowAlgorithm::TheilSen => self.theil_sen_estimate(weight),
         }
     }
 
@@ -115,8 +125,8 @@ impl FlowEstimator {
             .map(|&(_, w)| w)
             .collect();
         Estimate {
-            weight_g: median(&weights).unwrap_or(latest),
-            flow_g_per_s: self.offset_median_flow().unwrap_or(0.0),
+            weight: median(&weights).unwrap_or(latest),
+            flow: self.offset_median_flow().unwrap_or(0.0),
         }
     }
 
@@ -151,8 +161,8 @@ impl FlowEstimator {
         let n = self.samples.len();
         if n < 2 {
             return Estimate {
-                weight_g: latest,
-                flow_g_per_s: 0.0,
+                weight: latest,
+                flow: 0.0,
             };
         }
         let points: Vec<(f64, f32)> = self.samples.iter().map(|&(t, w)| (t as f64, w)).collect();
@@ -166,17 +176,17 @@ impl FlowEstimator {
                 }
             }
         }
-        let flow_g_per_s = median(&slopes).unwrap_or(0.0);
+        let flow = median(&slopes).unwrap_or(0.0);
 
         // Project every sample forward to "now" along the slope, then median.
         let now = points[n - 1].0;
         let projected: Vec<f32> = points
             .iter()
-            .map(|&(t, w)| w + flow_g_per_s * ((now - t) / 1000.0) as f32)
+            .map(|&(t, w)| w + flow * ((now - t) / 1000.0) as f32)
             .collect();
         Estimate {
-            weight_g: median(&projected).unwrap_or(latest),
-            flow_g_per_s,
+            weight: median(&projected).unwrap_or(latest),
+            flow,
         }
     }
 }
@@ -185,15 +195,20 @@ impl FlowEstimator {
 mod tests {
     use super::*;
 
+    /// Helper: a `Duration` of `ms` milliseconds.
+    fn ms(ms: u64) -> Duration {
+        Duration::from_millis(ms)
+    }
+
     /// Feed `count` samples of a clean ramp — `k` grams at `t = k·100 ms`, a
     /// 10 g/s line — and return the final estimate.
     fn feed_clean_ramp(estimator: &mut FlowEstimator, count: u64) -> Estimate {
         let mut estimate = Estimate {
-            weight_g: 0.0,
-            flow_g_per_s: 0.0,
+            weight: 0.0,
+            flow: 0.0,
         };
         for k in 0..count {
-            estimate = estimator.update(k as f32, k * 100);
+            estimate = estimator.update(k as f32, ms(k * 100));
         }
         estimate
     }
@@ -201,12 +216,12 @@ mod tests {
     /// Feed a 15-sample 10 g/s ramp with a 1000 g spike at sample 12.
     fn feed_ramp_with_spike(estimator: &mut FlowEstimator) -> Estimate {
         let mut estimate = Estimate {
-            weight_g: 0.0,
-            flow_g_per_s: 0.0,
+            weight: 0.0,
+            flow: 0.0,
         };
         for k in 0..15u64 {
             let weight = if k == 12 { 1000.0 } else { k as f32 };
-            estimate = estimator.update(weight, k * 100);
+            estimate = estimator.update(weight, ms(k * 100));
         }
         estimate
     }
@@ -220,14 +235,14 @@ mod tests {
     fn theil_sen_recovers_flow_from_a_clean_ramp() {
         let mut estimator = FlowEstimator::new(FlowAlgorithm::TheilSen);
         let estimate = feed_clean_ramp(&mut estimator, 15);
-        assert!((estimate.flow_g_per_s - 10.0).abs() < 0.01);
+        assert!((estimate.flow - 10.0).abs() < 0.01);
     }
 
     #[test]
     fn offset_median_recovers_flow_from_a_clean_ramp() {
         let mut estimator = FlowEstimator::new(FlowAlgorithm::OffsetMedian);
         let estimate = feed_clean_ramp(&mut estimator, 15);
-        assert!((estimate.flow_g_per_s - 10.0).abs() < 0.01);
+        assert!((estimate.flow - 10.0).abs() < 0.01);
     }
 
     #[test]
@@ -236,15 +251,15 @@ mod tests {
         let mut offset_median = FlowEstimator::new(FlowAlgorithm::OffsetMedian);
         let a = feed_clean_ramp(&mut theil_sen, 15);
         let b = feed_clean_ramp(&mut offset_median, 15);
-        assert!((a.flow_g_per_s - b.flow_g_per_s).abs() < 0.01);
+        assert!((a.flow - b.flow).abs() < 0.01);
     }
 
     #[test]
     fn offset_median_reports_no_flow_until_the_window_fills() {
         let mut estimator = FlowEstimator::new(FlowAlgorithm::OffsetMedian);
-        assert_eq!(feed_clean_ramp(&mut estimator, 14).flow_g_per_s, 0.0);
+        assert_eq!(feed_clean_ramp(&mut estimator, 14).flow, 0.0);
         // The 15th sample completes the shift register.
-        assert!(estimator.update(14.0, 1400).flow_g_per_s > 0.0);
+        assert!(estimator.update(14.0, ms(1400)).flow > 0.0);
     }
 
     #[test]
@@ -252,15 +267,15 @@ mod tests {
         let mut estimator = FlowEstimator::new(FlowAlgorithm::TheilSen);
         // Just three samples — Theil–Sen needs only two.
         let estimate = feed_clean_ramp(&mut estimator, 3);
-        assert!((estimate.flow_g_per_s - 10.0).abs() < 0.01);
+        assert!((estimate.flow - 10.0).abs() < 0.01);
     }
 
     #[test]
     fn theil_sen_is_steadier_than_offset_median_under_a_spike() {
         let theil_sen =
-            feed_ramp_with_spike(&mut FlowEstimator::new(FlowAlgorithm::TheilSen)).flow_g_per_s;
+            feed_ramp_with_spike(&mut FlowEstimator::new(FlowAlgorithm::TheilSen)).flow;
         let offset_median =
-            feed_ramp_with_spike(&mut FlowEstimator::new(FlowAlgorithm::OffsetMedian)).flow_g_per_s;
+            feed_ramp_with_spike(&mut FlowEstimator::new(FlowAlgorithm::OffsetMedian)).flow;
         // Theil–Sen holds the true 10 g/s; the spike sits in the offset-median
         // recent window and shifts its result.
         assert!((theil_sen - 10.0).abs() < 1.0, "theil-sen flow {theil_sen}");
@@ -276,6 +291,6 @@ mod tests {
         feed_clean_ramp(&mut estimator, 15);
         estimator.reset();
         // Fresh again: the first reading after reset yields no flow.
-        assert_eq!(estimator.update(5.0, 0).flow_g_per_s, 0.0);
+        assert_eq!(estimator.update(5.0, ms(0)).flow, 0.0);
     }
 }
