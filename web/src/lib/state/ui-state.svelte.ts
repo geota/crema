@@ -60,11 +60,12 @@ export const MAX_TELEMETRY_SAMPLES = 2000;
  * One decoded telemetry sample, the structured form the dashboard renders.
  * `Event::Telemetry` carries the DE1 channels; the scale weight is folded in
  * from the most recent `ScaleReading` so a sample is a complete 4-channel
- * snapshot at a point in time.
+ * snapshot at a point in time. Numeric fields keep their flat-number shape —
+ * the units (`ms`, `bar`, `mL/s`, `°C`, `g`) live in the doc-comments.
  */
 export interface TelemetrySample {
 	/** Milliseconds since the shot began; `0` when no shot is in progress. */
-	readonly elapsedMs: number;
+	readonly elapsed: number;
 	/** Group pressure, bar. */
 	readonly pressure: number;
 	/** Group flow, mL/s. */
@@ -76,7 +77,7 @@ export interface TelemetrySample {
 	/** Steam-heater temperature, °C. */
 	readonly steamTemp: number;
 	/** Latest scale weight at this instant, grams, or `null` if no scale. */
-	readonly weightG: number | null;
+	readonly weight: number | null;
 	/**
 	 * Puck resistance — `pressure / flow²`, the de1app/DSx derived "resistance"
 	 * metric (R4). `null` when flow is too low to divide by meaningfully, so a
@@ -94,7 +95,7 @@ export interface TelemetrySample {
  */
 export interface CompletedShot {
 	/** Authoritative shot duration, ms (the `Event::ShotCompleted` duration). */
-	readonly durationMs: number;
+	readonly duration: number;
 	/** Final yield — scale weight at shot end, grams, or `null` if no scale. */
 	readonly yieldG: number | null;
 	/** Peak group pressure reached during the shot, bar. */
@@ -121,11 +122,11 @@ export interface UiSnapshot {
 	/** Latest telemetry sample, pre-formatted. */
 	readonly telemetry: string | null;
 	/** Latest scale weight in grams, or null before the first reading. */
-	readonly scaleWeightG: number | null;
+	readonly scaleWeight: number | null;
 	/** Latest scale-reported native mass-flow rate in g/s, or null. */
-	readonly scaleFlowGPerS: number | null;
+	readonly scaleFlow: number | null;
 	/** Latest scale-reported built-in-timer reading in ms, or null. */
-	readonly scaleTimerMs: number | null;
+	readonly scaleTimer: number | null;
 	/** What the connected scale can do, or null before a scale is connected. */
 	readonly scaleCapabilities: ScaleCapabilities | null;
 	/** The scale beeper-volume step the UI currently shows (two-way). */
@@ -133,7 +134,7 @@ export interface UiSnapshot {
 	/** The scale auto-standby timeout (minutes) the UI shows (two-way). */
 	readonly scaleStandbyMinutes: number;
 	/** The scale's battery charge percentage, or null. Read-only. */
-	readonly scaleBatteryPercent: number | null;
+	readonly scaleBattery: number | null;
 	/** The connected scale's BLE advertised name, or null. Read-only. */
 	readonly scaleName: string | null;
 	/** The connected scale's firmware version `"M.m.p"`, or null. Read-only. */
@@ -156,13 +157,13 @@ export interface UiSnapshot {
 	 * or `null` before the first `WaterLevel` notification. Convert to a tank
 	 * volume for display with {@link waterTankMl}.
 	 */
-	readonly waterLevelMm: number | null;
+	readonly waterLevel: number | null;
 	/**
 	 * The DE1 water-tank refill threshold in mm — a refill is wanted at or
 	 * below it. `null` before the first `WaterLevel` notification. Drives the
 	 * "refill soon" cue (E2).
 	 */
-	readonly waterRefillThresholdMm: number | null;
+	readonly waterRefillThreshold: number | null;
 
 	// ---- Structured telemetry (Task 3 — the brew dashboard) --------------
 	//
@@ -180,8 +181,8 @@ export interface UiSnapshot {
 	readonly shotTelemetry: readonly TelemetrySample[];
 	/** Whether a shot is currently in progress (between Started and Completed). */
 	readonly shotInProgress: boolean;
-	/** Elapsed time of the current/last shot, ms — `latestTelemetry.elapsedMs`. */
-	readonly shotElapsedMs: number;
+	/** Elapsed time of the current/last shot, ms — `latestTelemetry.elapsed`. */
+	readonly shotElapsed: number;
 	/**
 	 * Zero-based index of the profile frame the DE1 is currently executing,
 	 * from `Event::ShotFrameChanged`. Reset to `0` on `ShotStarted`; drives the
@@ -259,17 +260,17 @@ export interface UiSnapshot {
 	/**
 	 * Timestamp (ms, the event clock) the most recent shot completed, or
 	 * `null` if no shot has finished this session. "Time since last shot" is
-	 * `now - lastShotCompletedAtMs`.
+	 * `now - lastShotCompletedAt`.
 	 */
-	readonly lastShotCompletedAtMs: number | null;
+	readonly lastShotCompletedAt: number | null;
 	/** Duration of the most recent completed shot, ms, or `null`. */
-	readonly lastShotDurationMs: number | null;
+	readonly lastShotDuration: number | null;
 	/**
 	 * Timestamp (ms, the event clock) the machine last entered a resting state
 	 * (Idle / Sleep), or `null` before the first such transition. Idle-elapsed
-	 * is `now - idleSinceMs`.
+	 * is `now - idleSince`.
 	 */
-	readonly idleSinceMs: number | null;
+	readonly idleSince: number | null;
 
 	// ---- Capture replay (developer tool) ---------------------------------
 	//
@@ -339,13 +340,13 @@ export const INITIAL_SNAPSHOT: UiSnapshot = {
 	machineState: null,
 	shotPhase: null,
 	telemetry: null,
-	scaleWeightG: null,
-	scaleFlowGPerS: null,
-	scaleTimerMs: null,
+	scaleWeight: null,
+	scaleFlow: null,
+	scaleTimer: null,
 	scaleCapabilities: null,
 	scaleVolume: DEFAULT_SCALE_VOLUME,
 	scaleStandbyMinutes: DEFAULT_SCALE_STANDBY_MINUTES,
-	scaleBatteryPercent: null,
+	scaleBattery: null,
 	scaleName: null,
 	scaleFirmware: null,
 	scaleSerial: null,
@@ -354,12 +355,12 @@ export const INITIAL_SNAPSHOT: UiSnapshot = {
 	scaleAntiMistouch: false,
 	scaleActiveMode: null,
 	eventLog: [],
-	waterLevelMm: null,
-	waterRefillThresholdMm: null,
+	waterLevel: null,
+	waterRefillThreshold: null,
 	latestTelemetry: null,
 	shotTelemetry: [],
 	shotInProgress: false,
-	shotElapsedMs: 0,
+	shotElapsed: 0,
 	shotFrame: 0,
 	completedShot: null,
 	activeProfileName: null,
@@ -368,9 +369,9 @@ export const INITIAL_SNAPSHOT: UiSnapshot = {
 	de1MachineInfo: {},
 	de1Calibration: EMPTY_DE1_CALIBRATION,
 	machineError: null,
-	lastShotCompletedAtMs: null,
-	lastShotDurationMs: null,
-	idleSinceMs: null,
+	lastShotCompletedAt: null,
+	lastShotDuration: null,
+	idleSince: null,
 	replay: null
 };
 
@@ -390,7 +391,7 @@ const TANK_MM_TO_ML: readonly number[] = [
 ];
 
 /**
- * Convert a DE1 tank-level reading (mm, see {@link UiSnapshot.waterLevelMm})
+ * Convert a DE1 tank-level reading (mm, see {@link UiSnapshot.waterLevel})
  * to the tank's water volume in mL via {@link TANK_MM_TO_ML}. Returns `null`
  * for a missing reading; the depth is clamped to the table's range — a depth
  * past the top reads as the 2058 mL full ceiling, a negative depth (a sensor
@@ -535,14 +536,14 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 			// R6 — stamp when the machine first entered a resting state, so an
 			// idle-elapsed readout can count up from it. Only re-stamp on the
 			// transition *into* rest, not on every notification while resting.
-			const enteringRest = resting && snapshot.idleSinceMs === null;
+			const enteringRest = resting && snapshot.idleSince === null;
 			return {
 				...snapshot,
 				machineState,
 				machineError,
 				...(resting ? { shotInProgress: false } : null),
-				...(enteringRest ? { idleSinceMs: performance.now() } : null),
-				...(resting ? null : { idleSinceMs: null }),
+				...(enteringRest ? { idleSince: performance.now() } : null),
+				...(resting ? null : { idleSince: null }),
 				eventLog: appendLog(snapshot.eventLog, `MachineState -> ${machineState}`)
 			};
 		}
@@ -553,7 +554,7 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				...snapshot,
 				shotTelemetry: [],
 				shotInProgress: true,
-				shotElapsedMs: 0,
+				shotElapsed: 0,
 				shotFrame: 0,
 				completedShot: null,
 				eventLog: appendLog(snapshot.eventLog, 'Shot started')
@@ -576,18 +577,18 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 			const t = event.content;
 			// Telemetry is high-rate — update the readout, never log it.
 			const line =
-				`t=${Math.round(t.elapsed_ms)}ms  P=${t.group_pressure.toFixed(1)}bar  ` +
+				`t=${Math.round(t.elapsed)}ms  P=${t.group_pressure.toFixed(1)}bar  ` +
 				`flow=${t.group_flow.toFixed(1)}mL/s  head=${t.head_temp.toFixed(1)}°C`;
 			// Build the structured sample, folding in the latest scale weight so
 			// every sample is a complete 4-channel snapshot.
 			const sample: TelemetrySample = {
-				elapsedMs: t.elapsed_ms,
+				elapsed: t.elapsed,
 				pressure: t.group_pressure,
 				flow: t.group_flow,
 				temp: t.head_temp,
 				mixTemp: t.mix_temp,
 				steamTemp: t.steam_temp,
-				weightG: snapshot.scaleWeightG,
+				weight: snapshot.scaleWeight,
 				resistance: puckResistance(t.group_pressure, t.group_flow)
 			};
 			// Append to the series; only buffer while a shot is in progress so
@@ -600,7 +601,7 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				telemetry: line,
 				latestTelemetry: sample,
 				shotTelemetry: series,
-				shotElapsedMs: t.elapsed_ms
+				shotElapsed: t.elapsed
 			};
 		}
 		case 'ScaleReading': {
@@ -610,12 +611,12 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 			// which case the field keeps its last value. High-rate: not logged.
 			return {
 				...snapshot,
-				scaleWeightG: r.weight_g,
-				scaleFlowGPerS: r.device_flow_g_per_s ?? null,
-				scaleTimerMs: r.device_timer_ms ?? null,
+				scaleWeight: r.weight,
+				scaleFlow: r.device_flow ?? null,
+				scaleTimer: r.device_timer ?? null,
 				scaleVolume: r.device_volume ?? snapshot.scaleVolume,
-				scaleStandbyMinutes: r.device_standby_minutes ?? snapshot.scaleStandbyMinutes,
-				scaleBatteryPercent: r.device_battery_percent ?? snapshot.scaleBatteryPercent,
+				scaleStandbyMinutes: r.device_standby ?? snapshot.scaleStandbyMinutes,
+				scaleBattery: r.device_battery ?? snapshot.scaleBattery,
 				scaleFlowSmoothing: r.device_flow_smoothing ?? snapshot.scaleFlowSmoothing,
 				scaleAutoStop: r.device_auto_stop ?? snapshot.scaleAutoStop
 			};
@@ -623,11 +624,11 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 		case 'WaterLevel':
 			return {
 				...snapshot,
-				waterLevelMm: event.content.level_mm,
-				waterRefillThresholdMm: event.content.refill_threshold_mm,
+				waterLevel: event.content.level,
+				waterRefillThreshold: event.content.refill_threshold,
 				eventLog: appendLog(
 					snapshot.eventLog,
-					`Water level: ${Math.round(event.content.level_mm)}mm`
+					`Water level: ${Math.round(event.content.level)}mm`
 				)
 			};
 		case 'StopTriggered':
@@ -648,22 +649,22 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 			for (const s of snapshot.shotTelemetry) {
 				if (s.pressure > peakPressure) peakPressure = s.pressure;
 				if (s.temp > peakTemp) peakTemp = s.temp;
-				if (s.weightG != null) yieldG = s.weightG;
+				if (s.weight != null) yieldG = s.weight;
 			}
 			return {
 				...snapshot,
 				shotInProgress: false,
 				completedShot: {
-					durationMs: event.content.duration_ms,
+					duration: event.content.duration,
 					yieldG,
 					peakPressure,
 					peakTemp
 				},
-				lastShotCompletedAtMs: performance.now(),
-				lastShotDurationMs: event.content.duration_ms,
+				lastShotCompletedAt: performance.now(),
+				lastShotDuration: event.content.duration,
 				eventLog: appendLog(
 					snapshot.eventLog,
-					`Shot completed: ${event.content.duration_ms}ms, ` +
+					`Shot completed: ${event.content.duration}ms, ` +
 						`${event.content.sample_count} samples`
 				)
 			};
@@ -694,7 +695,7 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				...snapshot,
 				eventLog: appendLog(
 					snapshot.eventLog,
-					`Steam session completed: ${event.content.duration_ms}ms`
+					`Steam session completed: ${event.content.duration}ms`
 				)
 			};
 		case 'SteamClogSuspected':
@@ -713,7 +714,7 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 		case 'ScaleStale':
 			return {
 				...snapshot,
-				scaleWeightG: null,
+				scaleWeight: null,
 				eventLog: appendLog(snapshot.eventLog, 'Scale stale')
 			};
 		case 'ScaleConfig': {

@@ -27,7 +27,7 @@
 	const prefs = $derived(settings.current);
 
 	/** Whole-second shot time. */
-	const time = $derived(`${Math.round(shot.durationMs / 1000)}`);
+	const time = $derived(`${Math.round(shot.duration / 1000)}`);
 	/** Final yield, in the chosen weight unit. */
 	const yieldM = $derived(convertWeight(shot.yieldG, prefs.weightUnit));
 	/** Yield-to-dose ratio `1:x`, or `1:—` when there is no yield. */

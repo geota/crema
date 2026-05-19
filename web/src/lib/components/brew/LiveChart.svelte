@@ -73,9 +73,9 @@
 		let lastMs = -Infinity;
 		for (let i = 0; i < samples.length; i++) {
 			const s = samples[i];
-			if (i === samples.length - 1 || s.elapsedMs - lastMs >= minGapMs) {
+			if (i === samples.length - 1 || s.elapsed - lastMs >= minGapMs) {
 				out.push(s);
-				lastMs = s.elapsedMs;
+				lastMs = s.elapsed;
 			}
 		}
 		return out;
@@ -167,12 +167,12 @@
 		const goal: (number | null)[] = [];
 		for (let i = 0; i < samples.length; i++) {
 			const s = samples[i];
-			const t = s.elapsedMs / 1000;
+			const t = s.elapsed / 1000;
 			xs.push(t);
 			pressure.push(pressureAt(samples, i));
 			flow.push(showFlowCurve ? (s.flow ?? null) : null);
 			temp.push(s.temp == null ? null : s.temp / 10);
-			weight.push(s.weightG == null ? null : s.weightG / 10);
+			weight.push(s.weight == null ? null : s.weight / 10);
 			goal.push(goalAt(t));
 		}
 		return [xs, pressure, flow, temp, weight, goal];

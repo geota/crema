@@ -48,7 +48,7 @@ const CLEARED_DE1_READOUT = {
 	latestTelemetry: null,
 	shotTelemetry: [],
 	shotInProgress: false,
-	shotElapsedMs: 0,
+	shotElapsed: 0,
 	completedShot: null,
 	de1Diagnostics: EMPTY_DE1_DIAGNOSTICS,
 	// Read-paths added on the wire-read-paths branch — also reset, so a
@@ -58,9 +58,9 @@ const CLEARED_DE1_READOUT = {
 	de1MachineInfo: {},
 	de1Calibration: EMPTY_DE1_CALIBRATION,
 	machineError: null,
-	idleSinceMs: null,
-	lastShotCompletedAtMs: null,
-	lastShotDurationMs: null
+	idleSince: null,
+	lastShotCompletedAt: null,
+	lastShotDuration: null
 } as const satisfies Partial<UiSnapshot>;
 
 /**
@@ -237,7 +237,7 @@ export class CremaApp {
 					? profiles.get(profiles.activeId)
 					: undefined;
 				const record = getHistoryStore().record({
-					durationMs: event.content.duration_ms,
+					durationMs: event.content.duration,
 					profileName: snapshot.activeProfileName,
 					doseG: activeProfile?.dose ?? null,
 					series: snapshot.shotTelemetry,
@@ -353,9 +353,9 @@ export class CremaApp {
 	async disconnectScale(): Promise<void> {
 		await this.scale.disconnect();
 		this.state.patch({
-			scaleWeightG: null,
-			scaleFlowGPerS: null,
-			scaleTimerMs: null,
+			scaleWeight: null,
+			scaleFlow: null,
+			scaleTimer: null,
 			scaleCapabilities: null,
 			scaleVolume: DEFAULT_SCALE_VOLUME,
 			scaleStandbyMinutes: DEFAULT_SCALE_STANDBY_MINUTES,
@@ -363,7 +363,7 @@ export class CremaApp {
 			scaleAutoStop: null,
 			scaleAntiMistouch: false,
 			scaleActiveMode: null,
-			scaleBatteryPercent: null,
+			scaleBattery: null,
 			scaleName: null,
 			scaleFirmware: null,
 			scaleSerial: null
