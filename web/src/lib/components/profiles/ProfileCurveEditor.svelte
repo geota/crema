@@ -59,6 +59,12 @@
 		return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || '#888';
 	}
 
+	/** The temperature axis range, °C — the per-segment editable bounds. */
+	const TEMP_MIN = 80;
+	const TEMP_MAX = 105;
+	/** A stepped path builder — temperature holds across a segment, then jumps. */
+	const tempStepPath = uPlot.paths.stepped?.({ align: 1 });
+
 	/** The total shot time — the right edge of the x-axis. */
 	const total = $derived(totalTime(segments));
 
@@ -74,7 +80,21 @@
 	function toData(segs: readonly ProfileSegment[]): uPlot.AlignedData {
 		const pressure = sampleCurve(segs);
 		const flow = sampleCurve(segs, dampFlow);
-		return [pressure.time, pressure.value, flow.value];
+		// Temperature is a per-segment hold — the DE1 frame temperature steps
+		// at each boundary — so it is the containing segment's temp at every
+		// sample time, drawn with a stepped path on its own right-hand axis.
+		const temp = pressure.time.map((x) => tempAt(segs, x));
+		return [pressure.time, pressure.value, flow.value, temp];
+	}
+
+	/** The target temperature of the segment a given elapsed time falls in. */
+	function tempAt(segs: readonly ProfileSegment[], x: number): number {
+		let t = 0;
+		for (const s of segs) {
+			if (x < t + s.time) return s.temperatureC;
+			t += s.time;
+		}
+		return segs[segs.length - 1]?.temperatureC ?? 93;
 	}
 
 	/** Round-numbered second marks — every 5 s, or 10 s on a long shot. */
@@ -161,7 +181,10 @@
 					range: (_u, _min, dataMax) => [0, Math.max(1, Number.isFinite(dataMax) ? dataMax : 1)]
 				},
 				// A fixed 0–12 scale — the design's grid max, matching `Y_MAX`.
-				y: { range: () => [0, Y_MAX] }
+				y: { range: () => [0, Y_MAX] },
+				// Temperature on its own scale + right axis, so it isn't
+				// squeezed into the 0–12 bar / flow range.
+				temp: { range: () => [TEMP_MIN, TEMP_MAX] }
 			},
 			axes: [
 				{
@@ -184,6 +207,18 @@
 					size: 34,
 					splits: () => [0, 3, 6, 9, 12],
 					values: (_u, splits) => splits.map((v) => `${v}`)
+				},
+				{
+					// The temperature axis — right-hand side, °C.
+					scale: 'temp',
+					side: 1,
+					stroke: labelColor,
+					grid: { show: false },
+					ticks: { show: false },
+					font,
+					size: 38,
+					splits: () => [80, 85, 90, 95, 100, 105],
+					values: (_u, splits) => splits.map((v) => `${v}°`)
 				}
 			],
 			series: [
@@ -201,6 +236,14 @@
 					stroke: () => cssVar('--tel-flow'),
 					width: 1.6,
 					dash: [3, 3],
+					points: { show: false }
+				},
+				{
+					// The per-segment temperature — a stepped line on the °C axis.
+					scale: 'temp',
+					stroke: () => cssVar('--tel-temp'),
+					width: 2,
+					paths: tempStepPath,
 					points: { show: false }
 				}
 			],
@@ -386,6 +429,7 @@
 		<div class="pe-curve-legend">
 			<span><i class="pe-leg-dot" style="background:var(--tel-pressure)"></i> Pressure</span>
 			<span><i class="pe-leg-dot" style="background:var(--tel-flow)"></i> Flow (est.)</span>
+			<span><i class="pe-leg-dot" style="background:var(--tel-temp)"></i> Temp</span>
 		</div>
 	</div>
 	<!-- The plot wrap is the positioning context for the handle overlay; the
