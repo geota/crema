@@ -20,6 +20,7 @@
  */
 
 import type { CremaCore, NotificationSource } from '$lib/core';
+import { describeError } from '$lib/utils/error';
 import { De1Uuids } from './de1-uuids';
 import { BleDevice, requestDevice, type ConnState } from './transport';
 
@@ -108,13 +109,10 @@ export class De1Manager {
 	/**
 	 * Per-source notification tallies since the current connect began. Kept
 	 * separately from the published {@link diagnostics} so the manager can
-	 * report a per-characteristic breakdown and a running total.
+	 * report a per-characteristic breakdown and a running total. Reset to
+	 * {@link freshCounts} on every connect / disconnect.
 	 */
-	private notificationCounts: Record<De1NotificationSource, number> = {
-		De1State: 0,
-		De1ShotSample: 0,
-		De1WaterLevels: 0
-	};
+	private notificationCounts: Record<De1NotificationSource, number> = freshCounts();
 
 	constructor(
 		private readonly core: CremaCore,
@@ -150,7 +148,7 @@ export class De1Manager {
 		this.device = null;
 		// Start each connect from a clean diagnostics slate.
 		this.patchDiagnostics(EMPTY_DE1_DIAGNOSTICS);
-		this.notificationCounts = { De1State: 0, De1ShotSample: 0, De1WaterLevels: 0 };
+		this.notificationCounts = freshCounts();
 		// `step` names the diagnostics stage in flight, so a thrown error can be
 		// attributed precisely — "DE1 service A000" vs. a specific characteristic
 		// — which is how the user learns a non-DE1 device was selected.
@@ -212,10 +210,10 @@ export class De1Manager {
 				// Count the notification per source and stamp the arrival — live
 				// proof the device is streaming decodable DE1 data.
 				this.notificationCounts[source] += 1;
-				const total =
-					this.notificationCounts.De1State +
-					this.notificationCounts.De1ShotSample +
-					this.notificationCounts.De1WaterLevels;
+				const total = Object.values(this.notificationCounts).reduce(
+					(sum, n) => sum + n,
+					0
+				);
 				this.patchDiagnostics({
 					notificationCount: total,
 					lastNotificationAtMs: notification.atMs
@@ -228,7 +226,7 @@ export class De1Manager {
 						// parse error — would otherwise silently kill the
 						// notification pipeline. Surface it instead.
 						this.callbacks.onStatus(
-							`DE1 notification processing failed: ${describe(error)}`
+							`DE1 notification processing failed: ${describeError(error)}`
 						);
 					});
 			});
@@ -276,7 +274,7 @@ export class De1Manager {
 				this.callbacks.onStatus('DE1 firmware version read ✓');
 			} catch (versionError) {
 				this.callbacks.onStatus(
-					`DE1 version read skipped: ${describe(versionError)}`
+					`DE1 version read skipped: ${describeError(versionError)}`
 				);
 			}
 			this.callbacks.onState('ready');
@@ -295,7 +293,7 @@ export class De1Manager {
 			// Name the failed step — a service / characteristic failure means the
 			// selected device is almost certainly NOT a DE1.
 			this.callbacks.onStatus(
-				`DE1 connection failed at "${step}": ${describe(error)}`
+				`DE1 connection failed at "${step}": ${describeError(error)}`
 			);
 		}
 	}
@@ -308,7 +306,7 @@ export class De1Manager {
 		// Clear the diagnostics — the device is gone, so its name / id / GATT
 		// verification / notification tally no longer hold.
 		this.patchDiagnostics(EMPTY_DE1_DIAGNOSTICS);
-		this.notificationCounts = { De1State: 0, De1ShotSample: 0, De1WaterLevels: 0 };
+		this.notificationCounts = freshCounts();
 		this.callbacks.onState('disconnected');
 		this.callbacks.onStatus('DE1 disconnected');
 	}
@@ -331,7 +329,11 @@ function sourceFor(characteristicUuid: string): De1NotificationSource | null {
 	}
 }
 
-/** Best-effort human-readable message from an unknown thrown value. */
-function describe(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
+/**
+ * A fresh per-source notification tally — every {@link De1NotificationSource}
+ * at zero. The one place the zeroed shape is spelled out, so a connect, a
+ * disconnect and the field initialiser cannot drift apart.
+ */
+function freshCounts(): Record<De1NotificationSource, number> {
+	return { De1State: 0, De1ShotSample: 0, De1WaterLevels: 0 };
 }

@@ -16,13 +16,73 @@
  */
 
 import { loadCore, type Command, type CoreOutput, type CremaCore } from '$lib/core';
+import { MachineState } from '$lib/core/crema-core';
 import { De1Manager, EMPTY_DE1_DIAGNOSTICS, ScaleManager } from '$lib/ble';
 import { getBeanStore } from '$lib/bean';
 import { getHistoryStore } from '$lib/history';
 import { getProfileStore } from '$lib/profiles';
 import { getMaintenanceStore } from '$lib/maintenance';
 import { parseCaptureFile, replayEvents, ReplayAbortedError } from '$lib/replay';
-import { CremaUiState, DEFAULT_SCALE_STANDBY_MINUTES, DEFAULT_SCALE_VOLUME } from './ui-state.svelte';
+import { describeError } from '$lib/utils/error';
+import {
+	CremaUiState,
+	DEFAULT_SCALE_STANDBY_MINUTES,
+	DEFAULT_SCALE_VOLUME,
+	EMPTY_DE1_CALIBRATION,
+	type UiSnapshot
+} from './ui-state.svelte';
+
+/**
+ * The "cleared DE1 readout" snapshot patch — every DE1-derived field returned
+ * to its pre-connect blank. Applied on connect, on disconnect and at the start
+ * of a capture replay, so a stale machine readout never bleeds across a
+ * reconnect or into a replay. One constant, so the three call sites cannot
+ * drift apart (and so a field added to the read-paths is cleared everywhere
+ * the moment it is added here).
+ */
+const CLEARED_DE1_READOUT = {
+	machineState: null,
+	shotPhase: null,
+	telemetry: null,
+	latestTelemetry: null,
+	shotTelemetry: [],
+	shotInProgress: false,
+	shotElapsedMs: 0,
+	de1Diagnostics: EMPTY_DE1_DIAGNOSTICS,
+	// Read-paths added on the wire-read-paths branch — also reset, so a
+	// reconnect does not show the previous machine's firmware / registers /
+	// calibration / error, or a stale idle / last-shot timer.
+	de1Firmware: null,
+	de1MachineInfo: {},
+	de1Calibration: EMPTY_DE1_CALIBRATION,
+	machineError: null,
+	idleSinceMs: null,
+	lastShotCompletedAtMs: null,
+	lastShotDurationMs: null
+} as const satisfies Partial<UiSnapshot>;
+
+/**
+ * The DE1 streams telemetry at ~25 Hz — a ~40 ms gap between samples. The
+ * water-accumulation integral caps Δt here, at 50× the nominal gap: a longer
+ * gap is a stall, a reconnect or a paused replay, not real dispensing, so it
+ * must not be integrated as if water had flowed the whole time. Generous
+ * enough to ride out a transient hiccup, tight enough to reject a real stall.
+ */
+const MAX_TELEMETRY_GAP_S = 2;
+
+/**
+ * The DE1 top-level states whose group flow counts toward the water-filter /
+ * descale counters: an espresso shot and the two hot-water modes (hot water +
+ * its rinse). Steam draws no water through the group, and idle / sleep / cal
+ * states dispense nothing — the de1app likewise counts only espresso + hot
+ * water. The state is the prefix of `UiSnapshot.machineState` (`"<state> /
+ * <substate>"`).
+ */
+const WATER_COUNTING_STATES: ReadonlySet<string> = new Set([
+	MachineState.Espresso,
+	MachineState.HotWater,
+	MachineState.HotWaterRinse
+]);
 
 /** Options for {@link CremaApp.replayCapture}. */
 export interface ReplayCaptureOptions {
@@ -102,12 +162,13 @@ export class CremaApp {
 			if (event.type === 'Telemetry') {
 				// Water accumulation (E1): integrate the DE1's group flow over
 				// the wall-clock gap since the previous telemetry sample, the
-				// de1app's `volume += GroupFlow × Δt` approach. The gap is
-				// capped at 2 s — the DE1 streams telemetry at ~25 Hz, so a
-				// larger gap is a stall / reconnect, not real dispensing.
+				// de1app's `volume += GroupFlow × Δt` approach.
 				const now = performance.now();
-				if (this.lastTelemetryAtMs !== null) {
-					const deltaS = Math.min(2, (now - this.lastTelemetryAtMs) / 1000);
+				if (this.lastTelemetryAtMs !== null && this.countsTowardWater()) {
+					const deltaS = Math.min(
+						MAX_TELEMETRY_GAP_S,
+						(now - this.lastTelemetryAtMs) / 1000
+					);
 					getMaintenanceStore().accumulate(event.content.group_flow, deltaS);
 				}
 				this.lastTelemetryAtMs = now;
@@ -150,6 +211,22 @@ export class CremaApp {
 	}
 
 	/**
+	 * Whether the machine's current state is one whose group flow should feed
+	 * the water-accumulation counters — see {@link WATER_COUNTING_STATES}. Read
+	 * after the `Telemetry` event is folded, so `machineState` already reflects
+	 * the session this sample belongs to (a `MachineStateChanged` for the
+	 * session is folded before its telemetry). Gates out steam, where the DE1
+	 * still reports a small group flow that would otherwise overcount.
+	 */
+	private countsTowardWater(): boolean {
+		const machineState = this.state.current.machineState;
+		if (machineState === null) return false;
+		// `machineState` is `"<state> / <substate>"` — match the state prefix.
+		const state = machineState.split(' / ')[0];
+		return WATER_COUNTING_STATES.has(state);
+	}
+
+	/**
 	 * Run one core `Command`.
 	 *
 	 * `WriteScale` → write the bytes to the scale (manual tare, auto-tare, and
@@ -186,16 +263,7 @@ export class CremaApp {
 	 * lifecycle never erases the other device's history.
 	 */
 	async connectDe1(): Promise<void> {
-		this.state.patch({
-			machineState: null,
-			shotPhase: null,
-			telemetry: null,
-			latestTelemetry: null,
-			shotTelemetry: [],
-			shotInProgress: false,
-			shotElapsedMs: 0,
-			de1Diagnostics: EMPTY_DE1_DIAGNOSTICS
-		});
+		this.state.patch({ ...CLEARED_DE1_READOUT });
 		await this.de1.connect();
 	}
 
@@ -205,16 +273,7 @@ export class CremaApp {
 		// Drop the telemetry wall-clock anchor — the next connect must not
 		// integrate the (arbitrarily long) gap across the disconnect.
 		this.lastTelemetryAtMs = null;
-		this.state.patch({
-			machineState: null,
-			shotPhase: null,
-			telemetry: null,
-			latestTelemetry: null,
-			shotTelemetry: [],
-			shotInProgress: false,
-			shotElapsedMs: 0,
-			de1Diagnostics: EMPTY_DE1_DIAGNOSTICS
-		});
+		this.state.patch({ ...CLEARED_DE1_READOUT });
 	}
 
 	// ---- Scale actions ----------------------------------------------------
@@ -384,14 +443,11 @@ export class CremaApp {
 		// Start from a clean core session so the replayed shot is not blended
 		// with any prior (or live) session's state.
 		await this.core.reset();
+		// The replay also drops the telemetry wall-clock anchor — replayed
+		// timestamps must not integrate the gap since the last live sample.
+		this.lastTelemetryAtMs = null;
 		this.state.patch({
-			machineState: null,
-			shotPhase: null,
-			telemetry: null,
-			latestTelemetry: null,
-			shotTelemetry: [],
-			shotInProgress: false,
-			shotElapsedMs: 0,
+			...CLEARED_DE1_READOUT,
 			replay: {
 				phase: 'running',
 				fileName: file.name,
@@ -471,11 +527,6 @@ export class CremaApp {
 	cancelReplay(): void {
 		this.replayAbort?.abort();
 	}
-}
-
-/** Best-effort human-readable text for an unknown thrown value. */
-function describeError(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
 }
 
 /**
