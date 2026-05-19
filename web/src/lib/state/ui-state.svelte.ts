@@ -130,6 +130,12 @@ export interface UiSnapshot {
 	readonly shotInProgress: boolean;
 	/** Elapsed time of the current/last shot, ms — `latestTelemetry.elapsedMs`. */
 	readonly shotElapsedMs: number;
+	/**
+	 * Zero-based index of the profile frame the DE1 is currently executing,
+	 * from `Event::ShotFrameChanged`. Reset to `0` on `ShotStarted`; drives the
+	 * brew dashboard's phase indicator against the active profile's segments.
+	 */
+	readonly shotFrame: number;
 
 	// ---- Active profile (Task 3 — the Profiles library) ------------------
 	//
@@ -213,6 +219,7 @@ export const INITIAL_SNAPSHOT: UiSnapshot = {
 	shotTelemetry: [],
 	shotInProgress: false,
 	shotElapsedMs: 0,
+	shotFrame: 0,
 	activeProfileName: null,
 	de1Diagnostics: EMPTY_DE1_DIAGNOSTICS,
 	de1Firmware: null,
@@ -303,6 +310,7 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				shotTelemetry: [],
 				shotInProgress: true,
 				shotElapsedMs: 0,
+				shotFrame: 0,
 				eventLog: appendLog(snapshot.eventLog, 'Shot started')
 			};
 		case 'ShotPhaseChanged': {
@@ -316,6 +324,7 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 		case 'ShotFrameChanged':
 			return {
 				...snapshot,
+				shotFrame: event.content.frame,
 				eventLog: appendLog(snapshot.eventLog, `Shot frame -> ${event.content.frame}`)
 			};
 		case 'Telemetry': {

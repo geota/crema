@@ -74,9 +74,8 @@
 		return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 	});
 
-	// Grinder model is not carried by the bean model — a representative
-	// placeholder, kept static until the model grows a grinder field.
-	const grinder = 'Niche Zero';
+	/** The grinder this bag is dialled in on, from the bean model. */
+	const grinder = $derived(bean.grinder.trim());
 
 	/** The roast-pill quick-sets — each maps the bean to a 1..10 level. */
 	const roastOptions: Roast[] = ['light', 'medium', 'dark'];
@@ -131,6 +130,15 @@
 					value={bean.type}
 					placeholder="Coffee, e.g. Colombian Geisha"
 					oninput={(e) => beanStore.setType(e.currentTarget.value)}
+				/>
+			</label>
+			<label class="bean-field">
+				<span class="t-eyebrow">Grinder</span>
+				<input
+					class="bean-input"
+					value={bean.grinder}
+					placeholder="Grinder, e.g. Niche Zero"
+					oninput={(e) => beanStore.setGrinder(e.currentTarget.value)}
 				/>
 			</label>
 			<label class="bean-field">
@@ -194,7 +202,9 @@
 			</div>
 			<div class="crema-bean-cell">
 				<span class="t-eyebrow">Grind</span>
-				<span class="crema-bean-val">{grind.toFixed(1)} <em>{grinder}</em></span>
+				<span class="crema-bean-val"
+					>{grind.toFixed(1)}{#if grinder}&nbsp;<em>{grinder}</em>{/if}</span
+				>
 			</div>
 		</div>
 	</button>

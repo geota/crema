@@ -67,6 +67,11 @@ export class BeanStore {
 	setRoastLevel(roastLevel: number | null): void {
 		this.update({ roastLevel });
 	}
+
+	/** Update the grinder name (free text, empty to clear) and persist. */
+	setGrinder(grinder: string): void {
+		this.update({ grinder });
+	}
 }
 
 /** The process-wide singleton — one current bean shared by every route. */

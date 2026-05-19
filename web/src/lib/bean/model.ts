@@ -33,11 +33,17 @@ export interface Bean {
 	 * or `null` when not logged. See {@link roastBand} to classify it.
 	 */
 	roastLevel: number | null;
+	/**
+	 * The grinder this bag is dialled in on, e.g. `Niche Zero` — free text,
+	 * empty when not logged. Bean-scoped because a grind setting only means
+	 * something paired with the grinder it was measured on.
+	 */
+	grinder: string;
 }
 
 /** A fresh, empty current bean — the starting point before anything is logged. */
 export function blankBean(): Bean {
-	return { roaster: '', type: '', roastedOn: null, roastLevel: null };
+	return { roaster: '', type: '', roastedOn: null, roastLevel: null, grinder: '' };
 }
 
 /**
@@ -152,6 +158,9 @@ export function migrateBean(raw: unknown): Bean {
 	}
 
 	if (typeof obj.roastedOn === 'string') base.roastedOn = obj.roastedOn;
+
+	// `grinder` is new — accept it if present, else blank.
+	if (typeof obj.grinder === 'string') base.grinder = obj.grinder;
 
 	// `roastLevel` is now a 1..10 number; the old shape stored a band word.
 	const level = obj.roastLevel;
