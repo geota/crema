@@ -174,7 +174,7 @@
 	<!-- Target -->
 	<div class="pe-seg-cell">
 		<div class="pe-seg-cell-body">
-			<div class="pe-seg-label">Target</div>
+			<div class="pe-seg-label-row"><span class="pe-seg-label">Target</span></div>
 			<div class="pe-seg-cell-input">
 				<QStepper
 					value={seg.target}
@@ -191,7 +191,7 @@
 	<!-- Time -->
 	<div class="pe-seg-cell">
 		<div class="pe-seg-cell-body">
-			<div class="pe-seg-label">Time</div>
+			<div class="pe-seg-label-row"><span class="pe-seg-label">Time</span></div>
 			<div class="pe-seg-cell-input">
 				<QStepper
 					value={seg.time}
@@ -311,7 +311,7 @@
 			</div>
 		</div>
 		<div class="pe-seg-cell-body">
-			<div class="pe-seg-label">Tolerance</div>
+			<div class="pe-seg-label-row"><span class="pe-seg-label">Tolerance</span></div>
 			<div class="pe-seg-cell-input" class:is-off={!limiterOn}>
 				<QStepper
 					value={limiterView.range}
@@ -346,12 +346,16 @@
 		   width; the Max box is two of them. The row is wide — it scrolls. */
 		grid-template-columns:
 			28px
-			minmax(132px, 0.6fr)
+			minmax(150px, 1fr)
 			repeat(5, 160px)
 			320px
 			32px;
 		gap: 12px;
-		align-items: start;
+		/* The cells are fixed-height; centre them in the row so the visible
+		   Max box and every invisible field box sit mid-row. The name column
+		   is the sole flexible track — it absorbs all slack, keeping the
+		   delete button pinned to the row's right edge. */
+		align-items: center;
 		min-width: 1420px;
 		padding: 10px 14px;
 		background: var(--espresso-900);
@@ -373,7 +377,6 @@
 		font-size: 11px;
 		color: rgba(244, 237, 224, 0.4);
 		text-align: center;
-		padding-top: 8px;
 	}
 	.pe-seg-name {
 		display: flex;
@@ -430,16 +433,15 @@
 		transition: opacity var(--dur-1) var(--ease);
 	}
 
-	/* Label rows — all a fixed height with vertically-centred content, so
-	   every label (plain, split-toggle or chip) lines up. */
-	.pe-seg-label,
-	.pe-seg-label-row,
-	.pe-seg-tog {
+	/* The uniform label row — every column has exactly one, a fixed-height
+	   flex box that vertically centres whatever sits inside it (a plain label
+	   span, a split-toggle, or a dotted chip). Because the container is
+	   identical everywhere, every input bar below starts on the same line —
+	   the dot in a toggle-chip is just centred content and shifts nothing. */
+	.pe-seg-label-row {
 		height: 18px;
 		display: flex;
 		align-items: center;
-	}
-	.pe-seg-label-row {
 		gap: 8px;
 	}
 	.pe-seg-label {
@@ -461,8 +463,12 @@
 		opacity: 0.4;
 	}
 
-	/* The toggle-label chip — a dotted enable switch doubling as the label. */
+	/* The toggle-label chip — a dotted enable switch doubling as the label.
+	   No height of its own: it is centred content inside `.pe-seg-label-row`,
+	   exactly like a plain label span, so it never shifts the input below. */
 	.pe-seg-tog {
+		display: inline-flex;
+		align-items: center;
 		gap: 5px;
 		background: transparent;
 		border: 0;
