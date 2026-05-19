@@ -12,6 +12,8 @@
 // is allowed module-wide here.
 #![allow(clippy::cast_precision_loss)]
 
+use std::time::Duration;
+
 use de1_protocol::{MachineState, ShotSample, StateInfo, SubState};
 use typeshare::typeshare;
 
@@ -186,19 +188,19 @@ impl ShotMonitor {
         self.shot.is_some()
     }
 
-    /// Feed a [`StateInfo`] notification. `now_ms` is a monotonic millisecond
-    /// timestamp supplied by the shell.
+    /// Feed a [`StateInfo`] notification. `now` is a monotonic timestamp
+    /// supplied by the shell (a [`Duration`] from a shell-chosen epoch).
     ///
     /// Returns the events this update produced — empty if nothing notable
     /// changed.
-    pub fn on_state_info(&mut self, info: StateInfo, now_ms: u64) -> Vec<ShotEvent> {
+    pub fn on_state_info(&mut self, info: StateInfo, now: Duration) -> Vec<ShotEvent> {
         let mut events = Vec::new();
         let in_espresso = info.state == MachineState::Espresso;
 
         // A shot starts when the machine enters the Espresso state.
         if in_espresso && self.shot.is_none() {
             let mut shot = ShotInProgress::default();
-            shot.timer.start(now_ms);
+            shot.timer.start(now);
             self.shot = Some(shot);
             events.push(ShotEvent::Started);
         }
@@ -211,8 +213,12 @@ impl ShotMonitor {
 
         // A shot ends when the machine leaves the Espresso state.
         if !in_espresso && let Some(mut shot) = self.shot.take() {
+            // `duration_ms` is the on-disk JSON shape: convert the elapsed
+            // `Duration` back to `u64` ms, saturating in the (impossible)
+            // case of a >584-million-year session.
+            let duration = shot.timer.finish(now).unwrap_or(Duration::ZERO);
             events.push(ShotEvent::Completed(ShotRecord {
-                duration_ms: shot.timer.finish(now_ms).unwrap_or(0),
+                duration_ms: u64::try_from(duration.as_millis()).unwrap_or(u64::MAX),
                 samples: shot.samples,
             }));
         }
@@ -223,7 +229,7 @@ impl ShotMonitor {
     /// while a shot is in progress.
     ///
     /// Returns the events this sample produced — empty if nothing notable.
-    pub fn on_sample(&mut self, sample: &ShotSample, now_ms: u64) -> Vec<ShotEvent> {
+    pub fn on_sample(&mut self, sample: &ShotSample, now: Duration) -> Vec<ShotEvent> {
         let mut events = Vec::new();
         if let Some(shot) = &mut self.shot {
             if shot.last_frame != Some(sample.frame_number) {
@@ -233,8 +239,12 @@ impl ShotMonitor {
             // Drop samples past the cap so an over-long stream cannot grow the
             // heap without bound; see [`MAX_SHOT_SAMPLES`].
             if shot.samples.len() < MAX_SHOT_SAMPLES {
+                // `elapsed_ms` is part of the persisted JSON schema — convert
+                // the `Duration` back to `u64` ms for the stored sample.
+                let elapsed_ms = u64::try_from(shot.timer.elapsed(now).as_millis())
+                    .unwrap_or(u64::MAX);
                 shot.samples.push(TimedSample {
-                    elapsed_ms: shot.timer.elapsed_ms(now_ms),
+                    elapsed_ms,
                     sample: sample.clone(),
                 });
             }
@@ -246,6 +256,12 @@ impl ShotMonitor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Helper: a `Duration` of `ms` milliseconds — the unit every test below
+    /// thinks in.
+    fn ms(ms: u64) -> Duration {
+        Duration::from_millis(ms)
+    }
 
     fn state(state: MachineState, substate: SubState) -> StateInfo {
         StateInfo { state, substate }
@@ -302,7 +318,7 @@ mod tests {
     #[test]
     fn entering_espresso_starts_a_shot() {
         let mut monitor = ShotMonitor::new();
-        let events = monitor.on_state_info(state(MachineState::Espresso, SubState::Heating), 1000);
+        let events = monitor.on_state_info(state(MachineState::Espresso, SubState::Heating), ms(1000));
         assert!(events.contains(&ShotEvent::Started));
         assert!(monitor.is_shot_in_progress());
         assert_eq!(monitor.phase(), ShotPhase::Heating);
@@ -311,15 +327,15 @@ mod tests {
     #[test]
     fn phase_transitions_are_reported() {
         let mut monitor = ShotMonitor::new();
-        monitor.on_state_info(state(MachineState::Espresso, SubState::Preinfusion), 1000);
-        let events = monitor.on_state_info(state(MachineState::Espresso, SubState::Pouring), 2000);
+        monitor.on_state_info(state(MachineState::Espresso, SubState::Preinfusion), ms(1000));
+        let events = monitor.on_state_info(state(MachineState::Espresso, SubState::Pouring), ms(2000));
         assert_eq!(events, vec![ShotEvent::PhaseChanged(ShotPhase::Pouring)]);
     }
 
     #[test]
     fn samples_are_not_recorded_before_a_shot() {
         let mut monitor = ShotMonitor::new();
-        let events = monitor.on_sample(&sample(0), 500);
+        let events = monitor.on_sample(&sample(0), ms(500));
         assert!(events.is_empty());
         assert!(!monitor.is_shot_in_progress());
     }
@@ -327,19 +343,19 @@ mod tests {
     #[test]
     fn a_new_frame_number_reports_a_frame_change() {
         let mut monitor = ShotMonitor::new();
-        monitor.on_state_info(state(MachineState::Espresso, SubState::Pouring), 1000);
-        monitor.on_sample(&sample(0), 1100);
-        let events = monitor.on_sample(&sample(1), 1200);
+        monitor.on_state_info(state(MachineState::Espresso, SubState::Pouring), ms(1000));
+        monitor.on_sample(&sample(0), ms(1100));
+        let events = monitor.on_sample(&sample(1), ms(1200));
         assert_eq!(events, vec![ShotEvent::FrameChanged(1)]);
     }
 
     #[test]
     fn a_full_shot_yields_a_record_with_samples_and_duration() {
         let mut monitor = ShotMonitor::new();
-        monitor.on_state_info(state(MachineState::Espresso, SubState::Preinfusion), 1000);
-        monitor.on_sample(&sample(0), 1200);
-        monitor.on_sample(&sample(0), 3000);
-        let done = monitor.on_state_info(state(MachineState::Idle, SubState::Ready), 5000);
+        monitor.on_state_info(state(MachineState::Espresso, SubState::Preinfusion), ms(1000));
+        monitor.on_sample(&sample(0), ms(1200));
+        monitor.on_sample(&sample(0), ms(3000));
+        let done = monitor.on_state_info(state(MachineState::Idle, SubState::Ready), ms(5000));
 
         let record = completed_record(done);
         assert_eq!(record.duration_ms, 4000); // 5000 - 1000
@@ -378,12 +394,12 @@ mod tests {
     #[test]
     fn the_sample_buffer_is_capped() {
         let mut monitor = ShotMonitor::new();
-        monitor.on_state_info(state(MachineState::Espresso, SubState::Pouring), 0);
+        monitor.on_state_info(state(MachineState::Espresso, SubState::Pouring), ms(0));
         // Feed well past the cap: the excess samples are dropped, not retained.
         for _ in 0..MAX_SHOT_SAMPLES + 100 {
-            monitor.on_sample(&sample(0), 1_000);
+            monitor.on_sample(&sample(0), ms(1_000));
         }
-        let done = monitor.on_state_info(state(MachineState::Idle, SubState::Ready), 2_000);
+        let done = monitor.on_state_info(state(MachineState::Idle, SubState::Ready), ms(2_000));
         let record = completed_record(done);
         assert_eq!(record.samples.len(), MAX_SHOT_SAMPLES);
     }

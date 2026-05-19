@@ -12,6 +12,8 @@
 //! duration, mirroring the legacy app's `start_hot_water` / `start_flush`
 //! (`machine.tcl`), which simply time the operation.
 
+use std::time::Duration;
+
 use de1_protocol::{MachineState, StateInfo};
 use typeshare::typeshare;
 
@@ -44,8 +46,8 @@ impl WaterSessionKind {
 pub struct WaterRecord {
     /// Whether this was a hot-water pour or a flush.
     pub kind: WaterSessionKind,
-    /// Total session duration, milliseconds.
-    pub duration_ms: u64,
+    /// Total session duration.
+    pub duration: Duration,
 }
 
 /// A notable change observed by a [`WaterMonitor`].
@@ -69,7 +71,7 @@ struct WaterInProgress {
 /// session at a time.
 ///
 /// Sans-IO: it holds no clock and performs no I/O. The shell supplies a
-/// monotonic `now_ms` with each notification.
+/// monotonic `now` with each notification.
 #[derive(Debug, Default)]
 pub struct WaterMonitor {
     session: Option<WaterInProgress>,
@@ -91,14 +93,14 @@ impl WaterMonitor {
         self.session.as_ref().map(|s| s.kind)
     }
 
-    /// Feed a [`StateInfo`] notification. `now_ms` is a monotonic millisecond
-    /// timestamp supplied by the shell.
+    /// Feed a [`StateInfo`] notification. `now` is a monotonic timestamp
+    /// supplied by the shell (a [`Duration`] from a shell-chosen epoch).
     ///
     /// Returns the events this update produced — empty if nothing notable
     /// changed. A session ends not only when the DE1 leaves the water states
     /// but also when it switches directly between `HotWater` and
     /// `HotWaterRinse`: the first session completes and the second begins.
-    pub fn on_state_info(&mut self, info: StateInfo, now_ms: u64) -> Vec<WaterEvent> {
+    pub fn on_state_info(&mut self, info: StateInfo, now: Duration) -> Vec<WaterEvent> {
         let mut events = Vec::new();
         let new_kind = WaterSessionKind::classify(info.state);
 
@@ -110,7 +112,7 @@ impl WaterMonitor {
             let mut session = self.session.take().expect("checked Some above");
             events.push(WaterEvent::Completed(WaterRecord {
                 kind: session.kind,
-                duration_ms: session.timer.finish(now_ms).unwrap_or(0),
+                duration: session.timer.finish(now).unwrap_or(Duration::ZERO),
             }));
         }
 
@@ -120,7 +122,7 @@ impl WaterMonitor {
             && self.session.is_none()
         {
             let mut timer = SessionTimer::new();
-            timer.start(now_ms);
+            timer.start(now);
             self.session = Some(WaterInProgress { kind, timer });
             events.push(WaterEvent::Started(kind));
         }
@@ -132,6 +134,11 @@ impl WaterMonitor {
 mod tests {
     use super::*;
     use de1_protocol::SubState;
+
+    /// Helper: a `Duration` of `ms` milliseconds.
+    fn ms(ms: u64) -> Duration {
+        Duration::from_millis(ms)
+    }
 
     fn state(state: MachineState, substate: SubState) -> StateInfo {
         StateInfo { state, substate }
@@ -164,7 +171,7 @@ mod tests {
     #[test]
     fn entering_hot_water_starts_a_session() {
         let mut monitor = WaterMonitor::new();
-        let events = monitor.on_state_info(state(MachineState::HotWater, SubState::Pouring), 1_000);
+        let events = monitor.on_state_info(state(MachineState::HotWater, SubState::Pouring), ms(1_000));
         assert_eq!(
             events,
             vec![WaterEvent::Started(WaterSessionKind::HotWater)]
@@ -177,7 +184,7 @@ mod tests {
     fn entering_hot_water_rinse_starts_a_flush_session() {
         let mut monitor = WaterMonitor::new();
         let events =
-            monitor.on_state_info(state(MachineState::HotWaterRinse, SubState::Pouring), 500);
+            monitor.on_state_info(state(MachineState::HotWaterRinse, SubState::Pouring), ms(500));
         assert_eq!(events, vec![WaterEvent::Started(WaterSessionKind::Flush)]);
         assert_eq!(monitor.session_kind(), Some(WaterSessionKind::Flush));
     }
@@ -185,19 +192,19 @@ mod tests {
     #[test]
     fn a_full_hot_water_session_yields_a_record_with_duration() {
         let mut monitor = WaterMonitor::new();
-        monitor.on_state_info(state(MachineState::HotWater, SubState::Pouring), 1_000);
-        let done = monitor.on_state_info(state(MachineState::Idle, SubState::Ready), 9_500);
+        monitor.on_state_info(state(MachineState::HotWater, SubState::Pouring), ms(1_000));
+        let done = monitor.on_state_info(state(MachineState::Idle, SubState::Ready), ms(9_500));
         let record = completed_record(done);
         assert_eq!(record.kind, WaterSessionKind::HotWater);
-        assert_eq!(record.duration_ms, 8_500); // 9500 - 1000
+        assert_eq!(record.duration, ms(8_500)); // 9500 - 1000
         assert!(!monitor.is_session_in_progress());
     }
 
     #[test]
     fn a_repeated_state_does_not_re_start_the_session() {
         let mut monitor = WaterMonitor::new();
-        monitor.on_state_info(state(MachineState::HotWater, SubState::Pouring), 1_000);
-        let events = monitor.on_state_info(state(MachineState::HotWater, SubState::Pouring), 2_000);
+        monitor.on_state_info(state(MachineState::HotWater, SubState::Pouring), ms(1_000));
+        let events = monitor.on_state_info(state(MachineState::HotWater, SubState::Pouring), ms(2_000));
         assert!(events.is_empty());
         assert!(monitor.is_session_in_progress());
     }
@@ -205,15 +212,15 @@ mod tests {
     #[test]
     fn switching_directly_between_water_states_completes_then_starts() {
         let mut monitor = WaterMonitor::new();
-        monitor.on_state_info(state(MachineState::HotWater, SubState::Pouring), 1_000);
+        monitor.on_state_info(state(MachineState::HotWater, SubState::Pouring), ms(1_000));
         let events =
-            monitor.on_state_info(state(MachineState::HotWaterRinse, SubState::Pouring), 4_000);
+            monitor.on_state_info(state(MachineState::HotWaterRinse, SubState::Pouring), ms(4_000));
         assert_eq!(
             events,
             vec![
                 WaterEvent::Completed(WaterRecord {
                     kind: WaterSessionKind::HotWater,
-                    duration_ms: 3_000,
+                    duration: ms(3_000),
                 }),
                 WaterEvent::Started(WaterSessionKind::Flush),
             ]
@@ -224,7 +231,7 @@ mod tests {
     #[test]
     fn a_non_water_state_with_no_session_does_nothing() {
         let mut monitor = WaterMonitor::new();
-        let events = monitor.on_state_info(state(MachineState::Espresso, SubState::Pouring), 1_000);
+        let events = monitor.on_state_info(state(MachineState::Espresso, SubState::Pouring), ms(1_000));
         assert!(events.is_empty());
         assert!(!monitor.is_session_in_progress());
     }
@@ -237,7 +244,7 @@ mod tests {
     #[test]
     fn a_long_session_accumulates_no_telemetry_buffer() {
         let mut monitor = WaterMonitor::new();
-        let started = monitor.on_state_info(state(MachineState::HotWater, SubState::Pouring), 0);
+        let started = monitor.on_state_info(state(MachineState::HotWater, SubState::Pouring), ms(0));
         assert_eq!(
             started,
             vec![WaterEvent::Started(WaterSessionKind::HotWater)]
@@ -247,7 +254,7 @@ mod tests {
         // tick rate a real pour would produce over many seconds.
         for tick in 1..=10_000u64 {
             let events =
-                monitor.on_state_info(state(MachineState::HotWater, SubState::Pouring), tick);
+                monitor.on_state_info(state(MachineState::HotWater, SubState::Pouring), ms(tick));
             // Steady-state updates are silent: no per-sample event is emitted.
             assert!(events.is_empty(), "an in-state update must emit nothing");
         }
@@ -258,9 +265,9 @@ mod tests {
         assert_eq!(monitor.session_kind(), Some(WaterSessionKind::HotWater));
 
         // The completed record carries only kind + duration, never samples.
-        let done = monitor.on_state_info(state(MachineState::Idle, SubState::Ready), 10_001);
+        let done = monitor.on_state_info(state(MachineState::Idle, SubState::Ready), ms(10_001));
         let record = completed_record(done);
         assert_eq!(record.kind, WaterSessionKind::HotWater);
-        assert_eq!(record.duration_ms, 10_001);
+        assert_eq!(record.duration, ms(10_001));
     }
 }
