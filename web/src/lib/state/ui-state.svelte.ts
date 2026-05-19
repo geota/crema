@@ -230,8 +230,12 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 	switch (event.type) {
 		case 'MachineStateChanged': {
 			const machineState = `${event.content.state} / ${event.content.substate}`;
-			// A drop to a resting state (Idle / Sleep) ends any session — clear
-			// the buffered series so the dashboard returns to its empty state.
+			// A drop to a resting state (Idle / Sleep) ends any shot in progress,
+			// but the finished curve STAYS on screen — it is reset only when the
+			// next shot starts (`ShotStarted`) or on connect/disconnect. Clearing
+			// `shotTelemetry` here wiped the just-finished shot the instant the
+			// machine idled — and wiped a whole replayed capture, which always
+			// ends with a return to Idle.
 			const resting =
 				event.content.state === 'Idle' ||
 				event.content.state === 'Sleep' ||
@@ -240,9 +244,7 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 			return {
 				...snapshot,
 				machineState,
-				...(resting
-					? { shotTelemetry: [], shotInProgress: false, shotElapsedMs: 0 }
-					: null),
+				...(resting ? { shotInProgress: false } : null),
 				eventLog: appendLog(snapshot.eventLog, `MachineState -> ${machineState}`)
 			};
 		}
