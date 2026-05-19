@@ -9,6 +9,10 @@
  * The shell therefore keeps a single **current bean** — the bag you are
  * pulling shots from right now — in its own localStorage-backed store (see
  * `store.svelte.ts`). It is independent of any profile.
+ *
+ * The shape mirrors what Visualizer expects in the de1app shot `bean` block:
+ * `roaster` → `bean.brand`, `type` → `bean.type`, `roastLevel` → the 1..10
+ * `roast_level` scale, `roastedOn` → `roast_date`.
  */
 
 import type { Roast } from '$lib/profiles';
@@ -18,18 +22,46 @@ import type { Roast } from '$lib/profiles';
  * shape is also stamped onto each recorded shot (see `lib/history`).
  */
 export interface Bean {
-	/** Bean name / origin, e.g. `Onyx Monarch`. */
-	name: string;
+	/** The roastery, e.g. `Onyx Coffee Lab` (Visualizer `bean.brand`). */
+	roaster: string;
+	/** The coffee itself, e.g. `Colombian Geisha` (Visualizer `bean.type`). */
+	type: string;
 	/** ISO `yyyy-mm-dd` roast date, or `null` when not logged. */
 	roastedOn: string | null;
-	/** Roast level, or `null` when not logged. */
-	roastLevel: Roast | null;
+	/**
+	 * Roast level on Visualizer's 1..10 `roast_level` scale (1 = lightest),
+	 * or `null` when not logged. See {@link roastBand} to classify it.
+	 */
+	roastLevel: number | null;
 }
 
 /** A fresh, empty current bean — the starting point before anything is logged. */
 export function blankBean(): Bean {
-	return { name: '', roastedOn: null, roastLevel: null };
+	return { roaster: '', type: '', roastedOn: null, roastLevel: null };
 }
+
+/**
+ * Classify a 1..10 roast level into a named band: `1–3 → 'light'`,
+ * `4–6 → 'medium'`, `7–10 → 'dark'`. Returns `null` for a `null` level.
+ * Values outside 1..10 are clamped into range first.
+ */
+export function roastBand(level: number | null): Roast | null {
+	if (level == null) return null;
+	const clamped = Math.max(1, Math.min(10, Math.round(level)));
+	if (clamped <= 3) return 'light';
+	if (clamped <= 6) return 'medium';
+	return 'dark';
+}
+
+/**
+ * The 1..10 roast-level a quick-set roast pill maps to — each value lands
+ * squarely inside its own {@link roastBand}: light → 1, medium → 5, dark → 10.
+ */
+export const ROAST_PILL_LEVEL: Readonly<Record<Roast, number>> = {
+	light: 1,
+	medium: 5,
+	dark: 10
+};
 
 /**
  * Whole days between a `yyyy-mm-dd` roast date and `asOf` (default: now) —
@@ -54,4 +86,38 @@ export function daysOffRoast(
 	);
 	const days = Math.floor((today - roast) / 86_400_000);
 	return Math.max(0, days);
+}
+
+/**
+ * Leniently migrate a value persisted under the **old** bean shape
+ * (`{ name, roastedOn, roastLevel: 'light'|'medium'|'dark'|null }`) — or any
+ * partial / unknown value — into a valid {@link Bean}. Unmappable fields fall
+ * back to blank. Never throws: used on load so an old payload cannot crash.
+ */
+export function migrateBean(raw: unknown): Bean {
+	const base = blankBean();
+	if (typeof raw !== 'object' || raw === null) return base;
+	const obj = raw as Record<string, unknown>;
+
+	// `roaster` is new — accept it if present, else blank.
+	if (typeof obj.roaster === 'string') base.roaster = obj.roaster;
+
+	// `type` is new; the old shape had a single `name` → migrate it to `type`.
+	if (typeof obj.type === 'string') {
+		base.type = obj.type;
+	} else if (typeof obj.name === 'string') {
+		base.type = obj.name;
+	}
+
+	if (typeof obj.roastedOn === 'string') base.roastedOn = obj.roastedOn;
+
+	// `roastLevel` is now a 1..10 number; the old shape stored a band word.
+	const level = obj.roastLevel;
+	if (typeof level === 'number' && Number.isFinite(level)) {
+		base.roastLevel = Math.max(1, Math.min(10, Math.round(level)));
+	} else if (level === 'light' || level === 'medium' || level === 'dark') {
+		base.roastLevel = ROAST_PILL_LEVEL[level];
+	}
+
+	return base;
 }

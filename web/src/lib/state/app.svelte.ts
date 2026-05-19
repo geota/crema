@@ -93,20 +93,24 @@ export class CremaApp {
 			if (event.type === 'ShotCompleted') {
 				const snapshot = this.state.current;
 				// Stamp a snapshot of the current bean onto the record, so a later
-				// bean change cannot rewrite history. An unlogged bean (blank name)
-				// stores `null` — the History UI treats the bean as optional.
+				// bean change cannot rewrite history. An unlogged bean (no roaster
+				// and no type) stores `null` — the History UI treats it as optional.
 				const bean = getBeanStore().current;
+				const roaster = bean.roaster.trim();
+				const type = bean.type.trim();
 				getHistoryStore().record({
 					durationMs: event.content.duration_ms,
 					profileName: snapshot.activeProfileName,
 					series: snapshot.shotTelemetry,
-					bean: bean.name.trim()
-						? {
-								name: bean.name.trim(),
-								roastLevel: bean.roastLevel,
-								roastedOn: bean.roastedOn
-							}
-						: null
+					bean:
+						roaster || type
+							? {
+									roaster,
+									type,
+									roastedOn: bean.roastedOn,
+									roastLevel: bean.roastLevel
+								}
+							: null
 				});
 			}
 		}
