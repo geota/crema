@@ -48,6 +48,7 @@ const CLEARED_DE1_READOUT = {
 	shotTelemetry: [],
 	shotInProgress: false,
 	shotElapsedMs: 0,
+	completedShot: null,
 	de1Diagnostics: EMPTY_DE1_DIAGNOSTICS,
 	// Read-paths added on the wire-read-paths branch — also reset, so a
 	// reconnect does not show the previous machine's firmware / registers /

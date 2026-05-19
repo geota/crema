@@ -125,17 +125,34 @@
 	);
 
 	// ── Real telemetry (the DISPLAY side — wired to lib/state) ───────────
-	/** The latest 4-channel sample, or null when no telemetry has arrived. */
+	//
+	// The timer column and the four top-right readouts show LIVE telemetry
+	// while a shot runs, then FREEZE at the shot's final values once it ends
+	// (`ui.completedShot`): the DE1 keeps streaming idle telemetry after the
+	// shot, so without the freeze the readouts would snap back to idle. The
+	// foot's Group / Steam temps and Scale weight read the live snapshot
+	// directly and never freeze.
+
+	/** The latest live 4-channel sample, or null before any telemetry. */
 	const tel = $derived(ui.latestTelemetry);
-	/** Whether there is any shot data to show. */
-	const hasData = $derived(ui.shotTelemetry.length > 0);
-	/** Shot elapsed time, seconds — from the buffered telemetry. */
-	const elapsedSec = $derived(ui.shotElapsedMs / 1000);
+	/** The just-finished shot's frozen end state, or null. */
+	const completed = $derived(ui.completedShot);
+	/** True while a finished shot's values are being held on screen. */
+	const showingCompleted = $derived(!ui.shotInProgress && completed !== null);
+	/** The sample feeding the timer column + top-right readouts — live, then frozen. */
+	const shotSample = $derived(showingCompleted ? completed!.sample : tel);
+	/** Shot elapsed seconds — live, then frozen at the final duration. */
+	const shotSeconds = $derived(
+		(showingCompleted ? completed!.durationMs : ui.shotElapsedMs) / 1000
+	);
+	/** The executing profile-frame index — live, then frozen. */
+	const shotFrame = $derived(showingCompleted ? completed!.frame : ui.shotFrame);
 
 	/** A human phase caption for the timer, from the core's shot phase. */
 	const phaseLabel = $derived.by(() => {
-		if (!ui.shotInProgress && !hasData) return 'Ready';
-		switch (ui.shotPhase) {
+		if (!ui.shotInProgress && !showingCompleted) return 'Ready';
+		const phase = showingCompleted ? completed!.phase : ui.shotPhase;
+		switch (phase) {
 			case ShotPhase.Heating:
 				return 'Heating';
 			case ShotPhase.Preinfusion:
@@ -155,19 +172,29 @@
 
 	// Unit-aware channel measurements — all driven by the Settings unit prefs
 	// so a unit change in Settings re-renders every readout at once (D1).
-	/** Pressure readout, in the chosen pressure unit. */
-	const pressureM = $derived(convertPressure(tel?.pressure, prefs.pressureUnit));
-	/** Group-head temperature readout, in the chosen temperature unit. */
-	const tempM = $derived(convertTemp(tel?.temp, prefs.tempUnit));
-	/** Mix ("group") temperature readout, in the chosen temperature unit. */
+	/** Pressure readout (top-right) — live during a shot, frozen after it. */
+	const pressureM = $derived(convertPressure(shotSample?.pressure, prefs.pressureUnit));
+	/** Group-head temperature readout (top-right) — live, then frozen. */
+	const tempM = $derived(convertTemp(shotSample?.temp, prefs.tempUnit));
+	/** Mix ("group") temperature for the foot — always the live reading. */
 	const mixTempM = $derived(convertTemp(tel?.mixTemp, prefs.tempUnit));
-	/** Steam-heater temperature readout, in the chosen temperature unit. */
+	/** Steam-heater temperature for the foot — always the live reading. */
 	const steamTempM = $derived(convertTemp(tel?.steamTemp, prefs.tempUnit));
 
-	/** Live weight (g) — from the scale stream, independent of shot state. */
-	const weight = $derived(ui.scaleWeightG);
-	/** Weight readout, in the chosen weight unit. */
-	const weightM = $derived(convertWeight(weight, prefs.weightUnit));
+	/** Live scale weight (g) — exactly what the scale sends; feeds the foot. */
+	const liveWeight = $derived(ui.scaleWeightG);
+	/** Live scale weight in the chosen unit — the foot's Scale cluster. */
+	const liveWeightM = $derived(convertWeight(liveWeight, prefs.weightUnit));
+	/**
+	 * The weight for the shot readouts (top-right WEIGHT tile, Yield, Ratio):
+	 * the live scale weight during a shot, the shot's frozen final weight once
+	 * it completes — so the yield does not drift as the cup is removed.
+	 */
+	const shotWeight = $derived(
+		showingCompleted ? (completed!.sample?.weightG ?? null) : liveWeight
+	);
+	/** Shot weight in the chosen weight unit. */
+	const shotWeightM = $derived(convertWeight(shotWeight, prefs.weightUnit));
 	/** Brew-temperature target, in the chosen temperature unit. */
 	const brewTempTarget = $derived(convertTemp(p.brewTemp, prefs.tempUnit));
 	/** Yield target, in the chosen weight unit. */
@@ -180,7 +207,7 @@
 	const scaleName = $derived(ui.scaleName ?? 'Scale');
 	/** Yield progress as a 0..100 % bar width. */
 	const yieldPct = $derived(
-		weight == null ? 0 : Math.min(100, (weight / p.yield) * 100)
+		shotWeight == null ? 0 : Math.min(100, (shotWeight / p.yield) * 100)
 	);
 	/**
 	 * Water-tank volume (mL) for the foot readout — the DE1's `WaterLevel`
@@ -253,12 +280,12 @@
 		<!-- Main grid: timer + targets | readouts + chart -->
 		<div class="crema-dash-main">
 			<div class="crema-dash-timercol">
-				<ExtractionTimer seconds={elapsedSec} step={phaseLabel} />
+				<ExtractionTimer seconds={shotSeconds} step={phaseLabel} />
 				<div class="crema-dash-targets">
 					<div class="crema-target">
 						<div class="t-eyebrow">Yield</div>
 						<div class="crema-target-val">
-							<span>{weightM.value}</span> / {yieldTarget.value}<span
+							<span>{shotWeightM.value}</span> / {yieldTarget.value}<span
 								class="crema-target-unit">{yieldTarget.unit}</span
 							>
 						</div>
@@ -269,7 +296,7 @@
 					<div class="crema-target">
 						<div class="t-eyebrow">Ratio</div>
 						<div class="crema-target-val">
-							<span>1:{weight == null ? '—' : (weight / p.dose).toFixed(2)}</span>
+							<span>1:{shotWeight == null ? '—' : (shotWeight / p.dose).toFixed(2)}</span>
 							<span class="crema-target-unit"> · target 1:{ratio}</span>
 						</div>
 					</div>
@@ -277,8 +304,8 @@
 					     Sheet is closed; the open sheet would overlap them. -->
 					{#if !quickSheetOpen}
 						<PhaseIndicatorCard
-							seconds={elapsedSec}
-							frame={ui.shotFrame}
+							seconds={shotSeconds}
+							frame={shotFrame}
 							segments={activeProfile?.segments}
 						/>
 						<BeanContextCard grind={p.grind} />
@@ -295,7 +322,7 @@
 					/>
 					<ChannelReadout
 						label="FLOW"
-						value={fmt(tel?.flow)}
+						value={fmt(shotSample?.flow)}
 						unit="ml/s"
 						color="var(--tel-flow)"
 					/>
@@ -308,32 +335,23 @@
 					/>
 					<ChannelReadout
 						label="WEIGHT"
-						value={weightM.value}
-						unit={weightM.unit || 'g'}
+						value={shotWeightM.value}
+						unit={shotWeightM.unit || 'g'}
 						color="var(--tel-weight)"
 						target={yieldTarget.value}
 					/>
 				</div>
 				<div class="crema-chart">
-					{#if hasData}
-						<LiveChart
-							series={ui.shotTelemetry}
-							goalSegments={activeProfile?.segments}
-							showFlowCurve={prefs.showFlowCurve}
-							smoothPressure={prefs.smoothPressure}
-							telemetryRateHz={prefs.telemetryRateHz}
-						/>
-					{:else}
-						<!-- Clean empty state — no shot data buffered yet. -->
-						<div class="crema-chart-empty">
-							<i class="ph-duotone ph-chart-line" aria-hidden="true"></i>
-							<div class="crema-chart-empty-title">No shot in progress</div>
-							<div class="crema-chart-empty-sub">
-								Live pressure, flow, temperature and weight will plot here once a
-								shot begins.
-							</div>
-						</div>
-					{/if}
+					<!-- Always mounted: an empty series renders bare axes + grid (the
+					     "ready" state); a finished shot's curve stays until the next
+					     shot starts. -->
+					<LiveChart
+						series={ui.shotTelemetry}
+						goalSegments={activeProfile?.segments}
+						showFlowCurve={prefs.showFlowCurve}
+						smoothPressure={prefs.smoothPressure}
+						telemetryRateHz={prefs.telemetryRateHz}
+					/>
 				</div>
 			</div>
 		</div>
@@ -346,7 +364,7 @@
 				<span class="t-eyebrow">Scale</span>
 				<span
 					>{scaleConnected
-						? `${scaleName} · ${weightM.value}${weightM.unit ? ` ${weightM.unit}` : ''}`
+						? `${scaleName} · ${liveWeightM.value}${liveWeightM.unit ? ` ${liveWeightM.unit}` : ''}`
 						: 'Not paired'}</span
 				>
 				<span class="crema-foot-divider"></span>
