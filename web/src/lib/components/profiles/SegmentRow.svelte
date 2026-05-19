@@ -3,12 +3,18 @@
 	 * `SegmentRow` — one editable row of the segment list, ported from
 	 * `SegmentRow` in `profile-edit-page.jsx`.
 	 *
-	 * The design's row was display-only; here every field is an input bound
-	 * **two-way** to the same segment model the curve editor drags — editing a
-	 * row's target / time moves the curve's dot, and vice versa. Clicking the
-	 * row selects the segment (highlighting it in the curve).
+	 * The design's row was display-only; here every field edits the same
+	 * segment model the curve editor drags — editing a row's target / time
+	 * moves the curve's dot, and vice versa. Clicking the row selects the
+	 * segment (highlighting it in the curve).
+	 *
+	 * The controls are the quick-controls primitives: a `QSplitLabel` split
+	 * toggle for the mode (Pressure | Flow) and ramp (Smooth | Fast), and a
+	 * `QStepper` (− / value+unit / +) for the Target and Time fields.
 	 */
 	import type { ProfileSegment, SegmentRamp } from '$lib/profiles';
+	import QStepper from '$lib/components/brew/QStepper.svelte';
+	import QSplitLabel from '$lib/components/brew/QSplitLabel.svelte';
 
 	let {
 		seg,
@@ -34,13 +40,6 @@
 
 	/** The target unit follows the segment mode. */
 	const unit = $derived(seg.mode === 'pressure' ? 'bar' : 'ml/s');
-
-	/** Parse a numeric input, clamping to a sane range; ignore garbage. */
-	function num(value: string, min: number, max: number): number | null {
-		const n = Number(value);
-		if (!Number.isFinite(n)) return null;
-		return Math.min(max, Math.max(min, n));
-	}
 </script>
 
 <div
@@ -61,69 +60,50 @@
 			onclick={(e) => e.stopPropagation()}
 			oninput={(e) => onEdit({ name: e.currentTarget.value })}
 		/>
-		<select
-			class="pe-seg-mode-select"
+		<QSplitLabel
+			options={[
+				{ id: 'pressure', label: 'Pressure' },
+				{ id: 'flow', label: 'Flow' }
+			]}
 			value={seg.mode}
-			onclick={(e) => e.stopPropagation()}
-			onchange={(e) =>
-				onEdit({ mode: e.currentTarget.value as ProfileSegment['mode'] })}
-		>
-			<option value="pressure">pressure</option>
-			<option value="flow">flow</option>
-		</select>
+			onChange={(m) => onEdit({ mode: m as ProfileSegment['mode'] })}
+		/>
 	</div>
 
 	<div class="pe-seg-field">
 		<div class="pe-seg-field-label">Target</div>
-		<div class="pe-seg-cell">
-			<input
-				class="pe-seg-numinput"
-				type="number"
-				step="0.1"
-				min="0"
-				max="12"
-				value={seg.target}
-				onclick={(e) => e.stopPropagation()}
-				oninput={(e) => {
-					const v = num(e.currentTarget.value, 0, 12);
-					if (v != null) onEdit({ target: v });
-				}}
-			/>
-			<em>{unit}</em>
-		</div>
+		<QStepper
+			value={seg.target}
+			{unit}
+			min={0}
+			max={12}
+			step={0.1}
+			onChange={(v) => onEdit({ target: v })}
+		/>
 	</div>
 
 	<div class="pe-seg-field">
 		<div class="pe-seg-field-label">Time</div>
-		<div class="pe-seg-cell">
-			<input
-				class="pe-seg-numinput"
-				type="number"
-				step="1"
-				min="1"
-				max="60"
-				value={seg.time}
-				onclick={(e) => e.stopPropagation()}
-				oninput={(e) => {
-					const v = num(e.currentTarget.value, 1, 60);
-					if (v != null) onEdit({ time: Math.round(v) });
-				}}
-			/>
-			<em>s</em>
-		</div>
+		<QStepper
+			value={seg.time}
+			unit="s"
+			min={1}
+			max={60}
+			step={1}
+			onChange={(v) => onEdit({ time: Math.round(v) })}
+		/>
 	</div>
 
 	<div class="pe-seg-field">
 		<div class="pe-seg-field-label">Ramp</div>
-		<select
-			class="pe-seg-ramp-select"
+		<QSplitLabel
+			options={[
+				{ id: 'smooth', label: 'Smooth' },
+				{ id: 'fast', label: 'Fast' }
+			]}
 			value={seg.ramp}
-			onclick={(e) => e.stopPropagation()}
-			onchange={(e) => onEdit({ ramp: e.currentTarget.value as SegmentRamp })}
-		>
-			<option value="smooth">smooth</option>
-			<option value="fast">fast</option>
-		</select>
+			onChange={(r) => onEdit({ ramp: r as SegmentRamp })}
+		/>
 	</div>
 
 	<div class="pe-seg-field pe-seg-field-exit">
@@ -153,18 +133,17 @@
 <style>
 	.pe-seg {
 		display: grid;
-		/* The design's row was display-only — static value text fit in narrow
-		   columns. This port makes every cell an editable input, so the small
-		   columns get honest content-sized minima (a number input + unit, a
-		   select) instead of thin fractional shares that truncated. The name
-		   and exit-when fields take the remaining flexible space. */
+		/* Every cell is an editable control. The Target / Time columns hold a
+		   QStepper (− value +) and the mode / ramp columns a QSplitLabel split
+		   toggle, so the columns get honest control-sized minima; the name and
+		   exit-when fields take the remaining flexible space. */
 		grid-template-columns:
 			28px
-			minmax(150px, 1.6fr)
-			minmax(96px, 0.8fr)
-			minmax(88px, 0.7fr)
-			minmax(96px, 0.8fr)
-			minmax(140px, 1.4fr)
+			minmax(150px, 1.4fr)
+			minmax(122px, 0.9fr)
+			minmax(112px, 0.9fr)
+			minmax(116px, 0.8fr)
+			minmax(120px, 1.1fr)
 			32px;
 		gap: 14px;
 		align-items: center;
@@ -192,7 +171,7 @@
 	.pe-seg-name {
 		display: flex;
 		flex-direction: column;
-		gap: 2px;
+		gap: 6px;
 		min-width: 0;
 	}
 	.pe-seg-name-input {
@@ -212,33 +191,11 @@
 	.pe-seg-name-input:focus {
 		border-bottom-color: rgba(244, 237, 224, 0.2);
 	}
-	.pe-seg-mode-select,
-	.pe-seg-ramp-select {
-		max-width: 100%;
-		background: transparent;
-		border: 0;
-		font-family: var(--font-sans);
-		color: rgba(244, 237, 224, 0.6);
-		cursor: pointer;
-		outline: 0;
-		padding: 0;
-	}
-	.pe-seg-ramp-select {
-		width: 100%;
-	}
-	.pe-seg-mode-select {
-		font-size: 9px;
-		letter-spacing: var(--track-allcaps);
-		text-transform: uppercase;
-	}
-	.pe-seg-ramp-select {
-		font-size: 12px;
-		color: rgba(244, 237, 224, 0.75);
-	}
-	.pe-seg-mode-select option,
-	.pe-seg-ramp-select option {
-		background: var(--espresso-850);
-		color: var(--ink-50);
+	.pe-seg-field {
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+		min-width: 0;
 	}
 	.pe-seg-field-label {
 		font-family: var(--font-sans);
@@ -247,35 +204,6 @@
 		text-transform: uppercase;
 		font-weight: 600;
 		color: rgba(244, 237, 224, 0.4);
-		margin-bottom: 2px;
-	}
-	.pe-seg-cell {
-		display: flex;
-		align-items: baseline;
-		gap: 2px;
-	}
-	.pe-seg-cell em {
-		font-style: normal;
-		font-size: 10px;
-		color: rgba(244, 237, 224, 0.5);
-	}
-	.pe-seg-numinput {
-		/* Wide enough for a 3-digit value plus the number-spinner; the cell's
-		   minmax min keeps the input + unit from being clipped. */
-		width: 58px;
-		background: rgba(244, 237, 224, 0.04);
-		border: 1px solid rgba(244, 237, 224, 0.08);
-		border-radius: 4px;
-		font-family: var(--font-mono);
-		font-variant-numeric: tabular-nums;
-		font-size: 13px;
-		color: var(--ink-50);
-		padding: 3px 6px;
-		outline: 0;
-		transition: border-color var(--dur-1) var(--ease);
-	}
-	.pe-seg-numinput:focus {
-		border-color: var(--copper-500);
 	}
 	.pe-seg-exit-input {
 		background: rgba(244, 237, 224, 0.04);
@@ -307,5 +235,23 @@
 	.pe-seg-del:hover {
 		color: #d97757;
 		background: rgba(217, 119, 87, 0.08);
+	}
+
+	/* Trim the quick-controls primitives to the compact segment-row context —
+	   the canonical stepper number (22px) and buttons (36px) are sized for the
+	   wide Quick Sheet; a list row wants the design's tighter variant. */
+	.pe-seg :global(.qcs-row) {
+		padding: 3px;
+		gap: 3px;
+	}
+	.pe-seg :global(.qcs-btn) {
+		width: 28px;
+		flex-basis: 28px;
+	}
+	.pe-seg :global(.qcs-num) {
+		font-size: 17px;
+	}
+	.pe-seg :global(.qcs-val) {
+		padding: 2px 4px;
 	}
 </style>
