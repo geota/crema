@@ -114,7 +114,7 @@
 	<!-- Header -->
 	<div class="hi-head">
 		<div>
-			<div class="t-eyebrow" style="color:rgba(244,237,224,0.55)">Library</div>
+			<div class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Library</div>
 			<div class="hi-title">Shot history</div>
 			<div class="hi-sub">
 				{shots.length}
@@ -205,7 +205,7 @@
 				{/each}
 			</div>
 			<div class="pp-sort">
-				<span class="t-eyebrow" style="color:rgba(244,237,224,0.45)">Range</span>
+				<span class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.45)">Range</span>
 				<button
 					class="pp-sort-opt"
 					class:is-active={range === '30d'}
@@ -255,7 +255,7 @@
 
 <style>
 	.hi-page {
-		background: var(--espresso-950);
+		background: var(--bg-page);
 		color: var(--ink-50);
 		display: flex;
 		flex-direction: column;
@@ -283,7 +283,7 @@
 	.hi-sub {
 		font-family: var(--font-sans);
 		font-size: 12px;
-		color: rgba(244, 237, 224, 0.5);
+		color: rgba(var(--tint-rgb), 0.5);
 		margin-top: 4px;
 	}
 	.hi-head-r {
@@ -295,17 +295,17 @@
 		position: relative;
 		display: flex;
 		align-items: center;
-		background: rgba(244, 237, 224, 0.04);
-		border: 1px solid rgba(244, 237, 224, 0.08);
+		background: rgba(var(--tint-rgb), 0.04);
+		border: 1px solid rgba(var(--tint-rgb), 0.08);
 		border-radius: var(--radius-pill);
 		padding: 0 12px;
 		width: 260px;
 	}
 	.hi-search:focus-within {
-		border-color: rgba(244, 237, 224, 0.2);
+		border-color: rgba(var(--tint-rgb), 0.2);
 	}
 	.hi-search i {
-		color: rgba(244, 237, 224, 0.4);
+		color: rgba(var(--tint-rgb), 0.4);
 		font-size: 13px;
 	}
 	.hi-search input {
@@ -320,7 +320,7 @@
 		padding: 8px 6px;
 	}
 	.hi-search input::placeholder {
-		color: rgba(244, 237, 224, 0.35);
+		color: rgba(var(--tint-rgb), 0.35);
 	}
 
 	/* The .st-btn family is shared globally — see settings-page.css. */
@@ -332,8 +332,8 @@
 		gap: 12px;
 	}
 	.hi-stat {
-		background: var(--espresso-900);
-		border: 1px solid rgba(244, 237, 224, 0.05);
+		background: var(--bg-surface);
+		border: 1px solid rgba(var(--tint-rgb), 0.05);
 		border-radius: var(--radius-md);
 		padding: 14px 16px;
 		display: flex;
@@ -346,7 +346,7 @@
 		font-weight: 700;
 		letter-spacing: var(--track-allcaps);
 		text-transform: uppercase;
-		color: rgba(244, 237, 224, 0.45);
+		color: rgba(var(--tint-rgb), 0.45);
 	}
 	.hi-stat-val {
 		display: flex;
@@ -362,7 +362,7 @@
 		font-style: normal;
 		font-family: var(--font-sans);
 		font-size: 11px;
-		color: rgba(244, 237, 224, 0.5);
+		color: rgba(var(--tint-rgb), 0.5);
 		margin-left: 1px;
 	}
 
@@ -373,7 +373,7 @@
 		align-items: center;
 		gap: 16px;
 		padding-bottom: 14px;
-		border-bottom: 1px solid rgba(244, 237, 224, 0.05);
+		border-bottom: 1px solid rgba(var(--tint-rgb), 0.05);
 	}
 	.hi-prof-filters {
 		display: flex;
@@ -387,7 +387,7 @@
 		padding: 7px 14px;
 		background: transparent;
 		border: 0;
-		color: rgba(244, 237, 224, 0.6);
+		color: rgba(var(--tint-rgb), 0.6);
 		font-family: var(--font-sans);
 		font-size: 13px;
 		cursor: pointer;
@@ -400,20 +400,20 @@
 	}
 	.pp-tag.is-active {
 		color: var(--ink-50);
-		background: rgba(244, 237, 224, 0.06);
+		background: rgba(var(--tint-rgb), 0.06);
 	}
 	.pp-tag-count {
 		font-family: var(--font-mono);
 		font-variant-numeric: tabular-nums;
 		font-size: 10px;
-		color: rgba(244, 237, 224, 0.4);
+		color: rgba(var(--tint-rgb), 0.4);
 		padding: 1px 6px;
-		background: rgba(244, 237, 224, 0.04);
+		background: rgba(var(--tint-rgb), 0.04);
 		border-radius: 999px;
 	}
 	.pp-tag.is-active .pp-tag-count {
 		background: var(--copper-500);
-		color: #1a120c;
+		color: var(--fg-on-accent);
 	}
 	.pp-sort {
 		display: flex;
@@ -424,7 +424,7 @@
 	.pp-sort-opt {
 		background: transparent;
 		border: 0;
-		color: rgba(244, 237, 224, 0.5);
+		color: rgba(var(--tint-rgb), 0.5);
 		font-family: var(--font-sans);
 		font-size: 12px;
 		cursor: pointer;
@@ -455,8 +455,8 @@
 		display: flex;
 		flex-direction: column;
 		gap: 2px;
-		background: var(--espresso-900);
-		border: 1px solid rgba(244, 237, 224, 0.05);
+		background: var(--bg-surface);
+		border: 1px solid rgba(var(--tint-rgb), 0.05);
 		border-radius: var(--radius-lg, 14px);
 		padding: 8px;
 		overflow-y: auto;
@@ -468,16 +468,16 @@
 		text-align: center;
 		font-family: var(--font-sans);
 		font-size: 12px;
-		color: rgba(244, 237, 224, 0.4);
+		color: rgba(var(--tint-rgb), 0.4);
 	}
 	.hi-detail-empty {
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		background: var(--espresso-900);
-		border: 1px solid rgba(244, 237, 224, 0.05);
+		background: var(--bg-surface);
+		border: 1px solid rgba(var(--tint-rgb), 0.05);
 		border-radius: var(--radius-lg, 14px);
-		color: rgba(244, 237, 224, 0.4);
+		color: rgba(var(--tint-rgb), 0.4);
 		font-family: var(--font-sans);
 		font-size: 13px;
 		min-height: 200px;
@@ -498,11 +498,11 @@
 		width: 64px;
 		height: 64px;
 		border-radius: 50%;
-		background: rgba(244, 237, 224, 0.05);
+		background: rgba(var(--tint-rgb), 0.05);
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		color: rgba(244, 237, 224, 0.5);
+		color: rgba(var(--tint-rgb), 0.5);
 		font-size: 30px;
 		margin-bottom: 6px;
 	}
@@ -515,7 +515,7 @@
 		font-family: var(--font-sans);
 		font-size: 13px;
 		line-height: 1.55;
-		color: rgba(244, 237, 224, 0.5);
+		color: rgba(var(--tint-rgb), 0.5);
 		max-width: 420px;
 	}
 

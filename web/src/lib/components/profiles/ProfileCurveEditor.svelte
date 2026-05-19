@@ -132,7 +132,7 @@
 					}
 
 					// Fixed bar marks — the design's 0 / 3 / 6 / 9 / 12 grid.
-					ctx.strokeStyle = 'rgba(244,237,224,0.05)';
+					ctx.strokeStyle = 'rgba(var(--tint-rgb), 0.05)';
 					ctx.lineWidth = 1;
 					for (const v of [0, 3, 6, 9, 12]) {
 						const y = Math.round(u.valToPos(v, 'y', true)) + 0.5;
@@ -164,8 +164,8 @@
 	});
 
 	function buildOpts(w: number, h: number): uPlot.Options {
-		const gridColor = 'rgba(244,237,224,0.05)';
-		const labelColor = 'rgba(244,237,224,0.35)';
+		const gridColor = 'rgba(var(--tint-rgb), 0.05)';
+		const labelColor = 'rgba(var(--tint-rgb), 0.35)';
 		const font = '11px "JetBrains Mono", monospace';
 		return {
 			width: w,
@@ -484,8 +484,8 @@
 
 <style>
 	.pe-curve {
-		background: var(--espresso-900);
-		border: 1px solid rgba(244, 237, 224, 0.05);
+		background: var(--bg-surface);
+		border: 1px solid rgba(var(--tint-rgb), 0.05);
 		border-radius: var(--radius-md);
 		padding: 14px 14px 6px;
 	}
@@ -501,14 +501,14 @@
 		font-weight: 600;
 		letter-spacing: var(--track-allcaps);
 		text-transform: uppercase;
-		color: rgba(244, 237, 224, 0.45);
+		color: rgba(var(--tint-rgb), 0.45);
 	}
 	.pe-curve-legend {
 		display: flex;
 		gap: 14px;
 		font-family: var(--font-sans);
 		font-size: 11px;
-		color: rgba(244, 237, 224, 0.65);
+		color: rgba(var(--tint-rgb), 0.65);
 	}
 	.pe-curve-legend > span {
 		display: inline-flex;
@@ -566,8 +566,8 @@
 		height: 10px;
 		transform: translate(-50%, -50%);
 		border-radius: 50%;
-		background: var(--espresso-950);
-		border: 1px solid rgba(244, 237, 224, 0.55);
+		background: var(--bg-page);
+		border: 1px solid rgba(var(--tint-rgb), 0.55);
 		box-sizing: border-box;
 	}
 	/* Active ring: ~6 px radius, copper. */
@@ -599,7 +599,7 @@
 		font-size: 11px;
 		letter-spacing: var(--track-allcaps);
 		text-transform: uppercase;
-		color: rgba(244, 237, 224, 0.45);
+		color: rgba(var(--tint-rgb), 0.45);
 	}
 	.pe-curve-foot-val {
 		font-family: var(--font-mono);

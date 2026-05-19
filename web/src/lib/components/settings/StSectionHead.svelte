@@ -13,7 +13,7 @@
 
 <div class="st-shead">
 	{#if eyebrow}
-		<div class="t-eyebrow" style="color:rgba(244,237,224,0.55)">{eyebrow}</div>
+		<div class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">{eyebrow}</div>
 	{/if}
 	<div class="st-shead-title">{title}</div>
 	{#if sub}

@@ -118,7 +118,7 @@
 					height={14}
 					color={selectedId === profile.id
 						? 'var(--copper-400)'
-						: 'rgba(244,237,224,0.55)'}
+						: 'rgba(var(--tint-rgb), 0.55)'}
 				/>
 				<span class="qfstrip-name">{profile.name || 'Untitled profile'}</span>
 				<span class="qfstrip-ratio">{ratioLabel(profile)}</span>

@@ -115,7 +115,7 @@
 <div class="hi-detail">
 	<div class="hi-detail-head">
 		<div>
-			<div class="t-eyebrow" style="color:rgba(244,237,224,0.55)">{stamp}</div>
+			<div class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">{stamp}</div>
 			<div class="hi-detail-title">{shot.profileName ?? 'Untitled shot'}</div>
 			<div class="hi-detail-sub">
 				{(shot.durationMs / 1000).toFixed(0)} s
@@ -183,7 +183,7 @@
 
 	<!-- Rating -->
 	<div class="hi-rating">
-		<span class="t-eyebrow" style="color:rgba(244,237,224,0.55)">Rating</span>
+		<span class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Rating</span>
 		<div class="hi-stars">
 			{#each [1, 2, 3, 4, 5] as n (n)}
 				<button
@@ -202,7 +202,7 @@
 	<!-- Notes -->
 	<div class="hi-notes">
 		<div class="hi-notes-head">
-			<span class="t-eyebrow" style="color:rgba(244,237,224,0.55)">Tasting notes</span>
+			<span class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Tasting notes</span>
 			{#if editing}
 				<button class="hi-notes-edit" onclick={saveNotes}>
 					<i class="ph ph-check" aria-hidden="true"></i> Save
@@ -230,8 +230,8 @@
 
 <style>
 	.hi-detail {
-		background: var(--espresso-900);
-		border: 1px solid rgba(244, 237, 224, 0.05);
+		background: var(--bg-surface);
+		border: 1px solid rgba(var(--tint-rgb), 0.05);
 		border-radius: var(--radius-lg, 14px);
 		padding: 20px 24px 24px;
 		display: flex;
@@ -245,7 +245,7 @@
 		justify-content: space-between;
 		gap: 16px;
 		padding-bottom: 16px;
-		border-bottom: 1px solid rgba(244, 237, 224, 0.05);
+		border-bottom: 1px solid rgba(var(--tint-rgb), 0.05);
 	}
 	.hi-detail-title {
 		font-family: var(--font-serif);
@@ -257,7 +257,7 @@
 	.hi-detail-sub {
 		font-family: var(--font-sans);
 		font-size: 12px;
-		color: rgba(244, 237, 224, 0.55);
+		color: rgba(var(--tint-rgb), 0.55);
 		margin-top: 4px;
 	}
 	.hi-detail-bean {
@@ -289,16 +289,16 @@
 		font-size: 13px;
 	}
 	.st-btn-secondary {
-		background: rgba(244, 237, 224, 0.04);
-		border-color: rgba(244, 237, 224, 0.1);
+		background: rgba(var(--tint-rgb), 0.04);
+		border-color: rgba(var(--tint-rgb), 0.1);
 		color: var(--ink-50);
 	}
 	.st-btn-secondary:hover {
-		background: rgba(244, 237, 224, 0.08);
+		background: rgba(var(--tint-rgb), 0.08);
 	}
 
 	.hi-chart {
-		background: var(--espresso-950);
+		background: var(--bg-page);
 		border-radius: var(--radius-md);
 		padding: 14px 14px 10px;
 		position: relative;
@@ -309,7 +309,7 @@
 		padding-top: 8px;
 		font-family: var(--font-sans);
 		font-size: 11px;
-		color: rgba(244, 237, 224, 0.65);
+		color: rgba(var(--tint-rgb), 0.65);
 	}
 	.hi-chart-legend > span {
 		display: inline-flex;
@@ -333,7 +333,7 @@
 		flex-direction: column;
 		gap: 4px;
 		padding: 10px 12px;
-		background: var(--espresso-950);
+		background: var(--bg-page);
 		border-radius: var(--radius-sm);
 	}
 	.hi-metric-l {
@@ -342,7 +342,7 @@
 		letter-spacing: var(--track-allcaps);
 		text-transform: uppercase;
 		font-weight: 700;
-		color: rgba(244, 237, 224, 0.42);
+		color: rgba(var(--tint-rgb), 0.42);
 	}
 	.hi-metric-v {
 		font-family: var(--font-mono);
@@ -353,7 +353,7 @@
 	.hi-metric-v em {
 		font-style: normal;
 		font-size: 10px;
-		color: rgba(244, 237, 224, 0.5);
+		color: rgba(var(--tint-rgb), 0.5);
 		margin-left: 2px;
 	}
 
@@ -371,7 +371,7 @@
 		border: 0;
 		padding: 2px;
 		cursor: pointer;
-		color: rgba(244, 237, 224, 0.3);
+		color: rgba(var(--tint-rgb), 0.3);
 		font-size: 18px;
 		line-height: 1;
 		transition: color var(--dur-1) var(--ease);
@@ -384,7 +384,7 @@
 	}
 
 	.hi-notes {
-		background: var(--espresso-950);
+		background: var(--bg-page);
 		border-radius: var(--radius-md);
 		padding: 14px 16px;
 		display: flex;
@@ -399,7 +399,7 @@
 	.hi-notes-edit {
 		background: transparent;
 		border: 0;
-		color: rgba(244, 237, 224, 0.55);
+		color: rgba(var(--tint-rgb), 0.55);
 		font-family: var(--font-sans);
 		font-size: 11px;
 		cursor: pointer;
@@ -417,13 +417,13 @@
 		color: var(--ink-50);
 	}
 	.hi-notes-body.is-empty {
-		color: rgba(244, 237, 224, 0.4);
+		color: rgba(var(--tint-rgb), 0.4);
 		font-style: italic;
 	}
 	.hi-notes-input {
 		width: 100%;
-		background: rgba(244, 237, 224, 0.04);
-		border: 1px solid rgba(244, 237, 224, 0.12);
+		background: rgba(var(--tint-rgb), 0.04);
+		border: 1px solid rgba(var(--tint-rgb), 0.12);
 		border-radius: var(--radius-sm);
 		color: var(--ink-50);
 		font-family: var(--font-sans);
@@ -434,7 +434,7 @@
 		outline: 0;
 	}
 	.hi-notes-input:focus {
-		border-color: rgba(244, 237, 224, 0.25);
+		border-color: rgba(var(--tint-rgb), 0.25);
 	}
 
 	@media (max-width: 1100px) {

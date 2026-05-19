@@ -64,7 +64,7 @@
 				? 'var(--warning)'
 				: freshness === 'bad'
 					? 'var(--danger)'
-					: 'rgba(244, 237, 224, 0.4)'
+					: 'rgba(var(--tint-rgb), 0.4)'
 	);
 	/** The roast date as a short `May 11`, or a dash when not logged. */
 	const roastDate = $derived.by(() => {
@@ -228,7 +228,7 @@
 		gap: 4px;
 		background: transparent;
 		border: 0;
-		color: rgba(244, 237, 224, 0.6);
+		color: rgba(var(--tint-rgb), 0.6);
 		font-family: var(--font-sans);
 		font-size: 10px;
 		cursor: pointer;
@@ -249,8 +249,8 @@
 		gap: 4px;
 	}
 	.bean-input {
-		background: rgba(244, 237, 224, 0.04);
-		border: 1px solid rgba(244, 237, 224, 0.12);
+		background: rgba(var(--tint-rgb), 0.04);
+		border: 1px solid rgba(var(--tint-rgb), 0.12);
 		border-radius: var(--radius-sm);
 		color: var(--ink-50);
 		font-family: var(--font-sans);
@@ -263,7 +263,7 @@
 		color-scheme: dark;
 	}
 	.bean-input:focus {
-		border-color: rgba(244, 237, 224, 0.25);
+		border-color: rgba(var(--tint-rgb), 0.25);
 	}
 	.bean-roast {
 		display: flex;
@@ -272,10 +272,10 @@
 	}
 	.bean-roast-opt {
 		flex: 1;
-		background: rgba(244, 237, 224, 0.04);
-		border: 1px solid rgba(244, 237, 224, 0.12);
+		background: rgba(var(--tint-rgb), 0.04);
+		border: 1px solid rgba(var(--tint-rgb), 0.12);
 		border-radius: var(--radius-sm);
-		color: rgba(244, 237, 224, 0.6);
+		color: rgba(var(--tint-rgb), 0.6);
 		font-family: var(--font-sans);
 		font-size: 11px;
 		text-transform: capitalize;
@@ -284,7 +284,7 @@
 		transition: all var(--dur-1) var(--ease);
 	}
 	.bean-roast-opt:hover {
-		background: rgba(244, 237, 224, 0.08);
+		background: rgba(var(--tint-rgb), 0.08);
 	}
 	.bean-roast-opt.is-active {
 		background: rgba(193, 124, 79, 0.16);

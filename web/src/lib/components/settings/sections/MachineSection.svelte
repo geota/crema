@@ -150,7 +150,7 @@
 				height="80"
 				rx="6"
 				fill="#3a2a1d"
-				stroke="rgba(244,237,224,0.18)"
+				stroke="rgba(var(--tint-rgb), 0.18)"
 			/>
 			<rect
 				x="28"
@@ -159,16 +159,16 @@
 				height="34"
 				rx="3"
 				fill="#0d0907"
-				stroke="rgba(244,237,224,0.12)"
+				stroke="rgba(var(--tint-rgb), 0.12)"
 			/>
 			<circle cx="55" cy="45" r="2" fill="var(--copper-400)" />
-			<rect x="42" y="68" width="26" height="6" rx="2" fill="rgba(244,237,224,0.18)" />
-			<rect x="48" y="74" width="14" height="20" rx="2" fill="rgba(244,237,224,0.10)" />
+			<rect x="42" y="68" width="26" height="6" rx="2" fill="rgba(var(--tint-rgb), 0.18)" />
+			<rect x="48" y="74" width="14" height="20" rx="2" fill="rgba(var(--tint-rgb), 0.10)" />
 			<ellipse cx="55" cy="110" rx="32" ry="4" fill="rgba(0,0,0,0.4)" />
 		</svg>
 	</div>
 	<div class="st-machinecard-info">
-		<div class="t-eyebrow" style="color:rgba(244,237,224,0.55)">{stateLabel}</div>
+		<div class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">{stateLabel}</div>
 		<div class="st-machinecard-name">
 			{connected ? 'DE1 · Crema Bar' : 'No machine connected'}
 		</div>
@@ -340,7 +340,7 @@
 	.st-diag-id {
 		font-family: var(--font-mono);
 		font-size: 10px;
-		color: rgba(244, 237, 224, 0.4);
+		color: rgba(var(--tint-rgb), 0.4);
 		word-break: break-all;
 		max-width: 220px;
 		display: inline-block;

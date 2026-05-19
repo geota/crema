@@ -100,6 +100,19 @@
   --hairline:       rgba(31, 24, 18, 0.08); /* 1px borders on light */
   --hairline-strong:rgba(31, 24, 18, 0.16);
 
+  /* Tint base — the RGB triplet used for opacity-based fills (faint surface
+     washes, dividers, scrollbar thumbs, inset highlights). Flips per theme so
+     `rgba(var(--tint-rgb), X)` reads correctly in both light and dark. On
+     light it's the warm ink; on dark the warm off-white. */
+  --tint-rgb: 31, 24, 18;
+
+  /* Chart-specific surfaces — consumed by the canvas chart components via the
+     `cssVar()` helper. Defined for both themes so charts repaint on theme
+     switch. */
+  --chart-grid:       rgba(31, 24, 18, 0.06);  /* gridlines */
+  --chart-axis-label: rgba(31, 24, 18, 0.45);  /* axis tick labels */
+  --chart-band:       rgba(199, 118, 59, 0.06);/* copper highlight band */
+
   /* ========================================================================
      TYPOGRAPHY
      ======================================================================== */
@@ -204,7 +217,7 @@
   --edge-desktop: 32px;
 
   --topbar-h: 56px;
-  --bottombar-h: 88px;
+  --sidebar-w: 72px; /* width of the fixed side rail (.cside) */
 }
 
 /* ============================================================================
@@ -227,6 +240,12 @@
 
   --hairline:        rgba(244, 237, 224, 0.08);
   --hairline-strong: rgba(244, 237, 224, 0.16);
+
+  --tint-rgb: 244, 237, 224;
+
+  --chart-grid:       rgba(244, 237, 224, 0.05);
+  --chart-axis-label: rgba(244, 237, 224, 0.3);
+  --chart-band:       rgba(193, 116, 75, 0.06);
 
   --shadow-sm: var(--inset-highlight);
   --shadow-md: var(--inset-highlight);
@@ -259,6 +278,17 @@
 }
 
 .t-h2 {
+  font-family: var(--font-serif);
+  font-weight: var(--w-regular);
+  font-size: var(--text-3xl);
+  line-height: var(--lh-snug);
+  letter-spacing: var(--track-tight);
+  color: var(--fg-1);
+}
+
+/* Shared screen heading — every route's page title uses this single role so
+   the page-title size is declared once, not re-rolled per screen. */
+.t-page-title {
   font-family: var(--font-serif);
   font-weight: var(--w-regular);
   font-size: var(--text-3xl);

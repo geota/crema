@@ -148,7 +148,7 @@
 	<!-- Header -->
 	<div class="pp-head">
 		<div class="pp-head-l">
-			<div class="t-eyebrow" style="color:rgba(244,237,224,0.55)">Library</div>
+			<div class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Library</div>
 			<div class="pp-title">Profiles</div>
 			<div class="pp-sub">
 				{#if store.loaded}
@@ -213,7 +213,7 @@
 			{/if}
 		</div>
 		<div class="pp-sort">
-			<span class="t-eyebrow" style="color:rgba(244,237,224,0.45)">Sort</span>
+			<span class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.45)">Sort</span>
 			{#each [{ id: 'recent', label: 'Recent' }, { id: 'name', label: 'Name' }, { id: 'dose', label: 'Dose' }] as const as s (s.id)}
 				<button
 					class="pp-sort-opt"
@@ -254,7 +254,7 @@
 
 <style>
 	.pp-page {
-		background: var(--espresso-950);
+		background: var(--bg-page);
 		color: var(--ink-50);
 		display: flex;
 		flex-direction: column;
@@ -286,7 +286,7 @@
 	.pp-sub {
 		font-family: var(--font-sans);
 		font-size: 13px;
-		color: rgba(244, 237, 224, 0.55);
+		color: rgba(var(--tint-rgb), 0.55);
 		margin-top: 2px;
 	}
 	.pp-head-r {
@@ -298,18 +298,18 @@
 		position: relative;
 		display: flex;
 		align-items: center;
-		background: rgba(244, 237, 224, 0.04);
-		border: 1px solid rgba(244, 237, 224, 0.08);
+		background: rgba(var(--tint-rgb), 0.04);
+		border: 1px solid rgba(var(--tint-rgb), 0.08);
 		border-radius: var(--radius-pill);
 		padding: 0 12px;
 		width: 300px;
 		transition: border-color var(--dur-1) var(--ease);
 	}
 	.pp-search:focus-within {
-		border-color: rgba(244, 237, 224, 0.2);
+		border-color: rgba(var(--tint-rgb), 0.2);
 	}
 	.pp-search i {
-		color: rgba(244, 237, 224, 0.45);
+		color: rgba(var(--tint-rgb), 0.45);
 		font-size: 14px;
 	}
 	.pp-search input {
@@ -324,13 +324,13 @@
 		padding: 9px 8px;
 	}
 	.pp-search input::placeholder {
-		color: rgba(244, 237, 224, 0.35);
+		color: rgba(var(--tint-rgb), 0.35);
 	}
 	.pp-search-clear {
 		background: transparent;
 		border: 0;
 		padding: 4px;
-		color: rgba(244, 237, 224, 0.4);
+		color: rgba(var(--tint-rgb), 0.4);
 		cursor: pointer;
 	}
 
@@ -352,16 +352,16 @@
 		font-size: 14px;
 	}
 	.pp-btn-secondary {
-		background: rgba(244, 237, 224, 0.04);
-		border-color: rgba(244, 237, 224, 0.1);
+		background: rgba(var(--tint-rgb), 0.04);
+		border-color: rgba(var(--tint-rgb), 0.1);
 		color: var(--ink-50);
 	}
 	.pp-btn-secondary:hover {
-		background: rgba(244, 237, 224, 0.07);
+		background: rgba(var(--tint-rgb), 0.07);
 	}
 	.pp-btn-primary {
 		background: var(--copper-500);
-		color: #1a120c;
+		color: var(--fg-on-accent);
 		font-weight: 600;
 	}
 	.pp-btn-primary:hover {
@@ -375,7 +375,7 @@
 		align-items: center;
 		gap: 24px;
 		padding: 0 var(--page-pad-x) 16px;
-		border-bottom: 1px solid rgba(244, 237, 224, 0.05);
+		border-bottom: 1px solid rgba(var(--tint-rgb), 0.05);
 	}
 	.pp-tags {
 		display: flex;
@@ -389,7 +389,7 @@
 		padding: 7px 14px;
 		background: transparent;
 		border: 0;
-		color: rgba(244, 237, 224, 0.6);
+		color: rgba(var(--tint-rgb), 0.6);
 		font-family: var(--font-sans);
 		font-size: 13px;
 		cursor: pointer;
@@ -402,25 +402,25 @@
 	}
 	.pp-tag.is-active {
 		color: var(--ink-50);
-		background: rgba(244, 237, 224, 0.06);
+		background: rgba(var(--tint-rgb), 0.06);
 	}
 	.pp-tag-count {
 		font-family: var(--font-mono);
 		font-variant-numeric: tabular-nums;
 		font-size: 10px;
-		color: rgba(244, 237, 224, 0.4);
+		color: rgba(var(--tint-rgb), 0.4);
 		padding: 1px 6px;
-		background: rgba(244, 237, 224, 0.04);
+		background: rgba(var(--tint-rgb), 0.04);
 		border-radius: 999px;
 	}
 	.pp-tag.is-active .pp-tag-count {
 		background: var(--copper-500);
-		color: #1a120c;
+		color: var(--fg-on-accent);
 	}
 	.pp-tag-divider {
 		width: 1px;
 		height: 16px;
-		background: rgba(244, 237, 224, 0.1);
+		background: rgba(var(--tint-rgb), 0.1);
 		margin: 0 6px;
 		align-self: center;
 	}
@@ -430,7 +430,7 @@
 		letter-spacing: var(--track-allcaps);
 		text-transform: uppercase;
 		font-weight: 700;
-		color: rgba(244, 237, 224, 0.4);
+		color: rgba(var(--tint-rgb), 0.4);
 		padding: 0 2px;
 		align-self: center;
 		white-space: nowrap;
@@ -445,7 +445,7 @@
 	}
 	.pp-tag-custom.is-active .pp-tag-count {
 		background: var(--copper-500);
-		color: #1a120c;
+		color: var(--fg-on-accent);
 	}
 	.pp-sort {
 		display: flex;
@@ -456,7 +456,7 @@
 	.pp-sort-opt {
 		background: transparent;
 		border: 0;
-		color: rgba(244, 237, 224, 0.5);
+		color: rgba(var(--tint-rgb), 0.5);
 		font-family: var(--font-sans);
 		font-size: 12px;
 		cursor: pointer;
@@ -508,7 +508,7 @@
 		justify-content: center;
 		gap: 8px;
 		background: transparent;
-		border: 1px dashed rgba(244, 237, 224, 0.15);
+		border: 1px dashed rgba(var(--tint-rgb), 0.15);
 		border-radius: var(--radius-lg, 14px);
 		color: var(--ink-50);
 		cursor: pointer;
@@ -518,25 +518,25 @@
 		transition: all var(--dur-1) var(--ease);
 	}
 	.pp-card-new:hover {
-		border-color: rgba(244, 237, 224, 0.3);
-		background: rgba(244, 237, 224, 0.02);
+		border-color: rgba(var(--tint-rgb), 0.3);
+		background: rgba(var(--tint-rgb), 0.02);
 	}
 	.pp-card-new-glyph {
 		width: 48px;
 		height: 48px;
 		border-radius: 50%;
-		background: rgba(244, 237, 224, 0.05);
+		background: rgba(var(--tint-rgb), 0.05);
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		color: rgba(244, 237, 224, 0.6);
+		color: rgba(var(--tint-rgb), 0.6);
 		font-size: 22px;
 		margin-bottom: 4px;
 		transition: all var(--dur-1) var(--ease);
 	}
 	.pp-card-new:hover .pp-card-new-glyph {
 		background: var(--copper-500);
-		color: #1a120c;
+		color: var(--fg-on-accent);
 	}
 	.pp-card-new-label {
 		font-size: 14px;
@@ -544,14 +544,14 @@
 	}
 	.pp-card-new-sub {
 		font-size: 11px;
-		color: rgba(244, 237, 224, 0.45);
+		color: rgba(var(--tint-rgb), 0.45);
 	}
 
 	.pp-empty {
 		grid-column: 1 / -1;
 		text-align: center;
 		padding: 40px;
-		color: rgba(244, 237, 224, 0.5);
+		color: rgba(var(--tint-rgb), 0.5);
 		font-family: var(--font-sans);
 		font-size: 13px;
 	}

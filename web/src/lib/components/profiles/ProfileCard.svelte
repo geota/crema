@@ -212,8 +212,8 @@
 		right: 0;
 		bottom: calc(100% + 6px);
 		z-index: 21;
-		background: var(--espresso-850);
-		border: 1px solid rgba(244, 237, 224, 0.1);
+		background: var(--bg-surface-2);
+		border: 1px solid rgba(var(--tint-rgb), 0.1);
 		border-radius: var(--radius-sm);
 		box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
 		padding: 4px;
@@ -240,14 +240,14 @@
 		font-size: 14px;
 	}
 	.pp-menu-item:hover {
-		background: rgba(244, 237, 224, 0.06);
+		background: rgba(var(--tint-rgb), 0.06);
 	}
 	.pp-menu-item:disabled {
 		opacity: 0.4;
 		cursor: not-allowed;
 	}
 	.pp-menu-item-danger {
-		color: #d97757;
+		color: var(--warning);
 	}
 	.pp-menu-item-danger:hover:not(:disabled) {
 		background: rgba(217, 119, 87, 0.1);

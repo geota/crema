@@ -82,7 +82,7 @@
 			{shape}
 			width={48}
 			height={20}
-			color={active ? 'var(--copper-400)' : 'rgba(244,237,224,0.45)'}
+			color={active ? 'var(--copper-400)' : 'rgba(var(--tint-rgb), 0.45)'}
 		/>
 	</div>
 	<div class="hi-row-main">
@@ -124,7 +124,7 @@
 		transition: background var(--dur-1) var(--ease);
 	}
 	.hi-row:hover {
-		background: rgba(244, 237, 224, 0.04);
+		background: rgba(var(--tint-rgb), 0.04);
 	}
 	.hi-row.is-active {
 		background: rgba(193, 116, 75, 0.1);
@@ -144,7 +144,7 @@
 	.hi-row-time-d {
 		font-family: var(--font-sans);
 		font-size: 10px;
-		color: rgba(244, 237, 224, 0.45);
+		color: rgba(var(--tint-rgb), 0.45);
 	}
 	.hi-row-spark {
 		display: flex;
@@ -169,7 +169,7 @@
 	.hi-row-bean {
 		font-family: var(--font-sans);
 		font-size: 11px;
-		color: rgba(244, 237, 224, 0.5);
+		color: rgba(var(--tint-rgb), 0.5);
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;
@@ -186,7 +186,7 @@
 	.hi-row-metric-val em {
 		font-style: normal;
 		font-size: 10px;
-		color: rgba(244, 237, 224, 0.5);
+		color: rgba(var(--tint-rgb), 0.5);
 		margin-left: 1px;
 	}
 	.hi-row-metric-l {
@@ -194,7 +194,7 @@
 		font-size: 9px;
 		letter-spacing: var(--track-allcaps);
 		text-transform: uppercase;
-		color: rgba(244, 237, 224, 0.4);
+		color: rgba(var(--tint-rgb), 0.4);
 	}
 	.hi-row-stars {
 		font-family: var(--font-sans);
@@ -205,6 +205,6 @@
 	}
 	/* An unrated shot still shows five (dim) glyphs, keeping the column rhythm. */
 	.hi-row-stars.is-unrated {
-		color: rgba(244, 237, 224, 0.25);
+		color: rgba(var(--tint-rgb), 0.25);
 	}
 </style>

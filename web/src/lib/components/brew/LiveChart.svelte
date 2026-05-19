@@ -245,8 +245,8 @@
 	}
 
 	function buildOpts(w: number, h: number): uPlot.Options {
-		const gridColor = 'rgba(244,237,224,0.05)';
-		const labelColor = 'rgba(244,237,224,0.35)';
+		const gridColor = 'rgba(var(--tint-rgb), 0.05)';
+		const labelColor = 'rgba(var(--tint-rgb), 0.35)';
 		const yFont = '11px "JetBrains Mono", monospace';
 		return {
 			width: w,
@@ -339,7 +339,7 @@
 				},
 				{
 					scale: 'y',
-					stroke: 'rgba(244,237,224,0.28)',
+					stroke: 'rgba(var(--tint-rgb), 0.28)',
 					width: 1.5,
 					dash: [4, 4],
 					points: { show: false }

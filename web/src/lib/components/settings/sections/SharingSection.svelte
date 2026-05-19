@@ -93,14 +93,14 @@
 				stroke-linecap="round"
 			/>
 			<circle cx="24" cy="24" r="3.5" fill="var(--copper-400)" />
-			<circle cx="44" cy="12" r="2.5" fill="rgba(244,237,224,0.6)" />
-			<circle cx="4" cy="36" r="2.5" fill="rgba(244,237,224,0.6)" />
+			<circle cx="44" cy="12" r="2.5" fill="rgba(var(--tint-rgb), 0.6)" />
+			<circle cx="4" cy="36" r="2.5" fill="rgba(var(--tint-rgb), 0.6)" />
 		</svg>
 	</div>
 	<div class="st-visualizer-info">
 		<div
 			class="t-eyebrow"
-			style="color:{connected ? 'var(--copper-400)' : 'rgba(244,237,224,0.5)'}"
+			style="color:{connected ? 'var(--copper-400)' : 'rgba(var(--tint-rgb), 0.5)'}"
 		>
 			{connected ? 'Connected' : 'Not connected'}
 		</div>
