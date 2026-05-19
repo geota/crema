@@ -63,6 +63,12 @@ pub const STEAM_CLOG_TRIM_SAMPLES: usize = 21;
 /// is treated as a brief purge and skipped (`machine.tcl:1173`).
 pub const STEAM_CLOG_MIN_SAMPLES: usize = 30;
 
+/// `clog_analysis` slices `samples[STEAM_CLOG_TRIM_SAMPLES..]` only after the
+/// `len() >= STEAM_CLOG_MIN_SAMPLES` early return, so the slice is panic-free
+/// only while the minimum is at least the trim count. Enforce that invariant
+/// at compile time.
+const _: () = assert!(STEAM_CLOG_MIN_SAMPLES >= STEAM_CLOG_TRIM_SAMPLES);
+
 /// Group pressure above which a steam sample counts as over-pressure, bar —
 /// the legacy `steam_over_pressure_threshold` (`machine.tcl:1195`).
 pub const STEAM_OVER_PRESSURE_THRESHOLD_BAR: f32 = 8.0;
@@ -219,6 +225,7 @@ impl SteamMonitor {
     /// [`on_tick`](Self::on_tick); [`on_eco_enabled`](Self::on_eco_enabled)
     /// returns the event directly.
     pub fn on_eco_enabled(&mut self, enabled: bool, now_ms: u64) -> Vec<SteamEvent> {
+        let was_enabled = self.eco_enabled;
         self.eco_enabled = enabled;
         let mut events = Vec::new();
         if !enabled && self.eco_mode {
@@ -226,8 +233,10 @@ impl SteamMonitor {
             events.push(SteamEvent::EcoModeChanged(false));
         }
         // Re-arm the idle clock so a freshly enabled eco mode counts its delay
-        // from now, not from a stale earlier timestamp.
-        if enabled {
+        // from now, not from a stale earlier timestamp. Only on the off->on
+        // edge: re-arming while eco is already enabled would silently push the
+        // pending eco transition further out.
+        if enabled && !was_enabled {
             self.last_steam_ms = Some(now_ms);
         }
         events
@@ -637,6 +646,18 @@ mod tests {
         let events = monitor.on_eco_enabled(false, 700_000);
         assert_eq!(events, vec![SteamEvent::EcoModeChanged(false)]);
         assert!(!monitor.is_eco_mode());
+    }
+
+    #[test]
+    fn re_enabling_eco_mode_does_not_delay_a_pending_transition() {
+        let mut monitor = SteamMonitor::new().with_eco_delay(600);
+        monitor.on_eco_enabled(true, 0);
+        // A redundant enable partway through the idle delay must not re-arm
+        // the idle clock and push the transition out.
+        monitor.on_eco_enabled(true, 300_000);
+        // Eco still engages 600 s after the *original* enable, not 900 s.
+        let events = monitor.on_tick(600_000);
+        assert_eq!(events, vec![SteamEvent::EcoModeChanged(true)]);
     }
 
     #[test]

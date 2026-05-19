@@ -91,7 +91,10 @@ impl FlowEstimator {
     }
 
     /// The sample `back` positions before the newest (`back == 0` is newest).
+    ///
+    /// Callers must ensure `back` is within the current sample count.
     fn at(&self, back: usize) -> (u64, f32) {
+        debug_assert!(back < self.samples.len());
         self.samples[self.samples.len() - 1 - back]
     }
 
