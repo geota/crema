@@ -366,24 +366,6 @@
 					<div class="pe-section-title">Limits</div>
 					<div class="pe-grid">
 						<PeNumber
-							label="Min pressure"
-							value={draft.minimumPressure}
-							step={0.1}
-							unit="bar"
-							min={0}
-							max={12}
-							onChange={(v) => patch({ minimumPressure: v })}
-						/>
-						<PeNumber
-							label="Max flow"
-							value={draft.maximumFlow}
-							step={0.1}
-							unit="ml/s"
-							min={0}
-							max={12}
-							onChange={(v) => patch({ maximumFlow: v })}
-						/>
-						<PeNumber
 							label="Max total volume"
 							value={draft.maxTotalVolumeMl}
 							step={5}

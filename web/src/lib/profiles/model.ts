@@ -127,10 +127,6 @@ export interface CremaProfile {
 	autoTare: boolean;
 	/** How many leading segments count as preinfusion — core `preinfuse_step_count`. */
 	preinfuseStepCount: number;
-	/** Minimum pressure for flow-priority segments, bar — core `minimum_pressure`. */
-	minimumPressure: number;
-	/** Maximum flow for pressure-priority segments, mL/s — core `maximum_flow`. */
-	maximumFlow: number;
 	/** Whole-shot dispensed-volume limit, mL, 0–1023 (0 = no limit). */
 	maxTotalVolumeMl: number;
 	/** The ordered pressure / flow segments. */
@@ -364,13 +360,13 @@ export function fromCoreProfile(profile: Profile, index: number): CremaProfile {
 		pinned: false,
 		lastUsed: null,
 		dose: 18,
-		yieldG: 36,
+		// The yield target is the profile's DE1 `target_weight`; fall back to a
+		// neutral default for a profile that carries none.
+		yieldG: profile.target_weight > 0 ? profile.target_weight : 36,
 		brewTemp: Math.round(meanTemp * 2) / 2,
 		stopOnWeight: true,
 		autoTare: true,
 		preinfuseStepCount: profile.preinfuse_step_count,
-		minimumPressure: profile.minimum_pressure,
-		maximumFlow: profile.maximum_flow,
 		maxTotalVolumeMl: profile.max_total_volume_ml,
 		segments
 	};
@@ -389,9 +385,14 @@ export function toCoreProfile(p: CremaProfile): Profile {
 		// Clamp the preinfuse count to the actual segment range — a profile can
 		// never count more leading preinfusion steps than it has segments.
 		preinfuse_step_count: Math.min(p.preinfuseStepCount, p.segments.length),
-		minimum_pressure: p.minimumPressure,
-		maximum_flow: p.maximumFlow,
-		max_total_volume_ml: p.maxTotalVolumeMl
+		// The DE1 ShotHeader pressure/flow limits are vestigial — the legacy app
+		// always sets the per-frame IgnoreLimit flag, so the per-step limiter is
+		// the real control. Emit the universal 0; not exposed in the editor.
+		minimum_pressure: 0,
+		maximum_flow: 0,
+		max_total_volume_ml: p.maxTotalVolumeMl,
+		// The yield target round-trips as the DE1 profile's `target_weight`.
+		target_weight: p.yieldG
 	};
 }
 
@@ -470,8 +471,6 @@ export function blankProfile(): CremaProfile {
 		stopOnWeight: true,
 		autoTare: true,
 		preinfuseStepCount: 1,
-		minimumPressure: 0,
-		maximumFlow: 6,
 		maxTotalVolumeMl: 0,
 		segments: defaultSegments()
 	};
