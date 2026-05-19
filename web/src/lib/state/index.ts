@@ -8,6 +8,7 @@ export {
 	CremaUiState,
 	applyEvent,
 	formatFirmware,
+	waterTankMl,
 	INITIAL_SNAPSHOT,
 	DEFAULT_SCALE_VOLUME,
 	DEFAULT_SCALE_STANDBY_MINUTES,
