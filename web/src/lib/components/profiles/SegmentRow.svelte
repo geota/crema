@@ -416,14 +416,14 @@
 		align-items: center;
 		min-width: 1420px;
 		padding: 10px 14px;
-		background: var(--espresso-900);
-		border: 1px solid rgba(244, 237, 224, 0.05);
+		background: var(--bg-surface);
+		border: 1px solid rgba(var(--tint-rgb), 0.05);
 		border-radius: var(--radius-sm);
 		cursor: pointer;
 		transition: all var(--dur-1) var(--ease);
 	}
 	.pe-seg:hover {
-		border-color: rgba(244, 237, 224, 0.12);
+		border-color: rgba(var(--tint-rgb), 0.12);
 	}
 	.pe-seg.is-active {
 		border-color: var(--copper-500);
@@ -451,14 +451,14 @@
 		background: transparent;
 		border: 0;
 		border-radius: 4px;
-		color: rgba(244, 237, 224, 0.35);
+		color: rgba(var(--tint-rgb), 0.35);
 		cursor: grab;
 		font-size: 13px;
 		transition: all var(--dur-1) var(--ease);
 	}
 	.pe-seg-grip:hover {
-		color: rgba(244, 237, 224, 0.7);
-		background: rgba(244, 237, 224, 0.06);
+		color: rgba(var(--tint-rgb), 0.7);
+		background: rgba(var(--tint-rgb), 0.06);
 	}
 	.pe-seg-grip:active {
 		cursor: grabbing;
@@ -472,14 +472,14 @@
 		font-family: var(--font-mono);
 		font-variant-numeric: tabular-nums;
 		font-size: 12px;
-		color: rgba(244, 237, 224, 0.55);
+		color: rgba(var(--tint-rgb), 0.55);
 		text-align: center;
 		outline: 0;
 		transition: border-color var(--dur-1) var(--ease);
 	}
 	.pe-seg-num:hover,
 	.pe-seg-num:focus {
-		border-bottom-color: rgba(244, 237, 224, 0.25);
+		border-bottom-color: rgba(var(--tint-rgb), 0.25);
 	}
 	.pe-seg-name {
 		display: flex;
@@ -502,7 +502,7 @@
 	}
 	.pe-seg-name-input:hover,
 	.pe-seg-name-input:focus {
-		border-bottom-color: rgba(244, 237, 224, 0.2);
+		border-bottom-color: rgba(var(--tint-rgb), 0.2);
 	}
 
 	/* The uniform field box. Invisible by default (transparent border); the
@@ -562,14 +562,14 @@
 		height: 30px;
 		background: transparent;
 		border: 0;
-		color: rgba(244, 237, 224, 0.4);
+		color: rgba(var(--tint-rgb), 0.4);
 		border-radius: 6px;
 		cursor: pointer;
 		font-size: 14px;
 		transition: all var(--dur-1) var(--ease);
 	}
 	.pe-seg-del:hover {
-		color: #d97757;
+		color: var(--warning);
 		background: rgba(217, 119, 87, 0.08);
 	}
 
@@ -583,7 +583,7 @@
 		align-items: center;
 	}
 	.pe-seg :global(.qsplit-prefix) {
-		color: rgba(244, 237, 224, 0.4);
+		color: rgba(var(--tint-rgb), 0.4);
 	}
 	/* Every stepper bar fills its (equal-width) cell. */
 	.pe-seg :global(.qcs) {

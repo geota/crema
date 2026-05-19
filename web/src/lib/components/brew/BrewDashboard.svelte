@@ -222,7 +222,7 @@
 		<!-- Profile header strip -->
 		<div class="crema-dash-head">
 			<div class="crema-dash-head-l">
-				<div class="t-eyebrow" style="color:rgba(244,237,224,0.55)">Profile</div>
+				<div class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Profile</div>
 				<div class="crema-dash-profile">{profileName}</div>
 				<div class="crema-dash-profile-meta">
 					Pre-inf {p.preinf}s · 1:{ratio} ratio · {p.yield.toFixed(1)} g target · {p.brewTemp.toFixed(

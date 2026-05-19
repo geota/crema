@@ -64,12 +64,12 @@
 		height: 76px;
 		box-sizing: border-box;
 		padding: 12px;
-		background: rgba(244, 237, 224, 0.03);
-		border: 1px solid rgba(244, 237, 224, 0.06);
+		background: rgba(var(--tint-rgb), 0.03);
+		border: 1px solid rgba(var(--tint-rgb), 0.06);
 		border-radius: var(--radius-sm);
 	}
 	.pe-num :global(.t-eyebrow) {
-		color: rgba(244, 237, 224, 0.5);
+		color: rgba(var(--tint-rgb), 0.5);
 		/* Slightly smaller + tighter, and never wrapping, so a long label
 		   like "Max total volume" stays on one line in the 2-up editor grid. */
 		font-size: 10px;
@@ -86,7 +86,7 @@
 		flex: 0 0 28px;
 		border: 0;
 		border-radius: 5px;
-		background: rgba(244, 237, 224, 0.06);
+		background: rgba(var(--tint-rgb), 0.06);
 		color: var(--ink-50);
 		cursor: pointer;
 		display: flex;
@@ -95,7 +95,7 @@
 		font-size: 12px;
 	}
 	.pe-num-btn:hover {
-		background: rgba(244, 237, 224, 0.1);
+		background: rgba(var(--tint-rgb), 0.1);
 	}
 	.pe-num-val {
 		flex: 1 1 auto;
@@ -113,6 +113,6 @@
 	}
 	.pe-num-unit {
 		font-size: 11px;
-		color: rgba(244, 237, 224, 0.5);
+		color: rgba(var(--tint-rgb), 0.5);
 	}
 </style>

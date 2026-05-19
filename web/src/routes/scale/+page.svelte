@@ -259,12 +259,12 @@
 	<!-- Header strip -->
 	<div class="sc-head">
 		<div>
-			<div class="t-eyebrow" style="color:rgba(244,237,224,0.55)">Connected scale</div>
+			<div class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Connected scale</div>
 			<div class="sc-head-name">{scaleName}</div>
 			<div class="sc-head-meta">
 				<span
 					class="sc-dot"
-					style="background:{connected ? '#6B8C5F' : 'rgba(244,237,224,0.25)'}"
+					style="background:{connected ? 'var(--success)' : 'rgba(var(--tint-rgb), 0.25)'}"
 				></span>
 				<span>{statusLabel}</span>
 				{#if battery != null}
@@ -336,7 +336,7 @@
 	<div class="sc-dose">
 		<div class="sc-dose-head">
 			<div>
-				<div class="t-eyebrow" style="color:rgba(244,237,224,0.55)">Dose helper</div>
+				<div class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Dose helper</div>
 				<div class="sc-dose-title">
 					{#if targetProfileName}
 						Weighing for <strong>{targetProfileName}</strong> · target {targetDose.toFixed(1)} g
@@ -515,7 +515,7 @@
 
 <style>
 	.sc-page {
-		background: var(--espresso-950);
+		background: var(--bg-page);
 		color: var(--ink-50);
 		display: flex;
 		flex-direction: column;
@@ -546,14 +546,14 @@
 		gap: 10px;
 		font-family: var(--font-sans);
 		font-size: 12px;
-		color: rgba(244, 237, 224, 0.55);
+		color: rgba(var(--tint-rgb), 0.55);
 		margin-top: 6px;
 	}
 	.sc-head-meta i {
 		font-size: 14px;
 	}
 	.sc-sep {
-		color: rgba(244, 237, 224, 0.2);
+		color: rgba(var(--tint-rgb), 0.2);
 	}
 	.sc-head-r {
 		display: flex;
@@ -571,7 +571,7 @@
 	   is shared globally — see settings-page.css. */
 	.st-segment {
 		display: inline-flex;
-		background: rgba(244, 237, 224, 0.04);
+		background: rgba(var(--tint-rgb), 0.04);
 		border-radius: var(--radius-pill);
 		padding: 3px;
 	}
@@ -581,7 +581,7 @@
 		font-family: var(--font-sans);
 		font-size: 11px;
 		font-weight: 500;
-		color: rgba(244, 237, 224, 0.55);
+		color: rgba(var(--tint-rgb), 0.55);
 		padding: 5px 12px;
 		border-radius: 999px;
 		cursor: pointer;
@@ -589,7 +589,7 @@
 	}
 	.st-segment > button.is-active {
 		background: var(--copper-500);
-		color: #1a120c;
+		color: var(--fg-on-accent);
 	}
 
 	/* Live readout hero */
@@ -604,8 +604,8 @@
 		flex-direction: column;
 		justify-content: center;
 		align-items: flex-start;
-		background: var(--espresso-900);
-		border: 1px solid rgba(244, 237, 224, 0.06);
+		background: var(--bg-surface);
+		border: 1px solid rgba(var(--tint-rgb), 0.06);
 		border-radius: var(--radius-lg, 14px);
 		padding: 36px 44px;
 		position: relative;
@@ -635,7 +635,7 @@
 	.sc-readout-num .sc-unit {
 		font-size: 32px;
 		font-weight: 400;
-		color: rgba(244, 237, 224, 0.4);
+		color: rgba(var(--tint-rgb), 0.4);
 		letter-spacing: 0;
 	}
 	.sc-readout-sub {
@@ -644,11 +644,11 @@
 		font-weight: 500;
 		letter-spacing: var(--track-allcaps);
 		text-transform: uppercase;
-		color: rgba(244, 237, 224, 0.4);
+		color: rgba(var(--tint-rgb), 0.4);
 		margin-top: 18px;
 	}
 	.sc-sub-sep {
-		color: rgba(244, 237, 224, 0.2);
+		color: rgba(var(--tint-rgb), 0.2);
 		margin: 0 2px;
 	}
 
@@ -666,7 +666,7 @@
 		background: var(--copper-500);
 		border: 0;
 		border-radius: var(--radius-md);
-		color: #1a120c;
+		color: var(--fg-on-accent);
 		cursor: pointer;
 		padding: 24px 28px;
 		transition:
@@ -710,8 +710,8 @@
 		align-items: center;
 		justify-content: flex-start;
 		gap: 8px;
-		background: rgba(244, 237, 224, 0.04);
-		border: 1px solid rgba(244, 237, 224, 0.08);
+		background: rgba(var(--tint-rgb), 0.04);
+		border: 1px solid rgba(var(--tint-rgb), 0.08);
 		border-radius: var(--radius-sm);
 		color: var(--ink-50);
 		cursor: pointer;
@@ -720,7 +720,7 @@
 		font-size: 13px;
 	}
 	.sc-secondary:hover {
-		background: rgba(244, 237, 224, 0.08);
+		background: rgba(var(--tint-rgb), 0.08);
 	}
 	.sc-secondary i {
 		font-size: 14px;
@@ -728,8 +728,8 @@
 
 	/* Dose helper */
 	.sc-dose {
-		background: var(--espresso-900);
-		border: 1px solid rgba(244, 237, 224, 0.06);
+		background: var(--bg-surface);
+		border: 1px solid rgba(var(--tint-rgb), 0.06);
 		border-radius: var(--radius-lg, 14px);
 		padding: 22px 24px 24px;
 	}
@@ -752,7 +752,7 @@
 	.sc-dose-track {
 		position: relative;
 		height: 10px;
-		background: rgba(244, 237, 224, 0.05);
+		background: rgba(var(--tint-rgb), 0.05);
 		border-radius: 999px;
 		overflow: visible;
 	}
@@ -782,7 +782,7 @@
 		font-size: 10px;
 		letter-spacing: var(--track-allcaps);
 		text-transform: uppercase;
-		color: rgba(244, 237, 224, 0.5);
+		color: rgba(var(--tint-rgb), 0.5);
 		font-weight: 600;
 	}
 	.sc-dose-status {
@@ -791,7 +791,7 @@
 		font-size: 14px;
 	}
 	.sc-dose-ok {
-		color: #6b8c5f;
+		color: var(--success);
 		display: inline-flex;
 		align-items: center;
 		gap: 6px;
@@ -803,7 +803,7 @@
 		color: var(--copper-400);
 	}
 	.sc-dose-bad {
-		color: #d28a4a;
+		color: var(--warning);
 	}
 
 	/* Bottom split */
@@ -814,8 +814,8 @@
 	}
 	.sc-settings,
 	.sc-activity {
-		background: var(--espresso-900);
-		border: 1px solid rgba(244, 237, 224, 0.06);
+		background: var(--bg-surface);
+		border: 1px solid rgba(var(--tint-rgb), 0.06);
 		border-radius: var(--radius-lg, 14px);
 		padding: 20px 24px;
 	}
@@ -827,7 +827,7 @@
 		color: var(--ink-50);
 		margin-bottom: 12px;
 		padding-bottom: 12px;
-		border-bottom: 1px solid rgba(244, 237, 224, 0.05);
+		border-bottom: 1px solid rgba(var(--tint-rgb), 0.05);
 	}
 	.sc-set-row {
 		display: grid;
@@ -835,7 +835,7 @@
 		gap: 18px;
 		align-items: center;
 		padding: 12px 0;
-		border-bottom: 1px solid rgba(244, 237, 224, 0.04);
+		border-bottom: 1px solid rgba(var(--tint-rgb), 0.04);
 	}
 	.sc-set-row:last-child {
 		border-bottom: 0;
@@ -850,7 +850,7 @@
 		font-family: var(--font-sans);
 		font-size: 11px;
 		line-height: 1.5;
-		color: rgba(244, 237, 224, 0.5);
+		color: rgba(var(--tint-rgb), 0.5);
 		margin-top: 2px;
 	}
 	.qmini-tog:disabled {
@@ -864,7 +864,7 @@
 		gap: 12px;
 		align-items: baseline;
 		padding: 8px 0 8px 10px;
-		border-bottom: 1px solid rgba(244, 237, 224, 0.04);
+		border-bottom: 1px solid rgba(var(--tint-rgb), 0.04);
 		/* A 2px rail on the row's leading edge — neutral by default; a
 		   milestone row lights it copper, routine noise leaves it transparent. */
 		border-left: 2px solid transparent;
@@ -877,7 +877,7 @@
 		font-family: var(--font-mono);
 		font-variant-numeric: tabular-nums;
 		font-size: 11px;
-		color: rgba(244, 237, 224, 0.4);
+		color: rgba(var(--tint-rgb), 0.4);
 	}
 	.sc-arow-detail {
 		font-family: var(--font-sans);
@@ -896,16 +896,16 @@
 	}
 	/* Routine state-transition noise recedes — dim text, no rail. */
 	.sc-arow.is-muted .sc-arow-detail {
-		color: rgba(244, 237, 224, 0.45);
+		color: rgba(var(--tint-rgb), 0.45);
 	}
 	.sc-arow.is-muted .sc-arow-t {
-		color: rgba(244, 237, 224, 0.28);
+		color: rgba(var(--tint-rgb), 0.28);
 	}
 	.sc-activity-empty {
 		padding: 20px 0;
 		font-family: var(--font-sans);
 		font-size: 12px;
-		color: rgba(244, 237, 224, 0.4);
+		color: rgba(var(--tint-rgb), 0.4);
 	}
 
 	@media (max-width: 900px) {

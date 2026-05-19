@@ -97,7 +97,7 @@
 		flex: 0 0 7px;
 		padding: 0;
 		border-radius: 50%;
-		border: 1px solid rgba(244, 237, 224, 0.35);
+		border: 1px solid rgba(var(--tint-rgb), 0.35);
 		background: transparent;
 		box-sizing: border-box;
 		cursor: pointer;

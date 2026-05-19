@@ -65,7 +65,7 @@
 					const { left, top, width, height: h } = u.bbox;
 					ctx.save();
 					ctx.setLineDash([]);
-					ctx.strokeStyle = 'rgba(244,237,224,0.05)';
+					ctx.strokeStyle = 'rgba(var(--tint-rgb), 0.05)';
 					ctx.lineWidth = devicePixelRatio;
 					for (const p of [0.2, 0.4, 0.6, 0.8]) {
 						const y = Math.round(top + h * p) + 0.5;
@@ -96,8 +96,8 @@
 	}
 
 	function buildOpts(w: number, h: number): uPlot.Options {
-		const gridColor = 'rgba(244,237,224,0.05)';
-		const labelColor = 'rgba(244,237,224,0.35)';
+		const gridColor = 'rgba(var(--tint-rgb), 0.05)';
+		const labelColor = 'rgba(var(--tint-rgb), 0.35)';
 		const yFont = '11px "JetBrains Mono", monospace';
 		return {
 			width: w,

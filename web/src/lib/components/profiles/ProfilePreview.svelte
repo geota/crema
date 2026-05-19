@@ -97,8 +97,8 @@
 	}
 
 	function buildOpts(w: number, h: number): uPlot.Options {
-		const gridColor = 'rgba(244,237,224,0.05)';
-		const labelColor = 'rgba(244,237,224,0.3)';
+		const gridColor = 'rgba(var(--tint-rgb), 0.05)';
+		const labelColor = 'rgba(var(--tint-rgb), 0.3)';
 		const font = '9px "JetBrains Mono", monospace';
 		return {
 			width: w,
@@ -294,7 +294,7 @@
 		font-weight: 600;
 		letter-spacing: var(--track-allcaps, 0.08em);
 		text-transform: uppercase;
-		color: rgba(244, 237, 224, 0.4);
+		color: rgba(var(--tint-rgb), 0.4);
 		pointer-events: none;
 	}
 </style>

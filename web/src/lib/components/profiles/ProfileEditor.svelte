@@ -268,7 +268,7 @@
 				<i class="ph ph-arrow-left" aria-hidden="true"></i> Profiles
 			</button>
 			<div class="pe-trail">
-				<span class="t-eyebrow" style="color:rgba(244,237,224,0.45)">{heading}</span>
+				<span class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.45)">{heading}</span>
 			</div>
 		</div>
 		<div class="pe-topbar-r">
@@ -495,7 +495,7 @@
 
 <style>
 	.pe-page {
-		background: var(--espresso-950);
+		background: var(--bg-page);
 		color: var(--ink-50);
 		display: flex;
 		flex-direction: column;
@@ -510,7 +510,7 @@
 		/* Shared page-header rhythm — see --page-pad-* in app.css — so the
 		   header sits where every other route's does (no jump on navigation). */
 		padding: var(--page-pad-top) var(--page-pad-x) 18px;
-		border-bottom: 1px solid rgba(244, 237, 224, 0.05);
+		border-bottom: 1px solid rgba(var(--tint-rgb), 0.05);
 		flex: 0 0 auto;
 		gap: 16px;
 	}
@@ -523,8 +523,8 @@
 		display: inline-flex;
 		align-items: center;
 		gap: 6px;
-		background: rgba(244, 237, 224, 0.04);
-		border: 1px solid rgba(244, 237, 224, 0.08);
+		background: rgba(var(--tint-rgb), 0.04);
+		border: 1px solid rgba(var(--tint-rgb), 0.08);
 		border-radius: var(--radius-pill);
 		color: var(--ink-50);
 		font-family: var(--font-sans);
@@ -533,7 +533,7 @@
 		cursor: pointer;
 	}
 	.pe-back:hover {
-		background: rgba(244, 237, 224, 0.08);
+		background: rgba(var(--tint-rgb), 0.08);
 	}
 	.pe-back i {
 		font-size: 13px;
@@ -546,7 +546,7 @@
 	.pe-btn-text {
 		background: transparent;
 		border: 0;
-		color: rgba(244, 237, 224, 0.55);
+		color: rgba(var(--tint-rgb), 0.55);
 		font-family: var(--font-sans);
 		font-size: 12px;
 		cursor: pointer;
@@ -579,16 +579,16 @@
 		font-size: 14px;
 	}
 	.pp-btn-secondary {
-		background: rgba(244, 237, 224, 0.04);
-		border-color: rgba(244, 237, 224, 0.1);
+		background: rgba(var(--tint-rgb), 0.04);
+		border-color: rgba(var(--tint-rgb), 0.1);
 		color: var(--ink-50);
 	}
 	.pp-btn-secondary:hover {
-		background: rgba(244, 237, 224, 0.07);
+		background: rgba(var(--tint-rgb), 0.07);
 	}
 	.pp-btn-primary {
 		background: var(--copper-500);
-		color: #1a120c;
+		color: var(--fg-on-accent);
 		font-weight: 600;
 	}
 	.pp-btn-primary:hover {
@@ -597,7 +597,7 @@
 
 	.pe-loading {
 		padding: 60px 32px;
-		color: rgba(244, 237, 224, 0.5);
+		color: rgba(var(--tint-rgb), 0.5);
 		font-family: var(--font-sans);
 		font-size: 14px;
 	}
@@ -614,12 +614,12 @@
 		}
 		.pe-left {
 			border-right: 0 !important;
-			border-bottom: 1px solid rgba(244, 237, 224, 0.05);
+			border-bottom: 1px solid rgba(var(--tint-rgb), 0.05);
 		}
 	}
 	.pe-left {
 		padding: 28px var(--page-pad-x);
-		border-right: 1px solid rgba(244, 237, 224, 0.05);
+		border-right: 1px solid rgba(var(--tint-rgb), 0.05);
 		display: flex;
 		flex-direction: column;
 		gap: 28px;
@@ -648,13 +648,13 @@
 		transition: border-color var(--dur-1) var(--ease);
 	}
 	.pe-name:hover {
-		border-bottom-color: rgba(244, 237, 224, 0.1);
+		border-bottom-color: rgba(var(--tint-rgb), 0.1);
 	}
 	.pe-name:focus {
 		border-bottom-color: var(--copper-500);
 	}
 	.pe-name::placeholder {
-		color: rgba(244, 237, 224, 0.3);
+		color: rgba(var(--tint-rgb), 0.3);
 	}
 
 	/* Section */
@@ -678,7 +678,7 @@
 	.pe-section-sub {
 		font-family: var(--font-sans);
 		font-size: 11px;
-		color: rgba(244, 237, 224, 0.5);
+		color: rgba(var(--tint-rgb), 0.5);
 		margin-top: 2px;
 	}
 	.pe-section-actions {
@@ -693,11 +693,11 @@
 		gap: 4px;
 	}
 	.pe-field :global(.t-eyebrow) {
-		color: rgba(244, 237, 224, 0.5);
+		color: rgba(var(--tint-rgb), 0.5);
 	}
 	.pe-input {
-		background: rgba(244, 237, 224, 0.03);
-		border: 1px solid rgba(244, 237, 224, 0.08);
+		background: rgba(var(--tint-rgb), 0.03);
+		border: 1px solid rgba(var(--tint-rgb), 0.08);
 		border-radius: var(--radius-sm);
 		font-family: var(--font-sans);
 		font-size: 13px;
@@ -707,7 +707,7 @@
 		transition: border-color var(--dur-1) var(--ease);
 	}
 	.pe-input:focus {
-		border-color: rgba(244, 237, 224, 0.25);
+		border-color: rgba(var(--tint-rgb), 0.25);
 	}
 	.pe-textarea {
 		resize: vertical;
@@ -722,10 +722,10 @@
 	.pe-tag {
 		flex: 1 1 0;
 		padding: 7px 8px;
-		background: rgba(244, 237, 224, 0.03);
-		border: 1px solid rgba(244, 237, 224, 0.08);
+		background: rgba(var(--tint-rgb), 0.03);
+		border: 1px solid rgba(var(--tint-rgb), 0.08);
 		border-radius: var(--radius-sm);
-		color: rgba(244, 237, 224, 0.7);
+		color: rgba(var(--tint-rgb), 0.7);
 		font-family: var(--font-sans);
 		font-size: 11px;
 		text-transform: uppercase;
@@ -734,12 +734,12 @@
 		transition: all var(--dur-1) var(--ease);
 	}
 	.pe-tag:hover {
-		background: rgba(244, 237, 224, 0.06);
+		background: rgba(var(--tint-rgb), 0.06);
 	}
 	.pe-tag.is-active {
 		background: var(--copper-500);
 		border-color: var(--copper-500);
-		color: #1a120c;
+		color: var(--fg-on-accent);
 		font-weight: 600;
 	}
 
@@ -769,7 +769,7 @@
 	}
 	.pe-tog-sub {
 		font-size: 11px;
-		color: rgba(244, 237, 224, 0.5);
+		color: rgba(var(--tint-rgb), 0.5);
 		margin-top: 2px;
 	}
 
@@ -796,8 +796,8 @@
 		height: 76px;
 		box-sizing: border-box;
 		padding: 12px;
-		background: rgba(244, 237, 224, 0.03);
-		border: 1px solid rgba(244, 237, 224, 0.06);
+		background: rgba(var(--tint-rgb), 0.03);
+		border: 1px solid rgba(var(--tint-rgb), 0.06);
 		border-radius: var(--radius-sm);
 	}
 	.pe-readout-head {
@@ -807,7 +807,7 @@
 		gap: 8px;
 	}
 	.pe-readout :global(.t-eyebrow) {
-		color: rgba(244, 237, 224, 0.5);
+		color: rgba(var(--tint-rgb), 0.5);
 		font-size: 10px;
 		letter-spacing: 0.04em;
 		white-space: nowrap;
@@ -825,7 +825,7 @@
 	.pe-readout-sub {
 		font-family: var(--font-sans);
 		font-size: 9px;
-		color: rgba(244, 237, 224, 0.4);
+		color: rgba(var(--tint-rgb), 0.4);
 		text-transform: uppercase;
 		letter-spacing: 0.04em;
 		white-space: nowrap;
@@ -846,10 +846,10 @@
 		align-items: center;
 		gap: 6px;
 		background: transparent;
-		border: 1px solid rgba(244, 237, 224, 0.08);
+		border: 1px solid rgba(var(--tint-rgb), 0.08);
 		border-radius: var(--radius-pill);
 		padding: 6px 12px;
-		color: rgba(244, 237, 224, 0.7);
+		color: rgba(var(--tint-rgb), 0.7);
 		font-family: var(--font-sans);
 		font-size: 11px;
 		cursor: pointer;
@@ -857,7 +857,7 @@
 	}
 	.pe-btn-ghost:hover {
 		color: var(--ink-50);
-		border-color: rgba(244, 237, 224, 0.18);
+		border-color: rgba(var(--tint-rgb), 0.18);
 	}
 	.pe-btn-ghost i {
 		font-size: 13px;

@@ -130,9 +130,9 @@
 		align-items: center;
 		gap: 4px;
 		background: transparent;
-		border: 1px dashed rgba(244, 237, 224, 0.18);
+		border: 1px dashed rgba(var(--tint-rgb), 0.18);
 		border-radius: var(--radius-pill);
-		color: rgba(244, 237, 224, 0.55);
+		color: rgba(var(--tint-rgb), 0.55);
 		font-family: var(--font-sans);
 		font-size: 11px;
 		padding: 5px 12px;
@@ -141,13 +141,13 @@
 	}
 	.pe-tag-add:hover {
 		color: var(--ink-50);
-		border-color: rgba(244, 237, 224, 0.4);
+		border-color: rgba(var(--tint-rgb), 0.4);
 	}
 	.pe-tag-add i {
 		font-size: 12px;
 	}
 	.pe-tag-input {
-		background: rgba(244, 237, 224, 0.05);
+		background: rgba(var(--tint-rgb), 0.05);
 		border: 1px solid var(--copper-500);
 		outline: 0;
 		border-radius: var(--radius-pill);

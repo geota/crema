@@ -272,9 +272,9 @@
 		color: var(--copper-400);
 	}
 	.rp-status-ok {
-		color: #6b8c5f;
+		color: var(--success);
 	}
 	.rp-status-err {
-		color: #ed8d8d;
+		color: var(--danger);
 	}
 </style>
