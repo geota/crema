@@ -22,6 +22,7 @@
  */
 
 import type { CoreOutput, ScaleCapabilities, ScaleUuids } from './crema-core';
+import type { CalTarget, MmrRegister } from './crema-core';
 
 /**
  * Which quantity a profile step holds at its target — mirrors the core's
@@ -130,7 +131,9 @@ export type NotificationSource =
 	| 'ScaleWeight'
 	| 'ScaleCommand'
 	| 'De1WaterLevels'
-	| 'De1Version';
+	| 'De1Version'
+	| 'De1MmrRead'
+	| 'De1Calibration';
 
 /**
  * The async core facade. One instance owns one `CremaBridge`; obtain it from
@@ -167,6 +170,19 @@ export interface CremaCore {
 	scaleUuids(): Promise<ScaleUuids | undefined>;
 	/** Build a `CoreOutput` whose command queries the connected scale's settings. */
 	queryScaleSettings(): Promise<CoreOutput>;
+	/**
+	 * Build a `CoreOutput` whose command reads one DE1 memory-mapped register.
+	 * The DE1 answers on the `De1MmrRead` characteristic, decoding to an
+	 * `MmrValue` event.
+	 */
+	readMmr(register: MmrRegister): Promise<CoreOutput>;
+	/**
+	 * Build a `CoreOutput` whose command reads a DE1 sensor's calibration —
+	 * the current (in-use) calibration, or the factory one when `factory` is
+	 * `true`. The DE1 answers on the `De1Calibration` characteristic, decoding
+	 * to a `Calibration` event.
+	 */
+	readCalibration(sensor: CalTarget, factory?: boolean): Promise<CoreOutput>;
 	/** Build a `CoreOutput` whose command tares the connected scale. */
 	tareScale(): Promise<CoreOutput>;
 	/** Build a `CoreOutput` whose command sets the scale beeper volume. */
@@ -243,8 +259,26 @@ async function createCore(): Promise<CremaCore> {
 				return wasm.NotificationSource.De1WaterLevels;
 			case 'De1Version':
 				return wasm.NotificationSource.De1Version;
+			case 'De1MmrRead':
+				return wasm.NotificationSource.De1MmrRead;
+			case 'De1Calibration':
+				return wasm.NotificationSource.De1Calibration;
 		}
 	};
+
+	/**
+	 * Map a typeshare `MmrRegister` string onto the wasm numeric `MmrReg`
+	 * enum. The two enums are kept name-for-name in sync — `MmrRegister` is
+	 * generated from the core's register list, `MmrReg` is its wasm mirror.
+	 */
+	const toWasmMmrReg = (
+		register: MmrRegister
+	): (typeof wasm.MmrReg)[keyof typeof wasm.MmrReg] => wasm.MmrReg[register];
+
+	/** Map a typeshare `CalTarget` string onto the wasm numeric `CalSensor`. */
+	const toWasmCalSensor = (
+		sensor: CalTarget
+	): (typeof wasm.CalSensor)[keyof typeof wasm.CalSensor] => wasm.CalSensor[sensor];
 
 	/** Parse a bridge JSON string into a typed `CoreOutput`. */
 	const parseOutput = (raw: string): CoreOutput => JSON.parse(raw) as CoreOutput;
@@ -272,6 +306,17 @@ async function createCore(): Promise<CremaCore> {
 		},
 		async queryScaleSettings() {
 			return parseOutput(bridge.query_scale_settings());
+		},
+		async readMmr(register) {
+			return parseOutput(bridge.read_mmr(toWasmMmrReg(register)));
+		},
+		async readCalibration(sensor, factory = false) {
+			const wasmSensor = toWasmCalSensor(sensor);
+			return parseOutput(
+				factory
+					? bridge.read_factory_calibration(wasmSensor)
+					: bridge.read_calibration(wasmSensor)
+			);
 		},
 		async tareScale() {
 			return parseOutput(bridge.tare_scale());
@@ -302,3 +347,4 @@ async function createCore(): Promise<CremaCore> {
 
 export type { CoreOutput, ScaleCapabilities, ScaleUuids } from './crema-core';
 export type { Event, Command, ModeInfo, RangeCapability } from './crema-core';
+export { CalCommand, CalTarget, MmrRegister } from './crema-core';

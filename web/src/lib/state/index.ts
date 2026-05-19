@@ -10,6 +10,9 @@ export {
 	formatFirmware,
 	waterTankMl,
 	waterRefillSoon,
+	puckResistance,
+	machineErrorText,
+	EMPTY_DE1_CALIBRATION,
 	INITIAL_SNAPSHOT,
 	DEFAULT_SCALE_VOLUME,
 	DEFAULT_SCALE_STANDBY_MINUTES,
@@ -17,6 +20,9 @@ export {
 	MAX_TELEMETRY_SAMPLES,
 	type UiSnapshot,
 	type TelemetrySample,
+	type De1MachineInfo,
+	type De1Calibration,
+	type SensorCalibration,
 	type ReplayStatus,
 	type ReplayPhase
 } from './ui-state.svelte';
