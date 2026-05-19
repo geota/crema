@@ -13,7 +13,6 @@
  * live `LiveChart` draws an in-progress one.
  */
 
-import type { Roast } from '$lib/profiles';
 import type { TelemetrySample } from '$lib/state';
 
 /**
@@ -24,12 +23,14 @@ import type { TelemetrySample } from '$lib/state';
  * no bean logged) simply has none.
  */
 export interface ShotBean {
-	/** Bean name / origin when the shot was pulled. */
-	readonly name: string;
-	/** Roast level when the shot was pulled, or `null`. */
-	readonly roastLevel: Roast | null;
+	/** The roastery when the shot was pulled (Visualizer `bean.brand`). */
+	readonly roaster: string;
+	/** The coffee itself when the shot was pulled (Visualizer `bean.type`). */
+	readonly type: string;
 	/** ISO `yyyy-mm-dd` roast date when the shot was pulled, or `null`. */
 	readonly roastedOn: string | null;
+	/** Roast level on the 1..10 scale when the shot was pulled, or `null`. */
+	readonly roastLevel: number | null;
 }
 
 /** A short id for a stored shot — `crypto.randomUUID` if present. */

@@ -11,17 +11,20 @@
  * {@link getBeanStore}. It loads synchronously from `localStorage`.
  */
 
-import type { Roast } from '$lib/profiles';
 import { readJson, writeJson } from '$lib/utils/storage';
-import { blankBean, type Bean } from './model';
+import { type Bean, migrateBean } from './model';
 
 /** localStorage key for the current bean (a single `Bean`). */
 const BEAN_KEY = 'crema.bean.current.v1';
 
 /** The reactive current-bean store. One instance per app — {@link getBeanStore}. */
 export class BeanStore {
-	/** The current bean. Loaded from localStorage. */
-	private bean = $state<Bean>(readJson<Bean>(BEAN_KEY, blankBean()));
+	/**
+	 * The current bean. Loaded from localStorage, then run through
+	 * {@link migrateBean} so an old-shape payload (`{ name, roastLevel: word }`)
+	 * is upgraded leniently rather than crashing.
+	 */
+	private bean = $state<Bean>(migrateBean(readJson<unknown>(BEAN_KEY, null)));
 
 	/** The current bean. Reactive: any setter re-renders the bean card. */
 	get current(): Bean {
@@ -45,9 +48,14 @@ export class BeanStore {
 		this.persist();
 	}
 
-	/** Update the bean name and persist. */
-	setName(name: string): void {
-		this.update({ name });
+	/** Update the roaster (Visualizer `bean.brand`) and persist. */
+	setRoaster(roaster: string): void {
+		this.update({ roaster });
+	}
+
+	/** Update the bean type (Visualizer `bean.type`) and persist. */
+	setType(type: string): void {
+		this.update({ type });
 	}
 
 	/** Update the roast date (`yyyy-mm-dd` or `null`) and persist. */
@@ -55,8 +63,8 @@ export class BeanStore {
 		this.update({ roastedOn });
 	}
 
-	/** Update the roast level and persist. */
-	setRoastLevel(roastLevel: Roast | null): void {
+	/** Update the 1..10 roast level (`null` to clear) and persist. */
+	setRoastLevel(roastLevel: number | null): void {
 		this.update({ roastLevel });
 	}
 }

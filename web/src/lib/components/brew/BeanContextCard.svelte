@@ -6,13 +6,13 @@
 	 *
 	 * Wired to the **current bean** (`$lib/bean`), not the profile: a bag of
 	 * coffee and an extraction recipe have different lifecycles, so bean identity
-	 * is not profile-scoped. The card shows the bean name, roast level, the
-	 * roast date and a derived days-off-roast; tapping it opens an inline editor
-	 * for the name, roast date and roast level.
+	 * is not profile-scoped. The card shows the roaster + bean, the roast band,
+	 * the roast date and a derived days-off-roast; tapping it opens an inline
+	 * editor for the roaster, beans, roast date and 1..10 roast level.
 	 *
 	 * Only mounted on the resting Brew dashboard (Quick Sheet closed).
 	 */
-	import { daysOffRoast, getBeanStore } from '$lib/bean';
+	import { daysOffRoast, getBeanStore, roastBand, ROAST_PILL_LEVEL } from '$lib/bean';
 	import type { Roast } from '$lib/profiles';
 
 	let {
@@ -27,14 +27,21 @@
 	/** The current bean — reactive. */
 	const bean = $derived(beanStore.current);
 
-	/** The bean line — the current bean's name, or a neutral fallback. */
-	const beanName = $derived(bean.name.trim() || 'No bean logged');
-	/** The roast level, title-cased, or a dash when unknown. */
-	const roastLabel = $derived(
-		bean.roastLevel
-			? bean.roastLevel[0].toUpperCase() + bean.roastLevel.slice(1)
-			: '—'
-	);
+	/**
+	 * The bean line — roaster + type. Shows both joined with `·` when both are
+	 * set, whichever is set when only one is, or a neutral fallback for none.
+	 */
+	const beanName = $derived.by(() => {
+		const roaster = bean.roaster.trim();
+		const type = bean.type.trim();
+		if (roaster && type) return `${roaster} · ${type}`;
+		return roaster || type || 'No bean logged';
+	});
+	/** The roast band word (`Light`/`Medium`/`Dark`), or a dash when unknown. */
+	const roastLabel = $derived.by(() => {
+		const band = roastBand(bean.roastLevel);
+		return band ? band[0].toUpperCase() + band.slice(1) : '—';
+	});
 	/** Whole days off roast, or `null` when no roast date is logged. */
 	const daysOff = $derived(daysOffRoast(bean.roastedOn));
 	/** The roast date as a short `May 11`, or a dash when not logged. */
@@ -49,8 +56,20 @@
 	// placeholder, kept static until the model grows a grinder field.
 	const grinder = 'Niche Zero';
 
-	/** The roast-level choices for the inline editor. */
+	/** The roast-pill quick-sets — each maps the bean to a 1..10 level. */
 	const roastOptions: Roast[] = ['light', 'medium', 'dark'];
+
+	/**
+	 * Coerce a roast-number input to an integer clamped to 1..10, or `null`
+	 * for an empty / unparseable field (the bean's "not logged" state).
+	 */
+	function parseRoastLevel(raw: string): number | null {
+		const trimmed = raw.trim();
+		if (trimmed === '') return null;
+		const n = Number(trimmed);
+		if (!Number.isFinite(n)) return null;
+		return Math.max(1, Math.min(10, Math.round(n)));
+	}
 
 	/** Whether the inline editor is open. */
 	let editing = $state(false);
@@ -75,12 +94,21 @@
 		</div>
 		<div class="bean-edit">
 			<label class="bean-field">
-				<span class="t-eyebrow">Name</span>
+				<span class="t-eyebrow">Roaster</span>
 				<input
 					class="bean-input"
-					value={bean.name}
-					placeholder="Bean name or origin"
-					oninput={(e) => beanStore.setName(e.currentTarget.value)}
+					value={bean.roaster}
+					placeholder="Roastery, e.g. Onyx Coffee Lab"
+					oninput={(e) => beanStore.setRoaster(e.currentTarget.value)}
+				/>
+			</label>
+			<label class="bean-field">
+				<span class="t-eyebrow">Beans</span>
+				<input
+					class="bean-input"
+					value={bean.type}
+					placeholder="Coffee, e.g. Colombian Geisha"
+					oninput={(e) => beanStore.setType(e.currentTarget.value)}
 				/>
 			</label>
 			<label class="bean-field">
@@ -94,14 +122,24 @@
 				/>
 			</label>
 			<div class="bean-field">
-				<span class="t-eyebrow">Roast level</span>
+				<span class="t-eyebrow">Roast level (1–10)</span>
+				<input
+					class="bean-input"
+					type="number"
+					min="1"
+					max="10"
+					step="1"
+					value={bean.roastLevel ?? ''}
+					placeholder="—"
+					oninput={(e) =>
+						beanStore.setRoastLevel(parseRoastLevel(e.currentTarget.value))}
+				/>
 				<div class="bean-roast">
 					{#each roastOptions as r (r)}
 						<button
 							class="bean-roast-opt"
-							class:is-active={bean.roastLevel === r}
-							onclick={() =>
-								beanStore.setRoastLevel(bean.roastLevel === r ? null : r)}
+							class:is-active={roastBand(bean.roastLevel) === r}
+							onclick={() => beanStore.setRoastLevel(ROAST_PILL_LEVEL[r])}
 						>
 							{r}
 						</button>
@@ -198,6 +236,7 @@
 	.bean-roast {
 		display: flex;
 		gap: 6px;
+		margin-top: 2px;
 	}
 	.bean-roast-opt {
 		flex: 1;

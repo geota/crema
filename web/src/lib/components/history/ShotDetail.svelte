@@ -11,7 +11,7 @@
 	 */
 	import type { ShotRecord } from '$lib/history';
 	import { ratioLabel } from '$lib/history';
-	import { daysOffRoast } from '$lib/bean';
+	import { daysOffRoast, roastBand } from '$lib/bean';
 	import StaticShotChart from './StaticShotChart.svelte';
 
 	let {
@@ -44,15 +44,27 @@
 	const yieldG = $derived(shot.finalWeightG ?? shot.peakWeightG);
 
 	/**
-	 * The bean caption — the snapshotted bean name plus its days-off-roast,
-	 * derived from the shot's own `completedAt` so it is stable. `null` for a
-	 * shot recorded with no bean (including pre-existing records).
+	 * The bean caption — the snapshotted bean type (with roaster and roast
+	 * band when known) plus its days-off-roast, derived from the shot's own
+	 * `completedAt` so it is stable. `null` for a shot recorded with no bean
+	 * (including pre-existing records). Tolerant of the pre-`roaster`/`type`
+	 * snapshot shape, where `roaster`/`type` may be absent.
 	 */
 	const beanLine = $derived.by(() => {
 		const bean = shot.bean;
 		if (!bean) return null;
+		const label = bean.type?.trim() || bean.roaster?.trim() || 'Bean';
+		const parts: string[] = [];
+		if (bean.roaster?.trim() && bean.type?.trim()) {
+			parts.push(`${bean.roaster.trim()} · ${bean.type.trim()}`);
+		} else {
+			parts.push(label);
+		}
+		const band = roastBand(bean.roastLevel);
+		if (band) parts.push(band[0].toUpperCase() + band.slice(1));
 		const days = daysOffRoast(bean.roastedOn, shot.completedAt);
-		return days != null ? `${bean.name} · ${days}d off roast` : bean.name;
+		if (days != null) parts.push(`${days}d off roast`);
+		return parts.join(' · ');
 	});
 
 	/** Open the notes editor, seeding the draft from the current notes. */

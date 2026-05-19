@@ -7,6 +7,13 @@
  * recorded shot by `lib/history`.
  */
 
-export { type Bean, blankBean, daysOffRoast } from './model';
+export {
+	type Bean,
+	blankBean,
+	daysOffRoast,
+	roastBand,
+	migrateBean,
+	ROAST_PILL_LEVEL
+} from './model';
 
 export { BeanStore, getBeanStore } from './store.svelte';
