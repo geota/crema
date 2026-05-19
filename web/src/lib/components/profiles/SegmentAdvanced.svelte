@@ -3,12 +3,11 @@
 	 * `SegmentAdvanced` — the advanced-settings panel for the **selected**
 	 * segment, rendered inline beneath the segment list.
 	 *
-	 * The common per-segment fields — name, mode, target, time, temperature,
-	 * temp sensor, ramp — live on `SegmentRow` itself. This panel holds only
-	 * the rest of what a DE1 profile step supports: the per-step volume limit,
-	 * the structured exit condition, and the advanced limiter. Editing a field
-	 * applies a partial patch to the same segment model the row and the curve
-	 * editor share.
+	 * The common per-segment fields — name, mode, ramp, target, time,
+	 * temperature, temp sensor, volume limit — live on `SegmentRow` itself.
+	 * This panel holds only the two compound fields: the structured exit
+	 * condition and the advanced limiter. Editing a field applies a partial
+	 * patch to the same segment model the row and the curve editor share.
 	 *
 	 * The controls are the quick-controls primitives — `QStepper` for the
 	 * numeric fields and `QSplitLabel` for the metric / compare toggles — and
@@ -65,19 +64,6 @@
 	<div class="pe-adv-head">
 		Advanced — segment {index + 1}
 		<span class="pe-adv-head-name">{seg.name}</span>
-	</div>
-
-	<!-- Volume limit -->
-	<div class="pe-adv-field pe-adv-vol">
-		<div class="pe-adv-label">Volume limit <span class="pe-adv-hint">0 = none</span></div>
-		<QStepper
-			value={seg.volumeLimitMl}
-			unit="mL"
-			min={0}
-			max={1023}
-			step={5}
-			onChange={(v) => onEdit({ volumeLimitMl: Math.round(v) })}
-		/>
 	</div>
 
 	<!-- Exit condition -->
@@ -202,10 +188,6 @@
 		gap: 4px;
 		min-width: 0;
 	}
-	/* The lone volume-limit field — keep it stepper-width, not full-bleed. */
-	.pe-adv-vol {
-		max-width: 200px;
-	}
 	.pe-adv-label {
 		font-family: var(--font-sans);
 		font-size: 9px;
@@ -213,17 +195,6 @@
 		text-transform: uppercase;
 		font-weight: 600;
 		color: rgba(244, 237, 224, 0.4);
-		display: flex;
-		gap: 6px;
-		align-items: baseline;
-	}
-	.pe-adv-hint {
-		font-family: var(--font-sans);
-		font-size: 9px;
-		letter-spacing: 0;
-		text-transform: none;
-		font-weight: 400;
-		color: rgba(244, 237, 224, 0.3);
 	}
 	.pe-adv-block {
 		display: flex;
