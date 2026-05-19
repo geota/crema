@@ -169,9 +169,10 @@ impl MmrRegister {
         }
     }
 
-    /// Every known register, in address order — the basis of
+    /// Every known register, in declaration order — the basis of
     /// [`from_address`](Self::from_address) and a useful read-set for callers
-    /// that want to poll the whole diagnostic window.
+    /// that want to poll the whole diagnostic window. Order is not significant;
+    /// the `all_covers_every_variant` test pins this list to the enum.
     pub const ALL: [MmrRegister; 21] = [
         MmrRegister::FirmwareVersion,
         MmrRegister::GhcInfo,
@@ -293,5 +294,49 @@ mod tests {
         }
         // An address Crema does not model resolves to nothing.
         assert_eq!(MmrRegister::from_address(0x00_0000), None);
+    }
+
+    #[test]
+    fn all_covers_every_variant() {
+        // Touch every variant in an exhaustive match so adding a new register
+        // without listing it below fails to compile here. The body asserts the
+        // variant is also present in `ALL`, so `ALL` cannot fall behind.
+        let covers = |reg: MmrRegister| {
+            assert!(
+                MmrRegister::ALL.contains(&reg),
+                "{reg:?} is missing from MmrRegister::ALL"
+            );
+        };
+        for reg in MmrRegister::ALL {
+            match reg {
+                MmrRegister::FirmwareVersion
+                | MmrRegister::GhcInfo
+                | MmrRegister::TankTempThreshold
+                | MmrRegister::FanThreshold
+                | MmrRegister::SerialNumber
+                | MmrRegister::SteamFlow
+                | MmrRegister::RefillKit
+                | MmrRegister::FlushFlowRate
+                | MmrRegister::HotWaterFlowRate
+                | MmrRegister::Phase1FlowRate
+                | MmrRegister::Phase2FlowRate
+                | MmrRegister::HotWaterIdleTemp
+                | MmrRegister::GhcMode
+                | MmrRegister::SteamHighFlowStart
+                | MmrRegister::HeaterVoltage
+                | MmrRegister::EspressoWarmupTimeout
+                | MmrRegister::CalibrationFlowMultiplier
+                | MmrRegister::FlushTimeout
+                | MmrRegister::UsbChargerOn
+                | MmrRegister::FeatureFlags
+                | MmrRegister::CupWarmerTemp => covers(reg),
+            }
+        }
+        // No two variants share an address, so `ALL` has no duplicates.
+        for (i, a) in MmrRegister::ALL.iter().enumerate() {
+            for b in &MmrRegister::ALL[i + 1..] {
+                assert_ne!(a.address(), b.address(), "{a:?} and {b:?} share an address");
+            }
+        }
     }
 }
