@@ -2,7 +2,7 @@
 
 .st-page {
   background: var(--bg-page);
-  color: var(--ink-50);
+  color: var(--fg-1);
   display: flex;
   overflow-y: auto;
 }
@@ -32,7 +32,7 @@
   font-family: var(--font-serif);
   font-size: 26px;
   letter-spacing: -0.015em;
-  color: var(--ink-50);
+  color: var(--fg-1);
   margin-top: 2px;
 }
 .st-nav-items {
@@ -54,11 +54,11 @@
   transition: all var(--dur-1) var(--ease);
   position: relative;
 }
-.st-nav-item:hover { background: rgba(var(--tint-rgb), 0.03); color: var(--ink-50); }
+.st-nav-item:hover { background: rgba(var(--tint-rgb), 0.03); color: var(--fg-1); }
 .st-nav-item i { font-size: 16px; color: rgba(var(--tint-rgb), 0.5); flex: 0 0 auto; }
 .st-nav-item.is-active {
   background: rgba(var(--tint-rgb), 0.05);
-  color: var(--ink-50);
+  color: var(--fg-1);
 }
 .st-nav-item.is-active i { color: var(--copper-400); }
 .st-nav-item.is-active::before {
@@ -91,7 +91,7 @@
   padding: 4px 0;
   cursor: pointer;
 }
-.st-nav-foot-btn:hover { color: var(--ink-50); }
+.st-nav-foot-btn:hover { color: var(--fg-1); }
 
 /* ───────────────────────────── Right content */
 .st-content {
@@ -104,10 +104,7 @@
   border-bottom: 1px solid rgba(var(--tint-rgb), 0.05);
 }
 .st-shead-title {
-  font-family: var(--font-serif);
-  font-size: 34px;
-  letter-spacing: -0.02em;
-  color: var(--ink-50);
+  /* Section title styling comes from the shared .t-page-title role. */
   margin-top: 2px;
 }
 .st-shead-sub {
@@ -164,7 +161,7 @@
 .st-row-title {
   font-family: var(--font-sans);
   font-size: 13px;
-  color: var(--ink-50);
+  color: var(--fg-1);
   font-weight: 500;
 }
 .st-row-sub {
@@ -192,7 +189,7 @@
   background: rgba(var(--tint-rgb), 0.04);
   border: 1px solid rgba(var(--tint-rgb), 0.10);
   border-radius: var(--radius-sm);
-  color: var(--ink-50);
+  color: var(--fg-1);
   font-family: var(--font-sans);
   font-size: 12px;
   padding: 6px 28px 6px 12px;
@@ -245,7 +242,7 @@
 .st-btn-secondary {
   background: rgba(var(--tint-rgb), 0.04);
   border-color: rgba(var(--tint-rgb), 0.10);
-  color: var(--ink-50);
+  color: var(--fg-1);
 }
 .st-btn-secondary:hover { background: rgba(var(--tint-rgb), 0.08); }
 .st-btn-primary {
@@ -266,7 +263,7 @@
   background: rgba(var(--tint-rgb), 0.04);
   border: 1px solid rgba(var(--tint-rgb), 0.10);
   border-radius: var(--radius-sm);
-  color: var(--ink-50);
+  color: var(--fg-1);
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   font-size: 13px;
@@ -281,7 +278,7 @@
   display: inline-flex; align-items: center; gap: 8px;
   font-family: var(--font-sans);
   font-size: 12px;
-  color: var(--ink-50);
+  color: var(--fg-1);
 }
 .st-statusdot-d {
   width: 8px; height: 8px;
@@ -316,7 +313,7 @@
   font-family: var(--font-serif);
   font-size: 22px;
   letter-spacing: -0.01em;
-  color: var(--ink-50);
+  color: var(--fg-1);
 }
 .st-machinecard-meta {
   display: flex; gap: 14px; flex-wrap: wrap;
@@ -324,7 +321,7 @@
   font-size: 11px;
   color: rgba(var(--tint-rgb), 0.5);
 }
-.st-machinecard-meta strong { color: var(--ink-50); font-weight: 500; }
+.st-machinecard-meta strong { color: var(--fg-1); font-weight: 500; }
 .st-machinecard-actions {
   display: flex; gap: 8px;
   margin-top: 8px;
@@ -340,7 +337,7 @@
 .st-machinecard-fw-ver {
   font-family: var(--font-sans);
   font-size: 13px;
-  color: var(--ink-50);
+  color: var(--fg-1);
   font-weight: 500;
 }
 .st-machinecard-fw-notes {
@@ -376,7 +373,7 @@
   font-weight: 600;
   letter-spacing: var(--track-allcaps);
   text-transform: uppercase;
-  color: var(--ink-50);
+  color: var(--fg-1);
 }
 .st-maint-state {
   font-family: var(--font-sans);
@@ -390,7 +387,7 @@
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   font-size: 22px;
-  color: var(--ink-50);
+  color: var(--fg-1);
   margin-top: 4px;
 }
 .st-maint-metric em {
@@ -412,7 +409,7 @@
   background: transparent;
   border: 1px solid rgba(var(--tint-rgb), 0.10);
   border-radius: var(--radius-sm);
-  color: var(--ink-50);
+  color: var(--fg-1);
   font-family: var(--font-sans);
   font-size: 11px;
   padding: 6px 10px;
@@ -444,7 +441,7 @@
   font-family: var(--font-serif);
   font-size: 22px;
   letter-spacing: -0.01em;
-  color: var(--ink-50);
+  color: var(--fg-1);
   margin-top: 2px;
 }
 .st-visualizer-meta {
@@ -454,7 +451,7 @@
   color: rgba(var(--tint-rgb), 0.5);
   margin-top: 4px;
 }
-.st-visualizer-meta strong { color: var(--ink-50); font-weight: 500; }
+.st-visualizer-meta strong { color: var(--fg-1); font-weight: 500; }
 .st-visualizer-meta-row {
   margin-top: 6px;
 }
@@ -497,7 +494,7 @@
   font-family: var(--font-sans);
   font-size: 13px;
   font-weight: 600;
-  color: var(--ink-50);
+  color: var(--fg-1);
 }
 .st-otherint-sub {
   font-family: var(--font-sans);
@@ -529,7 +526,7 @@
 .st-about-line strong {
   font-family: var(--font-serif);
   font-size: 18px;
-  color: var(--ink-50);
+  color: var(--fg-1);
   letter-spacing: -0.01em;
   font-weight: 500;
 }

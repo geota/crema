@@ -334,7 +334,7 @@
 	.st-diag-mono {
 		font-family: var(--font-mono);
 		font-size: 12px;
-		color: var(--ink-50);
+		color: var(--fg-1);
 		font-variant-numeric: tabular-nums;
 	}
 	.st-diag-id {

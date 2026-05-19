@@ -229,7 +229,7 @@
 		border: 0;
 		border-radius: 6px;
 		padding: 8px 10px;
-		color: var(--ink-50);
+		color: var(--fg-1);
 		font-family: var(--font-sans);
 		font-size: 12px;
 		cursor: pointer;

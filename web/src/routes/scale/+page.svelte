@@ -260,7 +260,7 @@
 	<div class="sc-head">
 		<div>
 			<div class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Connected scale</div>
-			<div class="sc-head-name">{scaleName}</div>
+			<div class="t-page-title sc-head-name">{scaleName}</div>
 			<div class="sc-head-meta">
 				<span
 					class="sc-dot"
@@ -516,7 +516,7 @@
 <style>
 	.sc-page {
 		background: var(--bg-page);
-		color: var(--ink-50);
+		color: var(--fg-1);
 		display: flex;
 		flex-direction: column;
 		min-height: 100vh;
@@ -533,11 +533,9 @@
 		justify-content: space-between;
 		gap: 20px;
 	}
+	/* Page title uses the shared .t-page-title role; only the layout nudge
+	   is screen-specific. */
 	.sc-head-name {
-		font-family: var(--font-serif);
-		font-size: 28px;
-		letter-spacing: -0.015em;
-		color: var(--ink-50);
 		margin-top: 2px;
 	}
 	.sc-head-meta {
@@ -619,7 +617,7 @@
 		font-variant-numeric: tabular-nums;
 		font-size: 132px;
 		font-weight: 300;
-		color: var(--ink-50);
+		color: var(--fg-1);
 		letter-spacing: -0.04em;
 		line-height: 1;
 		transition: color 240ms var(--ease);
@@ -713,7 +711,7 @@
 		background: rgba(var(--tint-rgb), 0.04);
 		border: 1px solid rgba(var(--tint-rgb), 0.08);
 		border-radius: var(--radius-sm);
-		color: var(--ink-50);
+		color: var(--fg-1);
 		cursor: pointer;
 		padding: 12px 16px;
 		font-family: var(--font-sans);
@@ -743,7 +741,7 @@
 	.sc-dose-title {
 		font-family: var(--font-sans);
 		font-size: 14px;
-		color: var(--ink-50);
+		color: var(--fg-1);
 		margin-top: 2px;
 	}
 	.sc-dose-title strong {
@@ -824,7 +822,7 @@
 		font-family: var(--font-serif);
 		font-size: 18px;
 		letter-spacing: -0.01em;
-		color: var(--ink-50);
+		color: var(--fg-1);
 		margin-bottom: 12px;
 		padding-bottom: 12px;
 		border-bottom: 1px solid rgba(var(--tint-rgb), 0.05);
@@ -843,7 +841,7 @@
 	.sc-set-title {
 		font-family: var(--font-sans);
 		font-size: 13px;
-		color: var(--ink-50);
+		color: var(--fg-1);
 		font-weight: 500;
 	}
 	.sc-set-sub {
@@ -882,7 +880,7 @@
 	.sc-arow-detail {
 		font-family: var(--font-sans);
 		font-size: 12px;
-		color: var(--ink-50);
+		color: var(--fg-1);
 		word-break: break-word;
 	}
 	/* Milestone rows — shot start/complete, auto-stop, steam — read brighter
