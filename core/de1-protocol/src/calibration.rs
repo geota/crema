@@ -5,6 +5,8 @@
 //! The same 14-byte packet reads the current or factory calibration, writes a
 //! new one, or resets a sensor to factory. See `docs/02-ble-protocol.md` §7.2.
 
+use typeshare::typeshare;
+
 use crate::error::ProtocolError;
 use crate::fixed_point::{s32p16_decode, s32p16_encode};
 
@@ -17,7 +19,9 @@ const WRITE_KEY_WRITE: u32 = 0xCAFE_F00D;
 const WRITE_KEY_READ: u32 = 1;
 
 /// Which sensor a calibration applies to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[typeshare]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(u8)]
 pub enum CalTarget {
     /// The flow-rate sensor.
@@ -45,7 +49,9 @@ impl TryFrom<u8> for CalTarget {
 }
 
 /// What a calibration packet asks the DE1 to do.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[typeshare]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(u8)]
 pub enum CalCommand {
     /// Read the calibration currently in use.
