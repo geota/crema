@@ -13,6 +13,8 @@
 //!
 //! See `docs/02-ble-protocol.md` §6.
 
+use typeshare::typeshare;
+
 use crate::error::ProtocolError;
 use crate::fixed_point::{u24p0_decode, u24p0_encode};
 
@@ -91,7 +93,9 @@ impl MmrReadReply {
 /// This covers the registers Crema reads or writes; `docs/02-ble-protocol.md`
 /// §6.3 has the full map. [`address`](Self::address) gives the raw 24-bit
 /// address to pass to [`read_request`] / [`write_request`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[typeshare]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum MmrRegister {
     /// Firmware build number.
     FirmwareVersion,
@@ -163,6 +167,42 @@ impl MmrRegister {
             MmrRegister::FeatureFlags => 0x80_3858,
             MmrRegister::CupWarmerTemp => 0x80_3874,
         }
+    }
+
+    /// Every known register, in address order — the basis of
+    /// [`from_address`](Self::from_address) and a useful read-set for callers
+    /// that want to poll the whole diagnostic window.
+    pub const ALL: [MmrRegister; 21] = [
+        MmrRegister::FirmwareVersion,
+        MmrRegister::GhcInfo,
+        MmrRegister::TankTempThreshold,
+        MmrRegister::FanThreshold,
+        MmrRegister::SerialNumber,
+        MmrRegister::SteamFlow,
+        MmrRegister::RefillKit,
+        MmrRegister::FlushFlowRate,
+        MmrRegister::HotWaterFlowRate,
+        MmrRegister::Phase1FlowRate,
+        MmrRegister::Phase2FlowRate,
+        MmrRegister::HotWaterIdleTemp,
+        MmrRegister::GhcMode,
+        MmrRegister::SteamHighFlowStart,
+        MmrRegister::HeaterVoltage,
+        MmrRegister::EspressoWarmupTimeout,
+        MmrRegister::CalibrationFlowMultiplier,
+        MmrRegister::FlushTimeout,
+        MmrRegister::UsbChargerOn,
+        MmrRegister::FeatureFlags,
+        MmrRegister::CupWarmerTemp,
+    ];
+
+    /// The register at the raw 24-bit MMR `address`, or `None` if `address` is
+    /// not one Crema models. The inverse of [`address`](Self::address) — used
+    /// to map a [`MmrReadReply`]'s echoed address back to a known register.
+    pub fn from_address(address: u32) -> Option<MmrRegister> {
+        MmrRegister::ALL
+            .into_iter()
+            .find(|reg| reg.address() == address)
     }
 }
 
@@ -240,32 +280,18 @@ mod tests {
 
     #[test]
     fn all_register_addresses_lie_in_the_documented_mmr_window() {
-        let regs = [
-            MmrRegister::FirmwareVersion,
-            MmrRegister::GhcInfo,
-            MmrRegister::TankTempThreshold,
-            MmrRegister::FanThreshold,
-            MmrRegister::SerialNumber,
-            MmrRegister::SteamFlow,
-            MmrRegister::RefillKit,
-            MmrRegister::FlushFlowRate,
-            MmrRegister::HotWaterFlowRate,
-            MmrRegister::Phase1FlowRate,
-            MmrRegister::Phase2FlowRate,
-            MmrRegister::HotWaterIdleTemp,
-            MmrRegister::GhcMode,
-            MmrRegister::SteamHighFlowStart,
-            MmrRegister::HeaterVoltage,
-            MmrRegister::EspressoWarmupTimeout,
-            MmrRegister::CalibrationFlowMultiplier,
-            MmrRegister::FlushTimeout,
-            MmrRegister::UsbChargerOn,
-            MmrRegister::FeatureFlags,
-            MmrRegister::CupWarmerTemp,
-        ];
-        for reg in regs {
+        for reg in MmrRegister::ALL {
             // All known registers sit in the 24-bit memory-mapped window.
             assert!(reg.address() <= 0xFF_FFFF, "{reg:?} address out of range");
         }
+    }
+
+    #[test]
+    fn from_address_is_the_inverse_of_address() {
+        for reg in MmrRegister::ALL {
+            assert_eq!(MmrRegister::from_address(reg.address()), Some(reg));
+        }
+        // An address Crema does not model resolves to nothing.
+        assert_eq!(MmrRegister::from_address(0x00_0000), None);
     }
 }
