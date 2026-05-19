@@ -35,7 +35,7 @@ const val DEFAULT_SCALE_VOLUME: Int = 3
  * reading.
  *
  * Like [DEFAULT_SCALE_VOLUME], this is only the fallback shown until the first
- * `Event.ScaleReading.device_standby_minutes` arrives, after which the control
+ * `Event.ScaleReading.device_standby` arrives, after which the control
  * tracks the scale's real value. The range comes from
  * `ScaleCapabilities.standby_minutes`.
  */
@@ -88,7 +88,7 @@ data class MainUiState(
      * The scale auto-standby timeout (minutes) the UI currently shows.
      *
      * Two-way like [scaleVolume]: it follows the scale's live value
-     * (`Event.ScaleReading.device_standby_minutes`) and is updated
+     * (`Event.ScaleReading.device_standby`) and is updated
      * optimistically on user change. Starts at [DEFAULT_SCALE_STANDBY_MINUTES].
      */
     val scaleStandbyMinutes: Int = DEFAULT_SCALE_STANDBY_MINUTES,
@@ -391,7 +391,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * again, so an out-of-range value is harmless. Capability-gated end to end:
      * the core emits a command only for a scale that exposes a configurable
      * auto-standby. The UI's shown value is updated optimistically; the live
-     * `Event.ScaleReading.device_standby_minutes` stream then catches up.
+     * `Event.ScaleReading.device_standby` stream then catches up.
      */
     fun setScaleStandbyMinutes(minutes: Int) {
         val range = _ui.value.scaleCapabilities?.standby_minutes
@@ -571,7 +571,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             is Event.Telemetry -> {
                 val t = event.content
                 val line = "t=%dms  P=%.1fbar  flow=%.1fmL/s  head=%.1f°C".format(
-                    t.elapsed_ms.toLong(), t.group_pressure, t.group_flow, t.head_temp,
+                    t.elapsed.toLong(), t.group_pressure, t.group_flow, t.head_temp,
                 )
                 _ui.value = _ui.value.copy(telemetry = line)
                 // Telemetry is high-rate; do not flood the log with it.
@@ -584,13 +584,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 // scales that do not report a setting, in which case the
                 // control keeps its last value.
                 _ui.value = _ui.value.copy(
-                    scaleWeightG = r.weight_g,
-                    scaleFlowGPerS = r.device_flow_g_per_s,
-                    scaleTimerMs = r.device_timer_ms?.toLong(),
+                    scaleWeightG = r.weight,
+                    scaleFlowGPerS = r.device_flow,
+                    scaleTimerMs = r.device_timer?.toLong(),
                     scaleVolume = r.device_volume?.toInt() ?: _ui.value.scaleVolume,
-                    scaleStandbyMinutes = r.device_standby_minutes?.toInt()
+                    scaleStandbyMinutes = r.device_standby?.toInt()
                         ?: _ui.value.scaleStandbyMinutes,
-                    scaleBatteryPercent = r.device_battery_percent?.toInt()
+                    scaleBatteryPercent = r.device_battery?.toInt()
                         ?: _ui.value.scaleBatteryPercent,
                     scaleFlowSmoothing = r.device_flow_smoothing
                         ?: _ui.value.scaleFlowSmoothing,
@@ -600,11 +600,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 // Weight is high-rate; do not flood the log with every reading.
             }
             is Event.WaterLevel ->
-                appendLog("Water level: %.0fmm".format(event.content.level_mm))
+                appendLog("Water level: %.0fmm".format(event.content.level))
             is Event.StopTriggered ->
                 appendLog("Auto-stop: ${event.content.reason.string}")
             is Event.ShotCompleted ->
-                appendLog("Shot completed: ${event.content.duration_ms}ms, " +
+                appendLog("Shot completed: ${event.content.duration}ms, " +
                     "${event.content.sample_count} samples")
             is Event.WaterSessionStarted ->
                 appendLog("Water session started: ${event.content.kind.string}")
@@ -612,7 +612,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 appendLog("Water session completed: ${event.content.kind.string}")
             is Event.SteamSessionStarted -> appendLog("Steam session started")
             is Event.SteamSessionCompleted ->
-                appendLog("Steam session completed: ${event.content.duration_ms}ms")
+                appendLog("Steam session completed: ${event.content.duration}ms")
             is Event.SteamClogSuspected ->
                 appendLog("Steam clog suspected: ${event.content.reason.string}")
             is Event.SteamEcoModeChanged ->
