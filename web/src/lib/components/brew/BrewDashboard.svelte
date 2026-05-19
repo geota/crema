@@ -254,7 +254,7 @@
 				</div>
 				<div class="crema-chart">
 					{#if hasData}
-						<LiveChart series={ui.shotTelemetry} height={quickSheetOpen ? 220 : 280} />
+						<LiveChart series={ui.shotTelemetry} />
 					{:else}
 						<!-- Clean empty state — no shot data buffered yet. -->
 						<div class="crema-chart-empty">

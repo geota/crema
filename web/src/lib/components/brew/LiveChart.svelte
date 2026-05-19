@@ -2,19 +2,20 @@
 	/**
 	 * `LiveChart` — the 4-channel telemetry chart.
 	 *
-	 * uPlot spike: ported from the hand-rolled SVG to a canvas uPlot chart.
-	 * Each of the four channels (pressure / flow / temp / weight) lives on its
-	 * own uPlot **scale** with a fixed range — uPlot supports multiple scales
-	 * natively, so no anchor-series hack is needed (unlike Lightweight Charts).
-	 * The dashed pressure-goal line is a fifth series on the pressure scale.
+	 * A canvas uPlot chart: each of the four channels (pressure / flow / temp /
+	 * weight) lives on its own uPlot **scale** with a fixed range, so no
+	 * anchor-series hack is needed. The dashed pressure-goal line is a fifth
+	 * series on the pressure scale.
 	 *
-	 * The now-marker vertical line and the per-channel end-dots are drawn by a
-	 * small `drawClear`/`draw`-hook plugin. The x-axis renders elapsed seconds
-	 * with an "Ns" suffix via a custom axis `values` formatter.
+	 * A small draw-hook plugin paints the design's chrome that uPlot's hidden
+	 * y-axes cannot: the four horizontal grid lines (behind the series, via the
+	 * `drawClear` hook) and, on top, the solid faded now-marker line plus a
+	 * per-channel end-dot. uPlot's own x-axis still renders the dashed vertical
+	 * grid and the elapsed-second labels.
 	 *
-	 * The chart is sized to its container with a `ResizeObserver` →
-	 * `uplot.setSize()`, so it never distorts the way the SVG's
-	 * `preserveAspectRatio="none"` did.
+	 * The chart fills its container — a `ResizeObserver` feeds the panel's live
+	 * width *and* height into `uplot.setSize()`, so it tracks the panel as the
+	 * Quick Sheet docks and never distorts the way the old SVG did.
 	 */
 	import { untrack } from 'svelte';
 	import uPlot from 'uplot';
@@ -22,13 +23,10 @@
 	import type { TelemetrySample } from '$lib/state';
 
 	let {
-		series,
-		height = 220
+		series
 	}: {
 		/** The buffered shot-telemetry series, oldest first. */
 		series: readonly TelemetrySample[];
-		/** Panel height, px. */
-		height?: number;
 	} = $props();
 
 	/**
@@ -78,10 +76,41 @@
 		return [xs, pressure, flow, temp, weight, goal];
 	}
 
-	/** uPlot draw plugin: now-marker vertical line + per-channel end-dots. */
-	function markerPlugin(): uPlot.Plugin {
+	/** The four channel end-dots: [data column, scale, colour var, radius]. */
+	const DOTS: readonly [number, string, string, number][] = [
+		[1, 'pressure', '--tel-pressure', 4],
+		[2, 'flow', '--tel-flow', 3],
+		[3, 'temp', '--tel-temp', 3],
+		[4, 'weight', '--tel-weight', 3]
+	];
+
+	/**
+	 * uPlot draw plugin: the horizontal grid (behind the series) plus the
+	 * now-marker line and per-channel end-dots (on top).
+	 */
+	function chromePlugin(): uPlot.Plugin {
 		return {
 			hooks: {
+				// Behind the series: four horizontal grid lines, matching the
+				// design's `[0.2, 0.4, 0.6, 0.8]` delimiters. uPlot's y-axes are
+				// hidden, so their grid never renders — we paint it ourselves.
+				drawClear: (u: uPlot) => {
+					const ctx = u.ctx;
+					const { left, top, width, height } = u.bbox;
+					ctx.save();
+					ctx.setLineDash([]);
+					ctx.strokeStyle = 'rgba(244,237,224,0.05)';
+					ctx.lineWidth = devicePixelRatio;
+					for (const p of [0.2, 0.4, 0.6, 0.8]) {
+						const y = Math.round(top + height * p) + 0.5;
+						ctx.beginPath();
+						ctx.moveTo(left, y);
+						ctx.lineTo(left + width, y);
+						ctx.stroke();
+					}
+					ctx.restore();
+				},
+				// On top: the now-marker line and the per-channel end-dots.
 				draw: (u: uPlot) => {
 					const n = u.data[0].length;
 					if (n === 0) return;
@@ -92,7 +121,10 @@
 					const bot = u.bbox.top + u.bbox.height;
 
 					ctx.save();
-					// now-marker line
+					// Now-marker: a solid, slightly faded vertical line. uPlot
+					// leaves the dashed x-grid's line-dash set on the context, so
+					// reset it explicitly or the marker comes out dotted.
+					ctx.setLineDash([]);
 					ctx.beginPath();
 					ctx.strokeStyle = cssVar('--copper-500');
 					ctx.globalAlpha = 0.7;
@@ -102,13 +134,9 @@
 					ctx.stroke();
 					ctx.globalAlpha = 1;
 
-					// end-dots: pressure (r4) and flow (r3)
-					const dots: [number, string, string, number][] = [
-						[1, 'pressure', '--tel-pressure', 4],
-						[2, 'flow', '--tel-flow', 3]
-					];
-					for (const [si, scale, varName, r] of dots) {
-						const v = u.data[si][n - 1];
+					// One end-dot per channel, sitting on the now-marker.
+					for (const [col, scale, varName, r] of DOTS) {
+						const v = u.data[col][n - 1];
 						if (v == null) continue;
 						const cy = u.valToPos(v as number, scale, true);
 						ctx.beginPath();
@@ -126,13 +154,21 @@
 	let chart: uPlot | null = null;
 	let resizeObs: ResizeObserver | null = null;
 
+	/** Round-numbered second marks inside the window — design uses 10 s steps. */
+	function timeSplits(max: number): number[] {
+		const incr = max <= 90 ? 10 : max <= 180 ? 20 : 30;
+		const out: number[] = [];
+		for (let t = incr; t < max; t += incr) out.push(t);
+		return out;
+	}
+
 	function buildOpts(w: number, h: number, win: number): uPlot.Options {
 		const gridColor = 'rgba(244,237,224,0.05)';
 		const labelColor = 'rgba(244,237,224,0.35)';
 		return {
 			width: w,
 			height: h,
-			padding: [8, 8, 0, 8],
+			padding: [8, 8, 4, 8],
 			cursor: { show: false },
 			legend: { show: false },
 			scales: {
@@ -149,21 +185,8 @@
 					grid: { stroke: gridColor, width: 1, dash: [2, 4] },
 					ticks: { show: false },
 					font: '11px "JetBrains Mono", monospace',
-					values: (_u, splits) =>
-						splits.map((v) => (v === 0 ? '' : `${Math.round(v)}s`)),
-					splits: (u) => {
-						const max = (u.scales.x.range as unknown as [number, number])[1];
-						return [0.2, 0.4, 0.6, 0.8].map((p) => Math.round(max * p));
-					}
-				},
-				{
-					scale: 'pressure',
-					show: false,
-					grid: { stroke: gridColor, width: 1 },
-					splits: (u) => {
-						const [min, max] = u.scales.pressure.range as unknown as [number, number];
-						return [0.2, 0.4, 0.6, 0.8].map((p) => min + (max - min) * p);
-					}
+					splits: (u) => timeSplits((u.scales.x.max ?? win) as number),
+					values: (_u, splits) => splits.map((v) => `${v}s`)
 				}
 			],
 			series: [
@@ -200,25 +223,30 @@
 					points: { show: false }
 				}
 			],
-			plugins: [markerPlugin()]
+			plugins: [chromePlugin()]
 		};
 	}
 
-	// Create the chart once on mount. `series`/`height` are read untracked so a
-	// telemetry tick doesn't tear down and rebuild the whole uPlot instance —
-	// the dedicated effects below feed updates into the live instance instead.
+	// Create the chart once on mount. `series` is read untracked so a telemetry
+	// tick doesn't tear down and rebuild the whole uPlot instance — the effect
+	// below feeds updates into the live instance instead.
 	$effect(() => {
 		const w = Math.max(1, plotEl.clientWidth);
-		const h = Math.max(1, untrack(() => height));
+		const h = Math.max(1, plotEl.clientHeight);
 		chart = new uPlot(
 			buildOpts(w, h, untrack(() => windowSec)),
 			toData(untrack(() => series)),
 			plotEl
 		);
 
+		// Track the panel's live width AND height so the chart fills it and
+		// follows the Quick Sheet docking in / out.
 		resizeObs = new ResizeObserver((entries) => {
 			const cr = entries[0].contentRect;
-			chart?.setSize({ width: Math.max(1, cr.width), height });
+			chart?.setSize({
+				width: Math.max(1, cr.width),
+				height: Math.max(1, cr.height)
+			});
 		});
 		resizeObs.observe(plotEl);
 
@@ -239,23 +267,14 @@
 		chart.setData(data, false);
 		chart.setScale('x', { min: 0, max: win });
 	});
-
-	// React to a height prop change without rebuilding the whole chart.
-	$effect(() => {
-		chart?.setSize({ width: chart.width, height });
-	});
 </script>
 
-<div
-	class="livechart"
-	style="height:{height}px"
-	bind:this={plotEl}
-	aria-label="Live shot telemetry chart"
-></div>
+<div class="livechart" bind:this={plotEl} aria-label="Live shot telemetry chart"></div>
 
 <style>
 	.livechart {
 		width: 100%;
+		height: 100%;
 	}
 	/* uPlot injects its own canvas; keep it from overflowing the panel. */
 	.livechart :global(.u-wrap) {
