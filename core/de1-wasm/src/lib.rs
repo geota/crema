@@ -29,6 +29,8 @@ pub enum NotificationSource {
     ScaleCommand,
     /// The DE1 water-tank level characteristic.
     De1WaterLevels,
+    /// The DE1 version characteristic — BLE + firmware versions.
+    De1Version,
 }
 
 impl From<NotificationSource> for Source {
@@ -39,6 +41,7 @@ impl From<NotificationSource> for Source {
             NotificationSource::ScaleWeight => Source::ScaleWeight,
             NotificationSource::ScaleCommand => Source::ScaleCommand,
             NotificationSource::De1WaterLevels => Source::De1WaterLevels,
+            NotificationSource::De1Version => Source::De1Version,
         }
     }
 }
@@ -487,13 +490,14 @@ mod tests {
 
     /// Every `NotificationSource` the wasm enum can name — used to fuzz the
     /// bridge against malformed input on every characteristic.
-    fn every_source() -> [NotificationSource; 5] {
+    fn every_source() -> [NotificationSource; 6] {
         [
             NotificationSource::De1State,
             NotificationSource::De1ShotSample,
             NotificationSource::ScaleWeight,
             NotificationSource::ScaleCommand,
             NotificationSource::De1WaterLevels,
+            NotificationSource::De1Version,
         ]
     }
 

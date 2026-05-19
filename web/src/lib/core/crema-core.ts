@@ -46,6 +46,10 @@ export type Event =
 	group_flow: number;
 	/** Group-head temperature, °C. */
 	head_temp: number;
+	/** Mix temperature, °C — the DE1's blended "group" water temperature. */
+	mix_temp: number;
+	/** Steam-heater temperature, °C. */
+	steam_temp: number;
 }}
 	/** A weight reading arrived from the scale, smoothed by the flow estimator. */
 	| { type: "ScaleReading", content: {
@@ -205,6 +209,17 @@ export type Event =
 	 * serial response.
 	 */
 	firmware_version?: number;
+}}
+	/** The DE1 reported its BLE-interface and CPU-board firmware versions. */
+	| { type: "Firmware", content: {
+	/** The CPU-board firmware's release number. */
+	fw_release: number;
+	/** The CPU-board firmware's commits-since-release count. */
+	fw_commits: number;
+	/** The CPU-board firmware's API version. */
+	fw_api_version: number;
+	/** A human-readable firmware label, e.g. `"FW 1.4.142 (API 4)"`. */
+	firmware_string: string;
 }}
 	/** An incoming notification could not be decoded. */
 	| { type: "DecodeError", content: {
