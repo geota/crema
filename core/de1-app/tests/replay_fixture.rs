@@ -172,7 +172,7 @@ fn recorded_session_decodes_to_pinned_event_sequence() {
             phase: ShotPhase::Idle,
         },
         Event::ShotCompleted {
-            duration_ms: 81_074,
+            duration: 81_074,
             sample_count: 389,
         },
         Event::MachineStateChanged {

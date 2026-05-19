@@ -41,7 +41,12 @@ pub enum Source {
 /// Something the core observed that the UI may want to react to.
 ///
 /// Serialized adjacently tagged — a JSON event reads `{"type":"ShotStarted"}`
-/// or `{"type":"Telemetry","content":{"elapsed_ms":…}}`.
+/// or `{"type":"Telemetry","content":{"elapsed":…}}`.
+///
+/// Numeric fields stay as flat scalars (`u32`, `f32`) so they cross the FFI
+/// boundary as plain numbers — `Duration` does not transmit through typeshare
+/// to TS / Kotlin. The unit each scalar carries is documented in its
+/// doc-comment.
 #[typeshare]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "content")]
@@ -69,7 +74,7 @@ pub enum Event {
     /// A telemetry sample arrived from the DE1.
     Telemetry {
         /// Milliseconds since the shot began; `0` if no shot is in progress.
-        elapsed_ms: u32,
+        elapsed: u32,
         /// Group pressure, bar.
         group_pressure: f32,
         /// Group flow, mL/s.
@@ -84,27 +89,27 @@ pub enum Event {
     /// A weight reading arrived from the scale, smoothed by the flow estimator.
     ScaleReading {
         /// Robust current weight, grams.
-        weight_g: f32,
+        weight: f32,
         /// Robust mass-flow rate, grams per second — the core's own estimate
         /// from the weight series, available for every supported scale.
-        flow_g_per_s: f32,
+        flow: f32,
         /// The scale's own native mass-flow rate, grams per second, when the
         /// scale reports one (the Bookoo does); `None` otherwise. Distinct
-        /// from the core-computed `flow_g_per_s` — surfaced as raw data.
-        device_flow_g_per_s: Option<f32>,
+        /// from the core-computed `flow` — surfaced as raw data.
+        device_flow: Option<f32>,
         /// The scale's own built-in-timer reading, milliseconds, when the
         /// scale reports one (the Bookoo does); `None` otherwise.
-        device_timer_ms: Option<u32>,
+        device_timer: Option<u32>,
         /// The scale's live beeper-volume setting `0..=5`, when the scale
         /// echoes its settings in the weight notification (the Bookoo does);
         /// `None` otherwise. Lets a settings control display the real value.
         device_volume: Option<u8>,
         /// The scale's live auto-standby timeout, minutes, when the scale
         /// echoes its settings (the Bookoo does); `None` otherwise.
-        device_standby_minutes: Option<u8>,
+        device_standby: Option<u8>,
         /// The scale's live battery charge percentage, when the scale reports
         /// it (the Bookoo does); `None` otherwise.
-        device_battery_percent: Option<u8>,
+        device_battery: Option<u8>,
         /// Whether the scale's flow smoothing is on, when the scale echoes its
         /// settings in the weight notification (the Bookoo does); `None`
         /// otherwise. Lets a settings toggle reflect the real on/off state.
@@ -118,9 +123,9 @@ pub enum Event {
     /// The DE1 reported its water-tank level.
     WaterLevel {
         /// Current tank level, mm — includes the legacy +5 mm sensor correction.
-        level_mm: f32,
+        level: f32,
         /// Refill threshold, mm; a refill is wanted at or below it.
-        refill_threshold_mm: f32,
+        refill_threshold: f32,
     },
     /// Auto-stop decided the shot should end. The accompanying [`Command`]
     /// carries the actual stop write.
@@ -131,7 +136,7 @@ pub enum Event {
     /// The espresso shot finished.
     ShotCompleted {
         /// Total shot duration, milliseconds.
-        duration_ms: u32,
+        duration: u32,
         /// Number of telemetry samples recorded.
         sample_count: u32,
     },
@@ -146,14 +151,14 @@ pub enum Event {
         /// Whether this was a hot-water pour or a flush.
         kind: WaterSessionKind,
         /// Total session duration, milliseconds.
-        duration_ms: u32,
+        duration: u32,
     },
     /// A steam session began (the DE1 entered the `Steam` state).
     SteamSessionStarted,
     /// A steam session finished.
     SteamSessionCompleted {
         /// Total session duration, milliseconds.
-        duration_ms: u32,
+        duration: u32,
         /// Number of steam telemetry samples recorded.
         sample_count: u32,
     },
