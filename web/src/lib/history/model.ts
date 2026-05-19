@@ -94,7 +94,9 @@ export function ratioLabel(record: ShotRecord): string {
 	const yieldG = record.finalWeightG ?? record.peakWeightG;
 	if (yieldG == null || yieldG <= 0) return '1:—';
 	const doseG = record.doseG != null && record.doseG > 0 ? record.doseG : 18;
-	return `1:${(yieldG / doseG).toFixed(2)}`;
+	// One decimal place — matches `profiles/model.ts` `ratioLabel`, so the same
+	// ratio reads identically on the History and Profiles screens.
+	return `1:${(yieldG / doseG).toFixed(1)}`;
 }
 
 /** A star string `★★★★☆` for a 0–5 rating. */

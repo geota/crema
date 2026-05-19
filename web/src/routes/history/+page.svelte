@@ -234,11 +234,18 @@
 				{/if}
 			</div>
 			{#if selected}
-				<ShotDetail
-					shot={selected}
-					onNotesChange={(notes) => store.setNotes(selected.id, notes)}
-					onRatingChange={(rating) => store.setRating(selected.id, rating)}
-				/>
+				<!-- Keyed on the shot id: `ShotDetail` holds a local notes draft
+				     in component state, so reusing one instance across a shot
+				     change could save shot A's open draft onto shot B. The
+				     `{#key}` forces a fresh instance — and a fresh draft —
+				     whenever the selection moves. -->
+				{#key selected.id}
+					<ShotDetail
+						shot={selected}
+						onNotesChange={(notes) => store.setNotes(selected.id, notes)}
+						onRatingChange={(rating) => store.setRating(selected.id, rating)}
+					/>
+				{/key}
 			{:else}
 				<div class="hi-detail-empty">Select a shot to see its detail.</div>
 			{/if}

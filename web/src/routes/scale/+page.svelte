@@ -209,9 +209,11 @@
 	const heroUnit = $derived(heroMeasure.unit || 'g');
 
 	// ── Activity log ─────────────────────────────────────────────────────
-	/** One parsed activity-log row. */
+	/** One activity-log row, ready to render. */
 	interface ActivityRow {
-		/** The `HH:MM:SS` timestamp slice. */
+		/** The log line's stable, monotonic id — the `{#each}` key. */
+		id: number;
+		/** The `HH:mm:ss` timestamp. */
 		time: string;
 		/** The event message. */
 		detail: string;
@@ -222,18 +224,18 @@
 	}
 
 	/**
-	 * Parse the shared `eventLog` (`"HH:MM:SS  <message>"`, newest-first) into
-	 * rows. The log strings are free-form, so there is no reliable categorical
-	 * event keyword to lift into a separate uppercase column — instead each row
-	 * is tagged `highlight` (a milestone) or `muted` (routine state noise) so
-	 * the feed reads at a glance without inventing structure the data lacks.
+	 * Map the shared `eventLog` ({@link LogLine}s, newest-first) into rows. The
+	 * log messages are free-form, so there is no reliable categorical event
+	 * keyword to lift into a separate uppercase column — instead each row is
+	 * tagged `highlight` (a milestone) or `muted` (routine state noise) so the
+	 * feed reads at a glance without inventing structure the data lacks. The
+	 * `LogLine.id` carries through as the row key — a stable key for this
+	 * newest-first prepended list, where an array index would re-bind every
+	 * row on each new entry.
 	 */
 	const activityRows = $derived.by<ActivityRow[]>(() =>
 		eventLog.slice(0, 14).map((line) => {
-			const sp = line.indexOf('  ');
-			const time = sp > 0 ? line.slice(0, sp) : '';
-			const detail = sp > 0 ? line.slice(sp + 2) : line;
-			const d = detail.toLowerCase();
+			const d = line.text.toLowerCase();
 			const highlight =
 				d.includes('shot started') ||
 				d.includes('shot complete') ||
@@ -244,7 +246,7 @@
 				d.startsWith('shot phase ->') ||
 				d.startsWith('shot frame ->') ||
 				d.includes('scale stale');
-			return { time, detail, highlight, muted };
+			return { id: line.id, time: line.time, detail: line.text, highlight, muted };
 		})
 	);
 </script>
@@ -500,7 +502,7 @@
 			{#if activityRows.length === 0}
 				<div class="sc-activity-empty">No activity yet — connect a scale to begin.</div>
 			{:else}
-				{#each activityRows as row, i (i)}
+				{#each activityRows as row (row.id)}
 					<div class="sc-arow" class:is-hl={row.highlight} class:is-muted={row.muted}>
 						<div class="sc-arow-t">{row.time}</div>
 						<div class="sc-arow-detail">{row.detail}</div>

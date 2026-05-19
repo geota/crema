@@ -232,7 +232,10 @@ function segmentFromStep(step: ProfileStep, index: number): ProfileSegment {
 		mode: step.pump === 'Flow' ? 'flow' : 'pressure',
 		target: step.target,
 		ramp: step.transition === 'Smooth' ? 'smooth' : 'fast',
-		time: Math.round(step.duration_seconds),
+		// Keep the float — the DE1 protocol carries 0.1 s frame durations, so a
+		// 6.5 s preinfusion must round-trip faithfully; rounding here truncated
+		// every sub-second step.
+		time: step.duration_seconds,
 		exit,
 		temperatureC: step.temperature_c,
 		tempSensor: step.temp_sensor === 'Mix' ? 'mix' : 'basket',
