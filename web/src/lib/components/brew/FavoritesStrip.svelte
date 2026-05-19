@@ -8,6 +8,7 @@
 	 * pinned profiles from the `lib/profiles` library store — the caller passes
 	 * them in, already filtered to `pinned` (see `BrewDashboard`).
 	 */
+	import { untrack } from 'svelte';
 	import type { Attachment } from 'svelte/attachments';
 	import QSparkline from './QSparkline.svelte';
 	import { ratioLabel, sparkShape, type CremaProfile } from '$lib/profiles';
@@ -63,7 +64,14 @@
 	 */
 	const trackScroll: Attachment<HTMLDivElement> = (el) => {
 		scrollEl = el;
-		syncArrows();
+		// Attachments run as effects in Svelte 5. We *write* `scrollEl` above —
+		// reading it back inside the same attachment (via `syncArrows`) would
+		// make this effect track a piece of state it also writes, which
+		// throws `effect_update_depth_exceeded`. `untrack` runs the initial
+		// sync without subscribing to `scrollEl`; subsequent syncs happen
+		// outside any effect (ResizeObserver callback, scroll event) and the
+		// list-change `$effect` below.
+		untrack(syncArrows);
 		const observer = new ResizeObserver(syncArrows);
 		observer.observe(el);
 		return () => {
