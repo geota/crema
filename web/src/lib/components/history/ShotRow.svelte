@@ -6,6 +6,7 @@
 	 */
 	import type { ShotRecord } from '$lib/history';
 	import { ratioLabel, stars } from '$lib/history';
+	import { getSettingsStore, convertWeight } from '$lib/settings';
 	import QSparkline, { type SparkShape } from '$lib/components/brew/QSparkline.svelte';
 
 	let {
@@ -59,6 +60,9 @@
 
 	/** Final (or peak) yield weight, grams, for the yield metric. */
 	const yieldG = $derived(shot.finalWeightG ?? shot.peakWeightG);
+	/** The yield weight in the chosen weight unit (D1). */
+	const settings = getSettingsStore();
+	const yieldM = $derived(convertWeight(yieldG, settings.current.weightUnit));
 
 	/**
 	 * The always-5-glyph star string — filled glyphs for the rating, empty for
@@ -91,7 +95,7 @@
 	</div>
 	<div class="hi-row-metric">
 		<div class="hi-row-metric-val">
-			{yieldG != null ? yieldG.toFixed(1) : '–'}<em>g</em>
+			{yieldM.value}<em>{yieldM.unit || 'g'}</em>
 		</div>
 		<div class="hi-row-metric-l">yield</div>
 	</div>
