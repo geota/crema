@@ -66,6 +66,11 @@
 	}
 	.pe-num :global(.t-eyebrow) {
 		color: rgba(244, 237, 224, 0.5);
+		/* Slightly smaller + tighter, and never wrapping, so a long label
+		   like "Max total volume" stays on one line in the 2-up editor grid. */
+		font-size: 10px;
+		letter-spacing: 0.04em;
+		white-space: nowrap;
 	}
 	.pe-num-row {
 		display: flex;

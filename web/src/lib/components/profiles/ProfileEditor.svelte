@@ -354,9 +354,11 @@
 							onChange={(v) => patch({ brewTemp: v })}
 						/>
 						<div class="pe-readout">
-							<div class="t-eyebrow">Ratio</div>
+							<div class="pe-readout-head">
+								<div class="t-eyebrow">Ratio</div>
+								<span class="pe-readout-sub">computed</span>
+							</div>
 							<div class="pe-readout-val">{ratio}</div>
-							<div class="pe-readout-sub">computed</div>
 						</div>
 					</div>
 				</div>
@@ -760,6 +762,10 @@
 		grid-template-columns: 1fr 1fr;
 		gap: 10px;
 	}
+	/* The Ratio read-out matches a `.pe-num` box: same padding and gap, an
+	   eyebrow row on top, a value the height of a stepper's −/+ bar below.
+	   "computed" rides the top-right of the eyebrow row so the box is two
+	   rows tall, like the steppers — not three. */
 	.pe-readout {
 		display: flex;
 		flex-direction: column;
@@ -768,10 +774,18 @@
 		background: rgba(244, 237, 224, 0.03);
 		border: 1px solid rgba(244, 237, 224, 0.06);
 		border-radius: var(--radius-sm);
+	}
+	.pe-readout-head {
+		display: flex;
+		align-items: baseline;
 		justify-content: space-between;
+		gap: 8px;
 	}
 	.pe-readout :global(.t-eyebrow) {
 		color: rgba(244, 237, 224, 0.5);
+		font-size: 10px;
+		letter-spacing: 0.04em;
+		white-space: nowrap;
 	}
 	.pe-readout-val {
 		font-family: var(--font-mono);
@@ -779,13 +793,17 @@
 		font-size: 22px;
 		color: var(--copper-400);
 		font-weight: 500;
+		min-height: 28px;
+		display: flex;
+		align-items: center;
 	}
 	.pe-readout-sub {
 		font-family: var(--font-sans);
-		font-size: 10px;
+		font-size: 9px;
 		color: rgba(244, 237, 224, 0.4);
 		text-transform: uppercase;
-		letter-spacing: var(--track-allcaps);
+		letter-spacing: 0.04em;
+		white-space: nowrap;
 	}
 
 	/* Segments list — the wide single-row segments scroll horizontally so a
