@@ -18,6 +18,7 @@
 	import '../app.css';
 	import { createCremaApp, type CremaApp } from '$lib/state';
 	import { CremaSidebar } from '$lib/components';
+	import { describeError } from '$lib/utils/error';
 	import { setCremaAppContext, type CoreLoadState } from '$lib/shell/app-context';
 
 	let { children } = $props();
@@ -48,7 +49,7 @@
 			loadState = 'ready';
 		} catch (err) {
 			loadState = 'failed';
-			loadError = err instanceof Error ? err.message : String(err);
+			loadError = describeError(err);
 		}
 	});
 </script>

@@ -24,6 +24,7 @@
  */
 
 import type { CoreOutput, CremaCore, NotificationSource, ScaleUuids } from '$lib/core';
+import { describeError } from '$lib/utils/error';
 import { BleDevice, requestDevice, type ConnState } from './transport';
 
 /**
@@ -168,7 +169,7 @@ export class ScaleManager {
 						// parse error — would otherwise silently kill the
 						// notification pipeline. Surface it instead.
 						this.callbacks.onStatus(
-							`Scale notification processing failed: ${describe(error)}`
+							`Scale notification processing failed: ${describeError(error)}`
 						);
 					});
 			});
@@ -199,7 +200,7 @@ export class ScaleManager {
 			this.device = null;
 			this.uuids = null;
 			this.callbacks.onState('failed');
-			this.callbacks.onStatus(`Scale connection failed: ${describe(error)}`);
+			this.callbacks.onStatus(`Scale connection failed: ${describeError(error)}`);
 		}
 	}
 
@@ -236,7 +237,7 @@ export class ScaleManager {
 		try {
 			await device.write(uuids.service, uuids.command_write, data);
 		} catch (error) {
-			this.callbacks.onStatus(`Scale command write was rejected: ${describe(error)}`);
+			this.callbacks.onStatus(`Scale command write was rejected: ${describeError(error)}`);
 		}
 	}
 
@@ -258,9 +259,4 @@ export class ScaleManager {
 		}
 		return null;
 	}
-}
-
-/** Best-effort human-readable message from an unknown thrown value. */
-function describe(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
 }
