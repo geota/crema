@@ -221,11 +221,15 @@ fn decode_hex(hex: &str) -> Result<Vec<u8>, String> {
     if !hex.len().is_multiple_of(2) {
         return Err(format!("odd-length hex string ({} chars)", hex.len()));
     }
-    (0..hex.len())
-        .step_by(2)
-        .map(|i| {
-            u8::from_str_radix(&hex[i..i + 2], 16)
-                .map_err(|_| format!("invalid hex digit pair \"{}\"", &hex[i..i + 2]))
+    // Walk the raw bytes in pairs: a non-ASCII (multi-byte) char would make a
+    // `&hex[i..i+2]` string slice panic on a non-char-boundary. `from_str_radix`
+    // on a non-UTF-8 / non-hex pair fails cleanly via `String::from_utf8_lossy`.
+    hex.as_bytes()
+        .chunks(2)
+        .map(|pair| {
+            let pair = String::from_utf8_lossy(pair);
+            u8::from_str_radix(&pair, 16)
+                .map_err(|_| format!("invalid hex digit pair \"{pair}\""))
         })
         .collect()
 }
