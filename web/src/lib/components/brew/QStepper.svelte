@@ -8,6 +8,8 @@
 	 * `onChange` callback; the buttons clamp to `[min, max]` so `onChange` only
 	 * ever fires with an in-range value.
 	 */
+	import type { Snippet } from 'svelte';
+
 	let {
 		label,
 		value,
@@ -16,7 +18,8 @@
 		max = 999,
 		step = 0.1,
 		onChange,
-		fmt
+		fmt,
+		prefix
 	}: {
 		/** Optional caption above the stepper row. */
 		label?: string;
@@ -34,6 +37,12 @@
 		onChange?: (next: number) => void;
 		/** Optional value formatter — defaults to step-aware decimal places. */
 		fmt?: (value: number) => string;
+		/**
+		 * Optional content rendered in the value box *before* the number — the
+		 * mirror of `unit`. Used for a leading symbol such as a `>` / `<`
+		 * comparator that reads like a prefix unit.
+		 */
+		prefix?: Snippet;
 	} = $props();
 
 	/** Format a value — the supplied `fmt`, or step-aware default. */
@@ -55,6 +64,7 @@
 			<i class="ph ph-minus" aria-hidden="true"></i>
 		</button>
 		<div class="qcs-val">
+			{@render prefix?.()}
 			<span class="qcs-num">{format(value)}</span>
 			<span class="qcs-unit">{unit}</span>
 		</div>
