@@ -8,9 +8,12 @@
 	 * moves the curve's dot, and vice versa. Clicking the row selects the
 	 * segment (highlighting it in the curve).
 	 *
-	 * The controls are the quick-controls primitives: a `QSplitLabel` split
-	 * toggle for the mode (Pressure | Flow) and ramp (Smooth | Fast), and a
-	 * `QStepper` (− / value+unit / +) for the Target and Time fields.
+	 * The controls are the quick-controls primitives: `QSplitLabel` split
+	 * toggles for the mode (Pressure | Flow) and temp sensor (Basket | Mix)
+	 * and ramp (Smooth | Fast), and `QStepper`s (− / value+unit / +) for the
+	 * Target, Time and Temp fields. The remaining per-segment fields (volume
+	 * limit, exit condition, limiter) live in `SegmentAdvanced`, the panel the
+	 * editor renders beneath the selected row.
 	 */
 	import type { ProfileSegment, SegmentRamp } from '$lib/profiles';
 	import QStepper from '$lib/components/brew/QStepper.svelte';
@@ -40,14 +43,6 @@
 
 	/** The target unit follows the segment mode. */
 	const unit = $derived(seg.mode === 'pressure' ? 'bar' : 'ml/s');
-
-	/** A compact read-out of the structured exit condition, or an em-dash. */
-	const exitSummary = $derived.by(() => {
-		if (!seg.exit) return '—';
-		const op = seg.exit.compare === 'over' ? '>' : '<';
-		const u = seg.exit.metric === 'pressure' ? 'bar' : 'ml/s';
-		return `${seg.exit.metric} ${op} ${seg.exit.threshold} ${u}`;
-	});
 </script>
 
 <div
@@ -103,6 +98,26 @@
 	</div>
 
 	<div class="pe-seg-field">
+		<div class="pe-seg-field-label">Temp</div>
+		<QStepper
+			value={seg.temperatureC}
+			unit="°C"
+			min={80}
+			max={105}
+			step={0.5}
+			onChange={(v) => onEdit({ temperatureC: v })}
+		/>
+		<QSplitLabel
+			options={[
+				{ id: 'basket', label: 'Basket' },
+				{ id: 'mix', label: 'Mix' }
+			]}
+			value={seg.tempSensor}
+			onChange={(s) => onEdit({ tempSensor: s as ProfileSegment['tempSensor'] })}
+		/>
+	</div>
+
+	<div class="pe-seg-field">
 		<div class="pe-seg-field-label">Ramp</div>
 		<QSplitLabel
 			options={[
@@ -112,15 +127,6 @@
 			value={seg.ramp}
 			onChange={(r) => onEdit({ ramp: r as SegmentRamp })}
 		/>
-	</div>
-
-	<div class="pe-seg-field pe-seg-field-exit">
-		<div class="pe-seg-field-label">Exit when</div>
-		<!-- A read-only summary of the structured exit condition; it is edited in
-		     the advanced panel the editor renders for the selected segment. -->
-		<div class="pe-seg-exit-summary" class:is-set={seg.exit != null}>
-			{exitSummary}
-		</div>
 	</div>
 
 	<button
@@ -139,20 +145,19 @@
 <style>
 	.pe-seg {
 		display: grid;
-		/* Every cell is an editable control. The Target / Time columns hold a
-		   QStepper (− value +) and the mode / ramp columns a QSplitLabel split
-		   toggle, so the columns get honest control-sized minima; the name and
-		   exit-when fields take the remaining flexible space. */
+		/* Every cell is an editable control. Target / Time / Temp hold a
+		   QStepper; the mode / sensor / ramp columns a QSplitLabel split
+		   toggle — control-sized minima; the name field takes the slack. */
 		grid-template-columns:
 			28px
 			minmax(150px, 1.4fr)
 			minmax(122px, 0.9fr)
 			minmax(112px, 0.9fr)
+			minmax(122px, 0.9fr)
 			minmax(116px, 0.8fr)
-			minmax(120px, 1.1fr)
 			32px;
 		gap: 14px;
-		align-items: center;
+		align-items: start;
 		padding: 10px 14px;
 		background: var(--espresso-900);
 		border: 1px solid rgba(244, 237, 224, 0.05);
@@ -173,6 +178,7 @@
 		font-size: 11px;
 		color: rgba(244, 237, 224, 0.4);
 		text-align: center;
+		padding-top: 6px;
 	}
 	.pe-seg-name {
 		display: flex;
@@ -210,23 +216,6 @@
 		text-transform: uppercase;
 		font-weight: 600;
 		color: rgba(244, 237, 224, 0.4);
-	}
-	.pe-seg-exit-summary {
-		background: rgba(244, 237, 224, 0.04);
-		border: 1px solid rgba(244, 237, 224, 0.08);
-		border-radius: 4px;
-		font-family: var(--font-mono);
-		font-size: 11px;
-		color: rgba(244, 237, 224, 0.35);
-		padding: 4px 6px;
-		width: 100%;
-		min-width: 0;
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
-	}
-	.pe-seg-exit-summary.is-set {
-		color: rgba(244, 237, 224, 0.7);
 	}
 	.pe-seg-del {
 		width: 30px;
