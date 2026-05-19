@@ -60,6 +60,11 @@
   --copper-500: #C7763B; /* Brand primary */
   --copper-600: #A55F2A;
   --copper-700: #82481C;
+  /* RGB triplet for copper accent washes — `rgba(var(--copper-rgb), X)`. */
+  --copper-rgb: 199, 118, 59;
+
+  /* RGB triplet for danger washes / shadows — `rgba(var(--danger-rgb), X)`. */
+  --danger-rgb: 184, 74, 58;
 
   /* Telemetry — one hue per data channel. Pressure and weight are swapped
      vs. the handoff at the project's request: pressure is the sage green,
