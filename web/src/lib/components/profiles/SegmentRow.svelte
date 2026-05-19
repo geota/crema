@@ -4,23 +4,26 @@
 	 * `SegmentRow` in `profile-edit-page.jsx`.
 	 *
 	 * Every per-segment field a DE1 profile supports lives on this single
-	 * (wide) row. The controls are the quick-controls primitives: `QSplitLabel`
-	 * split toggles, `QStepper`s for the numbers.
+	 * (wide) row. The controls are the quick-controls primitives.
+	 *
+	 * ## Labels
+	 *
+	 * Every field label is one `QSplitLabel` — the shell's label primitive —
+	 * so they all share the quick-controls look and line up exactly. A label
+	 * may be a bare word (Target / Time), a word + split toggle (Temp), or
+	 * carry a leading on/off dot for an optional group (Volume / Exit / Max).
 	 *
 	 * ## Layout
 	 *
-	 * Each field is a uniform **cell** — a fixed-size box (`.pe-seg-cell`,
-	 * invisible by default) holding a label pinned to the top and an input
-	 * pinned to the bottom. The Max + Tolerance pair is the *visible* variant
-	 * of that same box (`.is-grouped`), so it lines up with the rest instead
-	 * of needing layout hacks: every label sits on one line, every input bar
-	 * on another, all bars equal width.
+	 * Each field is a uniform **cell** — a fixed box (`.pe-seg-cell`, invisible
+	 * by default) with the label pinned to the top and the input to the
+	 * bottom. The Max + Tolerance pair is the *visible* (`.is-grouped`) variant
+	 * of that same box, so it lines up with the rest.
 	 *
 	 * ## Optional groups
 	 *
-	 * Volume, Exit and the Max limiter are optional. Each is gated by a
-	 * **toggle-label** — a dotted copper chip doubling as the label — that
-	 * turns the group on / off; while off its controls dim.
+	 * Volume, Exit and the Max limiter are optional; the label's on/off dot
+	 * turns each on / off, and its input dims while off.
 	 */
 	import type {
 		ProfileSegment,
@@ -66,13 +69,13 @@
 
 	// ── Exit condition ──────────────────────────────────────────────────
 	//
-	// `seg.exit` is optional. When it is null the sub-controls render dimmed
-	// against sensible defaults (flow / over / 4); the toggle-label creates or
+	// `seg.exit` is optional. When it is null the threshold renders dimmed
+	// against sensible defaults (flow / over / 4); the label dot creates or
 	// clears the condition. Editing a sub-field only patches when exit is set.
 
 	/** Whether an exit condition is set. */
 	const exitOn = $derived(seg.exit != null);
-	/** The exit condition, or its dimmed default placeholder when unset. */
+	/** The exit condition, or its default placeholder when unset. */
 	const exitView = $derived<SegmentExit>(
 		seg.exit ?? { metric: 'flow', compare: 'over', threshold: 4 }
 	);
@@ -96,11 +99,11 @@
 	// ── Max limiter ─────────────────────────────────────────────────────
 	//
 	// The limiter caps the *non-priority* quantity (flow on a pressure step,
-	// pressure on a flow step). Optional — gated by the same toggle-label.
+	// pressure on a flow step). Optional — gated by its label's on/off dot.
 
 	/** Whether the limiter is set. */
 	const limiterOn = $derived(seg.limiter != null);
-	/** The limiter, or its dimmed default placeholder when unset. */
+	/** The limiter, or its default placeholder when unset. */
 	const limiterView = $derived<SegmentLimiter>(seg.limiter ?? { value: 6, range: 0.6 });
 	/** The limiter caps the non-priority quantity — flow when pressure-priority. */
 	const limiterUnit = $derived(seg.mode === 'pressure' ? 'ml/s' : 'bar');
@@ -119,18 +122,6 @@
 		onEdit({ limiter: { ...seg.limiter, range: v } });
 	}
 </script>
-
-<!--
-	The toggle-label — a dotted chip that enables / disables an optional group.
-	Filled copper dot when on; hollow when off. Stays full-opacity even while
-	its group is dimmed, so it can always be seen and clicked.
--->
-{#snippet togLabel(text: string, on: boolean, toggle: () => void)}
-	<button class="pe-seg-tog" class:on type="button" onclick={toggle}>
-		<span class="pe-seg-tog-dot"></span>
-		{text}
-	</button>
-{/snippet}
 
 <div
 	class="pe-seg"
@@ -174,7 +165,7 @@
 	<!-- Target -->
 	<div class="pe-seg-cell">
 		<div class="pe-seg-cell-body">
-			<div class="pe-seg-label-row"><span class="pe-seg-label">Target</span></div>
+			<QSplitLabel prefix="Target" />
 			<div class="pe-seg-cell-input">
 				<QStepper
 					value={seg.target}
@@ -191,7 +182,7 @@
 	<!-- Time -->
 	<div class="pe-seg-cell">
 		<div class="pe-seg-cell-body">
-			<div class="pe-seg-label-row"><span class="pe-seg-label">Time</span></div>
+			<QSplitLabel prefix="Time" />
 			<div class="pe-seg-cell-input">
 				<QStepper
 					value={seg.time}
@@ -208,17 +199,15 @@
 	<!-- Temp -->
 	<div class="pe-seg-cell">
 		<div class="pe-seg-cell-body">
-			<div class="pe-seg-label-row">
-				<span class="pe-seg-label">Temp</span>
-				<QSplitLabel
-					options={[
-						{ id: 'basket', label: 'Basket' },
-						{ id: 'mix', label: 'Mix' }
-					]}
-					value={seg.tempSensor}
-					onChange={(s) => onEdit({ tempSensor: s as ProfileSegment['tempSensor'] })}
-				/>
-			</div>
+			<QSplitLabel
+				prefix="Temp"
+				options={[
+					{ id: 'basket', label: 'Basket' },
+					{ id: 'mix', label: 'Mix' }
+				]}
+				value={seg.tempSensor}
+				onChange={(s) => onEdit({ tempSensor: s as ProfileSegment['tempSensor'] })}
+			/>
 			<div class="pe-seg-cell-input">
 				<QStepper
 					value={seg.temperatureC}
@@ -232,12 +221,10 @@
 		</div>
 	</div>
 
-	<!-- Volume limit — gated by its toggle-label; dimmed while off. -->
+	<!-- Volume limit — the label dot enables it; the input dims while off. -->
 	<div class="pe-seg-cell">
 		<div class="pe-seg-cell-body">
-			<div class="pe-seg-label-row">
-				{@render togLabel('Volume', volumeOn, toggleVolume)}
-			</div>
+			<QSplitLabel prefix="Volume" dot dotOn={volumeOn} onDot={toggleVolume} />
 			<div class="pe-seg-cell-input" class:is-off={!volumeOn}>
 				<QStepper
 					value={seg.volumeLimitMl}
@@ -255,19 +242,18 @@
 	     symbol left of the threshold value, the way a unit sits to its right. -->
 	<div class="pe-seg-cell">
 		<div class="pe-seg-cell-body">
-			<div class="pe-seg-label-row">
-				{@render togLabel('Exit', exitOn, toggleExit)}
-				<div class="pe-seg-dim" class:is-off={!exitOn}>
-					<QSplitLabel
-						options={[
-							{ id: 'pressure', label: 'Pressure' },
-							{ id: 'flow', label: 'Flow' }
-						]}
-						value={exitView.metric}
-						onChange={(m) => patchExit({ metric: m as SegmentExit['metric'] })}
-					/>
-				</div>
-			</div>
+			<QSplitLabel
+				prefix="Exit"
+				dot
+				dotOn={exitOn}
+				onDot={toggleExit}
+				options={[
+					{ id: 'pressure', label: 'Pressure' },
+					{ id: 'flow', label: 'Flow' }
+				]}
+				value={exitView.metric}
+				onChange={(m) => patchExit({ metric: m as SegmentExit['metric'] })}
+			/>
 			<div class="pe-seg-cell-input" class:is-off={!exitOn}>
 				<QStepper
 					value={exitView.threshold}
@@ -293,12 +279,10 @@
 	</div>
 
 	<!-- Limiter — the visible variant of the cell box: Max + Tolerance side
-	     by side in a copper-tinted frame; gated by the Max toggle-label. -->
+	     by side in a copper-tinted frame; the Max label dot gates both. -->
 	<div class="pe-seg-cell is-grouped">
 		<div class="pe-seg-cell-body">
-			<div class="pe-seg-label-row">
-				{@render togLabel('Max', limiterOn, toggleLimiter)}
-			</div>
+			<QSplitLabel prefix="Max" dot dotOn={limiterOn} onDot={toggleLimiter} />
 			<div class="pe-seg-cell-input" class:is-off={!limiterOn}>
 				<QStepper
 					value={limiterView.value}
@@ -311,7 +295,7 @@
 			</div>
 		</div>
 		<div class="pe-seg-cell-body">
-			<div class="pe-seg-label-row"><span class="pe-seg-label">Tolerance</span></div>
+			<QSplitLabel prefix="Tolerance" />
 			<div class="pe-seg-cell-input" class:is-off={!limiterOn}>
 				<QStepper
 					value={limiterView.range}
@@ -351,10 +335,9 @@
 			320px
 			32px;
 		gap: 12px;
-		/* The cells are fixed-height; centre them in the row so the visible
-		   Max box and every invisible field box sit mid-row. The name column
-		   is the sole flexible track — it absorbs all slack, keeping the
-		   delete button pinned to the row's right edge. */
+		/* Centre the fixed-height cells in the row. The name column is the
+		   sole flexible track — it absorbs the slack, keeping the delete
+		   button pinned to the row's right edge. */
 		align-items: center;
 		min-width: 1420px;
 		padding: 10px 14px;
@@ -427,75 +410,13 @@
 		min-width: 0;
 	}
 	/* The input bar — pinned to the bottom of the cell, so every bar in the
-	   row sits on the same line and is the same width. */
+	   row sits on the same line; dims while its optional group is off. */
 	.pe-seg-cell-input {
 		margin-top: auto;
 		transition: opacity var(--dur-1) var(--ease);
 	}
-
-	/* The uniform label row — every column has exactly one, a fixed-height
-	   flex box that vertically centres whatever sits inside it (a plain label
-	   span, a split-toggle, or a dotted chip). Because the container is
-	   identical everywhere, every input bar below starts on the same line —
-	   the dot in a toggle-chip is just centred content and shifts nothing. */
-	.pe-seg-label-row {
-		height: 18px;
-		display: flex;
-		align-items: center;
-		gap: 8px;
-	}
-	.pe-seg-label {
-		font-family: var(--font-sans);
-		font-size: 9px;
-		letter-spacing: var(--track-allcaps);
-		text-transform: uppercase;
-		font-weight: 600;
-		color: rgba(244, 237, 224, 0.4);
-	}
-	/* A dimmable inline wrapper — the Exit metric while the group is off. */
-	.pe-seg-dim {
-		display: flex;
-		align-items: center;
-		transition: opacity var(--dur-1) var(--ease);
-	}
-	.pe-seg-dim.is-off,
 	.pe-seg-cell-input.is-off {
 		opacity: 0.4;
-	}
-
-	/* The toggle-label chip — a dotted enable switch doubling as the label.
-	   No height of its own: it is centred content inside `.pe-seg-label-row`,
-	   exactly like a plain label span, so it never shifts the input below. */
-	.pe-seg-tog {
-		display: inline-flex;
-		align-items: center;
-		gap: 5px;
-		background: transparent;
-		border: 0;
-		padding: 0;
-		cursor: pointer;
-		font-family: var(--font-sans);
-		font-size: 9px;
-		letter-spacing: var(--track-allcaps);
-		text-transform: uppercase;
-		font-weight: 600;
-		color: rgba(244, 237, 224, 0.3);
-	}
-	.pe-seg-tog.on {
-		color: rgba(244, 237, 224, 0.6);
-	}
-	.pe-seg-tog-dot {
-		width: 7px;
-		height: 7px;
-		border-radius: 50%;
-		border: 1px solid rgba(244, 237, 224, 0.3);
-		box-sizing: border-box;
-		flex: 0 0 7px;
-		transition: all var(--dur-1) var(--ease);
-	}
-	.pe-seg-tog.on .pe-seg-tog-dot {
-		background: var(--copper-500);
-		border-color: var(--copper-500);
 	}
 
 	/* The over/under comparator — a `>` / `<` symbol left of the threshold,
@@ -519,7 +440,6 @@
 	.pe-seg-del {
 		width: 30px;
 		height: 30px;
-		margin-top: 7px;
 		background: transparent;
 		border: 0;
 		color: rgba(244, 237, 224, 0.4);
@@ -533,13 +453,10 @@
 		background: rgba(217, 119, 87, 0.08);
 	}
 
-	/* Trim the quick-controls primitives to the compact segment-row context.
-	   The QSplitLabel toggles shrink to field-label size and centre their
-	   content (overriding the baseline alignment) so a split-toggle label
-	   lines up with a plain label and a chip. */
-	/* No forced height — the split-toggle sizes to its content and is centred
-	   by `.pe-seg-label-row`, exactly like a plain label span or a chip, so
-	   "Temp" sits at the same height as "Target" / "Time". */
+	/* Every label is a QSplitLabel — trim it to the compact segment-row
+	   context: field-label size, centred content (overriding the design's
+	   baseline alignment) so the on/off dot, prefix word and split toggle
+	   all line up, and the prefix in the muted field-label colour. */
 	.pe-seg :global(.qsplit) {
 		font-size: 9px;
 		gap: 6px;
