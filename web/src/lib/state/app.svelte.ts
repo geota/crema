@@ -19,6 +19,7 @@ import { loadCore, type Command, type CoreOutput, type CremaCore } from '$lib/co
 import { De1Manager, EMPTY_DE1_DIAGNOSTICS, ScaleManager } from '$lib/ble';
 import { getBeanStore } from '$lib/bean';
 import { getHistoryStore } from '$lib/history';
+import { getProfileStore } from '$lib/profiles';
 import { parseCaptureFile, replayEvents, ReplayAbortedError } from '$lib/replay';
 import { CremaUiState, DEFAULT_SCALE_STANDBY_MINUTES, DEFAULT_SCALE_VOLUME } from './ui-state.svelte';
 
@@ -98,9 +99,17 @@ export class CremaApp {
 				const bean = getBeanStore().current;
 				const roaster = bean.roaster.trim();
 				const type = bean.type.trim();
+				// Capture the brew dose from the active profile so the History
+				// ratio divides by the real dose, not a nominal 18 g. `null` when
+				// no profile is active or the library has not loaded yet.
+				const profiles = getProfileStore();
+				const activeProfile = profiles.activeId
+					? profiles.get(profiles.activeId)
+					: undefined;
 				getHistoryStore().record({
 					durationMs: event.content.duration_ms,
 					profileName: snapshot.activeProfileName,
+					doseG: activeProfile?.dose ?? null,
 					series: snapshot.shotTelemetry,
 					bean:
 						roaster || type

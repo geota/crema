@@ -55,6 +55,12 @@ export interface ShotRecord {
 	readonly profileName: string | null;
 	/** Total shot duration, milliseconds (the `ShotCompleted` duration). */
 	readonly durationMs: number;
+	/**
+	 * The brew dose, grams — the active profile's dose at the time of the
+	 * shot. Optional: a shot recorded before this field existed (or with no
+	 * active profile) simply has none, and {@link ratioLabel} falls back.
+	 */
+	readonly doseG?: number | null;
 	/** Peak scale weight reached during the shot, grams, or `null`. */
 	readonly peakWeightG: number | null;
 	/** Final scale weight at shot end, grams, or `null` if no scale. */
@@ -77,13 +83,18 @@ export interface ShotRecord {
 	notes: string;
 }
 
-/** A `1:N` ratio label from final weight ÷ a nominal 18 g dose, or `1:—`. */
+/**
+ * A `1:N` ratio label from final weight ÷ the recorded brew dose, or `1:—`.
+ *
+ * Uses the shot's own `doseG` — captured at `ShotCompleted` time from the
+ * active profile. A pre-existing record (or one pulled with no active
+ * profile) has no `doseG`, so it falls back to the shell-wide 18 g default.
+ */
 export function ratioLabel(record: ShotRecord): string {
 	const yieldG = record.finalWeightG ?? record.peakWeightG;
 	if (yieldG == null || yieldG <= 0) return '1:—';
-	// The shell does not record the dose (no core field for it). 18 g is the
-	// shell-wide default dose used everywhere else (see profiles `model.ts`).
-	return `1:${(yieldG / 18).toFixed(2)}`;
+	const doseG = record.doseG != null && record.doseG > 0 ? record.doseG : 18;
+	return `1:${(yieldG / doseG).toFixed(2)}`;
 }
 
 /** A star string `★★★★☆` for a 0–5 rating. */

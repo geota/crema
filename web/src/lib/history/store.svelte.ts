@@ -41,6 +41,8 @@ export interface ShotCompletion {
 	durationMs: number;
 	/** The active profile's name at the time of the shot, or `null`. */
 	profileName: string | null;
+	/** The active profile's brew dose (grams) at the time of the shot, or `null`. */
+	doseG: number | null;
 	/** The buffered telemetry series snapshotted at shot completion. */
 	series: readonly TelemetrySample[];
 	/** A snapshot of the current bean at shot completion, or `null`. */
@@ -96,6 +98,7 @@ export class HistoryStore {
 			completedAt: Date.now(),
 			profileName: completion.profileName,
 			durationMs: completion.durationMs,
+			doseG: completion.doseG,
 			peakWeightG: peakWeight,
 			finalWeightG: finalWeight,
 			peakPressure,
