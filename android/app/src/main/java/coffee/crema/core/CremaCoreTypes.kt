@@ -54,7 +54,11 @@ data class EventTelemetryInner (
 	/// Group flow, mL/s.
 	val group_flow: Float,
 	/// Group-head temperature, °C.
-	val head_temp: Float
+	val head_temp: Float,
+	/// Mix temperature, °C — the DE1's blended "group" water temperature.
+	val mix_temp: Float,
+	/// Steam-heater temperature, °C.
+	val steam_temp: Float
 )
 
 /// Generated type representing the anonymous struct variant `ScaleReading` of the `Event` Rust enum
@@ -157,13 +161,6 @@ data class EventSteamEcoModeChangedInner (
 	val eco: Boolean
 )
 
-/// Generated type representing the anonymous struct variant `DecodeError` of the `Event` Rust enum
-@Serializable
-data class EventDecodeErrorInner (
-	/// Human-readable description of the failure.
-	val message: String
-)
-
 /// Generated type representing the anonymous struct variant `ScaleConfig` of the `Event` Rust enum
 @Serializable
 data class EventScaleConfigInner (
@@ -183,6 +180,51 @@ data class EventScaleConfigInner (
 	/// patch` (e.g. `141` is firmware 1.4.1) — `Some` only for a `03 0c`
 	/// serial response.
 	val firmware_version: UShort? = null
+)
+
+/// Generated type representing the anonymous struct variant `Firmware` of the `Event` Rust enum
+@Serializable
+data class EventFirmwareInner (
+	/// The CPU-board firmware's release number.
+	val fw_release: Float,
+	/// The CPU-board firmware's commits-since-release count.
+	val fw_commits: UShort,
+	/// The CPU-board firmware's API version.
+	val fw_api_version: UByte,
+	/// A human-readable firmware label, e.g. `"FW 1.4.142 (API 4)"`.
+	val firmware_string: String
+)
+
+/// Generated type representing the anonymous struct variant `MmrValue` of the `Event` Rust enum
+@Serializable
+data class EventMmrValueInner (
+	/// Which register this value is for.
+	val register: MmrRegister,
+	/// The register's raw 32-bit value, little-endian. Some registers are
+	/// scaled (e.g. `CalibrationFlowMultiplier` is `int(1000 ×
+	/// multiplier)`); the raw word is surfaced and the reader scales it.
+	val value: UInt
+)
+
+/// Generated type representing the anonymous struct variant `Calibration` of the `Event` Rust enum
+@Serializable
+data class EventCalibrationInner (
+	/// Which sensor the calibration applies to.
+	val target: CalTarget,
+	/// Whether this is the current (in-use) or the factory calibration —
+	/// [`CalCommand::ReadCurrent`] or [`CalCommand::ReadFactory`].
+	val command: CalCommand,
+	/// The value the DE1's sensor reported at calibration time.
+	val de1_reported: Float,
+	/// The externally-measured true value the DE1 was calibrated against.
+	val measured: Float
+)
+
+/// Generated type representing the anonymous struct variant `DecodeError` of the `Event` Rust enum
+@Serializable
+data class EventDecodeErrorInner (
+	/// Human-readable description of the failure.
+	val message: String
 )
 
 /// Something the core observed that the UI may want to react to.
@@ -263,7 +305,7 @@ sealed class Event {
 	object ScaleStale: Event()
 	/// The connected scale reported its dynamic configuration on its command
 	/// characteristic (the Bookoo's `ff12` channel).
-	///
+	/// 
 	/// The scale answers a serial query (`0x0a`, also echoed after every
 	/// anti-mistouch write) with the `anti_mistouch` state plus its `serial`
 	/// and `firmware_version`; it answers a settings query (`0x0f`) with the
@@ -275,6 +317,22 @@ sealed class Event {
 	@Serializable
 	@SerialName("ScaleConfig")
 	data class ScaleConfig(val content: EventScaleConfigInner): Event()
+	/// The DE1 reported its BLE-interface and CPU-board firmware versions.
+	@Serializable
+	@SerialName("Firmware")
+	data class Firmware(val content: EventFirmwareInner): Event()
+	/// A DE1 memory-mapped register was read back. Emitted when a
+	/// `ReadFromMMR` reply decodes to a register Crema models; one event per
+	/// register the reply carries.
+	@Serializable
+	@SerialName("MmrValue")
+	data class MmrValue(val content: EventMmrValueInner): Event()
+	/// A DE1 sensor calibration was read back from the `Calibration`
+	/// characteristic — the current (in-use) or factory calibration for one
+	/// sensor.
+	@Serializable
+	@SerialName("Calibration")
+	data class Calibration(val content: EventCalibrationInner): Event()
 	/// An incoming notification could not be decoded.
 	@Serializable
 	@SerialName("DecodeError")
@@ -400,10 +458,10 @@ data class ScaleCapabilities (
 )
 
 /// The BLE UUIDs a scale's transport layer needs.
-///
+/// 
 /// `Clone` but not `Copy`: three string slices (48 bytes) exceed the size
 /// where implicit copies are a sensible default.
-///
+/// 
 /// `#[typeshare]` + serde `Serialize` (behind the `serde` feature): the web
 /// shell needs these UUIDs to know which Web Bluetooth characteristics to
 /// subscribe to, so they cross the JSON bridge boundary.
@@ -417,6 +475,37 @@ data class ScaleUuids (
 	/// scales that use a single characteristic for both.
 	val command_write: String
 )
+
+/// What a calibration packet asks the DE1 to do.
+@Serializable
+enum class CalCommand(val string: String) {
+	/// Read the calibration currently in use.
+	@SerialName("ReadCurrent")
+	ReadCurrent("ReadCurrent"),
+	/// Write a new calibration.
+	@SerialName("Write")
+	Write("Write"),
+	/// Reset the sensor to its factory calibration.
+	@SerialName("ResetToFactory")
+	ResetToFactory("ResetToFactory"),
+	/// Read the factory calibration.
+	@SerialName("ReadFactory")
+	ReadFactory("ReadFactory"),
+}
+
+/// Which sensor a calibration applies to.
+@Serializable
+enum class CalTarget(val string: String) {
+	/// The flow-rate sensor.
+	@SerialName("Flow")
+	Flow("Flow"),
+	/// The pressure sensor.
+	@SerialName("Pressure")
+	Pressure("Pressure"),
+	/// The temperature sensor.
+	@SerialName("Temperature")
+	Temperature("Temperature"),
+}
 
 /// DE1 top-level machine state. Discriminants match the firmware `MachineState`
 /// enum (see protocol §4.1).
@@ -469,6 +558,78 @@ enum class MachineState(val string: String) {
 	/// Scheduled-wake idle; firmware v1293 and later only.
 	@SerialName("SchedIdle")
 	SchedIdle("SchedIdle"),
+}
+
+/// Known MMR register addresses.
+/// 
+/// This covers the registers Crema reads or writes; `docs/02-ble-protocol.md`
+/// §6.3 has the full map. [`address`](Self::address) gives the raw 24-bit
+/// address to pass to [`read_request`] / [`write_request`].
+@Serializable
+enum class MmrRegister(val string: String) {
+	/// Firmware build number.
+	@SerialName("FirmwareVersion")
+	FirmwareVersion("FirmwareVersion"),
+	/// Group Head Controller info bitmask (bit 0: present, bit 1: active).
+	@SerialName("GhcInfo")
+	GhcInfo("GhcInfo"),
+	/// Tank desired water-temperature threshold, °C.
+	@SerialName("TankTempThreshold")
+	TankTempThreshold("TankTempThreshold"),
+	/// Fan-on temperature threshold, °C.
+	@SerialName("FanThreshold")
+	FanThreshold("FanThreshold"),
+	/// Machine serial number.
+	@SerialName("SerialNumber")
+	SerialNumber("SerialNumber"),
+	/// Steam flow rate.
+	@SerialName("SteamFlow")
+	SteamFlow("SteamFlow"),
+	/// Refill-kit presence.
+	@SerialName("RefillKit")
+	RefillKit("RefillKit"),
+	/// Flush flow rate.
+	@SerialName("FlushFlowRate")
+	FlushFlowRate("FlushFlowRate"),
+	/// Hot-water flow rate.
+	@SerialName("HotWaterFlowRate")
+	HotWaterFlowRate("HotWaterFlowRate"),
+	/// Hot-water dispense phase-1 flow rate.
+	@SerialName("Phase1FlowRate")
+	Phase1FlowRate("Phase1FlowRate"),
+	/// Hot-water dispense phase-2 flow rate.
+	@SerialName("Phase2FlowRate")
+	Phase2FlowRate("Phase2FlowRate"),
+	/// Hot-water idle temperature, °C.
+	@SerialName("HotWaterIdleTemp")
+	HotWaterIdleTemp("HotWaterIdleTemp"),
+	/// Group head control mode.
+	@SerialName("GhcMode")
+	GhcMode("GhcMode"),
+	/// Seconds of high-flow steam at the start of a steam cycle.
+	@SerialName("SteamHighFlowStart")
+	SteamHighFlowStart("SteamHighFlowStart"),
+	/// Mains heater voltage.
+	@SerialName("HeaterVoltage")
+	HeaterVoltage("HeaterVoltage"),
+	/// Espresso warmup timeout.
+	@SerialName("EspressoWarmupTimeout")
+	EspressoWarmupTimeout("EspressoWarmupTimeout"),
+	/// Calibration flow multiplier (`int(1000 * multiplier)`).
+	@SerialName("CalibrationFlowMultiplier")
+	CalibrationFlowMultiplier("CalibrationFlowMultiplier"),
+	/// Flush timeout (`int(10 * seconds)`).
+	@SerialName("FlushTimeout")
+	FlushTimeout("FlushTimeout"),
+	/// USB charger on (1 = tablet USB charging enabled).
+	@SerialName("UsbChargerOn")
+	UsbChargerOn("UsbChargerOn"),
+	/// Feature-flag bitmask (e.g. the `UserNotPresent` flag).
+	@SerialName("FeatureFlags")
+	FeatureFlags("FeatureFlags"),
+	/// Cup-warmer temperature (Bengle models only).
+	@SerialName("CupWarmerTemp")
+	CupWarmerTemp("CupWarmerTemp"),
 }
 
 /// Where an espresso shot is in its lifecycle.
@@ -631,7 +792,7 @@ enum class WaterSessionKind(val string: String) {
 
 /// A writable DE1 GATT characteristic. The shell maps this to a UUID.
 /// 
-/// `#[non_exhaustive]`: profile-upload and MMR targets arrive later.
+/// `#[non_exhaustive]`: profile-upload targets arrive later.
 @Serializable
 enum class WriteTarget(val string: String) {
 	/// The DE1 `RequestedState` characteristic (`cuuid_02`).
@@ -640,5 +801,13 @@ enum class WriteTarget(val string: String) {
 	/// The DE1 steam / hot-water `ShotSettings` characteristic (`cuuid_0B`).
 	@SerialName("De1ShotSettings")
 	De1ShotSettings("De1ShotSettings"),
+	/// The DE1 `ReadFromMMR` characteristic (`cuuid_05`) — an MMR read request
+	/// is *written* here; the DE1 answers on the same characteristic's notify.
+	@SerialName("De1MmrRequest")
+	De1MmrRequest("De1MmrRequest"),
+	/// The DE1 `Calibration` characteristic (`cuuid_12`) — a calibration read
+	/// request is *written* here; the DE1 answers on the same characteristic.
+	@SerialName("De1Calibration")
+	De1Calibration("De1Calibration"),
 }
 
