@@ -111,6 +111,12 @@ export interface Profile {
 	 * through JSON. Mirrors the legacy `final_desired_shot_weight`.
 	 */
 	target_weight: number;
+	/**
+	 * Recommended dry coffee dose, grams (0 = unspecified). App-side metadata
+	 * like `target_weight` — the DE1 protocol has no dose field; it only
+	 * round-trips through JSON. Mirrors the legacy `profile_grinder_dose_weight`.
+	 */
+	dose: number;
 }
 
 /**
@@ -123,7 +129,8 @@ export type NotificationSource =
 	| 'De1ShotSample'
 	| 'ScaleWeight'
 	| 'ScaleCommand'
-	| 'De1WaterLevels';
+	| 'De1WaterLevels'
+	| 'De1Version';
 
 /**
  * The async core facade. One instance owns one `CremaBridge`; obtain it from
@@ -234,6 +241,8 @@ async function createCore(): Promise<CremaCore> {
 				return wasm.NotificationSource.ScaleCommand;
 			case 'De1WaterLevels':
 				return wasm.NotificationSource.De1WaterLevels;
+			case 'De1Version':
+				return wasm.NotificationSource.De1Version;
 		}
 	};
 

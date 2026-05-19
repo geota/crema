@@ -15,6 +15,7 @@
 	import ProfilePreview from './ProfilePreview.svelte';
 	import {
 		ratioLabel,
+		relativeLastUsed,
 		preinfuseSeconds,
 		type CremaProfile
 	} from '$lib/profiles';
@@ -76,7 +77,7 @@
 		<div class="pp-card-name">{profile.name || 'Untitled profile'}</div>
 		<div class="pp-card-bean">
 			{profile.source === 'builtin' ? 'Built-in profile' : 'Custom profile'}
-			· {profile.lastUsed ?? 'never used'}
+			· {relativeLastUsed(profile.lastUsed)}
 		</div>
 
 		<div class="pp-card-tags">
