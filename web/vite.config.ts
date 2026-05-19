@@ -3,11 +3,17 @@ import { SvelteKitPWA } from '@vite-pwa/sveltekit';
 import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'vite';
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
 	plugins: [
 		tailwindcss(),
 		sveltekit(),
-		SvelteKitPWA({
+		// The PWA plugin only matters for production builds (it generates the
+		// service worker + manifest). In dev it does nothing useful AND its
+		// resolved config (the `workbox.globPatterns` against the source tree)
+		// contributes to Vite's `configHash`, so every time files matching
+		// those globs are added or removed in `src/` the hash shifts and
+		// `pnpm dev` pays a 30–75 s `optimizeDeps` re-bundle. Skip it in dev.
+		...(command === 'build' ? [SvelteKitPWA({
 			registerType: 'autoUpdate',
 			// Full web app manifest. `theme_color` / `background_color` match the
 			// daisyUI `coffee` theme's base so the splash and chrome blend in.
@@ -50,6 +56,6 @@ export default defineConfig({
 				// The wasm bundle exceeds Workbox's 2 MiB default cache limit.
 				maximumFileSizeToCacheInBytes: 8 * 1024 * 1024
 			}
-		})
+		})] : [])
 	]
-});
+}));
