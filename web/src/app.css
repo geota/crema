@@ -4,17 +4,27 @@
    `@import "tailwindcss"`). daisyUI has been dropped in favour of the Crema
    design system's own CSS kit.
 
-   The design tokens — the single source of truth for colour, type, spacing,
-   radii, shadows and motion — are pulled in from `styles/tokens.css`, which
-   also carries the Google Fonts (Newsreader, Hanken Grotesk, JetBrains Mono)
-   and Phosphor icon-font `@import`s. It defines the `:root` custom
-   properties, the `[data-theme="dark"]` overrides, the `.t-*` type-role
-   classes and the `html` / `body` defaults, so the whole app renders under
-   the design system. */
+   The design system's stylesheets are adopted **verbatim** from the Claude
+   Design handoff (`design_handoff_crema_quick_controls/styles/`) so the screens
+   render pixel-for-pixel against the reference. `tokens.css` is the single
+   source of truth for colour, type, spacing, radii, shadows and motion; it
+   also carries the Phosphor icon-font `@import`s (Google Fonts load via a
+   `<link>` in `app.html`). web-kit is the base kit; the rest are per-screen.
+
+   Import order matches the handoff README §2: tokens → web-kit → the
+   quick-controls layers → the per-page sheets. They are class-selector-only,
+   so no component needs a scoped `<style>` block for design styling. */
 
 @import 'tailwindcss';
 @import './styles/tokens.css';
-@import './styles/dashboard.css';
+@import './styles/web-kit.css';
+@import './styles/quick-controls.css';
+@import './styles/quick-controls-v2.css';
+@import './styles/profiles-page.css';
+@import './styles/profile-edit-page.css';
+@import './styles/settings-page.css';
+@import './styles/scale-page.css';
+@import './styles/history-page.css';
 
 /* ── Shared page-header rhythm ────────────────────────────────────────────
    The five route screens were each ported independently and drifted: every

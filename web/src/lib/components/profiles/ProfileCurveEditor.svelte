@@ -255,23 +255,24 @@
 				aria-valuemin={0}
 				aria-valuemax={Y_MAX}
 			>
-				<!-- A wide invisible hit target keeps the small dot easy to grab. -->
-				<circle cx={d.x} cy={d.y} r="16" fill="transparent" />
-				{#if activeSegId === d.id}
-					<!-- Soft copper halo marks the active dot without bulk. -->
-					<circle cx={d.x} cy={d.y} r="9" fill="rgba(193,116,75,0.16)" />
-				{/if}
-				<!-- One slim handle: a punched node on the curve when idle, a
-				     solid copper dot when active. -->
+				<!-- A wide 14 px invisible hit target keeps the small dot easy to
+				     grab — matches the design's `r=14` grab circle. -->
+				<circle cx={d.x} cy={d.y} r="14" fill="transparent" />
+				<!-- Outer ring: r=5 / 1 px hairline resting; r=6 / 1.5 px copper
+				     when active — the design's handle spec. -->
 				<circle
 					class="pe-dot-handle"
 					cx={d.x}
 					cy={d.y}
-					r={activeSegId === d.id ? 5 : 4}
-					fill={activeSegId === d.id ? 'var(--copper-400)' : 'var(--espresso-900)'}
-					stroke={activeSegId === d.id ? 'var(--espresso-900)' : 'rgba(244,237,224,0.5)'}
-					stroke-width="1.5"
+					r={activeSegId === d.id ? 6 : 5}
+					fill="var(--espresso-950)"
+					stroke={activeSegId === d.id ? 'var(--copper-500)' : 'rgba(244,237,224,0.55)'}
+					stroke-width={activeSegId === d.id ? 1.5 : 1}
 				/>
+				<!-- Inner copper dot only when the segment is active. -->
+				{#if activeSegId === d.id}
+					<circle cx={d.x} cy={d.y} r="2" fill="var(--copper-400)" />
+				{/if}
 			</g>
 		{/each}
 	</svg>

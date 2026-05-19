@@ -1,7 +1,7 @@
 <script lang="ts">
 	/**
 	 * `StToggle` — the mini on/off switch used throughout Settings. Reuses the
-	 * shared `.qmini-tog` styling (from `dashboard.css`), exactly as the design's
+	 * shared `.qmini-tog` styling (from `quick-controls-v2.css`), exactly as the design's
 	 * `StToggle` does.
 	 */
 	let {

@@ -499,7 +499,7 @@
 	}
 
 	/* st-segment ported from the design's settings kit. The .st-btn family
-	   is shared globally — see dashboard.css. */
+	   is shared globally — see settings-page.css. */
 	.st-segment {
 		display: inline-flex;
 		background: rgba(244, 237, 224, 0.04);

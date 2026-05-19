@@ -43,6 +43,21 @@
 	const machineConnected = $derived(ui !== null && liveStates.includes(ui.de1State));
 	const scaleConnected = $derived(ui !== null && liveStates.includes(ui.scaleState));
 
+	/**
+	 * Toggle the DE1 connection — the bottom status button. Connecting needs a
+	 * Web-Bluetooth user gesture, which a click satisfies.
+	 */
+	function toggleMachine(): void {
+		if (!app) return;
+		void (machineConnected ? app.disconnectDe1() : app.connectDe1());
+	}
+
+	/** Toggle the scale connection — the other bottom status button. */
+	function toggleScale(): void {
+		if (!app) return;
+		void (scaleConnected ? app.disconnectScale() : app.connectScale());
+	}
+
 	/** Keys 1–5 navigate to the matching route — design parity. */
 	function onKeydown(event: KeyboardEvent) {
 		// Ignore digits typed into inputs so forms keep working.
@@ -68,7 +83,7 @@
 
 <nav class="cside" aria-label="Primary">
 	<div class="cside-mark">
-		<img class="cside-mark-glyph" src="/bean-mark.svg" alt="Crema" width="34" height="34" />
+		<div class="cside-mark-glyph">C</div>
 	</div>
 	<div class="cside-items">
 		{#each items as it (it.id)}
@@ -85,128 +100,48 @@
 		<div style="flex: 1 1 auto"></div>
 	</div>
 	<div class="cside-bottom">
-		<div class="cside-status">
-			<span
-				class="cside-status-dot"
-				class:off={!machineConnected}
-				title={machineConnected ? 'DE1 connected' : 'DE1 disconnected'}
-			></span>
-			<span>DE1</span>
-		</div>
-		<div class="cside-status">
-			<span
-				class="cside-status-dot"
-				class:off={!scaleConnected}
-				title={scaleConnected ? 'Scale connected' : 'Scale disconnected'}
-			></span>
-			<span>Scale</span>
-		</div>
+		<button
+			type="button"
+			class="cside-status is-button"
+			class:is-connected={machineConnected}
+			onclick={toggleMachine}
+			disabled={!app}
+			title={machineConnected ? 'DE1 connected — click to disconnect' : 'Click to connect DE1'}
+		>
+			<span class="cside-status-dot" class:off={!machineConnected}></span>
+			<span class="cside-status-label">DE1</span>
+			<span class="cside-status-cta">
+				<i class={'ph ph-' + (machineConnected ? 'check' : 'bluetooth')} aria-hidden="true"></i>
+			</span>
+		</button>
+		<button
+			type="button"
+			class="cside-status is-button"
+			class:is-connected={scaleConnected}
+			onclick={toggleScale}
+			disabled={!app}
+			title={scaleConnected ? 'Scale connected — click to disconnect' : 'Click to connect scale'}
+		>
+			<span class="cside-status-dot" class:off={!scaleConnected}></span>
+			<span class="cside-status-label">Scale</span>
+			<span class="cside-status-cta">
+				<i class={'ph ph-' + (scaleConnected ? 'check' : 'bluetooth')} aria-hidden="true"></i>
+			</span>
+		</button>
 	</div>
 </nav>
 
 <style>
-	/* Ported verbatim from quick-controls-v2.css `.cside*`, with the prototype's
-	   absolute positioning swapped for `fixed` (it is now a true app-shell
-	   rail, not an artboard child). */
+	/* The `.cside*` visuals live in the global `quick-controls-v2.css` — the
+	   source of truth. Only two component-level overrides are needed:
+	   1. the rail is `fixed` (a true app-shell rail, not the prototype's
+	      absolutely-positioned artboard child);
+	   2. the nav items are `<a>` links here, so the anchor underline is killed
+	      (the global rule styles `<button class="cside-item">`). */
 	.cside {
 		position: fixed;
-		left: 0;
-		top: 0;
-		bottom: 0;
-		width: 72px;
-		background: var(--espresso-950);
-		border-right: 1px solid rgba(244, 237, 224, 0.04);
-		display: flex;
-		flex-direction: column;
-		z-index: 8;
-		padding: 16px 0 16px;
-	}
-	.cside-mark {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		width: 72px;
-		height: 56px;
-		margin-bottom: 4px;
-	}
-	.cside-mark-glyph {
-		width: 34px;
-		height: 34px;
-		border-radius: 50%;
-		box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2);
-		display: block;
-	}
-	.cside-items {
-		display: flex;
-		flex-direction: column;
-		gap: 2px;
-		flex: 1 1 auto;
-		padding-top: 8px;
 	}
 	.cside-item {
-		position: relative;
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-		gap: 4px;
-		background: transparent;
-		border: 0;
-		padding: 12px 0 10px;
-		cursor: pointer;
-		color: rgba(244, 237, 224, 0.5);
-		font-family: var(--font-sans);
-		font-size: 10px;
-		letter-spacing: 0.02em;
 		text-decoration: none;
-		transition: color var(--dur-1) var(--ease);
-	}
-	.cside-item i {
-		font-size: 22px;
-	}
-	.cside-item:hover {
-		color: var(--ink-50);
-	}
-	.cside-item.is-active {
-		color: var(--ink-50);
-	}
-	.cside-item.is-active i {
-		color: var(--copper-400);
-	}
-	.cside-item.is-active::before {
-		content: '';
-		position: absolute;
-		left: 0;
-		top: 14px;
-		bottom: 14px;
-		width: 2px;
-		background: var(--copper-500);
-		border-radius: 0 2px 2px 0;
-	}
-	.cside-bottom {
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-		gap: 10px;
-		padding: 0 8px;
-	}
-	.cside-status {
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-		gap: 4px;
-		font-family: var(--font-sans);
-		font-size: 9px;
-		color: rgba(244, 237, 224, 0.45);
-	}
-	.cside-status-dot {
-		width: 8px;
-		height: 8px;
-		border-radius: 50%;
-		background: var(--success, #6b8c5f);
-		box-shadow: 0 0 0 2px rgba(107, 140, 95, 0.18);
-	}
-	.cside-status-dot.off {
-		background: rgba(244, 237, 224, 0.2);
-		box-shadow: none;
 	}
 </style>

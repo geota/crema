@@ -313,7 +313,7 @@
 		color: rgba(244, 237, 224, 0.35);
 	}
 
-	/* The .st-btn family is shared globally — see dashboard.css. */
+	/* The .st-btn family is shared globally — see settings-page.css. */
 
 	/* Stats strip */
 	.hi-stats {

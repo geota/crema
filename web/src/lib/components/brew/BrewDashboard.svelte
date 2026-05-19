@@ -24,6 +24,8 @@
 	import { BrewParamState } from './brew-params.svelte';
 	import ExtractionTimer from './ExtractionTimer.svelte';
 	import ChannelReadout from './ChannelReadout.svelte';
+	import PhaseIndicatorCard from './PhaseIndicatorCard.svelte';
+	import BeanContextCard from './BeanContextCard.svelte';
 	import LiveChart from './LiveChart.svelte';
 	import QuickSheet from './QuickSheet.svelte';
 
@@ -138,6 +140,12 @@
 
 	/** Live weight (g) — from the scale stream, independent of shot state. */
 	const weight = $derived(ui.scaleWeightG);
+	/** Whether a scale is connected — drives the foot's "Scale" cluster. */
+	const scaleConnected = $derived(
+		ui.scaleState === 'ready' || ui.scaleState === 'subscribing'
+	);
+	/** The connected scale's advertised name, with a neutral fallback. */
+	const scaleName = $derived(ui.scaleName ?? 'Scale');
 	/** Yield progress as a 0..100 % bar width. */
 	const yieldPct = $derived(
 		weight == null ? 0 : Math.min(100, (weight / p.yield) * 100)
@@ -221,6 +229,12 @@
 							<span class="crema-target-unit"> · target 1:{ratio}</span>
 						</div>
 					</div>
+					<!-- Phase + Bean cards only fit the left column when the Quick
+					     Sheet is closed; the open sheet would overlap them. -->
+					{#if !quickSheetOpen}
+						<PhaseIndicatorCard seconds={elapsedSec} preinf={p.preinf} />
+						<BeanContextCard profile={activeProfile} grind={p.grind} />
+					{/if}
 				</div>
 			</div>
 			<div class="crema-dash-chartcol">
@@ -270,16 +284,39 @@
 			</div>
 		</div>
 
+		<!-- Foot: a meta cluster on the left, the big Start / Stop button on the
+		     right. Stays visible even with the Quick Sheet open — the docked
+		     sheet sits just above it (`bottom: 96px`). -->
+		<div class="crema-dash-foot is-split">
+			<div class="crema-foot-meta">
+				<span class="t-eyebrow">Scale</span>
+				<span>{scaleConnected ? `${scaleName} · ${fmt(weight)} g` : 'Not paired'}</span>
+				<span class="crema-foot-divider"></span>
+				<!-- TODO: wire to DE1 control — group / steam / water readouts need
+				     the machine's structured temperatures, which the core does not
+				     surface yet; these are the design's representative values. -->
+				<span class="t-eyebrow">Group</span><span>93.2 °C</span>
+				<span class="t-eyebrow">Steam</span><span>148 °C</span>
+				<span class="t-eyebrow">Water</span><span>OK</span>
+			</div>
+			<!-- TODO: wire to DE1 control — starting / stopping a shot is a net-new
+			     feature; today this only flips the local `running` flag. -->
+			<button class="crema-bigbtn" class:running={manualRunning} onclick={toggleRun}>
+				<i
+					class={'ph-fill ph-' + (manualRunning ? 'stop' : 'play')}
+					aria-hidden="true"
+				></i>
+				<span>{manualRunning ? 'Stop extraction' : 'Start extraction'}</span>
+			</button>
+		</div>
+
 		<!-- Docked Quick Sheet, variant G -->
 		<QuickSheet
 			{params}
-			{profileName}
 			{pinnedProfiles}
 			selectedProfileId={profileStore.activeId}
-			running={manualRunning}
 			open={quickSheetOpen}
 			onSelectFavorite={selectFavorite}
-			onToggleRun={toggleRun}
 			onClose={() => (quickSheetOpen = false)}
 		/>
 	</div>

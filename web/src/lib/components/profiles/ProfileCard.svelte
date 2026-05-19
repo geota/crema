@@ -3,13 +3,14 @@
 	 * `ProfileCard` — one profile in the `/profiles` library grid, ported from
 	 * `ProfileCard` in `profiles-page.jsx`.
 	 *
-	 * Shows the `QSparkline` hero curve, the serif name, a bean · last-used
-	 * line, roast + custom-tag chips, a 4-up metric strip, the notes, and the
-	 * action row (Load on Brew, duplicate, edit, overflow). The star pin and the
-	 * "Active" pill sit in the corners. All real data — the profile is a
-	 * `CremaProfile` from the library store.
+	 * Structure (per SCREENS.md §3): a header row (the "Active" pill + the pin
+	 * star), the `ProfilePreview` 3-curve mini-chart, the serif name + bean ·
+	 * last-used line, roast + custom-tag chips, a 4-up metric grid, the notes
+	 * (2-line clamp), and the action row (Load on Brew, duplicate, edit,
+	 * overflow). All real data — the profile is a `CremaProfile` from the
+	 * library store.
 	 */
-	import QSparkline from '$lib/components/brew/QSparkline.svelte';
+	import ProfilePreview from './ProfilePreview.svelte';
 	import {
 		ratioLabel,
 		sparkShape,
@@ -53,26 +54,23 @@
 </script>
 
 <div class="pp-card" class:is-active={active}>
-	{#if active}
-		<div class="pp-card-active">Active</div>
-	{/if}
-	<button
-		class="pp-card-pin"
-		class:pp-card-pin-off={!profile.pinned}
-		title={profile.pinned ? 'Pinned to favorites' : 'Pin to favorites'}
-		onclick={() => onTogglePin(profile.id)}
-	>
-		<i class={profile.pinned ? 'ph-fill ph-star' : 'ph ph-star'} aria-hidden="true"></i>
-	</button>
-
-	<div class="pp-card-spark">
-		<QSparkline
-			{shape}
-			width={220}
-			height={56}
-			color={active ? 'var(--copper-400)' : 'rgba(244,237,224,0.55)'}
-		/>
+	<div class="pp-card-head">
+		{#if active}
+			<div class="pp-card-active">Active</div>
+		{:else}
+			<span class="pp-card-head-spacer"></span>
+		{/if}
+		<button
+			class="pp-card-pin"
+			class:pp-card-pin-off={!profile.pinned}
+			title={profile.pinned ? 'Pinned to favorites' : 'Pin to favorites'}
+			onclick={() => onTogglePin(profile.id)}
+		>
+			<i class={profile.pinned ? 'ph-fill ph-star' : 'ph ph-star'} aria-hidden="true"></i>
+		</button>
 	</div>
+
+	<ProfilePreview id={profile.id} {shape} {preinf} {active} />
 
 	<div class="pp-card-body">
 		<div class="pp-card-name">{profile.name || 'Untitled profile'}</div>
@@ -193,226 +191,10 @@
 </div>
 
 <style>
-	.pp-card {
-		position: relative;
-		background: var(--espresso-900);
-		border: 1px solid rgba(244, 237, 224, 0.05);
-		border-radius: var(--radius-lg, 14px);
-		padding: 20px 22px 18px;
-		display: flex;
-		flex-direction: column;
-		gap: 14px;
-		overflow: hidden;
-		transition: all var(--dur-1) var(--ease);
-	}
-	.pp-card:hover {
-		border-color: rgba(244, 237, 224, 0.12);
-		transform: translateY(-1px);
-	}
-	.pp-card.is-active {
-		border-color: var(--copper-500);
-		box-shadow: 0 0 0 1px var(--copper-500);
-	}
-	.pp-card-active {
-		position: absolute;
-		top: 14px;
-		left: 22px;
-		font-family: var(--font-sans);
-		font-size: 9px;
-		font-weight: 700;
-		letter-spacing: var(--track-allcaps);
-		text-transform: uppercase;
-		color: #1a120c;
-		background: var(--copper-500);
-		padding: 3px 8px;
-		border-radius: 999px;
-	}
-	.pp-card-pin {
-		position: absolute;
-		top: 14px;
-		right: 18px;
-		background: transparent;
-		border: 0;
-		color: var(--copper-400);
-		font-size: 18px;
-		cursor: pointer;
-		padding: 4px;
-		border-radius: 6px;
-		transition: all var(--dur-1) var(--ease);
-		z-index: 1;
-	}
-	.pp-card-pin:hover {
-		background: rgba(244, 237, 224, 0.05);
-	}
-	.pp-card-pin.pp-card-pin-off {
-		color: rgba(244, 237, 224, 0.25);
-	}
-	.pp-card-pin.pp-card-pin-off:hover {
-		color: rgba(244, 237, 224, 0.6);
-	}
-
-	.pp-card-spark {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		height: 64px;
-		background: var(--espresso-950);
-		border-radius: 10px;
-		margin-top: 12px;
-		border: 1px solid rgba(244, 237, 224, 0.04);
-	}
-
-	.pp-card-body {
-		display: flex;
-		flex-direction: column;
-		gap: 10px;
-	}
-	.pp-card-name {
-		font-family: var(--font-serif);
-		font-size: 22px;
-		letter-spacing: -0.01em;
-		color: var(--ink-50);
-	}
-	.pp-card-bean {
-		font-family: var(--font-sans);
-		font-size: 12px;
-		color: rgba(244, 237, 224, 0.5);
-	}
-
-	.pp-card-tags {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 4px;
-		margin-top: 2px;
-	}
-	.pp-card-tag {
-		display: inline-flex;
-		align-items: center;
-		padding: 2px 7px;
-		background: rgba(193, 116, 75, 0.08);
-		border: 1px solid rgba(193, 116, 75, 0.25);
-		border-radius: 999px;
-		font-family: var(--font-sans);
-		font-size: 10px;
-		color: var(--copper-400);
-	}
-	.pp-card-roast {
-		display: inline-flex;
-		align-items: center;
-		padding: 2px 7px;
-		background: rgba(244, 237, 224, 0.05);
-		border: 1px solid rgba(244, 237, 224, 0.08);
-		border-radius: 999px;
-		font-family: var(--font-sans);
-		font-size: 10px;
-		letter-spacing: var(--track-allcaps);
-		text-transform: uppercase;
-		color: rgba(244, 237, 224, 0.6);
-	}
-
-	.pp-card-metrics {
-		display: grid;
-		grid-template-columns: repeat(4, minmax(0, 1fr));
-		gap: 6px;
-		padding: 10px 0;
-		border-top: 1px solid rgba(244, 237, 224, 0.05);
-		border-bottom: 1px solid rgba(244, 237, 224, 0.05);
-	}
-	.pp-metric {
-		display: flex;
-		flex-direction: column;
-		gap: 2px;
-	}
-	.pp-metric-label {
-		font-family: var(--font-sans);
-		font-size: 9px;
-		letter-spacing: var(--track-allcaps);
-		text-transform: uppercase;
-		font-weight: 600;
-		color: rgba(244, 237, 224, 0.4);
-	}
-	.pp-metric-val {
-		font-family: var(--font-mono);
-		font-variant-numeric: tabular-nums;
-		font-size: 14px;
-		color: var(--ink-50);
-	}
-	.pp-metric-val em {
-		font-style: normal;
-		font-size: 10px;
-		color: rgba(244, 237, 224, 0.5);
-		margin-left: 1px;
-	}
-
-	.pp-card-notes {
-		font-family: var(--font-sans);
-		font-size: 12px;
-		line-height: 1.5;
-		color: rgba(244, 237, 224, 0.6);
-		display: -webkit-box;
-		-webkit-line-clamp: 2;
-		line-clamp: 2;
-		-webkit-box-orient: vertical;
-		overflow: hidden;
-	}
-
-	.pp-card-actions {
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		margin-top: 2px;
-	}
-	.pp-action {
-		flex: 1 1 auto;
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		gap: 6px;
-		padding: 8px 12px;
-		border-radius: var(--radius-sm);
-		border: 1px solid rgba(244, 237, 224, 0.1);
-		background: rgba(244, 237, 224, 0.03);
-		color: var(--ink-50);
-		font-family: var(--font-sans);
-		font-size: 12px;
-		font-weight: 500;
-		cursor: pointer;
-		transition: all var(--dur-1) var(--ease);
-	}
-	.pp-action:hover {
-		background: rgba(244, 237, 224, 0.07);
-		border-color: rgba(244, 237, 224, 0.18);
-	}
-	.pp-action-primary.is-on {
-		background: rgba(193, 116, 75, 0.12);
-		border-color: var(--copper-500);
-		color: var(--copper-400);
-		cursor: default;
-	}
-	.pp-action-primary.is-on i {
-		color: var(--copper-400);
-	}
-	.pp-action-icon {
-		width: 32px;
-		height: 32px;
-		flex: 0 0 32px;
-		border: 1px solid rgba(244, 237, 224, 0.1);
-		background: rgba(244, 237, 224, 0.03);
-		border-radius: var(--radius-sm);
-		color: rgba(244, 237, 224, 0.6);
-		cursor: pointer;
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		font-size: 14px;
-		transition: all var(--dur-1) var(--ease);
-	}
-	.pp-action-icon:hover {
-		color: var(--ink-50);
-		background: rgba(244, 237, 224, 0.07);
-	}
-
-	/* Overflow menu */
+	/* Structural styles (.pp-card, .pp-card-head, .pp-preview, .pp-card-body,
+	   …) live in the handoff's profiles-page.css, imported globally by app.css.
+	   Only the overflow menu — which the design mocked but never styled — is
+	   defined here. */
 	.pp-card-menu {
 		position: relative;
 	}
