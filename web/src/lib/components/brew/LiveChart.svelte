@@ -30,7 +30,10 @@
 
 	let {
 		series,
-		goalSegments
+		goalSegments,
+		showFlowCurve = true,
+		smoothPressure = true,
+		telemetryRateHz = 0
 	}: {
 		/** The buffered shot-telemetry series, oldest first. */
 		series: readonly TelemetrySample[];
@@ -40,7 +43,42 @@
 		 * which case the goal series is omitted.
 		 */
 		goalSegments?: readonly ProfileSegment[];
+		/** Whether to plot the flow channel — the `showFlowCurve` setting (D3). */
+		showFlowCurve?: boolean;
+		/** Whether to smooth the pressure channel — the `smoothPressure` setting (D3). */
+		smoothPressure?: boolean;
+		/**
+		 * The chart's display sample rate, Hz — the `telemetryRateHz` setting
+		 * (D3). The buffered series is decimated to at most this many samples
+		 * per second before plotting; `0`/unset plots every sample.
+		 */
+		telemetryRateHz?: number;
 	} = $props();
+
+	/** The rolling-mean window (sample count) the `smoothPressure` setting uses. */
+	const PRESSURE_SMOOTH_WINDOW = 5;
+
+	/**
+	 * Decimate the buffered series to the `telemetryRateHz` display rate —
+	 * keep a sample only when at least `1000 / rate` ms have passed since the
+	 * last kept one. The final sample is always kept so the now-marker and
+	 * end-dots sit on the live value. A `0`/non-finite rate keeps everything.
+	 */
+	function decimate(samples: readonly TelemetrySample[]): readonly TelemetrySample[] {
+		const rate = telemetryRateHz ?? 0;
+		if (!Number.isFinite(rate) || rate <= 0 || samples.length < 3) return samples;
+		const minGapMs = 1000 / rate;
+		const out: TelemetrySample[] = [];
+		let lastMs = -Infinity;
+		for (let i = 0; i < samples.length; i++) {
+			const s = samples[i];
+			if (i === samples.length - 1 || s.elapsedMs - lastMs >= minGapMs) {
+				out.push(s);
+				lastMs = s.elapsedMs;
+			}
+		}
+		return out;
+	}
 
 	/** The default x-window, seconds, before any telemetry has arrived. */
 	const BASE_WINDOW_SEC = 60;
@@ -90,23 +128,48 @@
 	}
 
 	/**
+	 * The pressure value at `i`, optionally smoothed (D3 — `smoothPressure`).
+	 * Smoothing is a trailing rolling mean over {@link PRESSURE_SMOOTH_WINDOW}
+	 * samples — calmer than the raw ~25 Hz trace, no lookahead.
+	 */
+	function pressureAt(samples: readonly TelemetrySample[], i: number): number | null {
+		const raw = samples[i].pressure;
+		if (raw == null) return null;
+		if (!smoothPressure) return raw;
+		let sum = 0;
+		let n = 0;
+		for (let j = Math.max(0, i - PRESSURE_SMOOTH_WINDOW + 1); j <= i; j++) {
+			const v = samples[j].pressure;
+			if (v != null) {
+				sum += v;
+				n++;
+			}
+		}
+		return n > 0 ? sum / n : raw;
+	}
+
+	/**
 	 * Build the [x, pressure, flow, temp, weight, goal] column arrays uPlot
 	 * wants. Pressure and flow keep their raw value; temperature and weight are
 	 * divided by 10 so they ride the shared scale (and read back ×10 on the
-	 * right axis).
+	 * right axis). Pressure is smoothed when `smoothPressure` is on; the flow
+	 * column is fed all-`null` when `showFlowCurve` is off, hiding the channel.
+	 * The input is first decimated to the `telemetryRateHz` display rate.
 	 */
-	function toData(samples: readonly TelemetrySample[]): uPlot.AlignedData {
+	function toData(input: readonly TelemetrySample[]): uPlot.AlignedData {
+		const samples = decimate(input);
 		const xs: number[] = [];
 		const pressure: (number | null)[] = [];
 		const flow: (number | null)[] = [];
 		const temp: (number | null)[] = [];
 		const weight: (number | null)[] = [];
 		const goal: (number | null)[] = [];
-		for (const s of samples) {
+		for (let i = 0; i < samples.length; i++) {
+			const s = samples[i];
 			const t = s.elapsedMs / 1000;
 			xs.push(t);
-			pressure.push(s.pressure ?? null);
-			flow.push(s.flow ?? null);
+			pressure.push(pressureAt(samples, i));
+			flow.push(showFlowCurve ? (s.flow ?? null) : null);
 			temp.push(s.temp == null ? null : s.temp / 10);
 			weight.push(s.weightG == null ? null : s.weightG / 10);
 			goal.push(goalAt(t));

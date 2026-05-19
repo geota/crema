@@ -21,6 +21,9 @@ export const De1Uuids = {
 	/** The DE1 GATT service (`suuid`, `A000`). */
 	SERVICE: short('a000'),
 
+	/** `cuuid_01` / `A001` — Version: the BLE + firmware version block (Read). */
+	VERSION: short('a001'),
+
 	/** `cuuid_0D` / `A00D` — ShotSample: the ~4-10 Hz telemetry notify stream. */
 	SHOT_SAMPLE: short('a00d'),
 

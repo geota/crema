@@ -445,6 +445,28 @@ export class BleDevice {
 	}
 
 	/**
+	 * Read a characteristic's current value. Used for the DE1 `Version`
+	 * characteristic, which is a one-shot Read (not a Notify) — there is no
+	 * value-change stream, so the manager reads it once after connecting.
+	 *
+	 * The resolve-then-read runs as one queued GATT step, so it cannot collide
+	 * with a notification subscribe, a write, or a reconnect.
+	 */
+	readCharacteristic(serviceUuid: string, characteristicUuid: string): Promise<Uint8Array> {
+		return this.gattQueue.enqueue(async () => {
+			let characteristic = this.characteristics.get(characteristicUuid.toLowerCase());
+			if (characteristic === undefined) {
+				characteristic = await this.resolveCharacteristic(
+					serviceUuid,
+					characteristicUuid
+				);
+			}
+			const view = await characteristic.readValue();
+			return new Uint8Array(view.buffer, view.byteOffset, view.byteLength);
+		});
+	}
+
+	/**
 	 * Disconnect the GATT server and drop the device's listeners. Idempotent.
 	 *
 	 * Marks the teardown *deliberate*, which suppresses the auto-reconnect loop

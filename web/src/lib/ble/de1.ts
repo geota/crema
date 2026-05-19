@@ -255,6 +255,30 @@ export class De1Manager {
 
 			// All four GATT objects resolved — the device is verified as a DE1.
 			this.patchDiagnostics({ gattVerified: true });
+
+			// The Version characteristic (A001) is a one-shot Read, not a
+			// Notify — read it once now and route it through the core so the
+			// Machine card can show the DE1's firmware label. A read failure
+			// here is non-fatal: the connection is already verified, so log it
+			// and carry on rather than failing the whole connect.
+			step = 'Version characteristic A001';
+			try {
+				const versionBytes = await device.readCharacteristic(
+					De1Uuids.SERVICE,
+					De1Uuids.VERSION
+				);
+				const output = await this.core.onNotification(
+					'De1Version',
+					versionBytes,
+					performance.now()
+				);
+				this.callbacks.onCoreOutput(output);
+				this.callbacks.onStatus('DE1 firmware version read ✓');
+			} catch (versionError) {
+				this.callbacks.onStatus(
+					`DE1 version read skipped: ${describe(versionError)}`
+				);
+			}
 			this.callbacks.onState('ready');
 			this.callbacks.onStatus(
 				'DE1 GATT verified ✓ — A000 + StateInfo/ShotSample/WaterLevels resolved'
