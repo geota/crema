@@ -8,21 +8,18 @@
 	 * moves the curve's dot, and vice versa. Clicking the row selects the
 	 * segment (highlighting it in the curve).
 	 *
-	 * The controls are the quick-controls primitives. The Type (Pressure |
-	 * Flow), Ramp (Smooth | Fast) and Temp-sensor (Basket | Mix) toggles are
-	 * `QSplitLabel`s with a category prefix — small, left-aligned label rows
-	 * the size of a field label; Type and Ramp stack under the segment name.
-	 * Target / Time / Temp / Volume are `QStepper`s.
+	 * Every per-segment field a DE1 profile supports lives on this single
+	 * (wide) row. The controls are the quick-controls primitives: `QSplitLabel`
+	 * split toggles (Type / Ramp / Temp-sensor / Exit metric), `QStepper`s for
+	 * the numbers.
 	 *
-	 * Every per-segment field lives on this single (wide) row, including the
-	 * two compound fields — the structured exit condition and the limiter:
+	 * ## Optional groups
 	 *
-	 *  - **Exit** — optional (`seg.exit: SegmentExit | null`). A `.qmini-tog`
-	 *    switches it on / off; when off the metric / threshold / over-under
-	 *    controls render dimmed showing sensible defaults.
-	 *  - **Max** — the limiter (`seg.limiter: SegmentLimiter | null`), modelled
-	 *    the way Volume models its limit: a `Max` value of `0` *is* the off
-	 *    state (no toggle). Bumping `Max` above 0 creates the limiter.
+	 * Volume, Exit and the Max limiter are optional. Each is gated by a
+	 * **toggle-label** — a dotted-chip label (`togLabel`) that turns the group
+	 * on / off; while off the group's controls render dimmed. This one
+	 * affordance replaces the old per-group mini-toggle and the dim-at-zero
+	 * convention, so every disable-able group works the same way.
 	 */
 	import type {
 		ProfileSegment,
@@ -58,12 +55,22 @@
 	/** The target unit follows the segment mode. */
 	const unit = $derived(seg.mode === 'pressure' ? 'bar' : 'ml/s');
 
+	// ── Volume limit ────────────────────────────────────────────────────
+	/** Whether the per-step volume limit is set. */
+	const volumeOn = $derived(seg.volumeLimitMl > 0);
+	/** Toggle the volume limit — a default 50 mL on, 0 (no limit) off. */
+	function toggleVolume(): void {
+		onEdit({ volumeLimitMl: volumeOn ? 0 : 50 });
+	}
+
 	// ── Exit condition ──────────────────────────────────────────────────
 	//
 	// `seg.exit` is optional. When it is null the sub-controls render dimmed
-	// against sensible defaults (flow / 4 / over); the mini-toggle creates or
+	// against sensible defaults (flow / over / 4); the toggle-label creates or
 	// clears the condition. Editing a sub-field only patches when exit is set.
 
+	/** Whether an exit condition is set. */
+	const exitOn = $derived(seg.exit != null);
 	/** The exit condition, or its dimmed default placeholder when unset. */
 	const exitView = $derived<SegmentExit>(
 		seg.exit ?? { metric: 'flow', compare: 'over', threshold: 4 }
@@ -71,45 +78,58 @@
 	/** The exit-threshold unit follows the watched metric. */
 	const exitUnit = $derived(exitView.metric === 'flow' ? 'ml/s' : 'bar');
 
-	/** Toggle the structured exit condition on / off. */
+	/** Toggle the exit condition on / off. */
 	function toggleExit(): void {
-		const next: SegmentExit | null = seg.exit
-			? null
-			: { metric: 'flow', compare: 'over', threshold: 4 };
-		onEdit({ exit: next });
+		onEdit({ exit: exitOn ? null : { metric: 'flow', compare: 'over', threshold: 4 } });
 	}
-
 	/** Patch one field of the exit condition (no-op when exit is off). */
 	function patchExit(p: Partial<SegmentExit>): void {
 		if (!seg.exit) return;
 		onEdit({ exit: { ...seg.exit, ...p } });
 	}
-
-	// ── Limiter ─────────────────────────────────────────────────────────
-	//
-	// Modelled like the Volume limit: `Max` value 0 ⟺ `limiter == null`. The
-	// steppers stay clickable while off so bumping `Max` above 0 enables it.
-
-	/** The limiter, or its dimmed default placeholder when unset. */
-	const limiterView = $derived<SegmentLimiter>(seg.limiter ?? { value: 0, range: 0.6 });
-	/** The limiter caps the *non-priority* quantity — flow when pressure-priority. */
-	const limiterUnit = $derived(seg.mode === 'pressure' ? 'ml/s' : 'bar');
-
-	/** Set the limiter's `Max` value — 0 clears the limiter, >0 creates it. */
-	function setLimiterValue(v: number): void {
-		if (v <= 0) {
-			onEdit({ limiter: null });
-		} else {
-			onEdit({ limiter: { value: v, range: seg.limiter?.range ?? 0.6 } });
-		}
+	/** Flip the comparison between over (`>`) and under (`<`). */
+	function flipCompare(): void {
+		patchExit({ compare: exitView.compare === 'over' ? 'under' : 'over' });
 	}
 
-	/** Edit the limiter's tolerance range (no-op when the limiter is off). */
+	// ── Max limiter ─────────────────────────────────────────────────────
+	//
+	// The limiter caps the *non-priority* quantity (flow on a pressure step,
+	// pressure on a flow step). Optional — gated by the same toggle-label.
+
+	/** Whether the limiter is set. */
+	const limiterOn = $derived(seg.limiter != null);
+	/** The limiter, or its dimmed default placeholder when unset. */
+	const limiterView = $derived<SegmentLimiter>(seg.limiter ?? { value: 6, range: 0.6 });
+	/** The limiter caps the non-priority quantity — flow when pressure-priority. */
+	const limiterUnit = $derived(seg.mode === 'pressure' ? 'ml/s' : 'bar');
+
+	/** Toggle the limiter on / off. */
+	function toggleLimiter(): void {
+		onEdit({ limiter: limiterOn ? null : { value: 6, range: 0.6 } });
+	}
+	/** Set the limiter's Max value — 0 clears the limiter, >0 creates it. */
+	function setLimiterValue(v: number): void {
+		onEdit({ limiter: v <= 0 ? null : { value: v, range: seg.limiter?.range ?? 0.6 } });
+	}
+	/** Edit the limiter's tolerance (no-op when the limiter is off). */
 	function setLimiterRange(v: number): void {
 		if (!seg.limiter) return;
 		onEdit({ limiter: { ...seg.limiter, range: v } });
 	}
 </script>
+
+<!--
+	The toggle-label — a dotted chip that enables / disables an optional group.
+	Filled copper dot when on; hollow when off. Stays full-opacity even when its
+	group is dimmed, so it can always be seen and clicked.
+-->
+{#snippet togLabel(text: string, on: boolean, toggle: () => void)}
+	<button class="pe-seg-tog" class:on type="button" onclick={toggle}>
+		<span class="pe-seg-tog-dot"></span>
+		{text}
+	</button>
+{/snippet}
 
 <div
 	class="pe-seg"
@@ -194,34 +214,29 @@
 		/>
 	</div>
 
-	<!-- Volume limit — dimmed at 0 to read as "off"; bump it up to enable. -->
-	<div class="pe-seg-field" class:is-off={seg.volumeLimitMl === 0}>
-		<div class="pe-seg-field-label">Volume</div>
-		<QStepper
-			value={seg.volumeLimitMl}
-			unit="mL"
-			min={0}
-			max={1023}
-			step={5}
-			onChange={(v) => onEdit({ volumeLimitMl: Math.round(v) })}
-		/>
+	<!-- Volume limit — gated by its toggle-label; dimmed while off. -->
+	<div class="pe-seg-field">
+		{@render togLabel('Volume', volumeOn, toggleVolume)}
+		<div class="pe-seg-ctl" class:is-off={!volumeOn}>
+			<QStepper
+				value={seg.volumeLimitMl}
+				unit="mL"
+				min={0}
+				max={1023}
+				step={5}
+				onChange={(v) => onEdit({ volumeLimitMl: Math.round(v) })}
+			/>
+		</div>
 	</div>
 
-	<!-- Exit condition — optional. Off ⟹ the metric / threshold / compare
-	     controls render dimmed against their defaults; the mini-toggle
-	     creates or clears the condition. -->
+	<!-- Exit condition — the over/under comparison renders as a `>` / `<`
+	     symbol left of the threshold value, the way a unit sits to its right. -->
 	<div class="pe-seg-exit">
 		<div class="pe-seg-exit-head">
-			<button
-				class="qmini-tog"
-				class:on={seg.exit != null}
-				type="button"
-				aria-label="Toggle exit condition"
-				aria-pressed={seg.exit != null}
-				onclick={toggleExit}
-			></button>
+			{@render togLabel('Exit', exitOn, toggleExit)}
+		</div>
+		<div class="pe-seg-ctl" class:is-off={!exitOn}>
 			<QSplitLabel
-				prefix="Exit"
 				options={[
 					{ id: 'pressure', label: 'Pressure' },
 					{ id: 'flow', label: 'Flow' }
@@ -229,8 +244,6 @@
 				value={exitView.metric}
 				onChange={(m) => patchExit({ metric: m as SegmentExit['metric'] })}
 			/>
-		</div>
-		<div class="pe-seg-exit-body" class:is-off={seg.exit == null}>
 			<QStepper
 				value={exitView.threshold}
 				unit={exitUnit}
@@ -238,43 +251,49 @@
 				max={12}
 				step={0.1}
 				onChange={(v) => patchExit({ threshold: v })}
-			/>
-			<QSplitLabel
-				options={[
-					{ id: 'over', label: 'over' },
-					{ id: 'under', label: 'under' }
-				]}
-				value={exitView.compare}
-				onChange={(c) => patchExit({ compare: c as SegmentExit['compare'] })}
-			/>
+			>
+				{#snippet prefix()}
+					<button
+						class="pe-seg-cmp"
+						type="button"
+						aria-label="Toggle over / under"
+						onclick={flipCompare}
+					>
+						{exitView.compare === 'over' ? '>' : '<'}
+					</button>
+				{/snippet}
+			</QStepper>
 		</div>
 	</div>
 
-	<!-- Limiter — `Max` value 0 ⟺ no limiter (Volume-style). The Max /
-	     Tolerance steppers are visually grouped as one unit; the group dims
-	     when off but the steppers stay clickable so Max can re-enable it. -->
-	<div class="pe-seg-max" class:is-off={seg.limiter == null}>
-		<div class="pe-seg-max-field">
-			<div class="pe-seg-field-label">Max</div>
-			<QStepper
-				value={limiterView.value}
-				unit={limiterUnit}
-				min={0}
-				max={12}
-				step={0.1}
-				onChange={setLimiterValue}
-			/>
+	<!-- Limiter — Max + Tolerance side by side, wrapped in a copper-tinted box
+	     so they read as one group; gated by the Max toggle-label. -->
+	<div class="pe-seg-max">
+		<div class="pe-seg-max-pair">
+			{@render togLabel('Max', limiterOn, toggleLimiter)}
+			<div class="pe-seg-ctl" class:is-off={!limiterOn}>
+				<QStepper
+					value={limiterView.value}
+					unit={limiterUnit}
+					min={0}
+					max={12}
+					step={0.1}
+					onChange={setLimiterValue}
+				/>
+			</div>
 		</div>
-		<div class="pe-seg-max-field">
+		<div class="pe-seg-max-pair">
 			<div class="pe-seg-field-label">Tolerance</div>
-			<QStepper
-				value={limiterView.range}
-				unit=""
-				min={0}
-				max={6}
-				step={0.1}
-				onChange={setLimiterRange}
-			/>
+			<div class="pe-seg-ctl" class:is-off={!limiterOn}>
+				<QStepper
+					value={limiterView.range}
+					unit=""
+					min={0}
+					max={6}
+					step={0.1}
+					onChange={setLimiterRange}
+				/>
+			</div>
 		</div>
 	</div>
 
@@ -295,24 +314,20 @@
 	.pe-seg {
 		display: grid;
 		/* # · name(+Type+Ramp) · Target · Time · Temp+sensor · Volume · Exit ·
-		   Max+Tolerance · ⌫. The QStepper columns get control-sized minima;
-		   the name field — which also stacks the Type and Ramp toggles — takes
-		   the slack. The row is wide; its container scrolls horizontally. */
+		   Max+Tolerance · ⌫. The row is wide; its container scrolls. */
 		grid-template-columns:
 			28px
-			minmax(150px, 1.4fr)
-			minmax(112px, 0.9fr)
-			minmax(104px, 0.8fr)
-			minmax(128px, 1fr)
+			minmax(150px, 1.3fr)
 			minmax(112px, 0.85fr)
-			minmax(170px, 1.2fr)
-			minmax(220px, 1.4fr)
+			minmax(104px, 0.8fr)
+			minmax(128px, 0.95fr)
+			minmax(112px, 0.85fr)
+			minmax(150px, 1fr)
+			minmax(262px, 1.5fr)
 			32px;
 		gap: 12px;
 		align-items: start;
-		/* Keep the columns from crushing when the viewport is narrow — the
-		   container scrolls instead. */
-		min-width: 1000px;
+		min-width: 1180px;
 		padding: 10px 14px;
 		background: var(--espresso-900);
 		border: 1px solid rgba(244, 237, 224, 0.05);
@@ -364,14 +379,6 @@
 		gap: 4px;
 		min-width: 0;
 	}
-	/* Dimmed "off" state — used by the Volume column when its limit is 0, the
-	   Exit body when no condition is set, and the Max group when no limiter is
-	   set. The steppers stay clickable so bumping a value re-enables it. */
-	.pe-seg-field.is-off,
-	.pe-seg-exit-body.is-off,
-	.pe-seg-max.is-off {
-		opacity: 0.4;
-	}
 	.pe-seg-field-label {
 		font-family: var(--font-sans);
 		font-size: 9px;
@@ -384,8 +391,54 @@
 		align-items: center;
 	}
 
-	/* Exit column — a label row (mini-toggle + metric split-label) over the
-	   threshold stepper and the over/under split-label, stacked. */
+	/* The dimmable control wrapper — used for every optional group's controls
+	   while its toggle-label is off. The toggle-label sits outside it and
+	   stays full-opacity so it can always be clicked to re-enable. */
+	.pe-seg-ctl {
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+		min-width: 0;
+		transition: opacity var(--dur-1) var(--ease);
+	}
+	.pe-seg-ctl.is-off {
+		opacity: 0.4;
+	}
+
+	/* The toggle-label chip — a dotted enable switch doubling as the label. */
+	.pe-seg-tog {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		background: transparent;
+		border: 0;
+		padding: 0;
+		cursor: pointer;
+		font-family: var(--font-sans);
+		font-size: 9px;
+		letter-spacing: var(--track-allcaps);
+		text-transform: uppercase;
+		font-weight: 600;
+		color: rgba(244, 237, 224, 0.3);
+		min-height: 16px;
+	}
+	.pe-seg-tog.on {
+		color: rgba(244, 237, 224, 0.6);
+	}
+	.pe-seg-tog-dot {
+		width: 7px;
+		height: 7px;
+		border-radius: 50%;
+		border: 1px solid rgba(244, 237, 224, 0.3);
+		box-sizing: border-box;
+		transition: all var(--dur-1) var(--ease);
+	}
+	.pe-seg-tog.on .pe-seg-tog-dot {
+		background: var(--copper-500);
+		border-color: var(--copper-500);
+	}
+
+	/* Exit column — toggle-label over the metric split-label and threshold. */
 	.pe-seg-exit {
 		display: flex;
 		flex-direction: column;
@@ -395,41 +448,43 @@
 	.pe-seg-exit-head {
 		display: flex;
 		align-items: center;
-		gap: 8px;
 		min-height: 16px;
 	}
-	.pe-seg-exit-head .qmini-tog {
-		flex: 0 0 30px;
+	/* The over/under comparator — a `>` / `<` symbol left of the threshold,
+	   rendered into the QStepper value box like a leading unit. */
+	.pe-seg-cmp {
+		background: transparent;
 		border: 0;
 		padding: 0;
 		cursor: pointer;
+		font-family: var(--font-mono);
+		font-size: 15px;
+		font-weight: 600;
+		line-height: 1;
+		color: var(--copper-400);
+		transition: color var(--dur-1) var(--ease);
 	}
-	.pe-seg-exit-body {
-		display: flex;
-		flex-direction: column;
-		gap: 4px;
-		min-width: 0;
-		transition: opacity var(--dur-1) var(--ease);
+	.pe-seg-cmp:hover {
+		color: var(--copper-300);
 	}
 
-	/* Max column — the limiter's Max + Tolerance steppers, wrapped in a
-	   subtly copper-tinted bordered container so they read as one unit. */
+	/* Max column — the limiter's Max + Tolerance steppers side by side,
+	   wrapped in a subtly copper-tinted bordered box so they read as a unit. */
 	.pe-seg-max {
 		display: flex;
-		flex-direction: column;
-		gap: 6px;
+		gap: 10px;
 		min-width: 0;
 		padding: 6px 8px;
 		background: rgba(193, 116, 75, 0.05);
 		border: 1px solid rgba(193, 116, 75, 0.22);
 		border-radius: var(--radius-sm);
-		transition: opacity var(--dur-1) var(--ease);
 	}
-	.pe-seg-max-field {
+	.pe-seg-max-pair {
 		display: flex;
 		flex-direction: column;
 		gap: 4px;
 		min-width: 0;
+		flex: 1;
 	}
 
 	.pe-seg-del {
@@ -450,7 +505,7 @@
 
 	/* Trim the quick-controls primitives to the compact segment-row context.
 	   The QSplitLabel toggles shrink to the size of a field label — small,
-	   left-aligned, uppercase — so Type / Ramp / Temp / Exit read as labels. */
+	   left-aligned, uppercase — so Type / Ramp / Temp read as labels. */
 	.pe-seg :global(.qsplit) {
 		font-size: 9px;
 		gap: 6px;
