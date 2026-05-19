@@ -12,7 +12,13 @@
 	 *
 	 * Only mounted on the resting Brew dashboard (Quick Sheet closed).
 	 */
-	import { daysOffRoast, getBeanStore, roastBand, ROAST_PILL_LEVEL } from '$lib/bean';
+	import {
+		daysOffRoast,
+		getBeanStore,
+		roastBand,
+		roastFreshness,
+		ROAST_PILL_LEVEL
+	} from '$lib/bean';
 	import type { Roast } from '$lib/profiles';
 
 	let {
@@ -44,6 +50,22 @@
 	});
 	/** Whole days off roast, or `null` when no roast date is logged. */
 	const daysOff = $derived(daysOffRoast(bean.roastedOn));
+	/**
+	 * The rest verdict — how `daysOff` sits against the ideal window for this
+	 * roast band (`roastFreshness`). `null` when the roast level or date is
+	 * unknown, in which case the status dot stays neutral rather than green.
+	 */
+	const freshness = $derived(roastFreshness(roastBand(bean.roastLevel), daysOff));
+	/** The status colour driving the rest dot — green / amber / red / neutral. */
+	const freshColor = $derived(
+		freshness === 'best'
+			? 'var(--success)'
+			: freshness === 'ok'
+				? 'var(--warning)'
+				: freshness === 'bad'
+					? 'var(--danger)'
+					: 'rgba(244, 237, 224, 0.4)'
+	);
 	/** The roast date as a short `May 11`, or a dash when not logged. */
 	const roastDate = $derived.by(() => {
 		if (!bean.roastedOn) return '—';
@@ -157,8 +179,8 @@
 		<div class="crema-bean-head">
 			<div class="t-eyebrow">Bean</div>
 			{#if daysOff != null}
-				<div class="crema-bean-rest">
-					<span class="crema-bean-rest-dot"></span>
+				<div class="crema-bean-rest" style:color={freshColor}>
+					<span class="crema-bean-rest-dot" style:background={freshColor}></span>
 					{daysOff}d off roast
 				</div>
 			{/if}

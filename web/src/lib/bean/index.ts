@@ -9,9 +9,11 @@
 
 export {
 	type Bean,
+	type Freshness,
 	blankBean,
 	daysOffRoast,
 	roastBand,
+	roastFreshness,
 	migrateBean,
 	ROAST_PILL_LEVEL
 } from './model';
