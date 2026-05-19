@@ -11,7 +11,7 @@
 //! `unsafe_code = "forbid"` lint (see `Cargo.toml`).
 
 use de1_app::{CoreOutput, CremaCore, Source};
-use de1_protocol::{MachineState, ShotSettings};
+use de1_protocol::{CalTarget, MachineState, MmrRegister, ShotSettings};
 use wasm_bindgen::prelude::*;
 
 /// Which BLE characteristic an incoming notification came from — mirrors
@@ -31,6 +31,10 @@ pub enum NotificationSource {
     De1WaterLevels,
     /// The DE1 version characteristic — BLE + firmware versions.
     De1Version,
+    /// The DE1 `ReadFromMMR` characteristic — memory-mapped register replies.
+    De1MmrRead,
+    /// The DE1 `Calibration` characteristic — sensor-calibration replies.
+    De1Calibration,
 }
 
 impl From<NotificationSource> for Source {
@@ -42,6 +46,106 @@ impl From<NotificationSource> for Source {
             NotificationSource::ScaleCommand => Source::ScaleCommand,
             NotificationSource::De1WaterLevels => Source::De1WaterLevels,
             NotificationSource::De1Version => Source::De1Version,
+            NotificationSource::De1MmrRead => Source::De1MmrRead,
+            NotificationSource::De1Calibration => Source::De1Calibration,
+        }
+    }
+}
+
+/// A DE1 memory-mapped register the shell can ask the core to read — mirrors
+/// [`de1_protocol::MmrRegister`] across the wasm boundary.
+#[wasm_bindgen]
+pub enum MmrReg {
+    /// Firmware build number.
+    FirmwareVersion,
+    /// Group Head Controller info bitmask.
+    GhcInfo,
+    /// Tank desired water-temperature threshold, °C.
+    TankTempThreshold,
+    /// Fan-on temperature threshold, °C.
+    FanThreshold,
+    /// Machine serial number.
+    SerialNumber,
+    /// Steam flow rate.
+    SteamFlow,
+    /// Refill-kit presence.
+    RefillKit,
+    /// Flush flow rate.
+    FlushFlowRate,
+    /// Hot-water flow rate.
+    HotWaterFlowRate,
+    /// Hot-water dispense phase-1 flow rate.
+    Phase1FlowRate,
+    /// Hot-water dispense phase-2 flow rate.
+    Phase2FlowRate,
+    /// Hot-water idle temperature, °C.
+    HotWaterIdleTemp,
+    /// Group head control mode.
+    GhcMode,
+    /// Seconds of high-flow steam at the start of a steam cycle.
+    SteamHighFlowStart,
+    /// Mains heater voltage.
+    HeaterVoltage,
+    /// Espresso warmup timeout.
+    EspressoWarmupTimeout,
+    /// Calibration flow multiplier.
+    CalibrationFlowMultiplier,
+    /// Flush timeout.
+    FlushTimeout,
+    /// USB charger on.
+    UsbChargerOn,
+    /// Feature-flag bitmask.
+    FeatureFlags,
+    /// Cup-warmer temperature (Bengle models only).
+    CupWarmerTemp,
+}
+
+impl From<MmrReg> for MmrRegister {
+    fn from(reg: MmrReg) -> MmrRegister {
+        match reg {
+            MmrReg::FirmwareVersion => MmrRegister::FirmwareVersion,
+            MmrReg::GhcInfo => MmrRegister::GhcInfo,
+            MmrReg::TankTempThreshold => MmrRegister::TankTempThreshold,
+            MmrReg::FanThreshold => MmrRegister::FanThreshold,
+            MmrReg::SerialNumber => MmrRegister::SerialNumber,
+            MmrReg::SteamFlow => MmrRegister::SteamFlow,
+            MmrReg::RefillKit => MmrRegister::RefillKit,
+            MmrReg::FlushFlowRate => MmrRegister::FlushFlowRate,
+            MmrReg::HotWaterFlowRate => MmrRegister::HotWaterFlowRate,
+            MmrReg::Phase1FlowRate => MmrRegister::Phase1FlowRate,
+            MmrReg::Phase2FlowRate => MmrRegister::Phase2FlowRate,
+            MmrReg::HotWaterIdleTemp => MmrRegister::HotWaterIdleTemp,
+            MmrReg::GhcMode => MmrRegister::GhcMode,
+            MmrReg::SteamHighFlowStart => MmrRegister::SteamHighFlowStart,
+            MmrReg::HeaterVoltage => MmrRegister::HeaterVoltage,
+            MmrReg::EspressoWarmupTimeout => MmrRegister::EspressoWarmupTimeout,
+            MmrReg::CalibrationFlowMultiplier => MmrRegister::CalibrationFlowMultiplier,
+            MmrReg::FlushTimeout => MmrRegister::FlushTimeout,
+            MmrReg::UsbChargerOn => MmrRegister::UsbChargerOn,
+            MmrReg::FeatureFlags => MmrRegister::FeatureFlags,
+            MmrReg::CupWarmerTemp => MmrRegister::CupWarmerTemp,
+        }
+    }
+}
+
+/// A DE1 sensor the shell can ask the core to read calibration for — mirrors
+/// [`de1_protocol::CalTarget`] across the wasm boundary.
+#[wasm_bindgen]
+pub enum CalSensor {
+    /// The flow-rate sensor.
+    Flow,
+    /// The pressure sensor.
+    Pressure,
+    /// The temperature sensor.
+    Temperature,
+}
+
+impl From<CalSensor> for CalTarget {
+    fn from(sensor: CalSensor) -> CalTarget {
+        match sensor {
+            CalSensor::Flow => CalTarget::Flow,
+            CalSensor::Pressure => CalTarget::Pressure,
+            CalSensor::Temperature => CalTarget::Temperature,
         }
     }
 }
@@ -161,6 +265,26 @@ impl CremaBridge {
     /// `state`.
     pub fn request_machine_state(&self, state: MachineRequest) -> String {
         json(self.core.request_machine_state(state.into()))
+    }
+
+    /// Build a [`CoreOutput`] (JSON) whose command reads one DE1 memory-mapped
+    /// register. The DE1 answers with a notification on the `De1MmrRead`
+    /// characteristic, which decodes to an `MmrValue` event.
+    pub fn read_mmr(&self, register: MmrReg) -> String {
+        json(self.core.read_mmr(register.into()))
+    }
+
+    /// Build a [`CoreOutput`] (JSON) whose command reads `sensor`'s current
+    /// (in-use) calibration. The DE1 answers on the `De1Calibration`
+    /// characteristic, which decodes to a `Calibration` event.
+    pub fn read_calibration(&self, sensor: CalSensor) -> String {
+        json(self.core.read_calibration(sensor.into()))
+    }
+
+    /// Build a [`CoreOutput`] (JSON) whose command reads `sensor`'s factory
+    /// calibration — the calibration the machine shipped with.
+    pub fn read_factory_calibration(&self, sensor: CalSensor) -> String {
+        json(self.core.read_factory_calibration(sensor.into()))
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command tares the connected scale.
@@ -348,6 +472,27 @@ mod tests {
     }
 
     #[test]
+    fn read_mmr_produces_a_write_command() {
+        let bridge = CremaBridge::new();
+        let json = bridge.read_mmr(MmrReg::SerialNumber);
+        assert!(json.contains("\"commands\""));
+        assert!(json.contains("WriteCharacteristic"));
+        assert!(json.contains("De1MmrRequest"));
+    }
+
+    #[test]
+    fn read_calibration_produces_a_write_command() {
+        let bridge = CremaBridge::new();
+        for json in [
+            bridge.read_calibration(CalSensor::Pressure),
+            bridge.read_factory_calibration(CalSensor::Flow),
+        ] {
+            assert!(json.contains("WriteCharacteristic"));
+            assert!(json.contains("De1Calibration"));
+        }
+    }
+
+    #[test]
     fn connect_scale_identifies_a_known_scale() {
         let mut bridge = CremaBridge::new();
         assert_eq!(
@@ -490,7 +635,7 @@ mod tests {
 
     /// Every `NotificationSource` the wasm enum can name — used to fuzz the
     /// bridge against malformed input on every characteristic.
-    fn every_source() -> [NotificationSource; 6] {
+    fn every_source() -> [NotificationSource; 8] {
         [
             NotificationSource::De1State,
             NotificationSource::De1ShotSample,
@@ -498,6 +643,8 @@ mod tests {
             NotificationSource::ScaleCommand,
             NotificationSource::De1WaterLevels,
             NotificationSource::De1Version,
+            NotificationSource::De1MmrRead,
+            NotificationSource::De1Calibration,
         ]
     }
 
