@@ -12,11 +12,24 @@
 	 * Flow), Ramp (Smooth | Fast) and Temp-sensor (Basket | Mix) toggles are
 	 * `QSplitLabel`s with a category prefix — small, left-aligned label rows
 	 * the size of a field label; Type and Ramp stack under the segment name.
-	 * Target / Time / Temp / Volume are `QStepper`s. The structured exit
-	 * condition and the limiter live in `SegmentAdvanced`, the panel the
-	 * editor renders beneath the selected row.
+	 * Target / Time / Temp / Volume are `QStepper`s.
+	 *
+	 * Every per-segment field lives on this single (wide) row, including the
+	 * two compound fields — the structured exit condition and the limiter:
+	 *
+	 *  - **Exit** — optional (`seg.exit: SegmentExit | null`). A `.qmini-tog`
+	 *    switches it on / off; when off the metric / threshold / over-under
+	 *    controls render dimmed showing sensible defaults.
+	 *  - **Max** — the limiter (`seg.limiter: SegmentLimiter | null`), modelled
+	 *    the way Volume models its limit: a `Max` value of `0` *is* the off
+	 *    state (no toggle). Bumping `Max` above 0 creates the limiter.
 	 */
-	import type { ProfileSegment, SegmentRamp } from '$lib/profiles';
+	import type {
+		ProfileSegment,
+		SegmentRamp,
+		SegmentExit,
+		SegmentLimiter
+	} from '$lib/profiles';
 	import QStepper from '$lib/components/brew/QStepper.svelte';
 	import QSplitLabel from '$lib/components/brew/QSplitLabel.svelte';
 
@@ -44,6 +57,58 @@
 
 	/** The target unit follows the segment mode. */
 	const unit = $derived(seg.mode === 'pressure' ? 'bar' : 'ml/s');
+
+	// ── Exit condition ──────────────────────────────────────────────────
+	//
+	// `seg.exit` is optional. When it is null the sub-controls render dimmed
+	// against sensible defaults (flow / 4 / over); the mini-toggle creates or
+	// clears the condition. Editing a sub-field only patches when exit is set.
+
+	/** The exit condition, or its dimmed default placeholder when unset. */
+	const exitView = $derived<SegmentExit>(
+		seg.exit ?? { metric: 'flow', compare: 'over', threshold: 4 }
+	);
+	/** The exit-threshold unit follows the watched metric. */
+	const exitUnit = $derived(exitView.metric === 'flow' ? 'ml/s' : 'bar');
+
+	/** Toggle the structured exit condition on / off. */
+	function toggleExit(): void {
+		const next: SegmentExit | null = seg.exit
+			? null
+			: { metric: 'flow', compare: 'over', threshold: 4 };
+		onEdit({ exit: next });
+	}
+
+	/** Patch one field of the exit condition (no-op when exit is off). */
+	function patchExit(p: Partial<SegmentExit>): void {
+		if (!seg.exit) return;
+		onEdit({ exit: { ...seg.exit, ...p } });
+	}
+
+	// ── Limiter ─────────────────────────────────────────────────────────
+	//
+	// Modelled like the Volume limit: `Max` value 0 ⟺ `limiter == null`. The
+	// steppers stay clickable while off so bumping `Max` above 0 enables it.
+
+	/** The limiter, or its dimmed default placeholder when unset. */
+	const limiterView = $derived<SegmentLimiter>(seg.limiter ?? { value: 0, range: 0.6 });
+	/** The limiter caps the *non-priority* quantity — flow when pressure-priority. */
+	const limiterUnit = $derived(seg.mode === 'pressure' ? 'ml/s' : 'bar');
+
+	/** Set the limiter's `Max` value — 0 clears the limiter, >0 creates it. */
+	function setLimiterValue(v: number): void {
+		if (v <= 0) {
+			onEdit({ limiter: null });
+		} else {
+			onEdit({ limiter: { value: v, range: seg.limiter?.range ?? 0.6 } });
+		}
+	}
+
+	/** Edit the limiter's tolerance range (no-op when the limiter is off). */
+	function setLimiterRange(v: number): void {
+		if (!seg.limiter) return;
+		onEdit({ limiter: { ...seg.limiter, range: v } });
+	}
 </script>
 
 <div
@@ -142,6 +207,77 @@
 		/>
 	</div>
 
+	<!-- Exit condition — optional. Off ⟹ the metric / threshold / compare
+	     controls render dimmed against their defaults; the mini-toggle
+	     creates or clears the condition. -->
+	<div class="pe-seg-exit">
+		<div class="pe-seg-exit-head">
+			<button
+				class="qmini-tog"
+				class:on={seg.exit != null}
+				type="button"
+				aria-label="Toggle exit condition"
+				aria-pressed={seg.exit != null}
+				onclick={toggleExit}
+			></button>
+			<QSplitLabel
+				prefix="Exit"
+				options={[
+					{ id: 'pressure', label: 'Pressure' },
+					{ id: 'flow', label: 'Flow' }
+				]}
+				value={exitView.metric}
+				onChange={(m) => patchExit({ metric: m as SegmentExit['metric'] })}
+			/>
+		</div>
+		<div class="pe-seg-exit-body" class:is-off={seg.exit == null}>
+			<QStepper
+				value={exitView.threshold}
+				unit={exitUnit}
+				min={0}
+				max={12}
+				step={0.1}
+				onChange={(v) => patchExit({ threshold: v })}
+			/>
+			<QSplitLabel
+				options={[
+					{ id: 'over', label: 'over' },
+					{ id: 'under', label: 'under' }
+				]}
+				value={exitView.compare}
+				onChange={(c) => patchExit({ compare: c as SegmentExit['compare'] })}
+			/>
+		</div>
+	</div>
+
+	<!-- Limiter — `Max` value 0 ⟺ no limiter (Volume-style). The Max /
+	     Tolerance steppers are visually grouped as one unit; the group dims
+	     when off but the steppers stay clickable so Max can re-enable it. -->
+	<div class="pe-seg-max" class:is-off={seg.limiter == null}>
+		<div class="pe-seg-max-field">
+			<div class="pe-seg-field-label">Max</div>
+			<QStepper
+				value={limiterView.value}
+				unit={limiterUnit}
+				min={0}
+				max={12}
+				step={0.1}
+				onChange={setLimiterValue}
+			/>
+		</div>
+		<div class="pe-seg-max-field">
+			<div class="pe-seg-field-label">Tolerance</div>
+			<QStepper
+				value={limiterView.range}
+				unit=""
+				min={0}
+				max={6}
+				step={0.1}
+				onChange={setLimiterRange}
+			/>
+		</div>
+	</div>
+
 	<button
 		class="pe-seg-del"
 		title="Delete segment"
@@ -158,19 +294,25 @@
 <style>
 	.pe-seg {
 		display: grid;
-		/* # · name(+Type+Ramp) · Target · Time · Temp+sensor · Volume · ⌫.
-		   The QStepper columns get control-sized minima; the name field — which
-		   also stacks the Type and Ramp toggles — takes the slack. */
+		/* # · name(+Type+Ramp) · Target · Time · Temp+sensor · Volume · Exit ·
+		   Max+Tolerance · ⌫. The QStepper columns get control-sized minima;
+		   the name field — which also stacks the Type and Ramp toggles — takes
+		   the slack. The row is wide; its container scrolls horizontally. */
 		grid-template-columns:
 			28px
-			minmax(150px, 1.5fr)
-			minmax(116px, 0.95fr)
-			minmax(108px, 0.85fr)
-			minmax(130px, 1fr)
-			minmax(116px, 0.9fr)
+			minmax(150px, 1.4fr)
+			minmax(112px, 0.9fr)
+			minmax(104px, 0.8fr)
+			minmax(128px, 1fr)
+			minmax(112px, 0.85fr)
+			minmax(170px, 1.2fr)
+			minmax(220px, 1.4fr)
 			32px;
 		gap: 12px;
 		align-items: start;
+		/* Keep the columns from crushing when the viewport is narrow — the
+		   container scrolls instead. */
+		min-width: 1000px;
 		padding: 10px 14px;
 		background: var(--espresso-900);
 		border: 1px solid rgba(244, 237, 224, 0.05);
@@ -222,9 +364,12 @@
 		gap: 4px;
 		min-width: 0;
 	}
-	/* Dimmed "off" state — used by the Volume column when its limit is 0. The
-	   stepper stays clickable so bumping it up re-enables the limit. */
-	.pe-seg-field.is-off {
+	/* Dimmed "off" state — used by the Volume column when its limit is 0, the
+	   Exit body when no condition is set, and the Max group when no limiter is
+	   set. The steppers stay clickable so bumping a value re-enables it. */
+	.pe-seg-field.is-off,
+	.pe-seg-exit-body.is-off,
+	.pe-seg-max.is-off {
 		opacity: 0.4;
 	}
 	.pe-seg-field-label {
@@ -238,6 +383,55 @@
 		display: flex;
 		align-items: center;
 	}
+
+	/* Exit column — a label row (mini-toggle + metric split-label) over the
+	   threshold stepper and the over/under split-label, stacked. */
+	.pe-seg-exit {
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+		min-width: 0;
+	}
+	.pe-seg-exit-head {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		min-height: 16px;
+	}
+	.pe-seg-exit-head .qmini-tog {
+		flex: 0 0 30px;
+		border: 0;
+		padding: 0;
+		cursor: pointer;
+	}
+	.pe-seg-exit-body {
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+		min-width: 0;
+		transition: opacity var(--dur-1) var(--ease);
+	}
+
+	/* Max column — the limiter's Max + Tolerance steppers, wrapped in a
+	   subtly copper-tinted bordered container so they read as one unit. */
+	.pe-seg-max {
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+		min-width: 0;
+		padding: 6px 8px;
+		background: rgba(193, 116, 75, 0.05);
+		border: 1px solid rgba(193, 116, 75, 0.22);
+		border-radius: var(--radius-sm);
+		transition: opacity var(--dur-1) var(--ease);
+	}
+	.pe-seg-max-field {
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+		min-width: 0;
+	}
+
 	.pe-seg-del {
 		width: 30px;
 		height: 30px;
@@ -256,7 +450,7 @@
 
 	/* Trim the quick-controls primitives to the compact segment-row context.
 	   The QSplitLabel toggles shrink to the size of a field label — small,
-	   left-aligned, uppercase — so Type / Ramp / Temp read as labels. */
+	   left-aligned, uppercase — so Type / Ramp / Temp / Exit read as labels. */
 	.pe-seg :global(.qsplit) {
 		font-size: 9px;
 		gap: 6px;

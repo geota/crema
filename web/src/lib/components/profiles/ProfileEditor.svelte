@@ -35,7 +35,6 @@
 	} from '$lib/profiles';
 	import ProfileCurveEditor from './ProfileCurveEditor.svelte';
 	import SegmentRow from './SegmentRow.svelte';
-	import SegmentAdvanced from './SegmentAdvanced.svelte';
 	import TagInput from './TagInput.svelte';
 	import PeNumber from './PeNumber.svelte';
 
@@ -453,6 +452,10 @@
 							<i class="ph ph-plus" aria-hidden="true"></i> Add segment
 						</button>
 					</div>
+					<!-- Every per-segment field — including the exit condition and
+					     the limiter — lives on a single (wide) `SegmentRow`. The
+					     row outgrows a narrow viewport, so the list scrolls
+					     horizontally rather than crushing its columns. -->
 					<div class="pe-segs">
 						{#each draft.segments as seg, i (seg.id)}
 							<SegmentRow
@@ -463,16 +466,6 @@
 								onEdit={(p) => editSegment(seg.id, p)}
 								onDelete={() => deleteSegment(seg.id)}
 							/>
-							<!-- The advanced per-segment fields (temperature, exit
-							     condition, volume limit, limiter, temp sensor) expand
-							     inline beneath the selected row, so the row stays compact. -->
-							{#if activeSegId === seg.id}
-								<SegmentAdvanced
-									{seg}
-									index={i}
-									onEdit={(p) => editSegment(seg.id, p)}
-								/>
-							{/if}
 						{/each}
 					</div>
 				</div>
@@ -795,11 +788,13 @@
 		letter-spacing: var(--track-allcaps);
 	}
 
-	/* Segments list */
+	/* Segments list — the wide single-row segments scroll horizontally so a
+	   wide row never breaks the page layout. */
 	.pe-segs {
 		display: flex;
 		flex-direction: column;
 		gap: 6px;
+		overflow-x: auto;
 	}
 
 	/* Ghost button */
