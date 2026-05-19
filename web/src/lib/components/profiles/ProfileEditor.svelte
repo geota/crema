@@ -608,6 +608,7 @@
 		grid-template-columns: 440px 1fr;
 		flex: 1 1 auto;
 	}
+	/* Tablet landscape and narrower — the two editor panes stack vertically. */
 	@media (max-width: 980px) {
 		.pe-body {
 			grid-template-columns: minmax(0, 1fr);
@@ -615,6 +616,14 @@
 		.pe-left {
 			border-right: 0 !important;
 			border-bottom: 1px solid rgba(var(--tint-rgb), 0.05);
+		}
+	}
+
+	/* Tablet portrait — the fixed-width readout pair becomes fluid so it fills
+	   the now full-width pane instead of leaving a gap. */
+	@media (max-width: 820px) {
+		.pe-grid {
+			grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
 		}
 	}
 	.pe-left {
