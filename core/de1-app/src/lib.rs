@@ -21,9 +21,8 @@ pub use event::{Command, CoreOutput, Event, Source, WriteTarget};
 use std::time::Duration;
 
 use de1_domain::{
-    AutoStop, FlowAlgorithm, FlowEstimator, STOP_WEIGHT_BEFORE_SECONDS, ShotEvent, ShotMonitor,
-    ShotPhase, SteamEvent, SteamMonitor, StopConfig, StopReason, StopTargets, WaterEvent,
-    WaterMonitor,
+    AutoStop, FlowAlgorithm, FlowEstimator, STOP_WEIGHT_BEFORE, ShotEvent, ShotMonitor, ShotPhase,
+    SteamEvent, SteamMonitor, StopConfig, StopReason, StopTargets, WaterEvent, WaterMonitor,
 };
 use de1_protocol::{
     CalTarget, Calibration, MachineState, MmrReadReply, MmrRegister, ShotSample, ShotSettings,
@@ -31,9 +30,9 @@ use de1_protocol::{
 };
 use de1_scale::{Scale, ScaleCapabilities, ScaleUuids, bookoo};
 
-/// Scale sensor lag assumed when no scale is connected — a representative value
-/// across the supported scales.
-const DEFAULT_SCALE_LAG_SECONDS: f32 = 0.38;
+/// Scale sensor lag assumed when no scale is connected — a representative
+/// value across the supported scales (380 ms, the legacy default).
+const DEFAULT_SCALE_LAG: Duration = Duration::from_millis(380);
 /// Millimetres added to the DE1's reported tank level — the legacy
 /// `water_level_mm_correction` (`machine.tcl`).
 const WATER_LEVEL_MM_CORRECTION: f32 = 5.0;
@@ -168,20 +167,18 @@ impl CremaCore {
     /// Arm automatic shot-stop. A `None` target disables that mode; the
     /// [`AutoStop`] is constructed when the next shot starts flowing.
     ///
-    /// `weight_g` (grams) and `volume_ml` (mL) keep their unit-suffixed names
-    /// at the FFI boundary so the shell's call sites stay self-documenting;
-    /// they flow into the internal [`StopTargets`] (`weight`, `volume`) which
-    /// names its fields without the suffix. `max_time` is a shot-duration
-    /// limit in seconds (legacy `espresso_max_time`).
+    /// `weight` is grams (SAW target), `volume` is millilitres (SAV target),
+    /// and `max_time` is shot-duration seconds (the legacy `espresso_max_time`
+    /// limit).
     pub fn arm_auto_stop(
         &mut self,
-        weight_g: Option<f32>,
-        volume_ml: Option<f32>,
+        weight: Option<f32>,
+        volume: Option<f32>,
         max_time: Option<f32>,
     ) {
         self.auto_stop_targets = Some(StopTargets {
-            weight: weight_g,
-            volume: volume_ml,
+            weight,
+            volume,
             max_time,
         });
     }
@@ -921,12 +918,8 @@ impl CremaCore {
         let scale_lag = self
             .scale
             .as_ref()
-            .map_or(DEFAULT_SCALE_LAG_SECONDS, Scale::sensor_lag_seconds);
-        StopConfig::with_legacy_lead(
-            STOP_WEIGHT_BEFORE_SECONDS,
-            scale_lag,
-            FlowAlgorithm::TheilSen,
-        )
+            .map_or(DEFAULT_SCALE_LAG, Scale::sensor_lag);
+        StopConfig::with_legacy_lead(STOP_WEIGHT_BEFORE, scale_lag, FlowAlgorithm::TheilSen)
     }
 
     /// Push a [`StopReason`], when one occurred, as a [`Event::StopTriggered`]

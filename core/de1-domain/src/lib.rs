@@ -51,8 +51,8 @@ pub use shot::{
     MAX_SHOT_SAMPLES, ShotEvent, ShotMetrics, ShotMonitor, ShotPhase, ShotRecord, TimedSample,
 };
 pub use steam::{
-    MAX_STEAM_SAMPLES, STEAM_ECO_DELAY_SECONDS, SteamClogReason, SteamEvent, SteamMonitor,
-    SteamRecord, SteamSample,
+    MAX_STEAM_SAMPLES, STEAM_ECO_DELAY, SteamClogReason, SteamEvent, SteamMonitor, SteamRecord,
+    SteamSample,
 };
-pub use stop::{AutoStop, STOP_WEIGHT_BEFORE_SECONDS, StopConfig, StopReason, StopTargets};
+pub use stop::{AutoStop, STOP_WEIGHT_BEFORE, StopConfig, StopReason, StopTargets};
 pub use water::{WaterEvent, WaterMonitor, WaterRecord, WaterSessionKind};

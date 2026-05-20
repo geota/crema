@@ -12,12 +12,6 @@
 //! [`AutoStop::on_weight`] is enough; the estimator does the smoothing. SAV
 //! integrates the telemetry group flow into a dispensed volume.
 
-// `u64` millisecond elapsed times are divided into `f32` seconds for the
-// rate/look-ahead arithmetic; that time-to-float conversion loses precision
-// past the f32 mantissa — harmless for a shot's span — so the precision-loss
-// lint is allowed module-wide here.
-#![allow(clippy::cast_precision_loss)]
-
 use std::time::Duration;
 
 use de1_protocol::ShotSample;
@@ -42,9 +36,9 @@ pub struct StopTargets {
 /// Tuning for the [`AutoStop`] predictor.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct StopConfig {
-    /// Seconds of mass-flow to look ahead when projecting weight, to compensate
-    /// for the lag between sending a stop and flow ceasing.
-    pub weight_lead_seconds: f32,
+    /// How far ahead to project weight along the mass flow, to compensate for
+    /// the lag between sending a stop and flow ceasing.
+    pub weight_lead: Duration,
     /// Grams to stop short of the weight target (a constant fudge factor).
     pub weight_offset: f32,
     /// Suppress auto-stop for this long after the shot starts, letting flow
@@ -55,13 +49,13 @@ pub struct StopConfig {
 }
 
 impl Default for StopConfig {
-    /// Legacy-derived defaults: `weight_lead_seconds` is the legacy
+    /// Legacy-derived defaults: `weight_lead` is the legacy
     /// `stop_weight_before_seconds` setting default (0.15 s); `arming_delay`
     /// is the legacy "ignore the first 5 s of flow" rule; the flow algorithm
     /// defaults to [`FlowAlgorithm::TheilSen`].
     fn default() -> StopConfig {
         StopConfig {
-            weight_lead_seconds: STOP_WEIGHT_BEFORE_SECONDS,
+            weight_lead: STOP_WEIGHT_BEFORE,
             weight_offset: 0.0,
             arming_delay: Duration::from_secs(5),
             flow_algorithm: FlowAlgorithm::TheilSen,
@@ -72,38 +66,35 @@ impl Default for StopConfig {
 /// The legacy `stop_weight_before_seconds` setting default — the user-tunable
 /// part of the SAW look-ahead (the canonical home for this constant; the
 /// `de1-app` facade references it rather than re-declaring its own).
-pub const STOP_WEIGHT_BEFORE_SECONDS: f32 = 0.15;
+pub const STOP_WEIGHT_BEFORE: Duration = Duration::from_millis(150);
 
 /// The DE1's own contribution to the SAW look-ahead — the legacy
 /// `saw::_lag_time_de1` constant.
-pub const DE1_LAG_SECONDS: f32 = 0.1;
+pub const DE1_LAG: Duration = Duration::from_millis(100);
 
 /// The look-ahead the offset-median estimator adds: its windowed median lags
 /// ~half a window (the legacy `saw::lag_time_estimation`). Theil–Sen
 /// extrapolates to the present and adds none.
-pub const OFFSET_MEDIAN_LAG_SECONDS: f32 = 0.5;
+pub const OFFSET_MEDIAN_LAG: Duration = Duration::from_millis(500);
 
 impl StopConfig {
     /// Build a config whose SAW look-ahead is the legacy app's four-term lead
-    /// (`device_scale.tcl`): the user's `stop_weight_before_seconds` setting,
-    /// the connected scale's sensor lag (`de1_scale::Scale::sensor_lag_seconds`),
-    /// the fixed [`DE1_LAG_SECONDS`], and the chosen estimator's own lag —
-    /// [`OFFSET_MEDIAN_LAG_SECONDS`] for [`FlowAlgorithm::OffsetMedian`], none
-    /// for [`FlowAlgorithm::TheilSen`].
+    /// (`device_scale.tcl`): the user's `stop_weight_before` setting, the
+    /// connected scale's sensor lag (`de1_scale::Scale::sensor_lag_seconds`),
+    /// the fixed [`DE1_LAG`], and the chosen estimator's own lag —
+    /// [`OFFSET_MEDIAN_LAG`] for [`FlowAlgorithm::OffsetMedian`], none for
+    /// [`FlowAlgorithm::TheilSen`].
     pub fn with_legacy_lead(
-        stop_weight_before_seconds: f32,
-        scale_sensor_lag_seconds: f32,
+        stop_weight_before: Duration,
+        scale_sensor_lag: Duration,
         flow_algorithm: FlowAlgorithm,
     ) -> StopConfig {
         let estimator_lag = match flow_algorithm {
-            FlowAlgorithm::OffsetMedian => OFFSET_MEDIAN_LAG_SECONDS,
-            FlowAlgorithm::TheilSen => 0.0,
+            FlowAlgorithm::OffsetMedian => OFFSET_MEDIAN_LAG,
+            FlowAlgorithm::TheilSen => Duration::ZERO,
         };
         StopConfig {
-            weight_lead_seconds: stop_weight_before_seconds
-                + scale_sensor_lag_seconds
-                + DE1_LAG_SECONDS
-                + estimator_lag,
+            weight_lead: stop_weight_before + scale_sensor_lag + DE1_LAG + estimator_lag,
             flow_algorithm,
             ..StopConfig::default()
         }
@@ -205,7 +196,7 @@ impl AutoStop {
         }
         // Project the robust weight one look-ahead forward along the flow.
         let projected =
-            estimate.weight + estimate.flow.max(0.0) * self.config.weight_lead_seconds;
+            estimate.weight + estimate.flow.max(0.0) * self.config.weight_lead.as_secs_f32();
         if projected >= target - self.config.weight_offset {
             self.triggered = true;
             return Some(StopReason::Weight);
@@ -258,7 +249,7 @@ mod tests {
     /// threshold behaviour. Uses the default (Theil–Sen) flow algorithm.
     fn immediate_config() -> StopConfig {
         StopConfig {
-            weight_lead_seconds: 0.0,
+            weight_lead: Duration::ZERO,
             weight_offset: 0.0,
             arming_delay: Duration::ZERO,
             flow_algorithm: FlowAlgorithm::TheilSen,
@@ -302,7 +293,7 @@ mod tests {
             max_time: None,
         };
         let config = StopConfig {
-            weight_lead_seconds: 1.0,
+            weight_lead: Duration::from_secs(1),
             ..immediate_config()
         };
         let mut stop = AutoStop::new(targets, config, Duration::ZERO);
@@ -363,8 +354,10 @@ mod tests {
         };
         let mut stop = AutoStop::new(targets, config, Duration::ZERO);
         // A ramp climbing past the target eventually trips SAW.
-        let triggered = (0..20u64)
-            .any(|k| stop.on_weight(30.0 + k as f32, ms(k * 100)) == Some(StopReason::Weight));
+        let triggered = (0..20u8).any(|k| {
+            stop.on_weight(30.0 + f32::from(k), ms(u64::from(k) * 100))
+                == Some(StopReason::Weight)
+        });
         assert!(triggered);
     }
 
@@ -427,8 +420,12 @@ mod tests {
     #[test]
     fn with_legacy_lead_sums_the_four_terms() {
         // 0.15 setting + 0.50 sensor lag + 0.1 DE1 lag; Theil–Sen adds none.
-        let config = StopConfig::with_legacy_lead(0.15, 0.50, FlowAlgorithm::TheilSen);
-        assert!((config.weight_lead_seconds - 0.75).abs() < 1e-6);
+        let config = StopConfig::with_legacy_lead(
+            Duration::from_millis(150),
+            Duration::from_millis(500),
+            FlowAlgorithm::TheilSen,
+        );
+        assert_eq!(config.weight_lead, Duration::from_millis(750));
         assert_eq!(config.flow_algorithm, FlowAlgorithm::TheilSen);
     }
 
@@ -490,9 +487,18 @@ mod tests {
 
     #[test]
     fn offset_median_adds_its_lag_to_the_lead() {
-        let theil_sen = StopConfig::with_legacy_lead(0.15, 0.50, FlowAlgorithm::TheilSen);
-        let offset_median = StopConfig::with_legacy_lead(0.15, 0.50, FlowAlgorithm::OffsetMedian);
-        let added = offset_median.weight_lead_seconds - theil_sen.weight_lead_seconds;
-        assert!((added - OFFSET_MEDIAN_LAG_SECONDS).abs() < 1e-6);
+        let stop_weight_before = Duration::from_millis(150);
+        let scale_lag = Duration::from_millis(500);
+        let theil_sen =
+            StopConfig::with_legacy_lead(stop_weight_before, scale_lag, FlowAlgorithm::TheilSen);
+        let offset_median = StopConfig::with_legacy_lead(
+            stop_weight_before,
+            scale_lag,
+            FlowAlgorithm::OffsetMedian,
+        );
+        assert_eq!(
+            offset_median.weight_lead - theil_sen.weight_lead,
+            OFFSET_MEDIAN_LAG,
+        );
     }
 }

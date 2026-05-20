@@ -1,5 +1,7 @@
 //! The unifying [`Scale`] abstraction over every supported scale protocol.
 
+use std::time::Duration;
+
 use typeshare::typeshare;
 
 use crate::acaia::{self, AcaiaDecoder};
@@ -424,30 +426,31 @@ impl Scale {
         }
     }
 
-    /// The scale's sensor lag, in seconds — the delay between coffee landing
-    /// in the cup and the scale reporting the new weight. It is one term of
-    /// the SAW (stop-at-weight) stop-early prediction.
+    /// The scale's sensor lag — the delay between coffee landing in the cup
+    /// and the scale reporting the new weight. It is one term of the SAW
+    /// (stop-at-weight) stop-early prediction.
     ///
     /// Values are from the legacy app (`device_scale.tcl`), itself derived
     /// from James Hoffmann's scale-latency measurements plus BLE delay.
-    pub fn sensor_lag_seconds(&self) -> f32 {
-        match &self.inner {
-            Inner::HiroiaJimmy => 0.25,
-            Inner::Felicita | Inner::Bookoo | Inner::AtomheartEclair => 0.50,
+    pub fn sensor_lag(&self) -> Duration {
+        let ms: u64 = match &self.inner {
+            Inner::HiroiaJimmy => 250,
+            Inner::Felicita | Inner::Bookoo | Inner::AtomheartEclair => 500,
             // The legacy switch has no `acaiapyxis` arm (a Pyxis would hit the
             // 0.38 default); the Pyxis is physically an Acaia, so it shares the
             // Acaia sensor lag here — a deliberate correction of that gap.
-            Inner::AcaiaGen1(_) | Inner::AcaiaPyxis(_) => 0.69,
+            Inner::AcaiaGen1(_) | Inner::AcaiaPyxis(_) => 690,
             // Decent, Skale, and the scales without a dedicated entry take the
-            // legacy 0.38 s default.
+            // legacy 380 ms default.
             Inner::Decent { .. }
             | Inner::Skale
             | Inner::EurekaPrecisa
             | Inner::SoloBarista
             | Inner::Difluid
             | Inner::Smartchef
-            | Inner::VariaAku => 0.38,
-        }
+            | Inner::VariaAku => 380,
+        };
+        Duration::from_millis(ms)
     }
 
     /// Decode a weight notification into grams.
@@ -854,24 +857,20 @@ mod tests {
     #[test]
     fn sensor_lag_matches_the_per_scale_table() {
         assert_eq!(
-            Scale::from_label("Hiroia Jimmy")
-                .unwrap()
-                .sensor_lag_seconds(),
-            0.25
+            Scale::from_label("Hiroia Jimmy").unwrap().sensor_lag(),
+            Duration::from_millis(250)
         );
         assert_eq!(
-            Scale::from_label("Bookoo").unwrap().sensor_lag_seconds(),
-            0.50
+            Scale::from_label("Bookoo").unwrap().sensor_lag(),
+            Duration::from_millis(500)
         );
         assert_eq!(
-            Scale::from_label("Acaia Pyxis")
-                .unwrap()
-                .sensor_lag_seconds(),
-            0.69
+            Scale::from_label("Acaia Pyxis").unwrap().sensor_lag(),
+            Duration::from_millis(690)
         );
         assert_eq!(
-            Scale::from_label("Skale II").unwrap().sensor_lag_seconds(),
-            0.38
+            Scale::from_label("Skale II").unwrap().sensor_lag(),
+            Duration::from_millis(380)
         );
     }
 }
