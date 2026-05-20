@@ -6,12 +6,6 @@
 //! notable [`ShotEvent`]s. SAW / SAV (stop-at-weight / stop-at-volume) logic
 //! will build on this.
 
-// `u64` millisecond elapsed times are divided into `f32` seconds for the
-// recorded shot metrics; that time-to-float conversion loses precision past
-// the f32 mantissa — harmless for a shot's span — so the precision-loss lint
-// is allowed module-wide here.
-#![allow(clippy::cast_precision_loss)]
-
 use std::time::Duration;
 
 use de1_protocol::{MachineState, ShotSample, StateInfo, SubState};
@@ -69,8 +63,8 @@ impl ShotPhase {
 /// A telemetry sample tagged with its time since the shot began.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct TimedSample {
-    /// Milliseconds since the shot started.
-    pub elapsed_ms: u64,
+    /// Time since the shot started.
+    pub elapsed: Duration,
     /// The telemetry sample.
     pub sample: ShotSample,
 }
@@ -82,8 +76,8 @@ pub struct TimedSample {
 /// to locate flow-start.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ShotRecord {
-    /// Total shot duration, milliseconds.
-    pub duration_ms: u64,
+    /// Total shot duration.
+    pub duration: Duration,
     /// Every telemetry sample collected during the shot, in order.
     pub samples: Vec<TimedSample>,
 }
@@ -95,13 +89,13 @@ pub struct ShotRecord {
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ShotMetrics {
     /// Highest group pressure observed, bar.
-    pub peak_pressure_bar: f32,
+    pub peak_pressure: f32,
     /// Highest group flow observed, mL/s.
-    pub peak_flow_ml_per_s: f32,
+    pub peak_flow: f32,
     /// Total water dispensed, mL — the group flow integrated over time.
-    pub total_water_ml: f32,
-    /// Shot duration, seconds (from [`ShotRecord::duration_ms`]).
-    pub duration_s: f32,
+    pub total_water: f32,
+    /// Shot duration (from [`ShotRecord::duration`]).
+    pub duration: Duration,
 }
 
 impl ShotRecord {
@@ -110,32 +104,32 @@ impl ShotRecord {
     /// Peak pressure and flow are the maxima over all samples; total water is
     /// the trapezoidal integral of group flow (mL/s) over the elapsed time of
     /// the sample series. A record with no samples yields all-zero metrics
-    /// except [`duration_s`](ShotMetrics::duration_s).
+    /// except [`duration`](ShotMetrics::duration).
     pub fn metrics(&self) -> ShotMetrics {
-        let mut peak_pressure_bar = 0.0f32;
-        let mut peak_flow_ml_per_s = 0.0f32;
-        let mut total_water_ml = 0.0f32;
+        let mut peak_pressure = 0.0f32;
+        let mut peak_flow = 0.0f32;
+        let mut total_water = 0.0f32;
         let mut prev: Option<&TimedSample> = None;
 
         for timed in &self.samples {
-            peak_pressure_bar = peak_pressure_bar.max(timed.sample.group_pressure);
-            peak_flow_ml_per_s = peak_flow_ml_per_s.max(timed.sample.group_flow);
+            peak_pressure = peak_pressure.max(timed.sample.group_pressure);
+            peak_flow = peak_flow.max(timed.sample.group_flow);
             if let Some(prev) = prev
-                && timed.elapsed_ms > prev.elapsed_ms
+                && timed.elapsed > prev.elapsed
             {
                 // Trapezoidal rule: average flow over the interval × duration.
-                let dt_s = (timed.elapsed_ms - prev.elapsed_ms) as f32 / 1000.0;
+                let dt_s = (timed.elapsed - prev.elapsed).as_secs_f32();
                 let avg_flow = (prev.sample.group_flow + timed.sample.group_flow) / 2.0;
-                total_water_ml += avg_flow * dt_s;
+                total_water += avg_flow * dt_s;
             }
             prev = Some(timed);
         }
 
         ShotMetrics {
-            peak_pressure_bar,
-            peak_flow_ml_per_s,
-            total_water_ml,
-            duration_s: self.duration_ms as f32 / 1000.0,
+            peak_pressure,
+            peak_flow,
+            total_water,
+            duration: self.duration,
         }
     }
 }
@@ -213,12 +207,9 @@ impl ShotMonitor {
 
         // A shot ends when the machine leaves the Espresso state.
         if !in_espresso && let Some(mut shot) = self.shot.take() {
-            // `duration_ms` is the on-disk JSON shape: convert the elapsed
-            // `Duration` back to `u64` ms, saturating in the (impossible)
-            // case of a >584-million-year session.
             let duration = shot.timer.finish(now).unwrap_or(Duration::ZERO);
             events.push(ShotEvent::Completed(ShotRecord {
-                duration_ms: u64::try_from(duration.as_millis()).unwrap_or(u64::MAX),
+                duration,
                 samples: shot.samples,
             }));
         }
@@ -239,12 +230,8 @@ impl ShotMonitor {
             // Drop samples past the cap so an over-long stream cannot grow the
             // heap without bound; see [`MAX_SHOT_SAMPLES`].
             if shot.samples.len() < MAX_SHOT_SAMPLES {
-                // `elapsed_ms` is part of the persisted JSON schema — convert
-                // the `Duration` back to `u64` ms for the stored sample.
-                let elapsed_ms = u64::try_from(shot.timer.elapsed(now).as_millis())
-                    .unwrap_or(u64::MAX);
                 shot.samples.push(TimedSample {
-                    elapsed_ms,
+                    elapsed: shot.timer.elapsed(now),
                     sample: sample.clone(),
                 });
             }
@@ -358,25 +345,28 @@ mod tests {
         let done = monitor.on_state_info(state(MachineState::Idle, SubState::Ready), ms(5000));
 
         let record = completed_record(done);
-        assert_eq!(record.duration_ms, 4000); // 5000 - 1000
+        assert_eq!(record.duration, ms(4000)); // 5000 - 1000
         assert_eq!(record.samples.len(), 2);
-        assert_eq!(record.samples[0].elapsed_ms, 200); // 1200 - 1000
-        assert_eq!(record.samples[1].elapsed_ms, 2000); // 3000 - 1000
+        assert_eq!(record.samples[0].elapsed, ms(200)); // 1200 - 1000
+        assert_eq!(record.samples[1].elapsed, ms(2000)); // 3000 - 1000
         assert!(!monitor.is_shot_in_progress());
     }
 
-    /// A `TimedSample` at `elapsed_ms` carrying the given pressure and flow.
+    /// A `TimedSample` at `elapsed_ms` ms carrying the given pressure and flow.
     fn timed(elapsed_ms: u64, group_pressure: f32, group_flow: f32) -> TimedSample {
         let mut sample = sample(0);
         sample.group_pressure = group_pressure;
         sample.group_flow = group_flow;
-        TimedSample { elapsed_ms, sample }
+        TimedSample {
+            elapsed: ms(elapsed_ms),
+            sample,
+        }
     }
 
     #[test]
     fn metrics_report_peaks_water_and_duration() {
         let record = ShotRecord {
-            duration_ms: 30_000,
+            duration: ms(30_000),
             samples: vec![
                 timed(0, 1.0, 0.0),
                 timed(1_000, 9.0, 2.0),
@@ -384,11 +374,11 @@ mod tests {
             ],
         };
         let metrics = record.metrics();
-        assert_eq!(metrics.peak_pressure_bar, 9.0);
-        assert_eq!(metrics.peak_flow_ml_per_s, 2.0);
+        assert_eq!(metrics.peak_pressure, 9.0);
+        assert_eq!(metrics.peak_flow, 2.0);
         // Trapezoidal: 0..1 s avg 1.0 -> 1.0 mL; 1..2 s avg 2.0 -> 2.0 mL.
-        assert_eq!(metrics.total_water_ml, 3.0);
-        assert_eq!(metrics.duration_s, 30.0);
+        assert_eq!(metrics.total_water, 3.0);
+        assert_eq!(metrics.duration, ms(30_000));
     }
 
     #[test]
@@ -407,13 +397,13 @@ mod tests {
     #[test]
     fn metrics_of_an_empty_record_are_zero_except_duration() {
         let record = ShotRecord {
-            duration_ms: 5_000,
+            duration: ms(5_000),
             samples: vec![],
         };
         let metrics = record.metrics();
-        assert_eq!(metrics.peak_pressure_bar, 0.0);
-        assert_eq!(metrics.peak_flow_ml_per_s, 0.0);
-        assert_eq!(metrics.total_water_ml, 0.0);
-        assert_eq!(metrics.duration_s, 5.0);
+        assert_eq!(metrics.peak_pressure, 0.0);
+        assert_eq!(metrics.peak_flow, 0.0);
+        assert_eq!(metrics.total_water, 0.0);
+        assert_eq!(metrics.duration, ms(5_000));
     }
 }

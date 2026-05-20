@@ -19,16 +19,22 @@ use crate::stop::StopReason;
 
 /// Schema version stamped into every [`StoredShot`]. Bump it when the stored
 /// shape changes incompatibly; readers branch on [`StoredShot::format_version`].
-pub const STORED_SHOT_FORMAT_VERSION: u32 = 1;
+///
+/// `v2` dropped unit-suffixed field names from the persisted shape:
+/// [`ShotMetadata::dose`] (was `dose_in_g`), [`ShotMetadata::yield_out`] (was
+/// `yield_out_g`), [`StoredShot::recorded_at`] (was `recorded_at_unix_ms`),
+/// [`ShotRecord::duration`] / [`TimedSample::elapsed`] (were `_ms` `u64`s,
+/// now serde-default `Duration`s with `{secs, nanos}`).
+pub const STORED_SHOT_FORMAT_VERSION: u32 = 2;
 
 /// Barista-supplied journal metadata for a shot. Every field is optional — a
 /// shot can be stored with none of it and annotated afterwards.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct ShotMetadata {
     /// Dry coffee dose, grams.
-    pub dose_in_g: Option<f32>,
+    pub dose: Option<f32>,
     /// Weight in the cup, grams.
-    pub yield_out_g: Option<f32>,
+    pub yield_out: Option<f32>,
     /// Bean / roaster description.
     pub beans: Option<String>,
     /// Grinder setting used.
@@ -49,7 +55,7 @@ impl ShotMetadata {
     /// The brew ratio (yield ÷ dose), if both weights are recorded and the
     /// dose is positive.
     pub fn brew_ratio(&self) -> Option<f32> {
-        match (self.dose_in_g, self.yield_out_g) {
+        match (self.dose, self.yield_out) {
             (Some(dose), Some(yield_out)) if dose > 0.0 => Some(yield_out / dose),
             _ => None,
         }
@@ -64,7 +70,7 @@ pub struct StoredShot {
     pub format_version: u32,
     /// When the shot was pulled, Unix epoch milliseconds. The core has no
     /// clock; the shell supplies this.
-    pub recorded_at_unix_ms: u64,
+    pub recorded_at: u64,
     /// The profile pulled, if known.
     pub profile: Option<Profile>,
     /// Why the shot stopped, if an [`AutoStop`](crate::AutoStop) drove it.
@@ -77,12 +83,13 @@ pub struct StoredShot {
 
 impl StoredShot {
     /// Wrap a freshly completed `record` for storage, stamped with the current
-    /// [`STORED_SHOT_FORMAT_VERSION`] and `recorded_at_unix_ms`. Profile, stop
-    /// reason, and metadata start empty — attach them with the `with_*` setters.
-    pub fn new(recorded_at_unix_ms: u64, record: ShotRecord) -> StoredShot {
+    /// [`STORED_SHOT_FORMAT_VERSION`] and `recorded_at` (Unix epoch ms; the
+    /// core has no clock, the shell supplies this). Profile, stop reason, and
+    /// metadata start empty — attach them with the `with_*` setters.
+    pub fn new(recorded_at: u64, record: ShotRecord) -> StoredShot {
         StoredShot {
             format_version: STORED_SHOT_FORMAT_VERSION,
-            recorded_at_unix_ms,
+            recorded_at,
             profile: None,
             stop_reason: None,
             metadata: ShotMetadata::default(),
@@ -135,6 +142,8 @@ impl StoredShot {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
     use crate::shot::TimedSample;
     use de1_protocol::ShotSample;
@@ -142,9 +151,9 @@ mod tests {
     /// A one-sample shot record for round-trip tests.
     fn sample_record() -> ShotRecord {
         ShotRecord {
-            duration_ms: 27_000,
+            duration: Duration::from_secs(27),
             samples: vec![TimedSample {
-                elapsed_ms: 1_000,
+                elapsed: Duration::from_secs(1),
                 sample: ShotSample {
                     sample_time: 100,
                     group_pressure: 6.0,
@@ -175,8 +184,8 @@ mod tests {
         let shot = StoredShot::new(1_700_000_000_000, sample_record())
             .with_stop_reason(StopReason::Weight)
             .with_metadata(ShotMetadata {
-                dose_in_g: Some(18.0),
-                yield_out_g: Some(40.5),
+                dose: Some(18.0),
+                yield_out: Some(40.5),
                 beans: Some("washed Ethiopia".to_owned()),
                 grinder_setting: Some("3.2".to_owned()),
                 notes: None,
@@ -205,8 +214,8 @@ mod tests {
     #[test]
     fn brew_ratio_divides_yield_by_dose() {
         let meta = ShotMetadata {
-            dose_in_g: Some(18.0),
-            yield_out_g: Some(45.0),
+            dose: Some(18.0),
+            yield_out: Some(45.0),
             ..ShotMetadata::default()
         };
         assert_eq!(meta.brew_ratio(), Some(2.5));
@@ -216,7 +225,7 @@ mod tests {
     fn brew_ratio_is_none_without_both_weights() {
         assert_eq!(ShotMetadata::default().brew_ratio(), None);
         let dose_only = ShotMetadata {
-            dose_in_g: Some(18.0),
+            dose: Some(18.0),
             ..ShotMetadata::default()
         };
         assert_eq!(dose_only.brew_ratio(), None);
@@ -254,7 +263,7 @@ mod tests {
         assert_eq!(parsed.format_version, 9999);
         // Every other field survives intact.
         assert_eq!(parsed.record, shot.record);
-        assert_eq!(parsed.recorded_at_unix_ms, shot.recorded_at_unix_ms);
+        assert_eq!(parsed.recorded_at, shot.recorded_at);
     }
 
     #[test]
@@ -274,7 +283,7 @@ mod tests {
         // A future version does not excuse a missing required field: dropping
         // `record` must still fail, so a stale reader cannot silently accept
         // garbage just because the version is unfamiliar.
-        let bad = r#"{"format_version": 9999, "recorded_at_unix_ms": 0,
+        let bad = r#"{"format_version": 9999, "recorded_at": 0,
             "profile": null, "stop_reason": null, "metadata": {}}"#;
         assert!(StoredShot::from_json(bad).is_err());
     }

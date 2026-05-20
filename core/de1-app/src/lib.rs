@@ -850,9 +850,9 @@ impl CremaCore {
             ShotEvent::Completed(record) => {
                 self.shot_started = None;
                 self.auto_stop = None;
-                // `record.duration_ms` is u64 ms (the persisted shape from
-                // de1-domain); narrow to the u32 ms the FFI carries.
-                let duration = u32::try_from(record.duration_ms).unwrap_or(u32::MAX);
+                // `record.duration` is the domain `Duration`; narrow to the
+                // u32 ms the FFI `ShotCompleted` event carries.
+                let duration = u32::try_from(record.duration.as_millis()).unwrap_or(u32::MAX);
                 out.events.push(Event::ShotCompleted {
                     duration,
                     sample_count: u32::try_from(record.samples.len()).unwrap_or(u32::MAX),

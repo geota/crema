@@ -157,3 +157,29 @@ each screen visually matches (or deliberately supersedes) the handoff.
 Task 1 (uPlot wrappers) is the most self-contained and the safest standalone
 win. Task 3 (buttons) is gated on design QA. Task 2 (scale abstraction) is
 gated on a real second configurable scale — do not pull it forward.
+
+---
+
+## Persisted format note — `StoredShot` v1 → v2
+
+Bumped [`STORED_SHOT_FORMAT_VERSION`](../core/de1-domain/src/history.rs) from
+`1` to `2` when unit-suffixed field names were dropped from the Rust persistence
+layer. **Breaking on-disk shape**, no migrator is shipped — the only consumer
+(the project owner) accepted the break and v1 files should be deleted or
+reformatted by hand if they exist.
+
+Renames:
+
+- `ShotMetadata.dose_in_g` → `dose`
+- `ShotMetadata.yield_out_g` → `yield_out`
+- `StoredShot.recorded_at_unix_ms` → `recorded_at` (still Unix epoch ms;
+  documented on the field)
+- `ShotRecord.duration_ms: u64` → `duration: Duration` (now serializes as the
+  serde-default `{secs, nanos}` shape)
+- `TimedSample.elapsed_ms: u64` → `elapsed: Duration` (ditto)
+- `ShotMetrics.{peak_pressure_bar, peak_flow_ml_per_s, total_water_ml, duration_s}`
+  → `{peak_pressure, peak_flow, total_water, duration: Duration}` (this type
+  is not persisted; included for symmetry with the rest of the rename)
+
+A reader that needs to accept v1 input must do its own conversion: it has the
+`format_version` field to branch on.
