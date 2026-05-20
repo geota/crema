@@ -6,7 +6,7 @@
  *   - {@link CaptureRecorder} — a rolling in-memory buffer of `{t,dir,src,hex}`
  *     entries, fed at the `core.onNotification` boundary by the BLE managers.
  *   - {@link CaptureStore} — an IndexedDB-backed per-shot store, keyed by
- *     `ShotRecord.id`. Persists each shot's slice so it can be downloaded as
+ *     `StoredShot.id`. Persists each shot's slice so it can be downloaded as
  *     a JSONL capture that drops straight into Advanced → Replay.
  *
  * Singletons via {@link getCaptureRecorder} / {@link getCaptureStore}.

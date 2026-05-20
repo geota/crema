@@ -1,16 +1,16 @@
 /**
  * `$lib/capture/store` — IndexedDB-backed per-shot capture store.
  *
- * Keyed by `ShotRecord.id` — one capture per shot. IndexedDB rather than
+ * Keyed by `StoredShot.id` — one capture per shot. IndexedDB rather than
  * `localStorage` because a raw capture is ~300–400 KB / shot, easily exceeding
  * the ~5–10 MB total localStorage quota after a few shots; the IndexedDB quota
  * is typically a large share of free disk, so hundreds of captures fit
  * comfortably.
  *
- * Captures are *not* deleted when a `ShotRecord` is evicted from history (the
+ * Captures are *not* deleted when a `StoredShot` is evicted from history (the
  * shell does not couple the stores in the hot path). Instead the orchestrator
  * calls {@link CaptureStore.pruneTo} once at startup, dropping any capture
- * whose `ShotRecord` no longer exists — a simple lazy GC.
+ * whose `StoredShot` no longer exists — a simple lazy GC.
  */
 
 import type { CaptureEntry } from './recorder';

@@ -5,19 +5,23 @@
  * reports a duration and a sample count, nothing it stores. So the web shell
  * keeps its own history: when a shot completes, the orchestrator snapshots the
  * buffered `shotTelemetry` series (the same `TelemetrySample[]` the live chart
- * plots) plus a little derived metadata into a {@link ShotRecord}, and the
+ * plots) plus a little derived metadata into a {@link StoredShot}, and the
  * {@link HistoryStore} persists it to `localStorage`.
  *
- * A record is therefore *self-contained*: the History page can redraw a stored
- * shot's curve from `series` alone — no device, no re-fetch — exactly as the
- * live `LiveChart` draws an in-progress one.
+ * A stored shot is therefore *self-contained*: the History page can redraw it
+ * from `series` alone — no device, no re-fetch — exactly as the live
+ * `LiveChart` draws an in-progress one.
+ *
+ * Named to mirror Rust's `de1_domain::StoredShot`. The Rust `ShotRecord` is
+ * the raw telemetry sub-struct; the persisted top-level entry is called
+ * `StoredShot` on both halves of the split.
  */
 
 import type { TelemetrySample } from '$lib/state';
 
 /**
  * A snapshot of the current bean at the moment a shot was pulled. Stored on
- * the {@link ShotRecord} so a later change to the current bean cannot rewrite
+ * the {@link StoredShot} so a later change to the current bean cannot rewrite
  * history — days-off-roast is derived from `roastedOn` against the shot's own
  * `completedAt`. Optional: a shot recorded before this field existed (or with
  * no bean logged) simply has none.
@@ -44,9 +48,10 @@ export function shotId(): string {
 
 /**
  * One finished shot, persisted by the shell. Everything needed to render a
- * History `ShotRow` and `ShotDetail` without a device present.
+ * History `ShotRow` and `ShotDetail` without a device present. Named to
+ * mirror Rust's `de1_domain::StoredShot`.
  */
-export interface ShotRecord {
+export interface StoredShot {
 	/** Stable id — `shot:<uuid>`. */
 	readonly id: string;
 	/** Unix epoch milliseconds the shot completed. */
@@ -90,7 +95,7 @@ export interface ShotRecord {
  * the active profile. A pre-existing record (or one pulled with no active
  * profile) has no `dose`, so it falls back to the shell-wide 18 g default.
  */
-export function ratioLabel(record: ShotRecord): string {
+export function ratioLabel(record: StoredShot): string {
 	const yieldG = record.finalWeight ?? record.peakWeight;
 	if (yieldG == null || yieldG <= 0) return '1:—';
 	const dose = record.dose != null && record.dose > 0 ? record.dose : 18;
@@ -106,7 +111,7 @@ export function stars(rating: number): string {
 }
 
 /** A timestamped `.jsonl` filename for a downloaded shot. */
-export function shotFilename(record: ShotRecord): string {
+export function shotFilename(record: StoredShot): string {
 	const d = new Date(record.completedAt);
 	const p = (n: number): string => String(n).padStart(2, '0');
 	const stamp =
