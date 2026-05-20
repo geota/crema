@@ -245,15 +245,15 @@ impl CremaBridge {
         self.core.connect_scale(&advertised_name)
     }
 
-    /// Arm automatic shot-stop at a weight (grams), volume (mL), and/or
-    /// max-shot-time (seconds) target.
+    /// Arm automatic shot-stop. `weight` is grams (SAW), `volume` is
+    /// millilitres (SAV), and `max_time` is shot-duration seconds.
     pub fn arm_auto_stop(
         &mut self,
-        weight_g: Option<f32>,
-        volume_ml: Option<f32>,
+        weight: Option<f32>,
+        volume: Option<f32>,
         max_time: Option<f32>,
     ) {
-        self.core.arm_auto_stop(weight_g, volume_ml, max_time);
+        self.core.arm_auto_stop(weight, volume, max_time);
     }
 
     /// Disarm automatic shot-stop.

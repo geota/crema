@@ -14,10 +14,10 @@
 //!    pressure / temperature telemetry, emitting [`SteamEvent::Started`] and
 //!    [`SteamEvent::Completed`].
 //! 2. **Eco mode** — after the machine has been idle (not steaming) for
-//!    [`STEAM_ECO_DELAY_SECONDS`], the steam target temperature should drop to
-//!    a lower eco temperature; resuming a steam session disengages it. Modelled
-//!    as a time-driven transition on [`on_tick`](SteamMonitor::on_tick), which
-//!    emits [`SteamEvent::EcoModeChanged`].
+//!    [`STEAM_ECO_DELAY`], the steam target temperature should drop to a lower
+//!    eco temperature; resuming a steam session disengages it. Modelled as a
+//!    time-driven transition on [`on_tick`](SteamMonitor::on_tick), which emits
+//!    [`SteamEvent::EcoModeChanged`].
 //! 3. **Steam-clog detection** — at the end of a session the recorded steam
 //!    pressure / temperature series is analysed (`check_if_steam_clogged`,
 //!    `machine.tcl:1171-1226`); a clogged steam wand runs hot and
@@ -50,9 +50,9 @@ use crate::session::SessionTimer;
 /// panic, no reallocation).
 pub const MAX_STEAM_SAMPLES: usize = 36_000;
 
-/// How long the machine must be idle (not steaming) before eco mode engages,
-/// seconds — the legacy `steam_eco_delay_seconds` default (`machine.tcl:34`).
-pub const STEAM_ECO_DELAY_SECONDS: u64 = 600;
+/// How long the machine must be idle (not steaming) before eco mode engages
+/// — the legacy `steam_eco_delay_seconds` default of 600 s (`machine.tcl:34`).
+pub const STEAM_ECO_DELAY: Duration = Duration::from_secs(600);
 
 /// Number of recorded samples skipped at the start of a session before clog
 /// analysis — steam pressure is high by design at the start. The legacy
@@ -196,8 +196,8 @@ pub struct SteamMonitor {
     /// which the eco-mode idle delay is measured. `None` until the first
     /// session, the eco timer being un-armed before any steaming.
     last_steam: Option<Duration>,
-    /// Eco-mode idle delay — [`STEAM_ECO_DELAY_SECONDS`] by default;
-    /// configurable via [`with_eco_delay`](Self::with_eco_delay).
+    /// Eco-mode idle delay — [`STEAM_ECO_DELAY`] by default; configurable via
+    /// [`with_eco_delay`](Self::with_eco_delay).
     eco_delay: Duration,
     /// Whether eco mode is enabled at all (the legacy `eco_steam` setting).
     eco_enabled: bool,
@@ -217,7 +217,7 @@ impl SteamMonitor {
             puffing: false,
             eco_mode: false,
             last_steam: None,
-            eco_delay: Duration::from_secs(STEAM_ECO_DELAY_SECONDS),
+            eco_delay: STEAM_ECO_DELAY,
             eco_enabled: false,
         }
     }
@@ -244,10 +244,9 @@ impl SteamMonitor {
         events
     }
 
-    /// Override the eco-mode idle delay. The default is
-    /// [`STEAM_ECO_DELAY_SECONDS`].
-    pub fn with_eco_delay(mut self, delay_seconds: u64) -> SteamMonitor {
-        self.eco_delay = Duration::from_secs(delay_seconds);
+    /// Override the eco-mode idle delay. The default is [`STEAM_ECO_DELAY`].
+    pub fn with_eco_delay(mut self, delay: Duration) -> SteamMonitor {
+        self.eco_delay = delay;
         self
     }
 
@@ -598,7 +597,7 @@ mod tests {
 
     #[test]
     fn eco_mode_engages_after_the_idle_delay() {
-        let mut monitor = SteamMonitor::new().with_eco_delay(600);
+        let mut monitor = SteamMonitor::new().with_eco_delay(Duration::from_secs(600));
         monitor.on_eco_enabled(true, ms(0));
         // Before the delay: no change.
         assert!(monitor.on_tick(ms(599_000)).is_empty());
@@ -613,7 +612,7 @@ mod tests {
 
     #[test]
     fn eco_mode_does_not_engage_when_disabled() {
-        let mut monitor = SteamMonitor::new().with_eco_delay(600);
+        let mut monitor = SteamMonitor::new().with_eco_delay(Duration::from_secs(600));
         // eco mode never enabled.
         assert!(monitor.on_tick(ms(10_000_000)).is_empty());
         assert!(!monitor.is_eco_mode());
@@ -621,7 +620,7 @@ mod tests {
 
     #[test]
     fn steaming_disengages_eco_mode() {
-        let mut monitor = SteamMonitor::new().with_eco_delay(600);
+        let mut monitor = SteamMonitor::new().with_eco_delay(Duration::from_secs(600));
         monitor.on_eco_enabled(true, ms(0));
         monitor.on_tick(ms(600_000));
         assert!(monitor.is_eco_mode());
@@ -633,7 +632,7 @@ mod tests {
 
     #[test]
     fn eco_mode_re_engages_after_a_session_and_a_fresh_idle_delay() {
-        let mut monitor = SteamMonitor::new().with_eco_delay(600);
+        let mut monitor = SteamMonitor::new().with_eco_delay(Duration::from_secs(600));
         monitor.on_eco_enabled(true, ms(0));
         // Steam at t = 100 s, ending at t = 110 s: the idle clock restarts.
         monitor.on_state_info(state(MachineState::Steam, SubState::Steaming), ms(100_000));
@@ -646,7 +645,7 @@ mod tests {
 
     #[test]
     fn disabling_eco_mode_disengages_it() {
-        let mut monitor = SteamMonitor::new().with_eco_delay(600);
+        let mut monitor = SteamMonitor::new().with_eco_delay(Duration::from_secs(600));
         monitor.on_eco_enabled(true, ms(0));
         monitor.on_tick(ms(600_000));
         assert!(monitor.is_eco_mode());
@@ -657,7 +656,7 @@ mod tests {
 
     #[test]
     fn re_enabling_eco_mode_does_not_delay_a_pending_transition() {
-        let mut monitor = SteamMonitor::new().with_eco_delay(600);
+        let mut monitor = SteamMonitor::new().with_eco_delay(Duration::from_secs(600));
         monitor.on_eco_enabled(true, ms(0));
         // A redundant enable partway through the idle delay must not re-arm
         // the idle clock and push the transition out.
@@ -669,7 +668,7 @@ mod tests {
 
     #[test]
     fn eco_mode_does_not_engage_during_an_active_session() {
-        let mut monitor = SteamMonitor::new().with_eco_delay(600);
+        let mut monitor = SteamMonitor::new().with_eco_delay(Duration::from_secs(600));
         monitor.on_eco_enabled(true, ms(0));
         monitor.on_state_info(state(MachineState::Steam, SubState::Steaming), ms(1_000));
         // A very long session: eco mode must not engage while steaming.
