@@ -59,7 +59,7 @@
 	);
 
 	/** Final (or peak) yield weight, grams, for the yield metric. */
-	const yieldG = $derived(shot.finalWeightG ?? shot.peakWeightG);
+	const yieldG = $derived(shot.finalWeight ?? shot.peakWeight);
 	/** The yield weight in the chosen weight unit (D1). */
 	const settings = getSettingsStore();
 	const yieldM = $derived(convertWeight(yieldG, settings.current.weightUnit));
@@ -87,7 +87,7 @@
 	</div>
 	<div class="hi-row-main">
 		<div class="hi-row-name">{shot.profileName ?? 'Untitled shot'}</div>
-		<div class="hi-row-bean">{(shot.durationMs / 1000).toFixed(0)} s extraction</div>
+		<div class="hi-row-bean">{(shot.duration / 1000).toFixed(0)} s extraction</div>
 	</div>
 	<div class="hi-row-metric">
 		<div class="hi-row-metric-val">{ratioLabel(shot)}</div>

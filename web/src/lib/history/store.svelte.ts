@@ -21,8 +21,14 @@ import type { TelemetrySample } from '$lib/state';
 import { readJson, writeJson } from '$lib/utils/storage';
 import { shotId, type ShotBean, type ShotRecord } from './model';
 
-/** localStorage key for the recorded shots (a `ShotRecord[]`, newest first). */
-const HISTORY_KEY = 'crema.history.v1';
+/**
+ * localStorage key for the recorded shots (a `ShotRecord[]`, newest first).
+ *
+ * Bumped to `v2` when the in-record field names dropped their unit suffixes
+ * (`durationMs` → `duration`, `peakWeightG` → `peakWeight`, etc.); v1 records
+ * are simply ignored on first read rather than migrated.
+ */
+const HISTORY_KEY = 'crema.history.v2';
 
 /**
  * Cap on the stored history. A `ShotRecord` carries its full telemetry series
@@ -38,11 +44,11 @@ const MAX_RECORDS = 300;
  */
 export interface ShotCompletion {
 	/** Total shot duration, milliseconds (from `Event::ShotCompleted`). */
-	durationMs: number;
+	duration: number;
 	/** The active profile's name at the time of the shot, or `null`. */
 	profileName: string | null;
 	/** The active profile's brew dose (grams) at the time of the shot, or `null`. */
-	doseG: number | null;
+	dose: number | null;
 	/** The buffered telemetry series snapshotted at shot completion. */
 	series: readonly TelemetrySample[];
 	/** A snapshot of the current bean at shot completion, or `null`. */
@@ -99,10 +105,10 @@ export class HistoryStore {
 			id: shotId(),
 			completedAt: Date.now(),
 			profileName: completion.profileName,
-			durationMs: completion.durationMs,
-			doseG: completion.doseG,
-			peakWeightG: peakWeight,
-			finalWeightG: finalWeight,
+			duration: completion.duration,
+			dose: completion.dose,
+			peakWeight,
+			finalWeight,
 			peakPressure,
 			peakTemp,
 			series: [...series],

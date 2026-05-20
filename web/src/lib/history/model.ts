@@ -54,17 +54,17 @@ export interface ShotRecord {
 	/** The active profile's name when the shot was pulled, or `null`. */
 	readonly profileName: string | null;
 	/** Total shot duration, milliseconds (the `ShotCompleted` duration). */
-	readonly durationMs: number;
+	readonly duration: number;
 	/**
 	 * The brew dose, grams — the active profile's dose at the time of the
 	 * shot. Optional: a shot recorded before this field existed (or with no
 	 * active profile) simply has none, and {@link ratioLabel} falls back.
 	 */
-	readonly doseG?: number | null;
+	readonly dose?: number | null;
 	/** Peak scale weight reached during the shot, grams, or `null`. */
-	readonly peakWeightG: number | null;
+	readonly peakWeight: number | null;
 	/** Final scale weight at shot end, grams, or `null` if no scale. */
-	readonly finalWeightG: number | null;
+	readonly finalWeight: number | null;
 	/** Peak group pressure reached, bar. */
 	readonly peakPressure: number;
 	/** Peak group-head temperature reached, °C. */
@@ -86,17 +86,17 @@ export interface ShotRecord {
 /**
  * A `1:N` ratio label from final weight ÷ the recorded brew dose, or `1:—`.
  *
- * Uses the shot's own `doseG` — captured at `ShotCompleted` time from the
- * active profile. A pre-existing record (or one pulled with no active
- * profile) has no `doseG`, so it falls back to the shell-wide 18 g default.
+ * Uses the shot's own `dose` (grams) — captured at `ShotCompleted` time from
+ * the active profile. A pre-existing record (or one pulled with no active
+ * profile) has no `dose`, so it falls back to the shell-wide 18 g default.
  */
 export function ratioLabel(record: ShotRecord): string {
-	const yieldG = record.finalWeightG ?? record.peakWeightG;
+	const yieldG = record.finalWeight ?? record.peakWeight;
 	if (yieldG == null || yieldG <= 0) return '1:—';
-	const doseG = record.doseG != null && record.doseG > 0 ? record.doseG : 18;
+	const dose = record.dose != null && record.dose > 0 ? record.dose : 18;
 	// One decimal place — matches `profiles/model.ts` `ratioLabel`, so the same
 	// ratio reads identically on the History and Profiles screens.
-	return `1:${(yieldG / doseG).toFixed(1)}`;
+	return `1:${(yieldG / dose).toFixed(1)}`;
 }
 
 /** A star string `★★★★☆` for a 0–5 rating. */

@@ -81,7 +81,7 @@
 	 */
 	const avgYield = $derived.by(() => {
 		const yields = shots
-			.map((s) => s.finalWeightG ?? s.peakWeightG)
+			.map((s) => s.finalWeight ?? s.peakWeight)
 			.filter((y): y is number => y != null && y > 0);
 		if (yields.length === 0) return null;
 		const mean = yields.reduce((a, y) => a + y, 0) / yields.length;
@@ -90,7 +90,7 @@
 	/** Mean shot duration, seconds. */
 	const avgTime = $derived.by(() => {
 		if (shots.length === 0) return null;
-		const mean = shots.reduce((a, s) => a + s.durationMs, 0) / shots.length / 1000;
+		const mean = shots.reduce((a, s) => a + s.duration, 0) / shots.length / 1000;
 		return Math.round(mean);
 	});
 	/** Mean star rating across rated shots. */
