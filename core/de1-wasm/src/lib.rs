@@ -171,6 +171,14 @@ pub enum MachineRequest {
     Clean,
     /// Advance to the next espresso frame.
     SkipToNext,
+    /// Run the steam-wand purge cycle.
+    SteamRinse,
+    /// Run the group / steam air-purge cycle.
+    AirPurge,
+    /// Enter scheduled-wake idle (firmware v1293+) — the machine is ready and
+    /// holding temperature for a scheduled session. Distinct from regular
+    /// `Idle` so a scheduler-aware shell can request it explicitly.
+    SchedIdle,
 }
 
 impl From<MachineRequest> for MachineState {
@@ -185,6 +193,9 @@ impl From<MachineRequest> for MachineState {
             MachineRequest::Descale => MachineState::Descale,
             MachineRequest::Clean => MachineState::Clean,
             MachineRequest::SkipToNext => MachineState::SkipToNext,
+            MachineRequest::SteamRinse => MachineState::SteamRinse,
+            MachineRequest::AirPurge => MachineState::AirPurge,
+            MachineRequest::SchedIdle => MachineState::SchedIdle,
         }
     }
 }
