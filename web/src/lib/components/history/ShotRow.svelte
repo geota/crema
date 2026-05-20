@@ -4,7 +4,7 @@
 	 * `history-page.jsx`. Time, a tiny sparkline of the stored curve, the
 	 * profile name, the ratio + yield metrics and a star rating.
 	 */
-	import type { ShotRecord } from '$lib/history';
+	import type { StoredShot } from '$lib/history';
 	import { ratioLabel, stars } from '$lib/history';
 	import { getSettingsStore, convertWeight } from '$lib/settings';
 	import QSparkline, { type SparkShape } from '$lib/components/brew/QSparkline.svelte';
@@ -14,8 +14,8 @@
 		active = false,
 		onclick
 	}: {
-		/** The shot record this row renders. */
-		shot: ShotRecord;
+		/** The stored shot this row renders. */
+		shot: StoredShot;
 		/** Whether this row is the selected one. */
 		active?: boolean;
 		/** Click handler — selects the shot. */

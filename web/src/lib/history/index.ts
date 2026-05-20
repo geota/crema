@@ -8,7 +8,7 @@
  */
 
 export {
-	type ShotRecord,
+	type StoredShot,
 	type ShotBean,
 	shotId,
 	ratioLabel,

@@ -159,14 +159,14 @@ export class CremaApp {
 		});
 		// Best-effort: ask the browser for persistent storage (so IndexedDB
 		// captures aren't evicted under disk pressure), and garbage-collect
-		// any captures whose ShotRecord no longer exists. Fire and forget —
+		// any captures whose StoredShot no longer exists. Fire and forget —
 		// neither is on the critical path of app readiness.
 		void this.bootCaptureStore();
 	}
 
 	/**
 	 * One-shot capture-store housekeeping at app construction: request
-	 * persistent storage, then drop captures whose `ShotRecord` has been
+	 * persistent storage, then drop captures whose `StoredShot` has been
 	 * evicted from the history cap (or deleted by the user) since last load.
 	 */
 	private async bootCaptureStore(): Promise<void> {

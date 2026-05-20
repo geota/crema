@@ -76,8 +76,9 @@
 	);
 	/**
 	 * Mean yield weight (grams) across the history. Reported as a weight, not a
-	 * ratio: `ShotRecord` carries no dose, so a `yield ÷ dose` ratio would have
-	 * to assume one fixed dose and mislead for every other.
+	 * ratio: a `yield ÷ dose` ratio would have to assume one fixed dose and
+	 * mislead for every other (pre-`dose` records aside, the dose varies per
+	 * shot).
 	 */
 	const avgYield = $derived.by(() => {
 		const yields = shots

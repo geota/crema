@@ -9,7 +9,7 @@
 	 * and persisted to the `lib/history` store. Load-on-Brew / Save-as-profile /
 	 * Share are stubs (`// TODO`).
 	 */
-	import type { ShotRecord } from '$lib/history';
+	import type { StoredShot } from '$lib/history';
 	import { ratioLabel, shotFilename } from '$lib/history';
 	import { getCaptureStore, captureJsonl } from '$lib/capture';
 	import { daysOffRoast, roastBand } from '$lib/bean';
@@ -21,8 +21,8 @@
 		onNotesChange,
 		onRatingChange
 	}: {
-		/** The selected shot record. */
-		shot: ShotRecord;
+		/** The selected stored shot. */
+		shot: StoredShot;
 		/** Persist edited tasting notes. */
 		onNotesChange: (notes: string) => void;
 		/** Persist an edited star rating. */

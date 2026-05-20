@@ -19,10 +19,10 @@
 
 import type { TelemetrySample } from '$lib/state';
 import { readJson, writeJson } from '$lib/utils/storage';
-import { shotId, type ShotBean, type ShotRecord } from './model';
+import { shotId, type ShotBean, type StoredShot } from './model';
 
 /**
- * localStorage key for the recorded shots (a `ShotRecord[]`, newest first).
+ * localStorage key for the recorded shots (a `StoredShot[]`, newest first).
  *
  * Bumped to `v2` when the in-record field names dropped their unit suffixes
  * (`durationMs` → `duration`, `peakWeightG` → `peakWeight`, etc.); v1 records
@@ -31,7 +31,7 @@ import { shotId, type ShotBean, type ShotRecord } from './model';
 const HISTORY_KEY = 'crema.history.v2';
 
 /**
- * Cap on the stored history. A `ShotRecord` carries its full telemetry series
+ * Cap on the stored history. A `StoredShot` carries its full telemetry series
  * (~1500 samples of four small numbers), so a few hundred shots is already a
  * few MB — past this the oldest records are dropped to stay within the
  * localStorage quota.
@@ -58,15 +58,15 @@ export interface ShotCompletion {
 /** The reactive shot-history library. One instance per app — {@link getHistoryStore}. */
 export class HistoryStore {
 	/** The recorded shots, newest first. Loaded from localStorage. */
-	private shots = $state<ShotRecord[]>(readJson<ShotRecord[]>(HISTORY_KEY, []));
+	private shots = $state<StoredShot[]>(readJson<StoredShot[]>(HISTORY_KEY, []));
 
 	/** The full history, newest first. Reactive: a new record re-renders the list. */
-	get all(): ShotRecord[] {
+	get all(): StoredShot[] {
 		return this.shots;
 	}
 
 	/** Look up one shot by id, or `undefined` if it is not in the history. */
-	get(id: string): ShotRecord | undefined {
+	get(id: string): StoredShot | undefined {
 		return this.shots.find((s) => s.id === id);
 	}
 
@@ -84,7 +84,7 @@ export class HistoryStore {
 	 * newly-created record (so the caller can key per-shot side effects like
 	 * the IndexedDB capture store), or `null` when the shot was dropped.
 	 */
-	record(completion: ShotCompletion): ShotRecord | null {
+	record(completion: ShotCompletion): StoredShot | null {
 		const series = completion.series;
 		if (series.length === 0) return null;
 
@@ -101,7 +101,7 @@ export class HistoryStore {
 			if (s.temp > peakTemp) peakTemp = s.temp;
 		}
 
-		const record: ShotRecord = {
+		const record: StoredShot = {
 			id: shotId(),
 			completedAt: Date.now(),
 			profileName: completion.profileName,
