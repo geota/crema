@@ -64,14 +64,14 @@
 	});
 
 	/** Final (or peak) yield, grams. */
-	const yieldG = $derived(shot.finalWeightG ?? shot.peakWeightG);
+	const yieldG = $derived(shot.finalWeight ?? shot.peakWeight);
 
 	// Unit-aware metric readouts — driven by the Settings unit prefs (D1).
 	const settings = getSettingsStore();
 	/** Yield in the chosen weight unit. */
 	const yieldM = $derived(convertWeight(yieldG, settings.current.weightUnit));
 	/** Peak weight in the chosen weight unit. */
-	const peakWeightM = $derived(convertWeight(shot.peakWeightG, settings.current.weightUnit));
+	const peakWeightM = $derived(convertWeight(shot.peakWeight, settings.current.weightUnit));
 	/** Peak pressure in the chosen pressure unit. */
 	const peakPressureM = $derived(convertPressure(shot.peakPressure, settings.current.pressureUnit));
 	/** Peak temperature in the chosen temperature unit. */
@@ -160,7 +160,7 @@
 			<div class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">{stamp}</div>
 			<div class="hi-detail-title">{shot.profileName ?? 'Untitled shot'}</div>
 			<div class="hi-detail-sub">
-				{(shot.durationMs / 1000).toFixed(0)} s
+				{(shot.duration / 1000).toFixed(0)} s
 				{#if yieldG != null}· {yieldM.value} {yieldM.unit} · {ratioLabel(shot)}{/if}
 			</div>
 			{#if beanLine}
@@ -205,7 +205,7 @@
 	<div class="hi-metrics">
 		<div class="hi-metric">
 			<div class="hi-metric-l">Time</div>
-			<div class="hi-metric-v">{(shot.durationMs / 1000).toFixed(0)}<em>s</em></div>
+			<div class="hi-metric-v">{(shot.duration / 1000).toFixed(0)}<em>s</em></div>
 		</div>
 		<div class="hi-metric">
 			<div class="hi-metric-l">Peak bar</div>

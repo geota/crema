@@ -237,9 +237,9 @@ export class CremaApp {
 					? profiles.get(profiles.activeId)
 					: undefined;
 				const record = getHistoryStore().record({
-					durationMs: event.content.duration,
+					duration: event.content.duration,
 					profileName: snapshot.activeProfileName,
-					doseG: activeProfile?.dose ?? null,
+					dose: activeProfile?.dose ?? null,
 					series: snapshot.shotTelemetry,
 					bean:
 						roaster || type
