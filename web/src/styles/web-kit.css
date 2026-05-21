@@ -219,6 +219,9 @@
 .crema-target-bar > div { height: 100%; background: var(--copper-500); transition: width 500ms var(--ease); }
 
 /* ── Phase indicator card ────────────────────────────────────────── */
+/* Vertical list: one row per profile segment, horizontal labels. Scales
+   to many-phase profiles (8+) where the older horizontal-pill layout
+   stuffed labels under a too-narrow segment. */
 .crema-phase { padding: 14px 18px 12px; }
 .crema-phase-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .crema-phase-name {
@@ -227,37 +230,57 @@
   letter-spacing: -0.01em;
   color: var(--copper-400);
 }
-.crema-phase-track {
-  display: flex; gap: 3px;
+.crema-phase-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   margin-top: 10px;
-  height: 6px;
 }
-.crema-phase-seg {
-  position: relative;
-  background: rgba(var(--tint-rgb), 0.06);
+.crema-phase-row {
+  display: grid;
+  grid-template-columns: 1fr auto 64px;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 8px 5px 10px;
+  border-left: 2px solid transparent;
+  border-radius: 4px;
+  background: rgba(var(--tint-rgb), 0.03);
+  transition: background var(--dur-1) var(--ease), border-color var(--dur-1) var(--ease), opacity var(--dur-1) var(--ease);
+}
+.crema-phase-row.is-active {
+  border-left-color: var(--copper-500);
+  background: rgba(var(--copper-rgb), 0.08);
+}
+.crema-phase-row.is-past { opacity: 0.45; }
+.crema-phase-row-name {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--fg-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.crema-phase-row.is-active .crema-phase-row-name { color: var(--copper-400); font-weight: 500; }
+.crema-phase-row-time {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 10px;
+  color: rgba(var(--tint-rgb), 0.45);
+}
+.crema-phase-row-bar {
+  display: block;
+  height: 3px;
+  background: rgba(var(--tint-rgb), 0.08);
   border-radius: 2px;
   overflow: hidden;
-  flex: 0 0 auto;
 }
-.crema-phase-fill {
+.crema-phase-row-fill {
   display: block;
   height: 100%;
   background: var(--copper-500);
   transition: width 500ms var(--ease, cubic-bezier(.32,.72,0,1));
 }
-.crema-phase-seg.is-past .crema-phase-fill { width: 100% !important; opacity: 0.45; }
-.crema-phase-seg.is-active { background: rgba(var(--copper-rgb), 0.12); }
-.crema-phase-ticks {
-  display: flex; justify-content: space-between;
-  margin-top: 6px;
-  font-family: var(--font-sans);
-  font-size: 9px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  font-weight: 600;
-  color: rgba(var(--tint-rgb), 0.4);
-}
-.crema-phase-tick.is-active { color: var(--copper-400); }
+.crema-phase-row.is-past .crema-phase-row-fill { width: 100% !important; }
 
 /* ── Bean context card ───────────────────────────────────────────── */
 .crema-bean { padding: 14px 18px 14px; }
