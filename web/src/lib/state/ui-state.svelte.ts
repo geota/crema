@@ -882,24 +882,34 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 					`Write refused (firmware update in progress): ${event.content.method}`
 				)
 			};
-		case 'ProfileHeaderRead':
+		case 'ProfileHeaderRead': {
 			// The DE1 reported the shape of whatever profile it currently has
-			// loaded — read once at connect time. Surfaces on the brew page
-			// when Crema doesn't have a matching `activeProfileTitle` (e.g.
-			// the user uploaded outside Crema).
+			// loaded — read once at connect time. Empirically the DE1 returns
+			// an all-zero header (frame_count == 0) when its session buffer
+			// has no profile in it (e.g. after a power-cycle without a prior
+			// upload in the current session). docs/16 §6 flagged this as an
+			// unknown; the real-DE1 behavior is "empty buffer → empty read".
+			// Treat zero frames as "unknown / not loaded" rather than storing
+			// a misleading 0-frame shape.
+			const fc = event.content.frame_count;
+			const note =
+				fc === 0
+					? 'DE1 reports no profile loaded (read returned 0 frames — power-cycle since last upload?)'
+					: `DE1 loaded profile: ${fc} frame${fc === 1 ? '' : 's'}`;
 			return {
 				...snapshot,
-				loadedProfileShape: {
-					frameCount: event.content.frame_count,
-					preinfuseFrameCount: event.content.preinfuse_frame_count,
-					minimumPressure: event.content.minimum_pressure,
-					maximumFlow: event.content.maximum_flow
-				},
-				eventLog: appendLog(
-					snapshot.eventLog,
-					`DE1 loaded profile: ${event.content.frame_count} frame${event.content.frame_count === 1 ? '' : 's'}`
-				)
+				loadedProfileShape:
+					fc === 0
+						? null
+						: {
+								frameCount: fc,
+								preinfuseFrameCount: event.content.preinfuse_frame_count,
+								minimumPressure: event.content.minimum_pressure,
+								maximumFlow: event.content.maximum_flow
+							},
+				eventLog: appendLog(snapshot.eventLog, note)
 			};
+		}
 		case 'ProfileUploadStarted':
 			return {
 				...snapshot,
