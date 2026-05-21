@@ -185,6 +185,16 @@ export interface CremaCore {
 	readCalibration(sensor: CalTarget, factory?: boolean): Promise<CoreOutput>;
 	/** Build a `CoreOutput` whose command tares the connected scale. */
 	tareScale(): Promise<CoreOutput>;
+	/**
+	 * Build a `CoreOutput` whose command starts the connected scale's built-in
+	 * timer. Capability-gated to scales that support software timer commands
+	 * (the Bookoo today); empty for weight-only / timer-less scales.
+	 */
+	startTimer(): Promise<CoreOutput>;
+	/** Build a `CoreOutput` whose command stops the connected scale's built-in timer. */
+	stopTimer(): Promise<CoreOutput>;
+	/** Build a `CoreOutput` whose command resets the connected scale's built-in timer to zero. */
+	resetTimer(): Promise<CoreOutput>;
 	/** Build a `CoreOutput` whose command sets the scale beeper volume. */
 	setScaleVolume(level: number): Promise<CoreOutput>;
 	/** Build a `CoreOutput` whose command sets the scale auto-standby timeout. */
@@ -376,6 +386,15 @@ async function createCore(): Promise<CremaCore> {
 		},
 		async tareScale() {
 			return parseOutput(bridge.tare_scale());
+		},
+		async startTimer() {
+			return parseOutput(bridge.start_timer());
+		},
+		async stopTimer() {
+			return parseOutput(bridge.stop_timer());
+		},
+		async resetTimer() {
+			return parseOutput(bridge.reset_timer());
 		},
 		async setScaleVolume(level) {
 			return parseOutput(bridge.set_scale_volume(level));

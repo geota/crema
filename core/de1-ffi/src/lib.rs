@@ -382,6 +382,27 @@ impl CremaBridge {
         json(self.core().tare_scale())
     }
 
+    /// Build a [`CoreOutput`] (JSON) whose command starts the connected
+    /// scale's built-in timer. Capability-gated to scales that support
+    /// software timer commands (the Bookoo today); empty otherwise.
+    pub fn start_timer(&self) -> String {
+        json(self.core().start_timer())
+    }
+
+    /// Build a [`CoreOutput`] (JSON) whose command stops the connected
+    /// scale's built-in timer. Capability-gated like
+    /// [`start_timer`](Self::start_timer).
+    pub fn stop_timer(&self) -> String {
+        json(self.core().stop_timer())
+    }
+
+    /// Build a [`CoreOutput`] (JSON) whose command resets the connected
+    /// scale's built-in timer to zero. Capability-gated like
+    /// [`start_timer`](Self::start_timer).
+    pub fn reset_timer(&self) -> String {
+        json(self.core().reset_timer())
+    }
+
     /// What the currently-connected scale can do beyond reporting a bare
     /// weight, as a JSON-encoded `ScaleCapabilities` object — or `None` when no
     /// scale is connected.
