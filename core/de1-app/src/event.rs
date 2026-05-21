@@ -243,6 +243,19 @@ pub enum Event {
         /// The externally-measured true value the DE1 was calibrated against.
         measured: f32,
     },
+    /// A write was refused because a firmware upload is locking out other
+    /// writes. v1 carries the lockout guard as a stub
+    /// ([`firmware_locks_writes`](crate::CremaCore::firmware_locks_writes))
+    /// that always returns `false`; v2 will return `true` for the
+    /// `Erase..Verifying` phases of a firmware upload. The event names the
+    /// refused method so the shell can show a transient toast.
+    ///
+    /// See `docs/17-firmware-update-plan.md` §3.4.
+    FirmwareLockoutHit {
+        /// Name of the [`CremaCore`](crate::CremaCore) method that was
+        /// refused — e.g. `"set_refill_threshold"`.
+        method: String,
+    },
     /// An incoming notification could not be decoded.
     DecodeError {
         /// Human-readable description of the failure.

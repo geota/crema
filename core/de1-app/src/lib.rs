@@ -134,6 +134,48 @@ impl CremaCore {
         }
     }
 
+    /// Whether a firmware upload is currently locking out other writes.
+    ///
+    /// v1 always returns `false` — firmware update is a v2 feature
+    /// (`docs/17-firmware-update-plan.md`). The stub is carried now so every
+    /// write method added in v1 can include the one-line lockout guard
+    /// ([`refuse_if_firmware_locked`](Self::refuse_if_firmware_locked)) at the
+    /// time the write lands; retrofitting nine guards at v2 time is more work
+    /// than carrying them piecemeal.
+    ///
+    /// v2 will return `true` for the `Erase..Verifying` phases of a firmware
+    /// upload and `false` everywhere else; read-only methods bypass this check
+    /// because they cannot disturb an in-flight upload.
+    pub fn firmware_locks_writes(&self) -> bool {
+        false
+    }
+
+    /// If [`firmware_locks_writes`](Self::firmware_locks_writes) is `true`,
+    /// build a [`CoreOutput`] carrying one [`Event::FirmwareLockoutHit`] named
+    /// after `method` and return it; otherwise return `None`.
+    ///
+    /// The intended use is:
+    ///
+    /// ```ignore
+    /// pub fn set_refill_threshold(&self, mm: f32) -> CoreOutput {
+    ///     if let Some(out) = self.refuse_if_firmware_locked("set_refill_threshold") {
+    ///         return out;
+    ///     }
+    ///     // …normal write…
+    /// }
+    /// ```
+    fn refuse_if_firmware_locked(&self, method: &str) -> Option<CoreOutput> {
+        if self.firmware_locks_writes() {
+            let mut out = CoreOutput::default();
+            out.events.push(Event::FirmwareLockoutHit {
+                method: method.to_owned(),
+            });
+            Some(out)
+        } else {
+            None
+        }
+    }
+
     /// Identify and connect a scale from its BLE advertised name. Returns the
     /// connected scale's display label (`Scale::label`), or `None` if the name
     /// matched no supported scale.
@@ -207,7 +249,14 @@ impl CremaCore {
     /// Build a [`Command`] that asks the DE1 to enter `state` — e.g.
     /// [`MachineState::Espresso`] to start a shot, [`MachineState::Idle`] to
     /// stop one or wake from sleep.
+    ///
+    /// Refused while a firmware upload is in progress
+    /// (see [`firmware_locks_writes`](Self::firmware_locks_writes)) — emits one
+    /// [`Event::FirmwareLockoutHit`] and no command.
     pub fn request_machine_state(&self, state: MachineState) -> CoreOutput {
+        if let Some(out) = self.refuse_if_firmware_locked("request_machine_state") {
+            return out;
+        }
         let mut out = CoreOutput::default();
         out.commands.push(Command::WriteCharacteristic {
             target: WriteTarget::De1RequestedState,
@@ -279,6 +328,9 @@ impl CremaCore {
     /// wire packet (see [`steam_settings_for_eco`](Self::steam_settings_for_eco))
     /// so it does not stick after the scale disconnects.
     pub fn set_steam_hotwater_settings(&mut self, settings: ShotSettings) -> CoreOutput {
+        if let Some(out) = self.refuse_if_firmware_locked("set_steam_hotwater_settings") {
+            return out;
+        }
         self.steam_hotwater_settings = Some(settings);
         let mut out = CoreOutput::default();
         out.commands.push(Command::WriteCharacteristic {
@@ -297,6 +349,9 @@ impl CremaCore {
     /// [`SteamMonitor`](de1_domain::SteamMonitor). Disabling it while engaged
     /// restores the normal steam target immediately.
     pub fn enable_steam_eco_mode(&mut self, enabled: bool, now_ms: u64) -> CoreOutput {
+        if let Some(out) = self.refuse_if_firmware_locked("enable_steam_eco_mode") {
+            return out;
+        }
         let now = ms_to_duration(now_ms);
         let mut out = CoreOutput::default();
         for event in self.steam.on_eco_enabled(enabled, now) {
@@ -2049,6 +2104,31 @@ mod tests {
         for profile in &parsed {
             assert!(profile.assemble().is_ok());
         }
+    }
+
+    #[test]
+    fn firmware_locks_writes_is_false_in_v1() {
+        // v1 carries the lockout guard as a stub that always returns `false`;
+        // v2 will return `true` for the `Erase..Verifying` upload phases.
+        // This test pins the stub so a future change is a conscious decision,
+        // not an accident — see `docs/17-firmware-update-plan.md` §3.4.
+        let core = CremaCore::new();
+        assert!(!core.firmware_locks_writes());
+    }
+
+    #[test]
+    fn firmware_lockout_event_round_trips_through_json() {
+        // The new event variant has to serialise like the rest of the Event
+        // family — adjacently tagged with the `method` field intact.
+        let output = CoreOutput {
+            events: vec![Event::FirmwareLockoutHit {
+                method: "set_refill_threshold".to_owned(),
+            }],
+            commands: vec![],
+        };
+        let json = output.to_json().unwrap();
+        let parsed: CoreOutput = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, output);
     }
 
     #[test]
