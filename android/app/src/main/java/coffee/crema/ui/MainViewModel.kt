@@ -671,6 +671,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     "Calibration ${event.content.target} " +
                         "(${event.content.command})",
                 )
+            // v1 stub never fires this in practice — see
+            // `docs/17-firmware-update-plan.md` §3.4.
+            is Event.FirmwareLockoutHit ->
+                appendLog(
+                    "Write refused (firmware update in progress): " +
+                        event.content.method,
+                )
         }
     }
 

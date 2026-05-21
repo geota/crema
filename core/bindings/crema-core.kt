@@ -206,6 +206,14 @@ data class EventCalibrationInner (
 	val measured: Float
 )
 
+/// Generated type representing the anonymous struct variant `FirmwareLockoutHit` of the `Event` Rust enum
+@Serializable
+data class EventFirmwareLockoutHitInner (
+	/// Name of the [`CremaCore`](crate::CremaCore) method that was
+	/// refused — e.g. `"set_refill_threshold"`.
+	val method: String
+)
+
 /// Generated type representing the anonymous struct variant `DecodeError` of the `Event` Rust enum
 @Serializable
 data class EventDecodeErrorInner (
@@ -324,6 +332,17 @@ sealed class Event {
 	@Serializable
 	@SerialName("Calibration")
 	data class Calibration(val content: EventCalibrationInner): Event()
+	/// A write was refused because a firmware upload is locking out other
+	/// writes. v1 carries the lockout guard as a stub
+	/// ([`firmware_locks_writes`](crate::CremaCore::firmware_locks_writes))
+	/// that always returns `false`; v2 will return `true` for the
+	/// `Erase..Verifying` phases of a firmware upload. The event names the
+	/// refused method so the shell can show a transient toast.
+	/// 
+	/// See `docs/17-firmware-update-plan.md` §3.4.
+	@Serializable
+	@SerialName("FirmwareLockoutHit")
+	data class FirmwareLockoutHit(val content: EventFirmwareLockoutHitInner): Event()
 	/// An incoming notification could not be decoded.
 	@Serializable
 	@SerialName("DecodeError")

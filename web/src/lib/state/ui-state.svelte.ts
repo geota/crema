@@ -811,6 +811,17 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				)
 			};
 		}
+		case 'FirmwareLockoutHit':
+			// v1 stub never fires this in practice — see
+			// `docs/17-firmware-update-plan.md` §3.4. Logged so the data is
+			// visible when v2 lands, without a dedicated UI surface yet.
+			return {
+				...snapshot,
+				eventLog: appendLog(
+					snapshot.eventLog,
+					`Write refused (firmware update in progress): ${event.content.method}`
+				)
+			};
 		case 'DecodeError':
 			return {
 				...snapshot,
