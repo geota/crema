@@ -325,42 +325,20 @@ export class De1Manager {
 				);
 			}
 
-			// HeaderWrite (cuuid_0F) is a one-shot Read at connect time —
-			// the DE1 returns the 5-byte ShotHeader of whatever profile is
-			// currently loaded. Forwarding it through the core surfaces the
-			// shape on the brew page (active-profile indicator).
+			// HeaderWrite (cuuid_0F) Read at connect time was a speculative
+			// active-profile indicator. Removed 2026-05-21 after a Bluetooth
+			// HCI snoop of a legacy DE1-app session confirmed the legacy app
+			// never Reads cuuid_0F — the only operations on that handle are
+			// 5-byte Write Requests during a profile upload. The DE1's Read
+			// side returned all-zero bytes in our testing, which matches
+			// "the firmware does not expose the loaded-profile buffer on
+			// Read." See docs/16 §6.1 for the full write-up.
 			//
-			// UNVERIFIED — hypothesis recorded 2026-05-21: empirically the
-			// DE1 reports `frame_count == 0` here on the first connect after
-			// a power-cycle, suggesting the firmware does not persist the
-			// loaded-profile buffer across reboots (or doesn't expose it on
-			// Read). The legacy app re-uploads the active profile on every
-			// connect via `save_settings_to_de1`, which would mask this. A
-			// Bluetooth HCI snoop of a legacy-app connect will confirm
-			// whether the read returns useful bytes or not; until then,
-			// `loadedProfileShape` falls back to `null` for the 0-frame case
-			// (see `ui-state.svelte.ts:ProfileHeaderRead`). docs/16 §6 has
-			// the longer write-up.
-			step = 'HeaderWrite characteristic A00F';
-			try {
-				const headerBytes = await device.readCharacteristic(
-					De1Uuids.SERVICE,
-					De1Uuids.HEADER_WRITE
-				);
-				const now = performance.now();
-				getCaptureRecorder().record('De1ProfileHeader', headerBytes, now);
-				const headerOut = await this.core.onNotification(
-					'De1ProfileHeader',
-					headerBytes,
-					now
-				);
-				this.callbacks.onCoreOutput(headerOut);
-				this.callbacks.onStatus('DE1 loaded-profile header read ✓');
-			} catch (headerError) {
-				this.callbacks.onStatus(
-					`DE1 profile header read skipped: ${describeError(headerError)}`
-				);
-			}
+			// The active-profile identity comes from tracking our own
+			// successful uploads (`Event::ProfileUploadCompleted` → set
+			// `ui.activeProfileTitle`) — same model the legacy uses
+			// (`save_settings_to_de1` re-uploads on every connect; the
+			// "active profile" name is shell-only).
 
 			this.callbacks.onState('ready');
 			this.callbacks.onStatus(

@@ -910,45 +910,80 @@ DE1 before implementing §2"; the capture/replay infrastructure is
 already in place, so the lift is small (~30 LOC in three files plus a
 hands-on profile-switch on real hardware).
 
-### 6.1 Connect-time HeaderWrite Read — unverified hypothesis (2026-05-21)
+### 6.1 Connect-time HeaderWrite Read — VERIFIED, dropped (2026-05-21)
 
-Empirically the DE1 returned an **all-zero** `ShotHeader` on a first
-connect after a power-cycle (Crema's BLE log: `DE1 loaded-profile
-header: 0 frames`). This is the read-side path Crema added in commit
-`d14cfe3` to surface the active profile's shape on the brew page.
+Captured a Bluetooth HCI snoop of a legacy DE1-app session (P25
+Android device, multiple profile switches). Verdict: **outcome 1 below.
+Crema's connect-time HeaderWrite Read has been removed.**
 
-**Hypothesis:** the firmware does not persist the loaded-profile
-buffer across reboots — or it does not expose the current buffer on
-the Read side of `cuuid_0F` at all — so a Read on a freshly-paired
-session returns zero bytes regardless of whether a profile has ever
-been uploaded. The legacy DE1-app would mask this by re-uploading the
-"active" profile on every connect via `save_settings_to_de1`
-(`de1_comms.tcl:1539`), so a legacy user never has to question whether
-the buffer survived.
+**Snoop findings:**
 
-**Verification plan:** capture a Bluetooth HCI snoop (Android
-Developer Options → "Enable Bluetooth HCI snoop log") during a legacy
-DE1-app connect, then inspect the snoop for any Read of `cuuid_0F`
-and the bytes the DE1 returns. Three outcomes possible:
+1. The legacy app **never Reads `cuuid_0F`** (handle 0x0038 in the
+   captured session). The only ATT operations against that handle are
+   5-byte Write Requests during profile uploads — no `0x0a` (Read
+   Request), no `0x0b` (Read Response) traffic at all.
+2. Our standalone Read returned all-zero bytes (`frame_count == 0`),
+   consistent with "the firmware does not expose the buffer on Read"
+   — either it doesn't persist the loaded profile across reboots, or
+   the GATT descriptor's R-flag is a stale capability bit and the
+   read just returns garbage. We didn't need to disambiguate.
+3. The legacy app re-uploads on every profile switch
+   (`save_settings_to_de1` → `de1_send_shot_frames`). I observed five
+   complete upload sequences in the captured session, all to the same
+   handles in the same order documented in §2. The "active profile"
+   identity is shell-only — the DE1 stores no profile name.
 
-1. The legacy app never Reads `cuuid_0F` (it only Writes the header
-   during upload). Then Crema's Read is exercising an undocumented
-   firmware code path; we should drop the Read entirely and rely on
-   tracking `ProfileUploadCompleted` for the active-profile identity.
-2. The legacy app Reads `cuuid_0F` and gets useful bytes when (and
-   only when) a profile has been written in the current session.
-   Then Crema's Read is correct but needs the equivalent
-   re-upload-on-connect dance to ever return non-zero.
-3. The legacy app Reads `cuuid_0F` and gets useful bytes even on a
-   fresh connect after a power-cycle. Then the DE1 firmware *does*
-   persist the buffer and we have a different bug — likely in how
-   we're driving the BLE Read or in `ShotHeader::decode`.
+**Action taken:** removed the connect-time `HEADER_WRITE` Read in
+`web/src/lib/ble/de1.ts`. The brew page's active-profile indicator
+now tracks `ui.activeProfileTitle`, which is set by the
+`Event::ProfileUploadCompleted` handler — same model the legacy uses.
+`Source::De1ProfileHeader` and `WriteTarget::De1ProfileHeader` stay
+in the core; the latter is still used to Write the header during
+upload, and the former is harmless dead code that the BLE shell no
+longer routes anything into. (Both can stay — `#[non_exhaustive]`
+makes them additive-only.)
 
-Until the snoop confirms one of these, the UI handler at
-`web/src/lib/state/ui-state.svelte.ts:ProfileHeaderRead` falls back to
-`loadedProfileShape: null` for the zero-frame case rather than
-storing a misleading 0-frame shape, and the log message explains
-what the empty read means.
+### 6.2 FrameWrite ack — VERIFIED, requires shell-synthesized acks (2026-05-21)
+
+Same snoop revealed a separate, larger finding that invalidates the
+per-frame ack assumption from §6 of this plan:
+
+**The DE1 does NOT emit Handle Value Notifications on `cuuid_10`.**
+The snoop shows zero `0x1b` (HVN) opcodes on handle 0x003b — every
+write gets only an empty `0x13` (ATT Write Response). The legacy
+app's "ack handler" at `bluetooth.tcl:2824-2838` runs because the
+Tcl BLE wrapper echoes the *written value* into the success callback
+for debug-log purposes — not because the DE1 sent anything back.
+
+**Implication for Crema:** there is no `Source::De1FrameAck` traffic
+on the wire to feed the orchestrator's state machine. The core's
+expected-ack matcher would never advance, every upload would
+`AckTimeout` after 5 seconds, and the user would see
+`ProfileUploadFailed { reason: AckTimeout }` forever.
+
+**Workaround that preserves the core's design:** the shell
+synthesises a `De1FrameAck` from the data it just successfully wrote.
+After each `await device.write(SERVICE, FRAME_WRITE, data)` resolves
+(the `writeValueWithResponse` Promise) the shell calls
+`core.onNotification('De1FrameAck', data, now)`. Byte 0
+(`FrameToWrite`) is all the core's matcher reads, so feeding it the
+written payload moves the state machine forward exactly as if the
+DE1 had echoed.
+
+This is implemented in `web/src/lib/state/app.svelte.ts:executeCommand`
+under the `WriteCharacteristic` branch — only for
+`De1ProfileFrame` writes (`De1ProfileHeader` is not acked by the
+orchestrator).
+
+**Open question that stayed open:** does the DE1 ever NACK a frame
+(e.g. when it's busy / shot-in-progress)? The snoop only captured
+successful uploads. If the firmware rejects a frame by simply NOT
+sending the ATT Write Response, the underlying GATT write will
+timeout at the L2CAP level (≈30 s default), which is well past our
+5-s `PROFILE_UPLOAD_ACK_TIMEOUT`. The write would throw in the BLE
+shell, the synthetic De1FrameAck would not be emitted, and the
+orchestrator would surface `AckTimeout { awaiting: <frame> }` as
+designed. Good failure path; just not observed in the capture.
 
 ---
 
