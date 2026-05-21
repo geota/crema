@@ -302,8 +302,11 @@ export class CremaApp {
 	 * Run one core `Command`.
 	 *
 	 * `WriteScale` → write the bytes to the scale (manual tare, auto-tare, and
-	 * every config write all surface here). `WriteCharacteristic` → a no-op:
-	 * the DE1 is read-only in the shell, exactly as in the Android shell.
+	 * every config write all surface here). `WriteCharacteristic` → route to
+	 * the DE1 manager, which maps the `WriteTarget` to its GATT UUID and
+	 * dispatches the bytes. The write-side wiring per target lives in
+	 * `web/src/lib/ble/de1.ts:uuidForWriteTarget`; targets with no UUID
+	 * mapping are dropped with a status log.
 	 */
 	private async executeCommand(command: Command): Promise<void> {
 		switch (command.type) {
@@ -316,10 +319,13 @@ export class CremaApp {
 				await this.scale.writeScale(data);
 				break;
 			}
-			case 'WriteCharacteristic':
-				// DE1 machine control is not driven by the shell — no-op,
-				// mirroring the Android shell's command sink.
+			case 'WriteCharacteristic': {
+				const data = new Uint8Array(command.content.data);
+				const hex = [...data].map((b) => b.toString(16).padStart(2, '0')).join('');
+				this.state.log(`→ DE1 write ${command.content.target} ${hex}`);
+				await this.de1.writeCharacteristic(command.content.target, data);
 				break;
+			}
 		}
 	}
 

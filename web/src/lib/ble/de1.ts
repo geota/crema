@@ -16,19 +16,23 @@
  * strict arrival order (the web equivalent of the Android manager merging
  * characteristic flows).
  *
- * The DE1 is read-only in the shell — no write path.
+ * Writes are routed via {@link De1Manager.writeCharacteristic}, which maps a
+ * core `WriteTarget` to its GATT UUID and dispatches the bytes — the
+ * orchestrator (`CremaApp.executeCommand`) calls this for every
+ * `Command::WriteCharacteristic` the core emits.
  */
 
 import type { CremaCore, NotificationSource } from '$lib/core';
+import { MmrRegister, WriteTarget } from '$lib/core/crema-core';
 import { getCaptureRecorder } from '$lib/capture';
 import { describeError } from '$lib/utils/error';
 import { De1Uuids } from './de1-uuids';
 import { BleDevice, requestDevice, type ConnState } from './transport';
 
-/** The three `NotificationSource`s the DE1's characteristics route to. */
+/** The `NotificationSource`s the DE1's characteristics route to. */
 type De1NotificationSource = Extract<
 	NotificationSource,
-	'De1State' | 'De1ShotSample' | 'De1WaterLevels'
+	'De1State' | 'De1ShotSample' | 'De1WaterLevels' | 'De1MmrRead'
 >;
 
 /** Coarse state of the DE1 connection — mirrors the Android manager's enum. */
@@ -255,7 +259,15 @@ export class De1Manager {
 			await device.startNotifications(De1Uuids.SERVICE, De1Uuids.WATER_LEVELS);
 			this.callbacks.onStatus('WaterLevels A011 subscribed ✓');
 
-			// All four GATT objects resolved — the device is verified as a DE1.
+			// MMR_READ (cuuid_05) is the request/reply channel for memory-mapped
+			// register reads. Subscribe to its notify side here so the DE1's
+			// reply to a `read_mmr` request lands in the same notification sink
+			// that StateInfo/ShotSample/WaterLevels use.
+			step = 'MMR_READ characteristic A005';
+			await device.startNotifications(De1Uuids.SERVICE, De1Uuids.MMR_READ);
+			this.callbacks.onStatus('MMR_READ A005 subscribed ✓');
+
+			// All five GATT objects resolved — the device is verified as a DE1.
 			this.patchDiagnostics({ gattVerified: true });
 
 			// The Version characteristic (A001) is a one-shot Read, not a
@@ -285,6 +297,26 @@ export class De1Manager {
 					`DE1 version read skipped: ${describeError(versionError)}`
 				);
 			}
+
+			// Trigger an MMR read of register 0x800010 (FirmwareVersion) — the
+			// canonical "v1352" build number the firmware-update check compares
+			// against (see `firmware_info::compare`). The core builds the
+			// 20-byte read-request packet; routing it through `onCoreOutput`
+			// dispatches `executeCommand → writeCharacteristic`, and the DE1's
+			// reply lands on the MMR_READ notify subscription configured above.
+			// Best-effort: a write failure here is non-fatal, the user can
+			// still trigger a manual check later.
+			step = 'MMR read FirmwareVersion';
+			try {
+				const mmrOut = await this.core.readMmr(MmrRegister.FirmwareVersion);
+				this.callbacks.onCoreOutput(mmrOut);
+				this.callbacks.onStatus('DE1 firmware-build MMR read dispatched ✓');
+			} catch (mmrError) {
+				this.callbacks.onStatus(
+					`DE1 firmware-build MMR read skipped: ${describeError(mmrError)}`
+				);
+			}
+
 			this.callbacks.onState('ready');
 			this.callbacks.onStatus(
 				'DE1 GATT verified ✓ — A000 + StateInfo/ShotSample/WaterLevels resolved'
@@ -306,6 +338,34 @@ export class De1Manager {
 		}
 	}
 
+	/**
+	 * Write `data` to the DE1 characteristic identified by `target`.
+	 *
+	 * The orchestrator calls this for every `Command::WriteCharacteristic`
+	 * the core emits. Unrecognised / unmapped targets are dropped with a
+	 * status log — the caller is not penalised, but the failure is visible
+	 * in diagnostics so a forgotten UUID mapping does not silently disappear.
+	 */
+	async writeCharacteristic(target: WriteTarget, data: Uint8Array): Promise<void> {
+		const uuid = uuidForWriteTarget(target);
+		if (uuid === null) {
+			this.callbacks.onStatus(`DE1 write skipped: no UUID for target ${target}`);
+			return;
+		}
+		const device = this.device;
+		if (device === null) {
+			this.callbacks.onStatus(`DE1 write skipped: not connected (${target})`);
+			return;
+		}
+		try {
+			await device.write(De1Uuids.SERVICE, uuid, data);
+		} catch (error) {
+			this.callbacks.onStatus(
+				`DE1 write to ${target} failed: ${describeError(error)}`
+			);
+		}
+	}
+
 	/** Disconnect the DE1 and discard the core's session state. */
 	async disconnect(): Promise<void> {
 		this.device?.disconnect();
@@ -321,6 +381,30 @@ export class De1Manager {
 }
 
 /**
+ * Map a core `WriteTarget` to the DE1 characteristic UUID its bytes get
+ * written to. Returns `null` for a target Crema does not yet wire on the BLE
+ * side — the orchestrator surfaces this as a "no UUID for target" log entry.
+ */
+function uuidForWriteTarget(target: WriteTarget): string | null {
+	switch (target) {
+		case WriteTarget.De1RequestedState:
+			return De1Uuids.REQUESTED_STATE;
+		case WriteTarget.De1ShotSettings:
+			return De1Uuids.SHOT_SETTINGS;
+		case WriteTarget.De1MmrRequest:
+			return De1Uuids.MMR_READ;
+		case WriteTarget.De1MmrWrite:
+			return De1Uuids.MMR_WRITE;
+		case WriteTarget.De1Calibration:
+			return De1Uuids.CALIBRATION;
+		case WriteTarget.De1WaterLevels:
+			return De1Uuids.WATER_LEVELS;
+		default:
+			return null;
+	}
+}
+
+/**
  * Map a DE1 characteristic UUID to its core `NotificationSource`. Returns
  * `null` for an unmapped characteristic, which is dropped.
  */
@@ -332,6 +416,8 @@ function sourceFor(characteristicUuid: string): De1NotificationSource | null {
 			return 'De1ShotSample';
 		case De1Uuids.WATER_LEVELS:
 			return 'De1WaterLevels';
+		case De1Uuids.MMR_READ:
+			return 'De1MmrRead';
 		default:
 			return null;
 	}
@@ -343,5 +429,5 @@ function sourceFor(characteristicUuid: string): De1NotificationSource | null {
  * disconnect and the field initialiser cannot drift apart.
  */
 function freshCounts(): Record<De1NotificationSource, number> {
-	return { De1State: 0, De1ShotSample: 0, De1WaterLevels: 0 };
+	return { De1State: 0, De1ShotSample: 0, De1WaterLevels: 0, De1MmrRead: 0 };
 }
