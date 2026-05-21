@@ -477,10 +477,16 @@ export class CremaApp {
 			await profiles.ensureLoaded();
 			const id = profiles.activeId;
 			if (id === null) {
+				this.state.log(
+					'No active profile to auto-upload — open Profiles and click Load on Brew once; subsequent connects will auto-push it.'
+				);
 				return;
 			}
 			const profile = profiles.get(id);
 			if (!profile) {
+				this.state.log(
+					`Active profile id "${id}" not found in store — auto-upload skipped.`
+				);
 				return;
 			}
 			this.state.log(`Auto-upload on connect: ${profile.name}`);
