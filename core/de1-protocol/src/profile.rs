@@ -31,6 +31,28 @@ pub fn is_extension_frame(data: &[u8]) -> bool {
     data.first().is_some_and(|&b| b >= EXTENSION_FRAME_OFFSET)
 }
 
+/// The `FrameToWrite` byte from a `FrameWrite` echo / write-response, used to
+/// match acks during a profile upload (`cuuid_10`).
+///
+/// The DE1 echoes each frame write back as a notification carrying the same
+/// 8-byte payload; the first byte (`FrameToWrite`) identifies which frame was
+/// acknowledged: `0..32` for a normal-frame ack or for the tail ack
+/// (`FrameToWrite == frame_count`); `≥ 32` for an extension-frame ack
+/// (`index = byte - 32`). Returns `None` for an empty slice; trailing bytes
+/// are ignored.
+///
+/// See `docs/16-profile-upload-plan.md` §6 for the legacy reference (the Tcl
+/// `parse_binary_shotframe` echo path).
+pub fn ack_frame_byte(data: &[u8]) -> Option<u8> {
+    data.first().copied()
+}
+
+/// The numeric offset added to an [`ExtensionFrame`]'s step index to produce
+/// its `FrameToWrite` byte on the wire. Exposed so the orchestrator's ack
+/// matcher can build the expected-ack sequence without re-deriving the magic
+/// constant.
+pub const EXTENSION_FRAME_INDEX_OFFSET: u8 = EXTENSION_FRAME_OFFSET;
+
 /// The per-frame flag bits (`T_E_FrameFlags`). See protocol §5.4.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct FrameFlags {
@@ -413,6 +435,119 @@ mod tests {
                 max_total_volume_ml: 200,
             };
             assert_eq!(ShotTail::decode(&tail.encode()), Ok(tail));
+        }
+
+        #[test]
+        fn encodes_with_max_frame_count() {
+            // 32 is the protocol's maximum step count; the tail's
+            // `FrameToWrite` equals that count and must still encode as a
+            // tail (i.e. < 32 + 32 is not relevant; the dispatcher in
+            // legacy `parse_binary_shotframe` treats `FrameToWrite < 32`
+            // as a normal frame, so the tail at exactly 32 would be
+            // indistinguishable from an extension. Confirm the byte is
+            // emitted as `32` regardless.)
+            let tail = ShotTail {
+                frame_count: 32,
+                max_total_volume_ml: 0,
+            };
+            assert_eq!(tail.encode()[0], 32);
+        }
+    }
+
+    mod ack_frame_byte_fn {
+        use super::*;
+
+        #[test]
+        fn returns_none_for_empty() {
+            assert_eq!(ack_frame_byte(&[]), None);
+        }
+
+        #[test]
+        fn returns_first_byte_for_one_byte_slice() {
+            assert_eq!(ack_frame_byte(&[7]), Some(7));
+        }
+
+        #[test]
+        fn returns_first_byte_of_an_eight_byte_payload() {
+            let payload = [33, 0, 0, 0, 0, 0, 0, 0];
+            assert_eq!(ack_frame_byte(&payload), Some(33));
+        }
+
+        #[test]
+        fn extension_frame_index_offset_matches_internal_const() {
+            // The public constant is what the orchestrator imports; this
+            // pins it to the same value `is_extension_frame` /
+            // `ExtensionFrame::encode` use internally.
+            assert_eq!(EXTENSION_FRAME_INDEX_OFFSET, 32);
+        }
+    }
+
+    mod frame_flags_per_bit {
+        use super::*;
+
+        fn flags(bit_setter: impl FnOnce(&mut FrameFlags)) -> FrameFlags {
+            let mut f = FrameFlags::default();
+            bit_setter(&mut f);
+            f
+        }
+
+        #[test]
+        fn ctrl_f_is_bit_0() {
+            assert_eq!(flags(|f| f.flow_priority = true).to_byte(), 0x01);
+        }
+
+        #[test]
+        fn do_compare_is_bit_1() {
+            assert_eq!(flags(|f| f.do_compare = true).to_byte(), 0x02);
+        }
+
+        #[test]
+        fn compare_greater_is_bit_2() {
+            assert_eq!(flags(|f| f.compare_greater = true).to_byte(), 0x04);
+        }
+
+        #[test]
+        fn compare_flow_is_bit_3() {
+            assert_eq!(flags(|f| f.compare_flow = true).to_byte(), 0x08);
+        }
+
+        #[test]
+        fn target_mix_temp_is_bit_4() {
+            assert_eq!(flags(|f| f.target_mix_temp = true).to_byte(), 0x10);
+        }
+
+        #[test]
+        fn interpolate_is_bit_5() {
+            assert_eq!(flags(|f| f.interpolate = true).to_byte(), 0x20);
+        }
+
+        #[test]
+        fn ignore_limit_is_bit_6() {
+            assert_eq!(flags(|f| f.ignore_limit = true).to_byte(), 0x40);
+        }
+    }
+
+    mod extension_frame_boundaries {
+        use super::*;
+
+        #[test]
+        fn index_zero_encodes_as_byte_32() {
+            let ext = ExtensionFrame {
+                index: 0,
+                max_flow_or_pressure: 8.0,
+                max_fop_range: 0.5,
+            };
+            assert_eq!(ext.encode()[0], 32);
+        }
+
+        #[test]
+        fn index_31_encodes_as_byte_63() {
+            let ext = ExtensionFrame {
+                index: 31,
+                max_flow_or_pressure: 8.0,
+                max_fop_range: 0.5,
+            };
+            assert_eq!(ext.encode()[0], 63);
         }
     }
 
