@@ -77,17 +77,24 @@ pub enum FirmwareUpdateStatus {
 /// Compare an installed [`Version`] against [`LATEST_KNOWN_FIRMWARE`].
 ///
 /// Returns [`FirmwareUpdateStatus::Unknown`] when `installed` is `None`.
-/// Otherwise compares the CPU-block `(release, commits)` lexicographically:
-/// release first, then commits. Release is decoded from the wire's F8_1_7
-/// fixed-point format, so equal release values from one DE1 round-trip
-/// bit-exactly through `f32`.
+/// Otherwise compares the **BLE block**'s `(release, commits)`
+/// lexicographically: release first, then commits. The BLE block is the
+/// primary firmware identity per the legacy `de1_version_string`
+/// (`vars.tcl:3867`); the FW/CPU block is often all-zero on real DE1s.
+///
+/// **Known limitation**: Decent's user-facing firmware build number (e.g.
+/// "v1352") comes from MMR register `0x800010`, not from the Version
+/// characteristic. Until the MMR-read flow is wired end-to-end on the BLE
+/// side (`web/src/lib/ble/de1.ts` does not yet write to / subscribe on the
+/// MMR channels), this comparison is approximate — it confirms the BLE
+/// firmware tree version, not the headline build number.
 pub fn compare(installed: Option<&Version>) -> FirmwareUpdateStatus {
     let Some(v) = installed else {
         return FirmwareUpdateStatus::Unknown;
     };
     let installed = KnownFirmware {
-        release: v.fw.release,
-        commits: v.fw.commits,
+        release: v.ble.release,
+        commits: v.ble.commits,
     };
     let latest = LATEST_KNOWN_FIRMWARE;
     match installed.release.partial_cmp(&latest.release) {
@@ -119,17 +126,23 @@ mod tests {
     use de1_protocol::VersionBlock;
 
     fn version(release: f32, commits: u16) -> Version {
-        let block = VersionBlock {
+        // Put the values in the BLE block (the primary identity); leave the
+        // FW block zeroed to match a typical real-DE1 reply.
+        let ble = VersionBlock {
             api_version: 4,
             release,
             commits,
             changes: 0,
+            sha: 0xDEAD_BEEF,
+        };
+        let fw = VersionBlock {
+            api_version: 0,
+            release: 0.0,
+            commits: 0,
+            changes: 0,
             sha: 0,
         };
-        Version {
-            ble: block,
-            fw: block,
-        }
+        Version { ble, fw }
     }
 
     #[test]
