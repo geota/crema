@@ -27,7 +27,7 @@ import { De1Manager, EMPTY_DE1_DIAGNOSTICS, ScaleManager } from '$lib/ble';
 import { getBeanStore } from '$lib/bean';
 import { getHistoryStore } from '$lib/history';
 import { getCaptureRecorder, getCaptureStore } from '$lib/capture';
-import { getProfileStore } from '$lib/profiles';
+import { getProfileStore, toCoreProfile } from '$lib/profiles';
 import { getMaintenanceStore } from '$lib/maintenance';
 import { parseCaptureFile, replayEvents, ReplayAbortedError } from '$lib/replay';
 import { describeError } from '$lib/utils/error';
@@ -146,7 +146,19 @@ export class CremaApp {
 				this.state.patch({ status: line });
 				this.state.log(line);
 			},
-			onState: (de1State) => this.state.patch({ de1State }),
+			onState: (de1State) => {
+				this.state.patch({ de1State });
+				// Auto re-upload the active profile on every DE1 connect.
+				// Mirrors the legacy DE1-app's `save_settings_to_de1` →
+				// `de1_send_shot_frames` chain, which the 2026-05-21 HCI
+				// snoop confirmed fires ~80 ms after the connect-time
+				// subscriptions complete (docs/16 §6.2). Without this the
+				// DE1 wakes up with no profile loaded and the user has to
+				// remember to click Load on Brew every session.
+				if (de1State === 'ready') {
+					this.autoUploadActiveProfileOnReady();
+				}
+			},
 			// The connection-diagnostics snapshot — fold it straight in.
 			onDiagnostics: (de1Diagnostics) => this.state.patch({ de1Diagnostics })
 		});
@@ -445,6 +457,35 @@ export class CremaApp {
 	/** Cancel an in-progress profile upload (emits ProfileUploadFailed{Aborted}). */
 	async cancelProfileUpload(): Promise<void> {
 		this.applyCoreOutput(await this.core.cancelProfileUpload());
+	}
+
+	/**
+	 * Re-upload the active profile right after the DE1 connection enters
+	 * `ready`. Fire-and-forget — a failure here is logged via the normal
+	 * `applyCoreOutput` event stream and does not block any other connect
+	 * step.
+	 *
+	 * No active profile → no upload (the DE1 stays empty until the user
+	 * clicks Load on Brew). Profile store still loading → wait for it,
+	 * then upload (the `ensureLoaded` call resolves once the built-in
+	 * library has been deserialised; without this guard a fresh launch
+	 * would skip the auto-upload because `activeId` is briefly `null`).
+	 */
+	private autoUploadActiveProfileOnReady(): void {
+		void (async () => {
+			const profiles = getProfileStore();
+			await profiles.ensureLoaded();
+			const id = profiles.activeId;
+			if (id === null) {
+				return;
+			}
+			const profile = profiles.get(id);
+			if (!profile) {
+				return;
+			}
+			this.state.log(`Auto-upload on connect: ${profile.name}`);
+			await this.uploadProfile(toCoreProfile(profile));
+		})();
 	}
 
 	/** Tare the connected scale. Routes the core's `WriteScale` to the scale. */
