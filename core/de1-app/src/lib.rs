@@ -28,7 +28,7 @@ use de1_protocol::{
     CalTarget, Calibration, MachineState, MmrReadReply, MmrRegister, ShotSample, ShotSettings,
     StateInfo, Version, WaterLevels, mmr, requested_state,
 };
-use de1_scale::{Scale, ScaleCapabilities, ScaleUuids, bookoo};
+use de1_scale::{Scale, ScaleCapabilities, ScaleUuids, TimerCommand, bookoo};
 
 /// Scale sensor lag assumed when no scale is connected — a representative
 /// value across the supported scales (380 ms, the legacy default).
@@ -675,6 +675,66 @@ impl CremaCore {
     fn push_tare_command(&mut self, out: &mut CoreOutput) {
         if let Some(scale) = &mut self.scale
             && let Some(data) = scale.tare()
+        {
+            out.commands.push(Command::WriteScale { data });
+        }
+    }
+
+    /// Build a [`Command`] that starts the connected scale's built-in timer.
+    ///
+    /// Capability-gated: emitted only when the connected scale supports
+    /// software timer commands (the Bookoo today; weight-only scales and
+    /// timer-less scales like the Acaia get an empty [`CoreOutput`]).
+    /// Refused while a firmware upload is in progress.
+    pub fn start_timer(&self) -> CoreOutput {
+        if let Some(out) = self.refuse_if_firmware_locked("start_timer") {
+            return out;
+        }
+        let mut out = CoreOutput::default();
+        Self::push_timer_command(&self.scale, TimerCommand::Start, &mut out);
+        out
+    }
+
+    /// Build a [`Command`] that stops the connected scale's built-in timer.
+    ///
+    /// Capability-gated like [`start_timer`](Self::start_timer); refused
+    /// while a firmware upload is in progress.
+    pub fn stop_timer(&self) -> CoreOutput {
+        if let Some(out) = self.refuse_if_firmware_locked("stop_timer") {
+            return out;
+        }
+        let mut out = CoreOutput::default();
+        Self::push_timer_command(&self.scale, TimerCommand::Stop, &mut out);
+        out
+    }
+
+    /// Build a [`Command`] that resets the connected scale's built-in timer
+    /// to zero.
+    ///
+    /// Capability-gated like [`start_timer`](Self::start_timer); refused
+    /// while a firmware upload is in progress.
+    pub fn reset_timer(&self) -> CoreOutput {
+        if let Some(out) = self.refuse_if_firmware_locked("reset_timer") {
+            return out;
+        }
+        let mut out = CoreOutput::default();
+        Self::push_timer_command(&self.scale, TimerCommand::Reset, &mut out);
+        out
+    }
+
+    /// Internal: append a scale-timer [`Command`] to `out` if a scale is
+    /// connected and supports the given timer command.
+    ///
+    /// Shared by the three public timer methods and the auto-policy in
+    /// [`map_shot_event`](Self::map_shot_event). Returns silently when the
+    /// scale is `None` or its codec returns `None` for the command.
+    fn push_timer_command(
+        scale: &Option<Scale>,
+        command: TimerCommand,
+        out: &mut CoreOutput,
+    ) {
+        if let Some(scale) = scale
+            && let Some(data) = scale.timer(command)
         {
             out.commands.push(Command::WriteScale { data });
         }
@@ -2429,6 +2489,47 @@ mod tests {
         for profile in &parsed {
             assert!(profile.assemble().is_ok());
         }
+    }
+
+    #[test]
+    fn start_timer_emits_a_write_only_when_a_capable_scale_is_connected() {
+        let mut core = CremaCore::new();
+        // No scale: empty.
+        assert!(core.start_timer().commands.is_empty());
+        // Bookoo: a WriteScale command.
+        core.connect_scale("BOOKOO_SC");
+        let out = core.start_timer();
+        let Some(Command::WriteScale { data }) = out.commands.first() else {
+            panic!("expected a WriteScale command");
+        };
+        assert_eq!(data.as_slice(), bookoo::TIMER_START.as_slice());
+    }
+
+    #[test]
+    fn stop_and_reset_timer_emit_their_writes_for_a_capable_scale() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC");
+        let stop = core.stop_timer();
+        let reset = core.reset_timer();
+        let Some(Command::WriteScale { data: stop_data }) = stop.commands.first() else {
+            panic!("expected stop WriteScale");
+        };
+        let Some(Command::WriteScale { data: reset_data }) = reset.commands.first() else {
+            panic!("expected reset WriteScale");
+        };
+        assert_eq!(stop_data.as_slice(), bookoo::TIMER_STOP.as_slice());
+        assert_eq!(reset_data.as_slice(), bookoo::TIMER_RESET.as_slice());
+    }
+
+    #[test]
+    fn timer_methods_emit_nothing_for_a_timer_less_scale() {
+        let mut core = CremaCore::new();
+        // The Acaia is in `Scale::supports_timer`'s exclusion list — no
+        // software timer commands; capability-gated to nothing.
+        core.connect_scale("ACAIA-X");
+        assert!(core.start_timer().commands.is_empty());
+        assert!(core.stop_timer().commands.is_empty());
+        assert!(core.reset_timer().commands.is_empty());
     }
 
     #[test]
