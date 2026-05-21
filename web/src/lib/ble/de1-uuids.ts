@@ -9,7 +9,7 @@
  * Web Bluetooth wants **lowercase** 128-bit UUID strings (or 16-bit numbers);
  * these are pre-expanded to the lowercase 128-bit form. The shell subscribes
  * to the notify characteristics — `StateInfo`, `ShotSample`, `WaterLevels`,
- * and `MMR_READ` (for MMR read replies) — and writes to the matching
+ * and `ReadFromMMR` (for MMR read replies) — and writes to the matching
  * write/read-request characteristics for memory-mapped register access.
  */
 
