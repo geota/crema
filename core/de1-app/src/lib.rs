@@ -360,6 +360,35 @@ impl CremaCore {
         out
     }
 
+    /// Build a [`Command`] that writes the DE1's water-tank refill threshold
+    /// (`WaterLevels` / `cuuid_11`).
+    ///
+    /// `threshold_mm` is the level at or below which the DE1 should ask for a
+    /// refill. The current level on the wire is hard-zeroed to match the
+    /// legacy `set_tank_temperature_threshold` write — `WaterLevels` packets
+    /// are read-only as far as the current level goes, so a write of `0` is
+    /// the documented way to set only the threshold.
+    ///
+    /// Refused while a firmware upload is in progress
+    /// (see [`firmware_locks_writes`](Self::firmware_locks_writes)) — emits
+    /// one [`Event::FirmwareLockoutHit`] and no command.
+    pub fn set_refill_threshold(&self, threshold_mm: f32) -> CoreOutput {
+        if let Some(out) = self.refuse_if_firmware_locked("set_refill_threshold") {
+            return out;
+        }
+        let mut out = CoreOutput::default();
+        let packet = WaterLevels {
+            current_mm: 0.0,
+            refill_threshold_mm: threshold_mm,
+        }
+        .encode();
+        out.commands.push(Command::WriteCharacteristic {
+            target: WriteTarget::De1WaterLevels,
+            data: packet.to_vec(),
+        });
+        out
+    }
+
     /// The steam / hot-water [`ShotSettings`] to write, with the steam target
     /// temperature set for the given eco state. Falls back to a representative
     /// default when no settings have been supplied yet.
@@ -2104,6 +2133,24 @@ mod tests {
         for profile in &parsed {
             assert!(profile.assemble().is_ok());
         }
+    }
+
+    #[test]
+    fn set_refill_threshold_emits_a_water_levels_write() {
+        let core = CremaCore::new();
+        let out = core.set_refill_threshold(70.0);
+        let Some(Command::WriteCharacteristic { target, data }) = out.commands.first() else {
+            panic!("expected a WriteCharacteristic command");
+        };
+        assert_eq!(*target, WriteTarget::De1WaterLevels);
+        // 4-byte WaterLevels: current = 0 mm, threshold = 70 mm.
+        // u16p8 encode: integer part in the high byte (be).
+        assert_eq!(data.len(), 4);
+        assert_eq!(data[0], 0);
+        assert_eq!(data[1], 0);
+        // 70 mm → high byte 70.
+        assert_eq!(data[2], 70);
+        assert_eq!(data[3], 0);
     }
 
     #[test]
