@@ -32,7 +32,7 @@ import { BleDevice, requestDevice, type ConnState } from './transport';
 /** The `NotificationSource`s the DE1's characteristics route to. */
 type De1NotificationSource = Extract<
 	NotificationSource,
-	'De1State' | 'De1ShotSample' | 'De1WaterLevels' | 'De1MmrRead'
+	'De1State' | 'De1ShotSample' | 'De1WaterLevels' | 'De1MmrRead' | 'De1FrameAck'
 >;
 
 /** Coarse state of the DE1 connection — mirrors the Android manager's enum. */
@@ -267,7 +267,15 @@ export class De1Manager {
 			await device.startNotifications(De1Uuids.SERVICE, De1Uuids.MMR_READ);
 			this.callbacks.onStatus('MMR_READ A005 subscribed ✓');
 
-			// All five GATT objects resolved — the device is verified as a DE1.
+			// FRAME_WRITE (cuuid_10) is where the DE1 echoes each profile-frame
+			// write back as a notification — Crema's profile-upload orchestrator
+			// uses these acks to advance its state machine
+			// (docs/16-profile-upload-plan.md §5).
+			step = 'FRAME_WRITE characteristic A010';
+			await device.startNotifications(De1Uuids.SERVICE, De1Uuids.FRAME_WRITE);
+			this.callbacks.onStatus('FRAME_WRITE A010 subscribed ✓');
+
+			// All six GATT objects resolved — the device is verified as a DE1.
 			this.patchDiagnostics({ gattVerified: true });
 
 			// The Version characteristic (A001) is a one-shot Read, not a
@@ -314,6 +322,31 @@ export class De1Manager {
 			} catch (mmrError) {
 				this.callbacks.onStatus(
 					`DE1 firmware-build MMR read skipped: ${describeError(mmrError)}`
+				);
+			}
+
+			// HeaderWrite (cuuid_0F) is a one-shot Read at connect time —
+			// the DE1 returns the 5-byte ShotHeader of whatever profile is
+			// currently loaded. Forwarding it through the core surfaces the
+			// shape on the brew page (active-profile indicator).
+			step = 'HeaderWrite characteristic A00F';
+			try {
+				const headerBytes = await device.readCharacteristic(
+					De1Uuids.SERVICE,
+					De1Uuids.HEADER_WRITE
+				);
+				const now = performance.now();
+				getCaptureRecorder().record('De1ProfileHeader', headerBytes, now);
+				const headerOut = await this.core.onNotification(
+					'De1ProfileHeader',
+					headerBytes,
+					now
+				);
+				this.callbacks.onCoreOutput(headerOut);
+				this.callbacks.onStatus('DE1 loaded-profile header read ✓');
+			} catch (headerError) {
+				this.callbacks.onStatus(
+					`DE1 profile header read skipped: ${describeError(headerError)}`
 				);
 			}
 
@@ -399,6 +432,10 @@ function uuidForWriteTarget(target: WriteTarget): string | null {
 			return De1Uuids.CALIBRATION;
 		case WriteTarget.De1WaterLevels:
 			return De1Uuids.WATER_LEVELS;
+		case WriteTarget.De1ProfileHeader:
+			return De1Uuids.HEADER_WRITE;
+		case WriteTarget.De1ProfileFrame:
+			return De1Uuids.FRAME_WRITE;
 		default:
 			return null;
 	}
@@ -418,6 +455,8 @@ function sourceFor(characteristicUuid: string): De1NotificationSource | null {
 			return 'De1WaterLevels';
 		case De1Uuids.MMR_READ:
 			return 'De1MmrRead';
+		case De1Uuids.FRAME_WRITE:
+			return 'De1FrameAck';
 		default:
 			return null;
 	}
@@ -429,5 +468,11 @@ function sourceFor(characteristicUuid: string): De1NotificationSource | null {
  * disconnect and the field initialiser cannot drift apart.
  */
 function freshCounts(): Record<De1NotificationSource, number> {
-	return { De1State: 0, De1ShotSample: 0, De1WaterLevels: 0, De1MmrRead: 0 };
+	return {
+		De1State: 0,
+		De1ShotSample: 0,
+		De1WaterLevels: 0,
+		De1MmrRead: 0,
+		De1FrameAck: 0
+	};
 }

@@ -214,6 +214,62 @@ data class EventFirmwareLockoutHitInner (
 	val method: String
 )
 
+/// Generated type representing the anonymous struct variant `ProfileHeaderRead` of the `Event` Rust enum
+@Serializable
+data class EventProfileHeaderReadInner (
+	/// Total number of frames in the loaded profile.
+	val frame_count: UByte,
+	/// How many leading frames count as preinfusion.
+	val preinfuse_frame_count: UByte,
+	/// Minimum pressure allowed in flow-priority frames, bar.
+	val minimum_pressure: Float,
+	/// Maximum flow allowed in pressure-priority frames, mL/s.
+	val maximum_flow: Float
+)
+
+/// Generated type representing the anonymous struct variant `ProfileUploadStarted` of the `Event` Rust enum
+@Serializable
+data class EventProfileUploadStartedInner (
+	/// Title of the profile being uploaded — propagated for the
+	/// shell's UI ("Uploading <title>…") and for the active-profile
+	/// tracking that pairs with this event.
+	val title: String,
+	/// Number of normal frames the profile has.
+	val frame_count: UByte,
+	/// Number of extension frames (one per step that has a limiter).
+	val extension_frame_count: UByte
+)
+
+/// Generated type representing the anonymous struct variant `ProfileUploadProgress` of the `Event` Rust enum
+@Serializable
+data class EventProfileUploadProgressInner (
+	/// The step index just acknowledged. For an extension-frame ack
+	/// this is the step the extension extends (raw `FrameToWrite` byte
+	/// minus 32); for the tail it equals `frame_count`.
+	val frame: UByte,
+	/// Whether the just-acked write was an extension frame.
+	val extension: Boolean,
+	/// Total number of acks the upload expects
+	/// (`frame_count + extension_count + 1`).
+	val total_acks: UShort,
+	/// Number of acks received so far, including this one.
+	val acks_received: UShort
+)
+
+/// Generated type representing the anonymous struct variant `ProfileUploadCompleted` of the `Event` Rust enum
+@Serializable
+data class EventProfileUploadCompletedInner (
+	/// Title of the profile that finished uploading.
+	val title: String
+)
+
+/// Generated type representing the anonymous struct variant `ProfileUploadFailed` of the `Event` Rust enum
+@Serializable
+data class EventProfileUploadFailedInner (
+	/// Why the upload failed.
+	val reason: ProfileUploadFailure
+)
+
 /// Generated type representing the anonymous struct variant `DecodeError` of the `Event` Rust enum
 @Serializable
 data class EventDecodeErrorInner (
@@ -348,6 +404,33 @@ sealed class Event {
 	@Serializable
 	@SerialName("FirmwareLockoutHit")
 	data class FirmwareLockoutHit(val content: EventFirmwareLockoutHitInner): Event()
+	/// The DE1's `ShotHeader` was read from `HeaderWrite` (`cuuid_0F`) —
+	/// emitted once after the BLE shell reads the characteristic at connect
+	/// time. Carries the shape of the currently-loaded profile.
+	@Serializable
+	@SerialName("ProfileHeaderRead")
+	data class ProfileHeaderRead(val content: EventProfileHeaderReadInner): Event()
+	/// A profile upload has begun. Carries the total number of acks the
+	/// orchestrator expects (frames + extensions + tail; the header is
+	/// not acked separately).
+	@Serializable
+	@SerialName("ProfileUploadStarted")
+	data class ProfileUploadStarted(val content: EventProfileUploadStartedInner): Event()
+	/// One profile frame was acknowledged by the DE1.
+	@Serializable
+	@SerialName("ProfileUploadProgress")
+	data class ProfileUploadProgress(val content: EventProfileUploadProgressInner): Event()
+	/// The whole profile uploaded successfully — every expected ack
+	/// arrived in order. Carries the title for the shell's
+	/// active-profile bookkeeping.
+	@Serializable
+	@SerialName("ProfileUploadCompleted")
+	data class ProfileUploadCompleted(val content: EventProfileUploadCompletedInner): Event()
+	/// The profile upload failed. The core has discarded its in-progress
+	/// state; the shell may retry by calling `upload_profile` again.
+	@Serializable
+	@SerialName("ProfileUploadFailed")
+	data class ProfileUploadFailed(val content: EventProfileUploadFailedInner): Event()
 	/// An incoming notification could not be decoded.
 	@Serializable
 	@SerialName("DecodeError")
@@ -712,6 +795,67 @@ enum class MmrRegister(val string: String) {
 	CupWarmerTemp("CupWarmerTemp"),
 }
 
+/// Generated type representing the anonymous struct variant `TooManySteps` of the `ProfileUploadFailure` Rust enum
+@Serializable
+data class ProfileUploadFailureTooManyStepsInner (
+	/// How many steps the rejected profile had.
+	val count: UInt
+)
+
+/// Generated type representing the anonymous struct variant `UnexpectedAck` of the `ProfileUploadFailure` Rust enum
+@Serializable
+data class ProfileUploadFailureUnexpectedAckInner (
+	/// The `FrameToWrite` byte the core expected next, raw (`≥ 32` for
+	/// an expected extension ack, `== frame_count` for the tail).
+	val expected: UByte,
+	/// The `FrameToWrite` byte the ack actually carried.
+	val got: UByte
+)
+
+/// Generated type representing the anonymous struct variant `AckTimeout` of the `ProfileUploadFailure` Rust enum
+@Serializable
+data class ProfileUploadFailureAckTimeoutInner (
+	/// The `FrameToWrite` byte the core was waiting for when the
+	/// timeout fired.
+	val awaiting: UByte
+)
+
+/// Why a profile upload failed.
+/// 
+/// `#[non_exhaustive]` so additional categories (e.g. a firmware-side
+/// "shot in progress" rejection signalled through some future cuuid_10
+/// packet) can be added without breaking the FFI surface.
+/// 
+/// See `docs/16-profile-upload-plan.md` §4.3.
+@Serializable
+sealed class ProfileUploadFailure {
+	/// The profile had no steps.
+	@Serializable
+	@SerialName("Empty")
+	object Empty: ProfileUploadFailure()
+	/// The profile had more than 32 steps.
+	@Serializable
+	@SerialName("TooManySteps")
+	data class TooManySteps(val details: ProfileUploadFailureTooManyStepsInner): ProfileUploadFailure()
+	/// A frame ack arrived for a frame number the orchestrator did not
+	/// expect — either out-of-order or for a step the profile does not have.
+	@Serializable
+	@SerialName("UnexpectedAck")
+	data class UnexpectedAck(val details: ProfileUploadFailureUnexpectedAckInner): ProfileUploadFailure()
+	/// No ack arrived within
+	/// [`PROFILE_UPLOAD_ACK_TIMEOUT`](crate::PROFILE_UPLOAD_ACK_TIMEOUT) of
+	/// the most recent ack (or upload start, for the first ack).
+	@Serializable
+	@SerialName("AckTimeout")
+	data class AckTimeout(val details: ProfileUploadFailureAckTimeoutInner): ProfileUploadFailure()
+	/// The shell called
+	/// [`cancel_profile_upload`](crate::CremaCore::cancel_profile_upload)
+	/// mid-upload.
+	@Serializable
+	@SerialName("Aborted")
+	object Aborted: ProfileUploadFailure()
+}
+
 /// Where an espresso shot is in its lifecycle.
 @Serializable
 enum class ShotPhase(val string: String) {
@@ -899,5 +1043,16 @@ enum class WriteTarget(val string: String) {
 	/// `WaterLevels` packet is *written* here to set the refill threshold.
 	@SerialName("De1WaterLevels")
 	De1WaterLevels("De1WaterLevels"),
+	/// The DE1 `HeaderWrite` characteristic (`cuuid_0F`) — the 5-byte
+	/// `ShotHeader` packet is *written* here at the start of a profile
+	/// upload. See `docs/16-profile-upload-plan.md`.
+	@SerialName("De1ProfileHeader")
+	De1ProfileHeader("De1ProfileHeader"),
+	/// The DE1 `FrameWrite` characteristic (`cuuid_10`) — each 8-byte
+	/// frame packet (normal frames, extension frames, and the tail) is
+	/// *written* here in upload order during a profile upload. The DE1
+	/// echoes each write back as a `Source::De1FrameAck` notification.
+	@SerialName("De1ProfileFrame")
+	De1ProfileFrame("De1ProfileFrame"),
 }
 

@@ -42,7 +42,8 @@ pub use firmware::{
 };
 pub use mmr::{MMR_PACKET_LEN, MmrReadReply, MmrRegister};
 pub use profile::{
-    ExtensionFrame, FrameFlags, SHOT_FRAME_LEN, SHOT_HEADER_LEN, ShotFrame, ShotHeader, ShotTail,
+    EXTENSION_FRAME_INDEX_OFFSET, ExtensionFrame, FrameFlags, SHOT_FRAME_LEN, SHOT_HEADER_LEN,
+    ShotFrame, ShotHeader, ShotTail, ack_frame_byte,
 };
 pub use shot_sample::{SHOT_SAMPLE_LEN, ShotSample};
 pub use state::{MachineState, STATE_INFO_LEN, StateInfo, SubState};

@@ -117,12 +117,18 @@
 	/** Live yield-to-dose ratio for the header / target cards. */
 	const ratio = $derived((p.yield / p.dose).toFixed(2));
 	/**
-	 * The header profile name. The Profiles page can mark a profile "active"
-	 * (UI-level — see `lib/profiles`); when it has, that name wins. Otherwise
-	 * the snapshot's mirror of it, then a neutral fallback.
+	 * The header profile name. Prefers the DE1's *real* active profile — the
+	 * title Crema most recently uploaded successfully (`ui.activeProfileTitle`,
+	 * populated by the `ProfileUploadCompleted` event handler) — so the brew
+	 * page always reflects what the machine actually has loaded. Falls back to
+	 * the Profiles-page UI selection (`activeProfile.name`), then the legacy
+	 * snapshot mirror, then a neutral fallback for first-launch.
 	 */
 	const profileName = $derived(
-		activeProfile?.name ?? ui.activeProfileName ?? 'No profile selected'
+		ui.activeProfileTitle ??
+			activeProfile?.name ??
+			ui.activeProfileName ??
+			'No profile selected'
 	);
 
 	// ── Real telemetry (the DISPLAY side — wired to lib/state) ───────────

@@ -224,6 +224,34 @@ export interface UiSnapshot {
 	/** The DE1 firmware label, e.g. `"FW 1.4.142 (API 4)"`, or `null`. */
 	readonly de1Firmware: string | null;
 
+	// ---- DE1 profile (active + loaded shape) -----------------------------
+	//
+	// Tracks two related pieces of state: the title of the profile Crema
+	// most recently uploaded (the "active profile" the brew page highlights)
+	// and the shape of whatever the DE1 reports for its currently-loaded
+	// profile (read at connect time via `HeaderWrite`). The two can diverge
+	// if the user uploaded a profile outside Crema — in that case the title
+	// stays `null` and the shape still gives the brew page something to show.
+
+	/**
+	 * Title of the profile most recently uploaded by Crema; `null` until an
+	 * upload completes. Mirrors `CremaCore::active_profile_title`. The brew
+	 * page's "Active: …" indicator and the profile picker's "active" outline
+	 * both read this field.
+	 */
+	readonly activeProfileTitle: string | null;
+	/**
+	 * The DE1's currently-loaded profile shape (from a `HeaderWrite` read at
+	 * connect time, populated by `Event::ProfileHeaderRead`). `null` before
+	 * the first connect-time read, or if the read failed.
+	 */
+	readonly loadedProfileShape: LoadedProfileShape | null;
+	/**
+	 * In-flight profile-upload progress. `null` when no upload is running;
+	 * the brew page shows "Uploading … (acks/total)" while this is set.
+	 */
+	readonly profileUploadProgress: ProfileUploadProgress | null;
+
 	// ---- DE1 diagnostics — READ side of doc 11 (R1, R3, R5) --------------
 	//
 	// Plumbing only: these fields land the MMR registers, sensor calibration
@@ -315,6 +343,35 @@ export type De1Calibration = Partial<Record<CalTarget, SensorCalibration>>;
 /** The empty calibration snapshot — before any calibration has been read. */
 export const EMPTY_DE1_CALIBRATION: De1Calibration = {};
 
+/**
+ * Shape of the profile the DE1 currently has loaded — read at connect time
+ * from `HeaderWrite` (`cuuid_0F`). All four fields come from the 5-byte
+ * `ShotHeader`; populated by `Event::ProfileHeaderRead`.
+ */
+export interface LoadedProfileShape {
+	/** Total number of frames in the loaded profile. */
+	readonly frameCount: number;
+	/** How many leading frames count as preinfusion. */
+	readonly preinfuseFrameCount: number;
+	/** Minimum pressure allowed in flow-priority frames, bar. */
+	readonly minimumPressure: number;
+	/** Maximum flow allowed in pressure-priority frames, mL/s. */
+	readonly maximumFlow: number;
+}
+
+/**
+ * In-flight profile-upload progress — drives the brew page's progress UI.
+ * `null` when no upload is running.
+ */
+export interface ProfileUploadProgress {
+	/** Title of the profile being uploaded. */
+	readonly title: string;
+	/** Total number of acks the upload expects (frames + extensions + tail). */
+	readonly totalAcks: number;
+	/** Number of acks received so far (0 just after Started). */
+	readonly acksReceived: number;
+}
+
 /** Where a {@link ReplayStatus} is in its lifecycle. */
 export type ReplayPhase = 'running' | 'done' | 'cancelled' | 'error';
 
@@ -366,6 +423,9 @@ export const INITIAL_SNAPSHOT: UiSnapshot = {
 	activeProfileName: null,
 	de1Diagnostics: EMPTY_DE1_DIAGNOSTICS,
 	de1Firmware: null,
+	activeProfileTitle: null,
+	loadedProfileShape: null,
+	profileUploadProgress: null,
 	de1MachineInfo: {},
 	de1Calibration: EMPTY_DE1_CALIBRATION,
 	machineError: null,
@@ -820,6 +880,67 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				eventLog: appendLog(
 					snapshot.eventLog,
 					`Write refused (firmware update in progress): ${event.content.method}`
+				)
+			};
+		case 'ProfileHeaderRead':
+			// The DE1 reported the shape of whatever profile it currently has
+			// loaded — read once at connect time. Surfaces on the brew page
+			// when Crema doesn't have a matching `activeProfileTitle` (e.g.
+			// the user uploaded outside Crema).
+			return {
+				...snapshot,
+				loadedProfileShape: {
+					frameCount: event.content.frame_count,
+					preinfuseFrameCount: event.content.preinfuse_frame_count,
+					minimumPressure: event.content.minimum_pressure,
+					maximumFlow: event.content.maximum_flow
+				},
+				eventLog: appendLog(
+					snapshot.eventLog,
+					`DE1 loaded profile: ${event.content.frame_count} frame${event.content.frame_count === 1 ? '' : 's'}`
+				)
+			};
+		case 'ProfileUploadStarted':
+			return {
+				...snapshot,
+				profileUploadProgress: {
+					title: event.content.title,
+					totalAcks:
+						event.content.frame_count + event.content.extension_frame_count + 1,
+					acksReceived: 0
+				},
+				eventLog: appendLog(
+					snapshot.eventLog,
+					`Uploading profile: ${event.content.title}`
+				)
+			};
+		case 'ProfileUploadProgress':
+			return {
+				...snapshot,
+				profileUploadProgress: snapshot.profileUploadProgress
+					? {
+							...snapshot.profileUploadProgress,
+							acksReceived: event.content.acks_received
+						}
+					: null
+			};
+		case 'ProfileUploadCompleted':
+			return {
+				...snapshot,
+				activeProfileTitle: event.content.title,
+				profileUploadProgress: null,
+				eventLog: appendLog(
+					snapshot.eventLog,
+					`Profile uploaded: ${event.content.title}`
+				)
+			};
+		case 'ProfileUploadFailed':
+			return {
+				...snapshot,
+				profileUploadProgress: null,
+				eventLog: appendLog(
+					snapshot.eventLog,
+					`Profile upload failed: ${event.content.reason.kind}`
 				)
 			};
 		case 'DecodeError':

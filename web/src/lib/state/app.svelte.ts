@@ -404,6 +404,28 @@ export class CremaApp {
 		return this.core.firmwareUpdateStatus();
 	}
 
+	/**
+	 * Upload `profile` to the DE1. The core builds the BLE writes; the
+	 * orchestrator routes each `WriteCharacteristic` through
+	 * `de1.writeCharacteristic`. Progress events (`ProfileUploadStarted` /
+	 * `ProfileUploadProgress` / `ProfileUploadCompleted` /
+	 * `ProfileUploadFailed`) arrive over the same `applyCoreOutput` path
+	 * the rest of the events use; the UI snapshot's `profileUploadProgress`
+	 * and `activeProfileTitle` fields reflect them.
+	 *
+	 * `profile` is the typed `Profile` (de1-domain shape) — the shell's
+	 * `lib/profiles` model converts via `toCoreProfile` before calling this.
+	 */
+	async uploadProfile(profile: import('$lib/core').Profile): Promise<void> {
+		const now = performance.now();
+		this.applyCoreOutput(await this.core.uploadProfile(profile, now));
+	}
+
+	/** Cancel an in-progress profile upload (emits ProfileUploadFailed{Aborted}). */
+	async cancelProfileUpload(): Promise<void> {
+		this.applyCoreOutput(await this.core.cancelProfileUpload());
+	}
+
 	/** Tare the connected scale. Routes the core's `WriteScale` to the scale. */
 	async tareScale(): Promise<void> {
 		this.applyCoreOutput(await this.core.tareScale());

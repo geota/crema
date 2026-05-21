@@ -57,6 +57,8 @@ const SRC_NAME: Record<NotificationSource, string> = {
 	De1Version: 'DE1_VERSION',
 	De1MmrRead: 'DE1_MMR_READ',
 	De1Calibration: 'DE1_CALIBRATION',
+	De1ProfileHeader: 'DE1_PROFILE_HEADER',
+	De1FrameAck: 'DE1_FRAME_ACK',
 	ScaleWeight: 'SCALE_WEIGHT',
 	ScaleCommand: 'SCALE_FF12'
 };
