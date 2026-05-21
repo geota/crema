@@ -233,22 +233,36 @@
 	 * newest-first prepended list, where an array index would re-bind every
 	 * row on each new entry.
 	 */
-	const activityRows = $derived.by<ActivityRow[]>(() =>
-		eventLog.slice(0, 14).map((line) => {
-			const d = line.text.toLowerCase();
-			const highlight =
-				d.includes('shot started') ||
-				d.includes('shot complete') ||
-				d.includes('auto-stop') ||
-				d.includes('steam session');
-			const muted =
-				d.startsWith('machinestate ->') ||
-				d.startsWith('shot phase ->') ||
-				d.startsWith('shot frame ->') ||
-				d.includes('scale stale');
-			return { id: line.id, time: line.time, detail: line.text, highlight, muted };
-		})
-	);
+	/**
+	 * Search-filter input for the activity log. Empty matches every line; a
+	 * non-empty value matches the line text case-insensitively (no regex —
+	 * one substring against `detail.toLowerCase()`). Use this to cut
+	 * water-level / shot-frame noise out of view when looking for a
+	 * specific event ("upload", "calibration", "BLE", …).
+	 */
+	let activitySearch = $state('');
+
+	const activityRows = $derived.by<ActivityRow[]>(() => {
+		const needle = activitySearch.trim().toLowerCase();
+		return eventLog
+			.filter((line) => needle === '' || line.text.toLowerCase().includes(needle))
+			.map((line) => {
+				const d = line.text.toLowerCase();
+				const highlight =
+					d.includes('shot started') ||
+					d.includes('shot complete') ||
+					d.includes('auto-stop') ||
+					d.includes('steam session');
+				const muted =
+					d.startsWith('machinestate ->') ||
+					d.startsWith('shot phase ->') ||
+					d.startsWith('shot frame ->') ||
+					d.includes('scale stale') ||
+					d.startsWith('water ') ||
+					d.startsWith('mmr ');
+				return { id: line.id, time: line.time, detail: line.text, highlight, muted };
+			});
+	});
 </script>
 
 <svelte:head>
@@ -498,17 +512,45 @@
 		</div>
 
 		<div class="sc-activity">
-			<div class="sc-activity-head">Recent activity</div>
-			{#if activityRows.length === 0}
-				<div class="sc-activity-empty">No activity yet — connect a scale to begin.</div>
-			{:else}
-				{#each activityRows as row (row.id)}
-					<div class="sc-arow" class:is-hl={row.highlight} class:is-muted={row.muted}>
-						<div class="sc-arow-t">{row.time}</div>
-						<div class="sc-arow-detail">{row.detail}</div>
+			<div class="sc-activity-head">
+				<span>Recent activity</span>
+				<span class="sc-activity-count">{activityRows.length} / {eventLog.length}</span>
+			</div>
+			<div class="sc-activity-search">
+				<i class="ph ph-magnifying-glass sc-activity-search-icon" aria-hidden="true"></i>
+				<input
+					type="search"
+					placeholder="Filter the log…"
+					aria-label="Filter activity log"
+					bind:value={activitySearch}
+				/>
+				{#if activitySearch.length > 0}
+					<button
+						type="button"
+						class="sc-activity-search-clear"
+						aria-label="Clear filter"
+						onclick={() => (activitySearch = '')}
+					>
+						<i class="ph ph-x" aria-hidden="true"></i>
+					</button>
+				{/if}
+			</div>
+			<div class="sc-activity-list">
+				{#if activityRows.length === 0}
+					<div class="sc-activity-empty">
+						{eventLog.length === 0
+							? 'No activity yet — connect a scale to begin.'
+							: `No entries match "${activitySearch}".`}
 					</div>
-				{/each}
-			{/if}
+				{:else}
+					{#each activityRows as row (row.id)}
+						<div class="sc-arow" class:is-hl={row.highlight} class:is-muted={row.muted}>
+							<div class="sc-arow-t">{row.time}</div>
+							<div class="sc-arow-detail">{row.detail}</div>
+						</div>
+					{/each}
+				{/if}
+			</div>
 		</div>
 	</div>
 </div>
@@ -826,6 +868,80 @@
 		margin-bottom: 12px;
 		padding-bottom: 12px;
 		border-bottom: 1px solid rgba(var(--tint-rgb), 0.05);
+	}
+	.sc-activity-head {
+		display: flex;
+		align-items: baseline;
+		justify-content: space-between;
+		gap: 12px;
+	}
+	.sc-activity-count {
+		font-family: var(--font-mono);
+		font-variant-numeric: tabular-nums;
+		font-size: 11px;
+		color: rgba(var(--tint-rgb), 0.45);
+		letter-spacing: 0;
+	}
+	.sc-activity-search {
+		position: relative;
+		display: flex;
+		align-items: center;
+		margin-bottom: 8px;
+	}
+	.sc-activity-search input {
+		flex: 1;
+		width: 100%;
+		font-family: var(--font-sans);
+		font-size: 12px;
+		color: var(--fg-1);
+		background: rgba(var(--tint-rgb), 0.04);
+		border: 1px solid rgba(var(--tint-rgb), 0.08);
+		border-radius: 8px;
+		padding: 7px 30px 7px 30px;
+		outline: none;
+		transition: border-color var(--dur-1) var(--ease), background var(--dur-1) var(--ease);
+	}
+	.sc-activity-search input:focus {
+		border-color: rgba(var(--copper-400-rgb, 200, 130, 80), 0.6);
+		background: rgba(var(--tint-rgb), 0.06);
+	}
+	.sc-activity-search input::placeholder {
+		color: rgba(var(--tint-rgb), 0.35);
+	}
+	.sc-activity-search-icon {
+		position: absolute;
+		left: 9px;
+		font-size: 13px;
+		color: rgba(var(--tint-rgb), 0.4);
+		pointer-events: none;
+	}
+	.sc-activity-search-clear {
+		position: absolute;
+		right: 6px;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 22px;
+		height: 22px;
+		border: 0;
+		border-radius: 6px;
+		background: transparent;
+		color: rgba(var(--tint-rgb), 0.5);
+		cursor: pointer;
+		font-size: 13px;
+		transition: background var(--dur-1) var(--ease), color var(--dur-1) var(--ease);
+	}
+	.sc-activity-search-clear:hover {
+		background: rgba(var(--tint-rgb), 0.08);
+		color: var(--fg-1);
+	}
+	.sc-activity-list {
+		max-height: 360px;
+		overflow-y: auto;
+		/* Pull the scrollbar inward a touch so the rows still feel anchored
+		   to the card's right edge. */
+		margin-right: -8px;
+		padding-right: 8px;
 	}
 	.sc-set-row {
 		display: grid;
