@@ -445,6 +445,13 @@ impl CremaBridge {
         json(self.core.enable_steam_eco_mode(enabled, now_ms as u64))
     }
 
+    /// Write the DE1's water-tank refill threshold (`cuuid_11`). `threshold_mm`
+    /// is the level at or below which the DE1 should ask for a refill.
+    /// Returns a JSON-encoded [`CoreOutput`].
+    pub fn set_refill_threshold(&self, threshold_mm: f32) -> String {
+        json(self.core.set_refill_threshold(threshold_mm))
+    }
+
     /// The standard DE1 profiles Crema ships built in, as a JSON array string.
     ///
     /// Each element is a `Profile`; the shell parses the array into its own

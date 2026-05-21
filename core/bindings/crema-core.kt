@@ -819,5 +819,10 @@ enum class WriteTarget(val string: String) {
 	/// request is *written* here; the DE1 answers on the same characteristic.
 	@SerialName("De1Calibration")
 	De1Calibration("De1Calibration"),
+	/// The DE1 `WaterLevels` characteristic (`cuuid_11`) — the same
+	/// characteristic the DE1 notifies tank level on; a 4-byte
+	/// `WaterLevels` packet is *written* here to set the refill threshold.
+	@SerialName("De1WaterLevels")
+	De1WaterLevels("De1WaterLevels"),
 }
 

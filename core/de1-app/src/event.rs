@@ -280,6 +280,10 @@ pub enum WriteTarget {
     /// The DE1 `Calibration` characteristic (`cuuid_12`) — a calibration read
     /// request is *written* here; the DE1 answers on the same characteristic.
     De1Calibration,
+    /// The DE1 `WaterLevels` characteristic (`cuuid_11`) — the same
+    /// characteristic the DE1 notifies tank level on; a 4-byte
+    /// `WaterLevels` packet is *written* here to set the refill threshold.
+    De1WaterLevels,
 }
 
 /// A BLE write the shell should perform on the core's behalf.

@@ -198,6 +198,12 @@ export interface CremaCore {
 	/** Build a `CoreOutput` whose command selects the scale auto-stop mode. */
 	setScaleAutoStop(modeId: number): Promise<CoreOutput>;
 	/**
+	 * Build a `CoreOutput` whose command writes the DE1's water-tank refill
+	 * threshold (`cuuid_11`). `thresholdMm` is the level at or below which the
+	 * DE1 should ask for a refill.
+	 */
+	setRefillThreshold(thresholdMm: number): Promise<CoreOutput>;
+	/**
 	 * The standard DE1 profiles Crema ships built in, as a parsed array of
 	 * {@link Profile}. The bridge returns a JSON-string of `Profile[]` (the
 	 * "Option S" encoding); this method parses it. The list is read-only — the
@@ -338,6 +344,9 @@ async function createCore(): Promise<CremaCore> {
 		},
 		async setScaleAutoStop(modeId) {
 			return parseOutput(bridge.set_scale_auto_stop(modeId));
+		},
+		async setRefillThreshold(thresholdMm) {
+			return parseOutput(bridge.set_refill_threshold(thresholdMm));
 		},
 		async builtinProfiles() {
 			return JSON.parse(bridge.builtin_profiles_json()) as Profile[];
