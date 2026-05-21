@@ -111,8 +111,20 @@
 	const machineStateLabel = $derived(snapshot.machineState ?? '— (no StateInfo yet)');
 
 	// ── Machine card meta (D4) ────────────────────────────────────────────
-	/** The DE1's decoded firmware label, or a dash before the version arrives. */
-	const firmwareLabel = $derived(snapshot.de1Firmware ?? '—');
+	/**
+	 * The DE1's firmware label. Prefers the MMR FirmwareVersion build number
+	 * (`v1352`-style — Decent's user-facing release tag, read from MMR
+	 * `0x800010` shortly after pairing), and falls back to the BLE Version
+	 * label (`v1.5.559 (API 4)`-style) while the MMR reply is in flight or
+	 * if the MMR read failed. The dash is the initial state before either
+	 * arrives. Same format as the update-status string below the card, so
+	 * the two readouts read consistently.
+	 */
+	const firmwareLabel = $derived.by(() => {
+		const build = snapshot.de1MachineInfo.FirmwareVersion;
+		if (build !== undefined) return `v${build}`;
+		return snapshot.de1Firmware ?? '—';
+	});
 	/** The Web Bluetooth device id of the connected DE1, or a dash. */
 	const bleLabel = $derived(diag.deviceId ?? '—');
 	/** The live group ("mix") temperature, in the chosen unit, or a dash. */
