@@ -399,4 +399,144 @@ mod tests {
             Err(DomainError::TooManySteps { count: 33 })
         );
     }
+
+    // ── docs/16 §7.2 gaps ────────────────────────────────────────────────
+
+    #[test]
+    fn every_exit_metric_compare_pair_maps_to_the_right_flag_bits() {
+        // `metric` decides `DC_CompF` (true = flow); `compare` decides `DC_GT`
+        // (true = `>`). `DoCompare` is always set when an exit is present.
+        for (metric, expect_compare_flow) in
+            [(ExitMetric::Flow, true), (ExitMetric::Pressure, false)]
+        {
+            for (compare, expect_greater) in [(Compare::Over, true), (Compare::Under, false)] {
+                let mut s = step("pour", Pump::Pressure);
+                s.exit = Some(ExitCondition {
+                    metric,
+                    compare,
+                    threshold: 1.0,
+                });
+                let frame = profile(vec![s]).assemble().unwrap().frames.remove(0);
+                assert!(
+                    frame.flags.do_compare,
+                    "DoCompare must be set whenever an exit is present"
+                );
+                assert_eq!(
+                    frame.flags.compare_flow, expect_compare_flow,
+                    "{metric:?} should yield compare_flow={expect_compare_flow}"
+                );
+                assert_eq!(
+                    frame.flags.compare_greater, expect_greater,
+                    "{compare:?} should yield compare_greater={expect_greater}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_pressure_step_with_a_limiter_carries_a_flow_limit() {
+        // Per the legacy semantic: a profile step's limiter caps the *other*
+        // quantity from `pump`. A pressure-priority step is limited by flow.
+        let mut s = step("pressurized", Pump::Pressure);
+        s.limiter = Some(Limiter {
+            value: 3.5,
+            range: 0.2,
+        });
+        let assembled = profile(vec![s]).assemble().unwrap();
+        assert_eq!(assembled.extension_frames.len(), 1);
+        assert_eq!(assembled.extension_frames[0].max_flow_or_pressure, 3.5);
+        assert!(
+            !assembled.frames[0].flags.flow_priority,
+            "the step itself stays pressure-priority"
+        );
+    }
+
+    #[test]
+    fn a_flow_step_with_a_limiter_carries_a_pressure_limit() {
+        // Symmetric to the pressure case: a flow-priority step's limiter is
+        // a pressure ceiling.
+        let mut s = step("flowing", Pump::Flow);
+        s.limiter = Some(Limiter {
+            value: 9.5,
+            range: 0.3,
+        });
+        let assembled = profile(vec![s]).assemble().unwrap();
+        assert_eq!(assembled.extension_frames.len(), 1);
+        assert_eq!(assembled.extension_frames[0].max_flow_or_pressure, 9.5);
+        assert!(assembled.frames[0].flags.flow_priority);
+    }
+
+    #[test]
+    fn every_normal_frame_has_ignore_limit_set() {
+        // Mirrors the legacy `de1_packed_shot` which sets `IgnoreLimit`
+        // unconditionally (`binary.tcl:914`). Pinning this prevents a future
+        // refactor from accidentally dropping the bit.
+        let assembled = profile(vec![
+            step("a", Pump::Pressure),
+            step("b", Pump::Flow),
+            step("c", Pump::Pressure),
+        ])
+        .assemble()
+        .unwrap();
+        for frame in &assembled.frames {
+            assert!(
+                frame.flags.ignore_limit,
+                "IgnoreLimit must be set on every normal frame"
+            );
+        }
+    }
+
+    #[test]
+    fn a_thirty_two_step_profile_assembles_without_overflow() {
+        let steps = (0..32).map(|_| step("x", Pump::Pressure)).collect();
+        let assembled = profile(steps).assemble().unwrap();
+        assert_eq!(assembled.header.frame_count, 32);
+        assert_eq!(assembled.tail.frame_count, 32);
+        assert_eq!(assembled.frames.len(), 32);
+        // Frame indices go 0..=31, fitting a u8 without wrap.
+        for (i, frame) in assembled.frames.iter().enumerate() {
+            assert_eq!(frame.index as usize, i);
+        }
+    }
+
+    #[test]
+    fn frame_packets_byte_order_is_frames_then_extensions_then_tail() {
+        // Two steps, both with limiters → 2 frames + 2 extensions + 1 tail.
+        // Assert the first byte of each packet to pin the order:
+        // bytes 0,1 are the two frame indices (0, 1); bytes 2,3 are the
+        // extension indices on the wire (32, 33); byte 4 is the tail's
+        // FrameToWrite (== frame_count == 2).
+        let mut a = step("a", Pump::Pressure);
+        a.limiter = Some(Limiter {
+            value: 8.0,
+            range: 0.5,
+        });
+        let mut b = step("b", Pump::Flow);
+        b.limiter = Some(Limiter {
+            value: 9.0,
+            range: 0.5,
+        });
+        let assembled = profile(vec![a, b]).assemble().unwrap();
+        let packets = assembled.frame_packets();
+        assert_eq!(packets.len(), 5);
+        assert_eq!(packets[0][0], 0, "normal frame 0 first");
+        assert_eq!(packets[1][0], 1, "normal frame 1 second");
+        assert_eq!(packets[2][0], 32, "extension index 0 (= +32) third");
+        assert_eq!(packets[3][0], 33, "extension index 1 (= +32) fourth");
+        assert_eq!(packets[4][0], 2, "tail's FrameToWrite == frame_count last");
+    }
+
+    #[test]
+    fn a_profile_round_trips_through_json_and_assembles() {
+        // The bridge serializes a profile to JSON and deserializes it back;
+        // pin that round-trip and then confirm the result still assembles
+        // identically.
+        let original = profile(vec![
+            step("a", Pump::Pressure),
+            step("b", Pump::Flow),
+        ]);
+        let json = serde_json::to_string(&original).unwrap();
+        let restored: Profile = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.assemble(), original.assemble());
+    }
 }
