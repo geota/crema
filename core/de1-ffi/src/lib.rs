@@ -99,6 +99,10 @@ pub enum MmrReg {
     UsbChargerOn,
     /// Feature-flag bitmask.
     FeatureFlags,
+    /// Whether the user is currently present at the machine.
+    UserPresent,
+    /// Steam two-tap-stop register.
+    SteamTwoTapStop,
     /// Cup-warmer temperature (Bengle models only).
     CupWarmerTemp,
 }
@@ -126,6 +130,8 @@ impl From<MmrReg> for MmrRegister {
             MmrReg::FlushTimeout => MmrRegister::FlushTimeout,
             MmrReg::UsbChargerOn => MmrRegister::UsbChargerOn,
             MmrReg::FeatureFlags => MmrRegister::FeatureFlags,
+            MmrReg::UserPresent => MmrRegister::UserPresent,
+            MmrReg::SteamTwoTapStop => MmrRegister::SteamTwoTapStop,
             MmrReg::CupWarmerTemp => MmrRegister::CupWarmerTemp,
         }
     }
@@ -241,6 +247,31 @@ impl From<SteamHotWaterSettings> for ShotSettings {
             group_temp_c: s.group_temp_c,
         }
     }
+}
+
+/// The composite `set_heater_tweaks` argument record, mirroring
+/// [`de1_app::HeaterTweaks`] across the UniFFI boundary.
+///
+/// `Duration` does not cross UniFFI cleanly, so timeouts are flat scalars
+/// (`seconds` / `ms`) documented in their field names.
+#[derive(uniffi::Record)]
+pub struct HeaterTweaksRecord {
+    /// Hot-water phase-1 flow rate, mL/s.
+    pub phase_1_flow_rate: f32,
+    /// Hot-water phase-2 flow rate, mL/s.
+    pub phase_2_flow_rate: f32,
+    /// Hot-water idle temperature, °C.
+    pub hot_water_idle_temp_c: u8,
+    /// Espresso warmup timeout, seconds.
+    pub espresso_warmup_timeout_seconds: u32,
+    /// Steam two-tap-stop register raw byte.
+    pub steam_two_tap_stop: u8,
+    /// Flush timeout, milliseconds (scaled to deciseconds on the wire).
+    pub flush_timeout_ms: u32,
+    /// Flush flow rate, mL/s.
+    pub flush_flow_rate: f32,
+    /// Hot-water flow rate, mL/s.
+    pub hot_water_flow_rate: f32,
 }
 
 /// The Crema core, exposed to the Kotlin shell.
@@ -474,6 +505,128 @@ impl CremaBridge {
     /// Returns a JSON-encoded [`CoreOutput`].
     pub fn set_refill_threshold(&self, threshold_mm: f32) -> String {
         json(self.core().set_refill_threshold(threshold_mm))
+    }
+
+    /// Write one DE1 memory-mapped register. `value` is the raw little-endian
+    /// word the register expects, already scaled. `byte_len` is 1, 2, or 4 —
+    /// the wire `Len` byte of the resulting `WriteToMMR` packet.
+    pub fn write_mmr(&self, register: MmrReg, value: u32, byte_len: u8) -> String {
+        json(self.core().write_mmr(register.into(), value, byte_len))
+    }
+
+    /// Set the fan-on temperature threshold, °C. Legacy
+    /// `set_fan_temperature_threshold`; MMR `0x803808`, 1-byte.
+    pub fn set_fan_threshold(&self, temp_c: u8) -> String {
+        json(self.core().set_fan_threshold(temp_c))
+    }
+
+    /// Set the tank desired water-temperature threshold, °C. Legacy
+    /// `set_tank_temperature_threshold` (immediate value only); MMR
+    /// `0x80380C`, 1-byte.
+    pub fn set_tank_threshold(&self, temp_c: u8) -> String {
+        json(self.core().set_tank_threshold(temp_c))
+    }
+
+    /// Set the steam flow rate, mL/s. Scaled `int(10 × rate)`; MMR
+    /// `0x803828`, 1-byte.
+    pub fn set_steam_flow(&self, ml_per_s: f32) -> String {
+        json(self.core().set_steam_flow(ml_per_s))
+    }
+
+    /// Set the seconds of high-flow steam at the start of a steam cycle.
+    /// MMR `0x80382C`, 1-byte.
+    pub fn set_steam_highflow_start(&self, seconds: u32) -> String {
+        json(
+            self.core()
+                .set_steam_highflow_start(std::time::Duration::from_secs(u64::from(seconds))),
+        )
+    }
+
+    /// Set the group-head-control mode. MMR `0x803820`, 1-byte.
+    pub fn set_ghc_mode(&self, mode: u8) -> String {
+        json(self.core().set_ghc_mode(mode))
+    }
+
+    /// Set the hot-water flow rate, mL/s. Scaled `int(10 × rate)`; MMR
+    /// `0x80384C`, 2-byte.
+    pub fn set_hot_water_flow_rate(&self, ml_per_s: f32) -> String {
+        json(self.core().set_hot_water_flow_rate(ml_per_s))
+    }
+
+    /// Set the flush flow rate, mL/s. Scaled `int(10 × rate)`; MMR
+    /// `0x803840`, 2-byte.
+    pub fn set_flush_flow_rate(&self, ml_per_s: f32) -> String {
+        json(self.core().set_flush_flow_rate(ml_per_s))
+    }
+
+    /// Set the flush timeout. `ms` is milliseconds; the wire scale is
+    /// `int(10 × seconds)`. MMR `0x803848`, 2-byte.
+    pub fn set_flush_timeout(&self, ms: u32) -> String {
+        json(
+            self.core()
+                .set_flush_timeout(std::time::Duration::from_millis(u64::from(ms))),
+        )
+    }
+
+    /// Enable / disable the tablet's USB charging output. MMR `0x803854`,
+    /// 1-byte.
+    pub fn set_usb_charger_on(&self, enabled: bool) -> String {
+        json(self.core().set_usb_charger_on(enabled))
+    }
+
+    /// Tell the firmware whether the user is currently present at the
+    /// machine. **Distinct register** from `set_feature_flags`. MMR
+    /// `0x803860`, 1-byte.
+    pub fn set_user_present(&self, present: bool) -> String {
+        json(self.core().set_user_present(present))
+    }
+
+    /// Set the firmware feature-flag bitmask. **Distinct register** from
+    /// `set_user_present`. MMR `0x803858`, 2-byte.
+    pub fn set_feature_flags(&self, flags: u16) -> String {
+        json(self.core().set_feature_flags(flags))
+    }
+
+    /// Override the refill-kit presence flag (`0`/`1`/`2`). MMR `0x80385C`,
+    /// 4-byte.
+    pub fn set_refill_kit_present(&self, state: u8) -> String {
+        json(self.core().set_refill_kit_present(state))
+    }
+
+    /// Set the mains heater voltage. **Damaging if mis-set** — the shell
+    /// must wrap this in a typed-to-confirm modal. MMR `0x803834`, 1-byte.
+    pub fn set_heater_voltage(&self, volts: u8) -> String {
+        json(self.core().set_heater_voltage(volts))
+    }
+
+    /// Set the cup-warmer temperature, °C (Bengle models only). MMR
+    /// `0x803874`, 2-byte.
+    pub fn set_cup_warmer_temperature(&self, temp_c: u8) -> String {
+        json(self.core().set_cup_warmer_temperature(temp_c))
+    }
+
+    /// Set the flow-calibration multiplier. Scaled `int(1000 × multiplier)`;
+    /// MMR `0x80383C`, 2-byte.
+    pub fn set_calibration_flow_multiplier(&self, multiplier: f32) -> String {
+        json(self.core().set_calibration_flow_multiplier(multiplier))
+    }
+
+    /// Apply the seven-register `heater_tweaks` composite write (legacy
+    /// `set_heater_tweaks`). The record carries the seven settings the legacy
+    /// app pushes at connect time.
+    pub fn set_heater_tweaks(&self, tweaks: HeaterTweaksRecord) -> String {
+        json(self.core().set_heater_tweaks(de1_app::HeaterTweaks {
+            phase_1_flow_rate: tweaks.phase_1_flow_rate,
+            phase_2_flow_rate: tweaks.phase_2_flow_rate,
+            hot_water_idle_temp_c: tweaks.hot_water_idle_temp_c,
+            espresso_warmup_timeout: std::time::Duration::from_secs(u64::from(
+                tweaks.espresso_warmup_timeout_seconds,
+            )),
+            steam_two_tap_stop: tweaks.steam_two_tap_stop,
+            flush_timeout: std::time::Duration::from_millis(u64::from(tweaks.flush_timeout_ms)),
+            flush_flow_rate: tweaks.flush_flow_rate,
+            hot_water_flow_rate: tweaks.hot_water_flow_rate,
+        }))
     }
 
     /// The standard DE1 profiles Crema ships built in, as a JSON array string.

@@ -637,6 +637,18 @@ enum class MmrRegister(val string: String) {
 	/// Feature-flag bitmask (e.g. the `UserNotPresent` flag).
 	@SerialName("FeatureFlags")
 	FeatureFlags("FeatureFlags"),
+	/// Whether the user is currently present at the machine. The legacy app
+	/// writes `1` when the user touches the screen so the firmware does not
+	/// sleep on inactivity. **Distinct register from [`FeatureFlags`]** — the
+	/// legacy `de1_comms.tcl` writes to two separate addresses; the firmware
+	/// MMR map is not openly published but the legacy source treats them as
+	/// unrelated registers.
+	@SerialName("UserPresent")
+	UserPresent("UserPresent"),
+	/// Steam two-tap stop register — the second `tap` of the
+	/// double-tap-to-stop steam UX (`heater_tweaks`).
+	@SerialName("SteamTwoTapStop")
+	SteamTwoTapStop("SteamTwoTapStop"),
 	/// Cup-warmer temperature (Bengle models only).
 	@SerialName("CupWarmerTemp")
 	CupWarmerTemp("CupWarmerTemp"),
@@ -815,6 +827,11 @@ enum class WriteTarget(val string: String) {
 	/// is *written* here; the DE1 answers on the same characteristic's notify.
 	@SerialName("De1MmrRequest")
 	De1MmrRequest("De1MmrRequest"),
+	/// The DE1 `WriteToMMR` characteristic (`cuuid_06`) — an MMR write packet
+	/// is sent here. Sibling of [`De1MmrRequest`] on the read side; the two
+	/// use distinct UUIDs even though they share a packet layout.
+	@SerialName("De1MmrWrite")
+	De1MmrWrite("De1MmrWrite"),
 	/// The DE1 `Calibration` characteristic (`cuuid_12`) — a calibration read
 	/// request is *written* here; the DE1 answers on the same characteristic.
 	@SerialName("De1Calibration")
