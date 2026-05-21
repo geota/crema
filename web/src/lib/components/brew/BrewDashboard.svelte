@@ -368,13 +368,17 @@
 						: 'Not paired'}</span
 				>
 				<span class="crema-foot-divider"></span>
-				<!-- Group / steam temperatures: real telemetry. The DE1's
-				     blended "group" water temperature is `ShotSample.mix_temp`;
-				     the steam-heater temperature is `steam_temp`. Both arrive on
-				     every `Telemetry` event (see `applyEvent`). Display unit
+				<!-- Group / steam temperatures: real telemetry. "Group" is the
+				     measured group-head thermocouple (`ShotSample.head_temp`);
+				     this stays meaningful at idle (held at the idle setpoint
+				     ~80°C) where `mix_temp` would read room-temperature because
+				     no water is flowing. The mix temperature is also available
+				     via `mixTempM` if a future surface wants the post-blend
+				     output. The steam-heater temperature is `steam_temp`. All
+				     three arrive on every `Telemetry` event. Display unit
 				     follows the Settings temperature preference (D1). -->
 				<span class="t-eyebrow">Group</span><span
-					>{mixTempM.value}{mixTempM.unit ? ` ${mixTempM.unit}` : ''}</span
+					>{tempM.value}{tempM.unit ? ` ${tempM.unit}` : ''}</span
 				>
 				<span class="t-eyebrow">Steam</span><span
 					>{steamTempM.value}{steamTempM.unit ? ` ${steamTempM.unit}` : ''}</span
