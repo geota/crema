@@ -309,6 +309,22 @@ export interface CoreOutput {
 }
 
 /**
+ * A DE1 CPU-board firmware identity, taken from the `Version` characteristic's
+ * CPU block: the release number and the commits-since-release count.
+ * 
+ * Cross-FFI as plain scalars per the workspace convention.
+ */
+export interface KnownFirmware {
+	/** CPU firmware release number, e.g. `1.0` or `1.4`. */
+	release: number;
+	/**
+	 * Commits since the tagged release — the build number that increments per
+	 * firmware ship.
+	 */
+	commits: number;
+}
+
+/**
  * One selectable display/behaviour mode a scale exposes.
  * 
  * A "first-class" scale (the Bookoo) lets the user switch the active display
@@ -439,6 +455,42 @@ export enum CalTarget {
 	/** The temperature sensor. */
 	Temperature = "Temperature",
 }
+
+/**
+ * What the firmware-update check found.
+ * 
+ * `#[non_exhaustive]` so we can grow the enum (e.g. a future "checking…" /
+ * "fetched-from-manifest" variant) without breaking shell `match`es.
+ */
+export type FirmwareUpdateStatus = 
+	/**
+	 * No DE1 connected, or the `Version` characteristic has not yet been
+	 * read. The shell should render "Connect a DE1 to check" or similar.
+	 */
+	| { type: "Unknown", content?: undefined }
+	/** The installed firmware matches [`LATEST_KNOWN_FIRMWARE`]. */
+	| { type: "UpToDate", content: {
+	/** What Crema thinks is installed. */
+	installed: KnownFirmware;
+}}
+	/** The installed firmware is older than [`LATEST_KNOWN_FIRMWARE`]. */
+	| { type: "UpdateAvailable", content: {
+	/** What is installed today. */
+	installed: KnownFirmware;
+	/** The latest version Crema knows about. */
+	latest: KnownFirmware;
+}}
+	/**
+	 * The installed firmware is newer than [`LATEST_KNOWN_FIRMWARE`] — most
+	 * likely the user updated through the legacy de1app since this Crema
+	 * build shipped. Informational; no action needed.
+	 */
+	| { type: "NewerInstalled", content: {
+	/** What is installed today. */
+	installed: KnownFirmware;
+	/** The (older) version Crema knows about. */
+	latest: KnownFirmware;
+}};
 
 /**
  * DE1 top-level machine state. Discriminants match the firmware `MachineState`

@@ -22,7 +22,7 @@
  */
 
 import type { CoreOutput, ScaleCapabilities, ScaleUuids } from './crema-core';
-import type { CalTarget, MmrRegister } from './crema-core';
+import type { CalTarget, MmrRegister, FirmwareUpdateStatus } from './crema-core';
 
 /**
  * Which quantity a profile step holds at its target — mirrors the core's
@@ -168,6 +168,13 @@ export interface CremaCore {
 	 * characteristics to subscribe to.
 	 */
 	scaleUuids(): Promise<ScaleUuids | undefined>;
+	/**
+	 * Compare the most recently observed DE1 firmware version against the
+	 * latest firmware Crema was compiled against. Pure read — no BLE traffic.
+	 * Returns the `Unknown` variant until the DE1's `Version` characteristic
+	 * has been observed.
+	 */
+	firmwareUpdateStatus(): Promise<FirmwareUpdateStatus>;
 	/** Build a `CoreOutput` whose command queries the connected scale's settings. */
 	queryScaleSettings(): Promise<CoreOutput>;
 	/**
@@ -370,6 +377,9 @@ async function createCore(): Promise<CremaCore> {
 			const raw = bridge.scale_uuids();
 			return raw === undefined ? undefined : (JSON.parse(raw) as ScaleUuids);
 		},
+		async firmwareUpdateStatus() {
+			return JSON.parse(bridge.firmware_update_status()) as FirmwareUpdateStatus;
+		},
 		async queryScaleSettings() {
 			return parseOutput(bridge.query_scale_settings());
 		},
@@ -485,6 +495,6 @@ async function createCore(): Promise<CremaCore> {
 	};
 }
 
-export type { CoreOutput, ScaleCapabilities, ScaleUuids } from './crema-core';
+export type { CoreOutput, ScaleCapabilities, ScaleUuids, FirmwareUpdateStatus, KnownFirmware } from './crema-core';
 export type { Event, Command, ModeInfo, RangeCapability } from './crema-core';
 export { CalCommand, CalTarget, MmrRegister } from './crema-core';

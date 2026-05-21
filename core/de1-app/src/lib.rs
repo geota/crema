@@ -14,9 +14,11 @@
 
 pub mod error;
 pub mod event;
+pub mod firmware_info;
 
 pub use error::AppError;
 pub use event::{Command, CoreOutput, Event, Source, WriteTarget};
+pub use firmware_info::{FirmwareUpdateStatus, KnownFirmware, LATEST_KNOWN_FIRMWARE};
 
 use std::time::Duration;
 
@@ -80,6 +82,10 @@ pub struct CremaCore {
     /// The eco-mode steam target temperature, °C.
     steam_eco_temp: f32,
     last_state: Option<StateInfo>,
+    /// The most recent `Version` characteristic reply the shell delivered.
+    /// `None` until the DE1 connects and the BLE shell reads `cuuid_01`.
+    /// Powers [`firmware_update_status`](Self::firmware_update_status).
+    last_firmware: Option<de1_protocol::Version>,
     /// Timestamp the in-progress shot began — stamps telemetry elapsed time.
     /// `None` when no shot is in progress.
     shot_started: Option<Duration>,
@@ -123,6 +129,7 @@ impl CremaCore {
             steam_hotwater_settings: None,
             steam_eco_temp: STEAM_ECO_TEMPERATURE_C,
             last_state: None,
+            last_firmware: None,
             shot_started: None,
             scale: None,
             flow: FlowEstimator::new(FlowAlgorithm::default()),
@@ -1150,19 +1157,37 @@ impl CremaCore {
     }
 
     /// Decode and process a `Version` notification — the DE1's BLE-interface
-    /// and CPU-board firmware versions.
-    fn handle_version(&self, data: &[u8], out: &mut CoreOutput) {
+    /// and CPU-board firmware versions. Caches the decoded value on
+    /// `self.last_firmware` so
+    /// [`firmware_update_status`](Self::firmware_update_status) can compare it
+    /// against [`LATEST_KNOWN_FIRMWARE`](firmware_info::LATEST_KNOWN_FIRMWARE).
+    fn handle_version(&mut self, data: &[u8], out: &mut CoreOutput) {
         match Version::decode(data) {
-            Ok(version) => out.events.push(Event::Firmware {
-                fw_release: version.fw.release,
-                fw_commits: version.fw.commits,
-                fw_api_version: version.fw.api_version,
-                firmware_string: version.firmware_string(),
-            }),
+            Ok(version) => {
+                self.last_firmware = Some(version);
+                out.events.push(Event::Firmware {
+                    fw_release: version.fw.release,
+                    fw_commits: version.fw.commits,
+                    fw_api_version: version.fw.api_version,
+                    firmware_string: version.firmware_string(),
+                });
+            }
             Err(e) => out.events.push(Event::DecodeError {
                 message: e.to_string(),
             }),
         }
+    }
+
+    /// Compare the most recently observed DE1 firmware version against the
+    /// latest version Crema was compiled against
+    /// ([`LATEST_KNOWN_FIRMWARE`](firmware_info::LATEST_KNOWN_FIRMWARE)).
+    ///
+    /// Returns [`FirmwareUpdateStatus::Unknown`] until the DE1's `Version`
+    /// characteristic has been read at least once. The check is a pure
+    /// read against cached state — no BLE traffic, no network. Mirrors the
+    /// legacy de1app's local-comparison check (`vars.tcl:3787-3797`).
+    pub fn firmware_update_status(&self) -> FirmwareUpdateStatus {
+        firmware_info::compare(self.last_firmware.as_ref())
     }
 
     /// Decode and process a `ReadFromMMR` reply — the DE1's answer to an MMR
