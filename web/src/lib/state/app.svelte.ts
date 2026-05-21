@@ -324,6 +324,27 @@ export class CremaApp {
 				const hex = [...data].map((b) => b.toString(16).padStart(2, '0')).join('');
 				this.state.log(`→ DE1 write ${command.content.target} ${hex}`);
 				await this.de1.writeCharacteristic(command.content.target, data);
+				// The DE1 does *not* emit Handle Value Notifications on
+				// FrameWrite (cuuid_10) — confirmed by the 2026-05-21
+				// HCI snoop of a legacy-app session: every write gets only
+				// an empty ATT Write Response. The legacy's "frame ack"
+				// is its BLE wrapper echoing the written value into a
+				// callback for debug logs, not real device traffic.
+				//
+				// To keep the core's per-frame upload state machine the
+				// canonical source of truth without a phantom notification
+				// stream, synthesize a De1FrameAck from the data we just
+				// successfully wrote — byte 0 (FrameToWrite) is all the
+				// core matches on. Profile-header writes are not acked by
+				// the orchestrator, so they're skipped here.
+				if (command.content.target === 'De1ProfileFrame') {
+					const ackOut = await this.core.onNotification(
+						'De1FrameAck',
+						data,
+						performance.now()
+					);
+					this.applyCoreOutput(ackOut);
+				}
 				break;
 			}
 		}
