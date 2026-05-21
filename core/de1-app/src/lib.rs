@@ -18,7 +18,7 @@ pub mod firmware_info;
 
 pub use error::AppError;
 pub use event::{Command, CoreOutput, Event, Source, WriteTarget};
-pub use firmware_info::{FirmwareUpdateStatus, KnownFirmware, LATEST_KNOWN_FIRMWARE};
+pub use firmware_info::{FirmwareUpdateStatus, LATEST_KNOWN_FIRMWARE_BUILD};
 
 use std::time::Duration;
 
@@ -83,9 +83,16 @@ pub struct CremaCore {
     steam_eco_temp: f32,
     last_state: Option<StateInfo>,
     /// The most recent `Version` characteristic reply the shell delivered.
-    /// `None` until the DE1 connects and the BLE shell reads `cuuid_01`.
-    /// Powers [`firmware_update_status`](Self::firmware_update_status).
+    /// `None` until the DE1 connects and the BLE shell reads `cuuid_01`. The
+    /// BLE block here drives the human-readable firmware label
+    /// ([`Event::Firmware`]); the user-visible build number for the
+    /// update-status check lives in [`last_firmware_build`](Self) instead.
     last_firmware: Option<de1_protocol::Version>,
+    /// The most recent value read from MMR register `0x800010`
+    /// ([`MmrRegister::FirmwareVersion`]) — Decent's user-visible firmware
+    /// build number ("v1352"). `None` until that MMR has been read at least
+    /// once. Powers [`firmware_update_status`](Self::firmware_update_status).
+    last_firmware_build: Option<u16>,
     /// Timestamp the in-progress shot began — stamps telemetry elapsed time.
     /// `None` when no shot is in progress.
     shot_started: Option<Duration>,
@@ -130,6 +137,7 @@ impl CremaCore {
             steam_eco_temp: STEAM_ECO_TEMPERATURE_C,
             last_state: None,
             last_firmware: None,
+            last_firmware_build: None,
             shot_started: None,
             scale: None,
             flow: FlowEstimator::new(FlowAlgorithm::default()),
@@ -967,7 +975,7 @@ impl CremaCore {
             Source::ScaleCommand => self.handle_scale_command(data, &mut out),
             Source::De1WaterLevels => self.handle_water_levels(data, &mut out),
             Source::De1Version => self.handle_version(data, &mut out),
-            Source::De1MmrRead => Self::handle_mmr_read(data, &mut out),
+            Source::De1MmrRead => self.handle_mmr_read(data, &mut out),
             Source::De1Calibration => Self::handle_calibration(data, &mut out),
         }
         out
@@ -1178,16 +1186,21 @@ impl CremaCore {
         }
     }
 
-    /// Compare the most recently observed DE1 firmware version against the
-    /// latest version Crema was compiled against
-    /// ([`LATEST_KNOWN_FIRMWARE`](firmware_info::LATEST_KNOWN_FIRMWARE)).
+    /// Compare the most recently observed DE1 firmware build number against
+    /// the latest build Crema was compiled against
+    /// ([`LATEST_KNOWN_FIRMWARE_BUILD`](firmware_info::LATEST_KNOWN_FIRMWARE_BUILD)).
     ///
-    /// Returns [`FirmwareUpdateStatus::Unknown`] until the DE1's `Version`
-    /// characteristic has been read at least once. The check is a pure
-    /// read against cached state — no BLE traffic, no network. Mirrors the
-    /// legacy de1app's local-comparison check (`vars.tcl:3787-3797`).
+    /// The build number comes from MMR register `0x800010`
+    /// ([`MmrRegister::FirmwareVersion`]) — the canonical "v1352" build number
+    /// the legacy de1app's check uses (`vars.tcl:3787-3797`). The shell must
+    /// have issued [`read_mmr(FirmwareVersion)`](Self::read_mmr) and routed
+    /// the reply back through `on_notification` for this to return a
+    /// comparison; otherwise it returns [`FirmwareUpdateStatus::Unknown`].
+    ///
+    /// The check is a pure read against cached state — no BLE traffic, no
+    /// network.
     pub fn firmware_update_status(&self) -> FirmwareUpdateStatus {
-        firmware_info::compare(self.last_firmware.as_ref())
+        firmware_info::compare(self.last_firmware_build)
     }
 
     /// Decode and process a `ReadFromMMR` reply — the DE1's answer to an MMR
@@ -1199,7 +1212,7 @@ impl CremaCore {
     /// [`MmrRegister`] by the echoed address and emitted as an
     /// [`Event::MmrValue`]. A reply for an address Crema does not model is
     /// dropped silently — not a decode failure, just an unmodelled register.
-    fn handle_mmr_read(data: &[u8], out: &mut CoreOutput) {
+    fn handle_mmr_read(&mut self, data: &[u8], out: &mut CoreOutput) {
         let reply = match MmrReadReply::decode(data) {
             Ok(reply) => reply,
             Err(e) => {
@@ -1212,6 +1225,15 @@ impl CremaCore {
         if let Some(register) = MmrRegister::from_address(reply.address)
             && let Some(value) = reply.word(0)
         {
+            // Side-effect cache: the FirmwareVersion register feeds
+            // `firmware_update_status`. The wire word's value fits a `u16`
+            // for every shipped DE1 build (latest is ~1352, well below
+            // 65535); saturate on the impossible overflow path so the
+            // comparison still pins "newer than Crema knows" instead of
+            // silently truncating.
+            if register == MmrRegister::FirmwareVersion {
+                self.last_firmware_build = Some(u16::try_from(value).unwrap_or(u16::MAX));
+            }
             out.events.push(Event::MmrValue { register, value });
         }
     }
@@ -1810,6 +1832,23 @@ mod tests {
                 value: 1352,
             }
         )));
+    }
+
+    #[test]
+    fn firmware_version_mmr_reply_caches_last_firmware_build() {
+        let mut core = CremaCore::new();
+        // Before any MMR read, the status check returns Unknown.
+        assert_eq!(core.firmware_update_status(), FirmwareUpdateStatus::Unknown);
+        // Feed a ReadFromMMR reply for 0x800010 with value 1352.
+        let mut packet = [0u8; de1_protocol::MMR_PACKET_LEN];
+        packet[1..4].copy_from_slice(&[0x80, 0x00, 0x10]);
+        packet[4..8].copy_from_slice(&1352u32.to_le_bytes());
+        let _ = core.on_notification(Source::De1MmrRead, &packet, 0);
+        // The cache is now populated and the status check finds UpToDate.
+        assert_eq!(
+            core.firmware_update_status(),
+            FirmwareUpdateStatus::UpToDate { installed: 1352 }
+        );
     }
 
     #[test]

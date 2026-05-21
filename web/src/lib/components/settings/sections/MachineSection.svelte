@@ -35,7 +35,7 @@
 	 */
 	import type { CremaApp, UiSnapshot } from '$lib/state';
 	import type { De1State } from '$lib/ble';
-	import type { FirmwareUpdateStatus, KnownFirmware } from '$lib/core';
+	import type { FirmwareUpdateStatus } from '$lib/core';
 	import { getSettingsStore, formatTemp } from '$lib/settings';
 	import StSectionHead from '../StSectionHead.svelte';
 	import StGroup from '../StGroup.svelte';
@@ -122,17 +122,13 @@
 
 	// ── Firmware-update check (read-only) ─────────────────────────────────
 	// Mirrors the legacy de1app's local comparison (`vars.tcl:3787-3797`):
-	// read the DE1's installed firmware version (already cached in the core
-	// when `Event::Firmware` arrives at connect time) and compare against a
-	// hardcoded "latest known" constant bumped per Crema release. No network,
-	// no file picker, no upload — see `docs/17-firmware-update-plan.md` for
-	// the (v2-deferred) upload plan.
+	// the BLE shell reads MMR register 0x800010 (FirmwareVersion) at connect
+	// time — the canonical "v1352" build number — caches it in the core, and
+	// this UI compares against a hardcoded LATEST_KNOWN_FIRMWARE_BUILD bumped
+	// per Crema release. No network, no file picker, no upload — see
+	// `docs/17-firmware-update-plan.md` for the (v2-deferred) upload plan.
 	let firmwareStatus: FirmwareUpdateStatus | null = $state(null);
 	let firmwareChecking = $state(false);
-
-	function formatFw(fw: KnownFirmware): string {
-		return `${fw.release.toFixed(1)}.${fw.commits}`;
-	}
 
 	const firmwareStatusLabel = $derived.by(() => {
 		if (firmwareStatus === null) {
@@ -142,11 +138,11 @@
 			case 'Unknown':
 				return 'Connect a DE1 first';
 			case 'UpToDate':
-				return `Up to date — v${formatFw(firmwareStatus.content.installed)}`;
+				return `Up to date — v${firmwareStatus.content.installed}`;
 			case 'UpdateAvailable':
-				return `Update available — v${formatFw(firmwareStatus.content.latest)}`;
+				return `Update available — v${firmwareStatus.content.latest}`;
 			case 'NewerInstalled':
-				return `Newer than Crema knows — v${formatFw(firmwareStatus.content.installed)}`;
+				return `Newer than Crema knows — v${firmwareStatus.content.installed}`;
 		}
 	});
 
@@ -156,11 +152,11 @@
 		}
 		switch (firmwareStatus.type) {
 			case 'Unknown':
-				return 'Crema needs the DE1 connected and its version characteristic read.';
+				return 'Crema needs the DE1 connected and its FirmwareVersion MMR read.';
 			case 'UpToDate':
 				return 'Your DE1 is on the latest firmware this Crema build was tested against.';
 			case 'UpdateAvailable':
-				return `Use the legacy de1app to apply firmware v${formatFw(firmwareStatus.content.latest)}. Crema's own update flow ships in a later release.`;
+				return `Use the legacy de1app to apply firmware v${firmwareStatus.content.latest}. Crema's own update flow ships in a later release.`;
 			case 'NewerInstalled':
 				return "Your DE1's firmware is ahead of this Crema build. Nothing to do.";
 		}

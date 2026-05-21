@@ -495,6 +495,6 @@ async function createCore(): Promise<CremaCore> {
 	};
 }
 
-export type { CoreOutput, ScaleCapabilities, ScaleUuids, FirmwareUpdateStatus, KnownFirmware } from './crema-core';
+export type { CoreOutput, ScaleCapabilities, ScaleUuids, FirmwareUpdateStatus } from './crema-core';
 export type { Event, Command, ModeInfo, RangeCapability } from './crema-core';
 export { CalCommand, CalTarget, MmrRegister } from './crema-core';
