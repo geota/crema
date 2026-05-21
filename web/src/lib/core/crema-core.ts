@@ -283,6 +283,73 @@ export type Event =
 	 */
 	method: string;
 }}
+	/**
+	 * The DE1's `ShotHeader` was read from `HeaderWrite` (`cuuid_0F`) —
+	 * emitted once after the BLE shell reads the characteristic at connect
+	 * time. Carries the shape of the currently-loaded profile.
+	 */
+	| { type: "ProfileHeaderRead", content: {
+	/** Total number of frames in the loaded profile. */
+	frame_count: number;
+	/** How many leading frames count as preinfusion. */
+	preinfuse_frame_count: number;
+	/** Minimum pressure allowed in flow-priority frames, bar. */
+	minimum_pressure: number;
+	/** Maximum flow allowed in pressure-priority frames, mL/s. */
+	maximum_flow: number;
+}}
+	/**
+	 * A profile upload has begun. Carries the total number of acks the
+	 * orchestrator expects (frames + extensions + tail; the header is
+	 * not acked separately).
+	 */
+	| { type: "ProfileUploadStarted", content: {
+	/**
+	 * Title of the profile being uploaded — propagated for the
+	 * shell's UI ("Uploading <title>…") and for the active-profile
+	 * tracking that pairs with this event.
+	 */
+	title: string;
+	/** Number of normal frames the profile has. */
+	frame_count: number;
+	/** Number of extension frames (one per step that has a limiter). */
+	extension_frame_count: number;
+}}
+	/** One profile frame was acknowledged by the DE1. */
+	| { type: "ProfileUploadProgress", content: {
+	/**
+	 * The step index just acknowledged. For an extension-frame ack
+	 * this is the step the extension extends (raw `FrameToWrite` byte
+	 * minus 32); for the tail it equals `frame_count`.
+	 */
+	frame: number;
+	/** Whether the just-acked write was an extension frame. */
+	extension: boolean;
+	/**
+	 * Total number of acks the upload expects
+	 * (`frame_count + extension_count + 1`).
+	 */
+	total_acks: number;
+	/** Number of acks received so far, including this one. */
+	acks_received: number;
+}}
+	/**
+	 * The whole profile uploaded successfully — every expected ack
+	 * arrived in order. Carries the title for the shell's
+	 * active-profile bookkeeping.
+	 */
+	| { type: "ProfileUploadCompleted", content: {
+	/** Title of the profile that finished uploading. */
+	title: string;
+}}
+	/**
+	 * The profile upload failed. The core has discarded its in-progress
+	 * state; the shell may retry by calling `upload_profile` again.
+	 */
+	| { type: "ProfileUploadFailed", content: {
+	/** Why the upload failed. */
+	reason: ProfileUploadFailure;
+}}
 	/** An incoming notification could not be decoded. */
 	| { type: "DecodeError", content: {
 	/** Human-readable description of the failure. */
@@ -590,6 +657,55 @@ export enum MmrRegister {
 	CupWarmerTemp = "CupWarmerTemp",
 }
 
+/**
+ * Why a profile upload failed.
+ * 
+ * `#[non_exhaustive]` so additional categories (e.g. a firmware-side
+ * "shot in progress" rejection signalled through some future cuuid_10
+ * packet) can be added without breaking the FFI surface.
+ * 
+ * See `docs/16-profile-upload-plan.md` §4.3.
+ */
+export type ProfileUploadFailure = 
+	/** The profile had no steps. */
+	| { kind: "Empty", details?: undefined }
+	/** The profile had more than 32 steps. */
+	| { kind: "TooManySteps", details: {
+	/** How many steps the rejected profile had. */
+	count: number;
+}}
+	/**
+	 * A frame ack arrived for a frame number the orchestrator did not
+	 * expect — either out-of-order or for a step the profile does not have.
+	 */
+	| { kind: "UnexpectedAck", details: {
+	/**
+	 * The `FrameToWrite` byte the core expected next, raw (`≥ 32` for
+	 * an expected extension ack, `== frame_count` for the tail).
+	 */
+	expected: number;
+	/** The `FrameToWrite` byte the ack actually carried. */
+	got: number;
+}}
+	/**
+	 * No ack arrived within
+	 * [`PROFILE_UPLOAD_ACK_TIMEOUT`](crate::PROFILE_UPLOAD_ACK_TIMEOUT) of
+	 * the most recent ack (or upload start, for the first ack).
+	 */
+	| { kind: "AckTimeout", details: {
+	/**
+	 * The `FrameToWrite` byte the core was waiting for when the
+	 * timeout fired.
+	 */
+	awaiting: number;
+}}
+	/**
+	 * The shell called
+	 * [`cancel_profile_upload`](crate::CremaCore::cancel_profile_upload)
+	 * mid-upload.
+	 */
+	| { kind: "Aborted", details?: undefined };
+
 /** Where an espresso shot is in its lifecycle. */
 export enum ShotPhase {
 	/** No espresso shot in progress. */
@@ -726,5 +842,18 @@ export enum WriteTarget {
 	 * `WaterLevels` packet is *written* here to set the refill threshold.
 	 */
 	De1WaterLevels = "De1WaterLevels",
+	/**
+	 * The DE1 `HeaderWrite` characteristic (`cuuid_0F`) — the 5-byte
+	 * `ShotHeader` packet is *written* here at the start of a profile
+	 * upload. See `docs/16-profile-upload-plan.md`.
+	 */
+	De1ProfileHeader = "De1ProfileHeader",
+	/**
+	 * The DE1 `FrameWrite` characteristic (`cuuid_10`) — each 8-byte
+	 * frame packet (normal frames, extension frames, and the tail) is
+	 * *written* here in upload order during a profile upload. The DE1
+	 * echoes each write back as a `Source::De1FrameAck` notification.
+	 */
+	De1ProfileFrame = "De1ProfileFrame",
 }
 

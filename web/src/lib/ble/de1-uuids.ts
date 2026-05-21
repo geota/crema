@@ -69,6 +69,21 @@ export const De1Uuids = {
 	CALIBRATION: short('a012'),
 
 	/**
+	 * `cuuid_0F` / `A00F` — HeaderWrite: the 5-byte profile header. Crema
+	 * writes here at the start of a profile upload; a one-shot Read returns
+	 * the currently-loaded profile's header (read at connect time).
+	 */
+	HEADER_WRITE: short('a00f'),
+
+	/**
+	 * `cuuid_10` / `A010` — FrameWrite: one 8-byte profile frame. Crema
+	 * writes one packet per frame (normal frame, extension frame, tail)
+	 * during a profile upload; the DE1 echoes each write back as a
+	 * notification used to ack the upload.
+	 */
+	FRAME_WRITE: short('a010'),
+
+	/**
 	 * The DE1 advertises with a name beginning "DE1"; some units advertise
 	 * "BENGLE". Its Nordic nRF5x BLE module can also surface under the chip's
 	 * default name "nRF5x" — kept as a prefix for now so the chooser still

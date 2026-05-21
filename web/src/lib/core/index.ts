@@ -133,7 +133,9 @@ export type NotificationSource =
 	| 'De1WaterLevels'
 	| 'De1Version'
 	| 'De1MmrRead'
-	| 'De1Calibration';
+	| 'De1Calibration'
+	| 'De1ProfileHeader'
+	| 'De1FrameAck';
 
 /**
  * The async core facade. One instance owns one `CremaBridge`; obtain it from
@@ -175,6 +177,25 @@ export interface CremaCore {
 	 * has been observed.
 	 */
 	firmwareUpdateStatus(): Promise<FirmwareUpdateStatus>;
+	/**
+	 * Start uploading `profile` to the DE1. Resolves to the initial
+	 * `CoreOutput` carrying `ProfileUploadStarted` + every BLE write
+	 * command in upload order. Subsequent progress arrives via
+	 * `ProfileUploadProgress` events on `De1FrameAck` notifications,
+	 * success via `ProfileUploadCompleted`, failure via
+	 * `ProfileUploadFailed`. See `docs/16-profile-upload-plan.md`.
+	 */
+	uploadProfile(profile: unknown, nowMs: number): Promise<CoreOutput>;
+	/** Cancel an in-progress upload; emits `ProfileUploadFailed { Aborted }`. */
+	cancelProfileUpload(): Promise<CoreOutput>;
+	/** `true` from `uploadProfile` until the tail ack / failure / cancel. */
+	profileUploadInProgress(): Promise<boolean>;
+	/**
+	 * Title of the profile most recently uploaded successfully — the
+	 * "active profile on the DE1" identity. `null` until the first
+	 * successful upload; cleared by `reset`.
+	 */
+	activeProfileTitle(): Promise<string | null>;
 	/** Build a `CoreOutput` whose command queries the connected scale's settings. */
 	queryScaleSettings(): Promise<CoreOutput>;
 	/**
@@ -336,6 +357,10 @@ async function createCore(): Promise<CremaCore> {
 				return wasm.NotificationSource.De1MmrRead;
 			case 'De1Calibration':
 				return wasm.NotificationSource.De1Calibration;
+			case 'De1ProfileHeader':
+				return wasm.NotificationSource.De1ProfileHeader;
+			case 'De1FrameAck':
+				return wasm.NotificationSource.De1FrameAck;
 		}
 	};
 
@@ -379,6 +404,19 @@ async function createCore(): Promise<CremaCore> {
 		},
 		async firmwareUpdateStatus() {
 			return JSON.parse(bridge.firmware_update_status()) as FirmwareUpdateStatus;
+		},
+		async uploadProfile(profile, nowMs) {
+			return parseOutput(bridge.upload_profile(JSON.stringify(profile), nowMs));
+		},
+		async cancelProfileUpload() {
+			return parseOutput(bridge.cancel_profile_upload());
+		},
+		async profileUploadInProgress() {
+			return bridge.profile_upload_in_progress();
+		},
+		async activeProfileTitle() {
+			const t = bridge.active_profile_title();
+			return t === undefined ? null : t;
 		},
 		async queryScaleSettings() {
 			return parseOutput(bridge.query_scale_settings());

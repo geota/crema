@@ -18,7 +18,7 @@
 	 * core has no profile-upload path yet. Import is a stub (`// TODO`).
 	 */
 	import { goto } from '$app/navigation';
-	import { getProfileStore, type CremaProfile } from '$lib/profiles';
+	import { getProfileStore, toCoreProfile, type CremaProfile } from '$lib/profiles';
 	import { getCremaAppContext } from '$lib/shell/app-context';
 	import { ProfileCard } from '$lib/components/profiles';
 
@@ -92,17 +92,29 @@
 
 	// ── Card actions ─────────────────────────────────────────────────────
 	/**
-	 * Load a profile on Brew — mark it active. Updates the persisted active id
-	 * and pushes the name into the shared UI state so the Brew dashboard's
-	 * header reflects it.
+	 * Load a profile on Brew — mark it active and upload it to the DE1.
 	 *
-	 * TODO: wire to DE1 profile upload — this is UI-level only; the profile is
-	 * not written to the machine (the core has no profile-upload command).
+	 * Two pieces of state move:
+	 * - `store.setActive(id)` flips the local UI selection (the active outline
+	 *   tracks this immediately so a click feels responsive).
+	 * - `app.uploadProfile(...)` ships the profile to the DE1 over BLE; on
+	 *   success the orchestrator emits `ProfileUploadCompleted`, which sets
+	 *   `ui.activeProfileTitle` so the brew page header reflects what's
+	 *   *actually* on the machine.
+	 *
+	 * If no DE1 is connected the upload is a no-op (the core builds the
+	 * commands; `de1.writeCharacteristic` short-circuits with a "not
+	 * connected" status log). The user can still see the UI-level active
+	 * outline; the upload retries on the next click.
 	 */
 	function loadOnBrew(id: string): void {
 		store.setActive(id);
 		const profile = store.get(id);
-		ctx().app?.state.patch({ activeProfileName: profile?.name ?? null });
+		const app = ctx().app;
+		if (profile && app) {
+			app.state.patch({ activeProfileName: profile.name });
+			void app.uploadProfile(toCoreProfile(profile));
+		}
 	}
 
 	/** Duplicate a profile into a new custom profile, then open it for editing. */

@@ -10,7 +10,8 @@
 //! binding glue — so this crate opts out of the workspace's
 //! `unsafe_code = "forbid"` lint (see `Cargo.toml`).
 
-use de1_app::{CoreOutput, CremaCore, Source};
+use de1_app::{CoreOutput, CremaCore, Event, ProfileUploadFailure, Source};
+use de1_domain::Profile;
 use de1_protocol::{CalTarget, MachineState, MmrRegister, ShotSettings};
 use wasm_bindgen::prelude::*;
 
@@ -35,6 +36,12 @@ pub enum NotificationSource {
     De1MmrRead,
     /// The DE1 `Calibration` characteristic — sensor-calibration replies.
     De1Calibration,
+    /// The DE1 `HeaderWrite` characteristic — a one-shot Read returns the
+    /// currently-loaded profile's 5-byte `ShotHeader`.
+    De1ProfileHeader,
+    /// The DE1 `FrameWrite` characteristic — per-frame ack echoes during a
+    /// profile upload.
+    De1FrameAck,
 }
 
 impl From<NotificationSource> for Source {
@@ -48,6 +55,8 @@ impl From<NotificationSource> for Source {
             NotificationSource::De1Version => Source::De1Version,
             NotificationSource::De1MmrRead => Source::De1MmrRead,
             NotificationSource::De1Calibration => Source::De1Calibration,
+            NotificationSource::De1ProfileHeader => Source::De1ProfileHeader,
+            NotificationSource::De1FrameAck => Source::De1FrameAck,
         }
     }
 }
@@ -629,6 +638,79 @@ impl CremaBridge {
     pub fn builtin_profiles_json(&self) -> String {
         self.core.builtin_profiles_json()
     }
+
+    /// Start uploading the profile in `profile_json` to the DE1.
+    ///
+    /// Returns a JSON-encoded [`CoreOutput`]:
+    ///
+    /// - On success, `commands` carries the full upload sequence (header
+    ///   write, every frame write in order, tail) and `events` carries one
+    ///   `ProfileUploadStarted`.
+    /// - On validation failure (`Empty` / `TooManySteps`), `events`
+    ///   carries one `ProfileUploadFailed` and `commands` is empty.
+    /// - On a JSON parse failure, `events` carries one `DecodeError`.
+    ///
+    /// Subsequent acks arrive via `on_notification(De1FrameAck, …)`; the
+    /// core emits `ProfileUploadProgress` / `ProfileUploadCompleted` /
+    /// `ProfileUploadFailed` from those.
+    pub fn upload_profile(&mut self, profile_json: String, now_ms: f64) -> String {
+        let profile: Profile = match serde_json::from_str(&profile_json) {
+            Ok(p) => p,
+            Err(e) => {
+                let mut out = CoreOutput::default();
+                out.events.push(Event::DecodeError {
+                    message: format!("profile JSON parse failed: {e}"),
+                });
+                return json(out);
+            }
+        };
+        let now = std::time::Duration::from_millis(now_ms as u64);
+        match self.core.upload_profile(&profile, now) {
+            Ok(out) => json(out),
+            Err(err) => {
+                let mut out = CoreOutput::default();
+                let reason = match err {
+                    de1_app::AppError::ProfileUpload(domain) => match domain {
+                        de1_domain::DomainError::NoSteps => ProfileUploadFailure::Empty,
+                        de1_domain::DomainError::TooManySteps { count } => {
+                            ProfileUploadFailure::TooManySteps {
+                                count: u32::try_from(count).unwrap_or(u32::MAX),
+                            }
+                        }
+                        // The Serialization variant is for shot history;
+                        // upload_profile cannot produce it. Fall through to
+                        // Empty as the safest default.
+                        _ => ProfileUploadFailure::Empty,
+                    },
+                    // Other AppError variants (e.g. Serialization) similarly
+                    // shouldn't reach this path. Best-effort surface.
+                    _ => ProfileUploadFailure::Empty,
+                };
+                out.events.push(Event::ProfileUploadFailed { reason });
+                json(out)
+            }
+        }
+    }
+
+    /// Cancel an in-progress profile upload. Returns the
+    /// `ProfileUploadFailed { Aborted }` `CoreOutput`, or an empty one if
+    /// no upload is in flight.
+    pub fn cancel_profile_upload(&mut self) -> String {
+        json(self.core.cancel_profile_upload())
+    }
+
+    /// `true` from `upload_profile` until the tail-ack / a failure /
+    /// `cancel_profile_upload`.
+    pub fn profile_upload_in_progress(&self) -> bool {
+        self.core.profile_upload_in_progress()
+    }
+
+    /// Title of the profile most recently uploaded successfully — the
+    /// "active profile on the DE1" identity the brew page surfaces.
+    /// `null` until the first successful upload; cleared by a reset.
+    pub fn active_profile_title(&self) -> Option<String> {
+        self.core.active_profile_title().map(str::to_owned)
+    }
 }
 
 /// Serialize a [`CoreOutput`] to JSON for the shell. `CoreOutput` is flat plain
@@ -883,7 +965,7 @@ mod tests {
 
     /// Every `NotificationSource` the wasm enum can name — used to fuzz the
     /// bridge against malformed input on every characteristic.
-    fn every_source() -> [NotificationSource; 8] {
+    fn every_source() -> [NotificationSource; 10] {
         [
             NotificationSource::De1State,
             NotificationSource::De1ShotSample,
@@ -893,6 +975,8 @@ mod tests {
             NotificationSource::De1Version,
             NotificationSource::De1MmrRead,
             NotificationSource::De1Calibration,
+            NotificationSource::De1ProfileHeader,
+            NotificationSource::De1FrameAck,
         ]
     }
 

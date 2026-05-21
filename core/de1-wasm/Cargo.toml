@@ -12,6 +12,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 de1-app = { path = "../de1-app" }
+de1-domain = { path = "../de1-domain" }
 de1-protocol = { path = "../de1-protocol" }
 serde_json = { workspace = true }
 wasm-bindgen = "0.2.121"
