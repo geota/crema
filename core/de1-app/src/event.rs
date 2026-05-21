@@ -277,6 +277,10 @@ pub enum WriteTarget {
     /// The DE1 `ReadFromMMR` characteristic (`cuuid_05`) — an MMR read request
     /// is *written* here; the DE1 answers on the same characteristic's notify.
     De1MmrRequest,
+    /// The DE1 `WriteToMMR` characteristic (`cuuid_06`) — an MMR write packet
+    /// is sent here. Sibling of [`De1MmrRequest`] on the read side; the two
+    /// use distinct UUIDs even though they share a packet layout.
+    De1MmrWrite,
     /// The DE1 `Calibration` characteristic (`cuuid_12`) — a calibration read
     /// request is *written* here; the DE1 answers on the same characteristic.
     De1Calibration,

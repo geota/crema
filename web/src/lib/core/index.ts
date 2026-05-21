@@ -204,6 +204,56 @@ export interface CremaCore {
 	 */
 	setRefillThreshold(thresholdMm: number): Promise<CoreOutput>;
 	/**
+	 * Build a `CoreOutput` whose command writes one DE1 memory-mapped
+	 * register. `value` is the raw little-endian word the register expects
+	 * (already scaled); `byteLen` is `1`, `2`, or `4`.
+	 */
+	writeMmr(register: MmrRegister, value: number, byteLen: number): Promise<CoreOutput>;
+	/** Set the fan-on temperature threshold, °C. */
+	setFanThreshold(tempC: number): Promise<CoreOutput>;
+	/** Set the tank desired water-temperature threshold, °C. */
+	setTankThreshold(tempC: number): Promise<CoreOutput>;
+	/** Set the steam flow rate, mL/s. */
+	setSteamFlow(mlPerS: number): Promise<CoreOutput>;
+	/** Set the seconds of high-flow steam at the start of a steam cycle. */
+	setSteamHighflowStart(seconds: number): Promise<CoreOutput>;
+	/** Set the group-head-control mode. */
+	setGhcMode(mode: number): Promise<CoreOutput>;
+	/** Set the hot-water flow rate, mL/s. */
+	setHotWaterFlowRate(mlPerS: number): Promise<CoreOutput>;
+	/** Set the flush flow rate, mL/s. */
+	setFlushFlowRate(mlPerS: number): Promise<CoreOutput>;
+	/** Set the flush timeout, milliseconds. */
+	setFlushTimeout(ms: number): Promise<CoreOutput>;
+	/** Enable / disable the tablet's USB charging output. */
+	setUsbChargerOn(enabled: boolean): Promise<CoreOutput>;
+	/** Tell the firmware whether the user is present (distinct from feature flags). */
+	setUserPresent(present: boolean): Promise<CoreOutput>;
+	/** Set the firmware feature-flag bitmask (distinct from user-present). */
+	setFeatureFlags(flags: number): Promise<CoreOutput>;
+	/** Override the refill-kit presence flag (0/1/2). */
+	setRefillKitPresent(state: number): Promise<CoreOutput>;
+	/** Set the mains heater voltage. Damaging if mis-set — gate behind a typed-to-confirm modal. */
+	setHeaterVoltage(volts: number): Promise<CoreOutput>;
+	/** Set the cup-warmer temperature, °C (Bengle models only). */
+	setCupWarmerTemperature(tempC: number): Promise<CoreOutput>;
+	/** Set the flow-calibration multiplier (scaled `int(1000 × multiplier)`). */
+	setCalibrationFlowMultiplier(multiplier: number): Promise<CoreOutput>;
+	/**
+	 * Apply the seven-register `heater_tweaks` composite write — the legacy
+	 * connect-time push of the user's saved values.
+	 */
+	setHeaterTweaks(tweaks: {
+		phase1FlowRate: number;
+		phase2FlowRate: number;
+		hotWaterIdleTempC: number;
+		espressoWarmupTimeoutSeconds: number;
+		steamTwoTapStop: number;
+		flushTimeoutMs: number;
+		flushFlowRate: number;
+		hotWaterFlowRate: number;
+	}): Promise<CoreOutput>;
+	/**
 	 * The standard DE1 profiles Crema ships built in, as a parsed array of
 	 * {@link Profile}. The bridge returns a JSON-string of `Profile[]` (the
 	 * "Option S" encoding); this method parses it. The list is read-only — the
@@ -347,6 +397,68 @@ async function createCore(): Promise<CremaCore> {
 		},
 		async setRefillThreshold(thresholdMm) {
 			return parseOutput(bridge.set_refill_threshold(thresholdMm));
+		},
+		async writeMmr(register, value, byteLen) {
+			return parseOutput(bridge.write_mmr(toWasmMmrReg(register), value, byteLen));
+		},
+		async setFanThreshold(tempC) {
+			return parseOutput(bridge.set_fan_threshold(tempC));
+		},
+		async setTankThreshold(tempC) {
+			return parseOutput(bridge.set_tank_threshold(tempC));
+		},
+		async setSteamFlow(mlPerS) {
+			return parseOutput(bridge.set_steam_flow(mlPerS));
+		},
+		async setSteamHighflowStart(seconds) {
+			return parseOutput(bridge.set_steam_highflow_start(seconds));
+		},
+		async setGhcMode(mode) {
+			return parseOutput(bridge.set_ghc_mode(mode));
+		},
+		async setHotWaterFlowRate(mlPerS) {
+			return parseOutput(bridge.set_hot_water_flow_rate(mlPerS));
+		},
+		async setFlushFlowRate(mlPerS) {
+			return parseOutput(bridge.set_flush_flow_rate(mlPerS));
+		},
+		async setFlushTimeout(ms) {
+			return parseOutput(bridge.set_flush_timeout(ms));
+		},
+		async setUsbChargerOn(enabled) {
+			return parseOutput(bridge.set_usb_charger_on(enabled));
+		},
+		async setUserPresent(present) {
+			return parseOutput(bridge.set_user_present(present));
+		},
+		async setFeatureFlags(flags) {
+			return parseOutput(bridge.set_feature_flags(flags));
+		},
+		async setRefillKitPresent(state) {
+			return parseOutput(bridge.set_refill_kit_present(state));
+		},
+		async setHeaterVoltage(volts) {
+			return parseOutput(bridge.set_heater_voltage(volts));
+		},
+		async setCupWarmerTemperature(tempC) {
+			return parseOutput(bridge.set_cup_warmer_temperature(tempC));
+		},
+		async setCalibrationFlowMultiplier(multiplier) {
+			return parseOutput(bridge.set_calibration_flow_multiplier(multiplier));
+		},
+		async setHeaterTweaks(tweaks) {
+			return parseOutput(
+				bridge.set_heater_tweaks(
+					tweaks.phase1FlowRate,
+					tweaks.phase2FlowRate,
+					tweaks.hotWaterIdleTempC,
+					tweaks.espressoWarmupTimeoutSeconds,
+					tweaks.steamTwoTapStop,
+					tweaks.flushTimeoutMs,
+					tweaks.flushFlowRate,
+					tweaks.hotWaterFlowRate
+				)
+			);
 		},
 		async builtinProfiles() {
 			return JSON.parse(bridge.builtin_profiles_json()) as Profile[];

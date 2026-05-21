@@ -139,6 +139,16 @@ pub enum MmrRegister {
     UsbChargerOn,
     /// Feature-flag bitmask (e.g. the `UserNotPresent` flag).
     FeatureFlags,
+    /// Whether the user is currently present at the machine. The legacy app
+    /// writes `1` when the user touches the screen so the firmware does not
+    /// sleep on inactivity. **Distinct register from [`FeatureFlags`]** — the
+    /// legacy `de1_comms.tcl` writes to two separate addresses; the firmware
+    /// MMR map is not openly published but the legacy source treats them as
+    /// unrelated registers.
+    UserPresent,
+    /// Steam two-tap stop register — the second `tap` of the
+    /// double-tap-to-stop steam UX (`heater_tweaks`).
+    SteamTwoTapStop,
     /// Cup-warmer temperature (Bengle models only).
     CupWarmerTemp,
 }
@@ -167,6 +177,8 @@ impl MmrRegister {
             MmrRegister::FlushTimeout => 0x80_3848,
             MmrRegister::UsbChargerOn => 0x80_3854,
             MmrRegister::FeatureFlags => 0x80_3858,
+            MmrRegister::UserPresent => 0x80_3860,
+            MmrRegister::SteamTwoTapStop => 0x80_3850,
             MmrRegister::CupWarmerTemp => 0x80_3874,
         }
     }
@@ -175,7 +187,7 @@ impl MmrRegister {
     /// [`from_address`](Self::from_address) and a useful read-set for callers
     /// that want to poll the whole diagnostic window. Order is not significant;
     /// the `all_covers_every_variant` test pins this list to the enum.
-    pub const ALL: [MmrRegister; 21] = [
+    pub const ALL: [MmrRegister; 23] = [
         MmrRegister::FirmwareVersion,
         MmrRegister::GhcInfo,
         MmrRegister::TankTempThreshold,
@@ -196,6 +208,8 @@ impl MmrRegister {
         MmrRegister::FlushTimeout,
         MmrRegister::UsbChargerOn,
         MmrRegister::FeatureFlags,
+        MmrRegister::UserPresent,
+        MmrRegister::SteamTwoTapStop,
         MmrRegister::CupWarmerTemp,
     ];
 
@@ -278,6 +292,8 @@ mod tests {
         assert_eq!(MmrRegister::FlushTimeout.address(), 0x80_3848);
         assert_eq!(MmrRegister::UsbChargerOn.address(), 0x80_3854);
         assert_eq!(MmrRegister::FeatureFlags.address(), 0x80_3858);
+        assert_eq!(MmrRegister::UserPresent.address(), 0x80_3860);
+        assert_eq!(MmrRegister::SteamTwoTapStop.address(), 0x80_3850);
         assert_eq!(MmrRegister::CupWarmerTemp.address(), 0x80_3874);
     }
 
@@ -331,6 +347,8 @@ mod tests {
                 | MmrRegister::FlushTimeout
                 | MmrRegister::UsbChargerOn
                 | MmrRegister::FeatureFlags
+                | MmrRegister::UserPresent
+                | MmrRegister::SteamTwoTapStop
                 | MmrRegister::CupWarmerTemp => covers(reg),
             }
         }

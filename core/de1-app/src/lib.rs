@@ -360,6 +360,256 @@ impl CremaCore {
         out
     }
 
+    /// Build a [`Command`] that writes a single DE1 memory-mapped register.
+    ///
+    /// `register` selects the address; `value` is the raw little-endian word
+    /// the register expects, **already scaled** per the register's
+    /// documentation (the typed helpers below apply each register's scale
+    /// before calling this). `byte_len` is how many of the four LE bytes the
+    /// register actually consumes — 1, 2, or 4 — which controls the wire
+    /// `Len` byte of the `WriteToMMR` packet.
+    ///
+    /// Refused while a firmware upload is in progress
+    /// (see [`firmware_locks_writes`](Self::firmware_locks_writes)) — emits
+    /// one [`Event::FirmwareLockoutHit`] and no command.
+    pub fn write_mmr(&self, register: MmrRegister, value: u32, byte_len: u8) -> CoreOutput {
+        if let Some(out) = self.refuse_if_firmware_locked("write_mmr") {
+            return out;
+        }
+        mmr_write_command(register, value, byte_len)
+    }
+
+    /// Set the fan-on temperature threshold, in °C (legacy
+    /// `set_fan_temperature_threshold`). MMR `0x803808`, 1-byte.
+    pub fn set_fan_threshold(&self, temp_c: u8) -> CoreOutput {
+        if let Some(out) = self.refuse_if_firmware_locked("set_fan_threshold") {
+            return out;
+        }
+        mmr_write_command(MmrRegister::FanThreshold, u32::from(temp_c), 1)
+    }
+
+    /// Set the tank desired water-temperature threshold, in °C (legacy
+    /// `set_tank_temperature_threshold` — the immediate value only; the
+    /// legacy "preheat with 60 °C for 4 s" dance is a shell-side concern, see
+    /// `docs/14` §4.2). MMR `0x80380C`, 1-byte.
+    pub fn set_tank_threshold(&self, temp_c: u8) -> CoreOutput {
+        if let Some(out) = self.refuse_if_firmware_locked("set_tank_threshold") {
+            return out;
+        }
+        mmr_write_command(MmrRegister::TankTempThreshold, u32::from(temp_c), 1)
+    }
+
+    /// Set the steam flow rate. `ml_per_s` is scaled `int(10 × rate)` per the
+    /// legacy encoding (`de1_comms.tcl:1210`). MMR `0x803828`, 1-byte.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    pub fn set_steam_flow(&self, ml_per_s: f32) -> CoreOutput {
+        if let Some(out) = self.refuse_if_firmware_locked("set_steam_flow") {
+            return out;
+        }
+        let raw = (ml_per_s * 10.0).round().clamp(0.0, 255.0) as u32;
+        mmr_write_command(MmrRegister::SteamFlow, raw, 1)
+    }
+
+    /// Set the seconds of high-flow steam at the start of a steam cycle
+    /// (legacy `set_steam_highflow_start`). MMR `0x80382C`, 1-byte.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    pub fn set_steam_highflow_start(&self, dur: Duration) -> CoreOutput {
+        if let Some(out) = self.refuse_if_firmware_locked("set_steam_highflow_start") {
+            return out;
+        }
+        let raw = dur.as_secs().min(255) as u32;
+        mmr_write_command(MmrRegister::SteamHighFlowStart, raw, 1)
+    }
+
+    /// Set the group-head-control mode (legacy `set_ghc_mode`). `mode` is the
+    /// raw mode id (`0`–`3`). MMR `0x803820`, 1-byte.
+    pub fn set_ghc_mode(&self, mode: u8) -> CoreOutput {
+        if let Some(out) = self.refuse_if_firmware_locked("set_ghc_mode") {
+            return out;
+        }
+        mmr_write_command(MmrRegister::GhcMode, u32::from(mode), 1)
+    }
+
+    /// Set the hot-water flow rate. `ml_per_s` is scaled `int(10 × rate)`.
+    /// MMR `0x80384C`, 2-byte.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    pub fn set_hot_water_flow_rate(&self, ml_per_s: f32) -> CoreOutput {
+        if let Some(out) = self.refuse_if_firmware_locked("set_hot_water_flow_rate") {
+            return out;
+        }
+        let raw = (ml_per_s * 10.0).round().clamp(0.0, 65_535.0) as u32;
+        mmr_write_command(MmrRegister::HotWaterFlowRate, raw, 2)
+    }
+
+    /// Set the flush flow rate. `ml_per_s` is scaled `int(10 × rate)`.
+    /// MMR `0x803840`, 2-byte.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    pub fn set_flush_flow_rate(&self, ml_per_s: f32) -> CoreOutput {
+        if let Some(out) = self.refuse_if_firmware_locked("set_flush_flow_rate") {
+            return out;
+        }
+        let raw = (ml_per_s * 10.0).round().clamp(0.0, 65_535.0) as u32;
+        mmr_write_command(MmrRegister::FlushFlowRate, raw, 2)
+    }
+
+    /// Set the flush timeout. `dur` is scaled `int(10 × seconds)`.
+    /// MMR `0x803848`, 2-byte.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    pub fn set_flush_timeout(&self, dur: Duration) -> CoreOutput {
+        if let Some(out) = self.refuse_if_firmware_locked("set_flush_timeout") {
+            return out;
+        }
+        // Scale ms-resolution into deciseconds (the legacy `int(10 * s)` form).
+        let raw = (dur.as_millis() / 100).min(65_535) as u32;
+        mmr_write_command(MmrRegister::FlushTimeout, raw, 2)
+    }
+
+    /// Enable or disable the tablet's USB charging output. MMR `0x803854`,
+    /// 1-byte (`0`/`1`).
+    pub fn set_usb_charger_on(&self, enabled: bool) -> CoreOutput {
+        if let Some(out) = self.refuse_if_firmware_locked("set_usb_charger_on") {
+            return out;
+        }
+        mmr_write_command(MmrRegister::UsbChargerOn, u32::from(enabled), 1)
+    }
+
+    /// Tell the firmware whether the user is currently present at the machine
+    /// (the legacy `set_user_present`; written `1` on screen activity, `0`
+    /// when the app goes to sleep). MMR `0x803860`, 1-byte.
+    ///
+    /// **Distinct register** from [`set_feature_flags`](Self::set_feature_flags)
+    /// (`0x803858`). The legacy `de1_comms.tcl` writes to both addresses
+    /// independently; they have related semantics but separate wire targets.
+    pub fn set_user_present(&self, present: bool) -> CoreOutput {
+        if let Some(out) = self.refuse_if_firmware_locked("set_user_present") {
+            return out;
+        }
+        mmr_write_command(MmrRegister::UserPresent, u32::from(present), 1)
+    }
+
+    /// Set the firmware feature-flag bitmask (legacy `set_feature_flags`).
+    /// MMR `0x803858`, 2-byte. Bit semantics are firmware-defined; the caller
+    /// supplies the raw 16-bit word.
+    ///
+    /// **Distinct register** from [`set_user_present`](Self::set_user_present)
+    /// (`0x803860`) — see that method for the rationale.
+    pub fn set_feature_flags(&self, flags: u16) -> CoreOutput {
+        if let Some(out) = self.refuse_if_firmware_locked("set_feature_flags") {
+            return out;
+        }
+        mmr_write_command(MmrRegister::FeatureFlags, u32::from(flags), 2)
+    }
+
+    /// Override the refill-kit presence flag (legacy `set_refill_kit_present`,
+    /// `0`/`1`/`2` for off / on / auto). MMR `0x80385C`, 4-byte.
+    pub fn set_refill_kit_present(&self, state: u8) -> CoreOutput {
+        if let Some(out) = self.refuse_if_firmware_locked("set_refill_kit_present") {
+            return out;
+        }
+        mmr_write_command(MmrRegister::RefillKit, u32::from(state), 4)
+    }
+
+    /// Set the mains heater voltage (legacy `set_heater_voltage`). `volts` is
+    /// the raw wire byte — typical values `120` / `240`. MMR `0x803834`,
+    /// 1-byte.
+    ///
+    /// **Damaging if mis-set** — wrong voltage can fry the heater. The shell
+    /// is responsible for the type-to-confirm modal that the legacy app uses
+    /// (`docs/14` §4.13).
+    pub fn set_heater_voltage(&self, volts: u8) -> CoreOutput {
+        if let Some(out) = self.refuse_if_firmware_locked("set_heater_voltage") {
+            return out;
+        }
+        mmr_write_command(MmrRegister::HeaterVoltage, u32::from(volts), 1)
+    }
+
+    /// Set the cup-warmer plate temperature, in °C (Bengle models only).
+    /// MMR `0x803874`, 2-byte. The bridge layer is responsible for gating
+    /// this on the model — the firmware accepts the write on any DE1, but it
+    /// is a no-op outside Bengles.
+    pub fn set_cup_warmer_temperature(&self, temp_c: u8) -> CoreOutput {
+        if let Some(out) = self.refuse_if_firmware_locked("set_cup_warmer_temperature") {
+            return out;
+        }
+        mmr_write_command(MmrRegister::CupWarmerTemp, u32::from(temp_c), 2)
+    }
+
+    /// Set the flow-calibration multiplier (legacy
+    /// `set_calibration_flow_multiplier`). `multiplier` is scaled
+    /// `int(1000 × multiplier)`. MMR `0x80383C`, 2-byte.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    pub fn set_calibration_flow_multiplier(&self, multiplier: f32) -> CoreOutput {
+        if let Some(out) = self.refuse_if_firmware_locked("set_calibration_flow_multiplier") {
+            return out;
+        }
+        let raw = (multiplier * 1000.0).round().clamp(0.0, 65_535.0) as u32;
+        mmr_write_command(MmrRegister::CalibrationFlowMultiplier, raw, 2)
+    }
+
+    /// Apply the seven-MMR-register `heater_tweaks` write (legacy
+    /// `set_heater_tweaks`), pushing the writes onto a single [`CoreOutput`]
+    /// in legacy order. Used at connect time to push the user's saved values.
+    ///
+    /// The fields mirror the legacy proc's argument list verbatim
+    /// (`de1_comms.tcl:1123`). All flow / timeout values use the same scales
+    /// as the dedicated setters above. The shell may also send the implied
+    /// `set_flush_timeout` / `set_flush_flow_rate` / `set_hot_water_flow_rate`
+    /// separately when the user changes them individually — those three are
+    /// re-emitted here for parity with the legacy procedure.
+    ///
+    /// Refused while a firmware upload is in progress.
+    #[allow(
+        clippy::too_many_arguments,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss
+    )]
+    pub fn set_heater_tweaks(&self, tweaks: HeaterTweaks) -> CoreOutput {
+        if let Some(out) = self.refuse_if_firmware_locked("set_heater_tweaks") {
+            return out;
+        }
+        // Round/clamp helpers reused from the dedicated setters: the legacy
+        // proc's value scales survive here too.
+        let scale10 = |v: f32| (v * 10.0).round().clamp(0.0, 65_535.0) as u32;
+        let mut out = CoreOutput::default();
+        for (register, value, byte_len) in [
+            (MmrRegister::Phase1FlowRate, scale10(tweaks.phase_1_flow_rate), 2),
+            (MmrRegister::Phase2FlowRate, scale10(tweaks.phase_2_flow_rate), 2),
+            (
+                MmrRegister::HotWaterIdleTemp,
+                u32::from(tweaks.hot_water_idle_temp_c),
+                1,
+            ),
+            (
+                MmrRegister::EspressoWarmupTimeout,
+                tweaks.espresso_warmup_timeout.as_secs().min(255) as u32,
+                1,
+            ),
+            (
+                MmrRegister::SteamTwoTapStop,
+                u32::from(tweaks.steam_two_tap_stop),
+                1,
+            ),
+            (
+                MmrRegister::FlushTimeout,
+                (tweaks.flush_timeout.as_millis() / 100).min(65_535) as u32,
+                2,
+            ),
+            (MmrRegister::FlushFlowRate, scale10(tweaks.flush_flow_rate), 2),
+            (
+                MmrRegister::HotWaterFlowRate,
+                scale10(tweaks.hot_water_flow_rate),
+                2,
+            ),
+        ] {
+            let bytes = value.to_le_bytes();
+            out.commands.push(Command::WriteCharacteristic {
+                target: WriteTarget::De1MmrWrite,
+                data: mmr::write_request(register.address(), &bytes[..byte_len]).to_vec(),
+            });
+        }
+        out
+    }
+
     /// Build a [`Command`] that writes the DE1's water-tank refill threshold
     /// (`WaterLevels` / `cuuid_11`).
     ///
@@ -1017,6 +1267,52 @@ impl CremaCore {
             });
         }
     }
+}
+
+/// Composite arguments for [`CremaCore::set_heater_tweaks`], mirroring the
+/// legacy `set_heater_tweaks` proc (`de1_comms.tcl:1123`).
+///
+/// Carries the seven settings the legacy app pushes at connect time. The
+/// composite write reuses each register's individual scale (flow
+/// `int(10 × rate)`, etc.) — see [`CremaCore::set_heater_tweaks`] for the
+/// per-field units.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HeaterTweaks {
+    /// Hot-water phase-1 flow rate, mL/s.
+    pub phase_1_flow_rate: f32,
+    /// Hot-water phase-2 flow rate, mL/s.
+    pub phase_2_flow_rate: f32,
+    /// Hot-water idle temperature, °C.
+    pub hot_water_idle_temp_c: u8,
+    /// Espresso warmup timeout.
+    pub espresso_warmup_timeout: Duration,
+    /// Steam two-tap-stop register raw byte.
+    pub steam_two_tap_stop: u8,
+    /// Flush timeout.
+    pub flush_timeout: Duration,
+    /// Flush flow rate, mL/s.
+    pub flush_flow_rate: f32,
+    /// Hot-water flow rate, mL/s.
+    pub hot_water_flow_rate: f32,
+}
+
+/// Internal: build a `WriteToMMR` [`CoreOutput`] for one register.
+///
+/// Used by the public [`CremaCore::write_mmr`] and every typed setter;
+/// lockout-checking stays in the callers so a [`Event::FirmwareLockoutHit`]
+/// names the actual setter, not this internal helper.
+///
+/// `byte_len` is clamped to `1..=4`; the value is encoded little-endian.
+#[allow(clippy::cast_possible_truncation)]
+fn mmr_write_command(register: MmrRegister, value: u32, byte_len: u8) -> CoreOutput {
+    let mut out = CoreOutput::default();
+    let bytes = value.to_le_bytes();
+    let len = byte_len.clamp(1, 4) as usize;
+    out.commands.push(Command::WriteCharacteristic {
+        target: WriteTarget::De1MmrWrite,
+        data: mmr::write_request(register.address(), &bytes[..len]).to_vec(),
+    });
+    out
 }
 
 /// Map a scale mode `id` (the wire value carried in [`ScaleCapabilities`]'
@@ -2132,6 +2428,76 @@ mod tests {
         // Every shipped profile is uploadable to a DE1.
         for profile in &parsed {
             assert!(profile.assemble().is_ok());
+        }
+    }
+
+    #[test]
+    fn write_mmr_emits_a_write_to_mmr_command() {
+        let core = CremaCore::new();
+        let out = core.write_mmr(MmrRegister::FanThreshold, 45, 1);
+        let Some(Command::WriteCharacteristic { target, data }) = out.commands.first() else {
+            panic!("expected a WriteCharacteristic");
+        };
+        assert_eq!(*target, WriteTarget::De1MmrWrite);
+        // 20-byte WriteToMMR packet: Len = 1, address big-endian, value LE.
+        assert_eq!(data.len(), 20);
+        assert_eq!(data[0], 1);
+        assert_eq!(&data[1..4], &[0x80, 0x38, 0x08]);
+        assert_eq!(data[4], 45);
+    }
+
+    #[test]
+    fn set_steam_flow_scales_by_ten() {
+        let core = CremaCore::new();
+        let out = core.set_steam_flow(2.5);
+        let Some(Command::WriteCharacteristic { target, data }) = out.commands.first() else {
+            panic!("expected a WriteCharacteristic");
+        };
+        assert_eq!(*target, WriteTarget::De1MmrWrite);
+        // 2.5 mL/s × 10 = 25; 1-byte register.
+        assert_eq!(data[0], 1);
+        assert_eq!(data[4], 25);
+    }
+
+    #[test]
+    fn set_user_present_and_set_feature_flags_target_distinct_registers() {
+        // Confirmed by user: 0x803860 (UserPresent) and 0x803858 (FeatureFlags)
+        // are distinct registers, not aliases.
+        let core = CremaCore::new();
+        let up = core.set_user_present(true);
+        let ff = core.set_feature_flags(0x1234);
+        let Some(Command::WriteCharacteristic { data: up_data, .. }) = up.commands.first() else {
+            panic!("expected WriteCharacteristic");
+        };
+        let Some(Command::WriteCharacteristic { data: ff_data, .. }) = ff.commands.first() else {
+            panic!("expected WriteCharacteristic");
+        };
+        assert_eq!(&up_data[1..4], &[0x80, 0x38, 0x60], "UserPresent address");
+        assert_eq!(&ff_data[1..4], &[0x80, 0x38, 0x58], "FeatureFlags address");
+        assert_eq!(up_data[0], 1, "UserPresent is 1-byte");
+        assert_eq!(ff_data[0], 2, "FeatureFlags is 2-byte");
+    }
+
+    #[test]
+    fn set_heater_tweaks_emits_eight_writes_in_legacy_order() {
+        let core = CremaCore::new();
+        let out = core.set_heater_tweaks(HeaterTweaks {
+            phase_1_flow_rate: 1.0,
+            phase_2_flow_rate: 2.0,
+            hot_water_idle_temp_c: 85,
+            espresso_warmup_timeout: Duration::from_secs(30),
+            steam_two_tap_stop: 0,
+            flush_timeout: Duration::from_secs(5),
+            flush_flow_rate: 3.0,
+            hot_water_flow_rate: 4.0,
+        });
+        assert_eq!(out.commands.len(), 8);
+        // Each command should target De1MmrWrite.
+        for cmd in &out.commands {
+            let Command::WriteCharacteristic { target, .. } = cmd else {
+                panic!("expected WriteCharacteristic");
+            };
+            assert_eq!(*target, WriteTarget::De1MmrWrite);
         }
     }
 
