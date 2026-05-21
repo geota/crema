@@ -207,15 +207,20 @@ pub enum Event {
         /// serial response.
         firmware_version: Option<u16>,
     },
-    /// The DE1 reported its BLE-interface and CPU-board firmware versions.
+    /// The DE1 reported its firmware version (the `Version` characteristic).
+    /// Carries the **BLE-block** identity — the primary firmware identity per
+    /// the legacy `de1_version_string` (`vars.tcl:3867`). The CPU/FW block is
+    /// often all-zero on real DE1s and is not surfaced here; `firmware_string`
+    /// appends its values only when the FW block carries a distinct, non-zero
+    /// `Sha`.
     Firmware {
-        /// The CPU-board firmware's release number.
-        fw_release: f32,
-        /// The CPU-board firmware's commits-since-release count.
-        fw_commits: u16,
-        /// The CPU-board firmware's API version.
-        fw_api_version: u8,
-        /// A human-readable firmware label, e.g. `"FW 1.4.142 (API 4)"`.
+        /// The BLE-firmware release number.
+        release: f32,
+        /// The BLE-firmware commits-since-release count.
+        commits: u16,
+        /// The BLE-firmware API version.
+        api_version: u8,
+        /// A human-readable firmware label, e.g. `"v1.0.142 (API 4)"`.
         firmware_string: String,
     },
     /// A DE1 memory-mapped register was read back. Emitted when a

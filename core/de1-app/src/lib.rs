@@ -1166,9 +1166,9 @@ impl CremaCore {
             Ok(version) => {
                 self.last_firmware = Some(version);
                 out.events.push(Event::Firmware {
-                    fw_release: version.fw.release,
-                    fw_commits: version.fw.commits,
-                    fw_api_version: version.fw.api_version,
+                    release: version.ble.release,
+                    commits: version.ble.commits,
+                    api_version: version.ble.api_version,
                     firmware_string: version.firmware_string(),
                 });
             }
@@ -1764,7 +1764,7 @@ mod tests {
         assert!(
             out.events
                 .iter()
-                .any(|e| matches!(e, Event::Firmware { fw_commits: 142, .. }))
+                .any(|e| matches!(e, Event::Firmware { commits: 10, .. }))
         );
     }
 

@@ -186,13 +186,13 @@ data class EventScaleConfigInner (
 /// Generated type representing the anonymous struct variant `Firmware` of the `Event` Rust enum
 @Serializable
 data class EventFirmwareInner (
-	/// The CPU-board firmware's release number.
-	val fw_release: Float,
-	/// The CPU-board firmware's commits-since-release count.
-	val fw_commits: UShort,
-	/// The CPU-board firmware's API version.
-	val fw_api_version: UByte,
-	/// A human-readable firmware label, e.g. `"FW 1.4.142 (API 4)"`.
+	/// The BLE-firmware release number.
+	val release: Float,
+	/// The BLE-firmware commits-since-release count.
+	val commits: UShort,
+	/// The BLE-firmware API version.
+	val api_version: UByte,
+	/// A human-readable firmware label, e.g. `"v1.0.142 (API 4)"`.
 	val firmware_string: String
 )
 
@@ -331,7 +331,12 @@ sealed class Event {
 	@Serializable
 	@SerialName("ScaleConfig")
 	data class ScaleConfig(val content: EventScaleConfigInner): Event()
-	/// The DE1 reported its BLE-interface and CPU-board firmware versions.
+	/// The DE1 reported its firmware version (the `Version` characteristic).
+	/// Carries the **BLE-block** identity — the primary firmware identity per
+	/// the legacy `de1_version_string` (`vars.tcl:3867`). The CPU/FW block is
+	/// often all-zero on real DE1s and is not surfaced here; `firmware_string`
+	/// appends its values only when the FW block carries a distinct, non-zero
+	/// `Sha`.
 	@Serializable
 	@SerialName("Firmware")
 	data class Firmware(val content: EventFirmwareInner): Event()

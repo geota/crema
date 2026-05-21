@@ -237,15 +237,29 @@ impl Version {
         })
     }
 
-    /// A human-readable firmware label, e.g. `"FW 1.0.142 (API 4)"` — built
-    /// from the CPU firmware block: `FW {release}.{commits} (API {api})`. The
-    /// legacy `de1_version_string` also shows the uncommitted-`changes` count,
-    /// but that is build noise, not a release identity, so it is omitted here.
+    /// A human-readable firmware label, e.g. `"v1.0.142 (API 4)"`.
+    ///
+    /// Built from the **BLE block**, which is the primary firmware identity on
+    /// every real DE1 — the CPU/FW block is often all-zero or mirrors the BLE
+    /// block (its `Sha` matches), and the legacy `de1_version_string`
+    /// (`vars.tcl:3867`) treats BLE as the headline. A separate "FW v…" suffix
+    /// is appended only when the CPU/FW block carries a distinct, non-zero
+    /// `Sha`, mirroring the legacy "FW v… appended only if `FW_Sha !=
+    /// BLE_Sha && FW_Sha != 0`" rule. The legacy also shows uncommitted
+    /// `changes`, but that is build noise, not a release identity, so it is
+    /// omitted here.
     pub fn firmware_string(&self) -> String {
-        format!(
-            "FW {:.1}.{} (API {})",
-            self.fw.release, self.fw.commits, self.fw.api_version
-        )
+        let mut s = format!(
+            "v{:.1}.{} (API {})",
+            self.ble.release, self.ble.commits, self.ble.api_version
+        );
+        if self.fw.sha != 0 && self.fw.sha != self.ble.sha {
+            s.push_str(&format!(
+                " + FW v{:.1}.{} (API {})",
+                self.fw.release, self.fw.commits, self.fw.api_version
+            ));
+        }
+        s
     }
 }
 
@@ -398,10 +412,39 @@ mod tests {
     }
 
     #[test]
-    fn version_firmware_string_uses_the_cpu_block() {
+    fn version_firmware_string_uses_the_ble_block() {
+        // BLE block of `version_packet`: release 0x0A = 1.0, commits 10,
+        // API 4, Sha = 0xDEADBEEF. FW block has Sha = 0x12345678, distinct
+        // from BLE, so the "+ FW v…" suffix is appended.
         let v = Version::decode(&version_packet()).unwrap();
-        // FW block: release 0x0A = 1.0, commits 142, API 4. The `changes`
-        // count (5) is intentionally not part of the label.
-        assert_eq!(v.firmware_string(), "FW 1.0.142 (API 4)");
+        assert_eq!(
+            v.firmware_string(),
+            "v1.0.10 (API 4) + FW v1.0.142 (API 4)"
+        );
+    }
+
+    #[test]
+    fn version_firmware_string_omits_fw_suffix_when_fw_block_is_zero() {
+        // A typical real-DE1 reply: the FW block reports zero / duplicate
+        // values (Sha=0); legacy only shows the BLE line in that case.
+        let mut packet = version_packet();
+        packet[9..18].copy_from_slice(&[0u8; 9]);
+        let v = Version::decode(&packet).unwrap();
+        assert_eq!(v.firmware_string(), "v1.0.10 (API 4)");
+    }
+
+    #[test]
+    fn version_firmware_string_omits_fw_suffix_when_fw_sha_matches_ble() {
+        // When the FW block duplicates the BLE block, the "+ FW v…" suffix
+        // is redundant; the legacy `de1_version_string` drops it.
+        let mut packet = version_packet();
+        // Copy BLE block (bytes 0..9) into the FW block slot (bytes 9..18).
+        let ble = [
+            packet[0], packet[1], packet[2], packet[3], packet[4], packet[5], packet[6], packet[7],
+            packet[8],
+        ];
+        packet[9..18].copy_from_slice(&ble);
+        let v = Version::decode(&packet).unwrap();
+        assert_eq!(v.firmware_string(), "v1.0.10 (API 4)");
     }
 }
