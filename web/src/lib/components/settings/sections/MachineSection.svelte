@@ -127,9 +127,15 @@
 	});
 	/** The Web Bluetooth device id of the connected DE1, or a dash. */
 	const bleLabel = $derived(diag.deviceId ?? '—');
-	/** The live group ("mix") temperature, in the chosen unit, or a dash. */
+	/**
+	 * The live group-head temperature, in the chosen unit, or a dash.
+	 * Uses `head_temp` (the actual thermocouple) — at idle this sits at
+	 * the heater's idle setpoint (~80°C) while `mix_temp` reads room
+	 * temperature because no water is flowing. Matches the Brew
+	 * dashboard's "Group" column (`d129eef`).
+	 */
 	const groupLabel = $derived(
-		formatTemp(snapshot.latestTelemetry?.mixTemp ?? null, prefs.tempUnit)
+		formatTemp(snapshot.latestTelemetry?.temp ?? null, prefs.tempUnit)
 	);
 
 	// ── Firmware-update check (read-only) ─────────────────────────────────
