@@ -910,6 +910,46 @@ DE1 before implementing §2"; the capture/replay infrastructure is
 already in place, so the lift is small (~30 LOC in three files plus a
 hands-on profile-switch on real hardware).
 
+### 6.1 Connect-time HeaderWrite Read — unverified hypothesis (2026-05-21)
+
+Empirically the DE1 returned an **all-zero** `ShotHeader` on a first
+connect after a power-cycle (Crema's BLE log: `DE1 loaded-profile
+header: 0 frames`). This is the read-side path Crema added in commit
+`d14cfe3` to surface the active profile's shape on the brew page.
+
+**Hypothesis:** the firmware does not persist the loaded-profile
+buffer across reboots — or it does not expose the current buffer on
+the Read side of `cuuid_0F` at all — so a Read on a freshly-paired
+session returns zero bytes regardless of whether a profile has ever
+been uploaded. The legacy DE1-app would mask this by re-uploading the
+"active" profile on every connect via `save_settings_to_de1`
+(`de1_comms.tcl:1539`), so a legacy user never has to question whether
+the buffer survived.
+
+**Verification plan:** capture a Bluetooth HCI snoop (Android
+Developer Options → "Enable Bluetooth HCI snoop log") during a legacy
+DE1-app connect, then inspect the snoop for any Read of `cuuid_0F`
+and the bytes the DE1 returns. Three outcomes possible:
+
+1. The legacy app never Reads `cuuid_0F` (it only Writes the header
+   during upload). Then Crema's Read is exercising an undocumented
+   firmware code path; we should drop the Read entirely and rely on
+   tracking `ProfileUploadCompleted` for the active-profile identity.
+2. The legacy app Reads `cuuid_0F` and gets useful bytes when (and
+   only when) a profile has been written in the current session.
+   Then Crema's Read is correct but needs the equivalent
+   re-upload-on-connect dance to ever return non-zero.
+3. The legacy app Reads `cuuid_0F` and gets useful bytes even on a
+   fresh connect after a power-cycle. Then the DE1 firmware *does*
+   persist the buffer and we have a different bug — likely in how
+   we're driving the BLE Read or in `ShotHeader::decode`.
+
+Until the snoop confirms one of these, the UI handler at
+`web/src/lib/state/ui-state.svelte.ts:ProfileHeaderRead` falls back to
+`loadedProfileShape: null` for the zero-frame case rather than
+storing a misleading 0-frame shape, and the log message explains
+what the empty read means.
+
 ---
 
 ## 7. Test plan
