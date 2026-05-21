@@ -884,13 +884,21 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 			};
 		case 'ProfileHeaderRead': {
 			// The DE1 reported the shape of whatever profile it currently has
-			// loaded — read once at connect time. Empirically the DE1 returns
-			// an all-zero header (frame_count == 0) when its session buffer
-			// has no profile in it (e.g. after a power-cycle without a prior
-			// upload in the current session). docs/16 §6 flagged this as an
-			// unknown; the real-DE1 behavior is "empty buffer → empty read".
-			// Treat zero frames as "unknown / not loaded" rather than storing
-			// a misleading 0-frame shape.
+			// loaded — read once at connect time.
+			//
+			// UNVERIFIED — hypothesis recorded 2026-05-21: empirically the
+			// DE1 returns an all-zero header (frame_count == 0) on the first
+			// connect after a power-cycle, suggesting the firmware does not
+			// persist the loaded-profile buffer across reboots (or does not
+			// expose it via the Read side of cuuid_0F at all). The legacy
+			// app may mask this by re-uploading on every connect via
+			// `save_settings_to_de1`. A Bluetooth HCI snoop of a legacy-app
+			// connect should confirm whether this Read returns useful bytes
+			// at all, and if so under what condition. docs/16 §6 carries
+			// the longer write-up.
+			//
+			// Until verified: treat zero frames as "unknown / not loaded"
+			// rather than storing a misleading 0-frame `loadedProfileShape`.
 			const fc = event.content.frame_count;
 			const note =
 				fc === 0
