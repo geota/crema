@@ -786,3 +786,289 @@ and the wizard's post-upload pages need a different design.
   map write unless the InBootLoader-observability spike turns up
   evidence it's needed. Keep `FWMapRequest::map` in the codec (it's a
   cheap method already there) and leave it unused in the state machine.
+
+---
+
+## 7. Snoop-verified empirical findings (2026-05-21)
+
+Captured a Bluetooth HCI snoop of a complete legacy DE1-app firmware-update
+session against a real DE1 (P25 Android phone host, ~464 KB firmware
+flashed). The snoop is preserved at
+`~/firmware-isolated/firmware-protocol-trace.txt` plus two windowed
+pcaps. The findings below supersede §1.1 / §2.1 / §4.x wherever they
+disagree.
+
+### 7.1 The reconnect signal — what to wait for
+
+The wizard's "Turn DE1 off / Turn DE1 on" pages don't track any DE1-side
+state. The legacy reads `::de1(device_handle)` — a thin wrapper around
+the BLE link itself — to detect both the disconnect and the reconnect.
+The snoop confirms the chain at HCI level:
+
+| Time (s) | HCI event | Meaning |
+|---|---|---|
+| `5507.825` | `Disconnect Complete` (opcode `0x05`) | User flipped DE1 power off → BLE link tore down |
+| `5507.896` | `LE Extended Create Connection` (host-initiated) | Phone immediately started re-scanning for the DE1 |
+| `5537.898` | `LE Enhanced Connection Complete` (first) | ~30 s later, DE1 booted, advertised, link re-established |
+| `5552.990` | `LE Enhanced Connection Complete` (stable) | After parameter renegotiation, stable connection |
+| `5553.05 → 5554.13` | GATT rediscovery + subscriptions | Standard post-reconnect bring-up |
+| `5554.142` | `RequestedState ← 0` (Sleep) | **Firmware-related pre-erase setup** (§7.3) |
+| `5554.308` | `FWMapRequest::erase` | Erase command fires, **1.32 s after stable connection** |
+
+**The reconnect signal the legacy waits on is the BLE link itself
+re-establishing** — there is no DE1-side "I'm ready" notification.
+In Web Bluetooth that surfaces as `device.gatt.connect()` resolving
+**after** an earlier `gattserverdisconnected` event has fired.
+
+#### Implementation note for Crema
+
+The web shell has to handle Web Bluetooth's user-gesture constraint.
+Chromium *may* allow `device.gatt.connect()` without a chooser dialog
+when the same `BluetoothDevice` object is in the page's recently-paired
+list — but it's not guaranteed across browsers / versions. The safe UX
+is an explicit "Reconnect" button on the wizard's page 3 that the user
+clicks after powering the DE1 on; the click is the gesture, the gesture
+authorises `gatt.connect()`, the connect promise resolution drives the
+state-machine forward.
+
+### 7.2 Pre-erase setup the legacy does (and §3 missed)
+
+Within **170 ms** of the stable reconnect at 5552.99, the legacy fires:
+
+| Order | Time | Handle | Value | Decoded |
+|---|---|---|---|---|
+| 1 | 5554.142 | 0x0011 (A002 RequestedState) | `00` | **Sleep** state request |
+| 2 | 5554.168 | 0x001d (A006 WriteToMMR) | `04 80 38 08 3c …` | FanThreshold = 60 °C |
+| 3 | 5554.308 | 0x0026 (A009 FWMapRequest) | `00 00 01 01 00 00 00` | Erase slot 1 |
+
+(2) is routine connect-time setup unrelated to firmware update (matches
+`save_settings_to_de1`'s normal MMR-write fan-out). **(1) is the
+firmware-related step the plan currently glosses over.** The legacy
+comment at `de1_comms.tcl:230` ("Tell DE1 to start to go to SLEEP (so
+it's asleep during firmware upgrade)") describes this exact write.
+
+**Action for the v2 state machine**: between `Preflight` and `Erase`, add
+a `request_machine_state(Sleep)` write step. The DE1 doesn't ack via
+notification (the next `MachineStateChanged` confirms), but a 200-300 ms
+fixed wait should be enough — or better, observe `MachineStateChanged →
+Sleep` before firing erase. Either way it's a single new transition arc
+on §2's diagram (`Preflight → RequestingSleep → Erase`).
+
+### 7.3 The erase packet shape differs from Crema's builder
+
+The legacy's erase write is:
+
+```
+WindowIncrement = 0x0000
+FWToErase       = 0x01
+FWToMap         = 0x01
+FirstError      = 0x000000      ← zero, NOT FIRST_ERROR_REQUEST
+```
+
+Crema's `FWMapRequest::erase(slot)` (in `core/de1-protocol/src/firmware.rs`)
+builds:
+
+```rust
+pub fn erase(slot: u8) -> FWMapRequest {
+    FWMapRequest {
+        window_increment: 0,
+        fw_to_erase: slot,
+        fw_to_map: 0,                   // ← legacy uses 1
+        first_error: FIRST_ERROR_REQUEST, // ← legacy uses 0
+    }
+}
+```
+
+Two divergences from the snoop:
+
+- `fw_to_map` should be **1** (not `0`). The legacy maps slot 1 active
+  at the same time it requests erase of slot 1.
+- `first_error` should be **0** (not `FIRST_ERROR_REQUEST`). The
+  `FirstError` field is undefined in the erase direction; the legacy
+  zeros it. We send `0xFF_FFFF`, which is harmless but non-canonical.
+
+**Fix when v2 lands**: bring the builder in line — `fw_to_map: slot,
+first_error: 0`.
+
+### 7.4 The verify packet shape also differs
+
+The legacy's verify-poll packet:
+
+```
+WindowIncrement = 0x0000
+FWToErase       = 0x00
+FWToMap         = 0x01      ← Crema currently sends 0
+FirstError      = 0xFFFFFF  (FIRST_ERROR_REQUEST)
+```
+
+Crema's `FWMapRequest::request_first_error()` sets `fw_to_map: 0`. The
+DE1 may not transition into the "verified, mapped" state without that
+byte. **Fix**: change the constructor to set `fw_to_map: 1` (or accept
+a `slot: u8` parameter and use it).
+
+### 7.5 Verification is host-polled, not push-notified
+
+After streaming completes, the host writes the same verify-request
+packet **15 times in 820 ms** at ~50 ms cadence (the legacy seems to
+poll while waiting for the DE1 to finish its internal verify pass).
+The first FWMapRequest **notification** from the DE1 arrives at
+`292.566` carrying `FirstError = FIRST_ERROR_NONE` — **252 ms after
+the last poll**, and 1.14 s after streaming ended.
+
+After that the DE1 keeps emitting the same payload at ~1 Hz for 8 s
+(through `300.527`). The host doesn't ack any of these — they appear
+to be a "verified, slot mapped" heartbeat.
+
+**Implementation note**: the v2 state machine's `Verifying` step needs
+to poll `request_first_error` at ~50 ms intervals (with a max-iters cap,
+say 60 = 3 s) and accept the first matching notification. Subsequent
+echoes are ignored. Crema's `PROFILE_UPLOAD_ACK_TIMEOUT` model from the
+profile-upload work doesn't directly apply here — verification is a
+poll-until-reply, not a wait-for-arbitrary-ack.
+
+### 7.6 No `WindowIncrement` traffic during streaming
+
+The snoop captured **28,992 frame writes in a single uninterrupted
+burst** with **zero `FWMapRequest` writes** in between. The DE1 firmware
+on this hardware does not require periodic window-increment updates
+during streaming. The `WindowIncrement` field in `FWMapRequest` is
+unused for the v2 implementation (but kept in the codec — `#[non_exhaustive]`
+covers any future use).
+
+### 7.7 Inter-frame timing was ~30 ms, not 1 ms
+
+§4.2 / §6 recommend a 4 ms inter-frame delay on web and 1 ms on
+Android. The snoop measured **~30 ms per frame on Android** in practice
+— BLE-stack throttle, not host-side pacing. At 30 ms × 28,992 frames =
+**~14 minutes** of streaming for a ~464 KB image.
+
+**Investigate before v2 ships**: is the 4 ms recommendation actually
+correct, or should we just hand frames to the BLE stack as fast as it
+accepts them? Two hypotheses:
+
+1. **Native rate is the right target**: the Web Bluetooth stack throttles
+   to its natural ~30 ms cadence anyway; specifying a 4 ms minimum is
+   either ignored (no harm) or causes queue-full errors when the stack
+   *can* go faster (some harm).
+2. **The legacy's 1 ms target is real**: the Android Tcl wrapper does
+   send frames every 1 ms when the BLE stack accepts them. The 30 ms
+   we observed is just BLE-stack flow-control kicking in; specifying a
+   1 ms target would let it stream as fast as the link allows.
+
+A second snoop with Crema's current 4 ms-paced upload (or no pacing
+at all) would distinguish these. **Open question for the v2
+implementation kickoff**: spike-test all three (no delay, 4 ms, 30 ms)
+on a real DE1 and pick the fastest non-erroring rate. If the natural
+BLE-stack throttle wins, drop the pacing knob entirely — let the stack
+govern.
+
+### 7.8 Two-power-cycle wizard — updated state machine
+
+Adding §7.1's reconnect signal and §7.2's pre-erase sleep request, the
+v2 state machine is:
+
+```
+                 start_firmware_update(image, env)
+                          │
+                          ▼
+              ┌────────────────────────┐
+              │        Preflight       │  AC-power + machine-state +
+              │                        │  link-quality + image checks
+              └────────────┬───────────┘
+                          │ preflight ok
+                          ▼
+              ┌────────────────────────┐
+              │  AwaitingPowerOff      │  "Turn your DE1 off"
+              │  (shows wizard page 2) │  Watching for gattserverdisconnected.
+              └────────────┬───────────┘
+                          │ gattserverdisconnected
+                          ▼
+              ┌────────────────────────┐
+              │  AwaitingPowerOn       │  "Turn your DE1 on, then Reconnect"
+              │  (wizard page 3)       │  User clicks Reconnect → user gesture.
+              └────────────┬───────────┘
+                          │ device.gatt.connect() resolved
+                          │ + GATT rediscovery done
+                          ▼
+              ┌────────────────────────┐
+              │  RequestingSleep       │  Write RequestedState ← Sleep.
+              │  (200-300 ms wait or   │  Wait for MachineStateChanged → Sleep.
+              │   state-confirmation)  │
+              └────────────┬───────────┘
+                          │ sleep observed (or timeout)
+                          ▼
+              ┌────────────────────────┐
+              │         Erase          │  Emit FWMapRequest::erase(1) with the
+              │                        │  legacy packet shape (fw_to_map = 1,
+              │                        │  first_error = 0).
+              └────────────┬───────────┘
+                          │ ~10 s wall-clock
+                          ▼
+              ┌────────────────────────┐
+              │         Erasing        │  No DE1 notification expected during
+              │                        │  this gap; just wait.
+              └────────────┬───────────┘
+                          ▼
+              ┌──────────────────────────────┐
+              │  Uploading { sent, total }   │ ◄────┐  One firmware frame per
+              │                              │      │  emit. No pacing knob —
+              └────────────┬─────────────────┘ ─────┘  let the BLE stack throttle.
+                          │ sent == total
+                          ▼
+              ┌────────────────────────┐
+              │       Verifying        │  Poll FWMapRequest::request_first_error
+              │  (poll @ 50 ms, max 60)│  with the legacy packet shape
+              │                        │  (fw_to_map = 1).
+              └────────────┬───────────┘
+                          │ DE1 notify, first_error == FIRST_ERROR_NONE
+                          ▼
+              ┌────────────────────────┐
+              │  AwaitingFinalPowerOff │  Wizard page 4: "Turn your DE1 off —
+              │                        │  firmware is ready to be applied."
+              └────────────┬───────────┘
+                          │ gattserverdisconnected
+                          ▼
+              ┌────────────────────────┐
+              │  AwaitingFinalPowerOn  │  Wizard page 5: "Turn your DE1 on."
+              │                        │  Apply happens during the off→on cycle.
+              └────────────┬───────────┘
+                          │ device.gatt.connect() resolved
+                          ▼
+              ┌────────────────────────┐
+              │          Done          │  Read Version characteristic to
+              │                        │  confirm new firmware.
+              └────────────────────────┘
+```
+
+`Cancelled` / `Failed{…}` transitions remain as in §2, plus:
+
+- `AwaitingPowerOff/On` can transition to `Cancelled` on a wizard
+  "Cancel" tap (Crema's equivalent of legacy `app_exit`).
+- A timeout in either `AwaitingPowerOn` state (say 10 min — the
+  legacy's `after 600000 app_exit`) transitions to `Failed{Timeout}`.
+
+### 7.9 Acknowledged divergence: the `request_first_error` packet
+
+The legacy's verify-poll packet (`00 00 00 01 ff ff ff`) **also** sets
+`fw_to_map = 1`. Crema's `FWMapRequest::request_first_error()` sets it
+to 0. Same issue as §7.4 — the constructor needs a slot parameter or
+should hardcode `fw_to_map: 1` if v2 only ever maps slot 1 (which the
+codec already implies).
+
+### 7.10 Summary of code-level changes to land before v2 implementation
+
+These are the deltas from Crema's current codec to the empirically-verified
+legacy behavior. All small. Recommend landing them as a single
+codec-alignment commit on the existing `plan-firmware-update` thread
+even before the v2 implementation kicks off:
+
+1. `FWMapRequest::erase(slot)` → set `fw_to_map: slot, first_error: 0`.
+2. `FWMapRequest::request_first_error()` → either accept a `slot`
+   parameter and set `fw_to_map: slot`, or hardcode `fw_to_map: 1` with
+   a doc-comment explaining why.
+3. Two new `FirmwarePhase` variants (`AwaitingPowerOff`,
+   `AwaitingPowerOn`, plus `RequestingSleep` and the two
+   `AwaitingFinalPowerOff/On`) — pure type additions to the
+   `#[non_exhaustive]` enum.
+4. Update the §2 state-machine diagram with the §7.8 expanded
+   sequence (docs-only).
