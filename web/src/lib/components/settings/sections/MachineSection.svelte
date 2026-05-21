@@ -35,6 +35,7 @@
 	 */
 	import type { CremaApp, UiSnapshot } from '$lib/state';
 	import type { De1State } from '$lib/ble';
+	import type { FirmwareUpdateStatus, KnownFirmware } from '$lib/core';
 	import { getSettingsStore, formatTemp } from '$lib/settings';
 	import StSectionHead from '../StSectionHead.svelte';
 	import StGroup from '../StGroup.svelte';
@@ -119,9 +120,60 @@
 		formatTemp(snapshot.latestTelemetry?.mixTemp ?? null, prefs.tempUnit)
 	);
 
-	function updateFirmware(): void {
-		// TODO: the DE1 firmware-update path needs a BLE write channel the shell
-		// does not expose. Stubbed until the core gains a firmware-upload command.
+	// ── Firmware-update check (read-only) ─────────────────────────────────
+	// Mirrors the legacy de1app's local comparison (`vars.tcl:3787-3797`):
+	// read the DE1's installed firmware version (already cached in the core
+	// when `Event::Firmware` arrives at connect time) and compare against a
+	// hardcoded "latest known" constant bumped per Crema release. No network,
+	// no file picker, no upload — see `docs/17-firmware-update-plan.md` for
+	// the (v2-deferred) upload plan.
+	let firmwareStatus: FirmwareUpdateStatus | null = $state(null);
+	let firmwareChecking = $state(false);
+
+	function formatFw(fw: KnownFirmware): string {
+		return `${fw.release.toFixed(1)}.${fw.commits}`;
+	}
+
+	const firmwareStatusLabel = $derived.by(() => {
+		if (firmwareStatus === null) {
+			return 'No update info';
+		}
+		switch (firmwareStatus.type) {
+			case 'Unknown':
+				return 'Connect a DE1 first';
+			case 'UpToDate':
+				return `Up to date — v${formatFw(firmwareStatus.content.installed)}`;
+			case 'UpdateAvailable':
+				return `Update available — v${formatFw(firmwareStatus.content.latest)}`;
+			case 'NewerInstalled':
+				return `Newer than Crema knows — v${formatFw(firmwareStatus.content.installed)}`;
+		}
+	});
+
+	const firmwareStatusNotes = $derived.by(() => {
+		if (firmwareStatus === null) {
+			return "Click to compare your DE1's installed firmware against the latest Crema knows about.";
+		}
+		switch (firmwareStatus.type) {
+			case 'Unknown':
+				return 'Crema needs the DE1 connected and its version characteristic read.';
+			case 'UpToDate':
+				return 'Your DE1 is on the latest firmware this Crema build was tested against.';
+			case 'UpdateAvailable':
+				return `Use the legacy de1app to apply firmware v${formatFw(firmwareStatus.content.latest)}. Crema's own update flow ships in a later release.`;
+			case 'NewerInstalled':
+				return "Your DE1's firmware is ahead of this Crema build. Nothing to do.";
+		}
+	});
+
+	async function updateFirmware(): Promise<void> {
+		if (!app) return;
+		firmwareChecking = true;
+		try {
+			firmwareStatus = await app.firmwareUpdateStatus();
+		} finally {
+			firmwareChecking = false;
+		}
 	}
 	function rename(): void {
 		// TODO: a per-device display name needs a small device registry the
@@ -203,17 +255,13 @@
 	</div>
 	<div class="st-machinecard-fw">
 		<div class="t-eyebrow" style="color:var(--copper-400)">Firmware</div>
-		<div class="st-machinecard-fw-ver">No update info</div>
-		<div class="st-machinecard-fw-notes">
-			<!-- TODO: firmware update needs a DE1 write channel + an update
-			     feed. Faithful UI, but the action is stubbed. -->
-			Crema cannot yet read your DE1's firmware version or check for updates —
-			that needs a machine write channel the web shell does not have.
-		</div>
+		<div class="st-machinecard-fw-ver">{firmwareStatusLabel}</div>
+		<div class="st-machinecard-fw-notes">{firmwareStatusNotes}</div>
 		<StButton
-			label="Check for updates"
+			label={firmwareChecking ? 'Checking…' : 'Check for updates'}
 			icon="arrow-circle-up"
 			variant="primary"
+			disabled={!app || firmwareChecking}
 			onClick={updateFirmware}
 		/>
 	</div>

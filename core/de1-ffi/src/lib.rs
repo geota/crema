@@ -432,6 +432,15 @@ impl CremaBridge {
         })
     }
 
+    /// The firmware-update check result, as a JSON-encoded
+    /// [`FirmwareUpdateStatus`](de1_app::FirmwareUpdateStatus). Pure read —
+    /// no BLE traffic. Returns the `Unknown` variant until the DE1's `Version`
+    /// characteristic has been observed via `on_notification`.
+    pub fn firmware_update_status(&self) -> String {
+        serde_json::to_string(&self.core().firmware_update_status())
+            .expect("FirmwareUpdateStatus is plain data and always serializes")
+    }
+
     /// Build a [`CoreOutput`] (JSON) whose command sets the connected scale's
     /// beep volume to `level`.
     ///

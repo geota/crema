@@ -394,6 +394,19 @@ data class CoreOutput (
 	val commands: List<Command>
 )
 
+/// A DE1 CPU-board firmware identity, taken from the `Version` characteristic's
+/// CPU block: the release number and the commits-since-release count.
+/// 
+/// Cross-FFI as plain scalars per the workspace convention.
+@Serializable
+data class KnownFirmware (
+	/// CPU firmware release number, e.g. `1.0` or `1.4`.
+	val release: Float,
+	/// Commits since the tagged release — the build number that increments per
+	/// firmware ship.
+	val commits: UShort
+)
+
 /// One selectable display/behaviour mode a scale exposes.
 /// 
 /// A "first-class" scale (the Bookoo) lets the user switch the active display
@@ -515,6 +528,58 @@ enum class CalTarget(val string: String) {
 	/// The temperature sensor.
 	@SerialName("Temperature")
 	Temperature("Temperature"),
+}
+
+/// Generated type representing the anonymous struct variant `UpToDate` of the `FirmwareUpdateStatus` Rust enum
+@Serializable
+data class FirmwareUpdateStatusUpToDateInner (
+	/// What Crema thinks is installed.
+	val installed: KnownFirmware
+)
+
+/// Generated type representing the anonymous struct variant `UpdateAvailable` of the `FirmwareUpdateStatus` Rust enum
+@Serializable
+data class FirmwareUpdateStatusUpdateAvailableInner (
+	/// What is installed today.
+	val installed: KnownFirmware,
+	/// The latest version Crema knows about.
+	val latest: KnownFirmware
+)
+
+/// Generated type representing the anonymous struct variant `NewerInstalled` of the `FirmwareUpdateStatus` Rust enum
+@Serializable
+data class FirmwareUpdateStatusNewerInstalledInner (
+	/// What is installed today.
+	val installed: KnownFirmware,
+	/// The (older) version Crema knows about.
+	val latest: KnownFirmware
+)
+
+/// What the firmware-update check found.
+/// 
+/// `#[non_exhaustive]` so we can grow the enum (e.g. a future "checking…" /
+/// "fetched-from-manifest" variant) without breaking shell `match`es.
+@Serializable
+sealed class FirmwareUpdateStatus {
+	/// No DE1 connected, or the `Version` characteristic has not yet been
+	/// read. The shell should render "Connect a DE1 to check" or similar.
+	@Serializable
+	@SerialName("Unknown")
+	object Unknown: FirmwareUpdateStatus()
+	/// The installed firmware matches [`LATEST_KNOWN_FIRMWARE`].
+	@Serializable
+	@SerialName("UpToDate")
+	data class UpToDate(val content: FirmwareUpdateStatusUpToDateInner): FirmwareUpdateStatus()
+	/// The installed firmware is older than [`LATEST_KNOWN_FIRMWARE`].
+	@Serializable
+	@SerialName("UpdateAvailable")
+	data class UpdateAvailable(val content: FirmwareUpdateStatusUpdateAvailableInner): FirmwareUpdateStatus()
+	/// The installed firmware is newer than [`LATEST_KNOWN_FIRMWARE`] — most
+	/// likely the user updated through the legacy de1app since this Crema
+	/// build shipped. Informational; no action needed.
+	@Serializable
+	@SerialName("NewerInstalled")
+	data class NewerInstalled(val content: FirmwareUpdateStatusNewerInstalledInner): FirmwareUpdateStatus()
 }
 
 /// DE1 top-level machine state. Discriminants match the firmware `MachineState`

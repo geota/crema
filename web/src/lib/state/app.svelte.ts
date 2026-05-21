@@ -15,7 +15,13 @@
  * the screen.
  */
 
-import { loadCore, type Command, type CoreOutput, type CremaCore } from '$lib/core';
+import {
+	loadCore,
+	type Command,
+	type CoreOutput,
+	type CremaCore,
+	type FirmwareUpdateStatus
+} from '$lib/core';
 import { MachineState } from '$lib/core/crema-core';
 import { De1Manager, EMPTY_DE1_DIAGNOSTICS, ScaleManager } from '$lib/ble';
 import { getBeanStore } from '$lib/bean';
@@ -379,6 +385,17 @@ export class CremaApp {
 	private async refreshScaleCapabilities(advertisedName: string): Promise<void> {
 		const caps = await this.core.scaleCapabilities();
 		this.state.patch({ scaleCapabilities: caps ?? null, scaleName: advertisedName });
+	}
+
+	/**
+	 * Compare the most recently observed DE1 firmware version against the
+	 * latest firmware Crema was compiled against. Read-only — no BLE traffic.
+	 * Returns the `Unknown` variant until the DE1's `Version` characteristic
+	 * has been read at least once (it is read at connect time, so the value
+	 * is non-`Unknown` as soon as the DE1 is connected and subscribed).
+	 */
+	async firmwareUpdateStatus(): Promise<FirmwareUpdateStatus> {
+		return this.core.firmwareUpdateStatus();
 	}
 
 	/** Tare the connected scale. Routes the core's `WriteScale` to the scale. */
