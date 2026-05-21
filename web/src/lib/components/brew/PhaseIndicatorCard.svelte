@@ -16,7 +16,7 @@
 	 *
 	 * Only mounted on the resting Brew dashboard (Quick Sheet closed).
 	 */
-	import { type ProfileSegment } from '$lib/profiles';
+	import { totalTime, type ProfileSegment } from '$lib/profiles';
 
 	let {
 		seconds,
@@ -79,6 +79,38 @@
 	/** The active segment's label, for the card head. */
 	const activeLabel = $derived(rows.find((r) => r.isActive)?.name ?? 'Ready');
 
+	/**
+	 * Overall-progress strip above the per-phase list: one width-proportional
+	 * pill per segment, no labels. Reuses the same fill / active / past
+	 * state as the per-row bars; widths are proportional to segment time so
+	 * a glance gives a "where in the shot am I" sense even when the list
+	 * below is tall.
+	 */
+	const totalSec = $derived(
+		segments && segments.length > 0 ? totalTime(segments) : 1
+	);
+	const overall = $derived.by(() => {
+		if (!segments || segments.length === 0) {
+			return [{ id: 'none', widthPct: 100, fillPct: 0, isActive: true, isPast: false }];
+		}
+		const t = Math.max(0, seconds);
+		const activeIdx = Math.max(0, Math.min(frame, segments.length - 1));
+		let start = 0;
+		return segments.map((seg, i) => {
+			const span = seg.time;
+			const within = Math.max(0, Math.min(t, start + span) - start);
+			const seg2 = {
+				id: seg.id,
+				widthPct: totalSec > 0 ? (span / totalSec) * 100 : 0,
+				fillPct: span > 0 ? Math.min(100, (within / span) * 100) : 0,
+				isActive: i === activeIdx,
+				isPast: i < activeIdx
+			};
+			start += span;
+			return seg2;
+		});
+	});
+
 	/** Format a duration in seconds for the row's right column. */
 	function formatDuration(s: number): string {
 		if (s <= 0) return '—';
@@ -90,6 +122,21 @@
 	<div class="crema-phase-head">
 		<div class="t-eyebrow">Phase</div>
 		<div class="crema-phase-name">{activeLabel}</div>
+	</div>
+	<!-- Overall progress: one width-proportional pill per segment, no labels.
+	     Gives the at-a-glance "where am I in the shot" without crowding the
+	     vertical list below. -->
+	<div class="crema-phase-overall" aria-hidden="true">
+		{#each overall as seg (seg.id)}
+			<span
+				class="crema-phase-overall-seg"
+				class:is-active={seg.isActive}
+				class:is-past={seg.isPast}
+				style="flex: 0 0 {seg.widthPct}%"
+			>
+				<span class="crema-phase-overall-fill" style="width:{seg.fillPct}%"></span>
+			</span>
+		{/each}
 	</div>
 	<div class="crema-phase-list">
 		{#each rows as row (row.id)}

@@ -230,6 +230,30 @@
   letter-spacing: -0.01em;
   color: var(--copper-400);
 }
+/* Overall-progress strip above the per-phase list. Width-proportional
+   segments, no labels — the labels live in the vertical list below. */
+.crema-phase-overall {
+  display: flex;
+  gap: 3px;
+  margin-top: 10px;
+  height: 4px;
+}
+.crema-phase-overall-seg {
+  position: relative;
+  background: rgba(var(--tint-rgb), 0.06);
+  border-radius: 2px;
+  overflow: hidden;
+  min-width: 4px;
+}
+.crema-phase-overall-seg.is-active { background: rgba(var(--copper-rgb), 0.18); }
+.crema-phase-overall-fill {
+  display: block;
+  height: 100%;
+  background: var(--copper-500);
+  transition: width 500ms var(--ease, cubic-bezier(.32,.72,0,1));
+}
+.crema-phase-overall-seg.is-past .crema-phase-overall-fill { width: 100% !important; opacity: 0.5; }
+
 .crema-phase-list {
   display: flex;
   flex-direction: column;
