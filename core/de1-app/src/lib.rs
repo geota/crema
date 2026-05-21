@@ -1223,6 +1223,12 @@ impl CremaCore {
 
     /// Translate a domain [`ShotEvent`] into FFI [`Event`]s, maintaining the
     /// shot-start timestamp and the auto-stop lifecycle.
+    ///
+    /// At shot start the connected scale is also auto-tared and its built-in
+    /// timer is reset-then-started; at shot completion the timer is stopped.
+    /// All three timer writes are capability-gated by [`Scale::timer`], so
+    /// scales without software timer commands stay silent — matching the
+    /// audit §7.2 reactive auto-policy from `docs/14`.
     fn map_shot_event(&mut self, event: ShotEvent, now: Duration, out: &mut CoreOutput) {
         match event {
             ShotEvent::Started => {
@@ -1231,6 +1237,11 @@ impl CremaCore {
                 // Auto-tare the connected scale so the cup starts from zero,
                 // mirroring the legacy app's tare-at-shot-start behaviour.
                 self.push_tare_command(out);
+                // Reset the scale's built-in timer first, then start it. The
+                // reset clears any residual from a prior shot; the start
+                // begins counting from zero.
+                Self::push_timer_command(&self.scale, TimerCommand::Reset, out);
+                Self::push_timer_command(&self.scale, TimerCommand::Start, out);
                 out.events.push(Event::ShotStarted);
             }
             ShotEvent::PhaseChanged(phase) => {
@@ -1241,6 +1252,8 @@ impl CremaCore {
             ShotEvent::Completed(record) => {
                 self.shot_started = None;
                 self.auto_stop = None;
+                // Stop the scale's built-in timer alongside the auto-stop.
+                Self::push_timer_command(&self.scale, TimerCommand::Stop, out);
                 // `record.duration` is the domain `Duration`; narrow to the
                 // u32 ms the FFI `ShotCompleted` event carries.
                 let duration = u32::try_from(record.duration.as_millis()).unwrap_or(u32::MAX);
@@ -2488,6 +2501,75 @@ mod tests {
         // Every shipped profile is uploadable to a DE1.
         for profile in &parsed {
             assert!(profile.assemble().is_ok());
+        }
+    }
+
+    #[test]
+    fn a_shot_start_auto_resets_then_starts_a_capable_scale_timer() {
+        // Audit §7.2 reactive auto-policy: on transition into Espresso the
+        // scale's built-in timer is reset (clearing any residual from the
+        // previous shot) then started.
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC");
+        let out = core.on_notification(Source::De1State, &[4, 5], 1_000);
+        let scale_writes: Vec<&[u8]> = out
+            .commands
+            .iter()
+            .filter_map(|c| match c {
+                Command::WriteScale { data } => Some(data.as_slice()),
+                Command::WriteCharacteristic { .. } => None,
+            })
+            .collect();
+        // The first WriteScale is the auto-tare (TARE), then the two timer
+        // writes — RESET before START so the new shot counts from zero.
+        let reset_pos = scale_writes
+            .iter()
+            .position(|w| *w == bookoo::TIMER_RESET.as_slice())
+            .expect("a TIMER_RESET write");
+        let start_pos = scale_writes
+            .iter()
+            .position(|w| *w == bookoo::TIMER_START.as_slice())
+            .expect("a TIMER_START write");
+        assert!(reset_pos < start_pos, "RESET must precede START");
+    }
+
+    #[test]
+    fn a_shot_completion_auto_stops_a_capable_scale_timer() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC");
+        // Start an espresso shot.
+        core.on_notification(Source::De1State, &[4, 5], 1_000);
+        // Transition to Idle to complete the shot.
+        let out = core.on_notification(Source::De1State, &[2, 0], 5_000);
+        assert!(
+            out.commands.iter().any(|c| matches!(
+                c,
+                Command::WriteScale { data } if data.as_slice() == bookoo::TIMER_STOP.as_slice()
+            )),
+            "expected a TIMER_STOP write on ShotCompleted"
+        );
+    }
+
+    #[test]
+    fn a_shot_start_without_a_timer_capable_scale_emits_no_timer_writes() {
+        let mut core = CremaCore::new();
+        // Acaia has tare but no software timer.
+        core.connect_scale("ACAIA-X");
+        let out = core.on_notification(Source::De1State, &[4, 5], 1_000);
+        let scale_writes: Vec<&[u8]> = out
+            .commands
+            .iter()
+            .filter_map(|c| match c {
+                Command::WriteScale { data } => Some(data.as_slice()),
+                Command::WriteCharacteristic { .. } => None,
+            })
+            .collect();
+        // A tare may have been emitted (Acaia supports tare), but no timer
+        // bytes — bookoo::TIMER_* would not match the Acaia's tare bytes.
+        for write in &scale_writes {
+            assert_ne!(*write, bookoo::TIMER_RESET.as_slice());
+            assert_ne!(*write, bookoo::TIMER_START.as_slice());
+            assert_ne!(*write, bookoo::TIMER_STOP.as_slice());
         }
     }
 
