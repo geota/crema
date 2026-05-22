@@ -78,31 +78,14 @@
 	</StRow>
 </StGroup>
 
+<!--
+	Shot behaviour: "Stop on weight" and "Auto-tare on start" were removed
+	2026-05-22 — both are profile-level fields (`CremaProfile.stopOnWeight`
+	/ `.autoTare`) and live on the brew Quick Sheet for per-shot override.
+	The Settings copies were dead weight that the audit caught (see
+	docs/settings-audit.md §12-13).
+-->
 <StGroup title="Shot behaviour">
-	<StRow
-		title="Stop on weight"
-		sub="End the shot automatically when the scale hits target yield."
-	>
-		{#snippet control()}
-			<StToggle
-				on={prefs.stopOnWeight}
-				onChange={(v) => settings.set('stopOnWeight', v)}
-				label="Stop on weight"
-			/>
-		{/snippet}
-	</StRow>
-	<StRow
-		title="Auto-tare on start"
-		sub="Zero the scale automatically when you start a shot."
-	>
-		{#snippet control()}
-			<StToggle
-				on={prefs.autoTare}
-				onChange={(v) => settings.set('autoTare', v)}
-				label="Auto-tare on start"
-			/>
-		{/snippet}
-	</StRow>
 	<StRow
 		title="Auto-purge after steam"
 		sub="Run a 3s flush after steaming to clear the boiler."

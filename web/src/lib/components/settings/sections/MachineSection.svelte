@@ -463,17 +463,19 @@
 			/>
 		{/snippet}
 	</StRow>
-	<div class="st-grinder-row">
-		<StRow title="Grinder" sub="Doesn't report dose; Crema logs a manual grind setting.">
-			{#snippet control()}
-				<!-- Grinder is not implemented — empty dot always. -->
-				<span class="st-diag-dot" aria-label="Grinder not paired"></span>
-			{/snippet}
-			{#snippet hint()}
-				<StButton label="Pair" icon="bluetooth" disabled />
-			{/snippet}
-		</StRow>
-	</div>
+	<StRow
+		title="Grinder"
+		sub="Doesn't report dose; Crema logs a manual grind setting."
+		notImplemented
+	>
+		{#snippet control()}
+			<!-- Grinder is not implemented — empty dot always. -->
+			<span class="st-diag-dot" aria-label="Grinder not paired"></span>
+		{/snippet}
+		{#snippet hint()}
+			<StButton label="Pair" icon="bluetooth" disabled />
+		{/snippet}
+	</StRow>
 </StGroup>
 
 <style>
@@ -505,12 +507,6 @@
 	.st-diag-dot.is-on {
 		background: var(--success, #4ea869);
 		border-color: var(--success, #4ea869);
-	}
-	/* The Grinder row is "not yet implemented" — dim the whole row so it
-	   reads as a placeholder. Pair button stays disabled per the StButton
-	   `disabled` prop, but the muted opacity reinforces the "later" hint. */
-	.st-grinder-row {
-		opacity: 0.5;
 	}
 	.st-diag-id {
 		font-family: var(--font-mono);

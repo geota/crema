@@ -297,6 +297,28 @@ export class CremaApp {
 				// inside the 500 ms guard window.
 				this.lastProfileUploadCompletedAtMs = performance.now();
 			}
+			if (
+				event.type === 'WaterSessionCompleted' &&
+				event.content.kind === 'Flush' &&
+				this.pendingPreshotFlush !== null
+			) {
+				// The pre-shot flush we requested just finished — release
+				// the `startShot()` waiter so it can issue the Espresso
+				// state request. The 30 s timeout in `startShot` is the
+				// backstop if this notification is missed.
+				this.pendingPreshotFlush();
+			}
+			if (event.type === 'SteamSessionCompleted') {
+				// Auto-purge after steam (Settings → Brew defaults). A
+				// short HotWaterRinse clears the group plumbing after
+				// the user releases the steam control. Gated on the
+				// pref, and only when the DE1 is in a state that
+				// accepts a fresh state-request (the firmware refuses
+				// state-requests during error / cal / clean modes).
+				if (getSettingsStore().current.autoPurgeAfterSteam) {
+					this.scheduleAutoPurge();
+				}
+			}
 			if (event.type === 'ShotCompleted') {
 				const snapshot = this.state.current;
 				// Stamp a snapshot of the current bean onto the record, so a later
@@ -797,6 +819,72 @@ export class CremaApp {
 		// loop on each tick, so flipping the toggle takes effect on the
 		// next interval without any explicit write.
 	}
+
+	/**
+	 * Kick off a HotWaterRinse a brief moment after a steam session ended.
+	 *
+	 * The DE1 transitions Steam → Idle internally when the user releases the
+	 * steam control; the SteamSessionCompleted event arrives on or just
+	 * before that transition. Firing the state-request *during* the
+	 * Steam→Idle transition can race with the firmware, so we defer by a
+	 * short tick and bail out if the DE1 has already left Idle (e.g. user
+	 * pressed Espresso themselves) or a HotWaterRinse is already running.
+	 */
+	private scheduleAutoPurge(): void {
+		window.setTimeout(() => {
+			const ms = this.state.current.machineState ?? '';
+			const stateName = ms.split(' / ')[0];
+			// Only fire from Idle — avoid stepping on a manual user action.
+			if (stateName !== MachineState.Idle) return;
+			void this.requestMachineState(MachineState.HotWaterRinse);
+		}, 1500);
+	}
+
+	/**
+	 * Start an espresso shot — the Brew screen's primary action. Optionally
+	 * pre-flushes the group head if the user's `groupFlushBeforeShot` pref
+	 * is on, then requests `Espresso`.
+	 *
+	 * The pre-flush is a one-shot side effect: kick off `HotWaterRinse` and
+	 * subscribe (once) to the next `WaterSessionCompleted(Flush)` event to
+	 * advance to Espresso. The DE1's `FlushTimeout` MMR setting caps the
+	 * flush duration; the wall-clock ceiling here is just a backstop so a
+	 * lost Completion notification doesn't trap the start.
+	 */
+	async startShot(): Promise<void> {
+		if (!getSettingsStore().current.groupFlushBeforeShot) {
+			await this.requestMachineState(MachineState.Espresso);
+			return;
+		}
+		// Pre-shot group flush. Kick off the rinse, then wait for its
+		// completion (or the 30 s ceiling) before requesting Espresso.
+		await this.requestMachineState(MachineState.HotWaterRinse);
+		await new Promise<void>((resolve) => {
+			const timeout = window.setTimeout(() => {
+				this.pendingPreshotFlush = null;
+				resolve();
+			}, 30_000);
+			this.pendingPreshotFlush = () => {
+				window.clearTimeout(timeout);
+				this.pendingPreshotFlush = null;
+				resolve();
+			};
+		});
+		await this.requestMachineState(MachineState.Espresso);
+	}
+
+	/** Stop a running shot — requests `Idle`, which the DE1 honours from any session state. */
+	async stopShot(): Promise<void> {
+		await this.requestMachineState(MachineState.Idle);
+	}
+
+	/**
+	 * The pre-shot-flush waiter, populated by `startShot()` while the
+	 * pre-flush is running. The event loop in `applyCoreOutput` resolves it
+	 * when `WaterSessionCompleted(Flush)` arrives, freeing `startShot` to
+	 * issue the `Espresso` request.
+	 */
+	private pendingPreshotFlush: (() => void) | null = null;
 
 	/**
 	 * Ask the DE1 to enter a machine state — most usefully Sleep or Idle.

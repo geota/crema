@@ -69,10 +69,6 @@ export interface Settings {
 	defaultBrewTempC: number;
 	/** Default pre-infusion time, seconds. */
 	defaultPreinfusionS: number;
-	/** Stop the shot at target yield. */
-	stopOnWeight: boolean;
-	/** Zero the scale when a shot starts. */
-	autoTare: boolean;
 	/** Run a short flush after steaming. */
 	autoPurgeAfterSteam: boolean;
 	/** Flush the group before each shot. */
@@ -165,8 +161,6 @@ export const DEFAULT_SETTINGS: Settings = {
 	defaultRatio: 2.0,
 	defaultBrewTempC: 93.0,
 	defaultPreinfusionS: 8,
-	stopOnWeight: true,
-	autoTare: true,
 	autoPurgeAfterSteam: true,
 	groupFlushBeforeShot: false,
 
