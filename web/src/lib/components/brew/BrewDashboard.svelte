@@ -126,12 +126,19 @@
 	 * `ShotSettings` snapshot the connect-time Read populates; fallbacks
 	 * match the legacy de1app defaults so the chip has a sensible reading
 	 * before the read returns.
+	 *
+	 * Uses `posOr` rather than `??` because a partial / pre-handshake
+	 * `ShotSettings` payload can carry a literal `0` for these fields,
+	 * which `??` happily passes through. A zero timeout is meaningless
+	 * anyway — treat it as missing.
 	 */
+	const posOr = (v: number | undefined, fallback: number): number =>
+		v != null && Number.isFinite(v) && v > 0 ? v : fallback;
 	const MODE_TARGET_SEC = $derived<
 		Record<'steaming' | 'dispensing' | 'flushing', number>
 	>({
-		steaming: ui.de1ShotSettings?.steamTimeoutS ?? 90,
-		dispensing: ui.de1ShotSettings?.hotWaterTimeoutS ?? 30,
+		steaming: posOr(ui.de1ShotSettings?.steamTimeoutS, 90),
+		dispensing: posOr(ui.de1ShotSettings?.hotWaterTimeoutS, 30),
 		flushing: 4.0
 	});
 	/**
@@ -161,13 +168,8 @@
 	const MODE_TARGET_LABEL = $derived<
 		Record<'steaming' | 'dispensing' | 'flushing', string>
 	>({
-		steaming: `${formatTemp(ui.de1ShotSettings?.steamTempC ?? 148, prefs.tempUnit)} · ${
-			ui.de1ShotSettings?.steamTimeoutS ?? 90
-		} s`,
-		dispensing: `${formatTemp(
-			ui.de1ShotSettings?.hotWaterTempC ?? 92,
-			prefs.tempUnit
-		)} · ${formatVolume(ui.de1ShotSettings?.hotWaterVolumeMl ?? 250, prefs.volumeUnit)}`,
+		steaming: `${formatTemp(posOr(ui.de1ShotSettings?.steamTempC, 148), prefs.tempUnit)} · ${posOr(ui.de1ShotSettings?.steamTimeoutS, 90)} s`,
+		dispensing: `${formatTemp(posOr(ui.de1ShotSettings?.hotWaterTempC, 92), prefs.tempUnit)} · ${formatVolume(posOr(ui.de1ShotSettings?.hotWaterVolumeMl, 250), prefs.volumeUnit)}`,
 		flushing: `${formatTemp(flushTempC, prefs.tempUnit)} · 4 s`
 	});
 	/**

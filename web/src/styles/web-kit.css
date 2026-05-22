@@ -496,12 +496,13 @@
 .crema-bigbtn:hover:not(:disabled) { transform: translateY(-1px); }
 .crema-bigbtn:active:not(:disabled) { transform: scale(0.985); }
 /* Disabled state — the DE1 isn't ready (no machine connected, mid-
-   transition, …). Drops the copper glow and dims so the button reads
-   as "not actionable right now"; pointer cursor flips. The label
-   text stays legible for orientation. */
+   transition, …). Keep the copper hue so the button still reads as
+   "the shot control" and just dim the whole thing — mirrors how the
+   service-mode chips signal `.is-disabled` with a 50 % opacity drop
+   rather than swapping to neutral grey. The copper glow goes too so
+   the button reads as resting, not active. */
 .crema-bigbtn:disabled {
-  background: rgba(var(--tint-rgb), 0.12);
-  color: rgba(var(--tint-rgb), 0.5);
+  opacity: 0.5;
   box-shadow: none;
   cursor: not-allowed;
   transform: none;
