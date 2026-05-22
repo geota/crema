@@ -721,6 +721,13 @@
 		     one row of buttons. -->
 		<div class="crema-dash-foot is-split">
 			<div class="crema-foot-meta">
+				<!-- Machine: the formatted "State / Substate" string from the
+				     last `MachineStateChanged` event (e.g. "Sleep / Ready",
+				     "Espresso / Pouring", "Idle / HeatWaterTank"). `—` until
+				     the first notification arrives. -->
+				<span class="t-eyebrow">Machine</span>
+				<span>{ui.machineState ?? '—'}</span>
+				<span class="crema-foot-divider"></span>
 				<span class="t-eyebrow">Scale</span>
 				<span
 					>{scaleConnected
