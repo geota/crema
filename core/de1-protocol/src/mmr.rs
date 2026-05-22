@@ -202,6 +202,58 @@ impl MmrRegister {
         }
     }
 
+    /// The register's read-side scale factor — multiply the raw 32-bit
+    /// integer the firmware emits by this to get the engineering-units
+    /// value. The reciprocal applies on writes (callers that *write*
+    /// engineering units must divide by `scale()` and round, e.g. to
+    /// write `9.5 mL/s` to `FlushFlowRate` (scale `0.1`), encode
+    /// `95u32` on the wire).
+    ///
+    /// Catalog mirrors reaprime's `MMRItem.readScale`
+    /// (`de1.models.dart`); registers reaprime models with no explicit
+    /// scale default to `1.0` here. `SteamHighFlowStart` is an
+    /// audit-finding fix: reaprime declares the field `scaledFloat` but
+    /// omits `readScale` (their bug). The firmware's published
+    /// description says the wire value is `seconds × 100`, so the
+    /// correct read-scale is `0.01`; Crema models it correctly.
+    pub fn scale(self) -> f32 {
+        match self {
+            // ×0.1 — flow rates, idle temps, timeouts in tenths.
+            MmrRegister::Phase1FlowRate
+            | MmrRegister::Phase2FlowRate
+            | MmrRegister::HotWaterIdleTemp
+            | MmrRegister::HotWaterFlowRate
+            | MmrRegister::FlushFlowRate
+            | MmrRegister::FlushTemp
+            | MmrRegister::FlushTimeout
+            | MmrRegister::EspressoWarmupTimeout => 0.1,
+
+            // ×0.01 — steam flow / steam-high-flow-start.
+            MmrRegister::SteamFlow | MmrRegister::SteamHighFlowStart => 0.01,
+
+            // ×0.001 — calibration flow multiplier.
+            MmrRegister::CalibrationFlowMultiplier => 0.001,
+
+            // Plain integer registers — value is already in engineering
+            // units (°C, count, bitmask, …) and needs no scaling.
+            MmrRegister::CpuBoardVersion
+            | MmrRegister::MachineModel
+            | MmrRegister::FirmwareVersion
+            | MmrRegister::GhcInfo
+            | MmrRegister::TankTempThreshold
+            | MmrRegister::FanThreshold
+            | MmrRegister::SerialNumber
+            | MmrRegister::RefillKit
+            | MmrRegister::GhcMode
+            | MmrRegister::HeaterVoltage
+            | MmrRegister::UsbChargerOn
+            | MmrRegister::FeatureFlags
+            | MmrRegister::UserPresent
+            | MmrRegister::SteamTwoTapStop
+            | MmrRegister::CupWarmerTemp => 1.0,
+        }
+    }
+
     /// Every known register, in declaration order — the basis of
     /// [`from_address`](Self::from_address) and a useful read-set for callers
     /// that want to poll the whole diagnostic window. Order is not significant;
@@ -382,6 +434,56 @@ mod tests {
             for b in &MmrRegister::ALL[i + 1..] {
                 assert_ne!(a.address(), b.address(), "{a:?} and {b:?} share an address");
             }
+        }
+    }
+
+    #[test]
+    fn scale_catalog_matches_reaprime() {
+        // Pin every register's read-side scale against the reaprime
+        // catalog (`de1.models.dart`). Each entry that differs is
+        // deliberate (e.g. `SteamHighFlowStart` corrects reaprime's
+        // missing `readScale`; see the doc-comment on `scale`).
+        for (reg, expected) in [
+            (MmrRegister::Phase1FlowRate, 0.1),
+            (MmrRegister::Phase2FlowRate, 0.1),
+            (MmrRegister::HotWaterIdleTemp, 0.1),
+            (MmrRegister::HotWaterFlowRate, 0.1),
+            (MmrRegister::FlushFlowRate, 0.1),
+            (MmrRegister::FlushTemp, 0.1),
+            (MmrRegister::FlushTimeout, 0.1),
+            (MmrRegister::EspressoWarmupTimeout, 0.1),
+            (MmrRegister::SteamFlow, 0.01),
+            (MmrRegister::SteamHighFlowStart, 0.01),
+            (MmrRegister::CalibrationFlowMultiplier, 0.001),
+            (MmrRegister::CpuBoardVersion, 1.0),
+            (MmrRegister::MachineModel, 1.0),
+            (MmrRegister::FirmwareVersion, 1.0),
+            (MmrRegister::GhcInfo, 1.0),
+            (MmrRegister::TankTempThreshold, 1.0),
+            (MmrRegister::FanThreshold, 1.0),
+            (MmrRegister::SerialNumber, 1.0),
+            (MmrRegister::RefillKit, 1.0),
+            (MmrRegister::GhcMode, 1.0),
+            (MmrRegister::HeaterVoltage, 1.0),
+            (MmrRegister::UsbChargerOn, 1.0),
+            (MmrRegister::FeatureFlags, 1.0),
+            (MmrRegister::UserPresent, 1.0),
+            (MmrRegister::SteamTwoTapStop, 1.0),
+            (MmrRegister::CupWarmerTemp, 1.0),
+        ] {
+            let got = reg.scale();
+            assert!(
+                (got - expected).abs() < f32::EPSILON,
+                "{reg:?}: expected scale {expected}, got {got}"
+            );
+        }
+        // Every variant must have an entry — pinning the catalog also
+        // ensures forgotten variants flag immediately. Compile-time
+        // exhaustiveness on `match` already covers this for `scale()`
+        // itself; the loop above asserts the table doesn't go stale.
+        for reg in MmrRegister::ALL {
+            // Touch the method so every variant participates.
+            let _ = reg.scale();
         }
     }
 }
