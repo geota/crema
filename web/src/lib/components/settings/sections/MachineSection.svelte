@@ -36,6 +36,7 @@
 	import type { CremaApp, UiSnapshot } from '$lib/state';
 	import type { De1State } from '$lib/ble';
 	import type { FirmwareUpdateStatus } from '$lib/core';
+	import { MachineState } from '$lib/core/crema-core';
 	import { getSettingsStore } from '$lib/settings';
 	import StSectionHead from '../StSectionHead.svelte';
 	import StGroup from '../StGroup.svelte';
@@ -286,6 +287,28 @@
 					disabled={!app}
 					onClick={connect}
 				/>
+			{/if}
+			<!-- Sleep / Wake — writes RequestedState (cuuid_02) to ask the
+			     DE1 to enter Sleep (idle heaters, save power) or Idle (warm
+			     up + ready to brew). Idle also wakes from Sleep. Both
+			     gated on `connected` — the button does nothing without an
+			     active BLE link. Mirrors what the legacy app's "On / Off"
+			     buttons in the top-bar do. -->
+			{#if connected}
+				{#if snapshot.machineState === MachineState.Sleep}
+					<StButton
+						label="Wake"
+						icon="sun"
+						variant="primary"
+						onClick={() => app?.requestMachineState(MachineState.Idle)}
+					/>
+				{:else}
+					<StButton
+						label="Sleep"
+						icon="moon"
+						onClick={() => app?.requestMachineState(MachineState.Sleep)}
+					/>
+				{/if}
 			{/if}
 			<!-- TODO: Rename / Forget need a device registry the shell lacks. -->
 			<StButton label="Rename" icon="pencil-simple" onClick={rename} />
