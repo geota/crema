@@ -1,16 +1,19 @@
 <script lang="ts">
 	/**
-	 * `DebugPanel` — a floating bottom-right overlay that mirrors the shared
+	 * `DebugPanel` — middle-right floating overlay that mirrors the shared
 	 * `UiSnapshot.eventLog`, shown when `prefs.showDebugPanel` is on
 	 * (Settings → Advanced).
 	 *
-	 * The shell's event log is the same source the Scale page renders as its
-	 * full-page Activity panel; this corner overlay is the lightweight
-	 * cross-route version, available on every screen while debugging. The
-	 * close X flips the pref back off — symmetric with the Settings toggle.
+	 * Two states: **expanded** (the full event-log panel) and **minimized**
+	 * (a small icon chip on the right edge). The chip lets the user re-open
+	 * the panel without re-opening Settings. Both states live behind the
+	 * Settings toggle — when `showDebugPanel` is false, neither renders.
 	 *
-	 * Stays above the page content but below the sidebar (z-index 40 < the
-	 * sidebar's 50) so the rail's tap targets always win.
+	 * Minimize state is session-only (not persisted): the user usually wants
+	 * the panel open when debugging, so a fresh page load starts expanded.
+	 * The Settings toggle is the master enable / disable.
+	 *
+	 * Z-index 40 — below the sidebar (50) so its tap-targets always win.
 	 */
 	import type { CremaApp } from '$lib/state';
 	import { getSettingsStore } from '$lib/settings';
@@ -18,59 +21,86 @@
 	let { app }: { app: CremaApp | null } = $props();
 
 	const settings = getSettingsStore();
-	const open = $derived(settings.current.showDebugPanel);
+	const enabled = $derived(settings.current.showDebugPanel);
 	const snapshot = $derived(app?.state.current);
 	const eventLog = $derived(snapshot?.eventLog ?? []);
 	/** The most-recent N entries — the panel renders newest-first. */
 	const rows = $derived(eventLog.slice(0, 30));
 
-	function close(): void {
+	/** Session-level minimize state — resets on page load. */
+	let minimized = $state(false);
+
+	function minimize(): void {
+		minimized = true;
+	}
+	function expand(): void {
+		minimized = false;
+	}
+	function disable(): void {
 		settings.set('showDebugPanel', false);
 	}
 </script>
 
-{#if open}
-	<aside
-		class="dbg"
-		role="region"
-		aria-label="Debug event log"
-	>
-		<div class="dbg-head">
-			<div class="dbg-title">
-				<i class="ph ph-bug" aria-hidden="true"></i>
-				Debug
+{#if enabled}
+	{#if minimized}
+		<button
+			type="button"
+			class="dbg-chip"
+			onclick={expand}
+			aria-label="Open debug panel"
+			title="Open debug panel"
+		>
+			<i class="ph ph-bug" aria-hidden="true"></i>
+		</button>
+	{:else}
+		<aside class="dbg" role="region" aria-label="Debug event log">
+			<div class="dbg-head">
+				<div class="dbg-title">
+					<i class="ph ph-bug" aria-hidden="true"></i>
+					Debug
+				</div>
+				<div class="dbg-meta">{eventLog.length}</div>
+				<button
+					type="button"
+					class="dbg-x"
+					onclick={minimize}
+					aria-label="Minimize"
+					title="Minimize (click the chip on the right edge to re-open)"
+				>
+					<i class="ph ph-minus" aria-hidden="true"></i>
+				</button>
+				<button
+					type="button"
+					class="dbg-x"
+					onclick={disable}
+					aria-label="Disable debug panel"
+					title="Disable (Settings → Advanced → Show debug panel re-enables)"
+				>
+					<i class="ph ph-x" aria-hidden="true"></i>
+				</button>
 			</div>
-			<div class="dbg-meta">{eventLog.length}</div>
-			<button
-				type="button"
-				class="dbg-x"
-				onclick={close}
-				aria-label="Hide debug panel"
-				title="Hide (Settings → Advanced → Show debug panel)"
-			>
-				<i class="ph ph-x" aria-hidden="true"></i>
-			</button>
-		</div>
-		<div class="dbg-body">
-			{#if rows.length === 0}
-				<div class="dbg-empty">No events yet.</div>
-			{:else}
-				{#each rows as line (line.id)}
-					<div class="dbg-row">{line.text}</div>
-				{/each}
-			{/if}
-		</div>
-	</aside>
+			<div class="dbg-body">
+				{#if rows.length === 0}
+					<div class="dbg-empty">No events yet.</div>
+				{:else}
+					{#each rows as line (line.id)}
+						<div class="dbg-row">{line.text}</div>
+					{/each}
+				{/if}
+			</div>
+		</aside>
+	{/if}
 {/if}
 
 <style>
 	.dbg {
 		position: fixed;
 		right: 16px;
-		bottom: 16px;
+		top: 50%;
+		transform: translateY(-50%);
 		z-index: 40;
 		width: 320px;
-		max-height: 360px;
+		max-height: 60vh;
 		display: flex;
 		flex-direction: column;
 		background: var(--bg-surface);
@@ -141,5 +171,34 @@
 		font-size: 11px;
 		text-align: center;
 		padding: 18px 0;
+	}
+
+	/* Minimized state — small chip on the right edge, vertically centered. */
+	.dbg-chip {
+		position: fixed;
+		right: 0;
+		top: 50%;
+		transform: translateY(-50%);
+		z-index: 40;
+		width: 32px;
+		height: 36px;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		background: var(--bg-surface);
+		border: 1px solid var(--hairline-strong);
+		border-right: 0;
+		border-radius: var(--radius-md, 10px) 0 0 var(--radius-md, 10px);
+		color: var(--copper-400);
+		font-size: 16px;
+		cursor: pointer;
+		box-shadow: var(--shadow-md, 0 2px 6px rgba(0, 0, 0, 0.18));
+		transition:
+			background var(--dur-1, 140ms) var(--ease, ease),
+			color var(--dur-1, 140ms) var(--ease, ease);
+	}
+	.dbg-chip:hover {
+		background: rgba(var(--copper-rgb), 0.1);
+		color: var(--copper-300, var(--copper-400));
 	}
 </style>
