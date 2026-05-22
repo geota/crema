@@ -558,6 +558,15 @@
 		font-size: 10px;
 		color: rgba(var(--tint-rgb), 0.7);
 	}
+	/* Placeholder dash — applied when a value is the literal "—" so all
+	   four rows' dashes render at the same size/weight as the BLE row's
+	   mono dash. Avoids the eye-jerk of bold "—"s next to a faint mono
+	   "—" when the DE1 is disconnected. */
+	:global(.st-content .st-machinecard-info-val.is-placeholder) {
+		font-weight: 400;
+		font-size: 10px;
+		color: rgba(var(--tint-rgb), 0.5);
+	}
 	:global(.st-content .st-machinecard-info-actions) {
 		margin-top: auto;
 		padding-top: 12px;

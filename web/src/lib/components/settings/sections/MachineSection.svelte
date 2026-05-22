@@ -263,22 +263,36 @@
 			     (MMR 0x80000C), CPU board revision (MMR 0x800008), and the
 			     Web Bluetooth device id from the connect diagnostics. Each
 			     row is a label/value pair so the values line up under each
-			     other. All read "—" until the MMR replies land. -->
+			     other. All read "—" until the MMR replies land — the
+			     placeholder class renders the dash smaller/lighter so the
+			     four dashes look uniform with the BLE one. -->
 			<div class="st-machinecard-info-row">
 				<span class="st-machinecard-info-key">Firmware</span>
-				<span class="st-machinecard-info-val">{firmwareLabel}</span>
+				<span
+					class="st-machinecard-info-val"
+					class:is-placeholder={firmwareLabel === '—'}>{firmwareLabel}</span
+				>
 			</div>
 			<div class="st-machinecard-info-row">
 				<span class="st-machinecard-info-key">Model</span>
-				<span class="st-machinecard-info-val">{modelLabel}</span>
+				<span
+					class="st-machinecard-info-val"
+					class:is-placeholder={modelLabel === '—'}>{modelLabel}</span
+				>
 			</div>
 			<div class="st-machinecard-info-row">
 				<span class="st-machinecard-info-key">Board</span>
-				<span class="st-machinecard-info-val">{boardLabel}</span>
+				<span
+					class="st-machinecard-info-val"
+					class:is-placeholder={boardLabel === '—'}>{boardLabel}</span
+				>
 			</div>
 			<div class="st-machinecard-info-row">
 				<span class="st-machinecard-info-key">BLE</span>
-				<span class="st-machinecard-info-val st-machinecard-info-val-mono">{bleLabel}</span>
+				<span
+					class="st-machinecard-info-val st-machinecard-info-val-mono"
+					class:is-placeholder={bleLabel === '—'}>{bleLabel}</span
+				>
 			</div>
 		</div>
 		<div class="st-machinecard-info-actions">
