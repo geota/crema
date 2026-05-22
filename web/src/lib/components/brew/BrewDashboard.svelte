@@ -376,8 +376,20 @@
 			? tel.resistance.toFixed(2)
 			: '—'
 	);
-	/** Dispensed-volume readout, in the chosen volume unit. */
-	const dispensedVolumeM = $derived(convertVolume(ui.dispensedVolumeMl, prefs.volumeUnit));
+	/**
+	 * Dispensed-volume readout in the chosen unit, with one decimal so it
+	 * visually matches the density of the FLOW number next to it. The
+	 * snapshot's `dispensedVolumeMl` reads `0` while idle; gate on
+	 * `shotInProgress` so the card shows `—` until a shot starts rather
+	 * than a misleading `0.0`.
+	 */
+	const dispensedVolumeVal = $derived.by<string>(() => {
+		const ml = ui.shotInProgress ? ui.dispensedVolumeMl : null;
+		if (ml == null || !Number.isFinite(ml)) return '—';
+		if (prefs.volumeUnit === 'floz') return (ml / 29.5735).toFixed(1);
+		return ml.toFixed(1);
+	});
+	const dispensedVolumeUnit = $derived(prefs.volumeUnit === 'floz' ? 'fl oz' : 'mL');
 	/** Weight flow (g/s) — from the scale's host-side mass-flow estimate. */
 	const weightFlowVal = $derived<string>(
 		ui.scaleFlow != null && Number.isFinite(ui.scaleFlow) ? ui.scaleFlow.toFixed(1) : '—'
@@ -558,28 +570,29 @@
 			<div class="crema-dash-chartcol">
 				<div class="crema-readouts">
 					<ChannelReadout
+						icon="gauge"
 						label="PRESSURE"
 						value={pressureM.value}
 						unit={pressureM.unit}
 						color="var(--tel-pressure)"
 						secondaryLabel="RESISTANCE"
 						secondaryValue={resistanceVal}
-						secondaryUnit=""
+						secondaryUnit="bar·s²/mL"
 						secondaryColor="var(--tel-pressure-2)"
-						secondaryEnabled={prefs.showResistance}
 					/>
 					<ChannelReadout
+						icon="drop"
 						label="FLOW"
 						value={fmt(tel?.flow)}
 						unit="ml/s"
 						color="var(--tel-flow)"
 						secondaryLabel="VOLUME"
-						secondaryValue={dispensedVolumeM.value}
-						secondaryUnit={dispensedVolumeM.unit}
+						secondaryValue={dispensedVolumeVal}
+						secondaryUnit={dispensedVolumeUnit}
 						secondaryColor="var(--tel-flow-2)"
-						secondaryEnabled={prefs.showVolume}
 					/>
 					<ChannelReadout
+						icon="thermometer"
 						label="HEAD"
 						value={tempM.value}
 						unit={tempM.unit}
@@ -589,9 +602,9 @@
 						secondaryValue={mixTempM.value}
 						secondaryUnit={mixTempM.unit}
 						secondaryColor="var(--tel-temp-2)"
-						secondaryEnabled={prefs.showMixTemp}
 					/>
 					<ChannelReadout
+						icon="scales"
 						label="WEIGHT"
 						value={weightM.value}
 						unit={weightM.unit}
@@ -601,7 +614,6 @@
 						secondaryValue={weightFlowVal}
 						secondaryUnit="g/s"
 						secondaryColor="var(--tel-weight-2)"
-						secondaryEnabled={prefs.showWeightFlow}
 					/>
 				</div>
 				<div class="crema-chart">
