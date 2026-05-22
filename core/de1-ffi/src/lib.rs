@@ -89,6 +89,9 @@ pub enum MmrReg {
     RefillKit,
     /// Flush flow rate.
     FlushFlowRate,
+    /// Flush water target temperature, °C × 10 (modelled by reaprime; the
+    /// legacy TCL de1app doesn't reference this address).
+    FlushTemp,
     /// Hot-water flow rate.
     HotWaterFlowRate,
     /// Hot-water dispense phase-1 flow rate.
@@ -134,6 +137,7 @@ impl From<MmrReg> for MmrRegister {
             MmrReg::SteamFlow => MmrRegister::SteamFlow,
             MmrReg::RefillKit => MmrRegister::RefillKit,
             MmrReg::FlushFlowRate => MmrRegister::FlushFlowRate,
+            MmrReg::FlushTemp => MmrRegister::FlushTemp,
             MmrReg::HotWaterFlowRate => MmrRegister::HotWaterFlowRate,
             MmrReg::Phase1FlowRate => MmrRegister::Phase1FlowRate,
             MmrReg::Phase2FlowRate => MmrRegister::Phase2FlowRate,

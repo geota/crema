@@ -124,6 +124,13 @@ pub enum MmrRegister {
     RefillKit,
     /// Flush flow rate.
     FlushFlowRate,
+    /// Flush water target temperature, °C — the temperature the DE1
+    /// holds while a group-flush cycle runs. Wire value is `°C × 10`
+    /// (so 950 = 95.0 °C). Modelled by reaprime
+    /// (`de1.models.dart:flushTemp` at `0x00803844`, 4-byte slot,
+    /// `readScale: 0.1`); the legacy de1app TCL has no equivalent.
+    /// Crema's audit-discovered register — see docs/22 §3.2.
+    FlushTemp,
     /// Hot-water flow rate.
     HotWaterFlowRate,
     /// Hot-water dispense phase-1 flow rate.
@@ -176,6 +183,7 @@ impl MmrRegister {
             MmrRegister::SteamFlow => 0x80_3828,
             MmrRegister::RefillKit => 0x80_385C,
             MmrRegister::FlushFlowRate => 0x80_3840,
+            MmrRegister::FlushTemp => 0x80_3844,
             MmrRegister::HotWaterFlowRate => 0x80_384C,
             MmrRegister::Phase1FlowRate => 0x80_3810,
             MmrRegister::Phase2FlowRate => 0x80_3814,
@@ -198,7 +206,7 @@ impl MmrRegister {
     /// [`from_address`](Self::from_address) and a useful read-set for callers
     /// that want to poll the whole diagnostic window. Order is not significant;
     /// the `all_covers_every_variant` test pins this list to the enum.
-    pub const ALL: [MmrRegister; 25] = [
+    pub const ALL: [MmrRegister; 26] = [
         MmrRegister::CpuBoardVersion,
         MmrRegister::MachineModel,
         MmrRegister::FirmwareVersion,
@@ -209,6 +217,7 @@ impl MmrRegister {
         MmrRegister::SteamFlow,
         MmrRegister::RefillKit,
         MmrRegister::FlushFlowRate,
+        MmrRegister::FlushTemp,
         MmrRegister::HotWaterFlowRate,
         MmrRegister::Phase1FlowRate,
         MmrRegister::Phase2FlowRate,
@@ -350,6 +359,7 @@ mod tests {
                 | MmrRegister::SteamFlow
                 | MmrRegister::RefillKit
                 | MmrRegister::FlushFlowRate
+                | MmrRegister::FlushTemp
                 | MmrRegister::HotWaterFlowRate
                 | MmrRegister::Phase1FlowRate
                 | MmrRegister::Phase2FlowRate

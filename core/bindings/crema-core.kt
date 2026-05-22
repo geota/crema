@@ -775,6 +775,14 @@ enum class MmrRegister(val string: String) {
 	/// Flush flow rate.
 	@SerialName("FlushFlowRate")
 	FlushFlowRate("FlushFlowRate"),
+	/// Flush water target temperature, °C — the temperature the DE1
+	/// holds while a group-flush cycle runs. Wire value is `°C × 10`
+	/// (so 950 = 95.0 °C). Modelled by reaprime
+	/// (`de1.models.dart:flushTemp` at `0x00803844`, 4-byte slot,
+	/// `readScale: 0.1`); the legacy de1app TCL has no equivalent.
+	/// Crema's audit-discovered register — see docs/22 §3.2.
+	@SerialName("FlushTemp")
+	FlushTemp("FlushTemp"),
 	/// Hot-water flow rate.
 	@SerialName("HotWaterFlowRate")
 	HotWaterFlowRate("HotWaterFlowRate"),

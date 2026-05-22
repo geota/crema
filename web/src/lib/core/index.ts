@@ -543,7 +543,18 @@ async function createCore(): Promise<CremaCore> {
 				// rename. See core/de1-wasm/src/lib.rs:214.
 				HotWaterRinse: wasm.MachineRequest.Flush,
 				Descale: wasm.MachineRequest.Descale,
-				Clean: wasm.MachineRequest.Clean
+				Clean: wasm.MachineRequest.Clean,
+				// Five additional state requests the wasm bridge already
+				// supports but the facade didn't expose by name. Added per
+				// docs/22 §3.3 to match legacy de1app + reaprime's full
+				// requestable set. ShortCal / SelfTest are diagnostic
+				// states — gate them behind an explicit user action.
+				SkipToNext: wasm.MachineRequest.SkipToNext,
+				SteamRinse: wasm.MachineRequest.SteamRinse,
+				AirPurge: wasm.MachineRequest.AirPurge,
+				SchedIdle: wasm.MachineRequest.SchedIdle,
+				ShortCal: wasm.MachineRequest.ShortCal,
+				SelfTest: wasm.MachineRequest.SelfTest
 			};
 			const req = map[state];
 			if (req === undefined) {
