@@ -312,9 +312,14 @@
 			</div>
 		</div>
 		<div class="sc-head-r">
-			<button class="st-btn st-btn-secondary" onclick={repair} disabled={!app}>
-				<i class="ph ph-arrows-clockwise" aria-hidden="true"></i>
-				{connected ? 'Re-pair' : 'Connect'}
+			<!-- Pair / Re-pair triggers the Web Bluetooth chooser (or, after a
+			     previous pairing, the cached-device reconnect). Same call —
+			     `app.connectScale()` — for both labels, the verb shifts to
+			     match BLE terminology (users mentally "pair" a Bluetooth
+			     device, not "connect" to it). -->
+			<button class="st-btn st-btn-primary" onclick={repair} disabled={!app}>
+				<i class="ph ph-bluetooth" aria-hidden="true"></i>
+				{connected ? 'Re-pair' : 'Pair'}
 			</button>
 		</div>
 	</div>
