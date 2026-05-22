@@ -70,13 +70,16 @@
 	// PowerButton's threshold so the user only sees actionable controls).
 	type ModeState = 'idle' | 'steaming' | 'dispensing' | 'flushing';
 	const modeState = $derived.by<ModeState>(() => {
-		// `ui.machineState` is the formatted `"<state> / <substate>"` string,
-		// not the bare state name — match on the prefix.
-		const ms = ui.machineState ?? '';
-		if (ms.startsWith(MachineState.Steam)) return 'steaming';
-		if (ms.startsWith(MachineState.HotWaterRinse)) return 'flushing';
-		if (ms.startsWith(MachineState.HotWater)) return 'dispensing';
-		return 'idle';
+		switch (ui.machineStateName) {
+			case MachineState.Steam:
+				return 'steaming';
+			case MachineState.HotWater:
+				return 'dispensing';
+			case MachineState.HotWaterRinse:
+				return 'flushing';
+			default:
+				return 'idle';
+		}
 	});
 	const modeReady = $derived(ui.de1State === 'ready');
 	/** Tap handlers — write RequestedState; cancel returns to Idle. */
@@ -270,19 +273,14 @@
 	 */
 	let stateTransitionPending = $state(false);
 	/**
-	 * Whether the DE1 is currently running an espresso shot — derived
-	 * straight from the live `machineState`. Honest, two-way: a shot the
-	 * user kicks off via the on-machine touch button reads as running here
-	 * too, and the dashboard's Stop button can end it.
-	 *
-	 * `machineState` is the formatted `"<state> / <substate>"` string
-	 * (e.g. `"Espresso / Pouring"`); match on the state prefix so every
-	 * espresso substate (Heating, Stabilising, Preinfusion, Pouring,
-	 * Ending) reads as running.
+	 * Whether the DE1 is currently running an espresso shot — strict
+	 * equality on the typed state name covers every Espresso substate
+	 * (Heating, Stabilising, Preinfusion, Pouring, Ending). Honest,
+	 * two-way: a shot the user kicks off via the on-machine touch button
+	 * reads as running here too, and the dashboard's Stop button can end
+	 * it.
 	 */
-	const running = $derived(
-		ui.machineState !== null && ui.machineState.startsWith(MachineState.Espresso)
-	);
+	const running = $derived(ui.machineStateName === MachineState.Espresso);
 
 	const p = $derived(params.current);
 

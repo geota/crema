@@ -17,7 +17,14 @@
  * then just applies the returned snapshot.
  */
 
-import type { Event, ScaleCapabilities, MmrRegister, CalTarget } from '$lib/core';
+import type {
+	Event,
+	MachineState,
+	ScaleCapabilities,
+	MmrRegister,
+	CalTarget,
+	SubState
+} from '$lib/core';
 import type { De1State, De1Diagnostics } from '$lib/ble/de1';
 import { EMPTY_DE1_DIAGNOSTICS } from '$lib/ble/de1';
 import type { ScaleState } from '$lib/ble/scale';
@@ -127,8 +134,28 @@ export interface UiSnapshot {
 	readonly scaleState: ScaleState;
 	/** Most recent status line (connect / error transitions). */
 	readonly status: string;
-	/** Latest decoded machine state + substate, or null before the first one. */
+	/**
+	 * Display-formatted `"<state> / <substate>"` string for the live status
+	 * pills + Machine Section label, or null before the first
+	 * `MachineStateChanged` arrives. **For display only** — code that
+	 * branches on the state should compare against {@link machineStateName}
+	 * (strict equality vs the {@link MachineState} enum), not parse this
+	 * string.
+	 */
 	readonly machineState: string | null;
+	/**
+	 * The raw machine state, suitable for `===` comparison against the
+	 * {@link MachineState} enum — `Espresso`, `Steam`, `HotWater`,
+	 * `HotWaterRinse`, `Idle`, `Sleep`, …. `null` before the first
+	 * `MachineStateChanged`.
+	 */
+	readonly machineStateName: MachineState | null;
+	/**
+	 * The raw substate, suitable for `===` comparison against the
+	 * {@link SubState} enum. `null` before the first
+	 * `MachineStateChanged`.
+	 */
+	readonly machineSubstate: SubState | null;
 	/** Latest shot phase. */
 	readonly shotPhase: string | null;
 	/** Latest telemetry sample, pre-formatted. */
@@ -438,6 +465,8 @@ export const INITIAL_SNAPSHOT: UiSnapshot = {
 	scaleState: 'idle',
 	status: 'Idle',
 	machineState: null,
+	machineStateName: null,
+	machineSubstate: null,
 	shotPhase: null,
 	telemetry: null,
 	scaleWeight: null,
@@ -623,7 +652,9 @@ function appendLog(log: readonly LogLine[], text: string): readonly LogLine[] {
 export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 	switch (event.type) {
 		case 'MachineStateChanged': {
-			const machineState = `${event.content.state} / ${event.content.substate}`;
+			const stateName = event.content.state;
+			const substate = event.content.substate;
+			const machineState = `${stateName} / ${substate}`;
 			// A drop to a resting state (Idle / Sleep) ends any shot in progress,
 			// but the finished curve STAYS on screen — it is reset only when the
 			// next shot starts (`ShotStarted`) or on connect/disconnect. Clearing
@@ -631,10 +662,10 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 			// machine idled — and wiped a whole replayed capture, which always
 			// ends with a return to Idle.
 			const resting =
-				event.content.state === 'Idle' ||
-				event.content.state === 'Sleep' ||
-				event.content.state === 'SchedIdle' ||
-				event.content.state === 'GoingToSleep';
+				stateName === 'Idle' ||
+				stateName === 'Sleep' ||
+				stateName === 'SchedIdle' ||
+				stateName === 'GoingToSleep';
 			// **Reload-recovery**: if a page reload (or HMR) caught us mid-shot,
 			// `ShotStarted` was emitted before we attached, so `shotInProgress`
 			// is false and the Telemetry buffer below skips every sample —
@@ -643,10 +674,9 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 			// implicit ShotStarted: flip `shotInProgress` on so the next
 			// Telemetry sample lands on the chart. Benign in normal flow,
 			// where ShotStarted follows MachineStateChanged immediately.
-			const espressoEntering =
-				event.content.state === 'Espresso' && !snapshot.shotInProgress;
+			const espressoEntering = stateName === 'Espresso' && !snapshot.shotInProgress;
 			// R5 — readable error text for an Error* substate, null when healthy.
-			const machineError = machineErrorText(event.content.substate);
+			const machineError = machineErrorText(substate);
 			// R6 — stamp when the machine first entered a resting state, so an
 			// idle-elapsed readout can count up from it. Only re-stamp on the
 			// transition *into* rest, not on every notification while resting.
@@ -654,6 +684,8 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 			return {
 				...snapshot,
 				machineState,
+				machineStateName: stateName,
+				machineSubstate: substate,
 				machineError,
 				...(resting ? { shotInProgress: false } : null),
 				...(espressoEntering ? { shotInProgress: true } : null),
