@@ -103,16 +103,36 @@ export class ProfileStore {
 	get all(): CremaProfile[] {
 		const builtins = this.builtins
 			.filter((b) => !this.hiddenBuiltins.has(b.id))
-			.map((b) => {
-				const ov = this.overrides[b.id];
-				return ov ? { ...b, pinned: ov.pinned, lastUsed: ov.lastUsed } : b;
-			});
+			.map((b) => this.applyOverrides(b));
 		return [...builtins, ...this.custom];
 	}
 
-	/** How many built-ins the user has hidden — drives the "Restore" UI. */
+	/**
+	 * Only the built-in profiles the user has hidden — drives the
+	 * Profiles page's "Hidden" filter pill. Same override-folding as
+	 * `all` so a hidden-then-pinned-then-hidden round-trip preserves
+	 * the user's earlier pin state.
+	 */
+	get hiddenBuiltinProfiles(): CremaProfile[] {
+		return this.builtins
+			.filter((b) => this.hiddenBuiltins.has(b.id))
+			.map((b) => this.applyOverrides(b));
+	}
+
+	/** How many built-ins the user has hidden — gates the filter pill. */
 	get hiddenBuiltinCount(): number {
 		return this.hiddenBuiltins.size;
+	}
+
+	/** Check whether a specific built-in is currently hidden. */
+	isHidden(id: string): boolean {
+		return this.hiddenBuiltins.has(id);
+	}
+
+	/** Internal: fold per-built-in `pinned`/`lastUsed` overrides onto a base profile. */
+	private applyOverrides(base: CremaProfile): CremaProfile {
+		const ov = this.overrides[base.id];
+		return ov ? { ...base, pinned: ov.pinned, lastUsed: ov.lastUsed } : base;
 	}
 
 	/** Look up one profile by id, or `undefined` if it is not in the library. */
@@ -203,12 +223,15 @@ export class ProfileStore {
 	}
 
 	/**
-	 * Restore every hidden built-in to the library. The user-facing
-	 * action behind the "X built-ins hidden — Restore" hint that the
-	 * Profiles page surfaces when `hiddenBuiltinCount > 0`.
+	 * Restore a single hidden built-in to the library — drops it from
+	 * the hide-set. The user-facing action behind the eye-icon button
+	 * the card shows while in the "Hidden" filter view.
 	 */
-	unhideAllBuiltins(): void {
-		this.hiddenBuiltins = new Set();
+	unhideBuiltin(id: string): void {
+		if (!this.hiddenBuiltins.has(id)) return;
+		const next = new Set(this.hiddenBuiltins);
+		next.delete(id);
+		this.hiddenBuiltins = next;
 		this.persistHiddenBuiltins();
 	}
 
