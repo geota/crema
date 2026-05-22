@@ -444,7 +444,7 @@ export class CremaApp {
 	 * `ProfileUploadProgress` / `ProfileUploadCompleted` /
 	 * `ProfileUploadFailed`) arrive over the same `applyCoreOutput` path
 	 * the rest of the events use; the UI snapshot's `profileUploadProgress`
-	 * and `activeProfileTitle` fields reflect them.
+	 * and `activeProfileName` fields reflect them.
 	 *
 	 * `profile` is the typed `Profile` (de1-domain shape) — the shell's
 	 * `lib/profiles` model converts via `toCoreProfile` before calling this.

@@ -354,7 +354,7 @@ export class De1Manager {
 			//
 			// The active-profile identity comes from tracking our own
 			// successful uploads (`Event::ProfileUploadCompleted` → set
-			// `ui.activeProfileTitle`) — same model the legacy uses
+			// `ui.activeProfileName`) — same model the legacy uses
 			// (`save_settings_to_de1` re-uploads on every connect; the
 			// "active profile" name is shell-only).
 

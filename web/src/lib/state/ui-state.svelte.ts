@@ -197,15 +197,6 @@ export interface UiSnapshot {
 	 */
 	readonly completedShot: CompletedShot | null;
 
-	// ---- Active profile (Task 3 — the Profiles library) ------------------
-	//
-	// The profile the user marked "active" on the Profiles page — the one the
-	// Brew dashboard's header reflects. UI-level only: marking a profile active
-	// does NOT upload it to the DE1 (the core has no profile-upload path yet).
-
-	/** The active profile's display name, or `null` when none is selected. */
-	readonly activeProfileName: string | null;
-
 	// ---- DE1 connection diagnostics --------------------------------------
 	//
 	// Proof, after a connect, that the device the chooser selected is genuinely
@@ -226,20 +217,24 @@ export interface UiSnapshot {
 
 	// ---- DE1 profile (active + loaded shape) -----------------------------
 	//
-	// Tracks two related pieces of state: the title of the profile Crema
-	// most recently uploaded (the "active profile" the brew page highlights)
-	// and the shape of whatever the DE1 reports for its currently-loaded
-	// profile (read at connect time via `HeaderWrite`). The two can diverge
-	// if the user uploaded a profile outside Crema — in that case the title
-	// stays `null` and the shape still gives the brew page something to show.
+	// The "active profile" — the name of the profile Crema most recently
+	// uploaded successfully. Set on `Event::ProfileUploadCompleted`; stays
+	// at the prior value if a new upload fails (the DE1 is still running
+	// the old one). Cleared by `reset()` on disconnect.
 
 	/**
-	 * Title of the profile most recently uploaded by Crema; `null` until an
-	 * upload completes. Mirrors `CremaCore::active_profile_title`. The brew
-	 * page's "Active: …" indicator and the profile picker's "active" outline
-	 * both read this field.
+	 * Display name of the profile most recently uploaded by Crema; `null`
+	 * until the first successful upload completes. Mirrors the core's
+	 * `active_profile_title` getter (Rust-side method name still uses
+	 * `title` to match the DE1 community-v2 JSON contract's `Profile.title`
+	 * field; the snapshot uses `Name` for UI clarity).
+	 *
+	 * The brew page's header and the profile picker's "active" outline
+	 * both read this field. For instant click feedback during an upload,
+	 * UI components also fall back to the local `profileStore.active` for
+	 * the in-flight window — see `BrewDashboard.svelte`.
 	 */
-	readonly activeProfileTitle: string | null;
+	readonly activeProfileName: string | null;
 	/**
 	 * The DE1's currently-loaded profile shape (from a `HeaderWrite` read at
 	 * connect time, populated by `Event::ProfileHeaderRead`). `null` before
@@ -420,10 +415,9 @@ export const INITIAL_SNAPSHOT: UiSnapshot = {
 	shotElapsed: 0,
 	shotFrame: 0,
 	completedShot: null,
-	activeProfileName: null,
 	de1Diagnostics: EMPTY_DE1_DIAGNOSTICS,
 	de1Firmware: null,
-	activeProfileTitle: null,
+	activeProfileName: null,
 	loadedProfileShape: null,
 	profileUploadProgress: null,
 	de1MachineInfo: {},
@@ -945,7 +939,7 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 		case 'ProfileUploadCompleted':
 			return {
 				...snapshot,
-				activeProfileTitle: event.content.title,
+				activeProfileName: event.content.title,
 				profileUploadProgress: null,
 				eventLog: appendLog(
 					snapshot.eventLog,
