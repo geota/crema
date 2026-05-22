@@ -4,17 +4,17 @@
 	 * `ChannelReadout` in `ds/web-components.jsx`. Reuses the `.crema-readout*`
 	 * class names.
 	 *
-	 * Now a dual readout: the primary (`label` / `value` / `color`) renders on
-	 * the left, the secondary (`secondaryLabel` / `secondaryValue` /
-	 * `secondaryColor`) on the right. Both columns are equal width; the
-	 * primary's `target` (if any) sits below the value as before. When the
-	 * secondary props are omitted the card collapses to single-column —
-	 * unchanged from the original shape.
+	 * Dual layout: primary (`label` / `value` / `color`) on the left with the
+	 * Phosphor `icon` next to its label; secondary (`secondaryLabel` /
+	 * `secondaryValue` / `secondaryColor`) on the right. Both values render at
+	 * **the same font size** so they read as peers — the secondary is not
+	 * "diminished UI", just another live reading the user can study.
 	 *
 	 * Wired to real data: the dashboard passes the latest pressure / flow /
 	 * temp / weight value from `lib/state`.
 	 */
 	let {
+		icon,
 		label,
 		value,
 		unit,
@@ -23,20 +23,21 @@
 		secondaryLabel,
 		secondaryValue,
 		secondaryUnit,
-		secondaryColor,
-		secondaryEnabled = false
+		secondaryColor
 	}: {
-		/** Channel name — PRESSURE / FLOW / TEMP / WEIGHT. */
+		/** Phosphor icon name (e.g. 'gauge', 'drop', 'thermometer', 'scales'). */
+		icon: string;
+		/** Primary metric name — PRESSURE / FLOW / HEAD / WEIGHT. */
 		label: string;
-		/** The formatted current value (a placeholder dash when idle). */
+		/** The formatted primary value (a placeholder dash when idle). */
 		value: string;
-		/** Unit shown after the value. */
+		/** Unit shown after the primary value. */
 		unit: string;
-		/** Channel hue — a `--tel-*` token. */
+		/** Primary hue — a `--tel-*` token. */
 		color: string;
-		/** Optional target line shown below the value. */
+		/** Optional target line shown below the primary value. */
 		target?: string;
-		/** Secondary metric label — e.g. RESISTANCE / VOLUME / MIX / FLOW. */
+		/** Secondary metric name — e.g. RESISTANCE / VOLUME / MIX / FLOW. */
 		secondaryLabel?: string;
 		/** Secondary value (already formatted). */
 		secondaryValue?: string;
@@ -44,23 +45,8 @@
 		secondaryUnit?: string;
 		/** Secondary hue — a `--tel-*-2` token. */
 		secondaryColor?: string;
-		/**
-		 * Whether the secondary chart line is currently enabled. When false,
-		 * the right column still renders (so the user can see the number) but
-		 * the colour dot reads as "off" (hollow). Click handling lives on the
-		 * Quick Sheet; this is display-only.
-		 */
-		secondaryEnabled?: boolean;
 	} = $props();
 
-	/** The Phosphor icon for each channel. */
-	const ICONS: Record<string, string> = {
-		PRESSURE: 'gauge',
-		FLOW: 'drop',
-		TEMP: 'thermometer',
-		WEIGHT: 'scales'
-	};
-	const icon = $derived(ICONS[label] ?? 'circle');
 	const hasSecondary = $derived(secondaryLabel != null && secondaryValue != null);
 </script>
 
@@ -85,27 +71,13 @@
 	{#if hasSecondary}
 		<div class="crema-readout-side crema-readout-secondary">
 			<div class="crema-readout-head crema-readout-head-right">
-				<span
-					class="crema-readout-label"
-					style="color:{secondaryEnabled ? secondaryColor : 'rgba(var(--tint-rgb), 0.5)'}"
+				<span class="crema-readout-label" style="color:{secondaryColor}"
 					>{secondaryLabel}</span
 				>
-				<i
-					class="ph crema-readout-dot"
-					class:is-off={!secondaryEnabled}
-					style={secondaryEnabled
-						? `font-size:8px;color:${secondaryColor}`
-						: 'font-size:8px;color:rgba(var(--tint-rgb), 0.35)'}
-					aria-hidden="true"
-					title={secondaryEnabled ? 'Plotted' : 'Hidden (toggle in Quick Sheet)'}
-				>{secondaryEnabled ? '●' : '○'}</i>
 			</div>
 			<div class="crema-readout-val crema-readout-val-right">
-				<span
-					class="crema-readout-num"
-					style="color:{secondaryEnabled
-						? secondaryColor
-						: 'rgba(var(--tint-rgb), 0.6)'}">{secondaryValue}</span
+				<span class="crema-readout-num" style="color:{secondaryColor}"
+					>{secondaryValue}</span
 				>
 				<span class="crema-readout-unit">{secondaryUnit ?? ''}</span>
 			</div>
@@ -118,21 +90,12 @@
 		display: grid;
 		grid-template-columns: 1fr 1fr;
 		column-gap: 12px;
-	}
-	.crema-readout-secondary .crema-readout-val,
-	.crema-readout-secondary .crema-readout-num {
-		text-align: right;
+		align-items: start;
 	}
 	.crema-readout-val-right {
 		justify-content: flex-end;
 	}
 	.crema-readout-head-right {
 		justify-content: flex-end;
-	}
-	.crema-readout-dot {
-		font-family: var(--font-mono);
-		line-height: 1;
-		display: inline-block;
-		margin-left: 4px;
 	}
 </style>

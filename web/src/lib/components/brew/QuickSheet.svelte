@@ -28,30 +28,45 @@
 	const prefs = $derived(settings.current);
 
 	/**
-	 * The chart-channel toggles. Each entry pairs a settings field with its
-	 * channel label + the `--tel-*` colour token that the LiveChart strokes
-	 * with. Primary channels listed first, then secondaries; arrangement in
-	 * a 4×2 grid matches the channel cards above the chart.
+	 * The four channel groups in the foot's "Chart" strip. Each group has
+	 * the channel's Phosphor icon + colour and two toggles (primary,
+	 * secondary). Groups are visually separated by a thin vertical
+	 * divider.
 	 */
-	const CHANNEL_TOGGLES: ReadonlyArray<{
-		key: keyof Settings;
-		label: string;
+	const CHANNEL_GROUPS: ReadonlyArray<{
+		icon: string;
 		color: string;
-		sub?: string;
+		primary: { key: keyof Settings; label: string; color: string };
+		secondary: { key: keyof Settings; label: string; color: string };
 	}> = [
-		{ key: 'showPressure', label: 'Pressure', color: 'var(--tel-pressure)' },
 		{
-			key: 'showResistance',
-			label: 'Resistance',
-			color: 'var(--tel-pressure-2)',
-			sub: '×5'
+			icon: 'gauge',
+			color: 'var(--tel-pressure)',
+			primary: { key: 'showPressure', label: 'Pressure', color: 'var(--tel-pressure)' },
+			secondary: {
+				key: 'showResistance',
+				label: 'Resistance',
+				color: 'var(--tel-pressure-2)'
+			}
 		},
-		{ key: 'showFlow', label: 'Flow', color: 'var(--tel-flow)' },
-		{ key: 'showVolume', label: 'Volume', color: 'var(--tel-flow-2)' },
-		{ key: 'showHeadTemp', label: 'Head temp', color: 'var(--tel-temp)' },
-		{ key: 'showMixTemp', label: 'Mix temp', color: 'var(--tel-temp-2)' },
-		{ key: 'showWeight', label: 'Weight', color: 'var(--tel-weight)' },
-		{ key: 'showWeightFlow', label: 'Weight flow', color: 'var(--tel-weight-2)' }
+		{
+			icon: 'drop',
+			color: 'var(--tel-flow)',
+			primary: { key: 'showFlow', label: 'Flow', color: 'var(--tel-flow)' },
+			secondary: { key: 'showVolume', label: 'Volume', color: 'var(--tel-flow-2)' }
+		},
+		{
+			icon: 'thermometer',
+			color: 'var(--tel-temp)',
+			primary: { key: 'showHeadTemp', label: 'Head', color: 'var(--tel-temp)' },
+			secondary: { key: 'showMixTemp', label: 'Mix', color: 'var(--tel-temp-2)' }
+		},
+		{
+			icon: 'scales',
+			color: 'var(--tel-weight)',
+			primary: { key: 'showWeight', label: 'Weight', color: 'var(--tel-weight)' },
+			secondary: { key: 'showWeightFlow', label: 'Flow', color: 'var(--tel-weight-2)' }
+		}
 	];
 
 	let {
@@ -123,36 +138,55 @@
 		<PreinfFlushStepper {params} />
 	</div>
 
-	<!-- Chart channels — eight per-line on/off toggles for the LiveChart.
-	     Primaries (Pressure / Flow / Head / Weight) default on; secondaries
-	     (Resistance / Volume / Mix / Weight flow) default off. State lives
-	     on the persisted Settings bundle so a reload remembers. -->
-	<div class="qsheet-channels">
-		<div class="qsheet-channels-label">Chart channels</div>
-		<div class="qsheet-channels-grid">
-			{#each CHANNEL_TOGGLES as ch (ch.key)}
-				{@const on = prefs[ch.key] as boolean}
-				<label class="qsheet-ch">
+	<div class="qsheet-foot">
+		<!-- "Chart" strip — 4 channel groups, each with its Phosphor icon,
+		     channel colour, and primary/secondary checkboxes. Thin vertical
+		     hairlines between groups so the eye groups them as pairs. State
+		     persists to the Settings bundle. -->
+		<div class="qsheet-chart">
+			<span class="qsheet-chart-lead">Chart</span>
+			{#each CHANNEL_GROUPS as g, idx (g.icon)}
+				{@const on1 = prefs[g.primary.key] as boolean}
+				{@const on2 = prefs[g.secondary.key] as boolean}
+				{#if idx > 0}<span class="qsheet-chart-div" aria-hidden="true"></span>{/if}
+				<div class="qsheet-chart-group">
+					<i
+						class={'ph-duotone ph-' + g.icon}
+						style="font-size:14px;color:{g.color}"
+						aria-hidden="true"
+					></i>
 					<button
 						type="button"
-						class="qmini-tog"
-						class:on
-						style={on ? `--qch-color:${ch.color}` : undefined}
-						onclick={() => settings.set(ch.key, !on)}
-						aria-pressed={on}
-						aria-label={ch.label}
-					></button>
-					<span class="qsheet-ch-label">
-						<span class="qsheet-ch-dot" style="background:{ch.color}"></span>
-						{ch.label}
-						{#if ch.sub}<em class="qsheet-ch-sub">{ch.sub}</em>{/if}
-					</span>
-				</label>
+						class="qsheet-check"
+						class:on={on1}
+						style={on1 ? `--check-c:${g.primary.color}` : undefined}
+						onclick={() => settings.set(g.primary.key, !on1)}
+						aria-pressed={on1}
+					>
+						<i
+							class={'ph ' + (on1 ? 'ph-check-square-fill' : 'ph-square')}
+							aria-hidden="true"
+						></i>
+						<span>{g.primary.label}</span>
+					</button>
+					<button
+						type="button"
+						class="qsheet-check"
+						class:on={on2}
+						style={on2 ? `--check-c:${g.secondary.color}` : undefined}
+						onclick={() => settings.set(g.secondary.key, !on2)}
+						aria-pressed={on2}
+					>
+						<i
+							class={'ph ' + (on2 ? 'ph-check-square-fill' : 'ph-square')}
+							aria-hidden="true"
+						></i>
+						<span>{g.secondary.label}</span>
+					</button>
+				</div>
 			{/each}
 		</div>
-	</div>
 
-	<div class="qsheet-foot">
 		<div class="qsheet-toggles">
 			<label class="qsheet-tog">
 				<!-- TODO: wire to DE1 control — stop-on-weight is local UI state today. -->
@@ -181,13 +215,17 @@
 </div>
 
 <style>
-	.qsheet-channels {
-		padding: 12px 18px 4px;
-		display: flex;
-		flex-direction: column;
-		gap: 6px;
+	/* "Chart" strip in the foot — 4 channel groups (icon + 2 checkboxes
+	   each) with vertical hairline dividers. Sits on the left of the foot
+	   row; the existing stop-on-weight / auto-tare toggles sit on the
+	   right (already styled by the shared `.qsheet-foot` rules). */
+	.qsheet-chart {
+		display: inline-flex;
+		align-items: center;
+		gap: 12px;
+		flex-wrap: wrap;
 	}
-	.qsheet-channels-label {
+	.qsheet-chart-lead {
 		font-family: var(--font-sans);
 		font-size: 9px;
 		font-weight: 700;
@@ -195,35 +233,44 @@
 		text-transform: uppercase;
 		color: rgba(var(--tint-rgb), 0.5);
 	}
-	.qsheet-channels-grid {
-		display: grid;
-		grid-template-columns: repeat(4, 1fr);
-		gap: 4px 10px;
+	.qsheet-chart-div {
+		display: inline-block;
+		width: 1px;
+		height: 18px;
+		background: rgba(var(--tint-rgb), 0.12);
 	}
-	.qsheet-ch {
+	.qsheet-chart-group {
 		display: inline-flex;
 		align-items: center;
-		gap: 6px;
+		gap: 8px;
+	}
+	.qsheet-check {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		background: transparent;
+		border: 0;
+		padding: 2px 4px;
+		border-radius: 4px;
+		cursor: pointer;
 		font-family: var(--font-sans);
 		font-size: 11px;
+		color: rgba(var(--tint-rgb), 0.72);
+		--check-c: rgba(var(--tint-rgb), 0.4);
+		transition:
+			background var(--dur-1, 140ms) var(--ease, ease),
+			color var(--dur-1, 140ms) var(--ease, ease);
+	}
+	.qsheet-check i {
+		font-size: 13px;
+		color: var(--check-c);
+		line-height: 1;
+	}
+	.qsheet-check:hover {
+		background: rgba(var(--tint-rgb), 0.06);
 		color: var(--fg-1);
-		cursor: pointer;
 	}
-	.qsheet-ch-label {
-		display: inline-flex;
-		align-items: center;
-		gap: 5px;
-	}
-	.qsheet-ch-dot {
-		display: inline-block;
-		width: 8px;
-		height: 8px;
-		border-radius: 2px;
-	}
-	.qsheet-ch-sub {
-		font-style: normal;
-		font-size: 9px;
-		color: rgba(var(--tint-rgb), 0.45);
-		font-family: var(--font-mono);
+	.qsheet-check.on {
+		color: var(--fg-1);
 	}
 </style>
