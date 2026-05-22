@@ -810,6 +810,14 @@ impl CremaBridge {
             .map_err(|e| e.to_string())?;
         Ok(de1_domain::export_v2_json(&profile))
     }
+
+    /// Parse a legacy de1app `settings.tdb` file. Returns the parsed
+    /// settings as a JSON string. docs/22 §5.4.
+    pub fn import_settings_tdb(&self, content: String) -> Result<String, String> {
+        de1_domain::import_settings_tdb(&content)
+            .map_err(|e| e.to_string())
+            .and_then(|s| serde_json::to_string(&s).map_err(|e| e.to_string()))
+    }
 }
 
 /// Serialize a [`CoreOutput`] to JSON for the shell.

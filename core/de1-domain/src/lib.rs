@@ -32,6 +32,7 @@ pub mod history;
 pub mod history_import;
 pub mod profile;
 pub mod profile_import;
+pub mod settings_import;
 pub mod session;
 pub mod shot;
 pub mod steam;
@@ -49,6 +50,7 @@ pub use profile::{
 };
 pub use history_import::{import_legacy_tcl_shot, import_v2_json_shot};
 pub use profile_import::{export_v2_json, import_legacy_tcl, import_v2_json};
+pub use settings_import::{import_settings_tdb, ImportedDe1AppSettings};
 pub use session::SessionTimer;
 pub use shot::{
     MAX_SHOT_SAMPLES, ShotEvent, ShotMetrics, ShotMonitor, ShotPhase, ShotRecord, TimedSample,
