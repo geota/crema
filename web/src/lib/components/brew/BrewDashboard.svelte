@@ -741,7 +741,7 @@
 				     converted to a tank volume in mL (see `waterTankMl`), then
 				     to the Settings volume unit (D1). A "refill soon" cue (E2)
 				     shows when the level nears the DE1's refill threshold. -->
-				<span class="t-eyebrow">Water</span>
+				<span class="t-eyebrow">Tank</span>
 				<span style:color={refillSoon ? 'var(--warning)' : undefined}>
 					{convertVolumeText(waterMl)}{#if refillSoon}
 						· refill soon{/if}
