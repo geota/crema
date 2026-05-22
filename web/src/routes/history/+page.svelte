@@ -44,23 +44,23 @@
 	 * `history/` folder once and add every shot in one click.
 	 */
 	/**
-	 * Export every recorded shot as one `.ndjson` file — one
-	 * community-v2 JSON shot per line. NDJSON keeps each shot
-	 * independently re-importable (a downstream tool can read the
-	 * file line-by-line, parse each as a v2 shot) while bundling the
+	 * Export every recorded shot as one `.jsonl` file — one
+	 * community-v2 JSON shot per line. JSONL (≡ NDJSON for our
+	 * purposes; specs differ only on `\r\n` tolerance + MIME type)
+	 * keeps each shot independently re-importable while bundling the
 	 * whole library into a single download.
 	 *
 	 * Per-shot Download (in ShotDetail) emits a single `.shot.json`;
-	 * this Export collects them. Round-trips back through Crema's
-	 * Import button (NDJSON files are accepted as one shot per line
-	 * via `app.importShotFile` — TODO if not yet supported).
+	 * this Export collects them. Re-importable to Crema, reaprime,
+	 * Visualizer, or de1app by splitting on newlines + parsing each
+	 * line as a v2 shot.
 	 */
-	function exportAllAsV2Ndjson(): void {
+	function exportAllAsV2Jsonl(): void {
 		if (shots.length === 0) return;
-		const ndjson = shots
+		const jsonl = shots
 			.map((s) => exportStoredShotAsV2Json(s))
 			// `exportStoredShotAsV2Json` produces pretty-printed JSON;
-			// flatten to one line per shot so the file is true NDJSON.
+			// flatten to one line per shot so the file is true JSONL.
 			.map((s) => JSON.stringify(JSON.parse(s)))
 			.join('\n');
 		const d = new Date();
@@ -68,11 +68,11 @@
 		const stamp =
 			`${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}T` +
 			`${p(d.getHours())}${p(d.getMinutes())}`;
-		const blob = new Blob([ndjson], { type: 'application/x-ndjson' });
+		const blob = new Blob([jsonl], { type: 'application/x-ndjson' });
 		const url = URL.createObjectURL(blob);
 		const a = document.createElement('a');
 		a.href = url;
-		a.download = `crema-history-${stamp}.ndjson`;
+		a.download = `crema-history-${stamp}.jsonl`;
 		a.click();
 		URL.revokeObjectURL(url);
 	}
@@ -243,8 +243,8 @@
 			<button
 				class="st-btn st-btn-secondary"
 				disabled={shots.length === 0}
-				onclick={exportAllAsV2Ndjson}
-				title="Download every shot as one .ndjson file — one community-v2 JSON shot per line"
+				onclick={exportAllAsV2Jsonl}
+				title="Download every shot as one .jsonl file — one community-v2 JSON shot per line"
 			>
 				<i class="ph ph-download-simple" aria-hidden="true"></i> Export
 			</button>

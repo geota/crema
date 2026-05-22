@@ -11,6 +11,7 @@
 	 */
 	import type { StoredShot } from '$lib/history';
 	import { ratioLabel, shotFilename, exportStoredShotAsV2Json } from '$lib/history';
+	import { getCaptureStore, captureJsonl } from '$lib/capture';
 	import { daysOffRoast, roastBand } from '$lib/bean';
 	import { getSettingsStore, convertWeight, convertTemp, convertPressure } from '$lib/settings';
 	import { getProfileStore, toCoreProfile } from '$lib/profiles';
@@ -98,18 +99,38 @@
 	}
 
 	/**
-	 * Download this shot as a community-v2 `.shot.json` file — the
-	 * reaprime / modern-de1app contract (matches `import_v2_json_shot`
-	 * on the Rust side, so an exported file re-imports unchanged).
-	 * Other DE1 apps (reaprime, Visualizer, legacy de1app) read the
-	 * same shape, so an exported shot is portable.
+	 * Download this shot in whichever format the user picked in
+	 * Settings → Advanced → "Shot export format":
 	 *
-	 * Pre-2026-05-22 this button emitted a Crema-specific `.jsonl` raw
-	 * BLE capture; that path moved to a developer/admin export
-	 * (Advanced → Replay) since the v2 shape is the community standard.
+	 * - `'v2'` (default) — community v2 `.shot.json`, portable across
+	 *   reaprime / Visualizer / de1app, pre-decoded telemetry.
+	 * - `'jsonl'` — raw BLE capture, bit-exact replay for bug reports.
+	 *   Falls back to v2 with a console warn if the shot has no
+	 *   IndexedDB capture (older shots from before the recorder shipped,
+	 *   or imported shots).
+	 *
 	 * docs/22 task #64.
 	 */
-	function download(): void {
+	async function download(): Promise<void> {
+		if (settings.current.shotExportFormat === 'jsonl') {
+			const entries = await getCaptureStore().get(shot.id);
+			if (entries && entries.length > 0) {
+				const stamp = shotFilename(shot).replace(/\.shot\.json$/, '');
+				const blob = new Blob([captureJsonl(entries)], {
+					type: 'application/x-ndjson'
+				});
+				const url = URL.createObjectURL(blob);
+				const a = document.createElement('a');
+				a.href = url;
+				a.download = `${stamp}.jsonl`;
+				a.click();
+				URL.revokeObjectURL(url);
+				return;
+			}
+			console.warn(
+				`No raw capture available for ${shot.id}; falling back to v2 JSON export.`
+			);
+		}
 		const json = exportStoredShotAsV2Json(shot);
 		const blob = new Blob([json], { type: 'application/json' });
 		const url = URL.createObjectURL(blob);
