@@ -456,6 +456,17 @@
 	const fmt = (v: number | null | undefined, digits = 1): string =>
 		v == null ? '—' : v.toFixed(digits);
 
+	/**
+	 * Format a dispensed-water reading. Stored canonically in mL; rendered
+	 * in mL or fl oz per the volume pref. One decimal so the digit density
+	 * matches FLOW next to it on the card. `null`/non-finite → `'0.0'` so
+	 * the caller can independently decide pre-telemetry → `'—'`.
+	 */
+	function formatDispensedMl(ml: number | null | undefined, unit: 'ml' | 'floz'): string {
+		if (ml == null || !Number.isFinite(ml)) return '0.0';
+		return (unit === 'floz' ? ml / 29.5735 : ml).toFixed(1);
+	}
+
 	// Unit-aware channel measurements — all driven by the Settings unit prefs
 	// so a unit change in Settings re-renders every readout at once (D1).
 	/** Pressure readout, in the chosen pressure unit. */
@@ -527,39 +538,75 @@
 	//    line itself is plotted on the LiveChart only when the matching
 	//    toggle (prefs.show*) is on, but the *number* on the card stays
 	//    visible regardless so the user never loses the data.
-	/** Puck resistance — raw value (no chart-scaling multiplier here). */
-	const resistanceVal = $derived<string>(
-		tel?.resistance != null && Number.isFinite(tel.resistance)
-			? tel.resistance.toFixed(2)
-			: '—'
-	);
 	/**
-	 * Dispensed-volume readout in the chosen unit, with one decimal so it
-	 * visually matches the density of the FLOW number next to it. When a
-	 * moment is pinned, reads the buffered sample's `dispensedVolume`;
-	 * otherwise the live `ui.dispensedVolumeMl` (gated on
-	 * `shotInProgress` so the card shows `—` until a shot starts rather
-	 * than a misleading `0.0`).
+	 * Puck resistance — raw value (no chart-scaling multiplier here).
+	 *
+	 * Pre-telemetry (no `tel` sample → pre-connect) shows `—`. Once
+	 * telemetry is flowing but the value is `null` (flow below the
+	 * core's resistance floor — between shots, near-zero flow), shows
+	 * `0.00` to match the other "connected but quiet" channels rather
+	 * than the eye-grabbing dash.
+	 */
+	const resistanceVal = $derived.by<string>(() => {
+		let r: number | null | undefined;
+		if (pinnedSample) {
+			r = pinnedSample.resistance;
+		} else if (finalShotSample) {
+			r = finalShotSample.resistance;
+		} else if (tel === null) {
+			return '—';
+		} else {
+			r = tel.resistance;
+		}
+		return r != null && Number.isFinite(r) ? r.toFixed(2) : '0.00';
+	});
+	/**
+	 * Dispensed-water readout — the volume of water the pump has emitted,
+	 * integrated from `group_flow × Δt`. Matches the legacy de1app's
+	 * `water_dispensed` channel and the v2 export's `totals.water_dispensed`.
+	 * **Not** the espresso volume in the cup — the puck absorbs ~2× the dose
+	 * before the first drop falls, so dispensed-water > cup-volume always.
+	 *
+	 * Empty-state rule (matches the other primary readouts): pre-telemetry
+	 * (no `tel` sample yet — pre-connect or pre-handshake) shows `—`; once
+	 * the DE1 is streaming, shows the integrator value (0 between shots,
+	 * climbing live, frozen at the final value via `finalShotSample`
+	 * post-shot, pinned-sample value when the chart is pinned).
 	 */
 	const dispensedVolumeVal = $derived.by<string>(() => {
-		const ml = pinnedSample
-			? (pinnedSample.dispensedVolume ?? null)
-			: ui.shotInProgress
-				? ui.dispensedVolumeMl
-				: null;
-		if (ml == null || !Number.isFinite(ml)) return '—';
-		if (prefs.volumeUnit === 'floz') return (ml / 29.5735).toFixed(1);
-		return ml.toFixed(1);
+		if (pinnedSample) {
+			const v = pinnedSample.dispensedVolume;
+			return v != null && Number.isFinite(v)
+				? formatDispensedMl(v, prefs.volumeUnit)
+				: '0.0';
+		}
+		if (finalShotSample) {
+			const v = finalShotSample.dispensedVolume;
+			return v != null && Number.isFinite(v)
+				? formatDispensedMl(v, prefs.volumeUnit)
+				: '0.0';
+		}
+		if (tel === null) return '—';
+		return formatDispensedMl(ui.dispensedVolumeMl, prefs.volumeUnit);
 	});
 	const dispensedVolumeUnit = $derived(prefs.volumeUnit === 'floz' ? 'fl oz' : 'mL');
 	/**
-	 * Weight flow (g/s) — from the scale's host-side mass-flow estimate.
-	 * Follows the pin: buffered `weightFlow` while pinned, live
-	 * `ui.scaleFlow` otherwise.
+	 * Weight flow (g/s) — the scale's host-side mass-flow estimate. Same
+	 * pre-/post-/pinned/live ladder as the other secondary readouts. Pre-
+	 * telemetry: `—`; otherwise the current value (0 when no flow).
 	 */
 	const weightFlowVal = $derived.by<string>(() => {
-		const v = pinnedSample ? (pinnedSample.weightFlow ?? null) : ui.scaleFlow;
-		return v != null && Number.isFinite(v) ? v.toFixed(1) : '—';
+		let v: number | null | undefined;
+		if (pinnedSample) {
+			v = pinnedSample.weightFlow;
+		} else if (finalShotSample) {
+			v = finalShotSample.weightFlow;
+		} else if (tel === null) {
+			return '—';
+		} else {
+			v = ui.scaleFlow;
+		}
+		return v != null && Number.isFinite(v) ? v.toFixed(1) : '0.0';
 	});
 	/** Whether a scale is connected — drives the foot's "Scale" cluster. */
 	const scaleConnected = $derived(
@@ -769,7 +816,7 @@
 						value={fmt(tel?.flow)}
 						unit="ml/s"
 						color="var(--tel-flow)"
-						secondaryLabel="VOLUME"
+						secondaryLabel="WATER"
 						secondaryValue={dispensedVolumeVal}
 						secondaryUnit={dispensedVolumeUnit}
 						secondaryColor="var(--tel-flow-2)"
