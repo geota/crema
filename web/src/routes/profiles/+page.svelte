@@ -96,11 +96,16 @@
 	 *
 	 * Two pieces of state move:
 	 * - `store.setActive(id)` flips the local UI selection (the active outline
-	 *   tracks this immediately so a click feels responsive).
+	 *   on the profile card tracks this immediately, so a click feels
+	 *   responsive). The brew dashboard's header also reads
+	 *   `activeProfile?.name` as a fallback during the upload window for
+	 *   the same instant-feedback reason.
 	 * - `app.uploadProfile(...)` ships the profile to the DE1 over BLE; on
 	 *   success the orchestrator emits `ProfileUploadCompleted`, which sets
-	 *   `ui.activeProfileTitle` so the brew page header reflects what's
-	 *   *actually* on the machine.
+	 *   `ui.activeProfileName` so the brew page header pins to what's
+	 *   *actually* on the machine. On failure the field stays at the prior
+	 *   value — the DE1 didn't accept this one, so the previous profile is
+	 *   still loaded.
 	 *
 	 * If no DE1 is connected the upload is a no-op (the core builds the
 	 * commands; `de1.writeCharacteristic` short-circuits with a "not
@@ -112,7 +117,6 @@
 		const profile = store.get(id);
 		const app = ctx().app;
 		if (profile && app) {
-			app.state.patch({ activeProfileName: profile.name });
 			void app.uploadProfile(toCoreProfile(profile));
 		}
 	}

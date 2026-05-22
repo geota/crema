@@ -191,11 +191,14 @@ export interface CremaCore {
 	/** `true` from `uploadProfile` until the tail ack / failure / cancel. */
 	profileUploadInProgress(): Promise<boolean>;
 	/**
-	 * Title of the profile most recently uploaded successfully — the
+	 * Name of the profile most recently uploaded successfully — the
 	 * "active profile on the DE1" identity. `null` until the first
-	 * successful upload; cleared by `reset`.
+	 * successful upload; cleared by `reset`. (Bridge-side Rust method is
+	 * `active_profile_title()` because the Rust value comes straight from
+	 * `Profile.title`, the community-v2 JSON contract field. The web
+	 * facade renames it to `Name` for UI clarity.)
 	 */
-	activeProfileTitle(): Promise<string | null>;
+	activeProfileName(): Promise<string | null>;
 	/** Build a `CoreOutput` whose command queries the connected scale's settings. */
 	queryScaleSettings(): Promise<CoreOutput>;
 	/**
@@ -414,7 +417,7 @@ async function createCore(): Promise<CremaCore> {
 		async profileUploadInProgress() {
 			return bridge.profile_upload_in_progress();
 		},
-		async activeProfileTitle() {
+		async activeProfileName() {
 			const t = bridge.active_profile_title();
 			return t === undefined ? null : t;
 		},
