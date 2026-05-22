@@ -468,9 +468,44 @@
 	const steamTempM = $derived(convertTemp(tel?.steamTemp, prefs.tempUnit));
 
 	/** Live weight (g) — from the scale stream, independent of shot state. */
-	// Scale weight follows the pin too — when a moment is pinned, read
-	// the buffered sample's weight; otherwise the live `scaleWeight`.
-	const weight = $derived(pinnedSample ? pinnedSample.weight : ui.scaleWeight);
+	/**
+	 * The final sample of the just-finished shot — used to freeze the
+	 * shot-relevant readouts (weight, dispensed volume, weight flow) at
+	 * their end-of-shot values between `ShotCompleted` and the next
+	 * `ShotStarted`. Without this, the cards would keep tracking the
+	 * scale's live weight stream — so lifting the cup off the scale
+	 * after a shot read as a "weight went up" surprise.
+	 *
+	 * The `shotTelemetry` buffer is preserved through ShotCompleted
+	 * (the LastShotCard reads its peaks); the last entry is exactly
+	 * the final sample.
+	 *
+	 * Returns `null` when a shot is in progress (cards should be live)
+	 * OR when there's no recorded shot yet (no buffer to read from).
+	 * Temperature channels intentionally do NOT consult this — heater
+	 * temp is the warmed-up signal and must stay live regardless.
+	 */
+	const finalShotSample = $derived.by(() => {
+		if (ui.shotInProgress) return null;
+		if (!lastShot) return null;
+		const series = ui.shotTelemetry;
+		return series.length > 0 ? series[series.length - 1] : null;
+	});
+
+	/**
+	 * Scale weight readout. Three modes:
+	 *  - pinned moment on the chart → buffered sample's weight
+	 *  - between shots (post-`ShotCompleted`) → final shot weight (so
+	 *    lifting the cup doesn't push the card around)
+	 *  - otherwise → live `scaleWeight` stream
+	 */
+	const weight = $derived(
+		pinnedSample
+			? pinnedSample.weight
+			: finalShotSample
+				? finalShotSample.weight
+				: ui.scaleWeight
+	);
 	/** Weight readout, in the chosen weight unit. */
 	const weightM = $derived(convertWeight(weight, prefs.weightUnit));
 	/**
