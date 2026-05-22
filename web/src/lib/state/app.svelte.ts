@@ -541,6 +541,44 @@ export class CremaApp {
 	 * else → legacy TCL. Returns the imported record on success, or an
 	 * error string the caller can surface as a toast. docs/22 §5.1.
 	 */
+	/**
+	 * Import a single community-v2 `.json` or legacy de1app `.tcl`
+	 * profile file. Routes the parser by extension: `.tcl` → legacy
+	 * TCL parser, anything else → v2 JSON parser. Returns the parsed
+	 * Rust-shape `Profile` JSON on success (the caller adopts it into
+	 * the local store via `fromCoreProfile` + `ProfileStore.save`).
+	 */
+	async importProfileFile(
+		file: File
+	): Promise<{ profile: import('$lib/core').Profile | null; error: string | null }> {
+		let content: string;
+		try {
+			content = await file.text();
+		} catch (e) {
+			return {
+				profile: null,
+				error: `Could not read ${file.name}: ${e instanceof Error ? e.message : String(e)}`
+			};
+		}
+		const isLegacyTcl = file.name.toLowerCase().endsWith('.tcl');
+		try {
+			const profile = isLegacyTcl
+				? await this.core.importLegacyTclProfile(content)
+				: await this.core.importV2JsonProfile(content);
+			return { profile, error: null };
+		} catch (e) {
+			return {
+				profile: null,
+				error: `Could not import ${file.name}: ${e instanceof Error ? e.message : String(e)}`
+			};
+		}
+	}
+
+	/** Serialize a Crema `Profile` (TS shape) as a community-v2 JSON string. */
+	async exportProfileAsV2Json(profile: import('$lib/core').Profile): Promise<string> {
+		return this.core.exportV2JsonProfile(profile);
+	}
+
 	async importShotFile(
 		file: File
 	): Promise<{ record: ReturnType<ReturnType<typeof getHistoryStore>['addImported']>; error: string | null }> {

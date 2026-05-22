@@ -27,7 +27,8 @@
 		onDuplicate,
 		onEdit,
 		onTogglePin,
-		onDelete
+		onDelete,
+		onExport
 	}: {
 		/** The profile to render. */
 		profile: CremaProfile;
@@ -43,6 +44,12 @@
 		onTogglePin: (id: string) => void;
 		/** Delete this profile (custom profiles only). */
 		onDelete: (id: string) => void;
+		/**
+		 * Export this profile as a community-v2 `.json` file. The page
+		 * owner handles the bridge call + file download. Optional so
+		 * existing call sites (none today) don't break.
+		 */
+		onExport?: (id: string) => void;
 	} = $props();
 
 	const ratio = $derived(ratioLabel(profile));
@@ -172,6 +179,19 @@
 						>
 							<i class="ph ph-copy" aria-hidden="true"></i> Duplicate
 						</button>
+						{#if onExport}
+							<button
+								class="pp-menu-item"
+								role="menuitem"
+								onclick={() => {
+									menuOpen = false;
+									onExport(profile.id);
+								}}
+								title="Download as community v2 .json — re-importable to Crema, reaprime, Visualizer or de1app"
+							>
+								<i class="ph ph-download-simple" aria-hidden="true"></i> Export…
+							</button>
+						{/if}
 						<button
 							class="pp-menu-item pp-menu-item-danger"
 							role="menuitem"

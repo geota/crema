@@ -316,6 +316,20 @@ export interface CremaCore {
 	 * convention as `importLegacyTclShot`.
 	 */
 	importV2JsonShot(content: string): Promise<RustStoredShot>;
+	/**
+	 * Parse a community-v2 `.json` profile file. Returns the Rust-shape
+	 * `Profile` parsed from the bridge's JSON reply. Throws with the
+	 * importer's error message on failure.
+	 */
+	importV2JsonProfile(content: string): Promise<Profile>;
+	/** Parse a legacy de1app `.tcl` profile file. */
+	importLegacyTclProfile(content: string): Promise<Profile>;
+	/**
+	 * Export a Crema `Profile` as a community-v2 `.json` document.
+	 * Pure encoder — the result drops straight into a `Blob` for
+	 * download.
+	 */
+	exportV2JsonProfile(profile: Profile): Promise<string>;
 	/** Build a `CoreOutput` whose command queries the connected scale's settings. */
 	queryScaleSettings(): Promise<CoreOutput>;
 	/**
@@ -561,6 +575,15 @@ async function createCore(): Promise<CremaCore> {
 		},
 		async importV2JsonShot(content) {
 			return JSON.parse(bridge.import_v2_json_shot(content)) as RustStoredShot;
+		},
+		async importV2JsonProfile(content) {
+			return JSON.parse(bridge.import_v2_json_profile(content)) as Profile;
+		},
+		async importLegacyTclProfile(content) {
+			return JSON.parse(bridge.import_legacy_tcl_profile(content)) as Profile;
+		},
+		async exportV2JsonProfile(profile) {
+			return bridge.export_v2_json_profile(JSON.stringify(profile));
 		},
 		async queryScaleSettings() {
 			return parseOutput(bridge.query_scale_settings());

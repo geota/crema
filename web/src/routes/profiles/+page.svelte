@@ -18,12 +18,30 @@
 	 * core has no profile-upload path yet. Import is a stub (`// TODO`).
 	 */
 	import { goto } from '$app/navigation';
-	import { getProfileStore, toCoreProfile, type CremaProfile } from '$lib/profiles';
+	import {
+		getProfileStore,
+		toCoreProfile,
+		fromCoreProfile,
+		uid,
+		type CremaProfile
+	} from '$lib/profiles';
 	import { getCremaAppContext } from '$lib/shell/app-context';
 	import { ProfileCard } from '$lib/components/profiles';
 
 	const store = getProfileStore();
 	const ctx = getCremaAppContext();
+
+	/**
+	 * Outcome of the most recent import — `null` when no import has been
+	 * attempted in this session. Drives a dismissible banner below the
+	 * page header (mirrors the History page pattern).
+	 */
+	let importBanner = $state<
+		| { kind: 'success'; message: string }
+		| { kind: 'error'; message: string }
+		| null
+	>(null);
+	let importing = $state(false);
 
 	// Kick off the one-time built-in load (no-op if already loaded).
 	void store.ensureLoaded();
@@ -144,12 +162,86 @@
 		}
 	}
 
-	/** Import — not yet wired. */
-	function importProfile(): void {
-		// TODO: wire profile import — parse a `.json` / legacy `.tcl` file into a
-		// CremaProfile and `store.save` it. The core's `import_legacy_tcl` is the
-		// natural backend once the bridge surfaces it.
-		alert('Profile import is coming in a later step.');
+	/**
+	 * Hand-off from the hidden `<input type="file">` to the wasm-bridged
+	 * importers. Routes by extension: `.tcl` → legacy importer; anything
+	 * else (`.json`, `.shot.json`) → community-v2 JSON importer. Each
+	 * parsed `Profile` becomes a custom `CremaProfile` (fresh UUID, the
+	 * file's own title preserved) saved into the local library.
+	 */
+	/**
+	 * Export a single profile as a community-v2 `.json` file. Looks up
+	 * the profile by id, asks the app to encode it via the wasm bridge,
+	 * and triggers a browser download.
+	 */
+	async function exportProfile(id: string): Promise<void> {
+		const profile = store.get(id);
+		const app = ctx().app;
+		if (!profile || !app) return;
+		try {
+			const v2 = await app.exportProfileAsV2Json(toCoreProfile(profile));
+			const safeName = (profile.name || 'profile').replace(/[^\w.-]+/g, '_');
+			const blob = new Blob([v2], { type: 'application/json' });
+			const url = URL.createObjectURL(blob);
+			const a = document.createElement('a');
+			a.href = url;
+			a.download = `${safeName}.json`;
+			a.click();
+			URL.revokeObjectURL(url);
+		} catch (e) {
+			importBanner = {
+				kind: 'error',
+				message: `Could not export "${profile.name}": ${e instanceof Error ? e.message : String(e)}`
+			};
+		}
+	}
+
+	async function onImportFilesChosen(event: Event): Promise<void> {
+		const input = event.currentTarget as HTMLInputElement;
+		const files = input.files;
+		input.value = '';
+		const app = ctx().app;
+		if (!app || !files || files.length === 0) return;
+		importing = true;
+		importBanner = null;
+		let imported = 0;
+		const errors: string[] = [];
+		for (const file of Array.from(files)) {
+			const { profile: core, error } = await app.importProfileFile(file);
+			if (!core) {
+				errors.push(error ?? `Could not import ${file.name}.`);
+				continue;
+			}
+			// fromCoreProfile expects a numeric `index` for builtin
+			// IDs; -1 marks the result as "imported" before we replace
+			// the id below.
+			const adapted = fromCoreProfile(core, -1);
+			const custom: CremaProfile = {
+				...adapted,
+				id: uid('custom'),
+				source: 'custom',
+				tags: adapted.tags.filter((t) => t !== 'Built-in')
+			};
+			store.save(custom);
+			imported += 1;
+		}
+		importing = false;
+		if (imported > 0 && errors.length === 0) {
+			importBanner = {
+				kind: 'success',
+				message: `Imported ${imported} profile${imported === 1 ? '' : 's'}.`
+			};
+		} else if (imported > 0) {
+			importBanner = {
+				kind: 'success',
+				message: `Imported ${imported} of ${imported + errors.length}. ${errors[0]}`
+			};
+		} else {
+			importBanner = {
+				kind: 'error',
+				message: errors[0] ?? 'No profiles imported.'
+			};
+		}
 	}
 
 	/** Whether a card is the active profile. */
@@ -184,14 +276,53 @@
 					</button>
 				{/if}
 			</div>
-			<button class="pp-btn pp-btn-secondary" onclick={importProfile}>
-				<i class="ph ph-upload-simple" aria-hidden="true"></i> Import
-			</button>
+			<!-- Import: pick one-or-many community v2 .json or legacy
+			     .tcl profile files. The hidden <input> is wrapped in a
+			     label styled like the other header buttons so it
+			     matches `.pp-btn-secondary`. docs/22 task #66. -->
+			<label
+				class="pp-btn pp-btn-secondary pp-import"
+				class:pp-import-disabled={importing}
+				title="Import community v2 .json or legacy de1app .tcl profile files"
+			>
+				<i class="ph ph-upload-simple" aria-hidden="true"></i>
+				<span>{importing ? 'Importing…' : 'Import'}</span>
+				<input
+					type="file"
+					accept=".tcl,.json"
+					multiple
+					disabled={importing}
+					onchange={onImportFilesChosen}
+				/>
+			</label>
 			<button class="pp-btn pp-btn-primary" onclick={() => goto('/profiles/new')}>
 				<i class="ph ph-plus" aria-hidden="true"></i> New profile
 			</button>
 		</div>
 	</div>
+
+	{#if importBanner}
+		<div
+			class="pp-import-banner"
+			class:pp-import-banner-ok={importBanner.kind === 'success'}
+			class:pp-import-banner-err={importBanner.kind === 'error'}
+			role="status"
+		>
+			<i
+				class={importBanner.kind === 'success' ? 'ph ph-check-circle' : 'ph ph-warning'}
+				aria-hidden="true"
+			></i>
+			<span>{importBanner.message}</span>
+			<button
+				type="button"
+				class="pp-import-banner-close"
+				aria-label="Dismiss"
+				onclick={() => (importBanner = null)}
+			>
+				<i class="ph ph-x" aria-hidden="true"></i>
+			</button>
+		</div>
+	{/if}
 
 	<!-- Filter strip -->
 	<div class="pp-filters">
@@ -251,6 +382,7 @@
 				onEdit={edit}
 				onTogglePin={togglePin}
 				onDelete={remove}
+				onExport={exportProfile}
 			/>
 		{/each}
 		<button class="pp-card-new" onclick={() => goto('/profiles/new')}>
@@ -576,5 +708,57 @@
 		cursor: pointer;
 		font-size: 13px;
 		text-decoration: underline;
+	}
+
+	/* ── Import (header button + result banner) ────────────────────────── */
+	.pp-import {
+		position: relative;
+		cursor: pointer;
+	}
+	.pp-import input[type='file'] {
+		position: absolute;
+		inset: 0;
+		opacity: 0;
+		cursor: pointer;
+	}
+	.pp-import-disabled,
+	.pp-import-disabled input[type='file'] {
+		opacity: 0.5;
+		cursor: not-allowed;
+		pointer-events: none;
+	}
+	.pp-import-banner {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		margin: 0 var(--page-pad-x) 12px;
+		padding: 10px 14px;
+		border-radius: var(--radius-sm);
+		font-family: var(--font-sans);
+		font-size: 12.5px;
+		background: rgba(var(--tint-rgb), 0.04);
+		border: 1px solid rgba(var(--tint-rgb), 0.08);
+	}
+	.pp-import-banner-ok {
+		background: rgba(var(--success-rgb), 0.08);
+		border-color: rgba(var(--success-rgb), 0.4);
+		color: rgba(var(--success-rgb), 0.95);
+	}
+	.pp-import-banner-err {
+		background: rgba(var(--danger-rgb), 0.08);
+		border-color: rgba(var(--danger-rgb), 0.4);
+		color: rgba(var(--danger-rgb), 0.95);
+	}
+	.pp-import-banner-close {
+		margin-left: auto;
+		background: transparent;
+		border: none;
+		cursor: pointer;
+		color: inherit;
+		opacity: 0.7;
+		padding: 4px;
+	}
+	.pp-import-banner-close:hover {
+		opacity: 1;
 	}
 </style>
