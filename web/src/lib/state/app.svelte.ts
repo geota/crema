@@ -158,18 +158,30 @@ export class CremaApp {
 				// remember to click Load on Brew every session.
 				if (de1State === 'ready') {
 					this.autoUploadActiveProfileOnReady();
-					// Push the current `suppressDe1Sleep` preference to the
-					// DE1 — sets `FeatureFlags.UserNotPresent` so the
-					// firmware knows whether to listen for the heartbeat or
-					// fall back to its own sleep timer. Legacy parallel:
-					// `set_feature_flags` (de1_comms.tcl:1206) is part of
-					// `later_new_de1_connection_setup`.
-					const suppress = getSettingsStore().current.suppressDe1Sleep;
-					void this.setSuppressDe1Sleep(suppress);
-					// Also fire one heartbeat at connect so the DE1's
-					// presence-timer starts from a fresh "user just touched"
-					// state, not from whenever the user last interacted.
-					if (suppress) {
+					// Enable the firmware's user-presence feature
+					// unconditionally on every connect. With the bit set,
+					// the DE1 listens to the `UserPresent` register; whether
+					// Crema sends heartbeats is gated separately by the
+					// `suppressDe1Sleep` setting (the heartbeat loop in
+					// `createCremaApp`). Without sending the bit, the
+					// heartbeats Crema ships in commit `6c8be97` are a
+					// silent no-op on a fresh session.
+					// Matches reaprime's `enableUserPresenceFeature()` call
+					// in the connect path (unified_de1.dart:205). Legacy
+					// counterpart: `set_feature_flags` in
+					// `de1_comms.tcl:1202-1206`.
+					void this.core
+						.setFeatureFlags(1)
+						.then((out) => this.applyCoreOutput(out))
+						.catch(() => {
+							// Best-effort; the next connect retries.
+						});
+					// Fire one heartbeat at connect when the user has
+					// suppressDe1Sleep on, so the DE1's presence timer
+					// starts from a fresh "user just touched" state rather
+					// than from whenever the user last interacted on the
+					// prior session.
+					if (getSettingsStore().current.suppressDe1Sleep) {
 						void this.markUserPresent();
 					}
 				}
@@ -617,14 +629,17 @@ export class CremaApp {
 	//   `set_user_present` heartbeat (`de1_comms.tcl:1166`). Resets the
 	//   DE1's "user has gone away" timer. Debounced to once per minute by
 	//   the caller (`createCremaApp` attaches the document listener).
-	// - `setSuppressDe1Sleep(true/false)` writes the `UserNotPresent` bit
-	//   (`FeatureFlags`, `0x803858`, legacy `set_feature_flags`) — tells
-	//   the DE1 whether to listen to the heartbeat at all (`0`) or fall
-	//   back to its own sleep timer regardless (`1`).
+	// - `setSuppressDe1Sleep(true/false)` — local-state only now. The
+	//   FeatureFlags bit is written unconditionally as `1` on every
+	//   connect (`onState('ready')` block, matching reaprime's
+	//   `enableUserPresenceFeature()`), so the DE1 is always listening to
+	//   the UserPresent register. The setting just gates whether the
+	//   heartbeat loop in `createCremaApp` actually fires; off → no
+	//   heartbeats → DE1 falls back to its own timer.
 	//
-	// Together: Suppress=ON → bit=0 + heartbeat running → DE1 sleeps only
-	// when Crema is genuinely idle. Suppress=OFF → bit=1 + heartbeat
-	// silent → DE1 follows its own ~30 min timer.
+	// Together: Suppress=ON → feature bit=1 + heartbeat running → DE1
+	// sleeps only when Crema is genuinely idle. Suppress=OFF → feature
+	// bit=1 + heartbeat silent → DE1 follows its own ~30 min timer.
 
 	/**
 	 * Send a `UserPresent = 1` heartbeat to the DE1. Best-effort: ignores
@@ -642,20 +657,18 @@ export class CremaApp {
 	}
 
 	/**
-	 * Write the `FeatureFlags.UserNotPresent` bit on the DE1. `suppress =
-	 * true` clears the bit (`UserNotPresent = 0`, app is tracking
-	 * presence); `false` sets it (`UserNotPresent = 1`, DE1 follows its
-	 * own timer). The typed core method enforces the firmware-upload
-	 * lockout — see CremaCore::set_feature_flags.
+	 * Track the user's `suppressDe1Sleep` preference. The setting only
+	 * gates the local heartbeat loop in `createCremaApp` — the firmware
+	 * FeatureFlags bit is enabled unconditionally at every connect (in
+	 * `onState('ready')`), matching reaprime's `enableUserPresenceFeature`
+	 * call. So this method is a no-op on the wire; it exists for symmetry
+	 * with the rest of the orchestrator's setter API.
 	 */
-	async setSuppressDe1Sleep(suppress: boolean): Promise<void> {
-		const userNotPresent = suppress ? 0 : 1;
-		try {
-			this.applyCoreOutput(await this.core.setFeatureFlags(userNotPresent));
-		} catch {
-			// Best-effort — settings UI keeps the local preference regardless;
-			// next connect will retry from `createCremaApp`.
-		}
+	async setSuppressDe1Sleep(_suppress: boolean): Promise<void> {
+		// Intentional no-op. The setting is read directly from
+		// `getSettingsStore().current.suppressDe1Sleep` by the heartbeat
+		// loop on each tick, so flipping the toggle takes effect on the
+		// next interval without any explicit write.
 	}
 
 	/**

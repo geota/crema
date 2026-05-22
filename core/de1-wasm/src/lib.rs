@@ -86,6 +86,9 @@ pub enum MmrReg {
     RefillKit,
     /// Flush flow rate.
     FlushFlowRate,
+    /// Flush water target temperature, °C × 10 (modelled by reaprime; the
+    /// legacy TCL de1app doesn't reference this address).
+    FlushTemp,
     /// Hot-water flow rate.
     HotWaterFlowRate,
     /// Hot-water dispense phase-1 flow rate.
@@ -131,6 +134,7 @@ impl From<MmrReg> for MmrRegister {
             MmrReg::SteamFlow => MmrRegister::SteamFlow,
             MmrReg::RefillKit => MmrRegister::RefillKit,
             MmrReg::FlushFlowRate => MmrRegister::FlushFlowRate,
+            MmrReg::FlushTemp => MmrRegister::FlushTemp,
             MmrReg::HotWaterFlowRate => MmrRegister::HotWaterFlowRate,
             MmrReg::Phase1FlowRate => MmrRegister::Phase1FlowRate,
             MmrReg::Phase2FlowRate => MmrRegister::Phase2FlowRate,
@@ -201,6 +205,12 @@ pub enum MachineRequest {
     /// holding temperature for a scheduled session. Distinct from regular
     /// `Idle` so a scheduler-aware shell can request it explicitly.
     SchedIdle,
+    /// Run the short calibration routine — the firmware's "ShortCal" state
+    /// (reaprime calls it `calibration`). Diagnostic; the user should not
+    /// be able to trigger this casually.
+    ShortCal,
+    /// Run the firmware self-test routine. Diagnostic.
+    SelfTest,
 }
 
 impl From<MachineRequest> for MachineState {
@@ -218,6 +228,8 @@ impl From<MachineRequest> for MachineState {
             MachineRequest::SteamRinse => MachineState::SteamRinse,
             MachineRequest::AirPurge => MachineState::AirPurge,
             MachineRequest::SchedIdle => MachineState::SchedIdle,
+            MachineRequest::ShortCal => MachineState::ShortCal,
+            MachineRequest::SelfTest => MachineState::SelfTest,
         }
     }
 }
@@ -938,6 +950,7 @@ mod tests {
                     MmrRegister::SteamFlow => MmrReg::SteamFlow,
                     MmrRegister::RefillKit => MmrReg::RefillKit,
                     MmrRegister::FlushFlowRate => MmrReg::FlushFlowRate,
+                    MmrRegister::FlushTemp => MmrReg::FlushTemp,
                     MmrRegister::HotWaterFlowRate => MmrReg::HotWaterFlowRate,
                     MmrRegister::Phase1FlowRate => MmrReg::Phase1FlowRate,
                     MmrRegister::Phase2FlowRate => MmrReg::Phase2FlowRate,

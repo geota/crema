@@ -267,15 +267,20 @@ export class De1Manager {
 			await device.startNotifications(De1Uuids.SERVICE, De1Uuids.MMR_READ);
 			this.callbacks.onStatus('MMR_READ A005 subscribed ✓');
 
-			// FRAME_WRITE (cuuid_10) is where the DE1 echoes each profile-frame
-			// write back as a notification — Crema's profile-upload orchestrator
-			// uses these acks to advance its state machine
-			// (docs/16-profile-upload-plan.md §5).
-			step = 'FRAME_WRITE characteristic A010';
-			await device.startNotifications(De1Uuids.SERVICE, De1Uuids.FRAME_WRITE);
-			this.callbacks.onStatus('FRAME_WRITE A010 subscribed ✓');
+			// FRAME_WRITE (cuuid_10) notify subscription was removed
+			// 2026-05-22 (docs/22 §3.1). The 2026-05-21 HCI snoop of a
+			// legacy de1app session confirmed the DE1 firmware never emits
+			// HVNs on this characteristic — only empty ATT Write Responses
+			// (opcode 0x13) come back per frame, and the orchestrator
+			// synthesizes its per-frame ack from the bytes it just wrote
+			// (commit 49f0803). Reaprime doesn't subscribe to A010 either.
+			// Subscribing here was harmless but dormant; the
+			// `De1FrameAck` Source variant stays in the codec since the
+			// shell still synthesizes ack notifications for the
+			// orchestrator's state machine — only the BLE-level
+			// `startNotifications` call is dropped.
 
-			// All six GATT objects resolved — the device is verified as a DE1.
+			// All five GATT objects resolved — the device is verified as a DE1.
 			this.patchDiagnostics({ gattVerified: true });
 
 			// The Version characteristic (A001) is a one-shot Read, not a
