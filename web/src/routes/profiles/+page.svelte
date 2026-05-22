@@ -55,7 +55,42 @@
 	/** The active tag filter: `all`, `pinned`, a roast, or `t:<custom tag>`. */
 	let tag = $state('all');
 	/** The active sort key. */
-	let sort = $state<'recent' | 'name' | 'dose'>('recent');
+	type SortKey = 'recent' | 'name' | 'dose' | 'roast' | 'beverage' | 'author' | 'tags';
+	let sort = $state<SortKey>('recent');
+	/** Whether the sort dropdown is open. Click-away closes via the scrim. */
+	let sortOpen = $state(false);
+
+	/**
+	 * Ordered sort options the dropdown renders. Label is shown in the
+	 * button (current selection) + each menu row; `id` is the internal
+	 * key the `filtered` derive reads.
+	 */
+	const SORT_OPTIONS = [
+		{ id: 'recent', label: 'Recent' },
+		{ id: 'name', label: 'Name' },
+		{ id: 'dose', label: 'Dose' },
+		{ id: 'roast', label: 'Roast' },
+		{ id: 'beverage', label: 'Beverage type' },
+		{ id: 'author', label: 'Author' },
+		{ id: 'tags', label: 'Tags' }
+	] as const;
+	const sortLabel = $derived(
+		SORT_OPTIONS.find((s) => s.id === sort)?.label ?? 'Recent'
+	);
+
+	/**
+	 * The fixed roast ordering for the `'roast'` sort key. Light → dark
+	 * matches the design's roast-bar gradient; unknown roasts sink to
+	 * the end (so the sorted grid groups "known dose" cards first).
+	 */
+	const ROAST_ORDER: Record<string, number> = { light: 0, medium: 1, dark: 2 };
+
+	/**
+	 * Beverage-type ordering for the `'beverage'` sort + the filter
+	 * pills. Espresso lives first (the default), the others trail in
+	 * a stable order so the UI is deterministic across renders.
+	 */
+	const BEVERAGE_TYPES = ['espresso', 'pourover', 'manual', 'cleaning', 'calibrate'] as const;
 
 	/** Roast facet counts. */
 	const roasts = $derived(
@@ -64,6 +99,19 @@
 			label: id[0].toUpperCase() + id.slice(1),
 			count: profiles.filter((p) => p.roast === id).length
 		}))
+	);
+
+	/**
+	 * Beverage-type facets — one chip per beverage type that's actually
+	 * represented in the library, with a count. Order follows the
+	 * `BEVERAGE_TYPES` constant for deterministic UI.
+	 */
+	const beverageFacets = $derived(
+		BEVERAGE_TYPES.map((bt) => ({
+			id: `b:${bt}`,
+			label: bt.charAt(0).toUpperCase() + bt.slice(1),
+			count: profiles.filter((p) => p.beverageType === bt).length
+		})).filter((f) => f.count > 0)
 	);
 
 	/** Custom tag facets — derived from the library so new tags appear here. */
@@ -103,17 +151,66 @@
 			// list-level so they're already accounted for.
 			if (['light', 'medium', 'dark'].includes(tag) && p.roast !== tag) return false;
 			if (tag.startsWith('t:') && !p.tags.includes(tag.slice(2))) return false;
+			if (tag.startsWith('b:') && p.beverageType !== tag.slice(2)) return false;
 			if (tag === 'pinned' && !p.pinned) return false;
 			// Search.
 			if (query === '') return true;
 			return (
 				p.name.toLowerCase().includes(query) ||
 				p.notes.toLowerCase().includes(query) ||
-				p.tags.some((t) => t.toLowerCase().includes(query))
+				p.tags.some((t) => t.toLowerCase().includes(query)) ||
+				p.author.toLowerCase().includes(query)
 			);
 		});
-		if (sort === 'name') r = [...r].sort((a, b) => a.name.localeCompare(b.name));
-		if (sort === 'dose') r = [...r].sort((a, b) => a.dose - b.dose);
+		switch (sort) {
+			case 'name':
+				r = [...r].sort((a, b) => a.name.localeCompare(b.name));
+				break;
+			case 'dose':
+				r = [...r].sort((a, b) => a.dose - b.dose);
+				break;
+			case 'roast': {
+				// Light → medium → dark → unknown; break ties on name so the
+				// order is stable across renders.
+				const rank = (p: CremaProfile): number =>
+					p.roast != null ? ROAST_ORDER[p.roast] ?? 99 : 99;
+				r = [...r].sort(
+					(a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name)
+				);
+				break;
+			}
+			case 'beverage':
+				r = [...r].sort(
+					(a, b) =>
+						BEVERAGE_TYPES.indexOf(a.beverageType) -
+							BEVERAGE_TYPES.indexOf(b.beverageType) ||
+						a.name.localeCompare(b.name)
+				);
+				break;
+			case 'author':
+				r = [...r].sort(
+					(a, b) =>
+						(a.author || '').localeCompare(b.author || '') ||
+						a.name.localeCompare(b.name)
+				);
+				break;
+			case 'tags': {
+				// Group by the first user tag; ties (no tags or same first
+				// tag) fall back to name.
+				const firstTag = (p: CremaProfile): string =>
+					p.tags.find((t) => t !== 'Built-in') ?? '';
+				r = [...r].sort(
+					(a, b) =>
+						firstTag(a).localeCompare(firstTag(b)) ||
+						a.name.localeCompare(b.name)
+				);
+				break;
+			}
+			default:
+				// 'recent' — leave in `source` order (the store already
+				// emits newest first via lastUsed under the hood).
+				break;
+		}
 		return r;
 	});
 
@@ -466,6 +563,19 @@
 					<span>{r.label}</span><span class="pp-tag-count">{r.count}</span>
 				</button>
 			{/each}
+			{#if beverageFacets.length > 0}
+				<span class="pp-tag-divider"></span>
+				<span class="pp-tag-grouplabel">Beverage</span>
+				{#each beverageFacets as b (b.id)}
+					<button
+						class="pp-tag"
+						class:is-active={tag === b.id}
+						onclick={() => (tag = b.id)}
+					>
+						<span>{b.label}</span><span class="pp-tag-count">{b.count}</span>
+					</button>
+				{/each}
+			{/if}
 			{#if customTags.length > 0}
 				<span class="pp-tag-divider"></span>
 				<span class="pp-tag-grouplabel">Tags</span>
@@ -482,13 +592,41 @@
 		</div>
 		<div class="pp-sort">
 			<span class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.45)">Sort</span>
-			{#each [{ id: 'recent', label: 'Recent' }, { id: 'name', label: 'Name' }, { id: 'dose', label: 'Dose' }] as const as s (s.id)}
+			<!-- Dropdown — the old inline chip row hit ~9 options once
+			     roast / beverage / author / tags joined recent/name/dose.
+			     A combo button collapses that into one slot. -->
+			<div class="pp-sort-menu">
 				<button
-					class="pp-sort-opt"
-					class:is-active={sort === s.id}
-					onclick={() => (sort = s.id)}>{s.label}</button
+					class="pp-sort-btn"
+					aria-haspopup="menu"
+					aria-expanded={sortOpen}
+					onclick={() => (sortOpen = !sortOpen)}
 				>
-			{/each}
+					<span>{sortLabel}</span>
+					<i class="ph ph-caret-down" aria-hidden="true"></i>
+				</button>
+				{#if sortOpen}
+					<button
+						type="button"
+						class="pp-sort-scrim"
+						aria-label="Close sort menu"
+						onclick={() => (sortOpen = false)}
+					></button>
+					<div class="pp-sort-list" role="menu">
+						{#each SORT_OPTIONS as s (s.id)}
+							<button
+								class="pp-sort-opt"
+								class:is-active={sort === s.id}
+								role="menuitem"
+								onclick={() => {
+									sort = s.id;
+									sortOpen = false;
+								}}>{s.label}</button
+							>
+						{/each}
+					</div>
+				{/if}
+			</div>
 		</div>
 	</div>
 
@@ -722,25 +860,71 @@
 		gap: 10px;
 		flex: 0 0 auto;
 	}
-	.pp-sort-opt {
-		background: transparent;
-		border: 0;
-		color: rgba(var(--tint-rgb), 0.5);
+	.pp-sort-menu {
+		position: relative;
+	}
+	.pp-sort-btn {
+		display: inline-flex;
+		align-items: center;
+		gap: 8px;
+		background: rgba(var(--tint-rgb), 0.04);
+		border: 1px solid rgba(var(--tint-rgb), 0.1);
+		border-radius: var(--radius-sm);
+		color: var(--fg-1);
 		font-family: var(--font-sans);
 		font-size: 12px;
 		cursor: pointer;
-		padding: 4px 2px;
-		transition: color var(--dur-1) var(--ease);
+		padding: 6px 10px;
+		transition: background var(--dur-1) var(--ease);
+	}
+	.pp-sort-btn:hover {
+		background: rgba(var(--tint-rgb), 0.08);
+	}
+	.pp-sort-btn i {
+		font-size: 11px;
+		opacity: 0.6;
+	}
+	.pp-sort-scrim {
+		position: fixed;
+		inset: 0;
+		background: transparent;
+		border: 0;
+		cursor: default;
+		z-index: 20;
+	}
+	.pp-sort-list {
+		position: absolute;
+		right: 0;
+		top: calc(100% + 6px);
+		z-index: 21;
+		min-width: 160px;
+		background: var(--bg-surface-2);
+		border: 1px solid rgba(var(--tint-rgb), 0.1);
+		border-radius: var(--radius-sm);
+		box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+		padding: 4px;
+		display: flex;
+		flex-direction: column;
+	}
+	.pp-sort-opt {
+		background: transparent;
+		border: 0;
+		border-radius: 6px;
+		color: rgba(var(--tint-rgb), 0.7);
+		font-family: var(--font-sans);
+		font-size: 12px;
+		cursor: pointer;
+		padding: 8px 10px;
+		text-align: left;
+		transition: background var(--dur-1) var(--ease);
 	}
 	.pp-sort-opt:hover {
+		background: rgba(var(--tint-rgb), 0.06);
 		color: var(--fg-1);
 	}
 	.pp-sort-opt.is-active {
 		color: var(--fg-1);
-		text-decoration: underline;
-		text-decoration-color: var(--copper-500);
-		text-decoration-thickness: 1.5px;
-		text-underline-offset: 4px;
+		background: rgba(var(--copper-rgb, 199, 118, 59), 0.12);
 	}
 
 	/* Grid */

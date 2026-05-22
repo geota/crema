@@ -30,6 +30,7 @@
   "dependencies": {
     "@phosphor-icons/web": "^2.1.2",
     "bits-ui": "^2.18.1",
+    "jszip": "^3.10.1",
     "uplot": "^1.6.32"
   }
 }
