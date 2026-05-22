@@ -21,9 +21,13 @@
 	import { getHistoryStore, exportStoredShotAsV2Json, shotFilename } from '$lib/history';
 	import { ShotRow, ShotDetail } from '$lib/components/history';
 	import { getCremaAppContext } from '$lib/shell/app-context';
+	import { getSettingsStore } from '$lib/settings';
+	import { getCaptureStore, captureJsonl } from '$lib/capture';
+	import JSZip from 'jszip';
 
 	const store = getHistoryStore();
 	const appCtx = getCremaAppContext();
+	const settings = getSettingsStore();
 
 	/**
 	 * Outcome of the most recent import — `null` when no import has been
@@ -44,37 +48,89 @@
 	 * `history/` folder once and add every shot in one click.
 	 */
 	/**
-	 * Export every recorded shot as one `.jsonl` file — one
-	 * community-v2 JSON shot per line. JSONL (≡ NDJSON for our
-	 * purposes; specs differ only on `\r\n` tolerance + MIME type)
-	 * keeps each shot independently re-importable while bundling the
-	 * whole library into a single download.
-	 *
-	 * Per-shot Download (in ShotDetail) emits a single `.shot.json`;
-	 * this Export collects them. Re-importable to Crema, reaprime,
-	 * Visualizer, or de1app by splitting on newlines + parsing each
-	 * line as a v2 shot.
+	 * Whether a bulk export is in flight — the zip path is async (each
+	 * shot's raw capture is an IndexedDB lookup) so the button shows a
+	 * spinner while the archive builds.
 	 */
+	let exporting = $state(false);
+
+	/**
+	 * Bulk Export — routes by `shotExportFormat` (Settings → Advanced):
+	 *
+	 * - `'community'` (default) — every recorded shot collapses into
+	 *   one `.jsonl` file with one community-v2 JSON per line. Small,
+	 *   single-file, re-importable by every DE1 app.
+	 * - `'replay'` — assembles a `.zip` containing one `.jsonl` raw
+	 *   capture per shot (one BLE notification per line). Shots that
+	 *   were imported (or recorded before the capture recorder shipped)
+	 *   have no raw bytes — they fall back to their v2 JSON inside the
+	 *   same archive so the user still gets a record.
+	 */
+	async function exportAllShots(): Promise<void> {
+		if (shots.length === 0 || exporting) return;
+		exporting = true;
+		try {
+			if (settings.current.shotExportFormat === 'replay') {
+				await exportAllAsReplayZip();
+			} else {
+				exportAllAsV2Jsonl();
+			}
+		} finally {
+			exporting = false;
+		}
+	}
+
 	function exportAllAsV2Jsonl(): void {
-		if (shots.length === 0) return;
 		const jsonl = shots
 			.map((s) => exportStoredShotAsV2Json(s))
-			// `exportStoredShotAsV2Json` produces pretty-printed JSON;
-			// flatten to one line per shot so the file is true JSONL.
 			.map((s) => JSON.stringify(JSON.parse(s)))
 			.join('\n');
-		const d = new Date();
-		const p = (n: number): string => String(n).padStart(2, '0');
-		const stamp =
-			`${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}T` +
-			`${p(d.getHours())}${p(d.getMinutes())}`;
 		const blob = new Blob([jsonl], { type: 'application/x-ndjson' });
+		downloadBlob(blob, `crema-history-${stamp()}.jsonl`);
+	}
+
+	/**
+	 * Walk every recorded shot, fetch its raw BLE capture from
+	 * IndexedDB, and pack the lot into a single `.zip`. Imported shots
+	 * (and any pulled before the capture recorder existed) won't have
+	 * a capture — they get their community-v2 JSON instead so the
+	 * archive isn't missing entries. File naming inside the zip uses
+	 * `shotFilename` (yyyymmddTHHMMSS.shot.json) replacing the `.shot.json`
+	 * suffix with `.jsonl` for captures.
+	 */
+	async function exportAllAsReplayZip(): Promise<void> {
+		const zip = new JSZip();
+		const captureStore = getCaptureStore();
+		for (const shot of shots) {
+			const base = shotFilename(shot).replace(/\.shot\.json$/, '');
+			const entries = await captureStore.get(shot.id).catch(() => null);
+			if (entries && entries.length > 0) {
+				zip.file(`${base}.jsonl`, captureJsonl(entries));
+			} else {
+				// Fall back to the v2 JSON so imports still survive.
+				zip.file(`${base}.shot.json`, exportStoredShotAsV2Json(shot));
+			}
+		}
+		const blob = await zip.generateAsync({ type: 'blob' });
+		downloadBlob(blob, `crema-history-${stamp()}.zip`);
+	}
+
+	function downloadBlob(blob: Blob, filename: string): void {
 		const url = URL.createObjectURL(blob);
 		const a = document.createElement('a');
 		a.href = url;
-		a.download = `crema-history-${stamp}.jsonl`;
+		a.download = filename;
 		a.click();
 		URL.revokeObjectURL(url);
+	}
+
+	function stamp(): string {
+		const d = new Date();
+		const p = (n: number): string => String(n).padStart(2, '0');
+		return (
+			`${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}T` +
+			`${p(d.getHours())}${p(d.getMinutes())}`
+		);
 	}
 
 	async function onImportFilesChosen(event: Event): Promise<void> {
@@ -242,11 +298,14 @@
 			</label>
 			<button
 				class="st-btn st-btn-secondary"
-				disabled={shots.length === 0}
-				onclick={exportAllAsV2Jsonl}
-				title="Download every shot as one .jsonl file — one community-v2 JSON shot per line"
+				disabled={shots.length === 0 || exporting}
+				onclick={exportAllShots}
+				title={settings.current.shotExportFormat === 'replay'
+					? 'Download a .zip of raw BLE captures (.jsonl per shot) — Crema-only replay format'
+					: 'Download every shot as one .jsonl file — community-v2 JSON, one shot per line'}
 			>
-				<i class="ph ph-download-simple" aria-hidden="true"></i> Export
+				<i class="ph ph-download-simple" aria-hidden="true"></i>
+				{exporting ? 'Exporting…' : 'Export'}
 			</button>
 			<button class="st-btn st-btn-secondary" disabled={shots.length === 0}>
 				<i class="ph ph-arrows-left-right" aria-hidden="true"></i> Compare
