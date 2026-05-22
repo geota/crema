@@ -9,8 +9,10 @@ use crate::error::DomainError;
 /// The most steps a profile may have — the DE1's frame-index limit.
 const MAX_STEPS: usize = 32;
 
-/// Which quantity a step holds at its target.
+/// Which quantity a step holds at its target. Serializes as lowercase
+/// (`"pressure"` / `"flow"`) to match the community v2 JSON contract.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Pump {
     /// Pressure priority — the step targets a pressure in bar.
     Pressure,
@@ -75,8 +77,10 @@ impl Default for BeverageType {
     }
 }
 
-/// The metric an exit condition watches.
+/// The metric an exit condition watches. Lowercase wire spelling
+/// (`"pressure"` / `"flow"`) per the v2 contract.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ExitMetric {
     /// Watch pressure (bar).
     Pressure,
@@ -84,8 +88,10 @@ pub enum ExitMetric {
     Flow,
 }
 
-/// The direction of an exit comparison.
+/// The direction of an exit comparison. Lowercase wire spelling
+/// (`"over"` / `"under"`) per the v2 contract.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Compare {
     /// Exit when the metric rises above the threshold.
     Over,

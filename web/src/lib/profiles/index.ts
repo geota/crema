@@ -17,6 +17,7 @@ export {
 	type ExitCompare,
 	type TempSensor,
 	type Roast,
+	type BeverageType,
 	uid,
 	ratioLabel,
 	relativeLastUsed,

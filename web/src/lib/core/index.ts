@@ -26,21 +26,37 @@ import type { CalTarget, MmrRegister, FirmwareUpdateStatus } from './crema-core'
 
 /**
  * Which quantity a profile step holds at its target — mirrors the core's
- * `Pump` enum (serde-serialised as the bare variant name).
+ * `Pump` enum (lowercase wire spelling per the community v2 JSON contract).
  */
-export type ProfilePump = 'Pressure' | 'Flow';
+export type ProfilePump = 'pressure' | 'flow';
 
 /** How a profile step moves to its target — mirrors the core's `Transition`. */
-export type ProfileTransition = 'Fast' | 'Smooth';
+export type ProfileTransition = 'fast' | 'smooth';
 
-/** Which temperature sensor a step regulates — mirrors `TempSensor`. */
-export type ProfileTempSensor = 'Basket' | 'Mix';
+/**
+ * Which temperature sensor a step regulates — mirrors `TempSensor`.
+ * `'coffee'` = regulate the basket (head_temp); `'water'` = regulate
+ * the water exiting the group (mix_temp). Lowercase wire spelling per
+ * the community v2 contract.
+ */
+export type ProfileTempSensor = 'coffee' | 'water';
 
 /** The metric an exit condition watches — mirrors `ExitMetric`. */
-export type ProfileExitMetric = 'Pressure' | 'Flow';
+export type ProfileExitMetric = 'pressure' | 'flow';
 
 /** The direction of an exit comparison — mirrors `Compare`. */
-export type ProfileCompare = 'Over' | 'Under';
+export type ProfileCompare = 'over' | 'under';
+
+/**
+ * What kind of beverage a profile produces — mirrors the core's
+ * `BeverageType` enum. Lowercase wire spelling per the v2 contract.
+ */
+export type ProfileBeverageType =
+	| 'espresso'
+	| 'calibrate'
+	| 'cleaning'
+	| 'manual'
+	| 'pourover';
 
 /** An early-exit condition on a step — mirrors the core's `ExitCondition`. */
 export interface ProfileExit {
@@ -82,6 +98,12 @@ export interface ProfileStep {
 	volume_limit_ml: number;
 	/** Optional advanced limiter. */
 	limiter: ProfileLimiter | null;
+	/**
+	 * Optional per-step target weight, grams. `null` = no per-step
+	 * target. Reaprime emits `null` explicitly for hash-stability;
+	 * Crema preserves the Option<f32>.
+	 */
+	weight: number | null;
 }
 
 /**
@@ -118,6 +140,14 @@ export interface Profile {
 	 * round-trips through JSON. Mirrors the legacy `profile_grinder_dose_weight`.
 	 */
 	dose: number;
+	/** Profile author — free text, may be empty. */
+	author: string;
+	/** What kind of beverage the profile produces — defaults to `espresso`. */
+	beverage_type: ProfileBeverageType;
+	/** Target tank temperature, °C — `0` for "no override". */
+	tank_temperature: number;
+	/** Community v2 schema version — always `"2"` in this generation. */
+	version: string;
 }
 
 /**

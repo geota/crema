@@ -5,15 +5,15 @@
     "steps": [
       {
         "name": "preinfusion temp boost",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 2.4,
         "temperature_c": 90.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 2.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 4.5
         },
         "volume_limit_ml": 0,
@@ -21,15 +21,15 @@
       },
       {
         "name": "preinfusion",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 2.4,
         "temperature_c": 90.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 6.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 4.5
         },
         "volume_limit_ml": 0,
@@ -37,7 +37,7 @@
       },
       {
         "name": "forced rise without limit",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 7.5,
         "temperature_c": 90.0,
         "temp_sensor": "coffee",
@@ -49,7 +49,7 @@
       },
       {
         "name": "rise and hold",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 7.5,
         "temperature_c": 90.0,
         "temp_sensor": "coffee",
@@ -64,7 +64,7 @@
       },
       {
         "name": "decline",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 4.5,
         "temperature_c": 90.0,
         "temp_sensor": "coffee",
@@ -89,7 +89,7 @@
     "steps": [
       {
         "name": "preinfusion start",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 7.5,
         "temperature_c": 82.0,
         "temp_sensor": "coffee",
@@ -101,15 +101,15 @@
       },
       {
         "name": "preinfusion",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 7.5,
         "temperature_c": 82.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 6.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 3.8
         },
         "volume_limit_ml": 0,
@@ -117,7 +117,7 @@
       },
       {
         "name": "rise and hold",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 7.8,
         "temperature_c": 80.0,
         "temp_sensor": "coffee",
@@ -129,7 +129,7 @@
       },
       {
         "name": "decline",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 5.0,
         "temperature_c": 72.0,
         "temp_sensor": "coffee",
@@ -151,15 +151,15 @@
     "steps": [
       {
         "name": "Fill",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 8.0,
         "temperature_c": 93.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 15.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 3.0
         },
         "volume_limit_ml": 100,
@@ -170,7 +170,7 @@
       },
       {
         "name": "Infuse",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 3.0,
         "temperature_c": 93.0,
         "temp_sensor": "coffee",
@@ -185,15 +185,15 @@
       },
       {
         "name": "Pressure Up",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 9.0,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
         "transition": "smooth",
         "duration_seconds": 5.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Over",
+          "metric": "flow",
+          "compare": "over",
           "threshold": 2.0
         },
         "volume_limit_ml": 100,
@@ -201,15 +201,15 @@
       },
       {
         "name": "Pressure Decline",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 1.0,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
         "transition": "smooth",
         "duration_seconds": 0.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Under",
+          "metric": "flow",
+          "compare": "under",
           "threshold": 2.1
         },
         "volume_limit_ml": 100,
@@ -217,7 +217,7 @@
       },
       {
         "name": "Flow Start",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 2.0,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
@@ -229,7 +229,7 @@
       },
       {
         "name": "Flow Extraction",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 0.0,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
@@ -254,15 +254,15 @@
     "steps": [
       {
         "name": "Fill",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 8.0,
         "temperature_c": 93.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 15.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 3.0
         },
         "volume_limit_ml": 100,
@@ -273,7 +273,7 @@
       },
       {
         "name": "Infuse",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 3.0,
         "temperature_c": 93.0,
         "temp_sensor": "coffee",
@@ -288,15 +288,15 @@
       },
       {
         "name": "Pressure Up",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 10.0,
         "temperature_c": 93.0,
         "temp_sensor": "coffee",
         "transition": "smooth",
         "duration_seconds": 0.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Over",
+          "metric": "flow",
+          "compare": "over",
           "threshold": 2.0
         },
         "volume_limit_ml": 100,
@@ -304,15 +304,15 @@
       },
       {
         "name": "Pressure Decline",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 1.0,
         "temperature_c": 93.0,
         "temp_sensor": "coffee",
         "transition": "smooth",
         "duration_seconds": 0.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Under",
+          "metric": "flow",
+          "compare": "under",
           "threshold": 2.1
         },
         "volume_limit_ml": 100,
@@ -320,15 +320,15 @@
       },
       {
         "name": "Flow Start",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 2.0,
         "temperature_c": 93.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 10.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Over",
+          "metric": "flow",
+          "compare": "over",
           "threshold": 1.9
         },
         "volume_limit_ml": 100,
@@ -336,7 +336,7 @@
       },
       {
         "name": "Flow Extraction",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 4.0,
         "temperature_c": 93.0,
         "temp_sensor": "coffee",
@@ -361,15 +361,15 @@
     "steps": [
       {
         "name": "Fill",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 8.0,
         "temperature_c": 95.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 15.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 3.0
         },
         "volume_limit_ml": 100,
@@ -380,7 +380,7 @@
       },
       {
         "name": "Infuse",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 3.0,
         "temperature_c": 95.0,
         "temp_sensor": "coffee",
@@ -395,15 +395,15 @@
       },
       {
         "name": "Pressure Up",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 10.0,
         "temperature_c": 95.0,
         "temp_sensor": "coffee",
         "transition": "smooth",
         "duration_seconds": 10.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Over",
+          "metric": "flow",
+          "compare": "over",
           "threshold": 2.0
         },
         "volume_limit_ml": 100,
@@ -411,15 +411,15 @@
       },
       {
         "name": "Pressure Decline",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 1.0,
         "temperature_c": 95.0,
         "temp_sensor": "coffee",
         "transition": "smooth",
         "duration_seconds": 0.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Under",
+          "metric": "flow",
+          "compare": "under",
           "threshold": 2.0
         },
         "volume_limit_ml": 100,
@@ -427,7 +427,7 @@
       },
       {
         "name": "Flow Start",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 2.0,
         "temperature_c": 95.0,
         "temp_sensor": "coffee",
@@ -439,7 +439,7 @@
       },
       {
         "name": "Flow Extraction",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 4.0,
         "temperature_c": 95.0,
         "temp_sensor": "coffee",
@@ -464,15 +464,15 @@
     "steps": [
       {
         "name": "Fill",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 8.0,
         "temperature_c": 95.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 15.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 3.0
         },
         "volume_limit_ml": 100,
@@ -483,7 +483,7 @@
       },
       {
         "name": "Infuse",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 3.0,
         "temperature_c": 95.0,
         "temp_sensor": "coffee",
@@ -498,15 +498,15 @@
       },
       {
         "name": "Pressure Up",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 10.0,
         "temperature_c": 95.0,
         "temp_sensor": "coffee",
         "transition": "smooth",
         "duration_seconds": 3.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Over",
+          "metric": "flow",
+          "compare": "over",
           "threshold": 3.6
         },
         "volume_limit_ml": 100,
@@ -514,15 +514,15 @@
       },
       {
         "name": "Pressure Decline",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 1.0,
         "temperature_c": 95.0,
         "temp_sensor": "coffee",
         "transition": "smooth",
         "duration_seconds": 3.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Under",
+          "metric": "flow",
+          "compare": "under",
           "threshold": 1.9
         },
         "volume_limit_ml": 100,
@@ -530,7 +530,7 @@
       },
       {
         "name": "Flow Start",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 1.8,
         "temperature_c": 95.0,
         "temp_sensor": "coffee",
@@ -542,7 +542,7 @@
       },
       {
         "name": "Flow Extraction",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 3.6,
         "temperature_c": 95.0,
         "temp_sensor": "coffee",
@@ -567,15 +567,15 @@
     "steps": [
       {
         "name": "2s infuse",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 8.0,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 2.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 6.0
         },
         "volume_limit_ml": 0,
@@ -583,15 +583,15 @@
       },
       {
         "name": "infuse",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 8.0,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 10.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 6.0
         },
         "volume_limit_ml": 0,
@@ -599,7 +599,7 @@
       },
       {
         "name": "rise and hold",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 9.0,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
@@ -611,15 +611,15 @@
       },
       {
         "name": "decline",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 6.0,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
         "transition": "smooth",
         "duration_seconds": 30.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Under",
+          "metric": "pressure",
+          "compare": "under",
           "threshold": 6.0
         },
         "volume_limit_ml": 0,
@@ -630,7 +630,7 @@
       },
       {
         "name": "maintain flow",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 1.5,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
@@ -655,15 +655,15 @@
     "steps": [
       {
         "name": "preinfusion temp boost",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 8.0,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 2.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
@@ -671,15 +671,15 @@
       },
       {
         "name": "preinfusion",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 8.0,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 18.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
@@ -687,7 +687,7 @@
       },
       {
         "name": "forced rise without limit",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 8.4,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
@@ -699,7 +699,7 @@
       },
       {
         "name": "rise and hold",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 8.4,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
@@ -714,7 +714,7 @@
       },
       {
         "name": "decline",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 6.0,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
@@ -739,7 +739,7 @@
     "steps": [
       {
         "name": "fast pre start",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 4.5,
         "temperature_c": 95.0,
         "temp_sensor": "coffee",
@@ -751,15 +751,15 @@
       },
       {
         "name": "fast pre",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 4.5,
         "temperature_c": 95.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 3.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 3.5
         },
         "volume_limit_ml": 500,
@@ -767,15 +767,15 @@
       },
       {
         "name": "ramp down pre",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 2.0,
         "temperature_c": 93.0,
         "temp_sensor": "coffee",
         "transition": "smooth",
         "duration_seconds": 15.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 3.5
         },
         "volume_limit_ml": 500,
@@ -783,7 +783,7 @@
       },
       {
         "name": "bloom",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 0.0,
         "temperature_c": 93.0,
         "temp_sensor": "coffee",
@@ -795,7 +795,7 @@
       },
       {
         "name": "ramp",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 3.5,
         "temperature_c": 92.5,
         "temp_sensor": "coffee",
@@ -807,7 +807,7 @@
       },
       {
         "name": "hold at 3.5 ml/s",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 3.5,
         "temperature_c": 91.0,
         "temp_sensor": "coffee",
@@ -832,7 +832,7 @@
     "steps": [
       {
         "name": "preinfusion start",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 4.0,
         "temperature_c": 97.5,
         "temp_sensor": "coffee",
@@ -844,15 +844,15 @@
       },
       {
         "name": "preinfusion",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 4.0,
         "temperature_c": 97.5,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 23.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 4.0
         },
         "volume_limit_ml": 500,
@@ -860,7 +860,7 @@
       },
       {
         "name": "pause",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 0.0,
         "temperature_c": 90.0,
         "temp_sensor": "coffee",
@@ -872,7 +872,7 @@
       },
       {
         "name": "ramp",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 2.2,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
@@ -884,7 +884,7 @@
       },
       {
         "name": "flat flow",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 2.2,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
@@ -899,7 +899,7 @@
       },
       {
         "name": "reset temperature",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 0.0,
         "temperature_c": 98.0,
         "temp_sensor": "coffee",
@@ -921,15 +921,15 @@
     "steps": [
       {
         "name": "preinfusion temp boost",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 8.0,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 2.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
@@ -937,15 +937,15 @@
       },
       {
         "name": "preinfusion",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 8.0,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 6.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
@@ -953,7 +953,7 @@
       },
       {
         "name": "forced rise without limit",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 9.0,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
@@ -965,7 +965,7 @@
       },
       {
         "name": "rise and hold",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 9.0,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
@@ -990,7 +990,7 @@
     "steps": [
       {
         "name": "Pressure rise 1 start",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 10.0,
         "temperature_c": 85.0,
         "temp_sensor": "coffee",
@@ -1002,7 +1002,7 @@
       },
       {
         "name": "Pressure rise 1",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 10.0,
         "temperature_c": 85.0,
         "temp_sensor": "coffee",
@@ -1014,7 +1014,7 @@
       },
       {
         "name": "Pause 1",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.0,
         "temperature_c": 85.0,
         "temp_sensor": "coffee",
@@ -1026,7 +1026,7 @@
       },
       {
         "name": "Pressure rise 2",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 10.0,
         "temperature_c": 85.0,
         "temp_sensor": "coffee",
@@ -1038,7 +1038,7 @@
       },
       {
         "name": "Pause 2",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": -3.8857806e-16,
         "temperature_c": 85.0,
         "temp_sensor": "coffee",
@@ -1050,7 +1050,7 @@
       },
       {
         "name": "Pressure rise 3",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 10.0,
         "temperature_c": 85.0,
         "temp_sensor": "coffee",
@@ -1062,7 +1062,7 @@
       },
       {
         "name": "Pause 3",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": -5.7176486e-15,
         "temperature_c": 85.0,
         "temp_sensor": "coffee",
@@ -1074,7 +1074,7 @@
       },
       {
         "name": "Pressure rise 4",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 10.0,
         "temperature_c": 85.0,
         "temp_sensor": "coffee",
@@ -1086,7 +1086,7 @@
       },
       {
         "name": "Pause 4",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": -5.7176486e-15,
         "temperature_c": 85.0,
         "temp_sensor": "coffee",
@@ -1098,7 +1098,7 @@
       },
       {
         "name": "Pressure rise 5",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 10.0,
         "temperature_c": 85.0,
         "temp_sensor": "coffee",
@@ -1120,7 +1120,7 @@
     "steps": [
       {
         "name": "preinfusion start",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 1.1,
         "temperature_c": 91.5,
         "temp_sensor": "coffee",
@@ -1132,15 +1132,15 @@
       },
       {
         "name": "preinfusion",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 1.1,
         "temperature_c": 91.5,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 3.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 3.0
         },
         "volume_limit_ml": 100,
@@ -1148,7 +1148,7 @@
       },
       {
         "name": "soak",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 1.1,
         "temperature_c": 91.5,
         "temp_sensor": "coffee",
@@ -1160,7 +1160,7 @@
       },
       {
         "name": "ramp",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 9.0,
         "temperature_c": 91.5,
         "temp_sensor": "coffee",
@@ -1172,7 +1172,7 @@
       },
       {
         "name": "ramp-down",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 3.0,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
@@ -1194,7 +1194,7 @@
     "steps": [
       {
         "name": "fill start",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 1.8,
         "temperature_c": 89.0,
         "temp_sensor": "coffee",
@@ -1206,15 +1206,15 @@
       },
       {
         "name": "fill",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 1.8,
         "temperature_c": 89.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 20.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 1.0
         },
         "volume_limit_ml": 100,
@@ -1222,15 +1222,15 @@
       },
       {
         "name": "preinfusion",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 2.2,
         "temperature_c": 88.5,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 10.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 4.0
         },
         "volume_limit_ml": 100,
@@ -1238,15 +1238,15 @@
       },
       {
         "name": "rise",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 8.0,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 5.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 8.0
         },
         "volume_limit_ml": 100,
@@ -1254,15 +1254,15 @@
       },
       {
         "name": "hold",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 8.0,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 5.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Over",
+          "metric": "flow",
+          "compare": "over",
           "threshold": 1.5
         },
         "volume_limit_ml": 100,
@@ -1270,7 +1270,7 @@
       },
       {
         "name": "decline",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 2.2,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
@@ -1292,7 +1292,7 @@
     "steps": [
       {
         "name": "Fill start",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 2.0,
         "temperature_c": 89.0,
         "temp_sensor": "coffee",
@@ -1304,15 +1304,15 @@
       },
       {
         "name": "Fill",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 2.0,
         "temperature_c": 89.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 25.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 1.5
         },
         "volume_limit_ml": 100,
@@ -1320,7 +1320,7 @@
       },
       {
         "name": "Infuse",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 3.0,
         "temperature_c": 88.5,
         "temp_sensor": "coffee",
@@ -1332,7 +1332,7 @@
       },
       {
         "name": "Pressure Up",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 9.0,
         "temperature_c": 88.5,
         "temp_sensor": "coffee",
@@ -1344,15 +1344,15 @@
       },
       {
         "name": "Pressure Decline",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 3.0,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
         "transition": "smooth",
         "duration_seconds": 55.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Over",
+          "metric": "flow",
+          "compare": "over",
           "threshold": 2.8
         },
         "volume_limit_ml": 100,
@@ -1360,15 +1360,15 @@
       },
       {
         "name": "Pressure Hold",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 3.0,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 127.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Over",
+          "metric": "flow",
+          "compare": "over",
           "threshold": 2.8
         },
         "volume_limit_ml": 100,
@@ -1376,7 +1376,7 @@
       },
       {
         "name": "Flow Limit",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 2.5,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
@@ -1398,7 +1398,7 @@
     "steps": [
       {
         "name": "Fill start",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 2.0,
         "temperature_c": 90.0,
         "temp_sensor": "coffee",
@@ -1410,15 +1410,15 @@
       },
       {
         "name": "Fill",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 2.0,
         "temperature_c": 90.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 25.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 1.5
         },
         "volume_limit_ml": 100,
@@ -1426,7 +1426,7 @@
       },
       {
         "name": "Infuse",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 3.0,
         "temperature_c": 89.5,
         "temp_sensor": "coffee",
@@ -1438,7 +1438,7 @@
       },
       {
         "name": "Pressure Up",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 9.0,
         "temperature_c": 89.0,
         "temp_sensor": "coffee",
@@ -1450,15 +1450,15 @@
       },
       {
         "name": "9 Bar Hold",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 9.0,
         "temperature_c": 89.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 30.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Over",
+          "metric": "flow",
+          "compare": "over",
           "threshold": 1.9
         },
         "volume_limit_ml": 100,
@@ -1466,15 +1466,15 @@
       },
       {
         "name": "Pressure Decline",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 5.5,
         "temperature_c": 89.0,
         "temp_sensor": "coffee",
         "transition": "smooth",
         "duration_seconds": 35.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Over",
+          "metric": "flow",
+          "compare": "over",
           "threshold": 2.8
         },
         "volume_limit_ml": 100,
@@ -1482,15 +1482,15 @@
       },
       {
         "name": "5 Bar Hold",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 5.5,
         "temperature_c": 89.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 127.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Over",
+          "metric": "flow",
+          "compare": "over",
           "threshold": 2.8
         },
         "volume_limit_ml": 100,
@@ -1498,7 +1498,7 @@
       },
       {
         "name": "Flow Limit",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 2.2,
         "temperature_c": 89.0,
         "temp_sensor": "coffee",
@@ -1520,15 +1520,15 @@
     "steps": [
       {
         "name": "Filling",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 6.0,
         "temperature_c": 84.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 25.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 3.0
         },
         "volume_limit_ml": 60,
@@ -1536,7 +1536,7 @@
       },
       {
         "name": "Infusing",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 6.0,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
@@ -1548,7 +1548,7 @@
       },
       {
         "name": "Pouring",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 1.8,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
@@ -1573,15 +1573,15 @@
     "steps": [
       {
         "name": "preinfusion",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 6.0,
         "temperature_c": 84.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 10.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 3.0
         },
         "volume_limit_ml": 100,
@@ -1589,7 +1589,7 @@
       },
       {
         "name": "rise and hold",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 7.5,
         "temperature_c": 81.0,
         "temp_sensor": "coffee",
@@ -1601,7 +1601,7 @@
       },
       {
         "name": "decline",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 3.0,
         "temperature_c": 78.0,
         "temp_sensor": "coffee",
@@ -1613,7 +1613,7 @@
       },
       {
         "name": "reset temperature",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 0.0,
         "temperature_c": 84.0,
         "temp_sensor": "coffee",
@@ -1635,15 +1635,15 @@
     "steps": [
       {
         "name": "preinfusion",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 6.0,
         "temperature_c": 96.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 10.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 0.5
         },
         "volume_limit_ml": 100,
@@ -1651,7 +1651,7 @@
       },
       {
         "name": "long pre brew",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 1.0,
         "temperature_c": 93.0,
         "temp_sensor": "coffee",
@@ -1663,15 +1663,15 @@
       },
       {
         "name": "high pressure ramp",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 10.0,
         "temperature_c": 93.0,
         "temp_sensor": "coffee",
         "transition": "smooth",
         "duration_seconds": 20.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 10.0
         },
         "volume_limit_ml": 100,
@@ -1679,7 +1679,7 @@
       },
       {
         "name": "decline",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 6.0,
         "temperature_c": 92.5,
         "temp_sensor": "coffee",
@@ -1691,7 +1691,7 @@
       },
       {
         "name": "reset temperature",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 0.0,
         "temperature_c": 96.0,
         "temp_sensor": "coffee",
@@ -1713,7 +1713,7 @@
     "steps": [
       {
         "name": "preinfusion start",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 8.0,
         "temperature_c": 83.5,
         "temp_sensor": "coffee",
@@ -1725,15 +1725,15 @@
       },
       {
         "name": "preinfusion",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 8.0,
         "temperature_c": 83.5,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 20.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 4.5
         },
         "volume_limit_ml": 100,
@@ -1741,15 +1741,15 @@
       },
       {
         "name": "dynamic bloom",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 0.0,
         "temperature_c": 67.5,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 40.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Under",
+          "metric": "pressure",
+          "compare": "under",
           "threshold": 2.2
         },
         "volume_limit_ml": 100,
@@ -1757,15 +1757,15 @@
       },
       {
         "name": "6 bar",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 6.0,
         "temperature_c": 74.5,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 60.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Under",
+          "metric": "flow",
+          "compare": "under",
           "threshold": 0.0
         },
         "volume_limit_ml": 100,
@@ -1786,7 +1786,7 @@
     "steps": [
       {
         "name": "preinfusion",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 5.0,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
@@ -1798,7 +1798,7 @@
       },
       {
         "name": "pause",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 0.0,
         "temperature_c": 85.0,
         "temp_sensor": "coffee",
@@ -1810,7 +1810,7 @@
       },
       {
         "name": "flat flow",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 3.0,
         "temperature_c": 85.0,
         "temp_sensor": "coffee",
@@ -1825,7 +1825,7 @@
       },
       {
         "name": "reset temperature",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 0.0,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
@@ -1847,7 +1847,7 @@
     "steps": [
       {
         "name": "preinfusion",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 4.0,
         "temperature_c": 98.0,
         "temp_sensor": "coffee",
@@ -1859,7 +1859,7 @@
       },
       {
         "name": "preinfusion",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 1.0,
         "temperature_c": 95.0,
         "temp_sensor": "coffee",
@@ -1871,15 +1871,15 @@
       },
       {
         "name": "preinfusion",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 1.0,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 10.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 0.3
         },
         "volume_limit_ml": 0,
@@ -1887,7 +1887,7 @@
       },
       {
         "name": "0.1 mL/s bloom",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 0.1,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
@@ -1899,7 +1899,7 @@
       },
       {
         "name": "ramp",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 3.0,
         "temperature_c": 87.0,
         "temp_sensor": "coffee",
@@ -1914,7 +1914,7 @@
       },
       {
         "name": "3 mL/s",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 3.0,
         "temperature_c": 84.0,
         "temp_sensor": "coffee",
@@ -1939,15 +1939,15 @@
     "steps": [
       {
         "name": "preinfusion boost",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 8.0,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 2.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 5.0
         },
         "volume_limit_ml": 0,
@@ -1955,15 +1955,15 @@
       },
       {
         "name": "preinfusion",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 8.0,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 18.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 5.0
         },
         "volume_limit_ml": 0,
@@ -1971,7 +1971,7 @@
       },
       {
         "name": "hold",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 1.2,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
@@ -1986,7 +1986,7 @@
       },
       {
         "name": "decline",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 1.0,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
@@ -2011,15 +2011,15 @@
     "steps": [
       {
         "name": "preinfusion boost",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 8.0,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 2.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 5.0
         },
         "volume_limit_ml": 0,
@@ -2027,15 +2027,15 @@
       },
       {
         "name": "preinfusion",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 8.0,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 18.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 5.0
         },
         "volume_limit_ml": 0,
@@ -2043,7 +2043,7 @@
       },
       {
         "name": "hold",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 2.0,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
@@ -2058,7 +2058,7 @@
       },
       {
         "name": "decline",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 1.0,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
@@ -2083,15 +2083,15 @@
     "steps": [
       {
         "name": "preinfusion temp boost",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 8.0,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 2.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
@@ -2099,15 +2099,15 @@
       },
       {
         "name": "preinfusion",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 8.0,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 18.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
@@ -2115,7 +2115,7 @@
       },
       {
         "name": "forced rise without limit",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 6.0,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
@@ -2127,7 +2127,7 @@
       },
       {
         "name": "rise and hold",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 6.0,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
@@ -2142,7 +2142,7 @@
       },
       {
         "name": "decline",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 4.0,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
@@ -2167,15 +2167,15 @@
     "steps": [
       {
         "name": "preinfusion boost",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 2.5,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 2.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
@@ -2183,15 +2183,15 @@
       },
       {
         "name": "preinfusion",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 2.5,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 8.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
@@ -2199,7 +2199,7 @@
       },
       {
         "name": "hold",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 2.5,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
@@ -2211,7 +2211,7 @@
       },
       {
         "name": "decline",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 1.0,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
@@ -2233,15 +2233,15 @@
     "steps": [
       {
         "name": "preinfusion boost",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 3.5,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 2.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
@@ -2249,15 +2249,15 @@
       },
       {
         "name": "preinfusion",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 3.5,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 28.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
@@ -2265,7 +2265,7 @@
       },
       {
         "name": "hold",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 2.2,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
@@ -2277,7 +2277,7 @@
       },
       {
         "name": "decline",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 1.8,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
@@ -2299,15 +2299,15 @@
     "steps": [
       {
         "name": "preinfusion temp boost",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 4.0,
         "temperature_c": 89.5,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 2.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
@@ -2315,15 +2315,15 @@
       },
       {
         "name": "preinfusion",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 4.0,
         "temperature_c": 89.5,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 8.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
@@ -2331,7 +2331,7 @@
       },
       {
         "name": "forced rise without limit",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 8.4,
         "temperature_c": 89.5,
         "temp_sensor": "coffee",
@@ -2343,7 +2343,7 @@
       },
       {
         "name": "rise and hold",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 8.4,
         "temperature_c": 89.5,
         "temp_sensor": "coffee",
@@ -2355,7 +2355,7 @@
       },
       {
         "name": "decline",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 6.0,
         "temperature_c": 89.5,
         "temp_sensor": "coffee",
@@ -2377,15 +2377,15 @@
     "steps": [
       {
         "name": "preinfusion",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 2.0,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 25.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 1.5
         },
         "volume_limit_ml": 0,
@@ -2393,7 +2393,7 @@
       },
       {
         "name": "hold",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 2.2,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
@@ -2405,7 +2405,7 @@
       },
       {
         "name": "decline",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 1.8,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
@@ -2427,7 +2427,7 @@
     "steps": [
       {
         "name": "preinfusion start",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 4.0,
         "temperature_c": 90.0,
         "temp_sensor": "coffee",
@@ -2439,15 +2439,15 @@
       },
       {
         "name": "preinfusion",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 4.0,
         "temperature_c": 90.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 11.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 4.0
         },
         "volume_limit_ml": 500,
@@ -2455,15 +2455,15 @@
       },
       {
         "name": "Low Resistance",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 2.2,
         "temperature_c": 90.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 30.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 10.0
         },
         "volume_limit_ml": 500,
@@ -2471,15 +2471,15 @@
       },
       {
         "name": "Pause at HR",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 0.0,
         "temperature_c": 90.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 60.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Under",
+          "metric": "pressure",
+          "compare": "under",
           "threshold": 2.0
         },
         "volume_limit_ml": 500,
@@ -2487,7 +2487,7 @@
       },
       {
         "name": "ramp",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 2.2,
         "temperature_c": 90.0,
         "temp_sensor": "coffee",
@@ -2499,15 +2499,15 @@
       },
       {
         "name": "flat flow",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 2.2,
         "temperature_c": 90.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 30.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Under",
+          "metric": "pressure",
+          "compare": "under",
           "threshold": 0.0
         },
         "volume_limit_ml": 500,
@@ -2528,15 +2528,15 @@
     "steps": [
       {
         "name": "preinfusion boost",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 1.5,
         "temperature_c": 98.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 2.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 2.0
         },
         "volume_limit_ml": 0,
@@ -2544,15 +2544,15 @@
       },
       {
         "name": "preinfusion",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 1.5,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 35.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 2.0
         },
         "volume_limit_ml": 0,
@@ -2560,7 +2560,7 @@
       },
       {
         "name": "hold",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 2.5,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
@@ -2575,7 +2575,7 @@
       },
       {
         "name": "decline",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 1.8,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
@@ -2600,15 +2600,15 @@
     "steps": [
       {
         "name": "preinfusion temp boost",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 4.5,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 2.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
@@ -2616,15 +2616,15 @@
       },
       {
         "name": "preinfusion",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 4.5,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 6.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
@@ -2632,7 +2632,7 @@
       },
       {
         "name": "forced rise without limit",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 8.7,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
@@ -2644,7 +2644,7 @@
       },
       {
         "name": "rise and hold",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 8.7,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
@@ -2666,7 +2666,7 @@
     "steps": [
       {
         "name": "Fill start",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 2.0,
         "temperature_c": 89.0,
         "temp_sensor": "coffee",
@@ -2678,15 +2678,15 @@
       },
       {
         "name": "Fill",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 2.0,
         "temperature_c": 89.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 25.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 1.5
         },
         "volume_limit_ml": 100,
@@ -2694,7 +2694,7 @@
       },
       {
         "name": "Infuse",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 3.0,
         "temperature_c": 88.5,
         "temp_sensor": "coffee",
@@ -2706,7 +2706,7 @@
       },
       {
         "name": "Pressure Up",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 9.0,
         "temperature_c": 88.5,
         "temp_sensor": "coffee",
@@ -2718,15 +2718,15 @@
       },
       {
         "name": "Pressure Decline",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 3.0,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
         "transition": "smooth",
         "duration_seconds": 55.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Over",
+          "metric": "flow",
+          "compare": "over",
           "threshold": 2.8
         },
         "volume_limit_ml": 100,
@@ -2734,15 +2734,15 @@
       },
       {
         "name": "Pressure Hold",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 3.0,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 127.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Over",
+          "metric": "flow",
+          "compare": "over",
           "threshold": 2.8
         },
         "volume_limit_ml": 100,
@@ -2750,7 +2750,7 @@
       },
       {
         "name": "Flow Limit",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 2.5,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
@@ -2772,15 +2772,15 @@
     "steps": [
       {
         "name": "preinfusion",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 4.5,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 20.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
@@ -2788,7 +2788,7 @@
       },
       {
         "name": "forced rise without limit",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 6.0,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
@@ -2800,7 +2800,7 @@
       },
       {
         "name": "rise and hold",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 6.0,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
@@ -2812,7 +2812,7 @@
       },
       {
         "name": "decline",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.0,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
@@ -2834,7 +2834,7 @@
     "steps": [
       {
         "name": "Prewet",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 6.0,
         "temperature_c": 99.0,
         "temp_sensor": "water",
@@ -2846,7 +2846,7 @@
       },
       {
         "name": "Pause",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 0.0,
         "temperature_c": 97.0,
         "temp_sensor": "water",
@@ -2858,7 +2858,7 @@
       },
       {
         "name": "Main water #1",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 6.0,
         "temperature_c": 97.0,
         "temp_sensor": "water",
@@ -2870,7 +2870,7 @@
       },
       {
         "name": "Pause",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 0.0,
         "temperature_c": 95.0,
         "temp_sensor": "water",
@@ -2882,7 +2882,7 @@
       },
       {
         "name": "Main water #2",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 5.0,
         "temperature_c": 95.0,
         "temp_sensor": "water",
@@ -2894,7 +2894,7 @@
       },
       {
         "name": "Drain",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 0.0,
         "temperature_c": 95.0,
         "temp_sensor": "water",
@@ -2906,7 +2906,7 @@
       },
       {
         "name": "Reset temperature",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 0.0,
         "temperature_c": 99.0,
         "temp_sensor": "water",
@@ -2928,15 +2928,15 @@
     "steps": [
       {
         "name": "preinfusion",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 8.0,
         "temperature_c": 90.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 25.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
@@ -2944,7 +2944,7 @@
       },
       {
         "name": "hold",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 2.0,
         "temperature_c": 90.0,
         "temp_sensor": "coffee",
@@ -2956,7 +2956,7 @@
       },
       {
         "name": "decline",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 1.0,
         "temperature_c": 90.0,
         "temp_sensor": "coffee",
@@ -2978,15 +2978,15 @@
     "steps": [
       {
         "name": "preinfusion temp boost",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 7.5,
         "temperature_c": 0.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 2.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 3.8
         },
         "volume_limit_ml": 0,
@@ -2994,7 +2994,7 @@
       },
       {
         "name": "forced rise without limit",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 7.8,
         "temperature_c": 0.0,
         "temp_sensor": "coffee",
@@ -3006,7 +3006,7 @@
       },
       {
         "name": "rise and hold",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 7.8,
         "temperature_c": 0.0,
         "temp_sensor": "coffee",
@@ -3028,15 +3028,15 @@
     "steps": [
       {
         "name": "Fill",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 4.0,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 20.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 3.0
         },
         "volume_limit_ml": 500,
@@ -3044,7 +3044,7 @@
       },
       {
         "name": "Infuse",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.1,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
@@ -3056,7 +3056,7 @@
       },
       {
         "name": "Flush",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 11.0,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
@@ -3068,7 +3068,7 @@
       },
       {
         "name": "Infuse",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.1,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
@@ -3080,7 +3080,7 @@
       },
       {
         "name": "Flush",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 11.0,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
@@ -3092,7 +3092,7 @@
       },
       {
         "name": "infuse",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.1,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
@@ -3104,7 +3104,7 @@
       },
       {
         "name": "Flush",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 11.0,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
@@ -3116,7 +3116,7 @@
       },
       {
         "name": "Infuse",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.1,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
@@ -3128,7 +3128,7 @@
       },
       {
         "name": "Flush",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 11.0,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
@@ -3150,15 +3150,15 @@
     "steps": [
       {
         "name": "Fill",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 4.0,
         "temperature_c": 60.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 20.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 3.0
         },
         "volume_limit_ml": 500,
@@ -3166,7 +3166,7 @@
       },
       {
         "name": "Infuse",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.1,
         "temperature_c": 60.0,
         "temp_sensor": "coffee",
@@ -3178,7 +3178,7 @@
       },
       {
         "name": "Flush",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 11.0,
         "temperature_c": 60.0,
         "temp_sensor": "coffee",
@@ -3190,7 +3190,7 @@
       },
       {
         "name": "Infuse",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.1,
         "temperature_c": 60.0,
         "temp_sensor": "coffee",
@@ -3202,7 +3202,7 @@
       },
       {
         "name": "Flush",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 11.0,
         "temperature_c": 60.0,
         "temp_sensor": "coffee",
@@ -3214,7 +3214,7 @@
       },
       {
         "name": "infuse",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.1,
         "temperature_c": 60.0,
         "temp_sensor": "coffee",
@@ -3226,7 +3226,7 @@
       },
       {
         "name": "Flush",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 11.0,
         "temperature_c": 60.0,
         "temp_sensor": "coffee",
@@ -3248,15 +3248,15 @@
     "steps": [
       {
         "name": "Fill",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 4.0,
         "temperature_c": 60.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 20.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 3.0
         },
         "volume_limit_ml": 500,
@@ -3264,7 +3264,7 @@
       },
       {
         "name": "Infuse",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.1,
         "temperature_c": 60.0,
         "temp_sensor": "coffee",
@@ -3276,7 +3276,7 @@
       },
       {
         "name": "Flush",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 11.0,
         "temperature_c": 60.0,
         "temp_sensor": "coffee",
@@ -3288,7 +3288,7 @@
       },
       {
         "name": "Infuse",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.1,
         "temperature_c": 60.0,
         "temp_sensor": "coffee",
@@ -3300,7 +3300,7 @@
       },
       {
         "name": "Flush",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 11.0,
         "temperature_c": 60.0,
         "temp_sensor": "coffee",
@@ -3312,7 +3312,7 @@
       },
       {
         "name": "infuse",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.1,
         "temperature_c": 60.0,
         "temp_sensor": "coffee",
@@ -3324,7 +3324,7 @@
       },
       {
         "name": "Flush",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 11.0,
         "temperature_c": 60.0,
         "temp_sensor": "coffee",
@@ -3346,15 +3346,15 @@
     "steps": [
       {
         "name": "Fill",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 4.0,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 20.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 3.0
         },
         "volume_limit_ml": 500,
@@ -3362,7 +3362,7 @@
       },
       {
         "name": "Infuse",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.1,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
@@ -3374,7 +3374,7 @@
       },
       {
         "name": "Flush",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 11.0,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
@@ -3386,7 +3386,7 @@
       },
       {
         "name": "Infuse",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.1,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
@@ -3398,7 +3398,7 @@
       },
       {
         "name": "Flush",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 11.0,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
@@ -3410,7 +3410,7 @@
       },
       {
         "name": "infuse",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.1,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
@@ -3422,7 +3422,7 @@
       },
       {
         "name": "Flush",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 11.0,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
@@ -3444,15 +3444,15 @@
     "steps": [
       {
         "name": "Fill",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 4.0,
         "temperature_c": 93.5,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 20.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 3.0
         },
         "volume_limit_ml": 500,
@@ -3460,7 +3460,7 @@
       },
       {
         "name": "Infuse",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.1,
         "temperature_c": 93.5,
         "temp_sensor": "coffee",
@@ -3472,7 +3472,7 @@
       },
       {
         "name": "Flush",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 11.0,
         "temperature_c": 93.5,
         "temp_sensor": "coffee",
@@ -3494,15 +3494,15 @@
     "steps": [
       {
         "name": "Fill",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 4.0,
         "temperature_c": 82.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 20.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 3.0
         },
         "volume_limit_ml": 500,
@@ -3510,7 +3510,7 @@
       },
       {
         "name": "Infuse",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.1,
         "temperature_c": 82.0,
         "temp_sensor": "coffee",
@@ -3522,7 +3522,7 @@
       },
       {
         "name": "Flush",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 11.0,
         "temperature_c": 82.0,
         "temp_sensor": "coffee",
@@ -3534,7 +3534,7 @@
       },
       {
         "name": "Infuse",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.1,
         "temperature_c": 82.0,
         "temp_sensor": "coffee",
@@ -3546,7 +3546,7 @@
       },
       {
         "name": "Flush",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 11.0,
         "temperature_c": 82.0,
         "temp_sensor": "coffee",
@@ -3558,7 +3558,7 @@
       },
       {
         "name": "infuse",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.1,
         "temperature_c": 82.0,
         "temp_sensor": "coffee",
@@ -3570,7 +3570,7 @@
       },
       {
         "name": "Flush",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 11.0,
         "temperature_c": 82.0,
         "temp_sensor": "coffee",
@@ -3592,15 +3592,15 @@
     "steps": [
       {
         "name": "Filling",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 6.0,
         "temperature_c": 84.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 25.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 3.0
         },
         "volume_limit_ml": 60,
@@ -3608,7 +3608,7 @@
       },
       {
         "name": "Infusing",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 6.0,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
@@ -3620,7 +3620,7 @@
       },
       {
         "name": "Pouring",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 1.8,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
@@ -3645,15 +3645,15 @@
     "steps": [
       {
         "name": "preinfusion temp boost",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 8.0,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 2.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
@@ -3661,15 +3661,15 @@
       },
       {
         "name": "preinfusion",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 8.0,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 18.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
@@ -3677,7 +3677,7 @@
       },
       {
         "name": "forced rise without limit",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 9.0,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
@@ -3689,7 +3689,7 @@
       },
       {
         "name": "rise and hold",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 9.0,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
@@ -3701,7 +3701,7 @@
       },
       {
         "name": "decline",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.0,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
@@ -3723,15 +3723,15 @@
     "steps": [
       {
         "name": "preinfusion temp boost",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 8.0,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 2.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
@@ -3739,15 +3739,15 @@
       },
       {
         "name": "preinfusion",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 8.0,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 18.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
@@ -3755,7 +3755,7 @@
       },
       {
         "name": "forced rise without limit",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 6.0,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
@@ -3767,7 +3767,7 @@
       },
       {
         "name": "rise and hold",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 6.0,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
@@ -3789,7 +3789,7 @@
     "steps": [
       {
         "name": "preinfusion start",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 8.0,
         "temperature_c": 86.0,
         "temp_sensor": "coffee",
@@ -3801,15 +3801,15 @@
       },
       {
         "name": "preinfusion",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 8.0,
         "temperature_c": 86.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 20.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 4.0
         },
         "volume_limit_ml": 100,
@@ -3817,15 +3817,15 @@
       },
       {
         "name": "dynamic bloom",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 0.0,
         "temperature_c": 70.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 40.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Under",
+          "metric": "pressure",
+          "compare": "under",
           "threshold": 2.2
         },
         "volume_limit_ml": 100,
@@ -3833,7 +3833,7 @@
       },
       {
         "name": "ramp",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 6.0,
         "temperature_c": 80.0,
         "temp_sensor": "coffee",
@@ -3845,15 +3845,15 @@
       },
       {
         "name": "6 bar",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 6.0,
         "temperature_c": 77.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 2.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Under",
+          "metric": "flow",
+          "compare": "under",
           "threshold": 0.0
         },
         "volume_limit_ml": 100,
@@ -3864,7 +3864,7 @@
       },
       {
         "name": "decline",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 3.0,
         "temperature_c": 77.0,
         "temp_sensor": "coffee",
@@ -3889,7 +3889,7 @@
     "steps": [
       {
         "name": "Fill start",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 6.0,
         "temperature_c": 86.0,
         "temp_sensor": "coffee",
@@ -3901,15 +3901,15 @@
       },
       {
         "name": "Fill",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 6.0,
         "temperature_c": 86.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 2.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 2.0
         },
         "volume_limit_ml": 0,
@@ -3917,15 +3917,15 @@
       },
       {
         "name": "PI",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 5.0,
         "temperature_c": 82.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 20.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
@@ -3933,7 +3933,7 @@
       },
       {
         "name": "rise and hold",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 6.0,
         "temperature_c": 77.0,
         "temp_sensor": "coffee",
@@ -3948,7 +3948,7 @@
       },
       {
         "name": "decline",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 4.0,
         "temperature_c": 77.0,
         "temp_sensor": "coffee",
@@ -3963,7 +3963,7 @@
       },
       {
         "name": "hold",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 4.0,
         "temperature_c": 77.0,
         "temp_sensor": "coffee",
@@ -3988,15 +3988,15 @@
     "steps": [
       {
         "name": "preinfusion temp boost",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 8.0,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 2.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
@@ -4004,15 +4004,15 @@
       },
       {
         "name": "preinfusion",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 8.0,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 18.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
@@ -4020,7 +4020,7 @@
       },
       {
         "name": "forced rise without limit",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 9.0,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
@@ -4032,7 +4032,7 @@
       },
       {
         "name": "rise and hold",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 9.0,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
@@ -4044,7 +4044,7 @@
       },
       {
         "name": "decline",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.0,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
@@ -4066,15 +4066,15 @@
     "steps": [
       {
         "name": "infuse",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 8.0,
         "temperature_c": 90.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 10.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 6.0
         },
         "volume_limit_ml": 0,
@@ -4082,7 +4082,7 @@
       },
       {
         "name": "rise and hold",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 9.0,
         "temperature_c": 90.0,
         "temp_sensor": "coffee",
@@ -4094,15 +4094,15 @@
       },
       {
         "name": "decline",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 6.0,
         "temperature_c": 90.0,
         "temp_sensor": "coffee",
         "transition": "smooth",
         "duration_seconds": 30.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Under",
+          "metric": "pressure",
+          "compare": "under",
           "threshold": 6.0
         },
         "volume_limit_ml": 0,
@@ -4113,7 +4113,7 @@
       },
       {
         "name": "flow limit",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 1.5,
         "temperature_c": 90.0,
         "temp_sensor": "coffee",
@@ -4138,15 +4138,15 @@
     "steps": [
       {
         "name": "preinfusion",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 4.0,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 15.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 4.0
         },
         "volume_limit_ml": 500,
@@ -4154,7 +4154,7 @@
       },
       {
         "name": "rise and hold",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 8.6,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
@@ -4166,15 +4166,15 @@
       },
       {
         "name": "Scan 6.0 mL.s",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 6.0,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 127.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Under",
+          "metric": "flow",
+          "compare": "under",
           "threshold": 5.9
         },
         "volume_limit_ml": 500,
@@ -4182,15 +4182,15 @@
       },
       {
         "name": "Scan 5.5 mL.s",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 5.5,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 127.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Under",
+          "metric": "flow",
+          "compare": "under",
           "threshold": 5.4
         },
         "volume_limit_ml": 500,
@@ -4198,15 +4198,15 @@
       },
       {
         "name": "Scan 5.2 mL.s",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 5.2,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 127.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Under",
+          "metric": "flow",
+          "compare": "under",
           "threshold": 5.1
         },
         "volume_limit_ml": 500,
@@ -4214,15 +4214,15 @@
       },
       {
         "name": "Scan 5.0 mL.s",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 5.0,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 127.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Under",
+          "metric": "flow",
+          "compare": "under",
           "threshold": 4.9
         },
         "volume_limit_ml": 500,
@@ -4230,15 +4230,15 @@
       },
       {
         "name": "Scan 4.9 mL.s",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 4.9,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 127.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Under",
+          "metric": "flow",
+          "compare": "under",
           "threshold": 4.8
         },
         "volume_limit_ml": 500,
@@ -4246,15 +4246,15 @@
       },
       {
         "name": "Scan 4.8 mL.s",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 4.8,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 127.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Under",
+          "metric": "flow",
+          "compare": "under",
           "threshold": 4.7
         },
         "volume_limit_ml": 500,
@@ -4262,15 +4262,15 @@
       },
       {
         "name": "Scan 4.7 mL.s",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 4.7,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 127.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Under",
+          "metric": "flow",
+          "compare": "under",
           "threshold": 4.6
         },
         "volume_limit_ml": 500,
@@ -4278,15 +4278,15 @@
       },
       {
         "name": "Scan 4.6 mL.s",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 4.6,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 127.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Under",
+          "metric": "flow",
+          "compare": "under",
           "threshold": 4.5
         },
         "volume_limit_ml": 500,
@@ -4294,15 +4294,15 @@
       },
       {
         "name": "Scan 4.5 mL.s",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 4.5,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 127.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Under",
+          "metric": "flow",
+          "compare": "under",
           "threshold": 4.4
         },
         "volume_limit_ml": 500,
@@ -4310,15 +4310,15 @@
       },
       {
         "name": "Scan 4.4 mL.s",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 4.4,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 127.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Under",
+          "metric": "flow",
+          "compare": "under",
           "threshold": 4.3
         },
         "volume_limit_ml": 500,
@@ -4326,15 +4326,15 @@
       },
       {
         "name": "Scan 4.3 mL.s",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 4.3,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 127.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Under",
+          "metric": "flow",
+          "compare": "under",
           "threshold": 4.2
         },
         "volume_limit_ml": 500,
@@ -4342,15 +4342,15 @@
       },
       {
         "name": "Scan 4.2 mL.s",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 4.2,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 127.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Under",
+          "metric": "flow",
+          "compare": "under",
           "threshold": 4.1
         },
         "volume_limit_ml": 500,
@@ -4358,15 +4358,15 @@
       },
       {
         "name": "Scan 4.1 mL.s",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 4.1,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 127.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Under",
+          "metric": "flow",
+          "compare": "under",
           "threshold": 4.0
         },
         "volume_limit_ml": 500,
@@ -4374,15 +4374,15 @@
       },
       {
         "name": "Scan 4.0 mL.s",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 4.0,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 127.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Under",
+          "metric": "flow",
+          "compare": "under",
           "threshold": 3.9
         },
         "volume_limit_ml": 500,
@@ -4390,15 +4390,15 @@
       },
       {
         "name": "Scan 3.8 mL.s",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 3.8,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 127.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Under",
+          "metric": "flow",
+          "compare": "under",
           "threshold": 3.7
         },
         "volume_limit_ml": 500,
@@ -4406,15 +4406,15 @@
       },
       {
         "name": "Scan 3.4 mL.s",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 3.4,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 127.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Under",
+          "metric": "flow",
+          "compare": "under",
           "threshold": 3.3
         },
         "volume_limit_ml": 500,
@@ -4422,15 +4422,15 @@
       },
       {
         "name": "Scan 3.0 mL.s",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 3.0,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 127.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Under",
+          "metric": "flow",
+          "compare": "under",
           "threshold": 2.9
         },
         "volume_limit_ml": 500,
@@ -4438,7 +4438,7 @@
       },
       {
         "name": "last resort",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 1.0,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
@@ -4460,15 +4460,15 @@
     "steps": [
       {
         "name": "preinfusion",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 3.5,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 15.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 4.0
         },
         "volume_limit_ml": 100,
@@ -4476,7 +4476,7 @@
       },
       {
         "name": "rise and hold",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 8.6,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
@@ -4488,15 +4488,15 @@
       },
       {
         "name": "Scan 3.5 mL.s",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 3.5,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 127.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Under",
+          "metric": "flow",
+          "compare": "under",
           "threshold": 3.4
         },
         "volume_limit_ml": 100,
@@ -4504,15 +4504,15 @@
       },
       {
         "name": "Scan 3.3 mL.s",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 3.3,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 127.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Under",
+          "metric": "flow",
+          "compare": "under",
           "threshold": 3.2
         },
         "volume_limit_ml": 100,
@@ -4520,15 +4520,15 @@
       },
       {
         "name": "Scan 3.1 mL.s",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 3.1,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 127.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Under",
+          "metric": "flow",
+          "compare": "under",
           "threshold": 3.0
         },
         "volume_limit_ml": 100,
@@ -4536,15 +4536,15 @@
       },
       {
         "name": "Scan 2.9 mL.s",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 2.9,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 127.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Under",
+          "metric": "flow",
+          "compare": "under",
           "threshold": 2.8
         },
         "volume_limit_ml": 100,
@@ -4552,15 +4552,15 @@
       },
       {
         "name": "Scan 2.7 mL.s",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 2.7,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 127.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Under",
+          "metric": "flow",
+          "compare": "under",
           "threshold": 2.6
         },
         "volume_limit_ml": 100,
@@ -4568,15 +4568,15 @@
       },
       {
         "name": "Scan 2.6 mL.s",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 2.6,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 127.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Under",
+          "metric": "flow",
+          "compare": "under",
           "threshold": 2.5
         },
         "volume_limit_ml": 100,
@@ -4584,15 +4584,15 @@
       },
       {
         "name": "Scan 2.5 mL.s",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 2.5,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 127.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Under",
+          "metric": "flow",
+          "compare": "under",
           "threshold": 2.4
         },
         "volume_limit_ml": 100,
@@ -4600,15 +4600,15 @@
       },
       {
         "name": "Scan 2.4 mL.s",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 2.4,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 127.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Under",
+          "metric": "flow",
+          "compare": "under",
           "threshold": 2.3
         },
         "volume_limit_ml": 100,
@@ -4616,15 +4616,15 @@
       },
       {
         "name": "Scan 2.3 mL.s",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 2.3,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 127.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Under",
+          "metric": "flow",
+          "compare": "under",
           "threshold": 2.2
         },
         "volume_limit_ml": 100,
@@ -4632,15 +4632,15 @@
       },
       {
         "name": "Scan 2.2 mL.s",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 2.2,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 127.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Under",
+          "metric": "flow",
+          "compare": "under",
           "threshold": 2.1
         },
         "volume_limit_ml": 100,
@@ -4648,15 +4648,15 @@
       },
       {
         "name": "Scan 2.1 mL.s",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 2.1,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 127.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Under",
+          "metric": "flow",
+          "compare": "under",
           "threshold": 2.0
         },
         "volume_limit_ml": 100,
@@ -4664,15 +4664,15 @@
       },
       {
         "name": "Scan 2.0 mL.s",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 2.0,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 127.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Under",
+          "metric": "flow",
+          "compare": "under",
           "threshold": 1.9
         },
         "volume_limit_ml": 100,
@@ -4680,15 +4680,15 @@
       },
       {
         "name": "Scan 1.8 mL.s",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 1.8,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 127.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Under",
+          "metric": "flow",
+          "compare": "under",
           "threshold": 1.7
         },
         "volume_limit_ml": 100,
@@ -4696,15 +4696,15 @@
       },
       {
         "name": "Scan 1.6 mL.s",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 1.6,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 127.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Under",
+          "metric": "flow",
+          "compare": "under",
           "threshold": 1.5
         },
         "volume_limit_ml": 100,
@@ -4712,15 +4712,15 @@
       },
       {
         "name": "Scan 1.4 mL.s",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 1.4,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 127.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Under",
+          "metric": "flow",
+          "compare": "under",
           "threshold": 1.3
         },
         "volume_limit_ml": 100,
@@ -4728,15 +4728,15 @@
       },
       {
         "name": "Scan 1.2 mL.s",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 1.2,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 127.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Under",
+          "metric": "flow",
+          "compare": "under",
           "threshold": 1.1
         },
         "volume_limit_ml": 100,
@@ -4744,15 +4744,15 @@
       },
       {
         "name": "Scan 1.0 mL.s",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 1.0,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 127.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Under",
+          "metric": "flow",
+          "compare": "under",
           "threshold": 0.9
         },
         "volume_limit_ml": 100,
@@ -4760,7 +4760,7 @@
       },
       {
         "name": "last resort",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 0.5,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
@@ -4782,7 +4782,7 @@
     "steps": [
       {
         "name": "Prefill",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 8.0,
         "temperature_c": 93.0,
         "temp_sensor": "coffee",
@@ -4794,15 +4794,15 @@
       },
       {
         "name": "Fill",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 8.0,
         "temperature_c": 93.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 12.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 3.0
         },
         "volume_limit_ml": 100,
@@ -4810,15 +4810,15 @@
       },
       {
         "name": "Compressing",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 3.0,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 12.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Under",
+          "metric": "flow",
+          "compare": "under",
           "threshold": 3.0
         },
         "volume_limit_ml": 100,
@@ -4826,7 +4826,7 @@
       },
       {
         "name": "Dripping",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.1,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
@@ -4838,15 +4838,15 @@
       },
       {
         "name": "Pressurize",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 11.0,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
         "transition": "smooth",
         "duration_seconds": 6.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 8.8
         },
         "volume_limit_ml": 100,
@@ -4857,15 +4857,15 @@
       },
       {
         "name": "Extraction start",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 1.5,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 0.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 0.0
         },
         "volume_limit_ml": 0,
@@ -4876,7 +4876,7 @@
       },
       {
         "name": "Extraction",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 3.5,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
@@ -4901,15 +4901,15 @@
     "steps": [
       {
         "name": "Preinfusion fill",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 3.0,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 12.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 3.0
         },
         "volume_limit_ml": 100,
@@ -4917,15 +4917,15 @@
       },
       {
         "name": "Preinfusion fill end",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 3.0,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 12.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Under",
+          "metric": "flow",
+          "compare": "under",
           "threshold": 1.0
         },
         "volume_limit_ml": 100,
@@ -4933,7 +4933,7 @@
       },
       {
         "name": "Preinfusion dripping",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 1.5,
         "temperature_c": 90.0,
         "temp_sensor": "coffee",
@@ -4945,15 +4945,15 @@
       },
       {
         "name": "Pressurize",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 10.5,
         "temperature_c": 90.0,
         "temp_sensor": "coffee",
         "transition": "smooth",
         "duration_seconds": 6.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 8.0
         },
         "volume_limit_ml": 100,
@@ -4961,7 +4961,7 @@
       },
       {
         "name": "Extraction",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 3.4,
         "temperature_c": 90.0,
         "temp_sensor": "coffee",
@@ -4986,15 +4986,15 @@
     "steps": [
       {
         "name": "Pressure rise 1",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 4.0,
         "temperature_c": 85.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 15.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 7.0
         },
         "volume_limit_ml": 500,
@@ -5002,7 +5002,7 @@
       },
       {
         "name": "Pause 1",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.0,
         "temperature_c": 85.0,
         "temp_sensor": "coffee",
@@ -5014,15 +5014,15 @@
       },
       {
         "name": "Pressure rise 2",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 6.5,
         "temperature_c": 85.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 15.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 7.0
         },
         "volume_limit_ml": 500,
@@ -5030,7 +5030,7 @@
       },
       {
         "name": "Pause 2",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.0,
         "temperature_c": 85.0,
         "temp_sensor": "coffee",
@@ -5042,15 +5042,15 @@
       },
       {
         "name": "Pressure rise 3",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 6.5,
         "temperature_c": 85.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 15.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 7.0
         },
         "volume_limit_ml": 500,
@@ -5068,7 +5068,7 @@
     "steps": [
       {
         "name": "preinfusion",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 6.0,
         "temperature_c": 20.0,
         "temp_sensor": "coffee",
@@ -5080,7 +5080,7 @@
       },
       {
         "name": "bloom*",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.0,
         "temperature_c": 20.0,
         "temp_sensor": "coffee",
@@ -5092,7 +5092,7 @@
       },
       {
         "name": "pulse",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 2.5,
         "temperature_c": 20.0,
         "temp_sensor": "coffee",
@@ -5104,7 +5104,7 @@
       },
       {
         "name": "pause",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.0,
         "temperature_c": 20.0,
         "temp_sensor": "coffee",
@@ -5116,7 +5116,7 @@
       },
       {
         "name": "pulse",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 2.0,
         "temperature_c": 20.0,
         "temp_sensor": "coffee",
@@ -5128,7 +5128,7 @@
       },
       {
         "name": "pause",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.0,
         "temperature_c": 20.0,
         "temp_sensor": "coffee",
@@ -5140,7 +5140,7 @@
       },
       {
         "name": "pulse",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 2.0,
         "temperature_c": 20.0,
         "temp_sensor": "coffee",
@@ -5152,7 +5152,7 @@
       },
       {
         "name": "pulse*",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 0.1,
         "temperature_c": 20.0,
         "temp_sensor": "coffee",
@@ -5174,15 +5174,15 @@
     "steps": [
       {
         "name": "preinfusion temp boost",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 8.0,
         "temperature_c": 90.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 2.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
@@ -5190,15 +5190,15 @@
       },
       {
         "name": "preinfusion",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 8.0,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 18.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
@@ -5206,7 +5206,7 @@
       },
       {
         "name": "forced rise without limit",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 8.6,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
@@ -5218,7 +5218,7 @@
       },
       {
         "name": "rise and hold",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 8.6,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
@@ -5230,7 +5230,7 @@
       },
       {
         "name": "forced rise without limit",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 8.6,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
@@ -5242,7 +5242,7 @@
       },
       {
         "name": "decline",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 6.0,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
@@ -5264,15 +5264,15 @@
     "steps": [
       {
         "name": "preinfusion temp boost",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 4.0,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 2.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
@@ -5280,7 +5280,7 @@
       },
       {
         "name": "forced rise without limit",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 9.0,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
@@ -5292,7 +5292,7 @@
       },
       {
         "name": "rise and hold",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 9.0,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
@@ -5314,15 +5314,15 @@
     "steps": [
       {
         "name": "preinfusion temp boost",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 8.0,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 2.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
@@ -5330,15 +5330,15 @@
       },
       {
         "name": "preinfusion",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 8.0,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 8.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
@@ -5346,7 +5346,7 @@
       },
       {
         "name": "forced rise without limit",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 9.0,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
@@ -5358,7 +5358,7 @@
       },
       {
         "name": "rise and hold",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 9.0,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
@@ -5370,7 +5370,7 @@
       },
       {
         "name": "forced rise without limit",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 9.0,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
@@ -5382,7 +5382,7 @@
       },
       {
         "name": "decline",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 10.0,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
@@ -5404,15 +5404,15 @@
     "steps": [
       {
         "name": "preinfusion temp boost",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 8.0,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 2.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
@@ -5420,15 +5420,15 @@
       },
       {
         "name": "preinfusion",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 8.0,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 8.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
@@ -5436,7 +5436,7 @@
       },
       {
         "name": "forced rise without limit",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 10.0,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
@@ -5448,7 +5448,7 @@
       },
       {
         "name": "rise and hold",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 10.0,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
@@ -5470,15 +5470,15 @@
     "steps": [
       {
         "name": "preinfusion temp boost",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 8.0,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 2.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
@@ -5486,15 +5486,15 @@
       },
       {
         "name": "preinfusion",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 8.0,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 4.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
@@ -5502,7 +5502,7 @@
       },
       {
         "name": "forced rise without limit",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 9.0,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
@@ -5514,7 +5514,7 @@
       },
       {
         "name": "rise and hold",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 9.0,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
@@ -5536,7 +5536,7 @@
     "steps": [
       {
         "name": "preinfusion start",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 6.0,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
@@ -5548,15 +5548,15 @@
       },
       {
         "name": "preinfusion",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 6.0,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 20.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 4.0
         },
         "volume_limit_ml": 100,
@@ -5564,15 +5564,15 @@
       },
       {
         "name": "dynamic bloom",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 0.0,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 60.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Under",
+          "metric": "pressure",
+          "compare": "under",
           "threshold": 2.0
         },
         "volume_limit_ml": 100,
@@ -5580,7 +5580,7 @@
       },
       {
         "name": "fast pressure",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 7.0,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
@@ -5592,15 +5592,15 @@
       },
       {
         "name": "pressure hold 1",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 7.0,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 4.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Over",
+          "metric": "flow",
+          "compare": "over",
           "threshold": 1.6
         },
         "volume_limit_ml": 100,
@@ -5608,15 +5608,15 @@
       },
       {
         "name": "P fast decline 1",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 5.7,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
         "transition": "smooth",
         "duration_seconds": 5.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Under",
+          "metric": "flow",
+          "compare": "under",
           "threshold": 1.4
         },
         "volume_limit_ml": 100,
@@ -5624,15 +5624,15 @@
       },
       {
         "name": "P fast decline 2",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 5.9,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 40.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Under",
+          "metric": "flow",
+          "compare": "under",
           "threshold": 1.4
         },
         "volume_limit_ml": 100,
@@ -5640,15 +5640,15 @@
       },
       {
         "name": "pressure hold 2",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 7.0,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 8.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Over",
+          "metric": "flow",
+          "compare": "over",
           "threshold": 1.9
         },
         "volume_limit_ml": 100,
@@ -5656,15 +5656,15 @@
       },
       {
         "name": "P decline 1",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 5.8,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
         "transition": "smooth",
         "duration_seconds": 8.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Under",
+          "metric": "flow",
+          "compare": "under",
           "threshold": 1.7
         },
         "volume_limit_ml": 100,
@@ -5672,15 +5672,15 @@
       },
       {
         "name": "P decline 2",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 5.9,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 40.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Under",
+          "metric": "flow",
+          "compare": "under",
           "threshold": 1.7
         },
         "volume_limit_ml": 100,
@@ -5688,15 +5688,15 @@
       },
       {
         "name": "pressure hold 3",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 7.0,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 30.0,
         "exit": {
-          "metric": "Flow",
-          "compare": "Over",
+          "metric": "flow",
+          "compare": "over",
           "threshold": 2.2
         },
         "volume_limit_ml": 100,
@@ -5704,7 +5704,7 @@
       },
       {
         "name": "P slow decline",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 5.9,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
@@ -5726,7 +5726,7 @@
     "steps": [
       {
         "name": "Prewet",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 5.0,
         "temperature_c": 94.0,
         "temp_sensor": "water",
@@ -5741,7 +5741,7 @@
       },
       {
         "name": "Bloom",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 0.0,
         "temperature_c": 94.0,
         "temp_sensor": "water",
@@ -5753,7 +5753,7 @@
       },
       {
         "name": "Wet 1a",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 1.1,
         "temperature_c": 92.0,
         "temp_sensor": "water",
@@ -5765,7 +5765,7 @@
       },
       {
         "name": "Wet 1b",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 1.1,
         "temperature_c": 92.0,
         "temp_sensor": "water",
@@ -5777,7 +5777,7 @@
       },
       {
         "name": "Wet 2",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 1.1,
         "temperature_c": 90.0,
         "temp_sensor": "water",
@@ -5789,7 +5789,7 @@
       },
       {
         "name": "Wet 3",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 1.1,
         "temperature_c": 88.0,
         "temp_sensor": "water",
@@ -5801,7 +5801,7 @@
       },
       {
         "name": "Drawdown",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 0.0,
         "temperature_c": 88.0,
         "temp_sensor": "water",
@@ -5823,7 +5823,7 @@
     "steps": [
       {
         "name": "1 bar",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 1.0,
         "temperature_c": 90.0,
         "temp_sensor": "coffee",
@@ -5835,7 +5835,7 @@
       },
       {
         "name": "2 bar",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 2.0,
         "temperature_c": 90.0,
         "temp_sensor": "coffee",
@@ -5847,7 +5847,7 @@
       },
       {
         "name": "3 bar",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 3.0,
         "temperature_c": 90.0,
         "temp_sensor": "coffee",
@@ -5859,7 +5859,7 @@
       },
       {
         "name": "4 bar",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 4.0,
         "temperature_c": 90.0,
         "temp_sensor": "coffee",
@@ -5871,7 +5871,7 @@
       },
       {
         "name": "5 bar",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 5.0,
         "temperature_c": 90.0,
         "temp_sensor": "coffee",
@@ -5883,7 +5883,7 @@
       },
       {
         "name": "6 bar",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 6.0,
         "temperature_c": 90.0,
         "temp_sensor": "coffee",
@@ -5895,7 +5895,7 @@
       },
       {
         "name": "7 bar",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 7.0,
         "temperature_c": 90.0,
         "temp_sensor": "coffee",
@@ -5907,7 +5907,7 @@
       },
       {
         "name": "8 bar",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 8.0,
         "temperature_c": 90.0,
         "temp_sensor": "coffee",
@@ -5919,7 +5919,7 @@
       },
       {
         "name": "9 bar",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 9.0,
         "temperature_c": 90.0,
         "temp_sensor": "coffee",
@@ -5941,7 +5941,7 @@
     "steps": [
       {
         "name": "preinfusion",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 6.0,
         "temperature_c": 100.0,
         "temp_sensor": "coffee",
@@ -5953,7 +5953,7 @@
       },
       {
         "name": "bloom*",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.0,
         "temperature_c": 100.0,
         "temp_sensor": "coffee",
@@ -5965,7 +5965,7 @@
       },
       {
         "name": "pulse",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 6.0,
         "temperature_c": 100.0,
         "temp_sensor": "coffee",
@@ -5977,7 +5977,7 @@
       },
       {
         "name": "pause",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.0,
         "temperature_c": 100.0,
         "temp_sensor": "coffee",
@@ -5989,7 +5989,7 @@
       },
       {
         "name": "pulse",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 6.0,
         "temperature_c": 100.0,
         "temp_sensor": "coffee",
@@ -6001,7 +6001,7 @@
       },
       {
         "name": "pause",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.0,
         "temperature_c": 100.0,
         "temp_sensor": "coffee",
@@ -6013,7 +6013,7 @@
       },
       {
         "name": "pulse",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 6.0,
         "temperature_c": 100.0,
         "temp_sensor": "coffee",
@@ -6025,7 +6025,7 @@
       },
       {
         "name": "[ spin at end]*",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 0.1,
         "temperature_c": 100.0,
         "temp_sensor": "coffee",
@@ -6047,7 +6047,7 @@
     "steps": [
       {
         "name": "hold",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 0.0,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
@@ -6062,7 +6062,7 @@
       },
       {
         "name": "decline",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 0.0,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
@@ -6087,7 +6087,7 @@
     "steps": [
       {
         "name": "forced rise without limit",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.0,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
@@ -6099,7 +6099,7 @@
       },
       {
         "name": "rise and hold",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.0,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
@@ -6111,7 +6111,7 @@
       },
       {
         "name": "decline",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.0,
         "temperature_c": 88.0,
         "temp_sensor": "coffee",
@@ -6133,7 +6133,7 @@
     "steps": [
       {
         "name": "hold at 4.5 ml/s",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 4.5,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
@@ -6148,7 +6148,7 @@
       },
       {
         "name": "hold at 4.5 ml/s",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 4.5,
         "temperature_c": 92.0,
         "temp_sensor": "coffee",
@@ -6173,7 +6173,7 @@
     "steps": [
       {
         "name": "preinfusion boost",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 4.0,
         "temperature_c": 100.0,
         "temp_sensor": "water",
@@ -6185,7 +6185,7 @@
       },
       {
         "name": "flow",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 0.5,
         "temperature_c": 100.0,
         "temp_sensor": "water",
@@ -6197,7 +6197,7 @@
       },
       {
         "name": "hold",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 0.0,
         "temperature_c": 100.0,
         "temp_sensor": "water",
@@ -6209,7 +6209,7 @@
       },
       {
         "name": "flow",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 3.0,
         "temperature_c": 100.0,
         "temp_sensor": "water",
@@ -6221,7 +6221,7 @@
       },
       {
         "name": "hold",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 0.0,
         "temperature_c": 100.0,
         "temp_sensor": "water",
@@ -6233,7 +6233,7 @@
       },
       {
         "name": "flow",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 3.0,
         "temperature_c": 100.0,
         "temp_sensor": "water",
@@ -6245,7 +6245,7 @@
       },
       {
         "name": "hold",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 0.0,
         "temperature_c": 100.0,
         "temp_sensor": "water",
@@ -6257,7 +6257,7 @@
       },
       {
         "name": "flow",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 3.0,
         "temperature_c": 100.0,
         "temp_sensor": "water",
@@ -6269,7 +6269,7 @@
       },
       {
         "name": "hold",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 0.0,
         "temperature_c": 100.0,
         "temp_sensor": "water",
@@ -6281,7 +6281,7 @@
       },
       {
         "name": "flow",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 3.0,
         "temperature_c": 100.0,
         "temp_sensor": "water",
@@ -6293,7 +6293,7 @@
       },
       {
         "name": "hold",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 0.1,
         "temperature_c": 100.0,
         "temp_sensor": "water",
@@ -6305,7 +6305,7 @@
       },
       {
         "name": "flow",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 3.0,
         "temperature_c": 100.0,
         "temp_sensor": "water",
@@ -6317,7 +6317,7 @@
       },
       {
         "name": "hold",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 0.0,
         "temperature_c": 100.0,
         "temp_sensor": "water",
@@ -6329,7 +6329,7 @@
       },
       {
         "name": "flow",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 3.0,
         "temperature_c": 100.0,
         "temp_sensor": "water",
@@ -6341,7 +6341,7 @@
       },
       {
         "name": "flow",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 0.0,
         "temperature_c": 100.0,
         "temp_sensor": "water",
@@ -6353,7 +6353,7 @@
       },
       {
         "name": "flow",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 3.0,
         "temperature_c": 100.0,
         "temp_sensor": "water",
@@ -6375,15 +6375,15 @@
     "steps": [
       {
         "name": "Fill",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 11.0,
         "temperature_c": 105.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 20.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 2.0
         },
         "volume_limit_ml": 500,
@@ -6391,7 +6391,7 @@
       },
       {
         "name": "Infuse",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.1,
         "temperature_c": 105.0,
         "temp_sensor": "coffee",
@@ -6403,7 +6403,7 @@
       },
       {
         "name": "Flush",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 11.0,
         "temperature_c": 105.0,
         "temp_sensor": "coffee",
@@ -6415,7 +6415,7 @@
       },
       {
         "name": "Infuse",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.1,
         "temperature_c": 105.0,
         "temp_sensor": "coffee",
@@ -6427,7 +6427,7 @@
       },
       {
         "name": "Flush",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 11.0,
         "temperature_c": 105.0,
         "temp_sensor": "coffee",
@@ -6439,7 +6439,7 @@
       },
       {
         "name": "Infuse",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.1,
         "temperature_c": 105.0,
         "temp_sensor": "coffee",
@@ -6451,7 +6451,7 @@
       },
       {
         "name": "Flush",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 11.0,
         "temperature_c": 105.0,
         "temp_sensor": "coffee",
@@ -6463,7 +6463,7 @@
       },
       {
         "name": "Flush cooler",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 11.0,
         "temperature_c": 40.0,
         "temp_sensor": "coffee",
@@ -6485,15 +6485,15 @@
     "steps": [
       {
         "name": "Fill",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 11.0,
         "temperature_c": 80.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 20.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 2.0
         },
         "volume_limit_ml": 500,
@@ -6501,7 +6501,7 @@
       },
       {
         "name": "Infuse",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.1,
         "temperature_c": 80.0,
         "temp_sensor": "coffee",
@@ -6513,7 +6513,7 @@
       },
       {
         "name": "Flush",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 11.0,
         "temperature_c": 80.0,
         "temp_sensor": "coffee",
@@ -6525,7 +6525,7 @@
       },
       {
         "name": "Infuse",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.1,
         "temperature_c": 80.0,
         "temp_sensor": "coffee",
@@ -6537,7 +6537,7 @@
       },
       {
         "name": "Flush",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 11.0,
         "temperature_c": 80.0,
         "temp_sensor": "coffee",
@@ -6549,7 +6549,7 @@
       },
       {
         "name": "Infuse",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.1,
         "temperature_c": 80.0,
         "temp_sensor": "coffee",
@@ -6561,7 +6561,7 @@
       },
       {
         "name": "Flush",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 11.0,
         "temperature_c": 80.0,
         "temp_sensor": "coffee",
@@ -6573,7 +6573,7 @@
       },
       {
         "name": "Flush cooler",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 11.0,
         "temperature_c": 40.0,
         "temp_sensor": "coffee",
@@ -6595,15 +6595,15 @@
     "steps": [
       {
         "name": "Fill",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 11.0,
         "temperature_c": 74.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 20.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 2.0
         },
         "volume_limit_ml": 500,
@@ -6611,7 +6611,7 @@
       },
       {
         "name": "Infuse",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.1,
         "temperature_c": 74.0,
         "temp_sensor": "coffee",
@@ -6623,7 +6623,7 @@
       },
       {
         "name": "Flush",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 11.0,
         "temperature_c": 74.0,
         "temp_sensor": "coffee",
@@ -6635,7 +6635,7 @@
       },
       {
         "name": "Infuse",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.1,
         "temperature_c": 74.0,
         "temp_sensor": "coffee",
@@ -6647,7 +6647,7 @@
       },
       {
         "name": "Flush",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 11.0,
         "temperature_c": 74.0,
         "temp_sensor": "coffee",
@@ -6659,7 +6659,7 @@
       },
       {
         "name": "Infuse",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.1,
         "temperature_c": 74.0,
         "temp_sensor": "coffee",
@@ -6671,7 +6671,7 @@
       },
       {
         "name": "Flush",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 11.0,
         "temperature_c": 74.0,
         "temp_sensor": "coffee",
@@ -6683,7 +6683,7 @@
       },
       {
         "name": "Flush cooler",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 11.0,
         "temperature_c": 40.0,
         "temp_sensor": "coffee",
@@ -6705,15 +6705,15 @@
     "steps": [
       {
         "name": "Fill",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 8.0,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 20.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 1.0
         },
         "volume_limit_ml": 500,
@@ -6721,7 +6721,7 @@
       },
       {
         "name": "Release pressure",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.0,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
@@ -6733,7 +6733,7 @@
       },
       {
         "name": "Infuse",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 0.0,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
@@ -6745,7 +6745,7 @@
       },
       {
         "name": "Flush",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 7.0,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
@@ -6757,7 +6757,7 @@
       },
       {
         "name": "Release pressure",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.0,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
@@ -6769,7 +6769,7 @@
       },
       {
         "name": "Infuse",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 0.0,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
@@ -6781,7 +6781,7 @@
       },
       {
         "name": "Flush",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 7.0,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
@@ -6793,7 +6793,7 @@
       },
       {
         "name": "Release pressure",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.0,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
@@ -6805,7 +6805,7 @@
       },
       {
         "name": "Infuse",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 0.0,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
@@ -6817,7 +6817,7 @@
       },
       {
         "name": "Flush",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 7.0,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
@@ -6829,7 +6829,7 @@
       },
       {
         "name": "Flush cooler",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 6.0,
         "temperature_c": 40.0,
         "temp_sensor": "coffee",
@@ -6851,15 +6851,15 @@
     "steps": [
       {
         "name": "Fill",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 11.0,
         "temperature_c": 89.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 20.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 2.0
         },
         "volume_limit_ml": 500,
@@ -6867,7 +6867,7 @@
       },
       {
         "name": "Infuse",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.1,
         "temperature_c": 89.0,
         "temp_sensor": "coffee",
@@ -6879,7 +6879,7 @@
       },
       {
         "name": "Flush",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 11.0,
         "temperature_c": 89.0,
         "temp_sensor": "coffee",
@@ -6891,7 +6891,7 @@
       },
       {
         "name": "Infuse",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.1,
         "temperature_c": 89.0,
         "temp_sensor": "coffee",
@@ -6903,7 +6903,7 @@
       },
       {
         "name": "Flush",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 11.0,
         "temperature_c": 89.0,
         "temp_sensor": "coffee",
@@ -6915,7 +6915,7 @@
       },
       {
         "name": "Infuse",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.1,
         "temperature_c": 89.0,
         "temp_sensor": "coffee",
@@ -6927,7 +6927,7 @@
       },
       {
         "name": "Flush",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 11.0,
         "temperature_c": 89.0,
         "temp_sensor": "coffee",
@@ -6939,7 +6939,7 @@
       },
       {
         "name": "Flush cooler",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 11.0,
         "temperature_c": 40.0,
         "temp_sensor": "coffee",
@@ -6961,15 +6961,15 @@
     "steps": [
       {
         "name": "Fill",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 4.0,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 20.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 3.0
         },
         "volume_limit_ml": 500,
@@ -6977,7 +6977,7 @@
       },
       {
         "name": "Infuse",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.1,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
@@ -6989,7 +6989,7 @@
       },
       {
         "name": "Flush",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 11.0,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
@@ -7001,7 +7001,7 @@
       },
       {
         "name": "Infuse",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.1,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
@@ -7013,7 +7013,7 @@
       },
       {
         "name": "Flush",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 11.0,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
@@ -7025,7 +7025,7 @@
       },
       {
         "name": "infuse",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.1,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
@@ -7037,7 +7037,7 @@
       },
       {
         "name": "Flush",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 11.0,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
@@ -7049,7 +7049,7 @@
       },
       {
         "name": "Infuse",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.1,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
@@ -7061,7 +7061,7 @@
       },
       {
         "name": "Flush",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 11.0,
         "temperature_c": 94.0,
         "temp_sensor": "coffee",
@@ -7083,15 +7083,15 @@
     "steps": [
       {
         "name": "Fill",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 10.0,
         "temperature_c": 100.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 20.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 2.0
         },
         "volume_limit_ml": 500,
@@ -7099,7 +7099,7 @@
       },
       {
         "name": "Infuse",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 2.0,
         "temperature_c": 105.0,
         "temp_sensor": "coffee",
@@ -7111,7 +7111,7 @@
       },
       {
         "name": "Flush",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 10.0,
         "temperature_c": 105.0,
         "temp_sensor": "coffee",
@@ -7123,7 +7123,7 @@
       },
       {
         "name": "Infuse",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 2.0,
         "temperature_c": 105.0,
         "temp_sensor": "coffee",
@@ -7135,7 +7135,7 @@
       },
       {
         "name": "Flush",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 10.0,
         "temperature_c": 105.0,
         "temp_sensor": "coffee",
@@ -7147,7 +7147,7 @@
       },
       {
         "name": "Infuse",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 2.0,
         "temperature_c": 105.0,
         "temp_sensor": "coffee",
@@ -7159,7 +7159,7 @@
       },
       {
         "name": "Flush",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 11.0,
         "temperature_c": 105.0,
         "temp_sensor": "coffee",
@@ -7181,15 +7181,15 @@
     "steps": [
       {
         "name": "Fill",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 11.0,
         "temperature_c": 100.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 20.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 2.0
         },
         "volume_limit_ml": 500,
@@ -7197,7 +7197,7 @@
       },
       {
         "name": "Infuse",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.1,
         "temperature_c": 100.0,
         "temp_sensor": "coffee",
@@ -7209,7 +7209,7 @@
       },
       {
         "name": "Flush",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 11.0,
         "temperature_c": 100.0,
         "temp_sensor": "coffee",
@@ -7221,7 +7221,7 @@
       },
       {
         "name": "Infuse",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.1,
         "temperature_c": 100.0,
         "temp_sensor": "coffee",
@@ -7233,7 +7233,7 @@
       },
       {
         "name": "Flush",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 11.0,
         "temperature_c": 100.0,
         "temp_sensor": "coffee",
@@ -7245,7 +7245,7 @@
       },
       {
         "name": "Infuse",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.1,
         "temperature_c": 100.0,
         "temp_sensor": "coffee",
@@ -7257,7 +7257,7 @@
       },
       {
         "name": "Flush",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 11.0,
         "temperature_c": 100.0,
         "temp_sensor": "coffee",
@@ -7269,7 +7269,7 @@
       },
       {
         "name": "Flush cooler",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 11.0,
         "temperature_c": 40.0,
         "temp_sensor": "coffee",
@@ -7291,15 +7291,15 @@
     "steps": [
       {
         "name": "Fill",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 11.0,
         "temperature_c": 80.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 20.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 2.0
         },
         "volume_limit_ml": 500,
@@ -7307,7 +7307,7 @@
       },
       {
         "name": "Infuse",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.1,
         "temperature_c": 80.0,
         "temp_sensor": "coffee",
@@ -7319,7 +7319,7 @@
       },
       {
         "name": "Flush",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 11.0,
         "temperature_c": 80.0,
         "temp_sensor": "coffee",
@@ -7331,7 +7331,7 @@
       },
       {
         "name": "Infuse",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.1,
         "temperature_c": 80.0,
         "temp_sensor": "coffee",
@@ -7343,7 +7343,7 @@
       },
       {
         "name": "Flush",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 11.0,
         "temperature_c": 80.0,
         "temp_sensor": "coffee",
@@ -7355,7 +7355,7 @@
       },
       {
         "name": "Infuse",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.1,
         "temperature_c": 80.0,
         "temp_sensor": "coffee",
@@ -7367,7 +7367,7 @@
       },
       {
         "name": "Flush",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 11.0,
         "temperature_c": 80.0,
         "temp_sensor": "coffee",
@@ -7379,7 +7379,7 @@
       },
       {
         "name": "Flush cooler",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 11.0,
         "temperature_c": 40.0,
         "temp_sensor": "coffee",
@@ -7401,15 +7401,15 @@
     "steps": [
       {
         "name": "preinfusion to 0.5 bar",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 1.0,
         "temperature_c": 0.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 60.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 0.5
         },
         "volume_limit_ml": 500,
@@ -7417,7 +7417,7 @@
       },
       {
         "name": "rise to 0.5 bar and hold",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.5,
         "temperature_c": 0.0,
         "temp_sensor": "coffee",
@@ -7429,7 +7429,7 @@
       },
       {
         "name": "rise to 0.5 bar and hold",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.5,
         "temperature_c": 0.0,
         "temp_sensor": "coffee",
@@ -7441,7 +7441,7 @@
       },
       {
         "name": "rise to 0.5 bar and hold",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.5,
         "temperature_c": 0.0,
         "temp_sensor": "coffee",
@@ -7453,7 +7453,7 @@
       },
       {
         "name": "rise to 0.5 bar and hold",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.5,
         "temperature_c": 0.0,
         "temp_sensor": "coffee",
@@ -7465,7 +7465,7 @@
       },
       {
         "name": "rise to 0.5 bar and hold",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.5,
         "temperature_c": 0.0,
         "temp_sensor": "coffee",
@@ -7477,7 +7477,7 @@
       },
       {
         "name": "rise to 0.5 bar and hold",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.5,
         "temperature_c": 0.0,
         "temp_sensor": "coffee",
@@ -7489,7 +7489,7 @@
       },
       {
         "name": "rise to 0.5 bar and hold",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.5,
         "temperature_c": 0.0,
         "temp_sensor": "coffee",
@@ -7511,7 +7511,7 @@
     "steps": [
       {
         "name": "preinfusion",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 10.0,
         "temperature_c": 0.0,
         "temp_sensor": "coffee",
@@ -7523,7 +7523,7 @@
       },
       {
         "name": "rise and hold",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 10.0,
         "temperature_c": 0.0,
         "temp_sensor": "coffee",
@@ -7535,7 +7535,7 @@
       },
       {
         "name": "hold at no flow",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 0.0,
         "temperature_c": 0.0,
         "temp_sensor": "coffee",
@@ -7557,15 +7557,15 @@
     "steps": [
       {
         "name": "fast rise",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 7.0,
         "temperature_c": 1.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 20.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 7.0
         },
         "volume_limit_ml": 500,
@@ -7573,7 +7573,7 @@
       },
       {
         "name": "final slow rise",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 9.0,
         "temperature_c": 1.0,
         "temp_sensor": "coffee",
@@ -7585,7 +7585,7 @@
       },
       {
         "name": "hold",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 9.0,
         "temperature_c": 1.0,
         "temp_sensor": "coffee",
@@ -7607,7 +7607,7 @@
     "steps": [
       {
         "name": "Pressure up",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 12.0,
         "temperature_c": 1.0,
         "temp_sensor": "coffee",
@@ -7619,7 +7619,7 @@
       },
       {
         "name": "Pressure release",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.0,
         "temperature_c": 1.0,
         "temp_sensor": "coffee",
@@ -7631,7 +7631,7 @@
       },
       {
         "name": "Pressure up",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 12.0,
         "temperature_c": 1.0,
         "temp_sensor": "coffee",
@@ -7643,7 +7643,7 @@
       },
       {
         "name": "Pressure release",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.0,
         "temperature_c": 1.0,
         "temp_sensor": "coffee",
@@ -7655,7 +7655,7 @@
       },
       {
         "name": "Pressure up",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 12.0,
         "temperature_c": 1.0,
         "temp_sensor": "coffee",
@@ -7667,7 +7667,7 @@
       },
       {
         "name": "Pressure release",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.0,
         "temperature_c": 1.0,
         "temp_sensor": "coffee",
@@ -7679,7 +7679,7 @@
       },
       {
         "name": "Pressure up",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 12.0,
         "temperature_c": 1.0,
         "temp_sensor": "coffee",
@@ -7691,7 +7691,7 @@
       },
       {
         "name": "Pressure release",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.0,
         "temperature_c": 1.0,
         "temp_sensor": "coffee",
@@ -7703,7 +7703,7 @@
       },
       {
         "name": "Pressure up",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 12.0,
         "temperature_c": 1.0,
         "temp_sensor": "coffee",
@@ -7715,7 +7715,7 @@
       },
       {
         "name": "Pressure release",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.0,
         "temperature_c": 1.0,
         "temp_sensor": "coffee",
@@ -7727,7 +7727,7 @@
       },
       {
         "name": "Pressure up",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 12.0,
         "temperature_c": 1.0,
         "temp_sensor": "coffee",
@@ -7739,7 +7739,7 @@
       },
       {
         "name": "Pressure release",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.0,
         "temperature_c": 1.0,
         "temp_sensor": "coffee",
@@ -7751,7 +7751,7 @@
       },
       {
         "name": "Pressure up",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 12.0,
         "temperature_c": 1.0,
         "temp_sensor": "coffee",
@@ -7763,7 +7763,7 @@
       },
       {
         "name": "Pressure release",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.0,
         "temperature_c": 1.0,
         "temp_sensor": "coffee",
@@ -7775,7 +7775,7 @@
       },
       {
         "name": "Pressure up",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 12.0,
         "temperature_c": 1.0,
         "temp_sensor": "coffee",
@@ -7787,7 +7787,7 @@
       },
       {
         "name": "Pressure release",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.0,
         "temperature_c": 1.0,
         "temp_sensor": "coffee",
@@ -7799,7 +7799,7 @@
       },
       {
         "name": "Pressure up",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 12.0,
         "temperature_c": 1.0,
         "temp_sensor": "coffee",
@@ -7811,7 +7811,7 @@
       },
       {
         "name": "Pressure release",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.0,
         "temperature_c": 1.0,
         "temp_sensor": "coffee",
@@ -7823,7 +7823,7 @@
       },
       {
         "name": "Pressure up",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 12.0,
         "temperature_c": 1.0,
         "temp_sensor": "coffee",
@@ -7845,7 +7845,7 @@
     "steps": [
       {
         "name": "90c",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 4.0,
         "temperature_c": 90.0,
         "temp_sensor": "coffee",
@@ -7857,7 +7857,7 @@
       },
       {
         "name": "80c",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 4.0,
         "temperature_c": 80.0,
         "temp_sensor": "coffee",
@@ -7869,7 +7869,7 @@
       },
       {
         "name": "70c",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 4.0,
         "temperature_c": 70.0,
         "temp_sensor": "coffee",
@@ -7891,7 +7891,7 @@
     "steps": [
       {
         "name": "hold",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 3.0,
         "temperature_c": 90.0,
         "temp_sensor": "coffee",
@@ -7903,7 +7903,7 @@
       },
       {
         "name": "decline",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 1.0,
         "temperature_c": 90.0,
         "temp_sensor": "coffee",
@@ -7925,7 +7925,7 @@
     "steps": [
       {
         "name": "preinfusion",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 8.0,
         "temperature_c": 100.0,
         "temp_sensor": "coffee",
@@ -7937,7 +7937,7 @@
       },
       {
         "name": "bloom",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.0,
         "temperature_c": 100.0,
         "temp_sensor": "coffee",
@@ -7949,7 +7949,7 @@
       },
       {
         "name": "pulse",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 8.0,
         "temperature_c": 100.0,
         "temp_sensor": "coffee",
@@ -7961,7 +7961,7 @@
       },
       {
         "name": "pause",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.0,
         "temperature_c": 100.0,
         "temp_sensor": "coffee",
@@ -7973,7 +7973,7 @@
       },
       {
         "name": "pulse",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 8.0,
         "temperature_c": 100.0,
         "temp_sensor": "coffee",
@@ -7985,7 +7985,7 @@
       },
       {
         "name": "pause",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.0,
         "temperature_c": 100.0,
         "temp_sensor": "coffee",
@@ -7997,7 +7997,7 @@
       },
       {
         "name": "pulse",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 8.0,
         "temperature_c": 100.0,
         "temp_sensor": "coffee",
@@ -8019,7 +8019,7 @@
     "steps": [
       {
         "name": "preinfusion",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 8.0,
         "temperature_c": 100.0,
         "temp_sensor": "coffee",
@@ -8031,7 +8031,7 @@
       },
       {
         "name": "bloom*",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.0,
         "temperature_c": 100.0,
         "temp_sensor": "coffee",
@@ -8043,7 +8043,7 @@
       },
       {
         "name": "pulse",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 8.0,
         "temperature_c": 100.0,
         "temp_sensor": "coffee",
@@ -8055,7 +8055,7 @@
       },
       {
         "name": "pause",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.0,
         "temperature_c": 100.0,
         "temp_sensor": "coffee",
@@ -8067,7 +8067,7 @@
       },
       {
         "name": "pulse",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 8.0,
         "temperature_c": 100.0,
         "temp_sensor": "coffee",
@@ -8079,7 +8079,7 @@
       },
       {
         "name": "pause",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.0,
         "temperature_c": 100.0,
         "temp_sensor": "coffee",
@@ -8091,7 +8091,7 @@
       },
       {
         "name": "pulse",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 8.0,
         "temperature_c": 100.0,
         "temp_sensor": "coffee",
@@ -8103,7 +8103,7 @@
       },
       {
         "name": "[ spin at end]*",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 0.1,
         "temperature_c": 100.0,
         "temp_sensor": "coffee",
@@ -8125,7 +8125,7 @@
     "steps": [
       {
         "name": "preinfusion",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 8.0,
         "temperature_c": 100.0,
         "temp_sensor": "coffee",
@@ -8137,7 +8137,7 @@
       },
       {
         "name": "bloom*",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.0,
         "temperature_c": 100.0,
         "temp_sensor": "coffee",
@@ -8149,7 +8149,7 @@
       },
       {
         "name": "pulse",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 8.0,
         "temperature_c": 100.0,
         "temp_sensor": "coffee",
@@ -8161,7 +8161,7 @@
       },
       {
         "name": "pause",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.0,
         "temperature_c": 100.0,
         "temp_sensor": "coffee",
@@ -8173,7 +8173,7 @@
       },
       {
         "name": "pulse",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 8.0,
         "temperature_c": 100.0,
         "temp_sensor": "coffee",
@@ -8185,7 +8185,7 @@
       },
       {
         "name": "pause",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.0,
         "temperature_c": 100.0,
         "temp_sensor": "coffee",
@@ -8197,7 +8197,7 @@
       },
       {
         "name": "pulse",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 8.0,
         "temperature_c": 100.0,
         "temp_sensor": "coffee",
@@ -8209,7 +8209,7 @@
       },
       {
         "name": "[ spin at end]*",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 0.1,
         "temperature_c": 100.0,
         "temp_sensor": "coffee",
@@ -8231,7 +8231,7 @@
     "steps": [
       {
         "name": "Initial prefill",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 11.0,
         "temperature_c": 105.0,
         "temp_sensor": "coffee",
@@ -8243,15 +8243,15 @@
       },
       {
         "name": "Initial fill",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 11.0,
         "temperature_c": 105.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 60.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 1.0
         },
         "volume_limit_ml": 500,
@@ -8259,15 +8259,15 @@
       },
       {
         "name": "Fill and stir",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 0.3,
         "temperature_c": 105.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 127.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 9.0
         },
         "volume_limit_ml": 500,
@@ -8275,7 +8275,7 @@
       },
       {
         "name": "Hold",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 0.0,
         "temperature_c": 105.0,
         "temp_sensor": "coffee",
@@ -8287,15 +8287,15 @@
       },
       {
         "name": "Short flush",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.0,
         "temperature_c": 105.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 1.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Under",
+          "metric": "pressure",
+          "compare": "under",
           "threshold": 7.0
         },
         "volume_limit_ml": 500,
@@ -8303,15 +8303,15 @@
       },
       {
         "name": "Hold",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 0.1,
         "temperature_c": 105.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 20.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 9.0
         },
         "volume_limit_ml": 500,
@@ -8319,15 +8319,15 @@
       },
       {
         "name": "Short flush",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.0,
         "temperature_c": 105.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 1.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Under",
+          "metric": "pressure",
+          "compare": "under",
           "threshold": 7.0
         },
         "volume_limit_ml": 500,
@@ -8335,7 +8335,7 @@
       },
       {
         "name": "Hold",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 0.1,
         "temperature_c": 105.0,
         "temp_sensor": "coffee",
@@ -8347,7 +8347,7 @@
       },
       {
         "name": "Long flush",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.0,
         "temperature_c": 105.0,
         "temp_sensor": "coffee",
@@ -8359,15 +8359,15 @@
       },
       {
         "name": "Fill to rinse",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 6.0,
         "temperature_c": 105.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 30.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 9.0
         },
         "volume_limit_ml": 500,
@@ -8375,7 +8375,7 @@
       },
       {
         "name": "Flush to rinse",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.0,
         "temperature_c": 105.0,
         "temp_sensor": "coffee",
@@ -8387,15 +8387,15 @@
       },
       {
         "name": "Fill to rinse",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 4.0,
         "temperature_c": 105.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 30.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Under",
+          "metric": "pressure",
+          "compare": "under",
           "threshold": 8.0
         },
         "volume_limit_ml": 500,
@@ -8403,15 +8403,15 @@
       },
       {
         "name": "Full flush",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.0,
         "temperature_c": 105.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 20.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Under",
+          "metric": "pressure",
+          "compare": "under",
           "threshold": 0.1
         },
         "volume_limit_ml": 500,
@@ -8419,15 +8419,15 @@
       },
       {
         "name": "Fill to rinse",
-        "pump": "Flow",
+        "pump": "flow",
         "target": 6.0,
         "temperature_c": 20.0,
         "temp_sensor": "coffee",
         "transition": "fast",
         "duration_seconds": 20.0,
         "exit": {
-          "metric": "Pressure",
-          "compare": "Over",
+          "metric": "pressure",
+          "compare": "over",
           "threshold": 9.0
         },
         "volume_limit_ml": 500,
@@ -8435,7 +8435,7 @@
       },
       {
         "name": "Final flush",
-        "pump": "Pressure",
+        "pump": "pressure",
         "target": 0.0,
         "temperature_c": 20.0,
         "temp_sensor": "coffee",
