@@ -537,6 +537,11 @@ async function createCore(): Promise<CremaCore> {
 				Espresso: wasm.MachineRequest.Espresso,
 				Steam: wasm.MachineRequest.Steam,
 				HotWater: wasm.MachineRequest.HotWater,
+				// `Flush` in the wasm enum is the firmware's HotWaterRinse
+				// state (group-flush mode). Callers pass the public
+				// MachineState string `'HotWaterRinse'`; the bridge does the
+				// rename. See core/de1-wasm/src/lib.rs:214.
+				HotWaterRinse: wasm.MachineRequest.Flush,
 				Descale: wasm.MachineRequest.Descale,
 				Clean: wasm.MachineRequest.Clean
 			};

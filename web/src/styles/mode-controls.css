@@ -1,0 +1,266 @@
+/* ============================================================================
+   mode-controls.css — Steam / Hot-water / Flush mode chips on the Brew page.
+   Ported from `handoff-mode-controls-chips/styles/mode-controls.css`
+   (Variant A only; Variants B-G in the reference are not used here).
+
+   Three surfaces:
+
+     1. `.mc-actionrow`   — the row of three chips between the dashboard's
+                            main grid and the foot (Brew page).
+     2. `.mc-chip`        — a single chip; class-driven states for active /
+                            disabled, with mode-specific color tint.
+     3. `.mc-head-status` — a colored pill that appears in the dashboard
+                            header while a mode is active, between the
+                            profile-info block (left) and the Edit / Switch
+                            buttons (right).
+
+   The mode tokens (`--mc-steam`, `--mc-water`, `--mc-flush`) are scoped to
+   `:root` so they're available to both surfaces and to any future per-mode
+   surface (settings panels, status banners) without re-declaration.
+   ============================================================================ */
+
+:root {
+	--mc-steam: #c44e3f;
+	--mc-steam-15: #c44e3f26;
+	--mc-water: #4a6fa5;
+	--mc-water-15: #4a6fa526;
+	--mc-flush: #6b8c5f;
+	--mc-flush-15: #6b8c5f26;
+}
+
+/* ── Action row above the foot ─────────────────────────────────────── */
+
+.mc-actionrow {
+	display: flex;
+	justify-content: center;
+	align-items: center;
+	gap: 10px;
+	padding: 12px 32px 14px;
+	border-top: 1px solid rgba(244, 237, 224, 0.04);
+	background: rgba(15, 12, 9, 0.4);
+}
+.mc-actionrow .mc-chip {
+	min-width: 156px;
+}
+.mc-actionrow-hint {
+	font-family: var(--font-sans);
+	font-size: 11px;
+	color: rgba(244, 237, 224, 0.4);
+	margin-left: 14px;
+}
+
+/* ── Chip ──────────────────────────────────────────────────────────── */
+
+.mc-chip {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 10px;
+	padding: 10px 16px;
+	height: 40px;
+	border-radius: 999px;
+	background: rgba(244, 237, 224, 0.04);
+	color: var(--ink-50, var(--fg-1));
+	border: 1px solid rgba(244, 237, 224, 0.08);
+	font-family: var(--font-sans);
+	font-size: 13px;
+	font-weight: 500;
+	cursor: pointer;
+	transition:
+		background 160ms var(--ease, cubic-bezier(0.32, 0.72, 0, 1)),
+		border-color 160ms var(--ease, cubic-bezier(0.32, 0.72, 0, 1)),
+		color 160ms var(--ease, cubic-bezier(0.32, 0.72, 0, 1));
+}
+.mc-chip:hover {
+	background: rgba(244, 237, 224, 0.07);
+	border-color: rgba(244, 237, 224, 0.14);
+}
+.mc-chip > i {
+	font-size: 16px;
+	color: rgba(244, 237, 224, 0.7);
+}
+.mc-chip-text {
+	display: inline-flex;
+	flex-direction: column;
+	align-items: flex-start;
+	line-height: 1.1;
+}
+.mc-chip-sub {
+	color: rgba(244, 237, 224, 0.45);
+	font-size: 11px;
+	font-family: var(--font-mono);
+	font-variant-numeric: tabular-nums;
+}
+
+.mc-chip.is-disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+.mc-chip.is-disabled:hover {
+	background: rgba(244, 237, 224, 0.04);
+	border-color: rgba(244, 237, 224, 0.08);
+}
+
+/* Mode-specific tints when active */
+.mc-chip.is-active.is-steam {
+	background: var(--mc-steam-15);
+	border-color: var(--mc-steam);
+	color: var(--ink-50, var(--fg-1));
+}
+.mc-chip.is-active.is-steam > i {
+	color: var(--mc-steam);
+}
+.mc-chip.is-active.is-water {
+	background: var(--mc-water-15);
+	border-color: var(--mc-water);
+	color: var(--ink-50, var(--fg-1));
+}
+.mc-chip.is-active.is-water > i {
+	color: var(--mc-water);
+}
+.mc-chip.is-active.is-flush {
+	background: var(--mc-flush-15);
+	border-color: var(--mc-flush);
+	color: var(--ink-50, var(--fg-1));
+}
+.mc-chip.is-active.is-flush > i {
+	color: var(--mc-flush);
+}
+
+.mc-chip-cancel {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 18px;
+	height: 18px;
+	border-radius: 999px;
+	background: rgba(244, 237, 224, 0.06);
+	margin-left: 2px;
+}
+.mc-chip-cancel > i {
+	font-size: 10px;
+	color: rgba(244, 237, 224, 0.7);
+}
+
+/* ── Header status pill ────────────────────────────────────────────── */
+
+.mc-head-status {
+	display: inline-flex;
+	align-items: center;
+	gap: 14px;
+	padding: 7px 8px 7px 12px;
+	border-radius: 999px;
+	background: rgba(40, 31, 24, 0.6);
+	border: 1px solid rgba(244, 237, 224, 0.1);
+}
+.mc-head-status.is-steam {
+	background: rgba(196, 78, 63, 0.12);
+	border-color: rgba(196, 78, 63, 0.5);
+}
+.mc-head-status.is-water {
+	background: rgba(74, 111, 165, 0.12);
+	border-color: rgba(74, 111, 165, 0.5);
+}
+.mc-head-status.is-flush {
+	background: rgba(107, 140, 95, 0.12);
+	border-color: rgba(107, 140, 95, 0.5);
+}
+
+.mc-head-status-icon {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 26px;
+	height: 26px;
+	border-radius: 50%;
+	background: rgba(244, 237, 224, 0.08);
+	flex: 0 0 auto;
+}
+.mc-head-status-icon > i {
+	font-size: 14px;
+}
+.mc-head-status.is-steam .mc-head-status-icon {
+	background: var(--mc-steam-15);
+	color: var(--mc-steam);
+}
+.mc-head-status.is-water .mc-head-status-icon {
+	background: var(--mc-water-15);
+	color: #97b4e5;
+}
+.mc-head-status.is-flush .mc-head-status-icon {
+	background: var(--mc-flush-15);
+	color: #a9c29d;
+}
+
+.mc-head-status-text {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	min-width: 0;
+}
+.mc-head-status-name {
+	font-family: var(--font-sans);
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--ink-50, var(--fg-1));
+	letter-spacing: 0.01em;
+}
+.mc-head-status-meta {
+	font-family: var(--font-mono);
+	font-size: 12px;
+	color: rgba(244, 237, 224, 0.6);
+	font-variant-numeric: tabular-nums;
+}
+
+.mc-head-status-bar {
+	width: 96px;
+	height: 4px;
+	background: rgba(244, 237, 224, 0.1);
+	border-radius: 999px;
+	overflow: hidden;
+	flex: 0 0 auto;
+}
+.mc-head-status-bar > div {
+	height: 100%;
+	border-radius: 999px;
+	transition: width 500ms var(--ease, cubic-bezier(0.32, 0.72, 0, 1));
+}
+.mc-head-status.is-steam .mc-head-status-bar > div {
+	background: var(--mc-steam);
+}
+.mc-head-status.is-water .mc-head-status-bar > div {
+	background: var(--mc-water);
+}
+.mc-head-status.is-flush .mc-head-status-bar > div {
+	background: var(--mc-flush);
+}
+
+.mc-head-status-cancel {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 6px 12px 6px 10px;
+	border-radius: 999px;
+	background: rgba(184, 74, 58, 0.18);
+	border: 1px solid rgba(184, 74, 58, 0.45);
+	color: #e89c90;
+	font-family: var(--font-sans);
+	font-size: 12px;
+	font-weight: 600;
+	cursor: pointer;
+}
+.mc-head-status-cancel:hover {
+	background: rgba(184, 74, 58, 0.28);
+}
+.mc-head-status-cancel > i {
+	font-size: 11px;
+}
+
+/* Header layout when a mode pill is present — push it into the
+   right-aligned middle slot between profile-l and actions-r. */
+.crema-dash-head.has-status .crema-dash-head-mid {
+	display: inline-flex;
+	align-items: center;
+	margin-left: auto;
+	margin-right: 14px;
+}

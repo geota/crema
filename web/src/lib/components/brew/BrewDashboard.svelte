@@ -19,7 +19,9 @@
 	 * to DE1 control` markers in `QuickSheet.svelte` and `brew-params`).
 	 */
 	import { waterTankMl, waterRefillSoon, type UiSnapshot } from '$lib/state';
-	import { ShotPhase } from '$lib/core/crema-core';
+	import { ShotPhase, MachineState } from '$lib/core/crema-core';
+	import ModeActionRow from './ModeActionRow.svelte';
+	import ModeHeadStatus from './ModeHeadStatus.svelte';
 	import {
 		getSettingsStore,
 		convertWeight,
@@ -28,6 +30,7 @@
 		convertVolume
 	} from '$lib/settings';
 	import { getProfileStore, preinfuseSeconds, type CremaProfile } from '$lib/profiles';
+	import { getCremaAppContext } from '$lib/shell/app-context';
 	import { BrewParamState, type BrewParamSeed } from './brew-params.svelte';
 	import ExtractionTimer from './ExtractionTimer.svelte';
 	import ChannelReadout from './ChannelReadout.svelte';
@@ -44,10 +47,70 @@
 		ui: UiSnapshot;
 	} = $props();
 
+	// ── App context (real — orchestrator for write actions) ─────────────
+	/** Live ref to the shared CremaApp; used for the mode-chip writes. */
+	const appCtx = getCremaAppContext();
+
 	// ── Profile library (real — the lib/profiles store) ──────────────────
 	/** The shared profile library — the source of pinned favorites + active. */
 	const profileStore = getProfileStore();
 	void profileStore.ensureLoaded();
+
+	// ── Mode chips (Steam / Hot water / Flush) ───────────────────────────
+	//
+	// Derives a coarse `'idle' | 'steaming' | 'dispensing' | 'flushing'`
+	// state from the live MachineState the DE1 reports. Espresso is NOT
+	// represented here — the big Start button in the foot handles it; the
+	// chip row is for service modes only.
+	//
+	// `ready` gates on de1State === 'ready' (matches the floating
+	// PowerButton's threshold so the user only sees actionable controls).
+	type ModeState = 'idle' | 'steaming' | 'dispensing' | 'flushing';
+	const modeState = $derived.by<ModeState>(() => {
+		switch (ui.machineState) {
+			case MachineState.Steam:
+				return 'steaming';
+			case MachineState.HotWater:
+				return 'dispensing';
+			case MachineState.HotWaterRinse:
+				return 'flushing';
+			default:
+				return 'idle';
+		}
+	});
+	const modeReady = $derived(ui.de1State === 'ready');
+	/** Tap handlers — write RequestedState; cancel returns to Idle. */
+	function tapSteam(): void {
+		void appCtx().app?.requestMachineState(MachineState.Steam);
+	}
+	function tapWater(): void {
+		void appCtx().app?.requestMachineState(MachineState.HotWater);
+	}
+	function tapFlush(): void {
+		void appCtx().app?.requestMachineState(MachineState.HotWaterRinse);
+	}
+	function cancelMode(): void {
+		void appCtx().app?.requestMachineState(MachineState.Idle);
+	}
+	/** Header pill labels — keyed by active mode. */
+	const headStatusName = $derived(
+		modeState === 'steaming'
+			? 'Steaming'
+			: modeState === 'dispensing'
+				? 'Hot water'
+				: modeState === 'flushing'
+					? 'Flushing'
+					: ''
+	);
+	const headStatusMeta = $derived(
+		modeState === 'steaming'
+			? '148 °C · 8 s'
+			: modeState === 'dispensing'
+				? '92 °C · 250 ml'
+				: modeState === 'flushing'
+					? '4 s'
+					: ''
+	);
 
 	// ── Unit preferences (real — the lib/settings store) ─────────────────
 	/** The shared app-preferences store — drives every readout's display unit. */
@@ -241,7 +304,7 @@
 <div class="qcontain">
 	<div class="crema-dash">
 		<!-- Profile header strip -->
-		<div class="crema-dash-head">
+		<div class="crema-dash-head" class:has-status={modeState !== 'idle'}>
 			<div class="crema-dash-head-l">
 				<div class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Profile</div>
 				<div class="crema-dash-profile">
@@ -270,6 +333,19 @@
 					)} °C
 				</div>
 			</div>
+			{#if modeState !== 'idle'}
+				<!-- Header mode pill — visible only while a service mode is
+				     running. Sits between the profile-info block (left) and
+				     the Edit / Switch actions (right). -->
+				<div class="crema-dash-head-mid">
+					<ModeHeadStatus
+						state={modeState}
+						nameLabel={headStatusName}
+						metaLabel={headStatusMeta}
+						onCancel={cancelMode}
+					/>
+				</div>
+			{/if}
 			<div class="crema-dash-head-r">
 				{#if !quickSheetOpen}
 					<!-- QuickPill — reopens the docked Quick Sheet once it's closed. -->
@@ -387,6 +463,27 @@
 				</div>
 			</div>
 		</div>
+
+		<!-- Service-mode chip row — between the main grid and the foot.
+		     Three tap-to-start chips: Steam / Hot water / Flush. Espresso
+		     stays the big copper Start button below. The active chip flips
+		     to a colored border + cancel `×`; tapping the active chip (or
+		     its `×`, or the header pill's Stop) writes
+		     `RequestedState = Idle`. Hardcoded sub-text targets match
+		     the chips handoff defaults (148°C/8s, 92°C/250ml, 4s) until
+		     Settings → Steam / Hot Water / Flush sections land per
+		     docs/21. -->
+		<ModeActionRow
+			state={modeState}
+			ready={modeReady}
+			steamSub="148 °C · 8 s"
+			waterSub="92 °C · 250 ml"
+			flushSub="4 s"
+			onTapSteam={tapSteam}
+			onTapWater={tapWater}
+			onTapFlush={tapFlush}
+			onCancel={cancelMode}
+		/>
 
 		<!-- Foot: a meta cluster on the left, the big Start / Stop button on the
 		     right. Stays visible even with the Quick Sheet open — the docked
