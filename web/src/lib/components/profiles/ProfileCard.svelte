@@ -23,6 +23,7 @@
 	let {
 		profile,
 		active = false,
+		hidden = false,
 		onLoad,
 		onDuplicate,
 		onEdit,
@@ -34,6 +35,12 @@
 		profile: CremaProfile;
 		/** Whether this profile is the one active on the Brew dashboard. */
 		active?: boolean;
+		/**
+		 * Whether this card is rendered inside the "Hidden" filter view.
+		 * When `true`, the right-most icon flips from trash/hide → eye
+		 * (restore) and its tooltip + handler intent match.
+		 */
+		hidden?: boolean;
 		/** Load this profile on Brew (mark it active). */
 		onLoad: (id: string) => void;
 		/** Duplicate this profile into a new custom profile, then edit it. */
@@ -42,7 +49,12 @@
 		onEdit: (id: string) => void;
 		/** Toggle this profile's pinned-to-favorites state. */
 		onTogglePin: (id: string) => void;
-		/** Delete this profile (custom profiles only). */
+		/**
+		 * Delete / hide / restore — page-owner-routed:
+		 * - custom: hard delete.
+		 * - built-in (visible): add to hide-set.
+		 * - built-in (hidden, via `hidden` prop): remove from hide-set.
+		 */
 		onDelete: (id: string) => void;
 		/**
 		 * Export this profile as a community-v2 `.json` file. The page
@@ -55,11 +67,32 @@
 	const ratio = $derived(ratioLabel(profile));
 	const preinf = $derived(preinfuseSeconds(profile.segments));
 	/**
-	 * Custom profiles delete for real; built-ins hide (since the
-	 * binary still ships them). The trash icon stays enabled for both
-	 * — only the tooltip + confirm text change.
+	 * Right-most action icon — three states:
+	 *
+	 * - custom profile      → trash    + "Delete"
+	 * - built-in (visible)  → eye-slash + "Hide from library"
+	 * - built-in (hidden)   → eye       + "Restore"
+	 *
+	 * `hidden` (prop) only ever applies when viewing the "Hidden"
+	 * filter, so it implies a built-in. The icon class names are
+	 * Phosphor's `ph` prefix.
 	 */
-	const isBuiltin = $derived(profile.source === 'builtin');
+	const removeIcon = $derived(
+		hidden ? 'ph-eye' : profile.source === 'builtin' ? 'ph-eye-slash' : 'ph-trash'
+	);
+	const removeTitle = $derived(
+		hidden
+			? 'Restore to the library'
+			: profile.source === 'builtin'
+				? 'Hide from library — restore via the Hidden filter pill'
+				: 'Delete this custom profile'
+	);
+	/**
+	 * Whether the right-most icon is destructive (red). True for both
+	 * hide and delete — destructive in the sense of "the card vanishes
+	 * from the grid." The Restore variant uses a neutral colour.
+	 */
+	const removeIsDanger = $derived(!hidden);
 </script>
 
 <div class="pp-card" class:is-active={active}>
@@ -150,13 +183,12 @@
 				</button>
 			{/if}
 			<button
-				class="pp-action-icon pp-action-icon-danger"
-				title={isBuiltin
-					? 'Hide this built-in from the library — restore from the Profiles page footer'
-					: 'Delete this custom profile'}
+				class="pp-action-icon"
+				class:pp-action-icon-danger={removeIsDanger}
+				title={removeTitle}
 				onclick={() => onDelete(profile.id)}
 			>
-				<i class="ph ph-trash" aria-hidden="true"></i>
+				<i class={`ph ${removeIcon}`} aria-hidden="true"></i>
 			</button>
 		</div>
 	</div>

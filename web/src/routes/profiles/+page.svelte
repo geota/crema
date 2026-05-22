@@ -87,14 +87,23 @@
 	/** The pinned count, for the header sub-line. */
 	const pinnedCount = $derived(profiles.filter((p) => p.pinned).length);
 
+	/** Whether the "Hidden" filter is the active facet. */
+	const showingHidden = $derived(tag === 'hidden');
+
 	/** The filtered + sorted profile list the grid renders. */
 	const filtered = $derived.by(() => {
 		const query = q.trim().toLowerCase();
-		let r = profiles.filter((p) => {
-			// Tag facet.
-			if (tag === 'pinned' && !p.pinned) return false;
+		// The Hidden facet draws from a different list — hidden built-ins
+		// don't appear in `profiles` (which is `store.all`). Switch
+		// sources before applying search / sort.
+		const source = showingHidden ? store.hiddenBuiltinProfiles : profiles;
+		let r = source.filter((p) => {
+			// Tag facet — only the search/roast/custom-tag filters apply
+			// once `source` is in hand; `pinned` and `hidden` are
+			// list-level so they're already accounted for.
 			if (['light', 'medium', 'dark'].includes(tag) && p.roast !== tag) return false;
 			if (tag.startsWith('t:') && !p.tags.includes(tag.slice(2))) return false;
+			if (tag === 'pinned' && !p.pinned) return false;
 			// Search.
 			if (query === '') return true;
 			return (
@@ -155,19 +164,32 @@
 	}
 
 	/**
-	 * Delete (custom) or hide (built-in) a profile. Built-ins live in
-	 * the wasm binary so they can't be truly removed; "delete" just
-	 * adds them to a localStorage hide-list — restorable from the
-	 * footer button when any are hidden.
+	 * Three-mode handler routed by both the profile's source and
+	 * whether the user is viewing the "Hidden" filter:
+	 *
+	 * - Hidden filter active + built-in → restore (un-hide).
+	 * - Custom profile → hard delete (confirm).
+	 * - Built-in (visible) → hide.
+	 *
+	 * Built-ins compile into the wasm binary so they can't be truly
+	 * removed; hide-then-restore handles tidying. Hidden profiles
+	 * surface via the "Hidden" filter pill, where this same handler
+	 * runs the unhide branch.
 	 */
 	function remove(id: string): void {
-		const profile = store.get(id);
+		const profile = store.get(id) ?? store.hiddenBuiltinProfiles.find((p) => p.id === id);
 		if (!profile) return;
-		const isBuiltin = profile.source === 'builtin';
-		const message = isBuiltin
-			? `Hide "${profile.name}" from the library? Restore from the footer button.`
-			: `Delete "${profile.name}"? This cannot be undone.`;
-		if (confirm(message)) {
+		if (showingHidden && profile.source === 'builtin') {
+			store.unhideBuiltin(id);
+			return;
+		}
+		if (profile.source === 'builtin') {
+			if (confirm(`Hide "${profile.name}" from the library?`)) {
+				store.delete(id);
+			}
+			return;
+		}
+		if (confirm(`Delete "${profile.name}"? This cannot be undone.`)) {
 			store.delete(id);
 		}
 	}
@@ -425,6 +447,18 @@
 				<i class="ph-fill ph-star" style="font-size:11px;color:var(--copper-400)"></i>
 				<span>Pinned</span><span class="pp-tag-count">{pinnedCount}</span>
 			</button>
+			{#if store.hiddenBuiltinCount > 0}
+				<button
+					class="pp-tag"
+					class:is-active={tag === 'hidden'}
+					onclick={() => (tag = 'hidden')}
+					title="Show built-in profiles you've hidden — click their eye icon to restore"
+				>
+					<i class="ph ph-eye-slash" style="font-size:11px"></i>
+					<span>Hidden</span>
+					<span class="pp-tag-count">{store.hiddenBuiltinCount}</span>
+				</button>
+			{/if}
 			<span class="pp-tag-divider"></span>
 			<span class="pp-tag-grouplabel">Roast</span>
 			{#each roasts as r (r.id)}
@@ -464,6 +498,7 @@
 			<ProfileCard
 				profile={p}
 				active={p.id === activeId}
+				hidden={showingHidden}
 				onLoad={loadOnBrew}
 				onDuplicate={duplicate}
 				onEdit={edit}
@@ -486,18 +521,6 @@
 		{/if}
 	</div>
 
-	{#if store.hiddenBuiltinCount > 0}
-		<div class="pp-hidden-strip">
-			<span>
-				{store.hiddenBuiltinCount} built-in {store.hiddenBuiltinCount === 1
-					? 'profile is'
-					: 'profiles are'} hidden.
-			</span>
-			<button class="pp-empty-link" onclick={() => store.unhideAllBuiltins()}>
-				Restore all
-			</button>
-		</div>
-	{/if}
 </div>
 
 <style>
@@ -860,20 +883,5 @@
 	}
 	.pp-import-banner-close:hover {
 		opacity: 1;
-	}
-
-	.pp-hidden-strip {
-		display: flex;
-		align-items: center;
-		gap: 12px;
-		justify-content: center;
-		margin: 0 var(--page-pad-x) 24px;
-		padding: 10px 14px;
-		border-radius: var(--radius-sm);
-		font-family: var(--font-sans);
-		font-size: 12.5px;
-		color: rgba(var(--tint-rgb), 0.6);
-		background: rgba(var(--tint-rgb), 0.03);
-		border: 1px dashed rgba(var(--tint-rgb), 0.12);
 	}
 </style>
