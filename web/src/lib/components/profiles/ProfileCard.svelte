@@ -143,11 +143,11 @@
 			</div>
 			<div class="pp-metric">
 				<div class="pp-metric-label">Dose</div>
-				<div class="pp-metric-val">{doseM.value}<em>{doseM.unit || 'g'}</em></div>
+				<div class="pp-metric-val">{doseM.value}<em>{doseM.unit}</em></div>
 			</div>
 			<div class="pp-metric">
 				<div class="pp-metric-label">Temp</div>
-				<div class="pp-metric-val">{tempM.value}<em>{tempM.unit || '°C'}</em></div>
+				<div class="pp-metric-val">{tempM.value}<em>{tempM.unit}</em></div>
 			</div>
 			<div class="pp-metric">
 				<div class="pp-metric-label">Pre-inf</div>

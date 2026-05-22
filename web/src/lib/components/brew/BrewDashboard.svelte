@@ -550,7 +550,7 @@
 					<ChannelReadout
 						label="PRESSURE"
 						value={pressureM.value}
-						unit={pressureM.unit || 'bar'}
+						unit={pressureM.unit}
 						color="var(--tel-pressure)"
 					/>
 					<ChannelReadout
@@ -562,14 +562,14 @@
 					<ChannelReadout
 						label="TEMP"
 						value={tempM.value}
-						unit={tempM.unit || '°C'}
+						unit={tempM.unit}
 						color="var(--tel-temp)"
 						target={brewTempTarget.value}
 					/>
 					<ChannelReadout
 						label="WEIGHT"
 						value={weightM.value}
-						unit={weightM.unit || 'g'}
+						unit={weightM.unit}
 						color="var(--tel-weight)"
 						target={yieldTarget.value}
 					/>

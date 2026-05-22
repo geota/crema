@@ -21,7 +21,7 @@
 		label,
 		value,
 		step = 1,
-		unit,
+		unit = '',
 		min,
 		max,
 		digits = 1,
@@ -35,7 +35,7 @@
 		/** Increment per button press (canonical). */
 		step?: number;
 		/** Unit suffix shown after the number. Ignored when `dimension` is set. */
-		unit: string;
+		unit?: string;
 		/** Minimum allowed value (canonical). */
 		min: number;
 		/** Maximum allowed value (canonical). */
@@ -65,10 +65,23 @@
 		return dimension ? displayToCanonical(dimension, display, settings.current) : display;
 	}
 
-	/** Step the value by `dir × step`, clamped to `[min, max]` (all canonical). */
+	/**
+	 * Step by `dir`. With `dimension`, work in display units so each click
+	 * moves the visible digit — see {@link QStepper.inc} for the full
+	 * explanation. Without `dimension`, plain canonical arithmetic.
+	 */
 	function inc(dir: number): void {
+		if (dimension) {
+			const displayNow = toDisplay(value);
+			const grid = Math.pow(10, -effectiveDigits);
+			const displayStep = Math.max(grid, toDisplay(value + step) - displayNow);
+			const nextDisplay = Math.round((displayNow + dir * displayStep) / grid) * grid;
+			const next = Math.min(max, Math.max(min, fromDisplay(nextDisplay)));
+			if (next !== value) onChange(next);
+			return;
+		}
 		const next = Math.min(max, Math.max(min, Number((value + dir * step).toFixed(2))));
-		onChange(next);
+		if (next !== value) onChange(next);
 	}
 
 	// Click-to-type — mirrors StStepper's behaviour. Tap the digits to set

@@ -125,7 +125,7 @@
 	</div>
 	<div class="hi-row-metric">
 		<div class="hi-row-metric-val">
-			{yieldM.value}<em>{yieldM.unit || 'g'}</em>
+			{yieldM.value}<em>{yieldM.unit}</em>
 		</div>
 		<div class="hi-row-metric-l">yield</div>
 	</div>
