@@ -18,7 +18,7 @@
 	 *
 	 * **Stubbed** — Export, Compare and Save-as-profile are `// TODO`s.
 	 */
-	import { getHistoryStore } from '$lib/history';
+	import { getHistoryStore, exportStoredShotAsV2Json, shotFilename } from '$lib/history';
 	import { ShotRow, ShotDetail } from '$lib/components/history';
 	import { getCremaAppContext } from '$lib/shell/app-context';
 
@@ -43,6 +43,40 @@
 	 * importer. Iterates the picked files so the user can drop a whole
 	 * `history/` folder once and add every shot in one click.
 	 */
+	/**
+	 * Export every recorded shot as one `.ndjson` file — one
+	 * community-v2 JSON shot per line. NDJSON keeps each shot
+	 * independently re-importable (a downstream tool can read the
+	 * file line-by-line, parse each as a v2 shot) while bundling the
+	 * whole library into a single download.
+	 *
+	 * Per-shot Download (in ShotDetail) emits a single `.shot.json`;
+	 * this Export collects them. Round-trips back through Crema's
+	 * Import button (NDJSON files are accepted as one shot per line
+	 * via `app.importShotFile` — TODO if not yet supported).
+	 */
+	function exportAllAsV2Ndjson(): void {
+		if (shots.length === 0) return;
+		const ndjson = shots
+			.map((s) => exportStoredShotAsV2Json(s))
+			// `exportStoredShotAsV2Json` produces pretty-printed JSON;
+			// flatten to one line per shot so the file is true NDJSON.
+			.map((s) => JSON.stringify(JSON.parse(s)))
+			.join('\n');
+		const d = new Date();
+		const p = (n: number): string => String(n).padStart(2, '0');
+		const stamp =
+			`${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}T` +
+			`${p(d.getHours())}${p(d.getMinutes())}`;
+		const blob = new Blob([ndjson], { type: 'application/x-ndjson' });
+		const url = URL.createObjectURL(blob);
+		const a = document.createElement('a');
+		a.href = url;
+		a.download = `crema-history-${stamp}.ndjson`;
+		a.click();
+		URL.revokeObjectURL(url);
+	}
+
 	async function onImportFilesChosen(event: Event): Promise<void> {
 		const input = event.currentTarget as HTMLInputElement;
 		const files = input.files;
@@ -206,7 +240,12 @@
 					onchange={onImportFilesChosen}
 				/>
 			</label>
-			<button class="st-btn st-btn-secondary" disabled={shots.length === 0}>
+			<button
+				class="st-btn st-btn-secondary"
+				disabled={shots.length === 0}
+				onclick={exportAllAsV2Ndjson}
+				title="Download every shot as one .ndjson file — one community-v2 JSON shot per line"
+			>
 				<i class="ph ph-download-simple" aria-hidden="true"></i> Export
 			</button>
 			<button class="st-btn st-btn-secondary" disabled={shots.length === 0}>

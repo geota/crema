@@ -110,12 +110,12 @@ export function stars(rating: number): string {
 	return '★'.repeat(n) + '☆'.repeat(5 - n);
 }
 
-/** A timestamped `.jsonl` filename for a downloaded shot. */
+/** A timestamped `.shot.json` filename for a v2-JSON-exported shot. */
 export function shotFilename(record: StoredShot): string {
 	const d = new Date(record.completedAt);
 	const p = (n: number): string => String(n).padStart(2, '0');
 	const stamp =
-		`${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}` +
-		`-${p(d.getHours())}${p(d.getMinutes())}`;
-	return `crema-shot-${stamp}.jsonl`;
+		`${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}T` +
+		`${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+	return `${stamp}.shot.json`;
 }

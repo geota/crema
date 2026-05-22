@@ -21,3 +21,5 @@ export {
 	getHistoryStore,
 	type ShotCompletion
 } from './store.svelte';
+
+export { exportStoredShotAsV2Json } from './v2-export';
