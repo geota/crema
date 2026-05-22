@@ -787,6 +787,29 @@ impl CremaBridge {
             .map_err(|e| e.to_string())
             .and_then(|shot| shot.to_json().map_err(|e| e.to_string()))
     }
+
+    /// Parse a community-v2 `.json` profile file. Returns the parsed
+    /// `Profile` as JSON. docs/22 §5.1.
+    pub fn import_v2_json_profile(&self, content: String) -> Result<String, String> {
+        de1_domain::import_v2_json(&content)
+            .map_err(|e| e.to_string())
+            .and_then(|p| serde_json::to_string(&p).map_err(|e| e.to_string()))
+    }
+
+    /// Parse a legacy de1app `.tcl` profile file.
+    pub fn import_legacy_tcl_profile(&self, content: String) -> Result<String, String> {
+        de1_domain::import_legacy_tcl(&content)
+            .map_err(|e| e.to_string())
+            .and_then(|p| serde_json::to_string(&p).map_err(|e| e.to_string()))
+    }
+
+    /// Export a Crema `Profile` (as JSON) as a community-v2 `.json`
+    /// document. Pure encoder.
+    pub fn export_v2_json_profile(&self, profile_json: String) -> Result<String, String> {
+        let profile: de1_domain::Profile = serde_json::from_str(&profile_json)
+            .map_err(|e| e.to_string())?;
+        Ok(de1_domain::export_v2_json(&profile))
+    }
 }
 
 /// Serialize a [`CoreOutput`] to JSON for the shell.
