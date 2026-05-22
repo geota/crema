@@ -509,35 +509,65 @@
 		border-radius: var(--radius-md);
 		border: 1px solid rgba(var(--tint-rgb), 0.04);
 	}
+	/* Machine info card — same shape as the Firmware card, neutral colors.
+	   Column flex so the action button at the bottom can be pushed down
+	   with `margin-top: auto`, aligning it with the Firmware card's
+	   "Check for updates" button vertically. */
 	:global(.st-content .st-machinecard-info) {
+		background: rgba(var(--tint-rgb), 0.04);
+		border: 1px solid rgba(var(--tint-rgb), 0.08);
+		border-radius: var(--radius-md);
+		padding: 14px;
 		display: flex;
 		flex-direction: column;
 		gap: 6px;
 	}
-	:global(.st-content .st-machinecard-name) {
-		font-family: var(--font-serif);
-		font-size: 22px;
-		letter-spacing: -0.01em;
-		color: var(--fg-1);
-	}
-	:global(.st-content .st-machinecard-meta) {
-		display: flex;
-		gap: 14px;
-		flex-wrap: wrap;
+	:global(.st-content .st-machinecard-info-name) {
 		font-family: var(--font-sans);
-		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.5);
-	}
-	:global(.st-content .st-machinecard-meta strong) {
+		font-size: 13px;
 		color: var(--fg-1);
 		font-weight: 500;
 	}
-	:global(.st-content .st-machinecard-actions) {
+	:global(.st-content .st-machinecard-info-meta) {
 		display: flex;
-		gap: 8px;
-		margin-top: 8px;
-		flex-wrap: wrap;
+		flex-direction: column;
+		gap: 4px;
+		margin-top: 4px;
+		font-family: var(--font-sans);
+		font-size: 11px;
 	}
+	:global(.st-content .st-machinecard-info-row) {
+		display: grid;
+		grid-template-columns: 72px 1fr;
+		align-items: baseline;
+		gap: 12px;
+	}
+	:global(.st-content .st-machinecard-info-key) {
+		color: rgba(var(--tint-rgb), 0.5);
+	}
+	:global(.st-content .st-machinecard-info-val) {
+		color: var(--fg-1);
+		font-weight: 500;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	:global(.st-content .st-machinecard-info-val-mono) {
+		font-family: var(--font-mono);
+		font-weight: 400;
+		font-size: 10px;
+		color: rgba(var(--tint-rgb), 0.7);
+	}
+	:global(.st-content .st-machinecard-info-actions) {
+		margin-top: auto;
+		padding-top: 12px;
+		display: flex;
+	}
+	:global(.st-content .st-machinecard-info-actions .st-btn) {
+		flex: 1;
+		justify-content: center;
+	}
+	/* Firmware card — copper-tinted variant of the same base shape. */
 	:global(.st-content .st-machinecard-fw) {
 		background: rgba(193, 116, 75, 0.06);
 		border: 1px solid rgba(193, 116, 75, 0.3);
@@ -559,6 +589,11 @@
 		line-height: 1.5;
 		color: rgba(var(--tint-rgb), 0.55);
 		margin-bottom: 4px;
+	}
+	/* Push the Firmware card's button to the bottom of its flex box so it
+	   aligns vertically with the Machine info card's Connect button. */
+	:global(.st-content .st-machinecard-fw > .st-btn) {
+		margin-top: auto;
 	}
 
 	/* ── Maintenance cards ──────────────────────────────────────────────── */

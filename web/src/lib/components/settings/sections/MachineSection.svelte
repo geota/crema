@@ -249,25 +249,39 @@
 			<ellipse cx="55" cy="110" rx="32" ry="4" fill="rgba(0,0,0,0.4)" />
 		</svg>
 	</div>
+	<!-- Machine info card — mirrors the Firmware card's visual treatment
+	     (background tint, hairline, padded body, eyebrow at top, button
+	     pushed to bottom via flex). Sleep / Wake lives on the floating
+	     top-right PowerButton; this card is single-purpose connection. -->
 	<div class="st-machinecard-info">
-		<div class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">{stateLabel}</div>
+		<div class="t-eyebrow">{stateLabel}</div>
 		{#if connected}
-			<div class="st-machinecard-name">DE1 · Crema Bar</div>
+			<div class="st-machinecard-info-name">DE1 · Crema Bar</div>
 		{/if}
-		<div class="st-machinecard-meta">
+		<div class="st-machinecard-info-meta">
 			<!-- Identity meta: firmware build (MMR 0x800010), machine model
-			     (MMR 0x80000C), and CPU board revision (MMR 0x800008). The
-			     "Group" temp lived here originally but at idle it read
-			     room-temperature (mix_temp) or duplicated the brew foot
-			     (head_temp), neither of which is what users open the Machine
-			     card to see. Identity is the right thing for a settings
-			     surface. All read "—" until the MMR replies land. -->
-			<span>Firmware <strong>{firmwareLabel}</strong></span>
-			<span>Model <strong>{modelLabel}</strong></span>
-			<span>{boardLabel}</span>
-			<span class="st-machinecard-ble">BLE {bleLabel}</span>
+			     (MMR 0x80000C), CPU board revision (MMR 0x800008), and the
+			     Web Bluetooth device id from the connect diagnostics. Each
+			     row is a label/value pair so the values line up under each
+			     other. All read "—" until the MMR replies land. -->
+			<div class="st-machinecard-info-row">
+				<span class="st-machinecard-info-key">Firmware</span>
+				<span class="st-machinecard-info-val">{firmwareLabel}</span>
+			</div>
+			<div class="st-machinecard-info-row">
+				<span class="st-machinecard-info-key">Model</span>
+				<span class="st-machinecard-info-val">{modelLabel}</span>
+			</div>
+			<div class="st-machinecard-info-row">
+				<span class="st-machinecard-info-key">Board</span>
+				<span class="st-machinecard-info-val">{boardLabel}</span>
+			</div>
+			<div class="st-machinecard-info-row">
+				<span class="st-machinecard-info-key">BLE</span>
+				<span class="st-machinecard-info-val st-machinecard-info-val-mono">{bleLabel}</span>
+			</div>
 		</div>
-		<div class="st-machinecard-actions">
+		<div class="st-machinecard-info-actions">
 			{#if connected}
 				<StButton
 					label="Disconnect"
@@ -282,28 +296,6 @@
 					disabled={!app}
 					onClick={connect}
 				/>
-			{/if}
-			<!-- Sleep / Wake — writes RequestedState (cuuid_02) to ask the
-			     DE1 to enter Sleep (idle heaters, save power) or Idle (warm
-			     up + ready to brew). Idle also wakes from Sleep. Both
-			     gated on `connected` — the button does nothing without an
-			     active BLE link. Mirrors what the legacy app's "On / Off"
-			     buttons in the top-bar do. -->
-			{#if connected}
-				{#if snapshot.machineState === MachineState.Sleep}
-					<StButton
-						label="Wake"
-						icon="sun"
-						variant="primary"
-						onClick={() => app?.requestMachineState(MachineState.Idle)}
-					/>
-				{:else}
-					<StButton
-						label="Sleep"
-						icon="moon"
-						onClick={() => app?.requestMachineState(MachineState.Sleep)}
-					/>
-				{/if}
 			{/if}
 		</div>
 	</div>
@@ -466,12 +458,7 @@
 		max-width: 220px;
 		display: inline-block;
 	}
-	/* The Web Bluetooth device id can be a long opaque string — clamp it so
-	   the machine-card meta row keeps its rhythm. */
-	.st-machinecard-ble {
-		max-width: 180px;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
+	/* Note: the BLE id clamp formerly lived here (.st-machinecard-ble);
+	   replaced by `.st-machinecard-info-val` which has its own ellipsis
+	   clamp on the new info card. */
 </style>
