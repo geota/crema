@@ -239,7 +239,7 @@
 			<div class="hi-metric-v">{(shot.duration / 1000).toFixed(0)}<em>s</em></div>
 		</div>
 		<div class="hi-metric">
-			<div class="hi-metric-l">Peak bar</div>
+			<div class="hi-metric-l">Peak pressure</div>
 			<div class="hi-metric-v">{peakPressureM.value}<em>{peakPressureM.unit || 'bar'}</em></div>
 		</div>
 		<div class="hi-metric">

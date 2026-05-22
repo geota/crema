@@ -22,18 +22,17 @@
 	</div>
 	<QStepper
 		value={p.yield}
-		unit="g"
+		dimension="weight"
 		min={10}
 		max={80}
 		step={0.5}
 		onChange={(v) => params.set('yield', v)}
-		fmt={(v) => v.toFixed(1)}
 	/>
 	<div style="height:6px"></div>
 	<QChipRow
 		options={[28, 32, 36, 40, 45]}
 		value={p.yield}
-		unit="g"
+		dimension="weight"
 		onChange={(v) => params.set('yield', v)}
 	/>
 </div>

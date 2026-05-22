@@ -27,7 +27,10 @@
 		convertWeight,
 		convertTemp,
 		convertPressure,
-		convertVolume
+		convertVolume,
+		formatTemp,
+		formatVolume,
+		formatWeight
 	} from '$lib/settings';
 	import { getProfileStore, preinfuseSeconds, type CremaProfile } from '$lib/profiles';
 	import { getCremaAppContext } from '$lib/shell/app-context';
@@ -103,6 +106,12 @@
 					: ''
 	);
 
+	// ── Unit preferences (real — the lib/settings store) ─────────────────
+	/** The shared app-preferences store — drives every readout's display unit. */
+	const settings = getSettingsStore();
+	/** The live preference bundle — reactive; a unit change re-renders readouts. */
+	const prefs = $derived(settings.current);
+
 	// ── Live mode telemetry — drives the head pill's progress bar
 	//
 	// Targets are hardcoded for now; they'll come from the per-mode
@@ -115,11 +124,13 @@
 		dispensing: 30.0,
 		flushing: 4.0
 	};
-	const MODE_TARGET_LABEL: Record<'steaming' | 'dispensing' | 'flushing', string> = {
-		steaming: '148 °C · 8 s',
-		dispensing: '92 °C · 250 ml',
+	const MODE_TARGET_LABEL = $derived<
+		Record<'steaming' | 'dispensing' | 'flushing', string>
+	>({
+		steaming: `${formatTemp(148, prefs.tempUnit)} · 8 s`,
+		dispensing: `${formatTemp(92, prefs.tempUnit)} · ${formatVolume(250, prefs.volumeUnit)}`,
 		flushing: '4 s'
-	};
+	});
 	/**
 	 * `performance.now()` when the DE1 first transitioned into the
 	 * current service mode. Reset to `null` whenever the mode returns to
@@ -172,13 +183,13 @@
 		if (modeState === 'steaming') {
 			const steamTemp = ui.latestTelemetry?.steamTemp;
 			const tempLabel =
-				steamTemp != null ? ` · ${Math.round(steamTemp)} °C` : '';
+				steamTemp != null ? ` · ${formatTemp(steamTemp, prefs.tempUnit)}` : '';
 			return `${elapsed} / ${total} s${tempLabel}`;
 		}
 		if (modeState === 'dispensing') {
 			const headTemp = ui.latestTelemetry?.temp;
 			const tempLabel =
-				headTemp != null ? ` · ${Math.round(headTemp)} °C` : '';
+				headTemp != null ? ` · ${formatTemp(headTemp, prefs.tempUnit)}` : '';
 			return `${elapsed} / ${total} s${tempLabel}`;
 		}
 		return `${elapsed} / ${total} s`;
@@ -203,12 +214,6 @@
 			? `${modeElapsedSec.toFixed(1)} / ${modeTargetSec.toFixed(1)} s`
 			: MODE_TARGET_LABEL.flushing
 	);
-
-	// ── Unit preferences (real — the lib/settings store) ─────────────────
-	/** The shared app-preferences store — drives every readout's display unit. */
-	const settings = getSettingsStore();
-	/** The live preference bundle — reactive; a unit change re-renders readouts. */
-	const prefs = $derived(settings.current);
 
 	/** The real pinned profiles, shown as favorite chips in the Quick Sheet. */
 	const pinnedProfiles = $derived(profileStore.all.filter((p) => p.pinned));
@@ -420,9 +425,7 @@
 					{/if}
 				</div>
 				<div class="crema-dash-profile-meta">
-					Pre-inf {p.preinf}s · 1:{ratio} ratio · {p.yield.toFixed(1)} g target · {p.brewTemp.toFixed(
-						1
-					)} °C
+					Pre-inf {p.preinf}s · 1:{ratio} ratio · {formatWeight(p.yield, prefs.weightUnit)} target · {formatTemp(p.brewTemp, prefs.tempUnit)}
 				</div>
 			</div>
 			{#if modeState !== 'idle'}

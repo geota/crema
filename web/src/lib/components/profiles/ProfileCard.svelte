@@ -19,6 +19,10 @@
 		preinfuseSeconds,
 		type CremaProfile
 	} from '$lib/profiles';
+	import { getSettingsStore, convertWeight, convertTemp } from '$lib/settings';
+
+	const settings = getSettingsStore();
+	const prefs = $derived(settings.current);
 
 	let {
 		profile,
@@ -66,6 +70,8 @@
 
 	const ratio = $derived(ratioLabel(profile));
 	const preinf = $derived(preinfuseSeconds(profile.segments));
+	const doseM = $derived(convertWeight(profile.dose, prefs.weightUnit));
+	const tempM = $derived(convertTemp(profile.brewTemp, prefs.tempUnit));
 	/**
 	 * Right-most action icon — three states:
 	 *
@@ -137,11 +143,11 @@
 			</div>
 			<div class="pp-metric">
 				<div class="pp-metric-label">Dose</div>
-				<div class="pp-metric-val">{profile.dose}<em>g</em></div>
+				<div class="pp-metric-val">{doseM.value}<em>{doseM.unit || 'g'}</em></div>
 			</div>
 			<div class="pp-metric">
 				<div class="pp-metric-label">Temp</div>
-				<div class="pp-metric-val">{profile.brewTemp.toFixed(1)}<em>°C</em></div>
+				<div class="pp-metric-val">{tempM.value}<em>{tempM.unit || '°C'}</em></div>
 			</div>
 			<div class="pp-metric">
 				<div class="pp-metric-label">Pre-inf</div>

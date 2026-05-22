@@ -26,18 +26,17 @@
 	{#if p.doseGrindMode === 'dose'}
 		<QStepper
 			value={p.dose}
-			unit="g"
+			dimension="weight"
 			min={5}
 			max={30}
 			step={0.1}
 			onChange={(v) => params.set('dose', v)}
-			fmt={(v) => v.toFixed(1)}
 		/>
 		<div style="height:8px"></div>
 		<QChipRow
 			options={[16, 17, 18, 19, 20]}
 			value={p.dose}
-			unit="g"
+			dimension="weight"
 			onChange={(v) => params.set('dose', v)}
 		/>
 	{:else}

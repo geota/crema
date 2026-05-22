@@ -16,18 +16,17 @@
 	<QStepper
 		label="Brew temp"
 		value={p.brewTemp}
-		unit="°C"
+		dimension="temp"
 		min={80}
 		max={100}
 		step={0.5}
 		onChange={(v) => params.set('brewTemp', v)}
-		fmt={(v) => v.toFixed(1)}
 	/>
 	<div style="height:6px"></div>
 	<QChipRow
 		options={[88, 91, 93, 95, 97]}
 		value={p.brewTemp}
-		unit="°"
+		dimension="temp"
 		onChange={(v) => params.set('brewTemp', v)}
 	/>
 </div>

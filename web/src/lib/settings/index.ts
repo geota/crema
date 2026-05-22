@@ -31,5 +31,15 @@ export {
 	formatTemp,
 	formatPressure,
 	formatVolume,
-	type Measurement
+	formatByDimension,
+	toCanonicalWeight,
+	toCanonicalTemp,
+	toCanonicalPressure,
+	toCanonicalVolume,
+	canonicalToDisplay,
+	displayToCanonical,
+	displayDecimals,
+	unitLabel,
+	type Measurement,
+	type Dimension
 } from './format';

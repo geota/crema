@@ -388,6 +388,7 @@
 							value={draft.dose}
 							step={0.1}
 							unit="g"
+							dimension="weight"
 							min={5}
 							max={30}
 							onChange={(v) => patch({ dose: v })}
@@ -397,6 +398,7 @@
 							value={draft.yieldG}
 							step={0.5}
 							unit="g"
+							dimension="weight"
 							min={10}
 							max={80}
 							onChange={(v) => patch({ yieldG: v })}
@@ -406,6 +408,7 @@
 							value={draft.brewTemp}
 							step={0.5}
 							unit="°C"
+							dimension="temp"
 							min={80}
 							max={100}
 							onChange={(v) => patch({ brewTemp: v })}
@@ -428,6 +431,7 @@
 							value={draft.maxTotalVolumeMl}
 							step={5}
 							unit="mL"
+							dimension="volume"
 							min={0}
 							max={1023}
 							digits={0}
@@ -453,6 +457,7 @@
 							value={draft.tankTemperatureC}
 							step={1}
 							unit="°C"
+							dimension="temp"
 							min={0}
 							max={100}
 							digits={0}

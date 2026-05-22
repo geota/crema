@@ -27,12 +27,11 @@
 />
 
 <StGroup title="Targets">
-	<StRow title="Default dose" sub="Grams of ground coffee per shot.">
+	<StRow title="Default dose" sub="Dose of ground coffee per shot.">
 		{#snippet control()}
 			<StStepper
 				value={prefs.defaultDoseG}
-				unit="g"
-				decimals={1}
+				dimension="weight"
 				step={0.1}
 				min={5}
 				max={30}
@@ -57,8 +56,7 @@
 		{#snippet control()}
 			<StStepper
 				value={prefs.defaultBrewTempC}
-				unit="°C"
-				decimals={1}
+				dimension="temp"
 				step={0.5}
 				min={80}
 				max={100}
