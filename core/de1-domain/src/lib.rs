@@ -43,8 +43,8 @@ pub use error::{DomainError, ImportError};
 pub use flow::{Estimate, FlowAlgorithm, FlowEstimator};
 pub use history::{STORED_SHOT_FORMAT_VERSION, ShotMetadata, StoredShot};
 pub use profile::{
-    AssembledProfile, Compare, ExitCondition, ExitMetric, Limiter, Profile, ProfileStep, Pump,
-    TempSensor, Transition,
+    AssembledProfile, BeverageType, Compare, ExitCondition, ExitMetric, Limiter, Profile,
+    ProfileStep, Pump, TempSensor, Transition,
 };
 pub use profile_import::{export_v2_json, import_legacy_tcl, import_v2_json};
 pub use session::SessionTimer;

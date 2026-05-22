@@ -48,6 +48,33 @@ pub enum TempSensor {
     Water,
 }
 
+/// What kind of beverage a profile produces. Mirrors reaprime's
+/// `BeverageType` enum and the community v2 JSON contract's
+/// `beverage_type` field. Defaults to `Espresso` on import — both
+/// reaprime and Crema fall back lenient here (not strict) because the
+/// field is metadata, not execution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BeverageType {
+    /// Standard espresso shot. The default for absent / unknown values.
+    Espresso,
+    /// A calibration routine (flow / pressure cal profiles).
+    Calibrate,
+    /// A cleaning / backflush routine.
+    Cleaning,
+    /// Hand-controlled (manual) profile — the firmware honours user
+    /// adjustments mid-shot.
+    Manual,
+    /// Pour-over style profile (long, low-pressure).
+    Pourover,
+}
+
+impl Default for BeverageType {
+    fn default() -> Self {
+        BeverageType::Espresso
+    }
+}
+
 /// The metric an exit condition watches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ExitMetric {
@@ -109,6 +136,16 @@ pub struct ProfileStep {
     pub volume_limit_ml: u16,
     /// Optional advanced max-flow-or-pressure limiter.
     pub limiter: Option<Limiter>,
+    /// Per-step target weight in grams (None = no per-step weight
+    /// target). Metadata only — the DE1 protocol has no per-step
+    /// weight-target field, so this never reaches `assemble`; it
+    /// round-trips through v2 JSON only. Mirrors reaprime's
+    /// `ProfileStep.weight` (nullable in v2).
+    ///
+    /// `#[serde(default)]` so profiles serialized before this field
+    /// existed still deserialize.
+    #[serde(default)]
+    pub weight: Option<f32>,
 }
 
 impl ProfileStep {
@@ -190,6 +227,38 @@ pub struct Profile {
     /// (e.g. the embedded `builtin.json`) still deserialize.
     #[serde(default)]
     pub dose: f32,
+    /// Profile author / creator. Free text, optional.
+    ///
+    /// Matches reaprime's `Profile.author` + the community v2 JSON
+    /// `author` field. App-side metadata only — has no protocol effect.
+    /// `#[serde(default)]` so older serialized profiles still load.
+    #[serde(default)]
+    pub author: String,
+    /// What kind of beverage this profile produces. See [`BeverageType`].
+    /// `#[serde(default)]` → `Espresso` for older serialized profiles.
+    #[serde(default)]
+    pub beverage_type: BeverageType,
+    /// Target tank temperature, °C. Some advanced profiles change the
+    /// tank setpoint mid-shot; most are 0.0 (no override).
+    ///
+    /// Matches reaprime's `Profile.tankTemperature` + the community v2
+    /// `tank_temperature` field. App-side metadata only — the DE1
+    /// protocol has no per-profile tank-temp frame field.
+    #[serde(default)]
+    pub tank_temperature: f32,
+    /// Community v2 profile schema version. Reaprime serializes this as
+    /// the **string** `"2"` (not a number) per the v2 spec; Crema
+    /// matches. Default `"2"` for profiles serialized before this field
+    /// existed.
+    #[serde(default = "default_profile_version")]
+    pub version: String,
+}
+
+/// The default `Profile::version` — always the string `"2"` matching the
+/// community v2 contract. Free function (not `Default::default`) so the
+/// `#[serde(default = …)]` attribute can reference it.
+fn default_profile_version() -> String {
+    "2".to_string()
 }
 
 impl Profile {
@@ -290,6 +359,7 @@ mod tests {
             exit: None,
             volume_limit_ml: 0,
             limiter: None,
+            weight: None,
         }
     }
 
@@ -305,6 +375,10 @@ mod tests {
             max_total_volume_ml: 0,
             target_weight: 0.0,
             dose: 0.0,
+            author: String::new(),
+            beverage_type: BeverageType::Espresso,
+            tank_temperature: 0.0,
+            version: "2".to_string(),
         }
     }
 
