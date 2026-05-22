@@ -26,7 +26,7 @@ import { MachineState, MmrRegister } from '$lib/core/crema-core';
 import { De1Manager, EMPTY_DE1_DIAGNOSTICS, ScaleManager } from '$lib/ble';
 import { getBeanStore } from '$lib/bean';
 import { getHistoryStore } from '$lib/history';
-import { getCaptureRecorder, getCaptureStore } from '$lib/capture';
+import { getCaptureRecorder, getCaptureStore, type CaptureEntry } from '$lib/capture';
 import { getProfileStore, toCoreProfile } from '$lib/profiles';
 import { getSettingsStore } from '$lib/settings';
 import { getMaintenanceStore } from '$lib/maintenance';
@@ -391,8 +391,19 @@ export class CremaApp {
 						this.shotStartedAtMs - CAPTURE_LEAD_MS,
 						performance.now()
 					);
-					if (slice.length > 0) {
-						void getCaptureStore().put(record.id, slice);
+					// Prepend an explicit META entry carrying the scale's
+					// advertised name (and other identifying info) so the
+					// replay tool can `connectScale(name)` *before* feeding
+					// any SCALE_WEIGHT bytes. The advertised name is the
+					// most reliable scale-model signal — better than the
+					// wire-signature sniff `guessScaleAdvertisedName` does
+					// for older captures.
+					const enriched =
+						slice.length > 0
+							? this.enrichSliceWithMeta(slice, snapshot)
+							: slice;
+					if (enriched.length > 0) {
+						void getCaptureStore().put(record.id, enriched);
 					}
 				}
 				this.shotStartedAtMs = null;
@@ -572,6 +583,46 @@ export class CremaApp {
 	 */
 	async setLineFrequencyOverride(hz: 0 | 50 | 60): Promise<void> {
 		await this.core.setLineFrequencyOverride(hz);
+	}
+
+	/**
+	 * Prepend a synthetic META entry to a capture slice carrying connect-
+	 * phase identity (scale advertised name, DE1 firmware version). The
+	 * replay tool reads META on load and uses it to set up the wasm core
+	 * (`connectScale(name)`, …) BEFORE iterating the BLE byte stream —
+	 * otherwise scale weights can't decode (the core needs a scale model
+	 * selected up front).
+	 *
+	 * Timestamp tucked one ms before the first slice entry so it always
+	 * lands first in chronological replay; if the slice is empty, lands
+	 * at `performance.now()`.
+	 */
+	private enrichSliceWithMeta(
+		slice: readonly CaptureEntry[],
+		snapshot: UiSnapshot
+	): CaptureEntry[] {
+		const meta: Record<string, string | number | undefined> = {};
+		if (snapshot.scaleName) meta.scaleName = snapshot.scaleName;
+		if (snapshot.de1MachineInfo.FirmwareVersion != null) {
+			meta.de1FirmwareVersion = snapshot.de1MachineInfo.FirmwareVersion;
+		}
+		if (snapshot.de1MachineInfo.MachineModel != null) {
+			meta.de1MachineModel = snapshot.de1MachineInfo.MachineModel;
+		}
+		if (snapshot.de1MachineInfo.SerialNumber != null) {
+			meta.de1SerialNumber = snapshot.de1MachineInfo.SerialNumber;
+		}
+		// No identifying info? Nothing to prepend.
+		if (Object.keys(meta).length === 0) return [...slice];
+		const firstT = slice[0]?.t ?? performance.now();
+		const metaEntry: CaptureEntry = {
+			t: firstT - 1,
+			dir: 'in',
+			src: 'META',
+			hex: '',
+			meta
+		};
+		return [metaEntry, ...slice];
 	}
 
 	/**
@@ -1027,18 +1078,23 @@ export class CremaApp {
 		// Identify the scale so SCALE_WEIGHT bytes decode into ScaleReading
 		// events on the way through. Without a `connectScale` call the core
 		// has no decoder selected and the bytes are dropped, leaving the
-		// replayed shot's weight series empty. The capture format doesn't
-		// record the scale model, so we sniff the first SCALE_WEIGHT
-		// payload's header bytes for a known signature.
-		const firstScale = parsed.events.find((e) => e.source === 'ScaleWeight');
-		if (firstScale) {
-			const guess = guessScaleAdvertisedName(firstScale.data);
-			if (guess) {
-				try {
-					await this.core.connectScale(guess);
-				} catch {
-					// Non-fatal — if identification fails, weight just stays empty.
-				}
+		// replayed shot's weight series empty.
+		//
+		// Preference order: the explicit META prelude (Crema captures now
+		// prepend one with the scale's advertised name on persist) → the
+		// first SCALE_WEIGHT payload's header bytes for a known signature
+		// (legacy fallback for captures pre-dating META).
+		const scaleNameToConnect =
+			parsed.meta.scaleName ??
+			(() => {
+				const firstScale = parsed.events.find((e) => e.source === 'ScaleWeight');
+				return firstScale ? guessScaleAdvertisedName(firstScale.data) : undefined;
+			})();
+		if (scaleNameToConnect) {
+			try {
+				await this.core.connectScale(scaleNameToConnect);
+			} catch {
+				// Non-fatal — if identification fails, weight just stays empty.
 			}
 		}
 		this.state.patch({

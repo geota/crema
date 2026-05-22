@@ -35,10 +35,23 @@ export interface CaptureEntry {
 	 * Canonical source name — matches the Kotlin `BleSessionRecorder` and the
 	 * Rust `replay.rs` tool: `DE1_STATE`, `DE1_SHOT_SAMPLE`, `DE1_WATER_LEVELS`,
 	 * `SCALE_WEIGHT`, `SCALE_FF12`, …
+	 *
+	 * The special source `META` (introduced 2026-05-22) carries
+	 * connect-phase identity (scale advertised name, DE1 firmware, machine
+	 * model, …) so the replay tool can call `connectScale(name)` etc.
+	 * BEFORE feeding the BLE byte stream — otherwise the bytes can't decode
+	 * (scale model needs to be known up front). META entries set
+	 * `hex: ''` and stash the payload in {@link meta}.
 	 */
 	readonly src: string;
-	/** Lowercase hex payload, no separators. */
+	/** Lowercase hex payload, no separators. Empty string for META entries. */
 	readonly hex: string;
+	/**
+	 * Optional structured payload for META entries. Ignored on
+	 * regular-source entries. Stays optional so old captures (no META) and
+	 * external replay tools that don't understand META still parse.
+	 */
+	readonly meta?: Record<string, string | number | undefined>;
 }
 
 /**
@@ -76,34 +89,115 @@ export function toHex(data: Uint8Array): string {
 }
 
 /**
+ * Source names whose latest-seen entry is kept indefinitely (separate from
+ * the rolling buffer), so a slice taken long after the connect-phase reads
+ * still has the identity bytes the replay tool needs to decode subsequent
+ * notifications. Examples: the DE1 firmware Version read (one-shot at
+ * connect — never seen again unless reconnect), the StateInfo Read (also
+ * one-shot), ShotSettings (one-shot + occasional notify), and every MMR
+ * read response (model, serial, GHC info, flush temp, …).
+ *
+ * `SCALE_WEIGHT` is handled separately — we always keep the FIRST one
+ * seen (the wire-signature byte pattern lets the replay sniff the scale
+ * model), not the most recent.
+ */
+const IDENTITY_SOURCES: ReadonlySet<string> = new Set([
+	'DE1_VERSION',
+	'DE1_STATE',
+	'DE1_SHOT_SETTINGS',
+	'DE1_MMR_READ'
+]);
+
+/**
  * A rolling capture buffer. The BLE managers feed it on every inbound
  * notification; the orchestrator slices it on `ShotCompleted`.
+ *
+ * Alongside the rolling buffer, the recorder keeps a small dictionary of
+ * **identifier entries** — the latest connect-phase reads (DE1 firmware
+ * version, machine state, shot settings, MMR values) plus the FIRST scale
+ * weight ever seen. These survive the rolling-cap trim and get prepended
+ * to any slice that wouldn't otherwise include them, so a replay always
+ * has the bytes needed to identify the connected hardware regardless of
+ * how long ago the connect happened.
  */
 export class CaptureRecorder {
 	private buf: CaptureEntry[] = [];
+	/** Latest-seen entry per `IDENTITY_SOURCES` source (plus one bucket per MMR register). */
+	private identityLatest: Map<string, CaptureEntry> = new Map();
+	/** First SCALE_WEIGHT ever recorded — used by replay for scale-type sniffing. */
+	private firstScaleWeight: CaptureEntry | null = null;
 
 	/** Append one inbound notification. */
 	record(source: NotificationSource, data: Uint8Array, atMs: number): void {
-		this.buf.push({
+		const src = SRC_NAME[source];
+		const entry: CaptureEntry = {
 			t: atMs,
 			dir: 'in',
-			src: SRC_NAME[source],
+			src,
 			hex: toHex(data)
-		});
+		};
+		this.buf.push(entry);
+		// Identity sources — keep the most recent regardless of rolling trim.
+		// MMR responses bucket by register byte (data[0..3] is the address,
+		// little-endian), so a sweep of multiple registers keeps each
+		// independently rather than overwriting them.
+		if (IDENTITY_SOURCES.has(src)) {
+			const key = src === 'DE1_MMR_READ' ? `${src}:${data[0]},${data[1]},${data[2]}` : src;
+			this.identityLatest.set(key, entry);
+		}
+		// First scale weight — kept so a replay can sniff scale type by
+		// wire-signature even after the rolling buffer has churned past it.
+		if (src === 'SCALE_WEIGHT' && this.firstScaleWeight === null) {
+			this.firstScaleWeight = entry;
+		}
 		// Trim in batches so `Array.shift` does not run on every push.
 		if (this.buf.length > MAX_ENTRIES + TRIM_SLACK) {
 			this.buf = this.buf.slice(-MAX_ENTRIES);
 		}
 	}
 
-	/** Every entry whose `t` is in `[fromT, toT]`, in chronological order. */
+	/**
+	 * Every entry whose `t` is in `[fromT, toT]`, in chronological order —
+	 * plus any identity entries (latest connect-phase reads + first scale
+	 * weight) older than `fromT`, prepended with timestamps tucked just
+	 * before `fromT` so they replay first.
+	 */
 	slice(fromT: number, toT: number): CaptureEntry[] {
-		return this.buf.filter((e) => e.t >= fromT && e.t <= toT);
+		const inWindow = this.buf.filter((e) => e.t >= fromT && e.t <= toT);
+		// Collect identity entries that are NOT already in the window —
+		// always-keep entries from before the window start. Adjust their
+		// timestamps to land just before `fromT` so chronological replay
+		// hits them first; preserve the relative order across identities
+		// by spacing them 1 ms apart.
+		const prelude: CaptureEntry[] = [];
+		const inWindowHexSet = new Set(inWindow.map((e) => `${e.src}|${e.hex}`));
+		const candidates: CaptureEntry[] = [];
+		for (const entry of this.identityLatest.values()) {
+			if (entry.t < fromT && !inWindowHexSet.has(`${entry.src}|${entry.hex}`)) {
+				candidates.push(entry);
+			}
+		}
+		if (
+			this.firstScaleWeight &&
+			this.firstScaleWeight.t < fromT &&
+			!inWindowHexSet.has(`SCALE_WEIGHT|${this.firstScaleWeight.hex}`)
+		) {
+			candidates.push(this.firstScaleWeight);
+		}
+		// Keep their original relative order, just bump timestamps so they
+		// land before the window.
+		candidates.sort((a, b) => a.t - b.t);
+		for (let i = 0; i < candidates.length; i++) {
+			prelude.push({ ...candidates[i], t: fromT - (candidates.length - i) });
+		}
+		return [...prelude, ...inWindow];
 	}
 
 	/** Drop every entry — used on disconnect / replay-start. */
 	clear(): void {
 		this.buf = [];
+		this.identityLatest.clear();
+		this.firstScaleWeight = null;
 	}
 }
 
