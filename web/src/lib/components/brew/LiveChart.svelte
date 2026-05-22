@@ -165,6 +165,9 @@
 		const temp: (number | null)[] = [];
 		const weight: (number | null)[] = [];
 		const goal: (number | null)[] = [];
+		const setPressure: (number | null)[] = [];
+		const setFlow: (number | null)[] = [];
+		const setTemp: (number | null)[] = [];
 		for (let i = 0; i < samples.length; i++) {
 			const s = samples[i];
 			const t = s.elapsed / 1000;
@@ -174,8 +177,18 @@
 			temp.push(s.temp == null ? null : s.temp / 10);
 			weight.push(s.weight == null ? null : s.weight / 10);
 			goal.push(goalAt(t));
+			// Live setpoint dashed overlay — what the firmware was aiming for
+			// at each AC half-cycle. Distinct from `goal` (profile-derived)
+			// because the DE1 interpolates / ramps / clamps internally per
+			// frame logic. Same scale-divisor pattern as the measured channels
+			// (temp /10; pressure/flow native). Historical shots stored
+			// before these fields existed have them as `undefined`; coerce to
+			// null so uPlot draws a gap rather than throwing.
+			setPressure.push(s.setGroupPressure ?? null);
+			setFlow.push(showFlowCurve ? (s.setGroupFlow ?? null) : null);
+			setTemp.push(s.setHeadTemp == null ? null : s.setHeadTemp / 10);
 		}
-		return [xs, pressure, flow, temp, weight, goal];
+		return [xs, pressure, flow, temp, weight, goal, setPressure, setFlow, setTemp];
 	}
 
 	/** The four channel end-dots: [data column, colour var, radius]. */
@@ -346,6 +359,34 @@
 					stroke: () => cssVar('--chart-axis-label'),
 					width: 1.5,
 					dash: [4, 4],
+					points: { show: false }
+				},
+				// Live setpoint overlays — color-keyed to each measured curve,
+				// dashed to read as "target". Width 1.2 to read as background
+				// (the solid measured curves stay primary). Setpoints come
+				// straight from `ShotSample.set_*` per Telemetry event.
+				{
+					scale: 'y',
+					stroke: () => cssVar('--tel-pressure'),
+					width: 1.2,
+					dash: [3, 3],
+					alpha: 0.6,
+					points: { show: false }
+				},
+				{
+					scale: 'y',
+					stroke: () => cssVar('--tel-flow'),
+					width: 1.2,
+					dash: [3, 3],
+					alpha: 0.6,
+					points: { show: false }
+				},
+				{
+					scale: 'y',
+					stroke: () => cssVar('--tel-temp'),
+					width: 1.2,
+					dash: [3, 3],
+					alpha: 0.6,
 					points: { show: false }
 				}
 			],
