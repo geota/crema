@@ -58,8 +58,8 @@
 		{
 			icon: 'thermometer',
 			color: 'var(--tel-temp)',
-			primary: { key: 'showHeadTemp', label: 'Head', color: 'var(--tel-temp)' },
-			secondary: { key: 'showMixTemp', label: 'Mix', color: 'var(--tel-temp-2)' }
+			primary: { key: 'showHeadTemp', label: 'Coffee', color: 'var(--tel-temp)' },
+			secondary: { key: 'showMixTemp', label: 'Water', color: 'var(--tel-temp-2)' }
 		},
 		{
 			icon: 'scales',
