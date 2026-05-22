@@ -36,7 +36,7 @@
 	import type { CremaApp, UiSnapshot } from '$lib/state';
 	import type { De1State } from '$lib/ble';
 	import type { FirmwareUpdateStatus } from '$lib/core';
-	import { getSettingsStore, formatTemp } from '$lib/settings';
+	import { getSettingsStore } from '$lib/settings';
 	import StSectionHead from '../StSectionHead.svelte';
 	import StGroup from '../StGroup.svelte';
 	import StRow from '../StRow.svelte';
@@ -128,15 +128,35 @@
 	/** The Web Bluetooth device id of the connected DE1, or a dash. */
 	const bleLabel = $derived(diag.deviceId ?? '—');
 	/**
-	 * The live group-head temperature, in the chosen unit, or a dash.
-	 * Uses `head_temp` (the actual thermocouple) — at idle this sits at
-	 * the heater's idle setpoint (~80°C) while `mix_temp` reads room
-	 * temperature because no water is flowing. Matches the Brew
-	 * dashboard's "Group" column (`d129eef`).
+	 * Machine identity: derived from the connect-time MMR reads of
+	 * `MachineModel` (0x80000C) and `CpuBoardVersion` (0x800008). Both
+	 * land via the normal `Event::MmrValue` path into
+	 * `snapshot.de1MachineInfo`. Falls back to a dash until they arrive.
+	 *
+	 * `MachineModel` is a small integer per the legacy lookup
+	 * (`vars.tcl:3883`); `CpuBoardVersion` is encoded as
+	 * `board_revision × 1000` (raw 1100 → PCB v1.1, 1300 → PCB v1.3).
 	 */
-	const groupLabel = $derived(
-		formatTemp(snapshot.latestTelemetry?.temp ?? null, prefs.tempUnit)
-	);
+	const MACHINE_MODEL_NAMES = [
+		'unknown',
+		'DE1',
+		'DE1+',
+		'DE1PRO',
+		'DE1XL',
+		'DE1CAFE',
+		'DE1XXL',
+		'DE1XXXL'
+	] as const;
+	const modelLabel = $derived.by(() => {
+		const m = snapshot.de1MachineInfo.MachineModel;
+		if (m === undefined) return '—';
+		return MACHINE_MODEL_NAMES[m] ?? `model ${m}`;
+	});
+	const boardLabel = $derived.by(() => {
+		const cpu = snapshot.de1MachineInfo.CpuBoardVersion;
+		if (cpu === undefined) return '—';
+		return `PCB v${(cpu / 1000).toFixed(1)}`;
+	});
 
 	// ── Firmware-update check (read-only) ─────────────────────────────────
 	// Mirrors the legacy de1app's local comparison (`vars.tcl:3787-3797`):
@@ -239,12 +259,17 @@
 			{connected ? 'DE1 · Crema Bar' : 'No machine connected'}
 		</div>
 		<div class="st-machinecard-meta">
-			<!-- D4: Firmware is the DE1's decoded version label; BLE is the Web
-			     Bluetooth device id; Group is the live mix temperature. All read
-			     "—" until the DE1 is connected and the data arrives. -->
+			<!-- Identity meta: firmware build (MMR 0x800010), machine model
+			     (MMR 0x80000C), and CPU board revision (MMR 0x800008). The
+			     "Group" temp lived here originally but at idle it read
+			     room-temperature (mix_temp) or duplicated the brew foot
+			     (head_temp), neither of which is what users open the Machine
+			     card to see. Identity is the right thing for a settings
+			     surface. All read "—" until the MMR replies land. -->
 			<span>Firmware <strong>{firmwareLabel}</strong></span>
+			<span>Model <strong>{modelLabel}</strong></span>
+			<span>{boardLabel}</span>
 			<span class="st-machinecard-ble">BLE {bleLabel}</span>
-			<span>Group {groupLabel}</span>
 		</div>
 		<div class="st-machinecard-actions">
 			{#if connected}

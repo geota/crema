@@ -99,6 +99,15 @@ impl MmrReadReply {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum MmrRegister {
+    /// CPU-board revision, encoded `cpu_board_version × 1000` (e.g. raw
+    /// `1100` → PCB v1.1, raw `1300` → PCB v1.3). Read at connect time
+    /// in the legacy de1app via `get_3_mmr_cpuboard_machinemodel_firmwareversion`.
+    CpuBoardVersion,
+    /// Machine model identifier — `0 = Unset / unknown`, `1 = DE1`,
+    /// `2 = DE1+`, `3 = DE1PRO`, `4 = DE1XL`, `5 = DE1CAFE`, `6 = DE1XXL`,
+    /// `7 = DE1XXXL`. The legacy app uses this to gate model-specific
+    /// settings (e.g. the cup-warmer surface on Bengle hardware).
+    MachineModel,
     /// Firmware build number.
     FirmwareVersion,
     /// Group Head Controller info bitmask (bit 0: present, bit 1: active).
@@ -157,6 +166,8 @@ impl MmrRegister {
     /// The register's raw 24-bit MMR address.
     pub fn address(self) -> u32 {
         match self {
+            MmrRegister::CpuBoardVersion => 0x80_0008,
+            MmrRegister::MachineModel => 0x80_000C,
             MmrRegister::FirmwareVersion => 0x80_0010,
             MmrRegister::GhcInfo => 0x80_381C,
             MmrRegister::TankTempThreshold => 0x80_380C,
@@ -187,7 +198,9 @@ impl MmrRegister {
     /// [`from_address`](Self::from_address) and a useful read-set for callers
     /// that want to poll the whole diagnostic window. Order is not significant;
     /// the `all_covers_every_variant` test pins this list to the enum.
-    pub const ALL: [MmrRegister; 23] = [
+    pub const ALL: [MmrRegister; 25] = [
+        MmrRegister::CpuBoardVersion,
+        MmrRegister::MachineModel,
         MmrRegister::FirmwareVersion,
         MmrRegister::GhcInfo,
         MmrRegister::TankTempThreshold,
@@ -327,7 +340,9 @@ mod tests {
         };
         for reg in MmrRegister::ALL {
             match reg {
-                MmrRegister::FirmwareVersion
+                MmrRegister::CpuBoardVersion
+                | MmrRegister::MachineModel
+                | MmrRegister::FirmwareVersion
                 | MmrRegister::GhcInfo
                 | MmrRegister::TankTempThreshold
                 | MmrRegister::FanThreshold

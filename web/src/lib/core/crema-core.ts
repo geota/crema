@@ -599,6 +599,19 @@ export enum MachineState {
  * address to pass to [`read_request`] / [`write_request`].
  */
 export enum MmrRegister {
+	/**
+	 * CPU-board revision, encoded `cpu_board_version × 1000` (e.g. raw
+	 * `1100` → PCB v1.1, raw `1300` → PCB v1.3). Read at connect time
+	 * in the legacy de1app via `get_3_mmr_cpuboard_machinemodel_firmwareversion`.
+	 */
+	CpuBoardVersion = "CpuBoardVersion",
+	/**
+	 * Machine model identifier — `0 = Unset / unknown`, `1 = DE1`,
+	 * `2 = DE1+`, `3 = DE1PRO`, `4 = DE1XL`, `5 = DE1CAFE`, `6 = DE1XXL`,
+	 * `7 = DE1XXXL`. The legacy app uses this to gate model-specific
+	 * settings (e.g. the cup-warmer surface on Bengle hardware).
+	 */
+	MachineModel = "MachineModel",
 	/** Firmware build number. */
 	FirmwareVersion = "FirmwareVersion",
 	/** Group Head Controller info bitmask (bit 0: present, bit 1: active). */

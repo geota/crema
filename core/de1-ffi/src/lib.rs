@@ -68,6 +68,10 @@ impl From<NotificationSource> for Source {
 /// [`de1_protocol::MmrRegister`] across the FFI boundary.
 #[derive(uniffi::Enum)]
 pub enum MmrReg {
+    /// CPU-board revision (raw value / 1000 → e.g. PCB v1.1).
+    CpuBoardVersion,
+    /// Machine model identifier (1=DE1, 2=DE1+, 3=DE1PRO, 4=DE1XL, …).
+    MachineModel,
     /// Firmware build number.
     FirmwareVersion,
     /// Group Head Controller info bitmask.
@@ -119,6 +123,8 @@ pub enum MmrReg {
 impl From<MmrReg> for MmrRegister {
     fn from(reg: MmrReg) -> MmrRegister {
         match reg {
+            MmrReg::CpuBoardVersion => MmrRegister::CpuBoardVersion,
+            MmrReg::MachineModel => MmrRegister::MachineModel,
             MmrReg::FirmwareVersion => MmrRegister::FirmwareVersion,
             MmrReg::GhcInfo => MmrRegister::GhcInfo,
             MmrReg::TankTempThreshold => MmrRegister::TankTempThreshold,
