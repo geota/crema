@@ -552,17 +552,23 @@
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
+	/* BLE-id mono — keeps the opaque base64-ish id readable, but matches
+	   the sans rows' size + weight so the four real values read as one
+	   uniform stack (placeholder dashes use a separate override below). */
 	:global(.st-content .st-machinecard-info-val-mono) {
 		font-family: var(--font-mono);
-		font-weight: 400;
-		font-size: 10px;
-		color: rgba(var(--tint-rgb), 0.7);
+		/* font-weight + font-size + color intentionally inherited from
+		   `.st-machinecard-info-val` — only the family changes. */
 	}
 	/* Placeholder dash — applied when a value is the literal "—" so all
-	   four rows' dashes render at the same size/weight as the BLE row's
-	   mono dash. Avoids the eye-jerk of bold "—"s next to a faint mono
-	   "—" when the DE1 is disconnected. */
+	   four rows' dashes render uniformly. Overrides the BLE row's mono
+	   font too: a mono em-dash is visibly narrower than the proportional
+	   one, which made the BLE dash read as a different glyph next to the
+	   other three. Forcing the sans family on the placeholder keeps the
+	   four dashes identical in shape; the mono returns once a real BLE
+	   id arrives. */
 	:global(.st-content .st-machinecard-info-val.is-placeholder) {
+		font-family: var(--font-sans);
 		font-weight: 400;
 		font-size: 10px;
 		color: rgba(var(--tint-rgb), 0.5);
