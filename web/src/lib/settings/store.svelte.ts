@@ -100,6 +100,17 @@ export interface Settings {
 	 * makes the integrator use it instead of the auto-detector's lock.
 	 */
 	lineFrequencyHz: 0 | 50 | 60;
+	/**
+	 * Keep the DE1 awake while Crema is open and the user is interacting.
+	 * `true` (default): Crema sets `FeatureFlags.UserNotPresent = 0` on the
+	 * DE1 and sends a `UserPresent` heartbeat on every user touch
+	 * (debounced to once per minute). The DE1 will only sleep if Crema
+	 * goes 30+ minutes without any interaction.
+	 * `false`: Crema sets `FeatureFlags.UserNotPresent = 1` and stops the
+	 * heartbeat; the DE1 follows its own internal sleep timer regardless
+	 * of tablet activity. Useful for shared / café machines.
+	 */
+	suppressDe1Sleep: boolean;
 
 	// ── Sharing (Visualizer) ─────────────────────────────────────────────
 	/** Auto-upload finished shots to Visualizer. */
@@ -149,6 +160,7 @@ export const DEFAULT_SETTINGS: Settings = {
 	autoConnectOnLaunch: true,
 	telemetryRateHz: 50,
 	lineFrequencyHz: 0,
+	suppressDe1Sleep: true,
 
 	visualizerAutoUpload: true,
 	visualizerPrivacy: 'unlisted',

@@ -336,6 +336,25 @@
 			/>
 		{/snippet}
 	</StRow>
+	<StRow
+		title="Keep DE1 awake while Crema is open"
+		sub="Resets the DE1's sleep timer on every touch / keystroke so the
+		machine doesn't sleep mid-session. Off → the DE1 follows its own
+		~30 min sleep timer regardless of tablet activity (useful for shared
+		/ café machines)."
+	>
+		{#snippet control()}
+			<StToggle
+				on={prefs.suppressDe1Sleep}
+				onChange={(v) => {
+					settings.set('suppressDe1Sleep', v);
+					void app?.setSuppressDe1Sleep(v);
+					if (v) void app?.markUserPresent();
+				}}
+				label="Keep DE1 awake"
+			/>
+		{/snippet}
+	</StRow>
 </StGroup>
 
 <StGroup
