@@ -325,13 +325,37 @@ export class De1Manager {
 				);
 			}
 
-			// Read CpuBoardVersion (0x800008) + MachineModel (0x80000C) — the
-			// machine-identity registers the Machine settings card surfaces in
-			// place of a live temperature. Three sibling reads, each emits a
-			// WriteCharacteristic command which the orchestrator routes to BLE.
-			// Failures are non-fatal — the card just falls back to "—" until
-			// the value lands.
-			for (const reg of [MmrRegister.CpuBoardVersion, MmrRegister.MachineModel]) {
+			// Connect-time MMR sweep — mirrors the legacy
+			// `later_new_de1_connection_setup` block (`bluetooth.tcl:2054-2114`).
+			// Legacy issues each read in declaration order, with `get_heater_voltage`
+			// staggered by 7 s for older BLE-stack reasons (`bluetooth.tcl:2110`);
+			// modern stacks queue writes serially so we send the burst back-to-back.
+			//
+			// The six legacy-equivalent reads:
+			//   CpuBoardVersion       (0x800008) — get_3_mmr_…             (2074)
+			//   MachineModel          (0x80000C) — same multi-word read
+			//   GhcInfo               (0x80381C) — get_ghc_is_installed    (2069)
+			//   RefillKit             (0x80385C) — get_refill_kit_present  (2083)
+			//   SerialNumber          (0x803830) — get_sn                  (2084)
+			//   HeaterVoltage         (0x803834) — get_heater_voltage      (2110, +7s)
+			//
+			// FirmwareVersion (0x800010) was already dispatched above, so it's
+			// the seventh register Crema reads at connect time. The legacy's
+			// `get_3_mmr_cpuboard_machinemodel_firmwareversion` packs all three
+			// into a single multi-word read (length 2); Crema issues them as
+			// three single-word reads, which the DE1 handles the same way.
+			//
+			// All failures are non-fatal — each register's UI consumer falls
+			// back to "—" / null until the value lands.
+			const connectMmrSweep = [
+				MmrRegister.CpuBoardVersion,
+				MmrRegister.MachineModel,
+				MmrRegister.GhcInfo,
+				MmrRegister.RefillKit,
+				MmrRegister.SerialNumber,
+				MmrRegister.HeaterVoltage
+			];
+			for (const reg of connectMmrSweep) {
 				step = `MMR read ${reg}`;
 				try {
 					const out = await this.core.readMmr(reg);
