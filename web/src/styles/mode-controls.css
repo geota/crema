@@ -43,6 +43,12 @@
 	align-items: center;
 	gap: 8px;
 }
+/* Equal-width chips so the three sit on a uniform grid regardless of
+   the label's natural width (the longest sub — Hot water's
+   "92 °C · 250 ml" — drives the floor). */
+.mc-foot-chips .mc-chip {
+	min-width: 150px;
+}
 .mc-foot-rule {
 	display: inline-block;
 	width: 1px;
