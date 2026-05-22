@@ -88,6 +88,18 @@ const MAX_TELEMETRY_GAP_S = 2;
 const CAPTURE_LEAD_MS = 15_000;
 
 /**
+ * Minimum ms between `ProfileUploadCompleted` and the next
+ * `requestMachineState` write. The DE1 firmware finishes the final
+ * flash write inside `APIView::write` for the tail frame, and only
+ * clears `ProfileDownloadInProgress` when that write returns. A
+ * state-request that hits the firmware task loop inside the window
+ * aborts the shot to HeaterDown after preinfuse — BC 9788201734.
+ * Reaprime's value (`ConnectionTimings.profileDownloadGuard`); Crema
+ * matches. docs/22 §1.2.
+ */
+const PROFILE_DOWNLOAD_GUARD_MS = 500;
+
+/**
  * The DE1 top-level states whose group flow counts toward the water-filter /
  * descale counters: an espresso shot and the two hot-water modes (hot water +
  * its rinse). Steam draws no water through the group, and idle / sleep / cal
@@ -137,6 +149,18 @@ export class CremaApp {
 	 * rolling BLE-capture buffer for the IndexedDB capture store.
 	 */
 	private shotStartedAtMs: number | null = null;
+
+	/**
+	 * `performance.now()` of the most recent `ProfileUploadCompleted` event,
+	 * or `null` before any upload. `requestMachineState` consults this to
+	 * defer a state-request that hits the firmware too soon after a
+	 * profile upload — the BC 9788201734 race: the DE1 only clears
+	 * `ProfileDownloadInProgress` after the final flash write returns; a
+	 * state=Espresso request before that aborts the shot to HeaterDown
+	 * after preinfuse. Reaprime's `ConnectionTimings.profileDownloadGuard`
+	 * is 500 ms; Crema matches. docs/22 §1.2.
+	 */
+	private lastProfileUploadCompletedAtMs: number | null = null;
 
 	constructor(private readonly core: CremaCore) {
 		this.de1 = new De1Manager(core, {
@@ -265,6 +289,13 @@ export class CremaApp {
 				// Mark the shot's start so ShotCompleted can slice the raw BLE
 				// capture (with a lead-in) for the IndexedDB capture store.
 				this.shotStartedAtMs = performance.now();
+			}
+			if (event.type === 'ProfileUploadCompleted') {
+				// Open the profile-download race window — see the comment on
+				// `lastProfileUploadCompletedAtMs`. `requestMachineState`
+				// reads the value to delay any state-request that lands
+				// inside the 500 ms guard window.
+				this.lastProfileUploadCompletedAtMs = performance.now();
 			}
 			if (event.type === 'ShotCompleted') {
 				const snapshot = this.state.current;
@@ -680,6 +711,21 @@ export class CremaApp {
 	 * buttons; the shell exposes them for completeness.
 	 */
 	async requestMachineState(state: MachineState): Promise<void> {
+		// Profile-download race guard (docs/22 §1.2). The DE1 firmware
+		// holds `ProfileDownloadInProgress` for a short window after the
+		// final frame write — a state-request that arrives inside the
+		// window is aborted to HeaterDown after preinfuse (BC 9788201734).
+		// Mirrors reaprime's 500 ms `ConnectionTimings.profileDownloadGuard`.
+		if (this.lastProfileUploadCompletedAtMs !== null) {
+			const remaining =
+				PROFILE_DOWNLOAD_GUARD_MS -
+				(performance.now() - this.lastProfileUploadCompletedAtMs);
+			if (remaining > 0) {
+				await new Promise<void>((resolve) =>
+					window.setTimeout(resolve, remaining)
+				);
+			}
+		}
 		this.applyCoreOutput(await this.core.requestMachineState(state));
 	}
 
