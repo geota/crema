@@ -37,6 +37,7 @@ pub mod session;
 pub mod shot;
 pub mod steam;
 pub mod stop;
+pub mod tank;
 pub mod volume;
 pub mod water;
 
@@ -60,5 +61,6 @@ pub use steam::{
     SteamSample,
 };
 pub use stop::{AutoStop, STOP_WEIGHT_BEFORE, StopConfig, StopReason, StopTargets};
+pub use tank::{TANK_MM_TO_ML, water_tank_ml};
 pub use volume::{LineFreqDetector, VolumeIntegrator};
 pub use water::{WaterEvent, WaterMonitor, WaterRecord, WaterSessionKind};
