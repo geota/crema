@@ -183,12 +183,13 @@ export const DEFAULT_SETTINGS: Settings = {
 	visualizerIncludeProfile: true,
 	visualizerIncludeNotes: false,
 
-	// Chart channels — primaries on, secondaries off until the user opts in.
+	// Chart channels — only Pressure, Flow, and Weight default on; the rest
+	// are opt-in via the Quick Sheet's "Chart" toggles.
 	showPressure: true,
 	showResistance: false,
 	showFlow: true,
 	showVolume: false,
-	showHeadTemp: true,
+	showHeadTemp: false,
 	showMixTemp: false,
 	showWeight: true,
 	showWeightFlow: false,
