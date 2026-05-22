@@ -36,7 +36,7 @@
 	import type { CremaApp, UiSnapshot } from '$lib/state';
 	import type { De1State } from '$lib/ble';
 	import type { FirmwareUpdateStatus } from '$lib/core';
-	import { MachineState } from '$lib/core/crema-core';
+	import { MachineState, MmrRegister } from '$lib/core/crema-core';
 	import { getSettingsStore } from '$lib/settings';
 	import StSectionHead from '../StSectionHead.svelte';
 	import StGroup from '../StGroup.svelte';
@@ -369,6 +369,32 @@
 					if (v) void app?.markUserPresent();
 				}}
 				label="Keep DE1 awake"
+			/>
+		{/snippet}
+	</StRow>
+	<!--
+		Group Head Controller — the firmware setting that determines whether
+		host-initiated shot / steam / hot-water starts require a touch on the
+		on-machine button to confirm. Real machine setting (writes through
+		MMR `0x803820` via `app.setGhcMode`); the toggle reads the current
+		value off `de1MachineInfo[GhcMode]`. ON = 4 (legacy de1app's "all
+		on"); OFF = 0. The connect-time MMR sweep populates the initial
+		state.
+	-->
+	<StRow
+		title="Group head controller (GHC)"
+		sub="When on, the DE1 lights up its front buttons and waits for you to
+		tap one to confirm any host-initiated shot, steam, or hot-water start.
+		Turn off to let Crema start sessions directly from the Coffee button."
+	>
+		{#snippet control()}
+			{@const ghcOn = (snapshot.de1MachineInfo[MmrRegister.GhcMode] ?? 0) > 0}
+			<StToggle
+				on={ghcOn}
+				onChange={(v) => {
+					void app?.setGhcMode(v ? 4 : 0);
+				}}
+				label="GHC mode"
 			/>
 		{/snippet}
 	</StRow>

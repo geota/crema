@@ -22,7 +22,7 @@ import {
 	type CremaCore,
 	type FirmwareUpdateStatus
 } from '$lib/core';
-import { MachineState } from '$lib/core/crema-core';
+import { MachineState, MmrRegister } from '$lib/core/crema-core';
 import { De1Manager, EMPTY_DE1_DIAGNOSTICS, ScaleManager } from '$lib/ble';
 import { getBeanStore } from '$lib/bean';
 import { getHistoryStore } from '$lib/history';
@@ -112,6 +112,28 @@ const WATER_COUNTING_STATES: ReadonlySet<string> = new Set([
 	MachineState.HotWater,
 	MachineState.HotWaterRinse
 ]);
+
+/**
+ * Best-effort scale identification from the first SCALE_WEIGHT payload.
+ *
+ * Used by the replay path — the capture format doesn't record the scale
+ * model, so we sniff well-known wire signatures off the first weight
+ * notification's bytes:
+ *
+ * - **Bookoo** — every BOOKOO_SC weight packet starts with `03 0B` (header
+ *   byte 0x03, length 0x0B). No other supported scale uses that pair.
+ *
+ * Add new signatures as more scales make it into Crema's replay tests.
+ * Returns `undefined` if no signature matches; the replay then proceeds
+ * with no scale identified, which surfaces as an empty weight series —
+ * the existing (broken) behaviour, so we don't regress.
+ */
+function guessScaleAdvertisedName(firstWeightBytes: Uint8Array): string | undefined {
+	if (firstWeightBytes.length >= 2 && firstWeightBytes[0] === 0x03 && firstWeightBytes[1] === 0x0b) {
+		return 'BOOKOO_SC';
+	}
+	return undefined;
+}
 
 /** Options for {@link CremaApp.replayCapture}. */
 export interface ReplayCaptureOptions {
@@ -553,6 +575,25 @@ export class CremaApp {
 	}
 
 	/**
+	 * Write the Group Head Controller mode (MMR `0x803820`). `0` disables
+	 * the touch-to-confirm gate on host-initiated state changes so Crema
+	 * can start a shot from the dashboard without a physical button tap;
+	 * any non-zero value re-enables it (legacy de1app uses `4` for "on").
+	 *
+	 * After the write, the core re-reads `GhcMode` so the Settings toggle
+	 * reflects the firmware's new state. The user-visible row is a
+	 * real-machine setting (writes through to the DE1), so the toggle's
+	 * commit only fires through this wrapper, not through any local cache.
+	 */
+	async setGhcMode(mode: number): Promise<void> {
+		this.applyCoreOutput(await this.core.setGhcMode(mode));
+		// Read back to confirm + refresh the snapshot's de1MachineInfo
+		// (the toggle binds against `ui.de1MachineInfo[MmrRegister.GhcMode]`,
+		// which is populated by MmrValue events the read fires).
+		this.applyCoreOutput(await this.core.readMmr(MmrRegister.GhcMode));
+	}
+
+	/**
 	 * Result of one file submitted to {@link CremaApp.importShotFile}. The
 	 * imported record is the same shape the History page reads from the
 	 * shared store; `null` `record` means "couldn't parse" — `message`
@@ -982,6 +1023,24 @@ export class CremaApp {
 		// The replay also drops the telemetry wall-clock anchor — replayed
 		// timestamps must not integrate the gap since the last live sample.
 		this.lastTelemetryAtMs = null;
+
+		// Identify the scale so SCALE_WEIGHT bytes decode into ScaleReading
+		// events on the way through. Without a `connectScale` call the core
+		// has no decoder selected and the bytes are dropped, leaving the
+		// replayed shot's weight series empty. The capture format doesn't
+		// record the scale model, so we sniff the first SCALE_WEIGHT
+		// payload's header bytes for a known signature.
+		const firstScale = parsed.events.find((e) => e.source === 'ScaleWeight');
+		if (firstScale) {
+			const guess = guessScaleAdvertisedName(firstScale.data);
+			if (guess) {
+				try {
+					await this.core.connectScale(guess);
+				} catch {
+					// Non-fatal — if identification fails, weight just stays empty.
+				}
+			}
+		}
 		this.state.patch({
 			...CLEARED_DE1_READOUT,
 			replay: {
