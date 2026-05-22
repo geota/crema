@@ -62,6 +62,22 @@ export type Event =
 	 * fallback otherwise). Resets to 0 on every `ShotStarted`.
 	 */
 	dispensed_volume_ml: number;
+	/**
+	 * Target group-head temperature, °C — the heater setpoint for the
+	 * active frame. Legacy "Goal temperature" curve on the live shot
+	 * chart (`de1_de1.tcl:540` maps `goal_temperature ← SetHeadTemp`).
+	 */
+	set_head_temp: number;
+	/**
+	 * Target group pressure, bar — the pump pressure setpoint for the
+	 * active frame. Legacy "Goal pressure" curve.
+	 */
+	set_group_pressure: number;
+	/**
+	 * Target group flow, mL/s — the pump flow setpoint for the active
+	 * frame. Legacy "Goal flow" curve.
+	 */
+	set_group_flow: number;
 }}
 	/** A weight reading arrived from the scale, smoothed by the flow estimator. */
 	| { type: "ScaleReading", content: {

@@ -1188,6 +1188,9 @@ impl CremaCore {
             mix_temp: sample.mix_temp,
             steam_temp: sample.steam_temp,
             dispensed_volume_ml: self.volume_integrator.dispensed_ml(),
+            set_head_temp: sample.set_head_temp,
+            set_group_pressure: sample.set_group_pressure,
+            set_group_flow: sample.set_group_flow,
         });
     }
 

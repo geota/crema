@@ -110,6 +110,16 @@ pub enum Event {
         /// (BLE-jitter-immune when the line-frequency is known, host-clock
         /// fallback otherwise). Resets to 0 on every `ShotStarted`.
         dispensed_volume_ml: f32,
+        /// Target group-head temperature, °C — the heater setpoint for the
+        /// active frame. Legacy "Goal temperature" curve on the live shot
+        /// chart (`de1_de1.tcl:540` maps `goal_temperature ← SetHeadTemp`).
+        set_head_temp: f32,
+        /// Target group pressure, bar — the pump pressure setpoint for the
+        /// active frame. Legacy "Goal pressure" curve.
+        set_group_pressure: f32,
+        /// Target group flow, mL/s — the pump flow setpoint for the active
+        /// frame. Legacy "Goal flow" curve.
+        set_group_flow: f32,
     },
     /// A weight reading arrived from the scale, smoothed by the flow estimator.
     ScaleReading {
