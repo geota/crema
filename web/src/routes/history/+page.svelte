@@ -41,6 +41,16 @@
 	>(null);
 	/** Whether an import is currently running — disables the picker. */
 	let importing = $state(false);
+	/**
+	 * Outcome of the most recent bulk Export. Mirrors `importBanner`
+	 * but surfaces export-side info (especially the "skipped N without
+	 * raw bytes" message from the replay-zip path).
+	 */
+	let exportBanner = $state<
+		| { kind: 'success'; message: string }
+		| { kind: 'error'; message: string }
+		| null
+	>(null);
 
 	/**
 	 * Hand-off from the hidden `<input type="file">` to the CremaApp
@@ -69,6 +79,7 @@
 	async function exportAllShots(): Promise<void> {
 		if (shots.length === 0 || exporting) return;
 		exporting = true;
+		exportBanner = null;
 		try {
 			if (settings.current.shotExportFormat === 'replay') {
 				await exportAllAsReplayZip();
@@ -91,12 +102,15 @@
 
 	/**
 	 * Walk every recorded shot, fetch its raw BLE capture from
-	 * IndexedDB, and pack the lot into a single `.zip`. Imported shots
-	 * (and any pulled before the capture recorder existed) won't have
-	 * a capture — they get their community-v2 JSON instead so the
-	 * archive isn't missing entries. File naming inside the zip uses
-	 * `shotFilename` (yyyymmddTHHMMSS.shot.json) replacing the `.shot.json`
-	 * suffix with `.jsonl` for captures.
+	 * IndexedDB, and pack the captured ones into a single `.zip` of
+	 * `.jsonl` files. Shots with no capture (imports + pre-recorder
+	 * shots) are SKIPPED so the archive stays a pure replay bundle —
+	 * mixing v2 JSON in would confuse downstream tools that expect
+	 * `.jsonl` everywhere. The skipped count surfaces in the export
+	 * banner so the user knows which shots are missing.
+	 *
+	 * Filename inside the zip is `{shotStamp}.jsonl`, where the stamp
+	 * comes from `shotFilename` minus its `.shot.json` suffix.
 	 */
 	async function exportAllAsReplayZip(): Promise<void> {
 		const captureStore = getCaptureStore();
@@ -104,21 +118,41 @@
 		// a callback. Pre-resolve every shot's bytes serially so the
 		// IndexedDB awaits don't fight the zip's worker.
 		const files: Record<string, Uint8Array> = {};
+		let skipped = 0;
 		for (const shot of shots) {
-			const base = shotFilename(shot).replace(/\.shot\.json$/, '');
 			const entries = await captureStore.get(shot.id).catch(() => null);
-			if (entries && entries.length > 0) {
-				files[`${base}.jsonl`] = strToU8(captureJsonl(entries));
-			} else {
-				// Fall back to the v2 JSON so imports still survive.
-				files[`${base}.shot.json`] = strToU8(exportStoredShotAsV2Json(shot));
+			if (!entries || entries.length === 0) {
+				skipped += 1;
+				continue;
 			}
+			const base = shotFilename(shot).replace(/\.shot\.json$/, '');
+			files[`${base}.jsonl`] = strToU8(captureJsonl(entries));
+		}
+		const included = Object.keys(files).length;
+		if (included === 0) {
+			exportBanner = {
+				kind: 'error',
+				message: `No replayable captures found. ${skipped} shot${
+					skipped === 1 ? '' : 's'
+				} have no raw bytes — switch Settings → "Shot export format" to Community v2 to export them.`
+			};
+			return;
 		}
 		const zipped: Uint8Array = await new Promise((resolve, reject) => {
 			fflateZip(files, (err, data) => (err ? reject(err) : resolve(data)));
 		});
 		const blob = new Blob([new Uint8Array(zipped)], { type: 'application/zip' });
 		downloadBlob(blob, `crema-history-${stamp()}.zip`);
+		exportBanner =
+			skipped === 0
+				? {
+						kind: 'success',
+						message: `Exported ${included} replayable shot${included === 1 ? '' : 's'}.`
+					}
+				: {
+						kind: 'success',
+						message: `Exported ${included} replayable shot${included === 1 ? '' : 's'}; skipped ${skipped} without raw bytes (imported or pre-recorder).`
+					};
 	}
 
 	function downloadBlob(blob: Blob, filename: string): void {
@@ -336,6 +370,29 @@
 				class="hi-import-banner-close"
 				aria-label="Dismiss"
 				onclick={() => (importBanner = null)}
+			>
+				<i class="ph ph-x" aria-hidden="true"></i>
+			</button>
+		</div>
+	{/if}
+
+	{#if exportBanner}
+		<div
+			class="hi-import-banner"
+			class:hi-import-banner-ok={exportBanner.kind === 'success'}
+			class:hi-import-banner-err={exportBanner.kind === 'error'}
+			role="status"
+		>
+			<i
+				class={exportBanner.kind === 'success' ? 'ph ph-check-circle' : 'ph ph-warning'}
+				aria-hidden="true"
+			></i>
+			<span>{exportBanner.message}</span>
+			<button
+				type="button"
+				class="hi-import-banner-close"
+				aria-label="Dismiss"
+				onclick={() => (exportBanner = null)}
 			>
 				<i class="ph ph-x" aria-hidden="true"></i>
 			</button>
