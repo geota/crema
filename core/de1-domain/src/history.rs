@@ -53,12 +53,49 @@ pub struct ShotMetadata {
 
 impl ShotMetadata {
     /// The brew ratio (yield ÷ dose), if both weights are recorded and the
-    /// dose is positive.
+    /// dose is positive. Delegates to the free [`brew_ratio`] helper so
+    /// every consumer — Crema's history store, an Android shell, the
+    /// web ratio label — produces an identical number from the same
+    /// inputs.
     pub fn brew_ratio(&self) -> Option<f32> {
-        match (self.dose, self.yield_out) {
-            (Some(dose), Some(yield_out)) if dose > 0.0 => Some(yield_out / dose),
-            _ => None,
-        }
+        brew_ratio(self.dose?, self.yield_out?)
+    }
+}
+
+/// Compute the brew ratio (yield ÷ dose) for a pair of weights in grams.
+///
+/// Returns `None` for a non-positive dose, a non-finite operand, or a
+/// non-finite quotient — never panics. The result is the `N` in `1:N`
+/// style labels (the shell formats the string).
+pub fn brew_ratio(dose: f32, yield_out: f32) -> Option<f32> {
+    if !dose.is_finite() || !yield_out.is_finite() || dose <= 0.0 {
+        return None;
+    }
+    let r = yield_out / dose;
+    if r.is_finite() { Some(r) } else { None }
+}
+
+#[cfg(test)]
+mod ratio_tests {
+    use super::brew_ratio;
+
+    #[test]
+    fn standard_shot() {
+        assert_eq!(brew_ratio(18.0, 36.0), Some(2.0));
+    }
+
+    #[test]
+    fn ristretto() {
+        let r = brew_ratio(20.0, 30.0).expect("finite quotient");
+        assert!((r - 1.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn missing_or_invalid() {
+        assert_eq!(brew_ratio(0.0, 36.0), None);
+        assert_eq!(brew_ratio(-1.0, 36.0), None);
+        assert_eq!(brew_ratio(18.0, f32::NAN), None);
+        assert_eq!(brew_ratio(f32::INFINITY, 36.0), None);
     }
 }
 

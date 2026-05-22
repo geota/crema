@@ -20,6 +20,7 @@
  */
 
 import type { Profile, ProfileStep, SparkShape } from './core-types';
+import { formatRatio } from '$lib/utils/ratio';
 
 /** Roast level — a fixed library filter facet. */
 export type Roast = 'light' | 'medium' | 'dark';
@@ -170,10 +171,16 @@ export function uid(prefix: string): string {
 	return `${prefix}:${rnd}`;
 }
 
-/** The brew ratio label, e.g. `1:2.4`, derived from yield ÷ dose. */
+/**
+ * The brew ratio label, e.g. `1:2.4`, derived from yield ÷ dose.
+ *
+ * Delegates to the shared `formatRatio` helper in `$lib/utils/ratio`
+ * (which uses `de1_domain::brew_ratio` via the wasm bridge), so the
+ * Profiles and History screens read identical ratios from the same
+ * inputs and any future shell picks up the same arithmetic.
+ */
 export function ratioLabel(p: Pick<CremaProfile, 'dose' | 'yieldG'>): string {
-	if (p.dose <= 0) return '1:—';
-	return `1:${(p.yieldG / p.dose).toFixed(1)}`;
+	return formatRatio(p.dose, p.yieldG);
 }
 
 /**

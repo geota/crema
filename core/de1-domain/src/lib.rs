@@ -44,7 +44,7 @@ pub mod water;
 pub use builtin::{BUILTIN_PROFILE_COUNT, builtin_profiles};
 pub use error::{DomainError, ImportError};
 pub use flow::{Estimate, FlowAlgorithm, FlowEstimator};
-pub use history::{STORED_SHOT_FORMAT_VERSION, ShotMetadata, StoredShot};
+pub use history::{STORED_SHOT_FORMAT_VERSION, ShotMetadata, StoredShot, brew_ratio};
 pub use profile::{
     AssembledProfile, BeverageType, Compare, ExitCondition, ExitMetric, Limiter, Profile,
     ProfileStep, Pump, TempSensor, Transition,
