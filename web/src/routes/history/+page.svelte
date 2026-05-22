@@ -41,16 +41,6 @@
 	>(null);
 	/** Whether an import is currently running — disables the picker. */
 	let importing = $state(false);
-	/**
-	 * Outcome of the most recent bulk Export. Mirrors `importBanner`
-	 * but surfaces export-side info (especially the "skipped N without
-	 * raw bytes" message from the replay-zip path).
-	 */
-	let exportBanner = $state<
-		| { kind: 'success'; message: string }
-		| { kind: 'error'; message: string }
-		| null
-	>(null);
 
 	/**
 	 * Hand-off from the hidden `<input type="file">` to the CremaApp
@@ -79,7 +69,6 @@
 	async function exportAllShots(): Promise<void> {
 		if (shots.length === 0 || exporting) return;
 		exporting = true;
-		exportBanner = null;
 		try {
 			if (settings.current.shotExportFormat === 'replay') {
 				await exportAllAsReplayZip();
@@ -130,12 +119,11 @@
 		}
 		const included = Object.keys(files).length;
 		if (included === 0) {
-			exportBanner = {
-				kind: 'error',
-				message: `No replayable captures found. ${skipped} shot${
+			console.log(
+				`[history export] No replayable captures found. ${skipped} shot${
 					skipped === 1 ? '' : 's'
 				} have no raw bytes — switch Settings → "Shot export format" to Community v2 to export them.`
-			};
+			);
 			return;
 		}
 		const zipped: Uint8Array = await new Promise((resolve, reject) => {
@@ -143,16 +131,12 @@
 		});
 		const blob = new Blob([new Uint8Array(zipped)], { type: 'application/zip' });
 		downloadBlob(blob, `crema-history-${stamp()}.zip`);
-		exportBanner =
-			skipped === 0
-				? {
-						kind: 'success',
-						message: `Exported ${included} replayable shot${included === 1 ? '' : 's'}.`
-					}
-				: {
-						kind: 'success',
-						message: `Exported ${included} replayable shot${included === 1 ? '' : 's'}; skipped ${skipped} without raw bytes (imported or pre-recorder).`
-					};
+		console.log(
+			`[history export] Exported ${included} replayable shot${included === 1 ? '' : 's'}` +
+				(skipped > 0
+					? `; skipped ${skipped} without raw bytes (imported or pre-recorder).`
+					: '.')
+		);
 	}
 
 	function downloadBlob(blob: Blob, filename: string): void {
@@ -376,28 +360,6 @@
 		</div>
 	{/if}
 
-	{#if exportBanner}
-		<div
-			class="hi-import-banner"
-			class:hi-import-banner-ok={exportBanner.kind === 'success'}
-			class:hi-import-banner-err={exportBanner.kind === 'error'}
-			role="status"
-		>
-			<i
-				class={exportBanner.kind === 'success' ? 'ph ph-check-circle' : 'ph ph-warning'}
-				aria-hidden="true"
-			></i>
-			<span>{exportBanner.message}</span>
-			<button
-				type="button"
-				class="hi-import-banner-close"
-				aria-label="Dismiss"
-				onclick={() => (exportBanner = null)}
-			>
-				<i class="ph ph-x" aria-hidden="true"></i>
-			</button>
-		</div>
-	{/if}
 
 	{#if shots.length === 0}
 		<!-- Empty state — no shots recorded yet. -->
