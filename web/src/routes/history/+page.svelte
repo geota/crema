@@ -19,7 +19,7 @@
 	 * **Stubbed** — Export, Compare and Save-as-profile are `// TODO`s.
 	 */
 	import { getHistoryStore, exportStoredShotAsV2Json, shotFilename } from '$lib/history';
-	import { ShotRow, ShotDetail } from '$lib/components/history';
+	import { ShotRow, ShotDetail, CompareOverlay } from '$lib/components/history';
 	import { getCremaAppContext } from '$lib/shell/app-context';
 	import { getSettingsStore, convertWeight } from '$lib/settings';
 	import { getCaptureStore, captureJsonl } from '$lib/capture';
@@ -276,6 +276,62 @@
 	function select(id: string): void {
 		selectedId = id;
 	}
+
+	// ── Compare state ────────────────────────────────────────────────────
+	/**
+	 * Hard cap on the number of shots that may be overlaid at once. Beyond
+	 * five the lines stop being distinguishable; this matches the colour
+	 * palette in `CompareOverlay`.
+	 */
+	const COMPARE_MAX = 5;
+	/** Whether the list is in compare-select mode. */
+	let selectMode = $state(false);
+	/**
+	 * Ids picked for compare. Insertion order is preserved (it drives the
+	 * compare overlay's colour assignment), and stays sorted by selection
+	 * time — first-picked = first colour.
+	 */
+	let selectedIds = $state<string[]>([]);
+	/** Whether the compare overlay is open. */
+	let compareOpen = $state(false);
+
+	const selectedIdSet = $derived(new Set(selectedIds));
+
+	/** Enter compare-select mode (or exit it if already in). */
+	function toggleSelectMode(): void {
+		if (selectMode) {
+			selectMode = false;
+			selectedIds = [];
+		} else if (shots.length >= 2) {
+			selectMode = true;
+		}
+	}
+
+	/** Pick or unpick a shot for compare, capped at {@link COMPARE_MAX}. */
+	function toggleCompareSelection(id: string): void {
+		if (selectedIdSet.has(id)) {
+			selectedIds = selectedIds.filter((x) => x !== id);
+		} else if (selectedIds.length < COMPARE_MAX) {
+			selectedIds = [...selectedIds, id];
+		}
+	}
+
+	/** Open the compare overlay — only meaningful with ≥2 selected. */
+	function openCompare(): void {
+		if (selectedIds.length < 2) return;
+		compareOpen = true;
+	}
+
+	function closeCompare(): void {
+		compareOpen = false;
+	}
+
+	/** The selected shots, in selection order, resolved from the store. */
+	const compareShots = $derived(
+		selectedIds
+			.map((id) => store.get(id))
+			.filter((s): s is NonNullable<typeof s> => s != null)
+	);
 </script>
 
 <svelte:head>
@@ -331,9 +387,37 @@
 				<i class="ph ph-download-simple" aria-hidden="true"></i>
 				{exporting ? 'Exporting…' : 'Export'}
 			</button>
-			<button class="st-btn st-btn-secondary" disabled={shots.length === 0}>
-				<i class="ph ph-arrows-left-right" aria-hidden="true"></i> Compare
-			</button>
+			{#if selectMode}
+				<button
+					class="st-btn st-btn-secondary"
+					onclick={toggleSelectMode}
+					title="Cancel compare selection"
+				>
+					<i class="ph ph-x" aria-hidden="true"></i> Cancel
+				</button>
+				<button
+					class="st-btn st-btn-primary"
+					disabled={selectedIds.length < 2}
+					onclick={openCompare}
+					title={selectedIds.length < 2
+						? 'Pick at least 2 shots to compare'
+						: `Open compare overlay (${selectedIds.length} shots)`}
+				>
+					<i class="ph ph-arrows-left-right" aria-hidden="true"></i>
+					Compare ({selectedIds.length})
+				</button>
+			{:else}
+				<button
+					class="st-btn st-btn-secondary"
+					disabled={shots.length < 2}
+					onclick={toggleSelectMode}
+					title={shots.length < 2
+						? 'Need at least 2 shots to compare'
+						: 'Pick 2–5 shots to overlay on one chart'}
+				>
+					<i class="ph ph-arrows-left-right" aria-hidden="true"></i> Compare
+				</button>
+			{/if}
 		</div>
 	</div>
 
@@ -464,6 +548,21 @@
 			</div>
 		</div>
 
+		<!-- Compare-select hint banner -->
+		{#if selectMode}
+			<div class="hi-select-banner" role="status">
+				<i class="ph ph-arrows-left-right" aria-hidden="true"></i>
+				<span>
+					Pick 2–{COMPARE_MAX} shots to overlay on one chart.
+					{selectedIds.length === 0
+						? 'Tap a row below.'
+						: selectedIds.length < 2
+							? `1 picked — tap another.`
+							: `${selectedIds.length} picked — Compare when ready.`}
+				</span>
+			</div>
+		{/if}
+
 		<!-- Split pane: list + detail -->
 		<div class="hi-split">
 			<div class="hi-list">
@@ -471,14 +570,55 @@
 					<ShotRow
 						shot={s}
 						active={selected?.id === s.id}
-						onclick={() => select(s.id)}
+						selectable={selectMode}
+						selected={selectedIdSet.has(s.id)}
+						selectionDisabled={selectedIds.length >= COMPARE_MAX}
+						onclick={() => (selectMode ? toggleCompareSelection(s.id) : select(s.id))}
 					/>
 				{/each}
 				{#if filtered.length === 0}
 					<div class="hi-empty">No shots match.</div>
 				{/if}
 			</div>
-			{#if selected}
+			{#if selectMode}
+				<!-- Compare-select staging pane (replaces ShotDetail in select mode) -->
+				<div class="hi-detail-empty hi-compare-staging">
+					{#if selectedIds.length === 0}
+						<div class="hi-compare-staging-title">No shots picked yet</div>
+						<div class="hi-compare-staging-sub">
+							Tap any row in the list to add it.
+						</div>
+					{:else}
+						<div class="hi-compare-staging-title">
+							{selectedIds.length} of {COMPARE_MAX}
+						</div>
+						<div class="hi-compare-staging-sub">
+							{#if selectedIds.length < 2}
+								Pick at least one more shot.
+							{:else}
+								Ready — hit Compare in the header.
+							{/if}
+						</div>
+						<ol class="hi-compare-list">
+							{#each compareShots as cs (cs.id)}
+								<li>
+									<span class="hi-compare-list-name"
+										>{cs.profileName ?? 'Untitled shot'}</span
+									>
+									<button
+										type="button"
+										class="hi-compare-list-x"
+										aria-label="Remove from compare"
+										onclick={() => toggleCompareSelection(cs.id)}
+									>
+										<i class="ph ph-x"></i>
+									</button>
+								</li>
+							{/each}
+						</ol>
+					{/if}
+				</div>
+			{:else if selected}
 				<!-- Keyed on the shot id: `ShotDetail` holds a local notes draft
 				     in component state, so reusing one instance across a shot
 				     change could save shot A's open draft onto shot B. The
@@ -497,6 +637,10 @@
 		</div>
 	{/if}
 </div>
+
+{#if compareOpen && compareShots.length >= 2}
+	<CompareOverlay shots={compareShots} onClose={closeCompare} />
+{/if}
 
 <style>
 	.hi-page {
@@ -724,6 +868,78 @@
 		font-family: var(--font-sans);
 		font-size: 13px;
 		min-height: 200px;
+	}
+
+	/* Compare-select banner — above the split pane while in select mode. */
+	.hi-select-banner {
+		display: inline-flex;
+		align-items: center;
+		gap: 10px;
+		padding: 10px 14px;
+		border-radius: var(--radius-sm, 6px);
+		background: rgba(var(--copper-rgb), 0.1);
+		border: 1px solid rgba(var(--copper-rgb), 0.22);
+		color: var(--copper-400);
+		font-family: var(--font-sans);
+		font-size: 12px;
+		align-self: flex-start;
+	}
+
+	/* Compare-staging pane — replaces ShotDetail while in select mode. */
+	.hi-compare-staging {
+		flex-direction: column;
+		justify-content: flex-start;
+		padding: 28px 22px;
+		text-align: center;
+		gap: 6px;
+	}
+	.hi-compare-staging-title {
+		font-family: var(--font-serif, var(--font-sans));
+		font-size: 18px;
+		color: var(--fg-1);
+	}
+	.hi-compare-staging-sub {
+		font-size: 12px;
+		color: rgba(var(--tint-rgb), 0.5);
+	}
+	.hi-compare-list {
+		list-style: none;
+		padding: 14px 0 0;
+		margin: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+		align-self: stretch;
+	}
+	.hi-compare-list li {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		padding: 8px 12px;
+		background: rgba(var(--tint-rgb), 0.04);
+		border-radius: var(--radius-sm, 6px);
+		font-family: var(--font-sans);
+		font-size: 13px;
+		color: var(--fg-1);
+	}
+	.hi-compare-list-name {
+		text-align: left;
+		flex: 1 1 auto;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+	.hi-compare-list-x {
+		background: transparent;
+		border: 0;
+		color: rgba(var(--tint-rgb), 0.55);
+		cursor: pointer;
+		padding: 2px 6px;
+		border-radius: 4px;
+	}
+	.hi-compare-list-x:hover {
+		background: rgba(var(--tint-rgb), 0.08);
+		color: var(--fg-1);
 	}
 
 	/* Empty page state */
