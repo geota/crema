@@ -577,6 +577,24 @@ export class CremaApp {
 		this.applyCoreOutput(await this.core.setScaleAutoStop(modeId));
 	}
 
+	/**
+	 * Read one DE1 sensor's calibration value. `factory: true` reads the
+	 * factory baseline; `false` (the default) reads the in-use value the
+	 * DE1 is applying. The DE1 replies on the Calibration characteristic
+	 * (`cuuid_12`), which decodes to an `Event::Calibration` that lands
+	 * on `snapshot.de1Calibration[sensor].{current|factory}`.
+	 *
+	 * Used by the Settings → Calibration screen on mount (legacy reference:
+	 * `gui.tcl:2445-2452` reads temperature + pressure current/factory on
+	 * calibration-screen open).
+	 */
+	async readCalibration(
+		sensor: import('$lib/core').CalTarget,
+		factory = false
+	): Promise<void> {
+		this.applyCoreOutput(await this.core.readCalibration(sensor, factory));
+	}
+
 	// ---- Capture replay (developer tool) ----------------------------------
 
 	/**

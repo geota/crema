@@ -41,6 +41,7 @@
 	import SoundSection from '$lib/components/settings/sections/SoundSection.svelte';
 	import SharingSection from '$lib/components/settings/sections/SharingSection.svelte';
 	import AdvancedSection from '$lib/components/settings/sections/AdvancedSection.svelte';
+	import CalibrationSection from '$lib/components/settings/sections/CalibrationSection.svelte';
 	import AboutSection from '$lib/components/settings/sections/AboutSection.svelte';
 
 	import { INITIAL_SNAPSHOT } from '$lib/state';
@@ -64,6 +65,7 @@
 		{ id: 'display', label: 'Display & units', icon: 'monitor' },
 		{ id: 'sound', label: 'Sound & feedback', icon: 'speaker-simple-high' },
 		{ id: 'sharing', label: 'Sharing', icon: 'share-network' },
+		{ id: 'calibration', label: 'Calibration', icon: 'gauge' },
 		{ id: 'advanced', label: 'Advanced', icon: 'wrench' },
 		{ id: 'about', label: 'About', icon: 'info' }
 	] as const;
@@ -117,6 +119,8 @@
 				<SoundSection />
 			{:else if active === 'sharing'}
 				<SharingSection />
+			{:else if active === 'calibration'}
+				<CalibrationSection {app} />
 			{:else if active === 'advanced'}
 				<AdvancedSection {app} />
 			{:else if active === 'about'}
