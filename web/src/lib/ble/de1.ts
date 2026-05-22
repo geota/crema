@@ -325,6 +325,24 @@ export class De1Manager {
 				);
 			}
 
+			// Read CpuBoardVersion (0x800008) + MachineModel (0x80000C) — the
+			// machine-identity registers the Machine settings card surfaces in
+			// place of a live temperature. Three sibling reads, each emits a
+			// WriteCharacteristic command which the orchestrator routes to BLE.
+			// Failures are non-fatal — the card just falls back to "—" until
+			// the value lands.
+			for (const reg of [MmrRegister.CpuBoardVersion, MmrRegister.MachineModel]) {
+				step = `MMR read ${reg}`;
+				try {
+					const out = await this.core.readMmr(reg);
+					this.callbacks.onCoreOutput(out);
+				} catch (e) {
+					this.callbacks.onStatus(
+						`DE1 MMR read ${reg} skipped: ${describeError(e)}`
+					);
+				}
+			}
+
 			// HeaderWrite (cuuid_0F) Read at connect time was a speculative
 			// active-profile indicator. Removed 2026-05-21 after a Bluetooth
 			// HCI snoop of a legacy DE1-app session confirmed the legacy app
