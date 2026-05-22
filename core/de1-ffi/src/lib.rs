@@ -588,12 +588,11 @@ impl CremaBridge {
     }
 
     /// Set the seconds of high-flow steam at the start of a steam cycle.
-    /// MMR `0x80382C`, 1-byte.
-    pub fn set_steam_highflow_start(&self, seconds: u32) -> String {
-        json(
-            self.core()
-                .set_steam_highflow_start(std::time::Duration::from_secs(u64::from(seconds))),
-        )
+    /// MMR `0x80382C`, 4-byte. Wire value is `seconds × 100`. `f32`
+    /// to preserve sub-second precision (legacy default 0.7s).
+    /// docs/22 §2.2.
+    pub fn set_steam_highflow_start(&self, seconds: f32) -> String {
+        json(self.core().set_steam_highflow_start(seconds))
     }
 
     /// Set the group-head-control mode. MMR `0x803820`, 1-byte.

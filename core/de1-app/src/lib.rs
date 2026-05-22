@@ -508,26 +508,36 @@ impl CremaCore {
         mmr_write_command(MmrRegister::TankTempThreshold, u32::from(temp_c), 1)
     }
 
-    /// Set the steam flow rate. `ml_per_s` is scaled `int(10 × rate)` per the
-    /// legacy encoding (`de1_comms.tcl:1210`). MMR `0x803828`, 1-byte.
+    /// Set the steam flow rate. `ml_per_s` is scaled by ×100 per the
+    /// legacy `de1_comms.tcl:1210` + reaprime `de1.models.dart`
+    /// (`steamFlow` `writeScale: 100.0`); the stored wire value is
+    /// `mL/s × 100` (e.g. 7.0 mL/s → raw 700). MMR `0x803828`, 4-byte.
+    /// Pre-2026-05-22 builds wrote `×10` into a 1-byte slot, both
+    /// wrong; the 1-byte clamp prevented valid steam targets from
+    /// reaching the firmware. docs/22 §2.1.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     pub fn set_steam_flow(&self, ml_per_s: f32) -> CoreOutput {
         if let Some(out) = self.refuse_if_firmware_locked("set_steam_flow") {
             return out;
         }
-        let raw = (ml_per_s * 10.0).round().clamp(0.0, 255.0) as u32;
-        mmr_write_command(MmrRegister::SteamFlow, raw, 1)
+        let raw = (ml_per_s * 100.0).round().clamp(0.0, f32::from(u16::MAX)) as u32;
+        mmr_write_command(MmrRegister::SteamFlow, raw, 4)
     }
 
     /// Set the seconds of high-flow steam at the start of a steam cycle
-    /// (legacy `set_steam_highflow_start`). MMR `0x80382C`, 1-byte.
+    /// (legacy `set_steam_highflow_start`). The wire value is
+    /// `seconds × 100` (the firmware default `0.7s` stores as `70` —
+    /// see legacy `machine.tcl:309 steam_highflow_start 70`). MMR
+    /// `0x80382C`, 4-byte. Takes `f32` seconds so sub-second precision
+    /// survives — pre-2026-05-22 builds took `Duration` and called
+    /// `as_secs()`, truncating `0.7s` to `0`. docs/22 §2.2.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    pub fn set_steam_highflow_start(&self, dur: Duration) -> CoreOutput {
+    pub fn set_steam_highflow_start(&self, seconds: f32) -> CoreOutput {
         if let Some(out) = self.refuse_if_firmware_locked("set_steam_highflow_start") {
             return out;
         }
-        let raw = dur.as_secs().min(255) as u32;
-        mmr_write_command(MmrRegister::SteamHighFlowStart, raw, 1)
+        let raw = (seconds * 100.0).round().clamp(0.0, f32::from(u16::MAX)) as u32;
+        mmr_write_command(MmrRegister::SteamHighFlowStart, raw, 4)
     }
 
     /// Set the group-head-control mode (legacy `set_ghc_mode`). `mode` is the
@@ -3047,16 +3057,38 @@ mod tests {
     }
 
     #[test]
-    fn set_steam_flow_scales_by_ten() {
+    fn set_steam_flow_scales_by_one_hundred_into_a_four_byte_slot() {
+        // docs/22 §2.1: TCL + reaprime agree on ×100 + 4-byte; the
+        // pre-2026-05-22 `×10` + 1-byte encoding was a bug (the 1-byte
+        // clamp prevented valid steam targets from reaching the
+        // firmware). 7.0 mL/s × 100 = 700; little-endian 4-byte =
+        // [0xBC, 0x02, 0x00, 0x00].
         let core = CremaCore::new();
-        let out = core.set_steam_flow(2.5);
+        let out = core.set_steam_flow(7.0);
         let Some(Command::WriteCharacteristic { target, data }) = out.commands.first() else {
             panic!("expected a WriteCharacteristic");
         };
         assert_eq!(*target, WriteTarget::De1MmrWrite);
-        // 2.5 mL/s × 10 = 25; 1-byte register.
-        assert_eq!(data[0], 1);
-        assert_eq!(data[4], 25);
+        assert_eq!(data[0], 4, "4-byte register");
+        // bytes 4..8 = the little-endian payload after the [len, addr]
+        // header that mmr_write_command emits.
+        assert_eq!(&data[4..8], &[0xBC, 0x02, 0x00, 0x00]);
+    }
+
+    #[test]
+    fn set_steam_highflow_start_preserves_sub_second_precision() {
+        // docs/22 §2.2: the wire value is seconds × 100. The default
+        // 0.7s stores as 70 (matches legacy `machine.tcl:309
+        // steam_highflow_start 70`). Pre-2026-05-22 builds took a
+        // `Duration` and called `as_secs()`, truncating 0.7s → 0.
+        let core = CremaCore::new();
+        let out = core.set_steam_highflow_start(0.7);
+        let Some(Command::WriteCharacteristic { data, .. }) = out.commands.first() else {
+            panic!("expected a WriteCharacteristic");
+        };
+        assert_eq!(data[0], 4, "4-byte register");
+        // 0.7 × 100 = 70; little-endian = [0x46, 0x00, 0x00, 0x00].
+        assert_eq!(&data[4..8], &[0x46, 0x00, 0x00, 0x00]);
     }
 
     #[test]
