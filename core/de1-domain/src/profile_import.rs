@@ -1095,13 +1095,15 @@ impl<'de> serde::Deserialize<'de> for Scalar {
 // ---------------------------------------------------------------------------
 
 /// A parsed Tcl dictionary: an ordered list of `(key, value)` word pairs.
-struct TclDict {
+/// `pub(crate)` so the sibling `history_import` module can reuse it for
+/// legacy `.shot` files (same minimal-Tcl grammar).
+pub(crate) struct TclDict {
     pairs: Vec<(String, String)>,
 }
 
 impl TclDict {
     /// Parse a Tcl dictionary from its textual form.
-    fn parse(text: &str) -> Result<Self, ImportError> {
+    pub(crate) fn parse(text: &str) -> Result<Self, ImportError> {
         let words = tcl_words(text)?;
         if words.len() % 2 != 0 {
             return Err(ImportError::Tcl(
@@ -1117,13 +1119,13 @@ impl TclDict {
     }
 
     /// Parse a Tcl list whose every element is itself a dictionary.
-    fn parse_list_of_dicts(text: &str) -> Result<Vec<TclDict>, ImportError> {
+    pub(crate) fn parse_list_of_dicts(text: &str) -> Result<Vec<TclDict>, ImportError> {
         tcl_words(text)?.iter().map(|w| TclDict::parse(w)).collect()
     }
 
     /// The value for `key`, or `None` if absent. The last write wins, matching
     /// Tcl's `dict` semantics.
-    fn get(&self, key: &str) -> Option<&str> {
+    pub(crate) fn get(&self, key: &str) -> Option<&str> {
         self.pairs
             .iter()
             .rev()
@@ -1132,7 +1134,7 @@ impl TclDict {
     }
 
     /// The value for `key` parsed as `f32`, or `None` if absent or unparsable.
-    fn get_f32(&self, key: &str) -> Option<f32> {
+    pub(crate) fn get_f32(&self, key: &str) -> Option<f32> {
         self.get(key).and_then(|v| {
             let t = v.trim();
             if t.is_empty() {

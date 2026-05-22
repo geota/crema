@@ -55,10 +55,11 @@ pub enum TempSensor {
 /// `beverage_type` field. Defaults to `Espresso` on import — both
 /// reaprime and Crema fall back lenient here (not strict) because the
 /// field is metadata, not execution.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum BeverageType {
     /// Standard espresso shot. The default for absent / unknown values.
+    #[default]
     Espresso,
     /// A calibration routine (flow / pressure cal profiles).
     Calibrate,
@@ -69,12 +70,6 @@ pub enum BeverageType {
     Manual,
     /// Pour-over style profile (long, low-pressure).
     Pourover,
-}
-
-impl Default for BeverageType {
-    fn default() -> Self {
-        BeverageType::Espresso
-    }
 }
 
 /// The metric an exit condition watches. Lowercase wire spelling
