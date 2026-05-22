@@ -18,29 +18,13 @@
 	 * shell does not talk to; the connection is faithful local UI (a `// TODO`
 	 * marks the missing service), shown as "Not connected" out of the box.
 	 */
-	import { getSettingsStore } from '$lib/settings';
 	import { getHistoryStore } from '$lib/history';
 	import StSectionHead from '../StSectionHead.svelte';
 	import StGroup from '../StGroup.svelte';
 	import StRow from '../StRow.svelte';
-	import StToggle from '../StToggle.svelte';
-	import StSegment from '../StSegment.svelte';
 	import StButton from '../StButton.svelte';
 
-	const settings = getSettingsStore();
-	const prefs = $derived(settings.current);
 	const history = getHistoryStore();
-
-	/** The allowed Visualizer privacy values — the `StSegment` option set. */
-	type VisualizerPrivacy = 'public' | 'unlisted' | 'private';
-	const PRIVACY_VALUES: readonly VisualizerPrivacy[] = ['public', 'unlisted', 'private'];
-
-	/** Narrow an `StSegment` value to a {@link VisualizerPrivacy}, or `null`. */
-	function asPrivacy(v: string): VisualizerPrivacy | null {
-		return (PRIVACY_VALUES as readonly string[]).includes(v)
-			? (v as VisualizerPrivacy)
-			: null;
-	}
 
 	// TODO: the Visualizer link needs the visualizer.coffee service (OAuth +
 	// upload API). The shell has no network/account layer, so the connection is
@@ -135,59 +119,27 @@
 	</div>
 </div>
 
+<!--
+	Upload preferences were 4 separate rows (auto-upload toggle, privacy
+	default, include-profile, include-notes). They've collapsed behind a
+	single "Connect Visualizer to configure uploads" CTA — the toggles
+	persisted values nothing read, and the audit said as much
+	(settings-audit.md §24-27). When the visualizer.coffee OAuth + upload
+	queue lands, the four rows come back. Their fields still live on
+	`Settings` so a future restore preserves any value the user set.
+-->
 <StGroup title="Upload" sub="When and how new shots are sent to Visualizer.">
 	<StRow
-		title="Auto-upload after every shot"
-		sub="Shots upload in the background once you stop the extraction. Failed uploads retry on next connection."
+		title="Configure uploads"
+		sub="Connect Visualizer first — the per-shot toggles (auto-upload, default privacy, include the profile JSON, include your tasting notes) appear here once you sign in."
+		notImplemented
 	>
 		{#snippet control()}
-			<StToggle
-				on={prefs.visualizerAutoUpload}
-				onChange={(v) => settings.set('visualizerAutoUpload', v)}
-				label="Auto-upload after every shot"
-			/>
-		{/snippet}
-	</StRow>
-	<StRow
-		title="Default privacy"
-		sub="Public — discoverable in the global feed. Unlisted — link-only. Private — visible only to you."
-	>
-		{#snippet control()}
-			<StSegment
-				value={prefs.visualizerPrivacy}
-				options={[
-					{ value: 'public', label: 'Public' },
-					{ value: 'unlisted', label: 'Unlisted' },
-					{ value: 'private', label: 'Private' }
-				]}
-				onChange={(v) => {
-					const privacy = asPrivacy(v);
-					if (privacy) settings.set('visualizerPrivacy', privacy);
-				}}
-			/>
-		{/snippet}
-	</StRow>
-	<StRow
-		title="Include profile JSON"
-		sub="Lets others import the exact profile from your shot. Recommended."
-	>
-		{#snippet control()}
-			<StToggle
-				on={prefs.visualizerIncludeProfile}
-				onChange={(v) => settings.set('visualizerIncludeProfile', v)}
-				label="Include profile JSON"
-			/>
-		{/snippet}
-	</StRow>
-	<StRow
-		title="Include your notes"
-		sub="If you tag the shot with tasting notes, send those too."
-	>
-		{#snippet control()}
-			<StToggle
-				on={prefs.visualizerIncludeNotes}
-				onChange={(v) => settings.set('visualizerIncludeNotes', v)}
-				label="Include your notes"
+			<StButton
+				label={connected ? 'Configure' : 'Connect Visualizer'}
+				icon={connected ? 'gear' : 'sign-in'}
+				disabled={!connected}
+				onClick={signIn}
 			/>
 		{/snippet}
 	</StRow>

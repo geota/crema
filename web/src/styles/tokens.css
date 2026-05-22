@@ -78,6 +78,8 @@
   --tel-temp-15:     #C44E3F26;
   --tel-weight:      #D89030;
   --tel-weight-15:   #D8903026;
+  --tel-resistance:  #B59B2E;     /* puck resistance — desaturated yellow, secondary trace */
+  --tel-resistance-15: #B59B2E26;
 
   /* Semantic (light surface defaults) */
   --success: #5C8A4C;

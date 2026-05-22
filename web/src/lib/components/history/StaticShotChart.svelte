@@ -15,6 +15,7 @@
 	import 'uplot/dist/uPlot.min.css';
 	import type { TelemetrySample } from '$lib/state';
 	import { theme } from '$lib/theme.svelte';
+	import { getSettingsStore } from '$lib/settings';
 
 	let {
 		series,
@@ -25,6 +26,15 @@
 		/** Panel height, px. */
 		height?: number;
 	} = $props();
+
+	/**
+	 * The settings store — used for the `showPuckResistance` advanced toggle.
+	 * Puck resistance is `pressure ÷ flow²`, already computed sample-by-sample
+	 * (`TelemetrySample.resistance`) and skipped when flow is too small to
+	 * divide by meaningfully. Matches the legacy de1app's History viewer
+	 * "Resistance" overlay (`history_viewer.tcl:99-100`).
+	 */
+	const settings = getSettingsStore();
 
 	/** The default x-window, seconds, for a very short recorded shot. */
 	const BASE_WINDOW_SEC = 30;
@@ -47,14 +57,25 @@
 		const flow: (number | null)[] = [];
 		const temp: (number | null)[] = [];
 		const weight: (number | null)[] = [];
+		const resistance: (number | null)[] = [];
+		const showResistance = settings.current.showPuckResistance;
 		for (const s of samples) {
 			xs.push(s.elapsed / 1000);
 			pressure.push(s.pressure ?? null);
 			flow.push(s.flow ?? null);
 			temp.push(s.temp == null ? null : s.temp / 10);
 			weight.push(s.weight == null ? null : s.weight / 10);
+			// Resistance — `null` when the toggle is off (so the line disappears
+			// entirely) or when the core already skipped the sample for being
+			// in the near-zero-flow region. Clamped to the chart's shared 0-10
+			// scale so a low-flow spike doesn't blow the y-axis open. Old
+			// records pre-resistance simply read `null` here too.
+			const r = s.resistance;
+			resistance.push(
+				showResistance && r != null ? Math.min(10, Math.max(0, r)) : null
+			);
 		}
-		return [xs, pressure, flow, temp, weight];
+		return [xs, pressure, flow, temp, weight, resistance];
 	}
 
 	/** uPlot plugin: the four horizontal grid lines, behind the series. */
@@ -184,11 +205,34 @@
 					stroke: () => cssVar('--tel-weight'),
 					width: 2.2,
 					points: { show: false }
+				},
+				{
+					// Puck resistance — dashed, secondary line. Matches the
+					// legacy de1app's History "Resistance" overlay
+					// (`history_viewer.tcl:419-422`): a noticeable but secondary
+					// trace, dashed, on the shared 0-10 scale.
+					scale: 'y',
+					stroke: () => cssVar('--tel-resistance'),
+					width: 1.8,
+					dash: [6, 4],
+					points: { show: false }
 				}
 			],
 			plugins: [gridPlugin()]
 		};
 	}
+
+	/**
+	 * Repaint when the user toggles `showPuckResistance` — `toData` re-reads
+	 * the pref each call, so a fresh `setData` is enough to add or drop the
+	 * dashed line without rebuilding the chart.
+	 */
+	$effect(() => {
+		settings.current.showPuckResistance;
+		untrack(() => {
+			chart?.setData(toData(series));
+		});
+	});
 
 	// Create the chart once on mount; `series` / `height` are read untracked so
 	// a prop change updates the live instance (effects below) instead of

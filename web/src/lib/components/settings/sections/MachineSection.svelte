@@ -329,21 +329,16 @@
 </div>
 
 <StGroup title="Connection">
-	<StRow
-		title="Auto-connect on launch"
-		sub="Crema reconnects to your last-used DE1 when you open the app."
-	>
-		{#snippet control()}
-			<StToggle
-				on={prefs.autoConnectOnLaunch}
-				onChange={(v) => settings.set('autoConnectOnLaunch', v)}
-				label="Auto-connect on launch"
-			/>
-		{/snippet}
-	</StRow>
+	<!--
+		"Auto-connect on launch" removed 2026-05-22 — Web Bluetooth requires
+		a user gesture for every connect attempt, so the advertised behaviour
+		is architecturally impossible in a PWA. The future
+		`navigator.bluetooth.getDevices()`-driven "Offer reconnect on launch"
+		can land as a separate row when ready (settings-audit.md §20).
+	-->
 	<StRow
 		title="Telemetry rate"
-		sub="How often the chart samples. Higher = smoother curves, more battery."
+		sub="How often the chart redraws. Higher = smoother curves."
 	>
 		{#snippet control()}
 			<StSelect
