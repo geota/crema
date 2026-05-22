@@ -28,14 +28,8 @@
 	const liveStates: readonly De1State[] = ['ready'];
 	const connected = $derived(ui !== null && liveStates.includes(ui.de1State));
 
-	/**
-	 * True when the firmware reports `MachineState.Sleep`. `machineState`
-	 * is the formatted `"<state> / <substate>"` string, so match on the
-	 * state prefix.
-	 */
-	const asleep = $derived(
-		ui?.machineState != null && ui.machineState.startsWith(MachineState.Sleep)
-	);
+	/** True when the firmware reports `MachineState.Sleep`. */
+	const asleep = $derived(ui?.machineStateName === MachineState.Sleep);
 
 	function toggle(): void {
 		if (!app || !connected) return;

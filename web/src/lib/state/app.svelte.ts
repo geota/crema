@@ -390,11 +390,8 @@ export class CremaApp {
 	 * still reports a small group flow that would otherwise overcount.
 	 */
 	private countsTowardWater(): boolean {
-		const machineState = this.state.current.machineState;
-		if (machineState === null) return false;
-		// `machineState` is `"<state> / <substate>"` — match the state prefix.
-		const state = machineState.split(' / ')[0];
-		return WATER_COUNTING_STATES.has(state);
+		const name = this.state.current.machineStateName;
+		return name !== null && WATER_COUNTING_STATES.has(name);
 	}
 
 	/**
@@ -839,10 +836,8 @@ export class CremaApp {
 	 */
 	private scheduleAutoPurge(): void {
 		window.setTimeout(() => {
-			const ms = this.state.current.machineState ?? '';
-			const stateName = ms.split(' / ')[0];
 			// Only fire from Idle — avoid stepping on a manual user action.
-			if (stateName !== MachineState.Idle) return;
+			if (this.state.current.machineStateName !== MachineState.Idle) return;
 			void this.requestMachineState(MachineState.HotWaterRinse);
 		}, 1500);
 	}

@@ -738,4 +738,8 @@ async function createCore(): Promise<CremaCore> {
 
 export type { CoreOutput, ScaleCapabilities, ScaleUuids, FirmwareUpdateStatus } from './crema-core';
 export type { Event, Command, ModeInfo, RangeCapability } from './crema-core';
+// Re-export the wire enums so consumers comparing snapshot fields don't have
+// to deep-import from `./crema-core`. These are the discriminant strings
+// produced by typeshare; values matter (consumers `===` them).
+export { MachineState, SubState, ShotPhase } from './crema-core';
 export { CalCommand, CalTarget, MmrRegister } from './crema-core';
