@@ -151,6 +151,68 @@ export interface Profile {
 }
 
 /**
+ * A `Duration` as serialized by the Rust core — `{secs, nanos}`. The
+ * bridge emits this for `StoredShot.record.duration` and every
+ * `TimedSample.elapsed`; the shell folds it to plain milliseconds at
+ * the import boundary.
+ */
+export interface RustDuration {
+	secs: number;
+	nanos: number;
+}
+
+/** One telemetry sample as the Rust core emits it. */
+export interface RustShotSample {
+	sample_time: number;
+	group_pressure: number;
+	group_flow: number;
+	head_temp: number;
+	mix_temp: number;
+	set_head_temp: number;
+	set_mix_temp: number;
+	set_group_pressure: number;
+	set_group_flow: number;
+	frame_number: number;
+	steam_temp: number;
+}
+
+/** One timestamped sample in a `RustStoredShot.record.samples` array. */
+export interface RustTimedSample {
+	elapsed: RustDuration;
+	sample: RustShotSample;
+}
+
+/** Barista journal metadata as the Rust core emits it. */
+export interface RustShotMetadata {
+	dose: number | null;
+	yield_out: number | null;
+	beans: string | null;
+	grinder_setting: string | null;
+	notes: string | null;
+	rating: number | null;
+	tds: number | null;
+	extraction_yield: number | null;
+}
+
+/**
+ * The Rust-shape `StoredShot` the bridge returns from
+ * `importLegacyTclShot` / `importV2JsonShot`. Field names match the
+ * Rust struct (snake_case). The shell maps this onto its own
+ * (`$lib/history` `StoredShot`) shape at the import boundary.
+ */
+export interface RustStoredShot {
+	format_version: number;
+	recorded_at: number;
+	profile: Profile | null;
+	stop_reason: unknown | null;
+	metadata: RustShotMetadata;
+	record: {
+		duration: RustDuration;
+		samples: RustTimedSample[];
+	};
+}
+
+/**
  * Which BLE characteristic an incoming notification came from. A plain string
  * union mirroring the wasm `NotificationSource` enum — the facade maps it to
  * the wasm enum internally so callers never import a wasm type.
@@ -242,6 +304,18 @@ export interface CremaCore {
 	 * shot), else `null`.
 	 */
 	lineFrequencyHz(): Promise<number | null>;
+	/**
+	 * Parse a legacy de1app `.shot` (Tcl-dict) history file. Returns the
+	 * resulting Rust-shape `StoredShot` parsed from the bridge's JSON
+	 * reply. Throws with the importer's error message if parsing
+	 * fails. docs/22 §5.1.
+	 */
+	importLegacyTclShot(content: string): Promise<RustStoredShot>;
+	/**
+	 * Parse a modern de1app v2 `.shot.json` history file. Same return
+	 * convention as `importLegacyTclShot`.
+	 */
+	importV2JsonShot(content: string): Promise<RustStoredShot>;
 	/** Build a `CoreOutput` whose command queries the connected scale's settings. */
 	queryScaleSettings(): Promise<CoreOutput>;
 	/**
@@ -481,6 +555,12 @@ async function createCore(): Promise<CremaCore> {
 		async lineFrequencyHz() {
 			const hz = bridge.line_frequency_hz();
 			return hz === undefined ? null : hz;
+		},
+		async importLegacyTclShot(content) {
+			return JSON.parse(bridge.import_legacy_tcl_shot(content)) as RustStoredShot;
+		},
+		async importV2JsonShot(content) {
+			return JSON.parse(bridge.import_v2_json_shot(content)) as RustStoredShot;
 		},
 		async queryScaleSettings() {
 			return parseOutput(bridge.query_scale_settings());

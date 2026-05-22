@@ -768,6 +768,25 @@ impl CremaBridge {
         let override_hz = if hz > 0.0 { Some(hz) } else { None };
         self.core().set_line_frequency_override(override_hz);
     }
+
+    /// Parse a legacy de1app `.shot` (Tcl-dict) history file. Returns
+    /// the resulting `StoredShot` as a JSON string the Android shell
+    /// can deserialize into its Room history store. docs/22 §5.1.
+    /// Stateless — `&self` is required for the UniFFI instance-method
+    /// ABI but the import does not touch the core.
+    pub fn import_legacy_tcl_shot(&self, content: String) -> Result<String, String> {
+        de1_domain::import_legacy_tcl_shot(&content)
+            .map_err(|e| e.to_string())
+            .and_then(|shot| shot.to_json().map_err(|e| e.to_string()))
+    }
+
+    /// Parse a modern de1app v2 `.shot.json` history file. Same return
+    /// convention as `import_legacy_tcl_shot`.
+    pub fn import_v2_json_shot(&self, content: String) -> Result<String, String> {
+        de1_domain::import_v2_json_shot(&content)
+            .map_err(|e| e.to_string())
+            .and_then(|shot| shot.to_json().map_err(|e| e.to_string()))
+    }
 }
 
 /// Serialize a [`CoreOutput`] to JSON for the shell.
