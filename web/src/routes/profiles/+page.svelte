@@ -158,46 +158,67 @@
 				p.author.toLowerCase().includes(query)
 			);
 		});
-		// Asc comparator per key; the direction toggle reverses the
-		// result at the bottom of the switch.
-		switch (sort) {
-			case 'name':
-				r = [...r].sort((a, b) => a.name.localeCompare(b.name));
-				break;
-			case 'dose':
-				r = [...r].sort((a, b) => a.dose - b.dose);
-				break;
-			case 'roast': {
-				const rank = (p: CremaProfile): number =>
-					p.roast != null ? ROAST_ORDER[p.roast] ?? 99 : 99;
-				r = [...r].sort(
-					(a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name)
-				);
-				break;
+		// Two-tier sort: unset values always sink to the end (regardless
+		// of direction), then the active key's comparator decides among
+		// the set values. Stable tiebreak on name for every key.
+		const isUnset = (p: CremaProfile): boolean => {
+			switch (sort) {
+				case 'name':
+					return p.name.trim() === '';
+				case 'dose':
+					return !(p.dose > 0);
+				case 'roast':
+					return p.roast == null;
+				case 'author':
+					return p.author.trim() === '';
+				case 'recent':
+					return p.lastUsed == null;
+				case 'beverage':
+					// Every profile carries a beverageType (Espresso default
+					// on import); no "unset" state to sink.
+					return false;
+				default:
+					return false;
 			}
-			case 'beverage':
-				r = [...r].sort(
-					(a, b) =>
+		};
+		const keyCmp = (a: CremaProfile, b: CremaProfile): number => {
+			switch (sort) {
+				case 'name':
+					return a.name.localeCompare(b.name);
+				case 'dose':
+					return a.dose - b.dose;
+				case 'roast': {
+					const rank = (p: CremaProfile): number =>
+						p.roast != null ? (ROAST_ORDER[p.roast] ?? 99) : 99;
+					return rank(a) - rank(b);
+				}
+				case 'beverage':
+					return (
 						BEVERAGE_TYPES.indexOf(a.beverageType) -
-							BEVERAGE_TYPES.indexOf(b.beverageType) ||
-						a.name.localeCompare(b.name)
-				);
-				break;
-			case 'author':
-				r = [...r].sort(
-					(a, b) =>
-						(a.author || '').localeCompare(b.author || '') ||
-						a.name.localeCompare(b.name)
-				);
-				break;
-			default:
-				// 'recent' — leave in `source` order (the store already
-				// emits newest first via lastUsed). The direction toggle
-				// below reverses if asc was requested.
-				break;
-		}
-		if (sortDir === 'desc' && sort !== 'recent') r.reverse();
-		if (sortDir === 'asc' && sort === 'recent') r = [...r].reverse();
+						BEVERAGE_TYPES.indexOf(b.beverageType)
+					);
+				case 'author':
+					return (a.author || '').localeCompare(b.author || '');
+				case 'recent':
+					return (
+						(a.lastUsed != null ? Date.parse(a.lastUsed) : 0) -
+						(b.lastUsed != null ? Date.parse(b.lastUsed) : 0)
+					);
+				default:
+					return 0;
+			}
+		};
+		r = [...r].sort((a, b) => {
+			const ua = isUnset(a);
+			const ub = isUnset(b);
+			if (ua !== ub) return ua ? 1 : -1;
+			// Both set (or both unset) — apply the key comparator with
+			// the chosen direction; tiebreak on name (alphabetical) so
+			// unset-vs-unset ordering is also deterministic.
+			const cmp = keyCmp(a, b);
+			const dir = sortDir === 'desc' ? -1 : 1;
+			return cmp * dir || a.name.localeCompare(b.name);
+		});
 		return r;
 	});
 
