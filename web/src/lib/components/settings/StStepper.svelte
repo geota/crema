@@ -183,11 +183,12 @@
 	.st-stepper-val {
 		flex: 1 1 auto;
 		display: inline-flex;
-		align-items: baseline;
+		align-items: center;
 		justify-content: center;
 		gap: 3px;
 		padding: 0 6px;
 		min-width: 0;
+		line-height: 1;
 	}
 	.st-stepper-num {
 		font-family: var(--font-mono);
@@ -196,7 +197,11 @@
 		background: transparent;
 		border: 0;
 		padding: 0;
+		margin: 0;
+		line-height: 1;
 		cursor: text;
+		display: inline-flex;
+		align-items: center;
 	}
 	.st-stepper-num:hover {
 		color: var(--copper-400);
