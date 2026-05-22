@@ -176,8 +176,8 @@ the *FFI plumbing*, not the codec.
 |---|--------|---------|--------------------|-------------|--------|----------|
 | 4.1 | `set_fan_temperature_threshold` (`de1_comms.tcl:1329`) | Settings → Machine → "Fan turn-on temp" | `0x803808` (`FanThreshold`), 1-byte LE value | **Missing at FFI** — register modelled, no write path | S | M |
 | 4.2 | `set_tank_temperature_threshold` (`de1_comms.tcl:1060`) | Reactive after a profile upload (only for advanced profiles); preheats with `60 °C` for ~4 s, then sets the user value | `0x80380C` (`TankTempThreshold`), 1-byte LE value | **Missing at FFI** | M (the preheat dance needs a 4-s timer in the shell — surface a `MmrWrite` command and a follow-up tick-scheduled second `MmrWrite`) | M |
-| 4.3 | `set_steam_flow` (`de1_comms.tcl:1210`) | Settings → Steam → "Steam flow" | `0x803828` (`SteamFlow`), 1-byte | **Missing at FFI** | S | M |
-| 4.4 | `set_steam_highflow_start` (`de1_comms.tcl:1286`) | Settings → Steam → "Initial high-flow seconds" | `0x80382C` (`SteamHighFlowStart`), 1-byte | **Missing at FFI** | S | L |
+| 4.3 | `set_steam_flow` (`de1_comms.tcl:1210`) | Settings → Steam → "Steam flow" | `0x803828` (`SteamFlow`), 4-byte LE, value = `int(100 × rate)` | **Missing at FFI** | S | M |
+| 4.4 | `set_steam_highflow_start` (`de1_comms.tcl:1286`) | Settings → Steam → "Initial high-flow seconds" | `0x80382C` (`SteamHighFlowStart`), 4-byte LE, value = `int(100 × seconds)` (sub-second precision required — legacy default 0.7s = 70) | **Missing at FFI** | S | L |
 | 4.5 | `set_ghc_mode` (`de1_comms.tcl:1304`) | Settings → Machine → "Group head control" | `0x803820` (`GhcMode`), 1-byte | **Missing at FFI** | S | M |
 | 4.6 | `set_hotwater_flow_rate` (`de1_comms.tcl:1169`) | Settings → Hot water → "Flow rate" | `0x80384C` (`HotWaterFlowRate`), 2-byte LE, value = `int(10 × rate)` | **Missing at FFI** | S | L |
 | 4.7 | `set_flush_flow_rate` (`de1_comms.tcl:1188`) | Settings → Flush → "Flow rate" | `0x803840` (`FlushFlowRate`), 2-byte LE, value = `int(10 × rate)` | **Missing at FFI** | S | L |

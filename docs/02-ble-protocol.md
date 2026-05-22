@@ -475,8 +475,8 @@ info, `0x803800+` = tunable config.
 | `803818` | 1 | hot_water_idle_temp | Hot water idle temperature (`de1_comms.tcl:343,1129`) |
 | `80381C` | 1 | GHC Info bitmask | Group Head Controller: bit0 = GHC present, bit1 = GHC active (`de1_comms.tcl:297,1105`) |
 | `803820` | 1 | GHC mode | Group head control mode (`de1_comms.tcl:318`) |
-| `803828` | 1 | Steam flow | Steam flow rate (`de1_comms.tcl:322,1214`) |
-| `80382C` | 1 | steam_highflow_start | Seconds of high-flow steam at start (`de1_comms.tcl:430`) |
+| `803828` | 4 | Steam flow | Steam flow rate, wire = mL/s × 100 (`de1_comms.tcl:322,1214`; reaprime `steamFlow writeScale 100.0`) |
+| `80382C` | 4 | steam_highflow_start | Seconds of high-flow steam at start, wire = seconds × 100 (legacy default `machine.tcl:309 steam_highflow_start 70` = 0.7s) |
 | `803830` | 1 | Serial number | Machine SN (`de1_comms.tcl:326,1255`) |
 | `803834` | 1–2 | Heater voltage (+ warmup timeout) | Mains voltage; second word = espresso warmup timeout (`de1_comms.tcl:366-389,1117`) |
 | `803838` | 1 | espresso_warmup_timeout | Espresso warmup timeout (`de1_comms.tcl:349,1130`) |
