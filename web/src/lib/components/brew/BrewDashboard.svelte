@@ -593,12 +593,12 @@
 					/>
 					<ChannelReadout
 						icon="thermometer"
-						label="HEAD"
+						label="COFFEE"
 						value={tempM.value}
 						unit={tempM.unit}
 						color="var(--tel-temp)"
 						target={brewTempTarget.value}
-						secondaryLabel="MIX"
+						secondaryLabel="WATER"
 						secondaryValue={mixTempM.value}
 						secondaryUnit={mixTempM.unit}
 						secondaryColor="var(--tel-temp-2)"
@@ -656,18 +656,12 @@
 						: 'Not paired'}</span
 				>
 				<span class="crema-foot-divider"></span>
-				<!-- Group / steam temperatures: real telemetry. "Group" is the
-				     measured group-head thermocouple (`ShotSample.head_temp`);
-				     this stays meaningful at idle (held at the idle setpoint
-				     ~80°C) where `mix_temp` would read room-temperature because
-				     no water is flowing. The mix temperature is also available
-				     via `mixTempM` if a future surface wants the post-blend
-				     output. The steam-heater temperature is `steam_temp`. All
-				     three arrive on every `Telemetry` event. Display unit
-				     follows the Settings temperature preference (D1). -->
-				<span class="t-eyebrow">Group</span><span
-					>{tempM.value}{tempM.unit ? ` ${tempM.unit}` : ''}</span
-				>
+				<!-- Coffee / water-tank temperatures: the in-card COFFEE
+				     readout above the chart already covers the group-head
+				     thermocouple; the footer's job is the *other* live
+				     references — steam-heater temperature and water-tank
+				     volume — so the user has them at a glance without
+				     duplicating the card. -->
 				<span class="t-eyebrow">Steam</span><span
 					>{steamTempM.value}{steamTempM.unit ? ` ${steamTempM.unit}` : ''}</span
 				>
