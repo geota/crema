@@ -7,6 +7,8 @@
 // not a defect, so the precision-loss lint is allowed module-wide here.
 #![allow(clippy::cast_precision_loss)]
 
+use std::time::Duration;
+
 /// GATT service UUID.
 pub const SERVICE_UUID: &str = "b905eaea-2e63-0e04-7582-7913f10d8f81";
 /// Characteristic the scale notifies weight on.
@@ -27,15 +29,44 @@ pub const TIMER_STOP: [u8; 3] = [0x43, 0x00, 0x00];
 /// milligrams; byte 9 is an XOR checksum over bytes 1–8 — a frame that fails
 /// the checksum is rejected.
 pub fn parse_weight(data: &[u8]) -> Option<f32> {
-    if data.len() < 10 || data[0] != b'W' {
-        return None;
-    }
-    let checksum = data[1..9].iter().fold(0u8, |acc, &b| acc ^ b);
-    if checksum != data[9] {
+    if !valid_frame(data) {
         return None;
     }
     let milligrams = i32::from_le_bytes([data[1], data[2], data[3], data[4]]);
     Some(milligrams as f32 / 1000.0)
+}
+
+/// Decode the scale's built-in timer from a weight notification.
+///
+/// Bytes 5–8 are a little-endian unsigned 32-bit millisecond count
+/// representing the scale's running stopwatch. A reading of `0` means the
+/// timer is not running and yields `None` — matches reaprime's behaviour
+/// (`atomheart_scale.dart:parseFrame`). Same header + checksum gates as
+/// [`parse_weight`]: a bad frame returns `None` for both channels.
+///
+/// The audit-flagged "Atomheart timer-field decode" gap (docs/22 §5.3) —
+/// pre-2026-05-22 Crema dropped this field on the floor.
+pub fn parse_timer(data: &[u8]) -> Option<Duration> {
+    if !valid_frame(data) {
+        return None;
+    }
+    let ms = u32::from_le_bytes([data[5], data[6], data[7], data[8]]);
+    if ms == 0 {
+        None
+    } else {
+        Some(Duration::from_millis(u64::from(ms)))
+    }
+}
+
+/// Header + length + XOR-checksum gate shared by every Atomheart frame
+/// channel. Centralises the validation so weight + timer decoders can't
+/// drift in what they consider a usable frame.
+fn valid_frame(data: &[u8]) -> bool {
+    if data.len() < 10 || data[0] != b'W' {
+        return false;
+    }
+    let checksum = data[1..9].iter().fold(0u8, |acc, &b| acc ^ b);
+    checksum == data[9]
 }
 
 #[cfg(test)]
@@ -92,5 +123,52 @@ mod tests {
         let mut bad = frame();
         bad[0] = b'X';
         assert_eq!(parse_weight(&bad), None);
+    }
+
+    // ── Timer decode (docs/22 §5.3) ────────────────────────────────────
+
+    /// Build a frame with explicit weight + timer milliseconds; XOR
+    /// checksum re-derived so the frame validates.
+    fn frame_with_timer(weight_mg: i32, timer_ms: u32) -> [u8; 10] {
+        let w = weight_mg.to_le_bytes();
+        let t = timer_ms.to_le_bytes();
+        let mut f = [b'W', w[0], w[1], w[2], w[3], t[0], t[1], t[2], t[3], 0];
+        f[9] = f[1..9].iter().fold(0u8, |acc, &b| acc ^ b);
+        f
+    }
+
+    #[test]
+    fn decodes_timer_milliseconds() {
+        // Reaprime's `parseFrame` fixture — weight 1500 mg, timer 5000 ms.
+        let frame = frame_with_timer(1500, 5000);
+        assert_eq!(parse_weight(&frame), Some(1.5));
+        assert_eq!(parse_timer(&frame), Some(Duration::from_millis(5000)));
+    }
+
+    #[test]
+    fn zero_timer_returns_none() {
+        // Reaprime: a 0-ms timer means "not running" and surfaces as null.
+        let frame = frame_with_timer(2000, 0);
+        assert_eq!(parse_weight(&frame), Some(2.0));
+        assert_eq!(parse_timer(&frame), None);
+    }
+
+    #[test]
+    fn timer_rejects_a_short_packet() {
+        assert_eq!(parse_timer(&[b'W', 0, 0, 0, 0, 0, 0, 0, 0]), None);
+    }
+
+    #[test]
+    fn timer_rejects_a_bad_header() {
+        let mut bad = frame_with_timer(1500, 5000);
+        bad[0] = b'X';
+        assert_eq!(parse_timer(&bad), None);
+    }
+
+    #[test]
+    fn timer_rejects_a_bad_checksum() {
+        let mut bad = frame_with_timer(1500, 5000);
+        bad[9] ^= 0xFF;
+        assert_eq!(parse_timer(&bad), None);
     }
 }
