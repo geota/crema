@@ -10,8 +10,7 @@
 	 * Share are stubs (`// TODO`).
 	 */
 	import type { StoredShot } from '$lib/history';
-	import { ratioLabel, shotFilename } from '$lib/history';
-	import { getCaptureStore, captureJsonl } from '$lib/capture';
+	import { ratioLabel, shotFilename, exportStoredShotAsV2Json } from '$lib/history';
 	import { daysOffRoast, roastBand } from '$lib/bean';
 	import { getSettingsStore, convertWeight, convertTemp, convertPressure } from '$lib/settings';
 	import { getProfileStore, toCoreProfile } from '$lib/profiles';
@@ -35,27 +34,6 @@
 	let editing = $state(false);
 	/** The draft notes text while editing. */
 	let draft = $state('');
-	/**
-	 * Whether a raw-BLE capture is stored for the selected shot — gates the
-	 * Download button. The capture store is IndexedDB-async; the effect below
-	 * checks existence whenever the selected shot changes and writes the
-	 * result here.
-	 */
-	let captureAvailable = $state(false);
-	$effect(() => {
-		// Capture the id at effect start so a stale promise can't overwrite a
-		// later shot's flag (rapid history-row clicks).
-		const id = shot.id;
-		captureAvailable = false;
-		void getCaptureStore()
-			.has(id)
-			.then((has) => {
-				if (id === shot.id) captureAvailable = has;
-			})
-			.catch(() => {
-				if (id === shot.id) captureAvailable = false;
-			});
-	});
 
 	/** Date + time caption, e.g. `May 18 · 14:36`. */
 	const stamp = $derived.by(() => {
@@ -120,17 +98,20 @@
 	}
 
 	/**
-	 * Download this shot's raw BLE capture as a JSON Lines (`.jsonl`) file —
-	 * one `{t, dir, src, hex}` notification per line, the same format the
-	 * Advanced → Replay tool consumes. Wired to {@link captureJsonl} on the
-	 * IndexedDB-backed `$lib/capture` store. Shots recorded before the capture
-	 * recorder existed (or pulled with no BLE link) have no capture; the
-	 * button is disabled in that case.
+	 * Download this shot as a community-v2 `.shot.json` file — the
+	 * reaprime / modern-de1app contract (matches `import_v2_json_shot`
+	 * on the Rust side, so an exported file re-imports unchanged).
+	 * Other DE1 apps (reaprime, Visualizer, legacy de1app) read the
+	 * same shape, so an exported shot is portable.
+	 *
+	 * Pre-2026-05-22 this button emitted a Crema-specific `.jsonl` raw
+	 * BLE capture; that path moved to a developer/admin export
+	 * (Advanced → Replay) since the v2 shape is the community standard.
+	 * docs/22 task #64.
 	 */
-	async function download(): Promise<void> {
-		const entries = await getCaptureStore().get(shot.id);
-		if (!entries || entries.length === 0) return;
-		const blob = new Blob([captureJsonl(entries)], { type: 'application/x-ndjson' });
+	function download(): void {
+		const json = exportStoredShotAsV2Json(shot);
+		const blob = new Blob([json], { type: 'application/json' });
 		const url = URL.createObjectURL(blob);
 		const a = document.createElement('a');
 		a.href = url;
@@ -202,10 +183,7 @@
 			<button
 				class="st-btn st-btn-secondary"
 				onclick={download}
-				disabled={!captureAvailable}
-				title={captureAvailable
-					? 'Download a replayable JSONL capture of this shot'
-					: 'No replayable capture for this shot — only shots pulled since the capture recorder shipped have one'}
+				title="Download as community v2 .shot.json — re-importable to Crema, reaprime, Visualizer or de1app"
 			>
 				<i class="ph ph-download-simple" aria-hidden="true"></i> Download
 			</button>
