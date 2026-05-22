@@ -5,10 +5,15 @@
 	 * Renders only when the DE1 is connected. Reads `snapshot.machineState`
 	 * and swaps between two visuals:
 	 *
-	 *  - DE1 awake (any state other than `Sleep`) → moon icon, neutral
+	 *  - DE1 awake (any state other than `Sleep`) → **sun** icon, neutral
 	 *    surface. Click → request Sleep.
-	 *  - DE1 asleep → sun icon, copper-tinted. Click → request Idle (which
-	 *    also wakes from sleep).
+	 *  - DE1 asleep → **moon** icon, copper-tinted. Click → request Idle
+	 *    (which also wakes from sleep).
+	 *
+	 * Pattern: the icon shows the *current* state (sun = on, moon =
+	 * asleep), and clicking transitions to the opposite. The icon swap
+	 * after the click is the affordance — confirms the state change
+	 * landed.
 	 *
 	 * Renders inline wherever it's placed (no fixed positioning). Today the
 	 * Brew dashboard puts it as the leftmost item in its foot-meta strip,
@@ -38,21 +43,30 @@
 	}
 </script>
 
-{#if connected}
-	<button
-		type="button"
-		class="power-btn"
-		class:is-asleep={asleep}
-		onclick={toggle}
-		title={asleep ? 'DE1 is asleep — click to wake' : 'Click to put the DE1 to sleep'}
-		aria-label={asleep ? 'Wake DE1' : 'Sleep DE1'}
-	>
-		<i
-			class={asleep ? 'ph-fill ph-sun-dim' : 'ph-fill ph-moon'}
-			aria-hidden="true"
-		></i>
-	</button>
-{/if}
+<!--
+	Renders at all times — the foot-meta row reads as a hole if the slot
+	disappears when the DE1 disconnects. Disabled when not connected;
+	matches the Coffee button's disabled-state pattern (opacity dim, no
+	hover/active transforms, not-allowed cursor).
+-->
+<button
+	type="button"
+	class="power-btn"
+	class:is-asleep={asleep}
+	disabled={!connected}
+	onclick={toggle}
+	title={!connected
+		? 'No DE1 connected'
+		: asleep
+			? 'DE1 is asleep — click to wake'
+			: 'Click to put the DE1 to sleep'}
+	aria-label={asleep ? 'Wake DE1' : 'Sleep DE1'}
+>
+	<i
+		class={asleep ? 'ph-fill ph-moon' : 'ph-fill ph-sun'}
+		aria-hidden="true"
+	></i>
+</button>
 
 <style>
 	.power-btn {
@@ -90,5 +104,15 @@
 	.power-btn.is-asleep:hover {
 		background: rgba(var(--copper-rgb), 0.24);
 		color: var(--copper-300, var(--copper-400));
+	}
+	/* Disabled — no DE1 connected. Same opacity-drop pattern as the
+	   Coffee button + service-mode chips. */
+	.power-btn:disabled {
+		opacity: 0.4;
+		cursor: not-allowed;
+	}
+	.power-btn:disabled:hover {
+		background: var(--bg-surface);
+		color: rgba(var(--tint-rgb), 0.7);
 	}
 </style>

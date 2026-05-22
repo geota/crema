@@ -153,15 +153,19 @@
 		flushing: posOr(params.current.flushTime, 4)
 	}));
 	/**
-	 * Flush water target temperature — read from MMR `FlushTemp`
-	 * (`0x00803844`, wire value `°C × 10`). The connect-time MMR sweep
-	 * issues a one-shot read; falls back to the legacy de1app default
-	 * (~95 °C) until the value lands so the chip's sub-label has a
-	 * sensible reading at first paint.
+	 * Flush water target temperature, °C.
+	 *
+	 * Precedence: machine MMR `FlushTemp` (`0x00803844`, wire value
+	 * `°C × 10`) > the user's Quick Controls value (`params.current
+	 * .flushTemp` — Flush bucket's Temp option) > legacy 95 °C default.
+	 * The MMR read happens at connect time; before it lands, QC is
+	 * what's shown on the chip + active banner. `posOr` so a partial
+	 * payload's 0 falls through.
 	 */
 	const flushTempC = $derived.by<number>(() => {
 		const raw = ui.de1MachineInfo[MmrRegister.FlushTemp];
-		return raw != null && Number.isFinite(raw) ? raw / 10 : 95;
+		const machine = raw != null && Number.isFinite(raw) ? raw / 10 : NaN;
+		return posOr(machine, posOr(params.current.flushTemp, 95));
 	});
 
 	/**
@@ -184,7 +188,7 @@
 	const MODE_TARGET_LABEL = $derived.by<
 		Record<'steaming' | 'dispensing' | 'flushing', string>
 	>(() => ({
-		steaming: `${formatTemp(posOr(ui.de1ShotSettings?.steamTempC, 148), prefs.tempUnit)} · ${posOr(ui.de1ShotSettings?.steamTimeoutS, posOr(params.current.steamTime, 90))} s`,
+		steaming: `${formatTemp(posOr(ui.de1ShotSettings?.steamTempC, posOr(params.current.steamTemp, 148)), prefs.tempUnit)} · ${posOr(ui.de1ShotSettings?.steamTimeoutS, posOr(params.current.steamTime, 90))} s`,
 		dispensing: `${formatTemp(posOr(ui.de1ShotSettings?.hotWaterTempC, posOr(params.current.waterTemp, 92)), prefs.tempUnit)} · ${formatVolume(posOr(ui.de1ShotSettings?.hotWaterVolumeMl, posOr(params.current.waterVolume, 250)), prefs.volumeUnit)}`,
 		flushing: `${formatTemp(flushTempC, prefs.tempUnit)} · ${posOr(params.current.flushTime, 4)} s`
 	}));

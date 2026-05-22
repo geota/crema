@@ -21,26 +21,32 @@ export interface BrewParams {
 	grind: number;
 	/** Stop-on-weight yield target, grams. */
 	yield: number;
+	/** Which of Temp / Pre-infuse the Brew bucket is editing. */
+	brewMode: 'temp' | 'preinf';
 	/** Brew water temperature, °C. */
 	brewTemp: number;
 	/** Pre-infusion duration, seconds. */
 	preinf: number;
-	/** Which of Time / Flow the Steam card is editing. */
-	steamMode: 'time' | 'flow';
+	/** Which of Time / Flow / Temp the Steam bucket is editing. */
+	steamMode: 'time' | 'flow' | 'temp';
 	/** Steam duration, seconds. */
 	steamTime: number;
 	/** Steam flow rate, mL/s. */
 	steamFlow: number;
+	/** Steam boiler target temperature, °C. */
+	steamTemp: number;
 	/** Which of Temp / Volume the Hot Water card is editing. */
 	waterMode: 'temp' | 'volume';
 	/** Hot-water temperature, °C. */
 	waterTemp: number;
 	/** Hot-water volume, mL. */
 	waterVolume: number;
-	/** Which of Pre-Infuse / Flush the combined card is editing. */
-	timeMode: 'preinf' | 'flush';
+	/** Which of Time / Temp the Flush bucket is editing. */
+	flushMode: 'time' | 'temp';
 	/** Group-flush duration, seconds. */
 	flushTime: number;
+	/** Group-flush target temperature, °C. */
+	flushTemp: number;
 	/** Stop the shot when the yield target is reached. */
 	stopOnWeight: boolean;
 	/** Tare the scale automatically at shot start. */
@@ -53,16 +59,19 @@ export const DEFAULT_BREW_PARAMS: BrewParams = {
 	dose: 18.0,
 	grind: 4.2,
 	yield: 36.4,
+	brewMode: 'temp',
 	brewTemp: 93.0,
 	preinf: 8,
 	steamMode: 'time',
 	steamTime: 12,
 	steamFlow: 1.2,
+	steamTemp: 148.0,
 	waterMode: 'volume',
 	waterTemp: 80,
 	waterVolume: 150,
-	timeMode: 'preinf',
+	flushMode: 'time',
 	flushTime: 4,
+	flushTemp: 95.0,
 	stopOnWeight: true,
 	autoTare: true
 };
