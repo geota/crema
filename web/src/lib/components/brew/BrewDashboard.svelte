@@ -725,7 +725,7 @@
 				<span
 					>{scaleConnected
 						? `${scaleName} · ${weightM.value}${weightM.unit ? ` ${weightM.unit}` : ''}`
-						: 'Not paired'}</span
+						: '—'}</span
 				>
 				<span class="crema-foot-divider"></span>
 				<!-- Coffee / water-tank temperatures: the in-card COFFEE
