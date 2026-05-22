@@ -837,3 +837,84 @@ populates dormant state fields). §6.4 is design-led and parallel.
   compatibility might want it, but the capture-replay format Crema
   uses (`{t, dir, src, hex}`) carries wall-clock instead. Recommend:
   defer until a Visualizer integration demands it.
+
+---
+
+## 9. Per-register audit of the still-dormant MMRs
+
+After the connect-time MMR sweep landed (`a81769e`), 7 of 23 known
+registers are read at connect. The remaining 16 are still dormant.
+This table answers "should we wire each, and if so how?" by tracing
+each against the legacy source. **None of the 16 are read at connect
+by the legacy app either.** They split into three categories:
+
+- **Write-on-configure**: legacy writes to the register from
+  `::settings(*)` when the user changes a setting; never reads.
+  Crema should match — the setting is the source of truth, no
+  read needed.
+- **Read-on-demand**: legacy reads only when a specific screen opens
+  (Calibration, GHC, Hot Water). Crema should wire the read into
+  the matching screen's `onMount`.
+- **Live-loop**: legacy writes continuously while the user is
+  interacting (UserPresent on every touch). Crema needs the same
+  mechanism for screensaver-prevention.
+
+| MMR | Addr | Connect read in legacy? | Other read | Write | Category | Crema action |
+|---|---|---|---|---|---|---|
+| `TankTempThreshold` | `0x80380C` | No | `get_tank_temperature_threshold` (`de1_comms.tcl:1341`) | `set_tank_temperature_threshold` (1075-1088) | Read-on-demand (Water Settings) | Read on Settings → Water screen mount |
+| `SteamFlow` | `0x803828` | No | `get_steam_flow` (1250) | `set_steam_flow` (1214) | Read-on-demand (Steam Settings) | Read on Steam Settings mount |
+| `FlushFlowRate` | `0x803840` | No | — | `set_flush_flow_rate` (1192) | Write-on-configure | Write from `settings.flushFlowRate` |
+| `HotWaterFlowRate` | `0x80384C` | No | — | `set_hotwater_flow_rate` (1173) | Write-on-configure | Write from `settings.hotWaterFlowRate` |
+| `Phase1FlowRate` | `0x803810` | No (lazy, after GHC reply) | `mmr_read` (388, 2568) | `set_phase_1_flow_rate` (1127) | Write-on-configure | Write from `settings.phase1FlowRate` |
+| `Phase2FlowRate` | `0x803814` | No | — | `set_phase_2_flow_rate` (1128) | Write-on-configure | Write from `settings.phase2FlowRate` |
+| `HotWaterIdleTemp` | `0x803818` | No (commented) | — | `set_hot_water_idle_temp` (1129) | Write-on-configure | Write from `settings.hotWaterIdleTemp` |
+| `GhcMode` | `0x803820` | No | `get_ghc_mode` (1311) | `set_ghc_mode` (1306) | Read-on-demand (GHC Settings) | Read on GHC Settings mount; gated by `GhcInfo` capability |
+| `SteamHighFlowStart` | `0x80382C` | No | `get_steam_highflow_start` (1300) | `set_steam_highflow_start` (1295) | Read-on-demand (Steam Settings) | Read on Steam Settings mount |
+| `EspressoWarmupTimeout` | `0x803838` | No (commented) | — | `set_espresso_warmup_timeout` (1130) | Write-on-configure | Write from `settings.espressoWarmupTimeout` |
+| `CalibrationFlowMultiplier` | `0x80383C` | Conditional | `get_calibration_flow_multiplier` (1326) | `set_calibration_flow_multiplier` (1336) | Conditional (write if known, read if default-settings) | Match legacy's `bluetooth.tcl:2099-2106` conditional |
+| `FlushTimeout` | `0x803848` | No | — | `set_flush_timeout` (1199) | Write-on-configure | Write from `settings.flushTimeoutS` |
+| `UsbChargerOn` | `0x803854` | No | — | `set_usb_charger_on` (1156) | Write-on-configure | Write from `settings.usbChargerOn` |
+| `FeatureFlags` | `0x803858` | No | — | `set_feature_flags` (1206) | Write-on-configure | Write `UserNotPresent` bit from `settings.disableScreensaverPrevention` (etc) |
+| `UserPresent` | `0x803860` | No | — | `set_user_present` (1166, continuous) | Live-loop | Continuous write while the user is interacting (screensaver-prevention loop) |
+| `SteamTwoTapStop` | `0x803850` | No | — | `set_steam_two_tap_stop` (1133) | Write-on-configure | Write from `settings.steamTwoTapStop` |
+| `CupWarmerTemp` | `0x803874` | No | — | `set_cupwarmer_temperature` (1184) | Write-on-configure | Write from `settings.cupWarmerTempC`; gated by `MachineModel ∈ Bengle` |
+
+### 9.1 Takeaway
+
+The audit's earlier framing ("22 of 23 MMR registers dormant") slightly
+oversold the gap. The real situation:
+
+- **3 registers (`SteamFlow`, `SteamHighFlowStart`, `GhcMode`)** are
+  read-on-demand by the legacy. Crema should wire each as part of
+  the corresponding Settings screen, not at connect.
+- **3 registers (`HotWaterIdleTemp`, `EspressoWarmupTimeout`,
+  `TankTempThreshold`)** are read-conditional in the legacy
+  (commented-out by default). Crema should also defer.
+- **9 registers** are pure write-on-configure. The audit's "dormant
+  read path" framing is inaccurate for these — there is no read path
+  in the legacy app to be dormant against. The matching Crema work is
+  on the **write** side: when the user changes a setting, write the
+  register; the read side stays untouched. Crema already supports
+  the write side for most of these via `write_mmr`; what's missing is
+  the **settings binding** that triggers the writes.
+- **`UserPresent`** is the only live-loop register — Crema needs a
+  shell-side screensaver-prevention hook (every N minutes while the
+  user is interacting, write `1` to `0x803860`).
+- **`CalibrationFlowMultiplier`** is the only register with a real
+  read-vs-write decision tree; documented separately in §7 (waiting
+  on Calibration screen).
+
+### 9.2 Recommended next steps (re-prioritised)
+
+1. **Wire `UserPresent` periodic write** — small, high-impact (the
+  DE1 sleeps after ~30 min idle by default; Crema can extend that to
+  match the Tablet display timeout).
+2. **Wire `FeatureFlags` from settings** — single bit
+  (`UserNotPresent`), expose as "Allow DE1 to sleep when tablet is
+  idle" toggle.
+3. **Wire write-on-configure registers piecewise as their feature
+  surfaces land** — Hot Water, Flush, Steam, Cupwarmer. Each is one
+  MMR write hooked to the matching settings field; no read side.
+4. **Read-on-demand registers stay deferred** until the matching
+  screen is designed (Calibration § already done, Hot Water /
+  Steam / GHC settings still TBD).
