@@ -22,7 +22,7 @@ import {
 	type CremaCore,
 	type FirmwareUpdateStatus
 } from '$lib/core';
-import { MachineState } from '$lib/core/crema-core';
+import { MachineState, MmrRegister } from '$lib/core/crema-core';
 import { De1Manager, EMPTY_DE1_DIAGNOSTICS, ScaleManager } from '$lib/ble';
 import { getBeanStore } from '$lib/bean';
 import { getHistoryStore } from '$lib/history';
@@ -158,6 +158,20 @@ export class CremaApp {
 				// remember to click Load on Brew every session.
 				if (de1State === 'ready') {
 					this.autoUploadActiveProfileOnReady();
+					// Push the current `suppressDe1Sleep` preference to the
+					// DE1 — sets `FeatureFlags.UserNotPresent` so the
+					// firmware knows whether to listen for the heartbeat or
+					// fall back to its own sleep timer. Legacy parallel:
+					// `set_feature_flags` (de1_comms.tcl:1206) is part of
+					// `later_new_de1_connection_setup`.
+					const suppress = getSettingsStore().current.suppressDe1Sleep;
+					void this.setSuppressDe1Sleep(suppress);
+					// Also fire one heartbeat at connect so the DE1's
+					// presence-timer starts from a fresh "user just touched"
+					// state, not from whenever the user last interacted.
+					if (suppress) {
+						void this.markUserPresent();
+					}
 				}
 			},
 			// The connection-diagnostics snapshot — fold it straight in.
@@ -595,6 +609,56 @@ export class CremaApp {
 		this.applyCoreOutput(await this.core.readCalibration(sensor, factory));
 	}
 
+	// ---- User-presence heartbeat ------------------------------------------
+	//
+	// Two related write paths, both into `WriteToMMR` (`cuuid_06`):
+	//
+	// - `markUserPresent()` writes a `1` to `0x803860` — the legacy
+	//   `set_user_present` heartbeat (`de1_comms.tcl:1166`). Resets the
+	//   DE1's "user has gone away" timer. Debounced to once per minute by
+	//   the caller (`createCremaApp` attaches the document listener).
+	// - `setSuppressDe1Sleep(true/false)` writes the `UserNotPresent` bit
+	//   (`FeatureFlags`, `0x803858`, legacy `set_feature_flags`) — tells
+	//   the DE1 whether to listen to the heartbeat at all (`0`) or fall
+	//   back to its own sleep timer regardless (`1`).
+	//
+	// Together: Suppress=ON → bit=0 + heartbeat running → DE1 sleeps only
+	// when Crema is genuinely idle. Suppress=OFF → bit=1 + heartbeat
+	// silent → DE1 follows its own ~30 min timer.
+
+	/**
+	 * Send a `UserPresent = 1` heartbeat to the DE1. Best-effort: ignores
+	 * failures so a flaky link doesn't bubble exceptions into the
+	 * shell-side debounce loop.
+	 */
+	async markUserPresent(): Promise<void> {
+		try {
+			this.applyCoreOutput(
+				await this.core.writeMmr(MmrRegister.UserPresent, 1, 4)
+			);
+		} catch {
+			// Best-effort: the next debounce tick will retry.
+		}
+	}
+
+	/**
+	 * Write the `FeatureFlags.UserNotPresent` bit on the DE1. `suppress =
+	 * true` clears the bit (`UserNotPresent = 0`, app is tracking
+	 * presence); `false` sets it (`UserNotPresent = 1`, DE1 follows its
+	 * own timer).
+	 */
+	async setSuppressDe1Sleep(suppress: boolean): Promise<void> {
+		const userNotPresent = suppress ? 0 : 1;
+		try {
+			this.applyCoreOutput(
+				await this.core.writeMmr(MmrRegister.FeatureFlags, userNotPresent, 4)
+			);
+		} catch {
+			// Best-effort — settings UI keeps the local preference regardless;
+			// next connect will retry from `createCremaApp`.
+		}
+	}
+
 	// ---- Capture replay (developer tool) ----------------------------------
 
 	/**
@@ -762,6 +826,29 @@ export async function createCremaApp(): Promise<CremaApp> {
 		void core.setLineFrequencyOverride(hz);
 	} else {
 		void core.setLineFrequencyOverride(0);
+	}
+	// Install the user-presence heartbeat — every user touch / keystroke
+	// (debounced to once per minute) writes `UserPresent = 1` to the DE1,
+	// resetting its "user has gone away" timer. The actual MMR write is
+	// gated by the `suppressDe1Sleep` preference being on AND the DE1 being
+	// connected; either condition false is a no-op. Mirrors the legacy app
+	// firing `set_user_present` on every touch (`de1_comms.tcl:1166`), but
+	// debounced to keep the BLE channel quiet — the DE1's threshold for
+	// "user is gone" is on the order of minutes, so once-per-minute resets
+	// are plenty.
+	if (typeof document !== 'undefined') {
+		const HEARTBEAT_DEBOUNCE_MS = 60_000;
+		let lastFiredAt = 0;
+		const tick = () => {
+			if (!getSettingsStore().current.suppressDe1Sleep) return;
+			if (app.state.current.de1State !== 'ready') return;
+			const now = performance.now();
+			if (now - lastFiredAt < HEARTBEAT_DEBOUNCE_MS) return;
+			lastFiredAt = now;
+			void app.markUserPresent();
+		};
+		document.addEventListener('pointerdown', tick, { passive: true });
+		document.addEventListener('keydown', tick, { passive: true });
 	}
 	return app;
 }
