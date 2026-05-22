@@ -48,9 +48,9 @@
 	type="button"
 	class="mc-chip"
 	class:is-active={active}
-	class:is-steam={active && kind === 'steam'}
-	class:is-water={active && kind === 'water'}
-	class:is-flush={active && kind === 'flush'}
+	class:is-steam={kind === 'steam'}
+	class:is-water={kind === 'water'}
+	class:is-flush={kind === 'flush'}
 	class:is-disabled={!ready}
 	disabled={!ready}
 	aria-label={active ? `Cancel ${label}` : `Start ${label}`}

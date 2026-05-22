@@ -327,6 +327,29 @@ export class De1Manager {
 				);
 			}
 
+			// StateInfo (A00E) — one-shot Read at connect to seed the dashboard's
+			// MACHINE readout. The DE1 firmware emits StateInfo HVNs only on
+			// transitions, not on subscribe — so without this read the footer
+			// would show `—` until the next state change. Mirrors the legacy
+			// de1app's `de1_read_state` (`de1_comms.tcl`). Non-fatal: a failed
+			// read just leaves the footer empty until the first transition.
+			step = 'StateInfo read A00E';
+			try {
+				const stateBytes = await device.readCharacteristic(
+					De1Uuids.SERVICE,
+					De1Uuids.STATE_INFO
+				);
+				const now = performance.now();
+				getCaptureRecorder().record('De1State', stateBytes, now);
+				const output = await this.core.onNotification('De1State', stateBytes, now);
+				this.callbacks.onCoreOutput(output);
+				this.callbacks.onStatus('DE1 machine state read ✓');
+			} catch (stateError) {
+				this.callbacks.onStatus(
+					`DE1 state read skipped: ${describeError(stateError)}`
+				);
+			}
+
 			// ShotSettings (A00B) — one-shot Read at connect to seed the
 			// initial steam / hot-water / group-temp snapshot. The subscribe
 			// above will surface any subsequent on-machine changes; this
