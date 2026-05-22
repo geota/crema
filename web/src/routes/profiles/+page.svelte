@@ -74,15 +74,6 @@
 		{ id: 'author', label: 'Author', defaultDir: 'asc' }
 	];
 
-	function pickSort(next: SortKey): void {
-		if (next === sort) {
-			sortDir = sortDir === 'asc' ? 'desc' : 'asc';
-			return;
-		}
-		sort = next;
-		sortDir = SORT_OPTIONS.find((s) => s.id === next)?.defaultDir ?? 'asc';
-	}
-
 	/**
 	 * Fixed roast ordering for the `'roast'` sort key. Light → dark
 	 * matches the design's roast-bar gradient; unknown roasts sink
@@ -592,20 +583,34 @@
 				<button
 					class="pp-sort-opt"
 					class:is-active={sort === s.id}
-					onclick={() => pickSort(s.id)}
-					title={sort === s.id
-						? `Sorting by ${s.label} ${sortDir === 'asc' ? 'ascending' : 'descending'} — click to flip`
-						: `Sort by ${s.label}`}
+					onclick={() => {
+						if (s.id !== sort) {
+							sort = s.id;
+							sortDir = s.defaultDir;
+						}
+					}}
+					title={`Sort by ${s.label}`}
 				>
-					<span>{s.label}</span>
-					{#if sort === s.id}
-						<i
-							class={`ph ph-caret-${sortDir === 'asc' ? 'up' : 'down'} pp-sort-arrow`}
-							aria-hidden="true"
-						></i>
-					{/if}
+					{s.label}
 				</button>
 			{/each}
+			<span class="pp-sort-divider"></span>
+			<button
+				class="pp-sort-opt"
+				class:is-active={sortDir === 'asc'}
+				onclick={() => (sortDir = 'asc')}
+				title="Ascending"
+			>
+				Ascending
+			</button>
+			<button
+				class="pp-sort-opt"
+				class:is-active={sortDir === 'desc'}
+				onclick={() => (sortDir = 'desc')}
+				title="Descending"
+			>
+				Descending
+			</button>
 		</div>
 	</div>
 
@@ -840,9 +845,6 @@
 		flex: 0 0 auto;
 	}
 	.pp-sort-opt {
-		display: inline-flex;
-		align-items: center;
-		gap: 4px;
 		background: transparent;
 		border: 0;
 		color: rgba(var(--tint-rgb), 0.5);
@@ -862,9 +864,12 @@
 		text-decoration-thickness: 1.5px;
 		text-underline-offset: 4px;
 	}
-	.pp-sort-arrow {
-		font-size: 10px;
-		opacity: 0.8;
+	.pp-sort-divider {
+		display: inline-block;
+		width: 1px;
+		height: 16px;
+		margin: 0 4px;
+		background: rgba(var(--tint-rgb), 0.15);
 	}
 
 	/* Grid */
