@@ -36,6 +36,13 @@ pub enum Source {
     /// The DE1 `Calibration` characteristic (`cuuid_12`) — sensor calibration
     /// reads (current vs. factory) answer here.
     De1Calibration,
+    /// The DE1 `ShotSettings` characteristic (`cuuid_0B`) — steam, hot-water,
+    /// and group-temp settings. The firmware notifies on this characteristic
+    /// whenever the settings change (either from the on-machine UI or from a
+    /// host Write), and a connect-time Read seeds the initial snapshot.
+    /// Matches reaprime's `transport.shotSettings` notify stream + the
+    /// legacy de1app's `de1_read_hotwater` (`bluetooth.tcl:1707`).
+    De1ShotSettings,
     /// **DORMANT — see docs/16 §6.1 (snoop-verified 2026-05-21).** The DE1
     /// `HeaderWrite` characteristic (`cuuid_0F`) is nominally R/W per
     /// `docs/02-ble-protocol.md`, but the legacy de1app never Reads it and
@@ -315,6 +322,26 @@ pub enum Event {
         minimum_pressure: f32,
         /// Maximum flow allowed in pressure-priority frames, mL/s.
         maximum_flow: f32,
+    },
+    /// The DE1's steam + hot-water + group-temp `ShotSettings` were read,
+    /// either at connect-time or in response to a setting change. Mirrors
+    /// the legacy de1app's `de1_read_hotwater` flow (`bluetooth.tcl:1707`)
+    /// and reaprime's `shotSettings` notify stream.
+    ShotSettingsRead {
+        /// Target steam temperature, °C.
+        steam_temp_c: f32,
+        /// Steam timeout, seconds.
+        steam_timeout_s: f32,
+        /// Target hot-water temperature, °C.
+        hot_water_temp_c: f32,
+        /// Hot-water volume, mL.
+        hot_water_volume_ml: f32,
+        /// Hot-water timeout, seconds.
+        hot_water_timeout_s: f32,
+        /// Espresso target volume, mL.
+        espresso_volume_ml: f32,
+        /// Espresso group target temperature, °C.
+        group_temp_c: f32,
     },
     /// A profile upload has begun. Carries the total number of acks the
     /// orchestrator expects (frames + extensions + tail; the header is

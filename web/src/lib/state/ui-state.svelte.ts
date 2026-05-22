@@ -286,6 +286,14 @@ export interface UiSnapshot {
 	 */
 	readonly de1Calibration: De1Calibration;
 	/**
+	 * The DE1's last-read steam / hot-water / group-temp `ShotSettings`
+	 * (`cuuid_0B`). Populated at connect time from a one-shot Read and
+	 * kept fresh by the notify subscription (any on-machine or host
+	 * write fires a notification). `null` until the first read lands.
+	 * Drives the Steam / Hot Water settings panels (docs/23 — pending).
+	 */
+	readonly de1ShotSettings: De1ShotSettingsSnapshot | null;
+	/**
 	 * Readable text for the machine's current error substate (R5), or `null`
 	 * when the machine is healthy. Set from `MachineStateChanged` whenever the
 	 * substate is one of the DE1's `Error*` fault codes; cleared on any
@@ -356,6 +364,27 @@ export type De1Calibration = Partial<Record<CalTarget, SensorCalibration>>;
 
 /** The empty calibration snapshot — before any calibration has been read. */
 export const EMPTY_DE1_CALIBRATION: De1Calibration = {};
+
+/**
+ * The DE1's steam / hot-water / group-temp settings, as read back from
+ * the firmware (one snapshot of `cuuid_0B`).
+ */
+export interface De1ShotSettingsSnapshot {
+	/** Target steam temperature, °C. */
+	readonly steamTempC: number;
+	/** Steam timeout, seconds. */
+	readonly steamTimeoutS: number;
+	/** Target hot-water temperature, °C. */
+	readonly hotWaterTempC: number;
+	/** Hot-water target volume, mL. */
+	readonly hotWaterVolumeMl: number;
+	/** Hot-water timeout, seconds. */
+	readonly hotWaterTimeoutS: number;
+	/** Espresso target volume, mL. */
+	readonly espressoVolumeMl: number;
+	/** Espresso group target temperature, °C. */
+	readonly groupTempC: number;
+}
 
 /**
  * Shape of the profile the DE1 currently has loaded — read at connect time
@@ -442,6 +471,7 @@ export const INITIAL_SNAPSHOT: UiSnapshot = {
 	profileUploadProgress: null,
 	de1MachineInfo: {},
 	de1Calibration: EMPTY_DE1_CALIBRATION,
+	de1ShotSettings: null,
 	machineError: null,
 	lastShotCompletedAt: null,
 	lastShotDuration: null,
@@ -909,6 +939,33 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 					`Write refused (firmware update in progress): ${event.content.method}`
 				)
 			};
+		case 'ShotSettingsRead': {
+			// Steam / hot-water / group-temp settings either at connect
+			// (one-shot Read) or after a change (notify). Lands as the
+			// `de1ShotSettings` snapshot field; consumers are the Steam /
+			// Hot Water settings panels (docs/23) + the brew-page mode
+			// chips (target sub-labels can switch from the hardcoded
+			// "148 °C · 8 s" to live values once the panels exist).
+			const c = event.content;
+			return {
+				...snapshot,
+				de1ShotSettings: {
+					steamTempC: c.steam_temp_c,
+					steamTimeoutS: c.steam_timeout_s,
+					hotWaterTempC: c.hot_water_temp_c,
+					hotWaterVolumeMl: c.hot_water_volume_ml,
+					hotWaterTimeoutS: c.hot_water_timeout_s,
+					espressoVolumeMl: c.espresso_volume_ml,
+					groupTempC: c.group_temp_c
+				},
+				eventLog: appendLog(
+					snapshot.eventLog,
+					`ShotSettings read: steam ${c.steam_temp_c} °C/${c.steam_timeout_s} s · ` +
+						`hot water ${c.hot_water_temp_c} °C/${c.hot_water_volume_ml} mL/${c.hot_water_timeout_s} s · ` +
+						`group ${c.group_temp_c} °C`
+				)
+			};
+		}
 		case 'ProfileHeaderRead': {
 			// The DE1 reported the shape of whatever profile it currently has
 			// loaded — read once at connect time.

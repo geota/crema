@@ -134,6 +134,7 @@ export type NotificationSource =
 	| 'De1Version'
 	| 'De1MmrRead'
 	| 'De1Calibration'
+	| 'De1ShotSettings'
 	| 'De1ProfileHeader'
 	| 'De1FrameAck';
 
@@ -381,6 +382,8 @@ async function createCore(): Promise<CremaCore> {
 				return wasm.NotificationSource.De1MmrRead;
 			case 'De1Calibration':
 				return wasm.NotificationSource.De1Calibration;
+			case 'De1ShotSettings':
+				return wasm.NotificationSource.De1ShotSettings;
 			case 'De1ProfileHeader':
 				return wasm.NotificationSource.De1ProfileHeader;
 			case 'De1FrameAck':

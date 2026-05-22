@@ -329,6 +329,28 @@ export type Event =
 	maximum_flow: number;
 }}
 	/**
+	 * The DE1's steam + hot-water + group-temp `ShotSettings` were read,
+	 * either at connect-time or in response to a setting change. Mirrors
+	 * the legacy de1app's `de1_read_hotwater` flow (`bluetooth.tcl:1707`)
+	 * and reaprime's `shotSettings` notify stream.
+	 */
+	| { type: "ShotSettingsRead", content: {
+	/** Target steam temperature, °C. */
+	steam_temp_c: number;
+	/** Steam timeout, seconds. */
+	steam_timeout_s: number;
+	/** Target hot-water temperature, °C. */
+	hot_water_temp_c: number;
+	/** Hot-water volume, mL. */
+	hot_water_volume_ml: number;
+	/** Hot-water timeout, seconds. */
+	hot_water_timeout_s: number;
+	/** Espresso target volume, mL. */
+	espresso_volume_ml: number;
+	/** Espresso group target temperature, °C. */
+	group_temp_c: number;
+}}
+	/**
 	 * A profile upload has begun. Carries the total number of acks the
 	 * orchestrator expects (frames + extensions + tail; the header is
 	 * not acked separately).

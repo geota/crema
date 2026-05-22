@@ -1071,6 +1071,7 @@ impl CremaCore {
             Source::De1Version => self.handle_version(data, &mut out),
             Source::De1MmrRead => self.handle_mmr_read(data, &mut out),
             Source::De1Calibration => Self::handle_calibration(data, &mut out),
+            Source::De1ShotSettings => self.handle_shot_settings_read(data, &mut out),
             Source::De1ProfileHeader => self.handle_profile_header_read(data, &mut out),
             Source::De1FrameAck => self.handle_profile_frame_ack(data, now, &mut out),
         }
@@ -1586,6 +1587,34 @@ impl CremaCore {
                 measured: cal.measured,
             });
         }
+    }
+
+    /// Decode and process a `ShotSettings` notification — fired by the
+    /// firmware when the steam / hot-water / group-temp settings change
+    /// (either from on-machine UI or from a host write), and as the reply
+    /// to a connect-time Read of `cuuid_0B`. Caches the value on
+    /// [`steam_hotwater_settings`](Self::steam_hotwater_settings) and
+    /// emits one [`Event::ShotSettingsRead`].
+    fn handle_shot_settings_read(&mut self, data: &[u8], out: &mut CoreOutput) {
+        let settings = match ShotSettings::decode(data) {
+            Ok(s) => s,
+            Err(e) => {
+                out.events.push(Event::DecodeError {
+                    message: e.to_string(),
+                });
+                return;
+            }
+        };
+        self.steam_hotwater_settings = Some(settings.clone());
+        out.events.push(Event::ShotSettingsRead {
+            steam_temp_c: settings.steam_temp_c,
+            steam_timeout_s: settings.steam_timeout_s,
+            hot_water_temp_c: settings.hot_water_temp_c,
+            hot_water_volume_ml: settings.hot_water_volume_ml,
+            hot_water_timeout_s: settings.hot_water_timeout_s,
+            espresso_volume_ml: settings.espresso_volume_ml,
+            group_temp_c: settings.group_temp_c,
+        });
     }
 
     /// Translate a domain [`ShotEvent`] into FFI [`Event`]s, maintaining the
