@@ -31,7 +31,8 @@
 		totalTime,
 		type CremaProfile,
 		type ProfileSegment,
-		type Roast
+		type Roast,
+		type BeverageType
 	} from '$lib/profiles';
 	import ProfileCurveEditor from './ProfileCurveEditor.svelte';
 	import SegmentRow from './SegmentRow.svelte';
@@ -172,7 +173,7 @@
 			time: 6,
 			exit: null,
 			temperatureC: last?.temperatureC ?? draft.brewTemp,
-			tempSensor: last?.tempSensor ?? 'basket',
+			tempSensor: last?.tempSensor ?? 'coffee',
 			volumeLimitMl: 0,
 			limiter: null
 		};
@@ -254,6 +255,18 @@
 	}
 
 	const roastOptions: Roast[] = ['light', 'medium', 'dark'];
+	/**
+	 * Beverage-type choices in editor-friendly order. Matches the v2
+	 * contract enum (Espresso/Calibrate/Cleaning/Manual/Pourover); the
+	 * UI shows them lower-cased to align with the wire spelling.
+	 */
+	const beverageTypeOptions: BeverageType[] = [
+		'espresso',
+		'pourover',
+		'manual',
+		'cleaning',
+		'calibrate'
+	];
 </script>
 
 <svelte:head>
@@ -299,6 +312,17 @@
 
 				<div class="pe-section">
 					<div class="pe-field">
+						<label class="t-eyebrow" for="pe-author">Author</label>
+						<input
+							id="pe-author"
+							class="pe-input"
+							type="text"
+							value={draft.author}
+							placeholder="Who designed this profile?"
+							oninput={(e) => patch({ author: e.currentTarget.value })}
+						/>
+					</div>
+					<div class="pe-field">
 						<label class="t-eyebrow" for="pe-notes">Notes</label>
 						<textarea
 							id="pe-notes"
@@ -318,6 +342,22 @@
 									class:is-active={draft.roast === r}
 									onclick={() => patch({ roast: draft.roast === r ? null : r })}
 									>{r}</button
+								>
+							{/each}
+						</div>
+					</div>
+					<div class="pe-field">
+						<!-- Beverage type — espresso is the default and the only
+						     one most users will pick; the others are utility
+						     profile categories (calibration, cleaning, manual
+						     control, pour-over) that the v2 contract codifies. -->
+						<span class="t-eyebrow">Beverage type</span>
+						<div class="pe-tags">
+							{#each beverageTypeOptions as bt (bt)}
+								<button
+									class="pe-tag"
+									class:is-active={draft.beverageType === bt}
+									onclick={() => patch({ beverageType: bt })}>{bt}</button
 								>
 							{/each}
 						</div>
@@ -402,6 +442,21 @@
 							max={draft.segments.length}
 							digits={0}
 							onChange={(v) => patch({ preinfuseStepCount: Math.round(v) })}
+						/>
+						<!-- Tank temperature — advanced v2-only field. 0 means
+						     "no override" (the firmware keeps its current
+						     setpoint). Setting a non-zero value writes the tank
+						     setpoint at profile-load time. Most users leave it
+						     at 0. -->
+						<PeNumber
+							label="Tank temp"
+							value={draft.tankTemperatureC}
+							step={1}
+							unit="°C"
+							min={0}
+							max={100}
+							digits={0}
+							onChange={(v) => patch({ tankTemperatureC: Math.round(v) })}
 						/>
 					</div>
 				</div>

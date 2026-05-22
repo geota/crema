@@ -277,8 +277,8 @@
 			<QSplitLabel
 				prefix="Temp"
 				options={[
-					{ id: 'basket', label: 'Basket' },
-					{ id: 'mix', label: 'Mix' }
+					{ id: 'coffee', label: 'Coffee' },
+					{ id: 'water', label: 'Water' }
 				]}
 				value={seg.tempSensor}
 				onChange={(s) => onEdit({ tempSensor: s as ProfileSegment['tempSensor'] })}

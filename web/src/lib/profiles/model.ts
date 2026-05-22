@@ -36,8 +36,12 @@ export type ExitMetric = 'pressure' | 'flow';
 /** The direction of an exit comparison. */
 export type ExitCompare = 'over' | 'under';
 
-/** Which temperature sensor a segment regulates. */
-export type TempSensor = 'basket' | 'mix';
+/**
+ * Which temperature sensor a segment regulates. Lowercase wire spelling
+ * per the community v2 JSON contract: `'coffee'` = the basket (head
+ * temp); `'water'` = the water exiting the group (mix temp).
+ */
+export type TempSensor = 'coffee' | 'water';
 
 /**
  * A structured early-exit condition on a segment — leave the segment before
@@ -131,7 +135,31 @@ export interface CremaProfile {
 	maxTotalVolumeMl: number;
 	/** The ordered pressure / flow segments. */
 	segments: ProfileSegment[];
+	/**
+	 * Profile author — free text. Round-trips through the v2 JSON
+	 * `author` field. Optional (legacy + Crema-native profiles can be
+	 * anonymous).
+	 */
+	author: string;
+	/**
+	 * What kind of beverage this profile produces — drives whether Crema
+	 * surfaces the profile in the espresso list, the cleaning list, etc.
+	 * Defaults to `'espresso'`.
+	 */
+	beverageType: BeverageType;
+	/**
+	 * Target tank temperature, °C (0 = no override). Most profiles leave
+	 * this at 0; only advanced profiles change the tank setpoint
+	 * mid-shot.
+	 */
+	tankTemperatureC: number;
 }
+
+/**
+ * What kind of beverage a profile produces — the shell-side mirror of
+ * the core's `BeverageType`. Same lowercase wire spellings.
+ */
+export type BeverageType = 'espresso' | 'calibrate' | 'cleaning' | 'manual' | 'pourover';
 
 /** A short id for a custom profile / segment — `crypto.randomUUID` if present. */
 export function uid(prefix: string): string {
@@ -213,13 +241,13 @@ export function sparkShape(segments: readonly ProfileSegment[]): SparkShape {
 
 /** Map a core `ProfileStep` into a working {@link ProfileSegment}. */
 function segmentFromStep(step: ProfileStep, index: number): ProfileSegment {
-	// The core enums are PascalCase (`Pressure` / `Over` / `Mix`); the shell
-	// model is lowercase — translate each on the way in, as `pump` / `transition`
-	// already do.
+	// The shell + core enums now share the same lowercase wire spelling
+	// (v2 community contract — `'pressure'` / `'over'` / `'coffee'` /
+	// …), so the exit fields pass straight through without remapping.
 	const exit: SegmentExit | null = step.exit
 		? {
-				metric: step.exit.metric === 'Pressure' ? 'pressure' : 'flow',
-				compare: step.exit.compare === 'Over' ? 'over' : 'under',
+				metric: step.exit.metric,
+				compare: step.exit.compare,
 				threshold: step.exit.threshold
 			}
 		: null;
@@ -229,42 +257,48 @@ function segmentFromStep(step: ProfileStep, index: number): ProfileSegment {
 	return {
 		id: `s${index + 1}`,
 		name: step.name || `Step ${index + 1}`,
-		mode: step.pump === 'Flow' ? 'flow' : 'pressure',
+		mode: step.pump,
 		target: step.target,
-		ramp: step.transition === 'Smooth' ? 'smooth' : 'fast',
+		ramp: step.transition,
 		// Keep the float — the DE1 protocol carries 0.1 s frame durations, so a
 		// 6.5 s preinfusion must round-trip faithfully; rounding here truncated
 		// every sub-second step.
 		time: step.duration_seconds,
 		exit,
 		temperatureC: step.temperature_c,
-		tempSensor: step.temp_sensor === 'Mix' ? 'mix' : 'basket',
+		tempSensor: step.temp_sensor,
 		volumeLimitMl: step.volume_limit_ml,
 		limiter
 	};
 }
 
-/** Map a working {@link ProfileSegment} back into a core `ProfileStep`. */
+/**
+ * Map a working {@link ProfileSegment} back into a core `ProfileStep`.
+ * The shell + core types now share lowercase enum strings (v2 contract),
+ * so the segment fields pass straight through with no remapping.
+ */
 export function segmentToStep(seg: ProfileSegment): ProfileStep {
 	return {
 		name: seg.name,
-		pump: seg.mode === 'flow' ? 'Flow' : 'Pressure',
+		pump: seg.mode,
 		target: seg.target,
 		temperature_c: seg.temperatureC,
-		temp_sensor: seg.tempSensor === 'mix' ? 'Mix' : 'Basket',
-		transition: seg.ramp === 'smooth' ? 'Smooth' : 'Fast',
+		temp_sensor: seg.tempSensor,
+		transition: seg.ramp,
 		duration_seconds: seg.time,
-		// The structured exit condition round-trips losslessly — the lowercase
-		// shell enums map back to the core's PascalCase variants.
 		exit: seg.exit
 			? {
-					metric: seg.exit.metric === 'pressure' ? 'Pressure' : 'Flow',
-					compare: seg.exit.compare === 'over' ? 'Over' : 'Under',
+					metric: seg.exit.metric,
+					compare: seg.exit.compare,
 					threshold: seg.exit.threshold
 				}
 			: null,
 		volume_limit_ml: seg.volumeLimitMl,
-		limiter: seg.limiter ? { value: seg.limiter.value, range: seg.limiter.range } : null
+		limiter: seg.limiter ? { value: seg.limiter.value, range: seg.limiter.range } : null,
+		// No per-step weight target until §4.1b adds the editor row;
+		// preserves whatever the segment already carries (currently
+		// none in CremaProfile).
+		weight: null
 	};
 }
 
@@ -404,7 +438,13 @@ export function fromCoreProfile(profile: Profile, index: number): CremaProfile {
 		autoTare: true,
 		preinfuseStepCount: profile.preinfuse_step_count,
 		maxTotalVolumeMl: profile.max_total_volume_ml,
-		segments
+		segments,
+		// New v2 fields (docs/22 §4.1). #[serde(default)] on the Rust
+		// side means built-in profiles loaded before this field existed
+		// still deserialize — they arrive as empty / Espresso / 0 / "2".
+		author: profile.author ?? '',
+		beverageType: profile.beverage_type ?? 'espresso',
+		tankTemperatureC: profile.tank_temperature ?? 0
 	};
 }
 
@@ -430,7 +470,12 @@ export function toCoreProfile(p: CremaProfile): Profile {
 		// The yield target round-trips as the DE1 profile's `target_weight`.
 		target_weight: p.yieldG,
 		// The dose round-trips as the DE1 profile's `dose` field.
-		dose: p.dose
+		dose: p.dose,
+		// New v2 fields (docs/22 §4.1).
+		author: p.author,
+		beverage_type: p.beverageType,
+		tank_temperature: p.tankTemperatureC,
+		version: '2'
 	};
 }
 
@@ -446,7 +491,7 @@ export function defaultSegments(): ProfileSegment[] {
 			time: 8,
 			exit: { metric: 'flow', compare: 'over', threshold: 4 },
 			temperatureC: 92,
-			tempSensor: 'basket',
+			tempSensor: 'coffee',
 			volumeLimitMl: 0,
 			limiter: null
 		},
@@ -459,7 +504,7 @@ export function defaultSegments(): ProfileSegment[] {
 			time: 4,
 			exit: null,
 			temperatureC: 92,
-			tempSensor: 'basket',
+			tempSensor: 'coffee',
 			volumeLimitMl: 0,
 			limiter: null
 		},
@@ -472,7 +517,7 @@ export function defaultSegments(): ProfileSegment[] {
 			time: 12,
 			exit: null,
 			temperatureC: 92,
-			tempSensor: 'basket',
+			tempSensor: 'coffee',
 			volumeLimitMl: 0,
 			limiter: null
 		},
@@ -485,7 +530,7 @@ export function defaultSegments(): ProfileSegment[] {
 			time: 8,
 			exit: null,
 			temperatureC: 92,
-			tempSensor: 'basket',
+			tempSensor: 'coffee',
 			volumeLimitMl: 0,
 			limiter: null
 		}
@@ -510,7 +555,10 @@ export function blankProfile(): CremaProfile {
 		autoTare: true,
 		preinfuseStepCount: 1,
 		maxTotalVolumeMl: 0,
-		segments: defaultSegments()
+		segments: defaultSegments(),
+		author: '',
+		beverageType: 'espresso',
+		tankTemperatureC: 0
 	};
 }
 
