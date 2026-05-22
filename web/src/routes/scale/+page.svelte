@@ -311,17 +311,11 @@
 				{/if}
 			</div>
 		</div>
-		<div class="sc-head-r">
-			<!-- Pair / Re-pair triggers the Web Bluetooth chooser (or, after a
-			     previous pairing, the cached-device reconnect). Same call —
-			     `app.connectScale()` — for both labels, the verb shifts to
-			     match BLE terminology (users mentally "pair" a Bluetooth
-			     device, not "connect" to it). -->
-			<button class="st-btn st-btn-primary" onclick={repair} disabled={!app}>
-				<i class="ph ph-bluetooth" aria-hidden="true"></i>
-				{connected ? 'Re-pair' : 'Pair'}
-			</button>
-		</div>
+		<!-- Pair/Re-pair lives in Settings → Machine → Peripherals → Scale
+		     now, alongside the Grinder peripheral row. The Scale page hero
+		     stays focused on the live readout; pairing is a setup-once
+		     action that belongs in settings. -->
+		<div class="sc-head-r"></div>
 	</div>
 
 	<!-- Live readout hero -->

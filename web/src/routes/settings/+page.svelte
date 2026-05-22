@@ -334,6 +334,15 @@
 		font-size: 11px;
 		color: rgba(var(--tint-rgb), 0.4);
 	}
+	/* When a hint snippet renders no content (the only thing inside it
+	   was conditionally hidden), drop the wrapper from the layout
+	   entirely. Without this, the empty hint div remains a flex sibling
+	   and the parent's `gap` shifts the visible control 10 px to the
+	   left — visible on the Selected-device row when no device is
+	   connected (dash appears offset vs other rows' dashes). */
+	:global(.st-content .st-row-hint:empty) {
+		display: none;
+	}
 
 	/* ── Controls ───────────────────────────────────────────────────────── */
 	:global(.st-content .st-select-wrap) {
