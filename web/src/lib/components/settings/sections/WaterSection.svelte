@@ -21,7 +21,7 @@
 	import StGroup from '../StGroup.svelte';
 	import StRow from '../StRow.svelte';
 	import StSegment from '../StSegment.svelte';
-	import StValueChip from '../StValueChip.svelte';
+	import StStepper from '../StStepper.svelte';
 	import StMaintenanceCard from '../StMaintenanceCard.svelte';
 
 	const maintenance = getMaintenanceStore();
@@ -106,9 +106,9 @@
 		sub="Helps schedule descaling cycles accurately."
 	>
 		{#snippet control()}
-			<StValueChip
+			<StStepper
 				value={hardness}
-				suffix=" ppm"
+				unit="ppm"
 				step={1}
 				min={0}
 				max={500}
@@ -121,9 +121,9 @@
 		sub="Affects extraction; optional but useful for tuning."
 	>
 		{#snippet control()}
-			<StValueChip
+			<StStepper
 				value={tds}
-				suffix=" ppm"
+				unit="ppm"
 				step={1}
 				min={0}
 				max={1000}
