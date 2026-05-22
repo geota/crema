@@ -14,6 +14,8 @@
 	import { getCaptureStore, captureJsonl } from '$lib/capture';
 	import { daysOffRoast, roastBand } from '$lib/bean';
 	import { getSettingsStore, convertWeight, convertTemp, convertPressure } from '$lib/settings';
+	import { getProfileStore, toCoreProfile } from '$lib/profiles';
+	import { getCremaAppContext } from '$lib/shell/app-context';
 	import StaticShotChart from './StaticShotChart.svelte';
 
 	let {
@@ -137,13 +139,42 @@
 		URL.revokeObjectURL(url);
 	}
 
-	// TODO: Load-on-Brew / Save-as-profile / Share-to-Visualizer have no core
-	// backing yet — the core exposes no profile-upload path and there is no
-	// Visualizer integration. Stubbed.
+	const ctx = getCremaAppContext();
+
+	/**
+	 * Reload the profile this shot was pulled against. Looks up the profile
+	 * by name in the local store (`StoredShot.profileName` is the only
+	 * identifying field we persist on shots) and routes through
+	 * `app.uploadProfile`, same as the /profiles → Load on Brew flow. If
+	 * the profile has since been deleted or renamed, surface a friendly
+	 * message rather than a no-op.
+	 */
 	function loadOnBrew(): void {
-		// TODO: wire to DE1 profile upload when the core exposes it.
-		alert('Loading a shot on Brew is coming in a later step.');
+		const app = ctx().app;
+		if (!app) {
+			alert('App is still loading — try again in a moment.');
+			return;
+		}
+		if (!shot.profileName) {
+			alert("This shot wasn't tagged with a profile name; nothing to load.");
+			return;
+		}
+		const store = getProfileStore();
+		const profile = store.all.find((p) => p.name === shot.profileName);
+		if (!profile) {
+			alert(
+				`Profile "${shot.profileName}" was renamed or deleted since this shot. Open Profiles to load a current profile manually.`
+			);
+			return;
+		}
+		store.setActive(profile.id);
+		void app.uploadProfile(toCoreProfile(profile));
 	}
+
+	// TODO: Save-as-profile / Share-to-Visualizer are still stubbed —
+	// Save-as-profile needs a curve-to-profile deriver (not the same as
+	// the v2 profile importer); Share-to-Visualizer needs the Visualizer
+	// API integration.
 	function saveAsProfile(): void {
 		// TODO: derive a CremaProfile from the stored curve and save it.
 		alert('Save-as-profile is coming in a later step.');

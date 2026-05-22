@@ -673,10 +673,18 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 			// The Bookoo echoes its live settings in every weight notification.
 			// `device_*` is absent for scales that do not report a setting — in
 			// which case the field keeps its last value. High-rate: not logged.
+			//
+			// `scaleFlow` falls back to `r.flow` — the core-side FlowEstimator's
+			// host-computed mass-flow rate, which exists for *every* scale
+			// (`Event::ScaleReading.flow` per core/de1-app/src/event.rs). A
+			// Bookoo's native `device_flow` is preferred when present (matches
+			// the scale's internal smoothing); weight-only scales (Acaia, etc.)
+			// fall back to the estimator. Pre-fix this field was null on every
+			// non-Bookoo scale even though the data existed — audit §5.2 #3.
 			return {
 				...snapshot,
 				scaleWeight: r.weight,
-				scaleFlow: r.device_flow ?? null,
+				scaleFlow: r.device_flow ?? r.flow ?? null,
 				scaleTimer: r.device_timer ?? null,
 				scaleVolume: r.device_volume ?? snapshot.scaleVolume,
 				scaleStandbyMinutes: r.device_standby ?? snapshot.scaleStandbyMinutes,
