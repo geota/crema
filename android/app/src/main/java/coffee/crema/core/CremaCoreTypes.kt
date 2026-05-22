@@ -64,7 +64,17 @@ data class EventTelemetryInner (
 	/// telemetry flow stream against the DE1's `sample_time` ticks
 	/// (BLE-jitter-immune when the line-frequency is known, host-clock
 	/// fallback otherwise). Resets to 0 on every `ShotStarted`.
-	val dispensed_volume_ml: Float
+	val dispensed_volume_ml: Float,
+	/// Target group-head temperature, °C — the heater setpoint for the
+	/// active frame. Legacy "Goal temperature" curve on the live shot
+	/// chart (`de1_de1.tcl:540` maps `goal_temperature ← SetHeadTemp`).
+	val set_head_temp: Float,
+	/// Target group pressure, bar — the pump pressure setpoint for the
+	/// active frame. Legacy "Goal pressure" curve.
+	val set_group_pressure: Float,
+	/// Target group flow, mL/s — the pump flow setpoint for the active
+	/// frame. Legacy "Goal flow" curve.
+	val set_group_flow: Float
 )
 
 /// Generated type representing the anonymous struct variant `ScaleReading` of the `Event` Rust enum
