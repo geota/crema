@@ -127,6 +127,14 @@ pub enum Event {
         /// Target group flow, mL/s — the pump flow setpoint for the active
         /// frame. Legacy "Goal flow" curve.
         set_group_flow: f32,
+        /// Puck resistance — `group_pressure / group_flow²`, the
+        /// de1app/DSx derived "resistance" metric (the R4 read-path).
+        /// `None` when group flow is too low to divide by meaningfully —
+        /// the near-zero-flow region produces noisy spikes that have no
+        /// useful interpretation. Units are `bar / (mL/s)²`. Surfaced on
+        /// the event itself so every shell consumes the same value
+        /// (previously each shell duplicated the formula + threshold).
+        resistance: Option<f32>,
     },
     /// A weight reading arrived from the scale, smoothed by the flow estimator.
     ScaleReading {

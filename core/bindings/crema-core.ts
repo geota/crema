@@ -70,6 +70,16 @@ export type Event =
 	 * frame. Legacy "Goal flow" curve.
 	 */
 	set_group_flow: number;
+	/**
+	 * Puck resistance — `group_pressure / group_flow²`, the
+	 * de1app/DSx derived "resistance" metric (the R4 read-path).
+	 * `None` when group flow is too low to divide by meaningfully —
+	 * the near-zero-flow region produces noisy spikes that have no
+	 * useful interpretation. Units are `bar / (mL/s)²`. Surfaced on
+	 * the event itself so every shell consumes the same value
+	 * (previously each shell duplicated the formula + threshold).
+	 */
+	resistance?: number;
 }}
 	/** A weight reading arrived from the scale, smoothed by the flow estimator. */
 	| { type: "ScaleReading", content: {
