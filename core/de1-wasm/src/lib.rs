@@ -36,6 +36,10 @@ pub enum NotificationSource {
     De1MmrRead,
     /// The DE1 `Calibration` characteristic — sensor-calibration replies.
     De1Calibration,
+    /// The DE1 `ShotSettings` characteristic (`cuuid_0B`) — notifications
+    /// when steam / hot-water / group-temp settings change, plus the reply
+    /// to a connect-time Read. Mirrors `de1_app::Source::De1ShotSettings`.
+    De1ShotSettings,
     /// **DORMANT** — mirrors `de1_app::Source::De1ProfileHeader`, which the
     /// BLE shell no longer dispatches (docs/16 §6.1). Kept in the mirror
     /// enum for forward-compat. See the core variant for the longer note.
@@ -56,6 +60,7 @@ impl From<NotificationSource> for Source {
             NotificationSource::De1Version => Source::De1Version,
             NotificationSource::De1MmrRead => Source::De1MmrRead,
             NotificationSource::De1Calibration => Source::De1Calibration,
+            NotificationSource::De1ShotSettings => Source::De1ShotSettings,
             NotificationSource::De1ProfileHeader => Source::De1ProfileHeader,
             NotificationSource::De1FrameAck => Source::De1FrameAck,
         }
@@ -1010,7 +1015,7 @@ mod tests {
 
     /// Every `NotificationSource` the wasm enum can name — used to fuzz the
     /// bridge against malformed input on every characteristic.
-    fn every_source() -> [NotificationSource; 10] {
+    fn every_source() -> [NotificationSource; 11] {
         [
             NotificationSource::De1State,
             NotificationSource::De1ShotSample,
@@ -1020,6 +1025,7 @@ mod tests {
             NotificationSource::De1Version,
             NotificationSource::De1MmrRead,
             NotificationSource::De1Calibration,
+            NotificationSource::De1ShotSettings,
             NotificationSource::De1ProfileHeader,
             NotificationSource::De1FrameAck,
         ]

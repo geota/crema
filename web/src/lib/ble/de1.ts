@@ -32,7 +32,12 @@ import { BleDevice, requestDevice, type ConnState } from './transport';
 /** The `NotificationSource`s the DE1's characteristics route to. */
 type De1NotificationSource = Extract<
 	NotificationSource,
-	'De1State' | 'De1ShotSample' | 'De1WaterLevels' | 'De1MmrRead' | 'De1FrameAck'
+	| 'De1State'
+	| 'De1ShotSample'
+	| 'De1WaterLevels'
+	| 'De1MmrRead'
+	| 'De1ShotSettings'
+	| 'De1FrameAck'
 >;
 
 /** Coarse state of the DE1 connection — mirrors the Android manager's enum. */
@@ -267,6 +272,16 @@ export class De1Manager {
 			await device.startNotifications(De1Uuids.SERVICE, De1Uuids.MMR_READ);
 			this.callbacks.onStatus('MMR_READ A005 subscribed ✓');
 
+			// ShotSettings (cuuid_0B) — the DE1 notifies on this characteristic
+			// when steam / hot-water / group-temp settings change (either from
+			// the on-machine UI or from a host Write), and the connect-time
+			// Read below seeds the initial snapshot. Matches reaprime's
+			// `transport.shotSettings` notify stream and the legacy de1app's
+			// `de1_read_hotwater` flow (`bluetooth.tcl:1707`). docs/22 §3.5.
+			step = 'ShotSettings characteristic A00B';
+			await device.startNotifications(De1Uuids.SERVICE, De1Uuids.SHOT_SETTINGS);
+			this.callbacks.onStatus('ShotSettings A00B subscribed ✓');
+
 			// FRAME_WRITE (cuuid_10) notify subscription was removed
 			// 2026-05-22 (docs/22 §3.1). The 2026-05-21 HCI snoop of a
 			// legacy de1app session confirmed the DE1 firmware never emits
@@ -308,6 +323,35 @@ export class De1Manager {
 			} catch (versionError) {
 				this.callbacks.onStatus(
 					`DE1 version read skipped: ${describeError(versionError)}`
+				);
+			}
+
+			// ShotSettings (A00B) — one-shot Read at connect to seed the
+			// initial steam / hot-water / group-temp snapshot. The subscribe
+			// above will surface any subsequent on-machine changes; this
+			// Read covers the gap between connect and the first change.
+			// Matches reaprime's `_initializeShotSettings()` flow + the
+			// legacy de1app's `de1_read_hotwater` (`bluetooth.tcl:1707`).
+			// docs/22 §3.5. Non-fatal — the field defaults to `None` on the
+			// core if this read fails.
+			step = 'ShotSettings read A00B';
+			try {
+				const shotSettingsBytes = await device.readCharacteristic(
+					De1Uuids.SERVICE,
+					De1Uuids.SHOT_SETTINGS
+				);
+				const now = performance.now();
+				getCaptureRecorder().record('De1ShotSettings', shotSettingsBytes, now);
+				const output = await this.core.onNotification(
+					'De1ShotSettings',
+					shotSettingsBytes,
+					now
+				);
+				this.callbacks.onCoreOutput(output);
+				this.callbacks.onStatus('DE1 shot-settings read ✓');
+			} catch (shotSettingsError) {
+				this.callbacks.onStatus(
+					`DE1 shot-settings read skipped: ${describeError(shotSettingsError)}`
 				);
 			}
 
@@ -492,6 +536,8 @@ function sourceFor(characteristicUuid: string): De1NotificationSource | null {
 			return 'De1WaterLevels';
 		case De1Uuids.MMR_READ:
 			return 'De1MmrRead';
+		case De1Uuids.SHOT_SETTINGS:
+			return 'De1ShotSettings';
 		case De1Uuids.FRAME_WRITE:
 			return 'De1FrameAck';
 		default:
@@ -510,6 +556,7 @@ function freshCounts(): Record<De1NotificationSource, number> {
 		De1ShotSample: 0,
 		De1WaterLevels: 0,
 		De1MmrRead: 0,
+		De1ShotSettings: 0,
 		De1FrameAck: 0
 	};
 }

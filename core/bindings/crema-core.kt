@@ -242,6 +242,25 @@ data class EventProfileHeaderReadInner (
 	val maximum_flow: Float
 )
 
+/// Generated type representing the anonymous struct variant `ShotSettingsRead` of the `Event` Rust enum
+@Serializable
+data class EventShotSettingsReadInner (
+	/// Target steam temperature, °C.
+	val steam_temp_c: Float,
+	/// Steam timeout, seconds.
+	val steam_timeout_s: Float,
+	/// Target hot-water temperature, °C.
+	val hot_water_temp_c: Float,
+	/// Hot-water volume, mL.
+	val hot_water_volume_ml: Float,
+	/// Hot-water timeout, seconds.
+	val hot_water_timeout_s: Float,
+	/// Espresso target volume, mL.
+	val espresso_volume_ml: Float,
+	/// Espresso group target temperature, °C.
+	val group_temp_c: Float
+)
+
 /// Generated type representing the anonymous struct variant `ProfileUploadStarted` of the `Event` Rust enum
 @Serializable
 data class EventProfileUploadStartedInner (
@@ -432,6 +451,13 @@ sealed class Event {
 	@Serializable
 	@SerialName("ProfileHeaderRead")
 	data class ProfileHeaderRead(val content: EventProfileHeaderReadInner): Event()
+	/// The DE1's steam + hot-water + group-temp `ShotSettings` were read,
+	/// either at connect-time or in response to a setting change. Mirrors
+	/// the legacy de1app's `de1_read_hotwater` flow (`bluetooth.tcl:1707`)
+	/// and reaprime's `shotSettings` notify stream.
+	@Serializable
+	@SerialName("ShotSettingsRead")
+	data class ShotSettingsRead(val content: EventShotSettingsReadInner): Event()
 	/// A profile upload has begun. Carries the total number of acks the
 	/// orchestrator expects (frames + extensions + tail; the header is
 	/// not acked separately).
