@@ -399,7 +399,12 @@
 			<span class="st-diag-mono">{diag.deviceName ?? '—'}</span>
 		{/snippet}
 		{#snippet hint()}
-			<span class="st-diag-id">{diag.deviceId ?? '—'}</span>
+			<!-- Only show the id hint when a device is actually selected;
+			     otherwise the row would render two stacked dashes (one for
+			     the missing name, one for the missing id). -->
+			{#if diag.deviceId !== null}
+				<span class="st-diag-id">{diag.deviceId}</span>
+			{/if}
 		{/snippet}
 	</StRow>
 	<StRow
@@ -432,7 +437,7 @@
 	</StRow>
 </StGroup>
 
-<StGroup title="Peripherals" sub="Bluetooth devices Crema can talk to.">
+<StGroup title="Peripherals">
 	<!-- TODO: a peripheral registry (grinder) is not in the shell; the
 	     scale's live state lives on the Scale page. Faithful UI only. The
 	     "Weight-aware tamper" entry was removed — there is no BLE-smart
@@ -444,6 +449,18 @@
 				class:is-on={scaleConnected}
 				aria-label={scaleConnected ? 'Scale connected' : 'Scale not paired'}
 			></span>
+		{/snippet}
+		{#snippet hint()}
+			<!-- Pair lives here (matching the Grinder row's pattern) so the
+			     Scale page hero stays clean — pairing is a "set it once"
+			     action that belongs in Settings, not in the every-shot Scale
+			     workflow. Triggers the Web Bluetooth chooser on click. -->
+			<StButton
+				label={scaleConnected ? 'Re-pair' : 'Pair'}
+				icon="bluetooth"
+				disabled={!app}
+				onClick={() => app?.connectScale()}
+			/>
 		{/snippet}
 	</StRow>
 	<div class="st-grinder-row">
