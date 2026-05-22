@@ -239,6 +239,15 @@ impl From<MachineRequest> for MachineState {
     }
 }
 
+/// Convert a DE1 water-tank depth (mm of sensor reading) to the tank's
+/// water volume in mL. Pure helper — does no machine I/O. Exposed here so
+/// every shell consumes the same tank-geometry calibration (see
+/// `de1_domain::water_tank_ml` for the canonical implementation).
+#[wasm_bindgen]
+pub fn water_tank_ml(mm: f32) -> u16 {
+    de1_domain::water_tank_ml(mm)
+}
+
 /// The Crema core, exposed to the web shell.
 ///
 /// Methods that produce a [`CoreOutput`] return it as a JSON string; the shell

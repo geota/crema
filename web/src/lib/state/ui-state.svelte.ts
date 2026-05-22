@@ -28,6 +28,7 @@ import type {
 import type { De1State, De1Diagnostics } from '$lib/ble/de1';
 import { EMPTY_DE1_DIAGNOSTICS } from '$lib/ble/de1';
 import type { ScaleState } from '$lib/ble/scale';
+import { water_tank_ml as wasmWaterTankMl } from '$lib/wasm/de1_wasm';
 
 /** Default scale beeper-volume step shown before the first live reading. */
 export const DEFAULT_SCALE_VOLUME = 3;
@@ -523,34 +524,25 @@ export const INITIAL_SNAPSHOT: UiSnapshot = {
 	replay: null
 };
 
-/**
- * The DE1 tank-level → volume lookup table — mL of water in the tank at each
- * integer mm of sensor depth. Ported verbatim from the de1app's
- * `water_tank_level_to_milliliters` (`de1plus/vars.tcl`), the same table the
- * DSx skin uses: the DE1 protocol only reports a depth (mm), so the tank's
- * (non-linear) geometry has to be looked up. Index 0..67 → 0..2058 mL.
- */
-const TANK_MM_TO_ML: readonly number[] = [
-	0, 16, 43, 70, 97, 124, 151, 179, 206, 233, 261, 288, 316, 343, 371, 398,
-	426, 453, 481, 509, 537, 564, 592, 620, 648, 676, 704, 732, 760, 788, 816,
-	844, 872, 900, 929, 957, 985, 1013, 1042, 1070, 1104, 1138, 1172, 1207,
-	1242, 1277, 1312, 1347, 1382, 1417, 1453, 1488, 1523, 1559, 1594, 1630,
-	1665, 1701, 1736, 1772, 1808, 1843, 1879, 1915, 1951, 1986, 2022, 2058
-];
+// The DE1 tank-level → mL lookup moved to the core 2026-05-22
+// (`de1_domain::water_tank_ml` via the wasm bridge — audit #2). The shell
+// wrapper below adds the `null` propagation (the wasm fn takes a finite
+// f32 only); every shell consumes the same calibration. Old `null` /
+// non-finite inputs still return `null` rather than 0 — the bare wasm
+// fn returns 0 for both 0 mm and a missing reading, so the shell
+// distinguishes them here.
 
 /**
  * Convert a DE1 tank-level reading (mm, see {@link UiSnapshot.waterLevel})
- * to the tank's water volume in mL via {@link TANK_MM_TO_ML}. Returns `null`
- * for a missing reading; the depth is clamped to the table's range — a depth
- * past the top reads as the 2058 mL full ceiling, a negative depth (a sensor
- * glitch) as the 0 mL empty floor — matching the de1app / DSx behaviour.
+ * to the tank's water volume in mL via the core's `water_tank_ml` helper
+ * (`core/de1-domain/src/tank.rs`). Returns `null` for a missing reading;
+ * the depth is clamped to the lookup table's range — a depth past the top
+ * reads as the 2058 mL full ceiling, a negative depth (a sensor glitch) as
+ * the 0 mL empty floor — matching the de1app / DSx behaviour.
  */
 export function waterTankMl(mm: number | null | undefined): number | null {
 	if (mm == null || !Number.isFinite(mm)) return null;
-	const i = Math.trunc(mm);
-	if (i < 0) return TANK_MM_TO_ML[0];
-	if (i >= TANK_MM_TO_ML.length) return TANK_MM_TO_ML[TANK_MM_TO_ML.length - 1];
-	return TANK_MM_TO_ML[i];
+	return wasmWaterTankMl(mm);
 }
 
 /**
