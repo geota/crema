@@ -28,7 +28,10 @@ import type {
 import type { De1State, De1Diagnostics } from '$lib/ble/de1';
 import { EMPTY_DE1_DIAGNOSTICS } from '$lib/ble/de1';
 import type { ScaleState } from '$lib/ble/scale';
-import { water_tank_ml as wasmWaterTankMl } from '$lib/wasm/de1_wasm';
+import {
+	water_tank_ml as wasmWaterTankMl,
+	format_bookoo_firmware as wasmFormatBookooFirmware
+} from '$lib/wasm/de1_wasm';
 
 /** Default scale beeper-volume step shown before the first live reading. */
 export const DEFAULT_SCALE_VOLUME = 3;
@@ -566,14 +569,13 @@ export function waterRefillSoon(
 }
 
 /**
- * Format the Bookoo's `u16` firmware version into a `"M.m.p"` string. The
- * scale encodes it as `major × 100 + minor × 10 + patch` (e.g. `141` → 1.4.1).
+ * Format the Bookoo's `u16` firmware version into a `"M.m.p"` string —
+ * delegates to the core's `format_bookoo_firmware` (see
+ * `core/de1-scale/src/bookoo.rs::format_firmware_version`). The decode
+ * lives in core so every shell renders the version identically.
  */
 export function formatFirmware(encoded: number): string {
-	const major = Math.floor(encoded / 100);
-	const minor = Math.floor(encoded / 10) % 10;
-	const patch = encoded % 10;
-	return `${major}.${minor}.${patch}`;
+	return wasmFormatBookooFirmware(encoded);
 }
 
 /**

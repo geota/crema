@@ -257,6 +257,17 @@ pub fn brew_ratio(dose: f32, yield_out: f32) -> Option<f32> {
     de1_domain::brew_ratio(dose, yield_out)
 }
 
+/// Format the Bookoo scale's `u16` firmware version as a `"M.m.p"`
+/// string (e.g. `141` → `"1.4.1"`). The Bookoo encodes its firmware as
+/// `major × 100 + minor × 10 + patch`. Centralised here so every shell
+/// renders the version identically.
+#[wasm_bindgen]
+pub fn format_bookoo_firmware(encoded: u16) -> String {
+    // Re-exported from `de1-scale` via `de1-app::bookoo`, since the wasm
+    // crate already depends on `de1-app` (which depends on `de1-scale`).
+    de1_app::bookoo::format_firmware_version(encoded)
+}
+
 /// The Crema core, exposed to the web shell.
 ///
 /// Methods that produce a [`CoreOutput`] return it as a JSON string; the shell
