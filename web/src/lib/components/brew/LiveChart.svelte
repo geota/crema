@@ -36,7 +36,7 @@
 		showResistance = false,
 		showFlow = true,
 		showVolume = false,
-		showHeadTemp = true,
+		showHeadTemp = false,
 		showMixTemp = false,
 		showWeight = true,
 		showWeightFlow = false,
