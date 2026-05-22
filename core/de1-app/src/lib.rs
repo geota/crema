@@ -41,7 +41,15 @@ use de1_protocol::{
 /// margin is ~100× the typical real-DE1 round-trip and clears Web
 /// Bluetooth's worst-case back-pressure window.
 pub const PROFILE_UPLOAD_ACK_TIMEOUT: Duration = Duration::from_secs(5);
-use de1_scale::{Scale, ScaleCapabilities, ScaleUuids, TimerCommand, bookoo};
+use de1_scale::{Scale, ScaleCapabilities, ScaleUuids, TimerCommand};
+
+/// Re-export of `de1_scale::bookoo` so the wasm + future Android bridges
+/// can reach scale-side helpers (e.g. [`bookoo::format_firmware_version`])
+/// without each one depending on `de1-scale` directly. `de1-app` is the
+/// public-facing crate.
+pub mod bookoo {
+    pub use de1_scale::bookoo::*;
+}
 
 /// Scale sensor lag assumed when no scale is connected — a representative
 /// value across the supported scales (380 ms, the legacy default).

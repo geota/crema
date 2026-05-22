@@ -482,6 +482,21 @@ pub enum CommandResponse {
     },
 }
 
+/// Format the Bookoo's `u16` firmware version as a `"M.m.p"` string.
+///
+/// The scale encodes the firmware as `major × 100 + minor × 10 + patch`,
+/// so e.g. `141` is firmware `1.4.1`. Centralised here so every shell
+/// renders the version identically without duplicating the decode (web
+/// used to carry its own `formatFirmware`; an Android shell would have
+/// done the same — push #8 in `docs/26-shell-to-core-audit.md`).
+#[must_use]
+pub fn format_firmware_version(encoded: u16) -> String {
+    let major = encoded / 100;
+    let minor = (encoded / 10) % 10;
+    let patch = encoded % 10;
+    format!("{major}.{minor}.{patch}")
+}
+
 /// `[0-1]` header of a `03 0c` serial-number command response.
 const RESPONSE_HEADER_SERIAL: [u8; 2] = [0x03, 0x0C];
 /// `[0-1]` header of a `03 0e` settings command response.
@@ -536,6 +551,20 @@ pub fn parse_command_response(data: &[u8]) -> Option<CommandResponse> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn firmware_version_formatting() {
+        // Standard cases from the Bookoo's own docs.
+        assert_eq!(format_firmware_version(141), "1.4.1");
+        assert_eq!(format_firmware_version(100), "1.0.0");
+        assert_eq!(format_firmware_version(202), "2.0.2");
+        // Zero — no version reported yet.
+        assert_eq!(format_firmware_version(0), "0.0.0");
+        // The encoding maxes out at 999 in practice; a 4-digit value
+        // overflows the documented format but should still produce
+        // *some* readable output (used to find debug-mode firmware).
+        assert_eq!(format_firmware_version(1234), "12.3.4");
+    }
 
     /// Decode a lowercase-hex string into a fixed 20-byte array.
     fn hex20(s: &str) -> [u8; 20] {
