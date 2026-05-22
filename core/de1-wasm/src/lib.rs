@@ -757,6 +757,27 @@ impl CremaBridge {
         let override_hz = if hz > 0.0 { Some(hz) } else { None };
         self.core.set_line_frequency_override(override_hz);
     }
+
+    /// Parse a legacy de1app `.shot` (Tcl-dict) history file. Returns
+    /// the resulting `StoredShot` as a JSON string the shell can
+    /// deserialize into its IndexedDB history store. Returns the
+    /// `Err.message` on failure (the bridge serializes Option<Err> via
+    /// the `BridgeResult` shape consumers already use elsewhere).
+    /// docs/22 §5.1. Stateless — takes `&self` for the wasm-bindgen
+    /// instance-method ABI but does not touch the core.
+    pub fn import_legacy_tcl_shot(&self, content: &str) -> Result<String, String> {
+        de1_domain::import_legacy_tcl_shot(content)
+            .map_err(|e| e.to_string())
+            .and_then(|shot| shot.to_json().map_err(|e| e.to_string()))
+    }
+
+    /// Parse a modern de1app v2 `.shot.json` history file. Same return
+    /// convention as `import_legacy_tcl_shot`.
+    pub fn import_v2_json_shot(&self, content: &str) -> Result<String, String> {
+        de1_domain::import_v2_json_shot(content)
+            .map_err(|e| e.to_string())
+            .and_then(|shot| shot.to_json().map_err(|e| e.to_string()))
+    }
 }
 
 /// Serialize a [`CoreOutput`] to JSON for the shell. `CoreOutput` is flat plain

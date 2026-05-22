@@ -20,8 +20,65 @@
 	 */
 	import { getHistoryStore } from '$lib/history';
 	import { ShotRow, ShotDetail } from '$lib/components/history';
+	import { getCremaAppContext } from '$lib/shell/app-context';
 
 	const store = getHistoryStore();
+	const appCtx = getCremaAppContext();
+
+	/**
+	 * Outcome of the most recent import — `null` when no import has been
+	 * attempted in this session, a banner-shaped object otherwise. Picked
+	 * up by the toast strip below the page header.
+	 */
+	let importBanner = $state<
+		| { kind: 'success'; message: string }
+		| { kind: 'error'; message: string }
+		| null
+	>(null);
+	/** Whether an import is currently running — disables the picker. */
+	let importing = $state(false);
+
+	/**
+	 * Hand-off from the hidden `<input type="file">` to the CremaApp
+	 * importer. Iterates the picked files so the user can drop a whole
+	 * `history/` folder once and add every shot in one click.
+	 */
+	async function onImportFilesChosen(event: Event): Promise<void> {
+		const input = event.currentTarget as HTMLInputElement;
+		const files = input.files;
+		input.value = '';
+		const app = appCtx().app;
+		if (!app || !files || files.length === 0) return;
+		importing = true;
+		importBanner = null;
+		let imported = 0;
+		const errors: string[] = [];
+		for (const file of Array.from(files)) {
+			const { record, error } = await app.importShotFile(file);
+			if (record) {
+				imported += 1;
+			} else if (error) {
+				errors.push(error);
+			}
+		}
+		importing = false;
+		if (imported > 0 && errors.length === 0) {
+			importBanner = {
+				kind: 'success',
+				message: `Imported ${imported} shot${imported === 1 ? '' : 's'}.`
+			};
+		} else if (imported > 0) {
+			importBanner = {
+				kind: 'success',
+				message: `Imported ${imported} of ${imported + errors.length}. ${errors[0]}`
+			};
+		} else {
+			importBanner = {
+				kind: 'error',
+				message: errors[0] ?? 'No shots imported.'
+			};
+		}
+	}
 
 	/** Every recorded shot, newest first. Reactive. */
 	const shots = $derived(store.all);
@@ -127,6 +184,28 @@
 				<i class="ph ph-magnifying-glass" aria-hidden="true"></i>
 				<input bind:value={q} placeholder="Search profile, notes…" />
 			</div>
+			<!-- Import: pick one-or-many legacy de1app `.shot` files or
+			     modern `.shot.json` files. The file picker is a hidden
+			     <input> styled by its wrapping <label>, so the button
+			     matches the existing `.st-btn-secondary` rhythm. The
+			     CremaApp.importShotFile method picks the parser by
+			     extension and prepends each parsed shot to the history
+			     store. docs/22 §5.1. -->
+			<label
+				class="st-btn st-btn-secondary hi-import"
+				class:hi-import-disabled={importing}
+				title="Import legacy de1app .shot or .shot.json files"
+			>
+				<i class="ph ph-upload-simple" aria-hidden="true"></i>
+				<span>{importing ? 'Importing…' : 'Import'}</span>
+				<input
+					type="file"
+					accept=".shot,.json,.shot.json"
+					multiple
+					disabled={importing}
+					onchange={onImportFilesChosen}
+				/>
+			</label>
 			<button class="st-btn st-btn-secondary" disabled={shots.length === 0}>
 				<i class="ph ph-download-simple" aria-hidden="true"></i> Export
 			</button>
@@ -135,6 +214,29 @@
 			</button>
 		</div>
 	</div>
+
+	{#if importBanner}
+		<div
+			class="hi-import-banner"
+			class:hi-import-banner-ok={importBanner.kind === 'success'}
+			class:hi-import-banner-err={importBanner.kind === 'error'}
+			role="status"
+		>
+			<i
+				class={importBanner.kind === 'success' ? 'ph ph-check-circle' : 'ph ph-warning'}
+				aria-hidden="true"
+			></i>
+			<span>{importBanner.message}</span>
+			<button
+				type="button"
+				class="hi-import-banner-close"
+				aria-label="Dismiss"
+				onclick={() => (importBanner = null)}
+			>
+				<i class="ph ph-x" aria-hidden="true"></i>
+			</button>
+		</div>
+	{/if}
 
 	{#if shots.length === 0}
 		<!-- Empty state — no shots recorded yet. -->
@@ -145,6 +247,25 @@
 				Pull a shot on the Brew page with a connected DE1 — when it completes it is
 				saved here with its full telemetry curve.
 			</div>
+			<!-- Empty-state import CTA: the first time a user lands here
+			     with no shots, surface the import path next to the
+			     "pull a shot" instructions. Auto-disappears the moment
+			     there's one shot in history. -->
+			<label
+				class="st-btn st-btn-secondary hi-import hi-empty-import"
+				class:hi-import-disabled={importing}
+				title="Import legacy de1app .shot or .shot.json files"
+			>
+				<i class="ph ph-upload-simple" aria-hidden="true"></i>
+				<span>{importing ? 'Importing…' : 'Import from de1app'}</span>
+				<input
+					type="file"
+					accept=".shot,.json,.shot.json"
+					multiple
+					disabled={importing}
+					onchange={onImportFilesChosen}
+				/>
+			</label>
 		</div>
 	{:else}
 		<!-- Stats strip -->
@@ -516,6 +637,61 @@
 		line-height: 1.55;
 		color: rgba(var(--tint-rgb), 0.5);
 		max-width: 420px;
+	}
+
+	/* ── Import (header button + empty-state CTA + result banner) ──────── */
+	.hi-import {
+		position: relative;
+		cursor: pointer;
+	}
+	.hi-import input[type='file'] {
+		position: absolute;
+		inset: 0;
+		opacity: 0;
+		cursor: pointer;
+	}
+	.hi-import-disabled,
+	.hi-import-disabled input[type='file'] {
+		opacity: 0.5;
+		cursor: not-allowed;
+		pointer-events: none;
+	}
+	.hi-empty-import {
+		margin-top: 18px;
+	}
+	.hi-import-banner {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		margin: 12px 0 0;
+		padding: 10px 14px;
+		border-radius: var(--radius-sm);
+		font-family: var(--font-sans);
+		font-size: 12.5px;
+		background: rgba(var(--tint-rgb), 0.04);
+		border: 1px solid rgba(var(--tint-rgb), 0.08);
+	}
+	.hi-import-banner-ok {
+		background: rgba(var(--success-rgb), 0.08);
+		border-color: rgba(var(--success-rgb), 0.4);
+		color: rgba(var(--success-rgb), 0.95);
+	}
+	.hi-import-banner-err {
+		background: rgba(var(--danger-rgb), 0.08);
+		border-color: rgba(var(--danger-rgb), 0.4);
+		color: rgba(var(--danger-rgb), 0.95);
+	}
+	.hi-import-banner-close {
+		margin-left: auto;
+		background: transparent;
+		border: none;
+		cursor: pointer;
+		color: inherit;
+		opacity: 0.7;
+		padding: 4px;
+	}
+	.hi-import-banner-close:hover {
+		opacity: 1;
 	}
 
 	@media (max-width: 1100px) {

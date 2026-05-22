@@ -527,6 +527,54 @@ export class CremaApp {
 	}
 
 	/**
+	 * Result of one file submitted to {@link CremaApp.importShotFile}. The
+	 * imported record is the same shape the History page reads from the
+	 * shared store; `null` `record` means "couldn't parse" — `message`
+	 * carries a human-readable explanation in that case.
+	 */
+	// (Type alias inline so callers don't need a separate import.)
+
+	/**
+	 * Import a single legacy de1app `.shot` (Tcl-dict) or modern
+	 * `.shot.json` (v2) file and add the resulting shot to the History
+	 * store. Picks the parser by file extension: `.json` → v2, anything
+	 * else → legacy TCL. Returns the imported record on success, or an
+	 * error string the caller can surface as a toast. docs/22 §5.1.
+	 */
+	async importShotFile(
+		file: File
+	): Promise<{ record: ReturnType<ReturnType<typeof getHistoryStore>['addImported']>; error: string | null }> {
+		let content: string;
+		try {
+			content = await file.text();
+		} catch (e) {
+			return {
+				record: null,
+				error: `Could not read ${file.name}: ${e instanceof Error ? e.message : String(e)}`
+			};
+		}
+		const isV2Json = file.name.toLowerCase().endsWith('.json');
+		try {
+			const imported = isV2Json
+				? await this.core.importV2JsonShot(content)
+				: await this.core.importLegacyTclShot(content);
+			const record = getHistoryStore().addImported(imported);
+			if (!record) {
+				return {
+					record: null,
+					error: `${file.name} parsed cleanly but had no telemetry samples.`
+				};
+			}
+			return { record, error: null };
+		} catch (e) {
+			return {
+				record: null,
+				error: `Could not import ${file.name}: ${e instanceof Error ? e.message : String(e)}`
+			};
+		}
+	}
+
+	/**
 	 * The effective AC mains frequency the core's volume integrator is
 	 * currently using — `null` until either the user pins a value or the
 	 * auto-detector locks (1+ s of telemetry into the first shot).
