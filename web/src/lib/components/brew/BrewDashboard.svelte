@@ -364,6 +364,24 @@
 	const brewTempTarget = $derived(convertTemp(p.brewTemp, prefs.tempUnit));
 	/** Yield target, in the chosen weight unit. */
 	const yieldTarget = $derived(convertWeight(p.yield, prefs.weightUnit));
+
+	// ── Secondary-channel measurements (the right-side number on each
+	//    ChannelReadout). Each value is converted to the user's unit; the
+	//    line itself is plotted on the LiveChart only when the matching
+	//    toggle (prefs.show*) is on, but the *number* on the card stays
+	//    visible regardless so the user never loses the data.
+	/** Puck resistance — raw value (no chart-scaling multiplier here). */
+	const resistanceVal = $derived<string>(
+		tel?.resistance != null && Number.isFinite(tel.resistance)
+			? tel.resistance.toFixed(2)
+			: '—'
+	);
+	/** Dispensed-volume readout, in the chosen volume unit. */
+	const dispensedVolumeM = $derived(convertVolume(ui.dispensedVolumeMl, prefs.volumeUnit));
+	/** Weight flow (g/s) — from the scale's host-side mass-flow estimate. */
+	const weightFlowVal = $derived<string>(
+		ui.scaleFlow != null && Number.isFinite(ui.scaleFlow) ? ui.scaleFlow.toFixed(1) : '—'
+	);
 	/** Whether a scale is connected — drives the foot's "Scale" cluster. */
 	const scaleConnected = $derived(
 		ui.scaleState === 'ready' || ui.scaleState === 'subscribing'
@@ -514,20 +532,12 @@
 							<span class="crema-target-unit"> · target 1:{ratio}</span>
 						</div>
 					</div>
-					<!-- Volume: shot volume dispensed by the pump (mL), integrated
-					     by the core from the flow stream against the DE1's
-					     `sample_time` ticks (`UiSnapshot.dispensedVolumeMl`,
-					     populated by every Telemetry event). A shot-side metric
-					     — distinct from Yield (what's in the cup, scale-measured)
-					     because the puck absorbs some water. Resets to 0 on each
-					     ShotStarted; held at the last value when the shot
-					     completes. Volume unit follows the Settings preference. -->
-					<div class="crema-target">
-						<div class="t-eyebrow">Volume</div>
-						<div class="crema-target-val">
-							<span>{convertVolumeText(ui.dispensedVolumeMl)}</span>
-						</div>
-					</div>
+					<!-- The "Volume" card was retired 2026-05-22: the dispensed
+					     volume now lives as the secondary metric on the Flow
+					     channel card (right column), and the water-tank level
+					     stays on the foot strip. The card's left-column slot is
+					     left empty so PhaseIndicator / Bean / LastShot fill the
+					     space naturally. -->
 					<!-- Phase + Bean cards only fit the left column when the Quick
 					     Sheet is closed; the open sheet would overlap them. -->
 					{#if !quickSheetOpen}
@@ -552,19 +562,34 @@
 						value={pressureM.value}
 						unit={pressureM.unit}
 						color="var(--tel-pressure)"
+						secondaryLabel="RESISTANCE"
+						secondaryValue={resistanceVal}
+						secondaryUnit=""
+						secondaryColor="var(--tel-pressure-2)"
+						secondaryEnabled={prefs.showResistance}
 					/>
 					<ChannelReadout
 						label="FLOW"
 						value={fmt(tel?.flow)}
 						unit="ml/s"
 						color="var(--tel-flow)"
+						secondaryLabel="VOLUME"
+						secondaryValue={dispensedVolumeM.value}
+						secondaryUnit={dispensedVolumeM.unit}
+						secondaryColor="var(--tel-flow-2)"
+						secondaryEnabled={prefs.showVolume}
 					/>
 					<ChannelReadout
-						label="TEMP"
+						label="HEAD"
 						value={tempM.value}
 						unit={tempM.unit}
 						color="var(--tel-temp)"
 						target={brewTempTarget.value}
+						secondaryLabel="MIX"
+						secondaryValue={mixTempM.value}
+						secondaryUnit={mixTempM.unit}
+						secondaryColor="var(--tel-temp-2)"
+						secondaryEnabled={prefs.showMixTemp}
 					/>
 					<ChannelReadout
 						label="WEIGHT"
@@ -572,6 +597,11 @@
 						unit={weightM.unit}
 						color="var(--tel-weight)"
 						target={yieldTarget.value}
+						secondaryLabel="FLOW"
+						secondaryValue={weightFlowVal}
+						secondaryUnit="g/s"
+						secondaryColor="var(--tel-weight-2)"
+						secondaryEnabled={prefs.showWeightFlow}
 					/>
 				</div>
 				<div class="crema-chart">
@@ -581,7 +611,14 @@
 					<LiveChart
 						series={ui.shotTelemetry}
 						goalSegments={activeProfile?.segments}
-						showFlowCurve={prefs.showFlowCurve}
+						showPressure={prefs.showPressure}
+						showResistance={prefs.showResistance}
+						showFlow={prefs.showFlow}
+						showVolume={prefs.showVolume}
+						showHeadTemp={prefs.showHeadTemp}
+						showMixTemp={prefs.showMixTemp}
+						showWeight={prefs.showWeight}
+						showWeightFlow={prefs.showWeightFlow}
 						smoothPressure={prefs.smoothPressure}
 						telemetryRateHz={prefs.telemetryRateHz}
 					/>

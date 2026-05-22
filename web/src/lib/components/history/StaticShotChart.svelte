@@ -28,7 +28,7 @@
 	} = $props();
 
 	/**
-	 * The settings store — used for the `showPuckResistance` advanced toggle.
+	 * The settings store — used for the `showResistance` advanced toggle.
 	 * Puck resistance is `pressure ÷ flow²`, already computed sample-by-sample
 	 * (`TelemetrySample.resistance`) and skipped when flow is too small to
 	 * divide by meaningfully. Matches the legacy de1app's History viewer
@@ -58,7 +58,7 @@
 		const temp: (number | null)[] = [];
 		const weight: (number | null)[] = [];
 		const resistance: (number | null)[] = [];
-		const showResistance = settings.current.showPuckResistance;
+		const showResistance = settings.current.showResistance;
 		for (const s of samples) {
 			xs.push(s.elapsed / 1000);
 			pressure.push(s.pressure ?? null);
@@ -223,12 +223,12 @@
 	}
 
 	/**
-	 * Repaint when the user toggles `showPuckResistance` — `toData` re-reads
+	 * Repaint when the user toggles `showResistance` — `toData` re-reads
 	 * the pref each call, so a fresh `setData` is enough to add or drop the
 	 * dashed line without rebuilding the chart.
 	 */
 	$effect(() => {
-		settings.current.showPuckResistance;
+		settings.current.showResistance;
 		untrack(() => {
 			chart?.setData(toData(series));
 		});

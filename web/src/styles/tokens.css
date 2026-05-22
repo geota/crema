@@ -78,8 +78,19 @@
   --tel-temp-15:     #C44E3F26;
   --tel-weight:      #D89030;
   --tel-weight-15:   #D8903026;
-  --tel-resistance:  #B59B2E;     /* puck resistance — desaturated yellow, secondary trace */
-  --tel-resistance-15: #B59B2E26;
+  /* Secondary channel lines (palette B "bold siblings" — primary lightened
+     ~15 % at the same chroma). Solid 1.5 px stroke on the chart, paired
+     with their primary on the channel cards. Off by default; toggled in
+     the Quick Sheet's "Chart channels" group. */
+  --tel-pressure-2:  #88A37A;     /* resistance — lighter sage */
+  --tel-flow-2:      #6E8FBD;     /* volume — lighter blue */
+  --tel-temp-2:      #D8786A;     /* mix temp — lighter coral */
+  --tel-weight-2:    #E5A958;     /* weight flow — lighter amber */
+  /* Back-compat alias — the existing StaticShotChart resistance trace
+     points at the same token now. Drop when the static chart adopts the
+     primary/secondary pattern too. */
+  --tel-resistance:  var(--tel-pressure-2);
+  --tel-resistance-15: #88A37A26;
 
   /* Semantic (light surface defaults) */
   --success: #5C8A4C;
