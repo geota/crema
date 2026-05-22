@@ -469,7 +469,9 @@
 	const steamTempM = $derived(convertTemp(tel?.steamTemp, prefs.tempUnit));
 
 	/** Live weight (g) — from the scale stream, independent of shot state. */
-	const weight = $derived(ui.scaleWeight);
+	// Scale weight follows the pin too — when a moment is pinned, read
+	// the buffered sample's weight; otherwise the live `scaleWeight`.
+	const weight = $derived(pinnedSample ? pinnedSample.weight : ui.scaleWeight);
 	/** Weight readout, in the chosen weight unit. */
 	const weightM = $derived(convertWeight(weight, prefs.weightUnit));
 	/**
@@ -499,22 +501,32 @@
 	);
 	/**
 	 * Dispensed-volume readout in the chosen unit, with one decimal so it
-	 * visually matches the density of the FLOW number next to it. The
-	 * snapshot's `dispensedVolumeMl` reads `0` while idle; gate on
+	 * visually matches the density of the FLOW number next to it. When a
+	 * moment is pinned, reads the buffered sample's `dispensedVolume`;
+	 * otherwise the live `ui.dispensedVolumeMl` (gated on
 	 * `shotInProgress` so the card shows `—` until a shot starts rather
-	 * than a misleading `0.0`.
+	 * than a misleading `0.0`).
 	 */
 	const dispensedVolumeVal = $derived.by<string>(() => {
-		const ml = ui.shotInProgress ? ui.dispensedVolumeMl : null;
+		const ml = pinnedSample
+			? (pinnedSample.dispensedVolume ?? null)
+			: ui.shotInProgress
+				? ui.dispensedVolumeMl
+				: null;
 		if (ml == null || !Number.isFinite(ml)) return '—';
 		if (prefs.volumeUnit === 'floz') return (ml / 29.5735).toFixed(1);
 		return ml.toFixed(1);
 	});
 	const dispensedVolumeUnit = $derived(prefs.volumeUnit === 'floz' ? 'fl oz' : 'mL');
-	/** Weight flow (g/s) — from the scale's host-side mass-flow estimate. */
-	const weightFlowVal = $derived<string>(
-		ui.scaleFlow != null && Number.isFinite(ui.scaleFlow) ? ui.scaleFlow.toFixed(1) : '—'
-	);
+	/**
+	 * Weight flow (g/s) — from the scale's host-side mass-flow estimate.
+	 * Follows the pin: buffered `weightFlow` while pinned, live
+	 * `ui.scaleFlow` otherwise.
+	 */
+	const weightFlowVal = $derived.by<string>(() => {
+		const v = pinnedSample ? (pinnedSample.weightFlow ?? null) : ui.scaleFlow;
+		return v != null && Number.isFinite(v) ? v.toFixed(1) : '—';
+	});
 	/** Whether a scale is connected — drives the foot's "Scale" cluster. */
 	const scaleConnected = $derived(
 		ui.scaleState === 'ready' || ui.scaleState === 'subscribing'
