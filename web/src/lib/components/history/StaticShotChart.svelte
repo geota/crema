@@ -58,6 +58,18 @@
 		const temp: (number | null)[] = [];
 		const weight: (number | null)[] = [];
 		const resistance: (number | null)[] = [];
+		// Goal / setpoint channels — what the profile *asked for*. Plotted as
+		// dashed reference lines under the actuals so the shape of the shot
+		// can be compared against the profile. Persisted on every sample
+		// from the DE1's `setGroupPressure` / `setGroupFlow` / `setHeadTemp`
+		// fields; older records pre-targets simply emit `null` here.
+		const goalPressure: (number | null)[] = [];
+		const goalFlow: (number | null)[] = [];
+		const goalTemp: (number | null)[] = [];
+		// Dispensed water — pump-side volume integral. Stays on the shared
+		// 0-10 scale by reading it as `mL / 10` (so 60 mL plots as 6 — same
+		// trick `temp / 10` uses).
+		const water: (number | null)[] = [];
 		const showResistance = settings.current.showResistance;
 		for (const s of samples) {
 			xs.push(s.elapsed / 1000);
@@ -74,8 +86,12 @@
 			resistance.push(
 				showResistance && r != null ? Math.min(10, Math.max(0, r)) : null
 			);
+			goalPressure.push(s.setGroupPressure ?? null);
+			goalFlow.push(s.setGroupFlow ?? null);
+			goalTemp.push(s.setHeadTemp == null ? null : s.setHeadTemp / 10);
+			water.push(s.dispensedVolume == null ? null : s.dispensedVolume / 10);
 		}
-		return [xs, pressure, flow, temp, weight, resistance];
+		return [xs, pressure, flow, temp, weight, resistance, goalPressure, goalFlow, goalTemp, water];
 	}
 
 	/** uPlot plugin: the four horizontal grid lines, behind the series. */
@@ -215,6 +231,42 @@
 					stroke: () => cssVar('--tel-resistance'),
 					width: 1.8,
 					dash: [6, 4],
+					points: { show: false }
+				},
+				// Goal / setpoint channels — dashed reference lines under
+				// the actuals (matches the LiveChart). Faded alpha so the
+				// actuals dominate the read; same dash pattern across the
+				// three goals so "this is a target" reads consistently.
+				{
+					scale: 'y',
+					stroke: () => cssVar('--tel-pressure'),
+					width: 1.2,
+					dash: [3, 3],
+					alpha: 0.6,
+					points: { show: false }
+				},
+				{
+					scale: 'y',
+					stroke: () => cssVar('--tel-flow'),
+					width: 1.2,
+					dash: [3, 3],
+					alpha: 0.6,
+					points: { show: false }
+				},
+				{
+					scale: 'y',
+					stroke: () => cssVar('--tel-temp'),
+					width: 1.2,
+					dash: [3, 3],
+					alpha: 0.6,
+					points: { show: false }
+				},
+				// Dispensed water — solid 1.5 px in the flow-2 colour (same
+				// pairing the live chart uses for WATER on the FLOW card).
+				{
+					scale: 'y',
+					stroke: () => cssVar('--tel-flow-2'),
+					width: 1.5,
 					points: { show: false }
 				}
 			],
