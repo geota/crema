@@ -10,7 +10,6 @@ export {
 	formatFirmware,
 	waterTankMl,
 	waterRefillSoon,
-	puckResistance,
 	machineErrorText,
 	EMPTY_DE1_CALIBRATION,
 	INITIAL_SNAPSHOT,

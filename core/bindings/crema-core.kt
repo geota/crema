@@ -59,7 +59,15 @@ data class EventTelemetryInner (
 	val set_group_pressure: Float,
 	/// Target group flow, mL/s — the pump flow setpoint for the active
 	/// frame. Legacy "Goal flow" curve.
-	val set_group_flow: Float
+	val set_group_flow: Float,
+	/// Puck resistance — `group_pressure / group_flow²`, the
+	/// de1app/DSx derived "resistance" metric (the R4 read-path).
+	/// `None` when group flow is too low to divide by meaningfully —
+	/// the near-zero-flow region produces noisy spikes that have no
+	/// useful interpretation. Units are `bar / (mL/s)²`. Surfaced on
+	/// the event itself so every shell consumes the same value
+	/// (previously each shell duplicated the formula + threshold).
+	val resistance: Float? = null
 )
 
 /// Generated type representing the anonymous struct variant `ScaleReading` of the `Event` Rust enum

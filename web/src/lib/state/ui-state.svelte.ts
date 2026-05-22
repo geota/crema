@@ -624,26 +624,10 @@ export function machineErrorText(substate: string | null | undefined): string | 
 	return MACHINE_ERROR_TEXT[substate] ?? null;
 }
 
-/**
- * The minimum group flow (mL/s) below which {@link puckResistance} returns
- * `null`. At trickle flow `pressure / flow²` explodes into meaningless spikes,
- * so the de1app/DSx resistance metric is only defined once water is actually
- * moving through the puck.
- */
-const MIN_FLOW_FOR_RESISTANCE = 0.2;
-
-/**
- * The de1app/DSx puck-resistance metric (R4): `pressure / flow²`, in
- * bar / (mL/s)². Returns `null` when `flow` is at or below
- * {@link MIN_FLOW_FOR_RESISTANCE} — the value is only meaningful while water
- * is moving through the puck. Computed in the state layer from the telemetry
- * sample the core already delivers; no core change is needed.
- */
-export function puckResistance(pressure: number, flow: number): number | null {
-	if (!Number.isFinite(pressure) || !Number.isFinite(flow)) return null;
-	if (flow <= MIN_FLOW_FOR_RESISTANCE) return null;
-	return pressure / (flow * flow);
-}
+// The puck-resistance derivation moved to the core 2026-05-22 (audit #3 —
+// `Event::Telemetry.resistance: Option<f32>`); each shell now consumes the
+// same computation instead of duplicating the formula + flow threshold.
+// See `core/de1-app/src/lib.rs::puck_resistance`.
 
 /**
  * Prepend a timestamped {@link LogLine} to the log, capping it at
@@ -754,7 +738,7 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				weight: snapshot.scaleWeight,
 				weightFlow: snapshot.scaleFlow,
 				dispensedVolume: t.dispensed_volume_ml,
-				resistance: puckResistance(t.group_pressure, t.group_flow),
+				resistance: t.resistance ?? null,
 				setHeadTemp: t.set_head_temp,
 				setGroupPressure: t.set_group_pressure,
 				setGroupFlow: t.set_group_flow

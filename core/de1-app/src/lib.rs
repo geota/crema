@@ -74,6 +74,33 @@ fn duration_to_u32_ms(d: Duration) -> u32 {
     u32::try_from(d.as_millis()).unwrap_or(u32::MAX)
 }
 
+/// Minimum group flow (mL/s) below which puck-resistance is undefined.
+/// Reproduces the legacy de1app / DSx threshold — at near-zero flow the
+/// numeric value swings wildly (small denominator squared) and reads
+/// noisy, so the metric is suppressed.
+const RESISTANCE_FLOW_FLOOR_ML_PER_S: f32 = 0.1;
+
+/// The de1app/DSx "puck resistance" metric — `group_pressure / group_flow²`.
+/// Surfaced on every [`Event::Telemetry`] so each shell consumes the same
+/// computation. Returns `None` when group flow is below
+/// [`RESISTANCE_FLOW_FLOOR_ML_PER_S`] — near-zero-flow values aren't
+/// meaningful and used to be masked at the readout layer in every shell.
+/// Units: `bar / (mL/s)²`.
+fn puck_resistance(group_pressure_bar: f32, group_flow_ml_per_s: f32) -> Option<f32> {
+    if !group_pressure_bar.is_finite() || !group_flow_ml_per_s.is_finite() {
+        return None;
+    }
+    if group_flow_ml_per_s < RESISTANCE_FLOW_FLOOR_ML_PER_S {
+        return None;
+    }
+    let r = group_pressure_bar / (group_flow_ml_per_s * group_flow_ml_per_s);
+    if r.is_finite() {
+        Some(r)
+    } else {
+        None
+    }
+}
+
 /// The headless Crema application core.
 ///
 /// One `CremaCore` tracks one machine session. The FFI bridges wrap it behind
@@ -1202,6 +1229,7 @@ impl CremaCore {
             set_head_temp: sample.set_head_temp,
             set_group_pressure: sample.set_group_pressure,
             set_group_flow: sample.set_group_flow,
+            resistance: puck_resistance(sample.group_pressure, sample.group_flow),
         });
     }
 
