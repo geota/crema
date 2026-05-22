@@ -23,6 +23,10 @@
 	import StSectionHead from '../StSectionHead.svelte';
 	import StGroup from '../StGroup.svelte';
 	import StRow from '../StRow.svelte';
+	import { getSettingsStore, unitLabel } from '$lib/settings';
+
+	const settings = getSettingsStore();
+	const prefs = $derived(settings.current);
 
 	let { app }: { app: CremaApp | null } = $props();
 
@@ -79,7 +83,7 @@
 <StGroup title="Sensor calibration">
 	<StRow
 		title="Temperature"
-		sub="The DE1's group-head thermocouple offset, °C."
+		sub="The DE1's group-head thermocouple offset, {unitLabel('temp', prefs)}."
 	>
 		{#snippet control()}
 			<div class="cal-pair">
@@ -97,7 +101,7 @@
 
 	<StRow
 		title="Pressure"
-		sub="The DE1's group-pressure sensor offset, bar."
+		sub="The DE1's group-pressure sensor offset, {unitLabel('pressure', prefs)}."
 	>
 		{#snippet control()}
 			<div class="cal-pair">
