@@ -41,7 +41,9 @@
 		showWeight = true,
 		showWeightFlow = false,
 		smoothPressure = true,
-		telemetryRateHz = 0
+		telemetryRateHz = 0,
+		pinnedTimeSec = null,
+		onPin
 	}: {
 		/** The buffered shot-telemetry series, oldest first. */
 		series: readonly TelemetrySample[];
@@ -75,6 +77,19 @@
 		 * per second before plotting; `0`/unset plots every sample.
 		 */
 		telemetryRateHz?: number;
+		/**
+		 * Elapsed-time (seconds) of a pinned moment, drawn as a copper
+		 * vertical marker over the live curves. `null` = no pin. The
+		 * dashboard owns the state; the chart only renders the marker and
+		 * fires {@link onPin} on click.
+		 */
+		pinnedTimeSec?: number | null;
+		/**
+		 * Click-on-chart handler: fires with the elapsed-time (seconds) the
+		 * user clicked, clamped to `[0, last-sample]`. Wire to the
+		 * dashboard's pin state.
+		 */
+		onPin?: (timeSec: number) => void;
 	} = $props();
 
 	/** The rolling-mean window (sample count) the `smoothPressure` setting uses. */
@@ -260,7 +275,15 @@
 		[4, '--tel-weight', 3]
 	];
 
-	/** uPlot draw plugin: the now-marker line and per-channel end-dots. */
+	/**
+	 * Closure-accessible mirror of `pinnedTimeSec` for the marker plugin's
+	 * draw hook, which runs inside the uPlot instance (no Svelte reactivity).
+	 * Updated by the effect below; a change kicks `chart.redraw()` so the
+	 * pin marker repaints without rebuilding the chart.
+	 */
+	let pluginPinnedT: number | null = null;
+
+	/** uPlot draw plugin: the now-marker, the pin-marker, per-channel end-dots. */
 	function markerPlugin(): uPlot.Plugin {
 		return {
 			hooks: {
@@ -297,6 +320,45 @@
 						ctx.fillStyle = cssVar(varName);
 						ctx.arc(cx, cy, r * devicePixelRatio, 0, Math.PI * 2);
 						ctx.fill();
+					}
+
+					// Pin-marker: a brighter vertical line at the pinned moment,
+					// with the same per-channel dots so the user sees the values
+					// the cards are showing. Only drawn when set.
+					if (pluginPinnedT !== null) {
+						const px = u.valToPos(pluginPinnedT, 'x', true);
+						ctx.beginPath();
+						ctx.strokeStyle = cssVar('--copper-500');
+						ctx.lineWidth = 2 * devicePixelRatio;
+						ctx.moveTo(px, top);
+						ctx.lineTo(px, bot);
+						ctx.stroke();
+						// Locate the nearest sample column for the dots.
+						const xs = u.data[0] as readonly number[];
+						let bestI = 0;
+						let bestD = Math.abs(xs[0] - pluginPinnedT);
+						for (let i = 1; i < xs.length; i++) {
+							const d = Math.abs(xs[i] - pluginPinnedT);
+							if (d < bestD) {
+								bestD = d;
+								bestI = i;
+							}
+						}
+						for (const [col, varName, r] of DOTS) {
+							const v = u.data[col][bestI];
+							if (v == null) continue;
+							const cy = u.valToPos(v as number, 'y', true);
+							ctx.beginPath();
+							ctx.fillStyle = cssVar(varName);
+							ctx.arc(px, cy, (r + 1) * devicePixelRatio, 0, Math.PI * 2);
+							ctx.fill();
+							// White ring to distinguish from the now-dot.
+							ctx.beginPath();
+							ctx.strokeStyle = cssVar('--bg-page');
+							ctx.lineWidth = 1.5 * devicePixelRatio;
+							ctx.arc(px, cy, (r + 1) * devicePixelRatio, 0, Math.PI * 2);
+							ctx.stroke();
+						}
 					}
 					ctx.restore();
 				}
@@ -494,10 +556,23 @@
 		// element is attached; everything after is `untrack`ed.
 		const el = plotEl;
 		if (!el) return;
+		let onChartClick: ((e: MouseEvent) => void) | null = null;
 		untrack(() => {
 			const w = Math.max(1, el.clientWidth);
 			const h = Math.max(1, el.clientHeight);
 			chart = new uPlot(buildOpts(w, h), toData(series), el);
+
+			// Click-to-pin: a click on the plot area maps the click's
+			// canvas-relative x to the series' elapsed-time. Attaching to
+			// `chart.over` (uPlot's transparent overlay div, sized to the
+			// plot area exactly — axes excluded) means `e.offsetX` already
+			// matches `posToVal`'s coordinate system, no axis-padding maths.
+			onChartClick = (e: MouseEvent): void => {
+				if (!chart || !onPin) return;
+				const t = chart.posToVal(e.offsetX, 'x');
+				if (Number.isFinite(t)) onPin(Math.max(0, t));
+			};
+			chart.over.addEventListener('click', onChartClick);
 
 			// Track the panel's live width AND height so the chart fills it and
 			// follows the Quick Sheet docking in / out.
@@ -514,9 +589,17 @@
 		return () => {
 			resizeObs?.disconnect();
 			resizeObs = null;
+			if (chart && onChartClick) chart.over.removeEventListener('click', onChartClick);
 			chart?.destroy();
 			chart = null;
 		};
+	});
+
+	// Push the latest `pinnedTimeSec` into the plugin closure + redraw —
+	// avoids rebuilding the chart on every pin move.
+	$effect(() => {
+		pluginPinnedT = pinnedTimeSec ?? null;
+		chart?.redraw();
 	});
 
 	/**

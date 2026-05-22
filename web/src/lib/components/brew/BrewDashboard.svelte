@@ -306,8 +306,61 @@
 	// temperature in particular is the warmed-up signal, so it must never
 	// freeze. The just-finished shot's result is shown separately by the
 	// `LastShotCard` at the bottom of the left column.
-	/** The latest 4-channel sample, or null when no telemetry has arrived. */
-	const tel = $derived(ui.latestTelemetry);
+	// ── Chart pinning ────────────────────────────────────────────────────
+	/**
+	 * Click-to-pin state. Elapsed-time (seconds) of a moment the user
+	 * clicked on the live chart; `null` = live. While pinned, the 4 top
+	 * cards swap from the latest telemetry to the values at this moment
+	 * — useful for studying "what was the pressure when the flow peaked?"
+	 * The footer stays live as a "what's happening now" reference.
+	 *
+	 * Cleared when a new shot starts (`shotInProgress` flips low→high) so
+	 * a stale pin from the previous shot doesn't outlive its data.
+	 */
+	let pinnedTimeSec = $state<number | null>(null);
+	let lastShotInProgress = $state(false);
+	$effect(() => {
+		if (ui.shotInProgress && !lastShotInProgress) {
+			pinnedTimeSec = null;
+		}
+		lastShotInProgress = ui.shotInProgress;
+	});
+	/** Esc unpins. Document-level click outside the chart also unpins. */
+	function onKeydown(e: KeyboardEvent): void {
+		if (e.key === 'Escape' && pinnedTimeSec !== null) {
+			pinnedTimeSec = null;
+		}
+	}
+
+	/**
+	 * Find the sample whose elapsed-time is nearest the pinned moment.
+	 * Linear scan — the buffer is small (≤ 2000 samples capped). Returns
+	 * `null` when there is no pin or no buffered series.
+	 */
+	const pinnedSample = $derived.by(() => {
+		if (pinnedTimeSec === null) return null;
+		const series = ui.shotTelemetry;
+		if (series.length === 0) return null;
+		const targetMs = pinnedTimeSec * 1000;
+		let best = series[0];
+		let bestD = Math.abs(best.elapsed - targetMs);
+		for (let i = 1; i < series.length; i++) {
+			const d = Math.abs(series[i].elapsed - targetMs);
+			if (d < bestD) {
+				bestD = d;
+				best = series[i];
+			}
+		}
+		return best;
+	});
+
+	/**
+	 * The sample the channel cards read. When a pin is set, swap the live
+	 * `latestTelemetry` for the nearest sample at the pinned time — every
+	 * `convert*` reactive derives downstream picks this up automatically.
+	 */
+	const tel = $derived(pinnedSample ?? ui.latestTelemetry);
+	const isPinned = $derived(pinnedTimeSec !== null);
 	/** Shot elapsed time, seconds — live; resets to 0 between shots. */
 	const elapsedSec = $derived(ui.shotElapsed / 1000);
 	/** The just-finished shot's summary, or null. */
@@ -455,7 +508,24 @@
 			stateTransitionPending = false;
 		}
 	}
+
+	/**
+	 * Document-level click handler: any click that lands outside the chart
+	 * unpins. The LiveChart's own `onPin` callback fires *before* this for
+	 * in-chart clicks, so it always wins; we only see clicks that bubbled
+	 * up through the document without being absorbed by the chart's
+	 * overlay div. Listener installed only while pinned to keep the page
+	 * quiet otherwise.
+	 */
+	function onDocClick(e: MouseEvent): void {
+		if (pinnedTimeSec === null) return;
+		const target = e.target as Element | null;
+		if (target?.closest('.crema-chart')) return;
+		pinnedTimeSec = null;
+	}
 </script>
+
+<svelte:window onkeydown={onKeydown} onclick={onDocClick} />
 
 <div class="qcontain">
 	<div class="crema-dash">
@@ -616,7 +686,7 @@
 						secondaryColor="var(--tel-weight-2)"
 					/>
 				</div>
-				<div class="crema-chart">
+				<div class="crema-chart" class:is-pinned={isPinned}>
 					<!-- Always mounted: an empty series renders bare axes + grid (the
 					     "ready" state); a finished shot's curve stays until the next
 					     shot starts. -->
@@ -633,6 +703,8 @@
 						showWeightFlow={prefs.showWeightFlow}
 						smoothPressure={prefs.smoothPressure}
 						telemetryRateHz={prefs.telemetryRateHz}
+						{pinnedTimeSec}
+						onPin={(t) => (pinnedTimeSec = t)}
 					/>
 				</div>
 			</div>
@@ -738,3 +810,22 @@
 		/>
 	</div>
 </div>
+
+<style>
+	/* Pinned-state outline — the chart wrapper picks up a copper rim and
+	   a faint copper wash when the user has clicked to freeze a moment.
+	   Cards above pull their numbers from the pinned sample; the wrapper
+	   highlight tells the user where the freeze came from. Esc / click
+	   outside unpins (see `onKeydown` / `onDocClick` in script). */
+	.crema-chart.is-pinned {
+		outline: 2px solid var(--copper-500);
+		outline-offset: -2px;
+		background: rgba(var(--copper-rgb), 0.06);
+		transition:
+			background var(--dur-1, 140ms) var(--ease, ease),
+			outline-color var(--dur-1, 140ms) var(--ease, ease);
+	}
+	.crema-chart {
+		cursor: crosshair;
+	}
+</style>
