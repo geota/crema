@@ -36,10 +36,19 @@ pub enum Source {
     /// The DE1 `Calibration` characteristic (`cuuid_12`) — sensor calibration
     /// reads (current vs. factory) answer here.
     De1Calibration,
-    /// The DE1 `HeaderWrite` characteristic (`cuuid_0F`) — a one-shot Read of
-    /// this characteristic returns the currently-loaded profile's 5-byte
-    /// `ShotHeader`. Crema reads it at connect time to learn the shape of
-    /// the active profile.
+    /// **DORMANT — see docs/16 §6.1 (snoop-verified 2026-05-21).** The DE1
+    /// `HeaderWrite` characteristic (`cuuid_0F`) is nominally R/W per
+    /// `docs/02-ble-protocol.md`, but the legacy de1app never Reads it and
+    /// the firmware returns all-zero bytes when asked. The Crema BLE shell
+    /// no longer triggers a Read of this characteristic (dropped in commit
+    /// `49f0803`), so this `Source` arm is never dispatched and
+    /// [`Event::ProfileHeaderRead`] is never emitted.
+    ///
+    /// Kept in the enum for forward-compat: if a future firmware exposes
+    /// the loaded-profile buffer on the Read side, the wiring is one
+    /// `device.readCharacteristic` call away. `#[non_exhaustive]` makes the
+    /// variant additive; removing it later would be a breaking ABI change
+    /// for any out-of-workspace consumer.
     De1ProfileHeader,
     /// The DE1 `FrameWrite` characteristic (`cuuid_10`) echo — during a
     /// profile upload the DE1 echoes each frame write back as a
@@ -272,9 +281,16 @@ pub enum Event {
         /// refused — e.g. `"set_refill_threshold"`.
         method: String,
     },
-    /// The DE1's `ShotHeader` was read from `HeaderWrite` (`cuuid_0F`) —
-    /// emitted once after the BLE shell reads the characteristic at connect
-    /// time. Carries the shape of the currently-loaded profile.
+    /// **DORMANT — see [`Source::De1ProfileHeader`] and docs/16 §6.1.** This
+    /// event would carry the DE1's reported `ShotHeader` if the firmware
+    /// supported reading the loaded-profile buffer on `cuuid_0F`. It does
+    /// not (snoop-verified 2026-05-21), so the BLE shell no longer triggers
+    /// the Read and this variant is never emitted in the current code path.
+    ///
+    /// Kept for forward-compat — the decode path
+    /// ([`CremaCore::handle_profile_header_read`](crate::CremaCore)) and
+    /// every consumer (UI, tests) remain in place; flipping the BLE shell
+    /// back to issuing a Read is one line in `web/src/lib/ble/de1.ts`.
     ProfileHeaderRead {
         /// Total number of frames in the loaded profile.
         frame_count: u8,
