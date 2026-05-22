@@ -11,3 +11,4 @@
 export { default as ShotRow } from './ShotRow.svelte';
 export { default as ShotDetail } from './ShotDetail.svelte';
 export { default as StaticShotChart } from './StaticShotChart.svelte';
+export { default as CompareOverlay } from './CompareOverlay.svelte';

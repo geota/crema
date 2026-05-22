@@ -12,13 +12,31 @@
 	let {
 		shot,
 		active = false,
+		selectable = false,
+		selected = false,
+		selectionDisabled = false,
 		onclick
 	}: {
 		/** The stored shot this row renders. */
 		shot: StoredShot;
-		/** Whether this row is the selected one. */
+		/** Whether this row is the selected-detail one. */
 		active?: boolean;
-		/** Click handler — selects the shot. */
+		/**
+		 * When true, the row is in **compare-select mode**: a leading
+		 * checkbox replaces the active-row treatment, and clicking toggles
+		 * {@link selected} via `onclick` instead of opening a detail view.
+		 */
+		selectable?: boolean;
+		/** Whether the row is currently picked for compare (only meaningful when `selectable`). */
+		selected?: boolean;
+		/**
+		 * When `true` (only checked in select mode), the row is disabled
+		 * because the compare cap has been reached and this row is not one
+		 * of the already-picked ones. The user can still click an
+		 * already-picked row to unselect it.
+		 */
+		selectionDisabled?: boolean;
+		/** Click handler — selects the shot in normal mode, or toggles its compare-selection in select mode. */
 		onclick: () => void;
 	} = $props();
 
@@ -72,7 +90,19 @@
 	const starString = $derived(stars(shot.rating));
 </script>
 
-<button class="hi-row" class:is-active={active} {onclick}>
+<button
+	class="hi-row"
+	class:is-active={active && !selectable}
+	class:is-selected={selectable && selected}
+	class:is-selectmode={selectable}
+	disabled={selectable && selectionDisabled && !selected}
+	{onclick}
+>
+	{#if selectable}
+		<div class="hi-row-check" aria-hidden="true">
+			<i class="ph-fill {selected ? 'ph-check-square' : 'ph-square'}"></i>
+		</div>
+	{/if}
 	<div class="hi-row-time">
 		<div class="hi-row-time-h">{timeH}</div>
 		<div class="hi-row-time-d">{ago}</div>
@@ -82,7 +112,7 @@
 			{shape}
 			width={48}
 			height={20}
-			color={active ? 'var(--copper-400)' : 'rgba(var(--tint-rgb), 0.45)'}
+			color={selected || active ? 'var(--copper-400)' : 'rgba(var(--tint-rgb), 0.45)'}
 		/>
 	</div>
 	<div class="hi-row-main">
@@ -123,12 +153,34 @@
 		color: var(--fg-1);
 		transition: background var(--dur-1) var(--ease);
 	}
-	.hi-row:hover {
+	.hi-row.is-selectmode {
+		/* Reserve a slot for the leading checkbox without shifting the rest. */
+		grid-template-columns: 22px 60px 56px 1fr auto auto auto;
+	}
+	.hi-row:hover:not(:disabled) {
 		background: rgba(var(--tint-rgb), 0.04);
 	}
 	.hi-row.is-active {
 		background: rgba(193, 116, 75, 0.1);
 		box-shadow: inset 2px 0 0 var(--copper-500);
+	}
+	.hi-row.is-selected {
+		background: rgba(193, 116, 75, 0.14);
+		box-shadow: inset 2px 0 0 var(--copper-500);
+	}
+	.hi-row:disabled {
+		opacity: 0.42;
+		cursor: not-allowed;
+	}
+	.hi-row-check {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		color: rgba(var(--tint-rgb), 0.5);
+		font-size: 18px;
+	}
+	.hi-row.is-selected .hi-row-check {
+		color: var(--copper-500);
 	}
 	.hi-row-time {
 		display: flex;
