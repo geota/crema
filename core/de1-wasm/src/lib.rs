@@ -248,6 +248,15 @@ pub fn water_tank_ml(mm: f32) -> u16 {
     de1_domain::water_tank_ml(mm)
 }
 
+/// Compute the brew ratio (yield ÷ dose) for a pair of weights in grams.
+/// Returns `undefined` (JS `null`/`undefined`) when the ratio is undefined
+/// — non-positive dose, non-finite operand, or non-finite quotient.
+/// The shell formats the `1:N` label; this is just the number.
+#[wasm_bindgen]
+pub fn brew_ratio(dose: f32, yield_out: f32) -> Option<f32> {
+    de1_domain::brew_ratio(dose, yield_out)
+}
+
 /// The Crema core, exposed to the web shell.
 ///
 /// Methods that produce a [`CoreOutput`] return it as a JSON string; the shell

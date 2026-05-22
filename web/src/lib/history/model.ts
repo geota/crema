@@ -18,6 +18,7 @@
  */
 
 import type { TelemetrySample } from '$lib/state';
+import { formatRatio } from '$lib/utils/ratio';
 
 /**
  * A snapshot of the current bean at the moment a shot was pulled. Stored on
@@ -94,14 +95,16 @@ export interface StoredShot {
  * Uses the shot's own `dose` (grams) — captured at `ShotCompleted` time from
  * the active profile. A pre-existing record (or one pulled with no active
  * profile) has no `dose`, so it falls back to the shell-wide 18 g default.
+ *
+ * The arithmetic + format come from the shared `$lib/utils/ratio.formatRatio`
+ * helper, which delegates to `de1_domain::brew_ratio` via the wasm bridge so
+ * every shell produces the same number. This wrapper just resolves the
+ * shot-level fields and the 18 g dose fallback.
  */
 export function ratioLabel(record: StoredShot): string {
 	const yieldG = record.finalWeight ?? record.peakWeight;
-	if (yieldG == null || yieldG <= 0) return '1:—';
 	const dose = record.dose != null && record.dose > 0 ? record.dose : 18;
-	// One decimal place — matches `profiles/model.ts` `ratioLabel`, so the same
-	// ratio reads identically on the History and Profiles screens.
-	return `1:${(yieldG / dose).toFixed(1)}`;
+	return formatRatio(dose, yieldG);
 }
 
 /** A star string `★★★★☆` for a 0–5 rating. */
