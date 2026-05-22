@@ -23,7 +23,7 @@
 	import { getCremaAppContext } from '$lib/shell/app-context';
 	import { getSettingsStore } from '$lib/settings';
 	import { getCaptureStore, captureJsonl } from '$lib/capture';
-	import JSZip from 'jszip';
+	import { zip as fflateZip, strToU8 } from 'fflate';
 
 	const store = getHistoryStore();
 	const appCtx = getCremaAppContext();
@@ -99,19 +99,25 @@
 	 * suffix with `.jsonl` for captures.
 	 */
 	async function exportAllAsReplayZip(): Promise<void> {
-		const zip = new JSZip();
 		const captureStore = getCaptureStore();
+		// fflate's `zip` takes a plain `{ filename: Uint8Array }` map +
+		// a callback. Pre-resolve every shot's bytes serially so the
+		// IndexedDB awaits don't fight the zip's worker.
+		const files: Record<string, Uint8Array> = {};
 		for (const shot of shots) {
 			const base = shotFilename(shot).replace(/\.shot\.json$/, '');
 			const entries = await captureStore.get(shot.id).catch(() => null);
 			if (entries && entries.length > 0) {
-				zip.file(`${base}.jsonl`, captureJsonl(entries));
+				files[`${base}.jsonl`] = strToU8(captureJsonl(entries));
 			} else {
 				// Fall back to the v2 JSON so imports still survive.
-				zip.file(`${base}.shot.json`, exportStoredShotAsV2Json(shot));
+				files[`${base}.shot.json`] = strToU8(exportStoredShotAsV2Json(shot));
 			}
 		}
-		const blob = await zip.generateAsync({ type: 'blob' });
+		const zipped: Uint8Array = await new Promise((resolve, reject) => {
+			fflateZip(files, (err, data) => (err ? reject(err) : resolve(data)));
+		});
+		const blob = new Blob([new Uint8Array(zipped)], { type: 'application/zip' });
 		downloadBlob(blob, `crema-history-${stamp()}.zip`);
 	}
 
