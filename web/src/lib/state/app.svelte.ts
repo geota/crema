@@ -579,6 +579,16 @@ export class CremaApp {
 		return this.core.exportV2JsonProfile(profile);
 	}
 
+	/**
+	 * Parse one community-v2 profile JSON document (a single line of a
+	 * `.jsonl` bundle, or a `.json` file's content). Throws on parse
+	 * failure — callers handle per-line error reporting in bulk
+	 * imports.
+	 */
+	async parseV2JsonProfile(content: string): Promise<import('$lib/core').Profile> {
+		return this.core.importV2JsonProfile(content);
+	}
+
 	async importShotFile(
 		file: File
 	): Promise<{ record: ReturnType<ReturnType<typeof getHistoryStore>['addImported']>; error: string | null }> {

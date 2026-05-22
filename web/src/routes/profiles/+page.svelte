@@ -170,6 +170,58 @@
 	 * file's own title preserved) saved into the local library.
 	 */
 	/**
+	 * Adopt a Rust-shape `Profile` into the local store as a custom
+	 * CremaProfile (fresh UUID, source `custom`, `Built-in` tag stripped).
+	 * Used by both the per-file and per-line import paths.
+	 */
+	function adoptImportedProfile(core: import('$lib/core').Profile): void {
+		const adapted = fromCoreProfile(core, -1);
+		const custom: CremaProfile = {
+			...adapted,
+			id: uid('custom'),
+			source: 'custom',
+			tags: adapted.tags.filter((t) => t !== 'Built-in')
+		};
+		store.save(custom);
+	}
+
+	/**
+	 * Export every profile in the library as one `.jsonl` file — one
+	 * community-v2 profile JSON per line. Counterpart to the bulk
+	 * Import path which also recognises `.jsonl`. Built-ins + custom
+	 * profiles are both included; round-trips back through the same
+	 * page's Import button.
+	 */
+	async function exportAllAsV2Jsonl(): Promise<void> {
+		if (profiles.length === 0) return;
+		const app = ctx().app;
+		if (!app) return;
+		const lines: string[] = [];
+		for (const p of profiles) {
+			try {
+				const v2 = await app.exportProfileAsV2Json(toCoreProfile(p));
+				// `exportProfileAsV2Json` returns pretty-printed JSON;
+				// flatten to one line per profile for true JSONL.
+				lines.push(JSON.stringify(JSON.parse(v2)));
+			} catch (e) {
+				console.warn(`Skipped "${p.name}" in bulk export:`, e);
+			}
+		}
+		const d = new Date();
+		const p = (n: number): string => String(n).padStart(2, '0');
+		const stamp =
+			`${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}T` +
+			`${p(d.getHours())}${p(d.getMinutes())}`;
+		const blob = new Blob([lines.join('\n')], { type: 'application/x-ndjson' });
+		const url = URL.createObjectURL(blob);
+		const a = document.createElement('a');
+		a.href = url;
+		a.download = `crema-profiles-${stamp}.jsonl`;
+		a.click();
+		URL.revokeObjectURL(url);
+	}
+
+	/**
 	 * Export a single profile as a community-v2 `.json` file. Looks up
 	 * the profile by id, asks the app to encode it via the wasm bridge,
 	 * and triggers a browser download.
@@ -207,22 +259,39 @@
 		let imported = 0;
 		const errors: string[] = [];
 		for (const file of Array.from(files)) {
+			// `.jsonl` is a multi-profile bundle: one v2 profile JSON per
+			// line. Split locally, then route each non-empty line through
+			// the v2-JSON importer. `.json` / `.tcl` stay one-profile per
+			// file via `importProfileFile`.
+			const isJsonl = file.name.toLowerCase().endsWith('.jsonl');
+			if (isJsonl) {
+				try {
+					const text = await file.text();
+					const lines = text.split('\n').filter((l) => l.trim().length > 0);
+					for (let i = 0; i < lines.length; i++) {
+						try {
+							const core = await app.parseV2JsonProfile(lines[i]);
+							adoptImportedProfile(core);
+							imported += 1;
+						} catch (e) {
+							errors.push(
+								`Line ${i + 1} of ${file.name}: ${e instanceof Error ? e.message : String(e)}`
+							);
+						}
+					}
+				} catch (e) {
+					errors.push(
+						`Could not read ${file.name}: ${e instanceof Error ? e.message : String(e)}`
+					);
+				}
+				continue;
+			}
 			const { profile: core, error } = await app.importProfileFile(file);
 			if (!core) {
 				errors.push(error ?? `Could not import ${file.name}.`);
 				continue;
 			}
-			// fromCoreProfile expects a numeric `index` for builtin
-			// IDs; -1 marks the result as "imported" before we replace
-			// the id below.
-			const adapted = fromCoreProfile(core, -1);
-			const custom: CremaProfile = {
-				...adapted,
-				id: uid('custom'),
-				source: 'custom',
-				tags: adapted.tags.filter((t) => t !== 'Built-in')
-			};
-			store.save(custom);
+			adoptImportedProfile(core);
 			imported += 1;
 		}
 		importing = false;
@@ -283,18 +352,26 @@
 			<label
 				class="pp-btn pp-btn-secondary pp-import"
 				class:pp-import-disabled={importing}
-				title="Import community v2 .json or legacy de1app .tcl profile files"
+				title="Import community v2 .json or legacy .tcl files, or a .jsonl bundle (one v2 profile per line)"
 			>
 				<i class="ph ph-upload-simple" aria-hidden="true"></i>
 				<span>{importing ? 'Importing…' : 'Import'}</span>
 				<input
 					type="file"
-					accept=".tcl,.json"
+					accept=".tcl,.json,.jsonl"
 					multiple
 					disabled={importing}
 					onchange={onImportFilesChosen}
 				/>
 			</label>
+			<button
+				class="pp-btn pp-btn-secondary"
+				disabled={profiles.length === 0}
+				onclick={exportAllAsV2Jsonl}
+				title="Download every profile as one .jsonl file — one community-v2 profile per line"
+			>
+				<i class="ph ph-download-simple" aria-hidden="true"></i> Export
+			</button>
 			<button class="pp-btn pp-btn-primary" onclick={() => goto('/profiles/new')}>
 				<i class="ph ph-plus" aria-hidden="true"></i> New profile
 			</button>
