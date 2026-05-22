@@ -1396,6 +1396,11 @@ impl CremaCore {
     /// profile's 5-byte `ShotHeader`. Caches the value on
     /// [`last_profile_header`](Self::last_profile_header) and emits one
     /// [`Event::ProfileHeaderRead`].
+    ///
+    /// **DORMANT** — the BLE shell does not currently Read `cuuid_0F`
+    /// (docs/16 §6.1: legacy never Reads it, firmware returns zeros).
+    /// This handler is reachable only via test fixtures and remains as
+    /// forward-compat for a future firmware that exposes the buffer.
     fn handle_profile_header_read(&mut self, data: &[u8], out: &mut CoreOutput) {
         match ShotHeader::decode(data) {
             Ok(header) => {

@@ -39,8 +39,9 @@ pub enum NotificationSource {
     De1MmrRead,
     /// The DE1 `Calibration` characteristic — sensor-calibration replies.
     De1Calibration,
-    /// The DE1 `HeaderWrite` characteristic — one-shot Read of the
-    /// currently-loaded profile's 5-byte `ShotHeader`.
+    /// **DORMANT** — mirrors `de1_app::Source::De1ProfileHeader`, which the
+    /// BLE shell no longer dispatches (docs/16 §6.1). Kept in the mirror
+    /// enum for forward-compat. See the core variant for the longer note.
     De1ProfileHeader,
     /// The DE1 `FrameWrite` characteristic — per-frame ack echoes during a
     /// profile upload.
