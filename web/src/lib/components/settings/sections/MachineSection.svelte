@@ -44,7 +44,6 @@
 	import StToggle from '../StToggle.svelte';
 	import StSelect from '../StSelect.svelte';
 	import StButton from '../StButton.svelte';
-	import StStatusDot from '../StStatusDot.svelte';
 
 	let {
 		app,
@@ -109,7 +108,7 @@
 	});
 
 	/** The decoded machine state + substate, or a placeholder before the first. */
-	const machineStateLabel = $derived(snapshot.machineState ?? '— (no StateInfo yet)');
+	const machineStateLabel = $derived(snapshot.machineState ?? 'no StateInfo yet');
 
 	// ── Machine card meta (D4) ────────────────────────────────────────────
 	/**
@@ -378,13 +377,10 @@
 	</StRow>
 </StGroup>
 
-<StGroup
-	title="DE1 connection diagnostics"
-	sub="Proof the connected device is genuinely a DE1. A DE1's Nordic nRF5x module can appear in the chooser as a generic name, so this verifies the GATT layout and shows live data flowing."
->
+<StGroup title="DE1 connection diagnostics">
 	<StRow title="Connection state" sub="The coarse DE1 link state.">
 		{#snippet control()}
-			<StStatusDot ok={connected} label={stateLabel} />
+			<span class="st-diag-mono">{stateLabel}</span>
 		{/snippet}
 	</StRow>
 	<StRow
@@ -405,10 +401,7 @@
 		sub="True once service A000 and the StateInfo (A00E), ShotSample (A00D) and WaterLevels (A011) characteristics resolved. A non-DE1 board fails here."
 	>
 		{#snippet control()}
-			<StStatusDot
-				ok={diag.gattVerified}
-				label={diag.gattVerified ? 'Verified DE1' : 'Not verified'}
-			/>
+			<span class="st-diag-mono">{diag.gattVerified ? 'Verified DE1' : 'Not verified'}</span>
 		{/snippet}
 	</StRow>
 	<StRow
@@ -424,45 +417,50 @@
 		sub="DE1 notifications decoded since connecting — a rising count is live proof the device is streaming valid DE1 data."
 	>
 		{#snippet control()}
-			<StStatusDot ok={dataFlowing} label={notificationsLabel} />
+			<span class="st-diag-mono">{notificationsLabel}</span>
 		{/snippet}
 	</StRow>
 </StGroup>
 
 <StGroup title="Peripherals" sub="Bluetooth devices Crema can talk to.">
-	<!-- TODO: a peripheral registry (grinder / tamper) is not in the shell;
-	     the scale's live state lives on the Scale page. Faithful UI only. -->
+	<!-- TODO: a peripheral registry (grinder) is not in the shell; the
+	     scale's live state lives on the Scale page. Faithful UI only. The
+	     "Weight-aware tamper" entry was removed — there is no BLE-smart
+	     tamper product Crema would ever pair with, so it was dead UI. -->
 	<StRow title="Scale" sub="Used for stop-on-weight and auto-tare. Manage on the Scale page.">
 		{#snippet control()}
-			<StStatusDot ok={false} label="See Scale page" />
+			<span class="st-diag-mono">See Scale page</span>
 		{/snippet}
 	</StRow>
-	<StRow title="Grinder" sub="Doesn't report dose; Crema logs a manual grind setting.">
-		{#snippet control()}
-			<StStatusDot ok={false} label="Not paired" />
-		{/snippet}
-		{#snippet hint()}
-			<StButton label="Pair" icon="bluetooth" disabled />
-		{/snippet}
-	</StRow>
-	<StRow title="Weight-aware tamper" sub="Pressure logged with each shot.">
-		{#snippet control()}
-			<StStatusDot ok={false} label="Not paired" />
-		{/snippet}
-		{#snippet hint()}
-			<StButton label="Pair" icon="bluetooth" disabled />
-		{/snippet}
-	</StRow>
+	<div class="st-grinder-row">
+		<StRow title="Grinder" sub="Doesn't report dose; Crema logs a manual grind setting.">
+			{#snippet control()}
+				<span class="st-diag-mono">Not implemented</span>
+			{/snippet}
+			{#snippet hint()}
+				<StButton label="Pair" icon="bluetooth" disabled />
+			{/snippet}
+		</StRow>
+	</div>
 </StGroup>
 
 <style>
-	/* Diagnostics value cells — mono so the device id and decoded machine
-	   state read as data, consistent with the design's mono usage. */
+	/* Diagnostics value cells — mono, sized so every value cell on the
+	   Machine page reads the same. "Selected device" used to be the only
+	   row with this look; the rest are now aligned to it (the
+	   ok/not-ok dot icons were dropped in the same pass — too many
+	   green dots was visual noise; the text alone carries the state). */
 	.st-diag-mono {
 		font-family: var(--font-mono);
 		font-size: 12px;
 		color: var(--fg-1);
 		font-variant-numeric: tabular-nums;
+	}
+	/* The Grinder row is "not yet implemented" — dim the whole row so it
+	   reads as a placeholder. Pair button stays disabled per the StButton
+	   `disabled` prop, but the muted opacity reinforces the "later" hint. */
+	.st-grinder-row {
+		opacity: 0.5;
 	}
 	.st-diag-id {
 		font-family: var(--font-mono);
