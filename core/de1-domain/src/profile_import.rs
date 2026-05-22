@@ -23,7 +23,8 @@
 
 use crate::error::ImportError;
 use crate::profile::{
-    Compare, ExitCondition, ExitMetric, Limiter, Profile, ProfileStep, Pump, TempSensor, Transition,
+    BeverageType, Compare, ExitCondition, ExitMetric, Limiter, Profile, ProfileStep, Pump,
+    TempSensor, Transition,
 };
 
 /// The DE1 frame-index limit; a profile may hold at most this many steps.
@@ -61,6 +62,11 @@ struct V2Step {
     exit: Option<V2Exit>,
     #[serde(default)]
     limiter: Option<V2Limiter>,
+    /// Per-step target weight (grams). Optional in v2 — null when the
+    /// step does not watch weight. Reaprime emits `null` explicitly;
+    /// Crema preserves the Option<f32>.
+    #[serde(default)]
+    weight: Option<Scalar>,
 }
 
 /// The early-exit object of a legacy v2 JSON step.
@@ -105,6 +111,74 @@ struct V2Profile {
     /// Recommended dry coffee dose, grams — the legacy `grinder_dose_weight`.
     #[serde(default)]
     grinder_dose_weight: Scalar,
+    /// Profile author — free-text metadata.
+    #[serde(default)]
+    author: String,
+    /// Beverage type — falls back to `Espresso` on unknown / missing
+    /// values (matches reaprime's lenient handling — this field is
+    /// metadata, not execution).
+    #[serde(default, deserialize_with = "deserialize_beverage_type_lenient")]
+    beverage_type: BeverageType,
+    /// Target tank temperature, °C.
+    #[serde(default)]
+    tank_temperature: Scalar,
+    /// Community schema version — captured as the source string so an
+    /// exotic version (e.g. `"2.1"`) round-trips. Default `"2"` if
+    /// absent. Accepts string OR number in the source JSON: reaprime
+    /// emits `"2"` (the contract), but many older community profiles
+    /// emit a bare integer `2` (de1app TCL JSON dumper drops the
+    /// quotes). Both deserialize to `"2"`.
+    #[serde(default = "default_v2_version_string", deserialize_with = "deserialize_version_string")]
+    version: String,
+}
+
+fn default_v2_version_string() -> String {
+    "2".to_string()
+}
+
+/// Deserialize the `version` field tolerantly — accepts JSON strings,
+/// integers, floats, and null. Strings pass through verbatim; numbers
+/// stringify; null → `"2"`. Mirrors the de-facto community profile
+/// JSON corpus, which is split between `"version": "2"` (reaprime,
+/// modern de1app) and `"version": 2` (older de1app TCL JSON dumper).
+fn deserialize_version_string<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize as _;
+    use serde_json::Value;
+    let v = Value::deserialize(deserializer)?;
+    Ok(match v {
+        Value::String(s) => s,
+        Value::Number(n) => n.to_string(),
+        // null, bools, arrays, objects all fall back to the canonical
+        // schema version. Malformed input is logged elsewhere.
+        _ => default_v2_version_string(),
+    })
+}
+
+/// Deserialize a `BeverageType` leniently — accept the canonical
+/// lowercase spellings, the JSON `null`, and any other string by
+/// falling back to `Espresso`. Matches reaprime's
+/// `_parseBeverageType` (`profile.dart:116-123`): the field is
+/// metadata so strictness would reject otherwise-valid profiles for
+/// no execution-time benefit.
+fn deserialize_beverage_type_lenient<'de, D>(deserializer: D) -> Result<BeverageType, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize as _;
+    let raw = Option::<String>::deserialize(deserializer)?;
+    let Some(s) = raw else { return Ok(BeverageType::Espresso) };
+    Ok(match s.trim().to_ascii_lowercase().as_str() {
+        "calibrate" => BeverageType::Calibrate,
+        "cleaning" => BeverageType::Cleaning,
+        "manual" => BeverageType::Manual,
+        "pourover" => BeverageType::Pourover,
+        // "espresso", "" and any unknown value fall back to Espresso —
+        // metadata-grade lenient handling per reaprime's behaviour.
+        _ => BeverageType::Espresso,
+    })
 }
 
 /// Import a legacy **v2 JSON** profile into a Crema [`Profile`].
@@ -132,6 +206,10 @@ pub fn import_v2_json(json: &str) -> Result<Profile, ImportError> {
         raw.target_weight.as_f32(),
         raw.target_volume.as_f32(),
         raw.grinder_dose_weight.as_f32(),
+        raw.author,
+        raw.beverage_type,
+        raw.tank_temperature.as_f32(),
+        raw.version,
     )
 }
 
@@ -158,6 +236,15 @@ fn v2_step_to_profile_step(step: &V2Step) -> Result<ProfileStep, ImportError> {
         })
     });
 
+    // Per-step weight target — `null` or 0 means "no weight target",
+    // any positive value becomes `Some(weight)`. Reaprime serializes
+    // null explicitly for missing weights; Crema treats 0 the same.
+    let weight = step
+        .weight
+        .as_ref()
+        .map(Scalar::as_f32)
+        .filter(|w| *w > 0.0);
+
     Ok(ProfileStep {
         name: step.name.clone(),
         pump,
@@ -169,6 +256,7 @@ fn v2_step_to_profile_step(step: &V2Step) -> Result<ProfileStep, ImportError> {
         exit,
         volume_limit_ml: clamp_volume(step.volume.as_f32()),
         limiter,
+        weight,
     })
 }
 
@@ -195,6 +283,10 @@ struct V2StepOut {
     flow: f32,
     seconds: f32,
     volume: u16,
+    /// Per-step target weight. Emitted as `null` when None (reaprime
+    /// emits the slot explicitly for hash-stability); a non-zero
+    /// positive number when set.
+    weight: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     exit: Option<V2ExitOut>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -227,8 +319,18 @@ struct V2ProfileOut {
     /// Constant `"advanced"` — every Crema [`Profile`] is a multi-step profile.
     #[serde(rename = "type")]
     kind: &'static str,
-    /// Constant `2` — the v2 schema version.
-    version: u8,
+    /// Schema version, emitted as the **string** `"2"` per the
+    /// community v2 contract (reaprime: `'version': '2'`). The
+    /// importer accepts both the string and a bare integer so older
+    /// dumps still round-trip.
+    version: String,
+    /// Profile author (free text). Reaprime's `Profile.author`.
+    author: String,
+    /// `"espresso"` / `"calibrate"` / `"cleaning"` / `"manual"` /
+    /// `"pourover"` per the v2 enum.
+    beverage_type: &'static str,
+    /// Target tank temperature, °C (0 for "no override").
+    tank_temperature: f32,
     steps: Vec<V2StepOut>,
     target_weight: f32,
     target_volume: f32,
@@ -257,7 +359,16 @@ pub fn export_v2_json(profile: &Profile) -> String {
         title: profile.title.clone(),
         notes: profile.notes.clone(),
         kind: "advanced",
-        version: 2,
+        version: profile.version.clone(),
+        author: profile.author.clone(),
+        beverage_type: match profile.beverage_type {
+            BeverageType::Espresso => "espresso",
+            BeverageType::Calibrate => "calibrate",
+            BeverageType::Cleaning => "cleaning",
+            BeverageType::Manual => "manual",
+            BeverageType::Pourover => "pourover",
+        },
+        tank_temperature: profile.tank_temperature,
         steps,
         target_weight: profile.target_weight,
         // Crema's whole-shot volume limit is the legacy `target_volume`.
@@ -298,6 +409,7 @@ fn step_to_v2(step: &ProfileStep) -> V2StepOut {
         flow,
         seconds: step.duration_seconds,
         volume: step.volume_limit_ml,
+        weight: step.weight,
         exit: step.exit.map(|exit| V2ExitOut {
             kind: match exit.metric {
                 ExitMetric::Pressure => "pressure",
@@ -358,6 +470,13 @@ pub fn import_legacy_tcl(tcl: &str) -> Result<Profile, ImportError> {
         .and_then(|s| s.trim().parse::<f32>().ok())
         .map_or(0, |v| v.clamp(0.0, f32::from(u16::MAX)).round() as u16);
 
+    // Legacy TCL profiles carry an `author` field; `beverage_type` is
+    // typically absent (TCL is v1/v2 transitional, predates the field)
+    // — default to Espresso. `tank_temperature` is also absent in TCL
+    // profiles; default to 0. Version is always the string "2".
+    let author = dict.get("author").unwrap_or("").to_string();
+    let tank_temperature = dict.get_f32("tank_temperature").unwrap_or(0.0);
+
     finish_profile(
         title,
         notes,
@@ -370,6 +489,10 @@ pub fn import_legacy_tcl(tcl: &str) -> Result<Profile, ImportError> {
             .or_else(|| dict.get_f32("final_desired_shot_volume"))
             .unwrap_or(0.0),
         dict.get_f32("grinder_dose_weight").unwrap_or(0.0),
+        author,
+        BeverageType::Espresso,
+        tank_temperature,
+        "2".to_string(),
     )
 }
 
@@ -410,6 +533,7 @@ fn tcl_step_to_profile_step(step: &TclDict) -> Result<ProfileStep, ImportError> 
         _ => None,
     };
 
+    // Legacy TCL profiles have no per-step weight target — kept None.
     Ok(ProfileStep {
         name: step.get("name").unwrap_or("").to_string(),
         pump,
@@ -421,6 +545,7 @@ fn tcl_step_to_profile_step(step: &TclDict) -> Result<ProfileStep, ImportError> 
         exit,
         volume_limit_ml: clamp_volume(step.get_f32("volume").unwrap_or(0.0)),
         limiter,
+        weight: None,
     })
 }
 
@@ -516,6 +641,7 @@ fn preinfusion_frame(
         }),
         volume_limit_ml: 0,
         limiter: None,
+        weight: None,
     }
 }
 
@@ -687,6 +813,7 @@ fn pressure_frame(
         exit: None,
         volume_limit_ml: 0,
         limiter,
+        weight: None,
     }
 }
 
@@ -710,6 +837,7 @@ fn flow_frame(
         exit: None,
         volume_limit_ml: 0,
         limiter,
+        weight: None,
     }
 }
 
@@ -727,6 +855,7 @@ fn empty_frame() -> ProfileStep {
         exit: None,
         volume_limit_ml: 0,
         limiter: None,
+        weight: None,
     }
 }
 
@@ -747,6 +876,7 @@ fn max_value(dict: &TclDict, value_key: &str, range_key: &str) -> Option<Limiter
 // ---------------------------------------------------------------------------
 
 /// Assemble the parsed pieces into a validated [`Profile`].
+#[allow(clippy::too_many_arguments)]
 fn finish_profile(
     title: String,
     notes: String,
@@ -755,6 +885,10 @@ fn finish_profile(
     target_weight: f32,
     target_volume: f32,
     dose: f32,
+    author: String,
+    beverage_type: BeverageType,
+    tank_temperature: f32,
+    version: String,
 ) -> Result<Profile, ImportError> {
     if steps.is_empty() {
         return Err(ImportError::NoSteps);
@@ -794,6 +928,10 @@ fn finish_profile(
         // App-side metadata: the legacy `grinder_dose_weight`. Like
         // `target_weight` it has no protocol field.
         dose,
+        author,
+        beverage_type,
+        tank_temperature,
+        version,
     })
 }
 
@@ -1310,6 +1448,123 @@ mod tests {
         let reimported = import_v2_json(&export_v2_json(&original)).unwrap();
         assert_eq!(reimported, original);
         assert_eq!(reimported.steps[0].temp_sensor, TempSensor::Water);
+    }
+
+    #[test]
+    fn export_v2_json_round_trips_notes_with_embedded_newlines() {
+        // Reaprime's profile_test fixture catches that line-ending
+        // normalisation (LF↔CRLF, trim) on notes breaks profile-equality
+        // checks, which in turn triggers redundant DE1 re-uploads in
+        // the shell. Verify Crema preserves notes byte-for-byte across
+        // import → export → import.
+        // docs/22 §4.5.
+        let notes_with_newlines = "First line.\nSecond line.\n\nBlank between.\n";
+        let original = Profile {
+            title: "Newline test".into(),
+            notes: notes_with_newlines.into(),
+            steps: vec![ProfileStep {
+                name: "single".into(),
+                pump: Pump::Pressure,
+                target: 9.0,
+                temperature_c: 92.0,
+                temp_sensor: TempSensor::Coffee,
+                transition: Transition::Fast,
+                duration_seconds: 20.0,
+                exit: None,
+                volume_limit_ml: 0,
+                limiter: None,
+                weight: None,
+            }],
+            preinfuse_step_count: 0,
+            minimum_pressure: 0.0,
+            maximum_flow: 0.0,
+            max_total_volume_ml: 0,
+            target_weight: 0.0,
+            dose: 0.0,
+            author: "".into(),
+            beverage_type: BeverageType::Espresso,
+            tank_temperature: 0.0,
+            version: "2".into(),
+        };
+        let exported = export_v2_json(&original);
+        let reimported = import_v2_json(&exported).unwrap();
+        assert_eq!(reimported.notes, notes_with_newlines);
+        assert_eq!(reimported, original);
+    }
+
+    #[test]
+    fn export_v2_json_emits_the_new_v2_top_level_fields() {
+        // The four new top-level fields (author, beverage_type,
+        // tank_temperature, version) must reach the JSON; absence on the
+        // wire would break community-app interop.
+        let original = Profile {
+            title: "v2 fields".into(),
+            notes: "".into(),
+            steps: vec![ProfileStep {
+                name: "single".into(),
+                pump: Pump::Flow,
+                target: 4.0,
+                temperature_c: 90.0,
+                temp_sensor: TempSensor::Water,
+                transition: Transition::Smooth,
+                duration_seconds: 10.0,
+                exit: None,
+                volume_limit_ml: 0,
+                limiter: None,
+                weight: Some(20.0),
+            }],
+            preinfuse_step_count: 0,
+            minimum_pressure: 0.0,
+            maximum_flow: 0.0,
+            max_total_volume_ml: 0,
+            target_weight: 0.0,
+            dose: 0.0,
+            author: "Adrian".into(),
+            beverage_type: BeverageType::Pourover,
+            tank_temperature: 60.0,
+            version: "2".into(),
+        };
+        let exported = export_v2_json(&original);
+        // Each new key must appear in the emitted JSON.
+        assert!(exported.contains("\"author\": \"Adrian\""));
+        assert!(exported.contains("\"beverage_type\": \"pourover\""));
+        assert!(exported.contains("\"tank_temperature\": 60"));
+        assert!(exported.contains("\"version\": \"2\""));
+        // Per-step weight emits explicitly (with a positive value here).
+        assert!(exported.contains("\"weight\": 20"));
+        // Re-importing reconstructs all fields including the new ones.
+        let reimported = import_v2_json(&exported).unwrap();
+        assert_eq!(reimported, original);
+    }
+
+    #[test]
+    fn import_v2_json_accepts_integer_version_field() {
+        // The de-facto community corpus is split between `"version":
+        // "2"` (reaprime, modern de1app) and `"version": 2` (older TCL
+        // JSON dumper). Both must deserialize.
+        let json_with_int = r#"{
+            "title": "x", "notes": "", "version": 2,
+            "steps": [{"name":"a","temperature":92,"sensor":"coffee",
+                       "pump":"pressure","transition":"fast","pressure":9,
+                       "seconds":10}]
+        }"#;
+        let p = import_v2_json(json_with_int).unwrap();
+        assert_eq!(p.version, "2");
+    }
+
+    #[test]
+    fn import_v2_json_falls_back_to_espresso_for_unknown_beverage_type() {
+        // Reaprime is lenient on beverage_type — unknown values default
+        // to Espresso instead of throwing. Crema matches because the
+        // field is metadata, not execution.
+        let json = r#"{
+            "title": "x", "notes": "", "beverage_type": "rocket_fuel",
+            "steps": [{"name":"a","temperature":92,"sensor":"coffee",
+                       "pump":"pressure","transition":"fast","pressure":9,
+                       "seconds":10}]
+        }"#;
+        let p = import_v2_json(json).unwrap();
+        assert_eq!(p.beverage_type, BeverageType::Espresso);
     }
 
     #[test]

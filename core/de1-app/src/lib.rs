@@ -3161,7 +3161,9 @@ mod tests {
 
     mod profile_upload {
         use super::*;
-        use de1_domain::{Limiter, Profile, ProfileStep, Pump, TempSensor, Transition};
+        use de1_domain::{
+            BeverageType, Limiter, Profile, ProfileStep, Pump, TempSensor, Transition,
+        };
 
         fn step(name: &str, pump: Pump, limiter: Option<Limiter>) -> ProfileStep {
             ProfileStep {
@@ -3175,6 +3177,7 @@ mod tests {
                 exit: None,
                 volume_limit_ml: 0,
                 limiter,
+                weight: None,
             }
         }
 
@@ -3189,6 +3192,10 @@ mod tests {
                 max_total_volume_ml: 0,
                 target_weight: 0.0,
                 dose: 0.0,
+                author: String::new(),
+                beverage_type: BeverageType::Espresso,
+                tank_temperature: 0.0,
+                version: "2".to_string(),
             }
         }
 
