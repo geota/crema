@@ -267,8 +267,6 @@
 						{replay.message}
 					{/if}
 				</span>
-			{:else}
-				Developer tool — for testing without a DE1.
 			{/if}
 		{/snippet}
 	</StRow>
@@ -307,6 +305,7 @@
 	.rp-control {
 		display: flex;
 		align-items: center;
+		justify-content: flex-end;
 		gap: 10px;
 	}
 	.rp-pick {
