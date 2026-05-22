@@ -521,6 +521,7 @@
 						ready={modeReady}
 						icon="cloud"
 						label="Steam"
+						sub={modeState === 'steaming' ? 'In progress' : '148 °C · 8 s'}
 						onTap={() => (modeState === 'steaming' ? cancelMode() : tapSteam())}
 					/>
 					<ModeChip
@@ -529,6 +530,7 @@
 						ready={modeReady}
 						icon="drop"
 						label="Hot water"
+						sub={modeState === 'dispensing' ? 'Dispensing' : '92 °C · 250 ml'}
 						onTap={() => (modeState === 'dispensing' ? cancelMode() : tapWater())}
 					/>
 					<ModeChip
@@ -537,6 +539,7 @@
 						ready={modeReady}
 						icon="sparkle"
 						label="Flush"
+						sub={modeState === 'flushing' ? 'Flushing' : '4 s'}
 						onTap={() => (modeState === 'flushing' ? cancelMode() : tapFlush())}
 					/>
 				</div>
