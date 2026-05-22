@@ -45,7 +45,7 @@
 			/>
 		{/snippet}
 	</StRow>
-	<StRow title="Density" sub="Card padding and stepper sizes.">
+	<StRow title="Density" sub="Card padding and stepper sizes." notImplemented>
 		{#snippet control()}
 			<StSegment
 				value={prefs.density}
@@ -62,6 +62,7 @@
 	<StRow
 		title="Screensaver"
 		sub="After 10 minutes of inactivity, show a calm pour animation."
+		notImplemented
 	>
 		{#snippet control()}
 			<StToggle

@@ -265,11 +265,20 @@
 	 */
 	let quickSheetOpen = $state(false);
 	/**
-	 * Local "running" flag for the Start / Stop button. UI-only — the design's
-	 * brew-control surface is a stub here. The displayed shot state below comes
-	 * from real telemetry instead.
+	 * Whether a state-request transition we initiated is still in flight.
+	 * Used to debounce double-clicks on the big Start button while a
+	 * pre-shot flush + Espresso sequence is in progress, since the
+	 * orchestrator's `startShot()` awaits the flush completion before
+	 * issuing the espresso request.
 	 */
-	let manualRunning = $state(false);
+	let stateTransitionPending = $state(false);
+	/**
+	 * Whether the DE1 is currently running an espresso shot — derived
+	 * straight from the live `machineState`. Honest, two-way: a shot the
+	 * user kicks off via the on-machine touch button reads as running here
+	 * too, and the dashboard's Stop button can end it.
+	 */
+	const running = $derived(ui.machineState === MachineState.Espresso);
 
 	const p = $derived(params.current);
 
@@ -390,11 +399,29 @@
 		profileStore.setActive(profile.id);
 	}
 
-	/** Toggle the local running flag — the brew-control stub. */
-	function toggleRun(): void {
-		// TODO: wire to DE1 control — starting / stopping an extraction is a
-		// net-new feature; today this only flips local UI state.
-		manualRunning = !manualRunning;
+	/**
+	 * Start / stop a shot via the real DE1 control surface (real, not stub).
+	 *
+	 * The orchestrator's `startShot()` interposes a `HotWaterRinse` if
+	 * `prefs.groupFlushBeforeShot` is on, then requests `Espresso`;
+	 * `stopShot()` requests `Idle` which the firmware honours from any
+	 * session state. We treat any non-Idle DE1 state as "running" so a
+	 * shot the user kicked off via the on-machine touch button can be
+	 * stopped from the dashboard.
+	 */
+	async function toggleRun(): Promise<void> {
+		const app = appCtx().app;
+		if (!app || stateTransitionPending) return;
+		stateTransitionPending = true;
+		try {
+			if (running) {
+				await app.stopShot();
+			} else {
+				await app.startShot();
+			}
+		} finally {
+			stateTransitionPending = false;
+		}
 	}
 </script>
 
@@ -640,15 +667,17 @@
 					/>
 				</div>
 				<span class="mc-foot-rule" aria-hidden="true"></span>
-				<!-- TODO: wire to DE1 control — starting / stopping a shot is
-				     a net-new feature; today this only flips the local
-				     `running` flag. -->
-				<button class="crema-bigbtn" class:running={manualRunning} onclick={toggleRun}>
+				<button
+					class="crema-bigbtn"
+					class:running
+					disabled={stateTransitionPending || !modeReady}
+					onclick={toggleRun}
+				>
 					<i
-						class={'ph-fill ph-' + (manualRunning ? 'stop' : 'play')}
+						class={'ph-fill ph-' + (running ? 'stop' : 'coffee')}
 						aria-hidden="true"
 					></i>
-					<span>{manualRunning ? 'Stop extraction' : 'Start extraction'}</span>
+					<span>{running ? 'Stop' : 'Coffee'}</span>
 				</button>
 			</div>
 		</div>
