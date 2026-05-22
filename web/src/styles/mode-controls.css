@@ -28,25 +28,28 @@
 	--mc-flush-15: #6b8c5f26;
 }
 
-/* ── Action row above the foot ─────────────────────────────────────── */
-
-.mc-actionrow {
-	display: flex;
-	justify-content: center;
+/* ── Foot actions cluster ─────────────────────────────────────────── */
+/* `.crema-foot-actions` is the right-hand cell of the foot's `1fr auto`
+   grid: chip cluster + hairline + Start button, all on one row. Foot
+   height stays unchanged — chips are shorter than `.crema-bigbtn` and
+   center-align inside the row. */
+.crema-foot-actions {
+	display: inline-flex;
 	align-items: center;
-	gap: 10px;
-	padding: 12px 32px 14px;
-	border-top: 1px solid rgba(244, 237, 224, 0.04);
-	background: rgba(15, 12, 9, 0.4);
+	gap: 0;
 }
-.mc-actionrow .mc-chip {
-	min-width: 156px;
+.mc-foot-chips {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
 }
-.mc-actionrow-hint {
-	font-family: var(--font-sans);
-	font-size: 11px;
-	color: rgba(244, 237, 224, 0.4);
-	margin-left: 14px;
+.mc-foot-rule {
+	display: inline-block;
+	width: 1px;
+	height: 28px;
+	background: rgba(244, 237, 224, 0.12);
+	margin: 0 14px;
+	flex: 0 0 auto;
 }
 
 /* ── Chip ──────────────────────────────────────────────────────────── */
@@ -56,8 +59,8 @@
 	align-items: center;
 	justify-content: center;
 	gap: 10px;
-	padding: 10px 16px;
-	height: 40px;
+	padding: 8px 16px;
+	height: 44px;
 	border-radius: 999px;
 	background: rgba(244, 237, 224, 0.04);
 	color: var(--ink-50, var(--fg-1));
@@ -82,8 +85,8 @@
 .mc-chip-text {
 	display: inline-flex;
 	flex-direction: column;
-	align-items: flex-start;
-	line-height: 1.1;
+	align-items: center;
+	line-height: 1.15;
 }
 .mc-chip-sub {
 	color: rgba(244, 237, 224, 0.45);
