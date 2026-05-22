@@ -191,6 +191,24 @@
 			/>
 		{/snippet}
 	</StRow>
+	<StRow
+		title="Shot export format"
+		sub={prefs.shotExportFormat === 'jsonl'
+			? 'Per-shot Download emits the raw BLE capture (.jsonl) — every wire byte, bit-exact replay, Crema-only. Right for bug reports + development.'
+			: 'Per-shot Download emits the community v2 .shot.json — portable across reaprime / Visualizer / de1app, pre-decoded telemetry, user-readable.'}
+	>
+		{#snippet control()}
+			<StSelect
+				value={prefs.shotExportFormat}
+				options={[
+					{ value: 'v2', label: 'Community v2 (.shot.json)' },
+					{ value: 'jsonl', label: 'Raw capture (.jsonl)' }
+				]}
+				onChange={(v) =>
+					settings.set('shotExportFormat', v as 'v2' | 'jsonl')}
+			/>
+		{/snippet}
+	</StRow>
 </StGroup>
 
 <StGroup title="Integrations">
