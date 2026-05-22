@@ -42,6 +42,7 @@
 	import LiveChart from './LiveChart.svelte';
 	import QuickSheet from './QuickSheet.svelte';
 	import LastShotCard from './LastShotCard.svelte';
+	import PowerButton from '$lib/components/PowerButton.svelte';
 
 	let {
 		ui
@@ -53,6 +54,8 @@
 	// ── App context (real — orchestrator for write actions) ─────────────
 	/** Live ref to the shared CremaApp; used for the mode-chip writes. */
 	const appCtx = getCremaAppContext();
+	/** The CremaApp orchestrator, or `null` while the core is loading. */
+	const app = $derived(appCtx().app);
 
 	// ── Profile library (real — the lib/profiles store) ──────────────────
 	/** The shared profile library — the source of pinned favorites + active. */
@@ -556,7 +559,6 @@
 	 * stopped from the dashboard.
 	 */
 	async function toggleRun(): Promise<void> {
-		const app = appCtx().app;
 		if (!app || stateTransitionPending) return;
 		stateTransitionPending = true;
 		try {
@@ -782,6 +784,11 @@
 		     one row of buttons. -->
 		<div class="crema-dash-foot is-split">
 			<div class="crema-foot-meta">
+				<!-- Sleep / wake the DE1 — rendered inline as the leftmost
+				     foot-meta item. Moved here from the layout's fixed
+				     top-right corner, which was overlapping the
+				     profile-switcher dropdown in the dashboard header. -->
+				<PowerButton {app} />
 				<!-- Machine: the formatted "State / Substate" string from the
 				     last `MachineStateChanged` event (e.g. "Sleep / Ready",
 				     "Espresso / Pouring", "Idle / HeatWaterTank"). `—` until

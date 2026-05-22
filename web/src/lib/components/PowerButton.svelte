@@ -1,6 +1,6 @@
 <script lang="ts">
 	/**
-	 * `PowerButton` — a sleek viewport-corner power control for the DE1.
+	 * `PowerButton` — a compact circular power control for the DE1.
 	 *
 	 * Renders only when the DE1 is connected. Reads `snapshot.machineState`
 	 * and swaps between two visuals:
@@ -10,10 +10,11 @@
 	 *  - DE1 asleep → sun icon, copper-tinted. Click → request Idle (which
 	 *    also wakes from sleep).
 	 *
-	 * Lives in the app shell (`+layout.svelte`) so it's available on every
-	 * route. Fixed positioning at top-right; z-index above the page but
-	 * below modals / scrims. Mirrors the sidebar's connection-status pattern
-	 * — small, always-on, one-click toggle of a critical machine state.
+	 * Renders inline wherever it's placed (no fixed positioning). Today the
+	 * Brew dashboard puts it as the leftmost item in its foot-meta strip,
+	 * next to the Machine label. Moved out of the app shell on 2026-05-22
+	 * because it was overlapping the profile-switcher dropdown at the top
+	 * of the Brew page.
 	 */
 	import type { CremaApp } from '$lib/state';
 	import { MachineState } from '$lib/core/crema-core';
@@ -55,11 +56,10 @@
 
 <style>
 	.power-btn {
-		position: fixed;
-		top: 14px;
-		right: 14px;
-		width: 40px;
-		height: 40px;
+		/* Inline circular control. Sized to sit next to a foot-strip
+		   eyebrow label without dragging the row's height up. */
+		width: 28px;
+		height: 28px;
 		border-radius: 50%;
 		display: inline-flex;
 		align-items: center;
@@ -67,17 +67,13 @@
 		border: 1px solid var(--hairline, rgba(255, 255, 255, 0.08));
 		background: var(--bg-surface);
 		color: rgba(var(--tint-rgb), 0.7);
-		font-size: 18px;
+		font-size: 14px;
 		cursor: pointer;
-		box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
 		transition:
 			background var(--dur-1, 140ms) var(--ease, cubic-bezier(0.32, 0.72, 0, 1)),
 			color var(--dur-1, 140ms) var(--ease, cubic-bezier(0.32, 0.72, 0, 1)),
 			transform 80ms;
-		/* Above page chrome (modal scrims top out at ~31; sidebar is 50;
-		   sit between so the sidebar dropdowns / scrims still win, but the
-		   page content can never cover this). */
-		z-index: 40;
+		flex: 0 0 auto;
 	}
 	.power-btn:hover {
 		background: var(--bg-elevated, var(--bg-surface));
