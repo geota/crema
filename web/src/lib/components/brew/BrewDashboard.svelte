@@ -19,7 +19,7 @@
 	 * to DE1 control` markers in `QuickSheet.svelte` and `brew-params`).
 	 */
 	import { waterTankMl, waterRefillSoon, type UiSnapshot } from '$lib/state';
-	import { ShotPhase, MachineState } from '$lib/core/crema-core';
+	import { ShotPhase, MachineState, MmrRegister } from '$lib/core/crema-core';
 	import ModeChip from './ModeChip.svelte';
 	import ModeHeadStatus from './ModeHeadStatus.svelte';
 	import {
@@ -124,12 +124,24 @@
 		dispensing: 30.0,
 		flushing: 4.0
 	};
+	/**
+	 * Flush water target temperature — read from MMR `FlushTemp`
+	 * (`0x00803844`, wire value `°C × 10`). The connect-time MMR sweep
+	 * issues a one-shot read; falls back to the legacy de1app default
+	 * (~95 °C) until the value lands so the chip's sub-label has a
+	 * sensible reading at first paint.
+	 */
+	const flushTempC = $derived.by<number>(() => {
+		const raw = ui.de1MachineInfo[MmrRegister.FlushTemp];
+		return raw != null && Number.isFinite(raw) ? raw / 10 : 95;
+	});
+
 	const MODE_TARGET_LABEL = $derived<
 		Record<'steaming' | 'dispensing' | 'flushing', string>
 	>({
 		steaming: `${formatTemp(148, prefs.tempUnit)} · 8 s`,
 		dispensing: `${formatTemp(92, prefs.tempUnit)} · ${formatVolume(250, prefs.volumeUnit)}`,
-		flushing: '4 s'
+		flushing: `${formatTemp(flushTempC, prefs.tempUnit)} · 4 s`
 	});
 	/**
 	 * `performance.now()` when the DE1 first transitioned into the
