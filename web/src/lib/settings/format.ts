@@ -54,19 +54,28 @@ function present(v: number | null | undefined): v is number {
 /**
  * Convert a weight (canonical grams) to the chosen {@link WeightUnit}.
  * `g` shows grams to one decimal; `oz` converts (1 oz = 28.3495 g) to two.
+ *
+ * **The unit label is always honest.** A missing reading formats the value
+ * as `—` but the `unit` still reflects the user's pref — otherwise a
+ * `"— g"` placeholder would lie about Celsius / bar / grams whenever the
+ * user had picked the imperial unit. Same for {@link convertTemp},
+ * {@link convertPressure}, {@link convertVolume}.
  */
 export function convertWeight(grams: number | null | undefined, unit: WeightUnit): Measurement {
-	if (!present(grams)) return { value: DASH, unit: '' };
+	const label = unit === 'oz' ? 'oz' : 'g';
+	if (!present(grams)) return { value: DASH, unit: label };
 	if (unit === 'oz') return { value: (grams / 28.3495).toFixed(2), unit: 'oz' };
 	return { value: grams.toFixed(1), unit: 'g' };
 }
 
 /**
  * Convert a temperature (canonical °C) to the chosen {@link TempUnit}.
- * `F` converts via `°C × 9/5 + 32`. Both show one decimal.
+ * `F` converts via `°C × 9/5 + 32`. Both show one decimal. Unit label
+ * stays honest when the value is missing — see {@link convertWeight}.
  */
 export function convertTemp(celsius: number | null | undefined, unit: TempUnit): Measurement {
-	if (!present(celsius)) return { value: DASH, unit: '' };
+	const label = unit === 'F' ? '°F' : '°C';
+	if (!present(celsius)) return { value: DASH, unit: label };
 	if (unit === 'F') return { value: (celsius * 1.8 + 32).toFixed(1), unit: '°F' };
 	return { value: celsius.toFixed(1), unit: '°C' };
 }
@@ -74,12 +83,14 @@ export function convertTemp(celsius: number | null | undefined, unit: TempUnit):
 /**
  * Convert a pressure (canonical bar) to the chosen {@link PressureUnit}.
  * `psi` converts (1 bar = 14.5038 psi). `bar` shows one decimal, `psi` none.
+ * Unit label stays honest when the value is missing — see {@link convertWeight}.
  */
 export function convertPressure(
 	bar: number | null | undefined,
 	unit: PressureUnit
 ): Measurement {
-	if (!present(bar)) return { value: DASH, unit: '' };
+	const label = unit === 'psi' ? 'psi' : 'bar';
+	if (!present(bar)) return { value: DASH, unit: label };
 	if (unit === 'psi') return { value: String(Math.round(bar * 14.5038)), unit: 'psi' };
 	return { value: bar.toFixed(1), unit: 'bar' };
 }
@@ -87,10 +98,12 @@ export function convertPressure(
 /**
  * Convert a volume (canonical mL) to the chosen {@link VolumeUnit}.
  * `floz` converts (1 US fl oz = 29.5735 mL) to one decimal; `ml` shows a
- * whole number — a tank volume is never meaningfully fractional.
+ * whole number — a tank volume is never meaningfully fractional. Unit
+ * label stays honest when the value is missing — see {@link convertWeight}.
  */
 export function convertVolume(ml: number | null | undefined, unit: VolumeUnit): Measurement {
-	if (!present(ml)) return { value: DASH, unit: '' };
+	const label = unit === 'floz' ? 'fl oz' : 'mL';
+	if (!present(ml)) return { value: DASH, unit: label };
 	if (unit === 'floz') return { value: (ml / 29.5735).toFixed(1), unit: 'fl oz' };
 	return { value: String(Math.round(ml)), unit: 'mL' };
 }

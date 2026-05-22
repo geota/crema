@@ -48,7 +48,7 @@
 			<span class="ls-l">Time</span>
 		</div>
 		<div class="ls-stat">
-			<span class="ls-v">{yieldM.value}<em>{yieldM.unit || 'g'}</em></span>
+			<span class="ls-v">{yieldM.value}<em>{yieldM.unit}</em></span>
 			<span class="ls-l">Yield</span>
 		</div>
 		<div class="ls-stat">
@@ -56,11 +56,11 @@
 			<span class="ls-l">Ratio</span>
 		</div>
 		<div class="ls-stat">
-			<span class="ls-v">{peakBarM.value}<em>{peakBarM.unit || 'bar'}</em></span>
+			<span class="ls-v">{peakBarM.value}<em>{peakBarM.unit}</em></span>
 			<span class="ls-l">Peak</span>
 		</div>
 		<div class="ls-stat">
-			<span class="ls-v">{peakTempM.value}<em>{peakTempM.unit || '°C'}</em></span>
+			<span class="ls-v">{peakTempM.value}<em>{peakTempM.unit}</em></span>
 			<span class="ls-l">Peak temp</span>
 		</div>
 	</div>

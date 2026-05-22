@@ -221,7 +221,7 @@
 	/** The hero readout's numeric string. */
 	const heroNum = $derived(heroMeasure.value);
 	/** The hero readout's unit label. */
-	const heroUnit = $derived(heroMeasure.unit || 'g');
+	const heroUnit = $derived(heroMeasure.unit);
 	/** The Tare button's "0" caption, in the chosen weight unit. */
 	const tareZero = $derived(convertWeight(0, settings.current.weightUnit));
 

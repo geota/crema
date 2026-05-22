@@ -107,7 +107,21 @@
 		return n;
 	}
 
+	/**
+	 * Step by `dir`. With `dimension`, work in display units so each click
+	 * moves the visible digit — see {@link QStepper.inc} for the full
+	 * explanation. Without `dimension`, plain canonical arithmetic.
+	 */
 	function inc(dir: number): void {
+		if (dimension) {
+			const displayNow = toDisplay(value);
+			const grid = Math.pow(10, -effectiveDecimals);
+			const displayStep = Math.max(grid, toDisplay(value + step) - displayNow);
+			const nextDisplay = Math.round((displayNow + dir * displayStep) / grid) * grid;
+			const next = clamp(fromDisplay(nextDisplay));
+			if (next !== value) onCommit(next);
+			return;
+		}
 		const next = clamp(Number((value + dir * step).toFixed(4)));
 		if (next !== value) onCommit(next);
 	}

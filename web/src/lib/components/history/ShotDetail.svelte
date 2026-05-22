@@ -240,19 +240,19 @@
 		</div>
 		<div class="hi-metric">
 			<div class="hi-metric-l">Peak pressure</div>
-			<div class="hi-metric-v">{peakPressureM.value}<em>{peakPressureM.unit || 'bar'}</em></div>
+			<div class="hi-metric-v">{peakPressureM.value}<em>{peakPressureM.unit}</em></div>
 		</div>
 		<div class="hi-metric">
 			<div class="hi-metric-l">Peak temp</div>
-			<div class="hi-metric-v">{peakTempM.value}<em>{peakTempM.unit || '°C'}</em></div>
+			<div class="hi-metric-v">{peakTempM.value}<em>{peakTempM.unit}</em></div>
 		</div>
 		<div class="hi-metric">
 			<div class="hi-metric-l">Peak wt</div>
-			<div class="hi-metric-v">{peakWeightM.value}<em>{peakWeightM.unit || 'g'}</em></div>
+			<div class="hi-metric-v">{peakWeightM.value}<em>{peakWeightM.unit}</em></div>
 		</div>
 		<div class="hi-metric">
 			<div class="hi-metric-l">Yield</div>
-			<div class="hi-metric-v">{yieldM.value}<em>{yieldM.unit || 'g'}</em></div>
+			<div class="hi-metric-v">{yieldM.value}<em>{yieldM.unit}</em></div>
 		</div>
 		<div class="hi-metric">
 			<div class="hi-metric-l">Ratio</div>

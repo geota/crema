@@ -82,10 +82,32 @@
 	/** Format a value (already in display units) — the supplied `fmt`, or step-aware default. */
 	const format = (v: number): string => (fmt ? fmt(v) : v.toFixed(effectiveDecimals));
 
-	/** Step `value` by `dir × step`, clamped to `[min, max]` (all in canonical). */
+	/**
+	 * Step `value` by `dir × step`, clamped to `[min, max]`.
+	 *
+	 * Without `dimension`: pure canonical arithmetic — `value + dir × step`.
+	 *
+	 * With `dimension`: work in **display units** so every click changes
+	 * the visible digit. A canonical step that's finer than the display
+	 * decimal grid would otherwise produce hidden clicks — e.g. dose
+	 * `step=0.1 g` ≈ 0.0035 oz, which rounds away at 2 decimals so the
+	 * user clicks `+` twice before seeing anything happen. Convert the
+	 * canonical step into display units, floor at one visible grid step
+	 * (10^-decimals), then snap the next value to the grid so visited
+	 * display numbers stay round.
+	 */
 	function inc(dir: number): void {
+		if (dimension) {
+			const displayNow = toDisplay(value);
+			const grid = Math.pow(10, -effectiveDecimals);
+			const displayStep = Math.max(grid, toDisplay(value + step) - displayNow);
+			const nextDisplay = Math.round((displayNow + dir * displayStep) / grid) * grid;
+			const next = Math.max(min, Math.min(max, fromDisplay(nextDisplay)));
+			if (next !== value) onChange?.(next);
+			return;
+		}
 		const next = Math.max(min, Math.min(max, Number((value + dir * step).toFixed(2))));
-		onChange?.(next);
+		if (next !== value) onChange?.(next);
 	}
 
 	// ── Click-to-type — mirrors StStepper's behaviour. The visible digits

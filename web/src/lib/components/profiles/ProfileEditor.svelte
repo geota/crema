@@ -38,6 +38,9 @@
 	import SegmentRow from './SegmentRow.svelte';
 	import TagInput from './TagInput.svelte';
 	import PeNumber from './PeNumber.svelte';
+	import { getSettingsStore, formatWeight } from '$lib/settings';
+
+	const settings = getSettingsStore();
 
 	let {
 		mode,
@@ -387,7 +390,6 @@
 							label="Dose"
 							value={draft.dose}
 							step={0.1}
-							unit="g"
 							dimension="weight"
 							min={5}
 							max={30}
@@ -397,7 +399,6 @@
 							label="Yield"
 							value={draft.yieldG}
 							step={0.5}
-							unit="g"
 							dimension="weight"
 							min={10}
 							max={80}
@@ -407,7 +408,6 @@
 							label="Brew temp"
 							value={draft.brewTemp}
 							step={0.5}
-							unit="°C"
 							dimension="temp"
 							min={80}
 							max={100}
@@ -430,7 +430,6 @@
 							label="Max total volume"
 							value={draft.maxTotalVolumeMl}
 							step={5}
-							unit="mL"
 							dimension="volume"
 							min={0}
 							max={1023}
@@ -456,7 +455,6 @@
 							label="Tank temp"
 							value={draft.tankTemperatureC}
 							step={1}
-							unit="°C"
 							dimension="temp"
 							min={0}
 							max={100}
@@ -477,7 +475,7 @@
 						<span>
 							<span class="pe-tog-title">Stop on weight</span>
 							<span class="pe-tog-sub">
-								End the shot when the scale reads {draft.yieldG.toFixed(1)} g.
+								End the shot when the scale reads {formatWeight(draft.yieldG, settings.current.weightUnit)}.
 							</span>
 						</span>
 					</button>
