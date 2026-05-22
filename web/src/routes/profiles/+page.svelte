@@ -219,6 +219,21 @@
 			const dir = sortDir === 'desc' ? -1 : 1;
 			return cmp * dir || a.name.localeCompare(b.name);
 		});
+		// Float the active profile to the top-left when the user hasn't
+		// explicitly chosen a sort — i.e. the page is on its default
+		// "Recent · descending" view. An explicit pick (any other key or
+		// the reversed Recent direction) means the user wants strict
+		// sort order; leave the active profile in its sorted slot.
+		// `store.activeId` may also be filtered out (wrong roast facet,
+		// hidden built-in, search miss) — in that case nothing moves.
+		const isDefaultSort = sort === 'recent' && sortDir === 'desc';
+		if (isDefaultSort && store.activeId) {
+			const idx = r.findIndex((p) => p.id === store.activeId);
+			if (idx > 0) {
+				const [active] = r.splice(idx, 1);
+				r.unshift(active);
+			}
+		}
 		return r;
 	});
 
