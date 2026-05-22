@@ -782,16 +782,23 @@
 	.pe-tags {
 		display: flex;
 		gap: 6px;
+		/* Allow chip rows with more than ~3 options (beverage type:
+		   espresso/pourover/manual/cleaning/calibrate) to wrap rather
+		   than overflow the metadata column. */
+		flex-wrap: wrap;
 	}
 	.pe-tag {
-		flex: 1 1 0;
-		padding: 7px 8px;
+		/* Size to content; the wrap rule above handles overflow. (Earlier
+		   `flex: 1 1 0` forced equal-width chips, which clipped 5-option
+		   rows in narrow columns.) */
+		flex: 0 0 auto;
+		padding: 6px 9px;
 		background: rgba(var(--tint-rgb), 0.03);
 		border: 1px solid rgba(var(--tint-rgb), 0.08);
 		border-radius: var(--radius-sm);
 		color: rgba(var(--tint-rgb), 0.7);
 		font-family: var(--font-sans);
-		font-size: 11px;
+		font-size: 10.5px;
 		text-transform: uppercase;
 		letter-spacing: var(--track-allcaps);
 		cursor: pointer;
