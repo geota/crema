@@ -43,6 +43,15 @@ const OVERRIDES_KEY = 'crema.profiles.builtinOverrides.v1';
 /** localStorage key for the id of the profile marked "active" on Brew. */
 const ACTIVE_KEY = 'crema.profiles.activeId.v1';
 
+/**
+ * localStorage key for the set of built-in ids the user has chosen to
+ * hide from the library. Built-ins are compiled into the wasm binary
+ * and can't be truly deleted (the PWA has no server to persist a
+ * deletion against); a hide-list lets users tidy up the grid without
+ * losing the ability to restore later.
+ */
+const HIDDEN_BUILTINS_KEY = 'crema.profiles.hiddenBuiltins.v1';
+
 /** The user-owned, persisted slice of a built-in profile's state. */
 interface BuiltinOverride {
 	/** Whether the user pinned this built-in to favorites. */
@@ -63,6 +72,15 @@ export class ProfileStore {
 	private overrides = $state<Record<string, BuiltinOverride>>(
 		readJson<Record<string, BuiltinOverride>>(OVERRIDES_KEY, {})
 	);
+	/**
+	 * The set of built-in ids the user has hidden from the library.
+	 * Persisted to localStorage. A hidden built-in is excluded from
+	 * `all` but is still in `builtins` — restoring it is just removing
+	 * the id from this set.
+	 */
+	private hiddenBuiltins = $state<Set<string>>(
+		new Set(readJson<string[]>(HIDDEN_BUILTINS_KEY, []))
+	);
 	/** The id of the profile marked active on the Brew dashboard. */
 	activeId = $state<string | null>(readJson<string | null>(ACTIVE_KEY, null));
 	/** Whether the built-in load has finished (drives the grid's loading state). */
@@ -78,15 +96,23 @@ export class ProfileStore {
 	private loadPromise: Promise<void> | undefined;
 
 	/**
-	 * The full library — built-ins (with user overrides folded in) followed by
-	 * custom profiles. Reactive: any mutation re-renders the grid.
+	 * The full visible library — built-ins (with user overrides folded
+	 * in, minus those the user has hidden) followed by custom profiles.
+	 * Reactive: any mutation re-renders the grid.
 	 */
 	get all(): CremaProfile[] {
-		const builtins = this.builtins.map((b) => {
-			const ov = this.overrides[b.id];
-			return ov ? { ...b, pinned: ov.pinned, lastUsed: ov.lastUsed } : b;
-		});
+		const builtins = this.builtins
+			.filter((b) => !this.hiddenBuiltins.has(b.id))
+			.map((b) => {
+				const ov = this.overrides[b.id];
+				return ov ? { ...b, pinned: ov.pinned, lastUsed: ov.lastUsed } : b;
+			});
 		return [...builtins, ...this.custom];
+	}
+
+	/** How many built-ins the user has hidden — drives the "Restore" UI. */
+	get hiddenBuiltinCount(): number {
+		return this.hiddenBuiltins.size;
 	}
 
 	/** Look up one profile by id, or `undefined` if it is not in the library. */
@@ -148,11 +174,42 @@ export class ProfileStore {
 		this.persistCustom();
 	}
 
-	/** Delete a custom profile by id and persist. Built-ins cannot be deleted. */
+	/**
+	 * Delete a profile by id and persist.
+	 *
+	 * - Custom profiles are removed from the custom list and gone for
+	 *   good (re-import the file to bring them back).
+	 * - Built-ins are added to the hidden-builtins set (they stay
+	 *   compiled into the wasm binary; this just hides them from
+	 *   `all`). Restore via {@link unhideAllBuiltins}.
+	 *
+	 * Either way, the active-id is cleared if it pointed at the
+	 * removed profile.
+	 */
 	delete(id: string): void {
-		this.custom = this.custom.filter((p) => p.id !== id);
-		this.persistCustom();
+		if (id.startsWith('builtin:')) {
+			this.hiddenBuiltins = new Set([...this.hiddenBuiltins, id]);
+			this.persistHiddenBuiltins();
+		} else {
+			this.custom = this.custom.filter((p) => p.id !== id);
+			this.persistCustom();
+		}
 		if (this.activeId === id) this.setActive(null);
+	}
+
+	/** Persist the hidden-builtins set to localStorage. */
+	private persistHiddenBuiltins(): void {
+		writeJson(HIDDEN_BUILTINS_KEY, [...this.hiddenBuiltins]);
+	}
+
+	/**
+	 * Restore every hidden built-in to the library. The user-facing
+	 * action behind the "X built-ins hidden — Restore" hint that the
+	 * Profiles page surfaces when `hiddenBuiltinCount > 0`.
+	 */
+	unhideAllBuiltins(): void {
+		this.hiddenBuiltins = new Set();
+		this.persistHiddenBuiltins();
 	}
 
 	/**

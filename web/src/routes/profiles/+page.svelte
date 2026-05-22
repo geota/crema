@@ -154,10 +154,20 @@
 		store.togglePin(id);
 	}
 
-	/** Delete a custom profile (with a confirm). */
+	/**
+	 * Delete (custom) or hide (built-in) a profile. Built-ins live in
+	 * the wasm binary so they can't be truly removed; "delete" just
+	 * adds them to a localStorage hide-list — restorable from the
+	 * footer button when any are hidden.
+	 */
 	function remove(id: string): void {
 		const profile = store.get(id);
-		if (profile && confirm(`Delete "${profile.name}"? This cannot be undone.`)) {
+		if (!profile) return;
+		const isBuiltin = profile.source === 'builtin';
+		const message = isBuiltin
+			? `Hide "${profile.name}" from the library? Restore from the footer button.`
+			: `Delete "${profile.name}"? This cannot be undone.`;
+		if (confirm(message)) {
 			store.delete(id);
 		}
 	}
@@ -475,6 +485,19 @@
 			</div>
 		{/if}
 	</div>
+
+	{#if store.hiddenBuiltinCount > 0}
+		<div class="pp-hidden-strip">
+			<span>
+				{store.hiddenBuiltinCount} built-in {store.hiddenBuiltinCount === 1
+					? 'profile is'
+					: 'profiles are'} hidden.
+			</span>
+			<button class="pp-empty-link" onclick={() => store.unhideAllBuiltins()}>
+				Restore all
+			</button>
+		</div>
+	{/if}
 </div>
 
 <style>
@@ -837,5 +860,20 @@
 	}
 	.pp-import-banner-close:hover {
 		opacity: 1;
+	}
+
+	.pp-hidden-strip {
+		display: flex;
+		align-items: center;
+		gap: 12px;
+		justify-content: center;
+		margin: 0 var(--page-pad-x) 24px;
+		padding: 10px 14px;
+		border-radius: var(--radius-sm);
+		font-family: var(--font-sans);
+		font-size: 12.5px;
+		color: rgba(var(--tint-rgb), 0.6);
+		background: rgba(var(--tint-rgb), 0.03);
+		border: 1px dashed rgba(var(--tint-rgb), 0.12);
 	}
 </style>

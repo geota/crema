@@ -54,8 +54,12 @@
 
 	const ratio = $derived(ratioLabel(profile));
 	const preinf = $derived(preinfuseSeconds(profile.segments));
-	/** Built-in profiles cannot be deleted — the trash icon is disabled. */
-	const deletable = $derived(profile.source === 'custom');
+	/**
+	 * Custom profiles delete for real; built-ins hide (since the
+	 * binary still ships them). The trash icon stays enabled for both
+	 * — only the tooltip + confirm text change.
+	 */
+	const isBuiltin = $derived(profile.source === 'builtin');
 </script>
 
 <div class="pp-card" class:is-active={active}>
@@ -147,9 +151,10 @@
 			{/if}
 			<button
 				class="pp-action-icon pp-action-icon-danger"
-				title={deletable ? 'Delete' : 'Built-in profiles cannot be deleted'}
-				disabled={!deletable}
-				onclick={() => deletable && onDelete(profile.id)}
+				title={isBuiltin
+					? 'Hide this built-in from the library — restore from the Profiles page footer'
+					: 'Delete this custom profile'}
+				onclick={() => onDelete(profile.id)}
 			>
 				<i class="ph ph-trash" aria-hidden="true"></i>
 			</button>
