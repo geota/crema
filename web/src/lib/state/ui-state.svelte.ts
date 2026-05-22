@@ -635,6 +635,16 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				event.content.state === 'Sleep' ||
 				event.content.state === 'SchedIdle' ||
 				event.content.state === 'GoingToSleep';
+			// **Reload-recovery**: if a page reload (or HMR) caught us mid-shot,
+			// `ShotStarted` was emitted before we attached, so `shotInProgress`
+			// is false and the Telemetry buffer below skips every sample —
+			// hence the brew dashboard's "cards update but chart stays blank"
+			// bug after a mid-shot reload. Treat entering `Espresso` as an
+			// implicit ShotStarted: flip `shotInProgress` on so the next
+			// Telemetry sample lands on the chart. Benign in normal flow,
+			// where ShotStarted follows MachineStateChanged immediately.
+			const espressoEntering =
+				event.content.state === 'Espresso' && !snapshot.shotInProgress;
 			// R5 — readable error text for an Error* substate, null when healthy.
 			const machineError = machineErrorText(event.content.substate);
 			// R6 — stamp when the machine first entered a resting state, so an
@@ -646,6 +656,7 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				machineState,
 				machineError,
 				...(resting ? { shotInProgress: false } : null),
+				...(espressoEntering ? { shotInProgress: true } : null),
 				...(enteringRest ? { idleSince: performance.now() } : null),
 				...(resting ? null : { idleSince: null }),
 				eventLog: appendLog(snapshot.eventLog, `MachineState -> ${machineState}`)
