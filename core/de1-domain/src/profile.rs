@@ -18,8 +18,11 @@ pub enum Pump {
     Flow,
 }
 
-/// How a step moves to its target value.
+/// How a step moves to its target value. Serializes as lowercase
+/// `"fast"` / `"smooth"` to match the community v2 profile JSON contract
+/// shared with the legacy de1app TCL and reaprime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Transition {
     /// Jump straight to the target.
     Fast,
@@ -27,13 +30,22 @@ pub enum Transition {
     Smooth,
 }
 
-/// Which temperature a step regulates.
+/// Which temperature a step regulates. Variant names match the community
+/// v2 JSON contract used by the legacy de1app TCL + reaprime. The enum
+/// describes "what the step's temperature target represents," not which
+/// sensor it reads:
+/// - `Coffee` — regulate temperature of the coffee at the basket; the
+///   firmware holds `head_temp` to the step's target.
+/// - `Water` — regulate temperature of the water exiting the group; the
+///   firmware holds `mix_temp` to the step's target. Flips the
+///   wire-format `target_mix_temp` flag bit on each frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum TempSensor {
-    /// The basket (group head) temperature.
-    Basket,
-    /// The mix temperature (disables showerhead compensation).
-    Mix,
+    /// Regulate temperature of the coffee at the basket.
+    Coffee,
+    /// Regulate temperature of the water exiting the group.
+    Water,
 }
 
 /// The metric an exit condition watches.
@@ -121,7 +133,7 @@ impl ProfileStep {
                         ..
                     })
                 ),
-                target_mix_temp: matches!(self.temp_sensor, TempSensor::Mix),
+                target_mix_temp: matches!(self.temp_sensor, TempSensor::Water),
                 interpolate: matches!(self.transition, Transition::Smooth),
                 // The legacy app always sets IgnoreLimit: the header limits are
                 // advisory, and the per-step limiter is the real control.
@@ -272,7 +284,7 @@ mod tests {
             pump,
             target: 9.0,
             temperature_c: 92.0,
-            temp_sensor: TempSensor::Basket,
+            temp_sensor: TempSensor::Coffee,
             transition: Transition::Fast,
             duration_seconds: 20.0,
             exit: None,
@@ -350,7 +362,7 @@ mod tests {
     #[test]
     fn the_mix_sensor_sets_target_mix_temp() {
         let mut s = step("a", Pump::Pressure);
-        s.temp_sensor = TempSensor::Mix;
+        s.temp_sensor = TempSensor::Water;
         assert!(
             profile(vec![s]).assemble().unwrap().frames[0]
                 .flags

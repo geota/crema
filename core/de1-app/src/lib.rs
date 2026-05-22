@@ -3140,7 +3140,7 @@ mod tests {
                 pump,
                 target: 9.0,
                 temperature_c: 92.0,
-                temp_sensor: TempSensor::Basket,
+                temp_sensor: TempSensor::Coffee,
                 transition: Transition::Fast,
                 duration_seconds: 20.0,
                 exit: None,

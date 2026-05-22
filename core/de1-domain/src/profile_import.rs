@@ -163,8 +163,8 @@ fn v2_step_to_profile_step(step: &V2Step) -> Result<ProfileStep, ImportError> {
         pump,
         target,
         temperature_c: step.temperature.as_f32(),
-        temp_sensor: parse_sensor(step.sensor.as_deref()),
-        transition: parse_transition(step.transition.as_deref()),
+        temp_sensor: parse_sensor(step.sensor.as_deref())?,
+        transition: parse_transition(step.transition.as_deref())?,
         duration_seconds: step.seconds.as_f32(),
         exit,
         volume_limit_ml: clamp_volume(step.volume.as_f32()),
@@ -283,8 +283,8 @@ fn step_to_v2(step: &ProfileStep) -> V2StepOut {
         name: step.name.clone(),
         temperature: step.temperature_c,
         sensor: match step.temp_sensor {
-            TempSensor::Basket => "coffee",
-            TempSensor::Mix => "water",
+            TempSensor::Coffee => "coffee",
+            TempSensor::Water => "water",
         },
         pump: match step.pump {
             Pump::Pressure => "pressure",
@@ -415,8 +415,8 @@ fn tcl_step_to_profile_step(step: &TclDict) -> Result<ProfileStep, ImportError> 
         pump,
         target,
         temperature_c: step.get_f32("temperature").unwrap_or(0.0),
-        temp_sensor: parse_sensor(step.get("sensor")),
-        transition: parse_transition(step.get("transition")),
+        temp_sensor: parse_sensor(step.get("sensor"))?,
+        transition: parse_transition(step.get("transition"))?,
         duration_seconds: step.get_f32("seconds").unwrap_or(0.0),
         exit,
         volume_limit_ml: clamp_volume(step.get_f32("volume").unwrap_or(0.0)),
@@ -506,7 +506,7 @@ fn preinfusion_frame(
         pump: Pump::Flow,
         target: flow_rate,
         temperature_c,
-        temp_sensor: TempSensor::Basket,
+        temp_sensor: TempSensor::Coffee,
         transition: Transition::Fast,
         duration_seconds: seconds,
         exit: Some(ExitCondition {
@@ -681,7 +681,7 @@ fn pressure_frame(
         pump: Pump::Pressure,
         target: pressure,
         temperature_c,
-        temp_sensor: TempSensor::Basket,
+        temp_sensor: TempSensor::Coffee,
         transition,
         duration_seconds: seconds,
         exit: None,
@@ -704,7 +704,7 @@ fn flow_frame(
         pump: Pump::Flow,
         target: flow,
         temperature_c,
-        temp_sensor: TempSensor::Basket,
+        temp_sensor: TempSensor::Coffee,
         transition,
         duration_seconds: seconds,
         exit: None,
@@ -721,7 +721,7 @@ fn empty_frame() -> ProfileStep {
         pump: Pump::Flow,
         target: 0.0,
         temperature_c: 90.0,
-        temp_sensor: TempSensor::Basket,
+        temp_sensor: TempSensor::Coffee,
         transition: Transition::Smooth,
         duration_seconds: 0.0,
         exit: None,
@@ -807,22 +807,30 @@ fn parse_pump(pump: Option<&str>) -> Result<Pump, ImportError> {
     }
 }
 
-/// Parse a legacy transition field, defaulting to [`Transition::Fast`].
-fn parse_transition(transition: Option<&str>) -> Transition {
+/// Parse a legacy transition field. Strict on known values
+/// (`"fast"`/`"smooth"`); a missing field defaults to `Transition::Fast`
+/// per the legacy TCL's behaviour; anything else is an
+/// [`ImportError::UnknownValue`] — surfaces typos at import time rather
+/// than silently degrading mid-shot. Pre-2026-05-22 builds silently fell
+/// back to `Fast` on any unknown value (docs/22 §4.2).
+fn parse_transition(transition: Option<&str>) -> Result<Transition, ImportError> {
     match transition.map(str::trim) {
-        Some("smooth") => Transition::Smooth,
-        // The legacy default for an absent transition is "fast".
-        _ => Transition::Fast,
+        Some("fast") | None => Ok(Transition::Fast),
+        Some("smooth") => Ok(Transition::Smooth),
+        Some(other) => Err(ImportError::UnknownValue("transition", other.to_string())),
     }
 }
 
-/// Parse a legacy temperature-sensor field. The legacy `"coffee"` sensor is
-/// Crema's [`TempSensor::Basket`]; `"water"` is [`TempSensor::Mix`].
-fn parse_sensor(sensor: Option<&str>) -> TempSensor {
+/// Parse a legacy temperature-sensor field. The wire spelling
+/// `"coffee"` maps to Crema's [`TempSensor::Coffee`] (the basket
+/// thermocouple); `"water"` maps to [`TempSensor::Water`] (the mix-out
+/// thermocouple). Strict on unknown values per docs/22 §4.2; an absent
+/// field defaults to `Coffee` (legacy TCL default).
+fn parse_sensor(sensor: Option<&str>) -> Result<TempSensor, ImportError> {
     match sensor.map(str::trim) {
-        Some("water") => TempSensor::Mix,
-        // "coffee" and the absent default both regulate the basket.
-        _ => TempSensor::Basket,
+        Some("coffee") | None => Ok(TempSensor::Coffee),
+        Some("water") => Ok(TempSensor::Water),
+        Some(other) => Err(ImportError::UnknownValue("sensor", other.to_string())),
     }
 }
 
@@ -1169,7 +1177,7 @@ mod tests {
         let p = import_v2_json(V2_ADVANCED).unwrap();
         assert_eq!(p.steps[0].transition, Transition::Fast);
         assert_eq!(p.steps[1].transition, Transition::Smooth);
-        assert_eq!(p.steps[0].temp_sensor, TempSensor::Basket);
+        assert_eq!(p.steps[0].temp_sensor, TempSensor::Coffee);
         assert_eq!(p.steps[1].temperature_c, 88.5);
     }
 
@@ -1297,11 +1305,11 @@ mod tests {
             ]
         }"#;
         let original = import_v2_json(json).unwrap();
-        assert_eq!(original.steps[0].temp_sensor, TempSensor::Mix);
+        assert_eq!(original.steps[0].temp_sensor, TempSensor::Water);
         assert_eq!(original.steps[0].volume_limit_ml, 250);
         let reimported = import_v2_json(&export_v2_json(&original)).unwrap();
         assert_eq!(reimported, original);
-        assert_eq!(reimported.steps[0].temp_sensor, TempSensor::Mix);
+        assert_eq!(reimported.steps[0].temp_sensor, TempSensor::Water);
     }
 
     #[test]
