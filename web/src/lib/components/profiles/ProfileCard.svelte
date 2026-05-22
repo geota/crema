@@ -54,11 +54,8 @@
 
 	const ratio = $derived(ratioLabel(profile));
 	const preinf = $derived(preinfuseSeconds(profile.segments));
-	/** Built-in profiles cannot be deleted — the overflow menu hides Delete. */
+	/** Built-in profiles cannot be deleted — the trash icon is disabled. */
 	const deletable = $derived(profile.source === 'custom');
-
-	/** Whether the overflow menu is open. */
-	let menuOpen = $state(false);
 </script>
 
 <div class="pp-card" class:is-active={active}>
@@ -139,74 +136,23 @@
 			<button class="pp-action-icon" title="Edit" onclick={() => onEdit(profile.id)}>
 				<i class="ph ph-pencil-simple" aria-hidden="true"></i>
 			</button>
-			<div class="pp-card-menu">
+			{#if onExport}
 				<button
 					class="pp-action-icon"
-					title="More"
-					aria-haspopup="menu"
-					aria-expanded={menuOpen}
-					onclick={() => (menuOpen = !menuOpen)}
+					title="Download as community v2 .json — re-importable to Crema, reaprime, Visualizer or de1app"
+					onclick={() => onExport(profile.id)}
 				>
-					<i class="ph ph-dots-three" aria-hidden="true"></i>
+					<i class="ph ph-download-simple" aria-hidden="true"></i>
 				</button>
-				{#if menuOpen}
-					<!-- A click-away backdrop closes the menu. -->
-					<button
-						class="pp-menu-scrim"
-						aria-label="Close menu"
-						onclick={() => (menuOpen = false)}
-					></button>
-					<div class="pp-menu" role="menu">
-						<button
-							class="pp-menu-item"
-							role="menuitem"
-							onclick={() => {
-								menuOpen = false;
-								onTogglePin(profile.id);
-							}}
-						>
-							<i class={profile.pinned ? 'ph ph-star-half' : 'ph ph-star'} aria-hidden="true"
-							></i>
-							{profile.pinned ? 'Unpin from favorites' : 'Pin to favorites'}
-						</button>
-						<button
-							class="pp-menu-item"
-							role="menuitem"
-							onclick={() => {
-								menuOpen = false;
-								onDuplicate(profile.id);
-							}}
-						>
-							<i class="ph ph-copy" aria-hidden="true"></i> Duplicate
-						</button>
-						{#if onExport}
-							<button
-								class="pp-menu-item"
-								role="menuitem"
-								onclick={() => {
-									menuOpen = false;
-									onExport(profile.id);
-								}}
-								title="Download as community v2 .json — re-importable to Crema, reaprime, Visualizer or de1app"
-							>
-								<i class="ph ph-download-simple" aria-hidden="true"></i> Export…
-							</button>
-						{/if}
-						<button
-							class="pp-menu-item pp-menu-item-danger"
-							role="menuitem"
-							disabled={!deletable}
-							title={deletable ? '' : 'Built-in profiles cannot be deleted'}
-							onclick={() => {
-								menuOpen = false;
-								if (deletable) onDelete(profile.id);
-							}}
-						>
-							<i class="ph ph-trash" aria-hidden="true"></i> Delete
-						</button>
-					</div>
-				{/if}
-			</div>
+			{/if}
+			<button
+				class="pp-action-icon pp-action-icon-danger"
+				title={deletable ? 'Delete' : 'Built-in profiles cannot be deleted'}
+				disabled={!deletable}
+				onclick={() => deletable && onDelete(profile.id)}
+			>
+				<i class="ph ph-trash" aria-hidden="true"></i>
+			</button>
 		</div>
 	</div>
 </div>
@@ -214,62 +160,20 @@
 <style>
 	/* Structural styles (.pp-card, .pp-card-head, .pp-preview, .pp-card-body,
 	   …) live in the handoff's profiles-page.css, imported globally by app.css.
-	   Only the overflow menu — which the design mocked but never styled — is
-	   defined here. */
-	.pp-card-menu {
-		position: relative;
+	   The card-overflow menu was retired 2026-05-22 — Download (was Export…)
+	   and Delete moved into the icon row, Duplicate is already there, and
+	   Pin/Unpin is already on the card head (the star). Only the danger
+	   variant of `.pp-action-icon` for the far-right Delete trash needs a
+	   local style. */
+	.pp-action-icon-danger {
+		color: var(--danger);
 	}
-	.pp-menu-scrim {
-		position: fixed;
-		inset: 0;
-		background: transparent;
-		border: 0;
-		cursor: default;
-		z-index: 20;
+	.pp-action-icon-danger:hover:not(:disabled) {
+		color: var(--danger);
+		background: rgba(var(--danger-rgb), 0.12);
 	}
-	.pp-menu {
-		position: absolute;
-		right: 0;
-		bottom: calc(100% + 6px);
-		z-index: 21;
-		background: var(--bg-surface-2);
-		border: 1px solid rgba(var(--tint-rgb), 0.1);
-		border-radius: var(--radius-sm);
-		box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-		padding: 4px;
-		display: flex;
-		flex-direction: column;
-		min-width: 180px;
-	}
-	.pp-menu-item {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		background: transparent;
-		border: 0;
-		border-radius: 6px;
-		padding: 8px 10px;
-		color: var(--fg-1);
-		font-family: var(--font-sans);
-		font-size: 12px;
-		cursor: pointer;
-		text-align: left;
-		transition: background var(--dur-1) var(--ease);
-	}
-	.pp-menu-item i {
-		font-size: 14px;
-	}
-	.pp-menu-item:hover {
-		background: rgba(var(--tint-rgb), 0.06);
-	}
-	.pp-menu-item:disabled {
-		opacity: 0.4;
+	.pp-action-icon:disabled {
+		opacity: 0.35;
 		cursor: not-allowed;
-	}
-	.pp-menu-item-danger {
-		color: var(--warning);
-	}
-	.pp-menu-item-danger:hover:not(:disabled) {
-		background: rgba(217, 119, 87, 0.1);
 	}
 </style>
