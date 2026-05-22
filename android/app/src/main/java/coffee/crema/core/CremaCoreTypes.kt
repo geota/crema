@@ -59,7 +59,12 @@ data class EventTelemetryInner (
 	/// Mix temperature, °C — the DE1's blended "group" water temperature.
 	val mix_temp: Float,
 	/// Steam-heater temperature, °C.
-	val steam_temp: Float
+	val steam_temp: Float,
+	/// Running shot volume dispensed so far, mL — integrated from the
+	/// telemetry flow stream against the DE1's `sample_time` ticks
+	/// (BLE-jitter-immune when the line-frequency is known, host-clock
+	/// fallback otherwise). Resets to 0 on every `ShotStarted`.
+	val dispensed_volume_ml: Float
 )
 
 /// Generated type representing the anonymous struct variant `ScaleReading` of the `Event` Rust enum
@@ -419,9 +424,16 @@ sealed class Event {
 	@Serializable
 	@SerialName("FirmwareLockoutHit")
 	data class FirmwareLockoutHit(val content: EventFirmwareLockoutHitInner): Event()
-	/// The DE1's `ShotHeader` was read from `HeaderWrite` (`cuuid_0F`) —
-	/// emitted once after the BLE shell reads the characteristic at connect
-	/// time. Carries the shape of the currently-loaded profile.
+	/// **DORMANT — see [`Source::De1ProfileHeader`] and docs/16 §6.1.** This
+	/// event would carry the DE1's reported `ShotHeader` if the firmware
+	/// supported reading the loaded-profile buffer on `cuuid_0F`. It does
+	/// not (snoop-verified 2026-05-21), so the BLE shell no longer triggers
+	/// the Read and this variant is never emitted in the current code path.
+	/// 
+	/// Kept for forward-compat — the decode path
+	/// ([`CremaCore::handle_profile_header_read`](crate::CremaCore)) and
+	/// every consumer (UI, tests) remain in place; flipping the BLE shell
+	/// back to issuing a Read is one line in `web/src/lib/ble/de1.ts`.
 	@Serializable
 	@SerialName("ProfileHeaderRead")
 	data class ProfileHeaderRead(val content: EventProfileHeaderReadInner): Event()

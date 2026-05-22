@@ -199,6 +199,18 @@ export interface CremaCore {
 	 * facade renames it to `Name` for UI clarity.)
 	 */
 	activeProfileName(): Promise<string | null>;
+	/**
+	 * Pin the AC mains frequency the volume integrator uses. `50` or `60`
+	 * pins; `0` returns to auto-detect. (The wasm enum can't express
+	 * `Option<f32>` cleanly so `0` is the auto sentinel.)
+	 */
+	setLineFrequencyOverride(hz: 0 | 50 | 60): Promise<void>;
+	/**
+	 * The effective AC mains frequency in use, Hz — the override if pinned,
+	 * else the detector's locked value (after 1+ s of telemetry into a
+	 * shot), else `null`.
+	 */
+	lineFrequencyHz(): Promise<number | null>;
 	/** Build a `CoreOutput` whose command queries the connected scale's settings. */
 	queryScaleSettings(): Promise<CoreOutput>;
 	/**
@@ -420,6 +432,13 @@ async function createCore(): Promise<CremaCore> {
 		async activeProfileName() {
 			const t = bridge.active_profile_title();
 			return t === undefined ? null : t;
+		},
+		async setLineFrequencyOverride(hz) {
+			bridge.set_line_frequency_override(hz);
+		},
+		async lineFrequencyHz() {
+			const hz = bridge.line_frequency_hz();
+			return hz === undefined ? null : hz;
 		},
 		async queryScaleSettings() {
 			return parseOutput(bridge.query_scale_settings());

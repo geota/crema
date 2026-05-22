@@ -28,6 +28,7 @@ import { getBeanStore } from '$lib/bean';
 import { getHistoryStore } from '$lib/history';
 import { getCaptureRecorder, getCaptureStore } from '$lib/capture';
 import { getProfileStore, toCoreProfile } from '$lib/profiles';
+import { getSettingsStore } from '$lib/settings';
 import { getMaintenanceStore } from '$lib/maintenance';
 import { parseCaptureFile, replayEvents, ReplayAbortedError } from '$lib/replay';
 import { describeError } from '$lib/utils/error';
@@ -460,6 +461,24 @@ export class CremaApp {
 	}
 
 	/**
+	 * Pin the AC mains frequency the core's volume integrator uses. Called
+	 * by the Advanced settings section whenever the user changes the
+	 * "AC mains frequency" select.
+	 */
+	async setLineFrequencyOverride(hz: 0 | 50 | 60): Promise<void> {
+		await this.core.setLineFrequencyOverride(hz);
+	}
+
+	/**
+	 * The effective AC mains frequency the core's volume integrator is
+	 * currently using — `null` until either the user pins a value or the
+	 * auto-detector locks (1+ s of telemetry into the first shot).
+	 */
+	async lineFrequencyHz(): Promise<number | null> {
+		return this.core.lineFrequencyHz();
+	}
+
+	/**
 	 * Re-upload the active profile right after the DE1 connection enters
 	 * `ready`. Fire-and-forget — a failure here is logged via the normal
 	 * `applyCoreOutput` event stream and does not block any other connect
@@ -714,5 +733,17 @@ export class CremaApp {
  */
 export async function createCremaApp(): Promise<CremaApp> {
 	const core = await loadCore();
-	return new CremaApp(core);
+	const app = new CremaApp(core);
+	// Push the persisted AC mains-frequency preference into the core's
+	// volume integrator. `0` = auto (the core's auto-detector decides);
+	// `50` / `60` pin the value. Done once at construction; subsequent
+	// changes flow via `app.setLineFrequencyOverride(...)` from the
+	// Advanced settings section.
+	const hz = getSettingsStore().current.lineFrequencyHz;
+	if (hz === 50 || hz === 60) {
+		void core.setLineFrequencyOverride(hz);
+	} else {
+		void core.setLineFrequencyOverride(0);
+	}
+	return app;
 }

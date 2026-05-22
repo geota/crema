@@ -184,6 +184,13 @@ export interface UiSnapshot {
 	/** Elapsed time of the current/last shot, ms — `latestTelemetry.elapsed`. */
 	readonly shotElapsed: number;
 	/**
+	 * Volume dispensed in the current shot, mL — integrated by the core
+	 * from each `ShotSample`'s flow against the DE1's `sample_time`
+	 * ticks (`docs/02-ble-protocol.md` §3.3). Resets to 0 on every
+	 * `ShotStarted`; updated on every `Telemetry` event.
+	 */
+	readonly dispensedVolumeMl: number;
+	/**
 	 * Zero-based index of the profile frame the DE1 is currently executing,
 	 * from `Event::ShotFrameChanged`. Reset to `0` on `ShotStarted`; drives the
 	 * brew dashboard's phase indicator against the active profile's segments.
@@ -413,6 +420,7 @@ export const INITIAL_SNAPSHOT: UiSnapshot = {
 	shotTelemetry: [],
 	shotInProgress: false,
 	shotElapsed: 0,
+	dispensedVolumeMl: 0,
 	shotFrame: 0,
 	completedShot: null,
 	de1Diagnostics: EMPTY_DE1_DIAGNOSTICS,
@@ -609,6 +617,7 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				shotTelemetry: [],
 				shotInProgress: true,
 				shotElapsed: 0,
+				dispensedVolumeMl: 0,
 				shotFrame: 0,
 				completedShot: null,
 				eventLog: appendLog(snapshot.eventLog, 'Shot started')
@@ -655,7 +664,8 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				telemetry: line,
 				latestTelemetry: sample,
 				shotTelemetry: series,
-				shotElapsed: t.elapsed
+				shotElapsed: t.elapsed,
+				dispensedVolumeMl: t.dispensed_volume_ml
 			};
 		}
 		case 'ScaleReading': {

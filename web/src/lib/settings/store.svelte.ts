@@ -93,6 +93,13 @@ export interface Settings {
 	autoConnectOnLaunch: boolean;
 	/** Chart telemetry sample rate, Hz. App preference (display only). */
 	telemetryRateHz: number;
+	/**
+	 * AC mains frequency override for the DE1's flow → volume integrator.
+	 * `0` (default) means **auto-detect** from the live `sample_time`
+	 * stream; `50` / `60` pins the value. Sending the pin to the core
+	 * makes the integrator use it instead of the auto-detector's lock.
+	 */
+	lineFrequencyHz: 0 | 50 | 60;
 
 	// ── Sharing (Visualizer) ─────────────────────────────────────────────
 	/** Auto-upload finished shots to Visualizer. */
@@ -141,6 +148,7 @@ export const DEFAULT_SETTINGS: Settings = {
 
 	autoConnectOnLaunch: true,
 	telemetryRateHz: 50,
+	lineFrequencyHz: 0,
 
 	visualizerAutoUpload: true,
 	visualizerPrivacy: 'unlisted',

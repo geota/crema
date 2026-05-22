@@ -740,6 +740,27 @@ impl CremaBridge {
     pub fn active_profile_title(&self) -> Option<String> {
         self.core().active_profile_title().map(str::to_owned)
     }
+
+    /// Volume dispensed in the current shot, mL.
+    pub fn dispensed_volume_ml(&self) -> f32 {
+        self.core().dispensed_volume_ml()
+    }
+
+    /// The effective AC mains frequency the volume integrator uses, Hz.
+    /// `None` until either the user pins it via
+    /// [`set_line_frequency_override`](Self::set_line_frequency_override)
+    /// or the auto-detector locks (1+ second of telemetry into a shot).
+    pub fn line_frequency_hz(&self) -> Option<f32> {
+        self.core().line_frequency_hz()
+    }
+
+    /// Pin the AC mains frequency. `50.0` or `60.0` overrides the
+    /// auto-detector; `0.0` returns to auto (the UniFFI surface uses
+    /// `0.0` as the "auto" sentinel to keep the type as `f32`).
+    pub fn set_line_frequency_override(&self, hz: f32) {
+        let override_hz = if hz > 0.0 { Some(hz) } else { None };
+        self.core().set_line_frequency_override(override_hz);
+    }
 }
 
 /// Serialize a [`CoreOutput`] to JSON for the shell.
