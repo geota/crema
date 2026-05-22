@@ -241,42 +241,56 @@
 	}
 
 	/**
-	 * Map the shared `eventLog` ({@link LogLine}s, newest-first) into rows. The
-	 * log messages are free-form, so there is no reliable categorical event
-	 * keyword to lift into a separate uppercase column — instead each row is
-	 * tagged `highlight` (a milestone) or `muted` (routine state noise) so the
-	 * feed reads at a glance without inventing structure the data lacks. The
-	 * `LogLine.id` carries through as the row key — a stable key for this
-	 * newest-first prepended list, where an array index would re-bind every
-	 * row on each new entry.
+	 * The activity panel is **scale-only** by design — DE1 / shot / machine /
+	 * MMR noise belongs on the Brew dashboard's debug overlay, not here.
+	 * A log line counts as scale-related when its text mentions "scale" or
+	 * "tare", or is one of the scale-specific connection lines the
+	 * `ScaleManager` emits via `onStatus` (recognised scale label,
+	 * subscribing, ready). Strict, case-insensitive substring match — no
+	 * regex, no allocations beyond the filter.
 	 */
+	function isScaleEvent(text: string): boolean {
+		const d = text.toLowerCase();
+		return (
+			d.includes('scale') ||
+			d.includes('tare') ||
+			d.includes('bookoo') ||
+			d.startsWith('→ scale') ||
+			d.includes('beeper') ||
+			d.includes('anti-mistouch') ||
+			d.includes('auto-stop mode')
+		);
+	}
+
 	/**
-	 * Search-filter input for the activity log. Empty matches every line; a
-	 * non-empty value matches the line text case-insensitively (no regex —
-	 * one substring against `detail.toLowerCase()`). Use this to cut
-	 * water-level / shot-frame noise out of view when looking for a
-	 * specific event ("upload", "calibration", "BLE", …).
+	 * Search-filter input for the activity log. Empty matches every
+	 * (already scale-filtered) line; a non-empty value matches the line
+	 * text case-insensitively (no regex — one substring against
+	 * `detail.toLowerCase()`). Use this to find a specific event
+	 * ("connect", "disconnect", "stale", "config", …).
 	 */
 	let activitySearch = $state('');
 
+	/** Every scale-related log entry, before the search filter. */
+	const scaleEventLog = $derived(eventLog.filter((line) => isScaleEvent(line.text)));
+
+	/**
+	 * Map the (already scale-filtered) event log into rows, applying the
+	 * search filter. Each row is tagged `highlight` (a milestone) or
+	 * `muted` (routine state noise) so the feed reads at a glance.
+	 */
 	const activityRows = $derived.by<ActivityRow[]>(() => {
 		const needle = activitySearch.trim().toLowerCase();
-		return eventLog
+		return scaleEventLog
 			.filter((line) => needle === '' || line.text.toLowerCase().includes(needle))
 			.map((line) => {
 				const d = line.text.toLowerCase();
 				const highlight =
-					d.includes('shot started') ||
-					d.includes('shot complete') ||
-					d.includes('auto-stop') ||
-					d.includes('steam session');
+					d.includes('connected') ||
+					d.includes('ready — receiving') ||
+					d.includes('reconnected');
 				const muted =
-					d.startsWith('machinestate ->') ||
-					d.startsWith('shot phase ->') ||
-					d.startsWith('shot frame ->') ||
-					d.includes('scale stale') ||
-					d.startsWith('water ') ||
-					d.startsWith('mmr ');
+					d.includes('scale stale') || d.startsWith('→ scale');
 				return { id: line.id, time: line.time, detail: line.text, highlight, muted };
 			});
 	});
@@ -551,7 +565,7 @@
 		<div class="sc-activity">
 			<div class="sc-activity-head">
 				<span>Recent activity</span>
-				<span class="sc-activity-count">{activityRows.length} / {eventLog.length}</span>
+				<span class="sc-activity-count">{activityRows.length} / {scaleEventLog.length}</span>
 			</div>
 			<div class="sc-activity-search">
 				<i class="ph ph-magnifying-glass sc-activity-search-icon" aria-hidden="true"></i>
@@ -575,9 +589,9 @@
 			<div class="sc-activity-list">
 				{#if activityRows.length === 0}
 					<div class="sc-activity-empty">
-						{eventLog.length === 0
-							? 'No activity yet — connect a scale to begin.'
-							: `No entries match "${activitySearch}".`}
+						{scaleEventLog.length === 0
+							? 'No scale activity yet — connect a scale to begin.'
+							: `No scale entries match "${activitySearch}".`}
 					</div>
 				{:else}
 					{#each activityRows as row (row.id)}

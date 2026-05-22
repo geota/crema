@@ -215,7 +215,14 @@ export class CremaApp {
 		});
 		this.scale = new ScaleManager(core, {
 			onCoreOutput: (output) => this.applyCoreOutput(output),
-			onStatus: (line) => this.state.patch({ status: line }),
+			// Like DE1 onStatus: the scale's connect/disconnect/reconnect
+			// diagnostics are both the live status and an event-log entry,
+			// so the Scale page's Activity panel sees the connection
+			// timeline alongside the wire-level config events.
+			onStatus: (line) => {
+				this.state.patch({ status: line });
+				this.state.log(line);
+			},
 			onState: (scaleState) => this.state.patch({ scaleState }),
 			onScaleIdentified: (advertisedName) => {
 				void this.refreshScaleCapabilities(advertisedName);
