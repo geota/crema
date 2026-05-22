@@ -74,19 +74,7 @@ export interface Settings {
 	/** Flush the group before each shot. */
 	groupFlushBeforeShot: boolean;
 
-	// ── Sound & feedback ─────────────────────────────────────────────────
-	/** Soft tone when extraction begins. */
-	shotStartTone: boolean;
-	/** Tone when stop-on-weight triggers. */
-	shotEndTone: boolean;
-	/** Chime for maintenance reminders. */
-	maintenanceReminders: boolean;
-	/** Cue volume, 0–100 %. */
-	volumePercent: number;
-
 	// ── Machine ──────────────────────────────────────────────────────────
-	/** Reconnect the last-used DE1 on launch. App preference. */
-	autoConnectOnLaunch: boolean;
 	/** Chart telemetry sample rate, Hz. App preference (display only). */
 	telemetryRateHz: number;
 	/**
@@ -164,12 +152,6 @@ export const DEFAULT_SETTINGS: Settings = {
 	autoPurgeAfterSteam: true,
 	groupFlushBeforeShot: false,
 
-	shotStartTone: true,
-	shotEndTone: true,
-	maintenanceReminders: true,
-	volumePercent: 60,
-
-	autoConnectOnLaunch: true,
 	telemetryRateHz: 50,
 	lineFrequencyHz: 0,
 	suppressDe1Sleep: true,

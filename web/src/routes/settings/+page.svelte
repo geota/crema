@@ -20,7 +20,6 @@
 	 *   water counters the shell does not expose.
 	 * - **Display & units** — real: units, density, screensaver persisted; the
 	 *   theme control is fully end-to-end (sets `data-theme` on `<html>`).
-	 * - **Sound & feedback** — real: persisted app preferences.
 	 * - **Sharing** — Visualizer upload *preferences* are real & persisted; the
 	 *   Visualizer connection / sign-in / upload need the external service and
 	 *   are faithful local UI. History export is real (a JSON download).
@@ -38,7 +37,6 @@
 	import BrewDefaultsSection from '$lib/components/settings/sections/BrewDefaultsSection.svelte';
 	import WaterSection from '$lib/components/settings/sections/WaterSection.svelte';
 	import DisplaySection from '$lib/components/settings/sections/DisplaySection.svelte';
-	import SoundSection from '$lib/components/settings/sections/SoundSection.svelte';
 	import SharingSection from '$lib/components/settings/sections/SharingSection.svelte';
 	import AdvancedSection from '$lib/components/settings/sections/AdvancedSection.svelte';
 	import CalibrationSection from '$lib/components/settings/sections/CalibrationSection.svelte';
@@ -63,7 +61,6 @@
 		{ id: 'brew', label: 'Brew defaults', icon: 'coffee' },
 		{ id: 'water', label: 'Water & maintenance', icon: 'drop' },
 		{ id: 'display', label: 'Display & units', icon: 'monitor' },
-		{ id: 'sound', label: 'Sound & feedback', icon: 'speaker-simple-high' },
 		{ id: 'sharing', label: 'Sharing', icon: 'share-network' },
 		{ id: 'calibration', label: 'Calibration', icon: 'gauge' },
 		{ id: 'advanced', label: 'Advanced', icon: 'wrench' },
@@ -115,8 +112,6 @@
 				<WaterSection />
 			{:else if active === 'display'}
 				<DisplaySection />
-			{:else if active === 'sound'}
-				<SoundSection />
 			{:else if active === 'sharing'}
 				<SharingSection />
 			{:else if active === 'calibration'}
