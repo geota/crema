@@ -301,6 +301,11 @@
 		if (!profile) return;
 		if (showingHidden && profile.source === 'builtin') {
 			store.unhideBuiltin(id);
+			// When the user empties the hide-set, the "Hidden" filter
+			// pill disappears — and a stale `tag === 'hidden'` would
+			// leave them staring at an empty grid. Jump back to All so
+			// the just-restored profile is visible in context.
+			if (store.hiddenBuiltinCount === 0) tag = 'all';
 			return;
 		}
 		if (profile.source === 'builtin') {
