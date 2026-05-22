@@ -1,7 +1,8 @@
 <script lang="ts">
 	/**
-	 * `SteamStepper` — the Steam card, ported from the design's `SteamStepper`
-	 * in `quick-controls-v2.jsx`. A "Steam" prefix with a Time | Flow toggle.
+	 * `SteamStepper` — the Steam card. "Steam" prefix with a Time | Flow |
+	 * Temp three-way toggle (Temp added 2026-05-22 — DE1 firmware target,
+	 * mirrors the ShotSettings `steamTempC` field).
 	 */
 	import type { BrewParamState } from './brew-params.svelte';
 	import QSplitLabel from './QSplitLabel.svelte';
@@ -18,10 +19,11 @@
 		prefix="Steam"
 		options={[
 			{ id: 'time', label: 'time' },
-			{ id: 'flow', label: 'flow' }
+			{ id: 'flow', label: 'flow' },
+			{ id: 'temp', label: 'temp' }
 		]}
 		value={p.steamMode}
-		onChange={(v) => params.set('steamMode', v as 'time' | 'flow')}
+		onChange={(v) => params.set('steamMode', v as 'time' | 'flow' | 'temp')}
 	/>
 	{#if p.steamMode === 'time'}
 		<QStepper
@@ -40,7 +42,7 @@
 			unit="s"
 			onChange={(v) => params.set('steamTime', v)}
 		/>
-	{:else}
+	{:else if p.steamMode === 'flow'}
 		<QStepper
 			value={p.steamFlow}
 			unit="ml/s"
@@ -56,6 +58,22 @@
 			value={p.steamFlow}
 			onChange={(v) => params.set('steamFlow', v)}
 			fmt={(v) => v.toFixed(1)}
+		/>
+	{:else}
+		<QStepper
+			value={p.steamTemp}
+			dimension="temp"
+			min={120}
+			max={170}
+			step={0.5}
+			onChange={(v) => params.set('steamTemp', v)}
+		/>
+		<div style="height:6px"></div>
+		<QChipRow
+			options={[140, 145, 148, 150, 155]}
+			value={p.steamTemp}
+			dimension="temp"
+			onChange={(v) => params.set('steamTemp', v)}
 		/>
 	{/if}
 </div>

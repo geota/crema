@@ -1,7 +1,14 @@
 <script lang="ts">
 	/**
-	 * `PreinfFlushStepper` — the combined Pre-Infuse | Flush card, ported from
-	 * the design's `PreinfFlushStepper` in `quick-controls-v2.jsx`.
+	 * `PreinfFlushStepper` — the FLUSH bucket: a `Time | Temp` split.
+	 *
+	 * Repurposed 2026-05-22 — pre-infuse moved to the BREW bucket
+	 * (`BrewTempStepper`) where it pairs naturally with brew-temp; this
+	 * card became Flush-only and gained a Temp option (the FlushTemp
+	 * MMR setpoint, formerly read-only).
+	 *
+	 * Component filename kept for import stability; conceptually it's
+	 * now "FlushStepper."
 	 */
 	import type { BrewParamState } from './brew-params.svelte';
 	import QSplitLabel from './QSplitLabel.svelte';
@@ -15,31 +22,15 @@
 
 <div>
 	<QSplitLabel
+		prefix="Flush"
 		options={[
-			{ id: 'preinf', label: 'Pre-infuse' },
-			{ id: 'flush', label: 'Flush' }
+			{ id: 'time', label: 'time' },
+			{ id: 'temp', label: 'temp' }
 		]}
-		value={p.timeMode}
-		onChange={(v) => params.set('timeMode', v as 'preinf' | 'flush')}
+		value={p.flushMode}
+		onChange={(v) => params.set('flushMode', v as 'time' | 'temp')}
 	/>
-	{#if p.timeMode === 'preinf'}
-		<QStepper
-			value={p.preinf}
-			unit="s"
-			min={0}
-			max={30}
-			step={1}
-			onChange={(v) => params.set('preinf', v)}
-			fmt={(v) => v.toFixed(0)}
-		/>
-		<div style="height:6px"></div>
-		<QChipRow
-			options={[0, 4, 8, 12, 16]}
-			value={p.preinf}
-			unit="s"
-			onChange={(v) => params.set('preinf', v)}
-		/>
-	{:else}
+	{#if p.flushMode === 'time'}
 		<QStepper
 			value={p.flushTime}
 			unit="s"
@@ -55,6 +46,22 @@
 			value={p.flushTime}
 			unit="s"
 			onChange={(v) => params.set('flushTime', v)}
+		/>
+	{:else}
+		<QStepper
+			value={p.flushTemp}
+			dimension="temp"
+			min={80}
+			max={100}
+			step={0.5}
+			onChange={(v) => params.set('flushTemp', v)}
+		/>
+		<div style="height:6px"></div>
+		<QChipRow
+			options={[88, 92, 95, 97, 99]}
+			value={p.flushTemp}
+			dimension="temp"
+			onChange={(v) => params.set('flushTemp', v)}
 		/>
 	{/if}
 </div>
