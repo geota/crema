@@ -157,10 +157,10 @@ The DE1 notifies this characteristic at the firmware shot-reporting rate
 | 0  | `SampleTime`       | U16 | 2 | raw | half-cycles counter (see §3.2) |
 | 2  | `GroupPressure`    | U16 | 2 | `raw / 4096.0` | bar |
 | 4  | `GroupFlow`        | U16 | 2 | `raw / 4096.0` | mL/s |
-| 6  | `HeadTemp1`        | U8  | 1 | integer part | °C (combine w/ 7,8) |
-| 7  | `HeadTemp2`        | U8  | 1 | /256 fraction | — |
-| 8  | `HeadTemp3`        | U8  | 1 | /65536 fraction | — |
-| 9  | `MixTemp`          | U16 | 2 | `raw / 256.0` | °C |
+| 6  | `MixTemp`          | U16 | 2 | `raw / 256.0` | °C |
+| 8  | `HeadTemp1`        | U8  | 1 | integer part | °C (combine w/ 9,10) |
+| 9  | `HeadTemp2`        | U8  | 1 | /256 fraction | — |
+| 10 | `HeadTemp3`        | U8  | 1 | /65536 fraction | — |
 | 11 | `SetMixTemp`       | U16 | 2 | `raw / 256.0` | °C |
 | 13 | `SetHeadTemp`      | U16 | 2 | `raw / 256.0` | °C |
 | 15 | `SetGroupPressure` | U8  | 1 | `raw / 16.0` | bar |
