@@ -119,11 +119,21 @@
 	// Flush target = 4 s. Hot water defaults to 30 s as a placeholder
 	// time-budget until we wire `dispensedVolumeMl` against a
 	// settings-driven `hotWaterVolMl` target.
-	const MODE_TARGET_SEC: Record<'steaming' | 'dispensing' | 'flushing', number> = {
-		steaming: 8.0,
-		dispensing: 30.0,
+	/**
+	 * Per-mode target ceilings: the steam / hot-water timeouts the DE1's
+	 * firmware enforces (the cap, not the typical session length), and the
+	 * legacy 4 s flush window. Steam + hot-water targets come from the
+	 * `ShotSettings` snapshot the connect-time Read populates; fallbacks
+	 * match the legacy de1app defaults so the chip has a sensible reading
+	 * before the read returns.
+	 */
+	const MODE_TARGET_SEC = $derived<
+		Record<'steaming' | 'dispensing' | 'flushing', number>
+	>({
+		steaming: ui.de1ShotSettings?.steamTimeoutS ?? 90,
+		dispensing: ui.de1ShotSettings?.hotWaterTimeoutS ?? 30,
 		flushing: 4.0
-	};
+	});
 	/**
 	 * Flush water target temperature — read from MMR `FlushTemp`
 	 * (`0x00803844`, wire value `°C × 10`). The connect-time MMR sweep
@@ -136,11 +146,28 @@
 		return raw != null && Number.isFinite(raw) ? raw / 10 : 95;
 	});
 
+	/**
+	 * The resting chip sub-labels — the *target* (set) values the firmware
+	 * will hold during the session. Steam + hot-water targets come from
+	 * `ShotSettings`; flush target temp comes from the FlushTemp MMR
+	 * register above. Fallbacks (148 °C steam target, 92 °C / 250 mL hot
+	 * water) match the legacy de1app defaults so the chips paint
+	 * sensibly before the connect-time reads return.
+	 *
+	 * The *active* banner (`headStatusMeta` below) uses the *measured*
+	 * live values instead — so the chip says "what will happen" and the
+	 * banner says "what's happening now."
+	 */
 	const MODE_TARGET_LABEL = $derived<
 		Record<'steaming' | 'dispensing' | 'flushing', string>
 	>({
-		steaming: `${formatTemp(148, prefs.tempUnit)} · 8 s`,
-		dispensing: `${formatTemp(92, prefs.tempUnit)} · ${formatVolume(250, prefs.volumeUnit)}`,
+		steaming: `${formatTemp(ui.de1ShotSettings?.steamTempC ?? 148, prefs.tempUnit)} · ${
+			ui.de1ShotSettings?.steamTimeoutS ?? 90
+		} s`,
+		dispensing: `${formatTemp(
+			ui.de1ShotSettings?.hotWaterTempC ?? 92,
+			prefs.tempUnit
+		)} · ${formatVolume(ui.de1ShotSettings?.hotWaterVolumeMl ?? 250, prefs.volumeUnit)}`,
 		flushing: `${formatTemp(flushTempC, prefs.tempUnit)} · 4 s`
 	});
 	/**
@@ -184,9 +211,10 @@
 	/**
 	 * Meta line in the head pill. While running, formats `elapsed / total`
 	 * seconds with the live measured temperature where it's meaningful
-	 * (steam → steam heater temp; hot water → mix temp). Falls back to
-	 * the resting `MODE_TARGET_LABEL` when an active mode has no
-	 * temperature signal (Flush).
+	 * (steam → steam heater temp; hot water → head temp; flush → head
+	 * temp, since the firmware holds head_temp to FlushTemp during a
+	 * rinse cycle). The resting chip sub-labels carry the *target*
+	 * temperature; this active banner carries the *measured* one.
 	 */
 	const headStatusMeta = $derived.by(() => {
 		if (modeState === 'idle') return '';
@@ -199,6 +227,12 @@
 			return `${elapsed} / ${total} s${tempLabel}`;
 		}
 		if (modeState === 'dispensing') {
+			const headTemp = ui.latestTelemetry?.temp;
+			const tempLabel =
+				headTemp != null ? ` · ${formatTemp(headTemp, prefs.tempUnit)}` : '';
+			return `${elapsed} / ${total} s${tempLabel}`;
+		}
+		if (modeState === 'flushing') {
 			const headTemp = ui.latestTelemetry?.temp;
 			const tempLabel =
 				headTemp != null ? ` · ${formatTemp(headTemp, prefs.tempUnit)}` : '';
