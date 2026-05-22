@@ -20,7 +20,7 @@
 	 */
 	import { waterTankMl, waterRefillSoon, type UiSnapshot } from '$lib/state';
 	import { ShotPhase, MachineState } from '$lib/core/crema-core';
-	import ModeActionRow from './ModeActionRow.svelte';
+	import ModeChip from './ModeChip.svelte';
 	import ModeHeadStatus from './ModeHeadStatus.svelte';
 	import {
 		getSettingsStore,
@@ -464,30 +464,15 @@
 			</div>
 		</div>
 
-		<!-- Service-mode chip row — between the main grid and the foot.
-		     Three tap-to-start chips: Steam / Hot water / Flush. Espresso
-		     stays the big copper Start button below. The active chip flips
-		     to a colored border + cancel `×`; tapping the active chip (or
-		     its `×`, or the header pill's Stop) writes
-		     `RequestedState = Idle`. Hardcoded sub-text targets match
-		     the chips handoff defaults (148°C/8s, 92°C/250ml, 4s) until
-		     Settings → Steam / Hot Water / Flush sections land per
-		     docs/21. -->
-		<ModeActionRow
-			state={modeState}
-			ready={modeReady}
-			steamSub="148 °C · 8 s"
-			waterSub="92 °C · 250 ml"
-			flushSub="4 s"
-			onTapSteam={tapSteam}
-			onTapWater={tapWater}
-			onTapFlush={tapFlush}
-			onCancel={cancelMode}
-		/>
-
-		<!-- Foot: a meta cluster on the left, the big Start / Stop button on the
-		     right. Stays visible even with the Quick Sheet open — the docked
-		     sheet sits just above it (`bottom: 96px`). -->
+		<!-- Foot: meta cluster on the left, service-mode chips in the middle,
+		     big Start / Stop button on the right. Stays visible even with
+		     the Quick Sheet open — the docked sheet sits just above it
+		     (`bottom: 96px`).
+		     The chips share the foot with Start because they're all
+		     primary "what do I want the DE1 to do?" controls; espresso
+		     just gets the prominent copper pill. A subtle vertical hairline
+		     separates the chip cluster from Start so they don't read as
+		     one row of buttons. -->
 		<div class="crema-dash-foot is-split">
 			<div class="crema-foot-meta">
 				<span class="t-eyebrow">Scale</span>
@@ -522,15 +507,51 @@
 						· refill soon{/if}
 				</span>
 			</div>
-			<!-- TODO: wire to DE1 control — starting / stopping a shot is a net-new
-			     feature; today this only flips the local `running` flag. -->
-			<button class="crema-bigbtn" class:running={manualRunning} onclick={toggleRun}>
-				<i
-					class={'ph-fill ph-' + (manualRunning ? 'stop' : 'play')}
-					aria-hidden="true"
-				></i>
-				<span>{manualRunning ? 'Stop extraction' : 'Start extraction'}</span>
-			</button>
+			<!-- Right cluster: three service-mode chips + a subtle vertical
+			     hairline + the big Start button. Wrapped in one element so
+			     the foot's `1fr auto` grid keeps a single right column
+			     (without this wrapper the extra children wrap to a new row
+			     above Start). Chip labels are single-line per the design;
+			     active state still shows the inline ✕ cancel. -->
+			<div class="crema-foot-actions">
+				<div class="mc-foot-chips">
+					<ModeChip
+						kind="steam"
+						active={modeState === 'steaming'}
+						ready={modeReady}
+						icon="cloud"
+						label="Steam"
+						onTap={() => (modeState === 'steaming' ? cancelMode() : tapSteam())}
+					/>
+					<ModeChip
+						kind="water"
+						active={modeState === 'dispensing'}
+						ready={modeReady}
+						icon="drop"
+						label="Hot water"
+						onTap={() => (modeState === 'dispensing' ? cancelMode() : tapWater())}
+					/>
+					<ModeChip
+						kind="flush"
+						active={modeState === 'flushing'}
+						ready={modeReady}
+						icon="sparkle"
+						label="Flush"
+						onTap={() => (modeState === 'flushing' ? cancelMode() : tapFlush())}
+					/>
+				</div>
+				<span class="mc-foot-rule" aria-hidden="true"></span>
+				<!-- TODO: wire to DE1 control — starting / stopping a shot is
+				     a net-new feature; today this only flips the local
+				     `running` flag. -->
+				<button class="crema-bigbtn" class:running={manualRunning} onclick={toggleRun}>
+					<i
+						class={'ph-fill ph-' + (manualRunning ? 'stop' : 'play')}
+						aria-hidden="true"
+					></i>
+					<span>{manualRunning ? 'Stop extraction' : 'Start extraction'}</span>
+				</button>
+			</div>
 		</div>
 
 		<!-- Docked Quick Sheet, variant G -->
