@@ -155,34 +155,30 @@
 						style="font-size:14px;color:{g.color}"
 						aria-hidden="true"
 					></i>
-					<button
-						type="button"
-						class="qsheet-check"
-						class:on={on1}
-						style={on1 ? `--check-c:${g.primary.color}` : undefined}
-						onclick={() => settings.set(g.primary.key, !on1)}
-						aria-pressed={on1}
-					>
-						<i
-							class={'ph ' + (on1 ? 'ph-check-square-fill' : 'ph-square')}
-							aria-hidden="true"
-						></i>
+					<label class="qsheet-ch-tog">
+						<button
+							type="button"
+							class="qmini-tog"
+							class:on={on1}
+							style={on1 ? `background:${g.primary.color}` : undefined}
+							onclick={() => settings.set(g.primary.key, !on1)}
+							aria-pressed={on1}
+							aria-label={g.primary.label}
+						></button>
 						<span>{g.primary.label}</span>
-					</button>
-					<button
-						type="button"
-						class="qsheet-check"
-						class:on={on2}
-						style={on2 ? `--check-c:${g.secondary.color}` : undefined}
-						onclick={() => settings.set(g.secondary.key, !on2)}
-						aria-pressed={on2}
-					>
-						<i
-							class={'ph ' + (on2 ? 'ph-check-square-fill' : 'ph-square')}
-							aria-hidden="true"
-						></i>
+					</label>
+					<label class="qsheet-ch-tog">
+						<button
+							type="button"
+							class="qmini-tog"
+							class:on={on2}
+							style={on2 ? `background:${g.secondary.color}` : undefined}
+							onclick={() => settings.set(g.secondary.key, !on2)}
+							aria-pressed={on2}
+							aria-label={g.secondary.label}
+						></button>
 						<span>{g.secondary.label}</span>
-					</button>
+					</label>
 				</div>
 			{/each}
 		</div>
@@ -242,35 +238,18 @@
 	.qsheet-chart-group {
 		display: inline-flex;
 		align-items: center;
-		gap: 8px;
+		gap: 10px;
 	}
-	.qsheet-check {
+	/* One channel-toggle row — the pill switch (existing .qmini-tog) plus
+	   its label. Mirrors the Stop-on-weight / Auto-tare toggles on the
+	   same foot row so the chart toggles read as the same affordance. */
+	.qsheet-ch-tog {
 		display: inline-flex;
 		align-items: center;
-		gap: 4px;
-		background: transparent;
-		border: 0;
-		padding: 2px 4px;
-		border-radius: 4px;
-		cursor: pointer;
+		gap: 6px;
 		font-family: var(--font-sans);
 		font-size: 11px;
 		color: rgba(var(--tint-rgb), 0.72);
-		--check-c: rgba(var(--tint-rgb), 0.4);
-		transition:
-			background var(--dur-1, 140ms) var(--ease, ease),
-			color var(--dur-1, 140ms) var(--ease, ease);
-	}
-	.qsheet-check i {
-		font-size: 13px;
-		color: var(--check-c);
-		line-height: 1;
-	}
-	.qsheet-check:hover {
-		background: rgba(var(--tint-rgb), 0.06);
-		color: var(--fg-1);
-	}
-	.qsheet-check.on {
-		color: var(--fg-1);
+		cursor: pointer;
 	}
 </style>
