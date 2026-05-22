@@ -761,7 +761,7 @@
 		width: 56px;
 		height: 56px;
 		border-radius: 50%;
-		display: block;
+		font-size: 30px;
 	}
 	:global(.st-content .st-about-line) {
 		font-family: var(--font-sans);

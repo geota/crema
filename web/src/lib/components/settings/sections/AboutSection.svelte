@@ -25,13 +25,10 @@
 
 <div class="st-about">
 	<div class="st-about-mark">
-		<img
-			class="cside-mark-glyph"
-			src="/bean-mark.svg"
-			alt="Crema"
-			width="56"
-			height="56"
-		/>
+		<!-- Matches the sidebar's brand glyph (CremaSidebar.svelte:86) — same
+		     `.cside-mark-glyph` class, just larger via the size override in
+		     `routes/settings/+page.svelte`. Was a separate bean SVG before. -->
+		<div class="cside-mark-glyph" aria-label="Crema">C</div>
 	</div>
 	<div class="st-about-meta">
 		<div class="st-about-line"><strong>Crema</strong></div>
