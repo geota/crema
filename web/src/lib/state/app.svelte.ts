@@ -658,6 +658,18 @@ export class CremaApp {
 		}
 	}
 
+	/**
+	 * Ask the DE1 to enter a machine state — most usefully Sleep or Idle.
+	 * One byte gets written to the RequestedState characteristic
+	 * (cuuid_02). Idle also stops a running shot and wakes the machine
+	 * from sleep. Other requestable states (Espresso, Steam, HotWater,
+	 * Flush, Descale, Clean) are normally triggered by on-machine touch
+	 * buttons; the shell exposes them for completeness.
+	 */
+	async requestMachineState(state: MachineState): Promise<void> {
+		this.applyCoreOutput(await this.core.requestMachineState(state));
+	}
+
 	// ---- Capture replay (developer tool) ----------------------------------
 
 	/**

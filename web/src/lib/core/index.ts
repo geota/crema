@@ -280,6 +280,15 @@ export interface CremaCore {
 	setFlushTimeout(ms: number): Promise<CoreOutput>;
 	/** Enable / disable the tablet's USB charging output. */
 	setUsbChargerOn(enabled: boolean): Promise<CoreOutput>;
+	/**
+	 * Ask the DE1 to enter a machine state — Sleep (0), Idle (1),
+	 * Espresso (2), Steam (3), HotWater (4), Flush (5), Descale (6),
+	 * Clean (7). Writes one byte to RequestedState (cuuid_02). Idle
+	 * also stops a running shot and wakes from sleep. Most non-Sleep /
+	 * Idle states are normally initiated by the on-machine touch
+	 * buttons; the shell exposes them for completeness.
+	 */
+	requestMachineState(state: import('./crema-core').MachineState): Promise<CoreOutput>;
 	/** Tell the firmware whether the user is present (distinct from feature flags). */
 	setUserPresent(present: boolean): Promise<CoreOutput>;
 	/** Set the firmware feature-flag bitmask (distinct from user-present). */
@@ -516,6 +525,26 @@ async function createCore(): Promise<CremaCore> {
 		},
 		async setUsbChargerOn(enabled) {
 			return parseOutput(bridge.set_usb_charger_on(enabled));
+		},
+		async requestMachineState(state) {
+			// The wasm bridge takes a narrower `MachineRequest` enum (only
+			// the eight states the host can ask for) rather than the full
+			// `MachineState`. Map by name; unknown / non-requestable values
+			// fall through to NoRequest (a no-op the firmware accepts).
+			const map: Partial<Record<string, (typeof wasm.MachineRequest)[keyof typeof wasm.MachineRequest]>> = {
+				Sleep: wasm.MachineRequest.Sleep,
+				Idle: wasm.MachineRequest.Idle,
+				Espresso: wasm.MachineRequest.Espresso,
+				Steam: wasm.MachineRequest.Steam,
+				HotWater: wasm.MachineRequest.HotWater,
+				Descale: wasm.MachineRequest.Descale,
+				Clean: wasm.MachineRequest.Clean
+			};
+			const req = map[state];
+			if (req === undefined) {
+				throw new Error(`Machine state ${state} is not requestable from the host`);
+			}
+			return parseOutput(bridge.request_machine_state(req));
 		},
 		async setUserPresent(present) {
 			return parseOutput(bridge.set_user_present(present));
