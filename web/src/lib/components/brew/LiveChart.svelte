@@ -562,17 +562,23 @@
 			const h = Math.max(1, el.clientHeight);
 			chart = new uPlot(buildOpts(w, h), toData(series), el);
 
-			// Click-to-pin: a click on the plot area maps the click's
-			// canvas-relative x to the series' elapsed-time. Attaching to
-			// `chart.over` (uPlot's transparent overlay div, sized to the
-			// plot area exactly — axes excluded) means `e.offsetX` already
-			// matches `posToVal`'s coordinate system, no axis-padding maths.
+			// Click-to-pin: bind to the chart container `el` (not `chart.over`)
+			// because uPlot's overlay div does not always receive click events
+			// when `cursor.show: false` (which this chart sets) — pointer-
+			// events get suppressed on the cursor layer. The container always
+			// receives clicks; we subtract the bbox's left/top offset (in
+			// CSS pixels — `chart.bbox` is in canvas pixels, so divide by
+			// devicePixelRatio) to land in `posToVal`'s coordinate system.
 			onChartClick = (e: MouseEvent): void => {
 				if (!chart || !onPin) return;
-				const t = chart.posToVal(e.offsetX, 'x');
+				const rect = el.getBoundingClientRect();
+				const padLeftCss = chart.bbox.left / devicePixelRatio;
+				const localX = e.clientX - rect.left - padLeftCss;
+				if (localX < 0) return; // click in the left-axis gutter
+				const t = chart.posToVal(localX, 'x');
 				if (Number.isFinite(t)) onPin(Math.max(0, t));
 			};
-			chart.over.addEventListener('click', onChartClick);
+			el.addEventListener('click', onChartClick);
 
 			// Track the panel's live width AND height so the chart fills it and
 			// follows the Quick Sheet docking in / out.
@@ -589,7 +595,7 @@
 		return () => {
 			resizeObs?.disconnect();
 			resizeObs = null;
-			if (chart && onChartClick) chart.over.removeEventListener('click', onChartClick);
+			if (el && onChartClick) el.removeEventListener('click', onChartClick);
 			chart?.destroy();
 			chart = null;
 		};
