@@ -86,6 +86,21 @@ export interface TelemetrySample {
 	/** Latest scale weight at this instant, grams, or `null` if no scale. */
 	readonly weight: number | null;
 	/**
+	 * Latest scale-reported mass-flow rate at this instant, grams per second,
+	 * or `null` if no scale. Mirrors the {@link weight} fold-in pattern: the
+	 * scale's reading cadence is independent of the DE1's Telemetry cadence,
+	 * so each sample carries the *last known* value. Optional so a recorded
+	 * shot pre-dating this field still parses cleanly.
+	 */
+	readonly weightFlow?: number | null;
+	/**
+	 * Running shot volume dispensed at this instant, millilitres — the DE1's
+	 * `dispensed_volume_ml`, integrated by the core. `0` when no shot is in
+	 * progress. Optional so a recorded shot pre-dating this field still
+	 * parses cleanly.
+	 */
+	readonly dispensedVolume?: number;
+	/**
 	 * Puck resistance — `pressure / flow²`, the de1app/DSx derived "resistance"
 	 * metric (R4). `null` when flow is too low to divide by meaningfully, so a
 	 * reader can skip the noisy near-zero-flow region. Units are bar / (mL/s)².
@@ -737,6 +752,8 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				mixTemp: t.mix_temp,
 				steamTemp: t.steam_temp,
 				weight: snapshot.scaleWeight,
+				weightFlow: snapshot.scaleFlow,
+				dispensedVolume: t.dispensed_volume_ml,
 				resistance: puckResistance(t.group_pressure, t.group_flow),
 				setHeadTemp: t.set_head_temp,
 				setGroupPressure: t.set_group_pressure,

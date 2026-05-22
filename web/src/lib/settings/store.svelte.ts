@@ -106,11 +106,33 @@ export interface Settings {
 	/** Send tasting notes alongside each shot. */
 	visualizerIncludeNotes: boolean;
 
+	// ── Live-chart channel toggles ───────────────────────────────────────
+	// The eight per-line on/off flags for the Brew dashboard's chart. The
+	// four "primary" channels default on; the four "secondary" channels
+	// (paired siblings — resistance pairs with pressure, volume with flow,
+	// mix temp with head temp, weight flow with weight) default off so the
+	// chart stays clean until the user opts in. The Quick Sheet's "Chart
+	// channels" section is the live UI; each pair shares the channel
+	// card's slot so both numbers are always visible regardless of which
+	// lines are plotted.
+	/** Plot the pressure line. */
+	showPressure: boolean;
+	/** Plot the puck-resistance line (paired with pressure). */
+	showResistance: boolean;
+	/** Plot the flow line. */
+	showFlow: boolean;
+	/** Plot the dispensed-volume line (paired with flow). */
+	showVolume: boolean;
+	/** Plot the group-head temperature line. */
+	showHeadTemp: boolean;
+	/** Plot the mix (group water) temperature line (paired with head). */
+	showMixTemp: boolean;
+	/** Plot the scale-weight line. */
+	showWeight: boolean;
+	/** Plot the mass-flow rate line in g/s (paired with weight). */
+	showWeightFlow: boolean;
+
 	// ── Advanced ─────────────────────────────────────────────────────────
-	/** Show the flow curve on the live chart. */
-	showFlowCurve: boolean;
-	/** Show the estimated puck-resistance trace. */
-	showPuckResistance: boolean;
 	/** Smooth the pressure curve. */
 	smoothPressure: boolean;
 	/** Show a debug / event-log panel (BLE diagnostics). */
@@ -161,8 +183,16 @@ export const DEFAULT_SETTINGS: Settings = {
 	visualizerIncludeProfile: true,
 	visualizerIncludeNotes: false,
 
-	showFlowCurve: true,
-	showPuckResistance: false,
+	// Chart channels — primaries on, secondaries off until the user opts in.
+	showPressure: true,
+	showResistance: false,
+	showFlow: true,
+	showVolume: false,
+	showHeadTemp: true,
+	showMixTemp: false,
+	showWeight: true,
+	showWeightFlow: false,
+
 	smoothPressure: true,
 	showDebugPanel: false,
 	shotExportFormat: 'community'

@@ -149,24 +149,13 @@
 			/>
 		{/snippet}
 	</StRow>
-	<StRow title="Show flow curve in chart">
-		{#snippet control()}
-			<StToggle
-				on={prefs.showFlowCurve}
-				onChange={(v) => settings.set('showFlowCurve', v)}
-				label="Show flow curve in chart"
-			/>
-		{/snippet}
-	</StRow>
-	<StRow title="Show estimated puck resistance">
-		{#snippet control()}
-			<StToggle
-				on={prefs.showPuckResistance}
-				onChange={(v) => settings.set('showPuckResistance', v)}
-				label="Show estimated puck resistance"
-			/>
-		{/snippet}
-	</StRow>
+	<!--
+		The per-line "show pressure / resistance / flow / volume / head temp
+		/ mix temp / weight / weight flow" toggles moved to the Brew page's
+		Quick Sheet → Chart channels group on 2026-05-22. Same fields on
+		the persisted Settings bundle (`showPressure` etc.), just a more
+		discoverable home next to the chart they control.
+	-->
 	<StRow title="Smooth pressure curve">
 		{#snippet control()}
 			<StToggle

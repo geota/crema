@@ -22,6 +22,37 @@
 	import SteamStepper from './SteamStepper.svelte';
 	import WaterStepper from './WaterStepper.svelte';
 	import PreinfFlushStepper from './PreinfFlushStepper.svelte';
+	import { getSettingsStore, type Settings } from '$lib/settings';
+
+	const settings = getSettingsStore();
+	const prefs = $derived(settings.current);
+
+	/**
+	 * The chart-channel toggles. Each entry pairs a settings field with its
+	 * channel label + the `--tel-*` colour token that the LiveChart strokes
+	 * with. Primary channels listed first, then secondaries; arrangement in
+	 * a 4×2 grid matches the channel cards above the chart.
+	 */
+	const CHANNEL_TOGGLES: ReadonlyArray<{
+		key: keyof Settings;
+		label: string;
+		color: string;
+		sub?: string;
+	}> = [
+		{ key: 'showPressure', label: 'Pressure', color: 'var(--tel-pressure)' },
+		{
+			key: 'showResistance',
+			label: 'Resistance',
+			color: 'var(--tel-pressure-2)',
+			sub: '×5'
+		},
+		{ key: 'showFlow', label: 'Flow', color: 'var(--tel-flow)' },
+		{ key: 'showVolume', label: 'Volume', color: 'var(--tel-flow-2)' },
+		{ key: 'showHeadTemp', label: 'Head temp', color: 'var(--tel-temp)' },
+		{ key: 'showMixTemp', label: 'Mix temp', color: 'var(--tel-temp-2)' },
+		{ key: 'showWeight', label: 'Weight', color: 'var(--tel-weight)' },
+		{ key: 'showWeightFlow', label: 'Weight flow', color: 'var(--tel-weight-2)' }
+	];
 
 	let {
 		params,
@@ -92,6 +123,35 @@
 		<PreinfFlushStepper {params} />
 	</div>
 
+	<!-- Chart channels — eight per-line on/off toggles for the LiveChart.
+	     Primaries (Pressure / Flow / Head / Weight) default on; secondaries
+	     (Resistance / Volume / Mix / Weight flow) default off. State lives
+	     on the persisted Settings bundle so a reload remembers. -->
+	<div class="qsheet-channels">
+		<div class="qsheet-channels-label">Chart channels</div>
+		<div class="qsheet-channels-grid">
+			{#each CHANNEL_TOGGLES as ch (ch.key)}
+				{@const on = prefs[ch.key] as boolean}
+				<label class="qsheet-ch">
+					<button
+						type="button"
+						class="qmini-tog"
+						class:on
+						style={on ? `--qch-color:${ch.color}` : undefined}
+						onclick={() => settings.set(ch.key, !on)}
+						aria-pressed={on}
+						aria-label={ch.label}
+					></button>
+					<span class="qsheet-ch-label">
+						<span class="qsheet-ch-dot" style="background:{ch.color}"></span>
+						{ch.label}
+						{#if ch.sub}<em class="qsheet-ch-sub">{ch.sub}</em>{/if}
+					</span>
+				</label>
+			{/each}
+		</div>
+	</div>
+
 	<div class="qsheet-foot">
 		<div class="qsheet-toggles">
 			<label class="qsheet-tog">
@@ -119,3 +179,51 @@
 		</div>
 	</div>
 </div>
+
+<style>
+	.qsheet-channels {
+		padding: 12px 18px 4px;
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+	}
+	.qsheet-channels-label {
+		font-family: var(--font-sans);
+		font-size: 9px;
+		font-weight: 700;
+		letter-spacing: var(--track-allcaps, 0.06em);
+		text-transform: uppercase;
+		color: rgba(var(--tint-rgb), 0.5);
+	}
+	.qsheet-channels-grid {
+		display: grid;
+		grid-template-columns: repeat(4, 1fr);
+		gap: 4px 10px;
+	}
+	.qsheet-ch {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		font-family: var(--font-sans);
+		font-size: 11px;
+		color: var(--fg-1);
+		cursor: pointer;
+	}
+	.qsheet-ch-label {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+	}
+	.qsheet-ch-dot {
+		display: inline-block;
+		width: 8px;
+		height: 8px;
+		border-radius: 2px;
+	}
+	.qsheet-ch-sub {
+		font-style: normal;
+		font-size: 9px;
+		color: rgba(var(--tint-rgb), 0.45);
+		font-family: var(--font-mono);
+	}
+</style>

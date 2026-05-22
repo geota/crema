@@ -32,7 +32,14 @@
 	let {
 		series,
 		goalSegments,
-		showFlowCurve = true,
+		showPressure = true,
+		showResistance = false,
+		showFlow = true,
+		showVolume = false,
+		showHeadTemp = true,
+		showMixTemp = false,
+		showWeight = true,
+		showWeightFlow = false,
 		smoothPressure = true,
 		telemetryRateHz = 0
 	}: {
@@ -44,9 +51,23 @@
 		 * which case the goal series is omitted.
 		 */
 		goalSegments?: readonly ProfileSegment[];
-		/** Whether to plot the flow channel — the `showFlowCurve` setting (D3). */
-		showFlowCurve?: boolean;
-		/** Whether to smooth the pressure channel — the `smoothPressure` setting (D3). */
+		/** Plot the pressure line. */
+		showPressure?: boolean;
+		/** Plot the puck-resistance secondary line (paired with pressure). */
+		showResistance?: boolean;
+		/** Plot the flow line. */
+		showFlow?: boolean;
+		/** Plot the dispensed-volume secondary line (paired with flow). */
+		showVolume?: boolean;
+		/** Plot the head-temperature line. */
+		showHeadTemp?: boolean;
+		/** Plot the mix-temperature secondary line (paired with head temp). */
+		showMixTemp?: boolean;
+		/** Plot the scale-weight line. */
+		showWeight?: boolean;
+		/** Plot the scale-flow secondary line in g/s (paired with weight). */
+		showWeightFlow?: boolean;
+		/** Smooth the pressure curve (the rolling-mean window). */
 		smoothPressure?: boolean;
 		/**
 		 * The chart's display sample rate, Hz — the `telemetryRateHz` setting
@@ -154,7 +175,7 @@
 	 * wants. Pressure and flow keep their raw value; temperature and weight are
 	 * divided by 10 so they ride the shared scale (and read back ×10 on the
 	 * right axis). Pressure is smoothed when `smoothPressure` is on; the flow
-	 * column is fed all-`null` when `showFlowCurve` is off, hiding the channel.
+	 * column is fed all-`null` when `showFlow` is off, hiding the channel.
 	 * The input is first decimated to the `telemetryRateHz` display rate.
 	 */
 	function toData(input: readonly TelemetrySample[]): uPlot.AlignedData {
@@ -168,14 +189,21 @@
 		const setPressure: (number | null)[] = [];
 		const setFlow: (number | null)[] = [];
 		const setTemp: (number | null)[] = [];
+		// Secondary channels — paired siblings of the primaries above. Each
+		// gated on its toggle; an off toggle fills the column with null so
+		// uPlot draws nothing.
+		const resistance: (number | null)[] = [];
+		const volume: (number | null)[] = [];
+		const mixTemp: (number | null)[] = [];
+		const weightFlow: (number | null)[] = [];
 		for (let i = 0; i < samples.length; i++) {
 			const s = samples[i];
 			const t = s.elapsed / 1000;
 			xs.push(t);
-			pressure.push(pressureAt(samples, i));
-			flow.push(showFlowCurve ? (s.flow ?? null) : null);
-			temp.push(s.temp == null ? null : s.temp / 10);
-			weight.push(s.weight == null ? null : s.weight / 10);
+			pressure.push(showPressure ? pressureAt(samples, i) : null);
+			flow.push(showFlow ? (s.flow ?? null) : null);
+			temp.push(showHeadTemp ? (s.temp == null ? null : s.temp / 10) : null);
+			weight.push(showWeight ? (s.weight == null ? null : s.weight / 10) : null);
 			goal.push(goalAt(t));
 			// Live setpoint dashed overlay — what the firmware was aiming for
 			// at each AC half-cycle. Distinct from `goal` (profile-derived)
@@ -183,12 +211,45 @@
 			// frame logic. Same scale-divisor pattern as the measured channels
 			// (temp /10; pressure/flow native). Historical shots stored
 			// before these fields existed have them as `undefined`; coerce to
-			// null so uPlot draws a gap rather than throwing.
-			setPressure.push(s.setGroupPressure ?? null);
-			setFlow.push(showFlowCurve ? (s.setGroupFlow ?? null) : null);
-			setTemp.push(s.setHeadTemp == null ? null : s.setHeadTemp / 10);
+			// null so uPlot draws a gap rather than throwing. Each setpoint
+			// follows its primary channel's toggle.
+			setPressure.push(showPressure ? (s.setGroupPressure ?? null) : null);
+			setFlow.push(showFlow ? (s.setGroupFlow ?? null) : null);
+			setTemp.push(
+				showHeadTemp ? (s.setHeadTemp == null ? null : s.setHeadTemp / 10) : null
+			);
+			// Secondary lines — each rides the shared y scale:
+			// • resistance × 5 then clamp 10 — raw values are typically 0.1–2
+			//   (occasional channeling spike to 5), which would crowd the
+			//   bottom of the chart. The chart shows the SHAPE; the card
+			//   reads the raw value. See the Quick Sheet's "Resistance ×5"
+			//   sub-label;
+			// • volume / mix divide by 10 like their primary's scale (60 mL →
+			//   6 on plot; 90 °C → 9 on plot);
+			// • weight flow rides native (g/s ≈ mL/s).
+			const r = s.resistance;
+			resistance.push(showResistance && r != null ? Math.min(10, Math.max(0, r * 5)) : null);
+			const v = s.dispensedVolume;
+			volume.push(showVolume && v != null ? v / 10 : null);
+			mixTemp.push(showMixTemp && s.mixTemp != null ? s.mixTemp / 10 : null);
+			const wf = s.weightFlow;
+			weightFlow.push(showWeightFlow && wf != null ? wf : null);
 		}
-		return [xs, pressure, flow, temp, weight, goal, setPressure, setFlow, setTemp];
+		return [
+			xs,
+			pressure,
+			flow,
+			temp,
+			weight,
+			goal,
+			setPressure,
+			setFlow,
+			setTemp,
+			resistance,
+			volume,
+			mixTemp,
+			weightFlow
+		];
 	}
 
 	/** The four channel end-dots: [data column, colour var, radius]. */
@@ -388,6 +449,34 @@
 					dash: [3, 3],
 					alpha: 0.6,
 					points: { show: false }
+				},
+				// Secondary channel lines — paired siblings of the four
+				// primaries above. Solid 1.5 px stroke; dash is reserved for
+				// the goal/setpoint lines. Colour tokens follow the Palette B
+				// "bold siblings" set in `tokens.css`.
+				{
+					scale: 'y',
+					stroke: () => cssVar('--tel-pressure-2'),
+					width: 1.5,
+					points: { show: false }
+				},
+				{
+					scale: 'y',
+					stroke: () => cssVar('--tel-flow-2'),
+					width: 1.5,
+					points: { show: false }
+				},
+				{
+					scale: 'y',
+					stroke: () => cssVar('--tel-temp-2'),
+					width: 1.5,
+					points: { show: false }
+				},
+				{
+					scale: 'y',
+					stroke: () => cssVar('--tel-weight-2'),
+					width: 1.5,
+					points: { show: false }
 				}
 			],
 			plugins: [markerPlugin()]
@@ -396,7 +485,7 @@
 
 	// Create the chart once on mount. The whole opts + initial-data construction
 	// is `untrack`ed: `toData` transitively reads `series`, `telemetryRateHz`,
-	// `showFlowCurve` and `smoothPressure`, so without `untrack` toggling any of
+	// `showFlow` and `smoothPressure`, so without `untrack` toggling any of
 	// those settings (or switching profile) would tear down and rebuild the
 	// entire uPlot instance. Creation must depend on nothing reactive — the
 	// `$derived` data + `setData` effect below own every live update instead.
@@ -432,7 +521,7 @@
 
 	/**
 	 * The plotted column data — re-derives whenever the buffered series or any
-	 * telemetry-display setting (`telemetryRateHz`, `showFlowCurve`,
+	 * telemetry-display setting (`telemetryRateHz`, `showFlow`,
 	 * `smoothPressure`) changes. Kept as a `$derived` so the `setData` effect
 	 * below depends only on this value, never on the chart-creation path.
 	 */
