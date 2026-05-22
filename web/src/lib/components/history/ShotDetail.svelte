@@ -104,15 +104,16 @@
 	 *
 	 * - `'community'` (default) — community v2 `.shot.json`, portable
 	 *   across reaprime / Visualizer / de1app, pre-decoded telemetry.
-	 * - `'fullTelemetry'` — raw BLE capture (.jsonl), bit-exact replay
-	 *   for bug reports. Falls back to community with a console warn
-	 *   if the shot has no IndexedDB capture (older shots from before
-	 *   the recorder shipped, or imported shots).
+	 * - `'replay'` — raw BLE capture (.jsonl), bit-exact playback via
+	 *   Crema's Replay tool. Falls back to community with a console
+	 *   warn if the shot has no IndexedDB capture (older shots from
+	 *   before the recorder shipped, or imported shots — neither has
+	 *   the wire bytes to replay).
 	 *
 	 * docs/22 task #64.
 	 */
 	async function download(): Promise<void> {
-		if (settings.current.shotExportFormat === 'fullTelemetry') {
+		if (settings.current.shotExportFormat === 'replay') {
 			const entries = await getCaptureStore().get(shot.id);
 			if (entries && entries.length > 0) {
 				const stamp = shotFilename(shot).replace(/\.shot\.json$/, '');
