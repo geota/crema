@@ -428,7 +428,6 @@
 	 * `convert*` reactive derives downstream picks this up automatically.
 	 */
 	const tel = $derived(pinnedSample ?? ui.latestTelemetry);
-	const isPinned = $derived(pinnedTimeSec !== null);
 	/** Shot elapsed time, seconds — live; resets to 0 between shots. */
 	const elapsedSec = $derived(ui.shotElapsed / 1000);
 	/** The just-finished shot's summary, or null. */
@@ -765,7 +764,7 @@
 						secondaryColor="var(--tel-weight-2)"
 					/>
 				</div>
-				<div class="crema-chart" class:is-pinned={isPinned}>
+				<div class="crema-chart">
 					<!-- Always mounted: an empty series renders bare axes + grid (the
 					     "ready" state); a finished shot's curve stays until the next
 					     shot starts. -->
@@ -903,19 +902,8 @@
 </div>
 
 <style>
-	/* Pinned-state outline — the chart wrapper picks up a copper rim and
-	   a faint copper wash when the user has clicked to freeze a moment.
-	   Cards above pull their numbers from the pinned sample; the wrapper
-	   highlight tells the user where the freeze came from. Esc / click
-	   outside unpins (see `onKeydown` / `onDocClick` in script). */
-	.crema-chart.is-pinned {
-		outline: 2px solid var(--copper-500);
-		outline-offset: -2px;
-		background: rgba(var(--copper-rgb), 0.06);
-		transition:
-			background var(--dur-1, 140ms) var(--ease, ease),
-			outline-color var(--dur-1, 140ms) var(--ease, ease);
-	}
+	/* The pinned moment renders as a vertical line on the chart itself
+	   (drawn by LiveChart's marker plugin); no chrome on the wrapper. */
 	.crema-chart {
 		cursor: crosshair;
 	}

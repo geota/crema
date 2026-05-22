@@ -557,28 +557,72 @@
 		const el = plotEl;
 		if (!el) return;
 		let onChartClick: ((e: MouseEvent) => void) | null = null;
+		let pinDragStart: ((e: PointerEvent) => void) | null = null;
+		let pinDragMove: ((e: PointerEvent) => void) | null = null;
+		let pinDragEnd: ((e: PointerEvent) => void) | null = null;
+		let pinDragActive = false;
 		untrack(() => {
 			const w = Math.max(1, el.clientWidth);
 			const h = Math.max(1, el.clientHeight);
 			chart = new uPlot(buildOpts(w, h), toData(series), el);
 
-			// Click-to-pin: bind to the chart container `el` (not `chart.over`)
-			// because uPlot's overlay div does not always receive click events
-			// when `cursor.show: false` (which this chart sets) — pointer-
-			// events get suppressed on the cursor layer. The container always
-			// receives clicks; we subtract the bbox's left/top offset (in
-			// CSS pixels — `chart.bbox` is in canvas pixels, so divide by
-			// devicePixelRatio) to land in `posToVal`'s coordinate system.
-			onChartClick = (e: MouseEvent): void => {
-				if (!chart || !onPin) return;
+			// Click + drag to pin: the user can either single-click anywhere
+			// on the chart to drop a pin, or click-drag to slide an existing
+			// pin to a different moment. Both flows feed `onPin(timeSec)` —
+			// the dashboard just owns the state and re-routes it to the
+			// readouts. Bound to the wrapping container (`el`) rather than
+			// uPlot's `chart.over` because uPlot suppresses pointer events
+			// on `.u-over` when `cursor.show: false` (which this chart sets).
+			// `chart.bbox` is in canvas pixels — divide by devicePixelRatio
+			// to land in CSS coords that `posToVal` accepts.
+			const tFromClientX = (clientX: number): number | null => {
+				if (!chart) return null;
 				const rect = el.getBoundingClientRect();
 				const padLeftCss = chart.bbox.left / devicePixelRatio;
-				const localX = e.clientX - rect.left - padLeftCss;
-				if (localX < 0) return; // click in the left-axis gutter
+				const localX = clientX - rect.left - padLeftCss;
+				if (localX < 0) return null;
 				const t = chart.posToVal(localX, 'x');
-				if (Number.isFinite(t)) onPin(Math.max(0, t));
+				return Number.isFinite(t) ? Math.max(0, t) : null;
+			};
+			onChartClick = (e: MouseEvent): void => {
+				if (!onPin) return;
+				const t = tFromClientX(e.clientX);
+				if (t !== null) onPin(t);
 			};
 			el.addEventListener('click', onChartClick);
+
+			// Drag tracking — when a pointer is held down on the chart, every
+			// pointermove updates the pin. Captures the pointer so the drag
+			// continues if the user wanders outside the chart bounds; releases
+			// on pointerup / pointercancel.
+			pinDragMove = (e: PointerEvent): void => {
+				if (!pinDragActive || !onPin) return;
+				const t = tFromClientX(e.clientX);
+				if (t !== null) onPin(t);
+			};
+			pinDragEnd = (e: PointerEvent): void => {
+				pinDragActive = false;
+				try {
+					el.releasePointerCapture(e.pointerId);
+				} catch {
+					// pointer wasn't actually captured (e.g. drag began outside);
+					// the no-op release is harmless.
+				}
+			};
+			pinDragStart = (e: PointerEvent): void => {
+				if (e.button !== 0) return; // primary button only
+				pinDragActive = true;
+				try {
+					el.setPointerCapture(e.pointerId);
+				} catch {
+					// Pointer capture isn't critical — drag still works without it,
+					// just doesn't continue past the chart bounds.
+				}
+			};
+			el.addEventListener('pointerdown', pinDragStart);
+			el.addEventListener('pointermove', pinDragMove);
+			el.addEventListener('pointerup', pinDragEnd);
+			el.addEventListener('pointercancel', pinDragEnd);
 
 			// Track the panel's live width AND height so the chart fills it and
 			// follows the Quick Sheet docking in / out.
@@ -596,6 +640,12 @@
 			resizeObs?.disconnect();
 			resizeObs = null;
 			if (el && onChartClick) el.removeEventListener('click', onChartClick);
+			if (el && pinDragStart) el.removeEventListener('pointerdown', pinDragStart);
+			if (el && pinDragMove) el.removeEventListener('pointermove', pinDragMove);
+			if (el && pinDragEnd) {
+				el.removeEventListener('pointerup', pinDragEnd);
+				el.removeEventListener('pointercancel', pinDragEnd);
+			}
 			chart?.destroy();
 			chart = null;
 		};

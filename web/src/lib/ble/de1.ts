@@ -429,7 +429,11 @@ export class De1Manager {
 				MmrRegister.HeaterVoltage,
 				// Flush water target temp — surfaced as the Flush chip's
 				// sub-label on the Brew dashboard. Wire value is `°C × 10`.
-				MmrRegister.FlushTemp
+				MmrRegister.FlushTemp,
+				// Group Head Controller mode — read here so the Settings →
+				// Machine GHC toggle reflects the firmware's current state.
+				// Wire value 0 = off; non-zero = on (touch-to-confirm).
+				MmrRegister.GhcMode
 			];
 			for (const reg of connectMmrSweep) {
 				step = `MMR read ${reg}`;
