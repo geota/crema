@@ -622,7 +622,7 @@
 				onclick={() => (sortDir = 'asc')}
 				title="Ascending"
 			>
-				ASC
+				Ascending
 			</button>
 			<button
 				class="pp-sort-opt"
@@ -630,7 +630,7 @@
 				onclick={() => (sortDir = 'desc')}
 				title="Descending"
 			>
-				DESC
+				Descending
 			</button>
 		</div>
 	</div>
