@@ -268,6 +268,41 @@ pub fn format_bookoo_firmware(encoded: u16) -> String {
     de1_app::bookoo::format_firmware_version(encoded)
 }
 
+/// Hard wire-protocol bounds for DE1 profile fields, exposed to shells as
+/// a single JSON snapshot so steppers / validators / form widgets reach
+/// for the same numbers. The shell parses the result once at module load
+/// — these are constants, not live values. See
+/// `de1_domain::profile_bounds` for the canonical declarations.
+#[wasm_bindgen]
+pub fn profile_bounds_json() -> String {
+    use de1_domain::profile_bounds as b;
+    // Hand-rolled to keep the wasm crate free of an extra serde-of-
+    // statics module; the keys mirror the constant names so a reader can
+    // pattern-match either way.
+    format!(
+        "{{\"max_profile_steps\":{},\"max_total_volume_ml\":{},\
+         \"min_total_volume_ml\":{},\"min_pressure_bar\":{},\
+         \"max_pressure_bar\":{},\"min_flow_ml_per_s\":{},\
+         \"max_flow_ml_per_s\":{},\"min_temperature_c\":{},\
+         \"max_temperature_c\":{},\"max_steam_temperature_c\":{},\
+         \"min_frame_seconds\":{},\"max_frame_seconds\":{},\
+         \"max_preinfuse_steps\":{}}}",
+        b::MAX_PROFILE_STEPS,
+        b::MAX_TOTAL_VOLUME_ML,
+        b::MIN_TOTAL_VOLUME_ML,
+        b::MIN_PRESSURE_BAR,
+        b::MAX_PRESSURE_BAR,
+        b::MIN_FLOW_ML_PER_S,
+        b::MAX_FLOW_ML_PER_S,
+        b::MIN_TEMPERATURE_C,
+        b::MAX_TEMPERATURE_C,
+        b::MAX_STEAM_TEMPERATURE_C,
+        b::MIN_FRAME_SECONDS,
+        b::MAX_FRAME_SECONDS,
+        b::MAX_PREINFUSE_STEPS
+    )
+}
+
 /// The Crema core, exposed to the web shell.
 ///
 /// Methods that produce a [`CoreOutput`] return it as a JSON string; the shell

@@ -34,6 +34,7 @@
 	import QStepper from '$lib/components/brew/QStepper.svelte';
 	import QSplitLabel from '$lib/components/brew/QSplitLabel.svelte';
 	import { getSettingsStore, unitLabel } from '$lib/settings';
+	import { MAX_TOTAL_VOLUME_ML, MIN_TOTAL_VOLUME_ML } from '$lib/profiles/bounds';
 
 	const settings = getSettingsStore();
 
@@ -328,8 +329,8 @@
 				<QStepper
 					value={seg.volumeLimitMl}
 					dimension="volume"
-					min={0}
-					max={1023}
+					min={MIN_TOTAL_VOLUME_ML}
+					max={MAX_TOTAL_VOLUME_ML}
 					step={5}
 					onChange={(v) => onEdit({ volumeLimitMl: Math.round(v) })}
 				/>

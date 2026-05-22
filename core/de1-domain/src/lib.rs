@@ -31,6 +31,7 @@ pub mod flow;
 pub mod history;
 pub mod history_import;
 pub mod profile;
+pub mod profile_bounds;
 pub mod profile_import;
 pub mod settings_import;
 pub mod session;
