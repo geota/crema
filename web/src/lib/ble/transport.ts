@@ -55,6 +55,8 @@
  * `reconnecting` value driven by the auto-reconnect backoff loop. The managers
  * map this onto their own state enums and the UI's enabled rules.
  */
+import type { De1Transport } from './de1-transport';
+
 export type ConnState =
 	| 'disconnected'
 	| 'connecting'
@@ -139,8 +141,13 @@ class GattQueue {
  * the shared `characteristicvaluechanged` listener, a per-device serial GATT
  * operation queue, and an auto-reconnect backoff loop. `connectionState`
  * tracks the link; `disconnect()` is idempotent and suppresses reconnect.
+ *
+ * Implements the transport-agnostic {@link De1Transport} interface so
+ * the orchestrator + `de1.ts` can swap in a future USB / mock
+ * transport without code changes (docs/22 §7.1). The class keeps its
+ * full public surface for back-compat — the interface is a subset.
  */
-export class BleDevice {
+export class BleDevice implements De1Transport {
 	/** Coarse link state — read by the managers to drive their UI state. */
 	connectionState: ConnState = 'disconnected';
 

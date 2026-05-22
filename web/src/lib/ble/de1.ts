@@ -27,7 +27,8 @@ import { MmrRegister, WriteTarget } from '$lib/core/crema-core';
 import { getCaptureRecorder } from '$lib/capture';
 import { describeError } from '$lib/utils/error';
 import { De1Uuids } from './de1-uuids';
-import { BleDevice, requestDevice, type ConnState } from './transport';
+import { requestDevice, type ConnState } from './transport';
+import type { De1Transport } from './de1-transport';
 
 /** The `NotificationSource`s the DE1's characteristics route to. */
 type De1NotificationSource = Extract<
@@ -108,7 +109,7 @@ export interface De1ManagerCallbacks {
  * app; `connect()` / `disconnect()` are driven by the orchestrator.
  */
 export class De1Manager {
-	private device: BleDevice | null = null;
+	private device: De1Transport | null = null;
 
 	/**
 	 * The live connection-diagnostics snapshot. Mutated through {@link patchDiagnostics}
@@ -166,7 +167,7 @@ export class De1Manager {
 		// Hoisted out of the `try` so the `catch` can disconnect this exact
 		// device — nulling `this.device` alone would leave the transport's
 		// auto-reconnect loop running on it.
-		let device: BleDevice | null = null;
+		let device: De1Transport | null = null;
 		this.callbacks.onStatus('Requesting a DE1…');
 		try {
 			// Scope the chooser instead of listing every device: match the DE1
