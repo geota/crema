@@ -21,7 +21,7 @@
 	import { getHistoryStore, exportStoredShotAsV2Json, shotFilename } from '$lib/history';
 	import { ShotRow, ShotDetail } from '$lib/components/history';
 	import { getCremaAppContext } from '$lib/shell/app-context';
-	import { getSettingsStore } from '$lib/settings';
+	import { getSettingsStore, convertWeight } from '$lib/settings';
 	import { getCaptureStore, captureJsonl } from '$lib/capture';
 	import { zip as fflateZip, strToU8 } from 'fflate';
 
@@ -257,7 +257,7 @@
 			.filter((y): y is number => y != null && y > 0);
 		if (yields.length === 0) return null;
 		const mean = yields.reduce((a, y) => a + y, 0) / yields.length;
-		return mean.toFixed(1);
+		return convertWeight(mean, settings.current.weightUnit);
 	});
 	/** Mean shot duration, seconds. */
 	const avgTime = $derived.by(() => {
@@ -408,7 +408,7 @@
 			<div class="hi-stat">
 				<div class="hi-stat-label">Avg yield</div>
 				<div class="hi-stat-val">
-					<span>{avgYield ?? '—'}</span>{#if avgYield != null}<em>g</em>{/if}
+					<span>{avgYield?.value ?? '—'}</span>{#if avgYield != null}<em>{avgYield.unit}</em>{/if}
 				</div>
 			</div>
 			<div class="hi-stat">

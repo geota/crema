@@ -9,6 +9,14 @@
 	 * ever fires with an in-range value.
 	 */
 	import type { Snippet } from 'svelte';
+	import {
+		canonicalToDisplay,
+		displayDecimals,
+		displayToCanonical,
+		unitLabel,
+		type Dimension
+	} from '$lib/settings/format';
+	import { getSettingsStore } from '$lib/settings/store.svelte';
 
 	let {
 		label,
@@ -19,23 +27,28 @@
 		step = 0.1,
 		onChange,
 		fmt,
-		prefix
+		prefix,
+		dimension
 	}: {
 		/** Optional caption above the stepper row. */
 		label?: string;
-		/** Current value. */
+		/** Current value (canonical units when `dimension` is set). */
 		value: number;
-		/** Unit shown after the digits. */
+		/** Unit shown after the digits. Ignored when `dimension` is set. */
 		unit?: string;
-		/** Lower clamp bound. */
+		/** Lower clamp bound (canonical). */
 		min?: number;
-		/** Upper clamp bound. */
+		/** Upper clamp bound (canonical). */
 		max?: number;
-		/** Increment per `±` press. */
+		/** Increment per `±` press (canonical). */
 		step?: number;
-		/** Called with the next clamped value on a `±` press. */
+		/** Called with the next clamped value (canonical) on a `±` press. */
 		onChange?: (next: number) => void;
-		/** Optional value formatter — defaults to step-aware decimal places. */
+		/**
+		 * Optional value formatter — receives the value already in display
+		 * units when `dimension` is set. Defaults to step-aware decimal places
+		 * (or `displayDecimals` for the dimension's unit).
+		 */
 		fmt?: (value: number) => string;
 		/**
 		 * Optional content rendered in the value box *before* the number — the
@@ -43,12 +56,33 @@
 		 * comparator that reads like a prefix unit.
 		 */
 		prefix?: Snippet;
+		/**
+		 * Optional unit-aware dimension. When set, the stepper converts the
+		 * canonical `value` to the user's chosen unit on display and back to
+		 * canonical on commit. `unit` is overridden by the user's pref label.
+		 */
+		dimension?: Dimension;
 	} = $props();
 
-	/** Format a value — the supplied `fmt`, or step-aware default. */
-	const format = (v: number): string => (fmt ? fmt(v) : v.toFixed(step < 1 ? 1 : 0));
+	const settings = getSettingsStore();
+	const effectiveUnit = $derived(dimension ? unitLabel(dimension, settings.current) : unit);
+	const effectiveDecimals = $derived(
+		dimension ? displayDecimals(dimension, settings.current) : step < 1 ? 1 : 0
+	);
 
-	/** Step `value` by `dir × step`, clamped to `[min, max]`. */
+	/** Canonical → display number. */
+	function toDisplay(canonical: number): number {
+		return dimension ? canonicalToDisplay(dimension, canonical, settings.current) : canonical;
+	}
+	/** Display → canonical number. */
+	function fromDisplay(display: number): number {
+		return dimension ? displayToCanonical(dimension, display, settings.current) : display;
+	}
+
+	/** Format a value (already in display units) — the supplied `fmt`, or step-aware default. */
+	const format = (v: number): string => (fmt ? fmt(v) : v.toFixed(effectiveDecimals));
+
+	/** Step `value` by `dir × step`, clamped to `[min, max]` (all in canonical). */
 	function inc(dir: number): void {
 		const next = Math.max(min, Math.min(max, Number((value + dir * step).toFixed(2))));
 		onChange?.(next);
@@ -62,7 +96,7 @@
 	let inputEl = $state<HTMLInputElement | null>(null);
 	function beginEdit(): void {
 		if (!onChange) return;
-		draft = String(value);
+		draft = String(Number(toDisplay(value).toFixed(effectiveDecimals)));
 		editing = true;
 		queueMicrotask(() => {
 			inputEl?.focus();
@@ -74,7 +108,7 @@
 		editing = false;
 		const n = Number(draft);
 		if (!Number.isFinite(n)) return;
-		const next = Math.max(min, Math.min(max, n));
+		const next = Math.max(min, Math.min(max, fromDisplay(n)));
 		if (next !== value) onChange?.(next);
 	}
 	function onKey(e: KeyboardEvent): void {
@@ -103,19 +137,16 @@
 					bind:this={inputEl}
 					class="qcs-num qcs-num-input"
 					type="number"
-					{step}
-					{min}
-					{max}
 					bind:value={draft}
 					onblur={commit}
 					onkeydown={onKey}
 				/>
 			{:else}
 				<button type="button" class="qcs-num qcs-num-btn" onclick={beginEdit}>
-					{format(value)}
+					{format(toDisplay(value))}
 				</button>
 			{/if}
-			<span class="qcs-unit">{unit}</span>
+			<span class="qcs-unit">{effectiveUnit}</span>
 		</div>
 		<button class="qcs-btn" onclick={() => inc(1)} aria-label="Increase {label ?? 'value'}">
 			<i class="ph ph-plus" aria-hidden="true"></i>

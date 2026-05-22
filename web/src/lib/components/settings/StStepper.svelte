@@ -15,7 +15,22 @@
 	 * The component owns no persistent state — it's a controlled input.
 	 * The parent passes `value` and an `onCommit` callback fired with the
 	 * clamped new value on every button press or accepted edit.
+	 *
+	 * Optionally pass `dimension` to make the stepper unit-aware: it then
+	 * reads the user's unit preference from {@link getSettingsStore}, displays
+	 * the canonical `value` converted to the chosen unit (and ignores any
+	 * `unit` / `decimals` props), and converts the inline-edit draft back to
+	 * canonical before invoking `onCommit`. `value` / `step` / `min` / `max`
+	 * always remain canonical (grams / °C / mL / bar).
 	 */
+	import {
+		canonicalToDisplay,
+		displayDecimals,
+		displayToCanonical,
+		unitLabel,
+		type Dimension
+	} from '$lib/settings/format';
+	import { getSettingsStore } from '$lib/settings/store.svelte';
 
 	let {
 		value,
@@ -26,21 +41,25 @@
 		unit = '',
 		decimals = 0,
 		label,
-		size = 'sm'
+		size = 'sm',
+		dimension
 	}: {
-		/** Current numeric value. */
+		/** Current numeric value (canonical units when `dimension` is set). */
 		value: number;
-		/** Called with the clamped next value on a button press or edit commit. */
+		/** Called with the clamped next value (canonical) on a button press or edit commit. */
 		onCommit: (next: number) => void;
-		/** Increment per button press. */
+		/** Increment per button press (canonical units when `dimension` is set). */
 		step?: number;
-		/** Optional lower clamp bound. */
+		/** Optional lower clamp bound (canonical). */
 		min?: number;
-		/** Optional upper clamp bound. */
+		/** Optional upper clamp bound (canonical). */
 		max?: number;
-		/** Unit suffix shown after the digits (e.g. " g", " °C", " s"). */
+		/**
+		 * Unit suffix shown after the digits (e.g. " g", " °C", " s"). Ignored
+		 * when `dimension` is set — the user's pref label is used instead.
+		 */
 		unit?: string;
-		/** Decimal places to display. */
+		/** Decimal places to display. Ignored when `dimension` is set. */
 		decimals?: number;
 		/** Optional eyebrow label above the row. */
 		label?: string;
@@ -50,14 +69,37 @@
 		 * without forking the component.
 		 */
 		size?: 'sm' | 'md' | 'lg';
+		/**
+		 * Optional unit-aware dimension. When set, the stepper converts the
+		 * canonical `value` to the user's chosen unit on display and back to
+		 * canonical on commit. `unit` and `decimals` are overridden by the
+		 * dimension + pref.
+		 */
+		dimension?: Dimension;
 	} = $props();
+
+	const settings = getSettingsStore();
+
+	const effectiveUnit = $derived(dimension ? unitLabel(dimension, settings.current) : unit);
+	const effectiveDecimals = $derived(
+		dimension ? displayDecimals(dimension, settings.current) : decimals
+	);
 
 	/** Click-to-type editing state. */
 	let editing = $state(false);
 	let draft = $state('');
 	let inputEl = $state<HTMLInputElement | null>(null);
 
-	const display = $derived(value.toFixed(decimals));
+	/** Convert a canonical value to its display-unit number. */
+	function toDisplay(canonical: number): number {
+		return dimension ? canonicalToDisplay(dimension, canonical, settings.current) : canonical;
+	}
+	/** Convert a display-unit number back to canonical. */
+	function fromDisplay(display: number): number {
+		return dimension ? displayToCanonical(dimension, display, settings.current) : display;
+	}
+
+	const display = $derived(toDisplay(value).toFixed(effectiveDecimals));
 
 	function clamp(n: number): number {
 		if (min !== undefined) n = Math.max(min, n);
@@ -71,7 +113,7 @@
 	}
 
 	function beginEdit(): void {
-		draft = String(value);
+		draft = String(Number(toDisplay(value).toFixed(effectiveDecimals)));
 		editing = true;
 		queueMicrotask(() => {
 			inputEl?.focus();
@@ -84,7 +126,7 @@
 		editing = false;
 		const n = Number(draft);
 		if (!Number.isFinite(n)) return;
-		const next = clamp(n);
+		const next = clamp(fromDisplay(n));
 		if (next !== value) onCommit(next);
 	}
 
@@ -118,9 +160,6 @@
 					bind:this={inputEl}
 					class="st-stepper-input"
 					type="number"
-					{step}
-					{min}
-					{max}
 					bind:value={draft}
 					onblur={commit}
 					onkeydown={onKey}
@@ -132,7 +171,7 @@
 					onclick={beginEdit}
 					aria-label={`Edit ${label ?? 'value'}`}
 				>{display}</button>
-				<span class="st-stepper-unit">{unit}</span>
+				<span class="st-stepper-unit">{effectiveUnit}</span>
 			{/if}
 		</div>
 		<button

@@ -27,34 +27,33 @@
 	{#if p.waterMode === 'temp'}
 		<QStepper
 			value={p.waterTemp}
-			unit="°C"
+			dimension="temp"
 			min={40}
 			max={98}
 			step={1}
 			onChange={(v) => params.set('waterTemp', v)}
-			fmt={(v) => v.toFixed(0)}
 		/>
 		<div style="height:6px"></div>
 		<QChipRow
 			options={[60, 75, 85, 92, 96]}
 			value={p.waterTemp}
-			unit="°"
+			dimension="temp"
 			onChange={(v) => params.set('waterTemp', v)}
 		/>
 	{:else}
 		<QStepper
 			value={p.waterVolume}
-			unit="ml"
+			dimension="volume"
 			min={20}
 			max={500}
 			step={10}
 			onChange={(v) => params.set('waterVolume', v)}
-			fmt={(v) => v.toFixed(0)}
 		/>
 		<div style="height:6px"></div>
 		<QChipRow
 			options={[60, 120, 180, 250, 350]}
 			value={p.waterVolume}
+			dimension="volume"
 			onChange={(v) => params.set('waterVolume', v)}
 		/>
 	{/if}

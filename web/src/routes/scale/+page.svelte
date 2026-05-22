@@ -27,7 +27,7 @@
 	 */
 	import { getCremaAppContext } from '$lib/shell/app-context';
 	import { getProfileStore } from '$lib/profiles';
-	import { getSettingsStore, convertWeight } from '$lib/settings';
+	import { getSettingsStore, convertWeight, formatWeight } from '$lib/settings';
 
 	const ctx = getCremaAppContext();
 	const profiles = getProfileStore();
@@ -222,6 +222,8 @@
 	const heroNum = $derived(heroMeasure.value);
 	/** The hero readout's unit label. */
 	const heroUnit = $derived(heroMeasure.unit || 'g');
+	/** The Tare button's "0" caption, in the chosen weight unit. */
+	const tareZero = $derived(convertWeight(0, settings.current.weightUnit));
 
 	// ── Activity log ─────────────────────────────────────────────────────
 	/** One activity-log row, ready to render. */
@@ -347,7 +349,7 @@
 		<div class="sc-actions">
 			<button class="sc-tare" onclick={tare} disabled={!connected}>
 				<span class="sc-tare-label">Tare</span>
-				<span class="sc-tare-num">0.0<em>g</em></span>
+				<span class="sc-tare-num">{tareZero.value}<em>{tareZero.unit}</em></span>
 			</button>
 			<button class="sc-secondary" onclick={resetPeak}>
 				<i class="ph ph-arrow-clockwise" aria-hidden="true"></i>
@@ -367,9 +369,9 @@
 				<div class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Dose helper</div>
 				<div class="sc-dose-title">
 					{#if targetProfileName}
-						Weighing for <strong>{targetProfileName}</strong> · target {targetDose.toFixed(1)} g
+						Weighing for <strong>{targetProfileName}</strong> · target {formatWeight(targetDose, settings.current.weightUnit)}
 					{:else}
-						Target {targetDose.toFixed(1)} g
+						Target {formatWeight(targetDose, settings.current.weightUnit)}
 					{/if}
 				</div>
 			</div>
@@ -385,16 +387,17 @@
 			{:else if within}
 				<span class="sc-dose-ok">
 					<i class="ph-fill ph-check-circle" aria-hidden="true"></i>
-					On target — {weightG.toFixed(1)} g
+					On target — {formatWeight(weightG, settings.current.weightUnit)}
 				</span>
 			{:else if tooFar}
+				{@const dm = convertWeight(Math.abs(delta), settings.current.weightUnit)}
 				<span class="sc-dose-bad">
-					Way off · {delta > 0 ? `+${delta.toFixed(1)}` : delta.toFixed(1)} g
+					Way off · {delta > 0 ? '+' : '−'}{dm.value} {dm.unit}
 				</span>
 			{:else if delta < 0}
-				<span class="sc-dose-warn">Add {Math.abs(delta).toFixed(1)} g</span>
+				<span class="sc-dose-warn">Add {formatWeight(Math.abs(delta), settings.current.weightUnit)}</span>
 			{:else}
-				<span class="sc-dose-warn">Remove {delta.toFixed(1)} g</span>
+				<span class="sc-dose-warn">Remove {formatWeight(delta, settings.current.weightUnit)}</span>
 			{/if}
 		</div>
 	</div>

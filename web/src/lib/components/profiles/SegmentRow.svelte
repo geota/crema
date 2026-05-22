@@ -33,6 +33,9 @@
 	} from '$lib/profiles';
 	import QStepper from '$lib/components/brew/QStepper.svelte';
 	import QSplitLabel from '$lib/components/brew/QSplitLabel.svelte';
+	import { getSettingsStore, unitLabel } from '$lib/settings';
+
+	const settings = getSettingsStore();
 
 	let {
 		seg,
@@ -62,8 +65,14 @@
 		onReorder: (id: string, toIndex: number) => void;
 	} = $props();
 
-	/** The target unit follows the segment mode. */
-	const unit = $derived(seg.mode === 'pressure' ? 'bar' : 'ml/s');
+	/**
+	 * The target unit follows the segment mode. Pressure is unit-aware (bar /
+	 * psi); flow stays in mL/s — the unit `volumeUnit` chooses applies to
+	 * tank-style volumes, not flow rate (`fl oz/s` is a non-standard unit).
+	 */
+	const unit = $derived(
+		seg.mode === 'pressure' ? unitLabel('pressure', settings.current) : 'ml/s'
+	);
 
 	// ── Reorder ─────────────────────────────────────────────────────────
 	//
@@ -126,8 +135,10 @@
 	const exitView = $derived<SegmentExit>(
 		seg.exit ?? { metric: 'flow', compare: 'over', threshold: 4 }
 	);
-	/** The exit-threshold unit follows the watched metric. */
-	const exitUnit = $derived(exitView.metric === 'flow' ? 'ml/s' : 'bar');
+	/** The exit-threshold unit follows the watched metric (pressure → user's pref). */
+	const exitUnit = $derived(
+		exitView.metric === 'flow' ? 'ml/s' : unitLabel('pressure', settings.current)
+	);
 
 	/** Toggle the exit condition on / off. */
 	function toggleExit(): void {
@@ -153,7 +164,9 @@
 	/** The limiter, or its default placeholder when unset. */
 	const limiterView = $derived<SegmentLimiter>(seg.limiter ?? { value: 6, range: 0.6 });
 	/** The limiter caps the non-priority quantity — flow when pressure-priority. */
-	const limiterUnit = $derived(seg.mode === 'pressure' ? 'ml/s' : 'bar');
+	const limiterUnit = $derived(
+		seg.mode === 'pressure' ? 'ml/s' : unitLabel('pressure', settings.current)
+	);
 
 	/** Toggle the limiter on / off. */
 	function toggleLimiter(): void {
@@ -242,14 +255,25 @@
 		<div class="pe-seg-cell-body">
 			<QSplitLabel prefix="Target" />
 			<div class="pe-seg-cell-input">
-				<QStepper
-					value={seg.target}
-					{unit}
-					min={0}
-					max={12}
-					step={0.1}
-					onChange={(v) => onEdit({ target: v })}
-				/>
+				{#if seg.mode === 'pressure'}
+					<QStepper
+						value={seg.target}
+						dimension="pressure"
+						min={0}
+						max={12}
+						step={0.1}
+						onChange={(v) => onEdit({ target: v })}
+					/>
+				{:else}
+					<QStepper
+						value={seg.target}
+						unit="ml/s"
+						min={0}
+						max={12}
+						step={0.1}
+						onChange={(v) => onEdit({ target: v })}
+					/>
+				{/if}
 			</div>
 		</div>
 	</div>
@@ -286,7 +310,7 @@
 			<div class="pe-seg-cell-input">
 				<QStepper
 					value={seg.temperatureC}
-					unit="°C"
+					dimension="temp"
 					min={80}
 					max={105}
 					step={0.5}
@@ -303,7 +327,7 @@
 			<div class="pe-seg-cell-input" class:is-off={!volumeOn}>
 				<QStepper
 					value={seg.volumeLimitMl}
-					unit="mL"
+					dimension="volume"
 					min={0}
 					max={1023}
 					step={5}
@@ -333,6 +357,7 @@
 				<QStepper
 					value={exitView.threshold}
 					unit={exitUnit}
+					dimension={exitView.metric === 'pressure' ? 'pressure' : undefined}
 					min={0}
 					max={12}
 					step={0.1}
@@ -362,6 +387,7 @@
 				<QStepper
 					value={limiterView.value}
 					unit={limiterUnit}
+					dimension={seg.mode === 'flow' ? 'pressure' : undefined}
 					min={0}
 					max={12}
 					step={0.1}

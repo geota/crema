@@ -32,6 +32,10 @@
 		type ProfileSegment
 	} from '$lib/profiles';
 	import { theme } from '$lib/theme.svelte';
+	import { getSettingsStore, unitLabel } from '$lib/settings';
+
+	const settings = getSettingsStore();
+	const pressureUnitLabel = $derived(unitLabel('pressure', settings.current));
 
 	let {
 		segments,
@@ -454,7 +458,7 @@
 
 <div class="pe-curve">
 	<div class="pe-curve-head">
-		<div class="pe-curve-axislabel">PRESSURE · bar</div>
+		<div class="pe-curve-axislabel">PRESSURE · {pressureUnitLabel}</div>
 		<div class="pe-curve-legend">
 			<span><i class="pe-leg-dot" style="background:var(--tel-pressure)"></i> Pressure</span>
 			<span><i class="pe-leg-dot" style="background:var(--tel-flow)"></i> Flow (est.)</span>

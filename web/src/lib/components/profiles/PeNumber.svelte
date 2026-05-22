@@ -2,7 +2,21 @@
 	/**
 	 * `PeNumber` — a labelled −/+ number stepper, ported from `PeNumber` in
 	 * `profile-edit-page.jsx`. Used in the editor's Targets grid.
+	 *
+	 * Optionally pass `dimension` to make the stepper unit-aware (see
+	 * {@link QStepper} for the full pattern): `value` / `step` / `min` / `max`
+	 * stay canonical, the display value and inline-edit draft swap to the
+	 * user's chosen unit, and `onChange` still fires with canonical.
 	 */
+	import {
+		canonicalToDisplay,
+		displayDecimals,
+		displayToCanonical,
+		unitLabel,
+		type Dimension
+	} from '$lib/settings/format';
+	import { getSettingsStore } from '$lib/settings/store.svelte';
+
 	let {
 		label,
 		value,
@@ -11,27 +25,47 @@
 		min,
 		max,
 		digits = 1,
-		onChange
+		onChange,
+		dimension
 	}: {
 		/** The field label (eyebrow). */
 		label: string;
-		/** The current value. */
+		/** The current value (canonical units when `dimension` is set). */
 		value: number;
-		/** Increment per button press. */
+		/** Increment per button press (canonical). */
 		step?: number;
-		/** Unit suffix shown after the number. */
+		/** Unit suffix shown after the number. Ignored when `dimension` is set. */
 		unit: string;
-		/** Minimum allowed value. */
+		/** Minimum allowed value (canonical). */
 		min: number;
-		/** Maximum allowed value. */
+		/** Maximum allowed value (canonical). */
 		max: number;
-		/** Decimal places to display. */
+		/** Decimal places to display. Overridden by `displayDecimals` when `dimension` is set. */
 		digits?: number;
-		/** Called with the clamped new value. */
+		/** Called with the clamped new value (canonical). */
 		onChange: (value: number) => void;
+		/**
+		 * Optional unit-aware dimension. When set, the stepper displays the
+		 * canonical `value` in the user's chosen unit and converts the
+		 * inline-edit draft back to canonical before `onChange`.
+		 */
+		dimension?: Dimension;
 	} = $props();
 
-	/** Step the value by `dir × step`, clamped to `[min, max]`. */
+	const settings = getSettingsStore();
+	const effectiveUnit = $derived(dimension ? unitLabel(dimension, settings.current) : unit);
+	const effectiveDigits = $derived(
+		dimension ? displayDecimals(dimension, settings.current) : digits
+	);
+
+	function toDisplay(canonical: number): number {
+		return dimension ? canonicalToDisplay(dimension, canonical, settings.current) : canonical;
+	}
+	function fromDisplay(display: number): number {
+		return dimension ? displayToCanonical(dimension, display, settings.current) : display;
+	}
+
+	/** Step the value by `dir × step`, clamped to `[min, max]` (all canonical). */
 	function inc(dir: number): void {
 		const next = Math.min(max, Math.max(min, Number((value + dir * step).toFixed(2))));
 		onChange(next);
@@ -43,7 +77,7 @@
 	let draft = $state('');
 	let inputEl = $state<HTMLInputElement | null>(null);
 	function beginEdit(): void {
-		draft = String(value);
+		draft = String(Number(toDisplay(value).toFixed(effectiveDigits)));
 		editing = true;
 		queueMicrotask(() => {
 			inputEl?.focus();
@@ -55,7 +89,7 @@
 		editing = false;
 		const n = Number(draft);
 		if (!Number.isFinite(n)) return;
-		const next = Math.min(max, Math.max(min, n));
+		const next = Math.min(max, Math.max(min, fromDisplay(n)));
 		if (next !== value) onChange(next);
 	}
 	function onKey(e: KeyboardEvent): void {
@@ -81,9 +115,6 @@
 					bind:this={inputEl}
 					class="pe-num-num pe-num-input"
 					type="number"
-					{step}
-					{min}
-					{max}
 					bind:value={draft}
 					onblur={commit}
 					onkeydown={onKey}
@@ -93,10 +124,10 @@
 					type="button"
 					class="pe-num-num pe-num-numbtn"
 					aria-label={`Edit ${label}`}
-					onclick={beginEdit}>{value.toFixed(digits)}</button
+					onclick={beginEdit}>{toDisplay(value).toFixed(effectiveDigits)}</button
 				>
 			{/if}
-			<span class="pe-num-unit">{unit}</span>
+			<span class="pe-num-unit">{effectiveUnit}</span>
 		</div>
 		<button class="pe-num-btn" aria-label="Increase {label}" onclick={() => inc(1)}>
 			<i class="ph ph-plus" aria-hidden="true"></i>
