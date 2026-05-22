@@ -96,9 +96,7 @@
 	 * notification has arrived, how long ago the last one landed.
 	 */
 	const notificationsLabel = $derived.by(() => {
-		if (diag.notificationCount === 0) {
-			return connected ? 'Waiting for first notification…' : 'No notifications';
-		}
+		if (diag.notificationCount === 0) return '—';
 		let line = `${diag.notificationCount} received`;
 		if (diag.lastNotificationAtMs !== null) {
 			const ageMs = Math.max(0, performance.now() - diag.lastNotificationAtMs);
@@ -107,8 +105,12 @@
 		return line;
 	});
 
-	/** The decoded machine state + substate, or a placeholder before the first. */
-	const machineStateLabel = $derived(snapshot.machineState ?? 'no StateInfo yet');
+	/** The decoded machine state + substate, or a dash before the first. */
+	const machineStateLabel = $derived(snapshot.machineState ?? '—');
+	/** Connection state — dash for the idle "not connected" baseline. */
+	const connectionLabel = $derived(de1State === 'idle' ? '—' : stateLabel);
+	/** Scale-connected two-state for the Peripherals dot indicator. */
+	const scaleConnected = $derived(snapshot.scaleState === 'ready');
 
 	// ── Machine card meta (D4) ────────────────────────────────────────────
 	/**
@@ -378,9 +380,15 @@
 </StGroup>
 
 <StGroup title="DE1 connection diagnostics">
+	<!-- Each row's value cell follows one of two patterns:
+	     - Two-state (GATT verified): a small dot — empty grey by default,
+	       filled green when on. No words; the dot says everything.
+	     - Multi-state (connection state, device name, machine state,
+	       notification count): the value text in the `.st-diag-mono`
+	       hint style. A dash placeholder while the value is absent. -->
 	<StRow title="Connection state" sub="The coarse DE1 link state.">
 		{#snippet control()}
-			<span class="st-diag-mono">{stateLabel}</span>
+			<span class="st-diag-mono">{connectionLabel}</span>
 		{/snippet}
 	</StRow>
 	<StRow
@@ -388,12 +396,10 @@
 		sub="The name and browser device id of the device the chooser picked."
 	>
 		{#snippet control()}
-			<span class="st-diag-mono">
-				{diag.deviceName ?? '—'}
-			</span>
+			<span class="st-diag-mono">{diag.deviceName ?? '—'}</span>
 		{/snippet}
 		{#snippet hint()}
-			<span class="st-diag-id">{diag.deviceId ?? 'no device'}</span>
+			<span class="st-diag-id">{diag.deviceId ?? '—'}</span>
 		{/snippet}
 	</StRow>
 	<StRow
@@ -401,7 +407,11 @@
 		sub="True once service A000 and the StateInfo (A00E), ShotSample (A00D) and WaterLevels (A011) characteristics resolved. A non-DE1 board fails here."
 	>
 		{#snippet control()}
-			<span class="st-diag-mono">{diag.gattVerified ? 'Verified DE1' : 'Not verified'}</span>
+			<span
+				class="st-diag-dot"
+				class:is-on={diag.gattVerified}
+				aria-label={diag.gattVerified ? 'Verified' : 'Not verified'}
+			></span>
 		{/snippet}
 	</StRow>
 	<StRow
@@ -429,13 +439,18 @@
 	     tamper product Crema would ever pair with, so it was dead UI. -->
 	<StRow title="Scale" sub="Used for stop-on-weight and auto-tare. Manage on the Scale page.">
 		{#snippet control()}
-			<span class="st-diag-mono">See Scale page</span>
+			<span
+				class="st-diag-dot"
+				class:is-on={scaleConnected}
+				aria-label={scaleConnected ? 'Scale connected' : 'Scale not paired'}
+			></span>
 		{/snippet}
 	</StRow>
 	<div class="st-grinder-row">
 		<StRow title="Grinder" sub="Doesn't report dose; Crema logs a manual grind setting.">
 			{#snippet control()}
-				<span class="st-diag-mono">Not implemented</span>
+				<!-- Grinder is not implemented — empty dot always. -->
+				<span class="st-diag-dot" aria-label="Grinder not paired"></span>
 			{/snippet}
 			{#snippet hint()}
 				<StButton label="Pair" icon="bluetooth" disabled />
@@ -445,16 +460,34 @@
 </StGroup>
 
 <style>
-	/* Diagnostics value cells — mono, sized so every value cell on the
-	   Machine page reads the same. "Selected device" used to be the only
-	   row with this look; the rest are now aligned to it (the
-	   ok/not-ok dot icons were dropped in the same pass — too many
-	   green dots was visual noise; the text alone carries the state). */
+	/* Diagnostics value cells — sized to match the Selected-device hint
+	   line (the user's reference "best style"): small, mono, faint. The
+	   row's title is still the prominent thing; the value reads as data.
+	   The same `.st-diag-mono` is used for both the value and the hint
+	   so the row visually flows top-to-bottom with one consistent
+	   weight. */
 	.st-diag-mono {
 		font-family: var(--font-mono);
-		font-size: 12px;
-		color: var(--fg-1);
+		font-size: 11px;
+		color: rgba(var(--tint-rgb), 0.6);
 		font-variant-numeric: tabular-nums;
+	}
+	/* Two-state dot — empty grey by default, filled green when on. Used
+	   for the GATT-verified row, the Scale peripheral, and the Grinder
+	   placeholder. Replaces the per-row StStatusDot label text on those
+	   genuinely binary states. */
+	.st-diag-dot {
+		display: inline-block;
+		width: 9px;
+		height: 9px;
+		border-radius: 50%;
+		background: transparent;
+		border: 1.5px solid rgba(var(--tint-rgb), 0.3);
+		transition: background var(--dur-1, 140ms) var(--ease, ease);
+	}
+	.st-diag-dot.is-on {
+		background: var(--success, #4ea869);
+		border-color: var(--success, #4ea869);
 	}
 	/* The Grinder row is "not yet implemented" — dim the whole row so it
 	   reads as a placeholder. Pair button stays disabled per the StButton
@@ -465,7 +498,7 @@
 	.st-diag-id {
 		font-family: var(--font-mono);
 		font-size: 10px;
-		color: rgba(var(--tint-rgb), 0.4);
+		color: rgba(var(--tint-rgb), 0.45);
 		word-break: break-all;
 		max-width: 220px;
 		display: inline-block;
