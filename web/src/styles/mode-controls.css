@@ -81,8 +81,21 @@
 		color 160ms var(--ease, cubic-bezier(0.32, 0.72, 0, 1));
 }
 .mc-chip:hover {
+	/* The colored .is-steam / .is-water / .is-flush rules below set their
+	   own background, so this neutral hover only applies to a chip with
+	   no kind class (theoretical / future). The colored chips get a
+	   per-kind hover tint a few rules below. */
 	background: rgba(244, 237, 224, 0.07);
 	border-color: rgba(244, 237, 224, 0.14);
+}
+.mc-chip.is-steam:hover {
+	background: rgba(196, 78, 63, 0.22);
+}
+.mc-chip.is-water:hover {
+	background: rgba(74, 111, 165, 0.22);
+}
+.mc-chip.is-flush:hover {
+	background: rgba(107, 140, 95, 0.22);
 }
 .mc-chip > i {
 	font-size: 18px;
@@ -111,30 +124,41 @@
 	border-color: rgba(244, 237, 224, 0.08);
 }
 
-/* Mode-specific tints when active */
-.mc-chip.is-active.is-steam {
+/* Mode-specific tints applied always — the chip carries its own colour
+   even at rest so the trio reads as Steam / Water / Flush at a glance.
+   Background is the light 15-% wash (matching `.mc-head-status` banner)
+   and the icon picks up the full mode colour. The active state below
+   layers the strong border + cancel chip on top of this base. */
+.mc-chip.is-steam {
 	background: var(--mc-steam-15);
-	border-color: var(--mc-steam);
-	color: var(--ink-50, var(--fg-1));
 }
-.mc-chip.is-active.is-steam > i {
+.mc-chip.is-steam > i {
 	color: var(--mc-steam);
 }
-.mc-chip.is-active.is-water {
+.mc-chip.is-water {
 	background: var(--mc-water-15);
-	border-color: var(--mc-water);
-	color: var(--ink-50, var(--fg-1));
 }
-.mc-chip.is-active.is-water > i {
+.mc-chip.is-water > i {
 	color: var(--mc-water);
 }
-.mc-chip.is-active.is-flush {
+.mc-chip.is-flush {
 	background: var(--mc-flush-15);
-	border-color: var(--mc-flush);
-	color: var(--ink-50, var(--fg-1));
 }
-.mc-chip.is-active.is-flush > i {
+.mc-chip.is-flush > i {
 	color: var(--mc-flush);
+}
+
+/* Active state — same tinted body as the resting chip, but a full
+   coloured border to signal "this mode is running right now" plus the
+   cancel `×` chip on the right (rendered by the component). */
+.mc-chip.is-active.is-steam {
+	border-color: var(--mc-steam);
+}
+.mc-chip.is-active.is-water {
+	border-color: var(--mc-water);
+}
+.mc-chip.is-active.is-flush {
+	border-color: var(--mc-flush);
 }
 
 .mc-chip-cancel {
