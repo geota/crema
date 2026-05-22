@@ -84,6 +84,18 @@ export interface TelemetrySample {
 	 * reader can skip the noisy near-zero-flow region. Units are bar / (mL/s)².
 	 */
 	readonly resistance: number | null;
+	/**
+	 * The DE1's per-sample setpoints — what the firmware was *aiming* for at
+	 * the moment this sample was taken, as opposed to the measured value
+	 * above. Used for the live chart's dashed "goal" overlay. Mirrors the
+	 * legacy app's `goal_*` mapping in `de1_de1.tcl:539-541`:
+	 *   `setHeadTemp` ← `SetHeadTemp` (NOT `SetMixTemp` — legacy explicit)
+	 *   `setGroupPressure` ← `SetGroupPressure`
+	 *   `setGroupFlow` ← `SetGroupFlow`
+	 */
+	readonly setHeadTemp: number;
+	readonly setGroupPressure: number;
+	readonly setGroupFlow: number;
 }
 
 /**
@@ -652,7 +664,10 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				mixTemp: t.mix_temp,
 				steamTemp: t.steam_temp,
 				weight: snapshot.scaleWeight,
-				resistance: puckResistance(t.group_pressure, t.group_flow)
+				resistance: puckResistance(t.group_pressure, t.group_flow),
+				setHeadTemp: t.set_head_temp,
+				setGroupPressure: t.set_group_pressure,
+				setGroupFlow: t.set_group_flow
 			};
 			// Append to the series; only buffer while a shot is in progress so
 			// idle-state telemetry never grows the chart. Cap the length.
