@@ -29,6 +29,7 @@ pub mod error;
 pub mod filter;
 pub mod flow;
 pub mod history;
+pub mod history_import;
 pub mod profile;
 pub mod profile_import;
 pub mod session;
@@ -46,6 +47,7 @@ pub use profile::{
     AssembledProfile, BeverageType, Compare, ExitCondition, ExitMetric, Limiter, Profile,
     ProfileStep, Pump, TempSensor, Transition,
 };
+pub use history_import::{import_legacy_tcl_shot, import_v2_json_shot};
 pub use profile_import::{export_v2_json, import_legacy_tcl, import_v2_json};
 pub use session::SessionTimer;
 pub use shot::{
