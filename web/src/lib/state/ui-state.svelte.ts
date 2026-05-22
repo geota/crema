@@ -671,9 +671,20 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 			// hence the brew dashboard's "cards update but chart stays blank"
 			// bug after a mid-shot reload. Treat entering `Espresso` as an
 			// implicit ShotStarted: flip `shotInProgress` on so the next
-			// Telemetry sample lands on the chart. Benign in normal flow,
-			// where ShotStarted follows MachineStateChanged immediately.
-			const espressoEntering = stateName === 'Espresso' && !snapshot.shotInProgress;
+			// Telemetry sample lands on the chart.
+			//
+			// Gate on `completedShot === null` so this only fires on the
+			// *first* Espresso entry of a fresh session — `ShotStarted`
+			// always clears `completedShot`, `ShotCompleted` sets it.
+			// Without this gate, the DE1's tail Espresso substates
+			// (`Espresso / Ending`) re-fired the recovery branch right
+			// after a normal `ShotCompleted` and let the now-finished
+			// chart keep absorbing live scale weights (lifting the cup
+			// pushed the line up).
+			const espressoEntering =
+				stateName === 'Espresso' &&
+				!snapshot.shotInProgress &&
+				snapshot.completedShot === null;
 			// R5 — readable error text for an Error* substate, null when healthy.
 			const machineError = machineErrorText(substate);
 			// R6 — stamp when the machine first entered a resting state, so an
