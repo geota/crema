@@ -426,7 +426,10 @@ export class De1Manager {
 				MmrRegister.GhcInfo,
 				MmrRegister.RefillKit,
 				MmrRegister.SerialNumber,
-				MmrRegister.HeaterVoltage
+				MmrRegister.HeaterVoltage,
+				// Flush water target temp — surfaced as the Flush chip's
+				// sub-label on the Brew dashboard. Wire value is `°C × 10`.
+				MmrRegister.FlushTemp
 			];
 			for (const reg of connectMmrSweep) {
 				step = `MMR read ${reg}`;
