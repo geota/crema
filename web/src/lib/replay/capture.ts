@@ -32,6 +32,13 @@ interface CaptureLine {
 	src: string;
 	/** Lowercase hex payload, no separators. */
 	hex: string;
+	/**
+	 * Optional structured payload for `src:"META"` entries — the Crema-
+	 * specific prelude that carries connect-phase identity (scale
+	 * advertised name, DE1 firmware version, …). External replay tools
+	 * ignore it; legacy captures don't have it.
+	 */
+	meta?: Record<string, string | number | undefined>;
 }
 
 /**
@@ -51,10 +58,29 @@ export interface CaptureEvent {
 export interface ParsedCapture {
 	/** The replayable inbound events, in file order. */
 	readonly events: readonly CaptureEvent[];
+	/**
+	 * Connect-phase identity collected from `src:"META"` entries. The replay
+	 * tool reads these BEFORE iterating `events` so it can `connectScale(name)`
+	 * etc. and the bytes that follow decode properly. Empty for legacy
+	 * captures that pre-date the META prelude.
+	 */
+	readonly meta: ReplayMeta;
 	/** Total non-blank lines read. */
 	readonly linesRead: number;
 	/** Lines skipped — unparseable, `dir:"out"`, unmapped `src`, or bad hex. */
 	readonly skipped: number;
+}
+
+/** Merged metadata from one or more `src:"META"` prelude entries. */
+export interface ReplayMeta {
+	/** The scale's BLE advertised name (`"BOOKOO_SC"`, `"ACAIA…"`, …). */
+	readonly scaleName?: string;
+	/** The DE1's firmware build number (the integer MMR `FirmwareVersion`). */
+	readonly de1FirmwareVersion?: number;
+	/** The DE1's machine-model identifier (the integer MMR `MachineModel`). */
+	readonly de1MachineModel?: number;
+	/** The DE1's serial number (raw u32). */
+	readonly de1SerialNumber?: number;
 }
 
 /**
@@ -110,6 +136,7 @@ function decodeHex(hex: string): Uint8Array | undefined {
  */
 export function parseCapture(text: string): ParsedCapture {
 	const events: CaptureEvent[] = [];
+	const meta: ReplayMeta = {};
 	let linesRead = 0;
 	let skipped = 0;
 
@@ -133,6 +160,26 @@ export function parseCapture(text: string): ParsedCapture {
 			continue;
 		}
 
+		// META prelude entries carry identity payloads in the optional
+		// `meta` object; later entries override earlier ones (a session
+		// that re-paired a different scale mid-stream would land here).
+		if (entry.src === 'META' && entry.meta) {
+			const m = entry.meta;
+			if (typeof m.scaleName === 'string') {
+				(meta as { scaleName?: string }).scaleName = m.scaleName;
+			}
+			if (typeof m.de1FirmwareVersion === 'number') {
+				(meta as { de1FirmwareVersion?: number }).de1FirmwareVersion = m.de1FirmwareVersion;
+			}
+			if (typeof m.de1MachineModel === 'number') {
+				(meta as { de1MachineModel?: number }).de1MachineModel = m.de1MachineModel;
+			}
+			if (typeof m.de1SerialNumber === 'number') {
+				(meta as { de1SerialNumber?: number }).de1SerialNumber = m.de1SerialNumber;
+			}
+			continue;
+		}
+
 		const source = sourceFromName(entry.src);
 		if (source === undefined) {
 			// Inbound traffic the web core does not model — skip it.
@@ -149,7 +196,7 @@ export function parseCapture(text: string): ParsedCapture {
 		events.push({ t: entry.t, source, data });
 	}
 
-	return { events, linesRead, skipped };
+	return { events, meta, linesRead, skipped };
 }
 
 /** Read a `File` (e.g. from an `<input type="file">`) and {@link parseCapture} it. */
