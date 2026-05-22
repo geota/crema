@@ -102,17 +102,17 @@
 	 * Download this shot in whichever format the user picked in
 	 * Settings → Advanced → "Shot export format":
 	 *
-	 * - `'v2'` (default) — community v2 `.shot.json`, portable across
-	 *   reaprime / Visualizer / de1app, pre-decoded telemetry.
-	 * - `'jsonl'` — raw BLE capture, bit-exact replay for bug reports.
-	 *   Falls back to v2 with a console warn if the shot has no
-	 *   IndexedDB capture (older shots from before the recorder shipped,
-	 *   or imported shots).
+	 * - `'community'` (default) — community v2 `.shot.json`, portable
+	 *   across reaprime / Visualizer / de1app, pre-decoded telemetry.
+	 * - `'fullTelemetry'` — raw BLE capture (.jsonl), bit-exact replay
+	 *   for bug reports. Falls back to community with a console warn
+	 *   if the shot has no IndexedDB capture (older shots from before
+	 *   the recorder shipped, or imported shots).
 	 *
 	 * docs/22 task #64.
 	 */
 	async function download(): Promise<void> {
-		if (settings.current.shotExportFormat === 'jsonl') {
+		if (settings.current.shotExportFormat === 'fullTelemetry') {
 			const entries = await getCaptureStore().get(shot.id);
 			if (entries && entries.length > 0) {
 				const stamp = shotFilename(shot).replace(/\.shot\.json$/, '');
