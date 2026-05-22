@@ -22,7 +22,7 @@ import {
 	type CremaCore,
 	type FirmwareUpdateStatus
 } from '$lib/core';
-import { MachineState, MmrRegister } from '$lib/core/crema-core';
+import { MachineState } from '$lib/core/crema-core';
 import { De1Manager, EMPTY_DE1_DIAGNOSTICS, ScaleManager } from '$lib/ble';
 import { getBeanStore } from '$lib/bean';
 import { getHistoryStore } from '$lib/history';
@@ -629,13 +629,13 @@ export class CremaApp {
 	/**
 	 * Send a `UserPresent = 1` heartbeat to the DE1. Best-effort: ignores
 	 * failures so a flaky link doesn't bubble exceptions into the
-	 * shell-side debounce loop.
+	 * shell-side debounce loop. The typed core method enforces the
+	 * firmware-upload lockout (no MMR writes while a firmware upload is
+	 * in progress) — see CremaCore::set_user_present.
 	 */
 	async markUserPresent(): Promise<void> {
 		try {
-			this.applyCoreOutput(
-				await this.core.writeMmr(MmrRegister.UserPresent, 1, 4)
-			);
+			this.applyCoreOutput(await this.core.setUserPresent(true));
 		} catch {
 			// Best-effort: the next debounce tick will retry.
 		}
@@ -645,14 +645,13 @@ export class CremaApp {
 	 * Write the `FeatureFlags.UserNotPresent` bit on the DE1. `suppress =
 	 * true` clears the bit (`UserNotPresent = 0`, app is tracking
 	 * presence); `false` sets it (`UserNotPresent = 1`, DE1 follows its
-	 * own timer).
+	 * own timer). The typed core method enforces the firmware-upload
+	 * lockout — see CremaCore::set_feature_flags.
 	 */
 	async setSuppressDe1Sleep(suppress: boolean): Promise<void> {
 		const userNotPresent = suppress ? 0 : 1;
 		try {
-			this.applyCoreOutput(
-				await this.core.writeMmr(MmrRegister.FeatureFlags, userNotPresent, 4)
-			);
+			this.applyCoreOutput(await this.core.setFeatureFlags(userNotPresent));
 		} catch {
 			// Best-effort — settings UI keeps the local preference regardless;
 			// next connect will retry from `createCremaApp`.
