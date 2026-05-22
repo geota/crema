@@ -134,13 +134,21 @@
 	 */
 	const posOr = (v: number | undefined, fallback: number): number =>
 		v != null && Number.isFinite(v) && v > 0 ? v : fallback;
-	const MODE_TARGET_SEC = $derived<
+	// `$derived.by(fn)` rather than `$derived(value)` so the closure runs
+	// lazily — `params` is declared later in the file, and a non-lazy
+	// expression would hit the temporal-dead-zone error.
+	const MODE_TARGET_SEC = $derived.by<
 		Record<'steaming' | 'dispensing' | 'flushing', number>
-	>({
-		steaming: posOr(ui.de1ShotSettings?.steamTimeoutS, 90),
+	>(() => ({
+		// Precedence: live machine value (ShotSettings/MMR) > the user's
+		// Quick Controls value (the QuickSheet steppers persist these
+		// per-shot params via `params.current`) > hardcoded legacy default.
+		// The QC value is the user's intent; the machine value is what
+		// the firmware currently has loaded.
+		steaming: posOr(ui.de1ShotSettings?.steamTimeoutS, posOr(params.current.steamTime, 90)),
 		dispensing: posOr(ui.de1ShotSettings?.hotWaterTimeoutS, 30),
-		flushing: 4.0
-	});
+		flushing: posOr(params.current.flushTime, 4)
+	}));
 	/**
 	 * Flush water target temperature — read from MMR `FlushTemp`
 	 * (`0x00803844`, wire value `°C × 10`). The connect-time MMR sweep
@@ -165,13 +173,18 @@
 	 * live values instead — so the chip says "what will happen" and the
 	 * banner says "what's happening now."
 	 */
-	const MODE_TARGET_LABEL = $derived<
+	// Same lazy-closure pattern as MODE_TARGET_SEC above. Precedence on
+	// each field: machine read > Quick Controls value (where it exists)
+	// > hardcoded legacy default. Steam *temp* has no QC analogue
+	// (Quick Sheet doesn't expose a steam-temp stepper); flush *temp*
+	// likewise — both keep their machine-or-hardcoded fallback.
+	const MODE_TARGET_LABEL = $derived.by<
 		Record<'steaming' | 'dispensing' | 'flushing', string>
-	>({
-		steaming: `${formatTemp(posOr(ui.de1ShotSettings?.steamTempC, 148), prefs.tempUnit)} · ${posOr(ui.de1ShotSettings?.steamTimeoutS, 90)} s`,
-		dispensing: `${formatTemp(posOr(ui.de1ShotSettings?.hotWaterTempC, 92), prefs.tempUnit)} · ${formatVolume(posOr(ui.de1ShotSettings?.hotWaterVolumeMl, 250), prefs.volumeUnit)}`,
-		flushing: `${formatTemp(flushTempC, prefs.tempUnit)} · 4 s`
-	});
+	>(() => ({
+		steaming: `${formatTemp(posOr(ui.de1ShotSettings?.steamTempC, 148), prefs.tempUnit)} · ${posOr(ui.de1ShotSettings?.steamTimeoutS, posOr(params.current.steamTime, 90))} s`,
+		dispensing: `${formatTemp(posOr(ui.de1ShotSettings?.hotWaterTempC, posOr(params.current.waterTemp, 92)), prefs.tempUnit)} · ${formatVolume(posOr(ui.de1ShotSettings?.hotWaterVolumeMl, posOr(params.current.waterVolume, 250)), prefs.volumeUnit)}`,
+		flushing: `${formatTemp(flushTempC, prefs.tempUnit)} · ${posOr(params.current.flushTime, 4)} s`
+	}));
 	/**
 	 * `performance.now()` when the DE1 first transitioned into the
 	 * current service mode. Reset to `null` whenever the mode returns to
