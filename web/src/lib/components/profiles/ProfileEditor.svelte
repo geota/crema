@@ -39,6 +39,12 @@
 	import TagInput from './TagInput.svelte';
 	import PeNumber from './PeNumber.svelte';
 	import { getSettingsStore, formatWeight } from '$lib/settings';
+	import {
+		MAX_TOTAL_VOLUME_ML,
+		MIN_TOTAL_VOLUME_ML,
+		MAX_TEMPERATURE_C,
+		MIN_TEMPERATURE_C
+	} from '$lib/profiles/bounds';
 
 	const settings = getSettingsStore();
 
@@ -431,8 +437,8 @@
 							value={draft.maxTotalVolumeMl}
 							step={5}
 							dimension="volume"
-							min={0}
-							max={1023}
+							min={MIN_TOTAL_VOLUME_ML}
+							max={MAX_TOTAL_VOLUME_ML}
 							digits={0}
 							onChange={(v) => patch({ maxTotalVolumeMl: Math.round(v) })}
 						/>
@@ -456,8 +462,8 @@
 							value={draft.tankTemperatureC}
 							step={1}
 							dimension="temp"
-							min={0}
-							max={100}
+							min={MIN_TEMPERATURE_C}
+							max={MAX_TEMPERATURE_C}
 							digits={0}
 							onChange={(v) => patch({ tankTemperatureC: Math.round(v) })}
 						/>
