@@ -18,6 +18,7 @@
 	import '../app.css';
 	import { createCremaApp, type CremaApp } from '$lib/state';
 	import { CremaSidebar } from '$lib/components';
+	import PowerButton from '$lib/components/PowerButton.svelte';
 	import { describeError } from '$lib/utils/error';
 	import { setCremaAppContext, type CoreLoadState } from '$lib/shell/app-context';
 
@@ -74,6 +75,7 @@
 	</main>
 {:else}
 	<CremaSidebar {app} />
+	<PowerButton {app} />
 	<div class="shell-content">
 		{@render children?.()}
 	</div>
