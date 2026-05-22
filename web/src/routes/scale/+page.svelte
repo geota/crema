@@ -182,6 +182,21 @@
 		app?.setScaleMode(id);
 	}
 
+	/**
+	 * Auto-stop — the scale's "stop the built-in timer when outflow drops to
+	 * zero" feature. Capability-gated via `caps?.auto_stop`; the current
+	 * mode id comes from the snapshot's `scaleAutoStop` (populated on every
+	 * weight notification that echoes the setting). The Bookoo today
+	 * exposes a binary 0/1 mode (off/on); the toggle just flips between
+	 * those. Scales that report `device_auto_stop` but have additional
+	 * modes would be handled by extending this to a segment control.
+	 */
+	const autoStopOn = $derived(snap?.scaleAutoStop != null && snap.scaleAutoStop !== 0);
+	function toggleAutoStop(): void {
+		if (!caps?.auto_stop) return;
+		app?.setScaleAutoStop(autoStopOn ? 0 : 1);
+	}
+
 	// ── Reset-peak / Start-timer — UI-only ───────────────────────────────
 	// TODO: no core backing — the core exposes no scale peak-reset or
 	// built-in-timer start command. Local UI state only.
@@ -421,6 +436,26 @@
 					aria-label="Anti-mistouch"
 				></button>
 			</div>
+
+			<!-- Auto-stop (capability-gated, hidden when not supported) -->
+			{#if caps?.auto_stop}
+				<div class="sc-set-row">
+					<div>
+						<div class="sc-set-title">Auto-stop on flow drop</div>
+						<div class="sc-set-sub">
+							Stops the scale's built-in timer when outflow drops to zero —
+							handy for ratio-mode shots where the timer would otherwise
+							keep running after the cup is full.
+						</div>
+					</div>
+					<button
+						class="qmini-tog"
+						class:on={autoStopOn}
+						onclick={toggleAutoStop}
+						aria-label="Auto-stop"
+					></button>
+				</div>
+			{/if}
 
 			<!-- Auto-sleep ↔ standby timeout (real capability) -->
 			<div class="sc-set-row">
