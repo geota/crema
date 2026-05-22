@@ -14,7 +14,7 @@
 	import StGroup from '../StGroup.svelte';
 	import StRow from '../StRow.svelte';
 	import StToggle from '../StToggle.svelte';
-	import StValueChip from '../StValueChip.svelte';
+	import StStepper from '../StStepper.svelte';
 
 	const settings = getSettingsStore();
 	const prefs = $derived(settings.current);
@@ -29,9 +29,9 @@
 <StGroup title="Targets">
 	<StRow title="Default dose" sub="Grams of ground coffee per shot.">
 		{#snippet control()}
-			<StValueChip
+			<StStepper
 				value={prefs.defaultDoseG}
-				suffix=" g"
+				unit="g"
 				decimals={1}
 				step={0.1}
 				min={5}
@@ -42,9 +42,9 @@
 	</StRow>
 	<StRow title="Default ratio" sub="Yield-to-dose target for new profiles.">
 		{#snippet control()}
-			<StValueChip
+			<StStepper
 				value={prefs.defaultRatio}
-				suffix=":1 yield"
+				unit=":1"
 				decimals={1}
 				step={0.1}
 				min={1}
@@ -55,9 +55,9 @@
 	</StRow>
 	<StRow title="Default brew temp" sub="Group temperature when no profile is loaded.">
 		{#snippet control()}
-			<StValueChip
+			<StStepper
 				value={prefs.defaultBrewTempC}
-				suffix=" °C"
+				unit="°C"
 				decimals={1}
 				step={0.5}
 				min={80}
@@ -68,9 +68,9 @@
 	</StRow>
 	<StRow title="Default pre-infusion" sub="Pre-infusion time when no profile is loaded.">
 		{#snippet control()}
-			<StValueChip
+			<StStepper
 				value={prefs.defaultPreinfusionS}
-				suffix=" s"
+				unit="s"
 				step={1}
 				min={0}
 				max={60}

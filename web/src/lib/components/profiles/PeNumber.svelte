@@ -36,6 +36,37 @@
 		const next = Math.min(max, Math.max(min, Number((value + dir * step).toFixed(2))));
 		onChange(next);
 	}
+
+	// Click-to-type — mirrors StStepper's behaviour. Tap the digits to set
+	// a specific value instead of clicking the buttons N times.
+	let editing = $state(false);
+	let draft = $state('');
+	let inputEl = $state<HTMLInputElement | null>(null);
+	function beginEdit(): void {
+		draft = String(value);
+		editing = true;
+		queueMicrotask(() => {
+			inputEl?.focus();
+			inputEl?.select();
+		});
+	}
+	function commit(): void {
+		if (!editing) return;
+		editing = false;
+		const n = Number(draft);
+		if (!Number.isFinite(n)) return;
+		const next = Math.min(max, Math.max(min, n));
+		if (next !== value) onChange(next);
+	}
+	function onKey(e: KeyboardEvent): void {
+		if (e.key === 'Enter') {
+			e.preventDefault();
+			commit();
+		} else if (e.key === 'Escape') {
+			e.preventDefault();
+			editing = false;
+		}
+	}
 </script>
 
 <div class="pe-num">
@@ -45,7 +76,26 @@
 			<i class="ph ph-minus" aria-hidden="true"></i>
 		</button>
 		<div class="pe-num-val">
-			<span class="pe-num-num">{value.toFixed(digits)}</span>
+			{#if editing}
+				<input
+					bind:this={inputEl}
+					class="pe-num-num pe-num-input"
+					type="number"
+					{step}
+					{min}
+					{max}
+					bind:value={draft}
+					onblur={commit}
+					onkeydown={onKey}
+				/>
+			{:else}
+				<button
+					type="button"
+					class="pe-num-num pe-num-numbtn"
+					aria-label={`Edit ${label}`}
+					onclick={beginEdit}>{value.toFixed(digits)}</button
+				>
+			{/if}
 			<span class="pe-num-unit">{unit}</span>
 		</div>
 		<button class="pe-num-btn" aria-label="Increase {label}" onclick={() => inc(1)}>
@@ -110,6 +160,34 @@
 		font-variant-numeric: tabular-nums;
 		font-size: 20px;
 		color: var(--fg-1);
+	}
+	.pe-num-numbtn {
+		background: transparent;
+		border: 0;
+		padding: 0;
+		cursor: text;
+	}
+	.pe-num-numbtn:hover {
+		color: var(--copper-400);
+	}
+	.pe-num-input {
+		min-width: 0;
+		width: 100%;
+		background: rgba(var(--tint-rgb), 0.08);
+		border: 1px solid rgba(var(--copper-rgb), 0.5);
+		border-radius: 4px;
+		padding: 1px 4px;
+		text-align: center;
+		outline: none;
+	}
+	.pe-num-input::-webkit-outer-spin-button,
+	.pe-num-input::-webkit-inner-spin-button {
+		-webkit-appearance: none;
+		margin: 0;
+	}
+	.pe-num-input[type='number'] {
+		-moz-appearance: textfield;
+		appearance: textfield;
 	}
 	.pe-num-unit {
 		font-size: 11px;

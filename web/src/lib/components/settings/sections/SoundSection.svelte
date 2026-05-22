@@ -12,7 +12,7 @@
 	import StGroup from '../StGroup.svelte';
 	import StRow from '../StRow.svelte';
 	import StToggle from '../StToggle.svelte';
-	import StValueChip from '../StValueChip.svelte';
+	import StStepper from '../StStepper.svelte';
 
 	const settings = getSettingsStore();
 	const prefs = $derived(settings.current);
@@ -54,9 +54,9 @@
 	</StRow>
 	<StRow title="Volume">
 		{#snippet control()}
-			<StValueChip
+			<StStepper
 				value={prefs.volumePercent}
-				suffix="%"
+				unit="%"
 				step={5}
 				min={0}
 				max={100}
