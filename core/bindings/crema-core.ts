@@ -47,6 +47,13 @@ export type Event =
 	mix_temp: number;
 	/** Steam-heater temperature, °C. */
 	steam_temp: number;
+	/**
+	 * Running shot volume dispensed so far, mL — integrated from the
+	 * telemetry flow stream against the DE1's `sample_time` ticks
+	 * (BLE-jitter-immune when the line-frequency is known, host-clock
+	 * fallback otherwise). Resets to 0 on every `ShotStarted`.
+	 */
+	dispensed_volume_ml: number;
 }}
 	/** A weight reading arrived from the scale, smoothed by the flow estimator. */
 	| { type: "ScaleReading", content: {
@@ -276,9 +283,16 @@ export type Event =
 	method: string;
 }}
 	/**
-	 * The DE1's `ShotHeader` was read from `HeaderWrite` (`cuuid_0F`) —
-	 * emitted once after the BLE shell reads the characteristic at connect
-	 * time. Carries the shape of the currently-loaded profile.
+	 * **DORMANT — see [`Source::De1ProfileHeader`] and docs/16 §6.1.** This
+	 * event would carry the DE1's reported `ShotHeader` if the firmware
+	 * supported reading the loaded-profile buffer on `cuuid_0F`. It does
+	 * not (snoop-verified 2026-05-21), so the BLE shell no longer triggers
+	 * the Read and this variant is never emitted in the current code path.
+	 * 
+	 * Kept for forward-compat — the decode path
+	 * ([`CremaCore::handle_profile_header_read`](crate::CremaCore)) and
+	 * every consumer (UI, tests) remain in place; flipping the BLE shell
+	 * back to issuing a Read is one line in `web/src/lib/ble/de1.ts`.
 	 */
 	| { type: "ProfileHeaderRead", content: {
 	/** Total number of frames in the loaded profile. */

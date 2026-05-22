@@ -26,13 +26,45 @@
 	import StGroup from '../StGroup.svelte';
 	import StRow from '../StRow.svelte';
 	import StToggle from '../StToggle.svelte';
+	import StSelect from '../StSelect.svelte';
 	import StButton from '../StButton.svelte';
+	import { onMount } from 'svelte';
 
 	/** The shared orchestrator, or `null` while the wasm core is still loading. */
 	let { app }: { app: CremaApp | null } = $props();
 
 	const settings = getSettingsStore();
 	const prefs = $derived(settings.current);
+
+	// ---- Live line-frequency the core reports ----------------------------
+	//
+	// When the user has the AC-mains setting on "Auto", the core's
+	// auto-detector locks 1+ seconds into the first shot. Poll the core
+	// every second to surface the locked value as a hint in the select's
+	// description. Polling avoids plumbing a new Event variant for what is
+	// a one-time signal per session.
+	let detectedHz = $state<number | null>(null);
+	onMount(() => {
+		if (!app) return;
+		const tick = async () => {
+			const hz = await app!.lineFrequencyHz();
+			detectedHz = hz;
+		};
+		void tick();
+		const id = window.setInterval(tick, 1000);
+		return () => window.clearInterval(id);
+	});
+
+	/**
+	 * Handle the user picking a new mains-frequency option. Stores the
+	 * preference and pushes it into the core so the volume integrator
+	 * switches its dt source immediately.
+	 */
+	function onLineFrequencyChange(value: string): void {
+		const hz = (value === '50' ? 50 : value === '60' ? 60 : 0) as 0 | 50 | 60;
+		settings.set('lineFrequencyHz', hz);
+		void app?.setLineFrequencyOverride(hz);
+	}
 
 	// ---- Capture replay (developer tool) ---------------------------------
 
@@ -95,6 +127,28 @@
 />
 
 <StGroup title="Telemetry">
+	<StRow
+		title="AC mains frequency"
+		sub={prefs.lineFrequencyHz === 0
+			? `Auto-detect from the DE1's sample-time stream. ${
+				detectedHz != null
+					? `Currently locked at ${detectedHz} Hz.`
+					: 'Locks 1+ seconds into the first shot of a session.'
+			}`
+			: `Pinned at ${prefs.lineFrequencyHz} Hz. Switch back to Auto to let the detector run.`}
+	>
+		{#snippet control()}
+			<StSelect
+				value={String(prefs.lineFrequencyHz)}
+				options={[
+					{ value: '0', label: 'Auto' },
+					{ value: '50', label: '50 Hz' },
+					{ value: '60', label: '60 Hz' }
+				]}
+				onChange={onLineFrequencyChange}
+			/>
+		{/snippet}
+	</StRow>
 	<StRow title="Show flow curve in chart">
 		{#snippet control()}
 			<StToggle

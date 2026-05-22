@@ -124,12 +124,7 @@ pub struct AutoStop {
     config: StopConfig,
     /// Monotonic timestamp the shot started flowing — see [`AutoStop::new`].
     started: Duration,
-    /// Dispensed volume so far, mL — integrated from the telemetry flow stream.
-    dispensed_volume: f32,
     flow: FlowEstimator,
-    /// Monotonic timestamp of the most recent telemetry sample, for the flow
-    /// integration. `None` until the first sample arrives.
-    last_sample: Option<Duration>,
     triggered: bool,
 }
 
@@ -140,9 +135,7 @@ impl AutoStop {
             targets,
             config,
             started,
-            dispensed_volume: 0.0,
             flow: FlowEstimator::new(config.flow_algorithm),
-            last_sample: None,
             triggered: false,
         }
     }
@@ -150,11 +143,6 @@ impl AutoStop {
     /// Whether a stop has already been decided.
     pub fn has_triggered(&self) -> bool {
         self.triggered
-    }
-
-    /// The volume dispensed so far, mL (integrated from telemetry flow).
-    pub fn dispensed_volume(&self) -> f32 {
-        self.dispensed_volume
     }
 
     /// Whether enough time has passed since the start for auto-stop to act.
@@ -204,21 +192,21 @@ impl AutoStop {
         None
     }
 
-    /// Feed a telemetry sample. Integrates its flow into the dispensed volume
-    /// and returns [`StopReason::Volume`] the first time it reaches the SAV
-    /// target.
-    pub fn on_sample(&mut self, sample: &ShotSample, now: Duration) -> Option<StopReason> {
+    /// Feed a telemetry sample. The volume integration lives outside
+    /// AutoStop now ([`VolumeIntegrator`](crate::VolumeIntegrator) on the
+    /// orchestrator) — `dispensed_ml` carries the current running volume,
+    /// so AutoStop only does the SAV comparison without re-integrating.
+    /// Returns [`StopReason::Volume`] the first time `dispensed_ml`
+    /// reaches the SAV target.
+    pub fn on_sample(
+        &mut self,
+        _sample: &ShotSample,
+        now: Duration,
+        dispensed_ml: f32,
+    ) -> Option<StopReason> {
         if self.triggered {
             return None;
         }
-        // Integrate flow (mL/s) over the interval since the last sample.
-        if let Some(then) = self.last_sample
-            && now > then
-        {
-            let dt_s = (now - then).as_secs_f32();
-            self.dispensed_volume += sample.group_flow * dt_s;
-        }
-        self.last_sample = Some(now);
 
         if let Some(reason) = self.check_max_time(now) {
             return Some(reason);
@@ -228,7 +216,7 @@ impl AutoStop {
         if !self.is_armed(now) {
             return None;
         }
-        if self.dispensed_volume >= target {
+        if dispensed_ml >= target {
             self.triggered = true;
             return Some(StopReason::Volume);
         }
@@ -362,18 +350,18 @@ mod tests {
     }
 
     #[test]
-    fn sav_stops_when_integrated_volume_reaches_the_target() {
+    fn sav_stops_when_dispensed_volume_reaches_the_target() {
         let targets = StopTargets {
             weight: None,
             volume: Some(36.0),
             max_time: None,
         };
         let mut stop = AutoStop::new(targets, immediate_config(), Duration::ZERO);
-        // First sample establishes the integration baseline.
-        assert_eq!(stop.on_sample(&sample_with_flow(4.0), ms(1_000)), None);
-        // 4 mL/s over the next 9 s -> 36 mL dispensed.
+        // Below the target → no stop.
+        assert_eq!(stop.on_sample(&sample_with_flow(4.0), ms(1_000), 4.0), None);
+        // At/past the target → SAV fires.
         assert_eq!(
-            stop.on_sample(&sample_with_flow(4.0), ms(10_000)),
+            stop.on_sample(&sample_with_flow(4.0), ms(10_000), 36.0),
             Some(StopReason::Volume)
         );
     }
@@ -400,21 +388,11 @@ mod tests {
         };
         let mut stop = AutoStop::new(targets, immediate_config(), Duration::ZERO);
         assert_eq!(stop.on_weight(999.0, ms(1000)), None);
-        assert_eq!(stop.on_sample(&sample_with_flow(99.0), ms(2000)), None);
+        assert_eq!(
+            stop.on_sample(&sample_with_flow(99.0), ms(2000), 0.0),
+            None
+        );
         assert!(!stop.has_triggered());
-    }
-
-    #[test]
-    fn volume_is_integrated_from_the_flow_stream() {
-        let targets = StopTargets {
-            weight: None,
-            volume: None,
-            max_time: None,
-        };
-        let mut stop = AutoStop::new(targets, immediate_config(), Duration::ZERO);
-        stop.on_sample(&sample_with_flow(2.0), ms(0));
-        stop.on_sample(&sample_with_flow(2.0), ms(5_000)); // 2 mL/s * 5 s
-        assert_eq!(stop.dispensed_volume(), 10.0);
     }
 
     #[test]
@@ -449,9 +427,12 @@ mod tests {
             max_time: Some(60.0),
         };
         let mut stop = AutoStop::new(targets, immediate_config(), ms(1_000));
-        assert_eq!(stop.on_sample(&sample_with_flow(2.0), ms(30_000)), None);
         assert_eq!(
-            stop.on_sample(&sample_with_flow(2.0), ms(61_000)),
+            stop.on_sample(&sample_with_flow(2.0), ms(30_000), 0.0),
+            None
+        );
+        assert_eq!(
+            stop.on_sample(&sample_with_flow(2.0), ms(61_000), 0.0),
             Some(StopReason::MaxTime)
         );
     }

@@ -35,6 +35,7 @@ pub mod session;
 pub mod shot;
 pub mod steam;
 pub mod stop;
+pub mod volume;
 pub mod water;
 
 pub use builtin::{BUILTIN_PROFILE_COUNT, builtin_profiles};
@@ -55,4 +56,5 @@ pub use steam::{
     SteamSample,
 };
 pub use stop::{AutoStop, STOP_WEIGHT_BEFORE, StopConfig, StopReason, StopTargets};
+pub use volume::{LineFreqDetector, VolumeIntegrator};
 pub use water::{WaterEvent, WaterMonitor, WaterRecord, WaterSessionKind};

@@ -105,6 +105,11 @@ pub enum Event {
         mix_temp: f32,
         /// Steam-heater temperature, °C.
         steam_temp: f32,
+        /// Running shot volume dispensed so far, mL — integrated from the
+        /// telemetry flow stream against the DE1's `sample_time` ticks
+        /// (BLE-jitter-immune when the line-frequency is known, host-clock
+        /// fallback otherwise). Resets to 0 on every `ShotStarted`.
+        dispensed_volume_ml: f32,
     },
     /// A weight reading arrived from the scale, smoothed by the flow estimator.
     ScaleReading {

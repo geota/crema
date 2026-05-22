@@ -23,9 +23,9 @@ pub use firmware_info::{FirmwareUpdateStatus, LATEST_KNOWN_FIRMWARE_BUILD};
 use std::time::Duration;
 
 use de1_domain::{
-    AutoStop, FlowAlgorithm, FlowEstimator, Profile, STOP_WEIGHT_BEFORE, ShotEvent, ShotMonitor,
-    ShotPhase, SteamEvent, SteamMonitor, StopConfig, StopReason, StopTargets, WaterEvent,
-    WaterMonitor,
+    AutoStop, FlowAlgorithm, FlowEstimator, LineFreqDetector, Profile, STOP_WEIGHT_BEFORE,
+    ShotEvent, ShotMonitor, ShotPhase, SteamEvent, SteamMonitor, StopConfig, StopReason,
+    StopTargets, VolumeIntegrator, WaterEvent, WaterMonitor,
 };
 use de1_protocol::{
     CalTarget, Calibration, EXTENSION_FRAME_INDEX_OFFSET, MachineState, MmrReadReply, MmrRegister,
@@ -142,6 +142,19 @@ pub struct CremaCore {
     /// characteristic — the shape of whatever profile the DE1 has loaded.
     /// Populated by [`handle_profile_header_read`](Self::handle_profile_header_read).
     last_profile_header: Option<ShotHeader>,
+    /// Running dispensed-volume integrator — integrates `flow × dt` from
+    /// every `ShotSample`. The `dt` source is the DE1's `sample_time` when
+    /// the line-frequency is known, else the host clock. Reset on every
+    /// `ShotEvent::Started`.
+    volume_integrator: VolumeIntegrator,
+    /// Auto-detector for the DE1's AC mains frequency (50 vs 60 Hz). Locks
+    /// once after a 1+ second warmup; never reconsidered for the rest of
+    /// the session. Cleared by [`reset`](Self::reset).
+    line_freq_detector: LineFreqDetector,
+    /// User-supplied override for the AC mains frequency. `Some(50.0)` or
+    /// `Some(60.0)` if the user pinned it in settings; `None` means
+    /// auto-detect (the detector's locked value wins).
+    line_freq_override: Option<f32>,
 }
 
 /// In-flight state of one profile upload. Owned by
@@ -202,7 +215,32 @@ impl CremaCore {
             profile_upload: None,
             last_active_profile_title: None,
             last_profile_header: None,
+            volume_integrator: VolumeIntegrator::new(),
+            line_freq_detector: LineFreqDetector::new(),
+            line_freq_override: None,
         }
+    }
+
+    /// The effective AC mains frequency the volume integrator will use.
+    /// Returns the user override if set, else the auto-detector's locked
+    /// value (if any), else `None` — in which case the integrator falls
+    /// back to host-clock `dt` (BLE-jitter contaminated, ~5% volume drift).
+    pub fn line_frequency_hz(&self) -> Option<f32> {
+        self.line_freq_override.or(self.line_freq_detector.locked_hz())
+    }
+
+    /// Pin the AC mains frequency. `Some(50.0)` / `Some(60.0)` overrides
+    /// the auto-detector; `None` returns to auto. Persisting the setting
+    /// is the shell's job — pass `Some(hz)` on `loadCore()` once read from
+    /// localStorage, or here when the user changes it in Settings.
+    pub fn set_line_frequency_override(&mut self, hz: Option<f32>) {
+        self.line_freq_override = hz;
+    }
+
+    /// Volume dispensed in the current shot, mL. Resets to 0 on every
+    /// `Event::ShotStarted`. Updated on every `ShotSample` notification.
+    pub fn dispensed_volume_ml(&self) -> f32 {
+        self.volume_integrator.dispensed_ml()
     }
 
     /// Whether a firmware upload is currently locking out other writes.
@@ -1121,10 +1159,20 @@ impl CremaCore {
         }
         // Record steam telemetry while a steam session is in progress.
         self.steam.on_sample(&sample, now);
+        // Volume integration: observe the line-frequency detector first
+        // (its lock is the input to the integrator's dt source), then
+        // integrate the sample's flow into the running dispensed_ml.
+        // Auto-detect runs even while a user override is set — cheap, and
+        // surfaces the detector's view alongside the override for
+        // diagnostics.
+        self.line_freq_detector.observe(sample.sample_time, now);
+        self.volume_integrator
+            .integrate(&sample, now, self.line_frequency_hz());
+        let dispensed_ml = self.volume_integrator.dispensed_ml();
         let reason = self
             .auto_stop
             .as_mut()
-            .and_then(|stop| stop.on_sample(&sample, now));
+            .and_then(|stop| stop.on_sample(&sample, now, dispensed_ml));
         Self::push_stop(reason, out);
         // `Event::Telemetry.elapsed` is `u32` milliseconds — what the FFI
         // surface carries — so convert the `Duration` once at this boundary.
@@ -1139,6 +1187,7 @@ impl CremaCore {
             head_temp: sample.head_temp,
             mix_temp: sample.mix_temp,
             steam_temp: sample.steam_temp,
+            dispensed_volume_ml: self.volume_integrator.dispensed_ml(),
         });
     }
 
@@ -1549,6 +1598,10 @@ impl CremaCore {
             ShotEvent::Started => {
                 self.shot_started = Some(now);
                 self.flow.reset();
+                // Fresh shot → fresh running volume. The integrator keeps
+                // its `last_sample_time` / `last_host_time` so the first
+                // sample of the new shot still has a valid `dt` reference.
+                self.volume_integrator.reset();
                 // Auto-tare the connected scale so the cup starts from zero,
                 // mirroring the legacy app's tare-at-shot-start behaviour.
                 self.push_tare_command(out);
