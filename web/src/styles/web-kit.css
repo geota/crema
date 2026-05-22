@@ -477,19 +477,35 @@
 .crema-foot-meta.right { justify-content: flex-end; }
 
 .crema-bigbtn {
-  display: inline-flex; align-items: center; gap: 14px;
+  /* Fills its grid cell so it shares the chip row's 4-equal-column
+     rhythm (see `mode-controls.css` .crema-foot-actions). `inline-flex`
+     was right when it sat on its own; inside the grid, `flex` + a min
+     of 0 lets it shrink to its cell. */
+  display: flex; align-items: center; justify-content: center; gap: 14px;
+  width: 100%;
   font-family: var(--font-sans); font-size: 18px; font-weight: 600;
   background: var(--copper-500);
   color: var(--fg-on-accent);
-  padding: 18px 36px;
+  padding: 18px 18px;
   border-radius: 999px;
   border: none; cursor: pointer;
   transition: all 120ms var(--ease);
   box-shadow: 0 8px 24px rgba(var(--copper-rgb), 0.30);
 }
 .crema-bigbtn.running { background: var(--danger); box-shadow: 0 8px 24px rgba(var(--danger-rgb), 0.30); }
-.crema-bigbtn:hover { transform: translateY(-1px); }
-.crema-bigbtn:active { transform: scale(0.985); }
+.crema-bigbtn:hover:not(:disabled) { transform: translateY(-1px); }
+.crema-bigbtn:active:not(:disabled) { transform: scale(0.985); }
+/* Disabled state — the DE1 isn't ready (no machine connected, mid-
+   transition, …). Drops the copper glow and dims so the button reads
+   as "not actionable right now"; pointer cursor flips. The label
+   text stays legible for orientation. */
+.crema-bigbtn:disabled {
+  background: rgba(var(--tint-rgb), 0.12);
+  color: rgba(var(--tint-rgb), 0.5);
+  box-shadow: none;
+  cursor: not-allowed;
+  transform: none;
+}
 
 /* ── Profile Library ─────────────────────────────────────────────────── */
 .crema-library {
