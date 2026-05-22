@@ -102,14 +102,106 @@
 					? 'Flushing'
 					: ''
 	);
-	const headStatusMeta = $derived(
+
+	// ── Live mode telemetry — drives the head pill's progress bar
+	//
+	// Targets are hardcoded for now; they'll come from the per-mode
+	// Settings sections once they land (docs/21). Steam target = 8 s,
+	// Flush target = 4 s. Hot water defaults to 30 s as a placeholder
+	// time-budget until we wire `dispensedVolumeMl` against a
+	// settings-driven `hotWaterVolMl` target.
+	const MODE_TARGET_SEC: Record<'steaming' | 'dispensing' | 'flushing', number> = {
+		steaming: 8.0,
+		dispensing: 30.0,
+		flushing: 4.0
+	};
+	const MODE_TARGET_LABEL: Record<'steaming' | 'dispensing' | 'flushing', string> = {
+		steaming: '148 °C · 8 s',
+		dispensing: '92 °C · 250 ml',
+		flushing: '4 s'
+	};
+	/**
+	 * `performance.now()` when the DE1 first transitioned into the
+	 * current service mode. Reset to `null` whenever the mode returns to
+	 * idle so the next start gets a fresh `t = 0`. The associated
+	 * `modeNowMs` ticks every 250 ms while a mode is active, giving the
+	 * progress bar a smooth fill without coupling to the BLE telemetry
+	 * cadence (which can be sparse during HotWater / Flush).
+	 */
+	let modeStartedAtMs = $state<number | null>(null);
+	let modeNowMs = $state(0);
+	$effect(() => {
+		if (modeState === 'idle') {
+			modeStartedAtMs = null;
+			return;
+		}
+		// First tick after a transition: anchor `started` if absent and
+		// align `now` so elapsed = 0 on the first render.
+		if (modeStartedAtMs === null) {
+			modeStartedAtMs = performance.now();
+			modeNowMs = modeStartedAtMs;
+		}
+		const id = window.setInterval(() => {
+			modeNowMs = performance.now();
+		}, 250);
+		return () => window.clearInterval(id);
+	});
+	/** Seconds since the active mode began (0 when idle). */
+	const modeElapsedSec = $derived(
+		modeStartedAtMs === null ? 0 : Math.max(0, (modeNowMs - modeStartedAtMs) / 1000)
+	);
+	/** Target seconds for the active mode — 0 when idle. */
+	const modeTargetSec = $derived(
+		modeState === 'idle' ? 0 : MODE_TARGET_SEC[modeState]
+	);
+	/** Progress percentage 0-100 for the head pill's inline bar. */
+	const modeProgressPct = $derived(
+		modeTargetSec > 0 ? Math.min(100, (modeElapsedSec / modeTargetSec) * 100) : 0
+	);
+	/**
+	 * Meta line in the head pill. While running, formats `elapsed / total`
+	 * seconds with the live measured temperature where it's meaningful
+	 * (steam → steam heater temp; hot water → mix temp). Falls back to
+	 * the resting `MODE_TARGET_LABEL` when an active mode has no
+	 * temperature signal (Flush).
+	 */
+	const headStatusMeta = $derived.by(() => {
+		if (modeState === 'idle') return '';
+		const total = modeTargetSec.toFixed(1);
+		const elapsed = modeElapsedSec.toFixed(1);
+		if (modeState === 'steaming') {
+			const steamTemp = ui.latestTelemetry?.steamTemp;
+			const tempLabel =
+				steamTemp != null ? ` · ${Math.round(steamTemp)} °C` : '';
+			return `${elapsed} / ${total} s${tempLabel}`;
+		}
+		if (modeState === 'dispensing') {
+			const headTemp = ui.latestTelemetry?.temp;
+			const tempLabel =
+				headTemp != null ? ` · ${Math.round(headTemp)} °C` : '';
+			return `${elapsed} / ${total} s${tempLabel}`;
+		}
+		return `${elapsed} / ${total} s`;
+	});
+	/**
+	 * Per-chip sub line — the resting target when idle, a live
+	 * `elapsed / total s` counter while the chip's mode is the one
+	 * running.
+	 */
+	const steamChipSub = $derived(
 		modeState === 'steaming'
-			? '148 °C · 8 s'
-			: modeState === 'dispensing'
-				? '92 °C · 250 ml'
-				: modeState === 'flushing'
-					? '4 s'
-					: ''
+			? `${modeElapsedSec.toFixed(1)} / ${modeTargetSec.toFixed(1)} s`
+			: MODE_TARGET_LABEL.steaming
+	);
+	const waterChipSub = $derived(
+		modeState === 'dispensing'
+			? `${modeElapsedSec.toFixed(1)} / ${modeTargetSec.toFixed(1)} s`
+			: MODE_TARGET_LABEL.dispensing
+	);
+	const flushChipSub = $derived(
+		modeState === 'flushing'
+			? `${modeElapsedSec.toFixed(1)} / ${modeTargetSec.toFixed(1)} s`
+			: MODE_TARGET_LABEL.flushing
 	);
 
 	// ── Unit preferences (real — the lib/settings store) ─────────────────
@@ -342,6 +434,7 @@
 						state={modeState}
 						nameLabel={headStatusName}
 						metaLabel={headStatusMeta}
+						progressPct={modeProgressPct}
 						onCancel={cancelMode}
 					/>
 				</div>
@@ -521,7 +614,7 @@
 						ready={modeReady}
 						icon="cloud"
 						label="Steam"
-						sub={modeState === 'steaming' ? 'In progress' : '148 °C · 8 s'}
+						sub={steamChipSub}
 						onTap={() => (modeState === 'steaming' ? cancelMode() : tapSteam())}
 					/>
 					<ModeChip
@@ -530,7 +623,7 @@
 						ready={modeReady}
 						icon="drop"
 						label="Hot water"
-						sub={modeState === 'dispensing' ? 'Dispensing' : '92 °C · 250 ml'}
+						sub={waterChipSub}
 						onTap={() => (modeState === 'dispensing' ? cancelMode() : tapWater())}
 					/>
 					<ModeChip
@@ -539,7 +632,7 @@
 						ready={modeReady}
 						icon="sparkle"
 						label="Flush"
-						sub={modeState === 'flushing' ? 'Flushing' : '4 s'}
+						sub={flushChipSub}
 						onTap={() => (modeState === 'flushing' ? cancelMode() : tapFlush())}
 					/>
 				</div>
