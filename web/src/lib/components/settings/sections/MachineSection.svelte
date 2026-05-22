@@ -210,14 +210,9 @@
 			firmwareChecking = false;
 		}
 	}
-	function rename(): void {
-		// TODO: a per-device display name needs a small device registry the
-		// shell does not yet keep. Stubbed.
-	}
-	function forget(): void {
-		// TODO: forgetting a paired device needs a device registry; the shell
-		// only holds the live connection. Stubbed.
-	}
+	// Rename / Re-pair were UI-only stubs (no underlying device registry).
+	// Removed to keep the card focused on connect / disconnect / sleep — the
+	// real actions the shell can actually perform.
 </script>
 
 <StSectionHead
@@ -256,9 +251,9 @@
 	</div>
 	<div class="st-machinecard-info">
 		<div class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">{stateLabel}</div>
-		<div class="st-machinecard-name">
-			{connected ? 'DE1 · Crema Bar' : 'No machine connected'}
-		</div>
+		{#if connected}
+			<div class="st-machinecard-name">DE1 · Crema Bar</div>
+		{/if}
 		<div class="st-machinecard-meta">
 			<!-- Identity meta: firmware build (MMR 0x800010), machine model
 			     (MMR 0x80000C), and CPU board revision (MMR 0x800008). The
@@ -310,9 +305,6 @@
 					/>
 				{/if}
 			{/if}
-			<!-- TODO: Rename / Forget need a device registry the shell lacks. -->
-			<StButton label="Rename" icon="pencil-simple" onClick={rename} />
-			<StButton label="Re-pair" icon="arrows-clockwise" disabled={!app} onClick={connect} />
 		</div>
 	</div>
 	<div class="st-machinecard-fw">
