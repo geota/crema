@@ -244,7 +244,26 @@
 		<div class="crema-dash-head">
 			<div class="crema-dash-head-l">
 				<div class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Profile</div>
-				<div class="crema-dash-profile">{profileName}</div>
+				<div class="crema-dash-profile">
+					{profileName}
+					<!-- Upload-syncing chip — visible while a profile upload is in
+					     flight (auto-upload-on-connect or manual Load-on-Brew). The
+					     chip vanishes once `ProfileUploadCompleted` clears the
+					     `profileUploadProgress` field. Subtle by design: the user
+					     should notice "it's syncing" without it dominating the
+					     header. -->
+					{#if ui.profileUploadProgress}
+						<span
+							class="crema-profile-sync"
+							title="Uploading {ui.profileUploadProgress.title} ({ui
+								.profileUploadProgress.acksReceived}/{ui.profileUploadProgress.totalAcks})"
+						>
+							<i class="ph ph-arrows-clockwise" aria-hidden="true"></i>
+							Uploading… {ui.profileUploadProgress.acksReceived}/{ui.profileUploadProgress
+								.totalAcks}
+						</span>
+					{/if}
+				</div>
 				<div class="crema-dash-profile-meta">
 					Pre-inf {p.preinf}s · 1:{ratio} ratio · {p.yield.toFixed(1)} g target · {p.brewTemp.toFixed(
 						1
@@ -292,6 +311,20 @@
 						<div class="crema-target-val">
 							<span>1:{shotWeight == null ? '—' : (shotWeight / p.dose).toFixed(2)}</span>
 							<span class="crema-target-unit"> · target 1:{ratio}</span>
+						</div>
+					</div>
+					<!-- Volume: shot volume dispensed by the pump (mL), integrated
+					     by the core from the flow stream against the DE1's
+					     `sample_time` ticks (`UiSnapshot.dispensedVolumeMl`,
+					     populated by every Telemetry event). A shot-side metric
+					     — distinct from Yield (what's in the cup, scale-measured)
+					     because the puck absorbs some water. Resets to 0 on each
+					     ShotStarted; held at the last value when the shot
+					     completes. Volume unit follows the Settings preference. -->
+					<div class="crema-target">
+						<div class="t-eyebrow">Volume</div>
+						<div class="crema-target-val">
+							<span>{convertVolumeText(ui.dispensedVolumeMl)}</span>
 						</div>
 					</div>
 					<!-- Phase + Bean cards only fit the left column when the Quick
