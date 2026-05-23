@@ -113,7 +113,19 @@
   --fg-3:           var(--ink-500);     /* Tertiary / meta */
   --fg-disabled:    var(--ink-300);
   --fg-accent:      var(--copper-600);  /* Copper text on light */
-  --fg-on-accent:   var(--paper-50);    /* Text on copper button */
+  --fg-on-accent:   var(--ink-900);     /* Text on copper button — dark
+                                           text reads on the bright
+                                           copper accent in both themes
+                                           (the button bg is theme-fixed).
+                                           Cream-on-copper used to be the
+                                           light-theme default and read as
+                                           "white-on-orange" / borderline-
+                                           unreadable on a pale page;
+                                           dark text is unambiguously
+                                           legible. The dark-theme override
+                                           below collapses to the same
+                                           ink-900 value so dark mode is
+                                           unchanged. */
 
   --hairline:       rgba(31, 24, 18, 0.08); /* 1px borders on light */
   --hairline-strong:rgba(31, 24, 18, 0.16);
@@ -258,7 +270,10 @@
   --fg-3:         #B8A689;
   --fg-disabled:  var(--espresso-600);
   --fg-accent:    var(--copper-400);
-  --fg-on-accent: var(--ink-900);
+  /* --fg-on-accent intentionally NOT overridden here — the root value
+     (`--ink-900`) is theme-fixed because the copper button bg is
+     theme-fixed. Inheriting from :root keeps both themes legible with
+     dark-on-copper text. */
 
   --hairline:        rgba(244, 237, 224, 0.08);
   --hairline-strong: rgba(244, 237, 224, 0.16);
