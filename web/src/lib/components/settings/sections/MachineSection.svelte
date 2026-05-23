@@ -365,7 +365,6 @@
 				on={prefs.suppressDe1Sleep}
 				onChange={(v) => {
 					settings.set('suppressDe1Sleep', v);
-					void app?.setSuppressDe1Sleep(v);
 					if (v) void app?.markUserPresent();
 				}}
 				label="Keep DE1 awake"
