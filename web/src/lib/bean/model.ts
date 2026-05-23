@@ -16,6 +16,11 @@
  */
 
 import type { Roast } from '$lib/profiles';
+import {
+	roast_band as wasmRoastBand,
+	days_off_roast as wasmDaysOffRoast,
+	roast_freshness as wasmRoastFreshness
+} from '$lib/wasm/de1_wasm';
 
 /**
  * The current bean — the bag of coffee in use right now. A snapshot of this
@@ -50,13 +55,17 @@ export function blankBean(): Bean {
  * Classify a 1..10 roast level into a named band: `1–3 → 'light'`,
  * `4–6 → 'medium'`, `7–10 → 'dark'`. Returns `null` for a `null` level.
  * Values outside 1..10 are clamped into range first.
+ *
+ * Delegates to `de1_domain::roast_band` via the wasm bridge so every
+ * shell consumes the same classification (audit #5). The shell rounds
+ * a fractional level before crossing the bridge — the wasm helper
+ * takes an integer level.
  */
 export function roastBand(level: number | null): Roast | null {
 	if (level == null) return null;
-	const clamped = Math.max(1, Math.min(10, Math.round(level)));
-	if (clamped <= 3) return 'light';
-	if (clamped <= 6) return 'medium';
-	return 'dark';
+	const rounded = Math.round(level);
+	if (!Number.isFinite(rounded)) return null;
+	return (wasmRoastBand(rounded) ?? null) as Roast | null;
 }
 
 /**
@@ -76,64 +85,40 @@ export const ROAST_PILL_LEVEL: Readonly<Record<Roast, number>> = {
  *
  * The arithmetic is done on the calendar date only (UTC midnight of each
  * day), so a shot pulled at any time of day reports a stable integer.
+ *
+ * Delegates to `de1_domain::days_off_roast` via the wasm bridge — the
+ * core is sans-IO so the shell passes `Date.now()` (or `asOf`) at the
+ * call site (audit #5/#9).
  */
 export function daysOffRoast(
 	roastedOn: string | null,
 	asOf: number | Date = Date.now()
 ): number | null {
 	if (!roastedOn) return null;
-	const roast = Date.parse(`${roastedOn}T00:00:00Z`);
-	if (Number.isNaN(roast)) return null;
-	const now = asOf instanceof Date ? asOf : new Date(asOf);
-	const today = Date.UTC(
-		now.getUTCFullYear(),
-		now.getUTCMonth(),
-		now.getUTCDate()
-	);
-	const days = Math.floor((today - roast) / 86_400_000);
-	return Math.max(0, days);
+	const nowMs = asOf instanceof Date ? asOf.getTime() : asOf;
+	const days = wasmDaysOffRoast(roastedOn, nowMs);
+	return days == null ? null : days;
 }
 
 /** A bean's rest verdict against the ideal window for its roast band. */
 export type Freshness = 'best' | 'ok' | 'bad';
 
 /**
- * Per-band rest windows, in days off roast. `green` is the `[low, high]`
- * best window; `okHigh` is the upper bound of the still-drinkable fading
- * window — past it the bean is stale. Below the green window the bean also
- * only rates `ok` (still too gassy / unstable).
- *
- * The windows differ because degassing tracks bean density: darker beans are
- * porous and degas fast (earliest, shortest window); light roasts are dense,
- * hold CO₂ longest, and need the most rest.
- *
- *  - Dark   — best 4–10, ok 0–3 / 11–14, bad 15+.
- *  - Medium — best 6–14, ok 0–5 / 15–21, bad 22+.
- *  - Light  — best 10–24, ok 0–9 / 25–35, bad 36+.
- */
-const REST_WINDOW: Readonly<
-	Record<Roast, { green: readonly [number, number]; okHigh: number }>
-> = {
-	dark: { green: [4, 10], okHigh: 14 },
-	medium: { green: [6, 14], okHigh: 21 },
-	light: { green: [10, 24], okHigh: 35 }
-};
-
-/**
  * Rate how a bean's `days` off roast sits against the ideal rest window for
- * its roast `band` (see {@link REST_WINDOW}) — drives the bean card's status
- * dot. `best` inside the green window, `bad` past `okHigh`, `ok` either side
- * in between. Returns `null` when the band or the day count is unknown.
+ * its roast `band` — drives the bean card's status dot. `best` inside the
+ * green window, `bad` past the band's `ok` upper bound, `ok` either side in
+ * between. Returns `null` when the band or the day count is unknown.
+ *
+ * The per-band windows (dark / medium / light) and the verdict thresholds
+ * live in `de1_domain::roast_freshness` — this delegates via the wasm
+ * bridge so every shell rates a bean identically (audit #5).
  */
 export function roastFreshness(
 	band: Roast | null,
 	days: number | null
 ): Freshness | null {
 	if (band == null || days == null) return null;
-	const w = REST_WINDOW[band];
-	if (days >= w.green[0] && days <= w.green[1]) return 'best';
-	if (days > w.okHigh) return 'bad';
-	return 'ok';
+	return (wasmRoastFreshness(band, days) ?? null) as Freshness | null;
 }
 
 /**
