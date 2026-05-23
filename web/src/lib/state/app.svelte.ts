@@ -1003,6 +1003,20 @@ export class CremaApp {
 	async replayCapture(file: File, opts: ReplayCaptureOptions = {}): Promise<void> {
 		if (this.replayAbort) return;
 
+		const MAX_REPLAY_FILE_BYTES = 50 * 1024 * 1024; // 50 MB
+		if (file.size > MAX_REPLAY_FILE_BYTES) {
+			this.state.patch({
+				replay: {
+					phase: 'error',
+					fileName: file.name,
+					done: 0,
+					total: 0,
+					message: `Capture file is ${(file.size / 1024 / 1024).toFixed(1)} MB — Crema caps replay at ${MAX_REPLAY_FILE_BYTES / 1024 / 1024} MB to keep the tab responsive. Trim the file or replay it through the Rust CLI.`
+				}
+			});
+			return;
+		}
+
 		const abort = new AbortController();
 		this.replayAbort = abort;
 
