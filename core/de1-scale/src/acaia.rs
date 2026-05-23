@@ -62,9 +62,15 @@ const MAX_BUFFER_LEN: usize = 256;
 /// Feed every notification from the scale's status characteristic to
 /// [`push`](Self::push); it returns `Some(grams)` once a complete weight frame
 /// has been assembled.
+///
+/// The decoder also tracks the most recently observed battery percentage from
+/// `msgType == 8` notifications (the same channel that carries weight); see
+/// [`battery_percent`](Self::battery_percent). Reaprime parses this field
+/// (`acaia_scale.dart:355-357`); legacy de1app drops it on the floor.
 #[derive(Debug, Default)]
 pub struct AcaiaDecoder {
     buffer: Vec<u8>,
+    battery_percent: Option<u8>,
 }
 
 /// Outcome of scanning the receive buffer for a message.
@@ -79,6 +85,12 @@ enum Scan {
         msg_start: usize,
         length: usize,
     },
+    /// A `msgType == 8` battery message was found at `msg_start`; the battery
+    /// byte sits at `msg_start + 4` (the `event_type` slot — reaprime's
+    /// `acaia_scale.dart:355-357` reads `_commandBuffer[4]` here, then advances
+    /// past the message). Crema mirrors that behaviour: skip past the message
+    /// and surface the byte on the decoder state.
+    Battery { msg_start: usize, length: usize },
 }
 
 impl AcaiaDecoder {
@@ -87,8 +99,22 @@ impl AcaiaDecoder {
         Self::default()
     }
 
+    /// The most recently observed battery percentage from a `msgType == 8`
+    /// notification (`0..=100`), or `None` if no such notification has yet
+    /// been seen. Reaprime decodes the same field (`acaia_scale.dart:355-357`);
+    /// legacy de1app drops it on the floor.
+    #[must_use]
+    pub fn battery_percent(&self) -> Option<u8> {
+        self.battery_percent
+    }
+
     /// Feed one BLE notification. Returns `Some(grams)` when a complete weight
     /// frame has been decoded, otherwise `None` (more data may be needed).
+    ///
+    /// As a side-effect, a `msgType == 8` battery notification updates
+    /// [`battery_percent`](Self::battery_percent) and is consumed (returning
+    /// `None`) — the caller can read the latest battery on every weight
+    /// notification.
     pub fn push(&mut self, data: &[u8]) -> Option<f32> {
         self.buffer.extend_from_slice(data);
         // A buffer past the sanity cap is a hostile or desynced stream that
@@ -97,36 +123,58 @@ impl AcaiaDecoder {
             self.buffer.clear();
             return None;
         }
-        if self.buffer.len() < MIN_MESSAGE_LEN {
-            return None;
-        }
-        match scan(&self.buffer) {
-            Scan::NeedMoreData => None,
-            Scan::NoMessage => {
-                self.buffer.clear();
-                None
+        // Walk the buffer: a single notification may carry a battery message
+        // *and* a weight message, so we keep scanning after consuming a
+        // non-weight (battery) frame. Stop as soon as a weight frame
+        // decodes, or when no more messages can be processed.
+        loop {
+            if self.buffer.len() < MIN_MESSAGE_LEN {
+                return None;
             }
-            Scan::Weight {
-                event_type,
-                msg_start,
-                length,
-            } => {
-                if msg_start + METADATA_LEN + length > self.buffer.len() {
-                    // Frame not fully buffered yet — wait for the next notification.
+            match scan(&self.buffer) {
+                Scan::NeedMoreData => return None,
+                Scan::NoMessage => {
+                    self.buffer.clear();
                     return None;
                 }
-                // Payload sits after the metadata; event type 11 has 3 extra bytes.
-                let payload_offset =
-                    msg_start + METADATA_LEN + if event_type == 11 { 3 } else { 0 };
-                let grams = decode_weight(&self.buffer, payload_offset);
-                self.buffer.clear();
-                grams
+                Scan::Weight {
+                    event_type,
+                    msg_start,
+                    length,
+                } => {
+                    if msg_start + METADATA_LEN + length > self.buffer.len() {
+                        // Frame not fully buffered yet — wait for the next notification.
+                        return None;
+                    }
+                    // Payload sits after the metadata; event type 11 has 3 extra bytes.
+                    let payload_offset =
+                        msg_start + METADATA_LEN + if event_type == 11 { 3 } else { 0 };
+                    let grams = decode_weight(&self.buffer, payload_offset);
+                    self.buffer.clear();
+                    return grams;
+                }
+                Scan::Battery { msg_start, length } => {
+                    // Reaprime reads `_commandBuffer[4]` as the battery byte
+                    // (the `event_type` slot inside the metadata) and advances
+                    // past the full message — `_metadataLen + length` bytes
+                    // (`acaia_scale.dart:355-357, 367-372`).
+                    if self.buffer.len() < msg_start + METADATA_LEN {
+                        // Not even the metadata is fully buffered — wait.
+                        return None;
+                    }
+                    self.battery_percent = Some(self.buffer[msg_start + 4]);
+                    let claimed_end = msg_start + METADATA_LEN + length;
+                    let consume_end = claimed_end.min(self.buffer.len());
+                    self.buffer.drain(..consume_end);
+                    // Continue: there may be a weight frame after this.
+                }
             }
         }
     }
 }
 
-/// Scan a buffer for the first weight message, skipping non-weight messages.
+/// Scan a buffer for the first weight or battery message, skipping unknown
+/// non-weight messages.
 fn scan(buf: &[u8]) -> Scan {
     let mut i = 0;
     while i + 1 < buf.len() {
@@ -144,7 +192,17 @@ fn scan(buf: &[u8]) -> Scan {
                     length,
                 };
             }
-            // Not a weight message — skip the whole message and keep scanning.
+            // msgType == 8: battery notification. Reaprime reads
+            // `_commandBuffer[4]` (the event_type slot) as the battery byte
+            // and advances past the message — see `acaia_scale.dart:355-357`.
+            if msg_type == 8 && length <= 64 {
+                return Scan::Battery {
+                    msg_start: i,
+                    length,
+                };
+            }
+            // Not a weight or battery message — skip the whole message and
+            // keep scanning.
             i += METADATA_LEN + length;
             continue;
         }
@@ -203,6 +261,34 @@ mod tests {
     fn ignores_a_buffer_with_no_header() {
         let mut d = AcaiaDecoder::new();
         assert_eq!(d.push(&[0x01, 0x02, 0x03, 0x04, 0x05, 0x06]), None);
+    }
+
+    #[test]
+    fn decodes_a_battery_notification() {
+        // Reaprime parses `msgType == 8` battery notifications and stores
+        // byte `[4]` as the battery percentage (`acaia_scale.dart:355-357`).
+        let mut d = AcaiaDecoder::new();
+        assert_eq!(d.battery_percent(), None);
+        // EF DD <type=8> <length=1> <battery=78> <payload byte>
+        assert_eq!(d.push(&[0xEF, 0xDD, 8, 1, 78, 0]), None);
+        assert_eq!(d.battery_percent(), Some(78));
+    }
+
+    #[test]
+    fn battery_notification_does_not_block_a_following_weight_frame() {
+        // The decoder must consume the battery message in place and then keep
+        // scanning the remainder for a weight frame.
+        let mut d = AcaiaDecoder::new();
+        // A 6-byte battery frame (metadata + 1 payload byte) followed by an
+        // 11-byte weight frame. The decoder consumes the battery message and
+        // re-scans the remainder for weight.
+        let battery = [0xEF, 0xDD, 8, 1, 91, 0];
+        let weight = weight_frame(180, 0);
+        let mut combined = Vec::new();
+        combined.extend_from_slice(&battery);
+        combined.extend_from_slice(&weight);
+        assert_eq!(d.push(&combined), Some(18.0));
+        assert_eq!(d.battery_percent(), Some(91));
     }
 
     #[test]

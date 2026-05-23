@@ -443,6 +443,55 @@ export interface CremaCore {
 	 * whenever the `weightUnit` settings pref changes.
 	 */
 	setWeightUnitPref(unit: ShellWeightUnit): Promise<void>;
+	/**
+	 * Build a `CoreOutput` whose commands enable the Skale II's on-scale
+	 * LCD (legacy `ED EC` sequence, plus an optional `0x03` enable-grams
+	 * write when `unit === 'g'`). Skale-II-only; empty otherwise.
+	 */
+	enableSkaleLcd(unit: ShellWeightUnit): Promise<CoreOutput>;
+	/**
+	 * Build a `CoreOutput` whose command disables the Skale II's on-scale
+	 * LCD. Skale-II-only.
+	 */
+	disableSkaleLcd(): Promise<CoreOutput>;
+	/**
+	 * Build a `CoreOutput` whose command turns off the connected Eureka
+	 * Precisa or Solo Barista. Empty for every other scale.
+	 */
+	turnOffEurekaPrecisa(): Promise<CoreOutput>;
+	/**
+	 * Build a `CoreOutput` whose command beeps the Eureka Precisa / Solo
+	 * Barista twice. Empty for every other scale.
+	 */
+	beepEurekaPrecisa(): Promise<CoreOutput>;
+	/**
+	 * Build a `CoreOutput` whose command sets the Eureka Precisa / Solo
+	 * Barista's display unit. Only grams is supported on the wire — the
+	 * ounces case emits nothing (matches legacy de1app).
+	 */
+	setEurekaPrecisaUnit(unit: ShellWeightUnit): Promise<CoreOutput>;
+	/**
+	 * Build a `CoreOutput` whose command toggles the Hiroia Jimmy's
+	 * display unit (the codec exposes no "set unit directly" command —
+	 * only a toggle-to-next-unit). Empty for every other scale.
+	 */
+	toggleHiroiaJimmyUnit(): Promise<CoreOutput>;
+	/**
+	 * Build a `CoreOutput` whose command sets the Difluid Microbalance's
+	 * display unit to grams. Empty for every other scale.
+	 */
+	setDifluidUnitGrams(): Promise<CoreOutput>;
+	/**
+	 * Toggle whether the Eureka Precisa / Solo Barista should be powered
+	 * off on machine Sleep entry. Off by default; the user opts in via
+	 * the Machine settings page.
+	 */
+	setEurekaPrecisaAutoOffOnSleep(enabled: boolean): Promise<void>;
+	/**
+	 * Whether the Eureka Precisa / Solo Barista is configured to power
+	 * off on machine Sleep entry.
+	 */
+	eurekaPrecisaAutoOffOnSleep(): Promise<boolean>;
 	/** Build a `CoreOutput` whose command sets the scale beeper volume. */
 	setScaleVolume(level: number): Promise<CoreOutput>;
 	/** Build a `CoreOutput` whose command sets the scale auto-standby timeout. */
@@ -749,6 +798,33 @@ async function createCore(): Promise<CremaCore> {
 		},
 		async setWeightUnitPref(unit: ShellWeightUnit) {
 			bridge.set_weight_unit_pref(weightUnitToWire(unit));
+		},
+		async enableSkaleLcd(unit: ShellWeightUnit) {
+			return parseOutput(bridge.enable_skale_lcd(weightUnitToWire(unit)));
+		},
+		async disableSkaleLcd() {
+			return parseOutput(bridge.disable_skale_lcd());
+		},
+		async turnOffEurekaPrecisa() {
+			return parseOutput(bridge.turn_off_eureka_precisa());
+		},
+		async beepEurekaPrecisa() {
+			return parseOutput(bridge.beep_eureka_precisa());
+		},
+		async setEurekaPrecisaUnit(unit: ShellWeightUnit) {
+			return parseOutput(bridge.set_eureka_precisa_unit(weightUnitToWire(unit)));
+		},
+		async toggleHiroiaJimmyUnit() {
+			return parseOutput(bridge.toggle_hiroia_jimmy_unit());
+		},
+		async setDifluidUnitGrams() {
+			return parseOutput(bridge.set_difluid_unit_grams());
+		},
+		async setEurekaPrecisaAutoOffOnSleep(enabled: boolean) {
+			bridge.set_eureka_precisa_auto_off_on_sleep(enabled);
+		},
+		async eurekaPrecisaAutoOffOnSleep() {
+			return bridge.eureka_precisa_auto_off_on_sleep();
 		},
 		async setScaleVolume(level) {
 			return parseOutput(bridge.set_scale_volume(level));
