@@ -63,8 +63,17 @@
   /* RGB triplet for copper accent washes — `rgba(var(--copper-rgb), X)`. */
   --copper-rgb: 199, 118, 59;
 
-  /* RGB triplet for danger washes / shadows — `rgba(var(--danger-rgb), X)`. */
-  --danger-rgb: 184, 74, 58;
+  /* RGB triplets for semantic washes — `rgba(var(--<name>-rgb), X)`. The
+     hex variants below (`--success`, `--warning`, `--danger`, `--info`) are
+     the solid swatch (used for icon strokes, text, button accents). The
+     `-rgb` variants are the same color expressed as a comma-separated R,G,B
+     triplet so CSS can alpha-modulate them via `rgba(var(--…-rgb), 0.X)` —
+     this is how the import banners (history / profiles routes) tint their
+     surfaces. Defined for both themes so banners read against the page bg. */
+  --success-rgb: 92, 138, 76;   /* matches --success #5C8A4C */
+  --warning-rgb: 199, 135, 59;  /* matches --warning #C7873B */
+  --danger-rgb:  184, 74, 58;   /* matches --danger  #B84A3A */
+  --info-rgb:    74, 111, 165;  /* matches --info    #4A6FA5 */
 
   /* Telemetry — one hue per data channel. Pressure and weight are swapped
      vs. the handoff at the project's request: pressure is the sage green,
@@ -283,6 +292,19 @@
   --chart-grid:       rgba(244, 237, 224, 0.05);
   --chart-axis-label: rgba(244, 237, 224, 0.3);
   --chart-band:       rgba(193, 116, 75, 0.06);
+
+  /* Semantic swatches — slightly brightened against the dark espresso surfaces
+     so banner copy (e.g. "Import successful") and tinted backgrounds keep
+     their hue without going muddy. Each hex value's RGB triplet sits in the
+     companion `-rgb` token directly below for alpha-modulated tints. */
+  --success: #7AAD7E;
+  --success-rgb: 122, 173, 126;
+  --warning: #DBA764;
+  --warning-rgb: 219, 167, 100;
+  --danger:  #D26456;
+  --danger-rgb:  210, 100, 86;
+  --info:    #7DA0CD;
+  --info-rgb:    125, 160, 205;
 
   --shadow-sm: var(--inset-highlight);
   --shadow-md: var(--inset-highlight);

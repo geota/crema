@@ -252,11 +252,11 @@
 }
 .st-btn-primary:hover { background: var(--copper-600); }
 .st-btn-danger {
-  background: rgba(167, 64, 64, 0.10);
-  border-color: rgba(167, 64, 64, 0.35);
+  background: rgba(var(--danger-rgb), 0.10);
+  border-color: rgba(var(--danger-rgb), 0.35);
   color: var(--danger);
 }
-.st-btn-danger:hover { background: rgba(167, 64, 64, 0.18); }
+.st-btn-danger:hover { background: rgba(var(--danger-rgb), 0.18); }
 
 .st-valuechip {
   display: inline-flex; align-items: center; gap: 8px;
