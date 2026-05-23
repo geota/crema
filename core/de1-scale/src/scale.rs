@@ -6,6 +6,7 @@ use typeshare::typeshare;
 
 use crate::acaia::{self, AcaiaDecoder};
 use crate::decent_scale::DecentScale;
+use crate::smartchef::SmartchefScale;
 use crate::{
     atomheart_eclair, bookoo, decent_scale, difluid, eureka_precisa, felicita, hiroia_jimmy, skale,
     smartchef, varia_aku,
@@ -194,7 +195,11 @@ enum Inner {
     EurekaPrecisa,
     SoloBarista,
     Difluid,
-    Smartchef,
+    /// The Smartchef has no BLE tare command. The variant carries a small
+    /// stateful struct ([`SmartchefScale`]) that holds a software-tare
+    /// offset (matches reaprime's `_weightAtTare`), applied to every
+    /// reported weight.
+    Smartchef(SmartchefScale),
     HiroiaJimmy,
     VariaAku,
 }
@@ -233,7 +238,7 @@ impl Scale {
         } else if advertised_name.starts_with("Microbalance") {
             Inner::Difluid
         } else if advertised_name.starts_with("smartchef") {
-            Inner::Smartchef
+            Inner::Smartchef(SmartchefScale::new())
         } else if advertised_name.starts_with("HIROIA JIMMY") {
             Inner::HiroiaJimmy
         } else if any(&["AKU MINI", "Varia AKU"]) {
@@ -259,7 +264,7 @@ impl Scale {
             "Eureka Precisa" => Inner::EurekaPrecisa,
             "Solo Barista" => Inner::SoloBarista,
             "Difluid Microbalance" => Inner::Difluid,
-            "Smartchef" => Inner::Smartchef,
+            "Smartchef" => Inner::Smartchef(SmartchefScale::new()),
             "Hiroia Jimmy" => Inner::HiroiaJimmy,
             "Varia Aku" => Inner::VariaAku,
             _ => return None,
@@ -281,7 +286,7 @@ impl Scale {
             Inner::EurekaPrecisa => "Eureka Precisa",
             Inner::SoloBarista => "Solo Barista",
             Inner::Difluid => "Difluid Microbalance",
-            Inner::Smartchef => "Smartchef",
+            Inner::Smartchef(_) => "Smartchef",
             Inner::HiroiaJimmy => "Hiroia Jimmy",
             Inner::VariaAku => "Varia Aku",
         }
@@ -335,7 +340,7 @@ impl Scale {
                 weight_notify: difluid::NOTIFY_COMMAND_UUID,
                 command_write: difluid::NOTIFY_COMMAND_UUID,
             },
-            Inner::Smartchef => ScaleUuids {
+            Inner::Smartchef(_) => ScaleUuids {
                 service: smartchef::SERVICE_UUID,
                 weight_notify: smartchef::STATUS_UUID,
                 command_write: smartchef::COMMAND_UUID,
@@ -353,10 +358,15 @@ impl Scale {
         }
     }
 
-    /// Whether this scale accepts a software tare command. `false` only for
-    /// Smartchef, whose tare is a physical button.
+    /// Whether this scale accepts a software tare command.
+    ///
+    /// Every supported scale reports `true` today — including the Smartchef,
+    /// which used to return `false` (no BLE tare command) but now exposes a
+    /// software-tare offset (see [`crate::smartchef::SmartchefScale`]).
     pub fn supports_tare(&self) -> bool {
-        !matches!(&self.inner, Inner::Smartchef)
+        // No supported scale rejects tare today; kept as a method for the
+        // future where a new variant might (e.g. a totally read-only sensor).
+        true
     }
 
     /// Whether this scale is a Decent Scale.
@@ -417,7 +427,7 @@ impl Scale {
             &self.inner,
             Inner::AcaiaGen1(_)
                 | Inner::AcaiaPyxis(_)
-                | Inner::Smartchef
+                | Inner::Smartchef(_)
                 | Inner::HiroiaJimmy
                 | Inner::VariaAku
         )
@@ -473,7 +483,7 @@ impl Scale {
             | Inner::EurekaPrecisa
             | Inner::SoloBarista
             | Inner::Difluid
-            | Inner::Smartchef
+            | Inner::Smartchef(_)
             | Inner::HiroiaJimmy
             | Inner::VariaAku => ScaleCapabilities::default(),
         }
@@ -500,7 +510,7 @@ impl Scale {
             | Inner::EurekaPrecisa
             | Inner::SoloBarista
             | Inner::Difluid
-            | Inner::Smartchef
+            | Inner::Smartchef(_)
             | Inner::VariaAku => 380,
         };
         Duration::from_millis(ms)
@@ -521,7 +531,14 @@ impl Scale {
             Inner::AtomheartEclair => atomheart_eclair::parse_weight(data),
             Inner::EurekaPrecisa | Inner::SoloBarista => eureka_precisa::parse_weight(data),
             Inner::Difluid => difluid::parse_weight(data),
-            Inner::Smartchef => smartchef::parse_weight(data),
+            Inner::Smartchef(state) => {
+                // Smartchef firmware has no tare command; the user-visible
+                // weight is `raw - software_offset`. Record every raw reading
+                // so a subsequent `Scale::tare()` can capture it.
+                let raw = smartchef::parse_weight(data)?;
+                state.record_raw_weight(raw);
+                Some(state.apply_offset(raw))
+            }
             Inner::HiroiaJimmy => hiroia_jimmy::parse_weight(data),
             Inner::VariaAku => varia_aku::parse_weight(data),
         }
@@ -552,13 +569,42 @@ impl Scale {
             }
             // Fall through to the weight-only path for any non-20-byte frame.
         }
+        // Pull a per-scale battery byte where the wire format carries one in
+        // the same notification as weight. Computed before the weight decode
+        // so the lookup doesn't borrow `self.inner` past `parse_weight`.
+        let felicita_battery = matches!(&self.inner, Inner::Felicita)
+            .then(|| felicita::parse_battery_percent(data))
+            .flatten();
+        // Atomheart Eclair onboard timer — reaprime parses this; legacy
+        // drops it. See `atomheart_scale.dart:160-181`.
+        let atomheart_timer_ms = matches!(&self.inner, Inner::AtomheartEclair)
+            .then(|| atomheart_eclair::parse_timer(data))
+            .flatten()
+            .and_then(|d| u32::try_from(d.as_millis()).ok());
+        // Varia AKU's notifications come in two shapes — weight (command
+        // 0x01) and battery (command 0x85). The latter does not carry
+        // weight, so the unified path returns `None` from `parse_weight`,
+        // and the caller is meant to keep going for the next frame.
+        // Capture the battery here so a battery-only frame still surfaces
+        // the field; pair it with weight = 0 only if a weight frame also
+        // matches.
+        let varia_battery = matches!(&self.inner, Inner::VariaAku)
+            .then(|| varia_aku::parse_battery_percent(data))
+            .flatten();
+        // Acaia's framed protocol carries battery on `msgType == 8` rather
+        // than the weight frame, but the decoder reads both off the same
+        // characteristic — query the running value here.
+        let acaia_battery = match &self.inner {
+            Inner::AcaiaGen1(decoder) | Inner::AcaiaPyxis(decoder) => decoder.battery_percent(),
+            _ => None,
+        };
         self.parse_weight(data).map(|weight_g| ScaleReading {
             weight_g,
             flow_g_per_s: None,
-            timer_ms: None,
+            timer_ms: atomheart_timer_ms,
             volume: None,
             standby_minutes: None,
-            battery_percent: None,
+            battery_percent: felicita_battery.or(varia_battery).or(acaia_battery),
             flow_smoothing: None,
             auto_stop: None,
         })
@@ -585,7 +631,7 @@ impl Scale {
             | Inner::EurekaPrecisa
             | Inner::SoloBarista
             | Inner::Difluid
-            | Inner::Smartchef
+            | Inner::Smartchef(_)
             | Inner::HiroiaJimmy
             | Inner::VariaAku => None,
         }
@@ -618,8 +664,13 @@ impl Scale {
     }
 
     /// Build a tare command to write to the [command characteristic](ScaleUuids).
-    /// Returns `None` if the scale has no software tare (see
-    /// [`supports_tare`](Self::supports_tare)).
+    /// Returns `None` if the scale tares purely client-side and there is no
+    /// command to send (the Smartchef — see [`crate::smartchef::SmartchefScale`]).
+    ///
+    /// For the Smartchef this call updates the software-tare offset in place
+    /// and returns `None`; the next `parse_weight` will report a near-zero
+    /// reading without any BLE write. Every other scale returns the wire
+    /// bytes the shell should write to [`ScaleUuids::command_write`].
     pub fn tare(&mut self) -> Option<Vec<u8>> {
         Some(match &mut self.inner {
             Inner::Decent(state) => state.next_tare().to_vec(),
@@ -630,7 +681,14 @@ impl Scale {
             Inner::AtomheartEclair => atomheart_eclair::TARE.to_vec(),
             Inner::EurekaPrecisa | Inner::SoloBarista => eureka_precisa::TARE.to_vec(),
             Inner::Difluid => difluid::TARE.to_vec(),
-            Inner::Smartchef => return None,
+            Inner::Smartchef(state) => {
+                // Smartchef firmware has no tare command — record the current
+                // raw reading as the new offset and return `None` so the shell
+                // skips the write step. The next notification's user-visible
+                // weight will be `raw - offset`.
+                state.tare();
+                return None;
+            }
             Inner::HiroiaJimmy => hiroia_jimmy::TARE.to_vec(),
             Inner::VariaAku => varia_aku::TARE.to_vec(),
         })
@@ -680,10 +738,80 @@ impl Scale {
             },
             Inner::AcaiaGen1(_)
             | Inner::AcaiaPyxis(_)
-            | Inner::Smartchef
+            | Inner::Smartchef(_)
             | Inner::HiroiaJimmy
             | Inner::VariaAku => return None,
         })
+    }
+
+    /// Whether the connected scale is a Skale II (Atomax).
+    ///
+    /// The Skale needs an explicit LCD-enable / LCD-disable surface like the
+    /// Decent Scale — see [`is_decent_scale`](Self::is_decent_scale). The
+    /// shell uses this gate to fire `ED EC` (display-on + display-weight) on
+    /// machine Idle entry and `EE` (display-off) on Sleep entry. Every other
+    /// scale returns `false`.
+    pub fn is_skale(&self) -> bool {
+        matches!(&self.inner, Inner::Skale)
+    }
+
+    /// Whether the connected scale is a Eureka Precisa (CFS-9002) or its
+    /// codec-identical sibling, the Solo Barista (LSJ-001).
+    ///
+    /// Both scales accept the same 4-byte commands and only differ in the
+    /// advertised name. The shell uses this gate to fire the optional
+    /// turn-off / beep / set-unit-grams commands behind the user-controlled
+    /// "Eureka auto-off on sleep" toggle.
+    pub fn is_eureka_precisa(&self) -> bool {
+        matches!(&self.inner, Inner::EurekaPrecisa | Inner::SoloBarista)
+    }
+
+    /// Whether the connected scale is a Solo Barista (LSJ-001) specifically.
+    ///
+    /// Returns `false` for an Eureka Precisa even though both share the
+    /// codec — kept distinct so a Settings page can branch on the
+    /// user-visible scale identity if it ever needs to.
+    pub fn is_solo_barista(&self) -> bool {
+        matches!(&self.inner, Inner::SoloBarista)
+    }
+
+    /// Whether the connected scale is a Hiroia Jimmy.
+    ///
+    /// The Hiroia accepts a "toggle display unit" command not present on any
+    /// other scale; the shell fires it from the weight-notification path
+    /// when the scale's mode byte indicates a non-grams unit (matches
+    /// reaprime's auto-recovery — `hiroia_scale.dart:131-139`).
+    pub fn is_hiroia_jimmy(&self) -> bool {
+        matches!(&self.inner, Inner::HiroiaJimmy)
+    }
+
+    /// Whether the connected scale is a Difluid Microbalance.
+    ///
+    /// The Difluid auto-corrects unit drift by re-sending `SET_UNIT_GRAMS`
+    /// whenever a weight notification reports a non-grams unit
+    /// (`difluid_scale.dart:147-154`). The shell fires the recovery from
+    /// `CremaCore::on_notification`'s scale-weight path.
+    pub fn is_difluid(&self) -> bool {
+        matches!(&self.inner, Inner::Difluid)
+    }
+
+    /// Whether the connected scale is a Smartchef.
+    ///
+    /// The Smartchef firmware has no BLE tare or timer command. The shell
+    /// doesn't need to gate any reactive writes on this — the unified
+    /// [`tare`](Self::tare) returns `None` and applies the software-tare
+    /// offset on the codec side — but the capability check is exposed for
+    /// symmetry with the other `is_*` helpers and for tests.
+    pub fn is_smartchef(&self) -> bool {
+        matches!(&self.inner, Inner::Smartchef(_))
+    }
+
+    /// Whether the connected scale is a Varia AKU (Pro / Mini / Plus / Micro).
+    ///
+    /// Exposed for symmetry; the Varia AKU has no reactive write surface
+    /// today beyond what the unified [`tare`](Self::tare) covers.
+    pub fn is_varia_aku(&self) -> bool {
+        matches!(&self.inner, Inner::VariaAku)
     }
 }
 
@@ -879,12 +1007,29 @@ mod tests {
     }
 
     #[test]
-    fn smartchef_supports_no_commands() {
+    fn smartchef_tare_is_software_only_and_returns_no_wire_bytes() {
+        // The Smartchef has no BLE tare command; tare is software-side via
+        // the offset on `SmartchefScale`. `Scale::tare()` returns `None` to
+        // signal "no wire write needed" but `supports_tare()` is still `true`
+        // — the user gets a tared reading on the next notification.
         let mut smartchef = Scale::from_label("Smartchef").unwrap();
-        assert!(!smartchef.supports_tare());
+        assert!(smartchef.supports_tare());
         assert!(!smartchef.supports_timer());
         assert_eq!(smartchef.tare(), None);
         assert_eq!(smartchef.timer(TimerCommand::Start), None);
+    }
+
+    #[test]
+    fn smartchef_software_tare_zeroes_the_next_reading() {
+        // Push a raw 18.0 g reading, tare, push the same raw weight — the
+        // user-visible weight after tare should be ~0.
+        let mut smartchef = Scale::from_label("Smartchef").unwrap();
+        let frame = [0u8, 0, 0, 0, 0, 0x00, 0xB4]; // raw 18.0 g
+        assert_eq!(smartchef.parse_weight(&frame), Some(18.0));
+        // Tare captures the most recent raw reading as the offset.
+        assert_eq!(smartchef.tare(), None);
+        // The same raw reading now decodes as zero.
+        assert_eq!(smartchef.parse_weight(&frame), Some(0.0));
     }
 
     #[test]

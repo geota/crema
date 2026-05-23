@@ -666,6 +666,66 @@ impl CremaBridge {
         Ok(())
     }
 
+    /// Build a [`CoreOutput`] (JSON) whose commands enable the Skale II's
+    /// on-scale LCD (legacy `ED EC` sequence plus an optional `0x03`
+    /// enable-grams write when `unit == "grams"`). Skale-II-only.
+    pub fn enable_skale_lcd(&self, unit: &str) -> Result<String, String> {
+        let unit = de1_domain::WeightUnit::from_str_lower(unit)
+            .ok_or_else(|| format!("unknown weight unit: {unit}"))?;
+        Ok(json(self.core.enable_skale_lcd(unit)))
+    }
+
+    /// Build a [`CoreOutput`] (JSON) whose command disables the Skale II's
+    /// on-scale LCD. Skale-II-only.
+    pub fn disable_skale_lcd(&self) -> String {
+        json(self.core.disable_skale_lcd())
+    }
+
+    /// Build a [`CoreOutput`] (JSON) whose command turns off the Eureka
+    /// Precisa / Solo Barista. Empty for every other scale.
+    pub fn turn_off_eureka_precisa(&self) -> String {
+        json(self.core.turn_off_eureka_precisa())
+    }
+
+    /// Build a [`CoreOutput`] (JSON) whose command beeps the Eureka Precisa /
+    /// Solo Barista twice. Empty for every other scale.
+    pub fn beep_eureka_precisa(&self) -> String {
+        json(self.core.beep_eureka_precisa())
+    }
+
+    /// Build a [`CoreOutput`] (JSON) whose command sets the Eureka Precisa /
+    /// Solo Barista's display unit to grams (when `unit == "grams"`); ounces
+    /// is a no-op (legacy never sends an ounces variant).
+    pub fn set_eureka_precisa_unit(&self, unit: &str) -> Result<String, String> {
+        let unit = de1_domain::WeightUnit::from_str_lower(unit)
+            .ok_or_else(|| format!("unknown weight unit: {unit}"))?;
+        Ok(json(self.core.set_eureka_precisa_unit(unit)))
+    }
+
+    /// Build a [`CoreOutput`] (JSON) whose command toggles the Hiroia Jimmy's
+    /// display unit. Empty for every other scale.
+    pub fn toggle_hiroia_jimmy_unit(&self) -> String {
+        json(self.core.toggle_hiroia_jimmy_unit())
+    }
+
+    /// Build a [`CoreOutput`] (JSON) whose command sets the Difluid's display
+    /// unit to grams. Empty for every other scale.
+    pub fn set_difluid_unit_grams(&self) -> String {
+        json(self.core.set_difluid_unit_grams())
+    }
+
+    /// Toggle whether the Eureka Precisa / Solo Barista should be powered
+    /// off on machine Sleep entry. Off by default.
+    pub fn set_eureka_precisa_auto_off_on_sleep(&mut self, enabled: bool) {
+        self.core.set_eureka_precisa_auto_off_on_sleep(enabled);
+    }
+
+    /// Whether the Eureka Precisa / Solo Barista is configured to power off
+    /// on machine Sleep entry.
+    pub fn eureka_precisa_auto_off_on_sleep(&self) -> bool {
+        self.core.eureka_precisa_auto_off_on_sleep()
+    }
+
     /// What the currently-connected scale can do beyond reporting a bare
     /// weight, as a JSON-encoded `ScaleCapabilities` object — or `undefined`
     /// when no scale is connected.
