@@ -14,7 +14,7 @@
 	import { getCaptureStore, captureJsonl } from '$lib/capture';
 	import { daysOffRoast, roastBand } from '$lib/bean';
 	import { getSettingsStore, convertWeight, convertTemp, convertPressure } from '$lib/settings';
-	import { getProfileStore, toCoreProfile } from '$lib/profiles';
+	import { getProfileStore } from '$lib/profiles';
 	import { getCremaAppContext } from '$lib/shell/app-context';
 	import { downloadBlob } from '$lib/utils/download';
 	import StaticShotChart from './StaticShotChart.svelte';
@@ -162,7 +162,11 @@
 			return;
 		}
 		store.setActive(profile.id);
-		void app.uploadProfile(toCoreProfile(profile));
+		// `syncActiveProfile` keeps the fingerprint cache in lockstep
+		// with the upload — without it, the next Coffee tap on Brew
+		// would treat the DE1's loaded bytes as still being whatever
+		// was there before, and trigger an unnecessary re-upload.
+		void app.syncActiveProfile(profile, {});
 	}
 
 	// TODO: Save-as-profile / Share-to-Visualizer are still stubbed —

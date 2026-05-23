@@ -27,4 +27,10 @@ export {
 	type ReplayStatus,
 	type ReplayPhase
 } from './ui-state.svelte';
-export { CremaApp, createCremaApp, type ReplayCaptureOptions } from './app.svelte';
+export {
+	CremaApp,
+	createCremaApp,
+	NoActiveProfileError,
+	ProfileSyncFailedError,
+	type ReplayCaptureOptions
+} from './app.svelte';

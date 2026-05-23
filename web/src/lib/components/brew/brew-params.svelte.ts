@@ -85,6 +85,16 @@ export const DEFAULT_BREW_PARAMS: BrewParams = {
 export type BrewParamSeed = Pick<BrewParams, 'dose' | 'yield' | 'brewTemp' | 'preinf'>;
 
 /**
+ * The four QC keys that genuinely affect the profile-upload bytes — dose,
+ * yield, brew temp, pre-infusion. Drift italics in the Quick Sheet, the
+ * profile-sync fingerprint, and the shot-start lazy re-upload all agree on
+ * this set. Mode toggles (`doseGrindMode` etc.) are pure UI affordance;
+ * steam / hot-water / flush fields the profile doesn't carry have no
+ * "default" to drift from.
+ */
+export type BrewParamSeedKey = keyof BrewParamSeed;
+
+/**
  * The reactive Quick Sheet parameter store — a `$derived`-backed `BrewParams`.
  *
  * It is constructed with a *seed* getter (the active profile's targets, or the
@@ -124,5 +134,57 @@ export class BrewParamState {
 	/** Restore the params to the current seed — the sheet's "Reset" action. */
 	reset(): void {
 		this.current = { ...DEFAULT_BREW_PARAMS, ...this.seed() };
+	}
+
+	/**
+	 * Whether the live value for `key` differs from the active seed — the
+	 * "drift" indicator the Quick Sheet steppers use to italicise +
+	 * copper-tint an overridden field. Reads both `current` and `seed` so
+	 * a re-seed (different profile, edited Settings default) re-renders
+	 * the indicator without a manual reset.
+	 *
+	 * Numeric comparison uses strict equality — the stepper increments
+	 * and seed values are both in canonical units, so the only drift
+	 * source is a real user edit; no float-rounding fuzz is needed in
+	 * practice.
+	 */
+	isOverridden(key: BrewParamSeedKey): boolean {
+		return this.current[key] !== this.seed()[key];
+	}
+
+	/**
+	 * The active seed value for `key` — the per-profile / per-settings
+	 * default the current value would snap back to on Reset. Steppers
+	 * read this to format the drift tooltip ("Overriding default 93 °C")
+	 * in the user's pref unit; no component should imperatively cache
+	 * the seed itself because the underlying `$derived` chain
+	 * re-evaluates when the active profile or Settings default changes.
+	 */
+	seedOf(key: BrewParamSeedKey): number {
+		return this.seed()[key];
+	}
+
+	/**
+	 * The current QC override snapshot — the four seed-tracking fields
+	 * tagged with whether each one was edited away from the seed. Fed
+	 * into `profileFingerprint` at shot start so the lazy re-upload
+	 * triggers exactly when the user's intent diverges from what's on
+	 * the DE1.
+	 *
+	 * Returns the *override*-only subset: a field whose `current` still
+	 * matches the seed is left absent. The fingerprint helper then falls
+	 * back to the profile's own value, which keeps two paths in
+	 * agreement — a "dose stays at the profile's 18 g" hash equals a
+	 * "dose dial untouched" hash.
+	 */
+	qcOverrides(): Partial<BrewParamSeed> {
+		const cur = this.current;
+		const seed = this.seed();
+		const out: Partial<BrewParamSeed> = {};
+		if (cur.dose !== seed.dose) out.dose = cur.dose;
+		if (cur.yield !== seed.yield) out.yield = cur.yield;
+		if (cur.brewTemp !== seed.brewTemp) out.brewTemp = cur.brewTemp;
+		if (cur.preinf !== seed.preinf) out.preinf = cur.preinf;
+		return out;
 	}
 }

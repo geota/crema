@@ -7,12 +7,21 @@
 	import type { BrewParamState } from './brew-params.svelte';
 	import QStepper from './QStepper.svelte';
 	import QChipRow from './QChipRow.svelte';
+	import { getSettingsStore, formatWeight } from '$lib/settings';
 
 	let { params }: { params: BrewParamState } = $props();
 
 	const p = $derived(params.current);
+	const prefs = $derived(getSettingsStore().current);
 	/** Live yield-to-dose ratio. */
 	const ratio = $derived((p.yield / p.dose).toFixed(2));
+	/**
+	 * Whether the live yield differs from the active profile / brew-default
+	 * seed — drives the italics + copper tint on the value, and the
+	 * tooltip ("Overriding default 36 g") on hover.
+	 */
+	const yieldOverridden = $derived(params.isOverridden('yield'));
+	const yieldSeedLabel = $derived(formatWeight(params.seedOf('yield'), prefs.weightUnit));
 </script>
 
 <div>
@@ -27,6 +36,8 @@
 		max={80}
 		step={0.5}
 		onChange={(v) => params.set('yield', v)}
+		overridden={yieldOverridden}
+		overriddenTooltip="Overriding default {yieldSeedLabel}"
 	/>
 	<div style="height:6px"></div>
 	<QChipRow

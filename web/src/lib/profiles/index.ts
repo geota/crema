@@ -34,6 +34,8 @@ export {
 
 export { ProfileStore, getProfileStore } from './store.svelte';
 
+export { profileFingerprint, type ProfileFingerprintQc } from './fingerprint';
+
 export {
 	Y_MAX,
 	PAD_X,
