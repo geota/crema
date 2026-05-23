@@ -265,9 +265,14 @@
 		white-space: nowrap;
 	}
 	.st-stepper-input {
-		flex: 1 1 auto;
+		/* `width: 5em` keeps the input the same width as the display-
+		   mode `<button>NN.N</button><span>unit</span>` it replaces,
+		   independent of the browser's huge default for `input[type=
+		   "number"]` (~150 px on Chromium) which would otherwise push
+		   the row out via the surrounding `inline-flex` layout. */
+		flex: 0 0 auto;
+		width: 5em;
 		min-width: 0;
-		width: 100%;
 		background: rgba(var(--tint-rgb), 0.06);
 		border: 1px solid rgba(var(--copper-rgb), 0.4);
 		border-radius: 4px;
