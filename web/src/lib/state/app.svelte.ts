@@ -368,6 +368,15 @@ export class CremaApp {
 					profileName: snapshot.activeProfileName,
 					dose: activeProfile?.dose ?? null,
 					series: snapshot.shotTelemetry,
+					// Peak / final metrics ride on the event itself — the
+					// core's `ShotMetricsAccumulator` tracks them in real
+					// time, removing three sites of buffered-series
+					// re-iteration (this one, the `applyEvent`
+					// `ShotCompleted` fold, and `history/store.record`).
+					peakPressure: event.content.peak_pressure ?? null,
+					peakTemp: event.content.peak_temp ?? null,
+					peakWeight: event.content.peak_weight ?? null,
+					finalWeight: event.content.final_weight ?? null,
 					bean:
 						roaster || type
 							? {

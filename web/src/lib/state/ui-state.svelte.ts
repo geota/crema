@@ -809,22 +809,21 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 			// so the dashboard can show a "Last shot" card until the next pull.
 			// R6 — record when it finished and how long it ran so an idle screen
 			// can show "time since last shot" and the last-shot duration.
-			let peakPressure = 0;
-			let peakTemp = 0;
-			let yieldG: number | null = null;
-			for (const s of snapshot.shotTelemetry) {
-				if (s.pressure > peakPressure) peakPressure = s.pressure;
-				if (s.temp > peakTemp) peakTemp = s.temp;
-				if (s.weight != null) yieldG = s.weight;
-			}
+			//
+			// Peak pressure / temperature and final yield ride on the event
+			// itself now — the core's `ShotMetricsAccumulator` tracks them
+			// in real time. `peak_*` are `None` when no telemetry arrived;
+			// `final_weight` is `None` when no scale was paired. The card
+			// uses `0` / `null` as the displayable fallback (matches what
+			// the previous re-derivation produced for an empty series).
 			return {
 				...snapshot,
 				shotInProgress: false,
 				completedShot: {
 					duration: event.content.duration,
-					yieldG,
-					peakPressure,
-					peakTemp
+					yieldG: event.content.final_weight ?? null,
+					peakPressure: event.content.peak_pressure ?? 0,
+					peakTemp: event.content.peak_temp ?? 0
 				},
 				lastShotCompletedAt: performance.now(),
 				lastShotDuration: event.content.duration,

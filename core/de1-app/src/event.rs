@@ -189,6 +189,21 @@ pub enum Event {
         duration: u32,
         /// Number of telemetry samples recorded.
         sample_count: u32,
+        /// Peak group pressure observed across every Telemetry sample of the
+        /// shot, bar. `None` when no telemetry arrived. Computed once at the
+        /// core boundary — previously each shell re-iterated the buffered
+        /// series for it.
+        peak_pressure: Option<f32>,
+        /// Peak group-head temperature observed across every Telemetry
+        /// sample of the shot, °C. `None` when no telemetry arrived.
+        peak_temp: Option<f32>,
+        /// Peak scale weight observed across every ScaleReading of the shot,
+        /// grams. `None` when no scale was paired (no readings arrived).
+        peak_weight: Option<f32>,
+        /// The final scale weight observed before the shot ended, grams —
+        /// the "shot yield". `None` when no scale was paired (no readings
+        /// arrived).
+        final_weight: Option<f32>,
     },
     /// A hot-water or flush session began (the DE1 entered the `HotWater` or
     /// `HotWaterRinse` state).
