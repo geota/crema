@@ -537,12 +537,16 @@ export class CremaApp {
 			}
 			if (event.type === 'ShotCompleted') {
 				const snapshot = this.state.current;
-				// Stamp a snapshot of the current bean onto the record, so a later
-				// bean change cannot rewrite history. An unlogged bean (no roaster
-				// and no type) stores `null` — the History UI treats it as optional.
-				const bean = getBeanStore().current;
-				const roaster = bean.roaster.trim();
-				const type = bean.type.trim();
+				// Stamp a snapshot of the active library bean onto the record, so a
+				// later edit / archive / delete cannot rewrite history (the
+				// snapshot-wins design per docs/28 §design-decisions §1). An
+				// unselected bean stores `null`; the History UI treats it as
+				// optional.
+				const library = getBeanStore();
+				const activeBean = library.activeBean;
+				const activeRoaster = activeBean?.roasterId
+					? library.getRoaster(activeBean.roasterId)
+					: null;
 				// Capture the brew dose from the active profile so the History
 				// ratio divides by the real dose, not a nominal 18 g. `null` when
 				// no profile is active or the library has not loaded yet.
@@ -564,16 +568,23 @@ export class CremaApp {
 					peakTemp: event.content.peak_temp ?? null,
 					peakWeight: event.content.peak_weight ?? null,
 					finalWeight: event.content.final_weight ?? null,
-					bean:
-						roaster || type
-							? {
-									roaster,
-									type,
-									roastedOn: bean.roastedOn,
-									roastLevel: bean.roastLevel
-								}
-							: null
+					bean: activeBean
+						? {
+								beanId: activeBean.id,
+								roaster: activeRoaster?.name.trim() ?? '',
+								type: activeBean.name.trim(),
+								roastedOn: activeBean.roastedOn,
+								roastLevel: activeBean.roastLevel
+							}
+						: null
 				});
+				// Burn-down: debit the active bag by the profile's dose so the
+				// brew-page chip reads the remaining grams accurately. No-op
+				// when the user hasn't filled in a bag size. Innovation §2
+				// per docs/28.
+				if (activeBean && activeProfile?.dose) {
+					library.debitFromActive(activeProfile.dose);
+				}
 				// Fire the `shotCompleted` webhook after the History
 				// record is in. Brew ratio = final weight / dose when both
 				// are known; `null` otherwise.

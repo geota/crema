@@ -1,84 +1,384 @@
 /**
- * `$lib/bean/store` — the **current-bean** store.
+ * `$lib/bean/store` — the bean library store.
  *
- * Holds exactly one {@link Bean}: the bag of coffee in use right now. Unlike
- * `lib/profiles` (a library of many) this is a single record — there is one
- * "current bean" at a time. Crema's web shell is a static, client-only PWA —
- * there is no server — so `localStorage` is the store, via the shared
- * `$lib/utils/storage` helpers, exactly like the profile and history stores.
+ * Backs `/beans` (the library + roaster directory) and the brew-page
+ * bean picker. Two reactive lists — beans and roasters — plus an
+ * `activeBeanId` pointer for the brew-page selection. All four live in
+ * `localStorage` because Crema's web shell is a static, client-only PWA.
+ *
+ * Migration: on first load with no `crema.beans.v1` payload, the store
+ * reads the legacy `crema.bean.current.v1` single-bean record (the
+ * pre-library shape from the brew-page card) and promotes it into the
+ * library as one favourited bean + (optional) roaster row. After the
+ * migration the legacy key is left in place so a roll-back to the old
+ * shell keeps reading the old shape — a deliberately defensive choice
+ * for the static PWA.
  *
  * The store is a Svelte 5 `$state` class; obtain the singleton with
- * {@link getBeanStore}. It loads synchronously from `localStorage`.
+ * {@link getBeanLibraryStore} or the legacy alias {@link getBeanStore}.
  */
 
 import { readJson, writeJson } from '$lib/utils/storage';
-import { type Bean, migrateBean } from './model';
+import {
+	type Bean,
+	type Roaster,
+	blankBean,
+	blankRoaster,
+	coerceBean,
+	coerceRoaster,
+	migrateLegacyCurrentBean
+} from './model';
 
-/** localStorage key for the current bean (a single `Bean`). */
-const BEAN_KEY = 'crema.bean.current.v1';
+// ── localStorage keys (versioned envelope) ─────────────────────────────
 
-/** The reactive current-bean store. One instance per app — {@link getBeanStore}. */
-export class BeanStore {
+/** Library envelope key — beans + roasters + schemaVersion. */
+const LIBRARY_KEY = 'crema.beans.v1';
+/** Active bean id — the brew-page picker's pointer. */
+const ACTIVE_KEY = 'crema.beans.activeBeanId.v1';
+/** The pre-library single-bean key — read once for migration, then untouched. */
+const LEGACY_KEY = 'crema.bean.current.v1';
+
+/** Current schema version stamped in the envelope. */
+const LIBRARY_SCHEMA = 1;
+
+interface LibraryEnvelope {
+	schemaVersion: number;
+	beans: Bean[];
+	roasters: Roaster[];
+}
+
+function readLibrary(): LibraryEnvelope {
+	const raw = readJson<unknown>(LIBRARY_KEY, null);
+	if (
+		raw &&
+		typeof raw === 'object' &&
+		'schemaVersion' in raw &&
+		Array.isArray((raw as LibraryEnvelope).beans) &&
+		Array.isArray((raw as LibraryEnvelope).roasters)
+	) {
+		const env = raw as LibraryEnvelope;
+		const beans = env.beans.map(coerceBean).filter((b): b is Bean => b !== null);
+		const roasters = env.roasters
+			.map(coerceRoaster)
+			.filter((r): r is Roaster => r !== null);
+		return { schemaVersion: LIBRARY_SCHEMA, beans, roasters };
+	}
+	// First load — try the legacy single-bean migration.
+	const migrated = migrateLegacyCurrentBean(readJson<unknown>(LEGACY_KEY, null));
+	if (migrated) {
+		return {
+			schemaVersion: LIBRARY_SCHEMA,
+			beans: [migrated.bean],
+			roasters: migrated.roaster ? [migrated.roaster] : []
+		};
+	}
+	return { schemaVersion: LIBRARY_SCHEMA, beans: [], roasters: [] };
+}
+
+// ── BeanLibraryStore ───────────────────────────────────────────────────
+
+/**
+ * The reactive bean library. CRUD on `beans` and `roasters`, plus the
+ * `activeBeanId` pointer that drives the brew page's bean strip.
+ */
+export class BeanLibraryStore {
+	private envelope = $state.raw<LibraryEnvelope>(readLibrary());
+	private activeId = $state.raw<string | null>(
+		readJson<string | null>(ACTIVE_KEY, null)
+	);
+
+	// ── Reads ────────────────────────────────────────────────────────
+
+	/** The full bean list, ordered by `updatedAt` desc by default in the UI. */
+	get beans(): Bean[] {
+		return this.envelope.beans;
+	}
+
+	/** The full roaster directory. */
+	get roasters(): Roaster[] {
+		return this.envelope.roasters;
+	}
+
+	/** The id of the currently-selected bean (brew picker), or `null`. */
+	get activeBeanId(): string | null {
+		return this.activeId;
+	}
+
+	/** The currently-selected bean record, or `null`. */
+	get activeBean(): Bean | null {
+		const id = this.activeId;
+		if (!id) return null;
+		return this.envelope.beans.find((b) => b.id === id) ?? null;
+	}
+
+	/** Look up a bean by id. */
+	getBean(id: string): Bean | null {
+		return this.envelope.beans.find((b) => b.id === id) ?? null;
+	}
+
+	/** Look up a roaster by id. */
+	getRoaster(id: string): Roaster | null {
+		return this.envelope.roasters.find((r) => r.id === id) ?? null;
+	}
+
 	/**
-	 * The current bean. Loaded from localStorage, then run through
-	 * {@link migrateBean} so an old-shape payload (`{ name, roastLevel: word }`)
-	 * is upgraded leniently rather than crashing.
+	 * Find a roaster by case-insensitive name match. Used by import +
+	 * inline-create to dedup `"Onyx Coffee Lab"` vs `"onyx coffee lab"`.
 	 */
-	private bean = $state.raw<Bean>(migrateBean(readJson<unknown>(BEAN_KEY, null)));
-
-	/** The current bean. Reactive: any setter re-renders the bean card. */
-	get current(): Bean {
-		return this.bean;
+	findRoasterByName(name: string): Roaster | null {
+		const needle = name.trim().toLowerCase();
+		if (!needle) return null;
+		return (
+			this.envelope.roasters.find((r) => r.name.trim().toLowerCase() === needle) ?? null
+		);
 	}
 
-	/** Persist the current bean to localStorage. */
+	// ── Persistence ──────────────────────────────────────────────────
+
 	private persist(): void {
-		writeJson(BEAN_KEY, this.bean);
+		writeJson(LIBRARY_KEY, this.envelope);
+	}
+	private persistActive(): void {
+		writeJson(ACTIVE_KEY, this.activeId);
 	}
 
-	/** Replace the whole current bean and persist. */
-	set(bean: Bean): void {
-		this.bean = bean;
+	// ── Bean CRUD ────────────────────────────────────────────────────
+
+	/** Insert a new bean (must have a unique id; replaces if id collides). */
+	upsertBean(bean: Bean): void {
+		const now = Date.now();
+		const next = { ...bean, updatedAt: now };
+		const idx = this.envelope.beans.findIndex((b) => b.id === bean.id);
+		const beans =
+			idx >= 0
+				? [
+						...this.envelope.beans.slice(0, idx),
+						next,
+						...this.envelope.beans.slice(idx + 1)
+					]
+				: [next, ...this.envelope.beans];
+		this.envelope = { ...this.envelope, beans };
 		this.persist();
 	}
 
-	/** Patch one or more fields of the current bean and persist. */
-	update(patch: Partial<Bean>): void {
-		this.bean = { ...this.bean, ...patch };
+	/** Patch one or more fields on a bean. No-op if the id is unknown. */
+	updateBean(id: string, patch: Partial<Bean>): void {
+		const idx = this.envelope.beans.findIndex((b) => b.id === id);
+		if (idx < 0) return;
+		const updated: Bean = {
+			...this.envelope.beans[idx],
+			...patch,
+			id, // never let the patch swap the id
+			updatedAt: Date.now()
+		};
+		this.envelope = {
+			...this.envelope,
+			beans: [
+				...this.envelope.beans.slice(0, idx),
+				updated,
+				...this.envelope.beans.slice(idx + 1)
+			]
+		};
 		this.persist();
 	}
 
-	/** Update the roaster (Visualizer `bean.brand`) and persist. */
-	setRoaster(roaster: string): void {
-		this.update({ roaster });
+	/**
+	 * Hard-delete a bean (and clear the active pointer if it was active). Also
+	 * fires a best-effort DELETE against Visualizer so the remote stays in
+	 * sync — failure is logged and dropped, never blocks the local delete.
+	 */
+	deleteBean(id: string): void {
+		const bean = this.getBean(id);
+		const beans = this.envelope.beans.filter((b) => b.id !== id);
+		if (beans.length === this.envelope.beans.length) return;
+		this.envelope = { ...this.envelope, beans };
+		this.persist();
+		if (this.activeId === id) {
+			this.activeId = null;
+			this.persistActive();
+		}
+		// Fire-and-forget remote delete. Import inline to avoid pulling the
+		// sync module into the store's circular-dep surface.
+		if (bean?.visualizerId) {
+			void import('./visualizer-sync').then(({ deleteRemoteBean }) =>
+				deleteRemoteBean(bean).then((r) => {
+					if (!r.ok) console.warn('Visualizer delete failed:', r.error);
+				})
+			);
+		}
 	}
 
-	/** Update the bean type (Visualizer `bean.type`) and persist. */
-	setType(type: string): void {
-		this.update({ type });
+	/** Toggle the favourite flag. */
+	toggleFavourite(id: string): void {
+		const bean = this.getBean(id);
+		if (!bean) return;
+		this.updateBean(id, { favourite: !bean.favourite });
 	}
 
-	/** Update the roast date (`yyyy-mm-dd` or `null`) and persist. */
-	setRoastedOn(roastedOn: string | null): void {
-		this.update({ roastedOn });
+	/** Stamp `archivedAt` to the current time, or clear it (unarchive). */
+	toggleArchived(id: string): void {
+		const bean = this.getBean(id);
+		if (!bean) return;
+		this.updateBean(id, { archivedAt: bean.archivedAt == null ? Date.now() : null });
 	}
 
-	/** Update the 1..10 roast level (`null` to clear) and persist. */
-	setRoastLevel(roastLevel: number | null): void {
-		this.update({ roastLevel });
+	/**
+	 * Bulk-add beans (and synthesised roasters) — the import path's
+	 * commit step. Newly inserted beans land at the front; roasters
+	 * are added without dedup against an existing directory (callers
+	 * are responsible for `findRoasterByName` first).
+	 */
+	bulkAdd(beans: Bean[], roasters: Roaster[]): void {
+		if (beans.length === 0 && roasters.length === 0) return;
+		this.envelope = {
+			...this.envelope,
+			beans: [...beans, ...this.envelope.beans],
+			roasters: [...this.envelope.roasters, ...roasters]
+		};
+		this.persist();
 	}
 
-	/** Update the grinder name (free text, empty to clear) and persist. */
-	setGrinder(grinder: string): void {
-		this.update({ grinder });
+	/**
+	 * Auto-debit `doseG` from the active bean's `remainingG` when a shot
+	 * completes. Floors at `0` so the readout never goes negative. No-op
+	 * when there is no active bean or the bag size is unset.
+	 */
+	debitFromActive(doseG: number): void {
+		const bean = this.activeBean;
+		if (!bean || !(doseG > 0)) return;
+		if (bean.bagSizeG <= 0) return; // no bag size set → no burn-down to track
+		const remaining = Math.max(0, bean.remainingG - doseG);
+		this.updateBean(bean.id, { remainingG: remaining });
+	}
+
+	// ── Roaster CRUD ─────────────────────────────────────────────────
+
+	upsertRoaster(roaster: Roaster): void {
+		const next = { ...roaster, updatedAt: Date.now() };
+		const idx = this.envelope.roasters.findIndex((r) => r.id === roaster.id);
+		const roasters =
+			idx >= 0
+				? [
+						...this.envelope.roasters.slice(0, idx),
+						next,
+						...this.envelope.roasters.slice(idx + 1)
+					]
+				: [next, ...this.envelope.roasters];
+		this.envelope = { ...this.envelope, roasters };
+		this.persist();
+	}
+
+	updateRoaster(id: string, patch: Partial<Roaster>): void {
+		const idx = this.envelope.roasters.findIndex((r) => r.id === id);
+		if (idx < 0) return;
+		const updated: Roaster = {
+			...this.envelope.roasters[idx],
+			...patch,
+			id,
+			updatedAt: Date.now()
+		};
+		this.envelope = {
+			...this.envelope,
+			roasters: [
+				...this.envelope.roasters.slice(0, idx),
+				updated,
+				...this.envelope.roasters.slice(idx + 1)
+			]
+		};
+		this.persist();
+	}
+
+	/**
+	 * Delete a roaster. Beans pointing at it have their `roasterId`
+	 * cleared rather than disappearing — losing a roastery's name is
+	 * less destructive than losing the bag. Fires a best-effort DELETE
+	 * against Visualizer to keep the remote in sync.
+	 */
+	deleteRoaster(id: string): void {
+		const roaster = this.getRoaster(id);
+		const roasters = this.envelope.roasters.filter((r) => r.id !== id);
+		if (roasters.length === this.envelope.roasters.length) return;
+		const beans = this.envelope.beans.map((b) =>
+			b.roasterId === id ? { ...b, roasterId: null, updatedAt: Date.now() } : b
+		);
+		this.envelope = { ...this.envelope, beans, roasters };
+		this.persist();
+		if (roaster?.visualizerId) {
+			void import('./visualizer-sync').then(({ deleteRemoteRoaster }) =>
+				deleteRemoteRoaster(roaster).then((r) => {
+					if (!r.ok) console.warn('Visualizer delete failed:', r.error);
+				})
+			);
+		}
+	}
+
+	/**
+	 * Find an existing roaster by case-insensitive name or create a fresh
+	 * one. Returns the roaster row. Used by the bean editor's "type a name
+	 * to create a roaster" inline flow and by the Beanconqueror importer.
+	 */
+	ensureRoaster(name: string): Roaster | null {
+		const trimmed = name.trim();
+		if (!trimmed) return null;
+		const existing = this.findRoasterByName(trimmed);
+		if (existing) return existing;
+		const fresh = blankRoaster(trimmed);
+		this.upsertRoaster(fresh);
+		return fresh;
+	}
+
+	// ── Active-bean pointer ──────────────────────────────────────────
+
+	/** Set the active bean (or `null` to clear). Drives the brew picker. */
+	setActiveBean(id: string | null): void {
+		this.activeId = id;
+		this.persistActive();
+	}
+
+	/**
+	 * Quick-add: create + save + activate in one step. Used by the brew-page
+	 * inline "+ Add bean" affordance.
+	 */
+	quickAdd(name: string, roasterName?: string, roastedOn?: string | null): Bean {
+		const bean = blankBean();
+		bean.name = name.trim() || 'New bean';
+		if (roasterName) {
+			const roaster = this.ensureRoaster(roasterName);
+			bean.roasterId = roaster?.id ?? null;
+		}
+		if (roastedOn) bean.roastedOn = roastedOn;
+		bean.favourite = true; // a quick-add bean is implicitly pinned to the strip
+		this.upsertBean(bean);
+		this.setActiveBean(bean.id);
+		return bean;
+	}
+
+	// ── Visualizer sync helpers ──────────────────────────────────────
+
+	/**
+	 * Replace a bean's record with one pulled from Visualizer — used by the
+	 * sync path's "remote wins" merge.
+	 */
+	replaceBean(bean: Bean): void {
+		this.upsertBean(bean);
 	}
 }
 
-/** The process-wide singleton — one current bean shared by every route. */
-let store: BeanStore | undefined;
+// ── Singleton + back-compat alias ──────────────────────────────────────
 
-/** Get the shared {@link BeanStore}, creating it on first call. */
-export function getBeanStore(): BeanStore {
-	if (!store) store = new BeanStore();
+let store: BeanLibraryStore | undefined;
+
+/** Get the shared bean library store, creating it on first call. */
+export function getBeanLibraryStore(): BeanLibraryStore {
+	if (!store) store = new BeanLibraryStore();
 	return store;
+}
+
+/**
+ * Legacy alias — the pre-library API surface had `getBeanStore()` returning a
+ * single-bean object. Callers that just want the active bean keep working
+ * via this alias.
+ */
+export function getBeanStore(): BeanLibraryStore {
+	return getBeanLibraryStore();
 }

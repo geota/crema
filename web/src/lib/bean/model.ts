@@ -1,18 +1,16 @@
 /**
- * `$lib/bean/model` — the **current bean** model.
+ * `$lib/bean/model` — the bean library types.
  *
- * A *bean* (a bag of coffee) and a *profile* (an extraction recipe) have
- * different lifecycles, so bean identity does **not** live on the profile —
- * this matches the upstream de1app, where `profile_vars` carries no bean
- * fields and bean info lives in app settings plus per-shot metadata.
+ * One bag of coffee is a {@link Bean}; the roastery that produced it is a
+ * {@link Roaster}; and a snapshot frozen onto each completed shot is a
+ * {@link ShotBean}. All three mirror the canonical Rust types in
+ * `de1_domain::bean` (docs/28 §data-model-proposal) so the Android shell can
+ * consume identical shapes on day one via `#[typeshare]`.
  *
- * The shell therefore keeps a single **current bean** — the bag you are
- * pulling shots from right now — in its own localStorage-backed store (see
- * `store.svelte.ts`). It is independent of any profile.
- *
- * The shape mirrors what Visualizer expects in the de1app shot `bean` block:
- * `roaster` → `bean.brand`, `type` → `bean.type`, `roastLevel` → the 1..10
- * `roast_level` scale, `roastedOn` → `roast_date`.
+ * The shell owns persistence — the core is sans-IO — so this file defines the
+ * shape, the migration from the legacy single-bean store and the pure helpers
+ * (freshness band, days off roast) that ride on the wasm bridge. CRUD lives
+ * on {@link BeanLibraryStore} in `./store.svelte`.
  */
 
 import type { Roast } from '$lib/profiles';
@@ -22,44 +20,183 @@ import {
 	roast_freshness as wasmRoastFreshness
 } from '$lib/wasm/de1_wasm';
 
+// ── Wire types (mirrored from de1_domain::bean) ─────────────────────────
+
+/** Single-origin vs blend. Lowercase wire string — matches Rust `BeanMix`. */
+export type BeanMix = 'single' | 'blend';
+
 /**
- * The current bean — the bag of coffee in use right now. A snapshot of this
- * shape is also stamped onto each recorded shot (see `lib/history`).
+ * Origin metadata for a bag — country, region, farm and the rest of the
+ * upstream provenance. All optional and free-form because real coffee bag
+ * labels are inconsistent. Mirrors `de1_domain::BeanOrigin`.
  */
-export interface Bean {
-	/** The roastery, e.g. `Onyx Coffee Lab` (Visualizer `bean.brand`). */
-	roaster: string;
-	/** The coffee itself, e.g. `Colombian Geisha` (Visualizer `bean.type`). */
-	type: string;
-	/** ISO `yyyy-mm-dd` roast date, or `null` when not logged. */
-	roastedOn: string | null;
-	/**
-	 * Roast level on Visualizer's 1..10 `roast_level` scale (1 = lightest),
-	 * or `null` when not logged. See {@link roastBand} to classify it.
-	 */
-	roastLevel: number | null;
-	/**
-	 * The grinder this bag is dialled in on, e.g. `Niche Zero` — free text,
-	 * empty when not logged. Bean-scoped because a grind setting only means
-	 * something paired with the grinder it was measured on.
-	 */
-	grinder: string;
+export interface BeanOrigin {
+	country: string | null;
+	region: string | null;
+	farm: string | null;
+	farmer: string | null;
+	variety: string | null;
+	elevation: string | null;
+	processing: string | null;
+	harvestTime: string | null;
 }
 
-/** A fresh, empty current bean — the starting point before anything is logged. */
-export function blankBean(): Bean {
-	return { roaster: '', type: '', roastedOn: null, roastLevel: null, grinder: '' };
+/** A blank origin — every field `null`. */
+export function blankOrigin(): BeanOrigin {
+	return {
+		country: null,
+		region: null,
+		farm: null,
+		farmer: null,
+		variety: null,
+		elevation: null,
+		processing: null,
+		harvestTime: null
+	};
 }
+
+/**
+ * One bag of coffee — a row in the bean library. Mirrors `de1_domain::Bean`.
+ *
+ * The id is a stable `bean:<uuid>`. `createdAt` / `updatedAt` are Unix epoch
+ * milliseconds; the store bumps `updatedAt` on every patch. `metadata` is the
+ * open JSON escape valve — Beanconqueror-only fields and Visualizer-only keys
+ * ride here, with the agreement that Visualizer ignores unknown properties so
+ * round-trips are lossless (per Visualizer's `additionalProperties: true` on
+ * `CoffeeBagDetail.metadata`).
+ */
+export interface Bean {
+	id: string;
+	name: string;
+	roasterId: string | null;
+	roastedOn: string | null;
+	openedOn: string | null;
+	frozenOn: string | null;
+	defrostedOn: string | null;
+	/** 1..10 (Visualizer canonical scale). */
+	roastLevel: number | null;
+	mix: BeanMix | null;
+	decaf: boolean;
+	origin: BeanOrigin;
+	bagSizeG: number;
+	remainingG: number;
+	qualityScore: string;
+	tastingNotes: string;
+	/** Star rating 0..5; 0 = unrated. */
+	rating: number;
+	placeOfPurchase: string | null;
+	url: string | null;
+	notes: string;
+	favourite: boolean;
+	/** Unix epoch ms; `null` = active. */
+	archivedAt: number | null;
+	grinder: string;
+	grinderSetting: string;
+	visualizerId: string | null;
+	beanconquerorId: string | null;
+	imageRef: string | null;
+	/**
+	 * Open JSON for fields Crema/Visualizer don't model first-class. Use
+	 * sparingly — the type-safe fields above are preferred.
+	 */
+	metadata: Record<string, unknown>;
+	createdAt: number;
+	updatedAt: number;
+}
+
+/** Build a brand-new bag with a freshly minted id and timestamp. */
+export function blankBean(id?: string): Bean {
+	const now = Date.now();
+	return {
+		id: id ?? mintBeanId(),
+		name: '',
+		roasterId: null,
+		roastedOn: null,
+		openedOn: null,
+		frozenOn: null,
+		defrostedOn: null,
+		roastLevel: null,
+		mix: null,
+		decaf: false,
+		origin: blankOrigin(),
+		bagSizeG: 0,
+		remainingG: 0,
+		qualityScore: '',
+		tastingNotes: '',
+		rating: 0,
+		placeOfPurchase: null,
+		url: null,
+		notes: '',
+		favourite: false,
+		archivedAt: null,
+		grinder: '',
+		grinderSetting: '',
+		visualizerId: null,
+		beanconquerorId: null,
+		imageRef: null,
+		metadata: {},
+		createdAt: now,
+		updatedAt: now
+	};
+}
+
+/**
+ * One roastery — a record in the roaster directory. Sparse on purpose:
+ * Visualizer's `RoasterDetail` is itself minimal, and Beanconqueror has no
+ * first-class roaster, so promotion-from-string at import time keeps things
+ * honest. Mirrors `de1_domain::Roaster`.
+ */
+export interface Roaster {
+	id: string;
+	name: string;
+	website: string | null;
+	country: string | null;
+	notes: string;
+	visualizerId: string | null;
+	metadata: Record<string, unknown>;
+	createdAt: number;
+	updatedAt: number;
+}
+
+/** Build a brand-new roaster row. */
+export function blankRoaster(name: string, id?: string): Roaster {
+	const now = Date.now();
+	return {
+		id: id ?? mintRoasterId(),
+		name,
+		website: null,
+		country: null,
+		notes: '',
+		visualizerId: null,
+		metadata: {},
+		createdAt: now,
+		updatedAt: now
+	};
+}
+
+// ── Id minting ─────────────────────────────────────────────────────────
+
+/** Crypto-random id when available; weak fallback for the bookkeeping case. */
+function mintId(prefix: string): string {
+	const rnd =
+		typeof crypto !== 'undefined' && 'randomUUID' in crypto
+			? crypto.randomUUID()
+			: Math.random().toString(36).slice(2) + Date.now().toString(36);
+	return `${prefix}:${rnd}`;
+}
+export function mintBeanId(): string {
+	return mintId('bean');
+}
+export function mintRoasterId(): string {
+	return mintId('roaster');
+}
+
+// ── Pure helpers — delegate to the wasm core ───────────────────────────
 
 /**
  * Classify a 1..10 roast level into a named band: `1–3 → 'light'`,
  * `4–6 → 'medium'`, `7–10 → 'dark'`. Returns `null` for a `null` level.
- * Values outside 1..10 are clamped into range first.
- *
- * Delegates to `de1_domain::roast_band` via the wasm bridge so every
- * shell consumes the same classification (audit #5). The shell rounds
- * a fractional level before crossing the bridge — the wasm helper
- * takes an integer level.
+ * Delegates to `de1_domain::roast_band` via the wasm bridge.
  */
 export function roastBand(level: number | null): Roast | null {
 	if (level == null) return null;
@@ -68,10 +205,7 @@ export function roastBand(level: number | null): Roast | null {
 	return (wasmRoastBand(rounded) ?? null) as Roast | null;
 }
 
-/**
- * The 1..10 roast-level a quick-set roast pill maps to — each value lands
- * squarely inside its own {@link roastBand}: light → 1, medium → 5, dark → 10.
- */
+/** The roast level a quick-set pill maps to: light→1, medium→5, dark→10. */
 export const ROAST_PILL_LEVEL: Readonly<Record<Roast, number>> = {
 	light: 1,
 	medium: 5,
@@ -79,16 +213,9 @@ export const ROAST_PILL_LEVEL: Readonly<Record<Roast, number>> = {
 };
 
 /**
- * Whole days between a `yyyy-mm-dd` roast date and `asOf` (default: now) —
- * the bean's "days off roast". Returns `null` when no roast date is set, and
- * is clamped at `0` so a future-dated roast never reads negative.
- *
- * The arithmetic is done on the calendar date only (UTC midnight of each
- * day), so a shot pulled at any time of day reports a stable integer.
- *
- * Delegates to `de1_domain::days_off_roast` via the wasm bridge — the
- * core is sans-IO so the shell passes `Date.now()` (or `asOf`) at the
- * call site (audit #5/#9).
+ * Whole days between a `yyyy-mm-dd` roast date and `asOf` (default: now).
+ * Returns `null` when no roast date is set; clamped at `0` so a future-dated
+ * roast never reads negative.
  */
 export function daysOffRoast(
 	roastedOn: string | null,
@@ -103,16 +230,7 @@ export function daysOffRoast(
 /** A bean's rest verdict against the ideal window for its roast band. */
 export type Freshness = 'best' | 'ok' | 'bad';
 
-/**
- * Rate how a bean's `days` off roast sits against the ideal rest window for
- * its roast `band` — drives the bean card's status dot. `best` inside the
- * green window, `bad` past the band's `ok` upper bound, `ok` either side in
- * between. Returns `null` when the band or the day count is unknown.
- *
- * The per-band windows (dark / medium / light) and the verdict thresholds
- * live in `de1_domain::roast_freshness` — this delegates via the wasm
- * bridge so every shell rates a bean identically (audit #5).
- */
+/** Rate days-off-roast against the band's ideal window. */
 export function roastFreshness(
 	band: Roast | null,
 	days: number | null
@@ -122,38 +240,168 @@ export function roastFreshness(
 }
 
 /**
- * Leniently migrate a value persisted under the **old** bean shape
- * (`{ name, roastedOn, roastLevel: 'light'|'medium'|'dark'|null }`) — or any
- * partial / unknown value — into a valid {@link Bean}. Unmappable fields fall
- * back to blank. Never throws: used on load so an old payload cannot crash.
+ * One-line label summarising a bag — `"Yirgacheffe · Counter Culture · 14d off
+ * roast"`. Pieces that are unset are omitted; the dot-separator collapses.
+ * Mirrors `de1_domain::Bean::display_summary`.
  */
-export function migrateBean(raw: unknown): Bean {
-	const base = blankBean();
-	if (typeof raw !== 'object' || raw === null) return base;
+export function beanDisplaySummary(
+	bean: Bean,
+	roaster: Roaster | null,
+	asOf: number | Date = Date.now()
+): string {
+	const parts: string[] = [];
+	const name = bean.name.trim();
+	const country = bean.origin.country?.trim() ?? '';
+	if (name) parts.push(name);
+	else if (country) parts.push(country);
+	const roasterName = roaster?.name.trim();
+	if (roasterName) parts.push(roasterName);
+	const days = daysOffRoast(bean.roastedOn, asOf);
+	if (days != null) parts.push(`${days}d off roast`);
+	return parts.join(' · ');
+}
+
+// ── Legacy migration ───────────────────────────────────────────────────
+
+/**
+ * The pre-library single-bean shape — `{ roaster, type, roastedOn, roastLevel,
+ * grinder }` stored under `crema.bean.current.v1`. Kept here so the library
+ * store can migrate it forward on first load.
+ */
+export interface LegacyCurrentBean {
+	roaster: string;
+	type: string;
+	roastedOn: string | null;
+	roastLevel: number | null;
+	grinder: string;
+}
+
+/**
+ * Migrate the old single-bean record into a fresh library {@link Bean} plus
+ * (optionally) a {@link Roaster} synthesised from the legacy roaster string.
+ * Returns `null` when the legacy record is empty (nothing to migrate). The
+ * legacy `type` becomes the new `name`; the legacy `roaster` is promoted to
+ * a Roaster row when non-empty.
+ */
+export function migrateLegacyCurrentBean(raw: unknown): {
+	bean: Bean;
+	roaster: Roaster | null;
+} | null {
+	if (typeof raw !== 'object' || raw === null) return null;
 	const obj = raw as Record<string, unknown>;
-
-	// `roaster` is new — accept it if present, else blank.
-	if (typeof obj.roaster === 'string') base.roaster = obj.roaster;
-
-	// `type` is new; the old shape had a single `name` → migrate it to `type`.
-	if (typeof obj.type === 'string') {
-		base.type = obj.type;
-	} else if (typeof obj.name === 'string') {
-		base.type = obj.name;
+	// Accept either the v1 shape (roaster + type) or the earliest shape (name).
+	const roasterStr =
+		typeof obj.roaster === 'string' ? obj.roaster.trim() : '';
+	const typeStr =
+		typeof obj.type === 'string'
+			? obj.type.trim()
+			: typeof obj.name === 'string'
+				? obj.name.trim()
+				: '';
+	const grinderStr = typeof obj.grinder === 'string' ? obj.grinder.trim() : '';
+	const roastedOn = typeof obj.roastedOn === 'string' ? obj.roastedOn : null;
+	// roastLevel can be a number or a legacy band word.
+	let roastLevel: number | null = null;
+	const rawLevel = obj.roastLevel;
+	if (typeof rawLevel === 'number' && Number.isFinite(rawLevel)) {
+		roastLevel = Math.max(1, Math.min(10, Math.round(rawLevel)));
+	} else if (rawLevel === 'light' || rawLevel === 'medium' || rawLevel === 'dark') {
+		roastLevel = ROAST_PILL_LEVEL[rawLevel];
 	}
 
+	// Empty → nothing to migrate.
+	if (!roasterStr && !typeStr && !roastedOn && roastLevel == null && !grinderStr) {
+		return null;
+	}
+
+	const roaster = roasterStr ? blankRoaster(roasterStr) : null;
+	const bean = blankBean();
+	bean.name = typeStr || roasterStr || 'Imported bean';
+	bean.roasterId = roaster?.id ?? null;
+	bean.roastedOn = roastedOn;
+	bean.roastLevel = roastLevel;
+	bean.grinder = grinderStr;
+	bean.favourite = true; // The legacy active bean → pinned to the brew strip.
+	return { bean, roaster };
+}
+
+// ── Defensive deserialiser ─────────────────────────────────────────────
+
+/**
+ * Coerce a stored `unknown` into a valid {@link Bean}, filling missing fields
+ * from {@link blankBean}. Never throws — used on load so a stale shape cannot
+ * crash the app.
+ */
+export function coerceBean(raw: unknown): Bean | null {
+	if (typeof raw !== 'object' || raw === null) return null;
+	const obj = raw as Record<string, unknown>;
+	if (typeof obj.id !== 'string' || typeof obj.name !== 'string') return null;
+	const base = blankBean(obj.id);
+	base.name = obj.name;
+	if (typeof obj.roasterId === 'string') base.roasterId = obj.roasterId;
 	if (typeof obj.roastedOn === 'string') base.roastedOn = obj.roastedOn;
-
-	// `grinder` is new — accept it if present, else blank.
-	if (typeof obj.grinder === 'string') base.grinder = obj.grinder;
-
-	// `roastLevel` is now a 1..10 number; the old shape stored a band word.
-	const level = obj.roastLevel;
-	if (typeof level === 'number' && Number.isFinite(level)) {
-		base.roastLevel = Math.max(1, Math.min(10, Math.round(level)));
-	} else if (level === 'light' || level === 'medium' || level === 'dark') {
-		base.roastLevel = ROAST_PILL_LEVEL[level];
+	if (typeof obj.openedOn === 'string') base.openedOn = obj.openedOn;
+	if (typeof obj.frozenOn === 'string') base.frozenOn = obj.frozenOn;
+	if (typeof obj.defrostedOn === 'string') base.defrostedOn = obj.defrostedOn;
+	if (typeof obj.roastLevel === 'number') base.roastLevel = obj.roastLevel;
+	if (obj.mix === 'single' || obj.mix === 'blend') base.mix = obj.mix;
+	if (typeof obj.decaf === 'boolean') base.decaf = obj.decaf;
+	if (typeof obj.origin === 'object' && obj.origin !== null) {
+		const o = obj.origin as Record<string, unknown>;
+		const origin = blankOrigin();
+		const keys: (keyof BeanOrigin)[] = [
+			'country',
+			'region',
+			'farm',
+			'farmer',
+			'variety',
+			'elevation',
+			'processing',
+			'harvestTime'
+		];
+		for (const k of keys) {
+			const v = o[k];
+			if (typeof v === 'string') origin[k] = v;
+		}
+		base.origin = origin;
 	}
+	if (typeof obj.bagSizeG === 'number') base.bagSizeG = obj.bagSizeG;
+	if (typeof obj.remainingG === 'number') base.remainingG = obj.remainingG;
+	if (typeof obj.qualityScore === 'string') base.qualityScore = obj.qualityScore;
+	if (typeof obj.tastingNotes === 'string') base.tastingNotes = obj.tastingNotes;
+	if (typeof obj.rating === 'number') base.rating = obj.rating;
+	if (typeof obj.placeOfPurchase === 'string') base.placeOfPurchase = obj.placeOfPurchase;
+	if (typeof obj.url === 'string') base.url = obj.url;
+	if (typeof obj.notes === 'string') base.notes = obj.notes;
+	if (typeof obj.favourite === 'boolean') base.favourite = obj.favourite;
+	if (typeof obj.archivedAt === 'number') base.archivedAt = obj.archivedAt;
+	if (typeof obj.grinder === 'string') base.grinder = obj.grinder;
+	if (typeof obj.grinderSetting === 'string') base.grinderSetting = obj.grinderSetting;
+	if (typeof obj.visualizerId === 'string') base.visualizerId = obj.visualizerId;
+	if (typeof obj.beanconquerorId === 'string') base.beanconquerorId = obj.beanconquerorId;
+	if (typeof obj.imageRef === 'string') base.imageRef = obj.imageRef;
+	if (typeof obj.metadata === 'object' && obj.metadata !== null) {
+		base.metadata = obj.metadata as Record<string, unknown>;
+	}
+	if (typeof obj.createdAt === 'number') base.createdAt = obj.createdAt;
+	if (typeof obj.updatedAt === 'number') base.updatedAt = obj.updatedAt;
+	return base;
+}
 
+/** Coerce a stored `unknown` into a valid {@link Roaster}; `null` on garbage. */
+export function coerceRoaster(raw: unknown): Roaster | null {
+	if (typeof raw !== 'object' || raw === null) return null;
+	const obj = raw as Record<string, unknown>;
+	if (typeof obj.id !== 'string' || typeof obj.name !== 'string') return null;
+	const base = blankRoaster(obj.name, obj.id);
+	if (typeof obj.website === 'string') base.website = obj.website;
+	if (typeof obj.country === 'string') base.country = obj.country;
+	if (typeof obj.notes === 'string') base.notes = obj.notes;
+	if (typeof obj.visualizerId === 'string') base.visualizerId = obj.visualizerId;
+	if (typeof obj.metadata === 'object' && obj.metadata !== null) {
+		base.metadata = obj.metadata as Record<string, unknown>;
+	}
+	if (typeof obj.createdAt === 'number') base.createdAt = obj.createdAt;
+	if (typeof obj.updatedAt === 'number') base.updatedAt = obj.updatedAt;
 	return base;
 }
