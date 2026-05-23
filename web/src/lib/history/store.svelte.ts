@@ -42,6 +42,10 @@ const MAX_RECORDS = 300;
 /**
  * The inputs the orchestrator hands to {@link HistoryStore.record} when a shot
  * completes — everything that is *not* derivable from the series itself.
+ *
+ * Peak / final metrics ride on `Event::ShotCompleted` itself: the core's
+ * `ShotMetricsAccumulator` tracks them in real time, so the live path no
+ * longer re-iterates the buffered series for them.
  */
 export interface ShotCompletion {
 	/** Total shot duration, milliseconds (from `Event::ShotCompleted`). */
@@ -54,6 +58,14 @@ export interface ShotCompletion {
 	series: readonly TelemetrySample[];
 	/** A snapshot of the current bean at shot completion, or `null`. */
 	bean: ShotBean | null;
+	/** Peak group pressure observed during the shot, bar — from the core. */
+	peakPressure: number | null;
+	/** Peak group-head temperature observed during the shot, °C — from the core. */
+	peakTemp: number | null;
+	/** Peak scale weight observed during the shot, grams — from the core; `null` when no scale. */
+	peakWeight: number | null;
+	/** Final scale weight at shot end, grams — from the core; `null` when no scale. */
+	finalWeight: number | null;
 }
 
 /** The reactive shot-history library. One instance per app — {@link getHistoryStore}. */
@@ -77,8 +89,11 @@ export class HistoryStore {
 	}
 
 	/**
-	 * Record a finished shot. Derives the peak / final metrics from the series,
-	 * prepends the new record (newest first), caps the list and persists.
+	 * Record a finished shot. The peak / final metrics ride on the
+	 * `Event::ShotCompleted` payload — the core's `ShotMetricsAccumulator`
+	 * tracks them in real time — so the shell no longer re-iterates the
+	 * buffered series for them here. Prepends the new record (newest first),
+	 * caps the list and persists.
 	 *
 	 * A series with no samples — a shot that ended before any telemetry — is
 	 * dropped: there is nothing to draw and nothing useful to keep. Returns the
@@ -89,29 +104,19 @@ export class HistoryStore {
 		const series = completion.series;
 		if (series.length === 0) return null;
 
-		let peakWeight: number | null = null;
-		let finalWeight: number | null = null;
-		let peakPressure = 0;
-		let peakTemp = 0;
-		for (const s of series) {
-			if (s.weight != null) {
-				if (peakWeight == null || s.weight > peakWeight) peakWeight = s.weight;
-				finalWeight = s.weight;
-			}
-			if (s.pressure > peakPressure) peakPressure = s.pressure;
-			if (s.temp > peakTemp) peakTemp = s.temp;
-		}
-
 		const record: StoredShot = {
 			id: shotId(),
 			completedAt: Date.now(),
 			profileName: completion.profileName,
 			duration: completion.duration,
 			dose: completion.dose,
-			peakWeight,
-			finalWeight,
-			peakPressure,
-			peakTemp,
+			peakWeight: completion.peakWeight,
+			finalWeight: completion.finalWeight,
+			// `peakPressure` / `peakTemp` are non-nullable on `StoredShot`;
+			// fall back to `0` when no telemetry arrived (matches the empty-
+			// series behaviour of the previous re-derivation).
+			peakPressure: completion.peakPressure ?? 0,
+			peakTemp: completion.peakTemp ?? 0,
 			series: [...series],
 			bean: completion.bean,
 			rating: 0,

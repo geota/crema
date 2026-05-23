@@ -109,6 +109,80 @@ fn puck_resistance(group_pressure_bar: f32, group_flow_ml_per_s: f32) -> Option<
     }
 }
 
+/// Running peak / final-weight accumulator for one shot.
+///
+/// Fed each Telemetry sample (DE1-side: pressure, temperature) and each
+/// scale weight reading (scale-side: peak weight + final weight). Reset on
+/// every [`Event::ShotStarted`]; drained on [`Event::ShotCompleted`] into
+/// the metrics the event carries.
+///
+/// Surfacing the metrics on the event removes a three-way re-iteration of
+/// the buffered series in the web shell (`history/store.svelte.ts` live +
+/// imported paths and `state/ui-state.svelte.ts`'s `ShotCompleted` fold).
+/// All four are `Option<f32>` because there's no sample to bound them:
+/// `peak_pressure` / `peak_temp` are `None` when no Telemetry arrived;
+/// `peak_weight` / `final_weight` are `None` when no scale was paired.
+#[derive(Debug, Default, Clone, Copy)]
+struct ShotMetricsAccumulator {
+    peak_pressure: Option<f32>,
+    peak_temp: Option<f32>,
+    peak_weight: Option<f32>,
+    final_weight: Option<f32>,
+}
+
+impl ShotMetricsAccumulator {
+    /// Update the pressure / temperature peaks from a DE1 Telemetry sample.
+    fn feed_telemetry(&mut self, group_pressure: f32, head_temp: f32) {
+        if group_pressure.is_finite() {
+            self.peak_pressure = Some(match self.peak_pressure {
+                Some(p) => p.max(group_pressure),
+                None => group_pressure,
+            });
+        }
+        if head_temp.is_finite() {
+            self.peak_temp = Some(match self.peak_temp {
+                Some(t) => t.max(head_temp),
+                None => head_temp,
+            });
+        }
+    }
+
+    /// Update the weight peak and the running final-weight from a scale
+    /// reading. `final_weight` is the last non-`None` weight observed, so
+    /// every reading updates it.
+    fn feed_weight(&mut self, weight: f32) {
+        if !weight.is_finite() {
+            return;
+        }
+        self.peak_weight = Some(match self.peak_weight {
+            Some(w) => w.max(weight),
+            None => weight,
+        });
+        self.final_weight = Some(weight);
+    }
+
+    /// Pop the four metrics for an [`Event::ShotCompleted`] payload, leaving
+    /// the accumulator zeroed for the next shot.
+    fn drain(&mut self) -> (Option<f32>, Option<f32>, Option<f32>, Option<f32>) {
+        let metrics = (
+            self.peak_pressure,
+            self.peak_temp,
+            self.peak_weight,
+            self.final_weight,
+        );
+        *self = ShotMetricsAccumulator::default();
+        metrics
+    }
+
+    /// Wipe everything; used on [`Event::ShotStarted`] in case the previous
+    /// shot ended in a path that didn't drain (defensive — `map_shot_event`
+    /// always drains on `Completed`, but the reset keeps the invariant
+    /// independent of call order).
+    fn reset(&mut self) {
+        *self = ShotMetricsAccumulator::default();
+    }
+}
+
 /// The headless Crema application core.
 ///
 /// One `CremaCore` tracks one machine session. The FFI bridges wrap it behind
@@ -190,6 +264,10 @@ pub struct CremaCore {
     /// `Some(60.0)` if the user pinned it in settings; `None` means
     /// auto-detect (the detector's locked value wins).
     line_freq_override: Option<f32>,
+    /// Running peak / final-weight tracker for the in-progress shot. Reset
+    /// on every `ShotEvent::Started`; drained into `Event::ShotCompleted`
+    /// on every `ShotEvent::Completed`. See [`ShotMetricsAccumulator`].
+    shot_metrics: ShotMetricsAccumulator,
 }
 
 /// In-flight state of one profile upload. Owned by
@@ -253,6 +331,7 @@ impl CremaCore {
             volume_integrator: VolumeIntegrator::new(),
             line_freq_detector: LineFreqDetector::new(),
             line_freq_override: None,
+            shot_metrics: ShotMetricsAccumulator::default(),
         }
     }
 
@@ -1226,6 +1305,14 @@ impl CremaCore {
             self.shot_started
                 .map_or(Duration::ZERO, |start| now.saturating_sub(start)),
         );
+        // Update the in-progress shot's running peaks. Only contributes
+        // while a shot is in progress — the accumulator is reset on
+        // `ShotStarted` and drained on `ShotCompleted`, so any telemetry
+        // observed outside a shot is harmless (the next reset wipes it).
+        if self.shot_started.is_some() {
+            self.shot_metrics
+                .feed_telemetry(sample.group_pressure, sample.head_temp);
+        }
         out.events.push(Event::Telemetry {
             elapsed,
             group_pressure: sample.group_pressure,
@@ -1257,6 +1344,15 @@ impl CremaCore {
         // state and active mode are fetched as soon as the scale is reporting.
         self.push_connect_queries_once(out);
         let estimate = self.flow.update(reading.weight_g, now);
+        // Update the in-progress shot's running peak / final weight from
+        // the smoothed scale weight — only while a shot is in progress so
+        // post-shot trickle readings (cup-removal etc.) don't pollute the
+        // next shot's metrics. The smoothed `estimate.weight` is the
+        // value the shell sees on its TelemetrySample.weight channel, so
+        // peak / final stay aligned with what the chart actually drew.
+        if self.shot_started.is_some() {
+            self.shot_metrics.feed_weight(estimate.weight);
+        }
         out.events.push(Event::ScaleReading {
             weight: estimate.weight,
             flow: estimate.flow,
@@ -1680,6 +1776,11 @@ impl CremaCore {
                 // its `last_sample_time` / `last_host_time` so the first
                 // sample of the new shot still has a valid `dt` reference.
                 self.volume_integrator.reset();
+                // Wipe the previous shot's running peaks so this one starts
+                // from a clean slate. (`Completed` already drains, but the
+                // explicit reset keeps the invariant independent of call
+                // order.)
+                self.shot_metrics.reset();
                 // Auto-tare the connected scale so the cup starts from zero,
                 // mirroring the legacy app's tare-at-shot-start behaviour.
                 self.push_tare_command(out);
@@ -1703,9 +1804,18 @@ impl CremaCore {
                 // `record.duration` is the domain `Duration`; narrow to the
                 // u32 ms the FFI `ShotCompleted` event carries.
                 let duration = u32::try_from(record.duration.as_millis()).unwrap_or(u32::MAX);
+                // Drain the running peak / final-weight tracker into the
+                // event — one computation at the core boundary that every
+                // shell can consume directly.
+                let (peak_pressure, peak_temp, peak_weight, final_weight) =
+                    self.shot_metrics.drain();
                 out.events.push(Event::ShotCompleted {
                     duration,
                     sample_count: u32::try_from(record.samples.len()).unwrap_or(u32::MAX),
+                    peak_pressure,
+                    peak_temp,
+                    peak_weight,
+                    final_weight,
                 });
             }
         }
@@ -3011,6 +3121,132 @@ mod tests {
             )),
             "expected a TIMER_STOP write on ShotCompleted"
         );
+    }
+
+    #[test]
+    fn a_shot_with_no_scale_completes_with_pressure_and_temp_peaks_only() {
+        let mut core = CremaCore::new();
+        // Start an espresso shot.
+        core.on_notification(Source::De1State, &[4, 5], 1_000);
+        // Feed two telemetry samples — SAMPLE carries `group_pressure ≈ 9.0`
+        // and a non-zero `head_temp` from its fixture bytes.
+        core.on_notification(Source::De1ShotSample, &SAMPLE, 1_100);
+        core.on_notification(Source::De1ShotSample, &SAMPLE, 1_200);
+        // Transition to Idle to complete the shot.
+        let out = core.on_notification(Source::De1State, &[2, 0], 5_000);
+        let completed = out
+            .events
+            .iter()
+            .find(|e| matches!(e, Event::ShotCompleted { .. }))
+            .expect("a ShotCompleted event");
+        let Event::ShotCompleted {
+            peak_pressure,
+            peak_temp,
+            peak_weight,
+            final_weight,
+            ..
+        } = completed
+        else {
+            unreachable!("filtered for ShotCompleted");
+        };
+        assert!(
+            peak_pressure.is_some(),
+            "telemetry arrived → peak_pressure is Some",
+        );
+        assert!(
+            peak_temp.is_some(),
+            "telemetry arrived → peak_temp is Some",
+        );
+        assert!(
+            peak_weight.is_none(),
+            "no scale paired → peak_weight stays None",
+        );
+        assert!(
+            final_weight.is_none(),
+            "no scale paired → final_weight stays None",
+        );
+    }
+
+    #[test]
+    fn a_shot_with_a_scale_completes_with_peak_and_final_weight() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC");
+        // Start an espresso shot.
+        core.on_notification(Source::De1State, &[4, 5], 1_000);
+        // Weight rises to 32 g then settles at 30 g — peak ≥ 32, final = 30.
+        core.on_notification(Source::ScaleWeight, &bookoo_packet(2_000), 1_100);
+        core.on_notification(Source::ScaleWeight, &bookoo_packet(3_200), 1_200);
+        core.on_notification(Source::ScaleWeight, &bookoo_packet(3_000), 1_300);
+        // Transition to Idle to complete the shot.
+        let out = core.on_notification(Source::De1State, &[2, 0], 5_000);
+        let completed = out
+            .events
+            .iter()
+            .find(|e| matches!(e, Event::ShotCompleted { .. }))
+            .expect("a ShotCompleted event");
+        let Event::ShotCompleted {
+            peak_weight,
+            final_weight,
+            ..
+        } = completed
+        else {
+            unreachable!("filtered for ShotCompleted");
+        };
+        let peak = peak_weight.expect("scale readings arrived → peak_weight is Some");
+        let last = final_weight.expect("scale readings arrived → final_weight is Some");
+        assert!(
+            peak >= last,
+            "peak {peak} g should be >= the final {last} g — the running max never decreases",
+        );
+        // The smoothed weight tracks the inputs (20 g, 32 g, 30 g) but the
+        // flow estimator filters them, so we only check ordering and a
+        // plausible range rather than exact values.
+        assert!(
+            (15.0..=40.0).contains(&peak),
+            "peak {peak} g should be in a plausible espresso range",
+        );
+        assert!(
+            (15.0..=40.0).contains(&last),
+            "final {last} g should be in a plausible espresso range",
+        );
+    }
+
+    #[test]
+    fn a_second_shot_starts_with_a_clean_peak_metric_slate() {
+        let mut core = CremaCore::new();
+        // Shot 1: build up a peak.
+        core.on_notification(Source::De1State, &[4, 5], 1_000);
+        core.on_notification(Source::De1ShotSample, &SAMPLE, 1_100);
+        core.on_notification(Source::De1State, &[2, 0], 5_000);
+        // Shot 2: ShotStarted should wipe the accumulator. End immediately,
+        // without any telemetry, and the metrics should all be None.
+        core.on_notification(Source::De1State, &[4, 5], 10_000);
+        let out = core.on_notification(Source::De1State, &[2, 0], 11_000);
+        let completed = out
+            .events
+            .iter()
+            .find(|e| matches!(e, Event::ShotCompleted { .. }))
+            .expect("a ShotCompleted event");
+        let Event::ShotCompleted {
+            peak_pressure,
+            peak_temp,
+            peak_weight,
+            final_weight,
+            ..
+        } = completed
+        else {
+            unreachable!("filtered for ShotCompleted");
+        };
+        assert!(
+            peak_pressure.is_none(),
+            "shot 2 had no telemetry → peak_pressure must be None, not leftover from shot 1",
+        );
+        assert!(
+            peak_temp.is_none(),
+            "shot 2 had no telemetry → peak_temp must be None",
+        );
+        assert!(peak_weight.is_none());
+        assert!(final_weight.is_none());
     }
 
     #[test]
