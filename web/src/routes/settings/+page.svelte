@@ -67,8 +67,30 @@
 		{ id: 'about', label: 'About', icon: 'info' }
 	] as const;
 
-	/** The currently shown section. */
-	let active = $state<(typeof SECTIONS)[number]['id']>('machine');
+	/**
+	 * The currently shown section. Seed from `location.hash` so deep links
+	 * like `/settings#water` (used by the brew page's maintenance banner)
+	 * open the right pane directly. Falls back to Machine for any
+	 * unknown / absent hash. SSR-safe via the `typeof window` guard.
+	 */
+	const SECTION_IDS = SECTIONS.map((s) => s.id) as readonly string[];
+	function hashSection(): (typeof SECTIONS)[number]['id'] {
+		if (typeof window === 'undefined') return 'machine';
+		const h = window.location.hash.replace(/^#/, '');
+		return (SECTION_IDS.includes(h) ? h : 'machine') as (typeof SECTIONS)[number]['id'];
+	}
+	let active = $state<(typeof SECTIONS)[number]['id']>(hashSection());
+	// React to in-page hash changes (e.g. the user pasting `/settings#water`
+	// while already on the Settings route) — the navigation API doesn't
+	// remount the page when only the fragment changes.
+	$effect(() => {
+		if (typeof window === 'undefined') return;
+		const onHash = (): void => {
+			active = hashSection();
+		};
+		window.addEventListener('hashchange', onHash);
+		return () => window.removeEventListener('hashchange', onHash);
+	});
 </script>
 
 <svelte:head>

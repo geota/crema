@@ -120,15 +120,27 @@ export class BrewParamState {
 	/**
 	 * @param seed A getter for the current brew-target seed. Read inside the
 	 *   `current` `$derived`, so it must touch reactive state to track changes.
+	 * @param onWrite Optional per-key write hook fired when {@link set} mutates
+	 *   the given key — used by `BrewDashboard` to route the Flush bucket's
+	 *   `flushTemp` stepper through to the MMR `FlushTemp` setter. Other keys
+	 *   remain local-only UI for this porting step.
 	 */
-	constructor(private readonly seed: () => BrewParamSeed) {}
+	constructor(
+		private readonly seed: () => BrewParamSeed,
+		private readonly onWrite?: <K extends keyof BrewParams>(
+			key: K,
+			value: BrewParams[K]
+		) => void
+	) {}
 
 	/** Set one parameter — the steppers' `onChange`. */
 	set<K extends keyof BrewParams>(key: K, value: BrewParams[K]): void {
-		// TODO: wire to DE1 control — today this updates only local UI state;
-		// pushing a changed parameter to the machine is a later net-new feature.
-		// Reassigning the `$derived` overrides the seed with a local edit.
+		// Most keys remain local-only UI for this porting step; specific
+		// keys (today: `flushTemp`) route through `onWrite` to push the
+		// value onto the DE1. Reassigning the `$derived` overrides the
+		// seed with a local edit either way.
 		this.current = { ...this.current, [key]: value };
+		this.onWrite?.(key, value);
 	}
 
 	/** Restore the params to the current seed — the sheet's "Reset" action. */

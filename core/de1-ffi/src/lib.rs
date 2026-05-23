@@ -612,6 +612,12 @@ impl CremaBridge {
         json(self.core().set_flush_flow_rate(ml_per_s))
     }
 
+    /// Set the flush water target temperature, °C. Wire value is `°C × 10`;
+    /// MMR `0x803844`, 4-byte. docs/22 §3.2.
+    pub fn set_flush_temp(&self, temp_c: f32) -> String {
+        json(self.core().set_flush_temp(temp_c))
+    }
+
     /// Set the flush timeout. `ms` is milliseconds; the wire scale is
     /// `int(10 × seconds)`. MMR `0x803848`, 2-byte.
     pub fn set_flush_timeout(&self, ms: u32) -> String {

@@ -209,6 +209,14 @@
 	background: rgba(var(--danger-rgb), 0.12);
 	border-color: rgba(var(--danger-rgb), 0.5);
 }
+/* Maintenance / advisory variant — used by MachineErrorBanner when the
+   caller opts into the yellow palette. Same skeleton; the warning token
+   flips per theme. Reserved for "needs attention but not a fault" cues
+   (filter due, descale due, backflush due). */
+.mc-head-status.is-warning {
+	background: rgba(var(--warning-rgb), 0.12);
+	border-color: rgba(var(--warning-rgb), 0.5);
+}
 
 .mc-head-status-icon {
 	display: inline-flex;
@@ -241,6 +249,10 @@
 .mc-head-status.is-error .mc-head-status-icon {
 	background: rgba(var(--danger-rgb), 0.16);
 	color: var(--danger);
+}
+.mc-head-status.is-warning .mc-head-status-icon {
+	background: rgba(var(--warning-rgb), 0.16);
+	color: var(--warning);
 }
 
 .mc-head-status-text {
