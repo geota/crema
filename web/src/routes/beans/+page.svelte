@@ -33,6 +33,7 @@
 	import BeanQuickAdd from '$lib/components/beans/BeanQuickAdd.svelte';
 	import BeanImportDialog from '$lib/components/beans/BeanImportDialog.svelte';
 	import BeansEmptyState from '$lib/components/beans/BeansEmptyState.svelte';
+	import SortPill from '$lib/components/shared/SortPill.svelte';
 	import { roasterMarkTone } from '$lib/bean/roaster-mark';
 
 	const library = getBeanStore();
@@ -54,9 +55,13 @@
 	let q = $state('');
 	let selectedTags = $state<string[]>([]);
 
-	type SortKey = 'recent' | 'roast-new' | 'roast-old' | 'name' | 'rating' | 'remaining' | 'burn';
-	let sort = $state<SortKey>('recent');
-	let sortOpen = $state(false);
+	// Sort state has collapsed: each field carries a direction (asc/desc)
+	// rather than baking direction into the field id. `SortPill` exposes
+	// this as a single segmented value + a direction toggle.
+	type SortField = 'recent' | 'roast' | 'name' | 'rating' | 'remaining' | 'burn';
+	type SortDir = 'asc' | 'desc';
+	let sortField = $state<SortField>('recent');
+	let sortDir = $state<SortDir>('desc');
 
 	// Add-button split
 	let addMenuOpen = $state(false);
@@ -121,36 +126,45 @@
 
 	const sorted = $derived.by(() => {
 		const arr = [...filtered];
+		// Field-only comparators — direction is applied uniformly via the
+		// sortDir multiplier at the end so every field respects the
+		// SortPill direction toggle. Each comparator returns "ascending"
+		// order; descending flips the sign.
 		const cmpName = (a: Bean, b: Bean) => a.name.localeCompare(b.name);
-		const cmpRoastNew = (a: Bean, b: Bean) => {
-			// Newest first — empty roastedOn sinks.
+		const cmpRoast = (a: Bean, b: Bean) => {
+			// Ascending = oldest first; empty roastedOn always sinks to
+			// the end regardless of direction.
 			if (!a.roastedOn && !b.roastedOn) return 0;
 			if (!a.roastedOn) return 1;
 			if (!b.roastedOn) return -1;
-			return b.roastedOn.localeCompare(a.roastedOn);
+			return a.roastedOn.localeCompare(b.roastedOn);
 		};
-		switch (sort) {
-			case 'recent':
-				return arr.sort((a, b) => b.updatedAt - a.updatedAt);
-			case 'roast-new':
-				return arr.sort(cmpRoastNew);
-			case 'roast-old':
-				return arr.sort((a, b) => -cmpRoastNew(a, b));
-			case 'name':
-				return arr.sort(cmpName);
-			case 'rating':
-				return arr.sort((a, b) => b.rating - a.rating || cmpName(a, b));
-			case 'remaining':
-				return arr.sort((a, b) => a.remainingG - b.remainingG);
-			case 'burn': {
-				// Highest fraction consumed first.
-				const consumed = (x: Bean) =>
-					x.bagSizeG > 0 ? 1 - x.remainingG / x.bagSizeG : -1;
-				return arr.sort((a, b) => consumed(b) - consumed(a));
+		const keyCmp = (a: Bean, b: Bean): number => {
+			switch (sortField) {
+				case 'recent':
+					return a.updatedAt - b.updatedAt;
+				case 'roast':
+					return cmpRoast(a, b);
+				case 'name':
+					return cmpName(a, b);
+				case 'rating':
+					return a.rating - b.rating;
+				case 'remaining':
+					return a.remainingG - b.remainingG;
+				case 'burn': {
+					// Ascending = least-consumed first.
+					const consumed = (x: Bean) =>
+						x.bagSizeG > 0 ? 1 - x.remainingG / x.bagSizeG : -1;
+					return consumed(a) - consumed(b);
+				}
+				default:
+					return 0;
 			}
-			default:
-				return arr;
-		}
+		};
+		const dir = sortDir === 'asc' ? 1 : -1;
+		return arr.sort(
+			(a, b) => keyCmp(a, b) * dir || cmpName(a, b)
+		);
 	});
 
 	const sectionedBags = $derived.by(() => {
@@ -196,7 +210,15 @@
 	);
 
 	// ── Roaster directory rows ─────────────────────────────────────────
-	let roasterSort = $state<'beans' | 'name' | 'recent'>('beans');
+	// Roaster sort uses the same SortPill control as the bags tab.
+	type RoasterSortField = 'beans' | 'name' | 'recent';
+	let roasterSortField = $state<RoasterSortField>('beans');
+	let roasterSortDir = $state<SortDir>('desc');
+	const roasterSortOptions: { field: RoasterSortField; label: string; icon: string }[] = [
+		{ field: 'beans', label: 'Bag count', icon: 'coffee-bean' },
+		{ field: 'name', label: 'Name', icon: 'sort-ascending' },
+		{ field: 'recent', label: 'Recent', icon: 'clock' }
+	];
 	let roasterRegion = $state<string>('all');
 
 	const roasterRegionOptions = $derived.by(() => {
@@ -226,11 +248,18 @@
 		}
 		const cmpName = (a: typeof rows[number], b: typeof rows[number]) =>
 			a.roaster.name.localeCompare(b.roaster.name);
-		if (roasterSort === 'name') rows.sort(cmpName);
-		else if (roasterSort === 'recent')
-			rows.sort((a, b) => b.roaster.updatedAt - a.roaster.updatedAt);
-		else rows.sort((a, b) => b.count - a.count || cmpName(a, b));
-		return rows;
+		const keyCmp = (a: typeof rows[number], b: typeof rows[number]): number => {
+			switch (roasterSortField) {
+				case 'name':
+					return cmpName(a, b);
+				case 'recent':
+					return a.roaster.updatedAt - b.roaster.updatedAt;
+				default:
+					return a.count - b.count;
+			}
+		};
+		const dir = roasterSortDir === 'asc' ? 1 : -1;
+		return rows.sort((a, b) => keyCmp(a, b) * dir || cmpName(a, b));
 	});
 
 	// Detect probable duplicates by normalized roaster name (case-insensitive,
@@ -263,19 +292,16 @@
 		return result;
 	});
 
-	const sortOptions: { id: SortKey; label: string; icon: string }[] = [
-		{ id: 'recent', label: 'Recently added', icon: 'plus-circle' },
-		{ id: 'roast-new', label: 'Roast date · freshest', icon: 'fire' },
-		{ id: 'roast-old', label: 'Roast date · oldest', icon: 'clock-counter-clockwise' },
-		{ id: 'name', label: 'Name (A–Z)', icon: 'sort-ascending' },
-		{ id: 'rating', label: 'Rating', icon: 'star' },
-		{ id: 'remaining', label: 'Remaining · low first', icon: 'gauge' },
-		{ id: 'burn', label: 'Burn rate · fastest', icon: 'flame' }
+	// SortPill options — direction is now a separate axis (toggled by the
+	// pill's left half), so each entry maps to exactly one comparator.
+	const sortOptions: { field: SortField; label: string; icon: string }[] = [
+		{ field: 'recent', label: 'Recently added', icon: 'plus-circle' },
+		{ field: 'roast', label: 'Roast date', icon: 'fire' },
+		{ field: 'name', label: 'Name', icon: 'sort-ascending' },
+		{ field: 'rating', label: 'Rating', icon: 'star' },
+		{ field: 'remaining', label: 'Remaining', icon: 'gauge' },
+		{ field: 'burn', label: 'Burn rate', icon: 'flame' }
 	];
-
-	const currentSortLabel = $derived(
-		sortOptions.find((o) => o.id === sort)?.label ?? 'Sort'
-	);
 
 	// ── Actions ────────────────────────────────────────────────────────
 	function openTile(id: string): void {
@@ -401,10 +427,10 @@
 		library.deleteRoaster(dupe.id);
 	}
 
-	// Clicking outside the add-menu closes it.
+	// Clicking outside the add-menu closes it. The SortPill owns its own
+	// outside-click dismissal — no shared state needed.
 	function closeMenusOnDocClick(): void {
 		addMenuOpen = false;
-		sortOpen = false;
 	}
 </script>
 
@@ -553,48 +579,15 @@
 			</button>
 		</div>
 		{#if tab === 'bags' && allBeans.length > 0}
-			<!-- Same `stopPropagation`-only wrapper — see explanation on the
-			     Add-bean split above. -->
-			<!-- svelte-ignore a11y_click_events_have_key_events -->
-			<!-- svelte-ignore a11y_no_static_element_interactions -->
-			<div class="bn-toolbar-r" onclick={(e) => e.stopPropagation()}>
-				<div class="bn-sort" class:is-open={sortOpen}>
-					<button
-						class="bn-btn bn-btn-ghost bn-sort-trigger"
-						onclick={(e) => {
-							e.stopPropagation();
-							sortOpen = !sortOpen;
-						}}
-					>
-						<i class="ph ph-sort-ascending"></i>
-						<span class="bn-sort-lab">Sort</span>
-						<span class="bn-sort-val">{currentSortLabel}</span>
-						<i class="ph ph-caret-down bn-sort-chev"></i>
-					</button>
-					{#if sortOpen}
-						<div class="bn-sort-menu" role="menu">
-							<div class="bn-sort-menu-head">Sort by</div>
-							{#each sortOptions as o (o.id)}
-								<button
-									class="bn-sort-menu-item"
-									class:is-active={o.id === sort}
-									role="menuitemradio"
-									aria-checked={o.id === sort}
-									onclick={() => {
-										sort = o.id;
-										sortOpen = false;
-									}}
-								>
-									<i class={`ph ph-${o.icon}`} aria-hidden="true"></i>
-									<span>{o.label}</span>
-									{#if o.id === sort}
-										<i class="ph ph-check"></i>
-									{/if}
-								</button>
-							{/each}
-						</div>
-					{/if}
-				</div>
+			<div class="bn-toolbar-r">
+				<SortPill
+					value={{ field: sortField, direction: sortDir }}
+					options={sortOptions}
+					onchange={(next) => {
+						sortField = next.field as SortField;
+						sortDir = next.direction;
+					}}
+				/>
 			</div>
 		{/if}
 	</div>
@@ -803,21 +796,14 @@
 					<span class="bn-section-count">{roasterRows.length}</span>
 					<span class="bn-section-rule"></span>
 					<div class="bn-section-tools">
-						<button
-							class="bn-sort-opt"
-							class:is-active={roasterSort === 'beans'}
-							onclick={() => (roasterSort = 'beans')}
-						>Bag count</button>
-						<button
-							class="bn-sort-opt"
-							class:is-active={roasterSort === 'name'}
-							onclick={() => (roasterSort = 'name')}
-						>Name</button>
-						<button
-							class="bn-sort-opt"
-							class:is-active={roasterSort === 'recent'}
-							onclick={() => (roasterSort = 'recent')}
-						>Recent</button>
+						<SortPill
+							value={{ field: roasterSortField, direction: roasterSortDir }}
+							options={roasterSortOptions}
+							onchange={(next) => {
+								roasterSortField = next.field as RoasterSortField;
+								roasterSortDir = next.direction;
+							}}
+						/>
 					</div>
 				</header>
 				{#if roasterRegionOptions.length > 1}
@@ -1208,84 +1194,6 @@
 		color: var(--fg-on-accent);
 	}
 
-	/* Sort dropdown */
-	.bn-sort {
-		position: relative;
-	}
-	.bn-sort-trigger {
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
-	}
-	.bn-sort-lab {
-		font-family: var(--font-sans);
-		font-size: 11px;
-		font-weight: 600;
-		letter-spacing: var(--track-allcaps);
-		text-transform: uppercase;
-		color: rgba(var(--tint-rgb), 0.5);
-	}
-	.bn-sort-val {
-		color: var(--fg-1);
-	}
-	.bn-sort-chev {
-		font-size: 11px;
-		opacity: 0.55;
-	}
-	.bn-sort-menu {
-		position: absolute;
-		top: calc(100% + 6px);
-		right: 0;
-		min-width: 240px;
-		background: var(--bg-page);
-		border: 1px solid rgba(var(--tint-rgb), 0.14);
-		border-radius: var(--radius-md);
-		padding: 6px;
-		box-shadow: var(--shadow-lg);
-		z-index: 60;
-	}
-	.bn-sort-menu-head {
-		font-family: var(--font-sans);
-		font-size: 10px;
-		font-weight: 700;
-		letter-spacing: var(--track-allcaps);
-		text-transform: uppercase;
-		color: rgba(var(--tint-rgb), 0.5);
-		padding: 6px 8px 4px;
-	}
-	.bn-sort-menu-item {
-		display: flex;
-		gap: 10px;
-		align-items: center;
-		width: 100%;
-		text-align: left;
-		background: transparent;
-		border: 0;
-		padding: 7px 9px;
-		border-radius: var(--radius-sm);
-		cursor: pointer;
-		color: var(--fg-1);
-		font: inherit;
-		font-size: 12px;
-	}
-	.bn-sort-menu-item:hover {
-		background: rgba(var(--tint-rgb), 0.06);
-	}
-	.bn-sort-menu-item.is-active {
-		background: rgba(var(--copper-rgb), 0.1);
-		color: var(--copper-300);
-	}
-	.bn-sort-menu-item i {
-		font-size: 13px;
-		color: rgba(var(--tint-rgb), 0.55);
-	}
-	.bn-sort-menu-item.is-active i {
-		color: var(--copper-400);
-	}
-	.bn-sort-menu-item span:nth-of-type(1) {
-		flex: 1 1 auto;
-	}
-
 	/* Chip rail */
 	.bn-chiprail {
 		display: flex;
@@ -1658,24 +1566,5 @@
 	.bn-roaster-count {
 		font-family: var(--font-mono);
 		color: var(--copper-400);
-	}
-	.bn-sort-opt {
-		background: transparent;
-		border: 0;
-		color: rgba(var(--tint-rgb), 0.5);
-		font-family: var(--font-sans);
-		font-size: 12px;
-		cursor: pointer;
-		padding: 4px 2px;
-	}
-	.bn-sort-opt:hover {
-		color: var(--fg-1);
-	}
-	.bn-sort-opt.is-active {
-		color: var(--fg-1);
-		text-decoration: underline;
-		text-decoration-color: var(--copper-500);
-		text-decoration-thickness: 1.5px;
-		text-underline-offset: 4px;
 	}
 </style>
