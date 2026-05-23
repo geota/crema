@@ -31,7 +31,7 @@ export interface BrewParams {
 	steamMode: 'time' | 'flow' | 'temp';
 	/** Steam duration, seconds. */
 	steamTime: number;
-	/** Steam flow rate, mL/s. */
+	/** Steam flow rate, ml/s. */
 	steamFlow: number;
 	/** Steam boiler target temperature, °C. */
 	steamTemp: number;
@@ -39,7 +39,7 @@ export interface BrewParams {
 	waterMode: 'temp' | 'volume';
 	/** Hot-water temperature, °C. */
 	waterTemp: number;
-	/** Hot-water volume, mL. */
+	/** Hot-water volume, ml. */
 	waterVolume: number;
 	/** Which of Time / Temp the Flush bucket is editing. */
 	flushMode: 'time' | 'temp';

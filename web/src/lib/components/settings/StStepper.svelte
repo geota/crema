@@ -21,7 +21,7 @@
 	 * the canonical `value` converted to the chosen unit (and ignores any
 	 * `unit` / `decimals` props), and converts the inline-edit draft back to
 	 * canonical before invoking `onCommit`. `value` / `step` / `min` / `max`
-	 * always remain canonical (grams / °C / mL / bar).
+	 * always remain canonical (grams / °C / ml / bar).
 	 */
 	import {
 		canonicalToDisplay,

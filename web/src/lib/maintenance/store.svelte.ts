@@ -26,7 +26,7 @@ const MAINTENANCE_KEY = 'crema.maintenance.v1';
 /**
  * A single telemetry sample's worth of accumulated water dispensed past which
  * the value is treated as a glitch and dropped — mirrors the legacy app's
- * "excessive water volume dispensed" clamp (`de1_de1.tcl`, 1000 mL).
+ * "excessive water volume dispensed" clamp (`de1_de1.tcl`, 1000 ml).
  */
 const MAX_SAMPLE_ML = 1000;
 

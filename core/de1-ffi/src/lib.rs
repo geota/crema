@@ -248,11 +248,11 @@ pub struct SteamHotWaterSettings {
     pub steam_timeout_s: f32,
     /// Target hot-water temperature, °C.
     pub hot_water_temp_c: f32,
-    /// Hot-water volume, mL.
+    /// Hot-water volume, ml.
     pub hot_water_volume_ml: f32,
     /// Hot-water maximum time, seconds.
     pub hot_water_timeout_s: f32,
-    /// Typical espresso volume, mL.
+    /// Typical espresso volume, ml.
     pub espresso_volume_ml: f32,
     /// Espresso group target temperature, °C.
     pub group_temp_c: f32,
@@ -280,9 +280,9 @@ impl From<SteamHotWaterSettings> for ShotSettings {
 /// (`seconds` / `ms`) documented in their field names.
 #[derive(uniffi::Record)]
 pub struct HeaterTweaksRecord {
-    /// Hot-water phase-1 flow rate, mL/s.
+    /// Hot-water phase-1 flow rate, ml/s.
     pub phase_1_flow_rate: f32,
-    /// Hot-water phase-2 flow rate, mL/s.
+    /// Hot-water phase-2 flow rate, ml/s.
     pub phase_2_flow_rate: f32,
     /// Hot-water idle temperature, °C.
     pub hot_water_idle_temp_c: u8,
@@ -292,9 +292,9 @@ pub struct HeaterTweaksRecord {
     pub steam_two_tap_stop: u8,
     /// Flush timeout, milliseconds (scaled to deciseconds on the wire).
     pub flush_timeout_ms: u32,
-    /// Flush flow rate, mL/s.
+    /// Flush flow rate, ml/s.
     pub flush_flow_rate: f32,
-    /// Hot-water flow rate, mL/s.
+    /// Hot-water flow rate, ml/s.
     pub hot_water_flow_rate: f32,
 }
 
@@ -581,7 +581,7 @@ impl CremaBridge {
         json(self.core().set_tank_threshold(temp_c))
     }
 
-    /// Set the steam flow rate, mL/s. Scaled `int(10 × rate)`; MMR
+    /// Set the steam flow rate, ml/s. Scaled `int(10 × rate)`; MMR
     /// `0x803828`, 1-byte.
     pub fn set_steam_flow(&self, ml_per_s: f32) -> String {
         json(self.core().set_steam_flow(ml_per_s))
@@ -600,13 +600,13 @@ impl CremaBridge {
         json(self.core().set_ghc_mode(mode))
     }
 
-    /// Set the hot-water flow rate, mL/s. Scaled `int(10 × rate)`; MMR
+    /// Set the hot-water flow rate, ml/s. Scaled `int(10 × rate)`; MMR
     /// `0x80384C`, 2-byte.
     pub fn set_hot_water_flow_rate(&self, ml_per_s: f32) -> String {
         json(self.core().set_hot_water_flow_rate(ml_per_s))
     }
 
-    /// Set the flush flow rate, mL/s. Scaled `int(10 × rate)`; MMR
+    /// Set the flush flow rate, ml/s. Scaled `int(10 × rate)`; MMR
     /// `0x803840`, 2-byte.
     pub fn set_flush_flow_rate(&self, ml_per_s: f32) -> String {
         json(self.core().set_flush_flow_rate(ml_per_s))
@@ -748,7 +748,7 @@ impl CremaBridge {
         self.core().active_profile_title().map(str::to_owned)
     }
 
-    /// Volume dispensed in the current shot, mL.
+    /// Volume dispensed in the current shot, ml.
     pub fn dispensed_volume_ml(&self) -> f32 {
         self.core().dispensed_volume_ml()
     }

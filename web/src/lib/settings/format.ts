@@ -2,7 +2,7 @@
  * `$lib/settings/format` — the shared unit-formatting helpers.
  *
  * Every Crema readout (Brew, History, Scale) measures in the core's canonical
- * SI-ish units — grams, °C, bar, mL — but the user picks a display unit in
+ * SI-ish units — grams, °C, bar, ml — but the user picks a display unit in
  * Settings (`weightUnit` / `tempUnit` / `pressureUnit` / `volumeUnit`). These
  * helpers are the single place that conversion + labelling happens, so a unit
  * change in Settings reaches every screen at once.
@@ -111,17 +111,17 @@ export function convertPressure(
 }
 
 /**
- * Convert a volume (canonical mL) to the chosen {@link VolumeUnit}.
- * `floz` converts via the core's `ml_to_fl_oz` (1 US fl oz = 29.5735 mL)
+ * Convert a volume (canonical ml) to the chosen {@link VolumeUnit}.
+ * `floz` converts via the core's `ml_to_fl_oz` (1 US fl oz = 29.5735 ml)
  * to one decimal; `ml` shows a whole number — a tank volume is never
  * meaningfully fractional. Unit label stays honest when the value is
  * missing — see {@link convertWeight}.
  */
 export function convertVolume(ml: number | null | undefined, unit: VolumeUnit): Measurement {
-	const label = unit === 'floz' ? 'fl oz' : 'mL';
+	const label = unit === 'floz' ? 'fl oz' : 'ml';
 	if (!present(ml)) return { value: DASH, unit: label };
 	if (unit === 'floz') return { value: wasmMlToFlOz(ml).toFixed(1), unit: 'fl oz' };
-	return { value: String(Math.round(ml)), unit: 'mL' };
+	return { value: String(Math.round(ml)), unit: 'ml' };
 }
 
 /** Join a {@link Measurement} into a `"12.3 g"`-style string (no unit → bare value). */
@@ -144,7 +144,7 @@ export function formatPressure(bar: number | null | undefined, unit: PressureUni
 	return join(convertPressure(bar, unit));
 }
 
-/** Format a volume (canonical mL) as one string in the chosen unit. */
+/** Format a volume (canonical ml) as one string in the chosen unit. */
 export function formatVolume(ml: number | null | undefined, unit: VolumeUnit): string {
 	return join(convertVolume(ml, unit));
 }
@@ -168,7 +168,7 @@ export function toCanonicalPressure(displayValue: number, unit: PressureUnit): n
 	return unit === 'psi' ? wasmPsiToBar(displayValue) : displayValue;
 }
 
-/** Convert a display-unit volume back to canonical mL (uses the core's `fl_oz_to_ml`). */
+/** Convert a display-unit volume back to canonical ml (uses the core's `fl_oz_to_ml`). */
 export function toCanonicalVolume(displayValue: number, unit: VolumeUnit): number {
 	return unit === 'floz' ? wasmFlOzToMl(displayValue) : displayValue;
 }
@@ -194,7 +194,7 @@ export function unitLabel(dim: Dimension, s: Settings): string {
 		case 'pressure':
 			return s.pressureUnit === 'psi' ? 'psi' : 'bar';
 		case 'volume':
-			return s.volumeUnit === 'floz' ? 'fl oz' : 'mL';
+			return s.volumeUnit === 'floz' ? 'fl oz' : 'ml';
 	}
 }
 

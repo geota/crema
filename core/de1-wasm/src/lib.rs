@@ -240,7 +240,7 @@ impl From<MachineRequest> for MachineState {
 }
 
 /// Convert a DE1 water-tank depth (mm of sensor reading) to the tank's
-/// water volume in mL. Pure helper — does no machine I/O. Exposed here so
+/// water volume in ml. Pure helper — does no machine I/O. Exposed here so
 /// every shell consumes the same tank-geometry calibration (see
 /// `de1_domain::water_tank_ml` for the canonical implementation).
 #[wasm_bindgen]
@@ -300,13 +300,13 @@ pub fn psi_to_bar(psi: f32) -> f32 {
     de1_domain::psi_to_bar(psi)
 }
 
-/// Convert a volume in mL to US fluid ounces (`mL × 0.033814`).
+/// Convert a volume in ml to US fluid ounces (`ml × 0.033814`).
 #[wasm_bindgen]
 pub fn ml_to_fl_oz(ml: f32) -> f32 {
     de1_domain::ml_to_fl_oz(ml)
 }
 
-/// Convert a volume in US fluid ounces to mL (`fl oz × 29.5735`).
+/// Convert a volume in US fluid ounces to ml (`fl oz × 29.5735`).
 #[wasm_bindgen]
 pub fn fl_oz_to_ml(fl_oz: f32) -> f32 {
     de1_domain::fl_oz_to_ml(fl_oz)
@@ -758,7 +758,7 @@ impl CremaBridge {
         json(self.core.set_tank_threshold(temp_c))
     }
 
-    /// Set the steam flow rate, mL/s. Scaled `int(10 × rate)`; MMR
+    /// Set the steam flow rate, ml/s. Scaled `int(10 × rate)`; MMR
     /// `0x803828`, 1-byte.
     pub fn set_steam_flow(&self, ml_per_s: f32) -> String {
         json(self.core.set_steam_flow(ml_per_s))
@@ -777,13 +777,13 @@ impl CremaBridge {
         json(self.core.set_ghc_mode(mode))
     }
 
-    /// Set the hot-water flow rate, mL/s. Scaled `int(10 × rate)`; MMR
+    /// Set the hot-water flow rate, ml/s. Scaled `int(10 × rate)`; MMR
     /// `0x80384C`, 2-byte.
     pub fn set_hot_water_flow_rate(&self, ml_per_s: f32) -> String {
         json(self.core.set_hot_water_flow_rate(ml_per_s))
     }
 
-    /// Set the flush flow rate, mL/s. Scaled `int(10 × rate)`; MMR
+    /// Set the flush flow rate, ml/s. Scaled `int(10 × rate)`; MMR
     /// `0x803840`, 2-byte.
     pub fn set_flush_flow_rate(&self, ml_per_s: f32) -> String {
         json(self.core.set_flush_flow_rate(ml_per_s))
@@ -952,7 +952,7 @@ impl CremaBridge {
         self.core.active_profile_title().map(str::to_owned)
     }
 
-    /// Volume dispensed in the current shot, mL — integrated live from
+    /// Volume dispensed in the current shot, ml — integrated live from
     /// every `ShotSample`. Resets to 0 on every `Event::ShotStarted`.
     pub fn dispensed_volume_ml(&self) -> f32 {
         self.core.dispensed_volume_ml()

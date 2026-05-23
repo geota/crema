@@ -9,12 +9,12 @@
  * All functions work in the SVG's user-space coordinates: the curve is drawn
  * in a `width × height` viewBox with `padX` / `padY` insets, the X axis is
  * cumulative shot time and the Y axis is pressure / flow over a fixed 0–12
- * scale (12 bar / 12 mL/s — matches the design's grid).
+ * scale (12 bar / 12 ml/s — matches the design's grid).
  */
 
 import type { ProfileSegment } from './model';
 
-/** The fixed top of the Y scale — 12 bar / 12 mL/s, the design's grid max. */
+/** The fixed top of the Y scale — 12 bar / 12 ml/s, the design's grid max. */
 export const Y_MAX = 12;
 
 /** SVG inset on the X axis, px. */

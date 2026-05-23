@@ -59,7 +59,7 @@ impl VolumeIntegrator {
         Self::default()
     }
 
-    /// The volume dispensed so far, mL.
+    /// The volume dispensed so far, ml.
     pub fn dispensed_ml(&self) -> f32 {
         self.dispensed_ml
     }
@@ -244,7 +244,7 @@ mod tests {
         #[test]
         fn sample_time_dt_with_60hz_mains() {
             let mut v = VolumeIntegrator::new();
-            // 60 Hz mains → 120 ticks/s → 12 ticks = 0.1 s. 4 mL/s × 0.1 s = 0.4 mL.
+            // 60 Hz mains → 120 ticks/s → 12 ticks = 0.1 s. 4 ml/s × 0.1 s = 0.4 ml.
             v.integrate(&sample(0, 4.0), Duration::from_secs(0), Some(60.0));
             v.integrate(&sample(12, 4.0), Duration::from_millis(100), Some(60.0));
             let v_diff = (v.dispensed_ml() - 0.4).abs();
@@ -254,7 +254,7 @@ mod tests {
         #[test]
         fn sample_time_dt_with_50hz_mains() {
             let mut v = VolumeIntegrator::new();
-            // 50 Hz mains → 100 ticks/s → 10 ticks = 0.1 s. 4 mL/s × 0.1 s = 0.4 mL.
+            // 50 Hz mains → 100 ticks/s → 10 ticks = 0.1 s. 4 ml/s × 0.1 s = 0.4 ml.
             v.integrate(&sample(0, 4.0), Duration::from_secs(0), Some(50.0));
             v.integrate(&sample(10, 4.0), Duration::from_millis(100), Some(50.0));
             let v_diff = (v.dispensed_ml() - 0.4).abs();
@@ -274,7 +274,7 @@ mod tests {
         fn sample_time_unwraps_across_the_16bit_boundary() {
             let mut v = VolumeIntegrator::new();
             // 60 Hz mains. Sample-time wraps from 65520 → 12 with a "real"
-            // delta of 28 ticks = 233 ms. 4 mL/s × 0.2333 s ≈ 0.933 mL.
+            // delta of 28 ticks = 233 ms. 4 ml/s × 0.2333 s ≈ 0.933 ml.
             v.integrate(&sample(65520, 4.0), Duration::from_secs(0), Some(60.0));
             v.integrate(&sample(12, 4.0), Duration::from_millis(233), Some(60.0));
             let expected = 4.0 * 28.0 / 120.0;

@@ -67,7 +67,7 @@
 		const goalFlow: (number | null)[] = [];
 		const goalTemp: (number | null)[] = [];
 		// Dispensed water — pump-side volume integral. Stays on the shared
-		// 0-10 scale by reading it as `mL / 10` (so 60 mL plots as 6 — same
+		// 0-10 scale by reading it as `ml / 10` (so 60 ml plots as 6 — same
 		// trick `temp / 10` uses).
 		const water: (number | null)[] = [];
 		const showResistance = settings.current.showResistance;

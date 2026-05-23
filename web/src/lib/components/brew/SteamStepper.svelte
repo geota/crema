@@ -45,7 +45,7 @@
 	{:else if p.steamMode === 'flow'}
 		<QStepper
 			value={p.steamFlow}
-			unit="mL/s"
+			unit="ml/s"
 			min={0.2}
 			max={3}
 			step={0.1}

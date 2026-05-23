@@ -1,13 +1,13 @@
 //! Unit-conversion math for Crema's four user-facing measurement dimensions
 //! — weight (g ↔ oz), temperature (°C ↔ °F), pressure (bar ↔ psi), and
-//! volume (mL ↔ US fl oz).
+//! volume (ml ↔ US fl oz).
 //!
 //! Each conversion is a pure `f32 → f32` with no UI, locale, or formatting
 //! concerns. The shell owns the per-screen pieces — the unit label string,
 //! the decimal precision, the `—` placeholder for a missing value — and
 //! reaches here only when it needs the number. The same constants every
 //! shell trusts (`1 oz = 28.3495 g`, `1 bar = 14.5038 psi`, `1 US fl oz
-//! = 29.5735 mL`) live exactly once.
+//! = 29.5735 ml`) live exactly once.
 //!
 //! Each conversion has a sibling inverse for editable-input round-trips
 //! (a stepper showing oz commits canonical grams; a stepper showing °F
@@ -71,21 +71,21 @@ pub fn psi_to_bar(psi: f32) -> f32 {
     psi * BAR_PER_PSI
 }
 
-// ─── Volume: mL ↔ US fluid ounces ──────────────────────────────────────────
+// ─── Volume: ml ↔ US fluid ounces ──────────────────────────────────────────
 
-/// mL in one US fluid ounce. Crema's canonical volume unit is mL; US fl
+/// ml in one US fluid ounce. Crema's canonical volume unit is ml; US fl
 /// oz is the only imperial alternative the shell offers.
 const ML_PER_FL_OZ: f32 = 29.5735;
 
-/// US fl oz in one mL. Reciprocal of [`ML_PER_FL_OZ`].
+/// US fl oz in one ml. Reciprocal of [`ML_PER_FL_OZ`].
 const FL_OZ_PER_ML: f32 = 0.033814;
 
-/// Convert a volume in mL to US fluid ounces (`mL × 0.033814`).
+/// Convert a volume in ml to US fluid ounces (`ml × 0.033814`).
 pub fn ml_to_fl_oz(ml: f32) -> f32 {
     ml * FL_OZ_PER_ML
 }
 
-/// Convert a volume in US fluid ounces to mL (`fl oz × 29.5735`).
+/// Convert a volume in US fluid ounces to ml (`fl oz × 29.5735`).
 pub fn fl_oz_to_ml(fl_oz: f32) -> f32 {
     fl_oz * ML_PER_FL_OZ
 }

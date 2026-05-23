@@ -64,7 +64,7 @@ export interface ProfileExit {
 	metric: ProfileExitMetric;
 	/** Exit above (`Over`) or below (`Under`) the threshold. */
 	compare: ProfileCompare;
-	/** The threshold value, bar or mL/s per `metric`. */
+	/** The threshold value, bar or ml/s per `metric`. */
 	threshold: number;
 }
 
@@ -82,7 +82,7 @@ export interface ProfileStep {
 	name: string;
 	/** Whether the step holds pressure or flow. */
 	pump: ProfilePump;
-	/** Target value — bar (pressure) or mL/s (flow), per `pump`. */
+	/** Target value — bar (pressure) or ml/s (flow), per `pump`. */
 	target: number;
 	/** Target temperature, °C. */
 	temperature_c: number;
@@ -94,7 +94,7 @@ export interface ProfileStep {
 	duration_seconds: number;
 	/** Optional early-exit condition. */
 	exit: ProfileExit | null;
-	/** Per-step dispensed-volume limit, mL (0 = no limit). */
+	/** Per-step dispensed-volume limit, ml (0 = no limit). */
 	volume_limit_ml: number;
 	/** Optional advanced limiter. */
 	limiter: ProfileLimiter | null;
@@ -124,9 +124,9 @@ export interface Profile {
 	preinfuse_step_count: number;
 	/** Minimum pressure for flow-priority steps, bar. */
 	minimum_pressure: number;
-	/** Maximum flow for pressure-priority steps, mL/s. */
+	/** Maximum flow for pressure-priority steps, ml/s. */
 	maximum_flow: number;
-	/** Whole-shot dispensed-volume limit, mL (0 = no limit). */
+	/** Whole-shot dispensed-volume limit, ml (0 = no limit). */
 	max_total_volume_ml: number;
 	/**
 	 * Desired final shot weight, grams (0 = no target). App-side metadata —
@@ -408,15 +408,15 @@ export interface CremaCore {
 	setFanThreshold(tempC: number): Promise<CoreOutput>;
 	/** Set the tank desired water-temperature threshold, °C. */
 	setTankThreshold(tempC: number): Promise<CoreOutput>;
-	/** Set the steam flow rate, mL/s. */
+	/** Set the steam flow rate, ml/s. */
 	setSteamFlow(mlPerS: number): Promise<CoreOutput>;
 	/** Set the seconds of high-flow steam at the start of a steam cycle. */
 	setSteamHighflowStart(seconds: number): Promise<CoreOutput>;
 	/** Set the group-head-control mode. */
 	setGhcMode(mode: number): Promise<CoreOutput>;
-	/** Set the hot-water flow rate, mL/s. */
+	/** Set the hot-water flow rate, ml/s. */
 	setHotWaterFlowRate(mlPerS: number): Promise<CoreOutput>;
-	/** Set the flush flow rate, mL/s. */
+	/** Set the flush flow rate, ml/s. */
 	setFlushFlowRate(mlPerS: number): Promise<CoreOutput>;
 	/** Set the flush timeout, milliseconds. */
 	setFlushTimeout(ms: number): Promise<CoreOutput>;

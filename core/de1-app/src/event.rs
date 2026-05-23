@@ -104,7 +104,7 @@ pub enum Event {
         elapsed: u32,
         /// Group pressure, bar.
         group_pressure: f32,
-        /// Group flow, mL/s.
+        /// Group flow, ml/s.
         group_flow: f32,
         /// Group-head temperature, °C.
         head_temp: f32,
@@ -112,7 +112,7 @@ pub enum Event {
         mix_temp: f32,
         /// Steam-heater temperature, °C.
         steam_temp: f32,
-        /// Running shot volume dispensed so far, mL — integrated from the
+        /// Running shot volume dispensed so far, ml — integrated from the
         /// telemetry flow stream against the DE1's `sample_time` ticks
         /// (BLE-jitter-immune when the line-frequency is known, host-clock
         /// fallback otherwise). Resets to 0 on every `ShotStarted`.
@@ -124,14 +124,14 @@ pub enum Event {
         /// Target group pressure, bar — the pump pressure setpoint for the
         /// active frame. Legacy "Goal pressure" curve.
         set_group_pressure: f32,
-        /// Target group flow, mL/s — the pump flow setpoint for the active
+        /// Target group flow, ml/s — the pump flow setpoint for the active
         /// frame. Legacy "Goal flow" curve.
         set_group_flow: f32,
         /// Puck resistance — `group_pressure / group_flow²`, the
         /// de1app/DSx derived "resistance" metric (the R4 read-path).
         /// `None` when group flow is too low to divide by meaningfully —
         /// the near-zero-flow region produces noisy spikes that have no
-        /// useful interpretation. Units are `bar / (mL/s)²`. Surfaced on
+        /// useful interpretation. Units are `bar / (ml/s)²`. Surfaced on
         /// the event itself so every shell consumes the same value
         /// (previously each shell duplicated the formula + threshold).
         resistance: Option<f32>,
@@ -343,7 +343,7 @@ pub enum Event {
         preinfuse_frame_count: u8,
         /// Minimum pressure allowed in flow-priority frames, bar.
         minimum_pressure: f32,
-        /// Maximum flow allowed in pressure-priority frames, mL/s.
+        /// Maximum flow allowed in pressure-priority frames, ml/s.
         maximum_flow: f32,
     },
     /// The DE1's steam + hot-water + group-temp `ShotSettings` were read,
@@ -357,11 +357,11 @@ pub enum Event {
         steam_timeout_s: f32,
         /// Target hot-water temperature, °C.
         hot_water_temp_c: f32,
-        /// Hot-water volume, mL.
+        /// Hot-water volume, ml.
         hot_water_volume_ml: f32,
         /// Hot-water timeout, seconds.
         hot_water_timeout_s: f32,
-        /// Espresso target volume, mL.
+        /// Espresso target volume, ml.
         espresso_volume_ml: f32,
         /// Espresso group target temperature, °C.
         group_temp_c: f32,

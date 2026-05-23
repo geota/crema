@@ -24,7 +24,7 @@ use crate::flow::{FlowAlgorithm, FlowEstimator};
 pub struct StopTargets {
     /// Stop when the cup reaches this weight, grams (SAW).
     pub weight: Option<f32>,
-    /// Stop when this volume has been dispensed, mL (SAV).
+    /// Stop when this volume has been dispensed, ml (SAV).
     pub volume: Option<f32>,
     /// Stop when the shot has run this long, seconds (the legacy
     /// `espresso_max_time`). This type has no `Default`; the legacy app's

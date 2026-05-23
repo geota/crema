@@ -90,9 +90,9 @@ pub struct ShotRecord {
 pub struct ShotMetrics {
     /// Highest group pressure observed, bar.
     pub peak_pressure: f32,
-    /// Highest group flow observed, mL/s.
+    /// Highest group flow observed, ml/s.
     pub peak_flow: f32,
-    /// Total water dispensed, mL — the group flow integrated over time.
+    /// Total water dispensed, ml — the group flow integrated over time.
     pub total_water: f32,
     /// Shot duration (from [`ShotRecord::duration`]).
     pub duration: Duration,
@@ -102,7 +102,7 @@ impl ShotRecord {
     /// Compute summary [`ShotMetrics`] from the recorded telemetry.
     ///
     /// Peak pressure and flow are the maxima over all samples; total water is
-    /// the trapezoidal integral of group flow (mL/s) over the elapsed time of
+    /// the trapezoidal integral of group flow (ml/s) over the elapsed time of
     /// the sample series. A record with no samples yields all-zero metrics
     /// except [`duration`](ShotMetrics::duration).
     pub fn metrics(&self) -> ShotMetrics {
@@ -376,7 +376,7 @@ mod tests {
         let metrics = record.metrics();
         assert_eq!(metrics.peak_pressure, 9.0);
         assert_eq!(metrics.peak_flow, 2.0);
-        // Trapezoidal: 0..1 s avg 1.0 -> 1.0 mL; 1..2 s avg 2.0 -> 2.0 mL.
+        // Trapezoidal: 0..1 s avg 1.0 -> 1.0 ml; 1..2 s avg 2.0 -> 2.0 ml.
         assert_eq!(metrics.total_water, 3.0);
         assert_eq!(metrics.duration, ms(30_000));
     }

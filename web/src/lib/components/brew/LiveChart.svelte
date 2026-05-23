@@ -239,9 +239,9 @@
 			//   bottom of the chart. The chart shows the SHAPE; the card
 			//   reads the raw value. See the Quick Sheet's "Resistance ×5"
 			//   sub-label;
-			// • volume / mix divide by 10 like their primary's scale (60 mL →
+			// • volume / mix divide by 10 like their primary's scale (60 ml →
 			//   6 on plot; 90 °C → 9 on plot);
-			// • weight flow rides native (g/s ≈ mL/s).
+			// • weight flow rides native (g/s ≈ ml/s).
 			const r = s.resistance;
 			resistance.push(showResistance && r != null ? Math.min(10, Math.max(0, r * 5)) : null);
 			const v = s.dispensedVolume;

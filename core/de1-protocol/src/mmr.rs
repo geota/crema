@@ -206,7 +206,7 @@ impl MmrRegister {
     /// integer the firmware emits by this to get the engineering-units
     /// value. The reciprocal applies on writes (callers that *write*
     /// engineering units must divide by `scale()` and round, e.g. to
-    /// write `9.5 mL/s` to `FlushFlowRate` (scale `0.1`), encode
+    /// write `9.5 ml/s` to `FlushFlowRate` (scale `0.1`), encode
     /// `95u32` on the wire).
     ///
     /// Catalog mirrors reaprime's `MMRItem.readScale`

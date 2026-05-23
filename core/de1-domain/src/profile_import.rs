@@ -77,7 +77,7 @@ struct V2Exit {
     kind: String,
     /// `"over"` or `"under"`.
     condition: String,
-    /// The threshold (bar or mL/s).
+    /// The threshold (bar or ml/s).
     #[serde(default)]
     value: Scalar,
 }
@@ -996,7 +996,7 @@ fn parse_exit(kind: &str, condition: &str, threshold: f32) -> Result<ExitConditi
     })
 }
 
-/// Clamp a legacy volume value into Crema's `0..=1023` mL field.
+/// Clamp a legacy volume value into Crema's `0..=1023` ml field.
 fn clamp_volume(volume: f32) -> u16 {
     // Clamped to `0.0..=1023.0` before the cast, so the rounded value always
     // fits a u16 — the truncation lint is allowed for this provably-safe cast.
