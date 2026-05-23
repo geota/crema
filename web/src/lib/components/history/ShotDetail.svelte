@@ -224,11 +224,38 @@
 	<!-- Chart -->
 	<div class="hi-chart">
 		<StaticShotChart series={shot.series} height={380} />
+		<!--
+			Legend grouped into 4 channel families — mirrors the brew
+			dashboard's Quick Controls "Chart" toggle layout. Each group
+			carries the channel's icon and labels both the primary trace
+			(solid) and the paired secondary trace (also solid, in the
+			lighter sibling color). The static chart plots every series
+			whose data is non-null, so the legend names them all.
+		-->
 		<div class="hi-chart-legend">
-			<span><i class="hi-leg" style="background:var(--tel-pressure)"></i>Pressure</span>
-			<span><i class="hi-leg" style="background:var(--tel-flow)"></i>Flow</span>
-			<span><i class="hi-leg" style="background:var(--tel-temp)"></i>Temp</span>
-			<span><i class="hi-leg" style="background:var(--tel-weight)"></i>Weight</span>
+			<span class="hi-leg-group">
+				<i class="ph ph-gauge hi-leg-icon" aria-hidden="true"></i>
+				<span class="hi-leg-item"><i class="hi-leg" style="background:var(--tel-pressure)"></i>Pressure</span>
+				<span class="hi-leg-item"><i class="hi-leg" style="background:var(--tel-pressure-2)"></i>Resistance</span>
+			</span>
+			<span class="hi-leg-rule" aria-hidden="true"></span>
+			<span class="hi-leg-group">
+				<i class="ph ph-drop hi-leg-icon" aria-hidden="true"></i>
+				<span class="hi-leg-item"><i class="hi-leg" style="background:var(--tel-flow)"></i>Flow</span>
+				<span class="hi-leg-item"><i class="hi-leg" style="background:var(--tel-flow-2)"></i>Water</span>
+			</span>
+			<span class="hi-leg-rule" aria-hidden="true"></span>
+			<span class="hi-leg-group">
+				<i class="ph ph-thermometer hi-leg-icon" aria-hidden="true"></i>
+				<span class="hi-leg-item"><i class="hi-leg" style="background:var(--tel-temp)"></i>Coffee</span>
+				<span class="hi-leg-item"><i class="hi-leg" style="background:var(--tel-temp-2)"></i>Water</span>
+			</span>
+			<span class="hi-leg-rule" aria-hidden="true"></span>
+			<span class="hi-leg-group">
+				<i class="ph ph-scales hi-leg-icon" aria-hidden="true"></i>
+				<span class="hi-leg-item"><i class="hi-leg" style="background:var(--tel-weight)"></i>Weight</span>
+				<span class="hi-leg-item"><i class="hi-leg" style="background:var(--tel-weight-2)"></i>Flow</span>
+			</span>
 		</div>
 	</div>
 
@@ -366,16 +393,33 @@
 	}
 	.hi-chart-legend {
 		display: flex;
-		gap: 14px;
+		flex-wrap: wrap;
+		gap: 8px 14px;
 		padding-top: 8px;
 		font-family: var(--font-sans);
 		font-size: 11px;
 		color: rgba(var(--tint-rgb), 0.65);
 	}
-	.hi-chart-legend > span {
+	.hi-leg-group {
 		display: inline-flex;
 		align-items: center;
-		gap: 6px;
+		gap: 10px;
+	}
+	.hi-leg-icon {
+		font-size: 14px;
+		color: rgba(var(--tint-rgb), 0.5);
+	}
+	.hi-leg-item {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+	}
+	.hi-leg-rule {
+		display: inline-block;
+		width: 1px;
+		height: 14px;
+		background: rgba(var(--tint-rgb), 0.18);
+		align-self: center;
 	}
 	.hi-leg {
 		width: 8px;

@@ -53,7 +53,22 @@
 	];
 	const colorFor = (idx: number): string => SHOT_COLORS[idx % SHOT_COLORS.length];
 
-	type Channel = 'pressure' | 'flow' | 'temp' | 'weight';
+	/**
+	 * The 8 selectable channels — the 4 primaries (pressure / flow / coffee
+	 * temp / weight) plus the 4 secondaries paired with them on the brew
+	 * dashboard (resistance / dispensed water / mix temp / weight flow).
+	 * The compare chart shows ONE channel across N shots at a time; the
+	 * grouped selector lets the user move between the pair on each card.
+	 */
+	type Channel =
+		| 'pressure'
+		| 'resistance'
+		| 'flow'
+		| 'water'
+		| 'temp'
+		| 'mixTemp'
+		| 'weight'
+		| 'weightFlow';
 
 	/** The channel currently overlaid. Defaults to pressure — the most diagnostic. */
 	let channel = $state<Channel>('pressure');
@@ -61,31 +76,41 @@
 	/** Y-axis unit label, by channel + user pref. */
 	const yUnit = $derived.by(() => {
 		if (channel === 'pressure') return unitLabel('pressure', prefs);
+		if (channel === 'resistance') return 'bar·s²/mL';
 		if (channel === 'flow') return 'mL/s';
-		if (channel === 'temp') return unitLabel('temp', prefs);
+		if (channel === 'water') return unitLabel('volume', prefs);
+		if (channel === 'temp' || channel === 'mixTemp') return unitLabel('temp', prefs);
+		if (channel === 'weightFlow') return 'g/s';
 		return unitLabel('weight', prefs);
 	});
 
 	/**
 	 * Convert a canonical channel sample to the user's display unit. Flow
 	 * stays in mL/s (no sensible imperial flow unit); pressure / temp /
-	 * weight pick up the user's pref.
+	 * weight / water pick up the user's pref. Resistance and weight-flow
+	 * are unit-fixed.
 	 */
 	function toDisplay(value: number | null, ch: Channel): number | null {
 		if (value == null || !Number.isFinite(value)) return null;
 		if (ch === 'pressure')
 			return prefs.pressureUnit === 'psi' ? value * 14.5038 : value;
-		if (ch === 'temp') return prefs.tempUnit === 'F' ? value * 1.8 + 32 : value;
+		if (ch === 'temp' || ch === 'mixTemp')
+			return prefs.tempUnit === 'F' ? value * 1.8 + 32 : value;
 		if (ch === 'weight')
 			return prefs.weightUnit === 'oz' ? value / 28.3495 : value;
-		return value; // flow
+		if (ch === 'water') return prefs.volumeUnit === 'floz' ? value / 29.5735 : value;
+		return value; // flow, resistance, weightFlow — unit-fixed
 	}
 
 	/** Read the channel value off a telemetry sample, pre-converted to display unit. */
 	function valueAt(s: TelemetrySample, ch: Channel): number | null {
 		if (ch === 'pressure') return toDisplay(s.pressure, ch);
+		if (ch === 'resistance') return toDisplay(s.resistance ?? null, ch);
 		if (ch === 'flow') return toDisplay(s.flow, ch);
+		if (ch === 'water') return toDisplay(s.dispensedVolume ?? null, ch);
 		if (ch === 'temp') return toDisplay(s.temp, ch);
+		if (ch === 'mixTemp') return toDisplay(s.mixTemp, ch);
+		if (ch === 'weightFlow') return toDisplay(s.weightFlow ?? null, ch);
 		return toDisplay(s.weight, ch);
 	}
 
@@ -107,10 +132,29 @@
 			}
 		}
 		// Sensible minimum so a "flow ~0" shot still renders nice ticks.
-		const floor = channel === 'pressure' ? (prefs.pressureUnit === 'psi' ? 150 : 10) :
-			channel === 'flow' ? 6 :
-			channel === 'temp' ? (prefs.tempUnit === 'F' ? 210 : 100) :
-			(prefs.weightUnit === 'oz' ? 2 : 60);
+		// Each channel has a different natural range — pick a floor that
+		// keeps the y-axis from collapsing onto a single tick mark when the
+		// shot's actual max is near-zero.
+		const floor = (() => {
+			switch (channel) {
+				case 'pressure':
+					return prefs.pressureUnit === 'psi' ? 150 : 10;
+				case 'resistance':
+					return 5; // bar·s²/mL — typical extraction peak
+				case 'flow':
+					return 6;
+				case 'water':
+					return prefs.volumeUnit === 'floz' ? 2 : 60;
+				case 'temp':
+				case 'mixTemp':
+					return prefs.tempUnit === 'F' ? 210 : 100;
+				case 'weightFlow':
+					return 3; // g/s — typical peak espresso flow
+				case 'weight':
+				default:
+					return prefs.weightUnit === 'oz' ? 2 : 60;
+			}
+		})();
 		return Math.max(m * 1.1, floor);
 	});
 
@@ -191,10 +235,30 @@
 
 	const channelLabel: Record<Channel, string> = {
 		pressure: 'PRESSURE',
+		resistance: 'RESISTANCE',
 		flow: 'FLOW',
-		temp: 'TEMP',
-		weight: 'WEIGHT'
+		water: 'WATER',
+		temp: 'COFFEE',
+		mixTemp: 'WATER',
+		weight: 'WEIGHT',
+		weightFlow: 'FLOW'
 	};
+
+	/**
+	 * The selector layout — 4 groups (pressure family, flow family, temp
+	 * family, weight family), each holding the primary + secondary
+	 * channel that share the brew dashboard's icon. Identical to the
+	 * Quick Sheet "Chart" toggle grouping.
+	 */
+	const CHANNEL_GROUPS: ReadonlyArray<{
+		readonly icon: string;
+		readonly options: ReadonlyArray<Channel>;
+	}> = [
+		{ icon: 'gauge', options: ['pressure', 'resistance'] },
+		{ icon: 'drop', options: ['flow', 'water'] },
+		{ icon: 'thermometer', options: ['temp', 'mixTemp'] },
+		{ icon: 'scales', options: ['weight', 'weightFlow'] }
+	];
 </script>
 
 <svelte:window onkeydown={onKeydown} />
@@ -237,17 +301,29 @@
 			</button>
 		</div>
 
-		<!-- Channel selector — chip row -->
+		<!--
+			Channel selector — 4 groups of 2, each with the channel-family
+			icon + the primary/secondary chips. Mirrors the brew
+			dashboard's Quick Controls "Chart" toggle layout.
+		-->
 		<div class="cmp-ch">
-			{#each ['pressure', 'flow', 'temp', 'weight'] as ch (ch)}
-				<button
-					type="button"
-					class="cmp-ch-chip"
-					class:is-active={channel === ch}
-					onclick={() => (channel = ch as Channel)}
-				>
-					{channelLabel[ch as Channel]}
-				</button>
+			{#each CHANNEL_GROUPS as group, gi (gi)}
+				{#if gi > 0}
+					<span class="cmp-ch-rule" aria-hidden="true"></span>
+				{/if}
+				<span class="cmp-ch-group">
+					<i class={`ph ph-${group.icon} cmp-ch-icon`} aria-hidden="true"></i>
+					{#each group.options as ch (ch)}
+						<button
+							type="button"
+							class="cmp-ch-chip"
+							class:is-active={channel === ch}
+							onclick={() => (channel = ch)}
+						>
+							{channelLabel[ch]}
+						</button>
+					{/each}
+				</span>
 			{/each}
 			<span class="cmp-ch-unit">· {yUnit}</span>
 		</div>
@@ -441,6 +517,24 @@
 		gap: 6px;
 		padding: 8px 22px 12px;
 		align-items: center;
+		flex-wrap: wrap;
+	}
+	.cmp-ch-group {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+	}
+	.cmp-ch-icon {
+		font-size: 13px;
+		color: rgba(var(--tint-rgb), 0.55);
+		margin-right: 2px;
+	}
+	.cmp-ch-rule {
+		display: inline-block;
+		width: 1px;
+		height: 18px;
+		background: rgba(var(--tint-rgb), 0.18);
+		margin: 0 6px;
 	}
 	.cmp-ch-chip {
 		background: rgba(var(--tint-rgb), 0.04);
