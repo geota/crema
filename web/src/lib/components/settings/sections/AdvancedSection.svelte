@@ -20,18 +20,20 @@
 	 * shot plays out in the Brew dashboard and lands in History with no live
 	 * machine. See `CremaApp.replayCapture`.
 	 */
-	import type { CremaApp } from '$lib/state';
+	import type { CremaApp, UiSnapshot } from '$lib/state';
 	import { getSettingsStore } from '$lib/settings';
+	import { MmrRegister } from '$lib/core/crema-core';
 	import StSectionHead from '../StSectionHead.svelte';
 	import StGroup from '../StGroup.svelte';
 	import StRow from '../StRow.svelte';
 	import StToggle from '../StToggle.svelte';
 	import StSelect from '../StSelect.svelte';
 	import StButton from '../StButton.svelte';
+	import MainsConfirmModal from '../MainsConfirmModal.svelte';
 	import { onMount } from 'svelte';
 
 	/** The shared orchestrator, or `null` while the wasm core is still loading. */
-	let { app }: { app: CremaApp | null } = $props();
+	let { app, snapshot }: { app: CremaApp | null; snapshot: UiSnapshot } = $props();
 
 	const settings = getSettingsStore();
 	const prefs = $derived(settings.current);
@@ -56,14 +58,91 @@
 	});
 
 	/**
-	 * Handle the user picking a new mains-frequency option. Stores the
-	 * preference and pushes it into the core so the volume integrator
-	 * switches its dt source immediately.
+	 * Handle the user picking a new mains-frequency option.
+	 *
+	 * "Auto" (`0`) commits immediately — the auto-detector takes over, no
+	 * mis-calibration possible.
+	 *
+	 * `50` / `60` open the {@link MainsConfirmModal} first; only after the
+	 * user types the value verbatim do we persist the preference and push
+	 * it into the core. Hz mis-calibration is non-damaging (just ~5%
+	 * volume drift) but we still gate it for UX symmetry with the
+	 * heater-voltage control.
 	 */
 	function onLineFrequencyChange(value: string): void {
 		const hz = (value === '50' ? 50 : value === '60' ? 60 : 0) as 0 | 50 | 60;
+		if (hz === 0) {
+			settings.set('lineFrequencyHz', 0);
+			void app?.setLineFrequencyOverride(0);
+			return;
+		}
+		// Open the type-to-confirm modal; commit lands in `onHzConfirm`.
+		pendingHz = hz;
+	}
+
+	// ---- Mains heater voltage (MMR 0x803834) ----------------------------
+	//
+	// The current voltage is read at connect time and folded into the
+	// shared snapshot as `de1MachineInfo[HeaterVoltage]`. The firmware
+	// stamps `+1000` on user-committed values, so a raw read of `1120` /
+	// `1230` decodes to `120` / `230`. A raw `0` means the firmware has
+	// not yet been told (legacy: "detect from heater dB").
+	const heaterVoltageRaw = $derived(
+		snapshot.de1MachineInfo[MmrRegister.HeaterVoltage]
+	);
+	const heaterVoltage = $derived.by(() => {
+		const v = heaterVoltageRaw;
+		if (v === undefined || v === 0) return 0;
+		return v >= 1000 ? v - 1000 : v;
+	});
+	const heaterVoltageLabel = $derived(
+		heaterVoltageRaw === undefined
+			? '—'
+			: heaterVoltage === 0
+				? 'Not set (auto-detect)'
+				: `${heaterVoltage} V`
+	);
+
+	// ---- Modal controllers ----------------------------------------------
+	//
+	// One pending value per kind. `pendingVoltage` / `pendingHz` doubles
+	// as both "is the modal open?" and "what value did the user pick?".
+	let pendingVoltage = $state<120 | 230 | null>(null);
+	let pendingHz = $state<50 | 60 | null>(null);
+
+	function openVoltageModal(chosen: 120 | 230): void {
+		pendingVoltage = chosen;
+	}
+
+	async function onVoltageConfirm(): Promise<void> {
+		const chosen = pendingVoltage;
+		pendingVoltage = null;
+		if (chosen == null || !app) return;
+		try {
+			await app.setHeaterVoltage(chosen);
+		} catch (err) {
+			// The core's last-line clamp rejected the value. The modal
+			// already pre-validated, so this is defence-in-depth — surface
+			// it as a console warning. (A future error-toast layer would
+			// catch this too.)
+			console.warn('setHeaterVoltage rejected by core:', err);
+		}
+	}
+
+	function onVoltageCancel(): void {
+		pendingVoltage = null;
+	}
+
+	function onHzConfirm(): void {
+		const hz = pendingHz;
+		pendingHz = null;
+		if (hz == null) return;
 		settings.set('lineFrequencyHz', hz);
 		void app?.setLineFrequencyOverride(hz);
+	}
+
+	function onHzCancel(): void {
+		pendingHz = null;
 	}
 
 	// ---- Capture replay (developer tool) ---------------------------------
@@ -274,6 +353,36 @@
 	</StRow>
 </StGroup>
 
+<!--
+	Service-grade settings — destructive or hardware-affecting controls
+	that need a type-to-confirm gate. Visually quieter than the everyday
+	settings above, but the controls themselves are *not* placeholders.
+-->
+<StGroup title="Service-grade settings — change only if you know what you're doing">
+	<StRow
+		title="Mains heater voltage"
+		sub="Tells the DE1 whether you have 120 V or 230 V wiring. Wrong setting on the wrong outlet can permanently damage the heater — confirmation is required."
+	>
+		{#snippet control()}
+			<div class="adv-voltage-control">
+				<span class="adv-voltage-current">{heaterVoltageLabel}</span>
+				<StButton
+					label="Set to 120 V"
+					icon="lightning"
+					disabled={!app || heaterVoltage === 120}
+					onClick={() => openVoltageModal(120)}
+				/>
+				<StButton
+					label="Set to 230 V"
+					icon="lightning"
+					disabled={!app || heaterVoltage === 230}
+					onClick={() => openVoltageModal(230)}
+				/>
+			</div>
+		{/snippet}
+	</StRow>
+</StGroup>
+
 <StGroup title="Reset">
 	<StRow
 		title="Reset preferences"
@@ -299,6 +408,26 @@
 		{/snippet}
 	</StRow>
 </StGroup>
+
+{#if pendingVoltage != null}
+	<MainsConfirmModal
+		kind="voltage"
+		chosen={pendingVoltage}
+		current={heaterVoltage}
+		onConfirm={onVoltageConfirm}
+		onCancel={onVoltageCancel}
+	/>
+{/if}
+
+{#if pendingHz != null}
+	<MainsConfirmModal
+		kind="hz"
+		chosen={pendingHz}
+		current={prefs.lineFrequencyHz}
+		onConfirm={onHzConfirm}
+		onCancel={onHzCancel}
+	/>
+{/if}
 
 <style>
 	/* ── Capture-replay developer control ──────────────────────────────────
@@ -332,5 +461,28 @@
 	}
 	.rp-status-err {
 		color: var(--danger);
+	}
+
+	/* ── Service-grade voltage control ────────────────────────────────────
+	   Shows the current voltage label inline with the two "Set to N V"
+	   buttons. The buttons are not separated by a divider; the disabled
+	   state (when the firmware already holds the value) acts as the
+	   visual "current" indicator alongside the mono label. */
+	.adv-voltage-control {
+		display: flex;
+		align-items: center;
+		gap: 12px;
+		flex-wrap: wrap;
+		justify-content: flex-end;
+	}
+	.adv-voltage-current {
+		font-family: var(--font-mono);
+		font-size: 13px;
+		font-variant-numeric: tabular-nums;
+		color: var(--fg-1);
+		padding: 4px 10px;
+		border-radius: 6px;
+		background: rgba(var(--tint-rgb), 0.06);
+		border: 1px solid rgba(var(--tint-rgb), 0.12);
 	}
 </style>

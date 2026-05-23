@@ -846,18 +846,41 @@ impl CremaCore {
         mmr_write_command(MmrRegister::RefillKit, u32::from(state), 4)
     }
 
-    /// Set the mains heater voltage (legacy `set_heater_voltage`). `volts` is
-    /// the raw wire byte — typical values `120` / `240`. MMR `0x803834`,
-    /// 1-byte.
+    /// Set the mains heater voltage (legacy `set_heater_voltage`).
     ///
-    /// **Damaging if mis-set** — wrong voltage can fry the heater. The shell
-    /// is responsible for the type-to-confirm modal that the legacy app uses
-    /// (`docs/14` §4.13).
-    pub fn set_heater_voltage(&self, volts: u8) -> CoreOutput {
+    /// `volts` **must** be `120` or `230` — any other value is rejected with
+    /// [`AppError::InvalidArg`]. MMR `0x803834`, 4-byte little-endian.
+    ///
+    /// The wire payload is `volts + 1000` — the firmware uses the `+1000`
+    /// offset as a "user-committed" marker (so `120` / `230` read back as
+    /// `1120` / `1230`); a raw value of `0` means the firmware has not yet
+    /// been told and is detecting from the heater dB. We never write `0`
+    /// ourselves — only `1120` or `1230`. See reaprime
+    /// `de1.models.dart:301 heaterV` ("Nominal Heater Voltage (0, 120V or
+    /// 230V). +1000 if it's a set value.") and `docs/27` row #56.
+    ///
+    /// **Damaging if mis-set** — wrong voltage on the wrong mains can
+    /// permanently damage the heater. The shell is responsible for the
+    /// type-to-confirm modal (`MainsConfirmModal.svelte`) that the legacy
+    /// app uses (`docs/14` §4.13); this clamp is the last-line guard.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::InvalidArg`] if `volts` is not in `{120, 230}`.
+    pub fn set_heater_voltage(&self, volts: u8) -> Result<CoreOutput, AppError> {
         if let Some(out) = self.refuse_if_firmware_locked("set_heater_voltage") {
-            return out;
+            return Ok(out);
         }
-        mmr_write_command(MmrRegister::HeaterVoltage, u32::from(volts), 1)
+        if volts != 120 && volts != 230 {
+            return Err(AppError::InvalidArg {
+                field: "voltage".to_owned(),
+                value: volts.to_string(),
+                reason: "must be 120 or 230 V".to_owned(),
+            });
+        }
+        // +1000 user-committed marker; encoded as 4-byte LE on the wire.
+        let wire = u32::from(volts) + 1000;
+        Ok(mmr_write_command(MmrRegister::HeaterVoltage, wire, 4))
     }
 
     /// Set the cup-warmer plate temperature, in °C (Bengle models only).
@@ -3608,6 +3631,63 @@ mod tests {
         assert_eq!(&ff_data[1..4], &[0x80, 0x38, 0x58], "FeatureFlags address");
         assert_eq!(up_data[0], 1, "UserPresent is 1-byte");
         assert_eq!(ff_data[0], 2, "FeatureFlags is 2-byte");
+    }
+
+    #[test]
+    fn set_heater_voltage_rejects_values_outside_120_or_230() {
+        // docs/27 row #56: the firmware accepts only 120 or 230 as
+        // user-committed values. Anything else is a clamp failure at the
+        // bridge layer; the shell pre-validates via MainsConfirmModal but
+        // the core is the last-line guard.
+        let core = CremaCore::new();
+        for bad in [0u8, 1, 100, 110, 119, 121, 200, 229, 231, 240, 255] {
+            match core.set_heater_voltage(bad) {
+                Err(AppError::InvalidArg { field, value, .. }) => {
+                    assert_eq!(field, "voltage");
+                    assert_eq!(value, bad.to_string());
+                }
+                other => panic!("expected InvalidArg for {bad}, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn set_heater_voltage_encodes_plus_1000_as_four_byte_le() {
+        // docs/27 row #56 + reaprime de1.models.dart:301 heaterV "Nominal
+        // Heater Voltage (0, 120V or 230V). +1000 if it's a set value." —
+        // the user-committed marker is the +1000 offset, encoded as
+        // 4-byte little-endian on the wire.
+        //   120 + 1000 = 1120 = 0x460 → bytes [0x60, 0x04, 0x00, 0x00]
+        //   230 + 1000 = 1230 = 0x4CE → bytes [0xCE, 0x04, 0x00, 0x00]
+        let core = CremaCore::new();
+
+        let out120 = core
+            .set_heater_voltage(120)
+            .expect("120 V should be accepted");
+        let Some(Command::WriteCharacteristic { target, data }) = out120.commands.first() else {
+            panic!("expected a WriteCharacteristic for 120 V");
+        };
+        assert_eq!(*target, WriteTarget::De1MmrWrite);
+        assert_eq!(data[0], 4, "HeaterVoltage is a 4-byte register");
+        assert_eq!(&data[1..4], &[0x80, 0x38, 0x34], "address 0x803834 LE");
+        assert_eq!(
+            &data[4..8],
+            &[0x60, 0x04, 0x00, 0x00],
+            "wire payload = 120 + 1000 = 1120, LE"
+        );
+
+        let out230 = core
+            .set_heater_voltage(230)
+            .expect("230 V should be accepted");
+        let Some(Command::WriteCharacteristic { data, .. }) = out230.commands.first() else {
+            panic!("expected a WriteCharacteristic for 230 V");
+        };
+        assert_eq!(data[0], 4, "HeaterVoltage is a 4-byte register");
+        assert_eq!(
+            &data[4..8],
+            &[0xCE, 0x04, 0x00, 0x00],
+            "wire payload = 230 + 1000 = 1230, LE"
+        );
     }
 
     #[test]

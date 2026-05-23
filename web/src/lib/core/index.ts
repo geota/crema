@@ -453,8 +453,14 @@ export interface CremaCore {
 	setFeatureFlags(flags: number): Promise<CoreOutput>;
 	/** Override the refill-kit presence flag (0/1/2). */
 	setRefillKitPresent(state: number): Promise<CoreOutput>;
-	/** Set the mains heater voltage. Damaging if mis-set — gate behind a typed-to-confirm modal. */
-	setHeaterVoltage(volts: number): Promise<CoreOutput>;
+	/**
+	 * Set the mains heater voltage. **Damaging if mis-set** — wrong voltage
+	 * on the wrong wall outlet can permanently damage the heater. Gate
+	 * behind `MainsConfirmModal`. Only `120` and `230` are accepted; the
+	 * core rejects any other value (the call throws). Wire-side the value
+	 * carries the firmware's `+1000` user-committed marker.
+	 */
+	setHeaterVoltage(volts: 120 | 230): Promise<CoreOutput>;
 	/** Set the cup-warmer temperature, °C (Bengle models only). */
 	setCupWarmerTemperature(tempC: number): Promise<CoreOutput>;
 	/** Set the flow-calibration multiplier (scaled `int(1000 × multiplier)`). */
@@ -767,6 +773,11 @@ async function createCore(): Promise<CremaCore> {
 			return parseOutput(bridge.set_refill_kit_present(state));
 		},
 		async setHeaterVoltage(volts) {
+			// wasm-bindgen surfaces `Result<String, String>::Err` as a thrown
+			// `Error` whose `message` is the AppError display string. The
+			// shell pre-validates via `MainsConfirmModal`; this throw is
+			// the last-line guard and the caller should surface it as a
+			// toast / banner.
 			return parseOutput(bridge.set_heater_voltage(volts));
 		},
 		async setCupWarmerTemperature(tempC) {
