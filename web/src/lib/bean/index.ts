@@ -35,3 +35,16 @@ export {
 	getBeanLibraryStore,
 	getBeanStore
 } from './store.svelte';
+
+export {
+	deleteRemoteBean,
+	deleteRemoteRoaster,
+	readSyncSettings,
+	runSync,
+	testConnection,
+	writeSyncSettings,
+	VisualizerError,
+	type SyncLogEntry,
+	type SyncResult,
+	type VisualizerSyncSettings
+} from './visualizer-sync';
