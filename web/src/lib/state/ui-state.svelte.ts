@@ -140,6 +140,18 @@ export interface CompletedShot {
 	readonly peakPressure: number;
 	/** Peak group-head temperature reached during the shot, °C. */
 	readonly peakTemp: number;
+	/**
+	 * When the shot finished — `performance.now()` value at the
+	 * `Event::ShotCompleted` fold. Used by `idleSince` siblings to compute
+	 * "time since last shot."
+	 *
+	 * TODO(doc/11): feed a "Last shot 12 min ago" subline on the brew
+	 * dashboard or a screensaver trigger. Today nothing reads this; kept
+	 * because it co-locates cleanly with the rest of the shot summary,
+	 * which is cheaper than re-introducing a top-level snapshot field
+	 * later.
+	 */
+	readonly completedAt: number;
 }
 
 /**
@@ -352,19 +364,24 @@ export interface UiSnapshot {
 	// Derived in the state layer from event timestamps; no core change. The
 	// raw `performance.now()`-style timestamps are stored — a reader computes
 	// "time since" against the current clock. NO component reads them yet.
+	//
+	// The "last shot completed at + duration" data used to live as two
+	// top-level fields here; both moved into `completedShot` on 2026-05-22.
+	// Duration was a verbatim copy of `completedShot.duration`; the
+	// `completedAt` timestamp is now `completedShot.completedAt`. That
+	// trades the "survives the next ShotStarted" lifetime for cleaner
+	// co-location with the rest of the shot summary — once a new shot is
+	// in flight, "time since last shot" is moot anyway.
 
-	/**
-	 * Timestamp (ms, the event clock) the most recent shot completed, or
-	 * `null` if no shot has finished this session. "Time since last shot" is
-	 * `now - lastShotCompletedAt`.
-	 */
-	readonly lastShotCompletedAt: number | null;
-	/** Duration of the most recent completed shot, ms, or `null`. */
-	readonly lastShotDuration: number | null;
 	/**
 	 * Timestamp (ms, the event clock) the machine last entered a resting state
 	 * (Idle / Sleep), or `null` before the first such transition. Idle-elapsed
 	 * is `now - idleSince`.
+	 *
+	 * TODO(doc/11): feed a screensaver / idle-fade trigger (the
+	 * `prefs.screensaver` boolean already exists in `DEFAULT_SETTINGS` but
+	 * is unused) or a "Sleeping in N min" hint on the brew dashboard.
+	 * No component reads this yet.
 	 */
 	readonly idleSince: number | null;
 
@@ -521,8 +538,6 @@ export const INITIAL_SNAPSHOT: UiSnapshot = {
 	de1Calibration: EMPTY_DE1_CALIBRATION,
 	de1ShotSettings: null,
 	machineError: null,
-	lastShotCompletedAt: null,
-	lastShotDuration: null,
 	idleSince: null,
 	replay: null
 };
@@ -823,10 +838,9 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 					duration: event.content.duration,
 					yieldG: event.content.final_weight ?? null,
 					peakPressure: event.content.peak_pressure ?? 0,
-					peakTemp: event.content.peak_temp ?? 0
+					peakTemp: event.content.peak_temp ?? 0,
+					completedAt: performance.now()
 				},
-				lastShotCompletedAt: performance.now(),
-				lastShotDuration: event.content.duration,
 				eventLog: appendLog(
 					snapshot.eventLog,
 					`Shot completed: ${event.content.duration}ms, ` +

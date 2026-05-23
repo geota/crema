@@ -65,9 +65,7 @@ const CLEARED_DE1_READOUT = {
 	de1MachineInfo: {},
 	de1Calibration: EMPTY_DE1_CALIBRATION,
 	machineError: null,
-	idleSince: null,
-	lastShotCompletedAt: null,
-	lastShotDuration: null
+	idleSince: null
 } as const satisfies Partial<UiSnapshot>;
 
 /**
