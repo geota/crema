@@ -219,7 +219,7 @@ export class SettingsStore {
 	 * Loaded from localStorage, with {@link DEFAULT_SETTINGS} filling any field
 	 * a stored older bundle is missing (forward-compatible merge).
 	 */
-	current = $state<Settings>({
+	current = $state.raw<Settings>({
 		...DEFAULT_SETTINGS,
 		...readJson<Partial<Settings>>(SETTINGS_KEY, {})
 	});
