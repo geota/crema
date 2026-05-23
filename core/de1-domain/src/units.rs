@@ -17,7 +17,52 @@
 //!
 //! Audit reference: `docs/26-shell-to-core-audit.md` item #1.
 
+use typeshare::typeshare;
+
 // ─── Weight: grams ↔ ounces ────────────────────────────────────────────────
+
+/// The user's chosen *display unit* for weight.
+///
+/// Canonical storage is always grams; this enum names the unit the shell
+/// surfaces — and crucially, the unit the Decent Scale's on-scale LCD must
+/// be told to render. The Decent Scale exposes two LCD-enable wire packets
+/// (one with byte `[4] = 0x00` for grams, one with byte `[4] = 0x01` for
+/// ounces); the core picks the right packet based on this enum so the
+/// on-scale display matches the shell.
+///
+/// `#[typeshare]` + serde: the web shell already keeps a TypeScript
+/// `WeightUnit` (`'g' | 'oz'`) in its settings store; carrying the same
+/// shape through the bridge means the shell can pass its existing pref
+/// straight through without a lookup table.
+#[typeshare]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WeightUnit {
+    /// Grams — the canonical unit and the Decent Scale's default LCD mode.
+    #[default]
+    Grams,
+    /// US avoirdupois ounces — the only imperial display alternative.
+    Ounces,
+}
+
+impl WeightUnit {
+    /// Parse a lowercase wire string (`"grams"` / `"ounces"`) — the same
+    /// shape the serde representation uses. Returns `None` for an
+    /// unrecognised input.
+    ///
+    /// Provided as a bridge-friendly entry point: the wasm and JNI shims
+    /// receive a `&str` from the JS / Kotlin side and need a no-allocation
+    /// way to recover the enum without depending on serde-json or
+    /// reflection.
+    #[must_use]
+    pub fn from_str_lower(s: &str) -> Option<Self> {
+        match s {
+            "grams" => Some(Self::Grams),
+            "ounces" => Some(Self::Ounces),
+            _ => None,
+        }
+    }
+}
 
 /// Grams in one international avoirdupois ounce — the inverse of
 /// [`GRAMS_PER_OZ`]'s reciprocal, kept as a separate constant so each
@@ -124,6 +169,25 @@ mod tests {
     fn weight_zero_is_zero() {
         assert_eq!(grams_to_oz(0.0), 0.0);
         assert_eq!(oz_to_grams(0.0), 0.0);
+    }
+
+    #[test]
+    fn weight_unit_serializes_to_lowercase_grams_or_ounces() {
+        // The web shell already keeps its pref as the lowercase strings
+        // `"grams"` / `"ounces"`; the wire-format must match so the shell
+        // can pass its existing settings value straight through the bridge
+        // without a lookup table.
+        let g = serde_json::to_string(&WeightUnit::Grams).unwrap();
+        let o = serde_json::to_string(&WeightUnit::Ounces).unwrap();
+        assert_eq!(g, "\"grams\"");
+        assert_eq!(o, "\"ounces\"");
+    }
+
+    #[test]
+    fn weight_unit_defaults_to_grams() {
+        // Grams is the canonical unit — every numeric channel in the core
+        // stores grams — so the default is also Grams.
+        assert_eq!(WeightUnit::default(), WeightUnit::Grams);
     }
 
     // ── Temperature ────────────────────────────────────────────────────────

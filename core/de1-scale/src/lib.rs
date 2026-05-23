@@ -34,5 +34,6 @@ pub mod solo_barista;
 pub mod varia_aku;
 
 pub use scale::{
-    ModeInfo, RangeCapability, Scale, ScaleCapabilities, ScaleReading, ScaleUuids, TimerCommand,
+    DecentScaleFirmwareVersion, ModeInfo, RangeCapability, Scale, ScaleCapabilities, ScaleReading,
+    ScaleUuids, TimerCommand,
 };

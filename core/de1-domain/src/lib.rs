@@ -75,7 +75,7 @@ pub use stop::{AutoStop, STOP_WEIGHT_BEFORE, StopConfig, StopReason, StopTargets
 pub use tank::{TANK_MM_TO_ML, water_tank_ml};
 pub use units::{
     bar_to_psi, celsius_to_fahrenheit, fahrenheit_to_celsius, fl_oz_to_ml, grams_to_oz,
-    ml_to_fl_oz, oz_to_grams, psi_to_bar,
+    ml_to_fl_oz, oz_to_grams, psi_to_bar, WeightUnit,
 };
 pub use volume::{LineFreqDetector, VolumeIntegrator};
 pub use water::{WaterEvent, WaterMonitor, WaterRecord, WaterSessionKind};

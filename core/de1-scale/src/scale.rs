@@ -5,13 +5,13 @@ use std::time::Duration;
 use typeshare::typeshare;
 
 use crate::acaia::{self, AcaiaDecoder};
+use crate::decent_scale::DecentScale;
 use crate::{
     atomheart_eclair, bookoo, decent_scale, difluid, eureka_precisa, felicita, hiroia_jimmy, skale,
     smartchef, varia_aku,
 };
 
-/// The Decent Scale's tare counter starts here and wraps (`255` → `0`).
-const DECENT_TARE_COUNTER_INIT: u8 = 253;
+pub use crate::decent_scale::DecentScaleFirmwareVersion;
 
 /// The BLE UUIDs a scale's transport layer needs.
 ///
@@ -179,7 +179,12 @@ pub struct Scale {
 /// Per-scale variant and any runtime state it needs.
 #[derive(Debug)]
 enum Inner {
-    Decent { tare_counter: u8 },
+    /// The Decent Scale carries a small stateful struct ([`DecentScale`])
+    /// that tracks the rolling tare counter and the observed firmware
+    /// version — both fields the codec layer needs to issue the correct
+    /// bytes (a tare with the next counter, or a power-off only when the
+    /// firmware supports it).
+    Decent(DecentScale),
     Skale,
     Felicita,
     Bookoo,
@@ -208,9 +213,7 @@ impl Scale {
     pub fn identify(advertised_name: &str) -> Option<Scale> {
         let any = |prefixes: &[&str]| prefixes.iter().any(|p| advertised_name.starts_with(p));
         let inner = if any(&["Decent Scale", "ButtsHaus Scale"]) {
-            Inner::Decent {
-                tare_counter: DECENT_TARE_COUNTER_INIT,
-            }
+            Inner::Decent(DecentScale::new())
         } else if advertised_name.starts_with("Skale") {
             Inner::Skale
         } else if advertised_name.starts_with("FELICITA") {
@@ -246,9 +249,7 @@ impl Scale {
     /// instance with no accumulated state.
     pub fn from_label(label: &str) -> Option<Scale> {
         let inner = match label {
-            "Decent Scale" => Inner::Decent {
-                tare_counter: DECENT_TARE_COUNTER_INIT,
-            },
+            "Decent Scale" => Inner::Decent(DecentScale::new()),
             "Skale II" => Inner::Skale,
             "Felicita Arc" => Inner::Felicita,
             "Bookoo" => Inner::Bookoo,
@@ -270,7 +271,7 @@ impl Scale {
     /// as a settings key (round-trips through [`from_label`](Self::from_label)).
     pub fn label(&self) -> &'static str {
         match &self.inner {
-            Inner::Decent { .. } => "Decent Scale",
+            Inner::Decent(_) => "Decent Scale",
             Inner::Skale => "Skale II",
             Inner::Felicita => "Felicita Arc",
             Inner::Bookoo => "Bookoo",
@@ -289,7 +290,7 @@ impl Scale {
     /// The BLE service and characteristic UUIDs for this scale.
     pub fn uuids(&self) -> ScaleUuids {
         match &self.inner {
-            Inner::Decent { .. } => ScaleUuids {
+            Inner::Decent(_) => ScaleUuids {
                 service: decent_scale::SERVICE_UUID,
                 weight_notify: decent_scale::READ_NOTIFY_UUID,
                 command_write: decent_scale::WRITE_UUID,
@@ -371,7 +372,43 @@ impl Scale {
     /// because the writes are Decent-specific and have no analogue on other
     /// scales — a generic capability would have only one implementation.
     pub fn is_decent_scale(&self) -> bool {
-        matches!(&self.inner, Inner::Decent { .. })
+        matches!(&self.inner, Inner::Decent(_))
+    }
+
+    /// Whether the connected Decent Scale's firmware supports the
+    /// [`decent_scale::POWER_OFF`] command — only `true` once the firmware
+    /// version has been observed and is v1.2 or later.
+    ///
+    /// `false` for any non-Decent scale and for a Decent Scale whose
+    /// firmware version is not yet known: the safer default is to not
+    /// send the byte (v1.0 / v1.1 firmware would silently ignore it, so
+    /// the UI must know to fall back to the "long-press the button"
+    /// instruction).
+    pub fn supports_decent_scale_power_off(&self) -> bool {
+        matches!(&self.inner, Inner::Decent(state) if state.supports_power_off())
+    }
+
+    /// Record a Decent-Scale firmware-version observation (the byte
+    /// extracted from a `0x0A` reply — see
+    /// [`decent_scale::parse_command_response`]). No-op for every other
+    /// scale.
+    pub fn record_decent_scale_firmware_version(
+        &mut self,
+        version: DecentScaleFirmwareVersion,
+    ) {
+        if let Inner::Decent(state) = &mut self.inner {
+            state.record_firmware_version(version);
+        }
+    }
+
+    /// The currently-observed Decent-Scale firmware version, if any.
+    /// `None` for a non-Decent scale or a Decent Scale whose firmware
+    /// version has not yet been observed.
+    pub fn decent_scale_firmware_version(&self) -> Option<DecentScaleFirmwareVersion> {
+        match &self.inner {
+            Inner::Decent(state) => state.firmware_version(),
+            _ => None,
+        }
     }
 
     /// Whether this scale accepts software timer commands.
@@ -427,7 +464,7 @@ impl Scale {
                 ],
             },
             // Every other supported scale is weight-only for this slice.
-            Inner::Decent { .. }
+            Inner::Decent(_)
             | Inner::Skale
             | Inner::Felicita
             | Inner::AcaiaGen1(_)
@@ -458,7 +495,7 @@ impl Scale {
             Inner::AcaiaGen1(_) | Inner::AcaiaPyxis(_) => 690,
             // Decent, Skale, and the scales without a dedicated entry take the
             // legacy 380 ms default.
-            Inner::Decent { .. }
+            Inner::Decent(_)
             | Inner::Skale
             | Inner::EurekaPrecisa
             | Inner::SoloBarista
@@ -476,7 +513,7 @@ impl Scale {
     /// if the bytes are not (yet) a complete weight reading.
     pub fn parse_weight(&mut self, data: &[u8]) -> Option<f32> {
         match &mut self.inner {
-            Inner::Decent { .. } => decent_scale::parse_weight(data),
+            Inner::Decent(_) => decent_scale::parse_weight(data),
             Inner::Skale => skale::parse_weight(data),
             Inner::Felicita => felicita::parse_weight(data),
             Inner::Bookoo => bookoo::parse_weight(data),
@@ -539,7 +576,7 @@ impl Scale {
         match &self.inner {
             Inner::Bookoo => bookoo::parse_command_response(data),
             // No other supported scale models a command-channel response.
-            Inner::Decent { .. }
+            Inner::Decent(_)
             | Inner::Skale
             | Inner::Felicita
             | Inner::AcaiaGen1(_)
@@ -554,16 +591,38 @@ impl Scale {
         }
     }
 
+    /// Decode a notification from the *Decent Scale's* read characteristic
+    /// into a [`decent_scale::CommandResponse`].
+    ///
+    /// The Decent Scale notifies on a single characteristic for both
+    /// weight packets and command replies; the `0x0A` (LCD / heartbeat)
+    /// reply carries the battery and firmware-version bytes. This method
+    /// returns the decoded reply when the frame is one of those replies,
+    /// and `None` for a weight packet, a button packet, a tare-ack, or
+    /// any non-Decent scale.
+    ///
+    /// The shell calls this on every notification *after* [`parse_reading`]
+    /// returns `None`, so a weight notification still flows through
+    /// `parse_reading` as before; only non-weight Decent frames reach
+    /// this path.
+    ///
+    /// [`parse_reading`]: Self::parse_reading
+    pub fn parse_decent_scale_command_response(
+        &self,
+        data: &[u8],
+    ) -> Option<decent_scale::CommandResponse> {
+        match &self.inner {
+            Inner::Decent(_) => decent_scale::parse_command_response(data),
+            _ => None,
+        }
+    }
+
     /// Build a tare command to write to the [command characteristic](ScaleUuids).
     /// Returns `None` if the scale has no software tare (see
     /// [`supports_tare`](Self::supports_tare)).
     pub fn tare(&mut self) -> Option<Vec<u8>> {
         Some(match &mut self.inner {
-            Inner::Decent { tare_counter } => {
-                let command = decent_scale::tare(*tare_counter).to_vec();
-                *tare_counter = tare_counter.wrapping_add(1);
-                command
-            }
+            Inner::Decent(state) => state.next_tare().to_vec(),
             Inner::Skale => vec![skale::CMD_TARE],
             Inner::Felicita => vec![felicita::TARE],
             Inner::Bookoo => bookoo::TARE.to_vec(),
@@ -583,7 +642,7 @@ impl Scale {
     pub fn timer(&self, command: TimerCommand) -> Option<Vec<u8>> {
         use TimerCommand::{Reset, Start, Stop};
         Some(match &self.inner {
-            Inner::Decent { .. } => match command {
+            Inner::Decent(_) => match command {
                 Start => decent_scale::timer_start().to_vec(),
                 Stop => decent_scale::timer_stop().to_vec(),
                 Reset => decent_scale::timer_reset().to_vec(),
