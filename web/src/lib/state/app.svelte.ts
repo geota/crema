@@ -744,6 +744,49 @@ export class CremaApp {
 	}
 
 	/**
+	 * Set the flush water target temperature, °C — the MMR `FlushTemp`
+	 * register (`0x803844`) the firmware holds during a group-flush. Real
+	 * write; the brew page's Flush stepper calls this on commit so the
+	 * QC value reaches the machine. Wire scale `°C × 10` lives in the
+	 * core. No read-back here — the connect-time MMR sweep populates
+	 * `de1MachineInfo[FlushTemp]`, and the BrewDashboard's `flushTempC`
+	 * derive already prefers the live machine value when present.
+	 */
+	async setFlushTemp(tempC: number): Promise<void> {
+		this.applyCoreOutput(await this.core.setFlushTemp(tempC));
+	}
+
+	/**
+	 * Set the cup-warmer plate temperature, °C — Bengle hardware only.
+	 * MMR `CupWarmerTemp` (`0x803874`). `0` turns the plate off; the
+	 * firmware ignores the write on non-Bengle models so the call is
+	 * safe to gate UI-side without core-side guards.
+	 */
+	async setCupWarmerTemperature(tempC: number): Promise<void> {
+		this.applyCoreOutput(await this.core.setCupWarmerTemperature(tempC));
+	}
+
+	/**
+	 * Start the connected scale's built-in timer (Bookoo today;
+	 * capability-gated in the core — a weight-only scale gets a no-op).
+	 * Surfaced for manual milk-only sessions where shot-state auto-wiring
+	 * doesn't fire.
+	 */
+	async startTimer(): Promise<void> {
+		this.applyCoreOutput(await this.core.startTimer());
+	}
+
+	/** Stop the connected scale's built-in timer. */
+	async stopTimer(): Promise<void> {
+		this.applyCoreOutput(await this.core.stopTimer());
+	}
+
+	/** Reset the connected scale's built-in timer to zero. */
+	async resetTimer(): Promise<void> {
+		this.applyCoreOutput(await this.core.resetTimer());
+	}
+
+	/**
 	 * Result of one file submitted to {@link CremaApp.importShotFile}. The
 	 * imported record is the same shape the History page reads from the
 	 * shared store; `null` `record` means "couldn't parse" — `message`

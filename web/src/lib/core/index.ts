@@ -418,6 +418,8 @@ export interface CremaCore {
 	setHotWaterFlowRate(mlPerS: number): Promise<CoreOutput>;
 	/** Set the flush flow rate, ml/s. */
 	setFlushFlowRate(mlPerS: number): Promise<CoreOutput>;
+	/** Set the flush water target temperature, °C. Wire value is `°C × 10`. */
+	setFlushTemp(tempC: number): Promise<CoreOutput>;
 	/** Set the flush timeout, milliseconds. */
 	setFlushTimeout(ms: number): Promise<CoreOutput>;
 	/** Enable / disable the tablet's USB charging output. */
@@ -687,6 +689,9 @@ async function createCore(): Promise<CremaCore> {
 		},
 		async setFlushFlowRate(mlPerS) {
 			return parseOutput(bridge.set_flush_flow_rate(mlPerS));
+		},
+		async setFlushTemp(tempC) {
+			return parseOutput(bridge.set_flush_temp(tempC));
 		},
 		async setFlushTimeout(ms) {
 			return parseOutput(bridge.set_flush_timeout(ms));

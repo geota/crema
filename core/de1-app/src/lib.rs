@@ -724,6 +724,20 @@ impl CremaCore {
         mmr_write_command(MmrRegister::FlushFlowRate, raw, 2)
     }
 
+    /// Set the flush water target temperature, °C — the temperature the
+    /// DE1 holds while a group-flush cycle runs. Wire value is `°C × 10`
+    /// (so 95.0 °C → raw 950). MMR `0x803844`, 4-byte. Per reaprime
+    /// (`de1.models.dart:flushTemp` `readScale: 0.1`); the legacy de1app
+    /// has no equivalent. docs/22 §3.2.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    pub fn set_flush_temp(&self, temp_c: f32) -> CoreOutput {
+        if let Some(out) = self.refuse_if_firmware_locked("set_flush_temp") {
+            return out;
+        }
+        let raw = (temp_c * 10.0).round().clamp(0.0, f32::from(u16::MAX)) as u32;
+        mmr_write_command(MmrRegister::FlushTemp, raw, 4)
+    }
+
     /// Set the flush timeout. `dur` is scaled `int(10 × seconds)`.
     /// MMR `0x803848`, 2-byte.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
