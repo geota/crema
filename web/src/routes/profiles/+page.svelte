@@ -27,6 +27,7 @@
 	} from '$lib/profiles';
 	import { getCremaAppContext } from '$lib/shell/app-context';
 	import { ProfileCard } from '$lib/components/profiles';
+	import SortPill from '$lib/components/shared/SortPill.svelte';
 	import { downloadBlob, filenameStamp } from '$lib/utils/download';
 
 	const store = getProfileStore();
@@ -609,39 +610,24 @@
 			{/if}
 		</div>
 		<div class="pp-sort">
-			<span class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.45)">Sort</span>
-			{#each SORT_OPTIONS as s (s.id)}
-				<button
-					class="pp-sort-opt"
-					class:is-active={sort === s.id}
-					onclick={() => {
-						if (s.id !== sort) {
-							sort = s.id;
-							sortDir = s.defaultDir;
-						}
-					}}
-					title={`Sort by ${s.label}`}
-				>
-					{s.label}
-				</button>
-			{/each}
-			<span class="pp-sort-divider"></span>
-			<button
-				class="pp-sort-opt"
-				class:is-active={sortDir === 'asc'}
-				onclick={() => (sortDir = 'asc')}
-				title="Ascending"
-			>
-				Ascending
-			</button>
-			<button
-				class="pp-sort-opt"
-				class:is-active={sortDir === 'desc'}
-				onclick={() => (sortDir = 'desc')}
-				title="Descending"
-			>
-				Descending
-			</button>
+			<SortPill
+				value={{ field: sort, direction: sortDir }}
+				options={SORT_OPTIONS.map((s) => ({ field: s.id, label: s.label }))}
+				onchange={(next) => {
+					const previousField = sort;
+					sort = next.field as SortKey;
+					// When the user picks a new field (not just flipping
+					// direction), reapply that field's default direction so
+					// e.g. "Name" defaults to A→Z instead of inheriting the
+					// previous field's descending preference.
+					if (next.field !== previousField) {
+						const opt = SORT_OPTIONS.find((s) => s.id === next.field);
+						sortDir = opt?.defaultDir ?? next.direction;
+					} else {
+						sortDir = next.direction;
+					}
+				}}
+			/>
 		</div>
 	</div>
 
@@ -874,33 +860,6 @@
 		align-items: center;
 		gap: 10px;
 		flex: 0 0 auto;
-	}
-	.pp-sort-opt {
-		background: transparent;
-		border: 0;
-		color: rgba(var(--tint-rgb), 0.5);
-		font-family: var(--font-sans);
-		font-size: 12px;
-		cursor: pointer;
-		padding: 4px 2px;
-		transition: color var(--dur-1) var(--ease);
-	}
-	.pp-sort-opt:hover {
-		color: var(--fg-1);
-	}
-	.pp-sort-opt.is-active {
-		color: var(--fg-1);
-		text-decoration: underline;
-		text-decoration-color: var(--copper-500);
-		text-decoration-thickness: 1.5px;
-		text-underline-offset: 4px;
-	}
-	.pp-sort-divider {
-		display: inline-block;
-		width: 1px;
-		height: 16px;
-		margin: 0 4px;
-		background: rgba(var(--tint-rgb), 0.15);
 	}
 
 	/* Grid */
