@@ -25,8 +25,13 @@ use crate::session::SessionTimer;
 pub const MAX_SHOT_SAMPLES: usize = 36_000;
 
 /// Where an espresso shot is in its lifecycle.
+///
+/// `#[non_exhaustive]` so additional phases (e.g. a future post-shot
+/// "Draining" classification) can be added without breaking the FFI surface —
+/// this enum is the payload of `Event::ShotPhaseChanged`.
 #[typeshare]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub enum ShotPhase {
     /// No espresso shot in progress.
     #[default]

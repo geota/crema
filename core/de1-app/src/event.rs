@@ -453,6 +453,16 @@ pub enum ProfileUploadFailure {
     /// [`cancel_profile_upload`](crate::CremaCore::cancel_profile_upload)
     /// mid-upload.
     Aborted,
+    /// An unexpected [`AppError`] variant — the bridge couldn't classify it.
+    /// The `message` carries the `AppError`'s `Display` output so the shell
+    /// can surface it in a toast / log without losing the underlying cause.
+    ///
+    /// Previously such variants were silently coerced to
+    /// [`ProfileUploadFailure::Empty`], misclassifying real failures.
+    Internal {
+        /// Human-readable `Display` of the underlying error.
+        message: String,
+    },
 }
 
 /// A writable DE1 GATT characteristic. The shell maps this to a UUID.

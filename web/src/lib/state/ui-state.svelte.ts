@@ -1098,15 +1098,22 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 					`Profile uploaded: ${event.content.title}`
 				)
 			};
-		case 'ProfileUploadFailed':
+		case 'ProfileUploadFailed': {
+			// `Internal` is the catch-all the bridge produces for an
+			// `AppError` variant it didn't classify; surface its `Display`
+			// message so the log line carries the real cause rather than
+			// the generic kind tag.
+			const reason = event.content.reason;
+			const detail =
+				reason.kind === 'Internal'
+					? `Internal: ${reason.details.message}`
+					: reason.kind;
 			return {
 				...snapshot,
 				profileUploadProgress: null,
-				eventLog: appendLog(
-					snapshot.eventLog,
-					`Profile upload failed: ${event.content.reason.kind}`
-				)
+				eventLog: appendLog(snapshot.eventLog, `Profile upload failed: ${detail}`)
 			};
+		}
 		case 'DecodeError':
 			return {
 				...snapshot,
