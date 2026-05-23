@@ -8,10 +8,21 @@
 	import QSplitLabel from './QSplitLabel.svelte';
 	import QStepper from './QStepper.svelte';
 	import QChipRow from './QChipRow.svelte';
+	import { getSettingsStore, formatWeight } from '$lib/settings';
 
 	let { params }: { params: BrewParamState } = $props();
 
 	const p = $derived(params.current);
+	const prefs = $derived(getSettingsStore().current);
+	/**
+	 * Whether the live dose differs from the active profile / brew-default
+	 * seed — drives the italics + copper tint on the value, and the tooltip
+	 * ("Overriding default 18 g") on hover. Grind has no profile-side
+	 * default (it lives only as a log field, not on the upload payload),
+	 * so the indicator is dose-only.
+	 */
+	const doseOverridden = $derived(params.isOverridden('dose'));
+	const doseSeedLabel = $derived(formatWeight(params.seedOf('dose'), prefs.weightUnit));
 </script>
 
 <div>
@@ -31,6 +42,8 @@
 			max={30}
 			step={0.1}
 			onChange={(v) => params.set('dose', v)}
+			overridden={doseOverridden}
+			overriddenTooltip="Overriding default {doseSeedLabel}"
 		/>
 		<div style="height:8px"></div>
 		<QChipRow
