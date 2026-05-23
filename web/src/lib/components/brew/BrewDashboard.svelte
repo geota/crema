@@ -40,6 +40,7 @@
 		formatWeight
 	} from '$lib/settings';
 	import { getProfileStore, preinfuseSeconds, type CremaProfile } from '$lib/profiles';
+	import { getMaintenanceStore } from '$lib/maintenance';
 	import { getCremaAppContext } from '$lib/shell/app-context';
 	import { BrewParamState, type BrewParamSeed } from './brew-params.svelte';
 	import ExtractionTimer from './ExtractionTimer.svelte';
@@ -333,7 +334,17 @@
 	 * reaches the machine in this porting step — see the `// TODO: wire to DE1
 	 * control` notes.
 	 */
-	const params = new BrewParamState(() => paramSeed);
+	const params = new BrewParamState(
+		() => paramSeed,
+		(key, value) => {
+			// Route Flush-bucket `flushTemp` stepper edits through to the
+			// MMR `FlushTemp` setter so the user's QC value reaches the
+			// machine immediately. Other keys remain local-only UI.
+			if (key === 'flushTemp' && typeof value === 'number') {
+				void app?.setFlushTemp(value);
+			}
+		}
+	);
 	/**
 	 * Whether the Quick Sheet is docked open. Starts hidden — the dashboard is
 	 * the primary view; the header's QuickPill opens the sheet, and its Close
@@ -689,6 +700,49 @@
 	 */
 	let shotStartError = $state<string | null>(null);
 
+	// ── Maintenance advisory banner ──────────────────────────────────────
+	// The maintenance store (`$lib/maintenance`) integrates flow into a
+	// litre counter and flags filter / descale / backflush as `Ok = false`
+	// once the configured intervals are exceeded. Surface that as a yellow
+	// banner on the brew page so the user sees it without digging into
+	// Settings → Water; click routes them to the maintenance cards.
+	const maintenance = getMaintenanceStore();
+	const maintReadout = $derived(maintenance.readout);
+	/**
+	 * In-memory dismissed-keys set — a maintenance category the user
+	 * dismissed *for this session*. Re-shown on page reload so the user
+	 * cannot permanently silence a real maintenance need by tapping ✕.
+	 * Re-derives the visible banner from the live readout minus this
+	 * set so a re-tripped counter after dismiss still surfaces.
+	 */
+	let maintDismissed = $state(new Set<'filter' | 'descale' | 'backflush'>());
+	/**
+	 * The subset of due categories the user has not dismissed this
+	 * session — joined into a comma-separated banner body. Empty string
+	 * when everything is on schedule (or fully dismissed); the template
+	 * branches on `!== ''` to decide whether to render.
+	 */
+	const maintVisibleText = $derived.by<string>(() => {
+		const parts: string[] = [];
+		if (!maintReadout.filterOk && !maintDismissed.has('filter')) parts.push('Filter due');
+		if (!maintReadout.descaleOk && !maintDismissed.has('descale')) parts.push('Descale due');
+		if (!maintReadout.backflushOk && !maintDismissed.has('backflush'))
+			parts.push('Backflush due');
+		return parts.join(', ');
+	});
+	/** Dismiss every currently-due maintenance category for this session. */
+	function dismissMaintenance(): void {
+		const next = new Set(maintDismissed);
+		if (!maintReadout.filterOk) next.add('filter');
+		if (!maintReadout.descaleOk) next.add('descale');
+		if (!maintReadout.backflushOk) next.add('backflush');
+		maintDismissed = next;
+	}
+	/** Route to Settings → Water & maintenance — the cards' canonical home. */
+	function openMaintenance(): void {
+		void goto(resolve('/settings#water'));
+	}
+
 	/**
 	 * Whether a profile-sync upload is in flight — drives the "Syncing to
 	 * DE1…" pip + spinner glyph on the Coffee button while the lazy
@@ -823,6 +877,24 @@
 						text={shotStartError}
 						title="Can't start shot"
 						onDismiss={() => (shotStartError = null)}
+					/>
+				</div>
+			{:else if maintVisibleText !== ''}
+				<!-- Maintenance advisory — yellow banner shown when one of
+				     filter / descale / backflush has tripped. Re-uses the
+				     MachineErrorBanner skeleton with the `'warning'`
+				     variant so the dashboard has one visual language for
+				     header advisories. Click routes to Settings → Water &
+				     maintenance; the ✕ dismisses for the session only
+				     (re-shows on next reload so the user can't silence a
+				     real maintenance need permanently). -->
+				<div class="crema-dash-head-mid">
+					<MachineErrorBanner
+						text={maintVisibleText}
+						title="Maintenance due"
+						variant="warning"
+						onClick={openMaintenance}
+						onDismiss={dismissMaintenance}
 					/>
 				</div>
 			{:else if modeState !== 'idle'}

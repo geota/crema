@@ -43,6 +43,7 @@
 	import StRow from '../StRow.svelte';
 	import StToggle from '../StToggle.svelte';
 	import StSelect from '../StSelect.svelte';
+	import StStepper from '../StStepper.svelte';
 	import StButton from '../StButton.svelte';
 
 	let {
@@ -142,6 +143,24 @@
 		if (m === undefined) return '—';
 		return MACHINE_MODEL_NAMES[m] ?? `model ${m}`;
 	});
+	/**
+	 * Whether the connected DE1 has the Bengle cup-warmer plate hardware.
+	 * Per docs/21 §3.5 the cup-warmer setter is gated by `MachineModel ∈
+	 * {DE1XL, DE1XXL, DE1XXXL, DE1CAFE}` — indices 4..7 in the model
+	 * table above. Returns `false` until the `MachineModel` MMR read
+	 * lands so the card stays hidden on first paint.
+	 */
+	const isBengle = $derived.by<boolean>(() => {
+		const m = snapshot.de1MachineInfo.MachineModel;
+		return m !== undefined && m >= 4 && m <= 7;
+	});
+	/**
+	 * Live cup-warmer plate temperature read from
+	 * `de1MachineInfo[CupWarmerTemp]`. `0` = off. Undefined until the
+	 * MMR read lands; the stepper falls back to `0` so it paints as
+	 * "Off" before then.
+	 */
+	const cupWarmerC = $derived(snapshot.de1MachineInfo[MmrRegister.CupWarmerTemp] ?? 0);
 	const boardLabel = $derived.by(() => {
 		const cpu = snapshot.de1MachineInfo.CpuBoardVersion;
 		if (cpu === undefined) return '—';
@@ -387,6 +406,39 @@
 		{/snippet}
 	</StRow>
 </StGroup>
+
+{#if isBengle}
+	<!--
+		Cup warmer — Bengle hardware only. The MMR `CupWarmerTemp`
+		(`0x803874`) is a 2-byte °C setpoint; `0` turns the plate off.
+		The card is omitted entirely on non-Bengle models (per the
+		"don't show a disabled stub" rule). The stepper's display value
+		is converted by the temp dimension so it respects the user's
+		Settings → Display unit pref; canonical °C stays on the wire.
+	-->
+	<StGroup title="Cup warmer">
+		<StRow
+			title="Plate temperature"
+			sub={cupWarmerC === 0
+				? 'Off. Set above 0 to warm cups before pouring.'
+				: 'The DE1 holds the cup-warmer plate at this temperature.'}
+		>
+			{#snippet control()}
+				<StStepper
+					value={cupWarmerC}
+					dimension="temp"
+					step={1}
+					min={0}
+					max={80}
+					onCommit={(v) => {
+						if (!connected) return;
+						void app?.setCupWarmerTemperature(Math.round(v));
+					}}
+				/>
+			{/snippet}
+		</StRow>
+	</StGroup>
+{/if}
 
 <StGroup title="DE1 connection diagnostics">
 	<!-- Each row's value cell follows one of two patterns:
