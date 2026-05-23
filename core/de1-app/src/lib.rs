@@ -44,7 +44,10 @@ use de1_protocol::{
 /// margin is ~100× the typical real-DE1 round-trip and clears Web
 /// Bluetooth's worst-case back-pressure window.
 pub const PROFILE_UPLOAD_ACK_TIMEOUT: Duration = Duration::from_secs(5);
-use de1_scale::{Scale, ScaleCapabilities, ScaleUuids, TimerCommand, decent_scale};
+use de1_scale::{
+    Scale, ScaleCapabilities, ScaleUuids, TimerCommand, decent_scale, difluid, eureka_precisa,
+    hiroia_jimmy, skale,
+};
 use de1_scale::DecentScaleFirmwareVersion;
 
 /// Re-export of `de1_scale::bookoo` so the wasm + future Android bridges
@@ -315,6 +318,15 @@ pub struct CremaCore {
     /// Defaults to [`WeightUnit::Grams`] (matches the legacy app default
     /// and the canonical storage unit).
     weight_unit_pref: WeightUnit,
+    /// Whether the Eureka Precisa / Solo Barista should be powered off when
+    /// the DE1 enters [`MachineState::Sleep`]. Off by default; toggled by the
+    /// shell via [`set_eureka_precisa_auto_off_on_sleep`](Self::set_eureka_precisa_auto_off_on_sleep).
+    ///
+    /// Gated on the connected scale being an Eureka Precisa (or its
+    /// codec-identical Solo Barista) — every other scale ignores the
+    /// setting. The reactive auto-policy in [`handle_state`](Self::handle_state)
+    /// fires [`eureka_precisa::TURN_OFF`] on Sleep entry when this is true.
+    eureka_precisa_auto_off_on_sleep: bool,
 }
 
 /// In-flight state of one profile upload. Owned by
@@ -384,6 +396,7 @@ impl CremaCore {
             last_machine_model: None,
             last_serial_number: None,
             weight_unit_pref: WeightUnit::default(),
+            eureka_precisa_auto_off_on_sleep: false,
         }
     }
 
@@ -1359,6 +1372,180 @@ impl CremaCore {
         self.weight_unit_pref
     }
 
+    /// Build a [`Command`] that enables the Skale II's on-scale LCD.
+    ///
+    /// Skale-II-only: the LCD enable surface is unique to the Skale among the
+    /// non-Decent-Scale codecs, so the command is emitted only when
+    /// [`Scale::is_skale`] is `true`. Every other scale — and an unconnected
+    /// core — returns an empty [`CoreOutput`].
+    ///
+    /// Legacy sequence (`de1plus/bluetooth.tcl:238-253`): write `ED`
+    /// (screen-on) then `EC` (display-weight) — two single-byte writes
+    /// queued in order. The reactive auto-policy in
+    /// [`handle_state`](Self::handle_state) wires this to the DE1's
+    /// [`MachineState::Idle`] transition, mirroring the Decent Scale's
+    /// LCD-enable wiring established by PR-E.
+    ///
+    /// `unit` picks an additional `0x03` write (Skale's "enable grams"
+    /// command) when the user's pref is grams; the Skale doesn't expose an
+    /// ounces-LCD variant so the ounces case skips the unit write —
+    /// matches legacy de1app, which never sends an ounces command for the
+    /// Skale (`bluetooth.tcl:224-236`).
+    pub fn enable_skale_lcd(&self, unit: WeightUnit) -> CoreOutput {
+        let mut out = CoreOutput::default();
+        Self::push_skale_write(&self.scale, &[skale::CMD_SCREEN_ON], &mut out);
+        Self::push_skale_write(&self.scale, &[skale::CMD_DISPLAY_WEIGHT], &mut out);
+        if matches!(unit, WeightUnit::Grams) {
+            Self::push_skale_write(&self.scale, &[skale::CMD_ENABLE_GRAMS], &mut out);
+        }
+        out
+    }
+
+    /// Build a [`Command`] that disables the Skale II's on-scale LCD.
+    ///
+    /// Skale-II-only, mirroring [`enable_skale_lcd`](Self::enable_skale_lcd).
+    /// The reactive auto-policy fires this on the DE1's
+    /// [`MachineState::Sleep`] transition.
+    pub fn disable_skale_lcd(&self) -> CoreOutput {
+        let mut out = CoreOutput::default();
+        Self::push_skale_write(&self.scale, &[skale::CMD_SCREEN_OFF], &mut out);
+        out
+    }
+
+    /// Build a [`Command`] that turns off the connected Eureka Precisa or
+    /// Solo Barista. Returns an empty [`CoreOutput`] for every other scale
+    /// (and an unconnected core).
+    ///
+    /// The byte sequence (`AA 02 32 32`, see [`eureka_precisa::TURN_OFF`])
+    /// is the same for both scales — the Solo Barista is codec-identical to
+    /// the Eureka Precisa. Legacy de1app exposes this as
+    /// `eureka_precisa_turn_off` (`de1plus/bluetooth.tcl:750-756`);
+    /// reaprime does not implement it.
+    pub fn turn_off_eureka_precisa(&self) -> CoreOutput {
+        let mut out = CoreOutput::default();
+        Self::push_eureka_precisa_write(&self.scale, &eureka_precisa::TURN_OFF, &mut out);
+        out
+    }
+
+    /// Build a [`Command`] that fires the Eureka Precisa / Solo Barista
+    /// "beep twice" command. Empty for every other scale.
+    pub fn beep_eureka_precisa(&self) -> CoreOutput {
+        let mut out = CoreOutput::default();
+        Self::push_eureka_precisa_write(&self.scale, &eureka_precisa::BEEP, &mut out);
+        out
+    }
+
+    /// Build a [`Command`] that sets the Eureka Precisa / Solo Barista's
+    /// display unit to grams.
+    ///
+    /// Empty for every other scale. The Eureka Precisa only exposes a
+    /// "set to grams" command in its codec — there is no per-unit selector
+    /// — so the `unit` argument is currently only consumed via the
+    /// reactive path: an ounces pref means "do not send" (legacy de1app
+    /// only sends the grams command, and only when the user wants grams).
+    pub fn set_eureka_precisa_unit(&self, unit: WeightUnit) -> CoreOutput {
+        let mut out = CoreOutput::default();
+        if matches!(unit, WeightUnit::Grams) {
+            Self::push_eureka_precisa_write(
+                &self.scale,
+                &eureka_precisa::SET_UNIT_GRAMS,
+                &mut out,
+            );
+        }
+        out
+    }
+
+    /// Build a [`Command`] that toggles the Hiroia Jimmy's display unit
+    /// (grams ↔ oz / ml). Empty for every other scale.
+    ///
+    /// Reaprime's auto-recovery (`hiroia_scale.dart:120-128`) fires this
+    /// `[0x0B, 0x00]` byte sequence when the scale's mode byte indicates
+    /// a non-grams unit. The core wires it both as an explicit method
+    /// here and as an automatic recovery from the weight-notification
+    /// path (see `handle_scale_weight`).
+    pub fn toggle_hiroia_jimmy_unit(&self) -> CoreOutput {
+        let mut out = CoreOutput::default();
+        Self::push_hiroia_jimmy_write(&self.scale, &hiroia_jimmy::TOGGLE_UNIT, &mut out);
+        out
+    }
+
+    /// Build a [`Command`] that sets the Difluid Microbalance's display
+    /// unit to grams. Empty for every other scale.
+    ///
+    /// The Difluid only accepts a "set to grams" command — no other unit
+    /// is exposed in the codec. The core fires this automatically from
+    /// the weight-notification path when [`difluid::is_grams_unit`]
+    /// returns `Some(false)`, mirroring reaprime's auto-recovery
+    /// (`difluid_scale.dart:147-154`).
+    pub fn set_difluid_unit_grams(&self) -> CoreOutput {
+        let mut out = CoreOutput::default();
+        Self::push_difluid_write(&self.scale, &difluid::SET_UNIT_GRAMS, &mut out);
+        out
+    }
+
+    /// Toggle whether the Eureka Precisa / Solo Barista should be powered
+    /// off on [`MachineState::Sleep`] entry. Off by default; the user opts
+    /// in via the Machine settings page (the only UI surface introduced
+    /// by PR G beyond the existing LCD / unit-pref wiring).
+    pub fn set_eureka_precisa_auto_off_on_sleep(&mut self, enabled: bool) {
+        self.eureka_precisa_auto_off_on_sleep = enabled;
+    }
+
+    /// Whether the Eureka Precisa / Solo Barista is configured to power
+    /// off on machine Sleep entry. See
+    /// [`set_eureka_precisa_auto_off_on_sleep`](Self::set_eureka_precisa_auto_off_on_sleep).
+    pub fn eureka_precisa_auto_off_on_sleep(&self) -> bool {
+        self.eureka_precisa_auto_off_on_sleep
+    }
+
+    /// Internal: append a fixed Skale write to `out` if the connected scale
+    /// is a Skale II.
+    fn push_skale_write(scale: &Option<Scale>, bytes: &[u8], out: &mut CoreOutput) {
+        if let Some(scale) = scale
+            && scale.is_skale()
+        {
+            out.commands.push(Command::WriteScale {
+                data: bytes.to_vec(),
+            });
+        }
+    }
+
+    /// Internal: append a fixed Eureka Precisa / Solo Barista write to `out`
+    /// if the connected scale is one of those two codec-identical scales.
+    fn push_eureka_precisa_write(scale: &Option<Scale>, bytes: &[u8], out: &mut CoreOutput) {
+        if let Some(scale) = scale
+            && scale.is_eureka_precisa()
+        {
+            out.commands.push(Command::WriteScale {
+                data: bytes.to_vec(),
+            });
+        }
+    }
+
+    /// Internal: append a fixed Hiroia Jimmy write to `out` if the connected
+    /// scale is a Hiroia Jimmy.
+    fn push_hiroia_jimmy_write(scale: &Option<Scale>, bytes: &[u8], out: &mut CoreOutput) {
+        if let Some(scale) = scale
+            && scale.is_hiroia_jimmy()
+        {
+            out.commands.push(Command::WriteScale {
+                data: bytes.to_vec(),
+            });
+        }
+    }
+
+    /// Internal: append a fixed Difluid write to `out` if the connected
+    /// scale is a Difluid Microbalance.
+    fn push_difluid_write(scale: &Option<Scale>, bytes: &[u8], out: &mut CoreOutput) {
+        if let Some(scale) = scale
+            && scale.is_difluid()
+        {
+            out.commands.push(Command::WriteScale {
+                data: bytes.to_vec(),
+            });
+        }
+    }
+
     /// Internal: append a fixed Decent-Scale write to `out` if the connected
     /// scale is a Decent Scale.
     ///
@@ -1739,16 +1926,54 @@ impl CremaCore {
                     // weight unit, cached on the core by the shell via
                     // `set_weight_unit_pref` — so an Idle entry picks
                     // grams or ounces to match what the shell is showing.
-                    MachineState::Idle => Self::push_decent_scale_write(
-                        &self.scale,
-                        &Self::lcd_enable_bytes(self.weight_unit_pref),
-                        out,
-                    ),
-                    MachineState::Sleep => Self::push_decent_scale_write(
-                        &self.scale,
-                        &decent_scale::LCD_DISABLE,
-                        out,
-                    ),
+                    MachineState::Idle => {
+                        Self::push_decent_scale_write(
+                            &self.scale,
+                            &Self::lcd_enable_bytes(self.weight_unit_pref),
+                            out,
+                        );
+                        // Mirror the LCD-enable wiring for the Skale II:
+                        // legacy de1app fires `ED EC` on the same "scale is
+                        // present + machine is Idle" trigger. Each push is
+                        // separately capability-gated, so non-Skale scales
+                        // see no writes here.
+                        Self::push_skale_write(&self.scale, &[skale::CMD_SCREEN_ON], out);
+                        Self::push_skale_write(&self.scale, &[skale::CMD_DISPLAY_WEIGHT], out);
+                        if matches!(self.weight_unit_pref, WeightUnit::Grams) {
+                            Self::push_skale_write(
+                                &self.scale,
+                                &[skale::CMD_ENABLE_GRAMS],
+                                out,
+                            );
+                            // Eureka Precisa / Solo Barista also accept a
+                            // "set unit to grams" command — fire it on
+                            // Idle entry when the pref is grams so the
+                            // on-scale display follows.
+                            Self::push_eureka_precisa_write(
+                                &self.scale,
+                                &eureka_precisa::SET_UNIT_GRAMS,
+                                out,
+                            );
+                        }
+                    }
+                    MachineState::Sleep => {
+                        Self::push_decent_scale_write(
+                            &self.scale,
+                            &decent_scale::LCD_DISABLE,
+                            out,
+                        );
+                        Self::push_skale_write(&self.scale, &[skale::CMD_SCREEN_OFF], out);
+                        // Eureka Precisa auto-off on Sleep is an opt-in
+                        // setting (default off); fire `TURN_OFF` only when
+                        // the user has enabled it.
+                        if self.eureka_precisa_auto_off_on_sleep {
+                            Self::push_eureka_precisa_write(
+                                &self.scale,
+                                &eureka_precisa::TURN_OFF,
+                                out,
+                            );
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -1829,6 +2054,34 @@ impl CremaCore {
         let Some(scale) = &mut self.scale else {
             return;
         };
+        // Per-scale auto-recovery from the weight-notification path.
+        //
+        // - Hiroia Jimmy: if the scale's mode byte (`data[0]`) is `> 0x08`
+        //   the scale has booted in a non-grams unit; reaprime fires a
+        //   toggle-unit and skips parsing this frame
+        //   (`hiroia_scale.dart:131-139`). Crema mirrors that — the toggle
+        //   is queued, and the frame is dropped so a bogus reading doesn't
+        //   reach the shell.
+        // - Difluid: if byte `[17]` of a weight notification is non-zero
+        //   the scale is in a non-grams unit; reaprime re-sends
+        //   `SET_UNIT_GRAMS` (`difluid_scale.dart:147-154`). Crema queues
+        //   the same command but keeps parsing — the weight is still a
+        //   valid numeric reading; it's the unit display that needs
+        //   nudging.
+        if scale.is_hiroia_jimmy()
+            && hiroia_jimmy::is_non_grams_mode(data) == Some(true)
+        {
+            out.commands.push(Command::WriteScale {
+                data: hiroia_jimmy::TOGGLE_UNIT.to_vec(),
+            });
+            return;
+        }
+        if scale.is_difluid() && difluid::is_grams_unit(data) == Some(false) {
+            out.commands.push(Command::WriteScale {
+                data: difluid::SET_UNIT_GRAMS.to_vec(),
+            });
+            // Fall through: the weight bytes themselves are still valid.
+        }
         let Some(reading) = scale.parse_reading(data) else {
             // Not a weight packet — for the Decent Scale, this might be a
             // `0x0A` LCD / heartbeat reply carrying the firmware-version
@@ -3047,6 +3300,272 @@ mod tests {
             })
             .collect();
         assert!(lcd_writes.is_empty(), "unexpected LCD writes: {lcd_writes:?}");
+    }
+
+    // ----- PR G: per-scale parity sweep -----------------------------------
+
+    /// Helper: collect the bytes of every `WriteScale` command in `out`.
+    fn scale_writes(out: &CoreOutput) -> Vec<&[u8]> {
+        out.commands
+            .iter()
+            .filter_map(|c| match c {
+                Command::WriteScale { data } => Some(data.as_slice()),
+                Command::WriteCharacteristic { .. } => None,
+            })
+            .collect()
+    }
+
+    // ----- Skale II LCD auto-policy ---------------------------------------
+
+    #[test]
+    fn enable_skale_lcd_emits_screen_on_and_display_weight() {
+        let mut core = CremaCore::new();
+        core.connect_scale("Skale-9");
+        let out = core.enable_skale_lcd(WeightUnit::Grams);
+        let writes = scale_writes(&out);
+        // Legacy sends `ED` (screen-on) then `EC` (display-weight), in order.
+        // Grams pref also sends `03` (enable-grams).
+        assert_eq!(
+            writes,
+            vec![
+                [skale::CMD_SCREEN_ON].as_slice(),
+                [skale::CMD_DISPLAY_WEIGHT].as_slice(),
+                [skale::CMD_ENABLE_GRAMS].as_slice(),
+            ]
+        );
+    }
+
+    #[test]
+    fn enable_skale_lcd_skips_the_unit_write_when_pref_is_ounces() {
+        let mut core = CremaCore::new();
+        core.connect_scale("Skale-9");
+        let out = core.enable_skale_lcd(WeightUnit::Ounces);
+        let writes = scale_writes(&out);
+        // No `0x03` enable-grams write when the user prefers ounces.
+        assert!(!writes.contains(&[skale::CMD_ENABLE_GRAMS].as_slice()));
+        assert!(writes.contains(&[skale::CMD_SCREEN_ON].as_slice()));
+        assert!(writes.contains(&[skale::CMD_DISPLAY_WEIGHT].as_slice()));
+    }
+
+    #[test]
+    fn disable_skale_lcd_emits_screen_off() {
+        let mut core = CremaCore::new();
+        core.connect_scale("Skale-9");
+        let out = core.disable_skale_lcd();
+        let writes = scale_writes(&out);
+        assert_eq!(writes, vec![[skale::CMD_SCREEN_OFF].as_slice()]);
+    }
+
+    #[test]
+    fn skale_lcd_methods_are_silent_for_a_non_skale_scale() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC");
+        assert!(core.enable_skale_lcd(WeightUnit::Grams).commands.is_empty());
+        assert!(core.disable_skale_lcd().commands.is_empty());
+    }
+
+    #[test]
+    fn entering_idle_auto_enables_the_skale_lcd() {
+        let mut core = CremaCore::new();
+        core.connect_scale("Skale-9");
+        core.on_notification(Source::De1State, &[MachineState::Sleep as u8, 0], 1_000);
+        let out = core.on_notification(
+            Source::De1State,
+            &[MachineState::Idle as u8, 0],
+            2_000,
+        );
+        let writes = scale_writes(&out);
+        assert!(writes.contains(&[skale::CMD_SCREEN_ON].as_slice()));
+        assert!(writes.contains(&[skale::CMD_DISPLAY_WEIGHT].as_slice()));
+    }
+
+    #[test]
+    fn entering_sleep_auto_disables_the_skale_lcd() {
+        let mut core = CremaCore::new();
+        core.connect_scale("Skale-9");
+        core.on_notification(Source::De1State, &[MachineState::Idle as u8, 0], 1_000);
+        let out = core.on_notification(
+            Source::De1State,
+            &[MachineState::Sleep as u8, 0],
+            2_000,
+        );
+        let writes = scale_writes(&out);
+        assert!(writes.contains(&[skale::CMD_SCREEN_OFF].as_slice()));
+    }
+
+    // ----- Eureka Precisa methods + auto-off-on-sleep ---------------------
+
+    #[test]
+    fn turn_off_eureka_precisa_emits_the_known_bytes() {
+        let mut core = CremaCore::new();
+        core.connect_scale("CFS-9002");
+        let out = core.turn_off_eureka_precisa();
+        let writes = scale_writes(&out);
+        assert_eq!(writes, vec![eureka_precisa::TURN_OFF.as_slice()]);
+    }
+
+    #[test]
+    fn solo_barista_accepts_the_eureka_precisa_commands() {
+        // Solo Barista is codec-identical to Eureka Precisa — the same
+        // bytes go out via the `is_eureka_precisa()` gate.
+        let mut core = CremaCore::new();
+        core.connect_scale("LSJ-001");
+        let out = core.turn_off_eureka_precisa();
+        let writes = scale_writes(&out);
+        assert_eq!(writes, vec![eureka_precisa::TURN_OFF.as_slice()]);
+    }
+
+    #[test]
+    fn beep_eureka_precisa_emits_the_known_bytes() {
+        let mut core = CremaCore::new();
+        core.connect_scale("CFS-9002");
+        let out = core.beep_eureka_precisa();
+        let writes = scale_writes(&out);
+        assert_eq!(writes, vec![eureka_precisa::BEEP.as_slice()]);
+    }
+
+    #[test]
+    fn set_eureka_precisa_unit_grams_emits_the_set_unit_bytes() {
+        let mut core = CremaCore::new();
+        core.connect_scale("CFS-9002");
+        let out = core.set_eureka_precisa_unit(WeightUnit::Grams);
+        let writes = scale_writes(&out);
+        assert_eq!(writes, vec![eureka_precisa::SET_UNIT_GRAMS.as_slice()]);
+    }
+
+    #[test]
+    fn set_eureka_precisa_unit_ounces_emits_nothing() {
+        // The Eureka Precisa codec only has a "set to grams" command —
+        // ounces is a no-op (legacy de1app never sends the ounces variant).
+        let mut core = CremaCore::new();
+        core.connect_scale("CFS-9002");
+        let out = core.set_eureka_precisa_unit(WeightUnit::Ounces);
+        assert!(out.commands.is_empty());
+    }
+
+    #[test]
+    fn eureka_precisa_methods_are_silent_for_a_non_eureka_scale() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC");
+        assert!(core.turn_off_eureka_precisa().commands.is_empty());
+        assert!(core.beep_eureka_precisa().commands.is_empty());
+        assert!(core.set_eureka_precisa_unit(WeightUnit::Grams).commands.is_empty());
+    }
+
+    #[test]
+    fn eureka_precisa_auto_off_on_sleep_default_is_false() {
+        let core = CremaCore::new();
+        assert!(!core.eureka_precisa_auto_off_on_sleep());
+    }
+
+    #[test]
+    fn entering_sleep_fires_eureka_turn_off_when_the_opt_in_is_on() {
+        let mut core = CremaCore::new();
+        core.connect_scale("CFS-9002");
+        core.set_eureka_precisa_auto_off_on_sleep(true);
+        core.on_notification(Source::De1State, &[MachineState::Idle as u8, 0], 1_000);
+        let out = core.on_notification(
+            Source::De1State,
+            &[MachineState::Sleep as u8, 0],
+            2_000,
+        );
+        let writes = scale_writes(&out);
+        assert!(writes.contains(&eureka_precisa::TURN_OFF.as_slice()));
+    }
+
+    #[test]
+    fn entering_sleep_does_not_fire_eureka_turn_off_when_the_opt_in_is_off() {
+        let mut core = CremaCore::new();
+        core.connect_scale("CFS-9002");
+        core.on_notification(Source::De1State, &[MachineState::Idle as u8, 0], 1_000);
+        let out = core.on_notification(
+            Source::De1State,
+            &[MachineState::Sleep as u8, 0],
+            2_000,
+        );
+        let writes = scale_writes(&out);
+        assert!(!writes.contains(&eureka_precisa::TURN_OFF.as_slice()));
+    }
+
+    // ----- Hiroia Jimmy toggle-unit + auto-recovery -----------------------
+
+    #[test]
+    fn toggle_hiroia_jimmy_unit_emits_the_known_bytes() {
+        let mut core = CremaCore::new();
+        core.connect_scale("HIROIA JIMMY-X");
+        let out = core.toggle_hiroia_jimmy_unit();
+        let writes = scale_writes(&out);
+        assert_eq!(writes, vec![hiroia_jimmy::TOGGLE_UNIT.as_slice()]);
+    }
+
+    #[test]
+    fn toggle_hiroia_jimmy_unit_is_silent_for_a_non_hiroia_scale() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC");
+        assert!(core.toggle_hiroia_jimmy_unit().commands.is_empty());
+    }
+
+    #[test]
+    fn a_hiroia_non_grams_frame_triggers_an_auto_recovery_toggle() {
+        let mut core = CremaCore::new();
+        core.connect_scale("HIROIA JIMMY-X");
+        // Mode byte > 0x08 = non-grams unit; reaprime fires TOGGLE_UNIT.
+        let frame = [0x09u8, 0, 0, 0, 0xB4, 0x00, 0x00];
+        let out = core.on_notification(Source::ScaleWeight, &frame, 1_000);
+        let writes = scale_writes(&out);
+        assert!(writes.contains(&hiroia_jimmy::TOGGLE_UNIT.as_slice()));
+    }
+
+    #[test]
+    fn a_hiroia_grams_frame_does_not_trigger_an_auto_recovery() {
+        let mut core = CremaCore::new();
+        core.connect_scale("HIROIA JIMMY-X");
+        // Mode byte 0x00 = grams; no recovery write.
+        let frame = [0x00u8, 0, 0, 0, 0xB4, 0x00, 0x00];
+        let out = core.on_notification(Source::ScaleWeight, &frame, 1_000);
+        let writes = scale_writes(&out);
+        assert!(!writes.contains(&hiroia_jimmy::TOGGLE_UNIT.as_slice()));
+    }
+
+    // ----- Difluid SET_UNIT_GRAMS auto-recovery ---------------------------
+
+    #[test]
+    fn set_difluid_unit_grams_emits_the_known_bytes() {
+        let mut core = CremaCore::new();
+        core.connect_scale("Microbalance-X");
+        let out = core.set_difluid_unit_grams();
+        let writes = scale_writes(&out);
+        assert_eq!(writes, vec![difluid::SET_UNIT_GRAMS.as_slice()]);
+    }
+
+    #[test]
+    fn set_difluid_unit_grams_is_silent_for_a_non_difluid_scale() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC");
+        assert!(core.set_difluid_unit_grams().commands.is_empty());
+    }
+
+    #[test]
+    fn a_difluid_non_grams_frame_triggers_an_auto_recovery_set_unit() {
+        let mut core = CremaCore::new();
+        core.connect_scale("Microbalance-X");
+        // 19-byte frame, byte [17] = 0x01 (non-grams unit).
+        let mut frame = [0u8; 19];
+        frame[17] = 0x01;
+        let out = core.on_notification(Source::ScaleWeight, &frame, 1_000);
+        let writes = scale_writes(&out);
+        assert!(writes.contains(&difluid::SET_UNIT_GRAMS.as_slice()));
+    }
+
+    #[test]
+    fn a_difluid_grams_frame_does_not_trigger_an_auto_recovery() {
+        let mut core = CremaCore::new();
+        core.connect_scale("Microbalance-X");
+        // 19-byte frame, byte [17] = 0x00 (grams unit).
+        let frame = [0u8; 19];
+        let out = core.on_notification(Source::ScaleWeight, &frame, 1_000);
+        let writes = scale_writes(&out);
+        assert!(!writes.contains(&difluid::SET_UNIT_GRAMS.as_slice()));
     }
 
     #[test]

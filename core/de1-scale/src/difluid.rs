@@ -45,6 +45,27 @@ pub fn parse_weight(data: &[u8]) -> Option<f32> {
     Some(raw as f32 / 10.0)
 }
 
+/// Whether the Difluid is currently displaying grams.
+///
+/// Byte `[17]` of a weight notification is the unit flag — `0` for grams,
+/// non-zero for ounces / pounds / ml. Returns `None` if `data` is too short
+/// to carry the flag (matches the [`parse_weight`] length gate). Returns
+/// `Some(false)` for a non-grams reading, which is the signal the
+/// auto-recovery policy uses to re-send [`SET_UNIT_GRAMS`].
+///
+/// **Defer to reaprime.** Reaprime's parse path
+/// (`reaprime/lib/src/models/device/impl/difluid/difluid_scale.dart:147-154`)
+/// fires `SET_UNIT_GRAMS` whenever `data[17] != 0`; legacy de1app sends
+/// `SET_UNIT_GRAMS` once at connect and never checks again. Crema mirrors
+/// reaprime's behaviour at the shell layer (see `CremaCore::on_notification`).
+#[must_use]
+pub fn is_grams_unit(data: &[u8]) -> Option<bool> {
+    if data.len() < 19 {
+        return None;
+    }
+    Some(data[17] == 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -88,6 +109,29 @@ mod tests {
     /// The Difluid protocol has no sign field — bytes 5–8 are an unsigned
     /// `u32`, so a negative weight cannot be represented and the largest count
     /// `0xFFFFFFFF` decodes as a large positive number rather than wrapping.
+    #[test]
+    fn is_grams_unit_true_for_zero_byte_17() {
+        // Reaprime's `data[17] != 0` check: byte [17] == 0 means grams.
+        let packet = [0u8; 19];
+        assert_eq!(is_grams_unit(&packet), Some(true));
+    }
+
+    #[test]
+    fn is_grams_unit_false_for_a_non_grams_unit_byte() {
+        // Any non-zero byte means the scale is in a non-grams unit and the
+        // auto-recovery path should re-send SET_UNIT_GRAMS.
+        let mut packet = [0u8; 19];
+        packet[17] = 0x01;
+        assert_eq!(is_grams_unit(&packet), Some(false));
+        packet[17] = 0xFF;
+        assert_eq!(is_grams_unit(&packet), Some(false));
+    }
+
+    #[test]
+    fn is_grams_unit_rejects_a_short_packet() {
+        assert_eq!(is_grams_unit(&[0u8; 18]), None);
+    }
+
     #[test]
     fn the_protocol_cannot_represent_a_negative_weight() {
         let mut packet = [0u8; 19];

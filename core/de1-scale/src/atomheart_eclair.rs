@@ -10,11 +10,27 @@
 use std::time::Duration;
 
 /// GATT service UUID.
-pub const SERVICE_UUID: &str = "b905eaea-2e63-0e04-7582-7913f10d8f81";
+///
+/// **PR G — adopted reaprime's UUID.** Legacy de1app declares
+/// `B905EAEA-2E63-0E04-7582-7913F10D8F81` (`de1plus/machine.tcl:93`);
+/// reaprime declares `b905eaea-6c7e-4f73-b43d-2cdfcab29570`
+/// (`reaprime/lib/src/models/device/impl/atomheart/atomheart_scale.dart:19`).
+/// Both share the same first 32 bits (`b905eaea`) so vendor identity is
+/// consistent — one is wrong on the lower 96 bits. Per PR G's "defer to
+/// reaprime when the two disagree and reaprime isn't provably buggy" rule,
+/// Crema adopts reaprime's UUID. Open question: needs sniffer verification
+/// against a real Eclair (see docs/30 §"Open questions" §1).
+pub const SERVICE_UUID: &str = "b905eaea-6c7e-4f73-b43d-2cdfcab29570";
 /// Characteristic the scale notifies weight on.
-pub const NOTIFY_UUID: &str = "ad736c5f-bbc9-1f96-d304-cb5d5f41e160";
+///
+/// Reaprime's data characteristic, paired with the reaprime SERVICE_UUID
+/// above (`atomheart_scale.dart:21`): `b905eaeb-6c7e-4f73-b43d-2cdfcab29570`.
+pub const NOTIFY_UUID: &str = "b905eaeb-6c7e-4f73-b43d-2cdfcab29570";
 /// Characteristic commands are written to.
-pub const COMMAND_UUID: &str = "4f9a45ba-8e1b-4e07-e157-0814d393b968";
+///
+/// Reaprime's command characteristic, paired with the reaprime SERVICE_UUID
+/// above (`atomheart_scale.dart:23`): `b905eaec-6c7e-4f73-b43d-2cdfcab29570`.
+pub const COMMAND_UUID: &str = "b905eaec-6c7e-4f73-b43d-2cdfcab29570";
 
 /// Command: tare (also resets the timer).
 pub const TARE: [u8; 3] = [0x54, 0x01, 0x01];
