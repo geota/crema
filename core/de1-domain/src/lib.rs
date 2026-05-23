@@ -18,6 +18,9 @@
 //! - [`steam`] — the [`SteamMonitor`] state machine, the sibling for steam
 //!   sessions, eco mode, and steam-clog detection.
 //! - [`history`] — [`StoredShot`], a completed shot persisted to history.
+//! - [`history_import`] / [`history_export`] — legacy `.shot` and modern v2
+//!   `.shot.json` importers, plus the symmetric v2 exporter so a shell can
+//!   share / upload a Crema shot in the community contract.
 //! - [`stop`] — [`AutoStop`], the stop-at-weight / stop-at-volume controller.
 //! - [`flow`] — [`FlowEstimator`], robust weight/mass-flow estimation for SAW.
 //! - [`filter`] — [`median`](filter::median) computation, for smoothing a
@@ -32,6 +35,7 @@ pub mod error;
 pub mod filter;
 pub mod flow;
 pub mod history;
+pub mod history_export;
 pub mod history_import;
 pub mod profile;
 pub mod profile_bounds;
@@ -55,6 +59,7 @@ pub use profile::{
     AssembledProfile, BeverageType, Compare, ExitCondition, ExitMetric, Limiter, Profile,
     ProfileStep, Pump, TempSensor, Transition,
 };
+pub use history_export::export_v2_json_shot;
 pub use history_import::{import_legacy_tcl_shot, import_v2_json_shot};
 pub use profile_import::{export_v2_json, import_legacy_tcl, import_v2_json};
 pub use settings_import::{import_settings_tdb, ImportedDe1AppSettings};
