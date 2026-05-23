@@ -257,6 +257,61 @@ pub fn brew_ratio(dose: f32, yield_out: f32) -> Option<f32> {
     de1_domain::brew_ratio(dose, yield_out)
 }
 
+// ─── Unit conversions (audit #1) ────────────────────────────────────────
+//
+// Pure `f32 → f32` math, mirroring `de1_domain::units`. The shell's
+// `$lib/settings/format` keeps the unit-label string, the `—` placeholder,
+// and the per-dimension decimal precision; it reaches here only for the
+// numeric conversion so every shell trusts the same constants.
+
+/// Convert a weight in grams to ounces (`g × 0.035274`).
+#[wasm_bindgen]
+pub fn grams_to_oz(grams: f32) -> f32 {
+    de1_domain::grams_to_oz(grams)
+}
+
+/// Convert a weight in ounces to grams (`oz × 28.3495`).
+#[wasm_bindgen]
+pub fn oz_to_grams(oz: f32) -> f32 {
+    de1_domain::oz_to_grams(oz)
+}
+
+/// Convert a temperature in Celsius to Fahrenheit (`°C × 9/5 + 32`).
+#[wasm_bindgen]
+pub fn celsius_to_fahrenheit(celsius: f32) -> f32 {
+    de1_domain::celsius_to_fahrenheit(celsius)
+}
+
+/// Convert a temperature in Fahrenheit to Celsius (`(°F − 32) × 5/9`).
+#[wasm_bindgen]
+pub fn fahrenheit_to_celsius(fahrenheit: f32) -> f32 {
+    de1_domain::fahrenheit_to_celsius(fahrenheit)
+}
+
+/// Convert a pressure in bar to psi (`bar × 14.5038`).
+#[wasm_bindgen]
+pub fn bar_to_psi(bar: f32) -> f32 {
+    de1_domain::bar_to_psi(bar)
+}
+
+/// Convert a pressure in psi to bar (`psi × 0.0689476`).
+#[wasm_bindgen]
+pub fn psi_to_bar(psi: f32) -> f32 {
+    de1_domain::psi_to_bar(psi)
+}
+
+/// Convert a volume in mL to US fluid ounces (`mL × 0.033814`).
+#[wasm_bindgen]
+pub fn ml_to_fl_oz(ml: f32) -> f32 {
+    de1_domain::ml_to_fl_oz(ml)
+}
+
+/// Convert a volume in US fluid ounces to mL (`fl oz × 29.5735`).
+#[wasm_bindgen]
+pub fn fl_oz_to_ml(fl_oz: f32) -> f32 {
+    de1_domain::fl_oz_to_ml(fl_oz)
+}
+
 /// Format the Bookoo scale's `u16` firmware version as a `"M.m.p"`
 /// string (e.g. `141` → `"1.4.1"`). The Bookoo encodes its firmware as
 /// `major × 100 + minor × 10 + patch`. Centralised here so every shell

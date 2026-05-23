@@ -30,6 +30,16 @@ import type {
 	VolumeUnit,
 	WeightUnit
 } from './store.svelte';
+import {
+	bar_to_psi as wasmBarToPsi,
+	celsius_to_fahrenheit as wasmCelsiusToFahrenheit,
+	fahrenheit_to_celsius as wasmFahrenheitToCelsius,
+	fl_oz_to_ml as wasmFlOzToMl,
+	grams_to_oz as wasmGramsToOz,
+	ml_to_fl_oz as wasmMlToFlOz,
+	oz_to_grams as wasmOzToGrams,
+	psi_to_bar as wasmPsiToBar
+} from '$lib/wasm/de1_wasm';
 
 /** The placeholder shown for a missing reading — matches the dashboards. */
 const DASH = '—';
@@ -53,7 +63,10 @@ function present(v: number | null | undefined): v is number {
 
 /**
  * Convert a weight (canonical grams) to the chosen {@link WeightUnit}.
- * `g` shows grams to one decimal; `oz` converts (1 oz = 28.3495 g) to two.
+ * `g` shows grams to one decimal; `oz` converts via the core's
+ * `grams_to_oz` (1 oz = 28.3495 g) to two. The arithmetic lives in
+ * `de1_domain::units` so every shell shares one set of constants — see
+ * `docs/26-shell-to-core-audit.md` item #1.
  *
  * **The unit label is always honest.** A missing reading formats the value
  * as `—` but the `unit` still reflects the user's pref — otherwise a
@@ -64,26 +77,28 @@ function present(v: number | null | undefined): v is number {
 export function convertWeight(grams: number | null | undefined, unit: WeightUnit): Measurement {
 	const label = unit === 'oz' ? 'oz' : 'g';
 	if (!present(grams)) return { value: DASH, unit: label };
-	if (unit === 'oz') return { value: (grams / 28.3495).toFixed(2), unit: 'oz' };
+	if (unit === 'oz') return { value: wasmGramsToOz(grams).toFixed(2), unit: 'oz' };
 	return { value: grams.toFixed(1), unit: 'g' };
 }
 
 /**
  * Convert a temperature (canonical °C) to the chosen {@link TempUnit}.
- * `F` converts via `°C × 9/5 + 32`. Both show one decimal. Unit label
- * stays honest when the value is missing — see {@link convertWeight}.
+ * `F` converts via the core's `celsius_to_fahrenheit` (`°C × 9/5 + 32`).
+ * Both show one decimal. Unit label stays honest when the value is
+ * missing — see {@link convertWeight}.
  */
 export function convertTemp(celsius: number | null | undefined, unit: TempUnit): Measurement {
 	const label = unit === 'F' ? '°F' : '°C';
 	if (!present(celsius)) return { value: DASH, unit: label };
-	if (unit === 'F') return { value: (celsius * 1.8 + 32).toFixed(1), unit: '°F' };
+	if (unit === 'F') return { value: wasmCelsiusToFahrenheit(celsius).toFixed(1), unit: '°F' };
 	return { value: celsius.toFixed(1), unit: '°C' };
 }
 
 /**
  * Convert a pressure (canonical bar) to the chosen {@link PressureUnit}.
- * `psi` converts (1 bar = 14.5038 psi). `bar` shows one decimal, `psi` none.
- * Unit label stays honest when the value is missing — see {@link convertWeight}.
+ * `psi` converts via the core's `bar_to_psi` (1 bar = 14.5038 psi).
+ * `bar` shows one decimal, `psi` none. Unit label stays honest when the
+ * value is missing — see {@link convertWeight}.
  */
 export function convertPressure(
 	bar: number | null | undefined,
@@ -91,20 +106,21 @@ export function convertPressure(
 ): Measurement {
 	const label = unit === 'psi' ? 'psi' : 'bar';
 	if (!present(bar)) return { value: DASH, unit: label };
-	if (unit === 'psi') return { value: String(Math.round(bar * 14.5038)), unit: 'psi' };
+	if (unit === 'psi') return { value: String(Math.round(wasmBarToPsi(bar))), unit: 'psi' };
 	return { value: bar.toFixed(1), unit: 'bar' };
 }
 
 /**
  * Convert a volume (canonical mL) to the chosen {@link VolumeUnit}.
- * `floz` converts (1 US fl oz = 29.5735 mL) to one decimal; `ml` shows a
- * whole number — a tank volume is never meaningfully fractional. Unit
- * label stays honest when the value is missing — see {@link convertWeight}.
+ * `floz` converts via the core's `ml_to_fl_oz` (1 US fl oz = 29.5735 mL)
+ * to one decimal; `ml` shows a whole number — a tank volume is never
+ * meaningfully fractional. Unit label stays honest when the value is
+ * missing — see {@link convertWeight}.
  */
 export function convertVolume(ml: number | null | undefined, unit: VolumeUnit): Measurement {
 	const label = unit === 'floz' ? 'fl oz' : 'mL';
 	if (!present(ml)) return { value: DASH, unit: label };
-	if (unit === 'floz') return { value: (ml / 29.5735).toFixed(1), unit: 'fl oz' };
+	if (unit === 'floz') return { value: wasmMlToFlOz(ml).toFixed(1), unit: 'fl oz' };
 	return { value: String(Math.round(ml)), unit: 'mL' };
 }
 
@@ -137,24 +153,24 @@ export function formatVolume(ml: number | null | undefined, unit: VolumeUnit): s
 // Inverse conversion (user-chosen → canonical) — for editable inputs
 // ────────────────────────────────────────────────────────────────────────────
 
-/** Convert a display-unit weight back to canonical grams. */
+/** Convert a display-unit weight back to canonical grams (uses the core's `oz_to_grams`). */
 export function toCanonicalWeight(displayValue: number, unit: WeightUnit): number {
-	return unit === 'oz' ? displayValue * 28.3495 : displayValue;
+	return unit === 'oz' ? wasmOzToGrams(displayValue) : displayValue;
 }
 
-/** Convert a display-unit temperature back to canonical °C. */
+/** Convert a display-unit temperature back to canonical °C (uses the core's `fahrenheit_to_celsius`). */
 export function toCanonicalTemp(displayValue: number, unit: TempUnit): number {
-	return unit === 'F' ? (displayValue - 32) / 1.8 : displayValue;
+	return unit === 'F' ? wasmFahrenheitToCelsius(displayValue) : displayValue;
 }
 
-/** Convert a display-unit pressure back to canonical bar. */
+/** Convert a display-unit pressure back to canonical bar (uses the core's `psi_to_bar`). */
 export function toCanonicalPressure(displayValue: number, unit: PressureUnit): number {
-	return unit === 'psi' ? displayValue / 14.5038 : displayValue;
+	return unit === 'psi' ? wasmPsiToBar(displayValue) : displayValue;
 }
 
-/** Convert a display-unit volume back to canonical mL. */
+/** Convert a display-unit volume back to canonical mL (uses the core's `fl_oz_to_ml`). */
 export function toCanonicalVolume(displayValue: number, unit: VolumeUnit): number {
-	return unit === 'floz' ? displayValue * 29.5735 : displayValue;
+	return unit === 'floz' ? wasmFlOzToMl(displayValue) : displayValue;
 }
 
 // ────────────────────────────────────────────────────────────────────────────
