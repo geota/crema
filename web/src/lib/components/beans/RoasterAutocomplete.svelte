@@ -26,6 +26,7 @@
 		resolved,
 		roasters,
 		placeholder = '',
+		invalid = false,
 		onChange,
 		onResolve,
 		onCommitTyped
@@ -38,6 +39,12 @@
 		roasters: Roaster[];
 		/** Input placeholder text. */
 		placeholder?: string;
+		/**
+		 * When true, paint the input with the same red required-field
+		 * border the parent uses on its own inputs (so the autocomplete
+		 * participates in the editor's save-attempt validation).
+		 */
+		invalid?: boolean;
 		/** Fires on every keystroke with the new free-text value. */
 		onChange: (next: string) => void;
 		/**
@@ -155,7 +162,8 @@
 <div class="ra-wrap">
 	<input
 		bind:this={inputEl}
-		class="be-input"
+		class="ra-input"
+		class:is-invalid={invalid}
 		type="text"
 		{value}
 		{placeholder}
@@ -214,6 +222,32 @@
 	.ra-wrap {
 		position: relative;
 		width: 100%;
+	}
+	/*
+	 * The autocomplete's input must look identical to the surrounding
+	 * `.be-input` text inputs in BeanEditor.svelte. Because Svelte scopes
+	 * CSS per-component we can't reuse that class from here, so the
+	 * declarations below are a faithful duplicate of those rules (kept in
+	 * sync by-eye — they're short).
+	 */
+	.ra-input {
+		background: rgba(var(--tint-rgb), 0.04);
+		border: 1px solid rgba(var(--tint-rgb), 0.12);
+		border-radius: var(--radius-sm);
+		color: var(--fg-1);
+		font-family: var(--font-sans);
+		font-size: 13px;
+		padding: 8px 10px;
+		outline: 0;
+		color-scheme: dark;
+		width: 100%;
+		box-sizing: border-box;
+	}
+	.ra-input:focus {
+		border-color: var(--copper-400);
+	}
+	.ra-input.is-invalid {
+		border-color: var(--danger, #e3553c);
 	}
 	.ra-popover {
 		position: absolute;
