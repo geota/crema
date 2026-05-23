@@ -430,12 +430,12 @@
 		background: var(--copper-600);
 	}
 	:global(.st-content .st-btn-danger) {
-		background: rgba(167, 64, 64, 0.1);
-		border-color: rgba(167, 64, 64, 0.35);
+		background: rgba(var(--danger-rgb), 0.1);
+		border-color: rgba(var(--danger-rgb), 0.35);
 		color: var(--danger);
 	}
 	:global(.st-content .st-btn-danger:hover:not(:disabled)) {
-		background: rgba(167, 64, 64, 0.18);
+		background: rgba(var(--danger-rgb), 0.18);
 	}
 
 	:global(.st-content .st-valuechip) {
