@@ -461,6 +461,16 @@ export interface CremaCore {
 	 * carries the firmware's `+1000` user-committed marker.
 	 */
 	setHeaterVoltage(volts: 120 | 230): Promise<CoreOutput>;
+	/**
+	 * Reset 8 machine settings to factory baseline — mirrors reaprime's
+	 * `DELETE /api/v1/machine/settings/reset`. Emits 8 sequential MMR
+	 * writes (fan threshold, hot-water idle temp, heater phase 1/2 flows,
+	 * espresso warmup timeout, refill kit auto, flow-calibration
+	 * multiplier, steam purge mode). Profiles, shot history, and app
+	 * preferences are untouched. See `docs/27-write-side-gaps.md`
+	 * appendix "settings-reset baseline values".
+	 */
+	resetMachineDefaults(): Promise<CoreOutput>;
 	/** Set the cup-warmer temperature, °C (Bengle models only). */
 	setCupWarmerTemperature(tempC: number): Promise<CoreOutput>;
 	/** Set the flow-calibration multiplier (scaled `int(1000 × multiplier)`). */
@@ -779,6 +789,11 @@ async function createCore(): Promise<CremaCore> {
 			// the last-line guard and the caller should surface it as a
 			// toast / banner.
 			return parseOutput(bridge.set_heater_voltage(volts));
+		},
+		async resetMachineDefaults() {
+			// Bridge returns `Result<String, String>`; today infallible but
+			// shaped for forward symmetry with `setHeaterVoltage`.
+			return parseOutput(bridge.reset_machine_defaults());
 		},
 		async setCupWarmerTemperature(tempC) {
 			return parseOutput(bridge.set_cup_warmer_temperature(tempC));
