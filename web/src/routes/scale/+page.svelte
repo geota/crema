@@ -186,17 +186,40 @@
 		app?.setScaleAutoStop(autoStopOn ? 0 : 1);
 	}
 
-	// ── Reset-peak / Start-timer — UI-only ───────────────────────────────
-	// TODO: no core backing — the core exposes no scale peak-reset or
-	// built-in-timer start command. Local UI state only.
-	let timerRunning = $state(false);
+	// ── Reset-peak — UI-only ─────────────────────────────────────────────
+	// TODO: no core backing — the core exposes no scale peak-reset
+	// command. Local UI state only.
 	function resetPeak(): void {
 		// TODO: wire to a scale peak-reset command when the core exposes one.
 	}
+	// ── Manual scale timer (#34/#35/#36) ────────────────────────────────
+	// Auto-wiring on shot start/stop is already in the orchestrator; these
+	// three buttons surface manual control for milk-only sessions where
+	// no shot fires. Capability-gated on `reports_timer` (the Bookoo
+	// today); other scales hide the row entirely.
+	const timerSupported = $derived(caps?.reports_timer === true);
+	/** Whether timer commands can be issued — only over a live scale link. */
+	const timerActionable = $derived(timerSupported && connected);
+	/** Local "we asked it to run" hint — the scale doesn't echo timer state. */
+	let timerRunning = $state(false);
+	function startTimer(): void {
+		if (!timerActionable) return;
+		void app?.startTimer();
+		timerRunning = true;
+	}
+	function stopTimer(): void {
+		if (!timerActionable) return;
+		void app?.stopTimer();
+		timerRunning = false;
+	}
+	function resetTimer(): void {
+		if (!timerActionable) return;
+		void app?.resetTimer();
+		timerRunning = false;
+	}
 	function toggleTimer(): void {
-		// TODO: wire to the scale's built-in timer when the core exposes a
-		// start/stop command (the scale already *reports* `device_timer_ms`).
-		timerRunning = !timerRunning;
+		if (timerRunning) stopTimer();
+		else startTimer();
 	}
 
 	// Format the hero readout in the chosen weight unit (D1) — leading sign
@@ -358,10 +381,32 @@
 				<i class="ph ph-arrow-clockwise" aria-hidden="true"></i>
 				<span>Reset peak</span>
 			</button>
-			<button class="sc-secondary" onclick={toggleTimer}>
-				<i class="ph ph-timer" aria-hidden="true"></i>
-				<span>{timerRunning ? 'Stop timer' : 'Start timer'}</span>
-			</button>
+			{#if timerSupported}
+				<!-- Manual scale-timer controls — surface for milk-only
+				     sessions where the shot-state auto-wiring doesn't fire.
+				     The toggle is the primary affordance; Reset zeroes
+				     the count without changing the run state. Both are
+				     disabled when the link is down. -->
+				<div class="sc-timer-row">
+					<button
+						class="sc-secondary sc-timer-toggle"
+						onclick={toggleTimer}
+						disabled={!timerActionable}
+					>
+						<i class="ph ph-timer" aria-hidden="true"></i>
+						<span>{timerRunning ? 'Stop timer' : 'Start timer'}</span>
+					</button>
+					<button
+						class="sc-secondary sc-timer-reset"
+						onclick={resetTimer}
+						disabled={!timerActionable}
+						aria-label="Reset scale timer"
+					>
+						<i class="ph ph-arrow-counter-clockwise" aria-hidden="true"></i>
+						<span>Reset</span>
+					</button>
+				</div>
+			{/if}
 		</div>
 	</div>
 
@@ -804,6 +849,20 @@
 	}
 	.sc-secondary i {
 		font-size: 14px;
+	}
+	.sc-secondary:disabled {
+		opacity: 0.45;
+		cursor: not-allowed;
+	}
+	.sc-timer-row {
+		display: flex;
+		gap: 8px;
+	}
+	.sc-timer-row > .sc-timer-toggle {
+		flex: 1 1 auto;
+	}
+	.sc-timer-row > .sc-timer-reset {
+		flex: 0 0 auto;
 	}
 
 	/* Dose helper */
