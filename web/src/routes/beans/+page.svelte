@@ -49,6 +49,13 @@
 	let sortDir = $state<'asc' | 'desc'>('desc');
 	let selectedBeanId = $state<string | null>(null);
 	let showImport = $state(false);
+	/**
+	 * Draft bean for the "New bag" flow. Held off the store until the user
+	 * hits Save in the editor, so an abandoned form leaves no trace (and a
+	 * partially-typed roaster name doesn't pollute the roaster directory).
+	 * When set, the editor mounts in `isNew` mode.
+	 */
+	let newDraft = $state<Bean | null>(null);
 
 	// ── Derived lists ──────────────────────────────────────────────────
 	const allBeans = $derived(library.beans);
@@ -167,10 +174,12 @@
 
 	// ── Card actions ───────────────────────────────────────────────────
 	function newBean(): void {
-		const fresh = blankBean();
-		fresh.name = 'New bag';
-		library.upsertBean(fresh);
-		selectedBeanId = fresh.id;
+		// Don't upsert yet — open the editor in `isNew` mode so the draft
+		// only hits the store on Save. Prevents abandoned-form pollution
+		// (which the legacy `upsertBean(fresh)` here caused — a "New bag"
+		// row appeared the moment the button was clicked, even if the
+		// user closed the drawer right after).
+		newDraft = blankBean();
 	}
 
 	function makeActive(id: string): void {
@@ -595,8 +604,23 @@
 	{/if}
 </div>
 
-<!-- Bean editor drawer -->
-{#if selectedBeanId}
+<!-- Bean editor drawer — new-bag draft mode -->
+{#if newDraft}
+	<BeanEditor
+		bean={newDraft}
+		isNew
+		isActive={false}
+		onClose={() => (newDraft = null)}
+		onMakeActive={() => {}}
+		onSaved={(id) => {
+			newDraft = null;
+			// Re-open in edit mode so the user lands on the persisted record
+			// and can refine without re-typing — matches the "save and stay"
+			// convention from ProfileEditor.
+			selectedBeanId = id;
+		}}
+	/>
+{:else if selectedBeanId}
 	{@const sb = library.getBean(selectedBeanId)}
 	{#if sb}
 		<BeanEditor
