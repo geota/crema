@@ -145,6 +145,49 @@
 		pendingHz = null;
 	}
 
+	// ---- Reset machine settings to factory (MMR baseline) ---------------
+	//
+	// Mirrors reaprime's DELETE /api/v1/machine/settings/reset — re-applies
+	// 8 documented MMR baselines (fan threshold, hot-water idle temp,
+	// heater phase 1/2 flows, espresso warmup timeout, refill kit auto
+	// mode, flow-calibration multiplier, steam purge mode). Less
+	// aggressive UX gate than the heater-voltage modal: blast radius is
+	// "user retunes their settings", not "burned heater", so we use a
+	// plain `window.confirm` instead of type-to-confirm.
+
+	/** Most-recent inline feedback for the reset action; cleared after a few seconds. */
+	let resetFeedback = $state<string | null>(null);
+	/** Whether the reset is mid-flight (prevents double-clicks). */
+	let resetBusy = $state(false);
+
+	/** Whether the DE1 is connected — disables the reset button otherwise. */
+	const connected = $derived(snapshot.de1State === 'ready');
+
+	async function resetMachineSettings(): Promise<void> {
+		if (!app || resetBusy) return;
+		if (
+			typeof window === 'undefined' ||
+			!window.confirm('Reset the 8 DE1 machine settings to factory defaults?')
+		) {
+			return;
+		}
+		resetBusy = true;
+		resetFeedback = null;
+		try {
+			await app.resetMachineDefaults();
+			resetFeedback = 'Machine settings reset to defaults';
+		} catch (err) {
+			resetFeedback = `Reset failed: ${err instanceof Error ? err.message : String(err)}`;
+			console.warn('resetMachineDefaults failed:', err);
+		} finally {
+			resetBusy = false;
+			// Clear the inline message after ~4 s so it doesn't linger.
+			window.setTimeout(() => {
+				resetFeedback = null;
+			}, 4000);
+		}
+	}
+
 	// ---- Capture replay (developer tool) ---------------------------------
 
 	/** The live replay status from the shared UI state, or `null` if none. */
@@ -381,6 +424,24 @@
 			</div>
 		{/snippet}
 	</StRow>
+	<StRow
+		title="Reset machine settings to factory"
+		sub="Re-applies fan threshold, idle temp, heater flows, refill kit auto mode, flow estimate, steam purge. Does NOT touch profiles, history, or app preferences."
+	>
+		{#snippet control()}
+			<StButton
+				label={resetBusy ? 'Resetting…' : 'Reset…'}
+				icon="arrow-counter-clockwise"
+				disabled={!connected || resetBusy}
+				onClick={resetMachineSettings}
+			/>
+		{/snippet}
+		{#snippet hint()}
+			{#if resetFeedback}
+				<span class="adv-reset-feedback">{resetFeedback}</span>
+			{/if}
+		{/snippet}
+	</StRow>
 </StGroup>
 
 <StGroup title="Reset">
@@ -484,5 +545,14 @@
 		border-radius: 6px;
 		background: rgba(var(--tint-rgb), 0.06);
 		border: 1px solid rgba(var(--tint-rgb), 0.12);
+	}
+
+	/* ── Reset-feedback inline note ───────────────────────────────────────
+	   Ephemeral status line shown under "Reset machine settings to factory"
+	   for a few seconds after the action — green for success, the same
+	   muted tone as the rest of the row otherwise. */
+	.adv-reset-feedback {
+		color: var(--success);
+		font-variant-numeric: tabular-nums;
 	}
 </style>

@@ -883,6 +883,110 @@ impl CremaCore {
         Ok(mmr_write_command(MmrRegister::HeaterVoltage, wire, 4))
     }
 
+    /// Reset 8 machine settings to factory baseline (legacy reaprime
+    /// `DELETE /api/v1/machine/settings/reset`).
+    ///
+    /// Re-applies the documented baseline for: fan threshold, hot-water
+    /// idle temp, heater phase 1/2 flows, espresso warmup timeout,
+    /// refill kit auto mode, flow-calibration multiplier, and steam
+    /// purge mode. Every value is the post-clamp, on-the-wire baseline
+    /// that reaprime ends up writing — see the
+    /// `RESET_*` consts below and `docs/27-write-side-gaps.md`
+    /// appendix "settings-reset baseline values".
+    ///
+    /// Emits 8 [`Command::WriteCharacteristic`] entries in one
+    /// [`CoreOutput`]; the shell submits them serially. Order matches
+    /// reaprime's `Defaults.applySettingsDefaults`
+    /// (`de1_controller.defaults.dart:39-51`) but is not functionally
+    /// significant — the writes are independent.
+    ///
+    /// No rollback on partial failure (matches reaprime). Profiles,
+    /// shot history, and app preferences are untouched: this only
+    /// re-writes 8 MMR registers on the DE1 itself.
+    ///
+    /// **Fan threshold gotcha:** reaprime's source reads `55 °C` but
+    /// MMR `fanThreshold` clamps `max: 50`, so `_writeMMRInt` silently
+    /// emits `50` on the wire. Crema writes `50` directly so the
+    /// firmware ends up with the same value any user sees via
+    /// read-back. See the appendix's "Important gotcha" note.
+    ///
+    /// Refused while a firmware upload is in progress
+    /// (see [`firmware_locks_writes`](Self::firmware_locks_writes)) —
+    /// emits one [`Event::FirmwareLockoutHit`] and no commands.
+    ///
+    /// # Errors
+    ///
+    /// Infallible today; the [`Result`] mirrors
+    /// [`set_heater_voltage`](Self::set_heater_voltage) for forward
+    /// symmetry with future per-field validation.
+    pub fn reset_machine_defaults(&self) -> Result<CoreOutput, AppError> {
+        // Baselines — match reaprime/lib/src/controllers/
+        // de1_controller.defaults.dart:39-51 *post-clamp*. See
+        // docs/27 appendix "settings-reset baseline values" for the
+        // wire encoding of every value below.
+        //
+        // Fan: reaprime writes 55, gets clamped to 50 by `_writeMMRInt`
+        // (MMRItem.fanThreshold max=50). Crema emits 50 directly.
+        const RESET_FAN_THRESHOLD_C: u32 = 50;
+        // Hot-water idle temp: 95 °C, wire `°C × 10` = 950, 4-byte LE.
+        const RESET_HOT_WATER_IDLE_TEMP_RAW: u32 = 950;
+        // Phase-1/2 flows: 2.0 / 4.0 ml/s, wire `ml/s × 10` = 20 / 40, 4-byte LE.
+        const RESET_PHASE_1_FLOW_RAW: u32 = 20;
+        const RESET_PHASE_2_FLOW_RAW: u32 = 40;
+        // Espresso warmup timeout: 4.0 s, wire `s × 10` = 40, 4-byte LE.
+        const RESET_ESPRESSO_WARMUP_TIMEOUT_RAW: u32 = 40;
+        // Refill kit: 2 = auto, 4-byte LE.
+        const RESET_REFILL_KIT_RAW: u32 = 2;
+        // Cal-flow-est: 1.0, wire `× 1000` = 1000, 2-byte LE.
+        const RESET_CAL_FLOW_EST_RAW: u32 = 1000;
+        // Steam purge mode (SteamTwoTapStop register, 0x803850): 0, 4-byte LE bool.
+        const RESET_STEAM_PURGE_MODE_RAW: u32 = 0;
+
+        if let Some(out) = self.refuse_if_firmware_locked("reset_machine_defaults") {
+            return Ok(out);
+        }
+
+        // Eight independent MMR writes, in reaprime's source order. Each
+        // tuple is (register, value, byte_len).
+        let writes: [(MmrRegister, u32, u8); 8] = [
+            (MmrRegister::FanThreshold, RESET_FAN_THRESHOLD_C, 1),
+            (
+                MmrRegister::HotWaterIdleTemp,
+                RESET_HOT_WATER_IDLE_TEMP_RAW,
+                4,
+            ),
+            (MmrRegister::Phase1FlowRate, RESET_PHASE_1_FLOW_RAW, 4),
+            (MmrRegister::Phase2FlowRate, RESET_PHASE_2_FLOW_RAW, 4),
+            (
+                MmrRegister::EspressoWarmupTimeout,
+                RESET_ESPRESSO_WARMUP_TIMEOUT_RAW,
+                4,
+            ),
+            (MmrRegister::RefillKit, RESET_REFILL_KIT_RAW, 4),
+            (
+                MmrRegister::CalibrationFlowMultiplier,
+                RESET_CAL_FLOW_EST_RAW,
+                2,
+            ),
+            (
+                MmrRegister::SteamTwoTapStop,
+                RESET_STEAM_PURGE_MODE_RAW,
+                4,
+            ),
+        ];
+
+        let mut out = CoreOutput::default();
+        for (register, value, byte_len) in writes {
+            let bytes = value.to_le_bytes();
+            let len = usize::from(byte_len.clamp(1, 4));
+            out.commands.push(Command::WriteCharacteristic {
+                target: WriteTarget::De1MmrWrite,
+                data: mmr::write_request(register.address(), &bytes[..len]).to_vec(),
+            });
+        }
+        Ok(out)
+    }
+
     /// Set the cup-warmer plate temperature, in °C (Bengle models only).
     /// MMR `0x803874`, 2-byte. The bridge layer is responsible for gating
     /// this on the model — the firmware accepts the write on any DE1, but it
@@ -3688,6 +3792,62 @@ mod tests {
             &[0xCE, 0x04, 0x00, 0x00],
             "wire payload = 230 + 1000 = 1230, LE"
         );
+    }
+
+    #[test]
+    fn reset_machine_defaults_emits_8_writes_with_known_baselines() {
+        // docs/27 row #53 — settings reset to factory baseline.
+        // Pins the 8 MMR writes byte-for-byte against the documented
+        // baseline (post-clamp wire values, in reaprime's source order).
+        let core = CremaCore::new();
+        let out = core
+            .reset_machine_defaults()
+            .expect("reset_machine_defaults is infallible without a firmware lockout");
+
+        // Each tuple: (register address, byte-len byte, payload bytes).
+        // Payload bytes are little-endian; addresses are big-endian on
+        // the wire (mmr::write_request packs them at offsets 1..4).
+        let expected: [(u32, u8, &[u8]); 8] = [
+            // Fan: 50 °C (post-clamp; reaprime's source says 55).
+            (0x0080_3808, 1, &[0x32]),
+            // HotWaterIdleTemp: 95 °C × 10 = 950 = 0x03B6.
+            (0x0080_3818, 4, &[0xB6, 0x03, 0x00, 0x00]),
+            // Phase1FlowRate: 2.0 × 10 = 20 = 0x14.
+            (0x0080_3810, 4, &[0x14, 0x00, 0x00, 0x00]),
+            // Phase2FlowRate: 4.0 × 10 = 40 = 0x28.
+            (0x0080_3814, 4, &[0x28, 0x00, 0x00, 0x00]),
+            // EspressoWarmupTimeout: 4.0 s × 10 = 40 = 0x28.
+            (0x0080_3838, 4, &[0x28, 0x00, 0x00, 0x00]),
+            // RefillKit: 2 (auto).
+            (0x0080_385C, 4, &[0x02, 0x00, 0x00, 0x00]),
+            // CalFlowEst: 1.0 × 1000 = 1000 = 0x03E8.
+            (0x0080_383C, 2, &[0xE8, 0x03]),
+            // SteamPurgeMode (SteamTwoTapStop): 0.
+            (0x0080_3850, 4, &[0x00, 0x00, 0x00, 0x00]),
+        ];
+
+        assert_eq!(out.commands.len(), expected.len());
+        for (i, (cmd, (addr, byte_len, payload))) in
+            out.commands.iter().zip(expected.iter()).enumerate()
+        {
+            let Command::WriteCharacteristic { target, data } = cmd else {
+                panic!("write #{i}: expected WriteCharacteristic, got {cmd:?}");
+            };
+            assert_eq!(*target, WriteTarget::De1MmrWrite, "write #{i} target");
+            // mmr::write_request packs: [byte_len, addr_be (3 bytes), payload, …].
+            assert_eq!(data[0], *byte_len, "write #{i} byte-len byte");
+            let addr_bytes = [
+                ((addr >> 16) & 0xFF) as u8,
+                ((addr >> 8) & 0xFF) as u8,
+                (addr & 0xFF) as u8,
+            ];
+            assert_eq!(&data[1..4], &addr_bytes, "write #{i} address");
+            assert_eq!(
+                &data[4..4 + payload.len()],
+                *payload,
+                "write #{i} payload"
+            );
+        }
     }
 
     #[test]
