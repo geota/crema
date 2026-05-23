@@ -128,7 +128,22 @@ data class EventShotCompletedInner (
 	/// Total shot duration, milliseconds.
 	val duration: UInt,
 	/// Number of telemetry samples recorded.
-	val sample_count: UInt
+	val sample_count: UInt,
+	/// Peak group pressure observed across every Telemetry sample of the
+	/// shot, bar. `None` when no telemetry arrived. Computed once at the
+	/// core boundary — previously each shell re-iterated the buffered
+	/// series for it.
+	val peak_pressure: Float? = null,
+	/// Peak group-head temperature observed across every Telemetry
+	/// sample of the shot, °C. `None` when no telemetry arrived.
+	val peak_temp: Float? = null,
+	/// Peak scale weight observed across every ScaleReading of the shot,
+	/// grams. `None` when no scale was paired (no readings arrived).
+	val peak_weight: Float? = null,
+	/// The final scale weight observed before the shot ended, grams —
+	/// the "shot yield". `None` when no scale was paired (no readings
+	/// arrived).
+	val final_weight: Float? = null
 )
 
 /// Generated type representing the anonymous struct variant `WaterSessionStarted` of the `Event` Rust enum

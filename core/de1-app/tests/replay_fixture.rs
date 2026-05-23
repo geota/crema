@@ -121,6 +121,32 @@ fn recorded_session_decodes_to_pinned_event_sequence() {
         .cloned()
         .collect();
 
+    // `Event::ShotCompleted` carries derived metrics (peak pressure /
+    // temperature; weights are `None` because the capture has no scale
+    // source). The peak numerics depend on the smoothed telemetry float
+    // values, so the test pins `ShotCompleted` separately by destructuring
+    // for `duration` + `sample_count` and asserting the metrics' presence
+    // shape, rather than baking specific f32 maxima into the expected vec.
+    let stripped: Vec<Event> = non_telemetry
+        .iter()
+        .cloned()
+        .map(|e| match e {
+            Event::ShotCompleted {
+                duration,
+                sample_count,
+                ..
+            } => Event::ShotCompleted {
+                duration,
+                sample_count,
+                peak_pressure: None,
+                peak_temp: None,
+                peak_weight: None,
+                final_weight: None,
+            },
+            other => other,
+        })
+        .collect();
+
     let expected: Vec<Event> = vec![
         Event::MachineStateChanged {
             state: MachineState::Idle,
@@ -174,6 +200,10 @@ fn recorded_session_decodes_to_pinned_event_sequence() {
         Event::ShotCompleted {
             duration: 81_074,
             sample_count: 389,
+            peak_pressure: None,
+            peak_temp: None,
+            peak_weight: None,
+            final_weight: None,
         },
         Event::MachineStateChanged {
             state: MachineState::Sleep,
@@ -182,8 +212,48 @@ fn recorded_session_decodes_to_pinned_event_sequence() {
     ];
 
     assert_eq!(
-        non_telemetry, expected,
+        stripped, expected,
         "non-telemetry event sequence must match the recorded session",
+    );
+
+    // Pin the derived-metrics shape on `ShotCompleted`: the replay carries
+    // no scale source so both weight fields are `None`; the DE1 telemetry
+    // arrived (389 samples) so both pressure / temperature peaks must be
+    // `Some` and within plausible espresso-shot bands. Specific maxima are
+    // intentionally not pinned — they're floats produced by the smoothed
+    // telemetry path and need not be byte-identical across smoothing
+    // tweaks.
+    let shot_completed = non_telemetry
+        .iter()
+        .find(|e| matches!(e, Event::ShotCompleted { .. }))
+        .expect("a ShotCompleted event");
+    let Event::ShotCompleted {
+        peak_pressure,
+        peak_temp,
+        peak_weight,
+        final_weight,
+        ..
+    } = shot_completed
+    else {
+        unreachable!("filtered for ShotCompleted");
+    };
+    let pressure = peak_pressure.expect("telemetry arrived → peak_pressure is Some");
+    let temp = peak_temp.expect("telemetry arrived → peak_temp is Some");
+    assert!(
+        (0.0..=15.0).contains(&pressure),
+        "peak_pressure {pressure} bar should be in a plausible espresso range",
+    );
+    assert!(
+        (50.0..=120.0).contains(&temp),
+        "peak_temp {temp} °C should be in a plausible espresso range",
+    );
+    assert!(
+        peak_weight.is_none(),
+        "no scale source in the capture → peak_weight stays None",
+    );
+    assert!(
+        final_weight.is_none(),
+        "no scale source in the capture → final_weight stays None",
     );
 
     // Cross-check the telemetry split: 1150 telemetry + 20 non-telemetry = 1170.
