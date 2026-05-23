@@ -50,6 +50,8 @@
 	import QuickSheet from './QuickSheet.svelte';
 	import LastShotCard from './LastShotCard.svelte';
 	import PowerButton from '$lib/components/PowerButton.svelte';
+	import { goto } from '$app/navigation';
+	import { resolve } from '$app/paths';
 
 	let {
 		ui
@@ -845,14 +847,24 @@
 						<span>Quick Controls</span>
 					</button>
 				{/if}
-				<!-- TODO: wire to DE1 control — Edit / Switch need the profile model. -->
-				<button class="crema-btn crema-btn-secondaryDark crema-btn-sm">
+				<!--
+					Edit jumps to the profile editor for the active library
+					profile. Disabled when no profile is selected (matches the
+					Coffee button's no-profile gate). "Switch profile" used to
+					live here too — retired since the same affordance is in
+					the Profiles tab + the FavoritesStrip's pinned chips in
+					Quick Controls.
+				-->
+				<button
+					class="crema-btn crema-btn-secondaryDark crema-btn-sm"
+					disabled={!profileStore.activeId}
+					onclick={() => {
+						const id = profileStore.activeId;
+						if (id) void goto(resolve(`/profiles/${encodeURIComponent(id)}/edit`));
+					}}
+				>
 					<i class="ph ph-pencil-simple" aria-hidden="true"></i>
 					<span>Edit</span>
-				</button>
-				<button class="crema-btn crema-btn-secondaryDark crema-btn-sm">
-					<i class="ph ph-shuffle" aria-hidden="true"></i>
-					<span>Switch profile</span>
 				</button>
 			</div>
 		</div>
