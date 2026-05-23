@@ -6,41 +6,107 @@
 	 * (Identity, Dates, Bag, Origin, Tasting, Buy-again) so the median user
 	 * only sees the rows they need.
 	 *
-	 * Every field persists immediately via the library store; the drawer is
-	 * a view-of-truth onto the live record, not a draft. Close = dismiss.
+	 * Two modes:
+	 *
+	 * - **Edit existing (`isNew={false}`, default):** every field persists
+	 *   immediately via the library store; the drawer is a view-of-truth
+	 *   onto the live record, Close = dismiss.
+	 * - **Create new (`isNew={true}`):** the editor holds a local *draft* and
+	 *   shows a Save / Cancel footer. Nothing is written to the store until
+	 *   Save fires. This way a half-typed roaster name doesn't leak into the
+	 *   directory, and abandoning the form is a clean no-op.
+	 *
+	 * Polished 2026-05-23 (bean-editor-polish): toggles for boolean rows, a
+	 * QStepper + preset chip pattern for roast level / bag size / grind, a
+	 * proper Save button when creating, and a roaster autocomplete that
+	 * creates *at save time only* (the old `oninput`-driven flow polluted
+	 * the directory with every keystroke).
 	 */
+	import { untrack } from 'svelte';
 	import {
 		getBeanStore,
 		daysOffRoast,
-		ROAST_PILL_LEVEL,
 		roastBand,
 		roastFreshness,
-		type Bean
+		type Bean,
+		type Roaster
 	} from '$lib/bean';
 	import type { Roast } from '$lib/profiles';
 	import { getHistoryStore } from '$lib/history';
+	import QStepper from '$lib/components/brew/QStepper.svelte';
+	import StToggle from '$lib/components/settings/StToggle.svelte';
+	import RoasterAutocomplete from './RoasterAutocomplete.svelte';
 
 	let {
 		bean,
 		isActive,
+		isNew = false,
 		onClose,
-		onMakeActive
+		onMakeActive,
+		onSaved
 	}: {
 		bean: Bean;
 		isActive: boolean;
+		/**
+		 * True when the editor is being used to create a fresh bean. Switches
+		 * the editor into draft-mode (no live persistence) and reveals the
+		 * Save / Cancel footer. Defaults to false — existing beans keep the
+		 * pre-polish live-patch behaviour.
+		 */
+		isNew?: boolean;
 		onClose: () => void;
 		onMakeActive: () => void;
+		/**
+		 * Fires after a successful Save in `isNew` mode with the new bean's
+		 * id. Parents typically swap from "creating" state to "editing" so a
+		 * subsequent open lands on the persisted record.
+		 */
+		onSaved?: (id: string) => void;
 	} = $props();
 
 	const library = getBeanStore();
 	const history = getHistoryStore();
 
-	const roaster = $derived(
+	// ── Draft state (new-bean mode only) ───────────────────────────────────
+	//
+	// In edit-existing mode the working record `current` mirrors the live
+	// `bean` prop straight through — every patch hits the store, the prop
+	// updates, and we re-render. In new-bean mode we hold a local mutable
+	// `draftRecord` and read from that instead; nothing is written to the
+	// store until Save fires.
+	const live = $derived(!isNew);
+	// `untrack` because the seed is the one-shot initial value of the prop:
+	// the editor is unmounted + remounted whenever the parent swaps beans,
+	// so the draft never wants to re-mirror a later `bean` reference.
+	let draftRecord = $state<Bean>(
+		untrack(() => ({ ...bean, origin: { ...bean.origin } }))
+	);
+	/** The active record the form reads from — live `bean` prop, or local draft. */
+	const current: Bean = $derived(live ? bean : draftRecord);
+
+	// ── Roaster state ──────────────────────────────────────────────────────
+	//
+	// `resolvedRoaster` is the Roaster row the user has actually picked
+	// (either an existing one or one we created on a previous save). It
+	// can lag the typed name during typing — that's intentional; we only
+	// create a fresh roaster at Save time, never on `oninput`.
+	const initialRoaster = untrack(() =>
 		bean.roasterId ? library.getRoaster(bean.roasterId) : null
 	);
+	let resolvedRoaster = $state<Roaster | null>(initialRoaster);
+	let roasterName = $state<string>(initialRoaster?.name ?? '');
+	// Re-sync when the underlying bean's roasterId changes (live mode).
+	$effect(() => {
+		if (!live) return;
+		const r = current.roasterId ? library.getRoaster(current.roasterId) : null;
+		if ((r?.id ?? null) !== (resolvedRoaster?.id ?? null)) {
+			resolvedRoaster = r;
+			roasterName = r?.name ?? '';
+		}
+	});
 
-	const days = $derived(daysOffRoast(bean.roastedOn));
-	const band = $derived(roastBand(bean.roastLevel));
+	const days = $derived(daysOffRoast(current.roastedOn));
+	const band = $derived(roastBand(current.roastLevel));
 	const freshness = $derived(roastFreshness(band, days));
 	const freshColor = $derived(
 		freshness === 'best'
@@ -53,7 +119,7 @@
 	);
 
 	const shotsWithThis = $derived(
-		history.all.filter((s) => s.bean?.beanId === bean.id)
+		history.all.filter((s) => s.bean?.beanId === current.id)
 	);
 
 	const bestShot = $derived.by(() => {
@@ -71,44 +137,143 @@
 
 	const roastOptions: Roast[] = ['light', 'medium', 'dark'];
 
-	function parseLevel(raw: string): number | null {
-		const trimmed = raw.trim();
-		if (trimmed === '') return null;
-		const n = Number(trimmed);
-		if (!Number.isFinite(n)) return null;
-		return Math.max(1, Math.min(10, Math.round(n)));
-	}
+	// ── Save-button gating (new-bean mode only) ───────────────────────────
+	//
+	// Required: a name, a roaster (typed name or an explicit pick), and a
+	// roast date. Anything else is optional — the user can dial in tasting
+	// notes etc. later.
+	const canSave = $derived.by<boolean>(() => {
+		if (!isNew) return true; // edit mode persists eagerly, no save gate
+		if (!current.name.trim()) return false;
+		if (!roasterName.trim()) return false;
+		if (!current.roastedOn) return false;
+		return true;
+	});
 
-	function parseNumber(raw: string): number {
-		const n = Number(raw);
-		return Number.isFinite(n) && n >= 0 ? n : 0;
-	}
-
-	// Field setters route through the library store so the update timestamp +
-	// persist happen consistently.
+	/**
+	 * Patch one or more fields. In live mode this writes through to the
+	 * store immediately; in draft mode it mutates `draftRecord` in place
+	 * and the caller is responsible for hitting Save.
+	 */
 	function patch(p: Partial<Bean>): void {
-		library.updateBean(bean.id, p);
+		if (live) {
+			library.updateBean(bean.id, p);
+		} else {
+			// `draftRecord` is `$state` so a fresh object reassignment triggers reactivity.
+			draftRecord = { ...draftRecord, ...p };
+		}
 	}
 
+	// ── Roast level — numeric stepper canonical, chips snap to band ───────
+	//
+	// Stepper edits raw 1..10 (Visualizer scale). The three chips below
+	// snap to canonical band centres: Light → 3, Medium → 5, Dark → 8.
+	// (The legacy `ROAST_PILL_LEVEL` map uses 1/5/10, but those bracket the
+	// extreme of each band; 3/5/8 read truer for "typical of band".)
+	const ROAST_CHIP_LEVEL: Readonly<Record<Roast, number>> = {
+		light: 3,
+		medium: 5,
+		dark: 8
+	};
+
+	function setRoastLevel(n: number): void {
+		patch({ roastLevel: Math.max(1, Math.min(10, Math.round(n))) });
+	}
+
+	// ── Grind — keep store type as string (shot history compatibility) ────
+	//
+	// `Bean.grinderSetting: string` is wire-compatible with Visualizer +
+	// Beanconqueror, and the same field rides on every shot's metadata as
+	// a free-form string. Coerce numerically only in the UI: parse on read,
+	// serialise on write, default to 0 when empty.
+	const grindNum = $derived.by<number>(() => {
+		const n = Number(current.grinderSetting);
+		return Number.isFinite(n) ? n : 0;
+	});
+	function setGrind(n: number): void {
+		// Two decimals max — grinder dials don't go finer than that, and
+		// keeping the string short keeps the History view tidy.
+		const rounded = Math.round(n * 100) / 100;
+		patch({ grinderSetting: rounded.toString() });
+	}
+
+	// ── Roaster name → roaster row glue ───────────────────────────────────
 	function setRoasterName(value: string): void {
-		const trimmed = value.trim();
-		if (!trimmed) {
+		roasterName = value;
+		// Live mode: clear the bean's roasterId if the user clears the input,
+		// so the UI immediately reflects the empty state. We do NOT call
+		// `ensureRoaster` here (that's the keystroke-creation bug).
+		if (live && !value.trim()) {
 			patch({ roasterId: null });
-			return;
+			resolvedRoaster = null;
 		}
-		const r = library.ensureRoaster(trimmed);
-		patch({ roasterId: r?.id ?? null });
+		// If the typed name no longer matches the resolved row, the resolver
+		// in `RoasterAutocomplete` already cleared `resolvedRoaster` via
+		// `onResolve(null)`.
+	}
+
+	function onRoasterResolve(r: Roaster | null): void {
+		resolvedRoaster = r;
+		if (live) patch({ roasterId: r?.id ?? null });
+	}
+
+	/**
+	 * Look up or create the roaster matching the typed name. Called at Save
+	 * time (and immediately for live-mode roaster edits when the user has
+	 * typed a fresh name and tabbed away).
+	 *
+	 * Returns the roaster row (or `null` if the name is blank).
+	 */
+	function resolveRoasterOrCreate(name: string): Roaster | null {
+		const trimmed = name.trim();
+		if (!trimmed) return null;
+		const existing = library.findRoasterByName(trimmed);
+		if (existing) return existing;
+		// Create exactly once, at save time. This is the fix for the
+		// keystroke-creation bug.
+		return library.ensureRoaster(trimmed);
 	}
 
 	function ratingTap(n: number): void {
-		patch({ rating: bean.rating === n ? 0 : n });
+		patch({ rating: current.rating === n ? 0 : n });
 	}
+
+	// ── Bag-size chips: canonical sizes ───────────────────────────────────
+	const BAG_PRESETS = [250, 340, 454];
+
+	/**
+	 * Save handler — only meaningful in new-bean mode. Persists the draft
+	 * (creating its roaster on the fly if needed), then closes the drawer.
+	 */
+	function commitDraftAndClose(): void {
+		if (!isNew) {
+			onClose();
+			return;
+		}
+		if (!canSave) return;
+		const roaster = resolveRoasterOrCreate(roasterName);
+		const persisted: Bean = {
+			...draftRecord,
+			roasterId: roaster?.id ?? null,
+			name: draftRecord.name.trim(),
+			updatedAt: Date.now()
+		};
+		library.upsertBean(persisted);
+		onSaved?.(persisted.id);
+		onClose();
+	}
+
+	function cancelDraft(): void {
+		// Nothing was written; just close.
+		onClose();
+	}
+
 </script>
 
 <div
 	class="be-scrim"
-	onclick={onClose}
-	onkeydown={(e) => e.key === 'Escape' && onClose()}
+	onclick={isNew ? cancelDraft : onClose}
+	onkeydown={(e) => e.key === 'Escape' && (isNew ? cancelDraft() : onClose())}
 	role="button"
 	tabindex="-1"
 	aria-label="Close bean editor"
@@ -117,20 +282,28 @@
 <div class="be-drawer" role="dialog" aria-modal="true" aria-labelledby="be-title">
 	<header class="be-head">
 		<div>
-			<div class="t-eyebrow">{roaster?.name ?? 'Bean'}</div>
-			<h2 class="be-title" id="be-title">{bean.name || 'Untitled bag'}</h2>
+			<div class="t-eyebrow">{resolvedRoaster?.name ?? (isNew ? 'New bag' : 'Bean')}</div>
+			<h2 class="be-title" id="be-title">
+				{isNew ? 'Add a new bag' : current.name || 'Untitled bag'}
+			</h2>
 		</div>
 		<div class="be-head-actions">
-			{#if !isActive}
-				<button class="be-btn" onclick={onMakeActive}>
-					<i class="ph ph-target" aria-hidden="true"></i> Make active
-				</button>
-			{:else}
-				<span class="be-active-pill">
-					<span class="be-dot"></span> Active on Brew
-				</span>
+			{#if !isNew}
+				{#if !isActive}
+					<button class="be-btn" onclick={onMakeActive}>
+						<i class="ph ph-target" aria-hidden="true"></i> Make active
+					</button>
+				{:else}
+					<span class="be-active-pill">
+						<span class="be-dot"></span> Active on Brew
+					</span>
+				{/if}
 			{/if}
-			<button class="be-btn be-btn-icon" onclick={onClose} aria-label="Close">
+			<button
+				class="be-btn be-btn-icon"
+				onclick={() => (isNew ? cancelDraft() : onClose())}
+				aria-label="Close"
+			>
 				<i class="ph ph-x" aria-hidden="true"></i>
 			</button>
 		</div>
@@ -144,62 +317,83 @@
 				<span class="be-label">Name</span>
 				<input
 					class="be-input"
-					value={bean.name}
+					value={current.name}
 					placeholder="e.g. Geisha Esmeralda Lot 3"
 					oninput={(e) => patch({ name: e.currentTarget.value })}
 				/>
 			</label>
-			<label class="be-row">
-				<span class="be-label">Roaster</span>
-				<input
-					class="be-input"
-					value={roaster?.name ?? ''}
-					placeholder="e.g. Onyx Coffee Lab"
-					oninput={(e) => setRoasterName(e.currentTarget.value)}
-				/>
-			</label>
 			<div class="be-row">
-				<span class="be-label">Roast level (1–10)</span>
-				<div class="be-roast">
-					<input
-						class="be-input be-input-narrow"
-						type="number"
-						min="1"
-						max="10"
-						step="1"
-						value={bean.roastLevel ?? ''}
-						placeholder="—"
-						oninput={(e) =>
-							patch({ roastLevel: parseLevel(e.currentTarget.value) })}
-					/>
+				<span class="be-label">Roaster</span>
+				<RoasterAutocomplete
+					value={roasterName}
+					resolved={resolvedRoaster}
+					roasters={library.roasters}
+					placeholder="e.g. Onyx Coffee Lab"
+					onChange={setRoasterName}
+					onResolve={(r) => {
+						onRoasterResolve(r);
+						if (r) roasterName = r.name;
+					}}
+					onCommitTyped={live
+						? (typed) => {
+								// Live mode: the user typed a fresh name and blurred
+								// without picking. Commit it now so the bag is linked
+								// to the roastery. In draft mode the parent's Save
+								// handler does this once at save-time instead.
+								const r = resolveRoasterOrCreate(typed);
+								if (r) {
+									resolvedRoaster = r;
+									patch({ roasterId: r.id });
+								}
+							}
+						: undefined}
+				/>
+			</div>
+			<div class="be-row">
+				<span class="be-label">Roast level</span>
+				<QStepper
+					value={current.roastLevel ?? 5}
+					min={1}
+					max={10}
+					step={1}
+					onChange={(v) => setRoastLevel(v)}
+					fmt={(v) => v.toFixed(0)}
+				/>
+				<div class="be-chip-spacer"></div>
+				<div class="qchipr">
 					{#each roastOptions as r (r)}
 						<button
-							class="be-pill"
+							type="button"
+							class="qchip"
 							class:is-active={band === r}
-							onclick={() => patch({ roastLevel: ROAST_PILL_LEVEL[r] })}
+							onclick={() => setRoastLevel(ROAST_CHIP_LEVEL[r])}
+							style="text-transform: capitalize"
 						>
 							{r}
 						</button>
 					{/each}
 				</div>
 			</div>
-			<div class="be-row be-row-inline">
-				<label class="be-check">
-					<input
-						type="checkbox"
-						checked={bean.decaf}
-						onchange={(e) => patch({ decaf: e.currentTarget.checked })}
-					/>
-					<span>Decaf</span>
-				</label>
-				<label class="be-check">
-					<input
-						type="checkbox"
-						checked={bean.favourite}
-						onchange={(e) => patch({ favourite: e.currentTarget.checked })}
-					/>
-					<span>Pinned to brew picker</span>
-				</label>
+			<div class="be-toggle-row">
+				<div class="be-toggle-text">
+					<div class="be-toggle-title">Decaf</div>
+				</div>
+				<StToggle
+					on={current.decaf}
+					onChange={(v) => patch({ decaf: v })}
+					label="Decaf"
+				/>
+			</div>
+			<div class="be-toggle-row">
+				<div class="be-toggle-text">
+					<div class="be-toggle-title">Pin to brew picker</div>
+					<div class="be-toggle-sub">Show this bag in the favourites strip</div>
+				</div>
+				<StToggle
+					on={current.favourite}
+					onChange={(v) => patch({ favourite: v })}
+					label="Favourite"
+				/>
 			</div>
 		</section>
 
@@ -207,12 +401,12 @@
 		<section class="be-section">
 			<h3 class="be-section-title">Dates</h3>
 			<label class="be-row">
-				<span class="be-label">Roasted on</span>
+				<span class="be-label">Roasted on{isNew ? ' *' : ''}</span>
 				<div class="be-date-row">
 					<input
 						class="be-input be-input-date"
 						type="date"
-						value={bean.roastedOn ?? ''}
+						value={current.roastedOn ?? ''}
 						oninput={(e) => patch({ roastedOn: e.currentTarget.value || null })}
 					/>
 					{#if days != null}
@@ -228,7 +422,7 @@
 				<input
 					class="be-input be-input-date"
 					type="date"
-					value={bean.openedOn ?? ''}
+					value={current.openedOn ?? ''}
 					oninput={(e) => patch({ openedOn: e.currentTarget.value || null })}
 				/>
 			</label>
@@ -237,17 +431,17 @@
 				<input
 					class="be-input be-input-date"
 					type="date"
-					value={bean.frozenOn ?? ''}
+					value={current.frozenOn ?? ''}
 					oninput={(e) => patch({ frozenOn: e.currentTarget.value || null })}
 				/>
 			</label>
-			{#if bean.frozenOn}
+			{#if current.frozenOn}
 				<label class="be-row">
 					<span class="be-label">Defrosted on</span>
 					<input
 						class="be-input be-input-date"
 						type="date"
-						value={bean.defrostedOn ?? ''}
+						value={current.defrostedOn ?? ''}
 						oninput={(e) =>
 							patch({ defrostedOn: e.currentTarget.value || null })}
 					/>
@@ -258,48 +452,67 @@
 		<!-- Bag -->
 		<section class="be-section">
 			<h3 class="be-section-title">Bag</h3>
-			<div class="be-row-grid">
-				<label class="be-row">
-					<span class="be-label">Bag size (g)</span>
-					<input
-						class="be-input"
-						type="number"
-						min="0"
-						step="1"
-						value={bean.bagSizeG}
-						oninput={(e) => patch({ bagSizeG: parseNumber(e.currentTarget.value) })}
-					/>
-				</label>
-				<label class="be-row">
-					<span class="be-label">Remaining (g)</span>
-					<input
-						class="be-input"
-						type="number"
-						min="0"
-						step="1"
-						value={bean.remainingG}
-						oninput={(e) =>
-							patch({ remainingG: parseNumber(e.currentTarget.value) })}
-					/>
-				</label>
+			<div class="be-row">
+				<span class="be-label">Bag size</span>
+				<QStepper
+					value={current.bagSizeG}
+					unit="g"
+					min={100}
+					max={2000}
+					step={10}
+					onChange={(v) => patch({ bagSizeG: v })}
+					fmt={(v) => v.toFixed(0)}
+				/>
+				<div class="be-chip-spacer"></div>
+				<div class="qchipr">
+					{#each BAG_PRESETS as g (g)}
+						<button
+							type="button"
+							class="qchip"
+							class:is-active={current.bagSizeG === g}
+							onclick={() => patch({ bagSizeG: g })}
+						>
+							{g}<span class="qchip-unit">g</span>
+						</button>
+					{/each}
+				</div>
 			</div>
-			<div class="be-row-inline">
-				<button
-					class="be-mini"
-					onclick={() => patch({ remainingG: bean.bagSizeG })}
-				>
-					Refill to bag size
-				</button>
-				<button class="be-mini" onclick={() => patch({ remainingG: 0 })}>
-					Mark empty
-				</button>
+			<div class="be-row">
+				<span class="be-label">Remaining</span>
+				<QStepper
+					value={current.remainingG}
+					unit="g"
+					min={0}
+					max={Math.max(current.bagSizeG, 2000)}
+					step={1}
+					onChange={(v) => patch({ remainingG: v })}
+					fmt={(v) => v.toFixed(0)}
+				/>
+				<!--
+					PM call (2026-05-23, bean-editor-polish):
+					We keep "Refill bag" since it's a common path after a
+					weighing reset, but drop the old "Mark empty" button —
+					the auto-debit on each shot handles emptying the bag,
+					and a user who needs to zero it can edit the value
+					inline. See task brief §5.
+				-->
+				<div class="be-row-inline">
+					<button
+						class="be-mini"
+						type="button"
+						onclick={() => patch({ remainingG: current.bagSizeG })}
+					>
+						<i class="ph ph-arrow-counter-clockwise" aria-hidden="true"></i>
+						Refill to bag size
+					</button>
+				</div>
 			</div>
 			<div class="be-row-grid">
 				<label class="be-row">
 					<span class="be-label">Mix</span>
 					<select
 						class="be-input"
-						value={bean.mix ?? ''}
+						value={current.mix ?? ''}
 						onchange={(e) => {
 							const v = e.currentTarget.value;
 							patch({ mix: v === 'single' || v === 'blend' ? v : null });
@@ -314,21 +527,23 @@
 					<span class="be-label">Grinder</span>
 					<input
 						class="be-input"
-						value={bean.grinder}
+						value={current.grinder}
 						placeholder="e.g. Niche Zero"
 						oninput={(e) => patch({ grinder: e.currentTarget.value })}
 					/>
 				</label>
 			</div>
-			<label class="be-row">
-				<span class="be-label">Grinder setting</span>
-				<input
-					class="be-input"
-					value={bean.grinderSetting}
-					placeholder="e.g. 1.2"
-					oninput={(e) => patch({ grinderSetting: e.currentTarget.value })}
+			<div class="be-row">
+				<span class="be-label">Grind</span>
+				<QStepper
+					value={grindNum}
+					min={0}
+					max={20}
+					step={0.1}
+					onChange={(v) => setGrind(v)}
+					fmt={(v) => v.toFixed(1)}
 				/>
-			</label>
+			</div>
 		</section>
 
 		<!-- Origin (collapsible) -->
@@ -343,10 +558,10 @@
 						<span class="be-label">Country</span>
 						<input
 							class="be-input"
-							value={bean.origin.country ?? ''}
+							value={current.origin.country ?? ''}
 							oninput={(e) =>
 								patch({
-									origin: { ...bean.origin, country: e.currentTarget.value || null }
+									origin: { ...current.origin, country: e.currentTarget.value || null }
 								})}
 						/>
 					</label>
@@ -354,10 +569,10 @@
 						<span class="be-label">Region</span>
 						<input
 							class="be-input"
-							value={bean.origin.region ?? ''}
+							value={current.origin.region ?? ''}
 							oninput={(e) =>
 								patch({
-									origin: { ...bean.origin, region: e.currentTarget.value || null }
+									origin: { ...current.origin, region: e.currentTarget.value || null }
 								})}
 						/>
 					</label>
@@ -367,10 +582,10 @@
 						<span class="be-label">Variety</span>
 						<input
 							class="be-input"
-							value={bean.origin.variety ?? ''}
+							value={current.origin.variety ?? ''}
 							oninput={(e) =>
 								patch({
-									origin: { ...bean.origin, variety: e.currentTarget.value || null }
+									origin: { ...current.origin, variety: e.currentTarget.value || null }
 								})}
 						/>
 					</label>
@@ -378,12 +593,12 @@
 						<span class="be-label">Processing</span>
 						<input
 							class="be-input"
-							value={bean.origin.processing ?? ''}
+							value={current.origin.processing ?? ''}
 							placeholder="Washed, Natural, Anaerobic…"
 							oninput={(e) =>
 								patch({
 									origin: {
-										...bean.origin,
+										...current.origin,
 										processing: e.currentTarget.value || null
 									}
 								})}
@@ -395,10 +610,10 @@
 						<span class="be-label">Farm</span>
 						<input
 							class="be-input"
-							value={bean.origin.farm ?? ''}
+							value={current.origin.farm ?? ''}
 							oninput={(e) =>
 								patch({
-									origin: { ...bean.origin, farm: e.currentTarget.value || null }
+									origin: { ...current.origin, farm: e.currentTarget.value || null }
 								})}
 						/>
 					</label>
@@ -406,12 +621,12 @@
 						<span class="be-label">Elevation</span>
 						<input
 							class="be-input"
-							value={bean.origin.elevation ?? ''}
+							value={current.origin.elevation ?? ''}
 							placeholder="1900-2100 masl"
 							oninput={(e) =>
 								patch({
 									origin: {
-										...bean.origin,
+										...current.origin,
 										elevation: e.currentTarget.value || null
 									}
 								})}
@@ -429,8 +644,8 @@
 					<span class="be-label">Quality score</span>
 					<input
 						class="be-input"
-						value={bean.qualityScore}
-						placeholder="88 · A- · 🔥🔥🔥"
+						value={current.qualityScore}
+						placeholder="88 · A- · score"
 						oninput={(e) => patch({ qualityScore: e.currentTarget.value })}
 					/>
 				</label>
@@ -440,12 +655,12 @@
 						{#each [1, 2, 3, 4, 5] as n (n)}
 							<button
 								class="be-star"
-								class:is-active={bean.rating >= n}
+								class:is-active={current.rating >= n}
 								onclick={() => ratingTap(n)}
 								aria-label="{n} star"
 							>
 								<i
-									class={bean.rating >= n ? 'ph-fill ph-star' : 'ph ph-star'}
+									class={current.rating >= n ? 'ph-fill ph-star' : 'ph ph-star'}
 									aria-hidden="true"
 								></i>
 							</button>
@@ -458,7 +673,7 @@
 				<textarea
 					class="be-textarea"
 					rows="3"
-					value={bean.tastingNotes}
+					value={current.tastingNotes}
 					placeholder="Stone fruit, jasmine, honey…"
 					oninput={(e) => patch({ tastingNotes: e.currentTarget.value })}
 				></textarea>
@@ -468,7 +683,7 @@
 				<textarea
 					class="be-textarea"
 					rows="2"
-					value={bean.notes}
+					value={current.notes}
 					placeholder="Personal notes — drift on dial-in, store at…"
 					oninput={(e) => patch({ notes: e.currentTarget.value })}
 				></textarea>
@@ -487,7 +702,7 @@
 					<input
 						class="be-input"
 						type="url"
-						value={bean.url ?? ''}
+						value={current.url ?? ''}
 						placeholder="https://…"
 						oninput={(e) => patch({ url: e.currentTarget.value || null })}
 					/>
@@ -496,7 +711,7 @@
 					<span class="be-label">Place of purchase</span>
 					<input
 						class="be-input"
-						value={bean.placeOfPurchase ?? ''}
+						value={current.placeOfPurchase ?? ''}
 						oninput={(e) =>
 							patch({ placeOfPurchase: e.currentTarget.value || null })}
 					/>
@@ -504,8 +719,8 @@
 			{/if}
 		</section>
 
-		<!-- Shots with this bean -->
-		{#if shotsWithThis.length > 0}
+		<!-- Shots with this bean (edit mode only — a new bean has no shots yet) -->
+		{#if !isNew && shotsWithThis.length > 0}
 			<section class="be-section">
 				<h3 class="be-section-title">
 					Shots with this bag <span class="be-count">{shotsWithThis.length}</span>
@@ -513,7 +728,7 @@
 				{#if bestShot}
 					<div class="be-bestshot">
 						<i class="ph ph-trophy" aria-hidden="true"></i>
-						Best so far: ★{bestShot.rating} · {bestShot.profileName ?? 'No profile'}
+						Best so far: {bestShot.rating} star · {bestShot.profileName ?? 'No profile'}
 					</div>
 				{/if}
 				<ul class="be-shotlist">
@@ -529,7 +744,7 @@
 							</span>
 							<span class="be-shotprofile">{shot.profileName ?? '—'}</span>
 							{#if shot.rating > 0}
-								<span class="be-shotrating">★ {shot.rating}</span>
+								<span class="be-shotrating">{shot.rating}★</span>
 							{/if}
 						</li>
 					{/each}
@@ -537,6 +752,23 @@
 			</section>
 		{/if}
 	</div>
+
+	{#if isNew}
+		<footer class="be-footer">
+			<button class="be-btn" type="button" onclick={cancelDraft}>Cancel</button>
+			<button
+				class="be-btn be-btn-primary"
+				type="button"
+				disabled={!canSave}
+				onclick={commitDraftAndClose}
+				title={canSave
+					? undefined
+					: 'A name, roaster, and roast date are required to save.'}
+			>
+				<i class="ph ph-check" aria-hidden="true"></i> Save bag
+			</button>
+		</footer>
+	{/if}
 </div>
 
 <style>
@@ -595,6 +827,21 @@
 	}
 	.be-btn:hover {
 		background: rgba(var(--tint-rgb), 0.08);
+	}
+	.be-btn:disabled {
+		opacity: 0.4;
+		cursor: not-allowed;
+	}
+	.be-btn-primary {
+		background: var(--copper-500);
+		color: var(--fg-on-accent);
+		border-color: var(--copper-500);
+		font-weight: 600;
+		padding: 8px 16px;
+		font-size: 13px;
+	}
+	.be-btn-primary:hover:not(:disabled) {
+		background: var(--copper-600);
 	}
 	.be-btn-icon {
 		padding: 6px;
@@ -661,6 +908,7 @@
 		gap: 12px;
 		flex-wrap: wrap;
 		align-items: center;
+		margin-top: 4px;
 	}
 	.be-label {
 		font-family: var(--font-sans);
@@ -669,6 +917,9 @@
 		text-transform: uppercase;
 		color: rgba(var(--tint-rgb), 0.5);
 		font-weight: 600;
+	}
+	.be-chip-spacer {
+		height: 8px;
 	}
 	.be-input,
 	.be-textarea {
@@ -695,31 +946,6 @@
 	.be-input-date {
 		max-width: 200px;
 	}
-	.be-input-narrow {
-		max-width: 80px;
-	}
-	.be-roast {
-		display: flex;
-		gap: 6px;
-		align-items: center;
-	}
-	.be-pill {
-		flex: 1;
-		background: rgba(var(--tint-rgb), 0.04);
-		border: 1px solid rgba(var(--tint-rgb), 0.12);
-		border-radius: var(--radius-sm);
-		color: rgba(var(--tint-rgb), 0.6);
-		font-family: var(--font-sans);
-		font-size: 11px;
-		text-transform: capitalize;
-		padding: 6px 8px;
-		cursor: pointer;
-	}
-	.be-pill.is-active {
-		background: rgba(193, 124, 79, 0.16);
-		border-color: var(--copper-400);
-		color: var(--copper-300);
-	}
 	.be-date-row {
 		display: flex;
 		gap: 12px;
@@ -733,26 +959,43 @@
 		font-size: 11px;
 		font-weight: 500;
 	}
-	.be-check {
-		display: inline-flex;
-		gap: 6px;
+	.be-toggle-row {
+		display: flex;
 		align-items: center;
-		font-family: var(--font-sans);
-		font-size: 12px;
-		color: var(--fg-1);
-		cursor: pointer;
+		justify-content: space-between;
+		padding: 8px 0;
+		border-bottom: 1px solid rgba(var(--tint-rgb), 0.05);
 	}
-	.be-check input[type='checkbox'] {
-		accent-color: var(--copper-500);
+	.be-toggle-row:last-child {
+		border-bottom: 0;
+	}
+	.be-toggle-text {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+	}
+	.be-toggle-title {
+		font-family: var(--font-sans);
+		font-size: 13px;
+		color: var(--fg-1);
+		font-weight: 500;
+	}
+	.be-toggle-sub {
+		font-family: var(--font-sans);
+		font-size: 11px;
+		color: rgba(var(--tint-rgb), 0.5);
 	}
 	.be-mini {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
 		background: transparent;
 		border: 1px solid rgba(var(--tint-rgb), 0.12);
 		border-radius: var(--radius-sm);
 		color: rgba(var(--tint-rgb), 0.7);
 		font-family: var(--font-sans);
 		font-size: 11px;
-		padding: 4px 10px;
+		padding: 6px 10px;
 		cursor: pointer;
 	}
 	.be-mini:hover {
@@ -832,5 +1075,13 @@
 	}
 	.be-shotrating {
 		color: var(--copper-400);
+	}
+	.be-footer {
+		display: flex;
+		justify-content: flex-end;
+		gap: 10px;
+		padding: 14px 24px;
+		border-top: 1px solid rgba(var(--tint-rgb), 0.08);
+		background: var(--bg-page);
 	}
 </style>
