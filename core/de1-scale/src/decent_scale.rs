@@ -65,6 +65,32 @@ pub fn display_on_grams() -> [u8; 7] {
     command(0x0A, [0x01, 0x01, 0x00, 0x01])
 }
 
+/// Command: enable the on-scale LCD in grams mode.
+///
+/// Byte 5 (`0x01`) is the "send heartbeat" flag — once set, the scale expects
+/// periodic [`HEARTBEAT`] writes from the host or it puts its display to sleep
+/// after a few seconds of silence. The trailing `0x08` is the XOR of bytes
+/// `[0..=5]` (the same checksum scheme [`command`] computes). This is the same
+/// byte sequence the existing [`display_on_grams`] builder produces — kept
+/// here as a named constant so the LCD-enable / LCD-disable / heartbeat
+/// surface (`docs/27`) reads as one coherent group.
+pub const LCD_ENABLE_GRAMS: [u8; 7] = [0x03, 0x0A, 0x01, 0x01, 0x00, 0x01, 0x08];
+
+/// Command: disable the on-scale LCD (display off).
+pub const LCD_DISABLE: [u8; 7] = [0x03, 0x0A, 0x00, 0x00, 0x00, 0x00, 0x09];
+
+/// Command: heartbeat write.
+///
+/// The Decent Scale's spec allows up to 5 s between heartbeats; the legacy
+/// app ships one every 1 s and reaprime every 4 s. Crema uses
+/// [`HEARTBEAT_INTERVAL_MS`] (2 s), comfortably under the spec ceiling and
+/// quieter than the legacy 1 s cadence.
+pub const HEARTBEAT: [u8; 7] = [0x03, 0x0A, 0x03, 0xFF, 0xFF, 0x00, 0x0A];
+
+/// Recommended interval, in milliseconds, between [`HEARTBEAT`] writes — the
+/// shell schedules the heartbeat clock; the core is sans-IO.
+pub const HEARTBEAT_INTERVAL_MS: u64 = 2_000;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -105,5 +131,44 @@ mod tests {
         assert_eq!(timer_start(), [0x03, 0x0B, 0x03, 0x00, 0x00, 0x00, 0x0B]);
         assert_eq!(timer_stop(), [0x03, 0x0B, 0x00, 0x00, 0x00, 0x00, 0x08]);
         assert_eq!(timer_reset(), [0x03, 0x0B, 0x02, 0x00, 0x00, 0x00, 0x0A]);
+    }
+
+    /// XOR of the first six bytes — every Decent Scale command carries this
+    /// as the trailing checksum byte (see [`command`]).
+    fn xor_checksum(bytes: [u8; 7]) -> u8 {
+        bytes[..6].iter().fold(0u8, |acc, &b| acc ^ b)
+    }
+
+    #[test]
+    fn lcd_enable_grams_matches_the_documented_wire_bytes() {
+        // Documented in `docs/27` appendix as the LCD-enable-with-heartbeat
+        // packet; byte 5 is the "send heartbeat" flag.
+        assert_eq!(LCD_ENABLE_GRAMS, [0x03, 0x0A, 0x01, 0x01, 0x00, 0x01, 0x08]);
+        assert_eq!(LCD_ENABLE_GRAMS[6], xor_checksum(LCD_ENABLE_GRAMS));
+        // The constant matches what the existing builder produces — kept in
+        // lockstep so the LCD surface and the legacy `display_on_grams` builder
+        // never drift apart.
+        assert_eq!(LCD_ENABLE_GRAMS, display_on_grams());
+    }
+
+    #[test]
+    fn lcd_disable_matches_the_documented_wire_bytes() {
+        assert_eq!(LCD_DISABLE, [0x03, 0x0A, 0x00, 0x00, 0x00, 0x00, 0x09]);
+        assert_eq!(LCD_DISABLE[6], xor_checksum(LCD_DISABLE));
+    }
+
+    #[test]
+    fn heartbeat_matches_the_documented_wire_bytes() {
+        assert_eq!(HEARTBEAT, [0x03, 0x0A, 0x03, 0xFF, 0xFF, 0x00, 0x0A]);
+        assert_eq!(HEARTBEAT[6], xor_checksum(HEARTBEAT));
+    }
+
+    #[test]
+    fn heartbeat_interval_matches_the_documented_2s_cadence() {
+        // The Decent Scale spec allows up to 5 s between heartbeats. The
+        // chosen cadence (2 s) is below that ceiling and above the legacy
+        // app's 1 s; this assert pins the agreed value so an accidental
+        // bump shows up here.
+        assert_eq!(HEARTBEAT_INTERVAL_MS, 2_000);
     }
 }

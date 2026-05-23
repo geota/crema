@@ -358,6 +358,22 @@ impl Scale {
         !matches!(&self.inner, Inner::Smartchef)
     }
 
+    /// Whether this scale is a Decent Scale.
+    ///
+    /// The Decent Scale needs two pieces of behaviour none of the other
+    /// supported scales do — an explicit on-scale LCD enable/disable, and a
+    /// periodic [`decent_scale::HEARTBEAT`] to keep the display awake. The
+    /// core gates those reactive writes on this check; every other scale
+    /// returns `false` here and the writes are silently skipped.
+    ///
+    /// This is the single deliberate "device-driven" capability in the
+    /// otherwise capability-driven scale surface (`docs/14` §7.10/§7.11),
+    /// because the writes are Decent-specific and have no analogue on other
+    /// scales — a generic capability would have only one implementation.
+    pub fn is_decent_scale(&self) -> bool {
+        matches!(&self.inner, Inner::Decent { .. })
+    }
+
     /// Whether this scale accepts software timer commands.
     pub fn supports_timer(&self) -> bool {
         !matches!(
@@ -768,6 +784,30 @@ mod tests {
         let frame = [0xEF, 0xDD, 12, 6, 5, 180, 0, 0, 0, 1, 0];
         assert_eq!(acaia.parse_weight(&frame[..4]), None);
         assert_eq!(acaia.parse_weight(&frame[4..]), Some(18.0));
+    }
+
+    #[test]
+    fn is_decent_scale_only_true_for_a_decent_scale() {
+        assert!(Scale::from_label("Decent Scale").unwrap().is_decent_scale());
+        for label in [
+            "Bookoo",
+            "Skale II",
+            "Felicita Arc",
+            "Acaia",
+            "Acaia Pyxis",
+            "Atomheart Eclair",
+            "Eureka Precisa",
+            "Solo Barista",
+            "Difluid Microbalance",
+            "Smartchef",
+            "Hiroia Jimmy",
+            "Varia Aku",
+        ] {
+            assert!(
+                !Scale::from_label(label).unwrap().is_decent_scale(),
+                "{label} should not report as a Decent Scale"
+            );
+        }
     }
 
     #[test]
