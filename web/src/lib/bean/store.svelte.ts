@@ -182,8 +182,13 @@ export class BeanLibraryStore {
 		this.persist();
 	}
 
-	/** Hard-delete a bean (and clear the active pointer if it was active). */
+	/**
+	 * Hard-delete a bean (and clear the active pointer if it was active). Also
+	 * fires a best-effort DELETE against Visualizer so the remote stays in
+	 * sync — failure is logged and dropped, never blocks the local delete.
+	 */
 	deleteBean(id: string): void {
+		const bean = this.getBean(id);
 		const beans = this.envelope.beans.filter((b) => b.id !== id);
 		if (beans.length === this.envelope.beans.length) return;
 		this.envelope = { ...this.envelope, beans };
@@ -191,6 +196,15 @@ export class BeanLibraryStore {
 		if (this.activeId === id) {
 			this.activeId = null;
 			this.persistActive();
+		}
+		// Fire-and-forget remote delete. Import inline to avoid pulling the
+		// sync module into the store's circular-dep surface.
+		if (bean?.visualizerId) {
+			void import('./visualizer-sync').then(({ deleteRemoteBean }) =>
+				deleteRemoteBean(bean).then((r) => {
+					if (!r.ok) console.warn('Visualizer delete failed:', r.error);
+				})
+			);
 		}
 	}
 
@@ -277,9 +291,11 @@ export class BeanLibraryStore {
 	/**
 	 * Delete a roaster. Beans pointing at it have their `roasterId`
 	 * cleared rather than disappearing — losing a roastery's name is
-	 * less destructive than losing the bag.
+	 * less destructive than losing the bag. Fires a best-effort DELETE
+	 * against Visualizer to keep the remote in sync.
 	 */
 	deleteRoaster(id: string): void {
+		const roaster = this.getRoaster(id);
 		const roasters = this.envelope.roasters.filter((r) => r.id !== id);
 		if (roasters.length === this.envelope.roasters.length) return;
 		const beans = this.envelope.beans.map((b) =>
@@ -287,6 +303,13 @@ export class BeanLibraryStore {
 		);
 		this.envelope = { ...this.envelope, beans, roasters };
 		this.persist();
+		if (roaster?.visualizerId) {
+			void import('./visualizer-sync').then(({ deleteRemoteRoaster }) =>
+				deleteRemoteRoaster(roaster).then((r) => {
+					if (!r.ok) console.warn('Visualizer delete failed:', r.error);
+				})
+			);
+		}
 	}
 
 	/**
