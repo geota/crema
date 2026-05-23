@@ -646,6 +646,10 @@ data class ScaleUuids (
 )
 
 /// What a calibration packet asks the DE1 to do.
+/// 
+/// `#[non_exhaustive]` so any future firmware-side calibration verb can
+/// land here without breaking the FFI surface — this enum is the payload
+/// of `Event::Calibration` alongside `CalTarget`.
 @Serializable
 enum class CalCommand(val string: String) {
 	/// Read the calibration currently in use.
@@ -910,6 +914,13 @@ data class ProfileUploadFailureAckTimeoutInner (
 	val awaiting: UByte
 )
 
+/// Generated type representing the anonymous struct variant `Internal` of the `ProfileUploadFailure` Rust enum
+@Serializable
+data class ProfileUploadFailureInternalInner (
+	/// Human-readable `Display` of the underlying error.
+	val message: String
+)
+
 /// Why a profile upload failed.
 /// 
 /// `#[non_exhaustive]` so additional categories (e.g. a firmware-side
@@ -944,9 +955,22 @@ sealed class ProfileUploadFailure {
 	@Serializable
 	@SerialName("Aborted")
 	object Aborted: ProfileUploadFailure()
+	/// An unexpected [`AppError`] variant — the bridge couldn't classify it.
+	/// The `message` carries the `AppError`'s `Display` output so the shell
+	/// can surface it in a toast / log without losing the underlying cause.
+	/// 
+	/// Previously such variants were silently coerced to
+	/// [`ProfileUploadFailure::Empty`], misclassifying real failures.
+	@Serializable
+	@SerialName("Internal")
+	data class Internal(val details: ProfileUploadFailureInternalInner): ProfileUploadFailure()
 }
 
 /// Where an espresso shot is in its lifecycle.
+/// 
+/// `#[non_exhaustive]` so additional phases (e.g. a future post-shot
+/// "Draining" classification) can be added without breaking the FFI surface —
+/// this enum is the payload of `Event::ShotPhaseChanged`.
 @Serializable
 enum class ShotPhase(val string: String) {
 	/// No espresso shot in progress.
@@ -967,6 +991,10 @@ enum class ShotPhase(val string: String) {
 }
 
 /// Why a steam-clog warning was raised — which threshold the telemetry tripped.
+/// 
+/// `#[non_exhaustive]` so further clog signatures (e.g. a future flow-based
+/// detector) can be added without breaking the FFI surface — this enum rides
+/// on the `SteamEvent::ClogWarning` payload.
 @Serializable
 enum class SteamClogReason(val string: String) {
 	/// Steam pressure ran too high for too long — a clogged steam wand.
@@ -978,6 +1006,10 @@ enum class SteamClogReason(val string: String) {
 }
 
 /// Why [`AutoStop`] decided to end the shot.
+/// 
+/// `#[non_exhaustive]` so further stop reasons (e.g. a future puck-collapse
+/// trigger) can be added without breaking the FFI surface — this enum is the
+/// payload of `Event::StopTriggered`.
 @Serializable
 enum class StopReason(val string: String) {
 	/// The weight target (SAW) was reached.
@@ -1094,6 +1126,10 @@ enum class SubState(val string: String) {
 }
 
 /// Which kind of water-dispensing session the DE1 is running.
+/// 
+/// `#[non_exhaustive]` so additional session kinds (e.g. a future `SteamRinse`
+/// classification) can be added without breaking the FFI surface — this enum
+/// rides on every `WaterEvent::Started` payload.
 @Serializable
 enum class WaterSessionKind(val string: String) {
 	/// A hot-water pour (DE1 `HotWater` state).
