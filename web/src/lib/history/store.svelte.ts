@@ -71,7 +71,7 @@ export interface ShotCompletion {
 /** The reactive shot-history library. One instance per app — {@link getHistoryStore}. */
 export class HistoryStore {
 	/** The recorded shots, newest first. Loaded from localStorage. */
-	private shots = $state<StoredShot[]>(readJson<StoredShot[]>(HISTORY_KEY, []));
+	private shots = $state.raw<StoredShot[]>(readJson<StoredShot[]>(HISTORY_KEY, []));
 
 	/** The full history, newest first. Reactive: a new record re-renders the list. */
 	get all(): StoredShot[] {
