@@ -23,6 +23,7 @@
 	import { getCremaAppContext } from '$lib/shell/app-context';
 	import { getSettingsStore, convertWeight } from '$lib/settings';
 	import { getCaptureStore, captureJsonl } from '$lib/capture';
+	import { downloadBlob, filenameStamp } from '$lib/utils/download';
 	import { zip as fflateZip, strToU8 } from 'fflate';
 
 	const store = getHistoryStore();
@@ -86,7 +87,7 @@
 			.map((s) => JSON.stringify(JSON.parse(s)))
 			.join('\n');
 		const blob = new Blob([jsonl], { type: 'application/x-ndjson' });
-		downloadBlob(blob, `crema-history-${stamp()}.jsonl`);
+		downloadBlob(`crema-history-${filenameStamp()}.jsonl`, blob);
 	}
 
 	/**
@@ -130,30 +131,12 @@
 			fflateZip(files, (err, data) => (err ? reject(err) : resolve(data)));
 		});
 		const blob = new Blob([new Uint8Array(zipped)], { type: 'application/zip' });
-		downloadBlob(blob, `crema-history-${stamp()}.zip`);
+		downloadBlob(`crema-history-${filenameStamp()}.zip`, blob);
 		console.log(
 			`[history export] Exported ${included} replayable shot${included === 1 ? '' : 's'}` +
 				(skipped > 0
 					? `; skipped ${skipped} without raw bytes (imported or pre-recorder).`
 					: '.')
-		);
-	}
-
-	function downloadBlob(blob: Blob, filename: string): void {
-		const url = URL.createObjectURL(blob);
-		const a = document.createElement('a');
-		a.href = url;
-		a.download = filename;
-		a.click();
-		URL.revokeObjectURL(url);
-	}
-
-	function stamp(): string {
-		const d = new Date();
-		const p = (n: number): string => String(n).padStart(2, '0');
-		return (
-			`${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}T` +
-			`${p(d.getHours())}${p(d.getMinutes())}`
 		);
 	}
 
