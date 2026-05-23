@@ -44,7 +44,7 @@ use de1_protocol::{
 /// margin is ~100× the typical real-DE1 round-trip and clears Web
 /// Bluetooth's worst-case back-pressure window.
 pub const PROFILE_UPLOAD_ACK_TIMEOUT: Duration = Duration::from_secs(5);
-use de1_scale::{Scale, ScaleCapabilities, ScaleUuids, TimerCommand};
+use de1_scale::{Scale, ScaleCapabilities, ScaleUuids, TimerCommand, decent_scale};
 
 /// Re-export of `de1_scale::bookoo` so the wasm + future Android bridges
 /// can reach scale-side helpers (e.g. [`bookoo::format_firmware_version`])
@@ -52,6 +52,14 @@ use de1_scale::{Scale, ScaleCapabilities, ScaleUuids, TimerCommand};
 /// public-facing crate.
 pub mod bookoo {
     pub use de1_scale::bookoo::*;
+}
+
+/// Re-export of `de1_scale::decent_scale` for the same reason `bookoo` is
+/// re-exported above — the wasm + future Android bridges reach the
+/// LCD-enable / LCD-disable / heartbeat constants through `de1-app`, the
+/// public-facing crate.
+pub mod decent_scale_protocol {
+    pub use de1_scale::decent_scale::*;
 }
 
 /// Scale sensor lag assumed when no scale is connected — a representative
@@ -1204,6 +1212,72 @@ impl CremaCore {
         }
     }
 
+    /// Build a [`Command`] that enables the connected scale's on-scale LCD in
+    /// grams mode.
+    ///
+    /// Decent-Scale-only: the LCD enable/disable surface is unique to the
+    /// Decent Scale, so the command is emitted only when [`Scale::is_decent_scale`]
+    /// is `true`. Every other scale — and an unconnected core — returns an
+    /// empty [`CoreOutput`]. The wire packet ([`bookoo`]-style sibling
+    /// constant lives in `de1_scale::decent_scale::LCD_ENABLE_GRAMS`) sets the
+    /// "send heartbeat" flag, so callers must follow up with periodic
+    /// [`decent_scale_heartbeat`](Self::decent_scale_heartbeat) writes — the
+    /// shell schedules the clock; the core is sans-IO. The reactive auto-policy
+    /// in [`handle_state`](Self::handle_state) wires this to the DE1's
+    /// [`MachineState::Idle`] transition.
+    ///
+    /// May need a double-send on v1.0 Decent Scale firmware — see `docs/27`
+    /// appendix. Skipped for v1 of PR E; revisit if a real device drops
+    /// writes.
+    pub fn enable_decent_scale_lcd(&self) -> CoreOutput {
+        let mut out = CoreOutput::default();
+        Self::push_decent_scale_write(&self.scale, &decent_scale::LCD_ENABLE_GRAMS, &mut out);
+        out
+    }
+
+    /// Build a [`Command`] that disables the connected scale's on-scale LCD.
+    ///
+    /// Decent-Scale-only, mirroring [`enable_decent_scale_lcd`](Self::enable_decent_scale_lcd).
+    /// The reactive auto-policy fires this on the DE1's
+    /// [`MachineState::Sleep`] transition.
+    pub fn disable_decent_scale_lcd(&self) -> CoreOutput {
+        let mut out = CoreOutput::default();
+        Self::push_decent_scale_write(&self.scale, &decent_scale::LCD_DISABLE, &mut out);
+        out
+    }
+
+    /// Build a [`Command`] that emits one heartbeat write to a connected
+    /// Decent Scale.
+    ///
+    /// The Decent Scale's LCD goes back to sleep after a few seconds of
+    /// silence; the host has to send [`decent_scale::HEARTBEAT`] roughly every
+    /// [`decent_scale::HEARTBEAT_INTERVAL_MS`] ms to keep the display awake.
+    /// The shell schedules the clock — the core is sans-IO and only builds
+    /// the one-shot command on demand.
+    ///
+    /// Decent-Scale-only; empty for every other scale.
+    pub fn decent_scale_heartbeat(&self) -> CoreOutput {
+        let mut out = CoreOutput::default();
+        Self::push_decent_scale_write(&self.scale, &decent_scale::HEARTBEAT, &mut out);
+        out
+    }
+
+    /// Internal: append a fixed Decent-Scale write to `out` if the connected
+    /// scale is a Decent Scale.
+    ///
+    /// Shared by the three Decent-Scale public methods and by the reactive
+    /// auto-policy in [`handle_state`](Self::handle_state). Returns silently
+    /// when no scale is connected or the connected scale is anything else.
+    fn push_decent_scale_write(scale: &Option<Scale>, bytes: &[u8; 7], out: &mut CoreOutput) {
+        if let Some(scale) = scale
+            && scale.is_decent_scale()
+        {
+            out.commands.push(Command::WriteScale {
+                data: bytes.to_vec(),
+            });
+        }
+    }
+
     /// Append a settings-query [`Command`] (`bookoo::QUERY_SETTINGS`, command
     /// `0x0f`) to `out`. The scale answers with a `03 0e …` notification.
     ///
@@ -1538,11 +1612,34 @@ impl CremaCore {
             }
         };
         if self.last_state != Some(info) {
+            let prev_state = self.last_state.map(|s| s.state);
             self.last_state = Some(info);
             out.events.push(Event::MachineStateChanged {
                 state: info.state,
                 substate: info.substate,
             });
+            // Reactive Decent-Scale LCD auto-policy: enable the on-scale LCD
+            // when the DE1 enters Idle (wake-with-DE1) and disable it when the
+            // DE1 enters Sleep (sleep-with-DE1). Both writes are gated by
+            // `push_decent_scale_write` on the connected scale being a Decent
+            // Scale, so every other scale stays silent. We fire on *entry*
+            // into the state — not on every tick — by checking the previous
+            // top-level state, mirroring the audit §7.10/§7.11 design.
+            if prev_state != Some(info.state) {
+                match info.state {
+                    MachineState::Idle => Self::push_decent_scale_write(
+                        &self.scale,
+                        &decent_scale::LCD_ENABLE_GRAMS,
+                        out,
+                    ),
+                    MachineState::Sleep => Self::push_decent_scale_write(
+                        &self.scale,
+                        &decent_scale::LCD_DISABLE,
+                        out,
+                    ),
+                    _ => {}
+                }
+            }
         }
         for event in self.monitor.on_state_info(info, now) {
             self.map_shot_event(event, now, out);
@@ -2571,6 +2668,159 @@ mod tests {
                 .iter()
                 .any(|c| matches!(c, Command::WriteScale { .. }))
         );
+    }
+
+    // ----- Decent Scale LCD + heartbeat -----------------------------------
+
+    /// Extract the bytes of the single `WriteScale` command in `out`, or
+    /// panic if none was emitted. Helper for the LCD / heartbeat tests.
+    fn the_only_scale_write(out: &CoreOutput) -> &[u8] {
+        let writes: Vec<&[u8]> = out
+            .commands
+            .iter()
+            .filter_map(|c| match c {
+                Command::WriteScale { data } => Some(data.as_slice()),
+                Command::WriteCharacteristic { .. } => None,
+            })
+            .collect();
+        assert_eq!(writes.len(), 1, "expected exactly one WriteScale command");
+        writes[0]
+    }
+
+    #[test]
+    fn enable_decent_scale_lcd_emits_the_known_wire_bytes() {
+        let mut core = CremaCore::new();
+        core.connect_scale("Decent Scale ABC");
+        let out = core.enable_decent_scale_lcd();
+        // The single emitted command must carry exactly `LCD_ENABLE_GRAMS`.
+        assert_eq!(the_only_scale_write(&out), decent_scale::LCD_ENABLE_GRAMS);
+    }
+
+    #[test]
+    fn disable_decent_scale_lcd_emits_the_known_wire_bytes() {
+        let mut core = CremaCore::new();
+        core.connect_scale("Decent Scale ABC");
+        let out = core.disable_decent_scale_lcd();
+        assert_eq!(the_only_scale_write(&out), decent_scale::LCD_DISABLE);
+    }
+
+    #[test]
+    fn decent_scale_heartbeat_emits_the_known_wire_bytes() {
+        let mut core = CremaCore::new();
+        core.connect_scale("Decent Scale ABC");
+        let out = core.decent_scale_heartbeat();
+        assert_eq!(the_only_scale_write(&out), decent_scale::HEARTBEAT);
+    }
+
+    #[test]
+    fn the_decent_scale_writes_are_silent_with_no_scale_connected() {
+        let core = CremaCore::new();
+        assert!(core.enable_decent_scale_lcd().commands.is_empty());
+        assert!(core.disable_decent_scale_lcd().commands.is_empty());
+        assert!(core.decent_scale_heartbeat().commands.is_empty());
+    }
+
+    #[test]
+    fn the_decent_scale_writes_are_silent_for_a_non_decent_scale() {
+        // Every Decent-Scale-specific write is gated by `is_decent_scale`,
+        // so connecting a Bookoo (or any other) must yield nothing.
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC");
+        assert!(core.enable_decent_scale_lcd().commands.is_empty());
+        assert!(core.disable_decent_scale_lcd().commands.is_empty());
+        assert!(core.decent_scale_heartbeat().commands.is_empty());
+    }
+
+    #[test]
+    fn entering_idle_auto_enables_the_decent_scale_lcd() {
+        let mut core = CremaCore::new();
+        core.connect_scale("Decent Scale ABC");
+        // Transition Sleep -> Idle. The first state notification doesn't
+        // emit (no prior state) but the second one — entering Idle from
+        // Sleep — must fire the LCD-enable write.
+        core.on_notification(
+            Source::De1State,
+            &[MachineState::Sleep as u8, 0],
+            1_000,
+        );
+        let out = core.on_notification(
+            Source::De1State,
+            &[MachineState::Idle as u8, 0],
+            2_000,
+        );
+        let writes: Vec<&[u8]> = out
+            .commands
+            .iter()
+            .filter_map(|c| match c {
+                Command::WriteScale { data } => Some(data.as_slice()),
+                Command::WriteCharacteristic { .. } => None,
+            })
+            .collect();
+        assert!(
+            writes.contains(&decent_scale::LCD_ENABLE_GRAMS.as_slice()),
+            "expected LCD_ENABLE_GRAMS on Idle entry, got {writes:?}"
+        );
+    }
+
+    #[test]
+    fn entering_sleep_auto_disables_the_decent_scale_lcd() {
+        let mut core = CremaCore::new();
+        core.connect_scale("Decent Scale ABC");
+        // Transition Idle -> Sleep. The second notification — entering
+        // Sleep from Idle — must fire the LCD-disable write.
+        core.on_notification(
+            Source::De1State,
+            &[MachineState::Idle as u8, 0],
+            1_000,
+        );
+        let out = core.on_notification(
+            Source::De1State,
+            &[MachineState::Sleep as u8, 0],
+            2_000,
+        );
+        let writes: Vec<&[u8]> = out
+            .commands
+            .iter()
+            .filter_map(|c| match c {
+                Command::WriteScale { data } => Some(data.as_slice()),
+                Command::WriteCharacteristic { .. } => None,
+            })
+            .collect();
+        assert!(
+            writes.contains(&decent_scale::LCD_DISABLE.as_slice()),
+            "expected LCD_DISABLE on Sleep entry, got {writes:?}"
+        );
+    }
+
+    #[test]
+    fn the_decent_scale_lcd_auto_policy_is_silent_for_a_non_decent_scale() {
+        // The auto-policy is Decent-Scale-only; a Bookoo (or no scale)
+        // sees no LCD writes on the same state transitions.
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC");
+        core.on_notification(
+            Source::De1State,
+            &[MachineState::Sleep as u8, 0],
+            1_000,
+        );
+        let out = core.on_notification(
+            Source::De1State,
+            &[MachineState::Idle as u8, 0],
+            2_000,
+        );
+        let lcd_writes: Vec<&[u8]> = out
+            .commands
+            .iter()
+            .filter_map(|c| match c {
+                Command::WriteScale { data } => Some(data.as_slice()),
+                Command::WriteCharacteristic { .. } => None,
+            })
+            .filter(|w| {
+                *w == decent_scale::LCD_ENABLE_GRAMS.as_slice()
+                    || *w == decent_scale::LCD_DISABLE.as_slice()
+            })
+            .collect();
+        assert!(lcd_writes.is_empty(), "unexpected LCD writes: {lcd_writes:?}");
     }
 
     #[test]

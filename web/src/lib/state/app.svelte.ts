@@ -260,6 +260,15 @@ export class CremaApp {
 		| { resolve: (ok: boolean) => void; timeoutId: number }
 		| null = null;
 
+	/**
+	 * Active `setInterval` id for the Decent Scale heartbeat loop, or `null`
+	 * when no Decent Scale is connected. The Decent Scale's on-scale LCD goes
+	 * back to sleep after a few seconds of silence; the host has to fire
+	 * `decentScaleHeartbeat` every ~2 s to keep it awake. The core is sans-IO
+	 * — the clock lives here.
+	 */
+	private decentScaleHeartbeatId: ReturnType<typeof setInterval> | null = null;
+
 	constructor(private readonly core: CremaCore) {
 		this.de1 = new De1Manager(core, {
 			onCoreOutput: (output) => this.applyCoreOutput(output),
@@ -800,6 +809,10 @@ export class CremaApp {
 
 	/** Disconnect the scale and clear every scale-derived field. */
 	async disconnectScale(): Promise<void> {
+		// Tear down the Decent-Scale heartbeat clock before the GATT teardown,
+		// so an in-flight `decentScaleHeartbeat` write doesn't race against the
+		// disconnect.
+		this.clearDecentScaleHeartbeat();
 		await this.scale.disconnect();
 		this.state.patch({
 			scaleWeight: null,
@@ -824,10 +837,59 @@ export class CremaApp {
 	 * capturing the advertised name. Called once the core identifies the
 	 * scale; the screen gates config controls on the result. Mirrors the
 	 * Android shell's `refreshScaleCapabilities`.
+	 *
+	 * Also (re)arms the Decent-Scale heartbeat clock when the connected scale
+	 * is a Decent Scale — the LCD enable packet that the core's auto-policy
+	 * sends on the next DE1 Idle transition arms a heartbeat-required flag on
+	 * the scale; without periodic heartbeats the LCD goes back to sleep.
 	 */
 	private async refreshScaleCapabilities(advertisedName: string): Promise<void> {
 		const caps = await this.core.scaleCapabilities();
 		this.state.patch({ scaleCapabilities: caps ?? null, scaleName: advertisedName });
+		this.armDecentScaleHeartbeat(advertisedName);
+	}
+
+	/**
+	 * The Decent Scale's advertised-name prefixes — kept in sync with
+	 * `Scale::identify` in `core/de1-scale/src/scale.rs`.
+	 */
+	private static readonly DECENT_SCALE_NAME_PREFIXES = ['Decent Scale', 'ButtsHaus Scale'];
+
+	/**
+	 * Heartbeat cadence, ms. Matches `decent_scale::HEARTBEAT_INTERVAL_MS`
+	 * in the core (2 s — comfortably under the scale's 5 s spec ceiling,
+	 * quieter than the legacy 1 s cadence).
+	 */
+	private static readonly DECENT_SCALE_HEARTBEAT_INTERVAL_MS = 2_000;
+
+	/**
+	 * Start (or restart) the Decent-Scale heartbeat clock when the connected
+	 * scale's advertised name matches a Decent Scale; clear any existing clock
+	 * otherwise (so re-identifying as a Bookoo after a Decent Scale tears the
+	 * old timer down).
+	 */
+	private armDecentScaleHeartbeat(advertisedName: string): void {
+		const isDecent = CremaApp.DECENT_SCALE_NAME_PREFIXES.some((p) =>
+			advertisedName.startsWith(p)
+		);
+		this.clearDecentScaleHeartbeat();
+		if (!isDecent) return;
+		this.decentScaleHeartbeatId = setInterval(() => {
+			void this.core
+				.decentScaleHeartbeat()
+				.then((output) => this.applyCoreOutput(output))
+				.catch(() => {
+					// Best-effort; the next interval retries.
+				});
+		}, CremaApp.DECENT_SCALE_HEARTBEAT_INTERVAL_MS);
+	}
+
+	/** Clear the Decent-Scale heartbeat clock if one is running. */
+	private clearDecentScaleHeartbeat(): void {
+		if (this.decentScaleHeartbeatId !== null) {
+			clearInterval(this.decentScaleHeartbeatId);
+			this.decentScaleHeartbeatId = null;
+		}
 	}
 
 	/**
