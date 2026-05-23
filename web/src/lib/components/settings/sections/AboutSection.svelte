@@ -49,7 +49,7 @@
 			<div class="st-row-control">
 				<a
 					class="st-btn st-btn-secondary"
-					href="https://github.com/decentespresso"
+					href="https://github.com/geota/crema"
 					target="_blank"
 					rel="noreferrer noopener"
 				>

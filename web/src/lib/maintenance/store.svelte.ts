@@ -182,6 +182,36 @@ export class MaintenanceStore {
 		this.state = { ...this.state, backflushAtMs: Date.now() };
 		this.persist();
 	}
+
+	/**
+	 * Set the water-filter rated capacity, in litres. Drives the filter
+	 * card's "% capacity left" readout and the replace-now threshold.
+	 */
+	setFilterCapacity(litres: number): void {
+		if (!Number.isFinite(litres) || litres <= 0) return;
+		this.state = { ...this.state, filterCapacityLitres: litres };
+		this.persist();
+	}
+
+	/**
+	 * Set the descale interval, in litres. The descale card flips to
+	 * "Descale due" once `descaleSinceLitres` exceeds this value.
+	 */
+	setDescaleInterval(litres: number): void {
+		if (!Number.isFinite(litres) || litres <= 0) return;
+		this.state = { ...this.state, descaleIntervalLitres: litres };
+		this.persist();
+	}
+
+	/**
+	 * Set the backflush interval, in whole hours. The backflush card flips
+	 * to "Backflush due" once `backflushSinceHours` exceeds this value.
+	 */
+	setBackflushInterval(hours: number): void {
+		if (!Number.isFinite(hours) || hours <= 0) return;
+		this.state = { ...this.state, backflushIntervalHours: hours };
+		this.persist();
+	}
 }
 
 /** The process-wide singleton — one maintenance store shared by every route. */
