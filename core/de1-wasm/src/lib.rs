@@ -268,6 +268,24 @@ pub fn format_bookoo_firmware(encoded: u16) -> String {
     de1_app::bookoo::format_firmware_version(encoded)
 }
 
+/// Export a Rust-shape `StoredShot` (the same shape `import_v2_json_shot`
+/// returns) as a pretty-printed community-v2 `.shot.json` document.
+/// `shot_json` is the JSON of a `de1_domain::StoredShot` — the shell
+/// stringifies its `RustStoredShot`-mapped record and passes it
+/// straight through.
+///
+/// Symmetric with `import_v2_json_shot`; round-trip parity is tested
+/// in `de1-domain::history_export`. Exposed as a top-level function
+/// (not a `CremaBridge` method) because it is pure — no core state —
+/// so a shell can call it synchronously from a `Blob` download path.
+/// docs/26 audit #6.
+#[wasm_bindgen]
+pub fn export_v2_json_shot(shot_json: &str) -> Result<String, String> {
+    let shot: de1_domain::StoredShot =
+        serde_json::from_str(shot_json).map_err(|e| e.to_string())?;
+    Ok(de1_domain::export_v2_json_shot(&shot))
+}
+
 /// Hard wire-protocol bounds for DE1 profile fields, exposed to shells as
 /// a single JSON snapshot so steppers / validators / form widgets reach
 /// for the same numbers. The shell parses the result once at module load
