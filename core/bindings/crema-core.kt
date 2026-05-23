@@ -37,7 +37,7 @@ data class EventTelemetryInner (
 	val elapsed: UInt,
 	/// Group pressure, bar.
 	val group_pressure: Float,
-	/// Group flow, mL/s.
+	/// Group flow, ml/s.
 	val group_flow: Float,
 	/// Group-head temperature, °C.
 	val head_temp: Float,
@@ -45,7 +45,7 @@ data class EventTelemetryInner (
 	val mix_temp: Float,
 	/// Steam-heater temperature, °C.
 	val steam_temp: Float,
-	/// Running shot volume dispensed so far, mL — integrated from the
+	/// Running shot volume dispensed so far, ml — integrated from the
 	/// telemetry flow stream against the DE1's `sample_time` ticks
 	/// (BLE-jitter-immune when the line-frequency is known, host-clock
 	/// fallback otherwise). Resets to 0 on every `ShotStarted`.
@@ -57,14 +57,14 @@ data class EventTelemetryInner (
 	/// Target group pressure, bar — the pump pressure setpoint for the
 	/// active frame. Legacy "Goal pressure" curve.
 	val set_group_pressure: Float,
-	/// Target group flow, mL/s — the pump flow setpoint for the active
+	/// Target group flow, ml/s — the pump flow setpoint for the active
 	/// frame. Legacy "Goal flow" curve.
 	val set_group_flow: Float,
 	/// Puck resistance — `group_pressure / group_flow²`, the
 	/// de1app/DSx derived "resistance" metric (the R4 read-path).
 	/// `None` when group flow is too low to divide by meaningfully —
 	/// the near-zero-flow region produces noisy spikes that have no
-	/// useful interpretation. Units are `bar / (mL/s)²`. Surfaced on
+	/// useful interpretation. Units are `bar / (ml/s)²`. Surfaced on
 	/// the event itself so every shell consumes the same value
 	/// (previously each shell duplicated the formula + threshold).
 	val resistance: Float? = null
@@ -261,7 +261,7 @@ data class EventProfileHeaderReadInner (
 	val preinfuse_frame_count: UByte,
 	/// Minimum pressure allowed in flow-priority frames, bar.
 	val minimum_pressure: Float,
-	/// Maximum flow allowed in pressure-priority frames, mL/s.
+	/// Maximum flow allowed in pressure-priority frames, ml/s.
 	val maximum_flow: Float
 )
 
@@ -274,11 +274,11 @@ data class EventShotSettingsReadInner (
 	val steam_timeout_s: Float,
 	/// Target hot-water temperature, °C.
 	val hot_water_temp_c: Float,
-	/// Hot-water volume, mL.
+	/// Hot-water volume, ml.
 	val hot_water_volume_ml: Float,
 	/// Hot-water timeout, seconds.
 	val hot_water_timeout_s: Float,
-	/// Espresso target volume, mL.
+	/// Espresso target volume, ml.
 	val espresso_volume_ml: Float,
 	/// Espresso group target temperature, °C.
 	val group_temp_c: Float

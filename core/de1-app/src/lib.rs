@@ -63,7 +63,7 @@ const WATER_LEVEL_MM_CORRECTION: f32 = 5.0;
 /// How long the scale may go without reporting weight before it is considered
 /// stale — the legacy app warns after roughly one second of silence.
 const SCALE_STALE_TIMEOUT: Duration = Duration::from_secs(1);
-/// Hot-water volume (mL) requested when a scale is connected: the legacy app
+/// Hot-water volume (ml) requested when a scale is connected: the legacy app
 /// asks for far more water than wanted so the scale's weight-based stop is what
 /// cuts off the pour (`binary.tcl` `return_de1_packed_steam_hotwater_settings`).
 const HOT_WATER_STOP_ON_SCALE_ML: f32 = 250.0;
@@ -85,7 +85,7 @@ fn duration_to_u32_ms(d: Duration) -> u32 {
     u32::try_from(d.as_millis()).unwrap_or(u32::MAX)
 }
 
-/// Minimum group flow (mL/s) below which puck-resistance is undefined.
+/// Minimum group flow (ml/s) below which puck-resistance is undefined.
 /// Reproduces the legacy de1app / DSx threshold — at near-zero flow the
 /// numeric value swings wildly (small denominator squared) and reads
 /// noisy, so the metric is suppressed.
@@ -96,7 +96,7 @@ const RESISTANCE_FLOW_FLOOR_ML_PER_S: f32 = 0.1;
 /// computation. Returns `None` when group flow is below
 /// [`RESISTANCE_FLOW_FLOOR_ML_PER_S`] — near-zero-flow values aren't
 /// meaningful and used to be masked at the readout layer in every shell.
-/// Units: `bar / (mL/s)²`.
+/// Units: `bar / (ml/s)²`.
 fn puck_resistance(group_pressure_bar: f32, group_flow_ml_per_s: f32) -> Option<f32> {
     if !group_pressure_bar.is_finite() || !group_flow_ml_per_s.is_finite() {
         return None;
@@ -381,7 +381,7 @@ impl CremaCore {
         self.line_freq_override = hz;
     }
 
-    /// Volume dispensed in the current shot, mL. Resets to 0 on every
+    /// Volume dispensed in the current shot, ml. Resets to 0 on every
     /// `Event::ShotStarted`. Updated on every `ShotSample` notification.
     pub fn dispensed_volume_ml(&self) -> f32 {
         self.volume_integrator.dispensed_ml()
@@ -664,7 +664,7 @@ impl CremaCore {
     /// Set the steam flow rate. `ml_per_s` is scaled by ×100 per the
     /// legacy `de1_comms.tcl:1210` + reaprime `de1.models.dart`
     /// (`steamFlow` `writeScale: 100.0`); the stored wire value is
-    /// `mL/s × 100` (e.g. 7.0 mL/s → raw 700). MMR `0x803828`, 4-byte.
+    /// `ml/s × 100` (e.g. 7.0 ml/s → raw 700). MMR `0x803828`, 4-byte.
     /// Pre-2026-05-22 builds wrote `×10` into a 1-byte slot, both
     /// wrong; the 1-byte clamp prevented valid steam targets from
     /// reaching the firmware. docs/22 §2.1.
@@ -2017,9 +2017,9 @@ impl CremaCore {
 /// per-field units.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct HeaterTweaks {
-    /// Hot-water phase-1 flow rate, mL/s.
+    /// Hot-water phase-1 flow rate, ml/s.
     pub phase_1_flow_rate: f32,
-    /// Hot-water phase-2 flow rate, mL/s.
+    /// Hot-water phase-2 flow rate, ml/s.
     pub phase_2_flow_rate: f32,
     /// Hot-water idle temperature, °C.
     pub hot_water_idle_temp_c: u8,
@@ -2029,9 +2029,9 @@ pub struct HeaterTweaks {
     pub steam_two_tap_stop: u8,
     /// Flush timeout.
     pub flush_timeout: Duration,
-    /// Flush flow rate, mL/s.
+    /// Flush flow rate, ml/s.
     pub flush_flow_rate: f32,
-    /// Hot-water flow rate, mL/s.
+    /// Hot-water flow rate, ml/s.
     pub hot_water_flow_rate: f32,
 }
 
@@ -3033,7 +3033,7 @@ mod tests {
             panic!("expected a WriteCharacteristic command");
         };
         assert_eq!(*target, WriteTarget::De1ShotSettings);
-        // Byte 4 is the hot-water volume (u8p0): the user's 50 mL is unchanged.
+        // Byte 4 is the hot-water volume (u8p0): the user's 50 ml is unchanged.
         assert_eq!(data[4], 50);
     }
 
@@ -3045,7 +3045,7 @@ mod tests {
         let Some(Command::WriteCharacteristic { data, .. }) = out.commands.first() else {
             panic!("expected a WriteCharacteristic command");
         };
-        // With a scale connected the volume is bumped to 250 mL so the scale's
+        // With a scale connected the volume is bumped to 250 ml so the scale's
         // weight stop is what ends the pour.
         assert_eq!(data[4], 250);
     }
@@ -3054,12 +3054,12 @@ mod tests {
     fn steam_hotwater_volume_override_lifts_when_the_scale_disconnects() {
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC");
-        // The user configures 50 mL while a scale is connected.
+        // The user configures 50 ml while a scale is connected.
         core.set_steam_hotwater_settings(hotwater_settings(50.0));
         // The scale disconnects (an unrecognised name clears `scale`).
         assert_eq!(core.connect_scale("Some Random Device"), None);
         // An eco transition rewrites the settings; the hot-water volume must
-        // now be the user's original 50 mL, not the 250 mL scale override.
+        // now be the user's original 50 ml, not the 250 ml scale override.
         core.enable_steam_eco_mode(true, 0);
         let out = core.on_tick(600_000);
         let Some(Command::WriteCharacteristic { data, .. }) = out.commands.first() else {
@@ -3443,7 +3443,7 @@ mod tests {
         // docs/22 §2.1: TCL + reaprime agree on ×100 + 4-byte; the
         // pre-2026-05-22 `×10` + 1-byte encoding was a bug (the 1-byte
         // clamp prevented valid steam targets from reaching the
-        // firmware). 7.0 mL/s × 100 = 700; little-endian 4-byte =
+        // firmware). 7.0 ml/s × 100 = 700; little-endian 4-byte =
         // [0xBC, 0x02, 0x00, 0x00].
         let core = CremaCore::new();
         let out = core.set_steam_flow(7.0);
@@ -3945,7 +3945,7 @@ mod tests {
         fn header_read_emits_profile_header_read_event() {
             let mut core = CremaCore::new();
             // A 5-byte ShotHeader: version 1, frame_count 4, preinfuse 2,
-            // min_pressure raw=0x10 (1.0 bar), max_flow raw=0x60 (6.0 mL/s).
+            // min_pressure raw=0x10 (1.0 bar), max_flow raw=0x60 (6.0 ml/s).
             let packet = [0x01, 4, 2, 0x10, 0x60];
             let out = core.on_notification(Source::De1ProfileHeader, &packet, 0);
             assert!(out.events.iter().any(|e| matches!(

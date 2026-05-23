@@ -78,13 +78,13 @@ pub struct ImportedDe1AppSettings {
     // ── Hot water ─────────────────────────────────────────────────────
     /// `water_temperature` — hot-water target temperature, °C.
     pub hot_water_temperature_c: Option<u8>,
-    /// `water_volume` — hot-water target volume, mL.
+    /// `water_volume` — hot-water target volume, ml.
     pub hot_water_volume_ml: Option<u32>,
 
     // ── Flush ─────────────────────────────────────────────────────────
-    /// `flush_flow` — flush flow rate, mL/s. The legacy app stores
+    /// `flush_flow` — flush flow rate, ml/s. The legacy app stores
     /// this as a plain double; the wire value the DE1 expects is
-    /// `mL/s × 100` (docs/22 §2.1).
+    /// `ml/s × 100` (docs/22 §2.1).
     pub flush_flow_ml_per_s: Option<f32>,
     /// `flush_seconds` — flush duration, seconds.
     pub flush_seconds: Option<u32>,

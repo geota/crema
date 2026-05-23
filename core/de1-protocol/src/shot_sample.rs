@@ -9,7 +9,7 @@ pub const SHOT_SAMPLE_LEN: usize = 19;
 /// One decoded telemetry sample from the DE1, notified at ~4–10 Hz during a
 /// shot (see protocol §3).
 ///
-/// Temperatures are °C, pressure is bar, flow is mL/s. This type is `Clone` but
+/// Temperatures are °C, pressure is bar, flow is ml/s. This type is `Clone` but
 /// deliberately not `Copy`: it is large enough (a dozen fields) that implicit
 /// copies are not a good default — pass it by reference.
 #[derive(Debug, Clone, PartialEq)]
@@ -19,7 +19,7 @@ pub struct ShotSample {
     pub sample_time: u16,
     /// Measured group pressure, bar.
     pub group_pressure: f32,
-    /// Measured group flow, mL/s.
+    /// Measured group flow, ml/s.
     pub group_flow: f32,
     /// Measured group head temperature, °C.
     pub head_temp: f32,
@@ -31,7 +31,7 @@ pub struct ShotSample {
     pub set_head_temp: f32,
     /// Target group pressure, bar.
     pub set_group_pressure: f32,
-    /// Target group flow, mL/s.
+    /// Target group flow, ml/s.
     pub set_group_flow: f32,
     /// Index of the profile frame currently executing.
     pub frame_number: u8,
@@ -106,13 +106,13 @@ mod tests {
         [
             0x12, 0x34, // bytes 0-1  · SampleTime    = 0x1234 = 4660
             0x90, 0x00, // bytes 2-3  · GroupPressure = 36864 / 4096 = 9.0 bar
-            0x28, 0x00, // bytes 4-5  · GroupFlow     = 10240 / 4096 = 2.5 mL/s
+            0x28, 0x00, // bytes 4-5  · GroupFlow     = 10240 / 4096 = 2.5 ml/s
             0x58, 0x00, // bytes 6-7  · MixTemp       = 22528 / 256  = 88.0 °C
             0x5C, 0x80, 0x00, // bytes 8-10 · HeadTemp = 92 + 128/256 = 92.5 °C
             0x5A, 0x00, // bytes 11-12 · SetMixTemp   = 23040 / 256 = 90.0 °C
             0x5D, 0x00, // bytes 13-14 · SetHeadTemp  = 23808 / 256 = 93.0 °C
             0x60, // byte 15 · SetGroupPressure = 96 / 16 = 6.0 bar
-            0x40, // byte 16 · SetGroupFlow     = 64 / 16 = 4.0 mL/s
+            0x40, // byte 16 · SetGroupFlow     = 64 / 16 = 4.0 ml/s
             0x03, // byte 17 · FrameNumber      = 3
             0x96, // byte 18 · SteamTemp        = 150 °C
         ]

@@ -72,14 +72,14 @@ export const MAX_TELEMETRY_SAMPLES = 2000;
  * `Event::Telemetry` carries the DE1 channels; the scale weight is folded in
  * from the most recent `ScaleReading` so a sample is a complete 4-channel
  * snapshot at a point in time. Numeric fields keep their flat-number shape —
- * the units (`ms`, `bar`, `mL/s`, `°C`, `g`) live in the doc-comments.
+ * the units (`ms`, `bar`, `ml/s`, `°C`, `g`) live in the doc-comments.
  */
 export interface TelemetrySample {
 	/** Milliseconds since the shot began; `0` when no shot is in progress. */
 	readonly elapsed: number;
 	/** Group pressure, bar. */
 	readonly pressure: number;
-	/** Group flow, mL/s. */
+	/** Group flow, ml/s. */
 	readonly flow: number;
 	/** Group-head temperature, °C. */
 	readonly temp: number;
@@ -107,7 +107,7 @@ export interface TelemetrySample {
 	/**
 	 * Puck resistance — `pressure / flow²`, the de1app/DSx derived "resistance"
 	 * metric (R4). `null` when flow is too low to divide by meaningfully, so a
-	 * reader can skip the noisy near-zero-flow region. Units are bar / (mL/s)².
+	 * reader can skip the noisy near-zero-flow region. Units are bar / (ml/s)².
 	 */
 	readonly resistance: number | null;
 	/**
@@ -242,7 +242,7 @@ export interface UiSnapshot {
 	/** Elapsed time of the current/last shot, ms — `latestTelemetry.elapsed`. */
 	readonly shotElapsed: number;
 	/**
-	 * Volume dispensed in the current shot, mL — integrated by the core
+	 * Volume dispensed in the current shot, ml — integrated by the core
 	 * from each `ShotSample`'s flow against the DE1's `sample_time`
 	 * ticks (`docs/02-ble-protocol.md` §3.3). Resets to 0 on every
 	 * `ShotStarted`; updated on every `Telemetry` event.
@@ -422,11 +422,11 @@ export interface De1ShotSettingsSnapshot {
 	readonly steamTimeoutS: number;
 	/** Target hot-water temperature, °C. */
 	readonly hotWaterTempC: number;
-	/** Hot-water target volume, mL. */
+	/** Hot-water target volume, ml. */
 	readonly hotWaterVolumeMl: number;
 	/** Hot-water timeout, seconds. */
 	readonly hotWaterTimeoutS: number;
-	/** Espresso target volume, mL. */
+	/** Espresso target volume, ml. */
 	readonly espressoVolumeMl: number;
 	/** Espresso group target temperature, °C. */
 	readonly groupTempC: number;
@@ -444,7 +444,7 @@ export interface LoadedProfileShape {
 	readonly preinfuseFrameCount: number;
 	/** Minimum pressure allowed in flow-priority frames, bar. */
 	readonly minimumPressure: number;
-	/** Maximum flow allowed in pressure-priority frames, mL/s. */
+	/** Maximum flow allowed in pressure-priority frames, ml/s. */
 	readonly maximumFlow: number;
 }
 
@@ -527,7 +527,7 @@ export const INITIAL_SNAPSHOT: UiSnapshot = {
 	replay: null
 };
 
-// The DE1 tank-level → mL lookup moved to the core 2026-05-22
+// The DE1 tank-level → ml lookup moved to the core 2026-05-22
 // (`de1_domain::water_tank_ml` via the wasm bridge — audit #2). The shell
 // wrapper below adds the `null` propagation (the wasm fn takes a finite
 // f32 only); every shell consumes the same calibration. Old `null` /
@@ -537,11 +537,11 @@ export const INITIAL_SNAPSHOT: UiSnapshot = {
 
 /**
  * Convert a DE1 tank-level reading (mm, see {@link UiSnapshot.waterLevel})
- * to the tank's water volume in mL via the core's `water_tank_ml` helper
+ * to the tank's water volume in ml via the core's `water_tank_ml` helper
  * (`core/de1-domain/src/tank.rs`). Returns `null` for a missing reading;
  * the depth is clamped to the lookup table's range — a depth past the top
- * reads as the 2058 mL full ceiling, a negative depth (a sensor glitch) as
- * the 0 mL empty floor — matching the de1app / DSx behaviour.
+ * reads as the 2058 ml full ceiling, a negative depth (a sensor glitch) as
+ * the 0 ml empty floor — matching the de1app / DSx behaviour.
  */
 export function waterTankMl(mm: number | null | undefined): number | null {
 	if (mm == null || !Number.isFinite(mm)) return null;
@@ -730,7 +730,7 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 			// Telemetry is high-rate — update the readout, never log it.
 			const line =
 				`t=${Math.round(t.elapsed)}ms  P=${t.group_pressure.toFixed(1)}bar  ` +
-				`flow=${t.group_flow.toFixed(1)}mL/s  head=${t.head_temp.toFixed(1)}°C`;
+				`flow=${t.group_flow.toFixed(1)}ml/s  head=${t.head_temp.toFixed(1)}°C`;
 			// Build the structured sample, folding in the latest scale weight so
 			// every sample is a complete 4-channel snapshot.
 			const sample: TelemetrySample = {
@@ -1009,7 +1009,7 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				eventLog: appendLog(
 					snapshot.eventLog,
 					`ShotSettings read: steam ${c.steam_temp_c} °C/${c.steam_timeout_s} s · ` +
-						`hot water ${c.hot_water_temp_c} °C/${c.hot_water_volume_ml} mL/${c.hot_water_timeout_s} s · ` +
+						`hot water ${c.hot_water_temp_c} °C/${c.hot_water_volume_ml} ml/${c.hot_water_timeout_s} s · ` +
 						`group ${c.group_temp_c} °C`
 				)
 			};

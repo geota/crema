@@ -16,7 +16,7 @@ const MAX_STEPS: usize = 32;
 pub enum Pump {
     /// Pressure priority — the step targets a pressure in bar.
     Pressure,
-    /// Flow priority — the step targets a flow rate in mL/s.
+    /// Flow priority — the step targets a flow rate in ml/s.
     Flow,
 }
 
@@ -79,7 +79,7 @@ pub enum BeverageType {
 pub enum ExitMetric {
     /// Watch pressure (bar).
     Pressure,
-    /// Watch flow (mL/s).
+    /// Watch flow (ml/s).
     Flow,
 }
 
@@ -101,7 +101,7 @@ pub struct ExitCondition {
     pub metric: ExitMetric,
     /// Whether to exit above or below the threshold.
     pub compare: Compare,
-    /// The threshold value (bar or mL/s, per `metric`).
+    /// The threshold value (bar or ml/s, per `metric`).
     pub threshold: f32,
 }
 
@@ -121,7 +121,7 @@ pub struct ProfileStep {
     pub name: String,
     /// Whether the step holds pressure or flow.
     pub pump: Pump,
-    /// Target value — bar (pressure) or mL/s (flow), per `pump`.
+    /// Target value — bar (pressure) or ml/s (flow), per `pump`.
     pub target: f32,
     /// Target temperature, °C.
     pub temperature_c: f32,
@@ -133,7 +133,7 @@ pub struct ProfileStep {
     pub duration_seconds: f32,
     /// Optional early-exit condition.
     pub exit: Option<ExitCondition>,
-    /// Per-step dispensed-volume limit, mL, range 0–1023 (0 = no limit).
+    /// Per-step dispensed-volume limit, ml, range 0–1023 (0 = no limit).
     pub volume_limit_ml: u16,
     /// Optional advanced max-flow-or-pressure limiter.
     pub limiter: Option<Limiter>,
@@ -200,9 +200,9 @@ pub struct Profile {
     pub preinfuse_step_count: u8,
     /// Minimum pressure for flow-priority steps, bar.
     pub minimum_pressure: f32,
-    /// Maximum flow for pressure-priority steps, mL/s.
+    /// Maximum flow for pressure-priority steps, ml/s.
     pub maximum_flow: f32,
-    /// Whole-shot dispensed-volume limit, mL, range 0–1023 (0 = no limit).
+    /// Whole-shot dispensed-volume limit, ml, range 0–1023 (0 = no limit).
     pub max_total_volume_ml: u16,
     /// Desired final shot weight in grams (0.0 = no target).
     ///

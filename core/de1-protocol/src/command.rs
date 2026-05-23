@@ -71,11 +71,11 @@ pub struct ShotSettings {
     pub steam_timeout_s: f32,
     /// Target hot-water temperature, °C.
     pub hot_water_temp_c: f32,
-    /// Hot-water volume, mL.
+    /// Hot-water volume, ml.
     pub hot_water_volume_ml: f32,
     /// Hot-water maximum time, seconds.
     pub hot_water_timeout_s: f32,
-    /// Typical espresso volume, mL.
+    /// Typical espresso volume, ml.
     pub espresso_volume_ml: f32,
     /// Espresso group target temperature, °C.
     pub group_temp_c: f32,
@@ -83,8 +83,8 @@ pub struct ShotSettings {
 
 impl Default for ShotSettings {
     /// The legacy app's per-setting defaults for the steam and hot-water
-    /// settings (`machine.tcl`): 160 °C / 120 s steam; 85 °C / 50 mL / 60 s
-    /// hot water; 200 mL espresso volume; 92 °C group.
+    /// settings (`machine.tcl`): 160 °C / 120 s steam; 85 °C / 50 ml / 60 s
+    /// hot water; 200 ml espresso volume; 92 °C group.
     fn default() -> ShotSettings {
         ShotSettings {
             steam_flags: 0,

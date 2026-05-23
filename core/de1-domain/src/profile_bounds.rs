@@ -18,7 +18,7 @@ pub const MAX_PROFILE_STEPS: u8 = 32;
 
 // ── Volume ──────────────────────────────────────────────────────────────
 
-/// Maximum total volume (mL) the DE1 will dispense in one shot. The
+/// Maximum total volume (ml) the DE1 will dispense in one shot. The
 /// limit is the 10-bit wire field used in `HeaderWrite` (`cuuid_0F`,
 /// `max_total_volume`), so writes above this saturate at 1023.
 pub const MAX_TOTAL_VOLUME_ML: u16 = 1023;
@@ -41,10 +41,10 @@ pub const MAX_PRESSURE_BAR: f32 = 15.9375;
 
 // ── Flow ────────────────────────────────────────────────────────────────
 
-/// Lower bound for any flow setpoint (mL/s).
+/// Lower bound for any flow setpoint (ml/s).
 pub const MIN_FLOW_ML_PER_S: f32 = 0.0;
 
-/// Upper bound for any flow setpoint (mL/s) — same `u8p4` wire encoding
+/// Upper bound for any flow setpoint (ml/s) — same `u8p4` wire encoding
 /// as pressure.
 pub const MAX_FLOW_ML_PER_S: f32 = 15.9375;
 

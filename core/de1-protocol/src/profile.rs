@@ -107,7 +107,7 @@ pub struct ShotHeader {
     pub preinfuse_frame_count: u8,
     /// Minimum pressure allowed in flow-priority frames, bar.
     pub minimum_pressure: f32,
-    /// Maximum flow allowed in pressure-priority frames, mL/s.
+    /// Maximum flow allowed in pressure-priority frames, ml/s.
     pub maximum_flow: f32,
 }
 
@@ -153,7 +153,7 @@ pub struct ShotFrame {
     pub index: u8,
     /// Frame control flags.
     pub flags: FrameFlags,
-    /// Target pressure (bar) or flow (mL/s), per [`FrameFlags::flow_priority`].
+    /// Target pressure (bar) or flow (ml/s), per [`FrameFlags::flow_priority`].
     pub set_value: f32,
     /// Target temperature, °C.
     pub temperature: f32,
@@ -161,7 +161,7 @@ pub struct ShotFrame {
     pub duration_seconds: f32,
     /// Early-exit comparison threshold (pressure or flow, per the flags).
     pub trigger_value: f32,
-    /// Per-frame dispensed-volume limit, mL, range 0–1023 (0 = no limit).
+    /// Per-frame dispensed-volume limit, ml, range 0–1023 (0 = no limit).
     pub max_volume_ml: u16,
 }
 
@@ -248,7 +248,7 @@ impl ExtensionFrame {
 pub struct ShotTail {
     /// `FrameToWrite` for the tail — equal to the profile's frame count.
     pub frame_count: u8,
-    /// Whole-shot dispensed-volume limit, mL, range 0–1023 (0 = no limit).
+    /// Whole-shot dispensed-volume limit, ml, range 0–1023 (0 = no limit).
     pub max_total_volume_ml: u16,
 }
 

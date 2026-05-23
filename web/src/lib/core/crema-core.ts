@@ -39,7 +39,7 @@ export type Event =
 	elapsed: number;
 	/** Group pressure, bar. */
 	group_pressure: number;
-	/** Group flow, mL/s. */
+	/** Group flow, ml/s. */
 	group_flow: number;
 	/** Group-head temperature, °C. */
 	head_temp: number;
@@ -48,7 +48,7 @@ export type Event =
 	/** Steam-heater temperature, °C. */
 	steam_temp: number;
 	/**
-	 * Running shot volume dispensed so far, mL — integrated from the
+	 * Running shot volume dispensed so far, ml — integrated from the
 	 * telemetry flow stream against the DE1's `sample_time` ticks
 	 * (BLE-jitter-immune when the line-frequency is known, host-clock
 	 * fallback otherwise). Resets to 0 on every `ShotStarted`.
@@ -66,7 +66,7 @@ export type Event =
 	 */
 	set_group_pressure: number;
 	/**
-	 * Target group flow, mL/s — the pump flow setpoint for the active
+	 * Target group flow, ml/s — the pump flow setpoint for the active
 	 * frame. Legacy "Goal flow" curve.
 	 */
 	set_group_flow: number;
@@ -75,7 +75,7 @@ export type Event =
 	 * de1app/DSx derived "resistance" metric (the R4 read-path).
 	 * `None` when group flow is too low to divide by meaningfully —
 	 * the near-zero-flow region produces noisy spikes that have no
-	 * useful interpretation. Units are `bar / (mL/s)²`. Surfaced on
+	 * useful interpretation. Units are `bar / (ml/s)²`. Surfaced on
 	 * the event itself so every shell consumes the same value
 	 * (previously each shell duplicated the formula + threshold).
 	 */
@@ -350,7 +350,7 @@ export type Event =
 	preinfuse_frame_count: number;
 	/** Minimum pressure allowed in flow-priority frames, bar. */
 	minimum_pressure: number;
-	/** Maximum flow allowed in pressure-priority frames, mL/s. */
+	/** Maximum flow allowed in pressure-priority frames, ml/s. */
 	maximum_flow: number;
 }}
 	/**
@@ -366,11 +366,11 @@ export type Event =
 	steam_timeout_s: number;
 	/** Target hot-water temperature, °C. */
 	hot_water_temp_c: number;
-	/** Hot-water volume, mL. */
+	/** Hot-water volume, ml. */
 	hot_water_volume_ml: number;
 	/** Hot-water timeout, seconds. */
 	hot_water_timeout_s: number;
-	/** Espresso target volume, mL. */
+	/** Espresso target volume, ml. */
 	espresso_volume_ml: number;
 	/** Espresso group target temperature, °C. */
 	group_temp_c: number;

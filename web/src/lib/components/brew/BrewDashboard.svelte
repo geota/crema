@@ -172,7 +172,7 @@
 	 * The resting chip sub-labels — the *target* (set) values the firmware
 	 * will hold during the session. Steam + hot-water targets come from
 	 * `ShotSettings`; flush target temp comes from the FlushTemp MMR
-	 * register above. Fallbacks (148 °C steam target, 92 °C / 250 mL hot
+	 * register above. Fallbacks (148 °C steam target, 92 °C / 250 ml hot
 	 * water) match the legacy de1app defaults so the chips paint
 	 * sensibly before the connect-time reads return.
 	 *
@@ -457,8 +457,8 @@
 		v == null ? '—' : v.toFixed(digits);
 
 	/**
-	 * Format a dispensed-water reading. Stored canonically in mL; rendered
-	 * in mL or fl oz per the volume pref. One decimal so the digit density
+	 * Format a dispensed-water reading. Stored canonically in ml; rendered
+	 * in ml or fl oz per the volume pref. One decimal so the digit density
 	 * matches FLOW next to it on the card. `null`/non-finite → `'0.0'` so
 	 * the caller can independently decide pre-telemetry → `'—'`.
 	 */
@@ -589,7 +589,7 @@
 		if (tel === null) return '—';
 		return formatDispensedMl(ui.dispensedVolumeMl, prefs.volumeUnit);
 	});
-	const dispensedVolumeUnit = $derived(prefs.volumeUnit === 'floz' ? 'fl oz' : 'mL');
+	const dispensedVolumeUnit = $derived(prefs.volumeUnit === 'floz' ? 'fl oz' : 'ml');
 	/**
 	 * Weight flow (g/s) — the scale's host-side mass-flow estimate. Same
 	 * pre-/post-/pinned/live ladder as the other secondary readouts. Pre-
@@ -619,7 +619,7 @@
 		shotWeight == null ? 0 : Math.min(100, (shotWeight / p.yield) * 100)
 	);
 	/**
-	 * Water-tank volume (mL) for the foot readout — the DE1's `WaterLevel`
+	 * Water-tank volume (ml) for the foot readout — the DE1's `WaterLevel`
 	 * depth (mm) mapped through the de1app tank-geometry table, or `null`
 	 * before the first reading.
 	 */
@@ -807,14 +807,14 @@
 						color="var(--tel-pressure)"
 						secondaryLabel="RESISTANCE"
 						secondaryValue={resistanceVal}
-						secondaryUnit="bar·s²/mL"
+						secondaryUnit="bar·s²/ml"
 						secondaryColor="var(--tel-pressure-2)"
 					/>
 					<ChannelReadout
 						icon="drop"
 						label="FLOW"
 						value={fmt(tel?.flow)}
-						unit="mL/s"
+						unit="ml/s"
 						color="var(--tel-flow)"
 						secondaryLabel="WATER"
 						secondaryValue={dispensedVolumeVal}
@@ -910,7 +910,7 @@
 					>{steamTempM.value}{steamTempM.unit ? ` ${steamTempM.unit}` : ''}</span
 				>
 				<!-- Water tank: real `WaterLevel` telemetry, the sensor depth
-				     converted to a tank volume in mL (see `waterTankMl`), then
+				     converted to a tank volume in ml (see `waterTankMl`), then
 				     to the Settings volume unit (D1). A "refill soon" cue (E2)
 				     shows when the level nears the DE1's refill threshold. -->
 				<span class="t-eyebrow">Tank</span>

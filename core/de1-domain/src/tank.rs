@@ -1,5 +1,5 @@
 //! Water-tank geometry — translating the DE1's sensor depth (mm) to the
-//! tank's water volume (mL).
+//! tank's water volume (ml).
 //!
 //! The DE1's `WaterLevels` characteristic reports the sensor depth in
 //! millimetres. The tank is not a straight cylinder, so a lookup table is
@@ -10,7 +10,7 @@
 
 /// The DE1 tank-level → water-volume lookup table.
 ///
-/// Index 0..67 maps to 0..2058 mL — one entry per integer mm of sensor
+/// Index 0..67 maps to 0..2058 ml — one entry per integer mm of sensor
 /// depth. Ported verbatim from the de1app's
 /// `water_tank_level_to_milliliters` (`de1plus/vars.tcl`); the DSx skin
 /// uses the same table.
@@ -22,11 +22,11 @@ pub const TANK_MM_TO_ML: [u16; 68] = [
 ];
 
 /// Convert a DE1 tank-level reading (mm of sensor depth) to the tank's
-/// water volume in mL via [`TANK_MM_TO_ML`].
+/// water volume in ml via [`TANK_MM_TO_ML`].
 ///
 /// The depth is clamped to the table's range — a depth past the top reads
-/// as the 2058 mL full ceiling, a negative depth (a sensor glitch) as the
-/// 0 mL empty floor — matching the de1app / DSx behaviour. The mm reading
+/// as the 2058 ml full ceiling, a negative depth (a sensor glitch) as the
+/// 0 ml empty floor — matching the de1app / DSx behaviour. The mm reading
 /// is truncated to an integer index (the DE1 reports sub-millimetre noise
 /// at idle that would otherwise jitter the readout).
 pub fn water_tank_ml(mm: f32) -> u16 {
@@ -75,7 +75,7 @@ mod tests {
 
     #[test]
     fn truncates_sub_millimetre_noise() {
-        // 5.7 mm truncates to 5 → 124 mL (the table at index 5).
+        // 5.7 mm truncates to 5 → 124 ml (the table at index 5).
         assert_eq!(water_tank_ml(5.7), TANK_MM_TO_ML[5]);
         assert_eq!(water_tank_ml(5.0), TANK_MM_TO_ML[5]);
     }

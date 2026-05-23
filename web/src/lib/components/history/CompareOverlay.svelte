@@ -76,8 +76,8 @@
 	/** Y-axis unit label, by channel + user pref. */
 	const yUnit = $derived.by(() => {
 		if (channel === 'pressure') return unitLabel('pressure', prefs);
-		if (channel === 'resistance') return 'bar·s²/mL';
-		if (channel === 'flow') return 'mL/s';
+		if (channel === 'resistance') return 'bar·s²/ml';
+		if (channel === 'flow') return 'ml/s';
 		if (channel === 'water') return unitLabel('volume', prefs);
 		if (channel === 'temp' || channel === 'mixTemp') return unitLabel('temp', prefs);
 		if (channel === 'weightFlow') return 'g/s';
@@ -86,7 +86,7 @@
 
 	/**
 	 * Convert a canonical channel sample to the user's display unit. Flow
-	 * stays in mL/s (no sensible imperial flow unit); pressure / temp /
+	 * stays in ml/s (no sensible imperial flow unit); pressure / temp /
 	 * weight / water pick up the user's pref. Resistance and weight-flow
 	 * are unit-fixed.
 	 */
@@ -140,7 +140,7 @@
 				case 'pressure':
 					return prefs.pressureUnit === 'psi' ? 150 : 10;
 				case 'resistance':
-					return 5; // bar·s²/mL — typical extraction peak
+					return 5; // bar·s²/ml — typical extraction peak
 				case 'flow':
 					return 6;
 				case 'water':

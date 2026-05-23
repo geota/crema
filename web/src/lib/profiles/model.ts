@@ -28,7 +28,7 @@ export type Roast = 'light' | 'medium' | 'dark';
 /** How a segment ramps to its target — the design's `ramp` field. */
 export type SegmentRamp = 'smooth' | 'fast';
 
-/** Whether a segment targets a pressure (bar) or a flow (mL/s). */
+/** Whether a segment targets a pressure (bar) or a flow (ml/s). */
 export type SegmentMode = 'pressure' | 'flow';
 
 /** Which metric an exit condition watches. */
@@ -53,7 +53,7 @@ export interface SegmentExit {
 	metric: ExitMetric;
 	/** Exit when the metric rises above (`over`) or falls below (`under`). */
 	compare: ExitCompare;
-	/** The threshold value (bar or mL/s, per `metric`). */
+	/** The threshold value (bar or ml/s, per `metric`). */
 	threshold: number;
 }
 
@@ -80,7 +80,7 @@ export interface ProfileSegment {
 	name: string;
 	/** Pressure- or flow-priority. */
 	mode: SegmentMode;
-	/** Target value — bar (pressure) or mL/s (flow). */
+	/** Target value — bar (pressure) or ml/s (flow). */
 	target: number;
 	/** How the segment ramps to its target. */
 	ramp: SegmentRamp;
@@ -92,7 +92,7 @@ export interface ProfileSegment {
 	temperatureC: number;
 	/** Which temperature sensor the segment regulates. */
 	tempSensor: TempSensor;
-	/** Per-segment dispensed-volume limit, mL, range 0–1023 (0 = no limit). */
+	/** Per-segment dispensed-volume limit, ml, range 0–1023 (0 = no limit). */
 	volumeLimitMl: number;
 	/** Advanced max-flow-or-pressure limiter, or null when unused. */
 	limiter: SegmentLimiter | null;
@@ -132,7 +132,7 @@ export interface CremaProfile {
 	autoTare: boolean;
 	/** How many leading segments count as preinfusion — core `preinfuse_step_count`. */
 	preinfuseStepCount: number;
-	/** Whole-shot dispensed-volume limit, mL, 0–1023 (0 = no limit). */
+	/** Whole-shot dispensed-volume limit, ml, 0–1023 (0 = no limit). */
 	maxTotalVolumeMl: number;
 	/** The ordered pressure / flow segments. */
 	segments: ProfileSegment[];
