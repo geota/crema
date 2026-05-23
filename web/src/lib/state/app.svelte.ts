@@ -1112,12 +1112,31 @@ export class CremaApp {
 	 * pressed Espresso themselves) or a HotWaterRinse is already running.
 	 */
 	private scheduleAutoPurge(): void {
+		// Auto-purge and the pre-shot flush both fire `HotWaterRinse`. If a user
+		// steams and immediately presses "Brew" within the 1.5 s defer window,
+		// both paths can race to request the same state. The `rinsePending`
+		// flag (shared with `startShot`) lets whichever path acquires it first
+		// proceed; the other bails out cleanly.
+		if (this.rinsePending) return;
+		this.rinsePending = true;
 		window.setTimeout(() => {
-			// Only fire from Idle — avoid stepping on a manual user action.
-			if (this.state.current.machineStateName !== MachineState.Idle) return;
-			void this.requestMachineState(MachineState.HotWaterRinse);
+			try {
+				// Only fire from Idle — avoid stepping on a manual user action.
+				if (this.state.current.machineStateName !== MachineState.Idle) return;
+				void this.requestMachineState(MachineState.HotWaterRinse);
+			} finally {
+				this.rinsePending = false;
+			}
 		}, 1500);
 	}
+
+	/**
+	 * Shared in-flight guard for `HotWaterRinse` requests. Set by either the
+	 * post-steam auto-purge path or the pre-shot flush path while their rinse
+	 * is pending; the other path checks it and bails out so two rinses cannot
+	 * race when a user steams then immediately starts a shot.
+	 */
+	private rinsePending = false;
 
 	/**
 	 * Start an espresso shot — the Brew screen's primary action. Three
@@ -1172,20 +1191,27 @@ export class CremaApp {
 			await this.requestMachineState(MachineState.Espresso);
 			return;
 		}
-		// Pre-shot group flush. Kick off the rinse, then wait for its
-		// completion (or the 30 s ceiling) before requesting Espresso.
-		await this.requestMachineState(MachineState.HotWaterRinse);
-		await new Promise<void>((resolve) => {
-			const timeout = window.setTimeout(() => {
-				this.pendingPreshotFlush = null;
-				resolve();
-			}, 30_000);
-			this.pendingPreshotFlush = () => {
-				window.clearTimeout(timeout);
-				this.pendingPreshotFlush = null;
-				resolve();
-			};
-		});
+		// Pre-shot group flush. Hold the shared `rinsePending` guard so a
+		// just-scheduled auto-purge (within its 1.5 s defer) bails out
+		// instead of racing this flush. Kick off the rinse, then wait for
+		// its completion (or the 30 s ceiling) before requesting Espresso.
+		this.rinsePending = true;
+		try {
+			await this.requestMachineState(MachineState.HotWaterRinse);
+			await new Promise<void>((resolve) => {
+				const timeout = window.setTimeout(() => {
+					this.pendingPreshotFlush = null;
+					resolve();
+				}, 30_000);
+				this.pendingPreshotFlush = () => {
+					window.clearTimeout(timeout);
+					this.pendingPreshotFlush = null;
+					resolve();
+				};
+			});
+		} finally {
+			this.rinsePending = false;
+		}
 		await this.requestMachineState(MachineState.Espresso);
 	}
 

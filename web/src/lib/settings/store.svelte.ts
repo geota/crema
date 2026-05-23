@@ -178,6 +178,7 @@ export const DEFAULT_SETTINGS: Settings = {
 	lineFrequencyHz: 0,
 	suppressDe1Sleep: true,
 
+	// preserved for future visualizer.coffee upload queue — not currently read anywhere
 	visualizerAutoUpload: true,
 	visualizerPrivacy: 'unlisted',
 	visualizerIncludeProfile: true,

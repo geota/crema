@@ -378,6 +378,7 @@
 			{@const ghcOn = (snapshot.de1MachineInfo[MmrRegister.GhcMode] ?? 0) > 0}
 			<StToggle
 				on={ghcOn}
+				disabled={!connected}
 				onChange={(v) => {
 					void app?.setGhcMode(v ? 4 : 0);
 				}}
