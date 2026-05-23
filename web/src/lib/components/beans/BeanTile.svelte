@@ -3,31 +3,32 @@
 	 * `BeanTile` — one bag of coffee in the `/beans` library grid.
 	 *
 	 * Replaces the older {@link BeanCard.svelte}. Visual structure is
-	 * adopted one-for-one from the Claude-designed canvas
+	 * adopted from the Claude-designed canvas
 	 * (`crema-beans-svelte-export/BeanTile.svelte`):
 	 *
-	 *   ┌──────────────────────────┐
-	 *   │ [avatar]   roaster name  │   eyebrow
-	 *   │  ★         Bean name     │   display
-	 *   │            Country · Reg │   meta
-	 *   │            [pills]       │   roast band + flags + tags
-	 *   │            [Xd off][rate]│   stats
-	 *   │   [════════════════]     │   burn-down
-	 *   │   142g  /  250g          │
-	 *   └──────────────────────────┘
+	 *   ┌──────────────────────────────────┐
+	 *   │ [avatar]  roaster name        ★  │   eyebrow + favourite
+	 *   │           Bean name              │   display
+	 *   │           Country · Region       │   meta
+	 *   │           [pills]                │   roast band + flags + tags
+	 *   │           [Xd off] [opened]      │   stats + rating
+	 *   │   [════════════════]             │   burn-down
+	 *   │   142g / 250g                    │
+	 *   │   [Set active]  [⎘] [✎] [🗑]    │   action row
+	 *   └──────────────────────────────────┘
 	 *
-	 * Key departures from the old card:
+	 * Key departures from the prior tile (PR §3 + §4):
 	 *
-	 *  - The favourite star is **on the avatar, top-left** (not top-right
-	 *    of the card). One overlaid icon, filled when on, hidden when off.
-	 *  - The kebab / icon-row at the bottom is gone — actions (set active,
-	 *    edit, archive, delete) live in the drawer footer.
-	 *  - Days off roast / opened days / frozen days surface as labelled
-	 *    chips along the bottom edge; a 5-star Rating component sits to
-	 *    the right.
+	 *  - The **favourite star** is in the tile's **top-right corner**
+	 *    (matches `/profiles` `ProfileCard.svelte`'s `.pp-card-pin`).
+	 *    The avatar no longer carries the star — that was a holdover
+	 *    from the Claude canvas and clashed with the profile card.
+	 *  - A **bottom action row** mirrors the profile card layout:
+	 *    a primary "Set active" button + Duplicate / Edit / Delete
+	 *    icon buttons. Every button calls `e.stopPropagation()` so
+	 *    clicks don't bubble up to the tile-open handler.
 	 *
-	 * Click anywhere on the tile fires `onOpen(id)` — the parent decides
-	 * whether to open the drawer or jump straight to the editor.
+	 * Click anywhere outside the action row / star fires `onOpen(id)`.
 	 */
 	import {
 		daysOffRoast,
@@ -44,13 +45,21 @@
 		roaster,
 		isActive,
 		onOpen,
-		onToggleFavourite
+		onToggleFavourite,
+		onSetActive,
+		onDuplicate,
+		onEdit,
+		onDelete
 	}: {
 		bean: Bean;
 		roaster: Roaster | null;
 		isActive: boolean;
 		onOpen: (id: string) => void;
 		onToggleFavourite: (id: string) => void;
+		onSetActive: (id: string) => void;
+		onDuplicate: (id: string) => void;
+		onEdit: (id: string) => void;
+		onDelete: (id: string) => void;
 	} = $props();
 
 	const mt = $derived(roasterMarkTone(roaster));
@@ -101,6 +110,23 @@
 		e.stopPropagation();
 		onToggleFavourite(bean.id);
 	}
+	function onSetActiveClick(e: MouseEvent): void {
+		e.stopPropagation();
+		if (isActive) return;
+		onSetActive(bean.id);
+	}
+	function onDuplicateClick(e: MouseEvent): void {
+		e.stopPropagation();
+		onDuplicate(bean.id);
+	}
+	function onEditClick(e: MouseEvent): void {
+		e.stopPropagation();
+		onEdit(bean.id);
+	}
+	function onDeleteClick(e: MouseEvent): void {
+		e.stopPropagation();
+		onDelete(bean.id);
+	}
 </script>
 
 <div
@@ -114,22 +140,27 @@
 	onkeydown={onCardKey}
 	aria-label="Open {bean.name || 'untitled bean'}"
 >
+	<!-- Favourite star (top-right of the tile container; matches ProfileCard). -->
+	<button
+		type="button"
+		class="bn-tile-pin"
+		class:bn-tile-pin-off={!bean.favourite}
+		onclick={onFavClick}
+		aria-label={bean.favourite ? 'Unpin from brew picker' : 'Pin to brew picker'}
+		title={bean.favourite ? 'Pinned to favourites' : 'Pin to favourites'}
+	>
+		<i
+			class={bean.favourite ? 'ph-fill ph-star' : 'ph ph-star'}
+			aria-hidden="true"
+		></i>
+	</button>
+
 	<!-- Avatar block (left) -->
 	<div class="bn-tile-avatar" style="--tone: {mt.tone}">
 		<div class="bn-tile-mono">{mt.mark}</div>
 		{#if isActive}
 			<div class="bn-tile-active-dot" title="Active on Brew"></div>
 		{/if}
-		<button
-			type="button"
-			class="bn-tile-fav"
-			class:is-on={bean.favourite}
-			onclick={onFavClick}
-			aria-label={bean.favourite ? 'Unpin from brew picker' : 'Pin to brew picker'}
-			title={bean.favourite ? 'Pinned' : 'Pin to brew picker'}
-		>
-			<i class={bean.favourite ? 'ph-fill ph-star' : 'ph ph-star'} aria-hidden="true"></i>
-		</button>
 		{#if isFrozen}
 			<div class="bn-tile-frozen" title="Frozen storage">
 				<i class="ph-fill ph-snowflake" aria-hidden="true"></i>
@@ -220,6 +251,49 @@
 				</div>
 			</div>
 		{/if}
+
+		<!-- Action row (matches /profiles ProfileCard pattern) -->
+		<div class="bn-tile-actions">
+			<button
+				type="button"
+				class="bn-tile-action bn-tile-action-primary"
+				class:is-on={isActive}
+				onclick={onSetActiveClick}
+			>
+				<i
+					class={isActive ? 'ph-fill ph-check-circle' : 'ph ph-coffee'}
+					aria-hidden="true"
+				></i>
+				<span>{isActive ? 'Active on Brew' : 'Set active'}</span>
+			</button>
+			<button
+				type="button"
+				class="bn-tile-action-icon"
+				title="Duplicate"
+				aria-label="Duplicate"
+				onclick={onDuplicateClick}
+			>
+				<i class="ph ph-copy" aria-hidden="true"></i>
+			</button>
+			<button
+				type="button"
+				class="bn-tile-action-icon"
+				title="Edit"
+				aria-label="Edit"
+				onclick={onEditClick}
+			>
+				<i class="ph ph-pencil" aria-hidden="true"></i>
+			</button>
+			<button
+				type="button"
+				class="bn-tile-action-icon bn-tile-action-icon-danger"
+				title="Delete"
+				aria-label="Delete"
+				onclick={onDeleteClick}
+			>
+				<i class="ph ph-trash" aria-hidden="true"></i>
+			</button>
+		</div>
 	</div>
 </div>
 
@@ -233,6 +307,7 @@
 		border: 1px solid rgba(var(--tint-rgb), 0.08);
 		border-radius: var(--radius-lg, 14px);
 		padding: 14px;
+		padding-right: 16px;
 		text-align: left;
 		color: var(--fg-1);
 		font: inherit;
@@ -265,6 +340,32 @@
 			rgba(125, 160, 205, 0.04),
 			rgba(var(--tint-rgb), 0.04) 60%
 		);
+	}
+
+	/* Favourite star — top-right of the tile (matches `.pp-card-pin`). */
+	.bn-tile-pin {
+		position: absolute;
+		top: 8px;
+		right: 8px;
+		z-index: 2;
+		background: transparent;
+		border: 0;
+		color: var(--copper-400);
+		font-size: 18px;
+		cursor: pointer;
+		padding: 4px;
+		border-radius: 6px;
+		display: inline-flex;
+		transition: all var(--dur-1) var(--ease);
+	}
+	.bn-tile-pin:hover {
+		background: rgba(var(--tint-rgb), 0.05);
+	}
+	.bn-tile-pin.bn-tile-pin-off {
+		color: rgba(var(--tint-rgb), 0.25);
+	}
+	.bn-tile-pin.bn-tile-pin-off:hover {
+		color: rgba(var(--tint-rgb), 0.6);
 	}
 
 	/* Avatar (left column) */
@@ -300,39 +401,6 @@
 		background: var(--copper-400);
 		border: 2px solid var(--bg-page);
 	}
-	.bn-tile-fav {
-		position: absolute;
-		top: 4px;
-		left: 4px;
-		width: 22px;
-		height: 22px;
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		border: 0;
-		background: rgba(0, 0, 0, 0.18);
-		color: rgba(255, 255, 255, 0.55);
-		border-radius: 50%;
-		cursor: pointer;
-		font-size: 13px;
-		padding: 0;
-		transition:
-			background var(--dur-1) var(--ease),
-			color var(--dur-1) var(--ease),
-			transform var(--dur-1) var(--ease);
-	}
-	.bn-tile-fav:hover {
-		background: rgba(0, 0, 0, 0.32);
-		color: #fff;
-		transform: scale(1.08);
-	}
-	.bn-tile-fav.is-on {
-		background: rgba(255, 255, 255, 0.95);
-		color: var(--copper-500);
-	}
-	.bn-tile-fav.is-on:hover {
-		background: #fff;
-	}
 	.bn-tile-frozen {
 		position: absolute;
 		top: 4px;
@@ -354,6 +422,8 @@
 		flex-direction: column;
 		gap: 4px;
 		min-width: 0;
+		/* Clear the absolutely-positioned star in the top-right. */
+		padding-right: 28px;
 	}
 	.bn-tile-roaster {
 		font-family: var(--font-sans);
@@ -437,8 +507,8 @@
 		flex-wrap: wrap;
 		gap: 12px;
 		align-items: center;
-		margin-top: auto;
-		padding-top: 6px;
+		margin-top: 4px;
+		padding-top: 4px;
 	}
 	.bn-tile-stat {
 		display: inline-flex;
@@ -525,5 +595,71 @@
 	}
 	.bn-tile-burn-total {
 		color: rgba(var(--tint-rgb), 0.45);
+	}
+
+	/* Action row — same pattern as /profiles `ProfileCard`'s
+	   `.pp-card-actions`: primary fills, icon trio shrinks to 32px squares. */
+	.bn-tile-actions {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		margin-top: 8px;
+	}
+	.bn-tile-action {
+		flex: 1 1 auto;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		gap: 6px;
+		padding: 7px 12px;
+		border-radius: var(--radius-sm);
+		border: 1px solid rgba(var(--tint-rgb), 0.1);
+		background: rgba(var(--tint-rgb), 0.03);
+		color: var(--fg-1);
+		font-family: var(--font-sans);
+		font-size: 12px;
+		font-weight: 500;
+		cursor: pointer;
+		transition: all var(--dur-1) var(--ease);
+	}
+	.bn-tile-action:hover {
+		background: rgba(var(--tint-rgb), 0.07);
+		border-color: rgba(var(--tint-rgb), 0.18);
+	}
+	.bn-tile-action-primary.is-on {
+		background: rgba(193, 116, 75, 0.12);
+		border-color: var(--copper-500);
+		color: var(--copper-400);
+		cursor: default;
+	}
+	.bn-tile-action-primary.is-on i {
+		color: var(--copper-400);
+	}
+	.bn-tile-action-icon {
+		width: 30px;
+		height: 30px;
+		flex: 0 0 30px;
+		border: 1px solid rgba(var(--tint-rgb), 0.1);
+		background: rgba(var(--tint-rgb), 0.03);
+		border-radius: var(--radius-sm);
+		color: rgba(var(--tint-rgb), 0.6);
+		cursor: pointer;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		font-size: 13px;
+		transition: all var(--dur-1) var(--ease);
+		padding: 0;
+	}
+	.bn-tile-action-icon:hover {
+		color: var(--fg-1);
+		background: rgba(var(--tint-rgb), 0.07);
+	}
+	.bn-tile-action-icon-danger {
+		color: var(--danger);
+	}
+	.bn-tile-action-icon-danger:hover {
+		color: var(--danger);
+		background: rgba(var(--danger-rgb), 0.12);
 	}
 </style>

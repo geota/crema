@@ -27,6 +27,8 @@
 	} from '$lib/profiles';
 	import { getCremaAppContext } from '$lib/shell/app-context';
 	import { ProfileCard } from '$lib/components/profiles';
+	import SortPill from '$lib/components/shared/SortPill.svelte';
+	import FilterPills from '$lib/components/shared/FilterPills.svelte';
 	import { downloadBlob, filenameStamp } from '$lib/utils/download';
 
 	const store = getProfileStore();
@@ -134,6 +136,90 @@
 
 	/** Whether the "Hidden" filter is the active facet. */
 	const showingHidden = $derived(tag === 'hidden');
+
+	/**
+	 * The flat pill list passed to `FilterPills`. Built from the same
+	 * `roasts` / `beverageFacets` / `customTags` derivations the inline
+	 * markup used; just funnels through `divider` / `groupLabel` sentinel
+	 * entries to keep the visual rhythm.
+	 */
+	interface FilterPillItem {
+		id: string;
+		label?: string;
+		count?: number;
+		selected?: boolean;
+		icon?: string;
+		iconStyle?: string;
+		divider?: boolean;
+		groupLabel?: string;
+		custom?: boolean;
+		title?: string;
+	}
+	const filterPills = $derived.by(() => {
+		const items: FilterPillItem[] = [
+			{
+				id: 'all',
+				label: 'All',
+				count: profiles.length,
+				selected: tag === 'all'
+			},
+			{
+				id: 'pinned',
+				label: 'Pinned',
+				icon: 'ph-fill ph-star',
+				iconStyle: 'font-size:11px;color:var(--copper-400)',
+				count: pinnedCount,
+				selected: tag === 'pinned'
+			}
+		];
+		if (store.hiddenBuiltinCount > 0) {
+			items.push({
+				id: 'hidden',
+				label: 'Hidden',
+				icon: 'ph ph-eye-slash',
+				iconStyle: 'font-size:11px',
+				count: store.hiddenBuiltinCount,
+				selected: tag === 'hidden',
+				title: "Show built-in profiles you've hidden — click their eye icon to restore"
+			});
+		}
+		items.push({ id: '__div1', divider: true });
+		items.push({ id: '__roast', groupLabel: 'Roast' });
+		for (const r of roasts) {
+			items.push({
+				id: r.id,
+				label: r.label,
+				count: r.count,
+				selected: tag === r.id
+			});
+		}
+		if (beverageFacets.length > 0) {
+			items.push({ id: '__div2', divider: true });
+			items.push({ id: '__beverage', groupLabel: 'Beverage' });
+			for (const b of beverageFacets) {
+				items.push({
+					id: b.id,
+					label: b.label,
+					count: b.count,
+					selected: tag === b.id
+				});
+			}
+		}
+		if (customTags.length > 0) {
+			items.push({ id: '__div3', divider: true });
+			items.push({ id: '__tags', groupLabel: 'Tags' });
+			for (const t of customTags) {
+				items.push({
+					id: t.id,
+					label: t.label,
+					count: t.count,
+					selected: tag === t.id,
+					custom: true
+				});
+			}
+		}
+		return items;
+	});
 
 	/** The filtered + sorted profile list the grid renders. */
 	const filtered = $derived.by(() => {
@@ -550,98 +636,26 @@
 
 	<!-- Filter strip -->
 	<div class="pp-filters">
-		<div class="pp-tags">
-			<button class="pp-tag" class:is-active={tag === 'all'} onclick={() => (tag = 'all')}>
-				<span>All</span><span class="pp-tag-count">{profiles.length}</span>
-			</button>
-			<button
-				class="pp-tag"
-				class:is-active={tag === 'pinned'}
-				onclick={() => (tag = 'pinned')}
-			>
-				<i class="ph-fill ph-star" style="font-size:11px;color:var(--copper-400)"></i>
-				<span>Pinned</span><span class="pp-tag-count">{pinnedCount}</span>
-			</button>
-			{#if store.hiddenBuiltinCount > 0}
-				<button
-					class="pp-tag"
-					class:is-active={tag === 'hidden'}
-					onclick={() => (tag = 'hidden')}
-					title="Show built-in profiles you've hidden — click their eye icon to restore"
-				>
-					<i class="ph ph-eye-slash" style="font-size:11px"></i>
-					<span>Hidden</span>
-					<span class="pp-tag-count">{store.hiddenBuiltinCount}</span>
-				</button>
-			{/if}
-			<span class="pp-tag-divider"></span>
-			<span class="pp-tag-grouplabel">Roast</span>
-			{#each roasts as r (r.id)}
-				<button class="pp-tag" class:is-active={tag === r.id} onclick={() => (tag = r.id)}>
-					<span>{r.label}</span><span class="pp-tag-count">{r.count}</span>
-				</button>
-			{/each}
-			{#if beverageFacets.length > 0}
-				<span class="pp-tag-divider"></span>
-				<span class="pp-tag-grouplabel">Beverage</span>
-				{#each beverageFacets as b (b.id)}
-					<button
-						class="pp-tag"
-						class:is-active={tag === b.id}
-						onclick={() => (tag = b.id)}
-					>
-						<span>{b.label}</span><span class="pp-tag-count">{b.count}</span>
-					</button>
-				{/each}
-			{/if}
-			{#if customTags.length > 0}
-				<span class="pp-tag-divider"></span>
-				<span class="pp-tag-grouplabel">Tags</span>
-				{#each customTags as t (t.id)}
-					<button
-						class="pp-tag pp-tag-custom"
-						class:is-active={tag === t.id}
-						onclick={() => (tag = t.id)}
-					>
-						<span>{t.label}</span><span class="pp-tag-count">{t.count}</span>
-					</button>
-				{/each}
-			{/if}
-		</div>
+		<FilterPills pills={filterPills} onclick={(id) => (tag = id)} />
 		<div class="pp-sort">
-			<span class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.45)">Sort</span>
-			{#each SORT_OPTIONS as s (s.id)}
-				<button
-					class="pp-sort-opt"
-					class:is-active={sort === s.id}
-					onclick={() => {
-						if (s.id !== sort) {
-							sort = s.id;
-							sortDir = s.defaultDir;
-						}
-					}}
-					title={`Sort by ${s.label}`}
-				>
-					{s.label}
-				</button>
-			{/each}
-			<span class="pp-sort-divider"></span>
-			<button
-				class="pp-sort-opt"
-				class:is-active={sortDir === 'asc'}
-				onclick={() => (sortDir = 'asc')}
-				title="Ascending"
-			>
-				Ascending
-			</button>
-			<button
-				class="pp-sort-opt"
-				class:is-active={sortDir === 'desc'}
-				onclick={() => (sortDir = 'desc')}
-				title="Descending"
-			>
-				Descending
-			</button>
+			<SortPill
+				value={{ field: sort, direction: sortDir }}
+				options={SORT_OPTIONS.map((s) => ({ field: s.id, label: s.label }))}
+				onchange={(next) => {
+					const previousField = sort;
+					sort = next.field as SortKey;
+					// When the user picks a new field (not just flipping
+					// direction), reapply that field's default direction so
+					// e.g. "Name" defaults to A→Z instead of inheriting the
+					// previous field's descending preference.
+					if (next.field !== previousField) {
+						const opt = SORT_OPTIONS.find((s) => s.id === next.field);
+						sortDir = opt?.defaultDir ?? next.direction;
+					} else {
+						sortDir = next.direction;
+					}
+				}}
+			/>
 		</div>
 	</div>
 
@@ -799,108 +813,15 @@
 		padding: 0 var(--page-pad-x) 16px;
 		border-bottom: 1px solid rgba(var(--tint-rgb), 0.05);
 	}
-	.pp-tags {
-		display: flex;
-		gap: 4px;
-		overflow-x: auto;
-	}
-	.pp-tag {
-		display: inline-flex;
-		align-items: center;
-		gap: 8px;
-		padding: 7px 14px;
-		background: transparent;
-		border: 0;
-		color: rgba(var(--tint-rgb), 0.6);
-		font-family: var(--font-sans);
-		font-size: 13px;
-		cursor: pointer;
-		border-radius: var(--radius-pill);
-		transition: all var(--dur-1) var(--ease);
-		white-space: nowrap;
-	}
-	.pp-tag:hover {
-		color: var(--fg-1);
-	}
-	.pp-tag.is-active {
-		color: var(--fg-1);
-		background: rgba(var(--tint-rgb), 0.06);
-	}
-	.pp-tag-count {
-		font-family: var(--font-mono);
-		font-variant-numeric: tabular-nums;
-		font-size: 10px;
-		color: rgba(var(--tint-rgb), 0.4);
-		padding: 1px 6px;
-		background: rgba(var(--tint-rgb), 0.04);
-		border-radius: 999px;
-	}
-	.pp-tag.is-active .pp-tag-count {
-		background: var(--copper-500);
-		color: var(--fg-on-accent);
-	}
-	.pp-tag-divider {
-		width: 1px;
-		height: 16px;
-		background: rgba(var(--tint-rgb), 0.1);
-		margin: 0 6px;
-		align-self: center;
-	}
-	.pp-tag-grouplabel {
-		font-family: var(--font-sans);
-		font-size: 10px;
-		letter-spacing: var(--track-allcaps);
-		text-transform: uppercase;
-		font-weight: 700;
-		color: rgba(var(--tint-rgb), 0.4);
-		padding: 0 2px;
-		align-self: center;
-		white-space: nowrap;
-	}
-	.pp-tag-custom .pp-tag-count {
-		background: rgba(193, 116, 75, 0.1);
-		color: var(--copper-400);
-	}
-	.pp-tag-custom.is-active {
-		background: rgba(193, 116, 75, 0.12);
-		color: var(--copper-400);
-	}
-	.pp-tag-custom.is-active .pp-tag-count {
-		background: var(--copper-500);
-		color: var(--fg-on-accent);
-	}
+	/* `.pp-tag*` styles live in `styles/profiles-page.css` so the shared
+	   FilterPills component reads them from one canonical source. The
+	   page-local duplicates were removed when FilterPills replaced the
+	   inline markup. */
 	.pp-sort {
 		display: flex;
 		align-items: center;
 		gap: 10px;
 		flex: 0 0 auto;
-	}
-	.pp-sort-opt {
-		background: transparent;
-		border: 0;
-		color: rgba(var(--tint-rgb), 0.5);
-		font-family: var(--font-sans);
-		font-size: 12px;
-		cursor: pointer;
-		padding: 4px 2px;
-		transition: color var(--dur-1) var(--ease);
-	}
-	.pp-sort-opt:hover {
-		color: var(--fg-1);
-	}
-	.pp-sort-opt.is-active {
-		color: var(--fg-1);
-		text-decoration: underline;
-		text-decoration-color: var(--copper-500);
-		text-decoration-thickness: 1.5px;
-		text-underline-offset: 4px;
-	}
-	.pp-sort-divider {
-		display: inline-block;
-		width: 1px;
-		height: 16px;
-		margin: 0 4px;
-		background: rgba(var(--tint-rgb), 0.15);
 	}
 
 	/* Grid */
