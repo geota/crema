@@ -644,12 +644,12 @@ impl CremaBridge {
     /// auto-standby timeout to `minutes`.
     ///
     /// `minutes` is clamped to the connected scale's
-    /// `ScaleCapabilities::standby_minutes` `[min, max]` bounds. Capability-
+    /// `ScaleCapabilities::standby` `[min, max]` bounds. Capability-
     /// gated: the command is present only when the connected scale exposes a
     /// configurable auto-standby. Empty otherwise. Wired exactly like
     /// [`set_scale_volume`](Self::set_scale_volume).
-    pub fn set_scale_standby_minutes(&mut self, minutes: u8) -> String {
-        json(self.core.set_scale_standby_minutes(minutes))
+    pub fn set_scale_standby(&mut self, minutes: u8) -> String {
+        json(self.core.set_scale_standby(minutes))
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command enables or disables the
@@ -850,7 +850,7 @@ impl CremaBridge {
         &self,
         phase_1_flow_rate: f32,
         phase_2_flow_rate: f32,
-        hot_water_idle_temp_c: u8,
+        hot_water_idle_temp: u8,
         espresso_warmup_timeout_seconds: u32,
         steam_two_tap_stop: u8,
         flush_timeout_ms: u32,
@@ -860,7 +860,7 @@ impl CremaBridge {
         json(self.core.set_heater_tweaks(de1_app::HeaterTweaks {
             phase_1_flow_rate,
             phase_2_flow_rate,
-            hot_water_idle_temp_c,
+            hot_water_idle_temp,
             espresso_warmup_timeout: std::time::Duration::from_secs(u64::from(
                 espresso_warmup_timeout_seconds,
             )),
@@ -954,8 +954,8 @@ impl CremaBridge {
 
     /// Volume dispensed in the current shot, ml — integrated live from
     /// every `ShotSample`. Resets to 0 on every `Event::ShotStarted`.
-    pub fn dispensed_volume_ml(&self) -> f32 {
-        self.core.dispensed_volume_ml()
+    pub fn dispensed_volume(&self) -> f32 {
+        self.core.dispensed_volume()
     }
 
     /// The effective AC mains frequency the volume integrator uses, Hz.
@@ -1250,7 +1250,7 @@ mod tests {
         bridge.connect_scale("Decent Scale ABC".to_owned());
         for json in [
             bridge.set_scale_volume(3),
-            bridge.set_scale_standby_minutes(15),
+            bridge.set_scale_standby(15),
             bridge.set_scale_flow_smoothing(true),
             bridge.set_scale_anti_mistouch(true),
             bridge.set_scale_mode(0),

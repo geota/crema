@@ -53,7 +53,7 @@ export type Event =
 	 * (BLE-jitter-immune when the line-frequency is known, host-clock
 	 * fallback otherwise). Resets to 0 on every `ShotStarted`.
 	 */
-	dispensed_volume_ml: number;
+	dispensed_volume: number;
 	/**
 	 * Target group-head temperature, °C — the heater setpoint for the
 	 * active frame. Legacy "Goal temperature" curve on the live shot
@@ -361,19 +361,19 @@ export type Event =
 	 */
 	| { type: "ShotSettingsRead", content: {
 	/** Target steam temperature, °C. */
-	steam_temp_c: number;
+	steam_temp: number;
 	/** Steam timeout, seconds. */
-	steam_timeout_s: number;
+	steam_timeout: number;
 	/** Target hot-water temperature, °C. */
-	hot_water_temp_c: number;
+	hot_water_temp: number;
 	/** Hot-water volume, ml. */
-	hot_water_volume_ml: number;
+	hot_water_volume: number;
 	/** Hot-water timeout, seconds. */
-	hot_water_timeout_s: number;
+	hot_water_timeout: number;
 	/** Espresso target volume, ml. */
-	espresso_volume_ml: number;
+	espresso_volume: number;
 	/** Espresso group target temperature, °C. */
-	group_temp_c: number;
+	group_temp: number;
 }}
 	/**
 	 * A profile upload has begun. Carries the total number of acks the
@@ -537,7 +537,7 @@ export interface ScaleCapabilities {
 	 * The bounds of the scale's auto-standby timeout, in minutes — `None`
 	 * when the scale has no configurable auto-standby.
 	 */
-	standby_minutes?: RangeCapability;
+	standby?: RangeCapability;
 	/** The scale accepts a command to toggle flow smoothing. */
 	flow_smoothing: boolean;
 	/** The scale accepts a command to toggle anti-mistouch. */

@@ -46,12 +46,12 @@
 	});
 
 	/** Final (or peak) yield, grams. */
-	const yieldG = $derived(shot.finalWeight ?? shot.peakWeight);
+	const yieldOut = $derived(shot.finalWeight ?? shot.peakWeight);
 
 	// Unit-aware metric readouts — driven by the Settings unit prefs (D1).
 	const settings = getSettingsStore();
 	/** Yield in the chosen weight unit. */
-	const yieldM = $derived(convertWeight(yieldG, settings.current.weightUnit));
+	const yieldM = $derived(convertWeight(yieldOut, settings.current.weightUnit));
 	/** Peak weight in the chosen weight unit. */
 	const peakWeightM = $derived(convertWeight(shot.peakWeight, settings.current.weightUnit));
 	/** Peak pressure in the chosen pressure unit. */
@@ -186,7 +186,7 @@
 			<div class="hi-detail-title">{shot.profileName ?? 'Untitled shot'}</div>
 			<div class="hi-detail-sub">
 				{(shot.duration / 1000).toFixed(0)} s
-				{#if yieldG != null}· {yieldM.value} {yieldM.unit} · {ratioLabel(shot)}{/if}
+				{#if yieldOut != null}· {yieldM.value} {yieldM.unit} · {ratioLabel(shot)}{/if}
 			</div>
 			{#if beanLine}
 				<div class="hi-detail-sub hi-detail-bean">{beanLine}</div>

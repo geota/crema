@@ -383,7 +383,7 @@ impl CremaCore {
 
     /// Volume dispensed in the current shot, ml. Resets to 0 on every
     /// `Event::ShotStarted`. Updated on every `ShotSample` notification.
-    pub fn dispensed_volume_ml(&self) -> f32 {
+    pub fn dispensed_volume(&self) -> f32 {
         self.volume_integrator.dispensed_ml()
     }
 
@@ -848,7 +848,7 @@ impl CremaCore {
             (MmrRegister::Phase2FlowRate, scale10(tweaks.phase_2_flow_rate), 2),
             (
                 MmrRegister::HotWaterIdleTemp,
-                u32::from(tweaks.hot_water_idle_temp_c),
+                u32::from(tweaks.hot_water_idle_temp),
                 1,
             ),
             (
@@ -1104,15 +1104,15 @@ impl CremaCore {
     /// timeout, in minutes.
     ///
     /// `minutes` is clamped to the connected scale's
-    /// [`ScaleCapabilities::standby_minutes`] `[min, max]` bounds before the
+    /// [`ScaleCapabilities::standby`] `[min, max]` bounds before the
     /// command is built. Capability-gated, not device-gated: the command is
     /// emitted only when the connected scale exposes a configurable
-    /// auto-standby (its `standby_minutes` capability is `Some`). The result is
+    /// auto-standby (its `standby` capability is `Some`). The result is
     /// empty otherwise. Modelled on [`set_scale_volume`](Self::set_scale_volume).
-    pub fn set_scale_standby_minutes(&mut self, minutes: u8) -> CoreOutput {
+    pub fn set_scale_standby(&mut self, minutes: u8) -> CoreOutput {
         let mut out = CoreOutput::default();
         if let Some(scale) = &self.scale
-            && let Some(range) = scale.capabilities().standby_minutes
+            && let Some(range) = scale.capabilities().standby
         {
             let minutes = minutes.clamp(range.min, range.max);
             out.commands.push(Command::WriteScale {
@@ -1415,7 +1415,7 @@ impl CremaCore {
             head_temp: sample.head_temp,
             mix_temp: sample.mix_temp,
             steam_temp: sample.steam_temp,
-            dispensed_volume_ml: self.volume_integrator.dispensed_ml(),
+            dispensed_volume: self.volume_integrator.dispensed_ml(),
             set_head_temp: sample.set_head_temp,
             set_group_pressure: sample.set_group_pressure,
             set_group_flow: sample.set_group_flow,
@@ -1859,13 +1859,13 @@ impl CremaCore {
         };
         self.steam_hotwater_settings = Some(settings.clone());
         out.events.push(Event::ShotSettingsRead {
-            steam_temp_c: settings.steam_temp_c,
-            steam_timeout_s: settings.steam_timeout_s,
-            hot_water_temp_c: settings.hot_water_temp_c,
-            hot_water_volume_ml: settings.hot_water_volume_ml,
-            hot_water_timeout_s: settings.hot_water_timeout_s,
-            espresso_volume_ml: settings.espresso_volume_ml,
-            group_temp_c: settings.group_temp_c,
+            steam_temp: settings.steam_temp_c,
+            steam_timeout: settings.steam_timeout_s,
+            hot_water_temp: settings.hot_water_temp_c,
+            hot_water_volume: settings.hot_water_volume_ml,
+            hot_water_timeout: settings.hot_water_timeout_s,
+            espresso_volume: settings.espresso_volume_ml,
+            group_temp: settings.group_temp_c,
         });
     }
 
@@ -2022,7 +2022,7 @@ pub struct HeaterTweaks {
     /// Hot-water phase-2 flow rate, ml/s.
     pub phase_2_flow_rate: f32,
     /// Hot-water idle temperature, °C.
-    pub hot_water_idle_temp_c: u8,
+    pub hot_water_idle_temp: u8,
     /// Espresso warmup timeout.
     pub espresso_warmup_timeout: Duration,
     /// Steam two-tap-stop register raw byte.
@@ -2652,10 +2652,10 @@ mod tests {
     }
 
     #[test]
-    fn set_scale_standby_minutes_emits_a_write_for_a_capable_scale() {
+    fn set_scale_standby_emits_a_write_for_a_capable_scale() {
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC");
-        let out = core.set_scale_standby_minutes(15);
+        let out = core.set_scale_standby(15);
         assert!(matches!(
             out.commands.first(),
             Some(Command::WriteScale { .. })
@@ -2663,17 +2663,17 @@ mod tests {
     }
 
     #[test]
-    fn set_scale_standby_minutes_clamps_to_the_capability_range() {
+    fn set_scale_standby_clamps_to_the_capability_range() {
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC");
         // An out-of-range request clamps to the Bookoo's 5..=30 minute range.
         let Some(Command::WriteScale { data: clamped }) =
-            core.set_scale_standby_minutes(99).commands.into_iter().next()
+            core.set_scale_standby(99).commands.into_iter().next()
         else {
             panic!("expected a WriteScale command");
         };
         let Some(Command::WriteScale { data: at_max }) =
-            core.set_scale_standby_minutes(30).commands.into_iter().next()
+            core.set_scale_standby(30).commands.into_iter().next()
         else {
             panic!("expected a WriteScale command");
         };
@@ -2681,10 +2681,10 @@ mod tests {
     }
 
     #[test]
-    fn set_scale_standby_minutes_emits_nothing_for_a_weight_only_scale() {
+    fn set_scale_standby_emits_nothing_for_a_weight_only_scale() {
         let mut core = CremaCore::new();
         core.connect_scale("Decent Scale ABC");
-        assert!(core.set_scale_standby_minutes(15).commands.is_empty());
+        assert!(core.set_scale_standby(15).commands.is_empty());
     }
 
     #[test]
@@ -2845,10 +2845,10 @@ mod tests {
     }
 
     #[test]
-    fn set_scale_standby_minutes_appends_a_settings_query() {
+    fn set_scale_standby_appends_a_settings_query() {
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC");
-        let out = core.set_scale_standby_minutes(15);
+        let out = core.set_scale_standby(15);
         assert_eq!(out.commands.len(), 2);
         assert_eq!(last_write_scale(&out), bookoo::QUERY_SETTINGS);
     }
@@ -2897,7 +2897,7 @@ mod tests {
         core.connect_scale("Decent Scale ABC");
         // An unsupported scale emits nothing at all — not even the query.
         assert!(core.set_scale_volume(3).commands.is_empty());
-        assert!(core.set_scale_standby_minutes(15).commands.is_empty());
+        assert!(core.set_scale_standby(15).commands.is_empty());
         assert!(core.set_scale_flow_smoothing(true).commands.is_empty());
         assert!(core.set_scale_anti_mistouch(true).commands.is_empty());
         assert!(core.set_scale_mode(0).commands.is_empty());
@@ -3498,7 +3498,7 @@ mod tests {
         let out = core.set_heater_tweaks(HeaterTweaks {
             phase_1_flow_rate: 1.0,
             phase_2_flow_rate: 2.0,
-            hot_water_idle_temp_c: 85,
+            hot_water_idle_temp: 85,
             espresso_warmup_timeout: Duration::from_secs(30),
             steam_two_tap_stop: 0,
             flush_timeout: Duration::from_secs(5),

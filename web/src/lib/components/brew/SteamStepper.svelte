@@ -2,7 +2,7 @@
 	/**
 	 * `SteamStepper` — the Steam card. "Steam" prefix with a Time | Flow |
 	 * Temp three-way toggle (Temp added 2026-05-22 — DE1 firmware target,
-	 * mirrors the ShotSettings `steamTempC` field).
+	 * mirrors the ShotSettings `steamTemp` field).
 	 */
 	import type { BrewParamState } from './brew-params.svelte';
 	import QSplitLabel from './QSplitLabel.svelte';
