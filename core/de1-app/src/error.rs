@@ -20,4 +20,25 @@ pub enum AppError {
     /// with `kind == Empty` or `TooManySteps`.
     #[error("profile upload validation failed: {0}")]
     ProfileUpload(#[from] DomainError),
+    /// A setter rejected its argument before issuing any wire write — the
+    /// caller passed a value outside the allowed range or enum.
+    ///
+    /// Used by safety-critical bridge clamps where the shell **must** never
+    /// have been able to reach the setter with a bad value (e.g. mains
+    /// heater voltage, which is hardware-damaging when mis-set); the
+    /// `AppError` is the last-line guard. The shell catches the error and
+    /// shows a non-fatal toast or refuses to commit the UI change.
+    ///
+    /// - `field`: the parameter name (e.g. `"voltage"`, `"hz"`).
+    /// - `value`: the rejected value, formatted for the shell to display.
+    /// - `reason`: why it was rejected, in human terms.
+    #[error("invalid argument for {field}: {value} ({reason})")]
+    InvalidArg {
+        /// The parameter name that was rejected.
+        field: String,
+        /// The rejected value, formatted for the shell.
+        value: String,
+        /// Human-readable explanation.
+        reason: String,
+    },
 }

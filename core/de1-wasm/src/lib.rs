@@ -849,9 +849,23 @@ impl CremaBridge {
     }
 
     /// Set the mains heater voltage. **Damaging if mis-set** — the shell
-    /// must wrap this in a typed-to-confirm modal. MMR `0x803834`, 1-byte.
-    pub fn set_heater_voltage(&self, volts: u8) -> String {
-        json(self.core.set_heater_voltage(volts))
+    /// must wrap this in a typed-to-confirm modal (`MainsConfirmModal`).
+    /// MMR `0x803834`, 4-byte. Wire value is `volts + 1000` (user-committed
+    /// marker).
+    ///
+    /// `volts` must be `120` or `230`; anything else is rejected. Returns
+    /// `Result<String, String>` so the bridge throws on a bad value — the
+    /// shell pre-validates via the modal, this is the last-line guard.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`AppError`](de1_app::AppError) display string when the
+    /// core rejects `volts` for being out of `{120, 230}`.
+    pub fn set_heater_voltage(&self, volts: u8) -> Result<String, String> {
+        self.core
+            .set_heater_voltage(volts)
+            .map(json)
+            .map_err(|e| e.to_string())
     }
 
     /// Set the cup-warmer temperature, °C (Bengle models only). MMR
@@ -993,13 +1007,32 @@ impl CremaBridge {
         self.core.line_frequency_hz()
     }
 
-    /// Pin the AC mains frequency the volume integrator uses. `50.0` or
-    /// `60.0` overrides the auto-detector; `0.0` or any other value
-    /// returns to auto. (The wasm ABI can't express `Option<f32>`
-    /// cleanly, so `0.0` is the "auto" sentinel.)
-    pub fn set_line_frequency_override(&mut self, hz: f32) {
-        let override_hz = if hz > 0.0 { Some(hz) } else { None };
+    /// Pin the AC mains frequency the volume integrator uses. Accepts
+    /// only `0.0` (auto), `50.0`, or `60.0`; any other value is rejected.
+    /// (The wasm ABI can't express `Option<f32>` cleanly, so `0.0` is the
+    /// "auto" sentinel.)
+    ///
+    /// Hz mis-calibration only mis-times the AC-period integrator (no
+    /// hardware damage, unlike heater voltage), but the shell still gates
+    /// 50/60 selections behind `MainsConfirmModal` for symmetric UX; this
+    /// clamp is the last-line guard.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error string when `hz` is not `0.0`, `50.0`, or `60.0`.
+    pub fn set_line_frequency_override(&mut self, hz: f32) -> Result<(), String> {
+        let override_hz = match hz as i32 {
+            0 => None,
+            50 => Some(50.0),
+            60 => Some(60.0),
+            _ => {
+                return Err(format!(
+                    "invalid argument for hz: {hz} (must be 0, 50, or 60)"
+                ));
+            }
+        };
         self.core.set_line_frequency_override(override_hz);
+        Ok(())
     }
 
     /// Parse a legacy de1app `.shot` (Tcl-dict) history file. Returns
