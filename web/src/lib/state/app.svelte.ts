@@ -270,6 +270,7 @@ export class CremaApp {
 				this.state.log(line);
 			},
 			onState: (de1State) => {
+				const wasReady = this.state.current.de1State === 'ready';
 				this.state.patch({ de1State });
 				// Defensive re-upload of the active profile when the DE1
 				// becomes ready. Mirrors the legacy DE1-app's
@@ -282,6 +283,19 @@ export class CremaApp {
 				// bytes — without it, the DE1 wakes up with no profile
 				// loaded and the user has to remember to click Load on
 				// Brew every session.
+				if (de1State === 'ready' && !wasReady) {
+					// Fire a `de1Connected` webhook on the first transition
+					// into `ready`. The firmware string lands a moment later
+					// via `Event::Firmware`, so it may be `null` here on the
+					// very first connect — payload tolerates `null`.
+					const diag = this.state.current.de1Diagnostics;
+					this.fireWebhook('de1Connected', {
+						firmwareVersion: this.state.current.de1Firmware,
+						model: this.state.current.de1MachineInfo[MmrRegister.MachineModel] ?? null,
+						deviceId: diag.deviceId,
+						deviceName: diag.deviceName
+					});
+				}
 				if (de1State === 'ready') {
 					this.ensureLoadedMatches();
 					// Enable the firmware's user-presence feature
@@ -325,7 +339,20 @@ export class CremaApp {
 				this.state.patch({ status: line });
 				this.state.log(line);
 			},
-			onState: (scaleState) => this.state.patch({ scaleState }),
+			onState: (scaleState) => {
+				const wasReady = this.state.current.scaleState === 'ready';
+				this.state.patch({ scaleState });
+				// Fire `scaleConnected` on the first transition into ready.
+				// The advertised name and capabilities arrive a beat later
+				// via `onScaleIdentified` / `refreshScaleCapabilities`, so
+				// `scaleName` may still be `null` here; payload tolerates it.
+				if (scaleState === 'ready' && !wasReady) {
+					this.fireWebhook('scaleConnected', {
+						deviceName: this.state.current.scaleName,
+						deviceId: null
+					});
+				}
+			},
 			onScaleIdentified: (advertisedName) => {
 				void this.refreshScaleCapabilities(advertisedName);
 			},
@@ -389,7 +416,24 @@ export class CremaApp {
 	 */
 	private applyCoreOutput(output: CoreOutput): void {
 		for (const event of output.events) {
+			// Stash the prior error text so we can detect a `null → text`
+			// transition into an `Error*` substate after the fold below.
+			const priorMachineError = this.state.current.machineError;
 			this.state.applyEvent(event);
+			if (event.type === 'MachineStateChanged') {
+				const nextMachineError = this.state.current.machineError;
+				if (nextMachineError !== null && nextMachineError !== priorMachineError) {
+					// Edge-triggered: only the entry into an error substate
+					// fires. A persistent error that re-asserts the same
+					// substate does not re-fire; the user does not want a
+					// per-notification flood.
+					this.fireWebhook('machineError', {
+						errorText: nextMachineError,
+						machineState: event.content.state,
+						subState: event.content.substate
+					});
+				}
+			}
 			if (event.type === 'Telemetry') {
 				// Water accumulation (E1): integrate the DE1's group flow over
 				// the wall-clock gap since the previous telemetry sample, the
@@ -429,6 +473,22 @@ export class CremaApp {
 					window.clearTimeout(this.pendingUploadCompletion.timeoutId);
 					this.pendingUploadCompletion.resolve(true);
 					this.pendingUploadCompletion = null;
+				}
+				// Fire `profileUploaded` webhook — the core gives us the
+				// title; the dose / yield come from the active profile in
+				// the library (the same profile we just uploaded). `null`
+				// for fields the library cannot resolve.
+				{
+					const profiles = getProfileStore();
+					const activeProfile = profiles.activeId
+						? profiles.get(profiles.activeId)
+						: undefined;
+					this.fireWebhook('profileUploaded', {
+						profileName: event.content.title,
+						profileId: activeProfile?.id ?? null,
+						doseG: activeProfile?.dose ?? null,
+						yieldG: activeProfile?.yieldOut ?? null
+					});
 				}
 			}
 			if (event.type === 'ProfileUploadFailed') {
@@ -505,6 +565,26 @@ export class CremaApp {
 								}
 							: null
 				});
+				// Fire the `shotCompleted` webhook after the History
+				// record is in. Brew ratio = final weight / dose when both
+				// are known; `null` otherwise.
+				{
+					const finalWeight = event.content.final_weight ?? null;
+					const dose = activeProfile?.dose ?? null;
+					const brewRatio =
+						finalWeight !== null && dose !== null && dose > 0
+							? finalWeight / dose
+							: null;
+					this.fireWebhook('shotCompleted', {
+						profileName: snapshot.activeProfileName,
+						profileId: activeProfile?.id ?? null,
+						duration: event.content.duration,
+						finalWeight,
+						peakPressure: event.content.peak_pressure ?? null,
+						peakTemp: event.content.peak_temp ?? null,
+						brewRatio
+					});
+				}
 				// Persist the just-finished shot's raw BLE capture (a slice of
 				// the recorder's rolling buffer, scoped from a short lead-in
 				// before ShotStarted through completion) under the new record's
@@ -540,6 +620,74 @@ export class CremaApp {
 		}
 		for (const command of output.commands) {
 			void this.executeCommand(command);
+		}
+	}
+
+	/**
+	 * Fire a webhook for `eventType` with `payload`, gated on the user's
+	 * settings (`webhookEnabled`, a non-empty `webhookUrl`, and the
+	 * matching `webhookEvents.<eventType>` toggle).
+	 *
+	 * Fire-and-forget — the caller does not await, the response is
+	 * discarded, and any error (network, CORS, abort) lands as a log
+	 * line in the BLE debug panel instead of surfacing to the user. No
+	 * retries; if the user's endpoint is down, that's their problem.
+	 *
+	 * The "Send test" button in Advanced → Webhooks uses
+	 * {@link sendTestWebhook} instead, which awaits and returns the
+	 * outcome so the UI can show success / failure.
+	 */
+	private fireWebhook(eventType: string, payload: object): void {
+		const prefs = getSettingsStore().current;
+		if (!prefs.webhookEnabled) return;
+		const url = prefs.webhookUrl.trim();
+		if (url.length === 0) return;
+		const enabled = prefs.webhookEvents[eventType as keyof typeof prefs.webhookEvents];
+		if (!enabled) return;
+		const body = JSON.stringify({ type: eventType, payload, timestamp: Date.now() });
+		void fetch(url, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body,
+			signal: AbortSignal.timeout(5000)
+		}).catch((err) => {
+			const reason = err instanceof Error ? err.message : String(err);
+			this.state.log(`webhook ${eventType} failed: ${reason}`);
+		});
+	}
+
+	/**
+	 * Send a one-shot test webhook to the configured URL — awaits the
+	 * response and returns a human-readable outcome string the
+	 * `AdvancedSection` test button surfaces inline. Unlike
+	 * {@link fireWebhook}, this path surfaces errors directly so the
+	 * user can verify their endpoint works.
+	 */
+	async sendTestWebhook(): Promise<{ ok: boolean; message: string }> {
+		const prefs = getSettingsStore().current;
+		const url = prefs.webhookUrl.trim();
+		if (url.length === 0) {
+			return { ok: false, message: 'No URL configured.' };
+		}
+		const body = JSON.stringify({
+			type: 'test',
+			payload: { message: 'Hello from Crema' },
+			timestamp: Date.now()
+		});
+		try {
+			const res = await fetch(url, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body,
+				signal: AbortSignal.timeout(5000)
+			});
+			if (res.ok) {
+				return { ok: true, message: `Sent (HTTP ${res.status})` };
+			}
+			return { ok: false, message: `HTTP ${res.status}` };
+		} catch (err) {
+			const reason = err instanceof Error ? err.message : String(err);
+			return { ok: false, message: reason };
 		}
 	}
 

@@ -132,6 +132,29 @@ export interface Settings {
 	/** Plot the mass-flow rate line in g/s (paired with weight). */
 	showWeightFlow: boolean;
 
+	// ── Webhooks ─────────────────────────────────────────────────────────
+	// Outbound POSTs to a user-supplied URL when chosen events fire. The
+	// shell is a static, client-only PWA — there is no server hop, so the
+	// fetch goes straight from the browser to the user's endpoint. Subject
+	// to CORS on the receiving side. No retries, no auth — MVP.
+	/** Master switch for the webhook feature. */
+	webhookEnabled: boolean;
+	/** Destination URL — `https://…` (or `http://localhost…` for dev). */
+	webhookUrl: string;
+	/** Per-event toggles — independent of each other. */
+	webhookEvents: {
+		/** Fire when a shot finishes. */
+		shotCompleted: boolean;
+		/** Fire when the DE1 enters an `Error*` substate. */
+		machineError: boolean;
+		/** Fire when a profile upload completes successfully. */
+		profileUploaded: boolean;
+		/** Fire when a scale connects (reaches `ready`). */
+		scaleConnected: boolean;
+		/** Fire when the DE1 connects (reaches `ready`). */
+		de1Connected: boolean;
+	};
+
 	// ── Advanced ─────────────────────────────────────────────────────────
 	/** Smooth the pressure curve. */
 	smoothPressure: boolean;
@@ -194,6 +217,17 @@ export const DEFAULT_SETTINGS: Settings = {
 	showMixTemp: false,
 	showWeight: true,
 	showWeightFlow: false,
+
+	// Webhooks — off by default; user opts in from Advanced → Webhooks.
+	webhookEnabled: false,
+	webhookUrl: '',
+	webhookEvents: {
+		shotCompleted: true,
+		machineError: true,
+		profileUploaded: false,
+		scaleConnected: false,
+		de1Connected: false
+	},
 
 	smoothPressure: true,
 	showDebugPanel: false,
