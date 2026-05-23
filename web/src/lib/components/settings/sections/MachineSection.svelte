@@ -34,7 +34,7 @@
 	 * named in the event log).
 	 */
 	import type { CremaApp, UiSnapshot } from '$lib/state';
-	import type { De1State } from '$lib/ble';
+	import { bleStateLabel, type De1State } from '$lib/ble';
 	import type { FirmwareUpdateStatus } from '$lib/core';
 	import { MachineState, MmrRegister } from '$lib/core/crema-core';
 	import { getSettingsStore } from '$lib/settings';
@@ -65,19 +65,7 @@
 	);
 
 	/** Human label for the coarse DE1 connection state. */
-	const stateLabel = $derived(
-		(
-			{
-				idle: 'Not connected',
-				connecting: 'Connecting…',
-				subscribing: 'Subscribing…',
-				ready: 'Connected',
-				reconnecting: 'Reconnecting…',
-				disconnected: 'Disconnected',
-				failed: 'Connection failed'
-			} as const
-		)[de1State]
-	);
+	const stateLabel = $derived(bleStateLabel(de1State));
 
 	/** Connect a DE1 — a Web-Bluetooth gesture handler. */
 	function connect(): void {
