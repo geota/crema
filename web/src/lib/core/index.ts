@@ -394,6 +394,24 @@ export interface CremaCore {
 	stopTimer(): Promise<CoreOutput>;
 	/** Build a `CoreOutput` whose command resets the connected scale's built-in timer to zero. */
 	resetTimer(): Promise<CoreOutput>;
+	/**
+	 * Build a `CoreOutput` whose command enables a connected Decent Scale's
+	 * on-scale LCD in grams mode. Decent-Scale-only: empty for every other
+	 * scale, and for an unconnected core. The shell schedules periodic
+	 * `decentScaleHeartbeat` writes once the LCD is enabled.
+	 */
+	enableDecentScaleLcd(): Promise<CoreOutput>;
+	/**
+	 * Build a `CoreOutput` whose command disables a connected Decent Scale's
+	 * on-scale LCD. Decent-Scale-only; empty otherwise.
+	 */
+	disableDecentScaleLcd(): Promise<CoreOutput>;
+	/**
+	 * Build a `CoreOutput` whose command emits one heartbeat write to a
+	 * connected Decent Scale. The shell schedules the clock at roughly
+	 * 2 s between calls. Decent-Scale-only; empty otherwise.
+	 */
+	decentScaleHeartbeat(): Promise<CoreOutput>;
 	/** Build a `CoreOutput` whose command sets the scale beeper volume. */
 	setScaleVolume(level: number): Promise<CoreOutput>;
 	/** Build a `CoreOutput` whose command sets the scale auto-standby timeout. */
@@ -682,6 +700,15 @@ async function createCore(): Promise<CremaCore> {
 		},
 		async resetTimer() {
 			return parseOutput(bridge.reset_timer());
+		},
+		async enableDecentScaleLcd() {
+			return parseOutput(bridge.enable_decent_scale_lcd());
+		},
+		async disableDecentScaleLcd() {
+			return parseOutput(bridge.disable_decent_scale_lcd());
+		},
+		async decentScaleHeartbeat() {
+			return parseOutput(bridge.decent_scale_heartbeat());
 		},
 		async setScaleVolume(level) {
 			return parseOutput(bridge.set_scale_volume(level));

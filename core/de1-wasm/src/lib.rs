@@ -598,6 +598,32 @@ impl CremaBridge {
         json(self.core.reset_timer())
     }
 
+    /// Build a [`CoreOutput`] (JSON) whose command enables a connected
+    /// Decent Scale's on-scale LCD in grams mode. Decent-Scale-only: empty
+    /// for every other scale, and for an unconnected core.
+    ///
+    /// Setting the LCD enable also arms the heartbeat requirement on the
+    /// scale — the shell must follow up with periodic
+    /// [`decent_scale_heartbeat`](Self::decent_scale_heartbeat) writes to keep
+    /// the display awake.
+    pub fn enable_decent_scale_lcd(&self) -> String {
+        json(self.core.enable_decent_scale_lcd())
+    }
+
+    /// Build a [`CoreOutput`] (JSON) whose command disables a connected
+    /// Decent Scale's on-scale LCD. Decent-Scale-only; empty otherwise.
+    pub fn disable_decent_scale_lcd(&self) -> String {
+        json(self.core.disable_decent_scale_lcd())
+    }
+
+    /// Build a [`CoreOutput`] (JSON) whose command emits one heartbeat write
+    /// to a connected Decent Scale. The shell schedules the clock at
+    /// roughly [`decent_scale::HEARTBEAT_INTERVAL_MS`] ms between calls.
+    /// Decent-Scale-only; empty otherwise.
+    pub fn decent_scale_heartbeat(&self) -> String {
+        json(self.core.decent_scale_heartbeat())
+    }
+
     /// What the currently-connected scale can do beyond reporting a bare
     /// weight, as a JSON-encoded `ScaleCapabilities` object — or `undefined`
     /// when no scale is connected.
@@ -1374,6 +1400,39 @@ mod tests {
         ] {
             let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
             assert!(parsed["commands"].as_array().unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn decent_scale_lcd_and_heartbeat_bridge_methods_produce_a_write_for_a_decent_scale() {
+        let mut bridge = CremaBridge::new();
+        bridge.connect_scale("Decent Scale ABC".to_owned());
+        for json in [
+            bridge.enable_decent_scale_lcd(),
+            bridge.disable_decent_scale_lcd(),
+            bridge.decent_scale_heartbeat(),
+        ] {
+            let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+            let commands = parsed["commands"].as_array().unwrap();
+            assert_eq!(commands.len(), 1, "expected one WriteScale command: {json}");
+            assert_eq!(commands[0]["type"], "WriteScale");
+        }
+    }
+
+    #[test]
+    fn decent_scale_lcd_and_heartbeat_bridge_methods_produce_no_write_for_a_non_decent_scale() {
+        let mut bridge = CremaBridge::new();
+        bridge.connect_scale("BOOKOO_SC".to_owned());
+        for json in [
+            bridge.enable_decent_scale_lcd(),
+            bridge.disable_decent_scale_lcd(),
+            bridge.decent_scale_heartbeat(),
+        ] {
+            let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+            assert!(
+                parsed["commands"].as_array().unwrap().is_empty(),
+                "Bookoo should ignore Decent-Scale-specific writes: {json}"
+            );
         }
     }
 

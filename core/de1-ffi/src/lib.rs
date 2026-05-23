@@ -427,6 +427,31 @@ impl CremaBridge {
         json(self.core().reset_timer())
     }
 
+    /// Build a [`CoreOutput`] (JSON) whose command enables a connected
+    /// Decent Scale's on-scale LCD in grams mode. Decent-Scale-only: empty
+    /// for every other scale, and for an unconnected core. The shell must
+    /// follow up with periodic
+    /// [`decent_scale_heartbeat`](Self::decent_scale_heartbeat) writes once
+    /// the LCD is enabled, since byte 5 of the enable packet arms the
+    /// heartbeat requirement on the scale itself.
+    pub fn enable_decent_scale_lcd(&self) -> String {
+        json(self.core().enable_decent_scale_lcd())
+    }
+
+    /// Build a [`CoreOutput`] (JSON) whose command disables a connected
+    /// Decent Scale's on-scale LCD. Decent-Scale-only; empty otherwise.
+    pub fn disable_decent_scale_lcd(&self) -> String {
+        json(self.core().disable_decent_scale_lcd())
+    }
+
+    /// Build a [`CoreOutput`] (JSON) whose command emits one heartbeat write
+    /// to a connected Decent Scale. The shell schedules the clock at roughly
+    /// `decent_scale::HEARTBEAT_INTERVAL_MS` ms between calls.
+    /// Decent-Scale-only; empty otherwise.
+    pub fn decent_scale_heartbeat(&self) -> String {
+        json(self.core().decent_scale_heartbeat())
+    }
+
     /// What the currently-connected scale can do beyond reporting a bare
     /// weight, as a JSON-encoded `ScaleCapabilities` object — or `None` when no
     /// scale is connected.
