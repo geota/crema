@@ -40,6 +40,7 @@
 	import TagInput from './TagInput.svelte';
 	import PeNumber from './PeNumber.svelte';
 	import { getSettingsStore, formatWeight } from '$lib/settings';
+	import { getCremaAppContext } from '$lib/shell/app-context';
 	import {
 		MAX_TOTAL_VOLUME_ML,
 		MIN_TOTAL_VOLUME_ML,
@@ -67,6 +68,32 @@
 	 * URL rather than imperatively off `window.location`.
 	 */
 	const duplicateFlag = $derived(page.url.searchParams.get('duplicate') === '1');
+
+	/**
+	 * Where Back / Save should return to. Defaults to the profile library
+	 * (`/profiles`); the Brew page's "Edit" affordance passes `?from=brew`
+	 * so back/save return to `/brew` instead of dumping the user in the
+	 * library. Future surfaces (Settings → Machine, History detail) can
+	 * pass other tokens — extend the switch below as they land.
+	 */
+	const returnPath = $derived.by<string>(() => {
+		const from = page.url.searchParams.get('from');
+		switch (from) {
+			case 'brew':
+				return resolve('/');
+			default:
+				return resolve('/profiles');
+		}
+	});
+
+	/**
+	 * The CremaApp orchestrator — used on save to seed the freshly-forked
+	 * custom profile as the active one + sync to the DE1 when the user
+	 * edited the loaded profile (which forks because built-ins are
+	 * read-only). `null` while the core is loading.
+	 */
+	const appCtx = getCremaAppContext();
+	const app = $derived(appCtx().app);
 
 	/**
 	 * The **loaded baseline** — the profile the editor opens on, before any
@@ -225,10 +252,23 @@
 		dirty = true;
 	}
 
-	/** Save the draft to the library and return to the grid. */
+	/**
+	 * Save the draft to the library and return to wherever the user came
+	 * from (Brew or Profiles per `returnPath`).
+	 *
+	 * Two cases:
+	 *  - **Editing a custom profile in place** (`isCreate === false`):
+	 *    update the existing record; the active id is unchanged. If this
+	 *    profile happens to be the loaded one, the next Coffee tap will
+	 *    sync it (the new bytes change the fingerprint).
+	 *  - **Editing a built-in / arrived with `?duplicate=1`** (`isCreate
+	 *    === true`): fork into a fresh `custom:…` profile. Set it as the
+	 *    active profile + sync it to the DE1 — without this, the user
+	 *    just edited what they were brewing with and saved a copy nobody
+	 *    is brewing with. The fingerprint sync is the same path
+	 *    `loadOnBrew` uses, so the cache stays consistent.
+	 */
 	function save(): void {
-		// A built-in / duplicate is saved as a fresh custom profile; an
-		// existing custom profile is updated in place.
 		const toSave: CremaProfile = isCreate
 			? {
 					...draft,
@@ -237,8 +277,16 @@
 				}
 			: draft;
 		store.save(toSave);
+		if (isCreate) {
+			store.setActive(toSave.id);
+			if (app) {
+				// Keep the DE1's loaded profile in sync with the user's
+				// just-edited copy. Mirrors `loadOnBrew` in routes/profiles.
+				void app.syncActiveProfile(toSave, {});
+			}
+		}
 		dirty = false;
-		void goto(resolve('/profiles'));
+		void goto(returnPath);
 	}
 
 	/** Discard edits — revert the draft to its loaded baseline. */
@@ -258,10 +306,10 @@
 		dirty = true;
 	}
 
-	/** Back to the library — warn on unsaved edits. */
+	/** Back to wherever the user came from (Brew or Profiles per `returnPath`). */
 	function back(): void {
 		if (dirty && !confirm('Leave the editor? Unsaved changes will be lost.')) return;
-		void goto(resolve('/profiles'));
+		void goto(returnPath);
 	}
 
 	const roastOptions: Roast[] = ['light', 'medium', 'dark'];
