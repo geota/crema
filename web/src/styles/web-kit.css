@@ -557,7 +557,12 @@
   transition: background 120ms var(--ease);
 }
 .crema-chip:hover { background: rgba(var(--tint-rgb), 0.12); }
-.crema-chip.is-active { background: var(--ink-900); color: var(--fg-on-accent); }
+/* Active chip is an ink-900 (espresso) pill in BOTH themes — the bg is
+   theme-fixed, so the text must be too. `--fg-on-accent` flips per theme
+   (paper-50 in dark, ink-900 in light) and was reading as ink-on-ink in
+   dark mode = invisible. Use `--ink-50` directly so the cream-on-espresso
+   pill stays legible regardless of theme. */
+.crema-chip.is-active { background: var(--ink-900); color: var(--ink-50); }
 
 .crema-lib-items { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 6px; }
 .crema-plist {
