@@ -25,6 +25,7 @@
 
 import type { CoreOutput, CremaCore, NotificationSource, ScaleUuids } from '$lib/core';
 import { describeError } from '$lib/utils/error';
+import type { BleConnectionState } from './connection-state';
 import { BleDevice, requestDevice, type ConnState } from './transport';
 
 /**
@@ -40,15 +41,13 @@ const BOOKOO_NAME_PREFIX = 'BOOKOO_SC';
  */
 const BOOKOO_SERVICE_UUID = '00000ffe-0000-1000-8000-00805f9b34fb';
 
-/** Coarse state of the scale connection — mirrors the Android manager's enum. */
-export type ScaleState =
-	| 'idle'
-	| 'connecting'
-	| 'subscribing'
-	| 'ready'
-	| 'reconnecting'
-	| 'disconnected'
-	| 'failed';
+/**
+ * Coarse state of the scale connection — an alias of
+ * {@link BleConnectionState}, the shared BLE-manager lifecycle. Kept as
+ * `ScaleState` for backward compatibility at the existing call sites; new
+ * code should import `BleConnectionState` directly from `$lib/ble`.
+ */
+export type ScaleState = BleConnectionState;
 
 /** Callbacks the scale manager reports up to the orchestrator. */
 export interface ScaleManagerCallbacks {
