@@ -1140,6 +1140,29 @@ enum class WaterSessionKind(val string: String) {
 	Flush("Flush"),
 }
 
+/// The user's chosen *display unit* for weight.
+/// 
+/// Canonical storage is always grams; this enum names the unit the shell
+/// surfaces — and crucially, the unit the Decent Scale's on-scale LCD must
+/// be told to render. The Decent Scale exposes two LCD-enable wire packets
+/// (one with byte `[4] = 0x00` for grams, one with byte `[4] = 0x01` for
+/// ounces); the core picks the right packet based on this enum so the
+/// on-scale display matches the shell.
+/// 
+/// `#[typeshare]` + serde: the web shell already keeps a TypeScript
+/// `WeightUnit` (`'g' | 'oz'`) in its settings store; carrying the same
+/// shape through the bridge means the shell can pass its existing pref
+/// straight through without a lookup table.
+@Serializable
+enum class WeightUnit(val string: String) {
+	/// Grams — the canonical unit and the Decent Scale's default LCD mode.
+	@SerialName("grams")
+	Grams("grams"),
+	/// US avoirdupois ounces — the only imperial display alternative.
+	@SerialName("ounces")
+	Ounces("ounces"),
+}
+
 /// A writable DE1 GATT characteristic. The shell maps this to a UUID.
 /// 
 /// `#[non_exhaustive]`: profile-upload targets arrive later.

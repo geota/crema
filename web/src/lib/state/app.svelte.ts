@@ -936,6 +936,46 @@ export class CremaApp {
 	}
 
 	/**
+	 * Tell the core which unit the user wants on the Decent Scale's
+	 * on-scale LCD. The Settings page calls this whenever the
+	 * `weightUnit` pref changes; the core then picks the right LCD-enable
+	 * packet on the next DE1 Idle entry. If a Decent Scale is currently
+	 * connected and the DE1 is already in Idle, the LCD won't switch
+	 * until the next Idle re-entry — call {@link refreshDecentScaleLcd}
+	 * after this to push the new variant immediately.
+	 */
+	async applyWeightUnitPref(unit: 'g' | 'oz'): Promise<void> {
+		await this.core.setWeightUnitPref(unit);
+	}
+
+	/**
+	 * Re-emit the Decent Scale LCD-enable packet in the *current* weight
+	 * unit. Use after {@link applyWeightUnitPref} when the user wants the
+	 * on-scale display to switch units immediately (rather than waiting
+	 * for the next DE1 Idle entry).
+	 *
+	 * No-op when no Decent Scale is connected.
+	 */
+	async refreshDecentScaleLcd(): Promise<void> {
+		const unit = getSettingsStore().current.weightUnit;
+		this.applyCoreOutput(await this.core.enableDecentScaleLcd(unit));
+	}
+
+	/**
+	 * Power off a connected Decent Scale (v1.2+ firmware). Throws if the
+	 * scale doesn't support remote power-off — the caller surfaces the
+	 * error's message as a user-facing instruction ("long-press the
+	 * physical button to power off").
+	 *
+	 * No UI surface for this today; exposed here so a future Settings
+	 * action or Disconnect-button affordance can call it without touching
+	 * the core wiring again.
+	 */
+	async powerOffDecentScale(): Promise<void> {
+		this.applyCoreOutput(await this.core.powerOffDecentScale());
+	}
+
+	/**
 	 * Commit the mains heater voltage to MMR `0x803834`. **Hardware-damaging
 	 * if mis-set** — the caller MUST have gone through `MainsConfirmModal`
 	 * first. Only `120` and `230` are accepted; the core throws otherwise.
@@ -1785,6 +1825,12 @@ export async function createCremaApp(): Promise<CremaApp> {
 	} else {
 		void core.setLineFrequencyOverride(0);
 	}
+	// Push the persisted weight-unit pref into the core so the Decent
+	// Scale LCD-enable auto-policy (triggered on the DE1's Idle entry)
+	// picks the right wire packet from the first state notification.
+	// Subsequent changes flow via `app.applyWeightUnitPref(...)` invoked
+	// from the Settings page on every `weightUnit` change.
+	void core.setWeightUnitPref(getSettingsStore().current.weightUnit);
 	// Install the user-presence heartbeat — every user touch / keystroke
 	// (debounced to once per minute) writes `UserPresent = 1` to the DE1,
 	// resetting its "user has gone away" timer. The actual MMR write is

@@ -13,6 +13,7 @@
 	 * are persisted app preferences.
 	 */
 	import { getSettingsStore } from '$lib/settings';
+	import { getCremaAppContext } from '$lib/shell/app-context';
 	import StSectionHead from '../StSectionHead.svelte';
 	import StGroup from '../StGroup.svelte';
 	import StRow from '../StRow.svelte';
@@ -21,6 +22,27 @@
 
 	const settings = getSettingsStore();
 	const prefs = $derived(settings.current);
+	const appCtx = getCremaAppContext();
+
+	/**
+	 * Apply the new weight-unit pref end-to-end:
+	 *   1. Persist in the settings store (drives every shell formatter).
+	 *   2. Cache on the core so the Decent Scale LCD-enable auto-policy
+	 *      picks the right wire packet on the next DE1 Idle entry.
+	 *   3. Re-emit the LCD-enable in the new unit so a Decent Scale
+	 *      that's already showing the LCD switches immediately rather
+	 *      than waiting for the next Idle re-entry.
+	 *
+	 * (3) is a no-op when no Decent Scale is connected.
+	 */
+	async function setWeightUnit(value: 'g' | 'oz'): Promise<void> {
+		settings.set('weightUnit', value);
+		const app = appCtx().app;
+		if (app) {
+			await app.applyWeightUnitPref(value);
+			await app.refreshDecentScaleLcd();
+		}
+	}
 </script>
 
 <StSectionHead
@@ -83,7 +105,7 @@
 					{ value: 'g', label: 'g' },
 					{ value: 'oz', label: 'oz' }
 				]}
-				onChange={(v) => settings.set('weightUnit', v as 'g' | 'oz')}
+				onChange={(v) => void setWeightUnit(v as 'g' | 'oz')}
 			/>
 		{/snippet}
 	</StRow>

@@ -428,14 +428,21 @@ impl CremaBridge {
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command enables a connected
-    /// Decent Scale's on-scale LCD in grams mode. Decent-Scale-only: empty
-    /// for every other scale, and for an unconnected core. The shell must
-    /// follow up with periodic
+    /// Decent Scale's on-scale LCD in the unit the shell passes
+    /// (`"grams"` / `"ounces"`, matching the [`de1_domain::WeightUnit`]
+    /// serde form). Decent-Scale-only: empty for every other scale, and
+    /// for an unconnected core. The shell must follow up with periodic
     /// [`decent_scale_heartbeat`](Self::decent_scale_heartbeat) writes once
     /// the LCD is enabled, since byte 5 of the enable packet arms the
     /// heartbeat requirement on the scale itself.
-    pub fn enable_decent_scale_lcd(&self) -> String {
-        json(self.core().enable_decent_scale_lcd())
+    ///
+    /// Returns an error string (rather than a JSON `CoreOutput`) when
+    /// `unit` is not one of the known wire strings — `"grams"` or
+    /// `"ounces"`.
+    pub fn enable_decent_scale_lcd(&self, unit: &str) -> Result<String, String> {
+        let unit = de1_domain::WeightUnit::from_str_lower(unit)
+            .ok_or_else(|| format!("unknown weight unit: {unit}"))?;
+        Ok(json(self.core().enable_decent_scale_lcd(unit)))
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command disables a connected
@@ -450,6 +457,33 @@ impl CremaBridge {
     /// Decent-Scale-only; empty otherwise.
     pub fn decent_scale_heartbeat(&self) -> String {
         json(self.core().decent_scale_heartbeat())
+    }
+
+    /// Build a [`CoreOutput`] (JSON) whose command powers off a connected
+    /// Decent Scale on v1.2+ firmware. Decent-Scale-only.
+    ///
+    /// Returns an error string (and no `CoreOutput`) when no scale is
+    /// connected, the connected scale is not a Decent Scale, or the Decent
+    /// Scale's firmware version is not yet known / is v1.0 / v1.1 (which
+    /// silently ignore the byte). The shell catches the error and shows
+    /// a "long-press the button" instruction so the user gets actionable
+    /// feedback rather than a silent no-op.
+    pub fn power_off_decent_scale(&self) -> Result<String, String> {
+        self.core()
+            .power_off_decent_scale()
+            .map(json)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Cache the user's chosen weight unit on the core so the LCD-enable
+    /// auto-policy (triggered on the DE1's Idle entry) picks the right
+    /// wire packet. `unit` is the same lowercase string the shell keeps
+    /// in its settings (`"grams"` / `"ounces"`).
+    pub fn set_weight_unit_pref(&self, unit: &str) -> Result<(), String> {
+        let unit = de1_domain::WeightUnit::from_str_lower(unit)
+            .ok_or_else(|| format!("unknown weight unit: {unit}"))?;
+        self.core().set_weight_unit_pref(unit);
+        Ok(())
     }
 
     /// What the currently-connected scale can do beyond reporting a bare

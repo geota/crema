@@ -41,4 +41,24 @@ pub enum AppError {
         /// Human-readable explanation.
         reason: String,
     },
+    /// A capability-gated method was called on hardware that does not
+    /// support it — for example, the Decent Scale power-off byte on v1.0
+    /// or v1.1 firmware (silently ignored by anything before v1.2), or
+    /// when no scale is connected.
+    ///
+    /// The shell catches this and surfaces the [`reason`](Self) — typically
+    /// "this scale doesn't support remote power-off, please long-press the
+    /// button" — so the user gets actionable feedback instead of a silent
+    /// no-op write.
+    ///
+    /// - `feature`: a short identifier for the unsupported feature
+    ///   (e.g. `"decent_scale_power_off"`), suitable for log filtering.
+    /// - `reason`: a human-readable, user-facing explanation.
+    #[error("feature {feature} is unsupported on the connected hardware: {reason}")]
+    UnsupportedOnHardware {
+        /// Short identifier for the unsupported feature.
+        feature: String,
+        /// Human-readable explanation, suitable for surfacing to the user.
+        reason: String,
+    },
 }

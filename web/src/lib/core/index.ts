@@ -25,6 +25,18 @@ import type { CoreOutput, ScaleCapabilities, ScaleUuids } from './crema-core';
 import type { CalTarget, MmrRegister, FirmwareUpdateStatus } from './crema-core';
 
 /**
+ * The web shell stores the user's weight pref as `'g' | 'oz'` (legacy
+ * names baked into many components); the core's wire form is `'grams' |
+ * 'ounces'` (the {@link import('./crema-core').WeightUnit} typeshare
+ * enum). This is the one-line bridge converter — kept here so the rest
+ * of the shell never has to think about the discrepancy.
+ */
+type ShellWeightUnit = 'g' | 'oz';
+function weightUnitToWire(unit: ShellWeightUnit): 'grams' | 'ounces' {
+	return unit === 'oz' ? 'ounces' : 'grams';
+}
+
+/**
  * Which quantity a profile step holds at its target — mirrors the core's
  * `Pump` enum (lowercase wire spelling per the community v2 JSON contract).
  */
@@ -396,11 +408,13 @@ export interface CremaCore {
 	resetTimer(): Promise<CoreOutput>;
 	/**
 	 * Build a `CoreOutput` whose command enables a connected Decent Scale's
-	 * on-scale LCD in grams mode. Decent-Scale-only: empty for every other
-	 * scale, and for an unconnected core. The shell schedules periodic
-	 * `decentScaleHeartbeat` writes once the LCD is enabled.
+	 * on-scale LCD in the unit the user has chosen. Decent-Scale-only:
+	 * empty for every other scale, and for an unconnected core. The shell
+	 * schedules periodic `decentScaleHeartbeat` writes once the LCD is
+	 * enabled. `unit` is the shell's legacy `'g' | 'oz'` pref; the bridge
+	 * maps it to the core's `'grams' | 'ounces'` wire form.
 	 */
-	enableDecentScaleLcd(): Promise<CoreOutput>;
+	enableDecentScaleLcd(unit: ShellWeightUnit): Promise<CoreOutput>;
 	/**
 	 * Build a `CoreOutput` whose command disables a connected Decent Scale's
 	 * on-scale LCD. Decent-Scale-only; empty otherwise.
@@ -412,6 +426,23 @@ export interface CremaCore {
 	 * 2 s between calls. Decent-Scale-only; empty otherwise.
 	 */
 	decentScaleHeartbeat(): Promise<CoreOutput>;
+	/**
+	 * Build a `CoreOutput` whose command powers off a connected Decent
+	 * Scale (v1.2+ firmware only). Rejects with an error string when no
+	 * scale is connected, when the scale isn't a Decent Scale, or when
+	 * the firmware version is not yet known / is v1.0 / v1.1 — the shell
+	 * shows the rejection as a "long-press the button" instruction
+	 * instead of dispatching a silent no-op write.
+	 */
+	powerOffDecentScale(): Promise<CoreOutput>;
+	/**
+	 * Cache the user's chosen weight unit on the core, so the Decent
+	 * Scale LCD-enable auto-policy (triggered on the DE1's Idle entry)
+	 * picks the right wire packet without the shell re-dispatching
+	 * `enableDecentScaleLcd` on every state change. The shell calls this
+	 * whenever the `weightUnit` settings pref changes.
+	 */
+	setWeightUnitPref(unit: ShellWeightUnit): Promise<void>;
 	/** Build a `CoreOutput` whose command sets the scale beeper volume. */
 	setScaleVolume(level: number): Promise<CoreOutput>;
 	/** Build a `CoreOutput` whose command sets the scale auto-standby timeout. */
@@ -701,14 +732,23 @@ async function createCore(): Promise<CremaCore> {
 		async resetTimer() {
 			return parseOutput(bridge.reset_timer());
 		},
-		async enableDecentScaleLcd() {
-			return parseOutput(bridge.enable_decent_scale_lcd());
+		async enableDecentScaleLcd(unit: ShellWeightUnit) {
+			return parseOutput(bridge.enable_decent_scale_lcd(weightUnitToWire(unit)));
 		},
 		async disableDecentScaleLcd() {
 			return parseOutput(bridge.disable_decent_scale_lcd());
 		},
 		async decentScaleHeartbeat() {
 			return parseOutput(bridge.decent_scale_heartbeat());
+		},
+		async powerOffDecentScale() {
+			// The bridge throws a string on unsupported-hardware; surface it
+			// as a JS Error so callers can `try/catch` it normally and pull
+			// the user-facing reason out of `error.message`.
+			return parseOutput(bridge.power_off_decent_scale());
+		},
+		async setWeightUnitPref(unit: ShellWeightUnit) {
+			bridge.set_weight_unit_pref(weightUnitToWire(unit));
 		},
 		async setScaleVolume(level) {
 			return parseOutput(bridge.set_scale_volume(level));

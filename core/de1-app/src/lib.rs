@@ -28,7 +28,7 @@ use std::time::Duration;
 use de1_domain::{
     AutoStop, FlowAlgorithm, FlowEstimator, LineFreqDetector, Profile, STOP_WEIGHT_BEFORE,
     ShotEvent, ShotMonitor, ShotPhase, SteamEvent, SteamMonitor, StopConfig, StopReason,
-    StopTargets, VolumeIntegrator, WaterEvent, WaterMonitor,
+    StopTargets, VolumeIntegrator, WaterEvent, WaterMonitor, WeightUnit,
 };
 use de1_protocol::{
     CalTarget, Calibration, EXTENSION_FRAME_INDEX_OFFSET, MachineState, MmrReadReply, MmrRegister,
@@ -45,6 +45,7 @@ use de1_protocol::{
 /// Bluetooth's worst-case back-pressure window.
 pub const PROFILE_UPLOAD_ACK_TIMEOUT: Duration = Duration::from_secs(5);
 use de1_scale::{Scale, ScaleCapabilities, ScaleUuids, TimerCommand, decent_scale};
+use de1_scale::DecentScaleFirmwareVersion;
 
 /// Re-export of `de1_scale::bookoo` so the wasm + future Android bridges
 /// can reach scale-side helpers (e.g. [`bookoo::format_firmware_version`])
@@ -302,6 +303,18 @@ pub struct CremaCore {
     /// ([`MmrRegister::SerialNumber`]). `None` until the MMR has been read at
     /// least once. Feeds the capture META prelude.
     last_serial_number: Option<u32>,
+    /// The user's chosen display unit for weight, mirrored from the shell's
+    /// settings store via [`set_weight_unit_pref`](Self::set_weight_unit_pref).
+    ///
+    /// Read by the Decent-Scale LCD-enable path (both the public method
+    /// and the reactive auto-policy in [`handle_state`](Self::handle_state))
+    /// to choose between [`decent_scale::LCD_ENABLE_GRAMS`] and
+    /// [`decent_scale::LCD_ENABLE_OUNCES`]. The pref lives in the shell —
+    /// the core is sans-IO and never reads settings storage — so this
+    /// field is a write-through cache the shell keeps current.
+    /// Defaults to [`WeightUnit::Grams`] (matches the legacy app default
+    /// and the canonical storage unit).
+    weight_unit_pref: WeightUnit,
 }
 
 /// In-flight state of one profile upload. Owned by
@@ -370,6 +383,7 @@ impl CremaCore {
             last_scale_advertised_name: None,
             last_machine_model: None,
             last_serial_number: None,
+            weight_unit_pref: WeightUnit::default(),
         }
     }
 
@@ -1212,27 +1226,36 @@ impl CremaCore {
         }
     }
 
-    /// Build a [`Command`] that enables the connected scale's on-scale LCD in
-    /// grams mode.
+    /// Build a [`Command`] that enables the connected scale's on-scale LCD,
+    /// in the unit the user has chosen.
     ///
     /// Decent-Scale-only: the LCD enable/disable surface is unique to the
-    /// Decent Scale, so the command is emitted only when [`Scale::is_decent_scale`]
-    /// is `true`. Every other scale — and an unconnected core — returns an
-    /// empty [`CoreOutput`]. The wire packet ([`bookoo`]-style sibling
-    /// constant lives in `de1_scale::decent_scale::LCD_ENABLE_GRAMS`) sets the
-    /// "send heartbeat" flag, so callers must follow up with periodic
-    /// [`decent_scale_heartbeat`](Self::decent_scale_heartbeat) writes — the
-    /// shell schedules the clock; the core is sans-IO. The reactive auto-policy
-    /// in [`handle_state`](Self::handle_state) wires this to the DE1's
-    /// [`MachineState::Idle`] transition.
+    /// Decent Scale, so the command is emitted only when
+    /// [`Scale::is_decent_scale`] is `true`. Every other scale — and an
+    /// unconnected core — returns an empty [`CoreOutput`].
     ///
-    /// May need a double-send on v1.0 Decent Scale firmware — see `docs/27`
-    /// appendix. Skipped for v1 of PR E; revisit if a real device drops
-    /// writes.
-    pub fn enable_decent_scale_lcd(&self) -> CoreOutput {
+    /// `unit` picks between the two wire packets — [`decent_scale::LCD_ENABLE_GRAMS`]
+    /// for [`WeightUnit::Grams`] and [`decent_scale::LCD_ENABLE_OUNCES`] for
+    /// [`WeightUnit::Ounces`]. Both packets set the "send heartbeat" flag,
+    /// so callers must follow up with periodic
+    /// [`decent_scale_heartbeat`](Self::decent_scale_heartbeat) writes —
+    /// the shell schedules the clock; the core is sans-IO. The reactive
+    /// auto-policy in [`handle_state`](Self::handle_state) wires this to
+    /// the DE1's [`MachineState::Idle`] transition, using the cached
+    /// [`weight_unit_pref`](Self) so an Idle entry picks the right variant.
+    pub fn enable_decent_scale_lcd(&self, unit: WeightUnit) -> CoreOutput {
         let mut out = CoreOutput::default();
-        Self::push_decent_scale_write(&self.scale, &decent_scale::LCD_ENABLE_GRAMS, &mut out);
+        Self::push_decent_scale_write(&self.scale, &Self::lcd_enable_bytes(unit), &mut out);
         out
+    }
+
+    /// Pick the wire packet for [`enable_decent_scale_lcd`] based on the
+    /// user's chosen weight unit.
+    fn lcd_enable_bytes(unit: WeightUnit) -> [u8; 7] {
+        match unit {
+            WeightUnit::Grams => decent_scale::LCD_ENABLE_GRAMS,
+            WeightUnit::Ounces => decent_scale::LCD_ENABLE_OUNCES,
+        }
     }
 
     /// Build a [`Command`] that disables the connected scale's on-scale LCD.
@@ -1262,12 +1285,97 @@ impl CremaCore {
         out
     }
 
+    /// Build a [`Command`] that powers off the connected Decent Scale.
+    ///
+    /// Returns [`AppError::UnsupportedOnHardware`] when the connected
+    /// scale's firmware version is not yet known or is v1.0 / v1.1 — the
+    /// [`decent_scale::POWER_OFF`] byte is silently ignored by anything
+    /// before v1.2 firmware, so the UI must know to fall back to the
+    /// "long-press the physical button" instruction instead of sending a
+    /// no-op. Returns the same error for a non-Decent scale or no scale
+    /// connected at all, mirroring [`enable_decent_scale_lcd`]'s gating.
+    ///
+    /// The byte sequence comes from the legacy app
+    /// (`de1plus/bluetooth.tcl:1289`); the firmware-version gate is
+    /// derived from the Decent Scale protocol docs cited there.
+    pub fn power_off_decent_scale(&self) -> Result<CoreOutput, AppError> {
+        let Some(scale) = self.scale.as_ref() else {
+            return Err(AppError::UnsupportedOnHardware {
+                feature: "decent_scale_power_off".to_owned(),
+                reason: "no scale is connected".to_owned(),
+            });
+        };
+        if !scale.is_decent_scale() {
+            return Err(AppError::UnsupportedOnHardware {
+                feature: "decent_scale_power_off".to_owned(),
+                reason: "connected scale is not a Decent Scale".to_owned(),
+            });
+        }
+        if !scale.supports_decent_scale_power_off() {
+            let reason = match scale.decent_scale_firmware_version() {
+                Some(DecentScaleFirmwareVersion::V1_0 | DecentScaleFirmwareVersion::V1_1) => {
+                    "Decent Scale firmware < v1.2 ignores remote power-off; long-press \
+                     the physical button instead"
+                        .to_owned()
+                }
+                Some(DecentScaleFirmwareVersion::Unknown) | None => {
+                    "Decent Scale firmware version not yet known; the remote power-off \
+                     byte is only safe on v1.2+"
+                        .to_owned()
+                }
+                Some(DecentScaleFirmwareVersion::V1_2) => {
+                    // Unreachable: V1_2 returns true from supports_power_off.
+                    "internal inconsistency in supports_decent_scale_power_off".to_owned()
+                }
+            };
+            return Err(AppError::UnsupportedOnHardware {
+                feature: "decent_scale_power_off".to_owned(),
+                reason,
+            });
+        }
+        let mut out = CoreOutput::default();
+        Self::push_decent_scale_write(&self.scale, &decent_scale::POWER_OFF, &mut out);
+        Ok(out)
+    }
+
+    /// Cache the user's chosen weight unit for the LCD-enable auto-policy.
+    ///
+    /// The shell calls this on every settings change to `weightUnit`. The
+    /// core is sans-IO and never reaches into the settings store; this
+    /// setter is the one-way write-through that keeps the LCD-enable
+    /// auto-policy (in [`handle_state`](Self::handle_state)) in sync with
+    /// what the shell is showing.
+    ///
+    /// Note: this only updates the cache; it does *not* re-emit an
+    /// LCD-enable write. The shell decides whether to re-emit after a
+    /// pref change — call [`enable_decent_scale_lcd`] with the new unit
+    /// if the on-scale display should switch immediately.
+    pub fn set_weight_unit_pref(&mut self, unit: WeightUnit) {
+        self.weight_unit_pref = unit;
+    }
+
+    /// The cached weight-unit pref — what the LCD-enable auto-policy uses.
+    pub fn weight_unit_pref(&self) -> WeightUnit {
+        self.weight_unit_pref
+    }
+
     /// Internal: append a fixed Decent-Scale write to `out` if the connected
     /// scale is a Decent Scale.
     ///
-    /// Shared by the three Decent-Scale public methods and by the reactive
+    /// Shared by every Decent-Scale public method and by the reactive
     /// auto-policy in [`handle_state`](Self::handle_state). Returns silently
     /// when no scale is connected or the connected scale is anything else.
+    ///
+    /// Single write per command. Legacy de1app double-sends as a paranoia
+    /// workaround for v1.0 firmware buffer drops
+    /// (`de1plus/bluetooth.tcl:1327-1330`, repeated for every LCD / timer
+    /// / tare proc); reaprime does not (uses a data-flow watchdog
+    /// mitigation instead — see `reaprime/.../decent_scale/scale.dart`).
+    /// Per the project's "defer to reaprime on inconsistent missing
+    /// capabilities" rule, we trust the modern BLE stack to deliver
+    /// writes reliably. If real-hardware testing shows drops, the
+    /// reaprime-style watchdog retry is the right addition — not blind
+    /// double-send.
     fn push_decent_scale_write(scale: &Option<Scale>, bytes: &[u8; 7], out: &mut CoreOutput) {
         if let Some(scale) = scale
             && scale.is_decent_scale()
@@ -1627,9 +1735,13 @@ impl CremaCore {
             // top-level state, mirroring the audit §7.10/§7.11 design.
             if prev_state != Some(info.state) {
                 match info.state {
+                    // The LCD-enable variant follows the user's chosen
+                    // weight unit, cached on the core by the shell via
+                    // `set_weight_unit_pref` — so an Idle entry picks
+                    // grams or ounces to match what the shell is showing.
                     MachineState::Idle => Self::push_decent_scale_write(
                         &self.scale,
-                        &decent_scale::LCD_ENABLE_GRAMS,
+                        &Self::lcd_enable_bytes(self.weight_unit_pref),
                         out,
                     ),
                     MachineState::Sleep => Self::push_decent_scale_write(
@@ -1718,6 +1830,20 @@ impl CremaCore {
             return;
         };
         let Some(reading) = scale.parse_reading(data) else {
+            // Not a weight packet — for the Decent Scale, this might be a
+            // `0x0A` LCD / heartbeat reply carrying the firmware-version
+            // sentinel. The legacy app extracts the firmware version from
+            // the same frame (`de1plus/bluetooth.tcl:2738-2749`); we
+            // mirror that here so a Decent Scale's `supports_power_off`
+            // capability becomes accurate shortly after the first
+            // LCD-enable write. A non-Decent scale (or any frame that
+            // isn't a `0x0A` reply) silently returns from this path.
+            if let Some(decent_scale::CommandResponse::LcdAck {
+                firmware_version, ..
+            }) = scale.parse_decent_scale_command_response(data)
+            {
+                scale.record_decent_scale_firmware_version(firmware_version);
+            }
             return;
         };
         // A fresh reading re-arms the lost-scale watchdog.
@@ -2691,9 +2817,19 @@ mod tests {
     fn enable_decent_scale_lcd_emits_the_known_wire_bytes() {
         let mut core = CremaCore::new();
         core.connect_scale("Decent Scale ABC");
-        let out = core.enable_decent_scale_lcd();
+        let out = core.enable_decent_scale_lcd(WeightUnit::Grams);
         // The single emitted command must carry exactly `LCD_ENABLE_GRAMS`.
         assert_eq!(the_only_scale_write(&out), decent_scale::LCD_ENABLE_GRAMS);
+    }
+
+    #[test]
+    fn enable_decent_scale_lcd_in_ounces_emits_the_ounces_packet() {
+        let mut core = CremaCore::new();
+        core.connect_scale("Decent Scale ABC");
+        let out = core.enable_decent_scale_lcd(WeightUnit::Ounces);
+        // The ounces variant only differs from the grams variant in byte
+        // [4] (the unit flag) and the trailing checksum.
+        assert_eq!(the_only_scale_write(&out), decent_scale::LCD_ENABLE_OUNCES);
     }
 
     #[test]
@@ -2715,7 +2851,7 @@ mod tests {
     #[test]
     fn the_decent_scale_writes_are_silent_with_no_scale_connected() {
         let core = CremaCore::new();
-        assert!(core.enable_decent_scale_lcd().commands.is_empty());
+        assert!(core.enable_decent_scale_lcd(WeightUnit::Grams).commands.is_empty());
         assert!(core.disable_decent_scale_lcd().commands.is_empty());
         assert!(core.decent_scale_heartbeat().commands.is_empty());
     }
@@ -2726,9 +2862,99 @@ mod tests {
         // so connecting a Bookoo (or any other) must yield nothing.
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC");
-        assert!(core.enable_decent_scale_lcd().commands.is_empty());
+        assert!(core.enable_decent_scale_lcd(WeightUnit::Grams).commands.is_empty());
         assert!(core.disable_decent_scale_lcd().commands.is_empty());
         assert!(core.decent_scale_heartbeat().commands.is_empty());
+    }
+
+    #[test]
+    fn power_off_decent_scale_errors_when_no_scale_is_connected() {
+        let core = CremaCore::new();
+        let err = core.power_off_decent_scale().unwrap_err();
+        assert!(matches!(err, AppError::UnsupportedOnHardware { .. }));
+    }
+
+    #[test]
+    fn power_off_decent_scale_errors_for_a_non_decent_scale() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC");
+        let err = core.power_off_decent_scale().unwrap_err();
+        assert!(matches!(err, AppError::UnsupportedOnHardware { .. }));
+    }
+
+    #[test]
+    fn power_off_decent_scale_errors_when_firmware_version_is_unknown() {
+        let mut core = CremaCore::new();
+        core.connect_scale("Decent Scale ABC");
+        // No firmware reply observed yet — refuse the write.
+        let err = core.power_off_decent_scale().unwrap_err();
+        match err {
+            AppError::UnsupportedOnHardware { feature, .. } => {
+                assert_eq!(feature, "decent_scale_power_off");
+            }
+            other => panic!("expected UnsupportedOnHardware, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn power_off_decent_scale_emits_the_known_wire_bytes_on_v1_2_firmware() {
+        let mut core = CremaCore::new();
+        core.connect_scale("Decent Scale ABC");
+        // Forward a synthetic `0x0A` reply with the v1.2 sentinel byte
+        // through the notification path so the scale state records the
+        // firmware version the same way it would on real hardware.
+        let firmware_reply = [0x03, 0x0A, 0x01, 0x01, 0x00, 0x4E, 0x12, 0x00];
+        core.on_notification(Source::ScaleWeight, &firmware_reply, 1_000);
+        let out = core.power_off_decent_scale().expect("v1.2 supports power-off");
+        assert_eq!(the_only_scale_write(&out), decent_scale::POWER_OFF);
+    }
+
+    #[test]
+    fn power_off_decent_scale_errors_on_v1_0_firmware() {
+        let mut core = CremaCore::new();
+        core.connect_scale("Decent Scale ABC");
+        // A v1.0 firmware sentinel — power-off is silently ignored by
+        // the scale on this firmware, so the core must refuse the write
+        // (the shell needs to fall back to "long-press the button").
+        let firmware_reply = [0x03, 0x0A, 0x01, 0x01, 0x00, 0x4E, 0x10, 0x00];
+        core.on_notification(Source::ScaleWeight, &firmware_reply, 1_000);
+        let err = core.power_off_decent_scale().unwrap_err();
+        assert!(matches!(err, AppError::UnsupportedOnHardware { .. }));
+    }
+
+    #[test]
+    fn set_weight_unit_pref_round_trips() {
+        let mut core = CremaCore::new();
+        assert_eq!(core.weight_unit_pref(), WeightUnit::Grams);
+        core.set_weight_unit_pref(WeightUnit::Ounces);
+        assert_eq!(core.weight_unit_pref(), WeightUnit::Ounces);
+    }
+
+    #[test]
+    fn entering_idle_picks_the_ounces_lcd_packet_when_the_pref_is_ounces() {
+        // The auto-policy in handle_state reads the cached pref so an Idle
+        // entry matches the unit the shell is showing.
+        let mut core = CremaCore::new();
+        core.connect_scale("Decent Scale ABC");
+        core.set_weight_unit_pref(WeightUnit::Ounces);
+        core.on_notification(Source::De1State, &[MachineState::Sleep as u8, 0], 1_000);
+        let out = core.on_notification(
+            Source::De1State,
+            &[MachineState::Idle as u8, 0],
+            2_000,
+        );
+        let writes: Vec<&[u8]> = out
+            .commands
+            .iter()
+            .filter_map(|c| match c {
+                Command::WriteScale { data } => Some(data.as_slice()),
+                Command::WriteCharacteristic { .. } => None,
+            })
+            .collect();
+        assert!(
+            writes.contains(&decent_scale::LCD_ENABLE_OUNCES.as_slice()),
+            "expected LCD_ENABLE_OUNCES on Idle entry with ounces pref, got {writes:?}"
+        );
     }
 
     #[test]
