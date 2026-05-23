@@ -369,6 +369,25 @@
 	const profileName = $derived(
 		ui.activeProfileName ?? activeProfile?.name ?? 'No profile selected'
 	);
+	/**
+	 * Compact summary of the profile the DE1 firmware actually has loaded
+	 * — drawn from `loadedProfileShape` (the `ProfileHeaderRead` cached at
+	 * connect time). The DE1's wire shape doesn't carry the profile
+	 * title, so this is shape-only ("4 frames · 1 preinfuse · max 8 ml/s")
+	 * and complements the `profileName` displayed above it. `null` before
+	 * the first `HeaderRead` lands (pre-connect or pre-handshake), and
+	 * the subline element hides itself in that case.
+	 */
+	const loadedShapeSubline = $derived.by<string | null>(() => {
+		const s = ui.loadedProfileShape;
+		if (!s) return null;
+		const parts: string[] = [];
+		parts.push(`${s.frameCount} frame${s.frameCount === 1 ? '' : 's'}`);
+		if (s.preinfuseFrameCount > 0) parts.push(`${s.preinfuseFrameCount} preinfuse`);
+		if (s.maximumFlow > 0)
+			parts.push(`max ${s.maximumFlow.toFixed(1)} ml/s`);
+		return `On DE1: ${parts.join(' · ')}`;
+	});
 
 	// ── Real telemetry (the DISPLAY side — wired to lib/state) ───────────
 	// The timer, the four readouts and the foot all show LIVE machine data —
@@ -717,6 +736,14 @@
 				<div class="crema-dash-profile-meta">
 					Pre-inf {p.preinf}s · 1:{ratio} ratio · {formatWeight(p.yield, prefs.weightUnit)} target · {formatTemp(p.brewTemp, prefs.tempUnit)}
 				</div>
+				{#if loadedShapeSubline}
+					<!-- DE1-side shape summary — the structure the firmware
+					     actually has loaded (from the connect-time HeaderRead).
+					     Hides itself pre-connect / pre-handshake. The DE1's
+					     HeaderWrite characteristic carries no profile title,
+					     so this is shape-only and complements the title above. -->
+					<div class="crema-dash-profile-loaded">{loadedShapeSubline}</div>
+				{/if}
 			</div>
 			{#if ui.machineError != null}
 				<!-- Firmware-fault banner. Sits in the same header slot as the

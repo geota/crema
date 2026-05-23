@@ -199,6 +199,10 @@
 .crema-profile-sync > i { animation: crema-spin 1.2s linear infinite; font-size: 12px; }
 @keyframes crema-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 .crema-dash-profile-meta { font-family: var(--font-sans); font-size: 12px; color: rgba(var(--tint-rgb), 0.55); }
+/* DE1-side shape summary — sits one line below the user-side meta and
+   reads dimmer so the title + user targets dominate the eye. Mono so
+   the numeric counts line up if the user re-reads after an upload. */
+.crema-dash-profile-loaded { font-family: var(--font-mono); font-size: 10.5px; color: rgba(var(--tint-rgb), 0.4); margin-top: 2px; letter-spacing: 0.02em; }
 .crema-dash-head-r { display: flex; gap: 8px; }
 
 .crema-dash-main { flex: 1; display: grid; grid-template-columns: 320px 1fr; padding: 20px 28px; gap: 24px; min-height: 0; }
