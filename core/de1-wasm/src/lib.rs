@@ -554,6 +554,24 @@ impl CremaBridge {
         json(self.core.read_factory_calibration(sensor.into()))
     }
 
+    /// Build a [`CoreOutput`] (JSON) whose command writes a new calibration
+    /// for `sensor`: the DE1 reported `reported` while the externally-measured
+    /// true value was `measured`. Both arguments are in the sensor's canonical
+    /// units (°C / bar / ml·s⁻¹) — the shell converts at the I/O boundary
+    /// before calling. From then on the DE1 applies `measured / reported` as
+    /// a multiplier on that sensor.
+    pub fn write_calibration(&self, sensor: CalSensor, reported: f32, measured: f32) -> String {
+        json(self.core.write_calibration(sensor.into(), reported, measured))
+    }
+
+    /// Build a [`CoreOutput`] (JSON) whose command resets `sensor` to its
+    /// factory calibration. The DE1 starts using the factory values immediately;
+    /// the shell should follow up with a `read_calibration` to surface the new
+    /// in-use value.
+    pub fn reset_calibration_to_factory(&self, sensor: CalSensor) -> String {
+        json(self.core.reset_calibration_to_factory(sensor.into()))
+    }
+
     /// Build a [`CoreOutput`] (JSON) whose command tares the connected scale.
     pub fn tare_scale(&mut self) -> String {
         json(self.core.tare_scale())
@@ -1085,6 +1103,18 @@ mod tests {
         for json in [
             bridge.read_calibration(CalSensor::Pressure),
             bridge.read_factory_calibration(CalSensor::Flow),
+        ] {
+            assert!(json.contains("WriteCharacteristic"));
+            assert!(json.contains("De1Calibration"));
+        }
+    }
+
+    #[test]
+    fn write_and_reset_calibration_produce_write_commands() {
+        let bridge = CremaBridge::new();
+        for json in [
+            bridge.write_calibration(CalSensor::Temperature, 92.5, 93.0),
+            bridge.reset_calibration_to_factory(CalSensor::Pressure),
         ] {
             assert!(json.contains("WriteCharacteristic"));
             assert!(json.contains("De1Calibration"));

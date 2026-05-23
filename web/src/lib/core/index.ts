@@ -368,6 +368,20 @@ export interface CremaCore {
 	 * to a `Calibration` event.
 	 */
 	readCalibration(sensor: CalTarget, factory?: boolean): Promise<CoreOutput>;
+	/**
+	 * Build a `CoreOutput` whose command writes a new sensor calibration:
+	 * the DE1 reported `reported` while the externally-measured true value
+	 * was `measured`. Both arguments are in the sensor's canonical units
+	 * (°C / bar / ml·s⁻¹); the shell converts at the I/O boundary.
+	 */
+	writeCalibration(sensor: CalTarget, reported: number, measured: number): Promise<CoreOutput>;
+	/**
+	 * Build a `CoreOutput` whose command resets a sensor to its factory
+	 * calibration. The DE1 starts applying the factory values immediately;
+	 * the caller should follow up with `readCalibration` to surface the
+	 * resulting in-use value.
+	 */
+	resetCalibrationToFactory(sensor: CalTarget): Promise<CoreOutput>;
 	/** Build a `CoreOutput` whose command tares the connected scale. */
 	tareScale(): Promise<CoreOutput>;
 	/**
@@ -632,6 +646,14 @@ async function createCore(): Promise<CremaCore> {
 					? bridge.read_factory_calibration(wasmSensor)
 					: bridge.read_calibration(wasmSensor)
 			);
+		},
+		async writeCalibration(sensor, reported, measured) {
+			return parseOutput(
+				bridge.write_calibration(toWasmCalSensor(sensor), reported, measured)
+			);
+		},
+		async resetCalibrationToFactory(sensor) {
+			return parseOutput(bridge.reset_calibration_to_factory(toWasmCalSensor(sensor)));
 		},
 		async tareScale() {
 			return parseOutput(bridge.tare_scale());
