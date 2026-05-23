@@ -932,11 +932,7 @@
 				<span>{ui.machineState ?? '—'}</span>
 				<span class="crema-foot-divider"></span>
 				<span class="t-eyebrow">Scale</span>
-				<span
-					>{scaleConnected
-						? `${scaleName} · ${weightM.value}${weightM.unit ? ` ${weightM.unit}` : ''}`
-						: '—'}</span
-				>
+				<span>{scaleConnected ? scaleName : '—'}</span>
 				<span class="crema-foot-divider"></span>
 				<!-- Coffee / water-tank temperatures: the in-card COFFEE
 				     readout above the chart already covers the group-head
