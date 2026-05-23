@@ -576,6 +576,57 @@ impl CremaCore {
         out
     }
 
+    /// Write a new sensor calibration: the DE1 reported `reported` while
+    /// the externally-measured true value was `measured`. The firmware
+    /// stores the pair as a `WriteKey 0xCAFEF00D` packet on `cuuid_12`
+    /// and from then on applies `measured / reported` as a multiplier on
+    /// that sensor. The caller is expected to follow up with
+    /// [`read_calibration`](Self::read_calibration) to surface the value
+    /// the DE1 now reports as current.
+    ///
+    /// Refused while a firmware upload is in progress
+    /// (see [`firmware_locks_writes`](Self::firmware_locks_writes)) — emits
+    /// one [`Event::FirmwareLockoutHit`] and no command.
+    pub fn write_calibration(
+        &self,
+        target: CalTarget,
+        reported: f32,
+        measured: f32,
+    ) -> CoreOutput {
+        if let Some(out) = self.refuse_if_firmware_locked("write_calibration") {
+            return out;
+        }
+        let mut out = CoreOutput::default();
+        out.commands.push(Command::WriteCharacteristic {
+            target: WriteTarget::De1Calibration,
+            data: Calibration::write(target, reported, measured).encode().to_vec(),
+        });
+        out
+    }
+
+    /// Reset `target` to its factory sensor calibration. Encodes a
+    /// `WriteKey 0xCAFEF00D` `ResetToFactory` packet onto `cuuid_12`; the
+    /// DE1 immediately starts applying the factory calibration for that
+    /// sensor. The caller is expected to follow up with
+    /// [`read_calibration`](Self::read_calibration) (and optionally
+    /// [`read_factory_calibration`](Self::read_factory_calibration)) to
+    /// confirm the in-use value.
+    ///
+    /// Refused while a firmware upload is in progress
+    /// (see [`firmware_locks_writes`](Self::firmware_locks_writes)) — emits
+    /// one [`Event::FirmwareLockoutHit`] and no command.
+    pub fn reset_calibration_to_factory(&self, target: CalTarget) -> CoreOutput {
+        if let Some(out) = self.refuse_if_firmware_locked("reset_calibration_to_factory") {
+            return out;
+        }
+        let mut out = CoreOutput::default();
+        out.commands.push(Command::WriteCharacteristic {
+            target: WriteTarget::De1Calibration,
+            data: Calibration::reset_to_factory(target).encode().to_vec(),
+        });
+        out
+    }
+
     /// Build a [`Command`] that writes the DE1's steam / hot-water
     /// [`ShotSettings`] (`cuuid_0B`).
     ///
@@ -2524,6 +2575,59 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn write_calibration_emits_the_exact_wire_bytes() {
+        // The codec is exercised in de1-protocol; this asserts the
+        // command-level shape (target = De1Calibration) and that the
+        // encoded packet matches a known-good fixture so a regression
+        // in the wiring is caught here too. Fixture mirrors the
+        // `write_encodes_to_the_exact_wire_bytes` test in
+        // `core/de1-protocol/src/calibration.rs`: a temperature write,
+        // de1_reported = 92.5, measured = 93.0.
+        let core = CremaCore::new();
+        let out = core.write_calibration(CalTarget::Temperature, 92.5, 93.0);
+        let Some(Command::WriteCharacteristic { target, data }) = out.commands.first() else {
+            panic!("expected a WriteCharacteristic");
+        };
+        assert_eq!(*target, WriteTarget::De1Calibration);
+        assert_eq!(
+            data.as_slice(),
+            &[
+                // WriteKey magic 0xCAFEF00D, big-endian.
+                0xCA, 0xFE, 0xF0, 0x0D, //
+                0x01, // command = Write
+                0x02, // target = Temperature
+                // de1_reported 92.5 as S32P16: 92.5 * 65536 = 0x005C8000.
+                0x00, 0x5C, 0x80, 0x00, //
+                // measured 93.0 as S32P16: 93.0 * 65536 = 0x005D0000.
+                0x00, 0x5D, 0x00, 0x00,
+            ],
+        );
+    }
+
+    #[test]
+    fn reset_calibration_to_factory_emits_a_write_with_the_reset_packet() {
+        // Same shape: command targets De1Calibration; the encoded packet
+        // carries the WriteKey + ResetToFactory + target tuple with zero
+        // value fields. Fixture: pressure sensor.
+        let core = CremaCore::new();
+        let out = core.reset_calibration_to_factory(CalTarget::Pressure);
+        let Some(Command::WriteCharacteristic { target, data }) = out.commands.first() else {
+            panic!("expected a WriteCharacteristic");
+        };
+        assert_eq!(*target, WriteTarget::De1Calibration);
+        assert_eq!(
+            data.as_slice(),
+            &[
+                0xCA, 0xFE, 0xF0, 0x0D, // WriteKey = 0xCAFEF00D
+                0x02, // command = ResetToFactory
+                0x01, // target = Pressure
+                0x00, 0x00, 0x00, 0x00, // de1_reported = 0.0
+                0x00, 0x00, 0x00, 0x00, // measured = 0.0
+            ],
+        );
     }
 
     #[test]
