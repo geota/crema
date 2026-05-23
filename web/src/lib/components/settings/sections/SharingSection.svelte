@@ -24,6 +24,7 @@
 	import StGroup from '../StGroup.svelte';
 	import StRow from '../StRow.svelte';
 	import StButton from '../StButton.svelte';
+	import BeanSyncSection from './BeanSyncSection.svelte';
 
 	const history = getHistoryStore();
 
@@ -167,6 +168,8 @@
 		{/snippet}
 	</StRow>
 </StGroup>
+
+<BeanSyncSection />
 
 <div class="st-otherint">
 	<div class="st-group-title">Other integrations</div>

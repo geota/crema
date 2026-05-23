@@ -27,9 +27,10 @@
 	const items = [
 		{ id: 'brew', icon: 'coffee', label: 'Brew', href: resolve('/'), kbd: '1' },
 		{ id: 'profiles', icon: 'list-bullets', label: 'Profiles', href: resolve('/profiles'), kbd: '2' },
-		{ id: 'history', icon: 'chart-line', label: 'History', href: resolve('/history'), kbd: '3' },
-		{ id: 'scale', icon: 'scales', label: 'Scale', href: resolve('/scale'), kbd: '4' },
-		{ id: 'settings', icon: 'gear-six', label: 'Settings', href: resolve('/settings'), kbd: '5' }
+		{ id: 'beans', icon: 'seedling', label: 'Beans', href: resolve('/beans'), kbd: '3' },
+		{ id: 'history', icon: 'chart-line', label: 'History', href: resolve('/history'), kbd: '4' },
+		{ id: 'scale', icon: 'scales', label: 'Scale', href: resolve('/scale'), kbd: '5' },
+		{ id: 'settings', icon: 'gear-six', label: 'Settings', href: resolve('/settings'), kbd: '6' }
 	];
 
 	/** The active item is the one whose href matches the current path. */

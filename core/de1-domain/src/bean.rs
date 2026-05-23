@@ -17,8 +17,16 @@
 //! the pure classification helpers only. A typed bean shape and the
 //! profile-roast inference (`roastFromProfile`) are explicitly
 //! deferred until Android starts modelling beans.
+//!
+//! **2026-05-23 — Bean library types added.** Per `docs/28`, the
+//! per-bag canonical types ([`Bean`], [`Roaster`], [`BeanOrigin`],
+//! [`BeanMix`], [`ShotBean`]) now live here and are emitted to every
+//! shell via `#[typeshare]`. Pure helpers ([`BeanRecord::is_off_roast`],
+//! [`BeanRecord::display_summary`], [`Bean::freshness_band`]) ride on
+//! the same module so every shell consumes the same classification.
 
 use serde::{Deserialize, Serialize};
+use typeshare::typeshare;
 
 /// A coffee roast level, categorized into a named band — the same scale
 /// Visualizer's v2 `.shot.json` `bean.roast_level` field uses (1..10 with
@@ -228,6 +236,333 @@ fn days_from_civil(y: i32, m: u32, d: u32) -> Option<i64> {
         .checked_sub(719_468)
 }
 
+// ───────────────────────────────────────────────────────────────────
+// Bean library — per-bag identity types (docs/28).
+//
+// `Bean` is *a bag of coffee* (the unit of stock the user manages).
+// `Roaster` is *the roastery* that produced one or more bags. Both are
+// owned by the shell's localStorage / IndexedDB / Room store; the core
+// just defines the shape (sans-IO) so every shell consumes the same
+// thing. A snapshot of the active bean ([`ShotBean`]) is frozen onto
+// each completed shot — denormalised on purpose so a later rename does
+// not retroactively rewrite history (docs/28 §design-decisions §1).
+// ───────────────────────────────────────────────────────────────────
+
+/// Whether a bag of coffee is a single-origin lot or a blend. `None` =
+/// unknown / unset. Serialises as the lowercase wire string
+/// (`"single"` / `"blend"`) to match the TS shell's typed string union
+/// per docs/28.
+#[typeshare]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BeanMix {
+    /// A single-origin lot (one farm / region / process).
+    Single,
+    /// A blend of two or more components.
+    Blend,
+}
+
+/// Origin metadata for a bag — country, region, farm, and the rest of
+/// the upstream provenance fields. All optional: a fresh bean's origin
+/// starts empty and the user fills in whatever the bag label shows.
+/// Mirrors Visualizer's CoffeeBag origin fields so the sync mapping is
+/// 1:1 (docs/28 §Visualizer sync §schema-mapping).
+#[typeshare]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BeanOrigin {
+    /// Country of origin — `"Ethiopia"`, `"Ethiopia / Colombia"` for a blend.
+    pub country: Option<String>,
+    /// Region within the country — `"Yirgacheffe"`, `"Nyeri"`.
+    pub region: Option<String>,
+    /// Farm name — `"Hambela Estate"`.
+    pub farm: Option<String>,
+    /// Farmer / producer name — `"Tarekech Geleta"`.
+    pub farmer: Option<String>,
+    /// Cultivar / variety — `"Geisha"`, `"SL28 / SL34"`.
+    pub variety: Option<String>,
+    /// Elevation, free text — `"1900-2100 masl"`. Free-form because real
+    /// bags inconsistently report m / masl / ft / a range / a single.
+    pub elevation: Option<String>,
+    /// Process — `"Washed"`, `"Natural"`, `"Anaerobic"`. Free-form for the
+    /// same reason as `elevation`.
+    pub processing: Option<String>,
+    /// Harvest time — `"2024 Spring"`, `"October 2024"`.
+    pub harvest_time: Option<String>,
+}
+
+/// One bag of coffee — a row in the bean library. Per docs/28 this is
+/// the central entity: shots reference one by id, and a snapshot
+/// ([`ShotBean`]) is frozen onto each completed shot. The core owns the
+/// shape so every shell (web, Android, future iOS) consumes the same
+/// type via `#[typeshare]`.
+///
+/// CRUD lives in the shell — the core stays sans-IO and only defines
+/// the shape, the conversion helpers and the pure classifiers. A fresh
+/// bag is built via [`Bean::new`]; further edits ride on plain field
+/// assignment (the shell store is responsible for `updated_at` bumps
+/// and persistence).
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Bean {
+    /// Stable id — `"bean:<uuid>"`. The shell mints this on create.
+    pub id: String,
+    /// Bean name — e.g. `"Geisha Esmeralda Lot 3"`. **Required.**
+    pub name: String,
+    /// FK into the roaster directory. `None` for a bag whose roaster was
+    /// not recorded; the shell may opportunistically promote the
+    /// roaster name from import to a proper [`Roaster`] row.
+    pub roaster_id: Option<String>,
+    /// ISO `yyyy-mm-dd` roast date.
+    pub roasted_on: Option<String>,
+    /// ISO `yyyy-mm-dd` opened-on date. Crema-only — drives the
+    /// staleness signal alongside `roasted_on`.
+    pub opened_on: Option<String>,
+    /// ISO `yyyy-mm-dd` frozen-on date. Drives the freshness math's
+    /// freeze-pause: a frozen bag's freshness counter is the days
+    /// between `roasted_on` and `frozen_on`, paused while frozen.
+    pub frozen_on: Option<String>,
+    /// ISO `yyyy-mm-dd` defrosted-on date. Resumes the freshness
+    /// counter from `defrosted_on`.
+    pub defrosted_on: Option<String>,
+    /// Roast level on Visualizer's 1..10 scale. The shell typically
+    /// inputs via a 3-band quick-set (light=1, medium=5, dark=10) and
+    /// uses [`roast_band`] to bucket back into the band word.
+    pub roast_level: Option<u8>,
+    /// Single-origin vs blend. `None` = not classified.
+    pub mix: Option<BeanMix>,
+    /// Decaf flag — `false` by default.
+    pub decaf: bool,
+    /// Provenance metadata. Empty struct by default.
+    pub origin: BeanOrigin,
+    /// Bag size in grams — `0.0` when unknown.
+    pub bag_size_g: f32,
+    /// Remaining grams in the bag — auto-debited per shot when the
+    /// shell enables `Track bag remaining weight`. `0.0` when unknown.
+    pub remaining_g: f32,
+    /// Quality score — free text per Visualizer (`"88"`, `"A-"`).
+    pub quality_score: String,
+    /// Tasting notes — multi-line free text.
+    pub tasting_notes: String,
+    /// User star rating 0..5; `0` = unrated.
+    pub rating: u8,
+    /// Where the bag was bought — `"Counter Culture · Durham"`.
+    pub place_of_purchase: Option<String>,
+    /// URL to buy again — Visualizer / roaster / store link.
+    pub url: Option<String>,
+    /// Free-form notes (not the tasting box).
+    pub notes: String,
+    /// Pinned to the brew-page bean picker strip.
+    pub favourite: bool,
+    /// Unix epoch ms when the bag was archived; `None` = active.
+    pub archived_at: Option<i64>,
+    /// Bean-scoped grinder name — `"Niche Zero"`. Bean-scoped because a
+    /// grind setting only means something paired with the grinder it
+    /// was measured on.
+    pub grinder: String,
+    /// Bean-scoped grinder click / setting — `"1.2"`, `"6 + a tooth"`.
+    pub grinder_setting: String,
+    /// Visualizer `coffee_bag.id` once pushed.
+    pub visualizer_id: Option<String>,
+    /// Beanconqueror `bean.config.uuid` from a Bc import. Tracks
+    /// provenance so a re-import skips beans we already know.
+    pub beanconqueror_id: Option<String>,
+    /// IndexedDB blob ref for the bag photo, if any.
+    pub image_ref: Option<String>,
+    /// Open JSON metadata. The escape valve for fields neither
+    /// Visualizer nor Crema model first-class, but that an import
+    /// (Beanconqueror) or future feature needs to keep round-tripping.
+    /// Serialised as `serde_json::Value` so the wire format is a plain
+    /// nested object.
+    pub metadata: serde_json::Value,
+    /// Unix epoch ms when this bag was created.
+    pub created_at: i64,
+    /// Unix epoch ms when this bag was last updated.
+    pub updated_at: i64,
+}
+
+impl Bean {
+    /// Build a brand-new bag with a freshly minted id and `name`. Every
+    /// other field starts at its default (empty / `None` / `false` / `0`).
+    /// `created_at` and `updated_at` are stamped to `now_unix_ms`.
+    pub fn new(id: String, name: String, now_unix_ms: i64) -> Bean {
+        Bean {
+            id,
+            name,
+            roaster_id: None,
+            roasted_on: None,
+            opened_on: None,
+            frozen_on: None,
+            defrosted_on: None,
+            roast_level: None,
+            mix: None,
+            decaf: false,
+            origin: BeanOrigin::default(),
+            bag_size_g: 0.0,
+            remaining_g: 0.0,
+            quality_score: String::new(),
+            tasting_notes: String::new(),
+            rating: 0,
+            place_of_purchase: None,
+            url: None,
+            notes: String::new(),
+            favourite: false,
+            archived_at: None,
+            grinder: String::new(),
+            grinder_setting: String::new(),
+            visualizer_id: None,
+            beanconqueror_id: None,
+            image_ref: None,
+            metadata: serde_json::Value::Null,
+            created_at: now_unix_ms,
+            updated_at: now_unix_ms,
+        }
+    }
+
+    /// The bag's [`RoastBand`] if its `roast_level` is set, else `None`.
+    /// Bag classification rides on the same `roast_band` helper the
+    /// brew-page card uses.
+    pub fn freshness_band(&self) -> Option<RoastBand> {
+        self.roast_level.map(|n| roast_band(i32::from(n)))
+    }
+
+    /// `true` once the bag's rest verdict is [`RoastFreshness::Bad`] —
+    /// past its band's stale-out window. `false` while inside the
+    /// best / ok window, and `false` (defensively) when the bean has
+    /// no `roast_level` or `roasted_on` set so the UI does not flag a
+    /// bag the user just hasn't filled in yet.
+    pub fn is_off_roast(&self, now_unix_ms: i64) -> bool {
+        let Some(band) = self.freshness_band() else {
+            return false;
+        };
+        let Some(roasted_on) = self.roasted_on.as_deref() else {
+            return false;
+        };
+        let Some(days) = days_off_roast(roasted_on, now_unix_ms) else {
+            return false;
+        };
+        matches!(roast_freshness(band, days), RoastFreshness::Bad)
+    }
+
+    /// One-line label summarising the bag — `"Ethiopia Yirgacheffe ·
+    /// Counter Culture · 14d off roast"`. Slots in the bean-chip on
+    /// the brew-page picker and the library card subline. Pieces that
+    /// are unset are simply omitted; the dot-separator collapses.
+    pub fn display_summary(&self, roaster_name: Option<&str>, now_unix_ms: i64) -> String {
+        let mut parts: Vec<String> = Vec::with_capacity(3);
+        if !self.name.trim().is_empty() {
+            parts.push(self.name.trim().to_owned());
+        } else if let Some(country) = self.origin.country.as_deref()
+            && !country.trim().is_empty()
+        {
+            parts.push(country.trim().to_owned());
+        }
+        if let Some(roaster) = roaster_name
+            && !roaster.trim().is_empty()
+        {
+            parts.push(roaster.trim().to_owned());
+        }
+        if let Some(roasted_on) = self.roasted_on.as_deref()
+            && let Some(days) = days_off_roast(roasted_on, now_unix_ms)
+        {
+            parts.push(format!("{days}d off roast"));
+        }
+        parts.join(" · ")
+    }
+}
+
+/// One roastery — a record in the roaster directory. Sparse on
+/// purpose, mirroring Visualizer's `RoasterDetail` (which is itself
+/// minimal: id + name + website + image). Beanconqueror has no
+/// first-class roaster entity — its `bean.roaster` is free text; the
+/// shell promotes unique strings into [`Roaster`] rows on import per
+/// docs/28 §design-decisions §2.
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Roaster {
+    /// Stable id — `"roaster:<uuid>"`.
+    pub id: String,
+    /// Roastery name. **Required.**
+    pub name: String,
+    /// Roastery website / store URL.
+    pub website: Option<String>,
+    /// City / state / country. Crema-only.
+    pub country: Option<String>,
+    /// Free-form notes (private to the user — not pushed to Visualizer).
+    pub notes: String,
+    /// Visualizer `roaster.id` once pushed.
+    pub visualizer_id: Option<String>,
+    /// Open JSON metadata — escape valve symmetric with [`Bean::metadata`].
+    pub metadata: serde_json::Value,
+    /// Unix epoch ms.
+    pub created_at: i64,
+    /// Unix epoch ms.
+    pub updated_at: i64,
+}
+
+impl Roaster {
+    /// Build a brand-new roaster row with name + id stamped to `now_unix_ms`.
+    pub fn new(id: String, name: String, now_unix_ms: i64) -> Roaster {
+        Roaster {
+            id,
+            name,
+            website: None,
+            country: None,
+            notes: String::new(),
+            visualizer_id: None,
+            metadata: serde_json::Value::Null,
+            created_at: now_unix_ms,
+            updated_at: now_unix_ms,
+        }
+    }
+}
+
+/// A snapshot of the active bean at the moment a shot was pulled.
+/// Frozen onto each [`crate::history::StoredShot`] (in the shell's
+/// extended record) so a later rename / archive / delete of the bag
+/// does not retroactively rewrite history.
+///
+/// Beanconqueror reads the bean *live* off the brew (`Brew.bean: uuid`,
+/// see `Beanconqueror/src/classes/brew/brew.ts:60`). Crema takes the
+/// other approach per docs/28 §design-decisions §1: snapshot wins. A
+/// shot recorded under "Onyx Geisha" stays "Onyx Geisha" forever, even
+/// if the user later renames the bag.
+///
+/// Holds the strict minimum the History list / detail panel needs to
+/// render the shot without re-fetching the bag — the user-facing
+/// strings plus the dates that drive the freshness pill.
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShotBean {
+    /// FK back to the [`Bean`] in the library, if it still exists. The
+    /// History row can resolve the link to open the bean detail; an
+    /// archived / deleted bean falls back to the snapshot strings.
+    pub bean_id: Option<String>,
+    /// Bag name at the time of the shot — `"Geisha Esmeralda Lot 3"`.
+    pub name: String,
+    /// Roaster name at the time of the shot. Not the roaster id — the
+    /// id might dangle, but a string survives.
+    pub roaster_name: Option<String>,
+    /// ISO `yyyy-mm-dd` roast date at the time of the shot.
+    pub roasted_on: Option<String>,
+    /// Roast level (1..10) at the time of the shot.
+    pub roast_level: Option<u8>,
+}
+
+impl ShotBean {
+    /// Snapshot a [`Bean`] for storage on a shot. The shell passes the
+    /// resolved roaster name (looked up in the directory) alongside —
+    /// the core stays sans-IO and does not own the roaster table.
+    pub fn snapshot_of(bean: &Bean, roaster_name: Option<&str>) -> ShotBean {
+        ShotBean {
+            bean_id: Some(bean.id.clone()),
+            name: bean.name.clone(),
+            roaster_name: roaster_name.map(str::to_owned),
+            roasted_on: bean.roasted_on.clone(),
+            roast_level: bean.roast_level,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -400,5 +735,135 @@ mod tests {
         assert_eq!(days_from_civil(2000, 1, 1), Some(10_957));
         // 2024-02-29 (leap day) is valid.
         assert!(days_from_civil(2024, 2, 29).is_some());
+    }
+
+    // -- bean library round-trips + helpers ---------------------------
+
+    fn sample_bean() -> Bean {
+        let mut bean = Bean::new("bean:abc".to_owned(), "Yirgacheffe".to_owned(), NOW);
+        bean.roaster_id = Some("roaster:xyz".to_owned());
+        bean.roasted_on = Some("2026-05-08".to_owned());
+        bean.roast_level = Some(3);
+        bean.mix = Some(BeanMix::Single);
+        bean.decaf = false;
+        bean.origin = BeanOrigin {
+            country: Some("Ethiopia".to_owned()),
+            region: Some("Yirgacheffe".to_owned()),
+            processing: Some("Washed".to_owned()),
+            ..BeanOrigin::default()
+        };
+        bean.bag_size_g = 250.0;
+        bean.remaining_g = 142.0;
+        bean.tasting_notes = "stone fruit, jasmine".to_owned();
+        bean.rating = 4;
+        bean.favourite = true;
+        bean.grinder = "Niche Zero".to_owned();
+        bean.grinder_setting = "1.2".to_owned();
+        bean.metadata = serde_json::json!({"co2eKg": 1.4});
+        bean
+    }
+
+    #[test]
+    fn bean_round_trips_through_json() {
+        let bean = sample_bean();
+        let json = serde_json::to_string(&bean).unwrap();
+        let parsed: Bean = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, bean);
+    }
+
+    #[test]
+    fn roaster_round_trips_through_json() {
+        let mut roaster = Roaster::new("roaster:xyz".to_owned(), "Counter Culture".to_owned(), NOW);
+        roaster.website = Some("https://counterculturecoffee.com".to_owned());
+        roaster.country = Some("USA".to_owned());
+        roaster.notes = "Durham NC roastery".to_owned();
+        roaster.metadata = serde_json::json!({"founded": 1995});
+        let json = serde_json::to_string(&roaster).unwrap();
+        let parsed: Roaster = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, roaster);
+    }
+
+    #[test]
+    fn shot_bean_round_trips_through_json() {
+        let bean = sample_bean();
+        let snap = ShotBean::snapshot_of(&bean, Some("Counter Culture"));
+        let json = serde_json::to_string(&snap).unwrap();
+        let parsed: ShotBean = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, snap);
+        assert_eq!(parsed.bean_id.as_deref(), Some("bean:abc"));
+        assert_eq!(parsed.name, "Yirgacheffe");
+        assert_eq!(parsed.roaster_name.as_deref(), Some("Counter Culture"));
+        assert_eq!(parsed.roasted_on.as_deref(), Some("2026-05-08"));
+        assert_eq!(parsed.roast_level, Some(3));
+    }
+
+    #[test]
+    fn bean_freshness_band_buckets_via_roast_level() {
+        let mut bean = Bean::new("bean:1".to_owned(), "x".to_owned(), 0);
+        assert_eq!(bean.freshness_band(), None);
+        bean.roast_level = Some(1);
+        assert_eq!(bean.freshness_band(), Some(RoastBand::Light));
+        bean.roast_level = Some(5);
+        assert_eq!(bean.freshness_band(), Some(RoastBand::Medium));
+        bean.roast_level = Some(9);
+        assert_eq!(bean.freshness_band(), Some(RoastBand::Dark));
+    }
+
+    #[test]
+    fn bean_is_off_roast_only_true_past_ok_window() {
+        // A light roast goes Bad at day 36 (LIGHT_WINDOW.ok_high = 35).
+        let mut bean = Bean::new("bean:1".to_owned(), "x".to_owned(), 0);
+        bean.roast_level = Some(1);
+        // 7 days ago — inside the green window.
+        bean.roasted_on = Some("2026-05-15".to_owned());
+        assert!(!bean.is_off_roast(NOW));
+        // 40 days ago — past Light's ok_high (35).
+        bean.roasted_on = Some("2026-04-12".to_owned());
+        assert!(bean.is_off_roast(NOW));
+        // No date → false (defensively).
+        bean.roasted_on = None;
+        assert!(!bean.is_off_roast(NOW));
+        // No level → false.
+        bean.roasted_on = Some("2026-04-12".to_owned());
+        bean.roast_level = None;
+        assert!(!bean.is_off_roast(NOW));
+    }
+
+    #[test]
+    fn bean_display_summary_joins_name_roaster_days() {
+        let bean = sample_bean();
+        // Reference NOW is 2026-05-22; roasted_on is 2026-05-08 → 14 days.
+        let summary = bean.display_summary(Some("Counter Culture"), NOW);
+        assert_eq!(
+            summary,
+            "Yirgacheffe · Counter Culture · 14d off roast"
+        );
+    }
+
+    #[test]
+    fn bean_display_summary_falls_back_to_country_when_name_empty() {
+        let mut bean = Bean::new("bean:1".to_owned(), String::new(), NOW);
+        bean.origin = BeanOrigin {
+            country: Some("Ethiopia".to_owned()),
+            ..BeanOrigin::default()
+        };
+        let summary = bean.display_summary(None, NOW);
+        assert_eq!(summary, "Ethiopia");
+    }
+
+    #[test]
+    fn bean_display_summary_skips_missing_pieces() {
+        // No name, no roaster, no date → empty string.
+        let bean = Bean::new("bean:1".to_owned(), String::new(), NOW);
+        assert_eq!(bean.display_summary(None, NOW), "");
+        // Just a name.
+        let bean = Bean::new("bean:1".to_owned(), "Geisha".to_owned(), NOW);
+        assert_eq!(bean.display_summary(None, NOW), "Geisha");
+    }
+
+    #[test]
+    fn bean_mix_serialises_lowercase() {
+        assert_eq!(serde_json::to_string(&BeanMix::Single).unwrap(), "\"single\"");
+        assert_eq!(serde_json::to_string(&BeanMix::Blend).unwrap(), "\"blend\"");
     }
 }
