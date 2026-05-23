@@ -2,24 +2,22 @@
 	/**
 	 * `PowerButton` — a compact circular power control for the DE1.
 	 *
-	 * Renders only when the DE1 is connected. Reads `snapshot.machineState`
-	 * and swaps between two visuals:
+	 * Three visual states, each tinted in its semantic colour so the
+	 * connection / sleep state reads at a glance:
 	 *
-	 *  - DE1 awake (any state other than `Sleep`) → **sun** icon, neutral
-	 *    surface. Click → request Sleep.
-	 *  - DE1 asleep → **moon** icon, copper-tinted. Click → request Idle
-	 *    (which also wakes from sleep).
+	 *  - **Disconnected** → plug icon, red tint. The button is disabled —
+	 *    nothing actionable until a DE1 pairs. Click target stays so the
+	 *    foot-meta row's layout doesn't shift on disconnect.
+	 *  - **Connected + awake** → sun icon, yellow tint. Click → request Sleep.
+	 *  - **Connected + asleep** → moon icon, dark-blue tint. Click → request
+	 *    Idle (which also wakes from sleep).
 	 *
-	 * Pattern: the icon shows the *current* state (sun = on, moon =
-	 * asleep), and clicking transitions to the opposite. The icon swap
-	 * after the click is the affordance — confirms the state change
-	 * landed.
+	 * Pattern: the icon shows the *current* state, and clicking transitions
+	 * to the opposite. The icon swap after the click confirms the state
+	 * change landed.
 	 *
-	 * Renders inline wherever it's placed (no fixed positioning). Today the
-	 * Brew dashboard puts it as the leftmost item in its foot-meta strip,
-	 * next to the Machine label. Moved out of the app shell on 2026-05-22
-	 * because it was overlapping the profile-switcher dropdown at the top
-	 * of the Brew page.
+	 * Lives inline at the leftmost slot of the brew dashboard's foot-meta
+	 * strip, next to the Machine label.
 	 */
 	import type { CremaApp } from '$lib/state';
 	import { MachineState } from '$lib/core/crema-core';
@@ -37,33 +35,42 @@
 	/** True when the firmware reports `MachineState.Sleep`. */
 	const asleep = $derived(ui?.machineStateName === MachineState.Sleep);
 
+	/** Which of the three states the button currently renders. */
+	const state = $derived<'disconnected' | 'awake' | 'asleep'>(
+		!connected ? 'disconnected' : asleep ? 'asleep' : 'awake'
+	);
+
 	function toggle(): void {
 		if (!app || !connected) return;
 		void app.requestMachineState(asleep ? MachineState.Idle : MachineState.Sleep);
 	}
 </script>
 
-<!--
-	Renders at all times — the foot-meta row reads as a hole if the slot
-	disappears when the DE1 disconnects. Disabled when not connected;
-	matches the Coffee button's disabled-state pattern (opacity dim, no
-	hover/active transforms, not-allowed cursor).
--->
 <button
 	type="button"
 	class="power-btn"
-	class:is-asleep={asleep}
+	class:is-disconnected={state === 'disconnected'}
+	class:is-awake={state === 'awake'}
+	class:is-asleep={state === 'asleep'}
 	disabled={!connected}
 	onclick={toggle}
-	title={!connected
+	title={state === 'disconnected'
 		? 'No DE1 connected'
-		: asleep
+		: state === 'asleep'
 			? 'DE1 is asleep — click to wake'
 			: 'Click to put the DE1 to sleep'}
-	aria-label={asleep ? 'Wake DE1' : 'Sleep DE1'}
+	aria-label={state === 'disconnected'
+		? 'No DE1 connected'
+		: state === 'asleep'
+			? 'Wake DE1'
+			: 'Sleep DE1'}
 >
 	<i
-		class={asleep ? 'ph-fill ph-moon' : 'ph-fill ph-sun'}
+		class={state === 'disconnected'
+			? 'ph-fill ph-plugs'
+			: state === 'asleep'
+				? 'ph-fill ph-moon'
+				: 'ph-fill ph-sun'}
 		aria-hidden="true"
 	></i>
 </button>
@@ -89,30 +96,43 @@
 			transform 80ms;
 		flex: 0 0 auto;
 	}
-	.power-btn:hover {
-		background: var(--bg-elevated, var(--bg-surface));
-		color: var(--fg-1);
-	}
-	.power-btn:active {
+	.power-btn:active:not(:disabled) {
 		transform: scale(0.94);
 	}
+
+	/* Disconnected — red plug. */
+	.power-btn.is-disconnected {
+		background: rgba(var(--danger-rgb), 0.12);
+		border-color: rgba(var(--danger-rgb), 0.35);
+		color: var(--danger);
+	}
+
+	/* Awake — sun with yellow tint. Uses --warning-rgb (which is the
+	   amber/yellow semantic token defined in tokens.css), not copper —
+	   keeps the copper accent reserved for the Coffee button. */
+	.power-btn.is-awake {
+		background: rgba(var(--warning-rgb), 0.14);
+		border-color: rgba(var(--warning-rgb), 0.35);
+		color: var(--warning);
+	}
+	.power-btn.is-awake:hover {
+		background: rgba(var(--warning-rgb), 0.22);
+	}
+
+	/* Asleep — moon with dark-blue tint. Uses --info-rgb (blue semantic). */
 	.power-btn.is-asleep {
-		background: rgba(var(--copper-rgb), 0.16);
-		color: var(--copper-400);
-		border-color: rgba(var(--copper-rgb), 0.35);
+		background: rgba(var(--info-rgb), 0.14);
+		border-color: rgba(var(--info-rgb), 0.4);
+		color: var(--info);
 	}
 	.power-btn.is-asleep:hover {
-		background: rgba(var(--copper-rgb), 0.24);
-		color: var(--copper-300, var(--copper-400));
+		background: rgba(var(--info-rgb), 0.22);
 	}
-	/* Disabled — no DE1 connected. Same opacity-drop pattern as the
-	   Coffee button + service-mode chips. */
+
+	/* Disabled — no DE1 connected. Keep the red tint readable but show
+	   non-actionable cursor + slight opacity drop. */
 	.power-btn:disabled {
-		opacity: 0.4;
+		opacity: 0.65;
 		cursor: not-allowed;
-	}
-	.power-btn:disabled:hover {
-		background: var(--bg-surface);
-		color: rgba(var(--tint-rgb), 0.7);
 	}
 </style>
