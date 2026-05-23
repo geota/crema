@@ -21,6 +21,7 @@
 
 import type { Profile, ProfileStep, SparkShape } from './core-types';
 import { formatRatio } from '$lib/utils/ratio';
+import { getSettingsStore } from '$lib/settings/store.svelte';
 
 /** Roast level — a fixed library filter facet. */
 export type Roast = 'light' | 'medium' | 'dark';
@@ -546,6 +547,16 @@ export function defaultSegments(): ProfileSegment[] {
 
 /** A fresh, empty custom profile — the starting point for `/profiles/new`. */
 export function blankProfile(): CremaProfile {
+	// Pull the user's brew defaults from the Settings store so a new profile
+	// starts from the dose / ratio / temperature / preinfusion the user has
+	// dialled in, rather than the historical hardcoded 18 g / 1:2 / 93 °C / 8 s.
+	const prefs = getSettingsStore().current;
+	const segments = defaultSegments();
+	// `defaultPreinfusionS` is the *seconds* of the first preinfusion segment —
+	// it is NOT the `preinfuseStepCount` (a count of leading segments).
+	if (segments.length > 0) {
+		segments[0] = { ...segments[0], time: prefs.defaultPreinfusionS };
+	}
 	return {
 		id: uid('custom'),
 		source: 'custom',
@@ -555,14 +566,14 @@ export function blankProfile(): CremaProfile {
 		tags: [],
 		pinned: false,
 		lastUsed: null,
-		dose: 18,
-		yieldOut: 36,
-		brewTemp: 93,
+		dose: prefs.defaultDoseG,
+		yieldOut: prefs.defaultDoseG * prefs.defaultRatio,
+		brewTemp: prefs.defaultBrewTempC,
 		stopOnWeight: true,
 		autoTare: true,
 		preinfuseStepCount: 1,
 		maxTotalVolumeMl: 0,
-		segments: defaultSegments(),
+		segments,
 		author: '',
 		beverageType: 'espresso',
 		tankTemperatureC: 0

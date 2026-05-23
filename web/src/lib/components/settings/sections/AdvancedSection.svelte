@@ -100,16 +100,9 @@
 
 	function factoryReset(): void {
 		// TODO: a true factory reset would clear every Crema localStorage key
-		// (profiles, history, settings). Gated behind a confirm; left as a stub
-		// so it cannot silently wipe data during the port.
-		if (
-			typeof window !== 'undefined' &&
-			window.confirm(
-				'Factory reset erases everything on this device — profiles, history and settings. This cannot be undone. Continue?'
-			)
-		) {
-			// Intentionally not wired during the port. See TODO above.
-		}
+		// (profiles, history, settings). Left as a stub; the row is pilled
+		// `notImplemented` in the markup so the button reads as disabled —
+		// previously a confirm-then-do-nothing prompt looked like it worked.
 	}
 
 	function configureWebhook(): void {
@@ -204,6 +197,7 @@
 	<StRow
 		title="Home Assistant"
 		sub="Expose shot start/end and temperature as MQTT topics."
+		notImplemented
 	>
 		{#snippet control()}
 			<StToggle
@@ -221,6 +215,7 @@
 	<StRow
 		title="API access"
 		sub="Generate a personal API token for third-party clients."
+		notImplemented
 	>
 		{#snippet control()}
 			<StButton label="New token" icon="key" onClick={newToken} />
@@ -295,6 +290,7 @@
 	<StRow
 		title="Factory reset"
 		sub="Erases everything on this device — profiles, history and settings."
+		notImplemented
 	>
 		{#snippet control()}
 			<button type="button" class="st-btn st-btn-danger" onclick={factoryReset}>

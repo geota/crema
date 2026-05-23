@@ -87,7 +87,7 @@
 	title="Water chemistry"
 	sub="Tap or bottled? Crema uses this to estimate scale buildup."
 >
-	<StRow title="Water source">
+	<StRow title="Water source" notImplemented>
 		{#snippet control()}
 			<StSegment
 				value={waterSource}
@@ -104,6 +104,7 @@
 	<StRow
 		title="Hardness (ppm CaCO₃)"
 		sub="Helps schedule descaling cycles accurately."
+		notImplemented
 	>
 		{#snippet control()}
 			<StStepper
@@ -119,6 +120,7 @@
 	<StRow
 		title="Total dissolved solids"
 		sub="Affects extraction; optional but useful for tuning."
+		notImplemented
 	>
 		{#snippet control()}
 			<StStepper
@@ -128,6 +130,65 @@
 				min={0}
 				max={1000}
 				onCommit={(v) => (tds = v)}
+			/>
+		{/snippet}
+	</StRow>
+</StGroup>
+
+<!--
+	Maintenance intervals — the three thresholds the maintenance cards above
+	compare their counters against. Persisted via the maintenance store; each
+	stepper writes through its setter so a change takes effect immediately.
+	The litre values stay in canonical L (the maintenance store's native
+	unit); a future unit-aware variant of the `volume` dimension would let
+	these display as fl-oz for users on imperial units.
+-->
+<StGroup
+	title="Maintenance intervals"
+	sub="When the maintenance cards above flip to 'due'. Adjust to your filter spec, water source, and usage."
+>
+	<StRow
+		title="Filter capacity"
+		sub="Replace the inline filter after this many litres pass through it."
+	>
+		{#snippet control()}
+			<StStepper
+				value={m.filterCapacityLitres}
+				unit="L"
+				step={5}
+				min={5}
+				max={500}
+				onCommit={(v) => maintenance.setFilterCapacity(v)}
+			/>
+		{/snippet}
+	</StRow>
+	<StRow
+		title="Descale interval"
+		sub="Run a descale after this many litres dispensed."
+	>
+		{#snippet control()}
+			<StStepper
+				value={m.descaleIntervalLitres}
+				unit="L"
+				step={10}
+				min={10}
+				max={1000}
+				onCommit={(v) => maintenance.setDescaleInterval(v)}
+			/>
+		{/snippet}
+	</StRow>
+	<StRow
+		title="Backflush interval"
+		sub="Run a backflush after this many hours of use."
+	>
+		{#snippet control()}
+			<StStepper
+				value={m.backflushIntervalHours}
+				unit="hr"
+				step={1}
+				min={1}
+				max={500}
+				onCommit={(v) => maintenance.setBackflushInterval(v)}
 			/>
 		{/snippet}
 	</StRow>
