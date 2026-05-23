@@ -18,10 +18,10 @@ import { brew_ratio } from '$lib/wasm/de1_wasm';
 /** Format a brew ratio as `1:N` with one decimal, or `1:—` when undefined. */
 export function formatRatio(
 	dose: number | null | undefined,
-	yieldG: number | null | undefined
+	yieldOut: number | null | undefined
 ): string {
-	if (dose == null || yieldG == null) return '1:—';
-	const r = brew_ratio(dose, yieldG);
+	if (dose == null || yieldOut == null) return '1:—';
+	const r = brew_ratio(dose, yieldOut);
 	if (r == null || !Number.isFinite(r)) return '1:—';
 	return `1:${r.toFixed(1)}`;
 }

@@ -404,12 +404,12 @@
 						/>
 						<PeNumber
 							label="Yield"
-							value={draft.yieldG}
+							value={draft.yieldOut}
 							step={0.5}
 							dimension="weight"
 							min={10}
 							max={80}
-							onChange={(v) => patch({ yieldG: v })}
+							onChange={(v) => patch({ yieldOut: v })}
 						/>
 						<PeNumber
 							label="Brew temp"
@@ -482,7 +482,7 @@
 						<span>
 							<span class="pe-tog-title">Stop on weight</span>
 							<span class="pe-tog-sub">
-								End the shot when the scale reads {formatWeight(draft.yieldG, settings.current.weightUnit)}.
+								End the shot when the scale reads {formatWeight(draft.yieldOut, settings.current.weightUnit)}.
 							</span>
 						</span>
 					</button>

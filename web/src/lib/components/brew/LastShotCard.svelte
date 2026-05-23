@@ -29,10 +29,10 @@
 	/** Whole-second shot time. */
 	const time = $derived(`${Math.round(shot.duration / 1000)}`);
 	/** Final yield, in the chosen weight unit. */
-	const yieldM = $derived(convertWeight(shot.yieldG, prefs.weightUnit));
+	const yieldM = $derived(convertWeight(shot.yieldOut, prefs.weightUnit));
 	/** Yield-to-dose ratio `1:x`, or `1:—` when there is no yield. */
 	const ratio = $derived(
-		shot.yieldG != null && dose > 0 ? `1:${(shot.yieldG / dose).toFixed(1)}` : '1:—'
+		shot.yieldOut != null && dose > 0 ? `1:${(shot.yieldOut / dose).toFixed(1)}` : '1:—'
 	);
 	/** Peak group pressure, in the chosen pressure unit. */
 	const peakBarM = $derived(convertPressure(shot.peakPressure, prefs.pressureUnit));

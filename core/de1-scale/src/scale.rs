@@ -140,7 +140,7 @@ pub struct ScaleCapabilities {
     pub volume: Option<RangeCapability>,
     /// The bounds of the scale's auto-standby timeout, in minutes — `None`
     /// when the scale has no configurable auto-standby.
-    pub standby_minutes: Option<RangeCapability>,
+    pub standby: Option<RangeCapability>,
     /// The scale accepts a command to toggle flow smoothing.
     pub flow_smoothing: bool,
     /// The scale accepts a command to toggle anti-mistouch.
@@ -391,7 +391,7 @@ impl Scale {
                 // perceptibly louder than 3 (confirmed against the official
                 // app) — so the exposed range is deliberately clamped to 0..=3.
                 volume: Some(RangeCapability { min: 0, max: 3 }),
-                standby_minutes: Some(RangeCapability { min: 5, max: 30 }),
+                standby: Some(RangeCapability { min: 5, max: 30 }),
                 flow_smoothing: true,
                 anti_mistouch: true,
                 auto_stop: true,
@@ -796,7 +796,7 @@ mod tests {
         assert!(caps.reports_timer);
         assert_eq!(caps.volume, Some(RangeCapability { min: 0, max: 3 }));
         assert_eq!(
-            caps.standby_minutes,
+            caps.standby,
             Some(RangeCapability { min: 5, max: 30 })
         );
         assert!(caps.flow_smoothing);

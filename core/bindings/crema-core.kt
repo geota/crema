@@ -49,7 +49,7 @@ data class EventTelemetryInner (
 	/// telemetry flow stream against the DE1's `sample_time` ticks
 	/// (BLE-jitter-immune when the line-frequency is known, host-clock
 	/// fallback otherwise). Resets to 0 on every `ShotStarted`.
-	val dispensed_volume_ml: Float,
+	val dispensed_volume: Float,
 	/// Target group-head temperature, °C — the heater setpoint for the
 	/// active frame. Legacy "Goal temperature" curve on the live shot
 	/// chart (`de1_de1.tcl:540` maps `goal_temperature ← SetHeadTemp`).
@@ -269,19 +269,19 @@ data class EventProfileHeaderReadInner (
 @Serializable
 data class EventShotSettingsReadInner (
 	/// Target steam temperature, °C.
-	val steam_temp_c: Float,
+	val steam_temp: Float,
 	/// Steam timeout, seconds.
-	val steam_timeout_s: Float,
+	val steam_timeout: Float,
 	/// Target hot-water temperature, °C.
-	val hot_water_temp_c: Float,
+	val hot_water_temp: Float,
 	/// Hot-water volume, ml.
-	val hot_water_volume_ml: Float,
+	val hot_water_volume: Float,
 	/// Hot-water timeout, seconds.
-	val hot_water_timeout_s: Float,
+	val hot_water_timeout: Float,
 	/// Espresso target volume, ml.
-	val espresso_volume_ml: Float,
+	val espresso_volume: Float,
 	/// Espresso group target temperature, °C.
-	val group_temp_c: Float
+	val group_temp: Float
 )
 
 /// Generated type representing the anonymous struct variant `ProfileUploadStarted` of the `Event` Rust enum
@@ -612,7 +612,7 @@ data class ScaleCapabilities (
 	val volume: RangeCapability? = null,
 	/// The bounds of the scale's auto-standby timeout, in minutes — `None`
 	/// when the scale has no configurable auto-standby.
-	val standby_minutes: RangeCapability? = null,
+	val standby: RangeCapability? = null,
 	/// The scale accepts a command to toggle flow smoothing.
 	val flow_smoothing: Boolean,
 	/// The scale accepts a command to toggle anti-mistouch.

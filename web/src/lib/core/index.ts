@@ -383,7 +383,7 @@ export interface CremaCore {
 	/** Build a `CoreOutput` whose command sets the scale beeper volume. */
 	setScaleVolume(level: number): Promise<CoreOutput>;
 	/** Build a `CoreOutput` whose command sets the scale auto-standby timeout. */
-	setScaleStandbyMinutes(minutes: number): Promise<CoreOutput>;
+	setScaleStandby(minutes: number): Promise<CoreOutput>;
 	/** Build a `CoreOutput` whose command toggles scale flow smoothing. */
 	setScaleFlowSmoothing(enabled: boolean): Promise<CoreOutput>;
 	/** Build a `CoreOutput` whose command toggles scale anti-mistouch. */
@@ -450,7 +450,7 @@ export interface CremaCore {
 	setHeaterTweaks(tweaks: {
 		phase1FlowRate: number;
 		phase2FlowRate: number;
-		hotWaterIdleTempC: number;
+		hotWaterIdleTemp: number;
 		espressoWarmupTimeoutSeconds: number;
 		steamTwoTapStop: number;
 		flushTimeoutMs: number;
@@ -646,8 +646,8 @@ async function createCore(): Promise<CremaCore> {
 		async setScaleVolume(level) {
 			return parseOutput(bridge.set_scale_volume(level));
 		},
-		async setScaleStandbyMinutes(minutes) {
-			return parseOutput(bridge.set_scale_standby_minutes(minutes));
+		async setScaleStandby(minutes) {
+			return parseOutput(bridge.set_scale_standby(minutes));
 		},
 		async setScaleFlowSmoothing(enabled) {
 			return parseOutput(bridge.set_scale_flow_smoothing(enabled));
@@ -753,7 +753,7 @@ async function createCore(): Promise<CremaCore> {
 				bridge.set_heater_tweaks(
 					tweaks.phase1FlowRate,
 					tweaks.phase2FlowRate,
-					tweaks.hotWaterIdleTempC,
+					tweaks.hotWaterIdleTemp,
 					tweaks.espressoWarmupTimeoutSeconds,
 					tweaks.steamTwoTapStop,
 					tweaks.flushTimeoutMs,

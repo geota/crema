@@ -103,9 +103,9 @@ export interface StoredShot {
  * shot-level fields and the 18 g dose fallback.
  */
 export function ratioLabel(record: StoredShot): string {
-	const yieldG = record.finalWeight ?? record.peakWeight;
+	const yieldOut = record.finalWeight ?? record.peakWeight;
 	const dose = record.dose != null && record.dose > 0 ? record.dose : 18;
-	return formatRatio(dose, yieldG);
+	return formatRatio(dose, yieldOut);
 }
 
 /** A star string `★★★★☆` for a 0–5 rating. */
