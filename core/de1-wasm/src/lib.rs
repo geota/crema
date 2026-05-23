@@ -599,15 +599,24 @@ impl CremaBridge {
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command enables a connected
-    /// Decent Scale's on-scale LCD in grams mode. Decent-Scale-only: empty
-    /// for every other scale, and for an unconnected core.
+    /// Decent Scale's on-scale LCD in the unit the shell passes
+    /// (`"grams"` / `"ounces"`, matching the [`WeightUnit`] serde
+    /// representation). Decent-Scale-only: empty for every other scale,
+    /// and for an unconnected core.
     ///
     /// Setting the LCD enable also arms the heartbeat requirement on the
     /// scale — the shell must follow up with periodic
     /// [`decent_scale_heartbeat`](Self::decent_scale_heartbeat) writes to keep
     /// the display awake.
-    pub fn enable_decent_scale_lcd(&self) -> String {
-        json(self.core.enable_decent_scale_lcd())
+    ///
+    /// `unit` is the same lowercase string the web settings store keeps
+    /// (`"grams"` / `"ounces"`); a malformed string returns an empty
+    /// `CoreOutput` and an error to the JS side via the wasm-bindgen
+    /// return type.
+    pub fn enable_decent_scale_lcd(&self, unit: &str) -> Result<String, String> {
+        let unit = de1_domain::WeightUnit::from_str_lower(unit)
+            .ok_or_else(|| format!("unknown weight unit: {unit}"))?;
+        Ok(json(self.core.enable_decent_scale_lcd(unit)))
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command disables a connected
@@ -622,6 +631,39 @@ impl CremaBridge {
     /// Decent-Scale-only; empty otherwise.
     pub fn decent_scale_heartbeat(&self) -> String {
         json(self.core.decent_scale_heartbeat())
+    }
+
+    /// Build a [`CoreOutput`] (JSON) whose command powers off a connected
+    /// Decent Scale on v1.2+ firmware. Decent-Scale-only.
+    ///
+    /// Returns an error to the JS side (and *no* CoreOutput) when:
+    ///
+    /// - no scale is connected, or the connected scale is not a Decent
+    ///   Scale, or
+    /// - the Decent Scale's firmware version has not yet been observed,
+    ///   or is v1.0 / v1.1 (the [`decent_scale::POWER_OFF`] byte is
+    ///   silently ignored before v1.2 firmware).
+    ///
+    /// The shell catches the error string and surfaces a "this scale
+    /// doesn't support remote power-off — long-press the button" message
+    /// to the user, so the user gets actionable feedback rather than a
+    /// silent no-op.
+    pub fn power_off_decent_scale(&self) -> Result<String, String> {
+        self.core
+            .power_off_decent_scale()
+            .map(json)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Cache the user's chosen weight unit on the core so the LCD-enable
+    /// auto-policy (triggered on the DE1's Idle entry) picks the right
+    /// wire packet. `unit` is the same lowercase string the web settings
+    /// store keeps (`"grams"` / `"ounces"`).
+    pub fn set_weight_unit_pref(&mut self, unit: &str) -> Result<(), String> {
+        let unit = de1_domain::WeightUnit::from_str_lower(unit)
+            .ok_or_else(|| format!("unknown weight unit: {unit}"))?;
+        self.core.set_weight_unit_pref(unit);
+        Ok(())
     }
 
     /// What the currently-connected scale can do beyond reporting a bare
@@ -1408,7 +1450,7 @@ mod tests {
         let mut bridge = CremaBridge::new();
         bridge.connect_scale("Decent Scale ABC".to_owned());
         for json in [
-            bridge.enable_decent_scale_lcd(),
+            bridge.enable_decent_scale_lcd("grams").unwrap(),
             bridge.disable_decent_scale_lcd(),
             bridge.decent_scale_heartbeat(),
         ] {
@@ -1424,7 +1466,7 @@ mod tests {
         let mut bridge = CremaBridge::new();
         bridge.connect_scale("BOOKOO_SC".to_owned());
         for json in [
-            bridge.enable_decent_scale_lcd(),
+            bridge.enable_decent_scale_lcd("grams").unwrap(),
             bridge.disable_decent_scale_lcd(),
             bridge.decent_scale_heartbeat(),
         ] {
@@ -1434,6 +1476,57 @@ mod tests {
                 "Bookoo should ignore Decent-Scale-specific writes: {json}"
             );
         }
+    }
+
+    #[test]
+    fn enable_decent_scale_lcd_in_ounces_emits_the_ounces_packet() {
+        let mut bridge = CremaBridge::new();
+        bridge.connect_scale("Decent Scale ABC".to_owned());
+        let json = bridge.enable_decent_scale_lcd("ounces").unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let commands = parsed["commands"].as_array().unwrap();
+        assert_eq!(commands.len(), 1);
+        // The wire bytes are the LCD_ENABLE_OUNCES constant; the JSON
+        // encodes them as a u8 array under the serde-adjacent `content`
+        // wrapper (`tag = "type", content = "content"`).
+        let data: Vec<u8> = commands[0]["content"]["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| u8::try_from(v.as_u64().unwrap()).unwrap())
+            .collect();
+        assert_eq!(
+            data,
+            [0x03, 0x0A, 0x01, 0x01, 0x01, 0x01, 0x09],
+            "expected LCD_ENABLE_OUNCES bytes"
+        );
+    }
+
+    #[test]
+    fn enable_decent_scale_lcd_with_unknown_unit_errors() {
+        let mut bridge = CremaBridge::new();
+        bridge.connect_scale("Decent Scale ABC".to_owned());
+        assert!(bridge.enable_decent_scale_lcd("kilograms").is_err());
+    }
+
+    #[test]
+    fn power_off_decent_scale_errors_when_firmware_is_not_yet_known() {
+        let mut bridge = CremaBridge::new();
+        bridge.connect_scale("Decent Scale ABC".to_owned());
+        // No firmware reply observed — the bridge surfaces the error string.
+        let err = bridge.power_off_decent_scale().unwrap_err();
+        assert!(
+            err.contains("decent_scale_power_off"),
+            "error should name the feature: {err}"
+        );
+    }
+
+    #[test]
+    fn set_weight_unit_pref_validates_and_caches() {
+        let mut bridge = CremaBridge::new();
+        assert!(bridge.set_weight_unit_pref("ounces").is_ok());
+        assert!(bridge.set_weight_unit_pref("grams").is_ok());
+        assert!(bridge.set_weight_unit_pref("kilograms").is_err());
     }
 
     #[test]
