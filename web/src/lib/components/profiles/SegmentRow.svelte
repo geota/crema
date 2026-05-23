@@ -72,7 +72,7 @@
 	 * tank-style volumes, not flow rate (`fl oz/s` is a non-standard unit).
 	 */
 	const unit = $derived(
-		seg.mode === 'pressure' ? unitLabel('pressure', settings.current) : 'ml/s'
+		seg.mode === 'pressure' ? unitLabel('pressure', settings.current) : 'mL/s'
 	);
 
 	// ── Reorder ─────────────────────────────────────────────────────────
@@ -138,7 +138,7 @@
 	);
 	/** The exit-threshold unit follows the watched metric (pressure → user's pref). */
 	const exitUnit = $derived(
-		exitView.metric === 'flow' ? 'ml/s' : unitLabel('pressure', settings.current)
+		exitView.metric === 'flow' ? 'mL/s' : unitLabel('pressure', settings.current)
 	);
 
 	/** Toggle the exit condition on / off. */
@@ -166,7 +166,7 @@
 	const limiterView = $derived<SegmentLimiter>(seg.limiter ?? { value: 6, range: 0.6 });
 	/** The limiter caps the non-priority quantity — flow when pressure-priority. */
 	const limiterUnit = $derived(
-		seg.mode === 'pressure' ? 'ml/s' : unitLabel('pressure', settings.current)
+		seg.mode === 'pressure' ? 'mL/s' : unitLabel('pressure', settings.current)
 	);
 
 	/** Toggle the limiter on / off. */
@@ -268,7 +268,7 @@
 				{:else}
 					<QStepper
 						value={seg.target}
-						unit="ml/s"
+						unit="mL/s"
 						min={0}
 						max={12}
 						step={0.1}

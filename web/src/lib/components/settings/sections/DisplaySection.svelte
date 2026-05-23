@@ -104,7 +104,7 @@
 			<StSegment
 				value={prefs.volumeUnit}
 				options={[
-					{ value: 'ml', label: 'ml' },
+					{ value: 'ml', label: 'mL' },
 					{ value: 'floz', label: 'fl oz' }
 				]}
 				onChange={(v) => settings.set('volumeUnit', v as 'ml' | 'floz')}
