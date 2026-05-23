@@ -21,8 +21,24 @@
 	 * proper Save button when creating, and a roaster autocomplete that
 	 * creates *at save time only* (the old `oninput`-driven flow polluted
 	 * the directory with every keystroke).
+	 *
+	 * Compacted 2026-05-23 (bean-editor-compact):
+	 *
+	 *   1. Roaster autocomplete now visually matches the surrounding text
+	 *      inputs (see `RoasterAutocomplete.svelte`).
+	 *   2. Dropped the "Remaining" stepper + "Refill bag" button. The bag's
+	 *      `remainingG` value still ships through shot auto-debit and is
+	 *      silently seeded to `bagSizeG` whenever the user sets/changes the
+	 *      bag size — no UI.
+	 *   3. Dates are now a 3-wide row (Roasted | Opened | Frozen) with the
+	 *      freshness display tucked under the Roasted input. Bag section
+	 *      packs Bag Size + Grind side-by-side. Decaf + Favourite toggles
+	 *      share one row.
+	 *   4. Save is **always clickable**. Clicking with required fields
+	 *      missing highlights them in red, drops a "required" hint under
+	 *      each, and scrolls/focuses the first one.
 	 */
-	import { untrack } from 'svelte';
+	import { tick, untrack } from 'svelte';
 	import {
 		getBeanStore,
 		daysOffRoast,
@@ -146,25 +162,44 @@
 
 	const roastOptions: Roast[] = ['light', 'medium', 'dark'];
 
-	// ── Save-button gating (new-bean mode only) ───────────────────────────
+	// ── Save validation (new-bean mode only) ──────────────────────────────
 	//
 	// Required: a name, a roaster (typed name or an explicit pick), and a
 	// roast date. Anything else is optional — the user can dial in tasting
 	// notes etc. later.
-	const canSave = $derived.by<boolean>(() => {
-		if (!isNew) return true; // edit mode persists eagerly, no save gate
-		if (!current.name.trim()) return false;
-		if (!roasterName.trim()) return false;
-		if (!current.roastedOn) return false;
-		return true;
-	});
+	//
+	// Per the compact-layout brief: the Save button is **always clickable**.
+	// Clicking with missing fields flips `attemptedSave` on, which paints
+	// each missing field red and exposes a small "Required" hint. The first
+	// missing field is then scrolled into view and focused so the user can
+	// resume typing without hunting.
+	let attemptedSave = $state(false);
+	let nameInputEl = $state<HTMLInputElement | null>(null);
+	let roasterRowEl = $state<HTMLDivElement | null>(null);
+	let roastedDateInputEl = $state<HTMLInputElement | null>(null);
+
+	const isNameMissing = $derived(isNew && !current.name.trim());
+	const isRoasterMissing = $derived(isNew && !roasterName.trim());
+	const isRoastedOnMissing = $derived(isNew && !current.roastedOn);
 
 	/**
 	 * Patch one or more fields. In live mode this writes through to the
 	 * store immediately; in draft mode it mutates `draftRecord` in place
 	 * and the caller is responsible for hitting Save.
+	 *
+	 * Special-cases `bagSizeG`: bumping the bag size silently re-seeds
+	 * `remainingG` to match. The editor no longer renders a Remaining
+	 * stepper or a Refill button (auto-debit on each shot handles the
+	 * burn-down), so a fresh/refilled bag has to mirror its bag size on
+	 * its own.
 	 */
 	function patch(p: Partial<Bean>): void {
+		if (Object.prototype.hasOwnProperty.call(p, 'bagSizeG')) {
+			// Silently mirror remainingG → bagSizeG. The user edits the bag
+			// size (e.g. switched bag, weighed in fresh), and remaining
+			// rolls back to full — no need for a separate "refill" gesture.
+			(p as Partial<Bean>).remainingG = p.bagSizeG as number;
+		}
 		if (live) {
 			library.updateBean(bean.id, p);
 		} else {
@@ -253,18 +288,48 @@
 	/**
 	 * Save handler — only meaningful in new-bean mode. Persists the draft
 	 * (creating its roaster on the fly if needed), then closes the drawer.
+	 *
+	 * No `disabled` gate: instead we validate inline and bounce focus to
+	 * the first missing required field. The user can always click Save.
 	 */
-	function commitDraftAndClose(): void {
+	async function commitDraftAndClose(): Promise<void> {
 		if (!isNew) {
 			onClose();
 			return;
 		}
-		if (!canSave) return;
+		attemptedSave = true;
+		// Re-read missing flags after attemptedSave flips so the template
+		// repaints the red borders / hints before we scroll.
+		await tick();
+		if (isNameMissing) {
+			nameInputEl?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+			nameInputEl?.focus();
+			return;
+		}
+		if (isRoasterMissing) {
+			roasterRowEl?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+			// The autocomplete's input is the first descendant input.
+			roasterRowEl?.querySelector('input')?.focus();
+			return;
+		}
+		if (isRoastedOnMissing) {
+			roastedDateInputEl?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+			roastedDateInputEl?.focus();
+			return;
+		}
 		const roaster = resolveRoasterOrCreate(roasterName);
+		// Defensive: if the user typed a bag size but never explicitly
+		// reset remaining, mirror them at save time so the new bag starts
+		// out "full". `patch()` already does this on every bag-size edit,
+		// but a freshly opened editor with the seeded default 0/0 also
+		// needs to come out consistent.
+		const remainingG =
+			draftRecord.remainingG > 0 ? draftRecord.remainingG : draftRecord.bagSizeG;
 		const persisted: Bean = {
 			...draftRecord,
 			roasterId: roaster?.id ?? null,
 			name: draftRecord.name.trim(),
+			remainingG,
 			updatedAt: Date.now()
 		};
 		library.upsertBean(persisted);
@@ -323,21 +388,27 @@
 		<section class="be-section">
 			<h3 class="be-section-title">Identity</h3>
 			<label class="be-row">
-				<span class="be-label">Name</span>
+				<span class="be-label">Name{isNew ? ' *' : ''}</span>
 				<input
+					bind:this={nameInputEl}
 					class="be-input"
+					class:is-invalid={attemptedSave && isNameMissing}
 					value={current.name}
 					placeholder="e.g. Geisha Esmeralda Lot 3"
 					oninput={(e) => patch({ name: e.currentTarget.value })}
 				/>
+				{#if attemptedSave && isNameMissing}
+					<span class="be-required">Required</span>
+				{/if}
 			</label>
-			<div class="be-row">
-				<span class="be-label">Roaster</span>
+			<div class="be-row" bind:this={roasterRowEl}>
+				<span class="be-label">Roaster{isNew ? ' *' : ''}</span>
 				<RoasterAutocomplete
 					value={roasterName}
 					resolved={resolvedRoaster}
 					roasters={library.roasters}
 					placeholder="e.g. Onyx Coffee Lab"
+					invalid={attemptedSave && isRoasterMissing}
 					onChange={setRoasterName}
 					onResolve={(r) => {
 						onRoasterResolve(r);
@@ -357,6 +428,9 @@
 							}
 						: undefined}
 				/>
+				{#if attemptedSave && isRoasterMissing}
+					<span class="be-required">Required</span>
+				{/if}
 			</div>
 			<div class="be-row">
 				<span class="be-label">Roast level</span>
@@ -383,37 +457,45 @@
 					{/each}
 				</div>
 			</div>
-			<div class="be-toggle-row">
-				<div class="be-toggle-text">
-					<div class="be-toggle-title">Decaf</div>
+			<!-- Combined toggles: Decaf + Favourite share one row to save vertical space. -->
+			<div class="be-toggle-grid">
+				<div class="be-toggle-cell">
+					<div class="be-toggle-text">
+						<div class="be-toggle-title">Decaf</div>
+					</div>
+					<StToggle
+						on={current.decaf}
+						onChange={(v) => patch({ decaf: v })}
+						label="Decaf"
+					/>
 				</div>
-				<StToggle
-					on={current.decaf}
-					onChange={(v) => patch({ decaf: v })}
-					label="Decaf"
-				/>
-			</div>
-			<div class="be-toggle-row">
-				<div class="be-toggle-text">
-					<div class="be-toggle-title">Pin to brew picker</div>
-					<div class="be-toggle-sub">Show this bag in the favourites strip</div>
+				<div class="be-toggle-cell">
+					<div class="be-toggle-text">
+						<div class="be-toggle-title">Favourite</div>
+					</div>
+					<StToggle
+						on={current.favourite}
+						onChange={(v) => patch({ favourite: v })}
+						label="Favourite"
+					/>
 				</div>
-				<StToggle
-					on={current.favourite}
-					onChange={(v) => patch({ favourite: v })}
-					label="Favourite"
-				/>
 			</div>
 		</section>
 
-		<!-- Dates -->
+		<!-- Dates: roasted / opened / frozen packed into one 3-wide row. Freshness
+				 lives as a small inline pill beneath the roasted input so the
+				 sniff-test is still next to the date that drives it. Defrosted
+				 only surfaces once the bag is actually frozen — most bags never
+				 will be. -->
 		<section class="be-section">
 			<h3 class="be-section-title">Dates</h3>
-			<label class="be-row">
-				<span class="be-label">Roasted on{isNew ? ' *' : ''}</span>
-				<div class="be-date-row">
+			<div class="be-date-grid">
+				<label class="be-row">
+					<span class="be-label">Roasted on{isNew ? ' *' : ''}</span>
 					<input
+						bind:this={roastedDateInputEl}
 						class="be-input be-input-date"
+						class:is-invalid={attemptedSave && isRoastedOnMissing}
 						type="date"
 						value={current.roastedOn ?? ''}
 						oninput={(e) => patch({ roastedOn: e.currentTarget.value || null })}
@@ -424,26 +506,29 @@
 							{days}d off roast · {freshness ?? 'pending'}
 						</span>
 					{/if}
-				</div>
-			</label>
-			<label class="be-row">
-				<span class="be-label">Opened on</span>
-				<input
-					class="be-input be-input-date"
-					type="date"
-					value={current.openedOn ?? ''}
-					oninput={(e) => patch({ openedOn: e.currentTarget.value || null })}
-				/>
-			</label>
-			<label class="be-row">
-				<span class="be-label">Frozen on</span>
-				<input
-					class="be-input be-input-date"
-					type="date"
-					value={current.frozenOn ?? ''}
-					oninput={(e) => patch({ frozenOn: e.currentTarget.value || null })}
-				/>
-			</label>
+					{#if attemptedSave && isRoastedOnMissing}
+						<span class="be-required">Required</span>
+					{/if}
+				</label>
+				<label class="be-row">
+					<span class="be-label">Opened on</span>
+					<input
+						class="be-input be-input-date"
+						type="date"
+						value={current.openedOn ?? ''}
+						oninput={(e) => patch({ openedOn: e.currentTarget.value || null })}
+					/>
+				</label>
+				<label class="be-row">
+					<span class="be-label">Frozen on</span>
+					<input
+						class="be-input be-input-date"
+						type="date"
+						value={current.frozenOn ?? ''}
+						oninput={(e) => patch({ frozenOn: e.currentTarget.value || null })}
+					/>
+				</label>
+			</div>
 			{#if current.frozenOn}
 				<label class="be-row">
 					<span class="be-label">Defrosted on</span>
@@ -458,62 +543,48 @@
 			{/if}
 		</section>
 
-		<!-- Bag -->
+		<!-- Bag: Bag size + Grind paired in one 2-wide row of steppers, then the
+				 Mix + Grinder text pairs underneath. The "Remaining" stepper +
+				 "Refill bag" button are gone — `remainingG` is silently kept in
+				 sync with `bagSizeG` when the user edits the bag size, and shot
+				 auto-debit handles the natural burn-down. -->
 		<section class="be-section">
 			<h3 class="be-section-title">Bag</h3>
-			<div class="be-row">
-				<span class="be-label">Bag size</span>
-				<QStepper
-					value={current.bagSizeG}
-					unit="g"
-					min={100}
-					max={2000}
-					step={10}
-					onChange={(v) => patch({ bagSizeG: v })}
-					fmt={(v) => v.toFixed(0)}
-				/>
-				<div class="be-chip-spacer"></div>
-				<div class="qchipr">
-					{#each BAG_PRESETS as g (g)}
-						<button
-							type="button"
-							class="qchip"
-							class:is-active={current.bagSizeG === g}
-							onclick={() => patch({ bagSizeG: g })}
-						>
-							{g}<span class="qchip-unit">g</span>
-						</button>
-					{/each}
+			<div class="be-row-grid">
+				<div class="be-row">
+					<span class="be-label">Bag size</span>
+					<QStepper
+						value={current.bagSizeG}
+						unit="g"
+						min={100}
+						max={2000}
+						step={10}
+						onChange={(v) => patch({ bagSizeG: v })}
+						fmt={(v) => v.toFixed(0)}
+					/>
+					<div class="qchipr qchipr-tight">
+						{#each BAG_PRESETS as g (g)}
+							<button
+								type="button"
+								class="qchip"
+								class:is-active={current.bagSizeG === g}
+								onclick={() => patch({ bagSizeG: g })}
+							>
+								{g}<span class="qchip-unit">g</span>
+							</button>
+						{/each}
+					</div>
 				</div>
-			</div>
-			<div class="be-row">
-				<span class="be-label">Remaining</span>
-				<QStepper
-					value={current.remainingG}
-					unit="g"
-					min={0}
-					max={Math.max(current.bagSizeG, 2000)}
-					step={1}
-					onChange={(v) => patch({ remainingG: v })}
-					fmt={(v) => v.toFixed(0)}
-				/>
-				<!--
-					PM call (2026-05-23, bean-editor-polish):
-					We keep "Refill bag" since it's a common path after a
-					weighing reset, but drop the old "Mark empty" button —
-					the auto-debit on each shot handles emptying the bag,
-					and a user who needs to zero it can edit the value
-					inline. See task brief §5.
-				-->
-				<div class="be-row-inline">
-					<button
-						class="be-mini"
-						type="button"
-						onclick={() => patch({ remainingG: current.bagSizeG })}
-					>
-						<i class="ph ph-arrow-counter-clockwise" aria-hidden="true"></i>
-						Refill to bag size
-					</button>
+				<div class="be-row">
+					<span class="be-label">Grind</span>
+					<QStepper
+						value={grindNum}
+						min={0}
+						max={20}
+						step={0.1}
+						onChange={(v) => setGrind(v)}
+						fmt={(v) => v.toFixed(1)}
+					/>
 				</div>
 			</div>
 			<div class="be-row-grid">
@@ -541,17 +612,6 @@
 						oninput={(e) => patch({ grinder: e.currentTarget.value })}
 					/>
 				</label>
-			</div>
-			<div class="be-row">
-				<span class="be-label">Grind</span>
-				<QStepper
-					value={grindNum}
-					min={0}
-					max={20}
-					step={0.1}
-					onChange={(v) => setGrind(v)}
-					fmt={(v) => v.toFixed(1)}
-				/>
 			</div>
 		</section>
 
@@ -780,11 +840,7 @@
 			<button
 				class="be-btn be-btn-primary"
 				type="button"
-				disabled={!canSave}
 				onclick={commitDraftAndClose}
-				title={canSave
-					? undefined
-					: 'A name, roaster, and roast date are required to save.'}
 			>
 				<i class="ph ph-check" aria-hidden="true"></i> Save bag
 			</button>
@@ -892,7 +948,7 @@
 		padding: 16px 24px 40px;
 		display: flex;
 		flex-direction: column;
-		gap: 24px;
+		gap: 20px;
 	}
 	.be-section {
 		display: flex;
@@ -924,12 +980,13 @@
 		grid-template-columns: 1fr 1fr;
 		gap: 10px;
 	}
-	.be-row-inline {
-		display: flex;
-		gap: 12px;
-		flex-wrap: wrap;
-		align-items: center;
-		margin-top: 4px;
+	.be-date-grid {
+		/* Three meaningful dates (roasted / opened / frozen) packed across
+			 one row. Drops the form height by two whole rows on the dates
+			 section alone, which dominated the scroll before. */
+		display: grid;
+		grid-template-columns: 1fr 1fr 1fr;
+		gap: 10px;
 	}
 	.be-label {
 		font-family: var(--font-sans);
@@ -964,13 +1021,20 @@
 	.be-textarea:focus {
 		border-color: var(--copper-400);
 	}
-	.be-input-date {
-		max-width: 200px;
+	.be-input.is-invalid {
+		/* Save-validation highlight: matches the red ring on the autocomplete
+			 input via the `invalid` prop in RoasterAutocomplete. */
+		border-color: var(--danger, #e3553c);
 	}
-	.be-date-row {
-		display: flex;
-		gap: 12px;
-		align-items: center;
+	.be-input-date {
+		max-width: 100%;
+	}
+	.be-required {
+		font-family: var(--font-sans);
+		font-size: 11px;
+		font-weight: 500;
+		color: var(--danger, #e3553c);
+		margin-top: 2px;
 	}
 	.be-fresh {
 		display: inline-flex;
@@ -979,16 +1043,24 @@
 		font-family: var(--font-sans);
 		font-size: 11px;
 		font-weight: 500;
+		margin-top: 2px;
 	}
-	.be-toggle-row {
+	.be-toggle-grid {
+		/* Decaf + Favourite share a row to spare vertical space. Two cells,
+			 each a label/control pair, identical visual weight. */
+		display: grid;
+		grid-template-columns: 1fr 1fr;
+		gap: 10px;
+		margin-top: 4px;
+	}
+	.be-toggle-cell {
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
-		padding: 8px 0;
-		border-bottom: 1px solid rgba(var(--tint-rgb), 0.05);
-	}
-	.be-toggle-row:last-child {
-		border-bottom: 0;
+		padding: 8px 10px;
+		background: rgba(var(--tint-rgb), 0.03);
+		border: 1px solid rgba(var(--tint-rgb), 0.08);
+		border-radius: var(--radius-sm);
 	}
 	.be-toggle-text {
 		display: flex;
@@ -1000,28 +1072,6 @@
 		font-size: 13px;
 		color: var(--fg-1);
 		font-weight: 500;
-	}
-	.be-toggle-sub {
-		font-family: var(--font-sans);
-		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.5);
-	}
-	.be-mini {
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
-		background: transparent;
-		border: 1px solid rgba(var(--tint-rgb), 0.12);
-		border-radius: var(--radius-sm);
-		color: rgba(var(--tint-rgb), 0.7);
-		font-family: var(--font-sans);
-		font-size: 11px;
-		padding: 6px 10px;
-		cursor: pointer;
-	}
-	.be-mini:hover {
-		color: var(--fg-1);
-		background: rgba(var(--tint-rgb), 0.06);
 	}
 	.be-collapse {
 		display: inline-flex;
