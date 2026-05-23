@@ -34,6 +34,7 @@
 	import BeanImportDialog from '$lib/components/beans/BeanImportDialog.svelte';
 	import BeansEmptyState from '$lib/components/beans/BeansEmptyState.svelte';
 	import SortPill from '$lib/components/shared/SortPill.svelte';
+	import FilterPills from '$lib/components/shared/FilterPills.svelte';
 	import { roasterMarkTone } from '$lib/bean/roaster-mark';
 
 	const library = getBeanStore();
@@ -202,6 +203,103 @@
 			.map(([tag, count]) => ({ tag, count }))
 			.sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag));
 	});
+
+	/**
+	 * The full pill list for the Bags-tab filter rail. Three id-prefixed
+	 * groups — `s:` (status), `r:` (roast), `t:` (custom tag) — flow into a
+	 * single `FilterPills` instance and are dispatched by prefix in
+	 * `onBagPillClick` below. The same id namespace lets `selected` and the
+	 * click handler agree without a per-group fan-out.
+	 */
+	interface FilterPillItem {
+		id: string;
+		label?: string;
+		count?: number;
+		selected?: boolean;
+		icon?: string;
+		iconStyle?: string;
+		divider?: boolean;
+		groupLabel?: string;
+		custom?: boolean;
+		title?: string;
+	}
+
+	const bagsFilterPills = $derived.by(() => {
+		const items: FilterPillItem[] = [];
+		items.push({ id: '__status', groupLabel: 'Status' });
+		const statusEntries: { f: StatusFilter; label: string; icon?: string }[] = [
+			{ f: 'all', label: 'All' },
+			{ f: 'active', label: 'Active' },
+			{ f: 'frozen', label: 'Frozen', icon: 'ph ph-snowflake' },
+			{ f: 'archived', label: 'Archived', icon: 'ph ph-archive' },
+			{ f: 'favourite', label: 'Favourite', icon: 'ph-fill ph-star' }
+		];
+		for (const s of statusEntries) {
+			items.push({
+				id: `s:${s.f}`,
+				label: s.label,
+				icon: s.icon,
+				count: counts[s.f as keyof typeof counts],
+				selected: status === s.f
+			});
+		}
+		items.push({ id: '__div1', divider: true });
+		items.push({ id: '__roast', groupLabel: 'Roast' });
+		const roastEntries: { f: RoastFilter; label: string }[] = [
+			{ f: 'any', label: 'Any' },
+			{ f: 'light', label: 'Light' },
+			{ f: 'medium', label: 'Medium' },
+			{ f: 'dark', label: 'Dark' }
+		];
+		for (const r of roastEntries) {
+			items.push({
+				id: `r:${r.f}`,
+				label: r.label,
+				selected: roast === r.f
+			});
+		}
+		if (tagFacets.length > 0) {
+			items.push({ id: '__div2', divider: true });
+			items.push({ id: '__tags', groupLabel: 'Tags' });
+			for (const t of tagFacets) {
+				items.push({
+					id: `t:${t.tag}`,
+					label: t.tag,
+					count: t.count,
+					selected: selectedTags.includes(t.tag),
+					custom: true
+				});
+			}
+		}
+		return items;
+	});
+
+	function onBagPillClick(id: string): void {
+		if (id.startsWith('s:')) status = id.slice(2) as StatusFilter;
+		else if (id.startsWith('r:')) roast = id.slice(2) as RoastFilter;
+		else if (id.startsWith('t:')) toggleSelectedTag(id.slice(2));
+	}
+
+	/**
+	 * Region pills for the Roasters tab. `region:<id>` prefix mirrors the
+	 * bags-tab dispatcher; the empty `'all'` row is the catch-all reset.
+	 */
+	const roasterFilterPills = $derived.by(() => {
+		const items: FilterPillItem[] = [];
+		items.push({ id: '__region', groupLabel: 'Region' });
+		for (const r of roasterRegionOptions) {
+			items.push({
+				id: `region:${r}`,
+				label: r === 'all' ? 'All' : r,
+				selected: roasterRegion === r
+			});
+		}
+		return items;
+	});
+
+	function onRoasterPillClick(id: string): void {
+		if (id.startsWith('region:')) roasterRegion = id.slice('region:'.length);
+	}
 
 	const statusLine = $derived(
 		allBeans.length === 0
@@ -592,58 +690,12 @@
 		{/if}
 	</div>
 
-	<!-- Chip rail (Bags tab) -->
+	<!-- Chip rail (Bags tab) — adopts the shared FilterPills component so
+	     this rail looks identical to /profiles. Clear-filters chip lives
+	     outside the FilterPills group since it's not a selection state. -->
 	{#if tab === 'bags' && allBeans.length > 0}
-		<div class="bn-chiprail">
-			<div class="bn-chiprail-group">
-				<span class="bn-chiprail-lab">Status</span>
-				{#each ['all', 'active', 'frozen', 'archived', 'favourite'] as f (f)}
-					<button
-						class="bn-chip"
-						class:is-active={status === f}
-						onclick={() => (status = f as StatusFilter)}
-					>
-						{#if f === 'favourite'}
-							<i class="ph-fill ph-star" aria-hidden="true"></i>
-						{/if}
-						{#if f === 'frozen'}
-							<i class="ph ph-snowflake" aria-hidden="true"></i>
-						{/if}
-						{#if f === 'archived'}
-							<i class="ph ph-archive" aria-hidden="true"></i>
-						{/if}
-						<span>{f.charAt(0).toUpperCase() + f.slice(1)}</span>
-					</button>
-				{/each}
-			</div>
-			<div class="bn-chiprail-sep"></div>
-			<div class="bn-chiprail-group">
-				<span class="bn-chiprail-lab">Roast</span>
-				{#each ['any', 'light', 'medium', 'dark'] as f (f)}
-					<button
-						class="bn-chip"
-						class:is-active={roast === f}
-						onclick={() => (roast = f as RoastFilter)}
-					>
-						<span>{f.charAt(0).toUpperCase() + f.slice(1)}</span>
-					</button>
-				{/each}
-			</div>
-			{#if tagFacets.length > 0}
-				<div class="bn-chiprail-sep"></div>
-				<div class="bn-chiprail-group">
-					<span class="bn-chiprail-lab">Tags</span>
-					{#each tagFacets as t (t.tag)}
-						<button
-							class="bn-chip bn-chip-tag"
-							class:is-active={selectedTags.includes(t.tag)}
-							onclick={() => toggleSelectedTag(t.tag)}
-						>
-							<span>{t.tag}</span><span class="bn-chip-n">{t.count}</span>
-						</button>
-					{/each}
-				</div>
-			{/if}
+		<div class="bn-filterstrip">
+			<FilterPills pills={bagsFilterPills} onclick={onBagPillClick} />
 			{#if status !== 'all' || roast !== 'any' || selectedTags.length > 0}
 				<button class="bn-chip-clear" onclick={clearFilters}>
 					<i class="ph ph-x"></i> Clear
@@ -807,17 +859,11 @@
 					</div>
 				</header>
 				{#if roasterRegionOptions.length > 1}
-					<div class="bn-chiprail bn-chiprail-inline">
-						<span class="bn-chiprail-lab">Region</span>
-						{#each roasterRegionOptions as r (r)}
-							<button
-								class="bn-chip"
-								class:is-active={roasterRegion === r}
-								onclick={() => (roasterRegion = r)}
-							>
-								{r === 'all' ? 'All' : r}
-							</button>
-						{/each}
+					<div class="bn-filterstrip bn-filterstrip-inline">
+						<FilterPills
+							pills={roasterFilterPills}
+							onclick={onRoasterPillClick}
+						/>
 					</div>
 				{/if}
 				<div class="bn-roaster-grid">
@@ -1194,8 +1240,11 @@
 		color: var(--fg-on-accent);
 	}
 
-	/* Chip rail */
-	.bn-chiprail {
+	/* Filter strip — `.bn-filterstrip` is the page-level shell that hosts
+	   the shared FilterPills + Clear-filters chip. The pills themselves
+	   inherit the `.pp-tag*` rules from `styles/profiles-page.css`, so the
+	   visuals match /profiles exactly. */
+	.bn-filterstrip {
 		display: flex;
 		flex-wrap: wrap;
 		align-items: center;
@@ -1203,61 +1252,9 @@
 		padding: 12px var(--page-pad-x, 24px);
 		border-bottom: 1px solid rgba(var(--tint-rgb), 0.04);
 	}
-	.bn-chiprail-inline {
+	.bn-filterstrip-inline {
 		padding: 0 0 12px;
 		border-bottom: 0;
-	}
-	.bn-chiprail-group {
-		display: inline-flex;
-		flex-wrap: wrap;
-		gap: 4px;
-		align-items: center;
-	}
-	.bn-chiprail-lab {
-		font-family: var(--font-sans);
-		font-size: 10px;
-		font-weight: 700;
-		letter-spacing: var(--track-allcaps);
-		text-transform: uppercase;
-		color: rgba(var(--tint-rgb), 0.4);
-		margin-right: 4px;
-	}
-	.bn-chiprail-sep {
-		width: 1px;
-		height: 14px;
-		background: rgba(var(--tint-rgb), 0.1);
-	}
-	.bn-chip {
-		display: inline-flex;
-		align-items: center;
-		gap: 4px;
-		padding: 4px 11px;
-		background: transparent;
-		border: 1px solid rgba(var(--tint-rgb), 0.1);
-		color: rgba(var(--tint-rgb), 0.65);
-		font-family: var(--font-sans);
-		font-size: 11.5px;
-		cursor: pointer;
-		border-radius: var(--radius-pill);
-		transition: all var(--dur-1) var(--ease);
-	}
-	.bn-chip:hover {
-		color: var(--fg-1);
-		border-color: rgba(var(--tint-rgb), 0.18);
-	}
-	.bn-chip.is-active {
-		color: var(--copper-300);
-		background: rgba(var(--copper-rgb), 0.12);
-		border-color: var(--copper-400);
-	}
-	.bn-chip-n {
-		font-family: var(--font-mono);
-		font-size: 10px;
-		color: rgba(var(--tint-rgb), 0.4);
-		font-weight: 500;
-	}
-	.bn-chip.is-active .bn-chip-n {
-		color: var(--copper-400);
 	}
 	.bn-chip-clear {
 		display: inline-flex;
