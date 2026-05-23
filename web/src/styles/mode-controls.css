@@ -52,7 +52,7 @@
 	display: inline-block;
 	width: 1px;
 	height: 28px;
-	background: rgba(244, 237, 224, 0.12);
+	background: rgba(var(--tint-rgb), 0.12);
 	margin: 0 14px;
 	flex: 0 0 auto;
 }
@@ -67,9 +67,12 @@
 	padding: 8px 18px;
 	height: 52px;
 	border-radius: 999px;
-	background: rgba(244, 237, 224, 0.04);
-	color: var(--ink-50, var(--fg-1));
-	border: 1px solid rgba(244, 237, 224, 0.08);
+	background: rgba(var(--tint-rgb), 0.04);
+	/* `--fg-1` flips per theme (ink-900 on light, ink-50 on dark) so chip
+	   text reads on the 15-% mode-color wash in both themes. The previous
+	   `--ink-50` was a raw cream that disappeared on the light page bg. */
+	color: var(--fg-1);
+	border: 1px solid rgba(var(--tint-rgb), 0.08);
 	font-family: var(--font-sans);
 	font-size: 14px;
 	font-weight: 500;
@@ -84,8 +87,8 @@
 	   own background, so this neutral hover only applies to a chip with
 	   no kind class (theoretical / future). The colored chips get a
 	   per-kind hover tint a few rules below. */
-	background: rgba(244, 237, 224, 0.07);
-	border-color: rgba(244, 237, 224, 0.14);
+	background: rgba(var(--tint-rgb), 0.07);
+	border-color: rgba(var(--tint-rgb), 0.14);
 }
 .mc-chip.is-steam:hover {
 	background: rgba(196, 78, 63, 0.22);
@@ -98,7 +101,7 @@
 }
 .mc-chip > i {
 	font-size: 18px;
-	color: rgba(244, 237, 224, 0.7);
+	color: rgba(var(--tint-rgb), 0.7);
 }
 .mc-chip-text {
 	display: inline-flex;
@@ -108,7 +111,7 @@
 	gap: 1px;
 }
 .mc-chip-sub {
-	color: rgba(244, 237, 224, 0.45);
+	color: rgba(var(--tint-rgb), 0.55);
 	font-size: 10.5px;
 	font-family: var(--font-mono);
 	font-variant-numeric: tabular-nums;
@@ -119,8 +122,8 @@
 	cursor: not-allowed;
 }
 .mc-chip.is-disabled:hover {
-	background: rgba(244, 237, 224, 0.04);
-	border-color: rgba(244, 237, 224, 0.08);
+	background: rgba(var(--tint-rgb), 0.04);
+	border-color: rgba(var(--tint-rgb), 0.08);
 }
 
 /* Mode-specific tints applied always — the chip carries its own colour
@@ -167,12 +170,12 @@
 	width: 18px;
 	height: 18px;
 	border-radius: 999px;
-	background: rgba(244, 237, 224, 0.06);
+	background: rgba(var(--tint-rgb), 0.1);
 	margin-left: 2px;
 }
 .mc-chip-cancel > i {
 	font-size: 10px;
-	color: rgba(244, 237, 224, 0.7);
+	color: rgba(var(--tint-rgb), 0.7);
 }
 
 /* ── Header status pill ────────────────────────────────────────────── */
@@ -183,8 +186,8 @@
 	gap: 14px;
 	padding: 7px 8px 7px 12px;
 	border-radius: 999px;
-	background: rgba(40, 31, 24, 0.6);
-	border: 1px solid rgba(244, 237, 224, 0.1);
+	background: rgba(var(--tint-rgb), 0.08);
+	border: 1px solid rgba(var(--tint-rgb), 0.1);
 }
 .mc-head-status.is-steam {
 	background: rgba(196, 78, 63, 0.12);
@@ -206,23 +209,26 @@
 	width: 26px;
 	height: 26px;
 	border-radius: 50%;
-	background: rgba(244, 237, 224, 0.08);
+	background: rgba(var(--tint-rgb), 0.08);
 	flex: 0 0 auto;
 }
 .mc-head-status-icon > i {
 	font-size: 14px;
 }
+/* Icon color uses the full mode token (not a lighter custom hex) so the
+   icon reads on the 15-% mode-color wash in both themes — the previous
+   light blue / sage hexes only had contrast against the dark page bg. */
 .mc-head-status.is-steam .mc-head-status-icon {
 	background: var(--mc-steam-15);
 	color: var(--mc-steam);
 }
 .mc-head-status.is-water .mc-head-status-icon {
 	background: var(--mc-water-15);
-	color: #97b4e5;
+	color: var(--mc-water);
 }
 .mc-head-status.is-flush .mc-head-status-icon {
 	background: var(--mc-flush-15);
-	color: #a9c29d;
+	color: var(--mc-flush);
 }
 
 .mc-head-status-text {
@@ -235,20 +241,20 @@
 	font-family: var(--font-sans);
 	font-size: 13px;
 	font-weight: 600;
-	color: var(--ink-50, var(--fg-1));
+	color: var(--fg-1);
 	letter-spacing: 0.01em;
 }
 .mc-head-status-meta {
 	font-family: var(--font-mono);
 	font-size: 12px;
-	color: rgba(244, 237, 224, 0.6);
+	color: rgba(var(--tint-rgb), 0.65);
 	font-variant-numeric: tabular-nums;
 }
 
 .mc-head-status-bar {
 	width: 96px;
 	height: 4px;
-	background: rgba(244, 237, 224, 0.1);
+	background: rgba(var(--tint-rgb), 0.12);
 	border-radius: 999px;
 	overflow: hidden;
 	flex: 0 0 auto;
@@ -274,16 +280,19 @@
 	gap: 6px;
 	padding: 6px 12px 6px 10px;
 	border-radius: 999px;
-	background: rgba(184, 74, 58, 0.18);
-	border: 1px solid rgba(184, 74, 58, 0.45);
-	color: #e89c90;
+	background: rgba(var(--danger-rgb), 0.18);
+	border: 1px solid rgba(var(--danger-rgb), 0.45);
+	/* `--danger` is the full danger red — readable on the 18-% danger wash
+	   in both themes. The previous `#e89c90` light pink only had contrast
+	   on the dark page bg. */
+	color: var(--danger);
 	font-family: var(--font-sans);
 	font-size: 12px;
 	font-weight: 600;
 	cursor: pointer;
 }
 .mc-head-status-cancel:hover {
-	background: rgba(184, 74, 58, 0.28);
+	background: rgba(var(--danger-rgb), 0.28);
 }
 .mc-head-status-cancel > i {
 	font-size: 11px;
