@@ -146,7 +146,7 @@
 	/** Anti-mistouch — real scale capability, two-way. */
 	const antiMistouch = $derived(snap?.scaleAntiMistouch ?? false);
 	/** The scale's auto-standby timeout, minutes — real capability. */
-	const standbyMinutes = $derived(snap?.scaleStandbyMinutes ?? 0);
+	const standbyMinutes = $derived(snap?.scaleStandby ?? 0);
 	/** Whether auto-standby is "on" — i.e. a non-zero timeout. */
 	const autoSleepOn = $derived(standbyMinutes > 0);
 
@@ -172,9 +172,9 @@
 	 * clamped to the scale's range). Two-way through `CremaApp`.
 	 */
 	function toggleAutoSleep(): void {
-		if (!app || !caps?.standby_minutes) return;
-		const range = caps.standby_minutes;
-		app.setScaleStandbyMinutes(autoSleepOn ? range.min : Math.max(range.min, Math.min(5, range.max)));
+		if (!app || !caps?.standby) return;
+		const range = caps.standby;
+		app.setScaleStandby(autoSleepOn ? range.min : Math.max(range.min, Math.min(5, range.max)));
 	}
 
 	/** Set the scale's display/behaviour mode by wire id. */
@@ -489,7 +489,7 @@
 					class="qmini-tog"
 					class:on={autoSleepOn}
 					onclick={toggleAutoSleep}
-					disabled={!caps?.standby_minutes}
+					disabled={!caps?.standby}
 					aria-label="Auto-sleep"
 				></button>
 			</div>

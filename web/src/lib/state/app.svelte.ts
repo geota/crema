@@ -34,7 +34,7 @@ import { parseCaptureFile, replayEvents, ReplayAbortedError } from '$lib/replay'
 import { describeError } from '$lib/utils/error';
 import {
 	CremaUiState,
-	DEFAULT_SCALE_STANDBY_MINUTES,
+	DEFAULT_SCALE_STANDBY,
 	DEFAULT_SCALE_VOLUME,
 	EMPTY_DE1_CALIBRATION,
 	type UiSnapshot
@@ -529,7 +529,7 @@ export class CremaApp {
 			scaleTimer: null,
 			scaleCapabilities: null,
 			scaleVolume: DEFAULT_SCALE_VOLUME,
-			scaleStandbyMinutes: DEFAULT_SCALE_STANDBY_MINUTES,
+			scaleStandby: DEFAULT_SCALE_STANDBY,
 			scaleFlowSmoothing: false,
 			scaleAutoStop: null,
 			scaleAntiMistouch: false,
@@ -773,14 +773,14 @@ export class CremaApp {
 
 	/**
 	 * Set the scale auto-standby timeout to `minutes`. Clamped to the
-	 * `standby_minutes` capability bounds; optimistic, then stream-confirmed.
+	 * `standby` capability bounds; optimistic, then stream-confirmed.
 	 */
-	async setScaleStandbyMinutes(minutes: number): Promise<void> {
-		const range = this.state.current.scaleCapabilities?.standby_minutes;
+	async setScaleStandby(minutes: number): Promise<void> {
+		const range = this.state.current.scaleCapabilities?.standby;
 		const clamped =
 			range !== undefined ? Math.min(Math.max(minutes, range.min), range.max) : minutes;
-		this.state.patch({ scaleStandbyMinutes: clamped });
-		this.applyCoreOutput(await this.core.setScaleStandbyMinutes(clamped));
+		this.state.patch({ scaleStandby: clamped });
+		this.applyCoreOutput(await this.core.setScaleStandby(clamped));
 	}
 
 	/** Toggle the scale's flow smoothing. Optimistic, then stream-confirmed. */

@@ -37,7 +37,7 @@ import {
 export const DEFAULT_SCALE_VOLUME = 3;
 
 /** Default scale auto-standby timeout (minutes) shown before the first reading. */
-export const DEFAULT_SCALE_STANDBY_MINUTES = 15;
+export const DEFAULT_SCALE_STANDBY = 15;
 
 /** Cap on the rolling event log — newest-first, oldest dropped past this. */
 export const MAX_LOG_LINES = 200;
@@ -99,7 +99,7 @@ export interface TelemetrySample {
 	readonly weightFlow?: number | null;
 	/**
 	 * Running shot volume dispensed at this instant, millilitres — the DE1's
-	 * `dispensed_volume_ml`, integrated by the core. `0` when no shot is in
+	 * `dispensed_volume`, integrated by the core. `0` when no shot is in
 	 * progress. Optional so a recorded shot pre-dating this field still
 	 * parses cleanly.
 	 */
@@ -135,7 +135,7 @@ export interface CompletedShot {
 	/** Authoritative shot duration, ms (the `Event::ShotCompleted` duration). */
 	readonly duration: number;
 	/** Final yield — scale weight at shot end, grams, or `null` if no scale. */
-	readonly yieldG: number | null;
+	readonly yieldOut: number | null;
 	/** Peak group pressure reached during the shot, bar. */
 	readonly peakPressure: number;
 	/** Peak group-head temperature reached during the shot, °C. */
@@ -202,7 +202,7 @@ export interface UiSnapshot {
 	/** The scale beeper-volume step the UI currently shows (two-way). */
 	readonly scaleVolume: number;
 	/** The scale auto-standby timeout (minutes) the UI shows (two-way). */
-	readonly scaleStandbyMinutes: number;
+	readonly scaleStandby: number;
 	/** The scale's battery charge percentage, or null. Read-only. */
 	readonly scaleBattery: number | null;
 	/** The connected scale's BLE advertised name, or null. Read-only. */
@@ -259,7 +259,7 @@ export interface UiSnapshot {
 	 * ticks (`docs/02-ble-protocol.md` §3.3). Resets to 0 on every
 	 * `ShotStarted`; updated on every `Telemetry` event.
 	 */
-	readonly dispensedVolumeMl: number;
+	readonly dispensedVolume: number;
 	/**
 	 * Zero-based index of the profile frame the DE1 is currently executing,
 	 * from `Event::ShotFrameChanged`. Reset to `0` on `ShotStarted`; drives the
@@ -434,19 +434,19 @@ export const EMPTY_DE1_CALIBRATION: De1Calibration = {};
  */
 export interface De1ShotSettingsSnapshot {
 	/** Target steam temperature, °C. */
-	readonly steamTempC: number;
+	readonly steamTemp: number;
 	/** Steam timeout, seconds. */
-	readonly steamTimeoutS: number;
+	readonly steamTimeout: number;
 	/** Target hot-water temperature, °C. */
-	readonly hotWaterTempC: number;
+	readonly hotWaterTemp: number;
 	/** Hot-water target volume, ml. */
-	readonly hotWaterVolumeMl: number;
+	readonly hotWaterVolume: number;
 	/** Hot-water timeout, seconds. */
-	readonly hotWaterTimeoutS: number;
+	readonly hotWaterTimeout: number;
 	/** Espresso target volume, ml. */
-	readonly espressoVolumeMl: number;
+	readonly espressoVolume: number;
 	/** Espresso group target temperature, °C. */
-	readonly groupTempC: number;
+	readonly groupTemp: number;
 }
 
 /**
@@ -510,7 +510,7 @@ export const INITIAL_SNAPSHOT: UiSnapshot = {
 	scaleTimer: null,
 	scaleCapabilities: null,
 	scaleVolume: DEFAULT_SCALE_VOLUME,
-	scaleStandbyMinutes: DEFAULT_SCALE_STANDBY_MINUTES,
+	scaleStandby: DEFAULT_SCALE_STANDBY,
 	scaleBattery: null,
 	scaleName: null,
 	scaleFirmware: null,
@@ -526,7 +526,7 @@ export const INITIAL_SNAPSHOT: UiSnapshot = {
 	shotTelemetry: [],
 	shotInProgress: false,
 	shotElapsed: 0,
-	dispensedVolumeMl: 0,
+	dispensedVolume: 0,
 	shotFrame: 0,
 	completedShot: null,
 	de1Diagnostics: EMPTY_DE1_DIAGNOSTICS,
@@ -721,7 +721,7 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				shotTelemetry: [],
 				shotInProgress: true,
 				shotElapsed: 0,
-				dispensedVolumeMl: 0,
+				dispensedVolume: 0,
 				shotFrame: 0,
 				completedShot: null,
 				eventLog: appendLog(snapshot.eventLog, 'Shot started')
@@ -757,7 +757,7 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				steamTemp: t.steam_temp,
 				weight: snapshot.scaleWeight,
 				weightFlow: snapshot.scaleFlow,
-				dispensedVolume: t.dispensed_volume_ml,
+				dispensedVolume: t.dispensed_volume,
 				resistance: t.resistance ?? null,
 				setHeadTemp: t.set_head_temp,
 				setGroupPressure: t.set_group_pressure,
@@ -774,7 +774,7 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				latestTelemetry: sample,
 				shotTelemetry: series,
 				shotElapsed: t.elapsed,
-				dispensedVolumeMl: t.dispensed_volume_ml
+				dispensedVolume: t.dispensed_volume
 			};
 		}
 		case 'ScaleReading': {
@@ -796,7 +796,7 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				scaleFlow: r.device_flow ?? r.flow ?? null,
 				scaleTimer: r.device_timer ?? null,
 				scaleVolume: r.device_volume ?? snapshot.scaleVolume,
-				scaleStandbyMinutes: r.device_standby ?? snapshot.scaleStandbyMinutes,
+				scaleStandby: r.device_standby ?? snapshot.scaleStandby,
 				scaleBattery: r.device_battery ?? snapshot.scaleBattery,
 				scaleFlowSmoothing: r.device_flow_smoothing ?? snapshot.scaleFlowSmoothing,
 				scaleAutoStop: r.device_auto_stop ?? snapshot.scaleAutoStop
@@ -836,7 +836,7 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				shotInProgress: false,
 				completedShot: {
 					duration: event.content.duration,
-					yieldG: event.content.final_weight ?? null,
+					yieldOut: event.content.final_weight ?? null,
 					peakPressure: event.content.peak_pressure ?? 0,
 					peakTemp: event.content.peak_temp ?? 0,
 					completedAt: performance.now()
@@ -1012,19 +1012,19 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 			return {
 				...snapshot,
 				de1ShotSettings: {
-					steamTempC: c.steam_temp_c,
-					steamTimeoutS: c.steam_timeout_s,
-					hotWaterTempC: c.hot_water_temp_c,
-					hotWaterVolumeMl: c.hot_water_volume_ml,
-					hotWaterTimeoutS: c.hot_water_timeout_s,
-					espressoVolumeMl: c.espresso_volume_ml,
-					groupTempC: c.group_temp_c
+					steamTemp: c.steam_temp,
+					steamTimeout: c.steam_timeout,
+					hotWaterTemp: c.hot_water_temp,
+					hotWaterVolume: c.hot_water_volume,
+					hotWaterTimeout: c.hot_water_timeout,
+					espressoVolume: c.espresso_volume,
+					groupTemp: c.group_temp
 				},
 				eventLog: appendLog(
 					snapshot.eventLog,
-					`ShotSettings read: steam ${c.steam_temp_c} °C/${c.steam_timeout_s} s · ` +
-						`hot water ${c.hot_water_temp_c} °C/${c.hot_water_volume_ml} ml/${c.hot_water_timeout_s} s · ` +
-						`group ${c.group_temp_c} °C`
+					`ShotSettings read: steam ${c.steam_temp} °C/${c.steam_timeout} s · ` +
+						`hot water ${c.hot_water_temp} °C/${c.hot_water_volume} ml/${c.hot_water_timeout} s · ` +
+						`group ${c.group_temp} °C`
 				)
 			};
 		}

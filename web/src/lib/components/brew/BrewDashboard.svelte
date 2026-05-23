@@ -121,7 +121,7 @@
 	// Targets are hardcoded for now; they'll come from the per-mode
 	// Settings sections once they land (docs/21). Steam target = 8 s,
 	// Flush target = 4 s. Hot water defaults to 30 s as a placeholder
-	// time-budget until we wire `dispensedVolumeMl` against a
+	// time-budget until we wire `dispensedVolume` against a
 	// settings-driven `hotWaterVolMl` target.
 	/**
 	 * Per-mode target ceilings: the steam / hot-water timeouts the DE1's
@@ -149,8 +149,8 @@
 		// per-shot params via `params.current`) > hardcoded legacy default.
 		// The QC value is the user's intent; the machine value is what
 		// the firmware currently has loaded.
-		steaming: posOr(ui.de1ShotSettings?.steamTimeoutS, posOr(params.current.steamTime, 90)),
-		dispensing: posOr(ui.de1ShotSettings?.hotWaterTimeoutS, 30),
+		steaming: posOr(ui.de1ShotSettings?.steamTimeout, posOr(params.current.steamTime, 90)),
+		dispensing: posOr(ui.de1ShotSettings?.hotWaterTimeout, 30),
 		flushing: posOr(params.current.flushTime, 4)
 	}));
 	/**
@@ -189,8 +189,8 @@
 	const MODE_TARGET_LABEL = $derived.by<
 		Record<'steaming' | 'dispensing' | 'flushing', string>
 	>(() => ({
-		steaming: `${formatTemp(posOr(ui.de1ShotSettings?.steamTempC, posOr(params.current.steamTemp, 148)), prefs.tempUnit)} · ${posOr(ui.de1ShotSettings?.steamTimeoutS, posOr(params.current.steamTime, 90))} s`,
-		dispensing: `${formatTemp(posOr(ui.de1ShotSettings?.hotWaterTempC, posOr(params.current.waterTemp, 92)), prefs.tempUnit)} · ${formatVolume(posOr(ui.de1ShotSettings?.hotWaterVolumeMl, posOr(params.current.waterVolume, 250)), prefs.volumeUnit)}`,
+		steaming: `${formatTemp(posOr(ui.de1ShotSettings?.steamTemp, posOr(params.current.steamTemp, 148)), prefs.tempUnit)} · ${posOr(ui.de1ShotSettings?.steamTimeout, posOr(params.current.steamTime, 90))} s`,
+		dispensing: `${formatTemp(posOr(ui.de1ShotSettings?.hotWaterTemp, posOr(params.current.waterTemp, 92)), prefs.tempUnit)} · ${formatVolume(posOr(ui.de1ShotSettings?.hotWaterVolume, posOr(params.current.waterVolume, 250)), prefs.volumeUnit)}`,
 		flushing: `${formatTemp(flushTempC, prefs.tempUnit)} · ${posOr(params.current.flushTime, 4)} s`
 	}));
 	/**
@@ -307,7 +307,7 @@
 		if (activeProfile) {
 			return {
 				dose: activeProfile.dose,
-				yield: activeProfile.yieldG,
+				yield: activeProfile.yieldOut,
 				brewTemp: activeProfile.brewTemp,
 				preinf: preinfuseSeconds(activeProfile.segments)
 			};
@@ -545,7 +545,7 @@
 	 * the shot's result rather than the drifting scale. The 4-up WEIGHT readout
 	 * and the foot keep the live `weight`.
 	 */
-	const shotWeight = $derived(showLastShot && lastShot ? lastShot.yieldG : weight);
+	const shotWeight = $derived(showLastShot && lastShot ? lastShot.yieldOut : weight);
 	/** Yield / Ratio weight in the chosen weight unit. */
 	const shotWeightM = $derived(convertWeight(shotWeight, prefs.weightUnit));
 	/** Brew-temperature target, in the chosen temperature unit. */
@@ -607,7 +607,7 @@
 				: '0.0';
 		}
 		if (tel === null) return '—';
-		return formatDispensedMl(ui.dispensedVolumeMl, prefs.volumeUnit);
+		return formatDispensedMl(ui.dispensedVolume, prefs.volumeUnit);
 	});
 	const dispensedVolumeUnit = $derived(prefs.volumeUnit === 'floz' ? 'fl oz' : 'ml');
 	/**

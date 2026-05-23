@@ -123,7 +123,7 @@ export interface CremaProfile {
 	/** Dose target, grams. */
 	dose: number;
 	/** Yield target, grams. */
-	yieldG: number;
+	yieldOut: number;
 	/** Brew temperature, °C. */
 	brewTemp: number;
 	/** End the shot when the scale reaches the yield target. */
@@ -179,8 +179,8 @@ export function uid(prefix: string): string {
  * Profiles and History screens read identical ratios from the same
  * inputs and any future shell picks up the same arithmetic.
  */
-export function ratioLabel(p: Pick<CremaProfile, 'dose' | 'yieldG'>): string {
-	return formatRatio(p.dose, p.yieldG);
+export function ratioLabel(p: Pick<CremaProfile, 'dose' | 'yieldOut'>): string {
+	return formatRatio(p.dose, p.yieldOut);
 }
 
 /**
@@ -439,7 +439,7 @@ export function fromCoreProfile(profile: Profile, index: number): CremaProfile {
 		dose: profile.dose > 0 ? profile.dose : 18,
 		// The yield target is the profile's DE1 `target_weight`; fall back to a
 		// neutral default for a profile that carries none.
-		yieldG: profile.target_weight > 0 ? profile.target_weight : 36,
+		yieldOut: profile.target_weight > 0 ? profile.target_weight : 36,
 		brewTemp: Math.round(meanTemp * 2) / 2,
 		stopOnWeight: true,
 		autoTare: true,
@@ -475,7 +475,7 @@ export function toCoreProfile(p: CremaProfile): Profile {
 		maximum_flow: 0,
 		max_total_volume_ml: p.maxTotalVolumeMl,
 		// The yield target round-trips as the DE1 profile's `target_weight`.
-		target_weight: p.yieldG,
+		target_weight: p.yieldOut,
 		// The dose round-trips as the DE1 profile's `dose` field.
 		dose: p.dose,
 		// New v2 fields (docs/22 §4.1).
@@ -556,7 +556,7 @@ export function blankProfile(): CremaProfile {
 		pinned: false,
 		lastUsed: null,
 		dose: 18,
-		yieldG: 36,
+		yieldOut: 36,
 		brewTemp: 93,
 		stopOnWeight: true,
 		autoTare: true,

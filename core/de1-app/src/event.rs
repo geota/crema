@@ -116,7 +116,7 @@ pub enum Event {
         /// telemetry flow stream against the DE1's `sample_time` ticks
         /// (BLE-jitter-immune when the line-frequency is known, host-clock
         /// fallback otherwise). Resets to 0 on every `ShotStarted`.
-        dispensed_volume_ml: f32,
+        dispensed_volume: f32,
         /// Target group-head temperature, °C — the heater setpoint for the
         /// active frame. Legacy "Goal temperature" curve on the live shot
         /// chart (`de1_de1.tcl:540` maps `goal_temperature ← SetHeadTemp`).
@@ -352,19 +352,19 @@ pub enum Event {
     /// and reaprime's `shotSettings` notify stream.
     ShotSettingsRead {
         /// Target steam temperature, °C.
-        steam_temp_c: f32,
+        steam_temp: f32,
         /// Steam timeout, seconds.
-        steam_timeout_s: f32,
+        steam_timeout: f32,
         /// Target hot-water temperature, °C.
-        hot_water_temp_c: f32,
+        hot_water_temp: f32,
         /// Hot-water volume, ml.
-        hot_water_volume_ml: f32,
+        hot_water_volume: f32,
         /// Hot-water timeout, seconds.
-        hot_water_timeout_s: f32,
+        hot_water_timeout: f32,
         /// Espresso target volume, ml.
-        espresso_volume_ml: f32,
+        espresso_volume: f32,
         /// Espresso group target temperature, °C.
-        group_temp_c: f32,
+        group_temp: f32,
     },
     /// A profile upload has begun. Carries the total number of acks the
     /// orchestrator expects (frames + extensions + tail; the header is

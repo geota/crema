@@ -77,10 +77,10 @@
 	);
 
 	/** Final (or peak) yield weight, grams, for the yield metric. */
-	const yieldG = $derived(shot.finalWeight ?? shot.peakWeight);
+	const yieldOut = $derived(shot.finalWeight ?? shot.peakWeight);
 	/** The yield weight in the chosen weight unit (D1). */
 	const settings = getSettingsStore();
-	const yieldM = $derived(convertWeight(yieldG, settings.current.weightUnit));
+	const yieldM = $derived(convertWeight(yieldOut, settings.current.weightUnit));
 
 	/**
 	 * The always-5-glyph star string — filled glyphs for the rating, empty for
