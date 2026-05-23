@@ -25,6 +25,7 @@
 import type { CremaCore, NotificationSource } from '$lib/core';
 import { MmrRegister, WriteTarget } from '$lib/core/crema-core';
 import { describeError } from '$lib/utils/error';
+import type { BleConnectionState } from './connection-state';
 import { De1Uuids } from './de1-uuids';
 import { requestDevice, type ConnState } from './transport';
 import type { De1Transport } from './de1-transport';
@@ -40,15 +41,13 @@ type De1NotificationSource = Extract<
 	| 'De1FrameAck'
 >;
 
-/** Coarse state of the DE1 connection — mirrors the Android manager's enum. */
-export type De1State =
-	| 'idle'
-	| 'connecting'
-	| 'subscribing'
-	| 'ready'
-	| 'reconnecting'
-	| 'disconnected'
-	| 'failed';
+/**
+ * Coarse state of the DE1 connection — an alias of {@link BleConnectionState},
+ * the shared BLE-manager lifecycle. Kept as `De1State` for backward
+ * compatibility at the existing call sites; new code should import
+ * `BleConnectionState` directly from `$lib/ble`.
+ */
+export type De1State = BleConnectionState;
 
 /**
  * The connection-diagnostics snapshot folded into the UI state — proof, after

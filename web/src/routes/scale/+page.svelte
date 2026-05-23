@@ -25,6 +25,7 @@
 	 * dose target and the brew-behaviour toggles (auto-tare / stop-on-weight)
 	 * are local UI state. Each is marked with a `// TODO`.
 	 */
+	import { bleStateLabel } from '$lib/ble';
 	import { getCremaAppContext } from '$lib/shell/app-context';
 	import { getProfileStore } from '$lib/profiles';
 	import { getSettingsStore, convertWeight, formatWeight } from '$lib/settings';
@@ -80,19 +81,7 @@
 	}
 
 	/** A human label for the coarse connection state. */
-	const statusLabel = $derived(
-		(
-			{
-				idle: 'Not connected',
-				connecting: 'Connecting…',
-				subscribing: 'Subscribing…',
-				ready: 'Connected',
-				reconnecting: 'Reconnecting…',
-				disconnected: 'Disconnected',
-				failed: 'Connection failed'
-			} as const
-		)[scaleState]
-	);
+	const statusLabel = $derived(bleStateLabel(scaleState));
 
 	// ── Tare-flash ───────────────────────────────────────────────────────
 	/** When true, the hero readout flashes copper (a 600 ms pulse after a tare). */

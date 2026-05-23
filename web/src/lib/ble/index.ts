@@ -7,6 +7,7 @@
  * managers' `connect()` methods are wired straight to button handlers.
  */
 
+export { bleStateLabel, type BleConnectionState } from './connection-state';
 export { De1Uuids } from './de1-uuids';
 export {
 	BleDevice,
