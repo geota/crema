@@ -814,7 +814,7 @@
 						icon="drop"
 						label="FLOW"
 						value={fmt(tel?.flow)}
-						unit="ml/s"
+						unit="mL/s"
 						color="var(--tel-flow)"
 						secondaryLabel="WATER"
 						secondaryValue={dispensedVolumeVal}

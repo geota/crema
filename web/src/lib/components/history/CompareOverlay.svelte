@@ -61,7 +61,7 @@
 	/** Y-axis unit label, by channel + user pref. */
 	const yUnit = $derived.by(() => {
 		if (channel === 'pressure') return unitLabel('pressure', prefs);
-		if (channel === 'flow') return 'ml/s';
+		if (channel === 'flow') return 'mL/s';
 		if (channel === 'temp') return unitLabel('temp', prefs);
 		return unitLabel('weight', prefs);
 	});
