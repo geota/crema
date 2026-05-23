@@ -194,26 +194,25 @@
 		flushing: `${formatTemp(flushTempC, prefs.tempUnit)} · ${posOr(params.current.flushTime, 4)} s`
 	}));
 	/**
-	 * `performance.now()` when the DE1 first transitioned into the
-	 * current service mode. Reset to `null` whenever the mode returns to
-	 * idle so the next start gets a fresh `t = 0`. The associated
-	 * `modeNowMs` ticks every 250 ms while a mode is active, giving the
-	 * progress bar a smooth fill without coupling to the BLE telemetry
-	 * cadence (which can be sparse during HotWater / Flush).
+	 * `performance.now()` when the DE1 transitioned into the current
+	 * service mode — a pure `$derived` keyed off `modeState`. Recomputes
+	 * (and re-anchors to the wall clock) exactly when `modeState`
+	 * changes, so an idle → non-idle flip yields a fresh `t = 0` and a
+	 * non-idle → non-idle flip (cancel-and-restart) re-anchors cleanly
+	 * too. The associated `modeNowMs` is a tiny write-only effect that
+	 * ticks every 250 ms while a mode is active, giving the progress
+	 * bar a smooth fill without coupling to the BLE telemetry cadence.
 	 */
-	let modeStartedAtMs = $state<number | null>(null);
+	const modeStartedAtMs = $derived<number | null>(
+		modeState === 'idle' ? null : performance.now()
+	);
 	let modeNowMs = $state(0);
+	// Tick: pure write — seeds `modeNowMs` to the current wall clock on
+	// transition (so the first frame reads elapsed ≈ 0) and ticks it every
+	// 250 ms while a mode is active. No own-state read.
 	$effect(() => {
-		if (modeState === 'idle') {
-			modeStartedAtMs = null;
-			return;
-		}
-		// First tick after a transition: anchor `started` if absent and
-		// align `now` so elapsed = 0 on the first render.
-		if (modeStartedAtMs === null) {
-			modeStartedAtMs = performance.now();
-			modeNowMs = modeStartedAtMs;
-		}
+		if (modeState === 'idle') return;
+		modeNowMs = performance.now();
 		const id = window.setInterval(() => {
 			modeNowMs = performance.now();
 		}, 250);

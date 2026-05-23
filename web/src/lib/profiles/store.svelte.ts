@@ -23,6 +23,8 @@
  * `localStorage`.
  */
 
+import { SvelteSet } from 'svelte/reactivity';
+
 import { loadCore } from '$lib/core';
 import { readJson, writeJson } from '$lib/utils/storage';
 import {
@@ -65,21 +67,22 @@ interface BuiltinOverride {
  */
 export class ProfileStore {
 	/** The built-in profiles, adapted from the core. Empty until loaded. */
-	private builtins = $state<CremaProfile[]>([]);
+	private builtins = $state.raw<CremaProfile[]>([]);
 	/** The user's custom profiles, from localStorage. */
-	private custom = $state<CremaProfile[]>(readJson<CremaProfile[]>(CUSTOM_KEY, []));
+	private custom = $state.raw<CremaProfile[]>(readJson<CremaProfile[]>(CUSTOM_KEY, []));
 	/** Per-built-in user overrides (pin / last-used). */
-	private overrides = $state<Record<string, BuiltinOverride>>(
+	private overrides = $state.raw<Record<string, BuiltinOverride>>(
 		readJson<Record<string, BuiltinOverride>>(OVERRIDES_KEY, {})
 	);
 	/**
 	 * The set of built-in ids the user has hidden from the library.
 	 * Persisted to localStorage. A hidden built-in is excluded from
 	 * `all` but is still in `builtins` — restoring it is just removing
-	 * the id from this set.
+	 * the id from this set. `SvelteSet` so add/delete mutate in place
+	 * and stay reactive — no per-toggle full-set allocation.
 	 */
-	private hiddenBuiltins = $state<Set<string>>(
-		new Set(readJson<string[]>(HIDDEN_BUILTINS_KEY, []))
+	private hiddenBuiltins = new SvelteSet<string>(
+		readJson<string[]>(HIDDEN_BUILTINS_KEY, [])
 	);
 	/** The id of the profile marked active on the Brew dashboard. */
 	activeId = $state<string | null>(readJson<string | null>(ACTIVE_KEY, null));
@@ -208,7 +211,7 @@ export class ProfileStore {
 	 */
 	delete(id: string): void {
 		if (id.startsWith('builtin:')) {
-			this.hiddenBuiltins = new Set([...this.hiddenBuiltins, id]);
+			this.hiddenBuiltins.add(id);
 			this.persistHiddenBuiltins();
 		} else {
 			this.custom = this.custom.filter((p) => p.id !== id);
@@ -219,7 +222,7 @@ export class ProfileStore {
 
 	/** Persist the hidden-builtins set to localStorage. */
 	private persistHiddenBuiltins(): void {
-		writeJson(HIDDEN_BUILTINS_KEY, [...this.hiddenBuiltins]);
+		writeJson(HIDDEN_BUILTINS_KEY, Array.from(this.hiddenBuiltins));
 	}
 
 	/**
@@ -228,10 +231,7 @@ export class ProfileStore {
 	 * the card shows while in the "Hidden" filter view.
 	 */
 	unhideBuiltin(id: string): void {
-		if (!this.hiddenBuiltins.has(id)) return;
-		const next = new Set(this.hiddenBuiltins);
-		next.delete(id);
-		this.hiddenBuiltins = next;
+		if (!this.hiddenBuiltins.delete(id)) return;
 		this.persistHiddenBuiltins();
 	}
 

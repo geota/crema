@@ -12,18 +12,24 @@
 	 */
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
+	import { resolve } from '$app/paths';
 	import type { CremaApp } from '$lib/state';
 	import type { De1State, ScaleState } from '$lib/ble';
 
 	let { app }: { app: CremaApp | null } = $props();
 
-	/** Nav model — id, icon (Phosphor name), label, route, keyboard digit. */
+	/**
+	 * Nav model — id, icon (Phosphor name), resolved route, label, keyboard digit.
+	 * `href` is the resolved pathname (via `resolve(...)`) so the rail honours any
+	 * future `paths.base` config and stays correct under SvelteKit 2's typed
+	 * route table.
+	 */
 	const items = [
-		{ id: 'brew', icon: 'coffee', label: 'Brew', href: '/', kbd: '1' },
-		{ id: 'profiles', icon: 'list-bullets', label: 'Profiles', href: '/profiles', kbd: '2' },
-		{ id: 'history', icon: 'chart-line', label: 'History', href: '/history', kbd: '3' },
-		{ id: 'scale', icon: 'scales', label: 'Scale', href: '/scale', kbd: '4' },
-		{ id: 'settings', icon: 'gear-six', label: 'Settings', href: '/settings', kbd: '5' }
+		{ id: 'brew', icon: 'coffee', label: 'Brew', href: resolve('/'), kbd: '1' },
+		{ id: 'profiles', icon: 'list-bullets', label: 'Profiles', href: resolve('/profiles'), kbd: '2' },
+		{ id: 'history', icon: 'chart-line', label: 'History', href: resolve('/history'), kbd: '3' },
+		{ id: 'scale', icon: 'scales', label: 'Scale', href: resolve('/scale'), kbd: '4' },
+		{ id: 'settings', icon: 'gear-six', label: 'Settings', href: resolve('/settings'), kbd: '5' }
 	];
 
 	/** The active item is the one whose href matches the current path. */

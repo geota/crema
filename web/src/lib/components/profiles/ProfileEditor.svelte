@@ -21,6 +21,7 @@
 	 * shows this with a "Duplicate" heading.
 	 */
 	import { goto } from '$app/navigation';
+	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import {
 		getProfileStore,
@@ -237,7 +238,7 @@
 			: draft;
 		store.save(toSave);
 		dirty = false;
-		void goto('/profiles');
+		void goto(resolve('/profiles'));
 	}
 
 	/** Discard edits — revert the draft to its loaded baseline. */
@@ -260,7 +261,7 @@
 	/** Back to the library — warn on unsaved edits. */
 	function back(): void {
 		if (dirty && !confirm('Leave the editor? Unsaved changes will be lost.')) return;
-		void goto('/profiles');
+		void goto(resolve('/profiles'));
 	}
 
 	const roastOptions: Roast[] = ['light', 'medium', 'dark'];
