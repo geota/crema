@@ -7,7 +7,7 @@
 	import type { StoredShot } from '$lib/history';
 	import { ratioLabel, stars } from '$lib/history';
 	import { getSettingsStore, convertWeight } from '$lib/settings';
-	import QSparkline, { type SparkShape } from '$lib/components/brew/QSparkline.svelte';
+	import MiniShotChart from './MiniShotChart.svelte';
 
 	let {
 		shot,
@@ -61,21 +61,6 @@
 		return `${Math.round(d / 7)} wk ago`;
 	});
 
-	/**
-	 * Pick a sparkline silhouette from the curve's peak pressure — a rough,
-	 * purely-cosmetic classification, the History-page analogue of the
-	 * profile library's `sparkShape`.
-	 */
-	const shape = $derived<SparkShape>(
-		shot.peakPressure >= 10
-			? 'classic'
-			: shot.peakPressure >= 7
-				? 'rao'
-				: shot.peakPressure >= 4
-					? 'turbo'
-					: 'blooming'
-	);
-
 	/** Final (or peak) yield weight, grams, for the yield metric. */
 	const yieldOut = $derived(shot.finalWeight ?? shot.peakWeight);
 	/** The yield weight in the chosen weight unit (D1). */
@@ -108,12 +93,7 @@
 		<div class="hi-row-time-d">{ago}</div>
 	</div>
 	<div class="hi-row-spark">
-		<QSparkline
-			{shape}
-			width={48}
-			height={20}
-			color={selected || active ? 'var(--copper-400)' : 'rgba(var(--tint-rgb), 0.45)'}
-		/>
+		<MiniShotChart series={shot.series} width={96} height={32} />
 	</div>
 	<div class="hi-row-main">
 		<div class="hi-row-name">{shot.profileName ?? 'Untitled shot'}</div>
@@ -141,7 +121,9 @@
 <style>
 	.hi-row {
 		display: grid;
-		grid-template-columns: 60px 56px 1fr auto auto auto;
+		/* Slot 2 (96 px) holds the MiniShotChart — the recorded shot's
+		   pressure / flow / weight silhouette, the row's at-a-glance hook. */
+		grid-template-columns: 60px 96px 1fr auto auto auto;
 		gap: 12px;
 		align-items: center;
 		padding: 10px 12px;
@@ -155,7 +137,7 @@
 	}
 	.hi-row.is-selectmode {
 		/* Reserve a slot for the leading checkbox without shifting the rest. */
-		grid-template-columns: 22px 60px 56px 1fr auto auto auto;
+		grid-template-columns: 22px 60px 96px 1fr auto auto auto;
 	}
 	.hi-row:hover:not(:disabled) {
 		background: rgba(var(--tint-rgb), 0.04);

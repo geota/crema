@@ -21,12 +21,25 @@
 
 	let {
 		segments,
-		active = false
+		active = false,
+		compact = false
 	}: {
 		/** The profile's segments — the real curve is computed from these. */
 		segments: ProfileSegment[];
 		/** Whether the owning card is the active profile (warmer box tint). */
 		active?: boolean;
+		/**
+		 * Compact thumbnail mode — used by the brew Quick Sheet favorites strip,
+		 * which renders the preview at chip size (~70×30 px). Chrome is stripped
+		 * down to a bare silhouette of the curves:
+		 *   - no dashed time grid, no axis labels (left or right)
+		 *   - no pre-infusion chip, no channel-legend chips
+		 *   - temperature line dropped (3 lines → 2: pressure + flow)
+		 *   - mounts eagerly — favourite chips are always on-screen while the
+		 *     strip is, so the IntersectionObserver lazy-mount machinery would
+		 *     just add a paint round-trip for no benefit.
+		 */
+		compact?: boolean;
 	} = $props();
 
 	/** Build a chart once its card scrolls within this margin of the viewport. */
@@ -97,29 +110,21 @@
 		};
 	}
 
-	function buildOpts(w: number, h: number): uPlot.Options {
+	function buildOpts(w: number, h: number, isCompact: boolean): uPlot.Options {
 		// Canvas strokes can't resolve `var()` — resolve the chart tokens here.
 		const gridColor = cssVar('--chart-grid');
 		const labelColor = cssVar('--chart-axis-label');
 		const font = '9px "JetBrains Mono", monospace';
-		return {
-			width: w,
-			height: h,
-			padding: [14, 4, 2, 2],
-			cursor: { show: false },
-			legend: { show: false },
-			scales: {
-				// 0 → total shot time; a one-second floor avoids a zero-width axis.
-				x: {
-					time: false,
-					range: (_u, _min, dataMax) => [0, Math.max(1, Number.isFinite(dataMax) ? dataMax : 1)]
-				},
-				// A fixed 0–12 bar / ml·s scale — the design's grid max.
-				y: { range: () => [0, 12] },
-				// Temperature on its own scale + right axis.
-				temp: { range: () => [TEMP_MIN, TEMP_MAX] }
-			},
-			axes: [
+		// Compact mode strips all chrome down to bare curves — no axis chips, no
+		// grid, no labels, and only the pressure + flow channels (temperature
+		// drops out so the small box does not look noisy with 3 stacked lines).
+		const axes: uPlot.Axis[] = isCompact
+			? [
+				{ scale: 'x', show: false, grid: { show: false }, ticks: { show: false } },
+				{ scale: 'y', show: false, grid: { show: false }, ticks: { show: false } },
+				{ scale: 'temp', show: false, grid: { show: false }, ticks: { show: false } }
+			]
+			: [
 				{
 					scale: 'x',
 					stroke: labelColor,
@@ -154,7 +159,38 @@
 					splits: () => [80, 90, 100],
 					values: (_u, splits) => splits.map((v) => `${v}°`)
 				}
-			],
+			];
+		// The temp series — kept as a placeholder column so the data shape
+		// (x, flow, pressure, temp) stays identical between modes, but the
+		// line itself is hidden in compact previews.
+		const tempSeries: uPlot.Series = isCompact
+			? { scale: 'temp', show: false, points: { show: false } }
+			: {
+				scale: 'temp',
+				stroke: () => cssVar('--tel-temp'),
+				width: 1.6,
+				paths: tempStepPath,
+				points: { show: false }
+			};
+		return {
+			width: w,
+			height: h,
+			// Compact has no axis labels, so it can hug the box edges.
+			padding: isCompact ? [1, 1, 1, 1] : [14, 4, 2, 2],
+			cursor: { show: false },
+			legend: { show: false },
+			scales: {
+				// 0 → total shot time; a one-second floor avoids a zero-width axis.
+				x: {
+					time: false,
+					range: (_u, _min, dataMax) => [0, Math.max(1, Number.isFinite(dataMax) ? dataMax : 1)]
+				},
+				// A fixed 0–12 bar / ml·s scale — the design's grid max.
+				y: { range: () => [0, 12] },
+				// Temperature on its own scale + right axis.
+				temp: { range: () => [TEMP_MIN, TEMP_MAX] }
+			},
+			axes,
 			series: [
 				{},
 				{
@@ -162,7 +198,7 @@
 					scale: 'y',
 					stroke: () => cssVar('--tel-flow'),
 					fill: fillFor('--tel-flow', '24'),
-					width: 1.4,
+					width: isCompact ? 1.2 : 1.4,
 					dash: [3, 3],
 					points: { show: false }
 				},
@@ -171,17 +207,10 @@
 					scale: 'y',
 					stroke: () => cssVar('--tel-pressure'),
 					fill: fillFor('--tel-pressure', '4D'),
-					width: 2.4,
+					width: isCompact ? 1.6 : 2.4,
 					points: { show: false }
 				},
-				{
-					// The per-segment temperature — a stepped line, right °C axis.
-					scale: 'temp',
-					stroke: () => cssVar('--tel-temp'),
-					width: 1.6,
-					paths: tempStepPath,
-					points: { show: false }
-				}
+				tempSeries
 			]
 		};
 	}
@@ -193,13 +222,24 @@
 	let plotEl = $state<HTMLDivElement>();
 	let chart: uPlot | null = null;
 	let resizeObs: ResizeObserver | null = null;
-	/** Flips true once the card nears the viewport — gates chart construction. */
-	let mounted = $state(false);
+	/**
+	 * Flips true once the card nears the viewport — gates chart construction
+	 * in the full preview. Compact previews skip the IntersectionObserver and
+	 * mount eagerly: favourite chips are visible the whole time their strip
+	 * is, so the lazy machinery would add a paint round-trip for no benefit.
+	 *
+	 * `compact` is a prop (so technically reactive), but the mode never
+	 * changes for a given instance — a chip stays a chip. `untrack` the
+	 * one-shot initial read so svelte-check doesn't flag this as
+	 * "captures only the initial value" (it does, deliberately).
+	 */
+	let mounted = $state(untrack(() => compact));
 
 	// Arm the chart lazily: build uPlot only once the card scrolls into reach,
 	// so a gridful of profiles doesn't construct every chart in one frame.
+	// Compact previews skip this — they pre-mount above.
 	$effect(() => {
-		if (mounted || !boxEl) return;
+		if (compact || mounted || !boxEl) return;
 		const io = new IntersectionObserver(
 			(entries) => {
 				if (entries.some((e) => e.isIntersecting)) {
@@ -220,7 +260,7 @@
 		const el = plotEl;
 		const w = Math.max(1, el.clientWidth);
 		const h = Math.max(1, el.clientHeight);
-		chart = new uPlot(buildOpts(w, h), toData(untrack(() => segments)), el);
+		chart = new uPlot(buildOpts(w, h, compact), toData(untrack(() => segments)), el);
 
 		// Track the card's live width / height so the chart always fills its box.
 		resizeObs = new ResizeObserver((entries) => {
@@ -254,32 +294,41 @@
 			const w = Math.max(1, el.clientWidth);
 			const h = Math.max(1, el.clientHeight);
 			chart.destroy();
-			chart = new uPlot(buildOpts(w, h), toData(segments), el);
+			chart = new uPlot(buildOpts(w, h, compact), toData(segments), el);
 		});
 	});
 </script>
 
-<div class="pp-preview" class:is-active={active} bind:this={boxEl}>
+<div
+	class="pp-preview"
+	class:is-active={active}
+	class:is-compact={compact}
+	bind:this={boxEl}
+>
 	{#if mounted}
 		<div class="pp-preview-plot" bind:this={plotEl}></div>
 	{/if}
 
-	<!-- Channel legend (top-left) — the preview's only legend, so it stays. -->
-	<div class="pp-preview-legend">
-		<span class="pp-preview-chip" style="--c:var(--tel-pressure)">
-			<i></i><span>Pressure</span>
-		</span>
-		<span class="pp-preview-chip" style="--c:var(--tel-flow)">
-			<i></i><span>Flow</span>
-		</span>
-		<span class="pp-preview-chip pp-preview-chip-dashed" style="--c:var(--tel-temp)">
-			<i></i><span>Temp</span>
-		</span>
-	</div>
+	<!--
+		Channel legend + pre-inf chip are full-preview chrome only; compact
+		thumbnails drop them so the silhouette can breathe at chip size.
+	-->
+	{#if !compact}
+		<div class="pp-preview-legend">
+			<span class="pp-preview-chip" style="--c:var(--tel-pressure)">
+				<i></i><span>Pressure</span>
+			</span>
+			<span class="pp-preview-chip" style="--c:var(--tel-flow)">
+				<i></i><span>Flow</span>
+			</span>
+			<span class="pp-preview-chip pp-preview-chip-dashed" style="--c:var(--tel-temp)">
+				<i></i><span>Temp</span>
+			</span>
+		</div>
 
-	<!-- Pre-infusion (top-right) — "Pre-inf" matches the card's metric label. -->
-	{#if preinf > 0}
-		<div class="pp-preview-corner">Pre-inf · {preinf}s</div>
+		{#if preinf > 0}
+			<div class="pp-preview-corner">Pre-inf · {preinf}s</div>
+		{/if}
 	{/if}
 </div>
 
@@ -290,6 +339,25 @@
 	.pp-preview {
 		height: auto;
 		aspect-ratio: 11 / 5;
+	}
+	/*
+	 * Compact thumbnail — used by the brew Quick Sheet favorites strip. The
+	 * shared `.pp-preview` rules (in `styles/profiles-page.css`) give the
+	 * box a 132 px height, a card-tinted background, a border and rounded
+	 * corners. At chip size none of that reads — override to a small
+	 * transparent box so the silhouette can sit next to the name / ratio
+	 * text on equal terms.
+	 */
+	.pp-preview.is-compact {
+		height: 30px;
+		width: 70px;
+		aspect-ratio: auto;
+		background: transparent;
+		border: 0;
+		border-radius: 0;
+		margin: 0;
+		overflow: visible;
+		flex: 0 0 auto;
 	}
 	/* uPlot mounts here and fills the box; the legend / chip overlay on top. */
 	.pp-preview-plot {

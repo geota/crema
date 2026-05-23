@@ -10,8 +10,8 @@
 	 */
 	import { untrack } from 'svelte';
 	import type { Attachment } from 'svelte/attachments';
-	import QSparkline from './QSparkline.svelte';
-	import { ratioLabel, sparkShape, type CremaProfile } from '$lib/profiles';
+	import ProfilePreview from '$lib/components/profiles/ProfilePreview.svelte';
+	import { ratioLabel, type CremaProfile } from '$lib/profiles';
 
 	let {
 		profiles,
@@ -120,13 +120,10 @@
 				class:is-active={selectedId === profile.id}
 				onclick={() => onSelect(profile)}
 			>
-				<QSparkline
-					shape={sparkShape(profile.segments)}
-					width={28}
-					height={14}
-					color={selectedId === profile.id
-						? 'var(--copper-400)'
-						: 'rgba(var(--tint-rgb), 0.55)'}
+				<ProfilePreview
+					segments={profile.segments}
+					active={selectedId === profile.id}
+					compact
 				/>
 				<span class="qfstrip-name">{profile.name || 'Untitled profile'}</span>
 				<span class="qfstrip-ratio">{ratioLabel(profile)}</span>
