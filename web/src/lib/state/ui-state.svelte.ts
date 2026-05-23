@@ -313,6 +313,33 @@ export interface UiSnapshot {
 	 */
 	readonly activeProfileName: string | null;
 	/**
+	 * Fingerprint of the effective profile (library bytes + per-shot Quick
+	 * Controls overrides) the DE1 most recently acknowledged loading —
+	 * computed by {@link profileFingerprint}, stamped onto the snapshot
+	 * on `ProfileUploadCompleted` and cleared on disconnect.
+	 *
+	 * Compared against the *current* effective fingerprint at two
+	 * checkpoints:
+	 *
+	 *  - On `de1State === 'ready'`, the orchestrator's
+	 *    `ensureLoadedMatches()` uploads the active profile defensively
+	 *    when the cache is `null` or differs.
+	 *  - On `startShot()`, before issuing the Espresso state request — a
+	 *    dial change to dose / yield / brew temp / preinf that hasn't
+	 *    yet been pushed to the DE1 triggers an upload + await on
+	 *    `ProfileUploadCompleted` first.
+	 *
+	 * Persisted to `localStorage` (`crema.profile-sync.lastFingerprint`)
+	 * so a tab reload doesn't trigger a re-upload if the DE1 is still
+	 * running the same bytes.
+	 *
+	 * `null` means "no profile has been uploaded this session" (the
+	 * DE1's loaded bytes are unknown to us — a fresh connect with a
+	 * stale localStorage value is invalidated on connect anyway, see
+	 * `app.svelte.ts`).
+	 */
+	readonly activeProfileFingerprint: string | null;
+	/**
 	 * The DE1's currently-loaded profile shape (from a `HeaderWrite` read at
 	 * connect time, populated by `Event::ProfileHeaderRead`). `null` before
 	 * the first connect-time read, or if the read failed.
@@ -532,6 +559,7 @@ export const INITIAL_SNAPSHOT: UiSnapshot = {
 	de1Diagnostics: EMPTY_DE1_DIAGNOSTICS,
 	de1Firmware: null,
 	activeProfileName: null,
+	activeProfileFingerprint: null,
 	loadedProfileShape: null,
 	profileUploadProgress: null,
 	de1MachineInfo: {},

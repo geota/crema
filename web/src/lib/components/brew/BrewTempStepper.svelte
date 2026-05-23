@@ -15,10 +15,22 @@
 	import QSplitLabel from './QSplitLabel.svelte';
 	import QStepper from './QStepper.svelte';
 	import QChipRow from './QChipRow.svelte';
+	import { getSettingsStore, formatTemp } from '$lib/settings';
 
 	let { params }: { params: BrewParamState } = $props();
 
 	const p = $derived(params.current);
+	const prefs = $derived(getSettingsStore().current);
+	/**
+	 * Drift indicators for the two split-pill modes. Both fields live on
+	 * the active profile / brew-default seed (`brewTemp` and `preinf`),
+	 * so italics + copper tint apply to whichever the user is currently
+	 * editing.
+	 */
+	const tempOverridden = $derived(params.isOverridden('brewTemp'));
+	const tempSeedLabel = $derived(formatTemp(params.seedOf('brewTemp'), prefs.tempUnit));
+	const preinfOverridden = $derived(params.isOverridden('preinf'));
+	const preinfSeedLabel = $derived(`${params.seedOf('preinf')} s`);
 </script>
 
 <div>
@@ -39,6 +51,8 @@
 			max={100}
 			step={0.5}
 			onChange={(v) => params.set('brewTemp', v)}
+			overridden={tempOverridden}
+			overriddenTooltip="Overriding default {tempSeedLabel}"
 		/>
 		<div style="height:6px"></div>
 		<QChipRow
@@ -56,6 +70,8 @@
 			step={1}
 			onChange={(v) => params.set('preinf', v)}
 			fmt={(v) => v.toFixed(0)}
+			overridden={preinfOverridden}
+			overriddenTooltip="Overriding default {preinfSeedLabel}"
 		/>
 		<div style="height:6px"></div>
 		<QChipRow
