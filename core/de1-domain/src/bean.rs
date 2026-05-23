@@ -361,6 +361,11 @@ pub struct Bean {
     pub grinder: String,
     /// Bean-scoped grinder click / setting — `"1.2"`, `"6 + a tooth"`.
     pub grinder_setting: String,
+    /// Free-form user tags — e.g. `"daily-driver"`, `"comp"`, `"experimental"`.
+    /// Defaults to an empty list. Serialised as `tags` so the JSON contract
+    /// matches the [`crate::Profile`] tag pattern.
+    #[serde(default)]
+    pub tags: Vec<String>,
     /// Visualizer `coffee_bag.id` once pushed.
     pub visualizer_id: Option<String>,
     /// Beanconqueror `bean.config.uuid` from a Bc import. Tracks
@@ -409,6 +414,7 @@ impl Bean {
             archived_at: None,
             grinder: String::new(),
             grinder_setting: String::new(),
+            tags: Vec::new(),
             visualizer_id: None,
             beanconqueror_id: None,
             image_ref: None,
@@ -769,6 +775,28 @@ mod tests {
         let json = serde_json::to_string(&bean).unwrap();
         let parsed: Bean = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, bean);
+    }
+
+    #[test]
+    fn bean_tags_default_when_missing_from_json() {
+        // Older persisted Bean records have no `tags` field; the
+        // `#[serde(default)]` annotation must give us an empty Vec rather
+        // than failing to deserialise. Round-trip a fresh Bean's JSON
+        // with the `tags` field stripped to mimic the legacy wire shape.
+        let bean = Bean::new("bean:legacy".to_owned(), "x".to_owned(), 0);
+        let mut value = serde_json::to_value(&bean).unwrap();
+        value.as_object_mut().unwrap().remove("tags");
+        let parsed: Bean = serde_json::from_value(value).unwrap();
+        assert!(parsed.tags.is_empty());
+    }
+
+    #[test]
+    fn bean_tags_round_trip() {
+        let mut bean = sample_bean();
+        bean.tags = vec!["daily-driver".to_owned(), "comp".to_owned()];
+        let json = serde_json::to_string(&bean).unwrap();
+        let parsed: Bean = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.tags, bean.tags);
     }
 
     #[test]

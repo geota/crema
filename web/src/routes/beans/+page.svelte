@@ -3,48 +3,50 @@
 	 * Beans — the `/beans` route: the bean library + roaster directory.
 	 *
 	 * Two tabs: **Bags** (default) shows the bean library with search /
-	 * filter / sort; **Roasters** shows the roastery directory. The bag
-	 * cards open an inline detail drawer for edit / archive / favourite,
-	 * and the page header carries actions to add a bag, import from
-	 * Beanconqueror, or sync with Visualizer.
+	 * filter / sort; **Roasters** shows the roastery directory. Bag cards
+	 * mirror the visual + interaction pattern of the profile cards on
+	 * `/profiles` — favourite star top-right, full-width "Set active"
+	 * primary button at the bottom, and a row of Edit / Archive / Delete
+	 * icon buttons. Clicking the card body opens the inline editor drawer.
 	 *
-	 * Built per docs/28 §UX and §library-view. Re-uses the profiles page
-	 * visual rhythm (`pp-*` classes from `profiles-page.css`) so the
-	 * library reads as part of the same kit on first sight.
+	 * Cards live in `$lib/components/beans/BeanCard.svelte`; this page
+	 * holds the header (search + import + new), the filter strip (facet
+	 * pills + tag chips + sort), and the grid + roaster tab.
+	 *
+	 * Built per docs/28 §UX and §library-view; card pattern mirrors
+	 * `$lib/components/profiles/ProfileCard.svelte`.
 	 */
-	import { resolve } from '$app/paths';
-	import { goto } from '$app/navigation';
 	import {
 		getBeanStore,
 		blankBean,
 		blankRoaster,
-		beanDisplaySummary,
-		daysOffRoast,
-		roastBand,
-		roastFreshness,
-		type Bean,
-		type Roaster
+		type Bean
 	} from '$lib/bean';
-	import { getSettingsStore } from '$lib/settings';
 	import BeanEditor from '$lib/components/beans/BeanEditor.svelte';
 	import BeanImportDialog from '$lib/components/beans/BeanImportDialog.svelte';
+	import BeanCard from '$lib/components/beans/BeanCard.svelte';
 	import { getHistoryStore } from '$lib/history';
 
 	const library = getBeanStore();
 	const history = getHistoryStore();
-	const settings = getSettingsStore();
 
 	// ── UI state ───────────────────────────────────────────────────────
 	let tab = $state<'bags' | 'roasters'>('bags');
 	let q = $state('');
-	type FacetId =
-		| 'all'
-		| 'favourite'
-		| 'active'
-		| 'archived'
-		| 'frozen'
-		| 'decaf';
+	type FacetId = 'all' | 'favourite' | 'active' | 'frozen' | 'decaf';
 	let facet = $state<FacetId>('all');
+	/**
+	 * "Show archived" filter — independent of the main facet pills, since
+	 * archived is a mode (visible/hidden) rather than another filter. Off
+	 * by default so archived bags stay out of sight after a roast finishes.
+	 */
+	let showArchived = $state(false);
+	/**
+	 * Tag-filter selection — the set of tags the user has clicked on the
+	 * filter chip row. AND-semantics: a bean must contain every selected
+	 * tag to pass through. Empty set = all beans pass.
+	 */
+	let selectedTags = $state<string[]>([]);
 	let sort = $state<'recent' | 'name' | 'roastedOn' | 'rating'>('recent');
 	let sortDir = $state<'asc' | 'desc'>('desc');
 	let selectedBeanId = $state<string | null>(null);
@@ -61,10 +63,15 @@
 	const allBeans = $derived(library.beans);
 	const allRoasters = $derived(library.roasters);
 
-	/** Bean counts per facet for the chip badges. */
+	/**
+	 * Bean counts per facet for the chip badges. The `archived` count is
+	 * independent of the show-archived toggle (so the toggle's badge keeps
+	 * its true number); the other facets follow what the grid would render
+	 * given the current `showArchived` mode.
+	 */
 	const counts = $derived.by(() => {
 		const c = {
-			all: allBeans.length,
+			all: 0,
 			favourite: 0,
 			active: 0,
 			archived: 0,
@@ -72,13 +79,40 @@
 			decaf: 0
 		};
 		for (const b of allBeans) {
-			if (b.favourite) c.favourite += 1;
-			if (b.archivedAt == null) c.active += 1;
-			else c.archived += 1;
-			if (b.frozenOn && !b.defrostedOn) c.frozen += 1;
-			if (b.decaf) c.decaf += 1;
+			const archived = b.archivedAt != null;
+			if (archived) c.archived += 1;
+			else c.active += 1;
+			const visible = !archived || showArchived;
+			if (visible) c.all += 1;
+			if (visible && b.favourite) c.favourite += 1;
+			if (visible && b.frozenOn && !b.defrostedOn) c.frozen += 1;
+			if (visible && b.decaf) c.decaf += 1;
 		}
 		return c;
+	});
+
+	/**
+	 * Union of every tag used across the library — drives the tag-filter
+	 * chip row, sorted by usage frequency (most-used first) so the chip
+	 * order is stable across renders. Mirrors the profile page's
+	 * `customTags` $derived.
+	 */
+	const tagFacets = $derived.by(() => {
+		const counts = new Map<string, number>();
+		for (const b of allBeans) {
+			if (b.archivedAt != null && !showArchived) continue;
+			for (const t of b.tags) counts.set(t, (counts.get(t) ?? 0) + 1);
+		}
+		return [...counts.entries()]
+			.map(([tag, count]) => ({ tag, count }))
+			.sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag));
+	});
+
+	/** All tags ever seen in the library — feeds the editor's autocomplete. */
+	const allTagSuggestions = $derived.by(() => {
+		const set = new Set<string>();
+		for (const b of allBeans) for (const t of b.tags) set.add(t);
+		return [...set].sort((a, b) => a.localeCompare(b));
 	});
 
 	function matchesFacet(b: Bean, f: FacetId): boolean {
@@ -89,8 +123,6 @@
 				return b.favourite;
 			case 'active':
 				return b.archivedAt == null;
-			case 'archived':
-				return b.archivedAt != null;
 			case 'frozen':
 				return !!b.frozenOn && !b.defrostedOn;
 			case 'decaf':
@@ -102,10 +134,17 @@
 
 	const filtered = $derived.by(() => {
 		const query = q.trim().toLowerCase();
-		let r = allBeans.filter((b) => {
+		const r = allBeans.filter((b) => {
+			const archived = b.archivedAt != null;
+			// Archived gate — the dedicated toggle owns visibility.
+			if (archived && !showArchived) return false;
 			if (!matchesFacet(b, facet)) return false;
-			// Default behaviour: hide archived unless the user picked it.
-			if (facet !== 'archived' && b.archivedAt != null) return false;
+			// Tag AND-filter — bean must contain every selected tag.
+			if (selectedTags.length > 0) {
+				for (const t of selectedTags) {
+					if (!b.tags.includes(t)) return false;
+				}
+			}
 			if (!query) return true;
 			const roaster = b.roasterId ? library.getRoaster(b.roasterId) : null;
 			return (
@@ -114,7 +153,8 @@
 				b.origin.country?.toLowerCase().includes(query) ||
 				b.origin.region?.toLowerCase().includes(query) ||
 				b.tastingNotes.toLowerCase().includes(query) ||
-				b.notes.toLowerCase().includes(query)
+				b.notes.toLowerCase().includes(query) ||
+				b.tags.some((t) => t.toLowerCase().includes(query))
 			);
 		});
 		const keyCmp = (a: Bean, b: Bean): number => {
@@ -210,6 +250,12 @@
 		library.upsertRoaster(r);
 	}
 
+	function toggleSelectedTag(t: string): void {
+		selectedTags = selectedTags.includes(t)
+			? selectedTags.filter((x) => x !== t)
+			: [...selectedTags, t];
+	}
+
 	// ── Roaster directory derived ──────────────────────────────────────
 	const roasterRows = $derived.by(() => {
 		return [...allRoasters]
@@ -219,37 +265,6 @@
 			}))
 			.sort((a, b) => b.count - a.count || a.roaster.name.localeCompare(b.roaster.name));
 	});
-
-	function fmtRoastDate(d: string | null): string {
-		if (!d) return '—';
-		const date = new Date(`${d}T00:00:00`);
-		if (Number.isNaN(date.getTime())) return d;
-		return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-	}
-
-	function freshnessColor(b: Bean): string {
-		const days = daysOffRoast(b.roastedOn);
-		const band = roastBand(b.roastLevel);
-		const f = roastFreshness(band, days);
-		return f === 'best'
-			? 'var(--success)'
-			: f === 'ok'
-				? 'var(--warning)'
-				: f === 'bad'
-					? 'var(--danger)'
-					: 'rgba(var(--tint-rgb), 0.4)';
-	}
-
-	function freshnessLabel(b: Bean): string {
-		const days = daysOffRoast(b.roastedOn);
-		if (days == null) return '';
-		return `${days}d off roast`;
-	}
-
-	function burnDownPct(b: Bean): number | null {
-		if (b.bagSizeG <= 0) return null;
-		return Math.max(0, Math.min(100, (b.remainingG / b.bagSizeG) * 100));
-	}
 </script>
 
 <svelte:head>
@@ -268,7 +283,7 @@
 		<div class="pp-head-r">
 			<div class="pp-search">
 				<i class="ph ph-magnifying-glass" aria-hidden="true"></i>
-				<input bind:value={q} placeholder="Search beans, roasters, origin…" />
+				<input bind:value={q} placeholder="Search beans, roasters, origin, tags…" />
 				{#if q}
 					<button class="pp-search-clear" aria-label="Clear search" onclick={() => (q = '')}>
 						<i class="ph ph-x" aria-hidden="true"></i>
@@ -292,11 +307,7 @@
 
 	<!-- Tabs -->
 	<div class="bn-tabs">
-		<button
-			class="bn-tab"
-			class:is-active={tab === 'bags'}
-			onclick={() => (tab = 'bags')}
-		>
+		<button class="bn-tab" class:is-active={tab === 'bags'} onclick={() => (tab = 'bags')}>
 			<i class="ph ph-coffee-bean" aria-hidden="true"></i>
 			<span>Bags</span>
 			<span class="pp-tag-count">{counts.active}</span>
@@ -346,11 +357,17 @@
 					<span class="pp-tag-divider"></span>
 					<button
 						class="pp-tag"
-						class:is-active={facet === 'archived'}
-						onclick={() => (facet = 'archived')}
+						class:is-active={showArchived}
+						onclick={() => (showArchived = !showArchived)}
+						title={showArchived
+							? 'Hide archived bags from the grid'
+							: 'Show archived bags in the grid'}
 					>
-						<i class="ph ph-archive" style="font-size:11px"></i>
-						<span>Archived</span><span class="pp-tag-count">{counts.archived}</span>
+						<i
+							class={showArchived ? 'ph-fill ph-eye' : 'ph ph-eye-slash'}
+							style="font-size:11px"
+						></i>
+						<span>Show archived</span><span class="pp-tag-count">{counts.archived}</span>
 					</button>
 				{/if}
 			</div>
@@ -402,118 +419,47 @@
 			</div>
 		</div>
 
+		{#if tagFacets.length > 0}
+			<div class="bn-tag-strip">
+				<span class="pp-tag-grouplabel">Tags</span>
+				{#each tagFacets as t (t.tag)}
+					<button
+						class="pp-tag pp-tag-custom"
+						class:is-active={selectedTags.includes(t.tag)}
+						onclick={() => toggleSelectedTag(t.tag)}
+					>
+						<span>{t.tag}</span><span class="pp-tag-count">{t.count}</span>
+					</button>
+				{/each}
+				{#if selectedTags.length > 0}
+					<button class="bn-tag-clear" onclick={() => (selectedTags = [])}>
+						<i class="ph ph-x" aria-hidden="true"></i> Clear
+					</button>
+				{/if}
+			</div>
+		{/if}
+
 		<!-- Bean grid -->
 		<div class="bn-grid">
 			{#each filtered as bean (bean.id)}
-				{@const roaster = bean.roasterId ? library.getRoaster(bean.roasterId) : null}
-				{@const isActive = library.activeBeanId === bean.id}
-				{@const shots = shotCounts.get(bean.id) ?? 0}
-				{@const burn = burnDownPct(bean)}
-				<div
-					class="bn-card"
-					class:is-active={isActive}
-					class:is-archived={bean.archivedAt != null}
-					role="button"
-					tabindex="0"
-					onclick={() => (selectedBeanId = bean.id)}
-					onkeydown={(e) => {
-						if (e.key === 'Enter' || e.key === ' ') {
-							e.preventDefault();
-							selectedBeanId = bean.id;
-						}
-					}}
-				>
-					<div class="bn-card-head">
-						<div class="bn-card-eyebrow">
-							{roaster?.name ?? '—'}
-							{#if isActive}<span class="bn-active-tag">ACTIVE</span>{/if}
-						</div>
-						{#if daysOffRoast(bean.roastedOn) != null}
-							<div class="bn-fresh" style:color={freshnessColor(bean)}>
-								<span class="bn-fresh-dot" style:background={freshnessColor(bean)}></span>
-								{freshnessLabel(bean)}
-							</div>
-						{/if}
-					</div>
-					<div class="bn-card-name">{bean.name || 'Untitled bag'}</div>
-					<div class="bn-card-meta">
-						{[bean.origin.country, bean.origin.region].filter(Boolean).join(' · ') ||
-							'Origin unknown'}
-					</div>
-					<div class="bn-card-row">
-						<span class="bn-stars">
-							{'★'.repeat(bean.rating)}{'☆'.repeat(5 - bean.rating)}
-						</span>
-						<span class="bn-shots">{shots} shot{shots === 1 ? '' : 's'}</span>
-					</div>
-					{#if burn != null}
-						<div class="bn-burn" title="{bean.remainingG.toFixed(0)} g of {bean.bagSizeG.toFixed(0)} g">
-							<div class="bn-burn-bar" style:width="{burn}%"></div>
-							<span class="bn-burn-text">{bean.remainingG.toFixed(0)} g left</span>
-						</div>
-					{/if}
-					{#if shots >= 3}
-						{@const rec = recommendedProfile(bean.id)}
-						{#if rec}
-							<div class="bn-tip">
-								<i class="ph ph-lightbulb" aria-hidden="true"></i>
-								Best with <strong>{rec}</strong>
-							</div>
-						{/if}
-					{/if}
-					<div class="bn-card-actions">
-						<button
-							class="bn-iconbtn"
-							onclick={(e) => {
-								e.stopPropagation();
-								pin(bean.id);
-							}}
-							title={bean.favourite ? 'Unpin from brew picker' : 'Pin to brew picker'}
-						>
-							<i
-								class={bean.favourite ? 'ph-fill ph-star' : 'ph ph-star'}
-								style:color={bean.favourite ? 'var(--copper-400)' : undefined}
-								aria-hidden="true"
-							></i>
-						</button>
-						{#if !isActive && bean.archivedAt == null}
-							<button
-								class="bn-iconbtn"
-								onclick={(e) => {
-									e.stopPropagation();
-									makeActive(bean.id);
-								}}
-								title="Make this the active bean on Brew"
-							>
-								<i class="ph ph-target" aria-hidden="true"></i>
-							</button>
-						{/if}
-						<button
-							class="bn-iconbtn"
-							onclick={(e) => {
-								e.stopPropagation();
-								archive(bean.id);
-							}}
-							title={bean.archivedAt ? 'Restore from archive' : 'Archive this bag'}
-						>
-							<i
-								class={bean.archivedAt ? 'ph ph-archive-box' : 'ph ph-archive'}
-								aria-hidden="true"
-							></i>
-						</button>
-						<button
-							class="bn-iconbtn bn-iconbtn-danger"
-							onclick={(e) => {
-								e.stopPropagation();
-								del(bean.id);
-							}}
-							title="Delete this bag"
-						>
-							<i class="ph ph-trash" aria-hidden="true"></i>
-						</button>
-					</div>
-				</div>
+				<BeanCard
+					{bean}
+					roaster={bean.roasterId ? library.getRoaster(bean.roasterId) : null}
+					isActive={library.activeBeanId === bean.id}
+					shots={shotCounts.get(bean.id) ?? 0}
+					recommendation={recommendedProfile(bean.id)}
+					onOpen={(id) => (selectedBeanId = id)}
+					onSetActive={makeActive}
+					onToggleFavourite={pin}
+					onToggleArchived={archive}
+					onDelete={del}
+				/>
 			{/each}
+			<button class="bn-card-new" onclick={newBean}>
+				<div class="bn-card-new-glyph"><i class="ph ph-plus" aria-hidden="true"></i></div>
+				<div class="bn-card-new-label">New bag</div>
+				<div class="bn-card-new-sub">Track a fresh roast</div>
+			</button>
 			{#if filtered.length === 0}
 				<div class="bn-empty">
 					{#if allBeans.length === 0}
@@ -533,6 +479,10 @@
 					{:else}
 						No bags match the current filters.
 						{#if q}<button class="pp-empty-link" onclick={() => (q = '')}>Clear search</button
+							>{/if}
+						{#if selectedTags.length > 0}<button
+								class="pp-empty-link"
+								onclick={() => (selectedTags = [])}>Clear tags</button
 							>{/if}
 					{/if}
 				</div>
@@ -557,8 +507,7 @@
 					</div>
 					<div class="bn-card-name">{roaster.name}</div>
 					<div class="bn-card-meta">
-						{[roaster.country, roaster.website].filter(Boolean).join(' · ') ||
-							'No location'}
+						{[roaster.country, roaster.website].filter(Boolean).join(' · ') || 'No location'}
 					</div>
 					<div class="bn-card-row">
 						<span class="bn-shots">{count} bag{count === 1 ? '' : 's'}</span>
@@ -597,7 +546,9 @@
 				<div class="bn-empty">
 					<i class="ph-duotone ph-buildings" aria-hidden="true"></i>
 					<div class="bn-empty-title">No roasters yet</div>
-					<div class="bn-empty-sub">Add a bag — a roaster row is created when you type a roastery name.</div>
+					<div class="bn-empty-sub">
+						Add a bag — a roaster row is created when you type a roastery name.
+					</div>
 				</div>
 			{/if}
 		</div>
@@ -610,6 +561,7 @@
 		bean={newDraft}
 		isNew
 		isActive={false}
+		tagSuggestions={allTagSuggestions}
 		onClose={() => (newDraft = null)}
 		onMakeActive={() => {}}
 		onSaved={(id) => {
@@ -625,6 +577,7 @@
 	{#if sb}
 		<BeanEditor
 			bean={sb}
+			tagSuggestions={allTagSuggestions}
 			onClose={() => (selectedBeanId = null)}
 			onMakeActive={() => makeActive(sb.id)}
 			isActive={library.activeBeanId === sb.id}
@@ -827,6 +780,18 @@
 		background: var(--copper-500);
 		color: var(--fg-on-accent);
 	}
+	.pp-tag-custom .pp-tag-count {
+		background: rgba(193, 116, 75, 0.1);
+		color: var(--copper-400);
+	}
+	.pp-tag-custom.is-active {
+		background: rgba(193, 116, 75, 0.12);
+		color: var(--copper-400);
+	}
+	.pp-tag-custom.is-active .pp-tag-count {
+		background: var(--copper-500);
+		color: var(--fg-on-accent);
+	}
 	.pp-tag-divider {
 		width: 1px;
 		height: 16px;
@@ -879,7 +844,32 @@
 		background: rgba(var(--tint-rgb), 0.15);
 	}
 
-	/* Bean grid + card */
+	/* Tag filter row — lives between the facet pills and the grid. */
+	.bn-tag-strip {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		flex-wrap: wrap;
+		padding: 12px var(--page-pad-x) 0;
+	}
+	.bn-tag-clear {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		background: transparent;
+		border: 0;
+		color: rgba(var(--tint-rgb), 0.5);
+		font-family: var(--font-sans);
+		font-size: 11px;
+		cursor: pointer;
+		padding: 4px 8px;
+		border-radius: var(--radius-pill);
+	}
+	.bn-tag-clear:hover {
+		color: var(--fg-1);
+	}
+
+	/* Bean grid + roaster card */
 	.bn-grid {
 		display: grid;
 		grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -896,7 +886,6 @@
 			grid-template-columns: minmax(0, 1fr);
 		}
 	}
-	.bn-card,
 	.bn-roastcard {
 		background: rgba(var(--tint-rgb), 0.04);
 		border: 1px solid rgba(var(--tint-rgb), 0.08);
@@ -911,17 +900,9 @@
 		cursor: pointer;
 		transition: all var(--dur-1) var(--ease);
 	}
-	.bn-card:hover,
 	.bn-roastcard:hover {
 		background: rgba(var(--tint-rgb), 0.06);
 		border-color: rgba(var(--tint-rgb), 0.16);
-	}
-	.bn-card.is-active {
-		border-color: var(--copper-400);
-		background: rgba(193, 124, 79, 0.05);
-	}
-	.bn-card.is-archived {
-		opacity: 0.6;
 	}
 	.bn-card-head {
 		display: flex;
@@ -938,26 +919,6 @@
 		display: inline-flex;
 		gap: 8px;
 		align-items: center;
-	}
-	.bn-active-tag {
-		background: var(--copper-500);
-		color: var(--fg-on-accent);
-		padding: 1px 6px;
-		border-radius: 999px;
-		font-size: 9px;
-	}
-	.bn-fresh {
-		display: inline-flex;
-		align-items: center;
-		gap: 5px;
-		font-family: var(--font-sans);
-		font-size: 11px;
-		font-weight: 500;
-	}
-	.bn-fresh-dot {
-		width: 6px;
-		height: 6px;
-		border-radius: 50%;
 	}
 	.bn-card-name {
 		font-family: var(--font-sans);
@@ -976,50 +937,8 @@
 		font-family: var(--font-sans);
 		font-size: 11px;
 	}
-	.bn-stars {
-		color: var(--copper-400);
-		font-size: 12px;
-		letter-spacing: 1px;
-	}
 	.bn-shots {
 		color: rgba(var(--tint-rgb), 0.45);
-	}
-	.bn-burn {
-		position: relative;
-		height: 14px;
-		background: rgba(var(--tint-rgb), 0.05);
-		border-radius: 7px;
-		overflow: hidden;
-	}
-	.bn-burn-bar {
-		position: absolute;
-		inset: 0 auto 0 0;
-		background: linear-gradient(
-			90deg,
-			var(--copper-500),
-			var(--copper-400)
-		);
-	}
-	.bn-burn-text {
-		position: relative;
-		display: block;
-		text-align: center;
-		font-family: var(--font-mono);
-		font-size: 9px;
-		line-height: 14px;
-		color: var(--fg-1);
-		mix-blend-mode: difference;
-	}
-	.bn-tip {
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
-		font-family: var(--font-sans);
-		font-size: 11px;
-		color: var(--copper-300);
-		background: rgba(193, 124, 79, 0.08);
-		border-radius: var(--radius-sm);
-		padding: 6px 8px;
 	}
 	.bn-card-actions {
 		display: flex;
@@ -1045,6 +964,53 @@
 	}
 	.bn-iconbtn-danger:hover {
 		color: var(--danger);
+	}
+
+	/* "New bag" dashed tile */
+	.bn-card-new {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		gap: 8px;
+		background: transparent;
+		border: 1px dashed rgba(var(--tint-rgb), 0.15);
+		border-radius: var(--radius-lg, 14px);
+		color: var(--fg-1);
+		cursor: pointer;
+		min-height: 300px;
+		padding: 24px;
+		font-family: var(--font-sans);
+		transition: all var(--dur-1) var(--ease);
+	}
+	.bn-card-new:hover {
+		border-color: rgba(var(--tint-rgb), 0.3);
+		background: rgba(var(--tint-rgb), 0.02);
+	}
+	.bn-card-new-glyph {
+		width: 48px;
+		height: 48px;
+		border-radius: 50%;
+		background: rgba(var(--tint-rgb), 0.05);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		color: rgba(var(--tint-rgb), 0.6);
+		font-size: 22px;
+		margin-bottom: 4px;
+		transition: all var(--dur-1) var(--ease);
+	}
+	.bn-card-new:hover .bn-card-new-glyph {
+		background: var(--copper-500);
+		color: var(--fg-on-accent);
+	}
+	.bn-card-new-label {
+		font-size: 14px;
+		font-weight: 500;
+	}
+	.bn-card-new-sub {
+		font-size: 11px;
+		color: rgba(var(--tint-rgb), 0.45);
 	}
 
 	.bn-empty {
@@ -1080,5 +1046,6 @@
 		cursor: pointer;
 		font-size: 13px;
 		text-decoration: underline;
+		margin-left: 8px;
 	}
 </style>

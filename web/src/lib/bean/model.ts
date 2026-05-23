@@ -92,6 +92,12 @@ export interface Bean {
 	archivedAt: number | null;
 	grinder: string;
 	grinderSetting: string;
+	/**
+	 * Free-form user tags — `["daily-driver", "comp"]`. Defaults to `[]`.
+	 * Mirrors the profile tag pattern (`$lib/profiles`'s `CremaProfile.tags`)
+	 * so the filter / chip UI behaves consistently across the two libraries.
+	 */
+	tags: string[];
 	visualizerId: string | null;
 	beanconquerorId: string | null;
 	imageRef: string | null;
@@ -131,6 +137,7 @@ export function blankBean(id?: string): Bean {
 		archivedAt: null,
 		grinder: '',
 		grinderSetting: '',
+		tags: [],
 		visualizerId: null,
 		beanconquerorId: null,
 		imageRef: null,
@@ -377,6 +384,9 @@ export function coerceBean(raw: unknown): Bean | null {
 	if (typeof obj.archivedAt === 'number') base.archivedAt = obj.archivedAt;
 	if (typeof obj.grinder === 'string') base.grinder = obj.grinder;
 	if (typeof obj.grinderSetting === 'string') base.grinderSetting = obj.grinderSetting;
+	if (Array.isArray(obj.tags)) {
+		base.tags = obj.tags.filter((t): t is string => typeof t === 'string');
+	}
 	if (typeof obj.visualizerId === 'string') base.visualizerId = obj.visualizerId;
 	if (typeof obj.beanconquerorId === 'string') base.beanconquerorId = obj.beanconquerorId;
 	if (typeof obj.imageRef === 'string') base.imageRef = obj.imageRef;

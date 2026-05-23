@@ -36,11 +36,13 @@
 	import QStepper from '$lib/components/brew/QStepper.svelte';
 	import StToggle from '$lib/components/settings/StToggle.svelte';
 	import RoasterAutocomplete from './RoasterAutocomplete.svelte';
+	import TagInput from '$lib/components/profiles/TagInput.svelte';
 
 	let {
 		bean,
 		isActive,
 		isNew = false,
+		tagSuggestions = [],
 		onClose,
 		onMakeActive,
 		onSaved
@@ -54,6 +56,13 @@
 		 * pre-polish live-patch behaviour.
 		 */
 		isNew?: boolean;
+		/**
+		 * Union of tags used across the rest of the bean library. Feeds the
+		 * tag-chip input's autocomplete `<datalist>` so users land on the
+		 * same vocabulary across bags. Empty list = no suggestions (fine,
+		 * the input still accepts free-form entries).
+		 */
+		tagSuggestions?: string[];
 		onClose: () => void;
 		onMakeActive: () => void;
 		/**
@@ -688,6 +697,18 @@
 					oninput={(e) => patch({ notes: e.currentTarget.value })}
 				></textarea>
 			</label>
+		</section>
+
+		<!-- Tags -->
+		<section class="be-section">
+			<h3 class="be-section-title">Tags</h3>
+			<div class="be-row">
+				<TagInput
+					tags={current.tags}
+					suggestions={tagSuggestions}
+					onChange={(t) => patch({ tags: t })}
+				/>
+			</div>
 		</section>
 
 		<!-- Buy again (collapsible) -->
