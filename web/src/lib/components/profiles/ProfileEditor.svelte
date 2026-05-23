@@ -87,6 +87,16 @@
 	});
 
 	/**
+	 * Whether the editor was opened from the Brew page (Edit button on the
+	 * loaded profile). When true, Save makes the saved profile the active
+	 * one + syncs to the DE1 — the user is editing what they're brewing
+	 * with, so the edits should take effect immediately. When false (came
+	 * from the Profiles library), Save just persists; the active profile
+	 * is unchanged.
+	 */
+	const cameFromBrew = $derived(page.url.searchParams.get('from') === 'brew');
+
+	/**
 	 * The CremaApp orchestrator — used on save to seed the freshly-forked
 	 * custom profile as the active one + sync to the DE1 when the user
 	 * edited the loaded profile (which forks because built-ins are
@@ -256,17 +266,19 @@
 	 * Save the draft to the library and return to wherever the user came
 	 * from (Brew or Profiles per `returnPath`).
 	 *
-	 * Two cases:
-	 *  - **Editing a custom profile in place** (`isCreate === false`):
-	 *    update the existing record; the active id is unchanged. If this
-	 *    profile happens to be the loaded one, the next Coffee tap will
-	 *    sync it (the new bytes change the fingerprint).
-	 *  - **Editing a built-in / arrived with `?duplicate=1`** (`isCreate
-	 *    === true`): fork into a fresh `custom:…` profile. Set it as the
-	 *    active profile + sync it to the DE1 — without this, the user
-	 *    just edited what they were brewing with and saved a copy nobody
-	 *    is brewing with. The fingerprint sync is the same path
-	 *    `loadOnBrew` uses, so the cache stays consistent.
+	 * Persistence is unconditional — a custom profile is updated in place,
+	 * a built-in / `?duplicate=1` arrival forks into a fresh `custom:…`
+	 * profile (built-ins are read-only). What differs across surfaces:
+	 *
+	 *  - **From Brew (`cameFromBrew === true`):** the user opened Edit on
+	 *    the *loaded* profile. After save, the saved profile becomes the
+	 *    active one + a sync to the DE1 fires — so the edits take effect
+	 *    immediately on the user's next shot. Fork or in-place both flip
+	 *    active (the in-place case is a no-op if it was already active).
+	 *  - **From Profiles library (`cameFromBrew === false`):** the user
+	 *    is just curating the library. Save persists; the active profile
+	 *    is unchanged. They can hit Load on Brew separately if they want
+	 *    it on the DE1.
 	 */
 	function save(): void {
 		const toSave: CremaProfile = isCreate
@@ -277,11 +289,14 @@
 				}
 			: draft;
 		store.save(toSave);
-		if (isCreate) {
+		if (cameFromBrew) {
+			// User was on the brew page editing the loaded profile —
+			// promote the (possibly forked) save as the active profile
+			// + sync to the DE1 so the next shot uses the edited bytes.
 			store.setActive(toSave.id);
 			if (app) {
-				// Keep the DE1's loaded profile in sync with the user's
-				// just-edited copy. Mirrors `loadOnBrew` in routes/profiles.
+				// Mirrors `loadOnBrew` in routes/profiles — same path so
+				// the fingerprint cache stays consistent.
 				void app.syncActiveProfile(toSave, {});
 			}
 		}
