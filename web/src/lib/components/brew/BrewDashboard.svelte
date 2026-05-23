@@ -22,6 +22,7 @@
 	import { ShotPhase, MachineState, MmrRegister } from '$lib/core/crema-core';
 	import ModeChip from './ModeChip.svelte';
 	import ModeHeadStatus from './ModeHeadStatus.svelte';
+	import MachineErrorBanner from './MachineErrorBanner.svelte';
 	import {
 		getSettingsStore,
 		convertWeight,
@@ -717,7 +718,17 @@
 					Pre-inf {p.preinf}s · 1:{ratio} ratio · {formatWeight(p.yield, prefs.weightUnit)} target · {formatTemp(p.brewTemp, prefs.tempUnit)}
 				</div>
 			</div>
-			{#if modeState !== 'idle'}
+			{#if ui.machineError != null}
+				<!-- Firmware-fault banner. Sits in the same header slot as the
+				     mode pill and re-uses its visual skeleton (.mc-head-status
+				     `.is-error` variant) with a red palette so an error reads
+				     with one visual language across the dashboard. Wins over
+				     the mode pill when both could show — an error is the more
+				     important signal. -->
+				<div class="crema-dash-head-mid">
+					<MachineErrorBanner text={ui.machineError} />
+				</div>
+			{:else if modeState !== 'idle'}
 				<!-- Header mode pill — visible only while a service mode is
 				     running. Sits between the profile-info block (left) and
 				     the Edit / Switch actions (right). -->

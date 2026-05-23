@@ -201,6 +201,14 @@
 	background: rgba(107, 140, 95, 0.12);
 	border-color: rgba(107, 140, 95, 0.5);
 }
+/* Machine-error variant — used by MachineErrorBanner. Same skeleton as
+   the service-mode pills (so error + mode banners read with one visual
+   language), red-tinted to surface a firmware fault. The danger token
+   flips per theme so contrast holds on both backgrounds. */
+.mc-head-status.is-error {
+	background: rgba(var(--danger-rgb), 0.12);
+	border-color: rgba(var(--danger-rgb), 0.5);
+}
 
 .mc-head-status-icon {
 	display: inline-flex;
@@ -229,6 +237,10 @@
 .mc-head-status.is-flush .mc-head-status-icon {
 	background: var(--mc-flush-15);
 	color: var(--mc-flush);
+}
+.mc-head-status.is-error .mc-head-status-icon {
+	background: rgba(var(--danger-rgb), 0.16);
+	color: var(--danger);
 }
 
 .mc-head-status-text {
