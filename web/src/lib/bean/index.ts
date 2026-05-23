@@ -26,7 +26,10 @@ export {
 	mintBeanId,
 	mintRoasterId,
 	roastBand,
+	roastBand5,
 	roastFreshness,
+	bagState,
+	type BagState,
 	ROAST_PILL_LEVEL
 } from './model';
 
@@ -35,6 +38,8 @@ export {
 	getBeanLibraryStore,
 	getBeanStore
 } from './store.svelte';
+
+export { roasterMark, roasterTone, roasterMarkTone } from './roaster-mark';
 
 export {
 	deleteRemoteBean,

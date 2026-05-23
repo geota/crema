@@ -220,6 +220,41 @@ export const ROAST_PILL_LEVEL: Readonly<Record<Roast, number>> = {
 };
 
 /**
+ * Finer-grained 5-band classification for the RoastSlider display label —
+ * the design's slider shows five band labels (Light / Med-light / Medium /
+ * Med-dark / Dark) under the 1..10 track. Returns `'—'` when the level is
+ * unset.
+ *
+ * The 3-band {@link roastBand} stays canonical and rides on every
+ * `RoastBand` comparison in the freshness math — this is purely a
+ * UI-display helper for the slider.
+ */
+export function roastBand5(level: number | null): string {
+	if (level == null) return '—';
+	const n = Math.round(level);
+	if (n <= 3) return 'Light';
+	if (n <= 5) return 'Med-light';
+	if (n <= 7) return 'Medium';
+	if (n <= 9) return 'Med-dark';
+	return 'Dark';
+}
+
+/**
+ * Bag-state classifier for the library tile / drawer: which section a bag
+ * belongs in (`'active' | 'frozen' | 'archived'`) and the dot colour token
+ * for the status pip. The freshness window is *not* this — bag state is
+ * about user lifecycle (open / sealed / frozen / done), not roast age.
+ */
+export type BagState = 'archived' | 'frozen' | 'active';
+
+/** Bag-state label for grouping in the bags grid. */
+export function bagState(bean: Bean): BagState {
+	if (bean.archivedAt != null) return 'archived';
+	if (bean.frozenOn && !bean.defrostedOn) return 'frozen';
+	return 'active';
+}
+
+/**
  * Whole days between a `yyyy-mm-dd` roast date and `asOf` (default: now).
  * Returns `null` when no roast date is set; clamped at `0` so a future-dated
  * roast never reads negative.
