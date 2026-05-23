@@ -1,21 +1,37 @@
 /**
- * `$lib/bean` — the **current bean**: the bag of coffee in use right now.
+ * `$lib/bean` — the bean library: bags of coffee and the roasters that produced
+ * them. Mirrors `de1_domain::bean`; types are shareable across shells via
+ * `#[typeshare]`. Persistence and CRUD live in the shell store.
  *
- * Bean identity is decoupled from the profile model (a recipe and a bag of
- * coffee have different lifecycles — see `model.ts`). The current bean is real
- * and persisted in `localStorage`; a snapshot of it is stamped onto each
- * recorded shot by `lib/history`.
+ * See `docs/28-bean-roaster-library.md` and
+ * `docs/32-bean-library-implementation.md` for the design and the shipped /
+ * deferred scope.
  */
 
 export {
 	type Bean,
+	type BeanMix,
+	type BeanOrigin,
 	type Freshness,
+	type LegacyCurrentBean,
+	type Roaster,
 	blankBean,
+	blankOrigin,
+	blankRoaster,
+	beanDisplaySummary,
+	coerceBean,
+	coerceRoaster,
 	daysOffRoast,
+	migrateLegacyCurrentBean,
+	mintBeanId,
+	mintRoasterId,
 	roastBand,
 	roastFreshness,
-	migrateBean,
 	ROAST_PILL_LEVEL
 } from './model';
 
-export { BeanStore, getBeanStore } from './store.svelte';
+export {
+	BeanLibraryStore,
+	getBeanLibraryStore,
+	getBeanStore
+} from './store.svelte';

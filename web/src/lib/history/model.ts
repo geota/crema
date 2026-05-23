@@ -29,6 +29,14 @@ import { formatRatio } from '$lib/utils/ratio';
  * no bean logged) simply has none.
  */
 export interface ShotBean {
+	/**
+	 * FK back into the bean library, when the shot was pulled with a library
+	 * bag selected. `null` or missing for shots pulled before the library
+	 * existed, or imported from a `.shot` file. The History UI uses this to
+	 * resolve a click-through to the bean detail; an archived / deleted bag
+	 * falls back to the snapshot strings.
+	 */
+	readonly beanId?: string | null;
 	/** The roastery when the shot was pulled (Visualizer `bean.brand`). */
 	readonly roaster: string;
 	/** The coffee itself when the shot was pulled (Visualizer `bean.type`). */
