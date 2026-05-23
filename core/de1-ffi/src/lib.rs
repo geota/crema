@@ -722,9 +722,13 @@ impl CremaBridge {
                                 count: u32::try_from(count).unwrap_or(u32::MAX),
                             }
                         }
-                        _ => ProfileUploadFailure::Empty,
+                        // Any other `DomainError` shouldn't reach this path;
+                        // surface its `Display` rather than coercing to `Empty`.
+                        e => ProfileUploadFailure::Internal { message: e.to_string() },
                     },
-                    _ => ProfileUploadFailure::Empty,
+                    // Other AppError variants shouldn't reach this path either;
+                    // surface the underlying cause.
+                    e => ProfileUploadFailure::Internal { message: e.to_string() },
                 };
                 out.events.push(Event::ProfileUploadFailed { reason });
                 json(out)

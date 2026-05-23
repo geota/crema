@@ -20,8 +20,13 @@ use typeshare::typeshare;
 use crate::session::SessionTimer;
 
 /// Which kind of water-dispensing session the DE1 is running.
+///
+/// `#[non_exhaustive]` so additional session kinds (e.g. a future `SteamRinse`
+/// classification) can be added without breaking the FFI surface — this enum
+/// rides on every `WaterEvent::Started` payload.
 #[typeshare]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub enum WaterSessionKind {
     /// A hot-water pour (DE1 `HotWater` state).
     HotWater,

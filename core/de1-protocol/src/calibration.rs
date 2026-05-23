@@ -49,10 +49,15 @@ impl TryFrom<u8> for CalTarget {
 }
 
 /// What a calibration packet asks the DE1 to do.
+///
+/// `#[non_exhaustive]` so any future firmware-side calibration verb can
+/// land here without breaking the FFI surface — this enum is the payload
+/// of `Event::Calibration` alongside `CalTarget`.
 #[typeshare]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(u8)]
+#[non_exhaustive]
 pub enum CalCommand {
     /// Read the calibration currently in use.
     ReadCurrent = 0,
