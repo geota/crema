@@ -76,7 +76,6 @@
 
 	// ── Derived display values ─────────────────────────────────────────
 	const days = $derived(daysOffRoast(current.roastedOn));
-	const openedDays = $derived(daysOffRoast(current.openedOn));
 	const isActive = $derived(library.activeBeanId === current.id);
 
 	// ── Patch + commit ────────────────────────────────────────────────
@@ -132,9 +131,43 @@
 	const isRoasterMissing = $derived(!roasterName.trim());
 	const isRoastedOnMissing = $derived(!current.roastedOn);
 
+	/**
+	 * URL validity gate — accepts an empty value (the field is optional),
+	 * a bare URL with http:/https:, or rejects everything else (javascript:,
+	 * data:, file:, mailto: …). The bag editor lets users paste in a roastery
+	 * link for "Buy again"; only http(s) is safe to render as a clickable
+	 * anchor downstream.
+	 */
+	function isValidHttpUrl(v: string | null | undefined): boolean {
+		const s = (v ?? '').trim();
+		if (s === '') return true;
+		try {
+			const u = new URL(s);
+			return u.protocol === 'http:' || u.protocol === 'https:';
+		} catch {
+			return false;
+		}
+	}
+
+	const isBuyUrlInvalid = $derived(!isValidHttpUrl(current.url));
+	let urlTouched = $state(false);
+	const urlInputId = 'be-url-input';
+	const urlErrorId = 'be-url-error';
+
 	async function save(activate: boolean): Promise<void> {
 		attempted = true;
+		urlTouched = true;
 		await tick();
+		// URL validity is enforced for both new and live edits — an invalid
+		// `https://…` survives in storage until the next save anyway, so
+		// the easiest place to catch it is at the same gate as the required
+		// fields. Scroll the URL field into view + bounce out.
+		if (isBuyUrlInvalid) {
+			const el = document.getElementById(urlInputId) as HTMLInputElement | null;
+			el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+			el?.focus();
+			return;
+		}
 		if (isNew) {
 			if (isNameMissing) {
 				nameInputEl?.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -203,14 +236,17 @@
 	}
 
 	// ── TOC items ──────────────────────────────────────────────────────
+	// Tags moved inline under the Roaster field in the Identity block, so
+	// the standalone Tags entry is gone and the buy-again numbering shifts
+	// down. "Bag & grinder" → "Bag & Grind" matches the new block heading
+	// and the QStepper label used in quick controls.
 	const TOC = [
 		{ id: 'identity', label: 'Identity' },
 		{ id: 'roast', label: 'Roast & mix' },
 		{ id: 'dates', label: 'Dates' },
-		{ id: 'bag', label: 'Bag & grinder' },
+		{ id: 'bag', label: 'Bag & Grind' },
 		{ id: 'origin', label: 'Origin' },
 		{ id: 'tasting', label: 'Tasting' },
-		{ id: 'tags', label: 'Tags' },
 		{ id: 'buy', label: 'Buy again' }
 	] as const;
 
@@ -219,7 +255,10 @@
 		if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
 	}
 
-	const BAG_PRESETS = [150, 200, 227, 250, 340, 454] as const;
+	// Bag-size presets, ordered ascending — covers the most common retail
+	// sizes from the tiny 113g sampler through to the 5lb (2268g) wholesale
+	// brick. 907g (2lb) is omitted to keep the row from wrapping.
+	const BAG_PRESETS = [113, 227, 250, 340, 454, 1000, 2268] as const;
 
 	function setRoastLevel(n: number): void {
 		patch({ roastLevel: Math.max(1, Math.min(10, Math.round(n))) });
@@ -252,9 +291,9 @@
 		</div>
 		<div class="be-bar-actions">
 			<button class="be-btn be-btn-ghost" onclick={discard}>Cancel</button>
-			<button class="be-btn be-btn-primary" onclick={() => save(true)}>
-				<i class="ph ph-coffee" aria-hidden="true"></i>
-				{isNew ? 'Save & make active' : 'Save & make active'}
+			<button class="be-btn be-btn-primary" onclick={() => save(false)}>
+				<i class="ph ph-check" aria-hidden="true"></i>
+				Save
 			</button>
 		</div>
 	</header>
@@ -355,15 +394,49 @@
 						</div>
 					</div>
 
+					<!--
+					    Tags moved into the Identity block (below Roaster) per the
+					    design alignment pass — the standalone Tags section is
+					    gone. Same TagInput component, same suggestion list, just
+					    a different home.
+					-->
+					<div class="be-frow">
+						<div class="be-frow-l">
+							<div class="be-frow-label">Tags</div>
+							<div class="be-frow-sub">
+								Free-form labels — used to filter the library grid.
+							</div>
+						</div>
+						<div class="be-frow-r">
+							<TagInput tags={current.tags} suggestions={tagSuggestions} onChange={setTags} />
+						</div>
+					</div>
+
 					<div class="be-frow">
 						<div class="be-frow-l">
 							<div class="be-frow-label">Flags</div>
 							<div class="be-frow-sub">
-								Pin keeps the bag on the brew strip; decaf is a filter facet.
+								Active selects this bag on Brew. Pin keeps it on the brew
+								strip; decaf is a filter facet.
 							</div>
 						</div>
 						<div class="be-frow-r">
 							<div class="be-flagrow">
+								<!-- Active toggle drives the library's activeBeanId pointer.
+								     Effectively replaces the "& make active" half of the
+								     prior Save button. -->
+								<div class="be-flag" class:is-on={isActive}>
+									<i class="ph-fill ph-check-circle" aria-hidden="true"></i>
+									<span>Active</span>
+									<StToggle
+										on={isActive}
+										onChange={(v) => {
+											if (v) library.setActiveBean(current.id);
+											else if (isActive) library.setActiveBean(null);
+										}}
+										label="Active"
+									/>
+								</div>
 								<div class="be-flag" class:is-on={current.favourite}>
 									<i class="ph-fill ph-star" aria-hidden="true"></i>
 									<span>Pinned</span>
@@ -419,26 +492,28 @@
 							<div class="be-frow-label">Mix</div>
 							<div class="be-frow-sub">Single origin or blend.</div>
 						</div>
-						<div class="be-frow-r">
-							<div class="be-seg">
+						<div class="be-frow-r be-frow-r-end">
+							<!--
+							    The mix toggle is a small segmented pill — same scale as
+							    the settings `StSegment` so the editor reads as one
+							    design family. Right-aligned within the value column so
+							    the eye doesn't have to track from the left rule to a
+							    floating pill on the right; it lives flush with the
+							    column edge.
+							-->
+							<div class="be-seg be-seg-sm">
 								<button
 									type="button"
 									class="be-seg-opt"
 									class:is-on={current.mix === 'single'}
 									onclick={() => patch({ mix: 'single' })}
-								>
-									<i class="ph ph-coffee-bean" aria-hidden="true"></i>
-									<span>Single origin</span>
-								</button>
+								>Single</button>
 								<button
 									type="button"
 									class="be-seg-opt"
 									class:is-on={current.mix === 'blend'}
 									onclick={() => patch({ mix: 'blend' })}
-								>
-									<i class="ph ph-shuffle" aria-hidden="true"></i>
-									<span>Blend</span>
-								</button>
+								>Blend</button>
 							</div>
 						</div>
 					</div>
@@ -461,23 +536,21 @@
 						<div class="be-frow be-frow-stack">
 							<div class="be-frow-l">
 								<div class="be-frow-label">Roasted on <span class="be-req">*</span></div>
+								<div class="be-frow-sub">{dateHint(days)}</div>
 							</div>
 							<div class="be-frow-r">
-								<div class="be-fld-date">
-									<input
-										bind:this={roastedDateInputEl}
-										class="be-input"
-										class:is-invalid={attempted && isRoastedOnMissing}
-										type="date"
-										value={current.roastedOn ?? ''}
-										onchange={(e) =>
-											patch({
-												roastedOn:
-													(e.currentTarget as HTMLInputElement).value || null
-											})}
-									/>
-									<span class="be-fld-date-hint">{dateHint(days)}</span>
-								</div>
+								<input
+									bind:this={roastedDateInputEl}
+									class="be-input be-input-date"
+									class:is-invalid={attempted && isRoastedOnMissing}
+									type="date"
+									value={current.roastedOn ?? ''}
+									onchange={(e) =>
+										patch({
+											roastedOn:
+												(e.currentTarget as HTMLInputElement).value || null
+										})}
+								/>
 								{#if attempted && isRoastedOnMissing}
 									<div class="be-required">Required</div>
 								{/if}
@@ -489,19 +562,16 @@
 								<div class="be-frow-sub">When you cracked the bag.</div>
 							</div>
 							<div class="be-frow-r">
-								<div class="be-fld-date">
-									<input
-										class="be-input"
-										type="date"
-										value={current.openedOn ?? ''}
-										onchange={(e) =>
-											patch({
-												openedOn:
-													(e.currentTarget as HTMLInputElement).value || null
-											})}
-									/>
-									<span class="be-fld-date-hint">{dateHint(openedDays)}</span>
-								</div>
+								<input
+									class="be-input be-input-date"
+									type="date"
+									value={current.openedOn ?? ''}
+									onchange={(e) =>
+										patch({
+											openedOn:
+												(e.currentTarget as HTMLInputElement).value || null
+										})}
+								/>
 							</div>
 						</div>
 					</div>
@@ -566,12 +636,14 @@
 				</div>
 			</section>
 
-			<!-- Bag & grinder -->
+			<!-- Bag & Grind (renamed from "Bag & grinder" — matches the
+			     QStepper "Grind" label in the brew quick-controls so the
+			     mental model lines up). -->
 			<section class="be-block" id="be-bag">
 				<header class="be-block-head">
 					<span class="be-block-n">04</span>
 					<div>
-						<h3 class="be-block-title">Bag &amp; grinder</h3>
+						<h3 class="be-block-title">Bag &amp; Grind</h3>
 						<div class="be-block-sub">
 							Bag size auto-debits per shot. Grinder is bean-scoped — surfaced
 							at brew time when you swap to this bean.
@@ -611,9 +683,6 @@
 						<div class="be-frow be-frow-stack">
 							<div class="be-frow-l">
 								<div class="be-frow-label">Remaining</div>
-								<div class="be-frow-sub">
-									Defaults to bag size — adjust if the bag is partial.
-								</div>
 							</div>
 							<div class="be-frow-r">
 								<QStepper
@@ -647,7 +716,7 @@
 						</div>
 						<div class="be-frow be-frow-stack">
 							<div class="be-frow-l">
-								<div class="be-frow-label">Setting</div>
+								<div class="be-frow-label">Grind</div>
 							</div>
 							<div class="be-frow-r">
 								<QStepper
@@ -860,26 +929,11 @@
 				</div>
 			</section>
 
-			<!-- Tags -->
-			<section class="be-block" id="be-tags">
-				<header class="be-block-head">
-					<span class="be-block-n">07</span>
-					<div>
-						<h3 class="be-block-title">Tags</h3>
-						<div class="be-block-sub">
-							Free-form labels — used to filter the library grid.
-						</div>
-					</div>
-				</header>
-				<div class="be-block-body">
-					<TagInput tags={current.tags} suggestions={tagSuggestions} onChange={setTags} />
-				</div>
-			</section>
-
-			<!-- Buy again -->
+			<!-- Buy again (was 08 before the standalone Tags block was folded
+			     up into Identity; numbering compacted as a result). -->
 			<section class="be-block" id="be-buy">
 				<header class="be-block-head">
-					<span class="be-block-n">08</span>
+					<span class="be-block-n">07</span>
 					<div>
 						<h3 class="be-block-title">Buy again</h3>
 						<div class="be-block-sub">
@@ -912,14 +966,29 @@
 							</div>
 							<div class="be-frow-r">
 								<input
+									id={urlInputId}
 									class="be-input"
+									class:is-invalid={(urlTouched || attempted) && isBuyUrlInvalid}
+									type="url"
+									inputmode="url"
+									autocomplete="url"
+									aria-invalid={(urlTouched || attempted) && isBuyUrlInvalid}
+									aria-describedby={(urlTouched || attempted) && isBuyUrlInvalid
+										? urlErrorId
+										: undefined}
 									value={current.url ?? ''}
 									placeholder="https://…"
 									oninput={(e) =>
 										patch({
 											url: (e.currentTarget as HTMLInputElement).value || null
 										})}
+									onblur={() => (urlTouched = true)}
 								/>
+								{#if (urlTouched || attempted) && isBuyUrlInvalid}
+									<div id={urlErrorId} class="be-required">
+										Must start with https:// or http://
+									</div>
+								{/if}
 							</div>
 						</div>
 					</div>
@@ -946,9 +1015,9 @@
 					</button>
 				{/if}
 				<button class="be-btn be-btn-ghost" onclick={discard}>Cancel</button>
-				<button class="be-btn be-btn-primary be-btn-lg" onclick={() => save(true)}>
-					<i class="ph ph-coffee"></i>
-					{isNew ? 'Save & make active' : 'Save'}
+				<button class="be-btn be-btn-primary be-btn-lg" onclick={() => save(false)}>
+					<i class="ph ph-check"></i>
+					Save
 				</button>
 			</div>
 		</main>
@@ -1302,21 +1371,17 @@
 		font-size: 11px;
 		color: var(--danger);
 	}
-	.be-fld-date {
-		display: inline-flex;
-		align-items: center;
-		gap: 8px;
-	}
-	.be-fld-date input {
-		width: 180px;
-	}
-	.be-fld-date-hint {
-		font-family: var(--font-mono);
-		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.55);
+	/* Right-align the value column. Used on the Mix row so the small
+	   segmented control sits flush right rather than floating left of a
+	   long blank gutter. */
+	.be-frow-r-end {
+		align-items: flex-end;
 	}
 
-	/* Segmented (Mix) */
+	/* Segmented (Mix). `.be-seg-sm` matches the `.st-segment` from the
+	   settings panel — same 3px padded shell, 5px/12px button hit area,
+	   11px label — so the editor and settings read as one design
+	   family. */
 	.be-seg {
 		display: inline-flex;
 		gap: 4px;
@@ -1324,6 +1389,9 @@
 		padding: 4px;
 		border-radius: var(--radius-pill);
 		border: 1px solid rgba(var(--tint-rgb), 0.08);
+	}
+	.be-seg-sm {
+		padding: 3px;
 	}
 	.be-seg-opt {
 		display: inline-flex;
@@ -1340,12 +1408,22 @@
 		border-radius: var(--radius-pill);
 		transition: all var(--dur-1) var(--ease);
 	}
+	.be-seg-sm .be-seg-opt {
+		padding: 5px 12px;
+		font-size: 11px;
+	}
 	.be-seg-opt:hover {
 		color: var(--fg-1);
 	}
 	.be-seg-opt.is-on {
 		background: var(--copper-500);
 		color: var(--fg-on-accent);
+	}
+	/* Date input — used for the Roasted on / Opened on rows. Keeps a
+	   stable width so two date pickers in a be-grid2 line up regardless
+	   of locale-driven content length. */
+	.be-input-date {
+		max-width: 220px;
 	}
 
 	/* Flag row */
