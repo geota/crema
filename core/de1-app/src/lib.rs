@@ -12,6 +12,7 @@
 //!
 //! See `docs/08-ffi-and-web-scope.md` for the bridge design.
 
+mod capture;
 pub mod error;
 pub mod event;
 pub mod firmware_info;
@@ -19,6 +20,8 @@ pub mod firmware_info;
 pub use error::AppError;
 pub use event::{Command, CoreOutput, Event, ProfileUploadFailure, Source, WriteTarget};
 pub use firmware_info::{FirmwareUpdateStatus, LATEST_KNOWN_FIRMWARE_BUILD};
+
+use capture::{CaptureRecorder, MetaSnapshot, slice_to_jsonl};
 
 use std::time::Duration;
 
@@ -268,6 +271,29 @@ pub struct CremaCore {
     /// on every `ShotEvent::Started`; drained into `Event::ShotCompleted`
     /// on every `ShotEvent::Completed`. See [`ShotMetricsAccumulator`].
     shot_metrics: ShotMetricsAccumulator,
+    /// Rolling BLE-capture buffer + identity-keeper. Fed at the top of
+    /// [`on_notification`](Self::on_notification) (gated on
+    /// [`CaptureRecorder::is_suppressed`] so replays don't re-record
+    /// themselves); sliced into JSONL via
+    /// [`capture_slice_jsonl`](Self::capture_slice_jsonl). The shell used
+    /// to own this — pushed into the core (docs/26 audit) so web + Android
+    /// share one byte-for-byte implementation and the recorder side-effect
+    /// piggybacks the existing wasm-boundary crossing.
+    capture: CaptureRecorder,
+    /// BLE advertised name of the most recently `connect_scale`'d scale, so
+    /// the META prelude can carry it. `None` until a scale identifies; reset
+    /// by [`reset`](Self::reset) and re-set on every [`connect_scale`](Self::connect_scale).
+    last_scale_advertised_name: Option<String>,
+    /// Most recent value read from MMR register `0x80000C`
+    /// ([`MmrRegister::MachineModel`]). `None` until the MMR has been read at
+    /// least once. Feeds the capture META prelude alongside
+    /// [`last_firmware_build`](Self::last_firmware_build) and
+    /// [`last_serial_number`](Self).
+    last_machine_model: Option<u32>,
+    /// Most recent value read from MMR register `0x803830`
+    /// ([`MmrRegister::SerialNumber`]). `None` until the MMR has been read at
+    /// least once. Feeds the capture META prelude.
+    last_serial_number: Option<u32>,
 }
 
 /// In-flight state of one profile upload. Owned by
@@ -332,6 +358,10 @@ impl CremaCore {
             line_freq_detector: LineFreqDetector::new(),
             line_freq_override: None,
             shot_metrics: ShotMetricsAccumulator::default(),
+            capture: CaptureRecorder::default(),
+            last_scale_advertised_name: None,
+            last_machine_model: None,
+            last_serial_number: None,
         }
     }
 
@@ -407,7 +437,16 @@ impl CremaCore {
         // A newly connected scale has not yet been asked for its serial /
         // settings; re-arm the one-shot connect-time queries.
         self.scale_config_queried = false;
-        self.scale.as_ref().map(|scale| scale.label().to_owned())
+        // Remember the advertised name for the capture META prelude — the
+        // replay tool reads it to call `connectScale(name)` BEFORE iterating
+        // the bytes (so subsequent SCALE_WEIGHT entries can decode). Only
+        // stamped when the name identifies a supported scale, since the
+        // capture is only useful when there's a decoder.
+        let label = self.scale.as_ref().map(|scale| scale.label().to_owned());
+        if label.is_some() {
+            self.last_scale_advertised_name = Some(advertised_name.to_owned());
+        }
+        label
     }
 
     /// What the connected scale can do beyond reporting a bare weight — see
@@ -1184,6 +1223,14 @@ impl CremaCore {
     /// here, then handed to the internal handlers and monitors that all speak
     /// `Duration`.
     pub fn on_notification(&mut self, source: Source, data: &[u8], now_ms: u64) -> CoreOutput {
+        // Capture side-effect first — the recorder needs the raw notification
+        // bytes regardless of whether the decode that follows succeeds, and
+        // running it here (rather than at each shell's BLE-manager layer)
+        // means the recorder lives in one place and rides the same wasm
+        // boundary crossing as the decode. Suppressed during a capture
+        // replay so a replay doesn't re-record itself; see
+        // [`set_replay_mode`](Self::set_replay_mode).
+        self.capture.record(source, data, now_ms);
         let now = ms_to_duration(now_ms);
         let mut out = CoreOutput::default();
         match source {
@@ -1233,8 +1280,56 @@ impl CremaCore {
         out
     }
 
+    /// Slice the rolling BLE-capture buffer to JSONL covering `[from_ms,
+    /// to_ms]`, with the connect-phase identity entries (latest DE1_VERSION /
+    /// DE1_STATE / DE1_SHOT_SETTINGS / per-register DE1_MMR_READ + first
+    /// SCALE_WEIGHT) prepended ahead of the window so a replay can decode
+    /// the bytes that follow, and one META prelude line carrying the scale's
+    /// advertised name + DE1 firmware / model / serial when each is known.
+    ///
+    /// The wire format matches the Android `BleSessionRecorder`, the Rust
+    /// `examples/replay.rs` tool, and the web `lib/replay/capture` parser
+    /// byte-for-byte: one
+    /// `{"t":<ms>,"dir":"in","src":"<NAME>","hex":"<lower-hex>"}` object per
+    /// line, with an optional `{"src":"META","meta":{…}}` first line. Empty
+    /// when the recorder is empty.
+    pub fn capture_slice_jsonl(&self, from_ms: u64, to_ms: u64) -> String {
+        slice_to_jsonl(&self.capture, &self.meta_snapshot(), from_ms, to_ms)
+    }
+
+    /// Drop every captured entry — used by the shell on BLE disconnect, where
+    /// the live session is gone but the rest of the core (settings, history,
+    /// the active profile, …) must stay intact. Distinct from
+    /// [`reset`](Self::reset), which wipes everything.
+    pub fn capture_clear(&mut self) {
+        self.capture.clear();
+    }
+
+    /// Silence the rolling capture buffer (during a replay, when the shell
+    /// is feeding the core its own recorded notifications and re-recording
+    /// them would double-write IndexedDB on the next ShotCompleted). The
+    /// shell wraps `replayCapture` with `set_replay_mode(true)` /
+    /// `set_replay_mode(false)` in a try/finally.
+    pub fn set_replay_mode(&mut self, on: bool) {
+        self.capture.set_suppressed(on);
+    }
+
+    /// Build the [`MetaSnapshot`] handed to the capture slicer. The fields
+    /// are pulled from the live state the decoders maintain — same source
+    /// of truth the shell's `de1MachineInfo` snapshot would read.
+    fn meta_snapshot(&self) -> MetaSnapshot {
+        MetaSnapshot {
+            scale_name: self.last_scale_advertised_name.clone(),
+            de1_firmware_version: self.last_firmware_build.map(u32::from),
+            de1_machine_model: self.last_machine_model,
+            de1_serial_number: self.last_serial_number,
+        }
+    }
+
     /// Discard all session state — e.g. on disconnect. The connected scale and
-    /// armed auto-stop targets are cleared too.
+    /// armed auto-stop targets are cleared too, and the capture rolling
+    /// buffer is wiped (a fresh [`CaptureRecorder`] is part of
+    /// [`CremaCore::new`]).
     pub fn reset(&mut self) {
         *self = CremaCore::new();
     }
@@ -1694,8 +1789,23 @@ impl CremaCore {
             // 65535); saturate on the impossible overflow path so the
             // comparison still pins "newer than Crema knows" instead of
             // silently truncating.
-            if register == MmrRegister::FirmwareVersion {
-                self.last_firmware_build = Some(u16::try_from(value).unwrap_or(u16::MAX));
+            //
+            // MachineModel + SerialNumber land in the capture META prelude
+            // (so the replay tool can `connectScale(name)` and know which
+            // DE1 model + serial the bytes came from); cached unscaled
+            // because META carries the integers exactly as the shell wrote
+            // them in the pre-core implementation.
+            match register {
+                MmrRegister::FirmwareVersion => {
+                    self.last_firmware_build = Some(u16::try_from(value).unwrap_or(u16::MAX));
+                }
+                MmrRegister::MachineModel => {
+                    self.last_machine_model = Some(value);
+                }
+                MmrRegister::SerialNumber => {
+                    self.last_serial_number = Some(value);
+                }
+                _ => {}
             }
             out.events.push(Event::MmrValue { register, value });
         }

@@ -481,6 +481,30 @@ impl CremaBridge {
         self.core.reset();
     }
 
+    /// Slice the rolling BLE-capture buffer to JSONL covering
+    /// `[from_ms, to_ms]`, with connect-phase identity entries + META
+    /// prelude prepended. The shell parses the result back into its
+    /// `CaptureEntry[]` for IndexedDB persistence. See
+    /// [`CremaCore::capture_slice_jsonl`].
+    pub fn capture_slice_jsonl(&self, from_ms: f64, to_ms: f64) -> String {
+        self.core
+            .capture_slice_jsonl(from_ms as u64, to_ms as u64)
+    }
+
+    /// Drop every recorded entry — called by the shell on BLE disconnect.
+    /// Distinct from [`reset`](Self::reset), which wipes the whole core.
+    pub fn capture_clear(&mut self) {
+        self.core.capture_clear();
+    }
+
+    /// Suppress the rolling capture-buffer recorder while feeding the core a
+    /// replay (so the replay's own notifications don't get re-recorded). The
+    /// shell wraps `replayCapture` with `set_replay_mode(true)` /
+    /// `set_replay_mode(false)` in a try/finally.
+    pub fn set_replay_mode(&mut self, on: bool) {
+        self.core.set_replay_mode(on);
+    }
+
     /// Identify and connect a scale from its BLE advertised name. Returns the
     /// connected scale's display label, or `undefined` if the name matched no
     /// supported scale.

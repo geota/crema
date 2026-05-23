@@ -26,7 +26,7 @@ import { MachineState, MmrRegister } from '$lib/core/crema-core';
 import { De1Manager, EMPTY_DE1_DIAGNOSTICS, ScaleManager } from '$lib/ble';
 import { getBeanStore } from '$lib/bean';
 import { getHistoryStore } from '$lib/history';
-import { getCaptureRecorder, getCaptureStore, type CaptureEntry } from '$lib/capture';
+import { getCaptureStore, type CaptureEntry } from '$lib/capture';
 import { getProfileStore, toCoreProfile } from '$lib/profiles';
 import { getSettingsStore } from '$lib/settings';
 import { getMaintenanceStore } from '$lib/maintenance';
@@ -396,24 +396,26 @@ export class CremaApp {
 				// driver feeds the core directly, bypassing the BLE managers),
 				// so a put would persist a mismatched slice.
 				if (record && this.shotStartedAtMs !== null && this.replayAbort === null) {
-					const slice = getCaptureRecorder().slice(
-						this.shotStartedAtMs - CAPTURE_LEAD_MS,
-						performance.now()
-					);
-					// Prepend an explicit META entry carrying the scale's
-					// advertised name (and other identifying info) so the
-					// replay tool can `connectScale(name)` *before* feeding
-					// any SCALE_WEIGHT bytes. The advertised name is the
-					// most reliable scale-model signal — better than the
-					// wire-signature sniff `guessScaleAdvertisedName` does
-					// for older captures.
-					const enriched =
-						slice.length > 0
-							? this.enrichSliceWithMeta(slice, snapshot)
-							: slice;
-					if (enriched.length > 0) {
-						void getCaptureStore().put(record.id, enriched);
-					}
+					// The core owns the rolling buffer (`core/de1-app/src/capture.rs`)
+					// and prepends both the identity-keeper entries and the META
+					// prelude with the scale's advertised name + DE1 firmware /
+					// model / serial. Read the slice as JSONL — same wire format
+					// the Android `BleSessionRecorder`, the Rust replay tool, and
+					// the web replay parser all consume — parse it back into the
+					// `CaptureEntry[]` IndexedDB structured-clones.
+					const fromMs = this.shotStartedAtMs - CAPTURE_LEAD_MS;
+					const toMs = performance.now();
+					const shotId = record.id;
+					void this.core.captureSliceJsonl(fromMs, toMs).then((jsonl) => {
+						if (!jsonl) return;
+						const entries: CaptureEntry[] = jsonl
+							.split('\n')
+							.filter((line) => line.length > 0)
+							.map((line) => JSON.parse(line) as CaptureEntry);
+						if (entries.length > 0) {
+							void getCaptureStore().put(shotId, entries);
+						}
+					});
 				}
 				this.shotStartedAtMs = null;
 			}
@@ -592,46 +594,6 @@ export class CremaApp {
 	 */
 	async setLineFrequencyOverride(hz: 0 | 50 | 60): Promise<void> {
 		await this.core.setLineFrequencyOverride(hz);
-	}
-
-	/**
-	 * Prepend a synthetic META entry to a capture slice carrying connect-
-	 * phase identity (scale advertised name, DE1 firmware version). The
-	 * replay tool reads META on load and uses it to set up the wasm core
-	 * (`connectScale(name)`, …) BEFORE iterating the BLE byte stream —
-	 * otherwise scale weights can't decode (the core needs a scale model
-	 * selected up front).
-	 *
-	 * Timestamp tucked one ms before the first slice entry so it always
-	 * lands first in chronological replay; if the slice is empty, lands
-	 * at `performance.now()`.
-	 */
-	private enrichSliceWithMeta(
-		slice: readonly CaptureEntry[],
-		snapshot: UiSnapshot
-	): CaptureEntry[] {
-		const meta: Record<string, string | number | undefined> = {};
-		if (snapshot.scaleName) meta.scaleName = snapshot.scaleName;
-		if (snapshot.de1MachineInfo.FirmwareVersion != null) {
-			meta.de1FirmwareVersion = snapshot.de1MachineInfo.FirmwareVersion;
-		}
-		if (snapshot.de1MachineInfo.MachineModel != null) {
-			meta.de1MachineModel = snapshot.de1MachineInfo.MachineModel;
-		}
-		if (snapshot.de1MachineInfo.SerialNumber != null) {
-			meta.de1SerialNumber = snapshot.de1MachineInfo.SerialNumber;
-		}
-		// No identifying info? Nothing to prepend.
-		if (Object.keys(meta).length === 0) return [...slice];
-		const firstT = slice[0]?.t ?? performance.now();
-		const metaEntry: CaptureEntry = {
-			t: firstT - 1,
-			dir: 'in',
-			src: 'META',
-			hex: '',
-			meta
-		};
-		return [metaEntry, ...slice];
 	}
 
 	/**
@@ -1080,6 +1042,13 @@ export class CremaApp {
 		// Start from a clean core session so the replayed shot is not blended
 		// with any prior (or live) session's state.
 		await this.core.reset();
+		// Suppress the core's rolling capture buffer for the duration of the
+		// replay — without this the replay's own notifications would be
+		// re-recorded and the next `ShotCompleted` would persist a slice of
+		// replayed bytes back to IndexedDB, double-writing the capture. The
+		// flag is paired with the `finally` below that unconditionally
+		// clears it.
+		await this.core.setReplayMode(true);
 		// The replay also drops the telemetry wall-clock anchor — replayed
 		// timestamps must not integrate the gap since the last live sample.
 		this.lastTelemetryAtMs = null;
@@ -1180,6 +1149,9 @@ export class CremaApp {
 			}
 		} finally {
 			this.replayAbort = null;
+			// Always clear the replay-mode flag — including on the abort /
+			// error paths — so the next live BLE session resumes capturing.
+			await this.core.setReplayMode(false);
 		}
 	}
 
