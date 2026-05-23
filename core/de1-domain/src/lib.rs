@@ -23,7 +23,10 @@
 //! - [`filter`] — [`median`](filter::median) computation, for smoothing a
 //!   vibration-noisy signal.
 //! - [`session`] — [`SessionTimer`], the timing core shared by the monitors.
+//! - [`bean`] — pure roast-classification helpers ([`roast_band`],
+//!   [`days_off_roast`], [`roast_freshness`]) shared by every shell.
 
+pub mod bean;
 pub mod builtin;
 pub mod error;
 pub mod filter;
@@ -43,6 +46,7 @@ pub mod units;
 pub mod volume;
 pub mod water;
 
+pub use bean::{RoastBand, RoastFreshness, days_off_roast, roast_band, roast_freshness};
 pub use builtin::{BUILTIN_PROFILE_COUNT, builtin_profiles};
 pub use error::{DomainError, ImportError};
 pub use flow::{Estimate, FlowAlgorithm, FlowEstimator};

@@ -323,6 +323,62 @@ pub fn format_bookoo_firmware(encoded: u16) -> String {
     de1_app::bookoo::format_firmware_version(encoded)
 }
 
+/// Classify a 1..10 roast level into a named band — returns the lowercase
+/// wire string (`"light"` / `"medium"` / `"dark"`), or `undefined` for a
+/// missing (`None`) level. Values outside 1..10 are clamped first. See
+/// `de1_domain::roast_band` for the canonical implementation.
+#[wasm_bindgen]
+pub fn roast_band(level: Option<i32>) -> Option<String> {
+    level.map(|n| de1_domain::roast_band(n).as_str().to_owned())
+}
+
+/// Whole calendar days (UTC) between an ISO `yyyy-mm-dd` roast date and
+/// `now_unix_ms` — the bean's "days off roast". Returns `undefined` when
+/// the date string is malformed or empty. See `de1_domain::days_off_roast`
+/// for the canonical implementation.
+///
+/// `now_unix_ms` is an `f64` because the wasm-bindgen ABI cannot cross
+/// `i64` cleanly; the caller passes `Date.now()` (an integer-valued
+/// `f64`). Internally truncated to `i64` for the calendar math.
+#[wasm_bindgen]
+pub fn days_off_roast(roasted_on: Option<String>, now_unix_ms: f64) -> Option<f64> {
+    let date = roasted_on?;
+    // `Date.now()` is always integer-valued in JS; truncate defensively
+    // so a non-finite caller value yields `None` rather than a panic.
+    if !now_unix_ms.is_finite() {
+        return None;
+    }
+    #[allow(clippy::cast_possible_truncation)]
+    let now_ms = now_unix_ms as i64;
+    #[allow(clippy::cast_precision_loss)]
+    de1_domain::days_off_roast(&date, now_ms).map(|d| d as f64)
+}
+
+/// Rate how a bean's `days` off roast sits against the ideal rest window
+/// for its `band` — the bean card's status verdict. `band` is the
+/// lowercase wire string (`"light"` / `"medium"` / `"dark"`); `days` is
+/// the integer day count. Returns the lowercase wire verdict
+/// (`"best"` / `"ok"` / `"bad"`), or `undefined` when either input is
+/// missing or `band` is not a recognised band. See
+/// `de1_domain::roast_freshness` for the canonical implementation.
+#[wasm_bindgen]
+pub fn roast_freshness(band: Option<String>, days: Option<f64>) -> Option<String> {
+    let band = band?;
+    let days = days?;
+    if !days.is_finite() {
+        return None;
+    }
+    #[allow(clippy::cast_possible_truncation)]
+    let days_i = days as i64;
+    let band = match band.as_str() {
+        "light" => de1_domain::RoastBand::Light,
+        "medium" => de1_domain::RoastBand::Medium,
+        "dark" => de1_domain::RoastBand::Dark,
+        _ => return None,
+    };
+    Some(de1_domain::roast_freshness(band, days_i).as_str().to_owned())
+}
+
 /// Hard wire-protocol bounds for DE1 profile fields, exposed to shells as
 /// a single JSON snapshot so steppers / validators / form widgets reach
 /// for the same numbers. The shell parses the result once at module load
@@ -1016,6 +1072,61 @@ mod tests {
         // After the idle delay a tick engages eco mode and rewrites the target.
         let json = bridge.on_tick(600_000.0);
         assert!(json.contains("SteamEcoModeChanged"));
+    }
+
+    #[test]
+    fn roast_band_classifies_or_returns_none() {
+        assert_eq!(roast_band(Some(1)), Some("light".to_owned()));
+        assert_eq!(roast_band(Some(5)), Some("medium".to_owned()));
+        assert_eq!(roast_band(Some(10)), Some("dark".to_owned()));
+        // Clamped: 999 reads as dark.
+        assert_eq!(roast_band(Some(999)), Some("dark".to_owned()));
+        // None in, None out — the bean has no logged level.
+        assert_eq!(roast_band(None), None);
+    }
+
+    #[test]
+    fn days_off_roast_handles_missing_date_and_now() {
+        // 2026-05-22T12:00:00Z — same reference as the de1-domain tests.
+        let now_ms = 1_779_451_200_000.0;
+        assert_eq!(
+            days_off_roast(Some("2026-05-15".to_owned()), now_ms),
+            Some(7.0)
+        );
+        // Missing date → None.
+        assert_eq!(days_off_roast(None, now_ms), None);
+        // Malformed date → None.
+        assert_eq!(
+            days_off_roast(Some("not-a-date".to_owned()), now_ms),
+            None
+        );
+        // Non-finite now → None (defensive).
+        assert_eq!(
+            days_off_roast(Some("2026-05-22".to_owned()), f64::NAN),
+            None
+        );
+    }
+
+    #[test]
+    fn roast_freshness_returns_lowercase_verdict_or_none() {
+        // Dark roast, 7 days off → inside green [4, 10] → best.
+        assert_eq!(
+            roast_freshness(Some("dark".to_owned()), Some(7.0)),
+            Some("best".to_owned())
+        );
+        // Light roast, 50 days off → past ok_high (35) → bad.
+        assert_eq!(
+            roast_freshness(Some("light".to_owned()), Some(50.0)),
+            Some("bad".to_owned())
+        );
+        // Missing band or days → None.
+        assert_eq!(roast_freshness(None, Some(7.0)), None);
+        assert_eq!(roast_freshness(Some("dark".to_owned()), None), None);
+        // Unrecognised band → None (graceful — not a panic).
+        assert_eq!(
+            roast_freshness(Some("ultraviolet".to_owned()), Some(7.0)),
+            None
+        );
     }
 
     #[test]
