@@ -1124,7 +1124,7 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
  */
 export class CremaUiState {
 	/** The current snapshot — reactive; assigning re-renders readers. */
-	current = $state<UiSnapshot>(INITIAL_SNAPSHOT);
+	current = $state.raw<UiSnapshot>(INITIAL_SNAPSHOT);
 
 	/** Fold one core `Event` into the snapshot. */
 	applyEvent(event: Event): void {
