@@ -868,6 +868,31 @@ impl CremaBridge {
             .map_err(|e| e.to_string())
     }
 
+    /// Reset 8 machine settings to factory baseline — mirrors reaprime's
+    /// `DELETE /api/v1/machine/settings/reset`. Returns a JSON-encoded
+    /// [`CoreOutput`] with 8 sequential MMR writes (fan threshold,
+    /// hot-water idle temp, heater phase 1/2 flows, espresso warmup
+    /// timeout, refill kit auto, flow-calibration multiplier, steam
+    /// purge mode). Profiles, history, and app preferences are
+    /// untouched. See `docs/27-write-side-gaps.md` appendix
+    /// "settings-reset baseline values".
+    ///
+    /// Errors are surfaced as a thrown `Error` — today the core's
+    /// implementation is infallible, but the `Result` shape mirrors
+    /// [`set_heater_voltage`](Self::set_heater_voltage) for forward
+    /// symmetry.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`AppError`](de1_app::AppError) display string when
+    /// the core rejects the request (none today).
+    pub fn reset_machine_defaults(&self) -> Result<String, String> {
+        self.core
+            .reset_machine_defaults()
+            .map(json)
+            .map_err(|e| e.to_string())
+    }
+
     /// Set the cup-warmer temperature, °C (Bengle models only). MMR
     /// `0x803874`, 2-byte.
     pub fn set_cup_warmer_temperature(&self, temp_c: u8) -> String {
@@ -1151,6 +1176,24 @@ mod tests {
         ] {
             assert!(json.contains("WriteCharacteristic"));
             assert!(json.contains("De1Calibration"));
+        }
+    }
+
+    #[test]
+    fn reset_machine_defaults_returns_eight_write_characteristic_commands() {
+        // The bridge's `reset_machine_defaults` mirrors reaprime's
+        // settings-reset endpoint — the JSON should carry exactly 8
+        // `WriteCharacteristic` commands targeting `De1MmrWrite`.
+        let bridge = CremaBridge::new();
+        let json = bridge
+            .reset_machine_defaults()
+            .expect("infallible without a firmware lockout");
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let commands = parsed["commands"].as_array().unwrap();
+        assert_eq!(commands.len(), 8);
+        for cmd in commands {
+            assert_eq!(cmd["type"], "WriteCharacteristic");
+            assert_eq!(cmd["content"]["target"], "De1MmrWrite");
         }
     }
 
