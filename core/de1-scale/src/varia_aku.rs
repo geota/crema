@@ -34,6 +34,28 @@ pub fn parse_weight(data: &[u8]) -> Option<f32> {
     Some(if negative { -magnitude } else { magnitude })
 }
 
+/// Decode the Varia AKU battery percentage from a battery notification.
+///
+/// A battery frame has `command` byte `0x85` and `length` byte `0x01`; byte
+/// `[3]` is the battery percentage. Returns `None` for any other frame
+/// shape.
+///
+/// **Defer to reaprime.** Legacy de1app has a Tcl `$`-missing bug at
+/// `de1plus/bluetooth.tcl:1617`: it writes
+/// `set ::de1(scale_battery_level) battery` (the literal string `battery`,
+/// not the variable `$battery`), so the battery byte is silently dropped.
+/// Reaprime correctly assigns `_batteryLevel = data[3]`
+/// (`reaprime/lib/src/models/device/impl/varia/varia_aku_scale.dart:160`).
+/// Per docs/30 §"Top three places Crema should defer to reaprime", Crema
+/// adopts reaprime's decode here.
+#[must_use]
+pub fn parse_battery_percent(data: &[u8]) -> Option<u8> {
+    if data.len() < 5 || data[1] != 0x85 || data[2] != 0x01 {
+        return None;
+    }
+    Some(data[3])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -87,5 +109,26 @@ mod tests {
     fn rejects_a_short_packet() {
         // A correct weight header but only six bytes — one short of the minimum.
         assert_eq!(parse_weight(&[0x00, 0x01, 0x03, 0x00, 0x07, 0x08]), None);
+    }
+
+    #[test]
+    fn decodes_a_battery_notification() {
+        // `command=0x85, length=0x01, percent=78`.
+        let frame = [0x00, 0x85, 0x01, 78, 0x00];
+        assert_eq!(parse_battery_percent(&frame), Some(78));
+    }
+
+    #[test]
+    fn battery_rejects_a_weight_frame() {
+        // A `command=0x01` weight frame isn't a battery frame.
+        let frame = [0x00, 0x01, 0x03, 0x00, 0x07, 0x08, 0x00];
+        assert_eq!(parse_battery_percent(&frame), None);
+    }
+
+    #[test]
+    fn battery_rejects_a_short_frame() {
+        // A `command=0x85` frame must be at least 5 bytes (header + cmd +
+        // length + percent byte + checksum-ish trailer).
+        assert_eq!(parse_battery_percent(&[0x00, 0x85, 0x01, 78]), None);
     }
 }

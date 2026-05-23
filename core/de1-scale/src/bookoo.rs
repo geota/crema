@@ -157,6 +157,22 @@ pub const COMMAND_UUID: &str = "0000ff12-0000-1000-8000-00805f9b34fb";
 /// always correct by construction — see the [`COMMANDS`](self#commands) section
 /// of the module docs. Every constant and builder in this module is defined in
 /// terms of this function; checksums are never hand-typed.
+///
+/// # Why Crema's XOR is the source of truth — not legacy de1app or reaprime
+///
+/// **Both upstream apps ship the wrong XOR for the three timer commands.**
+/// Legacy de1app hand-types `0A`/`0D`/`0C` for `TIMER_START`/`TIMER_STOP`/
+/// `TIMER_RESET` (`de1plus/bluetooth.tcl:471-503`), and reaprime mirrors the
+/// same wrong bytes (`reaprime/lib/src/models/device/impl/bookoo/miniscale.dart:131-149`).
+/// The structurally-correct XOR per this builder is `0D`/`0C`/`0F`. The
+/// Bookoo's firmware appears to either ignore the XOR or has been silently
+/// dropping the timer commands in both apps for years (the documented
+/// "open question" in docs/30 §Bookoo / docs/29 §Bookoo).
+///
+/// Crema's `const fn command()` derives the XOR structurally — see the test
+/// `timer_constants_match_the_captured_bytes`. Per docs/30 §"Top three places
+/// Crema should ignore reaprime", Crema is the source of truth here; do NOT
+/// "fix" Crema's bytes down to match either upstream app.
 #[must_use]
 pub const fn command(cmd: u8, p1: u8, p2: u8) -> [u8; 6] {
     let xor = 0x03 ^ 0x0A ^ cmd ^ p1 ^ p2;

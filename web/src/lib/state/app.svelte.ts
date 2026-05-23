@@ -936,29 +936,74 @@ export class CremaApp {
 	}
 
 	/**
-	 * Tell the core which unit the user wants on the Decent Scale's
+	 * Tell the core which unit the user wants on the connected scale's
 	 * on-scale LCD. The Settings page calls this whenever the
-	 * `weightUnit` pref changes; the core then picks the right LCD-enable
-	 * packet on the next DE1 Idle entry. If a Decent Scale is currently
-	 * connected and the DE1 is already in Idle, the LCD won't switch
-	 * until the next Idle re-entry — call {@link refreshDecentScaleLcd}
-	 * after this to push the new variant immediately.
+	 * `weightUnit` pref changes.
+	 *
+	 * The core caches the pref so the Decent Scale and Skale II LCD-enable
+	 * auto-policy picks the right wire packet on the next DE1 Idle entry,
+	 * and the Eureka Precisa / Solo Barista's set-unit-grams write fires
+	 * automatically. To push the new variant *immediately* (rather than
+	 * waiting for an Idle re-entry), follow this call with
+	 * {@link refreshScaleLcd}.
 	 */
 	async applyWeightUnitPref(unit: 'g' | 'oz'): Promise<void> {
 		await this.core.setWeightUnitPref(unit);
 	}
 
 	/**
-	 * Re-emit the Decent Scale LCD-enable packet in the *current* weight
-	 * unit. Use after {@link applyWeightUnitPref} when the user wants the
-	 * on-scale display to switch units immediately (rather than waiting
-	 * for the next DE1 Idle entry).
+	 * Re-emit per-scale unit / LCD packets in the *current* weight unit
+	 * for every scale that has a reactive surface tied to the user's
+	 * weight-unit pref. Use after {@link applyWeightUnitPref} when the
+	 * user wants the on-scale display to switch units immediately.
 	 *
-	 * No-op when no Decent Scale is connected.
+	 * Each underlying core method is independently capability-gated, so a
+	 * call when (say) a Bookoo is connected dispatches nothing — only the
+	 * scale that is currently connected reacts.
+	 *
+	 * Covers (per PR G): Decent Scale (LCD enable in g/oz), Skale II
+	 * (`ED EC` + optional `0x03` enable-grams), Eureka Precisa / Solo
+	 * Barista (`SET_UNIT_GRAMS` when the pref is grams), Difluid
+	 * Microbalance (`SET_UNIT_GRAMS`), Hiroia Jimmy (toggle-unit if the
+	 * scale is currently non-grams — the toggle fires automatically from
+	 * the weight-notification path; no manual write here).
 	 */
-	async refreshDecentScaleLcd(): Promise<void> {
+	async refreshScaleLcd(): Promise<void> {
 		const unit = getSettingsStore().current.weightUnit;
 		this.applyCoreOutput(await this.core.enableDecentScaleLcd(unit));
+		this.applyCoreOutput(await this.core.enableSkaleLcd(unit));
+		this.applyCoreOutput(await this.core.setEurekaPrecisaUnit(unit));
+		if (unit === 'g') {
+			this.applyCoreOutput(await this.core.setDifluidUnitGrams());
+		}
+	}
+
+	/**
+	 * Alias preserved for backwards compatibility: `refreshDecentScaleLcd`
+	 * was the PR-F shell entry point, before the same reactive flow was
+	 * extended to Skale II + Eureka Precisa + Difluid in PR G. New code
+	 * should call {@link refreshScaleLcd}.
+	 */
+	async refreshDecentScaleLcd(): Promise<void> {
+		await this.refreshScaleLcd();
+	}
+
+	/**
+	 * Toggle whether the connected Eureka Precisa / Solo Barista should be
+	 * powered off when the DE1 enters Sleep. Off by default; the user
+	 * opts in via the Machine settings page.
+	 */
+	async setEurekaPrecisaAutoOffOnSleep(enabled: boolean): Promise<void> {
+		await this.core.setEurekaPrecisaAutoOffOnSleep(enabled);
+	}
+
+	/**
+	 * Whether the Eureka Precisa / Solo Barista is configured to power
+	 * off on Sleep entry. Read by the Machine settings page to populate
+	 * the toggle.
+	 */
+	async eurekaPrecisaAutoOffOnSleep(): Promise<boolean> {
+		return this.core.eurekaPrecisaAutoOffOnSleep();
 	}
 
 	/**
