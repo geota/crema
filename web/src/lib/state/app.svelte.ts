@@ -1110,6 +1110,35 @@ export class CremaApp {
 		this.applyCoreOutput(await this.core.readCalibration(sensor, factory));
 	}
 
+	/**
+	 * Write a new sensor calibration: the DE1 reported `reported` while the
+	 * externally-measured true value was `measured`. Both arguments are in
+	 * the sensor's canonical units (°C / bar / ml·s⁻¹) — the caller is
+	 * responsible for converting from display units. Re-reads the current
+	 * calibration after the write so the UI reflects the value the DE1 now
+	 * reports as in-use; the factory read is unchanged.
+	 */
+	async writeCalibration(
+		sensor: import('$lib/core').CalTarget,
+		reported: number,
+		measured: number
+	): Promise<void> {
+		this.applyCoreOutput(await this.core.writeCalibration(sensor, reported, measured));
+		await this.readCalibration(sensor, false);
+	}
+
+	/**
+	 * Reset a sensor to its factory calibration. After the reset, refreshes
+	 * both the in-use and factory values so the UI reflects what the DE1
+	 * now applies (and a stale factory readout from a prior session is
+	 * brought up to date).
+	 */
+	async resetCalibrationToFactory(sensor: import('$lib/core').CalTarget): Promise<void> {
+		this.applyCoreOutput(await this.core.resetCalibrationToFactory(sensor));
+		await this.readCalibration(sensor, false);
+		await this.readCalibration(sensor, true);
+	}
+
 	// ---- User-presence heartbeat ------------------------------------------
 	//
 	// `markUserPresent()` writes a `1` to `0x803860` via `WriteToMMR`
