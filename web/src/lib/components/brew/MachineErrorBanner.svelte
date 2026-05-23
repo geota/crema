@@ -18,10 +18,28 @@
 	 */
 
 	let {
-		text
+		text,
+		title = 'Machine error',
+		onDismiss
 	}: {
 		/** The fault text — `null` when the machine is healthy. */
 		text: string;
+		/**
+		 * The banner's bolded header — defaults to "Machine error" for
+		 * the original firmware-fault use; overridden ("Can't start
+		 * shot", …) for shot-start blockers that re-use this banner's
+		 * shape.
+		 */
+		title?: string;
+		/**
+		 * Optional dismiss callback — when present, renders a small `✕`
+		 * button on the right of the banner. Firmware faults clear
+		 * themselves when the substate resolves, so the original use
+		 * site omits this; transient banners (e.g. the no-profile
+		 * blocker) pass a setter that clears the parent's
+		 * `shotStartError` state.
+		 */
+		onDismiss?: () => void;
 	} = $props();
 </script>
 
@@ -30,7 +48,39 @@
 		<i class="ph-duotone ph-warning" aria-hidden="true"></i>
 	</span>
 	<span class="mc-head-status-text">
-		<span class="mc-head-status-name">Machine error</span>
+		<span class="mc-head-status-name">{title}</span>
 		<span class="mc-head-status-meta">{text}</span>
 	</span>
+	{#if onDismiss}
+		<button
+			type="button"
+			class="mc-head-status-dismiss"
+			onclick={onDismiss}
+			aria-label="Dismiss"
+		>
+			<i class="ph ph-x" aria-hidden="true"></i>
+		</button>
+	{/if}
 </div>
+
+<style>
+	.mc-head-status-dismiss {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 22px;
+		height: 22px;
+		margin-left: 6px;
+		border: 0;
+		background: transparent;
+		color: inherit;
+		opacity: 0.7;
+		cursor: pointer;
+		border-radius: 999px;
+		transition: opacity 120ms ease, background 120ms ease;
+	}
+	.mc-head-status-dismiss:hover {
+		opacity: 1;
+		background: rgba(var(--danger-rgb), 0.18);
+	}
+</style>

@@ -28,7 +28,9 @@
 		onChange,
 		fmt,
 		prefix,
-		dimension
+		dimension,
+		overridden = false,
+		overriddenTooltip
 	}: {
 		/** Optional caption above the stepper row. */
 		label?: string;
@@ -62,6 +64,21 @@
 		 * canonical on commit. `unit` is overridden by the user's pref label.
 		 */
 		dimension?: Dimension;
+		/**
+		 * Whether the current value differs from the active profile / brew
+		 * default seed — drives the italics + copper-tint "drift" cue on
+		 * the value display. Owned by the parent stepper component, which
+		 * reads `BrewParamState.isOverridden(key)`. Defaults to `false`
+		 * (the indicator is opt-in per stepper; not every Quick Sheet
+		 * card has a profile-side default to drift from).
+		 */
+		overridden?: boolean;
+		/**
+		 * Tooltip text shown on hover of an overridden value — typically
+		 * `"Overriding default 93 °C"` with the seed value formatted in
+		 * the user's pref. Ignored when `overridden` is `false`.
+		 */
+		overriddenTooltip?: string;
 	} = $props();
 
 	const settings = getSettingsStore();
@@ -152,7 +169,7 @@
 		<button class="qcs-btn" onclick={() => inc(-1)} aria-label="Decrease {label ?? 'value'}">
 			<i class="ph ph-minus" aria-hidden="true"></i>
 		</button>
-		<div class="qcs-val">
+		<div class="qcs-val" class:is-overridden={overridden}>
 			{@render prefix?.()}
 			{#if editing}
 				<input
@@ -164,7 +181,12 @@
 					onkeydown={onKey}
 				/>
 			{:else}
-				<button type="button" class="qcs-num qcs-num-btn" onclick={beginEdit}>
+				<button
+					type="button"
+					class="qcs-num qcs-num-btn"
+					onclick={beginEdit}
+					title={overridden ? overriddenTooltip : undefined}
+				>
 					{format(toDisplay(value))}
 				</button>
 			{/if}
@@ -212,5 +234,23 @@
 	:global(.qcs-num-input[type='number']) {
 		-moz-appearance: textfield;
 		appearance: textfield;
+	}
+	/* Drift indicator — the value differs from the active profile /
+	   brew-default seed. Italics + copper tint on both the digits and
+	   the unit suffix so the cue reads at a glance ("this isn't the
+	   default"). The unit colour follows the digits via `currentColor`-
+	   adjacent inheritance: the `.qcs-unit` element is dim by default;
+	   inside an overridden cell it picks up the copper hue too. */
+	.is-overridden :global(.qcs-num),
+	.is-overridden :global(.qcs-unit) {
+		font-style: italic;
+		color: var(--copper-400);
+	}
+	/* Keep the hover affordance on the click-to-edit button while
+	   overridden — the rule above turns the colour copper, so the
+	   prior generic hover would step back to copper-400 too; explicit
+	   here so the user sees a visible state change on hover. */
+	.is-overridden :global(.qcs-num-btn:hover) {
+		filter: brightness(1.12);
 	}
 </style>

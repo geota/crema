@@ -265,7 +265,11 @@
 		const profile = store.get(id);
 		const app = ctx().app;
 		if (profile && app) {
-			void app.uploadProfile(toCoreProfile(profile));
+			// `syncActiveProfile` (rather than the bare `uploadProfile`)
+			// so the fingerprint cache is kept in sync with the upload —
+			// without this, the next Coffee tap would see a stale cache
+			// and re-upload even though the bytes already match.
+			void app.syncActiveProfile(profile, {});
 		}
 	}
 

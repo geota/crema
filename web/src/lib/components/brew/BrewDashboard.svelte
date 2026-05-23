@@ -18,7 +18,13 @@
 	 * driving the machine is a separate net-new feature (see the `// TODO: wire
 	 * to DE1 control` markers in `QuickSheet.svelte` and `brew-params`).
 	 */
-	import { waterTankMl, waterRefillSoon, type UiSnapshot } from '$lib/state';
+	import {
+		waterTankMl,
+		waterRefillSoon,
+		NoActiveProfileError,
+		ProfileSyncFailedError,
+		type UiSnapshot
+	} from '$lib/state';
 	import { ShotPhase, MachineState, MmrRegister } from '$lib/core/crema-core';
 	import ModeChip from './ModeChip.svelte';
 	import ModeHeadStatus from './ModeHeadStatus.svelte';
@@ -662,26 +668,74 @@
 	 */
 	function selectFavorite(profile: CremaProfile): void {
 		profileStore.setActive(profile.id);
+		// Picking a profile resolves the "Select a profile first" blocker
+		// (and any sync-failed banner — the user's natural next move is
+		// to tap Coffee again, which retries the upload).
+		shotStartError = null;
 	}
+
+	/**
+	 * Pre-shot banner shown when the user taps Coffee in an invalid state —
+	 * the most common case being "no active profile selected". Sits in the
+	 * same dashboard header slot as `MachineErrorBanner` (and uses the
+	 * same `.is-error` skeleton), but is **transient** rather than
+	 * substate-driven: the user clears it by selecting a profile or by
+	 * tapping the dismiss `✕` on the banner.
+	 *
+	 * `null` means "no shot-start blocker active". A non-null string is
+	 * shown as the banner's body; the title is always "Can't start shot".
+	 */
+	let shotStartError = $state<string | null>(null);
+
+	/**
+	 * Whether a profile-sync upload is in flight — drives the "Syncing to
+	 * DE1…" pip + spinner glyph on the Coffee button while the lazy
+	 * re-upload's 1-2 s window is open. Reads the snapshot's
+	 * `profileUploadProgress` (set by `ProfileUploadStarted` and cleared
+	 * by `ProfileUploadCompleted` / `ProfileUploadFailed`) so any upload
+	 * surface — connect-time defensive sync, shot-start lazy sync, or a
+	 * manual Profiles-page Load on Brew — paints the indicator
+	 * uniformly without per-surface bookkeeping.
+	 */
+	const profileSyncing = $derived(ui.profileUploadProgress !== null);
 
 	/**
 	 * Start / stop a shot via the real DE1 control surface (real, not stub).
 	 *
-	 * The orchestrator's `startShot()` interposes a `HotWaterRinse` if
-	 * `prefs.groupFlushBeforeShot` is on, then requests `Espresso`;
-	 * `stopShot()` requests `Idle` which the firmware honours from any
-	 * session state. We treat any non-Idle DE1 state as "running" so a
-	 * shot the user kicked off via the on-machine touch button can be
-	 * stopped from the dashboard.
+	 * The orchestrator's `startShot(qc)` first verifies an active profile
+	 * is selected, then lazily re-uploads the effective profile to the
+	 * DE1 if the user's dial changes have drifted from what's currently
+	 * loaded (the `activeProfileFingerprint` cache), then interposes a
+	 * `HotWaterRinse` if `prefs.groupFlushBeforeShot` is on, then
+	 * requests `Espresso`. `stopShot()` requests `Idle` which the
+	 * firmware honours from any session state. We treat any non-Idle DE1
+	 * state as "running" so a shot the user kicked off via the on-machine
+	 * touch button can be stopped from the dashboard.
+	 *
+	 * Two error classes flow back as banners: {@link NoActiveProfileError}
+	 * (the user hasn't picked a profile) and {@link ProfileSyncFailedError}
+	 * (the lazy re-upload failed). Both clear themselves when the user
+	 * picks a profile / taps Coffee again.
 	 */
 	async function toggleRun(): Promise<void> {
 		if (!app || stateTransitionPending) return;
 		stateTransitionPending = true;
+		shotStartError = null;
 		try {
 			if (running) {
 				await app.stopShot();
+				return;
+			}
+			// The fingerprint compare + lazy re-upload happens inside
+			// `startShot()`; when no upload is needed the call returns
+			// promptly. `profileUploadProgress` (above) is the visible
+			// indicator during a genuine upload window.
+			await app.startShot(params.qcOverrides());
+		} catch (e) {
+			if (e instanceof NoActiveProfileError || e instanceof ProfileSyncFailedError) {
+				shotStartError = e.message;
 			} else {
-				await app.startShot();
+				throw e;
 			}
 		} finally {
 			stateTransitionPending = false;
@@ -753,6 +807,21 @@
 				     important signal. -->
 				<div class="crema-dash-head-mid">
 					<MachineErrorBanner text={ui.machineError} />
+				</div>
+			{:else if shotStartError != null}
+				<!-- Shot-start blocker — the user tapped Coffee in an
+				     invalid state (no active profile selected, or a lazy
+				     re-upload just failed). Re-uses the same `.is-error`
+				     skeleton so the dashboard has one visual language for
+				     "you can't start a shot right now" banners. Dismisses
+				     itself when the user picks a profile (via
+				     `selectFavorite`) or via the inline ✕. -->
+				<div class="crema-dash-head-mid">
+					<MachineErrorBanner
+						text={shotStartError}
+						title="Can't start shot"
+						onDismiss={() => (shotStartError = null)}
+					/>
 				</div>
 			{:else if modeState !== 'idle'}
 				<!-- Header mode pill — visible only while a service mode is
@@ -992,14 +1061,26 @@
 				<button
 					class="crema-bigbtn"
 					class:running
+					class:is-syncing={profileSyncing && !running}
 					disabled={stateTransitionPending || !modeReady}
 					onclick={toggleRun}
 				>
-					<i
-						class={'ph-fill ph-' + (running ? 'stop' : 'coffee')}
-						aria-hidden="true"
-					></i>
-					<span>{running ? 'Stop' : 'Coffee'}</span>
+					{#if profileSyncing && !running}
+						<!-- Sync pip — visible only while a profile upload
+						     is in flight on the Coffee leg (not while the
+						     shot is already running). Spinner glyph + the
+						     "Syncing to DE1…" caption replaces the usual
+						     coffee icon + label for the 1-2 s upload
+						     window. -->
+						<i class="ph ph-arrows-clockwise crema-bigbtn-spinner" aria-hidden="true"></i>
+						<span>Syncing to DE1…</span>
+					{:else}
+						<i
+							class={'ph-fill ph-' + (running ? 'stop' : 'coffee')}
+							aria-hidden="true"
+						></i>
+						<span>{running ? 'Stop' : 'Coffee'}</span>
+					{/if}
 				</button>
 			</div>
 		</div>
@@ -1021,5 +1102,26 @@
 	   (drawn by LiveChart's marker plugin); no chrome on the wrapper. */
 	.crema-chart {
 		cursor: crosshair;
+	}
+	/* Coffee-button sync state — visually mirrors the profile-sync chip
+	   in the header (subtle copper hue, spinning icon) so the same
+	   sync event reads identically wherever it appears. The button
+	   keeps its copper hue to remain "the shot control"; only the
+	   inner content swaps. */
+	:global(.crema-bigbtn.is-syncing) {
+		background: var(--copper-500);
+		box-shadow: 0 8px 24px rgba(var(--copper-rgb), 0.22);
+	}
+	:global(.crema-bigbtn-spinner) {
+		animation: bigbtn-spin 1.2s linear infinite;
+		font-size: 18px;
+	}
+	@keyframes bigbtn-spin {
+		from {
+			transform: rotate(0deg);
+		}
+		to {
+			transform: rotate(360deg);
+		}
 	}
 </style>
