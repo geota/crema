@@ -18,6 +18,7 @@
  */
 
 import type { TelemetrySample } from '$lib/state';
+import { filenameStamp } from '$lib/utils/download';
 import { formatRatio } from '$lib/utils/ratio';
 
 /**
@@ -116,9 +117,6 @@ export function stars(rating: number): string {
 /** A timestamped `.shot.json` filename for a v2-JSON-exported shot. */
 export function shotFilename(record: StoredShot): string {
 	const d = new Date(record.completedAt);
-	const p = (n: number): string => String(n).padStart(2, '0');
-	const stamp =
-		`${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}T` +
-		`${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
-	return `${stamp}.shot.json`;
+	const seconds = String(d.getSeconds()).padStart(2, '0');
+	return `${filenameStamp(d)}${seconds}.shot.json`;
 }

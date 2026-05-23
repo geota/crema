@@ -19,6 +19,7 @@
 	 * marks the missing service), shown as "Not connected" out of the box.
 	 */
 	import { getHistoryStore } from '$lib/history';
+	import { downloadBlob } from '$lib/utils/download';
 	import StSectionHead from '../StSectionHead.svelte';
 	import StGroup from '../StGroup.svelte';
 	import StRow from '../StRow.svelte';
@@ -46,16 +47,10 @@
 
 	/** Export the local shot history as a JSON download — genuinely real. */
 	function exportHistory(): void {
-		if (typeof document === 'undefined') return;
 		const blob = new Blob([JSON.stringify(history.all, null, 2)], {
 			type: 'application/json'
 		});
-		const url = URL.createObjectURL(blob);
-		const a = document.createElement('a');
-		a.href = url;
-		a.download = 'crema-history.json';
-		a.click();
-		URL.revokeObjectURL(url);
+		downloadBlob('crema-history.json', blob);
 	}
 </script>
 
