@@ -11,9 +11,15 @@
 	 * shared `UiSnapshot.eventLog` already exists). "Reset preferences" is real
 	 * — it calls `SettingsStore.reset()`; profiles and history are untouched.
 	 *
-	 * **UI-only** — Home Assistant, the webhook and API-token actions need a
-	 * network layer the shell lacks; factory reset is destructive and gated
-	 * behind a confirm. Each is marked with a `// TODO`.
+	 * **UI-only** — Home Assistant and the API-token action need a network
+	 * layer the shell lacks; factory reset is destructive and gated behind
+	 * a confirm. Each is marked with a `// TODO`.
+	 *
+	 * **Webhooks** — implemented: outbound POSTs from the browser to a
+	 * user-supplied URL when chosen events fire (subject to CORS). The
+	 * live fire path lives in `CremaApp.fireWebhook`; the test button
+	 * uses `CremaApp.sendTestWebhook`. Five event toggles + URL + master
+	 * switch all persist in `settings`.
 	 *
 	 * **Developer** — "Replay a capture" is a real developer/admin tool: it
 	 * feeds a recorded BLE capture file back through the core, so an exported
@@ -227,9 +233,56 @@
 		// previously a confirm-then-do-nothing prompt looked like it worked.
 	}
 
-	function configureWebhook(): void {
-		// TODO: a shot-end webhook needs a network layer. Stub.
+	// ---- Webhooks (Advanced → Webhooks card) ----------------------------
+	//
+	// MVP: a single user-supplied URL, five event toggles, and a "Send
+	// test" button. The live fire path lives in `CremaApp.fireWebhook`;
+	// the test path lives in `CremaApp.sendTestWebhook` (the only path
+	// that surfaces errors to the user — live fires are silent and log
+	// to the BLE event panel).
+
+	/** True for `https://…` and for `http://localhost…` (dev convenience). */
+	const webhookUrlValid = $derived.by(() => {
+		const url = prefs.webhookUrl.trim();
+		if (url.length === 0) return false;
+		if (url.startsWith('https://')) return true;
+		// Allow http://localhost / http://127.0.0.1 / http://[::1] for dev.
+		if (
+			url.startsWith('http://localhost') ||
+			url.startsWith('http://127.0.0.1') ||
+			url.startsWith('http://[::1]')
+		) {
+			return true;
+		}
+		return false;
+	});
+
+	/** Inline status for the most-recent "Send test" press; cleared after ~4 s. */
+	let webhookTestFeedback = $state<{ ok: boolean; message: string } | null>(null);
+	/** Whether a test send is currently in flight (button shows "Sending…"). */
+	let webhookTestBusy = $state(false);
+
+	function setWebhookEvent(
+		key: keyof typeof prefs.webhookEvents,
+		value: boolean
+	): void {
+		settings.set('webhookEvents', { ...prefs.webhookEvents, [key]: value });
 	}
+
+	async function sendTestWebhook(): Promise<void> {
+		if (!app || webhookTestBusy) return;
+		webhookTestBusy = true;
+		webhookTestFeedback = null;
+		try {
+			webhookTestFeedback = await app.sendTestWebhook();
+		} finally {
+			webhookTestBusy = false;
+			window.setTimeout(() => {
+				webhookTestFeedback = null;
+			}, 4000);
+		}
+	}
+
 	function newToken(): void {
 		// TODO: API tokens need an account / server. Stub.
 	}
@@ -329,11 +382,6 @@
 			/>
 		{/snippet}
 	</StRow>
-	<StRow title="Webhook on shot end" sub="POST shot JSON to a URL of your choice.">
-		{#snippet control()}
-			<StButton label="Configure" icon="link" onClick={configureWebhook} />
-		{/snippet}
-	</StRow>
 	<StRow
 		title="API access"
 		sub="Generate a personal API token for third-party clients."
@@ -341,6 +389,115 @@
 	>
 		{#snippet control()}
 			<StButton label="New token" icon="key" onClick={newToken} />
+		{/snippet}
+	</StRow>
+</StGroup>
+
+<StGroup
+	title="Webhooks"
+	sub="Outbound POSTs to your URL when these events fire. Requires CORS to be configured on your endpoint."
+>
+	<StRow title="Enable webhooks" sub="Master switch. Off by default.">
+		{#snippet control()}
+			<StToggle
+				on={prefs.webhookEnabled}
+				onChange={(v) => settings.set('webhookEnabled', v)}
+				label="Enable webhooks"
+			/>
+		{/snippet}
+	</StRow>
+	<StRow
+		title="Destination URL"
+		sub="POST target. Must be https:// (http://localhost is allowed for development testing)."
+	>
+		{#snippet control()}
+			<input
+				type="url"
+				class="wh-url"
+				class:wh-url-invalid={prefs.webhookUrl.trim().length > 0 && !webhookUrlValid}
+				placeholder="https://example.com/crema-hook"
+				value={prefs.webhookUrl}
+				disabled={!prefs.webhookEnabled}
+				oninput={(e) =>
+					settings.set('webhookUrl', (e.currentTarget as HTMLInputElement).value)}
+			/>
+		{/snippet}
+		{#snippet hint()}
+			{#if prefs.webhookUrl.trim().length > 0 && !webhookUrlValid}
+				<span class="wh-hint-err">URL must start with https:// (or http://localhost for dev).</span>
+			{/if}
+		{/snippet}
+	</StRow>
+	<StRow title="Shot completed" sub="Fires after each shot ends.">
+		{#snippet control()}
+			<StToggle
+				on={prefs.webhookEvents.shotCompleted}
+				onChange={(v) => setWebhookEvent('shotCompleted', v)}
+				disabled={!prefs.webhookEnabled}
+				label="Shot completed"
+			/>
+		{/snippet}
+	</StRow>
+	<StRow title="Machine error" sub="Fires when the DE1 enters an error state.">
+		{#snippet control()}
+			<StToggle
+				on={prefs.webhookEvents.machineError}
+				onChange={(v) => setWebhookEvent('machineError', v)}
+				disabled={!prefs.webhookEnabled}
+				label="Machine error"
+			/>
+		{/snippet}
+	</StRow>
+	<StRow title="Profile uploaded" sub="Fires after a profile upload completes successfully.">
+		{#snippet control()}
+			<StToggle
+				on={prefs.webhookEvents.profileUploaded}
+				onChange={(v) => setWebhookEvent('profileUploaded', v)}
+				disabled={!prefs.webhookEnabled}
+				label="Profile uploaded"
+			/>
+		{/snippet}
+	</StRow>
+	<StRow title="Scale connected" sub="Fires the first time the scale reaches ready.">
+		{#snippet control()}
+			<StToggle
+				on={prefs.webhookEvents.scaleConnected}
+				onChange={(v) => setWebhookEvent('scaleConnected', v)}
+				disabled={!prefs.webhookEnabled}
+				label="Scale connected"
+			/>
+		{/snippet}
+	</StRow>
+	<StRow title="DE1 connected" sub="Fires the first time the machine reaches ready.">
+		{#snippet control()}
+			<StToggle
+				on={prefs.webhookEvents.de1Connected}
+				onChange={(v) => setWebhookEvent('de1Connected', v)}
+				disabled={!prefs.webhookEnabled}
+				label="DE1 connected"
+			/>
+		{/snippet}
+	</StRow>
+	<StRow title="Send test" sub="POST a test payload to the URL above and surface the result.">
+		{#snippet control()}
+			<StButton
+				label={webhookTestBusy ? 'Sending…' : 'Send test'}
+				icon="paper-plane-tilt"
+				disabled={!app || !prefs.webhookEnabled || !webhookUrlValid || webhookTestBusy}
+				onClick={sendTestWebhook}
+			/>
+		{/snippet}
+		{#snippet hint()}
+			{#if webhookTestFeedback}
+				<span
+					class="wh-test-feedback"
+					class:wh-test-ok={webhookTestFeedback.ok}
+					class:wh-test-err={!webhookTestFeedback.ok}
+				>
+					{webhookTestFeedback.ok ? '✓' : '✗'}
+					{webhookTestFeedback.ok ? 'Sent' : 'Failed'}: {webhookTestFeedback.message}
+				</span>
+			{/if}
 		{/snippet}
 	</StRow>
 </StGroup>
@@ -554,5 +711,44 @@
 	.adv-reset-feedback {
 		color: var(--success);
 		font-variant-numeric: tabular-nums;
+	}
+
+	/* ── Webhooks URL input + test feedback ───────────────────────────────
+	   Plain `<input type="url">` styled to match the rest of the settings
+	   kit (the kit has no text-input precedent yet). Sits in the StRow's
+	   right slot, sized for a comfortable URL paste. */
+	.wh-url {
+		width: 280px;
+		max-width: 100%;
+		padding: 6px 10px;
+		font-family: var(--font-mono);
+		font-size: 12px;
+		color: var(--fg-1);
+		background: rgba(var(--tint-rgb), 0.06);
+		border: 1px solid rgba(var(--tint-rgb), 0.12);
+		border-radius: 6px;
+		outline: none;
+	}
+	.wh-url:focus {
+		border-color: rgba(var(--tint-rgb), 0.4);
+	}
+	.wh-url:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
+	}
+	.wh-url-invalid {
+		border-color: var(--danger);
+	}
+	.wh-hint-err {
+		color: var(--danger);
+	}
+	.wh-test-feedback {
+		font-variant-numeric: tabular-nums;
+	}
+	.wh-test-ok {
+		color: var(--success);
+	}
+	.wh-test-err {
+		color: var(--danger);
 	}
 </style>
