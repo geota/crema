@@ -24,7 +24,7 @@ export class BeanStore {
 	 * {@link migrateBean} so an old-shape payload (`{ name, roastLevel: word }`)
 	 * is upgraded leniently rather than crashing.
 	 */
-	private bean = $state<Bean>(migrateBean(readJson<unknown>(BEAN_KEY, null)));
+	private bean = $state.raw<Bean>(migrateBean(readJson<unknown>(BEAN_KEY, null)));
 
 	/** The current bean. Reactive: any setter re-renders the bean card. */
 	get current(): Bean {
