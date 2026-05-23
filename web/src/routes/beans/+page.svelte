@@ -23,13 +23,18 @@
 	import {
 		getBeanStore,
 		bagState,
-		type Bean
+		blankBean,
+		mintBeanId,
+		type Bean,
+		type Roaster
 	} from '$lib/bean';
 	import BeanTile from '$lib/components/beans/BeanTile.svelte';
 	import BeanDrawer from '$lib/components/beans/BeanDrawer.svelte';
 	import BeanQuickAdd from '$lib/components/beans/BeanQuickAdd.svelte';
 	import BeanImportDialog from '$lib/components/beans/BeanImportDialog.svelte';
 	import BeansEmptyState from '$lib/components/beans/BeansEmptyState.svelte';
+	import SortPill from '$lib/components/shared/SortPill.svelte';
+	import FilterPills from '$lib/components/shared/FilterPills.svelte';
 	import { roasterMarkTone } from '$lib/bean/roaster-mark';
 
 	const library = getBeanStore();
@@ -51,9 +56,13 @@
 	let q = $state('');
 	let selectedTags = $state<string[]>([]);
 
-	type SortKey = 'recent' | 'roast-new' | 'roast-old' | 'name' | 'rating' | 'remaining' | 'burn';
-	let sort = $state<SortKey>('recent');
-	let sortOpen = $state(false);
+	// Sort state has collapsed: each field carries a direction (asc/desc)
+	// rather than baking direction into the field id. `SortPill` exposes
+	// this as a single segmented value + a direction toggle.
+	type SortField = 'recent' | 'roast' | 'name' | 'rating' | 'remaining' | 'burn';
+	type SortDir = 'asc' | 'desc';
+	let sortField = $state<SortField>('recent');
+	let sortDir = $state<SortDir>('desc');
 
 	// Add-button split
 	let addMenuOpen = $state(false);
@@ -118,36 +127,45 @@
 
 	const sorted = $derived.by(() => {
 		const arr = [...filtered];
+		// Field-only comparators — direction is applied uniformly via the
+		// sortDir multiplier at the end so every field respects the
+		// SortPill direction toggle. Each comparator returns "ascending"
+		// order; descending flips the sign.
 		const cmpName = (a: Bean, b: Bean) => a.name.localeCompare(b.name);
-		const cmpRoastNew = (a: Bean, b: Bean) => {
-			// Newest first — empty roastedOn sinks.
+		const cmpRoast = (a: Bean, b: Bean) => {
+			// Ascending = oldest first; empty roastedOn always sinks to
+			// the end regardless of direction.
 			if (!a.roastedOn && !b.roastedOn) return 0;
 			if (!a.roastedOn) return 1;
 			if (!b.roastedOn) return -1;
-			return b.roastedOn.localeCompare(a.roastedOn);
+			return a.roastedOn.localeCompare(b.roastedOn);
 		};
-		switch (sort) {
-			case 'recent':
-				return arr.sort((a, b) => b.updatedAt - a.updatedAt);
-			case 'roast-new':
-				return arr.sort(cmpRoastNew);
-			case 'roast-old':
-				return arr.sort((a, b) => -cmpRoastNew(a, b));
-			case 'name':
-				return arr.sort(cmpName);
-			case 'rating':
-				return arr.sort((a, b) => b.rating - a.rating || cmpName(a, b));
-			case 'remaining':
-				return arr.sort((a, b) => a.remainingG - b.remainingG);
-			case 'burn': {
-				// Highest fraction consumed first.
-				const consumed = (x: Bean) =>
-					x.bagSizeG > 0 ? 1 - x.remainingG / x.bagSizeG : -1;
-				return arr.sort((a, b) => consumed(b) - consumed(a));
+		const keyCmp = (a: Bean, b: Bean): number => {
+			switch (sortField) {
+				case 'recent':
+					return a.updatedAt - b.updatedAt;
+				case 'roast':
+					return cmpRoast(a, b);
+				case 'name':
+					return cmpName(a, b);
+				case 'rating':
+					return a.rating - b.rating;
+				case 'remaining':
+					return a.remainingG - b.remainingG;
+				case 'burn': {
+					// Ascending = least-consumed first.
+					const consumed = (x: Bean) =>
+						x.bagSizeG > 0 ? 1 - x.remainingG / x.bagSizeG : -1;
+					return consumed(a) - consumed(b);
+				}
+				default:
+					return 0;
 			}
-			default:
-				return arr;
-		}
+		};
+		const dir = sortDir === 'asc' ? 1 : -1;
+		return arr.sort(
+			(a, b) => keyCmp(a, b) * dir || cmpName(a, b)
+		);
 	});
 
 	const sectionedBags = $derived.by(() => {
@@ -186,6 +204,103 @@
 			.sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag));
 	});
 
+	/**
+	 * The full pill list for the Bags-tab filter rail. Three id-prefixed
+	 * groups — `s:` (status), `r:` (roast), `t:` (custom tag) — flow into a
+	 * single `FilterPills` instance and are dispatched by prefix in
+	 * `onBagPillClick` below. The same id namespace lets `selected` and the
+	 * click handler agree without a per-group fan-out.
+	 */
+	interface FilterPillItem {
+		id: string;
+		label?: string;
+		count?: number;
+		selected?: boolean;
+		icon?: string;
+		iconStyle?: string;
+		divider?: boolean;
+		groupLabel?: string;
+		custom?: boolean;
+		title?: string;
+	}
+
+	const bagsFilterPills = $derived.by(() => {
+		const items: FilterPillItem[] = [];
+		items.push({ id: '__status', groupLabel: 'Status' });
+		const statusEntries: { f: StatusFilter; label: string; icon?: string }[] = [
+			{ f: 'all', label: 'All' },
+			{ f: 'active', label: 'Active' },
+			{ f: 'frozen', label: 'Frozen', icon: 'ph ph-snowflake' },
+			{ f: 'archived', label: 'Archived', icon: 'ph ph-archive' },
+			{ f: 'favourite', label: 'Favourite', icon: 'ph-fill ph-star' }
+		];
+		for (const s of statusEntries) {
+			items.push({
+				id: `s:${s.f}`,
+				label: s.label,
+				icon: s.icon,
+				count: counts[s.f as keyof typeof counts],
+				selected: status === s.f
+			});
+		}
+		items.push({ id: '__div1', divider: true });
+		items.push({ id: '__roast', groupLabel: 'Roast' });
+		const roastEntries: { f: RoastFilter; label: string }[] = [
+			{ f: 'any', label: 'Any' },
+			{ f: 'light', label: 'Light' },
+			{ f: 'medium', label: 'Medium' },
+			{ f: 'dark', label: 'Dark' }
+		];
+		for (const r of roastEntries) {
+			items.push({
+				id: `r:${r.f}`,
+				label: r.label,
+				selected: roast === r.f
+			});
+		}
+		if (tagFacets.length > 0) {
+			items.push({ id: '__div2', divider: true });
+			items.push({ id: '__tags', groupLabel: 'Tags' });
+			for (const t of tagFacets) {
+				items.push({
+					id: `t:${t.tag}`,
+					label: t.tag,
+					count: t.count,
+					selected: selectedTags.includes(t.tag),
+					custom: true
+				});
+			}
+		}
+		return items;
+	});
+
+	function onBagPillClick(id: string): void {
+		if (id.startsWith('s:')) status = id.slice(2) as StatusFilter;
+		else if (id.startsWith('r:')) roast = id.slice(2) as RoastFilter;
+		else if (id.startsWith('t:')) toggleSelectedTag(id.slice(2));
+	}
+
+	/**
+	 * Region pills for the Roasters tab. `region:<id>` prefix mirrors the
+	 * bags-tab dispatcher; the empty `'all'` row is the catch-all reset.
+	 */
+	const roasterFilterPills = $derived.by(() => {
+		const items: FilterPillItem[] = [];
+		items.push({ id: '__region', groupLabel: 'Region' });
+		for (const r of roasterRegionOptions) {
+			items.push({
+				id: `region:${r}`,
+				label: r === 'all' ? 'All' : r,
+				selected: roasterRegion === r
+			});
+		}
+		return items;
+	});
+
+	function onRoasterPillClick(id: string): void {
+		if (id.startsWith('region:')) roasterRegion = id.slice('region:'.length);
+	}
+
 	const statusLine = $derived(
 		allBeans.length === 0
 			? 'No beans yet — add your first bag to start tracking.'
@@ -193,7 +308,15 @@
 	);
 
 	// ── Roaster directory rows ─────────────────────────────────────────
-	let roasterSort = $state<'beans' | 'name' | 'recent'>('beans');
+	// Roaster sort uses the same SortPill control as the bags tab.
+	type RoasterSortField = 'beans' | 'name' | 'recent';
+	let roasterSortField = $state<RoasterSortField>('beans');
+	let roasterSortDir = $state<SortDir>('desc');
+	const roasterSortOptions: { field: RoasterSortField; label: string; icon: string }[] = [
+		{ field: 'beans', label: 'Bag count', icon: 'coffee-bean' },
+		{ field: 'name', label: 'Name', icon: 'sort-ascending' },
+		{ field: 'recent', label: 'Recent', icon: 'clock' }
+	];
 	let roasterRegion = $state<string>('all');
 
 	const roasterRegionOptions = $derived.by(() => {
@@ -223,11 +346,18 @@
 		}
 		const cmpName = (a: typeof rows[number], b: typeof rows[number]) =>
 			a.roaster.name.localeCompare(b.roaster.name);
-		if (roasterSort === 'name') rows.sort(cmpName);
-		else if (roasterSort === 'recent')
-			rows.sort((a, b) => b.roaster.updatedAt - a.roaster.updatedAt);
-		else rows.sort((a, b) => b.count - a.count || cmpName(a, b));
-		return rows;
+		const keyCmp = (a: typeof rows[number], b: typeof rows[number]): number => {
+			switch (roasterSortField) {
+				case 'name':
+					return cmpName(a, b);
+				case 'recent':
+					return a.roaster.updatedAt - b.roaster.updatedAt;
+				default:
+					return a.count - b.count;
+			}
+		};
+		const dir = roasterSortDir === 'asc' ? 1 : -1;
+		return rows.sort((a, b) => keyCmp(a, b) * dir || cmpName(a, b));
 	});
 
 	// Detect probable duplicates by normalized roaster name (case-insensitive,
@@ -260,19 +390,16 @@
 		return result;
 	});
 
-	const sortOptions: { id: SortKey; label: string; icon: string }[] = [
-		{ id: 'recent', label: 'Recently added', icon: 'plus-circle' },
-		{ id: 'roast-new', label: 'Roast date · freshest', icon: 'fire' },
-		{ id: 'roast-old', label: 'Roast date · oldest', icon: 'clock-counter-clockwise' },
-		{ id: 'name', label: 'Name (A–Z)', icon: 'sort-ascending' },
-		{ id: 'rating', label: 'Rating', icon: 'star' },
-		{ id: 'remaining', label: 'Remaining · low first', icon: 'gauge' },
-		{ id: 'burn', label: 'Burn rate · fastest', icon: 'flame' }
+	// SortPill options — direction is now a separate axis (toggled by the
+	// pill's left half), so each entry maps to exactly one comparator.
+	const sortOptions: { field: SortField; label: string; icon: string }[] = [
+		{ field: 'recent', label: 'Recently added', icon: 'plus-circle' },
+		{ field: 'roast', label: 'Roast date', icon: 'fire' },
+		{ field: 'name', label: 'Name', icon: 'sort-ascending' },
+		{ field: 'rating', label: 'Rating', icon: 'star' },
+		{ field: 'remaining', label: 'Remaining', icon: 'gauge' },
+		{ field: 'burn', label: 'Burn rate', icon: 'flame' }
 	];
-
-	const currentSortLabel = $derived(
-		sortOptions.find((o) => o.id === sort)?.label ?? 'Sort'
-	);
 
 	// ── Actions ────────────────────────────────────────────────────────
 	function openTile(id: string): void {
@@ -307,8 +434,77 @@
 		library.toggleArchived(id);
 	}
 	function deleteBean(id: string): void {
+		const bean = library.getBean(id);
+		if (!bean) return;
+		if (!confirm(`Delete "${bean.name || 'this bag'}"? This cannot be undone.`)) return;
 		library.deleteBean(id);
 		if (drawerBeanId === id) drawerBeanId = null;
+	}
+
+	/**
+	 * Clone a bag inline. The duplicate keeps the original's metadata
+	 * (roaster, origin, processing, tags…) but gets a fresh id, a
+	 * `" (copy)"` suffix on the name, and is bumped to the front of the
+	 * library (newest-first sort). The new bag is **not** made active.
+	 */
+	function duplicateBean(id: string): void {
+		const src = library.getBean(id);
+		if (!src) return;
+		const copy: Bean = {
+			...src,
+			id: mintBeanId(),
+			name: `${src.name || 'Untitled bag'} (copy)`,
+			origin: { ...src.origin },
+			tags: [...src.tags],
+			metadata: { ...src.metadata },
+			visualizerId: null,
+			beanconquerorId: null,
+			favourite: false,
+			archivedAt: null,
+			createdAt: Date.now(),
+			updatedAt: Date.now()
+		};
+		library.upsertBean(copy);
+	}
+
+	/** Clone a roaster row. Bags pointing at the original are not moved. */
+	function duplicateRoaster(id: string): void {
+		const src = library.getRoaster(id);
+		if (!src) return;
+		// Pick a unique name — append " (copy)" then " 2", " 3"… until clear.
+		let name = `${src.name} (copy)`;
+		let n = 2;
+		while (library.findRoasterByName(name)) {
+			name = `${src.name} (copy ${n})`;
+			n += 1;
+		}
+		library.upsertRoaster({
+			...src,
+			id: `roaster:${crypto.randomUUID?.() ?? Math.random().toString(36).slice(2)}`,
+			name,
+			visualizerId: null,
+			metadata: { ...src.metadata },
+			createdAt: Date.now(),
+			updatedAt: Date.now()
+		});
+	}
+
+	function deleteRoaster(r: Roaster, count: number): void {
+		if (
+			!confirm(
+				`Delete "${r.name}"? Their ${count} bag(s) will keep but lose the roaster link.`
+			)
+		)
+			return;
+		library.deleteRoaster(r.id);
+	}
+
+	function editRoaster(id: string): void {
+		// No dedicated roaster editor route yet — open the first bag from
+		// that roastery in the bean editor as a temporary affordance. If
+		// the roaster has no bags, fall through silently.
+		const firstBag = allBeans.find((b) => b.roasterId === id);
+		if (firstBag) goto(`/beans/${encodeURIComponent(firstBag.id)}/edit`);
 	}
 
 	function mergeRoaster(
@@ -329,10 +525,10 @@
 		library.deleteRoaster(dupe.id);
 	}
 
-	// Clicking outside the add-menu closes it.
+	// Clicking outside the add-menu closes it. The SortPill owns its own
+	// outside-click dismissal — no shared state needed.
 	function closeMenusOnDocClick(): void {
 		addMenuOpen = false;
-		sortOpen = false;
 	}
 </script>
 
@@ -481,104 +677,25 @@
 			</button>
 		</div>
 		{#if tab === 'bags' && allBeans.length > 0}
-			<!-- Same `stopPropagation`-only wrapper — see explanation on the
-			     Add-bean split above. -->
-			<!-- svelte-ignore a11y_click_events_have_key_events -->
-			<!-- svelte-ignore a11y_no_static_element_interactions -->
-			<div class="bn-toolbar-r" onclick={(e) => e.stopPropagation()}>
-				<div class="bn-sort" class:is-open={sortOpen}>
-					<button
-						class="bn-btn bn-btn-ghost bn-sort-trigger"
-						onclick={(e) => {
-							e.stopPropagation();
-							sortOpen = !sortOpen;
-						}}
-					>
-						<i class="ph ph-sort-ascending"></i>
-						<span class="bn-sort-lab">Sort</span>
-						<span class="bn-sort-val">{currentSortLabel}</span>
-						<i class="ph ph-caret-down bn-sort-chev"></i>
-					</button>
-					{#if sortOpen}
-						<div class="bn-sort-menu" role="menu">
-							<div class="bn-sort-menu-head">Sort by</div>
-							{#each sortOptions as o (o.id)}
-								<button
-									class="bn-sort-menu-item"
-									class:is-active={o.id === sort}
-									role="menuitemradio"
-									aria-checked={o.id === sort}
-									onclick={() => {
-										sort = o.id;
-										sortOpen = false;
-									}}
-								>
-									<i class={`ph ph-${o.icon}`} aria-hidden="true"></i>
-									<span>{o.label}</span>
-									{#if o.id === sort}
-										<i class="ph ph-check"></i>
-									{/if}
-								</button>
-							{/each}
-						</div>
-					{/if}
-				</div>
+			<div class="bn-toolbar-r">
+				<SortPill
+					value={{ field: sortField, direction: sortDir }}
+					options={sortOptions}
+					onchange={(next) => {
+						sortField = next.field as SortField;
+						sortDir = next.direction;
+					}}
+				/>
 			</div>
 		{/if}
 	</div>
 
-	<!-- Chip rail (Bags tab) -->
+	<!-- Chip rail (Bags tab) — adopts the shared FilterPills component so
+	     this rail looks identical to /profiles. Clear-filters chip lives
+	     outside the FilterPills group since it's not a selection state. -->
 	{#if tab === 'bags' && allBeans.length > 0}
-		<div class="bn-chiprail">
-			<div class="bn-chiprail-group">
-				<span class="bn-chiprail-lab">Status</span>
-				{#each ['all', 'active', 'frozen', 'archived', 'favourite'] as f (f)}
-					<button
-						class="bn-chip"
-						class:is-active={status === f}
-						onclick={() => (status = f as StatusFilter)}
-					>
-						{#if f === 'favourite'}
-							<i class="ph-fill ph-star" aria-hidden="true"></i>
-						{/if}
-						{#if f === 'frozen'}
-							<i class="ph ph-snowflake" aria-hidden="true"></i>
-						{/if}
-						{#if f === 'archived'}
-							<i class="ph ph-archive" aria-hidden="true"></i>
-						{/if}
-						<span>{f.charAt(0).toUpperCase() + f.slice(1)}</span>
-					</button>
-				{/each}
-			</div>
-			<div class="bn-chiprail-sep"></div>
-			<div class="bn-chiprail-group">
-				<span class="bn-chiprail-lab">Roast</span>
-				{#each ['any', 'light', 'medium', 'dark'] as f (f)}
-					<button
-						class="bn-chip"
-						class:is-active={roast === f}
-						onclick={() => (roast = f as RoastFilter)}
-					>
-						<span>{f.charAt(0).toUpperCase() + f.slice(1)}</span>
-					</button>
-				{/each}
-			</div>
-			{#if tagFacets.length > 0}
-				<div class="bn-chiprail-sep"></div>
-				<div class="bn-chiprail-group">
-					<span class="bn-chiprail-lab">Tags</span>
-					{#each tagFacets as t (t.tag)}
-						<button
-							class="bn-chip bn-chip-tag"
-							class:is-active={selectedTags.includes(t.tag)}
-							onclick={() => toggleSelectedTag(t.tag)}
-						>
-							<span>{t.tag}</span><span class="bn-chip-n">{t.count}</span>
-						</button>
-					{/each}
-				</div>
-			{/if}
+		<div class="bn-filterstrip">
+			<FilterPills pills={bagsFilterPills} onclick={onBagPillClick} />
 			{#if status !== 'all' || roast !== 'any' || selectedTags.length > 0}
 				<button class="bn-chip-clear" onclick={clearFilters}>
 					<i class="ph ph-x"></i> Clear
@@ -612,6 +729,10 @@
 									isActive={library.activeBeanId === b.id}
 									onOpen={openTile}
 									onToggleFavourite={toggleFavourite}
+									onSetActive={setActive}
+									onDuplicate={duplicateBean}
+									onEdit={gotoEdit}
+									onDelete={deleteBean}
 								/>
 							{/each}
 							<button class="bn-tile-new" onclick={() => (quickAddOpen = true)}>
@@ -642,6 +763,10 @@
 									isActive={library.activeBeanId === b.id}
 									onOpen={openTile}
 									onToggleFavourite={toggleFavourite}
+									onSetActive={setActive}
+									onDuplicate={duplicateBean}
+									onEdit={gotoEdit}
+									onDelete={deleteBean}
 								/>
 							{/each}
 						</div>
@@ -666,6 +791,10 @@
 									isActive={library.activeBeanId === b.id}
 									onOpen={openTile}
 									onToggleFavourite={toggleFavourite}
+									onSetActive={setActive}
+									onDuplicate={duplicateBean}
+									onEdit={gotoEdit}
+									onDelete={deleteBean}
 								/>
 							{/each}
 						</div>
@@ -719,72 +848,84 @@
 					<span class="bn-section-count">{roasterRows.length}</span>
 					<span class="bn-section-rule"></span>
 					<div class="bn-section-tools">
-						<button
-							class="bn-sort-opt"
-							class:is-active={roasterSort === 'beans'}
-							onclick={() => (roasterSort = 'beans')}
-						>Bag count</button>
-						<button
-							class="bn-sort-opt"
-							class:is-active={roasterSort === 'name'}
-							onclick={() => (roasterSort = 'name')}
-						>Name</button>
-						<button
-							class="bn-sort-opt"
-							class:is-active={roasterSort === 'recent'}
-							onclick={() => (roasterSort = 'recent')}
-						>Recent</button>
+						<SortPill
+							value={{ field: roasterSortField, direction: roasterSortDir }}
+							options={roasterSortOptions}
+							onchange={(next) => {
+								roasterSortField = next.field as RoasterSortField;
+								roasterSortDir = next.direction;
+							}}
+						/>
 					</div>
 				</header>
 				{#if roasterRegionOptions.length > 1}
-					<div class="bn-chiprail bn-chiprail-inline">
-						<span class="bn-chiprail-lab">Region</span>
-						{#each roasterRegionOptions as r (r)}
-							<button
-								class="bn-chip"
-								class:is-active={roasterRegion === r}
-								onclick={() => (roasterRegion = r)}
-							>
-								{r === 'all' ? 'All' : r}
-							</button>
-						{/each}
+					<div class="bn-filterstrip bn-filterstrip-inline">
+						<FilterPills
+							pills={roasterFilterPills}
+							onclick={onRoasterPillClick}
+						/>
 					</div>
 				{/if}
 				<div class="bn-roaster-grid">
 					{#each roasterRows as { roaster, count } (roaster.id)}
 						{@const mt = roasterMarkTone(roaster)}
 						<div class="bn-roaster-card">
-							<div class="bn-roaster-mark" style="--tone: {mt.tone}">{mt.mark}</div>
-							<div class="bn-roaster-body">
-								<div class="bn-roaster-name">{roaster.name}</div>
-								<div class="bn-roaster-loc">{roaster.country || '—'}</div>
-								<div class="bn-roaster-meta">
-									{#if roaster.website}
-										<span class="bn-roaster-site">
-											<i class="ph ph-globe"></i>{roaster.website}
+							<div class="bn-roaster-card-row">
+								<div class="bn-roaster-mark" style="--tone: {mt.tone}">{mt.mark}</div>
+								<div class="bn-roaster-body">
+									<div class="bn-roaster-name">{roaster.name}</div>
+									<div class="bn-roaster-loc">{roaster.country || '—'}</div>
+									<div class="bn-roaster-meta">
+										{#if roaster.website}
+											<span class="bn-roaster-site">
+												<i class="ph ph-globe"></i>{roaster.website}
+											</span>
+										{/if}
+										<span class="bn-roaster-count">
+											{count} bag{count === 1 ? '' : 's'}
 										</span>
-									{/if}
-									<span class="bn-roaster-count">
-										{count} bag{count === 1 ? '' : 's'}
-									</span>
+									</div>
 								</div>
 							</div>
-							<button
-								class="bn-roaster-x"
-								onclick={() => {
-									if (
-										confirm(
-											`Delete "${roaster.name}"? Their ${count} bag(s) will keep but lose the roaster link.`
-										)
-									) {
-										library.deleteRoaster(roaster.id);
-									}
-								}}
-								title="Delete roastery"
-								aria-label="Delete roastery"
-							>
-								<i class="ph ph-trash"></i>
-							</button>
+							<div class="bn-roaster-actions">
+								<button
+									type="button"
+									class="bn-tile-action-icon"
+									title="Duplicate"
+									aria-label="Duplicate"
+									onclick={(e) => {
+										e.stopPropagation();
+										duplicateRoaster(roaster.id);
+									}}
+								>
+									<i class="ph ph-copy"></i>
+								</button>
+								<button
+									type="button"
+									class="bn-tile-action-icon"
+									title={count > 0 ? 'Edit (opens first bag for now)' : 'No bags to edit'}
+									aria-label="Edit"
+									disabled={count === 0}
+									onclick={(e) => {
+										e.stopPropagation();
+										editRoaster(roaster.id);
+									}}
+								>
+									<i class="ph ph-pencil"></i>
+								</button>
+								<button
+									type="button"
+									class="bn-tile-action-icon bn-tile-action-icon-danger"
+									title="Delete roastery"
+									aria-label="Delete roastery"
+									onclick={(e) => {
+										e.stopPropagation();
+										deleteRoaster(roaster, count);
+									}}
+								>
+									<i class="ph ph-trash"></i>
+								</button>
+							</div>
 						</div>
 					{/each}
 				</div>
@@ -1099,86 +1240,11 @@
 		color: var(--fg-on-accent);
 	}
 
-	/* Sort dropdown */
-	.bn-sort {
-		position: relative;
-	}
-	.bn-sort-trigger {
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
-	}
-	.bn-sort-lab {
-		font-family: var(--font-sans);
-		font-size: 11px;
-		font-weight: 600;
-		letter-spacing: var(--track-allcaps);
-		text-transform: uppercase;
-		color: rgba(var(--tint-rgb), 0.5);
-	}
-	.bn-sort-val {
-		color: var(--fg-1);
-	}
-	.bn-sort-chev {
-		font-size: 11px;
-		opacity: 0.55;
-	}
-	.bn-sort-menu {
-		position: absolute;
-		top: calc(100% + 6px);
-		right: 0;
-		min-width: 240px;
-		background: var(--bg-page);
-		border: 1px solid rgba(var(--tint-rgb), 0.14);
-		border-radius: var(--radius-md);
-		padding: 6px;
-		box-shadow: var(--shadow-lg);
-		z-index: 60;
-	}
-	.bn-sort-menu-head {
-		font-family: var(--font-sans);
-		font-size: 10px;
-		font-weight: 700;
-		letter-spacing: var(--track-allcaps);
-		text-transform: uppercase;
-		color: rgba(var(--tint-rgb), 0.5);
-		padding: 6px 8px 4px;
-	}
-	.bn-sort-menu-item {
-		display: flex;
-		gap: 10px;
-		align-items: center;
-		width: 100%;
-		text-align: left;
-		background: transparent;
-		border: 0;
-		padding: 7px 9px;
-		border-radius: var(--radius-sm);
-		cursor: pointer;
-		color: var(--fg-1);
-		font: inherit;
-		font-size: 12px;
-	}
-	.bn-sort-menu-item:hover {
-		background: rgba(var(--tint-rgb), 0.06);
-	}
-	.bn-sort-menu-item.is-active {
-		background: rgba(var(--copper-rgb), 0.1);
-		color: var(--copper-300);
-	}
-	.bn-sort-menu-item i {
-		font-size: 13px;
-		color: rgba(var(--tint-rgb), 0.55);
-	}
-	.bn-sort-menu-item.is-active i {
-		color: var(--copper-400);
-	}
-	.bn-sort-menu-item span:nth-of-type(1) {
-		flex: 1 1 auto;
-	}
-
-	/* Chip rail */
-	.bn-chiprail {
+	/* Filter strip — `.bn-filterstrip` is the page-level shell that hosts
+	   the shared FilterPills + Clear-filters chip. The pills themselves
+	   inherit the `.pp-tag*` rules from `styles/profiles-page.css`, so the
+	   visuals match /profiles exactly. */
+	.bn-filterstrip {
 		display: flex;
 		flex-wrap: wrap;
 		align-items: center;
@@ -1186,61 +1252,9 @@
 		padding: 12px var(--page-pad-x, 24px);
 		border-bottom: 1px solid rgba(var(--tint-rgb), 0.04);
 	}
-	.bn-chiprail-inline {
+	.bn-filterstrip-inline {
 		padding: 0 0 12px;
 		border-bottom: 0;
-	}
-	.bn-chiprail-group {
-		display: inline-flex;
-		flex-wrap: wrap;
-		gap: 4px;
-		align-items: center;
-	}
-	.bn-chiprail-lab {
-		font-family: var(--font-sans);
-		font-size: 10px;
-		font-weight: 700;
-		letter-spacing: var(--track-allcaps);
-		text-transform: uppercase;
-		color: rgba(var(--tint-rgb), 0.4);
-		margin-right: 4px;
-	}
-	.bn-chiprail-sep {
-		width: 1px;
-		height: 14px;
-		background: rgba(var(--tint-rgb), 0.1);
-	}
-	.bn-chip {
-		display: inline-flex;
-		align-items: center;
-		gap: 4px;
-		padding: 4px 11px;
-		background: transparent;
-		border: 1px solid rgba(var(--tint-rgb), 0.1);
-		color: rgba(var(--tint-rgb), 0.65);
-		font-family: var(--font-sans);
-		font-size: 11.5px;
-		cursor: pointer;
-		border-radius: var(--radius-pill);
-		transition: all var(--dur-1) var(--ease);
-	}
-	.bn-chip:hover {
-		color: var(--fg-1);
-		border-color: rgba(var(--tint-rgb), 0.18);
-	}
-	.bn-chip.is-active {
-		color: var(--copper-300);
-		background: rgba(var(--copper-rgb), 0.12);
-		border-color: var(--copper-400);
-	}
-	.bn-chip-n {
-		font-family: var(--font-mono);
-		font-size: 10px;
-		color: rgba(var(--tint-rgb), 0.4);
-		font-weight: 500;
-	}
-	.bn-chip.is-active .bn-chip-n {
-		color: var(--copper-400);
 	}
 	.bn-chip-clear {
 		display: inline-flex;
@@ -1438,10 +1452,9 @@
 		gap: 12px;
 	}
 	.bn-roaster-card {
-		display: grid;
-		grid-template-columns: 48px 1fr auto;
-		align-items: center;
-		gap: 14px;
+		display: flex;
+		flex-direction: column;
+		gap: 12px;
 		background: rgba(var(--tint-rgb), 0.04);
 		border: 1px solid rgba(var(--tint-rgb), 0.08);
 		border-radius: var(--radius-md);
@@ -1451,6 +1464,52 @@
 	.bn-roaster-card:hover {
 		background: rgba(var(--tint-rgb), 0.06);
 		border-color: rgba(var(--tint-rgb), 0.16);
+	}
+	.bn-roaster-card-row {
+		display: grid;
+		grid-template-columns: 48px 1fr;
+		align-items: center;
+		gap: 14px;
+	}
+	.bn-roaster-actions {
+		display: flex;
+		gap: 6px;
+		justify-content: flex-end;
+		align-items: center;
+	}
+	/* Icon-button styling for the roaster action row. Mirrors
+	   `BeanTile.svelte`'s `.bn-tile-action-icon` so the two cards read as
+	   one design family. */
+	.bn-tile-action-icon {
+		width: 30px;
+		height: 30px;
+		flex: 0 0 30px;
+		border: 1px solid rgba(var(--tint-rgb), 0.1);
+		background: rgba(var(--tint-rgb), 0.03);
+		border-radius: var(--radius-sm);
+		color: rgba(var(--tint-rgb), 0.6);
+		cursor: pointer;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		font-size: 13px;
+		padding: 0;
+		transition: all var(--dur-1) var(--ease);
+	}
+	.bn-tile-action-icon:hover:not(:disabled) {
+		color: var(--fg-1);
+		background: rgba(var(--tint-rgb), 0.07);
+	}
+	.bn-tile-action-icon:disabled {
+		opacity: 0.35;
+		cursor: not-allowed;
+	}
+	.bn-tile-action-icon-danger {
+		color: var(--danger);
+	}
+	.bn-tile-action-icon-danger:hover:not(:disabled) {
+		color: var(--danger);
+		background: rgba(var(--danger-rgb), 0.12);
 	}
 	.bn-roaster-mark {
 		width: 48px;
@@ -1504,36 +1563,5 @@
 	.bn-roaster-count {
 		font-family: var(--font-mono);
 		color: var(--copper-400);
-	}
-	.bn-roaster-x {
-		background: transparent;
-		border: 0;
-		color: rgba(var(--tint-rgb), 0.4);
-		cursor: pointer;
-		padding: 6px;
-		border-radius: var(--radius-sm);
-	}
-	.bn-roaster-x:hover {
-		color: var(--danger);
-		background: rgba(var(--danger-rgb), 0.1);
-	}
-	.bn-sort-opt {
-		background: transparent;
-		border: 0;
-		color: rgba(var(--tint-rgb), 0.5);
-		font-family: var(--font-sans);
-		font-size: 12px;
-		cursor: pointer;
-		padding: 4px 2px;
-	}
-	.bn-sort-opt:hover {
-		color: var(--fg-1);
-	}
-	.bn-sort-opt.is-active {
-		color: var(--fg-1);
-		text-decoration: underline;
-		text-decoration-color: var(--copper-500);
-		text-decoration-thickness: 1.5px;
-		text-underline-offset: 4px;
 	}
 </style>

@@ -25,6 +25,7 @@
 	import { getCaptureStore, captureJsonl } from '$lib/capture';
 	import { downloadBlob, filenameStamp } from '$lib/utils/download';
 	import { zip as fflateZip, strToU8 } from 'fflate';
+	import FilterPills from '$lib/components/shared/FilterPills.svelte';
 
 	const store = getHistoryStore();
 	const appCtx = getCremaAppContext();
@@ -197,6 +198,48 @@
 	const profilesInUse = $derived([
 		...new Set(shots.map((s) => s.profileName).filter((n): n is string => !!n))
 	]);
+
+	/**
+	 * Pill list for the per-profile filter rail — wired through the shared
+	 * `FilterPills` component. The dispatcher reads the `p:` prefix.
+	 */
+	interface FilterPillItem {
+		id: string;
+		label?: string;
+		count?: number;
+		selected?: boolean;
+		icon?: string;
+		iconStyle?: string;
+		divider?: boolean;
+		groupLabel?: string;
+		custom?: boolean;
+		title?: string;
+	}
+	const profileFilterPills = $derived.by(() => {
+		const items: FilterPillItem[] = [
+			{
+				id: 'p:all',
+				label: 'All profiles',
+				count: shots.length,
+				selected: filterProfile === 'all'
+			}
+		];
+		for (const name of profilesInUse) {
+			items.push({
+				id: `p:${name}`,
+				label: name,
+				count: shots.filter((s) => s.profileName === name).length,
+				selected: filterProfile === name
+			});
+		}
+		return items;
+	});
+
+	function onProfileFilterClick(id: string): void {
+		if (!id.startsWith('p:')) return;
+		const v = id.slice(2);
+		filterProfile = v === 'all' ? 'all' : v;
+	}
 
 	/** The filtered shot list the list pane renders. */
 	const filtered = $derived.by(() => {
@@ -495,26 +538,10 @@
 		<!-- Filter strip -->
 		<div class="hi-filters">
 			<div class="hi-prof-filters">
-				<button
-					class="pp-tag"
-					class:is-active={filterProfile === 'all'}
-					onclick={() => (filterProfile = 'all')}
-				>
-					<span>All profiles</span>
-					<span class="pp-tag-count">{shots.length}</span>
-				</button>
-				{#each profilesInUse as name (name)}
-					<button
-						class="pp-tag"
-						class:is-active={filterProfile === name}
-						onclick={() => (filterProfile = name)}
-					>
-						<span>{name}</span>
-						<span class="pp-tag-count">
-							{shots.filter((s) => s.profileName === name).length}
-						</span>
-					</button>
-				{/each}
+				<FilterPills
+					pills={profileFilterPills}
+					onclick={onProfileFilterClick}
+				/>
 			</div>
 			<div class="pp-sort">
 				<span class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.45)">Range</span>
@@ -750,41 +777,8 @@
 		gap: 4px;
 		overflow-x: auto;
 	}
-	.pp-tag {
-		display: inline-flex;
-		align-items: center;
-		gap: 8px;
-		padding: 7px 14px;
-		background: transparent;
-		border: 0;
-		color: rgba(var(--tint-rgb), 0.6);
-		font-family: var(--font-sans);
-		font-size: 13px;
-		cursor: pointer;
-		border-radius: var(--radius-pill);
-		transition: all var(--dur-1) var(--ease);
-		white-space: nowrap;
-	}
-	.pp-tag:hover {
-		color: var(--fg-1);
-	}
-	.pp-tag.is-active {
-		color: var(--fg-1);
-		background: rgba(var(--tint-rgb), 0.06);
-	}
-	.pp-tag-count {
-		font-family: var(--font-mono);
-		font-variant-numeric: tabular-nums;
-		font-size: 10px;
-		color: rgba(var(--tint-rgb), 0.4);
-		padding: 1px 6px;
-		background: rgba(var(--tint-rgb), 0.04);
-		border-radius: 999px;
-	}
-	.pp-tag.is-active .pp-tag-count {
-		background: var(--copper-500);
-		color: var(--fg-on-accent);
-	}
+	/* `.pp-tag*` styles come from `styles/profiles-page.css` once
+	   `FilterPills` is in use; the local duplicates were removed. */
 	.pp-sort {
 		display: flex;
 		align-items: center;
