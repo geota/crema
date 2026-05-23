@@ -13,7 +13,7 @@ use crate::error::AppError;
 /// The shell maps each subscribed characteristic UUID to a `Source` before
 /// calling [`CremaCore::on_notification`](crate::CremaCore::on_notification).
 /// `#[non_exhaustive]`: more sources (water level, …) arrive in later increments.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Source {
     /// The DE1 machine state / substate characteristic (`cuuid_0E`).

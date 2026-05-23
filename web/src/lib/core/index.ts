@@ -247,6 +247,29 @@ export interface CremaCore {
 	/** Discard all session state — e.g. on disconnect. */
 	reset(): Promise<void>;
 	/**
+	 * Slice the rolling BLE-capture buffer to JSONL covering `[fromMs, toMs]`,
+	 * with connect-phase identity entries + META prelude prepended. The shell
+	 * persists the result to IndexedDB on every `ShotCompleted`; the same
+	 * JSONL bytes are the format the Android `BleSessionRecorder`, the Rust
+	 * `examples/replay.rs` tool, and the web `$lib/replay/capture` parser all
+	 * consume. Empty when no notifications have been recorded.
+	 */
+	captureSliceJsonl(fromMs: number, toMs: number): Promise<string>;
+	/**
+	 * Drop every captured entry — called by the BLE manager on disconnect,
+	 * where the live session is gone but the rest of the core (settings,
+	 * history, the active profile, …) must stay intact. Distinct from
+	 * {@link reset}, which wipes everything.
+	 */
+	captureClear(): Promise<void>;
+	/**
+	 * Suppress the rolling capture-buffer recorder while feeding the core a
+	 * replay. The orchestrator wraps `replayCapture` with
+	 * `setReplayMode(true)` / `setReplayMode(false)` in a try/finally so the
+	 * replay's own notifications don't get re-recorded.
+	 */
+	setReplayMode(on: boolean): Promise<void>;
+	/**
 	 * Identify and connect a scale from its BLE advertised name. Resolves to
 	 * the scale's display label, or `undefined` if the name matched no
 	 * supported scale.
@@ -535,6 +558,15 @@ async function createCore(): Promise<CremaCore> {
 		},
 		async reset() {
 			bridge.reset();
+		},
+		async captureSliceJsonl(fromMs, toMs) {
+			return bridge.capture_slice_jsonl(fromMs, toMs);
+		},
+		async captureClear() {
+			bridge.capture_clear();
+		},
+		async setReplayMode(on) {
+			bridge.set_replay_mode(on);
 		},
 		async connectScale(advertisedName) {
 			return bridge.connect_scale(advertisedName);

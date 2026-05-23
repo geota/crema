@@ -24,7 +24,6 @@
  */
 
 import type { CoreOutput, CremaCore, NotificationSource, ScaleUuids } from '$lib/core';
-import { getCaptureRecorder } from '$lib/capture';
 import { describeError } from '$lib/utils/error';
 import { BleDevice, requestDevice, type ConnState } from './transport';
 
@@ -162,9 +161,8 @@ export class ScaleManager {
 				if (source === null) {
 					return;
 				}
-				// Tee the raw bytes into the capture recorder so the orchestrator
-				// can persist a replayable JSONL slice on each ShotCompleted.
-				getCaptureRecorder().record(source, notification.data, notification.atMs);
+				// The core's `onNotification` captures the raw bytes itself —
+				// see `core/de1-app/src/capture.rs`. No separate tee here.
 				void this.core
 					.onNotification(source, notification.data, notification.atMs)
 					.then(this.callbacks.onCoreOutput)
