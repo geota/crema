@@ -16,6 +16,7 @@
 	import { getSettingsStore, convertWeight, convertTemp, convertPressure } from '$lib/settings';
 	import { getProfileStore, toCoreProfile } from '$lib/profiles';
 	import { getCremaAppContext } from '$lib/shell/app-context';
+	import { downloadBlob } from '$lib/utils/download';
 	import StaticShotChart from './StaticShotChart.svelte';
 
 	let {
@@ -120,12 +121,7 @@
 				const blob = new Blob([captureJsonl(entries)], {
 					type: 'application/x-ndjson'
 				});
-				const url = URL.createObjectURL(blob);
-				const a = document.createElement('a');
-				a.href = url;
-				a.download = `${stamp}.jsonl`;
-				a.click();
-				URL.revokeObjectURL(url);
+				downloadBlob(`${stamp}.jsonl`, blob);
 				return;
 			}
 			console.warn(
@@ -134,12 +130,7 @@
 		}
 		const json = exportStoredShotAsV2Json(shot);
 		const blob = new Blob([json], { type: 'application/json' });
-		const url = URL.createObjectURL(blob);
-		const a = document.createElement('a');
-		a.href = url;
-		a.download = shotFilename(shot);
-		a.click();
-		URL.revokeObjectURL(url);
+		downloadBlob(shotFilename(shot), blob);
 	}
 
 	const ctx = getCremaAppContext();

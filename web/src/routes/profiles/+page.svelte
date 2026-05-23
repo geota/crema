@@ -27,6 +27,7 @@
 	} from '$lib/profiles';
 	import { getCremaAppContext } from '$lib/shell/app-context';
 	import { ProfileCard } from '$lib/components/profiles';
+	import { downloadBlob, filenameStamp } from '$lib/utils/download';
 
 	const store = getProfileStore();
 	const ctx = getCremaAppContext();
@@ -364,18 +365,8 @@
 				console.warn(`Skipped "${p.name}" in bulk export:`, e);
 			}
 		}
-		const d = new Date();
-		const p = (n: number): string => String(n).padStart(2, '0');
-		const stamp =
-			`${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}T` +
-			`${p(d.getHours())}${p(d.getMinutes())}`;
 		const blob = new Blob([lines.join('\n')], { type: 'application/x-ndjson' });
-		const url = URL.createObjectURL(blob);
-		const a = document.createElement('a');
-		a.href = url;
-		a.download = `crema-profiles-${stamp}.jsonl`;
-		a.click();
-		URL.revokeObjectURL(url);
+		downloadBlob(`crema-profiles-${filenameStamp()}.jsonl`, blob);
 	}
 
 	/**
@@ -391,12 +382,7 @@
 			const v2 = await app.exportProfileAsV2Json(toCoreProfile(profile));
 			const safeName = (profile.name || 'profile').replace(/[^\w.-]+/g, '_');
 			const blob = new Blob([v2], { type: 'application/json' });
-			const url = URL.createObjectURL(blob);
-			const a = document.createElement('a');
-			a.href = url;
-			a.download = `${safeName}.json`;
-			a.click();
-			URL.revokeObjectURL(url);
+			downloadBlob(`${safeName}.json`, blob);
 		} catch (e) {
 			importBanner = {
 				kind: 'error',
