@@ -88,8 +88,13 @@ pub const STEAM_OVER_PRESSURE_COUNT_TRIGGER: usize = 10;
 pub const STEAM_OVER_TEMP_COUNT_TRIGGER: usize = 10;
 
 /// Why a steam-clog warning was raised — which threshold the telemetry tripped.
+///
+/// `#[non_exhaustive]` so further clog signatures (e.g. a future flow-based
+/// detector) can be added without breaking the FFI surface — this enum rides
+/// on the `SteamEvent::ClogWarning` payload.
 #[typeshare]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub enum SteamClogReason {
     /// Steam pressure ran too high for too long — a clogged steam wand.
     OverPressure,

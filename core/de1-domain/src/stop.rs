@@ -102,8 +102,13 @@ impl StopConfig {
 }
 
 /// Why [`AutoStop`] decided to end the shot.
+///
+/// `#[non_exhaustive]` so further stop reasons (e.g. a future puck-collapse
+/// trigger) can be added without breaking the FFI surface — this enum is the
+/// payload of `Event::StopTriggered`.
 #[typeshare]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub enum StopReason {
     /// The weight target (SAW) was reached.
     Weight,

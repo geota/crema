@@ -577,7 +577,13 @@ export interface ScaleUuids {
 	command_write: string;
 }
 
-/** What a calibration packet asks the DE1 to do. */
+/**
+ * What a calibration packet asks the DE1 to do.
+ * 
+ * `#[non_exhaustive]` so any future firmware-side calibration verb can
+ * land here without breaking the FFI surface — this enum is the payload
+ * of `Event::Calibration` alongside `CalTarget`.
+ */
 export enum CalCommand {
 	/** Read the calibration currently in use. */
 	ReadCurrent = "ReadCurrent",
@@ -803,9 +809,27 @@ export type ProfileUploadFailure =
 	 * [`cancel_profile_upload`](crate::CremaCore::cancel_profile_upload)
 	 * mid-upload.
 	 */
-	| { kind: "Aborted", details?: undefined };
+	| { kind: "Aborted", details?: undefined }
+	/**
+	 * An unexpected [`AppError`] variant — the bridge couldn't classify it.
+	 * The `message` carries the `AppError`'s `Display` output so the shell
+	 * can surface it in a toast / log without losing the underlying cause.
+	 * 
+	 * Previously such variants were silently coerced to
+	 * [`ProfileUploadFailure::Empty`], misclassifying real failures.
+	 */
+	| { kind: "Internal", details: {
+	/** Human-readable `Display` of the underlying error. */
+	message: string;
+}};
 
-/** Where an espresso shot is in its lifecycle. */
+/**
+ * Where an espresso shot is in its lifecycle.
+ * 
+ * `#[non_exhaustive]` so additional phases (e.g. a future post-shot
+ * "Draining" classification) can be added without breaking the FFI surface —
+ * this enum is the payload of `Event::ShotPhaseChanged`.
+ */
 export enum ShotPhase {
 	/** No espresso shot in progress. */
 	Idle = "Idle",
@@ -819,7 +843,13 @@ export enum ShotPhase {
 	Ending = "Ending",
 }
 
-/** Why a steam-clog warning was raised — which threshold the telemetry tripped. */
+/**
+ * Why a steam-clog warning was raised — which threshold the telemetry tripped.
+ * 
+ * `#[non_exhaustive]` so further clog signatures (e.g. a future flow-based
+ * detector) can be added without breaking the FFI surface — this enum rides
+ * on the `SteamEvent::ClogWarning` payload.
+ */
 export enum SteamClogReason {
 	/** Steam pressure ran too high for too long — a clogged steam wand. */
 	OverPressure = "OverPressure",
@@ -827,7 +857,13 @@ export enum SteamClogReason {
 	OverTemperature = "OverTemperature",
 }
 
-/** Why [`AutoStop`] decided to end the shot. */
+/**
+ * Why [`AutoStop`] decided to end the shot.
+ * 
+ * `#[non_exhaustive]` so further stop reasons (e.g. a future puck-collapse
+ * trigger) can be added without breaking the FFI surface — this enum is the
+ * payload of `Event::StopTriggered`.
+ */
 export enum StopReason {
 	/** The weight target (SAW) was reached. */
 	Weight = "Weight",
@@ -901,7 +937,13 @@ export enum SubState {
 	ErrorNoAc = "ErrorNoAc",
 }
 
-/** Which kind of water-dispensing session the DE1 is running. */
+/**
+ * Which kind of water-dispensing session the DE1 is running.
+ * 
+ * `#[non_exhaustive]` so additional session kinds (e.g. a future `SteamRinse`
+ * classification) can be added without breaking the FFI surface — this enum
+ * rides on every `WaterEvent::Started` payload.
+ */
 export enum WaterSessionKind {
 	/** A hot-water pour (DE1 `HotWater` state). */
 	HotWater = "HotWater",

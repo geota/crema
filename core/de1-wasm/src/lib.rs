@@ -917,14 +917,16 @@ impl CremaBridge {
                                 count: u32::try_from(count).unwrap_or(u32::MAX),
                             }
                         }
-                        // The Serialization variant is for shot history;
-                        // upload_profile cannot produce it. Fall through to
-                        // Empty as the safest default.
-                        _ => ProfileUploadFailure::Empty,
+                        // Any other `DomainError` (e.g. the Serialization
+                        // variant used for shot history) shouldn't reach this
+                        // path. Surface its `Display` rather than silently
+                        // coercing to `Empty`.
+                        e => ProfileUploadFailure::Internal { message: e.to_string() },
                     },
                     // Other AppError variants (e.g. Serialization) similarly
-                    // shouldn't reach this path. Best-effort surface.
-                    _ => ProfileUploadFailure::Empty,
+                    // shouldn't reach this path. Surface the underlying cause
+                    // so the shell's toast / log carries the real reason.
+                    e => ProfileUploadFailure::Internal { message: e.to_string() },
                 };
                 out.events.push(Event::ProfileUploadFailed { reason });
                 json(out)
