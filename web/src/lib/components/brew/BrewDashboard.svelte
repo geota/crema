@@ -860,7 +860,14 @@
 					disabled={!profileStore.activeId}
 					onclick={() => {
 						const id = profileStore.activeId;
-						if (id) void goto(resolve(`/profiles/${encodeURIComponent(id)}/edit`));
+						if (id) {
+							// `?from=brew` so the editor's Back + Save return to
+							// the brew page rather than dumping the user in the
+							// profile library.
+							void goto(
+								resolve(`/profiles/${encodeURIComponent(id)}/edit?from=brew`)
+							);
+						}
 					}}
 				>
 					<i class="ph ph-pencil-simple" aria-hidden="true"></i>
