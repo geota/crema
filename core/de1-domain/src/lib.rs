@@ -27,7 +27,10 @@
 //!   vibration-noisy signal.
 //! - [`session`] — [`SessionTimer`], the timing core shared by the monitors.
 //! - [`bean`] — pure roast-classification helpers ([`roast_band`],
-//!   [`days_off_roast`], [`roast_freshness`]) shared by every shell.
+//!   [`days_off_roast`], [`roast_freshness`]) plus the bean library
+//!   types ([`Bean`], [`Roaster`], [`ShotBean`], [`BeanOrigin`],
+//!   [`BeanMix`]) that every shell consumes via `#[typeshare]` per
+//!   docs/28.
 
 pub mod bean;
 pub mod builtin;
@@ -50,7 +53,10 @@ pub mod units;
 pub mod volume;
 pub mod water;
 
-pub use bean::{RoastBand, RoastFreshness, days_off_roast, roast_band, roast_freshness};
+pub use bean::{
+    Bean, BeanMix, BeanOrigin, Roaster, RoastBand, RoastFreshness, ShotBean, days_off_roast,
+    roast_band, roast_freshness,
+};
 pub use builtin::{BUILTIN_PROFILE_COUNT, builtin_profiles};
 pub use error::{DomainError, ImportError};
 pub use flow::{Estimate, FlowAlgorithm, FlowEstimator};
