@@ -718,10 +718,25 @@ export class CremaApp {
 	/**
 	 * Pin the AC mains frequency the core's volume integrator uses. Called
 	 * by the Advanced settings section whenever the user changes the
-	 * "AC mains frequency" select.
+	 * "AC mains frequency" select. 50/60 selections go through
+	 * `MainsConfirmModal` first; `0` (Auto) does not need confirmation.
 	 */
 	async setLineFrequencyOverride(hz: 0 | 50 | 60): Promise<void> {
 		await this.core.setLineFrequencyOverride(hz);
+	}
+
+	/**
+	 * Commit the mains heater voltage to MMR `0x803834`. **Hardware-damaging
+	 * if mis-set** — the caller MUST have gone through `MainsConfirmModal`
+	 * first. Only `120` and `230` are accepted; the core throws otherwise.
+	 *
+	 * Wire-side, the core encodes `volts + 1000` (the firmware's
+	 * user-committed marker, see `docs/27` row #56). The shell does not
+	 * need to know about that — pass `120` or `230` straight from the
+	 * modal's confirmed value.
+	 */
+	async setHeaterVoltage(volts: 120 | 230): Promise<void> {
+		this.applyCoreOutput(await this.core.setHeaterVoltage(volts));
 	}
 
 	/**

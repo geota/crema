@@ -139,7 +139,7 @@
 			{:else if active === 'calibration'}
 				<CalibrationSection {app} />
 			{:else if active === 'advanced'}
-				<AdvancedSection {app} />
+				<AdvancedSection {app} {snapshot} />
 			{:else if active === 'about'}
 				<AboutSection />
 			{/if}
