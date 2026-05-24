@@ -778,38 +778,44 @@ impl CremaBridge {
 
     /// Set the hot-water phase-1 flow rate (legacy `heater_tweaks`
     /// `phase_1_flow_rate`). Scaled `int(10 × rate)`; MMR `0x803810`,
-    /// 2-byte.
+    /// 4-byte LE.
     pub fn set_phase_1_flow_rate(&self, rate_ml_per_s: f32) -> String {
         json(self.core().set_phase_1_flow_rate(rate_ml_per_s))
     }
 
     /// Set the hot-water phase-2 flow rate (legacy `heater_tweaks`
     /// `phase_2_flow_rate`). Scaled `int(10 × rate)`; MMR `0x803814`,
-    /// 2-byte.
+    /// 4-byte LE.
     pub fn set_phase_2_flow_rate(&self, rate_ml_per_s: f32) -> String {
         json(self.core().set_phase_2_flow_rate(rate_ml_per_s))
     }
 
     /// Set the hot-water boiler idle target temperature, °C (legacy
-    /// `heater_tweaks` `hot_water_idle_temp`). MMR `0x803818`, 1-byte;
-    /// raw °C is written verbatim (no scale).
-    pub fn set_hot_water_idle_temp(&self, temp_c: u8) -> String {
+    /// `heater_tweaks` `hot_water_idle_temp`). MMR `0x803818`, 4-byte LE.
+    /// Wire value is `°C × 10` (scaled by reaprime's `writeScale: 10.0`).
+    pub fn set_hot_water_idle_temp(&self, temp_c: f32) -> String {
         json(self.core().set_hot_water_idle_temp(temp_c))
     }
 
     /// Set the espresso group warmup timeout (legacy `heater_tweaks`
-    /// `espresso_warmup_timeout`). `seconds` is rounded down to whole
-    /// seconds and clamped to `255`. MMR `0x803838`, 1-byte.
-    pub fn set_espresso_warmup_timeout(&self, seconds: u32) -> String {
-        json(
-            self.core()
-                .set_espresso_warmup_timeout(std::time::Duration::from_secs(u64::from(seconds))),
-        )
+    /// `espresso_warmup_timeout`). MMR `0x803838`, 4-byte LE. `seconds`
+    /// is scaled to deciseconds on the wire (`int(10 × seconds)`).
+    pub fn set_espresso_warmup_timeout(&self, seconds: f32) -> String {
+        let dur = if seconds.is_finite() && seconds > 0.0 {
+            // Convert seconds (f32) to a Duration with millisecond precision —
+            // the setter scales ms → deciseconds before writing.
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let ms = (seconds * 1000.0).round().clamp(0.0, u64::MAX as f32) as u64;
+            std::time::Duration::from_millis(ms)
+        } else {
+            std::time::Duration::ZERO
+        };
+        json(self.core().set_espresso_warmup_timeout(dur))
     }
 
     /// Set the steam two-tap-stop (legacy `heater_tweaks`
     /// `steam_two_tap_stop`; reaprime `steamPurgeMode`). MMR `0x803850`,
-    /// 1-byte; raw byte is written verbatim.
+    /// 4-byte LE int. `0` disables, `1` enables.
     pub fn set_steam_two_tap_stop(&self, value: u8) -> String {
         json(self.core().set_steam_two_tap_stop(value))
     }

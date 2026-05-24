@@ -867,25 +867,29 @@ impl CremaCore {
     }
 
     /// Set the hot-water flow rate. `ml_per_s` is scaled `int(10 × rate)`.
-    /// MMR `0x80384C`, 2-byte.
+    /// MMR `0x80384C`, 4-byte LE (one MMR word). TCL `de1_comms.tcl:1173`
+    /// and reaprime `de1.models.dart:hotWaterFlowRate writeScale: 10.0`
+    /// both write a 4-byte payload with Len=4; matched here.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     pub fn set_hot_water_flow_rate(&self, ml_per_s: f32) -> CoreOutput {
         if let Some(out) = self.refuse_if_firmware_locked("set_hot_water_flow_rate") {
             return out;
         }
         let raw = (ml_per_s * 10.0).round().clamp(0.0, 65_535.0) as u32;
-        mmr_write_command(MmrRegister::HotWaterFlowRate, raw, 2)
+        mmr_write_command(MmrRegister::HotWaterFlowRate, raw, 4)
     }
 
     /// Set the flush flow rate. `ml_per_s` is scaled `int(10 × rate)`.
-    /// MMR `0x803840`, 2-byte.
+    /// MMR `0x803840`, 4-byte LE (one MMR word). TCL `de1_comms.tcl:1192`
+    /// and reaprime `de1.models.dart:flushFlowRate writeScale: 10.0`
+    /// both write a 4-byte payload with Len=4; matched here.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     pub fn set_flush_flow_rate(&self, ml_per_s: f32) -> CoreOutput {
         if let Some(out) = self.refuse_if_firmware_locked("set_flush_flow_rate") {
             return out;
         }
         let raw = (ml_per_s * 10.0).round().clamp(0.0, 65_535.0) as u32;
-        mmr_write_command(MmrRegister::FlushFlowRate, raw, 2)
+        mmr_write_command(MmrRegister::FlushFlowRate, raw, 4)
     }
 
     /// Set the flush water target temperature, °C — the temperature the
@@ -903,7 +907,9 @@ impl CremaCore {
     }
 
     /// Set the flush timeout. `dur` is scaled `int(10 × seconds)`.
-    /// MMR `0x803848`, 2-byte.
+    /// MMR `0x803848`, 4-byte LE (one MMR word). TCL `de1_comms.tcl:1199`
+    /// and reaprime `de1.models.dart:flushTimeout writeScale: 10.0`
+    /// both write a 4-byte payload with Len=4; matched here.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     pub fn set_flush_timeout(&self, dur: Duration) -> CoreOutput {
         if let Some(out) = self.refuse_if_firmware_locked("set_flush_timeout") {
@@ -911,7 +917,7 @@ impl CremaCore {
         }
         // Scale ms-resolution into deciseconds (the legacy `int(10 * s)` form).
         let raw = (dur.as_millis() / 100).min(65_535) as u32;
-        mmr_write_command(MmrRegister::FlushTimeout, raw, 2)
+        mmr_write_command(MmrRegister::FlushTimeout, raw, 4)
     }
 
     /// Enable or disable the tablet's USB charging output. MMR `0x803854`,
@@ -1125,7 +1131,9 @@ impl CremaCore {
 
     /// Set the hot-water phase-1 flow rate (legacy `heater_tweaks`
     /// `phase_1_flow_rate`). `ml_per_s` is scaled `int(10 × rate)`.
-    /// MMR `0x803810`, 2-byte.
+    /// MMR `0x803810`, 4-byte LE (one MMR word). TCL `de1_comms.tcl:1127`
+    /// and reaprime `de1.models.dart:heaterUp1Flow writeScale: 10.0`
+    /// both write a 4-byte payload with Len=4; matched here.
     ///
     /// Refused while a firmware upload is in progress
     /// (see [`firmware_locks_writes`](Self::firmware_locks_writes)) — emits
@@ -1136,12 +1144,14 @@ impl CremaCore {
             return out;
         }
         let raw = (rate_ml_per_s * 10.0).round().clamp(0.0, 65_535.0) as u32;
-        mmr_write_command(MmrRegister::Phase1FlowRate, raw, 2)
+        mmr_write_command(MmrRegister::Phase1FlowRate, raw, 4)
     }
 
     /// Set the hot-water phase-2 flow rate (legacy `heater_tweaks`
     /// `phase_2_flow_rate`). `ml_per_s` is scaled `int(10 × rate)`.
-    /// MMR `0x803814`, 2-byte.
+    /// MMR `0x803814`, 4-byte LE (one MMR word). TCL `de1_comms.tcl:1128`
+    /// and reaprime `de1.models.dart:heaterUp2Flow writeScale: 10.0`
+    /// both write a 4-byte payload with Len=4; matched here.
     ///
     /// Refused while a firmware upload is in progress
     /// (see [`firmware_locks_writes`](Self::firmware_locks_writes)) — emits
@@ -1152,44 +1162,68 @@ impl CremaCore {
             return out;
         }
         let raw = (rate_ml_per_s * 10.0).round().clamp(0.0, 65_535.0) as u32;
-        mmr_write_command(MmrRegister::Phase2FlowRate, raw, 2)
+        mmr_write_command(MmrRegister::Phase2FlowRate, raw, 4)
     }
 
     /// Set the hot-water boiler idle target temperature, °C (legacy
-    /// `heater_tweaks` `hot_water_idle_temp`). MMR `0x803818`, 1-byte;
-    /// the raw °C is written verbatim (no scale), matching the legacy
-    /// `set_heater_tweaks` proc.
+    /// `heater_tweaks` `hot_water_idle_temp`). MMR `0x803818`, 4-byte LE.
+    ///
+    /// Wire value is `°C × 10` (so 95.0 °C → raw 950). Matches TCL
+    /// `de1_comms.tcl:1129` (settings stores the pre-scaled raw, e.g.
+    /// `hot_water_idle_temp 950` in `machine.tcl`; the UI displays
+    /// `0.1 * raw`) and reaprime `de1.models.dart:waterHeaterIdleTemp
+    /// writeScale: 10.0`. Both write a 4-byte payload with Len=4.
+    ///
+    /// The pre-fix encoding (`u8` raw °C, byte_len=1) wrote the wrong
+    /// value (under-scaled by 10×) into the wrong number of wire bytes
+    /// — same class of bug as the pre-2026-05-22 `set_steam_flow`
+    /// regression (see `set_steam_flow` doc-comment).
     ///
     /// Refused while a firmware upload is in progress
     /// (see [`firmware_locks_writes`](Self::firmware_locks_writes)) — emits
     /// one [`Event::FirmwareLockoutHit`] and no command.
-    pub fn set_hot_water_idle_temp(&self, temp_c: u8) -> CoreOutput {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    pub fn set_hot_water_idle_temp(&self, temp_c: f32) -> CoreOutput {
         if let Some(out) = self.refuse_if_firmware_locked("set_hot_water_idle_temp") {
             return out;
         }
-        mmr_write_command(MmrRegister::HotWaterIdleTemp, u32::from(temp_c), 1)
+        let raw = (temp_c * 10.0).round().clamp(0.0, 65_535.0) as u32;
+        mmr_write_command(MmrRegister::HotWaterIdleTemp, raw, 4)
     }
 
     /// Set the espresso group warmup timeout (legacy `heater_tweaks`
-    /// `espresso_warmup_timeout`). `timeout` is rounded down to whole
-    /// seconds and clamped to `255`. MMR `0x803838`, 1-byte.
+    /// `espresso_warmup_timeout`). MMR `0x803838`, 4-byte LE.
+    ///
+    /// Wire value is `seconds × 10` (so 3.0 s → raw 30). Matches TCL
+    /// `de1_comms.tcl:1130` (settings stores the pre-scaled raw, e.g.
+    /// `espresso_warmup_timeout 10` = 1.0 s in `machine.tcl`) and
+    /// reaprime `de1.models.dart:heaterUp2Timeout writeScale: 10.0`.
+    /// Both write a 4-byte payload with Len=4.
+    ///
+    /// `timeout` is rounded to the nearest 100 ms and clamped to a u16
+    /// raw value (max ~6553.5 s) before writing.
     ///
     /// Refused while a firmware upload is in progress
     /// (see [`firmware_locks_writes`](Self::firmware_locks_writes)) — emits
     /// one [`Event::FirmwareLockoutHit`] and no command.
-    #[allow(clippy::cast_possible_truncation)]
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     pub fn set_espresso_warmup_timeout(&self, timeout: Duration) -> CoreOutput {
         if let Some(out) = self.refuse_if_firmware_locked("set_espresso_warmup_timeout") {
             return out;
         }
-        let raw = timeout.as_secs().min(255) as u32;
-        mmr_write_command(MmrRegister::EspressoWarmupTimeout, raw, 1)
+        // dur.as_millis() / 100 gives deciseconds — the legacy `int(10 × s)` form.
+        let raw = (timeout.as_millis() / 100).min(65_535) as u32;
+        mmr_write_command(MmrRegister::EspressoWarmupTimeout, raw, 4)
     }
 
     /// Set the steam two-tap-stop (legacy `heater_tweaks`
     /// `steam_two_tap_stop`; reaprime `steamPurgeMode`). MMR `0x803850`,
-    /// 1-byte; the raw byte is written verbatim. Use `0` to disable and
-    /// `1` to enable the double-tap-to-stop steam UX.
+    /// 4-byte LE int (one MMR word). Use `0` to disable and `1` to enable
+    /// the double-tap-to-stop steam UX.
+    ///
+    /// TCL `de1_comms.tcl:1133` + reaprime
+    /// `de1.models.dart:steamPurgeMode (MmrValueKind.int32)` both write a
+    /// 4-byte payload with Len=4; matched here.
     ///
     /// Refused while a firmware upload is in progress
     /// (see [`firmware_locks_writes`](Self::firmware_locks_writes)) — emits
@@ -1198,7 +1232,7 @@ impl CremaCore {
         if let Some(out) = self.refuse_if_firmware_locked("set_steam_two_tap_stop") {
             return out;
         }
-        mmr_write_command(MmrRegister::SteamTwoTapStop, u32::from(value), 1)
+        mmr_write_command(MmrRegister::SteamTwoTapStop, u32::from(value), 4)
     }
 
     /// Build a [`Command`] that writes the DE1's water-tank refill threshold
@@ -4993,64 +5027,226 @@ mod tests {
     fn set_phase_1_flow_rate_emits_one_phase1_write() {
         let core = CremaCore::new();
         let out = core.set_phase_1_flow_rate(1.5);
-        // 1.5 ml/s × 10 = 15 → 2-byte LE.
-        assert_single_mmr_write(&out, MmrRegister::Phase1FlowRate, &[15, 0]);
+        // 1.5 ml/s × 10 = 15 → 4-byte LE (Len=4, one MMR word).
+        // TCL `de1_comms.tcl:1127` + reaprime `heaterUp1Flow writeScale 10.0`
+        // both write a full 4-byte payload; matched here.
+        assert_single_mmr_write(&out, MmrRegister::Phase1FlowRate, &[15, 0, 0, 0]);
     }
 
     #[test]
     fn set_phase_2_flow_rate_emits_one_phase2_write() {
         let core = CremaCore::new();
         let out = core.set_phase_2_flow_rate(4.0);
-        // 4.0 ml/s × 10 = 40 → 2-byte LE.
-        assert_single_mmr_write(&out, MmrRegister::Phase2FlowRate, &[40, 0]);
+        // 4.0 ml/s × 10 = 40 → 4-byte LE.
+        assert_single_mmr_write(&out, MmrRegister::Phase2FlowRate, &[40, 0, 0, 0]);
     }
 
     #[test]
     fn set_hot_water_idle_temp_emits_one_idle_temp_write() {
         let core = CremaCore::new();
-        let out = core.set_hot_water_idle_temp(85);
-        // 1-byte raw °C, no scale.
-        assert_single_mmr_write(&out, MmrRegister::HotWaterIdleTemp, &[85]);
+        let out = core.set_hot_water_idle_temp(85.0);
+        // 85.0 °C × 10 = 850 = 0x352 → 4-byte LE [0x52, 0x03, 0x00, 0x00].
+        // TCL `machine.tcl` stores the pre-scaled raw (e.g. 990 = 99.0°C);
+        // reaprime `waterHeaterIdleTemp writeScale 10.0`.
+        assert_single_mmr_write(
+            &out,
+            MmrRegister::HotWaterIdleTemp,
+            &[0x52, 0x03, 0x00, 0x00],
+        );
     }
 
     #[test]
     fn set_espresso_warmup_timeout_emits_one_warmup_write() {
         let core = CremaCore::new();
-        let out = core.set_espresso_warmup_timeout(Duration::from_secs(30));
-        // 1-byte seconds, clamped to 255.
-        assert_single_mmr_write(&out, MmrRegister::EspressoWarmupTimeout, &[30]);
+        let out = core.set_espresso_warmup_timeout(Duration::from_secs(3));
+        // 3.0 s × 10 = 30 → 4-byte LE [0x1E, 0x00, 0x00, 0x00].
+        // TCL `machine.tcl espresso_warmup_timeout 10` = 1.0s pre-scaled;
+        // reaprime `heaterUp2Timeout writeScale 10.0`.
+        assert_single_mmr_write(
+            &out,
+            MmrRegister::EspressoWarmupTimeout,
+            &[0x1E, 0x00, 0x00, 0x00],
+        );
     }
 
     #[test]
     fn set_steam_two_tap_stop_emits_one_steam_two_tap_write() {
         let core = CremaCore::new();
         let out = core.set_steam_two_tap_stop(1);
-        // 1-byte raw value.
-        assert_single_mmr_write(&out, MmrRegister::SteamTwoTapStop, &[1]);
+        // 4-byte LE int (reaprime `steamPurgeMode` is `MmrValueKind.int32`).
+        assert_single_mmr_write(&out, MmrRegister::SteamTwoTapStop, &[1, 0, 0, 0]);
     }
 
     #[test]
     fn set_flush_timeout_emits_one_flush_timeout_write() {
         let core = CremaCore::new();
         let out = core.set_flush_timeout(Duration::from_secs(5));
-        // 5 s = 5000 ms / 100 = 50 → 2-byte LE.
-        assert_single_mmr_write(&out, MmrRegister::FlushTimeout, &[50, 0]);
+        // 5 s = 5000 ms / 100 = 50 → 4-byte LE.
+        assert_single_mmr_write(&out, MmrRegister::FlushTimeout, &[50, 0, 0, 0]);
     }
 
     #[test]
     fn set_flush_flow_rate_emits_one_flush_flow_write() {
         let core = CremaCore::new();
         let out = core.set_flush_flow_rate(3.0);
-        // 3.0 ml/s × 10 = 30 → 2-byte LE.
-        assert_single_mmr_write(&out, MmrRegister::FlushFlowRate, &[30, 0]);
+        // 3.0 ml/s × 10 = 30 → 4-byte LE.
+        assert_single_mmr_write(&out, MmrRegister::FlushFlowRate, &[30, 0, 0, 0]);
     }
 
     #[test]
     fn set_hot_water_flow_rate_emits_one_hot_water_flow_write() {
         let core = CremaCore::new();
         let out = core.set_hot_water_flow_rate(4.0);
-        // 4.0 ml/s × 10 = 40 → 2-byte LE.
-        assert_single_mmr_write(&out, MmrRegister::HotWaterFlowRate, &[40, 0]);
+        // 4.0 ml/s × 10 = 40 → 4-byte LE.
+        assert_single_mmr_write(&out, MmrRegister::HotWaterFlowRate, &[40, 0, 0, 0]);
+    }
+
+    /// Every heater-tweak setter must emit a packet with `Len=4` (one MMR
+    /// word) and a 4-byte LE payload. Pins the wire byte that TCL
+    /// `mmr_write` always sets to `"04"` and reaprime's
+    /// `_mmrWriteRaw` derives from `_packMMRInt` (always 4 bytes). The
+    /// pre-2026-05-24 split wrote short packets (Len=1 / Len=2); same
+    /// class of bug fixed earlier for `set_steam_flow` (see
+    /// `set_steam_flow_scales_by_one_hundred_into_a_four_byte_slot`).
+    #[test]
+    fn heater_tweak_setters_emit_len_byte_4_and_4_byte_payload() {
+        let core = CremaCore::new();
+        let cases: [CoreOutput; 8] = [
+            core.set_phase_1_flow_rate(2.0),
+            core.set_phase_2_flow_rate(4.0),
+            core.set_hot_water_idle_temp(95.0),
+            core.set_espresso_warmup_timeout(Duration::from_secs(3)),
+            core.set_steam_two_tap_stop(1),
+            core.set_flush_timeout(Duration::from_secs(5)),
+            core.set_flush_flow_rate(6.0),
+            core.set_hot_water_flow_rate(1.0),
+        ];
+        for out in cases {
+            let Some(Command::WriteCharacteristic { data, .. }) = out.commands.first() else {
+                panic!("expected one WriteCharacteristic");
+            };
+            assert_eq!(data.len(), 20, "MMR packet is 20 bytes wide");
+            assert_eq!(data[0], 4, "Len byte must be 4 (full MMR word)");
+            // Bytes 8..20 must be zero — they're payload tail past the word
+            // and the wire pad. The first 4 payload bytes (data[4..8]) carry
+            // the value; the rest is zero per `mmr::write_request`.
+            for (i, &b) in data[8..20].iter().enumerate() {
+                assert_eq!(b, 0, "byte {} of pad is non-zero ({:#x})", 8 + i, b);
+            }
+        }
+    }
+
+    /// Round-trip: a setter encodes a value as a 4-byte LE word, and the
+    /// scale catalog decodes the same word back to the engineering-units
+    /// value. Pins write-scale × read-scale = 1.0 for every heater-tweak
+    /// register. Catches a class of bug where the write path scales by ×10
+    /// but the read path decodes as ÷100, etc.
+    #[test]
+    fn heater_tweak_round_trip_through_scale_catalog() {
+        let core = CremaCore::new();
+        // Each tuple: (the call that emits the write, the register the
+        // write targets, the engineering-units value we wrote).
+        let cases: [(CoreOutput, MmrRegister, f32); 5] = [
+            (core.set_phase_1_flow_rate(2.5), MmrRegister::Phase1FlowRate, 2.5),
+            (core.set_phase_2_flow_rate(4.0), MmrRegister::Phase2FlowRate, 4.0),
+            (core.set_hot_water_idle_temp(95.0), MmrRegister::HotWaterIdleTemp, 95.0),
+            (core.set_flush_flow_rate(6.0), MmrRegister::FlushFlowRate, 6.0),
+            (core.set_hot_water_flow_rate(1.0), MmrRegister::HotWaterFlowRate, 1.0),
+        ];
+        for (out, reg, expected) in cases {
+            let Some(Command::WriteCharacteristic { data, .. }) = out.commands.first() else {
+                panic!("expected one WriteCharacteristic for {reg:?}");
+            };
+            // Pull the 4-byte LE payload that the firmware will store.
+            let raw = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
+            // Decode through the same scale catalog the read path uses
+            // (`reg.scale()` × raw = engineering-units value). Heater-tweak
+            // raw values are small (<= 65_535) so an f32 round-trip preserves
+            // the integer exactly.
+            #[allow(clippy::cast_precision_loss)]
+            let decoded = raw as f32 * reg.scale();
+            assert!(
+                (decoded - expected).abs() < 0.05,
+                "{reg:?}: wrote {expected} -> raw {raw} -> decoded {decoded}",
+            );
+        }
+    }
+
+    /// Boundary: every heater-tweak setter clamps gracefully when callers
+    /// push extreme inputs through. Pinning the contracts:
+    ///
+    /// - flow-rate setters clamp at `0.0` (negative → 0) and at the u16
+    ///   raw ceiling (65_535 → 6553.5 ml/s);
+    /// - `set_hot_water_idle_temp` clamps similarly;
+    /// - `set_espresso_warmup_timeout` saturates at u16 raw deciseconds.
+    ///
+    /// All emit a 4-byte LE payload regardless of value (no silent truncation).
+    #[test]
+    fn heater_tweak_setters_clamp_at_register_bounds() {
+        let core = CremaCore::new();
+        // Negative ml/s → clamp to 0, payload [0,0,0,0].
+        let neg = core.set_phase_1_flow_rate(-1.0);
+        let Some(Command::WriteCharacteristic { data, .. }) = neg.commands.first() else {
+            panic!("expected write");
+        };
+        assert_eq!(&data[4..8], &[0u8; 4], "negative ml/s clamps to 0");
+        assert_eq!(data[0], 4, "Len byte stays 4");
+
+        // Huge ml/s → clamp to u16 max (65_535 raw = 6553.5 ml/s).
+        let huge = core.set_flush_flow_rate(1e9_f32);
+        let Some(Command::WriteCharacteristic { data, .. }) = huge.commands.first() else {
+            panic!("expected write");
+        };
+        assert_eq!(
+            &data[4..8],
+            &[0xFF, 0xFF, 0x00, 0x00],
+            "ml/s clamps at u16 raw"
+        );
+
+        // Warmup timeout saturates at u16 raw (~6553.5 s).
+        let long = core.set_espresso_warmup_timeout(Duration::from_secs(1_000_000));
+        let Some(Command::WriteCharacteristic { data, .. }) = long.commands.first() else {
+            panic!("expected write");
+        };
+        assert_eq!(
+            &data[4..8],
+            &[0xFF, 0xFF, 0x00, 0x00],
+            "warmup timeout saturates at u16 raw"
+        );
+    }
+
+    /// Positive path of the lockout-attribution test (the existing
+    /// `heater_tweak_setters_attribute_lockout_to_their_own_name` only
+    /// exercises the blocked case). Without the lockout, every heater-tweak
+    /// setter must emit exactly one MMR write and no events — confirming
+    /// the lockout assertion isn't a false positive of a setter that
+    /// always no-ops.
+    #[test]
+    fn heater_tweak_setters_emit_a_write_when_not_locked_out() {
+        let core = CremaCore::new();
+        // firmware_lock_override defaults to false, so this is the open path.
+        let cases: [(CoreOutput, MmrRegister); 8] = [
+            (core.set_phase_1_flow_rate(2.0), MmrRegister::Phase1FlowRate),
+            (core.set_phase_2_flow_rate(4.0), MmrRegister::Phase2FlowRate),
+            (core.set_hot_water_idle_temp(95.0), MmrRegister::HotWaterIdleTemp),
+            (
+                core.set_espresso_warmup_timeout(Duration::from_secs(3)),
+                MmrRegister::EspressoWarmupTimeout,
+            ),
+            (core.set_steam_two_tap_stop(1), MmrRegister::SteamTwoTapStop),
+            (core.set_flush_timeout(Duration::from_secs(5)), MmrRegister::FlushTimeout),
+            (core.set_flush_flow_rate(6.0), MmrRegister::FlushFlowRate),
+            (core.set_hot_water_flow_rate(1.0), MmrRegister::HotWaterFlowRate),
+        ];
+        for (out, reg) in cases {
+            assert_eq!(out.commands.len(), 1, "{reg:?}: expected one write");
+            assert!(out.events.is_empty(), "{reg:?}: no events on success");
+            let Command::WriteCharacteristic { target, data } = &out.commands[0] else {
+                panic!("{reg:?}: expected WriteCharacteristic");
+            };
+            assert_eq!(*target, WriteTarget::De1MmrWrite);
+            assert_eq!(data[0], 4, "{reg:?}: Len byte = 4");
+        }
     }
 
     #[test]
@@ -5067,7 +5263,7 @@ mod tests {
         let cases: [(CoreOutput, &str); 8] = [
             (core.set_phase_1_flow_rate(1.5), "set_phase_1_flow_rate"),
             (core.set_phase_2_flow_rate(4.0), "set_phase_2_flow_rate"),
-            (core.set_hot_water_idle_temp(85), "set_hot_water_idle_temp"),
+            (core.set_hot_water_idle_temp(85.0), "set_hot_water_idle_temp"),
             (
                 core.set_espresso_warmup_timeout(Duration::from_secs(30)),
                 "set_espresso_warmup_timeout",
