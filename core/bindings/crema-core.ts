@@ -899,6 +899,17 @@ export interface WireShot {
 	 * `updated_at`). Drives LWW conflict resolution.
 	 */
 	updated_at_ms?: number;
+	/**
+	 * Shot-level tags pulled from the remote — the `tags` array on
+	 * `DefaultShotDetail` (Visualizer's native serializer; the
+	 * Beanconqueror variant doesn't carry shot tags). These are
+	 * mutable metadata, NOT part of the de-dup signature: a remote
+	 * re-tagging doesn't change the shot's identity.
+	 * 
+	 * `#[serde(default)]` so older shells / responses without the
+	 * field still deserialise cleanly to an empty Vec.
+	 */
+	tag_list?: string[];
 }
 
 /**

@@ -97,6 +97,21 @@ export interface StoredShot {
 	/** User tasting notes. Editable. */
 	notes: string;
 	/**
+	 * Shot-level free-form tags (e.g. `["daily-driver", "comp"]`) —
+	 * surfaced from / pushed to Visualizer's `tags` (detail) / `tag_list`
+	 * (PATCH) field. Mutable metadata, NOT part of the de-dup signature
+	 * (`signatureForShot`) — a re-tag doesn't change shot identity.
+	 *
+	 * Optional on the type so legacy localStorage records without the
+	 * field deserialise cleanly; the history-store loader normalises
+	 * missing / non-array values to `[]` at load time. The bean library's
+	 * `Bean.tags` (`docs/28`) is the analogous frozen-at-completion
+	 * snapshot — the on-upload PATCH unions the two (shot.tags first,
+	 * bean.tags second, dedup case-sensitive preserving first occurrence)
+	 * per `shot-sync.ts`.
+	 */
+	tags?: string[];
+	/**
 	 * Visualizer `shot.id` once uploaded — the sync identity that
 	 * persists across local-id changes (docs/36 §3). `null` until the
 	 * shot has been pushed; the upload round-trip writes it back so

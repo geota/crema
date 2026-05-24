@@ -176,10 +176,13 @@
 	 * - `bind` → bindVisualizerId (local shot existed pre-sign-in; adopt
 	 *   the remote id without creating a duplicate; de-dup signature flow
 	 *   from docs/36 §3)
-	 * - `update` → skipped for v1; shot telemetry is immutable per
-	 *   Visualizer's model, so the only mutable fields (notes, rating)
-	 *   would need their own patch path. Logged as "skip" to make the
-	 *   gap visible.
+	 * - `update` → flow the editable annotations Visualizer mutates server-
+	 *   side (currently `tags`) onto the bound local row. Notes / rating
+	 *   are still owner-edited locally only — those don't loop back from
+	 *   the remote in v1 (we don't surface remote authorship), so we
+	 *   restrict the LWW patch to `tags` for now. The bind itself is
+	 *   already in place (this branch fires when `visualizerId` matches),
+	 *   so no extra binding step is needed.
 	 */
 	function applyShotReconciliation(remote: WireShot[]): void {
 		const local = history.all;
@@ -204,8 +207,13 @@
 					name: 'Shot (bound)',
 					at: Date.now()
 				});
+			} else if (action.kind === 'update') {
+				// Flow remote-side tag edits down. The wire `tag_list` is
+				// always present (defaults to `[]` server-omit), so this
+				// patch is idempotent — re-applying an empty list to a
+				// local that has none is a no-op write.
+				history.setTags(action.localId, action.remote.tag_list ?? []);
 			}
-			// `update` falls through — see docstring.
 		}
 	}
 
