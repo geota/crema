@@ -7,6 +7,146 @@ package coffee.crema.core
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
 
+/// Whether a bag of coffee is a single-origin lot or a blend. `None` =
+/// unknown / unset. Serialises as the lowercase wire string
+/// (`"single"` / `"blend"`) to match the TS shell's typed string union
+/// per docs/28.
+@Serializable
+enum class BeanMix(val string: String) {
+	/// A single-origin lot (one farm / region / process).
+	@SerialName("single")
+	Single("single"),
+	/// A blend of two or more components.
+	@SerialName("blend")
+	Blend("blend"),
+}
+
+/// Origin metadata for a bag — country, region, farm, and the rest of
+/// the upstream provenance fields. All optional: a fresh bean's origin
+/// starts empty and the user fills in whatever the bag label shows.
+/// Mirrors Visualizer's CoffeeBag origin fields so the sync mapping is
+/// 1:1 (docs/28 §Visualizer sync §schema-mapping).
+@Serializable
+data class BeanOrigin (
+	/// Country of origin — `"Ethiopia"`, `"Ethiopia / Colombia"` for a blend.
+	val country: String? = null,
+	/// Region within the country — `"Yirgacheffe"`, `"Nyeri"`.
+	val region: String? = null,
+	/// Farm name — `"Hambela Estate"`.
+	val farm: String? = null,
+	/// Farmer / producer name — `"Tarekech Geleta"`.
+	val farmer: String? = null,
+	/// Cultivar / variety — `"Geisha"`, `"SL28 / SL34"`.
+	val variety: String? = null,
+	/// Elevation, free text — `"1900-2100 masl"`. Free-form because real
+	/// bags inconsistently report m / masl / ft / a range / a single.
+	val elevation: String? = null,
+	/// Process — `"Washed"`, `"Natural"`, `"Anaerobic"`. Free-form for the
+	/// same reason as `elevation`.
+	val processing: String? = null,
+	/// Harvest time — `"2024 Spring"`, `"October 2024"`.
+	val harvest_time: String? = null
+)
+
+/// One bag of coffee — a row in the bean library. Per docs/28 this is
+/// the central entity: shots reference one by id, and a snapshot
+/// ([`ShotBean`]) is frozen onto each completed shot. The core owns the
+/// shape so every shell (web, Android, future iOS) consumes the same
+/// type via `#[typeshare]`.
+/// 
+/// CRUD lives in the shell — the core stays sans-IO and only defines
+/// the shape, the conversion helpers and the pure classifiers. A fresh
+/// bag is built via [`Bean::new`]; further edits ride on plain field
+/// assignment (the shell store is responsible for `updated_at` bumps
+/// and persistence).
+@Serializable
+data class Bean (
+	/// Stable id — `"bean:<uuid>"`. The shell mints this on create.
+	val id: String,
+	/// Bean name — e.g. `"Geisha Esmeralda Lot 3"`. **Required.**
+	val name: String,
+	/// FK into the roaster directory. `None` for a bag whose roaster was
+	/// not recorded; the shell may opportunistically promote the
+	/// roaster name from import to a proper [`Roaster`] row.
+	val roaster_id: String? = null,
+	/// ISO `yyyy-mm-dd` roast date.
+	val roasted_on: String? = null,
+	/// ISO `yyyy-mm-dd` opened-on date. Crema-only — drives the
+	/// staleness signal alongside `roasted_on`.
+	val opened_on: String? = null,
+	/// ISO `yyyy-mm-dd` frozen-on date. Drives the freshness math's
+	/// freeze-pause: a frozen bag's freshness counter is the days
+	/// between `roasted_on` and `frozen_on`, paused while frozen.
+	val frozen_on: String? = null,
+	/// ISO `yyyy-mm-dd` defrosted-on date. Resumes the freshness
+	/// counter from `defrosted_on`.
+	val defrosted_on: String? = null,
+	/// Roast level on Visualizer's 1..10 scale. The shell typically
+	/// inputs via a 3-band quick-set (light=1, medium=5, dark=10) and
+	/// uses [`roast_band`] to bucket back into the band word.
+	val roast_level: UByte? = null,
+	/// Single-origin vs blend. `None` = not classified.
+	val mix: BeanMix? = null,
+	/// Decaf flag — `false` by default.
+	val decaf: Boolean,
+	/// Provenance metadata. Empty struct by default.
+	val origin: BeanOrigin,
+	/// Bag size in grams — `0.0` when unknown.
+	val bag_size_g: Float,
+	/// Remaining grams in the bag — auto-debited per shot when the
+	/// shell enables `Track bag remaining weight`. `0.0` when unknown.
+	val remaining_g: Float,
+	/// Quality score — free text per Visualizer (`"88"`, `"A-"`).
+	val quality_score: String,
+	/// Tasting notes — multi-line free text.
+	val tasting_notes: String,
+	/// User star rating 0..5; `0` = unrated.
+	val rating: UByte,
+	/// Where the bag was bought — `"Counter Culture · Durham"`.
+	val place_of_purchase: String? = null,
+	/// URL to buy again — Visualizer / roaster / store link.
+	val url: String? = null,
+	/// Free-form notes (not the tasting box).
+	val notes: String,
+	/// Pinned to the brew-page bean picker strip.
+	val favourite: Boolean,
+	/// Unix epoch ms when the bag was archived; `None` = active.
+	val archived_at: Long? = null,
+	/// Bean-scoped grinder name — `"Niche Zero"`. Bean-scoped because a
+	/// grind setting only means something paired with the grinder it
+	/// was measured on.
+	val grinder: String,
+	/// Bean-scoped grinder click / setting — `"1.2"`, `"6 + a tooth"`.
+	val grinder_setting: String,
+	/// Free-form user tags — e.g. `"daily-driver"`, `"comp"`, `"experimental"`.
+	/// Defaults to an empty list. Serialised as `tags` so the JSON contract
+	/// matches the [`crate::Profile`] tag pattern.
+	val tags: List<String>? = null,
+	/// Visualizer `coffee_bag.id` once pushed.
+	val visualizer_id: String? = null,
+	/// Unix epoch ms when this bag was soft-deleted, or `None` when
+	/// active. Required for cross-device sync tombstone propagation
+	/// (docs/36 §3): on the next sync push, the remote row is DELETEd
+	/// and the local tombstone is garbage-collected. Defaults to
+	/// `None` so older `Bean` JSON deserialises cleanly.
+	val deleted_at: Long? = null,
+	/// Beanconqueror `bean.config.uuid` from a Bc import. Tracks
+	/// provenance so a re-import skips beans we already know.
+	val beanconqueror_id: String? = null,
+	/// IndexedDB blob ref for the bag photo, if any.
+	val image_ref: String? = null,
+	/// Open JSON metadata. The escape valve for fields neither
+	/// Visualizer nor Crema model first-class, but that an import
+	/// (Beanconqueror) or future feature needs to keep round-tripping.
+	/// Serialised as `serde_json::Value` so the wire format is a plain
+	/// nested object.
+	val metadata: Value,
+	/// Unix epoch ms when this bag was created.
+	val created_at: Long,
+	/// Unix epoch ms when this bag was last updated.
+	val updated_at: Long
+)
+
 /// Generated type representing the anonymous struct variant `MachineStateChanged` of the `Event` Rust enum
 @Serializable
 data class EventMachineStateChangedInner (
@@ -553,6 +693,36 @@ data class CoreOutput (
 	val commands: List<Command>
 )
 
+/// A slim view onto the shell's `StoredShot`: only the fields the
+/// reconcile planner reads. Lets the shell project its full record
+/// (web `StoredShot` in `$lib/history/model.ts`, Android equivalent)
+/// into a stable cross-shell shape without dragging the rest of the
+/// record (`series`, `bean`, `metadata`) through the FFI.
+/// 
+/// Field names are camelCase on the wire — the JSON shape lines up
+/// 1:1 with the web shell's `StoredShot`, so callers can hand a
+/// `StoredShot` straight to `JSON.stringify` and `serde_json::from_str`
+/// parses it cleanly (extra fields are ignored).
+@Serializable
+data class LocalShotRef (
+	/// Local stable id — `shot:<uuid>` in the web shell.
+	val id: String,
+	/// Unix epoch ms the shot completed.
+	val completedAt: Long,
+	/// Total shot duration, milliseconds.
+	val duration: Long,
+	/// Active profile's name when the shot was pulled, or `null`.
+	val profileName: String? = null,
+	/// Final scale weight at shot end, grams, or `null`.
+	val finalWeight: Float? = null,
+	/// Visualizer `shot.id` once uploaded — the binding key. `null` /
+	/// missing for an unbound local.
+	val visualizerId: String? = null,
+	/// Unix epoch ms when this shot was soft-deleted, or `null` / missing
+	/// when active. Tombstoned locals must NOT bind to a remote.
+	val deletedAt: Long? = null
+)
+
 /// One selectable display/behaviour mode a scale exposes.
 /// 
 /// A "first-class" scale (the Bookoo) lets the user switch the active display
@@ -580,6 +750,51 @@ data class RangeCapability (
 	val min: UByte,
 	/// The largest value the setting accepts.
 	val max: UByte
+)
+
+/// One roastery — a record in the roaster directory. Sparse on
+/// purpose, mirroring Visualizer's `RoasterDetail` (which is itself
+/// minimal: id + name + website + image). Beanconqueror has no
+/// first-class roaster entity — its `bean.roaster` is free text; the
+/// shell promotes unique strings into [`Roaster`] rows on import per
+/// docs/28 §design-decisions §2.
+@Serializable
+data class Roaster (
+	/// Stable id — `"roaster:<uuid>"`.
+	val id: String,
+	/// Roastery name. **Required.**
+	val name: String,
+	/// Roastery website / store URL.
+	val website: String? = null,
+	/// Logo / hero image URL. Mirrors Visualizer's `RoasterDetail.image_url`
+	/// — round-trips losslessly on sync. Renders as a small thumbnail in
+	/// the roaster card and the editor's preview slot.
+	val image_url: String? = null,
+	/// City — e.g. `"Portland"`. Crema-only; rides in `metadata.crema.city`
+	/// on Visualizer round-trip so the wire format stays lossless.
+	val city: String? = null,
+	/// Country / state / region — free text. Crema-only.
+	val country: String? = null,
+	/// Free-form notes (private to the user — not pushed to Visualizer).
+	val notes: String,
+	/// Pointer to the canonical roaster id when this row was tagged as a
+	/// duplicate. `None` = this row is itself canonical (or has not been
+	/// deduped). Mirrors Visualizer's `RoasterDetail.canonical_roaster_id`
+	/// — round-trips directly. Beans pointing at a duplicate are typically
+	/// re-pointed at the canonical id on merge.
+	val canonical_roaster_id: String? = null,
+	/// Visualizer `roaster.id` once pushed.
+	val visualizer_id: String? = null,
+	/// Unix epoch ms when this roaster was soft-deleted, or `None` when
+	/// active. See [`Bean::deleted_at`] for the rationale. Defaults to
+	/// `None` so older JSON deserialises cleanly.
+	val deleted_at: Long? = null,
+	/// Open JSON metadata — escape valve symmetric with [`Bean::metadata`].
+	val metadata: Value,
+	/// Unix epoch ms.
+	val created_at: Long,
+	/// Unix epoch ms.
+	val updated_at: Long
 )
 
 /// What a connected scale can do, beyond reporting a bare weight.
@@ -643,6 +858,66 @@ data class ScaleUuids (
 	/// Characteristic commands are written to — equal to `weight_notify` for
 	/// scales that use a single characteristic for both.
 	val command_write: String
+)
+
+/// A snapshot of the active bean at the moment a shot was pulled.
+/// Frozen onto each [`crate::history::StoredShot`] (in the shell's
+/// extended record) so a later rename / archive / delete of the bag
+/// does not retroactively rewrite history.
+/// 
+/// Beanconqueror reads the bean *live* off the brew (`Brew.bean: uuid`,
+/// see `Beanconqueror/src/classes/brew/brew.ts:60`). Crema takes the
+/// other approach per docs/28 §design-decisions §1: snapshot wins. A
+/// shot recorded under "Onyx Geisha" stays "Onyx Geisha" forever, even
+/// if the user later renames the bag.
+/// 
+/// Holds the strict minimum the History list / detail panel needs to
+/// render the shot without re-fetching the bag — the user-facing
+/// strings plus the dates that drive the freshness pill.
+@Serializable
+data class ShotBean (
+	/// FK back to the [`Bean`] in the library, if it still exists. The
+	/// History row can resolve the link to open the bean detail; an
+	/// archived / deleted bean falls back to the snapshot strings.
+	val bean_id: String? = null,
+	/// Bag name at the time of the shot — `"Geisha Esmeralda Lot 3"`.
+	val name: String,
+	/// Roaster name at the time of the shot. Not the roaster id — the
+	/// id might dangle, but a string survives.
+	val roaster_name: String? = null,
+	/// ISO `yyyy-mm-dd` roast date at the time of the shot.
+	val roasted_on: String? = null,
+	/// Roast level (1..10) at the time of the shot.
+	val roast_level: UByte? = null
+)
+
+/// The fields the planner reads from a remote shot row. Visualizer's
+/// API returns a superset; we only care about identity + the de-dup
+/// hash inputs + editable annotations. Mirrors the TS `WireShot` in
+/// `shot-sync-signatures.ts`. Unix MS (converted at the spec boundary
+/// from the spec's unix-sec `clock` / `updated_at`).
+/// 
+/// `#[serde(default)]` on the optional fields so a shell that omits them
+/// deserialises cleanly. The wasm / FFI bridges JSON-marshal this.
+@Serializable
+data class WireShot (
+	/// Visualizer shot id — the remote primary key.
+	val id: String,
+	/// Shot start timestamp, unix MS (converted from spec's unix-sec `clock`).
+	val clock: Long,
+	/// Total shot duration, milliseconds.
+	val duration_ms: Long,
+	/// Display name of the profile pulled.
+	val profile_title: String? = null,
+	/// Final scale weight at shot end (grams), or `None`.
+	val final_weight_g: Float? = null,
+	/// Annotations the user has typed remotely.
+	val notes: String? = null,
+	/// Star rating (0..5), or `None`.
+	val rating: Int? = null,
+	/// Last server-side update, unix MS (from spec's unix-sec
+	/// `updated_at`). Drives LWW conflict resolution.
+	val updated_at_ms: Long? = null
 )
 
 /// What a calibration packet asks the DE1 to do.
