@@ -1,9 +1,38 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { sveltekit } from '@sveltejs/kit/vite';
 import { SvelteKitPWA } from '@vite-pwa/sveltekit';
 import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'vite';
 
+/**
+ * Resolve an HTTPS cert pair for `pnpm dev`. Returns `undefined` (Vite falls
+ * back to HTTP) when the certs aren't present, so a fresh checkout still
+ * runs without ceremony — only the Visualizer OAuth flow needs HTTPS
+ * locally, and even there only if the user is signing in.
+ *
+ * Generate with `mkcert localhost 127.0.0.1` inside `web/` (one-time;
+ * requires `brew install mkcert && mkcert -install`). The `.pem` files
+ * are gitignored. See docs/35-visualizer-oauth-setup.md §dev-https.
+ */
+function devHttpsCert(): { key: Buffer; cert: Buffer } | undefined {
+	const keyPath = path.resolve('./localhost+1-key.pem');
+	const certPath = path.resolve('./localhost+1.pem');
+	if (!fs.existsSync(keyPath) || !fs.existsSync(certPath)) return undefined;
+	return { key: fs.readFileSync(keyPath), cert: fs.readFileSync(certPath) };
+}
+
 export default defineConfig(({ command }) => ({
+	server:
+		command === 'serve'
+			? {
+				// HTTPS only when the mkcert pair exists; otherwise plain HTTP.
+				// The `serve` command is `pnpm dev` (vs `build`); production
+				// deploys to adapter-static + Cloudflare Pages, which handles
+				// HTTPS independently.
+				https: devHttpsCert()
+			}
+			: undefined,
 	plugins: [
 		tailwindcss(),
 		sveltekit(),
