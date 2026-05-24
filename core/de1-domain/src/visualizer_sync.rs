@@ -66,6 +66,16 @@ pub struct WireShot {
     #[serde(default)]
     #[typeshare(serialized_as = "Option<I64>")]
     pub updated_at_ms: Option<i64>,
+    /// Shot-level tags pulled from the remote — the `tags` array on
+    /// `DefaultShotDetail` (Visualizer's native serializer; the
+    /// Beanconqueror variant doesn't carry shot tags). These are
+    /// mutable metadata, NOT part of the de-dup signature: a remote
+    /// re-tagging doesn't change the shot's identity.
+    ///
+    /// `#[serde(default)]` so older shells / responses without the
+    /// field still deserialise cleanly to an empty Vec.
+    #[serde(default)]
+    pub tag_list: Vec<String>,
 }
 
 /// A slim view onto the shell's `StoredShot`: only the fields the
@@ -545,6 +555,7 @@ mod tests {
             notes: None,
             rating: None,
             updated_at_ms: None,
+            tag_list: Vec::new(),
         }
     }
 
@@ -630,6 +641,7 @@ mod tests {
                 notes: None,
                 rating: None,
                 updated_at_ms: None,
+                tag_list: Vec::new(),
             },
             WireShot {
                 id: "r-bind".to_owned(),
@@ -640,6 +652,7 @@ mod tests {
                 notes: None,
                 rating: None,
                 updated_at_ms: None,
+                tag_list: Vec::new(),
             },
         ];
         let actions = reconcile_shots(&[bound, unbound], &remotes);
@@ -674,6 +687,29 @@ mod tests {
         let parsed: Vec<ReconcileAction> = serde_json::from_str(&out).unwrap();
         assert_eq!(parsed.len(), 1);
         assert!(matches!(parsed[0], ReconcileAction::Bind { .. }));
+    }
+
+    #[test]
+    fn wire_shot_tag_list_defaults_to_empty_when_absent() {
+        // Older shells / spec responses that don't carry `tag_list` should
+        // round-trip into an empty Vec rather than erroring out. Mirrors
+        // the `bean.tags` default test pattern in `bean.rs`.
+        let json = r#"{
+            "id": "r-1", "clock": 1700000000000, "duration_ms": 30000,
+            "profile_title": "p", "final_weight_g": 36,
+            "notes": null, "rating": null, "updated_at_ms": null
+        }"#;
+        let parsed: WireShot = serde_json::from_str(json).unwrap();
+        assert!(parsed.tag_list.is_empty());
+    }
+
+    #[test]
+    fn wire_shot_tag_list_round_trips() {
+        let mut w = wire("r-1");
+        w.tag_list = vec!["daily-driver".to_owned(), "lever".to_owned()];
+        let s = serde_json::to_string(&w).unwrap();
+        let parsed: WireShot = serde_json::from_str(&s).unwrap();
+        assert_eq!(parsed.tag_list, vec!["daily-driver", "lever"]);
     }
 
     #[test]

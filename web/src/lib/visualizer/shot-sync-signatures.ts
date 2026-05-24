@@ -63,6 +63,18 @@ export interface WireShot {
 	 * `updated_at`). Drives LWW conflict resolution.
 	 */
 	updated_at_ms: number | null;
+	/**
+	 * Shot-level tags pulled from the spec's `DefaultShotDetail.tags`
+	 * (the BC detail variant doesn't carry shot tags). Mutable metadata,
+	 * NOT part of `signatureForShot` — a re-tag doesn't change identity.
+	 * Default to `[]` when the wire payload omits the field.
+	 *
+	 * Named `tag_list` to line up with the Rust `WireShot` and the
+	 * `ShotUpdateRequest.tag_list` PATCH field even though the read-side
+	 * `ShotDetail` field is `tags` — the `wireShotFromDetail` boundary
+	 * in `shot-sync.ts` reads `detail.tags ?? []` into this slot.
+	 */
+	tag_list: string[];
 }
 
 /**
@@ -175,6 +187,11 @@ export function storedShotFromWire(remote: WireShot): StoredShot {
 		bean: null,
 		rating: remote.rating ?? 0,
 		notes: remote.notes ?? '',
+		// Defensive `?? []` even though the type says `string[]` — the
+		// boundary in `shot-sync.ts` is the single producer of `tag_list`
+		// and it already supplies `[]` on missing, but a fresh contract
+		// shouldn't depend on that to stay correct.
+		tags: [...(remote.tag_list ?? [])],
 		visualizerId: remote.id,
 		deletedAt: null
 	};

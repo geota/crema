@@ -269,6 +269,12 @@
 	let q = $state('');
 	/** The active profile filter — `all` or a profile name. */
 	let filterProfile = $state('all');
+	/**
+	 * Tags the user has pinned on. AND semantics (a shot matches when
+	 * every selected tag is in its `tags` array) — mirrors `/profiles`
+	 * and `/beans`. An empty list means "no tag filter applied".
+	 */
+	let selectedTags = $state<string[]>([]);
 	/** The active date-range filter — `30d` keeps only the last 30 days. */
 	let range = $state<'30d' | 'all'>('all');
 	/** The selected shot's id. */
@@ -283,8 +289,25 @@
 	]);
 
 	/**
-	 * Pill list for the per-profile filter rail — wired through the shared
-	 * `FilterPills` component. The dispatcher reads the `p:` prefix.
+	 * Distinct tags across the history, counted, sorted by frequency
+	 * then alphabetically. Drives the tag-pill facets in the filter
+	 * rail. Mirrors `/beans` `tagFacets` so the visual rhythm matches.
+	 */
+	const tagFacets = $derived.by(() => {
+		const m = new Map<string, number>();
+		for (const s of shots) {
+			for (const t of s.tags ?? []) m.set(t, (m.get(t) ?? 0) + 1);
+		}
+		return [...m.entries()]
+			.map(([tag, count]) => ({ tag, count }))
+			.sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag));
+	});
+
+	/**
+	 * Pill list for the filter rail — wired through the shared
+	 * `FilterPills` component. Two id-prefixed groups: `p:` (profile,
+	 * single-select) and `t:` (custom tag, multi-select AND). The
+	 * dispatcher routes by prefix; same shape as `/beans`.
 	 */
 	interface FilterPillItem {
 		id: string;
@@ -298,7 +321,7 @@
 		custom?: boolean;
 		title?: string;
 	}
-	const profileFilterPills = $derived.by(() => {
+	const filterPills = $derived.by(() => {
 		const items: FilterPillItem[] = [
 			{
 				id: 'p:all',
@@ -315,13 +338,32 @@
 				selected: filterProfile === name
 			});
 		}
+		if (tagFacets.length > 0) {
+			items.push({ id: '__divtags', divider: true });
+			items.push({ id: '__tags', groupLabel: 'Tags' });
+			for (const t of tagFacets) {
+				items.push({
+					id: `t:${t.tag}`,
+					label: t.tag,
+					count: t.count,
+					selected: selectedTags.includes(t.tag),
+					custom: true
+				});
+			}
+		}
 		return items;
 	});
 
-	function onProfileFilterClick(id: string): void {
-		if (!id.startsWith('p:')) return;
-		const v = id.slice(2);
-		filterProfile = v === 'all' ? 'all' : v;
+	function onFilterPillClick(id: string): void {
+		if (id.startsWith('p:')) {
+			const v = id.slice(2);
+			filterProfile = v === 'all' ? 'all' : v;
+		} else if (id.startsWith('t:')) {
+			const t = id.slice(2);
+			selectedTags = selectedTags.includes(t)
+				? selectedTags.filter((x) => x !== t)
+				: [...selectedTags, t];
+		}
 	}
 
 	/** The filtered shot list the list pane renders. */
@@ -332,10 +374,18 @@
 		return shots.filter((s) => {
 			if (cutoff != null && s.completedAt < cutoff) return false;
 			if (filterProfile !== 'all' && s.profileName !== filterProfile) return false;
+			// AND semantics — a shot must carry every selected tag.
+			if (selectedTags.length > 0) {
+				const shotTags = s.tags ?? [];
+				for (const t of selectedTags) {
+					if (!shotTags.includes(t)) return false;
+				}
+			}
 			if (query === '') return true;
 			return (
 				(s.profileName ?? '').toLowerCase().includes(query) ||
-				s.notes.toLowerCase().includes(query)
+				s.notes.toLowerCase().includes(query) ||
+				(s.tags ?? []).some((t) => t.toLowerCase().includes(query))
 			);
 		});
 	});
@@ -637,11 +687,17 @@
 		<!-- Filter strip -->
 		<div class="hi-filters">
 			<div class="hi-prof-filters">
-				<FilterPills
-					pills={profileFilterPills}
-					onclick={onProfileFilterClick}
-				/>
+				<FilterPills pills={filterPills} onclick={onFilterPillClick} />
 			</div>
+			{#if selectedTags.length > 0}
+				<button
+					class="hi-chip-clear"
+					onclick={() => (selectedTags = [])}
+					title="Clear all selected tag filters"
+				>
+					<i class="ph ph-x"></i> Clear tags
+				</button>
+			{/if}
 			<div class="pp-sort">
 				<span class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.45)">Range</span>
 				<button
@@ -904,6 +960,27 @@
 		text-decoration-color: var(--copper-500);
 		text-decoration-thickness: 1.5px;
 		text-underline-offset: 4px;
+	}
+
+	/* Clear-tags chip — surfaces alongside the profile / tag pill rail
+	   when at least one tag is selected. Mirrors `.bn-chip-clear` in
+	   `/beans` so the visual rhythm matches. */
+	.hi-chip-clear {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		background: transparent;
+		border: 0;
+		color: rgba(var(--tint-rgb), 0.5);
+		font-family: var(--font-sans);
+		font-size: 11px;
+		cursor: pointer;
+		padding: 4px 8px;
+		border-radius: var(--radius-pill);
+		flex-shrink: 0;
+	}
+	.hi-chip-clear:hover {
+		color: var(--fg-1);
 	}
 
 	/* Split */

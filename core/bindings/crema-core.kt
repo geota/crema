@@ -917,7 +917,16 @@ data class WireShot (
 	val rating: Int? = null,
 	/// Last server-side update, unix MS (from spec's unix-sec
 	/// `updated_at`). Drives LWW conflict resolution.
-	val updated_at_ms: Long? = null
+	val updated_at_ms: Long? = null,
+	/// Shot-level tags pulled from the remote — the `tags` array on
+	/// `DefaultShotDetail` (Visualizer's native serializer; the
+	/// Beanconqueror variant doesn't carry shot tags). These are
+	/// mutable metadata, NOT part of the de-dup signature: a remote
+	/// re-tagging doesn't change the shot's identity.
+	/// 
+	/// `#[serde(default)]` so older shells / responses without the
+	/// field still deserialise cleanly to an empty Vec.
+	val tag_list: List<String>? = null
 )
 
 /// What a calibration packet asks the DE1 to do.

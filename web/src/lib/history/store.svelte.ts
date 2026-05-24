@@ -132,7 +132,8 @@ export class HistoryStore {
 			series: [...series],
 			bean: completion.bean,
 			rating: 0,
-			notes: ''
+			notes: '',
+			tags: []
 		};
 		this.shots = [record, ...this.shots].slice(0, MAX_RECORDS);
 		this.persist();
@@ -146,6 +147,24 @@ export class HistoryStore {
 		this.shots = [
 			...this.shots.slice(0, idx),
 			{ ...this.shots[idx], notes },
+			...this.shots.slice(idx + 1)
+		];
+		this.persist();
+	}
+
+	/**
+	 * Replace a shot's tag list and persist. Tags are normalised at the
+	 * call site (trim + dedup case-sensitive); this setter is a thin
+	 * pass-through so the sync layer can drop a remote-sourced tag list
+	 * onto the local row during reconcile (LWW), the same way
+	 * {@link setRating} / {@link setNotes} flow editable annotations.
+	 */
+	setTags(id: string, tags: string[]): void {
+		const idx = this.shots.findIndex((s) => s.id === id);
+		if (idx < 0) return;
+		this.shots = [
+			...this.shots.slice(0, idx),
+			{ ...this.shots[idx], tags: [...tags] },
 			...this.shots.slice(idx + 1)
 		];
 		this.persist();
@@ -266,7 +285,8 @@ export class HistoryStore {
 			series,
 			bean,
 			rating: imported.metadata.rating ?? 0,
-			notes: imported.metadata.notes ?? ''
+			notes: imported.metadata.notes ?? '',
+			tags: []
 		};
 		this.shots = [record, ...this.shots].slice(0, MAX_RECORDS);
 		this.persist();
@@ -351,8 +371,17 @@ function loadShots(): StoredShot[] {
 		// Trust the shape for the existing fields — they have been
 		// stable through v2 — and only normalise the new sync fields
 		// so missing keys become `null`, not `undefined`.
+		// Defensive normalisation for the optional sync fields and the
+		// post-v2 `tags` field — older records have none of them.
+		// `tags` falls back to `[]`; non-string entries are filtered so a
+		// corrupted store doesn't taint the in-memory list.
+		const tagsRaw = obj.tags;
+		const tags = Array.isArray(tagsRaw)
+			? tagsRaw.filter((t): t is string => typeof t === 'string')
+			: [];
 		out.push({
 			...(obj as unknown as StoredShot),
+			tags,
 			visualizerId: typeof obj.visualizerId === 'string' ? obj.visualizerId : null,
 			deletedAt: typeof obj.deletedAt === 'number' ? obj.deletedAt : null
 		});

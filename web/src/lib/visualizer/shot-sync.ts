@@ -228,6 +228,15 @@ function wireShotFromDetail(summary: ShotSummary, detail: ShotDetail): WireShot 
 		null;
 	const rating =
 		flavorRaw != null ? Math.max(0, Math.min(5, Math.round(flavorRaw / 3))) : null;
+	// Spec note (`openapi.json` v1.8.2): the read-side detail field is
+	// `tags` on `DefaultShotDetail`; the write-side PATCH field is
+	// `tag_list` on `ShotUpdateRequest`. The Beanconqueror detail variant
+	// has no shot-level tags. We surface both shapes defensively in case
+	// a future serializer renames the read field too.
+	const fallbackTags = Array.isArray(fallback.tags) ? fallback.tags : null;
+	const tagList: string[] = fallbackTags
+		? fallbackTags.filter((t): t is string => typeof t === 'string')
+		: [];
 	return {
 		id: summary.id,
 		clock: summary.clock * 1000, // unix sec → ms
@@ -236,7 +245,8 @@ function wireShotFromDetail(summary: ShotSummary, detail: ShotDetail): WireShot 
 		final_weight_g: drinkWeightG,
 		notes: espressoNotes,
 		rating,
-		updated_at_ms: summary.updated_at * 1000 // unix sec → ms
+		updated_at_ms: summary.updated_at * 1000, // unix sec → ms
+		tag_list: tagList
 	};
 }
 
@@ -255,13 +265,17 @@ function wireShotFromDetail(summary: ShotSummary, detail: ShotDetail): WireShot 
  *   - `coffee_bag_id`: read from the live bean (looked up via
  *     `shot.bean.beanId`). The snapshot itself has no `visualizerId`
  *     field today — if it ever gains one, prefer that.
- *   - `tag_list`: prefer the snapshot's tags (frozen at brew time); fall
- *     back to the live bean's tags only when the snapshot has none. The
- *     snapshot type has no `tags` field today, so this currently always
- *     falls through to the live bean.
+ *   - `tag_list`: union of {@link StoredShot.tags} (shot-level tags;
+ *     pulled-back from a previous Visualizer sync) and the live bean's
+ *     `tags` array. Shot tags ride first, bean tags after, dedup is
+ *     case-sensitive preserving first occurrence (mirrors the
+ *     `TagInput` "trim + already-includes" pattern in `$lib/components`).
+ *     The shot-snapshot's `tags` field (if it ever lands per docs/28) is
+ *     read defensively and folded in ahead of the live bean's tags.
  *
  * Returns `null` on either field when nothing is resolvable. Caller
- * skips the follow-up PATCH entirely if the whole record is empty.
+ * skips the follow-up PATCH entirely if the whole record is empty (so
+ * an empty union doesn't clobber server-side tags).
  */
 function resolvePostUploadLinks(shot: StoredShot): {
 	coffeeBagId: string | null;
@@ -280,7 +294,7 @@ function resolvePostUploadLinks(shot: StoredShot): {
 	const snapshotTagsRaw = snapshotLoose?.tags;
 	const snapshotTags = Array.isArray(snapshotTagsRaw)
 		? snapshotTagsRaw.filter((t): t is string => typeof t === 'string')
-		: null;
+		: [];
 
 	let liveBean: ReturnType<ReturnType<typeof getBeanStore>['getBean']> = null;
 	const liveBeanId = snapshot?.beanId ?? null;
@@ -293,12 +307,27 @@ function resolvePostUploadLinks(shot: StoredShot): {
 	}
 
 	const coffeeBagId = snapshotVisualizerId ?? liveBean?.visualizerId ?? null;
-	const tagList =
-		snapshotTags && snapshotTags.length > 0
-			? snapshotTags
-			: liveBean?.tags && liveBean.tags.length > 0
-				? [...liveBean.tags]
-				: null;
+
+	// Union: shot.tags first, snapshot-bean.tags second, live-bean.tags
+	// third. Each source is trimmed + filtered for non-empties to match
+	// the bean library's normalisation (`TagInput.commit` in
+	// `$lib/components/profiles/TagInput.svelte`: `t.trim()`, dedup
+	// case-sensitive). Set preserves first-seen order.
+	const merged: string[] = [];
+	const seen = new Set<string>();
+	const pushAll = (src: readonly string[]): void => {
+		for (const raw of src) {
+			const t = raw.trim();
+			if (!t || seen.has(t)) continue;
+			seen.add(t);
+			merged.push(t);
+		}
+	};
+	pushAll(shot.tags ?? []);
+	pushAll(snapshotTags);
+	pushAll(liveBean?.tags ?? []);
+
+	const tagList = merged.length > 0 ? merged : null;
 
 	return { coffeeBagId, tagList };
 }

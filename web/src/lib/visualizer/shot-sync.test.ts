@@ -48,6 +48,7 @@ interface WireShot {
 	notes: string | null;
 	rating: number | null;
 	updated_at_ms: number | null;
+	tag_list: string[];
 }
 
 type ReconcileAction =
@@ -119,6 +120,7 @@ function storedShotFromWire(remote: WireShot): StoredShot {
 		bean: null,
 		rating: remote.rating ?? 0,
 		notes: remote.notes ?? '',
+		tags: [...(remote.tag_list ?? [])],
 		visualizerId: remote.id,
 		deletedAt: null
 	};
@@ -157,6 +159,7 @@ function shot(over: Partial<StoredShot> = {}): StoredShot {
 		bean: null,
 		rating: 4,
 		notes: '',
+		tags: [],
 		visualizerId: null,
 		deletedAt: null,
 		...over
@@ -173,6 +176,7 @@ function wire(over: Partial<WireShot> = {}): WireShot {
 		notes: null,
 		rating: null,
 		updated_at_ms: null,
+		tag_list: [],
 		...over
 	};
 }
@@ -421,6 +425,18 @@ describe('reconcileShots', () => {
 });
 
 describe('storedShotFromWire', () => {
+	it('populates tags from the wire tag_list', () => {
+		const remote = wire({ id: 'r-tagged', tag_list: ['daily-driver', 'lever'] });
+		const local = storedShotFromWire(remote);
+		assert.deepEqual(local.tags, ['daily-driver', 'lever']);
+	});
+
+	it('defaults tags to [] when the wire tag_list is empty', () => {
+		const remote = wire({ id: 'r-untagged', tag_list: [] });
+		const local = storedShotFromWire(remote);
+		assert.deepEqual(local.tags, []);
+	});
+
 	it('produces a stub local shot with visualizerId set', () => {
 		const remote = wire({ id: 'r-77', notes: 'lovely', rating: 5 });
 		const local = storedShotFromWire(remote);
