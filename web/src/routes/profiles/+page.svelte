@@ -636,7 +636,16 @@
 
 	<!-- Filter strip -->
 	<div class="pp-filters">
-		<FilterPills pills={filterPills} onclick={(id) => (tag = id)} />
+		<FilterPills
+			pills={filterPills}
+			onclick={(id) => {
+				// Re-clicking the active pill deselects → reset to the
+				// `all` catch-all. `all` itself is already the "no filter"
+				// state, so leave it pinned on re-click rather than
+				// flipping to a weirder unset value.
+				tag = tag === id && id !== 'all' ? 'all' : id;
+			}}
+		/>
 		<div class="pp-sort">
 			<SortPill
 				value={{ field: sort, direction: sortDir }}
