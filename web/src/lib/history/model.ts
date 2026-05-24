@@ -96,6 +96,22 @@ export interface StoredShot {
 	rating: number;
 	/** User tasting notes. Editable. */
 	notes: string;
+	/**
+	 * Visualizer `shot.id` once uploaded — the sync identity that
+	 * persists across local-id changes (docs/36 §3). `null` until the
+	 * shot has been pushed; the upload round-trip writes it back so
+	 * subsequent syncs PATCH the same row instead of POSTing a
+	 * duplicate. Optional on the type so legacy localStorage records
+	 * without the field deserialise cleanly.
+	 */
+	visualizerId?: string | null;
+	/**
+	 * Unix epoch ms when this shot was soft-deleted, or `null` when
+	 * active. The History UI filters tombstones out; the next sync push
+	 * DELETEs the remote row, then garbage-collects the tombstone (per
+	 * docs/36 §3 soft-delete). Optional so legacy records deserialise.
+	 */
+	deletedAt?: number | null;
 }
 
 /**

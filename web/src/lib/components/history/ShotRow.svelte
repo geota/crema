@@ -15,12 +15,20 @@
 		selectable = false,
 		selected = false,
 		selectionDisabled = false,
+		syncPip = 'local',
 		onclick
 	}: {
 		/** The stored shot this row renders. */
 		shot: StoredShot;
 		/** Whether this row is the selected-detail one. */
 		active?: boolean;
+		/**
+		 * Visualizer sync status pip — `uploaded` (🟢) when this shot has a
+		 * remote id, `pending` (🟡) when it sits in the retry queue,
+		 * `failed` (🔴) when the last attempt errored, `local` (⚪) when
+		 * sync is off / pull-only. docs/36 §5.
+		 */
+		syncPip?: 'uploaded' | 'pending' | 'failed' | 'local';
 		/**
 		 * When true, the row is in **compare-select mode**: a leading
 		 * checkbox replaces the active-row treatment, and clicking toggles
@@ -116,6 +124,17 @@
 	>
 		{starString}
 	</div>
+	<div
+		class="hi-row-pip hi-pip-{syncPip}"
+		title={syncPip === 'uploaded'
+			? 'Uploaded to Visualizer'
+			: syncPip === 'pending'
+				? 'Upload pending — will retry'
+				: syncPip === 'failed'
+					? 'Upload failed — open settings to retry'
+					: 'Not uploaded — local only'}
+		aria-label="Visualizer sync status: {syncPip}"
+	></div>
 </button>
 
 <style>
@@ -123,7 +142,7 @@
 		display: grid;
 		/* Slot 2 (96 px) holds the MiniShotChart — the recorded shot's
 		   pressure / flow / weight silhouette, the row's at-a-glance hook. */
-		grid-template-columns: 60px 96px 1fr auto auto auto;
+		grid-template-columns: 60px 96px 1fr auto auto auto 8px;
 		gap: 12px;
 		align-items: center;
 		padding: 10px 12px;
@@ -137,7 +156,7 @@
 	}
 	.hi-row.is-selectmode {
 		/* Reserve a slot for the leading checkbox without shifting the rest. */
-		grid-template-columns: 22px 60px 96px 1fr auto auto auto;
+		grid-template-columns: 22px 60px 96px 1fr auto auto auto 8px;
 	}
 	.hi-row:hover:not(:disabled) {
 		background: rgba(var(--tint-rgb), 0.04);
@@ -240,5 +259,36 @@
 	/* An unrated shot still shows five (dim) glyphs, keeping the column rhythm. */
 	.hi-row-stars.is-unrated {
 		color: rgba(var(--tint-rgb), 0.25);
+	}
+
+	/* Visualizer sync status pip — a tiny dot at the row's trailing edge. */
+	.hi-row-pip {
+		width: 6px;
+		height: 6px;
+		border-radius: 50%;
+		justify-self: end;
+		background: rgba(var(--tint-rgb), 0.2);
+	}
+	.hi-pip-uploaded {
+		background: var(--success, #2faa5a);
+	}
+	.hi-pip-pending {
+		background: var(--warning, #d9a55a);
+		animation: hi-pip-pulse 1.6s ease-in-out infinite;
+	}
+	.hi-pip-failed {
+		background: var(--danger, #cc4c4c);
+	}
+	@keyframes hi-pip-pulse {
+		0%, 100% { opacity: 0.45; }
+		50% { opacity: 1; }
+	}
+
+	.hi-spin {
+		animation: hi-spin 1.1s linear infinite;
+	}
+	@keyframes hi-spin {
+		from { transform: rotate(0); }
+		to { transform: rotate(360deg); }
 	}
 </style>

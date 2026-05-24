@@ -40,6 +40,15 @@ import { getMaintenanceStore } from '$lib/maintenance';
 import { parseCaptureFile, replayEvents, ReplayAbortedError } from '$lib/replay';
 import { describeError } from '$lib/utils/error';
 import {
+	appendSyncLog,
+	armQueueLifecycle,
+	directionPushes,
+	enqueue as enqueueSyncOp,
+	readSyncConfig,
+	uploadShot
+} from '$lib/visualizer';
+import { VisualizerError } from '$lib/bean';
+import {
 	CremaUiState,
 	DEFAULT_SCALE_STANDBY,
 	DEFAULT_SCALE_VOLUME,
@@ -386,6 +395,9 @@ export class CremaApp {
 		// any captures whose StoredShot no longer exists. Fire and forget —
 		// neither is on the critical path of app readiness.
 		void this.bootCaptureStore();
+		// Wire the Visualizer upload-queue lifecycle (drain on online,
+		// every 5 min foreground tick, and once on app start).
+		armQueueLifecycle();
 	}
 
 	/**
@@ -605,6 +617,13 @@ export class CremaApp {
 						brewRatio
 					});
 				}
+				// Auto-upload to Visualizer if shot sync direction includes
+				// push. Fire-and-forget on the orchestrator thread — failures
+				// fall through to the persistent retry queue so a 502 / offline
+				// blip doesn't lose the shot. docs/36 §5.
+				if (record) {
+					this.tryUploadShot(record.id);
+				}
 				// Persist the just-finished shot's raw BLE capture (a slice of
 				// the recorder's rolling buffer, scoped from a short lead-in
 				// before ShotStarted through completion) under the new record's
@@ -709,6 +728,54 @@ export class CremaApp {
 			const reason = err instanceof Error ? err.message : String(err);
 			return { ok: false, message: reason };
 		}
+	}
+
+	/**
+	 * Fire-and-forget Visualizer shot upload, gated on the user's shot
+	 * sync direction + the `visualizerAutoUpload` setting. Failures route
+	 * through the persistent retry queue so transient network blips don't
+	 * lose the shot. Auth + premium errors bypass the queue — the user
+	 * needs to fix something. docs/36 §5.
+	 */
+	private tryUploadShot(shotId: string): void {
+		const config = readSyncConfig();
+		if (!directionPushes(config.direction.shots)) return;
+		if (!getSettingsStore().current.visualizerAutoUpload) return;
+		const shot = getHistoryStore().get(shotId);
+		if (!shot) return;
+		void uploadShot(shot)
+			.then(({ visualizerId }) => {
+				getHistoryStore().bindVisualizerId(shotId, visualizerId);
+				appendSyncLog({
+					direction: 'push',
+					entity: 'shot',
+					id: shotId,
+					name: shot.profileName ?? 'Shot',
+					at: Date.now()
+				});
+			})
+			.catch((e) => {
+				const recoverable =
+					e instanceof VisualizerError
+						? e.kind === 'network' || (e.status >= 500 && e.status < 600) || e.status === 408
+						: true;
+				if (recoverable) {
+					enqueueSyncOp({
+						entity: 'shot',
+						id: shotId,
+						op: 'create',
+						error: e instanceof Error ? e.message : String(e)
+					});
+				}
+				appendSyncLog({
+					direction: 'skip',
+					entity: 'shot',
+					id: shotId,
+					name: shot.profileName ?? 'Shot',
+					at: Date.now(),
+					error: e instanceof Error ? e.message : String(e)
+				});
+			});
 	}
 
 	/**

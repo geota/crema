@@ -46,3 +46,46 @@ export {
 export { fetchAccount, type VisualizerAccount } from './account';
 
 export { migrateLegacyBasicAuth } from './migrate-basic-auth';
+
+// ── Shot sync (docs/36 §5) ─────────────────────────────────────────
+export {
+	deleteShot,
+	patchShot,
+	pullShots,
+	reconcileShots,
+	signatureForBean,
+	signatureForRoaster,
+	signatureForShot,
+	storedShotFromWire,
+	uploadShot,
+	type ReconcileAction,
+	type WireShot
+} from './shot-sync';
+
+// ── Upload queue (docs/36 §6, §7) ──────────────────────────────────
+export {
+	armQueueLifecycle,
+	clearQueue,
+	dequeue,
+	drainQueue,
+	enqueue,
+	getQueue,
+	isPending,
+	type DrainResult,
+	type QueueEntry
+} from './upload-queue';
+
+// ── Unified sync config (docs/36 §7) ───────────────────────────────
+export {
+	appendSyncLog,
+	clearSyncLog,
+	DEFAULT_SYNC_CONFIG,
+	directionPulls,
+	directionPushes,
+	readSyncConfig,
+	updateSyncConfig,
+	writeSyncConfig,
+	type SyncDirection,
+	type SyncLogEntry as VisualizerSyncLogEntry,
+	type VisualizerSyncConfig
+} from './sync-config';
