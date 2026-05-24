@@ -291,7 +291,9 @@
 /* ───────────────────────────── Machine hero card */
 .st-machinecard {
   display: grid;
-  grid-template-columns: 120px 1fr 280px;
+  /* Img column fixed; the two info panels (connection + firmware) split the
+     remaining width equally so they read as paired cards. */
+  grid-template-columns: 120px minmax(0, 1fr) minmax(0, 1fr);
   gap: 24px;
   align-items: stretch;
   padding: 20px 22px;
