@@ -2,8 +2,8 @@
 	/**
 	 * `BeanTile` — one bag of coffee in the `/beans` library grid.
 	 *
-	 * Replaces the older {@link BeanCard.svelte}. Visual structure is
-	 * adopted from the Claude-designed canvas
+	 * Replaces the older `BeanCard.svelte`. Visual structure is adopted
+	 * from the Claude-designed canvas
 	 * (`crema-beans-svelte-export/BeanTile.svelte`):
 	 *
 	 *   ┌──────────────────────────────────┐
@@ -17,18 +17,10 @@
 	 *   │   [Set active]  [⎘] [✎] [🗑]    │   action row
 	 *   └──────────────────────────────────┘
 	 *
-	 * Key departures from the prior tile (PR §3 + §4):
-	 *
-	 *  - The **favourite star** is in the tile's **top-right corner**
-	 *    (matches `/profiles` `ProfileCard.svelte`'s `.pp-card-pin`).
-	 *    The avatar no longer carries the star — that was a holdover
-	 *    from the Claude canvas and clashed with the profile card.
-	 *  - A **bottom action row** mirrors the profile card layout:
-	 *    a primary "Set active" button + Duplicate / Edit / Delete
-	 *    icon buttons. Every button calls `e.stopPropagation()` so
-	 *    clicks don't bubble up to the tile-open handler.
-	 *
-	 * Click anywhere outside the action row / star fires `onOpen(id)`.
+	 * Card chrome (grid template, top-right pin star, action-row layout)
+	 * lives in {@link LibraryCardShell} — this component owns only the
+	 * per-tile contents of each slot (avatar mark, header text, stats /
+	 * burn-down, and the action-row buttons).
 	 */
 	import {
 		daysOffRoast,
@@ -39,6 +31,7 @@
 		type Bean,
 		type Roaster
 	} from '$lib/bean';
+	import LibraryCardShell from '$lib/components/shared/LibraryCardShell.svelte';
 
 	let {
 		bean,
@@ -100,14 +93,7 @@
 	function onCardClick(): void {
 		onOpen(bean.id);
 	}
-	function onCardKey(e: KeyboardEvent): void {
-		if (e.key === 'Enter' || e.key === ' ') {
-			e.preventDefault();
-			onOpen(bean.id);
-		}
-	}
-	function onFavClick(e: MouseEvent): void {
-		e.stopPropagation();
+	function onFavClick(): void {
 		onToggleFavourite(bean.id);
 	}
 	function onSetActiveClick(e: MouseEvent): void {
@@ -129,47 +115,31 @@
 	}
 </script>
 
-<div
-	class="bn-tile"
-	class:is-active={isActive}
-	class:is-archived={isArchived}
-	class:is-frozen={isFrozen}
-	role="button"
-	tabindex="0"
-	onclick={onCardClick}
-	onkeydown={onCardKey}
-	aria-label="Open {bean.name || 'untitled bean'}"
+<LibraryCardShell
+	cardKind="bean"
+	favourite={bean.favourite}
+	onFavouriteClick={onFavClick}
+	{onCardClick}
+	ariaLabel={`Open ${bean.name || 'untitled bean'}`}
+	{isActive}
+	{isArchived}
+	{isFrozen}
 >
-	<!-- Favourite star (top-right of the tile container; matches ProfileCard). -->
-	<button
-		type="button"
-		class="bn-tile-pin"
-		class:bn-tile-pin-off={!bean.favourite}
-		onclick={onFavClick}
-		aria-label={bean.favourite ? 'Unpin from brew picker' : 'Pin to brew picker'}
-		title={bean.favourite ? 'Pinned to favourites' : 'Pin to favourites'}
-	>
-		<i
-			class={bean.favourite ? 'ph-fill ph-star' : 'ph ph-star'}
-			aria-hidden="true"
-		></i>
-	</button>
+	{#snippet avatar()}
+		<div class="bn-tile-avatar" style="--tone: {mt.tone}">
+			<div class="bn-tile-mono">{mt.mark}</div>
+			{#if isActive}
+				<div class="bn-tile-active-dot" title="Active on Brew"></div>
+			{/if}
+			{#if isFrozen}
+				<div class="bn-tile-frozen" title="Frozen storage">
+					<i class="ph-fill ph-snowflake" aria-hidden="true"></i>
+				</div>
+			{/if}
+		</div>
+	{/snippet}
 
-	<!-- Avatar block (left) -->
-	<div class="bn-tile-avatar" style="--tone: {mt.tone}">
-		<div class="bn-tile-mono">{mt.mark}</div>
-		{#if isActive}
-			<div class="bn-tile-active-dot" title="Active on Brew"></div>
-		{/if}
-		{#if isFrozen}
-			<div class="bn-tile-frozen" title="Frozen storage">
-				<i class="ph-fill ph-snowflake" aria-hidden="true"></i>
-			</div>
-		{/if}
-	</div>
-
-	<!-- Header group — sits beside the avatar in the second grid column. -->
-	<div class="bn-tile-head">
+	{#snippet head()}
 		<div class="bn-tile-roaster">{roaster?.name ?? 'No roaster'}</div>
 		<div class="bn-tile-name">{bean.name || 'Untitled bag'}</div>
 		<div class="bn-tile-meta">
@@ -194,13 +164,9 @@
 				<span class="bn-tile-pill bn-tile-pill-tag">+{overflowTags}</span>
 			{/if}
 		</div>
-	</div>
+	{/snippet}
 
-	<!-- Metrics group — spans both grid columns so the stats + burn-down use
-	     the full card width (avatar column included). Fixed-slot 3-column grid
-	     so the off-roast / lifecycle / rating slots stay put regardless of
-	     which fields a given bag has set. -->
-	<div class="bn-tile-metrics">
+	{#snippet metrics()}
 		<div class="bn-tile-stats">
 			<div class="bn-tile-stat">
 				<span class="bn-tile-stat-dot" style:background={freshColor}></span>
@@ -264,13 +230,12 @@
 				{/if}
 			</div>
 		</div>
-	</div>
+	{/snippet}
 
-	<!-- Action row — spans both grid columns to match the metrics row. -->
-	<div class="bn-tile-actions">
+	{#snippet actions()}
 		<button
 			type="button"
-			class="bn-tile-action bn-tile-action-primary"
+			class="lcs-action lcs-action-primary"
 			class:is-on={isActive}
 			onclick={onSetActiveClick}
 		>
@@ -282,7 +247,7 @@
 		</button>
 		<button
 			type="button"
-			class="bn-tile-action-icon"
+			class="lcs-action-icon"
 			title="Duplicate"
 			aria-label="Duplicate"
 			onclick={onDuplicateClick}
@@ -291,7 +256,7 @@
 		</button>
 		<button
 			type="button"
-			class="bn-tile-action-icon"
+			class="lcs-action-icon"
 			title="Edit"
 			aria-label="Edit"
 			onclick={onEditClick}
@@ -300,103 +265,19 @@
 		</button>
 		<button
 			type="button"
-			class="bn-tile-action-icon bn-tile-action-icon-danger"
+			class="lcs-action-icon lcs-action-icon-danger"
 			title="Delete"
 			aria-label="Delete"
 			onclick={onDeleteClick}
 		>
 			<i class="ph ph-trash" aria-hidden="true"></i>
 		</button>
-	</div>
-</div>
+	{/snippet}
+</LibraryCardShell>
 
 <style>
-	.bn-tile {
-		position: relative;
-		display: grid;
-		grid-template-columns: 88px 1fr;
-		/* Three named rows: avatar + header (side-by-side), then metrics +
-		   actions span the full width. Letting the bottom rows cross both
-		   columns is what makes the burn-down + action buttons use the
-		   whole card width instead of being confined to the right column. */
-		grid-template-areas:
-			'avatar head'
-			'metrics metrics'
-			'actions actions';
-		grid-template-rows: auto 1fr auto;
-		column-gap: 16px;
-		row-gap: 12px;
-		background: rgba(var(--tint-rgb), 0.04);
-		border: 1px solid rgba(var(--tint-rgb), 0.08);
-		border-radius: var(--radius-lg, 14px);
-		padding: 14px;
-		padding-right: 16px;
-		/* Min height absorbs variance across sparsely-filled bags so the action
-		   row sits at a consistent baseline across every row of the grid. */
-		min-height: 220px;
-		text-align: left;
-		color: var(--fg-1);
-		font: inherit;
-		cursor: pointer;
-		transition:
-			background var(--dur-1) var(--ease),
-			border-color var(--dur-1) var(--ease),
-			transform var(--dur-1) var(--ease);
-		min-height: 168px;
-		outline: 0;
-	}
-	.bn-tile:hover {
-		background: rgba(var(--tint-rgb), 0.06);
-		border-color: rgba(var(--tint-rgb), 0.16);
-	}
-	.bn-tile:focus-visible {
-		outline: 2px solid var(--copper-400);
-		outline-offset: 2px;
-	}
-	.bn-tile.is-active {
-		border-color: var(--copper-400);
-		background: rgba(var(--copper-rgb), 0.07);
-	}
-	.bn-tile.is-archived {
-		opacity: 0.55;
-	}
-	.bn-tile.is-frozen {
-		background: linear-gradient(
-			180deg,
-			rgba(125, 160, 205, 0.04),
-			rgba(var(--tint-rgb), 0.04) 60%
-		);
-	}
-
-	/* Favourite star — top-right of the tile (matches `.pp-card-pin`). */
-	.bn-tile-pin {
-		position: absolute;
-		top: 8px;
-		right: 8px;
-		z-index: 2;
-		background: transparent;
-		border: 0;
-		color: var(--copper-400);
-		font-size: 18px;
-		cursor: pointer;
-		padding: 4px;
-		border-radius: 6px;
-		display: inline-flex;
-		transition: all var(--dur-1) var(--ease);
-	}
-	.bn-tile-pin:hover {
-		background: rgba(var(--tint-rgb), 0.05);
-	}
-	.bn-tile-pin.bn-tile-pin-off {
-		color: rgba(var(--tint-rgb), 0.25);
-	}
-	.bn-tile-pin.bn-tile-pin-off:hover {
-		color: rgba(var(--tint-rgb), 0.6);
-	}
-
-	/* Avatar — sits in the `avatar` grid area in the top row beside header. */
+	/* Avatar — sits in the shell's `avatar` slot. */
 	.bn-tile-avatar {
-		grid-area: avatar;
 		position: relative;
 		width: 88px;
 		height: 88px;
@@ -443,19 +324,7 @@
 		font-size: 12px;
 	}
 
-	/* Body (right column) */
-	/* Header group — sits in the `head` grid area beside the avatar.
-	   The padding-right clears the absolutely-positioned star, which only
-	   overlaps these top rows; metrics + actions below span full width. */
-	.bn-tile-head {
-		grid-area: head;
-		display: flex;
-		flex-direction: column;
-		gap: 4px;
-		min-width: 0;
-		min-height: 0;
-		padding-right: 28px;
-	}
+	/* Header text in the shell's `head` slot. */
 	.bn-tile-roaster {
 		font-family: var(--font-sans);
 		font-size: 10px;
@@ -532,17 +401,6 @@
 		font-weight: 500;
 	}
 
-	/* Metrics group — spans both grid columns so stats + burn-down use the
-	   full card width. Stable layout across sparsely-filled vs fully-filled. */
-	.bn-tile-metrics {
-		grid-area: metrics;
-		display: flex;
-		flex-direction: column;
-		gap: 8px;
-		min-width: 0;
-		align-self: end; /* hug the bottom of its row when card is taller */
-	}
-
 	/* Stats row — fixed 3-column grid so off-roast / lifecycle / rating
 	   each own a slot that doesn't shift when neighbours are missing. */
 	.bn-tile-stats {
@@ -594,8 +452,6 @@
 		letter-spacing: var(--track-allcaps);
 	}
 	.bn-tile-stat-rating {
-		/* In the fixed-slot grid the rating sits in its own `auto` column;
-		   margin-left:auto is no longer needed and would over-shift now. */
 		gap: 1px;
 		font-size: 10px;
 		color: var(--copper-400);
@@ -609,9 +465,8 @@
 		color: rgba(var(--tint-rgb), 0.2);
 	}
 
-	/* Burn-down bar — sits inside .bn-tile-metrics; always renders so the
-	   slot is reserved even when no bag size is set (track shows empty,
-	   text reads "No bag size"). The `.bn-tile-burn-empty` modifier dims it. */
+	/* Burn-down bar. Always renders so the slot is reserved even when no
+	   bag size is set; the `.bn-tile-burn-empty` modifier dims it. */
 	.bn-tile-burn {
 		display: flex;
 		flex-direction: column;
@@ -650,85 +505,5 @@
 	}
 	.bn-tile-burn-total {
 		color: rgba(var(--tint-rgb), 0.45);
-	}
-
-	/* Action row — same pattern as /profiles `ProfileCard`'s
-	   `.pp-card-actions`: primary fills, icon trio shrinks to 32px squares. */
-	.bn-tile-actions {
-		grid-area: actions;
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		/* The tile grid's `auto 1fr auto` rows let the metrics row absorb
-		   variance; actions always render in their own bottom row at full
-		   width across both columns. */
-	}
-	.bn-tile-action {
-		flex: 1 1 auto;
-		min-width: 0;
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		gap: 6px;
-		padding: 7px 12px;
-		border-radius: var(--radius-sm);
-		border: 1px solid rgba(var(--tint-rgb), 0.1);
-		background: rgba(var(--tint-rgb), 0.03);
-		color: var(--fg-1);
-		font-family: var(--font-sans);
-		font-size: 12px;
-		font-weight: 500;
-		/* Keep the active label "Active on Brew" on one line so the button
-		   never grows vertically when toggled. */
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		cursor: pointer;
-		transition: all var(--dur-1) var(--ease);
-	}
-	.bn-tile-action > span {
-		min-width: 0;
-		overflow: hidden;
-		text-overflow: ellipsis;
-	}
-	.bn-tile-action:hover {
-		background: rgba(var(--tint-rgb), 0.07);
-		border-color: rgba(var(--tint-rgb), 0.18);
-	}
-	.bn-tile-action-primary.is-on {
-		background: rgba(193, 116, 75, 0.12);
-		border-color: var(--copper-500);
-		color: var(--copper-400);
-		cursor: default;
-	}
-	.bn-tile-action-primary.is-on i {
-		color: var(--copper-400);
-	}
-	.bn-tile-action-icon {
-		width: 30px;
-		height: 30px;
-		flex: 0 0 30px;
-		border: 1px solid rgba(var(--tint-rgb), 0.1);
-		background: rgba(var(--tint-rgb), 0.03);
-		border-radius: var(--radius-sm);
-		color: rgba(var(--tint-rgb), 0.6);
-		cursor: pointer;
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		font-size: 13px;
-		transition: all var(--dur-1) var(--ease);
-		padding: 0;
-	}
-	.bn-tile-action-icon:hover {
-		color: var(--fg-1);
-		background: rgba(var(--tint-rgb), 0.07);
-	}
-	.bn-tile-action-icon-danger {
-		color: var(--danger);
-	}
-	.bn-tile-action-icon-danger:hover {
-		color: var(--danger);
-		background: rgba(var(--danger-rgb), 0.12);
 	}
 </style>
