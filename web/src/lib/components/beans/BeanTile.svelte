@@ -197,60 +197,64 @@
 			{/if}
 		</div>
 
-		<div class="bn-tile-stats">
-			<div class="bn-tile-stat">
-				<span class="bn-tile-stat-dot" style:background={freshColor}></span>
-				<div class="bn-tile-stat-text">
-					<span class="bn-tile-stat-val">{days != null ? days + 'd' : '—'}</span>
-					<span class="bn-tile-stat-lab">off roast</span>
-				</div>
-			</div>
-			{#if frozenDays != null}
+		<!-- Metrics group — stats row + burn-down sit as one unit so the body
+		     layout is consistent whether or not a given bag has a bag size,
+		     frozen / opened date, or rating set. -->
+		<div class="bn-tile-metrics">
+			<div class="bn-tile-stats">
 				<div class="bn-tile-stat">
-					<i class="ph ph-snowflake" aria-hidden="true"></i>
+					<span class="bn-tile-stat-dot" style:background={freshColor}></span>
 					<div class="bn-tile-stat-text">
-						<span class="bn-tile-stat-val">{frozenDays}d</span>
-						<span class="bn-tile-stat-lab">frozen</span>
+						<span class="bn-tile-stat-val">{days != null ? days + 'd' : '—'}</span>
+						<span class="bn-tile-stat-lab">off roast</span>
 					</div>
 				</div>
-			{:else if openedDays != null}
-				<div class="bn-tile-stat">
-					<i class="ph ph-package" aria-hidden="true"></i>
-					<div class="bn-tile-stat-text">
-						<span class="bn-tile-stat-val">{openedDays}d</span>
-						<span class="bn-tile-stat-lab">open</span>
+				{#if frozenDays != null}
+					<div class="bn-tile-stat">
+						<i class="ph ph-snowflake" aria-hidden="true"></i>
+						<div class="bn-tile-stat-text">
+							<span class="bn-tile-stat-val">{frozenDays}d</span>
+							<span class="bn-tile-stat-lab">frozen</span>
+						</div>
+					</div>
+				{:else if openedDays != null}
+					<div class="bn-tile-stat">
+						<i class="ph ph-package" aria-hidden="true"></i>
+						<div class="bn-tile-stat-text">
+							<span class="bn-tile-stat-val">{openedDays}d</span>
+							<span class="bn-tile-stat-lab">open</span>
+						</div>
+					</div>
+				{/if}
+				<div class="bn-tile-stat bn-tile-stat-rating" aria-label="{bean.rating} of 5">
+					{#each [1, 2, 3, 4, 5] as i (i)}
+						<i
+							class={i <= bean.rating ? 'ph-fill ph-star' : 'ph ph-star'}
+							aria-hidden="true"
+						></i>
+					{/each}
+				</div>
+			</div>
+
+			{#if burnPct != null}
+				<div
+					class="bn-tile-burn"
+					title="{bean.remainingG.toFixed(0)} g of {bean.bagSizeG.toFixed(0)} g"
+				>
+					<div class="bn-tile-burn-track">
+						<div class="bn-tile-burn-fill" style:width="{burnPct}%"></div>
+					</div>
+					<div class="bn-tile-burn-text">
+						<span class="bn-tile-burn-rem"
+							>{bean.remainingG.toFixed(0)}<em>g</em></span
+						>
+						<span class="bn-tile-burn-total"
+							>/ {bean.bagSizeG.toFixed(0)}<em>g</em></span
+						>
 					</div>
 				</div>
 			{/if}
-			<div class="bn-tile-stat bn-tile-stat-rating" aria-label="{bean.rating} of 5">
-				{#each [1, 2, 3, 4, 5] as i (i)}
-					<i
-						class={i <= bean.rating ? 'ph-fill ph-star' : 'ph ph-star'}
-						aria-hidden="true"
-					></i>
-				{/each}
-			</div>
 		</div>
-
-		<!-- Burn-down bar -->
-		{#if burnPct != null}
-			<div
-				class="bn-tile-burn"
-				title="{bean.remainingG.toFixed(0)} g of {bean.bagSizeG.toFixed(0)} g"
-			>
-				<div class="bn-tile-burn-track">
-					<div class="bn-tile-burn-fill" style:width="{burnPct}%"></div>
-				</div>
-				<div class="bn-tile-burn-text">
-					<span class="bn-tile-burn-rem"
-						>{bean.remainingG.toFixed(0)}<em>g</em></span
-					>
-					<span class="bn-tile-burn-total"
-						>/ {bean.bagSizeG.toFixed(0)}<em>g</em></span
-					>
-				</div>
-			</div>
-		{/if}
 
 		<!-- Action row (matches /profiles ProfileCard pattern) -->
 		<div class="bn-tile-actions">
@@ -308,6 +312,9 @@
 		border-radius: var(--radius-lg, 14px);
 		padding: 14px;
 		padding-right: 16px;
+		/* Min height absorbs variance across sparsely-filled bags so the action
+		   row sits at a consistent baseline across every row of the grid. */
+		min-height: 220px;
 		text-align: left;
 		color: var(--fg-1);
 		font: inherit;
@@ -422,7 +429,14 @@
 		flex-direction: column;
 		gap: 4px;
 		min-width: 0;
-		/* Clear the absolutely-positioned star in the top-right. */
+		min-height: 0;
+		/* Padding-right was on the body; that squeezed the stats row, burn-down
+		   bar, and action buttons unnecessarily. The pin star only overlaps
+		   the top header rows — only those get the clearance. */
+	}
+	/* Clear the absolutely-positioned star in the top-right of the tile. */
+	.bn-tile-roaster,
+	.bn-tile-name {
 		padding-right: 28px;
 	}
 	.bn-tile-roaster {
@@ -501,14 +515,21 @@
 		font-weight: 500;
 	}
 
+	/* Metrics group — wraps stats + burn-down as a single unit so the body
+	   layout is consistent across sparsely-filled vs fully-filled bags. */
+	.bn-tile-metrics {
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+		margin-top: 4px;
+	}
+
 	/* Stats row — off-roast + open/frozen + rating */
 	.bn-tile-stats {
 		display: flex;
 		flex-wrap: wrap;
 		gap: 12px;
 		align-items: center;
-		margin-top: 4px;
-		padding-top: 4px;
 	}
 	.bn-tile-stat {
 		display: inline-flex;
@@ -558,12 +579,12 @@
 		color: rgba(var(--tint-rgb), 0.2);
 	}
 
-	/* Burn-down bar */
+	/* Burn-down bar — sits inside .bn-tile-metrics; the wrapping container
+	   owns the spacing above (margin-top), so no top margin here. */
 	.bn-tile-burn {
 		display: flex;
 		flex-direction: column;
 		gap: 3px;
-		margin-top: 6px;
 	}
 	.bn-tile-burn-track {
 		height: 4px;
@@ -613,6 +634,7 @@
 	}
 	.bn-tile-action {
 		flex: 1 1 auto;
+		min-width: 0;
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;
@@ -625,8 +647,18 @@
 		font-family: var(--font-sans);
 		font-size: 12px;
 		font-weight: 500;
+		/* Keep the active label "Active on Brew" on one line so the button
+		   never grows vertically when toggled. */
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
 		cursor: pointer;
 		transition: all var(--dur-1) var(--ease);
+	}
+	.bn-tile-action > span {
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
 	}
 	.bn-tile-action:hover {
 		background: rgba(var(--tint-rgb), 0.07);
