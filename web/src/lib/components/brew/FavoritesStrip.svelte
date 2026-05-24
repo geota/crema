@@ -1,32 +1,57 @@
 <script lang="ts">
 	/**
-	 * `FavoritesStrip` — the pinned-profile strip at the top of the Quick Sheet,
-	 * ported from the design's `FavoritesStrip` in `web-dashboard-v2.jsx`.
+	 * `FavoritesStrip` — the unified pinned-favourites strip at the top of the
+	 * Quick Sheet. Renders **both** pinned profiles and pinned beans as
+	 * same-height pill chips, separated by a thin divider, and shares a
+	 * single search box that filters across both halves.
 	 *
-	 * An inline fuzzy search filters the list; left / right arrows nudge the
-	 * horizontal scroll and disable at the ends. The strip shows the **real**
-	 * pinned profiles from the `lib/profiles` library store — the caller passes
-	 * them in, already filtered to `pinned` (see `BrewDashboard`).
+	 * Layout (left → right):
+	 *
+	 *   [ search ] [ ◀ ] [ profiles… │ beans… ] [ ▶ ]
+	 *
+	 * Active-state styling is consistent across both halves — the same
+	 * `.qfstrip-item.is-active` rule paints a copper border + soft glow
+	 * whether the active item is a profile or a bean — so "this one is
+	 * selected" reads identically.
+	 *
+	 * Search matches profile name + tags + author, and bean name +
+	 * roaster name + tags + origin country. A section with no matches
+	 * just shows empty; a strip with no matches at all shows a single
+	 * "No matches" placeholder.
 	 */
 	import { untrack } from 'svelte';
 	import type { Attachment } from 'svelte/attachments';
 	import ProfilePreview from '$lib/components/profiles/ProfilePreview.svelte';
+	import BeanPill from './BeanPill.svelte';
 	import { ratioLabel, type CremaProfile } from '$lib/profiles';
+	import type { Bean, Roaster } from '$lib/bean';
 
 	let {
 		profiles,
-		selectedId,
-		onSelect
+		selectedProfileId,
+		onSelectProfile,
+		beans,
+		roasters,
+		activeBeanId,
+		onSelectBean
 	}: {
-		/** The pinned profiles to show as favorite chips. */
+		/** The pinned profiles to show as favourite chips. */
 		profiles: readonly CremaProfile[];
 		/** The active profile's id (the highlighted chip), or `null`. */
-		selectedId: string | null;
+		selectedProfileId: string | null;
 		/** Called with the chosen profile. */
-		onSelect: (profile: CremaProfile) => void;
+		onSelectProfile: (profile: CremaProfile) => void;
+		/** The pinned beans to show as favourite chips (favourite && !archived). */
+		beans: readonly Bean[];
+		/** The roaster directory — needed to render the bean chip's mark + tone. */
+		roasters: readonly Roaster[];
+		/** The active bean's id (the highlighted chip), or `null`. */
+		activeBeanId: string | null;
+		/** Called with the chosen bean. */
+		onSelectBean: (bean: Bean) => void;
 	} = $props();
 
-	/** The live search query. */
+	/** The live search query — applies to both halves of the strip. */
 	let query = $state('');
 	// The scroll container — captured by the attachment for the nudge buttons.
 	// `$state` because it is read inside the list-change `$effect` below: the
@@ -36,12 +61,43 @@
 	let canScrollLeft = $state(false);
 	let canScrollRight = $state(false);
 
-	/** Filtered list: the full pinned set when searching, all of it otherwise. */
-	const items = $derived.by(() => {
+	/** Roaster lookup map — by-id, rebuilt only when the directory changes. */
+	const roasterById = $derived.by(() => {
+		const m = new Map<string, Roaster>();
+		for (const r of roasters) m.set(r.id, r);
+		return m;
+	});
+
+	/** Filtered profiles: full pinned set when not searching. */
+	const profileItems = $derived.by(() => {
 		const q = query.trim().toLowerCase();
 		if (q === '') return profiles;
-		return profiles.filter((p) => p.name.toLowerCase().includes(q));
+		return profiles.filter((p) => {
+			if (p.name.toLowerCase().includes(q)) return true;
+			if (p.author && p.author.toLowerCase().includes(q)) return true;
+			for (const t of p.tags) if (t.toLowerCase().includes(q)) return true;
+			return false;
+		});
 	});
+
+	/** Filtered beans: full pinned set when not searching. */
+	const beanItems = $derived.by(() => {
+		const q = query.trim().toLowerCase();
+		if (q === '') return beans;
+		return beans.filter((b) => {
+			if (b.name.toLowerCase().includes(q)) return true;
+			const r = b.roasterId ? roasterById.get(b.roasterId) : null;
+			if (r && r.name.toLowerCase().includes(q)) return true;
+			for (const t of b.tags) if (t.toLowerCase().includes(q)) return true;
+			const country = b.origin.country?.toLowerCase();
+			if (country && country.includes(q)) return true;
+			return false;
+		});
+	});
+
+	/** Whether either half rendered anything — drives the empty-state row. */
+	const hasAny = $derived(profileItems.length > 0 || beanItems.length > 0);
+	const hasAnyPinned = $derived(profiles.length > 0 || beans.length > 0);
 
 	/**
 	 * Recompute the arrow-enabled flags from the scroll geometry. The arrow
@@ -58,9 +114,9 @@
 	/**
 	 * Attachment on the scroll container: a *one-time* element capture plus the
 	 * `ResizeObserver` set-up / tear-down. It deliberately does **not** read the
-	 * item list — re-measuring when the list changes is the separate `$effect`
-	 * below, so a search keystroke does not tear the observer down and rebuild
-	 * it on every character.
+	 * item lists — re-measuring when they change is the separate `$effect`
+	 * below, so a search keystroke does not tear the observer down on every
+	 * character.
 	 */
 	const trackScroll: Attachment<HTMLDivElement> = (el) => {
 		scrollEl = el;
@@ -80,11 +136,12 @@
 		};
 	};
 
-	// Re-measure the arrows whenever the rendered list changes (a search
-	// filters it, or the pinned set updates). This is list-dependent state, so
-	// it lives here rather than in the element-lifecycle attachment above.
+	// Re-measure the arrows whenever either rendered list changes (a search
+	// filters them, or a pinned set updates). List-dependent state, so it
+	// lives here rather than in the element-lifecycle attachment above.
 	$effect(() => {
-		void items.length;
+		void profileItems.length;
+		void beanItems.length;
 		syncArrows();
 	});
 
@@ -97,7 +154,11 @@
 <div class="qfstrip-wrap">
 	<div class="qfstrip-search-inline">
 		<i class="ph ph-magnifying-glass" aria-hidden="true"></i>
-		<input bind:value={query} placeholder="Search profiles" aria-label="Search profiles" />
+		<input
+			bind:value={query}
+			placeholder="Search profiles + beans"
+			aria-label="Search profiles and beans"
+		/>
 		{#if query}
 			<button class="qfstrip-search-clear" onclick={() => (query = '')} aria-label="Clear search">
 				<i class="ph ph-x" aria-hidden="true"></i>
@@ -114,27 +175,43 @@
 		<i class="ph ph-caret-left" aria-hidden="true"></i>
 	</button>
 	<div class="qfstrip" {@attach trackScroll} onscroll={syncArrows}>
-		{#each items as profile (profile.id)}
+		{#each profileItems as profile (profile.id)}
 			<button
 				class="qfstrip-item"
-				class:is-active={selectedId === profile.id}
-				onclick={() => onSelect(profile)}
+				class:is-active={selectedProfileId === profile.id}
+				onclick={() => onSelectProfile(profile)}
 			>
 				<ProfilePreview
 					segments={profile.segments}
-					active={selectedId === profile.id}
+					active={selectedProfileId === profile.id}
 					compact
 				/>
 				<span class="qfstrip-name">{profile.name || 'Untitled profile'}</span>
 				<span class="qfstrip-ratio">{ratioLabel(profile)}</span>
 			</button>
 		{/each}
-		{#if items.length === 0}
+		{#if profileItems.length > 0 && beanItems.length > 0}
+			<span class="qfstrip-divider" aria-hidden="true"></span>
+		{/if}
+		{#each beanItems as bean (bean.id)}
+			{@const roaster = bean.roasterId ? (roasterById.get(bean.roasterId) ?? null) : null}
+			<button
+				class="qfstrip-item"
+				class:is-active={activeBeanId === bean.id}
+				onclick={() => onSelectBean(bean)}
+				title={bean.tastingNotes || bean.notes || undefined}
+			>
+				<BeanPill {bean} {roaster} active={activeBeanId === bean.id} />
+			</button>
+		{/each}
+		{#if !hasAny}
 			<div class="qfstrip-empty">
-				{#if profiles.length === 0}
-					No pinned profiles — pin one from the Profiles page
+				{#if !hasAnyPinned}
+					No pinned profiles or beans — pin one from Profiles or Beans
+				{:else if query}
+					No matches for "{query}"
 				{:else}
-					No profiles match "{query}"
+					No pinned favourites
 				{/if}
 			</div>
 		{/if}
@@ -149,3 +226,20 @@
 		<i class="ph ph-caret-right" aria-hidden="true"></i>
 	</button>
 </div>
+
+<style>
+	/*
+	 * Thin vertical divider between the profile and bean halves of the strip.
+	 * Same hairline treatment as the foot's `.qsheet-chart-div` so the eye
+	 * groups them as "two sections of the same row".
+	 */
+	.qfstrip-divider {
+		flex: 0 0 auto;
+		align-self: center;
+		display: inline-block;
+		width: 1px;
+		height: 28px;
+		background: rgba(var(--tint-rgb), 0.12);
+		margin: 0 4px;
+	}
+</style>
