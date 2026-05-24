@@ -157,8 +157,12 @@ type RoasterWire = Omit<RoasterDetail, 'id' | 'name'> & {
 
 // ── Mapping helpers ────────────────────────────────────────────────────
 
-/** Crema 1..10 → Visualizer's free-text `roast_level`. */
-function roastLevelToWire(level: number | null): string | null {
+/**
+ * Crema 1..10 → Visualizer's free-text `roast_level`. Exported so the shot
+ * uploader (`$lib/visualizer/shot-sync`) can encode the inline bean snapshot's
+ * `roastLevel` with the same banding the bean library uses.
+ */
+export function roastLevelToWire(level: number | null): string | null {
 	if (level == null) return null;
 	if (level <= 2) return 'Light';
 	if (level <= 4) return 'Medium-Light';

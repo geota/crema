@@ -355,6 +355,45 @@ function beanFromImported(label: string | null): ShotBean | null {
 }
 
 /**
+ * Coerce a stored `bean` field on a persisted shot into a {@link ShotBean}
+ * or `null`. Legacy records (pre-bean-snapshot) carry no `bean`; v1 records
+ * carry only `{ roaster, type, roastedOn, roastLevel }`; post-inline-bean
+ * records also carry `notes`, `grinderSetting`, `tags`, `visualizerId`. Each
+ * extra field is read defensively so a stored-shape regression cannot crash
+ * the History route — and so renamed / shifted future fields don't taint
+ * the in-memory shape.
+ */
+function coerceShotBean(raw: unknown): ShotBean | null {
+	if (typeof raw !== 'object' || raw === null) return null;
+	const obj = raw as Record<string, unknown>;
+	// Roaster + type are the bean's identity strings — both required (default
+	// to '' so a partial record still reads); roastedOn / roastLevel are
+	// nullable per the original v1 contract. Every other field is optional
+	// and ShotBean's `readonly` modifier doesn't prevent assembling the
+	// object literal in pieces, so build a plain mutable scratch object
+	// and return it as `ShotBean`.
+	const out: Record<string, unknown> = {
+		roaster: typeof obj.roaster === 'string' ? obj.roaster : '',
+		type: typeof obj.type === 'string' ? obj.type : '',
+		roastedOn: typeof obj.roastedOn === 'string' ? obj.roastedOn : null,
+		roastLevel: typeof obj.roastLevel === 'number' ? obj.roastLevel : null
+	};
+	if (typeof obj.beanId === 'string' || obj.beanId === null) out.beanId = obj.beanId;
+	if (typeof obj.notes === 'string' && obj.notes.length > 0) out.notes = obj.notes;
+	if (typeof obj.grinderSetting === 'string' && obj.grinderSetting.length > 0) {
+		out.grinderSetting = obj.grinderSetting;
+	}
+	if (Array.isArray(obj.tags)) {
+		const tags = obj.tags.filter((t): t is string => typeof t === 'string');
+		if (tags.length > 0) out.tags = tags;
+	}
+	if (typeof obj.visualizerId === 'string' && obj.visualizerId.length > 0) {
+		out.visualizerId = obj.visualizerId;
+	}
+	return out as unknown as ShotBean;
+}
+
+/**
  * Read the persisted history and coerce each row through a defensive
  * normaliser so legacy records without `visualizerId` / `deletedAt`
  * still parse cleanly (the fields are optional on the type; absent
@@ -379,8 +418,16 @@ function loadShots(): StoredShot[] {
 		const tags = Array.isArray(tagsRaw)
 			? tagsRaw.filter((t): t is string => typeof t === 'string')
 			: [];
+		// `bean` was formalised in the inline-bean upload work to carry the
+		// snapshot content used by Visualizer (notes, grinderSetting, tags,
+		// visualizerId). Legacy records (pre-v1 bean snapshot, or
+		// post-v1 but pre-inline-bean) still parse — `coerceShotBean`
+		// reads each new field defensively and omits it when absent so
+		// the shape is exactly `Required<oldFields> & Partial<newFields>`.
+		const bean = coerceShotBean(obj.bean ?? null);
 		out.push({
 			...(obj as unknown as StoredShot),
+			bean,
 			tags,
 			visualizerId: typeof obj.visualizerId === 'string' ? obj.visualizerId : null,
 			deletedAt: typeof obj.deletedAt === 'number' ? obj.deletedAt : null

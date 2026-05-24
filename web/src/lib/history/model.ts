@@ -27,6 +27,16 @@ import { formatRatio } from '$lib/utils/ratio';
  * history — days-off-roast is derived from `roastedOn` against the shot's own
  * `completedAt`. Optional: a shot recorded before this field existed (or with
  * no bean logged) simply has none.
+ *
+ * **Snapshot semantics (docs/28 §"Bean ↔ shot association").** Every field
+ * here is the bean's *frozen-at-completion* value — the shot's content source
+ * of truth. The bean library's live row (looked up via {@link beanId}) is
+ * used ONLY as a link pointer (e.g. wiring `coffee_bag_id` on Visualizer when
+ * the live bean has a `visualizerId` but the snapshot didn't capture one).
+ * Reading live-bean content for the shot would retroactively rewrite history
+ * — renaming a bag would silently rewrite every past shot's display name, the
+ * exact failure mode Beanconqueror has and docs/28 calls out as the reason
+ * Crema picked snapshots.
  */
 export interface ShotBean {
 	/**
@@ -35,16 +45,52 @@ export interface ShotBean {
 	 * existed, or imported from a `.shot` file. The History UI uses this to
 	 * resolve a click-through to the bean detail; an archived / deleted bag
 	 * falls back to the snapshot strings.
+	 *
+	 * NOTE: this is the ONLY field that may legitimately resolve to the live
+	 * bean — and only for the `Bean.visualizerId` link pointer (the visualizer
+	 * uploader uses it as a fallback for `coffee_bag_id` when the snapshot's
+	 * own {@link visualizerId} wasn't captured at shot time, because the bag
+	 * may have been pushed to Visualizer *after* the shot was pulled).
 	 */
 	readonly beanId?: string | null;
-	/** The roastery when the shot was pulled (Visualizer `bean.brand`). */
+	/** The roastery when the shot was pulled (Visualizer `bean_brand`). */
 	readonly roaster: string;
-	/** The coffee itself when the shot was pulled (Visualizer `bean.type`). */
+	/** The coffee itself when the shot was pulled (Visualizer `bean_type`). */
 	readonly type: string;
 	/** ISO `yyyy-mm-dd` roast date when the shot was pulled, or `null`. */
 	readonly roastedOn: string | null;
 	/** Roast level on the 1..10 scale when the shot was pulled, or `null`. */
 	readonly roastLevel: number | null;
+	/**
+	 * The bean's free-form notes at shot-completion time. Optional — legacy
+	 * snapshots without this field deserialise cleanly. Wires to Visualizer's
+	 * `bean_notes` on shot upload (docs/38 row 122).
+	 */
+	readonly notes?: string;
+	/**
+	 * The bean's grinder click setting at shot-completion time (e.g. `"2.5"`,
+	 * `"40"`). Optional — legacy snapshots without this field deserialise
+	 * cleanly. Wires to Visualizer's `grinder_setting` on shot upload.
+	 *
+	 * NOTE: task #81 adds equipment-level `grinderModel` (e.g. "Niche Zero")
+	 * — not in scope here. Only the bean-scoped click setting rides today.
+	 */
+	readonly grinderSetting?: string;
+	/**
+	 * The bean's tags at shot-completion time — `["daily-driver", "comp"]`.
+	 * Optional — legacy snapshots without this field deserialise cleanly.
+	 * Folded into the shot's `tag_list` on upload alongside any
+	 * {@link StoredShot.tags} (shot-level tags pulled back from Visualizer).
+	 */
+	readonly tags?: readonly string[];
+	/**
+	 * Visualizer `coffee_bag_id` at shot-completion time, if the bean had
+	 * already been synced to Visualizer when the shot was pulled. Optional —
+	 * shots pulled before the bag was synced have none, and the uploader
+	 * falls back to the live bean's `visualizerId` for the *link pointer*
+	 * (this one field — content stays snapshot-authoritative).
+	 */
+	readonly visualizerId?: string;
 }
 
 /** A short id for a stored shot — `crypto.randomUUID` if present. */
