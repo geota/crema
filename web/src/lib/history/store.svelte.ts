@@ -20,7 +20,8 @@
 import type { RustStoredShot } from '$lib/core';
 import type { TelemetrySample } from '$lib/state';
 import { readJson, writeJson } from '$lib/utils/storage';
-import { shotId, type ShotBean, type StoredShot } from './model';
+import { shotId, snapshotFromBean, type ShotBean, type StoredShot } from './model';
+import type { Bean, Roaster } from '$lib/bean';
 
 /**
  * localStorage key for the recorded shots (a `StoredShot[]`, newest first).
@@ -58,6 +59,14 @@ export interface ShotCompletion {
 	series: readonly TelemetrySample[];
 	/** A snapshot of the current bean at shot completion, or `null`. */
 	bean: ShotBean | null;
+	/**
+	 * Initial shot-level tags at completion time. The orchestrator
+	 * copies the active bean's `Bean.tags` into this slot at
+	 * `ShotCompleted` so bean tags become shot tags — one source of
+	 * truth, no later live-bean rewrite of history. Defaults to `[]`
+	 * for shots pulled with no bean (or a tag-less bean).
+	 */
+	tags?: readonly string[];
 	/**
 	 * The equipment-level grinder model at shot-completion time —
 	 * `settings.prefs.grinderModel.trim()` or `null` when the user
@@ -141,7 +150,7 @@ export class HistoryStore {
 			grinderModel: completion.grinderModel,
 			rating: 0,
 			notes: '',
-			tags: []
+			tags: completion.tags ? [...completion.tags] : []
 		};
 		this.shots = [record, ...this.shots].slice(0, MAX_RECORDS);
 		this.persist();
@@ -173,6 +182,47 @@ export class HistoryStore {
 		this.shots = [
 			...this.shots.slice(0, idx),
 			{ ...this.shots[idx], grinderModel },
+			...this.shots.slice(idx + 1)
+		];
+		this.persist();
+	}
+
+	/**
+	 * Rebind (or clear) the bean snapshot on a shot. Mirrors {@link
+	 * setRating} / {@link setNotes} / {@link setTags}: a thin replace-
+	 * and-persist over the persisted row.
+	 *
+	 * Used by the shot-detail panel's "Change bean" / "Assign bean"
+	 * affordance to backfill a bean onto a shot that completed without
+	 * one (or correct a wrong one). The caller is responsible for
+	 * producing the snapshot via {@link snapshotFromBean} so the shape
+	 * matches what `app.svelte.ts` writes at completion time —
+	 * `setBeanFromLive` below is the convenience that does that.
+	 *
+	 * Also re-snapshots `shot.tags` from the new bean's tags IF the
+	 * shot has no user-set shot-level tags yet (`shot.tags.length === 0`).
+	 * A shot that already carries user tags is left alone — the user's
+	 * curation wins over the bean tag copy. Clearing the bean (`null`)
+	 * does NOT clear `shot.tags` — bean removal shouldn't erase the
+	 * user's curation either.
+	 */
+	setBeanFromLive(
+		id: string,
+		bean: Bean | null | undefined,
+		roaster: Roaster | null | undefined
+	): void {
+		const idx = this.shots.findIndex((s) => s.id === id);
+		if (idx < 0) return;
+		const snapshot = snapshotFromBean(bean, roaster);
+		const target = this.shots[idx];
+		const existingTags = target.tags ?? [];
+		const nextTags =
+			existingTags.length === 0 && bean?.tags && bean.tags.length > 0
+				? [...bean.tags]
+				: existingTags;
+		this.shots = [
+			...this.shots.slice(0, idx),
+			{ ...target, bean: snapshot, tags: nextTags },
 			...this.shots.slice(idx + 1)
 		];
 		this.persist();
@@ -389,10 +439,16 @@ function beanFromImported(label: string | null): ShotBean | null {
  * Coerce a stored `bean` field on a persisted shot into a {@link ShotBean}
  * or `null`. Legacy records (pre-bean-snapshot) carry no `bean`; v1 records
  * carry only `{ roaster, type, roastedOn, roastLevel }`; post-inline-bean
- * records also carry `notes`, `grinderSetting`, `tags`, `visualizerId`. Each
- * extra field is read defensively so a stored-shape regression cannot crash
- * the History route — and so renamed / shifted future fields don't taint
- * the in-memory shape.
+ * records also carry `notes`, `grinderSetting`. Each extra field is read
+ * defensively so a stored-shape regression cannot crash the History route.
+ *
+ * Older records may still carry persisted `tags` / `visualizerId` on the
+ * snapshot from before the bean→shot tag copy and the coffee-bag-id live
+ * lookup landed. We deliberately DROP those on read — `tags` now lives on
+ * the shot row (`StoredShot.tags`), and the visualizer id is resolved
+ * live via `resolveCoffeeBagId`. Leaving the old keys in memory would
+ * tempt callers to read them again and re-introduce the snapshot-vs-live
+ * leak we're closing here.
  */
 function coerceShotBean(raw: unknown): ShotBean | null {
 	if (typeof raw !== 'object' || raw === null) return null;
@@ -414,14 +470,22 @@ function coerceShotBean(raw: unknown): ShotBean | null {
 	if (typeof obj.grinderSetting === 'string' && obj.grinderSetting.length > 0) {
 		out.grinderSetting = obj.grinderSetting;
 	}
-	if (Array.isArray(obj.tags)) {
-		const tags = obj.tags.filter((t): t is string => typeof t === 'string');
-		if (tags.length > 0) out.tags = tags;
-	}
-	if (typeof obj.visualizerId === 'string' && obj.visualizerId.length > 0) {
-		out.visualizerId = obj.visualizerId;
-	}
 	return out as unknown as ShotBean;
+}
+
+/**
+ * Loader-time tag-migration for older shots that carry `tags` on
+ * `bean` (the pre-bean→shot-copy shape) but `[]` on the row itself.
+ * Folded INTO `shot.tags` at load so the new single-source-of-truth
+ * (`shot.tags`) sees the legacy bean tags. This is a one-time forward
+ * migration: once the row persists with non-empty `tags`, the bean
+ * `tags` field is irrelevant and {@link coerceShotBean} discards it.
+ */
+function legacyBeanTags(rawBean: unknown): string[] {
+	if (typeof rawBean !== 'object' || rawBean === null) return [];
+	const obj = rawBean as Record<string, unknown>;
+	if (!Array.isArray(obj.tags)) return [];
+	return obj.tags.filter((t): t is string => typeof t === 'string');
 }
 
 /**
@@ -446,16 +510,23 @@ function loadShots(): StoredShot[] {
 		// `tags` falls back to `[]`; non-string entries are filtered so a
 		// corrupted store doesn't taint the in-memory list.
 		const tagsRaw = obj.tags;
-		const tags = Array.isArray(tagsRaw)
+		let tags = Array.isArray(tagsRaw)
 			? tagsRaw.filter((t): t is string => typeof t === 'string')
 			: [];
 		// `bean` was formalised in the inline-bean upload work to carry the
-		// snapshot content used by Visualizer (notes, grinderSetting, tags,
-		// visualizerId). Legacy records (pre-v1 bean snapshot, or
-		// post-v1 but pre-inline-bean) still parse — `coerceShotBean`
-		// reads each new field defensively and omits it when absent so
-		// the shape is exactly `Required<oldFields> & Partial<newFields>`.
-		const bean = coerceShotBean(obj.bean ?? null);
+		// snapshot content used by Visualizer (notes, grinderSetting).
+		// Legacy records (pre-v1 bean snapshot, or post-v1 but pre-
+		// inline-bean) still parse — `coerceShotBean` reads each field
+		// defensively and omits it when absent. Older shots persisted
+		// `bean.tags` too; we drop that on the snapshot read AND fold it
+		// into the row's `tags` (one-time forward migration) so the new
+		// single-source-of-truth (`StoredShot.tags`) sees them.
+		const rawBean = obj.bean ?? null;
+		const bean = coerceShotBean(rawBean);
+		if (tags.length === 0) {
+			const fromBean = legacyBeanTags(rawBean);
+			if (fromBean.length > 0) tags = fromBean;
+		}
 		// `grinderModel` (added in #81) is the equipment-level snapshot.
 		// Legacy records pre-#81 have no field at all — leave it `null`
 		// so the upload-time cascade re-reads the current settings

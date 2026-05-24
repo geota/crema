@@ -12,18 +12,23 @@
 	import type { StoredShot } from '$lib/history';
 	import { ratioLabel, shotFilename, exportStoredShotAsV2Json } from '$lib/history';
 	import { getCaptureStore, captureJsonl } from '$lib/capture';
-	import { daysOffRoast, roastBand } from '$lib/bean';
+	import { daysOffRoast, roastBand, type Bean, type Roaster } from '$lib/bean';
 	import { getSettingsStore, convertWeight, convertTemp, convertPressure } from '$lib/settings';
 	import { getProfileStore } from '$lib/profiles';
 	import { getCremaAppContext } from '$lib/shell/app-context';
 	import { downloadBlob } from '$lib/utils/download';
+	import { getBeanStore } from '$lib/bean';
+	import TagInput from '$lib/components/profiles/TagInput.svelte';
 	import StaticShotChart from './StaticShotChart.svelte';
+	import BeanPicker from './BeanPicker.svelte';
 
 	let {
 		shot,
 		onNotesChange,
 		onRatingChange,
-		onGrinderModelChange
+		onGrinderModelChange,
+		onTagsChange,
+		onBeanChange
 	}: {
 		/** The selected stored shot. */
 		shot: StoredShot;
@@ -37,12 +42,56 @@
 		 * sets a shot-specific override.
 		 */
 		onGrinderModelChange: (grinderModel: string | null) => void;
+		/** Persist edited shot-level tags. */
+		onTagsChange: (tags: string[]) => void;
+		/**
+		 * Retroactively (re)bind the shot to a live bean — caller wraps
+		 * `HistoryStore.setBeanFromLive` so the shared `snapshotFromBean`
+		 * helper handles the live → snapshot mapping. Passing `null`
+		 * clears the binding (shot becomes bean-less).
+		 */
+		onBeanChange: (bean: Bean | null, roaster: Roaster | null) => void;
 	} = $props();
 
 	/** Whether the notes block is in edit mode. */
 	let editing = $state(false);
 	/** The draft notes text while editing. */
 	let draft = $state('');
+	/** Whether the bean-picker modal is open. */
+	let pickerOpen = $state(false);
+
+	const library = getBeanStore();
+
+	/**
+	 * Tag suggestions for the inline TagInput — every other shot's
+	 * tag, plus every live bean's tag. Mirrors how `/profiles` and
+	 * `/beans` populate the same input (library-wide suggestions
+	 * minus the current entity's own tags, dedup'd).
+	 */
+	const tagSuggestions = $derived.by(() => {
+		const set = new Set<string>();
+		// `library.beans` is the in-memory live list — reading it for a
+		// suggestion list is safe (no persistence side effect, no
+		// snapshot rewrite).
+		for (const b of library.beans) for (const t of b.tags ?? []) set.add(t);
+		return [...set].sort();
+	});
+
+	/** The currently-bound live bean (if any), for the roaster name etc. */
+	const boundLiveBean = $derived(
+		shot.bean?.beanId ? library.getBean(shot.bean.beanId) : null
+	);
+	const boundRoasterName = $derived.by(() => {
+		// Snapshot roaster wins (history is content-snapshot-authoritative);
+		// fall back to the live row's roaster only when the snapshot string
+		// is empty (typical for shots imported with the legacy "roaster · type"
+		// label split, which sometimes left roaster blank).
+		const fromSnap = shot.bean?.roaster?.trim();
+		if (fromSnap) return fromSnap;
+		const liveRoasterId = boundLiveBean?.roasterId ?? null;
+		if (!liveRoasterId) return null;
+		return library.getRoaster(liveRoasterId)?.name.trim() ?? null;
+	});
 
 	/** Date + time caption, e.g. `May 18 · 14:36`. */
 	const stamp = $derived.by(() => {
@@ -205,6 +254,22 @@
 		// TODO: wire Visualizer upload when the integration lands.
 		alert('Visualizer sharing is coming in a later step.');
 	}
+
+	// ── Bean rebind (retroactive) ────────────────────────────────────────
+	function openPicker(): void {
+		pickerOpen = true;
+	}
+	function closePicker(): void {
+		pickerOpen = false;
+	}
+	function pickBean(bean: Bean, roaster: Roaster | null): void {
+		onBeanChange(bean, roaster);
+		pickerOpen = false;
+	}
+	function clearBean(): void {
+		onBeanChange(null, null);
+		pickerOpen = false;
+	}
 </script>
 
 <div class="hi-detail">
@@ -328,6 +393,59 @@
 		</div>
 	</div>
 
+	<!-- Bean — the bound bag snapshot + roaster, with a button to rebind
+	     retroactively. Shows the snapshot (so a later rename of the live
+	     bag can't rewrite history). "Change bean" opens the BeanPicker;
+	     "Assign bean" appears when no bean is bound. -->
+	<div class="hi-bean">
+		<div class="hi-bean-head">
+			<span class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Bean</span>
+			<button class="hi-bean-action" onclick={openPicker}>
+				<i class="ph ph-pencil-simple" aria-hidden="true"></i>
+				{shot.bean ? 'Change bean' : 'Assign bean'}
+			</button>
+		</div>
+		{#if shot.bean}
+			<div class="hi-bean-body">
+				<div class="hi-bean-line">
+					{#if boundRoasterName}
+						<span class="hi-bean-roaster">{boundRoasterName}</span>
+						<span class="hi-bean-sep">·</span>
+					{/if}
+					<span class="hi-bean-name">{shot.bean.type || 'Untitled bean'}</span>
+				</div>
+				<div class="hi-bean-meta">
+					{#if shot.bean.roastedOn}
+						<span>Roasted {shot.bean.roastedOn}</span>
+					{/if}
+					{#if roastBand(shot.bean.roastLevel)}
+						{#if shot.bean.roastedOn}<span class="hi-bean-sep">·</span>{/if}
+						<span class="hi-bean-roast"
+							>{roastBand(shot.bean.roastLevel)?.[0].toUpperCase()}{roastBand(
+								shot.bean.roastLevel
+							)?.slice(1)} roast</span
+						>
+					{/if}
+				</div>
+			</div>
+		{:else}
+			<div class="hi-bean-empty">No bean assigned to this shot.</div>
+		{/if}
+	</div>
+
+	<!-- Shot-level tags — free-form, edited via the canonical TagInput.
+	     Wires straight to `HistoryStore.setTags`; the upload-time
+	     `resolveTagList` reads `shot.tags` and rides as Visualizer's
+	     `tag_list` on the next PATCH. -->
+	<div class="hi-tags">
+		<span class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Tags</span>
+		<TagInput
+			tags={shot.tags ?? []}
+			suggestions={tagSuggestions}
+			onChange={onTagsChange}
+		/>
+	</div>
+
 	<!-- Grinder model — equipment-level override of the settings default
 	     (`prefs.grinderModel`). Empty saves as `null` so the upload-time
 	     cascade re-engages. The placeholder shows the current default so
@@ -379,6 +497,15 @@
 		{/if}
 	</div>
 </div>
+
+{#if pickerOpen}
+	<BeanPicker
+		currentBeanId={shot.bean?.beanId ?? null}
+		onPick={pickBean}
+		onClear={clearBean}
+		onClose={closePicker}
+	/>
+{/if}
 
 <style>
 	.hi-detail {
@@ -508,6 +635,79 @@
 		display: flex;
 		align-items: center;
 		gap: 14px;
+	}
+
+	/* Bean block — snapshot summary plus the Change/Assign button. */
+	.hi-bean {
+		background: var(--bg-page);
+		border-radius: var(--radius-md);
+		padding: 12px 14px;
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+	}
+	.hi-bean-head {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+	}
+	.hi-bean-action {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		background: transparent;
+		border: 0;
+		color: var(--copper-400);
+		font-family: var(--font-sans);
+		font-size: 11px;
+		cursor: pointer;
+		padding: 2px 0;
+	}
+	.hi-bean-action:hover {
+		color: var(--copper-300);
+		text-decoration: underline;
+	}
+	.hi-bean-body {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+	}
+	.hi-bean-line {
+		font-family: var(--font-sans);
+		font-size: 13px;
+		color: var(--fg-1);
+	}
+	.hi-bean-roaster {
+		color: rgba(var(--tint-rgb), 0.7);
+	}
+	.hi-bean-name {
+		color: var(--fg-1);
+		font-weight: 500;
+	}
+	.hi-bean-sep {
+		color: rgba(var(--tint-rgb), 0.3);
+		margin: 0 4px;
+	}
+	.hi-bean-meta {
+		font-family: var(--font-sans);
+		font-size: 11px;
+		color: rgba(var(--tint-rgb), 0.55);
+	}
+	.hi-bean-roast {
+		text-transform: capitalize;
+	}
+	.hi-bean-empty {
+		font-family: var(--font-sans);
+		font-size: 12px;
+		color: rgba(var(--tint-rgb), 0.45);
+		font-style: italic;
+	}
+
+	/* Shot-level tags block — wraps the canonical TagInput. */
+	.hi-tags {
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
 	}
 	.hi-stars {
 		display: flex;

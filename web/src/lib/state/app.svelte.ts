@@ -25,7 +25,7 @@ import {
 import { MachineState, MmrRegister } from '$lib/core/crema-core';
 import { De1Manager, EMPTY_DE1_DIAGNOSTICS, ScaleManager } from '$lib/ble';
 import { getBeanStore } from '$lib/bean';
-import { getHistoryStore } from '$lib/history';
+import { getHistoryStore, snapshotFromBean } from '$lib/history';
 import { getCaptureStore, type CaptureEntry } from '$lib/capture';
 import {
 	getProfileStore,
@@ -573,6 +573,16 @@ export class CremaApp {
 				// upload-time cascade can fall back cleanly (#81).
 				const grinderModelDefault =
 					getSettingsStore().current.grinderModel?.trim() || null;
+				// `ShotBean` is the *snapshot* of the live bean at the moment
+				// the shot finished — `snapshotFromBean` is the ONE shared
+				// helper used both here and on retroactive bean-rebind
+				// (`HistoryStore.setBeanFromLive`), so the snapshot shape
+				// can never drift between the two call sites. Downstream
+				// Visualizer uploader reads ONLY this snapshot for bean
+				// content (`bean_brand`, `bean_type`, `roast_date`,
+				// `roast_level`, `bean_notes`, `grinder_setting`); the live
+				// row is consulted only as a link pointer for `coffee_bag_id`.
+				const beanSnapshot = snapshotFromBean(activeBean, activeRoaster);
 				const record = getHistoryStore().record({
 					duration: event.content.duration,
 					profileName: snapshot.activeProfileName,
@@ -588,35 +598,17 @@ export class CremaApp {
 					peakTemp: event.content.peak_temp ?? null,
 					peakWeight: event.content.peak_weight ?? null,
 					finalWeight: event.content.final_weight ?? null,
-					// `ShotBean` is the *snapshot* of the live bean at the moment
-					// the shot finished — every field below is frozen from the
-					// live row right now so a later edit can't retroactively
-					// rewrite history (docs/28 §"Bean ↔ shot association"). The
-					// downstream Visualizer uploader reads ONLY this snapshot
-					// for bean content (`bean_brand`, `bean_type`, `roast_date`,
-					// `roast_level`, `bean_notes`, `grinder_setting`); the live
-					// row is consulted only as a link pointer for `coffee_bag_id`.
-					bean: activeBean
-						? {
-								beanId: activeBean.id,
-								roaster: activeRoaster?.name.trim() ?? '',
-								type: activeBean.name.trim(),
-								roastedOn: activeBean.roastedOn,
-								roastLevel: activeBean.roastLevel,
-								// Optional snapshot fields — omitted when empty so
-								// the persisted record stays minimal.
-								...(activeBean.notes ? { notes: activeBean.notes } : {}),
-								...(activeBean.grinderSetting
-									? { grinderSetting: activeBean.grinderSetting }
-									: {}),
-								...(activeBean.tags && activeBean.tags.length > 0
-									? { tags: [...activeBean.tags] }
-									: {}),
-								...(activeBean.visualizerId
-									? { visualizerId: activeBean.visualizerId }
-									: {})
-							}
-						: null
+					bean: beanSnapshot,
+					// Copy the live bean's tags STRAIGHT INTO `shot.tags`
+					// at completion — one source of truth for shot-level
+					// tags. A later user retag overwrites this; a later
+					// edit to the bean's tags does NOT rewrite history
+					// (the copy is one-shot). See `HistoryStore.setBeanFromLive`
+					// for the same copy on retroactive rebind.
+					tags:
+						activeBean?.tags && activeBean.tags.length > 0
+							? [...activeBean.tags]
+							: []
 				});
 				// Burn-down: debit the active bag by the profile's dose so the
 				// brew-page chip reads the remaining grams accurately. No-op
