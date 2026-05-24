@@ -1,6 +1,8 @@
 /**
  * `$lib/visualizer/shot-sync` — shot-history sync between Crema's local
- * shot library and Visualizer's `/api/v1/shots` endpoints.
+ * shot library and Visualizer's `/api/shots*` endpoints (per the
+ * OpenAPI spec at ~/code/visualizer-api.json — no `/v1/` prefix, and
+ * shot creation uses `POST /shots/upload` not `POST /shots`).
  *
  * Direction & modes (docs/36 §2):
  *   - **Backup**  — push only. `ShotCompleted` fires an upload; failures
@@ -174,7 +176,7 @@ async function call(path: string, opts: FetchOptions = {}): Promise<unknown> {
 // ── Public surface ────────────────────────────────────────────────────
 
 /**
- * Upload a single shot. POSTs to `/api/v1/shots` with the v2-JSON payload
+ * Upload a single shot. POSTs to `/api/shots/upload` with the v2-JSON payload
  * (trimmed per the user's `visualizer*` settings). Resolves with the
  * remote `visualizerId` so the caller can bind it onto the local row.
  *
@@ -187,7 +189,7 @@ export async function uploadShot(shot: StoredShot): Promise<{ visualizerId: stri
 		throw new VisualizerError(401, 'auth', 'Sign in to Visualizer first.');
 	}
 	const body = buildShotPayload(shot);
-	const result = (await call('/v1/shots', { method: 'POST', body })) as
+	const result = (await call('/shots/upload', { method: 'POST', body })) as
 		| { id?: string; data?: { id?: string } }
 		| null;
 	const remoteId =
@@ -212,7 +214,7 @@ export async function deleteShot(visualizerId: string): Promise<void> {
 		throw new VisualizerError(401, 'auth', 'Sign in to Visualizer first.');
 	}
 	try {
-		await call(`/v1/shots/${visualizerId}`, { method: 'DELETE' });
+		await call(`/shots/${visualizerId}`, { method: 'DELETE' });
 	} catch (e) {
 		if (e instanceof VisualizerError && e.status === 404) return;
 		throw e;
@@ -232,7 +234,7 @@ export async function patchShot(
 		throw new VisualizerError(401, 'auth', 'Sign in to Visualizer first.');
 	}
 	const body = JSON.stringify(patch);
-	await call(`/v1/shots/${visualizerId}`, { method: 'PATCH', body });
+	await call(`/shots/${visualizerId}`, { method: 'PATCH', body });
 }
 
 /**
@@ -257,7 +259,7 @@ export async function pullShots(
 	}
 	const since = Math.floor(sinceMs);
 	const body = (await call(
-		`/v1/shots?since=${since}&per_page=${perPage}`
+		`/shots?since=${since}&per_page=${perPage}`
 	)) as ListResponse<WireShot> | WireShot[] | null;
 	const shots = Array.isArray(body)
 		? body
