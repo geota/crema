@@ -566,11 +566,19 @@ export class CremaApp {
 				const activeProfile = profiles.activeId
 					? profiles.get(profiles.activeId)
 					: undefined;
+				// Equipment-level grinder model — frozen at completion the
+				// same way the bean snapshot is. The settings field is free
+				// text; an empty / whitespace-only default snapshots as
+				// `null` so the persisted record stays minimal and the
+				// upload-time cascade can fall back cleanly (#81).
+				const grinderModelDefault =
+					getSettingsStore().current.grinderModel?.trim() || null;
 				const record = getHistoryStore().record({
 					duration: event.content.duration,
 					profileName: snapshot.activeProfileName,
 					dose: activeProfile?.dose ?? null,
 					series: snapshot.shotTelemetry,
+					grinderModel: grinderModelDefault,
 					// Peak / final metrics ride on the event itself — the
 					// core's `ShotMetricsAccumulator` tracks them in real
 					// time, removing three sites of buffered-series

@@ -138,6 +138,28 @@ export interface StoredShot {
 	 * optional everywhere it is read.
 	 */
 	readonly bean?: ShotBean | null;
+	/**
+	 * The equipment-level grinder model at shot-completion time (e.g.
+	 * "Niche Zero"). Snapshotted from `settings.prefs.grinderModel`
+	 * exactly like {@link bean} — so a later change to the settings
+	 * default doesn't retroactively rewrite history.
+	 *
+	 * `null` means "no value at completion time"; the upload-time
+	 * cascade in {@link $lib/visualizer/shot-sync} falls back to the
+	 * current settings default for legacy shots without a snapshot.
+	 *
+	 * Editable post-completion via the shot-detail panel: an empty
+	 * string from the editor saves as `null` so the cascade re-engages
+	 * (rather than persisting an empty override that masks the default).
+	 *
+	 * Wires to Visualizer's shot-level `grinder_model` field (top-level
+	 * on `ShotUpdateRequest.shot`, not nested under a bean — siblings
+	 * with `grinder_setting`).
+	 *
+	 * Optional on the type so legacy localStorage records without the
+	 * field deserialise cleanly.
+	 */
+	grinderModel?: string | null;
 	/** User star rating 0–5; `0` means unrated. Editable. */
 	rating: number;
 	/** User tasting notes. Editable. */

@@ -185,6 +185,11 @@ export function storedShotFromWire(remote: WireShot): StoredShot {
 		peakTemp: 0,
 		series: [],
 		bean: null,
+		// `WireShot` doesn't carry the remote shot's `grinder_model`
+		// today — pulled rows leave the snapshot empty, and the
+		// upload-time cascade in `shot-sync.ts` re-applies the user's
+		// current settings default if they push the row back.
+		grinderModel: null,
 		rating: remote.rating ?? 0,
 		notes: remote.notes ?? '',
 		// Defensive `?? []` even though the type says `string[]` — the

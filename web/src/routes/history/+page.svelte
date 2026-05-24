@@ -795,6 +795,8 @@
 						shot={selected}
 						onNotesChange={(notes) => store.setNotes(selected.id, notes)}
 						onRatingChange={(rating) => store.setRating(selected.id, rating)}
+						onGrinderModelChange={(grinderModel) =>
+							store.setGrinderModel(selected.id, grinderModel)}
 					/>
 				{/key}
 			{:else}

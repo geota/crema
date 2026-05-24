@@ -118,6 +118,7 @@ function storedShotFromWire(remote: WireShot): StoredShot {
 		peakTemp: 0,
 		series: [],
 		bean: null,
+		grinderModel: null,
 		rating: remote.rating ?? 0,
 		notes: remote.notes ?? '',
 		tags: [...(remote.tag_list ?? [])],
@@ -165,6 +166,22 @@ function inlineBeanPatch(bean: ShotBean | null | undefined): Record<string, unkn
 	return out;
 }
 
+// ── Mirror of $lib/visualizer/shot-sync :: resolveGrinderModel ───────
+//
+// Snapshot wins (per-shot override or completion-time freeze); the
+// settings default is the legacy-fallback for shots that pre-date the
+// snapshot field. Trims both sides; `null` when neither carries a value.
+function resolveGrinderModel(
+	shot: StoredShot,
+	settingsDefault: string | undefined | null
+): string | null {
+	const fromShot = shot.grinderModel?.trim();
+	if (fromShot) return fromShot;
+	const fromSettings = settingsDefault?.trim();
+	if (fromSettings) return fromSettings;
+	return null;
+}
+
 // ── Wasm bootstrap ────────────────────────────────────────────────────
 
 // The wasm bundle is built with `--target web`, so its default
@@ -196,6 +213,7 @@ function shot(over: Partial<StoredShot> = {}): StoredShot {
 		peakTemp: 93,
 		series: [],
 		bean: null,
+		grinderModel: null,
 		rating: 4,
 		notes: '',
 		tags: [],
@@ -614,7 +632,53 @@ describe('inlineBeanPatch', () => {
 		assert.ok(!('tag_list' in out));
 		assert.ok(!('visualizerId' in out));
 		assert.ok(!('beanId' in out));
-		// Also: no `grinder_model` slot — that's task #81's scope.
+		// `grinder_model` is shot-level, not bean-level — it rides via
+		// the separate `resolveGrinderModel` helper and the typed slot
+		// on `patchShot`. So `inlineBeanPatch` does NOT emit it.
 		assert.ok(!('grinder_model' in out));
+	});
+});
+
+describe('resolveGrinderModel', () => {
+	it('returns null when the shot has no snapshot and the settings default is empty', () => {
+		assert.equal(resolveGrinderModel(shot(), ''), null);
+		assert.equal(resolveGrinderModel(shot(), null), null);
+		assert.equal(resolveGrinderModel(shot(), undefined), null);
+	});
+
+	it('snapshots the shot value wins when present', () => {
+		assert.equal(
+			resolveGrinderModel(shot({ grinderModel: 'Niche Zero' }), 'Eureka Mignon'),
+			'Niche Zero'
+		);
+	});
+
+	it('falls back to the settings default when the snapshot is null', () => {
+		assert.equal(
+			resolveGrinderModel(shot({ grinderModel: null }), 'Eureka Mignon Specialita'),
+			'Eureka Mignon Specialita'
+		);
+	});
+
+	it('treats whitespace-only values as empty (trim both sides)', () => {
+		assert.equal(resolveGrinderModel(shot({ grinderModel: '   ' }), '   '), null);
+		assert.equal(
+			resolveGrinderModel(shot({ grinderModel: '   ' }), '  Niche Zero  '),
+			'Niche Zero'
+		);
+		assert.equal(
+			resolveGrinderModel(shot({ grinderModel: '  Mythos One  ' }), 'Niche Zero'),
+			'Mythos One'
+		);
+	});
+
+	it('legacy shots without a grinderModel field cascade to the settings default', () => {
+		// Pre-#81 records have no `grinderModel` at all — defensive
+		// loader leaves it `null`, the cascade still resolves cleanly.
+		const legacy = shot();
+		// Force-clear via cast since the fixture defaults `grinderModel: null`.
+		delete (legacy as { grinderModel?: unknown }).grinderModel;
+		assert.equal(resolveGrinderModel(legacy, 'Niche Zero'), 'Niche Zero');
+		assert.equal(resolveGrinderModel(legacy, ''), null);
 	});
 });

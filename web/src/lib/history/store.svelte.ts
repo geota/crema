@@ -58,6 +58,13 @@ export interface ShotCompletion {
 	series: readonly TelemetrySample[];
 	/** A snapshot of the current bean at shot completion, or `null`. */
 	bean: ShotBean | null;
+	/**
+	 * The equipment-level grinder model at shot-completion time —
+	 * `settings.prefs.grinderModel.trim()` or `null` when the user
+	 * hasn't set a default. Frozen on the shot so a later settings
+	 * change can't rewrite history.
+	 */
+	grinderModel: string | null;
 	/** Peak group pressure observed during the shot, bar — from the core. */
 	peakPressure: number | null;
 	/** Peak group-head temperature observed during the shot, °C — from the core. */
@@ -131,6 +138,7 @@ export class HistoryStore {
 			peakTemp: completion.peakTemp ?? 0,
 			series: [...series],
 			bean: completion.bean,
+			grinderModel: completion.grinderModel,
 			rating: 0,
 			notes: '',
 			tags: []
@@ -147,6 +155,24 @@ export class HistoryStore {
 		this.shots = [
 			...this.shots.slice(0, idx),
 			{ ...this.shots[idx], notes },
+			...this.shots.slice(idx + 1)
+		];
+		this.persist();
+	}
+
+	/**
+	 * Update a shot's equipment-level grinder-model override and persist.
+	 * Pass `null` (or call with an empty string after trimming) to clear
+	 * the override — the upload-time cascade then falls back to the
+	 * settings default. Mirrors {@link setNotes}: a thin replace-and-
+	 * persist, no validation beyond trim-to-null at the caller.
+	 */
+	setGrinderModel(id: string, grinderModel: string | null): void {
+		const idx = this.shots.findIndex((s) => s.id === id);
+		if (idx < 0) return;
+		this.shots = [
+			...this.shots.slice(0, idx),
+			{ ...this.shots[idx], grinderModel },
 			...this.shots.slice(idx + 1)
 		];
 		this.persist();
@@ -284,6 +310,11 @@ export class HistoryStore {
 			peakTemp,
 			series,
 			bean,
+			// Imported legacy `.shot.json` files don't carry the
+			// equipment-level grinder model — Crema's pre-#81 records
+			// don't either. Leaving this `null` lets the upload-time
+			// cascade fall back to the current settings default.
+			grinderModel: null,
 			rating: imported.metadata.rating ?? 0,
 			notes: imported.metadata.notes ?? '',
 			tags: []
@@ -425,9 +456,20 @@ function loadShots(): StoredShot[] {
 		// reads each new field defensively and omits it when absent so
 		// the shape is exactly `Required<oldFields> & Partial<newFields>`.
 		const bean = coerceShotBean(obj.bean ?? null);
+		// `grinderModel` (added in #81) is the equipment-level snapshot.
+		// Legacy records pre-#81 have no field at all — leave it `null`
+		// so the upload-time cascade re-reads the current settings
+		// default. A persisted empty string is normalised to `null` too,
+		// so "no override" is one canonical shape.
+		const grinderModelRaw = obj.grinderModel;
+		const grinderModel =
+			typeof grinderModelRaw === 'string' && grinderModelRaw.length > 0
+				? grinderModelRaw
+				: null;
 		out.push({
 			...(obj as unknown as StoredShot),
 			bean,
+			grinderModel,
 			tags,
 			visualizerId: typeof obj.visualizerId === 'string' ? obj.visualizerId : null,
 			deletedAt: typeof obj.deletedAt === 'number' ? obj.deletedAt : null
