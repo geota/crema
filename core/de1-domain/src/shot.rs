@@ -66,12 +66,61 @@ impl ShotPhase {
 }
 
 /// A telemetry sample tagged with its time since the shot began.
+///
+/// The DE1's [`ShotSample`] is the raw protocol decode (pressure, flow,
+/// temperatures, setpoints). The overlay fields below carry data that
+/// rides *with* a DE1 sample but isn't on the wire:
+///
+/// - the scale's smoothed weight + flow at this instant (`scale_weight`,
+///   `scale_flow_weight`) — only present when a scale was paired;
+/// - the running pump-side dispensed volume (`dispensed_volume`) —
+///   the DE1's integrated `group_flow × Δt`, computed core-side;
+/// - the two puck-resistance signals (`resistance`,
+///   `resistance_weight`) — pre-computed by [`crate::lib::puck_resistance`]
+///   / `puck_resistance_weight` so every shell consumes the identical
+///   value without re-deriving the formula or threshold.
+///
+/// All overlays are `Option<f32>`: legacy `.shot.json` imports
+/// pre-dating this PR carry none of them, and a shot pulled without a
+/// scale paired carries no `scale_*` values. `#[serde(default)]` so an
+/// older record deserialises cleanly with the new fields absent.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct TimedSample {
     /// Time since the shot started.
     pub elapsed: Duration,
     /// The telemetry sample.
     pub sample: ShotSample,
+    /// Scale-derived cumulative weight at this instant, grams. `None`
+    /// when no scale was paired. Maps to the legacy de1app `espresso_weight`
+    /// channel + the Visualizer `totals.weight` upload field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale_weight: Option<f32>,
+    /// Scale-derived mass-flow rate at this instant, grams per second
+    /// (`dW/dt`). `None` when no scale was paired. The truer espresso
+    /// flow during the pour — measures what exits the puck. Maps to
+    /// `espresso_flow_weight` + Visualizer `flow.by_weight`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale_flow_weight: Option<f32>,
+    /// Running pump-side dispensed volume at this instant, millilitres.
+    /// `None` for legacy imports that didn't record it; live captures
+    /// always populate it from the DE1's integrator. Maps to
+    /// `espresso_water_dispensed` + Visualizer `totals.water_dispensed`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dispensed_volume: Option<f32>,
+    /// DE1-flow-derived puck resistance, `bar / (ml/s)²`. `None` near
+    /// zero flow (the `puck_resistance` floor). NOT uploaded to
+    /// Visualizer — the spec accepts no `espresso_resistance` field;
+    /// Visualizer derives the same series server-side from pressure +
+    /// flow. Carried on the sample only so the chart can render it
+    /// without re-deriving per render pass.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resistance: Option<f32>,
+    /// Scale-flow-derived puck resistance, `bar / (g/s)²`. `None` when
+    /// no scale was paired or scale flow is sub-floor. The chart prefers
+    /// this over `resistance` per-sample when present. Same
+    /// non-upload story as `resistance`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resistance_weight: Option<f32>,
 }
 
 /// A completed espresso shot — its duration and full telemetry series.
@@ -238,6 +287,15 @@ impl ShotMonitor {
                 shot.samples.push(TimedSample {
                     elapsed: shot.timer.elapsed(now),
                     sample: sample.clone(),
+                    // Overlay channels are populated at the export
+                    // boundary (the shell's `toRustStoredShot` adapter)
+                    // — the live `ShotMonitor` only carries the DE1
+                    // protocol sample. Leave them `None` here.
+                    scale_weight: None,
+                    scale_flow_weight: None,
+                    dispensed_volume: None,
+                    resistance: None,
+                    resistance_weight: None,
                 });
             }
         }
@@ -365,6 +423,11 @@ mod tests {
         TimedSample {
             elapsed: ms(elapsed_ms),
             sample,
+            scale_weight: None,
+            scale_flow_weight: None,
+            dispensed_volume: None,
+            resistance: None,
+            resistance_weight: None,
         }
     }
 

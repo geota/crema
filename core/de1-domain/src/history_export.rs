@@ -60,6 +60,17 @@ fn build_v2_document(shot: &StoredShot) -> V2DocumentOut {
     let mut basket = Vec::with_capacity(samples.len());
     let mut mix = Vec::with_capacity(samples.len());
     let mut temp_goal = Vec::with_capacity(samples.len());
+    // The overlay channels — each emitted as a same-length series of
+    // floats. A sample with no value (`None`) renders as `0.0` on the
+    // wire to keep the column lengths aligned with `elapsed` (v2
+    // readers index by position). When the *whole* shot has no values
+    // for a channel (e.g. a shot pulled with no scale paired) the
+    // series is all-zero — same shape the pre-PR placeholder emitted,
+    // so existing v2 consumers stay happy and Visualizer's parser
+    // accepts the silent channel rather than rejecting the upload.
+    let mut weight_series = Vec::with_capacity(samples.len());
+    let mut flow_by_weight = Vec::with_capacity(samples.len());
+    let mut water_dispensed = Vec::with_capacity(samples.len());
 
     for t in samples {
         elapsed.push(t.elapsed.as_secs_f32());
@@ -73,18 +84,21 @@ fn build_v2_document(shot: &StoredShot) -> V2DocumentOut {
         // DE1's separate set_head / set_mix collapse to one on export
         // — same convention `import_v2_json_shot` reads.
         temp_goal.push(t.sample.set_head_temp);
+        weight_series.push(t.scale_weight.unwrap_or(0.0));
+        flow_by_weight.push(t.scale_flow_weight.unwrap_or(0.0));
+        water_dispensed.push(t.dispensed_volume.unwrap_or(0.0));
     }
 
-    // Channels Crema's StoredShot doesn't carry: the scale's by-weight
-    // flow (`flow.by_weight`, `flow.by_weight_raw`) and the per-sample
-    // cumulative water dispensed (`totals.water_dispensed`). Emit a
-    // zeros placeholder of matching length so v2 readers that index by
-    // sample get a present series.
-    let zeros = vec![0.0_f32; samples.len()];
-    // Likewise `totals.weight`: Crema's wire-format TimedSample has no
-    // scale weight (that lives only in the shell's TelemetrySample
-    // overlay). Zeros preserves the shape.
-    let weight_series = vec![0.0_f32; samples.len()];
+    // `by_weight_raw` is the unsmoothed sibling of `by_weight`. Crema
+    // doesn't model a separate raw channel (the flow estimator's
+    // output is the only series), so the raw column mirrors the
+    // smoothed one — same trick the legacy de1app uses when the raw
+    // stream isn't recorded. Resistance / conductance are deliberately
+    // NOT emitted: the Visualizer spec accepts no `espresso_resistance`
+    // field (verified against `visualizer-openapi.json` v1.8.2 —
+    // resistance / conductance are derived server-side from
+    // pressure + flow), so emitting them would just bloat the payload.
+    let by_weight_raw = flow_by_weight.clone();
 
     let enjoyment = shot.metadata.rating.and_then(rating_to_enjoyment);
 
@@ -133,8 +147,8 @@ fn build_v2_document(shot: &StoredShot) -> V2DocumentOut {
         },
         flow: V2FlowOut {
             flow,
-            by_weight: zeros.clone(),
-            by_weight_raw: zeros.clone(),
+            by_weight: flow_by_weight,
+            by_weight_raw,
             goal: flow_goal,
         },
         temperature: V2TemperatureOut {
@@ -144,7 +158,7 @@ fn build_v2_document(shot: &StoredShot) -> V2DocumentOut {
         },
         totals: V2TotalsOut {
             weight: weight_series,
-            water_dispensed: zeros,
+            water_dispensed,
         },
         // Per-sample phase boundaries aren't stored on TimedSample;
         // the legacy log records them as a sparse array, empty is the
@@ -408,6 +422,12 @@ mod tests {
                     frame_number: 0,
                     steam_temp: 0.0,
                 },
+                // Pre-flow — no scale signal, no resistance yet.
+                scale_weight: Some(0.0),
+                scale_flow_weight: Some(0.0),
+                dispensed_volume: Some(0.0),
+                resistance: None,
+                resistance_weight: None,
             },
             TimedSample {
                 elapsed: Duration::from_secs_f32(1.0),
@@ -424,6 +444,12 @@ mod tests {
                     frame_number: 2,
                     steam_temp: 0.0,
                 },
+                // Mid-pour: 9 bar / 2.5 ml/s = 1.44, 9 bar / 2.3 g/s² = 1.70.
+                scale_weight: Some(8.5),
+                scale_flow_weight: Some(2.3),
+                dispensed_volume: Some(15.0),
+                resistance: Some(9.0 / (2.5 * 2.5)),
+                resistance_weight: Some(9.0 / (2.3 * 2.3)),
             },
         ];
         let record = ShotRecord {
@@ -588,6 +614,40 @@ mod tests {
             assert!(
                 (a.sample.set_head_temp - b.sample.set_head_temp).abs() < 1e-4,
                 "set_head_temp[{i}] drifted"
+            );
+            // Overlay channels — the export emits a same-length series
+            // of floats (`None` → `0.0`), so the round-trip side sees
+            // `Some(0.0)` rather than `None` for the absent values.
+            // Compare on the numeric value either way.
+            let av = a.scale_weight.unwrap_or(0.0);
+            let bv = b.scale_weight.unwrap_or(0.0);
+            assert!((av - bv).abs() < 1e-4, "scale_weight[{i}] drifted");
+            let av = a.scale_flow_weight.unwrap_or(0.0);
+            let bv = b.scale_flow_weight.unwrap_or(0.0);
+            assert!(
+                (av - bv).abs() < 1e-4,
+                "scale_flow_weight[{i}] drifted"
+            );
+            let av = a.dispensed_volume.unwrap_or(0.0);
+            let bv = b.dispensed_volume.unwrap_or(0.0);
+            assert!(
+                (av - bv).abs() < 1e-4,
+                "dispensed_volume[{i}] drifted"
+            );
+            // Resistance signals re-derive at import time from
+            // pressure / flow + scale_flow_weight, so they should match
+            // the original within the sub-floor guard. When both inputs
+            // are sub-floor (the t=0 sample) both sides should be
+            // `None`; mid-pour both should be `Some`.
+            assert_eq!(
+                a.resistance.is_some(),
+                b.resistance.is_some(),
+                "resistance presence[{i}] drifted"
+            );
+            assert_eq!(
+                a.resistance_weight.is_some(),
+                b.resistance_weight.is_some(),
+                "resistance_weight presence[{i}] drifted"
             );
         }
 

@@ -69,6 +69,12 @@ pub fn import_legacy_tcl_shot(content: &str) -> Result<StoredShot, ImportError> 
     let pressure_goal = parse_tcl_double_list(dict.get("espresso_pressure_goal"));
     let flow_goal = parse_tcl_double_list(dict.get("espresso_flow_goal"));
     let frame_no = parse_tcl_double_list(dict.get("espresso_frame_number"));
+    // The legacy TCL log carries the scale-derived channels alongside
+    // the DE1 ones — Crema imports them so the chart can read the
+    // weight-based resistance for legacy shots too.
+    let scale_weight = parse_tcl_double_list(dict.get("espresso_weight"));
+    let scale_flow_weight = parse_tcl_double_list(dict.get("espresso_flow_weight"));
+    let dispensed = parse_tcl_double_list(dict.get("espresso_water_dispensed"));
 
     let count = [
         elapsed.len(),
@@ -95,6 +101,9 @@ pub fn import_legacy_tcl_shot(content: &str) -> Result<StoredShot, ImportError> 
         &pressure_goal,
         &flow_goal,
         &frame_no,
+        &scale_weight,
+        &scale_flow_weight,
+        &dispensed,
     );
 
     let duration = samples
@@ -158,6 +167,12 @@ pub fn import_v2_json_shot(content: &str) -> Result<StoredShot, ImportError> {
         &raw.pressure.goal,
         &raw.flow.goal,
         &[],
+        // v2 puts the scale-derived channels under `totals.weight` and
+        // `flow.by_weight`; `totals.water_dispensed` carries the pump
+        // volume integral. All three are sample-aligned to `elapsed`.
+        &raw.totals.weight,
+        &raw.flow.by_weight,
+        &raw.totals.water_dispensed,
     );
     let duration = samples
         .last()
@@ -191,6 +206,9 @@ fn build_samples(
     pressure_goal: &[f32],
     flow_goal: &[f32],
     frame_no: &[f32],
+    scale_weight: &[f32],
+    scale_flow_weight: &[f32],
+    dispensed: &[f32],
 ) -> Vec<TimedSample> {
     let mut out = Vec::with_capacity(count);
     for i in 0..count {
@@ -222,12 +240,54 @@ fn build_samples(
                 .map_or(0, |f| frame_number_from_f32(*f)),
             steam_temp: 0.0,
         };
+        // Overlay channels — each `Some(value)` only when the source
+        // array carried this index, so a file that omits the channel
+        // (legacy `.shot` without a scale paired, pre-PR v2 export)
+        // imports with `None` rather than a misleading `Some(0.0)`.
+        let scale_weight_i = scale_weight.get(i).copied();
+        let scale_flow_weight_i = scale_flow_weight.get(i).copied();
+        let dispensed_i = dispensed.get(i).copied();
+        // Re-derive the resistance signals at import time so the chart
+        // can render legacy shots through the same auto-switch path
+        // live captures use. Same `P / F²` shape + sub-floor guard the
+        // live `Event::Telemetry` path runs (see `de1_app::puck_resistance`
+        // / `puck_resistance_weight`); kept inline to avoid de1-domain
+        // depending back on de1-app.
+        let resistance = derive_resistance(pressure[i], flow[i]);
+        let resistance_weight = scale_flow_weight_i
+            .and_then(|wf| derive_resistance(pressure[i], wf));
         out.push(TimedSample {
             elapsed: elapsed_dur,
             sample,
+            scale_weight: scale_weight_i,
+            scale_flow_weight: scale_flow_weight_i,
+            dispensed_volume: dispensed_i,
+            resistance,
+            resistance_weight,
         });
     }
     out
+}
+
+/// Sub-floor flow guard for the import-side resistance derivation —
+/// matches the live core's `RESISTANCE_FLOW_FLOOR_ML_PER_S` (also reused
+/// as the g/s floor since both magnitudes coincide at espresso flow
+/// rates).
+const RESISTANCE_FLOW_FLOOR: f32 = 0.1;
+
+/// `P / F²` with the near-zero-flow guard and non-finite check both
+/// resistance signals share. Inline copy of `de1_app::puck_resistance`
+/// / `puck_resistance_weight` — kept here so `de1-domain` (which the
+/// importer lives in) doesn't depend back on `de1-app`.
+fn derive_resistance(pressure: f32, flow: f32) -> Option<f32> {
+    if !pressure.is_finite() || !flow.is_finite() {
+        return None;
+    }
+    if flow < RESISTANCE_FLOW_FLOOR {
+        return None;
+    }
+    let r = pressure / (flow * flow);
+    if r.is_finite() { Some(r) } else { None }
 }
 
 fn duration_from_seconds(s: f32) -> Duration {
@@ -350,6 +410,12 @@ struct V2ShotJson {
     flow: V2Flow,
     #[serde(default)]
     temperature: V2Temperature,
+    /// Scale weight series + pump-dispensed-volume series, both
+    /// sample-aligned to `elapsed`. Pre-PR exports emitted these as
+    /// zeros placeholders; post-PR they carry real values when a
+    /// scale was paired / a DE1 was streaming.
+    #[serde(default)]
+    totals: V2Totals,
     #[serde(default)]
     profile: Option<serde_json::Value>,
     #[serde(default)]
@@ -370,6 +436,21 @@ struct V2Flow {
     flow: Vec<f32>,
     #[serde(default)]
     goal: Vec<f32>,
+    /// Scale-derived flow rate, sample-aligned to `elapsed`. Empty when
+    /// the source export had no scale paired (or pre-PR placeholder
+    /// zeros — same shape, just no useful values).
+    #[serde(default)]
+    by_weight: Vec<f32>,
+}
+
+#[derive(Deserialize, Default)]
+struct V2Totals {
+    /// Cumulative scale weight, grams.
+    #[serde(default)]
+    weight: Vec<f32>,
+    /// Cumulative pump-dispensed water, millilitres.
+    #[serde(default)]
+    water_dispensed: Vec<f32>,
 }
 
 #[derive(Deserialize, Default)]

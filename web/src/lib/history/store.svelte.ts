@@ -391,32 +391,54 @@ function durationToMs(d: { secs: number; nanos: number }): number {
  * overlay works on imports too.
  */
 function mapTimedSamples(
-	samples: readonly { elapsed: { secs: number; nanos: number }; sample: RustStoredShot['record']['samples'][number]['sample'] }[]
+	samples: readonly RustStoredShot['record']['samples'][number][]
 ): TelemetrySample[] {
-	return samples.map((t) => ({
-		elapsed: durationToMs(t.elapsed),
-		pressure: t.sample.group_pressure,
-		flow: t.sample.group_flow,
-		temp: t.sample.head_temp,
-		mixTemp: t.sample.mix_temp,
-		steamTemp: t.sample.steam_temp,
-		// Legacy logs have no scale weight; the importer leaves the
-		// channel `null` so the chart's weight series renders blank.
-		weight: null,
-		// Resistance is derived (pressure / flow²); `null` near zero
-		// flow. The chart re-derives at render time so we can skip
-		// here and leave it null.
-		resistance:
-			t.sample.group_flow > 0.05
-				? t.sample.group_pressure / (t.sample.group_flow * t.sample.group_flow)
-				: null,
-		// The legacy log records one `temperature_goal` per sample —
-		// fan it into `setHeadTemp` (the chart's dashed overlay channel)
-		// per `applyEvent` in ui-state.svelte.ts.
-		setHeadTemp: t.sample.set_head_temp,
-		setGroupPressure: t.sample.set_group_pressure,
-		setGroupFlow: t.sample.set_group_flow
-	}));
+	return samples.map((t) => {
+		// Overlay channels — the Rust importer carries them when the
+		// source `.shot.json` recorded them; pre-PR exports emit zeros
+		// (the v2 schema requires same-length columns). A literal `0`
+		// from a no-scale shot is indistinguishable from "no value" on
+		// the wire, so we treat a sub-floor / sub-noise sample as a gap
+		// for the resistance fallback path — the chart auto-switch
+		// uses per-sample `resistanceWeight ?? resistance`, and an
+		// absent value cleanly defers to the DE1-flow sibling.
+		const sw = t.scale_weight;
+		const sfw = t.scale_flow_weight;
+		const dv = t.dispensed_volume;
+		const r = t.resistance;
+		const rw = t.resistance_weight;
+		return {
+			elapsed: durationToMs(t.elapsed),
+			pressure: t.sample.group_pressure,
+			flow: t.sample.group_flow,
+			temp: t.sample.head_temp,
+			mixTemp: t.sample.mix_temp,
+			steamTemp: t.sample.steam_temp,
+			// Imported weight: present whenever the source file recorded
+			// a non-trivial scale series; a uniformly-zero placeholder
+			// (no scale paired) leaves the channel `null` so the chart
+			// renders a gap rather than a flat zero.
+			weight: sw != null && sw > 0 ? sw : null,
+			weightFlow: sfw != null && sfw > 0 ? sfw : null,
+			dispensedVolume: dv != null && dv > 0 ? dv : 0,
+			// Re-derive the DE1-flow resistance per-sample when the
+			// imported value is missing — legacy `.shot` files without
+			// the field, or pre-PR v2 exports.
+			resistance:
+				r != null && r > 0
+					? r
+					: t.sample.group_flow > 0.05
+						? t.sample.group_pressure / (t.sample.group_flow * t.sample.group_flow)
+						: null,
+			resistanceWeight: rw != null && rw > 0 ? rw : null,
+			// The legacy log records one `temperature_goal` per sample —
+			// fan it into `setHeadTemp` (the chart's dashed overlay channel)
+			// per `applyEvent` in ui-state.svelte.ts.
+			setHeadTemp: t.sample.set_head_temp,
+			setGroupPressure: t.sample.set_group_pressure,
+			setGroupFlow: t.sample.set_group_flow
+		};
+	});
 }
 
 /**

@@ -67,7 +67,22 @@ function toRustStoredShot(shot: StoredShot): RustStoredShot {
 					set_group_flow: s.setGroupFlow,
 					frame_number: 0,
 					steam_temp: s.steamTemp
-				}
+				},
+				// Overlay channels — forwarded onto the Rust `TimedSample`
+				// so the v2 exporter can emit them into the
+				// `totals.weight` / `flow.by_weight` / `totals.water_dispensed`
+				// columns the spec defines. `undefined` / `null` /
+				// missing values stay missing on the wire (the Rust
+				// side maps absent → `0.0` only when assembling the
+				// sample-aligned series). Each rider is what makes the
+				// new channels ride through `buildShotPayload` →
+				// `POST /shots/upload` without an explicit Visualizer
+				// adapter change.
+				scale_weight: s.weight ?? undefined,
+				scale_flow_weight: s.weightFlow ?? undefined,
+				dispensed_volume: s.dispensedVolume ?? undefined,
+				resistance: s.resistance ?? undefined,
+				resistance_weight: s.resistanceWeight ?? undefined
 			}))
 		}
 	};

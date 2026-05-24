@@ -242,7 +242,13 @@
 			// • volume / mix divide by 10 like their primary's scale (60 ml →
 			//   6 on plot; 90 °C → 9 on plot);
 			// • weight flow rides native (g/s ≈ ml/s).
-			const r = s.resistance;
+			// Resistance auto-switch: prefer the scale-derived
+			// `resistanceWeight` (truer signal during the pour —
+			// measures what exits the puck) and fall back to the
+			// DE1-flow `resistance` when no scale was paired for
+			// that sample. Legacy shots and pre-scale samples ride
+			// the fallback transparently.
+			const r = s.resistanceWeight ?? s.resistance;
 			resistance.push(showResistance && r != null ? Math.min(10, Math.max(0, r * 5)) : null);
 			const v = s.dispensedVolume;
 			volume.push(showVolume && v != null ? v / 10 : null);

@@ -192,6 +192,21 @@ export interface RustShotSample {
 export interface RustTimedSample {
 	elapsed: RustDuration;
 	sample: RustShotSample;
+	/**
+	 * Overlay channels added in the telemetry-bundle PR. Each rides on a
+	 * `TimedSample` only when known: a shot pulled without a scale paired
+	 * (and any legacy `.shot.json` parsed before this PR's exporter
+	 * touched it) carries none. The Rust side emits these as a
+	 * same-length series of floats in the v2 doc (`None` → `0.0`), so a
+	 * re-import sees `Some(0.0)` for absent values; the shell treats both
+	 * `undefined` and `0` as "no signal" for the resistance / scale
+	 * fallback path. Names are snake_case to match the Rust struct.
+	 */
+	scale_weight?: number;
+	scale_flow_weight?: number;
+	dispensed_volume?: number;
+	resistance?: number;
+	resistance_weight?: number;
 }
 
 /** Barista journal metadata as the Rust core emits it. */

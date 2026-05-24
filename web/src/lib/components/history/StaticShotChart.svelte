@@ -82,7 +82,14 @@
 			// in the near-zero-flow region. Clamped to the chart's shared 0-10
 			// scale so a low-flow spike doesn't blow the y-axis open. Old
 			// records pre-resistance simply read `null` here too.
-			const r = s.resistance;
+			// Resistance auto-switch: prefer the scale-derived
+			// `resistanceWeight` per-sample, fall back to the DE1-flow
+			// `resistance`. A shot pulled with no scale paired carries
+			// only `resistance` (the per-sample fallback) and reads as
+			// before; a scale-paired shot reads the truer extraction
+			// signal — the legacy de1app TCL `P / scale_weight_rate²`
+			// formula (`de1plus/gui.tcl:3414-3416`).
+			const r = s.resistanceWeight ?? s.resistance;
 			resistance.push(
 				showResistance && r != null ? Math.min(10, Math.max(0, r)) : null
 			);

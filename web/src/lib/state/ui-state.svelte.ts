@@ -111,6 +111,17 @@ export interface TelemetrySample {
 	 */
 	readonly resistance: number | null;
 	/**
+	 * Scale-derived puck resistance — `pressure / weight_flow²` where
+	 * `weight_flow` is the scale's mass-flow rate (g/s). Optional because
+	 * a shot pulled without a scale paired has no value; a shot
+	 * pulled with a scale carries one for every sample after the scale
+	 * starts streaming. The chart prefers this over {@link resistance}
+	 * per-sample (with {@link resistance} as the per-sample fallback)
+	 * so shots with and without a scale render coherently. Units are
+	 * bar / (g/s)². See `puck_resistance_weight` in the Rust core.
+	 */
+	readonly resistanceWeight?: number | null;
+	/**
 	 * The DE1's per-sample setpoints — what the firmware was *aiming* for at
 	 * the moment this sample was taken, as opposed to the measured value
 	 * above. Used for the live chart's dashed "goal" overlay. Mirrors the
@@ -787,6 +798,11 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				weightFlow: snapshot.scaleFlow,
 				dispensedVolume: t.dispensed_volume,
 				resistance: t.resistance ?? null,
+				// Scale-derived puck resistance — `null` when the
+				// core didn't compute one (no scale paired, sub-floor
+				// scale flow). The chart's per-sample fallback uses
+				// the DE1-flow `resistance` when this is `null`.
+				resistanceWeight: t.resistance_weight ?? null,
 				setHeadTemp: t.set_head_temp,
 				setGroupPressure: t.set_group_pressure,
 				setGroupFlow: t.set_group_flow

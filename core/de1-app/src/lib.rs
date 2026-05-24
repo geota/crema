@@ -26,9 +26,9 @@ use capture::{CaptureRecorder, MetaSnapshot, slice_to_jsonl};
 use std::time::Duration;
 
 use de1_domain::{
-    AutoStop, FlowAlgorithm, FlowEstimator, LineFreqDetector, Profile, STOP_WEIGHT_BEFORE,
-    ShotEvent, ShotMonitor, ShotPhase, SteamEvent, SteamMonitor, StopConfig, StopReason,
-    StopTargets, VolumeIntegrator, WaterEvent, WaterMonitor, WeightUnit,
+    AutoStop, Estimate, FlowAlgorithm, FlowEstimator, LineFreqDetector, Profile,
+    STOP_WEIGHT_BEFORE, ShotEvent, ShotMonitor, ShotPhase, SteamEvent, SteamMonitor, StopConfig,
+    StopReason, StopTargets, VolumeIntegrator, WaterEvent, WaterMonitor, WeightUnit,
 };
 use de1_protocol::{
     CalTarget, Calibration, EXTENSION_FRAME_INDEX_OFFSET, MachineState, MmrReadReply, MmrRegister,
@@ -103,6 +103,15 @@ fn duration_to_u32_ms(d: Duration) -> u32 {
 /// noisy, so the metric is suppressed.
 const RESISTANCE_FLOW_FLOOR_ML_PER_S: f32 = 0.1;
 
+/// Minimum scale-derived flow (g/s) below which the weight-based puck
+/// resistance is undefined. Same shape and motivation as
+/// [`RESISTANCE_FLOW_FLOOR_ML_PER_S`]: at near-zero flow the `P / F²`
+/// denominator gets tiny and noisy. Reuses the same numeric floor — the
+/// scale's g/s and the DE1's ml/s are both ~1:1 with espresso flow at
+/// the relevant magnitudes, and the legacy TCL (`gui.tcl:3414-3416`)
+/// gates on the same threshold for both signals.
+const RESISTANCE_WEIGHT_FLOW_FLOOR_G_PER_S: f32 = RESISTANCE_FLOW_FLOOR_ML_PER_S;
+
 /// The de1app/DSx "puck resistance" metric — `group_pressure / group_flow²`.
 /// Surfaced on every [`Event::Telemetry`] so each shell consumes the same
 /// computation. Returns `None` when group flow is below
@@ -117,6 +126,44 @@ fn puck_resistance(group_pressure_bar: f32, group_flow_ml_per_s: f32) -> Option<
         return None;
     }
     let r = group_pressure_bar / (group_flow_ml_per_s * group_flow_ml_per_s);
+    if r.is_finite() {
+        Some(r)
+    } else {
+        None
+    }
+}
+
+/// Puck resistance computed from the *scale's* mass-flow rate rather than
+/// the DE1's group-flow flowmeter — `group_pressure / weight_flow²`.
+///
+/// Why a sibling metric: the DE1's flowmeter sees what the *pump* dispenses
+/// upstream of the puck, which includes water retained by the basket /
+/// dispersion screen on the way in. A connected scale measures what
+/// actually exits the puck into the cup — the true espresso output. During
+/// pre-infusion and the early ramp the two diverge sharply (the pump is
+/// running, but no espresso is dripping yet); during the main pour they
+/// converge. The weight-derived resistance is therefore the truer
+/// extraction signal whenever a scale is paired. The legacy de1app TCL
+/// computes both — see `de1plus/gui.tcl:3414-3416` for the `P /
+/// scale_weight_rate²` formula behind the chart's overlay. Crema surfaces
+/// both on every Telemetry event so the chart can prefer the
+/// scale-derived value and fall back to the pump-derived one per sample.
+///
+/// Units: `bar / (g/s)²`. Returns `None` when the flow is below
+/// [`RESISTANCE_WEIGHT_FLOW_FLOOR_G_PER_S`] or any input is non-finite —
+/// same guard the DE1-flow sibling carries, for the same noisy-low-flow
+/// reason.
+fn puck_resistance_weight(
+    group_pressure_bar: f32,
+    weight_flow_g_per_s: f32,
+) -> Option<f32> {
+    if !group_pressure_bar.is_finite() || !weight_flow_g_per_s.is_finite() {
+        return None;
+    }
+    if weight_flow_g_per_s < RESISTANCE_WEIGHT_FLOW_FLOOR_G_PER_S {
+        return None;
+    }
+    let r = group_pressure_bar / (weight_flow_g_per_s * weight_flow_g_per_s);
     if r.is_finite() {
         Some(r)
     } else {
@@ -243,6 +290,18 @@ pub struct CremaCore {
     /// Timestamp of the most recent scale-weight reading, for the lost-scale
     /// watchdog. `None` until the connected scale reports once.
     last_scale_weight: Option<Duration>,
+    /// The most recent smoothed scale weight (g) and mass-flow rate (g/s)
+    /// from the [`FlowEstimator`]. Both `None` until a scale has reported
+    /// at least once. Fed by [`handle_scale_weight`](Self::handle_scale_weight);
+    /// read by [`handle_shot_sample`](Self::handle_shot_sample) so each
+    /// `Event::Telemetry` can carry the scale-derived weight + flow + the
+    /// weight-based puck resistance ([`puck_resistance_weight`]) alongside
+    /// the DE1-flow sibling. Cleared by [`reset`](Self::reset) so a
+    /// fresh session starts blank. Kept here (rather than peeked off
+    /// the `FlowEstimator`) because the estimator's public API only
+    /// returns an `Estimate` *as a sample is fed* — we need the last
+    /// returned value for the cross-event lookup.
+    last_scale_estimate: Option<Estimate>,
     /// Whether an [`Event::ScaleStale`] has already been emitted for the
     /// current stale episode — cleared by the next fresh reading.
     scale_stale_reported: bool,
@@ -382,6 +441,7 @@ impl CremaCore {
             auto_stop_targets: None,
             auto_stop: None,
             last_scale_weight: None,
+            last_scale_estimate: None,
             scale_stale_reported: false,
             scale_config_queried: false,
             profile_upload: None,
@@ -2034,6 +2094,15 @@ impl CremaCore {
             self.shot_metrics
                 .feed_telemetry(sample.group_pressure, sample.head_temp);
         }
+        // When a scale is reporting, compute the weight-derived puck
+        // resistance from its last estimate too — this is the "truer"
+        // signal during the pour because it measures what *exits* the
+        // puck, not what the pump pushes in. `None` falls through when
+        // no scale is paired (or the scale hasn't sampled yet) and the
+        // chart silently uses the DE1-flow sibling.
+        let resistance_weight = self
+            .last_scale_estimate
+            .and_then(|e| puck_resistance_weight(sample.group_pressure, e.flow));
         out.events.push(Event::Telemetry {
             elapsed,
             group_pressure: sample.group_pressure,
@@ -2046,6 +2115,7 @@ impl CremaCore {
             set_group_pressure: sample.set_group_pressure,
             set_group_flow: sample.set_group_flow,
             resistance: puck_resistance(sample.group_pressure, sample.group_flow),
+            resistance_weight,
         });
     }
 
@@ -2107,6 +2177,13 @@ impl CremaCore {
         // state and active mode are fetched as soon as the scale is reporting.
         self.push_connect_queries_once(out);
         let estimate = self.flow.update(reading.weight_g, now);
+        // Cache the latest smoothed weight + flow so the DE1 telemetry
+        // handler can fold them onto the next `Event::Telemetry` —
+        // powers the weight-based puck-resistance metric (see
+        // [`puck_resistance_weight`]) and rides through as raw
+        // `scale_weight` / `scale_flow_weight` channels for the v2
+        // export + Visualizer upload.
+        self.last_scale_estimate = Some(estimate);
         // Update the in-progress shot's running peak / final weight from
         // the smoothed scale weight — only while a shot is in progress so
         // post-shot trickle readings (cup-removal etc.) don't pollute the
@@ -2779,6 +2856,48 @@ mod tests {
             (centigrams >> 8) as u8,
             centigrams as u8,
         ]
+    }
+
+    #[test]
+    fn puck_resistance_weight_matches_p_over_f_squared() {
+        // 9 bar at 2 g/s → 9 / 4 = 2.25.
+        let r = puck_resistance_weight(9.0, 2.0).expect("a finite resistance");
+        assert!((r - 2.25).abs() < 1e-5);
+    }
+
+    #[test]
+    fn puck_resistance_weight_rejects_sub_floor_flow() {
+        // Below RESISTANCE_WEIGHT_FLOW_FLOOR_G_PER_S: noisy near-zero
+        // region — suppressed, matches the DE1-flow sibling.
+        assert!(puck_resistance_weight(9.0, 0.0).is_none());
+        assert!(puck_resistance_weight(9.0, 0.05).is_none());
+    }
+
+    #[test]
+    fn puck_resistance_weight_rejects_nonfinite_inputs() {
+        assert!(puck_resistance_weight(f32::NAN, 2.0).is_none());
+        assert!(puck_resistance_weight(9.0, f32::NAN).is_none());
+        assert!(puck_resistance_weight(f32::INFINITY, 2.0).is_none());
+        assert!(puck_resistance_weight(9.0, f32::INFINITY).is_none());
+    }
+
+    #[test]
+    fn telemetry_carries_no_resistance_weight_without_a_scale_estimate() {
+        // No scale weight has been fed — the telemetry handler can't
+        // compute a weight-derived resistance, so the field is `None`
+        // and the chart falls back to the DE1-flow sibling.
+        let mut core = CremaCore::new();
+        core.on_notification(Source::De1State, &[4, 5], 1_000);
+        let out = core.on_notification(Source::De1ShotSample, &SAMPLE, 3_500);
+        let Some(Event::Telemetry { resistance_weight, .. }) = out
+            .events
+            .iter()
+            .find(|e| matches!(e, Event::Telemetry { .. }))
+            .cloned()
+        else {
+            panic!("expected a Telemetry event");
+        };
+        assert!(resistance_weight.is_none());
     }
 
     #[test]
