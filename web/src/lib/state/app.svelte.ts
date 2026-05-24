@@ -620,12 +620,23 @@ export class CremaApp {
 					? profiles.get(profiles.activeId)
 					: undefined;
 				// Equipment-level grinder model — frozen at completion the
-				// same way the bean snapshot is. The settings field is free
-				// text; an empty / whitespace-only default snapshots as
-				// `null` so the persisted record stays minimal and the
-				// upload-time cascade can fall back cleanly (#81).
+				// same way the bean snapshot is. Three-tier write-time
+				// cascade (most-specific wins):
+				//   1. `bean.grinder` — the bag was ground on this specific
+				//      grinder. Wins when set.
+				//   2. `settings.grinderModel` — the user's global default
+				//      (their daily-driver gear).
+				//   3. `null` — nothing configured; upload skips the field.
+				// Resolved at WRITE time (not read time) so settings changes
+				// later don't rewrite a historical shot's record. The bean
+				// tier reads from the *live* bean here because we snapshot
+				// the resolved string straight onto `shot.grinderModel`; a
+				// later bean edit doesn't reach back. The user can still
+				// override per-shot via ShotDetail → `HistoryStore.setGrinderModel`.
 				const grinderModelDefault =
-					getSettingsStore().current.grinderModel?.trim() || null;
+					activeBean?.grinder?.trim() ||
+					getSettingsStore().current.grinderModel?.trim() ||
+					null;
 				// `ShotBean` is the *snapshot* of the live bean at the moment
 				// the shot finished — `snapshotFromBean` is the ONE shared
 				// helper used both here and on retroactive bean-rebind
@@ -841,7 +852,13 @@ export class CremaApp {
 			if (activeBean.grinderSetting) bean.grinderSetting = activeBean.grinderSetting;
 			if (Object.keys(bean).length > 0) meta.bean = bean;
 		}
-		const grinderModel = getSettingsStore().current.grinderModel?.trim();
+		// Replay META `grinderModel` mirrors the History capture cascade:
+		// bean.grinder beats the global settings default. Three-tier
+		// (bean → settings → omit) so a replay reader sees the same
+		// effective grinder model the History shot's record carries.
+		const grinderModel =
+			activeBean?.grinder?.trim() ||
+			getSettingsStore().current.grinderModel?.trim();
 		if (grinderModel) meta.grinderModel = grinderModel;
 		if (Object.keys(meta).length === 0) return null;
 		return {
