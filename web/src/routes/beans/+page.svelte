@@ -654,7 +654,10 @@
 		</div>
 	</div>
 
-	<!-- Tabs -->
+	<!-- Tabs + filter rail — Bags/Roasters tab buttons share a single row
+	     with the filter pills (separated by a hairline vertical divider) and
+	     the sort pill on the far right. The filter-pill region scrolls
+	     horizontally if needed so tabs and sort stay anchored. -->
 	<div class="bn-tabs">
 		<div class="bn-tabs-l">
 			<button
@@ -677,6 +680,15 @@
 			</button>
 		</div>
 		{#if tab === 'bags' && allBeans.length > 0}
+			<span class="bn-tabs-divider" aria-hidden="true"></span>
+			<div class="bn-tabs-filters">
+				<FilterPills pills={bagsFilterPills} onclick={onBagPillClick} />
+			</div>
+			{#if status !== 'all' || roast !== 'any' || selectedTags.length > 0}
+				<button class="bn-chip-clear" onclick={clearFilters}>
+					<i class="ph ph-x"></i> Clear
+				</button>
+			{/if}
 			<div class="bn-toolbar-r">
 				<SortPill
 					value={{ field: sortField, direction: sortDir }}
@@ -687,22 +699,30 @@
 					}}
 				/>
 			</div>
-		{/if}
-	</div>
-
-	<!-- Chip rail (Bags tab) — adopts the shared FilterPills component so
-	     this rail looks identical to /profiles. Clear-filters chip lives
-	     outside the FilterPills group since it's not a selection state. -->
-	{#if tab === 'bags' && allBeans.length > 0}
-		<div class="bn-filterstrip">
-			<FilterPills pills={bagsFilterPills} onclick={onBagPillClick} />
-			{#if status !== 'all' || roast !== 'any' || selectedTags.length > 0}
-				<button class="bn-chip-clear" onclick={clearFilters}>
+		{:else if tab === 'roasters' && allRoasters.length > 0}
+			{#if roasterRegionOptions.length > 1}
+				<span class="bn-tabs-divider" aria-hidden="true"></span>
+				<div class="bn-tabs-filters">
+					<FilterPills pills={roasterFilterPills} onclick={onRoasterPillClick} />
+				</div>
+			{/if}
+			{#if roasterRegion !== 'all'}
+				<button class="bn-chip-clear" onclick={() => (roasterRegion = 'all')}>
 					<i class="ph ph-x"></i> Clear
 				</button>
 			{/if}
-		</div>
-	{/if}
+			<div class="bn-toolbar-r">
+				<SortPill
+					value={{ field: roasterSortField, direction: roasterSortDir }}
+					options={roasterSortOptions}
+					onchange={(next) => {
+						roasterSortField = next.field as RoasterSortField;
+						roasterSortDir = next.direction;
+					}}
+				/>
+			</div>
+		{/if}
+	</div>
 
 	<!-- Body -->
 	{#if tab === 'bags'}
@@ -847,25 +867,7 @@
 					<h2 class="bn-section-title">Roasters</h2>
 					<span class="bn-section-count">{roasterRows.length}</span>
 					<span class="bn-section-rule"></span>
-					<div class="bn-section-tools">
-						<SortPill
-							value={{ field: roasterSortField, direction: roasterSortDir }}
-							options={roasterSortOptions}
-							onchange={(next) => {
-								roasterSortField = next.field as RoasterSortField;
-								roasterSortDir = next.direction;
-							}}
-						/>
-					</div>
 				</header>
-				{#if roasterRegionOptions.length > 1}
-					<div class="bn-filterstrip bn-filterstrip-inline">
-						<FilterPills
-							pills={roasterFilterPills}
-							onclick={onRoasterPillClick}
-						/>
-					</div>
-				{/if}
 				<div class="bn-roaster-grid">
 					{#each roasterRows as { roaster, count } (roaster.id)}
 						{@const mt = roasterMarkTone(roaster)}
@@ -1189,18 +1191,48 @@
 		margin: 6px 4px;
 	}
 
-	/* Tabs */
+	/* Tabs — single row: tabs · divider · filter pills (scroll) · clear · sort.
+	   On narrow viewports the row wraps; tabs stay together on one line and
+	   the filter / sort cluster breaks to the next. */
 	.bn-tabs {
 		display: flex;
-		justify-content: space-between;
 		align-items: center;
-		gap: 16px;
+		gap: 12px;
 		padding: 8px var(--page-pad-x, 24px) 12px;
 		border-bottom: 1px solid rgba(var(--tint-rgb), 0.06);
+		flex-wrap: wrap;
 	}
 	.bn-tabs-l {
 		display: inline-flex;
 		gap: 6px;
+		flex-shrink: 0;
+	}
+	.bn-tabs-divider {
+		width: 1px;
+		align-self: stretch;
+		background: var(--hairline);
+		margin-block: 6px;
+		flex-shrink: 0;
+	}
+	.bn-tabs-filters {
+		flex: 1 1 0;
+		min-width: 0;
+		display: flex;
+		align-items: center;
+		overflow: hidden;
+	}
+	/* The shared FilterPills container (`.pp-tags`) already enables
+	   horizontal overflow scroll; just make sure it can shrink inside our
+	   flex slot. */
+	.bn-tabs-filters :global(.pp-tags) {
+		flex: 1 1 auto;
+		min-width: 0;
+	}
+	.bn-toolbar-r {
+		margin-left: auto;
+		flex-shrink: 0;
+		display: inline-flex;
+		align-items: center;
 	}
 	.bn-tab {
 		display: inline-flex;
@@ -1240,22 +1272,8 @@
 		color: var(--fg-on-accent);
 	}
 
-	/* Filter strip — `.bn-filterstrip` is the page-level shell that hosts
-	   the shared FilterPills + Clear-filters chip. The pills themselves
-	   inherit the `.pp-tag*` rules from `styles/profiles-page.css`, so the
-	   visuals match /profiles exactly. */
-	.bn-filterstrip {
-		display: flex;
-		flex-wrap: wrap;
-		align-items: center;
-		gap: 10px;
-		padding: 12px var(--page-pad-x, 24px);
-		border-bottom: 1px solid rgba(var(--tint-rgb), 0.04);
-	}
-	.bn-filterstrip-inline {
-		padding: 0 0 12px;
-		border-bottom: 0;
-	}
+	/* Clear-filters chip — sits inline in the shared tabs row, just before
+	   the sort pill on the right. */
 	.bn-chip-clear {
 		display: inline-flex;
 		align-items: center;
@@ -1321,11 +1339,6 @@
 		font-family: var(--font-sans);
 		font-size: 11px;
 		color: rgba(var(--tint-rgb), 0.4);
-	}
-	.bn-section-tools {
-		display: inline-flex;
-		gap: 10px;
-		align-items: center;
 	}
 	.bn-section-archived {
 		opacity: 0.85;
