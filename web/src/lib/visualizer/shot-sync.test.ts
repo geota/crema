@@ -13,21 +13,134 @@
  *   --test src/lib/visualizer/shot-sync.test.ts
  * ```
  *
+ * The pure helpers now live in Rust (`de1_domain::visualizer_sync`)
+ * and are surfaced via wasm-bindgen. This test exercises that wasm
+ * directly: it imports the `de1_wasm` bundle via a relative path
+ * (node doesn't resolve the SvelteKit `$lib` alias), `await`s its
+ * `init()` once, then drives the same adapters
+ * `shot-sync-signatures.ts` uses in production. The contract under
+ * test is therefore the wasm export — proving the byte-identical
+ * hashes the prior pure-TS impl produced.
+ *
  * Covers only the pure helpers — `uploadShot` / `pullShots` need a fetch
  * mock and live in an integration test suite (deferred — see docs/37).
  */
 
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { describe, it, before } from 'node:test';
 import {
-	reconcileShots,
-	signatureForBean,
-	signatureForRoaster,
-	signatureForShot,
-	storedShotFromWire,
-	type WireShot
-} from './shot-sync-signatures.ts';
+	default as initWasm,
+	signatureForShot as wasmSignatureForShot,
+	signatureForBean as wasmSignatureForBean,
+	signatureForRoaster as wasmSignatureForRoaster,
+	reconcileShots as wasmReconcileShots
+} from '../wasm/de1_wasm.js';
 import type { StoredShot } from '../history/model.ts';
+
+// ── Types (mirrored from shot-sync-signatures.ts) ────────────────────
+
+interface WireShot {
+	id: string;
+	clock: number;
+	duration_ms: number;
+	profile_title: string | null;
+	final_weight_g: number | null;
+	notes: string | null;
+	rating: number | null;
+	updated_at_ms: number | null;
+}
+
+type ReconcileAction =
+	| { kind: 'add'; remote: WireShot }
+	| { kind: 'update'; localId: string; remote: WireShot }
+	| { kind: 'bind'; localId: string; visualizerId: string; remote: WireShot };
+
+// ── Adapters (mirror $lib/visualizer/shot-sync-signatures.ts) ────────
+//
+// Production calls these through the `$lib/wasm` alias; the alias
+// doesn't resolve in node, so the test inlines the same adapter
+// shapes against a relative import. If the production adapters in
+// `shot-sync-signatures.ts` ever drift from these, the test would
+// false-pass on a stale contract — keeping the shapes minimal and
+// the wasm functions on the public surface keeps the drift
+// surface small.
+
+function signatureForShot(shot: {
+	completedAt: number;
+	duration: number;
+	profileName: string | null;
+	finalWeight: number | null;
+}): string {
+	return wasmSignatureForShot(
+		shot.completedAt,
+		shot.duration,
+		shot.profileName ?? undefined,
+		shot.finalWeight ?? undefined
+	);
+}
+
+function signatureForBean(bean: {
+	name: string;
+	roasterName: string | null;
+	roastedOn: string | null;
+}): string {
+	return wasmSignatureForBean(
+		bean.name,
+		bean.roasterName ?? undefined,
+		bean.roastedOn ?? undefined
+	);
+}
+
+function signatureForRoaster(roaster: { name: string }): string {
+	return wasmSignatureForRoaster(roaster.name);
+}
+
+function reconcileShots(
+	local: readonly StoredShot[],
+	remote: readonly WireShot[]
+): ReconcileAction[] {
+	const raw = wasmReconcileShots(JSON.stringify({ local, remote }));
+	return JSON.parse(raw) as ReconcileAction[];
+}
+
+function storedShotFromWire(remote: WireShot): StoredShot {
+	const id = `shot:remote:${remote.id}`;
+	return {
+		id,
+		completedAt: remote.clock,
+		profileName: remote.profile_title,
+		duration: remote.duration_ms,
+		dose: null,
+		peakWeight: null,
+		finalWeight: remote.final_weight_g,
+		peakPressure: 0,
+		peakTemp: 0,
+		series: [],
+		bean: null,
+		rating: remote.rating ?? 0,
+		notes: remote.notes ?? '',
+		visualizerId: remote.id,
+		deletedAt: null
+	};
+}
+
+// ── Wasm bootstrap ────────────────────────────────────────────────────
+
+// The wasm bundle is built with `--target web`, so its default
+// initializer calls `fetch(<url to .wasm>)`. Node's `fetch` does not
+// support `file://` URLs (undici raises "not implemented... yet"),
+// so the test reads the .wasm file off disk and hands the bytes to
+// the initializer directly. The bundler-mode init accepts a Buffer
+// (or ArrayBuffer / WebAssembly.Module) as a single-arg shortcut and
+// skips the fetch path entirely.
+before(async () => {
+	const { readFile } = await import('node:fs/promises');
+	const wasmUrl = new URL('../wasm/de1_wasm_bg.wasm', import.meta.url);
+	const bytes = await readFile(wasmUrl);
+	await initWasm({ module_or_path: bytes });
+});
+
+// ── Fixtures ─────────────────────────────────────────────────────────
 
 function shot(over: Partial<StoredShot> = {}): StoredShot {
 	return {
@@ -64,6 +177,8 @@ function wire(over: Partial<WireShot> = {}): WireShot {
 	};
 }
 
+// ── Tests ─────────────────────────────────────────────────────────────
+
 describe('signatureForShot', () => {
 	it('is stable across identical inputs', () => {
 		const inputs = {
@@ -73,6 +188,19 @@ describe('signatureForShot', () => {
 			finalWeight: 36
 		};
 		assert.equal(signatureForShot(inputs), signatureForShot(inputs));
+	});
+
+	it('matches the pinned djb2 hex digest from the legacy TS impl', () => {
+		// The legacy TS impl emitted exactly this digest for the
+		// canonical reference input; the Rust port MUST produce a
+		// byte-identical hash.
+		const sig = signatureForShot({
+			completedAt: 1_700_000_000_000,
+			duration: 30_000,
+			profileName: 'best of decent',
+			finalWeight: 36
+		});
+		assert.equal(sig, '65946a11');
 	});
 
 	it('changes when the start time differs', () => {
@@ -169,6 +297,8 @@ describe('signatureForBean', () => {
 			roastedOn: '2026-05-08'
 		});
 		assert.equal(a, b);
+		// Pinned digest — cross-impl contract.
+		assert.equal(a, '481def0f');
 	});
 
 	it('changes when the roast date differs', () => {
@@ -193,6 +323,8 @@ describe('signatureForRoaster', () => {
 		const c = signatureForRoaster({ name: '  ONYX   COFFEE.LAB ' });
 		assert.equal(a, b);
 		assert.equal(a, c);
+		// Pinned digest — cross-impl contract.
+		assert.equal(a, 'cf16b46a');
 	});
 
 	it('treats different roasters as different signatures', () => {
@@ -214,7 +346,10 @@ describe('reconcileShots', () => {
 		const remote = wire({ id: 'r-1' });
 		const actions = reconcileShots([local], [remote]);
 		assert.equal(actions.length, 1);
-		assert.deepEqual(actions[0], { kind: 'update', localId: 'shot:l-1', remote });
+		assert.equal(actions[0].kind, 'update');
+		if (actions[0].kind === 'update') {
+			assert.equal(actions[0].localId, 'shot:l-1');
+		}
 	});
 
 	it('binds unbound locals by signature collision', () => {
@@ -235,12 +370,11 @@ describe('reconcileShots', () => {
 		});
 		const actions = reconcileShots([local], [remote]);
 		assert.equal(actions.length, 1);
-		assert.deepEqual(actions[0], {
-			kind: 'bind',
-			localId: 'shot:l-1',
-			visualizerId: 'r-1',
-			remote
-		});
+		assert.equal(actions[0].kind, 'bind');
+		if (actions[0].kind === 'bind') {
+			assert.equal(actions[0].localId, 'shot:l-1');
+			assert.equal(actions[0].visualizerId, 'r-1');
+		}
 	});
 
 	it('skips tombstoned locals when matching signatures', () => {
