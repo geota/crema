@@ -102,19 +102,28 @@
 		}
 	}
 
-	/** Card eyebrow — connection state + account identity. Stays put when
-	   transient status (test results, errors) takes over the meta line. */
-	const cardEyebrow = $derived(
-		connected
-			? account
-				? `Connected · ${account.name}`
-				: accountError
-					? 'Connected · profile unavailable'
-					: 'Connected'
-			: oauthConfigured
-				? 'Not connected'
-				: 'OAuth not configured'
-	);
+	/** Card eyebrow — connection state + account identity + public/private
+	   profile state. Stays put when transient status (test results,
+	   errors) takes over the meta line. The public/private suffix comes
+	   from `MeResponse.public` (docs/38 §"Recommendations" row 4); the
+	   API has no `PATCH /me` so this is display-only — the user toggles
+	   it in their visualizer.coffee account settings. We omit the suffix
+	   gracefully when an older `/me` cache lacks the field. */
+	const cardEyebrow = $derived.by(() => {
+		if (!connected) {
+			return oauthConfigured ? 'Not connected' : 'OAuth not configured';
+		}
+		if (!account) {
+			return accountError ? 'Connected · profile unavailable' : 'Connected';
+		}
+		const visibility =
+			typeof account.public === 'boolean'
+				? account.public
+					? ' · public profile'
+					: ' · private'
+				: '';
+		return `Connected · ${account.name}${visibility}`;
+	});
 
 	/** Status message shown in the card meta line — transient. */
 	const cardStatus = $derived.by(() => {
@@ -196,6 +205,19 @@
 			>
 				visualizer.coffee <i class="ph ph-arrow-square-out" aria-hidden="true"></i>
 			</a>
+			<!-- Public/private is settable only on visualizer.coffee — the
+			     spec has no `PATCH /me`, so Crema can only display the
+			     state and link out (docs/38 §"Recommendations" row 4). -->
+			{#if connected && account && typeof account.public === 'boolean'}
+				<a
+					class="st-visualizer-link"
+					href="https://visualizer.coffee/settings/profile"
+					target="_blank"
+					rel="noreferrer noopener"
+				>
+					change at visualizer.coffee <i class="ph ph-arrow-square-out" aria-hidden="true"></i>
+				</a>
+			{/if}
 		</div>
 	</div>
 	<div class="st-visualizer-actions">
