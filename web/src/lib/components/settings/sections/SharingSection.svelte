@@ -211,7 +211,7 @@
 			{#if connected && account && typeof account.public === 'boolean'}
 				<a
 					class="st-visualizer-link"
-					href="https://visualizer.coffee/settings/profile"
+					href="https://visualizer.coffee/profile/edit"
 					target="_blank"
 					rel="noreferrer noopener"
 				>
