@@ -625,6 +625,19 @@
 		return r != null && Number.isFinite(r) ? r.toFixed(2) : '0.00';
 	});
 	/**
+	 * Which resistance source the readout is currently displaying — drives
+	 * the unit label. Mirrors the `resistanceWeight ?? resistance` fallback
+	 * above so the unit is always in sync with the number above it. Flow-
+	 * based is `bar / (ml/s)² = bar·s²/ml²`; weight-based swaps `ml` → `g`
+	 * since the scale flow is in g/s. Reflects per-sample, so a shot that
+	 * starts unscaled and later pairs a scale auto-swaps mid-shot.
+	 */
+	const resistanceUnit = $derived.by<string>(() => {
+		const sample = pinnedSample ?? finalShotSample ?? tel;
+		const fromWeight = sample != null && sample.resistanceWeight != null;
+		return fromWeight ? 'bar·s²/g²' : 'bar·s²/ml²';
+	});
+	/**
 	 * Dispensed-water readout — the volume of water the pump has emitted,
 	 * integrated from `group_flow × Δt`. Matches the legacy de1app's
 	 * `water_dispensed` channel and the v2 export's `totals.water_dispensed`.
@@ -1030,7 +1043,7 @@
 						color="var(--tel-pressure)"
 						secondaryLabel="RESISTANCE"
 						secondaryValue={resistanceVal}
-						secondaryUnit="bar·s²/ml"
+						secondaryUnit={resistanceUnit}
 						secondaryColor="var(--tel-pressure-2)"
 					/>
 					<ChannelReadout
