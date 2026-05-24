@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "prepare": "svelte-kit sync || echo ''",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
-    "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch"
+    "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
+    "openapi": "openapi-typescript src/lib/visualizer/openapi.json -o src/lib/visualizer/openapi.d.ts"
   },
   "devDependencies": {
     "@sveltejs/adapter-static": "^3.0.10",
@@ -20,6 +21,7 @@
     "@types/node": "^25.8.0",
     "@types/web-bluetooth": "^0.0.21",
     "@vite-pwa/sveltekit": "^1.1.0",
+    "openapi-typescript": "^7.13.0",
     "svelte": "^5.55.7",
     "svelte-check": "^4.4.8",
     "tailwindcss": "^4.3.0",
