@@ -40,6 +40,7 @@
 		formatWeight
 	} from '$lib/settings';
 	import { getProfileStore, preinfuseSeconds, type CremaProfile } from '$lib/profiles';
+	import { getBeanStore, type Bean } from '$lib/bean';
 	import { getMaintenanceStore } from '$lib/maintenance';
 	import { getCremaAppContext } from '$lib/shell/app-context';
 	import { BrewParamState, type BrewParamSeed } from './brew-params.svelte';
@@ -299,6 +300,25 @@
 	const activeProfile = $derived(
 		profileStore.activeId ? profileStore.get(profileStore.activeId) : undefined
 	);
+
+	// ── Bean library — drives the bean half of the unified favourites strip ─
+	/** The shared bean library — pinned beans + roasters + active pointer. */
+	const beanLibrary = getBeanStore();
+	/**
+	 * The pinned beans shown alongside profiles in the Quick Sheet's unified
+	 * favourites strip. "Pinned" = favourited and not archived; an archived
+	 * bag is a finished one, which should not appear in the brew picker.
+	 */
+	const pinnedBeans = $derived(
+		beanLibrary.beans.filter((b) => b.favourite && b.archivedAt == null)
+	);
+	/**
+	 * Set the active bean from the strip — same idiom as `selectFavorite` for
+	 * profiles, so picking a bag from the QC strip activates it for the brew.
+	 */
+	function selectBean(bean: Bean): void {
+		beanLibrary.setActiveBean(bean.id);
+	}
 
 	// ── Quick Sheet local control state ──────────────────────────────────
 	/**
@@ -925,8 +945,8 @@
 					profile. Disabled when no profile is selected (matches the
 					Coffee button's no-profile gate). "Switch profile" used to
 					live here too — retired since the same affordance is in
-					the Profiles tab + the FavoritesStrip's pinned chips in
-					Quick Controls.
+					the Profiles tab + the unified FavoritesStrip's pinned chips
+					(profiles + beans) in Quick Controls.
 				-->
 				<button
 					class="crema-btn crema-btn-secondaryDark crema-btn-sm"
@@ -1182,8 +1202,12 @@
 			{params}
 			{pinnedProfiles}
 			selectedProfileId={profileStore.activeId}
+			{pinnedBeans}
+			roasters={beanLibrary.roasters}
+			activeBeanId={beanLibrary.activeBeanId}
 			open={quickSheetOpen}
 			onSelectFavorite={selectFavorite}
+			onSelectBean={selectBean}
 			onClose={() => (quickSheetOpen = false)}
 		/>
 	</div>
