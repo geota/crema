@@ -20,14 +20,19 @@
 	import { getHistoryStore } from '$lib/history';
 	import {
 		appendSyncLog,
+		directionPulls,
 		directionPushes,
 		drainQueue,
 		enqueue as enqueueSyncOp,
 		isConnected as isVisualizerConnected,
+		pullAllShots,
 		readSyncConfig,
+		reconcileShots,
+		storedShotFromWire,
 		updateSyncConfig,
 		uploadShot,
-		type SyncDirection
+		type SyncDirection,
+		type WireShot
 	} from '$lib/visualizer';
 	import { VisualizerError } from '$lib/bean';
 	import StGroup from '../StGroup.svelte';
@@ -43,6 +48,8 @@
 	let syncing = $state(false);
 	let lastResult = $state<BeanSyncResult | null>(null);
 	let logCollapsed = $state(true);
+	/** Pull-pagination progress — non-null only while shots are streaming in. */
+	let pullProgress = $state<{ fetched: number; page: number } | null>(null);
 
 	onMount(() => {
 		// Refresh in case another tab edited it while this one was open.
@@ -119,7 +126,36 @@
 					});
 				}
 			}
-			// 2. Shots — Backup push, no pull yet (Phase 2 follow-up).
+			// 2a. Shot pull — paginated. Walks `next_cursor` until exhausted
+			//     (page size 50 default). Progress drives a status line below.
+			if (directionPulls(config.direction.shots)) {
+				try {
+					const { shots: remote, truncated } = await pullAllShots(
+						config.lastSyncAt.shots ?? 0,
+						{
+							perPage: 50,
+							onProgress: (p) =>
+								(pullProgress = { fetched: p.fetched, page: p.page })
+						}
+					);
+					if (remote.length > 0) {
+						applyShotReconciliation(remote);
+					}
+					if (truncated) {
+						appendSyncLog({
+							direction: 'skip',
+							entity: 'shot',
+							id: '',
+							name: 'pull',
+							at: Date.now(),
+							error: 'Pull truncated at safety cap — re-run Sync to continue.'
+						});
+					}
+				} finally {
+					pullProgress = null;
+				}
+			}
+			// 2b. Shot push — upload any local shots that aren't on Visualizer.
 			if (directionPushes(config.direction.shots)) {
 				await uploadUnsyncedShots();
 				config = updateSyncConfig({
@@ -131,6 +167,45 @@
 			config = readSyncConfig();
 		} finally {
 			syncing = false;
+		}
+	}
+
+	/**
+	 * Apply the {@link reconcileShots} plan against the local history store.
+	 * - `add` → insertPulled (brand-new shot from remote)
+	 * - `bind` → bindVisualizerId (local shot existed pre-sign-in; adopt
+	 *   the remote id without creating a duplicate; de-dup signature flow
+	 *   from docs/36 §3)
+	 * - `update` → skipped for v1; shot telemetry is immutable per
+	 *   Visualizer's model, so the only mutable fields (notes, rating)
+	 *   would need their own patch path. Logged as "skip" to make the
+	 *   gap visible.
+	 */
+	function applyShotReconciliation(remote: WireShot[]): void {
+		const local = history.all;
+		const actions = reconcileShots(local, remote);
+		for (const action of actions) {
+			if (action.kind === 'add') {
+				const stored = storedShotFromWire(action.remote);
+				if (stored) history.insertPulled(stored);
+				appendSyncLog({
+					direction: 'pull',
+					entity: 'shot',
+					id: stored?.id ?? action.remote.id ?? '',
+					name: stored?.profileName ?? 'Shot',
+					at: Date.now()
+				});
+			} else if (action.kind === 'bind') {
+				history.bindVisualizerId(action.localId, action.visualizerId);
+				appendSyncLog({
+					direction: 'pull',
+					entity: 'shot',
+					id: action.localId,
+					name: 'Shot (bound)',
+					at: Date.now()
+				});
+			}
+			// `update` falls through — see docstring.
 		}
 	}
 
@@ -276,7 +351,9 @@
 
 		<StRow
 			title="Sync now"
-			sub="Run a one-shot full sync across every enabled entity."
+			sub={pullProgress
+				? `Pulling shots — ${pullProgress.fetched} fetched (page ${pullProgress.page + 1})…`
+				: 'Run a one-shot full sync across every enabled entity.'}
 		>
 			{#snippet control()}
 				<button

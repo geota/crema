@@ -236,24 +236,29 @@ export async function patchShot(
 }
 
 /**
- * Pull remote shots updated since a cursor (Unix epoch ms). Returns the
- * decoded `WireShot` rows + the next cursor (for pagination). When the
- * server returns no `next_cursor` we treat the page as final.
+ * Pull one page of remote shots updated since a cursor (Unix epoch ms).
+ * Returns the decoded `WireShot` rows + the next cursor when the server
+ * paginates. When the server returns no `next_cursor` we treat the page
+ * as final. Callers wanting the entire history should use
+ * {@link pullAllShots} which paginates this end-to-end.
  *
- * Naive single-request implementation for v1 per docs/36 §deferred:
- * paginated streaming for 1000+ shot accounts is a later cut.
+ * `perPage` defaults to 50 — small enough to keep each request fast,
+ * large enough that even a 1000-shot account converges in 20 round-trips.
  */
-export async function pullShots(sinceMs: number): Promise<{
+export async function pullShots(
+	sinceMs: number,
+	perPage = 50
+): Promise<{
 	shots: WireShot[];
 	nextCursor: number | null;
 }> {
 	if (!isConnected()) {
 		throw new VisualizerError(401, 'auth', 'Sign in to Visualizer first.');
 	}
-	const body = (await call(`/v1/shots?since=${Math.floor(sinceMs)}`)) as
-		| ListResponse<WireShot>
-		| WireShot[]
-		| null;
+	const since = Math.floor(sinceMs);
+	const body = (await call(
+		`/v1/shots?since=${since}&per_page=${perPage}`
+	)) as ListResponse<WireShot> | WireShot[] | null;
 	const shots = Array.isArray(body)
 		? body
 		: ((body?.data ?? []) as WireShot[]);
@@ -262,6 +267,63 @@ export async function pullShots(sinceMs: number): Promise<{
 			? body.next_cursor
 			: null;
 	return { shots, nextCursor };
+}
+
+/**
+ * Progress callback fired between pages when {@link pullAllShots}
+ * walks pagination. UIs can wire this to a progress bar or counter.
+ */
+export interface PullProgress {
+	/** Number of shots fetched so far across all pages. */
+	fetched: number;
+	/** Page index just completed (0-based). */
+	page: number;
+	/** Whether more pages remain. */
+	hasMore: boolean;
+}
+
+/**
+ * Pull every remote shot newer than `sinceMs`, walking the server's
+ * `next_cursor` pagination until exhausted. Yields the merged result + a
+ * per-page progress hook so UIs can render a progress bar during the
+ * initial sync of a large history (1000+ shots → ~20 round-trips at the
+ * default `perPage = 50`).
+ *
+ * **Safety cap**: walks at most `maxPages` pages (default 200 → 10k shots
+ * at perPage=50) so a malformed `next_cursor` loop can't pin the tab.
+ * Returns a partial result + `truncated: true` when the cap fires.
+ */
+export async function pullAllShots(
+	sinceMs: number,
+	opts: {
+		perPage?: number;
+		maxPages?: number;
+		onProgress?: (p: PullProgress) => void;
+	} = {}
+): Promise<{ shots: WireShot[]; truncated: boolean }> {
+	const perPage = opts.perPage ?? 50;
+	const maxPages = opts.maxPages ?? 200;
+	const all: WireShot[] = [];
+	let cursor = sinceMs;
+	for (let page = 0; page < maxPages; page++) {
+		const { shots, nextCursor } = await pullShots(cursor, perPage);
+		all.push(...shots);
+		opts.onProgress?.({
+			fetched: all.length,
+			page,
+			hasMore: nextCursor != null
+		});
+		if (nextCursor == null) {
+			return { shots: all, truncated: false };
+		}
+		// Advance the cursor. If the server returns the same cursor twice
+		// (broken pagination), break to avoid an infinite loop.
+		if (nextCursor <= cursor) {
+			return { shots: all, truncated: false };
+		}
+		cursor = nextCursor;
+	}
+	return { shots: all, truncated: true };
 }
 
 // Reconciliation, signature helpers, and the WireShot type live in
