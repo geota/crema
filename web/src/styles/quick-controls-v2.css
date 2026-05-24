@@ -960,11 +960,13 @@
 .qfstrip-wrap {
   display: grid;
   grid-template-columns: 200px 28px 1fr 28px;
-  /* `align-items: stretch` so every cell — search box, arrows, pill
-     strip — fills the grid row's height. The pill strip's natural
-     height (pills + their padding) sets the row; the search stretches
-     to match, ending up flush with the pill strip's bottom edge. */
-  align-items: stretch;
+  /* `align-items: stretch` (the default) made the search input stretch to
+     the row's tallest cell — the pill scroll-container ends up taller than
+     a single pill because of its own padding/scrollbar gutter, so the
+     search visually inflated. `center` lets every cell sit at its natural
+     content height; the search ends up the same height as the pills it
+     borders. */
+  align-items: center;
   gap: 8px;
   margin-bottom: 14px;
 }
@@ -979,8 +981,11 @@
 .qfstrip-search-inline {
   display: flex; align-items: center;
   gap: 6px;
-  /* No explicit height — the grid's align-items:stretch lets this fill
-     the row, so the bottom edge always aligns with the pill strip's. */
+  /* Match the pill height. .qfstrip-item content is ~30px tall (the
+     ProfilePreview compact thumbnail + the BeanPill avatar) plus 7px
+     vertical padding on each side → ~44px effective height. */
+  height: 44px;
+  box-sizing: border-box;
   padding: 0 12px;
   background: rgba(var(--tint-rgb), 0.02);
   border: 1px solid rgba(var(--tint-rgb), 0.08);
