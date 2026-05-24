@@ -66,13 +66,31 @@
 		onchange({ field, direction: value.direction });
 	}
 
-	function onWindowClick(e: MouseEvent): void {
+	// Outside-click dismissal — register the window listener ONLY while the
+	// menu is open, and only AFTER the click that opened it has fully bubbled
+	// through. The previous always-on `<svelte:window onclick>` racing with a
+	// stopPropagation'd toggle was brittle: any layout that swallowed the
+	// stopped event (or any extra wrapper that bubbled before window) could
+	// see `open=true`, then immediately flip it back to `false` on the same
+	// gesture. Using `mousedown` (capture phase) attached one microtask after
+	// the opening click guarantees the opening gesture can never also close
+	// the menu.
+	$effect(() => {
 		if (!open) return;
-		if (rootEl && !rootEl.contains(e.target as Node)) open = false;
-	}
+		let attached = false;
+		const handler = (e: MouseEvent) => {
+			if (!rootEl) return;
+			if (!rootEl.contains(e.target as Node)) open = false;
+		};
+		queueMicrotask(() => {
+			window.addEventListener('mousedown', handler, true);
+			attached = true;
+		});
+		return () => {
+			if (attached) window.removeEventListener('mousedown', handler, true);
+		};
+	});
 </script>
-
-<svelte:window onclick={onWindowClick} />
 
 <div class="sortpill" bind:this={rootEl}>
 	<button
@@ -139,7 +157,12 @@
 		font-family: var(--font-sans);
 		font-size: 12px;
 		color: var(--fg-1);
-		overflow: hidden;
+		/* Note: NO `overflow: hidden` here. The dropdown menu is positioned
+		   absolute relative to this pill and `overflow: hidden` would clip
+		   it invisibly — which is exactly what hid the dropdown previously.
+		   The pill halves themselves stay inside the rounded border via the
+		   button's own hover background being inside the border, so the
+		   visual seam still reads clean without parent clipping. */
 	}
 	.sortpill-dir,
 	.sortpill-field {
@@ -156,9 +179,18 @@
 			background var(--dur-1) var(--ease),
 			color var(--dur-1) var(--ease);
 	}
+	/* Half-rounding the two pill halves replaces the removed
+	   `overflow: hidden` on `.sortpill` so hover backgrounds still hug the
+	   pill's rounded outline. */
 	.sortpill-dir {
 		padding: 7px 10px;
 		color: rgba(var(--tint-rgb), 0.7);
+		border-top-left-radius: var(--radius-pill);
+		border-bottom-left-radius: var(--radius-pill);
+	}
+	.sortpill-field {
+		border-top-right-radius: var(--radius-pill);
+		border-bottom-right-radius: var(--radius-pill);
 	}
 	.sortpill-dir i {
 		font-size: 13px;
