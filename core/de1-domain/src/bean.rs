@@ -354,6 +354,7 @@ pub struct Bean {
     /// Pinned to the brew-page bean picker strip.
     pub favourite: bool,
     /// Unix epoch ms when the bag was archived; `None` = active.
+    #[typeshare(serialized_as = "Option<I64>")]
     pub archived_at: Option<i64>,
     /// Bean-scoped grinder name — `"Niche Zero"`. Bean-scoped because a
     /// grind setting only means something paired with the grinder it
@@ -374,6 +375,7 @@ pub struct Bean {
     /// and the local tombstone is garbage-collected. Defaults to
     /// `None` so older `Bean` JSON deserialises cleanly.
     #[serde(default)]
+    #[typeshare(serialized_as = "Option<I64>")]
     pub deleted_at: Option<i64>,
     /// Beanconqueror `bean.config.uuid` from a Bc import. Tracks
     /// provenance so a re-import skips beans we already know.
@@ -387,8 +389,10 @@ pub struct Bean {
     /// nested object.
     pub metadata: serde_json::Value,
     /// Unix epoch ms when this bag was created.
+    #[typeshare(serialized_as = "I64")]
     pub created_at: i64,
     /// Unix epoch ms when this bag was last updated.
+    #[typeshare(serialized_as = "I64")]
     pub updated_at: i64,
 }
 
@@ -525,12 +529,15 @@ pub struct Roaster {
     /// active. See [`Bean::deleted_at`] for the rationale. Defaults to
     /// `None` so older JSON deserialises cleanly.
     #[serde(default)]
+    #[typeshare(serialized_as = "Option<I64>")]
     pub deleted_at: Option<i64>,
     /// Open JSON metadata — escape valve symmetric with [`Bean::metadata`].
     pub metadata: serde_json::Value,
     /// Unix epoch ms.
+    #[typeshare(serialized_as = "I64")]
     pub created_at: i64,
     /// Unix epoch ms.
+    #[typeshare(serialized_as = "I64")]
     pub updated_at: i64,
 }
 

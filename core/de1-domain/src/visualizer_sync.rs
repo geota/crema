@@ -16,13 +16,11 @@
 //! emit the same hex string for the same input — there are unit tests
 //! that pin the algorithm.
 //!
-//! Why no `#[typeshare]`: the existing TS shim
-//! (`shot-sync-signatures.ts`) is the canonical contract that
-//! pre-dates the port, and the cross-crate `i64` typeshare bug in
-//! `bean.rs` blocks `typeshare-cli` for the whole `de1-domain`
-//! tree until that one is resolved. The shapes here are
-//! hand-mirrored on both halves of the split, so a drift would
-//! surface as a test failure on the JSON-bridge side.
+//! The wire types ([`WireShot`], [`LocalShotRef`], [`ReconcileAction`])
+//! are `#[typeshare]`-emitted into `core/bindings/crema-core.{ts,kt}`
+//! so the shell-side `WireShot` / `ReconcileAction` shapes stay
+//! mechanically in sync with the Rust source. `i64` fields ride as the
+//! `I64` alias (see `core/typeshare.toml` — TS `number`, Kotlin `Long`).
 //!
 //! Note: `storedShotFromWire` (the wire → local-`StoredShot`
 //! materializer) stays in the shell — it builds a shell-specific
@@ -30,6 +28,7 @@
 //! `localStorage` constructors. Only the pure-data fns move.
 
 use serde::{Deserialize, Serialize};
+use typeshare::typeshare;
 
 // ── Types ─────────────────────────────────────────────────────────────
 
@@ -39,16 +38,18 @@ use serde::{Deserialize, Serialize};
 /// `shot-sync-signatures.ts`. Unix MS (converted at the spec boundary
 /// from the spec's unix-sec `clock` / `updated_at`).
 ///
-/// Plain `#[derive(Serialize, Deserialize)]` — the wasm / FFI bridges
-/// JSON-marshal this. `#[serde(default)]` on the optional fields so a
-/// shell that omits them deserialises cleanly.
+/// `#[serde(default)]` on the optional fields so a shell that omits them
+/// deserialises cleanly. The wasm / FFI bridges JSON-marshal this.
+#[typeshare]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WireShot {
     /// Visualizer shot id — the remote primary key.
     pub id: String,
     /// Shot start timestamp, unix MS (converted from spec's unix-sec `clock`).
+    #[typeshare(serialized_as = "I64")]
     pub clock: i64,
     /// Total shot duration, milliseconds.
+    #[typeshare(serialized_as = "I64")]
     pub duration_ms: i64,
     /// Display name of the profile pulled.
     pub profile_title: Option<String>,
@@ -63,6 +64,7 @@ pub struct WireShot {
     /// Last server-side update, unix MS (from spec's unix-sec
     /// `updated_at`). Drives LWW conflict resolution.
     #[serde(default)]
+    #[typeshare(serialized_as = "Option<I64>")]
     pub updated_at_ms: Option<i64>,
 }
 
@@ -76,14 +78,17 @@ pub struct WireShot {
 /// 1:1 with the web shell's `StoredShot`, so callers can hand a
 /// `StoredShot` straight to `JSON.stringify` and `serde_json::from_str`
 /// parses it cleanly (extra fields are ignored).
+#[typeshare]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalShotRef {
     /// Local stable id — `shot:<uuid>` in the web shell.
     pub id: String,
     /// Unix epoch ms the shot completed.
+    #[typeshare(serialized_as = "I64")]
     pub completed_at: i64,
     /// Total shot duration, milliseconds.
+    #[typeshare(serialized_as = "I64")]
     pub duration: i64,
     /// Active profile's name when the shot was pulled, or `null`.
     #[serde(default)]
@@ -98,6 +103,7 @@ pub struct LocalShotRef {
     /// Unix epoch ms when this shot was soft-deleted, or `null` / missing
     /// when active. Tombstoned locals must NOT bind to a remote.
     #[serde(default)]
+    #[typeshare(serialized_as = "Option<I64>")]
     pub deleted_at: Option<i64>,
 }
 
@@ -105,6 +111,14 @@ pub struct LocalShotRef {
 /// wire form is an adjacently-tagged enum so the TS shell can pattern-
 /// match the `kind` discriminator the same way the existing
 /// `ReconcileAction` does.
+// No `#[typeshare]`: typeshare 1.x requires adjacently-tagged enums
+// (`#[serde(tag, content)]`) for algebraic types. The wire contract
+// here is intentionally internally-tagged — flat `{ kind, ...fields }` —
+// because the existing TS callers in `shot-sync.ts` and the test fixtures
+// pattern-match on `kind` without unwrapping a `content` envelope. The
+// TS mirror lives in `web/src/lib/visualizer/shot-sync-signatures.ts`;
+// the JSON bridge (`reconcile_shots_json` in `de1-wasm`) keeps the two
+// in sync structurally, and the unit tests on either side pin the shape.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum ReconcileAction {
