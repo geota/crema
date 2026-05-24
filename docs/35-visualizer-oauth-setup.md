@@ -45,14 +45,46 @@ the path is always `/auth/visualizer/callback`. List each origin you sign
 in from:
 
 ```
-http://localhost:5173/auth/visualizer/callback
-https://crema.coffee/auth/visualizer/callback
+https://localhost:5173/auth/visualizer/callback        # dev (HTTPS — see §2a)
+https://crema.coffee/auth/visualizer/callback          # prod
 https://<your-cf-pages-preview>.pages.dev/auth/visualizer/callback
 ```
 
 Doorkeeper requires an exact match including scheme, host, and port — wildcard
 patterns are not supported. Add each origin as a separate line in the
 **Redirect URI** field.
+
+> **Security:** keep your `localhost` redirect URI on the **dev** Doorkeeper
+> Application only. If it's whitelisted on the **prod** app, an attacker can
+> run a malicious page on `https://localhost:5173`, trick a signed-in user into
+> starting an OAuth flow with the prod client ID, and capture the access token
+> when Visualizer redirects back to their localhost page. PKCE doesn't help
+> here because the attacker generated the verifier — the redirect-URI
+> whitelist is the only thing keeping that attack out.
+
+## 2a. Dev HTTPS via mkcert
+
+Doorkeeper's `force_ssl_in_redirect_uri` is `true` on visualizer.coffee's
+production instance — it rejects `http://` redirect URIs even for localhost.
+Run `pnpm dev` over HTTPS with a locally-trusted cert so you can register
+`https://localhost:5173/...` on your dev Application.
+
+```bash
+brew install mkcert
+mkcert -install                                 # one-time, installs a local CA
+cd web
+mkcert localhost 127.0.0.1                      # → localhost+1.pem + localhost+1-key.pem
+```
+
+The `web/vite.config.ts` `server.https` block auto-detects the pair: if
+the `.pem` files exist, `pnpm dev` serves `https://localhost:5173`; if they
+don't, it falls back to plain `http://localhost:5173` (so a fresh checkout
+still runs without ceremony — you only need the certs when actually
+testing the OAuth flow). The `.pem` files are gitignored
+(`web/.gitignore` `*.pem`).
+
+`pnpm build` and the adapter-static deploy are unaffected — production
+HTTPS is handled by your hosting (Cloudflare Pages, etc.), not by Vite.
 
 ## 3. Configure Crema with the Client UID
 

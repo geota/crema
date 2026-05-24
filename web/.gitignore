@@ -17,6 +17,12 @@ dev-dist/
 .env.local
 .env.*.local
 
+# mkcert-generated dev HTTPS certs. Visualizer's Doorkeeper rejects http://
+# redirect URIs; running `pnpm dev` on https://localhost lets us register a
+# dev OAuth Application with an HTTPS redirect URI. Generate with
+# `mkcert localhost 127.0.0.1` inside web/. See docs/35-visualizer-oauth-setup.md.
+*.pem
+
 # OS / editor
 .DS_Store
 .vscode/
