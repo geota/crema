@@ -187,47 +187,10 @@
 	sub="Sync your bean library with Visualizer so a second device picks up where you left off."
 >
 	{#if !connected}
-		<!-- Sign-in is owned by the Visualizer card in SharingSection — once
-		     connected, this section renders the connected-state details
-		     (account, Test, Sync, log). When NOT connected, render nothing;
-		     SharingSection only mounts this component while `connected`. -->
+		<!-- Sign-in + account identity + Test + Disconnect live in the
+		     Visualizer card (SharingSection). This component only renders
+		     when connected, and only owns Sync now + the last-sync log. -->
 	{:else}
-		<StRow
-			title={accountLabel}
-			sub={accountError
-				? `Signed in, but couldn't fetch your profile: ${accountError}`
-				: connectStatus.kind === 'ok'
-					? connectStatus.message
-					: connectStatus.kind === 'error'
-						? connectStatus.message
-						: connectStatus.kind === 'testing'
-							? 'Testing…'
-							: settings.premium === false
-								? 'Connected (free tier — read-only sync).'
-								: 'Connected.'}
-		>
-			{#snippet control()}
-				<div class="bs-row-actions">
-					<button
-						type="button"
-						class="bs-btn"
-						disabled={connectStatus.kind === 'testing'}
-						onclick={onTest}
-					>
-						<i class="ph ph-plugs-connected" aria-hidden="true"></i>
-						Test
-					</button>
-					<button
-						type="button"
-						class="bs-btn bs-btn-danger"
-						onclick={onDisconnect}
-					>
-						<i class="ph ph-sign-out" aria-hidden="true"></i>
-						Disconnect
-					</button>
-				</div>
-			{/snippet}
-		</StRow>
 		<StRow
 			title="Sync now"
 			sub={`${library.beans.length} bag(s), ${library.roasters.length} roaster(s) in your library. Last sync: ${fmtTime(settings.lastSyncAt)}.`}
@@ -281,11 +244,6 @@
 </StGroup>
 
 <style>
-	.bs-row-actions {
-		display: inline-flex;
-		gap: 8px;
-		align-items: center;
-	}
 	.bs-btn {
 		display: inline-flex;
 		align-items: center;
@@ -312,10 +270,6 @@
 	}
 	.bs-btn-primary:hover:not([disabled]) {
 		background: var(--copper-600);
-	}
-	.bs-btn-danger {
-		color: var(--danger);
-		border-color: rgba(var(--danger-rgb, 200, 80, 80), 0.3);
 	}
 	.bs-spinner {
 		animation: bs-spin 1.1s linear infinite;
