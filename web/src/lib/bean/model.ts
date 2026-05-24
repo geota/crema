@@ -90,6 +90,14 @@ export interface Bean {
 	favourite: boolean;
 	/** Unix epoch ms; `null` = active. */
 	archivedAt: number | null;
+	/**
+	 * Unix epoch ms when this bag was soft-deleted, or `null` when
+	 * active. Required for cross-device sync tombstone propagation
+	 * (docs/36 §3): the next sync push DELETEs the remote row, then
+	 * garbage-collects the local tombstone. The library UI filters
+	 * tombstones out everywhere except the sync layer.
+	 */
+	deletedAt: number | null;
 	grinder: string;
 	grinderSetting: string;
 	/**
@@ -135,6 +143,7 @@ export function blankBean(id?: string): Bean {
 		notes: '',
 		favourite: false,
 		archivedAt: null,
+		deletedAt: null,
 		grinder: '',
 		grinderSetting: '',
 		tags: [],
@@ -180,6 +189,12 @@ export interface Roaster {
 	 */
 	canonicalRoasterId: string | null;
 	visualizerId: string | null;
+	/**
+	 * Unix epoch ms when this roaster was soft-deleted, or `null` when
+	 * active. Mirrors {@link Bean.deletedAt} (docs/36 §3): the next sync
+	 * push DELETEs the remote row, then GC's the local tombstone.
+	 */
+	deletedAt: number | null;
 	metadata: Record<string, unknown>;
 	createdAt: number;
 	updatedAt: number;
@@ -198,6 +213,7 @@ export function blankRoaster(name: string, id?: string): Roaster {
 		notes: '',
 		canonicalRoasterId: null,
 		visualizerId: null,
+		deletedAt: null,
 		metadata: {},
 		createdAt: now,
 		updatedAt: now
@@ -440,6 +456,7 @@ export function coerceBean(raw: unknown): Bean | null {
 	if (typeof obj.notes === 'string') base.notes = obj.notes;
 	if (typeof obj.favourite === 'boolean') base.favourite = obj.favourite;
 	if (typeof obj.archivedAt === 'number') base.archivedAt = obj.archivedAt;
+	if (typeof obj.deletedAt === 'number') base.deletedAt = obj.deletedAt;
 	if (typeof obj.grinder === 'string') base.grinder = obj.grinder;
 	if (typeof obj.grinderSetting === 'string') base.grinderSetting = obj.grinderSetting;
 	if (Array.isArray(obj.tags)) {
@@ -470,6 +487,7 @@ export function coerceRoaster(raw: unknown): Roaster | null {
 	if (typeof obj.canonicalRoasterId === 'string')
 		base.canonicalRoasterId = obj.canonicalRoasterId;
 	if (typeof obj.visualizerId === 'string') base.visualizerId = obj.visualizerId;
+	if (typeof obj.deletedAt === 'number') base.deletedAt = obj.deletedAt;
 	if (typeof obj.metadata === 'object' && obj.metadata !== null) {
 		base.metadata = obj.metadata as Record<string, unknown>;
 	}

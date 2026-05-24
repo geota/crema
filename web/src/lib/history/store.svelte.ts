@@ -71,10 +71,22 @@ export interface ShotCompletion {
 /** The reactive shot-history library. One instance per app — {@link getHistoryStore}. */
 export class HistoryStore {
 	/** The recorded shots, newest first. Loaded from localStorage. */
-	private shots = $state.raw<StoredShot[]>(readJson<StoredShot[]>(HISTORY_KEY, []));
+	private shots = $state.raw<StoredShot[]>(loadShots());
 
-	/** The full history, newest first. Reactive: a new record re-renders the list. */
+	/**
+	 * The user-visible history, newest first. Tombstones (`deletedAt`
+	 * set) are filtered out — they only exist for the sync layer to push
+	 * a remote DELETE. Reactive: a new record re-renders the list.
+	 */
 	get all(): StoredShot[] {
+		return this.shots.filter((s) => s.deletedAt == null);
+	}
+
+	/**
+	 * Every stored shot including soft-deleted tombstones. The sync layer
+	 * reads this so DELETEs can propagate; the UI must use {@link all}.
+	 */
+	get rawAll(): StoredShot[] {
 		return this.shots;
 	}
 
@@ -152,9 +164,66 @@ export class HistoryStore {
 		this.persist();
 	}
 
-	/** Delete a recorded shot by id and persist. */
+	/**
+	 * Soft-delete a recorded shot by id and persist. The row stays in
+	 * storage with `deletedAt` stamped so the next Visualizer sync can
+	 * push a DELETE for `visualizerId` and garbage-collect the
+	 * tombstone after the remote acknowledges. The History UI filters
+	 * tombstones out via {@link all}.
+	 *
+	 * If the shot has no `visualizerId` (never uploaded), the row is
+	 * removed outright — there is nothing to propagate to a remote.
+	 */
 	delete(id: string): void {
+		const idx = this.shots.findIndex((s) => s.id === id);
+		if (idx < 0) return;
+		const target = this.shots[idx];
+		if (!target.visualizerId) {
+			// Never synced — hard delete is safe.
+			this.shots = this.shots.filter((s) => s.id !== id);
+		} else {
+			this.shots = [
+				...this.shots.slice(0, idx),
+				{ ...target, deletedAt: Date.now() },
+				...this.shots.slice(idx + 1)
+			];
+		}
+		this.persist();
+	}
+
+	/**
+	 * Hard-remove a shot from storage. Called by the sync layer once
+	 * the remote DELETE has succeeded for a tombstoned row, so the
+	 * tombstone doesn't bloat localStorage forever.
+	 */
+	purgeTombstone(id: string): void {
 		this.shots = this.shots.filter((s) => s.id !== id);
+		this.persist();
+	}
+
+	/**
+	 * Stamp the Visualizer remote id onto a local shot — called by the
+	 * sync layer once an upload returns the remote `id`. Persists, so a
+	 * reload sees the binding.
+	 */
+	bindVisualizerId(id: string, visualizerId: string): void {
+		const idx = this.shots.findIndex((s) => s.id === id);
+		if (idx < 0) return;
+		this.shots = [
+			...this.shots.slice(0, idx),
+			{ ...this.shots[idx], visualizerId },
+			...this.shots.slice(idx + 1)
+		];
+		this.persist();
+	}
+
+	/**
+	 * Insert a shot pulled from Visualizer. Caller has already mapped
+	 * the wire row onto a `StoredShot` shape (with `visualizerId` set)
+	 * and verified de-dup. Prepends newest-first and persists.
+	 */
+	insertPulled(shot: StoredShot): void {
+		this.shots = [shot, ...this.shots].slice(0, MAX_RECORDS);
 		this.persist();
 	}
 
@@ -263,6 +332,32 @@ function beanFromImported(label: string | null): ShotBean | null {
 	const roaster = parts[0] ?? trimmed;
 	const type = parts[1] ?? '';
 	return { roaster, type, roastedOn: null, roastLevel: null };
+}
+
+/**
+ * Read the persisted history and coerce each row through a defensive
+ * normaliser so legacy records without `visualizerId` / `deletedAt`
+ * still parse cleanly (the fields are optional on the type; absent
+ * keys leave the rows in their "never synced, never deleted" default).
+ */
+function loadShots(): StoredShot[] {
+	const raw = readJson<unknown[]>(HISTORY_KEY, []);
+	if (!Array.isArray(raw)) return [];
+	const out: StoredShot[] = [];
+	for (const item of raw) {
+		if (typeof item !== 'object' || item === null) continue;
+		const obj = item as Record<string, unknown>;
+		if (typeof obj.id !== 'string') continue;
+		// Trust the shape for the existing fields — they have been
+		// stable through v2 — and only normalise the new sync fields
+		// so missing keys become `null`, not `undefined`.
+		out.push({
+			...(obj as unknown as StoredShot),
+			visualizerId: typeof obj.visualizerId === 'string' ? obj.visualizerId : null,
+			deletedAt: typeof obj.deletedAt === 'number' ? obj.deletedAt : null
+		});
+	}
+	return out;
 }
 
 /** The process-wide singleton — one history shared by every route. */
