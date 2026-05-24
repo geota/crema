@@ -981,10 +981,10 @@
 .qfstrip-search-inline {
   display: flex; align-items: center;
   gap: 6px;
-  /* Match the .qfstrip-arrow height (32px) so the search reads at the
-     same row-height as the pill row's other controls. Padding stays
-     narrow because the height constraint owns the vertical metric. */
-  height: 32px;
+  /* Match the pill height. .qfstrip-item content is ~30px tall (the
+     ProfilePreview compact thumbnail + the BeanPill avatar) plus 7px
+     vertical padding on each side → ~44px effective height. */
+  height: 44px;
   box-sizing: border-box;
   padding: 0 12px;
   background: rgba(var(--tint-rgb), 0.02);
