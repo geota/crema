@@ -603,7 +603,13 @@
 		display: flex;
 		align-items: center;
 		gap: 6px;
-		margin-top: 8px;
+		/* Pin to the bottom of the body — every tile's action row sits on the
+		   same baseline regardless of how much content fills the rows above.
+		   `.bn-tile-body` is column-flex, so `margin-top: auto` consumes all
+		   leftover vertical space. `padding-top` preserves the visual breath
+		   between the last content row (burn-down or stats) and the buttons. */
+		margin-top: auto;
+		padding-top: 8px;
 	}
 	.bn-tile-action {
 		flex: 1 1 auto;
