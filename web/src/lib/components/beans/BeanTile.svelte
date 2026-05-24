@@ -168,11 +168,10 @@
 		{/if}
 	</div>
 
-	<!-- Body -->
-	<div class="bn-tile-body">
+	<!-- Header group — sits beside the avatar in the second grid column. -->
+	<div class="bn-tile-head">
 		<div class="bn-tile-roaster">{roaster?.name ?? 'No roaster'}</div>
 		<div class="bn-tile-name">{bean.name || 'Untitled bag'}</div>
-
 		<div class="bn-tile-meta">
 			<span class="bn-tile-origin">
 				{#if bean.origin.country}
@@ -182,7 +181,6 @@
 				{/if}
 			</span>
 		</div>
-
 		<div class="bn-tile-tags">
 			{#if bean.roastLevel != null}
 				<span class="bn-tile-roastpill">{roastBand5(bean.roastLevel)}</span>
@@ -196,108 +194,119 @@
 				<span class="bn-tile-pill bn-tile-pill-tag">+{overflowTags}</span>
 			{/if}
 		</div>
+	</div>
 
-		<!-- Metrics group — stats row + burn-down sit as one unit so the body
-		     layout is consistent whether or not a given bag has a bag size,
-		     frozen / opened date, or rating set. -->
-		<div class="bn-tile-metrics">
-			<div class="bn-tile-stats">
-				<div class="bn-tile-stat">
-					<span class="bn-tile-stat-dot" style:background={freshColor}></span>
-					<div class="bn-tile-stat-text">
-						<span class="bn-tile-stat-val">{days != null ? days + 'd' : '—'}</span>
-						<span class="bn-tile-stat-lab">off roast</span>
-					</div>
-				</div>
-				{#if frozenDays != null}
-					<div class="bn-tile-stat">
-						<i class="ph ph-snowflake" aria-hidden="true"></i>
-						<div class="bn-tile-stat-text">
-							<span class="bn-tile-stat-val">{frozenDays}d</span>
-							<span class="bn-tile-stat-lab">frozen</span>
-						</div>
-					</div>
-				{:else if openedDays != null}
-					<div class="bn-tile-stat">
-						<i class="ph ph-package" aria-hidden="true"></i>
-						<div class="bn-tile-stat-text">
-							<span class="bn-tile-stat-val">{openedDays}d</span>
-							<span class="bn-tile-stat-lab">open</span>
-						</div>
-					</div>
-				{/if}
-				<div class="bn-tile-stat bn-tile-stat-rating" aria-label="{bean.rating} of 5">
-					{#each [1, 2, 3, 4, 5] as i (i)}
-						<i
-							class={i <= bean.rating ? 'ph-fill ph-star' : 'ph ph-star'}
-							aria-hidden="true"
-						></i>
-					{/each}
+	<!-- Metrics group — spans both grid columns so the stats + burn-down use
+	     the full card width (avatar column included). Fixed-slot 3-column grid
+	     so the off-roast / lifecycle / rating slots stay put regardless of
+	     which fields a given bag has set. -->
+	<div class="bn-tile-metrics">
+		<div class="bn-tile-stats">
+			<div class="bn-tile-stat">
+				<span class="bn-tile-stat-dot" style:background={freshColor}></span>
+				<div class="bn-tile-stat-text">
+					<span class="bn-tile-stat-val">{days != null ? days + 'd' : '—'}</span>
+					<span class="bn-tile-stat-lab">off roast</span>
 				</div>
 			</div>
+			<div class="bn-tile-stat bn-tile-stat-lifecycle">
+				{#if frozenDays != null}
+					<i class="ph ph-snowflake" aria-hidden="true"></i>
+					<div class="bn-tile-stat-text">
+						<span class="bn-tile-stat-val">{frozenDays}d</span>
+						<span class="bn-tile-stat-lab">frozen</span>
+					</div>
+				{:else if openedDays != null}
+					<i class="ph ph-package" aria-hidden="true"></i>
+					<div class="bn-tile-stat-text">
+						<span class="bn-tile-stat-val">{openedDays}d</span>
+						<span class="bn-tile-stat-lab">open</span>
+					</div>
+				{:else}
+					<!-- Placeholder reserves the slot so off-roast + rating don't
+					     drift when a bag has neither frozen nor opened set. -->
+					<span class="bn-tile-stat-empty" aria-hidden="true">—</span>
+				{/if}
+			</div>
+			<div class="bn-tile-stat bn-tile-stat-rating" aria-label="{bean.rating} of 5">
+				{#each [1, 2, 3, 4, 5] as i (i)}
+					<i
+						class={i <= bean.rating ? 'ph-fill ph-star' : 'ph ph-star'}
+						aria-hidden="true"
+					></i>
+				{/each}
+			</div>
+		</div>
 
-			{#if burnPct != null}
+		<div
+			class="bn-tile-burn"
+			class:bn-tile-burn-empty={burnPct == null}
+			title={burnPct != null
+				? `${bean.remainingG.toFixed(0)} g of ${bean.bagSizeG.toFixed(0)} g`
+				: 'No bag size set'}
+		>
+			<div class="bn-tile-burn-track">
 				<div
-					class="bn-tile-burn"
-					title="{bean.remainingG.toFixed(0)} g of {bean.bagSizeG.toFixed(0)} g"
-				>
-					<div class="bn-tile-burn-track">
-						<div class="bn-tile-burn-fill" style:width="{burnPct}%"></div>
-					</div>
-					<div class="bn-tile-burn-text">
-						<span class="bn-tile-burn-rem"
-							>{bean.remainingG.toFixed(0)}<em>g</em></span
-						>
-						<span class="bn-tile-burn-total"
-							>/ {bean.bagSizeG.toFixed(0)}<em>g</em></span
-						>
-					</div>
-				</div>
-			{/if}
+					class="bn-tile-burn-fill"
+					style:width={burnPct != null ? `${burnPct}%` : '0%'}
+				></div>
+			</div>
+			<div class="bn-tile-burn-text">
+				{#if burnPct != null}
+					<span class="bn-tile-burn-rem"
+						>{bean.remainingG.toFixed(0)}<em>g</em></span
+					>
+					<span class="bn-tile-burn-total"
+						>/ {bean.bagSizeG.toFixed(0)}<em>g</em></span
+					>
+				{:else}
+					<span class="bn-tile-burn-total">No bag size</span>
+				{/if}
+			</div>
 		</div>
+	</div>
 
-		<!-- Action row (matches /profiles ProfileCard pattern) -->
-		<div class="bn-tile-actions">
-			<button
-				type="button"
-				class="bn-tile-action bn-tile-action-primary"
-				class:is-on={isActive}
-				onclick={onSetActiveClick}
-			>
-				<i
-					class={isActive ? 'ph-fill ph-check-circle' : 'ph ph-coffee'}
-					aria-hidden="true"
-				></i>
-				<span>{isActive ? 'Active on Brew' : 'Set active'}</span>
-			</button>
-			<button
-				type="button"
-				class="bn-tile-action-icon"
-				title="Duplicate"
-				aria-label="Duplicate"
-				onclick={onDuplicateClick}
-			>
-				<i class="ph ph-copy" aria-hidden="true"></i>
-			</button>
-			<button
-				type="button"
-				class="bn-tile-action-icon"
-				title="Edit"
-				aria-label="Edit"
-				onclick={onEditClick}
-			>
-				<i class="ph ph-pencil" aria-hidden="true"></i>
-			</button>
-			<button
-				type="button"
-				class="bn-tile-action-icon bn-tile-action-icon-danger"
-				title="Delete"
-				aria-label="Delete"
-				onclick={onDeleteClick}
-			>
-				<i class="ph ph-trash" aria-hidden="true"></i>
-			</button>
-		</div>
+	<!-- Action row — spans both grid columns to match the metrics row. -->
+	<div class="bn-tile-actions">
+		<button
+			type="button"
+			class="bn-tile-action bn-tile-action-primary"
+			class:is-on={isActive}
+			onclick={onSetActiveClick}
+		>
+			<i
+				class={isActive ? 'ph-fill ph-check-circle' : 'ph ph-coffee'}
+				aria-hidden="true"
+			></i>
+			<span>{isActive ? 'Active on Brew' : 'Set active'}</span>
+		</button>
+		<button
+			type="button"
+			class="bn-tile-action-icon"
+			title="Duplicate"
+			aria-label="Duplicate"
+			onclick={onDuplicateClick}
+		>
+			<i class="ph ph-copy" aria-hidden="true"></i>
+		</button>
+		<button
+			type="button"
+			class="bn-tile-action-icon"
+			title="Edit"
+			aria-label="Edit"
+			onclick={onEditClick}
+		>
+			<i class="ph ph-pencil" aria-hidden="true"></i>
+		</button>
+		<button
+			type="button"
+			class="bn-tile-action-icon bn-tile-action-icon-danger"
+			title="Delete"
+			aria-label="Delete"
+			onclick={onDeleteClick}
+		>
+			<i class="ph ph-trash" aria-hidden="true"></i>
+		</button>
 	</div>
 </div>
 
@@ -306,7 +315,17 @@
 		position: relative;
 		display: grid;
 		grid-template-columns: 88px 1fr;
-		gap: 16px;
+		/* Three named rows: avatar + header (side-by-side), then metrics +
+		   actions span the full width. Letting the bottom rows cross both
+		   columns is what makes the burn-down + action buttons use the
+		   whole card width instead of being confined to the right column. */
+		grid-template-areas:
+			'avatar head'
+			'metrics metrics'
+			'actions actions';
+		grid-template-rows: auto 1fr auto;
+		column-gap: 16px;
+		row-gap: 12px;
 		background: rgba(var(--tint-rgb), 0.04);
 		border: 1px solid rgba(var(--tint-rgb), 0.08);
 		border-radius: var(--radius-lg, 14px);
@@ -375,8 +394,9 @@
 		color: rgba(var(--tint-rgb), 0.6);
 	}
 
-	/* Avatar (left column) */
+	/* Avatar — sits in the `avatar` grid area in the top row beside header. */
 	.bn-tile-avatar {
+		grid-area: avatar;
 		position: relative;
 		width: 88px;
 		height: 88px;
@@ -424,19 +444,16 @@
 	}
 
 	/* Body (right column) */
-	.bn-tile-body {
+	/* Header group — sits in the `head` grid area beside the avatar.
+	   The padding-right clears the absolutely-positioned star, which only
+	   overlaps these top rows; metrics + actions below span full width. */
+	.bn-tile-head {
+		grid-area: head;
 		display: flex;
 		flex-direction: column;
 		gap: 4px;
 		min-width: 0;
 		min-height: 0;
-		/* Padding-right was on the body; that squeezed the stats row, burn-down
-		   bar, and action buttons unnecessarily. The pin star only overlaps
-		   the top header rows — only those get the clearance. */
-	}
-	/* Clear the absolutely-positioned star in the top-right of the tile. */
-	.bn-tile-roaster,
-	.bn-tile-name {
 		padding-right: 28px;
 	}
 	.bn-tile-roaster {
@@ -515,21 +532,32 @@
 		font-weight: 500;
 	}
 
-	/* Metrics group — wraps stats + burn-down as a single unit so the body
-	   layout is consistent across sparsely-filled vs fully-filled bags. */
+	/* Metrics group — spans both grid columns so stats + burn-down use the
+	   full card width. Stable layout across sparsely-filled vs fully-filled. */
 	.bn-tile-metrics {
+		grid-area: metrics;
 		display: flex;
 		flex-direction: column;
 		gap: 8px;
-		margin-top: 4px;
+		min-width: 0;
+		align-self: end; /* hug the bottom of its row when card is taller */
 	}
 
-	/* Stats row — off-roast + open/frozen + rating */
+	/* Stats row — fixed 3-column grid so off-roast / lifecycle / rating
+	   each own a slot that doesn't shift when neighbours are missing. */
 	.bn-tile-stats {
-		display: flex;
-		flex-wrap: wrap;
+		display: grid;
+		grid-template-columns: 1fr 1fr auto;
 		gap: 12px;
 		align-items: center;
+	}
+	.bn-tile-stat-lifecycle {
+		justify-self: start;
+	}
+	.bn-tile-stat-empty {
+		font-family: var(--font-mono);
+		font-size: 11px;
+		color: rgba(var(--tint-rgb), 0.25);
 	}
 	.bn-tile-stat {
 		display: inline-flex;
@@ -566,10 +594,12 @@
 		letter-spacing: var(--track-allcaps);
 	}
 	.bn-tile-stat-rating {
-		margin-left: auto;
+		/* In the fixed-slot grid the rating sits in its own `auto` column;
+		   margin-left:auto is no longer needed and would over-shift now. */
 		gap: 1px;
 		font-size: 10px;
 		color: var(--copper-400);
+		justify-self: end;
 	}
 	.bn-tile-stat-rating .ph,
 	.bn-tile-stat-rating .ph-fill {
@@ -579,12 +609,16 @@
 		color: rgba(var(--tint-rgb), 0.2);
 	}
 
-	/* Burn-down bar — sits inside .bn-tile-metrics; the wrapping container
-	   owns the spacing above (margin-top), so no top margin here. */
+	/* Burn-down bar — sits inside .bn-tile-metrics; always renders so the
+	   slot is reserved even when no bag size is set (track shows empty,
+	   text reads "No bag size"). The `.bn-tile-burn-empty` modifier dims it. */
 	.bn-tile-burn {
 		display: flex;
 		flex-direction: column;
 		gap: 3px;
+	}
+	.bn-tile-burn-empty {
+		opacity: 0.45;
 	}
 	.bn-tile-burn-track {
 		height: 4px;
@@ -621,16 +655,13 @@
 	/* Action row — same pattern as /profiles `ProfileCard`'s
 	   `.pp-card-actions`: primary fills, icon trio shrinks to 32px squares. */
 	.bn-tile-actions {
+		grid-area: actions;
 		display: flex;
 		align-items: center;
 		gap: 6px;
-		/* Pin to the bottom of the body — every tile's action row sits on the
-		   same baseline regardless of how much content fills the rows above.
-		   `.bn-tile-body` is column-flex, so `margin-top: auto` consumes all
-		   leftover vertical space. `padding-top` preserves the visual breath
-		   between the last content row (burn-down or stats) and the buttons. */
-		margin-top: auto;
-		padding-top: 8px;
+		/* The tile grid's `auto 1fr auto` rows let the metrics row absorb
+		   variance; actions always render in their own bottom row at full
+		   width across both columns. */
 	}
 	.bn-tile-action {
 		flex: 1 1 auto;
