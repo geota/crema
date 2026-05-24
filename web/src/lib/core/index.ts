@@ -588,20 +588,16 @@ export interface CremaCore {
 	setCupWarmerTemperature(tempC: number): Promise<CoreOutput>;
 	/** Set the flow-calibration multiplier (scaled `int(1000 × multiplier)`). */
 	setCalibrationFlowMultiplier(multiplier: number): Promise<CoreOutput>;
-	/**
-	 * Apply the seven-register `heater_tweaks` composite write — the legacy
-	 * connect-time push of the user's saved values.
-	 */
-	setHeaterTweaks(tweaks: {
-		phase1FlowRate: number;
-		phase2FlowRate: number;
-		hotWaterIdleTemp: number;
-		espressoWarmupTimeoutSeconds: number;
-		steamTwoTapStop: number;
-		flushTimeoutMs: number;
-		flushFlowRate: number;
-		hotWaterFlowRate: number;
-	}): Promise<CoreOutput>;
+	/** Set the hot-water phase-1 flow rate, ml/s (scaled `int(10 × rate)`). MMR `0x803810`. */
+	setPhase1FlowRate(mlPerS: number): Promise<CoreOutput>;
+	/** Set the hot-water phase-2 flow rate, ml/s (scaled `int(10 × rate)`). MMR `0x803814`. */
+	setPhase2FlowRate(mlPerS: number): Promise<CoreOutput>;
+	/** Set the hot-water boiler idle target temperature, °C (raw byte). MMR `0x803818`. */
+	setHotWaterIdleTemp(tempC: number): Promise<CoreOutput>;
+	/** Set the espresso group warmup timeout, seconds (clamped to 255). MMR `0x803838`. */
+	setEspressoWarmupTimeout(seconds: number): Promise<CoreOutput>;
+	/** Set the steam two-tap-stop (`steamPurgeMode`), raw byte. MMR `0x803850`. */
+	setSteamTwoTapStop(value: number): Promise<CoreOutput>;
 	/**
 	 * The standard DE1 profiles Crema ships built in, as a parsed array of
 	 * {@link Profile}. The bridge returns a JSON-string of `Profile[]` (the
@@ -959,19 +955,20 @@ async function createCore(): Promise<CremaCore> {
 		async setCalibrationFlowMultiplier(multiplier) {
 			return parseOutput(bridge.set_calibration_flow_multiplier(multiplier));
 		},
-		async setHeaterTweaks(tweaks) {
-			return parseOutput(
-				bridge.set_heater_tweaks(
-					tweaks.phase1FlowRate,
-					tweaks.phase2FlowRate,
-					tweaks.hotWaterIdleTemp,
-					tweaks.espressoWarmupTimeoutSeconds,
-					tweaks.steamTwoTapStop,
-					tweaks.flushTimeoutMs,
-					tweaks.flushFlowRate,
-					tweaks.hotWaterFlowRate
-				)
-			);
+		async setPhase1FlowRate(mlPerS) {
+			return parseOutput(bridge.set_phase_1_flow_rate(mlPerS));
+		},
+		async setPhase2FlowRate(mlPerS) {
+			return parseOutput(bridge.set_phase_2_flow_rate(mlPerS));
+		},
+		async setHotWaterIdleTemp(tempC) {
+			return parseOutput(bridge.set_hot_water_idle_temp(tempC));
+		},
+		async setEspressoWarmupTimeout(seconds) {
+			return parseOutput(bridge.set_espresso_warmup_timeout(seconds));
+		},
+		async setSteamTwoTapStop(value) {
+			return parseOutput(bridge.set_steam_two_tap_stop(value));
 		},
 		async builtinProfiles() {
 			return JSON.parse(bridge.builtin_profiles_json()) as Profile[];
