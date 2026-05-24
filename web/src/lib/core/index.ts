@@ -588,15 +588,15 @@ export interface CremaCore {
 	setCupWarmerTemperature(tempC: number): Promise<CoreOutput>;
 	/** Set the flow-calibration multiplier (scaled `int(1000 × multiplier)`). */
 	setCalibrationFlowMultiplier(multiplier: number): Promise<CoreOutput>;
-	/** Set the hot-water phase-1 flow rate, ml/s (scaled `int(10 × rate)`). MMR `0x803810`. */
+	/** Set the hot-water phase-1 flow rate, ml/s (scaled `int(10 × rate)` on the wire). MMR `0x803810`, 4-byte LE. */
 	setPhase1FlowRate(mlPerS: number): Promise<CoreOutput>;
-	/** Set the hot-water phase-2 flow rate, ml/s (scaled `int(10 × rate)`). MMR `0x803814`. */
+	/** Set the hot-water phase-2 flow rate, ml/s (scaled `int(10 × rate)` on the wire). MMR `0x803814`, 4-byte LE. */
 	setPhase2FlowRate(mlPerS: number): Promise<CoreOutput>;
-	/** Set the hot-water boiler idle target temperature, °C (raw byte). MMR `0x803818`. */
+	/** Set the hot-water boiler idle target temperature, °C (scaled `int(10 × °C)` on the wire). MMR `0x803818`, 4-byte LE. */
 	setHotWaterIdleTemp(tempC: number): Promise<CoreOutput>;
-	/** Set the espresso group warmup timeout, seconds (clamped to 255). MMR `0x803838`. */
+	/** Set the espresso group warmup timeout, seconds (scaled `int(10 × s)` on the wire). MMR `0x803838`, 4-byte LE. */
 	setEspressoWarmupTimeout(seconds: number): Promise<CoreOutput>;
-	/** Set the steam two-tap-stop (`steamPurgeMode`), raw byte. MMR `0x803850`. */
+	/** Set the steam two-tap-stop (`steamPurgeMode`), 0/1. MMR `0x803850`, 4-byte LE int. */
 	setSteamTwoTapStop(value: number): Promise<CoreOutput>;
 	/**
 	 * The standard DE1 profiles Crema ships built in, as a parsed array of
