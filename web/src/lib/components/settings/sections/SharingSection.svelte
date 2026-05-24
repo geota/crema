@@ -102,13 +102,21 @@
 		}
 	}
 
-	/** Card eyebrow — connection state only; the account identity lives
-	   on the meta line below. */
+	/** Card eyebrow — connection state + account identity. Stays put when
+	   transient status (test results, errors) takes over the meta line. */
 	const cardEyebrow = $derived(
-		connected ? 'Connected' : oauthConfigured ? 'Not connected' : 'OAuth not configured'
+		connected
+			? account
+				? `Connected · ${account.name}`
+				: accountError
+					? 'Connected · profile unavailable'
+					: 'Connected'
+			: oauthConfigured
+				? 'Not connected'
+				: 'OAuth not configured'
 	);
 
-	/** Status message shown in the card meta line. */
+	/** Status message shown in the card meta line — transient. */
 	const cardStatus = $derived.by(() => {
 		if (!connected) {
 			if (!oauthConfigured) {
@@ -120,7 +128,7 @@
 		if (testStatus.kind === 'ok') return testStatus.message;
 		if (testStatus.kind === 'error') return testStatus.message;
 		if (accountError) return `Couldn't fetch your profile: ${accountError}`;
-		return account ? `Signed in · ${account.name}` : 'Signed in';
+		return 'Signed in · bean library + shots sync on demand';
 	});
 
 	/** Export the local shot history as a JSON download. */
