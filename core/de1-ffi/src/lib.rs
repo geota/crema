@@ -273,31 +273,6 @@ impl From<SteamHotWaterSettings> for ShotSettings {
     }
 }
 
-/// The composite `set_heater_tweaks` argument record, mirroring
-/// [`de1_app::HeaterTweaks`] across the UniFFI boundary.
-///
-/// `Duration` does not cross UniFFI cleanly, so timeouts are flat scalars
-/// (`seconds` / `ms`) documented in their field names.
-#[derive(uniffi::Record)]
-pub struct HeaterTweaksRecord {
-    /// Hot-water phase-1 flow rate, ml/s.
-    pub phase_1_flow_rate: f32,
-    /// Hot-water phase-2 flow rate, ml/s.
-    pub phase_2_flow_rate: f32,
-    /// Hot-water idle temperature, °C.
-    pub hot_water_idle_temp: u8,
-    /// Espresso warmup timeout, seconds.
-    pub espresso_warmup_timeout_seconds: u32,
-    /// Steam two-tap-stop register raw byte.
-    pub steam_two_tap_stop: u8,
-    /// Flush timeout, milliseconds (scaled to deciseconds on the wire).
-    pub flush_timeout_ms: u32,
-    /// Flush flow rate, ml/s.
-    pub flush_flow_rate: f32,
-    /// Hot-water flow rate, ml/s.
-    pub hot_water_flow_rate: f32,
-}
-
 /// The Crema core, exposed to the Kotlin shell.
 ///
 /// Methods that produce a [`CoreOutput`] return it as a JSON string; the shell
@@ -801,22 +776,42 @@ impl CremaBridge {
         json(self.core().set_calibration_flow_multiplier(multiplier))
     }
 
-    /// Apply the seven-register `heater_tweaks` composite write (legacy
-    /// `set_heater_tweaks`). The record carries the seven settings the legacy
-    /// app pushes at connect time.
-    pub fn set_heater_tweaks(&self, tweaks: HeaterTweaksRecord) -> String {
-        json(self.core().set_heater_tweaks(de1_app::HeaterTweaks {
-            phase_1_flow_rate: tweaks.phase_1_flow_rate,
-            phase_2_flow_rate: tweaks.phase_2_flow_rate,
-            hot_water_idle_temp: tweaks.hot_water_idle_temp,
-            espresso_warmup_timeout: std::time::Duration::from_secs(u64::from(
-                tweaks.espresso_warmup_timeout_seconds,
-            )),
-            steam_two_tap_stop: tweaks.steam_two_tap_stop,
-            flush_timeout: std::time::Duration::from_millis(u64::from(tweaks.flush_timeout_ms)),
-            flush_flow_rate: tweaks.flush_flow_rate,
-            hot_water_flow_rate: tweaks.hot_water_flow_rate,
-        }))
+    /// Set the hot-water phase-1 flow rate (legacy `heater_tweaks`
+    /// `phase_1_flow_rate`). Scaled `int(10 × rate)`; MMR `0x803810`,
+    /// 2-byte.
+    pub fn set_phase_1_flow_rate(&self, rate_ml_per_s: f32) -> String {
+        json(self.core().set_phase_1_flow_rate(rate_ml_per_s))
+    }
+
+    /// Set the hot-water phase-2 flow rate (legacy `heater_tweaks`
+    /// `phase_2_flow_rate`). Scaled `int(10 × rate)`; MMR `0x803814`,
+    /// 2-byte.
+    pub fn set_phase_2_flow_rate(&self, rate_ml_per_s: f32) -> String {
+        json(self.core().set_phase_2_flow_rate(rate_ml_per_s))
+    }
+
+    /// Set the hot-water boiler idle target temperature, °C (legacy
+    /// `heater_tweaks` `hot_water_idle_temp`). MMR `0x803818`, 1-byte;
+    /// raw °C is written verbatim (no scale).
+    pub fn set_hot_water_idle_temp(&self, temp_c: u8) -> String {
+        json(self.core().set_hot_water_idle_temp(temp_c))
+    }
+
+    /// Set the espresso group warmup timeout (legacy `heater_tweaks`
+    /// `espresso_warmup_timeout`). `seconds` is rounded down to whole
+    /// seconds and clamped to `255`. MMR `0x803838`, 1-byte.
+    pub fn set_espresso_warmup_timeout(&self, seconds: u32) -> String {
+        json(
+            self.core()
+                .set_espresso_warmup_timeout(std::time::Duration::from_secs(u64::from(seconds))),
+        )
+    }
+
+    /// Set the steam two-tap-stop (legacy `heater_tweaks`
+    /// `steam_two_tap_stop`; reaprime `steamPurgeMode`). MMR `0x803850`,
+    /// 1-byte; raw byte is written verbatim.
+    pub fn set_steam_two_tap_stop(&self, value: u8) -> String {
+        json(self.core().set_steam_two_tap_stop(value))
     }
 
     /// The standard DE1 profiles Crema ships built in, as a JSON array string.
