@@ -77,6 +77,7 @@
 	}
 
 	async function onSignIn(): Promise<void> {
+		console.log('[Crema] onSignIn fired. oauthConfigured=', oauthConfigured);
 		if (!oauthConfigured) {
 			connectStatus = {
 				kind: 'error',
@@ -87,9 +88,9 @@
 		}
 		connectStatus = { kind: 'starting' };
 		try {
+			console.log('[Crema] calling startVisualizerLogin…');
 			await startVisualizerLogin({ returnTo: '/settings' });
-			// `startVisualizerLogin` navigates away — control rarely
-			// returns to this function.
+			console.log('[Crema] startVisualizerLogin returned (unexpected — should have navigated)');
 		} catch (e) {
 			console.error('[Crema] startVisualizerLogin failed:', e);
 			connectStatus = {
