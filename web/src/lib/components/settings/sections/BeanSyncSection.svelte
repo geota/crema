@@ -186,48 +186,11 @@
 	title="Bean library sync"
 	sub="Sync your bean library with Visualizer so a second device picks up where you left off."
 >
-	{#if !oauthConfigured}
-		<StRow
-			title="OAuth client not configured"
-			sub="This build of Crema doesn't have a Visualizer OAuth client ID set. See docs/35-visualizer-oauth-setup.md to register a Doorkeeper application and re-build with VITE_VISUALIZER_CLIENT_ID."
-		>
-			{#snippet control()}
-				<a
-					class="bs-btn"
-					href="https://github.com/geota/crema/blob/main/docs/35-visualizer-oauth-setup.md"
-					target="_blank"
-					rel="noopener noreferrer"
-				>
-					<i class="ph ph-book-open-text" aria-hidden="true"></i>
-					Setup docs
-				</a>
-			{/snippet}
-		</StRow>
-	{:else if !connected}
-		<StRow
-			title="Sign in with Visualizer"
-			sub="Crema redirects you to visualizer.coffee to grant access. No password ever leaves Visualizer's own login page."
-		>
-			{#snippet control()}
-				<button
-					type="button"
-					class="bs-btn bs-btn-primary"
-					disabled={connectStatus.kind === 'starting'}
-					onclick={onSignIn}
-				>
-					<i class="ph ph-sign-in" aria-hidden="true"></i>
-					{connectStatus.kind === 'starting' ? 'Redirecting…' : 'Sign in with Visualizer'}
-				</button>
-			{/snippet}
-		</StRow>
-		{#if connectStatus.kind === 'error'}
-			<div class="bs-result">
-				<div class="bs-result-head">
-					<i class="ph ph-warning" style:color="var(--danger)" aria-hidden="true"></i>
-					{connectStatus.message}
-				</div>
-			</div>
-		{/if}
+	{#if !connected}
+		<!-- Sign-in is owned by the Visualizer card in SharingSection — once
+		     connected, this section renders the connected-state details
+		     (account, Test, Sync, log). When NOT connected, render nothing;
+		     SharingSection only mounts this component while `connected`. -->
 	{:else}
 		<StRow
 			title={accountLabel}

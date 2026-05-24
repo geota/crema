@@ -7,19 +7,21 @@
 	 * sync surface, and connecting it is opt-in. The section copy keeps that
 	 * framing front and centre.
 	 *
-	 * ## Real vs. stubbed
-	 *
-	 * **Real persistence** — the upload preferences (auto-upload, default
-	 * privacy, include-profile, include-notes) are persisted app preferences in
-	 * `lib/settings`: they are how the app *would* behave when a sync runs.
-	 *
-	 * **UI-only** — the Visualizer connection itself, signing in, the upload
-	 * queue and history export need the external visualizer.coffee service the
-	 * shell does not talk to; the connection is faithful local UI (a `// TODO`
-	 * marks the missing service), shown as "Not connected" out of the box.
+	 * The big visual Visualizer card lives here and owns connect / disconnect.
+	 * Once connected, `BeanSyncSection` renders below to surface the account
+	 * identity, Test, Sync now, and the sync log.
 	 */
+	import { onMount } from 'svelte';
 	import { getHistoryStore } from '$lib/history';
 	import { downloadBlob } from '$lib/utils/download';
+	import {
+		isVisualizerConnected,
+		isVisualizerOauthConfigured,
+		onVisualizerTokenChange,
+		startVisualizerLogin,
+		revokeVisualizerToken,
+		getStoredVisualizerTokens
+	} from '$lib/bean';
 	import StSectionHead from '../StSectionHead.svelte';
 	import StGroup from '../StGroup.svelte';
 	import StRow from '../StRow.svelte';
@@ -27,8 +29,36 @@
 	import BeanSyncSection from './BeanSyncSection.svelte';
 
 	const history = getHistoryStore();
+	const oauthConfigured = isVisualizerOauthConfigured();
+	let connected = $state(isVisualizerConnected());
+	let signingIn = $state(false);
 
-	/** Export the local shot history as a JSON download — genuinely real. */
+	onMount(() => {
+		const off = onVisualizerTokenChange((set) => {
+			connected = set !== null;
+		});
+		return off;
+	});
+
+	async function signIn(): Promise<void> {
+		if (!oauthConfigured) return;
+		signingIn = true;
+		try {
+			await startVisualizerLogin({ returnTo: '/settings' });
+		} catch (e) {
+			console.error('[Crema] startVisualizerLogin failed:', e);
+			signingIn = false;
+		}
+	}
+
+	async function disconnect(): Promise<void> {
+		const tokens = getStoredVisualizerTokens();
+		if (tokens?.accessToken) {
+			await revokeVisualizerToken(tokens.accessToken);
+		}
+	}
+
+	/** Export the local shot history as a JSON download. */
 	function exportHistory(): void {
 		const blob = new Blob([JSON.stringify(history.all, null, 2)], {
 			type: 'application/json'
@@ -43,12 +73,84 @@
 	sub="Crema is local-only — there's no Crema account. Shots and profiles live on this device. Connect Visualizer if you want to back up, share, or compare shots online."
 />
 
-<!-- Visualizer connection + sync controls live in BeanSyncSection — it
-     owns the OAuth flow, sync log, and (future) per-shot upload toggles.
-     The previous stand-alone Visualizer card + Upload / Pending stubs
-     were removed when OAuth landed (their stubbed buttons collided
-     visually with the real Sign-in button — both said "Sign in"). -->
-<BeanSyncSection />
+<!-- Visualizer card — the visual anchor of the Sharing tab. Wired to the
+     real OAuth flow ($lib/visualizer via $lib/bean re-exports). The
+     button does the actual sign-in / disconnect; details (account
+     identity, Test, Sync, log) are surfaced by BeanSyncSection below
+     once connected. -->
+<div class="st-visualizer">
+	<div class="st-visualizer-glyph">
+		<svg viewBox="0 0 48 48" width="40" height="40" aria-hidden="true">
+			<path
+				d="M 4 36 Q 12 8, 24 24 T 44 12"
+				fill="none"
+				stroke="var(--copper-400)"
+				stroke-width="2.5"
+				stroke-linecap="round"
+			/>
+			<circle cx="24" cy="24" r="3.5" fill="var(--copper-400)" />
+			<circle cx="44" cy="12" r="2.5" fill="rgba(var(--tint-rgb), 0.6)" />
+			<circle cx="4" cy="36" r="2.5" fill="rgba(var(--tint-rgb), 0.6)" />
+		</svg>
+	</div>
+	<div class="st-visualizer-info">
+		<div
+			class="t-eyebrow"
+			style="color:{connected ? 'var(--copper-400)' : 'rgba(var(--tint-rgb), 0.5)'}"
+		>
+			{connected ? 'Connected' : oauthConfigured ? 'Not connected' : 'OAuth not configured'}
+		</div>
+		<div class="st-visualizer-name">visualizer.coffee</div>
+		<div class="st-visualizer-meta">
+			{#if connected}
+				Signed in · bean library + shots sync on demand
+			{:else if oauthConfigured}
+				Free community service for sharing and comparing espresso shots
+			{:else}
+				Set <code>VITE_VISUALIZER_CLIENT_ID</code> in <code>web/.env.local</code> and restart the dev server. See <a
+					href="https://github.com/geota/crema/blob/main/docs/35-visualizer-oauth-setup.md"
+					target="_blank"
+					rel="noopener noreferrer">setup docs</a
+				>.
+			{/if}
+		</div>
+		<div class="st-visualizer-meta-row">
+			<a
+				class="st-visualizer-link"
+				href="https://visualizer.coffee"
+				target="_blank"
+				rel="noreferrer noopener"
+			>
+				visualizer.coffee <i class="ph ph-arrow-square-out" aria-hidden="true"></i>
+			</a>
+		</div>
+	</div>
+	<div class="st-visualizer-actions">
+		{#if connected}
+			<StButton
+				label="Open library"
+				icon="arrow-square-out"
+				onClick={() => window.open('https://visualizer.coffee', '_blank', 'noopener,noreferrer')}
+			/>
+			<button type="button" class="st-btn st-btn-danger" onclick={disconnect}>
+				<i class="ph ph-sign-out" aria-hidden="true"></i>Disconnect
+			</button>
+		{:else}
+			<StButton
+				label={signingIn ? 'Redirecting…' : 'Sign in'}
+				icon="sign-in"
+				variant="primary"
+				disabled={!oauthConfigured || signingIn}
+				onClick={signIn}
+			/>
+		{/if}
+	</div>
+</div>
+
+<!-- Connected-state details: account identity, Test, Sync now, log. -->
+{#if connected}
+	<BeanSyncSection />
+{/if}
 
 <StGroup title="Local export" sub="Download a copy of your local data.">
 	<StRow
@@ -70,7 +172,6 @@
 			<div class="st-otherint-sub">
 				Share a profile from the library straight to a forum post.
 			</div>
-			<!-- TODO: needs a forum API + a network layer. Stub. -->
 			<button type="button" class="st-btn st-btn-secondary" disabled>
 				<i class="ph ph-link" aria-hidden="true"></i>Connect
 			</button>
