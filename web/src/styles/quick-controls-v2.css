@@ -960,7 +960,13 @@
 .qfstrip-wrap {
   display: grid;
   grid-template-columns: 200px 28px 1fr 28px;
-  align-items: stretch;
+  /* `align-items: stretch` (the default) made the search input stretch to
+     the row's tallest cell — the pill scroll-container ends up taller than
+     a single pill because of its own padding/scrollbar gutter, so the
+     search visually inflated. `center` lets every cell sit at its natural
+     content height; the search ends up the same height as the pills it
+     borders. */
+  align-items: center;
   gap: 8px;
   margin-bottom: 14px;
 }
