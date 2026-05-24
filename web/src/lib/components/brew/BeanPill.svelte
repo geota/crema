@@ -19,7 +19,7 @@
 	 * same treatment, so "this one is selected" reads identically across
 	 * profile and bean chips.
 	 */
-	import { roasterMarkTone, roastBand, type Bean, type Roaster } from '$lib/bean';
+	import { roasterMarkTone, type Bean, type Roaster } from '$lib/bean';
 
 	let {
 		bean,
@@ -36,18 +36,13 @@
 
 	/** Mark + tone for the avatar; deterministic from the roaster name. */
 	const mt = $derived(roasterMarkTone(roaster));
-	/** Title-case 3-band roast label, or em-dash when no level is set. */
-	const bandLabel = $derived.by(() => {
-		const band = roastBand(bean.roastLevel);
-		return band ? band[0].toUpperCase() + band.slice(1) : '—';
-	});
 </script>
 
 <span class="bp-avatar" class:is-active={active} style="--tone: {mt.tone}">
 	<span class="bp-mark">{mt.mark}</span>
 </span>
 <span class="bp-name">{bean.name || 'Untitled bean'}</span>
-<span class="bp-band">{bandLabel}</span>
+<span class="bp-roaster">{roaster?.name ?? 'No roaster'}</span>
 
 <style>
 	/*
@@ -91,11 +86,15 @@
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
-	/* Roast band sub-label — mono caption, matches `.qfstrip-ratio`. */
-	.bp-band {
-		font-family: var(--font-mono);
-		font-variant-numeric: tabular-nums;
+	/* Roaster name sub-label — matches the position of the profile pill's
+	   ratio caption visually so the row reads with one rhythm. Plain sans
+	   (not mono) because roaster names aren't tabular data. */
+	.bp-roaster {
 		font-size: 11px;
 		color: rgba(var(--tint-rgb), 0.5);
+		max-width: 120px;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 </style>

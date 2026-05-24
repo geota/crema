@@ -51,7 +51,7 @@ export const REVOKE_URL = 'https://visualizer.coffee/oauth/revoke';
  * silently (and our premium-gating logic in `visualizer-sync.ts` handles
  * the 403 path when the user is on the free tier).
  */
-export const OAUTH_SCOPES: readonly string[] = ['read', 'upload', 'write'];
+export const OAUTH_SCOPES: readonly string[] = ['read', 'write', 'upload'];
 
 /** Joined-by-space form expected on the wire. */
 export const OAUTH_SCOPE = OAUTH_SCOPES.join(' ');
