@@ -102,17 +102,10 @@
 		}
 	}
 
-	/** Display string for the card eyebrow when connected. */
+	/** Card eyebrow — connection state only; the account identity lives
+	   on the meta line below. */
 	const cardEyebrow = $derived(
-		connected
-			? account
-				? `Connected · ${account.name}`
-				: accountError
-					? 'Connected · profile unavailable'
-					: 'Connected'
-			: oauthConfigured
-				? 'Not connected'
-				: 'OAuth not configured'
+		connected ? 'Connected' : oauthConfigured ? 'Not connected' : 'OAuth not configured'
 	);
 
 	/** Status message shown in the card meta line. */
@@ -127,7 +120,7 @@
 		if (testStatus.kind === 'ok') return testStatus.message;
 		if (testStatus.kind === 'error') return testStatus.message;
 		if (accountError) return `Couldn't fetch your profile: ${accountError}`;
-		return 'Signed in · bean library + shots sync on demand';
+		return account ? `Signed in · ${account.name}` : 'Signed in';
 	});
 
 	/** Export the local shot history as a JSON download. */
