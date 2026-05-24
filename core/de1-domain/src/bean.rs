@@ -491,10 +491,26 @@ pub struct Roaster {
     pub name: String,
     /// Roastery website / store URL.
     pub website: Option<String>,
-    /// City / state / country. Crema-only.
+    /// Logo / hero image URL. Mirrors Visualizer's `RoasterDetail.image_url`
+    /// — round-trips losslessly on sync. Renders as a small thumbnail in
+    /// the roaster card and the editor's preview slot.
+    #[serde(default)]
+    pub image_url: Option<String>,
+    /// City — e.g. `"Portland"`. Crema-only; rides in `metadata.crema.city`
+    /// on Visualizer round-trip so the wire format stays lossless.
+    #[serde(default)]
+    pub city: Option<String>,
+    /// Country / state / region — free text. Crema-only.
     pub country: Option<String>,
     /// Free-form notes (private to the user — not pushed to Visualizer).
     pub notes: String,
+    /// Pointer to the canonical roaster id when this row was tagged as a
+    /// duplicate. `None` = this row is itself canonical (or has not been
+    /// deduped). Mirrors Visualizer's `RoasterDetail.canonical_roaster_id`
+    /// — round-trips directly. Beans pointing at a duplicate are typically
+    /// re-pointed at the canonical id on merge.
+    #[serde(default)]
+    pub canonical_roaster_id: Option<String>,
     /// Visualizer `roaster.id` once pushed.
     pub visualizer_id: Option<String>,
     /// Open JSON metadata — escape valve symmetric with [`Bean::metadata`].
@@ -512,8 +528,11 @@ impl Roaster {
             id,
             name,
             website: None,
+            image_url: None,
+            city: None,
             country: None,
             notes: String::new(),
+            canonical_roaster_id: None,
             visualizer_id: None,
             metadata: serde_json::Value::Null,
             created_at: now_unix_ms,
@@ -809,6 +828,52 @@ mod tests {
         let json = serde_json::to_string(&roaster).unwrap();
         let parsed: Roaster = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, roaster);
+    }
+
+    #[test]
+    fn roaster_round_trips_new_fields_through_json() {
+        // The three roaster-CRUD extension fields (`image_url`, `city`,
+        // `canonical_roaster_id`) must survive a serde round-trip with
+        // their exact wire spelling so Visualizer-side fields land on the
+        // right keys.
+        let mut roaster = Roaster::new("roaster:xyz".to_owned(), "Onyx".to_owned(), NOW);
+        roaster.image_url = Some("https://onyxcoffeelab.com/logo.png".to_owned());
+        roaster.city = Some("Rogers".to_owned());
+        roaster.country = Some("Arkansas, USA".to_owned());
+        roaster.canonical_roaster_id = Some("roaster:canonical".to_owned());
+        let json = serde_json::to_string(&roaster).unwrap();
+        // Sanity: the snake_case wire keys must be present so the
+        // Visualizer mapping in the shell sync layer matches.
+        assert!(json.contains("\"image_url\":\"https://onyxcoffeelab.com/logo.png\""));
+        assert!(json.contains("\"city\":\"Rogers\""));
+        assert!(json.contains("\"canonical_roaster_id\":\"roaster:canonical\""));
+        let parsed: Roaster = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, roaster);
+    }
+
+    #[test]
+    fn roaster_deserialises_legacy_record_without_new_fields() {
+        // Pre-extension Roaster records on disk (and in localStorage) only
+        // had the original fields. `#[serde(default)]` on the three new
+        // optional fields must keep the legacy shape parseable so the next
+        // load after upgrade is not a wipe.
+        let legacy = serde_json::json!({
+            "id": "roaster:legacy",
+            "name": "Counter Culture",
+            "website": "https://counterculturecoffee.com",
+            "country": "USA",
+            "notes": "Durham NC",
+            "visualizer_id": null,
+            "metadata": null,
+            "created_at": 1700000000_i64,
+            "updated_at": 1700000000_i64
+        });
+        let parsed: Roaster = serde_json::from_value(legacy).unwrap();
+        assert_eq!(parsed.id, "roaster:legacy");
+        assert_eq!(parsed.name, "Counter Culture");
+        assert_eq!(parsed.image_url, None);
+        assert_eq!(parsed.city, None);
+        assert_eq!(parsed.canonical_roaster_id, None);
     }
 
     #[test]
