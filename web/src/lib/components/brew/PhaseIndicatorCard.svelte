@@ -40,9 +40,32 @@
 	}
 
 	/**
-	 * One row per segment with its progress fill and past/active flags. The
-	 * active segment is the one the DE1 reports via `frame`; its fill follows
-	 * the elapsed time within the segment's own time window.
+	 * Track the shot elapsed-time at which the current `frame` became
+	 * active. The DE1 advances frames on its own schedule — exit
+	 * conditions can end a phase early, so the actual phase boundaries
+	 * are NOT the nominal cumulative `seg.time` sums. Driving the active
+	 * bar off `seconds - activeStartedAt` keeps the fill anchored to the
+	 * frame's REAL start; past frames render full, future frames empty.
+	 *
+	 * Reset on shot start (frame goes back to 0 with seconds ≈ 0) is
+	 * automatic — the `frame !== prevFrame` branch captures the new start.
+	 */
+	let activeStartedAt = $state(0);
+	let prevFrame = $state(-1);
+	$effect(() => {
+		if (frame !== prevFrame) {
+			activeStartedAt = Math.max(0, seconds);
+			prevFrame = frame;
+		}
+	});
+
+	/**
+	 * One row per segment with its progress fill and past/active flags.
+	 * Past frames are always full; the active frame fills from when the
+	 * frame became active until its nominal span elapses; future frames
+	 * are empty. Decoupling fill from cumulative nominal time fixes the
+	 * "next phase doesn't start until the timer catches up" artifact when
+	 * a phase exits early.
 	 */
 	const rows = $derived.by(() => {
 		if (!segments || segments.length === 0) {
@@ -59,20 +82,24 @@
 		}
 		const t = Math.max(0, seconds);
 		const activeIdx = Math.max(0, Math.min(frame, segments.length - 1));
-		let start = 0;
 		return segments.map((seg, i) => {
 			const span = seg.time;
-			const within = Math.max(0, Math.min(t, start + span) - start);
-			const row = {
+			const isPast = i < activeIdx;
+			const isActive = i === activeIdx;
+			let fillPct = 0;
+			if (isPast) {
+				fillPct = 100;
+			} else if (isActive && span > 0) {
+				fillPct = Math.min(100, ((t - activeStartedAt) / span) * 100);
+			}
+			return {
 				id: seg.id,
 				name: tickFor(seg, i),
 				duration: span,
-				fillPct: span > 0 ? Math.min(100, (within / span) * 100) : 0,
-				isActive: i === activeIdx,
-				isPast: i < activeIdx
+				fillPct,
+				isActive,
+				isPast
 			};
-			start += span;
-			return row;
 		});
 	});
 
@@ -95,19 +122,23 @@
 		}
 		const t = Math.max(0, seconds);
 		const activeIdx = Math.max(0, Math.min(frame, segments.length - 1));
-		let start = 0;
 		return segments.map((seg, i) => {
 			const span = seg.time;
-			const within = Math.max(0, Math.min(t, start + span) - start);
-			const seg2 = {
+			const isPast = i < activeIdx;
+			const isActive = i === activeIdx;
+			let fillPct = 0;
+			if (isPast) {
+				fillPct = 100;
+			} else if (isActive && span > 0) {
+				fillPct = Math.min(100, ((t - activeStartedAt) / span) * 100);
+			}
+			return {
 				id: seg.id,
 				widthPct: totalSec > 0 ? (span / totalSec) * 100 : 0,
-				fillPct: span > 0 ? Math.min(100, (within / span) * 100) : 0,
-				isActive: i === activeIdx,
-				isPast: i < activeIdx
+				fillPct,
+				isActive,
+				isPast
 			};
-			start += span;
-			return seg2;
 		});
 	});
 
