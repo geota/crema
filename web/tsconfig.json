@@ -10,6 +10,11 @@
 		"sourceMap": true,
 		"strict": true,
 		"moduleResolution": "bundler",
+		// `node:test` files import sibling modules with explicit `.ts`
+		// extensions — that's what Node's `--experimental-strip-types`
+		// resolver requires. Bundlers (Vite) and `noEmit: true` make this
+		// safe in the IDE / svelte-check toolchain.
+		"allowImportingTsExtensions": true,
 		// The Web Bluetooth API is not in TypeScript's standard DOM lib;
 		// `@types/web-bluetooth` supplies `navigator.bluetooth` and the
 		// `Bluetooth*` GATT types the `$lib/ble` layer depends on.
