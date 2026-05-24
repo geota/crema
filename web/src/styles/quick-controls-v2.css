@@ -959,20 +959,29 @@
 /* ───────────────────────────── Favorites strip wrapper (search + scroll) */
 .qfstrip-wrap {
   display: grid;
-  grid-template-columns: 180px 28px 1fr 28px;
+  grid-template-columns: 200px 28px 1fr 28px;
   align-items: stretch;
   gap: 8px;
   margin-bottom: 14px;
 }
+/*
+ * Search input reads as "another pill in the strip, just wider": the same
+ * border-radius, the same resting background tint and border as a
+ * `.qfstrip-item`, and the same vertical metrics (the grid's
+ * `align-items: stretch` matches the pills' actual height for free, so the
+ * input visually sits in the same row rather than as a separate-looking
+ * standard text input).
+ */
 .qfstrip-search-inline {
   display: flex; align-items: center;
   gap: 6px;
-  padding: 0 10px;
-  background: rgba(var(--tint-rgb), 0.03);
+  padding: 0 12px;
+  background: rgba(var(--tint-rgb), 0.02);
   border: 1px solid rgba(var(--tint-rgb), 0.08);
   border-radius: var(--radius-pill);
-  transition: border-color var(--dur-1) var(--ease);
+  transition: all var(--dur-1) var(--ease);
 }
+.qfstrip-search-inline:hover { border-color: rgba(var(--tint-rgb), 0.16); background: rgba(var(--tint-rgb), 0.04); }
 .qfstrip-search-inline:focus-within { border-color: rgba(var(--tint-rgb), 0.2); background: rgba(var(--tint-rgb), 0.05); }
 .qfstrip-search-inline i { color: rgba(var(--tint-rgb), 0.4); font-size: 13px; }
 .qfstrip-search-inline input {
