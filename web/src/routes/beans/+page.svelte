@@ -49,10 +49,13 @@
 		| 'frozen'
 		| 'archived'
 		| 'favourite';
-	type RoastFilter = 'any' | 'light' | 'medium' | 'dark';
+	type RoastFilter = 'light' | 'medium' | 'dark';
 
 	let status = $state<StatusFilter>('all');
-	let roast = $state<RoastFilter>('any');
+	// `null` = no roast filter applied (replaces the prior `'any'` sentinel
+	// so the Roast group can mirror the `/profiles` pattern: no "Any" pill,
+	// re-clicking the active pill clears the filter).
+	let roast = $state<RoastFilter | null>(null);
 	let q = $state('');
 	let selectedTags = $state<string[]>([]);
 
@@ -95,8 +98,9 @@
 		}
 	}
 
-	function matchesRoast(b: Bean, f: RoastFilter): boolean {
-		if (f === 'any' || b.roastLevel == null) return f === 'any';
+	function matchesRoast(b: Bean, f: RoastFilter | null): boolean {
+		if (f === null) return true; // no roast filter active
+		if (b.roastLevel == null) return false;
 		if (f === 'light') return b.roastLevel <= 4;
 		if (f === 'medium') return b.roastLevel >= 5 && b.roastLevel <= 7;
 		return b.roastLevel >= 8;
@@ -194,6 +198,20 @@
 		return c;
 	});
 
+	// Per-band bag counts for the Roast filter pills. Mirrors the `/profiles`
+	// pattern (Light: N / Medium: N / Dark: N badges) and keeps the count in
+	// lockstep with `matchesRoast` so the displayed numbers cannot disagree
+	// with the actual filter result.
+	const roastCounts = $derived.by(() => {
+		const c: Record<RoastFilter, number> = { light: 0, medium: 0, dark: 0 };
+		for (const b of allBeans) {
+			if (matchesRoast(b, 'light')) c.light += 1;
+			else if (matchesRoast(b, 'medium')) c.medium += 1;
+			else if (matchesRoast(b, 'dark')) c.dark += 1;
+		}
+		return c;
+	});
+
 	const tagFacets = $derived.by(() => {
 		const m = new Map<string, number>();
 		for (const b of allBeans) {
@@ -246,7 +264,6 @@
 		items.push({ id: '__div1', divider: true });
 		items.push({ id: '__roast', groupLabel: 'Roast' });
 		const roastEntries: { f: RoastFilter; label: string }[] = [
-			{ f: 'any', label: 'Any' },
 			{ f: 'light', label: 'Light' },
 			{ f: 'medium', label: 'Medium' },
 			{ f: 'dark', label: 'Dark' }
@@ -255,6 +272,7 @@
 			items.push({
 				id: `r:${r.f}`,
 				label: r.label,
+				count: roastCounts[r.f],
 				selected: roast === r.f
 			});
 		}
@@ -275,9 +293,19 @@
 	});
 
 	function onBagPillClick(id: string): void {
-		if (id.startsWith('s:')) status = id.slice(2) as StatusFilter;
-		else if (id.startsWith('r:')) roast = id.slice(2) as RoastFilter;
-		else if (id.startsWith('t:')) toggleSelectedTag(id.slice(2));
+		if (id.startsWith('s:')) {
+			// Re-click the active status pill → reset to `all`. `all` itself
+			// is already the catch-all so leave it pinned on re-click.
+			const next = id.slice(2) as StatusFilter;
+			status = status === next && next !== 'all' ? 'all' : next;
+		} else if (id.startsWith('r:')) {
+			// Re-click the active roast pill → clear the roast filter (no
+			// "Any" pill exists anymore, so `null` is the unset state).
+			const next = id.slice(2) as RoastFilter;
+			roast = roast === next ? null : next;
+		} else if (id.startsWith('t:')) {
+			toggleSelectedTag(id.slice(2));
+		}
 	}
 
 	/**
@@ -298,7 +326,13 @@
 	});
 
 	function onRoasterPillClick(id: string): void {
-		if (id.startsWith('region:')) roasterRegion = id.slice('region:'.length);
+		if (id.startsWith('region:')) {
+			// Re-click the active region pill → reset to `all` (the
+			// catch-all that already represents "no region filter"). `all`
+			// itself stays pinned on re-click.
+			const next = id.slice('region:'.length);
+			roasterRegion = roasterRegion === next && next !== 'all' ? 'all' : next;
+		}
 	}
 
 	const statusLine = $derived(
@@ -415,7 +449,7 @@
 	}
 	function clearFilters(): void {
 		status = 'all';
-		roast = 'any';
+		roast = null;
 		selectedTags = [];
 	}
 	function gotoNew(): void {
@@ -684,7 +718,7 @@
 			<div class="bn-tabs-filters">
 				<FilterPills pills={bagsFilterPills} onclick={onBagPillClick} />
 			</div>
-			{#if status !== 'all' || roast !== 'any' || selectedTags.length > 0}
+			{#if status !== 'all' || roast !== null || selectedTags.length > 0}
 				<button class="bn-chip-clear" onclick={clearFilters}>
 					<i class="ph ph-x"></i> Clear
 				</button>
