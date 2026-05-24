@@ -474,21 +474,6 @@ function coerceShotBean(raw: unknown): ShotBean | null {
 }
 
 /**
- * Loader-time tag-migration for older shots that carry `tags` on
- * `bean` (the pre-bean→shot-copy shape) but `[]` on the row itself.
- * Folded INTO `shot.tags` at load so the new single-source-of-truth
- * (`shot.tags`) sees the legacy bean tags. This is a one-time forward
- * migration: once the row persists with non-empty `tags`, the bean
- * `tags` field is irrelevant and {@link coerceShotBean} discards it.
- */
-function legacyBeanTags(rawBean: unknown): string[] {
-	if (typeof rawBean !== 'object' || rawBean === null) return [];
-	const obj = rawBean as Record<string, unknown>;
-	if (!Array.isArray(obj.tags)) return [];
-	return obj.tags.filter((t): t is string => typeof t === 'string');
-}
-
-/**
  * Read the persisted history and coerce each row through a defensive
  * normaliser so legacy records without `visualizerId` / `deletedAt`
  * still parse cleanly (the fields are optional on the type; absent
@@ -510,23 +495,13 @@ function loadShots(): StoredShot[] {
 		// `tags` falls back to `[]`; non-string entries are filtered so a
 		// corrupted store doesn't taint the in-memory list.
 		const tagsRaw = obj.tags;
-		let tags = Array.isArray(tagsRaw)
+		const tags = Array.isArray(tagsRaw)
 			? tagsRaw.filter((t): t is string => typeof t === 'string')
 			: [];
-		// `bean` was formalised in the inline-bean upload work to carry the
-		// snapshot content used by Visualizer (notes, grinderSetting).
-		// Legacy records (pre-v1 bean snapshot, or post-v1 but pre-
-		// inline-bean) still parse — `coerceShotBean` reads each field
-		// defensively and omits it when absent. Older shots persisted
-		// `bean.tags` too; we drop that on the snapshot read AND fold it
-		// into the row's `tags` (one-time forward migration) so the new
-		// single-source-of-truth (`StoredShot.tags`) sees them.
-		const rawBean = obj.bean ?? null;
-		const bean = coerceShotBean(rawBean);
-		if (tags.length === 0) {
-			const fromBean = legacyBeanTags(rawBean);
-			if (fromBean.length > 0) tags = fromBean;
-		}
+		// `bean` is the inline-bean snapshot (notes, grinderSetting). Older
+		// records without these fields still parse — `coerceShotBean` reads
+		// each one defensively and omits it when absent.
+		const bean = coerceShotBean(obj.bean ?? null);
 		// `grinderModel` (added in #81) is the equipment-level snapshot.
 		// Legacy records pre-#81 have no field at all — leave it `null`
 		// so the upload-time cascade re-reads the current settings
