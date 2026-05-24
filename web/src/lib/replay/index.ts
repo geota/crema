@@ -15,7 +15,8 @@ export {
 	parseCaptureFile,
 	sourceFromName,
 	type CaptureEvent,
-	type ParsedCapture
+	type ParsedCapture,
+	type ReplayMeta
 } from './capture';
 export {
 	replayEvents,

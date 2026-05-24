@@ -208,6 +208,44 @@ export interface StoredShot {
 	 */
 	tags?: string[];
 	/**
+	 * Yield target the user dialed in for this shot, grams — the
+	 * stop-on-weight target from `BrewParams.yield` at completion time.
+	 * Distinct from {@link finalWeight} (what the scale actually
+	 * measured): the target is the *intent* a barista pulled the shot
+	 * against, the final weight is the *outcome*. Frozen at completion
+	 * so a later QC dial change cannot rewrite history.
+	 *
+	 * Optional on the type so legacy localStorage records pre-dating
+	 * this snapshot deserialise cleanly; the v2 export rides it under
+	 * `metadata.crema.yield_target`.
+	 */
+	yieldTarget?: number | null;
+	/**
+	 * Brew water temperature the user dialed in, °C — `BrewParams.brewTemp`
+	 * at completion time. Frozen at completion the same way
+	 * {@link yieldTarget} is. Optional; rides under
+	 * `metadata.crema.brew_temp_target` in the v2 export.
+	 */
+	brewTemp?: number | null;
+	/**
+	 * Pre-infuse duration the user dialed in, seconds — `BrewParams.preinf`
+	 * at completion time. Frozen at completion. Optional; rides under
+	 * `metadata.crema.preinfuse_target` in the v2 export.
+	 */
+	preinfuseTarget?: number | null;
+	/**
+	 * Whether stop-on-weight was armed for this shot — `BrewParams.stopOnWeight`
+	 * at completion time. Frozen at completion. Optional; rides under
+	 * `metadata.crema.stop_on_weight` in the v2 export.
+	 */
+	stopOnWeight?: boolean;
+	/**
+	 * Whether auto-tare was armed for this shot — `BrewParams.autoTare`
+	 * at completion time. Frozen at completion. Optional; rides under
+	 * `metadata.crema.auto_tare` in the v2 export.
+	 */
+	autoTare?: boolean;
+	/**
 	 * Visualizer `shot.id` once uploaded — the sync identity that
 	 * persists across local-id changes (docs/36 §3). `null` until the
 	 * shot has been pushed; the upload round-trip writes it back so

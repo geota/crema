@@ -821,6 +821,20 @@
 				await app.stopShot();
 				return;
 			}
+			// Freeze the live Quick Sheet snapshot onto the orchestrator
+			// so the next `ShotCompleted` can persist it onto the
+			// `StoredShot` (yield target, brew temp, pre-infuse, stop-
+			// on-weight, auto-tare). Mirrors the bean / grinder-model
+			// snapshot pattern — capture-time-frozen, not live-read at
+			// export, so a later dial change cannot rewrite history.
+			const live = params.current;
+			app.setBrewParamsSnapshot({
+				yieldTarget: live.yield,
+				brewTemp: live.brewTemp,
+				preinfuseTarget: live.preinf,
+				stopOnWeight: live.stopOnWeight,
+				autoTare: live.autoTare
+			});
 			// The fingerprint compare + lazy re-upload happens inside
 			// `startShot()`; when no upload is needed the call returns
 			// promptly. `profileUploadProgress` (above) is the visible

@@ -82,6 +82,26 @@ export interface ShotCompletion {
 	peakWeight: number | null;
 	/** Final scale weight at shot end, grams — from the core; `null` when no scale. */
 	finalWeight: number | null;
+	/**
+	 * Quick-control overrides — the `BrewParams` user dialed in for this
+	 * shot, snapshotted at completion time so a later dial change cannot
+	 * rewrite history. Each field optional: a headless caller (replay /
+	 * scripted shot) may have no live Quick Sheet, and a legacy completion
+	 * before this snapshot existed simply leaves them absent. The history
+	 * store mirrors them onto {@link StoredShot.yieldTarget} et al.
+	 *
+	 * Why not just read from the active profile? The QC dial decouples a
+	 * shot's user intent from the profile's bundled defaults (e.g. "this
+	 * shot uses Best Practice but I'm aiming for 40 g not the profile's
+	 * default 36"). The profile default lives in the embedded profile slot
+	 * via `exportStoredShotAsV2Json`; these are the user's *current*
+	 * overrides, sibling to the live QC fingerprint.
+	 */
+	yieldTarget?: number | null;
+	brewTemp?: number | null;
+	preinfuseTarget?: number | null;
+	stopOnWeight?: boolean;
+	autoTare?: boolean;
 }
 
 /** The reactive shot-history library. One instance per app — {@link getHistoryStore}. */
@@ -148,6 +168,15 @@ export class HistoryStore {
 			series: [...series],
 			bean: completion.bean,
 			grinderModel: completion.grinderModel,
+			// QC-override snapshot — each rides only when the caller
+			// supplied it, so a headless / replay completion (no live Quick
+			// Sheet) leaves them absent and downstream readers fall back to
+			// the embedded profile's defaults.
+			yieldTarget: completion.yieldTarget ?? null,
+			brewTemp: completion.brewTemp ?? null,
+			preinfuseTarget: completion.preinfuseTarget ?? null,
+			stopOnWeight: completion.stopOnWeight,
+			autoTare: completion.autoTare,
 			rating: 0,
 			notes: '',
 			tags: completion.tags ? [...completion.tags] : []
@@ -328,10 +357,20 @@ export class HistoryStore {
 	 * parsing — the shell maps the Rust-shape `StoredShot` onto Crema's
 	 * own `StoredShot` and prepends it like a freshly-recorded shot.
 	 *
+	 * `extras` carries the Crema-only fields that ride in
+	 * `metadata.crema.*` of the exported `.shot.json` and are not part
+	 * of the v2 schema the Rust core models — `grinderModel`, `tags`,
+	 * inline-bean snapshot extras (`roastedOn`, `roastLevel`, `notes`),
+	 * and the QC-override snapshot (`yieldTarget` / `brewTemp` /
+	 * `preinfuseTarget` / `stopOnWeight` / `autoTare`). The shell's
+	 * `importShotFile` extracts the block before handing the JSON to
+	 * the wasm parser; legacy `.shot` (TCL) imports and pre-this-PR
+	 * `.shot.json` files have no extras and pass `undefined`.
+	 *
 	 * `null` if the imported record carries no telemetry samples (the
 	 * UI treats this as a "couldn't parse" error and toasts).
 	 */
-	addImported(imported: RustStoredShot): StoredShot | null {
+	addImported(imported: RustStoredShot, extras?: ImportExtras): StoredShot | null {
 		const series = mapTimedSamples(imported.record.samples);
 		if (series.length === 0) return null;
 
@@ -347,7 +386,11 @@ export class HistoryStore {
 		}
 
 		const finalWeight = imported.metadata.yield_out ?? peakWeight;
-		const bean = beanFromImported(imported.metadata.beans ?? null);
+		const bean = beanFromImported(
+			imported.metadata.beans ?? null,
+			imported.metadata.grinder_setting ?? null,
+			extras?.bean ?? null
+		);
 		const record: StoredShot = {
 			id: shotId(),
 			completedAt: imported.recorded_at,
@@ -360,14 +403,19 @@ export class HistoryStore {
 			peakTemp,
 			series,
 			bean,
-			// Imported legacy `.shot.json` files don't carry the
-			// equipment-level grinder model — Crema's pre-#81 records
-			// don't either. Leaving this `null` lets the upload-time
-			// cascade fall back to the current settings default.
-			grinderModel: null,
+			// Imported `.shot.json` files post-this-PR carry the equipment-
+			// level grinder model in `metadata.crema.grinder_model`; legacy
+			// files don't, so leave it `null` and the upload-time cascade
+			// re-reads the current settings default.
+			grinderModel: extras?.grinderModel ?? null,
+			yieldTarget: extras?.yieldTarget ?? null,
+			brewTemp: extras?.brewTemp ?? null,
+			preinfuseTarget: extras?.preinfuseTarget ?? null,
+			stopOnWeight: extras?.stopOnWeight,
+			autoTare: extras?.autoTare,
 			rating: imported.metadata.rating ?? 0,
 			notes: imported.metadata.notes ?? '',
-			tags: []
+			tags: extras?.tags ? [...extras.tags] : []
 		};
 		this.shots = [record, ...this.shots].slice(0, MAX_RECORDS);
 		this.persist();
@@ -445,16 +493,73 @@ function mapTimedSamples(
  * Split the Rust importer's combined `"brand · type"` string back into
  * a `ShotBean` so the History card / detail panel can display it. The
  * legacy log carries no roast-date or roast-level on the bean side, so
- * those stay null.
+ * those stay null when no structured `extras` ride alongside.
+ *
+ * Post-this-PR `.shot.json` exports carry the richer ShotBean snapshot
+ * (roastedOn, roastLevel, notes) under `metadata.crema.bean_*`; when
+ * the caller has parsed those out they ride here so the import keeps
+ * the same shape the live capture produced. `grinderSetting` comes
+ * from the v2 schema's `metadata.grinder.setting` slot.
  */
-function beanFromImported(label: string | null): ShotBean | null {
-	if (!label) return null;
-	const trimmed = label.trim();
-	if (!trimmed) return null;
-	const parts = trimmed.split('·').map((p) => p.trim()).filter(Boolean);
-	const roaster = parts[0] ?? trimmed;
-	const type = parts[1] ?? '';
-	return { roaster, type, roastedOn: null, roastLevel: null };
+function beanFromImported(
+	label: string | null,
+	grinderSetting: string | null,
+	extras: ImportBeanExtras | null
+): ShotBean | null {
+	const hasExtras = extras !== null && (extras.roastedOn !== undefined
+		|| extras.roastLevel !== undefined
+		|| extras.notes !== undefined);
+	if (!label && !hasExtras && !grinderSetting) return null;
+	let roaster = '';
+	let type = '';
+	if (label) {
+		const trimmed = label.trim();
+		if (trimmed) {
+			const parts = trimmed.split('·').map((p) => p.trim()).filter(Boolean);
+			roaster = parts[0] ?? trimmed;
+			type = parts[1] ?? '';
+		}
+	}
+	const out: Record<string, unknown> = {
+		roaster,
+		type,
+		roastedOn: extras?.roastedOn ?? null,
+		roastLevel: extras?.roastLevel ?? null
+	};
+	if (extras?.notes && extras.notes.length > 0) out.notes = extras.notes;
+	if (grinderSetting && grinderSetting.length > 0) out.grinderSetting = grinderSetting;
+	return out as unknown as ShotBean;
+}
+
+/**
+ * Structured `metadata.crema.bean_*` slots a Crema-exported `.shot.json`
+ * carries — the ShotBean fields the v2 schema's bean object can't model
+ * (`roastedOn` / `roastLevel`) plus `notes`. All optional; `undefined`
+ * means "absent in the source file", distinct from a parsed `null`
+ * (which means "explicitly empty").
+ */
+export interface ImportBeanExtras {
+	readonly roastedOn?: string | null;
+	readonly roastLevel?: number | null;
+	readonly notes?: string;
+}
+
+/**
+ * The full `metadata.crema.*` block of a Crema-exported `.shot.json`,
+ * extracted by `importShotFile` before the wasm parser strips it. Each
+ * field optional; absent means "not in the source" and downstream
+ * fall-backs apply (legacy / pre-PR `.shot.json` exports omit the whole
+ * block).
+ */
+export interface ImportExtras {
+	readonly grinderModel?: string | null;
+	readonly tags?: readonly string[];
+	readonly yieldTarget?: number | null;
+	readonly brewTemp?: number | null;
+	readonly preinfuseTarget?: number | null;
+	readonly stopOnWeight?: boolean;
+	readonly autoTare?: boolean;
+	readonly bean?: ImportBeanExtras | null;
 }
 
 /**
@@ -534,11 +639,38 @@ function loadShots(): StoredShot[] {
 			typeof grinderModelRaw === 'string' && grinderModelRaw.length > 0
 				? grinderModelRaw
 				: null;
+		// QC-override snapshot — `yieldTarget` / `brewTemp` /
+		// `preinfuseTarget` / `stopOnWeight` / `autoTare` are frozen on the
+		// shot at completion time (see `ShotCompleted` handler in
+		// `app.svelte.ts`). Legacy records pre-this-PR have none of them;
+		// read each defensively so a non-number / non-bool / missing key
+		// lands as `null` or `undefined` and downstream readers fall back
+		// to the embedded profile slot's defaults.
+		const yieldTarget =
+			typeof obj.yieldTarget === 'number' && Number.isFinite(obj.yieldTarget)
+				? obj.yieldTarget
+				: null;
+		const brewTemp =
+			typeof obj.brewTemp === 'number' && Number.isFinite(obj.brewTemp)
+				? obj.brewTemp
+				: null;
+		const preinfuseTarget =
+			typeof obj.preinfuseTarget === 'number' && Number.isFinite(obj.preinfuseTarget)
+				? obj.preinfuseTarget
+				: null;
+		const stopOnWeight =
+			typeof obj.stopOnWeight === 'boolean' ? obj.stopOnWeight : undefined;
+		const autoTare = typeof obj.autoTare === 'boolean' ? obj.autoTare : undefined;
 		out.push({
 			...(obj as unknown as StoredShot),
 			bean,
 			grinderModel,
 			tags,
+			yieldTarget,
+			brewTemp,
+			preinfuseTarget,
+			stopOnWeight,
+			autoTare,
 			visualizerId: typeof obj.visualizerId === 'string' ? obj.visualizerId : null,
 			deletedAt: typeof obj.deletedAt === 'number' ? obj.deletedAt : null
 		});
