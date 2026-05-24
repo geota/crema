@@ -180,12 +180,12 @@
 	{#if !oauthConfigured}
 		<StRow
 			title="OAuth client not configured"
-			sub="This build of Crema doesn't have a Visualizer OAuth client ID set. See web/docs/visualizer-oauth-setup.md to register a Doorkeeper application and re-build with VITE_VISUALIZER_CLIENT_ID."
+			sub="This build of Crema doesn't have a Visualizer OAuth client ID set. See docs/35-visualizer-oauth-setup.md to register a Doorkeeper application and re-build with VITE_VISUALIZER_CLIENT_ID."
 		>
 			{#snippet control()}
 				<a
 					class="bs-btn"
-					href="https://github.com/adrian-m/crema/blob/main/web/docs/visualizer-oauth-setup.md"
+					href="https://github.com/geota/crema/blob/main/docs/35-visualizer-oauth-setup.md"
 					target="_blank"
 					rel="noopener noreferrer"
 				>
