@@ -580,13 +580,33 @@ export class CremaApp {
 					peakTemp: event.content.peak_temp ?? null,
 					peakWeight: event.content.peak_weight ?? null,
 					finalWeight: event.content.final_weight ?? null,
+					// `ShotBean` is the *snapshot* of the live bean at the moment
+					// the shot finished — every field below is frozen from the
+					// live row right now so a later edit can't retroactively
+					// rewrite history (docs/28 §"Bean ↔ shot association"). The
+					// downstream Visualizer uploader reads ONLY this snapshot
+					// for bean content (`bean_brand`, `bean_type`, `roast_date`,
+					// `roast_level`, `bean_notes`, `grinder_setting`); the live
+					// row is consulted only as a link pointer for `coffee_bag_id`.
 					bean: activeBean
 						? {
 								beanId: activeBean.id,
 								roaster: activeRoaster?.name.trim() ?? '',
 								type: activeBean.name.trim(),
 								roastedOn: activeBean.roastedOn,
-								roastLevel: activeBean.roastLevel
+								roastLevel: activeBean.roastLevel,
+								// Optional snapshot fields — omitted when empty so
+								// the persisted record stays minimal.
+								...(activeBean.notes ? { notes: activeBean.notes } : {}),
+								...(activeBean.grinderSetting
+									? { grinderSetting: activeBean.grinderSetting }
+									: {}),
+								...(activeBean.tags && activeBean.tags.length > 0
+									? { tags: [...activeBean.tags] }
+									: {}),
+								...(activeBean.visualizerId
+									? { visualizerId: activeBean.visualizerId }
+									: {})
 							}
 						: null
 				});

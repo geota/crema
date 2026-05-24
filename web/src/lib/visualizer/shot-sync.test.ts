@@ -35,7 +35,7 @@ import {
 	signatureForRoaster as wasmSignatureForRoaster,
 	reconcileShots as wasmReconcileShots
 } from '../wasm/de1_wasm.js';
-import type { StoredShot } from '../history/model.ts';
+import type { ShotBean, StoredShot } from '../history/model.ts';
 
 // ── Types (mirrored from shot-sync-signatures.ts) ────────────────────
 
@@ -124,6 +124,45 @@ function storedShotFromWire(remote: WireShot): StoredShot {
 		visualizerId: remote.id,
 		deletedAt: null
 	};
+}
+
+// ── Mirror of $lib/bean/visualizer-sync :: roastLevelToWire ──────────
+//
+// The shot-sync inline-bean mapper banding-encodes `bean.roastLevel`
+// (1..10) into Visualizer's free-text `roast_level` field using the
+// same 5-band thresholds as the bean library's bag write-side. If this
+// banding drifts from `bean/visualizer-sync.ts`'s `roastLevelToWire`
+// the round-trip between a shot's inline bean and the synced bag's
+// own roast_level will desync — keep both in lock-step.
+function roastLevelToWire(level: number | null): string | null {
+	if (level == null) return null;
+	if (level <= 2) return 'Light';
+	if (level <= 4) return 'Medium-Light';
+	if (level <= 6) return 'Medium';
+	if (level <= 8) return 'Medium-Dark';
+	return 'Dark';
+}
+
+// ── Mirror of $lib/visualizer/shot-sync :: inlineBeanPatch ───────────
+//
+// The shot-sync module's `inlineBeanPatch` is pure, but it imports via
+// `$lib/...` which node strip-types can't resolve. The test mirror
+// follows the same pattern the wasm-backed helpers use above.
+function inlineBeanPatch(bean: ShotBean | null | undefined): Record<string, unknown> {
+	const out: Record<string, unknown> = {};
+	if (!bean) return out;
+	const roaster = bean.roaster?.trim();
+	if (roaster) out.bean_brand = roaster;
+	const type = bean.type?.trim();
+	if (type) out.bean_type = type;
+	if (bean.roastedOn) out.roast_date = bean.roastedOn;
+	const roastLevelStr = roastLevelToWire(bean.roastLevel);
+	if (roastLevelStr) out.roast_level = roastLevelStr;
+	const notes = bean.notes?.trim();
+	if (notes) out.bean_notes = notes;
+	const grinder = bean.grinderSetting?.trim();
+	if (grinder) out.grinder_setting = grinder;
+	return out;
 }
 
 // ── Wasm bootstrap ────────────────────────────────────────────────────
@@ -446,5 +485,136 @@ describe('storedShotFromWire', () => {
 		assert.equal(local.deletedAt, null);
 		assert.deepEqual(local.series, []);
 		assert.ok(local.id.startsWith('shot:remote:'));
+	});
+});
+
+describe('inlineBeanPatch', () => {
+	it('returns an empty object when the snapshot is null', () => {
+		assert.deepEqual(inlineBeanPatch(null), {});
+		assert.deepEqual(inlineBeanPatch(undefined), {});
+	});
+
+	it('returns an empty object when every snapshot field is empty', () => {
+		const bean: ShotBean = {
+			roaster: '',
+			type: '',
+			roastedOn: null,
+			roastLevel: null
+		};
+		assert.deepEqual(inlineBeanPatch(bean), {});
+	});
+
+	it('maps the v1 ShotBean fields onto bean_brand / bean_type / roast_date / roast_level', () => {
+		const bean: ShotBean = {
+			beanId: 'bean:abc',
+			roaster: 'Onyx Coffee Lab',
+			type: 'Geisha Esmeralda',
+			roastedOn: '2026-05-16',
+			roastLevel: 2
+		};
+		assert.deepEqual(inlineBeanPatch(bean), {
+			bean_brand: 'Onyx Coffee Lab',
+			bean_type: 'Geisha Esmeralda',
+			roast_date: '2026-05-16',
+			roast_level: 'Light'
+		});
+	});
+
+	it('maps the new snapshot fields onto bean_notes + grinder_setting', () => {
+		const bean: ShotBean = {
+			roaster: 'Sey',
+			type: 'Kenya Kii',
+			roastedOn: null,
+			roastLevel: 4,
+			notes: 'Floral, blackcurrant.',
+			grinderSetting: '2.5'
+		};
+		assert.deepEqual(inlineBeanPatch(bean), {
+			bean_brand: 'Sey',
+			bean_type: 'Kenya Kii',
+			roast_level: 'Medium-Light',
+			bean_notes: 'Floral, blackcurrant.',
+			grinder_setting: '2.5'
+		});
+	});
+
+	it('trims whitespace on string fields and omits empty results', () => {
+		const bean: ShotBean = {
+			roaster: '   ',
+			type: '  Heirloom  ',
+			roastedOn: '2026-05-08',
+			roastLevel: null,
+			notes: '   ',
+			grinderSetting: '  '
+		};
+		assert.deepEqual(inlineBeanPatch(bean), {
+			bean_type: 'Heirloom',
+			roast_date: '2026-05-08'
+		});
+	});
+
+	it('bands roastLevel 1..10 through the 5-band roastLevelToWire', () => {
+		const cases: Array<[number, string]> = [
+			[1, 'Light'],
+			[2, 'Light'],
+			[3, 'Medium-Light'],
+			[4, 'Medium-Light'],
+			[5, 'Medium'],
+			[6, 'Medium'],
+			[7, 'Medium-Dark'],
+			[8, 'Medium-Dark'],
+			[9, 'Dark'],
+			[10, 'Dark']
+		];
+		for (const [level, wireValue] of cases) {
+			const bean: ShotBean = {
+				roaster: 'R',
+				type: 'T',
+				roastedOn: null,
+				roastLevel: level
+			};
+			assert.equal(inlineBeanPatch(bean).roast_level, wireValue);
+		}
+	});
+
+	it('skips fields with falsy / empty sources so an empty bean cannot clobber server values', () => {
+		// All-empty snapshot, except a roastedOn — only that one slot
+		// rides out. Crucially, the function does NOT emit
+		// `bean_brand: ''` / `bean_notes: ''` / etc — those would
+		// overwrite the user's Visualizer-side edits with blanks.
+		const bean: ShotBean = {
+			roaster: '',
+			type: '',
+			roastedOn: '2026-05-08',
+			roastLevel: null,
+			notes: '',
+			grinderSetting: ''
+		};
+		assert.deepEqual(inlineBeanPatch(bean), { roast_date: '2026-05-08' });
+	});
+
+	it('does NOT include visualizerId / tags / beanId — those route through coffee_bag_id + tag_list', () => {
+		// The snapshot's visualizerId is a *link pointer* — it rides on
+		// `coffee_bag_id` via `resolveCoffeeBagId`, not in the inline
+		// bean block. Same for `tags` (folded into `tag_list`) and
+		// `beanId` (FK into the local library, never serialised).
+		const bean: ShotBean = {
+			beanId: 'bean:xyz',
+			roaster: 'R',
+			type: 'T',
+			roastedOn: null,
+			roastLevel: null,
+			tags: ['daily-driver'],
+			visualizerId: 'vis-uuid-here'
+		};
+		const out = inlineBeanPatch(bean);
+		assert.equal(out.bean_brand, 'R');
+		assert.equal(out.bean_type, 'T');
+		assert.ok(!('coffee_bag_id' in out));
+		assert.ok(!('tag_list' in out));
+		assert.ok(!('visualizerId' in out));
+		assert.ok(!('beanId' in out));
+		// Also: no `grinder_model` slot — that's task #81's scope.
+		assert.ok(!('grinder_model' in out));
 	});
 });

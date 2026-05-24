@@ -29,12 +29,13 @@
  */
 
 import { VisualizerError } from '$lib/bean';
-// Imported directly from the store module rather than via `$lib/bean`
-// to avoid an import cycle: `$lib/bean/index.ts` re-exports
+// Imported directly from the store / sync modules rather than via
+// `$lib/bean` to avoid an import cycle: `$lib/bean/index.ts` re-exports
 // `$lib/visualizer`, which is *this* module's package.
 import { getBeanStore } from '$lib/bean/store.svelte';
+import { roastLevelToWire } from '$lib/bean/visualizer-sync';
 import { exportStoredShotAsV2Json } from '$lib/history/v2-export';
-import type { StoredShot } from '$lib/history/model';
+import type { ShotBean, StoredShot } from '$lib/history/model';
 import { getSettingsStore } from '$lib/settings';
 import { isConnected, NotAuthenticatedError, withFreshToken } from './token-store';
 import type { components } from './openapi';
@@ -253,69 +254,96 @@ function wireShotFromDetail(summary: ShotSummary, detail: ShotDetail): WireShot 
 // ── Public surface ────────────────────────────────────────────────────
 
 /**
- * Resolve the bag-link + tag-list metadata that `POST /shots/upload`
- * doesn't accept on its body but `PATCH /shots/{id}` does. Per docs/28
- * §"Bean ↔ shot association", the shot carries a denormalised
- * {@link StoredShot.bean} snapshot (content source of truth) plus a
- * `beanId` link into the live library; the snapshot is frozen at
- * completion, while the live bean carries the mutable Visualizer link
- * (`Bean.visualizerId`) and the editable `Bean.tags` array.
+ * Map a {@link ShotBean} snapshot onto the inline-bean PATCH fields
+ * Visualizer accepts on `ShotUpdateRequest.shot` (the spec marks `shot`
+ * as `additionalProperties: true`, so the wire allows fields beyond the
+ * explicitly-listed ones, mirroring the read-side `DefaultShotDetail`).
  *
- * Resolution rules:
- *   - `coffee_bag_id`: read from the live bean (looked up via
- *     `shot.bean.beanId`). The snapshot itself has no `visualizerId`
- *     field today — if it ever gains one, prefer that.
- *   - `tag_list`: union of {@link StoredShot.tags} (shot-level tags;
- *     pulled-back from a previous Visualizer sync) and the live bean's
- *     `tags` array. Shot tags ride first, bean tags after, dedup is
- *     case-sensitive preserving first occurrence (mirrors the
- *     `TagInput` "trim + already-includes" pattern in `$lib/components`).
- *     The shot-snapshot's `tags` field (if it ever lands per docs/28) is
- *     read defensively and folded in ahead of the live bean's tags.
+ * **Snapshot-only** (docs/28 §"Bean ↔ shot association"): every field
+ * below is read from the frozen-at-completion {@link ShotBean}, never
+ * from the live bean. Reading live-bean content would retroactively
+ * rewrite history when the user later edits the bag. The one place
+ * live-bean lookup is correct is the {@link resolveCoffeeBagId} fallback
+ * for the `coffee_bag_id` *link pointer* — content stays snapshot-only.
  *
- * Returns `null` on either field when nothing is resolvable. Caller
- * skips the follow-up PATCH entirely if the whole record is empty (so
- * an empty union doesn't clobber server-side tags).
+ * Each Crema field maps to a Visualizer wire slot per the field map in
+ * the PR description; empty strings / `null` sources are skipped so
+ * an empty bean doesn't blow away server-side values the user filled in
+ * via Visualizer's web UI.
+ *
+ * Pure (no fetch, no settings, no wasm). The test suite mirrors this
+ * helper inline (the same way it mirrors `signatureForShot` /
+ * `storedShotFromWire`) because `$lib` aliases don't resolve under
+ * `node --test`. Any change to the logic here MUST land in the test's
+ * inline mirror as well.
  */
-function resolvePostUploadLinks(shot: StoredShot): {
-	coffeeBagId: string | null;
-	tagList: string[] | null;
-} {
-	// `ShotBean` doesn't carry a snapshotted `visualizerId` today, but
-	// docs/28 §design-decisions §3 calls out the snapshot as the content
-	// source of truth — so we read defensively in case the field lands
-	// later. Fall through to the live bean if absent.
+export function inlineBeanPatch(bean: ShotBean | null | undefined): Record<string, unknown> {
+	const out: Record<string, unknown> = {};
+	if (!bean) return out;
+	const roaster = bean.roaster?.trim();
+	if (roaster) out.bean_brand = roaster;
+	const type = bean.type?.trim();
+	if (type) out.bean_type = type;
+	if (bean.roastedOn) out.roast_date = bean.roastedOn;
+	const roastLevelStr = roastLevelToWire(bean.roastLevel);
+	if (roastLevelStr) out.roast_level = roastLevelStr;
+	const notes = bean.notes?.trim();
+	if (notes) out.bean_notes = notes;
+	const grinder = bean.grinderSetting?.trim();
+	if (grinder) out.grinder_setting = grinder;
+	// NOTE: `grinder_model` (e.g. "Niche Zero") is task #81's scope —
+	// it'll be wired top-level on equipment settings, not on the bean
+	// snapshot. Don't add a `grinder_model` slot here.
+	return out;
+}
+
+/**
+ * Resolve the `coffee_bag_id` link pointer for a shot's post-upload
+ * PATCH. Per docs/28 §"Bean ↔ shot association", the snapshot is the
+ * content source of truth — but the bag's *Visualizer id* is a mutable
+ * link the user may not have synced until *after* the shot was pulled.
+ * So the snapshot's own `visualizerId` (captured at completion if
+ * known) wins, falling back to the live bean's `visualizerId` only when
+ * the snapshot didn't capture one.
+ *
+ * This is THE ONLY place the live bean is read on the upload path —
+ * everywhere else we deliberately stick to the snapshot so a later edit
+ * can't rewrite history.
+ */
+function resolveCoffeeBagId(shot: StoredShot): string | null {
 	const snapshot = shot.bean ?? null;
-	const snapshotLoose = snapshot as unknown as Record<string, unknown> | null;
-	const snapshotVisualizerId =
-		snapshotLoose && typeof snapshotLoose.visualizerId === 'string'
-			? (snapshotLoose.visualizerId as string)
-			: null;
-	const snapshotTagsRaw = snapshotLoose?.tags;
-	const snapshotTags = Array.isArray(snapshotTagsRaw)
-		? snapshotTagsRaw.filter((t): t is string => typeof t === 'string')
-		: [];
-
-	let liveBean: ReturnType<ReturnType<typeof getBeanStore>['getBean']> = null;
+	if (snapshot?.visualizerId) return snapshot.visualizerId;
 	const liveBeanId = snapshot?.beanId ?? null;
-	if (liveBeanId) {
-		try {
-			liveBean = getBeanStore().getBean(liveBeanId);
-		} catch {
-			liveBean = null;
-		}
+	if (!liveBeanId) return null;
+	try {
+		const liveBean = getBeanStore().getBean(liveBeanId);
+		return liveBean?.visualizerId ?? null;
+	} catch {
+		return null;
 	}
+}
 
-	const coffeeBagId = snapshotVisualizerId ?? liveBean?.visualizerId ?? null;
-
-	// Union: shot.tags first, snapshot-bean.tags second, live-bean.tags
-	// third. Each source is trimmed + filtered for non-empties to match
-	// the bean library's normalisation (`TagInput.commit` in
-	// `$lib/components/profiles/TagInput.svelte`: `t.trim()`, dedup
-	// case-sensitive). Set preserves first-seen order.
+/**
+ * Resolve the shot's `tag_list` for the post-upload PATCH. Per docs/38
+ * row 5, we auto-tag uploaded shots with the union of:
+ *   1. {@link StoredShot.tags} — shot-level tags, pulled-back from a
+ *      previous Visualizer sync or set by the user explicitly.
+ *   2. `shot.bean.tags` — the bean's tags at shot-completion time (the
+ *      frozen snapshot — NOT the live bean).
+ *
+ * Dedup is case-sensitive, preserves first-seen order, and trims each
+ * entry (mirrors the `TagInput.commit` "trim + already-includes"
+ * pattern in `$lib/components/profiles/TagInput.svelte`).
+ *
+ * Returns `null` when the union is empty so the caller can skip the
+ * `tag_list` field entirely — sending `[]` would clobber any tags the
+ * user added on Visualizer's web side.
+ */
+function resolveTagList(shot: StoredShot): string[] | null {
 	const merged: string[] = [];
 	const seen = new Set<string>();
-	const pushAll = (src: readonly string[]): void => {
+	const pushAll = (src: readonly string[] | undefined): void => {
+		if (!src) return;
 		for (const raw of src) {
 			const t = raw.trim();
 			if (!t || seen.has(t)) continue;
@@ -323,13 +351,9 @@ function resolvePostUploadLinks(shot: StoredShot): {
 			merged.push(t);
 		}
 	};
-	pushAll(shot.tags ?? []);
-	pushAll(snapshotTags);
-	pushAll(liveBean?.tags ?? []);
-
-	const tagList = merged.length > 0 ? merged : null;
-
-	return { coffeeBagId, tagList };
+	pushAll(shot.tags);
+	pushAll(shot.bean?.tags);
+	return merged.length > 0 ? merged : null;
 }
 
 /**
@@ -340,12 +364,18 @@ function resolvePostUploadLinks(shot: StoredShot): {
  * the local row.
  *
  * After a successful upload, fires a soft follow-up `PATCH /shots/{id}`
- * to wire the shot to its synced coffee bag (item 1) and to seed the
- * shot's `tag_list` from the bean's tags (item 5), per docs/38
- * §"Recommendations" rows 1 + 5. Both fields live on
- * `ShotUpdateRequest` (not `DecentUploadPayload`), so they must ride a
- * separate PATCH. PATCH failure is treated as soft — logged, not
- * rethrown — so a flaky link wire doesn't lose the uploaded shot.
+ * carrying every field `DecentUploadPayload` doesn't accept on its body
+ * but `ShotUpdateRequest.shot` does:
+ *   - `coffee_bag_id` — link to the synced coffee bag (docs/38 row 1).
+ *   - `tag_list` — auto-tag with the bean's tags (docs/38 row 5).
+ *   - `bean_brand` / `bean_type` / `roast_date` / `roast_level` /
+ *     `bean_notes` / `grinder_setting` — the inline bean snapshot
+ *     content (docs/38 §"Bag-side gaps to close"). All sourced from
+ *     {@link StoredShot.bean} — the *snapshot*, never the live bean —
+ *     so a later edit to the bag can't retroactively rewrite history.
+ *
+ * PATCH failure is treated as soft — logged, not rethrown — so a flaky
+ * link wire doesn't lose the uploaded shot.
  */
 export async function uploadShot(shot: StoredShot): Promise<{ visualizerId: string }> {
 	if (!isConnected()) {
@@ -363,18 +393,23 @@ export async function uploadShot(shot: StoredShot): Promise<{ visualizerId: stri
 		);
 	}
 
-	// Items 1 + 5: link the shot to its bag and stamp tags via a
-	// follow-up PATCH. Soft failure — log + swallow.
-	const { coffeeBagId, tagList } = resolvePostUploadLinks(shot);
-	if (coffeeBagId != null || (tagList != null && tagList.length > 0)) {
+	// Post-upload PATCH: bag link + auto-tags + inline bean snapshot.
+	// Build each block independently so empty sources skip cleanly (no
+	// risk of overwriting a Visualizer-side edit with a blank value).
+	const coffeeBagId = resolveCoffeeBagId(shot);
+	const tagList = resolveTagList(shot);
+	const inlineBean = inlineBeanPatch(shot.bean);
+	const hasInlineBean = Object.keys(inlineBean).length > 0;
+	if (coffeeBagId != null || (tagList != null && tagList.length > 0) || hasInlineBean) {
 		try {
 			await patchShot(result.id, {
 				...(coffeeBagId != null ? { coffeeBagId } : {}),
-				...(tagList != null && tagList.length > 0 ? { tagList } : {})
+				...(tagList != null && tagList.length > 0 ? { tagList } : {}),
+				...(hasInlineBean ? { inlineBean } : {})
 			});
 		} catch (e) {
 			console.warn(
-				'[Crema] post-upload PATCH (coffee_bag_id / tag_list) failed:',
+				'[Crema] post-upload PATCH (coffee_bag_id / tag_list / inline bean) failed:',
 				e instanceof Error ? e.message : String(e)
 			);
 		}
@@ -410,6 +445,11 @@ export async function deleteShot(visualizerId: string): Promise<void> {
  *     `rating` of `null` omits `flavor` entirely.
  *   - `coffeeBagId` → `coffee_bag_id` — link the shot to a synced bag.
  *   - `tagList` → `tag_list` — overwrite the shot's tag set.
+ *   - `inlineBean` — extra bean-content fields (`bean_brand`,
+ *     `bean_type`, `roast_date`, `roast_level`, `bean_notes`,
+ *     `grinder_setting`). Merged into `shot` via the spec's
+ *     `additionalProperties: true` index signature on
+ *     `ShotUpdateRequest.shot`.
  *
  * Only the keys explicitly present on `patch` ride out; absent keys are
  * left untouched server-side.
@@ -421,12 +461,18 @@ export async function patchShot(
 		notes?: string;
 		coffeeBagId?: string | null;
 		tagList?: string[];
+		inlineBean?: Record<string, unknown>;
 	}
 ): Promise<void> {
 	if (!isConnected()) {
 		throw new VisualizerError(401, 'auth', 'Sign in to Visualizer first.');
 	}
-	const shotBody: ShotUpdateRequest['shot'] = {};
+	// Start from the inline-bean block (if any) so the typed slots below
+	// take precedence on key collisions. `ShotUpdateRequest.shot` is
+	// `{ explicit props } & { [key: string]: unknown }` per the spec's
+	// `additionalProperties: true`, so the extra inline-bean fields ride
+	// directly on the same body.
+	const shotBody: ShotUpdateRequest['shot'] = { ...(patch.inlineBean ?? {}) };
 	if (patch.notes !== undefined) shotBody.private_notes = patch.notes;
 	if (patch.rating !== undefined) {
 		// 0..5 star → 0..15 cupping slot. `null` rating means "unrated" —
