@@ -128,7 +128,7 @@
 		if (testStatus.kind === 'ok') return testStatus.message;
 		if (testStatus.kind === 'error') return testStatus.message;
 		if (accountError) return `Couldn't fetch your profile: ${accountError}`;
-		return 'Signed in · bean library + shots sync on demand';
+		return 'Signed in';
 	});
 
 	/** Export the local shot history as a JSON download. */
