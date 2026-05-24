@@ -606,16 +606,21 @@
 	 * `0.00` to match the other "connected but quiet" channels rather
 	 * than the eye-grabbing dash.
 	 */
+	// Auto-switch to the scale-derived resistance when a scale
+	// estimate exists for this sample (`resistanceWeight ?? resistance`).
+	// Same per-sample fallback the charts apply — a shot with no
+	// scale paired reads the DE1-flow value, a paired shot reads
+	// the truer extraction signal (what exits the puck).
 	const resistanceVal = $derived.by<string>(() => {
 		let r: number | null | undefined;
 		if (pinnedSample) {
-			r = pinnedSample.resistance;
+			r = pinnedSample.resistanceWeight ?? pinnedSample.resistance;
 		} else if (finalShotSample) {
-			r = finalShotSample.resistance;
+			r = finalShotSample.resistanceWeight ?? finalShotSample.resistance;
 		} else if (tel === null) {
 			return '—';
 		} else {
-			r = tel.resistance;
+			r = tel.resistanceWeight ?? tel.resistance;
 		}
 		return r != null && Number.isFinite(r) ? r.toFixed(2) : '0.00';
 	});

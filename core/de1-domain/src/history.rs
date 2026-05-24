@@ -218,6 +218,11 @@ mod tests {
                     frame_number: 2,
                     steam_temp: 0.0,
                 },
+                scale_weight: None,
+                scale_flow_weight: None,
+                dispensed_volume: None,
+                resistance: None,
+                resistance_weight: None,
             }],
         }
     }

@@ -105,7 +105,8 @@
 	/** Read the channel value off a telemetry sample, pre-converted to display unit. */
 	function valueAt(s: TelemetrySample, ch: Channel): number | null {
 		if (ch === 'pressure') return toDisplay(s.pressure, ch);
-		if (ch === 'resistance') return toDisplay(s.resistance ?? null, ch);
+		// Resistance auto-switch: prefer scale-derived per-sample.
+		if (ch === 'resistance') return toDisplay(s.resistanceWeight ?? s.resistance ?? null, ch);
 		if (ch === 'flow') return toDisplay(s.flow, ch);
 		if (ch === 'water') return toDisplay(s.dispensedVolume ?? null, ch);
 		if (ch === 'temp') return toDisplay(s.temp, ch);

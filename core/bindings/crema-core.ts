@@ -247,6 +247,21 @@ export type Event =
 	 * (previously each shell duplicated the formula + threshold).
 	 */
 	resistance?: number;
+	/**
+	 * Scale-derived puck resistance — `group_pressure /
+	 * weight_flow²` where `weight_flow` is the scale's mass-flow
+	 * rate (g/s). The truer extraction signal during the pour
+	 * because it measures what exits the puck into the cup, not
+	 * what the pump pushes in. `None` when no scale is paired (no
+	 * estimate yet), when the scale's flow is below the resistance
+	 * floor, or when any input is non-finite. Units: `bar / (g/s)²`.
+	 * The chart prefers this over [`Self::resistance`] per-sample
+	 * (with the DE1-flow value as fallback when this is `None`)
+	 * so shots with and without a scale render coherently. The
+	 * legacy de1app TCL computes the same metric — see
+	 * `de1plus/gui.tcl:3414-3416`.
+	 */
+	resistance_weight?: number;
 }}
 	/** A weight reading arrived from the scale, smoothed by the flow estimator. */
 	| { type: "ScaleReading", content: {
