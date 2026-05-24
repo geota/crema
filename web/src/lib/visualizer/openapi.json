@@ -1,0 +1,2776 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Visualizer API",
+    "version": "1.8.2",
+    "description": "REST API for Visualizer.\n\nSupports:\n- Shot retrieval and upload\n- Shot updates/deletes\n- Roaster CRUD (premium)\n- Coffee bag CRUD (premium)\n\nAuthentication\n\nThe Visualizer API supports the following authentication methods:\n\n- HTTP Basic Authentication (`email` + `password`)\n  Acceptable for personal use cases, such as private scripts, local tooling, or internal automations.\n\n- OAuth 2.0 Authorization Code Flow\n  Recommended for public applications, distributed integrations, and any workflow exposed to other users.\n\nOAuth scopes\n\n- `read` — read-only access\n- `upload` — permission to upload shots only\n- `write` — full write access\n\nScope behavior\n\n- `upload` is a constrained, lower-risk write scope intended for ingestion-only clients.\n- `write` is required for broader mutating operations (for example, update/delete and other write endpoints).\n\nSecurity recommendation\n\n- For public or user-facing integrations, OAuth should be used instead of Basic Auth.\n- This avoids collecting user passwords outside Visualizer and reduces credential exposure risk.\n\nRate limits\n\n- All API requests are limited to 50 requests per minute per client IP.\n- All API requests are also limited to 200 requests per 10 minutes per client IP.\n- Authenticated API requests are additionally limited to 200 requests per 10 minutes per user.\n- When a limit is exceeded, the API returns `429 Too Many Requests` with a JSON error payload.\n\nNotes:\n- Some read endpoints are public (`/shots`, `/shots/{id}`, `/shots/shared`)\n- Write endpoints require authenticated users and write scope (OAuth)\n- Roaster/Coffee Bag writes also require premium access\n",
+    "contact": {
+      "email": "miha@visualizer.coffee"
+    }
+  },
+  "servers": [
+    {
+      "url": "https://visualizer.coffee/api",
+      "description": "Production"
+    },
+    {
+      "url": "http://localhost:3000/api",
+      "description": "Local development"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Credentials"
+    },
+    {
+      "name": "Shots"
+    },
+    {
+      "name": "Roasters"
+    },
+    {
+      "name": "Coffee Bags"
+    }
+  ],
+  "paths": {
+    "/me": {
+      "get": {
+        "tags": [
+          "Credentials"
+        ],
+        "summary": "Get current account",
+        "operationId": "getCurrentAccount",
+        "security": [
+          {
+            "OAuth2": [
+              "read"
+            ]
+          },
+          {
+            "BasicAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authenticated account details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required."
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/shots": {
+      "get": {
+        "tags": [
+          "Shots"
+        ],
+        "summary": "List shots",
+        "operationId": "listShots",
+        "description": "Returns shots sorted by start time (default) or `updated_at`.\n\nBehavior differs by auth state:\n- Unauthenticated: only public shots\n- Authenticated: own shots\n",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Page"
+          },
+          {
+            "$ref": "#/components/parameters/Items"
+          },
+          {
+            "$ref": "#/components/parameters/ShotSort"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated shot summaries.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShotListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid pagination/sort.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/shots/upload": {
+      "post": {
+        "tags": [
+          "Shots"
+        ],
+        "summary": "Upload shot export",
+        "operationId": "uploadShot",
+        "description": "Upload a shot file via one of:\n- `multipart/form-data` with `file`\n- `application/json` raw payload\n",
+        "security": [
+          {
+            "OAuth2": [
+              "upload"
+            ]
+          },
+          {
+            "OAuth2": [
+              "write"
+            ]
+          },
+          {
+            "BasicAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "file"
+                ],
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary"
+                  }
+                }
+              }
+            },
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ShotUploadPayload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Shot created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShotUploadResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required."
+          },
+          "403": {
+            "description": "Missing OAuth scope."
+          },
+          "422": {
+            "description": "Could not parse or persist shot.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/shots/shared": {
+      "get": {
+        "tags": [
+          "Shots"
+        ],
+        "summary": "Resolve shared shot(s)",
+        "operationId": "getSharedShots",
+        "description": "- With `code`: resolve a specific shared shot.\n- Without `code` and authenticated: return authenticated user's shared shots.\n- Without `code` and unauthenticated: returns 404.\n",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SharedCode"
+          },
+          {
+            "$ref": "#/components/parameters/ShotFormat"
+          },
+          {
+            "$ref": "#/components/parameters/WithData"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Shared shot or list of shared shots.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SharedShotsResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Shared shot not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/shots/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ShotId"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Shots"
+        ],
+        "summary": "Get shot",
+        "operationId": "getShot",
+        "description": "Returns a shot by id.\n\nWhen the authenticated user owns the shot, the response also includes `private_notes`.\n",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ShotFormat"
+          },
+          {
+            "$ref": "#/components/parameters/Essentials"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Shot detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShotDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Shot not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "Shots"
+        ],
+        "summary": "Update shot",
+        "operationId": "updateShot",
+        "security": [
+          {
+            "OAuth2": [
+              "write"
+            ]
+          },
+          {
+            "BasicAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ShotUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated shot detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShotDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required."
+          },
+          "403": {
+            "description": "Not authorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Shot not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request payload.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Shots"
+        ],
+        "summary": "Delete shot",
+        "operationId": "deleteShot",
+        "security": [
+          {
+            "OAuth2": [
+              "write"
+            ]
+          },
+          {
+            "BasicAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Shot deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required."
+          },
+          "403": {
+            "description": "Not authorized.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Shot not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/shots/{id}/download": {
+      "get": {
+        "tags": [
+          "Shots"
+        ],
+        "summary": "Download shot (alias of get shot)",
+        "operationId": "downloadShot",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ShotId"
+          },
+          {
+            "$ref": "#/components/parameters/ShotFormat"
+          },
+          {
+            "$ref": "#/components/parameters/Essentials"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Shot detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShotDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Shot not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/shots/{id}/profile": {
+      "get": {
+        "tags": [
+          "Shots"
+        ],
+        "summary": "Download shot profile file",
+        "operationId": "downloadShotProfile",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ShotId"
+          },
+          {
+            "$ref": "#/components/parameters/ProfileFormat"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Profile file stream.",
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "application/x-tcl": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Shot not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Shot has no profile.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/roasters": {
+      "get": {
+        "tags": [
+          "Roasters"
+        ],
+        "summary": "List roasters",
+        "operationId": "listRoasters",
+        "security": [
+          {
+            "OAuth2": [
+              "read"
+            ]
+          },
+          {
+            "BasicAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Page"
+          },
+          {
+            "$ref": "#/components/parameters/Items"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated roaster summaries.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoasterListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required."
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Roasters"
+        ],
+        "summary": "Create roaster",
+        "operationId": "createRoaster",
+        "security": [
+          {
+            "OAuth2": [
+              "write"
+            ]
+          },
+          {
+            "BasicAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoasterWriteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Roaster created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoasterDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required."
+          },
+          "403": {
+            "description": "Premium access or missing OAuth scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/roasters/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/RoasterId"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Roasters"
+        ],
+        "summary": "Get roaster",
+        "operationId": "getRoaster",
+        "security": [
+          {
+            "OAuth2": [
+              "read"
+            ]
+          },
+          {
+            "BasicAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Roaster detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoasterDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required."
+          },
+          "404": {
+            "description": "Roaster not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "Roasters"
+        ],
+        "summary": "Update roaster",
+        "operationId": "updateRoaster",
+        "security": [
+          {
+            "OAuth2": [
+              "write"
+            ]
+          },
+          {
+            "BasicAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoasterWriteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Roaster updated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoasterDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required."
+          },
+          "403": {
+            "description": "Premium access or missing OAuth scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Roaster not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Roasters"
+        ],
+        "summary": "Delete roaster",
+        "operationId": "deleteRoaster",
+        "security": [
+          {
+            "OAuth2": [
+              "write"
+            ]
+          },
+          {
+            "BasicAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Roaster deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required."
+          },
+          "403": {
+            "description": "Premium access or missing OAuth scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Roaster not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/coffee_bags": {
+      "get": {
+        "tags": [
+          "Coffee Bags"
+        ],
+        "summary": "List coffee bags",
+        "operationId": "listCoffeeBags",
+        "security": [
+          {
+            "OAuth2": [
+              "read"
+            ]
+          },
+          {
+            "BasicAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Page"
+          },
+          {
+            "$ref": "#/components/parameters/Items"
+          },
+          {
+            "$ref": "#/components/parameters/RoasterFilter"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated coffee bag summaries.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoffeeBagListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required."
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Coffee Bags"
+        ],
+        "summary": "Create coffee bag",
+        "operationId": "createCoffeeBag",
+        "security": [
+          {
+            "OAuth2": [
+              "write"
+            ]
+          },
+          {
+            "BasicAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CoffeeBagWriteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Coffee bag created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoffeeBagDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required."
+          },
+          "403": {
+            "description": "Premium access or missing OAuth scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/coffee_bags/{id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/CoffeeBagId"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Coffee Bags"
+        ],
+        "summary": "Get coffee bag",
+        "operationId": "getCoffeeBag",
+        "security": [
+          {
+            "OAuth2": [
+              "read"
+            ]
+          },
+          {
+            "BasicAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Coffee bag detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoffeeBagDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required."
+          },
+          "404": {
+            "description": "Coffee bag not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "Coffee Bags"
+        ],
+        "summary": "Update coffee bag",
+        "operationId": "updateCoffeeBag",
+        "security": [
+          {
+            "OAuth2": [
+              "write"
+            ]
+          },
+          {
+            "BasicAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CoffeeBagWriteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Coffee bag updated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoffeeBagDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required."
+          },
+          "403": {
+            "description": "Premium access or missing OAuth scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Coffee bag not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Coffee Bags"
+        ],
+        "summary": "Delete coffee bag",
+        "operationId": "deleteCoffeeBag",
+        "security": [
+          {
+            "OAuth2": [
+              "write"
+            ]
+          },
+          {
+            "BasicAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Coffee bag deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required."
+          },
+          "403": {
+            "description": "Premium access or missing OAuth scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Coffee bag not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/roasters/{roaster_id}/coffee_bags": {
+      "get": {
+        "tags": [
+          "Coffee Bags"
+        ],
+        "summary": "Legacy nested coffee bag index",
+        "description": "Deprecated alias that redirects to `/coffee_bags?roaster_id={roaster_id}`.",
+        "operationId": "legacyNestedCoffeeBagsIndex",
+        "deprecated": true,
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RoasterId"
+          }
+        ],
+        "responses": {
+          "301": {
+            "description": "Permanent redirect to root coffee bag index."
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/roasters/{roaster_id}/coffee_bags/{id}": {
+      "get": {
+        "tags": [
+          "Coffee Bags"
+        ],
+        "summary": "Legacy nested coffee bag show",
+        "description": "Deprecated alias that redirects to `/coffee_bags/{id}`.",
+        "operationId": "legacyNestedCoffeeBagShow",
+        "deprecated": true,
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RoasterId"
+          },
+          {
+            "$ref": "#/components/parameters/CoffeeBagId"
+          }
+        ],
+        "responses": {
+          "301": {
+            "description": "Permanent redirect to root coffee bag show."
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "responses": {
+      "RateLimited": {
+        "description": "Too many requests. The API rate limit has been exceeded.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "error": "Too many requests. Please try again later."
+            }
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "BasicAuth": {
+        "type": "http",
+        "scheme": "basic",
+        "description": "Email/password authentication."
+      },
+      "OAuth2": {
+        "type": "oauth2",
+        "flows": {
+          "authorizationCode": {
+            "authorizationUrl": "https://visualizer.coffee/oauth/authorize",
+            "tokenUrl": "https://visualizer.coffee/oauth/token",
+            "refreshUrl": "https://visualizer.coffee/oauth/token",
+            "scopes": {
+              "read": "Read account metadata, shots, roasters, and coffee bags.",
+              "upload": "Upload shot files.",
+              "write": "Update/delete shots and manage roasters/coffee bags."
+            }
+          }
+        }
+      }
+    },
+    "parameters": {
+      "Page": {
+        "name": "page",
+        "in": "query",
+        "schema": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "description": "1-based page number (default 1)."
+      },
+      "Items": {
+        "name": "items",
+        "in": "query",
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "description": "Items per page (default 10, max 100)."
+      },
+      "ShotSort": {
+        "name": "sort",
+        "in": "query",
+        "schema": {
+          "type": "string",
+          "enum": [
+            "updated_at"
+          ]
+        },
+        "description": "Set to `updated_at` for updated-time sorting. Omit for start-time sorting."
+      },
+      "ShotId": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "RoasterId": {
+        "name": "roaster_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "CoffeeBagId": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "SharedCode": {
+        "name": "code",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string"
+        },
+        "description": "Shared shot code (case-insensitive)."
+      },
+      "ShotFormat": {
+        "name": "format",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "enum": [
+            "default",
+            "beanconqueror"
+          ]
+        },
+        "description": "Optional output format used by shot serializers. Defaults to `default` when omitted. Legacy `decent` remains accepted as an alias for backward compatibility."
+      },
+      "ProfileFormat": {
+        "name": "format",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "enum": [
+            "csv",
+            "json",
+            "tcl"
+          ]
+        },
+        "description": "Profile output format. `tcl` is used when available and format is not `json`."
+      },
+      "Essentials": {
+        "name": "essentials",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
+        },
+        "description": "When present, omits full shot information payload."
+      },
+      "WithData": {
+        "name": "with_data",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
+        },
+        "description": "When present on shared shot responses, includes detailed shot information."
+      },
+      "RoasterFilter": {
+        "name": "roaster_id",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "description": "Filter coffee bags by roaster ID."
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        },
+        "example": {
+          "error": "Shot not found"
+        }
+      },
+      "DeleteResult": {
+        "type": "object",
+        "required": [
+          "success"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          }
+        },
+        "example": {
+          "success": true
+        }
+      },
+      "Paging": {
+        "type": "object",
+        "required": [
+          "count",
+          "page",
+          "limit",
+          "pages"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer"
+          },
+          "page": {
+            "type": "integer"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "pages": {
+            "type": "integer"
+          }
+        }
+      },
+      "MeResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "public",
+          "avatar_url"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "public": {
+            "type": "boolean"
+          },
+          "avatar_url": {
+            "type": "string",
+            "format": "uri"
+          }
+        }
+      },
+      "ShotSummary": {
+        "type": "object",
+        "required": [
+          "id",
+          "clock",
+          "updated_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "clock": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Shot start timestamp (unix seconds)."
+          },
+          "updated_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Last update timestamp (unix seconds)."
+          }
+        }
+      },
+      "ShotListResponse": {
+        "type": "object",
+        "required": [
+          "data",
+          "paging"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ShotSummary"
+            }
+          },
+          "paging": {
+            "$ref": "#/components/schemas/Paging"
+          }
+        }
+      },
+      "ShotDetail": {
+        "description": "Flexible shot payload. Keys vary by `format` and integration source.",
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/DefaultShotDetail"
+          },
+          {
+            "$ref": "#/components/schemas/BeanconquerorShotDetail"
+          }
+        ]
+      },
+      "DefaultShotDetail": {
+        "type": "object",
+        "description": "Default shot response shape used by Visualizer's native serializer.\n\n`private_notes` is only included when the authenticated user owns the shot.\nSome optional Visualizer-specific fields may be omitted entirely when blank.\n",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "user_id": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "duration": {
+            "type": "number",
+            "nullable": true
+          },
+          "profile_title": {
+            "type": "string",
+            "nullable": true
+          },
+          "drink_tds": {
+            "type": "string",
+            "nullable": true
+          },
+          "drink_ey": {
+            "type": "string",
+            "nullable": true
+          },
+          "espresso_enjoyment": {
+            "type": "integer",
+            "nullable": true
+          },
+          "bean_weight": {
+            "type": "string",
+            "nullable": true
+          },
+          "drink_weight": {
+            "type": "string",
+            "nullable": true
+          },
+          "grinder_model": {
+            "type": "string",
+            "nullable": true
+          },
+          "grinder_setting": {
+            "type": "string",
+            "nullable": true
+          },
+          "bean_brand": {
+            "type": "string",
+            "nullable": true
+          },
+          "bean_type": {
+            "type": "string",
+            "nullable": true
+          },
+          "roast_date": {
+            "type": "string",
+            "nullable": true
+          },
+          "espresso_notes": {
+            "type": "string",
+            "nullable": true
+          },
+          "roast_level": {
+            "type": "string",
+            "nullable": true
+          },
+          "bean_notes": {
+            "type": "string",
+            "nullable": true
+          },
+          "private_notes": {
+            "type": "string",
+            "nullable": true
+          },
+          "barista": {
+            "type": "string",
+            "nullable": true
+          },
+          "fragrance": {
+            "type": "integer",
+            "nullable": true
+          },
+          "aroma": {
+            "type": "integer",
+            "nullable": true
+          },
+          "flavor": {
+            "type": "integer",
+            "nullable": true
+          },
+          "aftertaste": {
+            "type": "integer",
+            "nullable": true
+          },
+          "acidity": {
+            "type": "integer",
+            "nullable": true
+          },
+          "bitterness": {
+            "type": "integer",
+            "nullable": true
+          },
+          "sweetness": {
+            "type": "integer",
+            "nullable": true
+          },
+          "mouthfeel": {
+            "type": "integer",
+            "nullable": true
+          },
+          "start_time": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "user_name": {
+            "type": "string"
+          },
+          "metadata": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ShotMetadata"
+              }
+            ],
+            "nullable": true
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "profile_url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "image_url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "roaster_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "coffee_bag_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "timeframe": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          },
+          "data": {
+            "$ref": "#/components/schemas/ShotSeriesData"
+          },
+          "brewdata": {
+            "$ref": "#/components/schemas/ShotBrewdata"
+          }
+        },
+        "example": {
+          "id": "15d4ec9f-7f86-4f63-b2ac-cfce8277f33f",
+          "user_id": "0c2f8248-7d67-44c1-a89a-3a6c0d468875",
+          "profile_title": "Rao Allonge",
+          "drink_weight": "42.1",
+          "bean_weight": "20.0",
+          "start_time": "2026-03-09T08:12:00Z",
+          "updated_at": 1741517580,
+          "timeframe": [
+            0,
+            1.2,
+            2.4
+          ],
+          "data": {
+            "espresso_pressure": [
+              0.5,
+              2.7,
+              8.4
+            ],
+            "espresso_flow": [
+              0,
+              1.1,
+              2.3
+            ]
+          },
+          "tags": [
+            "daily",
+            "washed"
+          ]
+        }
+      },
+      "BeanconquerorShotDetail": {
+        "type": "object",
+        "description": "Shot response shape used when `format=beanconqueror`.\n\n`meta.visualizer.private_notes` is only included when the authenticated user owns the shot.\nSome optional `meta.visualizer` fields may be omitted entirely when blank.\n",
+        "properties": {
+          "bean": {
+            "$ref": "#/components/schemas/BeanconquerorBean"
+          },
+          "mill": {
+            "$ref": "#/components/schemas/BeanconquerorMill"
+          },
+          "brew": {
+            "$ref": "#/components/schemas/BeanconquerorBrew"
+          },
+          "preparation": {
+            "$ref": "#/components/schemas/BeanconquerorPreparation"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/BeanconquerorMeta"
+          },
+          "brewdata": {
+            "$ref": "#/components/schemas/ShotBrewdata"
+          },
+          "timeframe": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          },
+          "data": {
+            "$ref": "#/components/schemas/ShotSeriesData"
+          }
+        },
+        "example": {
+          "bean": {
+            "roaster": "Sey",
+            "name": "Kenya Kii",
+            "roast": "Light"
+          },
+          "mill": {
+            "name": "EK43"
+          },
+          "brew": {
+            "grind_size": "7.5",
+            "brew_beverage_quantity": "40",
+            "grind_weight": "20"
+          },
+          "preparation": {
+            "name": "Beanconqueror"
+          },
+          "meta": {
+            "visualizer": {
+              "shot_id": "15d4ec9f-7f86-4f63-b2ac-cfce8277f33f",
+              "private_notes": "Dialed in and syrupy"
+            }
+          }
+        }
+      },
+      "SharedShotsResponse": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/ShotDetail"
+          },
+          {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ShotDetail"
+            }
+          }
+        ]
+      },
+      "ShotUploadPayload": {
+        "description": "Raw JSON shot export payload from supported tools/devices.",
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/BeanconquerorUploadPayload"
+          },
+          {
+            "$ref": "#/components/schemas/DecentUploadPayload"
+          },
+          {
+            "$ref": "#/components/schemas/GaggiuinoUploadPayload"
+          },
+          {
+            "$ref": "#/components/schemas/GaggiMateUploadPayload"
+          },
+          {
+            "$ref": "#/components/schemas/MeticulousUploadPayload"
+          }
+        ]
+      },
+      "BeanconquerorUploadPayload": {
+        "type": "object",
+        "properties": {
+          "bean": {
+            "$ref": "#/components/schemas/BeanconquerorBean"
+          },
+          "mill": {
+            "$ref": "#/components/schemas/BeanconquerorMill"
+          },
+          "brew": {
+            "$ref": "#/components/schemas/BeanconquerorBrew"
+          },
+          "preparation": {
+            "$ref": "#/components/schemas/BeanconquerorPreparation"
+          },
+          "brewFlow": {
+            "type": "object",
+            "description": "Beanconqueror brew flow series keyed by metric."
+          }
+        },
+        "required": [
+          "brew"
+        ]
+      },
+      "DecentUploadPayload": {
+        "type": "object",
+        "properties": {
+          "timestamp": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "elapsed": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          },
+          "profile": {
+            "type": "object",
+            "description": "Exported profile settings."
+          },
+          "pressure": {
+            "$ref": "#/components/schemas/DecentSeriesPayload"
+          },
+          "flow": {
+            "$ref": "#/components/schemas/DecentSeriesPayload"
+          },
+          "temperature": {
+            "$ref": "#/components/schemas/DecentTemperaturePayload"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/DecentTotalsPayload"
+          }
+        },
+        "required": [
+          "timestamp"
+        ]
+      },
+      "GaggiuinoUploadPayload": {
+        "type": "object",
+        "properties": {
+          "timestamp": {
+            "oneOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              }
+            ]
+          },
+          "profile": {
+            "type": "object",
+            "description": "Gaggiuino profile payload."
+          },
+          "datapoints": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GaggiuinoDatapoint"
+            }
+          }
+        },
+        "required": [
+          "datapoints"
+        ]
+      },
+      "GaggiMateUploadPayload": {
+        "type": "object",
+        "properties": {
+          "timestamp": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "profile": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "$ref": "#/components/schemas/GaggiMateProfile"
+              }
+            ]
+          },
+          "samples": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GaggiMateSample"
+            }
+          }
+        },
+        "required": [
+          "timestamp",
+          "samples"
+        ]
+      },
+      "MeticulousUploadPayload": {
+        "type": "object",
+        "properties": {
+          "time": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "profile_name": {
+            "type": "string"
+          },
+          "profile": {
+            "type": "object",
+            "description": "Meticulous profile payload."
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MeticulousDatapoint"
+            }
+          }
+        },
+        "required": [
+          "time",
+          "profile_name",
+          "data"
+        ]
+      },
+      "ShotUploadResult": {
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "ShotBrewdata": {
+        "description": "Raw brew payload preserved from the original integration source.",
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/BeanconquerorUploadPayload"
+          },
+          {
+            "$ref": "#/components/schemas/DecentUploadPayload"
+          },
+          {
+            "$ref": "#/components/schemas/GaggiuinoUploadPayload"
+          },
+          {
+            "$ref": "#/components/schemas/GaggiMateUploadPayload"
+          },
+          {
+            "$ref": "#/components/schemas/MeticulousUploadPayload"
+          }
+        ]
+      },
+      "ShotMetadata": {
+        "type": "object",
+        "description": "Optional user-defined metadata attached to the shot.",
+        "example": {
+          "grinder_burrs": "SSP HU",
+          "water_recipe": "Rao/Perger"
+        }
+      },
+      "ShotSeriesData": {
+        "type": "object",
+        "description": "Common shot time-series arrays keyed by metric name.",
+        "properties": {
+          "espresso_pressure": {
+            "$ref": "#/components/schemas/ShotSeries"
+          },
+          "espresso_flow": {
+            "$ref": "#/components/schemas/ShotSeries"
+          },
+          "espresso_weight": {
+            "$ref": "#/components/schemas/ShotSeries"
+          },
+          "espresso_flow_weight": {
+            "$ref": "#/components/schemas/ShotSeries"
+          },
+          "espresso_pressure_goal": {
+            "$ref": "#/components/schemas/ShotSeries"
+          },
+          "espresso_flow_goal": {
+            "$ref": "#/components/schemas/ShotSeries"
+          },
+          "espresso_temperature_goal": {
+            "$ref": "#/components/schemas/ShotSeries"
+          },
+          "espresso_temperature_mix": {
+            "$ref": "#/components/schemas/ShotSeries"
+          },
+          "espresso_temperature_basket": {
+            "$ref": "#/components/schemas/ShotSeries"
+          },
+          "espresso_water_dispensed": {
+            "$ref": "#/components/schemas/ShotSeries"
+          },
+          "espresso_state_change": {
+            "$ref": "#/components/schemas/ShotSeries"
+          }
+        }
+      },
+      "ShotSeries": {
+        "type": "array",
+        "items": {
+          "oneOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "BeanconquerorBean": {
+        "type": "object",
+        "properties": {
+          "roaster": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "roast": {
+            "type": "string"
+          },
+          "roastingDate": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "BeanconquerorMill": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "BeanconquerorBrew": {
+        "type": "object",
+        "properties": {
+          "grind_size": {
+            "type": "string"
+          },
+          "brew_beverage_quantity": {
+            "type": "string"
+          },
+          "grind_weight": {
+            "type": "string"
+          },
+          "tds": {
+            "type": "string"
+          },
+          "ey": {
+            "type": "string"
+          }
+        }
+      },
+      "BeanconquerorPreparation": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "BeanconquerorMeta": {
+        "type": "object",
+        "properties": {
+          "visualizer": {
+            "type": "object",
+            "description": "Visualizer-specific metadata for the shot.\n\nOwner-only fields such as `private_notes` are only included when the authenticated user owns the shot.\nSome optional fields may be omitted entirely when blank.\n",
+            "properties": {
+              "shot_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "user_id": {
+                "type": "string",
+                "format": "uuid",
+                "nullable": true
+              },
+              "updated_at": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "duration": {
+                "type": "number",
+                "nullable": true
+              },
+              "espresso_enjoyment": {
+                "type": "integer",
+                "nullable": true
+              },
+              "fragrance": {
+                "type": "integer",
+                "nullable": true
+              },
+              "aroma": {
+                "type": "integer",
+                "nullable": true
+              },
+              "flavor": {
+                "type": "integer",
+                "nullable": true
+              },
+              "aftertaste": {
+                "type": "integer",
+                "nullable": true
+              },
+              "acidity": {
+                "type": "integer",
+                "nullable": true
+              },
+              "bitterness": {
+                "type": "integer",
+                "nullable": true
+              },
+              "sweetness": {
+                "type": "integer",
+                "nullable": true
+              },
+              "mouthfeel": {
+                "type": "integer",
+                "nullable": true
+              },
+              "espresso_notes": {
+                "type": "string",
+                "nullable": true
+              },
+              "bean_notes": {
+                "type": "string",
+                "nullable": true
+              },
+              "barista": {
+                "type": "string",
+                "nullable": true
+              },
+              "metadata": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/ShotMetadata"
+                  }
+                ],
+                "nullable": true
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "roaster_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "coffee_bag_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "start_time": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "user_name": {
+                "type": "string"
+              },
+              "private_notes": {
+                "type": "string",
+                "nullable": true
+              },
+              "profile_url": {
+                "type": "string",
+                "format": "uri"
+              },
+              "image_url": {
+                "type": "string",
+                "format": "uri"
+              }
+            }
+          }
+        }
+      },
+      "DecentSeriesPayload": {
+        "type": "object",
+        "properties": {
+          "pressure": {
+            "$ref": "#/components/schemas/ShotSeries"
+          },
+          "flow": {
+            "$ref": "#/components/schemas/ShotSeries"
+          },
+          "by_weight": {
+            "$ref": "#/components/schemas/ShotSeries"
+          },
+          "by_weight_raw": {
+            "$ref": "#/components/schemas/ShotSeries"
+          },
+          "goal": {
+            "$ref": "#/components/schemas/ShotSeries"
+          }
+        }
+      },
+      "DecentTemperaturePayload": {
+        "type": "object",
+        "properties": {
+          "basket": {
+            "$ref": "#/components/schemas/ShotSeries"
+          },
+          "mix": {
+            "$ref": "#/components/schemas/ShotSeries"
+          },
+          "goal": {
+            "$ref": "#/components/schemas/ShotSeries"
+          }
+        }
+      },
+      "DecentTotalsPayload": {
+        "type": "object",
+        "properties": {
+          "weight": {
+            "$ref": "#/components/schemas/ShotSeries"
+          },
+          "water_dispensed": {
+            "$ref": "#/components/schemas/ShotSeries"
+          }
+        }
+      },
+      "GaggiuinoDatapoint": {
+        "type": "object",
+        "properties": {
+          "timeInShot": {
+            "type": "number"
+          },
+          "pressure": {
+            "type": "number"
+          },
+          "pumpFlow": {
+            "type": "number"
+          },
+          "shotWeight": {
+            "type": "number"
+          },
+          "targetPressure": {
+            "type": "number"
+          },
+          "targetPumpFlow": {
+            "type": "number"
+          },
+          "targetTemperature": {
+            "type": "number"
+          },
+          "temperature": {
+            "type": "number"
+          },
+          "waterPumped": {
+            "type": "number"
+          },
+          "weightFlow": {
+            "type": "number"
+          }
+        }
+      },
+      "GaggiMateProfile": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string"
+          }
+        }
+      },
+      "GaggiMateSample": {
+        "type": "object",
+        "properties": {
+          "t": {
+            "type": "number"
+          },
+          "cp": {
+            "type": "number"
+          },
+          "fl": {
+            "type": "number"
+          },
+          "tp": {
+            "type": "number"
+          },
+          "tf": {
+            "type": "number"
+          },
+          "tt": {
+            "type": "number"
+          },
+          "ct": {
+            "type": "number"
+          },
+          "v": {
+            "type": "number"
+          },
+          "ev": {
+            "type": "number"
+          },
+          "vf": {
+            "type": "number"
+          },
+          "pf": {
+            "type": "number"
+          }
+        }
+      },
+      "MeticulousDatapoint": {
+        "type": "object",
+        "properties": {
+          "time": {
+            "type": "number"
+          },
+          "status": {
+            "type": "string"
+          },
+          "shot": {
+            "type": "object",
+            "properties": {
+              "pressure": {
+                "type": "number"
+              },
+              "flow": {
+                "type": "number"
+              },
+              "weight": {
+                "type": "number"
+              },
+              "gravimetric_flow": {
+                "type": "number"
+              },
+              "setpoints": {
+                "type": "object",
+                "properties": {
+                  "pressure": {
+                    "type": "number"
+                  },
+                  "flow": {
+                    "type": "number"
+                  }
+                }
+              }
+            }
+          },
+          "sensors": {
+            "type": "object",
+            "properties": {
+              "tube": {
+                "type": "number"
+              }
+            }
+          }
+        }
+      },
+      "ShotUpdateRequest": {
+        "type": "object",
+        "required": [
+          "shot"
+        ],
+        "properties": {
+          "shot": {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+              "profile_title": {
+                "type": "string",
+                "nullable": true
+              },
+              "barista": {
+                "type": "string",
+                "nullable": true
+              },
+              "bean_weight": {
+                "type": "string",
+                "nullable": true
+              },
+              "private_notes": {
+                "type": "string",
+                "nullable": true
+              },
+              "fragrance": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 15,
+                "nullable": true
+              },
+              "aroma": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 15,
+                "nullable": true
+              },
+              "flavor": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 15,
+                "nullable": true
+              },
+              "aftertaste": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 15,
+                "nullable": true
+              },
+              "acidity": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 15,
+                "nullable": true
+              },
+              "bitterness": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 15,
+                "nullable": true
+              },
+              "sweetness": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 15,
+                "nullable": true
+              },
+              "mouthfeel": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 15,
+                "nullable": true
+              },
+              "canonical_coffee_bag_id": {
+                "type": "string",
+                "format": "uuid",
+                "nullable": true
+              },
+              "coffee_bag_id": {
+                "type": "string",
+                "format": "uuid",
+                "nullable": true
+              },
+              "tag_list": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "metadata": {
+                "type": "object",
+                "additionalProperties": true,
+                "nullable": true
+              }
+            }
+          }
+        }
+      },
+      "RoasterSummary": {
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "RoasterListResponse": {
+        "type": "object",
+        "required": [
+          "data",
+          "paging"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RoasterSummary"
+            }
+          },
+          "paging": {
+            "$ref": "#/components/schemas/Paging"
+          }
+        }
+      },
+      "RoasterDetail": {
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "website": {
+            "type": "string",
+            "format": "uri",
+            "nullable": true
+          },
+          "image_url": {
+            "type": "string",
+            "format": "uri",
+            "nullable": true
+          }
+        }
+      },
+      "RoasterWriteRequest": {
+        "type": "object",
+        "required": [
+          "roaster"
+        ],
+        "properties": {
+          "roaster": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "website": {
+                "type": "string",
+                "format": "uri",
+                "nullable": true
+              },
+              "canonical_roaster_id": {
+                "type": "string",
+                "format": "uuid",
+                "nullable": true
+              }
+            }
+          }
+        }
+      },
+      "CoffeeBagSummary": {
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "CoffeeBagListResponse": {
+        "type": "object",
+        "required": [
+          "data",
+          "paging"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CoffeeBagSummary"
+            }
+          },
+          "paging": {
+            "$ref": "#/components/schemas/Paging"
+          }
+        }
+      },
+      "CoffeeBagDetail": {
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "roast_date": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "frozen_date": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "defrosted_date": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "roast_level": {
+            "type": "string",
+            "nullable": true
+          },
+          "country": {
+            "type": "string",
+            "nullable": true
+          },
+          "region": {
+            "type": "string",
+            "nullable": true
+          },
+          "farm": {
+            "type": "string",
+            "nullable": true
+          },
+          "farmer": {
+            "type": "string",
+            "nullable": true
+          },
+          "variety": {
+            "type": "string",
+            "nullable": true
+          },
+          "elevation": {
+            "type": "string",
+            "nullable": true
+          },
+          "processing": {
+            "type": "string",
+            "nullable": true
+          },
+          "harvest_time": {
+            "type": "string",
+            "nullable": true
+          },
+          "quality_score": {
+            "type": "string",
+            "nullable": true
+          },
+          "tasting_notes": {
+            "type": "string",
+            "nullable": true
+          },
+          "place_of_purchase": {
+            "type": "string",
+            "nullable": true
+          },
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "nullable": true
+          },
+          "notes": {
+            "type": "string",
+            "nullable": true
+          },
+          "archived_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "image_url": {
+            "type": "string",
+            "format": "uri",
+            "nullable": true
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true,
+            "nullable": true
+          }
+        }
+      },
+      "CoffeeBagWriteRequest": {
+        "type": "object",
+        "required": [
+          "coffee_bag"
+        ],
+        "properties": {
+          "coffee_bag": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "roaster_id": {
+                "type": "string",
+                "format": "uuid",
+                "nullable": true
+              },
+              "canonical_coffee_bag_id": {
+                "type": "string",
+                "format": "uuid",
+                "nullable": true
+              },
+              "roast_date": {
+                "type": "string",
+                "format": "date",
+                "nullable": true
+              },
+              "frozen_date": {
+                "type": "string",
+                "format": "date",
+                "nullable": true
+              },
+              "defrosted_date": {
+                "type": "string",
+                "format": "date",
+                "nullable": true
+              },
+              "roast_level": {
+                "type": "string",
+                "nullable": true
+              },
+              "country": {
+                "type": "string",
+                "nullable": true
+              },
+              "region": {
+                "type": "string",
+                "nullable": true
+              },
+              "farm": {
+                "type": "string",
+                "nullable": true
+              },
+              "farmer": {
+                "type": "string",
+                "nullable": true
+              },
+              "variety": {
+                "type": "string",
+                "nullable": true
+              },
+              "elevation": {
+                "type": "string",
+                "nullable": true
+              },
+              "processing": {
+                "type": "string",
+                "nullable": true
+              },
+              "harvest_time": {
+                "type": "string",
+                "nullable": true
+              },
+              "quality_score": {
+                "type": "string",
+                "nullable": true
+              },
+              "tasting_notes": {
+                "type": "string",
+                "nullable": true
+              },
+              "place_of_purchase": {
+                "type": "string",
+                "nullable": true
+              },
+              "url": {
+                "type": "string",
+                "format": "uri",
+                "nullable": true
+              },
+              "notes": {
+                "type": "string",
+                "nullable": true
+              },
+              "metadata": {
+                "type": "object",
+                "additionalProperties": true,
+                "nullable": true
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

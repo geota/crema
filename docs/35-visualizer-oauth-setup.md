@@ -107,6 +107,34 @@ If the env var is missing, Crema renders the bean-sync card with a
 "OAuth client not configured" message and a link back to this doc — the
 build still ships, just without sign-in.
 
+## 3a. Regenerating the OpenAPI types
+
+Crema vendors the Visualizer OpenAPI spec at
+`web/src/lib/visualizer/openapi.json` and ships generated TypeScript
+types at `web/src/lib/visualizer/openapi.d.ts`. When Visualizer publishes
+a new spec version:
+
+```sh
+# drop the new spec into the vendored path
+cp ~/path/to/new/visualizer-api.json web/src/lib/visualizer/openapi.json
+
+# regenerate types (uses openapi-typescript, already in devDependencies)
+cd web && pnpm openapi
+```
+
+Commit both files together. The generated `.d.ts` is checked in so a
+fresh clone can `pnpm check` / `pnpm build` without running the codegen.
+
+The sync code consumes the types via:
+
+```ts
+import type { components } from '$lib/visualizer/openapi';
+type ShotSummary = components['schemas']['ShotSummary'];
+```
+
+If a field disappears or changes shape, the build breaks immediately at
+the consumer sites — that's the whole point of the codegen.
+
 ## 4. Scopes
 
 Crema requests three scopes per the Visualizer OpenAPI spec (v1.8.2):

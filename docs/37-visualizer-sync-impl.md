@@ -150,6 +150,75 @@ Manual flows to exercise before merging:
 
 ---
 
+## 5. OpenAPI grounding (2026-05-24, branch `visualizer-openapi-grounding`)
+
+The visualizer.coffee team published their OpenAPI spec mid-stream. The
+previous cut guessed several endpoints + query params from observation;
+this section is the catalogue of corrections applied once the spec
+landed. The vendored snapshot lives at
+`web/src/lib/visualizer/openapi.json` (the source-of-truth still lives
+at the user's `~/code/visualizer-api.json`; we vendor it so the build
+is hermetic).
+
+### 5.1 Codegen setup
+
+We use [`openapi-typescript`](https://github.com/openapi-ts/openapi-typescript),
+the most widely adopted TS generator for OpenAPI 3.x. It emits a single
+`paths` + `components` type tree — not classes, just types — into
+`web/src/lib/visualizer/openapi.d.ts`. Crema's code imports the spec
+types via:
+
+```ts
+import type { components } from '$lib/visualizer/openapi';
+type ShotSummary = components['schemas']['ShotSummary'];
+type CoffeeBagDetail = components['schemas']['CoffeeBagDetail'];
+```
+
+To refresh after Visualizer updates their spec: drop the new JSON into
+`web/src/lib/visualizer/openapi.json` and run `pnpm openapi` (added to
+`web/package.json`). The generated `.d.ts` is committed so a fresh
+checkout doesn't need the codegen tool to type-check.
+
+### 5.2 Corrections applied
+
+| Endpoint | Bug | Fix |
+|---|---|---|
+| `GET /shots` | sent `?per_page=` + `?since=<ms>`; expected `{data, next_cursor}` response | Now sends `?items=N&page=P&sort=updated_at`; reads `{data: ShotSummary[], paging: {count,page,limit,pages}}`; stops walking when a summary's `updated_at` (unix seconds) is older than the local cursor (converted to seconds from ms at the boundary). |
+| Shot details | treated list-response rows as full shots (they only carry `{id, clock, updated_at}` per `ShotSummary`) | Added `fetchShotDetail(id)` → `GET /shots/{id}` → `ShotDetail`. `pullAllShotsSince` fetches detail per new summary. |
+| `PATCH /shots/{id}` | sent bare `{rating, notes}` body | Wraps in `{shot: {espresso_enjoyment, private_notes}}` envelope per `ShotUpdateRequest`. Crema's small-integer `rating` clamps to the spec's 0..15 score range. |
+| `POST /roasters`, `PATCH /roasters/{id}` | sent bare body — silently dropped server-side | Wraps in `{roaster: {...}}` envelope per `RoasterWriteRequest`. |
+| `POST /coffee_bags`, `PATCH /coffee_bags/{id}` | sent bare body — silently dropped server-side | Wraps in `{coffee_bag: {...}}` envelope per `CoffeeBagWriteRequest`. |
+| `GET /roasters`, `GET /coffee_bags` | walked pages via `data.length < 100` heuristic | Walks `paging.pages` instead. Param `items=100` matches the spec name. |
+| `WireShot.updated_at` | typed `string | null` (we'd planned for ISO-8601) | Now `updated_at_ms: number | null`, converted from the spec's unix-seconds `updated_at` at the wire boundary. |
+| Premium upgrade link | pointed at `/upgrade` (404) | Now points at `/premium` (the canonical landing per the spec doc). |
+
+### 5.3 Unix seconds vs milliseconds
+
+Visualizer wires unix **seconds** on `ShotSummary.clock`, `ShotSummary.updated_at`, `DefaultShotDetail.updated_at`, and `DecentUploadPayload.timestamp`. Crema's `StoredShot.completedAt` and `bean.updatedAt` are unix **milliseconds**. The conversion happens at exactly two sites:
+
+1. `wireShotFromDetail` in `shot-sync.ts`: `summary.clock * 1000`, `summary.updated_at * 1000`, `detail.duration * 1000`.
+2. `pullAllShotsSince` cursor comparison: `cursorSec = Math.floor(sinceMs / 1000)` before comparing against `summary.updated_at`.
+
+If a future bug reports "shots from before some date stop coming back," the cursor-conversion is the first thing to inspect.
+
+### 5.4 Premium probing limitations
+
+The spec confirms `/me` exposes **no premium flag** — the only signal is a 403 on a write requiring the `write` scope under premium. The current behavior:
+
+- `premium === null` (not yet probed) — let the user click Sync; we discover via the first 403.
+- `premium === false` (probed; free tier) — the Beans / Roasters direction segments still render the four options, but the Backup / Two-way segments are click-ignored. A lock icon + tooltip + inline "Visualizer Premium required for push." link explains why.
+- `premium === true` (probed; pushes succeeded) — no UI change.
+
+When a sync run downshifts to read-only because of a 403, the activity log gets one clear header entry:
+
+> Premium required — beans + roasters disabled from push. Upgrade at visualizer.coffee/premium.
+
+…followed by per-row "premium required" skip lines for the bags / roasters that didn't push.
+
+The 403 cache lives in `crema.beans.sync.v1.premium` (localStorage). A future Visualizer feature that downgrades a user back to free tier would leave a stale `true` cached — for now we only re-probe on explicit "Disconnect & sign back in".
+
+---
+
 ## 6. Test coverage
 
 - 16 node:test cases in `web/src/lib/visualizer/shot-sync.test.ts` covering signatures + reconcile + storedShotFromWire.

@@ -42,6 +42,7 @@ import {
 	signatureForRoaster,
 	withFreshToken
 } from '$lib/visualizer';
+import type { components } from '$lib/visualizer/openapi';
 import {
 	blankBean,
 	blankRoaster,
@@ -51,6 +52,15 @@ import {
 	type Roaster
 } from './model';
 import type { BeanLibraryStore } from './store.svelte';
+
+// Spec-typed aliases so the wire shape stays in lock-step with the
+// vendored OpenAPI spec (`pnpm openapi` regenerates `openapi.d.ts`).
+type CoffeeBagDetail = components['schemas']['CoffeeBagDetail'];
+type CoffeeBagListResponse = components['schemas']['CoffeeBagListResponse'];
+type CoffeeBagWriteRequest = components['schemas']['CoffeeBagWriteRequest'];
+type RoasterDetail = components['schemas']['RoasterDetail'];
+type RoasterListResponse = components['schemas']['RoasterListResponse'];
+type RoasterWriteRequest = components['schemas']['RoasterWriteRequest'];
 
 /** Default API base — overridable for development. */
 const API_BASE = 'https://visualizer.coffee/api';
@@ -116,49 +126,34 @@ export interface SyncResult {
 }
 
 // ── Visualizer wire shapes ─────────────────────────────────────────────
+//
+// The read-side rides on the spec types directly (`CoffeeBagDetail`,
+// `RoasterDetail`). The Crema-side merged shapes below add the read-only
+// fields the spec exposes on the LIST/DETAIL paths but not on the write
+// envelopes (Visualizer round-trips `metadata` losslessly, so the
+// Crema-only extension keys live there). The write paths build the
+// spec's `*WriteRequest` envelopes via {@link bagBodyToWriteRequest} /
+// {@link roasterBodyToWriteRequest} below.
 
-interface RoasterWire {
+/** Crema-side merged shape used by `beanToWire` / `beanFromWire`.
+ *  Loosens DETAIL's required `id` + `name` so the local-only encode
+ *  side can produce a body for `POST /coffee_bags` (no id yet). */
+type BagWire = Omit<CoffeeBagDetail, 'id' | 'name'> & {
 	id?: string;
 	name: string;
-	website?: string | null;
-	image_url?: string | null;
-	canonical_roaster_id?: string | null;
-}
-
-interface BagWire {
-	id?: string;
-	name: string;
+	/** Mirrors the write request's `roaster_id` (DETAIL omits it but LIST
+	 * filters expose it; the round-trip needs it). */
 	roaster_id?: string | null;
 	canonical_coffee_bag_id?: string | null;
-	roast_date?: string | null;
-	frozen_date?: string | null;
-	defrosted_date?: string | null;
-	roast_level?: string | null;
-	country?: string | null;
-	region?: string | null;
-	farm?: string | null;
-	farmer?: string | null;
-	variety?: string | null;
-	elevation?: string | null;
-	processing?: string | null;
-	harvest_time?: string | null;
-	quality_score?: string | null;
-	tasting_notes?: string | null;
-	place_of_purchase?: string | null;
-	url?: string | null;
-	notes?: string | null;
-	image_url?: string | null;
-	archived_at?: string | null;
 	updated_at?: string | null;
-	metadata?: Record<string, unknown> | null;
-}
+};
 
-interface ListResponse<T> {
-	data?: T[];
-	page?: number;
-	per_page?: number;
-	total?: number;
-}
+/** Crema-side merged shape used by `roasterToWire` / `roasterFromWire`. */
+type RoasterWire = Omit<RoasterDetail, 'id' | 'name'> & {
+	id?: string;
+	name: string;
+	canonical_roaster_id?: string | null;
+};
 
 // ── Mapping helpers ────────────────────────────────────────────────────
 
@@ -325,6 +320,53 @@ export function roasterFromWire(wire: RoasterWire): Roaster {
 	return r;
 }
 
+// ── Spec-envelope helpers ──────────────────────────────────────────────
+//
+// Both `POST /roasters` and `PATCH /roasters/{id}` expect
+// `{ roaster: {...} }` per the `RoasterWriteRequest` schema; ditto
+// `CoffeeBagWriteRequest` → `{ coffee_bag: {...} }`. The previous cut
+// sent the bare body, which the server treats as `{}` (no recognised
+// keys) — every write was a no-op. These two helpers wrap each body in
+// the right envelope so the writes actually land.
+
+function roasterBodyToWriteRequest(body: RoasterWire): RoasterWriteRequest {
+	return {
+		roaster: {
+			name: body.name,
+			website: body.website ?? null,
+			canonical_roaster_id: body.canonical_roaster_id ?? null
+		}
+	};
+}
+
+function bagBodyToWriteRequest(body: BagWire): CoffeeBagWriteRequest {
+	return {
+		coffee_bag: {
+			name: body.name,
+			roaster_id: body.roaster_id ?? null,
+			canonical_coffee_bag_id: body.canonical_coffee_bag_id ?? null,
+			roast_date: body.roast_date ?? null,
+			frozen_date: body.frozen_date ?? null,
+			defrosted_date: body.defrosted_date ?? null,
+			roast_level: body.roast_level ?? null,
+			country: body.country ?? null,
+			region: body.region ?? null,
+			farm: body.farm ?? null,
+			farmer: body.farmer ?? null,
+			variety: body.variety ?? null,
+			elevation: body.elevation ?? null,
+			processing: body.processing ?? null,
+			harvest_time: body.harvest_time ?? null,
+			quality_score: body.quality_score ?? null,
+			tasting_notes: body.tasting_notes ?? null,
+			place_of_purchase: body.place_of_purchase ?? null,
+			url: body.url ?? null,
+			notes: body.notes ?? null,
+			metadata: body.metadata ?? null
+		}
+	};
+}
+
 // ── HTTP plumbing ──────────────────────────────────────────────────────
 
 interface FetchOptions {
@@ -484,15 +526,18 @@ export async function runSync(library: BeanLibraryStore): Promise<SyncResult> {
 
 	try {
 		// 1) Pull every remote roaster — these are the parent rows for bags.
+		//    `items=100` is the spec's per-page max; we walk pages 1..N
+		//    until `paging.pages` is exhausted (or the safety cap fires).
 		const remoteRoasters: RoasterWire[] = [];
 		let page = 1;
 		while (page < 50) {
 			const body = (await call(
 				`/roasters?items=100&page=${page}`
-			)) as ListResponse<RoasterWire>;
+			)) as RoasterListResponse;
 			const data = body?.data ?? [];
-			remoteRoasters.push(...data);
-			if (data.length < 100) break;
+			remoteRoasters.push(...(data as RoasterWire[]));
+			const totalPages = body?.paging?.pages ?? page;
+			if (page >= totalPages || data.length === 0) break;
 			page += 1;
 		}
 		// Build a remote-id → local-id lookup.
@@ -556,6 +601,23 @@ export async function runSync(library: BeanLibraryStore): Promise<SyncResult> {
 
 		// 2) Push every local roaster that has no visualizer id. Premium-gated.
 		let premiumLocked = settings.premium === false;
+		// Track whether we've already emitted the "downshift to read-only"
+		// banner entry; we only want one regardless of how many writes 403.
+		let premiumBannerLogged = settings.premium === false;
+		const logPremiumBannerOnce = (): void => {
+			if (premiumBannerLogged) return;
+			premiumBannerLogged = true;
+			log.push({
+				direction: 'skip',
+				kind: 'bean',
+				id: '',
+				name: 'Premium required',
+				at: Date.now(),
+				error:
+					'Premium required — beans + roasters disabled from push. ' +
+					'Upgrade at visualizer.coffee/premium.'
+			});
+		};
 		for (const local of library.roasters) {
 			if (local.visualizerId) continue;
 			if (premiumLocked) {
@@ -573,7 +635,7 @@ export async function runSync(library: BeanLibraryStore): Promise<SyncResult> {
 			try {
 				const wire = (await call('/roasters', {
 					method: 'POST',
-					body: roasterToWire(local)
+					body: roasterBodyToWriteRequest(roasterToWire(local))
 				})) as RoasterWire;
 				if (wire?.id) {
 					library.updateRoaster(local.id, { visualizerId: wire.id });
@@ -592,6 +654,7 @@ export async function runSync(library: BeanLibraryStore): Promise<SyncResult> {
 				if (e instanceof VisualizerError && e.kind === 'premium') {
 					premiumLocked = true;
 					writeSyncSettings({ premium: false });
+					logPremiumBannerOnce();
 					log.push({
 						direction: 'skip',
 						kind: 'roaster',
@@ -614,16 +677,24 @@ export async function runSync(library: BeanLibraryStore): Promise<SyncResult> {
 			}
 		}
 
-		// 3) Pull every remote bag.
+		// 3) Pull every remote bag. NOTE: `GET /coffee_bags` returns
+		//    `CoffeeBagSummary[]` ({id, name}); a true round-trip would
+		//    fetch `/coffee_bags/{id}` per row to read the full detail.
+		//    Today we treat the summary as a thin BagWire (the spec's
+		//    list endpoint doesn't carry the long form), and update calls
+		//    overwrite with the full local payload anyway. Follow-up:
+		//    paginate + per-row GET so pull-side mutations round-trip
+		//    every field (filed against docs/37 §5 ground-impl).
 		const remoteBags: BagWire[] = [];
 		page = 1;
 		while (page < 50) {
 			const body = (await call(
 				`/coffee_bags?items=100&page=${page}`
-			)) as ListResponse<BagWire>;
+			)) as CoffeeBagListResponse;
 			const data = body?.data ?? [];
-			remoteBags.push(...data);
-			if (data.length < 100) break;
+			remoteBags.push(...(data as BagWire[]));
+			const totalPages = body?.paging?.pages ?? page;
+			if (page >= totalPages || data.length === 0) break;
 			page += 1;
 		}
 		// Map by Crema id (stored in metadata.crema.crema_id) → local row.
@@ -706,7 +777,7 @@ export async function runSync(library: BeanLibraryStore): Promise<SyncResult> {
 				try {
 					const wire = (await call('/coffee_bags', {
 						method: 'POST',
-						body: beanToWire(local, remoteRoasterId)
+						body: bagBodyToWriteRequest(beanToWire(local, remoteRoasterId))
 					})) as BagWire;
 					if (wire?.id) {
 						library.updateBean(local.id, { visualizerId: wire.id });
@@ -723,6 +794,7 @@ export async function runSync(library: BeanLibraryStore): Promise<SyncResult> {
 					if (e instanceof VisualizerError && e.kind === 'premium') {
 						premiumLocked = true;
 						writeSyncSettings({ premium: false });
+						logPremiumBannerOnce();
 						log.push({
 							direction: 'skip',
 							kind: 'bean',
@@ -747,7 +819,7 @@ export async function runSync(library: BeanLibraryStore): Promise<SyncResult> {
 				try {
 					await call(`/coffee_bags/${local.visualizerId}`, {
 						method: 'PATCH',
-						body: beanToWire(local, remoteRoasterId)
+						body: bagBodyToWriteRequest(beanToWire(local, remoteRoasterId))
 					});
 					result.pushed += 1;
 					log.push({
@@ -761,6 +833,7 @@ export async function runSync(library: BeanLibraryStore): Promise<SyncResult> {
 					if (e instanceof VisualizerError && e.kind === 'premium') {
 						premiumLocked = true;
 						writeSyncSettings({ premium: false });
+						logPremiumBannerOnce();
 					}
 					log.push({
 						direction: 'skip',
