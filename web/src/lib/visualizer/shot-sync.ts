@@ -1,25 +1,31 @@
 /**
  * `$lib/visualizer/shot-sync` — shot-history sync between Crema's local
- * shot library and Visualizer's `/api/shots*` endpoints (per the
- * OpenAPI spec at ~/code/visualizer-api.json — no `/v1/` prefix, and
- * shot creation uses `POST /shots/upload` not `POST /shots`).
+ * shot library and Visualizer's `/shots*` endpoints (per the vendored
+ * OpenAPI spec at `./openapi.json`; types regenerate with `pnpm openapi`).
  *
- * Direction & modes (docs/36 §2):
- *   - **Backup**  — push only. `ShotCompleted` fires an upload; failures
- *     queue for retry. The history list never gets pulled.
- *   - **Pull**    — read remote shots into the local cache without ever
- *     pushing. De-dup via the `signatureForShot` hash so a local shot
- *     that matches a remote signature binds (no duplicate).
- *   - **Two-way** — both directions; LWW conflict resolution on
- *     `updatedAt`.
+ * Wire-level corrections applied 2026-05-24 against spec v1.8.2:
+ *   - `GET /shots` uses `items=` (max 100), NOT `per_page=`. There is no
+ *     `since=<ms>` query — we sort by `updated_at` and stop pagination
+ *     once a returned row is older than the local cursor.
+ *   - Response is `{ data: ShotSummary[], paging: { count, page, limit,
+ *     pages } }`; the spec has no `next_cursor`. `ShotSummary` carries
+ *     only `{ id, clock, updated_at }` (unix SECONDS, not ms — Crema
+ *     stores ms; we convert at this boundary).
+ *   - Full shot fields require `GET /shots/{id}` → `ShotDetail`.
+ *   - `POST /shots/upload` accepts a raw JSON payload (one of the brew
+ *     payload schemas — Crema's `exportStoredShotAsV2Json` produces the
+ *     Decent shape).
+ *   - `PATCH /shots/{id}` expects `{ shot: {...} }`, NOT a bare body.
+ *     The Crema-side `{ rating, notes }` patch maps to
+ *     `{ shot: { espresso_enjoyment, private_notes } }`.
+ *   - `DELETE /shots/{id}` returns 200 + `{ success: true }`.
  *
- * Wire shape: the existing `web/src/lib/history/v2-export.ts` already
- * produces the v2 JSON the Visualizer ingestion endpoint accepts. This
- * module wraps that exporter with the HTTP calls + the retry queue +
- * the de-dup signature.
+ * Direction & modes (docs/36 §2): unchanged from previous cut.
+ *   - **Backup**  — push only.
+ *   - **Pull**    — read remote shots; de-dup via `signatureForShot`.
+ *   - **Two-way** — both directions; LWW conflict resolution.
  *
- * Auth: every authenticated call funnels through
- * `withFreshToken` so the 401 → refresh-once dance is handled for free.
+ * Auth: every authenticated call funnels through `withFreshToken`.
  */
 
 import { VisualizerError } from '$lib/bean';
@@ -27,6 +33,7 @@ import { exportStoredShotAsV2Json } from '$lib/history/v2-export';
 import type { StoredShot } from '$lib/history/model';
 import { getSettingsStore } from '$lib/settings';
 import { isConnected, NotAuthenticatedError, withFreshToken } from './token-store';
+import type { components } from './openapi';
 import {
 	reconcileShots,
 	signatureForBean,
@@ -40,6 +47,17 @@ import {
 /** Visualizer API base. */
 const API_BASE = 'https://visualizer.coffee/api';
 
+// Spec-typed aliases — these ride DIRECTLY on the wire so they stay
+// in lock-step with the OpenAPI spec (regenerate via `pnpm openapi`).
+type ShotSummary = components['schemas']['ShotSummary'];
+type ShotListResponse = components['schemas']['ShotListResponse'];
+type Paging = components['schemas']['Paging'];
+type DefaultShotDetail = components['schemas']['DefaultShotDetail'];
+type ShotDetail = components['schemas']['ShotDetail'];
+type ShotUploadResult = components['schemas']['ShotUploadResult'];
+type ShotUpdateRequest = components['schemas']['ShotUpdateRequest'];
+type DeleteResult = components['schemas']['DeleteResult'];
+
 // Re-export the pure helpers so existing import paths through
 // `$lib/visualizer` continue to resolve via this module.
 export {
@@ -52,35 +70,28 @@ export {
 	type WireShot
 };
 
-interface ListResponse<T> {
-	data?: T[];
-	page?: number;
-	per_page?: number;
-	total?: number;
-	next_cursor?: number | null;
-}
+// Re-export spec-typed schema aliases for callers that want them.
+export type { ShotSummary, ShotDetail, Paging };
 
 // ── Settings-aware payload builder ────────────────────────────────────
 
 /**
- * Build the JSON payload the Visualizer ingestion endpoint accepts.
+ * Build the JSON payload `POST /shots/upload` accepts. Crema's
+ * `exportStoredShotAsV2Json` produces the Decent v2 shape (timestamp,
+ * elapsed, profile, pressure, flow, temperature, totals) — Visualizer's
+ * `DecentUploadPayload` (`#/components/schemas/DecentUploadPayload`).
+ *
  * Applies the four `visualizer*` user settings (privacy, includeProfile,
- * includeNotes) so the user's choices ride on the wire. The base payload
- * comes from `exportStoredShotAsV2Json` so the format is identical to
- * the per-shot Download button.
+ * includeNotes) so the user's choices ride on the wire.
  */
 function buildShotPayload(shot: StoredShot): string {
 	const settings = getSettingsStore().current;
 	const json = JSON.parse(exportStoredShotAsV2Json(shot)) as Record<string, unknown>;
 
-	// Apply per-setting trims so the wire carries what the user chose.
 	if (!settings.visualizerIncludeProfile) {
-		// The Rust exporter writes `profile` as a stub when present; drop
-		// the field entirely when the user opts out of profile sharing.
 		delete json.profile;
 	}
 	if (!settings.visualizerIncludeNotes) {
-		// `notes` live on the metadata block; null them out.
 		const metadata = (json.metadata as Record<string, unknown> | undefined) ?? null;
 		if (metadata && 'notes' in metadata) {
 			metadata.notes = null;
@@ -173,16 +184,54 @@ async function call(path: string, opts: FetchOptions = {}): Promise<unknown> {
 	return res.json();
 }
 
+// ── Wire / Crema boundary helpers ─────────────────────────────────────
+
+/**
+ * Convert a full `ShotDetail` (returned from `GET /shots/{id}`) plus the
+ * originating summary's `clock` / `updated_at` into Crema's
+ * {@link WireShot} (unix MS, normalised field names). Visualizer's
+ * default detail flattens scoring + journal fields onto the shot row;
+ * Beanconqueror's variant nests them under `meta.visualizer` — we read
+ * from both shapes defensively.
+ */
+function wireShotFromDetail(summary: ShotSummary, detail: ShotDetail): WireShot {
+	const fallback = detail as DefaultShotDetail;
+	const bcMeta = (detail as components['schemas']['BeanconquerorShotDetail']).meta?.visualizer;
+	const profileTitle = fallback.profile_title ?? null;
+	// `duration` in the spec is seconds (the BC payload's `meta.visualizer.duration`
+	// is also seconds). Convert to milliseconds so the de-dup signature lines up
+	// with Crema's `StoredShot.duration` (ms).
+	const durationSec = fallback.duration ?? bcMeta?.duration ?? null;
+	const durationMs = durationSec != null ? Math.round(durationSec * 1000) : 0;
+	// drink_weight is a stringified gram value in the default response.
+	const drinkWeightG = ((): number | null => {
+		const raw = fallback.drink_weight;
+		if (raw == null) return null;
+		const n = Number(raw);
+		return Number.isFinite(n) ? n : null;
+	})();
+	const espressoNotes = fallback.private_notes ?? bcMeta?.private_notes ?? fallback.espresso_notes ?? null;
+	const enjoyment = fallback.espresso_enjoyment ?? bcMeta?.espresso_enjoyment ?? null;
+	return {
+		id: summary.id,
+		clock: summary.clock * 1000, // unix sec → ms
+		duration_ms: durationMs,
+		profile_title: profileTitle,
+		final_weight_g: drinkWeightG,
+		notes: espressoNotes,
+		rating: enjoyment,
+		updated_at_ms: summary.updated_at * 1000 // unix sec → ms
+	};
+}
+
 // ── Public surface ────────────────────────────────────────────────────
 
 /**
- * Upload a single shot. POSTs to `/api/shots/upload` with the v2-JSON payload
- * (trimmed per the user's `visualizer*` settings). Resolves with the
- * remote `visualizerId` so the caller can bind it onto the local row.
- *
- * Throws {@link VisualizerError} on auth / network / premium /
- * upstream-5xx failures so the retry queue can branch on the failure
- * shape.
+ * Upload a single shot. POSTs to `/shots/upload` with the JSON payload
+ * (per the OAS `application/json` request body — Visualizer accepts one
+ * of the brew-payload shapes, and Crema produces the Decent variant).
+ * Resolves with the remote `visualizerId` so the caller can bind it onto
+ * the local row.
  */
 export async function uploadShot(shot: StoredShot): Promise<{ visualizerId: string }> {
 	if (!isConnected()) {
@@ -190,24 +239,21 @@ export async function uploadShot(shot: StoredShot): Promise<{ visualizerId: stri
 	}
 	const body = buildShotPayload(shot);
 	const result = (await call('/shots/upload', { method: 'POST', body })) as
-		| { id?: string; data?: { id?: string } }
+		| ShotUploadResult
 		| null;
-	const remoteId =
-		(result && (result.id ?? result.data?.id)) ?? null;
-	if (!remoteId) {
+	if (!result || !result.id) {
 		throw new VisualizerError(
 			0,
 			'other',
 			'Visualizer accepted the shot but returned no id.'
 		);
 	}
-	return { visualizerId: remoteId };
+	return { visualizerId: result.id };
 }
 
 /**
- * Delete a remote shot by its Visualizer id. Best-effort — a 404 is
- * treated as success (it was already gone). Other errors propagate as
- * {@link VisualizerError} so the retry queue can branch.
+ * Delete a remote shot by id. `DELETE /shots/{id}` returns 200 +
+ * `{success: true}` per the spec (not 204). A 404 is treated as success.
  */
 export async function deleteShot(visualizerId: string): Promise<void> {
 	if (!isConnected()) {
@@ -222,9 +268,11 @@ export async function deleteShot(visualizerId: string): Promise<void> {
 }
 
 /**
- * Patch an existing remote shot's editable annotations (rating + notes).
- * Telemetry is immutable per Visualizer's model; only the journal
- * fields move.
+ * Patch a remote shot's editable annotations. The spec requires a
+ * `{ shot: {...} }` envelope; Crema's `{rating, notes}` maps to
+ * `{ shot: { espresso_enjoyment: rating, private_notes: notes } }`
+ * (the only journal-style fields the spec exposes for the OAuth `write`
+ * scope without entering premium territory).
  */
 export async function patchShot(
 	visualizerId: string,
@@ -233,100 +281,160 @@ export async function patchShot(
 	if (!isConnected()) {
 		throw new VisualizerError(401, 'auth', 'Sign in to Visualizer first.');
 	}
-	const body = JSON.stringify(patch);
-	await call(`/shots/${visualizerId}`, { method: 'PATCH', body });
+	const shotBody: ShotUpdateRequest['shot'] = {};
+	if (patch.notes !== undefined) shotBody.private_notes = patch.notes;
+	if (patch.rating !== undefined) {
+		// Crema's rating is a small integer (0..5 today; if it ever expands,
+		// clamp to the spec's 0..15 score range).
+		(shotBody as Record<string, unknown>).espresso_enjoyment = Math.max(
+			0,
+			Math.min(15, Math.round(patch.rating))
+		);
+	}
+	const envelope: ShotUpdateRequest = { shot: shotBody };
+	await call(`/shots/${visualizerId}`, {
+		method: 'PATCH',
+		body: JSON.stringify(envelope)
+	});
 }
 
 /**
- * Pull one page of remote shots updated since a cursor (Unix epoch ms).
- * Returns the decoded `WireShot` rows + the next cursor when the server
- * paginates. When the server returns no `next_cursor` we treat the page
- * as final. Callers wanting the entire history should use
- * {@link pullAllShots} which paginates this end-to-end.
+ * Fetch one page of remote shot SUMMARIES. The summary is the spec's
+ * `{ id, clock, updated_at }` triple — no telemetry or annotations.
+ * Use {@link fetchShotDetail} to materialise a single full row.
  *
- * `perPage` defaults to 50 — small enough to keep each request fast,
- * large enough that even a 1000-shot account converges in 20 round-trips.
+ * The default `sort=updated_at` so {@link pullAllShotsSince} can stop
+ * walking as soon as it crosses the local cursor.
  */
 export async function pullShots(
-	sinceMs: number,
-	perPage = 50
-): Promise<{
-	shots: WireShot[];
-	nextCursor: number | null;
-}> {
+	page = 1,
+	itemsPerPage = 50
+): Promise<{ summaries: ShotSummary[]; paging: Paging }> {
 	if (!isConnected()) {
 		throw new VisualizerError(401, 'auth', 'Sign in to Visualizer first.');
 	}
-	const since = Math.floor(sinceMs);
+	const items = Math.min(100, Math.max(1, Math.floor(itemsPerPage)));
 	const body = (await call(
-		`/shots?since=${since}&per_page=${perPage}`
-	)) as ListResponse<WireShot> | WireShot[] | null;
-	const shots = Array.isArray(body)
-		? body
-		: ((body?.data ?? []) as WireShot[]);
-	const nextCursor =
-		!Array.isArray(body) && body && typeof body.next_cursor === 'number'
-			? body.next_cursor
-			: null;
-	return { shots, nextCursor };
+		`/shots?page=${page}&items=${items}&sort=updated_at`
+	)) as ShotListResponse;
+	return {
+		summaries: body?.data ?? [],
+		paging: body?.paging ?? { count: 0, page, limit: items, pages: 1 }
+	};
+}
+
+/** Fetch the full record for one shot (`GET /shots/{id}`). */
+export async function fetchShotDetail(id: string): Promise<ShotDetail> {
+	if (!isConnected()) {
+		throw new VisualizerError(401, 'auth', 'Sign in to Visualizer first.');
+	}
+	return (await call(`/shots/${id}`)) as ShotDetail;
 }
 
 /**
- * Progress callback fired between pages when {@link pullAllShots}
+ * Progress callback fired between pages when {@link pullAllShotsSince}
  * walks pagination. UIs can wire this to a progress bar or counter.
  */
 export interface PullProgress {
-	/** Number of shots fetched so far across all pages. */
+	/** Number of WireShots materialised so far across all pages. */
 	fetched: number;
-	/** Page index just completed (0-based). */
+	/** 1-based page index just completed. */
 	page: number;
+	/** Total pages reported by the server (best-effort; may be revised). */
+	totalPages: number;
 	/** Whether more pages remain. */
 	hasMore: boolean;
 }
 
 /**
- * Pull every remote shot newer than `sinceMs`, walking the server's
- * `next_cursor` pagination until exhausted. Yields the merged result + a
- * per-page progress hook so UIs can render a progress bar during the
- * initial sync of a large history (1000+ shots → ~20 round-trips at the
- * default `perPage = 50`).
+ * Pull every remote shot updated since `sinceMs` (Crema-side unix-ms
+ * cursor). Walks pages of `/shots?sort=updated_at` until either the
+ * server runs out OR a summary's `updated_at` is older than the cursor.
+ * For each summary newer than the cursor we fetch `/shots/{id}` and
+ * build a {@link WireShot}.
  *
- * **Safety cap**: walks at most `maxPages` pages (default 200 → 10k shots
- * at perPage=50) so a malformed `next_cursor` loop can't pin the tab.
- * Returns a partial result + `truncated: true` when the cap fires.
+ * **Safety cap**: walks at most `maxPages` pages (default 200 → 20k
+ * shots at items=100) so a buggy server can't pin the tab.
+ */
+export async function pullAllShotsSince(
+	sinceMs: number,
+	opts: {
+		itemsPerPage?: number;
+		maxPages?: number;
+		onProgress?: (p: PullProgress) => void;
+	} = {}
+): Promise<{ shots: WireShot[]; truncated: boolean }> {
+	const items = Math.min(100, Math.max(1, Math.floor(opts.itemsPerPage ?? 50)));
+	const maxPages = opts.maxPages ?? 200;
+	const cursorSec = Math.floor(sinceMs / 1000);
+	const wireShots: WireShot[] = [];
+	let totalPages = 1;
+	let reachedOlder = false;
+
+	for (let page = 1; page <= maxPages; page++) {
+		const { summaries, paging } = await pullShots(page, items);
+		totalPages = paging.pages || totalPages;
+		for (const summary of summaries) {
+			if (summary.updated_at < cursorSec) {
+				// Sorted by updated_at desc on Visualizer's side, so once we
+				// see an older row we know we've crossed the cursor.
+				reachedOlder = true;
+				continue;
+			}
+			try {
+				const detail = await fetchShotDetail(summary.id);
+				wireShots.push(wireShotFromDetail(summary, detail));
+			} catch (e) {
+				// One failed detail fetch shouldn't blow up the whole sync —
+				// re-throw only on auth (no point continuing). Other errors
+				// just skip the row; the next sync will retry.
+				if (e instanceof VisualizerError && e.kind === 'auth') throw e;
+			}
+		}
+		const hasMore = !reachedOlder && page < totalPages && summaries.length > 0;
+		opts.onProgress?.({
+			fetched: wireShots.length,
+			page,
+			totalPages,
+			hasMore
+		});
+		if (!hasMore) {
+			return { shots: wireShots, truncated: false };
+		}
+	}
+	return { shots: wireShots, truncated: true };
+}
+
+/**
+ * @deprecated Kept for source compatibility. Forwards to
+ * {@link pullAllShotsSince}. Prefer the new name + signature.
  */
 export async function pullAllShots(
 	sinceMs: number,
 	opts: {
 		perPage?: number;
 		maxPages?: number;
-		onProgress?: (p: PullProgress) => void;
+		onProgress?: (p: { fetched: number; page: number; hasMore: boolean }) => void;
 	} = {}
 ): Promise<{ shots: WireShot[]; truncated: boolean }> {
-	const perPage = opts.perPage ?? 50;
-	const maxPages = opts.maxPages ?? 200;
-	const all: WireShot[] = [];
-	let cursor = sinceMs;
-	for (let page = 0; page < maxPages; page++) {
-		const { shots, nextCursor } = await pullShots(cursor, perPage);
-		all.push(...shots);
-		opts.onProgress?.({
-			fetched: all.length,
-			page,
-			hasMore: nextCursor != null
-		});
-		if (nextCursor == null) {
-			return { shots: all, truncated: false };
-		}
-		// Advance the cursor. If the server returns the same cursor twice
-		// (broken pagination), break to avoid an infinite loop.
-		if (nextCursor <= cursor) {
-			return { shots: all, truncated: false };
-		}
-		cursor = nextCursor;
-	}
-	return { shots: all, truncated: true };
+	return pullAllShotsSince(sinceMs, {
+		itemsPerPage: opts.perPage,
+		maxPages: opts.maxPages,
+		onProgress: opts.onProgress
+			? (p) =>
+					opts.onProgress!({
+						fetched: p.fetched,
+						page: p.page - 1, // legacy callers expected 0-based
+						hasMore: p.hasMore
+					})
+			: undefined
+	});
 }
 
 // Reconciliation, signature helpers, and the WireShot type live in
 // `./shot-sync-signatures.ts` — pure, no wasm / fetch / settings.
+
+// Silence the unused-import lint when the DeleteResult alias isn't wired
+// through any helper above — it's exported for callers that want to
+// type their direct usage.
+export type { DeleteResult };
