@@ -197,6 +197,9 @@
 			{/if}
 		</div>
 		<div class="st-visualizer-meta-row">
+			<!-- Public/private is settable only on visualizer.coffee — the
+			     spec has no `PATCH /me`, so Crema only displays the state.
+			     The visualizer.coffee link below is the change path. -->
 			<a
 				class="st-visualizer-link"
 				href="https://visualizer.coffee"
@@ -205,19 +208,6 @@
 			>
 				visualizer.coffee <i class="ph ph-arrow-square-out" aria-hidden="true"></i>
 			</a>
-			<!-- Public/private is settable only on visualizer.coffee — the
-			     spec has no `PATCH /me`, so Crema can only display the
-			     state and link out (docs/38 §"Recommendations" row 4). -->
-			{#if connected && account && typeof account.public === 'boolean'}
-				<a
-					class="st-visualizer-link"
-					href="https://visualizer.coffee/profile/edit"
-					target="_blank"
-					rel="noreferrer noopener"
-				>
-					change at visualizer.coffee <i class="ph ph-arrow-square-out" aria-hidden="true"></i>
-				</a>
-			{/if}
 		</div>
 	</div>
 	<div class="st-visualizer-actions">
