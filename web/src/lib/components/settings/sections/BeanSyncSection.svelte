@@ -77,13 +77,21 @@
 	}
 
 	async function onSignIn(): Promise<void> {
-		if (!oauthConfigured) return;
+		if (!oauthConfigured) {
+			connectStatus = {
+				kind: 'error',
+				message:
+					'OAuth client_id not configured. Set VITE_VISUALIZER_CLIENT_ID in web/.env.local and restart `pnpm dev`.'
+			};
+			return;
+		}
 		connectStatus = { kind: 'starting' };
 		try {
 			await startVisualizerLogin({ returnTo: '/settings' });
 			// `startVisualizerLogin` navigates away — control rarely
 			// returns to this function.
 		} catch (e) {
+			console.error('[Crema] startVisualizerLogin failed:', e);
 			connectStatus = {
 				kind: 'error',
 				message: e instanceof Error ? e.message : String(e)
