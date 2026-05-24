@@ -1,154 +1,179 @@
 <script lang="ts">
 	/**
-	 * `BeanSyncSection` — the Settings → Sharing card for Visualizer bean
-	 * library sync.
+	 * `BeanSyncSection` — Settings → Sharing → "Sync" card.
 	 *
-	 * OAuth-only: the user clicks "Sign in with Visualizer", lands on
-	 * `/oauth/authorize`, returns to `/auth/visualizer/callback` with a
-	 * code, and we exchange it for a bearer (PKCE). Once connected the
-	 * card surfaces the linked account, lets the user sync, and exposes
-	 * "Disconnect" (revoke + clear tokens). HTTP-Basic was removed in
-	 * the 2026-05-24 cut.
+	 * Per docs/36 §8, this card holds the unified per-entity sync matrix:
+	 * beans / roasters / shots each get a direction selector (off /
+	 * backup / pull / two-way), with a master `Auto-sync` toggle, a
+	 * single "Sync now" button, and a collapsible activity log spanning
+	 * all three entity types.
 	 *
-	 * Premium gating is surfaced gracefully — free-tier users see
-	 * "Connected (read-only)" with an upgrade link, not an angry banner.
+	 * The name predates the unification — kept for git-blame continuity.
 	 */
 	import { onMount } from 'svelte';
 	import {
-		clearVisualizerTokens,
-		fetchVisualizerAccount,
 		getBeanStore,
-		getStoredVisualizerTokens,
-		isVisualizerConnected,
-		isVisualizerOauthConfigured,
-		onVisualizerTokenChange,
 		readSyncSettings,
-		revokeVisualizerToken,
-		runSync,
-		startVisualizerLogin,
-		testConnection,
-		type SyncLogEntry,
-		type SyncResult,
-		type VisualizerAccount
+		runSync as runBeanSync,
+		type SyncResult as BeanSyncResult
 	} from '$lib/bean';
+	import { getHistoryStore } from '$lib/history';
+	import {
+		appendSyncLog,
+		directionPushes,
+		drainQueue,
+		enqueue as enqueueSyncOp,
+		isConnected as isVisualizerConnected,
+		readSyncConfig,
+		updateSyncConfig,
+		uploadShot,
+		type SyncDirection
+	} from '$lib/visualizer';
+	import { VisualizerError } from '$lib/bean';
 	import StGroup from '../StGroup.svelte';
 	import StRow from '../StRow.svelte';
+	import StSegment from '../StSegment.svelte';
+	import StToggle from '../StToggle.svelte';
 
 	const library = getBeanStore();
-	const oauthConfigured = isVisualizerOauthConfigured();
+	const history = getHistoryStore();
 
-	let settings = $state(readSyncSettings());
-	let connected = $state(isVisualizerConnected());
-	let account = $state<VisualizerAccount | null>(null);
-	let accountError = $state<string | null>(null);
-
-	let connectStatus = $state<
-		| { kind: 'idle' }
-		| { kind: 'starting' }
-		| { kind: 'testing' }
-		| { kind: 'ok'; message: string }
-		| { kind: 'error'; message: string }
-	>({ kind: 'idle' });
+	let config = $state(readSyncConfig());
+	let beanLastSync = $state(readSyncSettings().lastSyncAt);
 	let syncing = $state(false);
-	let lastResult = $state<SyncResult | null>(null);
+	let lastResult = $state<BeanSyncResult | null>(null);
+	let logCollapsed = $state(true);
 
-	// Live-update if another tab signs in / disconnects.
 	onMount(() => {
-		const off = onVisualizerTokenChange((set) => {
-			connected = set !== null;
-			if (!connected) {
-				account = null;
-				accountError = null;
-			} else {
-				void loadAccount();
-			}
-		});
-		if (connected) void loadAccount();
-		return off;
+		// Refresh in case another tab edited it while this one was open.
+		config = readSyncConfig();
 	});
 
-	async function loadAccount(): Promise<void> {
-		accountError = null;
-		try {
-			account = await fetchVisualizerAccount();
-		} catch (e) {
-			accountError = e instanceof Error ? e.message : String(e);
-		}
-	}
+	/** docs/36 §8: every direction selector lists the same four modes. */
+	const DIRECTION_OPTIONS: { value: SyncDirection; label: string }[] = [
+		{ value: 'off', label: 'Off' },
+		{ value: 'backup', label: 'Backup' },
+		{ value: 'pull', label: 'Pull' },
+		{ value: 'two-way', label: 'Two-way' }
+	];
 
-	async function onSignIn(): Promise<void> {
-		console.log('[Crema] onSignIn fired. oauthConfigured=', oauthConfigured);
-		if (!oauthConfigured) {
-			connectStatus = {
-				kind: 'error',
-				message:
-					'OAuth client_id not configured. Set VITE_VISUALIZER_CLIENT_ID in web/.env.local and restart `pnpm dev`.'
-			};
+	/**
+	 * Free-tier users can't push beans / roasters (Visualizer's premium
+	 * gate). docs/36 §8: the segment shows the full four options but
+	 * `Backup` / `Two-way` are visually disabled for those entities. We
+	 * still allow Off / Pull. Shots stay unrestricted.
+	 */
+	const premiumLocked = $derived(config.premium === false);
+
+	function setEntityDirection(
+		entity: 'beans' | 'roasters' | 'shots',
+		direction: SyncDirection
+	): void {
+		// Block premium-gated pushes for beans + roasters when on free tier.
+		if (
+			premiumLocked &&
+			entity !== 'shots' &&
+			(direction === 'backup' || direction === 'two-way')
+		) {
 			return;
 		}
-		connectStatus = { kind: 'starting' };
-		try {
-			console.log('[Crema] calling startVisualizerLogin…');
-			await startVisualizerLogin({ returnTo: '/settings' });
-			console.log('[Crema] startVisualizerLogin returned (unexpected — should have navigated)');
-		} catch (e) {
-			console.error('[Crema] startVisualizerLogin failed:', e);
-			connectStatus = {
-				kind: 'error',
-				message: e instanceof Error ? e.message : String(e)
-			};
-		}
+		config = updateSyncConfig({
+			direction: { ...config.direction, [entity]: direction }
+		});
 	}
 
-	async function onDisconnect(): Promise<void> {
-		const tokens = getStoredVisualizerTokens();
-		if (tokens?.accessToken) {
-			// Best-effort revoke; we clear locally regardless.
-			await revokeVisualizerToken(tokens.accessToken);
-		}
-		clearVisualizerTokens();
-		connected = false;
-		account = null;
-		accountError = null;
-		connectStatus = { kind: 'idle' };
-		lastResult = null;
+	function setAutoSync(on: boolean): void {
+		config = updateSyncConfig({ autoSync: on });
 	}
 
-	async function onTest(): Promise<void> {
-		connectStatus = { kind: 'testing' };
-		const r = await testConnection();
-		if (r.ok) {
-			connectStatus = {
-				kind: 'ok',
-				message:
-					r.premium === false
-						? 'Connected (read-only — free tier).'
-						: 'Connected.'
-			};
-			settings = readSyncSettings();
-		} else {
-			connectStatus = { kind: 'error', message: r.error };
-		}
-	}
-
-	async function onSync(): Promise<void> {
+	async function syncNow(): Promise<void> {
 		if (syncing) return;
 		syncing = true;
-		lastResult = await runSync(library);
-		settings = readSyncSettings();
-		syncing = false;
-		if (lastResult.ok && lastResult.premiumLocked) {
-			connectStatus = {
-				kind: 'ok',
-				message: 'Connected (read-only — free tier).'
-			};
-		} else if (lastResult.ok) {
-			connectStatus = { kind: 'ok', message: 'Connected.' };
-		} else {
-			connectStatus = {
-				kind: 'error',
-				message: lastResult.error ?? 'Sync failed.'
-			};
+		try {
+			// 1. Beans + roasters share the existing runSync(library) call.
+			//    We respect the direction selector by skipping the call when
+			//    both bean + roaster modes are "off".
+			const beansOn = config.direction.beans !== 'off';
+			const roastersOn = config.direction.roasters !== 'off';
+			if (beansOn || roastersOn) {
+				lastResult = await runBeanSync(library);
+				beanLastSync = readSyncSettings().lastSyncAt;
+				config = updateSyncConfig({
+					lastSyncAt: {
+						...config.lastSyncAt,
+						beans: beansOn ? Date.now() : config.lastSyncAt.beans,
+						roasters: roastersOn ? Date.now() : config.lastSyncAt.roasters
+					},
+					premium: lastResult.premiumLocked ? false : (config.premium ?? true)
+				});
+				// Mirror the bean log into the unified log (one tag per entry
+				// so the user can filter mentally).
+				for (const entry of lastResult.log.slice(0, 10).reverse()) {
+					appendSyncLog({
+						direction: entry.direction,
+						entity: entry.kind,
+						id: entry.id,
+						name: entry.name,
+						at: entry.at,
+						error: entry.error
+					});
+				}
+			}
+			// 2. Shots — Backup push, no pull yet (Phase 2 follow-up).
+			if (directionPushes(config.direction.shots)) {
+				await uploadUnsyncedShots();
+				config = updateSyncConfig({
+					lastSyncAt: { ...config.lastSyncAt, shots: Date.now() }
+				});
+			}
+			// 3. Drain the retry queue so anything backlogged flushes.
+			await drainQueue();
+			config = readSyncConfig();
+		} finally {
+			syncing = false;
+		}
+	}
+
+	async function uploadUnsyncedShots(): Promise<void> {
+		for (const shot of history.all.filter((s) => !s.visualizerId)) {
+			try {
+				const { visualizerId } = await uploadShot(shot);
+				history.bindVisualizerId(shot.id, visualizerId);
+				appendSyncLog({
+					direction: 'push',
+					entity: 'shot',
+					id: shot.id,
+					name: shot.profileName ?? 'Shot',
+					at: Date.now()
+				});
+			} catch (e) {
+				const recoverable =
+					e instanceof VisualizerError
+						? e.kind === 'network' ||
+							(e.status >= 500 && e.status < 600) ||
+							e.status === 408
+						: true;
+				if (recoverable) {
+					enqueueSyncOp({
+						entity: 'shot',
+						id: shot.id,
+						op: 'create',
+						error: e instanceof Error ? e.message : String(e)
+					});
+				}
+				appendSyncLog({
+					direction: 'skip',
+					entity: 'shot',
+					id: shot.id,
+					name: shot.profileName ?? 'Shot',
+					at: Date.now(),
+					error: e instanceof Error ? e.message : String(e)
+				});
+				if (e instanceof VisualizerError && (e.kind === 'auth' || e.kind === 'premium')) {
+					// Don't keep hammering for the rest of the loop.
+					return;
+				}
+			}
 		}
 	}
 
@@ -166,82 +191,160 @@
 		});
 	}
 
-	function fmtLogEntry(entry: SyncLogEntry): string {
-		const arrow =
-			entry.direction === 'push'
-				? '↑'
-				: entry.direction === 'pull'
-					? '↓'
-					: entry.direction === 'delete'
-						? '✕'
-						: '·';
-		return `${arrow} ${entry.kind === 'bean' ? 'Bag' : 'Roaster'} "${entry.name}"${entry.error ? ` — ${entry.error}` : ''}`;
+	function logArrow(direction: string): string {
+		if (direction === 'push') return '↑';
+		if (direction === 'pull') return '↓';
+		if (direction === 'delete') return '✕';
+		return '·';
 	}
 
-	const recentLog = $derived(lastResult?.log.slice(0, 6) ?? []);
-	const accountLabel = $derived(account ? account.name : 'Visualizer account');
+	function entityLabel(entity: string): string {
+		if (entity === 'bean') return 'Bag';
+		if (entity === 'roaster') return 'Roaster';
+		return 'Shot';
+	}
+
+	const connected = $derived(isVisualizerConnected());
+	const unsyncedShotCount = $derived(history.all.filter((s) => !s.visualizerId).length);
 </script>
 
-<StGroup
-	title="Bean library sync"
-	sub="Sync your bean library with Visualizer so a second device picks up where you left off."
->
-	{#if !connected}
-		<!-- Sign-in + account identity + Test + Disconnect live in the
-		     Visualizer card (SharingSection). This component only renders
-		     when connected, and only owns Sync now + the last-sync log. -->
-	{:else}
+{#if connected}
+	<StGroup
+		title="Sync"
+		sub="Per-entity direction. Shots can backup or two-way sync regardless of premium; beans and roasters need Visualizer Premium for the push side."
+	>
+		<StRow
+			title="Auto-sync"
+			sub="When on, mutations push to Visualizer in the background and the queue drains on app launch."
+		>
+			{#snippet control()}
+				<StToggle on={config.autoSync} onChange={setAutoSync} />
+			{/snippet}
+		</StRow>
+
+		<StRow
+			title="Beans"
+			sub={`${library.beans.length} bag(s). Last sync: ${fmtTime(config.lastSyncAt.beans ?? beanLastSync)}.`}
+		>
+			{#snippet control()}
+				<StSegment
+					value={config.direction.beans}
+					options={DIRECTION_OPTIONS}
+					onChange={(v) => setEntityDirection('beans', v as SyncDirection)}
+				/>
+			{/snippet}
+			{#snippet hint()}
+				{#if premiumLocked}
+					<span class="bs-hint-dim">Backup / Two-way need Visualizer Premium.</span>
+				{/if}
+			{/snippet}
+		</StRow>
+
+		<StRow
+			title="Roasters"
+			sub={`${library.roasters.length} roaster(s). Last sync: ${fmtTime(config.lastSyncAt.roasters ?? beanLastSync)}.`}
+		>
+			{#snippet control()}
+				<StSegment
+					value={config.direction.roasters}
+					options={DIRECTION_OPTIONS}
+					onChange={(v) => setEntityDirection('roasters', v as SyncDirection)}
+				/>
+			{/snippet}
+			{#snippet hint()}
+				{#if premiumLocked}
+					<span class="bs-hint-dim">Backup / Two-way need Visualizer Premium.</span>
+				{/if}
+			{/snippet}
+		</StRow>
+
+		<StRow
+			title="Shots"
+			sub={`${history.all.length} shot(s) on this device${unsyncedShotCount > 0 ? `, ${unsyncedShotCount} unsynced` : ''}. Last sync: ${fmtTime(config.lastSyncAt.shots)}.`}
+		>
+			{#snippet control()}
+				<StSegment
+					value={config.direction.shots}
+					options={DIRECTION_OPTIONS}
+					onChange={(v) => setEntityDirection('shots', v as SyncDirection)}
+				/>
+			{/snippet}
+			{#snippet hint()}
+				<span class="bs-hint-dim">Free.</span>
+			{/snippet}
+		</StRow>
+
 		<StRow
 			title="Sync now"
-			sub={`${library.beans.length} bag(s), ${library.roasters.length} roaster(s) in your library. Last sync: ${fmtTime(settings.lastSyncAt)}.`}
+			sub="Run a one-shot full sync across every enabled entity."
 		>
 			{#snippet control()}
 				<button
 					type="button"
 					class="bs-btn bs-btn-primary"
 					disabled={syncing}
-					onclick={onSync}
+					onclick={syncNow}
 				>
 					<i
-						class={syncing ? 'ph ph-spinner-gap bs-spinner' : 'ph ph-arrows-clockwise'}
+						class={syncing ? 'ph ph-spinner-gap bs-spin' : 'ph ph-arrows-clockwise'}
 						aria-hidden="true"
 					></i>
 					{syncing ? 'Syncing…' : 'Sync now'}
 				</button>
 			{/snippet}
 		</StRow>
-		{#if lastResult}
-			<div class="bs-result">
-				<div class="bs-result-head">
-					{#if lastResult.ok}
-						<i class="ph-fill ph-check-circle" style:color="var(--success)" aria-hidden="true"></i>
-						Synced ↓{lastResult.pulled} pulled · ↑{lastResult.pushed} pushed{#if lastResult.skipped > 0}
-							· {lastResult.skipped} skipped{/if}
-					{:else}
-						<i class="ph ph-warning" style:color="var(--danger)" aria-hidden="true"></i>
-						Sync failed: {lastResult.error}
-					{/if}
-				</div>
-				{#if lastResult.premiumLocked}
-					<div class="bs-premium">
-						Bag and roaster writes need Visualizer Premium (€5/mo). Reads still
-						work — your library will pick up remote changes on every sync.
-						<a href="https://visualizer.coffee/upgrade" target="_blank" rel="noopener noreferrer">
-							Upgrade →
-						</a>
-					</div>
-				{/if}
-				{#if recentLog.length > 0}
-					<ul class="bs-log">
-						{#each recentLog as entry (entry.at + entry.id)}
-							<li>{fmtLogEntry(entry)}</li>
-						{/each}
-					</ul>
-				{/if}
+
+		<StRow
+			title="Recent activity"
+			sub={`${config.log.length} entr${config.log.length === 1 ? 'y' : 'ies'} logged.`}
+		>
+			{#snippet control()}
+				<button
+					type="button"
+					class="bs-btn"
+					onclick={() => (logCollapsed = !logCollapsed)}
+				>
+					<i
+						class={logCollapsed ? 'ph ph-caret-down' : 'ph ph-caret-up'}
+						aria-hidden="true"
+					></i>
+					{logCollapsed ? 'Show log' : 'Hide log'}
+				</button>
+			{/snippet}
+		</StRow>
+
+		{#if !logCollapsed && config.log.length > 0}
+			<ul class="bs-log">
+				{#each config.log as entry (entry.at + entry.id)}
+					<li class={entry.error ? 'bs-log-err' : ''}>
+						<span class="bs-log-arrow">{logArrow(entry.direction)}</span>
+						<span class="bs-log-kind">{entityLabel(entry.entity)}</span>
+						<span class="bs-log-name">"{entry.name}"</span>
+						<span class="bs-log-time">{fmtTime(entry.at)}</span>
+						{#if entry.error}
+							<span class="bs-log-msg">— {entry.error}</span>
+						{/if}
+					</li>
+				{/each}
+			</ul>
+		{/if}
+
+		{#if lastResult?.premiumLocked}
+			<div class="bs-premium">
+				Bag and roaster pushes need Visualizer Premium (€5/mo). Reads still work
+				— your library will pick up remote changes on every sync. Shots are
+				unrestricted.
+				<a
+					href="https://visualizer.coffee/upgrade"
+					target="_blank"
+					rel="noopener noreferrer"
+				>
+					Upgrade →
+				</a>
 			</div>
 		{/if}
-	{/if}
-</StGroup>
+	</StGroup>
+{/if}
 
 <style>
 	.bs-btn {
@@ -271,32 +374,24 @@
 	.bs-btn-primary:hover:not([disabled]) {
 		background: var(--copper-600);
 	}
-	.bs-spinner {
+	.bs-spin {
 		animation: bs-spin 1.1s linear infinite;
 	}
 	@keyframes bs-spin {
 		from { transform: rotate(0); }
 		to { transform: rotate(360deg); }
 	}
-	.bs-result {
+	.bs-hint-dim {
+		font-family: var(--font-sans);
+		font-size: 11px;
+		color: rgba(var(--tint-rgb), 0.45);
+	}
+	.bs-premium {
 		grid-column: 1 / -1;
 		margin: 8px 0 4px;
 		padding: 12px 14px;
 		background: rgba(var(--tint-rgb), 0.04);
 		border-radius: var(--radius-sm);
-		display: flex;
-		flex-direction: column;
-		gap: 8px;
-	}
-	.bs-result-head {
-		display: inline-flex;
-		gap: 8px;
-		align-items: center;
-		font-family: var(--font-sans);
-		font-size: 13px;
-		color: var(--fg-1);
-	}
-	.bs-premium {
 		font-family: var(--font-sans);
 		font-size: 12px;
 		color: rgba(var(--tint-rgb), 0.7);
@@ -307,12 +402,49 @@
 	.bs-log {
 		list-style: none;
 		padding: 0;
-		margin: 0;
+		margin: 4px 0 8px;
 		font-family: var(--font-sans);
 		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.6);
+		color: rgba(var(--tint-rgb), 0.65);
+		grid-column: 1 / -1;
+		max-height: 280px;
+		overflow-y: auto;
+	}
+	.bs-log li {
 		display: flex;
-		flex-direction: column;
-		gap: 2px;
+		align-items: baseline;
+		gap: 6px;
+		padding: 4px 0;
+		border-bottom: 1px dashed rgba(var(--tint-rgb), 0.06);
+	}
+	.bs-log li:last-child {
+		border-bottom: 0;
+	}
+	.bs-log-err {
+		color: rgba(var(--danger-rgb, 204 76 76), 0.95);
+	}
+	.bs-log-arrow {
+		font-family: var(--font-mono);
+		color: var(--copper-400);
+		width: 12px;
+		text-align: center;
+	}
+	.bs-log-kind {
+		color: rgba(var(--tint-rgb), 0.5);
+		min-width: 50px;
+	}
+	.bs-log-name {
+		color: var(--fg-1);
+		max-width: 240px;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+	.bs-log-time {
+		color: rgba(var(--tint-rgb), 0.4);
+		margin-left: auto;
+	}
+	.bs-log-msg {
+		color: rgba(var(--danger-rgb, 204 76 76), 0.95);
 	}
 </style>

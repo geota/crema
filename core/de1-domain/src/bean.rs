@@ -368,6 +368,13 @@ pub struct Bean {
     pub tags: Vec<String>,
     /// Visualizer `coffee_bag.id` once pushed.
     pub visualizer_id: Option<String>,
+    /// Unix epoch ms when this bag was soft-deleted, or `None` when
+    /// active. Required for cross-device sync tombstone propagation
+    /// (docs/36 §3): on the next sync push, the remote row is DELETEd
+    /// and the local tombstone is garbage-collected. Defaults to
+    /// `None` so older `Bean` JSON deserialises cleanly.
+    #[serde(default)]
+    pub deleted_at: Option<i64>,
     /// Beanconqueror `bean.config.uuid` from a Bc import. Tracks
     /// provenance so a re-import skips beans we already know.
     pub beanconqueror_id: Option<String>,
@@ -416,6 +423,7 @@ impl Bean {
             grinder_setting: String::new(),
             tags: Vec::new(),
             visualizer_id: None,
+            deleted_at: None,
             beanconqueror_id: None,
             image_ref: None,
             metadata: serde_json::Value::Null,
@@ -513,6 +521,11 @@ pub struct Roaster {
     pub canonical_roaster_id: Option<String>,
     /// Visualizer `roaster.id` once pushed.
     pub visualizer_id: Option<String>,
+    /// Unix epoch ms when this roaster was soft-deleted, or `None` when
+    /// active. See [`Bean::deleted_at`] for the rationale. Defaults to
+    /// `None` so older JSON deserialises cleanly.
+    #[serde(default)]
+    pub deleted_at: Option<i64>,
     /// Open JSON metadata — escape valve symmetric with [`Bean::metadata`].
     pub metadata: serde_json::Value,
     /// Unix epoch ms.
@@ -534,6 +547,7 @@ impl Roaster {
             notes: String::new(),
             canonical_roaster_id: None,
             visualizer_id: None,
+            deleted_at: None,
             metadata: serde_json::Value::Null,
             created_at: now_unix_ms,
             updated_at: now_unix_ms,

@@ -116,6 +116,18 @@ pub struct StoredShot {
     pub metadata: ShotMetadata,
     /// The recorded telemetry.
     pub record: ShotRecord,
+    /// Visualizer `shot.id` once pushed. `None` until the shot has been
+    /// uploaded; the upload round-trip writes it back so subsequent syncs
+    /// PATCH the same row instead of POSTing a duplicate. Defaults to
+    /// `None` so older `StoredShot` JSON deserialises cleanly.
+    #[serde(default)]
+    pub visualizer_id: Option<String>,
+    /// Unix epoch milliseconds when this shot was soft-deleted, or `None`
+    /// when active. The shell filters tombstones out of the History UI;
+    /// the next sync DELETEs the remote row, then garbage-collects the
+    /// tombstone. Defaults to `None` so older records deserialise.
+    #[serde(default)]
+    pub deleted_at: Option<i64>,
 }
 
 impl StoredShot {
@@ -131,6 +143,8 @@ impl StoredShot {
             stop_reason: None,
             metadata: ShotMetadata::default(),
             record,
+            visualizer_id: None,
+            deleted_at: None,
         }
     }
 
