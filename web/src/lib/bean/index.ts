@@ -53,3 +53,17 @@ export {
 	type SyncResult,
 	type VisualizerSyncSettings
 } from './visualizer-sync';
+
+export {
+	clearTokens as clearVisualizerTokens,
+	fetchAccount as fetchVisualizerAccount,
+	isConfigured as isVisualizerOauthConfigured,
+	isConnected as isVisualizerConnected,
+	onTokenChange as onVisualizerTokenChange,
+	revokeToken as revokeVisualizerToken,
+	startVisualizerLogin,
+	getStoredTokens as getStoredVisualizerTokens,
+	OAUTH_SCOPES as VISUALIZER_OAUTH_SCOPES,
+	type TokenSet as VisualizerTokenSet,
+	type VisualizerAccount
+} from '$lib/visualizer';
