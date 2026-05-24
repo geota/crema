@@ -18,9 +18,11 @@
  *     shared library across devices: if both sides changed since the last
  *     sync, the remote wins. Tested separately in the sync helper.
  *
- * Auth: HTTP Basic per Visualizer's `/api` contract — the user's email +
- * password live in the settings store (`visualizerUsername` /
- * `visualizerPassword`). OAuth is deferred (docs/28 §sync-model §phase-3).
+ * Auth: OAuth 2.0 Authorization-Code + PKCE (Doorkeeper on Visualizer's
+ * side). Tokens live in `$lib/visualizer/token-store`; this module asks
+ * `withFreshToken` for a known-fresh bearer and sets
+ * `Authorization: Bearer …` on every request. HTTP-Basic was removed in
+ * the 2026-05-24 cut — one Visualizer SaaS, one auth path.
  *
  * Premium gating: bag / roaster *write* endpoints require Visualizer
  * premium (€5/mo). We detect the gating via HTTP 403 (or a recognisable
@@ -33,6 +35,11 @@
  */
 
 import { readJson, writeJson } from '$lib/utils/storage';
+import {
+	isConnected,
+	NotAuthenticatedError,
+	withFreshToken
+} from '$lib/visualizer';
 import {
 	blankBean,
 	blankRoaster,
@@ -48,12 +55,13 @@ const API_BASE = 'https://visualizer.coffee/api';
 /** localStorage key for the sync settings (creds + last-sync metadata). */
 const SYNC_KEY = 'crema.beans.sync.v1';
 
-/** Persisted sync settings. */
+/**
+ * Persisted sync metadata. Credentials live in `$lib/visualizer/token-store`
+ * — the OAuth bearer is the source of authority. This shape holds only the
+ * sync bookkeeping (`lastSyncAt`, `premium`).
+ */
 export interface VisualizerSyncSettings {
-	username: string;
-	/** Plain — HTTP Basic needs cleartext; we surface the storage warning in UI. */
-	password: string;
-	/** ISO timestamp of the last successful sync. */
+	/** Unix-ms timestamp of the last successful sync. */
 	lastSyncAt: number | null;
 	/**
 	 * Cached premium-status flag. `true` = bag/roaster writes succeed.
@@ -64,14 +72,19 @@ export interface VisualizerSyncSettings {
 }
 
 const DEFAULT_SYNC_SETTINGS: VisualizerSyncSettings = {
-	username: '',
-	password: '',
 	lastSyncAt: null,
 	premium: null
 };
 
 export function readSyncSettings(): VisualizerSyncSettings {
-	return readJson<VisualizerSyncSettings>(SYNC_KEY, DEFAULT_SYNC_SETTINGS);
+	const raw = readJson<VisualizerSyncSettings>(SYNC_KEY, DEFAULT_SYNC_SETTINGS);
+	// Tolerate the legacy `{ username, password, lastSyncAt, premium }`
+	// shape — `migrateLegacyBasicAuth` strips the credential fields out
+	// at boot, but we may be called before that runs (or in tests).
+	return {
+		lastSyncAt: raw.lastSyncAt ?? null,
+		premium: raw.premium ?? null
+	};
 }
 export function writeSyncSettings(next: Partial<VisualizerSyncSettings>): void {
 	const merged = { ...readSyncSettings(), ...next };
@@ -312,15 +325,6 @@ export function roasterFromWire(wire: RoasterWire): Roaster {
 
 // ── HTTP plumbing ──────────────────────────────────────────────────────
 
-function authHeader(s: VisualizerSyncSettings): string {
-	// btoa is fine — HTTP-Basic is base64 of `username:password`.
-	const enc =
-		typeof btoa === 'function'
-			? btoa(`${s.username}:${s.password}`)
-			: Buffer.from(`${s.username}:${s.password}`).toString('base64');
-	return `Basic ${enc}`;
-}
-
 interface FetchOptions {
 	method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
 	body?: unknown;
@@ -328,7 +332,8 @@ interface FetchOptions {
 
 /**
  * Throw when the HTTP response is an error. Tagged so the caller can branch on
- * `kind: 'auth' | 'premium' | 'other'`.
+ * `kind: 'auth' | 'premium' | 'other'`. `'auth'` now means "the OAuth bearer
+ * was rejected and refresh failed" — the caller should prompt re-sign-in.
  */
 export class VisualizerError extends Error {
 	constructor(
@@ -340,34 +345,63 @@ export class VisualizerError extends Error {
 	}
 }
 
+/**
+ * Single HTTP entry point — every other helper in this file funnels here.
+ * Always sends `Authorization: Bearer …` from {@link withFreshToken}; on a
+ * 401 the token-store will have transparently refreshed once, and a still-
+ * failing call surfaces as `VisualizerError('auth')`.
+ */
 async function call(
 	path: string,
-	settings: VisualizerSyncSettings,
 	opts: FetchOptions = {}
 ): Promise<unknown> {
 	const url = `${API_BASE}${path}`;
-	const headers: Record<string, string> = {
-		Authorization: authHeader(settings),
-		Accept: 'application/json'
-	};
-	if (opts.body) headers['Content-Type'] = 'application/json';
-	let res: Response;
-	try {
-		res = await fetch(url, {
+	const doFetch = async (token: string): Promise<Response> => {
+		const headers: Record<string, string> = {
+			Authorization: `Bearer ${token}`,
+			Accept: 'application/json'
+		};
+		if (opts.body) headers['Content-Type'] = 'application/json';
+		return fetch(url, {
 			method: opts.method ?? 'GET',
 			headers,
 			body: opts.body ? JSON.stringify(opts.body) : undefined
 		});
+	};
+
+	let res: Response;
+	try {
+		res = await withFreshToken(async (token) => {
+			const r = await doFetch(token);
+			// `withFreshToken` retries once on a 401 — throw a tagged
+			// object so it recognises the failure shape.
+			if (r.status === 401) {
+				throw Object.assign(new Error('Unauthorized'), {
+					status: 401,
+					kind: 'auth'
+				});
+			}
+			return r;
+		});
 	} catch (e) {
+		if (e instanceof NotAuthenticatedError) {
+			throw new VisualizerError(401, 'auth', e.message);
+		}
+		const err = e as { status?: number; kind?: string; message?: string };
+		if (err && err.kind === 'auth') {
+			throw new VisualizerError(
+				401,
+				'auth',
+				'Visualizer rejected the access token. Please sign in again.'
+			);
+		}
 		throw new VisualizerError(
 			0,
 			'network',
 			`Network error: ${e instanceof Error ? e.message : String(e)}`
 		);
 	}
-	if (res.status === 401) {
-		throw new VisualizerError(401, 'auth', 'Invalid email or password.');
-	}
+
 	if (res.status === 402 || res.status === 403) {
 		// Premium gating per docs/28 — bag/roaster CRUD is paywalled.
 		const text = await res.text().catch(() => '');
@@ -392,17 +426,21 @@ async function call(
 // ── Public surface ─────────────────────────────────────────────────────
 
 /**
- * Verify credentials by issuing a small read. Returns the (cached or freshly
- * probed) premium flag on success.
+ * Verify the connection by issuing a small read against `/coffee_bags`.
+ * Returns the (cached or freshly probed) premium flag on success.
+ *
+ * Requires the user to have signed in via OAuth first — call
+ * `$lib/visualizer#isConnected()` (or just let this throw with `'auth'`).
  */
-export async function testConnection(
-	settings: VisualizerSyncSettings
-): Promise<{ ok: true; premium: boolean | null } | { ok: false; error: string }> {
-	if (!settings.username || !settings.password) {
-		return { ok: false, error: 'Enter your Visualizer email and password.' };
+export async function testConnection(): Promise<
+	{ ok: true; premium: boolean | null } | { ok: false; error: string }
+> {
+	if (!isConnected()) {
+		return { ok: false, error: 'Sign in to Visualizer first.' };
 	}
+	const settings = readSyncSettings();
 	try {
-		await call('/coffee_bags?items=1', settings);
+		await call('/coffee_bags?items=1');
 		// We can't be sure about the premium flag without a write; leave it
 		// at the cached value (or null) until a real push happens.
 		return { ok: true, premium: settings.premium };
@@ -437,8 +475,8 @@ export async function runSync(library: BeanLibraryStore): Promise<SyncResult> {
 		premiumLocked: settings.premium === false,
 		log
 	};
-	if (!settings.username || !settings.password) {
-		result.error = 'Sign in first — enter your Visualizer email and password.';
+	if (!isConnected()) {
+		result.error = 'Sign in to Visualizer first.';
 		return result;
 	}
 
@@ -448,8 +486,7 @@ export async function runSync(library: BeanLibraryStore): Promise<SyncResult> {
 		let page = 1;
 		while (page < 50) {
 			const body = (await call(
-				`/roasters?items=100&page=${page}`,
-				settings
+				`/roasters?items=100&page=${page}`
 			)) as ListResponse<RoasterWire>;
 			const data = body?.data ?? [];
 			remoteRoasters.push(...data);
@@ -518,7 +555,7 @@ export async function runSync(library: BeanLibraryStore): Promise<SyncResult> {
 				continue;
 			}
 			try {
-				const wire = (await call('/roasters', settings, {
+				const wire = (await call('/roasters', {
 					method: 'POST',
 					body: roasterToWire(local)
 				})) as RoasterWire;
@@ -566,8 +603,7 @@ export async function runSync(library: BeanLibraryStore): Promise<SyncResult> {
 		page = 1;
 		while (page < 50) {
 			const body = (await call(
-				`/coffee_bags?items=100&page=${page}`,
-				settings
+				`/coffee_bags?items=100&page=${page}`
 			)) as ListResponse<BagWire>;
 			const data = body?.data ?? [];
 			remoteBags.push(...data);
@@ -632,7 +668,7 @@ export async function runSync(library: BeanLibraryStore): Promise<SyncResult> {
 			if (!local.visualizerId) {
 				// Create.
 				try {
-					const wire = (await call('/coffee_bags', settings, {
+					const wire = (await call('/coffee_bags', {
 						method: 'POST',
 						body: beanToWire(local, remoteRoasterId)
 					})) as BagWire;
@@ -673,7 +709,7 @@ export async function runSync(library: BeanLibraryStore): Promise<SyncResult> {
 			} else if (local.updatedAt > lastSync) {
 				// Update.
 				try {
-					await call(`/coffee_bags/${local.visualizerId}`, settings, {
+					await call(`/coffee_bags/${local.visualizerId}`, {
 						method: 'PATCH',
 						body: beanToWire(local, remoteRoasterId)
 					});
@@ -725,11 +761,11 @@ export async function deleteRemoteBean(
 	bean: Bean
 ): Promise<{ ok: boolean; error?: string }> {
 	if (!bean.visualizerId) return { ok: true };
+	if (!isConnected()) return { ok: true };
 	const settings = readSyncSettings();
-	if (!settings.username || !settings.password) return { ok: true };
 	if (settings.premium === false) return { ok: true }; // free tier — skip
 	try {
-		await call(`/coffee_bags/${bean.visualizerId}`, settings, {
+		await call(`/coffee_bags/${bean.visualizerId}`, {
 			method: 'DELETE'
 		});
 		return { ok: true };
@@ -743,11 +779,11 @@ export async function deleteRemoteRoaster(
 	roaster: Roaster
 ): Promise<{ ok: boolean; error?: string }> {
 	if (!roaster.visualizerId) return { ok: true };
+	if (!isConnected()) return { ok: true };
 	const settings = readSyncSettings();
-	if (!settings.username || !settings.password) return { ok: true };
 	if (settings.premium === false) return { ok: true };
 	try {
-		await call(`/roasters/${roaster.visualizerId}`, settings, {
+		await call(`/roasters/${roaster.visualizerId}`, {
 			method: 'DELETE'
 		});
 		return { ok: true };
