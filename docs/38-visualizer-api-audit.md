@@ -135,17 +135,19 @@ Should be a clean field-map check — assign to a quick audit task.
 
 ## Recommendations (priority-ordered)
 
-| # | Wire | Cost | Ship now? |
+| # | Wire | Cost | Status |
 |---|---|---|---|
-| 1 | shot→bag link (`PATCH coffee_bag_id`) | ~20 lines | ✅ Yes |
-| 2 | rating → `flavor` mapping | ~5 lines | ✅ Yes |
-| 3 | shot.notes → `private_notes` | ~3 lines | ✅ Yes |
-| 4 | display user-public-vs-private | ~5 lines | ✅ Yes |
-| 5 | bean tags → `tag_list` on shot | ~5 lines | ✅ Yes (auto-tag) |
+| 1 | shot→bag link (`PATCH coffee_bag_id`) | ~20 lines | ✅ Shipped (PR #78 `731c597`; refined in `cd75d43` to single live lookup) |
+| 2 | rating → `flavor` mapping (rating × 3) | ~5 lines | ✅ Shipped (PR #78 `731c597`) |
+| 3 | shot.notes → `private_notes` | ~3 lines | ✅ Shipped (PR #78 `731c597`) |
+| 4 | display user-public-vs-private + link out | ~5 lines | ✅ Shipped (PR #78 `731c597` + URL fix `9ad7557`) |
+| 5 | bean tags → `tag_list` on shot | ~5 lines | ✅ Shipped — auto-tag PR #78, full shot-level tag editor + filter `cd75d43` |
+| — | Inline bean data on upload | ~half day | ✅ Shipped (`8b82c81`) — `bean_brand`, `bean_type`, `roast_date`, `roast_level`, `bean_notes`, `grinder_setting` all wired from `StoredShot.bean` snapshot |
+| — | `grinder_model` (equipment-level, per-shot override) | ~half day | ✅ Shipped (`83a96f0`) — `prefs.grinderModel` + `StoredShot.grinderModel` override + EquipmentSection UI |
 | 6 | bag `metadata` field audit | ~half day | TODO |
-| 7 | bag `frozen_date`/`defrosted_date` mapping verification | ~10 min | TODO (likely fine; verify) |
+| 7 | bag `frozen_date`/`defrosted_date` mapping verification | ~10 min | ✅ Verified — round-trips at `web/src/lib/bean/visualizer-sync.ts:214,252` (write) + `:353` (deserialize). `bean.frozenOn ↔ frozen_date`, `bean.defrostedOn ↔ defrosted_date` |
 | 8 | Full cupping form (8 sliders) | ~half day | TODO (power-user) |
 | 9 | Share-code consume / overlay | ~1 day | Defer |
 | 10 | Profile reconstruction from pulled shot | ~1 day | Defer (lossy per docs/36) |
 
-Items 1-5 bundle into a single PR (~60 lines + a few minutes thinking about edge cases). High visible-value/effort ratio.
+Items 1-5 + the inline-bean + grinder-model bundle landed as `731c597 → cd75d43` (7 commits, ~2,113 / -260 lines). Remaining ship-list: items 6 (bag metadata audit) and 8 (full cupping form). Items 9-10 stay deferred.

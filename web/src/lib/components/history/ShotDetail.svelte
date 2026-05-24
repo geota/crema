@@ -242,17 +242,16 @@
 		void app.syncActiveProfile(profile, {});
 	}
 
-	// TODO: Save-as-profile / Share-to-Visualizer are still stubbed —
-	// Save-as-profile needs a curve-to-profile deriver (not the same as
-	// the v2 profile importer); Share-to-Visualizer needs the Visualizer
-	// API integration.
+	// Save-as-profile needs a curve-to-profile deriver (not the same as the
+	// v2 profile importer); deferred.
 	function saveAsProfile(): void {
-		// TODO: derive a CremaProfile from the stored curve and save it.
 		alert('Save-as-profile is coming in a later step.');
 	}
+	// Visualizer sharing is wired via Settings → Sharing — shots upload
+	// automatically when sync is on, and a manual "Sync now" force-pushes
+	// the queue. This button just nudges the user there.
 	function share(): void {
-		// TODO: wire Visualizer upload when the integration lands.
-		alert('Visualizer sharing is coming in a later step.');
+		alert('Open Settings → Sharing to sign in to Visualizer and sync shots. Synced shots are visible at visualizer.coffee/shots.');
 	}
 
 	// ── Bean rebind (retroactive) ────────────────────────────────────────
