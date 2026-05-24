@@ -20,7 +20,7 @@
 
 	$effect(() => {
 		if (id && !roaster) {
-			queueMicrotask(() => goto('/beans'));
+			queueMicrotask(() => goto('/beans?tab=roasters'));
 		}
 	});
 </script>
