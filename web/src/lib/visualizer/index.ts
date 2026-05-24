@@ -51,7 +51,7 @@ export { migrateLegacyBasicAuth } from './migrate-basic-auth';
 export {
 	deleteShot,
 	patchShot,
-	pullAllShots,
+	pullAllShotsSince,
 	pullShots,
 	reconcileShots,
 	signatureForBean,

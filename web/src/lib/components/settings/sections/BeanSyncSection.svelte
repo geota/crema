@@ -25,7 +25,7 @@
 		drainQueue,
 		enqueue as enqueueSyncOp,
 		isConnected as isVisualizerConnected,
-		pullAllShots,
+		pullAllShotsSince,
 		readSyncConfig,
 		reconcileShots,
 		storedShotFromWire,
@@ -142,10 +142,10 @@
 			//     (page size 50 default). Progress drives a status line below.
 			if (directionPulls(config.direction.shots)) {
 				try {
-					const { shots: remote, truncated } = await pullAllShots(
+					const { shots: remote, truncated } = await pullAllShotsSince(
 						config.lastSyncAt.shots ?? 0,
 						{
-							perPage: 50,
+							itemsPerPage: 50,
 							onProgress: (p) =>
 								(pullProgress = { fetched: p.fetched, page: p.page })
 						}

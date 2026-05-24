@@ -651,31 +651,6 @@ export async function pullAllShotsSince(
 	return { shots: wireShots, truncated: true };
 }
 
-/**
- * @deprecated Kept for source compatibility. Forwards to
- * {@link pullAllShotsSince}. Prefer the new name + signature.
- */
-export async function pullAllShots(
-	sinceMs: number,
-	opts: {
-		perPage?: number;
-		maxPages?: number;
-		onProgress?: (p: { fetched: number; page: number; hasMore: boolean }) => void;
-	} = {}
-): Promise<{ shots: WireShot[]; truncated: boolean }> {
-	return pullAllShotsSince(sinceMs, {
-		itemsPerPage: opts.perPage,
-		maxPages: opts.maxPages,
-		onProgress: opts.onProgress
-			? (p) =>
-					opts.onProgress!({
-						fetched: p.fetched,
-						page: p.page - 1, // legacy callers expected 0-based
-						hasMore: p.hasMore
-					})
-			: undefined
-	});
-}
 
 // Reconciliation, signature helpers, and the WireShot type live in
 // `./shot-sync-signatures.ts` — pure, no wasm / fetch / settings.
