@@ -18,7 +18,8 @@
 		sub,
 		control,
 		hint,
-		notImplemented = false
+		notImplemented = false,
+		needsConnection = false
 	}: {
 		title: string;
 		sub?: string;
@@ -26,6 +27,8 @@
 		hint?: Snippet;
 		/** When true, show a "Not implemented yet" pill and dim the control. */
 		notImplemented?: boolean;
+		/** When true, show a "Connect a DE1" pill — the row's controls need a live device. */
+		needsConnection?: boolean;
 	} = $props();
 </script>
 
@@ -38,6 +41,12 @@
 					class="st-row-pill"
 					title="The control persists a value, but no part of the app reads it yet."
 					>Not implemented yet</span
+				>
+			{:else if needsConnection}
+				<span
+					class="st-row-pill st-row-pill-conn"
+					title="This setting needs a connected DE1."
+					>Connect DE1</span
 				>
 			{/if}
 		</div>
@@ -71,5 +80,10 @@
 	}
 	.st-row-not-impl .st-row-control {
 		opacity: 0.5;
+	}
+	.st-row-pill-conn {
+		color: var(--copper-400);
+		background: rgba(var(--copper-rgb), 0.08);
+		border-color: rgba(var(--copper-rgb), 0.22);
 	}
 </style>

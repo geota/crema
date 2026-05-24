@@ -252,7 +252,7 @@
 		padding: 24px;
 	}
 	.mc-panel {
-		background: var(--bg-1, #fff);
+		background: var(--bg-surface);
 		color: var(--fg-1);
 		border: 1px solid rgba(var(--tint-rgb), 0.12);
 		border-radius: 12px;

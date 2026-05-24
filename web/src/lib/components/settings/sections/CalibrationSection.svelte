@@ -132,43 +132,64 @@
 		return dim ? displayDecimals(dim, prefs) : 1;
 	}
 
-	// ---- Apply modal --------------------------------------------------------
+	// ---- Apply / Reset modal -----------------------------------------------
 	//
-	// Inline modal — the codebase has no existing dialog component, so this
-	// section owns its own overlay. Keep it small + dismissable: scrim click,
-	// Escape, Cancel button. Two number inputs default to the displayed
-	// current value so the user only edits one side (typically Measured).
+	// One inline modal handles both flows. Apply collects Reported /
+	// Measured; Reset has no fields. Both end in a type-to-confirm gate
+	// (the user types the sensor name verbatim), mirroring the heater-
+	// voltage modal — a mis-applied calibration silently warps every shot
+	// until reset, so the "stray tap" cost is high enough to justify the
+	// same gate the legacy app uses for hardware-damaging writes.
 
-	/** The target currently being edited, or `null` when the modal is closed. */
-	let editing = $state<CalTarget | null>(null);
-	/** Live form values (display units). */
+	type EditState = { target: CalTarget; mode: 'apply' | 'reset' };
+	/** The target + mode currently being edited, or `null` when closed. */
+	let editing = $state<EditState | null>(null);
+	/** Apply-mode form values (display units). */
 	let editReported = $state(0);
 	let editMeasured = $state(0);
+	/** Type-to-confirm input — must equal `nameOf(target)` to enable commit. */
+	let typed = $state('');
 	/** Submission spinner — disables the Confirm button while in-flight. */
 	let applying = $state(false);
+
+	const expectedTyped = $derived(editing ? nameOf(editing.target) : '');
+	const typedMatches = $derived(typed.trim().toLowerCase() === expectedTyped);
 
 	function openApply(target: CalTarget): void {
 		const current = cal[target]?.current ?? null;
 		const displayed = toDisplay(target, current) ?? 0;
 		editReported = Number(displayed.toFixed(decimalsFor(target)));
 		editMeasured = editReported;
-		editing = target;
+		typed = '';
+		editing = { target, mode: 'apply' };
 	}
 
-	function closeApply(): void {
+	function openReset(target: CalTarget): void {
+		if (!connected) return;
+		typed = '';
+		editing = { target, mode: 'reset' };
+	}
+
+	function closeModal(): void {
 		if (applying) return;
 		editing = null;
+		typed = '';
 	}
 
-	async function confirmApply(): Promise<void> {
-		if (editing == null || !app || !connected) return;
-		const target = editing;
-		const reported = toCanonical(target, editReported);
-		const measured = toCanonical(target, editMeasured);
+	async function confirmAction(): Promise<void> {
+		if (editing == null || !app || !connected || !typedMatches) return;
+		const { target, mode } = editing;
 		applying = true;
 		try {
-			await app.writeCalibration(target, reported, measured);
+			if (mode === 'apply') {
+				const reported = toCanonical(target, editReported);
+				const measured = toCanonical(target, editMeasured);
+				await app.writeCalibration(target, reported, measured);
+			} else {
+				await app.resetCalibrationToFactory(target);
+			}
 			editing = null;
+			typed = '';
 		} catch {
 			// The orchestrator logs failures via the event stream; leave the
 			// modal open so the user sees nothing visibly happened.
@@ -177,22 +198,11 @@
 		}
 	}
 
-	async function resetToFactory(target: CalTarget): Promise<void> {
-		if (!app || !connected) return;
-		if (typeof window === 'undefined') return;
-		if (!window.confirm(`Reset ${nameOf(target)} calibration to factory defaults?`)) return;
-		try {
-			await app.resetCalibrationToFactory(target);
-		} catch {
-			// Same as above — event stream carries the failure.
-		}
-	}
-
 	/** Escape closes the modal when one is open. */
 	function onKeydown(e: KeyboardEvent): void {
 		if (e.key === 'Escape' && editing != null) {
 			e.preventDefault();
-			closeApply();
+			closeModal();
 		}
 	}
 
@@ -212,6 +222,7 @@
 <StGroup title="Sensor calibration">
 	<StRow
 		title="Temperature"
+		needsConnection={!connected}
 		sub="The DE1's group-head thermocouple offset, {unitLabel('temp', prefs)}."
 	>
 		{#snippet control()}
@@ -238,7 +249,7 @@
 					<button
 						type="button"
 						class="st-btn st-btn-danger"
-						onclick={() => resetToFactory(CalTarget.Temperature)}
+						onclick={() => openReset(CalTarget.Temperature)}
 						disabled={!connected}
 					>
 						Reset to factory
@@ -250,6 +261,7 @@
 
 	<StRow
 		title="Pressure"
+		needsConnection={!connected}
 		sub="The DE1's group-pressure sensor offset, {unitLabel('pressure', prefs)}."
 	>
 		{#snippet control()}
@@ -276,7 +288,7 @@
 					<button
 						type="button"
 						class="st-btn st-btn-danger"
-						onclick={() => resetToFactory(CalTarget.Pressure)}
+						onclick={() => openReset(CalTarget.Pressure)}
 						disabled={!connected}
 					>
 						Reset to factory
@@ -288,6 +300,7 @@
 
 	<StRow
 		title="Flow"
+		notImplemented
 		sub="Flow calibration uses a separate multiplier register (MMR 0x80383C); read it on the Brew settings screen when that surface lands."
 	>
 		{#snippet control()}
@@ -304,7 +317,11 @@
 		{/snippet}
 	</StRow>
 
-	<StRow title="Last read" sub="When the calibration values above were last refreshed from the DE1.">
+	<StRow
+		title="Last read"
+		needsConnection={!connected}
+		sub="When the calibration values above were last refreshed from the DE1."
+	>
 		{#snippet control()}
 			<div class="cal-refresh">
 				<span class="cal-refresh-label">{lastRefreshedLabel}</span>
@@ -322,18 +339,20 @@
 </StGroup>
 
 {#if editing != null}
-	{@const target = editing}
+	{@const target = editing.target}
+	{@const mode = editing.mode}
 	<!--
 		Inline modal — scrim + centred panel. Click the scrim or press Escape
-		to close (mirrors the legacy gui.tcl confirm dance, but with a real
-		two-field form instead of a Tk popup).
+		to close. Apply mode collects Reported / Measured; Reset mode shows
+		no fields. Both gates require typing the sensor name to commit, so a
+		stray tap can't warp the user's shots until they next reset.
 	-->
 	<div
 		class="cal-modal-scrim"
 		role="presentation"
-		onclick={closeApply}
+		onclick={closeModal}
 		onkeydown={(e) => {
-			if (e.key === 'Enter' || e.key === ' ') closeApply();
+			if (e.key === 'Enter' || e.key === ' ') closeModal();
 		}}
 	>
 		<div
@@ -346,58 +365,111 @@
 			onkeydown={(e) => e.stopPropagation()}
 		>
 			<div class="cal-modal-head">
-				<div class="t-eyebrow">Apply calibration</div>
+				<div class="t-eyebrow">
+					{mode === 'apply' ? 'Apply calibration' : 'Reset calibration'}
+				</div>
 				<h2 id="cal-modal-title">{nameOf(target)} sensor</h2>
 			</div>
 
+			<div class="cal-modal-warn" role="alert">
+				<i class="ph ph-warning-octagon" aria-hidden="true"></i>
+				<span>
+					{#if mode === 'apply'}
+						Calibration changes how the DE1 interprets {nameOf(target)}
+						readings on every shot. Verify both values come from a trusted
+						external instrument before proceeding.
+					{:else}
+						This discards your current {nameOf(target)} calibration and
+						restores the factory baseline. The DE1 will use the as-shipped
+						offsets immediately.
+					{/if}
+				</span>
+			</div>
+
 			<div class="cal-modal-body">
-				<label class="cal-field">
-					<span class="cal-field-label">Reported</span>
-					<span class="cal-field-sub">The value the DE1 reported.</span>
-					<div class="cal-field-input">
-						<input
-							type="number"
-							step="any"
-							bind:value={editReported}
-							disabled={applying}
-						/>
-						<span class="cal-field-unit">{unitFor(target)}</span>
-					</div>
-				</label>
+				{#if mode === 'apply'}
+					<label class="cal-field">
+						<span class="cal-field-label">Reported</span>
+						<span class="cal-field-sub">The value the DE1 reported.</span>
+						<div class="cal-field-input">
+							<input
+								type="number"
+								step="any"
+								bind:value={editReported}
+								disabled={applying}
+							/>
+							<span class="cal-field-unit">{unitFor(target)}</span>
+						</div>
+					</label>
+
+					<label class="cal-field">
+						<span class="cal-field-label">Measured</span>
+						<span class="cal-field-sub">The value an external instrument measured.</span>
+						<div class="cal-field-input">
+							<input
+								type="number"
+								step="any"
+								bind:value={editMeasured}
+								disabled={applying}
+							/>
+							<span class="cal-field-unit">{unitFor(target)}</span>
+						</div>
+					</label>
+
+					<p class="cal-modal-caption">{applyCaption}</p>
+				{/if}
 
 				<label class="cal-field">
-					<span class="cal-field-label">Measured</span>
-					<span class="cal-field-sub">The value an external instrument measured.</span>
+					<span class="cal-field-label">
+						Type <code>{expectedTyped}</code> to confirm
+					</span>
+					<span class="cal-field-sub">
+						This prevents a stray tap from committing the change.
+					</span>
 					<div class="cal-field-input">
 						<input
-							type="number"
-							step="any"
-							bind:value={editMeasured}
+							type="text"
+							autocomplete="off"
+							autocorrect="off"
+							autocapitalize="off"
+							spellcheck="false"
+							bind:value={typed}
 							disabled={applying}
+							onkeydown={(e) => {
+								if (e.key === 'Enter' && typedMatches) {
+									e.preventDefault();
+									void confirmAction();
+								}
+							}}
+							placeholder={expectedTyped}
+							aria-label="Type sensor name to confirm"
 						/>
-						<span class="cal-field-unit">{unitFor(target)}</span>
 					</div>
 				</label>
-
-				<p class="cal-modal-caption">{applyCaption}</p>
 			</div>
 
 			<div class="cal-modal-actions">
 				<button
 					type="button"
 					class="st-btn st-btn-secondary"
-					onclick={closeApply}
+					onclick={closeModal}
 					disabled={applying}
 				>
 					Cancel
 				</button>
 				<button
 					type="button"
-					class="st-btn st-btn-primary"
-					onclick={confirmApply}
-					disabled={applying || !connected}
+					class={['st-btn', mode === 'reset' ? 'st-btn-danger' : 'st-btn-primary']}
+					onclick={confirmAction}
+					disabled={applying || !connected || !typedMatches}
 				>
-					{applying ? 'Applying…' : 'Confirm + Apply'}
+					{#if applying}
+						{mode === 'apply' ? 'Applying…' : 'Resetting…'}
+					{:else if mode === 'apply'}
+						Apply calibration
+					{:else}
+						Reset to factory
+					{/if}
 				</button>
 			</div>
 		</div>
@@ -449,7 +521,7 @@
 		padding: 24px;
 	}
 	.cal-modal {
-		background: var(--bg-1, #fff);
+		background: var(--bg-surface);
 		color: var(--fg-1);
 		border: 1px solid rgba(var(--tint-rgb), 0.12);
 		border-radius: 12px;
@@ -469,6 +541,31 @@
 		font-size: 18px;
 		font-weight: 600;
 		text-transform: capitalize;
+	}
+	.cal-modal-warn {
+		display: flex;
+		align-items: flex-start;
+		gap: 10px;
+		padding: 12px 14px;
+		border-radius: 8px;
+		font-size: 13px;
+		line-height: 1.4;
+		background: rgba(220, 80, 0, 0.12);
+		border: 1px solid rgba(220, 80, 0, 0.35);
+		color: #c64500;
+	}
+	.cal-modal-warn i {
+		flex-shrink: 0;
+		font-size: 18px;
+		margin-top: 1px;
+	}
+	.cal-field-label code {
+		font-family: var(--font-mono);
+		font-size: 13px;
+		font-weight: 700;
+		padding: 1px 6px;
+		background: rgba(var(--tint-rgb), 0.1);
+		border-radius: 4px;
 	}
 	.cal-modal-body {
 		display: flex;

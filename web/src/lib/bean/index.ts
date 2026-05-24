@@ -40,6 +40,7 @@ export {
 } from './store.svelte';
 
 export { roasterMark, roasterTone, roasterMarkTone } from './roaster-mark';
+export { roasterFaviconUrl } from './roaster-favicon';
 
 export {
 	deleteRemoteBean,

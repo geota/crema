@@ -107,6 +107,7 @@
 	}
 	.bn-empty-card {
 		display: flex;
+		align-items: center;
 		gap: 10px;
 		text-align: left;
 		background: rgba(var(--tint-rgb), 0.04);

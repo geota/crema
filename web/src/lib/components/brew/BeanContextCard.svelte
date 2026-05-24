@@ -19,8 +19,11 @@
 		getBeanStore,
 		ROAST_PILL_LEVEL,
 		roastBand,
-		roastFreshness
+		roastFreshness,
+		type Roaster
 	} from '$lib/bean';
+	import RoasterAutocomplete from '$lib/components/beans/RoasterAutocomplete.svelte';
+	import { getSettingsStore } from '$lib/settings';
 	import type { Roast } from '$lib/profiles';
 
 	let {
@@ -32,6 +35,15 @@
 
 	/** The shared library store. */
 	const library = getBeanStore();
+	/** App preferences — supplies the equipment-level default grinder. */
+	const settings = getSettingsStore();
+	/**
+	 * Equipment-level default grinder from Settings → Equipment. Acts as
+	 * the fallback when the bean itself doesn't carry a `grinder`
+	 * override. Per-shot edits on the History page still take final
+	 * precedence (ShotDetail handles that path).
+	 */
+	const defaultGrinder = $derived(settings.current.grinderModel?.trim() ?? '');
 	/** The currently-selected bean, or `null`. */
 	const bean = $derived(library.activeBean);
 	/** The roaster row for the active bean, or `null`. */
@@ -71,7 +83,16 @@
 		if (Number.isNaN(d.getTime())) return '—';
 		return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 	});
-	const grinder = $derived(bean?.grinder.trim() ?? '');
+	/**
+	 * The grinder label shown on the card. Resolution order:
+	 *   1. Bean-level override (`bean.grinder`)
+	 *   2. Equipment default from Settings (`prefs.grinderModel`)
+	 *   3. Empty — user can still set a per-shot value on the History
+	 *      page after the shot lands.
+	 */
+	const grinder = $derived(
+		(bean?.grinder.trim() || defaultGrinder) ?? ''
+	);
 	/** Burn-down: "2 shots left" warning when bag is near empty. */
 	const reorderHint = $derived.by<string | null>(() => {
 		if (!bean || bean.bagSizeG <= 0 || bean.remainingG <= 0) return null;
@@ -96,6 +117,44 @@
 	}
 
 	let editing = $state(false);
+	/**
+	 * Whether the editor is in create-mode (`+` tapped on an empty card)
+	 * vs. edit-mode (an existing bean tapped). Create-mode defers the
+	 * library write to Save, so a Cancel after `+` leaves nothing behind.
+	 */
+	let creating = $state(false);
+
+	// ── Inline-edit local buffers ──────────────────────────────────────
+	//
+	// The previous version pushed every keystroke straight into the
+	// library — typing "Onyx" in the roaster field created four roaster
+	// rows (`O`, `On`, `Ony`, `Onyx`). Now field edits are held in local
+	// state and only committed on Save; Cancel discards the buffer.
+	let eName = $state('');
+	let eRoasterName = $state('');
+	let eResolvedRoaster = $state<Roaster | null>(null);
+	let eGrinder = $state('');
+	let eRoastedOn = $state<string | null>(null);
+	let eRoastLevel = $state<number | null>(null);
+
+	function loadBufferFromBean(): void {
+		if (!bean) return;
+		eName = bean.name;
+		eRoasterName = roaster?.name ?? '';
+		eResolvedRoaster = roaster;
+		eGrinder = bean.grinder;
+		eRoastedOn = bean.roastedOn;
+		eRoastLevel = bean.roastLevel;
+	}
+
+	function resetBufferForCreate(): void {
+		eName = '';
+		eRoasterName = '';
+		eResolvedRoaster = null;
+		eGrinder = '';
+		eRoastedOn = null;
+		eRoastLevel = null;
+	}
 
 	function startEdit(): void {
 		// No active bean → route to the library page instead of opening an
@@ -104,81 +163,117 @@
 			void goto(resolve('/beans'));
 			return;
 		}
+		creating = false;
+		loadBufferFromBean();
 		editing = true;
 	}
-	function closeEdit(): void {
+
+	/**
+	 * Resolve the roaster id from the current buffer. Picks the typeahead
+	 * resolution if the name still matches; otherwise ensures a roaster
+	 * row by name (creating exactly one); empty → `null`.
+	 */
+	function resolveRoasterId(): string | null {
+		const trimmed = eRoasterName.trim();
+		if (eResolvedRoaster && eResolvedRoaster.name.trim() === trimmed) {
+			return eResolvedRoaster.id;
+		}
+		if (trimmed === '') return null;
+		const r = library.ensureRoaster(trimmed);
+		return r?.id ?? null;
+	}
+
+	function saveEdit(): void {
+		const roasterId = resolveRoasterId();
+		if (creating) {
+			// Mint the bean only now — Cancel leaves the library untouched.
+			const fresh = blankBean();
+			fresh.name = eName.trim() || 'New bag';
+			fresh.favourite = true;
+			fresh.roasterId = roasterId;
+			fresh.grinder = eGrinder;
+			fresh.roastedOn = eRoastedOn;
+			fresh.roastLevel = eRoastLevel;
+			library.upsertBean(fresh);
+			library.setActiveBean(fresh.id);
+		} else if (bean) {
+			library.updateBean(bean.id, {
+				name: eName,
+				roasterId,
+				grinder: eGrinder,
+				roastedOn: eRoastedOn,
+				roastLevel: eRoastLevel
+			});
+		}
+		creating = false;
 		editing = false;
 	}
 
-	/** Quick-add a new bag and activate it. The brew-page's 10-second path. */
-	function quickAdd(): void {
-		const fresh = blankBean();
-		fresh.name = 'New bag';
-		fresh.favourite = true;
-		library.upsertBean(fresh);
-		library.setActiveBean(fresh.id);
-		editing = true;
+	function cancelEdit(): void {
+		// Buffers are discarded; in create-mode no library row was ever
+		// written, so Cancel is a true no-op.
+		creating = false;
+		editing = false;
 	}
 
-	// ── Inline editor field setters (route through the library) ────────
-	function setName(value: string): void {
-		if (!bean) return;
-		library.updateBean(bean.id, { name: value });
-	}
-	function setRoasterName(value: string): void {
-		if (!bean) return;
-		// Resolve / create the roaster row by name.
-		const r = library.ensureRoaster(value);
-		library.updateBean(bean.id, { roasterId: r?.id ?? null });
-	}
-	function setGrinder(value: string): void {
-		if (!bean) return;
-		library.updateBean(bean.id, { grinder: value });
-	}
-	function setRoastedOn(value: string | null): void {
-		if (!bean) return;
-		library.updateBean(bean.id, { roastedOn: value });
-	}
-	function setRoastLevel(value: number | null): void {
-		if (!bean) return;
-		library.updateBean(bean.id, { roastLevel: value });
+	/**
+	 * Quick-add a new bag. The brew-page's 10-second path: opens the
+	 * editor in create-mode with empty buffers; the bean only lands in
+	 * the library on Save.
+	 */
+	function quickAdd(): void {
+		resetBufferForCreate();
+		creating = true;
+		editing = true;
 	}
 </script>
 
-{#if editing && bean}
+{#if editing && (bean || creating)}
 	<div class="crema-target crema-bean">
 		<div class="crema-bean-head">
-			<div class="t-eyebrow">Edit bean</div>
-			<button class="bean-edit-done" onclick={closeEdit}>
-				<i class="ph ph-check" aria-hidden="true"></i> Done
-			</button>
+			<div class="t-eyebrow">{creating ? 'Add bean' : 'Edit bean'}</div>
 		</div>
 		<div class="bean-edit">
 			<label class="bean-field">
 				<span class="t-eyebrow">Roaster</span>
-				<input
-					class="bean-input"
-					value={roaster?.name ?? ''}
+				<RoasterAutocomplete
+					value={eRoasterName}
+					resolved={eResolvedRoaster}
+					roasters={library.roasters}
 					placeholder="Roastery, e.g. Onyx Coffee Lab"
-					oninput={(e) => setRoasterName(e.currentTarget.value)}
+					onChange={(v) => {
+						eRoasterName = v;
+						// Typing free-form invalidates any prior resolved pick.
+						if (!eResolvedRoaster || eResolvedRoaster.name !== v) {
+							eResolvedRoaster = null;
+						}
+					}}
+					onResolve={(r) => {
+						eResolvedRoaster = r;
+						if (r) eRoasterName = r.name;
+					}}
 				/>
 			</label>
 			<label class="bean-field">
 				<span class="t-eyebrow">Beans</span>
 				<input
 					class="bean-input"
-					value={bean.name}
+					bind:value={eName}
 					placeholder="Coffee, e.g. Colombian Geisha"
-					oninput={(e) => setName(e.currentTarget.value)}
 				/>
 			</label>
 			<label class="bean-field">
-				<span class="t-eyebrow">Grinder</span>
+				<span class="t-eyebrow"
+					>Grinder{#if defaultGrinder}
+						<em class="bean-default-hint">override default ({defaultGrinder})</em>
+					{/if}</span
+				>
 				<input
 					class="bean-input"
-					value={bean.grinder}
-					placeholder="Grinder, e.g. Niche Zero"
-					oninput={(e) => setGrinder(e.currentTarget.value)}
+					bind:value={eGrinder}
+					placeholder={defaultGrinder
+						? `${defaultGrinder} (default)`
+						: 'Grinder, e.g. Niche Zero'}
 				/>
 			</label>
 			<label class="bean-field">
@@ -186,8 +281,8 @@
 				<input
 					class="bean-input"
 					type="date"
-					value={bean.roastedOn ?? ''}
-					oninput={(e) => setRoastedOn(e.currentTarget.value || null)}
+					value={eRoastedOn ?? ''}
+					oninput={(e) => (eRoastedOn = e.currentTarget.value || null)}
 				/>
 			</label>
 			<div class="bean-field">
@@ -198,21 +293,39 @@
 					min="1"
 					max="10"
 					step="1"
-					value={bean.roastLevel ?? ''}
+					value={eRoastLevel ?? ''}
 					placeholder="—"
-					oninput={(e) => setRoastLevel(parseRoastLevel(e.currentTarget.value))}
+					oninput={(e) => (eRoastLevel = parseRoastLevel(e.currentTarget.value))}
 				/>
 				<div class="bean-roast">
 					{#each roastOptions as r (r)}
 						<button
 							class="bean-roast-opt"
-							class:is-active={roastBand(bean.roastLevel) === r}
-							onclick={() => setRoastLevel(ROAST_PILL_LEVEL[r])}
+							class:is-active={roastBand(eRoastLevel) === r}
+							onclick={() => (eRoastLevel = ROAST_PILL_LEVEL[r])}
 						>
 							{r}
 						</button>
 					{/each}
 				</div>
+			</div>
+			<div class="bean-edit-actions">
+				<button
+					class="bean-edit-btn bean-edit-cancel"
+					onclick={cancelEdit}
+					aria-label="Cancel"
+					title="Cancel"
+				>
+					<i class="ph ph-x" aria-hidden="true"></i>
+				</button>
+				<button
+					class="bean-edit-btn bean-edit-save"
+					onclick={saveEdit}
+					aria-label="Save"
+					title="Save"
+				>
+					<i class="ph ph-check" aria-hidden="true"></i>
+				</button>
 			</div>
 			<a class="bean-fullopen" href={resolve('/beans')}>Open in library →</a>
 		</div>
@@ -287,19 +400,43 @@
 		cursor: pointer;
 	}
 
-	.bean-edit-done {
+	/* Save / Cancel pair — icon-only round buttons beneath the form
+	   fields. The X (cancel) is neutral; the ✓ (save) wears the copper
+	   accent to read as the affirmative action. */
+	.bean-edit-actions {
+		display: flex;
+		justify-content: flex-end;
+		gap: 8px;
+		margin-top: 4px;
+	}
+	.bean-edit-btn {
 		display: inline-flex;
 		align-items: center;
-		gap: 4px;
-		background: transparent;
-		border: 0;
-		color: rgba(var(--tint-rgb), 0.6);
-		font-family: var(--font-sans);
-		font-size: 10px;
-		cursor: pointer;
-	}
-	.bean-edit-done:hover {
+		justify-content: center;
+		width: 28px;
+		height: 28px;
+		background: rgba(var(--tint-rgb), 0.04);
+		border: 1px solid rgba(var(--tint-rgb), 0.12);
+		border-radius: 999px;
 		color: var(--fg-1);
+		font-size: 14px;
+		padding: 0;
+		cursor: pointer;
+		transition: all var(--dur-1) var(--ease);
+	}
+	.bean-edit-btn:hover {
+		background: rgba(var(--tint-rgb), 0.08);
+	}
+	.bean-edit-cancel {
+		color: rgba(var(--tint-rgb), 0.7);
+	}
+	.bean-edit-save {
+		background: rgba(193, 124, 79, 0.16);
+		border-color: var(--copper-400);
+		color: var(--copper-300);
+	}
+	.bean-edit-save:hover {
+		background: rgba(193, 124, 79, 0.24);
 	}
 
 	.bean-edit {
@@ -384,5 +521,16 @@
 	}
 	.bean-reorder {
 		color: var(--warning);
+	}
+	/* Field-label inline hint — sits next to the "Grinder" eyebrow to
+	   surface the equipment-level default the bean is about to override.
+	   Lowercase, dimmer, no italic emphasis beyond the existing `<em>`. */
+	.bean-default-hint {
+		font-style: normal;
+		font-weight: 400;
+		text-transform: none;
+		letter-spacing: 0;
+		color: rgba(var(--tint-rgb), 0.45);
+		margin-left: 4px;
 	}
 </style>
