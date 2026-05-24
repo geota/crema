@@ -73,10 +73,22 @@
 	/** The channel currently overlaid. Defaults to pressure — the most diagnostic. */
 	let channel = $state<Channel>('pressure');
 
+	/**
+	 * Whether ANY shot in the overlay has scale-based resistance samples.
+	 * The chart's per-sample fallback (`resistanceWeight ?? resistance`)
+	 * prefers the scale-derived value when present, so even one paired
+	 * shot in the set means the axis is reading in g-flow units. When
+	 * comparing a paired + unpaired shot the magnitudes won't line up
+	 * perfectly anyway — that's a property of the data, not a unit bug.
+	 */
+	const anyResistanceFromWeight = $derived.by(() =>
+		shots.some((shot) => shot.series.some((s) => s.resistanceWeight != null))
+	);
+
 	/** Y-axis unit label, by channel + user pref. */
 	const yUnit = $derived.by(() => {
 		if (channel === 'pressure') return unitLabel('pressure', prefs);
-		if (channel === 'resistance') return 'bar·s²/ml';
+		if (channel === 'resistance') return anyResistanceFromWeight ? 'bar·s²/g²' : 'bar·s²/ml²';
 		if (channel === 'flow') return 'ml/s';
 		if (channel === 'water') return unitLabel('volume', prefs);
 		if (channel === 'temp' || channel === 'mixTemp') return unitLabel('temp', prefs);
@@ -141,7 +153,7 @@
 				case 'pressure':
 					return prefs.pressureUnit === 'psi' ? 150 : 10;
 				case 'resistance':
-					return 5; // bar·s²/ml — typical extraction peak
+					return 5; // bar·s²/ml² (flow) or bar·s²/g² (weight) — typical extraction peak
 				case 'flow':
 					return 6;
 				case 'water':
