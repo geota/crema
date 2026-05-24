@@ -34,7 +34,6 @@
 	import { getCremaAppContext } from '$lib/shell/app-context';
 	import { getSettingsStore } from '$lib/settings';
 	import MachineSection from '$lib/components/settings/sections/MachineSection.svelte';
-	import EquipmentSection from '$lib/components/settings/sections/EquipmentSection.svelte';
 	import BrewDefaultsSection from '$lib/components/settings/sections/BrewDefaultsSection.svelte';
 	import WaterSection from '$lib/components/settings/sections/WaterSection.svelte';
 	import DisplaySection from '$lib/components/settings/sections/DisplaySection.svelte';
@@ -59,7 +58,6 @@
 	/** The nav sections — id, label, Phosphor icon. */
 	const SECTIONS = [
 		{ id: 'machine', label: 'Machine', icon: 'plug-charging' },
-		{ id: 'equipment', label: 'Equipment', icon: 'package' },
 		{ id: 'brew', label: 'Brew defaults', icon: 'coffee' },
 		{ id: 'water', label: 'Water & maintenance', icon: 'drop' },
 		{ id: 'display', label: 'Display & units', icon: 'monitor' },
@@ -130,8 +128,6 @@
 		<div class="st-content">
 			{#if active === 'machine'}
 				<MachineSection {app} {de1State} {snapshot} />
-			{:else if active === 'equipment'}
-				<EquipmentSection />
 			{:else if active === 'brew'}
 				<BrewDefaultsSection />
 			{:else if active === 'water'}

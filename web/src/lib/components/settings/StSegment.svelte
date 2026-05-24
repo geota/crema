@@ -6,6 +6,8 @@
 	interface Option {
 		value: string;
 		label: string;
+		/** Per-option disable — greys out and blocks clicks for this button only. */
+		disabled?: boolean;
 	}
 
 	let {
@@ -26,7 +28,7 @@
 		<button
 			type="button"
 			class:is-active={value === o.value}
-			{disabled}
+			disabled={disabled || o.disabled}
 			onclick={() => onChange?.(o.value)}>{o.label}</button
 		>
 	{/each}

@@ -322,14 +322,21 @@
 		</div>
 	</div>
 	<div class="st-machinecard-fw">
-		<div class="t-eyebrow" style="color:var(--copper-400)">Firmware</div>
+		<div class="fw-head">
+			<div class="t-eyebrow" style="color:var(--copper-400)">Firmware</div>
+			{#if !connected}
+				<span class="fw-conn-pill" title="This setting needs a connected DE1."
+					>Connect DE1</span
+				>
+			{/if}
+		</div>
 		<div class="st-machinecard-fw-ver">{firmwareStatusLabel}</div>
 		<div class="st-machinecard-fw-notes">{firmwareStatusNotes}</div>
 		<StButton
 			label={firmwareChecking ? 'Checking…' : 'Check for updates'}
 			icon="arrow-circle-up"
 			variant="primary"
-			disabled={!app || firmwareChecking}
+			disabled={!connected || firmwareChecking}
 			onClick={updateFirmware}
 		/>
 	</div>
@@ -389,6 +396,7 @@
 	-->
 	<StRow
 		title="Group head controller (GHC)"
+		needsConnection={!connected}
 		sub="When on, the DE1 lights up its front buttons and waits for you to
 		tap one to confirm any host-initiated shot, steam, or hot-water start.
 		Turn off to let Crema start sessions directly from the Coffee button."
@@ -419,6 +427,7 @@
 	<StGroup title="Cup warmer">
 		<StRow
 			title="Plate temperature"
+			needsConnection={!connected}
 			sub={cupWarmerC === 0
 				? 'Off. Set above 0 to warm cups before pouring.'
 				: 'The DE1 holds the cup-warmer plate at this temperature.'}
@@ -537,6 +546,33 @@
 			<StButton label="Pair" icon="bluetooth" disabled />
 		{/snippet}
 	</StRow>
+	<!--
+		Equipment-level grinder model — free-text default that flows into
+		the Brew page's bean card (bean-level `grinder` overrides it) and
+		rides on Visualizer uploads (`grinder_model`). Captured into each
+		shot at completion; per-shot edit lives on the History detail
+		panel. Sits under the Pair row because conceptually it's "the
+		other half" of the grinder relationship: pair when we can talk
+		to it, name it when we can't.
+	-->
+	<StRow
+		title="Grinder model"
+		sub="Used as the default on the Brew bean card and on Visualizer uploads. Free text — beans can override per-bag; shots can override per-shot."
+	>
+		{#snippet control()}
+			<input
+				type="text"
+				class="mc-grinder-model"
+				placeholder="e.g. Niche Zero"
+				value={prefs.grinderModel}
+				oninput={(e) =>
+					settings.set(
+						'grinderModel',
+						(e.currentTarget as HTMLInputElement).value
+					)}
+			/>
+		{/snippet}
+	</StRow>
 </StGroup>
 
 <style>
@@ -580,4 +616,45 @@
 	/* Note: the BLE id clamp formerly lived here (.st-machinecard-ble);
 	   replaced by `.st-machinecard-info-val` which has its own ellipsis
 	   clamp on the new info card. */
+
+	/* Firmware card header — eyebrow + the "Connect DE1" pill side-by-side.
+	   The pill duplicates the look of `StRow`'s `.st-row-pill-conn` so the
+	   firmware card carries the same offline cue as the rows below. */
+	.fw-head {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		flex-wrap: wrap;
+	}
+	/* Free-text grinder-model input under Peripherals → Grinder. Mirrors
+	   the Advanced webhook-URL field's metrics so the two single-line
+	   text inputs in Settings look like the same control. */
+	.mc-grinder-model {
+		width: 280px;
+		max-width: 100%;
+		padding: 6px 10px;
+		font-family: var(--font-sans);
+		font-size: 12px;
+		color: var(--fg-1);
+		background: rgba(var(--tint-rgb), 0.06);
+		border: 1px solid rgba(var(--tint-rgb), 0.12);
+		border-radius: 6px;
+		outline: none;
+	}
+	.mc-grinder-model:focus {
+		border-color: rgba(var(--tint-rgb), 0.4);
+	}
+	.fw-conn-pill {
+		font-family: var(--font-sans);
+		font-size: 9px;
+		font-weight: 600;
+		letter-spacing: var(--track-allcaps, 0.06em);
+		text-transform: uppercase;
+		color: var(--copper-400);
+		background: rgba(var(--copper-rgb), 0.08);
+		border: 1px solid rgba(var(--copper-rgb), 0.22);
+		border-radius: 999px;
+		padding: 2px 8px;
+		white-space: nowrap;
+	}
 </style>

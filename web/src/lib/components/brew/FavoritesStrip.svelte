@@ -175,6 +175,13 @@
 		<i class="ph ph-caret-left" aria-hidden="true"></i>
 	</button>
 	<div class="qfstrip" {@attach trackScroll} onscroll={syncArrows}>
+		{#if profileItems.length > 0}
+			<i
+				class="ph ph-list-bullets qfstrip-section-icon"
+				aria-label="Profiles"
+				title="Profiles"
+			></i>
+		{/if}
 		{#each profileItems as profile (profile.id)}
 			<button
 				class="qfstrip-item"
@@ -192,6 +199,13 @@
 		{/each}
 		{#if profileItems.length > 0 && beanItems.length > 0}
 			<span class="qfstrip-divider" aria-hidden="true"></span>
+		{/if}
+		{#if beanItems.length > 0}
+			<i
+				class="ph ph-coffee-bean qfstrip-section-icon"
+				aria-label="Beans"
+				title="Beans"
+			></i>
 		{/if}
 		{#each beanItems as bean (bean.id)}
 			{@const roaster = bean.roasterId ? (roasterById.get(bean.roasterId) ?? null) : null}
@@ -241,5 +255,15 @@
 		height: 28px;
 		background: rgba(var(--tint-rgb), 0.12);
 		margin: 0 4px;
+	}
+	/* Section-leader glyph — the sidebar's Profiles / Beans icons,
+	   reused here so the strip's two halves are recognisable at a glance
+	   even when chips look similar (e.g. small viewport, search-filtered). */
+	.qfstrip-section-icon {
+		flex: 0 0 auto;
+		align-self: center;
+		font-size: 14px;
+		color: rgba(var(--tint-rgb), 0.45);
+		margin-right: 4px;
 	}
 </style>

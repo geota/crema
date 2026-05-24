@@ -561,6 +561,7 @@
 <StGroup title="Service-grade settings — change only if you know what you're doing">
 	<StRow
 		title="Mains heater voltage"
+		needsConnection={!connected}
 		sub="Tells the DE1 whether you have 120 V or 230 V wiring. Wrong setting on the wrong outlet can permanently damage the heater — confirmation is required."
 	>
 		{#snippet control()}
@@ -569,13 +570,13 @@
 				<StButton
 					label="Set to 120 V"
 					icon="lightning"
-					disabled={!app || heaterVoltage === 120}
+					disabled={!connected || heaterVoltage === 120}
 					onClick={() => openVoltageModal(120)}
 				/>
 				<StButton
 					label="Set to 230 V"
 					icon="lightning"
-					disabled={!app || heaterVoltage === 230}
+					disabled={!connected || heaterVoltage === 230}
 					onClick={() => openVoltageModal(230)}
 				/>
 			</div>
@@ -583,6 +584,7 @@
 	</StRow>
 	<StRow
 		title="Reset machine settings to factory"
+		needsConnection={!connected}
 		sub="Re-applies fan threshold, idle temp, heater flows, refill kit auto mode, flow estimate, steam purge. Does NOT touch profiles, history, or app preferences."
 	>
 		{#snippet control()}
@@ -697,11 +699,7 @@
 		font-family: var(--font-mono);
 		font-size: 13px;
 		font-variant-numeric: tabular-nums;
-		color: var(--fg-1);
-		padding: 4px 10px;
-		border-radius: 6px;
-		background: rgba(var(--tint-rgb), 0.06);
-		border: 1px solid rgba(var(--tint-rgb), 0.12);
+		color: rgba(var(--tint-rgb), 0.7);
 	}
 
 	/* ── Reset-feedback inline note ───────────────────────────────────────

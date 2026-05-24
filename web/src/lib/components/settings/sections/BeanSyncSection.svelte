@@ -72,6 +72,18 @@
 	 */
 	const premiumLocked = $derived(config.premium === false);
 
+	/**
+	 * Beans + roasters use the same option list, but with the push-side
+	 * modes ("backup" + "two-way") greyed out on free tier — the user
+	 * sees they exist but can't pick them without upgrading.
+	 */
+	const beanRoasterDirectionOptions = $derived(
+		DIRECTION_OPTIONS.map((o) => ({
+			...o,
+			disabled: premiumLocked && (o.value === 'backup' || o.value === 'two-way')
+		}))
+	);
+
 	function setEntityDirection(
 		entity: 'beans' | 'roasters' | 'shots',
 		direction: SyncDirection
@@ -310,26 +322,25 @@
 			sub={`${library.beans.length} bag(s). Last sync: ${fmtTime(config.lastSyncAt.beans ?? beanLastSync)}.`}
 		>
 			{#snippet control()}
-				<StSegment
-					value={config.direction.beans}
-					options={DIRECTION_OPTIONS}
-					onChange={(v) => setEntityDirection('beans', v as SyncDirection)}
-				/>
-			{/snippet}
-			{#snippet hint()}
-				{#if premiumLocked}
-					<span
-						class="bs-hint-dim bs-hint-premium"
-						title="Visualizer Premium required for push. Upgrade at visualizer.coffee/premium."
-					>
-						<i class="ph ph-lock-key" aria-hidden="true"></i>
+				<div class="bs-direction">
+					{#if premiumLocked}
 						<a
+							class="bs-premium-tag"
 							href="https://visualizer.coffee/premium"
 							target="_blank"
 							rel="noopener noreferrer"
-						>Visualizer Premium required for push.</a>
-					</span>
-				{/if}
+							title="Visualizer Premium required for push. Upgrade at visualizer.coffee/premium."
+						>
+							<i class="ph ph-lock-key" aria-hidden="true"></i>
+							<span>Premium required for push</span>
+						</a>
+					{/if}
+					<StSegment
+						value={config.direction.beans}
+						options={beanRoasterDirectionOptions}
+						onChange={(v) => setEntityDirection('beans', v as SyncDirection)}
+					/>
+				</div>
 			{/snippet}
 		</StRow>
 
@@ -338,26 +349,25 @@
 			sub={`${library.roasters.length} roaster(s). Last sync: ${fmtTime(config.lastSyncAt.roasters ?? beanLastSync)}.`}
 		>
 			{#snippet control()}
-				<StSegment
-					value={config.direction.roasters}
-					options={DIRECTION_OPTIONS}
-					onChange={(v) => setEntityDirection('roasters', v as SyncDirection)}
-				/>
-			{/snippet}
-			{#snippet hint()}
-				{#if premiumLocked}
-					<span
-						class="bs-hint-dim bs-hint-premium"
-						title="Visualizer Premium required for push. Upgrade at visualizer.coffee/premium."
-					>
-						<i class="ph ph-lock-key" aria-hidden="true"></i>
+				<div class="bs-direction">
+					{#if premiumLocked}
 						<a
+							class="bs-premium-tag"
 							href="https://visualizer.coffee/premium"
 							target="_blank"
 							rel="noopener noreferrer"
-						>Visualizer Premium required for push.</a>
-					</span>
-				{/if}
+							title="Visualizer Premium required for push. Upgrade at visualizer.coffee/premium."
+						>
+							<i class="ph ph-lock-key" aria-hidden="true"></i>
+							<span>Premium required for push</span>
+						</a>
+					{/if}
+					<StSegment
+						value={config.direction.roasters}
+						options={beanRoasterDirectionOptions}
+						onChange={(v) => setEntityDirection('roasters', v as SyncDirection)}
+					/>
+				</div>
 			{/snippet}
 		</StRow>
 
@@ -491,23 +501,36 @@
 		font-size: 11px;
 		color: rgba(var(--tint-rgb), 0.45);
 	}
-	.bs-hint-premium {
+	/* ── Direction control with optional premium tag ─────────────────────
+	   Inline layout: [premium tag (if locked)] [segment]. Living in the
+	   row's right slot rather than below the segment means a free-tier
+	   layout doesn't shift the rows below — the tag steals horizontal
+	   room from the title's flex grow instead of stacking vertically. */
+	.bs-direction {
+		display: inline-flex;
+		align-items: center;
+		gap: 10px;
+		flex-wrap: wrap;
+		justify-content: flex-end;
+	}
+	.bs-premium-tag {
 		display: inline-flex;
 		align-items: center;
 		gap: 4px;
-	}
-	.bs-hint-premium i {
-		font-size: 12px;
-		opacity: 0.7;
-	}
-	.bs-hint-premium a {
+		font-family: var(--font-sans);
+		font-size: 11px;
 		color: rgba(var(--tint-rgb), 0.55);
-		text-decoration: underline;
-		text-decoration-color: rgba(var(--tint-rgb), 0.2);
+		text-decoration: none;
 	}
-	.bs-hint-premium a:hover {
+	.bs-premium-tag i {
+		font-size: 12px;
+		opacity: 0.75;
+	}
+	.bs-premium-tag:hover {
 		color: var(--copper-400);
-		text-decoration-color: var(--copper-400);
+	}
+	.bs-premium-tag:hover i {
+		opacity: 1;
 	}
 	.bs-premium {
 		grid-column: 1 / -1;
