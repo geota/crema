@@ -291,10 +291,44 @@ export function inlineBeanPatch(bean: ShotBean | null | undefined): Record<strin
 	if (notes) out.bean_notes = notes;
 	const grinder = bean.grinderSetting?.trim();
 	if (grinder) out.grinder_setting = grinder;
-	// NOTE: `grinder_model` (e.g. "Niche Zero") is task #81's scope —
-	// it'll be wired top-level on equipment settings, not on the bean
-	// snapshot. Don't add a `grinder_model` slot here.
+	// NOTE: `grinder_model` (e.g. "Niche Zero") is equipment-level, not
+	// bean-level — it's resolved separately via {@link resolveGrinderModel}
+	// and added to the same PATCH body alongside the inline-bean fields.
+	// Don't add a `grinder_model` slot here.
 	return out;
+}
+
+/**
+ * Resolve the shot's equipment-level grinder model for the post-upload
+ * PATCH. Cascade order (per #81):
+ *
+ *   1. {@link StoredShot.grinderModel} — the snapshot taken at shot
+ *      completion (or a per-shot override the user typed in the shot
+ *      detail panel). Wins because it's the shot's own frozen value.
+ *   2. `settings.prefs.grinderModel` — the equipment-level default.
+ *      Used as the fallback for legacy shots that completed before #81
+ *      shipped (their `grinderModel` is `null`) and for any shot
+ *      whose snapshot captured an empty default.
+ *   3. `null` — neither carries a value; the upload omits the field
+ *      entirely so a blank doesn't clobber a Visualizer-side edit.
+ *
+ * The settings fallback is the *only* place the equipment-level pref is
+ * read at upload time — mirroring the snapshot-wins discipline used for
+ * the bean fields, but tolerating legacy records that pre-date the
+ * snapshot field. Trims both sides so " " never rides the wire.
+ *
+ * Pure (no fetch, no wasm). The shot-sync test mirrors this helper
+ * inline — keep both in lock-step.
+ */
+export function resolveGrinderModel(
+	shot: StoredShot,
+	settingsDefault: string | undefined | null
+): string | null {
+	const fromShot = shot.grinderModel?.trim();
+	if (fromShot) return fromShot;
+	const fromSettings = settingsDefault?.trim();
+	if (fromSettings) return fromSettings;
+	return null;
 }
 
 /**
@@ -393,23 +427,37 @@ export async function uploadShot(shot: StoredShot): Promise<{ visualizerId: stri
 		);
 	}
 
-	// Post-upload PATCH: bag link + auto-tags + inline bean snapshot.
-	// Build each block independently so empty sources skip cleanly (no
-	// risk of overwriting a Visualizer-side edit with a blank value).
+	// Post-upload PATCH: bag link + auto-tags + inline bean snapshot
+	// + equipment-level grinder model. Build each block independently
+	// so empty sources skip cleanly (no risk of overwriting a
+	// Visualizer-side edit with a blank value).
 	const coffeeBagId = resolveCoffeeBagId(shot);
 	const tagList = resolveTagList(shot);
 	const inlineBean = inlineBeanPatch(shot.bean);
 	const hasInlineBean = Object.keys(inlineBean).length > 0;
-	if (coffeeBagId != null || (tagList != null && tagList.length > 0) || hasInlineBean) {
+	// Cascade `shot.grinderModel ?? settings.prefs.grinderModel` per #81.
+	// Snapshot wins; settings is the legacy-fallback. Empty/null on both
+	// sides → omit the field so a Visualizer-side edit survives.
+	const grinderModel = resolveGrinderModel(
+		shot,
+		getSettingsStore().current.grinderModel
+	);
+	if (
+		coffeeBagId != null ||
+		(tagList != null && tagList.length > 0) ||
+		hasInlineBean ||
+		grinderModel != null
+	) {
 		try {
 			await patchShot(result.id, {
 				...(coffeeBagId != null ? { coffeeBagId } : {}),
 				...(tagList != null && tagList.length > 0 ? { tagList } : {}),
-				...(hasInlineBean ? { inlineBean } : {})
+				...(hasInlineBean ? { inlineBean } : {}),
+				...(grinderModel != null ? { grinderModel } : {})
 			});
 		} catch (e) {
 			console.warn(
-				'[Crema] post-upload PATCH (coffee_bag_id / tag_list / inline bean) failed:',
+				'[Crema] post-upload PATCH (coffee_bag_id / tag_list / inline bean / grinder_model) failed:',
 				e instanceof Error ? e.message : String(e)
 			);
 		}
@@ -450,6 +498,10 @@ export async function deleteShot(visualizerId: string): Promise<void> {
  *     `grinder_setting`). Merged into `shot` via the spec's
  *     `additionalProperties: true` index signature on
  *     `ShotUpdateRequest.shot`.
+ *   - `grinderModel` → `grinder_model` — equipment-level grinder model
+ *     (sibling to `grinder_setting`, but shot-level not bean-level).
+ *     Pre-resolved by {@link resolveGrinderModel} so this slot is the
+ *     raw string Visualizer should store.
  *
  * Only the keys explicitly present on `patch` ride out; absent keys are
  * left untouched server-side.
@@ -462,6 +514,7 @@ export async function patchShot(
 		coffeeBagId?: string | null;
 		tagList?: string[];
 		inlineBean?: Record<string, unknown>;
+		grinderModel?: string;
 	}
 ): Promise<void> {
 	if (!isConnected()) {
@@ -484,6 +537,13 @@ export async function patchShot(
 	}
 	if (patch.coffeeBagId !== undefined) shotBody.coffee_bag_id = patch.coffeeBagId;
 	if (patch.tagList !== undefined) shotBody.tag_list = patch.tagList;
+	if (patch.grinderModel !== undefined) {
+		// Rides via the `additionalProperties: true` index signature on
+		// `ShotUpdateRequest.shot` (the spec's read-side `DefaultShotDetail`
+		// has a typed `grinder_model: string | null` slot, but the
+		// write-side request only lists a subset and forwards the rest).
+		shotBody.grinder_model = patch.grinderModel;
+	}
 	const envelope: ShotUpdateRequest = { shot: shotBody };
 	await call(`/shots/${visualizerId}`, {
 		method: 'PATCH',

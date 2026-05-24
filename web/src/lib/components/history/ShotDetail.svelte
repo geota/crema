@@ -22,7 +22,8 @@
 	let {
 		shot,
 		onNotesChange,
-		onRatingChange
+		onRatingChange,
+		onGrinderModelChange
 	}: {
 		/** The selected stored shot. */
 		shot: StoredShot;
@@ -30,6 +31,12 @@
 		onNotesChange: (notes: string) => void;
 		/** Persist an edited star rating. */
 		onRatingChange: (rating: number) => void;
+		/**
+		 * Persist an edited equipment-level grinder model. `null` clears
+		 * the override (cascade re-engages → settings default), a string
+		 * sets a shot-specific override.
+		 */
+		onGrinderModelChange: (grinderModel: string | null) => void;
 	} = $props();
 
 	/** Whether the notes block is in edit mode. */
@@ -58,6 +65,23 @@
 	const peakPressureM = $derived(convertPressure(shot.peakPressure, settings.current.pressureUnit));
 	/** Peak temperature in the chosen temperature unit. */
 	const peakTempM = $derived(convertTemp(shot.peakTemp, settings.current.tempUnit));
+
+	// ── Grinder model override (#81) ─────────────────────────────────────
+	// The shot's own override wins; empty input clears it and the
+	// upload-time cascade falls back to the settings default. The
+	// placeholder shows the current settings default so the user can see
+	// what the upload *would* use today without committing to an override.
+	const settingsDefaultGrinder = $derived(settings.current.grinderModel?.trim() ?? '');
+	const grinderPlaceholder = $derived(
+		settingsDefaultGrinder ? settingsDefaultGrinder : 'No default set'
+	);
+	function commitGrinderModel(raw: string): void {
+		const trimmed = raw.trim();
+		const next = trimmed.length > 0 ? trimmed : null;
+		// Only persist on real changes so a click-and-blur doesn't churn.
+		if ((shot.grinderModel ?? null) === next) return;
+		onGrinderModelChange(next);
+	}
 
 	/**
 	 * The bean caption — the snapshotted bean type (with roaster and roast
@@ -304,6 +328,29 @@
 		</div>
 	</div>
 
+	<!-- Grinder model — equipment-level override of the settings default
+	     (`prefs.grinderModel`). Empty saves as `null` so the upload-time
+	     cascade re-engages. The placeholder shows the current default so
+	     the user knows what the upload *would* use today. -->
+	<div class="hi-grinder">
+		<span class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Grinder model</span>
+		<input
+			class="hi-grinder-input"
+			type="text"
+			placeholder={grinderPlaceholder}
+			value={shot.grinderModel ?? ''}
+			onchange={(e) => commitGrinderModel((e.currentTarget as HTMLInputElement).value)}
+			onblur={(e) => commitGrinderModel((e.currentTarget as HTMLInputElement).value)}
+		/>
+		<span class="hi-grinder-hint">
+			{shot.grinderModel
+				? 'Per-shot override.'
+				: settingsDefaultGrinder
+					? `Using settings default (“${settingsDefaultGrinder}”). Type to override.`
+					: 'Override the settings default. Free text.'}
+		</span>
+	</div>
+
 	<!-- Notes -->
 	<div class="hi-notes">
 		<div class="hi-notes-head">
@@ -490,6 +537,40 @@
 		display: flex;
 		flex-direction: column;
 		gap: 8px;
+	}
+	/* Grinder-model override — same surface as the rating row, with
+	   the text input sized so a "Eureka Mignon Specialita"-class string
+	   fits comfortably. The hint is the cascade explainer. */
+	.hi-grinder {
+		display: flex;
+		align-items: center;
+		gap: 14px;
+		flex-wrap: wrap;
+	}
+	.hi-grinder-input {
+		flex: 1 1 220px;
+		min-width: 220px;
+		max-width: 360px;
+		background: rgba(var(--tint-rgb), 0.04);
+		border: 1px solid rgba(var(--tint-rgb), 0.12);
+		border-radius: var(--radius-sm);
+		color: var(--fg-1);
+		font-family: var(--font-sans);
+		font-size: 13px;
+		padding: 6px 10px;
+		outline: 0;
+	}
+	.hi-grinder-input:focus {
+		border-color: rgba(var(--tint-rgb), 0.4);
+	}
+	.hi-grinder-input::placeholder {
+		color: rgba(var(--tint-rgb), 0.35);
+		font-style: italic;
+	}
+	.hi-grinder-hint {
+		font-family: var(--font-sans);
+		font-size: 11px;
+		color: rgba(var(--tint-rgb), 0.45);
 	}
 	.hi-notes-head {
 		display: flex;

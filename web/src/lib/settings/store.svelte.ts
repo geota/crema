@@ -96,6 +96,21 @@ export interface Settings {
 	 */
 	suppressDe1Sleep: boolean;
 
+	// ── Equipment ────────────────────────────────────────────────────────
+	/**
+	 * Free-text grinder model — used as the equipment-level default on
+	 * shot uploads to Visualizer (`grinder_model` on `ShotUpdateRequest`).
+	 * Empty string means "no default", and the upload omits the field
+	 * unless the shot itself carries an override.
+	 *
+	 * Unlike `bean.grinderSetting` (which is the per-bag click setting),
+	 * this is a property of the user's gear — e.g. "Niche Zero",
+	 * "Eureka Mignon Specialita". Free text because there's no canonical
+	 * grinder catalogue. Captured into a shot's `grinderModel` snapshot
+	 * at completion; a shot may override it in the shot-detail panel.
+	 */
+	grinderModel: string;
+
 	// ── Sharing (Visualizer) ─────────────────────────────────────────────
 	/** Auto-upload finished shots to Visualizer. */
 	visualizerAutoUpload: boolean;
@@ -200,6 +215,8 @@ export const DEFAULT_SETTINGS: Settings = {
 	telemetryRateHz: 50,
 	lineFrequencyHz: 0,
 	suppressDe1Sleep: true,
+
+	grinderModel: '',
 
 	// preserved for future visualizer.coffee upload queue — not currently read anywhere
 	visualizerAutoUpload: true,
