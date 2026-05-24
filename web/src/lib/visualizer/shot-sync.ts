@@ -29,6 +29,10 @@
  */
 
 import { VisualizerError } from '$lib/bean';
+// Imported directly from the store module rather than via `$lib/bean`
+// to avoid an import cycle: `$lib/bean/index.ts` re-exports
+// `$lib/visualizer`, which is *this* module's package.
+import { getBeanStore } from '$lib/bean/store.svelte';
 import { exportStoredShotAsV2Json } from '$lib/history/v2-export';
 import type { StoredShot } from '$lib/history/model';
 import { getSettingsStore } from '$lib/settings';
@@ -211,7 +215,19 @@ function wireShotFromDetail(summary: ShotSummary, detail: ShotDetail): WireShot 
 		return Number.isFinite(n) ? n : null;
 	})();
 	const espressoNotes = fallback.private_notes ?? bcMeta?.private_notes ?? fallback.espresso_notes ?? null;
-	const enjoyment = fallback.espresso_enjoyment ?? bcMeta?.espresso_enjoyment ?? null;
+	// Crema rating is 0..5; the wire's cupping slots are 0..15. We write
+	// `flavor = rating * 3` on PATCH (docs/38 §"Recommendations" row 2),
+	// so the pull does the inverse: prefer `flavor`, fall back to the
+	// legacy `espresso_enjoyment` field for shots uploaded before the
+	// switch, then round-trip back to the 0..5 scale.
+	const flavorRaw =
+		fallback.flavor ??
+		bcMeta?.flavor ??
+		fallback.espresso_enjoyment ??
+		bcMeta?.espresso_enjoyment ??
+		null;
+	const rating =
+		flavorRaw != null ? Math.max(0, Math.min(5, Math.round(flavorRaw / 3))) : null;
 	return {
 		id: summary.id,
 		clock: summary.clock * 1000, // unix sec → ms
@@ -219,7 +235,7 @@ function wireShotFromDetail(summary: ShotSummary, detail: ShotDetail): WireShot 
 		profile_title: profileTitle,
 		final_weight_g: drinkWeightG,
 		notes: espressoNotes,
-		rating: enjoyment,
+		rating,
 		updated_at_ms: summary.updated_at * 1000 // unix sec → ms
 	};
 }
@@ -227,11 +243,80 @@ function wireShotFromDetail(summary: ShotSummary, detail: ShotDetail): WireShot 
 // ── Public surface ────────────────────────────────────────────────────
 
 /**
+ * Resolve the bag-link + tag-list metadata that `POST /shots/upload`
+ * doesn't accept on its body but `PATCH /shots/{id}` does. Per docs/28
+ * §"Bean ↔ shot association", the shot carries a denormalised
+ * {@link StoredShot.bean} snapshot (content source of truth) plus a
+ * `beanId` link into the live library; the snapshot is frozen at
+ * completion, while the live bean carries the mutable Visualizer link
+ * (`Bean.visualizerId`) and the editable `Bean.tags` array.
+ *
+ * Resolution rules:
+ *   - `coffee_bag_id`: read from the live bean (looked up via
+ *     `shot.bean.beanId`). The snapshot itself has no `visualizerId`
+ *     field today — if it ever gains one, prefer that.
+ *   - `tag_list`: prefer the snapshot's tags (frozen at brew time); fall
+ *     back to the live bean's tags only when the snapshot has none. The
+ *     snapshot type has no `tags` field today, so this currently always
+ *     falls through to the live bean.
+ *
+ * Returns `null` on either field when nothing is resolvable. Caller
+ * skips the follow-up PATCH entirely if the whole record is empty.
+ */
+function resolvePostUploadLinks(shot: StoredShot): {
+	coffeeBagId: string | null;
+	tagList: string[] | null;
+} {
+	// `ShotBean` doesn't carry a snapshotted `visualizerId` today, but
+	// docs/28 §design-decisions §3 calls out the snapshot as the content
+	// source of truth — so we read defensively in case the field lands
+	// later. Fall through to the live bean if absent.
+	const snapshot = shot.bean ?? null;
+	const snapshotLoose = snapshot as unknown as Record<string, unknown> | null;
+	const snapshotVisualizerId =
+		snapshotLoose && typeof snapshotLoose.visualizerId === 'string'
+			? (snapshotLoose.visualizerId as string)
+			: null;
+	const snapshotTagsRaw = snapshotLoose?.tags;
+	const snapshotTags = Array.isArray(snapshotTagsRaw)
+		? snapshotTagsRaw.filter((t): t is string => typeof t === 'string')
+		: null;
+
+	let liveBean: ReturnType<ReturnType<typeof getBeanStore>['getBean']> = null;
+	const liveBeanId = snapshot?.beanId ?? null;
+	if (liveBeanId) {
+		try {
+			liveBean = getBeanStore().getBean(liveBeanId);
+		} catch {
+			liveBean = null;
+		}
+	}
+
+	const coffeeBagId = snapshotVisualizerId ?? liveBean?.visualizerId ?? null;
+	const tagList =
+		snapshotTags && snapshotTags.length > 0
+			? snapshotTags
+			: liveBean?.tags && liveBean.tags.length > 0
+				? [...liveBean.tags]
+				: null;
+
+	return { coffeeBagId, tagList };
+}
+
+/**
  * Upload a single shot. POSTs to `/shots/upload` with the JSON payload
  * (per the OAS `application/json` request body — Visualizer accepts one
  * of the brew-payload shapes, and Crema produces the Decent variant).
  * Resolves with the remote `visualizerId` so the caller can bind it onto
  * the local row.
+ *
+ * After a successful upload, fires a soft follow-up `PATCH /shots/{id}`
+ * to wire the shot to its synced coffee bag (item 1) and to seed the
+ * shot's `tag_list` from the bean's tags (item 5), per docs/38
+ * §"Recommendations" rows 1 + 5. Both fields live on
+ * `ShotUpdateRequest` (not `DecentUploadPayload`), so they must ride a
+ * separate PATCH. PATCH failure is treated as soft — logged, not
+ * rethrown — so a flaky link wire doesn't lose the uploaded shot.
  */
 export async function uploadShot(shot: StoredShot): Promise<{ visualizerId: string }> {
 	if (!isConnected()) {
@@ -248,6 +333,24 @@ export async function uploadShot(shot: StoredShot): Promise<{ visualizerId: stri
 			'Visualizer accepted the shot but returned no id.'
 		);
 	}
+
+	// Items 1 + 5: link the shot to its bag and stamp tags via a
+	// follow-up PATCH. Soft failure — log + swallow.
+	const { coffeeBagId, tagList } = resolvePostUploadLinks(shot);
+	if (coffeeBagId != null || (tagList != null && tagList.length > 0)) {
+		try {
+			await patchShot(result.id, {
+				...(coffeeBagId != null ? { coffeeBagId } : {}),
+				...(tagList != null && tagList.length > 0 ? { tagList } : {})
+			});
+		} catch (e) {
+			console.warn(
+				'[Crema] post-upload PATCH (coffee_bag_id / tag_list) failed:',
+				e instanceof Error ? e.message : String(e)
+			);
+		}
+	}
+
 	return { visualizerId: result.id };
 }
 
@@ -269,14 +372,27 @@ export async function deleteShot(visualizerId: string): Promise<void> {
 
 /**
  * Patch a remote shot's editable annotations. The spec requires a
- * `{ shot: {...} }` envelope; Crema's `{rating, notes}` maps to
- * `{ shot: { espresso_enjoyment: rating, private_notes: notes } }`
- * (the only journal-style fields the spec exposes for the OAuth `write`
- * scope without entering premium territory).
+ * `{ shot: {...} }` envelope. Crema-side fields map onto the spec as
+ * follows (per docs/38 §"Recommendations"):
+ *
+ *   - `notes` → `private_notes` (kept out of the public profile view)
+ *   - `rating` (0..5 star) → `flavor` (0..15 SCA cupping slot) via
+ *     `flavor = rating * 3` clamped to 0..15 and rounded to int. A
+ *     `rating` of `null` omits `flavor` entirely.
+ *   - `coffeeBagId` → `coffee_bag_id` — link the shot to a synced bag.
+ *   - `tagList` → `tag_list` — overwrite the shot's tag set.
+ *
+ * Only the keys explicitly present on `patch` ride out; absent keys are
+ * left untouched server-side.
  */
 export async function patchShot(
 	visualizerId: string,
-	patch: { rating?: number; notes?: string }
+	patch: {
+		rating?: number | null;
+		notes?: string;
+		coffeeBagId?: string | null;
+		tagList?: string[];
+	}
 ): Promise<void> {
 	if (!isConnected()) {
 		throw new VisualizerError(401, 'auth', 'Sign in to Visualizer first.');
@@ -284,13 +400,15 @@ export async function patchShot(
 	const shotBody: ShotUpdateRequest['shot'] = {};
 	if (patch.notes !== undefined) shotBody.private_notes = patch.notes;
 	if (patch.rating !== undefined) {
-		// Crema's rating is a small integer (0..5 today; if it ever expands,
-		// clamp to the spec's 0..15 score range).
-		(shotBody as Record<string, unknown>).espresso_enjoyment = Math.max(
-			0,
-			Math.min(15, Math.round(patch.rating))
-		);
+		// 0..5 star → 0..15 cupping slot. `null` rating means "unrated" —
+		// omit `flavor` rather than sending 0 so we don't blow away an
+		// existing server-side cupping score with a noise-zero.
+		if (patch.rating != null) {
+			shotBody.flavor = Math.max(0, Math.min(15, Math.round(patch.rating * 3)));
+		}
 	}
+	if (patch.coffeeBagId !== undefined) shotBody.coffee_bag_id = patch.coffeeBagId;
+	if (patch.tagList !== undefined) shotBody.tag_list = patch.tagList;
 	const envelope: ShotUpdateRequest = { shot: shotBody };
 	await call(`/shots/${visualizerId}`, {
 		method: 'PATCH',
