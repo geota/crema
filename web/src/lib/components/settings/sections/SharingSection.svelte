@@ -2,25 +2,26 @@
 	/**
 	 * Sharing section — the Visualizer integration.
 	 *
-	 * Crema is **local-only — there is no Crema account**. Shots and profiles
-	 * live on this device (in `localStorage`). Visualizer is the only external
-	 * sync surface, and connecting it is opt-in. The section copy keeps that
-	 * framing front and centre.
-	 *
-	 * The big visual Visualizer card lives here and owns connect / disconnect.
-	 * Once connected, `BeanSyncSection` renders below to surface the account
-	 * identity, Test, Sync now, and the sync log.
+	 * The big visual Visualizer card lives here and owns the entire
+	 * connection life-cycle: sign in / out, fetching the user's account
+	 * identity, the "Test" health-check. Once connected,
+	 * `BeanSyncSection` renders below with the actual sync controls
+	 * (Sync now + last-result log).
 	 */
 	import { onMount } from 'svelte';
 	import { getHistoryStore } from '$lib/history';
 	import { downloadBlob } from '$lib/utils/download';
 	import {
+		clearVisualizerTokens,
+		fetchVisualizerAccount,
+		getStoredVisualizerTokens,
 		isVisualizerConnected,
 		isVisualizerOauthConfigured,
 		onVisualizerTokenChange,
-		startVisualizerLogin,
 		revokeVisualizerToken,
-		getStoredVisualizerTokens
+		startVisualizerLogin,
+		testConnection,
+		type VisualizerAccount
 	} from '$lib/bean';
 	import StSectionHead from '../StSectionHead.svelte';
 	import StGroup from '../StGroup.svelte';
@@ -30,15 +31,41 @@
 
 	const history = getHistoryStore();
 	const oauthConfigured = isVisualizerOauthConfigured();
+
 	let connected = $state(isVisualizerConnected());
+	let account = $state<VisualizerAccount | null>(null);
+	let accountError = $state<string | null>(null);
 	let signingIn = $state(false);
+	let testStatus = $state<
+		| { kind: 'idle' }
+		| { kind: 'testing' }
+		| { kind: 'ok'; message: string }
+		| { kind: 'error'; message: string }
+	>({ kind: 'idle' });
 
 	onMount(() => {
 		const off = onVisualizerTokenChange((set) => {
 			connected = set !== null;
+			if (!connected) {
+				account = null;
+				accountError = null;
+				testStatus = { kind: 'idle' };
+			} else {
+				void loadAccount();
+			}
 		});
+		if (connected) void loadAccount();
 		return off;
 	});
+
+	async function loadAccount(): Promise<void> {
+		accountError = null;
+		try {
+			account = await fetchVisualizerAccount();
+		} catch (e) {
+			accountError = e instanceof Error ? e.message : String(e);
+		}
+	}
 
 	async function signIn(): Promise<void> {
 		if (!oauthConfigured) return;
@@ -56,7 +83,52 @@
 		if (tokens?.accessToken) {
 			await revokeVisualizerToken(tokens.accessToken);
 		}
+		clearVisualizerTokens();
 	}
+
+	async function testNow(): Promise<void> {
+		testStatus = { kind: 'testing' };
+		const r = await testConnection();
+		if (r.ok) {
+			testStatus = {
+				kind: 'ok',
+				message:
+					r.premium === false
+						? 'Connected (free tier — read-only sync).'
+						: 'Connected.'
+			};
+		} else {
+			testStatus = { kind: 'error', message: r.error };
+		}
+	}
+
+	/** Display string for the card eyebrow when connected. */
+	const cardEyebrow = $derived(
+		connected
+			? account
+				? `Connected · ${account.name}`
+				: accountError
+					? 'Connected · profile unavailable'
+					: 'Connected'
+			: oauthConfigured
+				? 'Not connected'
+				: 'OAuth not configured'
+	);
+
+	/** Status message shown in the card meta line. */
+	const cardStatus = $derived.by(() => {
+		if (!connected) {
+			if (!oauthConfigured) {
+				return 'Set `VITE_VISUALIZER_CLIENT_ID` in `web/.env.local` and restart the dev server.';
+			}
+			return 'Free community service for sharing and comparing espresso shots';
+		}
+		if (testStatus.kind === 'testing') return 'Testing…';
+		if (testStatus.kind === 'ok') return testStatus.message;
+		if (testStatus.kind === 'error') return testStatus.message;
+		if (accountError) return `Couldn't fetch your profile: ${accountError}`;
+		return 'Signed in · bean library + shots sync on demand';
+	});
 
 	/** Export the local shot history as a JSON download. */
 	function exportHistory(): void {
@@ -73,11 +145,9 @@
 	sub="Crema is local-only — there's no Crema account. Shots and profiles live on this device. Connect Visualizer if you want to back up, share, or compare shots online."
 />
 
-<!-- Visualizer card — the visual anchor of the Sharing tab. Wired to the
-     real OAuth flow ($lib/visualizer via $lib/bean re-exports). The
-     button does the actual sign-in / disconnect; details (account
-     identity, Test, Sync, log) are surfaced by BeanSyncSection below
-     once connected. -->
+<!-- Visualizer card — owns the full connection life-cycle (sign in / out,
+     account identity, Test). Once `connected`, BeanSyncSection below
+     handles the actual sync controls + log. -->
 <div class="st-visualizer">
 	<div class="st-visualizer-glyph">
 		<svg viewBox="0 0 48 48" width="40" height="40" aria-hidden="true">
@@ -96,22 +166,24 @@
 	<div class="st-visualizer-info">
 		<div
 			class="t-eyebrow"
-			style="color:{connected ? 'var(--copper-400)' : 'rgba(var(--tint-rgb), 0.5)'}"
+			style="color:{connected
+				? 'var(--copper-400)'
+				: oauthConfigured
+					? 'rgba(var(--tint-rgb), 0.5)'
+					: 'var(--warning)'}"
 		>
-			{connected ? 'Connected' : oauthConfigured ? 'Not connected' : 'OAuth not configured'}
+			{cardEyebrow}
 		</div>
 		<div class="st-visualizer-name">visualizer.coffee</div>
 		<div class="st-visualizer-meta">
-			{#if connected}
-				Signed in · bean library + shots sync on demand
-			{:else if oauthConfigured}
-				Free community service for sharing and comparing espresso shots
-			{:else}
+			{#if !connected && !oauthConfigured}
 				Set <code>VITE_VISUALIZER_CLIENT_ID</code> in <code>web/.env.local</code> and restart the dev server. See <a
 					href="https://github.com/geota/crema/blob/main/docs/35-visualizer-oauth-setup.md"
 					target="_blank"
 					rel="noopener noreferrer">setup docs</a
 				>.
+			{:else}
+				{cardStatus}
 			{/if}
 		</div>
 		<div class="st-visualizer-meta-row">
@@ -128,9 +200,10 @@
 	<div class="st-visualizer-actions">
 		{#if connected}
 			<StButton
-				label="Open library"
-				icon="arrow-square-out"
-				onClick={() => window.open('https://visualizer.coffee', '_blank', 'noopener,noreferrer')}
+				label={testStatus.kind === 'testing' ? 'Testing…' : 'Test'}
+				icon="plugs-connected"
+				disabled={testStatus.kind === 'testing'}
+				onClick={testNow}
 			/>
 			<button type="button" class="st-btn st-btn-danger" onclick={disconnect}>
 				<i class="ph ph-sign-out" aria-hidden="true"></i>Disconnect
@@ -147,7 +220,7 @@
 	</div>
 </div>
 
-<!-- Connected-state details: account identity, Test, Sync now, log. -->
+<!-- Connected-state sync controls + log. -->
 {#if connected}
 	<BeanSyncSection />
 {/if}
