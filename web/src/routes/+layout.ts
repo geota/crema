@@ -28,3 +28,13 @@ export const prerender = false;
 // the only environment where the wasm module exists at all.
 import { loadCore } from '$lib/core';
 await loadCore();
+
+// ─── One-shot Visualizer Basic-auth → OAuth migration ──────────────────
+//
+// Prior versions stored a Visualizer email + cleartext password in
+// `crema.beans.sync.v1`. The 2026-05-24 cut moves to OAuth-only, so we
+// strip those fields out of `localStorage` on every boot (idempotent
+// no-op once clean). The Settings UI then shows the "Sign in with
+// Visualizer" button as if it's first-run — the intended re-auth nudge.
+import { migrateLegacyBasicAuth } from '$lib/visualizer';
+migrateLegacyBasicAuth();
