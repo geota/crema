@@ -960,13 +960,14 @@
 .qfstrip-wrap {
   display: grid;
   grid-template-columns: 200px 28px 1fr 28px;
-  /* `align-items: stretch` (the default) made the search input stretch to
-     the row's tallest cell — the pill scroll-container ends up taller than
-     a single pill because of its own padding/scrollbar gutter, so the
-     search visually inflated. `center` lets every cell sit at its natural
-     content height; the search ends up the same height as the pills it
-     borders. */
-  align-items: center;
+  /* `align-items: start` — every cell anchors to the top of the row. The
+     pill scroll container's height may include scrollbar gutter, so the
+     row ends up slightly taller than 44px; with `start`, the pills sit
+     at the top of their cell at 44px, and a fixed-height 44px search at
+     the top of its cell lines up bottom-to-bottom with them. Arrows
+     align to top too — they're shorter than the pill row but match the
+     pill row's TOP edge, which reads as expected next to the strip. */
+  align-items: start;
   gap: 8px;
   margin-bottom: 14px;
 }
