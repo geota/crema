@@ -981,13 +981,12 @@
 .qfstrip-search-inline {
   display: flex; align-items: center;
   gap: 6px;
-  /* Match `.qfstrip-item`'s exact padding so the search input renders at
-     the same rendered height as the pills it sits among. Grid's
-     align-items:stretch alone wasn't enough — pills are content-sized
-     and the input's intrinsic line-box was slightly taller; the equal
-     padding (and no vertical padding on the inner <input>) collapses
-     both to the same vertical metric. */
-  padding: 7px 12px;
+  /* Match the .qfstrip-arrow height (32px) so the search reads at the
+     same row-height as the pill row's other controls. Padding stays
+     narrow because the height constraint owns the vertical metric. */
+  height: 32px;
+  box-sizing: border-box;
+  padding: 0 12px;
   background: rgba(var(--tint-rgb), 0.02);
   border: 1px solid rgba(var(--tint-rgb), 0.08);
   border-radius: var(--radius-pill);
