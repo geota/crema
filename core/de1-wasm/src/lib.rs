@@ -312,6 +312,81 @@ pub fn fl_oz_to_ml(fl_oz: f32) -> f32 {
     de1_domain::fl_oz_to_ml(fl_oz)
 }
 
+// ─── Visualizer-sync helpers (audit #4) ─────────────────────────────────
+//
+// Pure de-dup signatures + the reconcile action planner, ported from
+// the web shell's `shot-sync-signatures.ts` into `de1_domain::visualizer_sync`
+// so every shell (web today, Android tomorrow) shares one algorithm
+// and one set of byte-identical hashes. The bridge marshals the
+// `reconcile_shots` `(local, remote)` pair as JSON, matching the
+// rest of the JSON-string FFI surface (`import_*_json_shot`, etc).
+
+/// djb2 hex signature for a shot — `(completedAt, duration,
+/// profileName, finalWeight)`. Pure helper; mirrors the TS
+/// `signatureForShot` so a JS / Rust call on the same inputs emits
+/// the same hex string. See `de1_domain::signature_for_shot`.
+#[wasm_bindgen(js_name = signatureForShot)]
+pub fn signature_for_shot(
+    completed_at: f64,
+    duration: f64,
+    profile_name: Option<String>,
+    final_weight: Option<f32>,
+) -> String {
+    // JS hands us integer-valued `f64`s for the unix-ms timestamps
+    // (a plain `i64` doesn't cross the wasm-bindgen ABI cleanly).
+    // Truncate defensively; non-finite operands fall through to 0
+    // rather than a panic.
+    #[allow(clippy::cast_possible_truncation)]
+    let completed_at = if completed_at.is_finite() {
+        completed_at as i64
+    } else {
+        0
+    };
+    #[allow(clippy::cast_possible_truncation)]
+    let duration = if duration.is_finite() {
+        duration as i64
+    } else {
+        0
+    };
+    de1_domain::signature_for_shot(completed_at, duration, profile_name.as_deref(), final_weight)
+}
+
+/// djb2 hex signature for a bean — `(name, roasterName, roastedOn)`.
+/// See `de1_domain::signature_for_bean`.
+#[wasm_bindgen(js_name = signatureForBean)]
+pub fn signature_for_bean(
+    name: String,
+    roaster_name: Option<String>,
+    roasted_on: Option<String>,
+) -> String {
+    de1_domain::signature_for_bean(&name, roaster_name.as_deref(), roasted_on.as_deref())
+}
+
+/// djb2 hex signature for a roaster — normalised name. See
+/// `de1_domain::signature_for_roaster`.
+#[wasm_bindgen(js_name = signatureForRoaster)]
+pub fn signature_for_roaster(name: String) -> String {
+    de1_domain::signature_for_roaster(&name)
+}
+
+/// Reconcile a remote Visualizer pull against the local history.
+/// `payload` is the JSON of `{"local": StoredShot[], "remote":
+/// WireShot[]}`; the planner only reads the slim subset of
+/// `StoredShot` (id, completedAt, duration, profileName, finalWeight,
+/// visualizerId, deletedAt) so extra fields are ignored. The result
+/// is a JSON array of `ReconcileAction` objects (`{"kind":"add"|
+/// "update"|"bind", ...}`), preserving remote order. See
+/// `de1_domain::reconcile_shots` for the algorithm.
+///
+/// # Errors
+///
+/// Returns the JSON parse error string when `payload` cannot be
+/// deserialised into the expected shape.
+#[wasm_bindgen(js_name = reconcileShots)]
+pub fn reconcile_shots(payload: &str) -> Result<String, String> {
+    de1_domain::reconcile_shots_json(payload)
+}
+
 /// Format the Bookoo scale's `u16` firmware version as a `"M.m.p"`
 /// string (e.g. `141` → `"1.4.1"`). The Bookoo encodes its firmware as
 /// `major × 100 + minor × 10 + patch`. Centralised here so every shell
@@ -1721,6 +1796,93 @@ mod tests {
         // surface a DecodeError event, not panic or drop the input silently.
         let out = bridge.on_notification(NotificationSource::De1State, vec![0x01], 1_000.0);
         assert!(out.contains("DecodeError"));
+    }
+
+    #[test]
+    fn signature_for_shot_matches_the_pinned_djb2_hex_digest() {
+        // The TS `signatureForShot({completedAt:1.7e12, duration:30000,
+        // profileName:'best of decent', finalWeight:36})` emits this
+        // exact hex string. The Rust impl in `de1_domain` must agree
+        // byte-for-byte; that's the contract callers depend on.
+        let sig = signature_for_shot(
+            1_700_000_000_000.0,
+            30_000.0,
+            Some("best of decent".to_owned()),
+            Some(36.0),
+        );
+        assert_eq!(sig, "65946a11");
+    }
+
+    #[test]
+    fn signature_for_shot_handles_a_null_profile_distinctly() {
+        let named = signature_for_shot(
+            1_700_000_000_000.0,
+            30_000.0,
+            Some("named".to_owned()),
+            Some(36.0),
+        );
+        let unnamed = signature_for_shot(1_700_000_000_000.0, 30_000.0, None, Some(36.0));
+        assert_ne!(named, unnamed);
+    }
+
+    #[test]
+    fn signature_for_bean_is_case_insensitive_on_name_and_roaster() {
+        let a = signature_for_bean(
+            "Yirgacheffe".to_owned(),
+            Some("Counter Culture".to_owned()),
+            Some("2026-05-08".to_owned()),
+        );
+        let b = signature_for_bean(
+            "yirgacheffe".to_owned(),
+            Some("COUNTER CULTURE".to_owned()),
+            Some("2026-05-08".to_owned()),
+        );
+        assert_eq!(a, b);
+        // And matches the pinned TS digest.
+        assert_eq!(a, "481def0f");
+    }
+
+    #[test]
+    fn signature_for_roaster_collapses_separators_and_strips_punctuation() {
+        let a = signature_for_roaster("Onyx Coffee Lab".to_owned());
+        let b = signature_for_roaster("onyx-coffee_lab".to_owned());
+        let c = signature_for_roaster("  ONYX   COFFEE.LAB ".to_owned());
+        assert_eq!(a, b);
+        assert_eq!(a, c);
+        // Pinned TS digest.
+        assert_eq!(a, "cf16b46a");
+    }
+
+    #[test]
+    fn reconcile_shots_bridges_a_minimum_viable_payload() {
+        // The shell hands its own `StoredShot[]` through as JSON.
+        // Extra fields on `StoredShot` (`series`, `bean`, …) are
+        // ignored by serde, so the minimum viable input only carries
+        // the slim subset the planner reads.
+        let payload = r#"{
+            "local": [
+                {"id": "shot:l-1", "completedAt": 1700000000000, "duration": 30000,
+                 "profileName": "best of decent", "finalWeight": 36}
+            ],
+            "remote": [
+                {"id": "r-1", "clock": 1700000000000, "duration_ms": 30000,
+                 "profile_title": "best of decent", "final_weight_g": 36}
+            ]
+        }"#;
+        let out = reconcile_shots(payload).expect("plan");
+        let actions: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let arr = actions.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        // Unbound local + signature match → bind.
+        assert_eq!(arr[0]["kind"], "bind");
+        assert_eq!(arr[0]["localId"], "shot:l-1");
+        assert_eq!(arr[0]["visualizerId"], "r-1");
+    }
+
+    #[test]
+    fn reconcile_shots_surfaces_a_parse_error_for_malformed_input() {
+        let err = reconcile_shots("not json").unwrap_err();
+        assert!(!err.is_empty(), "the bridge should surface a parse reason");
     }
 
     #[test]

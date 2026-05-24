@@ -1,12 +1,34 @@
 /**
- * `$lib/visualizer/shot-sync-signatures` — the pure de-dup signature
- * helpers and the {@link reconcileShots} planner extracted from
- * `shot-sync.ts` so the unit tests can import them without dragging in
- * the wasm bridge / settings store / fetch wrapper.
+ * `$lib/visualizer/shot-sync-signatures` — a thin TS shim over the
+ * Rust-core `de1_domain::visualizer_sync` impl (exposed via wasm-bindgen
+ * as `$lib/wasm/de1_wasm`).
  *
- * Everything here is sans-IO and deterministic. docs/36 §3.
+ * The signature helpers and the {@link reconcileShots} action planner
+ * used to live here as TS. Per docs/36 §3 they're pure functions —
+ * djb2 hash, action planner, LWW — and the Android shell wants to
+ * call the same algorithm. They now live in Rust
+ * (`core/de1-domain/src/visualizer_sync.rs`), so every shell shares
+ * one byte-identical implementation.
+ *
+ * The wasm export takes positional args and JSON for the planner; the
+ * tiny adapters below preserve the historical TS API surface
+ * (`signatureForShot({ completedAt, duration, profileName,
+ * finalWeight })`, `reconcileShots(local, remote)`) so existing
+ * importers (shot-sync.ts, bean/visualizer-sync.ts) don't have to
+ * change.
+ *
+ * `storedShotFromWire` is shell-specific (it allocates a
+ * shell-shaped {@link StoredShot} with empty `series` / `bean` / star
+ * defaults — see docs/36 deferred). It stays in TS, sans the wasm
+ * round-trip.
  */
 
+import {
+	signatureForShot as wasmSignatureForShot,
+	signatureForBean as wasmSignatureForBean,
+	signatureForRoaster as wasmSignatureForRoaster,
+	reconcileShots as wasmReconcileShots
+} from '$lib/wasm/de1_wasm';
 import type { StoredShot } from '$lib/history/model';
 
 // ── Types ─────────────────────────────────────────────────────────────
@@ -19,6 +41,9 @@ import type { StoredShot } from '$lib/history/model';
  * (see `wireShotFromDetail` in `shot-sync.ts`) and uses unix
  * MILLISECONDS so it lines up with Crema's `StoredShot.completedAt`.
  * Visualizer itself wires unix SECONDS — we convert at the boundary.
+ *
+ * Mirrors `de1_domain::visualizer_sync::WireShot` field-for-field; both
+ * halves of the split MUST stay in sync.
  */
 export interface WireShot {
 	id: string;
@@ -40,39 +65,25 @@ export interface WireShot {
 	updated_at_ms: number | null;
 }
 
-/** One reconciliation outcome — what to do with a remote row. */
+/**
+ * One reconciliation outcome — what to do with a remote row. Wire form
+ * is `{ kind, ... }` (lowercase tag) — pinned by the Rust serde
+ * attribute so the TS pattern-match stays valid.
+ */
 export type ReconcileAction =
 	| { kind: 'add'; remote: WireShot }
 	| { kind: 'update'; localId: string; remote: WireShot }
 	| { kind: 'bind'; localId: string; visualizerId: string; remote: WireShot };
 
-// ── djb2 hash + numeric rounding ─────────────────────────────────────
-
-/**
- * Stable djb2 hash. Fast, well-distributed for short ASCII strings, no
- * crypto needed. Returns an unsigned 32-bit integer so the hex
- * stringification is stable across runtimes.
- */
-function djb2(s: string): number {
-	let h = 5381;
-	for (let i = 0; i < s.length; i++) {
-		h = ((h << 5) + h + s.charCodeAt(i)) | 0;
-	}
-	return h >>> 0;
-}
-
-/** Render a number to a fixed-precision form so float jitter doesn't perturb the hash. */
-function rk(n: number | null | undefined, decimals = 2): string {
-	if (n == null || !Number.isFinite(n)) return '∅';
-	return n.toFixed(decimals);
-}
-
-// ── Signatures (docs/36 §3) ──────────────────────────────────────────
+// ── Signature helpers ────────────────────────────────────────────────
 
 /**
  * The shot de-dup signature: a djb2 hash of `(startedAtMs, durationMs,
  * profileId, finalWeightG)`. Shots are inherently unique by time + final
  * weight — collisions are intentional ID matches per docs/36 §3.
+ *
+ * Adapts the wasm `signatureForShot` (positional args) to the object
+ * shape the existing TS callers use.
  */
 export function signatureForShot(shot: {
 	completedAt: number;
@@ -80,13 +91,12 @@ export function signatureForShot(shot: {
 	profileName: string | null;
 	finalWeight: number | null;
 }): string {
-	const parts = [
-		shot.completedAt.toString(),
-		shot.duration.toString(),
-		shot.profileName ?? '∅',
-		rk(shot.finalWeight)
-	];
-	return djb2(parts.join('|')).toString(16);
+	return wasmSignatureForShot(
+		shot.completedAt,
+		shot.duration,
+		shot.profileName ?? undefined,
+		shot.finalWeight ?? undefined
+	);
 }
 
 /** Bean de-dup signature: `(name, roasterName, roastedOn)`. docs/36 §3. */
@@ -95,25 +105,19 @@ export function signatureForBean(bean: {
 	roasterName: string | null;
 	roastedOn: string | null;
 }): string {
-	const parts = [
-		bean.name.trim().toLowerCase(),
-		(bean.roasterName ?? '').trim().toLowerCase(),
-		bean.roastedOn ?? '∅'
-	];
-	return djb2(parts.join('|')).toString(16);
+	return wasmSignatureForBean(
+		bean.name,
+		bean.roasterName ?? undefined,
+		bean.roastedOn ?? undefined
+	);
 }
 
 /** Roaster de-dup signature: normalised name. docs/36 §3. */
 export function signatureForRoaster(roaster: { name: string }): string {
-	const normalised = roaster.name
-		.trim()
-		.toLowerCase()
-		.replace(/[\s_.\-,/]+/g, ' ')
-		.replace(/[^a-z0-9 ]/g, '');
-	return djb2(normalised).toString(16);
+	return wasmSignatureForRoaster(roaster.name);
 }
 
-// ── Reconciliation (docs/36 §3) ───────────────────────────────────────
+// ── Reconciliation ────────────────────────────────────────────────────
 
 /**
  * Reconcile a remote pull against the local history. Returns the list
@@ -127,53 +131,22 @@ export function signatureForRoaster(roaster: { name: string }): string {
  *   2. Else compute the signature; look for a local with
  *      `visualizerId === null` matching → BIND.
  *   3. Else ADD.
+ *
+ * Adapts the wasm `reconcileShots` (JSON in, JSON out) to the TS array
+ * surface. The wasm side only reads the slim subset of `StoredShot`
+ * (id, completedAt, duration, profileName, finalWeight, visualizerId,
+ * deletedAt) — extra fields (`series`, `bean`, …) are dropped at the
+ * JSON boundary.
  */
 export function reconcileShots(
-	local: StoredShot[],
-	remote: WireShot[]
+	local: readonly StoredShot[],
+	remote: readonly WireShot[]
 ): ReconcileAction[] {
-	const actions: ReconcileAction[] = [];
-	const byVisId = new Map<string, StoredShot>();
-	const bySig = new Map<string, StoredShot[]>();
-	for (const s of local) {
-		if (s.visualizerId) byVisId.set(s.visualizerId, s);
-		if (!s.visualizerId && s.deletedAt == null) {
-			const sig = signatureForShot(s);
-			const bucket = bySig.get(sig) ?? [];
-			bucket.push(s);
-			bySig.set(sig, bucket);
-		}
-	}
-	for (const r of remote) {
-		const bound = byVisId.get(r.id);
-		if (bound) {
-			actions.push({ kind: 'update', localId: bound.id, remote: r });
-			continue;
-		}
-		const sig = signatureForShot({
-			completedAt: r.clock,
-			duration: r.duration_ms,
-			profileName: r.profile_title,
-			finalWeight: r.final_weight_g
-		});
-		const candidates = bySig.get(sig);
-		if (candidates && candidates.length > 0) {
-			// Take the first; if multiple unbound locals collide on the
-			// same signature, the de-dup banner on the History page
-			// surfaces it post-bind so the user can merge manually.
-			const target = candidates.shift()!;
-			actions.push({
-				kind: 'bind',
-				localId: target.id,
-				visualizerId: r.id,
-				remote: r
-			});
-			continue;
-		}
-		actions.push({ kind: 'add', remote: r });
-	}
-	return actions;
+	const raw = wasmReconcileShots(JSON.stringify({ local, remote }));
+	return JSON.parse(raw) as ReconcileAction[];
 }
+
+// ── Wire-to-local materializer (kept in TS) ──────────────────────────
 
 /**
  * Convert a {@link WireShot} into a local {@link StoredShot} for the
@@ -181,6 +154,10 @@ export function reconcileShots(
  * response — we materialise a stub StoredShot good enough for the
  * History list; the detail panel surfaces a "Profile / telemetry not
  * local" placeholder per docs/36 §deferred.
+ *
+ * Stays in TS because it builds a shell-specific `StoredShot` shape
+ * (`series: []`, `peakPressure: 0`, etc) — the Rust core owns the
+ * algorithm, the shell owns the persistence record.
  */
 export function storedShotFromWire(remote: WireShot): StoredShot {
 	const id = `shot:remote:${remote.id}`;

@@ -31,6 +31,11 @@
 //!   types ([`Bean`], [`Roaster`], [`ShotBean`], [`BeanOrigin`],
 //!   [`BeanMix`]) that every shell consumes via `#[typeshare]` per
 //!   docs/28.
+//! - [`visualizer_sync`] — pure Visualizer-sync helpers: djb2-based
+//!   de-dup signatures ([`signature_for_shot`], [`signature_for_bean`],
+//!   [`signature_for_roaster`]) and the [`reconcile_shots`] action
+//!   planner, ported from the web shell's `shot-sync-signatures.ts`
+//!   so every shell shares one algorithm (docs/36 §3).
 
 pub mod bean;
 pub mod builtin;
@@ -50,6 +55,7 @@ pub mod steam;
 pub mod stop;
 pub mod tank;
 pub mod units;
+pub mod visualizer_sync;
 pub mod volume;
 pub mod water;
 
@@ -82,6 +88,10 @@ pub use tank::{TANK_MM_TO_ML, water_tank_ml};
 pub use units::{
     bar_to_psi, celsius_to_fahrenheit, fahrenheit_to_celsius, fl_oz_to_ml, grams_to_oz,
     ml_to_fl_oz, oz_to_grams, psi_to_bar, WeightUnit,
+};
+pub use visualizer_sync::{
+    LocalShotRef, ReconcileAction, WireShot, reconcile_shots, reconcile_shots_json,
+    signature_for_bean, signature_for_roaster, signature_for_shot,
 };
 pub use volume::{LineFreqDetector, VolumeIntegrator};
 pub use water::{WaterEvent, WaterMonitor, WaterRecord, WaterSessionKind};
