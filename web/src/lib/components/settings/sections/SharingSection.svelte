@@ -28,24 +28,6 @@
 
 	const history = getHistoryStore();
 
-	// TODO: the Visualizer link needs the visualizer.coffee service (OAuth +
-	// upload API). The shell has no network/account layer, so the connection is
-	// local UI state only — it starts disconnected and "Sign in" is a stub.
-	let connected = $state(false);
-
-	/** Number of recorded shots — the genuine local count, for the queue copy. */
-	const shotCount = $derived(history.all.length);
-
-	function signIn(): void {
-		// TODO: wire to visualizer.coffee OAuth when a network layer exists.
-	}
-	function disconnect(): void {
-		connected = false;
-	}
-	function uploadNow(): void {
-		// TODO: wire to the Visualizer upload API when a network layer exists.
-	}
-
 	/** Export the local shot history as a JSON download — genuinely real. */
 	function exportHistory(): void {
 		const blob = new Blob([JSON.stringify(history.all, null, 2)], {
@@ -61,104 +43,14 @@
 	sub="Crema is local-only — there's no Crema account. Shots and profiles live on this device. Connect Visualizer if you want to back up, share, or compare shots online."
 />
 
-<!-- Visualizer integration card -->
-<div class="st-visualizer">
-	<div class="st-visualizer-glyph">
-		<svg viewBox="0 0 48 48" width="40" height="40" aria-hidden="true">
-			<path
-				d="M 4 36 Q 12 8, 24 24 T 44 12"
-				fill="none"
-				stroke="var(--copper-400)"
-				stroke-width="2.5"
-				stroke-linecap="round"
-			/>
-			<circle cx="24" cy="24" r="3.5" fill="var(--copper-400)" />
-			<circle cx="44" cy="12" r="2.5" fill="rgba(var(--tint-rgb), 0.6)" />
-			<circle cx="4" cy="36" r="2.5" fill="rgba(var(--tint-rgb), 0.6)" />
-		</svg>
-	</div>
-	<div class="st-visualizer-info">
-		<div
-			class="t-eyebrow"
-			style="color:{connected ? 'var(--copper-400)' : 'rgba(var(--tint-rgb), 0.5)'}"
-		>
-			{connected ? 'Connected' : 'Not connected'}
-		</div>
-		<div class="st-visualizer-name">visualizer.coffee</div>
-		<div class="st-visualizer-meta">
-			{#if connected}
-				Signed in · shots upload in the background
-			{:else}
-				Free community service for sharing and comparing espresso shots
-			{/if}
-		</div>
-		<div class="st-visualizer-meta-row">
-			<a
-				class="st-visualizer-link"
-				href="https://visualizer.coffee"
-				target="_blank"
-				rel="noreferrer noopener"
-			>
-				visualizer.coffee <i class="ph ph-arrow-square-out" aria-hidden="true"></i>
-			</a>
-		</div>
-	</div>
-	<div class="st-visualizer-actions">
-		{#if connected}
-			<StButton label="Open library" icon="arrow-square-out" />
-			<button type="button" class="st-btn st-btn-danger" onclick={disconnect}>
-				<i class="ph ph-sign-out" aria-hidden="true"></i>Disconnect
-			</button>
-		{:else}
-			<StButton label="Sign in" icon="sign-in" variant="primary" onClick={signIn} />
-		{/if}
-	</div>
-</div>
+<!-- Visualizer connection + sync controls live in BeanSyncSection — it
+     owns the OAuth flow, sync log, and (future) per-shot upload toggles.
+     The previous stand-alone Visualizer card + Upload / Pending stubs
+     were removed when OAuth landed (their stubbed buttons collided
+     visually with the real Sign-in button — both said "Sign in"). -->
+<BeanSyncSection />
 
-<!--
-	Upload preferences were 4 separate rows (auto-upload toggle, privacy
-	default, include-profile, include-notes). They've collapsed behind a
-	single "Connect Visualizer to configure uploads" CTA — the toggles
-	persisted values nothing read, and the audit said as much
-	(settings-audit.md §24-27). When the visualizer.coffee OAuth + upload
-	queue lands, the four rows come back. Their fields still live on
-	`Settings` so a future restore preserves any value the user set.
--->
-<StGroup title="Upload" sub="When and how new shots are sent to Visualizer.">
-	<StRow
-		title="Configure uploads"
-		sub="Connect Visualizer first — the per-shot toggles (auto-upload, default privacy, include the profile JSON, include your tasting notes) appear here once you sign in."
-		notImplemented
-	>
-		{#snippet control()}
-			<StButton
-				label={connected ? 'Configure' : 'Connect Visualizer'}
-				icon={connected ? 'gear' : 'sign-in'}
-				disabled={!connected}
-				onClick={signIn}
-			/>
-		{/snippet}
-	</StRow>
-</StGroup>
-
-<StGroup title="Pending" sub="Shots not yet synced to Visualizer.">
-	<StRow
-		title={connected
-			? 'Up to date'
-			: `${shotCount} shot${shotCount === 1 ? '' : 's'} on this device`}
-		sub={connected
-			? 'All recorded shots are synced.'
-			: 'Connect Visualizer to back these up online.'}
-	>
-		{#snippet control()}
-			<StButton
-				label="Upload now"
-				icon="cloud-arrow-up"
-				disabled={!connected}
-				onClick={uploadNow}
-			/>
-		{/snippet}
-	</StRow>
+<StGroup title="Local export" sub="Download a copy of your local data.">
 	<StRow
 		title="History export"
 		sub="One-shot download of your entire shot history as JSON. Useful for spreadsheets and other tools."
@@ -168,8 +60,6 @@
 		{/snippet}
 	</StRow>
 </StGroup>
-
-<BeanSyncSection />
 
 <div class="st-otherint">
 	<div class="st-group-title">Other integrations</div>
