@@ -35,10 +35,14 @@ interface CaptureLine {
 	/**
 	 * Optional structured payload for `src:"META"` entries — the Crema-
 	 * specific prelude that carries connect-phase identity (scale
-	 * advertised name, DE1 firmware version, …). External replay tools
-	 * ignore it; legacy captures don't have it.
+	 * advertised name, DE1 firmware version, …) PLUS the at-shot-start
+	 * context the shell appends (active profile, BrewParams snapshot,
+	 * active bean snapshot, grinder model). External replay tools
+	 * ignore it; legacy captures don't have it. `unknown` for the values
+	 * because the parser reads each known key defensively — a malformed
+	 * line can't crash the replay reader.
 	 */
-	meta?: Record<string, string | number | undefined>;
+	meta?: Record<string, unknown>;
 }
 
 /**
@@ -81,6 +85,45 @@ export interface ReplayMeta {
 	readonly de1MachineModel?: number;
 	/** The DE1's serial number (raw u32). */
 	readonly de1SerialNumber?: number;
+	// ── At-shot-start context ────────────────────────────────────────────
+	// The fields below ride a second META line that the shell appends
+	// right after the core's connect-phase META prelude (see the writer
+	// in `lib/state/app.svelte.ts`'s `ShotCompleted` capture-slice path).
+	// They are advisory only — the replay driver doesn't need them to
+	// decode the BLE byte stream — but they let an analyst see "this
+	// shot was pulled with Profile X against a 36 g yield target on
+	// Niche Zero clicks 2.5" without having to cross-reference the
+	// `.shot.json` archive.
+	/** The active profile's name at shot start, or `undefined` when none. */
+	readonly profileName?: string;
+	/**
+	 * The byte-exact upload payload that was last written to the DE1, as
+	 * lowercase no-separator hex. Lets a future replay tool re-derive what
+	 * the firmware was executing without hunting for the matching `.tcl`
+	 * / `.json`. `undefined` today — the core does not surface the
+	 * profile-upload byte stream, and caching it shell-side would mean
+	 * plumbing through the BLE write path. Deferred per task spec:
+	 * "If the active-profile bytes aren't cheaply available, fall back to
+	 * `profileName` only and document the TODO." See the writer call site.
+	 */
+	readonly profileBytesHex?: string;
+	/** Quick-control overrides at shot start — `BrewParams` snapshot. */
+	readonly yieldTarget?: number;
+	readonly brewTemp?: number;
+	readonly preinfuseTarget?: number;
+	readonly stopOnWeight?: boolean;
+	readonly autoTare?: boolean;
+	/** Active bean snapshot at shot start — same shape as the v2 export. */
+	readonly bean?: {
+		readonly type?: string;
+		readonly roaster?: string;
+		readonly roastedOn?: string;
+		readonly roastLevel?: number;
+		readonly notes?: string;
+		readonly grinderSetting?: string;
+	};
+	/** Equipment-level grinder model at shot start (e.g. "Niche Zero"). */
+	readonly grinderModel?: string;
 }
 
 /**
@@ -162,21 +205,10 @@ export function parseCapture(text: string): ParsedCapture {
 
 		// META prelude entries carry identity payloads in the optional
 		// `meta` object; later entries override earlier ones (a session
-		// that re-paired a different scale mid-stream would land here).
+		// that re-paired a different scale mid-stream would land here,
+		// as does the shell-appended at-shot-start context line).
 		if (entry.src === 'META' && entry.meta) {
-			const m = entry.meta;
-			if (typeof m.scaleName === 'string') {
-				(meta as { scaleName?: string }).scaleName = m.scaleName;
-			}
-			if (typeof m.de1FirmwareVersion === 'number') {
-				(meta as { de1FirmwareVersion?: number }).de1FirmwareVersion = m.de1FirmwareVersion;
-			}
-			if (typeof m.de1MachineModel === 'number') {
-				(meta as { de1MachineModel?: number }).de1MachineModel = m.de1MachineModel;
-			}
-			if (typeof m.de1SerialNumber === 'number') {
-				(meta as { de1SerialNumber?: number }).de1SerialNumber = m.de1SerialNumber;
-			}
+			foldMeta(meta as Record<string, unknown>, entry.meta);
 			continue;
 		}
 
@@ -202,4 +234,52 @@ export function parseCapture(text: string): ParsedCapture {
 /** Read a `File` (e.g. from an `<input type="file">`) and {@link parseCapture} it. */
 export async function parseCaptureFile(file: File): Promise<ParsedCapture> {
 	return parseCapture(await file.text());
+}
+
+/**
+ * Fold one parsed META payload into the {@link ReplayMeta} accumulator
+ * — each known key is read defensively (typeof guard) and copied onto
+ * `target`, so a corrupt / future-key META line can't crash the
+ * replay reader. Mutating-by-reference so two META lines (the core's
+ * connect-phase prelude + the shell's at-shot-start line) merge into
+ * a single typed view, with later entries overriding earlier ones.
+ */
+function foldMeta(target: Record<string, unknown>, m: Record<string, unknown>): void {
+	if (typeof m.scaleName === 'string') target.scaleName = m.scaleName;
+	if (typeof m.de1FirmwareVersion === 'number') {
+		target.de1FirmwareVersion = m.de1FirmwareVersion;
+	}
+	if (typeof m.de1MachineModel === 'number') {
+		target.de1MachineModel = m.de1MachineModel;
+	}
+	if (typeof m.de1SerialNumber === 'number') {
+		target.de1SerialNumber = m.de1SerialNumber;
+	}
+	if (typeof m.profileName === 'string') target.profileName = m.profileName;
+	if (typeof m.profileBytesHex === 'string') target.profileBytesHex = m.profileBytesHex;
+	if (typeof m.yieldTarget === 'number' && Number.isFinite(m.yieldTarget)) {
+		target.yieldTarget = m.yieldTarget;
+	}
+	if (typeof m.brewTemp === 'number' && Number.isFinite(m.brewTemp)) {
+		target.brewTemp = m.brewTemp;
+	}
+	if (typeof m.preinfuseTarget === 'number' && Number.isFinite(m.preinfuseTarget)) {
+		target.preinfuseTarget = m.preinfuseTarget;
+	}
+	if (typeof m.stopOnWeight === 'boolean') target.stopOnWeight = m.stopOnWeight;
+	if (typeof m.autoTare === 'boolean') target.autoTare = m.autoTare;
+	if (typeof m.grinderModel === 'string') target.grinderModel = m.grinderModel;
+	if (typeof m.bean === 'object' && m.bean !== null) {
+		const raw = m.bean as Record<string, unknown>;
+		const bean: Record<string, unknown> = {};
+		if (typeof raw.type === 'string') bean.type = raw.type;
+		if (typeof raw.roaster === 'string') bean.roaster = raw.roaster;
+		if (typeof raw.roastedOn === 'string') bean.roastedOn = raw.roastedOn;
+		if (typeof raw.roastLevel === 'number' && Number.isFinite(raw.roastLevel)) {
+			bean.roastLevel = raw.roastLevel;
+		}
+		if (typeof raw.notes === 'string') bean.notes = raw.notes;
+		if (typeof raw.grinderSetting === 'string') bean.grinderSetting = raw.grinderSetting;
+		if (Object.keys(bean).length > 0) target.bean = bean;
+	}
 }

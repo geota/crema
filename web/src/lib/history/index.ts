@@ -20,7 +20,9 @@ export {
 export {
 	HistoryStore,
 	getHistoryStore,
-	type ShotCompletion
+	type ShotCompletion,
+	type ImportExtras,
+	type ImportBeanExtras
 } from './store.svelte';
 
-export { exportStoredShotAsV2Json } from './v2-export';
+export { exportStoredShotAsV2Json, extractCremaExtras } from './v2-export';

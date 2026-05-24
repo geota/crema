@@ -51,8 +51,16 @@ export interface CaptureEntry {
 	 * Optional structured payload for META entries. Ignored on
 	 * regular-source entries. Stays optional so old captures (no META) and
 	 * external replay tools that don't understand META still parse.
+	 *
+	 * The value type is open (`unknown`) because the META payload now
+	 * carries the at-shot-start context the shell appends — booleans
+	 * (`stopOnWeight`, `autoTare`) and a nested `bean` object alongside
+	 * the core's connect-phase strings / numbers. The parser
+	 * (`lib/replay/capture.ts`'s `foldMeta`) reads each known key
+	 * defensively with a typeof guard, so a future-key META line still
+	 * folds into a typed `ReplayMeta` cleanly.
 	 */
-	readonly meta?: Record<string, string | number | undefined>;
+	readonly meta?: Record<string, unknown>;
 }
 
 /**

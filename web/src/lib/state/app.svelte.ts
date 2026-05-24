@@ -25,7 +25,7 @@ import {
 import { MachineState, MmrRegister } from '$lib/core/crema-core';
 import { De1Manager, EMPTY_DE1_DIAGNOSTICS, ScaleManager } from '$lib/ble';
 import { getBeanStore } from '$lib/bean';
-import { getHistoryStore, snapshotFromBean } from '$lib/history';
+import { getHistoryStore, snapshotFromBean, extractCremaExtras } from '$lib/history';
 import { getCaptureStore, type CaptureEntry } from '$lib/capture';
 import {
 	getProfileStore,
@@ -37,7 +37,7 @@ import {
 import { readJson, writeJson } from '$lib/utils/storage';
 import { getSettingsStore } from '$lib/settings';
 import { getMaintenanceStore } from '$lib/maintenance';
-import { parseCaptureFile, replayEvents, ReplayAbortedError } from '$lib/replay';
+import { parseCaptureFile, replayEvents, ReplayAbortedError, type ReplayMeta } from '$lib/replay';
 import { describeError } from '$lib/utils/error';
 import {
 	appendSyncLog,
@@ -174,6 +174,35 @@ const WATER_COUNTING_STATES: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Compose the user-facing "now replaying" message, folding the parsed
+ * {@link ReplayMeta} into a short suffix so an analyst sees the context
+ * the META prelude carries (active profile, yield target, grinder
+ * model) without having to inspect the file. Legacy captures without
+ * the at-shot-start META line produce the bare message.
+ *
+ * Format: `"Replaying N events from foo.jsonl… (Profile X · 36 g · Niche Zero)"`
+ * — the parenthetical is dropped when no advisory META fields are set.
+ */
+function composeReplayStartMessage(
+	fileName: string,
+	eventCount: number,
+	meta: ReplayMeta
+): string {
+	const parts: string[] = [];
+	if (meta.profileName) parts.push(`Profile ${meta.profileName}`);
+	if (meta.yieldTarget != null) parts.push(`${meta.yieldTarget} g target`);
+	if (meta.brewTemp != null) parts.push(`${meta.brewTemp} °C`);
+	if (meta.grinderModel) parts.push(meta.grinderModel);
+	const beanLabel =
+		meta.bean?.roaster && meta.bean.type
+			? `${meta.bean.roaster} · ${meta.bean.type}`
+			: meta.bean?.type ?? meta.bean?.roaster ?? null;
+	if (beanLabel) parts.push(beanLabel);
+	const suffix = parts.length > 0 ? ` (${parts.join(' · ')})` : '';
+	return `Replaying ${eventCount} events from ${fileName}…${suffix}`;
+}
+
+/**
  * Best-effort scale identification from the first SCALE_WEIGHT payload.
  *
  * Used by the replay path — the capture format doesn't record the scale
@@ -277,6 +306,30 @@ export class CremaApp {
 	 * — the clock lives here.
 	 */
 	private decentScaleHeartbeatId: ReturnType<typeof setInterval> | null = null;
+
+	/**
+	 * The Quick Sheet's `BrewParams` at shot start, stashed by the brew
+	 * dashboard via {@link setBrewParamsSnapshot} just before
+	 * {@link startShot} fires. Read by the `ShotCompleted` handler so the
+	 * five user-facing fields the v2 schema doesn't carry — `yieldTarget`,
+	 * `brewTemp`, `preinfuseTarget`, `stopOnWeight`, `autoTare` — freeze
+	 * onto the persisted `StoredShot` instead of being read live (which
+	 * would let a post-shot dial change retroactively rewrite history,
+	 * the snapshot-vs-live failure mode docs/28 calls out).
+	 *
+	 * `null` between shots and on a headless / replay path that does not
+	 * pass through the Quick Sheet — both leave the `StoredShot`'s QC
+	 * fields absent and downstream readers fall back to the embedded
+	 * profile slot. Cleared at `ShotCompleted` so a never-completed shot
+	 * does not leak its snapshot into the next one.
+	 */
+	private brewParamsAtShotStart: {
+		yieldTarget: number;
+		brewTemp: number;
+		preinfuseTarget: number;
+		stopOnWeight: boolean;
+		autoTare: boolean;
+	} | null = null;
 
 	constructor(private readonly core: CremaCore) {
 		this.de1 = new De1Manager(core, {
@@ -583,6 +636,14 @@ export class CremaApp {
 				// `roast_level`, `bean_notes`, `grinder_setting`); the live
 				// row is consulted only as a link pointer for `coffee_bag_id`.
 				const beanSnapshot = snapshotFromBean(activeBean, activeRoaster);
+				// Quick-control overrides snapshot — the BrewDashboard pushes
+				// the live `BrewParams` here just before `startShot()`. A
+				// manual on-machine start (or replay) without going through
+				// the dashboard leaves the snapshot at its previous value
+				// or `null`; in the `null` case the QC fields stay absent
+				// on the persisted `StoredShot` so downstream readers fall
+				// back to the embedded profile slot.
+				const brewParams = this.brewParamsAtShotStart;
 				const record = getHistoryStore().record({
 					duration: event.content.duration,
 					profileName: snapshot.activeProfileName,
@@ -599,6 +660,11 @@ export class CremaApp {
 					peakWeight: event.content.peak_weight ?? null,
 					finalWeight: event.content.final_weight ?? null,
 					bean: beanSnapshot,
+					yieldTarget: brewParams?.yieldTarget ?? null,
+					brewTemp: brewParams?.brewTemp ?? null,
+					preinfuseTarget: brewParams?.preinfuseTarget ?? null,
+					stopOnWeight: brewParams?.stopOnWeight,
+					autoTare: brewParams?.autoTare,
 					// Copy the live bean's tags STRAIGHT INTO `shot.tags`
 					// at completion — one source of truth for shot-level
 					// tags. A later user retag overwrites this; a later
@@ -610,6 +676,12 @@ export class CremaApp {
 							? [...activeBean.tags]
 							: []
 				});
+				// `brewParamsAtShotStart` is intentionally NOT cleared here
+				// — the at-shot-start META line that the capture-slice path
+				// emits below reads the same snapshot, so a clear-then-read
+				// would race. Cleared at the end of the `ShotCompleted`
+				// fold instead (see the `null` assignment after the
+				// capture write).
 				// Burn-down: debit the active bag by the profile's dose so the
 				// brew-page chip reads the remaining grams accurately. No-op
 				// when the user hasn't filled in a bag size. Innovation §2
@@ -663,23 +735,122 @@ export class CremaApp {
 					const fromMs = this.shotStartedAtMs - CAPTURE_LEAD_MS;
 					const toMs = performance.now();
 					const shotId = record.id;
+					// Build the at-shot-start META payload once. The core's
+					// JSONL already prepends a connect-phase META line
+					// (scale name, DE1 firmware / model / serial); we
+					// APPEND a second META line carrying the at-shot-start
+					// context (active profile, BrewParams snapshot, bean
+					// snapshot, grinder model). Two lines is intentional:
+					// the core's MetaSnapshot is wire-side identity the
+					// replay driver needs BEFORE the bytes that follow,
+					// while this one is advisory state an analyst reads.
+					// `foldMeta` in `lib/replay/capture.ts` merges both
+					// onto one typed `ReplayMeta` view.
+					//
+					// `profileBytesHex` is intentionally absent — the core
+					// doesn't surface the byte-exact upload payload and
+					// caching it shell-side is multi-file plumbing
+					// deferred per the task spec. `profileName` carries
+					// the human label; the v2 export's embedded profile
+					// slot carries the structured stub.
+					const shotMeta = this.buildAtShotStartMeta(toMs);
 					void this.core.captureSliceJsonl(fromMs, toMs).then((jsonl) => {
 						if (!jsonl) return;
 						const entries: CaptureEntry[] = jsonl
 							.split('\n')
 							.filter((line) => line.length > 0)
 							.map((line) => JSON.parse(line) as CaptureEntry);
+						if (shotMeta) entries.push(shotMeta);
 						if (entries.length > 0) {
 							void getCaptureStore().put(shotId, entries);
 						}
 					});
 				}
 				this.shotStartedAtMs = null;
+				// Drop the QC snapshot — a never-completed shot must not
+				// leak its dial into the next shot. The brew dashboard
+				// pushes a fresh snapshot on every `startShot` tap; a
+				// no-snapshot completion (manual / replay) clears cleanly
+				// to `null` here. Cleared AFTER the at-shot-start META
+				// build above so the snapshot survives into the JSONL.
+				this.brewParamsAtShotStart = null;
 			}
 		}
 		for (const command of output.commands) {
 			void this.executeCommand(command);
 		}
+	}
+
+	/**
+	 * Build the at-shot-start META `CaptureEntry` the capture-slice path
+	 * appends after the core's connect-phase META prelude. Returns `null`
+	 * when there's nothing to add (no active profile, no BrewParams
+	 * snapshot, no bean, no grinder model) — the JSONL then matches the
+	 * legacy pre-this-PR shape byte-for-byte. Each field optional and
+	 * omitted when absent, so the persisted META stays minimal and a
+	 * legacy reader (without `foldMeta`'s defensive guards) sees the
+	 * same fields it always did plus extras it can ignore.
+	 *
+	 * `t_ms` is the slice's end timestamp — the META line sits at the
+	 * tail of the file rather than the head, so the bytes that decode
+	 * the BLE wire (the core's prelude) come first and don't get
+	 * delayed by the advisory context.
+	 */
+	private buildAtShotStartMeta(tMs: number): CaptureEntry | null {
+		const meta: Record<string, unknown> = {};
+		const snapshot = this.state.current;
+		const profiles = getProfileStore();
+		const activeProfile = profiles.activeId
+			? profiles.get(profiles.activeId)
+			: undefined;
+		const profileName = snapshot.activeProfileName ?? activeProfile?.name ?? null;
+		if (profileName) meta.profileName = profileName;
+		// `profileBytesHex` — deliberately absent. The core does not
+		// surface the byte-exact upload payload from `uploadProfile`;
+		// cheaply caching it would require teeing every `WriteCharacteristic`
+		// `De1ProfileFrame` write into a buffer and stamping it onto
+		// `ProfileUploadCompleted`. Multi-file plumbing per the task spec
+		// — deferred. TODO: when the core exposes the upload byte
+		// stream (e.g. via a `last_uploaded_profile_bytes()` accessor
+		// or by riding the bytes on the `ProfileUploadCompleted`
+		// event), wire them here so an analyst can re-derive what the
+		// firmware was executing without hunting for the matching
+		// profile file.
+		const brewParams = this.brewParamsAtShotStart;
+		if (brewParams) {
+			meta.yieldTarget = brewParams.yieldTarget;
+			meta.brewTemp = brewParams.brewTemp;
+			meta.preinfuseTarget = brewParams.preinfuseTarget;
+			meta.stopOnWeight = brewParams.stopOnWeight;
+			meta.autoTare = brewParams.autoTare;
+		}
+		const library = getBeanStore();
+		const activeBean = library.activeBean;
+		const activeRoaster = activeBean?.roasterId
+			? library.getRoaster(activeBean.roasterId)
+			: null;
+		if (activeBean) {
+			const bean: Record<string, unknown> = {};
+			const type = activeBean.name.trim();
+			const roaster = activeRoaster?.name.trim() ?? '';
+			if (type) bean.type = type;
+			if (roaster) bean.roaster = roaster;
+			if (activeBean.roastedOn) bean.roastedOn = activeBean.roastedOn;
+			if (activeBean.roastLevel != null) bean.roastLevel = activeBean.roastLevel;
+			if (activeBean.notes) bean.notes = activeBean.notes;
+			if (activeBean.grinderSetting) bean.grinderSetting = activeBean.grinderSetting;
+			if (Object.keys(bean).length > 0) meta.bean = bean;
+		}
+		const grinderModel = getSettingsStore().current.grinderModel?.trim();
+		if (grinderModel) meta.grinderModel = grinderModel;
+		if (Object.keys(meta).length === 0) return null;
+		return {
+			t: Math.round(tMs),
+			dir: 'in',
+			src: 'META',
+			hex: '',
+			meta
+		};
 	}
 
 	/**
@@ -1288,7 +1459,15 @@ export class CremaApp {
 			const imported = isV2Json
 				? await this.core.importV2JsonShot(content)
 				: await this.core.importLegacyTclShot(content);
-			const record = getHistoryStore().addImported(imported);
+			// Crema-exported `.shot.json` files ride extras under
+			// `metadata.crema.*` that the v2 schema (and the Rust wasm
+			// parser) doesn't model — grinder model, tags, QC-override
+			// snapshot, the inline-bean snapshot's roast extras. Extract
+			// them before they're lost so a Crema → file → Crema round-
+			// trip reconstructs the same `StoredShot`. Legacy `.shot`
+			// imports skip this — TCL files predate the escape valve.
+			const extras = isV2Json ? extractCremaExtras(content) ?? undefined : undefined;
+			const record = getHistoryStore().addImported(imported, extras);
 			if (!record) {
 				return {
 					record: null,
@@ -1633,6 +1812,29 @@ export class CremaApp {
 	private rinsePending = false;
 
 	/**
+	 * Stash the live Quick Sheet `BrewParams` snapshot on the orchestrator
+	 * so the next `ShotCompleted` can freeze them onto the persisted
+	 * `StoredShot`. Mirrors the bean / grinder-model / tags snapshot
+	 * pattern: capture-time-frozen, not live-read at export, so a later
+	 * dial change cannot rewrite history.
+	 *
+	 * Callable independently of {@link startShot} — the brew dashboard
+	 * calls this every time the user taps Coffee (just before the shot
+	 * request goes out), and a manual on-machine start (no Crema tap)
+	 * simply leaves the snapshot at its previous value; the `null`
+	 * fallback after `ShotCompleted` keeps that case sane.
+	 */
+	setBrewParamsSnapshot(snapshot: {
+		yieldTarget: number;
+		brewTemp: number;
+		preinfuseTarget: number;
+		stopOnWeight: boolean;
+		autoTare: boolean;
+	}): void {
+		this.brewParamsAtShotStart = { ...snapshot };
+	}
+
+	/**
 	 * Start an espresso shot — the Brew screen's primary action. Three
 	 * sequential steps, each pre-condition-gated:
 	 *
@@ -1871,7 +2073,7 @@ export class CremaApp {
 				fileName: file.name,
 				done: 0,
 				total: parsed.events.length,
-				message: `Replaying ${parsed.events.length} events from ${file.name}…`
+				message: composeReplayStartMessage(file.name, parsed.events.length, parsed.meta)
 			}
 		});
 
