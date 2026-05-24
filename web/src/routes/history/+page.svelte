@@ -26,6 +26,17 @@
 	import { downloadBlob, filenameStamp } from '$lib/utils/download';
 	import { zip as fflateZip, strToU8 } from 'fflate';
 	import FilterPills from '$lib/components/shared/FilterPills.svelte';
+	import {
+		appendSyncLog,
+		directionPushes,
+		drainQueue,
+		enqueue as enqueueSyncOp,
+		getQueue,
+		isConnected as isVisualizerConnected,
+		readSyncConfig,
+		uploadShot
+	} from '$lib/visualizer';
+	import { VisualizerError } from '$lib/bean';
 
 	const store = getHistoryStore();
 	const appCtx = getCremaAppContext();
@@ -180,6 +191,78 @@
 
 	/** Every recorded shot, newest first. Reactive. */
 	const shots = $derived(store.all);
+
+	// ── Visualizer upload state (docs/36 §5) ─────────────────────────────
+	let syncConfig = $state(readSyncConfig());
+	let uploadingAll = $state(false);
+	/** Reactive count of queued shot ops — drives the pip + Upload-all label. */
+	let pendingShotIds = $state<Set<string>>(
+		new Set(getQueue().filter((q) => q.entity === 'shot').map((q) => q.id))
+	);
+	function refreshSyncState(): void {
+		syncConfig = readSyncConfig();
+		pendingShotIds = new Set(getQueue().filter((q) => q.entity === 'shot').map((q) => q.id));
+	}
+	/** Pip kind for the per-row indicator. */
+	function pipFor(shot: { id: string; visualizerId?: string | null }): 'uploaded' | 'pending' | 'local' {
+		if (shot.visualizerId) return 'uploaded';
+		if (pendingShotIds.has(shot.id)) return 'pending';
+		return 'local';
+	}
+	/** Are we connected + push-enabled? Gates the "Upload all" button. */
+	const canPushShots = $derived(
+		isVisualizerConnected() && directionPushes(syncConfig.direction.shots)
+	);
+	/** Shots that need an upload — no `visualizerId` and not soft-deleted. */
+	const unsyncedShots = $derived(shots.filter((s) => !s.visualizerId));
+
+	async function uploadAll(): Promise<void> {
+		if (uploadingAll || !canPushShots) return;
+		uploadingAll = true;
+		try {
+			for (const shot of unsyncedShots) {
+				try {
+					const { visualizerId } = await uploadShot(shot);
+					store.bindVisualizerId(shot.id, visualizerId);
+					appendSyncLog({
+						direction: 'push',
+						entity: 'shot',
+						id: shot.id,
+						name: shot.profileName ?? 'Shot',
+						at: Date.now()
+					});
+				} catch (e) {
+					const recoverable =
+						e instanceof VisualizerError
+							? e.kind === 'network' ||
+								(e.status >= 500 && e.status < 600) ||
+								e.status === 408
+							: true;
+					if (recoverable) {
+						enqueueSyncOp({
+							entity: 'shot',
+							id: shot.id,
+							op: 'create',
+							error: e instanceof Error ? e.message : String(e)
+						});
+					}
+					appendSyncLog({
+						direction: 'skip',
+						entity: 'shot',
+						id: shot.id,
+						name: shot.profileName ?? 'Shot',
+						at: Date.now(),
+						error: e instanceof Error ? e.message : String(e)
+					});
+				}
+			}
+			// Drain whatever fell into the retry queue.
+			await drainQueue();
+		} finally {
+			refreshSyncState();
+			uploadingAll = false;
+		}
+	}
 
 	// ── Filter / search state ────────────────────────────────────────────
 	/** The search query. */
@@ -413,6 +496,22 @@
 				<i class="ph ph-download-simple" aria-hidden="true"></i>
 				{exporting ? 'Exporting…' : 'Export'}
 			</button>
+			{#if canPushShots && unsyncedShots.length > 0}
+				<button
+					class="st-btn st-btn-secondary"
+					disabled={uploadingAll}
+					onclick={uploadAll}
+					title={`Upload ${unsyncedShots.length} unsynced shot${unsyncedShots.length === 1 ? '' : 's'} to Visualizer`}
+				>
+					<i
+						class={uploadingAll ? 'ph ph-spinner-gap hi-spin' : 'ph ph-cloud-arrow-up'}
+						aria-hidden="true"
+					></i>
+					{uploadingAll
+						? 'Uploading…'
+						: `Upload all (${unsyncedShots.length})`}
+				</button>
+			{/if}
 			{#if selectMode}
 				<button
 					class="st-btn st-btn-secondary"
@@ -583,6 +682,7 @@
 						selectable={selectMode}
 						selected={selectedIdSet.has(s.id)}
 						selectionDisabled={selectedIds.length >= COMPARE_MAX}
+						syncPip={pipFor(s)}
 						onclick={() => (selectMode ? toggleCompareSelection(s.id) : select(s.id))}
 					/>
 				{/each}
@@ -1008,6 +1108,15 @@
 	}
 	.hi-import-banner-close:hover {
 		opacity: 1;
+	}
+
+	.hi-spin {
+		animation: hi-spin 1.1s linear infinite;
+		display: inline-block;
+	}
+	@keyframes hi-spin {
+		from { transform: rotate(0); }
+		to { transform: rotate(360deg); }
 	}
 
 	@media (max-width: 1100px) {
