@@ -17,6 +17,7 @@ export { default as BeanContextCard } from './BeanContextCard.svelte';
 export { default as LastShotCard } from './LastShotCard.svelte';
 export { default as LiveChart } from './LiveChart.svelte';
 export { default as FavoritesStrip } from './FavoritesStrip.svelte';
+export { default as BeanPill } from './BeanPill.svelte';
 export { default as QStepper } from './QStepper.svelte';
 export { default as QChipRow } from './QChipRow.svelte';
 export { default as QSparkline } from './QSparkline.svelte';

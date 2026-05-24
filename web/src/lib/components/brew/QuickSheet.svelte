@@ -4,7 +4,8 @@
 	 * `variant === 'g'` path of `WebQDashV2` in `web-dashboard-v2.jsx`.
 	 *
 	 * Header (serif title, Save / Reset / Close — no profile chip; the profile
-	 * already sits in the dash header), the `FavoritesStrip`, the one-row
+	 * already sits in the dash header), the unified `FavoritesStrip` (pinned
+	 * profiles **and** pinned beans, shared search across both), the one-row
 	 * six-card body (Dose|Grind · Yield · Brew Temp · Steam · Hot Water ·
 	 * Pre-Infuse|Flush), and the footer (just the two mini-toggles — the big
 	 * Start button lives on the dash-foot, which stays visible behind the sheet).
@@ -15,6 +16,7 @@
 	 */
 	import type { BrewParamState } from './brew-params.svelte';
 	import type { CremaProfile } from '$lib/profiles';
+	import type { Bean, Roaster } from '$lib/bean';
 	import FavoritesStrip from './FavoritesStrip.svelte';
 	import DoseGrindStepper from './DoseGrindStepper.svelte';
 	import YieldRatioStepper from './YieldRatioStepper.svelte';
@@ -73,8 +75,12 @@
 		params,
 		pinnedProfiles,
 		selectedProfileId,
+		pinnedBeans,
+		roasters,
+		activeBeanId,
 		open,
 		onSelectFavorite,
+		onSelectBean,
 		onClose
 	}: {
 		/** The shared Quick Sheet parameter store. */
@@ -83,10 +89,18 @@
 		pinnedProfiles: readonly CremaProfile[];
 		/** The active profile's id (the highlighted chip), or `null`. */
 		selectedProfileId: string | null;
+		/** The pinned beans (favourite && !archived) shown as favourite chips. */
+		pinnedBeans: readonly Bean[];
+		/** The roaster directory — drives each bean chip's mark + tone. */
+		roasters: readonly Roaster[];
+		/** The active bean's id (the highlighted chip), or `null`. */
+		activeBeanId: string | null;
 		/** Whether the sheet is docked open; when false it slides away. */
 		open: boolean;
-		/** Called when a favorite chip is picked. */
+		/** Called when a favorite profile chip is picked. */
 		onSelectFavorite: (profile: CremaProfile) => void;
+		/** Called when a favourite bean chip is picked. */
+		onSelectBean: (bean: Bean) => void;
 		/** Called to dismiss the sheet (Close button or scrim tap). */
 		onClose: () => void;
 	} = $props();
@@ -125,8 +139,12 @@
 
 	<FavoritesStrip
 		profiles={pinnedProfiles}
-		selectedId={selectedProfileId}
-		onSelect={onSelectFavorite}
+		selectedProfileId={selectedProfileId}
+		onSelectProfile={onSelectFavorite}
+		beans={pinnedBeans}
+		{roasters}
+		{activeBeanId}
+		{onSelectBean}
 	/>
 
 	<div class="qsheet-g-grid is-six">
