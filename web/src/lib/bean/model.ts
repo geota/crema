@@ -157,8 +157,28 @@ export interface Roaster {
 	id: string;
 	name: string;
 	website: string | null;
+	/**
+	 * Logo / hero image URL. Mirrors Visualizer `RoasterDetail.image_url` —
+	 * round-trips losslessly on sync. Renders as a small thumbnail in the
+	 * roaster card and the editor's preview slot. `null` falls back to the
+	 * deterministic two-letter mark.
+	 */
+	imageUrl: string | null;
+	/**
+	 * City — e.g. `"Portland"`. Crema-only; rides in `metadata.crema.city`
+	 * on Visualizer round-trip so the wire stays lossless.
+	 */
+	city: string | null;
 	country: string | null;
 	notes: string;
+	/**
+	 * Pointer to the canonical roaster id when this row was tagged as a
+	 * duplicate. `null` = this row is itself canonical (or has not been
+	 * deduped). Mirrors Visualizer `RoasterDetail.canonical_roaster_id`.
+	 * The Roasters tab filters duplicates out by default (showing only
+	 * canonicals); merge-duplicates wires this field on commit.
+	 */
+	canonicalRoasterId: string | null;
 	visualizerId: string | null;
 	metadata: Record<string, unknown>;
 	createdAt: number;
@@ -172,8 +192,11 @@ export function blankRoaster(name: string, id?: string): Roaster {
 		id: id ?? mintRoasterId(),
 		name,
 		website: null,
+		imageUrl: null,
+		city: null,
 		country: null,
 		notes: '',
+		canonicalRoasterId: null,
 		visualizerId: null,
 		metadata: {},
 		createdAt: now,
@@ -440,8 +463,12 @@ export function coerceRoaster(raw: unknown): Roaster | null {
 	if (typeof obj.id !== 'string' || typeof obj.name !== 'string') return null;
 	const base = blankRoaster(obj.name, obj.id);
 	if (typeof obj.website === 'string') base.website = obj.website;
+	if (typeof obj.imageUrl === 'string') base.imageUrl = obj.imageUrl;
+	if (typeof obj.city === 'string') base.city = obj.city;
 	if (typeof obj.country === 'string') base.country = obj.country;
 	if (typeof obj.notes === 'string') base.notes = obj.notes;
+	if (typeof obj.canonicalRoasterId === 'string')
+		base.canonicalRoasterId = obj.canonicalRoasterId;
 	if (typeof obj.visualizerId === 'string') base.visualizerId = obj.visualizerId;
 	if (typeof obj.metadata === 'object' && obj.metadata !== null) {
 		base.metadata = obj.metadata as Record<string, unknown>;

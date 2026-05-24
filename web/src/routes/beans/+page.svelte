@@ -23,8 +23,8 @@
 	import {
 		getBeanStore,
 		bagState,
-		blankBean,
 		mintBeanId,
+		mintRoasterId,
 		type Bean,
 		type Roaster
 	} from '$lib/bean';
@@ -352,6 +352,10 @@
 		{ field: 'recent', label: 'Recent', icon: 'clock' }
 	];
 	let roasterRegion = $state<string>('all');
+	// Whether the Roasters tab includes merged duplicates. Off by default
+	// so the directory shows one row per real roastery; flip on to inspect
+	// or un-merge a row that was tagged via `canonicalRoasterId`.
+	let showDuplicates = $state(false);
 
 	const roasterRegionOptions = $derived.by(() => {
 		const set = new Set<string>();
@@ -372,6 +376,12 @@
 			roaster: r,
 			count: counts.get(r.id) ?? 0
 		}));
+		// Filter out rows tagged as duplicates unless the user opted in.
+		// The badge on the directory makes the merged state obvious, so the
+		// directory stays one-row-per-roastery by default.
+		if (!showDuplicates) {
+			rows = rows.filter((x) => !x.roaster.canonicalRoasterId);
+		}
 		if (roasterRegion !== 'all') {
 			rows = rows.filter(
 				(x) =>
@@ -395,29 +405,36 @@
 	});
 
 	// Detect probable duplicates by normalized roaster name (case-insensitive,
-	// stripped of common stopwords).
+	// stripped of common stopwords). Two-pass:
+	//   (a) "wired" dupes — rows whose `canonicalRoasterId` already points
+	//       at another row. Surfaced as a "duplicate of X" badge inline on
+	//       the card; not surfaced in the merge banner since the user has
+	//       already merged them.
+	//   (b) "candidate" dupes — rows that share a normalised name with
+	//       another row and have NOT been wired yet. These drive the
+	//       merge banner; pick the **most-recently-updated** as canonical
+	//       (per spec) so a fresh edit wins.
 	const dupes = $derived.by(() => {
-		const norm = (s: string) =>
-			s
-				.toLowerCase()
-				.replace(/\b(coffee|coffees|cafe|roasters?|roastery|company|the|and|&)\b/g, '')
-				.replace(/\s+/g, ' ')
-				.trim();
+		const norm = (s: string) => s.toLowerCase().trim();
 		const buckets = new Map<string, typeof allRoasters>();
 		for (const r of allRoasters) {
+			// Already-merged rows are tracked separately; skip them here so
+			// the banner only ever surfaces fresh candidates.
+			if (r.canonicalRoasterId) continue;
 			const key = norm(r.name);
 			if (!key) continue;
 			const arr = buckets.get(key) ?? [];
 			arr.push(r);
 			buckets.set(key, arr);
 		}
-		const result: { canonical: typeof allRoasters[number]; dupe: typeof allRoasters[number] }[] = [];
+		const result: {
+			canonical: (typeof allRoasters)[number];
+			dupe: (typeof allRoasters)[number];
+		}[] = [];
 		for (const arr of buckets.values()) {
 			if (arr.length < 2) continue;
-			// Canonical = roaster with the most beans; first one otherwise.
-			const beanCount = (r: typeof allRoasters[number]) =>
-				allBeans.filter((b) => b.roasterId === r.id).length;
-			const sorted = [...arr].sort((a, b) => beanCount(b) - beanCount(a));
+			// Canonical = most-recently-updated row (spec §6).
+			const sorted = [...arr].sort((a, b) => b.updatedAt - a.updatedAt);
 			const [canonical, ...rest] = sorted;
 			for (const dupe of rest) result.push({ canonical, dupe });
 		}
@@ -457,6 +474,12 @@
 	}
 	function gotoEdit(id: string): void {
 		goto(`/beans/${encodeURIComponent(id)}/edit`);
+	}
+	function gotoNewRoaster(): void {
+		goto('/beans/roasters/new');
+	}
+	function gotoEditRoaster(id: string): void {
+		goto(`/beans/roasters/${encodeURIComponent(id)}/edit`);
 	}
 	function setActive(id: string): void {
 		library.setActiveBean(id);
@@ -514,8 +537,10 @@
 		}
 		library.upsertRoaster({
 			...src,
-			id: `roaster:${crypto.randomUUID?.() ?? Math.random().toString(36).slice(2)}`,
+			id: mintRoasterId(),
 			name,
+			// A fresh clone is itself canonical; never inherit a merge link.
+			canonicalRoasterId: null,
 			visualizerId: null,
 			metadata: { ...src.metadata },
 			createdAt: Date.now(),
@@ -534,20 +559,30 @@
 	}
 
 	function editRoaster(id: string): void {
-		// No dedicated roaster editor route yet — open the first bag from
-		// that roastery in the bean editor as a temporary affordance. If
-		// the roaster has no bags, fall through silently.
-		const firstBag = allBeans.find((b) => b.roasterId === id);
-		if (firstBag) goto(`/beans/${encodeURIComponent(firstBag.id)}/edit`);
+		gotoEditRoaster(id);
 	}
 
+	/**
+	 * Merge two roaster rows. The `dupe` row is **not** deleted — it is
+	 * tagged with `canonicalRoasterId = canonical.id` so the directory
+	 * filters it out by default but the row is recoverable (the user can
+	 * flip "Show duplicates" on and un-merge). Beans pointing at the
+	 * dupe are re-pointed at the canonical row in the same pass so
+	 * nothing is left dangling.
+	 *
+	 * Per spec §6: canonical = most-recently-updated row (handled by
+	 * `dupes` upstream); merging both deduplicates the directory and
+	 * round-trips through Visualizer's `canonical_roaster_id` field on
+	 * the next sync push.
+	 */
 	function mergeRoaster(
 		canonical: (typeof allRoasters)[number],
 		dupe: (typeof allRoasters)[number]
 	): void {
+		const moveCount = allBeans.filter((b) => b.roasterId === dupe.id).length;
 		if (
 			!confirm(
-				`Move ${allBeans.filter((b) => b.roasterId === dupe.id).length} bag(s) from "${dupe.name}" to "${canonical.name}", then delete "${dupe.name}"?`
+				`Move ${moveCount} bag(s) from "${dupe.name}" to "${canonical.name}" and tag "${dupe.name}" as a duplicate of "${canonical.name}"?`
 			)
 		)
 			return;
@@ -556,7 +591,14 @@
 				library.updateBean(b.id, { roasterId: canonical.id });
 			}
 		}
-		library.deleteRoaster(dupe.id);
+		// Tag rather than delete — keeps Visualizer's `canonical_roaster_id`
+		// pointer alive and lets the user un-merge later.
+		library.updateRoaster(dupe.id, { canonicalRoasterId: canonical.id });
+	}
+
+	/** Un-merge a previously-merged dupe by clearing its canonical pointer. */
+	function unmergeRoaster(id: string): void {
+		library.updateRoaster(id, { canonicalRoasterId: null });
 	}
 
 	// Clicking outside the add-menu closes it. The SortPill owns its own
@@ -746,6 +788,20 @@
 				</button>
 			{/if}
 			<div class="bn-toolbar-r">
+				<!-- "Show duplicates" toggle — surfaces canonical-tagged rows in
+				     the directory so the user can inspect / un-merge them. Same
+				     visual treatment as `.bn-chip-clear` so the row stays light. -->
+				{#if allRoasters.some((r) => r.canonicalRoasterId != null)}
+					<button
+						class="bn-chip-clear bn-chip-toggle"
+						class:is-on={showDuplicates}
+						onclick={() => (showDuplicates = !showDuplicates)}
+						title={showDuplicates ? 'Hide merged duplicates' : 'Show merged duplicates'}
+					>
+						<i class={showDuplicates ? 'ph-fill ph-eye' : 'ph ph-eye-slash'}></i>
+						{showDuplicates ? 'Hide dupes' : 'Show dupes'}
+					</button>
+				{/if}
 				<SortPill
 					value={{ field: roasterSortField, direction: roasterSortDir }}
 					options={roasterSortOptions}
@@ -754,6 +810,16 @@
 						roasterSortDir = next.direction;
 					}}
 				/>
+				<!-- Primary CTA for the Roasters tab. Mirrors the Bags-tab "Add
+				     bean" split button's primary half so the two tabs offer the
+				     same shape of entry point. -->
+				<button
+					class="bn-btn bn-btn-primary"
+					onclick={gotoNewRoaster}
+					title="Create a new roaster"
+				>
+					<i class="ph ph-plus"></i> New roaster
+				</button>
 			</div>
 		{/if}
 	</div>
@@ -881,7 +947,7 @@
 							<div class="bn-merge-banner-sub">
 								{allBeans.filter((b) => b.roasterId === d.dupe.id).length} bag(s) from
 								{d.dupe.name}. Merging will move them to {d.canonical.name} and
-								delete the duplicate row.
+								tag the duplicate (it stays recoverable via "Show dupes").
 							</div>
 						</div>
 						<div class="bn-merge-banner-actions">
@@ -905,17 +971,85 @@
 				<div class="bn-roaster-grid">
 					{#each roasterRows as { roaster, count } (roaster.id)}
 						{@const mt = roasterMarkTone(roaster)}
-						<div class="bn-roaster-card">
+						{@const dupOf = roaster.canonicalRoasterId
+							? library.getRoaster(roaster.canonicalRoasterId)
+							: null}
+						{@const websiteDomain = (() => {
+							if (!roaster.website) return null;
+							try {
+								return new URL(roaster.website).hostname.replace(/^www\./, '');
+							} catch {
+								return roaster.website;
+							}
+						})()}
+						<div
+							class="bn-roaster-card"
+							class:is-dupe={roaster.canonicalRoasterId != null}
+						>
 							<div class="bn-roaster-card-row">
-								<div class="bn-roaster-mark" style="--tone: {mt.tone}">{mt.mark}</div>
+								<div class="bn-roaster-mark" style="--tone: {mt.tone}">
+									{#if roaster.imageUrl}
+										<!-- Logo: 40×40 thumbnail. `object-fit: cover` keeps a
+										     non-square logo from squashing; an `onerror`
+										     handler swaps in the deterministic mark when the
+										     URL is broken so the card never shows a sad-cloud
+										     glyph. The hidden `.bn-roaster-mono` sibling is
+										     what the error handler reveals (CSS-only fallback
+										     would require :not(:has(img)) which Safari ≤16
+										     does not support reliably). -->
+										<img
+											class="bn-roaster-logo"
+											src={roaster.imageUrl}
+											alt=""
+											onerror={(e) => {
+												const img = e.currentTarget as HTMLImageElement;
+												img.style.display = 'none';
+												const mark = img.nextElementSibling as HTMLElement | null;
+												if (mark) mark.style.display = 'flex';
+											}}
+										/>
+										<span class="bn-roaster-mono" style="display: none">
+											{mt.mark}
+										</span>
+									{:else}
+										<span class="bn-roaster-mono">{mt.mark}</span>
+									{/if}
+								</div>
 								<div class="bn-roaster-body">
-									<div class="bn-roaster-name">{roaster.name}</div>
-									<div class="bn-roaster-loc">{roaster.country || '—'}</div>
-									<div class="bn-roaster-meta">
-										{#if roaster.website}
-											<span class="bn-roaster-site">
-												<i class="ph ph-globe"></i>{roaster.website}
+									<div class="bn-roaster-name">
+										{roaster.name}
+										{#if dupOf}
+											<span
+												class="bn-roaster-dup-badge"
+												title="Tagged as a duplicate of {dupOf.name}"
+											>
+												duplicate of {dupOf.name}
 											</span>
+										{/if}
+									</div>
+									<div class="bn-roaster-loc">
+										{#if roaster.city && roaster.country}
+											{roaster.city} · {roaster.country}
+										{:else if roaster.city}
+											{roaster.city}
+										{:else if roaster.country}
+											{roaster.country}
+										{:else}
+											&mdash;
+										{/if}
+									</div>
+									<div class="bn-roaster-meta">
+										{#if websiteDomain && roaster.website}
+											<a
+												class="bn-roaster-site"
+												href={roaster.website}
+												target="_blank"
+												rel="noopener noreferrer"
+												onclick={(e) => e.stopPropagation()}
+												title={roaster.website}
+											>
+												<i class="ph ph-globe"></i>{websiteDomain}
+											</a>
 										{/if}
 										<span class="bn-roaster-count">
 											{count} bag{count === 1 ? '' : 's'}
@@ -924,6 +1058,23 @@
 								</div>
 							</div>
 							<div class="bn-roaster-actions">
+								{#if dupOf}
+									<!-- Un-merge button — only visible on dupe-tagged rows.
+									     Clearing the canonical pointer restores the row to
+									     the directory. -->
+									<button
+										type="button"
+										class="bn-tile-action-icon"
+										title="Un-merge (restore as standalone roaster)"
+										aria-label="Un-merge"
+										onclick={(e) => {
+											e.stopPropagation();
+											unmergeRoaster(roaster.id);
+										}}
+									>
+										<i class="ph ph-link-break"></i>
+									</button>
+								{/if}
 								<button
 									type="button"
 									class="bn-tile-action-icon"
@@ -939,9 +1090,8 @@
 								<button
 									type="button"
 									class="bn-tile-action-icon"
-									title={count > 0 ? 'Edit (opens first bag for now)' : 'No bags to edit'}
+									title="Edit"
 									aria-label="Edit"
-									disabled={count === 0}
 									onclick={(e) => {
 										e.stopPropagation();
 										editRoaster(roaster.id);
@@ -964,13 +1114,24 @@
 							</div>
 						</div>
 					{/each}
+
+					<!-- Trailing "+ New roaster" tile — mirrors the Bags-tab "+ Add
+					     a bean" dashed tile so the two directories share an
+					     identical entry-point shape. -->
+					<button class="bn-roaster-tile-new" onclick={gotoNewRoaster}>
+						<div class="bn-tile-new-glyph"><i class="ph ph-plus"></i></div>
+						<div class="bn-tile-new-label">New roaster</div>
+						<div class="bn-tile-new-sub">
+							Add a roastery before (or instead of) attaching it to a bag.
+						</div>
+					</button>
 				</div>
 				{#if roasterRows.length === 0}
 					<div class="bn-empty-filter">
 						<i class="ph-duotone ph-storefront" aria-hidden="true"></i>
 						<div>
 							{allRoasters.length === 0
-								? "No roasters yet. Add a bag — a roaster row is created when you type a roastery name."
+								? "No roasters yet. Click " + 'New roaster' + " to add one."
 								: 'No roasters match this region.'}
 						</div>
 					</div>
@@ -1603,6 +1764,15 @@
 		display: inline-flex;
 		align-items: center;
 		gap: 4px;
+		/* The website is now an anchor — strip the default underline so it
+		   reads like the rest of the meta row. Hover restores the underline
+		   to signal it's still a real link. */
+		color: rgba(var(--tint-rgb), 0.5);
+		text-decoration: none;
+	}
+	.bn-roaster-site:hover {
+		color: var(--copper-400);
+		text-decoration: underline;
 	}
 	.bn-roaster-site i {
 		font-size: 11px;
@@ -1610,5 +1780,96 @@
 	.bn-roaster-count {
 		font-family: var(--font-mono);
 		color: var(--copper-400);
+	}
+
+	/* Roaster logo + fallback mark. The logo fills the 48×48 mark slot
+	   when present; an `onerror` swap reveals the deterministic mark
+	   sibling. `.bn-roaster-mono` is the original glyph styling, kept
+	   under a class so the inline error handler can flip its display. */
+	.bn-roaster-logo {
+		width: 100%;
+		height: 100%;
+		object-fit: cover;
+		display: block;
+	}
+	.bn-roaster-mono {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 100%;
+		height: 100%;
+		color: #fff;
+		font-family: var(--font-serif);
+		font-weight: 500;
+		font-size: 22px;
+		letter-spacing: -0.02em;
+	}
+	.bn-roaster-mark {
+		overflow: hidden;
+	}
+
+	/* Inline "duplicate of X" badge. Sits next to the roaster name on
+	   merged rows; reused by the un-merge affordance to surface state. */
+	.bn-roaster-dup-badge {
+		display: inline-block;
+		margin-left: 6px;
+		padding: 1px 6px;
+		font-family: var(--font-sans);
+		font-size: 9px;
+		font-weight: 700;
+		letter-spacing: var(--track-allcaps);
+		text-transform: uppercase;
+		color: var(--warning);
+		background: rgba(var(--warning-rgb), 0.12);
+		border-radius: var(--radius-pill);
+		vertical-align: middle;
+	}
+	.bn-roaster-card.is-dupe {
+		opacity: 0.7;
+	}
+	.bn-roaster-card.is-dupe:hover {
+		opacity: 1;
+	}
+
+	/* Dashed "+ New roaster" tile at the end of the grid — mirrors the
+	   Bags-tab `.bn-tile-new` exactly. Sits inline in the grid so it
+	   reflows with the rest of the cards. */
+	.bn-roaster-tile-new {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		gap: 6px;
+		background: transparent;
+		border: 1px dashed rgba(var(--tint-rgb), 0.15);
+		border-radius: var(--radius-md);
+		color: var(--fg-1);
+		cursor: pointer;
+		min-height: 132px;
+		padding: 18px;
+		font-family: var(--font-sans);
+		transition: all var(--dur-1) var(--ease);
+	}
+	.bn-roaster-tile-new:hover {
+		border-color: var(--copper-400);
+		background: rgba(var(--copper-rgb), 0.03);
+	}
+	.bn-roaster-tile-new .bn-tile-new-label {
+		font-size: 13px;
+		font-weight: 600;
+	}
+	.bn-roaster-tile-new .bn-tile-new-sub {
+		font-size: 11px;
+		color: rgba(var(--tint-rgb), 0.5);
+		text-align: center;
+		max-width: 220px;
+		line-height: 1.4;
+	}
+
+	/* "Show dupes" toggle in the tab toolbar — reuses `.bn-chip-clear`
+	   geometry but adds an on-state colour so the active filter reads. */
+	.bn-chip-toggle.is-on {
+		color: var(--copper-400);
+		background: rgba(var(--copper-rgb), 0.08);
 	}
 </style>
