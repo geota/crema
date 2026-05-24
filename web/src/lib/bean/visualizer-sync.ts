@@ -285,11 +285,19 @@ export function beanFromWire(
 }
 
 export function roasterToWire(roaster: Roaster): RoasterWire {
+	// Tuck the Crema-only `city` field into the metadata escape valve.
+	// Visualizer's `RoasterWire` does not (yet) model `metadata`, so we
+	// can't push the city as an extension key on the parent body — for
+	// the moment we round-trip it through the roaster's own `metadata`
+	// blob when (and if) Visualizer adds the field. Until then, `city`
+	// stays local. This keeps the wire shape strict and the round-trip
+	// non-lossy for the fields Visualizer does model.
 	return {
 		id: roaster.visualizerId ?? undefined,
 		name: roaster.name,
 		website: roaster.website,
-		image_url: null
+		image_url: roaster.imageUrl,
+		canonical_roaster_id: roaster.canonicalRoasterId
 	};
 }
 
@@ -297,6 +305,8 @@ export function roasterFromWire(wire: RoasterWire): Roaster {
 	const r = blankRoaster(wire.name);
 	r.visualizerId = wire.id ?? null;
 	r.website = wire.website ?? null;
+	r.imageUrl = wire.image_url ?? null;
+	r.canonicalRoasterId = wire.canonical_roaster_id ?? null;
 	return r;
 }
 
@@ -454,10 +464,15 @@ export async function runSync(library: BeanLibraryStore): Promise<SyncResult> {
 			const localById = library.roasters.find((r) => r.visualizerId === wire.id);
 			const localByName = localById ?? library.findRoasterByName(wire.name);
 			if (localById) {
-				// Remote wins on conflict.
+				// Remote wins on conflict. Pull the full mirrored field set
+				// (name + website + the three roaster-CRUD extension fields)
+				// rather than the prior partial patch so locally-edited
+				// duplicates / logos / city snap to whatever the remote holds.
 				library.updateRoaster(localById.id, {
 					name: wire.name,
 					website: wire.website ?? null,
+					imageUrl: wire.image_url ?? null,
+					canonicalRoasterId: wire.canonical_roaster_id ?? null,
 					visualizerId: wire.id
 				});
 				remoteRoasterIdToLocal.set(wire.id, localById.id);
