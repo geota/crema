@@ -20,6 +20,7 @@
 	 * design's tile + drawer + dedicated editor route replaces it.
 	 */
 	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import {
 		getBeanStore,
 		bagState,
@@ -41,7 +42,14 @@
 
 	// ── UI state ───────────────────────────────────────────────────────
 	type Tab = 'bags' | 'roasters';
-	let tab = $state<Tab>('bags');
+	// Initial tab honours `?tab=roasters` so return paths from
+	// `/beans/roasters/new` and `/beans/roasters/[id]/edit` land on the
+	// Roasters tab instead of defaulting back to Bags. Read once at mount
+	// time — once the user clicks a tab the local state takes over and the
+	// URL is no longer consulted (avoids fighting an `$effect` loop).
+	let tab = $state<Tab>(
+		page.url.searchParams.get('tab') === 'roasters' ? 'roasters' : 'bags'
+	);
 
 	type StatusFilter =
 		| 'all'

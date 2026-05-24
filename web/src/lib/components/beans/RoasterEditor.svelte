@@ -127,12 +127,15 @@
 			};
 			library.upsertRoaster(persisted);
 		}
-		// Live mode already saved each patch — just bounce back.
-		goto('/beans');
+		// Live mode already saved each patch — just bounce back. The
+		// `?tab=roasters` query keeps the Roasters tab pinned on return so
+		// the user lands where they came from rather than getting bumped
+		// to the Bags tab.
+		goto('/beans?tab=roasters');
 	}
 
 	function back(): void {
-		goto('/beans');
+		goto('/beans?tab=roasters');
 	}
 
 	function discard(): void {
@@ -160,7 +163,7 @@
 		)
 			return;
 		library.deleteRoaster(current.id);
-		goto('/beans');
+		goto('/beans?tab=roasters');
 	}
 </script>
 
