@@ -38,6 +38,8 @@ import { readJson, writeJson } from '$lib/utils/storage';
 import {
 	isConnected,
 	NotAuthenticatedError,
+	signatureForBean,
+	signatureForRoaster,
 	withFreshToken
 } from '$lib/visualizer';
 import {
@@ -495,11 +497,25 @@ export async function runSync(library: BeanLibraryStore): Promise<SyncResult> {
 		}
 		// Build a remote-id → local-id lookup.
 		const remoteRoasterIdToLocal = new Map<string, string>();
-		// First pass: reconcile by visualizer id, then by name.
+		// First pass: reconcile by visualizer id, then by signature, then by
+		// name. Signature binding (docs/36 §3) catches the case where the
+		// user created the same roaster on two devices pre-sign-in — both
+		// rows have null visualizerId locally, identical normalised names,
+		// so the signature collision means we should bind to the remote
+		// rather than create a duplicate row.
 		for (const wire of remoteRoasters) {
 			if (!wire.id) continue;
+			const wireSig = signatureForRoaster({ name: wire.name });
 			const localById = library.roasters.find((r) => r.visualizerId === wire.id);
-			const localByName = localById ?? library.findRoasterByName(wire.name);
+			const localBySig =
+				localById ??
+				library.roasters.find(
+					(r) =>
+						r.visualizerId === null &&
+						r.deletedAt == null &&
+						signatureForRoaster({ name: r.name }) === wireSig
+				);
+			const localByName = localBySig ?? library.findRoasterByName(wire.name);
 			if (localById) {
 				// Remote wins on conflict. Pull the full mirrored field set
 				// (name + website + the three roaster-CRUD extension fields)
@@ -611,16 +627,36 @@ export async function runSync(library: BeanLibraryStore): Promise<SyncResult> {
 			page += 1;
 		}
 		// Map by Crema id (stored in metadata.crema.crema_id) → local row.
+		// Falls back to signatureForBean (docs/36 §3) when neither the
+		// remote-id nor the crema_id round-trip yields a hit — same
+		// rationale as the roaster pass above.
 		const localBeans = library.beans;
 		for (const wire of remoteBags) {
 			const decoded = beanFromWire(wire, (rid) =>
 				rid ? (remoteRoasterIdToLocal.get(rid) ?? null) : null
 			);
-			const existing = localBeans.find(
-				(b) =>
-					(decoded.visualizerId && b.visualizerId === decoded.visualizerId) ||
-					b.id === decoded.id
-			);
+			const decodedSig = signatureForBean({
+				name: decoded.name,
+				roasterName:
+					(decoded.roasterId && library.getRoaster(decoded.roasterId)?.name) ?? null,
+				roastedOn: decoded.roastedOn
+			});
+			const existing =
+				localBeans.find(
+					(b) =>
+						(decoded.visualizerId && b.visualizerId === decoded.visualizerId) ||
+						b.id === decoded.id
+				) ??
+				localBeans.find(
+					(b) =>
+						b.visualizerId === null &&
+						b.deletedAt == null &&
+						signatureForBean({
+							name: b.name,
+							roasterName: (b.roasterId && library.getRoaster(b.roasterId)?.name) ?? null,
+							roastedOn: b.roastedOn
+						}) === decodedSig
+				);
 			if (existing) {
 				// Last-write-wins: remote wins per coordinator direction.
 				library.replaceBean({ ...decoded, id: existing.id });
