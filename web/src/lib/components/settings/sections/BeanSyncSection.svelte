@@ -310,7 +310,17 @@
 			{/snippet}
 			{#snippet hint()}
 				{#if premiumLocked}
-					<span class="bs-hint-dim">Backup / Two-way need Visualizer Premium.</span>
+					<span
+						class="bs-hint-dim bs-hint-premium"
+						title="Visualizer Premium required for push. Upgrade at visualizer.coffee/premium."
+					>
+						<i class="ph ph-lock-key" aria-hidden="true"></i>
+						<a
+							href="https://visualizer.coffee/premium"
+							target="_blank"
+							rel="noopener noreferrer"
+						>Visualizer Premium required for push.</a>
+					</span>
 				{/if}
 			{/snippet}
 		</StRow>
@@ -328,7 +338,17 @@
 			{/snippet}
 			{#snippet hint()}
 				{#if premiumLocked}
-					<span class="bs-hint-dim">Backup / Two-way need Visualizer Premium.</span>
+					<span
+						class="bs-hint-dim bs-hint-premium"
+						title="Visualizer Premium required for push. Upgrade at visualizer.coffee/premium."
+					>
+						<i class="ph ph-lock-key" aria-hidden="true"></i>
+						<a
+							href="https://visualizer.coffee/premium"
+							target="_blank"
+							rel="noopener noreferrer"
+						>Visualizer Premium required for push.</a>
+					</span>
 				{/if}
 			{/snippet}
 		</StRow>
@@ -412,7 +432,7 @@
 				— your library will pick up remote changes on every sync. Shots are
 				unrestricted.
 				<a
-					href="https://visualizer.coffee/upgrade"
+					href="https://visualizer.coffee/premium"
 					target="_blank"
 					rel="noopener noreferrer"
 				>
@@ -462,6 +482,24 @@
 		font-family: var(--font-sans);
 		font-size: 11px;
 		color: rgba(var(--tint-rgb), 0.45);
+	}
+	.bs-hint-premium {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+	}
+	.bs-hint-premium i {
+		font-size: 12px;
+		opacity: 0.7;
+	}
+	.bs-hint-premium a {
+		color: rgba(var(--tint-rgb), 0.55);
+		text-decoration: underline;
+		text-decoration-color: rgba(var(--tint-rgb), 0.2);
+	}
+	.bs-hint-premium a:hover {
+		color: var(--copper-400);
+		text-decoration-color: var(--copper-400);
 	}
 	.bs-premium {
 		grid-column: 1 / -1;

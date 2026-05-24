@@ -601,6 +601,23 @@ export async function runSync(library: BeanLibraryStore): Promise<SyncResult> {
 
 		// 2) Push every local roaster that has no visualizer id. Premium-gated.
 		let premiumLocked = settings.premium === false;
+		// Track whether we've already emitted the "downshift to read-only"
+		// banner entry; we only want one regardless of how many writes 403.
+		let premiumBannerLogged = settings.premium === false;
+		const logPremiumBannerOnce = (): void => {
+			if (premiumBannerLogged) return;
+			premiumBannerLogged = true;
+			log.push({
+				direction: 'skip',
+				kind: 'bean',
+				id: '',
+				name: 'Premium required',
+				at: Date.now(),
+				error:
+					'Premium required — beans + roasters disabled from push. ' +
+					'Upgrade at visualizer.coffee/premium.'
+			});
+		};
 		for (const local of library.roasters) {
 			if (local.visualizerId) continue;
 			if (premiumLocked) {
@@ -637,6 +654,7 @@ export async function runSync(library: BeanLibraryStore): Promise<SyncResult> {
 				if (e instanceof VisualizerError && e.kind === 'premium') {
 					premiumLocked = true;
 					writeSyncSettings({ premium: false });
+					logPremiumBannerOnce();
 					log.push({
 						direction: 'skip',
 						kind: 'roaster',
@@ -776,6 +794,7 @@ export async function runSync(library: BeanLibraryStore): Promise<SyncResult> {
 					if (e instanceof VisualizerError && e.kind === 'premium') {
 						premiumLocked = true;
 						writeSyncSettings({ premium: false });
+						logPremiumBannerOnce();
 						log.push({
 							direction: 'skip',
 							kind: 'bean',
@@ -814,6 +833,7 @@ export async function runSync(library: BeanLibraryStore): Promise<SyncResult> {
 					if (e instanceof VisualizerError && e.kind === 'premium') {
 						premiumLocked = true;
 						writeSyncSettings({ premium: false });
+						logPremiumBannerOnce();
 					}
 					log.push({
 						direction: 'skip',
