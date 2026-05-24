@@ -14,11 +14,15 @@ import type { StoredShot } from '$lib/history/model';
 /**
  * The fields we read from a remote shot row. Visualizer's API returns a
  * superset; we only care about identity + the de-dup hash inputs +
- * editable annotations.
+ * editable annotations. This shape is Crema-internal: it's BUILT from
+ * `components['schemas']['ShotSummary']` + `components['schemas']['ShotDetail']`
+ * (see `wireShotFromDetail` in `shot-sync.ts`) and uses unix
+ * MILLISECONDS so it lines up with Crema's `StoredShot.completedAt`.
+ * Visualizer itself wires unix SECONDS — we convert at the boundary.
  */
 export interface WireShot {
 	id: string;
-	/** Unix epoch ms when the shot was pulled. */
+	/** Shot start timestamp, unix MS (converted from spec's unix-sec `clock`). */
 	clock: number;
 	/** Total shot duration, milliseconds. */
 	duration_ms: number;
@@ -29,8 +33,11 @@ export interface WireShot {
 	/** Annotations the user has typed remotely. */
 	notes: string | null;
 	rating: number | null;
-	/** Last server-side update — drives LWW conflict resolution. */
-	updated_at: string | null;
+	/**
+	 * Last server-side update, unix MS (converted from the spec's unix-sec
+	 * `updated_at`). Drives LWW conflict resolution.
+	 */
+	updated_at_ms: number | null;
 }
 
 /** One reconciliation outcome — what to do with a remote row. */

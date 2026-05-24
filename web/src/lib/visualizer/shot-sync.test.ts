@@ -59,7 +59,7 @@ function wire(over: Partial<WireShot> = {}): WireShot {
 		final_weight_g: 36,
 		notes: null,
 		rating: null,
-		updated_at: null,
+		updated_at_ms: null,
 		...over
 	};
 }
