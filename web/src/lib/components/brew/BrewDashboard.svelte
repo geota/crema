@@ -51,8 +51,6 @@
 	import QuickSheet from './QuickSheet.svelte';
 	import LastShotCard from './LastShotCard.svelte';
 	import PowerButton from '$lib/components/PowerButton.svelte';
-	import BeanStrip from '$lib/components/beans/BeanStrip.svelte';
-	import { getBeanStore, type Bean } from '$lib/bean';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 
@@ -297,21 +295,6 @@
 	/** The real pinned profiles, shown as favorite chips in the Quick Sheet. */
 	const pinnedProfiles = $derived(profileStore.all.filter((p) => p.pinned));
 
-	// ── Bean library — drives the picker strip on the dashboard ──────────
-	/** The shared library store. */
-	const beanLibrary = getBeanStore();
-	/** The favourited (pinned) bags shown in the BeanStrip. */
-	const pinnedBeans = $derived(
-		beanLibrary.beans.filter((b) => b.favourite && b.archivedAt == null)
-	);
-	/** Every roaster row so the strip can render `Roaster · Bag` per chip. */
-	const allRoasters = $derived(beanLibrary.roasters);
-	/** The currently-selected bean id. */
-	const activeBeanId = $derived(beanLibrary.activeBeanId);
-
-	function selectBean(bean: Bean): void {
-		beanLibrary.setActiveBean(bean.id);
-	}
 	/** The profile marked active on the Profiles page, or `undefined`. */
 	const activeProfile = $derived(
 		profileStore.activeId ? profileStore.get(profileStore.activeId) : undefined
@@ -966,21 +949,6 @@
 			</div>
 		</div>
 
-		<!-- Bean strip — favourited bags from the library; tap to switch
-		     the active bean. Mirrors the FavoritesStrip idiom for profiles
-		     (docs/28 §UX §brew-page-integration). Hides itself entirely
-		     while the Quick Sheet is open to keep the dashboard quiet. -->
-		{#if !quickSheetOpen}
-			<div class="crema-bean-strip">
-				<BeanStrip
-					beans={pinnedBeans}
-					roasters={allRoasters}
-					{activeBeanId}
-					onSelect={selectBean}
-				/>
-			</div>
-		{/if}
-
 		<!-- Main grid: timer + targets | readouts + chart -->
 		<div class="crema-dash-main">
 			<div class="crema-dash-timercol">
@@ -1227,12 +1195,7 @@
 	.crema-chart {
 		cursor: crosshair;
 	}
-	/* Bean picker strip — same horizontal-padding rhythm as the rest of
-	   the dashboard, sits just below the profile header. */
-	.crema-bean-strip {
-		padding: 0 var(--page-pad-x) 8px;
-	}
-	/* Coffee-button sync state — visually mirrors the profile-sync chip
+/* Coffee-button sync state — visually mirrors the profile-sync chip
 	   in the header (subtle copper hue, spinning icon) so the same
 	   sync event reads identically wherever it appears. The button
 	   keeps its copper hue to remain "the shot control"; only the
