@@ -334,20 +334,19 @@ export function resolveGrinderModel(
 /**
  * Resolve the `coffee_bag_id` link pointer for a shot's post-upload
  * PATCH. Per docs/28 §"Bean ↔ shot association", the snapshot is the
- * content source of truth — but the bag's *Visualizer id* is a mutable
- * link the user may not have synced until *after* the shot was pulled.
- * So the snapshot's own `visualizerId` (captured at completion if
- * known) wins, falling back to the live bean's `visualizerId` only when
- * the snapshot didn't capture one.
+ * content source of truth — but the bag's *Visualizer id* is a stable
+ * mutable link not part of the shot's content, so we read it from the
+ * LIVE bean every time. The snapshot's `beanId` is the FK we look up
+ * against the bean library.
  *
  * This is THE ONLY place the live bean is read on the upload path —
- * everywhere else we deliberately stick to the snapshot so a later edit
- * can't rewrite history.
+ * everywhere else we deliberately stick to the snapshot so a later
+ * content edit can't rewrite history. The link is intentionally
+ * never snapshotted: a bag synced to Visualizer *after* the shot was
+ * pulled would otherwise be unreachable from the older shot.
  */
 function resolveCoffeeBagId(shot: StoredShot): string | null {
-	const snapshot = shot.bean ?? null;
-	if (snapshot?.visualizerId) return snapshot.visualizerId;
-	const liveBeanId = snapshot?.beanId ?? null;
+	const liveBeanId = shot.bean?.beanId ?? null;
 	if (!liveBeanId) return null;
 	try {
 		const liveBean = getBeanStore().getBean(liveBeanId);
@@ -359,34 +358,28 @@ function resolveCoffeeBagId(shot: StoredShot): string | null {
 
 /**
  * Resolve the shot's `tag_list` for the post-upload PATCH. Per docs/38
- * row 5, we auto-tag uploaded shots with the union of:
- *   1. {@link StoredShot.tags} — shot-level tags, pulled-back from a
- *      previous Visualizer sync or set by the user explicitly.
- *   2. `shot.bean.tags` — the bean's tags at shot-completion time (the
- *      frozen snapshot — NOT the live bean).
+ * row 5 we auto-tag uploaded shots with {@link StoredShot.tags} — the
+ * single source of truth for shot-level tags. Bean tags get folded into
+ * this list at completion time (and at retroactive rebind time via
+ * `HistoryStore.setBeanFromLive`), so there's no second source to merge.
  *
- * Dedup is case-sensitive, preserves first-seen order, and trims each
- * entry (mirrors the `TagInput.commit` "trim + already-includes"
- * pattern in `$lib/components/profiles/TagInput.svelte`).
+ * Trim + dedup (case-sensitive, preserve first-seen order) mirror the
+ * `TagInput.commit` "trim + already-includes" pattern in
+ * `$lib/components/profiles/TagInput.svelte`.
  *
- * Returns `null` when the union is empty so the caller can skip the
+ * Returns `null` when the list is empty so the caller can skip the
  * `tag_list` field entirely — sending `[]` would clobber any tags the
  * user added on Visualizer's web side.
  */
 function resolveTagList(shot: StoredShot): string[] | null {
 	const merged: string[] = [];
 	const seen = new Set<string>();
-	const pushAll = (src: readonly string[] | undefined): void => {
-		if (!src) return;
-		for (const raw of src) {
-			const t = raw.trim();
-			if (!t || seen.has(t)) continue;
-			seen.add(t);
-			merged.push(t);
-		}
-	};
-	pushAll(shot.tags);
-	pushAll(shot.bean?.tags);
+	for (const raw of shot.tags ?? []) {
+		const t = raw.trim();
+		if (!t || seen.has(t)) continue;
+		seen.add(t);
+		merged.push(t);
+	}
 	return merged.length > 0 ? merged : null;
 }
 

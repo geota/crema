@@ -13,7 +13,8 @@ export {
 	shotId,
 	ratioLabel,
 	stars,
-	shotFilename
+	shotFilename,
+	snapshotFromBean
 } from './model';
 
 export {

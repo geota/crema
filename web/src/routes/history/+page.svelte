@@ -19,6 +19,7 @@
 	 * **Stubbed** — Export, Compare and Save-as-profile are `// TODO`s.
 	 */
 	import { getHistoryStore, exportStoredShotAsV2Json, shotFilename } from '$lib/history';
+	import type { StoredShot } from '$lib/history';
 	import { ShotRow, ShotDetail, CompareOverlay } from '$lib/components/history';
 	import { getCremaAppContext } from '$lib/shell/app-context';
 	import { getSettingsStore, convertWeight } from '$lib/settings';
@@ -26,6 +27,8 @@
 	import { downloadBlob, filenameStamp } from '$lib/utils/download';
 	import { zip as fflateZip, strToU8 } from 'fflate';
 	import FilterPills from '$lib/components/shared/FilterPills.svelte';
+	import SortPill from '$lib/components/shared/SortPill.svelte';
+	import { getBeanStore } from '$lib/bean';
 	import {
 		appendSyncLog,
 		directionPushes,
@@ -41,6 +44,27 @@
 	const store = getHistoryStore();
 	const appCtx = getCremaAppContext();
 	const settings = getSettingsStore();
+	const beanLibrary = getBeanStore();
+
+	/**
+	 * Resolve a shot's effective tag list for filter facets / matching.
+	 * Reads `shot.tags` first (the persisted single-source-of-truth),
+	 * then falls back to the live bean's tags via the snapshot's
+	 * `beanId` FK. Historical shots that completed before bean tags
+	 * propagated to `shot.tags` (and shots whose bean tags were edited
+	 * later) still surface their bean tags in the /history filter —
+	 * read-only, no persistence side effect.
+	 *
+	 * Live-bean lookup is acceptable here ONLY because this is a pure
+	 * UI filter — it never writes the result back into the snapshot,
+	 * so a later bean rename / retag doesn't rewrite history.
+	 */
+	function effectiveShotTags(shot: StoredShot): readonly string[] {
+		if (shot.tags && shot.tags.length > 0) return shot.tags;
+		const beanId = shot.bean?.beanId ?? null;
+		if (!beanId) return [];
+		return beanLibrary.getBean(beanId)?.tags ?? [];
+	}
 
 	/**
 	 * Outcome of the most recent import — `null` when no import has been
@@ -264,6 +288,29 @@
 		}
 	}
 
+	// ── Sort state ───────────────────────────────────────────────────────
+	type SortField = 'completedAt' | 'rating' | 'profileName' | 'beanName';
+	type SortDir = 'asc' | 'desc';
+	let sortField = $state<SortField>('completedAt');
+	let sortDir = $state<SortDir>('desc');
+	const sortOptions: { field: SortField; label: string; icon: string }[] = [
+		{ field: 'completedAt', label: 'Date', icon: 'calendar' },
+		{ field: 'rating', label: 'Rating', icon: 'star' },
+		{ field: 'profileName', label: 'Profile', icon: 'circle' },
+		{ field: 'beanName', label: 'Bean', icon: 'coffee' }
+	];
+	/**
+	 * Default direction per field so a fresh pick lands on the obvious
+	 * choice — newest-first for date, highest-first for rating, a-z for
+	 * the strings — instead of inheriting the previous field's direction.
+	 */
+	const DEFAULT_DIR: Record<SortField, SortDir> = {
+		completedAt: 'desc',
+		rating: 'desc',
+		profileName: 'asc',
+		beanName: 'asc'
+	};
+
 	// ── Filter / search state ────────────────────────────────────────────
 	/** The search query. */
 	let q = $state('');
@@ -292,11 +339,15 @@
 	 * Distinct tags across the history, counted, sorted by frequency
 	 * then alphabetically. Drives the tag-pill facets in the filter
 	 * rail. Mirrors `/beans` `tagFacets` so the visual rhythm matches.
+	 *
+	 * Reads through `effectiveShotTags` so shots that pre-date the
+	 * bean→shot tag copy (and the rare retroactive bean retag) still
+	 * surface their bean's tags in the facet list.
 	 */
 	const tagFacets = $derived.by(() => {
 		const m = new Map<string, number>();
 		for (const s of shots) {
-			for (const t of s.tags ?? []) m.set(t, (m.get(t) ?? 0) + 1);
+			for (const t of effectiveShotTags(s)) m.set(t, (m.get(t) ?? 0) + 1);
 		}
 		return [...m.entries()]
 			.map(([tag, count]) => ({ tag, count }))
@@ -371,12 +422,14 @@
 		const query = q.trim().toLowerCase();
 		// The "Last 30 days" range cuts off shots older than the window.
 		const cutoff = range === '30d' ? Date.now() - 30 * dayMs : null;
-		return shots.filter((s) => {
+		const base = shots.filter((s) => {
 			if (cutoff != null && s.completedAt < cutoff) return false;
 			if (filterProfile !== 'all' && s.profileName !== filterProfile) return false;
 			// AND semantics — a shot must carry every selected tag.
+			// Pulls through `effectiveShotTags` so legacy / retroactive
+			// bean tags filter just like persisted shot tags.
 			if (selectedTags.length > 0) {
-				const shotTags = s.tags ?? [];
+				const shotTags = effectiveShotTags(s);
 				for (const t of selectedTags) {
 					if (!shotTags.includes(t)) return false;
 				}
@@ -385,9 +438,41 @@
 			return (
 				(s.profileName ?? '').toLowerCase().includes(query) ||
 				s.notes.toLowerCase().includes(query) ||
-				(s.tags ?? []).some((t) => t.toLowerCase().includes(query))
+				effectiveShotTags(s).some((t) => t.toLowerCase().includes(query))
 			);
 		});
+		// Sort AFTER filtering. The default `recent / desc` reproduces the
+		// store's native newest-first order; flipping to `asc` reverses;
+		// other fields stable-sort within the filtered subset.
+		const dir = sortDir === 'asc' ? 1 : -1;
+		const cmpStr = (a: string | null, b: string | null): number => {
+			const ax = (a ?? '').toLowerCase();
+			const bx = (b ?? '').toLowerCase();
+			return ax < bx ? -1 : ax > bx ? 1 : 0;
+		};
+		const cmpNum = (a: number, b: number): number => a - b;
+		const arr = [...base];
+		arr.sort((a, b) => {
+			let k = 0;
+			switch (sortField) {
+				case 'completedAt':
+					k = cmpNum(a.completedAt, b.completedAt);
+					break;
+				case 'rating':
+					k = cmpNum(a.rating, b.rating);
+					break;
+				case 'profileName':
+					k = cmpStr(a.profileName, b.profileName);
+					break;
+				case 'beanName':
+					k = cmpStr(a.bean?.type ?? null, b.bean?.type ?? null);
+					break;
+			}
+			// Tie-break on completedAt desc so equal-keyed rows stay
+			// chronologically ordered (newest-first) within their bucket.
+			return k * dir || b.completedAt - a.completedAt;
+		});
+		return arr;
 	});
 
 	/** The selected shot record — the first filtered shot when none is picked. */
@@ -684,7 +769,9 @@
 			</div>
 		</div>
 
-		<!-- Filter strip -->
+		<!-- Filter strip — pills on the left, clear-tags chip + range
+		     + SortPill on the right. Layout mirrors /profiles and /beans
+		     so the visual rhythm matches across the three library pages. -->
 		<div class="hi-filters">
 			<div class="hi-prof-filters">
 				<FilterPills pills={filterPills} onclick={onFilterPillClick} />
@@ -698,7 +785,7 @@
 					<i class="ph ph-x"></i> Clear tags
 				</button>
 			{/if}
-			<div class="pp-sort">
+			<div class="pp-sort hi-range">
 				<span class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.45)">Range</span>
 				<button
 					class="pp-sort-opt"
@@ -710,6 +797,25 @@
 					class:is-active={range === 'all'}
 					onclick={() => (range = 'all')}>All time</button
 				>
+			</div>
+			<div class="pp-sort">
+				<SortPill
+					value={{ field: sortField, direction: sortDir }}
+					options={sortOptions}
+					onchange={(next) => {
+						const previousField = sortField;
+						sortField = next.field as SortField;
+						// Picking a NEW field reapplies that field's default
+						// direction so e.g. "Bean" defaults to A→Z instead of
+						// inheriting the previous field's descending preference.
+						// Flipping direction on the same field threads through.
+						if (next.field !== previousField) {
+							sortDir = DEFAULT_DIR[next.field as SortField] ?? next.direction;
+						} else {
+							sortDir = next.direction;
+						}
+					}}
+				/>
 			</div>
 		</div>
 
@@ -797,6 +903,9 @@
 						onRatingChange={(rating) => store.setRating(selected.id, rating)}
 						onGrinderModelChange={(grinderModel) =>
 							store.setGrinderModel(selected.id, grinderModel)}
+						onTagsChange={(tags) => store.setTags(selected.id, tags)}
+						onBeanChange={(bean, roaster) =>
+							store.setBeanFromLive(selected.id, bean, roaster)}
 					/>
 				{/key}
 			{:else}

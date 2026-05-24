@@ -17,6 +17,7 @@
  * `StoredShot` on both halves of the split.
  */
 
+import type { Bean, Roaster } from '$lib/bean';
 import type { TelemetrySample } from '$lib/state';
 import { filenameStamp } from '$lib/utils/download';
 import { formatRatio } from '$lib/utils/ratio';
@@ -31,12 +32,23 @@ import { formatRatio } from '$lib/utils/ratio';
  * **Snapshot semantics (docs/28 §"Bean ↔ shot association").** Every field
  * here is the bean's *frozen-at-completion* value — the shot's content source
  * of truth. The bean library's live row (looked up via {@link beanId}) is
- * used ONLY as a link pointer (e.g. wiring `coffee_bag_id` on Visualizer when
- * the live bean has a `visualizerId` but the snapshot didn't capture one).
+ * used ONLY as a link pointer (e.g. wiring `coffee_bag_id` on Visualizer —
+ * the live `Bean.visualizerId` is the link, never snapshotted into history).
  * Reading live-bean content for the shot would retroactively rewrite history
  * — renaming a bag would silently rewrite every past shot's display name, the
  * exact failure mode Beanconqueror has and docs/28 calls out as the reason
  * Crema picked snapshots.
+ *
+ * `visualizerId` is deliberately NOT carried here — Visualizer ids are
+ * stable once assigned, so reading the live bean for the `coffee_bag_id`
+ * link is correct (and is the one place upload-time live-bean lookup is
+ * legitimate). Snapshotting it would leak the link into the snapshot
+ * layer for no gain.
+ *
+ * `tags` is deliberately NOT carried here either — bean tags at completion
+ * time are copied straight into {@link StoredShot.tags} so there's one
+ * source of truth for shot-level tags. The completion-time copy lives in
+ * `app.svelte.ts`'s `ShotCompleted` handler.
  */
 export interface ShotBean {
 	/**
@@ -46,11 +58,12 @@ export interface ShotBean {
 	 * resolve a click-through to the bean detail; an archived / deleted bag
 	 * falls back to the snapshot strings.
 	 *
-	 * NOTE: this is the ONLY field that may legitimately resolve to the live
-	 * bean — and only for the `Bean.visualizerId` link pointer (the visualizer
-	 * uploader uses it as a fallback for `coffee_bag_id` when the snapshot's
-	 * own {@link visualizerId} wasn't captured at shot time, because the bag
-	 * may have been pushed to Visualizer *after* the shot was pulled).
+	 * Also the live-lookup key for {@link
+	 * $lib/visualizer/shot-sync.resolveCoffeeBagId} (which reads the live
+	 * `Bean.visualizerId` as the upload's `coffee_bag_id` link pointer)
+	 * and for the /history tag-filter live-fallback (so historical shots
+	 * pulled before the bean→shot tag copy still see their bean's tags
+	 * in the filter facets).
 	 */
 	readonly beanId?: string | null;
 	/** The roastery when the shot was pulled (Visualizer `bean_brand`). */
@@ -76,21 +89,36 @@ export interface ShotBean {
 	 * — not in scope here. Only the bean-scoped click setting rides today.
 	 */
 	readonly grinderSetting?: string;
-	/**
-	 * The bean's tags at shot-completion time — `["daily-driver", "comp"]`.
-	 * Optional — legacy snapshots without this field deserialise cleanly.
-	 * Folded into the shot's `tag_list` on upload alongside any
-	 * {@link StoredShot.tags} (shot-level tags pulled back from Visualizer).
-	 */
-	readonly tags?: readonly string[];
-	/**
-	 * Visualizer `coffee_bag_id` at shot-completion time, if the bean had
-	 * already been synced to Visualizer when the shot was pulled. Optional —
-	 * shots pulled before the bag was synced have none, and the uploader
-	 * falls back to the live bean's `visualizerId` for the *link pointer*
-	 * (this one field — content stays snapshot-authoritative).
-	 */
-	readonly visualizerId?: string;
+}
+
+/**
+ * Snapshot a live {@link Bean} (+ its resolved roaster) into the
+ * {@link ShotBean} content shape. The ONE canonical helper used at both
+ * shot-completion time (`app.svelte.ts`'s `ShotCompleted` handler) and
+ * retroactive bean-rebind time (`HistoryStore.setBean`) so the snapshot
+ * shape can never drift between the two call sites.
+ *
+ * Returns `null` when `bean` is null/undefined — the call sites then
+ * persist `shot.bean = null` (a bean-less shot).
+ *
+ * Optional fields (`notes`, `grinderSetting`) are omitted from the
+ * literal when their source is empty so the persisted record stays
+ * minimal (matches the original capture-site assembly).
+ */
+export function snapshotFromBean(
+	bean: Bean | null | undefined,
+	roaster: Roaster | null | undefined
+): ShotBean | null {
+	if (!bean) return null;
+	return {
+		beanId: bean.id,
+		roaster: roaster?.name.trim() ?? '',
+		type: bean.name.trim(),
+		roastedOn: bean.roastedOn,
+		roastLevel: bean.roastLevel,
+		...(bean.notes ? { notes: bean.notes } : {}),
+		...(bean.grinderSetting ? { grinderSetting: bean.grinderSetting } : {})
+	};
 }
 
 /** A short id for a stored shot — `crypto.randomUUID` if present. */

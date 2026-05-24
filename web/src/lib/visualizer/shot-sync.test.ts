@@ -611,26 +611,25 @@ describe('inlineBeanPatch', () => {
 		assert.deepEqual(inlineBeanPatch(bean), { roast_date: '2026-05-08' });
 	});
 
-	it('does NOT include visualizerId / tags / beanId — those route through coffee_bag_id + tag_list', () => {
-		// The snapshot's visualizerId is a *link pointer* — it rides on
-		// `coffee_bag_id` via `resolveCoffeeBagId`, not in the inline
-		// bean block. Same for `tags` (folded into `tag_list`) and
-		// `beanId` (FK into the local library, never serialised).
+	it('does NOT include beanId — that is the FK into the local library, never serialised', () => {
+		// The snapshot's `beanId` is a local-library foreign key — it
+		// routes through `coffee_bag_id` via `resolveCoffeeBagId` (which
+		// reads the LIVE bean's `visualizerId`), never inlined directly.
+		// Tags + the visualizer link are no longer carried on the snapshot
+		// at all (tags live on `StoredShot.tags`; visualizer id is resolved
+		// live every upload).
 		const bean: ShotBean = {
 			beanId: 'bean:xyz',
 			roaster: 'R',
 			type: 'T',
 			roastedOn: null,
-			roastLevel: null,
-			tags: ['daily-driver'],
-			visualizerId: 'vis-uuid-here'
+			roastLevel: null
 		};
 		const out = inlineBeanPatch(bean);
 		assert.equal(out.bean_brand, 'R');
 		assert.equal(out.bean_type, 'T');
 		assert.ok(!('coffee_bag_id' in out));
 		assert.ok(!('tag_list' in out));
-		assert.ok(!('visualizerId' in out));
 		assert.ok(!('beanId' in out));
 		// `grinder_model` is shot-level, not bean-level — it rides via
 		// the separate `resolveGrinderModel` helper and the typed slot
