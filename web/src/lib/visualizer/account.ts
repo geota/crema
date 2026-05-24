@@ -1,14 +1,22 @@
 /**
  * `$lib/visualizer/account` — fetch the authenticated user's profile.
  *
- * Visualizer's OpenAPI exposes `GET /api/me` (under the `Credentials`
- * tag) returning `{ id, name, public, avatar_url }`. The Settings UI
- * uses it to show "Signed in as <name>" once the OAuth dance lands.
+ * Visualizer's OpenAPI exposes `GET /me` (under the `Credentials` tag)
+ * returning `{ id, name, public, avatar_url }`. The Settings UI uses it
+ * to show "Signed in as <name>" once the OAuth dance lands.
+ *
+ * Note: the spec confirms `/me` exposes NO premium flag. We rely on the
+ * 403-on-write probe from `$lib/bean/visualizer-sync` to detect free
+ * tier — do not add a `premium` field here.
  */
 
+import type { components } from './openapi';
 import { withFreshToken } from './token-store';
 
-/** Shape of the `/api/me` response per the OpenAPI spec (v1.8.2). */
+/** Spec-typed wire response — regenerate via `pnpm openapi`. */
+type MeResponse = components['schemas']['MeResponse'];
+
+/** Crema-side projection of the `/me` response (camel-cased). */
 export interface VisualizerAccount {
 	id: string;
 	name: string;
@@ -36,12 +44,7 @@ export async function fetchAccount(): Promise<VisualizerAccount> {
 				status: res.status
 			});
 		}
-		const body = (await res.json()) as {
-			id: string;
-			name: string;
-			public: boolean;
-			avatar_url: string;
-		};
+		const body = (await res.json()) as MeResponse;
 		return {
 			id: body.id,
 			name: body.name,
