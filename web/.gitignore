@@ -13,6 +13,10 @@ src/lib/wasm/
 # PWA / Workbox generated assets
 dev-dist/
 
+# Local env (the user's per-environment Visualizer OAuth Client UID).
+.env.local
+.env.*.local
+
 # OS / editor
 .DS_Store
 .vscode/
