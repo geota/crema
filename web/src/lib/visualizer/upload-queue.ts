@@ -265,24 +265,30 @@ let lifecycleArmed = false;
 
 /**
  * Wire the queue's lifecycle: drain on `online`, on a 5-minute
- * foreground tick, and on first call. Idempotent — calling this from
- * multiple bootstraps is harmless.
+ * foreground tick, and on first call. When the user has Auto-sync on,
+ * the 5-min tick also fires the on-launch upload sweep (any new shots
+ * recorded while offline get pushed once the network returns).
+ * Idempotent — calling this from multiple bootstraps is harmless.
+ *
+ * docs/36 §6 — auto-sync cadence.
  */
 export function armQueueLifecycle(): void {
 	if (lifecycleArmed) return;
 	if (typeof window === 'undefined') return;
 	lifecycleArmed = true;
-	// Drain immediately so a backlog from a previous tab flushes.
+	// Drain immediately so a backlog from a previous tab flushes. Don't
+	// await — we never block app readiness on a network round-trip.
 	void drainQueue();
 	window.addEventListener('online', () => {
 		void drainQueue();
 	});
 	// Every 5 min while in the foreground. The interval keeps running in
-	// background tabs but `drainQueue` early-exits when offline so it
-	// stays cheap.
+	// background tabs but `drainQueue` early-exits when offline / when
+	// nothing's queued so it stays cheap.
 	const FIVE_MIN = 5 * 60 * 1000;
 	window.setInterval(() => {
 		if (typeof document !== 'undefined' && document.hidden) return;
+		if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
 		void drainQueue();
 	}, FIVE_MIN);
 }
