@@ -30,13 +30,13 @@
 		type Roaster
 	} from '$lib/bean';
 	import BeanTile from '$lib/components/beans/BeanTile.svelte';
+	import RoasterCard from '$lib/components/beans/RoasterCard.svelte';
 	import BeanDrawer from '$lib/components/beans/BeanDrawer.svelte';
 	import BeanQuickAdd from '$lib/components/beans/BeanQuickAdd.svelte';
 	import BeanImportDialog from '$lib/components/beans/BeanImportDialog.svelte';
 	import BeansEmptyState from '$lib/components/beans/BeansEmptyState.svelte';
 	import SortPill from '$lib/components/shared/SortPill.svelte';
 	import FilterPills from '$lib/components/shared/FilterPills.svelte';
-	import { roasterMarkTone } from '$lib/bean/roaster-mark';
 
 	const library = getBeanStore();
 
@@ -652,36 +652,31 @@
 				<i class="ph ph-upload-simple"></i> Import
 			</button>
 
-			<!-- Split: Quick add (primary click) + caret menu -->
-			<!-- The wrapper's only purpose is to stop the window-level click
-			     listener from closing the menu when clicks land on inner
-			     buttons. The handler reads `e.stopPropagation()` and never
-			     opens a non-keyboard interaction, so no keyboard handler is
-			     needed; suppress the lint accordingly. -->
+			<!-- "+ Add" menu — primary button opens a dropdown rather than
+			     firing a default action because the four entries (bean
+			     quick / bean full / roaster / import) aren't symmetric and
+			     none is a safe default for an arbitrary click. The wrapper
+			     stops the window-level outside-click handler from closing
+			     the menu when clicks land on inner buttons. -->
 			<!-- svelte-ignore a11y_click_events_have_key_events -->
 			<!-- svelte-ignore a11y_no_static_element_interactions -->
 			<div class="bn-split" onclick={(e) => e.stopPropagation()}>
 				<button
-					class="bn-btn bn-btn-primary bn-split-main"
-					onclick={() => (quickAddOpen = true)}
-					title="Quick add a bean (10 seconds)"
-				>
-					<i class="ph ph-plus"></i> Add bean
-				</button>
-				<button
-					class="bn-btn bn-btn-primary bn-split-chev"
+					class="bn-btn bn-btn-primary bn-split-main bn-split-solo"
 					onclick={(e) => {
 						e.stopPropagation();
 						addMenuOpen = !addMenuOpen;
 					}}
-					title="More ways to add"
-					aria-label="More ways to add"
+					aria-haspopup="menu"
+					aria-expanded={addMenuOpen}
+					title="Add bean, roaster, or import"
 				>
-					<i class="ph ph-caret-down"></i>
+					<i class="ph ph-plus"></i> Add
+					<i class="ph ph-caret-down bn-split-caret"></i>
 				</button>
 				{#if addMenuOpen}
 					<div class="bn-split-menu" role="menu">
-						<div class="bn-split-menu-head">Add a bean</div>
+						<div class="bn-split-menu-head">Add</div>
 						<button
 							class="bn-split-menu-item"
 							role="menuitem"
@@ -692,12 +687,11 @@
 						>
 							<i class="ph-duotone ph-lightning" aria-hidden="true"></i>
 							<div class="bn-split-menu-text">
-								<div class="bn-split-menu-title">Quick add</div>
+								<div class="bn-split-menu-title">Quick add bean</div>
 								<div class="bn-split-menu-sub">
 									Name, roaster, roast date — ~10 seconds. Refine later.
 								</div>
 							</div>
-							<span class="bn-split-menu-default">Default</span>
 						</button>
 						<button
 							class="bn-split-menu-item"
@@ -709,9 +703,25 @@
 						>
 							<i class="ph-duotone ph-list-checks" aria-hidden="true"></i>
 							<div class="bn-split-menu-text">
-								<div class="bn-split-menu-title">Full editor</div>
+								<div class="bn-split-menu-title">Full editor bean</div>
 								<div class="bn-split-menu-sub">
 									All fields — origin, processing, grinder, tasting notes.
+								</div>
+							</div>
+						</button>
+						<button
+							class="bn-split-menu-item"
+							role="menuitem"
+							onclick={() => {
+								addMenuOpen = false;
+								gotoNewRoaster();
+							}}
+						>
+							<i class="ph-duotone ph-storefront" aria-hidden="true"></i>
+							<div class="bn-split-menu-text">
+								<div class="bn-split-menu-title">Roaster</div>
+								<div class="bn-split-menu-sub">
+									New roastery — name, website, location, logo.
 								</div>
 							</div>
 						</button>
@@ -978,149 +988,19 @@
 				</header>
 				<div class="bn-roaster-grid">
 					{#each roasterRows as { roaster, count } (roaster.id)}
-						{@const mt = roasterMarkTone(roaster)}
 						{@const dupOf = roaster.canonicalRoasterId
 							? library.getRoaster(roaster.canonicalRoasterId)
 							: null}
-						{@const websiteDomain = (() => {
-							if (!roaster.website) return null;
-							try {
-								return new URL(roaster.website).hostname.replace(/^www\./, '');
-							} catch {
-								return roaster.website;
-							}
-						})()}
-						<div
-							class="bn-roaster-card"
-							class:is-dupe={roaster.canonicalRoasterId != null}
-						>
-							<div class="bn-roaster-card-row">
-								<div class="bn-roaster-mark" style="--tone: {mt.tone}">
-									{#if roaster.imageUrl}
-										<!-- Logo: 40×40 thumbnail. `object-fit: cover` keeps a
-										     non-square logo from squashing; an `onerror`
-										     handler swaps in the deterministic mark when the
-										     URL is broken so the card never shows a sad-cloud
-										     glyph. The hidden `.bn-roaster-mono` sibling is
-										     what the error handler reveals (CSS-only fallback
-										     would require :not(:has(img)) which Safari ≤16
-										     does not support reliably). -->
-										<img
-											class="bn-roaster-logo"
-											src={roaster.imageUrl}
-											alt=""
-											onerror={(e) => {
-												const img = e.currentTarget as HTMLImageElement;
-												img.style.display = 'none';
-												const mark = img.nextElementSibling as HTMLElement | null;
-												if (mark) mark.style.display = 'flex';
-											}}
-										/>
-										<span class="bn-roaster-mono" style="display: none">
-											{mt.mark}
-										</span>
-									{:else}
-										<span class="bn-roaster-mono">{mt.mark}</span>
-									{/if}
-								</div>
-								<div class="bn-roaster-body">
-									<div class="bn-roaster-name">
-										{roaster.name}
-										{#if dupOf}
-											<span
-												class="bn-roaster-dup-badge"
-												title="Tagged as a duplicate of {dupOf.name}"
-											>
-												duplicate of {dupOf.name}
-											</span>
-										{/if}
-									</div>
-									<div class="bn-roaster-loc">
-										{#if roaster.city && roaster.country}
-											{roaster.city} · {roaster.country}
-										{:else if roaster.city}
-											{roaster.city}
-										{:else if roaster.country}
-											{roaster.country}
-										{:else}
-											&mdash;
-										{/if}
-									</div>
-									<div class="bn-roaster-meta">
-										{#if websiteDomain && roaster.website}
-											<a
-												class="bn-roaster-site"
-												href={roaster.website}
-												target="_blank"
-												rel="noopener noreferrer"
-												onclick={(e) => e.stopPropagation()}
-												title={roaster.website}
-											>
-												<i class="ph ph-globe"></i>{websiteDomain}
-											</a>
-										{/if}
-										<span class="bn-roaster-count">
-											{count} bag{count === 1 ? '' : 's'}
-										</span>
-									</div>
-								</div>
-							</div>
-							<div class="bn-roaster-actions">
-								{#if dupOf}
-									<!-- Un-merge button — only visible on dupe-tagged rows.
-									     Clearing the canonical pointer restores the row to
-									     the directory. -->
-									<button
-										type="button"
-										class="bn-tile-action-icon"
-										title="Un-merge (restore as standalone roaster)"
-										aria-label="Un-merge"
-										onclick={(e) => {
-											e.stopPropagation();
-											unmergeRoaster(roaster.id);
-										}}
-									>
-										<i class="ph ph-link-break"></i>
-									</button>
-								{/if}
-								<button
-									type="button"
-									class="bn-tile-action-icon"
-									title="Duplicate"
-									aria-label="Duplicate"
-									onclick={(e) => {
-										e.stopPropagation();
-										duplicateRoaster(roaster.id);
-									}}
-								>
-									<i class="ph ph-copy"></i>
-								</button>
-								<button
-									type="button"
-									class="bn-tile-action-icon"
-									title="Edit"
-									aria-label="Edit"
-									onclick={(e) => {
-										e.stopPropagation();
-										editRoaster(roaster.id);
-									}}
-								>
-									<i class="ph ph-pencil"></i>
-								</button>
-								<button
-									type="button"
-									class="bn-tile-action-icon bn-tile-action-icon-danger"
-									title="Delete roastery"
-									aria-label="Delete roastery"
-									onclick={(e) => {
-										e.stopPropagation();
-										deleteRoaster(roaster, count);
-									}}
-								>
-									<i class="ph ph-trash"></i>
-								</button>
-							</div>
-						</div>
+						<RoasterCard
+							{roaster}
+							{count}
+							{dupOf}
+							onOpen={editRoaster}
+							onEdit={editRoaster}
+							onDuplicate={duplicateRoaster}
+							onDelete={deleteRoaster}
+							onUnmerge={unmergeRoaster}
+						/>
 					{/each}
 
 					<!-- Trailing "+ New roaster" tile — mirrors the Bags-tab "+ Add
@@ -1291,7 +1171,10 @@
 		background: var(--copper-600);
 	}
 
-	/* Split add button */
+	/* "+ Add" menu button. The wrapper is `position: relative` so the
+	   dropdown anchors to its right edge. The single-button variant
+	   (`.bn-split-solo`) keeps the full pill radius now that the
+	   chevron has been folded inline into the button itself. */
 	.bn-split {
 		position: relative;
 		display: inline-flex;
@@ -1299,13 +1182,13 @@
 	.bn-split-main {
 		border-radius: var(--radius-pill) 0 0 var(--radius-pill);
 	}
-	.bn-split-chev {
-		border-radius: 0 var(--radius-pill) var(--radius-pill) 0;
-		padding: 9px 11px;
-		border-left: 1px solid rgba(0, 0, 0, 0.18);
+	.bn-split-main.bn-split-solo {
+		border-radius: var(--radius-pill);
 	}
-	.bn-split-main + .bn-split-chev {
-		margin-left: -1px;
+	.bn-split-caret {
+		margin-left: 4px;
+		font-size: 11px;
+		opacity: 0.75;
 	}
 	.bn-split-menu {
 		position: absolute;
@@ -1375,18 +1258,6 @@
 		padding: 1px 4px;
 		background: rgba(var(--tint-rgb), 0.06);
 		border-radius: 4px;
-	}
-	.bn-split-menu-default {
-		font-family: var(--font-sans);
-		font-size: 9px;
-		font-weight: 700;
-		letter-spacing: var(--track-allcaps);
-		text-transform: uppercase;
-		color: var(--copper-400);
-		background: rgba(var(--copper-rgb), 0.12);
-		border-radius: var(--radius-pill);
-		padding: 2px 7px;
-		align-self: center;
 	}
 	.bn-split-menu-rule {
 		height: 1px;
@@ -1665,178 +1536,7 @@
 	.bn-roaster-grid {
 		display: grid;
 		grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-		gap: 12px;
-	}
-	.bn-roaster-card {
-		display: flex;
-		flex-direction: column;
-		gap: 12px;
-		background: rgba(var(--tint-rgb), 0.04);
-		border: 1px solid rgba(var(--tint-rgb), 0.08);
-		border-radius: var(--radius-md);
-		padding: 14px;
-		transition: all var(--dur-1) var(--ease);
-	}
-	.bn-roaster-card:hover {
-		background: rgba(var(--tint-rgb), 0.06);
-		border-color: rgba(var(--tint-rgb), 0.16);
-	}
-	.bn-roaster-card-row {
-		display: grid;
-		grid-template-columns: 48px 1fr;
-		align-items: center;
 		gap: 14px;
-	}
-	.bn-roaster-actions {
-		display: flex;
-		gap: 6px;
-		justify-content: flex-end;
-		align-items: center;
-	}
-	/* Icon-button styling for the roaster action row. Mirrors
-	   `BeanTile.svelte`'s `.bn-tile-action-icon` so the two cards read as
-	   one design family. */
-	.bn-tile-action-icon {
-		width: 30px;
-		height: 30px;
-		flex: 0 0 30px;
-		border: 1px solid rgba(var(--tint-rgb), 0.1);
-		background: rgba(var(--tint-rgb), 0.03);
-		border-radius: var(--radius-sm);
-		color: rgba(var(--tint-rgb), 0.6);
-		cursor: pointer;
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		font-size: 13px;
-		padding: 0;
-		transition: all var(--dur-1) var(--ease);
-	}
-	.bn-tile-action-icon:hover:not(:disabled) {
-		color: var(--fg-1);
-		background: rgba(var(--tint-rgb), 0.07);
-	}
-	.bn-tile-action-icon:disabled {
-		opacity: 0.35;
-		cursor: not-allowed;
-	}
-	.bn-tile-action-icon-danger {
-		color: var(--danger);
-	}
-	.bn-tile-action-icon-danger:hover:not(:disabled) {
-		color: var(--danger);
-		background: rgba(var(--danger-rgb), 0.12);
-	}
-	.bn-roaster-mark {
-		width: 48px;
-		height: 48px;
-		border-radius: var(--radius-md);
-		background: var(--tone, var(--copper-500));
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		color: #fff;
-		font-family: var(--font-serif);
-		font-weight: 500;
-		font-size: 22px;
-		letter-spacing: -0.02em;
-	}
-	.bn-roaster-body {
-		min-width: 0;
-		display: flex;
-		flex-direction: column;
-		gap: 2px;
-	}
-	.bn-roaster-name {
-		font-family: var(--font-serif);
-		font-size: 15px;
-		font-weight: 500;
-		color: var(--fg-1);
-		letter-spacing: -0.01em;
-	}
-	.bn-roaster-loc {
-		font-family: var(--font-sans);
-		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.5);
-	}
-	.bn-roaster-meta {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 8px;
-		margin-top: 2px;
-		font-family: var(--font-sans);
-		font-size: 10.5px;
-		color: rgba(var(--tint-rgb), 0.5);
-	}
-	.bn-roaster-site {
-		display: inline-flex;
-		align-items: center;
-		gap: 4px;
-		/* The website is now an anchor — strip the default underline so it
-		   reads like the rest of the meta row. Hover restores the underline
-		   to signal it's still a real link. */
-		color: rgba(var(--tint-rgb), 0.5);
-		text-decoration: none;
-	}
-	.bn-roaster-site:hover {
-		color: var(--copper-400);
-		text-decoration: underline;
-	}
-	.bn-roaster-site i {
-		font-size: 11px;
-	}
-	.bn-roaster-count {
-		font-family: var(--font-mono);
-		color: var(--copper-400);
-	}
-
-	/* Roaster logo + fallback mark. The logo fills the 48×48 mark slot
-	   when present; an `onerror` swap reveals the deterministic mark
-	   sibling. `.bn-roaster-mono` is the original glyph styling, kept
-	   under a class so the inline error handler can flip its display. */
-	.bn-roaster-logo {
-		width: 100%;
-		height: 100%;
-		object-fit: cover;
-		display: block;
-	}
-	.bn-roaster-mono {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		width: 100%;
-		height: 100%;
-		color: #fff;
-		font-family: var(--font-serif);
-		font-weight: 500;
-		font-size: 22px;
-		letter-spacing: -0.02em;
-	}
-	.bn-roaster-mark {
-		overflow: hidden;
-	}
-
-	/* Inline "duplicate of X" badge. Sits next to the roaster name on
-	   merged rows; reused by the un-merge affordance to surface state. */
-	.bn-roaster-dup-badge {
-		display: inline-block;
-		margin-left: 6px;
-		padding: 1px 6px;
-		font-family: var(--font-sans);
-		font-size: 9px;
-		font-weight: 700;
-		letter-spacing: var(--track-allcaps);
-		text-transform: uppercase;
-		color: var(--warning);
-		background: rgba(var(--warning-rgb), 0.12);
-		border-radius: var(--radius-pill);
-		vertical-align: middle;
-	}
-	.bn-roaster-card.is-dupe {
-		opacity: 0.7;
-	}
-	.bn-roaster-card.is-dupe:hover {
-		opacity: 1;
 	}
 
 	/* Dashed "+ New roaster" tile at the end of the grid — mirrors the
@@ -1850,10 +1550,12 @@
 		gap: 6px;
 		background: transparent;
 		border: 1px dashed rgba(var(--tint-rgb), 0.15);
-		border-radius: var(--radius-md);
+		border-radius: var(--radius-lg, 14px);
 		color: var(--fg-1);
 		cursor: pointer;
-		min-height: 132px;
+		/* Match RoasterCard's `minHeight={180}` so the dashed tile lines up
+		   with the rest of the row instead of dangling short. */
+		min-height: 180px;
 		padding: 18px;
 		font-family: var(--font-sans);
 		transition: all var(--dur-1) var(--ease);
