@@ -14,19 +14,11 @@
  */
 
 import type { Roast } from '$lib/profiles';
-
-// Roast / freshness helpers used to delegate to wasm (`de1_domain::bean`),
-// but that created a static-import race: `BeanContextCard` on the brew
-// dashboard mounts before the wasm `init()` completes and the underlying
-// `__wbindgen_malloc` is undefined. Date math doesn't need a Rust round-
-// trip, so the helpers are ported inline. The constants below mirror
-// `LIGHT_WINDOW` / `MEDIUM_WINDOW` / `DARK_WINDOW` in `core/de1-domain/src/bean.rs`.
-const MS_PER_DAY = 86_400_000;
-const REST_WINDOWS = {
-	light: { green: [10, 24] as const, okHigh: 35 },
-	medium: { green: [6, 14] as const, okHigh: 21 },
-	dark: { green: [4, 10] as const, okHigh: 14 }
-} as const;
+import {
+	roast_band as wasmRoastBand,
+	days_off_roast as wasmDaysOffRoast,
+	roast_freshness as wasmRoastFreshness
+} from '$lib/wasm/de1_wasm';
 
 // ── Wire types (mirrored from de1_domain::bean) ─────────────────────────
 
@@ -217,10 +209,7 @@ export function roastBand(level: number | null): Roast | null {
 	if (level == null) return null;
 	const rounded = Math.round(level);
 	if (!Number.isFinite(rounded)) return null;
-	const clamped = Math.min(10, Math.max(1, rounded));
-	if (clamped <= 3) return 'light';
-	if (clamped <= 6) return 'medium';
-	return 'dark';
+	return (wasmRoastBand(rounded) ?? null) as Roast | null;
 }
 
 /** The roast level a quick-set pill maps to: light→1, medium→5, dark→10. */
@@ -275,14 +264,9 @@ export function daysOffRoast(
 	asOf: number | Date = Date.now()
 ): number | null {
 	if (!roastedOn) return null;
-	// Strict yyyy-mm-dd guard — matches Rust's `parse_iso_date_to_unix_ms`.
-	if (!/^\d{4}-\d{2}-\d{2}$/.test(roastedOn)) return null;
-	const roastMs = Date.parse(roastedOn + 'T00:00:00Z');
-	if (Number.isNaN(roastMs)) return null;
 	const nowMs = asOf instanceof Date ? asOf.getTime() : asOf;
-	const todayMs = Math.floor(nowMs / MS_PER_DAY) * MS_PER_DAY;
-	const days = Math.floor((todayMs - roastMs) / MS_PER_DAY);
-	return Math.max(0, days);
+	const days = wasmDaysOffRoast(roastedOn, nowMs);
+	return days == null ? null : days;
 }
 
 /** A bean's rest verdict against the ideal window for its roast band. */
@@ -294,11 +278,7 @@ export function roastFreshness(
 	days: number | null
 ): Freshness | null {
 	if (band == null || days == null) return null;
-	const d = Math.max(0, days);
-	const w = REST_WINDOWS[band];
-	if (d >= w.green[0] && d <= w.green[1]) return 'best';
-	if (d > w.okHigh) return 'bad';
-	return 'ok';
+	return (wasmRoastFreshness(band, days) ?? null) as Freshness | null;
 }
 
 /**
