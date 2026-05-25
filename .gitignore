@@ -35,3 +35,6 @@ docs/
 # .gitignore; this root entry catches strays from new sub-projects.
 **/.env.local
 **/.env.*.local
+
+# Internal session handoff doc — not public-facing.
+HANDOFF.md
