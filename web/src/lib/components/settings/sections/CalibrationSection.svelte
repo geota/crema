@@ -2,34 +2,40 @@
 	/**
 	 * Calibration section — read + write of the DE1's sensor calibration.
 	 *
-	 * The DE1 exposes calibration via the `cuuid_12 / Calibration`
-	 * characteristic; a read request is *written* to it and the DE1 answers
-	 * on the same characteristic, decoded by the core into
-	 * `Event::Calibration` which lands on the snapshot's `de1Calibration`
-	 * field. A write (the `WriteKey 0xCAFEF00D` packet) tells the DE1 to use
-	 * `measured / reported` as a multiplier on the named sensor; a separate
-	 * `ResetToFactory` packet restores the factory baseline.
+	 * Three rows, one shared layout: Temperature, Pressure, and Flow. Each
+	 * renders through {@link CalibrationRow}, which lays out a 3-column
+	 * Current / Factory / New value strip plus Apply + Reset-to-factory
+	 * buttons. The visual style is identical across all three so the screen
+	 * reads as one block, not three bespoke widgets.
 	 *
-	 * Flow calibration is a **separate path** — the flow multiplier lives in
-	 * the MMR register `CalibrationFlowMultiplier` (`0x80383C`), not on
-	 * `cuuid_12`. Path A of docs/43 is wired here: a numeric input bounded
-	 * 0.13..=2.00 step 0.01 that reads `de1MachineInfo[CalibrationFlow
-	 * Multiplier]` (raw `int(1000 × m)` → divide by 1000), and on Apply +
-	 * confirm writes through `app.core.setCalibrationFlowMultiplier(value)`
-	 * (core clamps to the same 0.13..=2.0 range). The auto-derive
-	 * (dispense → weigh → derive) flow is deferred per docs/43 v2.
+	 * Temperature + Pressure go through `cuuid_12 / Calibration`: a paired
+	 * reported / measured write the DE1 turns into a per-sensor multiplier.
+	 * Their "New value" cell is intentionally **disabled** in the row — the
+	 * single-number stepper is the wrong surface for that paired workflow.
+	 * Apply opens a modal that collects Reported + Measured (in the user's
+	 * display unit); the read + factory columns + Reset-to-factory all work
+	 * as before. TODO: inline the reported/measured pair into the row so the
+	 * stepper can carry its own weight.
+	 *
+	 * Flow calibration lives in a separate MMR register
+	 * (`CalibrationFlowMultiplier`, `0x80383C`): a single number bounded
+	 * `0.13..=2.0`, default `1.000`. The row's "New value" stepper is the
+	 * commit surface; Apply opens a confirm modal that previews the new
+	 * value; Reset writes `1.000` (the firmware has no per-register factory-
+	 * reset wire packet for the MMR side — see docs/43 §"Reset to factory").
+	 *
+	 * Reads on mount fire temperature + pressure (current + factory) **and**
+	 * the flow MMR. They're non-fatal: a disconnect mid-mount just leaves the
+	 * row's value as `—`.
 	 *
 	 * Legacy reference: `gui.tcl:2445-2452` — the legacy calibration screen
 	 * reads temperature + pressure current/factory on mount (flow reads are
-	 * commented out; flow uses a separate MMR-based multiplier). Crema
-	 * matches the read shape and adds an Apply / Reset to factory action on
-	 * each row.
+	 * commented out; flow uses a separate MMR-based multiplier).
 	 *
 	 * Unit-awareness: the codec works in canonical units (°C / bar / ml·s⁻¹)
 	 * — the Apply modal renders its inputs in the user's display unit and
-	 * converts back at the I/O boundary, so a °F user types °F. Flow is left
-	 * read-only here because its in-use value lives in a separate MMR
-	 * register, not on `cuuid_12`.
+	 * converts back at the I/O boundary, so a °F user types °F. Flow is
+	 * unitless (a multiplier) so its input is plain.
 	 */
 	import { onMount } from 'svelte';
 	import type { CremaApp } from '$lib/state';
@@ -38,6 +44,7 @@
 	import StSectionHead from '../StSectionHead.svelte';
 	import StGroup from '../StGroup.svelte';
 	import StRow from '../StRow.svelte';
+	import CalibrationRow from '../CalibrationRow.svelte';
 	import {
 		getSettingsStore,
 		unitLabel,
@@ -57,15 +64,6 @@
 	const cal = $derived(snapshot.de1Calibration);
 	const connected = $derived(snapshot.de1State === 'ready');
 
-	/**
-	 * On mount, fire reads for temperature + pressure (current + factory)
-	 * **and** the flow-calibration MMR multiplier. Flow has its own register
-	 * (`CalibrationFlowMultiplier`, MMR `0x80383C`) — separate from the
-	 * `cuuid_12` Calibration block.
-	 *
-	 * Reads are non-fatal: a disconnect mid-mount just leaves the value
-	 * fields as `null` and the row reads `—`.
-	 */
 	let lastRefreshAt = $state<number | null>(null);
 	async function refresh(): Promise<void> {
 		if (!app || !connected) return;
@@ -85,43 +83,29 @@
 		void refresh();
 	});
 
-	/** Format a calibration value: 3 decimal places, or a dash if null. */
-	function fmt(v: number | null | undefined): string {
-		if (v == null) return '—';
-		return v.toFixed(3);
-	}
-
 	/** Format the "last read" timestamp in HH:MM:SS local time. */
 	const lastRefreshedLabel = $derived(
 		lastRefreshAt == null ? 'reading…' : new Date(lastRefreshAt).toLocaleTimeString()
 	);
 
-	/**
-	 * Which dimension a calibration target lives in. Drives the unit label
-	 * + the canonical-to-display conversion in the Apply modal. Flow has no
-	 * imperial counterpart in the Settings store (no `flowUnit`) so its
-	 * input is unitless ml·s⁻¹.
-	 */
+	/** Which dimension a calibration target lives in — drives unit + decimals. */
 	function dimensionOf(target: CalTarget): Dimension | null {
 		if (target === CalTarget.Temperature) return 'temp';
 		if (target === CalTarget.Pressure) return 'pressure';
 		return null;
 	}
 
-	/** Per-target unit suffix shown next to the inputs (and elsewhere). */
 	function unitFor(target: CalTarget): string {
 		const dim = dimensionOf(target);
-		return dim ? unitLabel(dim, prefs) : 'ml/s';
+		return dim ? unitLabel(dim, prefs) : '';
 	}
 
-	/** Per-target friendly name for confirm copy. */
 	function nameOf(target: CalTarget): string {
 		if (target === CalTarget.Temperature) return 'temperature';
 		if (target === CalTarget.Pressure) return 'pressure';
 		return 'flow';
 	}
 
-	/** Convert a canonical reading to the user's display unit. */
 	function toDisplay(target: CalTarget, canonical: number | null | undefined): number | null {
 		if (canonical == null || !Number.isFinite(canonical)) return null;
 		const dim = dimensionOf(target);
@@ -129,47 +113,119 @@
 		return canonicalToDisplay(dim, canonical, prefs);
 	}
 
-	/** Inverse of `toDisplay` for committing the modal's inputs to the core. */
 	function toCanonical(target: CalTarget, display: number): number {
 		const dim = dimensionOf(target);
 		if (!dim) return display;
 		return displayToCanonical(dim, display, prefs);
 	}
 
-	/** Decimals the modal's number inputs should show, per dimension + unit. */
 	function decimalsFor(target: CalTarget): number {
 		const dim = dimensionOf(target);
-		return dim ? displayDecimals(dim, prefs) : 1;
+		return dim ? displayDecimals(dim, prefs) : 3;
 	}
 
-	// ---- Apply / Reset modal -----------------------------------------------
-	//
-	// One inline modal handles both flows. Apply collects Reported /
-	// Measured; Reset has no fields. Both end in a type-to-confirm gate
-	// (the user types the sensor name verbatim), mirroring the heater-
-	// voltage modal — a mis-applied calibration silently warps every shot
-	// until reset, so the "stray tap" cost is high enough to justify the
-	// same gate the legacy app uses for hardware-damaging writes.
+	// ---- Flow-calibration multiplier (MMR 0x80383C) ----------------------
 
-	type EditState = { target: CalTarget; mode: 'apply' | 'reset' };
-	/** The target + mode currently being edited, or `null` when closed. */
+	const FLOW_MIN = 0.13;
+	const FLOW_MAX = 2.0;
+	const FLOW_STEP = 0.01;
+	const FLOW_DEFAULT = 1.0;
+
+	const flowMultiplierRaw = $derived(
+		snapshot.de1MachineInfo[MmrRegister.CalibrationFlowMultiplier]
+	);
+	const flowMultiplier = $derived<number | null>(
+		flowMultiplierRaw != null && Number.isFinite(flowMultiplierRaw)
+			? flowMultiplierRaw / 1000
+			: null
+	);
+
+	/** The value the user is typing in Flow's new-value stepper. */
+	let flowDraft = $state(FLOW_DEFAULT);
+	/** Whether the draft has ever been seeded from the live read. */
+	let flowDraftSeeded = $state(false);
+
+	$effect(() => {
+		if (!flowDraftSeeded && flowMultiplier != null) {
+			flowDraft = Number(flowMultiplier.toFixed(3));
+			flowDraftSeeded = true;
+		}
+	});
+
+	/** Clamp + round to the wire's accepted resolution (`int(1000 × m)`). */
+	function clampFlow(n: number): number {
+		if (!Number.isFinite(n)) return FLOW_DEFAULT;
+		const clamped = Math.max(FLOW_MIN, Math.min(FLOW_MAX, n));
+		return Math.round(clamped * 1000) / 1000;
+	}
+
+	const flowDirty = $derived.by(() => {
+		if (flowMultiplier == null) return false;
+		return Math.abs(clampFlow(flowDraft) - flowMultiplier) > 0.0005;
+	});
+
+	const flowAtDefault = $derived(
+		flowMultiplier != null && Math.abs(flowMultiplier - FLOW_DEFAULT) < 0.0005
+	);
+
+	/**
+	 * Reset Flow's multiplier to the no-correction default (1.000). The
+	 * flow path has no `resetCalibrationToFactory` wire packet — the
+	 * baseline IS 1.000, so we just write it. Re-reads the MMR after the
+	 * write so the Current column reflects the firmware's accepted value.
+	 */
+	async function resetFlowToFactory(): Promise<void> {
+		if (!app) return;
+		await app.setCalibrationFlowMultiplier(FLOW_DEFAULT);
+		await app.readMmr(MmrRegister.CalibrationFlowMultiplier);
+		flowDraft = FLOW_DEFAULT;
+	}
+
+	// ---- Unified Apply / Reset modal -------------------------------------
+	//
+	// One modal handles all six paths (apply × 3 targets, reset × 3
+	// targets). Apply for Temp + Pressure collects Reported / Measured;
+	// Apply for Flow shows the "Setting to" preview. Reset has no fields.
+	// Every path ends in a type-to-confirm gate (typing `reset` for reset
+	// flows, the sensor name for apply flows) — mirrors the heater-voltage
+	// modal. A mis-applied calibration silently warps every shot until
+	// reset, so the "stray tap" cost is high enough to justify the same
+	// gate the legacy app uses for hardware-damaging writes.
+
+	type ApplyState = { target: CalTarget; mode: 'apply' };
+	type ResetState = { target: CalTarget; mode: 'reset' };
+	type EditState = ApplyState | ResetState;
+
 	let editing = $state<EditState | null>(null);
-	/** Apply-mode form values (display units). */
 	let editReported = $state(0);
 	let editMeasured = $state(0);
-	/** Type-to-confirm input — must equal `nameOf(target)` to enable commit. */
 	let typed = $state('');
-	/** Submission spinner — disables the Confirm button while in-flight. */
 	let applying = $state(false);
 
-	const expectedTyped = $derived(editing ? nameOf(editing.target) : '');
+	/**
+	 * Expected type-to-confirm token. For Reset we use a single consistent
+	 * verb (`reset`) across all three targets — it reads clearly in the
+	 * modal copy ("Type `reset` to confirm") and keeps the muscle-memory
+	 * the same regardless of which sensor is being restored. For Apply we
+	 * use the sensor name (preserving the existing temp/pressure behaviour
+	 * + extending it to flow).
+	 */
+	const expectedTyped = $derived.by(() => {
+		if (editing == null) return '';
+		if (editing.mode === 'reset') return 'reset';
+		return nameOf(editing.target);
+	});
 	const typedMatches = $derived(typed.trim().toLowerCase() === expectedTyped);
 
+	/** Open the Apply modal for a target — seeds inputs from the live read. */
 	function openApply(target: CalTarget): void {
-		const current = cal[target]?.current ?? null;
-		const displayed = toDisplay(target, current) ?? 0;
-		editReported = Number(displayed.toFixed(decimalsFor(target)));
-		editMeasured = editReported;
+		if (!connected) return;
+		if (target === CalTarget.Temperature || target === CalTarget.Pressure) {
+			const current = cal[target]?.current ?? null;
+			const displayed = toDisplay(target, current) ?? 0;
+			editReported = Number(displayed.toFixed(decimalsFor(target)));
+			editMeasured = editReported;
+		}
 		typed = '';
 		editing = { target, mode: 'apply' };
 	}
@@ -192,11 +248,23 @@
 		applying = true;
 		try {
 			if (mode === 'apply') {
-				const reported = toCanonical(target, editReported);
-				const measured = toCanonical(target, editMeasured);
-				await app.writeCalibration(target, reported, measured);
+				if (target === CalTarget.Temperature || target === CalTarget.Pressure) {
+					const reported = toCanonical(target, editReported);
+					const measured = toCanonical(target, editMeasured);
+					await app.writeCalibration(target, reported, measured);
+				} else {
+					// Flow apply — single value commit through MMR.
+					const value = clampFlow(flowDraft);
+					await app.setCalibrationFlowMultiplier(value);
+					await app.readMmr(MmrRegister.CalibrationFlowMultiplier);
+				}
 			} else {
-				await app.resetCalibrationToFactory(target);
+				// Reset
+				if (target === CalTarget.Temperature || target === CalTarget.Pressure) {
+					await app.resetCalibrationToFactory(target);
+				} else {
+					await resetFlowToFactory();
+				}
 			}
 			editing = null;
 			typed = '';
@@ -208,158 +276,45 @@
 		}
 	}
 
-	/** Escape closes the modal when one is open. */
 	function onKeydown(e: KeyboardEvent): void {
 		if (e.key === 'Escape' && editing != null) {
 			e.preventDefault();
 			closeModal();
 		}
-		if (e.key === 'Escape' && flowEditing) {
-			e.preventDefault();
-			closeFlowModal();
-		}
 	}
 
-	/** Caption explaining the effect of the multiplier. */
 	const applyCaption =
 		'After saving, the DE1 will use (measured / reported) as a multiplier on this sensor.';
 
-	// ---- Flow-calibration multiplier (MMR 0x80383C) ----------------------
-	//
-	// Per docs/43 Path A. The core already exposes the read/write path; this
-	// adds the UI surface promised by the legacy "Flow" row sub-text.
-	//
-	// Wire value is `int(1000 × multiplier)`; the snapshot's
-	// `de1MachineInfo[CalibrationFlowMultiplier]` holds it raw. Divide by
-	// 1000 to get the human multiplier. Range 0.13..=2.0 (reaprime clamp,
-	// followed by Crema's core); step 0.01; default 1.000 (the no-correction
-	// value).
-	//
-	// Apply opens a confirm modal (the same shape as the temperature /
-	// pressure apply, minus the reported / measured math — flow has no
-	// reported / measured workflow here, just "set this value"). Reset
-	// writes `1.000` (the firmware has no per-register factory-reset wire
-	// packet — see docs/43 §Crema "Reset to factory").
+	const tempUnit = $derived(unitFor(CalTarget.Temperature));
+	const pressureUnit = $derived(unitFor(CalTarget.Pressure));
 
-	const FLOW_MIN = 0.13;
-	const FLOW_MAX = 2.0;
-	const FLOW_STEP = 0.01;
-	const FLOW_DEFAULT = 1.0;
+	/** Modal title — friendly sensor name, capitalised by CSS. */
+	const modalTitle = $derived(editing == null ? '' : nameOf(editing.target));
 
-	/** Raw value from the MMR read, or `undefined` if not yet read. */
-	const flowMultiplierRaw = $derived(
-		snapshot.de1MachineInfo[MmrRegister.CalibrationFlowMultiplier]
-	);
-	/** Human multiplier (raw / 1000), or `null` until the first read lands. */
-	const flowMultiplier = $derived<number | null>(
-		flowMultiplierRaw != null && Number.isFinite(flowMultiplierRaw)
-			? flowMultiplierRaw / 1000
-			: null
-	);
-	/** Current value, formatted to 3 decimals. */
-	const flowCurrentLabel = $derived(
-		flowMultiplier == null ? '—' : flowMultiplier.toFixed(3)
-	);
-
-	/** The value the user is typing in the row's number input. */
-	let flowDraft = $state(FLOW_DEFAULT);
-	/** Whether the draft has ever been set from the read (so we don't clobber the user's edit). */
-	let flowDraftSeeded = $state(false);
-
-	/**
-	 * Seed the draft once the first read lands so the input shows the live
-	 * value, not the default. Subsequent reads (e.g. after Apply) do *not*
-	 * re-seed — the user may still be editing.
-	 */
-	$effect(() => {
-		if (!flowDraftSeeded && flowMultiplier != null) {
-			flowDraft = Number(flowMultiplier.toFixed(3));
-			flowDraftSeeded = true;
+	/** Whether the reset gate should be disabled for the live target. */
+	function resetDisabledFor(target: CalTarget): { disabled: boolean; reason?: string } {
+		if (!connected) return { disabled: true, reason: 'Connect DE1 to reset calibration' };
+		if (target === CalTarget.Flow && flowAtDefault) {
+			return { disabled: true, reason: 'Already at the default (1.000)' };
 		}
-	});
-
-	/**
-	 * Clamp + round the draft to the wire's accepted resolution. Mirrors the
-	 * core clamp (0.13..=2.0) plus 3-decimal precision (the wire scale is
-	 * `× 1000`).
-	 */
-	function clampFlow(n: number): number {
-		if (!Number.isFinite(n)) return FLOW_DEFAULT;
-		const clamped = Math.max(FLOW_MIN, Math.min(FLOW_MAX, n));
-		return Math.round(clamped * 1000) / 1000;
+		return { disabled: false };
 	}
 
-	/** Whether the draft differs from the live value (Apply has work to do). */
-	const flowDirty = $derived.by(() => {
-		if (flowMultiplier == null) return false;
-		return Math.abs(clampFlow(flowDraft) - flowMultiplier) > 0.0005;
-	});
-
-	/**
-	 * Whether the "Reset to 1.000" button should be enabled — only if the
-	 * live multiplier is not already 1.000 (within the wire's precision).
-	 */
-	const flowAtDefault = $derived(
-		flowMultiplier != null && Math.abs(flowMultiplier - FLOW_DEFAULT) < 0.0005
-	);
-
-	type FlowEditMode = 'apply' | 'reset';
-	let flowEditing = $state<FlowEditMode | null>(null);
-	let flowApplying = $state(false);
-	/** Type-to-confirm input for the flow-multiplier modal. */
-	let flowTyped = $state('');
-	/** The value the modal will commit (clamped draft for apply, default for reset). */
-	const flowTargetValue = $derived(
-		flowEditing === 'reset' ? FLOW_DEFAULT : clampFlow(flowDraft)
-	);
-	const flowExpectedTyped = 'flow';
-	const flowTypedMatches = $derived(flowTyped.trim().toLowerCase() === flowExpectedTyped);
-
-	function openFlowApply(): void {
-		if (!connected || !flowDirty) return;
-		flowTyped = '';
-		flowEditing = 'apply';
-	}
-
-	function openFlowReset(): void {
-		if (!connected || flowAtDefault) return;
-		flowTyped = '';
-		flowEditing = 'reset';
-	}
-
-	function closeFlowModal(): void {
-		if (flowApplying) return;
-		flowEditing = null;
-		flowTyped = '';
-	}
-
-	async function confirmFlowAction(): Promise<void> {
-		if (flowEditing == null || !app || !connected || !flowTypedMatches) return;
-		flowApplying = true;
-		try {
-			await app.setCalibrationFlowMultiplier(flowTargetValue);
-			// Read back so the snapshot's `de1MachineInfo` reflects the
-			// firmware's accepted value; the row's "Current" label re-renders
-			// from the live read, giving the user visible confirmation.
-			await app.readMmr(MmrRegister.CalibrationFlowMultiplier);
-			// After a reset, snap the draft back to the default so the row
-			// no longer reports "dirty".
-			if (flowEditing === 'reset') flowDraft = FLOW_DEFAULT;
-			flowEditing = null;
-			flowTyped = '';
-		} catch {
-			// The orchestrator logs via the event stream; leave the modal
-			// open so a retry / cancel is one tap.
-		} finally {
-			flowApplying = false;
+	function applyDisabledFor(target: CalTarget): { disabled: boolean; reason?: string } {
+		if (!connected) return { disabled: true, reason: 'Connect DE1 to apply calibration' };
+		if (target === CalTarget.Flow && !flowDirty) {
+			return { disabled: true, reason: 'New value matches the current — nothing to apply' };
 		}
+		return { disabled: false };
 	}
 
-	function onFlowDraftInput(e: Event): void {
-		const target = e.target as HTMLInputElement;
-		const n = Number(target.value);
-		if (Number.isFinite(n)) flowDraft = n;
-	}
+	const tempApplyState = $derived(applyDisabledFor(CalTarget.Temperature));
+	const tempResetState = $derived(resetDisabledFor(CalTarget.Temperature));
+	const pressureApplyState = $derived(applyDisabledFor(CalTarget.Pressure));
+	const pressureResetState = $derived(resetDisabledFor(CalTarget.Pressure));
+	const flowApplyState = $derived(applyDisabledFor(CalTarget.Flow));
+	const flowResetState = $derived(resetDisabledFor(CalTarget.Flow));
 </script>
 
 <svelte:window onkeydown={onKeydown} />
@@ -371,135 +326,61 @@
 />
 
 <StGroup title="Sensor calibration">
-	<StRow
+	<CalibrationRow
 		title="Temperature"
+		unit={tempUnit}
+		currentValue={cal[CalTarget.Temperature]?.current ?? null}
+		factoryValue={cal[CalTarget.Temperature]?.factory ?? null}
+		newValueInput={{ type: 'disabled' }}
+		onApply={() => openApply(CalTarget.Temperature)}
+		onResetToFactory={() => openReset(CalTarget.Temperature)}
+		applyDisabled={tempApplyState.disabled}
+		applyDisabledReason={tempApplyState.reason}
+		resetDisabled={tempResetState.disabled}
+		resetDisabledReason={tempResetState.reason}
 		needsConnection={!connected}
-		sub="The DE1's group-head thermocouple offset, {unitLabel('temp', prefs)}."
-	>
-		{#snippet control()}
-			<div class="cal-control">
-				<div class="cal-pair">
-					<div>
-						<div class="t-eyebrow">Current</div>
-						<div class="cal-val">{fmt(cal[CalTarget.Temperature]?.current)}</div>
-					</div>
-					<div>
-						<div class="t-eyebrow">Factory</div>
-						<div class="cal-val">{fmt(cal[CalTarget.Temperature]?.factory)}</div>
-					</div>
-				</div>
-				<div class="cal-actions">
-					<button
-						type="button"
-						class="st-btn st-btn-secondary"
-						onclick={() => openApply(CalTarget.Temperature)}
-						disabled={!connected}
-					>
-						Apply
-					</button>
-					<button
-						type="button"
-						class="st-btn st-btn-danger"
-						onclick={() => openReset(CalTarget.Temperature)}
-						disabled={!connected}
-					>
-						Reset to factory
-					</button>
-				</div>
-			</div>
-		{/snippet}
-	</StRow>
+		decimals={3}
+	/>
 
-	<StRow
+	<CalibrationRow
 		title="Pressure"
+		unit={pressureUnit}
+		currentValue={cal[CalTarget.Pressure]?.current ?? null}
+		factoryValue={cal[CalTarget.Pressure]?.factory ?? null}
+		newValueInput={{ type: 'disabled' }}
+		onApply={() => openApply(CalTarget.Pressure)}
+		onResetToFactory={() => openReset(CalTarget.Pressure)}
+		applyDisabled={pressureApplyState.disabled}
+		applyDisabledReason={pressureApplyState.reason}
+		resetDisabled={pressureResetState.disabled}
+		resetDisabledReason={pressureResetState.reason}
 		needsConnection={!connected}
-		sub="The DE1's group-pressure sensor offset, {unitLabel('pressure', prefs)}."
-	>
-		{#snippet control()}
-			<div class="cal-control">
-				<div class="cal-pair">
-					<div>
-						<div class="t-eyebrow">Current</div>
-						<div class="cal-val">{fmt(cal[CalTarget.Pressure]?.current)}</div>
-					</div>
-					<div>
-						<div class="t-eyebrow">Factory</div>
-						<div class="cal-val">{fmt(cal[CalTarget.Pressure]?.factory)}</div>
-					</div>
-				</div>
-				<div class="cal-actions">
-					<button
-						type="button"
-						class="st-btn st-btn-secondary"
-						onclick={() => openApply(CalTarget.Pressure)}
-						disabled={!connected}
-					>
-						Apply
-					</button>
-					<button
-						type="button"
-						class="st-btn st-btn-danger"
-						onclick={() => openReset(CalTarget.Pressure)}
-						disabled={!connected}
-					>
-						Reset to factory
-					</button>
-				</div>
-			</div>
-		{/snippet}
-	</StRow>
+		decimals={3}
+	/>
 
-	<StRow
-		title="Flow calibration multiplier"
+	<CalibrationRow
+		title="Flow"
+		unit=""
+		currentValue={flowMultiplier}
+		factoryValue={FLOW_DEFAULT}
+		newValueInput={{
+			type: 'stepper',
+			min: FLOW_MIN,
+			max: FLOW_MAX,
+			step: FLOW_STEP,
+			value: flowDraft
+		}}
+		onNewValueChange={(next) => (flowDraft = next)}
+		onApply={() => openApply(CalTarget.Flow)}
+		onResetToFactory={() => openReset(CalTarget.Flow)}
+		applyDisabled={flowApplyState.disabled}
+		applyDisabledReason={flowApplyState.reason}
+		resetDisabled={flowResetState.disabled}
+		resetDisabledReason={flowResetState.reason}
+		description="Calibrate when an external scale disagrees with the DE1's estimate."
 		needsConnection={!connected}
-		sub="Per-machine flow correction (MMR 0x80383C). Default 1.000 (no correction); range 0.13–2.0. Drag-grade flow drift skews weight-stop accuracy; calibrate when an external scale disagrees with the DE1's estimate."
-	>
-		{#snippet control()}
-			<div class="cal-control">
-				<div class="cal-pair">
-					<div>
-						<div class="t-eyebrow">Current</div>
-						<div class="cal-val">{flowCurrentLabel}</div>
-					</div>
-					<div>
-						<div class="t-eyebrow">New value</div>
-						<div class="cal-flow-input">
-							<input
-								type="number"
-								min={FLOW_MIN}
-								max={FLOW_MAX}
-								step={FLOW_STEP}
-								value={Number(flowDraft.toFixed(3))}
-								oninput={onFlowDraftInput}
-								disabled={!connected}
-								aria-label="Flow calibration multiplier"
-							/>
-						</div>
-					</div>
-				</div>
-				<div class="cal-actions">
-					<button
-						type="button"
-						class="st-btn st-btn-secondary"
-						onclick={openFlowApply}
-						disabled={!connected || !flowDirty}
-						title={!connected ? 'Connect DE1 to apply calibration' : undefined}
-					>
-						Apply
-					</button>
-					<button
-						type="button"
-						class="cal-flow-reset"
-						onclick={openFlowReset}
-						disabled={!connected || flowAtDefault}
-						title={flowAtDefault ? 'Already at the default (1.000)' : undefined}
-					>
-						Reset to 1.000
-					</button>
-				</div>
-			</div>
-		{/snippet}
-	</StRow>
+		decimals={3}
+	/>
 
 	<StRow
 		title="Last read"
@@ -525,11 +406,15 @@
 {#if editing != null}
 	{@const target = editing.target}
 	{@const mode = editing.mode}
+	{@const isFlow = target === CalTarget.Flow}
+	{@const sensorUnit = unitFor(target)}
 	<!--
-		Inline modal — scrim + centred panel. Click the scrim or press Escape
-		to close. Apply mode collects Reported / Measured; Reset mode shows
-		no fields. Both gates require typing the sensor name to commit, so a
-		stray tap can't warp the user's shots until they next reset.
+		One inline modal — scrim + centred panel. Click the scrim or press
+		Escape to close. Apply mode for Temp/Pressure collects Reported /
+		Measured; Apply mode for Flow shows the "Setting to" preview. Reset
+		mode shows no fields. Every path requires the type-to-confirm token
+		(sensor name for Apply; `reset` for Reset) before the commit button
+		enables.
 	-->
 	<div
 		class="cal-modal-scrim"
@@ -552,16 +437,24 @@
 				<div class="t-eyebrow">
 					{mode === 'apply' ? 'Apply calibration' : 'Reset calibration'}
 				</div>
-				<h2 id="cal-modal-title">{nameOf(target)} sensor</h2>
+				<h2 id="cal-modal-title">{modalTitle}{isFlow ? ' multiplier' : ' sensor'}</h2>
 			</div>
 
 			<div class="cal-modal-warn" role="alert">
 				<i class="ph ph-warning-octagon" aria-hidden="true"></i>
 				<span>
-					{#if mode === 'apply'}
+					{#if mode === 'apply' && isFlow}
+						This changes how the DE1 estimates dispensed mass from its
+						flow-meter on every shot. Verify the new value matches what
+						an external scale shows before proceeding.
+					{:else if mode === 'apply'}
 						Calibration changes how the DE1 interprets {nameOf(target)}
 						readings on every shot. Verify both values come from a trusted
 						external instrument before proceeding.
+					{:else if isFlow}
+						This restores the DE1's flow-calibration multiplier to the
+						no-correction default (1.000). Any prior calibration is
+						overwritten.
 					{:else}
 						This discards your current {nameOf(target)} calibration and
 						restores the factory baseline. The DE1 will use the as-shipped
@@ -571,7 +464,22 @@
 			</div>
 
 			<div class="cal-modal-body">
-				{#if mode === 'apply'}
+				{#if mode === 'apply' && isFlow}
+					<div class="cal-flow-rows">
+						<div class="cal-flow-row">
+							<span class="cal-flow-row-label">Currently set</span>
+							<span class="cal-flow-row-value">
+								{flowMultiplier == null ? '—' : flowMultiplier.toFixed(3)}
+							</span>
+						</div>
+						<div class="cal-flow-row">
+							<span class="cal-flow-row-label">Setting to</span>
+							<span class="cal-flow-row-value cal-flow-row-value-chosen">
+								{clampFlow(flowDraft).toFixed(3)}
+							</span>
+						</div>
+					</div>
+				{:else if mode === 'apply'}
 					<label class="cal-field">
 						<span class="cal-field-label">Reported</span>
 						<span class="cal-field-sub">The value the DE1 reported.</span>
@@ -582,7 +490,7 @@
 								bind:value={editReported}
 								disabled={applying}
 							/>
-							<span class="cal-field-unit">{unitFor(target)}</span>
+							<span class="cal-field-unit">{sensorUnit}</span>
 						</div>
 					</label>
 
@@ -596,7 +504,7 @@
 								bind:value={editMeasured}
 								disabled={applying}
 							/>
-							<span class="cal-field-unit">{unitFor(target)}</span>
+							<span class="cal-field-unit">{sensorUnit}</span>
 						</div>
 					</label>
 
@@ -626,7 +534,7 @@
 								}
 							}}
 							placeholder={expectedTyped}
-							aria-label="Type sensor name to confirm"
+							aria-label="Type confirmation token"
 						/>
 					</div>
 				</label>
@@ -651,6 +559,8 @@
 						{mode === 'apply' ? 'Applying…' : 'Resetting…'}
 					{:else if mode === 'apply'}
 						Apply calibration
+					{:else if isFlow}
+						Reset to default
 					{:else}
 						Reset to factory
 					{/if}
@@ -660,145 +570,7 @@
 	</div>
 {/if}
 
-{#if flowEditing != null}
-	<!--
-		Flow-calibration confirm modal — same scrim + panel shape as the
-		sensor-calibration modal above. Asks the user to type `flow` before
-		committing. The wire write is `set_calibration_flow_multiplier`
-		(MMR `0x80383C`, scaled `int(1000 × m)`); the core also clamps
-		0.13..=2.0 as a defence-in-depth.
-	-->
-	<div
-		class="cal-modal-scrim"
-		role="presentation"
-		onclick={closeFlowModal}
-		onkeydown={(e) => {
-			if (e.key === 'Enter' || e.key === ' ') closeFlowModal();
-		}}
-	>
-		<div
-			class="cal-modal"
-			role="dialog"
-			aria-modal="true"
-			aria-labelledby="cal-flow-modal-title"
-			tabindex="-1"
-			onclick={(e) => e.stopPropagation()}
-			onkeydown={(e) => e.stopPropagation()}
-		>
-			<div class="cal-modal-head">
-				<div class="t-eyebrow">
-					{flowEditing === 'apply' ? 'Apply calibration' : 'Reset calibration'}
-				</div>
-				<h2 id="cal-flow-modal-title">flow multiplier</h2>
-			</div>
-
-			<div class="cal-modal-warn" role="alert">
-				<i class="ph ph-warning-octagon" aria-hidden="true"></i>
-				<span>
-					{#if flowEditing === 'apply'}
-						This changes how the DE1 estimates dispensed mass from its
-						flow-meter on every shot. Verify the new value matches what
-						an external scale shows before proceeding.
-					{:else}
-						This restores the DE1's flow-calibration multiplier to the
-						no-correction default (1.000). Any prior calibration is
-						overwritten.
-					{/if}
-				</span>
-			</div>
-
-			<div class="cal-modal-body">
-				<div class="cal-flow-rows">
-					<div class="cal-flow-row">
-						<span class="cal-flow-row-label">Currently set</span>
-						<span class="cal-flow-row-value">{flowCurrentLabel}</span>
-					</div>
-					<div class="cal-flow-row">
-						<span class="cal-flow-row-label">Setting to</span>
-						<span class="cal-flow-row-value cal-flow-row-value-chosen">
-							{flowTargetValue.toFixed(3)}
-						</span>
-					</div>
-				</div>
-
-				<label class="cal-field">
-					<span class="cal-field-label">
-						Type <code>{flowExpectedTyped}</code> to confirm
-					</span>
-					<span class="cal-field-sub">
-						This prevents a stray tap from committing the change.
-					</span>
-					<div class="cal-field-input">
-						<input
-							type="text"
-							autocomplete="off"
-							autocorrect="off"
-							autocapitalize="off"
-							spellcheck="false"
-							bind:value={flowTyped}
-							disabled={flowApplying}
-							onkeydown={(e) => {
-								if (e.key === 'Enter' && flowTypedMatches) {
-									e.preventDefault();
-									void confirmFlowAction();
-								}
-							}}
-							placeholder={flowExpectedTyped}
-							aria-label="Type flow to confirm"
-						/>
-					</div>
-				</label>
-			</div>
-
-			<div class="cal-modal-actions">
-				<button
-					type="button"
-					class="st-btn st-btn-secondary"
-					onclick={closeFlowModal}
-					disabled={flowApplying}
-				>
-					Cancel
-				</button>
-				<button
-					type="button"
-					class={['st-btn', flowEditing === 'reset' ? 'st-btn-danger' : 'st-btn-primary']}
-					onclick={confirmFlowAction}
-					disabled={flowApplying || !connected || !flowTypedMatches}
-				>
-					{#if flowApplying}
-						{flowEditing === 'apply' ? 'Applying…' : 'Resetting…'}
-					{:else if flowEditing === 'apply'}
-						Apply calibration
-					{:else}
-						Reset to default
-					{/if}
-				</button>
-			</div>
-		</div>
-	</div>
-{/if}
-
 <style>
-	.cal-control {
-		display: flex;
-		align-items: center;
-		gap: 24px;
-	}
-	.cal-pair {
-		display: flex;
-		gap: 28px;
-	}
-	.cal-val {
-		font-family: var(--font-mono);
-		font-size: 13px;
-		font-variant-numeric: tabular-nums;
-		color: var(--fg-1);
-	}
-	.cal-actions {
-		display: flex;
-		gap: 8px;
-		align-items: center;
-	}
 	.cal-refresh {
 		display: flex;
 		align-items: center;
@@ -808,53 +580,6 @@
 		font-family: var(--font-mono);
 		font-size: 11px;
 		color: rgba(var(--tint-rgb), 0.55);
-	}
-
-	/* ---- Flow-multiplier row -------------------------------------------- */
-
-	.cal-flow-input {
-		display: inline-flex;
-		align-items: center;
-		min-width: 88px;
-	}
-	.cal-flow-input input {
-		width: 6em;
-		border: 1px solid rgba(var(--tint-rgb), 0.18);
-		border-radius: 6px;
-		background: rgba(var(--tint-rgb), 0.04);
-		padding: 4px 8px;
-		font-family: var(--font-mono);
-		font-size: 13px;
-		font-variant-numeric: tabular-nums;
-		color: var(--fg-1);
-		outline: none;
-	}
-	.cal-flow-input input:focus-visible {
-		border-color: rgba(var(--copper-rgb), 0.5);
-		background: rgba(var(--tint-rgb), 0.06);
-	}
-	.cal-flow-input input:disabled {
-		opacity: 0.55;
-		cursor: not-allowed;
-	}
-	.cal-flow-reset {
-		background: transparent;
-		border: 0;
-		color: var(--copper-400);
-		font-family: var(--font-sans);
-		font-size: 12px;
-		padding: 4px 6px;
-		cursor: pointer;
-		text-decoration: underline;
-		text-underline-offset: 2px;
-	}
-	.cal-flow-reset:hover:not(:disabled) {
-		color: var(--fg-1);
-	}
-	.cal-flow-reset:disabled {
-		opacity: 0.4;
-		cursor: not-allowed;
-		text-decoration: none;
 	}
 
 	/* ---- Modal ---------------------------------------------------------- */
