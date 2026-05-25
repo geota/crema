@@ -109,6 +109,21 @@ crema/
 └── android/                  # Native Kotlin shell (in progress)
 ```
 
+## Coming soon
+
+### Native Android tablet + phone apps
+
+A parallel **Jetpack Compose** shell for Android is in active development. It reuses the same Rust `de1-core` workspace via [UniFFI](https://github.com/mozilla/uniffi-rs) bindings — the protocol codecs, shot state machine, profile model, bean/roaster store, and Visualizer reconciliation logic all share **one source of truth across web and Android**.
+
+Why both shells:
+
+- **Tablet-first ergonomics** — the DE1 is paired with a tablet 90% of the time. A native Compose UI gets edge-to-edge layouts, Material 3 motion, and predictable BLE behavior the way Android users expect.
+- **Phone companion** — a slimmer "remote" surface for one-handed brewing-context switches (start/stop, weight readout, last-shot review) without breaking eye contact with the espresso.
+- **Background BLE** — native Android can keep the DE1 + scale connections alive when the screen is off and across Doze, something the web shell can't guarantee.
+- **Same brain, two faces** — bug-fix the protocol once in Rust, both shells inherit. Add a bean field once in the domain crate, both UIs see it via typeshare / UniFFI.
+
+The Rust core's surface (`CremaCore` facade + typed event stream) is already FFI-ready; the Android shell tracks parity feature-by-feature against the web shell.
+
 ## Contributing
 
 Issues and pull requests welcome. The codebase aims for:
