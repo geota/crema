@@ -5788,6 +5788,7 @@ mod tests {
 
         fn profile(title: &str, steps: Vec<ProfileStep>) -> Profile {
             Profile {
+                id: String::new(),
                 title: title.to_string(),
                 notes: String::new(),
                 steps,

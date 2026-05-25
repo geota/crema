@@ -126,6 +126,15 @@ export interface ProfileStep {
  * type — it only crosses the bridge as a JSON string.
  */
 export interface Profile {
+	/**
+	 * Stable profile ID — a UUID v7 (RFC 9562) string. Built-ins ship
+	 * with their ID baked into `core/de1-domain/profiles/builtin.json`;
+	 * custom profiles get a fresh ID from {@link newProfileId}. Empty
+	 * string ("") for profiles imported from the v2 community JSON
+	 * format (which has no `id` field) — the shell mints a fresh ID
+	 * for an imported profile before persisting it.
+	 */
+	id: string;
 	/** Profile title. */
 	title: string;
 	/** Free-text notes. */
@@ -618,6 +627,40 @@ export interface CremaCore {
 let corePromise: Promise<CremaCore> | undefined;
 
 /**
+ * The loaded wasm namespace, captured by {@link createCore} so synchronous
+ * helpers (e.g. {@link newProfileId}) can reach the pure top-level wasm
+ * exports without re-doing the async init. `undefined` until the first
+ * {@link loadCore} resolves.
+ */
+let wasmModule: typeof import('$lib/wasm/de1_wasm.js') | undefined;
+
+/**
+ * Mint a fresh profile ID — a UUID v7 (RFC 9562, 2024) in the
+ * 36-character dashed form, e.g. `01910f80-7a3b-7c54-b2d1-23a4f8e9cd00`.
+ *
+ * Synchronous wrapper over the wasm `newProfileId` export, which the
+ * Rust core ([`de1_domain::new_profile_id`]) backs. Requires
+ * {@link loadCore} to have resolved at least once: every place that
+ * calls this (profile create / duplicate / import) sits behind the
+ * orchestrator's boot, where the core has already loaded.
+ *
+ * Used for **custom** profiles. Built-in profile IDs are pre-generated
+ * and ship in `core/de1-domain/profiles/builtin.json` — not minted at
+ * runtime.
+ *
+ * @throws `Error` if the wasm module has not been loaded yet
+ *  (a programming error — call `await loadCore()` once at boot).
+ */
+export function newProfileId(): string {
+	if (!wasmModule) {
+		throw new Error(
+			'newProfileId() called before the wasm core was loaded; await loadCore() first'
+		);
+	}
+	return wasmModule.newProfileId();
+}
+
+/**
  * Load the wasm core and return the async facade.
  *
  * Dynamic-imports the `de1-wasm` bundle, `await`s its async `init()`, and
@@ -637,6 +680,11 @@ export function loadCore(): Promise<CremaCore> {
 async function createCore(): Promise<CremaCore> {
 	const wasm = await import('$lib/wasm/de1_wasm.js');
 	await wasm.default();
+	// Cache the namespace so the synchronous top-level helpers (e.g.
+	// `newProfileId`) can reach the wasm without going through the
+	// async facade — these helpers run from synchronous edit-shell
+	// paths (create / duplicate / import a profile).
+	wasmModule = wasm;
 	const bridge = new wasm.CremaBridge();
 
 	/**

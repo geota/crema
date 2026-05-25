@@ -273,6 +273,24 @@ impl From<SteamHotWaterSettings> for ShotSettings {
     }
 }
 
+/// Mint a fresh profile ID — a standard UUID v7 (RFC 9562, 2024) in
+/// the 36-character dashed form, e.g.
+/// `01910f80-7a3b-7c54-b2d1-23a4f8e9cd00`. The 48-bit timestamp prefix
+/// makes IDs lexicographically sortable by creation time; the 74 random
+/// bits keep collisions astronomical.
+///
+/// Used by the Android shell when creating, duplicating, or importing a
+/// **custom** profile. Built-in IDs are pre-generated and live in
+/// `core/de1-domain/profiles/builtin.json`, not minted at runtime.
+/// Exposed at the top level rather than on [`CremaBridge`] so the shell
+/// can call it without needing a core instance.
+///
+/// See [`de1_domain::new_profile_id`] for the canonical implementation.
+#[uniffi::export]
+pub fn new_profile_id() -> String {
+    de1_domain::new_profile_id()
+}
+
 /// The Crema core, exposed to the Kotlin shell.
 ///
 /// Methods that produce a [`CoreOutput`] return it as a JSON string; the shell

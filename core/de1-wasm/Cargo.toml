@@ -16,6 +16,13 @@ de1-domain = { path = "../de1-domain" }
 de1-protocol = { path = "../de1-protocol" }
 serde_json = { workspace = true }
 wasm-bindgen = "0.2.121"
+# The `uuid` crate needs a randomness source on `wasm32-unknown-unknown`;
+# the `js` feature wires it through `crypto.getRandomValues()` via
+# `wasm-bindgen` + `js-sys`. Pulled in (rather than declared in
+# `de1-domain`) so the workspace build for the host target stays free of
+# the JS-binding dependency tree. See:
+# https://docs.rs/uuid/latest/uuid/#wasm-support
+uuid = { version = "1", features = ["v7", "js"] }
 
 [dev-dependencies]
 serde_json = { workspace = true }

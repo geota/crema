@@ -1,5 +1,6 @@
 [
   {
+    "id": "019e5fb5-63b5-7333-a2ac-34b9f4f0e604",
     "title": "7g basket",
     "notes": "This profile is optimized for the 7g Decent Basket.  You should weigh 7g of beans and dose them into the center mini-basket at the bottom.  You'll need a small 36mm tamper.  The flow rate is slowed down to prevent disturbing the puck.  A lower pressure is used to compensate for the lower puck integrity.  Final shot weight should be 18 to 28 grams.",
     "steps": [
@@ -17,7 +18,8 @@
           "threshold": 4.5
         },
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "preinfusion",
@@ -33,7 +35,8 @@
           "threshold": 4.5
         },
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "forced rise without limit",
@@ -45,7 +48,8 @@
         "duration_seconds": 3.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "rise and hold",
@@ -60,7 +64,8 @@
         "limiter": {
           "value": 6.0,
           "range": 1.0
-        }
+        },
+        "weight": null
       },
       {
         "name": "decline",
@@ -75,15 +80,23 @@
         "limiter": {
           "value": 6.0,
           "range": 1.0
-        }
+        },
+        "weight": null
       }
     ],
     "preinfuse_step_count": 2,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 36
+    "max_total_volume_ml": 36,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-34c516215b2c",
     "title": "80's Espresso",
     "notes": "For medium to dark roasted beans. Produced a complex espresso meant for sipping, not for mixing with milk. The low starting temperature of 82C--which declines to 72C--is the magic.  This creates a silky, textured shot with good aroma, pleasant acidity, great complexity, and no off flavors. There are two styles: a ristretto or a double shot.  With a ristretto, put the recommended dose weight (ie, 14g, 15g, 18g, 20g) into the basket, and pull it as a 1:1 ratio shot.  For a double shot, updose by 10% to 20% and extract to a 2:1 ratio (and grind a bit coarser).  With both approaches, immediately after preinfusion aim for a flow rate in the range of 0.5-1.2ml/sec. The darker the roast, the slower the recommended flow rate. The ristretto has more flavor and complexity while the overdosed double shot is very smooth, easy to drink, and classic.",
     "steps": [
@@ -97,7 +110,8 @@
         "duration_seconds": 2.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "preinfusion",
@@ -113,7 +127,8 @@
           "threshold": 3.8
         },
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "rise and hold",
@@ -125,7 +140,8 @@
         "duration_seconds": 4.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "decline",
@@ -137,15 +153,23 @@
         "duration_seconds": 50.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 1,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-34d77349babd",
     "title": "A-Flow / default-dark",
     "notes": "A-Flow: an alternative profile for D-Flow",
     "steps": [
@@ -166,7 +190,8 @@
         "limiter": {
           "value": 8.0,
           "range": 0.6
-        }
+        },
+        "weight": null
       },
       {
         "name": "Infuse",
@@ -181,7 +206,8 @@
         "limiter": {
           "value": 1.0,
           "range": 0.6
-        }
+        },
+        "weight": null
       },
       {
         "name": "Pressure Up",
@@ -197,7 +223,8 @@
           "threshold": 2.0
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Pressure Decline",
@@ -213,7 +240,8 @@
           "threshold": 2.1
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flow Start",
@@ -225,7 +253,8 @@
         "duration_seconds": 0.0,
         "exit": null,
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flow Extraction",
@@ -240,15 +269,23 @@
         "limiter": {
           "value": 9.0,
           "range": 0.6
-        }
+        },
+        "weight": null
       }
     ],
     "preinfuse_step_count": 2,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 100
+    "max_total_volume_ml": 100,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-34efafd59cf6",
     "title": "A-Flow / default-like-dflow",
     "notes": "A-Flow: an alternative profile for D-Flow",
     "steps": [
@@ -269,7 +306,8 @@
         "limiter": {
           "value": 8.0,
           "range": 0.6
-        }
+        },
+        "weight": null
       },
       {
         "name": "Infuse",
@@ -284,7 +322,8 @@
         "limiter": {
           "value": 1.0,
           "range": 0.6
-        }
+        },
+        "weight": null
       },
       {
         "name": "Pressure Up",
@@ -300,7 +339,8 @@
           "threshold": 2.0
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Pressure Decline",
@@ -316,7 +356,8 @@
           "threshold": 2.1
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flow Start",
@@ -332,7 +373,8 @@
           "threshold": 1.9
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flow Extraction",
@@ -347,15 +389,23 @@
         "limiter": {
           "value": 10.0,
           "range": 0.6
-        }
+        },
+        "weight": null
       }
     ],
     "preinfuse_step_count": 2,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 100
+    "max_total_volume_ml": 100,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-34f5d2318196",
     "title": "A-Flow / default-medium",
     "notes": "A-Flow: an alternative profile for D-Flow",
     "steps": [
@@ -376,7 +426,8 @@
         "limiter": {
           "value": 8.0,
           "range": 0.6
-        }
+        },
+        "weight": null
       },
       {
         "name": "Infuse",
@@ -391,7 +442,8 @@
         "limiter": {
           "value": 1.0,
           "range": 0.6
-        }
+        },
+        "weight": null
       },
       {
         "name": "Pressure Up",
@@ -407,7 +459,8 @@
           "threshold": 2.0
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Pressure Decline",
@@ -423,7 +476,8 @@
           "threshold": 2.0
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flow Start",
@@ -435,7 +489,8 @@
         "duration_seconds": 0.0,
         "exit": null,
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flow Extraction",
@@ -450,15 +505,23 @@
         "limiter": {
           "value": 10.0,
           "range": 0.6
-        }
+        },
+        "weight": null
       }
     ],
     "preinfuse_step_count": 2,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 100
+    "max_total_volume_ml": 100,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-35089d9721cf",
     "title": "A-Flow / default-very-dark",
     "notes": "A-Flow: an alternative profile for D-Flow",
     "steps": [
@@ -479,7 +542,8 @@
         "limiter": {
           "value": 8.0,
           "range": 0.6
-        }
+        },
+        "weight": null
       },
       {
         "name": "Infuse",
@@ -494,7 +558,8 @@
         "limiter": {
           "value": 1.0,
           "range": 0.6
-        }
+        },
+        "weight": null
       },
       {
         "name": "Pressure Up",
@@ -510,7 +575,8 @@
           "threshold": 3.6
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Pressure Decline",
@@ -526,7 +592,8 @@
           "threshold": 1.9
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flow Start",
@@ -538,7 +605,8 @@
         "duration_seconds": 0.0,
         "exit": null,
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flow Extraction",
@@ -553,15 +621,23 @@
         "limiter": {
           "value": 10.0,
           "range": 0.6
-        }
+        },
+        "weight": null
       }
     ],
     "preinfuse_step_count": 2,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 100
+    "max_total_volume_ml": 100,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-351638801558",
     "title": "Advanced spring lever",
     "notes": "Advanced spring lever profile, with additional constant flow step to salvage overly slow and fast flowing shots.",
     "steps": [
@@ -579,7 +655,8 @@
           "threshold": 6.0
         },
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "infuse",
@@ -595,7 +672,8 @@
           "threshold": 6.0
         },
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "rise and hold",
@@ -607,7 +685,8 @@
         "duration_seconds": 3.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "decline",
@@ -626,7 +705,8 @@
         "limiter": {
           "value": 1.5,
           "range": 0.6
-        }
+        },
+        "weight": null
       },
       {
         "name": "maintain flow",
@@ -641,15 +721,23 @@
         "limiter": {
           "value": 6.0,
           "range": 0.6
-        }
+        },
+        "weight": null
       }
     ],
     "preinfuse_step_count": 0,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-3520b89e29d1",
     "title": "Best overall pressure profile",
     "notes": "We recommend this pressure profile as the most likely to produce a good espresso in the most varied number of cases.  The decreasing pressure will help reduce acidity.",
     "steps": [
@@ -667,7 +755,8 @@
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "preinfusion",
@@ -683,7 +772,8 @@
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "forced rise without limit",
@@ -695,7 +785,8 @@
         "duration_seconds": 3.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "rise and hold",
@@ -710,7 +801,8 @@
         "limiter": {
           "value": 3.5,
           "range": 1.0
-        }
+        },
+        "weight": null
       },
       {
         "name": "decline",
@@ -725,15 +817,23 @@
         "limiter": {
           "value": 3.5,
           "range": 1.0
-        }
+        },
+        "weight": null
       }
     ],
     "preinfuse_step_count": 0,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-3530a13a834f",
     "title": "Blooming Allongé",
     "notes": "An amazing long espresso for light roasts, this is a fruit bomb of a brewing method. 5:1 ratio, 60 seconds, very fine grind. If close to the right pressure, make 0.5g dose adjustments to get to an 8-9 bar peak. The very high flow rate means small grind adjustments cause big pressure changes. A very advanced technique, extractions average 26%.",
     "steps": [
@@ -747,7 +847,8 @@
         "duration_seconds": 2.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "fast pre",
@@ -763,7 +864,8 @@
           "threshold": 3.5
         },
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "ramp down pre",
@@ -779,7 +881,8 @@
           "threshold": 3.5
         },
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "bloom",
@@ -791,7 +894,8 @@
         "duration_seconds": 30.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "ramp",
@@ -803,7 +907,8 @@
         "duration_seconds": 7.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "hold at 3.5 ml/s",
@@ -818,15 +923,23 @@
         "limiter": {
           "value": 8.6,
           "range": 0.6
-        }
+        },
+        "weight": null
       }
     ],
     "preinfuse_step_count": 0,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 180
+    "max_total_volume_ml": 180,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-354503e27cdf",
     "title": "Blooming Espresso",
     "notes": "This technique causes a furor when Rao first published it.  His extraction of 24% is 2% higher than what is usually attainable with only the very best grinders, yet Rao did it with an inexpensive home grinder.  This technique is especially appropriate for lightly roasted, complex and expensive coffee beans.  If you have a bluetooth scale, you can keep track of how much dripping into the cup there is before the ramp stage.  8 grams of total dripping, within 2 grams, seems to give the best tasting results. Try adusting your grind and dose to get that amount of dripping, and see if you like how it tastes.",
     "steps": [
@@ -840,7 +953,8 @@
         "duration_seconds": 2.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "preinfusion",
@@ -856,7 +970,8 @@
           "threshold": 4.0
         },
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "pause",
@@ -868,7 +983,8 @@
         "duration_seconds": 30.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "ramp",
@@ -880,7 +996,8 @@
         "duration_seconds": 5.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "flat flow",
@@ -895,7 +1012,8 @@
         "limiter": {
           "value": 8.6,
           "range": 0.6
-        }
+        },
+        "weight": null
       },
       {
         "name": "reset temperature",
@@ -907,15 +1025,23 @@
         "duration_seconds": 1.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 2,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-355adebcb237",
     "title": "Classic Italian espresso",
     "notes": "This will imitate the espresso style of the majority of cafes around the world. It uses a short preinfusion with a flat 9 bar pressure profile.",
     "steps": [
@@ -933,7 +1059,8 @@
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "preinfusion",
@@ -949,7 +1076,8 @@
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "forced rise without limit",
@@ -961,7 +1089,8 @@
         "duration_seconds": 3.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "rise and hold",
@@ -976,15 +1105,23 @@
         "limiter": {
           "value": 4.5,
           "range": 1.0
-        }
+        },
+        "weight": null
       }
     ],
     "preinfuse_step_count": 0,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-356c9eb7de77",
     "title": "Cleaning/Forward Flush x5",
     "notes": "A convenient way to 5 times flush and clean your group head.  (1) Put a blind basket in your portafilter  (2) Put 3g (1/2 teaspoon) of espresso machine detergent in the blind basket  (3) Run this profile  (4) When it is done, remove the portafilter off Flush the DE1 until the water goes clear  (5) Put the portafilter back without detergent and run this profile again  (6) Finally, run FLUSH for 20 seconds.",
     "steps": [
@@ -998,7 +1135,8 @@
         "duration_seconds": 2.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Pressure rise 1",
@@ -1010,7 +1148,8 @@
         "duration_seconds": 18.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Pause 1",
@@ -1022,7 +1161,8 @@
         "duration_seconds": 15.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Pressure rise 2",
@@ -1034,7 +1174,8 @@
         "duration_seconds": 15.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Pause 2",
@@ -1046,7 +1187,8 @@
         "duration_seconds": 15.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Pressure rise 3",
@@ -1058,7 +1200,8 @@
         "duration_seconds": 15.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Pause 3",
@@ -1070,7 +1213,8 @@
         "duration_seconds": 15.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Pressure rise 4",
@@ -1082,7 +1226,8 @@
         "duration_seconds": 15.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Pause 4",
@@ -1094,7 +1239,8 @@
         "duration_seconds": 15.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Pressure rise 5",
@@ -1106,15 +1252,23 @@
         "duration_seconds": 15.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 2,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-3571d61e1e01",
     "title": "Cremina lever machine",
     "notes": "Aim for a 50 second shot time to have a thick espresso in the style of the much-loved Cremina manual lever machine. By Denis from KafaTek.",
     "steps": [
@@ -1128,7 +1282,8 @@
         "duration_seconds": 2.0,
         "exit": null,
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "preinfusion",
@@ -1144,7 +1299,8 @@
           "threshold": 3.0
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "soak",
@@ -1156,7 +1312,8 @@
         "duration_seconds": 10.0,
         "exit": null,
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "ramp",
@@ -1168,7 +1325,8 @@
         "duration_seconds": 10.0,
         "exit": null,
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "ramp-down",
@@ -1180,15 +1338,23 @@
         "duration_seconds": 50.0,
         "exit": null,
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 0,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-358f486b4bc7",
     "title": "Damian's LM Leva",
     "notes": "Damian wrote this profile to mimic a shot Gabor Laczko recorded on a La Marzocco Leva machine using his Smart Espresso Profiler. He feels that this is a great profile for non milk drinks, it highlights flavours in a smooth balanced way, with a more creamy body than the thicker chocolatey body of the LRv2 profile. By Damian Brakel",
     "steps": [
@@ -1202,7 +1368,8 @@
         "duration_seconds": 2.0,
         "exit": null,
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "fill",
@@ -1218,7 +1385,8 @@
           "threshold": 1.0
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "preinfusion",
@@ -1234,7 +1402,8 @@
           "threshold": 4.0
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "rise",
@@ -1250,7 +1419,8 @@
           "threshold": 8.0
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "hold",
@@ -1266,7 +1436,8 @@
           "threshold": 1.5
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "decline",
@@ -1278,15 +1449,23 @@
         "duration_seconds": 58.0,
         "exit": null,
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 2,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-3590e5f325f7",
     "title": "Damian's LRv2",
     "notes": "This profile simulates a Londinium R machines extraction style. This is an advanced profile with some added steps to assist with less than ideal puck prep. Christee-Lee described it as like having a milkshake with extra syrup. Great body and flavour range. 2nd edition.   By Damian Brakel",
     "steps": [
@@ -1300,7 +1479,8 @@
         "duration_seconds": 2.0,
         "exit": null,
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Fill",
@@ -1316,7 +1496,8 @@
           "threshold": 1.5
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Infuse",
@@ -1328,7 +1509,8 @@
         "duration_seconds": 12.0,
         "exit": null,
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Pressure Up",
@@ -1340,7 +1522,8 @@
         "duration_seconds": 8.0,
         "exit": null,
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Pressure Decline",
@@ -1356,7 +1539,8 @@
           "threshold": 2.8
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Pressure Hold",
@@ -1372,7 +1556,8 @@
           "threshold": 2.8
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flow Limit",
@@ -1384,15 +1569,23 @@
         "duration_seconds": 127.0,
         "exit": null,
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 2,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-35a03e8e3479",
     "title": "Damian's LRv3",
     "notes": "This profile simulates a Londinium R machines extraction style. This is an advanced profile with some added steps to assist with less than ideal puck prep. Christee-Lee described it as like having a milkshake with extra syrup. Great body and flavour range. 3rd edition. By Damian Brakel",
     "steps": [
@@ -1406,7 +1599,8 @@
         "duration_seconds": 2.0,
         "exit": null,
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Fill",
@@ -1422,7 +1616,8 @@
           "threshold": 1.5
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Infuse",
@@ -1434,7 +1629,8 @@
         "duration_seconds": 12.0,
         "exit": null,
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Pressure Up",
@@ -1446,7 +1642,8 @@
         "duration_seconds": 4.0,
         "exit": null,
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "9 Bar Hold",
@@ -1462,7 +1659,8 @@
           "threshold": 1.9
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Pressure Decline",
@@ -1478,7 +1676,8 @@
           "threshold": 2.8
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "5 Bar Hold",
@@ -1494,7 +1693,8 @@
           "threshold": 2.8
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flow Limit",
@@ -1506,15 +1706,23 @@
         "duration_seconds": 127.0,
         "exit": null,
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 2,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-35b2f76390ce",
     "title": "Damian's Q",
     "notes": "A very popular profile made with D-Flow, spun out as its own profile.  Optimized for medium-light beans. By Damian Brakel",
     "steps": [
@@ -1532,7 +1740,8 @@
           "threshold": 3.0
         },
         "volume_limit_ml": 60,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Infusing",
@@ -1544,7 +1753,8 @@
         "duration_seconds": 1.0,
         "exit": null,
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Pouring",
@@ -1559,15 +1769,23 @@
         "limiter": {
           "value": 10.0,
           "range": 0.2
-        }
+        },
+        "weight": null
       }
     ],
     "preinfuse_step_count": 2,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-35c6eb3495fa",
     "title": "Espresso Forge Dark",
     "notes": "A dark roast pressure profile that emulates the flow and temperature characteristics of the Espresso Forge manual machine. Good for medium to dark roasts where you want to pull out more fruit flavors, similar to the classic Italian Lever profile.",
     "steps": [
@@ -1585,7 +1803,8 @@
           "threshold": 3.0
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "rise and hold",
@@ -1597,7 +1816,8 @@
         "duration_seconds": 8.0,
         "exit": null,
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "decline",
@@ -1609,7 +1829,8 @@
         "duration_seconds": 30.0,
         "exit": null,
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "reset temperature",
@@ -1621,15 +1842,23 @@
         "duration_seconds": 1.0,
         "exit": null,
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 0,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-35d2631ef332",
     "title": "Espresso Forge Light",
     "notes": "A light roast pressure profile that emulates the flow and temperature characteristics of the Espresso Forge manual machine. Good for medium to light roasts where you want to mute the fruit flavors and up extraction to balance the shot more in comparison to a standard flat or lever profile.",
     "steps": [
@@ -1647,7 +1876,8 @@
           "threshold": 0.5
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "long pre brew",
@@ -1659,7 +1889,8 @@
         "duration_seconds": 25.0,
         "exit": null,
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "high pressure ramp",
@@ -1675,7 +1906,8 @@
           "threshold": 10.0
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "decline",
@@ -1687,7 +1919,8 @@
         "duration_seconds": 50.0,
         "exit": null,
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "reset temperature",
@@ -1699,15 +1932,23 @@
         "duration_seconds": 1.0,
         "exit": null,
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 0,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-35eb8eb88591",
     "title": "Extractamundo Dos!",
     "notes": "Dynamic bloom into pressure extraction. Based on the 'easy blooming' profile structure from Luca and Stephane and modified to primarily target high extraction grinders at high flow rates, typically ending around 2.5-4ml/s. Dial with ratio once grind is giving an ending flowrate in the range. Includes a significant temperature drop that reduces harshness (although the actual temperature drop is much less than programmed). Improves upon TurboBloom by using a flow-based pressure drop instead of a programmed pressure drop. By Joe D.",
     "steps": [
@@ -1721,7 +1962,8 @@
         "duration_seconds": 2.0,
         "exit": null,
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "preinfusion",
@@ -1737,7 +1979,8 @@
           "threshold": 4.5
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "dynamic bloom",
@@ -1753,7 +1996,8 @@
           "threshold": 2.2
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "6 bar",
@@ -1772,15 +2016,23 @@
         "limiter": {
           "value": 1.0,
           "range": 3.0
-        }
+        },
+        "weight": null
       }
     ],
     "preinfuse_step_count": 2,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-35f4b3b39e9d",
     "title": "Filter 2.0",
     "notes": "A new technique developed by Scott Rao, for making filter coffee with an espresso machine and 24g basket.  The process: (1) insert two micron 55mm paper filter into the bottom of a clean portafilter basket.  (2) Rinser the filter and basket with hot water.  (3) Fill the basket with 20g to 22g of finely ground coffee, not quite espresso grind, but far finer than any filter grind.  (4) WDT the grounds.  (5) tamping is optional.  (6) Place a metal mesh filter on top.  (7) Lock in the portafilter and make the espresso to a 5:1 ratio. (8) Dilute with 225g-250g of water.",
     "steps": [
@@ -1794,7 +2046,8 @@
         "duration_seconds": 6.0,
         "exit": null,
         "volume_limit_ml": 465,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "pause",
@@ -1806,7 +2059,8 @@
         "duration_seconds": 120.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "flat flow",
@@ -1821,7 +2075,8 @@
         "limiter": {
           "value": 3.0,
           "range": 0.6
-        }
+        },
+        "weight": null
       },
       {
         "name": "reset temperature",
@@ -1833,15 +2088,23 @@
         "duration_seconds": 1.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 1,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 100
+    "max_total_volume_ml": 100,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-360b73f7d51f",
     "title": "Filter 2.1",
     "notes": "Make excellent filter-style coffee using a normal espresso basket, a paper filter, and your DE1.  No V60 or other equipment required.\n\nA new technique developed by Scott Rao, for making filter coffee with an espresso machine and 24g basket.  The process: (1) insert two micron 55mm paper filter into the bottom of a clean portafilter basket.  (2) Rinser the filter and basket with hot water.  (3) Fill the basket with 20g to 22g of finely ground coffee, not quite espresso grind, but far finer than any filter grind.  (4) WDT the grounds.  (5) tamping is optional.  (6) Place a metal mesh filter on top.  (7) Lock in the portafilter and make the espresso to a 5:1 ratio. (8) Dilute with 225g-250g of water.\n\nFrom Scott Rao: I put the Filter 2.0 profile on in the Internet prematurely, hoping others would try it out and offer suggestions. I received some interesting feedback, some of which helped, and some of which sent me down some dead ends. Now every extraction is stellar.   \n\nMy Filter 2.1 of Pradera Geisha yesterday scored 88.5, exceeding my cupping score by a point. Every cup recently has been juicy, clean, and free of astringency. I consider the profile complete, and better than 99% of pourovers out there. 2.0 is also fast, as total brew time is 2:00. That is especially helpful for cafes seeking a way to brew individual cups with maximum efficiency, which was the goal of this project. \n\nThe keys to Filter 2.0 are:  \n\n(1) Use a paper filter cut to size. The Whatman lab filters yielded cleaner cups, but often imparted off-flavors and weren’t food grade/ food safe, so I dropped those. I’m currently using Chemex filters cut to 55mm circles. I finally found a use for all of that wasteful extra filter paper. \n\n(2) Use an oversized basket relative to dose, to keep pressure as low as possible. (more pressure > more astringency from a given channel). For this profile, I used 16g in a 25g basket. \n\n(3) Use a fine enough grind to use a 3:1 ratio, such that the puck provides enough resistance to maintain a slurry during the bloom (this took months to figure out). \n\n(4) This profile is made for a 15-17g dose. With a larger dose, proportionally increase the water volume in the steps before the bloom. Likewise, if you use 16g in a smaller basket, such as 20g, decrease the amount of preinfusion water, as there will be less headspace to fill. \n\n(5) After brewing 48g of liquid, dilute to your preferred strength (I dilute to 260g total liquid). \n\n(6) My typical extractions are 24%-26%, 8%-8.5% TDS, 16g in, 48g out. Pressure never rises above 0.3 bar.  \n\n(7) When dialing in, if pressure never rises at all, grind finer. If pressure exceeds 0.3 bar during the last few seconds, grind coarser.",
     "steps": [
@@ -1855,7 +2118,8 @@
         "duration_seconds": 4.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "preinfusion",
@@ -1867,7 +2131,8 @@
         "duration_seconds": 8.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "preinfusion",
@@ -1883,7 +2148,8 @@
           "threshold": 0.3
         },
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "0.1 mL/s bloom",
@@ -1895,7 +2161,8 @@
         "duration_seconds": 90.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "ramp",
@@ -1910,7 +2177,8 @@
         "limiter": {
           "value": 0.8,
           "range": 0.6
-        }
+        },
+        "weight": null
       },
       {
         "name": "3 mL/s",
@@ -1925,15 +2193,23 @@
         "limiter": {
           "value": 0.8,
           "range": 0.6
-        }
+        },
+        "weight": null
       }
     ],
     "preinfuse_step_count": 0,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-361be349f297",
     "title": "Flow profile for milky drinks",
     "notes": "John Buckman, the founder of Decent Espresso, finds that this flow profile produces the best espresso shots for milky drinks in the widest variety of circumstances. It is especially tolerant of not-yet-very-good barista technique.",
     "steps": [
@@ -1951,7 +2227,8 @@
           "threshold": 5.0
         },
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "preinfusion",
@@ -1967,7 +2244,8 @@
           "threshold": 5.0
         },
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "hold",
@@ -1982,7 +2260,8 @@
         "limiter": {
           "value": 8.6,
           "range": 0.9
-        }
+        },
+        "weight": null
       },
       {
         "name": "decline",
@@ -1997,15 +2276,23 @@
         "limiter": {
           "value": 8.6,
           "range": 0.9
-        }
+        },
+        "weight": null
       }
     ],
     "preinfuse_step_count": 0,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-36208ae8cf82",
     "title": "Flow profile for straight espresso",
     "notes": "John Buckman, the founder of Decent Espresso, finds that this flow profile produces the best espresso shots for straight espresso drinks in the widest variety of circumstances. It is especially tolerant of not-yet-very-good barista technique.",
     "steps": [
@@ -2023,7 +2310,8 @@
           "threshold": 5.0
         },
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "preinfusion",
@@ -2039,7 +2327,8 @@
           "threshold": 5.0
         },
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "hold",
@@ -2054,7 +2343,8 @@
         "limiter": {
           "value": 8.6,
           "range": 0.9
-        }
+        },
+        "weight": null
       },
       {
         "name": "decline",
@@ -2069,15 +2359,23 @@
         "limiter": {
           "value": 8.6,
           "range": 0.9
-        }
+        },
+        "weight": null
       }
     ],
     "preinfuse_step_count": 0,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-363575db40b2",
     "title": "Gentle and sweet",
     "notes": "This is a very easy espresso to successfully make and is suggested if you are having difficulty making good drinks.  The pressure rises to only 6 bar and then slowly descends to 4 bar.  The resulting espresso should be free of channeling, have low acidity and quite pleasant to drink straight or with milk.",
     "steps": [
@@ -2095,7 +2393,8 @@
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "preinfusion",
@@ -2111,7 +2410,8 @@
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "forced rise without limit",
@@ -2123,7 +2423,8 @@
         "duration_seconds": 3.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "rise and hold",
@@ -2138,7 +2439,8 @@
         "limiter": {
           "value": 4.0,
           "range": 1.0
-        }
+        },
+        "weight": null
       },
       {
         "name": "decline",
@@ -2153,15 +2455,23 @@
         "limiter": {
           "value": 4.0,
           "range": 1.0
-        }
+        },
+        "weight": null
       }
     ],
     "preinfuse_step_count": 0,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 135
+    "max_total_volume_ml": 135,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-3641eefd23dd",
     "title": "Gentle flat 2.5 ml per second",
     "notes": "Created by French barista Adrien Sénac of Cafeism, this innovative technique allowed Adrien to produce excellent shots from very aromatic, lightly roasted beans that he had never before managed to successfully pull.",
     "steps": [
@@ -2179,7 +2489,8 @@
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "preinfusion",
@@ -2195,7 +2506,8 @@
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "hold",
@@ -2207,7 +2519,8 @@
         "duration_seconds": 45.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "decline",
@@ -2219,15 +2532,23 @@
         "duration_seconds": 0.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 0,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 135
+    "max_total_volume_ml": 135,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-3655157134a0",
     "title": "Gentle preinfusion flow profile",
     "notes": "Created by a famously innovative Seattle-based espresso machine manufacturer, this technique works well with aromatic, lightly roasted coffee beans.",
     "steps": [
@@ -2245,7 +2566,8 @@
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "preinfusion",
@@ -2261,7 +2583,8 @@
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "hold",
@@ -2273,7 +2596,8 @@
         "duration_seconds": 21.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "decline",
@@ -2285,15 +2609,23 @@
         "duration_seconds": 0.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 0,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 135
+    "max_total_volume_ml": 135,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-366a9366cef4",
     "title": "Gentler but still traditional 8.4 bar",
     "notes": "Professional baristas worldwide have found that slightly lowering the pressure from 9 bar down to 8.4 produces great espresso more often.  The gentler pressure still produces traditional flavors but requires less perfect preparation skills from the barista.",
     "steps": [
@@ -2311,7 +2643,8 @@
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "preinfusion",
@@ -2327,7 +2660,8 @@
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "forced rise without limit",
@@ -2339,7 +2673,8 @@
         "duration_seconds": 3.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "rise and hold",
@@ -2351,7 +2686,8 @@
         "duration_seconds": 28.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "decline",
@@ -2363,15 +2699,23 @@
         "duration_seconds": 2.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 0,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 135
+    "max_total_volume_ml": 135,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-367b4cb8d759",
     "title": "Hybrid pour over espresso",
     "notes": "Another approach created by a famously innovative Seattle-based espresso machine manufacturer, this technique requires you to grind your coffee very finely.  Try this with very lightly roasted coffee beans.  The resulting flavor is a blend of pour-over and espresso techniques.",
     "steps": [
@@ -2389,7 +2733,8 @@
           "threshold": 1.5
         },
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "hold",
@@ -2401,7 +2746,8 @@
         "duration_seconds": 20.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "decline",
@@ -2413,15 +2759,23 @@
         "duration_seconds": 0.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 0,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 74
+    "max_total_volume_ml": 74,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-368622de6f80",
     "title": "I got your back",
     "notes": "The goal of this profile is to never fail to make an acceptable espresso, at any grinder dial setting. The profile detects the resistance by looking at the pressure. It then either it transitions to a flat 2.2ml/s flow shot at the low resistance (low pressure) or to bloom at the high resistance (high pressure/low flow rate).  Profile created by Shin.",
     "steps": [
@@ -2435,7 +2789,8 @@
         "duration_seconds": 2.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "preinfusion",
@@ -2451,7 +2806,8 @@
           "threshold": 4.0
         },
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Low Resistance",
@@ -2467,7 +2823,8 @@
           "threshold": 10.0
         },
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Pause at HR",
@@ -2483,7 +2840,8 @@
           "threshold": 2.0
         },
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "ramp",
@@ -2495,7 +2853,8 @@
         "duration_seconds": 5.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "flat flow",
@@ -2514,15 +2873,23 @@
         "limiter": {
           "value": 8.6,
           "range": 0.6
-        }
+        },
+        "weight": null
       }
     ],
     "preinfuse_step_count": 2,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-369b16abbfa5",
     "title": "Innovative long preinfusion",
     "notes": "Another approach created by a famously innovative Seattle-based espresso machine manufacturer, this technique requires you to grind your coffee very finely.  Try this with very lightly roasted coffee beans.  The resulting flavor is more like a pour-over than espresso.",
     "steps": [
@@ -2540,7 +2907,8 @@
           "threshold": 2.0
         },
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "preinfusion",
@@ -2556,7 +2924,8 @@
           "threshold": 2.0
         },
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "hold",
@@ -2571,7 +2940,8 @@
         "limiter": {
           "value": 9.5,
           "range": 0.6
-        }
+        },
+        "weight": null
       },
       {
         "name": "decline",
@@ -2586,15 +2956,23 @@
         "limiter": {
           "value": 9.5,
           "range": 0.6
-        }
+        },
+        "weight": null
       }
     ],
     "preinfuse_step_count": 0,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 74
+    "max_total_volume_ml": 74,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-36a6844c7bbe",
     "title": "Italian Australian espresso",
     "notes": "Italians in Australia have a style all their own. They still use dark roasted coffee beans and extract at 9 bar, but they lower the brew temperature so as to not overextract the coffee.  Aim for a brew ratio of 2.5x, which is to say an in-cup weight that is 2.5x the weight of the coffee ground dose.",
     "steps": [
@@ -2612,7 +2990,8 @@
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "preinfusion",
@@ -2628,7 +3007,8 @@
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "forced rise without limit",
@@ -2640,7 +3020,8 @@
         "duration_seconds": 3.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "rise and hold",
@@ -2652,15 +3033,23 @@
         "duration_seconds": 32.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 0,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 74
+    "max_total_volume_ml": 74,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-36ba3d473a32",
     "title": "Londonium",
     "notes": "This profile simulates a Londinium R machines extraction style. This is an advanced profile with some added steps to assist with less than ideal puck prep. Christee-Lee described it as like having a milkshake with extra syrup. Great body and flavour range. 2nd edition.  This is identical to the LRv2 profile, but renamed to be easier to understand. By Damian Brakel",
     "steps": [
@@ -2674,7 +3063,8 @@
         "duration_seconds": 2.0,
         "exit": null,
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Fill",
@@ -2690,7 +3080,8 @@
           "threshold": 1.5
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Infuse",
@@ -2702,7 +3093,8 @@
         "duration_seconds": 12.0,
         "exit": null,
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Pressure Up",
@@ -2714,7 +3106,8 @@
         "duration_seconds": 8.0,
         "exit": null,
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Pressure Decline",
@@ -2730,7 +3123,8 @@
           "threshold": 2.8
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Pressure Hold",
@@ -2746,7 +3140,8 @@
           "threshold": 2.8
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flow Limit",
@@ -2758,15 +3153,23 @@
         "duration_seconds": 127.0,
         "exit": null,
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 0,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-36c2a54c4894",
     "title": "Low pressure lever machine at 6 bar",
     "notes": "Lever espresso machines are why we refer to pulling an espresso.  You pull a spring-loaded lever by hand to create pressure on the coffee puck.  This 6 bar espresso is a classic Italian technique, and will result in a very sweet and gentle espresso.",
     "steps": [
@@ -2784,7 +3187,8 @@
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "forced rise without limit",
@@ -2796,7 +3200,8 @@
         "duration_seconds": 3.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "rise and hold",
@@ -2808,7 +3213,8 @@
         "duration_seconds": 5.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "decline",
@@ -2820,15 +3226,23 @@
         "duration_seconds": 27.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 0,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-36dadcc9c089",
     "title": "Pour over basket/Decent pour over",
     "notes": "You can make a pour over coffee with your espresso machine.  To do this, first remove the drip tray. Then, place a coffee mug with a filter cone on it under the espresso machine's group head.",
     "steps": [
@@ -2842,7 +3256,8 @@
         "duration_seconds": 4.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Pause",
@@ -2854,7 +3269,8 @@
         "duration_seconds": 40.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Main water #1",
@@ -2866,7 +3282,8 @@
         "duration_seconds": 14.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Pause",
@@ -2878,7 +3295,8 @@
         "duration_seconds": 20.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Main water #2",
@@ -2890,7 +3308,8 @@
         "duration_seconds": 25.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Drain",
@@ -2902,7 +3321,8 @@
         "duration_seconds": 20.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Reset temperature",
@@ -2914,15 +3334,23 @@
         "duration_seconds": 1.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 0,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-36ee84645bb8",
     "title": "Preinfuse then 45ml of water",
     "notes": "Australian barista Matt Perger suggested this technique to us. The idea is to fully saturate your puck, and then squeeze the brewed coffee out using a calculated water volume.  This results in consistently brewed espresso without needing to use a scale.",
     "steps": [
@@ -2940,7 +3368,8 @@
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "hold",
@@ -2952,7 +3381,8 @@
         "duration_seconds": 20.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "decline",
@@ -2964,15 +3394,23 @@
         "duration_seconds": 0.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 0,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-36fa091e6a58",
     "title": "Steam only",
     "notes": "Fast heating of steam, not heating for espresso.   You might want to do this if you only want to steam, not brew. Perhaps you are making hot chocolate, an ice cream custard, or de-wrinkling your clothes with the steam wand.",
     "steps": [
@@ -2990,7 +3428,8 @@
           "threshold": 3.8
         },
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "forced rise without limit",
@@ -3002,7 +3441,8 @@
         "duration_seconds": 3.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "rise and hold",
@@ -3014,15 +3454,23 @@
         "duration_seconds": 9.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 1,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-3708bd723551",
     "title": "Tea portafilter/Bug Bite Oolong",
     "notes": "This profile requires the Decent Espresso tea portafilter and is optimized for the tea named \"Black Honey Bug Bite Oolong\" from Blue Willow Tea https://www.bluewillowtea.com/ - Taste wise, this profile created a full 10oz mug that tasted the same as the second gongfu-style infusion.  We use a 2.3 to 3 gram dose of leaves for this profile.",
     "steps": [
@@ -3040,7 +3488,8 @@
           "threshold": 3.0
         },
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Infuse",
@@ -3052,7 +3501,8 @@
         "duration_seconds": 20.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flush",
@@ -3064,7 +3514,8 @@
         "duration_seconds": 30.0,
         "exit": null,
         "volume_limit_ml": 80,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Infuse",
@@ -3076,7 +3527,8 @@
         "duration_seconds": 25.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flush",
@@ -3088,7 +3540,8 @@
         "duration_seconds": 30.0,
         "exit": null,
         "volume_limit_ml": 80,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "infuse",
@@ -3100,7 +3553,8 @@
         "duration_seconds": 30.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flush",
@@ -3112,7 +3566,8 @@
         "duration_seconds": 30.0,
         "exit": null,
         "volume_limit_ml": 80,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Infuse",
@@ -3124,7 +3579,8 @@
         "duration_seconds": 40.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flush",
@@ -3136,15 +3592,23 @@
         "duration_seconds": 30.0,
         "exit": null,
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 1,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-371161b9bb3e",
     "title": "Tea portafilter/Sencha",
     "notes": "This profile requires the Decent Espresso tea portafilter and is optimized for the tea named \"Tsuyuhikari Sencha\" from Blue Willow Tea https://www.bluewillowtea.com/ - Taste wise, this profile created a similar taste to the mug made with a French press, with a 3 minute and 65C temperature water, though the end beverage quantity is less on the DE1 version. Three infusion steps were used, because we found the 4th infusion to be unpleasant.  We use a 4 gram dose of leaves for this profile.",
     "steps": [
@@ -3162,7 +3626,8 @@
           "threshold": 3.0
         },
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Infuse",
@@ -3174,7 +3639,8 @@
         "duration_seconds": 20.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flush",
@@ -3186,7 +3652,8 @@
         "duration_seconds": 30.0,
         "exit": null,
         "volume_limit_ml": 80,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Infuse",
@@ -3198,7 +3665,8 @@
         "duration_seconds": 25.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flush",
@@ -3210,7 +3678,8 @@
         "duration_seconds": 30.0,
         "exit": null,
         "volume_limit_ml": 80,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "infuse",
@@ -3222,7 +3691,8 @@
         "duration_seconds": 30.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flush",
@@ -3234,15 +3704,23 @@
         "duration_seconds": 30.0,
         "exit": null,
         "volume_limit_ml": 80,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 1,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-3721e39e3245",
     "title": "Tea portafilter/Blue Willow: Tsuyuhikari Sensha",
     "notes": "This profile requires a specially the Decent Espresso tea portafilter and is optimized for the tea named \"Tsuyuhikari Sencha\" from Blue Willow Tea https://www.bluewillowtea.com/ - Taste wise, this profile created a similar taste to the mug made with a French press, with a 3 minute and 65C temperature water, though the end beverage quantity is less on the DE1 version. Three infusion steps were used, because we found the 4th infusion to be unpleasant.  We use a 4 gram dose of leaves for this profile.",
     "steps": [
@@ -3260,7 +3738,8 @@
           "threshold": 3.0
         },
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Infuse",
@@ -3272,7 +3751,8 @@
         "duration_seconds": 20.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flush",
@@ -3284,7 +3764,8 @@
         "duration_seconds": 30.0,
         "exit": null,
         "volume_limit_ml": 80,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Infuse",
@@ -3296,7 +3777,8 @@
         "duration_seconds": 25.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flush",
@@ -3308,7 +3790,8 @@
         "duration_seconds": 30.0,
         "exit": null,
         "volume_limit_ml": 80,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "infuse",
@@ -3320,7 +3803,8 @@
         "duration_seconds": 30.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flush",
@@ -3332,15 +3816,23 @@
         "duration_seconds": 30.0,
         "exit": null,
         "volume_limit_ml": 80,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 1,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-373b5f8f2742",
     "title": "Tea portafilter/Oolong 1st extraction",
     "notes": "This profile requires the Decent Espresso tea portafilter and is optimized for the tea named \"Black Phoenix\" from Blue Willow Tea https://www.bluewillowtea.com/ - Taste wise, this profile created a 6oz/180ml mug that tasted the similar, but a little bit different, as the second gongfu-style infusion. Very delicate with faint chocolate notes.  We use a 4 gram dose of leaves for this profile.",
     "steps": [
@@ -3358,7 +3850,8 @@
           "threshold": 3.0
         },
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Infuse",
@@ -3370,7 +3863,8 @@
         "duration_seconds": 20.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flush",
@@ -3382,7 +3876,8 @@
         "duration_seconds": 8.0,
         "exit": null,
         "volume_limit_ml": 85,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Infuse",
@@ -3394,7 +3889,8 @@
         "duration_seconds": 20.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flush",
@@ -3406,7 +3902,8 @@
         "duration_seconds": 8.0,
         "exit": null,
         "volume_limit_ml": 84,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "infuse",
@@ -3418,7 +3915,8 @@
         "duration_seconds": 20.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flush",
@@ -3430,15 +3928,23 @@
         "duration_seconds": 8.0,
         "exit": null,
         "volume_limit_ml": 85,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 1,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-374fcf06a5db",
     "title": "Tea portafilter/Oolong 2nd extraction",
     "notes": "This profile requires the Decent Espresso tea portafilter and is optimized for the tea named \"Black Phoenix Oolong\" from Blue Willow Tea https://www.bluewillowtea.com/ - This is an optional second extraction you can do with the same already-extracted leaves that you made a first extraction from. Taste wise, this profile created a 2oz/60ml cup that tastes similar to a single gongfu-style infusion made several minutes after the first. Chocolate notes dominate.  You can start this profile any time (up to five minutes) after running the first extraction.",
     "steps": [
@@ -3456,7 +3962,8 @@
           "threshold": 3.0
         },
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Infuse",
@@ -3468,7 +3975,8 @@
         "duration_seconds": 60.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flush",
@@ -3480,15 +3988,23 @@
         "duration_seconds": 8.0,
         "exit": null,
         "volume_limit_ml": 85,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 1,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-375d8586d940",
     "title": "Tea portafilter/Yunnan green",
     "notes": "This profile requires the Decent Espresso tea portafilter and is optimized for the tea named \"Lunar Winter\" from Blue Willow Tea https://www.bluewillowtea.com/ - Taste wise, this profile created a 6oz/180ml mug that tastes similar as the second gongfu-style infusion.  We use a 4 gram dose of leaves for this profile.",
     "steps": [
@@ -3506,7 +4022,8 @@
           "threshold": 3.0
         },
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Infuse",
@@ -3518,7 +4035,8 @@
         "duration_seconds": 20.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flush",
@@ -3530,7 +4048,8 @@
         "duration_seconds": 8.0,
         "exit": null,
         "volume_limit_ml": 85,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Infuse",
@@ -3542,7 +4061,8 @@
         "duration_seconds": 15.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flush",
@@ -3554,7 +4074,8 @@
         "duration_seconds": 8.0,
         "exit": null,
         "volume_limit_ml": 84,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "infuse",
@@ -3566,7 +4087,8 @@
         "duration_seconds": 15.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flush",
@@ -3578,15 +4100,23 @@
         "duration_seconds": 8.0,
         "exit": null,
         "volume_limit_ml": 85,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 1,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-3766354291a0",
     "title": "Test/profile_editor_demo",
     "notes": "THIS IS NOT AN EDITABLE PROFILE - Although it will run a copy of D-FLow Q.\n        It is a dummy profile to test the profile_editor framework, this profile has a variable 'profile_editor demo'.    By Damian Nov 2025",
     "steps": [
@@ -3604,7 +4134,8 @@
           "threshold": 3.0
         },
         "volume_limit_ml": 60,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Infusing",
@@ -3616,7 +4147,8 @@
         "duration_seconds": 1.0,
         "exit": null,
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Pouring",
@@ -3631,15 +4163,23 @@
         "limiter": {
           "value": 10.0,
           "range": 0.2
-        }
+        },
+        "weight": null
       }
     ],
     "preinfuse_step_count": 0,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-3772ea398970",
     "title": "Traditional lever machine",
     "notes": "Lever espresso machines are why we refer to pulling an espresso.  You pull a spring-loaded lever by hand to create pressure on the coffee puck.  This 9 bar espresso is the most common type of classic lever espresso you'll have, and many fans consider lever shots to be the best espresso they've ever had.",
     "steps": [
@@ -3657,7 +4197,8 @@
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "preinfusion",
@@ -3673,7 +4214,8 @@
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "forced rise without limit",
@@ -3685,7 +4227,8 @@
         "duration_seconds": 3.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "rise and hold",
@@ -3697,7 +4240,8 @@
         "duration_seconds": 5.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "decline",
@@ -3709,15 +4253,23 @@
         "duration_seconds": 27.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 0,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 180
+    "max_total_volume_ml": 180,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-3782576bf979",
     "title": "Trendy 6 bar low pressure shot",
     "notes": "Some lightly roasted espresso beans smell great but resist being well extracted into a drink.  The solution can be to lower the pressure to 6 bar. Try this technique if you're having trouble with a particularly sophisticated lightly roasted bean.",
     "steps": [
@@ -3735,7 +4287,8 @@
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "preinfusion",
@@ -3751,7 +4304,8 @@
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "forced rise without limit",
@@ -3763,7 +4317,8 @@
         "duration_seconds": 3.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "rise and hold",
@@ -3775,15 +4330,23 @@
         "duration_seconds": 32.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 0,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 180
+    "max_total_volume_ml": 180,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-3794dd99b76f",
     "title": "TurboBloom",
     "notes": "Dynamic bloom into pressure extraction. Based on the 'easy blooming' profile structure from Luca and Stephane and modified to primarily target high extraction grinders at high flow rates, typically ending around 3-4.5ml/s. Dial with ratio once grind is giving an ending flowrate in the range. Includes a significant temperature drop that reduces harshness (although the actual temperature drop is much less than programmed). By Joe D.",
     "steps": [
@@ -3797,7 +4360,8 @@
         "duration_seconds": 2.0,
         "exit": null,
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "preinfusion",
@@ -3813,7 +4377,8 @@
           "threshold": 4.0
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "dynamic bloom",
@@ -3829,7 +4394,8 @@
           "threshold": 2.2
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "ramp",
@@ -3841,7 +4407,8 @@
         "duration_seconds": 4.0,
         "exit": null,
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "6 bar",
@@ -3860,7 +4427,8 @@
         "limiter": {
           "value": 4.5,
           "range": 1.0
-        }
+        },
+        "weight": null
       },
       {
         "name": "decline",
@@ -3875,15 +4443,23 @@
         "limiter": {
           "value": 4.5,
           "range": 1.0
-        }
+        },
+        "weight": null
       }
     ],
     "preinfuse_step_count": 2,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-37a5299d19cc",
     "title": "TurboTurbo",
     "notes": "Non-blooming turbo shot profile intended primarily for high extraction grinders with ending flow of 3-4.5ml/s. The profile uses maximum fill rate in preinfusion as coarse grinds saturate easily and quickly. Dial with ratio once grind is giving an ending flowrate in the range. Includes a significant temperature drop that reduces harshness (although the actual temperature drop is much less than programmed).  By Joe D.",
     "steps": [
@@ -3897,7 +4473,8 @@
         "duration_seconds": 2.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Fill",
@@ -3913,7 +4490,8 @@
           "threshold": 2.0
         },
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "PI",
@@ -3929,7 +4507,8 @@
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "rise and hold",
@@ -3944,7 +4523,8 @@
         "limiter": {
           "value": 6.0,
           "range": 1.0
-        }
+        },
+        "weight": null
       },
       {
         "name": "decline",
@@ -3959,7 +4539,8 @@
         "limiter": {
           "value": 4.5,
           "range": 1.0
-        }
+        },
+        "weight": null
       },
       {
         "name": "hold",
@@ -3974,15 +4555,23 @@
         "limiter": {
           "value": 4.5,
           "range": 1.0
-        }
+        },
+        "weight": null
       }
     ],
     "preinfuse_step_count": 2,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-37b0655fc07d",
     "title": "Two spring lever machine to 9 bar",
     "notes": "A final evolution of the classic lever machine style was to add a second spring. This helped work around a deficiency with single springs, namely that the top pressure achieved went down almost immediately, rather than being held.  The second spring required more arm muscle but is often considered the final perfection of the lever espresso style.",
     "steps": [
@@ -4000,7 +4589,8 @@
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "preinfusion",
@@ -4016,7 +4606,8 @@
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "forced rise without limit",
@@ -4028,7 +4619,8 @@
         "duration_seconds": 3.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "rise and hold",
@@ -4040,7 +4632,8 @@
         "duration_seconds": 5.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "decline",
@@ -4052,15 +4645,23 @@
         "duration_seconds": 26.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 0,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 180
+    "max_total_volume_ml": 180,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-37c5ab664dd3",
     "title": "Weiss advanced spring lever",
     "notes": "advanced spring lever profile, with additional steps to salvage choked shots",
     "steps": [
@@ -4078,7 +4679,8 @@
           "threshold": 6.0
         },
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "rise and hold",
@@ -4090,7 +4692,8 @@
         "duration_seconds": 3.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "decline",
@@ -4109,7 +4712,8 @@
         "limiter": {
           "value": 1.5,
           "range": 0.6
-        }
+        },
+        "weight": null
       },
       {
         "name": "flow limit",
@@ -4124,15 +4728,23 @@
         "limiter": {
           "value": 6.0,
           "range": 0.6
-        }
+        },
+        "weight": null
       }
     ],
     "preinfuse_step_count": 0,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-37d4803d74a3",
     "title": "Gagné/Adaptive Allongé 94C v1.0",
     "notes": "This profile is a variation on the Rao Allongé. After preinfusion, pressure raises to 8.6 bar and then detects the current flow to keep it stable ever after. I believe this might make better espresso when it is not perfectly dialed in. See it like this - you are dialing in the constant flow rate, not the pressure curve or the shape of the flow curve. Faster flow rates might taste better with longer shots. Taken to the extreme, this profile can do something similar to the Rao Allonge if you just grind coarse enough.",
     "steps": [
@@ -4150,7 +4762,8 @@
           "threshold": 4.0
         },
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "rise and hold",
@@ -4162,7 +4775,8 @@
         "duration_seconds": 4.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Scan 6.0 mL.s",
@@ -4178,7 +4792,8 @@
           "threshold": 5.9
         },
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Scan 5.5 mL.s",
@@ -4194,7 +4809,8 @@
           "threshold": 5.4
         },
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Scan 5.2 mL.s",
@@ -4210,7 +4826,8 @@
           "threshold": 5.1
         },
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Scan 5.0 mL.s",
@@ -4226,7 +4843,8 @@
           "threshold": 4.9
         },
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Scan 4.9 mL.s",
@@ -4242,7 +4860,8 @@
           "threshold": 4.8
         },
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Scan 4.8 mL.s",
@@ -4258,7 +4877,8 @@
           "threshold": 4.7
         },
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Scan 4.7 mL.s",
@@ -4274,7 +4894,8 @@
           "threshold": 4.6
         },
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Scan 4.6 mL.s",
@@ -4290,7 +4911,8 @@
           "threshold": 4.5
         },
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Scan 4.5 mL.s",
@@ -4306,7 +4928,8 @@
           "threshold": 4.4
         },
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Scan 4.4 mL.s",
@@ -4322,7 +4945,8 @@
           "threshold": 4.3
         },
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Scan 4.3 mL.s",
@@ -4338,7 +4962,8 @@
           "threshold": 4.2
         },
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Scan 4.2 mL.s",
@@ -4354,7 +4979,8 @@
           "threshold": 4.1
         },
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Scan 4.1 mL.s",
@@ -4370,7 +4996,8 @@
           "threshold": 4.0
         },
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Scan 4.0 mL.s",
@@ -4386,7 +5013,8 @@
           "threshold": 3.9
         },
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Scan 3.8 mL.s",
@@ -4402,7 +5030,8 @@
           "threshold": 3.7
         },
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Scan 3.4 mL.s",
@@ -4418,7 +5047,8 @@
           "threshold": 3.3
         },
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Scan 3.0 mL.s",
@@ -4434,7 +5064,8 @@
           "threshold": 2.9
         },
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "last resort",
@@ -4446,15 +5077,23 @@
         "duration_seconds": 127.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 2,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-37ec10a8b77b",
     "title": "Gagné/Adaptive Shot 92C v1.0",
     "notes": "The more forgiving evolution of Scott Rao's original blooming profile. Designed to produce tasty espressos from a wide range of grind settings. Accomplished by 2 main features in the recipe: 1. The Blooming stage declines from 4 bar to 2 bar. Blooming time is dictated by the grind size (Course is shorter, finer is longer) and ensures a more consistent puck resistance.  2. An adaptive pressure phase based on the flow rate evolution. e.g. When resistance is lower (faster flowrate) pressure declines. If resistance is higher (slower flowrate) pressure increases.  Best used with a large flat burr and light roasts. If using darker roasts, reduce the temps to 84°C-86°C and increase the exit pressure to enable a shorter bloom. Note conical burrs can use higher temperatures.  20g dose with a ratio between 1 : 2 to 1 : 2.5 with total shot times ranging from 25 to 45 seconds.",
     "steps": [
@@ -4472,7 +5111,8 @@
           "threshold": 4.0
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "rise and hold",
@@ -4484,7 +5124,8 @@
         "duration_seconds": 4.0,
         "exit": null,
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Scan 3.5 mL.s",
@@ -4500,7 +5141,8 @@
           "threshold": 3.4
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Scan 3.3 mL.s",
@@ -4516,7 +5158,8 @@
           "threshold": 3.2
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Scan 3.1 mL.s",
@@ -4532,7 +5175,8 @@
           "threshold": 3.0
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Scan 2.9 mL.s",
@@ -4548,7 +5192,8 @@
           "threshold": 2.8
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Scan 2.7 mL.s",
@@ -4564,7 +5209,8 @@
           "threshold": 2.6
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Scan 2.6 mL.s",
@@ -4580,7 +5226,8 @@
           "threshold": 2.5
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Scan 2.5 mL.s",
@@ -4596,7 +5243,8 @@
           "threshold": 2.4
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Scan 2.4 mL.s",
@@ -4612,7 +5260,8 @@
           "threshold": 2.3
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Scan 2.3 mL.s",
@@ -4628,7 +5277,8 @@
           "threshold": 2.2
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Scan 2.2 mL.s",
@@ -4644,7 +5294,8 @@
           "threshold": 2.1
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Scan 2.1 mL.s",
@@ -4660,7 +5311,8 @@
           "threshold": 2.0
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Scan 2.0 mL.s",
@@ -4676,7 +5328,8 @@
           "threshold": 1.9
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Scan 1.8 mL.s",
@@ -4692,7 +5345,8 @@
           "threshold": 1.7
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Scan 1.6 mL.s",
@@ -4708,7 +5362,8 @@
           "threshold": 1.5
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Scan 1.4 mL.s",
@@ -4724,7 +5379,8 @@
           "threshold": 1.3
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Scan 1.2 mL.s",
@@ -4740,7 +5396,8 @@
           "threshold": 1.1
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Scan 1.0 mL.s",
@@ -4756,7 +5413,8 @@
           "threshold": 0.9
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "last resort",
@@ -4768,15 +5426,23 @@
         "duration_seconds": 127.0,
         "exit": null,
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 2,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-37f2ec804f94",
     "title": "Adaptive v2",
     "notes": "This profile aims to unite the best practices in espresso extraction that we have learned so far with the Decent. It unites Brakel's Londonium, Rao's Blooming and Gagné's Adaptive profiles. The flow rate during extraction will automatically adjust itself from the flow rate actually happening during the Pressurize step and then gently increase it from there.  A 15g dose is typical.  Aim for a flow rate around 1.5 ml/s at the Pressurize step. 15g in, 33g out, in 32 seconds is a typical recipe for a medium roast.  Grind fine enough to keep dripping during preinfusion to around 4g. If you have a bluetooth scale, you can keep track of how much dripping into the cup there is before the ramp stage.  4 grams of total dripping, within 1 gram, seems to give the best tasting results. Try adusting your grind and dose to get that amount of dripping, and see if you like how it tastes.",
     "steps": [
@@ -4790,7 +5456,8 @@
         "duration_seconds": 5.0,
         "exit": null,
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Fill",
@@ -4806,7 +5473,8 @@
           "threshold": 3.0
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Compressing",
@@ -4822,7 +5490,8 @@
           "threshold": 3.0
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Dripping",
@@ -4834,7 +5503,8 @@
         "duration_seconds": 6.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Pressurize",
@@ -4853,7 +5523,8 @@
         "limiter": {
           "value": 3.5,
           "range": 0.6
-        }
+        },
+        "weight": null
       },
       {
         "name": "Extraction start",
@@ -4872,7 +5543,8 @@
         "limiter": {
           "value": 9.5,
           "range": 0.6
-        }
+        },
+        "weight": null
       },
       {
         "name": "Extraction",
@@ -4887,15 +5559,23 @@
         "limiter": {
           "value": 9.5,
           "range": 0.6
-        }
+        },
+        "weight": null
       }
     ],
     "preinfuse_step_count": 3,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 36
+    "max_total_volume_ml": 36,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-380be7eeee3f",
     "title": "Best practice (light roast)",
     "notes": "This profile aims to unite the best practices in espresso extraction that we have learned so far with the Decent. It unites Brakel's Londonium, Rao's Blooming and Gagné's Adaptive profiles. Your grind should be coarser for light roasts, aiming for a flow rate around 2.5 ml/s at peak pressure. 18g in, 50g out, in 60 seconds is a typical recipe.   Grind fine enough to keep dripping during preinfusion to around 8g.",
     "steps": [
@@ -4913,7 +5593,8 @@
           "threshold": 3.0
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Preinfusion fill end",
@@ -4929,7 +5610,8 @@
           "threshold": 1.0
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Preinfusion dripping",
@@ -4941,7 +5623,8 @@
         "duration_seconds": 13.0,
         "exit": null,
         "volume_limit_ml": 12,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Pressurize",
@@ -4957,7 +5640,8 @@
           "threshold": 8.0
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Extraction",
@@ -4972,15 +5656,23 @@
         "limiter": {
           "value": 9.5,
           "range": 0.6
-        }
+        },
+        "weight": null
       }
     ],
     "preinfuse_step_count": 2,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 36
+    "max_total_volume_ml": 36,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-3815959d2c2d",
     "title": "Cleaning/Forward flush",
     "notes": "Use this profile with some cleaning product in a blind (no hole) portafilter basket, to thoroughly clean the inside of the group head.",
     "steps": [
@@ -4998,7 +5690,8 @@
           "threshold": 7.0
         },
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Pause 1",
@@ -5010,7 +5703,8 @@
         "duration_seconds": 15.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Pressure rise 2",
@@ -5026,7 +5720,8 @@
           "threshold": 7.0
         },
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Pause 2",
@@ -5038,7 +5733,8 @@
         "duration_seconds": 15.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Pressure rise 3",
@@ -5054,15 +5750,23 @@
           "threshold": 7.0
         },
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 2,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 36
+    "max_total_volume_ml": 36,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-38214669ba44",
     "title": "Pour over basket/Cold brew 22g in, 375ml out",
     "notes": "Brewing with cold water substantially slows the flow rate of liquid through the coffee bed and often leads to choking. We set the flow rate very low for our cold brew recipe in order to provide steady flow, mitigate choking, and promote an even extraction. We recommend grinding a little coarser for cold brew than for hot-water brewing. Expect cold-brew extraction levels to be a couple of points lower than hot-water extractions.  We recommend giving the brewer a gentle spin after prewetting and after the last pulse of water has sprayed.",
     "steps": [
@@ -5076,7 +5780,8 @@
         "duration_seconds": 14.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "bloom*",
@@ -5088,7 +5793,8 @@
         "duration_seconds": 30.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "pulse",
@@ -5100,7 +5806,8 @@
         "duration_seconds": 60.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "pause",
@@ -5112,7 +5819,8 @@
         "duration_seconds": 30.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "pulse",
@@ -5124,7 +5832,8 @@
         "duration_seconds": 60.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "pause",
@@ -5136,7 +5845,8 @@
         "duration_seconds": 30.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "pulse",
@@ -5148,7 +5858,8 @@
         "duration_seconds": 52.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "pulse*",
@@ -5160,15 +5871,23 @@
         "duration_seconds": 2.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 0,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-3836d809e7e3",
     "title": "Default",
     "notes": "This profile is gentle on the coffee puck and not too demanding on the barista.  Produces a very acceptable espresso in a wide variety of settings.",
     "steps": [
@@ -5186,7 +5905,8 @@
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "preinfusion",
@@ -5202,7 +5922,8 @@
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "forced rise without limit",
@@ -5214,7 +5935,8 @@
         "duration_seconds": 3.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "rise and hold",
@@ -5226,7 +5948,8 @@
         "duration_seconds": 1.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "forced rise without limit",
@@ -5238,7 +5961,8 @@
         "duration_seconds": 3.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "decline",
@@ -5250,15 +5974,23 @@
         "duration_seconds": 32.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 0,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-384e73a49f6b",
     "title": "E61 espresso machine",
     "notes": "The E61 machine was invented by Faema in 1961 and is still the most classic and most copied espresso machine design.  It is likely what most people mean when they say Professional Italian Espresso Machine",
     "steps": [
@@ -5276,7 +6008,8 @@
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "forced rise without limit",
@@ -5288,7 +6021,8 @@
         "duration_seconds": 3.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "rise and hold",
@@ -5300,15 +6034,23 @@
         "duration_seconds": 32.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 0,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-385abcb08451",
     "title": "E61 classic gently up to 10 bar",
     "notes": "This high tech variation on the classic E61 9 bar shot brings out more acidity by increasing pressure towards the end of the shot.  This makes it more appropriate to drink without milk.  It will be quite thick, so adding water to make an Americano is recommended.",
     "steps": [
@@ -5326,7 +6068,8 @@
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "preinfusion",
@@ -5342,7 +6085,8 @@
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "forced rise without limit",
@@ -5354,7 +6098,8 @@
         "duration_seconds": 3.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "rise and hold",
@@ -5366,7 +6111,8 @@
         "duration_seconds": 2.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "forced rise without limit",
@@ -5378,7 +6124,8 @@
         "duration_seconds": 3.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "decline",
@@ -5390,15 +6137,23 @@
         "duration_seconds": 17.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 0,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-38614b3cad47",
     "title": "E61 rocketing up to 10 bar",
     "notes": "With a technician's help, you could sometimes boost the pressure on the classic E61 machine to 10 bar.  You will need to grind finer, and your espresso will be very thick.  Excellent for medium roasted beans mixed with whole milk.",
     "steps": [
@@ -5416,7 +6171,8 @@
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "preinfusion",
@@ -5432,7 +6188,8 @@
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "forced rise without limit",
@@ -5444,7 +6201,8 @@
         "duration_seconds": 3.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "rise and hold",
@@ -5456,15 +6214,23 @@
         "duration_seconds": 27.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 0,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-3872f9906845",
     "title": "E61 with fast preinfusion to 9 bar",
     "notes": "E61 machines evolved with time, with some models adding an optional, manually controlled preinfusion step.  In most cases, preinfusion will produce a more evenly extracted shot.",
     "steps": [
@@ -5482,7 +6248,8 @@
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "preinfusion",
@@ -5498,7 +6265,8 @@
           "threshold": 4.0
         },
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "forced rise without limit",
@@ -5510,7 +6278,8 @@
         "duration_seconds": 3.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "rise and hold",
@@ -5522,15 +6291,23 @@
         "duration_seconds": 27.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 0,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-3881d18e2cc2",
     "title": "Easy blooming - active pressure decline",
     "notes": "This profile is a more forgiving evolution of Scott Rao’s original blooming profile. It can produce tasty cups of espresso coffee in a wide range of grind settings. This is accomplished thanks to 2 main features: 1. As the bloom with no water flow progresses, the pressure measured above the puck decreases. We have added a condition asking the machine to end the bloom and switch to the next step when the pressure has declined from 4 bar to 2 bar. Doing so, the bloom is shorter when coarser grinds are used and longer with finer grinds. This guarantees a more consistent puck resistance when the subsequent extraction phase is about to start. The length of the bloom is no longer a fixed value. 2. Then, the pressure of the extraction phase adapts automatically based on the estimated flow rate evolution, that is, in some way, an image of the puck resistance. The pressure decline starts earlier when the resistance is lower (when the DE1 sees a quicker increase of the flow rate) and occurs later when the resistance is higher. The profile has been developed with lightly roasted beans (hence the limited maximum pressure and the medium-high optimum flow rate during the extraction phase), ground with large flat burrs, but some users have also reported good results with darker roast levels. The temperature has been set to 88°C: it can be increased with very light roasts and / or when a grinder with a wider particle distribution (e.g. conical grinder) is used. The temperature can be decreased to 84°C – 86°C with darker roasts. The length of the bloom phase can also be adjusted with the exit pressure condition: e.g. increased exit pressure for a shorter bloom (probably a sensible approach for darker roasts) and lower exit pressure for longer blooms. With a 20 gram dose and considering extraction ratios between 1:2 to 1:2.5, this profile has generally produced very tasty shots with total shot times ranging from 25 to 45 seconds. By Stéphane Ribes.",
     "steps": [
@@ -5544,7 +6321,8 @@
         "duration_seconds": 2.0,
         "exit": null,
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "preinfusion",
@@ -5560,7 +6338,8 @@
           "threshold": 4.0
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "dynamic bloom",
@@ -5576,7 +6355,8 @@
           "threshold": 2.0
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "fast pressure",
@@ -5588,7 +6368,8 @@
         "duration_seconds": 4.0,
         "exit": null,
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "pressure hold 1",
@@ -5604,7 +6385,8 @@
           "threshold": 1.6
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "P fast decline 1",
@@ -5620,7 +6402,8 @@
           "threshold": 1.4
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "P fast decline 2",
@@ -5636,7 +6419,8 @@
           "threshold": 1.4
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "pressure hold 2",
@@ -5652,7 +6436,8 @@
           "threshold": 1.9
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "P decline 1",
@@ -5668,7 +6453,8 @@
           "threshold": 1.7
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "P decline 2",
@@ -5684,7 +6470,8 @@
           "threshold": 1.7
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "pressure hold 3",
@@ -5700,7 +6487,8 @@
           "threshold": 2.2
         },
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "P slow decline",
@@ -5712,15 +6500,23 @@
         "duration_seconds": 40.0,
         "exit": null,
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 1,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-3898399d6c83",
     "title": "Filter3",
     "notes": "Set your grinder as coarsely as it can be set (11am setting on a Niche Zero).  Center a 58.5mm filter paper in the bottom of a Filter3 basket. Wet it with Flush water. Add 22 grams of coffee and shake to level the grounds.  Gently lock the portafilter in.  Place a cup, tap the COFFEE icon on the Group Head to start.  Optional: 30 seconds into the extraction, unlock the portafilter, swirl and check for 2cm-4cm of water on the grounds.  Adjust the grind if necessary for next time: finer if you saw not enough water, coarser if there was too much water on the grounds.  If water comes out of the holes at the top of the basket, your grind is too fine.",
     "steps": [
@@ -5737,7 +6533,8 @@
         "limiter": {
           "value": 5.0,
           "range": 1.0
-        }
+        },
+        "weight": null
       },
       {
         "name": "Bloom",
@@ -5749,7 +6546,8 @@
         "duration_seconds": 30.0,
         "exit": null,
         "volume_limit_ml": 75,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Wet 1a",
@@ -5761,7 +6559,8 @@
         "duration_seconds": 30.0,
         "exit": null,
         "volume_limit_ml": 200,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Wet 1b",
@@ -5773,7 +6572,8 @@
         "duration_seconds": 30.0,
         "exit": null,
         "volume_limit_ml": 200,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Wet 2",
@@ -5785,7 +6585,8 @@
         "duration_seconds": 60.0,
         "exit": null,
         "volume_limit_ml": 200,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Wet 3",
@@ -5797,7 +6598,8 @@
         "duration_seconds": 100.0,
         "exit": null,
         "volume_limit_ml": 200,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Drawdown",
@@ -5809,15 +6611,23 @@
         "duration_seconds": 10.0,
         "exit": null,
         "volume_limit_ml": 200,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 2,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-38a7e53f145c",
     "title": "Test/Flow calibration",
     "notes": "Put a 0.3mm puck simulator basket into a portafilter. Connect a bluetooth scale.  Run this profile. Change the Flow value on the Calibration page, and rerun this profile.  Repeat until the blue and brown lines follow each other.",
     "steps": [
@@ -5831,7 +6641,8 @@
         "duration_seconds": 20.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "2 bar",
@@ -5843,7 +6654,8 @@
         "duration_seconds": 15.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "3 bar",
@@ -5855,7 +6667,8 @@
         "duration_seconds": 15.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "4 bar",
@@ -5867,7 +6680,8 @@
         "duration_seconds": 15.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "5 bar",
@@ -5879,7 +6693,8 @@
         "duration_seconds": 15.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "6 bar",
@@ -5891,7 +6706,8 @@
         "duration_seconds": 15.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "7 bar",
@@ -5903,7 +6719,8 @@
         "duration_seconds": 15.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "8 bar",
@@ -5915,7 +6732,8 @@
         "duration_seconds": 15.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "9 bar",
@@ -5927,15 +6745,23 @@
         "duration_seconds": 15.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 2,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-38b7780950d9",
     "title": "Pour over basket/Kalita 20g in, 340ml out",
     "notes": "We use a little lower flow rate for the Kalita than for the v60 to tame the turbulence. We have found that excessive turbulence chokes brews in the Kalita more readily than in the V60. We recommend giving the brewer a gentle spin after prewetting and after the last pulse of water has sprayed.",
     "steps": [
@@ -5949,7 +6775,8 @@
         "duration_seconds": 11.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "bloom*",
@@ -5961,7 +6788,8 @@
         "duration_seconds": 30.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "pulse",
@@ -5973,7 +6801,8 @@
         "duration_seconds": 20.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "pause",
@@ -5985,7 +6814,8 @@
         "duration_seconds": 30.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "pulse",
@@ -5997,7 +6827,8 @@
         "duration_seconds": 20.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "pause",
@@ -6009,7 +6840,8 @@
         "duration_seconds": 35.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "pulse",
@@ -6021,7 +6853,8 @@
         "duration_seconds": 19.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "[ spin at end]*",
@@ -6033,15 +6866,23 @@
         "duration_seconds": 1.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 0,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-38cdc37aeb3d",
     "title": "GHC/manual flow control",
     "notes": "For use with machines that have a group head controller (GHC).  Hold your finger on the GHC for the flow you want.",
     "steps": [
@@ -6058,7 +6899,8 @@
         "limiter": {
           "value": 9.0,
           "range": 0.9
-        }
+        },
+        "weight": null
       },
       {
         "name": "decline",
@@ -6073,15 +6915,23 @@
         "limiter": {
           "value": 9.0,
           "range": 0.9
-        }
+        },
+        "weight": null
       }
     ],
     "preinfuse_step_count": 0,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-38d0b68cc036",
     "title": "GHC/manual pressure control",
     "notes": "For use with machines that have a group head controller (GHC).  Hold your finger on the GHC for the pressure you want.",
     "steps": [
@@ -6095,7 +6945,8 @@
         "duration_seconds": 3.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "rise and hold",
@@ -6107,7 +6958,8 @@
         "duration_seconds": 57.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "decline",
@@ -6119,15 +6971,23 @@
         "duration_seconds": 60.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 0,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-38e4bf184ff2",
     "title": "Rao Allongé",
     "notes": "An amazing long espresso for light roasts, this is the biggest fruit bomb of any brewing method we know.  5:1 ratio, 35-40 seconds, coarse espresso grind. If close to the right pressure, make 0.5g dose adjustments to get to an 8-9 bar peak. The very high flow rate means small grind adjustments cause big pressure changes. An advanced technique, allongé averages 24% extraction.",
     "steps": [
@@ -6144,7 +7004,8 @@
         "limiter": {
           "value": 8.6,
           "range": 0.6
-        }
+        },
+        "weight": null
       },
       {
         "name": "hold at 4.5 ml/s",
@@ -6159,15 +7020,23 @@
         "limiter": {
           "value": 8.6,
           "range": 0.6
-        }
+        },
+        "weight": null
       }
     ],
     "preinfuse_step_count": 0,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 180
+    "max_total_volume_ml": 180,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-38f9470322d6",
     "title": "Tea/in a basket",
     "notes": "This profile makes an acceptable mug of tea using a regular portafilter espresso basket.  Place half a teaspoon of loose leaf tea, or a teabag, into a basket of any size.  Works best of teas that prefer high brewing temperatures, such as English Breakfast.  For better quality brews, use a tea portafilter, but this technique works well enough if you don't own that.",
     "steps": [
@@ -6181,7 +7050,8 @@
         "duration_seconds": 4.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "flow",
@@ -6193,7 +7063,8 @@
         "duration_seconds": 5.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "hold",
@@ -6205,7 +7076,8 @@
         "duration_seconds": 10.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "flow",
@@ -6217,7 +7089,8 @@
         "duration_seconds": 12.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "hold",
@@ -6229,7 +7102,8 @@
         "duration_seconds": 12.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "flow",
@@ -6241,7 +7115,8 @@
         "duration_seconds": 12.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "hold",
@@ -6253,7 +7128,8 @@
         "duration_seconds": 12.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "flow",
@@ -6265,7 +7141,8 @@
         "duration_seconds": 12.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "hold",
@@ -6277,7 +7154,8 @@
         "duration_seconds": 12.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "flow",
@@ -6289,7 +7167,8 @@
         "duration_seconds": 12.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "hold",
@@ -6301,7 +7180,8 @@
         "duration_seconds": 12.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "flow",
@@ -6313,7 +7193,8 @@
         "duration_seconds": 12.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "hold",
@@ -6325,7 +7206,8 @@
         "duration_seconds": 10.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "flow",
@@ -6337,7 +7219,8 @@
         "duration_seconds": 10.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "flow",
@@ -6349,7 +7232,8 @@
         "duration_seconds": 10.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "flow",
@@ -6361,15 +7245,23 @@
         "duration_seconds": 10.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 0,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 295
+    "max_total_volume_ml": 295,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-390994ae1ace",
     "title": "Tea portafilter/black tea",
     "notes": "This profile requires a specially designed tea portafilter that opens its valve at pressures of 3 bar or above.  Put a tea bag or loose leaf tea into the basket.  Makes about 230ml of tea in 3 minutes.  The 2 bar of pressure extract a stronger brew, with different flavors.  You can up the pressure during the infusion steps, if you tighten the screw on your tea portafilter.",
     "steps": [
@@ -6387,7 +7279,8 @@
           "threshold": 2.0
         },
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Infuse",
@@ -6399,7 +7292,8 @@
         "duration_seconds": 30.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flush",
@@ -6411,7 +7305,8 @@
         "duration_seconds": 12.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Infuse",
@@ -6423,7 +7318,8 @@
         "duration_seconds": 40.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flush",
@@ -6435,7 +7331,8 @@
         "duration_seconds": 12.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Infuse",
@@ -6447,7 +7344,8 @@
         "duration_seconds": 40.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flush",
@@ -6459,7 +7357,8 @@
         "duration_seconds": 11.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flush cooler",
@@ -6471,15 +7370,23 @@
         "duration_seconds": 13.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 1,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-391260590cfc",
     "title": "Tea portafilter/Chinese green",
     "notes": "This profile requires a specially designed tea portafilter that opens its valve at pressures of 3 bar or above.  Put a tea bag or loose leaf tea into the basket.  Makes about 230ml of tea in 3 minutes.  The 2 bar of pressure extract a stronger brew, with different flavors.  You can up the pressure during the infusion steps, if you tighten the screw on your tea portafilter.",
     "steps": [
@@ -6497,7 +7404,8 @@
           "threshold": 2.0
         },
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Infuse",
@@ -6509,7 +7417,8 @@
         "duration_seconds": 30.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flush",
@@ -6521,7 +7430,8 @@
         "duration_seconds": 12.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Infuse",
@@ -6533,7 +7443,8 @@
         "duration_seconds": 40.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flush",
@@ -6545,7 +7456,8 @@
         "duration_seconds": 12.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Infuse",
@@ -6557,7 +7469,8 @@
         "duration_seconds": 40.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flush",
@@ -6569,7 +7482,8 @@
         "duration_seconds": 11.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flush cooler",
@@ -6581,15 +7495,23 @@
         "duration_seconds": 13.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 1,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-392faf5e77c6",
     "title": "Tea portafilter/Japanese green",
     "notes": "This profile requires a specially designed tea portafilter that opens its valve at pressures of 3 bar or above.  Put a tea bag or loose leaf tea into the basket.  Makes about 230ml of tea in 3 minutes.  The 2 bar of pressure extract a stronger brew, with different flavors.  You can up the pressure during the infusion steps, if you tighten the screw on your tea portafilter.",
     "steps": [
@@ -6607,7 +7529,8 @@
           "threshold": 2.0
         },
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Infuse",
@@ -6619,7 +7542,8 @@
         "duration_seconds": 30.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flush",
@@ -6631,7 +7555,8 @@
         "duration_seconds": 12.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Infuse",
@@ -6643,7 +7568,8 @@
         "duration_seconds": 40.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flush",
@@ -6655,7 +7581,8 @@
         "duration_seconds": 12.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Infuse",
@@ -6667,7 +7594,8 @@
         "duration_seconds": 40.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flush",
@@ -6679,7 +7607,8 @@
         "duration_seconds": 11.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flush cooler",
@@ -6691,15 +7620,23 @@
         "duration_seconds": 13.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 1,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-39382386f734",
     "title": "Tea portafilter/no pressure",
     "notes": "This profile requires a specially designed tea portafilter that opens its valve at pressures of 3 bar or above.  Put a tea bag or loose leaf tea into the basket.  Makes about 230ml of tea in 3 minutes.  The 2 bar of pressure extract a stronger brew, with different flavors.  You can up the pressure during the infusion steps, if you tighten the screw on your tea portafilter.",
     "steps": [
@@ -6717,7 +7654,8 @@
           "threshold": 1.0
         },
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Release pressure",
@@ -6729,7 +7667,8 @@
         "duration_seconds": 5.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Infuse",
@@ -6741,7 +7680,8 @@
         "duration_seconds": 25.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flush",
@@ -6753,7 +7693,8 @@
         "duration_seconds": 15.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Release pressure",
@@ -6765,7 +7706,8 @@
         "duration_seconds": 5.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Infuse",
@@ -6777,7 +7719,8 @@
         "duration_seconds": 25.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flush",
@@ -6789,7 +7732,8 @@
         "duration_seconds": 15.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Release pressure",
@@ -6801,7 +7745,8 @@
         "duration_seconds": 5.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Infuse",
@@ -6813,7 +7758,8 @@
         "duration_seconds": 25.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flush",
@@ -6825,7 +7771,8 @@
         "duration_seconds": 11.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flush cooler",
@@ -6837,15 +7784,23 @@
         "duration_seconds": 15.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 1,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-3943ccd65b2c",
     "title": "Tea portafilter/oolong",
     "notes": "This profile requires a specially designed tea portafilter that opens its valve at pressures of 3 bar or above.  Put a tea bag or loose leaf tea into the basket.  Makes about 230ml of tea in 3 minutes.  The 2 bar of pressure extract a stronger brew, with different flavors.  You can up the pressure during the infusion steps, if you tighten the screw on your tea portafilter.",
     "steps": [
@@ -6863,7 +7818,8 @@
           "threshold": 2.0
         },
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Infuse",
@@ -6875,7 +7831,8 @@
         "duration_seconds": 30.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flush",
@@ -6887,7 +7844,8 @@
         "duration_seconds": 12.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Infuse",
@@ -6899,7 +7857,8 @@
         "duration_seconds": 40.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flush",
@@ -6911,7 +7870,8 @@
         "duration_seconds": 12.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Infuse",
@@ -6923,7 +7883,8 @@
         "duration_seconds": 40.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flush",
@@ -6935,7 +7896,8 @@
         "duration_seconds": 11.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flush cooler",
@@ -6947,15 +7909,23 @@
         "duration_seconds": 13.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 1,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-395c2b994ba8",
     "title": "Tea portafilter/oolong dark",
     "notes": "This profile requires a specially designed tea portafilter that opens its valve at pressures of 3 bar or above.  Put a tea bag or loose leaf tea into the basket.  Makes about 230ml of tea in 3 minutes.  The 2 bar of pressure extract a stronger brew, with different flavors.  You can up the pressure during the infusion steps, if you tighten the screw on your tea portafilter.",
     "steps": [
@@ -6973,7 +7943,8 @@
           "threshold": 3.0
         },
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Infuse",
@@ -6985,7 +7956,8 @@
         "duration_seconds": 20.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flush",
@@ -6997,7 +7969,8 @@
         "duration_seconds": 30.0,
         "exit": null,
         "volume_limit_ml": 80,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Infuse",
@@ -7009,7 +7982,8 @@
         "duration_seconds": 25.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flush",
@@ -7021,7 +7995,8 @@
         "duration_seconds": 30.0,
         "exit": null,
         "volume_limit_ml": 80,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "infuse",
@@ -7033,7 +8008,8 @@
         "duration_seconds": 30.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flush",
@@ -7045,7 +8021,8 @@
         "duration_seconds": 30.0,
         "exit": null,
         "volume_limit_ml": 80,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Infuse",
@@ -7057,7 +8034,8 @@
         "duration_seconds": 40.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flush",
@@ -7069,15 +8047,23 @@
         "duration_seconds": 30.0,
         "exit": null,
         "volume_limit_ml": 100,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 1,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-396448abb04f",
     "title": "Tea portafilter/Pressurized tea",
     "notes": "This profile requires a specially designed tea portafilter that opens its valve at pressures of 3 bar or above.  Put a tea bag or loose leaf tea into the basket.  Makes about 230ml of tea in 3 minutes.  The 2 bar of pressure extract a stronger brew, with different flavors.  You can up the pressure during the infusion steps, if you tighten the screw on your tea portafilter.",
     "steps": [
@@ -7095,7 +8081,8 @@
           "threshold": 2.0
         },
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Infuse",
@@ -7107,7 +8094,8 @@
         "duration_seconds": 30.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flush",
@@ -7119,7 +8107,8 @@
         "duration_seconds": 12.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Infuse",
@@ -7131,7 +8120,8 @@
         "duration_seconds": 40.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flush",
@@ -7143,7 +8133,8 @@
         "duration_seconds": 12.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Infuse",
@@ -7155,7 +8146,8 @@
         "duration_seconds": 40.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flush",
@@ -7167,15 +8159,23 @@
         "duration_seconds": 22.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 1,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-3977ce63f6e4",
     "title": "Tea portafilter/tisane",
     "notes": "This profile requires a specially designed tea portafilter that opens its valve at pressures of 3 bar or above.  Put a tea bag or loose leaf tea into the basket.  Makes about 230ml of tea in 3 minutes.  The 2 bar of pressure extract a stronger brew, with different flavors.  You can up the pressure during the infusion steps, if you tighten the screw on your tea portafilter.",
     "steps": [
@@ -7193,7 +8193,8 @@
           "threshold": 2.0
         },
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Infuse",
@@ -7205,7 +8206,8 @@
         "duration_seconds": 30.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flush",
@@ -7217,7 +8219,8 @@
         "duration_seconds": 12.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Infuse",
@@ -7229,7 +8232,8 @@
         "duration_seconds": 40.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flush",
@@ -7241,7 +8245,8 @@
         "duration_seconds": 12.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Infuse",
@@ -7253,7 +8258,8 @@
         "duration_seconds": 40.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flush",
@@ -7265,7 +8271,8 @@
         "duration_seconds": 11.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flush cooler",
@@ -7277,15 +8284,23 @@
         "duration_seconds": 13.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 1,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-398102489414",
     "title": "Tea portafilter/white tea",
     "notes": "This profile requires a specially designed tea portafilter that opens its valve at pressures of 3 bar or above.  Put a tea bag or loose leaf tea into the basket.  Makes about 230ml of tea in 3 minutes.  The 2 bar of pressure extract a stronger brew, with different flavors.  You can up the pressure during the infusion steps, if you tighten the screw on your tea portafilter.",
     "steps": [
@@ -7303,7 +8318,8 @@
           "threshold": 2.0
         },
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Infuse",
@@ -7315,7 +8331,8 @@
         "duration_seconds": 30.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flush",
@@ -7327,7 +8344,8 @@
         "duration_seconds": 12.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Infuse",
@@ -7339,7 +8357,8 @@
         "duration_seconds": 40.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flush",
@@ -7351,7 +8370,8 @@
         "duration_seconds": 12.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Infuse",
@@ -7363,7 +8383,8 @@
         "duration_seconds": 40.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flush",
@@ -7375,7 +8396,8 @@
         "duration_seconds": 11.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flush cooler",
@@ -7387,15 +8409,23 @@
         "duration_seconds": 13.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 1,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-3995c8f572c2",
     "title": "Test/low pressure leak",
     "notes": "Put a blind (no hole) portafilter basket into your portafilter, and then run this profile to see if there are any water leaks in your machine.  Once pressure is reached, water will be turned off and pressure held.  After five minutes check with a flashlight for any water droplets inside the machine.   You should not wait for the profile to stop. Start looking for leaks after 3 minutes and stop the profile once you feel assured there is no visible water leaking.",
     "steps": [
@@ -7413,7 +8443,8 @@
           "threshold": 0.5
         },
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "rise to 0.5 bar and hold",
@@ -7425,7 +8456,8 @@
         "duration_seconds": 127.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "rise to 0.5 bar and hold",
@@ -7437,7 +8469,8 @@
         "duration_seconds": 127.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "rise to 0.5 bar and hold",
@@ -7449,7 +8482,8 @@
         "duration_seconds": 127.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "rise to 0.5 bar and hold",
@@ -7461,7 +8495,8 @@
         "duration_seconds": 127.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "rise to 0.5 bar and hold",
@@ -7473,7 +8508,8 @@
         "duration_seconds": 127.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "rise to 0.5 bar and hold",
@@ -7485,7 +8521,8 @@
         "duration_seconds": 127.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "rise to 0.5 bar and hold",
@@ -7497,15 +8534,23 @@
         "duration_seconds": 127.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 1,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-39aaee33869f",
     "title": "Test/for a small leak",
     "notes": "Put a blind (no hole) portafilter basket into your portafilter, and then run this profile to see if there are any water leaks in your machine.  Once pressure is reached, water will be turned off and pressure held.  A small mount of pressure loss is normal, because of leaking around the pump's valve.  After two minutes of no flow, your pressure should be above 8 bar.",
     "steps": [
@@ -7519,7 +8564,8 @@
         "duration_seconds": 10.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "rise and hold",
@@ -7531,7 +8577,8 @@
         "duration_seconds": 5.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "hold at no flow",
@@ -7543,15 +8590,23 @@
         "duration_seconds": 120.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 1,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-39b011b69fc5",
     "title": "Test/pressure calibration",
     "notes": "You will need a portafilter fitted with a pressure gauge that leaks or has a slow flow rate.  This profile will slowly rise to 9 bar and hold it.  Compare what is on the screen with what your analog pressure gauge tells you.  Go to Settings->Machine->Calibrate and enter the held pressure value, and then retest until the pressure until the two agree.",
     "steps": [
@@ -7569,7 +8624,8 @@
           "threshold": 7.0
         },
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "final slow rise",
@@ -7581,7 +8637,8 @@
         "duration_seconds": 3.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "hold",
@@ -7593,15 +8650,23 @@
         "duration_seconds": 60.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 2,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 36
+    "max_total_volume_ml": 36,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-39cba5a7c89f",
     "title": "Test/leakage stress test",
     "notes": "Put a blank (no hole) basket into a portafilter, and run this program to stress test all the O-rings and water connections.  The intent of this test is to cause a water leak at any connection, if there is a weak spot.",
     "steps": [
@@ -7615,7 +8680,8 @@
         "duration_seconds": 10.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Pressure release",
@@ -7627,7 +8693,8 @@
         "duration_seconds": 1.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Pressure up",
@@ -7639,7 +8706,8 @@
         "duration_seconds": 5.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Pressure release",
@@ -7651,7 +8719,8 @@
         "duration_seconds": 1.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Pressure up",
@@ -7663,7 +8732,8 @@
         "duration_seconds": 5.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Pressure release",
@@ -7675,7 +8745,8 @@
         "duration_seconds": 1.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Pressure up",
@@ -7687,7 +8758,8 @@
         "duration_seconds": 5.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Pressure release",
@@ -7699,7 +8771,8 @@
         "duration_seconds": 1.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Pressure up",
@@ -7711,7 +8784,8 @@
         "duration_seconds": 5.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Pressure release",
@@ -7723,7 +8797,8 @@
         "duration_seconds": 1.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Pressure up",
@@ -7735,7 +8810,8 @@
         "duration_seconds": 5.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Pressure release",
@@ -7747,7 +8823,8 @@
         "duration_seconds": 1.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Pressure up",
@@ -7759,7 +8836,8 @@
         "duration_seconds": 5.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Pressure release",
@@ -7771,7 +8849,8 @@
         "duration_seconds": 1.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Pressure up",
@@ -7783,7 +8862,8 @@
         "duration_seconds": 5.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Pressure release",
@@ -7795,7 +8875,8 @@
         "duration_seconds": 1.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Pressure up",
@@ -7807,7 +8888,8 @@
         "duration_seconds": 5.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Pressure release",
@@ -7819,7 +8901,8 @@
         "duration_seconds": 1.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Pressure up",
@@ -7831,15 +8914,23 @@
         "duration_seconds": 5.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 2,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-39d4fa7c8da4",
     "title": "Test/temperature accuracy",
     "notes": "Put a pour over basket in your DE1.  Look for smooth temperature ramps between each temperature stage.",
     "steps": [
@@ -7853,7 +8944,8 @@
         "duration_seconds": 20.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "80c",
@@ -7865,7 +8957,8 @@
         "duration_seconds": 30.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "70c",
@@ -7877,15 +8970,23 @@
         "duration_seconds": 30.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 0,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-39e0c287b7ac",
     "title": "Test/temperature calibration",
     "notes": "Make a device to read ºC inside a basket.  Drill a 3mm hole in a no hole basket. Thread a K type temperature bead through. Bend the wire. Run this profile twice to warm up the basket and portafilter. When the DE1 stabilizes at 90ºC, if the meter is not 90.0ºC then go to Settings->Machine->Calibrate and enter the temperature on your meter.  Press Enter, then Done, then Ok. Run the profile. Repeat until the DE1 is within 0.3ºC of the meter.",
     "steps": [
@@ -7899,7 +9000,8 @@
         "duration_seconds": 60.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "decline",
@@ -7911,15 +9013,23 @@
         "duration_seconds": 0.0,
         "exit": null,
         "volume_limit_ml": 0,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 0,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 180
+    "max_total_volume_ml": 180,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-39fc2093df18",
     "title": "Pour over basket/V60 15g in, 250g out",
     "notes": "We use the highest flow rate for V60 brewing, to take advantage of the extraction evenness provided by high turbulence. If you get any choking in your V60 brews,  try coarsening the grind a little.  If brews still choke, consider using the Kalita recipe for some V60 brews, such as decafs and Ethiopians, as they are more prone to choking than other coffees are. We recommend giving the brewer a gentle spin after prewetting and after the last pulse of water has sprayed.",
     "steps": [
@@ -7933,7 +9043,8 @@
         "duration_seconds": 8.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "bloom",
@@ -7945,7 +9056,8 @@
         "duration_seconds": 30.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "pulse",
@@ -7957,7 +9069,8 @@
         "duration_seconds": 12.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "pause",
@@ -7969,7 +9082,8 @@
         "duration_seconds": 30.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "pulse",
@@ -7981,7 +9095,8 @@
         "duration_seconds": 12.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "pause",
@@ -7993,7 +9108,8 @@
         "duration_seconds": 30.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "pulse",
@@ -8005,15 +9121,23 @@
         "duration_seconds": 11.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 0,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-3a0d880e7d22",
     "title": "Pour over basket/V60 20g in, 340g out",
     "notes": "We use the highest flow rate for V60 brewing, to take advantage of the extraction evenness provided by high turbulence. If you get any choking in your V60 brews,  try coarsening the grind a little.  If brews still choke, consider using the Kalita recipe for some V60 brews, such as decafs and Ethiopians, as they are more prone to choking than other coffees are. We recommend giving the brewer a gentle spin after prewetting and after the last pulse of water has sprayed.",
     "steps": [
@@ -8027,7 +9151,8 @@
         "duration_seconds": 10.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "bloom*",
@@ -8039,7 +9164,8 @@
         "duration_seconds": 30.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "pulse",
@@ -8051,7 +9177,8 @@
         "duration_seconds": 15.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "pause",
@@ -8063,7 +9190,8 @@
         "duration_seconds": 30.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "pulse",
@@ -8075,7 +9203,8 @@
         "duration_seconds": 15.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "pause",
@@ -8087,7 +9216,8 @@
         "duration_seconds": 35.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "pulse",
@@ -8099,7 +9229,8 @@
         "duration_seconds": 14.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "[ spin at end]*",
@@ -8111,15 +9242,23 @@
         "duration_seconds": 1.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 0,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-3a1bdc350eb6",
     "title": "Pour over basket/V60 22g in, 375g out",
     "notes": "We use the highest flow rate for V60 brewing, to take advantage of the extraction evenness provided by high turbulence. If you get any choking in your V60 brews,  try coarsening the grind a little.  If brews still choke, consider using the Kalita recipe for some V60 brews, such as decafs and Ethiopians, as they are more prone to choking than other coffees are. We recommend giving the brewer a gentle spin after prewetting and after the last pulse of water has sprayed.",
     "steps": [
@@ -8133,7 +9272,8 @@
         "duration_seconds": 11.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "bloom*",
@@ -8145,7 +9285,8 @@
         "duration_seconds": 30.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "pulse",
@@ -8157,7 +9298,8 @@
         "duration_seconds": 17.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "pause",
@@ -8169,7 +9311,8 @@
         "duration_seconds": 30.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "pulse",
@@ -8181,7 +9324,8 @@
         "duration_seconds": 16.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "pause",
@@ -8193,7 +9337,8 @@
         "duration_seconds": 35.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "pulse",
@@ -8205,7 +9350,8 @@
         "duration_seconds": 16.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "[ spin at end]*",
@@ -8217,15 +9363,23 @@
         "duration_seconds": 1.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 0,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   },
   {
+    "id": "019e5fb5-63b5-7333-a2ac-3a28944a22f0",
     "title": "Cleaning/Weber Spring Clean",
     "notes": "This profile is gentle on the coffee puck and not too demanding on the barista.  Produces a very acceptable espresso in a wide variety of settings.",
     "steps": [
@@ -8239,7 +9393,8 @@
         "duration_seconds": 20.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Initial fill",
@@ -8255,7 +9410,8 @@
           "threshold": 1.0
         },
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Fill and stir",
@@ -8271,7 +9427,8 @@
           "threshold": 9.0
         },
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Hold",
@@ -8283,7 +9440,8 @@
         "duration_seconds": 10.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Short flush",
@@ -8299,7 +9457,8 @@
           "threshold": 7.0
         },
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Hold",
@@ -8315,7 +9474,8 @@
           "threshold": 9.0
         },
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Short flush",
@@ -8331,7 +9491,8 @@
           "threshold": 7.0
         },
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Hold",
@@ -8343,7 +9504,8 @@
         "duration_seconds": 10.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Long flush",
@@ -8355,7 +9517,8 @@
         "duration_seconds": 10.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Fill to rinse",
@@ -8371,7 +9534,8 @@
           "threshold": 9.0
         },
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Flush to rinse",
@@ -8383,7 +9547,8 @@
         "duration_seconds": 10.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Fill to rinse",
@@ -8399,7 +9564,8 @@
           "threshold": 8.0
         },
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Full flush",
@@ -8415,7 +9581,8 @@
           "threshold": 0.1
         },
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Fill to rinse",
@@ -8431,7 +9598,8 @@
           "threshold": 9.0
         },
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       },
       {
         "name": "Final flush",
@@ -8443,12 +9611,19 @@
         "duration_seconds": 30.0,
         "exit": null,
         "volume_limit_ml": 500,
-        "limiter": null
+        "limiter": null,
+        "weight": null
       }
     ],
     "preinfuse_step_count": 2,
     "minimum_pressure": 0.0,
     "maximum_flow": 0.0,
-    "max_total_volume_ml": 0
+    "max_total_volume_ml": 0,
+    "target_weight": 0.0,
+    "dose": 0.0,
+    "author": "",
+    "beverage_type": "espresso",
+    "tank_temperature": 0.0,
+    "version": "2"
   }
 ]

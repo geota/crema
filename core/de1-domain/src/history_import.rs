@@ -356,6 +356,10 @@ fn tcl_profile(settings: &TclDict, metadata: &ShotMetadata) -> Option<Profile> {
         return None;
     }
     Some(Profile {
+        // A profile reconstructed from a legacy shot record carries no
+        // stable ID (the legacy `.shot` format has no profile-id field);
+        // the shell mints one if/when it persists the recovered profile.
+        id: String::new(),
         title: title.to_string(),
         notes: String::new(),
         steps: Vec::new(),
