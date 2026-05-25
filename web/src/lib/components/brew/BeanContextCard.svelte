@@ -263,18 +263,23 @@
 				/>
 			</label>
 			<label class="bean-field">
-				<span class="t-eyebrow"
-					>Grinder{#if defaultGrinder}
-						<em class="bean-default-hint">override default ({defaultGrinder})</em>
-					{/if}</span
-				>
+				<span class="t-eyebrow">Grinder</span>
 				<input
 					class="bean-input"
 					bind:value={eGrinder}
-					placeholder={defaultGrinder
-						? `${defaultGrinder} (default)`
-						: 'Grinder, e.g. Niche Zero'}
+					placeholder="Grinder, e.g. Niche Zero"
 				/>
+				{#if defaultGrinder && eGrinder.trim() === ''}
+					<button
+						type="button"
+						class="bean-default-chip"
+						title="Use the equipment-level default from Settings → Machine"
+						onclick={() => (eGrinder = defaultGrinder)}
+					>
+						<span class="bean-default-chip-tag">default</span>
+						<span>{defaultGrinder}</span>
+					</button>
+				{/if}
 			</label>
 			<label class="bean-field">
 				<span class="t-eyebrow">Roasted on</span>
@@ -522,15 +527,40 @@
 	.bean-reorder {
 		color: var(--warning);
 	}
-	/* Field-label inline hint — sits next to the "Grinder" eyebrow to
-	   surface the equipment-level default the bean is about to override.
-	   Lowercase, dimmer, no italic emphasis beyond the existing `<em>`. */
-	.bean-default-hint {
-		font-style: normal;
-		font-weight: 400;
-		text-transform: none;
-		letter-spacing: 0;
-		color: rgba(var(--tint-rgb), 0.45);
-		margin-left: 4px;
+	/* "Default" chip — surfaces the equipment-level grinder default when
+	   the per-bag override is empty. Visually distinct from typed text:
+	   pill-shaped, copper-tinted "default" tag + the value. Tapping
+	   copies the default into the input so the user can either accept
+	   or edit it. Disappears the moment the user types an override. */
+	.bean-default-chip {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		align-self: flex-start;
+		margin-top: 4px;
+		padding: 3px 8px 3px 4px;
+		background: rgba(var(--tint-rgb), 0.04);
+		border: 1px solid rgba(var(--tint-rgb), 0.1);
+		border-radius: 999px;
+		color: rgba(var(--tint-rgb), 0.7);
+		font-family: var(--font-sans);
+		font-size: 11px;
+		cursor: pointer;
+		transition: all var(--dur-1) var(--ease);
+	}
+	.bean-default-chip:hover {
+		background: rgba(var(--tint-rgb), 0.08);
+		border-color: rgba(var(--copper-rgb), 0.32);
+		color: var(--copper-300);
+	}
+	.bean-default-chip-tag {
+		font-size: 9px;
+		font-weight: 600;
+		letter-spacing: var(--track-allcaps, 0.06em);
+		text-transform: uppercase;
+		color: var(--copper-400);
+		background: rgba(var(--copper-rgb), 0.12);
+		border-radius: 999px;
+		padding: 2px 6px;
 	}
 </style>

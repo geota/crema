@@ -37,6 +37,7 @@
 	import RoasterAutocomplete from './RoasterAutocomplete.svelte';
 	import TagInput from '$lib/components/profiles/TagInput.svelte';
 	import RoastSlider from './RoastSlider.svelte';
+	import { getSettingsStore } from '$lib/settings';
 
 	let {
 		bean,
@@ -49,6 +50,14 @@
 	} = $props();
 
 	const library = getBeanStore();
+	/**
+	 * Equipment-level grinder default from Settings → Machine. Surfaced
+	 * as a small "default" chip below the bean's Grinder field when no
+	 * per-bag override is set, so the user understands the value the
+	 * brew card will fall back to.
+	 */
+	const settings = getSettingsStore();
+	const defaultGrinder = $derived(settings.current.grinderModel?.trim() ?? '');
 
 	// ── Draft state (new mode only) ────────────────────────────────────
 	const live = $derived(!isNew);
@@ -725,6 +734,17 @@
 											grinder: (e.currentTarget as HTMLInputElement).value
 										})}
 								/>
+								{#if defaultGrinder && current.grinder.trim() === ''}
+									<button
+										type="button"
+										class="be-default-chip"
+										title="Use the equipment-level default from Settings → Machine"
+										onclick={() => patch({ grinder: defaultGrinder })}
+									>
+										<span class="be-default-chip-tag">default</span>
+										<span>{defaultGrinder}</span>
+									</button>
+								{/if}
 							</div>
 						</div>
 						<div class="be-frow be-frow-stack">
@@ -1400,6 +1420,41 @@
 	   long blank gutter. */
 	.be-frow-r-end {
 		align-items: flex-end;
+	}
+
+	/* "Default" chip — same pattern as the brew bean card. Appears
+	   below the Grinder input when the per-bag override is empty and a
+	   Settings → Machine default exists. Tappable to copy the default
+	   into the field, then disappears. */
+	.be-default-chip {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		align-self: flex-start;
+		padding: 3px 8px 3px 4px;
+		background: rgba(var(--tint-rgb), 0.04);
+		border: 1px solid rgba(var(--tint-rgb), 0.1);
+		border-radius: 999px;
+		color: rgba(var(--tint-rgb), 0.7);
+		font-family: var(--font-sans);
+		font-size: 11px;
+		cursor: pointer;
+		transition: all var(--dur-1) var(--ease);
+	}
+	.be-default-chip:hover {
+		background: rgba(var(--tint-rgb), 0.08);
+		border-color: rgba(var(--copper-rgb), 0.32);
+		color: var(--copper-300);
+	}
+	.be-default-chip-tag {
+		font-size: 9px;
+		font-weight: 600;
+		letter-spacing: var(--track-allcaps, 0.06em);
+		text-transform: uppercase;
+		color: var(--copper-400);
+		background: rgba(var(--copper-rgb), 0.12);
+		border-radius: 999px;
+		padding: 2px 6px;
 	}
 
 	/* Segmented (Mix). `.be-seg-sm` matches the `.st-segment` from the
