@@ -59,7 +59,7 @@ pnpm dev
 
 Open `http://localhost:5173`. The web shell starts in a connected-to-nothing state — click "Connect" to pair your DE1 over Web Bluetooth.
 
-> **Pairing tip — DE1 may advertise as `nRF5x`.** Some DE1 units (depending on firmware revision and the BLE module they shipped with) advertise their device name as `nRF5x` rather than `DE1` in the browser's Web Bluetooth picker. If your DE1 doesn't show up by name, look for an `nRF5x`-prefixed entry instead — that's the same machine. The official `de1app` and `reaprime` clients both see this; Crema accepts both name patterns automatically.
+> **Pairing tip — DE1 may advertise as `nRF5x` in the browser's Web Bluetooth picker.**
 
 ### Visualizer integration (optional)
 
