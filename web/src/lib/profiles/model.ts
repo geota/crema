@@ -105,7 +105,12 @@ export interface ProfileSegment {
  * profiles are created / edited and persisted in localStorage.
  */
 export interface CremaProfile {
-	/** Stable id. Built-ins are `builtin:<index>`; custom are `custom:<uuid>`. */
+	/**
+	 * Stable UUID. Built-ins derive theirs deterministically from the profile
+	 * title (see {@link uuidFromString}); custom profiles use
+	 * `crypto.randomUUID()`. Source distinction lives on the {@link source}
+	 * field — there is no longer any prefix on the id.
+	 */
 	id: string;
 	/** Whether this profile is a fixed built-in (read-only) or user-owned. */
 	source: 'builtin' | 'custom';
@@ -163,13 +168,75 @@ export interface CremaProfile {
  */
 export type BeverageType = 'espresso' | 'calibrate' | 'cleaning' | 'manual' | 'pourover';
 
-/** A short id for a custom profile / segment — `crypto.randomUUID` if present. */
+/**
+ * A prefixed short id — used by segment ids (`s1`, `s2`, …, or `seg:<uuid>`
+ * for editor-added segments). Profile ids are no longer minted through
+ * here: they use {@link newProfileUuid} (custom) or {@link uuidFromString}
+ * (built-ins). The kept-around `uid()` lets the segment scheme — which IS
+ * scoped within a profile, not the global URL space — stay as-is.
+ */
 export function uid(prefix: string): string {
-	const rnd =
-		typeof crypto !== 'undefined' && 'randomUUID' in crypto
-			? crypto.randomUUID()
-			: Math.random().toString(36).slice(2) + Date.now().toString(36);
-	return `${prefix}:${rnd}`;
+	return `${prefix}:${newProfileUuid()}`;
+}
+
+/**
+ * Mint a fresh UUID for a custom profile. Prefers the platform's
+ * `crypto.randomUUID()` (every browser Crema targets has it), with a
+ * synchronous fallback that produces a well-formed v4 UUID for the
+ * unusual case of an environment without it (e.g. Node test runners
+ * before the global crypto landed).
+ */
+export function newProfileUuid(): string {
+	if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+		return crypto.randomUUID();
+	}
+	// Fallback: 16 random bytes shaped into the 8-4-4-4-12 v4 form.
+	const bytes = new Uint8Array(16);
+	for (let i = 0; i < 16; i++) bytes[i] = Math.floor(Math.random() * 256);
+	bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4
+	bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant 10
+	const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+	return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+/**
+ * Derive a stable, well-formed v4-shaped UUID from an input string. Used
+ * to give each built-in profile a permanent UUID derived from its title,
+ * so the URL space (`/profiles/<uuid>/edit`) is clean and reorderings of
+ * `builtin.json` don't shuffle ids out from under pinned/last-used state.
+ *
+ * Algorithm: FNV-1a 32-bit hashed four times with constant per-pass byte
+ * offsets to fill 128 bits, then formatted with the v4 version nibble and
+ * the 10xx variant bits. Deterministic across platforms and runs — the
+ * same title always maps to the same id.
+ */
+export function uuidFromString(input: string): string {
+	const FNV_PRIME = 16777619;
+	const OFFSET = 2166136261;
+	let h0 = OFFSET;
+	let h1 = OFFSET;
+	let h2 = OFFSET;
+	let h3 = OFFSET;
+	for (let i = 0; i < input.length; i++) {
+		const c = input.charCodeAt(i);
+		h0 = Math.imul(h0 ^ c, FNV_PRIME);
+		h1 = Math.imul(h1 ^ (c + 0x11), FNV_PRIME);
+		h2 = Math.imul(h2 ^ (c + 0x22), FNV_PRIME);
+		h3 = Math.imul(h3 ^ (c + 0x33), FNV_PRIME);
+	}
+	const hex = (n: number): string => (n >>> 0).toString(16).padStart(8, '0');
+	const a = hex(h0);
+	const h1Hex = hex(h1);
+	const h2Hex = hex(h2);
+	const h3Hex = hex(h3);
+	const b = h1Hex.slice(0, 4);
+	// Version nibble: force '4' to mark as v4 UUID.
+	const c = '4' + h1Hex.slice(5, 8);
+	// Variant nibble: force the high two bits to 10 (i.e. 8/9/a/b).
+	const variantNibble = ((parseInt(h2Hex[0], 16) & 0x3) | 0x8).toString(16);
+	const d = variantNibble + h2Hex.slice(1, 4);
+	const e = h2Hex.slice(4, 8) + h3Hex;
+	return `${a}-${b}-${c}-${d}-${e}`;
 }
 
 /**
@@ -418,7 +485,7 @@ function roastFromProfile(profile: Profile): Roast | null {
  * read-only — editing a built-in duplicates it to a custom profile (see
  * `store.ts`).
  */
-export function fromCoreProfile(profile: Profile, index: number): CremaProfile {
+export function fromCoreProfile(profile: Profile, _index: number): CremaProfile {
 	const segments = profile.steps.map(segmentFromStep);
 	const temps = profile.steps.map((s) => s.temperature_c).filter((t) => t > 0);
 	const meanTemp =
@@ -426,7 +493,7 @@ export function fromCoreProfile(profile: Profile, index: number): CremaProfile {
 	const tags = ['Built-in'];
 	if (isTeaProfile(profile.title)) tags.push('tea');
 	return {
-		id: `builtin:${index}`,
+		id: uuidFromString(profile.title),
 		source: 'builtin',
 		name: profile.title,
 		notes: profile.notes,
@@ -558,7 +625,7 @@ export function blankProfile(): CremaProfile {
 		segments[0] = { ...segments[0], time: prefs.defaultPreinfusionS };
 	}
 	return {
-		id: uid('custom'),
+		id: newProfileUuid(),
 		source: 'custom',
 		name: '',
 		notes: '',
@@ -588,7 +655,7 @@ export function blankProfile(): CremaProfile {
 export function duplicateProfile(p: CremaProfile): CremaProfile {
 	return {
 		...p,
-		id: uid('custom'),
+		id: newProfileUuid(),
 		source: 'custom',
 		name: `${p.name} (copy)`,
 		pinned: false,
