@@ -349,6 +349,24 @@
   color: rgba(var(--tint-rgb), 0.55);
   margin-bottom: 4px;
 }
+/* Two buttons side-by-side: "Check for updates" + "Update firmware…".
+   The second is the type-to-confirm entry point (FirmwareUpdateModal);
+   the gap matches `.st-machinecard-actions`. */
+.st-machinecard-fw-actions {
+  display: flex; gap: 8px;
+  flex-wrap: wrap;
+}
+/* Inline notice shown after the user confirms an Update — today this is
+   the "not yet implemented (#55)" stub. Uses the same faint copper as
+   the surrounding card so it reads as part of the firmware block. */
+.st-machinecard-fw-stub {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  line-height: 1.5;
+  color: rgba(var(--tint-rgb), 0.7);
+  font-style: italic;
+  margin-top: 4px;
+}
 
 /* ───────────────────────────── Maintenance cards */
 .st-maint-grid {

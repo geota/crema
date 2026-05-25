@@ -36,7 +36,7 @@ not the shell).
 | 10 | `ShotSettings.steam_timeout_s` finite | wire-cap 0..=255 via `u8p0_encode` | n/a | TCL maps 0 → 255 ("don't turn off"); we don't | reaprime sends raw | YES (silent) | LOW | doc only |
 | 11 | Steam flow ≤ ~7 ml/s | wire-cap (`* 100` then clamp to u16 → 655.35 ml/s) | n/a (no UI) | none | none | YES | LOW (firmware refuses; no damage) | doc only |
 | 12 | Hot-water / flush flow ≤ ~15 ml/s | wire-cap (`* 10` → u16, 6553 ml/s) | n/a | none | none | YES | LOW | doc only |
-| 13 | Flush temp 60..=100 °C | wire-cap only (u16 / 10 → 6553 °C) | n/a (only `flushTemp` is wired; reaches via QStepper but no range present in stepper) | none | none | YES | MEDIUM | shell-side clamp follow-up (the `BrewDashboard` `flushTemp` route is the only QC stepper that reaches the wire; the stepper has no `min`/`max` enforcement today) |
+| 13 | Flush temp 60..=100 °C | wire-cap only (u16 / 10 → 6553 °C) | **stepper-enforced 60..100** (`PreinfFlushStepper` `min={60} max={100}` — `QStepper.inc()` + click-to-type `commit()` both clamp) | none | none | YES | MEDIUM | closed at shell layer; core wire-cap stays as last-line guard |
 | 14 | Phase 1 / Phase 2 flow ≤ ~10 ml/s | wire-cap (`* 10` → u16) | n/a | none | none | YES | LOW | doc only |
 | 15 | Espresso warmup timeout ≤ 60 s | wire-cap (`*10` → u16) | n/a | none | none | YES | LOW | doc only |
 | 16 | Tank refill threshold 3..=70 mm | wire-cap via U16P8 (max ~256 mm) | n/a | none (legacy slider 3..70 — UI only) | none | YES | LOW | doc only |
@@ -73,7 +73,7 @@ Don't relax these.
 | Reset 8 MMR machine settings to defaults | `window.confirm` plain prompt | n/a (no equivalent) | no confirm — `DELETE /api/v1/machine/settings/reset` is silent | none | MEDIUM | kept; a typed modal is overkill for the blast radius ("user retunes settings") |
 | Reset user preferences (brew defaults, display, sound) | `window.confirm` | n/a | n/a | none | LOW | kept |
 | Skin removal | n/a (no skin-removal UI in shell) | n/a | `AlertDialog` with Cancel/Remove | none | LOW | shell follow-up if/when skins land |
-| Firmware update start | n/a (v2 feature, `docs/17`) | n/a | no confirm (POST `/api/v1/machine/firmware` starts immediately) | n/a | deferred | implement modal at v2 time |
+| Firmware update start | **type-to-confirm gate** in place — `FirmwareUpdateModal` mounts behind the Settings → Machine "Update firmware…" button; confirm fires a `// TODO(#55)` stub that surfaces "not yet implemented" inline | n/a | no confirm (POST `/api/v1/machine/firmware` starts immediately) | n/a | gate landed; flow deferred to #55 | wire `onConfirm` to the real upload flow when v2 ships |
 | Factory reset (clear all Crema localStorage) | row marked `notImplemented`; click is a no-op | n/a | n/a | YES (cosmetic) | LOW | implement only when there's a real handler; row already pilled |
 | Profile delete | implementation deferred (no UI) | TCL has popup confirm in profile editor | none | n/a | deferred (no Crema profile-delete UI yet) | when adding, follow legacy and `window.confirm` |
 | Bean delete | exists in bean library (see `docs/32`) | TCL no equivalent | n/a | check separately | out of scope | — |
@@ -81,12 +81,16 @@ Don't relax these.
 
 **Proposed fix sketches (deferred — UI work needs design review):**
 
-1. *Firmware update start (CRITICAL when v2 lands)*: a modal that
-   surfaces the firmware build name + version, requires the user to
-   type the build short-hash (4 chars) before "Start update" enables,
-   and warns that the upload phase locks all writes for ~5 minutes.
-   The text-to-confirm scheme is symmetric with `MainsConfirmModal`.
-   File to add: `web/src/lib/components/firmware/FirmwareUpdateModal.svelte`.
+1. *Firmware update start (CRITICAL when v2 lands)*: **gate landed** —
+   `web/src/lib/components/settings/FirmwareUpdateModal.svelte` mirrors
+   `MainsConfirmModal`'s type-to-confirm scheme. The user types
+   `UPDATE` (a fixed literal, not the build hash — chosen because the
+   from/to builds are already shown directly above the input, so
+   echoing the build there would be redundant and would also leak the
+   "should I update?" question into the confirmation token). When #55
+   wires the v2 upload flow, the seam is `MachineSection.svelte`'s
+   `onUpdateConfirm` handler (marked `// TODO(#55)`); today it surfaces
+   "Firmware update is not yet implemented (#55)." inline.
 
 ## C — Connection-state / handshake guards
 

@@ -45,6 +45,7 @@
 	import StSelect from '../StSelect.svelte';
 	import StStepper from '../StStepper.svelte';
 	import StButton from '../StButton.svelte';
+	import FirmwareUpdateModal from '../FirmwareUpdateModal.svelte';
 
 	let {
 		app,
@@ -218,6 +219,45 @@
 			firmwareChecking = false;
 		}
 	}
+
+	// ── Firmware update — type-to-confirm gate (#55 stub) ─────────────────
+	//
+	// The gate exists today; the underlying flashing flow does not. Per
+	// docs/40 "Top deferred safety checks" #2 the entry point still needs
+	// the same destructive-action UX guard the mains writes use, so a
+	// future "Update" button can't ship without it. When #55 lands, the
+	// onConfirm handler is the single seam to wire to the real flow.
+	let showUpdateModal = $state(false);
+	let updateStubNotice = $state<string | null>(null);
+
+	/** Latest build Crema knows about — pulled off the read-only status. */
+	const latestKnownBuild = $derived.by(() => {
+		if (firmwareStatus === null) return undefined;
+		switch (firmwareStatus.type) {
+			case 'UpToDate':
+				return firmwareStatus.content.installed;
+			case 'UpdateAvailable':
+				return firmwareStatus.content.latest;
+			case 'NewerInstalled':
+				return firmwareStatus.content.installed;
+			default:
+				return undefined;
+		}
+	});
+
+	function openUpdateModal(): void {
+		updateStubNotice = null;
+		showUpdateModal = true;
+	}
+	function closeUpdateModal(): void {
+		showUpdateModal = false;
+	}
+	function onUpdateConfirm(): void {
+		// TODO(#55): wire to firmware-update v2 implementation
+		showUpdateModal = false;
+		updateStubNotice = 'Firmware update is not yet implemented (#55).';
+	}
+
 	// Rename / Re-pair were UI-only stubs (no underlying device registry).
 	// Removed to keep the card focused on connect / disconnect / sleep — the
 	// real actions the shell can actually perform.
@@ -332,13 +372,26 @@
 		</div>
 		<div class="st-machinecard-fw-ver">{firmwareStatusLabel}</div>
 		<div class="st-machinecard-fw-notes">{firmwareStatusNotes}</div>
-		<StButton
-			label={firmwareChecking ? 'Checking…' : 'Check for updates'}
-			icon="arrow-circle-up"
-			variant="primary"
-			disabled={!connected || firmwareChecking}
-			onClick={updateFirmware}
-		/>
+		<div class="st-machinecard-fw-actions">
+			<StButton
+				label={firmwareChecking ? 'Checking…' : 'Check for updates'}
+				icon="arrow-circle-up"
+				variant="primary"
+				disabled={!connected || firmwareChecking}
+				onClick={updateFirmware}
+			/>
+			<StButton
+				label="Update firmware…"
+				icon="download-simple"
+				disabled={!connected}
+				onClick={openUpdateModal}
+			/>
+		</div>
+		{#if updateStubNotice !== null}
+			<div class="st-machinecard-fw-stub" role="status" aria-live="polite">
+				{updateStubNotice}
+			</div>
+		{/if}
 	</div>
 </div>
 
@@ -574,6 +627,15 @@
 		{/snippet}
 	</StRow>
 </StGroup>
+
+{#if showUpdateModal}
+	<FirmwareUpdateModal
+		installedBuild={snapshot.de1MachineInfo.FirmwareVersion}
+		latestBuild={latestKnownBuild}
+		onConfirm={onUpdateConfirm}
+		onCancel={closeUpdateModal}
+	/>
+{/if}
 
 <style>
 	/* Diagnostics value cells — sized to match the Selected-device hint

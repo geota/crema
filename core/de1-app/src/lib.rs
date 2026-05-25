@@ -854,7 +854,13 @@ impl CremaCore {
     }
 
     /// Set the fan-on temperature threshold, in °C (legacy
-    /// `set_fan_temperature_threshold`). MMR `0x803808`, 1-byte.
+    /// `set_fan_temperature_threshold`). MMR `0x803808`, 4-byte LE
+    /// (one MMR word). reaprime `de1.models.dart:247 fanThreshold`
+    /// declares `MmrValueKind.int32` (4 bytes); matched here. The
+    /// pre-fix `byte_len=1` was the same class of short-packet bug
+    /// fixed for the 8 heater-tweak setters in `9ef8ee5` — fan_threshold
+    /// was outside that struct and got missed. Raw °C, no scaling;
+    /// high 3 bytes are zero-pad.
     ///
     /// Clamped to 0..=50 °C — matches reaprime `MMRItem.fanThreshold`
     /// (`min: 0, max: 50`); legacy TCL has no clamp. docs/40 §A.
@@ -865,7 +871,7 @@ impl CremaCore {
         // Range 0..=50 °C — matches reaprime `fanThreshold` min/max;
         // legacy TCL is unbounded.
         let clamped = temp_c.min(50);
-        mmr_write_command(MmrRegister::FanThreshold, u32::from(clamped), 1)
+        mmr_write_command(MmrRegister::FanThreshold, u32::from(clamped), 4)
     }
 
     /// Set the tank desired water-temperature threshold, in °C (legacy
@@ -1133,7 +1139,7 @@ impl CremaCore {
         // Eight independent MMR writes, in reaprime's source order. Each
         // tuple is (register, value, byte_len).
         let writes: [(MmrRegister, u32, u8); 8] = [
-            (MmrRegister::FanThreshold, RESET_FAN_THRESHOLD_C, 1),
+            (MmrRegister::FanThreshold, RESET_FAN_THRESHOLD_C, 4),
             (
                 MmrRegister::HotWaterIdleTemp,
                 RESET_HOT_WATER_IDLE_TEMP_RAW,
@@ -5074,6 +5080,27 @@ mod tests {
     }
 
     #[test]
+    fn set_fan_threshold_emits_len_byte_4_and_4_byte_payload() {
+        // Pins the wire Len byte and full payload — reaprime
+        // `de1.models.dart:247 fanThreshold` is `MmrValueKind.int32`
+        // (4 bytes). The pre-fix `byte_len=1` was the same class of
+        // short-packet bug fixed for the 8 heater-tweak setters in
+        // `9ef8ee5`; this test pins the Len byte so the regression
+        // can't sneak back through the clamp test (which only reads
+        // payload[0]).
+        let core = CremaCore::new();
+        let out = core.set_fan_threshold(45);
+        let Some(Command::WriteCharacteristic { target, data }) = out.commands.first() else {
+            panic!("expected one WriteCharacteristic");
+        };
+        assert_eq!(*target, WriteTarget::De1MmrWrite);
+        assert_eq!(data.len(), 20, "MMR packet is 20 bytes wide");
+        assert_eq!(data[0], 4, "Len byte must be 4 (full MMR word)");
+        // 45 °C as little-endian u32 = [0x2D, 0x00, 0x00, 0x00].
+        assert_eq!(&data[4..8], &[0x2D, 0x00, 0x00, 0x00]);
+    }
+
+    #[test]
     fn set_steam_highflow_start_clamps_above_4_seconds() {
         // docs/40 §A: reaprime steamStartSecs says "Valid range 0.0 - 4.0".
         let core = CremaCore::new();
@@ -5274,8 +5301,10 @@ mod tests {
         // Payload bytes are little-endian; addresses are big-endian on
         // the wire (mmr::write_request packs them at offsets 1..4).
         let expected: [(u32, u8, &[u8]); 8] = [
-            // Fan: 50 °C (post-clamp; reaprime's source says 55).
-            (0x0080_3808, 1, &[0x32]),
+            // Fan: 50 °C (post-clamp; reaprime's source says 55). 4-byte
+            // LE: reaprime declares `MmrValueKind.int32` — raw °C in the
+            // low byte, zero-pad the rest.
+            (0x0080_3808, 4, &[0x32, 0x00, 0x00, 0x00]),
             // HotWaterIdleTemp: 95 °C × 10 = 950 = 0x03B6.
             (0x0080_3818, 4, &[0xB6, 0x03, 0x00, 0x00]),
             // Phase1FlowRate: 2.0 × 10 = 20 = 0x14.
