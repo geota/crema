@@ -1,19 +1,23 @@
-<!-- Crema favicon — matches the in-app top-left brand glyph (CremaSidebar
-     `.cside-mark-glyph`, defined in `quick-controls-v2.css:478`):
-     copper-500 disc (#C7763B) + ink-900 (#1F1812) "C" in Newsreader serif,
-     weight 500, with the same slight glyph asymmetry the live `<div>`
-     produces. Falls back to Georgia → Times → generic serif for clients
-     without Newsreader; the visual offset of a serif "C" reads the same. -->
+<!-- Crema favicon — pixel-perfect match to the in-app top-left brand
+     glyph (CremaSidebar `.cside-mark-glyph`, defined in
+     `quick-controls-v2.css:478`).
+
+     Uses `<foreignObject>` so the favicon goes through the SAME
+     rendering path as the live `<div>` does — identical CSS (flex
+     centering, letter-spacing, font-family fallback), identical
+     glyph metrics. The serif "C" reads slightly left of geometric
+     center because Newsreader's "C" carries most of its visual mass
+     on the left side; the flex container centers the em-box, not
+     the ink mass. That intentional asymmetry is the brand mark.
+
+     Font fallback: Newsreader → Georgia → Times → generic serif —
+     so clients without Newsreader still render the same visual offset.
+
+     Disc + ink colours come from the token sheet:
+       copper-500  → #C7763B   (`tokens.css`)
+       ink-900     → #1F1812   (`tokens.css`, alias `fg-on-accent`) -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
-  <circle cx="32" cy="32" r="32" fill="#C7763B" />
-  <text
-    x="32"
-    y="34"
-    text-anchor="middle"
-    dominant-baseline="central"
-    font-family="Newsreader, Georgia, 'Times New Roman', serif"
-    font-size="40"
-    font-weight="500"
-    fill="#1F1812"
-  >C</text>
+  <foreignObject x="0" y="0" width="64" height="64">
+    <div xmlns="http://www.w3.org/1999/xhtml" style="width:64px;height:64px;border-radius:50%;background:#C7763B;display:flex;align-items:center;justify-content:center;color:#1F1812;font-family:Newsreader,Georgia,'Times New Roman',serif;font-size:34px;font-weight:500;letter-spacing:-0.04em;box-shadow:inset 0 1px 0 rgba(255,255,255,0.2);box-sizing:border-box;line-height:1;">C</div>
+  </foreignObject>
 </svg>
