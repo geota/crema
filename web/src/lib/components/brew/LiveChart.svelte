@@ -234,11 +234,20 @@
 				showHeadTemp ? (s.setHeadTemp == null ? null : s.setHeadTemp / 10) : null
 			);
 			// Secondary lines — each rides the shared y scale:
-			// • resistance × 5 then clamp 10 — raw values are typically 0.1–2
-			//   (occasional channeling spike to 5), which would crowd the
-			//   bottom of the chart. The chart shows the SHAPE; the card
-			//   reads the raw value. See the Quick Sheet's "Resistance ×5"
-			//   sub-label;
+			// • resistance: the chart-scale depends on which variant
+			//   the sample carries.
+			//   - Weight-based (`resistanceWeight`, scale-derived): rides
+			//     native. Raw values typically span 1–10 because the
+			//     scale-flow denominator (g/s, after puck retention) is
+			//     smaller than the pump-flow denominator (ml/s), so the
+			//     squared term lands larger. Multiplying ×5 would clamp
+			//     to 10 across the whole pour and erase the signal.
+			//   - Flow-based (`resistance`, DE1-flow): ×5 then clamp 10 —
+			//     raw values are typically 0.1–2 (occasional channeling
+			//     spike to 5), which would crowd the bottom of the
+			//     chart. The chart shows the SHAPE; the card reads the
+			//     raw value. See the Quick Sheet's "Resistance ×5"
+			//     sub-label (which only applies to flow mode).
 			// • volume / mix divide by 10 like their primary's scale (60 ml →
 			//   6 on plot; 90 °C → 9 on plot);
 			// • weight flow rides native (g/s ≈ ml/s).
@@ -248,8 +257,15 @@
 			// DE1-flow `resistance` when no scale was paired for
 			// that sample. Legacy shots and pre-scale samples ride
 			// the fallback transparently.
-			const r = s.resistanceWeight ?? s.resistance;
-			resistance.push(showResistance && r != null ? Math.min(10, Math.max(0, r * 5)) : null);
+			const rRaw =
+				s.resistanceWeight != null
+					? s.resistanceWeight
+					: s.resistance != null
+						? s.resistance * 5
+						: null;
+			resistance.push(
+				showResistance && rRaw != null ? Math.min(10, Math.max(0, rRaw)) : null
+			);
 			const v = s.dispensedVolume;
 			volume.push(showVolume && v != null ? v / 10 : null);
 			mixTemp.push(showMixTemp && s.mixTemp != null ? s.mixTemp / 10 : null);
