@@ -395,7 +395,8 @@ mod tests {
     #[test]
     fn entering_steam_starts_a_session() {
         let mut monitor = SteamMonitor::new();
-        let events = monitor.on_state_info(state(MachineState::Steam, SubState::Steaming), ms(1_000));
+        let events =
+            monitor.on_state_info(state(MachineState::Steam, SubState::Steaming), ms(1_000));
         assert_eq!(events, vec![SteamEvent::Started]);
         assert!(monitor.is_session_in_progress());
     }
@@ -404,7 +405,8 @@ mod tests {
     fn a_repeated_steam_state_does_not_re_start_the_session() {
         let mut monitor = SteamMonitor::new();
         monitor.on_state_info(state(MachineState::Steam, SubState::Steaming), ms(1_000));
-        let events = monitor.on_state_info(state(MachineState::Steam, SubState::Steaming), ms(2_000));
+        let events =
+            monitor.on_state_info(state(MachineState::Steam, SubState::Steaming), ms(2_000));
         assert!(events.is_empty());
         assert!(monitor.is_session_in_progress());
     }
@@ -630,7 +632,8 @@ mod tests {
         monitor.on_tick(ms(600_000));
         assert!(monitor.is_eco_mode());
         // A steam session is activity: it disengages eco mode.
-        let events = monitor.on_state_info(state(MachineState::Steam, SubState::Steaming), ms(601_000));
+        let events =
+            monitor.on_state_info(state(MachineState::Steam, SubState::Steaming), ms(601_000));
         assert!(events.contains(&SteamEvent::EcoModeChanged(false)));
         assert!(!monitor.is_eco_mode());
     }

@@ -123,10 +123,14 @@ fn build_v2_document(shot: &StoredShot) -> V2DocumentOut {
         },
         // Per-shot grinder model isn't stored; setting may be. Emit
         // the grinder block when a setting is present, null otherwise.
-        grinder: shot.metadata.grinder_setting.as_ref().map(|setting| V2GrinderOut {
-            model: String::new(),
-            setting: setting.clone(),
-        }),
+        grinder: shot
+            .metadata
+            .grinder_setting
+            .as_ref()
+            .map(|setting| V2GrinderOut {
+                model: String::new(),
+                setting: setting.clone(),
+            }),
         dose_in: shot.metadata.dose,
         out: shot.metadata.yield_out,
         time: shot.record.duration.as_secs_f32(),
@@ -263,15 +267,17 @@ fn format_clock_label(clock_s: u64) -> String {
     let hours = (clock_s / 3600) % 24;
     let days_since_epoch = clock_s / 86_400;
     let (year, month, day) = civil_from_days(days_since_epoch);
-    format!(
-        "{year:04}-{month:02}-{day:02}T{hours:02}:{mins:02}:{secs:02}Z"
-    )
+    format!("{year:04}-{month:02}-{day:02}T{hours:02}:{mins:02}:{secs:02}Z")
 }
 
 /// Convert "days since 1970-01-01" to a (year, month, day) triple. Based
 /// on Howard Hinnant's `civil_from_days`, restricted to the post-epoch
 /// range Crema sees.
-#[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap, clippy::cast_sign_loss)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss
+)]
 fn civil_from_days(days: u64) -> (u32, u32, u32) {
     let z = days as i64 + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
@@ -568,10 +574,16 @@ mod tests {
         assert_eq!(parsed.metadata.dose, shot.metadata.dose);
         assert_eq!(parsed.metadata.yield_out, shot.metadata.yield_out);
         assert_eq!(parsed.metadata.tds, shot.metadata.tds);
-        assert_eq!(parsed.metadata.extraction_yield, shot.metadata.extraction_yield);
+        assert_eq!(
+            parsed.metadata.extraction_yield,
+            shot.metadata.extraction_yield
+        );
         assert_eq!(parsed.metadata.rating, shot.metadata.rating);
         assert_eq!(parsed.metadata.notes, shot.metadata.notes);
-        assert_eq!(parsed.metadata.grinder_setting, shot.metadata.grinder_setting);
+        assert_eq!(
+            parsed.metadata.grinder_setting,
+            shot.metadata.grinder_setting
+        );
         assert_eq!(parsed.metadata.beans, shot.metadata.beans);
 
         // Sample series survives: length + key channels match.
@@ -623,16 +635,10 @@ mod tests {
             assert!((av - bv).abs() < 1e-4, "scale_weight[{i}] drifted");
             let av = a.scale_flow_weight.unwrap_or(0.0);
             let bv = b.scale_flow_weight.unwrap_or(0.0);
-            assert!(
-                (av - bv).abs() < 1e-4,
-                "scale_flow_weight[{i}] drifted"
-            );
+            assert!((av - bv).abs() < 1e-4, "scale_flow_weight[{i}] drifted");
             let av = a.dispensed_volume.unwrap_or(0.0);
             let bv = b.dispensed_volume.unwrap_or(0.0);
-            assert!(
-                (av - bv).abs() < 1e-4,
-                "dispensed_volume[{i}] drifted"
-            );
+            assert!((av - bv).abs() < 1e-4, "dispensed_volume[{i}] drifted");
             // Resistance signals re-derive at import time from
             // pressure / flow + scale_flow_weight, so they should match
             // the original within the sub-floor guard. When both inputs
@@ -654,7 +660,9 @@ mod tests {
         // (Crema's StoredShot has no profile in the fixture above —
         // the export emits `"Unknown profile"`, the importer accepts
         // a profile block with no steps.)
-        assert!(parsed.profile.is_none() || parsed.profile.as_ref().unwrap().title == "Unknown profile");
+        assert!(
+            parsed.profile.is_none() || parsed.profile.as_ref().unwrap().title == "Unknown profile"
+        );
     }
 
     /// A shot with no metadata fields populated still emits a valid v2

@@ -97,8 +97,8 @@ fn recorded_session_decodes_to_pinned_event_sequence() {
 
         let source = source_from_name(&entry.src)
             .unwrap_or_else(|| panic!("line {}: unknown src \"{}\"", index + 1, entry.src));
-        let data = decode_hex(&entry.hex)
-            .unwrap_or_else(|e| panic!("line {}: bad hex: {e}", index + 1));
+        let data =
+            decode_hex(&entry.hex).unwrap_or_else(|e| panic!("line {}: bad hex: {e}", index + 1));
 
         let output = core.on_notification(source, &data, entry.t);
         for event in output.events {

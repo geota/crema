@@ -132,8 +132,12 @@ impl ImportedDe1AppSettings {
 pub fn import_settings_tdb(content: &str) -> Result<ImportedDe1AppSettings, ImportError> {
     let dict = TclDict::parse(content)?;
 
-    let wake_seconds = dict.get("scheduler_wake").and_then(|s| s.trim().parse::<u32>().ok());
-    let sleep_seconds = dict.get("scheduler_sleep").and_then(|s| s.trim().parse::<u32>().ok());
+    let wake_seconds = dict
+        .get("scheduler_wake")
+        .and_then(|s| s.trim().parse::<u32>().ok());
+    let sleep_seconds = dict
+        .get("scheduler_sleep")
+        .and_then(|s| s.trim().parse::<u32>().ok());
 
     let (wake_hour, wake_minute) = match wake_seconds {
         Some(s) => (

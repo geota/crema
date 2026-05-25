@@ -267,7 +267,10 @@ pub fn signature_for_roaster(name: &str) -> String {
     // strip non-[a-z0-9 ]. Done in one pass to avoid building an intermediate.
     for c in name.trim().chars() {
         let lower = c.to_ascii_lowercase();
-        let is_sep = matches!(lower, ' ' | '\t' | '\n' | '\r' | '_' | '.' | '-' | ',' | '/');
+        let is_sep = matches!(
+            lower,
+            ' ' | '\t' | '\n' | '\r' | '_' | '.' | '-' | ',' | '/'
+        );
         if is_sep {
             if !prev_was_separator && !s.is_empty() {
                 s.push(' ');
@@ -417,29 +420,69 @@ mod tests {
     /// breaks this test.
     #[test]
     fn shot_signature_is_stable_across_identical_inputs() {
-        let a = signature_for_shot(1_700_000_000_000, 30_000, Some("best of decent"), Some(36.0));
-        let b = signature_for_shot(1_700_000_000_000, 30_000, Some("best of decent"), Some(36.0));
+        let a = signature_for_shot(
+            1_700_000_000_000,
+            30_000,
+            Some("best of decent"),
+            Some(36.0),
+        );
+        let b = signature_for_shot(
+            1_700_000_000_000,
+            30_000,
+            Some("best of decent"),
+            Some(36.0),
+        );
         assert_eq!(a, b);
     }
 
     #[test]
     fn shot_signature_changes_when_start_time_differs() {
-        let a = signature_for_shot(1_700_000_000_000, 30_000, Some("best of decent"), Some(36.0));
-        let b = signature_for_shot(1_700_000_001_000, 30_000, Some("best of decent"), Some(36.0));
+        let a = signature_for_shot(
+            1_700_000_000_000,
+            30_000,
+            Some("best of decent"),
+            Some(36.0),
+        );
+        let b = signature_for_shot(
+            1_700_000_001_000,
+            30_000,
+            Some("best of decent"),
+            Some(36.0),
+        );
         assert_ne!(a, b);
     }
 
     #[test]
     fn shot_signature_changes_when_duration_differs() {
-        let a = signature_for_shot(1_700_000_000_000, 30_000, Some("best of decent"), Some(36.0));
-        let b = signature_for_shot(1_700_000_000_000, 31_000, Some("best of decent"), Some(36.0));
+        let a = signature_for_shot(
+            1_700_000_000_000,
+            30_000,
+            Some("best of decent"),
+            Some(36.0),
+        );
+        let b = signature_for_shot(
+            1_700_000_000_000,
+            31_000,
+            Some("best of decent"),
+            Some(36.0),
+        );
         assert_ne!(a, b);
     }
 
     #[test]
     fn shot_signature_changes_when_final_weight_differs() {
-        let a = signature_for_shot(1_700_000_000_000, 30_000, Some("best of decent"), Some(36.0));
-        let b = signature_for_shot(1_700_000_000_000, 30_000, Some("best of decent"), Some(37.5));
+        let a = signature_for_shot(
+            1_700_000_000_000,
+            30_000,
+            Some("best of decent"),
+            Some(36.0),
+        );
+        let b = signature_for_shot(
+            1_700_000_000_000,
+            30_000,
+            Some("best of decent"),
+            Some(37.5),
+        );
         assert_ne!(a, b);
     }
 
@@ -448,8 +491,18 @@ mod tests {
     /// the TS test of the same name.
     #[test]
     fn shot_signature_is_stable_under_sub_rounding_float_jitter() {
-        let a = signature_for_shot(1_700_000_000_000, 30_000, Some("best of decent"), Some(36.001));
-        let b = signature_for_shot(1_700_000_000_000, 30_000, Some("best of decent"), Some(36.0));
+        let a = signature_for_shot(
+            1_700_000_000_000,
+            30_000,
+            Some("best of decent"),
+            Some(36.001),
+        );
+        let b = signature_for_shot(
+            1_700_000_000_000,
+            30_000,
+            Some("best of decent"),
+            Some(36.0),
+        );
         assert_eq!(a, b);
     }
 
@@ -474,7 +527,12 @@ mod tests {
     /// failure rather than a silently divergent dedup planner.
     #[test]
     fn shot_signature_matches_pinned_djb2_hex_digest() {
-        let sig = signature_for_shot(1_700_000_000_000, 30_000, Some("best of decent"), Some(36.0));
+        let sig = signature_for_shot(
+            1_700_000_000_000,
+            30_000,
+            Some("best of decent"),
+            Some(36.0),
+        );
         // Manually computed djb2 of "1700000000000|30000|best of decent|36.00".
         // This pin is derived from the algorithm definition; both
         // language impls must agree.

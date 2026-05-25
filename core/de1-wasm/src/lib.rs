@@ -349,7 +349,12 @@ pub fn signature_for_shot(
     } else {
         0
     };
-    de1_domain::signature_for_shot(completed_at, duration, profile_name.as_deref(), final_weight)
+    de1_domain::signature_for_shot(
+        completed_at,
+        duration,
+        profile_name.as_deref(),
+        final_weight,
+    )
 }
 
 /// djb2 hex signature for a bean — `(name, roasterName, roastedOn)`.
@@ -452,7 +457,11 @@ pub fn roast_freshness(band: Option<String>, days: Option<f64>) -> Option<String
         "dark" => de1_domain::RoastBand::Dark,
         _ => return None,
     };
-    Some(de1_domain::roast_freshness(band, days_i).as_str().to_owned())
+    Some(
+        de1_domain::roast_freshness(band, days_i)
+            .as_str()
+            .to_owned(),
+    )
 }
 
 /// Export a Rust-shape `StoredShot` (the same shape `import_v2_json_shot`
@@ -579,8 +588,7 @@ impl CremaBridge {
     /// `CaptureEntry[]` for IndexedDB persistence. See
     /// [`CremaCore::capture_slice_jsonl`].
     pub fn capture_slice_jsonl(&self, from_ms: f64, to_ms: f64) -> String {
-        self.core
-            .capture_slice_jsonl(from_ms as u64, to_ms as u64)
+        self.core.capture_slice_jsonl(from_ms as u64, to_ms as u64)
     }
 
     /// Drop every recorded entry — called by the shell on BLE disconnect.
@@ -653,7 +661,10 @@ impl CremaBridge {
     /// before calling. From then on the DE1 applies `measured / reported` as
     /// a multiplier on that sensor.
     pub fn write_calibration(&self, sensor: CalSensor, reported: f32, measured: f32) -> String {
-        json(self.core.write_calibration(sensor.into(), reported, measured))
+        json(
+            self.core
+                .write_calibration(sensor.into(), reported, measured),
+        )
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command resets `sensor` to its
@@ -835,8 +846,7 @@ impl CremaBridge {
     /// consistent with the rest of the bridge's JSON surface.
     pub fn scale_uuids(&self) -> Option<String> {
         self.core.scale_uuids().map(|uuids| {
-            serde_json::to_string(&uuids)
-                .expect("ScaleUuids is plain data and always serializes")
+            serde_json::to_string(&uuids).expect("ScaleUuids is plain data and always serializes")
         })
     }
 
@@ -1210,12 +1220,16 @@ impl CremaBridge {
                         // variant used for shot history) shouldn't reach this
                         // path. Surface its `Display` rather than silently
                         // coercing to `Empty`.
-                        e => ProfileUploadFailure::Internal { message: e.to_string() },
+                        e => ProfileUploadFailure::Internal {
+                            message: e.to_string(),
+                        },
                     },
                     // Other AppError variants (e.g. Serialization) similarly
                     // shouldn't reach this path. Surface the underlying cause
                     // so the shell's toast / log carries the real reason.
-                    e => ProfileUploadFailure::Internal { message: e.to_string() },
+                    e => ProfileUploadFailure::Internal {
+                        message: e.to_string(),
+                    },
                 };
                 out.events.push(Event::ProfileUploadFailed { reason });
                 json(out)
@@ -1477,10 +1491,7 @@ mod tests {
         // Missing date → None.
         assert_eq!(days_off_roast(None, now_ms), None);
         // Malformed date → None.
-        assert_eq!(
-            days_off_roast(Some("not-a-date".to_owned()), now_ms),
-            None
-        );
+        assert_eq!(days_off_roast(Some("not-a-date".to_owned()), now_ms), None);
         // Non-finite now → None (defensive).
         assert_eq!(
             days_off_roast(Some("2026-05-22".to_owned()), f64::NAN),
@@ -1671,7 +1682,9 @@ mod tests {
         bridge.connect_scale("Decent Scale ABC".to_owned());
         // Power-off is sent unconditionally on a Decent Scale; older
         // firmware silently no-ops on the byte sequence.
-        let json = bridge.power_off_decent_scale().expect("decent scale connected");
+        let json = bridge
+            .power_off_decent_scale()
+            .expect("decent scale connected");
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         let commands = parsed["commands"].as_array().unwrap();
         assert_eq!(commands.len(), 1);

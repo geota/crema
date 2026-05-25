@@ -354,7 +354,10 @@ mod tests {
             // 12 samples: total 132 ticks over 1.1 s → 120/s → 60 Hz.
             let times: [u16; 12] = [0, 11, 23, 35, 47, 60, 72, 83, 95, 108, 120, 132];
             for (i, t) in times.iter().enumerate() {
-                d.observe(*t, Duration::from_millis(u64::try_from(i).unwrap_or(0) * 100));
+                d.observe(
+                    *t,
+                    Duration::from_millis(u64::try_from(i).unwrap_or(0) * 100),
+                );
             }
             assert_eq!(d.locked_hz(), Some(60.0));
         }

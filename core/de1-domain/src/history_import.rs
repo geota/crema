@@ -106,9 +106,7 @@ pub fn import_legacy_tcl_shot(content: &str) -> Result<StoredShot, ImportError> 
         &dispensed,
     );
 
-    let duration = samples
-        .last()
-        .map_or(Duration::ZERO, |t| t.elapsed);
+    let duration = samples.last().map_or(Duration::ZERO, |t| t.elapsed);
 
     // The nested `settings {...}` dict.
     let settings = dict
@@ -174,9 +172,7 @@ pub fn import_v2_json_shot(content: &str) -> Result<StoredShot, ImportError> {
         &raw.flow.by_weight,
         &raw.totals.water_dispensed,
     );
-    let duration = samples
-        .last()
-        .map_or(Duration::ZERO, |t| t.elapsed);
+    let duration = samples.last().map_or(Duration::ZERO, |t| t.elapsed);
 
     let metadata = v2_metadata(&raw);
     let profile = v2_profile(&raw);
@@ -235,9 +231,7 @@ fn build_samples(
             set_mix_temp: temp_goal[i],
             set_group_pressure: pressure_goal[i],
             set_group_flow: flow_goal[i],
-            frame_number: frame_no
-                .get(i)
-                .map_or(0, |f| frame_number_from_f32(*f)),
+            frame_number: frame_no.get(i).map_or(0, |f| frame_number_from_f32(*f)),
             steam_temp: 0.0,
         };
         // Overlay channels — each `Some(value)` only when the source
@@ -254,8 +248,8 @@ fn build_samples(
         // / `puck_resistance_weight`); kept inline to avoid de1-domain
         // depending back on de1-app.
         let resistance = derive_resistance(pressure[i], flow[i]);
-        let resistance_weight = scale_flow_weight_i
-            .and_then(|wf| derive_resistance(pressure[i], wf));
+        let resistance_weight =
+            scale_flow_weight_i.and_then(|wf| derive_resistance(pressure[i], wf));
         out.push(TimedSample {
             elapsed: elapsed_dur,
             sample,
@@ -331,10 +325,7 @@ fn tcl_metadata(settings: &TclDict) -> ShotMetadata {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string);
-    let beans = combine_bean_label(
-        settings.get("bean_brand"),
-        settings.get("bean_type"),
-    );
+    let beans = combine_bean_label(settings.get("bean_brand"), settings.get("bean_type"));
 
     ShotMetadata {
         dose,
@@ -598,7 +589,10 @@ settings {
         assert_eq!(shot.recorded_at, 1_699_432_544 * 1000);
         assert_eq!(shot.format_version, STORED_SHOT_FORMAT_VERSION);
         // Bean label combines brand + type.
-        assert_eq!(shot.metadata.beans.as_deref(), Some("Banibeans · Colombia Huila"));
+        assert_eq!(
+            shot.metadata.beans.as_deref(),
+            Some("Banibeans · Colombia Huila")
+        );
         // Weights round-trip.
         assert_eq!(shot.metadata.dose, Some(18.5));
         assert_eq!(shot.metadata.yield_out, Some(38.0));
@@ -606,7 +600,10 @@ settings {
         assert_eq!(shot.metadata.extraction_yield, Some(21.0));
         // Enjoyment 80 → rating 4 (80 / 25 = 3.2 round = 3, + 1 = 4).
         assert_eq!(shot.metadata.rating, Some(4));
-        assert_eq!(shot.metadata.notes.as_deref(), Some("Balanced, good sweetness"));
+        assert_eq!(
+            shot.metadata.notes.as_deref(),
+            Some("Balanced, good sweetness")
+        );
         assert_eq!(shot.metadata.grinder_setting.as_deref(), Some("2.5"));
         // Profile picked up the title.
         let profile = shot.profile.expect("profile present");

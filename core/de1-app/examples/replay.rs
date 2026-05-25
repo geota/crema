@@ -190,7 +190,10 @@ fn replay(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 );
             }
             other => {
-                eprintln!("line {}: skipping line with unknown dir \"{other}\"", index + 1);
+                eprintln!(
+                    "line {}: skipping line with unknown dir \"{other}\"",
+                    index + 1
+                );
             }
         }
     }
@@ -228,8 +231,7 @@ fn decode_hex(hex: &str) -> Result<Vec<u8>, String> {
         .chunks(2)
         .map(|pair| {
             let pair = String::from_utf8_lossy(pair);
-            u8::from_str_radix(&pair, 16)
-                .map_err(|_| format!("invalid hex digit pair \"{pair}\""))
+            u8::from_str_radix(&pair, 16).map_err(|_| format!("invalid hex digit pair \"{pair}\""))
         })
         .collect()
 }

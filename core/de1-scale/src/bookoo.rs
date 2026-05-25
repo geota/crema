@@ -415,11 +415,9 @@ pub fn parse_packet(data: &[u8]) -> Option<BookooPacket> {
         return None;
     }
 
-    let timer_ms =
-        (u32::from(data[2]) << 16) | (u32::from(data[3]) << 8) | u32::from(data[4]);
+    let timer_ms = (u32::from(data[2]) << 16) | (u32::from(data[3]) << 8) | u32::from(data[4]);
 
-    let weight_raw =
-        (u32::from(data[7]) << 16) | (u32::from(data[8]) << 8) | u32::from(data[9]);
+    let weight_raw = (u32::from(data[7]) << 16) | (u32::from(data[8]) << 8) | u32::from(data[9]);
     let weight_magnitude = weight_raw as f32 / 100.0;
     let weight_g = if data[6] == b'-' {
         -weight_magnitude

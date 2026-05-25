@@ -189,8 +189,7 @@ impl CaptureRecorder {
             .collect();
         let mut candidates: Vec<RawEntry> = Vec::new();
         for entry in self.identity_latest.values() {
-            if entry.t_ms < from_ms
-                && !in_window_keys.contains(&(entry.source, entry.data.clone()))
+            if entry.t_ms < from_ms && !in_window_keys.contains(&(entry.source, entry.data.clone()))
             {
                 candidates.push(entry.clone());
             }
@@ -312,7 +311,10 @@ fn meta_to_jsonl(t_ms: u64, meta: &MetaSnapshot) -> Option<String> {
     }
     use std::fmt::Write;
     let mut out = String::new();
-    let _ = write!(out, "{{\"t\":{t_ms},\"dir\":\"in\",\"src\":\"META\",\"hex\":\"\",\"meta\":{{");
+    let _ = write!(
+        out,
+        "{{\"t\":{t_ms},\"dir\":\"in\",\"src\":\"META\",\"hex\":\"\",\"meta\":{{"
+    );
     let mut first = true;
     let mut sep = |s: &mut String| {
         if first {
@@ -354,7 +356,9 @@ pub(crate) fn slice_to_jsonl(
     let entries = recorder.slice(from_ms, to_ms);
     // META timestamp matches the shell's behaviour: one ms before the first
     // entry, falling back to `from_ms` when the slice is empty.
-    let meta_t = entries.first().map_or(from_ms, |e| e.t_ms.saturating_sub(1));
+    let meta_t = entries
+        .first()
+        .map_or(from_ms, |e| e.t_ms.saturating_sub(1));
     let mut out = String::new();
     if let Some(meta_line) = meta_to_jsonl(meta_t, meta) {
         out.push_str(&meta_line);
@@ -425,7 +429,10 @@ mod tests {
         let first = entries.first().expect("at least one entry");
         assert_eq!(first.source, Source::De1Version);
         assert_eq!(first.data, vec![0xaa, 0xbb]);
-        assert!(first.t_ms < 50, "prepended version landed before the window");
+        assert!(
+            first.t_ms < 50,
+            "prepended version landed before the window"
+        );
         // Everything after the version is in-window.
         for entry in &entries[1..] {
             assert!(entry.t_ms >= 50 && entry.t_ms <= 200);
@@ -517,10 +524,7 @@ mod tests {
         };
         let json = slice_to_jsonl(&rec, &meta, 0, 200);
         let parsed = parse_jsonl(&json);
-        let meta_v = parsed[0]
-            .meta
-            .as_ref()
-            .expect("META carries a payload");
+        let meta_v = parsed[0].meta.as_ref().expect("META carries a payload");
         assert_eq!(meta_v["scaleName"], "BOOKOO_SC");
         assert_eq!(meta_v["de1FirmwareVersion"], 1352);
         assert_eq!(meta_v["de1MachineModel"], 4);
@@ -563,9 +567,8 @@ mod tests {
         // One identity entry well before the trim window — must survive.
         rec.record(Source::De1Version, &[0xaa, 0xbb], 0);
         // Flood the buffer past MAX_ENTRIES + TRIM_SLACK.
-        let total: u64 = u64::try_from(MAX_ENTRIES).unwrap()
-            + u64::try_from(TRIM_SLACK).unwrap()
-            + 5;
+        let total: u64 =
+            u64::try_from(MAX_ENTRIES).unwrap() + u64::try_from(TRIM_SLACK).unwrap() + 5;
         for i in 1..=total {
             let byte = u8::try_from(i & 0xff).unwrap_or(0);
             rec.record(Source::De1ShotSample, &[byte], 100 + i);
@@ -573,7 +576,9 @@ mod tests {
         // The recent slice must still get the identity prepend.
         let entries = rec.slice(100 + total - 10, 100 + total);
         assert!(
-            entries.iter().any(|e| matches!(e.source, Source::De1Version)),
+            entries
+                .iter()
+                .any(|e| matches!(e.source, Source::De1Version)),
             "identity entry survives rolling trim",
         );
     }
@@ -600,9 +605,6 @@ mod tests {
         // Parses without error and round-trips the value.
         let parsed = parse_jsonl(&json);
         let meta_v = parsed[0].meta.as_ref().unwrap();
-        assert_eq!(
-            meta_v["scaleName"],
-            "Name with \"quotes\" and \\backslash"
-        );
+        assert_eq!(meta_v["scaleName"], "Name with \"quotes\" and \\backslash");
     }
 }

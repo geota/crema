@@ -640,10 +640,7 @@ mod tests {
             serde_json::to_string(&RoastBand::Medium).unwrap(),
             "\"medium\""
         );
-        assert_eq!(
-            serde_json::to_string(&RoastBand::Dark).unwrap(),
-            "\"dark\""
-        );
+        assert_eq!(serde_json::to_string(&RoastBand::Dark).unwrap(), "\"dark\"");
     }
 
     // -- days_off_roast -----------------------------------------------
@@ -944,10 +941,7 @@ mod tests {
         let bean = sample_bean();
         // Reference NOW is 2026-05-22; roasted_on is 2026-05-08 → 14 days.
         let summary = bean.display_summary(Some("Counter Culture"), NOW);
-        assert_eq!(
-            summary,
-            "Yirgacheffe · Counter Culture · 14d off roast"
-        );
+        assert_eq!(summary, "Yirgacheffe · Counter Culture · 14d off roast");
     }
 
     #[test]
@@ -973,7 +967,10 @@ mod tests {
 
     #[test]
     fn bean_mix_serialises_lowercase() {
-        assert_eq!(serde_json::to_string(&BeanMix::Single).unwrap(), "\"single\"");
+        assert_eq!(
+            serde_json::to_string(&BeanMix::Single).unwrap(),
+            "\"single\""
+        );
         assert_eq!(serde_json::to_string(&BeanMix::Blend).unwrap(), "\"blend\"");
     }
 }

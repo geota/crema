@@ -53,8 +53,8 @@ pub mod ids;
 pub mod profile;
 pub mod profile_bounds;
 pub mod profile_import;
-pub mod settings_import;
 pub mod session;
+pub mod settings_import;
 pub mod shot;
 pub mod steam;
 pub mod stop;
@@ -65,23 +65,23 @@ pub mod volume;
 pub mod water;
 
 pub use bean::{
-    Bean, BeanMix, BeanOrigin, Roaster, RoastBand, RoastFreshness, ShotBean, days_off_roast,
+    Bean, BeanMix, BeanOrigin, RoastBand, RoastFreshness, Roaster, ShotBean, days_off_roast,
     roast_band, roast_freshness,
 };
 pub use builtin::{BUILTIN_PROFILE_COUNT, builtin_profiles};
 pub use error::{DomainError, ImportError};
 pub use flow::{Estimate, FlowAlgorithm, FlowEstimator};
 pub use history::{STORED_SHOT_FORMAT_VERSION, ShotMetadata, StoredShot, brew_ratio};
+pub use history_export::export_v2_json_shot;
+pub use history_import::{import_legacy_tcl_shot, import_v2_json_shot};
 pub use ids::new_profile_id;
 pub use profile::{
     AssembledProfile, BeverageType, Compare, ExitCondition, ExitMetric, Limiter, Profile,
     ProfileStep, Pump, TempSensor, Transition,
 };
-pub use history_export::export_v2_json_shot;
-pub use history_import::{import_legacy_tcl_shot, import_v2_json_shot};
 pub use profile_import::{export_v2_json, import_legacy_tcl, import_v2_json};
-pub use settings_import::{import_settings_tdb, ImportedDe1AppSettings};
 pub use session::SessionTimer;
+pub use settings_import::{ImportedDe1AppSettings, import_settings_tdb};
 pub use shot::{
     MAX_SHOT_SAMPLES, ShotEvent, ShotMetrics, ShotMonitor, ShotPhase, ShotRecord, TimedSample,
 };
@@ -92,8 +92,8 @@ pub use steam::{
 pub use stop::{AutoStop, STOP_WEIGHT_BEFORE, StopConfig, StopReason, StopTargets};
 pub use tank::{TANK_MM_TO_ML, water_tank_ml};
 pub use units::{
-    bar_to_psi, celsius_to_fahrenheit, fahrenheit_to_celsius, fl_oz_to_ml, grams_to_oz,
-    ml_to_fl_oz, oz_to_grams, psi_to_bar, WeightUnit,
+    WeightUnit, bar_to_psi, celsius_to_fahrenheit, fahrenheit_to_celsius, fl_oz_to_ml, grams_to_oz,
+    ml_to_fl_oz, oz_to_grams, psi_to_bar,
 };
 pub use visualizer_sync::{
     LocalShotRef, ReconcileAction, WireShot, reconcile_shots, reconcile_shots_json,

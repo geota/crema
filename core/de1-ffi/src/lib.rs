@@ -354,12 +354,7 @@ impl CremaBridge {
 
     /// Arm automatic shot-stop. `weight` is grams (SAW), `volume` is
     /// millilitres (SAV), and `max_time` is shot-duration seconds.
-    pub fn arm_auto_stop(
-        &self,
-        weight: Option<f32>,
-        volume: Option<f32>,
-        max_time: Option<f32>,
-    ) {
+    pub fn arm_auto_stop(&self, weight: Option<f32>, volume: Option<f32>, max_time: Option<f32>) {
         self.core().arm_auto_stop(weight, volume, max_time);
     }
 
@@ -561,8 +556,7 @@ impl CremaBridge {
     /// JSON surface; wired exactly like [`scale_capabilities`](Self::scale_capabilities).
     pub fn scale_uuids(&self) -> Option<String> {
         self.core().scale_uuids().map(|uuids| {
-            serde_json::to_string(&uuids)
-                .expect("ScaleUuids is plain data and always serializes")
+            serde_json::to_string(&uuids).expect("ScaleUuids is plain data and always serializes")
         })
     }
 
@@ -879,11 +873,15 @@ impl CremaBridge {
                         }
                         // Any other `DomainError` shouldn't reach this path;
                         // surface its `Display` rather than coercing to `Empty`.
-                        e => ProfileUploadFailure::Internal { message: e.to_string() },
+                        e => ProfileUploadFailure::Internal {
+                            message: e.to_string(),
+                        },
                     },
                     // Other AppError variants shouldn't reach this path either;
                     // surface the underlying cause.
-                    e => ProfileUploadFailure::Internal { message: e.to_string() },
+                    e => ProfileUploadFailure::Internal {
+                        message: e.to_string(),
+                    },
                 };
                 out.events.push(Event::ProfileUploadFailed { reason });
                 json(out)
@@ -982,8 +980,8 @@ impl CremaBridge {
     /// Export a Crema `Profile` (as JSON) as a community-v2 `.json`
     /// document. Pure encoder.
     pub fn export_v2_json_profile(&self, profile_json: String) -> Result<String, String> {
-        let profile: de1_domain::Profile = serde_json::from_str(&profile_json)
-            .map_err(|e| e.to_string())?;
+        let profile: de1_domain::Profile =
+            serde_json::from_str(&profile_json).map_err(|e| e.to_string())?;
         Ok(de1_domain::export_v2_json(&profile))
     }
 

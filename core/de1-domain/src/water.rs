@@ -176,7 +176,8 @@ mod tests {
     #[test]
     fn entering_hot_water_starts_a_session() {
         let mut monitor = WaterMonitor::new();
-        let events = monitor.on_state_info(state(MachineState::HotWater, SubState::Pouring), ms(1_000));
+        let events =
+            monitor.on_state_info(state(MachineState::HotWater, SubState::Pouring), ms(1_000));
         assert_eq!(
             events,
             vec![WaterEvent::Started(WaterSessionKind::HotWater)]
@@ -188,8 +189,10 @@ mod tests {
     #[test]
     fn entering_hot_water_rinse_starts_a_flush_session() {
         let mut monitor = WaterMonitor::new();
-        let events =
-            monitor.on_state_info(state(MachineState::HotWaterRinse, SubState::Pouring), ms(500));
+        let events = monitor.on_state_info(
+            state(MachineState::HotWaterRinse, SubState::Pouring),
+            ms(500),
+        );
         assert_eq!(events, vec![WaterEvent::Started(WaterSessionKind::Flush)]);
         assert_eq!(monitor.session_kind(), Some(WaterSessionKind::Flush));
     }
@@ -209,7 +212,8 @@ mod tests {
     fn a_repeated_state_does_not_re_start_the_session() {
         let mut monitor = WaterMonitor::new();
         monitor.on_state_info(state(MachineState::HotWater, SubState::Pouring), ms(1_000));
-        let events = monitor.on_state_info(state(MachineState::HotWater, SubState::Pouring), ms(2_000));
+        let events =
+            monitor.on_state_info(state(MachineState::HotWater, SubState::Pouring), ms(2_000));
         assert!(events.is_empty());
         assert!(monitor.is_session_in_progress());
     }
@@ -218,8 +222,10 @@ mod tests {
     fn switching_directly_between_water_states_completes_then_starts() {
         let mut monitor = WaterMonitor::new();
         monitor.on_state_info(state(MachineState::HotWater, SubState::Pouring), ms(1_000));
-        let events =
-            monitor.on_state_info(state(MachineState::HotWaterRinse, SubState::Pouring), ms(4_000));
+        let events = monitor.on_state_info(
+            state(MachineState::HotWaterRinse, SubState::Pouring),
+            ms(4_000),
+        );
         assert_eq!(
             events,
             vec![
@@ -236,7 +242,8 @@ mod tests {
     #[test]
     fn a_non_water_state_with_no_session_does_nothing() {
         let mut monitor = WaterMonitor::new();
-        let events = monitor.on_state_info(state(MachineState::Espresso, SubState::Pouring), ms(1_000));
+        let events =
+            monitor.on_state_info(state(MachineState::Espresso, SubState::Pouring), ms(1_000));
         assert!(events.is_empty());
         assert!(!monitor.is_session_in_progress());
     }
@@ -249,7 +256,8 @@ mod tests {
     #[test]
     fn a_long_session_accumulates_no_telemetry_buffer() {
         let mut monitor = WaterMonitor::new();
-        let started = monitor.on_state_info(state(MachineState::HotWater, SubState::Pouring), ms(0));
+        let started =
+            monitor.on_state_info(state(MachineState::HotWater, SubState::Pouring), ms(0));
         assert_eq!(
             started,
             vec![WaterEvent::Started(WaterSessionKind::HotWater)]

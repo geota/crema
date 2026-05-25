@@ -272,8 +272,7 @@ mod tests {
 
     #[test]
     fn theil_sen_is_steadier_than_offset_median_under_a_spike() {
-        let theil_sen =
-            feed_ramp_with_spike(&mut FlowEstimator::new(FlowAlgorithm::TheilSen)).flow;
+        let theil_sen = feed_ramp_with_spike(&mut FlowEstimator::new(FlowAlgorithm::TheilSen)).flow;
         let offset_median =
             feed_ramp_with_spike(&mut FlowEstimator::new(FlowAlgorithm::OffsetMedian)).flow;
         // Theil–Sen holds the true 10 g/s; the spike sits in the offset-median
