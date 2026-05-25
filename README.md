@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="web/static/icon.svg" alt="Crema icon" width="120" height="120" />
+<img src="web/static/favicon.svg" alt="Crema icon" width="120" height="120" />
 
 # Crema
 
