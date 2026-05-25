@@ -12,20 +12,28 @@ firmware OTA codec) plus every scale-side write. BLE-level housekeeping
 
 | Bucket | Count | %   |
 | ------ | ----- | --- |
-| ✅ Verified + aligned       | 36 | 69% |
-| ⚠️ Verified, divergent     | 9  | 17% |
+| ✅ Verified + aligned       | 38 | 73% |
+| ⚠️ Verified, divergent     | 7  | 13% |
 | ❓ Unverified              | 7  | 13% |
 | **Total wires audited**    | 52 | 100% |
 
-The 35 "aligned" entries cover the bread-and-butter writes that have
+The 38 "aligned" entries cover the bread-and-butter writes that have
 been actively maintained against legacy `de1plus` and now also reaprime:
 state requests, the 8 heater-tweaks, flow/temp/timeout setters, MMR
 identity reads, profile-upload header + frames, calibration R/W, the
 core scale tare/timer command set.
 
-The 9 "divergent" entries are largely Crema-stricter clamps (already
+The 7 "divergent" entries are largely Crema-stricter clamps (already
 defended in `docs/40`) plus a handful of legitimate wire-encoding
 asymmetries the docs/22 audit chose deliberately.
+
+**Audit walkthrough 2026-05-24:** five Bucket-2 items were closed by
+the audit-fixes PR: `set_user_present` byte_len 1→4, `set_calibration
+_flow_multiplier` byte_len 2→4, `ShotSettings` steam_temp floor 130→135
+(matches TCL), `set_steam_highflow_start` lower bound 0.0→0.3
+(safe-floor against firmware overheat), and `set_hot_water_idle_temp`
+ceiling 100→99 (matches TCL safe historical max). See
+"Audit walkthrough decisions (2026-05-24)" at the end of this file.
 
 The 7 "unverified" entries are mostly the Bookoo extended command set
 (volume / standby / mode / auto-stop / flow-smoothing / anti-mistouch)
@@ -112,10 +120,10 @@ so verification is straight byte-equality.
 | `set_hot_water_flow_rate` (0x80384C, 4) | `set_hot_water_flow_rate(f32)` × 10 byte_len=4 ([lib.rs:945-951](core/de1-app/src/lib.rs)) | `mmr_write "set_hotwater_flow_rate" "80384C" "04" [zero_pad ... 2]` (`de1_comms.tcl:1173`) | `_writeMMRScaled(MMRItem.hotWaterFlowRate, val)` writeScale 10.0 | All three. |
 | `set_steam_flow` (0x803828, 4) | `set_steam_flow(f32)` × 100 byte_len=4 ([lib.rs:896-902](core/de1-app/src/lib.rs)) | `mmr_write "set_steam_flow" "803828" "04" [zero_pad ... 2]` (`de1_comms.tcl:1214`) — TCL passes `desired_flow` as raw int (settings stores pre-scaled value) | `_writeMMRScaled(MMRItem.targetSteamFlow, val)` writeScale 100.0 | Both `desired_flow × 100` LE32 in reaprime + Crema. TCL's caller pre-scales the same way. |
 | `set_steam_highflow_start` (0x80382C, 4) | `set_steam_highflow_start(f32 s)` × 100 byte_len=4 ([lib.rs:917-929](core/de1-app/src/lib.rs)) | `mmr_write "set_steam_highflow_start" "80382C" "04" [zero_pad [int_to_hex ...] 2]` (`de1_comms.tcl:1295`) | `MMRItem.steamStartSecs` — no `writeScale` declared, but description says raw is `secs × 100`. | Crema's `× 100` correctly implements the firmware semantics where reaprime is silent. |
-| `set_calibration_flow_multiplier` (0x80383C, 2) | `set_calibration_flow_multiplier(f32)` × 1000 byte_len=2, clamped 0.13..=2.0 ([lib.rs:1208-1216](core/de1-app/src/lib.rs)) | `mmr_write "set_calibration_flow_multiplier" "80383C" "04" [zero_pad ... 2]` (`de1_comms.tcl:1336`) — wire Len=4 | `_writeMMRScaled(MMRItem.calFlowEst, val)` writeScale 1000.0 min:130 max:2000 (`de1.models.dart:315-324`) — wire Len=4 | All three encode `int(1000 × m)` LE. Crema picks `byte_len=2` (raw fits a u16 in 0..=2000); the high 2 bytes that reaprime/TCL send are zero anyway. Crema's clamp matches reaprime exactly. |
+| `set_calibration_flow_multiplier` (0x80383C, 4) | `set_calibration_flow_multiplier(f32)` × 1000 byte_len=4, clamped 0.13..=2.0 ([lib.rs:1208-1216](core/de1-app/src/lib.rs)) | `mmr_write "set_calibration_flow_multiplier" "80383C" "04" [zero_pad ... 2]` (`de1_comms.tcl:1336`) — wire Len=4 | `_writeMMRScaled(MMRItem.calFlowEst, val)` writeScale 1000.0 min:130 max:2000 (`de1.models.dart:315-324`) — wire Len=4 | All three encode `int(1000 × m)` LE with wire Len=4. Crema's clamp matches reaprime exactly. **Post-audit 2026-05-24:** byte_len normalised from 2 → 4 (matches TCL + reaprime). |
 | `set_ghc_mode` (0x803820, 1) | `set_ghc_mode(u8)` byte_len=1 ([lib.rs:933-938](core/de1-app/src/lib.rs)) | `mmr_write "set_ghc_mode" "803820" "04" [zero_pad ... 2]` (`de1_comms.tcl:1306`) | n/a (reaprime doesn't expose) | TCL + Crema match; Crema picks 1-byte wire. |
 | `set_usb_charger_on` (0x803854, 1) | `set_usb_charger_on(bool)` byte_len=1 ([lib.rs:996-1001](core/de1-app/src/lib.rs)) | `mmr_write "set_usb_charger_on" "803854" "04" [zero_pad ... 2]` (`de1_comms.tcl:1156`) | `_writeMMRInt(MMRItem.allowUSBCharging, t ? 1 : 0)` (`unified_de1.dart:325-327`) | All three: low byte carries the 0/1; high bytes zero. |
-| `set_user_present` (0x803860, 1) | `set_user_present(bool)` byte_len=1 ([lib.rs:1010-1015](core/de1-app/src/lib.rs)) | `mmr_write "set_user_present" "803860" "04" [zero_pad ... 2]` (`de1_comms.tcl:1166`) — TCL only ever writes `1` | `_writeMMRInt(MMRItem.userPresent, 1)` (`unified_de1.dart:344-347`) — reaprime also only ever writes `1` | Crema is the only one that can also write `0`; the wire encoding for `1` matches the references. |
+| `set_user_present` (0x803860, 4) | `set_user_present(bool)` byte_len=4 ([lib.rs:1010-1015](core/de1-app/src/lib.rs)) | `mmr_write "set_user_present" "803860" "04" [zero_pad ... 2]` (`de1_comms.tcl:1166`) — TCL only ever writes `1` | `_writeMMRInt(MMRItem.userPresent, 1)` (`unified_de1.dart:344-347`) — reaprime also only ever writes `1` | Crema is the only one that can also write `0`; the wire encoding for `1` matches the references. **Post-audit 2026-05-24:** byte_len normalised from 1 → 4 (matches TCL + reaprime). |
 | `set_feature_flags` (0x803858, 2) | `set_feature_flags(u16)` byte_len=2 ([lib.rs:1023-1028](core/de1-app/src/lib.rs)) | `mmr_write "set_feature_flags" "803858" "04" [zero_pad ... 2]` (`de1_comms.tcl:1206`) | `_writeMMRInt(MMRItem.appFeatureFlags, 1)` (`unified_de1.dart:339-342`) — reaprime only writes the literal `1` | Crema lets the caller supply the 16-bit bitmask; reference impls only ever write 1. Wire bytes match for the common case. |
 | `set_refill_kit_present` (0x80385C, 4) | `set_refill_kit_present(u8)` byte_len=4 ([lib.rs:1032-1037](core/de1-app/src/lib.rs)) | `mmr_write "set_refill_kit_present" "80385C" "04" [zero_pad [long_to_little_endian_hex ...] 4]` (`de1_comms.tcl:1238`) | `_writeMMRInt(MMRItem.refillKitPresent, settings.hex)` (`unified_de1.dart:668-672`) | All three write 4-byte int (tri-state 0/1/2). |
 | `set_heater_voltage` (0x803834, 4) | `set_heater_voltage(u8)` writes `volts + 1000` byte_len=4 ([lib.rs:1060-1074](core/de1-app/src/lib.rs)) — rejects anything not in {120, 230} | `mmr_write "set_heater_voltage" "803834" "04" [zero_pad ... 2]` (`de1_comms.tcl:1281`) | `_writeMMRInt(MMRItem.heaterV, voltage.voltage)` — `De1HeaterVoltage` enum carries `1120`/`1230` (`unified_de1.dart:663-666`) | Crema is stricter (typed enum + reject); wire bytes match for valid inputs. |
@@ -173,14 +181,12 @@ both TCL (which carries scale codecs in `bluetooth.tcl`) and reaprime
 | Wire | Crema | TCL | reaprime | Divergence | Risk |
 |---|---|---|---|---|---|
 | `set_fan_threshold` (0x803808) | `set_fan_threshold(u8)` clamps 0..=50, byte_len=4 ([lib.rs:867-875](core/de1-app/src/lib.rs)) | `set_fan_temperature_threshold` no clamp (`de1_comms.tcl:1329-1332`) | `MMRItem.fanThreshold min:0 max:50` (`de1.models.dart:247-254`) — `_writeMMRInt` clamps | Crema matches reaprime; TCL has no clamp. Crema-stricter than TCL. Wire bytes align with both for in-range inputs. | LOW (Crema-stricter, defends fw). |
-| `set_calibration_flow_multiplier` (0x80383C, byte_len=2) | Crema clamps 0.13..=2.0, byte_len=**2** ([lib.rs:1208-1216](core/de1-app/src/lib.rs)) | TCL byte_len=4 wire (`de1_comms.tcl:1336`) | reaprime wire Len=4 (`_writeMMRInt` packs 4 bytes); min:130 max:2000 | Crema picks byte_len=2 (raw fits 130..2000 in 2 bytes — high 2 bytes would be 0 anyway); functionally equivalent on the wire. Clamp matches reaprime exactly. | LOW (encoding equivalent; firmware reads only Len bytes). |
 | `set_cup_warmer_temperature` (0x803874) | Crema clamps 0..=80 °C, byte_len=2, **raw integer °C** ([lib.rs:1188-1195](core/de1-app/src/lib.rs)) | `set_cupwarmer_temperature` writes raw int via `long_to_little_endian_hex $temp` byte_len=2 wire-bytes (`de1_comms.tcl:1184`) — no clamp | reaprime `BengleMmr.matSetPoint` is `scaledFloat readScale:0.1 writeScale:10.0` min:0 max:800 — wire value is **°C × 10** (`bengle_mmr.dart:12-21`) | **Crema follows TCL (raw °C) but disagrees with reaprime (°C × 10).** If the firmware on a Bengle expects °C × 10, Crema would write a target 10× lower than intended (80 °C → wire 80 → device reads as 8.0 °C). reaprime's Bengle was developed against the Bengle FW; TCL's `set_cupwarmer_temperature` predates Bengles. Open question drafted for upstream reaprime maintainers — see [`docs/42-reaprime-cup-warmer-question.md`](42-reaprime-cup-warmer-question.md). | **HIGH** — if reaprime's encoding is correct, Crema cup-warmer would always under-target by 10×. Worth confirming against a real Bengle. |
 | `ShotSettings` group_temp clamp | Crema clamps `group_temp_c` to 0..=105 °C, all other fields use wire-cap only ([lib.rs:805-818](core/de1-app/src/lib.rs)) | `range_check_shot_variables` (`vars.tcl:4181-4211`) clamps `espresso_temperature` 0..105 in the **settings layer**, not the wire layer | reaprime sends raw `groupTemp.toInt()` with no clamp (`unified_de1.dart:407-435`) | Crema applies the TCL clamp at the wire boundary; reaprime omits it entirely. Crema-stricter than reaprime, matches TCL semantics. | LOW (Crema-stricter). |
-| `ShotSettings` steam_temp clamp | Crema: values in `(0, 130)` snap to 0 (heater off), values > 170 clamp to 170 ([lib.rs:805-818](core/de1-app/src/lib.rs)) | `binary.tcl:184-186` forces `<135` → 0 (turn the heater off) — Crema picks 130 not 135 as the threshold | reaprime sends raw, no clamp | Crema's 130 threshold is 5 °C lower than TCL's 135 (intentional per code comment — keeps a wider "valid steam" band) and stricter than reaprime. | LOW (Crema-stricter, intentional). |
+| `ShotSettings` steam_temp clamp | Crema: values in `(0, 135)` snap to 0 (heater off), values > 170 clamp to 170 ([lib.rs:805-818](core/de1-app/src/lib.rs)) | `binary.tcl:184-186` forces `<135` → 0 (turn the heater off) | reaprime sends raw, no clamp | **Post-audit 2026-05-24:** Crema's threshold realigned from 130 → 135 to match TCL exactly. Still stricter than reaprime (which has no clamp). | LOW (aligned with TCL post-audit-fixes; Crema-stricter than reaprime). |
 | `ShotSettings` hot_water_temp clamp | Crema clamps 0..=100 °C ([lib.rs:805-818](core/de1-app/src/lib.rs)) | TCL: no clamp at this layer | reaprime: no clamp | Crema-stricter than both — prevents the firmware boiling its hot-water boiler. | LOW (Crema-stricter, defends fw). |
-| `set_user_present` byte_len | Crema byte_len=1 ([lib.rs:1010-1015](core/de1-app/src/lib.rs)) | TCL wire Len=4 (`de1_comms.tcl:1166`) | reaprime wire Len=4 (`_writeMMRInt`) | Wire-byte count differs (1 vs 4); the byte value is the same. Firmware boolean register reads only the first byte. | LOW (encoding equivalent for the single-byte payload). |
-| `set_steam_highflow_start` clamp | Crema clamps 0.0..=4.0 s, byte_len=4 ([lib.rs:917-929](core/de1-app/src/lib.rs)) | TCL no clamp | reaprime: description says "Valid 0.0–4.0" but no `min`/`max` declared in `MMRItem` → no clamp from `_writeMMRScaled` | Crema-stricter than both — implements the firmware-documented bounds (>4.0 s risks overheating the steam heater). | LOW (Crema-stricter, intentional safety per `docs/40` §3). |
-| `set_hot_water_idle_temp` clamp | Crema clamps 0..=100 °C, byte_len=4 ([lib.rs:1278-1288](core/de1-app/src/lib.rs)) | TCL no clamp | reaprime no clamp | Crema-stricter — above 100 °C in the boiler causes a pressure event and forces a firmware safety stop. | LOW (Crema-stricter, defends fw). |
+| `set_steam_highflow_start` clamp | Crema clamps **0.3..=4.0 s**, byte_len=4 ([lib.rs:917-929](core/de1-app/src/lib.rs)) | TCL no clamp | reaprime: description says "Valid 0.0–4.0. 0 may result in an overheated heater" but no `min`/`max` declared in `MMRItem` → no clamp from `_writeMMRScaled` | **Post-audit 2026-05-24:** lower bound raised from 0.0 → 0.3 s. 0 skips the high-flow blast that dissipates accumulated heater heat (firmware overheat warning); 0.3 s is the smallest blast that meaningfully clears the steam line. Crema-stricter than both. | LOW (Crema-stricter, intentional safety per `docs/40` §3). |
+| `set_hot_water_idle_temp` clamp | Crema clamps **0..=99 °C**, byte_len=4 ([lib.rs:1278-1288](core/de1-app/src/lib.rs)) | TCL safe historical max = 99 °C (`machine.tcl:285 hot_water_idle_temp "990"`); no in-code clamp | reaprime no clamp | **Post-audit 2026-05-24:** ceiling lowered from 100 → 99 °C to match TCL's documented safe maximum. 100 °C boils → firmware safety stop; 99 °C stays one degree under. | LOW (matches TCL safe max; Crema-stricter than reaprime). |
 
 ---
 
@@ -257,3 +263,53 @@ Ordered by risk:
    correct; reaprime's is silently wrong by 100×. Worth filing
    upstream so reaprime gets the right scale and the two impls
    converge.
+
+---
+
+## Audit walkthrough decisions (2026-05-24)
+
+Per-item resolution from the live audit walkthrough. Five items
+("Address") were closed in the audit-fixes PR; the remaining items
+were either skipped with reasoning or filed as TODO follow-ups.
+
+### Bucket 2 (originally 9 items)
+
+| # | Item | Decision | Notes |
+|---|---|---|---|
+| 1 | `set_fan_threshold` clamp 0..=50 | **Skip** | Crema-stricter; matches reaprime exactly. No change needed. |
+| 2 | `set_calibration_flow_multiplier` byte_len | **Address** | byte_len 2 → 4. Closed: now matches TCL + reaprime; moved to Bucket 1. |
+| 3 | `set_cup_warmer_temperature` encoding (raw °C vs °C × 10) | **TODO** | Hardware confirmation needed (open question in docs/42). Kept as Bucket 2 HIGH. |
+| 4 | `ShotSettings` group_temp clamp 0..=105 | **Skip** | Crema-stricter; matches TCL `vars.tcl:range_check_shot_variables` semantics at the wire boundary. No change needed. |
+| 5 | `ShotSettings` steam_temp clamp threshold | **Address** | 130 → 135. Closed: now matches TCL `binary.tcl:184-186` exactly. |
+| 6 | `ShotSettings` hot_water_temp clamp 0..=100 | **Skip** | Crema-stricter than both refs; defends firmware against boiling. No change needed. |
+| 7 | `set_user_present` byte_len | **Address** | byte_len 1 → 4. Closed: now matches TCL + reaprime; moved to Bucket 1. |
+| 8 | `set_steam_highflow_start` lower bound | **Address** | 0.0 → 0.3 s safe floor. Closed: 0 risks heater overheat per firmware spec; 0.3 s is the smallest blast that clears the steam line. Crema-stricter; documented. |
+| 9 | `set_hot_water_idle_temp` ceiling | **Address** | 100 → 99 °C. Closed: matches TCL safe historical max (`machine.tcl:285 hot_water_idle_temp "990"`); 100 °C triggers firmware safety stop. |
+
+### Bucket 3 (10 items — Bookoo extended + firmware OTA codecs)
+
+All items receive **Skip** in this walkthrough; they remain documented
+follow-ups rather than audit-fixes-PR work.
+
+| # | Item | Decision | Notes |
+|---|---|---|---|
+| 10 | Bookoo `set_volume` (cmd `0x02`) | **Skip** | LOW severity (scale-side cosmetic); reverse-engineered from BLE-HCI capture. No reference impl, no firmware-rev cross-check available. Wait for upstream Bookoo doc or a second capture. |
+| 11 | Bookoo `set_standby_minutes` (cmd `0x03`) | **Skip** | LOW severity (scale auto-standby delay); same rationale as #10. |
+| 12 | Bookoo `set_mode_enabled` / `select_mode` (cmd `0x0E`) | **Skip** | LOW severity (scale display mode); same rationale as #10. |
+| 13 | Bookoo `set_flow_smoothing` (cmd `0x08`) | **Skip** | LOW severity (scale-side data processing); same rationale as #10. |
+| 14 | Bookoo `set_auto_stop_mode` (cmd `0x0B`) | **Skip** | LOW severity (scale timer auto-stop behaviour); same rationale as #10. |
+| 15 | Bookoo `set_anti_mistouch` (cmd `0x10`) | **Skip** | LOW severity (scale button anti-mistouch toggle); same rationale as #10. |
+| 16 | `FWMapRequest::erase` (firmware OTA) | **Skip** | Codec verified by unit test; no `CremaCore` driver yet (firmware OTA is a v2 feature, see `docs/17`). Will be wired up when the orchestrator lands; revisit then. |
+| 17 | `firmware_write_frame` (firmware OTA) | **Skip** | Same as #16 — codec only, no driver. |
+| 18 | `FWMapRequest::map` / `request_first_error` (firmware OTA) | **Skip** | Same as #16 — codec only, no driver. |
+| (n/a) | Bookoo query commands (`0x0A` / `0x0F`) | **Skip** | Reads, not state-change; minimal risk. Treated as part of the Bookoo block above. |
+
+### Summary count delta
+
+- Bucket 1 ✅ **+2** (was 36 → 38) — gained `set_calibration_flow_multiplier`
+  and `set_user_present` after byte_len normalisation.
+- Bucket 2 ⚠️ **−2** (was 9 → 7) — same two items moved out; the three
+  clamp items (`ShotSettings` steam_temp, `set_steam_highflow_start`,
+  `set_hot_water_idle_temp`) remain Bucket 2 LOW with updated
+  rationale notes.
+- Bucket 3 ❓ unchanged (7).
