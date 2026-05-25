@@ -220,8 +220,8 @@ crashing.
 
 ## DE1 BLE UUIDs
 
-From `docs/02-ble-protocol.md` §1. All share the base
-`0000xxxx-0000-1000-8000-00805F9B34FB`. See `app/.../ble/De1Uuids.kt`.
+All share the base `0000xxxx-0000-1000-8000-00805F9B34FB`.
+See `app/.../ble/De1Uuids.kt`.
 
 | Role | 16-bit | Purpose |
 |---|---|---|

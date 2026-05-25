@@ -353,7 +353,7 @@ export class HistoryStore {
 
 	/**
 	 * Adopt a shot the user imported from a legacy de1app `.shot` or
-	 * modern `.shot.json` file (docs/22 §5.1). The Rust core does the
+	 * modern `.shot.json` file. The Rust core does the
 	 * parsing — the shell maps the Rust-shape `StoredShot` onto Crema's
 	 * own `StoredShot` and prepends it like a freshly-recorded shot.
 	 *

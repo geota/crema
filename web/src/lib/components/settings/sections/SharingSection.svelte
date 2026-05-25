@@ -105,7 +105,7 @@
 	/** Card eyebrow — connection state + account identity + public/private
 	   profile state. Stays put when transient status (test results,
 	   errors) takes over the meta line. The public/private suffix comes
-	   from `MeResponse.public` (docs/38 §"Recommendations" row 4); the
+	   from `MeResponse.public`; the
 	   API has no `PATCH /me` so this is display-only — the user toggles
 	   it in their visualizer.coffee account settings. We omit the suffix
 	   gracefully when an older `/me` cache lacks the field. */
@@ -187,11 +187,7 @@
 		<div class="st-visualizer-name">visualizer.coffee</div>
 		<div class="st-visualizer-meta">
 			{#if !connected && !oauthConfigured}
-				Set <code>VITE_VISUALIZER_CLIENT_ID</code> in <code>web/.env.local</code> and restart the dev server. See <a
-					href="https://github.com/geota/crema/blob/main/docs/35-visualizer-oauth-setup.md"
-					target="_blank"
-					rel="noopener noreferrer">setup docs</a
-				>.
+				Set <code>VITE_VISUALIZER_CLIENT_ID</code> in <code>web/.env.local</code> and restart the dev server.
 			{:else}
 				{cardStatus}
 			{/if}

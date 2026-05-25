@@ -13,7 +13,7 @@ import { defineConfig } from 'vite';
  *
  * Generate with `mkcert localhost 127.0.0.1` inside `web/` (one-time;
  * requires `brew install mkcert && mkcert -install`). The `.pem` files
- * are gitignored. See docs/35-visualizer-oauth-setup.md §dev-https.
+ * are gitignored.
  */
 function devHttpsCert(): { key: Buffer; cert: Buffer } | undefined {
 	const keyPath = path.resolve('./localhost+1-key.pem');
@@ -56,7 +56,7 @@ export default defineConfig(({ command }) => ({
 				start_url: '/',
 				icons: [
 					// Placeholder art — a coffee-toned square with a "C" arc; final
-					// art is a later polish item (see docs/09-web-shell.md step 7).
+					// art is a later polish item.
 					{
 						src: 'icon-192.png',
 						sizes: '192x192',

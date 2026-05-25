@@ -267,7 +267,7 @@ export interface UiSnapshot {
 	/**
 	 * Volume dispensed in the current shot, ml — integrated by the core
 	 * from each `ShotSample`'s flow against the DE1's `sample_time`
-	 * ticks (`docs/02-ble-protocol.md` §3.3). Resets to 0 on every
+	 * ticks. Resets to 0 on every
 	 * `ShotStarted`; updated on every `Telemetry` event.
 	 */
 	readonly dispensedVolume: number;
@@ -386,7 +386,7 @@ export interface UiSnapshot {
 	 * (`cuuid_0B`). Populated at connect time from a one-shot Read and
 	 * kept fresh by the notify subscription (any on-machine or host
 	 * write fires a notification). `null` until the first read lands.
-	 * Drives the Steam / Hot Water settings panels (docs/23 — pending).
+	 * Drives the Steam / Hot Water settings panels.
 	 */
 	readonly de1ShotSettings: De1ShotSettingsSnapshot | null;
 	/**
@@ -1035,8 +1035,7 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 			};
 		}
 		case 'FirmwareLockoutHit':
-			// v1 stub never fires this in practice — see
-			// `docs/17-firmware-update-plan.md` §3.4. Logged so the data is
+			// v1 stub never fires this in practice. Logged so the data is
 			// visible when v2 lands, without a dedicated UI surface yet.
 			return {
 				...snapshot,
@@ -1049,7 +1048,7 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 			// Steam / hot-water / group-temp settings either at connect
 			// (one-shot Read) or after a change (notify). Lands as the
 			// `de1ShotSettings` snapshot field; consumers are the Steam /
-			// Hot Water settings panels (docs/23) + the brew-page mode
+			// Hot Water settings panels + the brew-page mode
 			// chips (target sub-labels can switch from the hardcoded
 			// "148 °C · 8 s" to live values once the panels exist).
 			const c = event.content;
@@ -1084,8 +1083,7 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 			// app may mask this by re-uploading on every connect via
 			// `save_settings_to_de1`. A Bluetooth HCI snoop of a legacy-app
 			// connect should confirm whether this Read returns useful bytes
-			// at all, and if so under what condition. docs/16 §6 carries
-			// the longer write-up.
+			// at all, and if so under what condition.
 			//
 			// Until verified: treat zero frames as "unknown / not loaded"
 			// rather than storing a misleading 0-frame `loadedProfileShape`.

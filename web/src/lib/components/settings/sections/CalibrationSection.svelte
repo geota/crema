@@ -12,12 +12,13 @@
 	 *
 	 * Flow calibration is a **separate path** — the flow multiplier lives in
 	 * the MMR register `CalibrationFlowMultiplier` (`0x80383C`), not on
-	 * `cuuid_12`. Path A of docs/43 is wired here: a numeric input bounded
-	 * 0.13..=2.00 step 0.01 that reads `de1MachineInfo[CalibrationFlow
-	 * Multiplier]` (raw `int(1000 × m)` → divide by 1000), and on Apply +
-	 * confirm writes through `app.core.setCalibrationFlowMultiplier(value)`
-	 * (core clamps to the same 0.13..=2.0 range). The auto-derive
-	 * (dispense → weigh → derive) flow is deferred per docs/43 v2.
+	 * `cuuid_12`. The manual-multiplier path is wired here: a numeric
+	 * input bounded 0.13..=2.00 step 0.01 that reads
+	 * `de1MachineInfo[CalibrationFlowMultiplier]` (raw `int(1000 × m)` →
+	 * divide by 1000), and on Apply + confirm writes through
+	 * `app.core.setCalibrationFlowMultiplier(value)` (core clamps to the
+	 * same 0.13..=2.0 range). The auto-derive (dispense → weigh →
+	 * derive) flow is deferred.
 	 *
 	 * Legacy reference: `gui.tcl:2445-2452` — the legacy calibration screen
 	 * reads temperature + pressure current/factory on mount (flow reads are
@@ -226,8 +227,8 @@
 
 	// ---- Flow-calibration multiplier (MMR 0x80383C) ----------------------
 	//
-	// Per docs/43 Path A. The core already exposes the read/write path; this
-	// adds the UI surface promised by the legacy "Flow" row sub-text.
+	// The core already exposes the read/write path; this adds the UI
+	// surface promised by the legacy "Flow" row sub-text.
 	//
 	// Wire value is `int(1000 × multiplier)`; the snapshot's
 	// `de1MachineInfo[CalibrationFlowMultiplier]` holds it raw. Divide by
@@ -239,7 +240,7 @@
 	// pressure apply, minus the reported / measured math — flow has no
 	// reported / measured workflow here, just "set this value"). Reset
 	// writes `1.000` (the firmware has no per-register factory-reset wire
-	// packet — see docs/43 §Crema "Reset to factory").
+	// packet).
 
 	const FLOW_MIN = 0.13;
 	const FLOW_MAX = 2.0;

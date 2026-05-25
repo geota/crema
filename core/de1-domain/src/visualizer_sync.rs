@@ -4,7 +4,7 @@
 //! planner — extracted from the web shell's
 //! `$lib/visualizer/shot-sync-signatures.ts` so every shell (web today,
 //! Android tomorrow) reaches for the same algorithm via the same
-//! `de1_domain` crate. docs/36 §3.
+//! `de1_domain` crate.
 //!
 //! Sans-IO and deterministic: takes plain data in, returns plain data
 //! out. The wasm-bindgen / FFI / Kotlin bridges marshal the payload as
@@ -210,11 +210,13 @@ fn rk(n: Option<f64>, decimals: usize) -> String {
     }
 }
 
-// ── Signatures (docs/36 §3) ──────────────────────────────────────────
+// ── Signatures ───────────────────────────────────────────────────────
 
 /// The shot de-dup signature: a djb2 hash of `(completedAt, duration,
 /// profileName, finalWeight)`. Shots are inherently unique by time +
-/// final weight — collisions are intentional ID matches per docs/36 §3.
+/// final weight — collisions are intentional ID matches (a Visualizer
+/// push that comes back with a new `id` still binds to the same local
+/// row instead of re-importing as a duplicate).
 ///
 /// Returns the lowercase hex string of the 32-bit hash (matches TS
 /// `djb2(...).toString(16)` — no padding, no `0x` prefix).
@@ -233,8 +235,7 @@ pub fn signature_for_shot(
     format!("{:x}", djb2(&joined))
 }
 
-/// Bean de-dup signature: `(name, roasterName, roastedOn)`. docs/36 §3.
-/// The TS contract:
+/// Bean de-dup signature: `(name, roasterName, roastedOn)`. The TS contract:
 ///
 /// - `name` and `roasterName` are trimmed + lowercased (TS
 ///   `String.prototype.toLowerCase` — locale-independent ASCII lower
@@ -253,7 +254,7 @@ pub fn signature_for_bean(
     format!("{:x}", djb2(&joined))
 }
 
-/// Roaster de-dup signature: normalised name. docs/36 §3. The TS
+/// Roaster de-dup signature: normalised name. The TS
 /// contract: trim, lowercase, replace any run of whitespace / `_` /
 /// `.` / `-` / `,` / `/` with a single space, then strip every char
 /// that isn't `[a-z0-9 ]`.
@@ -293,13 +294,13 @@ pub fn signature_for_roaster(name: &str) -> String {
     format!("{:x}", djb2(&s))
 }
 
-// ── Reconciliation (docs/36 §3) ───────────────────────────────────────
+// ── Reconciliation ────────────────────────────────────────────────────
 
 /// Reconcile a remote pull against the local history. Returns the list
 /// of actions the caller must apply to its store; this function is
 /// pure (no side effects) so it is easy to test.
 ///
-/// Per docs/36 §3:
+/// Three-step planner:
 ///   1. If a local shot's `visualizerId` matches a remote → `Update`
 ///      action (the LWW gate on `updated_at_ms` happens caller-side
 ///      so the planner stays signature-agnostic on annotation

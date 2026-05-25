@@ -29,15 +29,15 @@ import { formatRatio } from '$lib/utils/ratio';
  * `completedAt`. Optional: a shot recorded before this field existed (or with
  * no bean logged) simply has none.
  *
- * **Snapshot semantics (docs/28 §"Bean ↔ shot association").** Every field
- * here is the bean's *frozen-at-completion* value — the shot's content source
- * of truth. The bean library's live row (looked up via {@link beanId}) is
- * used ONLY as a link pointer (e.g. wiring `coffee_bag_id` on Visualizer —
- * the live `Bean.visualizerId` is the link, never snapshotted into history).
- * Reading live-bean content for the shot would retroactively rewrite history
- * — renaming a bag would silently rewrite every past shot's display name, the
- * exact failure mode Beanconqueror has and docs/28 calls out as the reason
- * Crema picked snapshots.
+ * **Snapshot semantics.** Every field here is the bean's
+ * *frozen-at-completion* value — the shot's content source of truth.
+ * The bean library's live row (looked up via {@link beanId}) is used
+ * ONLY as a link pointer (e.g. wiring `coffee_bag_id` on Visualizer —
+ * the live `Bean.visualizerId` is the link, never snapshotted into
+ * history). Reading live-bean content for the shot would retroactively
+ * rewrite history — renaming a bag would silently rewrite every past
+ * shot's display name, the exact failure mode Beanconqueror has, which
+ * is why Crema picked snapshots.
  *
  * `visualizerId` is deliberately NOT carried here — Visualizer ids are
  * stable once assigned, so reading the live bean for the `coffee_bag_id`
@@ -77,7 +77,7 @@ export interface ShotBean {
 	/**
 	 * The bean's free-form notes at shot-completion time. Optional — legacy
 	 * snapshots without this field deserialise cleanly. Wires to Visualizer's
-	 * `bean_notes` on shot upload (docs/38 row 122).
+	 * `bean_notes` on shot upload.
 	 */
 	readonly notes?: string;
 	/**
@@ -201,7 +201,7 @@ export interface StoredShot {
 	 * Optional on the type so legacy localStorage records without the
 	 * field deserialise cleanly; the history-store loader normalises
 	 * missing / non-array values to `[]` at load time. The bean library's
-	 * `Bean.tags` (`docs/28`) is the analogous frozen-at-completion
+	 * `Bean.tags` is the analogous frozen-at-completion
 	 * snapshot — the on-upload PATCH unions the two (shot.tags first,
 	 * bean.tags second, dedup case-sensitive preserving first occurrence)
 	 * per `shot-sync.ts`.
@@ -247,7 +247,7 @@ export interface StoredShot {
 	autoTare?: boolean;
 	/**
 	 * Visualizer `shot.id` once uploaded — the sync identity that
-	 * persists across local-id changes (docs/36 §3). `null` until the
+	 * persists across local-id changes. `null` until the
 	 * shot has been pushed; the upload round-trip writes it back so
 	 * subsequent syncs PATCH the same row instead of POSTing a
 	 * duplicate. Optional on the type so legacy localStorage records
@@ -257,8 +257,8 @@ export interface StoredShot {
 	/**
 	 * Unix epoch ms when this shot was soft-deleted, or `null` when
 	 * active. The History UI filters tombstones out; the next sync push
-	 * DELETEs the remote row, then garbage-collects the tombstone (per
-	 * docs/36 §3 soft-delete). Optional so legacy records deserialise.
+	 * DELETEs the remote row, then garbage-collects the tombstone.
+	 * Optional so legacy records deserialise.
 	 */
 	deletedAt?: number | null;
 }

@@ -5,8 +5,7 @@
 /**
  * Whether a bag of coffee is a single-origin lot or a blend. `None` =
  * unknown / unset. Serialises as the lowercase wire string
- * (`"single"` / `"blend"`) to match the TS shell's typed string union
- * per docs/28.
+ * (`"single"` / `"blend"`) to match the TS shell's typed string union.
  */
 export enum BeanMix {
 	/** A single-origin lot (one farm / region / process). */
@@ -20,7 +19,7 @@ export enum BeanMix {
  * the upstream provenance fields. All optional: a fresh bean's origin
  * starts empty and the user fills in whatever the bag label shows.
  * Mirrors Visualizer's CoffeeBag origin fields so the sync mapping is
- * 1:1 (docs/28 §Visualizer sync §schema-mapping).
+ * 1:1.
  */
 export interface BeanOrigin {
 	/** Country of origin — `"Ethiopia"`, `"Ethiopia / Colombia"` for a blend. */
@@ -48,7 +47,7 @@ export interface BeanOrigin {
 }
 
 /**
- * One bag of coffee — a row in the bean library. Per docs/28 this is
+ * One bag of coffee — a row in the bean library. This is
  * the central entity: shots reference one by id, and a snapshot
  * ([`ShotBean`]) is frozen onto each completed shot. The core owns the
  * shape so every shell (web, Android, future iOS) consumes the same
@@ -142,10 +141,10 @@ export interface Bean {
 	visualizer_id?: string;
 	/**
 	 * Unix epoch ms when this bag was soft-deleted, or `None` when
-	 * active. Required for cross-device sync tombstone propagation
-	 * (docs/36 §3): on the next sync push, the remote row is DELETEd
-	 * and the local tombstone is garbage-collected. Defaults to
-	 * `None` so older `Bean` JSON deserialises cleanly.
+	 * active. Required for cross-device sync tombstone propagation:
+	 * on the next sync push, the remote row is DELETEd and the local
+	 * tombstone is garbage-collected. Defaults to `None` so older
+	 * `Bean` JSON deserialises cleanly.
 	 */
 	deleted_at?: number;
 	/**
@@ -503,8 +502,6 @@ export type Event =
 	 * that always returns `false`; v2 will return `true` for the
 	 * `Erase..Verifying` phases of a firmware upload. The event names the
 	 * refused method so the shell can show a transient toast.
-	 * 
-	 * See `docs/17-firmware-update-plan.md` §3.4.
 	 */
 	| { type: "FirmwareLockoutHit", content: {
 	/**
@@ -514,7 +511,7 @@ export type Event =
 	method: string;
 }}
 	/**
-	 * **DORMANT — see [`Source::De1ProfileHeader`] and docs/16 §6.1.** This
+	 * **DORMANT — see [`Source::De1ProfileHeader`].** This
 	 * event would carry the DE1's reported `ShotHeader` if the firmware
 	 * supported reading the loaded-profile buffer on `cuuid_0F`. It does
 	 * not (snoop-verified 2026-05-21), so the BLE shell no longer triggers
@@ -720,8 +717,7 @@ export interface RangeCapability {
  * purpose, mirroring Visualizer's `RoasterDetail` (which is itself
  * minimal: id + name + website + image). Beanconqueror has no
  * first-class roaster entity — its `bean.roaster` is free text; the
- * shell promotes unique strings into [`Roaster`] rows on import per
- * docs/28 §design-decisions §2.
+ * shell promotes unique strings into [`Roaster`] rows on import.
  */
 export interface Roaster {
 	/** Stable id — `"roaster:<uuid>"`. */
@@ -856,9 +852,8 @@ export interface ScaleUuids {
  * 
  * Beanconqueror reads the bean *live* off the brew (`Brew.bean: uuid`,
  * see `Beanconqueror/src/classes/brew/brew.ts:60`). Crema takes the
- * other approach per docs/28 §design-decisions §1: snapshot wins. A
- * shot recorded under "Onyx Geisha" stays "Onyx Geisha" forever, even
- * if the user later renames the bag.
+ * other approach: snapshot wins. A shot recorded under "Onyx Geisha"
+ * stays "Onyx Geisha" forever, even if the user later renames the bag.
  * 
  * Holds the strict minimum the History list / detail panel needs to
  * render the shot without re-fetching the bag — the user-facing
@@ -1027,9 +1022,9 @@ export enum MachineState {
 /**
  * Known MMR register addresses.
  * 
- * This covers the registers Crema reads or writes; `docs/02-ble-protocol.md`
- * §6.3 has the full map. [`address`](Self::address) gives the raw 24-bit
- * address to pass to [`read_request`] / [`write_request`].
+ * This covers the registers Crema reads or writes.
+ * [`address`](Self::address) gives the raw 24-bit address to pass to
+ * [`read_request`] / [`write_request`].
  */
 export enum MmrRegister {
 	/**
@@ -1067,7 +1062,6 @@ export enum MmrRegister {
 	 * (so 950 = 95.0 °C). Modelled by reaprime
 	 * (`de1.models.dart:flushTemp` at `0x00803844`, 4-byte slot,
 	 * `readScale: 0.1`); the legacy de1app TCL has no equivalent.
-	 * Crema's audit-discovered register — see docs/22 §3.2.
 	 */
 	FlushTemp = "FlushTemp",
 	/** Hot-water flow rate. */
@@ -1118,8 +1112,6 @@ export enum MmrRegister {
  * `#[non_exhaustive]` so additional categories (e.g. a firmware-side
  * "shot in progress" rejection signalled through some future cuuid_10
  * packet) can be added without breaking the FFI surface.
- * 
- * See `docs/16-profile-upload-plan.md` §4.3.
  */
 export type ProfileUploadFailure = 
 	/** The profile had no steps. */
@@ -1358,7 +1350,7 @@ export enum WriteTarget {
 	/**
 	 * The DE1 `HeaderWrite` characteristic (`cuuid_0F`) — the 5-byte
 	 * `ShotHeader` packet is *written* here at the start of a profile
-	 * upload. See `docs/16-profile-upload-plan.md`.
+	 * upload.
 	 */
 	De1ProfileHeader = "De1ProfileHeader",
 	/**

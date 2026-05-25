@@ -1,7 +1,5 @@
 //! Hiroia Jimmy BLE codec (`scale_type` `hiroiajimmy`).
 //!
-//! See `docs/06-scale-protocols.md` §12.
-//!
 //! **Caution — unverified.** The legacy parser never validates the 4-byte
 //! header, so any status notification is treated as weight. Header semantics
 //! should be confirmed against real hardware.

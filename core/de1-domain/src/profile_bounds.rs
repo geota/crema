@@ -7,8 +7,7 @@
 //! shell; this module is the canonical reject-or-accept truth.
 //!
 //! Centralised in `de1-domain` so the web shell, Android shell, and any
-//! profile validator all reach for the same numbers — push #11 from
-//! `docs/26-shell-to-core-audit.md`.
+//! profile validator all reach for the same numbers.
 
 // ── Step count ──────────────────────────────────────────────────────────
 

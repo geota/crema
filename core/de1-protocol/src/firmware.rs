@@ -18,8 +18,6 @@
 //! upload loop, retry/timeout policy, and progress reporting are the *shell's*
 //! responsibility — the shell drives these codecs. The core, being sans-IO,
 //! has no clock and no filesystem and so owns none of that orchestration.
-//!
-//! See `docs/02-ble-protocol.md` §6.2.
 
 use crate::error::ProtocolError;
 use crate::fixed_point::{f8_1_7_decode, u24p0_decode, u24p0_encode};

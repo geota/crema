@@ -76,8 +76,7 @@ impl ShotSample {
         // is a 2-byte Short at bytes 6-7; HeadTemp is a 3-byte 24-bit at
         // bytes 8-10. Pre-2026-05-22 Crema had these byte offsets swapped —
         // it read HeadTemp from bytes 6-8 and MixTemp from bytes 9-10,
-        // producing corrupted temps. docs/22 §1.1 + docs/02 §3.2 carry the
-        // fix history.
+        // producing corrupted temps.
         Ok(ShotSample {
             sample_time: u16_be(0),
             // GroupPressure / GroupFlow are 16-bit values scaled by 4096 (4.12).

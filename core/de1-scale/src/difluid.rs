@@ -1,7 +1,5 @@
 //! Difluid Microbalance BLE codec (`scale_type` `difluid`).
 //!
-//! See `docs/06-scale-protocols.md` §9.
-//!
 //! **Caution — unverified.** The legacy Tcl parser is hex-string based and the
 //! byte offset (bytes 5–8) and lack of sign handling were flagged as needing
 //! confirmation against real hardware. This module follows the documented

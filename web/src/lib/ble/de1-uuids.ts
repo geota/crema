@@ -2,9 +2,9 @@
  * DE1 GATT service and characteristic UUIDs — the web shell's mirror of the
  * Android shell's `De1Uuids.kt`.
  *
- * Source: `docs/02-ble-protocol.md` §1. All DE1 characteristics share the
- * Bluetooth-SIG base UUID `0000xxxx-0000-1000-8000-00805f9b34fb` with a 16-bit
- * value in the `xxxx` slot (`A000`..`A012`).
+ * All DE1 characteristics share the Bluetooth-SIG base UUID
+ * `0000xxxx-0000-1000-8000-00805f9b34fb` with a 16-bit value in the
+ * `xxxx` slot (`A000`..`A012`).
  *
  * Web Bluetooth wants **lowercase** 128-bit UUID strings (or 16-bit numbers);
  * these are pre-expanded to the lowercase 128-bit form. The shell subscribes

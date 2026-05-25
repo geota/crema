@@ -2,10 +2,6 @@
  * `$lib/bean` — the bean library: bags of coffee and the roasters that produced
  * them. Mirrors `de1_domain::bean`; types are shareable across shells via
  * `#[typeshare]`. Persistence and CRUD live in the shell store.
- *
- * See `docs/28-bean-roaster-library.md` and
- * `docs/32-bean-library-implementation.md` for the design and the shipped /
- * deferred scope.
  */
 
 export {

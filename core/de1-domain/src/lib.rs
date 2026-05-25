@@ -29,13 +29,12 @@
 //! - [`bean`] — pure roast-classification helpers ([`roast_band`],
 //!   [`days_off_roast`], [`roast_freshness`]) plus the bean library
 //!   types ([`Bean`], [`Roaster`], [`ShotBean`], [`BeanOrigin`],
-//!   [`BeanMix`]) that every shell consumes via `#[typeshare]` per
-//!   docs/28.
+//!   [`BeanMix`]) that every shell consumes via `#[typeshare]`.
 //! - [`visualizer_sync`] — pure Visualizer-sync helpers: djb2-based
 //!   de-dup signatures ([`signature_for_shot`], [`signature_for_bean`],
 //!   [`signature_for_roaster`]) and the [`reconcile_shots`] action
 //!   planner, ported from the web shell's `shot-sync-signatures.ts`
-//!   so every shell shares one algorithm (docs/36 §3).
+//!   so every shell shares one algorithm.
 //! - [`ids`] — [`new_profile_id`], the one canonical profile-ID minter
 //!   (UUID v7, RFC 9562). Built-in IDs are pre-generated into
 //!   `profiles/builtin.json` by the `gen-builtin-ids` binary in this

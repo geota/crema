@@ -26,7 +26,7 @@
 		 * Visualizer sync status pip — `uploaded` (🟢) when this shot has a
 		 * remote id, `pending` (🟡) when it sits in the retry queue,
 		 * `failed` (🔴) when the last attempt errored, `local` (⚪) when
-		 * sync is off / pull-only. docs/36 §5.
+		 * sync is off / pull-only.
 		 */
 		syncPip?: 'uploaded' | 'pending' | 'failed' | 'local';
 		/**

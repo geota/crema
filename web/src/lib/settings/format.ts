@@ -65,8 +65,7 @@ function present(v: number | null | undefined): v is number {
  * Convert a weight (canonical grams) to the chosen {@link WeightUnit}.
  * `g` shows grams to one decimal; `oz` converts via the core's
  * `grams_to_oz` (1 oz = 28.3495 g) to two. The arithmetic lives in
- * `de1_domain::units` so every shell shares one set of constants — see
- * `docs/26-shell-to-core-audit.md` item #1.
+ * `de1_domain::units` so every shell shares one set of constants.
  *
  * **The unit label is always honest.** A missing reading formats the value
  * as `—` but the `unit` still reflects the user's pref — otherwise a

@@ -8,8 +8,7 @@
 	 * Pass `notImplemented` to mark the row as a documented placeholder —
 	 * shows a "Not implemented yet" pill next to the title and dims the
 	 * control. The row stays discoverable (so the user can see what's
-	 * coming) but honest about what doesn't work yet. See
-	 * docs/settings-audit.md for the per-setting rationale.
+	 * coming) but honest about what doesn't work yet.
 	 */
 	import type { Snippet } from 'svelte';
 

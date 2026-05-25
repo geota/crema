@@ -954,7 +954,7 @@ fn parse_pump(pump: Option<&str>) -> Result<Pump, ImportError> {
 /// per the legacy TCL's behaviour; anything else is an
 /// [`ImportError::UnknownValue`] — surfaces typos at import time rather
 /// than silently degrading mid-shot. Pre-2026-05-22 builds silently fell
-/// back to `Fast` on any unknown value (docs/22 §4.2).
+/// back to `Fast` on any unknown value.
 fn parse_transition(transition: Option<&str>) -> Result<Transition, ImportError> {
     match transition.map(str::trim) {
         Some("fast") | None => Ok(Transition::Fast),
@@ -966,7 +966,7 @@ fn parse_transition(transition: Option<&str>) -> Result<Transition, ImportError>
 /// Parse a legacy temperature-sensor field. The wire spelling
 /// `"coffee"` maps to Crema's [`TempSensor::Coffee`] (the basket
 /// thermocouple); `"water"` maps to [`TempSensor::Water`] (the mix-out
-/// thermocouple). Strict on unknown values per docs/22 §4.2; an absent
+/// thermocouple). Strict on unknown values; an absent
 /// field defaults to `Coffee` (legacy TCL default).
 fn parse_sensor(sensor: Option<&str>) -> Result<TempSensor, ImportError> {
     match sensor.map(str::trim) {
@@ -1463,7 +1463,6 @@ mod tests {
         // checks, which in turn triggers redundant DE1 re-uploads in
         // the shell. Verify Crema preserves notes byte-for-byte across
         // import → export → import.
-        // docs/22 §4.5.
         let notes_with_newlines = "First line.\nSecond line.\n\nBlank between.\n";
         let original = Profile {
             id: String::new(),

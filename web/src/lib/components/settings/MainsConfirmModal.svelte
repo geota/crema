@@ -8,9 +8,8 @@
 	 *
 	 * Heater voltage is **hardware-damaging if mis-set** — writing 120 V
 	 * when the wall outlet is 240 V will fry the heater. The legacy de1app
-	 * uses a confirm-then-set dance in the Tcl settings page (`docs/14`
-	 * §4.13); reaprime clamps the REST value to `[120, 230]` but offers no
-	 * UX guard. Crema does both: the Rust core clamps (last-line guard) and
+	 * uses a confirm-then-set dance in the Tcl settings page; reaprime
+	 * clamps the REST value to `[120, 230]` but offers no UX guard. Crema does both: the Rust core clamps (last-line guard) and
 	 * this modal asks the user to literally type the value (front-line
 	 * guard) so a stray tap or autocomplete cannot commit the change.
 	 *

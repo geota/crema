@@ -1,6 +1,6 @@
 /**
  * `$lib/visualizer/upload-queue` — persistent retry queue for Visualizer
- * sync operations (docs/36 §6, §7).
+ * sync operations.
  *
  * When `ShotCompleted` fires (or a bean / roaster mutates) and the user
  * has push enabled, the upload is fire-and-forget. The HTTP call is
@@ -25,7 +25,7 @@ import { getHistoryStore } from '$lib/history';
 import { VisualizerError } from '$lib/bean';
 import { deleteShot, uploadShot } from './shot-sync';
 
-/** localStorage key for the upload queue (docs/36 §7). */
+/** localStorage key for the upload queue. */
 const QUEUE_KEY = 'crema.visualizer.uploadQueue.v1';
 
 /** Per-entry hard ceiling on retry attempts; after this it's dropped. */
@@ -73,7 +73,7 @@ function write(state: QueueState): void {
 
 /**
  * Compute the next retry timestamp using exponential backoff (1s, 2s,
- * 4s, 8s, … capped at 60s). docs/36 §6.
+ * 4s, 8s, … capped at 60s).
  */
 function backoffMs(attempt: number): number {
 	const base = 1000 * Math.pow(2, Math.max(0, attempt));
@@ -269,8 +269,6 @@ let lifecycleArmed = false;
  * the 5-min tick also fires the on-launch upload sweep (any new shots
  * recorded while offline get pushed once the network returns).
  * Idempotent — calling this from multiple bootstraps is harmless.
- *
- * docs/36 §6 — auto-sync cadence.
  */
 export function armQueueLifecycle(): void {
 	if (lifecycleArmed) return;

@@ -3,7 +3,7 @@
 //! The DE1 lets the app calibrate its flow, pressure, and temperature sensors:
 //! tell the machine "you reported X while the true value was Y" and it adjusts.
 //! The same 14-byte packet reads the current or factory calibration, writes a
-//! new one, or resets a sensor to factory. See `docs/02-ble-protocol.md` §7.2.
+//! new one, or resets a sensor to factory.
 
 use typeshare::typeshare;
 

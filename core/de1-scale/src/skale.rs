@@ -1,7 +1,7 @@
 //! Skale II (Atomax) BLE codec (`scale_type` `atomaxskale`).
 //!
 //! Weight notifications arrive on [`WEIGHT_NOTIFY_UUID`]; single-byte commands
-//! are written to [`COMMAND_UUID`]. See `docs/02-ble-protocol.md` §8.2.
+//! are written to [`COMMAND_UUID`].
 
 /// GATT service UUID.
 pub const SERVICE_UUID: &str = "0000ff08-0000-1000-8000-00805f9b34fb";

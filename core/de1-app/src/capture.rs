@@ -17,8 +17,8 @@
 //! The on-disk JSONL wire format is unchanged: one
 //! `{"t": <ms>, "dir": "in", "src": "<NAME>", "hex": "<lower-hex>"}` object
 //! per line, with an optional `META` prelude entry carrying `{"meta": {...}}`
-//! instead of `hex`. See `docs/26-shell-to-core-audit.md` and
-//! `web/src/lib/replay/capture.ts` for the cross-tool contract.
+//! instead of `hex`. See `web/src/lib/replay/capture.ts` for the
+//! cross-tool contract.
 
 use std::collections::HashMap;
 

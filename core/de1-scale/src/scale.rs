@@ -378,9 +378,9 @@ impl Scale {
     /// returns `false` here and the writes are silently skipped.
     ///
     /// This is the single deliberate "device-driven" capability in the
-    /// otherwise capability-driven scale surface (`docs/14` §7.10/§7.11),
-    /// because the writes are Decent-specific and have no analogue on other
-    /// scales — a generic capability would have only one implementation.
+    /// otherwise capability-driven scale surface, because the writes are
+    /// Decent-specific and have no analogue on other scales — a generic
+    /// capability would have only one implementation.
     pub fn is_decent_scale(&self) -> bool {
         matches!(&self.inner, Inner::Decent(_))
     }

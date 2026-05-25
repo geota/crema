@@ -16,8 +16,8 @@
 //! [`Event::Firmware`](crate::Event::Firmware); this module compares the
 //! build only.
 //!
-//! This module does **not** apply firmware updates; see
-//! `docs/17-firmware-update-plan.md` for that plan, deferred to v2.
+//! This module does **not** apply firmware updates; that plan is deferred
+//! to v2.
 
 use serde::{Deserialize, Serialize};
 use typeshare::typeshare;

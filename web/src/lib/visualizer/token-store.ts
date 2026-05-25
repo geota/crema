@@ -8,8 +8,7 @@
  * that a Service Worker token broker is overkill for v1. Short-lived
  * access tokens + refresh-token rotation keep the blast radius of an
  * XSS to "hours, not weeks", and Crema ships a tight CSP that keeps the
- * XSS surface small. See `docs/35-visualizer-oauth-setup.md`
- * §security for the full trade-off.
+ * XSS surface small.
  *
  * Reactivity: the store does **not** expose Svelte runes — only plain
  * read/write/clear methods. Components that need a "Are we connected?"

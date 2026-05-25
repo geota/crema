@@ -499,7 +499,7 @@ mod tests {
         );
     }
 
-    // ── docs/16 §7.2 gaps ────────────────────────────────────────────────
+    // ── Profile gaps ─────────────────────────────────────────────────────
 
     #[test]
     fn every_exit_metric_compare_pair_maps_to_the_right_flag_bits() {

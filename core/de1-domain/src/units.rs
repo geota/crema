@@ -14,8 +14,6 @@
 //! commits canonical °C). The pair is exact under f32 arithmetic for
 //! reasonable inputs — see the round-trip tests — though one-way ULP
 //! noise from the conversion factors is expected for extreme inputs.
-//!
-//! Audit reference: `docs/26-shell-to-core-audit.md` item #1.
 
 use typeshare::typeshare;
 

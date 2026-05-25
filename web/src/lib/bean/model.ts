@@ -4,7 +4,7 @@
  * One bag of coffee is a {@link Bean}; the roastery that produced it is a
  * {@link Roaster}; and a snapshot frozen onto each completed shot is a
  * {@link ShotBean}. All three mirror the canonical Rust types in
- * `de1_domain::bean` (docs/28 §data-model-proposal) so the Android shell can
+ * `de1_domain::bean` so the Android shell can
  * consume identical shapes on day one via `#[typeshare]`.
  *
  * The shell owns persistence — the core is sans-IO — so this file defines the
@@ -92,8 +92,8 @@ export interface Bean {
 	archivedAt: number | null;
 	/**
 	 * Unix epoch ms when this bag was soft-deleted, or `null` when
-	 * active. Required for cross-device sync tombstone propagation
-	 * (docs/36 §3): the next sync push DELETEs the remote row, then
+	 * active. Required for cross-device sync tombstone propagation:
+	 * the next sync push DELETEs the remote row, then
 	 * garbage-collects the local tombstone. The library UI filters
 	 * tombstones out everywhere except the sync layer.
 	 */
@@ -191,7 +191,7 @@ export interface Roaster {
 	visualizerId: string | null;
 	/**
 	 * Unix epoch ms when this roaster was soft-deleted, or `null` when
-	 * active. Mirrors {@link Bean.deletedAt} (docs/36 §3): the next sync
+	 * active. Mirrors {@link Bean.deletedAt}: the next sync
 	 * push DELETEs the remote row, then GC's the local tombstone.
 	 */
 	deletedAt: number | null;

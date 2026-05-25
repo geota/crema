@@ -469,7 +469,7 @@ export function fromCoreProfile(profile: Profile, _index: number): CremaProfile 
 		preinfuseStepCount: profile.preinfuse_step_count,
 		maxTotalVolumeMl: profile.max_total_volume_ml,
 		segments,
-		// New v2 fields (docs/22 §4.1). #[serde(default)] on the Rust
+		// New v2 fields. #[serde(default)] on the Rust
 		// side means built-in profiles loaded before this field existed
 		// still deserialize — they arrive as empty / Espresso / 0 / "2".
 		author: profile.author ?? '',
@@ -507,7 +507,7 @@ export function toCoreProfile(p: CremaProfile): Profile {
 		target_weight: p.yieldOut,
 		// The dose round-trips as the DE1 profile's `dose` field.
 		dose: p.dose,
-		// New v2 fields (docs/22 §4.1).
+		// New v2 fields.
 		author: p.author,
 		beverage_type: p.beverageType,
 		tank_temperature: p.tankTemperatureC,

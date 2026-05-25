@@ -15,12 +15,11 @@
  * the equipment-level `grinderModel`, shot-level `tags`, and the
  * Quick-control overrides (`yieldTarget` / `brewTemp` /
  * `preinfuseTarget` / `stopOnWeight` / `autoTare`) — ride alongside in
- * a sibling `metadata.crema.*` block. That's the documented escape
- * valve (docs/28 §design-decisions; shot-sync's Visualizer payload
- * uses the same key for `localId` / `signature` / `appVersion`), and
- * Visualizer's `additionalProperties: true` schema accepts unknown
- * keys so the same JSON drives both the downloaded archive and the
- * upload path.
+ * a sibling `metadata.crema.*` block — the documented escape valve
+ * (shot-sync's Visualizer payload uses the same key for `localId` /
+ * `signature` / `appVersion`). Visualizer's `additionalProperties:
+ * true` schema accepts unknown keys so the same JSON drives both the
+ * downloaded archive and the upload path.
  */
 
 import { export_v2_json_shot } from '$lib/wasm/de1_wasm';

@@ -5,9 +5,9 @@ import java.util.UUID
 /**
  * DE1 GATT service and characteristic UUIDs.
  *
- * Source: `docs/02-ble-protocol.md` §1. All DE1 characteristics share the
- * Bluetooth-SIG base UUID `0000xxxx-0000-1000-8000-00805F9B34FB` with a 16-bit
- * value in the `xxxx` slot (`A000`..`A012`).
+ * All DE1 characteristics share the Bluetooth-SIG base UUID
+ * `0000xxxx-0000-1000-8000-00805F9B34FB` with a 16-bit value in the
+ * `xxxx` slot (`A000`..`A012`).
  *
  * The app currently uses the two notify characteristics — `StateInfo` and
  * `ShotSample` — plus `RequestedState` for the (optional) machine-control

@@ -144,7 +144,7 @@ class GattQueue {
  *
  * Implements the transport-agnostic {@link De1Transport} interface so
  * the orchestrator + `de1.ts` can swap in a future USB / mock
- * transport without code changes (docs/22 §7.1). The class keeps its
+ * transport without code changes. The class keeps its
  * full public surface for back-compat — the interface is a subset.
  */
 export class BleDevice implements De1Transport {

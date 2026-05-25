@@ -1,6 +1,4 @@
 //! Atomheart Eclair BLE codec (`scale_type` `atomheart_eclair`).
-//!
-//! See `docs/06-scale-protocols.md` §7.
 
 // Raw integer weight fields are decoded into `f32` grams; precision loss past
 // 2^23 is inherent to representing a wire reading as the codec's `f32` weight,
@@ -19,7 +17,7 @@ use std::time::Duration;
 /// consistent — one is wrong on the lower 96 bits. Per PR G's "defer to
 /// reaprime when the two disagree and reaprime isn't provably buggy" rule,
 /// Crema adopts reaprime's UUID. Open question: needs sniffer verification
-/// against a real Eclair (see docs/30 §"Open questions" §1).
+/// against a real Eclair.
 pub const SERVICE_UUID: &str = "b905eaea-6c7e-4f73-b43d-2cdfcab29570";
 /// Characteristic the scale notifies weight on.
 ///
@@ -60,8 +58,7 @@ pub fn parse_weight(data: &[u8]) -> Option<f32> {
 /// (`atomheart_scale.dart:parseFrame`). Same header + checksum gates as
 /// [`parse_weight`]: a bad frame returns `None` for both channels.
 ///
-/// The audit-flagged "Atomheart timer-field decode" gap (docs/22 §5.3) —
-/// pre-2026-05-22 Crema dropped this field on the floor.
+/// Pre-2026-05-22 Crema dropped this field on the floor.
 pub fn parse_timer(data: &[u8]) -> Option<Duration> {
     if !valid_frame(data) {
         return None;
@@ -141,7 +138,7 @@ mod tests {
         assert_eq!(parse_weight(&bad), None);
     }
 
-    // ── Timer decode (docs/22 §5.3) ────────────────────────────────────
+    // ── Timer decode ───────────────────────────────────────────────────
 
     /// Build a frame with explicit weight + timer milliseconds; XOR
     /// checksum re-derived so the frame validates.

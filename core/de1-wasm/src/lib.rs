@@ -2,8 +2,9 @@
 //!
 //! The wasm-bindgen bridge: exposes [`de1_app::CremaCore`] to the web shell.
 //! Like `de1-ffi`, it is a thin wrapper — it serializes the rich
-//! [`CoreOutput`](de1_app::CoreOutput) to JSON (the "Option S" encoding from
-//! `docs/08-ffi-and-web-scope.md`) and marshals simple typed values for inputs.
+//! [`CoreOutput`](de1_app::CoreOutput) to JSON ("Option S" encoding —
+//! every CoreOutput crosses as one JSON string) and marshals simple
+//! typed values for inputs.
 //!
 //! No mutex: wasm is single-threaded, so the wrapped core uses ordinary
 //! `&mut self` methods. `unsafe` is unavoidable — wasm-bindgen generates the
@@ -41,7 +42,7 @@ pub enum NotificationSource {
     /// to a connect-time Read. Mirrors `de1_app::Source::De1ShotSettings`.
     De1ShotSettings,
     /// **DORMANT** — mirrors `de1_app::Source::De1ProfileHeader`, which the
-    /// BLE shell no longer dispatches (docs/16 §6.1). Kept in the mirror
+    /// BLE shell no longer dispatches. Kept in the mirror
     /// enum for forward-compat. See the core variant for the longer note.
     De1ProfileHeader,
     /// The DE1 `FrameWrite` characteristic — per-frame ack echoes during a
@@ -464,7 +465,6 @@ pub fn roast_freshness(band: Option<String>, days: Option<f64>) -> Option<String
 /// in `de1-domain::history_export`. Exposed as a top-level function
 /// (not a `CremaBridge` method) because it is pure — no core state —
 /// so a shell can call it synchronously from a `Blob` download path.
-/// docs/26 audit #6.
 #[wasm_bindgen]
 pub fn export_v2_json_shot(shot_json: &str) -> Result<String, String> {
     let shot: de1_domain::StoredShot =
@@ -997,7 +997,7 @@ impl CremaBridge {
     /// Set the seconds of high-flow steam at the start of a steam cycle.
     /// MMR `0x80382C`, 4-byte. The wire value is `seconds × 100` —
     /// `seconds` is `f32` so sub-second precision survives (legacy
-    /// default 0.7s = wire 70). docs/22 §2.2.
+    /// default 0.7s = wire 70).
     pub fn set_steam_highflow_start(&self, seconds: f32) -> String {
         json(self.core.set_steam_highflow_start(seconds))
     }
@@ -1021,7 +1021,7 @@ impl CremaBridge {
 
     /// Set the flush water target temperature, °C — the temperature the
     /// DE1 holds during a group-flush cycle. Wire value is `°C × 10`;
-    /// MMR `0x803844`, 4-byte. docs/22 §3.2.
+    /// MMR `0x803844`, 4-byte.
     pub fn set_flush_temp(&self, temp_c: f32) -> String {
         json(self.core.set_flush_temp(temp_c))
     }
@@ -1086,8 +1086,7 @@ impl CremaBridge {
     /// hot-water idle temp, heater phase 1/2 flows, espresso warmup
     /// timeout, refill kit auto, flow-calibration multiplier, steam
     /// purge mode). Profiles, history, and app preferences are
-    /// untouched. See `docs/27-write-side-gaps.md` appendix
-    /// "settings-reset baseline values".
+    /// untouched.
     ///
     /// Errors are surfaced as a thrown `Error` — today the core's
     /// implementation is infallible, but the `Result` shape mirrors
@@ -1291,8 +1290,8 @@ impl CremaBridge {
     /// deserialize into its IndexedDB history store. Returns the
     /// `Err.message` on failure (the bridge serializes Option<Err> via
     /// the `BridgeResult` shape consumers already use elsewhere).
-    /// docs/22 §5.1. Stateless — takes `&self` for the wasm-bindgen
-    /// instance-method ABI but does not touch the core.
+    /// Stateless — takes `&self` for the wasm-bindgen instance-method
+    /// ABI but does not touch the core.
     pub fn import_legacy_tcl_shot(&self, content: &str) -> Result<String, String> {
         de1_domain::import_legacy_tcl_shot(content)
             .map_err(|e| e.to_string())
@@ -1309,8 +1308,7 @@ impl CremaBridge {
 
     /// Parse a community-v2 `.json` profile file. Returns the parsed
     /// `Profile` as JSON the shell can deserialize into the existing
-    /// TS `Profile` shape and feed to `fromCoreProfile`. docs/22 §5.1
-    /// (the profile counterpart to the shot importer).
+    /// TS `Profile` shape and feed to `fromCoreProfile`.
     pub fn import_v2_json_profile(&self, content: &str) -> Result<String, String> {
         de1_domain::import_v2_json(content)
             .map_err(|e| e.to_string())
@@ -1336,7 +1334,7 @@ impl CremaBridge {
     /// Parse a legacy de1app `settings.tdb` file. Returns the
     /// `ImportedDe1AppSettings` struct as a JSON string the shell
     /// can deserialize + selectively apply to Crema's settings store
-    /// + queued DE1-side writes. docs/22 §5.4.
+    /// + queued DE1-side writes.
     pub fn import_settings_tdb(&self, content: &str) -> Result<String, String> {
         de1_domain::import_settings_tdb(content)
             .map_err(|e| e.to_string())

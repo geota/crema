@@ -1,5 +1,5 @@
-<!-- Crema maskable app icon — placeholder art (later polish item per docs/09
-     step 7). The "C" arc sits inside the inner 80% "safe zone" so platform
+<!-- Crema maskable app icon — placeholder art (later polish item).
+     The "C" arc sits inside the inner 80% "safe zone" so platform
      masks (circle, squircle, rounded square) never clip it; the coffee-toned
      fill bleeds to all four edges. The glyph is a vector path — no font. -->
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
