@@ -131,7 +131,7 @@
 			{:else if active === 'brew'}
 				<BrewDefaultsSection />
 			{:else if active === 'water'}
-				<WaterSection />
+				<WaterSection {app} />
 			{:else if active === 'display'}
 				<DisplaySection />
 			{:else if active === 'sharing'}

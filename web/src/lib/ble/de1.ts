@@ -425,7 +425,11 @@ export class De1Manager {
 				// Group Head Controller mode — read here so the Settings →
 				// Machine GHC toggle reflects the firmware's current state.
 				// Wire value 0 = off; non-zero = on (touch-to-confirm).
-				MmrRegister.GhcMode
+				MmrRegister.GhcMode,
+				// Flow-calibration multiplier — surfaced in the Calibration
+				// settings section as the current flow multiplier. Wire
+				// value is `int(1000 × multiplier)`. See docs/43.
+				MmrRegister.CalibrationFlowMultiplier
 			];
 			for (const reg of connectMmrSweep) {
 				step = `MMR read ${reg}`;

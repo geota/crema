@@ -1757,6 +1757,29 @@ export class CremaApp {
 		await this.readCalibration(sensor, true);
 	}
 
+	/**
+	 * Read one MMR register from the DE1. The reply lands as an
+	 * `Event::MmrValue` and folds into `de1MachineInfo[register]` on the
+	 * snapshot. Used by the Calibration screen on mount to populate the
+	 * flow-multiplier row from `MmrRegister::CalibrationFlowMultiplier`,
+	 * and after each Apply / Reset so the row's "Current" label re-renders
+	 * from the live read.
+	 */
+	async readMmr(register: import('$lib/core').MmrRegister): Promise<void> {
+		this.applyCoreOutput(await this.core.readMmr(register));
+	}
+
+	/**
+	 * Write the DE1's flow-calibration multiplier (MMR `0x80383C`). The core
+	 * clamps to `0.13..=2.0` and encodes `int(1000 × multiplier)` LE on the
+	 * wire. Re-reads the register after the write so `de1MachineInfo` (and
+	 * the Calibration screen's Current label) reflect the firmware's
+	 * accepted value.
+	 */
+	async setCalibrationFlowMultiplier(multiplier: number): Promise<void> {
+		this.applyCoreOutput(await this.core.setCalibrationFlowMultiplier(multiplier));
+	}
+
 	// ---- User-presence heartbeat ------------------------------------------
 	//
 	// `markUserPresent()` writes a `1` to `0x803860` via `WriteToMMR`

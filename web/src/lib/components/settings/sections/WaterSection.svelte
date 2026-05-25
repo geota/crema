@@ -1,6 +1,6 @@
 <script lang="ts">
 	/**
-	 * Water & maintenance section — filter life, descaling, backflush, and the
+	 * Water & maintenance section — filter life, descaling, clean cycle, and the
 	 * water-chemistry block.
 	 *
 	 * ## Real vs. stubbed
@@ -8,15 +8,30 @@
 	 * **Real** — the maintenance cards are driven by `$lib/maintenance`: the
 	 * DE1 has no water-volume counter, so the shell integrates group flow over
 	 * time (the de1app's approach) into a persisted litre total. The filter
-	 * capacity, litres-since-descale and hours-since-backflush all derive from
+	 * capacity, litres-since-descale and hours-since-clean all derive from
 	 * that counter plus the stored intervals; "Mark complete" rebaselines the
-	 * relevant counter.
+	 * relevant counter. The Descale / Clean / SteamRinse cards also expose a
+	 * "Run now" button that fires the matching `requestMachineState` after a
+	 * confirm dialog — the firmware drives the cycle to completion, then the
+	 * user manually taps "Mark complete" once the puck-side hardware is reset.
 	 *
 	 * **UI-only** — the water-chemistry inputs are faithful UI; they are not
 	 * app preferences the rest of the app reads, so they are kept as local
 	 * state with a `// TODO`.
+	 *
+	 * ## Backflush → Clean rename
+	 *
+	 * The DE1 firmware state for the high-pressure puck-side cleaning cycle is
+	 * `MachineState::Clean`; reaprime calls the button "Clean" and TCL never
+	 * uses the word "backflush" at all. Crema previously called the tracker
+	 * "Backflush" — the rename here (and in the store) brings the
+	 * user-visible vocabulary in line with the firmware. The cycle is the
+	 * same; the wire is the same. See docs/44 §"Reference disagreement".
 	 */
 	import { getMaintenanceStore } from '$lib/maintenance';
+	import { MachineState } from '$lib/core/crema-core';
+	import type { CremaApp } from '$lib/state';
+	import { INITIAL_SNAPSHOT } from '$lib/state';
 	import StSectionHead from '../StSectionHead.svelte';
 	import StGroup from '../StGroup.svelte';
 	import StRow from '../StRow.svelte';
@@ -24,8 +39,24 @@
 	import StStepper from '../StStepper.svelte';
 	import StMaintenanceCard from '../StMaintenanceCard.svelte';
 
+	let { app }: { app: CremaApp | null } = $props();
+
+	/** Live UI snapshot — drives the connection + machine-state gates on the Run-now buttons. */
+	const snapshot = $derived(app?.state.current ?? INITIAL_SNAPSHOT);
+	const connected = $derived(snapshot.de1State === 'ready');
+	/**
+	 * Whether the firmware is in an idle/sleep state that accepts a cycle
+	 * request. The DE1 will reject a Descale / Clean / SteamRinse request
+	 * mid-shot or mid-steam; restrict the Run-now buttons to Idle or Sleep
+	 * to match the safety analysis of `docs/18-calibration-safety.md`.
+	 */
+	const machineIdle = $derived(
+		snapshot.machineStateName === MachineState.Idle ||
+			snapshot.machineStateName === MachineState.Sleep
+	);
+
 	const maintenance = getMaintenanceStore();
-	/** The derived filter / descale / backflush readouts — reactive. */
+	/** The derived filter / descale / clean readouts — reactive. */
 	const readout = $derived(maintenance.readout);
 	/** The persisted maintenance state — for the intervals and last-done dates. */
 	const m = $derived(maintenance.current);
@@ -40,7 +71,104 @@
 	let waterSource = $state('bottled');
 	let hardness = $state(38);
 	let tds = $state(148);
+
+	// ── Cycle confirmation modal ────────────────────────────────────────
+	//
+	// The three Run-now buttons (Descale, Clean, SteamRinse) all go through
+	// one shared confirm modal. Type-to-confirm is overkill — the cycle is
+	// user-initiated and reversible by power-cycling — so a single click
+	// + a clear "Run cycle" / "Cancel" pair is enough. After the user taps
+	// "Run cycle" we fire `requestMachineState` and close; we do NOT
+	// auto-reset the tracker since the cycle running != the cycle
+	// completing properly. The user marks complete manually.
+
+	type CycleKind = 'descale' | 'clean' | 'steamrinse';
+	type CycleSpec = {
+		title: string;
+		copy: string;
+		runLabel: string;
+		state: MachineState;
+	};
+	const CYCLES: Record<CycleKind, CycleSpec> = {
+		descale: {
+			title: 'Run descale cycle?',
+			copy:
+				'This will pump descaling solution through the group head. The cycle takes ~15 minutes. Make sure the drip tray is empty.',
+			runLabel: 'Run cycle',
+			state: MachineState.Descale
+		},
+		clean: {
+			title: 'Run cleaning cycle?',
+			copy:
+				'Install a blind basket with cleaning tablet. The cycle pumps water through the puck-side at high pressure.',
+			runLabel: 'Run cycle',
+			state: MachineState.Clean
+		},
+		steamrinse: {
+			title: 'Run steam rinse?',
+			copy:
+				'Clears the steam line. Make sure the wand is over the drip tray.',
+			runLabel: 'Run cycle',
+			state: MachineState.SteamRinse
+		}
+	};
+
+	/** Which cycle is being confirmed, or `null` when no modal is open. */
+	let pendingCycle = $state<CycleKind | null>(null);
+	/** Whether the request is in-flight — disables the Run button. */
+	let running = $state(false);
+
+	const pendingSpec = $derived<CycleSpec | null>(
+		pendingCycle ? CYCLES[pendingCycle] : null
+	);
+
+	function openCycle(kind: CycleKind): void {
+		if (!connected || !machineIdle) return;
+		pendingCycle = kind;
+	}
+
+	function cancelCycle(): void {
+		if (running) return;
+		pendingCycle = null;
+	}
+
+	async function confirmCycle(): Promise<void> {
+		if (pendingCycle == null || pendingSpec == null || !app) return;
+		running = true;
+		try {
+			await app.requestMachineState(pendingSpec.state);
+			pendingCycle = null;
+		} catch {
+			// The orchestrator already logged via the event stream; leave the
+			// modal open so the user can retry or cancel.
+		} finally {
+			running = false;
+		}
+	}
+
+	function onModalKeydown(e: KeyboardEvent): void {
+		if (e.key === 'Escape' && pendingCycle != null) {
+			e.preventDefault();
+			cancelCycle();
+		}
+	}
+
+	/**
+	 * Tooltip explaining why a Run-now button is disabled, or `undefined`
+	 * when it is enabled. Match the gating order: connection first (the
+	 * write goes nowhere without a paired DE1), then firmware state.
+	 */
+	const runDisabledReason = $derived(
+		!connected
+			? 'Connect DE1 to run a maintenance cycle'
+			: !machineIdle
+				? 'Machine must be in Idle/Ready state.'
+				: undefined
+	);
+	const runDisabled = $derived(!connected || !machineIdle);
 </script>
+
+<svelte:window onkeydown={onModalKeydown} />
 
 <StSectionHead
 	eyebrow="Health"
@@ -70,16 +198,37 @@
 		metricLabel="since last descale"
 		detail={`Threshold: ${m.descaleIntervalLitres} L · last descaled ${shortDate(m.descaleAtMs)}`}
 		onComplete={() => maintenance.markDescaled()}
+		onRun={() => openCycle('descale')}
+		runLabel="Run descale"
+		{runDisabled}
+		{runDisabledReason}
 	/>
 	<StMaintenanceCard
 		icon="sparkle"
-		title="Backflush"
-		state={readout.backflushOk ? 'On schedule' : 'Backflush due'}
-		stateOk={readout.backflushOk}
-		metric={`${readout.backflushSinceHours} hr`}
+		title="Clean cycle"
+		state={readout.cleanOk ? 'On schedule' : 'Clean due'}
+		stateOk={readout.cleanOk}
+		metric={`${readout.cleanSinceHours} hr`}
 		metricLabel="since last cycle"
-		detail={`Recommended every ${m.backflushIntervalHours} hr · last done ${shortDate(m.backflushAtMs)}`}
-		onComplete={() => maintenance.markBackflushed()}
+		detail={`Recommended every ${m.cleanIntervalHours} hr · last done ${shortDate(m.cleanAtMs)}`}
+		onComplete={() => maintenance.markCleaned()}
+		onRun={() => openCycle('clean')}
+		runLabel="Run clean"
+		{runDisabled}
+		{runDisabledReason}
+	/>
+	<StMaintenanceCard
+		icon="wind"
+		title="Steam rinse"
+		state="Manual"
+		stateOk={true}
+		metric="—"
+		metricLabel="purge the steam line"
+		detail="Clears any residual milk from the steam wand. Run it after every steam session."
+		onRun={() => openCycle('steamrinse')}
+		runLabel="Run steam rinse"
+		{runDisabled}
+		{runDisabledReason}
 	/>
 </div>
 
@@ -178,18 +327,134 @@
 		{/snippet}
 	</StRow>
 	<StRow
-		title="Backflush interval"
-		sub="Run a backflush after this many hours of use."
+		title="Clean cycle interval"
+		sub="Run a clean cycle after this many hours of use."
 	>
 		{#snippet control()}
 			<StStepper
-				value={m.backflushIntervalHours}
+				value={m.cleanIntervalHours}
 				unit="hr"
 				step={1}
 				min={1}
 				max={500}
-				onCommit={(v) => maintenance.setBackflushInterval(v)}
+				onCommit={(v) => maintenance.setCleanInterval(v)}
 			/>
 		{/snippet}
 	</StRow>
 </StGroup>
+
+{#if pendingCycle != null && pendingSpec != null}
+	<!--
+		Cycle-confirmation modal — scrim + centred panel. Click the scrim or
+		press Escape to close. A single "Run cycle" button fires the
+		`requestMachineState` write; we do NOT auto-reset the tracker (the
+		cycle starting is not proof that it completed properly — the user
+		marks it complete manually after they've reinstalled the regular
+		basket). Type-to-confirm is overkill here: the cycle is user-
+		initiated and reversible by power-cycling, so a click + confirm is
+		enough.
+	-->
+	<div
+		class="cyc-scrim"
+		role="presentation"
+		onclick={cancelCycle}
+		onkeydown={(e) => {
+			if (e.key === 'Enter' || e.key === ' ') cancelCycle();
+		}}
+	>
+		<div
+			class="cyc-panel"
+			role="dialog"
+			aria-modal="true"
+			aria-labelledby="cyc-title"
+			tabindex="-1"
+			onclick={(e) => e.stopPropagation()}
+			onkeydown={(e) => e.stopPropagation()}
+		>
+			<div class="cyc-head">
+				<div class="t-eyebrow">Maintenance cycle</div>
+				<h2 id="cyc-title">{pendingSpec.title}</h2>
+			</div>
+			<div class="cyc-banner" role="alert">
+				<i class="ph ph-info" aria-hidden="true"></i>
+				<span>{pendingSpec.copy}</span>
+			</div>
+			<div class="cyc-actions">
+				<button
+					type="button"
+					class="st-btn st-btn-secondary"
+					onclick={cancelCycle}
+					disabled={running}
+				>
+					Cancel
+				</button>
+				<button
+					type="button"
+					class="st-btn st-btn-primary"
+					onclick={confirmCycle}
+					disabled={running || !connected || !machineIdle}
+				>
+					{running ? 'Starting…' : pendingSpec.runLabel}
+				</button>
+			</div>
+		</div>
+	</div>
+{/if}
+
+<style>
+	.cyc-scrim {
+		position: fixed;
+		inset: 0;
+		background: rgba(0, 0, 0, 0.55);
+		backdrop-filter: blur(4px);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		z-index: 1000;
+		padding: 24px;
+	}
+	.cyc-panel {
+		background: var(--bg-surface);
+		color: var(--fg-1);
+		border: 1px solid rgba(var(--tint-rgb), 0.12);
+		border-radius: 12px;
+		box-shadow:
+			0 24px 48px rgba(0, 0, 0, 0.35),
+			0 4px 12px rgba(0, 0, 0, 0.2);
+		max-width: 440px;
+		width: 100%;
+		padding: 24px;
+		display: flex;
+		flex-direction: column;
+		gap: 20px;
+		outline: none;
+	}
+	.cyc-head h2 {
+		margin: 4px 0 0 0;
+		font-size: 18px;
+		font-weight: 600;
+	}
+	.cyc-banner {
+		display: flex;
+		align-items: flex-start;
+		gap: 10px;
+		padding: 12px 14px;
+		border-radius: 8px;
+		font-size: 13px;
+		line-height: 1.45;
+		background: rgba(var(--copper-rgb), 0.08);
+		border: 1px solid rgba(var(--copper-rgb), 0.25);
+		color: var(--fg-1);
+	}
+	.cyc-banner i {
+		flex-shrink: 0;
+		font-size: 18px;
+		margin-top: 1px;
+		color: var(--copper-400);
+	}
+	.cyc-actions {
+		display: flex;
+		gap: 8px;
+		justify-content: flex-end;
+	}
+</style>

@@ -11,7 +11,22 @@
  * From that one persisted counter plus user-set intervals the store derives
  * the three maintenance readouts the Settings → Water section shows: the
  * water-filter capacity (%), the litres since the last descale, and the hours
- * since the last backflush. "Mark complete" resets the relevant counter.
+ * since the last clean cycle. "Mark complete" resets the relevant counter.
+ *
+ * ## Naming: Clean (formerly "Backflush")
+ *
+ * Pre-rename the third tracker was called "Backflush". The DE1 firmware's
+ * `MachineState::Clean` *is* the cycle the espresso world informally calls a
+ * "backflush" (blind basket + cleaning tablet, pressure pulses puck-side);
+ * legacy TCL never uses the word "backflush" at all, and reaprime calls the
+ * button "Clean". docs/44 §"Reference disagreement" recommended unifying on
+ * "Clean" so the run-cycle action and the tracker share vocabulary with the
+ * firmware state.
+ *
+ * Persistence key bumped `crema.maintenance.v1` → `crema.maintenance.v2` with
+ * a one-shot migration from the v1 key on first load — Crema is pre-prod, but
+ * the migration is one line and avoids a confused "filter counter reset" on
+ * the next session, so we keep it.
  *
  * Like the profile / history / settings stores this is a Svelte 5 `$state`
  * class over the shared `$lib/utils/storage` helpers and a single versioned
@@ -21,7 +36,13 @@
 import { readJson, writeJson } from '$lib/utils/storage';
 
 /** localStorage key for the maintenance counters ({@link MaintenanceState}). */
-const MAINTENANCE_KEY = 'crema.maintenance.v1';
+const MAINTENANCE_KEY = 'crema.maintenance.v2';
+/**
+ * Previous key (before the Backflush→Clean rename). Read once on first load
+ * to migrate the prior persisted state forward; thereafter only the v2 key is
+ * read or written.
+ */
+const MAINTENANCE_KEY_V1 = 'crema.maintenance.v1';
 
 /**
  * A single telemetry sample's worth of accumulated water dispensed past which
@@ -38,8 +59,8 @@ export interface MaintenanceState {
 	filterBaselineLitres: number;
 	/** `totalLitres` at the last descale. */
 	descaleBaselineLitres: number;
-	/** Unix epoch ms of the last backflush. */
-	backflushAtMs: number;
+	/** Unix epoch ms of the last clean cycle (DE1 `MachineState::Clean`). */
+	cleanAtMs: number;
 	/** Unix epoch ms of the last filter replacement. */
 	filterAtMs: number;
 	/** Unix epoch ms of the last descale. */
@@ -48,14 +69,14 @@ export interface MaintenanceState {
 	filterCapacityLitres: number;
 	/** Descale interval, litres — descale is due past this many litres. */
 	descaleIntervalLitres: number;
-	/** Backflush interval, hours — backflush is due past this many hours. */
-	backflushIntervalHours: number;
+	/** Clean cycle interval, hours — clean is due past this many hours. */
+	cleanIntervalHours: number;
 }
 
 /**
  * The default maintenance state — a fresh install. The baselines and the
  * timestamps start at "now / zero" so the very first readouts are sane: a
- * full filter, no litres since descale, no hours since backflush.
+ * full filter, no litres since descale, no hours since clean.
  */
 function defaultState(): MaintenanceState {
 	const now = Date.now();
@@ -63,16 +84,63 @@ function defaultState(): MaintenanceState {
 		totalLitres: 0,
 		filterBaselineLitres: 0,
 		descaleBaselineLitres: 0,
-		backflushAtMs: now,
+		cleanAtMs: now,
 		filterAtMs: now,
 		descaleAtMs: now,
 		// Sane defaults — a typical inline water filter is rated ~50 L; the
-		// DE1's own descale guidance is interval-based; 48 h backflush matches
+		// DE1's own descale guidance is interval-based; 48 h clean matches
 		// the design's placeholder copy.
 		filterCapacityLitres: 50,
 		descaleIntervalLitres: 120,
-		backflushIntervalHours: 48
+		cleanIntervalHours: 48
 	};
+}
+
+/**
+ * Shape of the v1 persisted state — same fields as v2 but with the
+ * pre-rename keys (`backflushAtMs`, `backflushIntervalHours`). Used once at
+ * load time to migrate a pre-rename install forward.
+ */
+interface MaintenanceStateV1 {
+	totalLitres?: number;
+	filterBaselineLitres?: number;
+	descaleBaselineLitres?: number;
+	backflushAtMs?: number;
+	filterAtMs?: number;
+	descaleAtMs?: number;
+	filterCapacityLitres?: number;
+	descaleIntervalLitres?: number;
+	backflushIntervalHours?: number;
+}
+
+/**
+ * Read the persisted state, applying the one-shot v1→v2 Backflush→Clean key
+ * rename if no v2 record exists but a v1 record does. Returns a partial state
+ * suitable for spreading over {@link defaultState}.
+ */
+function loadPersisted(): Partial<MaintenanceState> {
+	const v2 = readJson<Partial<MaintenanceState> | null>(MAINTENANCE_KEY, null);
+	if (v2 != null) return v2;
+	// Fallback: migrate the old key. Same fields except `backflush*` → `clean*`.
+	const v1 = readJson<MaintenanceStateV1 | null>(MAINTENANCE_KEY_V1, null);
+	if (v1 == null) return {};
+	const migrated: Partial<MaintenanceState> = {
+		totalLitres: v1.totalLitres,
+		filterBaselineLitres: v1.filterBaselineLitres,
+		descaleBaselineLitres: v1.descaleBaselineLitres,
+		filterAtMs: v1.filterAtMs,
+		descaleAtMs: v1.descaleAtMs,
+		filterCapacityLitres: v1.filterCapacityLitres,
+		descaleIntervalLitres: v1.descaleIntervalLitres,
+		cleanAtMs: v1.backflushAtMs,
+		cleanIntervalHours: v1.backflushIntervalHours
+	};
+	// Strip undefined fields so the spread over defaultState keeps the
+	// fresh-install timestamps where the v1 record had nothing.
+	for (const k of Object.keys(migrated) as (keyof MaintenanceState)[]) {
+		if (migrated[k] === undefined) delete migrated[k];
+	}
+	return migrated;
 }
 
 /** A derived maintenance readout — a counter, its limit, and a due/ok verdict. */
@@ -87,10 +155,10 @@ export interface MaintenanceReadout {
 	descaleSinceLitres: number;
 	/** Whether the descale interval has not yet been exceeded. */
 	descaleOk: boolean;
-	/** Whole hours since the last backflush. */
-	backflushSinceHours: number;
-	/** Whether the backflush interval has not yet been exceeded. */
-	backflushOk: boolean;
+	/** Whole hours since the last clean cycle. */
+	cleanSinceHours: number;
+	/** Whether the clean interval has not yet been exceeded. */
+	cleanOk: boolean;
 }
 
 /** The reactive water-accumulation & maintenance store — {@link getMaintenanceStore}. */
@@ -98,7 +166,7 @@ export class MaintenanceStore {
 	/** The persisted state. Loaded from localStorage, defaults filling any gap. */
 	private state = $state<MaintenanceState>({
 		...defaultState(),
-		...readJson<Partial<MaintenanceState>>(MAINTENANCE_KEY, {})
+		...loadPersisted()
 	});
 
 	/** The current maintenance state. Reactive: a counter change re-renders readers. */
@@ -133,7 +201,7 @@ export class MaintenanceStore {
 		this.persist();
 	}
 
-	/** The derived filter / descale / backflush readouts for the UI. */
+	/** The derived filter / descale / clean readouts for the UI. */
 	get readout(): MaintenanceReadout {
 		const s = this.state;
 		const filterUsedLitres = Math.max(0, s.totalLitres - s.filterBaselineLitres);
@@ -142,9 +210,9 @@ export class MaintenanceStore {
 				? Math.max(0, Math.min(100, 100 - (filterUsedLitres / s.filterCapacityLitres) * 100))
 				: 0;
 		const descaleSinceLitres = Math.max(0, s.totalLitres - s.descaleBaselineLitres);
-		const backflushSinceHours = Math.max(
+		const cleanSinceHours = Math.max(
 			0,
-			Math.floor((Date.now() - s.backflushAtMs) / 3_600_000)
+			Math.floor((Date.now() - s.cleanAtMs) / 3_600_000)
 		);
 		return {
 			filterUsedLitres,
@@ -152,8 +220,8 @@ export class MaintenanceStore {
 			filterOk: filterUsedLitres < s.filterCapacityLitres,
 			descaleSinceLitres,
 			descaleOk: descaleSinceLitres < s.descaleIntervalLitres,
-			backflushSinceHours,
-			backflushOk: backflushSinceHours < s.backflushIntervalHours
+			cleanSinceHours,
+			cleanOk: cleanSinceHours < s.cleanIntervalHours
 		};
 	}
 
@@ -177,9 +245,9 @@ export class MaintenanceStore {
 		this.persist();
 	}
 
-	/** Mark a backflush done — reset its hour counter. */
-	markBackflushed(): void {
-		this.state = { ...this.state, backflushAtMs: Date.now() };
+	/** Mark a clean cycle done — reset its hour counter. */
+	markCleaned(): void {
+		this.state = { ...this.state, cleanAtMs: Date.now() };
 		this.persist();
 	}
 
@@ -204,12 +272,12 @@ export class MaintenanceStore {
 	}
 
 	/**
-	 * Set the backflush interval, in whole hours. The backflush card flips
-	 * to "Backflush due" once `backflushSinceHours` exceeds this value.
+	 * Set the clean cycle interval, in whole hours. The clean card flips
+	 * to "Clean due" once `cleanSinceHours` exceeds this value.
 	 */
-	setBackflushInterval(hours: number): void {
+	setCleanInterval(hours: number): void {
 		if (!Number.isFinite(hours) || hours <= 0) return;
-		this.state = { ...this.state, backflushIntervalHours: hours };
+		this.state = { ...this.state, cleanIntervalHours: hours };
 		this.persist();
 	}
 }

@@ -741,7 +741,7 @@
 
 	// ── Maintenance advisory banner ──────────────────────────────────────
 	// The maintenance store (`$lib/maintenance`) integrates flow into a
-	// litre counter and flags filter / descale / backflush as `Ok = false`
+	// litre counter and flags filter / descale / clean as `Ok = false`
 	// once the configured intervals are exceeded. Surface that as a yellow
 	// banner on the brew page so the user sees it without digging into
 	// Settings → Water; click routes them to the maintenance cards.
@@ -754,7 +754,7 @@
 	 * Re-derives the visible banner from the live readout minus this
 	 * set so a re-tripped counter after dismiss still surfaces.
 	 */
-	let maintDismissed = $state(new Set<'filter' | 'descale' | 'backflush'>());
+	let maintDismissed = $state(new Set<'filter' | 'descale' | 'clean'>());
 	/**
 	 * The subset of due categories the user has not dismissed this
 	 * session — joined into a comma-separated banner body. Empty string
@@ -765,8 +765,8 @@
 		const parts: string[] = [];
 		if (!maintReadout.filterOk && !maintDismissed.has('filter')) parts.push('Filter due');
 		if (!maintReadout.descaleOk && !maintDismissed.has('descale')) parts.push('Descale due');
-		if (!maintReadout.backflushOk && !maintDismissed.has('backflush'))
-			parts.push('Backflush due');
+		if (!maintReadout.cleanOk && !maintDismissed.has('clean'))
+			parts.push('Clean due');
 		return parts.join(', ');
 	});
 	/** Dismiss every currently-due maintenance category for this session. */
@@ -774,7 +774,7 @@
 		const next = new Set(maintDismissed);
 		if (!maintReadout.filterOk) next.add('filter');
 		if (!maintReadout.descaleOk) next.add('descale');
-		if (!maintReadout.backflushOk) next.add('backflush');
+		if (!maintReadout.cleanOk) next.add('clean');
 		maintDismissed = next;
 	}
 	/** Route to Settings → Water & maintenance — the cards' canonical home. */
@@ -934,7 +934,7 @@
 				</div>
 			{:else if maintVisibleText !== ''}
 				<!-- Maintenance advisory — yellow banner shown when one of
-				     filter / descale / backflush has tripped. Re-uses the
+				     filter / descale / clean has tripped. Re-uses the
 				     MachineErrorBanner skeleton with the `'warning'`
 				     variant so the dashboard has one visual language for
 				     header advisories. Click routes to Settings → Water &
