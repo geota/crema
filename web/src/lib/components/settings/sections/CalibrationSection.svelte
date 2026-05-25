@@ -492,12 +492,12 @@
 					</button>
 					<button
 						type="button"
-						class="cal-flow-reset"
+						class="st-btn st-btn-danger"
 						onclick={openFlowReset}
 						disabled={!connected || flowAtDefault}
 						title={flowAtDefault ? 'Already at the default (1.000)' : undefined}
 					>
-						Reset to 1.000
+						Reset to factory
 					</button>
 				</div>
 			</div>
@@ -840,26 +840,6 @@
 		opacity: 0.55;
 		cursor: not-allowed;
 	}
-	.cal-flow-reset {
-		background: transparent;
-		border: 0;
-		color: var(--copper-400);
-		font-family: var(--font-sans);
-		font-size: 12px;
-		padding: 4px 6px;
-		cursor: pointer;
-		text-decoration: underline;
-		text-underline-offset: 2px;
-	}
-	.cal-flow-reset:hover:not(:disabled) {
-		color: var(--fg-1);
-	}
-	.cal-flow-reset:disabled {
-		opacity: 0.4;
-		cursor: not-allowed;
-		text-decoration: none;
-	}
-
 	/* ---- Modal ---------------------------------------------------------- */
 
 	.cal-modal-scrim {
