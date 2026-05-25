@@ -338,7 +338,6 @@
 		applyDisabledReason={tempApplyState.reason}
 		resetDisabled={tempResetState.disabled}
 		resetDisabledReason={tempResetState.reason}
-		needsConnection={!connected}
 		decimals={3}
 	/>
 
@@ -354,7 +353,6 @@
 		applyDisabledReason={pressureApplyState.reason}
 		resetDisabled={pressureResetState.disabled}
 		resetDisabledReason={pressureResetState.reason}
-		needsConnection={!connected}
 		decimals={3}
 	/>
 
@@ -378,13 +376,11 @@
 		resetDisabled={flowResetState.disabled}
 		resetDisabledReason={flowResetState.reason}
 		description="Calibrate when an external scale disagrees with the DE1's estimate."
-		needsConnection={!connected}
 		decimals={3}
 	/>
 
 	<StRow
 		title="Last read"
-		needsConnection={!connected}
 		sub="When the calibration values above were last refreshed from the DE1."
 	>
 		{#snippet control()}
