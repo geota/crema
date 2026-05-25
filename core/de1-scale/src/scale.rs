@@ -385,19 +385,6 @@ impl Scale {
         matches!(&self.inner, Inner::Decent(_))
     }
 
-    /// Whether the connected Decent Scale's firmware supports the
-    /// [`decent_scale::POWER_OFF`] command — only `true` once the firmware
-    /// version has been observed and is v1.2 or later.
-    ///
-    /// `false` for any non-Decent scale and for a Decent Scale whose
-    /// firmware version is not yet known: the safer default is to not
-    /// send the byte (v1.0 / v1.1 firmware would silently ignore it, so
-    /// the UI must know to fall back to the "long-press the button"
-    /// instruction).
-    pub fn supports_decent_scale_power_off(&self) -> bool {
-        matches!(&self.inner, Inner::Decent(state) if state.supports_power_off())
-    }
-
     /// Record a Decent-Scale firmware-version observation (the byte
     /// extracted from a `0x0A` reply — see
     /// [`decent_scale::parse_command_response`]). No-op for every other

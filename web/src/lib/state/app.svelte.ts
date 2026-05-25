@@ -1293,10 +1293,10 @@ export class CremaApp {
 	}
 
 	/**
-	 * Power off a connected Decent Scale (v1.2+ firmware). Throws if the
-	 * scale doesn't support remote power-off — the caller surfaces the
-	 * error's message as a user-facing instruction ("long-press the
-	 * physical button to power off").
+	 * Power off a connected Decent Scale. The byte sequence is sent
+	 * unconditionally — older firmware versions silently no-op on it.
+	 * Throws only when no scale is connected or the connected scale
+	 * isn't a Decent Scale.
 	 *
 	 * No UI surface for this today; exposed here so a future Settings
 	 * action or Disconnect-button affordance can call it without touching

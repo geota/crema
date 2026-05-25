@@ -91,17 +91,13 @@ pub const LCD_ENABLE_OUNCES: [u8; 7] = [0x03, 0x0A, 0x01, 0x01, 0x01, 0x01, 0x09
 /// Command: disable the on-scale LCD (display off).
 pub const LCD_DISABLE: [u8; 7] = [0x03, 0x0A, 0x00, 0x00, 0x00, 0x00, 0x09];
 
-/// Command: power the scale off (Decent Scale firmware v1.2+ only).
+/// Command: power the scale off.
 ///
-/// On v1.0 / v1.1 firmware the scale silently ignores this byte sequence —
-/// the user has to long-press the physical button to power off. Callers
-/// MUST gate this write on [`DecentScale::supports_power_off`] returning
-/// true (i.e. the firmware version has been observed and is >= v1.2); the
-/// safer default for an unknown firmware is *not* to send.
-///
-/// Wire bytes from the legacy app (de1plus/bluetooth.tcl:1289):
+/// Wire bytes from the legacy app (`de1plus/bluetooth.tcl:1289`):
 /// `[decent_scale_make_command 0A 02]`, padded by the builder to a 7-byte
-/// frame with the XOR checksum (`0x0B`).
+/// frame with the XOR checksum (`0x0B`). Sent unconditionally — older
+/// firmware versions (v1.0 / v1.1) silently no-op on this byte sequence
+/// rather than erroring, so there is no harm in always emitting it.
 pub const POWER_OFF: [u8; 7] = [0x03, 0x0A, 0x02, 0x00, 0x00, 0x00, 0x0B];
 
 /// Command: heartbeat write.
@@ -118,9 +114,11 @@ pub const HEARTBEAT_INTERVAL_MS: u64 = 2_000;
 
 /// The Decent Scale's firmware version, as observed at runtime.
 ///
-/// The version is used to gate one Decent-Scale-specific feature:
-/// [`POWER_OFF`] only works on v1.2+ — every other variant returns `false`
-/// from [`DecentScale::supports_power_off`].
+/// Parsed from the `0x0A` LCD / heartbeat reply (see
+/// [`parse_command_response`]) and surfaced diagnostically — the core no
+/// longer gates any behaviour on the version, but the value is still
+/// useful as a connection-info field and for future telemetry. Older
+/// firmware versions silently no-op on commands they don't understand.
 ///
 /// (The legacy app *also* double-sends every command write regardless of
 /// firmware version — the original `bluetooth.tcl:1327-1330` comment
@@ -129,12 +127,6 @@ pub const HEARTBEAT_INTERVAL_MS: u64 = 2_000;
 /// command buffer occasionally drops the next write when the previous
 /// hasn't finished. The double-send therefore happens unconditionally in
 /// [`crate::Scale`] / `de1-app`; it is *not* gated on this enum.)
-///
-/// The variants are derived `PartialOrd / Ord` so a "≥ v1.2" check is a
-/// single comparison; the source-order is `V1_0 < V1_1 < V1_2 < Unknown`,
-/// which means `Unknown` sorts *above* v1.2 — that is deliberate so an
-/// unknown firmware fails the `>= V1_2` gate (we know less, not more) and
-/// the safer default kicks in. See [`DecentScale::supports_power_off`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum DecentScaleFirmwareVersion {
     /// v1.0 — original firmware; no remote power-off.
@@ -259,9 +251,7 @@ pub struct DecentScale {
     tare_counter: u8,
     /// Firmware version, if known. Set by
     /// [`record_firmware_version`](Self::record_firmware_version) once the
-    /// shell forwards the first `0x0A` reply; used to gate
-    /// [`supports_power_off`](Self::supports_power_off) and
-    /// [`needs_double_send`](Self::needs_double_send).
+    /// shell forwards the first `0x0A` reply; surfaced diagnostically only.
     firmware_version: Option<DecentScaleFirmwareVersion>,
 }
 
@@ -288,18 +278,6 @@ impl DecentScale {
         let bytes = tare(self.tare_counter);
         self.tare_counter = self.tare_counter.wrapping_add(1);
         bytes
-    }
-
-    /// Whether the connected scale supports the [`POWER_OFF`] command.
-    ///
-    /// Only `true` once a firmware reply has been observed *and* the
-    /// version is v1.2 or later — every other state (no observation yet,
-    /// v1.0, v1.1) returns `false` so the safer "don't send" branch
-    /// applies (a v1.0 scale would silently ignore the byte; the user
-    /// needs UI feedback like "long-press the button to power off").
-    #[must_use]
-    pub fn supports_power_off(&self) -> bool {
-        matches!(self.firmware_version, Some(DecentScaleFirmwareVersion::V1_2))
     }
 
     /// Record the firmware version reported by a `0x0A` reply (see
@@ -446,25 +424,6 @@ mod tests {
         // initial counter value).
         let mut state = DecentScale::new();
         assert_eq!(state.next_tare(), tare(253));
-    }
-
-    #[test]
-    fn supports_power_off_is_false_until_a_v12_firmware_is_observed() {
-        let mut state = DecentScale::new();
-        // No observation yet: don't power off.
-        assert!(!state.supports_power_off());
-        // v1.0 / v1.1: still don't power off (the scale would silently
-        // ignore the byte).
-        state.record_firmware_version(DecentScaleFirmwareVersion::V1_0);
-        assert!(!state.supports_power_off());
-        state.record_firmware_version(DecentScaleFirmwareVersion::V1_1);
-        assert!(!state.supports_power_off());
-        // Explicit Unknown also blocks the write.
-        state.record_firmware_version(DecentScaleFirmwareVersion::Unknown);
-        assert!(!state.supports_power_off());
-        // v1.2: yes.
-        state.record_firmware_version(DecentScaleFirmwareVersion::V1_2);
-        assert!(state.supports_power_off());
     }
 
     #[test]

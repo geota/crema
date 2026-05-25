@@ -12,9 +12,9 @@ firmware OTA codec) plus every scale-side write. BLE-level housekeeping
 
 | Bucket | Count | %   |
 | ------ | ----- | --- |
-| ✅ Verified + aligned       | 35 | 67% |
+| ✅ Verified + aligned       | 36 | 69% |
 | ⚠️ Verified, divergent     | 9  | 17% |
-| ❓ Unverified              | 8  | 16% |
+| ❓ Unverified              | 7  | 13% |
 | **Total wires audited**    | 52 | 100% |
 
 The 35 "aligned" entries cover the bread-and-butter writes that have
@@ -27,10 +27,10 @@ The 9 "divergent" entries are largely Crema-stricter clamps (already
 defended in `docs/40`) plus a handful of legitimate wire-encoding
 asymmetries the docs/22 audit chose deliberately.
 
-The 8 "unverified" entries are mostly the Bookoo extended command set
+The 7 "unverified" entries are mostly the Bookoo extended command set
 (volume / standby / mode / auto-stop / flow-smoothing / anti-mistouch)
-which neither legacy TCL nor reaprime models, and the Decent Scale
-firmware-version-gated power-off.
+which neither legacy TCL nor reaprime models, plus the firmware OTA
+codec rows (codec exists, no driver yet).
 
 ---
 
@@ -152,6 +152,7 @@ both TCL (which carries scale codecs in `bluetooth.tcl`) and reaprime
 | Decent Scale LCD enable (grams) | `[0x03,0x0A,0x01,0x01,0x00,0x01,0x08]` ([decent_scale.rs:77](core/de1-scale/src/decent_scale.rs)) | `decent_scale_make_command 0A 01 01 00 01` (`bluetooth.tcl:1274`) — same 7-byte packet | n/a | Matches TCL exactly. |
 | Decent Scale LCD enable (ounces) | `[0x03,0x0A,0x01,0x01,0x01,0x01,0x09]` ([decent_scale.rs:89](core/de1-scale/src/decent_scale.rs)) | `decent_scale_make_command 0A 01 01 01 01` (`bluetooth.tcl:1277`) | n/a | Matches TCL. |
 | Decent Scale LCD disable | `[0x03,0x0A,0x00,0x00,0x00,0x00,0x09]` ([decent_scale.rs:92](core/de1-scale/src/decent_scale.rs)) | `decent_scale_make_command 0A 00 00` (`bluetooth.tcl:1288`) | n/a | Aligned. |
+| Decent Scale POWER_OFF | `[0x03,0x0A,0x02,0x00,0x00,0x00,0x0B]` ([decent_scale.rs](core/de1-scale/src/decent_scale.rs) `POWER_OFF`) | `decent_scale_make_command 0A 02` (`bluetooth.tcl:1289`) — same 7-byte packet | n/a (reaprime decent_scale doesn't expose a remote power-off) | Byte-equal to TCL; sent unconditionally. Older firmware silently no-ops on the byte sequence. |
 | Decent Scale heartbeat | `[0x03,0x0A,0x03,0xFF,0xFF,0x00,0x0A]` ([decent_scale.rs:113](core/de1-scale/src/decent_scale.rs)) | `decentscale_send_heartbeat` (`bluetooth.tcl:937`) sends matching 7-byte heartbeat | n/a | Aligned. |
 | Decent Scale timer start/stop/reset | `decent_scale::timer_*` helpers build the legacy commands `0B 03 00` / `0B 00 00` / `0B 02 00` | TCL `decentscale_timer_start/stop/reset` (`bluetooth.tcl:1310,1335,1363`) | n/a | Matches TCL; Crema sends each command once, TCL double-sends (workaround for v1.0 firmware drops; see `decent_scale.rs` doc-comment for rationale on the single-send choice). |
 | Eureka Precisa tare / timer / off / beep | `[0xAA,0x02,0x31..0x37,...]` ([eureka_precisa.rs:16-28](core/de1-scale/src/eureka_precisa.rs)) | `eureka_precisa_*` procs in `bluetooth.tcl:742-789` | reaprime has `eureka_scale.dart` (separate codec) | Byte-equal to TCL. |
@@ -173,7 +174,7 @@ both TCL (which carries scale codecs in `bluetooth.tcl`) and reaprime
 |---|---|---|---|---|---|
 | `set_fan_threshold` (0x803808) | `set_fan_threshold(u8)` clamps 0..=50, byte_len=4 ([lib.rs:867-875](core/de1-app/src/lib.rs)) | `set_fan_temperature_threshold` no clamp (`de1_comms.tcl:1329-1332`) | `MMRItem.fanThreshold min:0 max:50` (`de1.models.dart:247-254`) — `_writeMMRInt` clamps | Crema matches reaprime; TCL has no clamp. Crema-stricter than TCL. Wire bytes align with both for in-range inputs. | LOW (Crema-stricter, defends fw). |
 | `set_calibration_flow_multiplier` (0x80383C, byte_len=2) | Crema clamps 0.13..=2.0, byte_len=**2** ([lib.rs:1208-1216](core/de1-app/src/lib.rs)) | TCL byte_len=4 wire (`de1_comms.tcl:1336`) | reaprime wire Len=4 (`_writeMMRInt` packs 4 bytes); min:130 max:2000 | Crema picks byte_len=2 (raw fits 130..2000 in 2 bytes — high 2 bytes would be 0 anyway); functionally equivalent on the wire. Clamp matches reaprime exactly. | LOW (encoding equivalent; firmware reads only Len bytes). |
-| `set_cup_warmer_temperature` (0x803874) | Crema clamps 0..=80 °C, byte_len=2, **raw integer °C** ([lib.rs:1188-1195](core/de1-app/src/lib.rs)) | `set_cupwarmer_temperature` writes raw int via `long_to_little_endian_hex $temp` byte_len=2 wire-bytes (`de1_comms.tcl:1184`) — no clamp | reaprime `BengleMmr.matSetPoint` is `scaledFloat readScale:0.1 writeScale:10.0` min:0 max:800 — wire value is **°C × 10** (`bengle_mmr.dart:12-21`) | **Crema follows TCL (raw °C) but disagrees with reaprime (°C × 10).** If the firmware on a Bengle expects °C × 10, Crema would write a target 10× lower than intended (80 °C → wire 80 → device reads as 8.0 °C). reaprime's Bengle was developed against the Bengle FW; TCL's `set_cupwarmer_temperature` predates Bengles. | **HIGH** — if reaprime's encoding is correct, Crema cup-warmer would always under-target by 10×. Worth confirming against a real Bengle. |
+| `set_cup_warmer_temperature` (0x803874) | Crema clamps 0..=80 °C, byte_len=2, **raw integer °C** ([lib.rs:1188-1195](core/de1-app/src/lib.rs)) | `set_cupwarmer_temperature` writes raw int via `long_to_little_endian_hex $temp` byte_len=2 wire-bytes (`de1_comms.tcl:1184`) — no clamp | reaprime `BengleMmr.matSetPoint` is `scaledFloat readScale:0.1 writeScale:10.0` min:0 max:800 — wire value is **°C × 10** (`bengle_mmr.dart:12-21`) | **Crema follows TCL (raw °C) but disagrees with reaprime (°C × 10).** If the firmware on a Bengle expects °C × 10, Crema would write a target 10× lower than intended (80 °C → wire 80 → device reads as 8.0 °C). reaprime's Bengle was developed against the Bengle FW; TCL's `set_cupwarmer_temperature` predates Bengles. Open question drafted for upstream reaprime maintainers — see [`docs/42-reaprime-cup-warmer-question.md`](42-reaprime-cup-warmer-question.md). | **HIGH** — if reaprime's encoding is correct, Crema cup-warmer would always under-target by 10×. Worth confirming against a real Bengle. |
 | `ShotSettings` group_temp clamp | Crema clamps `group_temp_c` to 0..=105 °C, all other fields use wire-cap only ([lib.rs:805-818](core/de1-app/src/lib.rs)) | `range_check_shot_variables` (`vars.tcl:4181-4211`) clamps `espresso_temperature` 0..105 in the **settings layer**, not the wire layer | reaprime sends raw `groupTemp.toInt()` with no clamp (`unified_de1.dart:407-435`) | Crema applies the TCL clamp at the wire boundary; reaprime omits it entirely. Crema-stricter than reaprime, matches TCL semantics. | LOW (Crema-stricter). |
 | `ShotSettings` steam_temp clamp | Crema: values in `(0, 130)` snap to 0 (heater off), values > 170 clamp to 170 ([lib.rs:805-818](core/de1-app/src/lib.rs)) | `binary.tcl:184-186` forces `<135` → 0 (turn the heater off) — Crema picks 130 not 135 as the threshold | reaprime sends raw, no clamp | Crema's 130 threshold is 5 °C lower than TCL's 135 (intentional per code comment — keeps a wider "valid steam" band) and stricter than reaprime. | LOW (Crema-stricter, intentional). |
 | `ShotSettings` hot_water_temp clamp | Crema clamps 0..=100 °C ([lib.rs:805-818](core/de1-app/src/lib.rs)) | TCL: no clamp at this layer | reaprime: no clamp | Crema-stricter than both — prevents the firmware boiling its hot-water boiler. | LOW (Crema-stricter, defends fw). |
@@ -199,7 +200,6 @@ were reverse-engineered from a packet capture and have no canonical reference.
 | **Bookoo set_auto_stop_mode** (cmd `0x0B`) | `bookoo::set_auto_stop_mode(FlowStop|CupRemoval)` ([bookoo.rs:314-316](core/de1-scale/src/bookoo.rs)) | n/a | n/a | BLE-HCI capture. **LOW** — affects scale timer auto-stop behaviour. |
 | **Bookoo set_anti_mistouch** (cmd `0x10`) | `bookoo::set_anti_mistouch(enabled)` ([bookoo.rs:323-325](core/de1-scale/src/bookoo.rs)) | n/a | n/a | BLE-HCI capture. **LOW** — toggles scale button anti-mistouch only. |
 | **Bookoo query commands** (`0x0A` serial, `0x0F` settings) | `bookoo::QUERY_SERIAL` and `QUERY_SETTINGS` ([bookoo.rs:195,200](core/de1-scale/src/bookoo.rs)) — pushed at scale-connect time | n/a | n/a | BLE-HCI capture. **LOW** — query, not state-change. |
-| **Decent Scale POWER_OFF** (`[0x03,0x0A,0x02,0x00,0x00,0x00,0x0B]`) | `decent_scale::POWER_OFF` gated behind Decent firmware v1.2+ ([decent_scale.rs:105](core/de1-scale/src/decent_scale.rs)) | `decentscale_disable_lcd` sends `0A 02` if `keep_scale_on=0` (`bluetooth.tcl:1289,1299`) — TCL sends the `0A 02` command via `decent_scale_make_command` and trusts the scale to handle it | reaprime decent_scale doesn't expose a remote power-off | The exact 7-byte packet differs from TCL (TCL uses `0A 02` with the XOR rebuilt; Crema declares the bytes as a const). The firmware-version gate is Crema-original — no reference impl gates the same way. **LOW** — Crema's gate is conservative (only sends to v1.2+). |
 | **`FWMapRequest::erase`** (cuuid_09, 7 bytes) | `FWMapRequest::erase(slot)` ([firmware.rs:70-77](core/de1-protocol/src/firmware.rs)) | `de1_erase_firmware` writes via `de1_comm write "FWMapRequest"` (`de1_comms.tcl:912`) | reaprime `_updateFirmware` calls `_eraseFirmware` (`unified_de1.firmware.dart`) | TCL + reaprime both invoke the same packet shape via their firmware-update orchestrator, but **Crema's `firmware.rs` codec is currently a library only** — no `CremaCore` method writes one yet. Firmware update is a v2 feature; the codec is verified by test but the wire path has no driver. **MEDIUM** — when wired up, needs the orchestrator parity to match TCL's batched write/verify loop (`firmware_upload_next`). |
 | **`firmware_write_frame`** (cuuid_06 stream) | `firmware_write_frame(offset, chunk)` ([firmware.rs:159-173](core/de1-protocol/src/firmware.rs)) — encodes one 20-byte WriteToMMR packet | `firmware_upload_next` loops chunks via `de1_comm write WriteToMMR` (`de1_comms.tcl:988`) | reaprime `_updateFirmware` does the same | Same situation as `FWMapRequest::erase` — codec exists, no driver. **MEDIUM**. |
 | **`FWMapRequest::map` / `request_first_error`** | codec methods ([firmware.rs:80-99](core/de1-protocol/src/firmware.rs)) | TCL drives these inside `firmware_upload_next` | reaprime drives these in `_updateFirmware` | Same as above. **MEDIUM**. |
@@ -223,6 +223,8 @@ Ordered by risk:
    shipped after legacy TCL stopped tracking it, so reaprime is the
    newer reference. If reaprime is right, Crema's cup-warmer writes
    80°C as raw 80 and the firmware reads 8.0 °C — a silent 10× under-set.
+   Open question drafted for upstream reaprime maintainers at
+   [`docs/42-reaprime-cup-warmer-question.md`](42-reaprime-cup-warmer-question.md).
 2. **Wire up the firmware OTA driver** ([Bucket 3 rows 9-11](#bucket-3--unverified)).
    The protocol codecs (`FWMapRequest`, `firmware_write_frame`) exist and
    are unit-tested, but no `CremaCore` public method drives them.
