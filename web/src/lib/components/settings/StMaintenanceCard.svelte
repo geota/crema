@@ -27,7 +27,8 @@
 		onRun,
 		runLabel,
 		runDisabled = false,
-		runDisabledReason
+		runDisabledReason,
+		wide = false
 	}: {
 		icon: string;
 		title: string;
@@ -39,16 +40,19 @@
 		onComplete?: () => void;
 		/** Fires when the user taps the "Run now" button. Omit to hide the button. */
 		onRun?: () => void;
-		/** Label for the run-now button (e.g. `'Run descale'`). */
+		/** Label for the run-now button (e.g. `'Run'`). */
 		runLabel?: string;
 		/** Whether the run-now button is disabled (machine not in a runnable state). */
 		runDisabled?: boolean;
 		/** Hover tooltip explaining why the button is disabled. */
 		runDisabledReason?: string;
+		/** Span the full grid row. Used by the Water-filter card to fill a
+		 * second row alone, centering its text in a long-shallow tile. */
+		wide?: boolean;
 	} = $props();
 </script>
 
-<div class="st-maint">
+<div class="st-maint" class:is-wide={wide}>
 	<div class="st-maint-head">
 		<i class={'ph-duotone ph-' + icon} aria-hidden="true"></i>
 		<div class="st-maint-title">{title}</div>
@@ -96,5 +100,28 @@
 	.st-maint-action:disabled {
 		opacity: 0.5;
 		cursor: not-allowed;
+	}
+	/* Long-shallow variant: span the full 3-column row, center the body
+	   text so the wider tile doesn't look left-anchored, and switch the
+	   internal stack to a horizontal layout so the card stays shallow. */
+	:global(.st-maint.is-wide) {
+		grid-column: 1 / -1;
+		display: grid;
+		grid-template-columns: auto auto 1fr auto;
+		align-items: center;
+		gap: 16px;
+		padding: 14px 18px;
+	}
+	:global(.st-maint.is-wide .st-maint-head),
+	:global(.st-maint.is-wide .st-maint-state),
+	:global(.st-maint.is-wide .st-maint-metric),
+	:global(.st-maint.is-wide .st-maint-detail) {
+		margin: 0;
+	}
+	:global(.st-maint.is-wide .st-maint-detail) {
+		text-align: left;
+	}
+	:global(.st-maint.is-wide .st-maint-actions) {
+		margin-left: auto;
 	}
 </style>

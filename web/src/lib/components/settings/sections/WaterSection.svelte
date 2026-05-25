@@ -177,17 +177,23 @@
 />
 
 <div class="st-maint-grid">
+	<!-- 3-cycle row across the top; the Water filter card spans the full
+	     3-column row below them. Cycles share a Run button; the filter is
+	     a Mark-complete-only physical action. The layout puts the three
+	     wire-triggered actions together and leaves the filter as a wide
+	     "long shallow" tile with no orphan column on the second row. -->
 	<StMaintenanceCard
-		icon="funnel"
-		title="Water filter"
-		state={readout.filterOk
-			? `${Math.round(readout.filterPercent)}% capacity left`
-			: 'Clean now'}
-		stateOk={readout.filterOk}
-		metric={`${Math.round(readout.filterPercent)}%`}
-		metricLabel="capacity left"
-		detail={`${readout.filterUsedLitres.toFixed(1)} L of ${m.filterCapacityLitres} L used · last cleaned ${shortDate(m.filterAtMs)}`}
-		onComplete={() => maintenance.markFilterCleaned()}
+		icon="wind"
+		title="Steam rinse"
+		state="Manual"
+		stateOk={true}
+		metric="—"
+		metricLabel="purge the steam line"
+		detail="Clears any residual milk from the steam wand. Run it after every steam session."
+		onRun={() => openCycle('steamrinse')}
+		runLabel="Run"
+		{runDisabled}
+		{runDisabledReason}
 	/>
 	<StMaintenanceCard
 		icon="snowflake"
@@ -199,7 +205,7 @@
 		detail={`Threshold: ${m.descaleIntervalLitres} L · last descaled ${shortDate(m.descaleAtMs)}`}
 		onComplete={() => maintenance.markDescaled()}
 		onRun={() => openCycle('descale')}
-		runLabel="Run descale"
+		runLabel="Run"
 		{runDisabled}
 		{runDisabledReason}
 	/>
@@ -213,22 +219,22 @@
 		detail={`Recommended every ${m.cleanIntervalHours} hr · last done ${shortDate(m.cleanAtMs)}`}
 		onComplete={() => maintenance.markCleaned()}
 		onRun={() => openCycle('clean')}
-		runLabel="Run clean"
+		runLabel="Run"
 		{runDisabled}
 		{runDisabledReason}
 	/>
 	<StMaintenanceCard
-		icon="wind"
-		title="Steam rinse"
-		state="Manual"
-		stateOk={true}
-		metric="—"
-		metricLabel="purge the steam line"
-		detail="Clears any residual milk from the steam wand. Run it after every steam session."
-		onRun={() => openCycle('steamrinse')}
-		runLabel="Run steam rinse"
-		{runDisabled}
-		{runDisabledReason}
+		icon="funnel"
+		title="Water filter"
+		state={readout.filterOk
+			? `${Math.round(readout.filterPercent)}% capacity left`
+			: 'Clean now'}
+		stateOk={readout.filterOk}
+		metric={`${Math.round(readout.filterPercent)}%`}
+		metricLabel="capacity left"
+		detail={`${readout.filterUsedLitres.toFixed(1)} L of ${m.filterCapacityLitres} L used · last cleaned ${shortDate(m.filterAtMs)}`}
+		onComplete={() => maintenance.markFilterCleaned()}
+		wide
 	/>
 </div>
 
@@ -298,7 +304,7 @@
 >
 	<StRow
 		title="Filter capacity"
-		sub="Replace the inline filter after this many litres pass through it."
+		sub="Clean the inline filter after this many litres pass through it."
 	>
 		{#snippet control()}
 			<StStepper
