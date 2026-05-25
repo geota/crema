@@ -70,15 +70,11 @@ cp web/.env.example web/.env.local
 # Edit web/.env.local — paste your VITE_VISUALIZER_CLIENT_ID
 ```
 
-`web/.env.local` is `.gitignore`-d.
-
 ### Build for production
 
 ```bash
 pnpm build         # static site → web/build/
 ```
-
-Deploy `web/build/` to any static host (Cloudflare Pages, Netlify, GitHub Pages, S3 + CloudFront, etc.). PWA install + offline cache rides automatically.
 
 ### Run the test suite
 
