@@ -37,6 +37,14 @@ Thumbs.db
 # implementation history, design rationale, and migration notes.
 docs/
 
+# Internal design / design-backup artefacts — kept locally as a working
+# reference (chats, JSX prototypes, screen handoffs) but not part of the
+# public repo. History was rewritten via `git filter-branch` to remove
+# them from past commits as well, so cloning a fresh checkout doesn't
+# resurrect them.
+design/
+design-backup-20260518/
+
 # Defensive env-file pattern — covers any future subdirectory that might
 # carry secrets. The web/ shell already excludes `.env.local` via its own
 # .gitignore; this root entry catches strays from new sub-projects.
