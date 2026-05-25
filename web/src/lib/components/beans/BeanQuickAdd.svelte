@@ -345,11 +345,35 @@
 		display: flex;
 		flex-direction: column;
 		gap: 8px;
-		align-items: flex-end;
+		/* Stretch so the stepper and the preset row share one column
+		   width — they visually align as one block. (Was `flex-end`,
+		   which left the stepper at its intrinsic width and made the
+		   preset row look orphaned underneath.) */
+		align-items: stretch;
+		/* A modest min-width keeps the preset row from collapsing into
+		   two lines on narrow viewports. */
+		min-width: 260px;
 	}
 	.bn-fld-bag-presets {
-		display: inline-flex;
+		display: flex;
+		justify-content: space-between;
 		gap: 4px;
+		width: 100%;
+	}
+	.bn-fld-bag-presets .bn-preset {
+		flex: 1;
+		text-align: center;
+	}
+	/* Keep the stepper at the column width on click — the inline
+	   number editor inherits `width: 100%` from the QStepper's
+	   `.qcs-num-input`, which inside a `flex: 1` `.qcs-val` cell does
+	   not change the row width. Explicit here so a future tweak to
+	   the stepper internals can't widen the row on focus. */
+	.bn-fld-bag :global(.qcs) {
+		width: 100%;
+	}
+	.bn-fld-bag :global(.qcs-row) {
+		width: 100%;
 	}
 	.bn-preset {
 		background: rgba(var(--tint-rgb), 0.04);

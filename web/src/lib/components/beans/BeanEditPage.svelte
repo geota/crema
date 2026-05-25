@@ -256,9 +256,10 @@
 	}
 
 	// Bag-size presets, ordered ascending — covers the most common retail
-	// sizes from the tiny 113g sampler through to the 5lb (2268g) wholesale
-	// brick. 907g (2lb) is omitted to keep the row from wrapping.
-	const BAG_PRESETS = [113, 227, 250, 340, 454, 1000, 2268] as const;
+	// sizes from the tiny 113g sampler through to the 1kg home-bulk bag.
+	// 907g (2lb) is omitted to keep the row from wrapping; the 5lb (2268g)
+	// wholesale brick is excluded since it's seldom a home unit.
+	const BAG_PRESETS = [113, 227, 250, 340, 454, 1000] as const;
 
 	function setRoastLevel(n: number): void {
 		patch({ roastLevel: Math.max(1, Math.min(10, Math.round(n))) });
@@ -582,13 +583,25 @@
 						</div>
 						<div class="be-frow-r">
 							<StToggle
-								on={!!current.frozenOn && !current.defrostedOn}
+								on={!!current.frozenOn}
 								onChange={(v) => {
-									const today = new Date().toISOString().slice(0, 10);
 									if (v) {
+										// Flip ON — surface the date pickers with empty
+										// values so the user fills them in. (The frozenOn
+										// being non-null is what reveals the picker row,
+										// so we seed with `null` and let the user pick.)
+										//
+										// To make the `{#if current.frozenOn}` reveal
+										// trigger we seed `frozenOn` with today's date —
+										// the user can edit it. defrostedOn stays null.
+										const today = new Date().toISOString().slice(0, 10);
 										patch({ frozenOn: today, defrostedOn: null });
-									} else if (current.frozenOn) {
-										patch({ defrostedOn: today });
+									} else {
+										// Flip OFF — hide the pickers AND clear the
+										// stored dates so toggling back on starts from
+										// a clean slate rather than re-showing the
+										// previous values.
+										patch({ frozenOn: null, defrostedOn: null });
 									}
 								}}
 								label="Frozen"
@@ -603,7 +616,7 @@
 								</div>
 								<div class="be-frow-r">
 									<input
-										class="be-input"
+										class="be-input be-input-date"
 										type="date"
 										value={current.frozenOn ?? ''}
 										onchange={(e) =>
@@ -620,7 +633,7 @@
 								</div>
 								<div class="be-frow-r">
 									<input
-										class="be-input"
+										class="be-input be-input-date"
 										type="date"
 										value={current.defrostedOn ?? ''}
 										onchange={(e) =>
@@ -1354,6 +1367,11 @@
 		color-scheme: dark;
 		width: 100%;
 		box-sizing: border-box;
+		/* Match the QStepper's `.qcs-row` height (4px padding + 36px
+		   button + 4px padding = 44px) so an `<input>` and a stepper
+		   sitting in adjacent grid cells line up vertically with no
+		   per-row tweaks. */
+		min-height: 44px;
 	}
 	.be-input:focus {
 		border-color: var(--copper-400);
@@ -1419,11 +1437,13 @@
 		background: var(--copper-500);
 		color: var(--fg-on-accent);
 	}
-	/* Date input — used for the Roasted on / Opened on rows. Keeps a
-	   stable width so two date pickers in a be-grid2 line up regardless
-	   of locale-driven content length. */
+	/* Date input — used for the Roasted on / Opened on rows. Inherits
+	   `width: 100%` from `.be-input` so two date pickers in a `.be-grid2`
+	   split the card width equally (when wrapped to a single column they
+	   each fill the column). No hardcoded pixel cap — locale-driven
+	   content length is handled by the browser's date control. */
 	.be-input-date {
-		max-width: 220px;
+		width: 100%;
 	}
 
 	/* Flag row */
