@@ -415,10 +415,7 @@ mod tests {
         // API 4, Sha = 0xDEADBEEF. FW block has Sha = 0x12345678, distinct
         // from BLE, so the "+ FW v…" suffix is appended.
         let v = Version::decode(&version_packet()).unwrap();
-        assert_eq!(
-            v.firmware_string(),
-            "v1.0.10 (API 4) + FW v1.0.142 (API 4)"
-        );
+        assert_eq!(v.firmware_string(), "v1.0.10 (API 4) + FW v1.0.142 (API 4)");
     }
 
     #[test]

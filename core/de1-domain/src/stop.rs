@@ -348,8 +348,7 @@ mod tests {
         let mut stop = AutoStop::new(targets, config, Duration::ZERO);
         // A ramp climbing past the target eventually trips SAW.
         let triggered = (0..20u8).any(|k| {
-            stop.on_weight(30.0 + f32::from(k), ms(u64::from(k) * 100))
-                == Some(StopReason::Weight)
+            stop.on_weight(30.0 + f32::from(k), ms(u64::from(k) * 100)) == Some(StopReason::Weight)
         });
         assert!(triggered);
     }
@@ -393,10 +392,7 @@ mod tests {
         };
         let mut stop = AutoStop::new(targets, immediate_config(), Duration::ZERO);
         assert_eq!(stop.on_weight(999.0, ms(1000)), None);
-        assert_eq!(
-            stop.on_sample(&sample_with_flow(99.0), ms(2000), 0.0),
-            None
-        );
+        assert_eq!(stop.on_sample(&sample_with_flow(99.0), ms(2000), 0.0), None);
         assert!(!stop.has_triggered());
     }
 

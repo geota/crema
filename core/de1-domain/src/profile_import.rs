@@ -128,7 +128,10 @@ struct V2Profile {
     /// emits `"2"` (the contract), but many older community profiles
     /// emit a bare integer `2` (de1app TCL JSON dumper drops the
     /// quotes). Both deserialize to `"2"`.
-    #[serde(default = "default_v2_version_string", deserialize_with = "deserialize_version_string")]
+    #[serde(
+        default = "default_v2_version_string",
+        deserialize_with = "deserialize_version_string"
+    )]
     version: String,
 }
 
@@ -169,7 +172,9 @@ where
 {
     use serde::Deserialize as _;
     let raw = Option::<String>::deserialize(deserializer)?;
-    let Some(s) = raw else { return Ok(BeverageType::Espresso) };
+    let Some(s) = raw else {
+        return Ok(BeverageType::Espresso);
+    };
     Ok(match s.trim().to_ascii_lowercase().as_str() {
         "calibrate" => BeverageType::Calibrate,
         "cleaning" => BeverageType::Cleaning,

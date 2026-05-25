@@ -389,10 +389,7 @@ impl Scale {
     /// extracted from a `0x0A` reply — see
     /// [`decent_scale::parse_command_response`]). No-op for every other
     /// scale.
-    pub fn record_decent_scale_firmware_version(
-        &mut self,
-        version: DecentScaleFirmwareVersion,
-    ) {
+    pub fn record_decent_scale_firmware_version(&mut self, version: DecentScaleFirmwareVersion) {
         if let Inner::Decent(state) = &mut self.inner {
             state.record_firmware_version(version);
         }
@@ -850,11 +847,8 @@ mod tests {
         let packet: Vec<u8> = (0.."030b000000012b00c06c2b312f64009601000048".len())
             .step_by(2)
             .map(|i| {
-                u8::from_str_radix(
-                    &"030b000000012b00c06c2b312f64009601000048"[i..i + 2],
-                    16,
-                )
-                .unwrap()
+                u8::from_str_radix(&"030b000000012b00c06c2b312f64009601000048"[i..i + 2], 16)
+                    .unwrap()
             })
             .collect();
         let reading = bookoo.parse_reading(&packet).expect("20-byte packet");
@@ -1026,19 +1020,25 @@ mod tests {
         assert!(caps.reports_flow);
         assert!(caps.reports_timer);
         assert_eq!(caps.volume, Some(RangeCapability { min: 0, max: 3 }));
-        assert_eq!(
-            caps.standby,
-            Some(RangeCapability { min: 5, max: 30 })
-        );
+        assert_eq!(caps.standby, Some(RangeCapability { min: 5, max: 30 }));
         assert!(caps.flow_smoothing);
         assert!(caps.anti_mistouch);
         assert!(caps.auto_stop);
         assert_eq!(
             caps.modes,
             vec![
-                ModeInfo { id: 0, name: "Flow Rate".to_owned() },
-                ModeInfo { id: 1, name: "Timer".to_owned() },
-                ModeInfo { id: 2, name: "Auto".to_owned() },
+                ModeInfo {
+                    id: 0,
+                    name: "Flow Rate".to_owned()
+                },
+                ModeInfo {
+                    id: 1,
+                    name: "Timer".to_owned()
+                },
+                ModeInfo {
+                    id: 2,
+                    name: "Auto".to_owned()
+                },
             ]
         );
     }

@@ -43,8 +43,7 @@ mod tests {
     /// The canonical UUID v7 form — 8-4-4-4-12 lowercase hex, version
     /// nibble `7`, variant nibble in `{8,9,a,b}`. Mirrors the regex the
     /// TS shell tests use.
-    const UUID_V7: &str =
-        r"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$";
+    const UUID_V7: &str = r"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$";
 
     fn matches_v7(id: &str) -> bool {
         // Hand-rolled tiny matcher to avoid an extra regex dep.

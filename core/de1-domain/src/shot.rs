@@ -368,7 +368,8 @@ mod tests {
     #[test]
     fn entering_espresso_starts_a_shot() {
         let mut monitor = ShotMonitor::new();
-        let events = monitor.on_state_info(state(MachineState::Espresso, SubState::Heating), ms(1000));
+        let events =
+            monitor.on_state_info(state(MachineState::Espresso, SubState::Heating), ms(1000));
         assert!(events.contains(&ShotEvent::Started));
         assert!(monitor.is_shot_in_progress());
         assert_eq!(monitor.phase(), ShotPhase::Heating);
@@ -377,8 +378,12 @@ mod tests {
     #[test]
     fn phase_transitions_are_reported() {
         let mut monitor = ShotMonitor::new();
-        monitor.on_state_info(state(MachineState::Espresso, SubState::Preinfusion), ms(1000));
-        let events = monitor.on_state_info(state(MachineState::Espresso, SubState::Pouring), ms(2000));
+        monitor.on_state_info(
+            state(MachineState::Espresso, SubState::Preinfusion),
+            ms(1000),
+        );
+        let events =
+            monitor.on_state_info(state(MachineState::Espresso, SubState::Pouring), ms(2000));
         assert_eq!(events, vec![ShotEvent::PhaseChanged(ShotPhase::Pouring)]);
     }
 
@@ -402,7 +407,10 @@ mod tests {
     #[test]
     fn a_full_shot_yields_a_record_with_samples_and_duration() {
         let mut monitor = ShotMonitor::new();
-        monitor.on_state_info(state(MachineState::Espresso, SubState::Preinfusion), ms(1000));
+        monitor.on_state_info(
+            state(MachineState::Espresso, SubState::Preinfusion),
+            ms(1000),
+        );
         monitor.on_sample(&sample(0), ms(1200));
         monitor.on_sample(&sample(0), ms(3000));
         let done = monitor.on_state_info(state(MachineState::Idle, SubState::Ready), ms(5000));

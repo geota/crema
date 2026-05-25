@@ -630,10 +630,7 @@ mod tests {
         // The bridge serializes a profile to JSON and deserializes it back;
         // pin that round-trip and then confirm the result still assembles
         // identically.
-        let original = profile(vec![
-            step("a", Pump::Pressure),
-            step("b", Pump::Flow),
-        ]);
+        let original = profile(vec![step("a", Pump::Pressure), step("b", Pump::Flow)]);
         let json = serde_json::to_string(&original).unwrap();
         let restored: Profile = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.assemble(), original.assemble());

@@ -109,12 +109,18 @@ mod tests {
 
     #[test]
     fn battery_minimum_raw_decodes_to_0_percent() {
-        assert_eq!(parse_battery_percent(&frame_with_battery(MIN_BATTERY_RAW)), Some(0));
+        assert_eq!(
+            parse_battery_percent(&frame_with_battery(MIN_BATTERY_RAW)),
+            Some(0)
+        );
     }
 
     #[test]
     fn battery_maximum_raw_decodes_to_100_percent() {
-        assert_eq!(parse_battery_percent(&frame_with_battery(MAX_BATTERY_RAW)), Some(100));
+        assert_eq!(
+            parse_battery_percent(&frame_with_battery(MAX_BATTERY_RAW)),
+            Some(100)
+        );
     }
 
     #[test]
@@ -138,7 +144,10 @@ mod tests {
     #[test]
     fn battery_rejects_a_short_frame() {
         // A 9-byte frame carries weight but not the battery byte at [15].
-        assert_eq!(parse_battery_percent(&[1, 2, b'+', b'0', b'0', b'1', b'8', b'0', b'0']), None);
+        assert_eq!(
+            parse_battery_percent(&[1, 2, b'+', b'0', b'0', b'1', b'8', b'0', b'0']),
+            None
+        );
     }
 
     #[test]

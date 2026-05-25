@@ -33,7 +33,9 @@ use typeshare::typeshare;
 /// shape through the bridge means the shell can pass its existing pref
 /// straight through without a lookup table.
 #[typeshare]
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Default, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum WeightUnit {
     /// Grams — the canonical unit and the Decent Scale's default LCD mode.

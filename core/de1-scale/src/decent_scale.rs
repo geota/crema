@@ -386,7 +386,10 @@ mod tests {
         // 01 01 01 01`) at `de1plus/bluetooth.tcl:1277`. Byte [4] (`0x01`)
         // is the ounces / grams unit flag; byte [5] still arms the
         // heartbeat requirement.
-        assert_eq!(LCD_ENABLE_OUNCES, [0x03, 0x0A, 0x01, 0x01, 0x01, 0x01, 0x09]);
+        assert_eq!(
+            LCD_ENABLE_OUNCES,
+            [0x03, 0x0A, 0x01, 0x01, 0x01, 0x01, 0x09]
+        );
         assert_eq!(LCD_ENABLE_OUNCES[6], xor_checksum(LCD_ENABLE_OUNCES));
         // The only byte that differs from the grams variant is [4].
         let mut grams = LCD_ENABLE_GRAMS;

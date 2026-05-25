@@ -122,11 +122,7 @@ fn puck_resistance(group_pressure_bar: f32, group_flow_ml_per_s: f32) -> Option<
         return None;
     }
     let r = group_pressure_bar / (group_flow_ml_per_s * group_flow_ml_per_s);
-    if r.is_finite() {
-        Some(r)
-    } else {
-        None
-    }
+    if r.is_finite() { Some(r) } else { None }
 }
 
 /// Puck resistance computed from the *scale's* mass-flow rate rather than
@@ -149,10 +145,7 @@ fn puck_resistance(group_pressure_bar: f32, group_flow_ml_per_s: f32) -> Option<
 /// [`RESISTANCE_WEIGHT_FLOW_FLOOR_G_PER_S`] or any input is non-finite —
 /// same guard the DE1-flow sibling carries, for the same noisy-low-flow
 /// reason.
-fn puck_resistance_weight(
-    group_pressure_bar: f32,
-    weight_flow_g_per_s: f32,
-) -> Option<f32> {
+fn puck_resistance_weight(group_pressure_bar: f32, weight_flow_g_per_s: f32) -> Option<f32> {
     if !group_pressure_bar.is_finite() || !weight_flow_g_per_s.is_finite() {
         return None;
     }
@@ -160,11 +153,7 @@ fn puck_resistance_weight(
         return None;
     }
     let r = group_pressure_bar / (weight_flow_g_per_s * weight_flow_g_per_s);
-    if r.is_finite() {
-        Some(r)
-    } else {
-        None
-    }
+    if r.is_finite() { Some(r) } else { None }
 }
 
 /// Running peak / final-weight accumulator for one shot.
@@ -469,7 +458,8 @@ impl CremaCore {
     /// value (if any), else `None` — in which case the integrator falls
     /// back to host-clock `dt` (BLE-jitter contaminated, ~5% volume drift).
     pub fn line_frequency_hz(&self) -> Option<f32> {
-        self.line_freq_override.or(self.line_freq_detector.locked_hz())
+        self.line_freq_override
+            .or(self.line_freq_detector.locked_hz())
     }
 
     /// Pin the AC mains frequency. `Some(50.0)` / `Some(60.0)` overrides
@@ -696,19 +686,16 @@ impl CremaCore {
     /// Refused while a firmware upload is in progress
     /// (see [`firmware_locks_writes`](Self::firmware_locks_writes)) — emits
     /// one [`Event::FirmwareLockoutHit`] and no command.
-    pub fn write_calibration(
-        &self,
-        target: CalTarget,
-        reported: f32,
-        measured: f32,
-    ) -> CoreOutput {
+    pub fn write_calibration(&self, target: CalTarget, reported: f32, measured: f32) -> CoreOutput {
         if let Some(out) = self.refuse_if_firmware_locked("write_calibration") {
             return out;
         }
         let mut out = CoreOutput::default();
         out.commands.push(Command::WriteCharacteristic {
             target: WriteTarget::De1Calibration,
-            data: Calibration::write(target, reported, measured).encode().to_vec(),
+            data: Calibration::write(target, reported, measured)
+                .encode()
+                .to_vec(),
         });
         out
     }
@@ -1161,11 +1148,7 @@ impl CremaCore {
                 RESET_CAL_FLOW_EST_RAW,
                 4,
             ),
-            (
-                MmrRegister::SteamTwoTapStop,
-                RESET_STEAM_PURGE_MODE_RAW,
-                4,
-            ),
+            (MmrRegister::SteamTwoTapStop, RESET_STEAM_PURGE_MODE_RAW, 4),
         ];
 
         let mut out = CoreOutput::default();
@@ -1472,11 +1455,7 @@ impl CremaCore {
     /// Shared by the three public timer methods and the auto-policy in
     /// [`map_shot_event`](Self::map_shot_event). Returns silently when the
     /// scale is `None` or its codec returns `None` for the command.
-    fn push_timer_command(
-        scale: &Option<Scale>,
-        command: TimerCommand,
-        out: &mut CoreOutput,
-    ) {
+    fn push_timer_command(scale: &Option<Scale>, command: TimerCommand, out: &mut CoreOutput) {
         if let Some(scale) = scale
             && let Some(data) = scale.timer(command)
         {
@@ -1666,11 +1645,7 @@ impl CremaCore {
     pub fn set_eureka_precisa_unit(&self, unit: WeightUnit) -> CoreOutput {
         let mut out = CoreOutput::default();
         if matches!(unit, WeightUnit::Grams) {
-            Self::push_eureka_precisa_write(
-                &self.scale,
-                &eureka_precisa::SET_UNIT_GRAMS,
-                &mut out,
-            );
+            Self::push_eureka_precisa_write(&self.scale, &eureka_precisa::SET_UNIT_GRAMS, &mut out);
         }
         out
     }
@@ -2160,11 +2135,7 @@ impl CremaCore {
                         Self::push_skale_write(&self.scale, &[skale::CMD_SCREEN_ON], out);
                         Self::push_skale_write(&self.scale, &[skale::CMD_DISPLAY_WEIGHT], out);
                         if matches!(self.weight_unit_pref, WeightUnit::Grams) {
-                            Self::push_skale_write(
-                                &self.scale,
-                                &[skale::CMD_ENABLE_GRAMS],
-                                out,
-                            );
+                            Self::push_skale_write(&self.scale, &[skale::CMD_ENABLE_GRAMS], out);
                             // Eureka Precisa / Solo Barista also accept a
                             // "set unit to grams" command — fire it on
                             // Idle entry when the pref is grams so the
@@ -2177,11 +2148,7 @@ impl CremaCore {
                         }
                     }
                     MachineState::Sleep => {
-                        Self::push_decent_scale_write(
-                            &self.scale,
-                            &decent_scale::LCD_DISABLE,
-                            out,
-                        );
+                        Self::push_decent_scale_write(&self.scale, &decent_scale::LCD_DISABLE, out);
                         Self::push_skale_write(&self.scale, &[skale::CMD_SCREEN_OFF], out);
                         // Eureka Precisa auto-off on Sleep is an opt-in
                         // setting (default off); fire `TURN_OFF` only when
@@ -2298,9 +2265,7 @@ impl CremaCore {
         //   the same command but keeps parsing — the weight is still a
         //   valid numeric reading; it's the unit display that needs
         //   nudging.
-        if scale.is_hiroia_jimmy()
-            && hiroia_jimmy::is_non_grams_mode(data) == Some(true)
-        {
+        if scale.is_hiroia_jimmy() && hiroia_jimmy::is_non_grams_mode(data) == Some(true) {
             out.commands.push(Command::WriteScale {
                 data: hiroia_jimmy::TOGGLE_UNIT.to_vec(),
             });
@@ -2517,8 +2482,7 @@ impl CremaCore {
         // then the tail (whose FrameToWrite == frame_count). The header is
         // not acked separately.
         let frame_count = assembled.header.frame_count;
-        let extension_count =
-            u8::try_from(assembled.extension_frames.len()).unwrap_or(u8::MAX);
+        let extension_count = u8::try_from(assembled.extension_frames.len()).unwrap_or(u8::MAX);
         let mut expected_acks =
             Vec::with_capacity(usize::from(frame_count) + usize::from(extension_count) + 1);
         for i in 0..frame_count {
@@ -2634,7 +2598,10 @@ impl CremaCore {
         if byte != expected {
             self.profile_upload = None;
             out.events.push(Event::ProfileUploadFailed {
-                reason: ProfileUploadFailure::UnexpectedAck { expected, got: byte },
+                reason: ProfileUploadFailure::UnexpectedAck {
+                    expected,
+                    got: byte,
+                },
             });
             return;
         }
@@ -3022,7 +2989,9 @@ mod tests {
         let mut core = CremaCore::new();
         core.on_notification(Source::De1State, &[4, 5], 1_000);
         let out = core.on_notification(Source::De1ShotSample, &SAMPLE, 3_500);
-        let Some(Event::Telemetry { resistance_weight, .. }) = out
+        let Some(Event::Telemetry {
+            resistance_weight, ..
+        }) = out
             .events
             .iter()
             .find(|e| matches!(e, Event::Telemetry { .. }))
@@ -3356,7 +3325,11 @@ mod tests {
     #[test]
     fn the_decent_scale_writes_are_silent_with_no_scale_connected() {
         let core = CremaCore::new();
-        assert!(core.enable_decent_scale_lcd(WeightUnit::Grams).commands.is_empty());
+        assert!(
+            core.enable_decent_scale_lcd(WeightUnit::Grams)
+                .commands
+                .is_empty()
+        );
         assert!(core.disable_decent_scale_lcd().commands.is_empty());
         assert!(core.decent_scale_heartbeat().commands.is_empty());
     }
@@ -3367,7 +3340,11 @@ mod tests {
         // so connecting a Bookoo (or any other) must yield nothing.
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC");
-        assert!(core.enable_decent_scale_lcd(WeightUnit::Grams).commands.is_empty());
+        assert!(
+            core.enable_decent_scale_lcd(WeightUnit::Grams)
+                .commands
+                .is_empty()
+        );
         assert!(core.disable_decent_scale_lcd().commands.is_empty());
         assert!(core.decent_scale_heartbeat().commands.is_empty());
     }
@@ -3393,7 +3370,9 @@ mod tests {
         // Decent Scale — older firmware versions silently no-op on it.
         let mut core = CremaCore::new();
         core.connect_scale("Decent Scale ABC");
-        let out = core.power_off_decent_scale().expect("decent scale connected");
+        let out = core
+            .power_off_decent_scale()
+            .expect("decent scale connected");
         assert_eq!(the_only_scale_write(&out), decent_scale::POWER_OFF);
     }
 
@@ -3413,11 +3392,7 @@ mod tests {
         core.connect_scale("Decent Scale ABC");
         core.set_weight_unit_pref(WeightUnit::Ounces);
         core.on_notification(Source::De1State, &[MachineState::Sleep as u8, 0], 1_000);
-        let out = core.on_notification(
-            Source::De1State,
-            &[MachineState::Idle as u8, 0],
-            2_000,
-        );
+        let out = core.on_notification(Source::De1State, &[MachineState::Idle as u8, 0], 2_000);
         let writes: Vec<&[u8]> = out
             .commands
             .iter()
@@ -3439,16 +3414,8 @@ mod tests {
         // Transition Sleep -> Idle. The first state notification doesn't
         // emit (no prior state) but the second one — entering Idle from
         // Sleep — must fire the LCD-enable write.
-        core.on_notification(
-            Source::De1State,
-            &[MachineState::Sleep as u8, 0],
-            1_000,
-        );
-        let out = core.on_notification(
-            Source::De1State,
-            &[MachineState::Idle as u8, 0],
-            2_000,
-        );
+        core.on_notification(Source::De1State, &[MachineState::Sleep as u8, 0], 1_000);
+        let out = core.on_notification(Source::De1State, &[MachineState::Idle as u8, 0], 2_000);
         let writes: Vec<&[u8]> = out
             .commands
             .iter()
@@ -3469,16 +3436,8 @@ mod tests {
         core.connect_scale("Decent Scale ABC");
         // Transition Idle -> Sleep. The second notification — entering
         // Sleep from Idle — must fire the LCD-disable write.
-        core.on_notification(
-            Source::De1State,
-            &[MachineState::Idle as u8, 0],
-            1_000,
-        );
-        let out = core.on_notification(
-            Source::De1State,
-            &[MachineState::Sleep as u8, 0],
-            2_000,
-        );
+        core.on_notification(Source::De1State, &[MachineState::Idle as u8, 0], 1_000);
+        let out = core.on_notification(Source::De1State, &[MachineState::Sleep as u8, 0], 2_000);
         let writes: Vec<&[u8]> = out
             .commands
             .iter()
@@ -3499,16 +3458,8 @@ mod tests {
         // sees no LCD writes on the same state transitions.
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC");
-        core.on_notification(
-            Source::De1State,
-            &[MachineState::Sleep as u8, 0],
-            1_000,
-        );
-        let out = core.on_notification(
-            Source::De1State,
-            &[MachineState::Idle as u8, 0],
-            2_000,
-        );
+        core.on_notification(Source::De1State, &[MachineState::Sleep as u8, 0], 1_000);
+        let out = core.on_notification(Source::De1State, &[MachineState::Idle as u8, 0], 2_000);
         let lcd_writes: Vec<&[u8]> = out
             .commands
             .iter()
@@ -3521,7 +3472,10 @@ mod tests {
                     || *w == decent_scale::LCD_DISABLE.as_slice()
             })
             .collect();
-        assert!(lcd_writes.is_empty(), "unexpected LCD writes: {lcd_writes:?}");
+        assert!(
+            lcd_writes.is_empty(),
+            "unexpected LCD writes: {lcd_writes:?}"
+        );
     }
 
     // ----- PR G: per-scale parity sweep -----------------------------------
@@ -3591,11 +3545,7 @@ mod tests {
         let mut core = CremaCore::new();
         core.connect_scale("Skale-9");
         core.on_notification(Source::De1State, &[MachineState::Sleep as u8, 0], 1_000);
-        let out = core.on_notification(
-            Source::De1State,
-            &[MachineState::Idle as u8, 0],
-            2_000,
-        );
+        let out = core.on_notification(Source::De1State, &[MachineState::Idle as u8, 0], 2_000);
         let writes = scale_writes(&out);
         assert!(writes.contains(&[skale::CMD_SCREEN_ON].as_slice()));
         assert!(writes.contains(&[skale::CMD_DISPLAY_WEIGHT].as_slice()));
@@ -3606,11 +3556,7 @@ mod tests {
         let mut core = CremaCore::new();
         core.connect_scale("Skale-9");
         core.on_notification(Source::De1State, &[MachineState::Idle as u8, 0], 1_000);
-        let out = core.on_notification(
-            Source::De1State,
-            &[MachineState::Sleep as u8, 0],
-            2_000,
-        );
+        let out = core.on_notification(Source::De1State, &[MachineState::Sleep as u8, 0], 2_000);
         let writes = scale_writes(&out);
         assert!(writes.contains(&[skale::CMD_SCREEN_OFF].as_slice()));
     }
@@ -3671,7 +3617,11 @@ mod tests {
         core.connect_scale("BOOKOO_SC");
         assert!(core.turn_off_eureka_precisa().commands.is_empty());
         assert!(core.beep_eureka_precisa().commands.is_empty());
-        assert!(core.set_eureka_precisa_unit(WeightUnit::Grams).commands.is_empty());
+        assert!(
+            core.set_eureka_precisa_unit(WeightUnit::Grams)
+                .commands
+                .is_empty()
+        );
     }
 
     #[test]
@@ -3686,11 +3636,7 @@ mod tests {
         core.connect_scale("CFS-9002");
         core.set_eureka_precisa_auto_off_on_sleep(true);
         core.on_notification(Source::De1State, &[MachineState::Idle as u8, 0], 1_000);
-        let out = core.on_notification(
-            Source::De1State,
-            &[MachineState::Sleep as u8, 0],
-            2_000,
-        );
+        let out = core.on_notification(Source::De1State, &[MachineState::Sleep as u8, 0], 2_000);
         let writes = scale_writes(&out);
         assert!(writes.contains(&eureka_precisa::TURN_OFF.as_slice()));
     }
@@ -3700,11 +3646,7 @@ mod tests {
         let mut core = CremaCore::new();
         core.connect_scale("CFS-9002");
         core.on_notification(Source::De1State, &[MachineState::Idle as u8, 0], 1_000);
-        let out = core.on_notification(
-            Source::De1State,
-            &[MachineState::Sleep as u8, 0],
-            2_000,
-        );
+        let out = core.on_notification(Source::De1State, &[MachineState::Sleep as u8, 0], 2_000);
         let writes = scale_writes(&out);
         assert!(!writes.contains(&eureka_precisa::TURN_OFF.as_slice()));
     }
@@ -4725,10 +4667,7 @@ mod tests {
             peak_pressure.is_some(),
             "telemetry arrived → peak_pressure is Some",
         );
-        assert!(
-            peak_temp.is_some(),
-            "telemetry arrived → peak_temp is Some",
-        );
+        assert!(peak_temp.is_some(), "telemetry arrived → peak_temp is Some",);
         assert!(
             peak_weight.is_none(),
             "no scale paired → peak_weight stays None",
@@ -5187,12 +5126,18 @@ mod tests {
         // 0.0 clamps up to 0.13 → raw 130.
         let under = core.set_calibration_flow_multiplier(0.0);
         let raw_under = u32::from_le_bytes(mmr_write_payload(&under));
-        assert_eq!(raw_under, 130, "0.0 must clamp up to the 0.13 reaprime floor");
+        assert_eq!(
+            raw_under, 130,
+            "0.0 must clamp up to the 0.13 reaprime floor"
+        );
 
         // 5.0 clamps down to 2.0 → raw 2000.
         let over = core.set_calibration_flow_multiplier(5.0);
         let raw_over = u32::from_le_bytes(mmr_write_payload(&over));
-        assert_eq!(raw_over, 2000, "5.0 must clamp down to the 2.0 reaprime ceiling");
+        assert_eq!(
+            raw_over, 2000,
+            "5.0 must clamp down to the 2.0 reaprime ceiling"
+        );
     }
 
     #[test]
@@ -5227,7 +5172,10 @@ mod tests {
             panic!("expected WriteCharacteristic");
         };
         let decoded = ShotSettings::decode(data).expect("packet round-trips");
-        assert_eq!(decoded.group_temp_c, 105.0, "group temp must clamp to 105 °C");
+        assert_eq!(
+            decoded.group_temp_c, 105.0,
+            "group temp must clamp to 105 °C"
+        );
         // The retained settings carry the clamped value, not the input.
         let stored = core
             .steam_hotwater_settings
@@ -5286,7 +5234,10 @@ mod tests {
             .steam_hotwater_settings
             .as_ref()
             .expect("settings retained");
-        assert_eq!(stored.steam_temp_c, 0.0, "80 °C falls below the 135 °C steam floor");
+        assert_eq!(
+            stored.steam_temp_c, 0.0,
+            "80 °C falls below the 135 °C steam floor"
+        );
 
         // 134 °C — one degree under the legacy TCL floor; must also snap to 0.
         let just_under = ShotSettings {
@@ -5337,7 +5288,10 @@ mod tests {
             .steam_hotwater_settings
             .as_ref()
             .expect("settings retained");
-        assert_eq!(stored.steam_temp_c, 135.0, "135 °C is the TCL floor and must pass through");
+        assert_eq!(
+            stored.steam_temp_c, 135.0,
+            "135 °C is the TCL floor and must pass through"
+        );
     }
 
     #[test]
@@ -5390,11 +5344,7 @@ mod tests {
                 (addr & 0xFF) as u8,
             ];
             assert_eq!(&data[1..4], &addr_bytes, "write #{i} address");
-            assert_eq!(
-                &data[4..4 + payload.len()],
-                *payload,
-                "write #{i} payload"
-            );
+            assert_eq!(&data[4..4 + payload.len()], *payload, "write #{i} payload");
         }
     }
 
@@ -5542,11 +5492,31 @@ mod tests {
         // Each tuple: (the call that emits the write, the register the
         // write targets, the engineering-units value we wrote).
         let cases: [(CoreOutput, MmrRegister, f32); 5] = [
-            (core.set_phase_1_flow_rate(2.5), MmrRegister::Phase1FlowRate, 2.5),
-            (core.set_phase_2_flow_rate(4.0), MmrRegister::Phase2FlowRate, 4.0),
-            (core.set_hot_water_idle_temp(95.0), MmrRegister::HotWaterIdleTemp, 95.0),
-            (core.set_flush_flow_rate(6.0), MmrRegister::FlushFlowRate, 6.0),
-            (core.set_hot_water_flow_rate(1.0), MmrRegister::HotWaterFlowRate, 1.0),
+            (
+                core.set_phase_1_flow_rate(2.5),
+                MmrRegister::Phase1FlowRate,
+                2.5,
+            ),
+            (
+                core.set_phase_2_flow_rate(4.0),
+                MmrRegister::Phase2FlowRate,
+                4.0,
+            ),
+            (
+                core.set_hot_water_idle_temp(95.0),
+                MmrRegister::HotWaterIdleTemp,
+                95.0,
+            ),
+            (
+                core.set_flush_flow_rate(6.0),
+                MmrRegister::FlushFlowRate,
+                6.0,
+            ),
+            (
+                core.set_hot_water_flow_rate(1.0),
+                MmrRegister::HotWaterFlowRate,
+                1.0,
+            ),
         ];
         for (out, reg, expected) in cases {
             let Some(Command::WriteCharacteristic { data, .. }) = out.commands.first() else {
@@ -5623,15 +5593,24 @@ mod tests {
         let cases: [(CoreOutput, MmrRegister); 8] = [
             (core.set_phase_1_flow_rate(2.0), MmrRegister::Phase1FlowRate),
             (core.set_phase_2_flow_rate(4.0), MmrRegister::Phase2FlowRate),
-            (core.set_hot_water_idle_temp(95.0), MmrRegister::HotWaterIdleTemp),
+            (
+                core.set_hot_water_idle_temp(95.0),
+                MmrRegister::HotWaterIdleTemp,
+            ),
             (
                 core.set_espresso_warmup_timeout(Duration::from_secs(3)),
                 MmrRegister::EspressoWarmupTimeout,
             ),
             (core.set_steam_two_tap_stop(1), MmrRegister::SteamTwoTapStop),
-            (core.set_flush_timeout(Duration::from_secs(5)), MmrRegister::FlushTimeout),
+            (
+                core.set_flush_timeout(Duration::from_secs(5)),
+                MmrRegister::FlushTimeout,
+            ),
             (core.set_flush_flow_rate(6.0), MmrRegister::FlushFlowRate),
-            (core.set_hot_water_flow_rate(1.0), MmrRegister::HotWaterFlowRate),
+            (
+                core.set_hot_water_flow_rate(1.0),
+                MmrRegister::HotWaterFlowRate,
+            ),
         ];
         for (out, reg) in cases {
             assert_eq!(out.commands.len(), 1, "{reg:?}: expected one write");
@@ -5658,7 +5637,10 @@ mod tests {
         let cases: [(CoreOutput, &str); 8] = [
             (core.set_phase_1_flow_rate(1.5), "set_phase_1_flow_rate"),
             (core.set_phase_2_flow_rate(4.0), "set_phase_2_flow_rate"),
-            (core.set_hot_water_idle_temp(85.0), "set_hot_water_idle_temp"),
+            (
+                core.set_hot_water_idle_temp(85.0),
+                "set_hot_water_idle_temp",
+            ),
             (
                 core.set_espresso_warmup_timeout(Duration::from_secs(30)),
                 "set_espresso_warmup_timeout",
@@ -5786,7 +5768,11 @@ mod tests {
         /// Helper: walk the writes-to-FrameWrite commands and feed each back
         /// as a `De1FrameAck` notification. Returns the events emitted for the
         /// last ack.
-        fn ack_every_frame(core: &mut CremaCore, commands: &[Command], now_ms_step: u64) -> Vec<Event> {
+        fn ack_every_frame(
+            core: &mut CremaCore,
+            commands: &[Command],
+            now_ms_step: u64,
+        ) -> Vec<Event> {
             let mut last_events = Vec::new();
             let frames: Vec<&[u8]> = commands
                 .iter()
@@ -5905,7 +5891,10 @@ mod tests {
 
             // Acking each in order completes cleanly.
             let last = ack_every_frame(&mut core, &started.commands, 10);
-            assert!(last.iter().any(|e| matches!(e, Event::ProfileUploadCompleted { .. })));
+            assert!(
+                last.iter()
+                    .any(|e| matches!(e, Event::ProfileUploadCompleted { .. }))
+            );
         }
 
         #[test]
@@ -5930,7 +5919,10 @@ mod tests {
             // 1 header + 4 frames + 4 extensions + 1 tail = 10 writes.
             assert_eq!(started.commands.len(), 10);
             let last = ack_every_frame(&mut core, &started.commands, 10);
-            assert!(last.iter().any(|e| matches!(e, Event::ProfileUploadCompleted { .. })));
+            assert!(
+                last.iter()
+                    .any(|e| matches!(e, Event::ProfileUploadCompleted { .. }))
+            );
         }
 
         #[test]
@@ -5938,7 +5930,9 @@ mod tests {
             let mut core = CremaCore::new();
             let p = profile(
                 "Max",
-                (0..32).map(|i| step(&format!("s{i}"), Pump::Pressure, None)).collect(),
+                (0..32)
+                    .map(|i| step(&format!("s{i}"), Pump::Pressure, None))
+                    .collect(),
             );
             let started = core.upload_profile(&p, Duration::ZERO).unwrap();
             // 1 header + 32 frames + 0 extensions + 1 tail = 34 writes.
@@ -5959,7 +5953,9 @@ mod tests {
             let mut core = CremaCore::new();
             let p = profile(
                 "TooMany",
-                (0..33).map(|i| step(&format!("s{i}"), Pump::Pressure, None)).collect(),
+                (0..33)
+                    .map(|i| step(&format!("s{i}"), Pump::Pressure, None))
+                    .collect(),
             );
             assert!(matches!(
                 core.upload_profile(&p, Duration::ZERO),
@@ -6007,7 +6003,13 @@ mod tests {
         #[test]
         fn cancel_mid_upload_emits_aborted() {
             let mut core = CremaCore::new();
-            let p = profile("Two", vec![step("a", Pump::Pressure, None), step("b", Pump::Pressure, None)]);
+            let p = profile(
+                "Two",
+                vec![
+                    step("a", Pump::Pressure, None),
+                    step("b", Pump::Pressure, None),
+                ],
+            );
             let _ = core.upload_profile(&p, Duration::ZERO).unwrap();
             let out = core.cancel_profile_upload();
             assert!(out.events.iter().any(|e| matches!(
@@ -6041,22 +6043,24 @@ mod tests {
                     reason: ProfileUploadFailure::Aborted
                 }
             ));
-            assert!(matches!(
-                out.events[1],
-                Event::ProfileUploadStarted { .. }
-            ));
+            assert!(matches!(out.events[1], Event::ProfileUploadStarted { .. }));
             assert!(core.profile_upload_in_progress());
         }
 
         #[test]
         fn on_tick_after_timeout_fires_ack_timeout() {
             let mut core = CremaCore::new();
-            let p = profile("Two", vec![step("a", Pump::Pressure, None), step("b", Pump::Pressure, None)]);
+            let p = profile(
+                "Two",
+                vec![
+                    step("a", Pump::Pressure, None),
+                    step("b", Pump::Pressure, None),
+                ],
+            );
             let _ = core.upload_profile(&p, Duration::ZERO).unwrap();
             // Tick at 5 seconds (the timeout); no acks have arrived.
-            let tick = core.on_tick(
-                u64::try_from(PROFILE_UPLOAD_ACK_TIMEOUT.as_millis()).unwrap_or(u64::MAX),
-            );
+            let tick = core
+                .on_tick(u64::try_from(PROFILE_UPLOAD_ACK_TIMEOUT.as_millis()).unwrap_or(u64::MAX));
             assert!(tick.events.iter().any(|e| matches!(
                 e,
                 Event::ProfileUploadFailed {
@@ -6069,7 +6073,13 @@ mod tests {
         #[test]
         fn timeout_resets_on_each_ack() {
             let mut core = CremaCore::new();
-            let p = profile("Two", vec![step("a", Pump::Pressure, None), step("b", Pump::Pressure, None)]);
+            let p = profile(
+                "Two",
+                vec![
+                    step("a", Pump::Pressure, None),
+                    step("b", Pump::Pressure, None),
+                ],
+            );
             let _ = core.upload_profile(&p, Duration::ZERO).unwrap();
             // Ack frame 0 at t=4s (just under the timeout).
             let mut ack0 = [0u8; 8];
@@ -6092,7 +6102,13 @@ mod tests {
         #[test]
         fn reset_mid_upload_clears_state() {
             let mut core = CremaCore::new();
-            let p = profile("Two", vec![step("a", Pump::Pressure, None), step("b", Pump::Pressure, None)]);
+            let p = profile(
+                "Two",
+                vec![
+                    step("a", Pump::Pressure, None),
+                    step("b", Pump::Pressure, None),
+                ],
+            );
             let _ = core.upload_profile(&p, Duration::ZERO).unwrap();
             assert!(core.profile_upload_in_progress());
             core.reset();
