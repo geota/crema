@@ -212,7 +212,7 @@
 /* Maintenance / advisory variant — used by MachineErrorBanner when the
    caller opts into the yellow palette. Same skeleton; the warning token
    flips per theme. Reserved for "needs attention but not a fault" cues
-   (filter due, descale due, backflush due). */
+   (filter due, descale due, clean due). */
 .mc-head-status.is-warning {
 	background: rgba(var(--warning-rgb), 0.12);
 	border-color: rgba(var(--warning-rgb), 0.5);
