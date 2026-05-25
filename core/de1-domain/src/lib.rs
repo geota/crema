@@ -36,6 +36,11 @@
 //!   [`signature_for_roaster`]) and the [`reconcile_shots`] action
 //!   planner, ported from the web shell's `shot-sync-signatures.ts`
 //!   so every shell shares one algorithm (docs/36 §3).
+//! - [`ids`] — [`new_profile_id`], the one canonical profile-ID minter
+//!   (UUID v7, RFC 9562). Built-in IDs are pre-generated into
+//!   `profiles/builtin.json` by the `gen-builtin-ids` binary in this
+//!   crate; custom profiles call this from the shell via the wasm /
+//!   UniFFI bridges.
 
 pub mod bean;
 pub mod builtin;
@@ -45,6 +50,7 @@ pub mod flow;
 pub mod history;
 pub mod history_export;
 pub mod history_import;
+pub mod ids;
 pub mod profile;
 pub mod profile_bounds;
 pub mod profile_import;
@@ -67,6 +73,7 @@ pub use builtin::{BUILTIN_PROFILE_COUNT, builtin_profiles};
 pub use error::{DomainError, ImportError};
 pub use flow::{Estimate, FlowAlgorithm, FlowEstimator};
 pub use history::{STORED_SHOT_FORMAT_VERSION, ShotMetadata, StoredShot, brew_ratio};
+pub use ids::new_profile_id;
 pub use profile::{
     AssembledProfile, BeverageType, Compare, ExitCondition, ExitMetric, Limiter, Profile,
     ProfileStep, Pump, TempSensor, Transition,

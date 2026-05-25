@@ -472,6 +472,23 @@ pub fn export_v2_json_shot(shot_json: &str) -> Result<String, String> {
     Ok(de1_domain::export_v2_json_shot(&shot))
 }
 
+/// Mint a fresh profile ID — a standard UUID v7 (RFC 9562, 2024) in
+/// the 36-character dashed form, e.g. `01910f80-7a3b-7c54-b2d1-23a4f8e9cd00`.
+/// The 48-bit timestamp prefix makes IDs lexicographically sortable by
+/// creation time; the 74 random bits keep collisions astronomical.
+///
+/// Used by the web shell when creating, duplicating, or importing a
+/// **custom** profile. Built-in IDs are pre-generated and live in
+/// `core/de1-domain/profiles/builtin.json`, not minted at runtime.
+///
+/// Exposed under the camelCase JS name `newProfileId` so the TS shell
+/// can call it as `bridge.newProfileId()`. See
+/// [`de1_domain::new_profile_id`] for the canonical implementation.
+#[wasm_bindgen(js_name = newProfileId)]
+pub fn new_profile_id() -> String {
+    de1_domain::new_profile_id()
+}
+
 /// Hard wire-protocol bounds for DE1 profile fields, exposed to shells as
 /// a single JSON snapshot so steppers / validators / form widgets reach
 /// for the same numbers. The shell parses the result once at module load

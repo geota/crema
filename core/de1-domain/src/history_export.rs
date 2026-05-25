@@ -694,6 +694,7 @@ mod tests {
     fn profile_slot_survives_when_a_profile_is_present() {
         let mut shot = fixture();
         let profile = Profile {
+            id: String::new(),
             title: "Best Practice".to_string(),
             notes: "test".to_string(),
             steps: Vec::new(),

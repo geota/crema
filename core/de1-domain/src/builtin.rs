@@ -105,6 +105,52 @@ mod tests {
     }
 
     #[test]
+    fn builtin_profiles_all_have_a_uuid_v7_id() {
+        // Every built-in must carry a pre-generated UUID v7 — the
+        // `gen-builtin-ids` binary fills `builtin.json` once and the
+        // values survive every subsequent build. The shell consumes
+        // these IDs as the stable URL key, so a missing or malformed
+        // entry would silently break navigation.
+        for profile in builtin_profiles() {
+            assert!(
+                is_uuid_v7(&profile.id),
+                "built-in profile {:?} has invalid id {:?} (expected UUID v7)",
+                profile.title,
+                profile.id,
+            );
+        }
+    }
+
+    /// Match the 36-char dashed UUID v7 form
+    /// (`^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`).
+    /// Kept here as a local helper so the builtin-corpus assertion does
+    /// not pull in a regex dependency.
+    fn is_uuid_v7(id: &str) -> bool {
+        let bytes = id.as_bytes();
+        if bytes.len() != 36 {
+            return false;
+        }
+        for &i in &[8, 13, 18, 23] {
+            if bytes[i] != b'-' {
+                return false;
+            }
+        }
+        if bytes[14] != b'7' {
+            return false;
+        }
+        if !matches!(bytes[19], b'8' | b'9' | b'a' | b'b') {
+            return false;
+        }
+        bytes.iter().enumerate().all(|(i, &b)| {
+            if i == 8 || i == 13 || i == 18 || i == 23 {
+                b == b'-'
+            } else {
+                b.is_ascii_digit() || (b'a'..=b'f').contains(&b)
+            }
+        })
+    }
+
+    #[test]
     fn builtin_profiles_is_memoized() {
         // Two calls return the very same cached slice.
         let first = builtin_profiles();

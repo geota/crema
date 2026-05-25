@@ -913,6 +913,10 @@ fn finish_profile(
     let dose = dose.max(0.0);
 
     Ok(Profile {
+        // Imported profiles carry no ID — the v2 community contract has no
+        // `id` field. The shell mints a fresh ID via the wasm/UniFFI
+        // `new_profile_id` bridge before persisting an imported profile.
+        id: String::new(),
         title,
         notes,
         steps,
@@ -1462,6 +1466,7 @@ mod tests {
         // docs/22 §4.5.
         let notes_with_newlines = "First line.\nSecond line.\n\nBlank between.\n";
         let original = Profile {
+            id: String::new(),
             title: "Newline test".into(),
             notes: notes_with_newlines.into(),
             steps: vec![ProfileStep {
@@ -1500,6 +1505,7 @@ mod tests {
         // tank_temperature, version) must reach the JSON; absence on the
         // wire would break community-app interop.
         let original = Profile {
+            id: String::new(),
             title: "v2 fields".into(),
             notes: "".into(),
             steps: vec![ProfileStep {
@@ -1583,23 +1589,34 @@ mod tests {
     fn export_v2_json_round_trips_a_builtin_profile() {
         // A representative built-in profile (which uses exits, limiters and
         // volume limits) round-trips through the exporter unchanged.
+        //
+        // The v2 community JSON contract has no `id` field (the shared
+        // wire format is defined by reaprime/de1app); a built-in's id
+        // is therefore dropped on export and reconstituted as "" by
+        // import. Compare the profile minus its id.
         let builtin = crate::builtin_profiles()
             .iter()
             .find(|p| p.title == "Best practice")
             .or_else(|| crate::builtin_profiles().first())
             .expect("at least one built-in profile");
+        let mut expected = builtin.clone();
+        expected.id = String::new();
         let reimported = import_v2_json(&export_v2_json(builtin)).unwrap();
-        assert_eq!(&reimported, builtin);
+        assert_eq!(reimported, expected);
     }
 
     #[test]
     fn export_v2_json_round_trips_every_builtin_profile() {
         // The whole vendored corpus survives import_v2_json(export_v2_json(p)).
+        // As above, the v2 JSON contract has no `id` field, so compare
+        // each profile minus its id.
         for builtin in crate::builtin_profiles() {
             let reimported = import_v2_json(&export_v2_json(builtin))
                 .unwrap_or_else(|e| panic!("re-import of {:?} failed: {e}", builtin.title));
+            let mut expected = builtin.clone();
+            expected.id = String::new();
             assert_eq!(
-                &reimported, builtin,
+                reimported, expected,
                 "round trip changed profile {:?}",
                 builtin.title,
             );

@@ -22,7 +22,7 @@
 		getProfileStore,
 		toCoreProfile,
 		fromCoreProfile,
-		newProfileUuid,
+		newProfileId,
 		type CremaProfile
 	} from '$lib/profiles';
 	import { getCremaAppContext } from '$lib/shell/app-context';
@@ -426,7 +426,7 @@
 		const adapted = fromCoreProfile(core, -1);
 		const custom: CremaProfile = {
 			...adapted,
-			id: newProfileUuid(),
+			id: newProfileId(),
 			source: 'custom',
 			tags: adapted.tags.filter((t) => t !== 'Built-in')
 		};

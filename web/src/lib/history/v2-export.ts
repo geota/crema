@@ -186,6 +186,10 @@ function profileFromName(
 ): Profile | null {
 	if (!name) return null;
 	return {
+		// A profile reconstructed from a shot's metadata carries no
+		// stable ID — it is a degraded view, not a stored profile, and
+		// the v2 community contract has no `id` field anyway.
+		id: '',
 		title: name,
 		notes: '',
 		steps: [],

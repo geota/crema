@@ -28,7 +28,7 @@
 		blankProfile,
 		duplicateProfile,
 		uid,
-		newProfileUuid,
+		newProfileId,
 		ratioLabel,
 		totalTime,
 		type CremaProfile,
@@ -285,10 +285,12 @@
 		const toSave: CremaProfile = isCreate
 			? {
 					...draft,
-					// Profile ids are bare UUIDs — `blankProfile` /
-					// `duplicateProfile` already mint one, so this `||`
-					// is just belt-and-braces against an empty draft id.
-					id: draft.id || newProfileUuid(),
+					// Profile ids are UUID v7 strings — `blankProfile` /
+					// `duplicateProfile` already mint one via
+					// `newProfileId()` (the wasm bridge over the Rust
+					// `de1_domain::new_profile_id`), so this `||` is just
+					// belt-and-braces against an empty draft id.
+					id: draft.id || newProfileId(),
 					source: 'custom'
 				}
 			: draft;

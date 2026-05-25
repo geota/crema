@@ -190,6 +190,17 @@ impl ProfileStep {
 /// machine-level parameters needed to run it.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Profile {
+    /// Stable profile ID — a UUID v7 string. Built-in profiles carry
+    /// pre-generated IDs in `profiles/builtin.json` (filled by the
+    /// `gen-builtin-ids` binary). Custom profiles get a fresh ID from
+    /// [`new_profile_id`](crate::new_profile_id) via the shell.
+    ///
+    /// `#[serde(default)]` so profiles imported from the community v2
+    /// `.json` format (which has no `id` field) still deserialize —
+    /// the shell mints a fresh ID for an imported profile before
+    /// persisting it.
+    #[serde(default)]
+    pub id: String,
     /// Profile title.
     pub title: String,
     /// Free-text notes.
@@ -367,6 +378,7 @@ mod tests {
     /// A profile wrapping the given steps.
     fn profile(steps: Vec<ProfileStep>) -> Profile {
         Profile {
+            id: String::new(),
             title: "Test".to_string(),
             notes: String::new(),
             steps,

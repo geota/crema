@@ -20,6 +20,7 @@
  */
 
 import type { Profile, ProfileStep, SparkShape } from './core-types';
+import { newProfileId } from '$lib/core';
 import { formatRatio } from '$lib/utils/ratio';
 import { getSettingsStore } from '$lib/settings/store.svelte';
 
@@ -106,10 +107,12 @@ export interface ProfileSegment {
  */
 export interface CremaProfile {
 	/**
-	 * Stable UUID. Built-ins derive theirs deterministically from the profile
-	 * title (see {@link uuidFromString}); custom profiles use
-	 * `crypto.randomUUID()`. Source distinction lives on the {@link source}
-	 * field — there is no longer any prefix on the id.
+	 * Stable UUID v7 (RFC 9562, 2024) — timestamp-prefixed, sortable,
+	 * 36-character dashed form. Built-ins carry pre-generated IDs that
+	 * ship in `core/de1-domain/profiles/builtin.json`; custom profiles
+	 * mint a fresh ID via `newProfileId()` from the Rust core (the wasm
+	 * `de1_domain::new_profile_id` bridge). Source distinction lives on
+	 * the {@link source} field — there is no longer any prefix on the id.
 	 */
 	id: string;
 	/** Whether this profile is a fixed built-in (read-only) or user-owned. */
@@ -169,75 +172,23 @@ export interface CremaProfile {
 export type BeverageType = 'espresso' | 'calibrate' | 'cleaning' | 'manual' | 'pourover';
 
 /**
- * A prefixed short id — used by segment ids (`s1`, `s2`, …, or `seg:<uuid>`
- * for editor-added segments). Profile ids are no longer minted through
- * here: they use {@link newProfileUuid} (custom) or {@link uuidFromString}
- * (built-ins). The kept-around `uid()` lets the segment scheme — which IS
- * scoped within a profile, not the global URL space — stay as-is.
+ * A prefixed short id — used by segment ids (`seg:<uuid>` for
+ * editor-added segments). Profile ids themselves no longer go through
+ * here: they come from {@link newProfileId} (the wasm bridge over
+ * `de1_domain::new_profile_id`) for custom profiles, and from the
+ * built-in JSON for built-ins. The kept-around `uid()` lets the
+ * segment scheme — which IS scoped within a profile, not the global
+ * URL space — stay as-is.
  */
 export function uid(prefix: string): string {
-	return `${prefix}:${newProfileUuid()}`;
+	return `${prefix}:${newProfileId()}`;
 }
 
-/**
- * Mint a fresh UUID for a custom profile. Prefers the platform's
- * `crypto.randomUUID()` (every browser Crema targets has it), with a
- * synchronous fallback that produces a well-formed v4 UUID for the
- * unusual case of an environment without it (e.g. Node test runners
- * before the global crypto landed).
- */
-export function newProfileUuid(): string {
-	if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
-		return crypto.randomUUID();
-	}
-	// Fallback: 16 random bytes shaped into the 8-4-4-4-12 v4 form.
-	const bytes = new Uint8Array(16);
-	for (let i = 0; i < 16; i++) bytes[i] = Math.floor(Math.random() * 256);
-	bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4
-	bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant 10
-	const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
-	return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-}
-
-/**
- * Derive a stable, well-formed v4-shaped UUID from an input string. Used
- * to give each built-in profile a permanent UUID derived from its title,
- * so the URL space (`/profiles/<uuid>/edit`) is clean and reorderings of
- * `builtin.json` don't shuffle ids out from under pinned/last-used state.
- *
- * Algorithm: FNV-1a 32-bit hashed four times with constant per-pass byte
- * offsets to fill 128 bits, then formatted with the v4 version nibble and
- * the 10xx variant bits. Deterministic across platforms and runs — the
- * same title always maps to the same id.
- */
-export function uuidFromString(input: string): string {
-	const FNV_PRIME = 16777619;
-	const OFFSET = 2166136261;
-	let h0 = OFFSET;
-	let h1 = OFFSET;
-	let h2 = OFFSET;
-	let h3 = OFFSET;
-	for (let i = 0; i < input.length; i++) {
-		const c = input.charCodeAt(i);
-		h0 = Math.imul(h0 ^ c, FNV_PRIME);
-		h1 = Math.imul(h1 ^ (c + 0x11), FNV_PRIME);
-		h2 = Math.imul(h2 ^ (c + 0x22), FNV_PRIME);
-		h3 = Math.imul(h3 ^ (c + 0x33), FNV_PRIME);
-	}
-	const hex = (n: number): string => (n >>> 0).toString(16).padStart(8, '0');
-	const a = hex(h0);
-	const h1Hex = hex(h1);
-	const h2Hex = hex(h2);
-	const h3Hex = hex(h3);
-	const b = h1Hex.slice(0, 4);
-	// Version nibble: force '4' to mark as v4 UUID.
-	const c = '4' + h1Hex.slice(5, 8);
-	// Variant nibble: force the high two bits to 10 (i.e. 8/9/a/b).
-	const variantNibble = ((parseInt(h2Hex[0], 16) & 0x3) | 0x8).toString(16);
-	const d = variantNibble + h2Hex.slice(1, 4);
-	const e = h2Hex.slice(4, 8) + h3Hex;
-	return `${a}-${b}-${c}-${d}-${e}`;
-}
+// Re-export `newProfileId` so existing callers in this module + the
+// profiles barrel keep one stable name to import. The implementation
+// lives in the Rust core (`de1_domain::new_profile_id`) and is exposed
+// through the wasm bridge — same UUID v7 scheme on every shell.
+export { newProfileId };
 
 /**
  * The brew ratio label, e.g. `1:2.4`, derived from yield ÷ dose.
@@ -493,7 +444,11 @@ export function fromCoreProfile(profile: Profile, _index: number): CremaProfile 
 	const tags = ['Built-in'];
 	if (isTeaProfile(profile.title)) tags.push('tea');
 	return {
-		id: uuidFromString(profile.title),
+		// Pre-generated UUID v7 from `core/de1-domain/profiles/builtin.json`
+		// (filled once by the `gen-builtin-ids` Rust binary). Stable across
+		// rebuilds — reorderings in `builtin.json` no longer shuffle ids out
+		// from under pinned / last-used state.
+		id: profile.id,
 		source: 'builtin',
 		name: profile.title,
 		notes: profile.notes,
@@ -530,6 +485,12 @@ export function fromCoreProfile(profile: Profile, _index: number): CremaProfile 
  */
 export function toCoreProfile(p: CremaProfile): Profile {
 	return {
+		// Round-trip the CremaProfile's id back into the core `Profile`.
+		// Useful for `uploadProfile` (the core never reads it) and any
+		// future v2-export path that carries it (the current
+		// `exportV2JsonProfile` strips it — the v2 contract has no
+		// `id` field).
+		id: p.id,
 		title: p.name,
 		notes: p.notes,
 		steps: p.segments.map(segmentToStep),
@@ -625,7 +586,7 @@ export function blankProfile(): CremaProfile {
 		segments[0] = { ...segments[0], time: prefs.defaultPreinfusionS };
 	}
 	return {
-		id: newProfileUuid(),
+		id: newProfileId(),
 		source: 'custom',
 		name: '',
 		notes: '',
@@ -655,7 +616,7 @@ export function blankProfile(): CremaProfile {
 export function duplicateProfile(p: CremaProfile): CremaProfile {
 	return {
 		...p,
-		id: newProfileUuid(),
+		id: newProfileId(),
 		source: 'custom',
 		name: `${p.name} (copy)`,
 		pinned: false,
