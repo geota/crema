@@ -88,6 +88,17 @@
 		display: flex;
 		flex-wrap: wrap;
 		gap: 8px;
+		/* Anchor the action row to the bottom of the card's flex column
+		   so all cards in a row line their buttons up regardless of how
+		   much body text each card has (Steam rinse's detail is long;
+		   Descale's is short). */
+		margin-top: auto;
+		/* `space-between` puts the Run button (rendered first) on the
+		   left edge and the Mark-complete button (rendered second) on
+		   the right edge when both exist. With only one button, that
+		   button sits at the start, which is fine — the cards that
+		   carry just one action are visually consistent within the row. */
+		justify-content: space-between;
 	}
 	.st-maint-action-primary {
 		background: rgba(var(--copper-rgb), 0.16);
