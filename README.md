@@ -45,6 +45,7 @@ Crema is a clean-room reimplementation of the DE1 tablet experience as a **fast,
 - **Node.js** 20+
 - **[pnpm](https://pnpm.io/)** 9+
 - **Rust** 1.80+ with `wasm-pack` (`cargo install wasm-pack`)
+- Node.js 24 (an `.nvmrc` is committed — `nvm use` / `fnm use` will pick it up).
 - A browser with [Web Bluetooth](https://caniuse.com/web-bluetooth) support — Chrome / Edge / Opera. Brave works after enabling the flag (see below).
 
 <details>
