@@ -1303,6 +1303,12 @@
 		display: grid;
 		grid-template-columns: repeat(2, 1fr);
 		gap: 12px;
+		/* Don't stretch cells to row height. When one cell has extra
+		   content beneath the primary control (e.g. Bag size's presets
+		   row, or a default-grinder chip), the sibling cell stays at its
+		   natural height so its label + control stay glued at the top of
+		   the row — keeping all steppers aligned across the grid. */
+		align-items: start;
 	}
 	@media (max-width: 680px) {
 		.be-grid2 {
@@ -1477,10 +1483,12 @@
 		color: var(--copper-400);
 	}
 
-	/* Bag presets */
+	/* Bag presets — centered so the 6 chips visually anchor under the
+	   stepper rather than left-aligning against an empty right gutter. */
 	.be-presets {
 		display: flex;
 		flex-wrap: wrap;
+		justify-content: center;
 		gap: 4px;
 	}
 	.be-preset {
