@@ -350,8 +350,18 @@
 		   which left the stepper at its intrinsic width and made the
 		   preset row look orphaned underneath.) */
 		align-items: stretch;
-		/* A modest min-width keeps the preset row from collapsing into
-		   two lines on narrow viewports. */
+		/* `flex: 1; min-width: 0` fixes the column's width budget to
+		   whatever's left after the row label. Without this the
+		   column is content-sized — and when the stepper's digit
+		   button becomes an `<input type="number">` on click, the
+		   input's larger user-agent min-content width grows the
+		   column and reflows the whole row. The `min-width: 0` is
+		   the standard flex escape-hatch that lets children shrink
+		   below their intrinsic size so the input can't bully the
+		   parent. A modest `min-width: 260px` floor keeps the
+		   preset row from collapsing onto two lines on narrow
+		   viewports where the bag column would otherwise be tiny. */
+		flex: 1;
 		min-width: 260px;
 	}
 	.bn-fld-bag-presets {
