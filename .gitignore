@@ -30,3 +30,15 @@ Thumbs.db
 
 # Claude Code agent worktrees
 .claude/worktrees/
+
+# Internal design docs / audits / handoffs — kept locally for development
+# reference but not part of the public repo. The README in the repo root
+# is the public-facing project description; everything under docs/ is
+# implementation history, design rationale, and migration notes.
+docs/
+
+# Defensive env-file pattern — covers any future subdirectory that might
+# carry secrets. The web/ shell already excludes `.env.local` via its own
+# .gitignore; this root entry catches strays from new sub-projects.
+**/.env.local
+**/.env.*.local
