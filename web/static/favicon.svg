@@ -1,7 +1,19 @@
-<!-- Crema favicon: copper disc (copper-500 #C7763B) with a serif "C" arc
-     (ink-900 #1F1812), matching the sidebar .cside-mark-glyph. -->
-<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+<!-- Crema favicon — matches the in-app top-left brand glyph (CremaSidebar
+     `.cside-mark-glyph`, defined in `quick-controls-v2.css:478`):
+     copper-500 disc (#C7763B) + ink-900 (#1F1812) "C" in Newsreader serif,
+     weight 500, with the same slight glyph asymmetry the live `<div>`
+     produces. Falls back to Georgia → Times → generic serif for clients
+     without Newsreader; the visual offset of a serif "C" reads the same. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
   <circle cx="32" cy="32" r="32" fill="#C7763B" />
-  <path d="M 46 19.5 A 17.5 17.5 0 1 0 46 44.5"
-        fill="none" stroke="#1F1812" stroke-width="7" stroke-linecap="round" />
+  <text
+    x="32"
+    y="34"
+    text-anchor="middle"
+    dominant-baseline="central"
+    font-family="Newsreader, Georgia, 'Times New Roman', serif"
+    font-size="40"
+    font-weight="500"
+    fill="#1F1812"
+  >C</text>
 </svg>
