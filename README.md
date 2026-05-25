@@ -45,7 +45,20 @@ Crema is a clean-room reimplementation of the DE1 tablet experience as a **fast,
 - **Node.js** 20+
 - **[pnpm](https://pnpm.io/)** 9+
 - **Rust** 1.80+ with `wasm-pack` (`cargo install wasm-pack`)
-- A browser with [Web Bluetooth](https://caniuse.com/web-bluetooth) support — Chrome / Edge / Opera. Brave works after enabling the flag.
+- A browser with [Web Bluetooth](https://caniuse.com/web-bluetooth) support — Chrome / Edge / Opera. Brave works after enabling the flag (see below).
+
+<details>
+<summary><strong>Enabling Web Bluetooth in Brave</strong></summary>
+
+Brave ships Web Bluetooth disabled by default. To turn it on:
+
+1. Open `brave://flags/#brave-web-bluetooth-api` (paste the URL into the address bar).
+2. Set the **Web Bluetooth API** flag to **Enabled**.
+3. Click **Relaunch** at the bottom of the page.
+
+After the restart, Brave will prompt for device-picker permissions like Chrome does. No other browser config is required.
+
+</details>
 
 ### Run the dev server
 
