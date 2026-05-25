@@ -55,17 +55,23 @@ const MAX_SAMPLE_ML = 1000;
 export interface MaintenanceState {
 	/** Total litres of water dispensed, ever — the integrated flow counter. */
 	totalLitres: number;
-	/** `totalLitres` at the last filter replacement. */
+	/** `totalLitres` at the last filter clean. The DE1's in-tank filter is
+	 * a small mesh screen that catches debris before the pump — the user
+	 * pulls it out and rinses it, doesn't replace it (the user-manual
+	 * recommends mineral-controlled water; the in-tank piece is reusable).
+	 * "Capacity" here is a heuristic for how often a clean is due based
+	 * on litres dispensed, not a hard limit. */
 	filterBaselineLitres: number;
 	/** `totalLitres` at the last descale. */
 	descaleBaselineLitres: number;
 	/** Unix epoch ms of the last clean cycle (DE1 `MachineState::Clean`). */
 	cleanAtMs: number;
-	/** Unix epoch ms of the last filter replacement. */
+	/** Unix epoch ms of the last filter clean. */
 	filterAtMs: number;
 	/** Unix epoch ms of the last descale. */
 	descaleAtMs: number;
-	/** Filter rated capacity, litres — replace when this many litres pass it. */
+	/** Filter clean-interval threshold, litres — clean (rinse) when this
+	 * many litres have passed through since the last clean. */
 	filterCapacityLitres: number;
 	/** Descale interval, litres — descale is due past this many litres. */
 	descaleIntervalLitres: number;
@@ -225,8 +231,8 @@ export class MaintenanceStore {
 		};
 	}
 
-	/** Mark the water filter replaced — rebaseline its litre counter. */
-	markFilterReplaced(): void {
+	/** Mark the water filter cleaned — rebaseline its litre counter. */
+	markFilterCleaned(): void {
 		this.state = {
 			...this.state,
 			filterBaselineLitres: this.state.totalLitres,

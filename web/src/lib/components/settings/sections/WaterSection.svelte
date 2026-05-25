@@ -182,12 +182,12 @@
 		title="Water filter"
 		state={readout.filterOk
 			? `${Math.round(readout.filterPercent)}% capacity left`
-			: 'Replace now'}
+			: 'Clean now'}
 		stateOk={readout.filterOk}
 		metric={`${Math.round(readout.filterPercent)}%`}
 		metricLabel="capacity left"
-		detail={`${readout.filterUsedLitres.toFixed(1)} L of ${m.filterCapacityLitres} L used · last replaced ${shortDate(m.filterAtMs)}`}
-		onComplete={() => maintenance.markFilterReplaced()}
+		detail={`${readout.filterUsedLitres.toFixed(1)} L of ${m.filterCapacityLitres} L used · last cleaned ${shortDate(m.filterAtMs)}`}
+		onComplete={() => maintenance.markFilterCleaned()}
 	/>
 	<StMaintenanceCard
 		icon="snowflake"
