@@ -1,6 +1,6 @@
 //! Varia Aku BLE codec (`scale_type` `varia_aku`).
 //!
-//! Covers AKU Pro / Mini / Plus / Micro. See `docs/06-scale-protocols.md` §13.
+//! Covers AKU Pro / Mini / Plus / Micro.
 
 // Raw integer weight fields are decoded into `f32` grams; precision loss past
 // 2^23 is inherent to representing a wire reading as the codec's `f32` weight,
@@ -46,8 +46,7 @@ pub fn parse_weight(data: &[u8]) -> Option<f32> {
 /// not the variable `$battery`), so the battery byte is silently dropped.
 /// Reaprime correctly assigns `_batteryLevel = data[3]`
 /// (`reaprime/lib/src/models/device/impl/varia/varia_aku_scale.dart:160`).
-/// Per docs/30 §"Top three places Crema should defer to reaprime", Crema
-/// adopts reaprime's decode here.
+/// Crema adopts reaprime's decode here.
 #[must_use]
 pub fn parse_battery_percent(data: &[u8]) -> Option<u8> {
     if data.len() < 5 || data[1] != 0x85 || data[2] != 0x01 {

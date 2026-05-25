@@ -5,7 +5,7 @@
  * ticks, get back a `CoreOutput` of observed `Event`s and `Command`s to
  * perform. `de1-wasm` exposes it as a wasm-bindgen `CremaBridge` whose
  * `CoreOutput`-producing methods return a JSON **string** (the "Option S"
- * encoding from `docs/08`). This module wraps that bridge so callers never see
+ * encoding — every CoreOutput crosses as one JSON string). This module wraps that bridge so callers never see
  * the wasm or the JSON: every method parses the string into the typed
  * `CoreOutput` / `ScaleCapabilities` / `ScaleUuids` from `crema-core.ts`.
  *
@@ -13,7 +13,7 @@
  *
  * The core runs on the main thread today — it is microsecond-scale work — so
  * each method resolves synchronously. They are nonetheless declared `async`
- * (return a `Promise`) on purpose: per `docs/09`, this keeps the facade
+ * (return a `Promise`) on purpose: keeps the facade
  * swappable to a Web Worker later (a `postMessage` round-trip is inherently
  * async) with **zero caller changes**. `loadCore()` is genuinely async — it
  * dynamic-imports the wasm bundle and `await`s its `init()`.
@@ -335,7 +335,7 @@ export interface CremaCore {
 	 * command in upload order. Subsequent progress arrives via
 	 * `ProfileUploadProgress` events on `De1FrameAck` notifications,
 	 * success via `ProfileUploadCompleted`, failure via
-	 * `ProfileUploadFailed`. See `docs/16-profile-upload-plan.md`.
+	 * `ProfileUploadFailed`.
 	 */
 	uploadProfile(profile: unknown, nowMs: number): Promise<CoreOutput>;
 	/** Cancel an in-progress upload; emits `ProfileUploadFailed { Aborted }`. */
@@ -367,7 +367,7 @@ export interface CremaCore {
 	 * Parse a legacy de1app `.shot` (Tcl-dict) history file. Returns the
 	 * resulting Rust-shape `StoredShot` parsed from the bridge's JSON
 	 * reply. Throws with the importer's error message if parsing
-	 * fails. docs/22 §5.1.
+	 * fails.
 	 */
 	importLegacyTclShot(content: string): Promise<RustStoredShot>;
 	/**
@@ -588,8 +588,7 @@ export interface CremaCore {
 	 * writes (fan threshold, hot-water idle temp, heater phase 1/2 flows,
 	 * espresso warmup timeout, refill kit auto, flow-calibration
 	 * multiplier, steam purge mode). Profiles, shot history, and app
-	 * preferences are untouched. See `docs/27-write-side-gaps.md`
-	 * appendix "settings-reset baseline values".
+	 * preferences are untouched.
 	 */
 	resetMachineDefaults(): Promise<CoreOutput>;
 	/** Set the cup-warmer temperature, °C (Bengle models only). */
@@ -957,9 +956,9 @@ async function createCore(): Promise<CremaCore> {
 				Descale: wasm.MachineRequest.Descale,
 				Clean: wasm.MachineRequest.Clean,
 				// Five additional state requests the wasm bridge already
-				// supports but the facade didn't expose by name. Added per
-				// docs/22 §3.3 to match legacy de1app + reaprime's full
-				// requestable set. ShortCal / SelfTest are diagnostic
+				// supports but the facade didn't expose by name. Added to
+				// match legacy de1app + reaprime's full requestable set.
+				// ShortCal / SelfTest are diagnostic
 				// states — gate them behind an explicit user action.
 				SkipToNext: wasm.MachineRequest.SkipToNext,
 				SteamRinse: wasm.MachineRequest.SteamRinse,

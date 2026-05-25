@@ -335,8 +335,6 @@ export type Event =
 	 * that always returns `false`; v2 will return `true` for the
 	 * `Erase..Verifying` phases of a firmware upload. The event names the
 	 * refused method so the shell can show a transient toast.
-	 * 
-	 * See `docs/17-firmware-update-plan.md` §3.4.
 	 */
 	| { type: "FirmwareLockoutHit", content: {
 	/**
@@ -346,7 +344,7 @@ export type Event =
 	method: string;
 }}
 	/**
-	 * **DORMANT — see [`Source::De1ProfileHeader`] and docs/16 §6.1.** This
+	 * **DORMANT — see [`Source::De1ProfileHeader`].** This
 	 * event would carry the DE1's reported `ShotHeader` if the firmware
 	 * supported reading the loaded-profile buffer on `cuuid_0F`. It does
 	 * not (snoop-verified 2026-05-21), so the BLE shell no longer triggers
@@ -691,9 +689,9 @@ export enum MachineState {
 /**
  * Known MMR register addresses.
  * 
- * This covers the registers Crema reads or writes; `docs/02-ble-protocol.md`
- * §6.3 has the full map. [`address`](Self::address) gives the raw 24-bit
- * address to pass to [`read_request`] / [`write_request`].
+ * This covers the registers Crema reads or writes.
+ * [`address`](Self::address) gives the raw 24-bit address to pass to
+ * [`read_request`] / [`write_request`].
  */
 export enum MmrRegister {
 	/**
@@ -731,7 +729,6 @@ export enum MmrRegister {
 	 * (so 950 = 95.0 °C). Modelled by reaprime
 	 * (`de1.models.dart:flushTemp` at `0x00803844`, 4-byte slot,
 	 * `readScale: 0.1`); the legacy de1app TCL has no equivalent.
-	 * Crema's audit-discovered register — see docs/22 §3.2.
 	 */
 	FlushTemp = "FlushTemp",
 	/** Hot-water flow rate. */
@@ -782,8 +779,6 @@ export enum MmrRegister {
  * `#[non_exhaustive]` so additional categories (e.g. a firmware-side
  * "shot in progress" rejection signalled through some future cuuid_10
  * packet) can be added without breaking the FFI surface.
- * 
- * See `docs/16-profile-upload-plan.md` §4.3.
  */
 export type ProfileUploadFailure = 
 	/** The profile had no steps. */
@@ -1000,7 +995,7 @@ export enum WriteTarget {
 	/**
 	 * The DE1 `HeaderWrite` characteristic (`cuuid_0F`) — the 5-byte
 	 * `ShotHeader` packet is *written* here at the start of a profile
-	 * upload. See `docs/16-profile-upload-plan.md`.
+	 * upload.
 	 */
 	De1ProfileHeader = "De1ProfileHeader",
 	/**

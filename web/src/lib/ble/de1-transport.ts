@@ -3,8 +3,8 @@
  * concrete DE1 link implementation satisfies.
  *
  * `BleDevice` (Web Bluetooth GATT, the current default) is one impl;
- * a future WebUSB / Android USB-host transport would be another (see
- * docs/22 §7 for the plan). The DE1 firmware's USB-CDC framing
+ * a future WebUSB / Android USB-host transport would be another. The
+ * DE1 firmware's USB-CDC framing
  * (`<+X>\n` subscribe / `<X>HEX\n` write / `[X]HEX` notify, where `X`
  * is the low nibble of the BLE characteristic UUID A001–A012)
  * exposes the same characteristics as BLE — only the framing

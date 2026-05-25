@@ -3,7 +3,7 @@
 //! Acaia uses a proprietary **framed protocol**: a message is delimited by an
 //! `EF DD` header and a single weight frame may span several BLE
 //! notifications. Decoding is therefore stateful — feed every notification to
-//! an [`AcaiaDecoder`]. See `docs/06-scale-protocols.md` §5–6.
+//! an [`AcaiaDecoder`].
 //!
 //! gen1 and Pyxis share this protocol; they differ only in their UUIDs (and,
 //! in the shell, their connection handshake).

@@ -26,7 +26,7 @@
 	 * uses the word "backflush" at all. Crema previously called the tracker
 	 * "Backflush" — the rename here (and in the store) brings the
 	 * user-visible vocabulary in line with the firmware. The cycle is the
-	 * same; the wire is the same. See docs/44 §"Reference disagreement".
+	 * same; the wire is the same.
 	 */
 	import { getMaintenanceStore } from '$lib/maintenance';
 	import { MachineState } from '$lib/core/crema-core';
@@ -48,7 +48,7 @@
 	 * Whether the firmware is in an idle/sleep state that accepts a cycle
 	 * request. The DE1 will reject a Descale / Clean / SteamRinse request
 	 * mid-shot or mid-steam; restrict the Run-now buttons to Idle or Sleep
-	 * to match the safety analysis of `docs/18-calibration-safety.md`.
+	 * to match the firmware's safety gating.
 	 */
 	const machineIdle = $derived(
 		snapshot.machineStateName === MachineState.Idle ||

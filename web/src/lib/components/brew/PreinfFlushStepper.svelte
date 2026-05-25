@@ -51,9 +51,7 @@
 		<!-- min/max match reaprime's hot-water range (60..100 °C — flush
 		     reuses the hot-water heater path). QStepper's `inc()` +
 		     click-to-type `commit()` both clamp to these bounds, so the
-		     props are *enforced*, not decorative. docs/40 Category-A
-		     MEDIUM #13 — closes the "QC flush stepper has no min/max"
-		     row. -->
+		     props are *enforced*, not decorative. -->
 		<QStepper
 			value={p.flushTemp}
 			dimension="temp"

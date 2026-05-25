@@ -275,13 +275,13 @@ export class De1Manager {
 			// the on-machine UI or from a host Write), and the connect-time
 			// Read below seeds the initial snapshot. Matches reaprime's
 			// `transport.shotSettings` notify stream and the legacy de1app's
-			// `de1_read_hotwater` flow (`bluetooth.tcl:1707`). docs/22 §3.5.
+			// `de1_read_hotwater` flow (`bluetooth.tcl:1707`).
 			step = 'ShotSettings characteristic A00B';
 			await device.startNotifications(De1Uuids.SERVICE, De1Uuids.SHOT_SETTINGS);
 			this.callbacks.onStatus('ShotSettings A00B subscribed ✓');
 
 			// FRAME_WRITE (cuuid_10) notify subscription was removed
-			// 2026-05-22 (docs/22 §3.1). The 2026-05-21 HCI snoop of a
+			// 2026-05-22. The 2026-05-21 HCI snoop of a
 			// legacy de1app session confirmed the DE1 firmware never emits
 			// HVNs on this characteristic — only empty ATT Write Responses
 			// (opcode 0x13) come back per frame, and the orchestrator
@@ -349,7 +349,7 @@ export class De1Manager {
 			// Read covers the gap between connect and the first change.
 			// Matches reaprime's `_initializeShotSettings()` flow + the
 			// legacy de1app's `de1_read_hotwater` (`bluetooth.tcl:1707`).
-			// docs/22 §3.5. Non-fatal — the field defaults to `None` on the
+			// Non-fatal — the field defaults to `None` on the
 			// core if this read fails.
 			step = 'ShotSettings read A00B';
 			try {
@@ -428,7 +428,7 @@ export class De1Manager {
 				MmrRegister.GhcMode,
 				// Flow-calibration multiplier — surfaced in the Calibration
 				// settings section as the current flow multiplier. Wire
-				// value is `int(1000 × multiplier)`. See docs/43.
+				// value is `int(1000 × multiplier)`.
 				MmrRegister.CalibrationFlowMultiplier
 			];
 			for (const reg of connectMmrSweep) {
@@ -450,7 +450,7 @@ export class De1Manager {
 			// 5-byte Write Requests during a profile upload. The DE1's Read
 			// side returned all-zero bytes in our testing, which matches
 			// "the firmware does not expose the loaded-profile buffer on
-			// Read." See docs/16 §6.1 for the full write-up.
+			// Read."
 			//
 			// The active-profile identity comes from tracking our own
 			// successful uploads (`Event::ProfileUploadCompleted` → set

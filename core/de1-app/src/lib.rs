@@ -9,8 +9,6 @@
 //! [`AutoStop`](de1_domain::AutoStop) controller, and reports [`Event`]s and
 //! [`Command`]s in a [`CoreOutput`] envelope. It is sans-IO and holds no clock
 //! — every notification carries a monotonic `now_ms` from the shell.
-//!
-//! See `docs/08-ffi-and-web-scope.md` for the bridge design.
 
 mod capture;
 pub mod error;
@@ -40,9 +38,8 @@ use de1_protocol::{
 /// upload with [`ProfileUploadFailure::AckTimeout`]. Measured from the
 /// upload start for the first ack, from each subsequent ack thereafter.
 ///
-/// See `docs/16-profile-upload-plan.md` §5.3 for the rationale; a 5-second
-/// margin is ~100× the typical real-DE1 round-trip and clears Web
-/// Bluetooth's worst-case back-pressure window.
+/// A 5-second margin is ~100× the typical real-DE1 round-trip and clears
+/// Web Bluetooth's worst-case back-pressure window.
 pub const PROFILE_UPLOAD_ACK_TIMEOUT: Duration = Duration::from_secs(5);
 use de1_scale::{
     Scale, ScaleCapabilities, ScaleUuids, TimerCommand, decent_scale, difluid, eureka_precisa,
@@ -346,7 +343,7 @@ pub struct CremaCore {
     /// [`CaptureRecorder::is_suppressed`] so replays don't re-record
     /// themselves); sliced into JSONL via
     /// [`capture_slice_jsonl`](Self::capture_slice_jsonl). The shell used
-    /// to own this — pushed into the core (docs/26 audit) so web + Android
+    /// to own this — pushed into the core so web + Android
     /// share one byte-for-byte implementation and the recorder side-effect
     /// piggybacks the existing wasm-boundary crossing.
     capture: CaptureRecorder,
@@ -491,8 +488,8 @@ impl CremaCore {
 
     /// Whether a firmware upload is currently locking out other writes.
     ///
-    /// v1 always returns `false` — firmware update is a v2 feature
-    /// (`docs/17-firmware-update-plan.md`). The stub is carried now so every
+    /// v1 always returns `false` — firmware update is a v2 feature.
+    /// The stub is carried now so every
     /// write method added in v1 can include the one-line lockout guard
     /// ([`refuse_if_firmware_locked`](Self::refuse_if_firmware_locked)) at the
     /// time the write lands; retrofitting nine guards at v2 time is more work
@@ -762,8 +759,7 @@ impl CremaCore {
     ///   values `<135` to `0` (disable the steam heater entirely).
     ///   Values above 170 °C risk over-heating the steam boiler —
     ///   neither TCL nor reaprime intends them. The 135 °C floor
-    ///   matches TCL exactly (post-audit 2026-05-24; docs/41
-    ///   "Audit walkthrough decisions"). docs/40 §A.
+    ///   matches TCL exactly.
     /// - `hot_water_temp_c`: 0–100 °C. Above 100 °C boils → pressure
     ///   event. The legacy default is 85 °C; reaprime doesn't clamp.
     /// - `group_temp_c`: 0–105 °C (matches legacy `vars.tcl`
@@ -865,7 +861,7 @@ impl CremaCore {
     /// high 3 bytes are zero-pad.
     ///
     /// Clamped to 0..=50 °C — matches reaprime `MMRItem.fanThreshold`
-    /// (`min: 0, max: 50`); legacy TCL has no clamp. docs/40 §A.
+    /// (`min: 0, max: 50`); legacy TCL has no clamp.
     pub fn set_fan_threshold(&self, temp_c: u8) -> CoreOutput {
         if let Some(out) = self.refuse_if_firmware_locked("set_fan_threshold") {
             return out;
@@ -878,8 +874,8 @@ impl CremaCore {
 
     /// Set the tank desired water-temperature threshold, in °C (legacy
     /// `set_tank_temperature_threshold` — the immediate value only; the
-    /// legacy "preheat with 60 °C for 4 s" dance is a shell-side concern, see
-    /// `docs/14` §4.2). MMR `0x80380C`, 1-byte.
+    /// legacy "preheat with 60 °C for 4 s" dance is a shell-side concern).
+    /// MMR `0x80380C`, 1-byte.
     pub fn set_tank_threshold(&self, temp_c: u8) -> CoreOutput {
         if let Some(out) = self.refuse_if_firmware_locked("set_tank_threshold") {
             return out;
@@ -893,7 +889,7 @@ impl CremaCore {
     /// `ml/s × 100` (e.g. 7.0 ml/s → raw 700). MMR `0x803828`, 4-byte.
     /// Pre-2026-05-22 builds wrote `×10` into a 1-byte slot, both
     /// wrong; the 1-byte clamp prevented valid steam targets from
-    /// reaching the firmware. docs/22 §2.1.
+    /// reaching the firmware.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     pub fn set_steam_flow(&self, ml_per_s: f32) -> CoreOutput {
         if let Some(out) = self.refuse_if_firmware_locked("set_steam_flow") {
@@ -909,19 +905,17 @@ impl CremaCore {
     /// see legacy `machine.tcl:309 steam_highflow_start 70`). MMR
     /// `0x80382C`, 4-byte. Takes `f32` seconds so sub-second precision
     /// survives — pre-2026-05-22 builds took `Duration` and called
-    /// `as_secs()`, truncating `0.7s` to `0`. docs/22 §2.2.
+    /// `as_secs()`, truncating `0.7s` to `0`.
     ///
     /// Clamped to 0.3..=4.0 s before scaling — reaprime
     /// `MMRItem.steamStartSecs` description: "Valid range 0.0 - 4.0.
     /// **0 may result in an overheated heater. Be careful.**" Legacy
-    /// TCL has no clamp. The audit (docs/41 "Audit walkthrough
-    /// decisions 2026-05-24") concluded nobody legitimately wants 0 —
-    /// it skips the initial high-flow blast that dissipates accumulated
-    /// heater heat into the steam line. 0.3 s is the smallest blast
-    /// that meaningfully clears the line; anything shorter is
-    /// effectively the firmware's "overheated heater" failure mode.
-    /// Crema-stricter than both references on the lower bound;
-    /// docs/40 §A.
+    /// TCL has no clamp. Nobody legitimately wants 0 — it skips the
+    /// initial high-flow blast that dissipates accumulated heater heat
+    /// into the steam line. 0.3 s is the smallest blast that
+    /// meaningfully clears the line; anything shorter is effectively
+    /// the firmware's "overheated heater" failure mode.
+    /// Crema-stricter than both references on the lower bound.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     pub fn set_steam_highflow_start(&self, seconds: f32) -> CoreOutput {
         if let Some(out) = self.refuse_if_firmware_locked("set_steam_highflow_start") {
@@ -974,7 +968,7 @@ impl CremaCore {
     /// DE1 holds while a group-flush cycle runs. Wire value is `°C × 10`
     /// (so 95.0 °C → raw 950). MMR `0x803844`, 4-byte. Per reaprime
     /// (`de1.models.dart:flushTemp` `readScale: 0.1`); the legacy de1app
-    /// has no equivalent. docs/22 §3.2.
+    /// has no equivalent.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     pub fn set_flush_temp(&self, temp_c: f32) -> CoreOutput {
         if let Some(out) = self.refuse_if_firmware_locked("set_flush_temp") {
@@ -1017,8 +1011,7 @@ impl CremaCore {
     ///
     /// Wire `Len=4` — matches TCL `de1_comms.tcl:1166` and reaprime
     /// `_writeMMRInt` (always 4 wire bytes). Normalising the wire-byte
-    /// count to 4 aligns Crema with both references (docs/41
-    /// §"Bucket 1" — Audit walkthrough decisions 2026-05-24).
+    /// count to 4 aligns Crema with both references.
     pub fn set_user_present(&self, present: bool) -> CoreOutput {
         if let Some(out) = self.refuse_if_firmware_locked("set_user_present") {
             return out;
@@ -1059,12 +1052,12 @@ impl CremaCore {
     /// been told and is detecting from the heater dB. We never write `0`
     /// ourselves — only `1120` or `1230`. See reaprime
     /// `de1.models.dart:301 heaterV` ("Nominal Heater Voltage (0, 120V or
-    /// 230V). +1000 if it's a set value.") and `docs/27` row #56.
+    /// 230V). +1000 if it's a set value.").
     ///
     /// **Damaging if mis-set** — wrong voltage on the wrong mains can
     /// permanently damage the heater. The shell is responsible for the
     /// type-to-confirm modal (`MainsConfirmModal.svelte`) that the legacy
-    /// app uses (`docs/14` §4.13); this clamp is the last-line guard.
+    /// app uses; this clamp is the last-line guard.
     ///
     /// # Errors
     ///
@@ -1092,9 +1085,7 @@ impl CremaCore {
     /// idle temp, heater phase 1/2 flows, espresso warmup timeout,
     /// refill kit auto mode, flow-calibration multiplier, and steam
     /// purge mode. Every value is the post-clamp, on-the-wire baseline
-    /// that reaprime ends up writing — see the
-    /// `RESET_*` consts below and `docs/27-write-side-gaps.md`
-    /// appendix "settings-reset baseline values".
+    /// that reaprime ends up writing — see the `RESET_*` consts below.
     ///
     /// Emits 8 [`Command::WriteCharacteristic`] entries in one
     /// [`CoreOutput`]; the shell submits them serially. Order matches
@@ -1110,7 +1101,7 @@ impl CremaCore {
     /// MMR `fanThreshold` clamps `max: 50`, so `_writeMMRInt` silently
     /// emits `50` on the wire. Crema writes `50` directly so the
     /// firmware ends up with the same value any user sees via
-    /// read-back. See the appendix's "Important gotcha" note.
+    /// read-back.
     ///
     /// Refused while a firmware upload is in progress
     /// (see [`firmware_locks_writes`](Self::firmware_locks_writes)) —
@@ -1123,9 +1114,8 @@ impl CremaCore {
     /// symmetry with future per-field validation.
     pub fn reset_machine_defaults(&self) -> Result<CoreOutput, AppError> {
         // Baselines — match reaprime/lib/src/controllers/
-        // de1_controller.defaults.dart:39-51 *post-clamp*. See
-        // docs/27 appendix "settings-reset baseline values" for the
-        // wire encoding of every value below.
+        // de1_controller.defaults.dart:39-51 *post-clamp*. Each
+        // RESET_* const documents its wire encoding inline.
         //
         // Fan: reaprime writes 55, gets clamped to 50 by `_writeMMRInt`
         // (MMRItem.fanThreshold max=50). Crema emits 50 directly.
@@ -1140,8 +1130,7 @@ impl CremaCore {
         // Refill kit: 2 = auto, 4-byte LE.
         const RESET_REFILL_KIT_RAW: u32 = 2;
         // Cal-flow-est: 1.0, wire `× 1000` = 1000, 4-byte LE.
-        // Post-audit 2026-05-24: byte_len normalised to 4 (matches
-        // TCL + reaprime; docs/41 "Audit walkthrough decisions").
+        // byte_len normalised to 4 (matches TCL + reaprime).
         const RESET_CAL_FLOW_EST_RAW: u32 = 1000;
         // Steam purge mode (SteamTwoTapStop register, 0x803850): 0, 4-byte LE bool.
         const RESET_STEAM_PURGE_MODE_RAW: u32 = 0;
@@ -1198,20 +1187,19 @@ impl CremaCore {
     ///
     /// Clamped to 0..=80 °C — matches the web shell's
     /// `MachineSection.svelte` stepper (`min=0, max=80`); neither legacy
-    /// TCL nor reaprime clamps. docs/40 §A.
+    /// TCL nor reaprime clamps.
     ///
-    /// **OPEN — wire encoding divergence vs reaprime (docs/41 Bucket 2,
-    /// docs/42).** Crema follows the legacy TCL convention: raw °C as a
-    /// u8 (e.g., 60°C → wire byte 60). reaprime's `BengleMmr.matSetPoint`
-    /// declares `MmrValueKind.scaledFloat readScale:0.1 writeScale:10.0
+    /// **OPEN — wire encoding divergence vs reaprime.** Crema follows
+    /// the legacy TCL convention: raw °C as a u8 (e.g., 60°C → wire
+    /// byte 60). reaprime's `BengleMmr.matSetPoint` declares
+    /// `MmrValueKind.scaledFloat readScale:0.1 writeScale:10.0
     /// min:0 max:800` — wire value = °C × 10 as a 4-byte LE int (e.g.,
     /// 60°C → wire bytes `[88, 02, 00, 00]` for 600). If reaprime is
     /// correct, Crema writes 10× too low: a 60°C target lands on the
     /// firmware as 6.0°C, never warm enough to do anything. Kept as-is
     /// because the wrong direction (10× too HIGH = 600°C target) would
     /// be worse if the legacy convention is the real spec. Resolution
-    /// pending hardware test + upstream reaprime confirmation
-    /// (`docs/42-reaprime-cup-warmer-question.md`).
+    /// pending hardware test + upstream reaprime confirmation.
     pub fn set_cup_warmer_temperature(&self, temp_c: u8) -> CoreOutput {
         if let Some(out) = self.refuse_if_firmware_locked("set_cup_warmer_temperature") {
             return out;
@@ -1230,13 +1218,12 @@ impl CremaCore {
     /// outside this range corrupts the flow-estimation algorithm to
     /// the point that profile-driven stops misfire (under-extracted or
     /// flooded). Legacy TCL has no clamp; reaprime is the canonical
-    /// source. docs/40 §A.
+    /// source.
     ///
     /// Wire `Len=4` — matches TCL `de1_comms.tcl:1336` and reaprime
     /// `_writeMMRInt` (always 4 wire bytes). The raw value fits in two
     /// bytes (max 2000), but normalising the wire-byte count to 4
-    /// aligns Crema with both references (docs/41 §"Bucket 1" — Audit
-    /// walkthrough decisions 2026-05-24).
+    /// aligns Crema with both references.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     pub fn set_calibration_flow_multiplier(&self, multiplier: f32) -> CoreOutput {
         if let Some(out) = self.refuse_if_firmware_locked("set_calibration_flow_multiplier") {
@@ -1308,7 +1295,6 @@ impl CremaCore {
     /// and forces a firmware safety stop; 99 °C stays one degree under
     /// the trigger. The legacy default is 95.0 °C (`machine.tcl
     /// :hot_water_idle_temp 950`); reaprime doesn't clamp this register.
-    /// docs/40 §A; docs/41 "Audit walkthrough decisions 2026-05-24".
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     pub fn set_hot_water_idle_temp(&self, temp_c: f32) -> CoreOutput {
         if let Some(out) = self.refuse_if_firmware_locked("set_hot_water_idle_temp") {
@@ -2482,12 +2468,12 @@ impl CremaCore {
 
     // ── Profile upload (write side) ───────────────────────────────────────
     //
-    // Implements the design in `docs/16-profile-upload-plan.md`. The shape
-    // is: `upload_profile` validates the profile, returns one `CoreOutput`
-    // carrying every BLE write in upload order (header + N frames + M
-    // extensions + tail), and arms the ack matcher. Each `Source::De1FrameAck`
-    // notification advances the matcher one step; the tail ack emits
-    // `ProfileUploadCompleted` and records the title as the active profile.
+    // The shape is: `upload_profile` validates the profile, returns one
+    // `CoreOutput` carrying every BLE write in upload order (header + N
+    // frames + M extensions + tail), and arms the ack matcher. Each
+    // `Source::De1FrameAck` notification advances the matcher one step;
+    // the tail ack emits `ProfileUploadCompleted` and records the title
+    // as the active profile.
 
     /// Start uploading `profile` to the DE1.
     ///
@@ -2607,7 +2593,7 @@ impl CremaCore {
     /// [`Event::ProfileHeaderRead`].
     ///
     /// **DORMANT** — the BLE shell does not currently Read `cuuid_0F`
-    /// (docs/16 §6.1: legacy never Reads it, firmware returns zeros).
+    /// (the legacy app never Reads it, and firmware returns zeros).
     /// This handler is reachable only via test fixtures and remains as
     /// forward-compat for a future firmware that exposes the buffer.
     fn handle_profile_header_read(&mut self, data: &[u8], out: &mut CoreOutput) {
@@ -2795,7 +2781,7 @@ impl CremaCore {
     /// timer is reset-then-started; at shot completion the timer is stopped.
     /// All three timer writes are capability-gated by [`Scale::timer`], so
     /// scales without software timer commands stay silent — matching the
-    /// audit §7.2 reactive auto-policy from `docs/14`.
+    /// reactive auto-policy of the legacy app.
     fn map_shot_event(&mut self, event: ShotEvent, now: Duration, out: &mut CoreOutput) {
         match event {
             ShotEvent::Started => {
@@ -4916,7 +4902,7 @@ mod tests {
 
     #[test]
     fn set_steam_flow_scales_by_one_hundred_into_a_four_byte_slot() {
-        // docs/22 §2.1: TCL + reaprime agree on ×100 + 4-byte; the
+        // TCL + reaprime agree on ×100 + 4-byte; the
         // pre-2026-05-22 `×10` + 1-byte encoding was a bug (the 1-byte
         // clamp prevented valid steam targets from reaching the
         // firmware). 7.0 ml/s × 100 = 700; little-endian 4-byte =
@@ -4935,7 +4921,7 @@ mod tests {
 
     #[test]
     fn set_steam_highflow_start_preserves_sub_second_precision() {
-        // docs/22 §2.2: the wire value is seconds × 100. The default
+        // The wire value is seconds × 100. The default
         // 0.7s stores as 70 (matches legacy `machine.tcl:309
         // steam_highflow_start 70`). Pre-2026-05-22 builds took a
         // `Duration` and called `as_secs()`, truncating 0.7s → 0.
@@ -4952,11 +4938,10 @@ mod tests {
     #[test]
     fn set_user_present_and_set_feature_flags_target_distinct_registers() {
         // Confirmed by user: 0x803860 (UserPresent) and 0x803858 (FeatureFlags)
-        // are distinct registers, not aliases. Post-audit 2026-05-24:
-        // UserPresent byte_len normalised from 1 → 4 to match TCL +
-        // reaprime (docs/41 "Audit walkthrough decisions"). The wire
-        // bytes for the boolean payload are the same; only the Len
-        // byte changes.
+        // are distinct registers, not aliases. UserPresent byte_len
+        // normalised from 1 → 4 to match TCL + reaprime. The wire bytes
+        // for the boolean payload are the same; only the Len byte
+        // changes.
         let core = CremaCore::new();
         let up = core.set_user_present(true);
         let ff = core.set_feature_flags(0x1234);
@@ -4976,8 +4961,8 @@ mod tests {
 
     #[test]
     fn set_heater_voltage_rejects_values_outside_120_or_230() {
-        // docs/27 row #56: the firmware accepts only 120 or 230 as
-        // user-committed values. Anything else is a clamp failure at the
+        // The firmware accepts only 120 or 230 as user-committed
+        // values. Anything else is a clamp failure at the
         // bridge layer; the shell pre-validates via MainsConfirmModal but
         // the core is the last-line guard.
         let core = CremaCore::new();
@@ -4994,8 +4979,8 @@ mod tests {
 
     #[test]
     fn set_heater_voltage_encodes_plus_1000_as_four_byte_le() {
-        // docs/27 row #56 + reaprime de1.models.dart:301 heaterV "Nominal
-        // Heater Voltage (0, 120V or 230V). +1000 if it's a set value." —
+        // Per reaprime de1.models.dart:301 heaterV "Nominal Heater
+        // Voltage (0, 120V or 230V). +1000 if it's a set value." —
         // the user-committed marker is the +1000 offset, encoded as
         // 4-byte little-endian on the wire.
         //   120 + 1000 = 1120 = 0x460 → bytes [0x60, 0x04, 0x00, 0x00]
@@ -5031,7 +5016,7 @@ mod tests {
         );
     }
 
-    // ---- Range-clamp safety audit (docs/40) ----------------------------
+    // ---- Range-clamp safety audit -------------------------------------
     //
     // These tests pin the defense-in-depth clamps the core applies on
     // settings writes that could send dangerous / out-of-range values to
@@ -5050,7 +5035,7 @@ mod tests {
 
     #[test]
     fn set_fan_threshold_clamps_above_50c() {
-        // docs/40 §A: reaprime MMRItem.fanThreshold min=0, max=50.
+        // reaprime MMRItem.fanThreshold min=0, max=50.
         let core = CremaCore::new();
         let in_range = core.set_fan_threshold(45);
         assert_eq!(mmr_write_payload(&in_range)[0], 45);
@@ -5090,7 +5075,7 @@ mod tests {
 
     #[test]
     fn set_steam_highflow_start_clamps_above_4_seconds() {
-        // docs/40 §A: reaprime steamStartSecs says "Valid range 0.0 - 4.0".
+        // reaprime steamStartSecs says "Valid range 0.0 - 4.0".
         let core = CremaCore::new();
         // 0.7 s × 100 = 70 (unchanged — within range).
         let in_range = core.set_steam_highflow_start(0.7);
@@ -5107,8 +5092,7 @@ mod tests {
 
     #[test]
     fn set_steam_highflow_start_clamps_below_safe_minimum() {
-        // Post-audit 2026-05-24 (docs/41 "Audit walkthrough decisions"):
-        // the lower bound is 0.3 s (not 0.0). The firmware spec text
+        // The lower bound is 0.3 s (not 0.0). The firmware spec text
         // warns "0 may result in an overheated heater. Be careful." —
         // 0 skips the high-flow blast that dissipates accumulated
         // heater heat. 0.3 s is the smallest blast that meaningfully
@@ -5138,8 +5122,7 @@ mod tests {
 
     #[test]
     fn set_hot_water_idle_temp_clamps_above_99c() {
-        // docs/40 §A + docs/41 "Audit walkthrough decisions 2026-05-24":
-        // ceiling = 99 °C (matches TCL `machine.tcl:285
+        // Ceiling = 99 °C (matches TCL `machine.tcl:285
         // hot_water_idle_temp "990"` = 99.0 °C). At 100 °C the boiler
         // boils → pressure event → firmware safety stop; 99 °C is one
         // degree under that trigger. reaprime doesn't clamp.
@@ -5175,7 +5158,7 @@ mod tests {
 
     #[test]
     fn set_cup_warmer_temperature_clamps_above_80c() {
-        // docs/40 §A: shell stepper bounds 0..80; core mirrors.
+        // Shell stepper bounds 0..80; core mirrors.
         let core = CremaCore::new();
         let in_range = core.set_cup_warmer_temperature(60);
         // CupWarmer is 2-byte but mmr_write_payload reads the first 4;
@@ -5192,7 +5175,7 @@ mod tests {
 
     #[test]
     fn set_calibration_flow_multiplier_clamps_to_reaprime_range() {
-        // docs/40 §A: reaprime calFlowEst min=130, max=2000 raw
+        // reaprime calFlowEst min=130, max=2000 raw
         // (= 0.13..=2.0 multiplier). A value outside this range
         // corrupts the flow-estimation algorithm.
         let core = CremaCore::new();
@@ -5214,10 +5197,8 @@ mod tests {
 
     #[test]
     fn set_calibration_flow_multiplier_emits_len_byte_4_and_4_byte_payload() {
-        // Post-audit 2026-05-24: byte_len normalised from 2 → 4 to
-        // match TCL `de1_comms.tcl:1336` and reaprime `_writeMMRInt`
-        // (both always write 4 wire bytes). docs/41 "Audit walkthrough
-        // decisions".
+        // byte_len normalised from 2 → 4 to match TCL `de1_comms.tcl:1336`
+        // and reaprime `_writeMMRInt` (both always write 4 wire bytes).
         let core = CremaCore::new();
         let out = core.set_calibration_flow_multiplier(1.0);
         let Some(Command::WriteCharacteristic { target, data }) = out.commands.first() else {
@@ -5231,7 +5212,7 @@ mod tests {
 
     #[test]
     fn set_steam_hotwater_settings_clamps_group_temp_above_105c() {
-        // docs/40 §A: TCL vars.tcl range_check_shot_variables clamps
+        // TCL vars.tcl range_check_shot_variables clamps
         // espresso_temperature to 0..=105. Above 100 °C the group
         // cannot usefully run; +5 °C head-room matches the TCL guard.
         let mut core = CremaCore::new();
@@ -5257,7 +5238,7 @@ mod tests {
 
     #[test]
     fn set_steam_hotwater_settings_clamps_hot_water_temp_above_100c() {
-        // docs/40 §A: above 100 °C boils → pressure event.
+        // Above 100 °C boils → pressure event.
         let mut core = CremaCore::new();
         let settings = ShotSettings {
             hot_water_temp_c: 150.0,
@@ -5273,7 +5254,7 @@ mod tests {
 
     #[test]
     fn set_steam_hotwater_settings_clamps_steam_temp_above_170c() {
-        // docs/40 §A: legacy default skin slider runs 134..170; above
+        // Legacy default skin slider runs 134..170; above
         // 170 risks over-heating the steam boiler.
         let mut core = CremaCore::new();
         let settings = ShotSettings {
@@ -5290,12 +5271,11 @@ mod tests {
 
     #[test]
     fn set_steam_hotwater_settings_snaps_sub_steam_temp_to_zero() {
-        // docs/40 §A + legacy binary.tcl:184-186: values below 135 °C
-        // are useless for steam (the heater would never actually
-        // steam), so the legacy app forces them to 0 (disable steam).
-        // Crema matches the legacy 135 °C floor exactly (post-audit
-        // 2026-05-24; docs/41 "Audit walkthrough decisions"), leaving
-        // 0 itself untouched (the explicit "disabled" intent).
+        // Per legacy binary.tcl:184-186, values below 135 °C are
+        // useless for steam (the heater would never actually steam),
+        // so the legacy app forces them to 0 (disable steam). Crema
+        // matches the legacy 135 °C floor exactly, leaving 0 itself
+        // untouched (the explicit "disabled" intent).
         let mut core = CremaCore::new();
         let settings = ShotSettings {
             steam_temp_c: 80.0,
@@ -5362,7 +5342,6 @@ mod tests {
 
     #[test]
     fn reset_machine_defaults_emits_8_writes_with_known_baselines() {
-        // docs/27 row #53 — settings reset to factory baseline.
         // Pins the 8 MMR writes byte-for-byte against the documented
         // baseline (post-clamp wire values, in reaprime's source order).
         let core = CremaCore::new();
@@ -5388,9 +5367,8 @@ mod tests {
             (0x0080_3838, 4, &[0x28, 0x00, 0x00, 0x00]),
             // RefillKit: 2 (auto).
             (0x0080_385C, 4, &[0x02, 0x00, 0x00, 0x00]),
-            // CalFlowEst: 1.0 × 1000 = 1000 = 0x03E8. Post-audit
-            // 2026-05-24: byte_len normalised to 4 (matches TCL +
-            // reaprime; docs/41 "Audit walkthrough decisions").
+            // CalFlowEst: 1.0 × 1000 = 1000 = 0x03E8. byte_len
+            // normalised to 4 (matches TCL + reaprime).
             (0x0080_383C, 4, &[0xE8, 0x03, 0x00, 0x00]),
             // SteamPurgeMode (SteamTwoTapStop): 0.
             (0x0080_3850, 4, &[0x00, 0x00, 0x00, 0x00]),
@@ -5729,7 +5707,7 @@ mod tests {
         // v1 carries the lockout guard as a stub that always returns `false`;
         // v2 will return `true` for the `Erase..Verifying` upload phases.
         // This test pins the stub so a future change is a conscious decision,
-        // not an accident — see `docs/17-firmware-update-plan.md` §3.4.
+        // not an accident.
         let core = CremaCore::new();
         assert!(!core.firmware_locks_writes());
     }
@@ -5762,7 +5740,7 @@ mod tests {
         assert_eq!(parsed, output);
     }
 
-    // ── Profile upload — docs/16 §7.3 ─────────────────────────────────────
+    // ── Profile upload ────────────────────────────────────────────────────
 
     mod profile_upload {
         use super::*;

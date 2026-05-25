@@ -1,6 +1,6 @@
 /**
  * `$lib/visualizer/sync-config` — persisted per-entity sync direction +
- * cadence settings (docs/36 §7).
+ * cadence settings.
  *
  * One unified shape replaces the bean-only `crema.beans.sync.v1` config
  * with `crema.visualizer.sync.v1`. The old key is read once on first
@@ -14,12 +14,12 @@
 
 import { readJson, writeJson } from '$lib/utils/storage';
 
-/** New unified persistence key (docs/36 §7). */
+/** New unified persistence key. */
 const SYNC_KEY = 'crema.visualizer.sync.v1';
 /** Legacy bean-only key — read once for migration, then tombstoned. */
 const LEGACY_BEAN_KEY = 'crema.beans.sync.v1';
 
-/** One direction per entity (docs/36 §2). */
+/** One direction per entity. */
 export type SyncDirection = 'off' | 'backup' | 'pull' | 'two-way';
 
 /** A single sync-log entry surfaced in the Sync UI. */

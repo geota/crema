@@ -19,9 +19,8 @@
  * `MachineState::Clean` *is* the cycle the espresso world informally calls a
  * "backflush" (blind basket + cleaning tablet, pressure pulses puck-side);
  * legacy TCL never uses the word "backflush" at all, and reaprime calls the
- * button "Clean". docs/44 §"Reference disagreement" recommended unifying on
- * "Clean" so the run-cycle action and the tracker share vocabulary with the
- * firmware state.
+ * button "Clean", so the run-cycle action and the tracker share
+ * vocabulary with the firmware state.
  *
  * Persistence key bumped `crema.maintenance.v1` → `crema.maintenance.v2` with
  * a one-shot migration from the v1 key on first load — Crema is pre-prod, but

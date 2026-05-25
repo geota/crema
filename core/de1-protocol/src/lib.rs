@@ -6,9 +6,8 @@
 //! filesystem. It turns raw GATT packet bytes into typed Rust values and back.
 //! Every DE1 GATT packet is big-endian.
 //!
-//! The protocol is documented in `docs/02-ble-protocol.md`; this crate
-//! implements it. It is a clean-room reimplementation — the legacy Tcl app is
-//! referenced for the protocol's *behaviour*, not copied.
+//! Clean-room reimplementation — the legacy Tcl app is referenced for
+//! the protocol's *behaviour*, not copied.
 //!
 //! ## Modules
 //!

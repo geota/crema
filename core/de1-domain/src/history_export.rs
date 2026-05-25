@@ -10,8 +10,7 @@
 //! The v2 schema covers parallel telemetry arrays + structured meta;
 //! Crema's [`StoredShot`] carries less than the schema permits (no raw
 //! scale-flow channel, no per-sample phase boundaries, no roast-date
-//! on the bean — see `docs/26-shell-to-core-audit.md` §6 for the
-//! audit). Fields Crema doesn't model emit the v2-schema-friendly
+//! on the bean). Fields Crema doesn't model emit the v2-schema-friendly
 //! "absent" value: an empty array, `null`, or zero, matching what the
 //! existing shell exporter produced before this push.
 //!

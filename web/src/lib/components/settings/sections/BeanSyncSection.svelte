@@ -2,7 +2,7 @@
 	/**
 	 * `BeanSyncSection` — Settings → Sharing → "Sync" card.
 	 *
-	 * Per docs/36 §8, this card holds the unified per-entity sync matrix:
+	 * This card holds the unified per-entity sync matrix:
 	 * beans / roasters / shots each get a direction selector (off /
 	 * backup / pull / two-way), with a master `Auto-sync` toggle, a
 	 * single "Sync now" button, and a collapsible activity log spanning
@@ -56,7 +56,7 @@
 		config = readSyncConfig();
 	});
 
-	/** docs/36 §8: every direction selector lists the same four modes. */
+	/** Every direction selector lists the same four modes. */
 	const DIRECTION_OPTIONS: { value: SyncDirection; label: string }[] = [
 		{ value: 'off', label: 'Off' },
 		{ value: 'backup', label: 'Backup' },
@@ -66,7 +66,7 @@
 
 	/**
 	 * Free-tier users can't push beans / roasters (Visualizer's premium
-	 * gate). docs/36 §8: the segment shows the full four options but
+	 * gate). The segment shows the full four options but
 	 * `Backup` / `Two-way` are visually disabled for those entities. We
 	 * still allow Off / Pull. Shots stay unrestricted.
 	 */
@@ -186,8 +186,8 @@
 	 * Apply the {@link reconcileShots} plan against the local history store.
 	 * - `add` → insertPulled (brand-new shot from remote)
 	 * - `bind` → bindVisualizerId (local shot existed pre-sign-in; adopt
-	 *   the remote id without creating a duplicate; de-dup signature flow
-	 *   from docs/36 §3)
+	 *   the remote id without creating a duplicate via the de-dup
+	 *   signature flow)
 	 * - `update` → flow the editable annotations Visualizer mutates server-
 	 *   side (currently `tags`) onto the bound local row. Notes / rating
 	 *   are still owner-edited locally only — those don't loop back from

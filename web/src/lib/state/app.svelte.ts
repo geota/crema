@@ -155,7 +155,7 @@ const LAST_FINGERPRINT_KEY = 'crema.profile-sync.lastFingerprint.v1';
  * state-request that hits the firmware task loop inside the window
  * aborts the shot to HeaterDown after preinfuse — BC 9788201734.
  * Reaprime's value (`ConnectionTimings.profileDownloadGuard`); Crema
- * matches. docs/22 §1.2.
+ * matches.
  */
 const PROFILE_DOWNLOAD_GUARD_MS = 500;
 
@@ -269,7 +269,7 @@ export class CremaApp {
 	 * `ProfileDownloadInProgress` after the final flash write returns; a
 	 * state=Espresso request before that aborts the shot to HeaterDown
 	 * after preinfuse. Reaprime's `ConnectionTimings.profileDownloadGuard`
-	 * is 500 ms; Crema matches. docs/22 §1.2.
+	 * is 500 ms; Crema matches.
 	 */
 	private lastProfileUploadCompletedAtMs: number | null = null;
 
@@ -315,7 +315,7 @@ export class CremaApp {
 	 * `brewTemp`, `preinfuseTarget`, `stopOnWeight`, `autoTare` — freeze
 	 * onto the persisted `StoredShot` instead of being read live (which
 	 * would let a post-shot dial change retroactively rewrite history,
-	 * the snapshot-vs-live failure mode docs/28 calls out).
+	 * the snapshot-vs-live failure mode).
 	 *
 	 * `null` between shots and on a headless / replay path that does not
 	 * pass through the Quick Sheet — both leave the `StoredShot`'s QC
@@ -347,8 +347,8 @@ export class CremaApp {
 				// becomes ready. Mirrors the legacy DE1-app's
 				// `save_settings_to_de1` → `de1_send_shot_frames` chain
 				// (the 2026-05-21 HCI snoop confirmed it fires ~80 ms
-				// after the connect-time subscriptions complete; docs/16
-				// §6.2). `ensureLoadedMatches()` consults the cached
+				// after the connect-time subscriptions complete).
+				// `ensureLoadedMatches()` consults the cached
 				// fingerprint (persisted across reloads via localStorage)
 				// to skip the upload when the DE1 still has the right
 				// bytes — without it, the DE1 wakes up with no profile
@@ -604,7 +604,7 @@ export class CremaApp {
 				const snapshot = this.state.current;
 				// Stamp a snapshot of the active library bean onto the record, so a
 				// later edit / archive / delete cannot rewrite history (the
-				// snapshot-wins design per docs/28 §design-decisions §1). An
+				// snapshot-wins design). An
 				// unselected bean stores `null`; the History UI treats it as
 				// optional.
 				const library = getBeanStore();
@@ -695,8 +695,7 @@ export class CremaApp {
 				// capture write).
 				// Burn-down: debit the active bag by the profile's dose so the
 				// brew-page chip reads the remaining grams accurately. No-op
-				// when the user hasn't filled in a bag size. Innovation §2
-				// per docs/28.
+				// when the user hasn't filled in a bag size.
 				if (activeBean && activeProfile?.dose) {
 					library.debitFromActive(activeProfile.dose);
 				}
@@ -723,7 +722,7 @@ export class CremaApp {
 				// Auto-upload to Visualizer if shot sync direction includes
 				// push. Fire-and-forget on the orchestrator thread — failures
 				// fall through to the persistent retry queue so a 502 / offline
-				// blip doesn't lose the shot. docs/36 §5.
+				// blip doesn't lose the shot.
 				if (record) {
 					this.tryUploadShot(record.id);
 				}
@@ -943,7 +942,7 @@ export class CremaApp {
 	 * sync direction + the `visualizerAutoUpload` setting. Failures route
 	 * through the persistent retry queue so transient network blips don't
 	 * lose the shot. Auth + premium errors bypass the queue — the user
-	 * needs to fix something. docs/36 §5.
+	 * needs to fix something.
 	 */
 	private tryUploadShot(shotId: string): void {
 		const config = readSyncConfig();
@@ -1312,9 +1311,8 @@ export class CremaApp {
 	 * first. Only `120` and `230` are accepted; the core throws otherwise.
 	 *
 	 * Wire-side, the core encodes `volts + 1000` (the firmware's
-	 * user-committed marker, see `docs/27` row #56). The shell does not
-	 * need to know about that — pass `120` or `230` straight from the
-	 * modal's confirmed value.
+	 * user-committed marker). The shell does not need to know about
+	 * that — pass `120` or `230` straight from the modal's confirmed value.
 	 */
 	async setHeaterVoltage(volts: 120 | 230): Promise<void> {
 		this.applyCoreOutput(await this.core.setHeaterVoltage(volts));
@@ -1409,7 +1407,7 @@ export class CremaApp {
 	 * `.shot.json` (v2) file and add the resulting shot to the History
 	 * store. Picks the parser by file extension: `.json` → v2, anything
 	 * else → legacy TCL. Returns the imported record on success, or an
-	 * error string the caller can surface as a toast. docs/22 §5.1.
+	 * error string the caller can surface as a toast.
 	 */
 	/**
 	 * Import a single community-v2 `.json` or legacy de1app `.tcl`
@@ -1973,7 +1971,7 @@ export class CremaApp {
 	 * buttons; the shell exposes them for completeness.
 	 */
 	async requestMachineState(state: MachineState): Promise<void> {
-		// Profile-download race guard (docs/22 §1.2). The DE1 firmware
+		// Profile-download race guard. The DE1 firmware
 		// holds `ProfileDownloadInProgress` for a short window after the
 		// final frame write — a state-request that arrives inside the
 		// window is aborted to HeaterDown after preinfuse (BC 9788201734).

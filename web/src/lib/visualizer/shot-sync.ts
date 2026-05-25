@@ -20,7 +20,7 @@
  *     `{ shot: { espresso_enjoyment, private_notes } }`.
  *   - `DELETE /shots/{id}` returns 200 + `{ success: true }`.
  *
- * Direction & modes (docs/36 §2): unchanged from previous cut.
+ * Direction & modes: unchanged from previous cut.
  *   - **Backup**  — push only.
  *   - **Pull**    — read remote shots; de-dup via `signatureForShot`.
  *   - **Two-way** — both directions; LWW conflict resolution.
@@ -217,7 +217,7 @@ function wireShotFromDetail(summary: ShotSummary, detail: ShotDetail): WireShot 
 	})();
 	const espressoNotes = fallback.private_notes ?? bcMeta?.private_notes ?? fallback.espresso_notes ?? null;
 	// Crema rating is 0..5; the wire's cupping slots are 0..15. We write
-	// `flavor = rating * 3` on PATCH (docs/38 §"Recommendations" row 2),
+	// `flavor = rating * 3` on PATCH,
 	// so the pull does the inverse: prefer `flavor`, fall back to the
 	// legacy `espresso_enjoyment` field for shots uploaded before the
 	// switch, then round-trip back to the 0..5 scale.
@@ -259,10 +259,10 @@ function wireShotFromDetail(summary: ShotSummary, detail: ShotDetail): WireShot 
  * as `additionalProperties: true`, so the wire allows fields beyond the
  * explicitly-listed ones, mirroring the read-side `DefaultShotDetail`).
  *
- * **Snapshot-only** (docs/28 §"Bean ↔ shot association"): every field
- * below is read from the frozen-at-completion {@link ShotBean}, never
- * from the live bean. Reading live-bean content would retroactively
- * rewrite history when the user later edits the bag. The one place
+ * **Snapshot-only**: every field below is read from the frozen-at-
+ * completion {@link ShotBean}, never from the live bean. Reading
+ * live-bean content would retroactively rewrite history when the
+ * user later edits the bag. The one place
  * live-bean lookup is correct is the {@link resolveCoffeeBagId} fallback
  * for the `coffee_bag_id` *link pointer* — content stays snapshot-only.
  *
@@ -333,10 +333,9 @@ export function resolveGrinderModel(
 
 /**
  * Resolve the `coffee_bag_id` link pointer for a shot's post-upload
- * PATCH. Per docs/28 §"Bean ↔ shot association", the snapshot is the
- * content source of truth — but the bag's *Visualizer id* is a stable
- * mutable link not part of the shot's content, so we read it from the
- * LIVE bean every time. The snapshot's `beanId` is the FK we look up
+ * PATCH. The snapshot is the content source of truth — but the bag's
+ * *Visualizer id* is a stable mutable link not part of the shot's
+ * content, so we read it from the LIVE bean every time. The snapshot's `beanId` is the FK we look up
  * against the bean library.
  *
  * This is THE ONLY place the live bean is read on the upload path —
@@ -357,9 +356,9 @@ function resolveCoffeeBagId(shot: StoredShot): string | null {
 }
 
 /**
- * Resolve the shot's `tag_list` for the post-upload PATCH. Per docs/38
- * row 5 we auto-tag uploaded shots with {@link StoredShot.tags} — the
- * single source of truth for shot-level tags. Bean tags get folded into
+ * Resolve the shot's `tag_list` for the post-upload PATCH. Auto-tag
+ * uploaded shots with {@link StoredShot.tags} — the single source of
+ * truth for shot-level tags. Bean tags get folded into
  * this list at completion time (and at retroactive rebind time via
  * `HistoryStore.setBeanFromLive`), so there's no second source to merge.
  *
@@ -393,13 +392,13 @@ function resolveTagList(shot: StoredShot): string[] | null {
  * After a successful upload, fires a soft follow-up `PATCH /shots/{id}`
  * carrying every field `DecentUploadPayload` doesn't accept on its body
  * but `ShotUpdateRequest.shot` does:
- *   - `coffee_bag_id` — link to the synced coffee bag (docs/38 row 1).
- *   - `tag_list` — auto-tag with the bean's tags (docs/38 row 5).
+ *   - `coffee_bag_id` — link to the synced coffee bag.
+ *   - `tag_list` — auto-tag with the bean's tags.
  *   - `bean_brand` / `bean_type` / `roast_date` / `roast_level` /
  *     `bean_notes` / `grinder_setting` — the inline bean snapshot
- *     content (docs/38 §"Bag-side gaps to close"). All sourced from
- *     {@link StoredShot.bean} — the *snapshot*, never the live bean —
- *     so a later edit to the bag can't retroactively rewrite history.
+ *     content. All sourced from {@link StoredShot.bean} — the
+ *     *snapshot*, never the live bean — so a later edit to the bag
+ *     can't retroactively rewrite history.
  *
  * PATCH failure is treated as soft — logged, not rethrown — so a flaky
  * link wire doesn't lose the uploaded shot.
@@ -478,7 +477,7 @@ export async function deleteShot(visualizerId: string): Promise<void> {
 /**
  * Patch a remote shot's editable annotations. The spec requires a
  * `{ shot: {...} }` envelope. Crema-side fields map onto the spec as
- * follows (per docs/38 §"Recommendations"):
+ * follows:
  *
  *   - `notes` → `private_notes` (kept out of the public profile view)
  *   - `rating` (0..5 star) → `flavor` (0..15 SCA cupping slot) via

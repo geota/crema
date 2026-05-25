@@ -13,12 +13,11 @@
 //!   window for its band, the verdict (`Best` / `Ok` / `Bad`) that
 //!   drives the bean card's status dot.
 //!
-//! Per `docs/26-shell-to-core-audit.md` push #5/#9, this module covers
-//! the pure classification helpers only. A typed bean shape and the
-//! profile-roast inference (`roastFromProfile`) are explicitly
-//! deferred until Android starts modelling beans.
+//! This module covers the pure classification helpers only. A typed
+//! bean shape and the profile-roast inference (`roastFromProfile`) are
+//! explicitly deferred until Android starts modelling beans.
 //!
-//! **2026-05-23 — Bean library types added.** Per `docs/28`, the
+//! **2026-05-23 — Bean library types added.** The
 //! per-bag canonical types ([`Bean`], [`Roaster`], [`BeanOrigin`],
 //! [`BeanMix`], [`ShotBean`]) now live here and are emitted to every
 //! shell via `#[typeshare]`. Pure helpers ([`BeanRecord::is_off_roast`],
@@ -237,7 +236,7 @@ fn days_from_civil(y: i32, m: u32, d: u32) -> Option<i64> {
 }
 
 // ───────────────────────────────────────────────────────────────────
-// Bean library — per-bag identity types (docs/28).
+// Bean library — per-bag identity types.
 //
 // `Bean` is *a bag of coffee* (the unit of stock the user manages).
 // `Roaster` is *the roastery* that produced one or more bags. Both are
@@ -245,13 +244,12 @@ fn days_from_civil(y: i32, m: u32, d: u32) -> Option<i64> {
 // just defines the shape (sans-IO) so every shell consumes the same
 // thing. A snapshot of the active bean ([`ShotBean`]) is frozen onto
 // each completed shot — denormalised on purpose so a later rename does
-// not retroactively rewrite history (docs/28 §design-decisions §1).
+// not retroactively rewrite history.
 // ───────────────────────────────────────────────────────────────────
 
 /// Whether a bag of coffee is a single-origin lot or a blend. `None` =
 /// unknown / unset. Serialises as the lowercase wire string
-/// (`"single"` / `"blend"`) to match the TS shell's typed string union
-/// per docs/28.
+/// (`"single"` / `"blend"`) to match the TS shell's typed string union.
 #[typeshare]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -266,7 +264,7 @@ pub enum BeanMix {
 /// the upstream provenance fields. All optional: a fresh bean's origin
 /// starts empty and the user fills in whatever the bag label shows.
 /// Mirrors Visualizer's CoffeeBag origin fields so the sync mapping is
-/// 1:1 (docs/28 §Visualizer sync §schema-mapping).
+/// 1:1.
 #[typeshare]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BeanOrigin {
@@ -290,7 +288,7 @@ pub struct BeanOrigin {
     pub harvest_time: Option<String>,
 }
 
-/// One bag of coffee — a row in the bean library. Per docs/28 this is
+/// One bag of coffee — a row in the bean library. This is
 /// the central entity: shots reference one by id, and a snapshot
 /// ([`ShotBean`]) is frozen onto each completed shot. The core owns the
 /// shape so every shell (web, Android, future iOS) consumes the same
@@ -370,10 +368,10 @@ pub struct Bean {
     /// Visualizer `coffee_bag.id` once pushed.
     pub visualizer_id: Option<String>,
     /// Unix epoch ms when this bag was soft-deleted, or `None` when
-    /// active. Required for cross-device sync tombstone propagation
-    /// (docs/36 §3): on the next sync push, the remote row is DELETEd
-    /// and the local tombstone is garbage-collected. Defaults to
-    /// `None` so older `Bean` JSON deserialises cleanly.
+    /// active. Required for cross-device sync tombstone propagation:
+    /// on the next sync push, the remote row is DELETEd and the local
+    /// tombstone is garbage-collected. Defaults to `None` so older
+    /// `Bean` JSON deserialises cleanly.
     #[serde(default)]
     #[typeshare(serialized_as = "Option<I64>")]
     pub deleted_at: Option<i64>,
@@ -492,8 +490,7 @@ impl Bean {
 /// purpose, mirroring Visualizer's `RoasterDetail` (which is itself
 /// minimal: id + name + website + image). Beanconqueror has no
 /// first-class roaster entity — its `bean.roaster` is free text; the
-/// shell promotes unique strings into [`Roaster`] rows on import per
-/// docs/28 §design-decisions §2.
+/// shell promotes unique strings into [`Roaster`] rows on import.
 #[typeshare]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Roaster {
@@ -569,9 +566,8 @@ impl Roaster {
 ///
 /// Beanconqueror reads the bean *live* off the brew (`Brew.bean: uuid`,
 /// see `Beanconqueror/src/classes/brew/brew.ts:60`). Crema takes the
-/// other approach per docs/28 §design-decisions §1: snapshot wins. A
-/// shot recorded under "Onyx Geisha" stays "Onyx Geisha" forever, even
-/// if the user later renames the bag.
+/// other approach: snapshot wins. A shot recorded under "Onyx Geisha"
+/// stays "Onyx Geisha" forever, even if the user later renames the bag.
 ///
 /// Holds the strict minimum the History list / detail panel needs to
 /// render the shot without re-fetching the bag — the user-facing

@@ -21,8 +21,6 @@
 //! ec61f8e of 2026-05-21). Field set and value-coercion rules are
 //! same-for-same; Crema's struct picks more user-friendly Rust field
 //! names (snake_case + units in the suffix where useful).
-//!
-//! docs/22 §5.4.
 
 use crate::error::ImportError;
 use crate::profile_import::TclDict;
@@ -84,7 +82,7 @@ pub struct ImportedDe1AppSettings {
     // ── Flush ─────────────────────────────────────────────────────────
     /// `flush_flow` — flush flow rate, ml/s. The legacy app stores
     /// this as a plain double; the wire value the DE1 expects is
-    /// `ml/s × 100` (docs/22 §2.1).
+    /// `ml/s × 100`.
     pub flush_flow_ml_per_s: Option<f32>,
     /// `flush_seconds` — flush duration, seconds.
     pub flush_seconds: Option<u32>,

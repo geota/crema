@@ -581,7 +581,7 @@
 			<!-- Import: pick one-or-many community v2 .json or legacy
 			     .tcl profile files. The hidden <input> is wrapped in a
 			     label styled like the other header buttons so it
-			     matches `.pp-btn-secondary`. docs/22 task #66. -->
+			     matches `.pp-btn-secondary`. -->
 			<label
 				class="pp-btn pp-btn-secondary pp-import"
 				class:pp-import-disabled={importing}

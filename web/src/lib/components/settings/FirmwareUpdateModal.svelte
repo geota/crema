@@ -7,8 +7,7 @@
 	 *
 	 * Firmware flashing is **bricking-class destructive** — a mid-flash
 	 * power loss, the wrong file picked, or a stray double-tap can leave
-	 * the DE1 unbootable. docs/40 "Top deferred safety checks" #2 calls
-	 * out the firmware-update entry point as needing the same
+	 * the DE1 unbootable. The firmware-update entry point needs the same
 	 * type-to-confirm gate the mains voltage / Hz writes use
 	 * (`MainsConfirmModal`). This is that gate — the flow itself is
 	 * tracked separately as #55 and is not implemented here.

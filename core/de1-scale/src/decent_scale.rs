@@ -1,7 +1,7 @@
 //! Decent Scale BLE codec (`scale_type` `decentscale`).
 //!
 //! Weight notifications arrive on [`READ_NOTIFY_UUID`]; commands are written to
-//! [`WRITE_UUID`]. See the protocol reference, `docs/02-ble-protocol.md` §8.1.
+//! [`WRITE_UUID`].
 
 /// GATT service UUID.
 pub const SERVICE_UUID: &str = "0000fff0-0000-1000-8000-00805f9b34fb";
@@ -73,7 +73,7 @@ pub fn display_on_grams() -> [u8; 7] {
 /// `[0..=5]` (the same checksum scheme [`command`] computes). This is the same
 /// byte sequence the existing [`display_on_grams`] builder produces — kept
 /// here as a named constant so the LCD-enable / LCD-disable / heartbeat
-/// surface (`docs/27`) reads as one coherent group.
+/// surface reads as one coherent group.
 pub const LCD_ENABLE_GRAMS: [u8; 7] = [0x03, 0x0A, 0x01, 0x01, 0x00, 0x01, 0x08];
 
 /// Command: enable the on-scale LCD in ounces mode — same role as
@@ -349,8 +349,7 @@ mod tests {
 
     #[test]
     fn lcd_enable_grams_matches_the_documented_wire_bytes() {
-        // Documented in `docs/27` appendix as the LCD-enable-with-heartbeat
-        // packet; byte 5 is the "send heartbeat" flag.
+        // LCD-enable-with-heartbeat packet; byte 5 is the "send heartbeat" flag.
         assert_eq!(LCD_ENABLE_GRAMS, [0x03, 0x0A, 0x01, 0x01, 0x00, 0x01, 0x08]);
         assert_eq!(LCD_ENABLE_GRAMS[6], xor_checksum(LCD_ENABLE_GRAMS));
         // The constant matches what the existing builder produces — kept in
@@ -382,7 +381,7 @@ mod tests {
 
     #[test]
     fn lcd_enable_ounces_matches_the_documented_wire_bytes() {
-        // Documented in `docs/27` appendix and confirmed against the legacy
+        // Confirmed against the legacy
         // `decentscale_enable_lcd` builder (`decent_scale_make_command 0A
         // 01 01 01 01`) at `de1plus/bluetooth.tcl:1277`. Byte [4] (`0x01`)
         // is the ounces / grams unit flag; byte [5] still arms the

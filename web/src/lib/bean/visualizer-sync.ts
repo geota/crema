@@ -1,8 +1,7 @@
 /**
  * `$lib/bean/visualizer-sync` — bidirectional sync between Crema's bean
  * library and Visualizer's `/coffee_bags` + `/roasters` REST endpoints
- * (docs/28 §sync-flow, updated per the coordinator's "TWO-WAY, not pull-only"
- * direction).
+ * (two-way direction).
  *
  * Direction:
  *   - **Pull** every remote bag + roaster into the Crema library on demand.
@@ -451,7 +450,7 @@ async function call(
 	}
 
 	if (res.status === 402 || res.status === 403) {
-		// Premium gating per docs/28 — bag/roaster CRUD is paywalled.
+		// Premium gating — bag/roaster CRUD is paywalled.
 		const text = await res.text().catch(() => '');
 		throw new VisualizerError(
 			res.status,
@@ -547,7 +546,7 @@ export async function runSync(library: BeanLibraryStore): Promise<SyncResult> {
 		// Build a remote-id → local-id lookup.
 		const remoteRoasterIdToLocal = new Map<string, string>();
 		// First pass: reconcile by visualizer id, then by signature, then by
-		// name. Signature binding (docs/36 §3) catches the case where the
+		// name. Signature binding catches the case where the
 		// user created the same roaster on two devices pre-sign-in — both
 		// rows have null visualizerId locally, identical normalised names,
 		// so the signature collision means we should bind to the remote
@@ -688,7 +687,7 @@ export async function runSync(library: BeanLibraryStore): Promise<SyncResult> {
 		//    list endpoint doesn't carry the long form), and update calls
 		//    overwrite with the full local payload anyway. Follow-up:
 		//    paginate + per-row GET so pull-side mutations round-trip
-		//    every field (filed against docs/37 §5 ground-impl).
+		//    every field.
 		const remoteBags: BagWire[] = [];
 		page = 1;
 		while (page < 50) {
@@ -702,7 +701,7 @@ export async function runSync(library: BeanLibraryStore): Promise<SyncResult> {
 			page += 1;
 		}
 		// Map by Crema id (stored in metadata.crema.crema_id) → local row.
-		// Falls back to signatureForBean (docs/36 §3) when neither the
+		// Falls back to signatureForBean when neither the
 		// remote-id nor the crema_id round-trip yields a hit — same
 		// rationale as the roaster pass above.
 		const localBeans = library.beans;

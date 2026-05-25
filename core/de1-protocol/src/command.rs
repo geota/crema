@@ -1,7 +1,7 @@
 //! Command and settings packets the app writes to the DE1.
 //!
 //! Covers `RequestedState` (`cuuid_02`), `WaterLevels` (`cuuid_11`), and the
-//! steam / hot-water `ShotSettings` (`cuuid_0B`). See `docs/02-ble-protocol.md` §7.
+//! steam / hot-water `ShotSettings` (`cuuid_0B`).
 
 use crate::error::ProtocolError;
 use crate::fixed_point::{u8p0_decode, u8p0_encode, u16p8_decode, u16p8_encode};

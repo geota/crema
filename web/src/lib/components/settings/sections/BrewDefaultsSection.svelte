@@ -82,8 +82,7 @@
 	Shot behaviour: "Stop on weight" and "Auto-tare on start" were removed
 	2026-05-22 — both are profile-level fields (`CremaProfile.stopOnWeight`
 	/ `.autoTare`) and live on the brew Quick Sheet for per-shot override.
-	The Settings copies were dead weight that the audit caught (see
-	docs/settings-audit.md §12-13).
+	The Settings copies were dead weight that the audit caught.
 -->
 <StGroup title="Shot behaviour">
 	<StRow

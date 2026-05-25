@@ -6,8 +6,6 @@
 //! recorded at the moment the user presses Tare, and every later reading is
 //! reported with that offset subtracted.
 //!
-//! See `docs/06-scale-protocols.md` §10.
-//!
 //! **Defer to reaprime.** Legacy de1app comments out its `smartchef_tare`
 //! proc and pops a popup telling the user to press the physical button
 //! (`de1plus/bluetooth.tcl:1429-1443`); reaprime implements software tare

@@ -183,8 +183,6 @@
 	 *   warn if the shot has no IndexedDB capture (older shots from
 	 *   before the recorder shipped, or imported shots — neither has
 	 *   the wire bytes to replay).
-	 *
-	 * docs/22 task #64.
 	 */
 	async function download(): Promise<void> {
 		if (settings.current.shotExportFormat === 'replay') {

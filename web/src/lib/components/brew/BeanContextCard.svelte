@@ -1,7 +1,7 @@
 <script lang="ts">
 	/**
 	 * `BeanContextCard` — the brew dashboard's "what bag of coffee you're
-	 * pulling" card. Reads from the bean library's `activeBean` (per docs/28);
+	 * pulling" card. Reads from the bean library's `activeBean`;
 	 * tap to open the inline editor that targets the active library record.
 	 * A `+` corner button quick-adds a fresh bag and makes it active in one
 	 * tap (the impatient-Monday case: bought a bag on the way to work, want

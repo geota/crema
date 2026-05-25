@@ -129,7 +129,7 @@
 	// ── Live mode telemetry — drives the head pill's progress bar
 	//
 	// Targets are hardcoded for now; they'll come from the per-mode
-	// Settings sections once they land (docs/21). Steam target = 8 s,
+	// Settings sections once they land. Steam target = 8 s,
 	// Flush target = 4 s. Hot water defaults to 30 s as a placeholder
 	// time-budget until we wire `dispensedVolume` against a
 	// settings-driven `hotWaterVolMl` target.

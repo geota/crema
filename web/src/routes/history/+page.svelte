@@ -216,7 +216,7 @@
 	/** Every recorded shot, newest first. Reactive. */
 	const shots = $derived(store.all);
 
-	// ── Visualizer upload state (docs/36 §5) ─────────────────────────────
+	// ── Visualizer upload state ──────────────────────────────────────────
 	let syncConfig = $state(readSyncConfig());
 	let uploadingAll = $state(false);
 	/** Reactive count of queued shot ops — drives the pip + Upload-all label. */
@@ -604,7 +604,7 @@
 			     matches the existing `.st-btn-secondary` rhythm. The
 			     CremaApp.importShotFile method picks the parser by
 			     extension and prepends each parsed shot to the history
-			     store. docs/22 §5.1. -->
+			     store. -->
 			<label
 				class="st-btn st-btn-secondary hi-import"
 				class:hi-import-disabled={importing}

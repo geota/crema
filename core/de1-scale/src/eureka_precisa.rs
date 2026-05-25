@@ -2,7 +2,6 @@
 //!
 //! Also covers the Krell CFS-9002. The Solo Barista LSJ-001 is protocol-
 //! identical and re-exports this module (see [`crate::solo_barista`]).
-//! See `docs/06-scale-protocols.md` §8.
 
 /// GATT service UUID (the generic `FFF0` service — scales sharing it are
 /// disambiguated by advertised name during the BLE scan).

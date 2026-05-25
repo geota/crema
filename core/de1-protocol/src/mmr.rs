@@ -10,8 +10,6 @@
 //! - register *addresses* are 24-bit and travel **big-endian** in the packet,
 //!   like every other DE1 GATT field;
 //! - register *values* in the data payload are little-endian 32-bit words.
-//!
-//! See `docs/02-ble-protocol.md` §6.
 
 use typeshare::typeshare;
 
@@ -92,9 +90,9 @@ impl MmrReadReply {
 
 /// Known MMR register addresses.
 ///
-/// This covers the registers Crema reads or writes; `docs/02-ble-protocol.md`
-/// §6.3 has the full map. [`address`](Self::address) gives the raw 24-bit
-/// address to pass to [`read_request`] / [`write_request`].
+/// This covers the registers Crema reads or writes.
+/// [`address`](Self::address) gives the raw 24-bit address to pass to
+/// [`read_request`] / [`write_request`].
 #[typeshare]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -129,7 +127,6 @@ pub enum MmrRegister {
     /// (so 950 = 95.0 °C). Modelled by reaprime
     /// (`de1.models.dart:flushTemp` at `0x00803844`, 4-byte slot,
     /// `readScale: 0.1`); the legacy de1app TCL has no equivalent.
-    /// Crema's audit-discovered register — see docs/22 §3.2.
     FlushTemp,
     /// Hot-water flow rate.
     HotWaterFlowRate,

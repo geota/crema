@@ -43,10 +43,10 @@ pub enum Source {
     /// Matches reaprime's `transport.shotSettings` notify stream + the
     /// legacy de1app's `de1_read_hotwater` (`bluetooth.tcl:1707`).
     De1ShotSettings,
-    /// **DORMANT — see docs/16 §6.1 (snoop-verified 2026-05-21).** The DE1
-    /// `HeaderWrite` characteristic (`cuuid_0F`) is nominally R/W per
-    /// `docs/02-ble-protocol.md`, but the legacy de1app never Reads it and
-    /// the firmware returns all-zero bytes when asked. The Crema BLE shell
+    /// **DORMANT (snoop-verified 2026-05-21).** The DE1 `HeaderWrite`
+    /// characteristic (`cuuid_0F`) is nominally R/W per the BLE
+    /// protocol, but the legacy de1app never Reads it and the
+    /// firmware returns all-zero bytes when asked. The Crema BLE shell
     /// no longer triggers a Read of this characteristic (dropped in commit
     /// `49f0803`), so this `Source` arm is never dispatched and
     /// [`Event::ProfileHeaderRead`] is never emitted.
@@ -61,7 +61,7 @@ pub enum Source {
     /// profile upload the DE1 echoes each frame write back as a
     /// write-response / notification, carrying the same 8-byte payload it
     /// received. The orchestrator's ack matcher reads byte 0 (`FrameToWrite`)
-    /// to confirm each frame applied. See `docs/16-profile-upload-plan.md` §5.
+    /// to confirm each frame applied.
     De1FrameAck,
 }
 
@@ -332,14 +332,12 @@ pub enum Event {
     /// that always returns `false`; v2 will return `true` for the
     /// `Erase..Verifying` phases of a firmware upload. The event names the
     /// refused method so the shell can show a transient toast.
-    ///
-    /// See `docs/17-firmware-update-plan.md` §3.4.
     FirmwareLockoutHit {
         /// Name of the [`CremaCore`](crate::CremaCore) method that was
         /// refused — e.g. `"set_refill_threshold"`.
         method: String,
     },
-    /// **DORMANT — see [`Source::De1ProfileHeader`] and docs/16 §6.1.** This
+    /// **DORMANT — see [`Source::De1ProfileHeader`].** This
     /// event would carry the DE1's reported `ShotHeader` if the firmware
     /// supported reading the loaded-profile buffer on `cuuid_0F`. It does
     /// not (snoop-verified 2026-05-21), so the BLE shell no longer triggers
@@ -431,8 +429,6 @@ pub enum Event {
 /// `#[non_exhaustive]` so additional categories (e.g. a firmware-side
 /// "shot in progress" rejection signalled through some future cuuid_10
 /// packet) can be added without breaking the FFI surface.
-///
-/// See `docs/16-profile-upload-plan.md` §4.3.
 #[typeshare]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "details")]
@@ -505,7 +501,7 @@ pub enum WriteTarget {
     De1WaterLevels,
     /// The DE1 `HeaderWrite` characteristic (`cuuid_0F`) — the 5-byte
     /// `ShotHeader` packet is *written* here at the start of a profile
-    /// upload. See `docs/16-profile-upload-plan.md`.
+    /// upload.
     De1ProfileHeader,
     /// The DE1 `FrameWrite` characteristic (`cuuid_10`) — each 8-byte
     /// frame packet (normal frames, extension frames, and the tail) is

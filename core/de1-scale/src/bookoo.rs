@@ -167,12 +167,11 @@ pub const COMMAND_UUID: &str = "0000ff12-0000-1000-8000-00805f9b34fb";
 /// The structurally-correct XOR per this builder is `0D`/`0C`/`0F`. The
 /// Bookoo's firmware appears to either ignore the XOR or has been silently
 /// dropping the timer commands in both apps for years (the documented
-/// "open question" in docs/30 §Bookoo / docs/29 §Bookoo).
+/// open question for years).
 ///
 /// Crema's `const fn command()` derives the XOR structurally — see the test
-/// `timer_constants_match_the_captured_bytes`. Per docs/30 §"Top three places
-/// Crema should ignore reaprime", Crema is the source of truth here; do NOT
-/// "fix" Crema's bytes down to match either upstream app.
+/// `timer_constants_match_the_captured_bytes`. Crema is the source of truth
+/// here; do NOT "fix" Crema's bytes down to match either upstream app.
 #[must_use]
 pub const fn command(cmd: u8, p1: u8, p2: u8) -> [u8; 6] {
     let xor = 0x03 ^ 0x0A ^ cmd ^ p1 ^ p2;
@@ -504,7 +503,7 @@ pub enum CommandResponse {
 /// so e.g. `141` is firmware `1.4.1`. Centralised here so every shell
 /// renders the version identically without duplicating the decode (web
 /// used to carry its own `formatFirmware`; an Android shell would have
-/// done the same — push #8 in `docs/26-shell-to-core-audit.md`).
+/// done the same).
 #[must_use]
 pub fn format_firmware_version(encoded: u16) -> String {
     let major = encoded / 100;

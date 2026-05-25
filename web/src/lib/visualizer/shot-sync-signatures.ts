@@ -4,8 +4,8 @@
  * as `$lib/wasm/de1_wasm`).
  *
  * The signature helpers and the {@link reconcileShots} action planner
- * used to live here as TS. Per docs/36 §3 they're pure functions —
- * djb2 hash, action planner, LWW — and the Android shell wants to
+ * used to live here as TS. They're pure functions — djb2 hash, action
+ * planner, LWW — and the Android shell wants to
  * call the same algorithm. They now live in Rust
  * (`core/de1-domain/src/visualizer_sync.rs`), so every shell shares
  * one byte-identical implementation.
@@ -19,8 +19,7 @@
  *
  * `storedShotFromWire` is shell-specific (it allocates a
  * shell-shaped {@link StoredShot} with empty `series` / `bean` / star
- * defaults — see docs/36 deferred). It stays in TS, sans the wasm
- * round-trip.
+ * defaults). It stays in TS, sans the wasm round-trip.
  */
 
 import {
@@ -92,7 +91,7 @@ export type ReconcileAction =
 /**
  * The shot de-dup signature: a djb2 hash of `(startedAtMs, durationMs,
  * profileId, finalWeightG)`. Shots are inherently unique by time + final
- * weight — collisions are intentional ID matches per docs/36 §3.
+ * weight — collisions are intentional ID matches.
  *
  * Adapts the wasm `signatureForShot` (positional args) to the object
  * shape the existing TS callers use.
@@ -111,7 +110,7 @@ export function signatureForShot(shot: {
 	);
 }
 
-/** Bean de-dup signature: `(name, roasterName, roastedOn)`. docs/36 §3. */
+/** Bean de-dup signature: `(name, roasterName, roastedOn)`. */
 export function signatureForBean(bean: {
 	name: string;
 	roasterName: string | null;
@@ -124,7 +123,7 @@ export function signatureForBean(bean: {
 	);
 }
 
-/** Roaster de-dup signature: normalised name. docs/36 §3. */
+/** Roaster de-dup signature: normalised name. */
 export function signatureForRoaster(roaster: { name: string }): string {
 	return wasmSignatureForRoaster(roaster.name);
 }
@@ -136,7 +135,7 @@ export function signatureForRoaster(roaster: { name: string }): string {
  * of actions the caller must apply to the store; this function is
  * pure (no side effects) so it is easy to test.
  *
- * Per docs/36 §3:
+ * Three-step planner:
  *   1. If a local shot's `visualizerId` matches a remote → LWW on
  *      `updated_at` (we only patch annotations; telemetry is immutable
  *      Visualizer-side, so conflicts are rare).
@@ -165,7 +164,7 @@ export function reconcileShots(
  * "ADD" branch of reconcile. Telemetry isn't carried in the pull list
  * response — we materialise a stub StoredShot good enough for the
  * History list; the detail panel surfaces a "Profile / telemetry not
- * local" placeholder per docs/36 §deferred.
+ * local" placeholder.
  *
  * Stays in TS because it builds a shell-specific `StoredShot` shape
  * (`series: []`, `peakPressure: 0`, etc) — the Rust core owns the

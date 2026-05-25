@@ -3,8 +3,7 @@
 	 * `BeanImportDialog` — drop / pick a Beanconqueror `.zip` export, parse it
 	 * with `fflate`, and preview / commit the import into Crema's library.
 	 *
-	 * Per the coordinator's mid-flight adjustment (and docs/28 §import-flow),
-	 * the importer is **deliberately lossy**: only the high-value subset of
+	 * The importer is **deliberately lossy**: only the high-value subset of
 	 * Beanconqueror's ~40 bean fields lands as first-class Crema fields, and
 	 * anything we don't model (cupping form, mill, roast curves, EAN, CO2e,
 	 * frozen-group portions…) is dropped. We surface the dropped categories

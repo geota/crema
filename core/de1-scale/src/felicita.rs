@@ -1,7 +1,6 @@
 //! Felicita Arc BLE codec (`scale_type` `felicita`).
 //!
 //! One characteristic is used for both weight notifications and commands.
-//! See `docs/06-scale-protocols.md` §3.
 
 // Raw integer weight fields are decoded into `f32` grams; precision loss past
 // 2^23 is inherent to representing a wire reading as the codec's `f32` weight,

@@ -3,7 +3,7 @@
 //! A profile is uploaded to the DE1 as one [`ShotHeader`] (to `HeaderWrite` /
 //! `cuuid_0F`) followed by N frame packets (to `FrameWrite` / `cuuid_10`):
 //! [`ShotFrame`]s (normal), optional [`ExtensionFrame`]s (advanced max-flow /
-//! max-pressure limiting), and a final [`ShotTail`]. See `docs/02-ble-protocol.md` §5.
+//! max-pressure limiting), and a final [`ShotTail`].
 //!
 //! This module is the **wire codec only**. The higher-level profile *model*
 //! (recipe, metadata, JSON import) belongs in the domain layer.
@@ -40,9 +40,6 @@ pub fn is_extension_frame(data: &[u8]) -> bool {
 /// (`FrameToWrite == frame_count`); `≥ 32` for an extension-frame ack
 /// (`index = byte - 32`). Returns `None` for an empty slice; trailing bytes
 /// are ignored.
-///
-/// See `docs/16-profile-upload-plan.md` §6 for the legacy reference (the Tcl
-/// `parse_binary_shotframe` echo path).
 pub fn ack_frame_byte(data: &[u8]) -> Option<u8> {
     data.first().copied()
 }

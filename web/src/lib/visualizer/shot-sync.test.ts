@@ -1,7 +1,6 @@
 /**
  * `$lib/visualizer/shot-sync.test` — node:test suite for the de-dup
- * signature helpers and the {@link reconcileShots} action planner
- * (docs/36 §3).
+ * signature helpers and the {@link reconcileShots} action planner.
  *
  * Mirrors the existing `oauth.test.ts` style: no vitest dependency, runs
  * via Node's built-in test runner. Invoked with:
@@ -23,7 +22,7 @@
  * hashes the prior pure-TS impl produced.
  *
  * Covers only the pure helpers — `uploadShot` / `pullShots` need a fetch
- * mock and live in an integration test suite (deferred — see docs/37).
+ * mock and live in an integration test suite (deferred).
  */
 
 import assert from 'node:assert/strict';

@@ -146,7 +146,7 @@
 	});
 	/**
 	 * Whether the connected DE1 has the Bengle cup-warmer plate hardware.
-	 * Per docs/21 §3.5 the cup-warmer setter is gated by `MachineModel ∈
+	 * The cup-warmer setter is gated by `MachineModel ∈
 	 * {DE1XL, DE1XXL, DE1XXXL, DE1CAFE}` — indices 4..7 in the model
 	 * table above. Returns `false` until the `MachineModel` MMR read
 	 * lands so the card stays hidden on first paint.
@@ -173,8 +173,8 @@
 	// the BLE shell reads MMR register 0x800010 (FirmwareVersion) at connect
 	// time — the canonical "v1352" build number — caches it in the core, and
 	// this UI compares against a hardcoded LATEST_KNOWN_FIRMWARE_BUILD bumped
-	// per Crema release. No network, no file picker, no upload — see
-	// `docs/17-firmware-update-plan.md` for the (v2-deferred) upload plan.
+	// per Crema release. No network, no file picker, no upload — the
+	// upload flow is deferred to v2.
 	let firmwareStatus: FirmwareUpdateStatus | null = $state(null);
 	let firmwareChecking = $state(false);
 
@@ -222,10 +222,9 @@
 
 	// ── Firmware update — type-to-confirm gate (#55 stub) ─────────────────
 	//
-	// The gate exists today; the underlying flashing flow does not. Per
-	// docs/40 "Top deferred safety checks" #2 the entry point still needs
-	// the same destructive-action UX guard the mains writes use, so a
-	// future "Update" button can't ship without it. When #55 lands, the
+	// The gate exists today; the underlying flashing flow does not. The
+	// entry point still needs the same destructive-action UX guard the
+	// mains writes use, so a future "Update" button can't ship without it. When #55 lands, the
 	// onConfirm handler is the single seam to wire to the real flow.
 	let showUpdateModal = $state(false);
 	let updateStubNotice = $state<string | null>(null);

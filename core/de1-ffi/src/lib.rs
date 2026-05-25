@@ -2,9 +2,9 @@
 //!
 //! The UniFFI bridge: exposes [`de1_app::CremaCore`] to the Android (Kotlin)
 //! shell. The bridge is deliberately thin — it wraps the core behind a mutex
-//! and serializes the rich [`CoreOutput`](de1_app::CoreOutput) to JSON (the
-//! "Option S" encoding from `docs/08-ffi-and-web-scope.md`). Inputs are simple
-//! typed values UniFFI marshals natively.
+//! and serializes the rich [`CoreOutput`](de1_app::CoreOutput) to JSON
+//! ("Option S" encoding — every CoreOutput crosses as one JSON string).
+//! Inputs are simple typed values UniFFI marshals natively.
 //!
 //! `unsafe` is unavoidable here — UniFFI generates the `extern "C"` FFI
 //! scaffolding — which is why this crate opts out of the workspace's
@@ -43,7 +43,7 @@ pub enum NotificationSource {
     /// hot-water / group-temp settings, notify + read.
     De1ShotSettings,
     /// **DORMANT** — mirrors `de1_app::Source::De1ProfileHeader`, which the
-    /// BLE shell no longer dispatches (docs/16 §6.1). Kept in the mirror
+    /// BLE shell no longer dispatches. Kept in the mirror
     /// enum for forward-compat. See the core variant for the longer note.
     De1ProfileHeader,
     /// The DE1 `FrameWrite` characteristic — per-frame ack echoes during a
@@ -700,7 +700,6 @@ impl CremaBridge {
     /// Set the seconds of high-flow steam at the start of a steam cycle.
     /// MMR `0x80382C`, 4-byte. Wire value is `seconds × 100`. `f32`
     /// to preserve sub-second precision (legacy default 0.7s).
-    /// docs/22 §2.2.
     pub fn set_steam_highflow_start(&self, seconds: f32) -> String {
         json(self.core().set_steam_highflow_start(seconds))
     }
@@ -723,7 +722,7 @@ impl CremaBridge {
     }
 
     /// Set the flush water target temperature, °C. Wire value is `°C × 10`;
-    /// MMR `0x803844`, 4-byte. docs/22 §3.2.
+    /// MMR `0x803844`, 4-byte.
     pub fn set_flush_temp(&self, temp_c: f32) -> String {
         json(self.core().set_flush_temp(temp_c))
     }
@@ -765,7 +764,7 @@ impl CremaBridge {
     /// Set the mains heater voltage. **Damaging if mis-set** — the shell
     /// must wrap this in a typed-to-confirm modal (`MainsConfirmModal`).
     /// MMR `0x803834`, 4-byte. Wire value is `volts + 1000`
-    /// (user-committed marker — see `docs/27` row #56).
+    /// (user-committed marker).
     ///
     /// `volts` must be `120` or `230`; the core rejects any other value.
     /// Returns `Result<String, String>` so UniFFI surfaces a thrown
@@ -948,7 +947,7 @@ impl CremaBridge {
 
     /// Parse a legacy de1app `.shot` (Tcl-dict) history file. Returns
     /// the resulting `StoredShot` as a JSON string the Android shell
-    /// can deserialize into its Room history store. docs/22 §5.1.
+    /// can deserialize into its Room history store.
     /// Stateless — `&self` is required for the UniFFI instance-method
     /// ABI but the import does not touch the core.
     pub fn import_legacy_tcl_shot(&self, content: String) -> Result<String, String> {
@@ -966,7 +965,7 @@ impl CremaBridge {
     }
 
     /// Parse a community-v2 `.json` profile file. Returns the parsed
-    /// `Profile` as JSON. docs/22 §5.1.
+    /// `Profile` as JSON.
     pub fn import_v2_json_profile(&self, content: String) -> Result<String, String> {
         de1_domain::import_v2_json(&content)
             .map_err(|e| e.to_string())
@@ -989,7 +988,7 @@ impl CremaBridge {
     }
 
     /// Parse a legacy de1app `settings.tdb` file. Returns the parsed
-    /// settings as a JSON string. docs/22 §5.4.
+    /// settings as a JSON string.
     pub fn import_settings_tdb(&self, content: String) -> Result<String, String> {
         de1_domain::import_settings_tdb(&content)
             .map_err(|e| e.to_string())
