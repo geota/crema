@@ -1,68 +1,139 @@
+<div align="center">
+
+<img src="web/static/icon.svg" alt="Crema icon" width="120" height="120" />
+
 # Crema
 
-A ground-up rewrite of the Decent Espresso **DE1** tablet app — a native Android app with
-a Rust core.
+**A modern, open-source companion app for the [Decent Espresso DE1](https://decentespresso.com/).**
 
-> Unofficial. Not affiliated with Decent Espresso. The official app is `de1app`.
+[![License: GPL v3](https://img.shields.io/badge/License-GPL_v3-blue.svg)](LICENSE)
+[![Built with Rust](https://img.shields.io/badge/core-Rust-orange.svg)](https://www.rust-lang.org/)
+[![Built with SvelteKit](https://img.shields.io/badge/web-SvelteKit-ff3e00.svg)](https://kit.svelte.dev/)
 
-## Why
+</div>
 
-The official `de1app` is ~80–100k lines of Tcl/Tk running on a bundled AndroWish runtime,
-with a 12k-line bespoke canvas UI framework. Crema rebuilds it as a native Android app on a
-clean, fully testable core.
+---
 
-## Goals
+> **Unofficial. Not affiliated with Decent Espresso.** Crema talks to the DE1 over its public Bluetooth GATT protocol. The official client is [`de1app`](https://github.com/decentespresso/de1app).
 
-Crema is a **clean-room reimplementation, not a port.** The legacy Tcl is referenced to
-understand the DE1's *protocol and behaviour* (both apps are GPL-3.0, so this is free) —
-but the architecture is designed fresh. Explicit goals:
+Crema is a clean-room reimplementation of the DE1 tablet experience as a **fast, type-safe, testable, browser-based PWA** with parallel native Android development. The codebase is split into a sans-IO Rust core that owns the protocol and a SvelteKit-based web shell that owns the UI and transport.
 
-- **Modern, idiomatic code** — idiomatic Rust and Kotlin on current toolchains (Compose,
-  AndroidX, coroutines/Flow). No Tcl-isms carried across.
-- **Type-driven design** — make illegal states unrepresentable: typed `MachineState`,
-  `Profile`, `ShotSample`; errors as `Result`. No untyped global dict/array soup.
-- **Sans-IO, testable core** — protocol and shot logic unit-tested with no machine
-  attached. The legacy app cannot be tested at all without hardware.
-- **Clear layered separation** — protocol / domain / FFI / transport / UI, each testable in
-  isolation, with an explicit API between core and shell.
-- **Explicit state machines** over implicit callback ordering.
+## Features
 
-Two disciplines keep "fresh architecture" safe:
+- **Live brew dashboard** — real-time pressure / flow / temperature / weight telemetry, four-channel chart, phase indicator, and shot-completion metrics.
+- **Profile library** — pin favorites, edit frames, sync to/from [visualizer.coffee](https://visualizer.coffee), and live-preview each profile's intent.
+- **Shot history** — record every pour locally with full telemetry, link shots to beans/roasters, multi-shot overlay comparison, and round-trip community v2 `.shot.json` import/export.
+- **Bean + roaster library** — track bags, roast levels, grinder settings, and per-shot retroactive bean rebinding with snapshot semantics.
+- **Bluetooth scales** — first-class support for Bookoo Themis, Decent Scale, Acaia (Lunar / Pyxis / Pearl), Skale, Eureka Precisa, Hiroia Jimmy, Difluid, Felicita, Atomheart Eclair, Varia Aku, and Smartchef.
+- **Visualizer integration** — OAuth 2.0 + PKCE auth, full two-way sync of shots, beans, and roasters with LWW conflict resolution.
+- **Maintenance tracking** — water filter, descale, and cleaning cycle reminders with one-click "Run" buttons that drive the DE1's built-in cycles.
+- **Replay capture** — record BLE traces of real sessions and replay them deterministically through the core for development and regression testing.
 
-1. **Behaviour is preserved precisely even though structure is not.** The DE1 hardware does
-   not care about our architecture — bytes, timing, and state transitions must match the
-   legacy app exactly (SAW lag compensation, auto-tare thresholds, fixed-point edge cases).
-   Reject the old *structure* freely; respect the old *behaviour* exactly.
-2. **Best practices include simplicity.** "Modern" means clean, typed, tested, idiomatic —
-   not over-abstracted. No speculative layers or premature generality (cf. the dropped
-   plugin bus). YAGNI is a best practice too.
+## Tech stack
 
-## Architecture
+| Layer | Technology |
+|---|---|
+| **Core** | Rust (sans-IO), compiled to WebAssembly via `wasm-bindgen`. Pure protocol codecs, shot state machine, profile model, and signature/reconciliation helpers. No I/O, no UI — fully testable without hardware. |
+| **Web shell** | SvelteKit 2 + Svelte 5 (runes), TypeScript, adapter-static. Web Bluetooth API for DE1 + scale transports. PWA with offline install. |
+| **Bindings** | `typeshare` for Rust ↔ TypeScript type generation. `openapi-typescript` for the Visualizer API. |
+| **Storage** | `localStorage` for shots / beans / profiles, `IndexedDB` for binary captures, vanilla content-negotiated JSON for export. |
 
-- **`de1-core`** — Rust, **sans-IO**. Protocol codecs, shot state machine, profile model.
-  No Bluetooth, no UI, no file I/O — driven by inbound bytes + timer ticks, emits a typed
-  event/effect stream. Fully testable with no hardware.
-- **Android app** — Kotlin + Jetpack Compose. BLE transport, UI, history, persistence.
-  Tablet primary, phone secondary.
-- **FFI** — UniFFI-generated Kotlin bindings.
+## Quick start
 
-No plugin architecture: the core's typed event stream *is* its API. See [`docs/`](docs/).
+### Prerequisites
 
-## Status
+- **Node.js** 20+
+- **[pnpm](https://pnpm.io/)** 9+
+- **Rust** 1.80+ with `wasm-pack` (`cargo install wasm-pack`)
+- A browser with [Web Bluetooth](https://caniuse.com/web-bluetooth) support — Chrome / Edge / Opera. Brave works after enabling the flag.
 
-**Pre-Phase-0.** Architecture decided and documented. Next step: two de-risking spikes —
-a Rust codec skeleton (`de1-core`) and an Android BLE connection test. See
-[`docs/04-mvp-scope.md`](docs/04-mvp-scope.md) and [`docs/README.md`](docs/README.md).
+### Run the dev server
 
-## Reference
+```bash
+git clone https://github.com/<your-user>/crema.git
+cd crema/web
+pnpm install
+pnpm wasm     # one-time wasm build of the Rust core
+pnpm dev
+```
 
-The legacy Tcl app is the de-facto protocol spec. Keep a checkout of `de1app` beside this
-repo (`../de1app/`); paths in `docs/` written as `de1plus/...` are relative to it.
+Open `http://localhost:5173`. The web shell starts in a connected-to-nothing state — click "Connect" to pair your DE1 over Web Bluetooth.
+
+### Visualizer integration (optional)
+
+To enable Visualizer OAuth sync, register a public Doorkeeper application at <https://visualizer.coffee/oauth/applications>, then drop the Client UID into a local env file:
+
+```bash
+cp web/.env.example web/.env.local
+# Edit web/.env.local — paste your VITE_VISUALIZER_CLIENT_ID
+```
+
+`web/.env.local` is `.gitignore`-d.
+
+### Build for production
+
+```bash
+pnpm build         # static site → web/build/
+```
+
+Deploy `web/build/` to any static host (Cloudflare Pages, Netlify, GitHub Pages, S3 + CloudFront, etc.). PWA install + offline cache rides automatically.
+
+### Run the test suite
+
+```bash
+# Rust core
+cd core
+cargo test --workspace
+
+# Web shell type-check + lint
+cd web
+pnpm check
+pnpm test
+```
+
+## Project layout
+
+```
+crema/
+├── core/                     # Rust workspace
+│   ├── de1-protocol/         #   BLE wire codec (sans-IO)
+│   ├── de1-domain/           #   Shot model, profiles, beans, sync helpers
+│   ├── de1-scale/            #   Per-scale codecs (12 supported)
+│   ├── de1-app/              #   The orchestrator — `CremaCore` facade
+│   ├── de1-wasm/             #   wasm-bindgen FFI for the web shell
+│   └── de1-ffi/              #   UniFFI bindings for the Android shell
+├── web/                      # SvelteKit PWA
+│   ├── src/lib/              #   Stores, components, BLE transports
+│   ├── src/routes/           #   Routes: /brew, /history, /beans, /profiles, /settings
+│   └── static/               #   Icons, manifest, PWA assets
+└── android/                  # Native Kotlin shell (in progress)
+```
+
+## Contributing
+
+Issues and pull requests welcome. The codebase aims for:
+
+- **Type-driven design** — make illegal states unrepresentable.
+- **Sans-IO core** — protocol + domain logic tested without hardware.
+- **Behavioral fidelity** — bytes, timing, and state transitions match the DE1's firmware spec exactly; structure is free to evolve.
+- **Tight, idiomatic code** — no speculative abstractions; YAGNI is a best practice.
+
+Before opening a PR:
+
+```bash
+cd core && cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings
+cd ../web && pnpm check && pnpm build
+```
+
+## Acknowledgements
+
+- **[Decent Espresso](https://decentespresso.com/)** for the DE1 hardware and the open Bluetooth protocol.
+- **[`de1app`](https://github.com/decentespresso/de1app)** — the canonical Tcl reference implementation. Crema's protocol fidelity is verified against legacy `de1app` and the newer [`reaprime`](https://github.com/reaprime) Dart client.
+- **[Visualizer](https://visualizer.coffee/)** for the shot-sharing service and its public API.
+- **The Decent community** — Diaspora forum, Discord, and r/decentespresso — for collective wisdom on shot dynamics, profile design, and the protocol's many undocumented quirks.
 
 ## License
 
-Crema is licensed under the **GNU General Public License v3.0 or later** — see
-[`LICENSE`](LICENSE). This matches the DE1 ecosystem (`de1app` and its plugins are
-GPL-3.0), so GPL-licensed code may be referenced and adapted freely.
+Crema is licensed under the **GNU General Public License v3.0 or later** — see [`LICENSE`](LICENSE). This matches the DE1 ecosystem (`de1app` is GPL-3.0), so GPL-licensed code may be referenced and adapted freely.
 
 Copyright © 2026 Adrian Maceiras.
