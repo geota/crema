@@ -64,7 +64,7 @@ events decoded, decode errors).
 
 ## Captures
 
-### `session-20260517-122732.jsonl`
+### `session-20260517-122732-shot-pull.jsonl`
 
 First end-to-end capture on real hardware — a Pixel 10 phone (Android 16)
 connected to a DE1. ~259 s, 1158 BLE messages (1150 `ShotSample` telemetry +
