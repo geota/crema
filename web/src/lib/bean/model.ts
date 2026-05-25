@@ -264,6 +264,14 @@ export const ROAST_PILL_LEVEL: Readonly<Record<Roast, number>> = {
  * Med-dark / Dark) under the 1..10 track. Returns `'—'` when the level is
  * unset.
  *
+ * Mapping (1..10 → label):
+ *
+ * - `1..=2`  → `'Light'`
+ * - `3..=4`  → `'Med-light'`
+ * - `5`      → `'Medium'`
+ * - `6..=7`  → `'Med-dark'`
+ * - `8..=10` → `'Dark'`
+ *
  * The 3-band {@link roastBand} stays canonical and rides on every
  * `RoastBand` comparison in the freshness math — this is purely a
  * UI-display helper for the slider.
@@ -271,10 +279,10 @@ export const ROAST_PILL_LEVEL: Readonly<Record<Roast, number>> = {
 export function roastBand5(level: number | null): string {
 	if (level == null) return '—';
 	const n = Math.round(level);
-	if (n <= 3) return 'Light';
-	if (n <= 5) return 'Med-light';
-	if (n <= 7) return 'Medium';
-	if (n <= 9) return 'Med-dark';
+	if (n <= 2) return 'Light';
+	if (n <= 4) return 'Med-light';
+	if (n === 5) return 'Medium';
+	if (n <= 7) return 'Med-dark';
 	return 'Dark';
 }
 
