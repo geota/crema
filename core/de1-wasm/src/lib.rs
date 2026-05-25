@@ -709,20 +709,12 @@ impl CremaBridge {
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command powers off a connected
-    /// Decent Scale on v1.2+ firmware. Decent-Scale-only.
+    /// Decent Scale. Decent-Scale-only.
     ///
-    /// Returns an error to the JS side (and *no* CoreOutput) when:
-    ///
-    /// - no scale is connected, or the connected scale is not a Decent
-    ///   Scale, or
-    /// - the Decent Scale's firmware version has not yet been observed,
-    ///   or is v1.0 / v1.1 (the [`decent_scale::POWER_OFF`] byte is
-    ///   silently ignored before v1.2 firmware).
-    ///
-    /// The shell catches the error string and surfaces a "this scale
-    /// doesn't support remote power-off — long-press the button" message
-    /// to the user, so the user gets actionable feedback rather than a
-    /// silent no-op.
+    /// The [`decent_scale::POWER_OFF`] byte sequence is sent
+    /// unconditionally — older firmware versions silently no-op on it.
+    /// Returns an error to the JS side (and *no* CoreOutput) only when no
+    /// scale is connected or the connected scale is not a Decent Scale.
     pub fn power_off_decent_scale(&self) -> Result<String, String> {
         self.core
             .power_off_decent_scale()
@@ -1659,10 +1651,32 @@ mod tests {
     }
 
     #[test]
-    fn power_off_decent_scale_errors_when_firmware_is_not_yet_known() {
+    fn power_off_decent_scale_emits_the_power_off_packet() {
         let mut bridge = CremaBridge::new();
         bridge.connect_scale("Decent Scale ABC".to_owned());
-        // No firmware reply observed — the bridge surfaces the error string.
+        // Power-off is sent unconditionally on a Decent Scale; older
+        // firmware silently no-ops on the byte sequence.
+        let json = bridge.power_off_decent_scale().expect("decent scale connected");
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let commands = parsed["commands"].as_array().unwrap();
+        assert_eq!(commands.len(), 1);
+        let data: Vec<u8> = commands[0]["content"]["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| u8::try_from(v.as_u64().unwrap()).unwrap())
+            .collect();
+        assert_eq!(
+            data,
+            [0x03, 0x0A, 0x02, 0x00, 0x00, 0x00, 0x0B],
+            "expected POWER_OFF bytes"
+        );
+    }
+
+    #[test]
+    fn power_off_decent_scale_errors_for_a_non_decent_scale() {
+        let mut bridge = CremaBridge::new();
+        bridge.connect_scale("BOOKOO_SC".to_owned());
         let err = bridge.power_off_decent_scale().unwrap_err();
         assert!(
             err.contains("decent_scale_power_off"),

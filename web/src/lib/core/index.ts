@@ -443,11 +443,10 @@ export interface CremaCore {
 	decentScaleHeartbeat(): Promise<CoreOutput>;
 	/**
 	 * Build a `CoreOutput` whose command powers off a connected Decent
-	 * Scale (v1.2+ firmware only). Rejects with an error string when no
-	 * scale is connected, when the scale isn't a Decent Scale, or when
-	 * the firmware version is not yet known / is v1.0 / v1.1 — the shell
-	 * shows the rejection as a "long-press the button" instruction
-	 * instead of dispatching a silent no-op write.
+	 * Scale. The byte sequence is sent unconditionally — older firmware
+	 * versions silently no-op on it. Rejects with an error string only
+	 * when no scale is connected or the connected scale isn't a Decent
+	 * Scale.
 	 */
 	powerOffDecentScale(): Promise<CoreOutput>;
 	/**

@@ -48,7 +48,6 @@ use de1_scale::{
     Scale, ScaleCapabilities, ScaleUuids, TimerCommand, decent_scale, difluid, eureka_precisa,
     hiroia_jimmy, skale,
 };
-use de1_scale::DecentScaleFirmwareVersion;
 
 /// Re-export of `de1_scale::bookoo` so the wasm + future Android bridges
 /// can reach scale-side helpers (e.g. [`bookoo::format_firmware_version`])
@@ -1185,6 +1184,19 @@ impl CremaCore {
     /// Clamped to 0..=80 °C — matches the web shell's
     /// `MachineSection.svelte` stepper (`min=0, max=80`); neither legacy
     /// TCL nor reaprime clamps. docs/40 §A.
+    ///
+    /// **OPEN — wire encoding divergence vs reaprime (docs/41 Bucket 2,
+    /// docs/42).** Crema follows the legacy TCL convention: raw °C as a
+    /// u8 (e.g., 60°C → wire byte 60). reaprime's `BengleMmr.matSetPoint`
+    /// declares `MmrValueKind.scaledFloat readScale:0.1 writeScale:10.0
+    /// min:0 max:800` — wire value = °C × 10 as a 4-byte LE int (e.g.,
+    /// 60°C → wire bytes `[88, 02, 00, 00]` for 600). If reaprime is
+    /// correct, Crema writes 10× too low: a 60°C target lands on the
+    /// firmware as 6.0°C, never warm enough to do anything. Kept as-is
+    /// because the wrong direction (10× too HIGH = 600°C target) would
+    /// be worse if the legacy convention is the real spec. Resolution
+    /// pending hardware test + upstream reaprime confirmation
+    /// (`docs/42-reaprime-cup-warmer-question.md`).
     pub fn set_cup_warmer_temperature(&self, temp_c: u8) -> CoreOutput {
         if let Some(out) = self.refuse_if_firmware_locked("set_cup_warmer_temperature") {
             return out;
@@ -1522,17 +1534,14 @@ impl CremaCore {
 
     /// Build a [`Command`] that powers off the connected Decent Scale.
     ///
-    /// Returns [`AppError::UnsupportedOnHardware`] when the connected
-    /// scale's firmware version is not yet known or is v1.0 / v1.1 — the
-    /// [`decent_scale::POWER_OFF`] byte is silently ignored by anything
-    /// before v1.2 firmware, so the UI must know to fall back to the
-    /// "long-press the physical button" instruction instead of sending a
-    /// no-op. Returns the same error for a non-Decent scale or no scale
-    /// connected at all, mirroring [`enable_decent_scale_lcd`]'s gating.
+    /// Returns [`AppError::UnsupportedOnHardware`] when no scale is
+    /// connected or the connected scale is not a Decent Scale (mirroring
+    /// [`enable_decent_scale_lcd`]'s gating). The byte sequence is sent
+    /// unconditionally on a Decent Scale — older firmware versions
+    /// silently no-op on it rather than erroring.
     ///
     /// The byte sequence comes from the legacy app
-    /// (`de1plus/bluetooth.tcl:1289`); the firmware-version gate is
-    /// derived from the Decent Scale protocol docs cited there.
+    /// (`de1plus/bluetooth.tcl:1289`).
     pub fn power_off_decent_scale(&self) -> Result<CoreOutput, AppError> {
         let Some(scale) = self.scale.as_ref() else {
             return Err(AppError::UnsupportedOnHardware {
@@ -1544,28 +1553,6 @@ impl CremaCore {
             return Err(AppError::UnsupportedOnHardware {
                 feature: "decent_scale_power_off".to_owned(),
                 reason: "connected scale is not a Decent Scale".to_owned(),
-            });
-        }
-        if !scale.supports_decent_scale_power_off() {
-            let reason = match scale.decent_scale_firmware_version() {
-                Some(DecentScaleFirmwareVersion::V1_0 | DecentScaleFirmwareVersion::V1_1) => {
-                    "Decent Scale firmware < v1.2 ignores remote power-off; long-press \
-                     the physical button instead"
-                        .to_owned()
-                }
-                Some(DecentScaleFirmwareVersion::Unknown) | None => {
-                    "Decent Scale firmware version not yet known; the remote power-off \
-                     byte is only safe on v1.2+"
-                        .to_owned()
-                }
-                Some(DecentScaleFirmwareVersion::V1_2) => {
-                    // Unreachable: V1_2 returns true from supports_power_off.
-                    "internal inconsistency in supports_decent_scale_power_off".to_owned()
-                }
-            };
-            return Err(AppError::UnsupportedOnHardware {
-                feature: "decent_scale_power_off".to_owned(),
-                reason,
             });
         }
         let mut out = CoreOutput::default();
@@ -2319,10 +2306,10 @@ impl CremaCore {
             // `0x0A` LCD / heartbeat reply carrying the firmware-version
             // sentinel. The legacy app extracts the firmware version from
             // the same frame (`de1plus/bluetooth.tcl:2738-2749`); we
-            // mirror that here so a Decent Scale's `supports_power_off`
-            // capability becomes accurate shortly after the first
-            // LCD-enable write. A non-Decent scale (or any frame that
-            // isn't a `0x0A` reply) silently returns from this path.
+            // mirror that here so the version is available diagnostically
+            // (connection-info / future telemetry). A non-Decent scale (or
+            // any frame that isn't a `0x0A` reply) silently returns from
+            // this path.
             if let Some(decent_scale::CommandResponse::LcdAck {
                 firmware_version, ..
             }) = scale.parse_decent_scale_command_response(data)
@@ -3390,43 +3377,13 @@ mod tests {
     }
 
     #[test]
-    fn power_off_decent_scale_errors_when_firmware_version_is_unknown() {
+    fn power_off_decent_scale_emits_the_known_wire_bytes() {
+        // The byte sequence is sent unconditionally on any connected
+        // Decent Scale — older firmware versions silently no-op on it.
         let mut core = CremaCore::new();
         core.connect_scale("Decent Scale ABC");
-        // No firmware reply observed yet — refuse the write.
-        let err = core.power_off_decent_scale().unwrap_err();
-        match err {
-            AppError::UnsupportedOnHardware { feature, .. } => {
-                assert_eq!(feature, "decent_scale_power_off");
-            }
-            other => panic!("expected UnsupportedOnHardware, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn power_off_decent_scale_emits_the_known_wire_bytes_on_v1_2_firmware() {
-        let mut core = CremaCore::new();
-        core.connect_scale("Decent Scale ABC");
-        // Forward a synthetic `0x0A` reply with the v1.2 sentinel byte
-        // through the notification path so the scale state records the
-        // firmware version the same way it would on real hardware.
-        let firmware_reply = [0x03, 0x0A, 0x01, 0x01, 0x00, 0x4E, 0x12, 0x00];
-        core.on_notification(Source::ScaleWeight, &firmware_reply, 1_000);
-        let out = core.power_off_decent_scale().expect("v1.2 supports power-off");
+        let out = core.power_off_decent_scale().expect("decent scale connected");
         assert_eq!(the_only_scale_write(&out), decent_scale::POWER_OFF);
-    }
-
-    #[test]
-    fn power_off_decent_scale_errors_on_v1_0_firmware() {
-        let mut core = CremaCore::new();
-        core.connect_scale("Decent Scale ABC");
-        // A v1.0 firmware sentinel — power-off is silently ignored by
-        // the scale on this firmware, so the core must refuse the write
-        // (the shell needs to fall back to "long-press the button").
-        let firmware_reply = [0x03, 0x0A, 0x01, 0x01, 0x00, 0x4E, 0x10, 0x00];
-        core.on_notification(Source::ScaleWeight, &firmware_reply, 1_000);
-        let err = core.power_off_decent_scale().unwrap_err();
-        assert!(matches!(err, AppError::UnsupportedOnHardware { .. }));
     }
 
     #[test]
