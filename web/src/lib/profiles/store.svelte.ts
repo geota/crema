@@ -36,9 +36,9 @@ import {
 const CUSTOM_KEY = 'crema.profiles.custom.v1';
 
 /**
- * localStorage key for per-built-in overrides — a map of `builtin:<n>` →
- * `{ pinned, lastUsed }`. Built-ins themselves are not stored (they come from
- * the core); only the user-owned bits of their state are.
+ * localStorage key for per-built-in overrides — a map of built-in profile
+ * UUID → `{ pinned, lastUsed }`. Built-ins themselves are not stored (they
+ * come from the core); only the user-owned bits of their state are.
  */
 const OVERRIDES_KEY = 'crema.profiles.builtinOverrides.v1';
 
@@ -210,7 +210,8 @@ export class ProfileStore {
 	 * removed profile.
 	 */
 	delete(id: string): void {
-		if (id.startsWith('builtin:')) {
+		const profile = this.get(id);
+		if (profile?.source === 'builtin') {
 			this.hiddenBuiltins.add(id);
 			this.persistHiddenBuiltins();
 		} else {
@@ -241,9 +242,8 @@ export class ProfileStore {
 	 * read-only, but pinning is the user's own state).
 	 */
 	togglePin(id: string): void {
-		if (id.startsWith('builtin:')) {
-			const base = this.builtins.find((b) => b.id === id);
-			if (!base) return;
+		const base = this.builtins.find((b) => b.id === id);
+		if (base) {
 			const current = this.overrides[id] ?? {
 				pinned: base.pinned,
 				lastUsed: base.lastUsed
@@ -280,9 +280,8 @@ export class ProfileStore {
 		if (id == null) return;
 		// Stamp the current instant as the last-used timestamp (ISO-8601).
 		const stamp = new Date().toISOString();
-		if (id.startsWith('builtin:')) {
-			const base = this.builtins.find((b) => b.id === id);
-			if (!base) return;
+		const base = this.builtins.find((b) => b.id === id);
+		if (base) {
 			const current = this.overrides[id] ?? {
 				pinned: base.pinned,
 				lastUsed: base.lastUsed

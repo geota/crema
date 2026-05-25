@@ -28,6 +28,7 @@
 		blankProfile,
 		duplicateProfile,
 		uid,
+		newProfileUuid,
 		ratioLabel,
 		totalTime,
 		type CremaProfile,
@@ -267,7 +268,7 @@
 	 * from (Brew or Profiles per `returnPath`).
 	 *
 	 * Persistence is unconditional — a custom profile is updated in place,
-	 * a built-in / `?duplicate=1` arrival forks into a fresh `custom:…`
+	 * a built-in / `?duplicate=1` arrival forks into a fresh custom
 	 * profile (built-ins are read-only). What differs across surfaces:
 	 *
 	 *  - **From Brew (`cameFromBrew === true`):** the user opened Edit on
@@ -284,7 +285,10 @@
 		const toSave: CremaProfile = isCreate
 			? {
 					...draft,
-					id: draft.id.startsWith('custom:') ? draft.id : uid('custom'),
+					// Profile ids are bare UUIDs — `blankProfile` /
+					// `duplicateProfile` already mint one, so this `||`
+					// is just belt-and-braces against an empty draft id.
+					id: draft.id || newProfileUuid(),
 					source: 'custom'
 				}
 			: draft;

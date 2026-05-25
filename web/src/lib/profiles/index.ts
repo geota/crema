@@ -19,6 +19,8 @@ export {
 	type Roast,
 	type BeverageType,
 	uid,
+	newProfileUuid,
+	uuidFromString,
 	ratioLabel,
 	relativeLastUsed,
 	totalTime,
