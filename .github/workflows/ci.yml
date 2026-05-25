@@ -1,0 +1,176 @@
+# Crema CI — quality gates for the Rust core and the SvelteKit web shell.
+#
+# This workflow runs on every PR to `main` and on direct pushes to `main`.
+# It does NOT deploy. Cloudflare Pages handles auto-deploy from GitHub
+# independently. See DEPLOY.md for the deploy story.
+#
+# The two main jobs (`rust` and `web`) run in parallel for shorter wall-clock
+# time. We don't gate them on per-job path filters because the web shell
+# depends on the Rust core (via wasm) and they share a cargo cache — running
+# both on every PR is cheap once warm and avoids "PR didn't run check X"
+# foot-guns when a change touches both halves.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel in-flight CI runs on the same PR when a new commit lands;
+# leave push-to-main runs alone so each merge gets a clean signal.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────
+  # Rust core gates: fmt, clippy, tests, builtin-ID idempotency check.
+  # ─────────────────────────────────────────────────────────────────────
+  rust:
+    name: rust (core)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (stable + wasm32 + rustfmt + clippy)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+
+      # Swatinem/rust-cache handles the cargo registry + git + target dirs
+      # better than hand-rolled actions/cache for Rust. Keyed on Cargo.lock.
+      - name: Cache cargo + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core -> target
+          shared-key: rust-core
+
+      - name: cargo fmt --check
+        working-directory: core
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy (-D warnings)
+        working-directory: core
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: cargo test --workspace
+        working-directory: core
+        run: cargo test --workspace
+
+      # gen-builtin-ids is idempotent: it stamps stable UUID v7 IDs into
+      # builtin.json once, and is a no-op afterward. If running it produces
+      # any diff, either (a) the tool isn't idempotent (bug) or (b) somebody
+      # hand-edited builtin.json without re-running the generator.
+      - name: gen-builtin-ids idempotency
+        working-directory: core
+        run: |
+          cargo run -p de1-domain --bin gen-builtin-ids
+          git diff --exit-code de1-domain/profiles/builtin.json
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Web shell gates: install, build wasm bundle, svelte-check, build.
+  # Depends on the Rust core indirectly (`pnpm wasm` rebuilds de1-wasm).
+  # ─────────────────────────────────────────────────────────────────────
+  web:
+    name: web (svelte)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (stable + wasm32)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo + target (shared with rust job)
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core -> target
+          shared-key: rust-core
+
+      # Prebuilt wasm-pack binary — saves ~3 min over `cargo install`.
+      - name: Install wasm-pack
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: pnpm install
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+
+      # Build the wasm bundle first — `pnpm check` and `pnpm build` both
+      # depend on it (the Svelte shell imports from src/lib/wasm/).
+      - name: Build wasm bundle
+        working-directory: web
+        run: pnpm wasm
+
+      # `pnpm check` runs `svelte-kit sync` then svelte-check; fails on any error.
+      - name: Type-check + svelte-check
+        working-directory: web
+        run: pnpm check
+
+      - name: Build (adapter-static)
+        working-directory: web
+        run: pnpm build
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Advisory dependency audit. Runs on main pushes only (no PR noise).
+  # continue-on-error keeps a flared-up transitive advisory from blocking
+  # merges; findings still surface as annotations on the run.
+  # ─────────────────────────────────────────────────────────────────────
+  audit:
+    name: audit (advisory)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      - name: cargo audit
+        working-directory: core
+        run: cargo audit
+        continue-on-error: true
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: pnpm audit (prod)
+        working-directory: web
+        run: pnpm audit --prod
+        continue-on-error: true

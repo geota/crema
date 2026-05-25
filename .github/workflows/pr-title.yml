@@ -1,0 +1,43 @@
+# PR title check — enforces a loose Conventional-Commits-ish prefix so the
+# `main` log stays scannable. Accepted prefixes: feat, fix, chore, docs,
+# refactor, test, ci. Followed by an optional scope in parens, then `:` and
+# a description.
+#
+# Examples that PASS:
+#   feat: add HA continuation overlay
+#   fix(profiles): clamp ratio to [0.5, 4.0]
+#   chore: bump svelte-check
+#
+# Examples that FAIL:
+#   Add HA overlay
+#   FEAT: foo
+#   feat add overlay   (missing colon)
+
+name: pr-title
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  check:
+    name: title format
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate title prefix
+        env:
+          # Read via env to avoid command injection from a malicious PR title.
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          set -eu
+          printf 'PR title: %s\n' "$PR_TITLE"
+          if ! printf '%s' "$PR_TITLE" | grep -Eq '^(feat|fix|chore|docs|refactor|test|ci)(\([a-z0-9_.-]+\))?: .+'; then
+            echo "::error::PR title must start with one of: feat|fix|chore|docs|refactor|test|ci (optionally with a scope in parens), then ': '. Example: 'fix(profiles): clamp ratio'."
+            exit 1
+          fi
+          echo "ok"

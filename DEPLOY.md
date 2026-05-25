@@ -74,3 +74,17 @@ cd web && pnpm dev
 | `web/svelte.config.js` | `adapter-static` configuration. |
 | `web/.env.example` | Template for local dev's `.env.local`. |
 | `web/.env.local` | **Local-only.** Gitignored. Holds your dev Client UID. |
+
+## CI and branch protection
+
+CI quality gates live in `.github/workflows/ci.yml` (Rust core + SvelteKit web shell, run in parallel on every PR + push to `main`). CI does **not** deploy — Cloudflare Pages auto-deploys from `main` independently. See the workflow file for the full step list.
+
+Branch-protection rules are not in YAML; they're configured in GitHub Settings → Branches. Recommended rules for `main`:
+
+- **Require status checks**: `rust (core)` and `web (svelte)` (both jobs from `ci.yml`).
+- **Require branches to be up to date before merging.**
+- **Require linear history** (no merge commits via UI — squash or rebase only).
+- **Disable force-push and deletion** of `main`.
+- **Allow administrators to bypass**: enabled, for emergencies.
+
+PR titles are checked by `pr-title.yml` (loose Conventional Commits: `feat|fix|chore|docs|refactor|test|ci`, optional scope, then `: description`). It's a separate workflow, so you can promote it to a required status check independently of the build gates.
