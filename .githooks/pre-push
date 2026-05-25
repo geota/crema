@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# Crema pre-push hook — mirrors .github/workflows/ci.yml so failures surface
+# locally before the push lands on GitHub. Mirrors the `rust` and `web` jobs;
+# skips the `audit` job (advisory-only in CI; runs slow tooling installs).
+#
+# Install once per clone:
+#   scripts/install-hooks.sh
+#
+# Escape hatch (use sparingly — CI will still run on the remote):
+#   SKIP_CI_CHECKS=1 git push
+#
+# Per-step skips (when you know the other step is clean):
+#   SKIP_RUST=1 git push     # skip rust gates
+#   SKIP_WEB=1  git push     # skip web gates
+
+set -euo pipefail
+
+if [[ "${SKIP_CI_CHECKS:-0}" == "1" ]]; then
+	echo "pre-push: SKIP_CI_CHECKS=1 — skipping all gates."
+	exit 0
+fi
+
+# Resolve repo root regardless of where git invokes us from.
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+
+step() {
+	printf '\n\033[1;36m▸ %s\033[0m\n' "$1"
+}
+fail() {
+	printf '\n\033[1;31m✗ pre-push failed: %s\033[0m\n' "$1" >&2
+	printf '  To skip (CI will still run): \033[2mSKIP_CI_CHECKS=1 git push\033[0m\n' >&2
+	exit 1
+}
+
+START_TS=$(date +%s)
+
+# ─────────────────────────────────────────────────────────────────────
+# Rust gates (mirrors `rust (core)` job in ci.yml)
+# ─────────────────────────────────────────────────────────────────────
+if [[ "${SKIP_RUST:-0}" != "1" ]]; then
+	step "cargo fmt --all -- --check"
+	( cd core && cargo fmt --all -- --check ) \
+		|| fail "rustfmt drift — run 'cargo fmt --all' in core/"
+
+	step "cargo clippy --workspace --all-targets -- -D warnings"
+	( cd core && cargo clippy --workspace --all-targets -- -D warnings ) \
+		|| fail "clippy errors — fix warnings in core/"
+
+	step "cargo test --workspace"
+	( cd core && cargo test --workspace ) \
+		|| fail "cargo test failures in core/"
+
+	step "gen-builtin-ids idempotency"
+	( cd core && cargo run -p de1-domain --bin gen-builtin-ids ) \
+		|| fail "gen-builtin-ids binary failed"
+	git diff --exit-code core/de1-domain/profiles/builtin.json \
+		|| fail "builtin.json changed after gen-builtin-ids — commit the result"
+else
+	echo "pre-push: SKIP_RUST=1 — skipping rust gates."
+fi
+
+# ─────────────────────────────────────────────────────────────────────
+# Web gates (mirrors `web (svelte)` job in ci.yml)
+# ─────────────────────────────────────────────────────────────────────
+if [[ "${SKIP_WEB:-0}" != "1" ]]; then
+	step "pnpm install --frozen-lockfile"
+	( cd web && pnpm install --frozen-lockfile ) \
+		|| fail "pnpm install failed — pnpm-lock.yaml drift?"
+
+	step "pnpm wasm (rebuild de1-wasm bundle)"
+	( cd web && pnpm wasm ) \
+		|| fail "wasm-pack build failed"
+
+	step "pnpm check (svelte-kit sync + svelte-check)"
+	( cd web && pnpm check ) \
+		|| fail "svelte-check errors — fix type / a11y issues"
+
+	step "pnpm build (adapter-static)"
+	( cd web && pnpm build ) \
+		|| fail "vite build failed"
+else
+	echo "pre-push: SKIP_WEB=1 — skipping web gates."
+fi
+
+ELAPSED=$(( $(date +%s) - START_TS ))
+printf '\n\033[1;32m✓ pre-push gates passed in %ds — pushing.\033[0m\n' "$ELAPSED"

@@ -102,6 +102,16 @@ pnpm check
 pnpm test
 ```
 
+### Git hooks (optional, recommended)
+
+A pre-push hook that mirrors the CI workflow (fmt, clippy, tests, svelte-check, build) lives in `.githooks/`. Install once per clone:
+
+```bash
+scripts/install-hooks.sh
+```
+
+Bypass for a one-off push with `SKIP_CI_CHECKS=1 git push` — CI will still run on the remote.
+
 ## Project layout
 
 ```
