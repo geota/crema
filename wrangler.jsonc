@@ -1,0 +1,12 @@
+{
+  // Cloudflare Pages config for the Crema static PWA. Build runs in CF's
+  // build environment (Node + Rust + wasm-pack) per the build command set
+  // in the Pages dashboard; the output of `pnpm build` lands at web/build.
+  //
+  // `wrangler pages deploy web/build --project-name crema` from a local
+  // shell also works for manual hotfix deploys (see DEPLOY.md).
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "crema",
+  "pages_build_output_dir": "web/build",
+  "compatibility_date": "2025-05-01"
+}
