@@ -26,6 +26,13 @@ import {
 export type BeanMix = 'single' | 'blend';
 
 /**
+ * What a bag is roasted for. Lowercase wire string — matches Rust
+ * `BeanRoastType`. Imported from Beanconqueror's `bean_roasting_type`
+ * (their `Unknown` value maps to `null` on the bag).
+ */
+export type BeanRoastType = 'espresso' | 'filter' | 'omni';
+
+/**
  * Origin metadata for a bag — country, region, farm and the rest of the
  * upstream provenance. All optional and free-form because real coffee bag
  * labels are inconsistent. Mirrors `de1_domain::BeanOrigin`.
@@ -76,6 +83,11 @@ export interface Bean {
 	/** 1..10 (Visualizer canonical scale). */
 	roastLevel: number | null;
 	mix: BeanMix | null;
+	/**
+	 * What the bag is roasted for. `null` = unset. Imported from BC's
+	 * `bean_roasting_type`; surfaced in the editor's Roast section.
+	 */
+	roastType: BeanRoastType | null;
 	decaf: boolean;
 	origin: BeanOrigin;
 	bagSize: number;
@@ -137,6 +149,7 @@ export function blankBean(id?: string): Bean {
 		defrostedOn: null,
 		roastLevel: null,
 		mix: null,
+		roastType: null,
 		decaf: false,
 		origin: blankOrigin(),
 		bagSize: 0,
@@ -441,6 +454,13 @@ export function coerceBean(raw: unknown): Bean | null {
 	if (typeof obj.defrostedOn === 'string') base.defrostedOn = obj.defrostedOn;
 	if (typeof obj.roastLevel === 'number') base.roastLevel = obj.roastLevel;
 	if (obj.mix === 'single' || obj.mix === 'blend') base.mix = obj.mix;
+	if (
+		obj.roastType === 'espresso' ||
+		obj.roastType === 'filter' ||
+		obj.roastType === 'omni'
+	) {
+		base.roastType = obj.roastType;
+	}
 	if (typeof obj.decaf === 'boolean') base.decaf = obj.decaf;
 	if (typeof obj.origin === 'object' && obj.origin !== null) {
 		const o = obj.origin as Record<string, unknown>;
