@@ -21,8 +21,9 @@ local.properties
 .DS_Store
 Thumbs.db
 
-# Claude Code agent worktrees
+# Claude Code agent worktrees + local settings
 .claude/worktrees/
+.claude/settings.local.json
 
 # Internal design docs / audits / handoffs — kept locally for development
 # reference but not part of the public repo. The README in the repo root
