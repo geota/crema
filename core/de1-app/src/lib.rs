@@ -267,9 +267,38 @@ pub struct CremaCore {
     scale: Option<Scale>,
     /// Smooths the scale stream into weight + flow for display.
     flow: FlowEstimator,
-    /// Auto-stop targets armed by the shell; the [`AutoStop`] itself is built
-    /// when the shot first reaches a flowing phase.
-    auto_stop_targets: Option<StopTargets>,
+    /// Whether to tare the connected scale automatically on shot start.
+    /// Latched flag, default `true`; the shell pushes the user pref via
+    /// [`set_auto_tare`](Self::set_auto_tare). Consulted on
+    /// `ShotEvent::Started` regardless of whether the shot was initiated
+    /// via Crema or the DE1's on-machine touch (GHC) — the gating event is
+    /// the same.
+    auto_tare: bool,
+    /// Whether stop-at-weight (SAW) is enabled. Latched flag, default
+    /// `true`; the shell pushes the user pref via
+    /// [`set_stop_on_weight`](Self::set_stop_on_weight). Even when `true`,
+    /// SAW only fires if a scale is connected and an effective target
+    /// weight resolves > 0 (see [`effective_target_weight`](Self::effective_target_weight)).
+    stop_on_weight: bool,
+    /// The active profile's recipe target weight, grams. `None` = no
+    /// recipe target. Set via
+    /// [`set_profile_target_weight`](Self::set_profile_target_weight) when
+    /// the shell activates or edits a profile.
+    profile_target_weight: Option<f32>,
+    /// The per-shot dial override weight, grams. `None` = no override
+    /// (fall back to the profile recipe). Set via
+    /// [`set_shot_target_weight`](Self::set_shot_target_weight) when the
+    /// QC stepper moves.
+    shot_target_weight: Option<f32>,
+    /// The active profile's volume limit, millilitres (SAV). `None` = no
+    /// limit. Set via
+    /// [`set_profile_volume_limit`](Self::set_profile_volume_limit).
+    profile_volume_limit: Option<f32>,
+    /// The global maximum shot duration, seconds. `None` = no max. Set
+    /// via [`set_max_shot_duration`](Self::set_max_shot_duration); the
+    /// shell binds this to a user-tunable Settings field (legacy default
+    /// 60 s).
+    max_shot_duration: Option<f32>,
     /// The live auto-stop controller, for the duration of one shot.
     auto_stop: Option<AutoStop>,
     /// Timestamp of the most recent scale-weight reading, for the lost-scale
@@ -429,7 +458,12 @@ impl CremaCore {
             shot_started: None,
             scale: None,
             flow: FlowEstimator::new(FlowAlgorithm::default()),
-            auto_stop_targets: None,
+            auto_tare: true,
+            stop_on_weight: true,
+            profile_target_weight: None,
+            shot_target_weight: None,
+            profile_volume_limit: None,
+            max_shot_duration: None,
             auto_stop: None,
             last_scale_weight: None,
             last_scale_estimate: None,
@@ -567,29 +601,86 @@ impl CremaCore {
         self.scale.as_ref().map(Scale::uuids)
     }
 
-    /// Arm automatic shot-stop. A `None` target disables that mode; the
-    /// [`AutoStop`] is constructed when the next shot starts flowing.
-    ///
-    /// `weight` is grams (SAW target), `volume` is millilitres (SAV target),
-    /// and `max_time` is shot-duration seconds (the legacy `espresso_max_time`
-    /// limit).
-    pub fn arm_auto_stop(
-        &mut self,
-        weight: Option<f32>,
-        volume: Option<f32>,
-        max_time: Option<f32>,
-    ) {
-        self.auto_stop_targets = Some(StopTargets {
-            weight,
-            volume,
-            max_time,
-        });
+    /// Enable or disable auto-tare on shot start (default `true`). The
+    /// connected scale is tared on `ShotEvent::Started` only when this
+    /// flag is `true` *and* a scale is connected. Consulted regardless of
+    /// who initiated the shot (Crema-tap or GHC-tap on the machine).
+    pub fn set_auto_tare(&mut self, enabled: bool) {
+        self.auto_tare = enabled;
     }
 
-    /// Disarm automatic shot-stop, including any controller already running.
-    pub fn disarm_auto_stop(&mut self) {
-        self.auto_stop_targets = None;
-        self.auto_stop = None;
+    /// Enable or disable stop-at-weight (default `true`). When `false`,
+    /// SAW never arms even if a target weight is configured. Volume and
+    /// max-time stops remain independent.
+    pub fn set_stop_on_weight(&mut self, enabled: bool) {
+        self.stop_on_weight = enabled;
+    }
+
+    /// Set the active profile's recipe target weight, in grams. `None` =
+    /// no recipe target. Defensive: a finite value `<= 0` normalises to
+    /// `None`, mirroring the legacy wire convention where `0` means
+    /// "disabled."
+    pub fn set_profile_target_weight(&mut self, grams: Option<f32>) {
+        self.profile_target_weight = grams.filter(|g| g.is_finite() && *g > 0.0);
+    }
+
+    /// Set the per-shot dial override weight, in grams. `None` clears the
+    /// override and falls back to the profile recipe target. Same defensive
+    /// `<= 0 → None` normalisation as
+    /// [`set_profile_target_weight`](Self::set_profile_target_weight).
+    pub fn set_shot_target_weight(&mut self, grams: Option<f32>) {
+        self.shot_target_weight = grams.filter(|g| g.is_finite() && *g > 0.0);
+    }
+
+    /// Set the active profile's volume limit (SAV), in millilitres.
+    /// `None` = no limit. Defensive `<= 0 → None`.
+    pub fn set_profile_volume_limit(&mut self, milliliters: Option<f32>) {
+        self.profile_volume_limit = milliliters.filter(|v| v.is_finite() && *v > 0.0);
+    }
+
+    /// Set the global maximum shot duration, in seconds. `None` = no max.
+    /// Defensive `<= 0 → None`. The legacy app default is 60 s.
+    pub fn set_max_shot_duration(&mut self, seconds: Option<f32>) {
+        self.max_shot_duration = seconds.filter(|s| s.is_finite() && *s > 0.0);
+    }
+
+    /// The target weight currently in effect for SAW. Priority:
+    ///
+    /// 1. Per-shot dial override ([`shot_target_weight`](Self::shot_target_weight))
+    ///    wins when set.
+    /// 2. Otherwise the active profile's recipe target
+    ///    ([`profile_target_weight`](Self::profile_target_weight)).
+    /// 3. If both are `None`, no weight target.
+    ///
+    /// Does not consider `stop_on_weight` or scale-connected — that's
+    /// [`effective_stop_targets`](Self::effective_stop_targets)'s job.
+    fn effective_target_weight(&self) -> Option<f32> {
+        self.shot_target_weight.or(self.profile_target_weight)
+    }
+
+    /// Compose the [`StopTargets`] that should arm the [`AutoStop`] on the
+    /// next shot's first flowing phase. Returns `None` when none of the
+    /// three stop modes resolve to an active target.
+    ///
+    /// SAW is additionally gated on `stop_on_weight && scale.is_some()`;
+    /// SAV and max-time are independent of the scale.
+    fn effective_stop_targets(&self) -> Option<StopTargets> {
+        let weight = if self.stop_on_weight && self.scale.is_some() {
+            self.effective_target_weight()
+        } else {
+            None
+        };
+        let volume = self.profile_volume_limit;
+        let max_time = self.max_shot_duration;
+        if weight.is_none() && volume.is_none() && max_time.is_none() {
+            None
+        } else {
+            Some(StopTargets {
+                weight,
+                volume,
+                max_time,
+            })
+        }
     }
 
     /// The standard DE1 profiles Crema ships built in, as a JSON array string.
@@ -2764,8 +2855,13 @@ impl CremaCore {
                 // order.)
                 self.shot_metrics.reset();
                 // Auto-tare the connected scale so the cup starts from zero,
-                // mirroring the legacy app's tare-at-shot-start behaviour.
-                self.push_tare_command(out);
+                // mirroring the legacy app's tare-at-shot-start behaviour —
+                // gated on the latched user preference (default true). The
+                // tare write is a no-op when no scale is connected, so the
+                // explicit scale check inside `push_tare_command` carries.
+                if self.auto_tare {
+                    self.push_tare_command(out);
+                }
                 // Reset the scale's built-in timer first, then start it. The
                 // reset clears any residual from a prior shot; the start
                 // begins counting from zero.
@@ -2845,6 +2941,11 @@ impl CremaCore {
 
     /// Construct the [`AutoStop`] the first time the shot reaches a flowing
     /// phase, so its arming delay counts from flow start, not heating start.
+    ///
+    /// The targets are composed fresh from the latched user settings via
+    /// [`effective_stop_targets`](Self::effective_stop_targets), so any
+    /// setting changes between shots are picked up automatically without a
+    /// cached-tuple staleness window.
     fn arm_auto_stop_if_flowing(&mut self, phase: ShotPhase, now: Duration) {
         if self.auto_stop.is_some() {
             return;
@@ -2852,7 +2953,7 @@ impl CremaCore {
         if !matches!(phase, ShotPhase::Preinfusion | ShotPhase::Pouring) {
             return;
         }
-        if let Some(targets) = self.auto_stop_targets {
+        if let Some(targets) = self.effective_stop_targets() {
             self.auto_stop = Some(AutoStop::new(targets, self.stop_config(), now));
         }
     }
@@ -4331,20 +4432,18 @@ mod tests {
     }
 
     #[test]
-    fn an_armed_weight_target_triggers_a_stop_and_command() {
+    fn a_profile_target_weight_triggers_saw_and_a_stop_command() {
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC");
-        core.arm_auto_stop(Some(30.0), None, None);
-        // Start a shot already in a flowing phase: arms the AutoStop at t = 0.
+        // Default settings (auto_tare=true, stop_on_weight=true) — push only
+        // the profile recipe target.
+        core.set_profile_target_weight(Some(30.0));
         core.on_notification(Source::De1State, &[4, 5], 0);
         // A 35 g reading well past the 5 s arming delay crosses the 30 g target.
         let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(3_500), 6_000);
         assert!(out.events.contains(&Event::StopTriggered {
             reason: StopReason::Weight,
         }));
-        // The same first weight notification also rides the connect-time scale
-        // queries, so the stop write is not necessarily commands[0] — assert it
-        // is present rather than first.
         assert!(out.commands.iter().any(|c| matches!(
             c,
             Command::WriteCharacteristic {
@@ -4355,16 +4454,84 @@ mod tests {
     }
 
     #[test]
-    fn an_armed_max_time_target_stops_the_shot() {
+    fn a_shot_dial_override_wins_over_the_profile_target() {
         let mut core = CremaCore::new();
-        core.arm_auto_stop(None, None, Some(30.0));
-        // Start a shot in a flowing phase: arms the AutoStop at t = 0.
+        core.connect_scale("BOOKOO_SC");
+        // Profile says 30 g; dial overrides to 50 g.
+        core.set_profile_target_weight(Some(30.0));
+        core.set_shot_target_weight(Some(50.0));
         core.on_notification(Source::De1State, &[4, 5], 0);
-        // A telemetry sample past the 30 s limit trips the time-based stop.
+        // 35 g would have stopped the 30 g shot — verify it doesn't here.
+        let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(3_500), 6_000);
+        assert!(!out.events.iter().any(|e| matches!(
+            e,
+            Event::StopTriggered {
+                reason: StopReason::Weight
+            }
+        )));
+    }
+
+    #[test]
+    fn stop_on_weight_disabled_suppresses_saw_even_with_a_target() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC");
+        core.set_profile_target_weight(Some(30.0));
+        core.set_stop_on_weight(false);
+        core.on_notification(Source::De1State, &[4, 5], 0);
+        let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(3_500), 6_000);
+        assert!(!out.events.iter().any(|e| matches!(
+            e,
+            Event::StopTriggered {
+                reason: StopReason::Weight
+            }
+        )));
+    }
+
+    #[test]
+    fn saw_does_not_arm_without_a_connected_scale() {
+        let mut core = CremaCore::new();
+        // No connect_scale call.
+        core.set_profile_target_weight(Some(30.0));
+        core.on_notification(Source::De1State, &[4, 5], 0);
+        // Without a scale there's nothing to feed the AutoStop; assert no
+        // controller was ever constructed by checking SAV / max-time
+        // independence works in a sibling test.
+        // Sanity: a sample past a 30 s max-time still doesn't trip SAW.
+        let out = core.on_notification(Source::De1ShotSample, &SAMPLE, 31_000);
+        assert!(!out.events.iter().any(|e| matches!(
+            e,
+            Event::StopTriggered {
+                reason: StopReason::Weight
+            }
+        )));
+    }
+
+    #[test]
+    fn max_shot_duration_stops_the_shot() {
+        let mut core = CremaCore::new();
+        core.set_max_shot_duration(Some(30.0));
+        core.on_notification(Source::De1State, &[4, 5], 0);
         let out = core.on_notification(Source::De1ShotSample, &SAMPLE, 31_000);
         assert!(out.events.contains(&Event::StopTriggered {
             reason: StopReason::MaxTime,
         }));
+    }
+
+    #[test]
+    fn defensive_normalisation_treats_zero_and_negative_as_none() {
+        let mut core = CremaCore::new();
+        core.set_profile_target_weight(Some(0.0));
+        core.set_shot_target_weight(Some(-5.0));
+        core.set_profile_volume_limit(Some(f32::NAN));
+        core.set_max_shot_duration(Some(0.0));
+        // None of these arms anything.
+        core.on_notification(Source::De1State, &[4, 5], 0);
+        let out = core.on_notification(Source::De1ShotSample, &SAMPLE, 31_000);
+        assert!(
+            !out.events
+                .iter()
+                .any(|e| matches!(e, Event::StopTriggered { .. }))
+        );
     }
 
     #[test]
@@ -4391,6 +4558,33 @@ mod tests {
                 .iter()
                 .any(|c| matches!(c, Command::WriteScale { .. }))
         );
+    }
+
+    #[test]
+    fn auto_tare_disabled_suppresses_the_tare_at_shot_start() {
+        // Shot start emits a tare + timer-reset + timer-start, all as
+        // WriteScale commands. With auto_tare disabled we expect two writes
+        // (reset + start) rather than three.
+        let mut on_core = CremaCore::new();
+        on_core.connect_scale("BOOKOO_SC");
+        let on_out = on_core.on_notification(Source::De1State, &[4, 5], 1_000);
+        let on_writes = on_out
+            .commands
+            .iter()
+            .filter(|c| matches!(c, Command::WriteScale { .. }))
+            .count();
+
+        let mut off_core = CremaCore::new();
+        off_core.connect_scale("BOOKOO_SC");
+        off_core.set_auto_tare(false);
+        let off_out = off_core.on_notification(Source::De1State, &[4, 5], 1_000);
+        let off_writes = off_out
+            .commands
+            .iter()
+            .filter(|c| matches!(c, Command::WriteScale { .. }))
+            .count();
+
+        assert_eq!(on_writes, off_writes + 1, "auto_tare=false drops the tare");
     }
 
     /// A `ShotSettings` with a placeholder hot-water volume; other fields are

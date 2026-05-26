@@ -467,6 +467,38 @@ export interface CremaCore {
 	 */
 	setWeightUnitPref(unit: ShellWeightUnit): Promise<void>;
 	/**
+	 * Enable or disable auto-tare on shot start. Latched in the core and
+	 * consulted on `ShotEvent::Started` regardless of who initiated the
+	 * shot (Crema-tap or DE1 group-head touch). Default `true` until set.
+	 */
+	setAutoTare(enabled: boolean): Promise<void>;
+	/**
+	 * Enable or disable stop-at-weight. When `false`, SAW never arms even
+	 * if a target weight is configured. Default `true` until set.
+	 */
+	setStopOnWeight(enabled: boolean): Promise<void>;
+	/**
+	 * Set the active profile's recipe target weight, grams. `undefined`
+	 * (or a `<=0` / non-finite value) means "no target." Called when the
+	 * shell activates or edits a profile.
+	 */
+	setProfileTargetWeight(grams: number | undefined): Promise<void>;
+	/**
+	 * Set the per-shot dial-override weight, grams. `undefined` clears
+	 * the override and falls back to the profile recipe target.
+	 */
+	setShotTargetWeight(grams: number | undefined): Promise<void>;
+	/**
+	 * Set the active profile's volume limit (SAV), millilitres.
+	 * `undefined` means "no limit."
+	 */
+	setProfileVolumeLimit(milliliters: number | undefined): Promise<void>;
+	/**
+	 * Set the global maximum shot duration, seconds. `undefined` means
+	 * "no max." Legacy default is 60 s.
+	 */
+	setMaxShotDuration(seconds: number | undefined): Promise<void>;
+	/**
 	 * Build a `CoreOutput` whose commands enable the Skale II's on-scale
 	 * LCD (legacy `ED EC` sequence, plus an optional `0x03` enable-grams
 	 * write when `unit === 'g'`). Skale-II-only; empty otherwise.
@@ -855,6 +887,24 @@ async function createCore(): Promise<CremaCore> {
 		},
 		async setWeightUnitPref(unit: ShellWeightUnit) {
 			bridge.set_weight_unit_pref(weightUnitToWire(unit));
+		},
+		async setAutoTare(enabled) {
+			bridge.set_auto_tare(enabled);
+		},
+		async setStopOnWeight(enabled) {
+			bridge.set_stop_on_weight(enabled);
+		},
+		async setProfileTargetWeight(grams) {
+			bridge.set_profile_target_weight(grams);
+		},
+		async setShotTargetWeight(grams) {
+			bridge.set_shot_target_weight(grams);
+		},
+		async setProfileVolumeLimit(milliliters) {
+			bridge.set_profile_volume_limit(milliliters);
+		},
+		async setMaxShotDuration(seconds) {
+			bridge.set_max_shot_duration(seconds);
 		},
 		async enableSkaleLcd(unit: ShellWeightUnit) {
 			return parseOutput(bridge.enable_skale_lcd(weightUnitToWire(unit)));

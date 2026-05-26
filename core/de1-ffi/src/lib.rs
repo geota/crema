@@ -352,15 +352,38 @@ impl CremaBridge {
         self.core().connect_scale(&advertised_name)
     }
 
-    /// Arm automatic shot-stop. `weight` is grams (SAW), `volume` is
-    /// millilitres (SAV), and `max_time` is shot-duration seconds.
-    pub fn arm_auto_stop(&self, weight: Option<f32>, volume: Option<f32>, max_time: Option<f32>) {
-        self.core().arm_auto_stop(weight, volume, max_time);
+    /// Enable or disable auto-tare on shot start.
+    pub fn set_auto_tare(&self, enabled: bool) {
+        self.core().set_auto_tare(enabled);
     }
 
-    /// Disarm automatic shot-stop.
-    pub fn disarm_auto_stop(&self) {
-        self.core().disarm_auto_stop();
+    /// Enable or disable stop-at-weight (SAW).
+    pub fn set_stop_on_weight(&self, enabled: bool) {
+        self.core().set_stop_on_weight(enabled);
+    }
+
+    /// Set the active profile's recipe target weight, in grams.
+    /// `None` (or a non-finite / non-positive value) means "no target."
+    pub fn set_profile_target_weight(&self, grams: Option<f32>) {
+        self.core().set_profile_target_weight(grams);
+    }
+
+    /// Set the per-shot dial override weight, in grams. `None` clears the
+    /// override (falls back to the profile recipe target).
+    pub fn set_shot_target_weight(&self, grams: Option<f32>) {
+        self.core().set_shot_target_weight(grams);
+    }
+
+    /// Set the active profile's volume limit (SAV), in millilitres.
+    /// `None` means "no limit."
+    pub fn set_profile_volume_limit(&self, milliliters: Option<f32>) {
+        self.core().set_profile_volume_limit(milliliters);
+    }
+
+    /// Set the global maximum shot duration, in seconds. `None` means
+    /// "no max." Legacy default is 60 s.
+    pub fn set_max_shot_duration(&self, seconds: Option<f32>) {
+        self.core().set_max_shot_duration(seconds);
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command asks the DE1 to enter
