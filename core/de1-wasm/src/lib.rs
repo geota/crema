@@ -443,6 +443,25 @@ pub fn fold_replay_meta_jsonl(payloads_json: &str) -> Result<String, String> {
     de1_domain::fold_meta_jsonl_json(payloads_json)
 }
 
+/// Derive the maintenance readout (filter capacity %, litres since
+/// descale, hours since clean) from the persisted state. `state_json`
+/// is the shell-side `MaintenanceState` serialised to JSON; `now_ms`
+/// is the wall-clock unix-epoch ms. See
+/// `de1_domain::maintenance_readout_json`.
+///
+/// # Errors
+///
+/// Returns the JSON parse error string when `state_json` doesn't
+/// deserialise into a `MaintenanceState`.
+#[wasm_bindgen(js_name = maintenanceReadout)]
+pub fn maintenance_readout(state_json: &str, now_ms: f64) -> Result<String, String> {
+    // JS `Date.now()` is an integer-valued `f64`. Truncate defensively;
+    // a non-finite value falls through to 0 instead of panicking.
+    #[allow(clippy::cast_possible_truncation)]
+    let now = if now_ms.is_finite() { now_ms as i64 } else { 0 };
+    de1_domain::maintenance_readout_json(state_json, now)
+}
+
 /// Classify a 1..10 roast level into a named band — returns the lowercase
 /// wire string (`"light"` / `"medium"` / `"dark"`), or `undefined` for a
 /// missing (`None`) level. Values outside 1..10 are clamped first. See

@@ -331,6 +331,19 @@ pub fn fold_replay_meta_jsonl(payloads_json: String) -> Result<String, String> {
     de1_domain::fold_meta_jsonl_json(&payloads_json)
 }
 
+/// Derive the maintenance readout (filter capacity %, litres since
+/// descale, hours since clean) from the persisted state. See
+/// [`de1_domain::maintenance_readout_json`].
+///
+/// # Errors
+///
+/// Returns the JSON parse error string when `state_json` doesn't
+/// deserialise into a `MaintenanceState`.
+#[uniffi::export]
+pub fn maintenance_readout(state_json: String, now_ms: i64) -> Result<String, String> {
+    de1_domain::maintenance_readout_json(&state_json, now_ms)
+}
+
 /// The Crema core, exposed to the Kotlin shell.
 ///
 /// Methods that produce a [`CoreOutput`] return it as a JSON string; the shell
