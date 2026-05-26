@@ -5,9 +5,9 @@
 	 * mirrors the ShotSettings `steamTemp` field).
 	 */
 	import type { BrewParamState } from './brew-params.svelte';
-	import QSplitLabel from './QSplitLabel.svelte';
-	import QStepper from './QStepper.svelte';
-	import QChipRow from './QChipRow.svelte';
+	import QuickSplitLabel from './QuickSplitLabel.svelte';
+	import QuickStepper from './QuickStepper.svelte';
+	import QuickChipRow from './QuickChipRow.svelte';
 
 	let { params }: { params: BrewParamState } = $props();
 
@@ -15,7 +15,7 @@
 </script>
 
 <div>
-	<QSplitLabel
+	<QuickSplitLabel
 		prefix="Steam"
 		options={[
 			{ id: 'time', label: 'time' },
@@ -26,7 +26,7 @@
 		onChange={(v) => params.set('steamMode', v as 'time' | 'flow' | 'temp')}
 	/>
 	{#if p.steamMode === 'time'}
-		<QStepper
+		<QuickStepper
 			value={p.steamTime}
 			unit="s"
 			min={1}
@@ -36,14 +36,14 @@
 			fmt={(v) => v.toFixed(0)}
 		/>
 		<div style="height:6px"></div>
-		<QChipRow
+		<QuickChipRow
 			options={[5, 10, 15, 20, 30]}
 			value={p.steamTime}
 			unit="s"
 			onChange={(v) => params.set('steamTime', v)}
 		/>
 	{:else if p.steamMode === 'flow'}
-		<QStepper
+		<QuickStepper
 			value={p.steamFlow}
 			unit="ml/s"
 			min={0.2}
@@ -53,14 +53,14 @@
 			fmt={(v) => v.toFixed(1)}
 		/>
 		<div style="height:6px"></div>
-		<QChipRow
+		<QuickChipRow
 			options={[0.6, 0.9, 1.2, 1.6, 2.0]}
 			value={p.steamFlow}
 			onChange={(v) => params.set('steamFlow', v)}
 			fmt={(v) => v.toFixed(1)}
 		/>
 	{:else}
-		<QStepper
+		<QuickStepper
 			value={p.steamTemp}
 			dimension="temp"
 			min={120}
@@ -69,7 +69,7 @@
 			onChange={(v) => params.set('steamTemp', v)}
 		/>
 		<div style="height:6px"></div>
-		<QChipRow
+		<QuickChipRow
 			options={[140, 145, 148, 150, 155]}
 			value={p.steamTemp}
 			dimension="temp"

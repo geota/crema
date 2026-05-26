@@ -23,7 +23,7 @@
 		type Roaster
 	} from '$lib/bean';
 	import RoasterAutocomplete from '$lib/components/beans/RoasterAutocomplete.svelte';
-	import QStepper from './QStepper.svelte';
+	import QuickStepper from './QuickStepper.svelte';
 	import { getSettingsStore } from '$lib/settings';
 	import type { Roast } from '$lib/profiles';
 
@@ -313,7 +313,7 @@
 			</label>
 			<div class="bean-field">
 				<span class="t-eyebrow">Roast level (1–10)</span>
-				<QStepper
+				<QuickStepper
 					value={eRoastLevel ?? 5}
 					min={1}
 					max={10}

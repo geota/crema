@@ -5,8 +5,8 @@
 	 * live brew ratio as a top-right superscript.
 	 */
 	import type { BrewParamState } from './brew-params.svelte';
-	import QStepper from './QStepper.svelte';
-	import QChipRow from './QChipRow.svelte';
+	import QuickStepper from './QuickStepper.svelte';
+	import QuickChipRow from './QuickChipRow.svelte';
 	import { getSettingsStore, formatWeight } from '$lib/settings';
 
 	let {
@@ -58,7 +58,7 @@
 		</span>
 		<span class="qcs-sup">1:{ratio}</span>
 	</div>
-	<QStepper
+	<QuickStepper
 		value={p.yield}
 		dimension="weight"
 		min={10}
@@ -69,7 +69,7 @@
 		overriddenTooltip="Overriding default {yieldSeedLabel}"
 	/>
 	<div style="height:6px"></div>
-	<QChipRow
+	<QuickChipRow
 		options={[28, 32, 36, 40, 45]}
 		value={p.yield}
 		dimension="weight"

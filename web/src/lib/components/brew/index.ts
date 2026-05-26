@@ -18,9 +18,9 @@ export { default as LastShotCard } from './LastShotCard.svelte';
 export { default as LiveChart } from './LiveChart.svelte';
 export { default as FavoritesStrip } from './FavoritesStrip.svelte';
 export { default as BeanPill } from './BeanPill.svelte';
-export { default as QStepper } from './QStepper.svelte';
-export { default as QChipRow } from './QChipRow.svelte';
-export { default as QSparkline } from './QSparkline.svelte';
-export { default as QSplitLabel } from './QSplitLabel.svelte';
+export { default as QuickStepper } from './QuickStepper.svelte';
+export { default as QuickChipRow } from './QuickChipRow.svelte';
+export { default as QuickSparkline } from './QuickSparkline.svelte';
+export { default as QuickSplitLabel } from './QuickSplitLabel.svelte';
 
 export { BrewParamState, DEFAULT_BREW_PARAMS, type BrewParams } from './brew-params.svelte';

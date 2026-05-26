@@ -16,7 +16,7 @@
 		type Bean,
 		type Roaster
 	} from '$lib/bean';
-	import QStepper from '$lib/components/brew/QStepper.svelte';
+	import QuickStepper from '$lib/components/brew/QuickStepper.svelte';
 	import RoasterAutocomplete from './RoasterAutocomplete.svelte';
 
 	let {
@@ -175,7 +175,7 @@
 		<div class="bn-fld bn-fld-row">
 			<span class="bn-fld-label">Bag size</span>
 			<div class="bn-fld-bag">
-				<QStepper
+				<QuickStepper
 					label=""
 					value={bagSizeG}
 					unit="g"
@@ -375,7 +375,7 @@
 		text-align: center;
 	}
 	/* Keep the stepper at the column width on click — the inline
-	   number editor inherits `width: 100%` from the QStepper's
+	   number editor inherits `width: 100%` from the QuickStepper's
 	   `.qcs-num-input`, which inside a `flex: 1` `.qcs-val` cell does
 	   not change the row width. Explicit here so a future tweak to
 	   the stepper internals can't widen the row on focus. */

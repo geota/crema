@@ -11,7 +11,7 @@
 	 * Roast level uses the design's `RoastSlider` (1-10 with band labels
 	 * underneath). Everything else uses Crema primitives:
 	 *
-	 * - `QStepper`     for grams (bag size, remaining).
+	 * - `QuickStepper`     for grams (bag size, remaining).
 	 * - native `<select>` for the mix / origin processing dropdowns.
 	 * - `StToggle`    for the boolean flags (decaf, favourite, frozen).
 	 * - `TagInput`    (the one used by /profiles) for tags.
@@ -33,7 +33,7 @@
 		type Bean,
 		type Roaster
 	} from '$lib/bean';
-	import QStepper from '$lib/components/brew/QStepper.svelte';
+	import QuickStepper from '$lib/components/brew/QuickStepper.svelte';
 	import StToggle from '$lib/components/settings/StToggle.svelte';
 	import RoasterAutocomplete from './RoasterAutocomplete.svelte';
 	import TagInput from '$lib/components/profiles/TagInput.svelte';
@@ -249,7 +249,7 @@
 	// Tags moved inline under the Roaster field in the Identity block, so
 	// the standalone Tags entry is gone and the buy-again numbering shifts
 	// down. "Bag & grinder" → "Bag & Grind" matches the new block heading
-	// and the QStepper label used in quick controls.
+	// and the QuickStepper label used in quick controls.
 	const TOC = [
 		{ id: 'identity', label: 'Identity' },
 		{ id: 'roast', label: 'Roast & mix' },
@@ -660,7 +660,7 @@
 			</section>
 
 			<!-- Bag & Grind (renamed from "Bag & grinder" — matches the
-			     QStepper "Grind" label in the brew quick-controls so the
+			     QuickStepper "Grind" label in the brew quick-controls so the
 			     mental model lines up). -->
 			<section class="be-block" id="be-bag">
 				<header class="be-block-head">
@@ -680,7 +680,7 @@
 								<div class="be-frow-label">Bag size</div>
 							</div>
 							<div class="be-frow-r">
-								<QStepper
+								<QuickStepper
 									label=""
 									value={current.bagSizeG}
 									unit="g"
@@ -708,7 +708,7 @@
 								<div class="be-frow-label">Remaining</div>
 							</div>
 							<div class="be-frow-r">
-								<QStepper
+								<QuickStepper
 									label=""
 									value={current.remainingG}
 									unit="g"
@@ -753,7 +753,7 @@
 								<div class="be-frow-label">Grind</div>
 							</div>
 							<div class="be-frow-r">
-								<QStepper
+								<QuickStepper
 									label=""
 									value={grindNum}
 									unit=""
@@ -1394,7 +1394,7 @@
 		color-scheme: dark;
 		width: 100%;
 		box-sizing: border-box;
-		/* Match the QStepper's `.qcs-row` height (4px padding + 36px
+		/* Match the QuickStepper's `.qcs-row` height (4px padding + 36px
 		   button + 4px padding = 44px) so an `<input>` and a stepper
 		   sitting in adjacent grid cells line up vertically with no
 		   per-row tweaks. */
