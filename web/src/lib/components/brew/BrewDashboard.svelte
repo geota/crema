@@ -1058,17 +1058,58 @@
 			<div class="crema-dash-timercol">
 				<ExtractionTimer seconds={elapsedSec} step={phaseLabel} />
 				<div class="crema-dash-targets">
-					{#if yieldCardVisible}
-						<div class="crema-target">
-							<div class="t-eyebrow">Yield</div>
-							<div class="crema-target-val">
-								<span>{shotWeightM.value}</span> / {yieldTarget.value}<span
-									class="crema-target-unit">{yieldTarget.unit}</span
-								>
-							</div>
-							<div class="crema-target-bar">
-								<div style="width:{yieldPct}%"></div>
-							</div>
+					{#if yieldCardVisible || maxVolumeCardVisible || maxDurationCardVisible}
+						<!-- Consolidated stop-conditions card. Each row is
+						     independently gated on its own target; the card
+						     itself only renders when at least one row would
+						     show. Keeps the left column compact when the
+						     user has multiple guards configured, so the
+						     chart on the right doesn't stretch the layout
+						     past the viewport. -->
+						<div class="crema-target crema-target-stack">
+							<div class="t-eyebrow">Max</div>
+							{#if yieldCardVisible}
+								<div class="crema-target-stack-row">
+									<span class="crema-target-stack-label">Yield</span>
+									<span class="crema-target-stack-val">
+										<span class="crema-target-stack-live">{shotWeightM.value}</span>
+										/ {yieldTarget.value}<span class="crema-target-unit"
+											>{yieldTarget.unit}</span
+										>
+									</span>
+									<div class="crema-target-bar">
+										<div style="width:{yieldPct}%"></div>
+									</div>
+								</div>
+							{/if}
+							{#if maxVolumeCardVisible}
+								<div class="crema-target-stack-row">
+									<span class="crema-target-stack-label">Volume</span>
+									<span class="crema-target-stack-val">
+										<span class="crema-target-stack-live"
+											>{(ui.dispensedVolume ?? 0).toFixed(0)}</span
+										>
+										/ {activeProfile?.maxTotalVolumeMl}<span class="crema-target-unit"
+											>ml</span
+										>
+									</span>
+									<div class="crema-target-bar">
+										<div style="width:{maxVolumePct}%"></div>
+									</div>
+								</div>
+							{/if}
+							{#if maxDurationCardVisible}
+								<div class="crema-target-stack-row">
+									<span class="crema-target-stack-label">Time</span>
+									<span class="crema-target-stack-val">
+										<span class="crema-target-stack-live">{elapsedSec.toFixed(0)}</span>
+										/ {prefs.maxShotDurationS}<span class="crema-target-unit">s</span>
+									</span>
+									<div class="crema-target-bar">
+										<div style="width:{maxDurationPct}%"></div>
+									</div>
+								</div>
+							{/if}
 						</div>
 					{/if}
 					<div class="crema-target">
@@ -1078,38 +1119,6 @@
 							<span class="crema-target-unit"> · target 1:{ratio}</span>
 						</div>
 					</div>
-					{#if maxVolumeCardVisible}
-						<!-- Stop-by-volume guardrail — appears only when the active
-						     profile sets `maxTotalVolumeMl > 0`. Live progress bar
-						     so the user can see why a shot ends. -->
-						<div class="crema-target">
-							<div class="t-eyebrow">Max volume</div>
-							<div class="crema-target-val">
-								<span>{(ui.dispensedVolume ?? 0).toFixed(0)}</span> /
-								{activeProfile?.maxTotalVolumeMl}<span class="crema-target-unit">ml</span>
-							</div>
-							<div class="crema-target-bar">
-								<div style="width:{maxVolumePct}%"></div>
-							</div>
-						</div>
-					{/if}
-					{#if maxDurationCardVisible}
-						<!-- Safety guardrail — appears only when the user sets a
-						     non-zero "Max shot duration" in Settings. Counts up
-						     toward the cap; a full bar means time is the
-						     reason a shot is about to stop. -->
-						<div class="crema-target">
-							<div class="t-eyebrow">Max time</div>
-							<div class="crema-target-val">
-								<span>{elapsedSec.toFixed(0)}</span> / {prefs.maxShotDurationS}<span
-									class="crema-target-unit">s</span
-								>
-							</div>
-							<div class="crema-target-bar">
-								<div style="width:{maxDurationPct}%"></div>
-							</div>
-						</div>
-					{/if}
 					<!-- The "Volume" card was retired 2026-05-22: the dispensed
 					     volume now lives as the secondary metric on the Flow
 					     channel card (right column), and the water-tank level
