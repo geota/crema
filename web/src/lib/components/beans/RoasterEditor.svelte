@@ -33,6 +33,7 @@
 	 */
 	import { tick, untrack } from 'svelte';
 	import { goto } from '$app/navigation';
+	import { resolve } from '$app/paths';
 	import { getBeanStore, roasterMarkTone, type Roaster } from '$lib/bean';
 
 	let {
@@ -131,11 +132,11 @@
 		// `?tab=roasters` query keeps the Roasters tab pinned on return so
 		// the user lands where they came from rather than getting bumped
 		// to the Bags tab.
-		goto('/beans?tab=roasters');
+		goto(resolve('/beans?tab=roasters'));
 	}
 
 	function back(): void {
-		goto('/beans?tab=roasters');
+		goto(resolve('/beans?tab=roasters'));
 	}
 
 	function discard(): void {
@@ -163,7 +164,7 @@
 		)
 			return;
 		library.deleteRoaster(current.id);
-		goto('/beans?tab=roasters');
+		goto(resolve('/beans?tab=roasters'));
 	}
 </script>
 

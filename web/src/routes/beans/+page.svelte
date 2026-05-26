@@ -20,6 +20,7 @@
 	 * design's tile + drawer + dedicated editor route replaces it.
 	 */
 	import { goto } from '$app/navigation';
+	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import {
 		getBeanStore,
@@ -478,16 +479,16 @@
 		selectedTags = [];
 	}
 	function gotoNew(): void {
-		goto('/beans/new');
+		goto(resolve('/beans/new'));
 	}
 	function gotoEdit(id: string): void {
-		goto(`/beans/${encodeURIComponent(id)}/edit`);
+		goto(resolve(`/beans/${encodeURIComponent(id)}/edit`));
 	}
 	function gotoNewRoaster(): void {
-		goto('/beans/roasters/new');
+		goto(resolve('/beans/roasters/new'));
 	}
 	function gotoEditRoaster(id: string): void {
-		goto(`/beans/roasters/${encodeURIComponent(id)}/edit`);
+		goto(resolve(`/beans/roasters/${encodeURIComponent(id)}/edit`));
 	}
 	function setActive(id: string): void {
 		library.setActiveBean(id);

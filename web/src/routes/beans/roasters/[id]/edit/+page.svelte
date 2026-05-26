@@ -10,6 +10,7 @@
 	 */
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
+	import { resolve } from '$app/paths';
 	import { getBeanStore } from '$lib/bean';
 	import RoasterEditor from '$lib/components/beans/RoasterEditor.svelte';
 
@@ -20,7 +21,7 @@
 
 	$effect(() => {
 		if (id && !roaster) {
-			queueMicrotask(() => goto('/beans?tab=roasters'));
+			queueMicrotask(() => goto(resolve('/beans?tab=roasters')));
 		}
 	});
 </script>

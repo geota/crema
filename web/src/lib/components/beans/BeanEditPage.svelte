@@ -23,6 +23,7 @@
 	 */
 	import { tick, untrack } from 'svelte';
 	import { goto } from '$app/navigation';
+	import { resolve } from '$app/paths';
 	import {
 		getBeanStore,
 		daysOffRoast,
@@ -205,7 +206,7 @@
 			};
 			library.upsertBean(persisted);
 			if (activate) library.setActiveBean(persisted.id);
-			goto(`/beans`);
+			goto(resolve('/beans'));
 		} else {
 			// Live mode — already saved every patch. Just commit any pending
 			// roaster name change and bounce back.
@@ -218,12 +219,12 @@
 				}
 			}
 			if (activate && !isActive) library.setActiveBean(current.id);
-			goto(`/beans`);
+			goto(resolve('/beans'));
 		}
 	}
 
 	function back(): void {
-		goto('/beans');
+		goto(resolve('/beans'));
 	}
 
 	function discard(): void {
@@ -1040,7 +1041,7 @@
 								)
 							) {
 								library.deleteBean(current.id);
-								goto('/beans');
+								goto(resolve('/beans'));
 							}
 						}}
 					>

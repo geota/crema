@@ -18,6 +18,7 @@
 	 * and Export are all wired.
 	 */
 	import { goto } from '$app/navigation';
+	import { resolve } from '$app/paths';
 	import {
 		getProfileStore,
 		toCoreProfile,
@@ -361,12 +362,12 @@
 
 	/** Duplicate a profile into a new custom profile, then open it for editing. */
 	function duplicate(id: string): void {
-		void goto(`/profiles/${encodeURIComponent(id)}/edit?duplicate=1`);
+		void goto(resolve(`/profiles/${encodeURIComponent(id)}/edit?duplicate=1`));
 	}
 
 	/** Open a profile in the editor. */
 	function edit(id: string): void {
-		void goto(`/profiles/${encodeURIComponent(id)}/edit`);
+		void goto(resolve(`/profiles/${encodeURIComponent(id)}/edit`));
 	}
 
 	/** Toggle a profile's pinned state. */
@@ -605,7 +606,7 @@
 			>
 				<i class="ph ph-download-simple" aria-hidden="true"></i> Export
 			</button>
-			<button class="pp-btn pp-btn-primary" onclick={() => goto('/profiles/new')}>
+			<button class="pp-btn pp-btn-primary" onclick={() => goto(resolve('/profiles/new'))}>
 				<i class="ph ph-plus" aria-hidden="true"></i> New profile
 			</button>
 		</div>
@@ -683,7 +684,7 @@
 				onExport={exportProfile}
 			/>
 		{/each}
-		<button class="pp-card-new" onclick={() => goto('/profiles/new')}>
+		<button class="pp-card-new" onclick={() => goto(resolve('/profiles/new'))}>
 			<div class="pp-card-new-glyph"><i class="ph ph-plus" aria-hidden="true"></i></div>
 			<div class="pp-card-new-label">New profile</div>
 			<div class="pp-card-new-sub">Start from a template or scratch</div>
