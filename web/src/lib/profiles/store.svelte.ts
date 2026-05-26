@@ -46,6 +46,26 @@ const OVERRIDES_KEY = 'crema.profiles.builtinOverrides.v1';
 const ACTIVE_KEY = 'crema.profiles.activeId.v1';
 
 /**
+ * One-shot migration: pre-2026-05 custom profiles were minted with a
+ * `custom:<uuid>` id prefix; the editor since switched to bare UUIDs but
+ * never migrated the persisted records. Strip the prefix on load so the
+ * `/profiles/{uuid}/edit` route + every store lookup work with a plain
+ * UUID. Idempotent (a profile whose id is already a bare UUID is returned
+ * unchanged) and lossless (the underlying UUID is preserved).
+ */
+function stripLegacyIdPrefix(profiles: CremaProfile[]): CremaProfile[] {
+	return profiles.map((p) =>
+		p.id.startsWith('custom:') ? { ...p, id: p.id.slice('custom:'.length) } : p
+	);
+}
+
+/** Same migration applied to the persisted active-profile id. */
+function stripLegacyIdPrefixOnId(id: string | null): string | null {
+	if (id == null) return null;
+	return id.startsWith('custom:') ? id.slice('custom:'.length) : id;
+}
+
+/**
  * localStorage key for the set of built-in ids the user has chosen to
  * hide from the library. Built-ins are compiled into the wasm binary
  * and can't be truly deleted (the PWA has no server to persist a
@@ -69,7 +89,7 @@ export class ProfileStore {
 	/** The built-in profiles, adapted from the core. Empty until loaded. */
 	private builtins = $state.raw<CremaProfile[]>([]);
 	/** The user's custom profiles, from localStorage. */
-	private custom = $state.raw<CremaProfile[]>(readJson<CremaProfile[]>(CUSTOM_KEY, []));
+	private custom = $state.raw<CremaProfile[]>(stripLegacyIdPrefix(readJson<CremaProfile[]>(CUSTOM_KEY, [])));
 	/** Per-built-in user overrides (pin / last-used). */
 	private overrides = $state.raw<Record<string, BuiltinOverride>>(
 		readJson<Record<string, BuiltinOverride>>(OVERRIDES_KEY, {})
@@ -85,7 +105,7 @@ export class ProfileStore {
 		readJson<string[]>(HIDDEN_BUILTINS_KEY, [])
 	);
 	/** The id of the profile marked active on the Brew dashboard. */
-	activeId = $state<string | null>(readJson<string | null>(ACTIVE_KEY, null));
+	activeId = $state<string | null>(stripLegacyIdPrefixOnId(readJson<string | null>(ACTIVE_KEY, null)));
 	/** Whether the built-in load has finished (drives the grid's loading state). */
 	loaded = $state(false);
 
@@ -136,6 +156,16 @@ export class ProfileStore {
 	private applyOverrides(base: CremaProfile): CremaProfile {
 		const ov = this.overrides[base.id];
 		return ov ? { ...base, pinned: ov.pinned, lastUsed: ov.lastUsed } : base;
+	}
+
+	constructor() {
+		// After the field initializers ran `stripLegacyIdPrefix*` over the
+		// raw localStorage data, persist the migrated values so subsequent
+		// loads observe clean ids. The writes are no-ops when nothing was
+		// migrated (`writeJson` doesn't diff, but the cost is one
+		// `JSON.stringify` once per app boot — negligible).
+		writeJson(CUSTOM_KEY, this.custom);
+		writeJson(ACTIVE_KEY, this.activeId);
 	}
 
 	/** Look up one profile by id, or `undefined` if it is not in the library. */

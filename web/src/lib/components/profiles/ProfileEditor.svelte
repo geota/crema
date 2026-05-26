@@ -45,8 +45,7 @@
 	import {
 		MAX_TOTAL_VOLUME_ML,
 		MIN_TOTAL_VOLUME_ML,
-		MAX_TEMPERATURE_C,
-		MIN_TEMPERATURE_C
+		MAX_TEMPERATURE_C
 	} from '$lib/profiles/bounds';
 
 	const settings = getSettingsStore();
@@ -531,6 +530,12 @@
 							max={draft.segments.length}
 							digits={0}
 							onChange={(v) => patch({ preinfuseStepCount: Math.round(v) })}
+							dot
+							dotOn={draft.preinfuseStepCount > 0}
+							onDot={() =>
+								patch({
+									preinfuseStepCount: draft.preinfuseStepCount > 0 ? 0 : 1
+								})}
 						/>
 						<!-- Tank temperature — advanced v2-only field. 0 means
 						     "no override" (the firmware keeps its current
@@ -542,10 +547,16 @@
 							value={draft.tankTemperatureC}
 							step={1}
 							dimension="temp"
-							min={MIN_TEMPERATURE_C}
+							min={0}
 							max={MAX_TEMPERATURE_C}
 							digits={0}
 							onChange={(v) => patch({ tankTemperatureC: Math.round(v) })}
+							dot
+							dotOn={draft.tankTemperatureC > 0}
+							onDot={() =>
+								patch({
+									tankTemperatureC: draft.tankTemperatureC > 0 ? 0 : 92
+								})}
 						/>
 					</div>
 				</div>
