@@ -2314,5 +2314,31 @@ export async function createCremaApp(): Promise<CremaApp> {
 		document.addEventListener('pointerdown', tick, { passive: true });
 		document.addEventListener('keydown', tick, { passive: true });
 	}
+	// Register the eager DE1 upload hook on profile activation. Every
+	// `ProfileStore.setActive(...)` site (BrewDashboard, ProfileEditor,
+	// ShotDetail, profiles page, library delete-self) gets a
+	// fingerprint-gated upload for free.
+	//
+	// Connection-state policy: only upload when the DE1 is `ready`. If
+	// the user activates a profile while disconnected, the upload is
+	// deferred — the existing `ensureLoadedMatches()` call on the next
+	// `de1State === 'ready'` transition picks up the fingerprint
+	// mismatch and pushes the bytes then. This avoids firing BLE writes
+	// at a missing device + keeps "activate now, connect later" working.
+	//
+	// Fire-and-forget — failures surface via the existing
+	// `profileUploadProgress` / log UI.
+	{
+		const profiles = getProfileStore();
+		profiles.onActivate = (profile) => {
+			if (profile == null) return;
+			if (app.state.current.de1State !== 'ready') return;
+			void app.syncActiveProfile(profile, {}).catch((e) => {
+				app.state.log(
+					`Eager profile upload failed: ${e instanceof Error ? e.message : String(e)}`
+				);
+			});
+		};
+	}
 	return app;
 }
