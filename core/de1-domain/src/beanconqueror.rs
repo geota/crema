@@ -156,7 +156,7 @@ pub struct BcBean {
     pub _other: serde_json::Map<String, Value>,
 }
 
-#[derive(Debug, Default, Clone, Deserialize)]
+#[derive(Debug, Default, Clone, Deserialize, Serialize)]
 pub struct BcBeanInformation {
     #[serde(default)]
     pub country: String,
@@ -617,13 +617,10 @@ where
         // tastes — joined with a blank line so they round-trip
         // readable. `notes` stays empty on import; the user can split
         // material out manually if they want to.
-        let tn_parts: Vec<&str> = [
-            bc_bean.note.trim(),
-            bc_bean.aromatics.trim(),
-        ]
-        .into_iter()
-        .filter(|s| !s.is_empty())
-        .collect();
+        let tn_parts: Vec<&str> = [bc_bean.note.trim(), bc_bean.aromatics.trim()]
+            .into_iter()
+            .filter(|s| !s.is_empty())
+            .collect();
         bean.tasting_notes = tn_parts.join("\n\n");
         if bc_bean.cost > 0.0 && bc_bean.cost.is_finite() {
             bean.cost = Some(bc_bean.cost);
@@ -674,22 +671,38 @@ where
                 *drop_counts.entry(key).or_insert(0) += 1;
             }
         }
-        // Photo references — captured both in the flat diagnostics
-        // list (for the import-summary banner) AND on the bean itself
-        // via `metadata.beanconqueror.photo_filenames`, so the shell
-        // can map filename → bean when the user drops the photo files
-        // alongside the ZIP.
+        // Stash everything Crema doesn't model first-class into
+        // `metadata.beanconqueror.*` so a future export-back-to-BC can
+        // put it on the wire verbatim. Three buckets:
+        //
+        //   - `photo_filenames`: derived from `attachments[]`, also
+        //     driving the shell's filename → bean pairing for the
+        //     dropped photo files (the catch-all `unmapped` block
+        //     below doesn't carry `attachments` because we model the
+        //     field explicitly).
+        //   - `bean_information_extra`: blend components beyond [0].
+        //     We consume [0] as the bean's primary origin; extras
+        //     would otherwise be lost on import.
+        //   - `unmapped`: every field BC ships that Crema doesn't
+        //     model first-class — cupping form, cupped_flavor wheel,
+        //     bean_roast_information (self-roast curve), qr_code,
+        //     internal_share_code, shared, bestDate, buyDate,
+        //     cupping_points, co2e_kg, frozen-group accounting
+        //     (frozenId / frozenGroupId / frozenStorageType /
+        //     frozenNote), ean_article_number, roast_custom, plus
+        //     anything BC adds in future versions. Survives a round-
+        //     trip without us having to enumerate the schema.
         let photos: Vec<String> = bc_bean
             .attachments
             .iter()
             .map(|s| s.trim().to_owned())
             .filter(|s| !s.is_empty())
             .collect();
+        let mut bc_meta = serde_json::Map::new();
         if !photos.is_empty() {
             for p in &photos {
                 plan.diagnostics.bag_photo_filenames.push(p.clone());
             }
-            let mut bc_meta = serde_json::Map::new();
             bc_meta.insert(
                 "photo_filenames".to_owned(),
                 serde_json::Value::Array(
@@ -699,6 +712,21 @@ where
                         .collect(),
                 ),
             );
+        }
+        if bc_bean.bean_information.len() > 1 {
+            let extras = serde_json::to_value(&bc_bean.bean_information[1..])
+                .unwrap_or(serde_json::Value::Null);
+            if !matches!(extras, serde_json::Value::Null) {
+                bc_meta.insert("bean_information_extra".to_owned(), extras);
+            }
+        }
+        if !bc_bean._other.is_empty() {
+            bc_meta.insert(
+                "unmapped".to_owned(),
+                serde_json::Value::Object(bc_bean._other.clone()),
+            );
+        }
+        if !bc_meta.is_empty() {
             let mut wrapper = serde_json::Map::new();
             wrapper.insert(
                 "beanconqueror".to_owned(),
@@ -1062,6 +1090,72 @@ mod tests {
         assert_eq!(bean.rating, 4);
         assert_eq!(bean.cost, Some(22.5));
         assert_eq!(bean.beanconqueror_id.as_deref(), Some("u1"));
+    }
+
+    #[test]
+    fn unmapped_bc_fields_land_in_metadata_for_round_trip() {
+        // Cupping form, EAN, freezing accounting, qr_code, etc. don't
+        // have first-class Crema slots — stash them under
+        // `metadata.beanconqueror.unmapped` so an export-back-to-BC
+        // round-trip doesn't lose data. Two extra blend components
+        // (bean_information[1..]) ride under
+        // `metadata.beanconqueror.bean_information_extra`.
+        let json = r#"{
+            "BEANS": [{
+                "config":{"uuid":"u1","unix_timestamp":0},
+                "name":"x","roaster":"r",
+                "cupping_points": "88",
+                "ean_article_number": "1234567890",
+                "qr_code": "QR-PAYLOAD",
+                "frozenStorageType": "BAG",
+                "co2e_kg": 1.4,
+                "shared": true,
+                "cupping": {"body": 5, "notes": "honey"},
+                "bean_information": [
+                    {"country": "Ethiopia"},
+                    {"country": "Colombia", "variety": "Caturra"},
+                    {"country": "Kenya"}
+                ]
+            }]
+        }"#;
+        let plan = bc_to_crema(&parse_export(json).unwrap(), 1, seq_id());
+        let bean = &plan.beans[0];
+
+        // Primary origin still comes from [0].
+        assert_eq!(bean.origin.country.as_deref(), Some("Ethiopia"));
+
+        // Round-trip stash holds everything else.
+        let meta = bean
+            .metadata
+            .as_object()
+            .expect("metadata is an object")
+            .get("beanconqueror")
+            .and_then(|v| v.as_object())
+            .expect("beanconqueror metadata key");
+
+        // Extras: blend components beyond [0].
+        let extras = meta
+            .get("bean_information_extra")
+            .and_then(|v| v.as_array())
+            .expect("bean_information_extra is an array");
+        assert_eq!(extras.len(), 2);
+        assert_eq!(extras[0]["country"], "Colombia");
+        assert_eq!(extras[1]["country"], "Kenya");
+
+        // Unmapped: everything BC ships we don't model. The
+        // `_other` flatten catches them, so we get the lot.
+        let unmapped = meta
+            .get("unmapped")
+            .and_then(|v| v.as_object())
+            .expect("unmapped catch-all");
+        assert_eq!(unmapped["cupping_points"], "88");
+        assert_eq!(unmapped["ean_article_number"], "1234567890");
+        assert_eq!(unmapped["qr_code"], "QR-PAYLOAD");
+        assert_eq!(unmapped["frozenStorageType"], "BAG");
+        assert_eq!(unmapped["co2e_kg"], 1.4);
+        assert_eq!(unmapped["shared"], true);
+        assert_eq!(unmapped["cupping"]["body"], 5);
+        assert_eq!(unmapped["cupping"]["notes"], "honey");
     }
 
     #[test]
