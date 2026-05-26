@@ -301,7 +301,8 @@
 		{ id: 'bag', label: 'Bag & Grind' },
 		{ id: 'origin', label: 'Origin' },
 		{ id: 'tasting', label: 'Tasting' },
-		{ id: 'buy', label: 'Buy again' }
+		{ id: 'buy', label: 'Buy again' },
+		{ id: 'notes', label: 'Notes' }
 	] as const;
 
 	function scrollToSection(id: string): void {
@@ -1091,26 +1092,6 @@
 							></textarea>
 						</div>
 					</div>
-					<div class="be-frow be-frow-stack">
-						<div class="be-frow-l">
-							<div class="be-frow-label">Free-form notes</div>
-							<div class="be-frow-sub">
-								Anything else worth keeping — not surfaced on the brew page.
-							</div>
-						</div>
-						<div class="be-frow-r">
-							<textarea
-								class="be-input be-textarea"
-								rows="3"
-								value={current.notes}
-								placeholder="Bought at the cafe down the road. They were closing out."
-								oninput={(e) =>
-									patch({
-										notes: (e.currentTarget as HTMLTextAreaElement).value
-									})}
-							></textarea>
-						</div>
-					</div>
 				</div>
 			</section>
 
@@ -1198,6 +1179,37 @@
 									</div>
 								{/if}
 							</div>
+						</div>
+					</div>
+				</div>
+			</section>
+
+			<!-- Notes — anything else worth keeping that isn't a tasting
+			     impression or a re-buy detail. Kept as its own section so
+			     it doesn't fight Tasting notes for the same row. -->
+			<section class="be-block" id="be-notes">
+				<header class="be-block-head">
+					<span class="be-block-n">08</span>
+					<div>
+						<h3 class="be-block-title">Notes</h3>
+						<div class="be-block-sub">
+							Anything else worth keeping — not surfaced on the brew page.
+						</div>
+					</div>
+				</header>
+				<div class="be-block-body">
+					<div class="be-frow be-frow-stack">
+						<div class="be-frow-r">
+							<textarea
+								class="be-input be-textarea"
+								rows="4"
+								value={current.notes}
+								placeholder="Bought at the cafe down the road. They were closing out."
+								oninput={(e) =>
+									patch({
+										notes: (e.currentTarget as HTMLTextAreaElement).value
+									})}
+							></textarea>
 						</div>
 					</div>
 				</div>
