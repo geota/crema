@@ -521,12 +521,6 @@ impl CremaCore {
         self.line_freq_override = hz;
     }
 
-    /// Volume dispensed in the current shot, ml. Resets to 0 on every
-    /// `Event::ShotStarted`. Updated on every `ShotSample` notification.
-    pub fn dispensed_volume(&self) -> f32 {
-        self.volume_integrator.dispensed_ml()
-    }
-
     /// Whether a firmware upload is currently locking out other writes.
     ///
     /// v1 always returns `false` — firmware update is a v2 feature.

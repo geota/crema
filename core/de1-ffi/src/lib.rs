@@ -940,11 +940,6 @@ impl CremaBridge {
         self.core().active_profile_title().map(str::to_owned)
     }
 
-    /// Volume dispensed in the current shot, ml.
-    pub fn dispensed_volume(&self) -> f32 {
-        self.core().dispensed_volume()
-    }
-
     /// The effective AC mains frequency the volume integrator uses, Hz.
     /// `None` until either the user pins it via
     /// [`set_line_frequency_override`](Self::set_line_frequency_override)
