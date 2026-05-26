@@ -137,11 +137,12 @@
 			</li>
 			<li>
 				<strong>Scope</strong> is limited to
-				<code>drive.appdata</code> — Crema can only read and write
-				files inside its own application-data folder on your Drive.
-				It cannot see, list, or modify any other files in your Drive.
-				The application-data folder is hidden from the Drive web UI
-				by design.
+				<code>https://www.googleapis.com/auth/drive.file</code> —
+				"See, edit, create, and delete only the specific Google Drive
+				files you use with this app." Crema cannot list, read, or
+				modify any file on your Drive that you did not create or
+				select through Crema itself. You retain visibility and
+				control of these files from the regular Drive UI.
 			</li>
 			<li>
 				<strong>Payload</strong> consists solely of your own Crema data
@@ -163,8 +164,8 @@
 					target="_blank"
 					rel="noreferrer noopener">myaccount.google.com/permissions</a
 				>. Revoking does not delete previously uploaded backup files;
-				you can remove those manually in Drive's "Manage apps" page or
-				let Crema delete them from within the app.
+				you can remove those directly from your Drive or let Crema
+				delete them from within the app.
 			</li>
 			<li>
 				<strong>Google's own privacy policy</strong> at

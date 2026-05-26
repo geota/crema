@@ -86,7 +86,8 @@
 		onToggleStopOnWeight,
 		yieldTargetOn,
 		onToggleYieldTarget,
-		onSavePreset
+		onSavePreset,
+		onToggleSteamEco
 	}: {
 		/** The shared Quick Sheet parameter store. */
 		params: BrewParamState;
@@ -134,6 +135,12 @@
 		 * button is hidden in that case).
 		 */
 		onSavePreset?: () => void;
+		/**
+		 * Toggle steam eco mode. Parent owns the `settings.set` +
+		 * `app.applySteamEcoMode` pair so the BLE write fires at the
+		 * action site.
+		 */
+		onToggleSteamEco: (enabled: boolean) => void;
 	} = $props();
 
 	const p = $derived(params.current);
@@ -234,9 +241,11 @@
 		</div>
 
 		<div class="qsheet-toggles">
+			<!-- Brew-behaviour toggles — mirror the Settings → Brew defaults
+			     → Shot behaviour rows so the user can flip them mid-flow
+			     without opening the Settings page. All bound to the same
+			     `SettingsStore` fields (single source of truth). -->
 			<label class="qsheet-tog">
-				<!-- Bound to the global `Settings.stopOnWeight` (single source
-				     of truth); toggling here mirrors the Brew defaults row. -->
 				<button
 					class="qmini-tog"
 					class:on={prefs.stopOnWeight}
@@ -247,7 +256,6 @@
 				<span>Stop on weight</span>
 			</label>
 			<label class="qsheet-tog">
-				<!-- Bound to the global `Settings.autoTareOnShotStart`. -->
 				<button
 					class="qmini-tog"
 					class:on={prefs.autoTareOnShotStart}
@@ -256,6 +264,36 @@
 					aria-label="Auto-tare"
 				></button>
 				<span>Auto-tare</span>
+			</label>
+			<label class="qsheet-tog">
+				<button
+					class="qmini-tog"
+					class:on={prefs.groupFlushBeforeShot}
+					onclick={() => settings.set('groupFlushBeforeShot', !prefs.groupFlushBeforeShot)}
+					aria-pressed={prefs.groupFlushBeforeShot}
+					aria-label="Pre-flush"
+				></button>
+				<span>Pre-flush</span>
+			</label>
+			<label class="qsheet-tog">
+				<button
+					class="qmini-tog"
+					class:on={prefs.autoPurgeAfterSteam}
+					onclick={() => settings.set('autoPurgeAfterSteam', !prefs.autoPurgeAfterSteam)}
+					aria-pressed={prefs.autoPurgeAfterSteam}
+					aria-label="Purge after steam"
+				></button>
+				<span>Steam purge</span>
+			</label>
+			<label class="qsheet-tog">
+				<button
+					class="qmini-tog"
+					class:on={prefs.steamEcoMode}
+					onclick={() => onToggleSteamEco(!prefs.steamEcoMode)}
+					aria-pressed={prefs.steamEcoMode}
+					aria-label="Steam eco mode"
+				></button>
+				<span>Steam eco</span>
 			</label>
 		</div>
 	</div>
