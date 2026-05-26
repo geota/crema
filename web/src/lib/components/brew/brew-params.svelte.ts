@@ -1,14 +1,19 @@
 /**
  * `brew-params` — the Quick Sheet's local parameter model.
  *
- * The brew-CONTROL surface is **UI-only** for this porting step: the core and
- * BLE layer treat the DE1 as read-only, so driving these parameters onto the
- * machine is a separate net-new feature. This module is the faithful local
- * state the Quick Sheet steppers / chips bind to — a Svelte 5 `$state` class,
- * the web mirror of the design's `useParamsV2` hook in `quick-controls-v2.jsx`.
+ * Backing state for the Quick Sheet steppers / chips — a Svelte 5 `$state`
+ * class, the web mirror of the design's `useParamsV2` hook in
+ * `quick-controls-v2.jsx`. Mode flags + per-card values live here; the
+ * orchestrator reads / pushes them through the relevant core setters when
+ * the user mutates a control.
  *
- * Every place a value would reach the DE1 is marked `// TODO: wire to DE1
- * control` at the call site (the steppers, the Start/Stop button).
+ * Wiring status (kept here so changes stay coherent with the orchestrator):
+ *   - `yield` — wired (core SAW target; see `applyShotTargetWeight`).
+ *   - `brewTemp`, `preinf` — wired as profile QC overrides at activation.
+ *   - `dose` — recorded only (no DE1 control; logged on `ShotCompleted`).
+ *   - `grind` — log-only.
+ *   - steam (`steamTime` / `steamFlow` / `steamTemp`), hot water
+ *     (`waterTemp` / `waterVolume`) — local UI only; no DE1 control yet.
  */
 
 /** The full mode-aware Quick Sheet parameter set — mirrors `DEFAULT_PARAMS_V2`. */
