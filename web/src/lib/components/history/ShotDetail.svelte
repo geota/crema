@@ -173,35 +173,44 @@
 	}
 
 	/**
-	 * Download this shot in whichever format the user picked in
-	 * Settings → Advanced → "Shot export format":
-	 *
-	 * - `'community'` (default) — community v2 `.shot.json`, portable
-	 *   across reaprime / Visualizer / de1app, pre-decoded telemetry.
-	 * - `'replay'` — raw BLE capture (.jsonl), bit-exact playback via
-	 *   Crema's Replay tool. Falls back to community with a console
-	 *   warn if the shot has no IndexedDB capture (older shots from
-	 *   before the recorder shipped, or imported shots — neither has
-	 *   the wire bytes to replay).
+	 * Download this shot in the community v2 `.shot.json` format —
+	 * portable across reaprime / Visualizer / de1app, pre-decoded
+	 * telemetry, user-readable. The default action on the Download
+	 * split-button.
 	 */
-	async function download(): Promise<void> {
-		if (settings.current.shotExportFormat === 'replay') {
-			const entries = await getCaptureStore().get(shot.id);
-			if (entries && entries.length > 0) {
-				const stamp = shotFilename(shot).replace(/\.shot\.json$/, '');
-				const blob = new Blob([captureJsonl(entries)], {
-					type: 'application/x-ndjson'
-				});
-				downloadBlob(`${stamp}.jsonl`, blob);
-				return;
-			}
-			console.warn(
-				`No raw capture available for ${shot.id}; falling back to v2 JSON export.`
-			);
-		}
+	function downloadCommunity(): void {
 		const json = exportStoredShotAsV2Json(shot);
 		const blob = new Blob([json], { type: 'application/json' });
 		downloadBlob(shotFilename(shot), blob);
+	}
+
+	/**
+	 * Download this shot's raw BLE capture (`.jsonl`) — every wire
+	 * byte preserved, bit-exact playback via Crema's Replay tool.
+	 * Crema-only; right for bug reports + development. Falls back
+	 * to community v2 with a console warn if the shot has no
+	 * IndexedDB capture (older shots from before the recorder
+	 * shipped, or imported shots — neither has the wire bytes).
+	 */
+	async function downloadReplayCapture(): Promise<void> {
+		const entries = await getCaptureStore().get(shot.id);
+		if (entries && entries.length > 0) {
+			const stamp = shotFilename(shot).replace(/\.shot\.json$/, '');
+			const blob = new Blob([captureJsonl(entries)], {
+				type: 'application/x-ndjson'
+			});
+			downloadBlob(`${stamp}.jsonl`, blob);
+			return;
+		}
+		console.warn(
+			`No raw capture available for ${shot.id}; falling back to v2 JSON export.`
+		);
+		downloadCommunity();
+	}
+
+	let downloadMenuOpen = $state(false);
+	function closeDownloadMenuOnDocClick(): void {
+		downloadMenuOpen = false;
 	}
 
 	const ctx = getCremaAppContext();
@@ -269,6 +278,8 @@
 	}
 </script>
 
+<svelte:window onclick={closeDownloadMenuOnDocClick} />
+
 <div class="hi-detail">
 	<div class="hi-detail-head">
 		<div>
@@ -283,13 +294,68 @@
 			{/if}
 		</div>
 		<div class="hi-detail-actions">
-			<button
-				class="st-btn st-btn-secondary"
-				onclick={download}
-				title="Download as community v2 .shot.json — re-importable to Crema, reaprime, Visualizer or de1app"
-			>
-				<i class="ph ph-download-simple" aria-hidden="true"></i> Download
-			</button>
+			<!-- svelte-ignore a11y_click_events_have_key_events -->
+			<!-- svelte-ignore a11y_no_static_element_interactions -->
+			<div class="hi-split" onclick={(e) => e.stopPropagation()}>
+				<button
+					class="st-btn st-btn-secondary hi-split-main"
+					onclick={downloadCommunity}
+					title="Download as community v2 .shot.json — re-importable to Crema, reaprime, Visualizer or de1app"
+				>
+					<i class="ph ph-download-simple" aria-hidden="true"></i> Download
+				</button>
+				<button
+					class="st-btn st-btn-secondary hi-split-caret-btn"
+					onclick={(e) => {
+						e.stopPropagation();
+						downloadMenuOpen = !downloadMenuOpen;
+					}}
+					aria-haspopup="menu"
+					aria-expanded={downloadMenuOpen}
+					aria-label="Choose download format"
+				>
+					<i class="ph ph-caret-down" aria-hidden="true"></i>
+				</button>
+				{#if downloadMenuOpen}
+					<div class="hi-split-menu" role="menu">
+						<div class="hi-split-menu-head">Download as</div>
+						<button
+							class="hi-split-menu-item"
+							role="menuitem"
+							onclick={() => {
+								downloadMenuOpen = false;
+								downloadCommunity();
+							}}
+						>
+							<i class="ph-duotone ph-file-text" aria-hidden="true"></i>
+							<div class="hi-split-menu-text">
+								<div class="hi-split-menu-title">Community v2 (.shot.json)</div>
+								<div class="hi-split-menu-sub">
+									Portable across reaprime / Visualizer / de1app.
+									Pre-decoded telemetry, user-readable.
+								</div>
+							</div>
+						</button>
+						<button
+							class="hi-split-menu-item"
+							role="menuitem"
+							onclick={() => {
+								downloadMenuOpen = false;
+								void downloadReplayCapture();
+							}}
+						>
+							<i class="ph-duotone ph-file-code" aria-hidden="true"></i>
+							<div class="hi-split-menu-text">
+								<div class="hi-split-menu-title">Replayable capture (.jsonl)</div>
+								<div class="hi-split-menu-sub">
+									Raw BLE bytes — bit-exact playback via Replay. Crema-only;
+									right for bug reports.
+								</div>
+							</div>
+						</button>
+					</div>
+				{/if}
+			</div>
 			<button class="st-btn st-btn-secondary" onclick={loadOnBrew}>
 				<i class="ph ph-coffee" aria-hidden="true"></i> Load on Brew
 			</button>
@@ -550,6 +616,83 @@
 
 	/* .st-btn / .st-btn-secondary come from the global settings kit
 	   (styles/settings-page.css) — no scoped re-declaration needed. */
+
+	/* Download split-button — primary + caret pair the user can click
+	   for a quick default or a format menu. Mirrors `/beans`'s
+	   `bn-split-*`; renamed to hi-split for scope-safety. */
+	.hi-split {
+		position: relative;
+		display: inline-flex;
+	}
+	.hi-split-main {
+		border-radius: var(--radius-pill) 0 0 var(--radius-pill);
+	}
+	.hi-split-caret-btn {
+		border-radius: 0 var(--radius-pill) var(--radius-pill) 0;
+		padding-left: 8px;
+		padding-right: 10px;
+		margin-left: -1px;
+	}
+	.hi-split-menu {
+		position: absolute;
+		top: calc(100% + 6px);
+		right: 0;
+		min-width: 320px;
+		background: var(--bg-page);
+		border: 1px solid rgba(var(--tint-rgb), 0.12);
+		border-radius: var(--radius-md, 10px);
+		padding: 6px;
+		z-index: 60;
+		box-shadow: 0 8px 28px rgba(0, 0, 0, 0.32);
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+	}
+	.hi-split-menu-head {
+		font-family: var(--font-sans);
+		font-size: 10px;
+		font-weight: 700;
+		letter-spacing: var(--track-allcaps);
+		text-transform: uppercase;
+		color: rgba(var(--tint-rgb), 0.5);
+		padding: 6px 10px 4px;
+	}
+	.hi-split-menu-item {
+		display: flex;
+		gap: 12px;
+		align-items: flex-start;
+		background: transparent;
+		border: 0;
+		color: var(--fg-1);
+		text-align: left;
+		font-family: var(--font-sans);
+		font-size: 13px;
+		padding: 10px 12px;
+		border-radius: var(--radius-sm);
+		cursor: pointer;
+	}
+	.hi-split-menu-item:hover {
+		background: rgba(var(--tint-rgb), 0.06);
+	}
+	.hi-split-menu-item i {
+		font-size: 18px;
+		color: var(--copper-400);
+		flex-shrink: 0;
+		margin-top: 1px;
+	}
+	.hi-split-menu-text {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+	}
+	.hi-split-menu-title {
+		font-weight: 600;
+	}
+	.hi-split-menu-sub {
+		font-size: 12px;
+		color: rgba(var(--tint-rgb), 0.6);
+		line-height: 1.4;
+	}
 
 	.hi-chart {
 		background: var(--bg-page);
