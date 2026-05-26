@@ -12,10 +12,10 @@
 	 *
 	 * The library is **real**: built-in profiles come from the wasm core, custom
 	 * profiles from `localStorage` — both via `lib/profiles`. Search, filtering,
-	 * sorting, pinning, duplicating, deleting and "Load on Brew" are all wired.
-	 * "Load on Brew" marks the profile active in shared UI state (the Brew
-	 * header reflects it); it does **not** upload the profile to the DE1 — the
-	 * core has no profile-upload path yet. Import is a stub (`// TODO`).
+	 * sorting, pinning, duplicating, deleting, "Load on Brew" (which now also
+	 * eagerly uploads to a connected DE1 via the orchestrator's `onActivate`
+	 * hook), Import (legacy `.tcl` + community-v2 `.json` + `.jsonl` bundles)
+	 * and Export are all wired.
 	 */
 	import { goto } from '$app/navigation';
 	import {
