@@ -274,6 +274,52 @@ fn default_profile_version() -> String {
 }
 
 impl Profile {
+    /// The profile's recipe target weight as an `Option<f32>` — `None` when
+    /// the wire-encoded `target_weight` is 0 (the legacy "no target" sentinel),
+    /// else `Some(grams)`.
+    ///
+    /// Prefer this over reading `target_weight` directly when the consumer
+    /// cares about the disabled state. The struct field stays an `f32` for
+    /// wire compatibility; this accessor models the optionality.
+    #[must_use]
+    pub fn target_weight_opt(&self) -> Option<f32> {
+        (self.target_weight.is_finite() && self.target_weight > 0.0).then_some(self.target_weight)
+    }
+
+    /// The profile's whole-shot volume limit as an `Option<u16>` — `None`
+    /// when [`max_total_volume_ml`](Self::max_total_volume_ml) is 0 (the
+    /// legacy "no limit" sentinel), else `Some(milliliters)`.
+    #[must_use]
+    pub fn max_total_volume_ml_opt(&self) -> Option<u16> {
+        (self.max_total_volume_ml > 0).then_some(self.max_total_volume_ml)
+    }
+
+    /// The profile's preinfuse step count as an `Option<u8>` — `None` when
+    /// 0 (no preinfusion phase), else `Some(count)`. Matches the de1app /
+    /// reaprime convention of treating "no preinfuse" as the disabled state.
+    #[must_use]
+    pub fn preinfuse_step_count_opt(&self) -> Option<u8> {
+        (self.preinfuse_step_count > 0).then_some(self.preinfuse_step_count)
+    }
+
+    /// The profile's tank-temperature override as an `Option<f32>` — `None`
+    /// when 0 (no override; the firmware keeps its current setpoint), else
+    /// `Some(°C)`. Matches the de1app `tank_temperature` convention.
+    #[must_use]
+    pub fn tank_temperature_opt(&self) -> Option<f32> {
+        (self.tank_temperature.is_finite() && self.tank_temperature > 0.0)
+            .then_some(self.tank_temperature)
+    }
+
+    /// The profile's recommended dose as an `Option<f32>` — `None` when
+    /// 0 (unspecified), else `Some(grams)`.
+    #[must_use]
+    pub fn dose_opt(&self) -> Option<f32> {
+        (self.dose.is_finite() && self.dose > 0.0).then_some(self.dose)
+    }
+}
+
+impl Profile {
     /// Assemble this profile into the protocol packets the DE1 expects.
     ///
     /// # Errors
