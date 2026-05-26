@@ -705,18 +705,14 @@
 
 	/**
 	 * Whether the per-shot weight target is engaged for the next / current
-	 * shot. Starts OFF (per spec — every profile load is a fresh decision),
-	 * and the `$derived.by` re-runs whenever the active profile changes
-	 * (touching `activeProfile?.id` registers the dependency); reassigning
-	 * via {@link onToggleYieldTarget} breaks the `$derived` track until the
-	 * next reseed. Mirrors the user's "starts disabled" requirement and
-	 * the core's matching `weight_target_disabled = true` push on
-	 * `ProfileStore.pushActiveProfileToCore`.
+	 * shot. Reseeds on every active-profile change to mirror the profile's
+	 * own intent: a profile with `yieldOut > 0` engages the target on
+	 * load; a profile with `yieldOut === 0` (or none active) leaves it
+	 * off. Reassigning via {@link onToggleYieldTarget} breaks the
+	 * `$derived` track until the next reseed, so per-shot flips persist
+	 * until the user activates a different profile.
 	 */
-	let yieldTargetOn = $derived.by(() => {
-		void activeProfile?.id;
-		return false;
-	});
+	let yieldTargetOn = $derived.by(() => (activeProfile?.yieldOut ?? 0) > 0);
 	/**
 	 * Flip the yield-target dot for the current shot. Pushes the inverse
 	 * to the core so SAW arming consults the same value next time

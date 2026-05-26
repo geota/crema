@@ -214,19 +214,22 @@ export class ProfileStore {
 	 */
 	private async pushActiveProfileToCore(): Promise<void> {
 		const core = await loadCore();
-		// Reset the per-shot weight-target suppression: every profile load
-		// starts with the user's last persistent intent (the QC yield dot
-		// in BrewDashboard defaults to OFF and re-engages on each profile
-		// change, so we mirror it here).
-		await core.setWeightTargetDisabled(true);
 		const id = this.activeId;
 		if (id == null) {
+			// No active profile → disable everything.
+			await core.setWeightTargetDisabled(true);
 			await core.setProfileTargetWeight(undefined);
 			await core.setProfileVolumeLimit(undefined);
 			return;
 		}
 		const p = this.get(id);
 		if (!p) return;
+		// The per-shot weight-target dot follows the profile's intent on
+		// load: a profile with `yieldOut > 0` engages the target (dot ON,
+		// `disabled = false`); a profile with `yieldOut === 0` disables it
+		// (dot OFF, `disabled = true`). The user can still flip it per
+		// shot via the QC card.
+		await core.setWeightTargetDisabled(p.yieldOut <= 0);
 		await core.setProfileTargetWeight(p.yieldOut > 0 ? p.yieldOut : undefined);
 		await core.setProfileVolumeLimit(p.maxTotalVolumeMl > 0 ? p.maxTotalVolumeMl : undefined);
 	}
