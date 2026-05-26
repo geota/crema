@@ -26,7 +26,10 @@
 		max,
 		digits = 1,
 		onChange,
-		dimension
+		dimension,
+		dot = false,
+		dotOn = true,
+		onDot
 	}: {
 		/** The field label (eyebrow). */
 		label: string;
@@ -50,6 +53,18 @@
 		 * inline-edit draft back to canonical before `onChange`.
 		 */
 		dimension?: Dimension;
+		/**
+		 * Show a small left-aligned dot toggle on the label row — same
+		 * affordance as a `SegmentRow` volume cell. The dot's on/off state
+		 * is purely visual; the parent owns the toggle action via
+		 * {@link onDot}. The stepper's input dims (`is-off`) while
+		 * `dotOn` is `false` so the disabled state reads at a glance.
+		 */
+		dot?: boolean;
+		/** Whether the dot indicator is currently lit. Only used when `dot` is `true`. */
+		dotOn?: boolean;
+		/** Called when the user clicks the dot. The parent flips state. */
+		onDot?: () => void;
 	} = $props();
 
 	const settings = getSettingsStore();
@@ -117,8 +132,20 @@
 </script>
 
 <div class="pe-num">
-	<div class="t-eyebrow">{label}</div>
-	<div class="pe-num-row">
+	<div class="pe-num-label">
+		{#if dot}
+			<button
+				type="button"
+				class="pe-num-dot"
+				class:on={dotOn}
+				onclick={onDot}
+				aria-pressed={dotOn}
+				aria-label={dotOn ? `${label}: on (click to disable)` : `${label}: off (click to enable)`}
+			></button>
+		{/if}
+		<div class="t-eyebrow">{label}</div>
+	</div>
+	<div class="pe-num-row" class:is-off={dot && !dotOn}>
 		<button class="pe-num-btn" aria-label="Decrease {label}" onclick={() => inc(-1)}>
 			<i class="ph ph-minus" aria-hidden="true"></i>
 		</button>
@@ -236,5 +263,38 @@
 	.pe-num-unit {
 		font-size: 11px;
 		color: rgba(var(--tint-rgb), 0.5);
+	}
+	.pe-num-label {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		min-height: 12px;
+	}
+	.pe-num-dot {
+		width: 8px;
+		height: 8px;
+		flex: 0 0 8px;
+		border: 1px solid rgba(var(--tint-rgb), 0.35);
+		border-radius: 50%;
+		background: transparent;
+		padding: 0;
+		cursor: pointer;
+		transition:
+			background 0.12s,
+			border-color 0.12s;
+	}
+	.pe-num-dot.on {
+		background: var(--copper-400);
+		border-color: var(--copper-400);
+	}
+	.pe-num-dot:hover {
+		border-color: rgba(var(--copper-rgb), 0.6);
+	}
+	.pe-num-row.is-off {
+		opacity: 0.4;
+	}
+	.pe-num-row.is-off :global(.pe-num-num),
+	.pe-num-row.is-off :global(.pe-num-unit) {
+		color: rgba(var(--tint-rgb), 0.4);
 	}
 </style>

@@ -40,7 +40,7 @@
 	import SegmentRow from './SegmentRow.svelte';
 	import TagInput from './TagInput.svelte';
 	import PeNumber from './PeNumber.svelte';
-	import { getSettingsStore, formatWeight } from '$lib/settings';
+	import { getSettingsStore } from '$lib/settings';
 	import { getCremaAppContext } from '$lib/shell/app-context';
 	import {
 		MAX_TOTAL_VOLUME_ML,
@@ -476,9 +476,15 @@
 							value={draft.yieldOut}
 							step={0.5}
 							dimension="weight"
-							min={10}
+							min={0}
 							max={80}
 							onChange={(v) => patch({ yieldOut: v })}
+							dot
+							dotOn={draft.yieldOut > 0}
+							onDot={() =>
+								patch({
+									yieldOut: draft.yieldOut > 0 ? 0 : (draft.dose || 18) * 2
+								})}
 						/>
 						<PeNumber
 							label="Brew temp"
@@ -511,6 +517,10 @@
 							max={MAX_TOTAL_VOLUME_ML}
 							digits={0}
 							onChange={(v) => patch({ maxTotalVolumeMl: Math.round(v) })}
+							dot
+							dotOn={draft.maxTotalVolumeMl > 0}
+							onDot={() =>
+								patch({ maxTotalVolumeMl: draft.maxTotalVolumeMl > 0 ? 0 : 50 })}
 						/>
 						<PeNumber
 							label="Preinfuse steps"
@@ -540,35 +550,14 @@
 					</div>
 				</div>
 
-				<div class="pe-section">
-					<div class="pe-section-title">Behaviour</div>
-					<button
-						class="pe-tog"
-						type="button"
-						onclick={() => patch({ stopOnWeight: !draft.stopOnWeight })}
-					>
-						<span class="qmini-tog" class:on={draft.stopOnWeight}></span>
-						<span>
-							<span class="pe-tog-title">Stop on weight</span>
-							<span class="pe-tog-sub">
-								End the shot when the scale reads {formatWeight(draft.yieldOut, settings.current.weightUnit)}.
-							</span>
-						</span>
-					</button>
-					<button
-						class="pe-tog"
-						type="button"
-						onclick={() => patch({ autoTare: !draft.autoTare })}
-					>
-						<span class="qmini-tog" class:on={draft.autoTare}></span>
-						<span>
-							<span class="pe-tog-title">Auto-tare on start</span>
-							<span class="pe-tog-sub">
-								Zero the scale automatically when the shot begins.
-							</span>
-						</span>
-					</button>
-				</div>
+				<!--
+					"Stop on weight" and "Auto-tare on start" are global app
+					preferences now (Settings → Brew defaults → Shot behaviour),
+					mirrored in the Quick Controls. The recipe target weight
+					itself lives on the Yield field above — set its dot to off
+					(or stepper to 0) to mark the profile as "no SAW target."
+				-->
+
 			</div>
 
 			<!-- Right column — curve editor -->
@@ -893,8 +882,7 @@
 		font-weight: 600;
 	}
 
-	.pe-pin,
-	.pe-tog {
+	.pe-pin {
 		display: flex;
 		align-items: flex-start;
 		gap: 10px;
@@ -908,19 +896,9 @@
 		text-align: left;
 		width: 100%;
 	}
-	.pe-pin .qmini-tog,
-	.pe-tog .qmini-tog {
+	.pe-pin .qmini-tog {
 		margin-top: 1px;
 		flex: 0 0 30px;
-	}
-	.pe-tog > span:last-child {
-		display: flex;
-		flex-direction: column;
-	}
-	.pe-tog-sub {
-		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.5);
-		margin-top: 2px;
 	}
 
 	/* Number grid — fixed 175px columns (not `1fr`). `1fr` is really
