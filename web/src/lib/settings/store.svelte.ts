@@ -74,6 +74,13 @@ export interface Settings {
 	/** Flush the group before each shot. */
 	groupFlushBeforeShot: boolean;
 	/**
+	 * Steam eco mode — when on, the DE1 runs a lower-flow, lower-temp
+	 * steam profile that's gentler on small milk jugs and easier to
+	 * texture. Default off (full-power steam). Pushed to the core via
+	 * `enableSteamEcoMode`.
+	 */
+	steamEcoMode: boolean;
+	/**
 	 * Auto-tare the connected scale on shot start. Mirrors the legacy
 	 * de1app's always-on tare behaviour (and reaprime's), exposed here
 	 * as a user preference so dose-cup-mass pre-tare workflows can opt
@@ -233,6 +240,7 @@ export const DEFAULT_SETTINGS: Settings = {
 	defaultPreinfusionS: 8,
 	autoPurgeAfterSteam: true,
 	groupFlushBeforeShot: false,
+	steamEcoMode: false,
 	autoTareOnShotStart: true,
 	stopOnWeight: true,
 	maxShotDurationS: 0,

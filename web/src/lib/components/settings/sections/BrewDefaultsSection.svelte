@@ -42,6 +42,14 @@
 		settings.set('maxShotDurationS', s);
 		void app?.applyMaxShotDuration(s);
 	}
+	function setSteamEcoMode(on: boolean): void {
+		settings.set('steamEcoMode', on);
+		// The push to the DE1 only takes effect while connected; if the
+		// user toggles offline the persisted pref still updates and the
+		// next toggle while connected will sync. (No deferred-replay yet;
+		// pragmatic for a setting users rarely change mid-session.)
+		void app?.applySteamEcoMode(on);
+	}
 </script>
 
 <StSectionHead
@@ -166,6 +174,18 @@
 				on={prefs.groupFlushBeforeShot}
 				onChange={(v) => settings.set('groupFlushBeforeShot', v)}
 				label="Group flush before each shot"
+			/>
+		{/snippet}
+	</StRow>
+	<StRow
+		title="Steam eco mode"
+		sub="Lower-flow, lower-temp steam — gentler on small milk jugs and easier to texture. Off uses the default full-power steam profile."
+	>
+		{#snippet control()}
+			<StToggle
+				on={prefs.steamEcoMode}
+				onChange={setSteamEcoMode}
+				label="Steam eco mode"
 			/>
 		{/snippet}
 	</StRow>
