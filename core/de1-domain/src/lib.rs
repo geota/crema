@@ -52,6 +52,7 @@ pub mod history_import;
 pub mod ids;
 pub mod profile;
 pub mod profile_bounds;
+pub mod profile_fingerprint;
 pub mod profile_import;
 pub mod session;
 pub mod settings_import;
@@ -79,6 +80,7 @@ pub use profile::{
     AssembledProfile, BeverageType, Compare, ExitCondition, ExitMetric, Limiter, Profile,
     ProfileStep, Pump, TempSensor, Transition,
 };
+pub use profile_fingerprint::profile_fingerprint;
 pub use profile_import::{export_v2_json, import_legacy_tcl, import_v2_json};
 pub use session::SessionTimer;
 pub use settings_import::{ImportedDe1AppSettings, import_settings_tdb};

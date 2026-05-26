@@ -16,12 +16,12 @@
  *    upload bytes (no override) is a no-op; one that does triggers an upload +
  *    `ProfileUploadCompleted` await before the Espresso state request lands.
  *
- * The hash is djb2 over a stable JSON serialization — no crypto, no
- * collision-resistance claim, just a cheap stable comparator. The same
- * shell-side function feeds both the connect-time and shot-start checks so
- * the two checkpoints can never disagree.
+ * The algorithm lives in Rust (`de1_domain::profile_fingerprint`) so the web
+ * + Android shells share one byte-identical implementation. This module is a
+ * thin adapter that hands the shell shape over the wasm boundary.
  */
 
+import { profileFingerprint as wasmProfileFingerprint } from '$lib/wasm/de1_wasm';
 import type { CremaProfile } from './model';
 
 /**
@@ -51,53 +51,22 @@ export interface ProfileFingerprintQc {
 }
 
 /**
- * djb2 string hash — Bernstein's classic, terse, no allocation per byte.
- * Returns a 32-bit unsigned integer rendered as base-36 for compact display
- * in logs. Stable across runs; **not** cryptographic.
- */
-function djb2(s: string): string {
-	// Seed 5381 is djb2's canonical magic constant.
-	let h = 5381;
-	for (let i = 0; i < s.length; i++) {
-		// `(h << 5) + h` is `h * 33` without the multiply; `>>> 0` keeps
-		// the running value as an unsigned 32-bit int.
-		h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
-	}
-	return h.toString(36);
-}
-
-/**
- * Compute the effective-profile fingerprint — a djb2 of a stable
- * serialization of the fields that influence the upload bytes.
+ * Compute the effective-profile fingerprint by handing the shell shape
+ * over to the core's `profile_fingerprint` wasm export. The Rust
+ * algorithm is the canonical one (see
+ * `core/de1-domain/src/profile_fingerprint.rs`); both shells go through
+ * this single implementation.
  *
- * Per-shot Quick Controls overrides (when present) take precedence over
- * the profile's own values, so two dial changes that converge on the
- * same final numbers produce identical fingerprints. The id is folded
- * in last so two distinct profiles with identical numbers (rare but
- * possible — e.g. a `(copy)`) still hash apart.
- *
- * The segment list is serialised verbatim — its shape is *the* upload
- * payload, so the hash must change the moment any segment field does
- * (target, mode, ramp, time, exit, limiter, temperature, sensor,
- * volume limit). `JSON.stringify` produces deterministic output for
- * Crema's plain-object segment shape (no Maps / Sets / undefined
- * fields), so a stable serialisation drops out for free.
+ * Note: the legacy in-shell hash and this wasm hash do not produce
+ * identical digests for the same input (float formatting differs
+ * between JS `JSON.stringify` and Rust `serde_json`). The first call
+ * after the migration produces a different hash from the cached one;
+ * the orchestrator treats the mismatch as a normal "need to upload",
+ * triggers exactly one redundant upload, and the cache self-heals.
  */
 export function profileFingerprint(
 	profile: CremaProfile,
 	qc: ProfileFingerprintQc = {}
 ): string {
-	const key = {
-		id: profile.id,
-		dose: qc.dose ?? profile.dose,
-		yield: qc.yield ?? profile.yieldOut,
-		brewTemp: qc.brewTemp ?? profile.brewTemp,
-		preinf: qc.preinf,
-		preinfuseStepCount: profile.preinfuseStepCount,
-		maxTotalVolumeMl: profile.maxTotalVolumeMl,
-		tankTemperatureC: profile.tankTemperatureC,
-		beverageType: profile.beverageType,
-		segments: profile.segments
-	};
-	return djb2(JSON.stringify(key));
+	return wasmProfileFingerprint(JSON.stringify(profile), JSON.stringify(qc));
 }
