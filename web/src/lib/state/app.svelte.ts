@@ -1255,6 +1255,16 @@ export class CremaApp {
 	}
 
 	/**
+	 * Per-shot kill switch for the weight target. Set when the user
+	 * toggles the QC yield dot OFF (suppressed=true) or ON
+	 * (suppressed=false). The core consults this on every shot start in
+	 * addition to {@link applyStopOnWeight}; either flag suppresses.
+	 */
+	async applyWeightTargetDisabled(disabled: boolean): Promise<void> {
+		await this.core.setWeightTargetDisabled(disabled);
+	}
+
+	/**
 	 * Push the global max-shot-duration safety guardrail into the core,
 	 * in seconds. `0` (or any non-positive value) clears the limit.
 	 */

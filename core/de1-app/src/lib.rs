@@ -280,6 +280,13 @@ pub struct CremaCore {
     /// SAW only fires if a scale is connected and an effective target
     /// weight resolves > 0 (see [`effective_target_weight`](Self::effective_target_weight)).
     stop_on_weight: bool,
+    /// Per-shot SAW kill switch. Latched flag, default `false`; the shell
+    /// pushes `true` when the user toggles the QC yield dot OFF, back to
+    /// `false` when it turns ON. Independent of
+    /// [`stop_on_weight`](Self::stop_on_weight): either flag suppresses
+    /// SAW arming. Reseeded to `false` on every active-profile change so
+    /// each profile load starts with the user's last persistent intent.
+    weight_target_disabled: bool,
     /// The active profile's recipe target weight, grams. `None` = no
     /// recipe target. Set via
     /// [`set_profile_target_weight`](Self::set_profile_target_weight) when
@@ -460,6 +467,7 @@ impl CremaCore {
             flow: FlowEstimator::new(FlowAlgorithm::default()),
             auto_tare: true,
             stop_on_weight: true,
+            weight_target_disabled: false,
             profile_target_weight: None,
             shot_target_weight: None,
             profile_volume_limit: None,
@@ -616,6 +624,17 @@ impl CremaCore {
         self.stop_on_weight = enabled;
     }
 
+    /// Per-shot kill switch for the weight target — when `true`, the
+    /// orchestrator skips weight-based auto-stop arming this shot even
+    /// if a target is configured. Independent of
+    /// [`set_stop_on_weight`](Self::set_stop_on_weight) (the user's
+    /// persistent pref); either flag suppresses arming. The shell flips
+    /// this when the user toggles the QC yield dot OFF, and resets to
+    /// `false` on every active-profile change.
+    pub fn set_weight_target_disabled(&mut self, disabled: bool) {
+        self.weight_target_disabled = disabled;
+    }
+
     /// Set the active profile's recipe target weight, in grams. `None` =
     /// no recipe target. Defensive: a finite value `<= 0` normalises to
     /// `None`, mirroring the legacy wire convention where `0` means
@@ -665,7 +684,8 @@ impl CremaCore {
     /// SAW is additionally gated on `stop_on_weight && scale.is_some()`;
     /// SAV and max-time are independent of the scale.
     fn effective_stop_targets(&self) -> Option<StopTargets> {
-        let weight = if self.stop_on_weight && self.scale.is_some() {
+        let weight = if self.stop_on_weight && !self.weight_target_disabled && self.scale.is_some()
+        {
             self.effective_target_weight()
         } else {
             None

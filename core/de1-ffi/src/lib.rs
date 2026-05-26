@@ -362,6 +362,12 @@ impl CremaBridge {
         self.core().set_stop_on_weight(enabled);
     }
 
+    /// Per-shot kill switch for the weight target. Independent of
+    /// `set_stop_on_weight`; either flag suppresses arming.
+    pub fn set_weight_target_disabled(&self, disabled: bool) {
+        self.core().set_weight_target_disabled(disabled);
+    }
+
     /// Set the active profile's recipe target weight, in grams.
     /// `None` (or a non-finite / non-positive value) means "no target."
     pub fn set_profile_target_weight(&self, grams: Option<f32>) {
