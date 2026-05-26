@@ -5,9 +5,9 @@
 	 * label is the toggle; one stepper edits whichever side is active.
 	 */
 	import type { BrewParamState } from './brew-params.svelte';
-	import QSplitLabel from './QSplitLabel.svelte';
-	import QStepper from './QStepper.svelte';
-	import QChipRow from './QChipRow.svelte';
+	import QuickSplitLabel from './QuickSplitLabel.svelte';
+	import QuickStepper from './QuickStepper.svelte';
+	import QuickChipRow from './QuickChipRow.svelte';
 	import { getSettingsStore, formatWeight } from '$lib/settings';
 
 	let { params }: { params: BrewParamState } = $props();
@@ -26,7 +26,7 @@
 </script>
 
 <div>
-	<QSplitLabel
+	<QuickSplitLabel
 		options={[
 			{ id: 'dose', label: 'Dose' },
 			{ id: 'grind', label: 'Grind' }
@@ -35,7 +35,7 @@
 		onChange={(v) => params.set('doseGrindMode', v as 'dose' | 'grind')}
 	/>
 	{#if p.doseGrindMode === 'dose'}
-		<QStepper
+		<QuickStepper
 			value={p.dose}
 			dimension="weight"
 			min={5}
@@ -46,14 +46,14 @@
 			overriddenTooltip="Overriding default {doseSeedLabel}"
 		/>
 		<div style="height:8px"></div>
-		<QChipRow
+		<QuickChipRow
 			options={[16, 17, 18, 19, 20]}
 			value={p.dose}
 			dimension="weight"
 			onChange={(v) => params.set('dose', v)}
 		/>
 	{:else}
-		<QStepper
+		<QuickStepper
 			value={p.grind}
 			min={0}
 			max={20}
@@ -62,7 +62,7 @@
 			fmt={(v) => v.toFixed(1)}
 		/>
 		<div style="height:8px"></div>
-		<QChipRow
+		<QuickChipRow
 			options={[3.8, 4.0, 4.2, 4.4, 4.6]}
 			value={p.grind}
 			onChange={(v) => params.set('grind', v)}

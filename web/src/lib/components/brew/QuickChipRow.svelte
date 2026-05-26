@@ -1,7 +1,7 @@
 <script lang="ts">
 	/**
-	 * `QChipRow` — the compact horizontal preset-chip row, ported from the
-	 * design's `QChipRow` in `quick-controls.jsx`. Reuses the `.qchipr` /
+	 * `QuickChipRow` — the compact horizontal preset-chip row, ported from the
+	 * design's `QuickChipRow` in `quick-controls.jsx`. Reuses the `.qchipr` /
 	 * `.qchip` class names.
 	 *
 	 * A chip reads active when its value matches the current `value` within a

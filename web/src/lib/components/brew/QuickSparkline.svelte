@@ -56,8 +56,8 @@
 
 <script lang="ts">
 	/**
-	 * `QSparkline` — the tiny pressure-curve thumbnail used in favorite chips,
-	 * ported from the design's `QSparkline` in `quick-controls.jsx`. Pure SVG.
+	 * `QuickSparkline` — the tiny pressure-curve thumbnail used in favorite chips,
+	 * ported from the design's `QuickSparkline` in `quick-controls.jsx`. Pure SVG.
 	 *
 	 * The path is drawn in a fixed `100 × 100` user-space `viewBox`; the SVG
 	 * itself is sized by CSS (`width`/`height` props become the box) and uses

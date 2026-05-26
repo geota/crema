@@ -8,7 +8,7 @@
 	 *
 	 * ## Labels
 	 *
-	 * Every field label is one `QSplitLabel` — the shell's label primitive —
+	 * Every field label is one `QuickSplitLabel` — the shell's label primitive —
 	 * so they all share the quick-controls look and line up exactly. A label
 	 * may be a bare word (Target / Time), a word + split toggle (Temp), or
 	 * carry a leading on/off dot for an optional group (Volume / Exit / Max).
@@ -31,8 +31,8 @@
 		SegmentExit,
 		SegmentLimiter
 	} from '$lib/profiles';
-	import QStepper from '$lib/components/brew/QStepper.svelte';
-	import QSplitLabel from '$lib/components/brew/QSplitLabel.svelte';
+	import QuickStepper from '$lib/components/brew/QuickStepper.svelte';
+	import QuickSplitLabel from '$lib/components/brew/QuickSplitLabel.svelte';
 	import { getSettingsStore, unitLabel } from '$lib/settings';
 	import { MAX_TOTAL_VOLUME_ML, MIN_TOTAL_VOLUME_ML } from '$lib/profiles/bounds';
 
@@ -231,7 +231,7 @@
 			onclick={(e) => e.stopPropagation()}
 			oninput={(e) => onEdit({ name: e.currentTarget.value })}
 		/>
-		<QSplitLabel
+		<QuickSplitLabel
 			prefix="Type"
 			options={[
 				{ id: 'pressure', label: 'Pressure' },
@@ -240,7 +240,7 @@
 			value={seg.mode}
 			onChange={(m) => onEdit({ mode: m as ProfileSegment['mode'] })}
 		/>
-		<QSplitLabel
+		<QuickSplitLabel
 			prefix="Ramp"
 			options={[
 				{ id: 'smooth', label: 'Smooth' },
@@ -254,10 +254,10 @@
 	<!-- Target -->
 	<div class="pe-seg-cell">
 		<div class="pe-seg-cell-body">
-			<QSplitLabel prefix="Target" />
+			<QuickSplitLabel prefix="Target" />
 			<div class="pe-seg-cell-input">
 				{#if seg.mode === 'pressure'}
-					<QStepper
+					<QuickStepper
 						value={seg.target}
 						dimension="pressure"
 						min={0}
@@ -266,7 +266,7 @@
 						onChange={(v) => onEdit({ target: v })}
 					/>
 				{:else}
-					<QStepper
+					<QuickStepper
 						value={seg.target}
 						unit="ml/s"
 						min={0}
@@ -282,9 +282,9 @@
 	<!-- Time -->
 	<div class="pe-seg-cell">
 		<div class="pe-seg-cell-body">
-			<QSplitLabel prefix="Time" />
+			<QuickSplitLabel prefix="Time" />
 			<div class="pe-seg-cell-input">
-				<QStepper
+				<QuickStepper
 					value={seg.time}
 					unit="s"
 					min={1}
@@ -299,7 +299,7 @@
 	<!-- Temp -->
 	<div class="pe-seg-cell">
 		<div class="pe-seg-cell-body">
-			<QSplitLabel
+			<QuickSplitLabel
 				prefix="Temp"
 				options={[
 					{ id: 'coffee', label: 'Coffee' },
@@ -309,7 +309,7 @@
 				onChange={(s) => onEdit({ tempSensor: s as ProfileSegment['tempSensor'] })}
 			/>
 			<div class="pe-seg-cell-input">
-				<QStepper
+				<QuickStepper
 					value={seg.temperatureC}
 					dimension="temp"
 					min={80}
@@ -324,9 +324,9 @@
 	<!-- Volume limit — the label dot enables it; the input dims while off. -->
 	<div class="pe-seg-cell">
 		<div class="pe-seg-cell-body">
-			<QSplitLabel prefix="Volume" dot dotOn={volumeOn} onDot={toggleVolume} />
+			<QuickSplitLabel prefix="Volume" dot dotOn={volumeOn} onDot={toggleVolume} />
 			<div class="pe-seg-cell-input" class:is-off={!volumeOn}>
-				<QStepper
+				<QuickStepper
 					value={seg.volumeLimitMl}
 					dimension="volume"
 					min={MIN_TOTAL_VOLUME_ML}
@@ -342,7 +342,7 @@
 	     symbol left of the threshold value, the way a unit sits to its right. -->
 	<div class="pe-seg-cell">
 		<div class="pe-seg-cell-body">
-			<QSplitLabel
+			<QuickSplitLabel
 				prefix="Exit"
 				dot
 				dotOn={exitOn}
@@ -355,7 +355,7 @@
 				onChange={(m) => patchExit({ metric: m as SegmentExit['metric'] })}
 			/>
 			<div class="pe-seg-cell-input" class:is-off={!exitOn}>
-				<QStepper
+				<QuickStepper
 					value={exitView.threshold}
 					unit={exitUnit}
 					dimension={exitView.metric === 'pressure' ? 'pressure' : undefined}
@@ -374,7 +374,7 @@
 							{exitView.compare === 'over' ? '>' : '<'}
 						</button>
 					{/snippet}
-				</QStepper>
+				</QuickStepper>
 			</div>
 		</div>
 	</div>
@@ -383,9 +383,9 @@
 	     by side in a copper-tinted frame; the Max label dot gates both. -->
 	<div class="pe-seg-cell is-grouped">
 		<div class="pe-seg-cell-body">
-			<QSplitLabel prefix="Max" dot dotOn={limiterOn} onDot={toggleLimiter} />
+			<QuickSplitLabel prefix="Max" dot dotOn={limiterOn} onDot={toggleLimiter} />
 			<div class="pe-seg-cell-input" class:is-off={!limiterOn}>
-				<QStepper
+				<QuickStepper
 					value={limiterView.value}
 					unit={limiterUnit}
 					dimension={seg.mode === 'flow' ? 'pressure' : undefined}
@@ -397,9 +397,9 @@
 			</div>
 		</div>
 		<div class="pe-seg-cell-body">
-			<QSplitLabel prefix="Tolerance" />
+			<QuickSplitLabel prefix="Tolerance" />
 			<div class="pe-seg-cell-input" class:is-off={!limiterOn}>
-				<QStepper
+				<QuickStepper
 					value={limiterView.range}
 					unit=""
 					min={0}
@@ -567,7 +567,7 @@
 	}
 
 	/* The over/under comparator — a `>` / `<` symbol left of the threshold,
-	   rendered into the QStepper value box like a leading unit. */
+	   rendered into the QuickStepper value box like a leading unit. */
 	.pe-seg-cmp {
 		background: transparent;
 		border: 0;
@@ -600,7 +600,7 @@
 		background: rgba(217, 119, 87, 0.08);
 	}
 
-	/* Every label is a QSplitLabel — trim it to the compact segment-row
+	/* Every label is a QuickSplitLabel — trim it to the compact segment-row
 	   context: field-label size, centred content (overriding the design's
 	   baseline alignment) so the on/off dot, prefix word and split toggle
 	   all line up, and the prefix in the muted field-label colour. */

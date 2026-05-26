@@ -12,9 +12,9 @@
 	 * keep working; conceptually it's now "BrewStepper."
 	 */
 	import type { BrewParamState } from './brew-params.svelte';
-	import QSplitLabel from './QSplitLabel.svelte';
-	import QStepper from './QStepper.svelte';
-	import QChipRow from './QChipRow.svelte';
+	import QuickSplitLabel from './QuickSplitLabel.svelte';
+	import QuickStepper from './QuickStepper.svelte';
+	import QuickChipRow from './QuickChipRow.svelte';
 	import { getSettingsStore, formatTemp } from '$lib/settings';
 
 	let { params }: { params: BrewParamState } = $props();
@@ -34,7 +34,7 @@
 </script>
 
 <div>
-	<QSplitLabel
+	<QuickSplitLabel
 		prefix="Brew"
 		options={[
 			{ id: 'temp', label: 'temp' },
@@ -44,7 +44,7 @@
 		onChange={(v) => params.set('brewMode', v as 'temp' | 'preinf')}
 	/>
 	{#if p.brewMode === 'temp'}
-		<QStepper
+		<QuickStepper
 			value={p.brewTemp}
 			dimension="temp"
 			min={80}
@@ -55,14 +55,14 @@
 			overriddenTooltip="Overriding default {tempSeedLabel}"
 		/>
 		<div style="height:6px"></div>
-		<QChipRow
+		<QuickChipRow
 			options={[88, 91, 93, 95, 97]}
 			value={p.brewTemp}
 			dimension="temp"
 			onChange={(v) => params.set('brewTemp', v)}
 		/>
 	{:else}
-		<QStepper
+		<QuickStepper
 			value={p.preinf}
 			unit="s"
 			min={0}
@@ -74,7 +74,7 @@
 			overriddenTooltip="Overriding default {preinfSeedLabel}"
 		/>
 		<div style="height:6px"></div>
-		<QChipRow
+		<QuickChipRow
 			options={[0, 4, 8, 12, 16]}
 			value={p.preinf}
 			unit="s"

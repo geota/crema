@@ -1,7 +1,7 @@
 <script lang="ts">
 	/**
-	 * `QStepper` — the dark `−` / value / `+` stepper, ported from the design's
-	 * `QStepper` in `quick-controls.jsx`. Reuses the `.qcs*` class names so the
+	 * `QuickStepper` — the dark `−` / value / `+` stepper, ported from the design's
+	 * `QuickStepper` in `quick-controls.jsx`. Reuses the `.qcs*` class names so the
 	 * design CSS applies verbatim.
 	 *
 	 * Presentation-only: it owns no state. The parent passes `value` and an

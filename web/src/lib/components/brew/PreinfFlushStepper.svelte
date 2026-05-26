@@ -11,9 +11,9 @@
 	 * now "FlushStepper."
 	 */
 	import type { BrewParamState } from './brew-params.svelte';
-	import QSplitLabel from './QSplitLabel.svelte';
-	import QStepper from './QStepper.svelte';
-	import QChipRow from './QChipRow.svelte';
+	import QuickSplitLabel from './QuickSplitLabel.svelte';
+	import QuickStepper from './QuickStepper.svelte';
+	import QuickChipRow from './QuickChipRow.svelte';
 
 	let { params }: { params: BrewParamState } = $props();
 
@@ -21,7 +21,7 @@
 </script>
 
 <div>
-	<QSplitLabel
+	<QuickSplitLabel
 		prefix="Flush"
 		options={[
 			{ id: 'time', label: 'time' },
@@ -31,7 +31,7 @@
 		onChange={(v) => params.set('flushMode', v as 'time' | 'temp')}
 	/>
 	{#if p.flushMode === 'time'}
-		<QStepper
+		<QuickStepper
 			value={p.flushTime}
 			unit="s"
 			min={1}
@@ -41,7 +41,7 @@
 			fmt={(v) => v.toFixed(0)}
 		/>
 		<div style="height:6px"></div>
-		<QChipRow
+		<QuickChipRow
 			options={[2, 4, 6, 8, 10]}
 			value={p.flushTime}
 			unit="s"
@@ -49,10 +49,10 @@
 		/>
 	{:else}
 		<!-- min/max match reaprime's hot-water range (60..100 °C — flush
-		     reuses the hot-water heater path). QStepper's `inc()` +
+		     reuses the hot-water heater path). QuickStepper's `inc()` +
 		     click-to-type `commit()` both clamp to these bounds, so the
 		     props are *enforced*, not decorative. -->
-		<QStepper
+		<QuickStepper
 			value={p.flushTemp}
 			dimension="temp"
 			min={60}
@@ -61,7 +61,7 @@
 			onChange={(v) => params.set('flushTemp', v)}
 		/>
 		<div style="height:6px"></div>
-		<QChipRow
+		<QuickChipRow
 			options={[88, 92, 95, 97, 99]}
 			value={p.flushTemp}
 			dimension="temp"

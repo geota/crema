@@ -5,9 +5,9 @@
 	 * Temp | Volume toggle.
 	 */
 	import type { BrewParamState } from './brew-params.svelte';
-	import QSplitLabel from './QSplitLabel.svelte';
-	import QStepper from './QStepper.svelte';
-	import QChipRow from './QChipRow.svelte';
+	import QuickSplitLabel from './QuickSplitLabel.svelte';
+	import QuickStepper from './QuickStepper.svelte';
+	import QuickChipRow from './QuickChipRow.svelte';
 
 	let { params }: { params: BrewParamState } = $props();
 
@@ -15,7 +15,7 @@
 </script>
 
 <div>
-	<QSplitLabel
+	<QuickSplitLabel
 		prefix="Hot water"
 		options={[
 			{ id: 'temp', label: 'temp' },
@@ -25,7 +25,7 @@
 		onChange={(v) => params.set('waterMode', v as 'temp' | 'volume')}
 	/>
 	{#if p.waterMode === 'temp'}
-		<QStepper
+		<QuickStepper
 			value={p.waterTemp}
 			dimension="temp"
 			min={40}
@@ -34,14 +34,14 @@
 			onChange={(v) => params.set('waterTemp', v)}
 		/>
 		<div style="height:6px"></div>
-		<QChipRow
+		<QuickChipRow
 			options={[60, 75, 85, 92, 96]}
 			value={p.waterTemp}
 			dimension="temp"
 			onChange={(v) => params.set('waterTemp', v)}
 		/>
 	{:else}
-		<QStepper
+		<QuickStepper
 			value={p.waterVolume}
 			dimension="volume"
 			min={20}
@@ -50,7 +50,7 @@
 			onChange={(v) => params.set('waterVolume', v)}
 		/>
 		<div style="height:6px"></div>
-		<QChipRow
+		<QuickChipRow
 			options={[60, 120, 180, 250, 350]}
 			value={p.waterVolume}
 			dimension="volume"

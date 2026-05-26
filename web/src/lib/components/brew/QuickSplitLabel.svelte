@@ -12,8 +12,8 @@
 
 <script lang="ts">
 	/**
-	 * `QSplitLabel` — the "DOSE | grind" split-pill label, ported from the
-	 * design's `QSplitLabel` in `quick-controls-v2.jsx`. Tapping the dim side
+	 * `QuickSplitLabel` — the "DOSE | grind" split-pill label, ported from the
+	 * design's `QuickSplitLabel` in `quick-controls-v2.jsx`. Tapping the dim side
 	 * switches which parameter the stepper below edits; the copper underline
 	 * tracks the active option.
 	 *
@@ -90,7 +90,7 @@
 <style>
 	/* The on/off dot — copper when enabled, hollow when disabled. The other
 	   `.qsplit*` classes come from the global design CSS; only the dot, which
-	   the design's QSplitLabel never had, is styled here. */
+	   the design's QuickSplitLabel never had, is styled here. */
 	.qsplit-dot {
 		width: 7px;
 		height: 7px;

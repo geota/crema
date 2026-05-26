@@ -6,7 +6,7 @@
 	 * the buttons to nudge, click the value to set a specific number.
 	 *
 	 * Shared across the Settings pages (Brew defaults, Water + maintenance,
-	 * Sound volume). The Quick-sheet `QStepper` and the Profile-editor
+	 * Sound volume). The Quick-sheet `QuickStepper` and the Profile-editor
 	 * `PeNumber` have their own visual treatments (dark chrome and
 	 * labelled-box respectively) and keep their own components, but
 	 * share the click-to-type behaviour by mirroring this file's
@@ -68,7 +68,7 @@
 		label?: string;
 		/**
 		 * Visual size. `sm` (settings rows) is the default. `md` and `lg` are
-		 * exposed so future surfaces can match QStepper / PeNumber sizing
+		 * exposed so future surfaces can match QuickStepper / PeNumber sizing
 		 * without forking the component.
 		 */
 		size?: 'sm' | 'md' | 'lg';
@@ -124,7 +124,7 @@
 
 	/**
 	 * Step by `dir`. With `dimension`, work in display units so each click
-	 * moves the visible digit — see {@link QStepper.inc} for the full
+	 * moves the visible digit — see {@link QuickStepper.inc} for the full
 	 * explanation. Without `dimension`, plain canonical arithmetic.
 	 */
 	function inc(dir: number): void {

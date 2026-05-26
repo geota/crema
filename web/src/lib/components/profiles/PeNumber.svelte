@@ -4,7 +4,7 @@
 	 * `profile-edit-page.jsx`. Used in the editor's Targets grid.
 	 *
 	 * Optionally pass `dimension` to make the stepper unit-aware (see
-	 * {@link QStepper} for the full pattern): `value` / `step` / `min` / `max`
+	 * {@link QuickStepper} for the full pattern): `value` / `step` / `min` / `max`
 	 * stay canonical, the display value and inline-edit draft swap to the
 	 * user's chosen unit, and `onChange` still fires with canonical.
 	 */
@@ -82,7 +82,7 @@
 
 	/**
 	 * Step by `dir`. With `dimension`, work in display units so each click
-	 * moves the visible digit — see {@link QStepper.inc} for the full
+	 * moves the visible digit — see {@link QuickStepper.inc} for the full
 	 * explanation. Without `dimension`, plain canonical arithmetic.
 	 */
 	function inc(dir: number): void {
