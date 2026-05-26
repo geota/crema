@@ -605,6 +605,43 @@
 							</div>
 						</div>
 					</div>
+					<div class="be-frow">
+						<div class="be-frow-l">
+							<div class="be-frow-label">Roast type</div>
+							<div class="be-frow-sub">What it's roasted for. Click an active option to clear.</div>
+						</div>
+						<div class="be-frow-r be-frow-r-end">
+							<div class="be-seg be-seg-sm">
+								<button
+									type="button"
+									class="be-seg-opt"
+									class:is-on={current.roastType === 'espresso'}
+									onclick={() =>
+										patch({
+											roastType: current.roastType === 'espresso' ? null : 'espresso'
+										})}
+								>Espresso</button>
+								<button
+									type="button"
+									class="be-seg-opt"
+									class:is-on={current.roastType === 'filter'}
+									onclick={() =>
+										patch({
+											roastType: current.roastType === 'filter' ? null : 'filter'
+										})}
+								>Filter</button>
+								<button
+									type="button"
+									class="be-seg-opt"
+									class:is-on={current.roastType === 'omni'}
+									onclick={() =>
+										patch({
+											roastType: current.roastType === 'omni' ? null : 'omni'
+										})}
+								>Omni</button>
+							</div>
+						</div>
+					</div>
 				</div>
 			</section>
 
@@ -733,6 +770,23 @@
 							</div>
 						</div>
 					{/if}
+					<div class="be-frow">
+						<div class="be-frow-l">
+							<div class="be-frow-label">Archived</div>
+							<div class="be-frow-sub">
+								Hide this bag from the active grid. Beanconqueror imports
+								flip this on for any bag marked `finished`.
+							</div>
+						</div>
+						<div class="be-frow-r">
+							<StToggle
+								on={current.archivedAt != null}
+								onChange={(v) =>
+									patch({ archivedAt: v ? Date.now() : null })}
+								label="Archived"
+							/>
+						</div>
+					</div>
 				</div>
 			</section>
 
@@ -1019,9 +1073,9 @@
 					</div>
 					<div class="be-frow be-frow-stack">
 						<div class="be-frow-l">
-							<div class="be-frow-label">Notes</div>
+							<div class="be-frow-label">Tasting notes</div>
 							<div class="be-frow-sub">
-								Tasting notes, brewing advice — whatever you want to remember.
+								Flavour, aroma, brewing advice — whatever the cup tells you.
 							</div>
 						</div>
 						<div class="be-frow-r">
@@ -1033,6 +1087,26 @@
 								oninput={(e) =>
 									patch({
 										tastingNotes: (e.currentTarget as HTMLTextAreaElement).value
+									})}
+							></textarea>
+						</div>
+					</div>
+					<div class="be-frow be-frow-stack">
+						<div class="be-frow-l">
+							<div class="be-frow-label">Free-form notes</div>
+							<div class="be-frow-sub">
+								Anything else worth keeping — not surfaced on the brew page.
+							</div>
+						</div>
+						<div class="be-frow-r">
+							<textarea
+								class="be-input be-textarea"
+								rows="3"
+								value={current.notes}
+								placeholder="Bought at the cafe down the road. They were closing out."
+								oninput={(e) =>
+									patch({
+										notes: (e.currentTarget as HTMLTextAreaElement).value
 									})}
 							></textarea>
 						</div>
