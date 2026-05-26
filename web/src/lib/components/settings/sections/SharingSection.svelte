@@ -12,6 +12,7 @@
 	import { getHistoryStore } from '$lib/history';
 	import { downloadBlob } from '$lib/utils/download';
 	import {
+		clearVisualizerPremiumCache,
 		clearVisualizerTokens,
 		fetchVisualizerAccount,
 		getStoredVisualizerTokens,
@@ -84,6 +85,9 @@
 			await revokeVisualizerToken(tokens.accessToken);
 		}
 		clearVisualizerTokens();
+		// Tier flag is per-account — a fresh sign-in (or the same account
+		// after a tier change on visualizer.coffee) shouldn't inherit it.
+		clearVisualizerPremiumCache();
 	}
 
 	async function testNow(): Promise<void> {
@@ -94,8 +98,10 @@
 				kind: 'ok',
 				message:
 					r.premium === false
-						? 'Connected (free tier — read-only sync).'
-						: 'Connected.'
+						? 'Connected — free tier (read-only sync for beans / roasters).'
+						: r.premium === true
+							? 'Connected — Supporter tier (full sync).'
+							: 'Connected — tier could not be verified (will retry on next Sync).'
 			};
 		} else {
 			testStatus = { kind: 'error', message: r.error };

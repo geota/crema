@@ -39,6 +39,7 @@ export { roasterMark, roasterTone, roasterMarkTone } from './roaster-mark';
 export { roasterFaviconUrl } from './roaster-favicon';
 
 export {
+	clearVisualizerPremiumCache,
 	deleteRemoteBean,
 	deleteRemoteRoaster,
 	readSyncSettings,

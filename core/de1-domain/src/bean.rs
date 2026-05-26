@@ -260,6 +260,26 @@ pub enum BeanMix {
     Blend,
 }
 
+/// Whether a bag is roasted for espresso, filter, or both. `None` on the
+/// owning [`Bean`] = unset; the value never serialises as `"unknown"`
+/// (the user picks one of the three or leaves it blank). Lowercase wire
+/// strings match the TS shell convention.
+///
+/// Imported from Beanconqueror's `bean_roasting_type` field, which uses
+/// the same three categories plus an `Unknown` sentinel that we map to
+/// `None` on the bag.
+#[typeshare]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BeanRoastType {
+    /// Roasted for espresso pulls — typically a darker development.
+    Espresso,
+    /// Roasted for filter / pour-over.
+    Filter,
+    /// Roasted to work for both espresso and filter (industry term).
+    Omni,
+}
+
 /// Origin metadata for a bag — country, region, farm, and the rest of
 /// the upstream provenance fields. All optional: a fresh bean's origin
 /// starts empty and the user fills in whatever the bag label shows.
@@ -328,6 +348,13 @@ pub struct Bean {
     pub roast_level: Option<u8>,
     /// Single-origin vs blend. `None` = not classified.
     pub mix: Option<BeanMix>,
+    /// What the bag was roasted for — espresso, filter, or omni. `None`
+    /// when the user hasn't picked. `#[serde(default)]` so older Bean
+    /// records (pre-this-field) deserialise cleanly. Imported from
+    /// Beanconqueror's `bean_roasting_type` (its `Unknown` value maps
+    /// to `None`).
+    #[serde(default)]
+    pub roast_type: Option<BeanRoastType>,
     /// Decaf flag — `false` by default.
     pub decaf: bool,
     /// Provenance metadata. Empty struct by default.
@@ -409,6 +436,7 @@ impl Bean {
             defrosted_on: None,
             roast_level: None,
             mix: None,
+            roast_type: None,
             decaf: false,
             origin: BeanOrigin::default(),
             bag_size_g: 0.0,

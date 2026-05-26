@@ -41,6 +41,7 @@ import {
 	signatureForRoaster,
 	withFreshToken
 } from '$lib/visualizer';
+import { updateSyncConfig } from '$lib/visualizer/sync-config';
 import type { components } from '$lib/visualizer/openapi';
 import {
 	blankBean,
@@ -473,11 +474,26 @@ async function call(
 // ── Public surface ─────────────────────────────────────────────────────
 
 /**
- * Verify the connection by issuing a small read against `/coffee_bags`.
- * Returns the (cached or freshly probed) premium flag on success.
+ * Verify the connection AND probe the current premium tier.
  *
- * Requires the user to have signed in via OAuth first — call
- * `$lib/visualizer#isConnected()` (or just let this throw with `'auth'`).
+ * Two-step:
+ *   1. Read `/coffee_bags?items=1` — catches auth errors early; works on
+ *      any tier so doesn't reveal the user's status.
+ *   2. Probe via {@link probePremiumWrite} — `POST /roasters` with a
+ *      sentinel name then immediately `DELETE` it. The HTTP status of
+ *      the POST is the one authoritative signal Visualizer's API
+ *      exposes for tier membership (the spec confirms `/me` has no
+ *      premium field).
+ *
+ * The discovered tier is written to both the legacy
+ * `crema.beans.sync.v1` settings AND the active
+ * `crema.visualizer.sync.v1` config so the UI's `premiumLocked`
+ * derived value picks up the new tier on the same render. Without
+ * this, a user who upgrades from free → supporter on visualizer.coffee
+ * sees the bean/roaster push buttons stay greyed until they manually
+ * run a Sync now that happens to attempt a write.
+ *
+ * Requires OAuth sign-in first — returns `{ ok: false, error }` otherwise.
  */
 export async function testConnection(): Promise<
 	{ ok: true; premium: boolean | null } | { ok: false; error: string }
@@ -485,17 +501,86 @@ export async function testConnection(): Promise<
 	if (!isConnected()) {
 		return { ok: false, error: 'Sign in to Visualizer first.' };
 	}
-	const settings = readSyncSettings();
 	try {
 		await call('/coffee_bags?items=1');
-		// We can't be sure about the premium flag without a write; leave it
-		// at the cached value (or null) until a real push happens.
-		return { ok: true, premium: settings.premium };
+		const premium = await probePremiumWrite();
+		// Mirror the result into both caches so every UI surface that
+		// reads either one (`premiumLocked` on BeanSyncSection reads the
+		// active config; the legacy settings drive the upload-queue
+		// recoverability classifier) agrees.
+		writeSyncSettings({ premium });
+		updateSyncConfig({ premium });
+		return { ok: true, premium };
 	} catch (e) {
 		if (e instanceof VisualizerError) {
 			return { ok: false, error: e.message };
 		}
 		return { ok: false, error: String(e) };
+	}
+}
+
+/**
+ * Clear the cached premium-tier flag from both sync-config locations.
+ * Called on disconnect so that reconnecting with a different account
+ * (or after a tier change) doesn't inherit a stale `false` — the next
+ * Test or Sync will re-probe from scratch.
+ */
+export function clearVisualizerPremiumCache(): void {
+	writeSyncSettings({ premium: null });
+	updateSyncConfig({ premium: null });
+}
+
+/**
+ * Probe Visualizer for the current premium tier via a sentinel write.
+ *
+ * `POST /roasters` is one of Visualizer's premium-gated write endpoints;
+ * its status code is the authoritative signal:
+ *   - 201 → premium (Supporter or higher)
+ *   - 402/403 → free tier
+ *   - anything else → unknown (network, transient server error)
+ *
+ * The sentinel roaster is deleted immediately after creation. If the
+ * DELETE leg fails (network glitch between the two requests), the row
+ * lingers on the user's Visualizer account; the next full
+ * {@link runSync} reconcile pass will clean it up the same way it
+ * cleans any locally-absent remote row. The name carries a `__crema_`
+ * prefix so the user recognises it if they see it in the Visualizer UI.
+ *
+ * Returns `null` (not `false`) on transient/unknown failures so the UI
+ * shows "tier unknown" rather than locking buttons.
+ */
+async function probePremiumWrite(): Promise<boolean | null> {
+	const sentinelName = `__crema_premium_probe_${Date.now()}`;
+	try {
+		const created = (await call('/roasters', {
+			method: 'POST',
+			body: {
+				roaster: {
+					name: sentinelName,
+					website: null,
+					canonical_roaster_id: null
+				}
+			}
+		})) as RoasterWire;
+		if (created?.id) {
+			try {
+				await call(`/roasters/${created.id}`, { method: 'DELETE' });
+			} catch {
+				// Cleanup failure is non-fatal — the runSync reconcile
+				// pass will tidy up. Don't surface to the user.
+				console.warn(
+					`[visualizer] premium-probe sentinel ${sentinelName} not cleaned up; will be removed on next full Sync`
+				);
+			}
+		}
+		return true;
+	} catch (e) {
+		if (e instanceof VisualizerError && e.kind === 'premium') {
+			return false;
+		}
+		// Unknown error (network, 5xx, auth-after-refresh) — leave tier
+		// undetermined so the UI doesn't lock anything pre-emptively.
+		return null;
 	}
 }
 
