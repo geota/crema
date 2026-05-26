@@ -26,6 +26,8 @@
 	import { resolve } from '$app/paths';
 	import {
 		getBeanStore,
+		getBeanImageStore,
+		beanImageRefFor,
 		daysOffRoast,
 		roastBand5,
 		roasterMarkTone,
@@ -83,6 +85,68 @@
 	});
 
 	const mt = $derived(roasterMarkTone(resolvedRoaster));
+
+	// ── Bag photo (IndexedDB blob via `Bean.imageRef`) ─────────────────
+	const imageStore = getBeanImageStore();
+	let imageUrl = $state<string | null>(null);
+	let photoUploading = $state(false);
+	let photoError = $state<string | null>(null);
+	$effect(() => {
+		const ref = current.imageRef;
+		if (!ref) {
+			imageUrl = null;
+			return;
+		}
+		let cancelled = false;
+		let createdUrl: string | null = null;
+		void (async () => {
+			const blob = await imageStore.get(ref);
+			if (cancelled) return;
+			if (blob) {
+				createdUrl = URL.createObjectURL(blob);
+				imageUrl = createdUrl;
+			} else {
+				imageUrl = null;
+			}
+		})();
+		return () => {
+			cancelled = true;
+			untrack(() => {
+				if (createdUrl) URL.revokeObjectURL(createdUrl);
+			});
+		};
+	});
+
+	async function onPhotoPicked(event: Event): Promise<void> {
+		const input = event.currentTarget as HTMLInputElement;
+		const file = input.files?.[0];
+		input.value = '';
+		if (!file) return;
+		photoError = null;
+		photoUploading = true;
+		try {
+			const ref = beanImageRefFor(current.id);
+			await imageStore.put(ref, file);
+			patch({ imageRef: ref });
+		} catch (e) {
+			photoError =
+				e instanceof Error ? e.message : 'Could not save the photo.';
+		} finally {
+			photoUploading = false;
+		}
+	}
+
+	async function removePhoto(): Promise<void> {
+		const ref = current.imageRef;
+		if (!ref) return;
+		photoError = null;
+		try {
+			await imageStore.delete(ref);
+		} catch {
+			// Non-fatal — clearing the ref is the source of truth.
+		}
+		patch({ imageRef: null });
+	}
 
 	// ── Derived display values ─────────────────────────────────────────
 	const days = $derived(daysOffRoast(current.roastedOn));
@@ -313,14 +377,47 @@
 		<!-- Left rail -->
 		<aside class="be-rail">
 			<div class="be-photo">
-				<div class="be-photo-drop" style="--tone: {mt.tone}">
-					<div class="be-photo-mark">{mt.mark}</div>
-				</div>
+				<label class="be-photo-drop" style="--tone: {mt.tone}">
+					{#if imageUrl}
+						<img class="be-photo-img" src={imageUrl} alt="" />
+					{:else}
+						<div class="be-photo-mark">{mt.mark}</div>
+					{/if}
+					<input
+						type="file"
+						accept="image/*"
+						class="be-photo-input"
+						onchange={onPhotoPicked}
+						disabled={photoUploading}
+						aria-label={imageUrl ? 'Replace bag photo' : 'Add bag photo'}
+					/>
+					<span class="be-photo-overlay">
+						<i
+							class="ph {imageUrl ? 'ph-pencil-simple' : 'ph-camera-plus'}"
+							aria-hidden="true"
+						></i>
+					</span>
+				</label>
 				<div class="be-photo-cap">{resolvedRoaster?.name ?? 'No roaster'}</div>
-				<div class="be-photo-sub">
-					Photo OCR for roast date is on the roadmap — for now use the
-					Roasted-on field below.
+				<div class="be-photo-actions">
+					{#if imageUrl}
+						<button class="be-photo-link" type="button" onclick={removePhoto}>
+							Remove photo
+						</button>
+					{/if}
 				</div>
+				{#if photoError}
+					<div class="be-photo-error">{photoError}</div>
+				{:else}
+					<div class="be-photo-sub">
+						{#if imageUrl}
+							Click the photo to replace it.
+						{:else}
+							Add a JPG/PNG of the bag (any photo from your phone or
+							pulled in from a Beanconqueror import).
+						{/if}
+					</div>
+				{/if}
 			</div>
 			<nav class="be-toc" aria-label="Sections">
 				{#each TOC as s, i (s.id)}
@@ -1199,7 +1296,44 @@
 		display: flex;
 		align-items: center;
 		justify-content: center;
+		overflow: hidden;
+		position: relative;
+		cursor: pointer;
 		box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+		transition: filter var(--dur-1) var(--ease);
+	}
+	.be-photo-drop:hover {
+		filter: brightness(0.92);
+	}
+	.be-photo-img {
+		position: absolute;
+		inset: 0;
+		width: 100%;
+		height: 100%;
+		object-fit: cover;
+	}
+	.be-photo-input {
+		position: absolute;
+		inset: 0;
+		opacity: 0;
+		width: 100%;
+		height: 100%;
+		cursor: pointer;
+	}
+	.be-photo-overlay {
+		position: absolute;
+		right: 8px;
+		bottom: 8px;
+		width: 28px;
+		height: 28px;
+		border-radius: 999px;
+		background: rgba(0, 0, 0, 0.55);
+		color: #fff;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		font-size: 14px;
+		pointer-events: none;
 	}
 	.be-photo-mark {
 		font-family: var(--font-serif);
@@ -1216,6 +1350,31 @@
 		text-transform: uppercase;
 		color: rgba(var(--tint-rgb), 0.6);
 		margin-top: 8px;
+	}
+	.be-photo-actions {
+		display: flex;
+		gap: 8px;
+		margin-top: 2px;
+	}
+	.be-photo-link {
+		background: transparent;
+		border: 0;
+		padding: 0;
+		font-family: var(--font-sans);
+		font-size: 11px;
+		color: rgba(var(--tint-rgb), 0.55);
+		text-decoration: underline;
+		text-underline-offset: 2px;
+		cursor: pointer;
+	}
+	.be-photo-link:hover {
+		color: var(--fg-1);
+	}
+	.be-photo-error {
+		font-family: var(--font-sans);
+		font-size: 11px;
+		color: var(--danger);
+		line-height: 1.5;
 	}
 	.be-photo-sub {
 		font-family: var(--font-sans);
