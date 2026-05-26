@@ -129,7 +129,7 @@
 	</StRow>
 	<StRow
 		title="Max shot duration"
-		sub="Safety guardrail — abort the shot if it runs longer than this. Set to 0 to disable."
+		sub="Safety guardrail — abort the shot if it runs longer than this. Click the dot to disable."
 	>
 		{#snippet control()}
 			<StStepper
@@ -139,6 +139,9 @@
 				min={0}
 				max={300}
 				onCommit={setMaxShotDuration}
+				dot
+				dotOn={prefs.maxShotDurationS > 0}
+				onDot={() => setMaxShotDuration(prefs.maxShotDurationS > 0 ? 0 : 60)}
 			/>
 		{/snippet}
 	</StRow>
