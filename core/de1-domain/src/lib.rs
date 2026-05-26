@@ -42,6 +42,7 @@
 //!   UniFFI bridges.
 
 pub mod bean;
+pub mod beanconqueror;
 pub mod builtin;
 pub mod error;
 pub mod filter;
