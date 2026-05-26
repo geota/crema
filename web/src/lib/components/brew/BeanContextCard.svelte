@@ -27,10 +27,19 @@
 	import type { Roast } from '$lib/profiles';
 
 	let {
-		grind
+		grind,
+		onEditingChange
 	}: {
 		/** The current grinder click setting from the Quick Sheet params. */
 		grind: number;
+		/**
+		 * Fires when the inline editor opens or closes. The Brew dashboard
+		 * uses this to collapse sibling cards (Max stack, Phase indicator,
+		 * Last shot) while the bean form is expanded, so a tall form
+		 * doesn't push the foot strip out of viewport. The card reverts to
+		 * its normal compact size on save / cancel.
+		 */
+		onEditingChange?: (editing: boolean) => void;
 	} = $props();
 
 	/** The shared library store. */
@@ -124,6 +133,17 @@
 	 */
 	let creating = $state(false);
 
+	/**
+	 * Toggle `editing` and notify the parent. The parent collapses
+	 * sibling cards while editing so the inline form doesn't push the
+	 * foot strip out of the viewport.
+	 */
+	function setEditing(next: boolean): void {
+		if (editing === next) return;
+		editing = next;
+		onEditingChange?.(next);
+	}
+
 	// ── Inline-edit local buffers ──────────────────────────────────────
 	//
 	// The previous version pushed every keystroke straight into the
@@ -165,7 +185,7 @@
 		}
 		creating = false;
 		loadBufferFromBean();
-		editing = true;
+		setEditing(true);
 	}
 
 	/**
@@ -206,14 +226,14 @@
 			});
 		}
 		creating = false;
-		editing = false;
+		setEditing(false);
 	}
 
 	function cancelEdit(): void {
 		// Buffers are discarded; in create-mode no library row was ever
 		// written, so Cancel is a true no-op.
 		creating = false;
-		editing = false;
+		setEditing(false);
 	}
 
 	/**
@@ -224,7 +244,7 @@
 	function quickAdd(): void {
 		resetBufferForCreate();
 		creating = true;
-		editing = true;
+		setEditing(true);
 	}
 </script>
 

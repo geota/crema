@@ -738,6 +738,15 @@
 	);
 
 	/**
+	 * Whether the BeanContextCard's inline editor is open. Drives the
+	 * collapse of sibling cards in the left column — when the bean form
+	 * is expanded, the Max stack / Ratio / PhaseIndicator / LastShot
+	 * cards hide so the form fits in the column without pushing the
+	 * foot strip out of viewport. Reverts on save / cancel.
+	 */
+	let beanEditing = $state(false);
+
+	/**
 	 * Whether the per-shot weight target is engaged for the next / current
 	 * shot. Reseeds on every active-profile change to mirror the profile's
 	 * own intent: a profile with `yieldOut > 0` engages the target on
@@ -1092,7 +1101,7 @@
 			<div class="crema-dash-timercol">
 				<ExtractionTimer seconds={elapsedSec} step={phaseLabel} />
 				<div class="crema-dash-targets">
-					{#if yieldCardVisible || maxVolumeCardVisible || maxDurationCardVisible}
+					{#if !beanEditing && (yieldCardVisible || maxVolumeCardVisible || maxDurationCardVisible)}
 						<!-- Consolidated stop-conditions card. Each row is
 						     independently gated on its own target; the card
 						     itself only renders when at least one row would
@@ -1146,13 +1155,15 @@
 							{/if}
 						</div>
 					{/if}
-					<div class="crema-target">
-						<div class="t-eyebrow">Ratio</div>
-						<div class="crema-target-val">
-							<span>1:{shotWeight == null ? '—' : (shotWeight / p.dose).toFixed(2)}</span>
-							<span class="crema-target-unit"> · target 1:{ratio}</span>
+					{#if !beanEditing}
+						<div class="crema-target">
+							<div class="t-eyebrow">Ratio</div>
+							<div class="crema-target-val">
+								<span>1:{shotWeight == null ? '—' : (shotWeight / p.dose).toFixed(2)}</span>
+								<span class="crema-target-unit"> · target 1:{ratio}</span>
+							</div>
 						</div>
-					</div>
+					{/if}
 					<!-- The "Volume" card was retired 2026-05-22: the dispensed
 					     volume now lives as the secondary metric on the Flow
 					     channel card (right column), and the water-tank level
@@ -1162,13 +1173,18 @@
 					<!-- Phase + Bean cards only fit the left column when the Quick
 					     Sheet is closed; the open sheet would overlap them. -->
 					{#if !quickSheetOpen}
-						<PhaseIndicatorCard
-							seconds={elapsedSec}
-							frame={ui.shotFrame}
-							segments={activeProfile?.segments}
+						{#if !beanEditing}
+							<PhaseIndicatorCard
+								seconds={elapsedSec}
+								frame={ui.shotFrame}
+								segments={activeProfile?.segments}
+							/>
+						{/if}
+						<BeanContextCard
+							grind={p.grind}
+							onEditingChange={(v) => (beanEditing = v)}
 						/>
-						<BeanContextCard grind={p.grind} />
-						{#if showLastShot && lastShot}
+						{#if !beanEditing && showLastShot && lastShot}
 							<!-- The just-finished shot's result — the bottom card of
 							     the left column, shown until the next shot starts. -->
 							<LastShotCard shot={lastShot} dose={p.dose} />
