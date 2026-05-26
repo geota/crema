@@ -19,7 +19,10 @@
 	 * skipped (V60 / AeroPress / etc. — no Crema surface for them).
 	 */
 	import { unzip, strFromU8 } from 'fflate';
-	import { importBeanconquerorJson as wasmImportBeanconquerorJson } from '$lib/wasm/de1_wasm';
+	import {
+		importBeanconquerorJson as wasmImportBeanconquerorJson,
+		importCremaJsonl as wasmImportCremaJsonl
+	} from '$lib/wasm/de1_wasm';
 	import {
 		getBeanStore,
 		getBeanImageStore,
@@ -197,12 +200,21 @@
 	 */
 	async function ingestFiles(files: File[]): Promise<void> {
 		if (files.length === 0) return;
+		// Crema-native JSONL takes precedence — same-app round-trip
+		// is lossless; BC is the lossy migration path. If both kinds
+		// of files are dropped, the JSONL wins.
+		const jsonl = files.find((f) => f.name.toLowerCase().endsWith('.jsonl'));
+		if (jsonl) {
+			droppedPhotoFiles = [];
+			await ingestCremaJsonl(jsonl);
+			return;
+		}
 		const zip = files.find(
 			(f) => f.name.toLowerCase().endsWith('.zip')
 		);
 		if (!zip) {
 			step = 'error';
-			errorMessage = 'No .zip file in the selection. Pick the Beanconqueror .zip (or drop the whole export folder).';
+			errorMessage = 'Pick the Beanconqueror .zip or a Crema .jsonl export. Drop the whole export folder for BC with photos.';
 			return;
 		}
 		droppedPhotoFiles = files.filter(
@@ -212,6 +224,29 @@
 					/\.(jpe?g|png|webp|heic|gif)$/i.test(f.name))
 		);
 		await ingest(zip);
+	}
+
+	async function ingestCremaJsonl(file: File): Promise<void> {
+		step = 'parsing';
+		errorMessage = '';
+		try {
+			const text = await file.text();
+			let planJson: string;
+			try {
+				planJson = wasmImportCremaJsonl(text);
+			} catch (e) {
+				step = 'error';
+				errorMessage = `Core parser rejected the file: ${e instanceof Error ? e.message : String(e)}`;
+				return;
+			}
+			const plan = JSON.parse(planJson) as CorePlan;
+			preview = buildPreview(plan, file.name);
+			step = 'preview';
+		} catch (e) {
+			step = 'error';
+			errorMessage =
+				e instanceof Error ? e.message : 'Could not read the file.';
+		}
 	}
 
 	async function ingest(file: File): Promise<void> {
@@ -629,18 +664,18 @@
 			aria-label="Drop a Beanconqueror .zip file"
 		>
 			<i class="ph-duotone ph-file-zip" aria-hidden="true"></i>
-			<div class="bd-drop-title">Drop a Beanconqueror export</div>
+			<div class="bd-drop-title">Drop a Crema or Beanconqueror export</div>
 			<div class="bd-drop-sub">
-				Drop the <code>Beanconqueror.zip</code> on its own, or — for
-				the "with photos" export — drop the ZIP and the
-				<code>photo_*.jpg</code> sibling files together. Beans,
-				roasters, and espresso shots come through (Crema is
-				espresso-only, so V60 / AeroPress brews are skipped + counted).
+				A Crema <code>.jsonl</code> round-trips losslessly. A
+				Beanconqueror <code>.zip</code> imports the high-value
+				subset; drop the photo files alongside for the
+				"with photos" variant. Crema is espresso-only — BC
+				V60 / AeroPress brews are skipped + counted.
 			</div>
 			<label class="bd-pickbtn">
 				<input
 					type="file"
-					accept=".zip,application/zip,image/*"
+					accept=".zip,.jsonl,application/zip,application/jsonl,image/*"
 					multiple
 					onchange={onFileChosen}
 				/>

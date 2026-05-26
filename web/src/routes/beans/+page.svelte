@@ -36,11 +36,23 @@
 	import BeanQuickAdd from '$lib/components/beans/BeanQuickAdd.svelte';
 	import BeanImportDialog from '$lib/components/beans/BeanImportDialog.svelte';
 	import RoasterDeleteDialog from '$lib/components/beans/RoasterDeleteDialog.svelte';
+	import { exportCrema, exportBeanconqueror } from '$lib/bean/export';
+	import { getHistoryStore } from '$lib/history';
 	import BeansEmptyState from '$lib/components/beans/BeansEmptyState.svelte';
 	import SortPill from '$lib/components/shared/SortPill.svelte';
 	import FilterPills from '$lib/components/shared/FilterPills.svelte';
 
 	const library = getBeanStore();
+	const history = getHistoryStore();
+
+	function doExportCrema(): void {
+		exportMenuOpen = false;
+		exportCrema(library.beans, library.roasters, history.rawAll, '0.0.1');
+	}
+	function doExportBeanconqueror(): void {
+		exportMenuOpen = false;
+		void exportBeanconqueror(library.beans, library.roasters, history.rawAll);
+	}
 
 	// ── UI state ───────────────────────────────────────────────────────
 	type Tab = 'bags' | 'roasters';
@@ -83,6 +95,7 @@
 	let drawerBeanId = $state<string | null>(null);
 	let quickAddOpen = $state(false);
 	let importOpen = $state(false);
+	let exportMenuOpen = $state(false);
 
 	// ── Derived ────────────────────────────────────────────────────────
 	const allBeans = $derived(library.beans);
@@ -610,6 +623,7 @@
 	// outside-click dismissal — no shared state needed.
 	function closeMenusOnDocClick(): void {
 		addMenuOpen = false;
+		exportMenuOpen = false;
 	}
 </script>
 
@@ -644,10 +658,70 @@
 			<button
 				class="bn-btn bn-btn-ghost"
 				onclick={() => (importOpen = true)}
-				title="Import from a Beanconqueror .zip export"
+				title="Import a Crema .jsonl or Beanconqueror .zip"
 			>
 				<i class="ph ph-upload-simple"></i> Import
 			</button>
+
+			<!-- Export split-button — primary fires the Crema .jsonl
+			     export immediately (the round-trip-lossless default);
+			     the caret menu surfaces the Beanconqueror variant. -->
+			<!-- svelte-ignore a11y_click_events_have_key_events -->
+			<!-- svelte-ignore a11y_no_static_element_interactions -->
+			<div class="bn-split" onclick={(e) => e.stopPropagation()}>
+				<button
+					class="bn-btn bn-btn-ghost bn-split-main"
+					onclick={doExportCrema}
+					title="Download a Crema .jsonl backup"
+				>
+					<i class="ph ph-download-simple"></i> Export
+				</button>
+				<button
+					class="bn-btn bn-btn-ghost bn-split-caret-btn"
+					onclick={(e) => {
+						e.stopPropagation();
+						exportMenuOpen = !exportMenuOpen;
+					}}
+					aria-haspopup="menu"
+					aria-expanded={exportMenuOpen}
+					aria-label="Choose export format"
+				>
+					<i class="ph ph-caret-down bn-split-caret"></i>
+				</button>
+				{#if exportMenuOpen}
+					<div class="bn-split-menu" role="menu">
+						<div class="bn-split-menu-head">Export as</div>
+						<button
+							class="bn-split-menu-item"
+							role="menuitem"
+							onclick={doExportCrema}
+						>
+							<i class="ph-duotone ph-file-text" aria-hidden="true"></i>
+							<div class="bn-split-menu-text">
+								<div class="bn-split-menu-title">Crema .jsonl</div>
+								<div class="bn-split-menu-sub">
+									Lossless round-trip. Beans, roasters, shots. Photos
+									stay device-local.
+								</div>
+							</div>
+						</button>
+						<button
+							class="bn-split-menu-item"
+							role="menuitem"
+							onclick={doExportBeanconqueror}
+						>
+							<i class="ph-duotone ph-file-zip" aria-hidden="true"></i>
+							<div class="bn-split-menu-text">
+								<div class="bn-split-menu-title">Beanconqueror .zip</div>
+								<div class="bn-split-menu-sub">
+									For sharing with BC users. Photos bundled in the
+									zip; Crema-only fields like tags don't survive.
+								</div>
+							</div>
+						</button>
+					</div>
+				{/if}
+			</div>
 
 			<!-- "+ Add" menu — primary button opens a dropdown rather than
 			     firing a default action because the four entries (bean
@@ -1192,6 +1266,12 @@
 	}
 	.bn-split-main.bn-split-solo {
 		border-radius: var(--radius-pill);
+	}
+	.bn-split-caret-btn {
+		border-radius: 0 var(--radius-pill) var(--radius-pill) 0;
+		padding-left: 8px;
+		padding-right: 10px;
+		margin-left: -1px;
 	}
 	.bn-split-caret {
 		margin-left: 4px;
