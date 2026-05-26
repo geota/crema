@@ -33,9 +33,24 @@
 	const ctx = getCremaAppContext();
 	const profiles = getProfileStore();
 	const settings = getSettingsStore();
+	/** The reactive preference bundle — `prefs.weightUnit` drives the LCD-unit row. */
+	const prefs = $derived(settings.current);
 
 	/** The shared orchestrator, or `null` while the wasm core loads. */
 	const app = $derived(ctx().app);
+
+	/**
+	 * Toggle the Decent Scale LCD unit. Bound to the global
+	 * `Settings.weightUnit`, so toggling here mirrors the Display
+	 * section. The push to the core + immediate LCD re-emit handle
+	 * the visible-on-scale behaviour.
+	 */
+	async function setLcdUnit(unit: 'g' | 'oz'): Promise<void> {
+		settings.set('weightUnit', unit);
+		if (!app) return;
+		await app.applyWeightUnitPref(unit);
+		await app.refreshDecentScaleLcd();
+	}
 	/** The reactive UI snapshot — the screen renders off this. */
 	const snap = $derived(app?.state.current ?? null);
 
@@ -561,6 +576,33 @@
 								onclick={() => setMode(m.id)}>{m.name}</button
 							>
 						{/each}
+					</div>
+				</div>
+			{/if}
+
+			<!-- Decent Scale LCD unit — the on-scale LCD displays the user's
+			     preferred weight unit. Bound to the global `Settings.weightUnit`
+			     so toggling here mirrors the Display section (and vice versa).
+			     Capability-gated to scales that have a software-controlled
+			     LCD (Decent today). -->
+			{#if scaleName === 'Decent Scale'}
+				<div class="sc-set-row">
+					<div>
+						<div class="sc-set-title">LCD unit</div>
+						<div class="sc-set-sub">
+							What the on-scale display reads in. Mirrors the global Display
+							setting.
+						</div>
+					</div>
+					<div class="st-segment">
+						<button
+							class:is-active={prefs.weightUnit === 'g'}
+							onclick={() => setLcdUnit('g')}>g</button
+						>
+						<button
+							class:is-active={prefs.weightUnit === 'oz'}
+							onclick={() => setLcdUnit('oz')}>oz</button
+						>
 					</div>
 				</div>
 			{/if}
