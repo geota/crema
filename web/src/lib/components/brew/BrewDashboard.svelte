@@ -1397,6 +1397,10 @@
 			{yieldTargetOn}
 			{onToggleYieldTarget}
 			onSavePreset={activeProfile ? savePreset : undefined}
+			onToggleSteamEco={(v) => {
+				settings.set('steamEcoMode', v);
+				void app?.applySteamEcoMode(v);
+			}}
 		/>
 	</div>
 </div>
