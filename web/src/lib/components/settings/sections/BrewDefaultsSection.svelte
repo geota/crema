@@ -9,6 +9,7 @@
 	 * `lib/settings`. They are app-side defaults the Brew screen can read later;
 	 * persisting them now is the whole job. None of them is written to the DE1.
 	 */
+	import { getCremaAppContext } from '$lib/shell/app-context';
 	import { getSettingsStore } from '$lib/settings';
 	import StSectionHead from '../StSectionHead.svelte';
 	import StGroup from '../StGroup.svelte';
@@ -17,7 +18,30 @@
 	import StStepper from '../StStepper.svelte';
 
 	const settings = getSettingsStore();
+	const appCtx = getCremaAppContext();
 	const prefs = $derived(settings.current);
+
+	/** The CremaApp accessor — `null` until the orchestrator boots. */
+	const app = $derived(appCtx().app);
+
+	/**
+	 * Set + push to core. The setting is the single source of truth; the
+	 * core call is the imperative side-effect at the action site (no
+	 * `$effect` indirection — the value is pushed at the exact moment
+	 * the user toggles).
+	 */
+	function setAutoTare(on: boolean): void {
+		settings.set('autoTareOnShotStart', on);
+		void app?.applyAutoTare(on);
+	}
+	function setStopOnWeight(on: boolean): void {
+		settings.set('stopOnWeight', on);
+		void app?.applyStopOnWeight(on);
+	}
+	function setMaxShotDuration(s: number): void {
+		settings.set('maxShotDurationS', s);
+		void app?.applyMaxShotDuration(s);
+	}
 </script>
 
 <StSectionHead
@@ -78,13 +102,46 @@
 	</StRow>
 </StGroup>
 
-<!--
-	Shot behaviour: "Stop on weight" and "Auto-tare on start" were removed
-	2026-05-22 — both are profile-level fields (`CremaProfile.stopOnWeight`
-	/ `.autoTare`) and live on the brew Quick Sheet for per-shot override.
-	The Settings copies were dead weight that the audit caught.
--->
 <StGroup title="Shot behaviour">
+	<StRow
+		title="Auto-tare on shot start"
+		sub="Zero the connected scale when an espresso shot starts. Fires on shots started from Crema and from the DE1's group-head touch."
+	>
+		{#snippet control()}
+			<StToggle
+				on={prefs.autoTareOnShotStart}
+				onChange={setAutoTare}
+				label="Auto-tare on shot start"
+			/>
+		{/snippet}
+	</StRow>
+	<StRow
+		title="Stop on weight"
+		sub="End the shot when the cup reaches the active profile's target yield (or the Quick Controls override). Requires a connected scale and a yield > 0."
+	>
+		{#snippet control()}
+			<StToggle
+				on={prefs.stopOnWeight}
+				onChange={setStopOnWeight}
+				label="Stop on weight"
+			/>
+		{/snippet}
+	</StRow>
+	<StRow
+		title="Max shot duration"
+		sub="Safety guardrail — abort the shot if it runs longer than this. Set to 0 to disable."
+	>
+		{#snippet control()}
+			<StStepper
+				value={prefs.maxShotDurationS}
+				unit="s"
+				step={5}
+				min={0}
+				max={300}
+				onCommit={setMaxShotDuration}
+			/>
+		{/snippet}
+	</StRow>
 	<StRow
 		title="Auto-purge after steam"
 		sub="Run a 3s flush after steaming to clear the boiler."

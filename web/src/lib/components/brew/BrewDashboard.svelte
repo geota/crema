@@ -360,9 +360,16 @@
 		(key, value) => {
 			// Route Flush-bucket `flushTemp` stepper edits through to the
 			// MMR `FlushTemp` setter so the user's QC value reaches the
-			// machine immediately. Other keys remain local-only UI.
+			// machine immediately.
 			if (key === 'flushTemp' && typeof value === 'number') {
 				void app?.setFlushTemp(value);
+			}
+			// Route Yield stepper edits to the core's per-shot dial
+			// override. The core composes (dial > profile-recipe) at
+			// shot-start, so a QC bump on top of an active profile takes
+			// effect on the very next shot — GHC-initiated shots included.
+			if (key === 'yield' && typeof value === 'number') {
+				void app?.applyShotTargetWeight(value);
 			}
 		}
 	);
@@ -1241,6 +1248,14 @@
 			onSelectFavorite={selectFavorite}
 			onSelectBean={selectBean}
 			onClose={() => (quickSheetOpen = false)}
+			onToggleAutoTare={(v) => {
+				settings.set('autoTareOnShotStart', v);
+				void app?.applyAutoTare(v);
+			}}
+			onToggleStopOnWeight={(v) => {
+				settings.set('stopOnWeight', v);
+				void app?.applyStopOnWeight(v);
+			}}
 		/>
 	</div>
 </div>

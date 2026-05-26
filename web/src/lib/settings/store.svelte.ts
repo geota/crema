@@ -73,6 +73,28 @@ export interface Settings {
 	autoPurgeAfterSteam: boolean;
 	/** Flush the group before each shot. */
 	groupFlushBeforeShot: boolean;
+	/**
+	 * Auto-tare the connected scale on shot start. Mirrors the legacy
+	 * de1app's always-on tare behaviour (and reaprime's), exposed here
+	 * as a user preference so dose-cup-mass pre-tare workflows can opt
+	 * out. Pushed to the core via `setAutoTare`; consulted on
+	 * `ShotEvent::Started` regardless of who initiated the shot.
+	 */
+	autoTareOnShotStart: boolean;
+	/**
+	 * Enable stop-at-weight. When off, SAW never arms even if a target
+	 * weight is configured (on the active profile or the QC dial).
+	 * Pushed to the core via `setStopOnWeight`.
+	 */
+	stopOnWeight: boolean;
+	/**
+	 * Global maximum shot duration, seconds — a safety guardrail when
+	 * neither SAW nor SAV is configured. `0` means "no max." Default
+	 * 60 s (legacy `espresso_max_time` default). Pushed to the core via
+	 * `setMaxShotDuration`. Settings-only because neither de1app nor
+	 * reaprime carry this per-profile.
+	 */
+	maxShotDurationS: number;
 
 	// ── Machine ──────────────────────────────────────────────────────────
 	/** Chart telemetry sample rate, Hz. App preference (display only). */
@@ -211,6 +233,9 @@ export const DEFAULT_SETTINGS: Settings = {
 	defaultPreinfusionS: 8,
 	autoPurgeAfterSteam: true,
 	groupFlushBeforeShot: false,
+	autoTareOnShotStart: true,
+	stopOnWeight: true,
+	maxShotDurationS: 60,
 
 	telemetryRateHz: 50,
 	lineFrequencyHz: 0,

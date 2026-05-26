@@ -81,7 +81,9 @@
 		open,
 		onSelectFavorite,
 		onSelectBean,
-		onClose
+		onClose,
+		onToggleAutoTare,
+		onToggleStopOnWeight
 	}: {
 		/** The shared Quick Sheet parameter store. */
 		params: BrewParamState;
@@ -103,6 +105,16 @@
 		onSelectBean: (bean: Bean) => void;
 		/** Called to dismiss the sheet (Close button or scrim tap). */
 		onClose: () => void;
+		/**
+		 * Toggle the global "auto-tare on shot start" preference. The
+		 * parent owns the `settings.set(...)` + `app.applyAutoTare(...)`
+		 * pair so the side-effect at the action site is one call from
+		 * the parent's POV. The QC pill is purely a view onto
+		 * `Settings.autoTareOnShotStart`.
+		 */
+		onToggleAutoTare: (enabled: boolean) => void;
+		/** Toggle the global "stop on weight" preference. Same pattern. */
+		onToggleStopOnWeight: (enabled: boolean) => void;
 	} = $props();
 
 	const p = $derived(params.current);
@@ -203,23 +215,24 @@
 
 		<div class="qsheet-toggles">
 			<label class="qsheet-tog">
-				<!-- TODO: wire to DE1 control — stop-on-weight is local UI state today. -->
+				<!-- Bound to the global `Settings.stopOnWeight` (single source
+				     of truth); toggling here mirrors the Brew defaults row. -->
 				<button
 					class="qmini-tog"
-					class:on={p.stopOnWeight}
-					onclick={() => params.set('stopOnWeight', !p.stopOnWeight)}
-					aria-pressed={p.stopOnWeight}
+					class:on={prefs.stopOnWeight}
+					onclick={() => onToggleStopOnWeight(!prefs.stopOnWeight)}
+					aria-pressed={prefs.stopOnWeight}
 					aria-label="Stop on weight"
 				></button>
 				<span>Stop on weight</span>
 			</label>
 			<label class="qsheet-tog">
-				<!-- TODO: wire to DE1 control — auto-tare is local UI state today. -->
+				<!-- Bound to the global `Settings.autoTareOnShotStart`. -->
 				<button
 					class="qmini-tog"
-					class:on={p.autoTare}
-					onclick={() => params.set('autoTare', !p.autoTare)}
-					aria-pressed={p.autoTare}
+					class:on={prefs.autoTareOnShotStart}
+					onclick={() => onToggleAutoTare(!prefs.autoTareOnShotStart)}
+					aria-pressed={prefs.autoTareOnShotStart}
 					aria-label="Auto-tare"
 				></button>
 				<span>Auto-tare</span>

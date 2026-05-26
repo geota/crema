@@ -139,11 +139,10 @@
 	/** Whether auto-standby is "on" — i.e. a non-zero timeout. */
 	const autoSleepOn = $derived(standbyMinutes > 0);
 
-	// TODO: brew-behaviour toggles below have no scale-capability backing — the
-	// DE1 owns auto-tare-on-shot-start and stop-on-weight (they live on the
-	// profile model). They stay UI-only local state, clearly secondary.
-	let autoTareLocal = $state(true);
-	let stopOnWeightLocal = $state(true);
+	// Brew-behaviour toggles (auto-tare on shot start, stop on weight)
+	// moved to Settings → Brew defaults → Shot behaviour, mirrored on
+	// the Quick Controls. The Scale page surfaces only scale-capability
+	// state.
 
 	/** Toggle flow-smoothing on the scale (optimistic, then stream-confirmed). */
 	function toggleFlowSmoothing(): void {
@@ -565,35 +564,8 @@
 				</div>
 			{/if}
 
-			<!-- Brew-behaviour toggles — UI-only (no scale-capability backing) -->
-			<div class="sc-set-row">
-				<div>
-					<div class="sc-set-title">Auto-tare on shot start</div>
-					<div class="sc-set-sub">
-						Zero the scale when extraction begins. (App preference — not a scale setting.)
-					</div>
-				</div>
-				<button
-					class="qmini-tog"
-					class:on={autoTareLocal}
-					onclick={() => (autoTareLocal = !autoTareLocal)}
-					aria-label="Auto-tare on shot start"
-				></button>
-			</div>
-			<div class="sc-set-row">
-				<div>
-					<div class="sc-set-title">Stop-on-weight</div>
-					<div class="sc-set-sub">
-						End the shot at the profile's target yield. (App preference — not a scale setting.)
-					</div>
-				</div>
-				<button
-					class="qmini-tog"
-					class:on={stopOnWeightLocal}
-					onclick={() => (stopOnWeightLocal = !stopOnWeightLocal)}
-					aria-label="Stop-on-weight"
-				></button>
-			</div>
+			<!-- Auto-tare + stop-on-weight live in Settings → Brew defaults
+			     → Shot behaviour, mirrored on the Quick Controls. -->
 		</div>
 
 		<div class="sc-activity">

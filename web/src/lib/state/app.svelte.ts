@@ -1237,6 +1237,60 @@ export class CremaApp {
 	}
 
 	/**
+	 * Push the user's "auto-tare on shot start" preference into the core.
+	 * The core gates the start-of-shot tare on this latched flag, so
+	 * toggling it OFF takes effect on the very next shot — including
+	 * GHC-initiated shots that bypass {@link startShot}.
+	 */
+	async applyAutoTare(enabled: boolean): Promise<void> {
+		await this.core.setAutoTare(enabled);
+	}
+
+	/**
+	 * Push the user's "stop on weight" preference into the core. When
+	 * off, SAW never arms even if a target weight is configured.
+	 */
+	async applyStopOnWeight(enabled: boolean): Promise<void> {
+		await this.core.setStopOnWeight(enabled);
+	}
+
+	/**
+	 * Push the global max-shot-duration safety guardrail into the core,
+	 * in seconds. `0` (or any non-positive value) clears the limit.
+	 */
+	async applyMaxShotDuration(seconds: number): Promise<void> {
+		await this.core.setMaxShotDuration(seconds > 0 ? seconds : undefined);
+	}
+
+	/**
+	 * Push the active profile's recipe target weight (yield, grams) into
+	 * the core. Called whenever the active profile changes or its yield
+	 * value is edited. `0` clears the target (SAW becomes a no-op for the
+	 * profile recipe — the per-shot dial may still override).
+	 */
+	async applyProfileTargetWeight(grams: number): Promise<void> {
+		await this.core.setProfileTargetWeight(grams > 0 ? grams : undefined);
+	}
+
+	/**
+	 * Push the active profile's volume limit (SAV, millilitres) into the
+	 * core. Called whenever the active profile changes or its
+	 * `maxTotalVolumeMl` is edited. `0` clears the limit.
+	 */
+	async applyProfileVolumeLimit(milliliters: number): Promise<void> {
+		await this.core.setProfileVolumeLimit(milliliters > 0 ? milliliters : undefined);
+	}
+
+	/**
+	 * Push the per-shot dial-override target weight (grams) into the
+	 * core. Called by the QC yield stepper. `0` clears the override and
+	 * lets the profile recipe target take effect.
+	 */
+	async applyShotTargetWeight(grams: number): Promise<void> {
+		await this.core.setShotTargetWeight(grams > 0 ? grams : undefined);
+	}
+
+	/**
 	 * Re-emit per-scale unit / LCD packets in the *current* weight unit
 	 * for every scale that has a reactive surface tied to the user's
 	 * weight-unit pref. Use after {@link applyWeightUnitPref} when the
@@ -2214,6 +2268,19 @@ export async function createCremaApp(): Promise<CremaApp> {
 	// Subsequent changes flow via `app.applyWeightUnitPref(...)` invoked
 	// from the Settings page on every `weightUnit` change.
 	void core.setWeightUnitPref(getSettingsStore().current.weightUnit);
+	// Push the persisted shot-behaviour settings into the core so SAW +
+	// auto-tare fire correctly on the very first shot — including a shot
+	// initiated via the DE1's group-head touch (GHC), which bypasses
+	// `startShot()`. The core latches these and consults them on
+	// `ShotEvent::Started` / first flowing phase regardless of initiator.
+	// Subsequent changes flow via the matching `applyXxx(...)` methods
+	// on `CremaApp` whenever the Settings / Profile / QC surfaces mutate.
+	{
+		const s = getSettingsStore().current;
+		void core.setAutoTare(s.autoTareOnShotStart);
+		void core.setStopOnWeight(s.stopOnWeight);
+		void core.setMaxShotDuration(s.maxShotDurationS > 0 ? s.maxShotDurationS : undefined);
+	}
 	// Install the user-presence heartbeat — every user touch / keystroke
 	// (debounced to once per minute) writes `UserPresent = 1` to the DE1,
 	// resetting its "user has gone away" timer. The actual MMR write is

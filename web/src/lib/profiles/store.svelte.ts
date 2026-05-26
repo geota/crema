@@ -165,7 +165,35 @@ export class ProfileStore {
 			this.builtins = [];
 		} finally {
 			this.loaded = true;
+			// Now that the library is hydrated, push the persisted active
+			// profile's recipe targets into the core. The boot sequence in
+			// `createCremaApp` pushes app-level settings, but the active
+			// profile's `yieldOut` / `maxTotalVolumeMl` can only resolve
+			// once `builtins` and `custom` are both loaded.
+			void this.pushActiveProfileToCore();
 		}
+	}
+
+	/**
+	 * Push the currently active profile's recipe targets (yield + volume
+	 * limit) into the core via the wasm bridge, so SAW + SAV arming uses
+	 * the right values on the next shot. `undefined` for both when no
+	 * profile is active or its fields are at 0 (the disabled sentinel).
+	 * Fire-and-forget — the core consults its latched values lazily on
+	 * the next `ShotEvent::Started` / first flowing phase.
+	 */
+	private async pushActiveProfileToCore(): Promise<void> {
+		const core = await loadCore();
+		const id = this.activeId;
+		if (id == null) {
+			await core.setProfileTargetWeight(undefined);
+			await core.setProfileVolumeLimit(undefined);
+			return;
+		}
+		const p = this.get(id);
+		if (!p) return;
+		await core.setProfileTargetWeight(p.yieldOut > 0 ? p.yieldOut : undefined);
+		await core.setProfileVolumeLimit(p.maxTotalVolumeMl > 0 ? p.maxTotalVolumeMl : undefined);
 	}
 
 	/** Persist the custom-profile list to localStorage. */
@@ -195,6 +223,10 @@ export class ProfileStore {
 			this.custom = [...this.custom, profile];
 		}
 		this.persistCustom();
+		// If this save edited the active profile, propagate any changes to
+		// its recipe targets (yield / max volume) into the core right
+		// away — the next shot picks them up without needing a re-activate.
+		if (this.activeId === profile.id) void this.pushActiveProfileToCore();
 	}
 
 	/**
@@ -277,6 +309,11 @@ export class ProfileStore {
 	setActive(id: string | null): void {
 		this.activeId = id;
 		writeJson(ACTIVE_KEY, id);
+		// Push the new active profile's recipe targets to the core so SAW
+		// + SAV arming consult the right values on the next shot — works
+		// for Crema-tap and GHC-tap starts alike (the core latches the
+		// values and reads them on `ShotEvent::Started`).
+		void this.pushActiveProfileToCore();
 		if (id == null) return;
 		// Stamp the current instant as the last-used timestamp (ISO-8601).
 		const stamp = new Date().toISOString();
