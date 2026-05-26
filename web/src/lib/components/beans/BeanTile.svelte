@@ -22,8 +22,10 @@
 	 * per-tile contents of each slot (avatar mark, header text, stats /
 	 * burn-down, and the action-row buttons).
 	 */
+	import { untrack } from 'svelte';
 	import {
 		daysOffRoast,
+		getBeanImageStore,
 		roastBand,
 		roastBand5,
 		roastFreshness,
@@ -56,6 +58,39 @@
 	} = $props();
 
 	const mt = $derived(roasterMarkTone(roaster));
+
+	/**
+	 * Object-URL for the bag photo when one is stored in IndexedDB
+	 * (imported from a Beanconqueror export). Loaded asynchronously
+	 * via the bean image store; revoked on unmount or when the bean
+	 * changes to a different `imageRef`. `null` when no photo.
+	 */
+	let imageUrl = $state<string | null>(null);
+	$effect(() => {
+		const ref = bean.imageRef;
+		if (!ref) {
+			imageUrl = null;
+			return;
+		}
+		let cancelled = false;
+		let createdUrl: string | null = null;
+		void (async () => {
+			const blob = await getBeanImageStore().get(ref);
+			if (cancelled) return;
+			if (blob) {
+				createdUrl = URL.createObjectURL(blob);
+				imageUrl = createdUrl;
+			} else {
+				imageUrl = null;
+			}
+		})();
+		return () => {
+			cancelled = true;
+			untrack(() => {
+				if (createdUrl) URL.revokeObjectURL(createdUrl);
+			});
+		};
+	});
 
 	const days = $derived(daysOffRoast(bean.roastedOn));
 	const band = $derived(roastBand(bean.roastLevel));
@@ -127,7 +162,11 @@
 >
 	{#snippet avatar()}
 		<div class="bn-tile-avatar" style="--tone: {mt.tone}">
-			<div class="bn-tile-mono">{mt.mark}</div>
+			{#if imageUrl}
+				<img class="bn-tile-photo" src={imageUrl} alt="" />
+			{:else}
+				<div class="bn-tile-mono">{mt.mark}</div>
+			{/if}
 			{#if isActive}
 				<div class="bn-tile-active-dot" title="Active on Brew"></div>
 			{/if}
@@ -289,7 +328,14 @@
 		align-items: center;
 		justify-content: center;
 		flex-shrink: 0;
+		overflow: hidden;
 		box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
+	}
+	.bn-tile-photo {
+		width: 100%;
+		height: 100%;
+		object-fit: cover;
+		display: block;
 	}
 	.bn-tile-mono {
 		font-family: var(--font-serif);
