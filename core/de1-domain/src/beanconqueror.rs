@@ -635,7 +635,14 @@ where
         }
         if bc_bean.weight > 0.0 {
             bean.bag_size = bc_bean.weight;
-            bean.remaining = bc_bean.weight;
+            // A `finished` bag has been consumed, so remaining = 0;
+            // otherwise assume the bag is full (Crema's only signal
+            // for "remaining" is auto-debit per shot).
+            bean.remaining = if bc_bean.finished {
+                0.0
+            } else {
+                bc_bean.weight
+            };
         }
         if bc_bean.finished {
             bean.archived_at = Some(now_unix_ms);
@@ -1055,6 +1062,29 @@ mod tests {
         assert_eq!(bean.rating, 4);
         assert_eq!(bean.cost, Some(22.5));
         assert_eq!(bean.beanconqueror_id.as_deref(), Some("u1"));
+    }
+
+    #[test]
+    fn finished_bag_sets_remaining_to_zero() {
+        // BC's `finished` flag means the bag has been consumed. The bag
+        // size stays as a record of how much it held, but `remaining`
+        // drops to 0 — Crema's auto-debit signal can't infer this
+        // from telemetry, so the import is the only place to land it.
+        let json = r#"{
+            "BEANS": [
+                {"config":{"uuid":"u1","unix_timestamp":0},"name":"a","roaster":"r",
+                 "weight": 250.0, "finished": false},
+                {"config":{"uuid":"u2","unix_timestamp":0},"name":"b","roaster":"r",
+                 "weight": 250.0, "finished": true}
+            ]
+        }"#;
+        let plan = bc_to_crema(&parse_export(json).unwrap(), 1_700_000_000_000, seq_id());
+        assert_eq!(plan.beans[0].bag_size, 250.0);
+        assert_eq!(plan.beans[0].remaining, 250.0);
+        assert_eq!(plan.beans[0].archived_at, None);
+        assert_eq!(plan.beans[1].bag_size, 250.0);
+        assert_eq!(plan.beans[1].remaining, 0.0);
+        assert_eq!(plan.beans[1].archived_at, Some(1_700_000_000_000));
     }
 
     #[test]
