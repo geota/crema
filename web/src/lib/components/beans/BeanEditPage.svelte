@@ -35,6 +35,7 @@
 		type Bean,
 		type Roaster
 	} from '$lib/bean';
+	import BeanImage from './BeanImage.svelte';
 	import QuickStepper from '$lib/components/brew/QuickStepper.svelte';
 	import StToggle from '$lib/components/settings/StToggle.svelte';
 	import RoasterAutocomplete from './RoasterAutocomplete.svelte';
@@ -87,35 +88,14 @@
 	const mt = $derived(roasterMarkTone(resolvedRoaster));
 
 	// ── Bag photo (IndexedDB blob via `Bean.imageRef`) ─────────────────
+	// Display is handled by <BeanImage>; this component owns the
+	// upload + remove side. `hasPhoto` mirrors `current.imageRef` so
+	// template copy and the Remove button gate on it without
+	// duplicating the optional-chain.
 	const imageStore = getBeanImageStore();
-	let imageUrl = $state<string | null>(null);
+	const hasPhoto = $derived(current.imageRef != null);
 	let photoUploading = $state(false);
 	let photoError = $state<string | null>(null);
-	$effect(() => {
-		const ref = current.imageRef;
-		if (!ref) {
-			imageUrl = null;
-			return;
-		}
-		let cancelled = false;
-		let createdUrl: string | null = null;
-		void (async () => {
-			const blob = await imageStore.get(ref);
-			if (cancelled) return;
-			if (blob) {
-				createdUrl = URL.createObjectURL(blob);
-				imageUrl = createdUrl;
-			} else {
-				imageUrl = null;
-			}
-		})();
-		return () => {
-			cancelled = true;
-			untrack(() => {
-				if (createdUrl) URL.revokeObjectURL(createdUrl);
-			});
-		};
-	});
 
 	async function onPhotoPicked(event: Event): Promise<void> {
 		const input = event.currentTarget as HTMLInputElement;
@@ -378,29 +358,29 @@
 		<aside class="be-rail">
 			<div class="be-photo">
 				<label class="be-photo-drop" style="--tone: {mt.tone}">
-					{#if imageUrl}
-						<img class="be-photo-img" src={imageUrl} alt="" />
-					{:else}
-						<div class="be-photo-mark">{mt.mark}</div>
-					{/if}
+					<BeanImage ref={current.imageRef} className="be-photo-img">
+						{#snippet fallback()}
+							<div class="be-photo-mark">{mt.mark}</div>
+						{/snippet}
+					</BeanImage>
 					<input
 						type="file"
 						accept="image/*"
 						class="be-photo-input"
 						onchange={onPhotoPicked}
 						disabled={photoUploading}
-						aria-label={imageUrl ? 'Replace bag photo' : 'Add bag photo'}
+						aria-label={hasPhoto ? 'Replace bag photo' : 'Add bag photo'}
 					/>
 					<span class="be-photo-overlay">
 						<i
-							class="ph {imageUrl ? 'ph-pencil-simple' : 'ph-camera-plus'}"
+							class="ph {hasPhoto ? 'ph-pencil-simple' : 'ph-camera-plus'}"
 							aria-hidden="true"
 						></i>
 					</span>
 				</label>
 				<div class="be-photo-cap">{resolvedRoaster?.name ?? 'No roaster'}</div>
 				<div class="be-photo-actions">
-					{#if imageUrl}
+					{#if hasPhoto}
 						<button class="be-photo-link" type="button" onclick={removePhoto}>
 							Remove photo
 						</button>
@@ -410,7 +390,7 @@
 					<div class="be-photo-error">{photoError}</div>
 				{:else}
 					<div class="be-photo-sub">
-						{#if imageUrl}
+						{#if hasPhoto}
 							Click the photo to replace it.
 						{:else}
 							Add a JPG/PNG of the bag (any photo from your phone or
@@ -1305,7 +1285,7 @@
 	.be-photo-drop:hover {
 		filter: brightness(0.92);
 	}
-	.be-photo-img {
+	:global(.be-photo-img) {
 		position: absolute;
 		inset: 0;
 		width: 100%;

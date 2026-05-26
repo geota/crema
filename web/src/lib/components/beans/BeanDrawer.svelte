@@ -10,10 +10,8 @@
 	 * an input surface. Clicking the Edit footer button fires `onEdit(id)`
 	 * which the parent uses to navigate to the full editor route.
 	 */
-	import { untrack } from 'svelte';
 	import {
 		daysOffRoast,
-		getBeanImageStore,
 		roastBand,
 		roastBand5,
 		roastFreshness,
@@ -22,6 +20,7 @@
 		type Roaster
 	} from '$lib/bean';
 	import { getHistoryStore } from '$lib/history';
+	import BeanImage from './BeanImage.svelte';
 	import RoastSlider from './RoastSlider.svelte';
 
 	let {
@@ -49,37 +48,6 @@
 	const history = getHistoryStore();
 
 	const mt = $derived(roasterMarkTone(roaster));
-
-	/**
-	 * Object-URL for the bag photo when one is stored in IndexedDB.
-	 * Same async-load + revoke pattern as {@link BeanTile}.
-	 */
-	let imageUrl = $state<string | null>(null);
-	$effect(() => {
-		const ref = bean.imageRef;
-		if (!ref) {
-			imageUrl = null;
-			return;
-		}
-		let cancelled = false;
-		let createdUrl: string | null = null;
-		void (async () => {
-			const blob = await getBeanImageStore().get(ref);
-			if (cancelled) return;
-			if (blob) {
-				createdUrl = URL.createObjectURL(blob);
-				imageUrl = createdUrl;
-			} else {
-				imageUrl = null;
-			}
-		})();
-		return () => {
-			cancelled = true;
-			untrack(() => {
-				if (createdUrl) URL.revokeObjectURL(createdUrl);
-			});
-		};
-	});
 	const days = $derived(daysOffRoast(bean.roastedOn));
 	const band = $derived(roastBand(bean.roastLevel));
 	const freshness = $derived(roastFreshness(band, days));
@@ -210,11 +178,11 @@
 		<!-- Hero -->
 		<div class="bn-drawer-hero">
 			<div class="bn-drawer-photo" style="--tone: {mt.tone}">
-				{#if imageUrl}
-					<img class="bn-drawer-photo-img" src={imageUrl} alt="" />
-				{:else}
-					<div class="bn-drawer-photo-mark">{mt.mark}</div>
-				{/if}
+				<BeanImage ref={bean.imageRef} className="bn-drawer-photo-img">
+					{#snippet fallback()}
+						<div class="bn-drawer-photo-mark">{mt.mark}</div>
+					{/snippet}
+				</BeanImage>
 				{#if isFrozen}
 					<div class="bn-drawer-photo-frozen" title="Frozen storage">
 						<i class="ph-fill ph-snowflake"></i>
@@ -663,7 +631,7 @@
 		overflow: hidden;
 		box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
 	}
-	.bn-drawer-photo-img {
+	:global(.bn-drawer-photo-img) {
 		width: 100%;
 		height: 100%;
 		object-fit: cover;
