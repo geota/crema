@@ -85,7 +85,8 @@
 		onToggleAutoTare,
 		onToggleStopOnWeight,
 		yieldTargetOn,
-		onToggleYieldTarget
+		onToggleYieldTarget,
+		onSavePreset
 	}: {
 		/** The shared Quick Sheet parameter store. */
 		params: BrewParamState;
@@ -126,6 +127,13 @@
 		yieldTargetOn: boolean;
 		/** Toggle the per-shot weight target on/off (yield card dot). */
 		onToggleYieldTarget: () => void;
+		/**
+		 * Save the current QC dial values + active profile as a new
+		 * custom profile. The parent prompts for a name and clones via
+		 * the ProfileStore. `undefined` when no active profile (the
+		 * button is hidden in that case).
+		 */
+		onSavePreset?: () => void;
 	} = $props();
 
 	const p = $derived(params.current);
@@ -147,10 +155,11 @@
 			<div class="qsheet-v2-title">Quick Controls</div>
 		</div>
 		<div class="qsheet-v2-actions">
-			<!-- TODO: wire to DE1 control — saving a preset needs the profile model. -->
-			<button class="qsheet-cta">
-				<i class="ph ph-bookmark-simple" aria-hidden="true"></i> Save preset
-			</button>
+			{#if onSavePreset}
+				<button class="qsheet-cta" onclick={onSavePreset}>
+					<i class="ph ph-bookmark-simple" aria-hidden="true"></i> Save preset
+				</button>
+			{/if}
 			<button class="qsheet-cta" onclick={() => params.reset()}>
 				<i class="ph ph-arrow-counter-clockwise" aria-hidden="true"></i> Reset
 			</button>
