@@ -1073,6 +1073,29 @@
 						</div>
 						<div class="be-frow be-frow-stack">
 							<div class="be-frow-l">
+								<div class="be-frow-label">Cost</div>
+							</div>
+							<div class="be-frow-r">
+								<input
+									class="be-input"
+									type="number"
+									inputmode="decimal"
+									min="0"
+									step="0.01"
+									value={current.cost ?? ''}
+									placeholder="What you paid"
+									oninput={(e) => {
+										const raw = (e.currentTarget as HTMLInputElement).value;
+										const n = raw === '' ? null : Number(raw);
+										patch({
+											cost: n != null && Number.isFinite(n) && n >= 0 ? n : null
+										});
+									}}
+								/>
+							</div>
+						</div>
+						<div class="be-frow be-frow-stack">
+							<div class="be-frow-l">
 								<div class="be-frow-label">URL</div>
 							</div>
 							<div class="be-frow-r">

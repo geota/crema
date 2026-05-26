@@ -110,6 +110,12 @@ export interface Bean {
 	beanconquerorId: string | null;
 	imageRef: string | null;
 	/**
+	 * What the user paid for the bag — currency-less (Crema doesn't track
+	 * currency yet). Surfaced in the editor's "Buy again" section.
+	 * Imported from Beanconqueror's `cost` field. `null` = unrecorded.
+	 */
+	cost: number | null;
+	/**
 	 * Open JSON for fields Crema/Visualizer don't model first-class. Use
 	 * sparingly — the type-safe fields above are preferred.
 	 */
@@ -150,6 +156,7 @@ export function blankBean(id?: string): Bean {
 		visualizerId: null,
 		beanconquerorId: null,
 		imageRef: null,
+		cost: null,
 		metadata: {},
 		createdAt: now,
 		updatedAt: now
@@ -473,6 +480,9 @@ export function coerceBean(raw: unknown): Bean | null {
 	if (typeof obj.visualizerId === 'string') base.visualizerId = obj.visualizerId;
 	if (typeof obj.beanconquerorId === 'string') base.beanconquerorId = obj.beanconquerorId;
 	if (typeof obj.imageRef === 'string') base.imageRef = obj.imageRef;
+	if (typeof obj.cost === 'number' && Number.isFinite(obj.cost) && obj.cost >= 0) {
+		base.cost = obj.cost;
+	}
 	if (typeof obj.metadata === 'object' && obj.metadata !== null) {
 		base.metadata = obj.metadata as Record<string, unknown>;
 	}

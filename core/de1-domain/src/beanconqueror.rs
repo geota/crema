@@ -96,6 +96,17 @@ pub struct BcBean {
     pub roast_range: i32,
     #[serde(default)]
     pub note: String,
+    /// BC's free-text flavour-descriptor field ("Aromatics / Flavour").
+    /// Distinct from `note` — BC presents this as a separate input on
+    /// the bean editor. Crema folds both into `tasting_notes` on import.
+    #[serde(default)]
+    pub aromatics: String,
+    /// What the user paid for the bag. Currency-less; BC's currency
+    /// lives in app-level settings (we drop those, so the bare number
+    /// rides through). `0.0` (BC's "unset" sentinel) maps to `None` on
+    /// the Crema side via the `cost > 0.0` guard in the mapper.
+    #[serde(default)]
+    pub cost: f32,
     #[serde(default, rename = "beanMix")]
     pub bean_mix: BcBeanMix,
     /// Roasted-for category. Wire form may be any of the legacy TS
@@ -599,7 +610,24 @@ where
         bean.roast_type = bc_bean.bean_roasting_type.to_crema();
         bean.decaf = bc_bean.decaffeinated;
         bean.favourite = bc_bean.favourite;
-        bean.notes = bc_bean.note.clone();
+        // Crema has two free-text fields on Bean: `notes` (general
+        // free-form notes) and `tasting_notes` (the tasting-focused
+        // box the editor surfaces under "Tasting"). BC's `note` and
+        // `aromatics` map to the latter — both describe how the bag
+        // tastes — joined with a blank line so they round-trip
+        // readable. `notes` stays empty on import; the user can split
+        // material out manually if they want to.
+        let tn_parts: Vec<&str> = [
+            bc_bean.note.trim(),
+            bc_bean.aromatics.trim(),
+        ]
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .collect();
+        bean.tasting_notes = tn_parts.join("\n\n");
+        if bc_bean.cost > 0.0 && bc_bean.cost.is_finite() {
+            bean.cost = Some(bc_bean.cost);
+        }
         if bc_bean.rating >= 0.0 && bc_bean.rating <= 5.0 {
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let r = bc_bean.rating.round() as u8;
@@ -1011,7 +1039,8 @@ mod tests {
                 "decaffeinated": true,
                 "favourite": true,
                 "weight": 250.0,
-                "rating": 4.2
+                "rating": 4.2,
+                "cost": 22.5
             }]
         }"#;
         let export = parse_export(json).unwrap();
@@ -1024,7 +1053,34 @@ mod tests {
         assert_eq!(bean.bag_size_g, 250.0);
         assert_eq!(bean.remaining_g, 250.0);
         assert_eq!(bean.rating, 4);
+        assert_eq!(bean.cost, Some(22.5));
         assert_eq!(bean.beanconqueror_id.as_deref(), Some("u1"));
+    }
+
+    #[test]
+    fn beans_merge_note_and_aromatics_into_tasting_notes() {
+        // BC has two free-text fields the user fills in for tasting:
+        // `note` (general) and `aromatics` (flavour descriptors).
+        // Crema folds both into `tasting_notes` joined by a blank line.
+        let json = r#"{
+            "BEANS": [
+                {"config":{"uuid":"u1","unix_timestamp":0},"name":"a","roaster":"r",
+                 "note":"Amazing bean","aromatics":"Sweet, tangy"},
+                {"config":{"uuid":"u2","unix_timestamp":0},"name":"b","roaster":"r",
+                 "note":"","aromatics":"Yum"},
+                {"config":{"uuid":"u3","unix_timestamp":0},"name":"c","roaster":"r",
+                 "note":"Only a note","aromatics":""},
+                {"config":{"uuid":"u4","unix_timestamp":0},"name":"d","roaster":"r"}
+            ]
+        }"#;
+        let plan = bc_to_crema(&parse_export(json).unwrap(), 1, seq_id());
+        assert_eq!(plan.beans[0].tasting_notes, "Amazing bean\n\nSweet, tangy");
+        assert_eq!(plan.beans[1].tasting_notes, "Yum");
+        assert_eq!(plan.beans[2].tasting_notes, "Only a note");
+        assert_eq!(plan.beans[3].tasting_notes, "");
+        // `notes` (free-form) stays empty — both BC fields are
+        // tasting-focused, neither belongs there.
+        assert_eq!(plan.beans[0].notes, "");
     }
 
     #[test]
