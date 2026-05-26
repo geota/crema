@@ -164,11 +164,11 @@
 				case 'rating':
 					return a.rating - b.rating;
 				case 'remaining':
-					return a.remainingG - b.remainingG;
+					return a.remaining - b.remaining;
 				case 'burn': {
 					// Ascending = least-consumed first.
 					const consumed = (x: Bean) =>
-						x.bagSizeG > 0 ? 1 - x.remainingG / x.bagSizeG : -1;
+						x.bagSize > 0 ? 1 - x.remaining / x.bagSize : -1;
 					return consumed(a) - consumed(b);
 				}
 				default:

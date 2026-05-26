@@ -82,8 +82,8 @@
 	);
 
 	const burnPct = $derived.by<number | null>(() => {
-		if (bean.bagSizeG <= 0) return null;
-		return Math.max(0, Math.min(100, (bean.remainingG / bean.bagSizeG) * 100));
+		if (bean.bagSize <= 0) return null;
+		return Math.max(0, Math.min(100, (bean.remaining / bean.bagSize) * 100));
 	});
 
 	/** Cap visible tag chips so a long list does not blow out the card. */
@@ -213,7 +213,7 @@
 			class="bn-tile-burn"
 			class:bn-tile-burn-empty={burnPct == null}
 			title={burnPct != null
-				? `${bean.remainingG.toFixed(0)} g of ${bean.bagSizeG.toFixed(0)} g`
+				? `${bean.remaining.toFixed(0)} g of ${bean.bagSize.toFixed(0)} g`
 				: 'No bag size set'}
 		>
 			<div class="bn-tile-burn-track">
@@ -225,10 +225,10 @@
 			<div class="bn-tile-burn-text">
 				{#if burnPct != null}
 					<span class="bn-tile-burn-rem"
-						>{bean.remainingG.toFixed(0)}<em>g</em></span
+						>{bean.remaining.toFixed(0)}<em>g</em></span
 					>
 					<span class="bn-tile-burn-total"
-						>/ {bean.bagSizeG.toFixed(0)}<em>g</em></span
+						>/ {bean.bagSize.toFixed(0)}<em>g</em></span
 					>
 				{:else}
 					<span class="bn-tile-burn-total">No bag size</span>

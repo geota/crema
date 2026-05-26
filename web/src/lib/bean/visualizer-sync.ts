@@ -195,8 +195,8 @@ export function beanToWire(bean: Bean, roasterRemoteId: string | null): BagWire 
 		crema_mix: bean.mix,
 		crema_decaf: bean.decaf,
 		crema_favourite: bean.favourite,
-		crema_bag_size_g: bean.bagSizeG,
-		crema_remaining_g: bean.remainingG,
+		crema_bag_size_g: bean.bagSize,
+		crema_remaining_g: bean.remaining,
 		crema_rating: bean.rating,
 		crema_grinder: bean.grinder,
 		crema_grinder_setting: bean.grinderSetting,
@@ -265,9 +265,9 @@ export function beanFromWire(
 		processing: wire.processing ?? null,
 		harvestTime: wire.harvest_time ?? null
 	} satisfies BeanOrigin;
-	bean.bagSizeG =
+	bean.bagSize =
 		typeof crema.crema_bag_size_g === 'number' ? crema.crema_bag_size_g : 0;
-	bean.remainingG =
+	bean.remaining =
 		typeof crema.crema_remaining_g === 'number' ? crema.crema_remaining_g : 0;
 	bean.qualityScore = wire.quality_score ?? '';
 	bean.tastingNotes = wire.tasting_notes ?? '';

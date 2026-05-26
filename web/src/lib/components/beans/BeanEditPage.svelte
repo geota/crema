@@ -135,8 +135,8 @@
 	// ── Patch + commit ────────────────────────────────────────────────
 	function patch(p: Partial<Bean>): void {
 		// Special-case: bumping bag size silently re-seeds remaining.
-		if (Object.prototype.hasOwnProperty.call(p, 'bagSizeG') && p.bagSizeG != null) {
-			(p as Partial<Bean>).remainingG = p.bagSizeG;
+		if (Object.prototype.hasOwnProperty.call(p, 'bagSize') && p.bagSize != null) {
+			(p as Partial<Bean>).remaining = p.bagSize;
 		}
 		if (live) {
 			library.updateBean(bean.id, p);
@@ -240,12 +240,12 @@
 			}
 			const roaster = resolveRoasterOrCreate(roasterName);
 			const remaining =
-				draftRecord.remainingG > 0 ? draftRecord.remainingG : draftRecord.bagSizeG;
+				draftRecord.remaining > 0 ? draftRecord.remaining : draftRecord.bagSize;
 			const persisted: Bean = {
 				...draftRecord,
 				roasterId: roaster?.id ?? null,
 				name: draftRecord.name.trim(),
-				remainingG: remaining,
+				remaining: remaining,
 				updatedAt: Date.now()
 			};
 			library.upsertBean(persisted);
@@ -759,20 +759,20 @@
 							<div class="be-frow-r">
 								<QuickStepper
 									label=""
-									value={current.bagSizeG}
+									value={current.bagSize}
 									unit="g"
 									min={0}
 									max={5000}
 									step={50}
-									onChange={(n) => patch({ bagSizeG: n })}
+									onChange={(n) => patch({ bagSize: n })}
 								/>
 								<div class="be-presets">
 									{#each BAG_PRESETS as g (g)}
 										<button
 											type="button"
 											class="be-preset"
-											class:is-on={current.bagSizeG === g}
-											onclick={() => patch({ bagSizeG: g })}
+											class:is-on={current.bagSize === g}
+											onclick={() => patch({ bagSize: g })}
 										>
 											{g}<em>g</em>
 										</button>
@@ -787,12 +787,12 @@
 							<div class="be-frow-r">
 								<QuickStepper
 									label=""
-									value={current.remainingG}
+									value={current.remaining}
 									unit="g"
 									min={0}
 									max={5000}
 									step={1}
-									onChange={(n) => patch({ remainingG: n })}
+									onChange={(n) => patch({ remaining: n })}
 								/>
 							</div>
 						</div>

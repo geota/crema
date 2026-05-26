@@ -105,13 +105,13 @@
 	);
 	/** Burn-down: "2 shots left" warning when bag is near empty. */
 	const reorderHint = $derived.by<string | null>(() => {
-		if (!bean || bean.bagSizeG <= 0 || bean.remainingG <= 0) return null;
+		if (!bean || bean.bagSize <= 0 || bean.remaining <= 0) return null;
 		// Threshold: 2 doses' worth (the brew-page default dose isn't reachable
 		// here without the param state, so use 18g as the proxy — same default
 		// the history ratio uses).
 		const proxyDose = 18;
-		if (bean.remainingG <= proxyDose * 2) {
-			const shotsLeft = Math.max(1, Math.floor(bean.remainingG / proxyDose));
+		if (bean.remaining <= proxyDose * 2) {
+			const shotsLeft = Math.max(1, Math.floor(bean.remaining / proxyDose));
 			return `${shotsLeft} shot${shotsLeft === 1 ? '' : 's'} left — reorder?`;
 		}
 		return null;

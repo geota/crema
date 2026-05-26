@@ -273,16 +273,16 @@ export class BeanLibraryStore {
 	}
 
 	/**
-	 * Auto-debit `doseG` from the active bean's `remainingG` when a shot
+	 * Auto-debit `doseG` from the active bean's `remaining` when a shot
 	 * completes. Floors at `0` so the readout never goes negative. No-op
 	 * when there is no active bean or the bag size is unset.
 	 */
 	debitFromActive(doseG: number): void {
 		const bean = this.activeBean;
 		if (!bean || !(doseG > 0)) return;
-		if (bean.bagSizeG <= 0) return; // no bag size set → no burn-down to track
-		const remaining = Math.max(0, bean.remainingG - doseG);
-		this.updateBean(bean.id, { remainingG: remaining });
+		if (bean.bagSize <= 0) return; // no bag size set → no burn-down to track
+		const remaining = Math.max(0, bean.remaining - doseG);
+		this.updateBean(bean.id, { remaining: remaining });
 	}
 
 	// ── Roaster CRUD ─────────────────────────────────────────────────

@@ -38,7 +38,7 @@
 	let roasterName = $state('');
 	let resolvedRoaster = $state<Roaster | null>(null);
 	let roastedOn = $state<string>(new Date().toISOString().slice(0, 10));
-	let bagSizeG = $state<number>(250);
+	let bagSize = $state<number>(250);
 	let attempted = $state(false);
 	let nameInputEl = $state<HTMLInputElement | null>(null);
 
@@ -67,8 +67,8 @@
 		// quick-add captures that `quickAdd` doesn't take as args.
 		const created = library.quickAdd(name.trim(), roasterName.trim(), roastedOn);
 		library.updateBean(created.id, {
-			bagSizeG,
-			remainingG: bagSizeG
+			bagSize,
+			remaining: bagSize
 		});
 		// Optionally clear the active pointer if the user opted out of
 		// "make active". The default is to make active; the secondary
@@ -90,8 +90,8 @@
 			name: name.trim(),
 			roasterId: resolvedRoaster?.id ?? null,
 			roastedOn,
-			bagSizeG,
-			remainingG: bagSizeG
+			bagSize,
+			remaining: bagSize
 		});
 		onClose();
 	}
@@ -177,20 +177,20 @@
 			<div class="bn-fld-bag">
 				<QuickStepper
 					label=""
-					value={bagSizeG}
+					value={bagSize}
 					unit="g"
 					min={0}
 					max={5000}
 					step={50}
-					onChange={(n) => (bagSizeG = n)}
+					onChange={(n) => (bagSize = n)}
 				/>
 				<div class="bn-fld-bag-presets">
 					{#each BAG_PRESETS as g (g)}
 						<button
 							type="button"
 							class="bn-preset"
-							class:is-on={bagSizeG === g}
-							onclick={() => (bagSizeG = g)}
+							class:is-on={bagSize === g}
+							onclick={() => (bagSize = g)}
 						>
 							{g}<em>g</em>
 						</button>

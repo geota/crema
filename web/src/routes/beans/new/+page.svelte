@@ -15,9 +15,9 @@
 	// One-shot draft. Re-mounted whenever the route is re-entered.
 	const draft = blankBean();
 	// Seed remaining to bag size so the first Save lands a "full" bag.
-	if (draft.bagSizeG === 0) {
-		draft.bagSizeG = 250;
-		draft.remainingG = 250;
+	if (draft.bagSize === 0) {
+		draft.bagSize = 250;
+		draft.remaining = 250;
 	}
 
 	// Seed roasted-on to today — the most common case is logging a bag

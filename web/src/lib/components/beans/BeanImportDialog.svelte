@@ -75,7 +75,7 @@
 	 * touch) alone.
 	 *
 	 * Crema's web `Bean` / `Roaster` types use camelCase
-	 * (`bagSizeG`, `roastLevel`, …); the Rust core's `Bean` /
+	 * (`bagSize`, `roastLevel`, …); the Rust core's `Bean` /
 	 * `Roaster` JSON serialize as snake_case (`bag_size_g`,
 	 * `roast_level`, …) — they intentionally don't carry
 	 * `rename_all = "camelCase"` because the Visualizer sync layer
@@ -336,7 +336,7 @@
 	 */
 	function buildPreview(plan: CorePlan, filename: string): Preview {
 		// snake_case → camelCase on the wasm-returned beans / roasters
-		// so they match the shell's persisted shape (`bagSizeG`,
+		// so they match the shell's persisted shape (`bagSize`,
 		// `roasterId`, …) before we touch anything else.
 		const wireBeans = plan.beans.map((b) => snakeToCamel<Bean>(b));
 		const wireRoasters = plan.roasters.map((r) => snakeToCamel<Roaster>(r));

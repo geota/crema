@@ -127,13 +127,18 @@ export interface Bean {
 	decaf: boolean;
 	/** Provenance metadata. Empty struct by default. */
 	origin: BeanOrigin;
-	/** Bag size in grams — `0.0` when unknown. */
-	bag_size_g: number;
 	/**
-	 * Remaining grams in the bag — auto-debited per shot when the
-	 * shell enables `Track bag remaining weight`. `0.0` when unknown.
+	 * Bag size, grams. `0.0` when unknown. Unit lives in the doc
+	 * comment, not the field name, per the locked-in naming rule
+	 * (`docs/44-pre-android-handoff.md`).
 	 */
-	remaining_g: number;
+	bag_size: number;
+	/**
+	 * Remaining weight in the bag, grams. Auto-debited per shot when
+	 * the shell enables `Track bag remaining weight`. `0.0` when
+	 * unknown.
+	 */
+	remaining: number;
 	/** Quality score — free text per Visualizer (`"88"`, `"A-"`). */
 	quality_score: string;
 	/** Tasting notes — multi-line free text. */
