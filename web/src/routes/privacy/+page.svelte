@@ -116,6 +116,73 @@
 			230&thinsp;V). The result is cached locally; we do not retransmit it.
 			Lookup failures are silent and do not affect functionality.
 		</p>
+
+		<h3>3.4 Google Drive — Optional Backup &amp; Restore</h3>
+		<p>
+			Crema offers an optional Google Drive integration so you can
+			back up and restore your local data: app preferences, custom
+			profiles, shot history (including telemetry curves), bean and
+			roaster library, and maintenance state. This is strictly
+			user-initiated: nothing is written to your Drive unless you
+			sign in and explicitly trigger a backup or enable scheduled
+			backups in Settings.
+		</p>
+		<ul>
+			<li>
+				<strong>Authentication</strong> uses Google's OAuth 2.0 flow.
+				Crema receives a short-lived access token (and, with your
+				consent, a refresh token) which is stored on your device only.
+				Tokens are never transmitted to any Crema server (there is no
+				Crema server).
+			</li>
+			<li>
+				<strong>Scope</strong> is limited to
+				<code>drive.appdata</code> — Crema can only read and write
+				files inside its own application-data folder on your Drive.
+				It cannot see, list, or modify any other files in your Drive.
+				The application-data folder is hidden from the Drive web UI
+				by design.
+			</li>
+			<li>
+				<strong>Payload</strong> consists solely of your own Crema data
+				exported as JSON / JSONL files (the same format the local
+				export buttons produce). No analytics, no device identifiers,
+				no metrics — just the data you already see in the app.
+			</li>
+			<li>
+				<strong>Restore</strong> downloads those files from your
+				Drive back onto a new device or browser, replacing the local
+				records you select.
+			</li>
+			<li>
+				<strong>Revoking access</strong> — sign out from Settings →
+				Sharing, or revoke the application from your Google account
+				at
+				<a
+					href="https://myaccount.google.com/permissions"
+					target="_blank"
+					rel="noreferrer noopener">myaccount.google.com/permissions</a
+				>. Revoking does not delete previously uploaded backup files;
+				you can remove those manually in Drive's "Manage apps" page or
+				let Crema delete them from within the app.
+			</li>
+			<li>
+				<strong>Google's own privacy policy</strong> at
+				<a
+					href="https://policies.google.com/privacy"
+					target="_blank"
+					rel="noreferrer noopener">policies.google.com/privacy</a
+				> applies to any data processed by Google Drive itself.
+			</li>
+		</ul>
+		<p>
+			Crema's use and transfer of information received from Google APIs
+			adheres to the <a
+				href="https://developers.google.com/terms/api-services-user-data-policy"
+				target="_blank"
+				rel="noreferrer noopener">Google API Services User Data Policy</a
+			>, including the Limited Use requirements.
+		</p>
 	</section>
 
 	<section>
