@@ -38,6 +38,7 @@ import { readJson, writeJson } from '$lib/utils/storage';
 import { getSettingsStore } from '$lib/settings';
 import { getMaintenanceStore } from '$lib/maintenance';
 import { parseCaptureFile, replayEvents, ReplayAbortedError, type ReplayMeta } from '$lib/replay';
+import { guessScaleFromFirstWeightPacket as wasmGuessScaleFromFirstWeightPacket } from '$lib/wasm/de1_wasm';
 import { describeError } from '$lib/utils/error';
 import {
 	appendSyncLog,
@@ -204,24 +205,15 @@ function composeReplayStartMessage(
 
 /**
  * Best-effort scale identification from the first SCALE_WEIGHT payload.
- *
- * Used by the replay path — the capture format doesn't record the scale
- * model, so we sniff well-known wire signatures off the first weight
- * notification's bytes:
- *
- * - **Bookoo** — every BOOKOO_SC weight packet starts with `03 0B` (header
- *   byte 0x03, length 0x0B). No other supported scale uses that pair.
- *
- * Add new signatures as more scales make it into Crema's replay tests.
- * Returns `undefined` if no signature matches; the replay then proceeds
- * with no scale identified, which surfaces as an empty weight series —
- * the existing (broken) behaviour, so we don't regress.
+ * The signature table lives in core
+ * (`de1_scale::Scale::guess_from_first_weight_packet`); this shell
+ * adapter just hands the bytes to the wasm export so both shells share
+ * one identification path. Returns `undefined` when no signature
+ * matches, in which case the replay proceeds with no scale identified
+ * (empty weight series).
  */
 function guessScaleAdvertisedName(firstWeightBytes: Uint8Array): string | undefined {
-	if (firstWeightBytes.length >= 2 && firstWeightBytes[0] === 0x03 && firstWeightBytes[1] === 0x0b) {
-		return 'BOOKOO_SC';
-	}
-	return undefined;
+	return wasmGuessScaleFromFirstWeightPacket(firstWeightBytes) ?? undefined;
 }
 
 /** Options for {@link CremaApp.replayCapture}. */

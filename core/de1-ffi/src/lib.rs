@@ -308,6 +308,16 @@ pub fn profile_fingerprint(
     de1_domain::profile_fingerprint(&profile_json, qc_json.as_deref())
 }
 
+/// Sniff a first weight-notify packet for a known-scale signature.
+/// Returns the BLE advertised-name prefix the connect path would
+/// consume, or `None` when no signature matches. Used by the shell's
+/// replay path for captures that pre-date the META prelude. See
+/// [`de1_app::ScaleId::guess_from_first_weight_packet`].
+#[uniffi::export]
+pub fn guess_scale_from_first_weight_packet(bytes: Vec<u8>) -> Option<String> {
+    de1_app::ScaleId::guess_from_first_weight_packet(&bytes).map(str::to_owned)
+}
+
 /// The Crema core, exposed to the Kotlin shell.
 ///
 /// Methods that produce a [`CoreOutput`] return it as a JSON string; the shell

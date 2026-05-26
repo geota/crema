@@ -249,6 +249,36 @@ impl Scale {
         Some(Scale { inner })
     }
 
+    /// Sniff the first weight-notify packet to guess an advertised-name
+    /// prefix for captures that pre-date the META prelude (where the
+    /// connect-phase recorded the scale name). Returns a prefix that
+    /// [`Scale::identify`] would consume, or `None` if no signature
+    /// matches.
+    ///
+    /// Today only the Bookoo's `03 0b` weight-notify header is
+    /// recognised — the documented signature in `bookoo::parse_packet`.
+    /// Extend the signature table as more scales make it into Crema's
+    /// replay fixtures. Returning `None` is non-fatal at the call site:
+    /// the replay proceeds with no scale identified and an empty weight
+    /// series.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use de1_scale::Scale;
+    /// let bookoo_first = [0x03, 0x0b, 0x00, 0x00, 0x00];
+    /// assert_eq!(Scale::guess_from_first_weight_packet(&bookoo_first), Some("BOOKOO_SC"));
+    /// assert_eq!(Scale::guess_from_first_weight_packet(&[]), None);
+    /// assert_eq!(Scale::guess_from_first_weight_packet(&[0xff, 0xff]), None);
+    /// ```
+    #[must_use]
+    pub fn guess_from_first_weight_packet(bytes: &[u8]) -> Option<&'static str> {
+        if bytes.len() >= 2 && bytes[0] == 0x03 && bytes[1] == 0x0b {
+            return Some("BOOKOO_SC");
+        }
+        None
+    }
+
     /// Reconstruct a scale from a [`label`](Self::label) string (the inverse of
     /// `label`, for persisting a chosen scale in settings). Returns a fresh
     /// instance with no accumulated state.
