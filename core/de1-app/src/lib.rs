@@ -62,6 +62,12 @@ pub mod decent_scale_protocol {
     pub use de1_scale::decent_scale::*;
 }
 
+/// Re-export of `de1_scale::Scale` so the wasm + future Android bridges can
+/// reach the stateless name / weight-packet identification helpers
+/// ([`Scale::identify`], [`Scale::guess_from_first_weight_packet`])
+/// without each bridge crate taking a direct dep on `de1-scale`.
+pub use de1_scale::Scale as ScaleId;
+
 /// Scale sensor lag assumed when no scale is connected — a representative
 /// value across the supported scales (380 ms, the legacy default).
 const DEFAULT_SCALE_LAG: Duration = Duration::from_millis(380);

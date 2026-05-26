@@ -418,6 +418,17 @@ pub fn format_bookoo_firmware(encoded: u16) -> String {
     de1_app::bookoo::format_firmware_version(encoded)
 }
 
+/// Sniff a first weight-notify packet for a known-scale signature.
+/// Returns the BLE advertised-name prefix the connect path would
+/// consume, or `None` when no signature matches. Today only the
+/// Bookoo's `03 0b` header is recognised; see
+/// `de1_scale::Scale::guess_from_first_weight_packet`. Used by the
+/// shell's replay path for captures that pre-date the META prelude.
+#[wasm_bindgen(js_name = guessScaleFromFirstWeightPacket)]
+pub fn guess_scale_from_first_weight_packet(bytes: &[u8]) -> Option<String> {
+    de1_app::ScaleId::guess_from_first_weight_packet(bytes).map(str::to_owned)
+}
+
 /// Classify a 1..10 roast level into a named band — returns the lowercase
 /// wire string (`"light"` / `"medium"` / `"dark"`), or `undefined` for a
 /// missing (`None`) level. Values outside 1..10 are clamped first. See
