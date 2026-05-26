@@ -15,6 +15,25 @@ export enum BeanMix {
 }
 
 /**
+ * Whether a bag is roasted for espresso, filter, or both. `None` on the
+ * owning [`Bean`] = unset; the value never serialises as `"unknown"`
+ * (the user picks one of the three or leaves it blank). Lowercase wire
+ * strings match the TS shell convention.
+ * 
+ * Imported from Beanconqueror's `bean_roasting_type` field, which uses
+ * the same three categories plus an `Unknown` sentinel that we map to
+ * `None` on the bag.
+ */
+export enum BeanRoastType {
+	/** Roasted for espresso pulls — typically a darker development. */
+	Espresso = "espresso",
+	/** Roasted for filter / pour-over. */
+	Filter = "filter",
+	/** Roasted to work for both espresso and filter (industry term). */
+	Omni = "omni",
+}
+
+/**
  * Origin metadata for a bag — country, region, farm, and the rest of
  * the upstream provenance fields. All optional: a fresh bean's origin
  * starts empty and the user fills in whatever the bag label shows.
@@ -96,6 +115,14 @@ export interface Bean {
 	roast_level?: number;
 	/** Single-origin vs blend. `None` = not classified. */
 	mix?: BeanMix;
+	/**
+	 * What the bag was roasted for — espresso, filter, or omni. `None`
+	 * when the user hasn't picked. `#[serde(default)]` so older Bean
+	 * records (pre-this-field) deserialise cleanly. Imported from
+	 * Beanconqueror's `bean_roasting_type` (its `Unknown` value maps
+	 * to `None`).
+	 */
+	roast_type?: BeanRoastType;
 	/** Decaf flag — `false` by default. */
 	decaf: boolean;
 	/** Provenance metadata. Empty struct by default. */

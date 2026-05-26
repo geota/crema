@@ -1,71 +1,104 @@
 <script lang="ts">
 	/**
-	 * `BeanImportDialog` — drop / pick a Beanconqueror `.zip` export, parse it
-	 * with `fflate`, and preview / commit the import into Crema's library.
+	 * `BeanImportDialog` — drop / pick a Beanconqueror `.zip` export, parse
+	 * it with `fflate`, hand the merged main JSON to the core's
+	 * `importBeanconquerorJson` wasm fn, and apply the resulting plan to
+	 * Crema's bean library + shot history.
 	 *
-	 * The importer is **deliberately lossy**: only the high-value subset of
-	 * Beanconqueror's ~40 bean fields lands as first-class Crema fields, and
-	 * anything we don't model (cupping form, mill, roast curves, EAN, CO2e,
-	 * frozen-group portions…) is dropped. We surface the dropped categories
-	 * in the preview and again in a one-time banner after the commit so the
-	 * user knows what was skipped.
+	 * The mapping (BC field → Crema field, defensive enum handling,
+	 * espresso-only filter on brews, duplicate-by-fingerprint dedup of
+	 * roasters) lives in `core/de1-domain/src/beanconqueror.rs` — the
+	 * Android shell will reach the same algorithm via UniFFI. This
+	 * component is the web-shell adapter: unzip the archive, build the
+	 * merged JSON, render the preview, commit on confirm.
 	 *
-	 * Conflict resolution v1: skip on duplicate by case-insensitive
-	 * `(roasterName, name, roastedOn)` triple. No field-level merge UI.
+	 * Deliberately lossy: cupping form, frozen-group portions, EAN,
+	 * roast curves, attachments etc. don't survive. The diagnostics
+	 * surface every dropped category so the user knows what was
+	 * skipped. Brews whose preparation isn't ESPRESSO are counted +
+	 * skipped (V60 / AeroPress / etc. — no Crema surface for them).
 	 */
 	import { unzip, strFromU8 } from 'fflate';
-	import {
-		getBeanStore,
-		blankBean,
-		blankRoaster,
-		type Bean,
-		type Roaster
-	} from '$lib/bean';
+	import { importBeanconquerorJson as wasmImportBeanconquerorJson } from '$lib/wasm/de1_wasm';
+	import { getBeanStore, type Bean, type Roaster } from '$lib/bean';
+	import { getHistoryStore, type StoredShot, type ShotBean } from '$lib/history';
 
 	let { onClose }: { onClose: () => void } = $props();
 
 	const library = getBeanStore();
+	const history = getHistoryStore();
 
 	type Step = 'pick' | 'parsing' | 'preview' | 'done' | 'error';
 	let step = $state<Step>('pick');
 	let errorMessage = $state('');
-	let preview = $state<{
-		beans: Bean[];
-		roasters: Roaster[];
-		skipped: number;
-		droppedCategories: string[];
-		filename: string;
+	let preview = $state<Preview | null>(null);
+	let committed = $state<{
+		beansImported: number;
+		shotsImported: number;
+		duplicatesSkipped: number;
 	} | null>(null);
-	let committed = $state<{ imported: number; skipped: number } | null>(null);
 
-	/** Beanconqueror's 13-band roast enum → Crema's 1..10 scale. */
-	const BC_ROAST_MAP: Record<string, number> = {
-		CINNAMON: 1,
-		LIGHT: 2,
-		MEDIUM_LIGHT: 3,
-		MEDIUM: 4,
-		CITY: 4,
-		'CITY_+': 5,
-		MEDIUM_DARK: 6,
-		FULL_CITY: 6,
-		VIENNA: 7,
-		FRENCH: 8,
-		ITALIAN: 9,
-		SPANISH: 10,
-		UNKNOWN: 0
-	};
-
-	/** Beanconqueror's mix enum → Crema's lowercase wire string. */
-	function bcMix(value: unknown): 'single' | 'blend' | null {
-		if (value === 'SINGLE_ORIGIN') return 'single';
-		if (value === 'BLEND') return 'blend';
-		return null;
+	/**
+	 * The plan shape the core's `importBeanconquerorJson` returns. Mirrors
+	 * `de1_domain::beanconqueror::ImportPlan` (camelCase via the wasm
+	 * serialiser). We treat it as JSON-shaped data; the fields below are
+	 * the ones the UI consumes.
+	 */
+	interface CorePlan {
+		readonly beans: Bean[];
+		readonly roasters: Roaster[];
+		readonly shots: CoreImportedShot[];
+		readonly diagnostics: {
+			readonly nonEspressoBrewsSkipped: number;
+			readonly brewsDanglingPreparation: number;
+			readonly brewsDanglingBean: number;
+			readonly beansImported: number;
+			readonly roastersCreated: number;
+			readonly shotsImported: number;
+			readonly droppedBeanCategories: ReadonlyArray<readonly [string, number]>;
+		};
 	}
 
-	function bcRoastLevel(raw: unknown): number | null {
-		if (typeof raw !== 'string') return null;
-		const v = BC_ROAST_MAP[raw];
-		return typeof v === 'number' && v > 0 ? v : null;
+	/** One BC brew mapped to a Rust-shape StoredShot + the resolved snapshot strings. */
+	interface CoreImportedShot {
+		readonly storedShot: RustStoredShotWire;
+		readonly beanId: string | null;
+		readonly beanName: string;
+		readonly roasterName: string | null;
+		readonly roastedOn: string | null;
+		readonly roastLevel: number | null;
+		readonly grinderModel: string | null;
+	}
+
+	/** The Rust StoredShot's wire shape (just the fields the shell uses). */
+	interface RustStoredShotWire {
+		readonly recorded_at: number;
+		readonly record: {
+			readonly duration: { secs: number; nanos: number };
+		};
+		readonly metadata: {
+			readonly dose?: number | null;
+			readonly yield_out?: number | null;
+			readonly rating?: number | null;
+			readonly notes?: string | null;
+			readonly grinder_setting?: string | null;
+		};
+	}
+
+	interface Preview {
+		filename: string;
+		newBeans: Bean[];
+		newRoasters: Roaster[];
+		newShots: PreparedShot[];
+		duplicatesSkipped: number;
+		droppedCategories: string[];
+		nonEspressoBrewsSkipped: number;
+		brewsDanglingPreparation: number;
+	}
+
+	/** A shell-ready StoredShot pre-built from a core ImportedShot. */
+	interface PreparedShot {
+		shot: StoredShot;
 	}
 
 	async function onFileChosen(event: Event): Promise<void> {
@@ -92,55 +125,26 @@
 				(resolve, reject) =>
 					unzip(buf, (err, data) => (err ? reject(err) : resolve(data)))
 			);
-			// Walk every JSON entry inside; tolerate Bc's "Beanconqueror.json"
-			// and chunked "Beanconqueror_Beans_*.json" layout.
-			const allBcBeans: unknown[] = [];
-			for (const [name, bytes] of Object.entries(entries)) {
-				if (!name.toLowerCase().endsWith('.json')) continue;
-				let parsed: unknown;
-				try {
-					parsed = JSON.parse(strFromU8(bytes));
-				} catch {
-					continue;
-				}
-				const beans = extractBeans(parsed);
-				if (beans.length > 0) allBcBeans.push(...beans);
-			}
-			if (allBcBeans.length === 0) {
+			const mergedJson = mergeBcArchive(entries);
+			if (mergedJson === null) {
 				step = 'error';
 				errorMessage =
-					'No beans found in the archive. Expected a Beanconqueror .zip export.';
+					'No Beanconqueror.json found in the archive. Expected a Beanconqueror .zip export.';
 				return;
 			}
-			// Build the preview. Dedup the bean list by stable key, dedup
-			// roasters case-insensitively, skip duplicates already present
-			// in the library by (roasterName, name, roastedOn).
-			const builtRoasters = new Map<string, Roaster>(); // key: lowercase name
-			const builtBeans: Bean[] = [];
-			const droppedCounts = new Map<string, number>();
-			let skipped = 0;
-			for (const raw of allBcBeans) {
-				if (typeof raw !== 'object' || raw === null) continue;
-				const bc = raw as Record<string, unknown>;
-				const result = mapBcBean(bc, builtRoasters);
-				if (result === 'duplicate') {
-					skipped += 1;
-					continue;
-				}
-				builtBeans.push(result.bean);
-				for (const cat of result.dropped) {
-					droppedCounts.set(cat, (droppedCounts.get(cat) ?? 0) + 1);
-				}
+
+			// Core does the mapping. Returns the full plan (beans,
+			// roasters, espresso-shots, diagnostics) as JSON.
+			let planJson: string;
+			try {
+				planJson = wasmImportBeanconquerorJson(mergedJson, Date.now());
+			} catch (e) {
+				step = 'error';
+				errorMessage = `Core parser rejected the archive: ${e instanceof Error ? e.message : String(e)}`;
+				return;
 			}
-			preview = {
-				beans: builtBeans,
-				roasters: [...builtRoasters.values()],
-				skipped,
-				droppedCategories: [...droppedCounts.entries()]
-					.sort((a, b) => b[1] - a[1])
-					.map(([cat, n]) => `${cat} (${n})`),
-				filename: file.name
-			};
+			const plan = JSON.parse(planJson) as CorePlan;
+			preview = buildPreview(plan, file.name);
 			step = 'preview';
 		} catch (e) {
 			step = 'error';
@@ -150,166 +154,195 @@
 	}
 
 	/**
-	 * Walk a parsed JSON value and extract Beanconqueror bean records, which
-	 * may be either at the top level (`{beans: [...]}` / `{BEANS: [...]}`) or
-	 * nested under chunked exports.
+	 * Merge the main `Beanconqueror.json` with any chunked
+	 * `Beanconqueror_{Beans,Brews}_N.json` files into one JSON object
+	 * the core can parse. Returns `null` when no main file is found.
+	 *
+	 * BC's writer (`src/services/uiExportImportHelper.ts`) puts the
+	 * first 500 BREWS / BEANS inline in the main file and overflows
+	 * into chunk files; the merge here is the inverse — concatenate
+	 * the chunk arrays back onto the main entries.
 	 */
-	function extractBeans(parsed: unknown): unknown[] {
-		if (Array.isArray(parsed)) {
-			return parsed.filter(
-				(v) =>
-					typeof v === 'object' &&
-					v !== null &&
-					('name' in v || 'config' in v || 'roastingDate' in v)
-			);
+	function mergeBcArchive(entries: Record<string, Uint8Array>): string | null {
+		// Locate the main file. BC names it `Beanconqueror.json`; tolerate
+		// case variation for archives produced by hand-edited tooling.
+		const mainKey = Object.keys(entries).find(
+			(k) => k.toLowerCase().endsWith('beanconqueror.json')
+		);
+		if (mainKey === undefined) return null;
+		let mainObj: Record<string, unknown>;
+		try {
+			mainObj = JSON.parse(strFromU8(entries[mainKey])) as Record<string, unknown>;
+		} catch {
+			return null;
 		}
-		if (typeof parsed === 'object' && parsed !== null) {
-			const obj = parsed as Record<string, unknown>;
-			for (const key of ['BEANS', 'beans', 'data']) {
-				const v = obj[key];
-				if (Array.isArray(v)) return extractBeans(v);
+
+		// Walk chunk files in numeric order, appending to BREWS / BEANS.
+		// Pattern: `Beanconqueror_(Brews|Beans)_N.json` per BC's
+		// `chunkFileName(file, idx)`. Sort by N so we preserve order.
+		interface Chunk {
+			key: 'BREWS' | 'BEANS';
+			index: number;
+			name: string;
+		}
+		const chunks: Chunk[] = [];
+		const re = /Beanconqueror_(Brews|Beans)_(\d+)\.json$/i;
+		for (const name of Object.keys(entries)) {
+			const m = name.match(re);
+			if (!m) continue;
+			const key = m[1].toLowerCase() === 'brews' ? 'BREWS' : 'BEANS';
+			chunks.push({ key, index: Number(m[2]), name });
+		}
+		chunks.sort((a, b) => (a.key === b.key ? a.index - b.index : a.key < b.key ? -1 : 1));
+
+		for (const c of chunks) {
+			let arr: unknown;
+			try {
+				arr = JSON.parse(strFromU8(entries[c.name]));
+			} catch {
+				continue;
 			}
+			if (!Array.isArray(arr)) continue;
+			const existing = Array.isArray(mainObj[c.key]) ? (mainObj[c.key] as unknown[]) : [];
+			mainObj[c.key] = [...existing, ...arr];
 		}
-		return [];
+
+		return JSON.stringify(mainObj);
 	}
 
-	function mapBcBean(
-		bc: Record<string, unknown>,
-		roasterMap: Map<string, Roaster>
-	):
-		| 'duplicate'
-		| { bean: Bean; dropped: string[] } {
-		const name = typeof bc.name === 'string' ? bc.name.trim() : '';
-		const roasterName = typeof bc.roaster === 'string' ? bc.roaster.trim() : '';
-		const roastedOn =
-			typeof bc.roastingDate === 'string' ? bc.roastingDate.slice(0, 10) : null;
-
-		// Duplicate check against existing library beans.
-		const libRoasterId =
-			(() => {
-				const r = library.findRoasterByName(roasterName);
-				return r?.id ?? null;
-			})();
-		if (libRoasterId) {
-			const isDupe = library.beans.some(
-				(existing) =>
-					existing.roasterId === libRoasterId &&
-					existing.name.trim().toLowerCase() === name.toLowerCase() &&
-					(existing.roastedOn ?? null) === roastedOn
-			);
-			if (isDupe) return 'duplicate';
+	/**
+	 * Build the preview object the UI renders, dedup'ing beans we
+	 * already have in the library by case-insensitive
+	 * `(roasterName, name, roastedOn)` triple — the same conflict-
+	 * resolution rule the old TS importer used. Shots are not dedup'd
+	 * here (their UUID makes them unique by construction; a re-import
+	 * inserts duplicates — future enhancement: skip by
+	 * `beanconqueror_id`).
+	 */
+	function buildPreview(plan: CorePlan, filename: string): Preview {
+		const existingRoasterByLc = new Map<string, Roaster>();
+		for (const r of library.roasters) {
+			existingRoasterByLc.set(r.name.trim().toLowerCase(), r);
 		}
 
-		// Resolve / create the roaster row in the preview's working set.
-		let roaster: Roaster | null = null;
-		if (roasterName) {
-			const key = roasterName.toLowerCase();
-			roaster = roasterMap.get(key) ?? null;
-			if (!roaster) {
-				// Reuse the library roaster if one already exists by name.
-				const existingLib = library.findRoasterByName(roasterName);
-				if (existingLib) {
-					roaster = existingLib;
-				} else {
-					roaster = blankRoaster(roasterName);
-					roasterMap.set(key, roaster);
-				}
-			}
-		}
-
-		const bean = blankBean();
-		bean.name = name || 'Imported bean';
-		bean.roasterId = roaster?.id ?? null;
-		bean.roastedOn = roastedOn;
-		bean.openedOn =
-			typeof bc.openDate === 'string' ? bc.openDate.slice(0, 10) : null;
-		bean.frozenOn =
-			typeof bc.frozenDate === 'string' ? bc.frozenDate.slice(0, 10) : null;
-		bean.defrostedOn =
-			typeof bc.unfrozenDate === 'string' ? bc.unfrozenDate.slice(0, 10) : null;
-		bean.roastLevel = bcRoastLevel(bc.roast);
-		bean.mix = bcMix(bc.beanMix);
-		bean.decaf = bc.decaffeinated === true;
-		bean.notes = typeof bc.note === 'string' ? bc.note : '';
-		bean.rating =
-			typeof bc.rating === 'number' && bc.rating >= 0 && bc.rating <= 5
-				? Math.round(bc.rating)
-				: 0;
-		bean.favourite = bc.favourite === true;
-		bean.url = typeof bc.url === 'string' ? bc.url : null;
-		bean.bagSizeG =
-			typeof bc.weight === 'number' && bc.weight > 0 ? bc.weight : 0;
-		bean.remainingG = bean.bagSizeG; // assume full bag on import
-		if (bc.finished === true) bean.archivedAt = Date.now();
-		bean.beanconquerorId =
-			typeof (bc.config as Record<string, unknown> | undefined)?.uuid === 'string'
-				? ((bc.config as Record<string, unknown>).uuid as string)
+		// Dedup beans against the library by (roaster, name, roastedOn).
+		const roasterById = new Map<string, Roaster>();
+		for (const r of plan.roasters) roasterById.set(r.id, r);
+		const newBeans: Bean[] = [];
+		let duplicatesSkipped = 0;
+		for (const bean of plan.beans) {
+			const roasterName = bean.roasterId
+				? roasterById.get(bean.roasterId)?.name ?? ''
+				: '';
+			const libRoaster = roasterName
+				? existingRoasterByLc.get(roasterName.toLowerCase())
 				: null;
-
-		// Origin — Beanconqueror's `bean_information` array, take [0].
-		const info = bc.bean_information;
-		if (Array.isArray(info) && info.length > 0) {
-			const first = info[0] as Record<string, unknown>;
-			bean.origin = {
-				country: typeof first.country === 'string' ? first.country : null,
-				region: typeof first.region === 'string' ? first.region : null,
-				farm: typeof first.farm === 'string' ? first.farm : null,
-				farmer: typeof first.farmer === 'string' ? first.farmer : null,
-				variety: typeof first.variety === 'string' ? first.variety : null,
-				elevation:
-					typeof first.elevation === 'string' ? first.elevation : null,
-				processing:
-					typeof first.processing === 'string' ? first.processing : null,
-				harvestTime:
-					typeof first.harvest_time === 'string' ? first.harvest_time : null
-			};
+			const isDupe =
+				libRoaster &&
+				library.beans.some(
+					(existing) =>
+						existing.roasterId === libRoaster.id &&
+						existing.name.trim().toLowerCase() === bean.name.trim().toLowerCase() &&
+						(existing.roastedOn ?? null) === (bean.roastedOn ?? null)
+				);
+			if (isDupe) {
+				duplicatesSkipped += 1;
+				continue;
+			}
+			newBeans.push(bean);
 		}
 
-		// Quality / cupping points — Visualizer maps these to free-text. Take
-		// `cupping_points` if it exists; ignore the full 10-axis form.
-		if (typeof bc.cupping_points === 'string' || typeof bc.cupping_points === 'number') {
-			bean.qualityScore = String(bc.cupping_points);
+		// New roasters = those that aren't already in the library by name.
+		const newRoasters = plan.roasters.filter(
+			(r) => !existingRoasterByLc.has(r.name.trim().toLowerCase())
+		);
+
+		const newShots: PreparedShot[] = plan.shots.map((imp) => ({
+			shot: prepareShot(imp)
+		}));
+
+		const droppedCategories = plan.diagnostics.droppedBeanCategories
+			.filter((entry) => entry[1] > 0)
+			.map(([cat, n]) => `${dropCategoryLabel(cat)} (${n})`);
+
+		return {
+			filename,
+			newBeans,
+			newRoasters,
+			newShots,
+			duplicatesSkipped,
+			droppedCategories,
+			nonEspressoBrewsSkipped: plan.diagnostics.nonEspressoBrewsSkipped,
+			brewsDanglingPreparation: plan.diagnostics.brewsDanglingPreparation
+		};
+	}
+
+	/** Translate the core's category key into a user-facing label. */
+	function dropCategoryLabel(key: string): string {
+		switch (key) {
+			case 'cupping':
+				return 'cupping form';
+			case 'cupped_flavor':
+				return 'flavor wheel tags';
+			case 'bean_roast_information':
+				return 'self-roast curve';
+			case 'attachments':
+				return 'bag photos';
+			default:
+				return key;
 		}
+	}
 
-		// Track the dropped categories so the preview surfaces them.
-		const dropped: string[] = [];
-		if (bc.cupping && typeof bc.cupping === 'object') dropped.push('cupping form');
-		if (bc.cupped_flavor && Array.isArray(bc.cupped_flavor) && bc.cupped_flavor.length > 0)
-			dropped.push('flavor wheel tags');
-		if (bc.bean_roast_information && typeof bc.bean_roast_information === 'object')
-			dropped.push('self-roast curve');
-		if (bc.ean_article_number) dropped.push('EAN barcode');
-		if (bc.co2e_kg) dropped.push('CO2e per kg');
-		if (bc.cost != null) dropped.push('cost');
-		if (bc.qr_code || bc.internal_share_code) dropped.push('QR / share code');
-		if (Array.isArray(bc.attachments) && bc.attachments.length > 0)
-			dropped.push('bag photos');
-
-		// Lossy escape valve: stash anything else that's trivially
-		// serialisable into metadata.beanconqueror so it round-trips through
-		// localStorage even if we never render it (yet).
-		const meta: Record<string, unknown> = {};
-		if (bc.aromatics) meta.aromatics = bc.aromatics;
-		if (bc.bestDate) meta.bestDate = bc.bestDate;
-		if (bc.buyDate) meta.buyDate = bc.buyDate;
-		if (bc.cost != null) meta.cost = bc.cost;
-		if (bc.ean_article_number) meta.ean = bc.ean_article_number;
-		if (Object.keys(meta).length > 0) {
-			bean.metadata = { beanconqueror: meta };
-		}
-
-		return { bean, dropped };
+	/**
+	 * Take one core-shaped `ImportedShot` and build the shell's enriched
+	 * `StoredShot` shape — telemetry stays empty (BC's `flow_profile`
+	 * sidecar parse is deferred), but the bean snapshot + grinder model +
+	 * metadata all come through so a History row renders without needing
+	 * the wasm result again.
+	 */
+	function prepareShot(imp: CoreImportedShot): StoredShot {
+		const dur = imp.storedShot.record.duration;
+		const durationMs = dur.secs * 1000 + dur.nanos / 1_000_000;
+		const bean: ShotBean | null = imp.beanName
+			? {
+					beanId: imp.beanId,
+					roaster: imp.roasterName ?? '',
+					type: imp.beanName,
+					roastedOn: imp.roastedOn,
+					roastLevel: imp.roastLevel
+				}
+			: null;
+		const meta = imp.storedShot.metadata;
+		return {
+			id: `shot:bc:${crypto.randomUUID()}`,
+			completedAt: imp.storedShot.recorded_at,
+			profileName: null,
+			duration: durationMs,
+			dose: meta.dose ?? null,
+			peakWeight: null,
+			finalWeight: meta.yield_out ?? null,
+			peakPressure: 0,
+			peakTemp: 0,
+			series: [],
+			bean,
+			grinderModel: imp.grinderModel,
+			rating: meta.rating ?? 0,
+			notes: meta.notes ?? '',
+			tags: []
+		};
 	}
 
 	function commit(): void {
 		if (!preview) return;
-		// Add only roasters that aren't already in the library — those were
-		// detected during preview building and reused.
-		const newRoasters = preview.roasters.filter(
-			(r) => !library.findRoasterByName(r.name)
-		);
-		library.bulkAdd(preview.beans, newRoasters);
-		committed = { imported: preview.beans.length, skipped: preview.skipped };
+		library.bulkAdd(preview.newBeans, preview.newRoasters);
+		for (const prep of preview.newShots) {
+			history.insertPulled(prep.shot);
+		}
+		committed = {
+			beansImported: preview.newBeans.length,
+			shotsImported: preview.newShots.length,
+			duplicatesSkipped: preview.duplicatesSkipped
+		};
 		step = 'done';
 	}
 </script>
@@ -325,7 +358,7 @@
 
 <div class="bd-modal" role="dialog" aria-labelledby="bd-title">
 	<header class="bd-head">
-		<h2 class="bd-title" id="bd-title">Import beans</h2>
+		<h2 class="bd-title" id="bd-title">Import from Beanconqueror</h2>
 		<button class="bd-close" onclick={onClose} aria-label="Close">
 			<i class="ph ph-x" aria-hidden="true"></i>
 		</button>
@@ -342,9 +375,10 @@
 			<i class="ph-duotone ph-file-zip" aria-hidden="true"></i>
 			<div class="bd-drop-title">Drop a Beanconqueror .zip export</div>
 			<div class="bd-drop-sub">
-				The importer takes the high-value subset — name, roaster, roast date,
-				origin, notes, bag size — and skips anything Crema doesn't model
-				(cupping form, roast curves, mill data, attachments).
+				Beans, roasters, and espresso shots come through (Crema is
+				espresso-only, so V60 / AeroPress brews are skipped + counted).
+				Fields Crema doesn't model (cupping form, roast curves, EAN,
+				attachments) are dropped.
 			</div>
 			<label class="bd-pickbtn">
 				<input type="file" accept=".zip,application/zip" onchange={onFileChosen} />
@@ -368,26 +402,42 @@
 	{:else if step === 'preview' && preview}
 		<div class="bd-preview">
 			<div class="bd-stat">
-				<div class="bd-stat-n">{preview.beans.length}</div>
+				<div class="bd-stat-n">{preview.newBeans.length}</div>
 				<div class="bd-stat-label">beans to import</div>
 			</div>
 			<div class="bd-stat">
-				<div class="bd-stat-n">{preview.roasters.length}</div>
+				<div class="bd-stat-n">{preview.newRoasters.length}</div>
 				<div class="bd-stat-label">new roasters</div>
 			</div>
-			{#if preview.skipped > 0}
+			<div class="bd-stat">
+				<div class="bd-stat-n">{preview.newShots.length}</div>
+				<div class="bd-stat-label">espresso shots</div>
+			</div>
+			{#if preview.duplicatesSkipped > 0}
 				<div class="bd-stat">
-					<div class="bd-stat-n">{preview.skipped}</div>
+					<div class="bd-stat-n">{preview.duplicatesSkipped}</div>
 					<div class="bd-stat-label">skipped (duplicates)</div>
 				</div>
 			{/if}
 		</div>
-		{#if preview.droppedCategories.length > 0}
+		{#if preview.nonEspressoBrewsSkipped > 0 || preview.brewsDanglingPreparation > 0 || preview.droppedCategories.length > 0}
 			<div class="bd-dropped">
 				<i class="ph ph-info" aria-hidden="true"></i>
 				<div>
-					<div class="bd-dropped-title">Not migrated (Crema doesn't model these):</div>
+					<div class="bd-dropped-title">Not migrated:</div>
 					<ul>
+						{#if preview.nonEspressoBrewsSkipped > 0}
+							<li>
+								{preview.nonEspressoBrewsSkipped} non-espresso brew{preview.nonEspressoBrewsSkipped === 1 ? '' : 's'}
+								(V60 / AeroPress / etc.)
+							</li>
+						{/if}
+						{#if preview.brewsDanglingPreparation > 0}
+							<li>
+								{preview.brewsDanglingPreparation} brew{preview.brewsDanglingPreparation === 1 ? '' : 's'}
+								with missing preparation reference
+							</li>
+						{/if}
 						{#each preview.droppedCategories as cat (cat)}
 							<li>{cat}</li>
 						{/each}
@@ -398,16 +448,21 @@
 		<div class="bd-foot">
 			<button class="bd-btn" onclick={onClose}>Cancel</button>
 			<button class="bd-btn bd-btn-primary" onclick={commit}>
-				Import {preview.beans.length} bean{preview.beans.length === 1 ? '' : 's'}
+				Import {preview.newBeans.length + preview.newShots.length} item{preview.newBeans.length + preview.newShots.length === 1 ? '' : 's'}
 			</button>
 		</div>
 	{:else if step === 'done' && committed}
 		<div class="bd-status">
 			<i class="ph-fill ph-check-circle" aria-hidden="true"></i>
 			<div>
-				<div class="bd-status-title">Imported {committed.imported} bean{committed.imported === 1 ? '' : 's'}</div>
-				{#if committed.skipped > 0}
-					<div>Skipped {committed.skipped} duplicate{committed.skipped === 1 ? '' : 's'}.</div>
+				<div class="bd-status-title">
+					Imported {committed.beansImported} bean{committed.beansImported === 1 ? '' : 's'}
+					{#if committed.shotsImported > 0}
+						and {committed.shotsImported} shot{committed.shotsImported === 1 ? '' : 's'}
+					{/if}
+				</div>
+				{#if committed.duplicatesSkipped > 0}
+					<div>Skipped {committed.duplicatesSkipped} duplicate bean{committed.duplicatesSkipped === 1 ? '' : 's'}.</div>
 				{/if}
 			</div>
 			<button class="bd-btn bd-btn-primary" onclick={onClose}>Done</button>

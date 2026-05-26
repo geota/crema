@@ -371,6 +371,55 @@ impl<'de> Deserialize<'de> for BcBeanMix {
     }
 }
 
+/// Beanconqueror's `bean_roasting_type` enum. Maps to Crema's
+/// [`BeanRoastType`] via [`BcBeanRoastingType::to_crema`]; the
+/// `Unknown` variant returns `None` so the bag carries no roast-type
+/// rather than guessing.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum BcBeanRoastingType {
+    #[default]
+    Unknown,
+    Filter,
+    Espresso,
+    Omni,
+}
+
+impl BcBeanRoastingType {
+    #[must_use]
+    pub fn to_crema(self) -> Option<BeanRoastType> {
+        match self {
+            BcBeanRoastingType::Espresso => Some(BeanRoastType::Espresso),
+            BcBeanRoastingType::Filter => Some(BeanRoastType::Filter),
+            BcBeanRoastingType::Omni => Some(BeanRoastType::Omni),
+            BcBeanRoastingType::Unknown => None,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for BcBeanRoastingType {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let v = Value::deserialize(d)?;
+        if let Some(n) = v.as_i64() {
+            return Ok(match n {
+                1 => BcBeanRoastingType::Filter,
+                2 => BcBeanRoastingType::Espresso,
+                3 => BcBeanRoastingType::Omni,
+                _ => BcBeanRoastingType::Unknown,
+            });
+        }
+        let Some(s) = v.as_str() else {
+            return Ok(BcBeanRoastingType::Unknown);
+        };
+        let key = s.trim().to_ascii_uppercase();
+        Ok(match key.as_str() {
+            "FILTER" => BcBeanRoastingType::Filter,
+            "ESPRESSO" => BcBeanRoastingType::Espresso,
+            "OMNI" => BcBeanRoastingType::Omni,
+            _ => BcBeanRoastingType::Unknown,
+        })
+    }
+}
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum BcQuantityKind {
     #[default]
@@ -394,7 +443,10 @@ impl<'de> Deserialize<'de> for BcQuantityKind {
 // ── Import plan + diagnostics ────────────────────────────────────────
 
 /// The mapped Crema-side records ready to apply, plus diagnostics.
-#[derive(Debug, Clone, Default)]
+/// JSON-serializable so the wasm / uniffi bridges can hand it across
+/// the FFI boundary as one string.
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ImportPlan {
     pub beans: Vec<Bean>,
     pub roasters: Vec<Roaster>,
@@ -409,7 +461,8 @@ pub struct ImportPlan {
 /// A shot ready to feed into the shell's `HistoryStore.upsert`, with
 /// the cross-reference resolved into plain strings the shell uses to
 /// build its enriched record (ShotBean snapshot, grinder model, etc.).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ImportedShot {
     pub stored_shot: StoredShot,
     /// FK into the bean library we just imported. `None` when the BC
@@ -424,7 +477,8 @@ pub struct ImportedShot {
 }
 
 /// Counts + notes for the import-summary UI.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ImportDiagnostics {
     /// Number of brews skipped because their preparation wasn't espresso.
     pub non_espresso_brews_skipped: usize,
@@ -456,6 +510,24 @@ pub struct ImportDiagnostics {
 /// missing keys default to empty arrays.
 pub fn parse_export(json: &str) -> Result<BcExport, String> {
     serde_json::from_str(json).map_err(|e| e.to_string())
+}
+
+/// JSON-in / JSON-out adapter for the wasm + uniffi bridges. Takes the
+/// merged Beanconqueror main export JSON and a wall-clock `now_unix_ms`
+/// for the `created_at` / `updated_at` stamps; returns the
+/// [`ImportPlan`] serialized as JSON (camelCase field names) for the
+/// shell to apply.
+///
+/// Uses [`crate::new_profile_id`] for fresh roaster ids (UUID v7).
+///
+/// # Errors
+///
+/// Returns the JSON parse error string when the input isn't a
+/// well-formed object.
+pub fn import_beanconqueror_json(json: &str, now_unix_ms: i64) -> Result<String, String> {
+    let export = parse_export(json)?;
+    let plan = bc_to_crema(&export, now_unix_ms, crate::new_profile_id);
+    serde_json::to_string(&plan).map_err(|e| e.to_string())
 }
 
 /// Map a parsed [`BcExport`] into Crema's domain types.
@@ -504,6 +576,7 @@ where
             bc_bean.roast.to_crema_level()
         };
         bean.mix = bc_bean.bean_mix.to_crema();
+        bean.roast_type = bc_bean.bean_roasting_type.to_crema();
         bean.decaf = bc_bean.decaffeinated;
         bean.favourite = bc_bean.favourite;
         bean.notes = bc_bean.note.clone();
@@ -989,6 +1062,27 @@ mod tests {
             plan.shots[0].stored_shot.record.duration,
             Duration::from_millis(28_000)
         );
+    }
+
+    #[test]
+    fn roast_type_maps_to_crema_optional() {
+        let json = r#"{
+            "BEANS": [
+                {"config":{"uuid":"u1","unix_timestamp":0},"name":"a","roaster":"r","bean_roasting_type":"ESPRESSO"},
+                {"config":{"uuid":"u2","unix_timestamp":0},"name":"b","roaster":"r","bean_roasting_type":"FILTER"},
+                {"config":{"uuid":"u3","unix_timestamp":0},"name":"c","roaster":"r","bean_roasting_type":"OMNI"},
+                {"config":{"uuid":"u4","unix_timestamp":0},"name":"d","roaster":"r","bean_roasting_type":"UNKNOWN"},
+                {"config":{"uuid":"u5","unix_timestamp":0},"name":"e","roaster":"r"}
+            ]
+        }"#;
+        let plan = bc_to_crema(&parse_export(json).unwrap(), 1, seq_id());
+        assert_eq!(plan.beans[0].roast_type, Some(BeanRoastType::Espresso));
+        assert_eq!(plan.beans[1].roast_type, Some(BeanRoastType::Filter));
+        assert_eq!(plan.beans[2].roast_type, Some(BeanRoastType::Omni));
+        // BC `Unknown` → None on the Crema side (per design call).
+        assert_eq!(plan.beans[3].roast_type, None);
+        // Missing field → None (default).
+        assert_eq!(plan.beans[4].roast_type, None);
     }
 
     #[test]
