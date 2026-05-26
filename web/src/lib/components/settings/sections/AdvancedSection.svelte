@@ -11,9 +11,8 @@
 	 * shared `UiSnapshot.eventLog` already exists). "Reset preferences" is real
 	 * — it calls `SettingsStore.reset()`; profiles and history are untouched.
 	 *
-	 * **UI-only** — Home Assistant and the API-token action need a network
-	 * layer the shell lacks; factory reset is destructive and gated behind
-	 * a confirm. Each is marked with a `// TODO`.
+	 * **Factory reset** — destructive; wipes every `crema.*` localStorage
+	 * key and reloads. Gated behind a confirm. DE1 firmware is untouched.
 	 *
 	 * **Webhooks** — implemented: outbound POSTs from the browser to a
 	 * user-supplied URL when chosen events fire (subject to CORS). The
@@ -212,9 +211,6 @@
 		if (file && app) void app.replayCapture(file);
 	}
 
-	// TODO: Home Assistant MQTT bridge needs a network layer; local UI only.
-	let homeAssistant = $state(false);
-
 	function resetPreferences(): void {
 		if (
 			typeof window === 'undefined' ||
@@ -309,9 +305,6 @@
 		}
 	}
 
-	function newToken(): void {
-		// TODO: API tokens need an account / server. Stub.
-	}
 </script>
 
 <StSectionHead
@@ -390,31 +383,6 @@
 				onChange={(v) =>
 					settings.set('shotExportFormat', v as 'community' | 'replay')}
 			/>
-		{/snippet}
-	</StRow>
-</StGroup>
-
-<StGroup title="Integrations">
-	<StRow
-		title="Home Assistant"
-		sub="Expose shot start/end and temperature as MQTT topics."
-		notImplemented
-	>
-		{#snippet control()}
-			<StToggle
-				on={homeAssistant}
-				onChange={(v) => (homeAssistant = v)}
-				label="Home Assistant"
-			/>
-		{/snippet}
-	</StRow>
-	<StRow
-		title="API access"
-		sub="Generate a personal API token for third-party clients."
-		notImplemented
-	>
-		{#snippet control()}
-			<StButton label="New token" icon="key" onClick={newToken} />
 		{/snippet}
 	</StRow>
 </StGroup>

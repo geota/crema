@@ -153,14 +153,9 @@ export interface CompletedShot {
 	readonly peakTemp: number;
 	/**
 	 * When the shot finished — `performance.now()` value at the
-	 * `Event::ShotCompleted` fold. Used by `idleSince` siblings to compute
-	 * "time since last shot."
-	 *
-	 * TODO(doc/11): feed a "Last shot 12 min ago" subline on the brew
-	 * dashboard or a screensaver trigger. Today nothing reads this; kept
-	 * because it co-locates cleanly with the rest of the shot summary,
-	 * which is cheaper than re-introducing a top-level snapshot field
-	 * later.
+	 * `Event::ShotCompleted` fold. Unread today; kept co-located with
+	 * the rest of the shot summary so a future "time since last shot"
+	 * surface (if needed) doesn't need a structural change.
 	 */
 	readonly completedAt: number;
 }
@@ -416,10 +411,9 @@ export interface UiSnapshot {
 	 * (Idle / Sleep), or `null` before the first such transition. Idle-elapsed
 	 * is `now - idleSince`.
 	 *
-	 * TODO(doc/11): feed a screensaver / idle-fade trigger (the
-	 * `prefs.screensaver` boolean already exists in `DEFAULT_SETTINGS` but
-	 * is unused) or a "Sleeping in N min" hint on the brew dashboard.
-	 * No component reads this yet.
+	 * Tracked but currently unread — screensaver / idle-fade is a
+	 * conscious skip; the field stays so a future hint can read it
+	 * without re-introducing state.
 	 */
 	readonly idleSince: number | null;
 

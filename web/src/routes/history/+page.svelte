@@ -16,7 +16,7 @@
 	 *
 	 * Until a shot has been pulled the page shows a genuine empty state.
 	 *
-	 * **Stubbed** — Export, Compare and Save-as-profile are `// TODO`s.
+	 * Save-as-profile from a history row is a planned follow-on.
 	 */
 	import { getHistoryStore, exportStoredShotAsV2Json, shotFilename } from '$lib/history';
 	import type { StoredShot } from '$lib/history';
