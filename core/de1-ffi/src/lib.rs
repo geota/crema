@@ -303,9 +303,11 @@ pub struct CremaBridge {
 
 impl CremaBridge {
     /// Lock the wrapped core. The mutex is poisoned only by a panic inside a
-    /// core method; the core does not panic, so this never fails in practice.
+    /// core method; the core does not panic in practice, but if it ever does
+    /// we recover the inner guard rather than aborting the host process — the
+    /// Android shell would otherwise crash the app on a poisoned mutex.
     fn core(&self) -> MutexGuard<'_, CremaCore> {
-        self.inner.lock().expect("CremaCore mutex poisoned")
+        self.inner.lock().unwrap_or_else(|p| p.into_inner())
     }
 }
 
