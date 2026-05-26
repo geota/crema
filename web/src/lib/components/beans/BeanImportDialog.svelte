@@ -35,7 +35,7 @@
 	const history = getHistoryStore();
 	const imageStore = getBeanImageStore();
 
-	type Step = 'pick' | 'parsing' | 'preview' | 'done' | 'error';
+	type Step = 'pick' | 'parsing' | 'preview' | 'committing' | 'done' | 'error';
 	let step = $state<Step>('pick');
 	let errorMessage = $state('');
 	let preview = $state<Preview | null>(null);
@@ -393,43 +393,52 @@
 	}
 
 	async function commit(): Promise<void> {
-		if (!preview) return;
-		// Persist photo blobs FIRST so we can set each bean's
-		// `imageRef` before the bulk-add lands. The Bean is read-only
-		// after `bulkAdd` from the dialog's perspective, so we mutate
-		// the in-memory copies here and let the store snapshot include
-		// the imageRef.
-		const dropped = new Map(droppedPhotoFiles.map((f) => [f.name, f]));
-		const beansWithImages: Bean[] = await Promise.all(
-			preview.newBeans.map(async (bean) => {
-				const photos = readPhotoFilenames(bean);
-				if (photos.length === 0) return bean;
-				const file = photos.map((n) => dropped.get(n)).find((f) => f != null);
-				if (!file) return bean;
-				const ref = beanImageRefFor(bean.id);
-				try {
-					await imageStore.put(ref, file);
-				} catch {
-					// If IndexedDB fails (private mode, quota, …), drop
-					// the imageRef quietly — the bean still imports.
-					return bean;
-				}
-				return { ...bean, imageRef: ref };
-			})
-		);
+		if (!preview || step !== 'preview') return;
+		// Lock the step BEFORE awaiting anything so a double-click on
+		// the Import button can't queue a second pass while the first
+		// is in-flight. The button is disabled by the template too,
+		// but we belt-and-suspenders here in case the click slipped
+		// through (focus → space, drive-by ondblclick handlers, etc).
+		const snapshot = preview;
+		step = 'committing';
+		try {
+			const dropped = new Map(droppedPhotoFiles.map((f) => [f.name, f]));
+			const beansWithImages: Bean[] = await Promise.all(
+				snapshot.newBeans.map(async (bean) => {
+					const photos = readPhotoFilenames(bean);
+					if (photos.length === 0) return bean;
+					const file = photos.map((n) => dropped.get(n)).find((f) => f != null);
+					if (!file) return bean;
+					const ref = beanImageRefFor(bean.id);
+					try {
+						await imageStore.put(ref, file);
+					} catch {
+						// If IndexedDB fails (private mode, quota, …),
+						// drop the imageRef quietly — the bean still
+						// imports.
+						return bean;
+					}
+					return { ...bean, imageRef: ref };
+				})
+			);
 
-		library.bulkAdd(beansWithImages, preview.newRoasters);
-		for (const prep of preview.newShots) {
-			history.insertPulled(prep.shot);
+			library.bulkAdd(beansWithImages, snapshot.newRoasters);
+			for (const prep of snapshot.newShots) {
+				history.insertPulled(prep.shot);
+			}
+			const photosStored = beansWithImages.filter((b) => b.imageRef != null).length;
+			committed = {
+				beansImported: beansWithImages.length,
+				shotsImported: snapshot.newShots.length,
+				duplicatesSkipped: snapshot.duplicatesSkipped,
+				photosStored
+			};
+			step = 'done';
+		} catch (e) {
+			step = 'error';
+			errorMessage =
+				e instanceof Error ? e.message : 'Import failed mid-commit.';
 		}
-		const photosStored = beansWithImages.filter((b) => b.imageRef != null).length;
-		committed = {
-			beansImported: beansWithImages.length,
-			shotsImported: preview.newShots.length,
-			duplicatesSkipped: preview.duplicatesSkipped,
-			photosStored
-		};
-		step = 'done';
 	}
 
 	/**
@@ -497,6 +506,11 @@
 		<div class="bd-status">
 			<i class="ph ph-spinner-gap bd-spinner" aria-hidden="true"></i>
 			Parsing your archive…
+		</div>
+	{:else if step === 'committing'}
+		<div class="bd-status">
+			<i class="ph ph-spinner-gap bd-spinner" aria-hidden="true"></i>
+			Saving beans and photos…
 		</div>
 	{:else if step === 'error'}
 		<div class="bd-status bd-status-err">
@@ -567,7 +581,11 @@
 		{/if}
 		<div class="bd-foot">
 			<button class="bd-btn" onclick={onClose}>Cancel</button>
-			<button class="bd-btn bd-btn-primary" onclick={commit}>
+			<button
+				class="bd-btn bd-btn-primary"
+				onclick={commit}
+				disabled={step !== 'preview'}
+			>
 				Import {preview.newBeans.length + preview.newShots.length} item{preview.newBeans.length + preview.newShots.length === 1 ? '' : 's'}
 			</button>
 		</div>
