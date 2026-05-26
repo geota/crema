@@ -41,6 +41,25 @@ const LEGACY_KEY = 'crema.bean.current.v1';
 /** Current schema version stamped in the envelope. */
 const LIBRARY_SCHEMA = 1;
 
+/**
+ * Self-heal: drop any rows whose `id` already appeared earlier in the
+ * list. Last-write-wins semantics would mean keeping the latest, but
+ * the persisted order matches insertion (newest-first), so first-wins
+ * here preserves the most-recently-imported version. The pre-fix
+ * `bulkAdd` path could produce `[A, A, …]` after a double-click —
+ * this strips the duplicates on next page load without user action.
+ */
+function dedupById<T extends { id: string }>(rows: T[]): T[] {
+	const seen = new Set<string>();
+	const out: T[] = [];
+	for (const r of rows) {
+		if (seen.has(r.id)) continue;
+		seen.add(r.id);
+		out.push(r);
+	}
+	return out;
+}
+
 interface LibraryEnvelope {
 	schemaVersion: number;
 	beans: Bean[];
@@ -57,10 +76,12 @@ function readLibrary(): LibraryEnvelope {
 		Array.isArray((raw as LibraryEnvelope).roasters)
 	) {
 		const env = raw as LibraryEnvelope;
-		const beans = env.beans.map(coerceBean).filter((b): b is Bean => b !== null);
-		const roasters = env.roasters
-			.map(coerceRoaster)
-			.filter((r): r is Roaster => r !== null);
+		const beans = dedupById(
+			env.beans.map(coerceBean).filter((b): b is Bean => b !== null)
+		);
+		const roasters = dedupById(
+			env.roasters.map(coerceRoaster).filter((r): r is Roaster => r !== null)
+		);
 		return { schemaVersion: LIBRARY_SCHEMA, beans, roasters };
 	}
 	// First load — try the legacy single-bean migration.
@@ -224,16 +245,29 @@ export class BeanLibraryStore {
 
 	/**
 	 * Bulk-add beans (and synthesised roasters) — the import path's
-	 * commit step. Newly inserted beans land at the front; roasters
-	 * are added without dedup against an existing directory (callers
-	 * are responsible for `findRoasterByName` first).
+	 * commit step. Inserts land at the front; an incoming row whose
+	 * `id` already exists in the library REPLACES the existing one
+	 * (last-write-wins), so a re-import of the same `.zip` is
+	 * idempotent rather than producing two beans / roasters with the
+	 * same id (which would break Svelte's `each` key invariant on
+	 * `/beans`). Roasters are still de-duped by id only — callers that
+	 * want name-level merging should resolve via `findRoasterByName`
+	 * first.
 	 */
 	bulkAdd(beans: Bean[], roasters: Roaster[]): void {
 		if (beans.length === 0 && roasters.length === 0) return;
+		const incomingBeanIds = new Set(beans.map((b) => b.id));
+		const incomingRoasterIds = new Set(roasters.map((r) => r.id));
 		this.envelope = {
 			...this.envelope,
-			beans: [...beans, ...this.envelope.beans],
-			roasters: [...this.envelope.roasters, ...roasters]
+			beans: [
+				...beans,
+				...this.envelope.beans.filter((b) => !incomingBeanIds.has(b.id))
+			],
+			roasters: [
+				...this.envelope.roasters.filter((r) => !incomingRoasterIds.has(r.id)),
+				...roasters
+			]
 		};
 		this.persist();
 	}
