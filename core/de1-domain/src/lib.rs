@@ -69,7 +69,8 @@ pub mod volume;
 pub mod water;
 
 pub use bean::{
-    Bean, BeanMix, BeanOrigin, RoastBand, RoastFreshness, Roaster, ShotBean, days_off_roast,
+    Bean, BeanMix, BeanOrigin, BeanRoastType, RoastBand, RoastFreshness, Roaster, ShotBean,
+    days_off_roast,
     roast_band, roast_freshness,
 };
 pub use builtin::{BUILTIN_PROFILE_COUNT, builtin_profiles};

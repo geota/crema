@@ -47,7 +47,9 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::time::Duration;
 
-use crate::{Bean, BeanMix, BeanOrigin, Roaster, ShotMetadata, ShotRecord, StoredShot};
+use crate::{
+    Bean, BeanMix, BeanOrigin, BeanRoastType, Roaster, ShotMetadata, ShotRecord, StoredShot,
+};
 
 // ── Wire types — partial; serde drops unknown fields ─────────────────
 
@@ -96,6 +98,12 @@ pub struct BcBean {
     pub note: String,
     #[serde(default, rename = "beanMix")]
     pub bean_mix: BcBeanMix,
+    /// Roasted-for category. Wire form may be any of the legacy TS
+    /// value (`"Espresso"`), the proto name (`"ESPRESSO"` /
+    /// `"UNKNOWN_BEAN_ROASTING_TYPE"`), or the proto integer index
+    /// (0..3); see [`BcBeanRoastingType`].
+    #[serde(default, rename = "bean_roasting_type")]
+    pub bean_roasting_type: BcBeanRoastingType,
     #[serde(default)]
     pub decaffeinated: bool,
     #[serde(default)]
