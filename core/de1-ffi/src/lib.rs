@@ -331,6 +331,21 @@ pub fn fold_replay_meta_jsonl(payloads_json: String) -> Result<String, String> {
     de1_domain::fold_meta_jsonl_json(&payloads_json)
 }
 
+/// Import a Beanconqueror main export JSON. See
+/// [`de1_domain::import_beanconqueror_json`].
+///
+/// # Errors
+///
+/// Returns the JSON parse error string when the payload isn't a
+/// well-formed object.
+#[uniffi::export]
+pub fn import_beanconqueror_json(
+    merged_main_json: String,
+    now_unix_ms: i64,
+) -> Result<String, String> {
+    de1_domain::import_beanconqueror_json(&merged_main_json, now_unix_ms)
+}
+
 /// Derive the maintenance readout (filter capacity %, litres since
 /// descale, hours since clean) from the persisted state. See
 /// [`de1_domain::maintenance_readout_json`].

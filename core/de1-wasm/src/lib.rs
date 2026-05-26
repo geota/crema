@@ -443,6 +443,35 @@ pub fn fold_replay_meta_jsonl(payloads_json: &str) -> Result<String, String> {
     de1_domain::fold_meta_jsonl_json(payloads_json)
 }
 
+/// Import a Beanconqueror main export JSON, mapping the high-value
+/// subset into Crema's `Bean` / `Roaster` / `StoredShot` types. The
+/// shell unzips the BC archive (which packs `Beanconqueror.json` plus
+/// chunk files for BREWS/BEANS over 500 items) and concatenates them
+/// into one merged JSON before calling here. Returns the import plan
+/// serialised as JSON (camelCase field names): `{beans, roasters,
+/// shots, diagnostics}`. See `de1_domain::import_beanconqueror_json`
+/// for the canonical mapping rules.
+///
+/// # Errors
+///
+/// Returns the JSON parse error string when the payload isn't a
+/// well-formed object.
+#[wasm_bindgen(js_name = importBeanconquerorJson)]
+pub fn import_beanconqueror_json(
+    merged_main_json: &str,
+    now_unix_ms: f64,
+) -> Result<String, String> {
+    // JS `Date.now()` is an integer-valued `f64`. Truncate defensively;
+    // a non-finite value falls through to 0 rather than panicking.
+    #[allow(clippy::cast_possible_truncation)]
+    let now = if now_unix_ms.is_finite() {
+        now_unix_ms as i64
+    } else {
+        0
+    };
+    de1_domain::import_beanconqueror_json(merged_main_json, now)
+}
+
 /// Derive the maintenance readout (filter capacity %, litres since
 /// descale, hours since clean) from the persisted state. `state_json`
 /// is the shell-side `MaintenanceState` serialised to JSON; `now_ms`

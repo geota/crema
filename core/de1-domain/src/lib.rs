@@ -72,6 +72,7 @@ pub use bean::{
     Bean, BeanMix, BeanOrigin, BeanRoastType, RoastBand, RoastFreshness, Roaster, ShotBean,
     days_off_roast, roast_band, roast_freshness,
 };
+pub use beanconqueror::{ImportDiagnostics, ImportPlan, ImportedShot, import_beanconqueror_json};
 pub use builtin::{BUILTIN_PROFILE_COUNT, builtin_profiles};
 pub use error::{DomainError, ImportError};
 pub use flow::{Estimate, FlowAlgorithm, FlowEstimator};
