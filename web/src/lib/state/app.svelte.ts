@@ -1274,6 +1274,16 @@ export class CremaApp {
 	}
 
 	/**
+	 * Toggle steam eco mode on the DE1 — low-flow, lower-temp steam for
+	 * cleaner milk texture on small jugs. The core writes the new steam
+	 * settings to the firmware; `applyCoreOutput` dispatches the BLE
+	 * commands.
+	 */
+	async applySteamEcoMode(enabled: boolean): Promise<void> {
+		this.applyCoreOutput(await this.core.enableSteamEcoMode(enabled));
+	}
+
+	/**
 	 * Push the global max-shot-duration safety guardrail into the core,
 	 * in seconds. `0` (or any non-positive value) clears the limit.
 	 */

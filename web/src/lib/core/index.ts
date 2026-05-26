@@ -492,6 +492,14 @@ export interface CremaCore {
 	 */
 	resetScalePeaks(): Promise<void>;
 	/**
+	 * Enable / disable steam eco mode. The DE1 firmware exposes two
+	 * steam profiles — full-power steam (default) and a lower-flow,
+	 * lower-temp variant for cleaner milk texture on small jugs.
+	 * Returns the `CoreOutput` whose commands write the new steam
+	 * settings to the DE1.
+	 */
+	enableSteamEcoMode(enabled: boolean): Promise<CoreOutput>;
+	/**
 	 * Set the active profile's recipe target weight, grams. `undefined`
 	 * (or a `<=0` / non-finite value) means "no target." Called when the
 	 * shell activates or edits a profile.
@@ -913,6 +921,9 @@ async function createCore(): Promise<CremaCore> {
 		},
 		async resetScalePeaks() {
 			bridge.reset_scale_peaks();
+		},
+		async enableSteamEcoMode(enabled) {
+			return parseOutput(bridge.enable_steam_eco_mode(enabled, performance.now()));
 		},
 		async setProfileTargetWeight(grams) {
 			bridge.set_profile_target_weight(grams);
