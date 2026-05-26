@@ -39,7 +39,7 @@
 		formatVolume,
 		formatWeight
 	} from '$lib/settings';
-	import { getProfileStore, preinfuseSeconds, type CremaProfile } from '$lib/profiles';
+	import { getProfileStore, newProfileId, preinfuseSeconds, type CremaProfile } from '$lib/profiles';
 	import { getBeanStore, type Bean } from '$lib/bean';
 	import { getMaintenanceStore } from '$lib/maintenance';
 	import { getCremaAppContext } from '$lib/shell/app-context';
@@ -355,6 +355,40 @@
 	 * reaches the machine in this porting step — see the `// TODO: wire to DE1
 	 * control` notes.
 	 */
+	/**
+	 * Save the current QC dial values as a new custom profile, cloned
+	 * from the active profile. Prompts for a name; clamps blanks to a
+	 * timestamped default. The new profile is persisted via
+	 * ProfileStore and (per #83 wiring) activated + eagerly uploaded to
+	 * the DE1 if connected.
+	 */
+	function savePreset(): void {
+		const base = activeProfile;
+		if (!base) return;
+		if (typeof window === 'undefined') return;
+		const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
+		const suggested = `${base.name} — preset ${stamp}`;
+		const name = window.prompt('Name for the new preset:', suggested)?.trim();
+		if (!name) return;
+		const live = params.current;
+		const cloned: CremaProfile = {
+			...base,
+			source: 'custom',
+			id: newProfileId(),
+			name,
+			pinned: false,
+			lastUsed: null,
+			// Apply the QC dial values that genuinely affect the recipe.
+			// Steam / hot-water / flush fields on BrewParams are
+			// session-only UI; they aren't part of the profile model.
+			dose: live.dose,
+			yieldOut: live.yield,
+			brewTemp: live.brewTemp
+		};
+		profileStore.save(cloned);
+		profileStore.setActive(cloned.id);
+	}
+
 	const params = new BrewParamState(
 		() => paramSeed,
 		(key, value) => {
@@ -1346,6 +1380,7 @@
 			}}
 			{yieldTargetOn}
 			{onToggleYieldTarget}
+			onSavePreset={activeProfile ? savePreset : undefined}
 		/>
 	</div>
 </div>
