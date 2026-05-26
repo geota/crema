@@ -75,12 +75,12 @@
 	const openedDays = $derived(bean.openedOn ? daysOffRoast(bean.openedOn) : null);
 
 	const burnPct = $derived.by<number>(() => {
-		if (bean.bagSizeG <= 0) return 0;
-		return Math.max(0, Math.min(100, (bean.remainingG / bean.bagSizeG) * 100));
+		if (bean.bagSize <= 0) return 0;
+		return Math.max(0, Math.min(100, (bean.remaining / bean.bagSize) * 100));
 	});
 	const shotsRemaining = $derived.by<number>(() => {
-		if (bean.bagSizeG <= 0) return 0;
-		return Math.max(0, Math.floor(bean.remainingG / 18));
+		if (bean.bagSize <= 0) return 0;
+		return Math.max(0, Math.floor(bean.remaining / 18));
 	});
 
 	const shotsWithThis = $derived(history.all.filter((s) => s.bean?.beanId === bean.id));
@@ -241,9 +241,9 @@
 				</div>
 				<div class="bn-drawer-status-cell">
 					<div class="bn-cell-label">Remaining</div>
-					<div class="bn-cell-val">{bean.remainingG.toFixed(0)}<em>g</em></div>
+					<div class="bn-cell-val">{bean.remaining.toFixed(0)}<em>g</em></div>
 					<div class="bn-cell-sub">
-						of {bean.bagSizeG.toFixed(0)}<em>g</em>
+						of {bean.bagSize.toFixed(0)}<em>g</em>
 						{#if shotsRemaining > 0}· ~{shotsRemaining} shots{/if}
 					</div>
 				</div>
@@ -255,7 +255,7 @@
 					</div>
 				</div>
 			</div>
-			{#if bean.bagSizeG > 0}
+			{#if bean.bagSize > 0}
 				<div class="bn-drawer-burn">
 					<div class="bn-drawer-burn-track">
 						<div class="bn-drawer-burn-fill" style:width="{burnPct}%"></div>
@@ -338,8 +338,8 @@
 			</header>
 			{#if openBag}
 				<div class="bn-group-body">
-					<div class="bn-row"><div class="bn-row-label">Bag size</div><div class="bn-row-val">{bean.bagSizeG > 0 ? `${bean.bagSizeG.toFixed(0)}g` : '—'}</div></div>
-					<div class="bn-row"><div class="bn-row-label">Remaining</div><div class="bn-row-val">{bean.bagSizeG > 0 ? `${bean.remainingG.toFixed(0)}g` : '—'}</div></div>
+					<div class="bn-row"><div class="bn-row-label">Bag size</div><div class="bn-row-val">{bean.bagSize > 0 ? `${bean.bagSize.toFixed(0)}g` : '—'}</div></div>
+					<div class="bn-row"><div class="bn-row-label">Remaining</div><div class="bn-row-val">{bean.bagSize > 0 ? `${bean.remaining.toFixed(0)}g` : '—'}</div></div>
 					<div class="bn-row"><div class="bn-row-label">Grinder</div><div class="bn-row-val">{bean.grinder || '—'}</div></div>
 					<div class="bn-row"><div class="bn-row-label">Setting</div><div class="bn-row-val">{bean.grinderSetting || '—'}</div></div>
 				</div>

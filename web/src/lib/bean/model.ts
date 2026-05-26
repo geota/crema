@@ -78,8 +78,8 @@ export interface Bean {
 	mix: BeanMix | null;
 	decaf: boolean;
 	origin: BeanOrigin;
-	bagSizeG: number;
-	remainingG: number;
+	bagSize: number;
+	remaining: number;
 	qualityScore: string;
 	tastingNotes: string;
 	/** Star rating 0..5; 0 = unrated. */
@@ -139,8 +139,8 @@ export function blankBean(id?: string): Bean {
 		mix: null,
 		decaf: false,
 		origin: blankOrigin(),
-		bagSizeG: 0,
-		remainingG: 0,
+		bagSize: 0,
+		remaining: 0,
 		qualityScore: '',
 		tastingNotes: '',
 		rating: 0,
@@ -461,8 +461,17 @@ export function coerceBean(raw: unknown): Bean | null {
 		}
 		base.origin = origin;
 	}
-	if (typeof obj.bagSizeG === 'number') base.bagSizeG = obj.bagSizeG;
-	if (typeof obj.remainingG === 'number') base.remainingG = obj.remainingG;
+	// Accept new + legacy names so existing localStorage records (which
+	// carry the pre-rename `bagSizeG` / `remainingG` keys) migrate on
+	// load. Next persist writes the new names.
+	if (typeof obj.bagSize === 'number') base.bagSize = obj.bagSize;
+	else if (typeof (obj as Record<string, unknown>).bagSizeG === 'number') {
+		base.bagSize = (obj as Record<string, number>).bagSizeG;
+	}
+	if (typeof obj.remaining === 'number') base.remaining = obj.remaining;
+	else if (typeof (obj as Record<string, unknown>).remainingG === 'number') {
+		base.remaining = (obj as Record<string, number>).remainingG;
+	}
 	if (typeof obj.qualityScore === 'string') base.qualityScore = obj.qualityScore;
 	if (typeof obj.tastingNotes === 'string') base.tastingNotes = obj.tastingNotes;
 	if (typeof obj.rating === 'number') base.rating = obj.rating;

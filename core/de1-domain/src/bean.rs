@@ -359,11 +359,14 @@ pub struct Bean {
     pub decaf: bool,
     /// Provenance metadata. Empty struct by default.
     pub origin: BeanOrigin,
-    /// Bag size in grams — `0.0` when unknown.
-    pub bag_size_g: f32,
-    /// Remaining grams in the bag — auto-debited per shot when the
-    /// shell enables `Track bag remaining weight`. `0.0` when unknown.
-    pub remaining_g: f32,
+    /// Bag size, grams. `0.0` when unknown. Unit lives in the doc
+    /// comment, not the field name, per the locked-in naming rule
+    /// (`docs/44-pre-android-handoff.md`).
+    pub bag_size: f32,
+    /// Remaining weight in the bag, grams. Auto-debited per shot when
+    /// the shell enables `Track bag remaining weight`. `0.0` when
+    /// unknown.
+    pub remaining: f32,
     /// Quality score — free text per Visualizer (`"88"`, `"A-"`).
     pub quality_score: String,
     /// Tasting notes — multi-line free text.
@@ -444,8 +447,8 @@ impl Bean {
             roast_type: None,
             decaf: false,
             origin: BeanOrigin::default(),
-            bag_size_g: 0.0,
-            remaining_g: 0.0,
+            bag_size: 0.0,
+            remaining: 0.0,
             quality_score: String::new(),
             tasting_notes: String::new(),
             rating: 0,
@@ -825,8 +828,8 @@ mod tests {
             processing: Some("Washed".to_owned()),
             ..BeanOrigin::default()
         };
-        bean.bag_size_g = 250.0;
-        bean.remaining_g = 142.0;
+        bean.bag_size = 250.0;
+        bean.remaining = 142.0;
         bean.tasting_notes = "stone fruit, jasmine".to_owned();
         bean.rating = 4;
         bean.favourite = true;

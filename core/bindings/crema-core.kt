@@ -117,11 +117,14 @@ data class Bean (
 	val decaf: Boolean,
 	/// Provenance metadata. Empty struct by default.
 	val origin: BeanOrigin,
-	/// Bag size in grams — `0.0` when unknown.
-	val bag_size_g: Float,
-	/// Remaining grams in the bag — auto-debited per shot when the
-	/// shell enables `Track bag remaining weight`. `0.0` when unknown.
-	val remaining_g: Float,
+	/// Bag size, grams. `0.0` when unknown. Unit lives in the doc
+	/// comment, not the field name, per the locked-in naming rule
+	/// (`docs/44-pre-android-handoff.md`).
+	val bag_size: Float,
+	/// Remaining weight in the bag, grams. Auto-debited per shot when
+	/// the shell enables `Track bag remaining weight`. `0.0` when
+	/// unknown.
+	val remaining: Float,
 	/// Quality score — free text per Visualizer (`"88"`, `"A-"`).
 	val quality_score: String,
 	/// Tasting notes — multi-line free text.

@@ -634,8 +634,8 @@ where
             bean.rating = r.min(5);
         }
         if bc_bean.weight > 0.0 {
-            bean.bag_size_g = bc_bean.weight;
-            bean.remaining_g = bc_bean.weight;
+            bean.bag_size = bc_bean.weight;
+            bean.remaining = bc_bean.weight;
         }
         if bc_bean.finished {
             bean.archived_at = Some(now_unix_ms);
@@ -1050,8 +1050,8 @@ mod tests {
         assert_eq!(bean.mix, Some(BeanMix::Single));
         assert!(bean.decaf);
         assert!(bean.favourite);
-        assert_eq!(bean.bag_size_g, 250.0);
-        assert_eq!(bean.remaining_g, 250.0);
+        assert_eq!(bean.bag_size, 250.0);
+        assert_eq!(bean.remaining, 250.0);
         assert_eq!(bean.rating, 4);
         assert_eq!(bean.cost, Some(22.5));
         assert_eq!(bean.beanconqueror_id.as_deref(), Some("u1"));
