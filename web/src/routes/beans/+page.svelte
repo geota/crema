@@ -35,6 +35,7 @@
 	import BeanDrawer from '$lib/components/beans/BeanDrawer.svelte';
 	import BeanQuickAdd from '$lib/components/beans/BeanQuickAdd.svelte';
 	import BeanImportDialog from '$lib/components/beans/BeanImportDialog.svelte';
+	import RoasterDeleteDialog from '$lib/components/beans/RoasterDeleteDialog.svelte';
 	import BeansEmptyState from '$lib/components/beans/BeansEmptyState.svelte';
 	import SortPill from '$lib/components/shared/SortPill.svelte';
 	import FilterPills from '$lib/components/shared/FilterPills.svelte';
@@ -557,14 +558,9 @@
 		});
 	}
 
+	let roasterToDelete = $state<{ id: string; name: string; count: number } | null>(null);
 	function deleteRoaster(r: Roaster, count: number): void {
-		if (
-			!confirm(
-				`Delete "${r.name}"? Their ${count} bag(s) will keep but lose the roaster link.`
-			)
-		)
-			return;
-		library.deleteRoaster(r.id);
+		roasterToDelete = { id: r.id, name: r.name, count };
 	}
 
 	function editRoaster(id: string): void {
@@ -1062,6 +1058,17 @@
 <!-- Import -->
 {#if importOpen}
 	<BeanImportDialog onClose={() => (importOpen = false)} />
+{/if}
+
+<!-- Roaster delete (detach vs cascade) -->
+{#if roasterToDelete}
+	<RoasterDeleteDialog
+		roasterId={roasterToDelete.id}
+		roasterName={roasterToDelete.name}
+		linkedBeanCount={roasterToDelete.count}
+		onClose={() => (roasterToDelete = null)}
+		onDeleted={() => (roasterToDelete = null)}
+	/>
 {/if}
 
 <style>

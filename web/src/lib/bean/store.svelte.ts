@@ -347,6 +347,24 @@ export class BeanLibraryStore {
 	}
 
 	/**
+	 * Delete a roaster AND every bean that pointed at it. Opt-in
+	 * cascade — most users want the default {@link deleteRoaster}
+	 * (soft-detach) since beans carry the high-value data. This is
+	 * the rarer "I imported a roaster with junk beans I don't want
+	 * either" flow. Each bean is soft-deleted via {@link deleteBean}
+	 * so its Visualizer tombstone fires; the roaster delete itself
+	 * uses the soft-detach path (the beans have already been
+	 * removed, so the detach is a no-op).
+	 */
+	deleteRoasterAndBeans(id: string): void {
+		const beanIds = this.envelope.beans
+			.filter((b) => b.roasterId === id)
+			.map((b) => b.id);
+		for (const beanId of beanIds) this.deleteBean(beanId);
+		this.deleteRoaster(id);
+	}
+
+	/**
 	 * Find an existing roaster by case-insensitive name or create a fresh
 	 * one. Returns the roaster row. Used by the bean editor's "type a name
 	 * to create a roaster" inline flow and by the Beanconqueror importer.
