@@ -33,7 +33,7 @@ import type { CremaProfile } from './model';
  * bytes on the DE1 belong here. Mode toggles (`doseGrindMode` etc.) are pure
  * UI affordance and never reach the wire.
  */
-export interface ProfileFingerprintQc {
+export interface ProfileFingerprintOverrides {
 	/** Per-shot dose override (g) — wins over the profile's own dose. */
 	dose?: number;
 	/** Per-shot yield override (g) — wins over the profile's own yield. */
@@ -66,7 +66,7 @@ export interface ProfileFingerprintQc {
  */
 export function profileFingerprint(
 	profile: CremaProfile,
-	qc: ProfileFingerprintQc = {}
+	qc: ProfileFingerprintOverrides = {}
 ): string {
 	return wasmProfileFingerprint(JSON.stringify(profile), JSON.stringify(qc));
 }

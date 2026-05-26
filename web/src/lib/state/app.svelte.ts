@@ -32,7 +32,7 @@ import {
 	profileFingerprint,
 	toCoreProfile,
 	type CremaProfile,
-	type ProfileFingerprintQc
+	type ProfileFingerprintOverrides
 } from '$lib/profiles';
 import { readJson, writeJson } from '$lib/utils/storage';
 import { getSettingsStore } from '$lib/settings';
@@ -1665,7 +1665,7 @@ export class CremaApp {
 	 */
 	async syncActiveProfile(
 		profile: CremaProfile,
-		qc: ProfileFingerprintQc
+		qc: ProfileFingerprintOverrides
 	): Promise<boolean> {
 		const desired = profileFingerprint(profile, qc);
 		if (this.state.current.activeProfileFingerprint === desired) {
@@ -1973,7 +1973,7 @@ export class CremaApp {
 	 *   Defaults to no overrides for callers that don't have a brew sheet
 	 *   (e.g. headless scripts) — equivalent to running the profile bare.
 	 */
-	async startShot(qc: ProfileFingerprintQc = {}): Promise<void> {
+	async startShot(qc: ProfileFingerprintOverrides = {}): Promise<void> {
 		const profiles = getProfileStore();
 		await profiles.ensureLoaded();
 		const id = profiles.activeId;
