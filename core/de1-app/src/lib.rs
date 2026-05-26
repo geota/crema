@@ -228,6 +228,15 @@ impl ShotMetricsAccumulator {
     fn reset(&mut self) {
         *self = ShotMetricsAccumulator::default();
     }
+
+    /// Clear only the scale-derived running peaks (peak weight + final
+    /// weight). Used by [`CremaCore::reset_scale_peaks`] so the user can
+    /// drain the Scale-page peak display without disturbing the
+    /// pressure / temperature peaks that the DE1 telemetry feeds.
+    fn reset_scale(&mut self) {
+        self.peak_weight = None;
+        self.final_weight = None;
+    }
 }
 
 /// The headless Crema application core.
@@ -633,6 +642,14 @@ impl CremaCore {
     /// `false` on every active-profile change.
     pub fn set_weight_target_disabled(&mut self, disabled: bool) {
         self.weight_target_disabled = disabled;
+    }
+
+    /// Clear the running scale-derived peaks (peak weight + final
+    /// weight) without disturbing pressure / temperature peaks. The
+    /// Scale page's "Reset peak" button calls this when the user wants
+    /// a fresh measurement window — e.g. between dose-in and brew.
+    pub fn reset_scale_peaks(&mut self) {
+        self.shot_metrics.reset_scale();
     }
 
     /// Set the active profile's recipe target weight, in grams. `None` =

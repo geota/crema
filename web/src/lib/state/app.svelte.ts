@@ -1265,6 +1265,15 @@ export class CremaApp {
 	}
 
 	/**
+	 * Clear the running scale-derived peaks (peak weight + final weight).
+	 * The Scale page's "Reset peak" button calls this when the user
+	 * wants a fresh measurement window.
+	 */
+	async resetScalePeaks(): Promise<void> {
+		await this.core.resetScalePeaks();
+	}
+
+	/**
 	 * Push the global max-shot-duration safety guardrail into the core,
 	 * in seconds. `0` (or any non-positive value) clears the limit.
 	 */

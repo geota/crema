@@ -486,6 +486,12 @@ export interface CremaCore {
 	 */
 	setWeightTargetDisabled(disabled: boolean): Promise<void>;
 	/**
+	 * Clear the running scale-derived peaks (peak weight + final weight)
+	 * without disturbing pressure / temperature peaks. The Scale page's
+	 * "Reset peak" button.
+	 */
+	resetScalePeaks(): Promise<void>;
+	/**
 	 * Set the active profile's recipe target weight, grams. `undefined`
 	 * (or a `<=0` / non-finite value) means "no target." Called when the
 	 * shell activates or edits a profile.
@@ -904,6 +910,9 @@ async function createCore(): Promise<CremaCore> {
 		},
 		async setWeightTargetDisabled(disabled) {
 			bridge.set_weight_target_disabled(disabled);
+		},
+		async resetScalePeaks() {
+			bridge.reset_scale_peaks();
 		},
 		async setProfileTargetWeight(grams) {
 			bridge.set_profile_target_weight(grams);
