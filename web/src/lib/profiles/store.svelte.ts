@@ -106,6 +106,17 @@ export class ProfileStore {
 	);
 	/** The id of the profile marked active on the Brew dashboard. */
 	activeId = $state<string | null>(stripLegacyIdPrefixOnId(readJson<string | null>(ACTIVE_KEY, null)));
+	/**
+	 * Optional hook fired from {@link setActive} after the activeId
+	 * mutation, passing the resolved {@link CremaProfile} (or `null` if
+	 * the profile was deactivated / not found). The orchestrator
+	 * registers this at boot to eagerly upload the activated profile to
+	 * the DE1 — fire-and-forget, fingerprint-gated. Keeping the wiring
+	 * here means every `setActive` call site (BrewDashboard, ProfileEditor,
+	 * ShotDetail, profiles page, library delete-self) gets the upload
+	 * for free without needing a direct `CremaApp` reference.
+	 */
+	onActivate?: (profile: CremaProfile | null) => void;
 	/** Whether the built-in load has finished (drives the grid's loading state). */
 	loaded = $state(false);
 
@@ -337,12 +348,10 @@ export class ProfileStore {
 	 * relatively for display. (Legacy records may hold the old `'just now'`
 	 * label — the formatter falls back gracefully.)
 	 *
-	 * This is UI-level only: it does **not** write the profile to the DE1.
-	 * Uploading a profile to the machine needs the DE1 profile-upload path,
-	 * which the core does not yet expose.
-	 *
-	 * TODO: wire to DE1 profile upload — when the core gains a profile-upload
-	 * command, `setActive` should also assemble and upload the profile.
+	 * Also fires the optional {@link onActivate} hook (registered by the
+	 * orchestrator at boot) so the activated profile is eagerly uploaded
+	 * to the DE1 — fire-and-forget, fingerprint-gated against re-upload
+	 * of the same bytes.
 	 */
 	setActive(id: string | null): void {
 		this.activeId = id;
@@ -352,6 +361,11 @@ export class ProfileStore {
 		// for Crema-tap and GHC-tap starts alike (the core latches the
 		// values and reads them on `ShotEvent::Started`).
 		void this.pushActiveProfileToCore();
+		// Eager DE1 upload via the orchestrator's registered hook. The
+		// hook is fingerprint-gated, so reactivating the same profile
+		// costs one cheap compare; failures surface through the existing
+		// upload-progress / log surface.
+		this.onActivate?.(id == null ? null : (this.get(id) ?? null));
 		if (id == null) return;
 		// Stamp the current instant as the last-used timestamp (ISO-8601).
 		const stamp = new Date().toISOString();
