@@ -486,7 +486,8 @@
 	 * a stale pin from the previous shot doesn't outlive its data.
 	 */
 	let pinnedTimeSec = $state<number | null>(null);
-	let lastShotInProgress = $state(false);
+	// Plain `let` (not `$state`) so the rising-edge effect only tracks the prop.
+	let lastShotInProgress = false;
 	$effect(() => {
 		if (ui.shotInProgress && !lastShotInProgress) {
 			pinnedTimeSec = null;
