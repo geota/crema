@@ -733,6 +733,50 @@ data class LocalShotRef (
 	val deletedAt: Long? = null
 )
 
+/// A derived maintenance readout — counters, percentages, and due/ok
+/// verdicts. Mirrors the TS `MaintenanceReadout`.
+@Serializable
+data class MaintenanceReadout (
+	/// Litres since the last filter change.
+	val filterUsedLitres: Double,
+	/// Filter capacity remaining, 0–100 %.
+	val filterPercent: Double,
+	/// Whether the filter still has usable capacity.
+	val filterOk: Boolean,
+	/// Litres dispensed since the last descale.
+	val descaleSinceLitres: Double,
+	/// Whether the descale interval has not yet been exceeded.
+	val descaleOk: Boolean,
+	/// Whole hours since the last clean cycle.
+	val cleanSinceHours: Long,
+	/// Whether the clean interval has not yet been exceeded.
+	val cleanOk: Boolean
+)
+
+/// The persisted maintenance state — counters, baselines, and
+/// user-set intervals. Mirrors the TS `MaintenanceState`.
+@Serializable
+data class MaintenanceState (
+	/// Total litres of water dispensed, ever — the integrated flow counter.
+	val totalLitres: Double,
+	/// `total_litres` at the last filter clean.
+	val filterBaselineLitres: Double,
+	/// `total_litres` at the last descale.
+	val descaleBaselineLitres: Double,
+	/// Unix epoch ms of the last clean cycle.
+	val cleanAtMs: Long,
+	/// Unix epoch ms of the last filter clean.
+	val filterAtMs: Long,
+	/// Unix epoch ms of the last descale.
+	val descaleAtMs: Long,
+	/// Filter clean-interval threshold, litres.
+	val filterCapacityLitres: Double,
+	/// Descale interval, litres.
+	val descaleIntervalLitres: Double,
+	/// Clean cycle interval, hours.
+	val cleanIntervalHours: Double
+)
+
 /// One selectable display/behaviour mode a scale exposes.
 /// 
 /// A "first-class" scale (the Bookoo) lets the user switch the active display

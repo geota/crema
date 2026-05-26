@@ -50,6 +50,7 @@ pub mod history;
 pub mod history_export;
 pub mod history_import;
 pub mod ids;
+pub mod maintenance;
 pub mod profile;
 pub mod profile_bounds;
 pub mod profile_fingerprint;
@@ -77,6 +78,9 @@ pub use history::{STORED_SHOT_FORMAT_VERSION, ShotMetadata, StoredShot, brew_rat
 pub use history_export::export_v2_json_shot;
 pub use history_import::{import_legacy_tcl_shot, import_v2_json_shot};
 pub use ids::new_profile_id;
+pub use maintenance::{
+    MaintenanceReadout, MaintenanceState, maintenance_readout, maintenance_readout_json,
+};
 pub use profile::{
     AssembledProfile, BeverageType, Compare, ExitCondition, ExitMetric, Limiter, Profile,
     ProfileStep, Pump, TempSensor, Transition,

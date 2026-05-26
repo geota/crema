@@ -682,6 +682,52 @@ export interface LocalShotRef {
 }
 
 /**
+ * A derived maintenance readout — counters, percentages, and due/ok
+ * verdicts. Mirrors the TS `MaintenanceReadout`.
+ */
+export interface MaintenanceReadout {
+	/** Litres since the last filter change. */
+	filterUsedLitres: number;
+	/** Filter capacity remaining, 0–100 %. */
+	filterPercent: number;
+	/** Whether the filter still has usable capacity. */
+	filterOk: boolean;
+	/** Litres dispensed since the last descale. */
+	descaleSinceLitres: number;
+	/** Whether the descale interval has not yet been exceeded. */
+	descaleOk: boolean;
+	/** Whole hours since the last clean cycle. */
+	cleanSinceHours: number;
+	/** Whether the clean interval has not yet been exceeded. */
+	cleanOk: boolean;
+}
+
+/**
+ * The persisted maintenance state — counters, baselines, and
+ * user-set intervals. Mirrors the TS `MaintenanceState`.
+ */
+export interface MaintenanceState {
+	/** Total litres of water dispensed, ever — the integrated flow counter. */
+	totalLitres: number;
+	/** `total_litres` at the last filter clean. */
+	filterBaselineLitres: number;
+	/** `total_litres` at the last descale. */
+	descaleBaselineLitres: number;
+	/** Unix epoch ms of the last clean cycle. */
+	cleanAtMs: number;
+	/** Unix epoch ms of the last filter clean. */
+	filterAtMs: number;
+	/** Unix epoch ms of the last descale. */
+	descaleAtMs: number;
+	/** Filter clean-interval threshold, litres. */
+	filterCapacityLitres: number;
+	/** Descale interval, litres. */
+	descaleIntervalLitres: number;
+	/** Clean cycle interval, hours. */
+	cleanIntervalHours: number;
+}
+
+/**
  * One selectable display/behaviour mode a scale exposes.
  * 
  * A "first-class" scale (the Bookoo) lets the user switch the active display

@@ -33,6 +33,7 @@
  */
 
 import { readJson, writeJson } from '$lib/utils/storage';
+import { maintenanceReadout as wasmMaintenanceReadout } from '$lib/wasm/de1_wasm';
 
 /** localStorage key for the maintenance counters ({@link MaintenanceState}). */
 const MAINTENANCE_KEY = 'crema.maintenance.v2';
@@ -206,28 +207,15 @@ export class MaintenanceStore {
 		this.persist();
 	}
 
-	/** The derived filter / descale / clean readouts for the UI. */
+	/**
+	 * The derived filter / descale / clean readouts for the UI. The
+	 * derivation lives in the core (`de1_domain::maintenance_readout`)
+	 * so the web + Android shells produce byte-identical readouts from
+	 * the same persisted state.
+	 */
 	get readout(): MaintenanceReadout {
-		const s = this.state;
-		const filterUsedLitres = Math.max(0, s.totalLitres - s.filterBaselineLitres);
-		const filterPercent =
-			s.filterCapacityLitres > 0
-				? Math.max(0, Math.min(100, 100 - (filterUsedLitres / s.filterCapacityLitres) * 100))
-				: 0;
-		const descaleSinceLitres = Math.max(0, s.totalLitres - s.descaleBaselineLitres);
-		const cleanSinceHours = Math.max(
-			0,
-			Math.floor((Date.now() - s.cleanAtMs) / 3_600_000)
-		);
-		return {
-			filterUsedLitres,
-			filterPercent,
-			filterOk: filterUsedLitres < s.filterCapacityLitres,
-			descaleSinceLitres,
-			descaleOk: descaleSinceLitres < s.descaleIntervalLitres,
-			cleanSinceHours,
-			cleanOk: cleanSinceHours < s.cleanIntervalHours
-		};
+		const out = wasmMaintenanceReadout(JSON.stringify(this.state), Date.now());
+		return JSON.parse(out) as MaintenanceReadout;
 	}
 
 	/** Mark the water filter cleaned — rebaseline its litre counter. */
