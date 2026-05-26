@@ -37,6 +37,15 @@
 		shotsImported: number;
 		duplicatesSkipped: number;
 	} | null>(null);
+	/**
+	 * Photo files dropped alongside the ZIP. BC's "full with photos"
+	 * export emits the ZIP plus per-bean `photo_<uuid>.jpg` siblings
+	 * (not inside the ZIP — verified by inspecting actual exports).
+	 * Captured here so the IndexedDB image-storage pipeline (when it
+	 * lands) can match by filename against
+	 * `diagnostics.bagPhotoFilenames`.
+	 */
+	let droppedPhotoFiles = $state<File[]>([]);
 
 	/**
 	 * The plan shape the core's `importBeanconquerorJson` returns. Mirrors
@@ -56,6 +65,8 @@
 			readonly roastersCreated: number;
 			readonly shotsImported: number;
 			readonly droppedBeanCategories: ReadonlyArray<readonly [string, number]>;
+			readonly bagPhotosReferenced: number;
+			readonly bagPhotoFilenames: string[];
 		};
 	}
 
@@ -94,6 +105,10 @@
 		droppedCategories: string[];
 		nonEspressoBrewsSkipped: number;
 		brewsDanglingPreparation: number;
+		/** Photos referenced in `BEANS[*].attachments` (from the core). */
+		photosReferenced: number;
+		/** Photo files actually present alongside the ZIP in the drop. */
+		photosMatched: number;
 	}
 
 	/** A shell-ready StoredShot pre-built from a core ImportedShot. */
@@ -103,17 +118,41 @@
 
 	async function onFileChosen(event: Event): Promise<void> {
 		const input = event.currentTarget as HTMLInputElement;
-		const file = input.files?.[0];
+		const files = input.files ? [...input.files] : [];
 		input.value = '';
-		if (!file) return;
-		await ingest(file);
+		await ingestFiles(files);
 	}
 
 	async function onDrop(event: DragEvent): Promise<void> {
 		event.preventDefault();
-		const file = event.dataTransfer?.files?.[0];
-		if (!file) return;
-		await ingest(file);
+		const files = event.dataTransfer?.files ? [...event.dataTransfer.files] : [];
+		await ingestFiles(files);
+	}
+
+	/**
+	 * Entry point for both file-picker and drag-drop. Locates the BC
+	 * ZIP among the dropped files (case-insensitive, by `.zip`
+	 * extension) and captures sibling photo files (anything else with
+	 * an image-y name pattern that matches BC's `photo_<uuid>.<ext>`
+	 * convention or just `image/*` MIME types).
+	 */
+	async function ingestFiles(files: File[]): Promise<void> {
+		if (files.length === 0) return;
+		const zip = files.find(
+			(f) => f.name.toLowerCase().endsWith('.zip')
+		);
+		if (!zip) {
+			step = 'error';
+			errorMessage = 'No .zip file in the selection. Pick the Beanconqueror .zip (or drop the whole export folder).';
+			return;
+		}
+		droppedPhotoFiles = files.filter(
+			(f) =>
+				f !== zip &&
+				(f.type.startsWith('image/') ||
+					/\.(jpe?g|png|webp|heic|gif)$/i.test(f.name))
+		);
+		await ingest(zip);
 	}
 
 	async function ingest(file: File): Promise<void> {
@@ -265,6 +304,17 @@
 			.filter((entry) => entry[1] > 0)
 			.map(([cat, n]) => `${dropCategoryLabel(cat)} (${n})`);
 
+		// Match the referenced photo filenames against the files the
+		// user dropped alongside the ZIP. Filenames are typically
+		// `photo_<uuid>.<ext>` and unique, so a Set lookup is enough.
+		const droppedNames = new Set(
+			droppedPhotoFiles.map((f) => f.name)
+		);
+		const photosReferenced = plan.diagnostics.bagPhotoFilenames.length;
+		const photosMatched = plan.diagnostics.bagPhotoFilenames.filter(
+			(name) => droppedNames.has(name)
+		).length;
+
 		return {
 			filename,
 			newBeans,
@@ -273,7 +323,9 @@
 			duplicatesSkipped,
 			droppedCategories,
 			nonEspressoBrewsSkipped: plan.diagnostics.nonEspressoBrewsSkipped,
-			brewsDanglingPreparation: plan.diagnostics.brewsDanglingPreparation
+			brewsDanglingPreparation: plan.diagnostics.brewsDanglingPreparation,
+			photosReferenced,
+			photosMatched
 		};
 	}
 
@@ -373,16 +425,22 @@
 			aria-label="Drop a Beanconqueror .zip file"
 		>
 			<i class="ph-duotone ph-file-zip" aria-hidden="true"></i>
-			<div class="bd-drop-title">Drop a Beanconqueror .zip export</div>
+			<div class="bd-drop-title">Drop a Beanconqueror export</div>
 			<div class="bd-drop-sub">
-				Beans, roasters, and espresso shots come through (Crema is
+				Drop the <code>Beanconqueror.zip</code> on its own, or — for
+				the "with photos" export — drop the ZIP and the
+				<code>photo_*.jpg</code> sibling files together. Beans,
+				roasters, and espresso shots come through (Crema is
 				espresso-only, so V60 / AeroPress brews are skipped + counted).
-				Fields Crema doesn't model (cupping form, roast curves, EAN,
-				attachments) are dropped.
 			</div>
 			<label class="bd-pickbtn">
-				<input type="file" accept=".zip,application/zip" onchange={onFileChosen} />
-				<span>Choose file…</span>
+				<input
+					type="file"
+					accept=".zip,application/zip,image/*"
+					multiple
+					onchange={onFileChosen}
+				/>
+				<span>Choose files…</span>
 			</label>
 		</div>
 	{:else if step === 'parsing'}
@@ -420,7 +478,7 @@
 				</div>
 			{/if}
 		</div>
-		{#if preview.nonEspressoBrewsSkipped > 0 || preview.brewsDanglingPreparation > 0 || preview.droppedCategories.length > 0}
+		{#if preview.nonEspressoBrewsSkipped > 0 || preview.brewsDanglingPreparation > 0 || preview.droppedCategories.length > 0 || preview.photosReferenced > 0}
 			<div class="bd-dropped">
 				<i class="ph ph-info" aria-hidden="true"></i>
 				<div>
@@ -436,6 +494,17 @@
 							<li>
 								{preview.brewsDanglingPreparation} brew{preview.brewsDanglingPreparation === 1 ? '' : 's'}
 								with missing preparation reference
+							</li>
+						{/if}
+						{#if preview.photosReferenced > 0}
+							<li>
+								{preview.photosReferenced} bag photo{preview.photosReferenced === 1 ? '' : 's'}
+								{#if preview.photosMatched > 0}
+									({preview.photosMatched} found alongside the ZIP)
+								{:else}
+									(drop the photo files alongside the ZIP next time)
+								{/if}
+								— Crema's photo storage isn't wired yet, coming soon
 							</li>
 						{/if}
 						{#each preview.droppedCategories as cat (cat)}

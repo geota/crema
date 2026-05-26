@@ -128,8 +128,18 @@ pub struct BcBean {
     pub url: String,
     #[serde(default)]
     pub bean_information: Vec<BcBeanInformation>,
+    /// File names of bag photos. BC stores photos OUT of the ZIP as
+    /// sibling files (e.g. `photo_<uuid>.jpg`) and references them
+    /// here. The "full with photos" export drops the ZIP + the photo
+    /// files into a folder; the "slim" export omits photos entirely
+    /// (`attachments: []`). Crema captures the names for the
+    /// import-summary diagnostic; the byte storage hookup is a
+    /// follow-up (`Bean.image_ref` exists in the model but the
+    /// IndexedDB pipeline isn't wired yet).
+    #[serde(default)]
+    pub attachments: Vec<String>,
     /// Catch-all for fields we don't model (cupping form, frozen-group
-    /// tracking, EAN, attachments, …). Surface in diagnostics, drop on
+    /// tracking, EAN, …). Surface in diagnostics, drop on
     /// the Crema side.
     #[serde(flatten)]
     pub _other: serde_json::Map<String, Value>,
@@ -497,6 +507,16 @@ pub struct ImportDiagnostics {
     /// E.g. `("cupping form", 18)` if 18 beans carried a non-empty
     /// `cupping` object.
     pub dropped_bean_categories: Vec<(String, usize)>,
+    /// Total bag-photo filenames referenced across all beans. Photos
+    /// ride OUT of the BC ZIP as sibling files; this count is what the
+    /// import-summary UI uses to nudge the user "drop the folder, not
+    /// just the zip" when they have photos.
+    pub bag_photos_referenced: usize,
+    /// Filenames of every photo referenced (in BEANS[*].attachments[*]
+    /// order). The shell can match these against files the user
+    /// dropped alongside the ZIP to wire up `Bean.image_ref` once the
+    /// IndexedDB pipeline lands.
+    pub bag_photo_filenames: Vec<String>,
 }
 
 // ── Mapping ──────────────────────────────────────────────────────────
@@ -619,12 +639,20 @@ where
                 *drop_counts.entry(key).or_insert(0) += 1;
             }
         }
-        if has_non_empty(&bc_bean._other, "attachments") {
-            *drop_counts.entry("attachments").or_insert(0) += 1;
+        // Photo references — captured separately (the shell may match
+        // them against dropped-alongside files once image storage lands).
+        for photo in &bc_bean.attachments {
+            let trimmed = photo.trim();
+            if !trimmed.is_empty() {
+                plan.diagnostics
+                    .bag_photo_filenames
+                    .push(trimmed.to_owned());
+            }
         }
 
         plan.beans.push(bean);
     }
+    plan.diagnostics.bag_photos_referenced = plan.diagnostics.bag_photo_filenames.len();
 
     plan.diagnostics.beans_imported = plan.beans.len();
     plan.diagnostics.roasters_created = plan.roasters.len();
@@ -1085,6 +1113,74 @@ mod tests {
         assert_eq!(plan.beans[4].roast_type, None);
     }
 
+    /// Read a BC `Beanconqueror.json` out of one of the user's locally
+    /// captured fixtures (`~/code/bean-q-slim/Beanconqueror.zip`,
+    /// `~/code/bean-q-full-with-photos/Beanconqueror.zip`). Skips the
+    /// test cleanly when the file isn't present (CI won't have it).
+    fn read_user_fixture(subdir: &str) -> Option<String> {
+        let home = std::env::var("HOME").ok()?;
+        let zip_path = format!("{home}/code/{subdir}/Beanconqueror.zip");
+        let bytes = std::fs::read(&zip_path).ok()?;
+        // Minimal ZIP central-directory walk: find the entry named
+        // `Beanconqueror.json` and inflate it. We pull in `flate2` only
+        // when this test runs (it's already a transitive dep via wasm
+        // tooling — confirm at build time if it isn't).
+        //
+        // Cheaper: shell out to `unzip -p` so we don't add a Rust dep
+        // just for this ignored test.
+        let out = std::process::Command::new("unzip")
+            .args(["-p", &zip_path, "Beanconqueror.json"])
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        String::from_utf8(out.stdout).ok()
+    }
+
+    /// User's slim export: 2 beans, no attachments, no brews.
+    #[test]
+    #[ignore = "depends on ~/code/bean-q-slim being present"]
+    fn bc_user_slim_fixture() {
+        let Some(text) = read_user_fixture("bean-q-slim") else {
+            return;
+        };
+        let plan = bc_to_crema(
+            &parse_export(&text).expect("parse"),
+            1_700_000_000_000,
+            seq_id(),
+        );
+        assert_eq!(plan.beans.len(), 2, "slim fixture has 2 beans");
+        assert_eq!(plan.shots.len(), 0, "slim fixture has no brews");
+        assert_eq!(
+            plan.diagnostics.bag_photos_referenced, 0,
+            "slim fixture has no photo attachments"
+        );
+    }
+
+    /// User's full-with-photos export: 2 beans, 1 bean has a photo
+    /// attachment (the JPG ships as a sibling of the ZIP on disk),
+    /// no brews.
+    #[test]
+    #[ignore = "depends on ~/code/bean-q-full-with-photos being present"]
+    fn bc_user_full_with_photos_fixture() {
+        let Some(text) = read_user_fixture("bean-q-full-with-photos") else {
+            return;
+        };
+        let plan = bc_to_crema(
+            &parse_export(&text).expect("parse"),
+            1_700_000_000_000,
+            seq_id(),
+        );
+        assert_eq!(plan.beans.len(), 2);
+        assert_eq!(plan.shots.len(), 0);
+        assert_eq!(plan.diagnostics.bag_photos_referenced, 1);
+        assert_eq!(
+            plan.diagnostics.bag_photo_filenames[0],
+            "photo_2325dbb9-2278-47dc-bd81-47872f4c11c0.jpg"
+        );
+    }
+
     /// Sanity check against Beanconqueror's bundled test fixture
     /// (`~/code/crema-design/Beanconqueror/src/assets/BeanconquerorTestData.json`).
     /// Ignored by default — the fixture lives outside this repo, so CI
@@ -1101,16 +1197,19 @@ mod tests {
             Ok(h) => h,
             Err(_) => return,
         };
-        let path = format!(
-            "{home}/code/crema-design/Beanconqueror/src/assets/BeanconquerorTestData.json"
-        );
+        let path =
+            format!("{home}/code/crema-design/Beanconqueror/src/assets/BeanconquerorTestData.json");
         let Ok(text) = std::fs::read_to_string(&path) else {
             // Fixture not present locally — skip.
             return;
         };
         let plan = bc_to_crema(&parse_export(&text).unwrap(), 1_700_000_000_000, seq_id());
         assert_eq!(plan.beans.len(), 1, "fixture has 1 bean");
-        assert_eq!(plan.shots.len(), 0, "fixture is all AeroPress — no espresso");
+        assert_eq!(
+            plan.shots.len(),
+            0,
+            "fixture is all AeroPress — no espresso"
+        );
         assert!(
             plan.diagnostics.non_espresso_brews_skipped >= 1900,
             "expected ~2000 non-espresso brews counted, got {}",
