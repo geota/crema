@@ -20,13 +20,20 @@
 	 */
 	import { unzip, strFromU8 } from 'fflate';
 	import { importBeanconquerorJson as wasmImportBeanconquerorJson } from '$lib/wasm/de1_wasm';
-	import { getBeanStore, type Bean, type Roaster } from '$lib/bean';
+	import {
+		getBeanStore,
+		getBeanImageStore,
+		beanImageRefFor,
+		type Bean,
+		type Roaster
+	} from '$lib/bean';
 	import { getHistoryStore, type StoredShot, type ShotBean } from '$lib/history';
 
 	let { onClose }: { onClose: () => void } = $props();
 
 	const library = getBeanStore();
 	const history = getHistoryStore();
+	const imageStore = getBeanImageStore();
 
 	type Step = 'pick' | 'parsing' | 'preview' | 'done' | 'error';
 	let step = $state<Step>('pick');
@@ -36,6 +43,7 @@
 		beansImported: number;
 		shotsImported: number;
 		duplicatesSkipped: number;
+		photosStored: number;
 	} | null>(null);
 	/**
 	 * Photo files dropped alongside the ZIP. BC's "full with photos"
@@ -384,18 +392,60 @@
 		};
 	}
 
-	function commit(): void {
+	async function commit(): Promise<void> {
 		if (!preview) return;
-		library.bulkAdd(preview.newBeans, preview.newRoasters);
+		// Persist photo blobs FIRST so we can set each bean's
+		// `imageRef` before the bulk-add lands. The Bean is read-only
+		// after `bulkAdd` from the dialog's perspective, so we mutate
+		// the in-memory copies here and let the store snapshot include
+		// the imageRef.
+		const dropped = new Map(droppedPhotoFiles.map((f) => [f.name, f]));
+		const beansWithImages: Bean[] = await Promise.all(
+			preview.newBeans.map(async (bean) => {
+				const photos = readPhotoFilenames(bean);
+				if (photos.length === 0) return bean;
+				const file = photos.map((n) => dropped.get(n)).find((f) => f != null);
+				if (!file) return bean;
+				const ref = beanImageRefFor(bean.id);
+				try {
+					await imageStore.put(ref, file);
+				} catch {
+					// If IndexedDB fails (private mode, quota, …), drop
+					// the imageRef quietly — the bean still imports.
+					return bean;
+				}
+				return { ...bean, imageRef: ref };
+			})
+		);
+
+		library.bulkAdd(beansWithImages, preview.newRoasters);
 		for (const prep of preview.newShots) {
 			history.insertPulled(prep.shot);
 		}
+		const photosStored = beansWithImages.filter((b) => b.imageRef != null).length;
 		committed = {
-			beansImported: preview.newBeans.length,
+			beansImported: beansWithImages.length,
 			shotsImported: preview.newShots.length,
-			duplicatesSkipped: preview.duplicatesSkipped
+			duplicatesSkipped: preview.duplicatesSkipped,
+			photosStored
 		};
 		step = 'done';
+	}
+
+	/**
+	 * Pull the BC-attached `photo_filenames` list off a bean's open
+	 * metadata blob. The core's mapper writes it under
+	 * `metadata.beanconqueror.photo_filenames` (an array of strings).
+	 * Returns an empty array if the field is missing or wrong-shaped.
+	 */
+	function readPhotoFilenames(bean: Bean): string[] {
+		const meta = bean.metadata as unknown;
+		if (!meta || typeof meta !== 'object') return [];
+		const bc = (meta as Record<string, unknown>).beanconqueror;
+		if (!bc || typeof bc !== 'object') return [];
+		const names = (bc as Record<string, unknown>).photo_filenames;
+		if (!Array.isArray(names)) return [];
+		return names.filter((n): n is string => typeof n === 'string');
 	}
 </script>
 
@@ -471,6 +521,12 @@
 				<div class="bd-stat-n">{preview.newShots.length}</div>
 				<div class="bd-stat-label">espresso shots</div>
 			</div>
+			{#if preview.photosMatched > 0}
+				<div class="bd-stat">
+					<div class="bd-stat-n">{preview.photosMatched}</div>
+					<div class="bd-stat-label">bag photos</div>
+				</div>
+			{/if}
 			{#if preview.duplicatesSkipped > 0}
 				<div class="bd-stat">
 					<div class="bd-stat-n">{preview.duplicatesSkipped}</div>
@@ -478,7 +534,7 @@
 				</div>
 			{/if}
 		</div>
-		{#if preview.nonEspressoBrewsSkipped > 0 || preview.brewsDanglingPreparation > 0 || preview.droppedCategories.length > 0 || preview.photosReferenced > 0}
+		{#if preview.nonEspressoBrewsSkipped > 0 || preview.brewsDanglingPreparation > 0 || preview.droppedCategories.length > 0 || preview.photosReferenced > preview.photosMatched}
 			<div class="bd-dropped">
 				<i class="ph ph-info" aria-hidden="true"></i>
 				<div>
@@ -496,15 +552,10 @@
 								with missing preparation reference
 							</li>
 						{/if}
-						{#if preview.photosReferenced > 0}
+						{#if preview.photosReferenced > 0 && preview.photosMatched < preview.photosReferenced}
 							<li>
-								{preview.photosReferenced} bag photo{preview.photosReferenced === 1 ? '' : 's'}
-								{#if preview.photosMatched > 0}
-									({preview.photosMatched} found alongside the ZIP)
-								{:else}
-									(drop the photo files alongside the ZIP next time)
-								{/if}
-								— Crema's photo storage isn't wired yet, coming soon
+								{preview.photosReferenced - preview.photosMatched} bag photo{preview.photosReferenced - preview.photosMatched === 1 ? '' : 's'}
+								not found alongside the ZIP — drop the photo files together next time
 							</li>
 						{/if}
 						{#each preview.droppedCategories as cat (cat)}
@@ -528,6 +579,9 @@
 					Imported {committed.beansImported} bean{committed.beansImported === 1 ? '' : 's'}
 					{#if committed.shotsImported > 0}
 						and {committed.shotsImported} shot{committed.shotsImported === 1 ? '' : 's'}
+					{/if}
+					{#if committed.photosStored > 0}
+						(plus {committed.photosStored} photo{committed.photosStored === 1 ? '' : 's'})
 					{/if}
 				</div>
 				{#if committed.duplicatesSkipped > 0}

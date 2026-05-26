@@ -639,15 +639,37 @@ where
                 *drop_counts.entry(key).or_insert(0) += 1;
             }
         }
-        // Photo references — captured separately (the shell may match
-        // them against dropped-alongside files once image storage lands).
-        for photo in &bc_bean.attachments {
-            let trimmed = photo.trim();
-            if !trimmed.is_empty() {
-                plan.diagnostics
-                    .bag_photo_filenames
-                    .push(trimmed.to_owned());
+        // Photo references — captured both in the flat diagnostics
+        // list (for the import-summary banner) AND on the bean itself
+        // via `metadata.beanconqueror.photo_filenames`, so the shell
+        // can map filename → bean when the user drops the photo files
+        // alongside the ZIP.
+        let photos: Vec<String> = bc_bean
+            .attachments
+            .iter()
+            .map(|s| s.trim().to_owned())
+            .filter(|s| !s.is_empty())
+            .collect();
+        if !photos.is_empty() {
+            for p in &photos {
+                plan.diagnostics.bag_photo_filenames.push(p.clone());
             }
+            let mut bc_meta = serde_json::Map::new();
+            bc_meta.insert(
+                "photo_filenames".to_owned(),
+                serde_json::Value::Array(
+                    photos
+                        .iter()
+                        .map(|s| serde_json::Value::String(s.clone()))
+                        .collect(),
+                ),
+            );
+            let mut wrapper = serde_json::Map::new();
+            wrapper.insert(
+                "beanconqueror".to_owned(),
+                serde_json::Value::Object(bc_meta),
+            );
+            bean.metadata = serde_json::Value::Object(wrapper);
         }
 
         plan.beans.push(bean);
@@ -1120,14 +1142,11 @@ mod tests {
     fn read_user_fixture(subdir: &str) -> Option<String> {
         let home = std::env::var("HOME").ok()?;
         let zip_path = format!("{home}/code/{subdir}/Beanconqueror.zip");
-        let bytes = std::fs::read(&zip_path).ok()?;
-        // Minimal ZIP central-directory walk: find the entry named
-        // `Beanconqueror.json` and inflate it. We pull in `flate2` only
-        // when this test runs (it's already a transitive dep via wasm
-        // tooling — confirm at build time if it isn't).
-        //
-        // Cheaper: shell out to `unzip -p` so we don't add a Rust dep
-        // just for this ignored test.
+        if !std::path::Path::new(&zip_path).exists() {
+            return None;
+        }
+        // Shell out to `unzip -p` so we don't add a Rust ZIP dep just
+        // for this ignored test.
         let out = std::process::Command::new("unzip")
             .args(["-p", &zip_path, "Beanconqueror.json"])
             .output()

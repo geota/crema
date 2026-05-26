@@ -53,6 +53,12 @@ export {
 } from './visualizer-sync';
 
 export {
+	BeanImageStore,
+	getBeanImageStore,
+	refForBean as beanImageRefFor
+} from './image-storage';
+
+export {
 	clearTokens as clearVisualizerTokens,
 	fetchAccount as fetchVisualizerAccount,
 	isConfigured as isVisualizerOauthConfigured,
