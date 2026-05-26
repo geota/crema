@@ -1085,6 +1085,39 @@ mod tests {
         assert_eq!(plan.beans[4].roast_type, None);
     }
 
+    /// Sanity check against Beanconqueror's bundled test fixture
+    /// (`~/code/crema-design/Beanconqueror/src/assets/BeanconquerorTestData.json`).
+    /// Ignored by default — the fixture lives outside this repo, so CI
+    /// won't have it. Run locally with:
+    /// `cargo test -p de1-domain bc_real_fixture_does_not_panic -- --include-ignored`.
+    /// The fixture has 1 bean and 2000 brews, all AeroPress (style_type
+    /// `FULL_IMMERSION`) — so we expect 1 imported bean, 0 imported shots,
+    /// and 2000 non-espresso skips. If the file isn't there the test
+    /// silently passes.
+    #[test]
+    #[ignore = "depends on the BC repo being checked out alongside Crema"]
+    fn bc_real_fixture_does_not_panic() {
+        let home = match std::env::var("HOME") {
+            Ok(h) => h,
+            Err(_) => return,
+        };
+        let path = format!(
+            "{home}/code/crema-design/Beanconqueror/src/assets/BeanconquerorTestData.json"
+        );
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            // Fixture not present locally — skip.
+            return;
+        };
+        let plan = bc_to_crema(&parse_export(&text).unwrap(), 1_700_000_000_000, seq_id());
+        assert_eq!(plan.beans.len(), 1, "fixture has 1 bean");
+        assert_eq!(plan.shots.len(), 0, "fixture is all AeroPress — no espresso");
+        assert!(
+            plan.diagnostics.non_espresso_brews_skipped >= 1900,
+            "expected ~2000 non-espresso brews counted, got {}",
+            plan.diagnostics.non_espresso_brews_skipped
+        );
+    }
+
     #[test]
     fn fixture_style_enum_lowercase_unknown_falls_through() {
         // The BC test fixture uses `"roast":"UNKNOWN"` (suffix-stripped
