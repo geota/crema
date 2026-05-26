@@ -331,6 +331,47 @@ pub fn fold_replay_meta_jsonl(payloads_json: String) -> Result<String, String> {
     de1_domain::fold_meta_jsonl_json(&payloads_json)
 }
 
+/// Build a Beanconqueror main JSON from a Crema envelope. See
+/// [`de1_domain::crema_to_bc_main_json_from_envelope`].
+///
+/// # Errors
+///
+/// Returns the JSON parse error string when the envelope is malformed.
+#[uniffi::export]
+pub fn export_beanconqueror_main_json(
+    envelope_json: String,
+    now_unix_ms: i64,
+) -> Result<String, String> {
+    de1_domain::crema_to_bc_main_json_from_envelope(&envelope_json, now_unix_ms)
+}
+
+/// Build a Crema JSONL export from an envelope JSON. See
+/// [`de1_domain::export_jsonl_from_json`].
+///
+/// # Errors
+///
+/// Returns the JSON parse error string when the envelope is
+/// malformed.
+#[uniffi::export]
+pub fn export_crema_jsonl(
+    envelope_json: String,
+    exported_at_unix_ms: i64,
+    crema_version: String,
+) -> Result<String, String> {
+    de1_domain::export_jsonl_from_json(&envelope_json, exported_at_unix_ms, &crema_version)
+}
+
+/// Parse a Crema JSONL export into an `ImportPlan` JSON. See
+/// [`de1_domain::import_jsonl_to_plan_json`].
+///
+/// # Errors
+///
+/// Currently always Ok; reserved for future schema-version errors.
+#[uniffi::export]
+pub fn import_crema_jsonl(text: String) -> Result<String, String> {
+    de1_domain::import_jsonl_to_plan_json(&text)
+}
+
 /// Import a Beanconqueror main export JSON. See
 /// [`de1_domain::import_beanconqueror_json`].
 ///

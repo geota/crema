@@ -543,6 +543,363 @@ pub fn parse_export(json: &str) -> Result<BcExport, String> {
     serde_json::from_str(json).map_err(|e| e.to_string())
 }
 
+// ── Export back to Beanconqueror ─────────────────────────────────────
+
+/// Build a Beanconqueror main JSON from Crema's library + history.
+///
+/// Inverse of [`bc_to_crema`] within the limits documented in
+/// `docs/47-beanconqueror-field-mapping.md` §4. Lossy on the Crema
+/// side (BC has no Roaster entity — flattens to bean.roaster
+/// string; no tags / visualizer ids / canonical-roaster pointer).
+/// Round-trippable: BC → Crema → BC re-emits the `metadata.beanconqueror.unmapped`
+/// stash on every bean, so cupping form / EAN / qr_code / blend
+/// extras survive the trip.
+///
+/// The shell handles ZIP packaging + sibling photo files; this fn
+/// just produces the main `Beanconqueror.json` payload.
+#[must_use]
+pub fn crema_to_bc_main_json(
+    beans: &[Bean],
+    roasters: &[Roaster],
+    shots: &[StoredShot],
+    now_unix_ms: i64,
+) -> String {
+    let roaster_by_id: std::collections::HashMap<&str, &Roaster> =
+        roasters.iter().map(|r| (r.id.as_str(), r)).collect();
+
+    // Synthesise one PREPARATION row referenced by every brew —
+    // ESPRESSO style. BC tolerates a brews-only export but the brew's
+    // `method_of_preparation` would dangle without it.
+    let prep_uuid = "crema-espresso-preparation";
+    let preparation = serde_json::json!({
+        "config": { "uuid": prep_uuid, "unix_timestamp": now_unix_ms / 1000 },
+        "name": "Espresso",
+        "type": "PORTAFILTER",
+        "style_type": "ESPRESSO",
+        "finished": false,
+        "attachments": []
+    });
+
+    // Distinct grinder models across shots → one MILL row each.
+    let mut mill_uuids: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    let mut mills_json: Vec<serde_json::Value> = Vec::new();
+    // The Rust core's `ShotMetadata` doesn't carry an equipment-level
+    // `grinderModel` — that's a shell field. BC's `MILL` rows need a
+    // distinct equipment name per record; we leave MILL empty in the
+    // sans-IO path and the shell adapter fills it in by walking its
+    // own `StoredShot.grinderModel` snapshot.
+    let _ = &mut mill_uuids;
+    let _ = &mut mills_json;
+    let _ = shots;
+
+    let mut beans_json: Vec<serde_json::Value> = Vec::with_capacity(beans.len());
+    for bean in beans {
+        let roaster_name = bean
+            .roaster_id
+            .as_deref()
+            .and_then(|id| roaster_by_id.get(id))
+            .map(|r| r.name.clone())
+            .unwrap_or_default();
+
+        // Pull the unmapped + extra-blend-components stash back out
+        // of metadata.beanconqueror so they round-trip verbatim.
+        let bc_stash = bean
+            .metadata
+            .as_object()
+            .and_then(|m| m.get("beanconqueror"))
+            .and_then(|v| v.as_object());
+        let photo_filenames = bc_stash
+            .and_then(|s| s.get("photo_filenames"))
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(str::to_owned))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let bean_information_extra = bc_stash
+            .and_then(|s| s.get("bean_information_extra"))
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let unmapped = bc_stash
+            .and_then(|s| s.get("unmapped"))
+            .and_then(|v| v.as_object())
+            .cloned()
+            .unwrap_or_default();
+
+        // Reverse the tasting-notes join: BC has separate note +
+        // aromatics fields. We can't tell which half of the joined
+        // string came from which BC field on the round-trip back,
+        // so the safest choice is: put the whole thing in `note`
+        // and leave `aromatics` empty. If the original BC import
+        // stashed the split somewhere, future work could recover
+        // it; for now a lossy reverse is acceptable per the doc.
+        let note = bean.tasting_notes.clone();
+        let aromatics = String::new();
+
+        let mut bean_info: Vec<serde_json::Value> =
+            Vec::with_capacity(1 + bean_information_extra.len());
+        // Primary origin → bean_information[0].
+        let mut primary = serde_json::Map::new();
+        if let Some(c) = &bean.origin.country {
+            primary.insert("country".to_owned(), serde_json::Value::String(c.clone()));
+        }
+        if let Some(r) = &bean.origin.region {
+            primary.insert("region".to_owned(), serde_json::Value::String(r.clone()));
+        }
+        if let Some(f) = &bean.origin.farm {
+            primary.insert("farm".to_owned(), serde_json::Value::String(f.clone()));
+        }
+        if let Some(f) = &bean.origin.farmer {
+            primary.insert("farmer".to_owned(), serde_json::Value::String(f.clone()));
+        }
+        if let Some(v) = &bean.origin.variety {
+            primary.insert("variety".to_owned(), serde_json::Value::String(v.clone()));
+        }
+        if let Some(e) = &bean.origin.elevation {
+            primary.insert("elevation".to_owned(), serde_json::Value::String(e.clone()));
+        }
+        if let Some(p) = &bean.origin.processing {
+            primary.insert(
+                "processing".to_owned(),
+                serde_json::Value::String(p.clone()),
+            );
+        }
+        if let Some(h) = &bean.origin.harvest_time {
+            primary.insert(
+                "harvest_time".to_owned(),
+                serde_json::Value::String(h.clone()),
+            );
+        }
+        bean_info.push(serde_json::Value::Object(primary));
+        for extra in bean_information_extra {
+            bean_info.push(extra);
+        }
+
+        let mut obj = serde_json::Map::new();
+        // Strip the `bean:` prefix so BC sees its native UUID shape.
+        let uuid = bean.id.strip_prefix("bean:").unwrap_or(&bean.id).to_owned();
+        obj.insert(
+            "config".to_owned(),
+            serde_json::json!({ "uuid": uuid, "unix_timestamp": bean.created_at / 1000 }),
+        );
+        obj.insert(
+            "name".to_owned(),
+            serde_json::Value::String(bean.name.clone()),
+        );
+        obj.insert(
+            "roaster".to_owned(),
+            serde_json::Value::String(roaster_name),
+        );
+        obj.insert(
+            "roast".to_owned(),
+            serde_json::Value::String(crema_roast_level_to_bc(bean.roast_level)),
+        );
+        obj.insert(
+            "roast_range".to_owned(),
+            serde_json::Value::from(bean.roast_level.unwrap_or(0)),
+        );
+        obj.insert("note".to_owned(), serde_json::Value::String(note));
+        obj.insert("aromatics".to_owned(), serde_json::Value::String(aromatics));
+        obj.insert(
+            "cost".to_owned(),
+            serde_json::Value::from(bean.cost.unwrap_or(0.0)),
+        );
+        obj.insert(
+            "beanMix".to_owned(),
+            serde_json::Value::String(match bean.mix {
+                Some(BeanMix::Single) => "SINGLE_ORIGIN".to_owned(),
+                Some(BeanMix::Blend) => "BLEND".to_owned(),
+                None => "UNKNOWN".to_owned(),
+            }),
+        );
+        obj.insert(
+            "bean_roasting_type".to_owned(),
+            serde_json::Value::String(match bean.roast_type {
+                Some(BeanRoastType::Espresso) => "ESPRESSO".to_owned(),
+                Some(BeanRoastType::Filter) => "FILTER".to_owned(),
+                Some(BeanRoastType::Omni) => "OMNI".to_owned(),
+                None => "UNKNOWN".to_owned(),
+            }),
+        );
+        obj.insert(
+            "decaffeinated".to_owned(),
+            serde_json::Value::Bool(bean.decaf),
+        );
+        obj.insert(
+            "favourite".to_owned(),
+            serde_json::Value::Bool(bean.favourite),
+        );
+        obj.insert(
+            "finished".to_owned(),
+            serde_json::Value::Bool(bean.archived_at.is_some()),
+        );
+        obj.insert("weight".to_owned(), serde_json::Value::from(bean.bag_size));
+        obj.insert("rating".to_owned(), serde_json::Value::from(bean.rating));
+        obj.insert(
+            "roastingDate".to_owned(),
+            serde_json::Value::String(bean.roasted_on.clone().unwrap_or_default()),
+        );
+        obj.insert(
+            "openDate".to_owned(),
+            serde_json::Value::String(bean.opened_on.clone().unwrap_or_default()),
+        );
+        obj.insert(
+            "frozenDate".to_owned(),
+            serde_json::Value::String(bean.frozen_on.clone().unwrap_or_default()),
+        );
+        obj.insert(
+            "unfrozenDate".to_owned(),
+            serde_json::Value::String(bean.defrosted_on.clone().unwrap_or_default()),
+        );
+        obj.insert(
+            "url".to_owned(),
+            serde_json::Value::String(bean.url.clone().unwrap_or_default()),
+        );
+        obj.insert(
+            "bean_information".to_owned(),
+            serde_json::Value::Array(bean_info),
+        );
+        obj.insert(
+            "attachments".to_owned(),
+            serde_json::Value::Array(
+                photo_filenames
+                    .into_iter()
+                    .map(serde_json::Value::String)
+                    .collect(),
+            ),
+        );
+        // Restore unmapped fields verbatim (cupping form, qr_code,
+        // EAN, frozen-portion accounting, etc.).
+        for (k, v) in unmapped {
+            obj.entry(k).or_insert(v);
+        }
+        beans_json.push(serde_json::Value::Object(obj));
+    }
+
+    let mut brews_json: Vec<serde_json::Value> = Vec::with_capacity(shots.len());
+    for shot in shots {
+        // Cap at u32::MAX ms (~49 days) — well within f64 mantissa
+        // precision; longer durations are theoretical.
+        #[allow(clippy::cast_precision_loss)]
+        let dur_ms = (shot.record.duration.as_millis().min(u128::from(u32::MAX))) as f64;
+        let dur_s = dur_ms / 1000.0;
+        let mut obj = serde_json::Map::new();
+        // The Rust `StoredShot` doesn't carry an id (that's a
+        // shell-side concept). Synthesise one from the recorded
+        // timestamp so BC sees a unique uuid-shaped string per brew.
+        // The shell's id round-trip can be done by the shell adapter
+        // if exact-id preservation is needed.
+        let synth_uuid = format!("crema-shot-{}", shot.recorded_at);
+        obj.insert(
+            "config".to_owned(),
+            serde_json::json!({
+                "uuid": synth_uuid,
+                "unix_timestamp": (shot.recorded_at / 1000) as i64
+            }),
+        );
+        obj.insert("bean".to_owned(), serde_json::Value::String(String::new()));
+        obj.insert("mill".to_owned(), serde_json::Value::String(String::new()));
+        obj.insert(
+            "method_of_preparation".to_owned(),
+            serde_json::Value::String(prep_uuid.to_owned()),
+        );
+        obj.insert(
+            "grind_size".to_owned(),
+            serde_json::Value::String(shot.metadata.grinder_setting.clone().unwrap_or_default()),
+        );
+        obj.insert(
+            "bean_weight_in".to_owned(),
+            serde_json::Value::from(shot.metadata.dose.unwrap_or(0.0)),
+        );
+        obj.insert("brew_time".to_owned(), serde_json::Value::from(dur_s));
+        obj.insert(
+            "brew_time_milliseconds".to_owned(),
+            serde_json::Value::from(dur_ms),
+        );
+        obj.insert(
+            "brew_beverage_quantity".to_owned(),
+            serde_json::Value::from(shot.metadata.yield_out.unwrap_or(0.0)),
+        );
+        obj.insert(
+            "brew_beverage_quantity_type".to_owned(),
+            serde_json::Value::String("gr".to_owned()),
+        );
+        obj.insert(
+            "rating".to_owned(),
+            serde_json::Value::from(shot.metadata.rating.unwrap_or(0)),
+        );
+        obj.insert(
+            "note".to_owned(),
+            serde_json::Value::String(shot.metadata.notes.clone().unwrap_or_default()),
+        );
+        brews_json.push(serde_json::Value::Object(obj));
+    }
+
+    let main = serde_json::json!({
+        "BEANS": beans_json,
+        "BREWS": brews_json,
+        "MILL": [],
+        "PREPARATION": [preparation],
+        "VERSION": [{
+            "config": { "uuid": "crema-export", "unix_timestamp": now_unix_ms / 1000 },
+            "alreadyDisplayedVersions": [],
+            "updatedDataVersions": []
+        }]
+    });
+    serde_json::to_string(&main).unwrap_or_else(|_| "{}".to_owned())
+}
+
+/// Crema's 1..10 roast level → the BC wire enum string. Buckets:
+/// 1 → Cinnamon, 2 → American, … 10 → French. `None` → `"UNKNOWN"`.
+fn crema_roast_level_to_bc(level: Option<u8>) -> String {
+    match level {
+        Some(1) => "CINNAMON_ROAST",
+        Some(2) => "AMERICAN_ROAST",
+        Some(3) => "HALF_CITY_ROAST",
+        Some(4) => "CITY_ROAST",
+        Some(5) => "CITY_PLUS_ROAST",
+        Some(6) => "FULL_CITY_ROAST",
+        Some(7) => "FULL_CITY_PLUS_ROAST",
+        Some(8) => "VIEANNA_ROAST",
+        Some(9) => "ITALIAN_ROAST",
+        Some(10) => "FRENCH_ROAST",
+        _ => "UNKNOWN",
+    }
+    .to_owned()
+}
+
+/// JSON-in / JSON-out adapter for the wasm + uniffi bridges. Envelope:
+/// `{ "beans": [...], "roasters": [...], "shots": [...] }`. Returns
+/// the Beanconqueror main JSON.
+///
+/// # Errors
+///
+/// Returns the JSON parse error string when the envelope is malformed.
+pub fn crema_to_bc_main_json_from_envelope(
+    envelope_json: &str,
+    now_unix_ms: i64,
+) -> Result<String, String> {
+    #[derive(serde::Deserialize)]
+    struct In {
+        #[serde(default)]
+        beans: Vec<Bean>,
+        #[serde(default)]
+        roasters: Vec<Roaster>,
+        #[serde(default)]
+        shots: Vec<StoredShot>,
+    }
+    let inp: In = serde_json::from_str(envelope_json).map_err(|e| e.to_string())?;
+    Ok(crema_to_bc_main_json(
+        &inp.beans,
+        &inp.roasters,
+        &inp.shots,
+        now_unix_ms,
+    ))
+}
+
 /// JSON-in / JSON-out adapter for the wasm + uniffi bridges. Takes the
 /// merged Beanconqueror main export JSON and a wall-clock `now_unix_ms`
 /// for the `created_at` / `updated_at` stamps; returns the
@@ -1090,6 +1447,55 @@ mod tests {
         assert_eq!(bean.rating, 4);
         assert_eq!(bean.cost, Some(22.5));
         assert_eq!(bean.beanconqueror_id.as_deref(), Some("u1"));
+    }
+
+    #[test]
+    fn crema_to_bc_export_basic_shape() {
+        use crate::{Bean, Roaster};
+        let mut roaster = Roaster::new("roaster:r1".to_owned(), "Onyx".to_owned(), 1);
+        roaster.metadata = serde_json::Value::Null;
+        let mut bean = Bean::new("bean:b1".to_owned(), "Geisha".to_owned(), 1_700_000_000_000);
+        bean.roaster_id = Some("roaster:r1".to_owned());
+        bean.bag_size = 250.0;
+        bean.remaining = 200.0;
+        bean.roast_level = Some(5);
+        bean.mix = Some(BeanMix::Single);
+        bean.roast_type = Some(BeanRoastType::Espresso);
+        bean.cost = Some(22.0);
+        bean.tasting_notes = "Peach, jasmine".to_owned();
+        bean.metadata = serde_json::json!({
+            "beanconqueror": {
+                "unmapped": {
+                    "ean_article_number": "1234567890",
+                    "qr_code": "QR-PAYLOAD"
+                },
+                "photo_filenames": ["photo_xyz.jpg"]
+            }
+        });
+
+        let json = crema_to_bc_main_json(&[bean], &[roaster], &[], 1_700_000_000_000);
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let beans = v["BEANS"].as_array().expect("BEANS array");
+        assert_eq!(beans.len(), 1);
+        let b = &beans[0];
+        assert_eq!(b["name"], "Geisha");
+        assert_eq!(b["roaster"], "Onyx");
+        assert_eq!(b["weight"], 250.0);
+        assert_eq!(b["roast"], "CITY_PLUS_ROAST");
+        assert_eq!(b["beanMix"], "SINGLE_ORIGIN");
+        assert_eq!(b["bean_roasting_type"], "ESPRESSO");
+        assert_eq!(b["cost"], 22.0);
+        assert_eq!(b["note"], "Peach, jasmine");
+        // Unmapped stash restored verbatim onto the bean.
+        assert_eq!(b["ean_article_number"], "1234567890");
+        assert_eq!(b["qr_code"], "QR-PAYLOAD");
+        // Photo filename restored.
+        assert_eq!(b["attachments"][0], "photo_xyz.jpg");
+
+        // Synthesised PREPARATION row (ESPRESSO) is present.
+        let prep = v["PREPARATION"].as_array().expect("PREPARATION array");
+        assert_eq!(prep.len(), 1);
+        assert_eq!(prep[0]["style_type"], "ESPRESSO");
     }
 
     #[test]
