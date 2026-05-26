@@ -291,6 +291,23 @@ pub fn new_profile_id() -> String {
     de1_domain::new_profile_id()
 }
 
+/// djb2 base-36 fingerprint of an effective profile (library profile
+/// merged with optional Quick-Controls overrides). Both payloads are
+/// JSON strings; see [`de1_domain::profile_fingerprint`] for the
+/// canonical implementation and cache-compatibility notes.
+///
+/// # Errors
+///
+/// Returns the JSON parse error string when either payload fails to
+/// deserialise into the expected shape.
+#[uniffi::export]
+pub fn profile_fingerprint(
+    profile_json: String,
+    qc_json: Option<String>,
+) -> Result<String, String> {
+    de1_domain::profile_fingerprint(&profile_json, qc_json.as_deref())
+}
+
 /// The Crema core, exposed to the Kotlin shell.
 ///
 /// Methods that produce a [`CoreOutput`] return it as a JSON string; the shell

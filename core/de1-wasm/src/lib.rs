@@ -375,6 +375,20 @@ pub fn signature_for_roaster(name: String) -> String {
     de1_domain::signature_for_roaster(&name)
 }
 
+/// djb2 base-36 fingerprint of an "effective profile" — library
+/// `CremaProfile` JSON merged with optional Quick-Controls overrides
+/// JSON. Drives the connect-time + shot-start "do we already have these
+/// bytes loaded?" decision. See `de1_domain::profile_fingerprint`.
+///
+/// # Errors
+///
+/// Returns the JSON parse error string when either payload fails to
+/// deserialise into the expected shape.
+#[wasm_bindgen(js_name = profileFingerprint)]
+pub fn profile_fingerprint(profile_json: &str, qc_json: Option<String>) -> Result<String, String> {
+    de1_domain::profile_fingerprint(profile_json, qc_json.as_deref())
+}
+
 /// Reconcile a remote Visualizer pull against the local history.
 /// `payload` is the JSON of `{"local": StoredShot[], "remote":
 /// WireShot[]}`; the planner only reads the slim subset of
