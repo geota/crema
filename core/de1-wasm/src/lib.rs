@@ -628,6 +628,12 @@ impl CremaBridge {
         self.core.set_weight_target_disabled(disabled);
     }
 
+    /// Clear the running scale-derived peaks (peak weight + final
+    /// weight). The Scale page's "Reset peak" button.
+    pub fn reset_scale_peaks(&mut self) {
+        self.core.reset_scale_peaks();
+    }
+
     /// Set the active profile's recipe target weight, in grams.
     /// `None` (or a non-finite / non-positive value) means "no target."
     pub fn set_profile_target_weight(&mut self, grams: Option<f32>) {

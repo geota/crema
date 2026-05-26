@@ -185,11 +185,12 @@
 		app?.setScaleAutoStop(autoStopOn ? 0 : 1);
 	}
 
-	// ── Reset-peak — UI-only ─────────────────────────────────────────────
-	// TODO: no core backing — the core exposes no scale peak-reset
-	// command. Local UI state only.
+	// ── Reset-peak ───────────────────────────────────────────────────────
+	// Wired through `core.reset_scale_peaks()` — clears the
+	// shot-metrics-tracked peak weight + final weight without disturbing
+	// the pressure / temperature peaks the DE1 telemetry feeds.
 	function resetPeak(): void {
-		// TODO: wire to a scale peak-reset command when the core exposes one.
+		void app?.resetScalePeaks();
 	}
 	// ── Manual scale timer (#34/#35/#36) ────────────────────────────────
 	// Auto-wiring on shot start/stop is already in the orchestrator; these
