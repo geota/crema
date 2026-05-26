@@ -226,11 +226,37 @@
 		}
 	}
 
+	/**
+	 * Factory reset for the **Crema app** — wipes every `crema.*` key from
+	 * `localStorage` and reloads. Does NOT touch the DE1: profiles
+	 * uploaded to the machine, calibration, etc. stay on the firmware.
+	 * Gated behind a `window.confirm` so a stray tap doesn't nuke user
+	 * data. Documented in the row's sub-copy.
+	 */
 	function factoryReset(): void {
-		// TODO: a true factory reset would clear every Crema localStorage key
-		// (profiles, history, settings). Left as a stub; the row is pilled
-		// `notImplemented` in the markup so the button reads as disabled —
-		// previously a confirm-then-do-nothing prompt looked like it worked.
+		if (typeof window === 'undefined') return;
+		const ok = window.confirm(
+			'Reset the Crema app on this device?\n\n' +
+				'This permanently erases:\n' +
+				'  • custom profiles + library overrides\n' +
+				'  • shot history + per-shot captures\n' +
+				'  • bean library + roasters\n' +
+				'  • all app preferences\n\n' +
+				'Your DE1 is NOT affected — uploaded profiles, calibration, and\n' +
+				'machine settings stay on the firmware. The page will reload.'
+		);
+		if (!ok) return;
+		const keys: string[] = [];
+		for (let i = 0; i < localStorage.length; i++) {
+			const k = localStorage.key(i);
+			if (k && k.startsWith('crema.')) keys.push(k);
+		}
+		for (const k of keys) localStorage.removeItem(k);
+		// Hard reload so every $state / module-singleton re-initialises
+		// from the now-empty store. `location.reload()` is enough — the
+		// PWA service worker will still serve cached assets, which is
+		// fine; the data layer is what's being reset.
+		window.location.reload();
 	}
 
 	// ---- Webhooks (Advanced → Webhooks card) ----------------------------
@@ -618,8 +644,7 @@
 	</StRow>
 	<StRow
 		title="Factory reset"
-		sub="Erases everything on this device — profiles, history and settings."
-		notImplemented
+		sub="Resets the Crema app on this device — profiles, history, settings, beans. Does NOT change DE1 machine settings (those stay on the firmware)."
 	>
 		{#snippet control()}
 			<button type="button" class="st-btn st-btn-danger" onclick={factoryReset}>
