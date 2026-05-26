@@ -429,6 +429,20 @@ pub fn guess_scale_from_first_weight_packet(bytes: &[u8]) -> Option<String> {
     de1_app::ScaleId::guess_from_first_weight_packet(bytes).map(str::to_owned)
 }
 
+/// Fold a JSON array of `src:"META"` payload objects into a merged
+/// `ReplayMeta` JSON. Later entries override earlier ones; each
+/// payload is read field-by-field with type guards. See
+/// `de1_domain::fold_meta_jsonl_json`.
+///
+/// # Errors
+///
+/// Returns the JSON parse error string when the outer payload isn't a
+/// JSON array of objects or any inner payload is malformed.
+#[wasm_bindgen(js_name = foldReplayMetaJsonl)]
+pub fn fold_replay_meta_jsonl(payloads_json: &str) -> Result<String, String> {
+    de1_domain::fold_meta_jsonl_json(payloads_json)
+}
+
 /// Classify a 1..10 roast level into a named band — returns the lowercase
 /// wire string (`"light"` / `"medium"` / `"dark"`), or `undefined` for a
 /// missing (`None`) level. Values outside 1..10 are clamped first. See

@@ -713,6 +713,64 @@ export interface RangeCapability {
 }
 
 /**
+ * Bean snapshot at shot start; nested under [`ReplayMeta::bean`].
+ * 
+ * All fields optional; absent on the connect-phase prelude, present
+ * (in part) on the shell's at-shot-start line.
+ */
+export interface ReplayMetaBean {
+	/** Bean type / name (`"Yirgacheffe"`, …). */
+	type?: string;
+	/** Roaster's display name. */
+	roaster?: string;
+	/** ISO `yyyy-mm-dd` roast date. */
+	roastedOn?: string;
+	/** 1..10 roast level. */
+	roastLevel?: number;
+	/** Free-text tasting / dial notes. */
+	notes?: string;
+	/** Grinder click / setting label. */
+	grinderSetting?: string;
+}
+
+/**
+ * Merged metadata from one or more `src:"META"` prelude entries.
+ * 
+ * Every field is optional; META omits any unset field, and the
+ * folder leaves every absent field unchanged. Field names are
+ * camelCase in the wire / TS / Kotlin shapes; Rust uses snake_case
+ * and typeshare renames at the boundary.
+ */
+export interface ReplayMeta {
+	/** Scale's BLE advertised name (`"BOOKOO_SC"`, `"ACAIA…"`, …). */
+	scaleName?: string;
+	/** DE1's firmware build number (MMR `FirmwareVersion`). */
+	de1FirmwareVersion?: number;
+	/** DE1's machine-model identifier (MMR `MachineModel`). */
+	de1MachineModel?: number;
+	/** DE1's serial number (MMR `SerialNumber`). */
+	de1SerialNumber?: number;
+	/** Active profile's display name at shot start. */
+	profileName?: string;
+	/** Byte-exact upload payload as lowercase no-separator hex. */
+	profileBytesHex?: string;
+	/** QC yield target at shot start, grams. */
+	yieldTarget?: number;
+	/** QC brew-temperature override at shot start, °C. */
+	brewTemp?: number;
+	/** QC pre-infusion target at shot start, seconds. */
+	preinfuseTarget?: number;
+	/** SAW toggle at shot start. */
+	stopOnWeight?: boolean;
+	/** Auto-tare toggle at shot start. */
+	autoTare?: boolean;
+	/** Active bean snapshot at shot start. */
+	bean?: ReplayMetaBean;
+	/** Equipment-level grinder model at shot start. */
+	grinderModel?: string;
+}
+
+/**
  * One roastery — a record in the roaster directory. Sparse on
  * purpose, mirroring Visualizer's `RoasterDetail` (which is itself
  * minimal: id + name + website + image). Beanconqueror has no

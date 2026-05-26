@@ -18,6 +18,7 @@
  */
 
 import type { NotificationSource } from '$lib/core';
+import { foldReplayMetaJsonl as wasmFoldReplayMetaJsonl } from '$lib/wasm/de1_wasm';
 
 /**
  * One raw capture line — the JSON Lines schema the Android `BleSessionRecorder`
@@ -179,7 +180,7 @@ function decodeHex(hex: string): Uint8Array | undefined {
  */
 export function parseCapture(text: string): ParsedCapture {
 	const events: CaptureEvent[] = [];
-	const meta: ReplayMeta = {};
+	const metaPayloads: string[] = [];
 	let linesRead = 0;
 	let skipped = 0;
 
@@ -204,11 +205,11 @@ export function parseCapture(text: string): ParsedCapture {
 		}
 
 		// META prelude entries carry identity payloads in the optional
-		// `meta` object; later entries override earlier ones (a session
-		// that re-paired a different scale mid-stream would land here,
-		// as does the shell-appended at-shot-start context line).
+		// `meta` object; collected here in file order so the core's
+		// `foldReplayMetaJsonl` folds them with the right precedence
+		// (later entries override earlier ones).
 		if (entry.src === 'META' && entry.meta) {
-			foldMeta(meta as Record<string, unknown>, entry.meta);
+			metaPayloads.push(JSON.stringify(entry.meta));
 			continue;
 		}
 
@@ -228,6 +229,7 @@ export function parseCapture(text: string): ParsedCapture {
 		events.push({ t: entry.t, source, data });
 	}
 
+	const meta = foldMetaPayloadsViaCore(metaPayloads);
 	return { events, meta, linesRead, skipped };
 }
 
@@ -237,49 +239,19 @@ export async function parseCaptureFile(file: File): Promise<ParsedCapture> {
 }
 
 /**
- * Fold one parsed META payload into the {@link ReplayMeta} accumulator
- * — each known key is read defensively (typeof guard) and copied onto
- * `target`, so a corrupt / future-key META line can't crash the
- * replay reader. Mutating-by-reference so two META lines (the core's
- * connect-phase prelude + the shell's at-shot-start line) merge into
- * a single typed view, with later entries overriding earlier ones.
+ * Hand the collected `src:"META"` payloads to the core's folder and
+ * parse the merged `ReplayMeta` back. The folder lives in Rust
+ * (`de1_domain::fold_meta_jsonl_json`) so the schema knowledge sits
+ * next to its capture-write counterpart and stays in lockstep with the
+ * Kotlin shell. Returns an empty `ReplayMeta` when the folder errors
+ * (a malformed META payload is non-fatal for replay — the events still
+ * decode).
  */
-function foldMeta(target: Record<string, unknown>, m: Record<string, unknown>): void {
-	if (typeof m.scaleName === 'string') target.scaleName = m.scaleName;
-	if (typeof m.de1FirmwareVersion === 'number') {
-		target.de1FirmwareVersion = m.de1FirmwareVersion;
-	}
-	if (typeof m.de1MachineModel === 'number') {
-		target.de1MachineModel = m.de1MachineModel;
-	}
-	if (typeof m.de1SerialNumber === 'number') {
-		target.de1SerialNumber = m.de1SerialNumber;
-	}
-	if (typeof m.profileName === 'string') target.profileName = m.profileName;
-	if (typeof m.profileBytesHex === 'string') target.profileBytesHex = m.profileBytesHex;
-	if (typeof m.yieldTarget === 'number' && Number.isFinite(m.yieldTarget)) {
-		target.yieldTarget = m.yieldTarget;
-	}
-	if (typeof m.brewTemp === 'number' && Number.isFinite(m.brewTemp)) {
-		target.brewTemp = m.brewTemp;
-	}
-	if (typeof m.preinfuseTarget === 'number' && Number.isFinite(m.preinfuseTarget)) {
-		target.preinfuseTarget = m.preinfuseTarget;
-	}
-	if (typeof m.stopOnWeight === 'boolean') target.stopOnWeight = m.stopOnWeight;
-	if (typeof m.autoTare === 'boolean') target.autoTare = m.autoTare;
-	if (typeof m.grinderModel === 'string') target.grinderModel = m.grinderModel;
-	if (typeof m.bean === 'object' && m.bean !== null) {
-		const raw = m.bean as Record<string, unknown>;
-		const bean: Record<string, unknown> = {};
-		if (typeof raw.type === 'string') bean.type = raw.type;
-		if (typeof raw.roaster === 'string') bean.roaster = raw.roaster;
-		if (typeof raw.roastedOn === 'string') bean.roastedOn = raw.roastedOn;
-		if (typeof raw.roastLevel === 'number' && Number.isFinite(raw.roastLevel)) {
-			bean.roastLevel = raw.roastLevel;
-		}
-		if (typeof raw.notes === 'string') bean.notes = raw.notes;
-		if (typeof raw.grinderSetting === 'string') bean.grinderSetting = raw.grinderSetting;
-		if (Object.keys(bean).length > 0) target.bean = bean;
+function foldMetaPayloadsViaCore(payloads: readonly string[]): ReplayMeta {
+	try {
+		const out = wasmFoldReplayMetaJsonl(`[${payloads.join(',')}]`);
+		return JSON.parse(out) as ReplayMeta;
+	} catch {
+		return {};
 	}
 }
