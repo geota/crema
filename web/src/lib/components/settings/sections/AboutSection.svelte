@@ -180,67 +180,52 @@
 	</ul>
 </div>
 
-<!-- ── Terms of use ──────────────────────────────────────────────────── -->
+<!-- ── Legal ─────────────────────────────────────────────────────────── -->
 <div class="st-group">
 	<div class="st-group-head">
-		<div class="st-group-title">Terms of use</div>
+		<div class="st-group-title">Legal</div>
 		<div class="st-group-sub">
-			The short version: Crema is best-effort hobbyist software with no
-			warranty. Please read this before relying on it.
+			Crema is best-effort hobbyist software with no warranty. The full
+			Terms of Service and Privacy Policy are public pages.
 		</div>
 	</div>
-	<div class="ab-terms">
-		<div class="ab-terms-block">
-			<div class="ab-terms-h">Best effort, no warranty</div>
-			<p>
-				Crema is provided <strong>as-is, with no warranty</strong> of any
-				kind, express or implied. It is a community project, not a
-				commercial product, and there is no support contract or
-				service-level guarantee.
-			</p>
-		</div>
-		<div class="ab-terms-block">
-			<div class="ab-terms-h">Not every feature has been tested end-to-end</div>
-			<p>
-				Crema controls real hardware over Bluetooth. Many controls are
-				validated against captured BLE traces, but not every combination
-				of firmware version, profile, and DE1 model has been exercised on
-				live machines. Treat new releases like a fresh roast — sip it
-				before you brew the whole bag.
-			</p>
-		</div>
-		<div class="ab-terms-block ab-terms-warn">
-			<i class="ph ph-warning-octagon" aria-hidden="true"></i>
-			<div>
-				<div class="ab-terms-h">Some features can damage or brick your DE1</div>
-				<p>
-					Writes to the heater voltage, calibration values, factory
-					reset, and any future firmware-update flow can leave your DE1
-					in a state that requires service or factory recovery. The
-					type-to-confirm gates exist for a reason — read them. If you
-					are not sure what a setting does, leave it alone.
-				</p>
+	<div class="st-group-rows">
+		<div class="st-row">
+			<div class="st-row-text">
+				<div class="st-row-title">Terms of Service</div>
+				<div class="st-row-sub">
+					License, hardware-risk disclaimer, limitation of liability.
+				</div>
+			</div>
+			<div class="st-row-control">
+				<a
+					class="st-btn st-btn-secondary"
+					href="/terms"
+					target="_blank"
+					rel="noreferrer noopener"
+				>
+					<i class="ph ph-arrow-square-out" aria-hidden="true"></i><span>Read</span>
+				</a>
 			</div>
 		</div>
-		<div class="ab-terms-block">
-			<div class="ab-terms-h">Your data stays on this device</div>
-			<p>
-				Settings, profiles, shot history, and bean entries are stored in
-				your browser's <strong>IndexedDB</strong> and
-				<strong>localStorage</strong> on this device. Nothing is sent to
-				Crema servers (there are none). The only outbound traffic is the
-				services you explicitly enable — Visualizer sync, webhooks, and
-				the country lookup used by the mains-voltage confirm dialog.
-			</p>
-		</div>
-		<div class="ab-terms-block">
-			<div class="ab-terms-h">By using Crema you accept these terms</div>
-			<p>
-				You are responsible for your machine, your shots, and your
-				calibration. Crema's authors and contributors are not liable for
-				damage to hardware, lost data, or anything else that may arise
-				from using this software.
-			</p>
+		<div class="st-row">
+			<div class="st-row-text">
+				<div class="st-row-title">Privacy Policy</div>
+				<div class="st-row-sub">
+					Crema is local-only. No analytics, no cloud, no tracking — just
+					what you opt in to.
+				</div>
+			</div>
+			<div class="st-row-control">
+				<a
+					class="st-btn st-btn-secondary"
+					href="/privacy"
+					target="_blank"
+					rel="noreferrer noopener"
+				>
+					<i class="ph ph-arrow-square-out" aria-hidden="true"></i><span>Read</span>
+				</a>
+			</div>
 		</div>
 	</div>
 </div>
@@ -296,56 +281,4 @@
 		color: rgba(var(--tint-rgb), 0.6);
 	}
 
-	/* ── Terms of use blocks ────────────────────────────────────────────
-	   Stacked plain-prose blocks. The "may brick your DE1" block uses the
-	   same red-orange treatment as the mains / calibration warn banners
-	   so danger reads consistently across the app. */
-	.ab-terms {
-		display: flex;
-		flex-direction: column;
-		gap: 14px;
-		padding: 14px 16px;
-	}
-	.ab-terms-block {
-		display: flex;
-		flex-direction: column;
-		gap: 4px;
-	}
-	.ab-terms-h {
-		font-family: var(--font-sans);
-		font-size: 13px;
-		font-weight: 600;
-		color: var(--fg-1);
-	}
-	.ab-terms p {
-		margin: 0;
-		font-size: 12px;
-		line-height: 1.55;
-		color: rgba(var(--tint-rgb), 0.7);
-	}
-	.ab-terms p strong {
-		color: var(--fg-1);
-		font-weight: 600;
-	}
-	.ab-terms-warn {
-		flex-direction: row;
-		align-items: flex-start;
-		gap: 12px;
-		padding: 12px 14px;
-		border-radius: 8px;
-		background: rgba(220, 80, 0, 0.12);
-		border: 1px solid rgba(220, 80, 0, 0.35);
-	}
-	.ab-terms-warn i {
-		flex-shrink: 0;
-		font-size: 18px;
-		margin-top: 1px;
-		color: #c64500;
-	}
-	.ab-terms-warn .ab-terms-h {
-		color: #c64500;
-	}
-	.ab-terms-warn p {
-		color: #8a3500;
-	}
 </style>
