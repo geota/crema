@@ -443,6 +443,64 @@ pub fn fold_replay_meta_jsonl(payloads_json: &str) -> Result<String, String> {
     de1_domain::fold_meta_jsonl_json(payloads_json)
 }
 
+/// Build a Beanconqueror main JSON from a Crema envelope. The shell
+/// packages the result into a ZIP with sibling photo files. See
+/// `de1_domain::crema_to_bc_main_json_from_envelope`.
+///
+/// # Errors
+///
+/// Returns the JSON parse error string when the envelope is malformed.
+#[wasm_bindgen(js_name = exportBeanconquerorMainJson)]
+pub fn export_beanconqueror_main_json(
+    envelope_json: &str,
+    now_unix_ms: f64,
+) -> Result<String, String> {
+    #[allow(clippy::cast_possible_truncation)]
+    let now = if now_unix_ms.is_finite() {
+        now_unix_ms as i64
+    } else {
+        0
+    };
+    de1_domain::crema_to_bc_main_json_from_envelope(envelope_json, now)
+}
+
+/// Build a Crema JSONL export from an envelope JSON
+/// `{ "beans": [...], "roasters": [...], "shots": [...] }`. Returns
+/// the multi-line JSONL text — one record per line, header first.
+/// See `de1_domain::export_jsonl`.
+///
+/// # Errors
+///
+/// Returns the JSON parse error string when the envelope is
+/// malformed.
+#[wasm_bindgen(js_name = exportCremaJsonl)]
+pub fn export_crema_jsonl(
+    envelope_json: &str,
+    exported_at_unix_ms: f64,
+    crema_version: &str,
+) -> Result<String, String> {
+    #[allow(clippy::cast_possible_truncation)]
+    let exported_at = if exported_at_unix_ms.is_finite() {
+        exported_at_unix_ms as i64
+    } else {
+        0
+    };
+    de1_domain::export_jsonl_from_json(envelope_json, exported_at, crema_version)
+}
+
+/// Parse a Crema JSONL export into an ImportPlan JSON (same shape
+/// the BC importer returns; the shell's apply path is shared). See
+/// `de1_domain::import_jsonl_to_plan_json`.
+///
+/// # Errors
+///
+/// Currently always Ok — even an empty string parses cleanly to an
+/// empty plan. Reserved for future schema-version errors.
+#[wasm_bindgen(js_name = importCremaJsonl)]
+pub fn import_crema_jsonl(text: &str) -> Result<String, String> {
+    de1_domain::import_jsonl_to_plan_json(text)
+}
+
 /// Import a Beanconqueror main export JSON, mapping the high-value
 /// subset into Crema's `Bean` / `Roaster` / `StoredShot` types. The
 /// shell unzips the BC archive (which packs `Beanconqueror.json` plus

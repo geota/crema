@@ -44,6 +44,7 @@
 pub mod bean;
 pub mod beanconqueror;
 pub mod builtin;
+pub mod crema_jsonl;
 pub mod error;
 pub mod filter;
 pub mod flow;
@@ -72,8 +73,14 @@ pub use bean::{
     Bean, BeanMix, BeanOrigin, BeanRoastType, RoastBand, RoastFreshness, Roaster, ShotBean,
     days_off_roast, roast_band, roast_freshness,
 };
-pub use beanconqueror::{ImportDiagnostics, ImportPlan, ImportedShot, import_beanconqueror_json};
+pub use beanconqueror::{
+    ImportDiagnostics, ImportPlan, ImportedShot, crema_to_bc_main_json,
+    crema_to_bc_main_json_from_envelope, import_beanconqueror_json,
+};
 pub use builtin::{BUILTIN_PROFILE_COUNT, builtin_profiles};
+pub use crema_jsonl::{
+    CremaExportHeader, export_jsonl, export_jsonl_from_json, import_jsonl_to_plan_json, parse_jsonl,
+};
 pub use error::{DomainError, ImportError};
 pub use flow::{Estimate, FlowAlgorithm, FlowEstimator};
 pub use history::{STORED_SHOT_FORMAT_VERSION, ShotMetadata, StoredShot, brew_ratio};
