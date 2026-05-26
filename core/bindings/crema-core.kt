@@ -762,6 +762,62 @@ data class RangeCapability (
 	val max: UByte
 )
 
+/// Bean snapshot at shot start; nested under [`ReplayMeta::bean`].
+/// 
+/// All fields optional; absent on the connect-phase prelude, present
+/// (in part) on the shell's at-shot-start line.
+@Serializable
+data class ReplayMetaBean (
+	/// Bean type / name (`"Yirgacheffe"`, …).
+	val type: String? = null,
+	/// Roaster's display name.
+	val roaster: String? = null,
+	/// ISO `yyyy-mm-dd` roast date.
+	val roastedOn: String? = null,
+	/// 1..10 roast level.
+	val roastLevel: Double? = null,
+	/// Free-text tasting / dial notes.
+	val notes: String? = null,
+	/// Grinder click / setting label.
+	val grinderSetting: String? = null
+)
+
+/// Merged metadata from one or more `src:"META"` prelude entries.
+/// 
+/// Every field is optional; META omits any unset field, and the
+/// folder leaves every absent field unchanged. Field names are
+/// camelCase in the wire / TS / Kotlin shapes; Rust uses snake_case
+/// and typeshare renames at the boundary.
+@Serializable
+data class ReplayMeta (
+	/// Scale's BLE advertised name (`"BOOKOO_SC"`, `"ACAIA…"`, …).
+	val scaleName: String? = null,
+	/// DE1's firmware build number (MMR `FirmwareVersion`).
+	val de1FirmwareVersion: Double? = null,
+	/// DE1's machine-model identifier (MMR `MachineModel`).
+	val de1MachineModel: Double? = null,
+	/// DE1's serial number (MMR `SerialNumber`).
+	val de1SerialNumber: Double? = null,
+	/// Active profile's display name at shot start.
+	val profileName: String? = null,
+	/// Byte-exact upload payload as lowercase no-separator hex.
+	val profileBytesHex: String? = null,
+	/// QC yield target at shot start, grams.
+	val yieldTarget: Double? = null,
+	/// QC brew-temperature override at shot start, °C.
+	val brewTemp: Double? = null,
+	/// QC pre-infusion target at shot start, seconds.
+	val preinfuseTarget: Double? = null,
+	/// SAW toggle at shot start.
+	val stopOnWeight: Boolean? = null,
+	/// Auto-tare toggle at shot start.
+	val autoTare: Boolean? = null,
+	/// Active bean snapshot at shot start.
+	val bean: ReplayMetaBean? = null,
+	/// Equipment-level grinder model at shot start.
+	val grinderModel: String? = null
+)
+
 /// One roastery — a record in the roaster directory. Sparse on
 /// purpose, mirroring Visualizer's `RoasterDetail` (which is itself
 /// minimal: id + name + website + image). Beanconqueror has no

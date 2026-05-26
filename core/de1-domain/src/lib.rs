@@ -54,6 +54,7 @@ pub mod profile;
 pub mod profile_bounds;
 pub mod profile_fingerprint;
 pub mod profile_import;
+pub mod replay;
 pub mod session;
 pub mod settings_import;
 pub mod shot;
@@ -82,6 +83,7 @@ pub use profile::{
 };
 pub use profile_fingerprint::profile_fingerprint;
 pub use profile_import::{export_v2_json, import_legacy_tcl, import_v2_json};
+pub use replay::{ReplayMeta, ReplayMetaBean, fold_meta_jsonl, fold_meta_jsonl_json};
 pub use session::SessionTimer;
 pub use settings_import::{ImportedDe1AppSettings, import_settings_tdb};
 pub use shot::{
