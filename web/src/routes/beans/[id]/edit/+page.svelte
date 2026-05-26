@@ -9,6 +9,7 @@
 	 */
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
+	import { resolve } from '$app/paths';
 	import { getBeanStore } from '$lib/bean';
 	import BeanEditPage from '$lib/components/beans/BeanEditPage.svelte';
 
@@ -23,7 +24,7 @@
 	$effect(() => {
 		if (id && !bean) {
 			// Defer one tick so the navigation isn't fighting the route load.
-			queueMicrotask(() => goto('/beans'));
+			queueMicrotask(() => goto(resolve('/beans')));
 		}
 	});
 
