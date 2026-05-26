@@ -509,44 +509,71 @@
 		// through (focus → space, drive-by ondblclick handlers, etc).
 		const snapshot = preview;
 		step = 'committing';
-		progress = { done: 0, total: snapshot.newBeans.length };
 		try {
+			// Phase 1 — fast, atomic-ish: bulk-add beans + roasters
+			// + shots. Lands them in localStorage in a single envelope
+			// write. A crash AFTER this point still leaves a consistent
+			// library; the photo loop below picks up on re-import via
+			// the resume-photos scan.
+			library.bulkAdd(snapshot.newBeans, snapshot.newRoasters);
+			for (const prep of snapshot.newShots) {
+				history.insertPulled(prep.shot);
+			}
+
+			// Phase 2 — photos. Slow (IDB transactions per file +
+			// localStorage upsert per bean), so this drives the
+			// progress bar. Includes:
+			//   (a) newly-added beans whose photos are in `dropped`,
+			//   (b) RESUME: beans already in the library (skipped from
+			//       newBeans via the BC-uuid dedup) that still have no
+			//       `imageRef` and have a matching dropped photo. This
+			//       is what makes re-importing the same .zip after a
+			//       partial run actually finish the photos for beans
+			//       that landed last time but didn't get their image.
 			const dropped = new Map(droppedPhotoFiles.map((f) => [f.name, f]));
-			// Process beans sequentially so the progress bar increments
-			// per-bean. Parallel was marginally faster but gave the user
-			// no usable feedback for large imports (hundreds of beans).
-			// Order matches snapshot.newBeans so a partial run is
-			// resumable: the BC-uuid skip in `buildPreview` picks up
-			// where this leaves off on a re-import.
-			const beansWithImages: Bean[] = [];
+			const photoTasks: { beanId: string; file: File }[] = [];
+			const taskedIds = new Set<string>();
 			for (const bean of snapshot.newBeans) {
 				const photos = readPhotoFilenames(bean);
 				const file = photos
 					.map((n) => dropped.get(n))
 					.find((f) => f != null);
 				if (file) {
-					const ref = beanImageRefFor(bean.id);
-					try {
-						await imageStore.put(ref, file);
-						beansWithImages.push({ ...bean, imageRef: ref });
-					} catch {
-						// IndexedDB failed (private mode, quota, …) —
-						// drop the imageRef quietly and keep going.
-						beansWithImages.push(bean);
-					}
-				} else {
-					beansWithImages.push(bean);
+					photoTasks.push({ beanId: bean.id, file });
+					taskedIds.add(bean.id);
+				}
+			}
+			for (const bean of library.beans) {
+				if (bean.imageRef != null || taskedIds.has(bean.id)) continue;
+				const photos = readPhotoFilenames(bean);
+				if (photos.length === 0) continue;
+				const file = photos
+					.map((n) => dropped.get(n))
+					.find((f) => f != null);
+				if (file) {
+					photoTasks.push({ beanId: bean.id, file });
+					taskedIds.add(bean.id);
+				}
+			}
+
+			progress = { done: 0, total: photoTasks.length };
+			let photosStored = 0;
+			for (const task of photoTasks) {
+				const ref = beanImageRefFor(task.beanId);
+				try {
+					await imageStore.put(ref, task.file);
+					library.updateBean(task.beanId, { imageRef: ref });
+					photosStored += 1;
+				} catch {
+					// IndexedDB failed (private mode, quota, …) —
+					// the bean stays photo-less; a future import of the
+					// same .zip can retry via the resume-photos path.
 				}
 				progress = { done: progress.done + 1, total: progress.total };
 			}
 
-			library.bulkAdd(beansWithImages, snapshot.newRoasters);
-			for (const prep of snapshot.newShots) {
-				history.insertPulled(prep.shot);
-			}
-			const photosStored = beansWithImages.filter((b) => b.imageRef != null).length;
 			committed = {
-				beansImported: beansWithImages.length,
+				beansImported: snapshot.newBeans.length,
 				shotsImported: snapshot.newShots.length,
 				duplicatesSkipped: snapshot.duplicatesSkipped,
 				photosStored
@@ -629,22 +656,26 @@
 		<div class="bd-status bd-status-progress">
 			<i class="ph ph-spinner-gap bd-spinner" aria-hidden="true"></i>
 			<div class="bd-progress-text">
-				Saving {progress.done} of {progress.total} bean{progress.total === 1 ? '' : 's'}…
+				{#if progress.total > 0}
+					Saving photo {progress.done} of {progress.total}…
+				{:else}
+					Saving import…
+				{/if}
 			</div>
-			<div
-				class="bd-progress-bar"
-				role="progressbar"
-				aria-valuemin="0"
-				aria-valuemax={progress.total}
-				aria-valuenow={progress.done}
-			>
+			{#if progress.total > 0}
 				<div
-					class="bd-progress-fill"
-					style:width="{progress.total > 0
-						? Math.round((progress.done / progress.total) * 100)
-						: 0}%"
-				></div>
-			</div>
+					class="bd-progress-bar"
+					role="progressbar"
+					aria-valuemin="0"
+					aria-valuemax={progress.total}
+					aria-valuenow={progress.done}
+				>
+					<div
+						class="bd-progress-fill"
+						style:width="{Math.round((progress.done / progress.total) * 100)}%"
+					></div>
+				</div>
+			{/if}
 		</div>
 	{:else if step === 'error'}
 		<div class="bd-status bd-status-err">
