@@ -317,6 +317,26 @@ impl Profile {
     pub fn dose_opt(&self) -> Option<f32> {
         (self.dose.is_finite() && self.dose > 0.0).then_some(self.dose)
     }
+
+    /// The profile's flow ceiling on pressure-priority steps as an
+    /// `Option<f32>` — `None` when 0 (the legacy `maximum_flow 0` "no
+    /// ceiling" sentinel), else `Some(ml_per_s)`. Not currently surfaced
+    /// in the editor; kept for consistency with the other 0-sentinel
+    /// accessors so future UI can pick it up without re-modelling.
+    #[must_use]
+    pub fn maximum_flow_opt(&self) -> Option<f32> {
+        (self.maximum_flow.is_finite() && self.maximum_flow > 0.0).then_some(self.maximum_flow)
+    }
+
+    /// The profile's pressure floor on flow-priority steps as an
+    /// `Option<f32>` — `None` when 0 ("no floor"), else `Some(bar)`.
+    /// Same UI-not-surfaced status as
+    /// [`maximum_flow_opt`](Self::maximum_flow_opt).
+    #[must_use]
+    pub fn minimum_pressure_opt(&self) -> Option<f32> {
+        (self.minimum_pressure.is_finite() && self.minimum_pressure > 0.0)
+            .then_some(self.minimum_pressure)
+    }
 }
 
 impl Profile {

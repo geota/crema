@@ -42,7 +42,10 @@
 		decimals = 0,
 		label,
 		size = 'sm',
-		dimension
+		dimension,
+		dot = false,
+		dotOn = true,
+		onDot
 	}: {
 		/** Current numeric value (canonical units when `dimension` is set). */
 		value: number;
@@ -76,6 +79,18 @@
 		 * dimension + pref.
 		 */
 		dimension?: Dimension;
+		/**
+		 * Show a small left-aligned dot toggle to indicate / control an
+		 * optional / disabled state — matches the
+		 * `PeNumber` + `SegmentRow` convention. The dot is purely visual
+		 * here; the parent owns the toggle action via {@link onDot}. The
+		 * stepper input dims (`is-off`) while `dotOn` is `false`.
+		 */
+		dot?: boolean;
+		/** Whether the dot indicator is currently lit. Only used when `dot` is `true`. */
+		dotOn?: boolean;
+		/** Called when the user clicks the dot. The parent flips state. */
+		onDot?: () => void;
 	} = $props();
 
 	const settings = getSettingsStore();
@@ -156,10 +171,24 @@
 </script>
 
 <div class={`st-stepper st-stepper-${size}`}>
-	{#if label}
-		<div class="t-eyebrow">{label}</div>
+	{#if label || dot}
+		<div class="st-stepper-label">
+			{#if dot}
+				<button
+					type="button"
+					class="st-stepper-dot"
+					class:on={dotOn}
+					onclick={onDot}
+					aria-pressed={dotOn}
+					aria-label={dotOn ? `${label ?? 'value'}: on (click to disable)` : `${label ?? 'value'}: off (click to enable)`}
+				></button>
+			{/if}
+			{#if label}
+				<div class="t-eyebrow">{label}</div>
+			{/if}
+		</div>
 	{/if}
-	<div class="st-stepper-row">
+	<div class="st-stepper-row" class:is-off={dot && !dotOn}>
 		<button
 			type="button"
 			class="st-stepper-btn"
@@ -334,5 +363,43 @@
 	}
 	.st-stepper-lg .st-stepper-unit {
 		font-size: 12px;
+	}
+
+	/* Optional dot affordance — same convention as PeNumber / SegmentRow.
+	   When the dot is off, the input row dims so the disabled state reads
+	   at a glance. The parent retains ownership of the toggle behaviour
+	   (typically: clicking the dot flips the underlying value between a
+	   sensible default and the 0-sentinel that means "disabled"). */
+	.st-stepper-label {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+	}
+	.st-stepper-dot {
+		width: 8px;
+		height: 8px;
+		flex: 0 0 8px;
+		border: 1px solid rgba(var(--tint-rgb), 0.35);
+		border-radius: 50%;
+		background: transparent;
+		padding: 0;
+		cursor: pointer;
+		transition:
+			background 0.12s,
+			border-color 0.12s;
+	}
+	.st-stepper-dot.on {
+		background: var(--copper-400);
+		border-color: var(--copper-400);
+	}
+	.st-stepper-dot:hover {
+		border-color: rgba(var(--copper-rgb), 0.6);
+	}
+	.st-stepper-row.is-off {
+		opacity: 0.4;
+	}
+	.st-stepper-row.is-off .st-stepper-num,
+	.st-stepper-row.is-off .st-stepper-unit {
+		color: rgba(var(--tint-rgb), 0.4);
 	}
 </style>
