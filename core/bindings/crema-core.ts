@@ -142,6 +142,12 @@ export interface Bean {
 	rating: number;
 	/** Where the bag was bought — `"Counter Culture · Durham"`. */
 	place_of_purchase?: string;
+	/**
+	 * What the bag cost — currency-less number in the user's local
+	 * units (Crema doesn't track currency yet). `None` = unrecorded.
+	 * Imported from Beanconqueror's `cost` field when present.
+	 */
+	cost?: number;
 	/** URL to buy again — Visualizer / roaster / store link. */
 	url?: string;
 	/** Free-form notes (not the tasting box). */

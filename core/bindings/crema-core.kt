@@ -130,6 +130,10 @@ data class Bean (
 	val rating: UByte,
 	/// Where the bag was bought — `"Counter Culture · Durham"`.
 	val place_of_purchase: String? = null,
+	/// What the bag cost — currency-less number in the user's local
+	/// units (Crema doesn't track currency yet). `None` = unrecorded.
+	/// Imported from Beanconqueror's `cost` field when present.
+	val cost: Float? = null,
 	/// URL to buy again — Visualizer / roaster / store link.
 	val url: String? = null,
 	/// Free-form notes (not the tasting box).

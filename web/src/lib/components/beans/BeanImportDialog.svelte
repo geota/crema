@@ -46,6 +46,13 @@
 		photosStored: number;
 	} | null>(null);
 	/**
+	 * Per-bean commit progress. `total` is the number of beans the
+	 * commit pass will process (after dedups); `done` increments as
+	 * each one's image + record lands. Drives the progress bar shown
+	 * in the `committing` step.
+	 */
+	let progress = $state<{ done: number; total: number }>({ done: 0, total: 0 });
+	/**
 	 * Photo files dropped alongside the ZIP. BC's "full with photos"
 	 * export emits the ZIP plus per-bean `photo_<uuid>.jpg` siblings
 	 * (not inside the ZIP — verified by inspecting actual exports).
@@ -61,9 +68,43 @@
 	 * serialiser). We treat it as JSON-shaped data; the fields below are
 	 * the ones the UI consumes.
 	 */
+	/**
+	 * Recursively rewrite an object's keys from `snake_case` to
+	 * `camelCase`. Leaves arrays, scalars, and the special `metadata`
+	 * field (which carries opaque user JSON whose keys we must not
+	 * touch) alone.
+	 *
+	 * Crema's web `Bean` / `Roaster` types use camelCase
+	 * (`bagSizeG`, `roastLevel`, …); the Rust core's `Bean` /
+	 * `Roaster` JSON serialize as snake_case (`bag_size_g`,
+	 * `roast_level`, …) — they intentionally don't carry
+	 * `rename_all = "camelCase"` because the Visualizer sync layer
+	 * expects snake_case Roaster keys on the wire. So at the wasm
+	 * boundary we translate to match the shell's persisted shape.
+	 */
+	function snakeToCamel<T>(value: unknown): T {
+		if (Array.isArray(value)) {
+			return value.map((v) => snakeToCamel(v)) as unknown as T;
+		}
+		if (value === null || typeof value !== 'object') {
+			return value as T;
+		}
+		const out: Record<string, unknown> = {};
+		for (const [k, v] of Object.entries(value)) {
+			if (k === 'metadata') {
+				// User-opaque JSON — keys must round-trip verbatim.
+				out[k] = v;
+				continue;
+			}
+			const camel = k.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase());
+			out[camel] = snakeToCamel(v);
+		}
+		return out as T;
+	}
+
 	interface CorePlan {
-		readonly beans: Bean[];
-		readonly roasters: Roaster[];
+		readonly beans: BeanWireSnake[];
+		readonly roasters: RoasterWireSnake[];
 		readonly shots: CoreImportedShot[];
 		readonly diagnostics: {
 			readonly nonEspressoBrewsSkipped: number;
@@ -77,6 +118,16 @@
 			readonly bagPhotoFilenames: string[];
 		};
 	}
+
+	/**
+	 * Marker types — the wasm output is snake_case JSON; we cast it
+	 * through these placeholders before `snakeToCamel` projects it
+	 * onto the shell's camelCase `Bean` / `Roaster`. The types are
+	 * deliberately opaque (`unknown`) so we never accidentally read
+	 * a snake_case field via the camelCase interface.
+	 */
+	type BeanWireSnake = Record<string, unknown>;
+	type RoasterWireSnake = Record<string, unknown>;
 
 	/** One BC brew mapped to a Rust-shape StoredShot + the resolved snapshot strings. */
 	interface CoreImportedShot {
@@ -258,33 +309,92 @@
 	}
 
 	/**
-	 * Build the preview object the UI renders, dedup'ing beans we
-	 * already have in the library by case-insensitive
-	 * `(roasterName, name, roastedOn)` triple — the same conflict-
-	 * resolution rule the old TS importer used. Shots are not dedup'd
-	 * here (their UUID makes them unique by construction; a re-import
-	 * inserts duplicates — future enhancement: skip by
-	 * `beanconqueror_id`).
+	 * Build the preview object the UI renders. Three dedups happen
+	 * here, all against the shell library's current state:
+	 *
+	 *  1. **BC-uuid skip (resumability)**: if a bean's
+	 *     `beanconquerorId` already exists in the library, the bean
+	 *     and its photo were imported on a previous (possibly
+	 *     interrupted) run; skip silently. This is what makes
+	 *     re-importing the same `.zip` after a partial run pick up
+	 *     where it left off.
+	 *  2. **(roaster, name, roastedOn) triple**: dedup against
+	 *     hand-created Crema beans the user may have entered
+	 *     manually that line up with a BC bag.
+	 *  3. **Roaster re-point**: if an incoming bean references a
+	 *     freshly-minted roaster whose NAME matches an existing
+	 *     library roaster, rewrite the bean's `roasterId` to the
+	 *     existing roaster's id (and drop the duplicate roaster from
+	 *     the add-set). Otherwise the bean would land with a dangling
+	 *     pointer because we filter the duplicate-name roaster out
+	 *     of `newRoasters`.
+	 *
+	 * Shots are not dedup'd — their UUID makes them unique by
+	 * construction. (Could be tightened by a `beanconquerorId`
+	 * snapshot on `StoredShot` in a follow-up if users start
+	 * re-importing the same history.)
 	 */
 	function buildPreview(plan: CorePlan, filename: string): Preview {
+		// snake_case → camelCase on the wasm-returned beans / roasters
+		// so they match the shell's persisted shape (`bagSizeG`,
+		// `roasterId`, …) before we touch anything else.
+		const wireBeans = plan.beans.map((b) => snakeToCamel<Bean>(b));
+		const wireRoasters = plan.roasters.map((r) => snakeToCamel<Roaster>(r));
+
 		const existingRoasterByLc = new Map<string, Roaster>();
 		for (const r of library.roasters) {
 			existingRoasterByLc.set(r.name.trim().toLowerCase(), r);
 		}
+		const existingBeanconquerorIds = new Set<string>();
+		for (const b of library.beans) {
+			if (b.beanconquerorId) existingBeanconquerorIds.add(b.beanconquerorId);
+		}
 
-		// Dedup beans against the library by (roaster, name, roastedOn).
-		const roasterById = new Map<string, Roaster>();
-		for (const r of plan.roasters) roasterById.set(r.id, r);
+		// Build a roaster lookup from the wire beans' BC-side ids so we
+		// can resolve the new bean's roasterId → roaster name once.
+		const wireRoasterById = new Map<string, Roaster>();
+		for (const r of wireRoasters) wireRoasterById.set(r.id, r);
+
 		const newBeans: Bean[] = [];
 		let duplicatesSkipped = 0;
-		for (const bean of plan.beans) {
-			const roasterName = bean.roasterId
-				? roasterById.get(bean.roasterId)?.name ?? ''
-				: '';
+		// Roasters that ended up referenced by a kept bean — we'll
+		// emit only these in `newRoasters` (dropping any name-collision
+		// roaster and rewriting the bean's pointer to the live one).
+		const keptNewRoasterIds = new Set<string>();
+		for (const bean of wireBeans) {
+			// Resumability: same BC uuid as a bean already in the library
+			// → skip. This lets a re-import of the same .zip pick up
+			// where a previous run left off without producing duplicates.
+			if (
+				bean.beanconquerorId &&
+				existingBeanconquerorIds.has(bean.beanconquerorId)
+			) {
+				duplicatesSkipped += 1;
+				continue;
+			}
+
+			// Roaster lookup + repoint. The bean's roasterId currently
+			// points at a freshly-minted roaster from the core; if the
+			// library already has a roaster with the same name, rewrite
+			// the pointer to use it.
+			let resolvedBean = bean;
+			const wireRoaster = bean.roasterId
+				? wireRoasterById.get(bean.roasterId) ?? null
+				: null;
+			const roasterName = wireRoaster?.name ?? '';
 			const libRoaster = roasterName
 				? existingRoasterByLc.get(roasterName.toLowerCase())
 				: null;
-			const isDupe =
+			if (libRoaster && wireRoaster && wireRoaster.id !== libRoaster.id) {
+				resolvedBean = { ...bean, roasterId: libRoaster.id };
+			} else if (wireRoaster) {
+				keptNewRoasterIds.add(wireRoaster.id);
+			}
+
+			// Soft dedup: same (roaster, name, roastedOn) triple as a
+			// library bean → skip. Catches hand-entered Crema beans
+			// that match a BC import.
+			const isTripleDupe =
 				libRoaster &&
 				library.beans.some(
 					(existing) =>
@@ -292,17 +402,15 @@
 						existing.name.trim().toLowerCase() === bean.name.trim().toLowerCase() &&
 						(existing.roastedOn ?? null) === (bean.roastedOn ?? null)
 				);
-			if (isDupe) {
+			if (isTripleDupe) {
 				duplicatesSkipped += 1;
 				continue;
 			}
-			newBeans.push(bean);
+
+			newBeans.push(resolvedBean);
 		}
 
-		// New roasters = those that aren't already in the library by name.
-		const newRoasters = plan.roasters.filter(
-			(r) => !existingRoasterByLc.has(r.name.trim().toLowerCase())
-		);
+		const newRoasters = wireRoasters.filter((r) => keptNewRoasterIds.has(r.id));
 
 		const newShots: PreparedShot[] = plan.shots.map((imp) => ({
 			shot: prepareShot(imp)
@@ -401,26 +509,36 @@
 		// through (focus → space, drive-by ondblclick handlers, etc).
 		const snapshot = preview;
 		step = 'committing';
+		progress = { done: 0, total: snapshot.newBeans.length };
 		try {
 			const dropped = new Map(droppedPhotoFiles.map((f) => [f.name, f]));
-			const beansWithImages: Bean[] = await Promise.all(
-				snapshot.newBeans.map(async (bean) => {
-					const photos = readPhotoFilenames(bean);
-					if (photos.length === 0) return bean;
-					const file = photos.map((n) => dropped.get(n)).find((f) => f != null);
-					if (!file) return bean;
+			// Process beans sequentially so the progress bar increments
+			// per-bean. Parallel was marginally faster but gave the user
+			// no usable feedback for large imports (hundreds of beans).
+			// Order matches snapshot.newBeans so a partial run is
+			// resumable: the BC-uuid skip in `buildPreview` picks up
+			// where this leaves off on a re-import.
+			const beansWithImages: Bean[] = [];
+			for (const bean of snapshot.newBeans) {
+				const photos = readPhotoFilenames(bean);
+				const file = photos
+					.map((n) => dropped.get(n))
+					.find((f) => f != null);
+				if (file) {
 					const ref = beanImageRefFor(bean.id);
 					try {
 						await imageStore.put(ref, file);
+						beansWithImages.push({ ...bean, imageRef: ref });
 					} catch {
-						// If IndexedDB fails (private mode, quota, …),
-						// drop the imageRef quietly — the bean still
-						// imports.
-						return bean;
+						// IndexedDB failed (private mode, quota, …) —
+						// drop the imageRef quietly and keep going.
+						beansWithImages.push(bean);
 					}
-					return { ...bean, imageRef: ref };
-				})
-			);
+				} else {
+					beansWithImages.push(bean);
+				}
+				progress = { done: progress.done + 1, total: progress.total };
+			}
 
 			library.bulkAdd(beansWithImages, snapshot.newRoasters);
 			for (const prep of snapshot.newShots) {
@@ -508,9 +626,25 @@
 			Parsing your archive…
 		</div>
 	{:else if step === 'committing'}
-		<div class="bd-status">
+		<div class="bd-status bd-status-progress">
 			<i class="ph ph-spinner-gap bd-spinner" aria-hidden="true"></i>
-			Saving beans and photos…
+			<div class="bd-progress-text">
+				Saving {progress.done} of {progress.total} bean{progress.total === 1 ? '' : 's'}…
+			</div>
+			<div
+				class="bd-progress-bar"
+				role="progressbar"
+				aria-valuemin="0"
+				aria-valuemax={progress.total}
+				aria-valuenow={progress.done}
+			>
+				<div
+					class="bd-progress-fill"
+					style:width="{progress.total > 0
+						? Math.round((progress.done / progress.total) * 100)
+						: 0}%"
+				></div>
+			</div>
 		</div>
 	{:else if step === 'error'}
 		<div class="bd-status bd-status-err">
@@ -727,6 +861,30 @@
 	@keyframes bd-spin {
 		from { transform: rotate(0); }
 		to { transform: rotate(360deg); }
+	}
+	.bd-status-progress {
+		flex-direction: column;
+		align-items: stretch;
+		gap: 10px;
+		padding: 28px 24px;
+	}
+	.bd-status-progress i {
+		align-self: center;
+	}
+	.bd-progress-text {
+		text-align: center;
+		color: rgba(var(--tint-rgb), 0.7);
+	}
+	.bd-progress-bar {
+		height: 6px;
+		border-radius: 999px;
+		background: rgba(var(--tint-rgb), 0.12);
+		overflow: hidden;
+	}
+	.bd-progress-fill {
+		height: 100%;
+		background: var(--copper-400);
+		transition: width 120ms var(--ease);
 	}
 	.bd-preview {
 		display: flex;

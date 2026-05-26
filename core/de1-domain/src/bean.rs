@@ -372,6 +372,11 @@ pub struct Bean {
     pub rating: u8,
     /// Where the bag was bought — `"Counter Culture · Durham"`.
     pub place_of_purchase: Option<String>,
+    /// What the bag cost — currency-less number in the user's local
+    /// units (Crema doesn't track currency yet). `None` = unrecorded.
+    /// Imported from Beanconqueror's `cost` field when present.
+    #[serde(default)]
+    pub cost: Option<f32>,
     /// URL to buy again — Visualizer / roaster / store link.
     pub url: Option<String>,
     /// Free-form notes (not the tasting box).
@@ -445,6 +450,7 @@ impl Bean {
             tasting_notes: String::new(),
             rating: 0,
             place_of_purchase: None,
+            cost: None,
             url: None,
             notes: String::new(),
             favourite: false,
