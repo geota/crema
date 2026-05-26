@@ -367,24 +367,6 @@
 			/>
 		{/snippet}
 	</StRow>
-	<StRow
-		title="Shot export format"
-		sub={prefs.shotExportFormat === 'replay'
-			? 'Per-shot Download emits the raw BLE capture (.jsonl) — every wire byte preserved, replayable through Crema. Crema-only; right for bug reports + development.'
-			: 'Per-shot Download emits the community v2 .shot.json — portable across reaprime / Visualizer / de1app, pre-decoded telemetry, user-readable.'}
-	>
-		{#snippet control()}
-			<StSelect
-				value={prefs.shotExportFormat}
-				options={[
-					{ value: 'community', label: 'Community v2 (.shot.json)' },
-					{ value: 'replay', label: 'Replayable capture (.jsonl)' }
-				]}
-				onChange={(v) =>
-					settings.set('shotExportFormat', v as 'community' | 'replay')}
-			/>
-		{/snippet}
-	</StRow>
 </StGroup>
 
 <StGroup

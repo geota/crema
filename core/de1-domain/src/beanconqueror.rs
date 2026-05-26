@@ -1763,6 +1763,142 @@ mod tests {
         );
     }
 
+    /// Round-trip the user's slim BC fixture: BC → Crema → BC →
+    /// Crema, comparing the two ImportPlans. Verifies that the
+    /// `metadata.beanconqueror.unmapped` stash preserves everything
+    /// BC ships that Crema doesn't model first-class.
+    #[test]
+    #[ignore = "depends on ~/code/bean-q-slim being present"]
+    fn bc_round_trip_slim_fixture_is_lossless() {
+        let Some(text1) = read_user_fixture("bean-q-slim") else {
+            return;
+        };
+        let plan1 = bc_to_crema(&parse_export(&text1).unwrap(), 1, seq_id());
+
+        // Round-trip: emit the BC main JSON from the imported plan.
+        let mut roasters = plan1.roasters.clone();
+        // Stamp deterministic timestamps so the round-trip doesn't
+        // diff on `created_at` / `updated_at`.
+        for r in roasters.iter_mut() {
+            r.created_at = 1;
+            r.updated_at = 1;
+        }
+        let mut beans = plan1.beans.clone();
+        for b in beans.iter_mut() {
+            b.created_at = 1;
+            b.updated_at = 1;
+        }
+        let bc_json2 = crema_to_bc_main_json(&beans, &roasters, &[], 1);
+
+        // Re-import.
+        let plan2 = bc_to_crema(&parse_export(&bc_json2).unwrap(), 1, seq_id());
+
+        // Same counts.
+        assert_eq!(
+            plan1.beans.len(),
+            plan2.beans.len(),
+            "bean count round-tripped"
+        );
+        assert_eq!(
+            plan1.roasters.len(),
+            plan2.roasters.len(),
+            "roaster count round-tripped"
+        );
+
+        // Per-bean value-level comparison. Field-by-field (ids /
+        // timestamps differ on re-import so we skip them).
+        let by_bc_uuid = |plan: &ImportPlan| -> std::collections::HashMap<String, Bean> {
+            plan.beans
+                .iter()
+                .filter_map(|b| b.beanconqueror_id.clone().map(|id| (id, b.clone())))
+                .collect()
+        };
+        let m1 = by_bc_uuid(&plan1);
+        let m2 = by_bc_uuid(&plan2);
+        for (uuid, b1) in &m1 {
+            let b2 = m2.get(uuid).unwrap_or_else(|| {
+                panic!("bean with beanconqueror_id {uuid:?} missing after round-trip")
+            });
+            assert_eq!(b1.name, b2.name, "name");
+            assert_eq!(b1.roast_level, b2.roast_level, "roast_level");
+            assert_eq!(b1.mix, b2.mix, "mix");
+            assert_eq!(b1.roast_type, b2.roast_type, "roast_type");
+            assert_eq!(b1.decaf, b2.decaf, "decaf");
+            assert_eq!(b1.favourite, b2.favourite, "favourite");
+            assert_eq!(b1.bag_size, b2.bag_size, "bag_size");
+            assert_eq!(b1.remaining, b2.remaining, "remaining");
+            assert_eq!(b1.cost, b2.cost, "cost");
+            assert_eq!(b1.rating, b2.rating, "rating");
+            assert_eq!(b1.roasted_on, b2.roasted_on, "roasted_on");
+            assert_eq!(b1.opened_on, b2.opened_on, "opened_on");
+            assert_eq!(b1.frozen_on, b2.frozen_on, "frozen_on");
+            assert_eq!(b1.defrosted_on, b2.defrosted_on, "defrosted_on");
+            assert_eq!(b1.url, b2.url, "url");
+            assert_eq!(b1.tasting_notes, b2.tasting_notes, "tasting_notes");
+            assert_eq!(b1.origin, b2.origin, "origin");
+            // archivedAt may change on a finished-bag round-trip
+            // (now_unix_ms is re-stamped). Compare on presence only.
+            assert_eq!(b1.archived_at.is_some(), b2.archived_at.is_some(), "archived");
+            // The unmapped stash must round-trip verbatim.
+            let stash1 = b1
+                .metadata
+                .as_object()
+                .and_then(|m| m.get("beanconqueror"))
+                .and_then(|v| v.get("unmapped"))
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            let stash2 = b2
+                .metadata
+                .as_object()
+                .and_then(|m| m.get("beanconqueror"))
+                .and_then(|v| v.get("unmapped"))
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            assert_eq!(stash1, stash2, "metadata.beanconqueror.unmapped");
+            let photos1 = b1
+                .metadata
+                .as_object()
+                .and_then(|m| m.get("beanconqueror"))
+                .and_then(|v| v.get("photo_filenames"))
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            let photos2 = b2
+                .metadata
+                .as_object()
+                .and_then(|m| m.get("beanconqueror"))
+                .and_then(|v| v.get("photo_filenames"))
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            assert_eq!(photos1, photos2, "metadata.beanconqueror.photo_filenames");
+        }
+    }
+
+    /// Same round-trip on the photo-bearing fixture. The single
+    /// `photo_xxx.jpg` attachment must round-trip via
+    /// `metadata.beanconqueror.photo_filenames`.
+    #[test]
+    #[ignore = "depends on ~/code/bean-q-full-with-photos being present"]
+    fn bc_round_trip_full_with_photos_fixture_preserves_attachment() {
+        let Some(text1) = read_user_fixture("bean-q-full-with-photos") else {
+            return;
+        };
+        let plan1 = bc_to_crema(&parse_export(&text1).unwrap(), 1, seq_id());
+        let bc_json2 = crema_to_bc_main_json(&plan1.beans, &plan1.roasters, &[], 1);
+        let plan2 = bc_to_crema(&parse_export(&bc_json2).unwrap(), 1, seq_id());
+
+        // Same photo references on each side.
+        assert_eq!(
+            plan1.diagnostics.bag_photo_filenames,
+            plan2.diagnostics.bag_photo_filenames
+        );
+        assert_eq!(plan1.diagnostics.bag_photos_referenced, 1);
+        assert_eq!(plan2.diagnostics.bag_photos_referenced, 1);
+        assert_eq!(
+            plan2.diagnostics.bag_photo_filenames[0],
+            "photo_2325dbb9-2278-47dc-bd81-47872f4c11c0.jpg"
+        );
+    }
+
     /// User's full-with-photos export: 2 beans, 1 bean has a photo
     /// attachment (the JPG ships as a sibling of the ZIP on disk),
     /// no brews.

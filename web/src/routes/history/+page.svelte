@@ -92,29 +92,37 @@
 	let exporting = $state(false);
 
 	/**
-	 * Bulk Export — routes by `shotExportFormat` (Settings → Advanced):
+	 * Bulk Export — two formats surfaced via the Export split-button:
 	 *
-	 * - `'community'` (default) — every recorded shot collapses into
+	 * - **Community v2 (default click)** — every shot collapses into
 	 *   one `.jsonl` file with one community-v2 JSON per line. Small,
 	 *   single-file, re-importable by every DE1 app.
-	 * - `'replay'` — assembles a `.zip` containing one `.jsonl` raw
-	 *   capture per shot (one BLE notification per line). Shots that
-	 *   were imported (or recorded before the capture recorder shipped)
-	 *   have no raw bytes — they fall back to their v2 JSON inside the
-	 *   same archive so the user still gets a record.
+	 * - **Replayable capture** — `.zip` of per-shot `.jsonl` raw BLE
+	 *   captures. Shots without raw bytes (imports, pre-recorder)
+	 *   are skipped with a count logged.
 	 */
-	async function exportAllShots(): Promise<void> {
+	async function exportAllCommunity(): Promise<void> {
 		if (shots.length === 0 || exporting) return;
 		exporting = true;
 		try {
-			if (settings.current.shotExportFormat === 'replay') {
-				await exportAllAsReplayZip();
-			} else {
-				exportAllAsV2Jsonl();
-			}
+			exportAllAsV2Jsonl();
 		} finally {
 			exporting = false;
 		}
+	}
+	async function exportAllReplay(): Promise<void> {
+		if (shots.length === 0 || exporting) return;
+		exporting = true;
+		try {
+			await exportAllAsReplayZip();
+		} finally {
+			exporting = false;
+		}
+	}
+
+	let exportMenuOpen = $state(false);
+	function closeMenusOnDocClick(): void {
+		exportMenuOpen = false;
 	}
 
 	function exportAllAsV2Jsonl(): void {
@@ -582,6 +590,8 @@
 	<title>Crema — History</title>
 </svelte:head>
 
+<svelte:window onclick={closeMenusOnDocClick} />
+
 <div class="qcontain hi-page">
 	<!-- Header -->
 	<div class="hi-head">
@@ -620,17 +630,74 @@
 					onchange={onImportFilesChosen}
 				/>
 			</label>
-			<button
-				class="st-btn st-btn-secondary"
-				disabled={shots.length === 0 || exporting}
-				onclick={exportAllShots}
-				title={settings.current.shotExportFormat === 'replay'
-					? 'Download a .zip of raw BLE captures (.jsonl per shot) — Crema-only replay format'
-					: 'Download every shot as one .jsonl file — community-v2 JSON, one shot per line'}
-			>
-				<i class="ph ph-download-simple" aria-hidden="true"></i>
-				{exporting ? 'Exporting…' : 'Export'}
-			</button>
+			<!-- Export split-button — primary fires the community v2
+			     bulk export immediately; the caret menu surfaces the
+			     replay-capture zip variant. Mirrors the /beans pattern. -->
+			<!-- svelte-ignore a11y_click_events_have_key_events -->
+			<!-- svelte-ignore a11y_no_static_element_interactions -->
+			<div class="hi-split" onclick={(e) => e.stopPropagation()}>
+				<button
+					class="st-btn st-btn-secondary hi-split-main"
+					disabled={shots.length === 0 || exporting}
+					onclick={exportAllCommunity}
+					title="Download every shot as one .jsonl file — community-v2 JSON, one shot per line"
+				>
+					<i class="ph ph-download-simple" aria-hidden="true"></i>
+					{exporting ? 'Exporting…' : 'Export'}
+				</button>
+				<button
+					class="st-btn st-btn-secondary hi-split-caret-btn"
+					disabled={shots.length === 0 || exporting}
+					onclick={(e) => {
+						e.stopPropagation();
+						exportMenuOpen = !exportMenuOpen;
+					}}
+					aria-haspopup="menu"
+					aria-expanded={exportMenuOpen}
+					aria-label="Choose export format"
+				>
+					<i class="ph ph-caret-down" aria-hidden="true"></i>
+				</button>
+				{#if exportMenuOpen}
+					<div class="hi-split-menu" role="menu">
+						<div class="hi-split-menu-head">Export as</div>
+						<button
+							class="hi-split-menu-item"
+							role="menuitem"
+							onclick={() => {
+								exportMenuOpen = false;
+								void exportAllCommunity();
+							}}
+						>
+							<i class="ph-duotone ph-file-text" aria-hidden="true"></i>
+							<div class="hi-split-menu-text">
+								<div class="hi-split-menu-title">Community v2 (.jsonl)</div>
+								<div class="hi-split-menu-sub">
+									One JSON per shot, one shot per line. Portable across
+									reaprime / Visualizer / de1app.
+								</div>
+							</div>
+						</button>
+						<button
+							class="hi-split-menu-item"
+							role="menuitem"
+							onclick={() => {
+								exportMenuOpen = false;
+								void exportAllReplay();
+							}}
+						>
+							<i class="ph-duotone ph-file-zip" aria-hidden="true"></i>
+							<div class="hi-split-menu-text">
+								<div class="hi-split-menu-title">Replayable captures (.zip)</div>
+								<div class="hi-split-menu-sub">
+									Per-shot raw BLE bytes. Imports / pre-recorder shots
+									are skipped (no raw bytes).
+								</div>
+							</div>
+						</button>
+					</div>
+				{/if}
+			</div>
 			{#if canPushShots && unsyncedShots.length > 0}
 				<button
 					class="st-btn st-btn-secondary"
@@ -920,6 +987,83 @@
 {/if}
 
 <style>
+	/* Export split-button — primary fires the default format,
+	   caret opens a menu with both options. Same pattern + class
+	   names as ShotDetail.svelte; scoped here to the history page. */
+	.hi-split {
+		position: relative;
+		display: inline-flex;
+	}
+	.hi-split-main {
+		border-radius: var(--radius-pill) 0 0 var(--radius-pill);
+	}
+	.hi-split-caret-btn {
+		border-radius: 0 var(--radius-pill) var(--radius-pill) 0;
+		padding-left: 8px;
+		padding-right: 10px;
+		margin-left: -1px;
+	}
+	.hi-split-menu {
+		position: absolute;
+		top: calc(100% + 6px);
+		right: 0;
+		min-width: 320px;
+		background: var(--bg-page);
+		border: 1px solid rgba(var(--tint-rgb), 0.12);
+		border-radius: var(--radius-md, 10px);
+		padding: 6px;
+		z-index: 60;
+		box-shadow: 0 8px 28px rgba(0, 0, 0, 0.32);
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+	}
+	.hi-split-menu-head {
+		font-family: var(--font-sans);
+		font-size: 10px;
+		font-weight: 700;
+		letter-spacing: var(--track-allcaps);
+		text-transform: uppercase;
+		color: rgba(var(--tint-rgb), 0.5);
+		padding: 6px 10px 4px;
+	}
+	.hi-split-menu-item {
+		display: flex;
+		gap: 12px;
+		align-items: flex-start;
+		background: transparent;
+		border: 0;
+		color: var(--fg-1);
+		text-align: left;
+		font-family: var(--font-sans);
+		font-size: 13px;
+		padding: 10px 12px;
+		border-radius: var(--radius-sm);
+		cursor: pointer;
+	}
+	.hi-split-menu-item:hover {
+		background: rgba(var(--tint-rgb), 0.06);
+	}
+	.hi-split-menu-item i {
+		font-size: 18px;
+		color: var(--copper-400);
+		flex-shrink: 0;
+		margin-top: 1px;
+	}
+	.hi-split-menu-text {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+	}
+	.hi-split-menu-title {
+		font-weight: 600;
+	}
+	.hi-split-menu-sub {
+		font-size: 12px;
+		color: rgba(var(--tint-rgb), 0.6);
+		line-height: 1.4;
+	}
+
 	.hi-page {
 		background: var(--bg-page);
 		color: var(--fg-1);

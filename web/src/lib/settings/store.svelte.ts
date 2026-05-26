@@ -204,24 +204,6 @@ export interface Settings {
 	smoothPressure: boolean;
 	/** Show a debug / event-log panel (BLE diagnostics). */
 	showDebugPanel: boolean;
-	/**
-	 * Which format the History page's Download (per-shot) + Export
-	 * (bulk) actions emit:
-	 *
-	 * - `'community'` (default) — community v2 `.shot.json` — portable
-	 *   across reaprime / Visualizer / de1app, pre-decoded telemetry,
-	 *   user-readable.
-	 * - `'replay'` — Crema's raw BLE capture (`.jsonl`) — every wire
-	 *   byte preserved, bit-exact playback through Crema's Replay
-	 *   tool. Crema-only; choose when sharing for debugging / bug
-	 *   reports.
-	 *
-	 * Only the per-shot Download follows this setting today; the bulk
-	 * Export remains community v2 JSONL because raw-capture bulk
-	 * export needs separate plumbing (per-shot IndexedDB capture
-	 * lookups).
-	 */
-	shotExportFormat: 'community' | 'replay';
 }
 
 /** The default preference bundle — every field's out-of-box value. */
@@ -280,8 +262,7 @@ export const DEFAULT_SETTINGS: Settings = {
 	},
 
 	smoothPressure: true,
-	showDebugPanel: false,
-	shotExportFormat: 'community'
+	showDebugPanel: false
 };
 
 /**
