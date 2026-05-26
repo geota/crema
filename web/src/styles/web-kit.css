@@ -238,6 +238,17 @@
 .crema-target-bar { margin-top: 10px; height: 4px; background: rgba(var(--tint-rgb), 0.08); border-radius: 999px; overflow: hidden; }
 .crema-target-bar > div { height: 100%; background: var(--copper-500); transition: width 500ms var(--ease); }
 
+/* Stop-conditions card — one card hosts up to three rows (yield,
+   volume, time) so the left column stays compact when several
+   guards are active. Each row carries its own progress bar. */
+.crema-target-stack { padding: 12px 18px 14px; }
+.crema-target-stack-row { display: grid; grid-template-columns: 56px 1fr; column-gap: 10px; align-items: baseline; margin-top: 8px; }
+.crema-target-stack-row:first-of-type { margin-top: 4px; }
+.crema-target-stack-row .crema-target-bar { grid-column: 1 / span 2; margin-top: 4px; }
+.crema-target-stack-label { font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; color: rgba(var(--tint-rgb), 0.55); }
+.crema-target-stack-val { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 15px; color: rgba(var(--tint-rgb), 0.55); justify-self: end; text-align: right; }
+.crema-target-stack-live { color: var(--copper-400); }
+
 /* ── Phase indicator card ────────────────────────────────────────── */
 /* Vertical list: one row per profile segment, horizontal labels. Scales
    to many-phase profiles (8+) where the older horizontal-pill layout
