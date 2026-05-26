@@ -235,7 +235,7 @@ export const DEFAULT_SETTINGS: Settings = {
 	groupFlushBeforeShot: false,
 	autoTareOnShotStart: true,
 	stopOnWeight: true,
-	maxShotDurationS: 60,
+	maxShotDurationS: 0,
 
 	telemetryRateHz: 50,
 	lineFrequencyHz: 0,

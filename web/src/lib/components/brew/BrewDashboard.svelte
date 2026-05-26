@@ -702,6 +702,55 @@
 	const yieldPct = $derived(
 		shotWeight == null ? 0 : Math.min(100, (shotWeight / p.yield) * 100)
 	);
+
+	/**
+	 * Whether the per-shot weight target is engaged for the next / current
+	 * shot. Starts OFF (per spec — every profile load is a fresh decision),
+	 * and the `$derived.by` re-runs whenever the active profile changes
+	 * (touching `activeProfile?.id` registers the dependency); reassigning
+	 * via {@link onToggleYieldTarget} breaks the `$derived` track until the
+	 * next reseed. Mirrors the user's "starts disabled" requirement and
+	 * the core's matching `weight_target_disabled = true` push on
+	 * `ProfileStore.pushActiveProfileToCore`.
+	 */
+	let yieldTargetOn = $derived.by(() => {
+		void activeProfile?.id;
+		return false;
+	});
+	/**
+	 * Flip the yield-target dot for the current shot. Pushes the inverse
+	 * to the core so SAW arming consults the same value next time
+	 * `ShotEvent::Started` fires (Crema-tap or GHC-tap).
+	 */
+	function onToggleYieldTarget(): void {
+		yieldTargetOn = !yieldTargetOn;
+		void app?.applyWeightTargetDisabled(!yieldTargetOn);
+	}
+
+	/**
+	 * Whether the Yield brew target card should render — gated on
+	 * (a) the active profile having a configured target, AND
+	 * (b) the user having engaged the per-shot dot (above). When either
+	 * is missing the card hides; the user only sees a yield surface when
+	 * a weight-stop is actually going to fire.
+	 */
+	const yieldCardVisible = $derived(yieldTargetOn && p.yield > 0);
+	/** Whether to render the Max Volume target card. */
+	const maxVolumeCardVisible = $derived((activeProfile?.maxTotalVolumeMl ?? 0) > 0);
+	/** Volume progress as 0..100 % for the max-volume card's bar. */
+	const maxVolumePct = $derived.by(() => {
+		const cap = activeProfile?.maxTotalVolumeMl ?? 0;
+		if (cap <= 0) return 0;
+		return Math.min(100, ((ui.dispensedVolume ?? 0) / cap) * 100);
+	});
+	/** Whether to render the Max Duration target card. */
+	const maxDurationCardVisible = $derived(prefs.maxShotDurationS > 0);
+	/** Elapsed-time progress as 0..100 % for the max-duration card's bar. */
+	const maxDurationPct = $derived.by(() => {
+		const cap = prefs.maxShotDurationS;
+		if (cap <= 0) return 0;
+		return Math.min(100, (elapsedSec / cap) * 100);
+	});
 	/**
 	 * Water-tank volume (ml) for the foot readout — the DE1's `WaterLevel`
 	 * depth (mm) mapped through the de1app tank-geometry table, or `null`
@@ -1013,17 +1062,19 @@
 			<div class="crema-dash-timercol">
 				<ExtractionTimer seconds={elapsedSec} step={phaseLabel} />
 				<div class="crema-dash-targets">
-					<div class="crema-target">
-						<div class="t-eyebrow">Yield</div>
-						<div class="crema-target-val">
-							<span>{shotWeightM.value}</span> / {yieldTarget.value}<span
-								class="crema-target-unit">{yieldTarget.unit}</span
-							>
+					{#if yieldCardVisible}
+						<div class="crema-target">
+							<div class="t-eyebrow">Yield</div>
+							<div class="crema-target-val">
+								<span>{shotWeightM.value}</span> / {yieldTarget.value}<span
+									class="crema-target-unit">{yieldTarget.unit}</span
+								>
+							</div>
+							<div class="crema-target-bar">
+								<div style="width:{yieldPct}%"></div>
+							</div>
 						</div>
-						<div class="crema-target-bar">
-							<div style="width:{yieldPct}%"></div>
-						</div>
-					</div>
+					{/if}
 					<div class="crema-target">
 						<div class="t-eyebrow">Ratio</div>
 						<div class="crema-target-val">
@@ -1031,6 +1082,38 @@
 							<span class="crema-target-unit"> · target 1:{ratio}</span>
 						</div>
 					</div>
+					{#if maxVolumeCardVisible}
+						<!-- Stop-by-volume guardrail — appears only when the active
+						     profile sets `maxTotalVolumeMl > 0`. Live progress bar
+						     so the user can see why a shot ends. -->
+						<div class="crema-target">
+							<div class="t-eyebrow">Max volume</div>
+							<div class="crema-target-val">
+								<span>{(ui.dispensedVolume ?? 0).toFixed(0)}</span> /
+								{activeProfile?.maxTotalVolumeMl}<span class="crema-target-unit">ml</span>
+							</div>
+							<div class="crema-target-bar">
+								<div style="width:{maxVolumePct}%"></div>
+							</div>
+						</div>
+					{/if}
+					{#if maxDurationCardVisible}
+						<!-- Safety guardrail — appears only when the user sets a
+						     non-zero "Max shot duration" in Settings. Counts up
+						     toward the cap; a full bar means time is the
+						     reason a shot is about to stop. -->
+						<div class="crema-target">
+							<div class="t-eyebrow">Max time</div>
+							<div class="crema-target-val">
+								<span>{elapsedSec.toFixed(0)}</span> / {prefs.maxShotDurationS}<span
+									class="crema-target-unit">s</span
+								>
+							</div>
+							<div class="crema-target-bar">
+								<div style="width:{maxDurationPct}%"></div>
+							</div>
+						</div>
+					{/if}
 					<!-- The "Volume" card was retired 2026-05-22: the dispensed
 					     volume now lives as the secondary metric on the Flow
 					     channel card (right column), and the water-tank level
@@ -1256,6 +1339,8 @@
 				settings.set('stopOnWeight', v);
 				void app?.applyStopOnWeight(v);
 			}}
+			{yieldTargetOn}
+			{onToggleYieldTarget}
 		/>
 	</div>
 </div>

@@ -478,6 +478,14 @@ export interface CremaCore {
 	 */
 	setStopOnWeight(enabled: boolean): Promise<void>;
 	/**
+	 * Per-shot kill switch for the weight target — when `true`, the core
+	 * skips arming weight-based auto-stop for the next shot regardless of
+	 * the configured target. Independent of {@link setStopOnWeight} (the
+	 * user's persistent pref). The shell flips this when the user toggles
+	 * the QC yield dot OFF, and resets to `false` on every profile change.
+	 */
+	setWeightTargetDisabled(disabled: boolean): Promise<void>;
+	/**
 	 * Set the active profile's recipe target weight, grams. `undefined`
 	 * (or a `<=0` / non-finite value) means "no target." Called when the
 	 * shell activates or edits a profile.
@@ -893,6 +901,9 @@ async function createCore(): Promise<CremaCore> {
 		},
 		async setStopOnWeight(enabled) {
 			bridge.set_stop_on_weight(enabled);
+		},
+		async setWeightTargetDisabled(disabled) {
+			bridge.set_weight_target_disabled(disabled);
 		},
 		async setProfileTargetWeight(grams) {
 			bridge.set_profile_target_weight(grams);

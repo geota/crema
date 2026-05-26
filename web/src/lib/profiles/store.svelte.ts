@@ -214,6 +214,11 @@ export class ProfileStore {
 	 */
 	private async pushActiveProfileToCore(): Promise<void> {
 		const core = await loadCore();
+		// Reset the per-shot weight-target suppression: every profile load
+		// starts with the user's last persistent intent (the QC yield dot
+		// in BrewDashboard defaults to OFF and re-engages on each profile
+		// change, so we mirror it here).
+		await core.setWeightTargetDisabled(true);
 		const id = this.activeId;
 		if (id == null) {
 			await core.setProfileTargetWeight(undefined);

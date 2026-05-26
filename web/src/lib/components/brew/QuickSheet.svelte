@@ -83,7 +83,9 @@
 		onSelectBean,
 		onClose,
 		onToggleAutoTare,
-		onToggleStopOnWeight
+		onToggleStopOnWeight,
+		yieldTargetOn,
+		onToggleYieldTarget
 	}: {
 		/** The shared Quick Sheet parameter store. */
 		params: BrewParamState;
@@ -115,6 +117,15 @@
 		onToggleAutoTare: (enabled: boolean) => void;
 		/** Toggle the global "stop on weight" preference. Same pattern. */
 		onToggleStopOnWeight: (enabled: boolean) => void;
+		/**
+		 * Whether the per-shot weight target is engaged. The Yield card's
+		 * label dot renders lit when `true`. The parent owns the state
+		 * (so it can reset on profile change) and pushes to the core when
+		 * the user toggles via {@link onToggleYieldTarget}.
+		 */
+		yieldTargetOn: boolean;
+		/** Toggle the per-shot weight target on/off (yield card dot). */
+		onToggleYieldTarget: () => void;
 	} = $props();
 
 	const p = $derived(params.current);
@@ -161,7 +172,7 @@
 
 	<div class="qsheet-g-grid is-six">
 		<DoseGrindStepper {params} />
-		<YieldRatioStepper {params} />
+		<YieldRatioStepper {params} dotOn={yieldTargetOn} onDot={onToggleYieldTarget} />
 		<BrewTempStepper {params} />
 		<SteamStepper {params} />
 		<WaterStepper {params} />
