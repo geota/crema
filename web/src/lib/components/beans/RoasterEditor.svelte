@@ -35,6 +35,7 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { getBeanStore, roasterMarkTone, type Roaster } from '$lib/bean';
+	import RoasterDeleteDialog from './RoasterDeleteDialog.svelte';
 
 	let {
 		roaster,
@@ -154,16 +155,13 @@
 		back();
 	}
 
+	let confirmingDelete = $state(false);
 	function onDelete(): void {
 		if (isNew) return;
-		const label = current.name || 'this roaster';
-		if (
-			!confirm(
-				`Delete "${label}"? Their ${beanCount} bag(s) will keep but lose the roaster link.`
-			)
-		)
-			return;
-		library.deleteRoaster(current.id);
+		confirmingDelete = true;
+	}
+	function onDeleted(): void {
+		confirmingDelete = false;
 		goto(resolve('/beans?tab=roasters'));
 	}
 </script>
@@ -380,6 +378,16 @@
 		</div>
 	</main>
 </div>
+
+{#if confirmingDelete}
+	<RoasterDeleteDialog
+		roasterId={current.id}
+		roasterName={current.name}
+		linkedBeanCount={beanCount}
+		onClose={() => (confirmingDelete = false)}
+		onDeleted={onDeleted}
+	/>
+{/if}
 
 <style>
 	.rd-page {
