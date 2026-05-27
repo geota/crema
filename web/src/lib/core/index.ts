@@ -803,16 +803,8 @@ async function createCore(): Promise<CremaCore> {
 		sensor: CalTarget
 	): (typeof wasm.CalSensor)[keyof typeof wasm.CalSensor] => wasm.CalSensor[sensor];
 
-	/**
-	 * Type-cast a bridge return into a `CoreOutput`. The bridge methods
-	 * now return native JS objects via `serde-wasm-bindgen` (was: a
-	 * JSON string the shell `JSON.parse`d). The shape across the boundary
-	 * is identical (the structured-clone deserialised object IS the
-	 * `CoreOutput`); this is the same `as CoreOutput` cast the parse
-	 * path did, just without the JSON round-trip cost on the hot
-	 * notification path.
-	 */
-	const parseOutput = (raw: unknown): CoreOutput => raw as CoreOutput;
+	/** Parse a bridge JSON string into a typed `CoreOutput`. */
+	const parseOutput = (raw: string): CoreOutput => JSON.parse(raw) as CoreOutput;
 
 	// `lastNotificationAtMs` is mutated inside `onNotification` so it stays
 	// in lockstep with whatever timestamp the core just stamped into its

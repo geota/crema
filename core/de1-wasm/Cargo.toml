@@ -14,9 +14,7 @@ crate-type = ["cdylib", "rlib"]
 de1-app = { path = "../de1-app" }
 de1-domain = { path = "../de1-domain" }
 de1-protocol = { path = "../de1-protocol" }
-serde = { workspace = true }
 serde_json = { workspace = true }
-serde-wasm-bindgen = "0.6"
 wasm-bindgen = "0.2.121"
 # The `uuid` crate needs a randomness source on `wasm32-unknown-unknown`;
 # the `js` feature wires it through `crypto.getRandomValues()` via
