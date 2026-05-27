@@ -25,9 +25,8 @@
 	 * shot plays out in the Brew dashboard and lands in History with no live
 	 * machine. See `CremaApp.replayCapture`.
 	 */
-	import type { CremaApp, UiSnapshot } from '$lib/state';
+	import { getMachineReadout, type CremaApp, type UiSnapshot } from '$lib/state';
 	import { getSettingsStore } from '$lib/settings';
-	import { MmrRegister } from '$lib/core/crema-core';
 	import StSectionHead from '../StSectionHead.svelte';
 	import StGroup from '../StGroup.svelte';
 	import StRow from '../StRow.svelte';
@@ -92,16 +91,15 @@
 	// stamps `+1000` on user-committed values, so a raw read of `1120` /
 	// `1230` decodes to `120` / `230`. A raw `0` means the firmware has
 	// not yet been told (legacy: "detect from heater dB").
-	const heaterVoltageRaw = $derived(
-		snapshot.de1MachineInfo[MmrRegister.HeaterVoltage]
-	);
+	const machine = getMachineReadout();
+	const heaterVoltageRaw = $derived(machine.heaterVoltage);
 	const heaterVoltage = $derived.by(() => {
 		const v = heaterVoltageRaw;
-		if (v === undefined || v === 0) return 0;
+		if (v === null || v === 0) return 0;
 		return v >= 1000 ? v - 1000 : v;
 	});
 	const heaterVoltageLabel = $derived(
-		heaterVoltageRaw === undefined
+		heaterVoltageRaw === null
 			? '—'
 			: heaterVoltage === 0
 				? 'Not set (auto-detect)'

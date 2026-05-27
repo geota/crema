@@ -33,7 +33,7 @@
 	 * verification (the connect itself would have failed at the failing step,
 	 * named in the event log).
 	 */
-	import type { CremaApp, UiSnapshot } from '$lib/state';
+	import { getMachineReadout, type CremaApp, type UiSnapshot } from '$lib/state';
 	import { bleStateLabel, type De1State } from '$lib/ble';
 	import type { FirmwareUpdateStatus } from '$lib/core';
 	import { MachineState, MmrRegister } from '$lib/core/crema-core';
@@ -55,6 +55,7 @@
 
 	const settings = getSettingsStore();
 	const prefs = $derived(settings.current);
+	const machine = getMachineReadout();
 
 	/** The DE1 connection-diagnostics snapshot — proof the device is a DE1. */
 	const diag = $derived(snapshot.de1Diagnostics);
@@ -113,9 +114,9 @@
 	 * the two readouts read consistently.
 	 */
 	const firmwareLabel = $derived.by(() => {
-		const build = snapshot.de1MachineInfo.FirmwareVersion;
-		if (build !== undefined) return `v${build}`;
-		return snapshot.de1Firmware ?? '—';
+		const build = machine.firmwareBuild;
+		if (build !== null) return `v${build}`;
+		return machine.firmwareString ?? '—';
 	});
 	/** The Web Bluetooth device id of the connected DE1, or a dash. */
 	const bleLabel = $derived(diag.deviceId ?? '—');
@@ -140,8 +141,8 @@
 		'DE1XXXL'
 	] as const;
 	const modelLabel = $derived.by(() => {
-		const m = snapshot.de1MachineInfo.MachineModel;
-		if (m === undefined) return '—';
+		const m = machine.machineModel;
+		if (m === null) return '—';
 		return MACHINE_MODEL_NAMES[m] ?? `model ${m}`;
 	});
 	/**
@@ -152,8 +153,8 @@
 	 * lands so the card stays hidden on first paint.
 	 */
 	const isBengle = $derived.by<boolean>(() => {
-		const m = snapshot.de1MachineInfo.MachineModel;
-		return m !== undefined && m >= 4 && m <= 7;
+		const m = machine.machineModel;
+		return m !== null && m >= 4 && m <= 7;
 	});
 	/**
 	 * Live cup-warmer plate temperature read from
@@ -161,10 +162,10 @@
 	 * MMR read lands; the stepper falls back to `0` so it paints as
 	 * "Off" before then.
 	 */
-	const cupWarmerC = $derived(snapshot.de1MachineInfo[MmrRegister.CupWarmerTemp] ?? 0);
+	const cupWarmerC = $derived(machine.cupWarmerTempC);
 	const boardLabel = $derived.by(() => {
-		const cpu = snapshot.de1MachineInfo.CpuBoardVersion;
-		if (cpu === undefined) return '—';
+		const cpu = machine.cpuBoardVersion;
+		if (cpu === null) return '—';
 		return `PCB v${(cpu / 1000).toFixed(1)}`;
 	});
 
@@ -454,7 +455,7 @@
 		Turn off to let Crema start sessions directly from the Coffee button."
 	>
 		{#snippet control()}
-			{@const ghcOn = (snapshot.de1MachineInfo[MmrRegister.GhcMode] ?? 0) > 0}
+			{@const ghcOn = machine.ghcOn}
 			<StToggle
 				on={ghcOn}
 				disabled={!connected}
@@ -629,7 +630,7 @@
 
 {#if showUpdateModal}
 	<FirmwareUpdateModal
-		installedBuild={snapshot.de1MachineInfo.FirmwareVersion}
+		installedBuild={machine.firmwareBuild ?? undefined}
 		latestBuild={latestKnownBuild}
 		onConfirm={onUpdateConfirm}
 		onCancel={closeUpdateModal}

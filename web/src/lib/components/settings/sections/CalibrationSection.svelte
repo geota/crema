@@ -33,9 +33,11 @@
 	 * register, not on `cuuid_12`.
 	 */
 	import { onMount } from 'svelte';
-	import type { CremaApp } from '$lib/state';
+	import { getMachineReadout, type CremaApp } from '$lib/state';
 	import { CalTarget, MmrRegister } from '$lib/core';
 	import { INITIAL_SNAPSHOT } from '$lib/state';
+
+	const machine = getMachineReadout();
 	import StSectionHead from '../StSectionHead.svelte';
 	import StGroup from '../StGroup.svelte';
 	import StRow from '../StRow.svelte';
@@ -247,10 +249,8 @@
 	const FLOW_STEP = 0.01;
 	const FLOW_DEFAULT = 1.0;
 
-	/** Raw value from the MMR read, or `undefined` if not yet read. */
-	const flowMultiplierRaw = $derived(
-		snapshot.de1MachineInfo[MmrRegister.CalibrationFlowMultiplier]
-	);
+	/** Raw value from the MMR read, or `null` if not yet read. */
+	const flowMultiplierRaw = $derived(machine.calibrationFlowMultiplier);
 	/** Human multiplier (raw / 1000), or `null` until the first read lands. */
 	const flowMultiplier = $derived<number | null>(
 		flowMultiplierRaw != null && Number.isFinite(flowMultiplierRaw)
