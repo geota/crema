@@ -18,7 +18,12 @@
  */
 
 import { MmrRegister } from '$lib/core/crema-core';
-import type { De1Calibration, CremaUiState, UiSnapshot } from './ui-state.svelte';
+import {
+	getCremaUiState,
+	type CremaUiState,
+	type De1Calibration,
+	type UiSnapshot
+} from './ui-state.svelte';
 
 /**
  * Typed accessors over the wire-shape `de1MachineInfo` map and its
@@ -137,27 +142,14 @@ export class MachineReadout {
 }
 
 let readout: MachineReadout | undefined;
-let bound: CremaUiState | undefined;
 
 /**
- * Singleton accessor. Constructed lazily on first call; the orchestrator
- * wires the `CremaUiState` reference via {@link bindMachineReadout} at
- * app construction so the instance reads through the same snapshot the
- * rest of the shell consumes.
+ * Singleton accessor. Constructs the readout lazily on first call using
+ * the shared {@link getCremaUiState} singleton — no separate bind step.
+ * Safe to call from any component at module-load time; the singletons
+ * resolve eagerly and stay valid for the app's lifetime.
  */
 export function getMachineReadout(): MachineReadout {
-	if (!readout) {
-		if (!bound) {
-			throw new Error(
-				'MachineReadout used before bindMachineReadout — wire it in the orchestrator first.'
-			);
-		}
-		readout = new MachineReadout(bound);
-	}
+	if (!readout) readout = new MachineReadout(getCremaUiState());
 	return readout;
-}
-
-/** Wire the orchestrator's `CremaUiState` into the singleton. Called once at boot. */
-export function bindMachineReadout(state: CremaUiState): void {
-	bound = state;
 }

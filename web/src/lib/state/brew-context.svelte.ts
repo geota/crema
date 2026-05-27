@@ -17,18 +17,21 @@
  * fallback.
  */
 
-import type { Bean, BeanLibraryStore } from '$lib/bean';
-import type { CremaProfile, ProfileStore } from '$lib/profiles';
-import type { SettingsStore } from '$lib/settings';
-import type {
-	ActiveShotBrewParams,
-	ActiveShotStore
+import { getBeanStore, type Bean, type BeanLibraryStore } from '$lib/bean';
+import { getProfileStore, type CremaProfile, type ProfileStore } from '$lib/profiles';
+import { getSettingsStore, type SettingsStore } from '$lib/settings';
+import {
+	getActiveShotStore,
+	type ActiveShotBrewParams,
+	type ActiveShotStore
 } from './active-shot.svelte';
-import type { CremaUiState } from './ui-state.svelte';
+import { getCremaUiState, type CremaUiState } from './ui-state.svelte';
 
 /**
  * Joined view of the brew page's read paths — wired by the orchestrator
- * at boot via {@link bindBrewContext}; consumed via {@link getBrewContext}.
+ * Constructed lazily on first access via {@link getBrewContext}; reads
+ * through the shared store singletons (`getBeanStore`, `getProfileStore`,
+ * `getSettingsStore`, `getActiveShotStore`, `getCremaUiState`).
  *
  * Getters propagate Svelte 5 signal subscriptions through their reads,
  * so `$derived(brew.activeBean)` in a component re-runs whenever any
@@ -165,36 +168,21 @@ export class BrewContext {
 }
 
 let context: BrewContext | undefined;
-let deps:
-	| {
-			beans: BeanLibraryStore;
-			profiles: ProfileStore;
-			settings: SettingsStore;
-			active: ActiveShotStore;
-			state: CremaUiState;
-	  }
-	| undefined;
 
-/** Singleton accessor — throws if {@link bindBrewContext} hasn't been called yet. */
+/**
+ * Singleton accessor. Constructs the context lazily on first call using
+ * the shared store + state singletons — no separate bind step. Safe to
+ * call from any component at module-load time.
+ */
 export function getBrewContext(): BrewContext {
 	if (!context) {
-		if (!deps) {
-			throw new Error(
-				'BrewContext used before bindBrewContext — wire it in the orchestrator first.'
-			);
-		}
-		context = new BrewContext(deps.beans, deps.profiles, deps.settings, deps.active, deps.state);
+		context = new BrewContext(
+			getBeanStore(),
+			getProfileStore(),
+			getSettingsStore(),
+			getActiveShotStore(),
+			getCremaUiState()
+		);
 	}
 	return context;
-}
-
-/** Wire the orchestrator's store refs into the singleton. Called once at boot. */
-export function bindBrewContext(args: {
-	beans: BeanLibraryStore;
-	profiles: ProfileStore;
-	settings: SettingsStore;
-	active: ActiveShotStore;
-	state: CremaUiState;
-}): void {
-	deps = args;
 }

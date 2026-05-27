@@ -1188,3 +1188,16 @@ export class CremaUiState {
 		this.current = { ...this.current, eventLog: appendLog(this.current.eventLog, line) };
 	}
 }
+
+let cremaUiState: CremaUiState | undefined;
+/**
+ * Singleton accessor. The orchestrator and the read-side context
+ * classes (`BrewContext`, `MachineReadout`) share the same instance —
+ * promoted to a singleton so the contexts can construct themselves
+ * lazily without a separate bind step, matching the pattern every
+ * other store in `$lib` follows.
+ */
+export function getCremaUiState(): CremaUiState {
+	if (!cremaUiState) cremaUiState = new CremaUiState();
+	return cremaUiState;
+}

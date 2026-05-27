@@ -14,8 +14,8 @@
  * underlying data is the shot itself.
  */
 
-import type { Bean, BeanLibraryStore } from '$lib/bean';
-import type { CremaProfile, ProfileStore } from '$lib/profiles';
+import { getBeanStore, type Bean, type BeanLibraryStore } from '$lib/bean';
+import { getProfileStore, type CremaProfile, type ProfileStore } from '$lib/profiles';
 import type { StoredShot } from '$lib/history';
 
 /**
@@ -85,25 +85,13 @@ export class HistoryContext {
 }
 
 let context: HistoryContext | undefined;
-let deps: { beans: BeanLibraryStore; profiles: ProfileStore } | undefined;
 
-/** Singleton accessor — throws if {@link bindHistoryContext} hasn't been called yet. */
+/**
+ * Singleton accessor. Constructs the context lazily on first call using
+ * the shared store singletons — no separate bind step. Safe to call
+ * from any component at module-load time.
+ */
 export function getHistoryContext(): HistoryContext {
-	if (!context) {
-		if (!deps) {
-			throw new Error(
-				'HistoryContext used before bindHistoryContext — wire it in the orchestrator first.'
-			);
-		}
-		context = new HistoryContext(deps.beans, deps.profiles);
-	}
+	if (!context) context = new HistoryContext(getBeanStore(), getProfileStore());
 	return context;
-}
-
-/** Wire the orchestrator's store refs into the singleton. Called once at boot. */
-export function bindHistoryContext(args: {
-	beans: BeanLibraryStore;
-	profiles: ProfileStore;
-}): void {
-	deps = args;
 }
