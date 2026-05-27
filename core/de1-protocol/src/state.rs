@@ -160,6 +160,123 @@ impl SubState {
     pub fn is_error(self) -> bool {
         (self as u8) >= 200
     }
+
+    /// Human-readable English message for an error substate, or `None` for
+    /// a healthy (non-error) one. Ported from the legacy de1app
+    /// `de1plus/machine.tcl` substate table; the bare `Error_*`-style
+    /// labels are expanded into one-line sentences. Locale-independent —
+    /// every shell renders the same source-of-truth here so the Android
+    /// shell inherits the table without porting it to Kotlin.
+    #[must_use]
+    pub fn error_message(self) -> Option<&'static str> {
+        use SubState::{
+            ErrorAcc, ErrorAssertion, ErrorBootFill, ErrorDeadline, ErrorDip, ErrorFlash,
+            ErrorGeneric, ErrorHiCurrent, ErrorInf, ErrorInvalidParm, ErrorLoCurrent, ErrorNaN,
+            ErrorNoAc, ErrorOom, ErrorPSensor, ErrorTSensor, ErrorUnsafe, ErrorWLevel,
+        };
+        Some(match self {
+            ErrorNaN => "Firmware error: a calculation produced an invalid number (NaN).",
+            ErrorInf => "Firmware error: a calculation produced an infinite value.",
+            ErrorGeneric => "The machine reported a generic firmware error.",
+            ErrorAcc => {
+                "Accelerometer not responding — the machine may have been moved or tipped."
+            }
+            ErrorTSensor => "A temperature sensor failed or is reading out of range.",
+            ErrorPSensor => "The pressure sensor failed or is reading out of range.",
+            ErrorWLevel => "The water-level sensor failed or is reading out of range.",
+            ErrorDip => "The DIP switches forced the machine into an error state.",
+            ErrorAssertion => "Firmware error: an internal assertion failed.",
+            ErrorUnsafe => "Firmware error: an unsafe value was assigned.",
+            ErrorInvalidParm => "Firmware error: an invalid parameter was supplied.",
+            ErrorFlash => "The machine could not access its internal flash storage.",
+            ErrorOom => "Firmware error: the machine ran out of memory.",
+            ErrorDeadline => "Firmware error: a realtime deadline was missed.",
+            ErrorHiCurrent => "Heater current too high — the machine shut down for safety.",
+            ErrorLoCurrent => "Heater current too low — check the mains power supply.",
+            ErrorBootFill => "The boot pressure test failed — the machine may be out of water.",
+            ErrorNoAc => "The front power switch is off — turn the machine on at the switch.",
+            _ => return None,
+        })
+    }
+
+    /// The wire-side variant name (the same name the FFI / wasm bridge
+    /// emits for serde): `Ready`, `ErrorTSensor`, …. Stable across
+    /// shells; the shell `MACHINE_ERROR_TEXT` table keyed off this.
+    #[must_use]
+    pub fn variant_name(self) -> &'static str {
+        use SubState::*;
+        match self {
+            Ready => "Ready",
+            Heating => "Heating",
+            FinalHeating => "FinalHeating",
+            Stabilising => "Stabilising",
+            Preinfusion => "Preinfusion",
+            Pouring => "Pouring",
+            Ending => "Ending",
+            Steaming => "Steaming",
+            DescaleInit => "DescaleInit",
+            DescaleFillGroup => "DescaleFillGroup",
+            DescaleReturn => "DescaleReturn",
+            DescaleGroup => "DescaleGroup",
+            DescaleSteam => "DescaleSteam",
+            CleanInit => "CleanInit",
+            CleanFillGroup => "CleanFillGroup",
+            CleanSoak => "CleanSoak",
+            CleanGroup => "CleanGroup",
+            Refill => "Refill",
+            PausedSteam => "PausedSteam",
+            UserNotPresent => "UserNotPresent",
+            Puffing => "Puffing",
+            ErrorNaN => "ErrorNaN",
+            ErrorInf => "ErrorInf",
+            ErrorGeneric => "ErrorGeneric",
+            ErrorAcc => "ErrorAcc",
+            ErrorTSensor => "ErrorTSensor",
+            ErrorPSensor => "ErrorPSensor",
+            ErrorWLevel => "ErrorWLevel",
+            ErrorDip => "ErrorDip",
+            ErrorAssertion => "ErrorAssertion",
+            ErrorUnsafe => "ErrorUnsafe",
+            ErrorInvalidParm => "ErrorInvalidParm",
+            ErrorFlash => "ErrorFlash",
+            ErrorOom => "ErrorOom",
+            ErrorDeadline => "ErrorDeadline",
+            ErrorHiCurrent => "ErrorHiCurrent",
+            ErrorLoCurrent => "ErrorLoCurrent",
+            ErrorBootFill => "ErrorBootFill",
+            ErrorNoAc => "ErrorNoAc",
+        }
+    }
+
+    /// Look up the human-readable error message by the wire-side variant
+    /// name a notification carries. Returns `None` for unknown / healthy
+    /// substates so the shell renders nothing rather than guessing.
+    #[must_use]
+    pub fn error_message_for_name(name: &str) -> Option<&'static str> {
+        use SubState::*;
+        let sub = match name {
+            "ErrorNaN" => ErrorNaN,
+            "ErrorInf" => ErrorInf,
+            "ErrorGeneric" => ErrorGeneric,
+            "ErrorAcc" => ErrorAcc,
+            "ErrorTSensor" => ErrorTSensor,
+            "ErrorPSensor" => ErrorPSensor,
+            "ErrorWLevel" => ErrorWLevel,
+            "ErrorDip" => ErrorDip,
+            "ErrorAssertion" => ErrorAssertion,
+            "ErrorUnsafe" => ErrorUnsafe,
+            "ErrorInvalidParm" => ErrorInvalidParm,
+            "ErrorFlash" => ErrorFlash,
+            "ErrorOom" => ErrorOom,
+            "ErrorDeadline" => ErrorDeadline,
+            "ErrorHiCurrent" => ErrorHiCurrent,
+            "ErrorLoCurrent" => ErrorLoCurrent,
+            "ErrorBootFill" => ErrorBootFill,
+            "ErrorNoAc" => ErrorNoAc,
+            _ => return None,
+        };
+        sub.error_message()
+    }
 }
 
 impl TryFrom<u8> for SubState {
@@ -321,6 +438,36 @@ mod tests {
             assert!(SubState::ErrorNaN.is_error());
             assert!(SubState::ErrorNoAc.is_error());
             assert!(!SubState::Pouring.is_error());
+        }
+
+        #[test]
+        fn error_message_present_for_every_error_substate_and_none_for_healthy() {
+            // Every byte the protocol recognises as an error must carry a
+            // message — the shell relies on this for the error banner.
+            for byte in 200u8..=217 {
+                let sub = SubState::try_from(byte).expect("known error byte");
+                assert!(
+                    sub.error_message().is_some(),
+                    "{sub:?} ({byte}) has no error message"
+                );
+            }
+            // Healthy substates have no message; the shell renders no
+            // banner in that case.
+            for byte in 0u8..=20 {
+                let sub = SubState::try_from(byte).expect("known healthy byte");
+                assert!(sub.error_message().is_none(), "{sub:?} unexpected message");
+            }
+        }
+
+        #[test]
+        fn error_message_for_name_round_trips_through_variant_name() {
+            for byte in 200u8..=217 {
+                let sub = SubState::try_from(byte).unwrap();
+                let by_name = SubState::error_message_for_name(sub.variant_name());
+                assert_eq!(by_name, sub.error_message());
+            }
+            assert!(SubState::error_message_for_name("Pouring").is_none());
+            assert!(SubState::error_message_for_name("BogusName").is_none());
         }
     }
 
