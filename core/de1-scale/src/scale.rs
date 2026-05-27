@@ -908,6 +908,29 @@ impl Scale {
         }
     }
 
+    /// Inspect a frame that [`parse_reading`] couldn't decode and update
+    /// any device-specific state it carries — today that means snapping
+    /// the Decent Scale's firmware version from a `0x0A` LCD-ack frame.
+    /// Returns silently for every scale that has nothing to absorb (most
+    /// of them); the shell calls this once on every non-weight
+    /// notification without having to name the device.
+    ///
+    /// Centralising the device-specific branch here keeps `de1-app`'s
+    /// generic `handle_scale_weight` from destructuring
+    /// `decent_scale::CommandResponse::LcdAck` — the shell stops naming
+    /// Decent entirely.
+    ///
+    /// [`parse_reading`]: Self::parse_reading
+    pub fn absorb_unmatched_frame(&mut self, data: &[u8]) {
+        if matches!(self.inner, Inner::Decent(_))
+            && let Some(decent_scale::CommandResponse::LcdAck {
+                firmware_version, ..
+            }) = decent_scale::parse_command_response(data)
+        {
+            self.record_decent_scale_firmware_version(firmware_version);
+        }
+    }
+
     /// Build a tare command to write to the [command characteristic](ScaleUuids).
     /// Returns `None` if the scale tares purely client-side and there is no
     /// command to send (the Smartchef — see [`crate::smartchef::SmartchefScale`]).
