@@ -12,15 +12,9 @@ use crate::error::AppError;
 ///
 /// The shell maps each subscribed characteristic UUID to a `Source` before
 /// calling [`CremaCore::on_notification`](crate::CremaCore::on_notification).
-///
-/// Under the `wasm-bindgen` feature this enum doubles as the wasm
-/// boundary type (no mirror enum on the bridge); `de1-ffi` registers
-/// it via `#[uniffi::remote(Enum)]` for the same reason. Adding a
-/// variant is no longer purely additive — the bridge crates must
-/// re-list it — but the trade is one Rust source of truth for all
-/// three representations.
+/// `#[non_exhaustive]`: more sources (water level, …) arrive in later increments.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "wasm-bindgen", wasm_bindgen::prelude::wasm_bindgen)]
+#[non_exhaustive]
 pub enum Source {
     /// The DE1 machine state / substate characteristic (`cuuid_0E`).
     De1State,

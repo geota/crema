@@ -15,15 +15,6 @@ thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 typeshare = "1.0.5"
-# Optional: `#[wasm_bindgen]` on the public enums that cross the wasm
-# boundary (today: `Source`). Same pattern as `de1-protocol`'s
-# `wasm-bindgen` feature — enabled only by `de1-wasm`.
-wasm-bindgen = { version = "0.2", optional = true }
-
-[features]
-# Adds `#[wasm_bindgen]` to public enums that cross the wasm boundary
-# as direct function args. Enabled only by `de1-wasm`.
-wasm-bindgen = ["dep:wasm-bindgen", "de1-protocol/wasm-bindgen"]
 
 [dev-dependencies]
 serde_json = "1"
