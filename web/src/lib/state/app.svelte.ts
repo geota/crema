@@ -52,6 +52,7 @@ import {
 	DEFAULT_SCALE_STANDBY,
 	DEFAULT_SCALE_VOLUME,
 	EMPTY_DE1_CALIBRATION,
+	getCremaUiState,
 	type UiSnapshot
 } from './ui-state.svelte';
 import {
@@ -59,9 +60,6 @@ import {
 	type ActiveShotBrewParams,
 	type ActiveShotData
 } from './active-shot.svelte';
-import { bindBrewContext } from './brew-context.svelte';
-import { bindHistoryContext } from './history-context.svelte';
-import { bindMachineReadout } from './machine-readout.svelte';
 
 /**
  * Thrown by {@link CremaApp.startShot} when the user taps Coffee without an
@@ -280,7 +278,7 @@ export interface ReplayCaptureOptions {
  */
 export class CremaApp {
 	/** The reactive UI state — the screen renders `app.state.current`. */
-	readonly state = new CremaUiState();
+	readonly state = getCremaUiState();
 
 	private readonly de1: De1Manager;
 	private readonly scale: ScaleManager;
@@ -2131,22 +2129,10 @@ export class CremaApp {
 export async function createCremaApp(): Promise<CremaApp> {
 	const core = await loadCore();
 	const app = new CremaApp(core);
-	// Wire the read-side seam singletons (BrewContext, MachineReadout,
-	// HistoryContext) — see $lib/state/{brew-context,machine-readout,
-	// history-context}.svelte. They join the underlying stores into typed
-	// views the components read instead of reaching into store internals.
-	bindMachineReadout(app.state);
-	bindBrewContext({
-		beans: getBeanStore(),
-		profiles: getProfileStore(),
-		settings: getSettingsStore(),
-		active: getActiveShotStore(),
-		state: app.state
-	});
-	bindHistoryContext({
-		beans: getBeanStore(),
-		profiles: getProfileStore()
-	});
+	// The read-side context singletons (BrewContext, MachineReadout,
+	// HistoryContext) construct themselves lazily on first access via
+	// the shared store + `getCremaUiState()` singletons — no bind step
+	// needed. See `$lib/state/{brew-context,machine-readout,history-context}.svelte`.
 	// Push the persisted AC mains-frequency preference into the core's
 	// volume integrator. `0` = auto (the core's auto-detector decides);
 	// `50` / `60` pin the value. Done once at construction; subsequent

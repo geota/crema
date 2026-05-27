@@ -6,6 +6,7 @@
 
 export {
 	CremaUiState,
+	getCremaUiState,
 	applyEvent,
 	formatFirmware,
 	waterTankMl,
@@ -40,11 +41,6 @@ export {
 	type ActiveShotData,
 	type ActiveShotBrewParams
 } from './active-shot.svelte';
-export { MachineReadout, getMachineReadout, bindMachineReadout } from './machine-readout.svelte';
-export { BrewContext, getBrewContext, bindBrewContext } from './brew-context.svelte';
-export {
-	HistoryContext,
-	getHistoryContext,
-	bindHistoryContext,
-	type ShotView
-} from './history-context.svelte';
+export { MachineReadout, getMachineReadout } from './machine-readout.svelte';
+export { BrewContext, getBrewContext } from './brew-context.svelte';
+export { HistoryContext, getHistoryContext, type ShotView } from './history-context.svelte';
