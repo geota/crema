@@ -24,35 +24,7 @@ import {
 import type { Bean, Roaster } from './model';
 import type { StoredShot } from '$lib/history';
 import { getBeanImageStore } from './image-storage';
-
-/**
- * Trigger a browser download for `data` named `filename`. Used by
- * both export paths; cleaned up after the click so the object URL
- * doesn't leak.
- */
-function downloadBlob(data: BlobPart, filename: string, mime: string): void {
-	const blob = new Blob([data], { type: mime });
-	const url = URL.createObjectURL(blob);
-	const a = document.createElement('a');
-	a.href = url;
-	a.download = filename;
-	document.body.appendChild(a);
-	a.click();
-	document.body.removeChild(a);
-	// Revoke the URL after the click so the browser releases the blob.
-	// 100 ms is generous — most browsers fire the download synchronously
-	// from the click, but a few queue it.
-	setTimeout(() => URL.revokeObjectURL(url), 100);
-}
-
-/** A short timestamp suitable for filenames — `YYYY-MM-DD-HHmm`. */
-function fileStamp(now: Date): string {
-	const pad = (n: number) => String(n).padStart(2, '0');
-	return (
-		`${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}` +
-		`-${pad(now.getHours())}${pad(now.getMinutes())}`
-	);
-}
+import { downloadBlob, filenameStamp } from '$lib/utils/download';
 
 /**
  * Export the user's bean library as a Crema bundle.
@@ -95,9 +67,8 @@ export async function exportCrema(
 	}
 	const zipped = zipSync(entries);
 	downloadBlob(
-		zipped,
-		`crema-${fileStamp(new Date())}.crema.zip`,
-		'application/zip'
+		`crema-${filenameStamp()}.crema.zip`,
+		new Blob([zipped], { type: 'application/zip' })
 	);
 }
 
@@ -153,8 +124,7 @@ export async function exportBeanconqueror(
 	};
 	const zipped = zipSync(zipEntries);
 	downloadBlob(
-		zipped,
-		`crema-to-beanconqueror-${fileStamp(new Date())}.zip`,
-		'application/zip'
+		`crema-to-beanconqueror-${filenameStamp()}.zip`,
+		new Blob([zipped], { type: 'application/zip' })
 	);
 }

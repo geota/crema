@@ -9,8 +9,14 @@
 
 /**
  * Trigger a browser download for `blob` with the given filename.
- * Creates a temporary object URL, dispatches an anchor click, then
- * revokes the URL. No-op outside the browser.
+ *
+ * Defensive sequencing: attach the anchor to the DOM before clicking
+ * (Firefox in particular requires this for the download to actually
+ * fire), then remove it; revoke the object URL on a short timeout so
+ * the browser has a moment to queue the download from the click event
+ * (most browsers fire it synchronously, a few don't). 100 ms is far
+ * more than enough for any browser to have started the download.
+ * No-op outside the browser.
  */
 export function downloadBlob(filename: string, blob: Blob): void {
 	if (typeof window === 'undefined') return;
@@ -18,8 +24,10 @@ export function downloadBlob(filename: string, blob: Blob): void {
 	const a = document.createElement('a');
 	a.href = url;
 	a.download = filename;
+	document.body.appendChild(a);
 	a.click();
-	URL.revokeObjectURL(url);
+	document.body.removeChild(a);
+	setTimeout(() => URL.revokeObjectURL(url), 100);
 }
 
 /**
