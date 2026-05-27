@@ -28,6 +28,34 @@ import {
 import { getCremaUiState, type CremaUiState } from './ui-state.svelte';
 
 /**
+ * Unified read-side view of the brew page's bean. Joins the two underlying
+ * sources (a live `Bean` row from the library, and the in-flight `ShotBean`
+ * snapshot frozen at shot start / parsed from replay META) into a single
+ * shape components render against.
+ *
+ * `source` carries the underlying library `Bean` only when this view was
+ * derived from a live library row — components that need write access
+ * (BeanContextCard's inline edit, quick-add) gate on it being non-null.
+ * Replay snapshots and live shots whose library row has since been
+ * archived/deleted return `null` there.
+ */
+export interface DisplayBean {
+	readonly name: string;
+	readonly roasterName: string | null;
+	readonly roastedOn: string | null;
+	readonly roastLevel: number | null;
+	readonly grinder: string;
+	/** Bag size in grams; `null` when the snapshot doesn't carry one. */
+	readonly bagSize: number | null;
+	/** Grams remaining; `null` when the snapshot doesn't carry one. */
+	readonly remaining: number | null;
+	/** Free-form tags at shot time. */
+	readonly tags: readonly string[];
+	/** The underlying library `Bean` when editable; `null` for snapshot-only views. */
+	readonly source: Bean | null;
+}
+
+/**
  * Joined view of the brew page's read paths — wired by the orchestrator
  * Constructed lazily on first access via {@link getBrewContext}; reads
  * through the shared store singletons (`getBeanStore`, `getProfileStore`,
@@ -57,22 +85,53 @@ export class BrewContext {
 	}
 
 	/**
-	 * The bean the brew page should display — in-flight snapshot wins
-	 * over the live library selection. Returns the `Bean` shape (live)
-	 * when no shot is in flight; the in-flight `ShotBean` snapshot is
-	 * surfaced via {@link activeShotBean} when callers specifically need
-	 * the frozen-at-shot-start view.
+	 * The bean the brew page should render, as a unified {@link DisplayBean}
+	 * view. The in-flight snapshot wins over the live library selection
+	 * — including the replay case, where {@link ActiveShotData.bean}
+	 * carries `beanId: null` by design (the snapshot is the source of
+	 * truth, no library row exists).
 	 *
-	 * Note: callers that bind on `activeBean.id` for live mutations should
-	 * read {@link liveActiveBean} instead — `activeBean` may have an
-	 * in-flight snapshot lacking the library's `id`.
+	 * Returns `null` when no shot is in flight AND no library bean is
+	 * active. Callers needing write access to the underlying record
+	 * (BeanContextCard's inline edit / quick-add) read the optional
+	 * `source` field — it's `null` for replay snapshots so edit affordances
+	 * naturally hide.
 	 */
-	get activeBean(): Bean | null {
-		const inFlightId = this.active.bean?.beanId;
-		if (inFlightId) {
-			return this.beans.getBean(inFlightId) ?? this.beans.activeBean;
+	get activeBean(): DisplayBean | null {
+		const snap = this.active.bean;
+		if (snap !== null) {
+			// In flight (live or replay). The snapshot is authoritative;
+			// resolve the underlying library row only to back the editable
+			// `source` field (live shot path). Replay's `beanId` is null
+			// by design, so `source` stays null and editor affordances
+			// suppress without a separate replay branch.
+			const libRow = snap.beanId ? this.beans.getBean(snap.beanId) : null;
+			return {
+				name: snap.name,
+				roasterName: snap.roasterName ?? null,
+				roastedOn: snap.roastedOn ?? null,
+				roastLevel: snap.roastLevel ?? null,
+				grinder: snap.grinderSetting ?? libRow?.grinder ?? '',
+				bagSize: libRow?.bagSize ?? null,
+				remaining: libRow?.remaining ?? null,
+				tags: snap.tags ?? [],
+				source: libRow
+			};
 		}
-		return this.beans.activeBean;
+		const live = this.beans.activeBean;
+		if (live === null) return null;
+		const roaster = live.roasterId ? this.beans.getRoaster(live.roasterId) : null;
+		return {
+			name: live.name,
+			roasterName: roaster?.name ?? null,
+			roastedOn: live.roastedOn,
+			roastLevel: live.roastLevel,
+			grinder: live.grinder,
+			bagSize: live.bagSize,
+			remaining: live.remaining,
+			tags: live.tags,
+			source: live
+		};
 	}
 
 	/** The library's currently-selected bean, ignoring any in-flight shot. */

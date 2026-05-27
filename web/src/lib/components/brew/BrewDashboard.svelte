@@ -299,10 +299,15 @@
 	/** The real pinned profiles, shown as favorite chips in the Quick Sheet. */
 	const pinnedProfiles = $derived(profileStore.all.filter((p) => p.pinned));
 
-	/** The profile marked active on the Profiles page, or `undefined`. */
-	const activeProfile = $derived(
-		profileStore.activeId ? profileStore.get(profileStore.activeId) : undefined
-	);
+	/**
+	 * The profile the brew page should display — routed through
+	 * {@link BrewContext.activeProfile}, so the in-flight shot's
+	 * profileName (live or replay META) resolves through the library
+	 * before falling back to the user's currently-active selection. Same
+	 * shape as `profileStore.get(...)` — components downstream don't need
+	 * to know about the in-flight branch.
+	 */
+	const activeProfile = $derived(brew.activeProfile);
 
 	// ── Bean library — drives the bean half of the unified favourites strip ─
 	/** The shared bean library — pinned beans + roasters + active pointer. */
