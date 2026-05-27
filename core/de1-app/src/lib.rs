@@ -41,25 +41,9 @@ use de1_protocol::{
 /// A 5-second margin is ~100× the typical real-DE1 round-trip and clears
 /// Web Bluetooth's worst-case back-pressure window.
 pub const PROFILE_UPLOAD_ACK_TIMEOUT: Duration = Duration::from_secs(5);
-use de1_scale::{Scale, ScaleCapabilities, ScaleUuids, TimerCommand};
+use de1_scale::{Scale, ScaleCapabilities, ScaleConfigUpdate, ScaleUuids, TimerCommand};
 #[cfg(test)]
-use de1_scale::decent_scale;
-
-/// Re-export of `de1_scale::bookoo` so the wasm + future Android bridges
-/// can reach scale-side helpers (e.g. [`bookoo::format_firmware_version`])
-/// without each one depending on `de1-scale` directly. `de1-app` is the
-/// public-facing crate.
-pub mod bookoo {
-    pub use de1_scale::bookoo::*;
-}
-
-/// Re-export of `de1_scale::decent_scale` for the same reason `bookoo` is
-/// re-exported above — the wasm + future Android bridges reach the
-/// LCD-enable / LCD-disable / heartbeat constants through `de1-app`, the
-/// public-facing crate.
-pub mod decent_scale_protocol {
-    pub use de1_scale::decent_scale::*;
-}
+use de1_scale::{bookoo, decent_scale};
 
 /// Re-export of `de1_scale::Scale` so the wasm + future Android bridges can
 /// reach the stateless name / weight-packet identification helpers
@@ -1765,205 +1749,150 @@ impl CremaCore {
         }
     }
 
-    /// Append a settings-query [`Command`] (`bookoo::QUERY_SETTINGS`, command
-    /// `0x0f`) to `out`. The scale answers with a `03 0e …` notification.
-    ///
-    /// Called after a config write so the query reflects the post-change
-    /// state; the caller has already established that the connected scale
-    /// accepts the config command, so the query is unconditionally appended.
-    fn push_query_settings_command(out: &mut CoreOutput) {
-        out.commands.push(Command::WriteScale {
-            data: bookoo::QUERY_SETTINGS.to_vec(),
-        });
+    /// Append a [`Command::WriteScale`] for `bytes` to `out`.
+    fn push_scale_write(out: &mut CoreOutput, bytes: Vec<u8>) {
+        out.commands.push(Command::WriteScale { data: bytes });
     }
 
-    /// Append a serial-query [`Command`] (`bookoo::QUERY_SERIAL`, command
-    /// `0x0a`) to `out`. The scale answers with a `03 0c …` notification on its
-    /// command characteristic, carrying the live anti-mistouch state.
-    fn push_query_serial_command(out: &mut CoreOutput) {
-        out.commands.push(Command::WriteScale {
-            data: bookoo::QUERY_SERIAL.to_vec(),
-        });
+    /// Append the connected scale's settings-query bytes (capability-gated;
+    /// no-op when the scale doesn't expose a query). Used after every
+    /// config write to re-sync the shell view to post-change state.
+    fn push_query_settings_command(scale: &Scale, out: &mut CoreOutput) {
+        if let Some(bytes) = scale.query_settings_command() {
+            Self::push_scale_write(out, bytes);
+        }
     }
 
     /// Emit the one-shot connect-time scale-config queries the first time a
     /// capability-bearing scale reports weight.
     ///
     /// There is no dedicated scale-connected notification, so the queries ride
-    /// on the first weight notification: the `0x0a` serial query (anti-mistouch
-    /// state) and the `0x0f` settings query (active / enabled modes) are pushed
-    /// once, so the shell's anti-mistouch toggle and mode selector show live
-    /// state immediately. Capability-gated like
-    /// [`query_scale_settings`](Self::query_scale_settings) — a weight-only
-    /// scale (no `volume` capability) issues nothing — and guarded by
-    /// `scale_config_queried` so it fires exactly once per connection.
+    /// on the first weight notification — the scale's [`Scale::query_serial_command`]
+    /// (anti-mistouch + serial) and [`Scale::query_settings_command`]
+    /// (active / enabled modes) are issued once, so the shell's anti-mistouch
+    /// toggle and mode selector show live state immediately. Capability-gated
+    /// by the methods themselves; guarded by `scale_config_queried` so the
+    /// branch fires exactly once per connection.
     fn push_connect_queries_once(&mut self, out: &mut CoreOutput) {
         if self.scale_config_queried {
             return;
         }
-        if let Some(scale) = &self.scale
-            && scale.capabilities().volume.is_some()
-        {
-            Self::push_query_serial_command(out);
-            Self::push_query_settings_command(out);
+        if let Some(scale) = &self.scale {
+            if let Some(bytes) = scale.query_serial_command() {
+                Self::push_scale_write(out, bytes);
+            }
+            if let Some(bytes) = scale.query_settings_command() {
+                Self::push_scale_write(out, bytes);
+            }
         }
         // Mark the one-shot done even for a weight-only scale, so the
         // capability check is not repeated on every weight notification.
         self.scale_config_queried = true;
     }
 
-    /// Build a [`Command`] that queries the connected scale's settings
-    /// (`bookoo::QUERY_SETTINGS`, command `0x0f`).
-    ///
-    /// Capability-gated, not device-gated: the query is emitted only when the
-    /// connected scale exposes a configurable setting (its
-    /// [`ScaleCapabilities::volume`] is `Some` — the same gate the config
-    /// methods use). The result is empty when no scale is connected or the
-    /// scale is weight-only. The scale answers with a `03 0e …` notification.
+    /// Build a [`Command`] that queries the connected scale's settings.
+    /// Returns an empty [`CoreOutput`] when no scale is connected or the
+    /// scale has no settings query. The scale answers on the command
+    /// characteristic (decoded by `handle_scale_command`).
     pub fn query_scale_settings(&self) -> CoreOutput {
         let mut out = CoreOutput::default();
         if let Some(scale) = &self.scale
-            && scale.capabilities().volume.is_some()
+            && let Some(bytes) = scale.query_settings_command()
         {
-            Self::push_query_settings_command(&mut out);
+            Self::push_scale_write(&mut out, bytes);
         }
         out
     }
 
-    /// Build a [`Command`] that sets the connected scale's beeper volume.
-    ///
-    /// `level` is the requested volume step; it is clamped to the connected
-    /// scale's [`ScaleCapabilities::volume`] `[min, max]` bounds before the
-    /// command is built. Capability-gated, not device-gated: the command is
-    /// emitted only when the connected scale exposes a settable volume (its
-    /// `volume` capability is `Some`). The result is empty when no scale is
-    /// connected or the scale cannot set its volume. Modelled on
-    /// [`tare_scale`](Self::tare_scale).
+    /// Build a [`Command`] that sets the connected scale's beeper volume,
+    /// clamped to the scale's [`ScaleCapabilities::volume`] range. Empty
+    /// [`CoreOutput`] when no scale is connected or the volume isn't
+    /// settable. Routed through the per-scale [`Scale::set_volume_command`].
     pub fn set_scale_volume(&mut self, level: u8) -> CoreOutput {
         let mut out = CoreOutput::default();
         if let Some(scale) = &self.scale
-            && let Some(range) = scale.capabilities().volume
+            && let Some(bytes) = scale.set_volume_command(level)
         {
-            let level = level.clamp(range.min, range.max);
-            out.commands.push(Command::WriteScale {
-                data: bookoo::set_volume(level).to_vec(),
-            });
-            Self::push_query_settings_command(&mut out);
+            Self::push_scale_write(&mut out, bytes);
+            Self::push_query_settings_command(scale, &mut out);
         }
         out
     }
 
     /// Build a [`Command`] that sets the connected scale's auto-standby
-    /// timeout, in minutes.
-    ///
-    /// `minutes` is clamped to the connected scale's
-    /// [`ScaleCapabilities::standby`] `[min, max]` bounds before the
-    /// command is built. Capability-gated, not device-gated: the command is
-    /// emitted only when the connected scale exposes a configurable
-    /// auto-standby (its `standby` capability is `Some`). The result is
-    /// empty otherwise. Modelled on [`set_scale_volume`](Self::set_scale_volume).
+    /// timeout. `minutes` is clamped to the connected scale's
+    /// [`ScaleCapabilities::standby`] range. Empty [`CoreOutput`] when the
+    /// scale exposes no configurable standby. Routed through
+    /// [`Scale::set_standby_command`].
     pub fn set_scale_standby(&mut self, minutes: u8) -> CoreOutput {
         let mut out = CoreOutput::default();
         if let Some(scale) = &self.scale
-            && let Some(range) = scale.capabilities().standby
+            && let Some(bytes) = scale.set_standby_command(minutes)
         {
-            let minutes = minutes.clamp(range.min, range.max);
-            out.commands.push(Command::WriteScale {
-                data: bookoo::set_standby_minutes(minutes).to_vec(),
-            });
-            Self::push_query_settings_command(&mut out);
+            Self::push_scale_write(&mut out, bytes);
+            Self::push_query_settings_command(scale, &mut out);
         }
         out
     }
 
-    /// Build a [`Command`] that enables or disables the connected scale's
-    /// flow smoothing.
-    ///
-    /// Capability-gated, not device-gated: the command is emitted only when
-    /// the connected scale's [`ScaleCapabilities::flow_smoothing`] is `true`.
-    /// The result is empty otherwise. Modelled on
-    /// [`set_scale_volume`](Self::set_scale_volume).
+    /// Build a [`Command`] that toggles the connected scale's flow
+    /// smoothing — empty when the capability is absent. Routed through
+    /// [`Scale::set_flow_smoothing_command`].
     pub fn set_scale_flow_smoothing(&mut self, enabled: bool) -> CoreOutput {
         let mut out = CoreOutput::default();
         if let Some(scale) = &self.scale
-            && scale.capabilities().flow_smoothing
+            && let Some(bytes) = scale.set_flow_smoothing_command(enabled)
         {
-            out.commands.push(Command::WriteScale {
-                data: bookoo::set_flow_smoothing(enabled).to_vec(),
-            });
-            Self::push_query_settings_command(&mut out);
+            Self::push_scale_write(&mut out, bytes);
+            Self::push_query_settings_command(scale, &mut out);
         }
         out
     }
 
-    /// Build a [`Command`] that enables or disables the connected scale's
-    /// anti-mistouch.
-    ///
-    /// Capability-gated, not device-gated: the command is emitted only when
-    /// the connected scale's [`ScaleCapabilities::anti_mistouch`] is `true`.
-    /// The result is empty otherwise. Modelled on
-    /// [`set_scale_volume`](Self::set_scale_volume).
+    /// Build a [`Command`] that toggles the connected scale's
+    /// anti-mistouch — empty when the capability is absent. Routed
+    /// through [`Scale::set_anti_mistouch_command`].
     pub fn set_scale_anti_mistouch(&mut self, enabled: bool) -> CoreOutput {
         let mut out = CoreOutput::default();
         if let Some(scale) = &self.scale
-            && scale.capabilities().anti_mistouch
+            && let Some(bytes) = scale.set_anti_mistouch_command(enabled)
         {
-            out.commands.push(Command::WriteScale {
-                data: bookoo::set_anti_mistouch(enabled).to_vec(),
-            });
-            Self::push_query_settings_command(&mut out);
+            Self::push_scale_write(&mut out, bytes);
+            Self::push_query_settings_command(scale, &mut out);
         }
         out
     }
 
-    /// Build the [`Command`]s that switch the connected scale to display mode
-    /// `mode_id`.
-    ///
-    /// Capability-gated, not device-gated: the commands are emitted only when
-    /// the connected scale exposes switchable modes (its
-    /// [`ScaleCapabilities::modes`] is non-empty) **and** `mode_id` is one of
-    /// the listed modes. The result is empty otherwise.
-    ///
-    /// Selecting a mode is three writes — the target mode is enabled first,
-    /// then the other two are disabled, so a mode is always enabled mid-
-    /// sequence (see [`bookoo::select_mode`]). All three are pushed onto
-    /// `CoreOutput::commands` **in order**; the shell must perform them in that
-    /// order.
+    /// Build the [`Command`]s that switch the connected scale to display
+    /// mode `mode_id`. Routed through [`Scale::select_mode_command`],
+    /// which returns the three-write sequence the Bookoo requires (the
+    /// target mode is enabled first, then the other two are disabled —
+    /// at least one mode is always enabled mid-sequence). The shell must
+    /// perform the returned writes in order.
     pub fn set_scale_mode(&mut self, mode_id: u8) -> CoreOutput {
         let mut out = CoreOutput::default();
         if let Some(scale) = &self.scale
-            && scale.capabilities().modes.iter().any(|m| m.id == mode_id)
-            && let Some(mode) = bookoo_mode_from_id(mode_id)
+            && let Some(writes) = scale.select_mode_command(mode_id)
         {
-            for command in bookoo::select_mode(mode) {
-                out.commands.push(Command::WriteScale {
-                    data: command.to_vec(),
-                });
+            for bytes in writes {
+                Self::push_scale_write(&mut out, bytes);
             }
-            Self::push_query_settings_command(&mut out);
+            Self::push_query_settings_command(scale, &mut out);
         }
         out
     }
 
-    /// Build a [`Command`] that selects the connected scale's auto-stop mode.
-    ///
-    /// `mode_id` is the wire value of the desired mode (`0` = flow-stop,
-    /// `1` = cup-removal). Capability-gated, not device-gated: the command is
-    /// emitted only when the connected scale's [`ScaleCapabilities::auto_stop`]
-    /// is `true` **and** `mode_id` maps to a known [`bookoo::AutoStopMode`].
-    /// An unconnected scale, a scale without the capability, or an
-    /// out-of-range `mode_id` all yield an empty [`CoreOutput`]. Modelled on
-    /// [`set_scale_mode`](Self::set_scale_mode).
+    /// Build a [`Command`] that selects the connected scale's auto-stop
+    /// mode (`0` = flow-stop, `1` = cup-removal). Routed through
+    /// [`Scale::set_auto_stop_command`]; empty [`CoreOutput`] when the
+    /// capability is absent or `mode_id` is out of range.
     pub fn set_scale_auto_stop(&mut self, mode_id: u8) -> CoreOutput {
         let mut out = CoreOutput::default();
         if let Some(scale) = &self.scale
-            && scale.capabilities().auto_stop
-            && let Some(mode) = bookoo_auto_stop_from_id(mode_id)
+            && let Some(bytes) = scale.set_auto_stop_command(mode_id)
         {
-            out.commands.push(Command::WriteScale {
-                data: bookoo::set_auto_stop_mode(mode).to_vec(),
-            });
-            Self::push_query_settings_command(&mut out);
+            Self::push_scale_write(&mut out, bytes);
+            Self::push_query_settings_command(scale, &mut out);
         }
         out
     }
@@ -2304,7 +2233,7 @@ impl CremaCore {
             return;
         };
         let event = match response {
-            bookoo::CommandResponse::Serial {
+            ScaleConfigUpdate::SerialInfo {
                 firmware_version,
                 serial,
                 anti_mistouch,
@@ -2315,7 +2244,7 @@ impl CremaCore {
                 serial: Some(serial),
                 firmware_version: Some(firmware_version),
             },
-            bookoo::CommandResponse::Settings {
+            ScaleConfigUpdate::Settings {
                 active_mode,
                 enabled_modes,
             } => Event::ScaleConfig {
@@ -2836,34 +2765,6 @@ fn mmr_write_command(register: MmrRegister, value: u32, byte_len: u8) -> CoreOut
         data: mmr::write_request(register.address(), &bytes[..len]).to_vec(),
     });
     out
-}
-
-/// Map a scale mode `id` (the wire value carried in [`ScaleCapabilities`]'
-/// `modes`) to the [`bookoo::BookooMode`] the command builder expects.
-///
-/// Returns `None` for an unknown `id`. The capability list is the source of
-/// truth for which ids are valid; this is the final guard that the id is one
-/// the Bookoo protocol actually understands.
-fn bookoo_mode_from_id(id: u8) -> Option<bookoo::BookooMode> {
-    match id {
-        0 => Some(bookoo::BookooMode::FlowRate),
-        1 => Some(bookoo::BookooMode::Timer),
-        2 => Some(bookoo::BookooMode::Auto),
-        _ => None,
-    }
-}
-
-/// Map an auto-stop-mode `id` to the [`bookoo::AutoStopMode`] the command
-/// builder expects (`0` = flow-stop, `1` = cup-removal).
-///
-/// Returns `None` for an out-of-range `id`, the final guard that the id is one
-/// the Bookoo protocol actually understands.
-fn bookoo_auto_stop_from_id(id: u8) -> Option<bookoo::AutoStopMode> {
-    match id {
-        0 => Some(bookoo::AutoStopMode::FlowStop),
-        1 => Some(bookoo::AutoStopMode::CupRemoval),
-        _ => None,
-    }
 }
 
 #[cfg(test)]

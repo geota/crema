@@ -179,6 +179,60 @@ pub struct ScaleCapabilities {
     pub heartbeat_interval_ms: Option<u32>,
 }
 
+/// A structured configuration update decoded from a scale's command
+/// characteristic — the device-agnostic surface the orchestrator
+/// consumes. Per-device parsers fold into this; the orchestrator
+/// translates it into the shell-facing `Event::ScaleConfig`.
+///
+/// A new scale that exposes a fresh config event (e.g. battery percent
+/// on a future scale) lands as a new variant here — the orchestrator's
+/// match adds the case at that time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScaleConfigUpdate {
+    /// Serial / firmware-info reply — fired in response to a
+    /// [`Scale::query_serial_command`]. Bookoo's `0x0c` reply today;
+    /// other scales may surface analogous info under the same variant.
+    SerialInfo {
+        /// The scale's firmware version encoding (Bookoo: `major × 100 + minor × 10 + patch`).
+        firmware_version: u16,
+        /// The scale's serial number, decoded to a display string.
+        serial: String,
+        /// Whether anti-mistouch protection is currently enabled.
+        anti_mistouch: bool,
+    },
+    /// Configurable-settings reply — fired in response to a
+    /// [`Scale::query_settings_command`]. Bookoo's `0x0e` reply today.
+    Settings {
+        /// The mode the scale is currently displaying (per [`ScaleCapabilities::modes`]).
+        active_mode: u8,
+        /// Bitmask of currently-enabled modes (bit `n` set ↔ mode `n` enabled).
+        enabled_modes: u8,
+    },
+}
+
+impl From<bookoo::CommandResponse> for ScaleConfigUpdate {
+    fn from(response: bookoo::CommandResponse) -> Self {
+        match response {
+            bookoo::CommandResponse::Serial {
+                firmware_version,
+                serial,
+                anti_mistouch,
+            } => ScaleConfigUpdate::SerialInfo {
+                firmware_version,
+                serial,
+                anti_mistouch,
+            },
+            bookoo::CommandResponse::Settings {
+                active_mode,
+                enabled_modes,
+            } => ScaleConfigUpdate::Settings {
+                active_mode,
+                enabled_modes,
+            },
+        }
+    }
+}
+
 /// A timer command a scale may support.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TimerCommand {
@@ -855,17 +909,19 @@ impl Scale {
         })
     }
 
-    /// Decode a notification from the scale's *command* characteristic into a
-    /// [`bookoo::CommandResponse`].
+    /// Decode a notification from the scale's *command* characteristic
+    /// into a device-agnostic [`ScaleConfigUpdate`].
     ///
-    /// Some scales' command characteristic also has the NOTIFY property and the
-    /// scale pushes structured responses back on it — the Bookoo answers a
-    /// settings / serial query there. Only the Bookoo decodes such a frame
-    /// today; every weight-only scale returns `None`, as does the Bookoo for a
-    /// frame that is not a recognised command response.
-    pub fn parse_command_response(&self, data: &[u8]) -> Option<bookoo::CommandResponse> {
+    /// Some scales' command characteristic also has the NOTIFY property
+    /// and the scale pushes structured responses back on it — the
+    /// Bookoo answers a settings / serial query there. Only the Bookoo
+    /// decodes such a frame today; every weight-only scale returns
+    /// `None`, as does the Bookoo for a frame that is not a recognised
+    /// command response. The return is intentionally generic so the
+    /// orchestrator doesn't import the per-device type.
+    pub fn parse_command_response(&self, data: &[u8]) -> Option<ScaleConfigUpdate> {
         match &self.inner {
-            Inner::Bookoo => bookoo::parse_command_response(data),
+            Inner::Bookoo => bookoo::parse_command_response(data).map(ScaleConfigUpdate::from),
             // No other supported scale models a command-channel response.
             Inner::Decent(_)
             | Inner::Skale
@@ -929,6 +985,155 @@ impl Scale {
         {
             self.record_decent_scale_firmware_version(firmware_version);
         }
+    }
+
+    /// Build the command bytes that query the connected scale's current
+    /// configurable settings — the response lands on the scale's command
+    /// characteristic. `None` when the scale has no queryable settings
+    /// surface (every weight-only scale). The orchestrator uses this to
+    /// (a) issue a one-shot query on first connect and (b) re-sync after
+    /// every config write.
+    #[must_use]
+    pub fn query_settings_command(&self) -> Option<Vec<u8>> {
+        match &self.inner {
+            Inner::Bookoo => Some(bookoo::QUERY_SETTINGS.to_vec()),
+            _ => None,
+        }
+    }
+
+    /// Build the command bytes that query the connected scale's serial /
+    /// firmware info, including the anti-mistouch state. `None` when the
+    /// scale has no such query — every weight-only scale. The orchestrator
+    /// issues this once on connect.
+    #[must_use]
+    pub fn query_serial_command(&self) -> Option<Vec<u8>> {
+        match &self.inner {
+            Inner::Bookoo => Some(bookoo::QUERY_SERIAL.to_vec()),
+            _ => None,
+        }
+    }
+
+    /// Build the command bytes that set the connected scale's beeper
+    /// volume to `level`. `level` is clamped to the scale's
+    /// [`ScaleCapabilities::volume`] range; the result is `None` when
+    /// the scale exposes no settable volume.
+    #[must_use]
+    pub fn set_volume_command(&self, level: u8) -> Option<Vec<u8>> {
+        let range = self.capabilities().volume?;
+        let level = level.clamp(range.min, range.max);
+        match &self.inner {
+            Inner::Bookoo => Some(bookoo::set_volume(level).to_vec()),
+            _ => None,
+        }
+    }
+
+    /// Build the command bytes that set the connected scale's
+    /// auto-standby timeout to `minutes`. `minutes` is clamped to the
+    /// scale's [`ScaleCapabilities::standby`] range; `None` when the
+    /// scale has no configurable standby.
+    #[must_use]
+    pub fn set_standby_command(&self, minutes: u8) -> Option<Vec<u8>> {
+        let range = self.capabilities().standby?;
+        let minutes = minutes.clamp(range.min, range.max);
+        match &self.inner {
+            Inner::Bookoo => Some(bookoo::set_standby_minutes(minutes).to_vec()),
+            _ => None,
+        }
+    }
+
+    /// Build the command bytes that toggle the connected scale's flow
+    /// smoothing. `None` when the scale doesn't expose the setting
+    /// ([`ScaleCapabilities::flow_smoothing`] is `false`).
+    #[must_use]
+    pub fn set_flow_smoothing_command(&self, enabled: bool) -> Option<Vec<u8>> {
+        if !self.capabilities().flow_smoothing {
+            return None;
+        }
+        match &self.inner {
+            Inner::Bookoo => Some(bookoo::set_flow_smoothing(enabled).to_vec()),
+            _ => None,
+        }
+    }
+
+    /// Build the command bytes that toggle the connected scale's
+    /// anti-mistouch protection. `None` when the scale doesn't expose
+    /// the setting ([`ScaleCapabilities::anti_mistouch`] is `false`).
+    #[must_use]
+    pub fn set_anti_mistouch_command(&self, enabled: bool) -> Option<Vec<u8>> {
+        if !self.capabilities().anti_mistouch {
+            return None;
+        }
+        match &self.inner {
+            Inner::Bookoo => Some(bookoo::set_anti_mistouch(enabled).to_vec()),
+            _ => None,
+        }
+    }
+
+    /// Build the ordered command sequence that switches the connected
+    /// scale to the display mode identified by `mode_id` (the value
+    /// from a [`ModeInfo::id`] entry on
+    /// [`ScaleCapabilities::modes`]).
+    ///
+    /// Selecting a mode on a Bookoo is three writes — the target mode
+    /// is enabled first, then the other two are disabled — so an
+    /// enabled mode always exists mid-sequence. The shell must perform
+    /// the writes in the returned order. `None` when the scale has no
+    /// switchable modes or `mode_id` matches none of them.
+    #[must_use]
+    pub fn select_mode_command(&self, mode_id: u8) -> Option<Vec<Vec<u8>>> {
+        if !self.capabilities().modes.iter().any(|m| m.id == mode_id) {
+            return None;
+        }
+        match &self.inner {
+            Inner::Bookoo => {
+                let mode = match mode_id {
+                    x if x == bookoo::BookooMode::FlowRate.index() => bookoo::BookooMode::FlowRate,
+                    x if x == bookoo::BookooMode::Timer.index() => bookoo::BookooMode::Timer,
+                    x if x == bookoo::BookooMode::Auto.index() => bookoo::BookooMode::Auto,
+                    _ => return None,
+                };
+                Some(
+                    bookoo::select_mode(mode)
+                        .iter()
+                        .map(|cmd| cmd.to_vec())
+                        .collect(),
+                )
+            }
+            _ => None,
+        }
+    }
+
+    /// Build the command bytes that set the connected scale's
+    /// auto-stop mode (`0` = flow-stop, `1` = cup-removal). `None`
+    /// when the scale exposes no auto-stop mode setting
+    /// ([`ScaleCapabilities::auto_stop`] is `false`) or `mode_id`
+    /// maps to no known mode.
+    #[must_use]
+    pub fn set_auto_stop_command(&self, mode_id: u8) -> Option<Vec<u8>> {
+        if !self.capabilities().auto_stop {
+            return None;
+        }
+        match &self.inner {
+            Inner::Bookoo => {
+                let mode = match mode_id {
+                    0 => bookoo::AutoStopMode::FlowStop,
+                    1 => bookoo::AutoStopMode::CupRemoval,
+                    _ => return None,
+                };
+                Some(bookoo::set_auto_stop_mode(mode).to_vec())
+            }
+            _ => None,
+        }
+    }
+
+    /// Format the Bookoo scale's `u16` encoded firmware version as a
+    /// `"M.m.p"` string (e.g. `141` → `"1.4.1"`). Bookoo-only today —
+    /// wraps [`bookoo::format_firmware_version`] so a wasm/UniFFI
+    /// bridge can format the version without taking a direct dep on
+    /// the per-device bookoo module.
+    #[must_use]
+    pub fn format_bookoo_firmware_version(encoded: u16) -> String {
+        bookoo::format_firmware_version(encoded)
     }
 
     /// Build a tare command to write to the [command characteristic](ScaleUuids).
@@ -1209,7 +1414,7 @@ mod tests {
             .collect();
         assert_eq!(
             bookoo.parse_command_response(&frame),
-            Some(bookoo::CommandResponse::Serial {
+            Some(ScaleConfigUpdate::SerialInfo {
                 firmware_version: 141,
                 serial: "SN2400d66a89e7".to_owned(),
                 anti_mistouch: true,

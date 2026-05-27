@@ -440,9 +440,9 @@ pub fn sub_state_error_message(name: &str) -> Option<String> {
 /// renders the version identically.
 #[wasm_bindgen]
 pub fn format_bookoo_firmware(encoded: u16) -> String {
-    // Re-exported from `de1-scale` via `de1-app::bookoo`, since the wasm
-    // crate already depends on `de1-app` (which depends on `de1-scale`).
-    de1_app::bookoo::format_firmware_version(encoded)
+    // Routed through `Scale::format_bookoo_firmware_version` so this
+    // crate doesn't reach into per-device namespaces.
+    de1_app::ScaleId::format_bookoo_firmware_version(encoded)
 }
 
 /// Sniff a first weight-notify packet for a known-scale signature.
