@@ -35,5 +35,5 @@ pub mod varia_aku;
 
 pub use scale::{
     DecentScaleFirmwareVersion, ModeInfo, RangeCapability, Scale, ScaleCapabilities, ScaleReading,
-    ScaleUuids, TimerCommand,
+    ScaleUuids, TimerCommand, UnitRecovery,
 };

@@ -2329,31 +2329,26 @@ impl CremaCore {
         let Some(scale) = &mut self.scale else {
             return;
         };
-        // Per-scale auto-recovery from the weight-notification path.
-        //
-        // - Hiroia Jimmy: if the scale's mode byte (`data[0]`) is `> 0x08`
-        //   the scale has booted in a non-grams unit; reaprime fires a
-        //   toggle-unit and skips parsing this frame
-        //   (`hiroia_scale.dart:131-139`). Crema mirrors that — the toggle
-        //   is queued, and the frame is dropped so a bogus reading doesn't
-        //   reach the shell.
-        // - Difluid: if byte `[17]` of a weight notification is non-zero
-        //   the scale is in a non-grams unit; reaprime re-sends
-        //   `SET_UNIT_GRAMS` (`difluid_scale.dart:147-154`). Crema queues
-        //   the same command but keeps parsing — the weight is still a
-        //   valid numeric reading; it's the unit display that needs
-        //   nudging.
-        if scale.is_hiroia_jimmy() && hiroia_jimmy::is_non_grams_mode(data) == Some(true) {
-            out.commands.push(Command::WriteScale {
-                data: hiroia_jimmy::TOGGLE_UNIT.to_vec(),
-            });
-            return;
-        }
-        if scale.is_difluid() && difluid::is_grams_unit(data) == Some(false) {
-            out.commands.push(Command::WriteScale {
-                data: difluid::SET_UNIT_GRAMS.to_vec(),
-            });
-            // Fall through: the weight bytes themselves are still valid.
+        // Capability-driven auto-recovery from the weight-notification
+        // path. The scale itself decides whether `data` reveals a
+        // non-grams mode and which wire bytes nudge it back — see
+        // `Scale::unit_recovery`. Drop / Continue tells us whether the
+        // numeric weight is bogus (drop the frame) or only the display
+        // unit is off (queue the nudge + keep parsing).
+        if let Some(recovery) = scale.unit_recovery(data) {
+            match recovery {
+                de1_scale::UnitRecovery::Drop { bytes } => {
+                    out.commands.push(Command::WriteScale {
+                        data: bytes.to_vec(),
+                    });
+                    return;
+                }
+                de1_scale::UnitRecovery::Continue { bytes } => {
+                    out.commands.push(Command::WriteScale {
+                        data: bytes.to_vec(),
+                    });
+                }
+            }
         }
         let Some(reading) = scale.parse_reading(data) else {
             // Not a weight packet — for the Decent Scale, this might be a

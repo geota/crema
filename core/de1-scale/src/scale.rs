@@ -166,6 +166,25 @@ pub enum TimerCommand {
     Reset,
 }
 
+/// What the core should do when a weight notification reveals the scale
+/// is in a non-grams unit — see [`Scale::unit_recovery`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnitRecovery {
+    /// Queue `bytes` and drop the frame: the weight value is bogus in the
+    /// scale's current unit (e.g. Hiroia in ounces reports ounce values).
+    Drop {
+        /// Wire bytes that nudge the scale back to grams.
+        bytes: &'static [u8],
+    },
+    /// Queue `bytes` but keep parsing the frame: the numeric weight is
+    /// still valid — only the scale's display unit is off (e.g. Difluid
+    /// in ounces still streams grams on the weight characteristic).
+    Continue {
+        /// Wire bytes that nudge the scale back to grams.
+        bytes: &'static [u8],
+    },
+}
+
 /// A connected coffee scale: weight decoding plus command building, unified
 /// across every protocol in this crate.
 ///
@@ -500,6 +519,47 @@ impl Scale {
             | Inner::Smartchef(_)
             | Inner::HiroiaJimmy
             | Inner::VariaAku => ScaleCapabilities::default(),
+        }
+    }
+
+    /// The capability-driven sibling of [`parse_reading`](Self::parse_reading)
+    /// for scales whose firmware needs a unit-mode nudge. Returns:
+    ///
+    ///  - `None` when the scale is in grams, has no settable unit, or
+    ///    `data` isn't a recognised weight notification.
+    ///  - `Some(Drop { bytes })` when the scale's current unit makes the
+    ///    weight value itself bogus — caller queues the bytes and skips
+    ///    `parse_reading`.
+    ///  - `Some(Continue { bytes })` when the numeric weight is still
+    ///    valid (only the display unit is off) — caller queues the bytes
+    ///    and parses the frame normally.
+    ///
+    /// Replaces the previous per-device `is_hiroia_jimmy()` /
+    /// `is_difluid()` branches in `handle_scale_weight`. A 13th scale
+    /// needing unit recovery is a one-file addition here, not a fresh
+    /// branch in `CremaCore`.
+    #[must_use]
+    pub fn unit_recovery(&self, data: &[u8]) -> Option<UnitRecovery> {
+        match &self.inner {
+            // Hiroia: mode-byte > 0x08 means non-grams. The reported weight
+            // is in that unit (lb / oz / ml), so it must NOT reach the
+            // shell — drop the frame after queueing the toggle. Mirrors
+            // reaprime (`hiroia_scale.dart:131-139`).
+            Inner::HiroiaJimmy if hiroia_jimmy::is_non_grams_mode(data) == Some(true) => {
+                Some(UnitRecovery::Drop {
+                    bytes: &hiroia_jimmy::TOGGLE_UNIT,
+                })
+            }
+            // Difluid: byte [17] of a weight notification flags non-grams,
+            // but the weight bytes themselves remain a valid gram reading —
+            // only the on-device display unit lies. Queue the recovery and
+            // keep parsing. Mirrors reaprime (`difluid_scale.dart:147-154`).
+            Inner::Difluid if difluid::is_grams_unit(data) == Some(false) => {
+                Some(UnitRecovery::Continue {
+                    bytes: &difluid::SET_UNIT_GRAMS,
+                })
+            }
+            _ => None,
         }
     }
 
@@ -1041,6 +1101,59 @@ mod tests {
         assert_eq!(smartchef.tare(), None);
         // The same raw reading now decodes as zero.
         assert_eq!(smartchef.parse_weight(&frame), Some(0.0));
+    }
+
+    #[test]
+    fn unit_recovery_is_none_for_a_scale_without_settable_units() {
+        let bookoo = Scale::from_label("Bookoo").unwrap();
+        // Even a properly-formed Bookoo weight notification carries no
+        // unit signal, so the recovery surface is silent.
+        assert_eq!(bookoo.unit_recovery(&[0x03, 0x0b, 0x00, 0x00, 0x00]), None);
+    }
+
+    #[test]
+    fn unit_recovery_drops_the_frame_for_a_hiroia_in_non_grams() {
+        let hiroia = Scale::from_label("Hiroia Jimmy").unwrap();
+        // Mode-byte > 0x08 → non-grams. The reading is in ounces / lb /
+        // ml; the toggle must be queued and the frame dropped.
+        let mut packet = [0u8; 16];
+        packet[0] = 0x09;
+        match hiroia.unit_recovery(&packet) {
+            Some(UnitRecovery::Drop { bytes }) => assert_eq!(bytes, &hiroia_jimmy::TOGGLE_UNIT),
+            other => panic!("expected Drop, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unit_recovery_is_none_for_a_hiroia_already_in_grams() {
+        let hiroia = Scale::from_label("Hiroia Jimmy").unwrap();
+        let mut packet = [0u8; 16];
+        packet[0] = 0x01; // a grams-mode byte
+        assert_eq!(hiroia.unit_recovery(&packet), None);
+    }
+
+    #[test]
+    fn unit_recovery_continues_for_a_difluid_in_non_grams() {
+        let difluid = Scale::from_label("Difluid Microbalance").unwrap();
+        // Byte [17] non-zero → display unit is off, but the weight bytes
+        // are still in grams. Queue + keep parsing.
+        let mut packet = [0u8; 20];
+        packet[17] = 0x01;
+        match difluid.unit_recovery(&packet) {
+            Some(UnitRecovery::Continue { bytes }) => {
+                assert_eq!(bytes, &difluid::SET_UNIT_GRAMS)
+            }
+            other => panic!("expected Continue, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unit_recovery_is_silent_for_a_decent_scale() {
+        // Decent Scale doesn't carry a unit byte the core polices — this
+        // surface must stay None so a stray `0x0A` LCD-ack frame doesn't
+        // get misclassified.
+        let decent = Scale::from_label("Decent Scale").unwrap();
+        assert_eq!(decent.unit_recovery(&[0x0a; 7]), None);
     }
 
     #[test]
