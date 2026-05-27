@@ -13,11 +13,23 @@ thiserror.workspace = true
 # Optional: `serde` derives on packet types, behind the `serde` feature.
 serde = { workspace = true, optional = true }
 typeshare = "1.0.5"
+# Optional: `#[wasm_bindgen]` on the public enums that cross the wasm
+# boundary as direct function args (today: `MmrRegister`). Enabled by
+# `de1-wasm` so the one Rust enum is the source of truth for typeshare
+# JSON, wasm-bindgen numeric ABI, and uniffi — no hand-maintained
+# mirror enum on either bridge. UniFFI doesn't need a parallel feature
+# here: its `#[uniffi::remote(Enum)]` macro lives in the bridge crate
+# (`de1-ffi`) and registers this type without touching the protocol
+# crate's deps.
+wasm-bindgen = { version = "0.2", optional = true }
 
 [features]
 # Adds `serde::{Serialize, Deserialize}` to packet types — enabled by de1-domain
 # for shot-history persistence.
 serde = ["dep:serde"]
+# Adds `#[wasm_bindgen]` to the enums that cross the wasm boundary as
+# function args. Enabled only by `de1-wasm` (the actual wasm target).
+wasm-bindgen = ["dep:wasm-bindgen"]
 
 [lints]
 workspace = true
