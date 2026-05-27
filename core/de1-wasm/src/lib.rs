@@ -779,7 +779,7 @@ impl CremaBridge {
         source: NotificationSource,
         data: Vec<u8>,
         now_ms: f64,
-    ) -> String {
+    ) -> JsValue {
         json(
             self.core
                 .on_notification(source.into(), &data, now_ms as u64),
@@ -787,7 +787,7 @@ impl CremaBridge {
     }
 
     /// Feed a periodic clock tick. Returns a JSON-encoded [`CoreOutput`].
-    pub fn on_tick(&mut self, now_ms: f64) -> String {
+    pub fn on_tick(&mut self, now_ms: f64) -> JsValue {
         json(self.core.on_tick(now_ms as u64))
     }
 
@@ -866,27 +866,27 @@ impl CremaBridge {
 
     /// Build a [`CoreOutput`] (JSON) whose command asks the DE1 to enter
     /// `state`.
-    pub fn request_machine_state(&self, state: MachineRequest) -> String {
+    pub fn request_machine_state(&self, state: MachineRequest) -> JsValue {
         json(self.core.request_machine_state(state.into()))
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command reads one DE1 memory-mapped
     /// register. The DE1 answers with a notification on the `De1MmrRead`
     /// characteristic, which decodes to an `MmrValue` event.
-    pub fn read_mmr(&self, register: MmrReg) -> String {
+    pub fn read_mmr(&self, register: MmrReg) -> JsValue {
         json(self.core.read_mmr(register.into()))
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command reads `sensor`'s current
     /// (in-use) calibration. The DE1 answers on the `De1Calibration`
     /// characteristic, which decodes to a `Calibration` event.
-    pub fn read_calibration(&self, sensor: CalSensor) -> String {
+    pub fn read_calibration(&self, sensor: CalSensor) -> JsValue {
         json(self.core.read_calibration(sensor.into()))
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command reads `sensor`'s factory
     /// calibration — the calibration the machine shipped with.
-    pub fn read_factory_calibration(&self, sensor: CalSensor) -> String {
+    pub fn read_factory_calibration(&self, sensor: CalSensor) -> JsValue {
         json(self.core.read_factory_calibration(sensor.into()))
     }
 
@@ -896,7 +896,7 @@ impl CremaBridge {
     /// units (°C / bar / ml·s⁻¹) — the shell converts at the I/O boundary
     /// before calling. From then on the DE1 applies `measured / reported` as
     /// a multiplier on that sensor.
-    pub fn write_calibration(&self, sensor: CalSensor, reported: f32, measured: f32) -> String {
+    pub fn write_calibration(&self, sensor: CalSensor, reported: f32, measured: f32) -> JsValue {
         json(
             self.core
                 .write_calibration(sensor.into(), reported, measured),
@@ -907,33 +907,33 @@ impl CremaBridge {
     /// factory calibration. The DE1 starts using the factory values immediately;
     /// the shell should follow up with a `read_calibration` to surface the new
     /// in-use value.
-    pub fn reset_calibration_to_factory(&self, sensor: CalSensor) -> String {
+    pub fn reset_calibration_to_factory(&self, sensor: CalSensor) -> JsValue {
         json(self.core.reset_calibration_to_factory(sensor.into()))
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command tares the connected scale.
-    pub fn tare_scale(&mut self) -> String {
+    pub fn tare_scale(&mut self) -> JsValue {
         json(self.core.tare_scale())
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command starts the connected
     /// scale's built-in timer. Capability-gated to scales that support
     /// software timer commands (the Bookoo today); empty otherwise.
-    pub fn start_timer(&self) -> String {
+    pub fn start_timer(&self) -> JsValue {
         json(self.core.start_timer())
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command stops the connected
     /// scale's built-in timer. Capability-gated like
     /// [`start_timer`](Self::start_timer).
-    pub fn stop_timer(&self) -> String {
+    pub fn stop_timer(&self) -> JsValue {
         json(self.core.stop_timer())
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command resets the connected
     /// scale's built-in timer to zero. Capability-gated like
     /// [`start_timer`](Self::start_timer).
-    pub fn reset_timer(&self) -> String {
+    pub fn reset_timer(&self) -> JsValue {
         json(self.core.reset_timer())
     }
 
@@ -952,24 +952,24 @@ impl CremaBridge {
     /// (`"grams"` / `"ounces"`); a malformed string returns an empty
     /// `CoreOutput` and an error to the JS side via the wasm-bindgen
     /// return type.
-    pub fn enable_scale_lcd(&self, unit: &str) -> Result<String, String> {
+    pub fn enable_scale_lcd(&self, unit: &str) -> Result<JsValue, JsValue> {
         let unit = de1_domain::WeightUnit::from_str_lower(unit)
             .ok_or_else(|| format!("unknown weight unit: {unit}"))?;
         self.core
             .enable_scale_lcd(unit)
             .map(json)
-            .map_err(|e| e.to_string())
+            .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
     /// Build a [`CoreOutput`] (JSON) whose commands disable the connected
     /// scale's on-scale LCD. Capability-driven — see
     /// `Scale::lcd_disable_command`. Returns an error when no scale or
     /// the scale has no LCD-disable command.
-    pub fn disable_scale_lcd(&self) -> Result<String, String> {
+    pub fn disable_scale_lcd(&self) -> Result<JsValue, JsValue> {
         self.core
             .disable_scale_lcd()
             .map(json)
-            .map_err(|e| e.to_string())
+            .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command emits one keep-alive
@@ -977,11 +977,11 @@ impl CremaBridge {
     /// (Decent Scale's interval is ~`HEARTBEAT_INTERVAL_MS` ms).
     /// Capability-driven — returns an error when the scale doesn't need
     /// a heartbeat (`ScaleCapabilities::needs_heartbeat == false`).
-    pub fn scale_heartbeat(&self) -> Result<String, String> {
+    pub fn scale_heartbeat(&self) -> Result<JsValue, JsValue> {
         self.core
             .scale_heartbeat()
             .map(json)
-            .map_err(|e| e.to_string())
+            .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
     /// Build a [`CoreOutput`] (JSON) whose commands power off the
@@ -989,11 +989,11 @@ impl CremaBridge {
     /// `Scale::power_off_command`. Returns an error when no scale or
     /// the scale lacks a host-driven power-off (Decent / Eureka / Solo
     /// support it).
-    pub fn power_off_scale(&self) -> Result<String, String> {
+    pub fn power_off_scale(&self) -> Result<JsValue, JsValue> {
         self.core
             .power_off_scale()
             .map(json)
-            .map_err(|e| e.to_string())
+            .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
     /// Cache the user's chosen weight unit on the core so the LCD-enable
@@ -1009,8 +1009,11 @@ impl CremaBridge {
 
     /// Build a [`CoreOutput`] (JSON) whose command fires a beep on the
     /// connected scale. Capability-driven — Eureka / Solo support it.
-    pub fn scale_beep(&self) -> Result<String, String> {
-        self.core.scale_beep().map(json).map_err(|e| e.to_string())
+    pub fn scale_beep(&self) -> Result<JsValue, JsValue> {
+        self.core
+            .scale_beep()
+            .map(json)
+            .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command sets the connected
@@ -1018,21 +1021,21 @@ impl CremaBridge {
     /// / Difluid expose this. Scales whose unit lives in the LCD-enable
     /// bytes (Decent / Skale) return an error; scales with only a
     /// toggle (Hiroia) want `toggle_scale_unit` instead.
-    pub fn set_scale_unit_grams(&self) -> Result<String, String> {
+    pub fn set_scale_unit_grams(&self) -> Result<JsValue, JsValue> {
         self.core
             .set_scale_unit_grams()
             .map(json)
-            .map_err(|e| e.to_string())
+            .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command toggles the connected
     /// scale's display unit. Capability-driven — Hiroia is the only
     /// scale that exposes a toggle today.
-    pub fn toggle_scale_unit(&self) -> Result<String, String> {
+    pub fn toggle_scale_unit(&self) -> Result<JsValue, JsValue> {
         self.core
             .toggle_scale_unit()
             .map(json)
-            .map_err(|e| e.to_string())
+            .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
     /// Toggle whether the connected scale should be powered off on
@@ -1094,7 +1097,7 @@ impl CremaBridge {
     /// Capability-gated: the command is present only when the connected scale
     /// exposes a configurable setting. Empty otherwise. Wired exactly like
     /// [`tare_scale`](Self::tare_scale).
-    pub fn query_scale_settings(&self) -> String {
+    pub fn query_scale_settings(&self) -> JsValue {
         json(self.core.query_scale_settings())
     }
 
@@ -1105,7 +1108,7 @@ impl CremaBridge {
     /// `[min, max]` bounds. Capability-gated: the command is present only when
     /// the connected scale exposes a settable volume. Empty otherwise. Wired
     /// exactly like [`tare_scale`](Self::tare_scale).
-    pub fn set_scale_volume(&mut self, level: u8) -> String {
+    pub fn set_scale_volume(&mut self, level: u8) -> JsValue {
         json(self.core.set_scale_volume(level))
     }
 
@@ -1117,7 +1120,7 @@ impl CremaBridge {
     /// gated: the command is present only when the connected scale exposes a
     /// configurable auto-standby. Empty otherwise. Wired exactly like
     /// [`set_scale_volume`](Self::set_scale_volume).
-    pub fn set_scale_standby(&mut self, minutes: u8) -> String {
+    pub fn set_scale_standby(&mut self, minutes: u8) -> JsValue {
         json(self.core.set_scale_standby(minutes))
     }
 
@@ -1127,7 +1130,7 @@ impl CremaBridge {
     /// Capability-gated: the command is present only when the connected scale
     /// supports flow smoothing. Empty otherwise. Wired exactly like
     /// [`set_scale_volume`](Self::set_scale_volume).
-    pub fn set_scale_flow_smoothing(&mut self, enabled: bool) -> String {
+    pub fn set_scale_flow_smoothing(&mut self, enabled: bool) -> JsValue {
         json(self.core.set_scale_flow_smoothing(enabled))
     }
 
@@ -1137,7 +1140,7 @@ impl CremaBridge {
     /// Capability-gated: the command is present only when the connected scale
     /// supports anti-mistouch. Empty otherwise. Wired exactly like
     /// [`set_scale_volume`](Self::set_scale_volume).
-    pub fn set_scale_anti_mistouch(&mut self, enabled: bool) -> String {
+    pub fn set_scale_anti_mistouch(&mut self, enabled: bool) -> JsValue {
         json(self.core.set_scale_anti_mistouch(enabled))
     }
 
@@ -1149,7 +1152,7 @@ impl CremaBridge {
     /// modes. Switching a mode is **three** `WriteScale` commands, emitted in
     /// order — the shell must perform them in that order. Empty otherwise.
     /// Wired exactly like [`set_scale_volume`](Self::set_scale_volume).
-    pub fn set_scale_mode(&mut self, mode_id: u8) -> String {
+    pub fn set_scale_mode(&mut self, mode_id: u8) -> JsValue {
         json(self.core.set_scale_mode(mode_id))
     }
 
@@ -1160,7 +1163,7 @@ impl CremaBridge {
     /// supports an auto-stop-mode setting and `mode_id` is in range. An
     /// out-of-range `mode_id` yields an empty `CoreOutput`. Wired exactly like
     /// [`set_scale_volume`](Self::set_scale_volume).
-    pub fn set_scale_auto_stop(&mut self, mode_id: u8) -> String {
+    pub fn set_scale_auto_stop(&mut self, mode_id: u8) -> JsValue {
         json(self.core.set_scale_auto_stop(mode_id))
     }
 
@@ -1180,7 +1183,7 @@ impl CremaBridge {
         hot_water_timeout_s: f32,
         espresso_volume_ml: f32,
         group_temp_c: f32,
-    ) -> String {
+    ) -> JsValue {
         let settings = ShotSettings {
             steam_flags,
             steam_temp_c,
@@ -1196,40 +1199,40 @@ impl CremaBridge {
 
     /// Enable or disable steam eco mode (the legacy `eco_steam` setting).
     /// Returns a JSON-encoded [`CoreOutput`].
-    pub fn enable_steam_eco_mode(&mut self, enabled: bool, now_ms: f64) -> String {
+    pub fn enable_steam_eco_mode(&mut self, enabled: bool, now_ms: f64) -> JsValue {
         json(self.core.enable_steam_eco_mode(enabled, now_ms as u64))
     }
 
     /// Write the DE1's water-tank refill threshold (`cuuid_11`). `threshold_mm`
     /// is the level at or below which the DE1 should ask for a refill.
     /// Returns a JSON-encoded [`CoreOutput`].
-    pub fn set_refill_threshold(&self, threshold_mm: f32) -> String {
+    pub fn set_refill_threshold(&self, threshold_mm: f32) -> JsValue {
         json(self.core.set_refill_threshold(threshold_mm))
     }
 
     /// Write one DE1 memory-mapped register. `value` is the raw little-endian
     /// word the register expects, already scaled. `byte_len` is 1, 2, or 4 —
     /// the wire `Len` byte of the resulting `WriteToMMR` packet.
-    pub fn write_mmr(&self, register: MmrReg, value: u32, byte_len: u8) -> String {
+    pub fn write_mmr(&self, register: MmrReg, value: u32, byte_len: u8) -> JsValue {
         json(self.core.write_mmr(register.into(), value, byte_len))
     }
 
     /// Set the fan-on temperature threshold, °C. Legacy
     /// `set_fan_temperature_threshold`; MMR `0x803808`, 1-byte.
-    pub fn set_fan_threshold(&self, temp_c: u8) -> String {
+    pub fn set_fan_threshold(&self, temp_c: u8) -> JsValue {
         json(self.core.set_fan_threshold(temp_c))
     }
 
     /// Set the tank desired water-temperature threshold, °C. Legacy
     /// `set_tank_temperature_threshold` (immediate value only); MMR
     /// `0x80380C`, 1-byte.
-    pub fn set_tank_threshold(&self, temp_c: u8) -> String {
+    pub fn set_tank_threshold(&self, temp_c: u8) -> JsValue {
         json(self.core.set_tank_threshold(temp_c))
     }
 
     /// Set the steam flow rate, ml/s. Scaled `int(10 × rate)`; MMR
     /// `0x803828`, 1-byte.
-    pub fn set_steam_flow(&self, ml_per_s: f32) -> String {
+    pub fn set_steam_flow(&self, ml_per_s: f32) -> JsValue {
         json(self.core.set_steam_flow(ml_per_s))
     }
 
@@ -1237,37 +1240,37 @@ impl CremaBridge {
     /// MMR `0x80382C`, 4-byte. The wire value is `seconds × 100` —
     /// `seconds` is `f32` so sub-second precision survives (legacy
     /// default 0.7s = wire 70).
-    pub fn set_steam_highflow_start(&self, seconds: f32) -> String {
+    pub fn set_steam_highflow_start(&self, seconds: f32) -> JsValue {
         json(self.core.set_steam_highflow_start(seconds))
     }
 
     /// Set the group-head-control mode. MMR `0x803820`, 1-byte.
-    pub fn set_ghc_mode(&self, mode: u8) -> String {
+    pub fn set_ghc_mode(&self, mode: u8) -> JsValue {
         json(self.core.set_ghc_mode(mode))
     }
 
     /// Set the hot-water flow rate, ml/s. Scaled `int(10 × rate)`; MMR
     /// `0x80384C`, 2-byte.
-    pub fn set_hot_water_flow_rate(&self, ml_per_s: f32) -> String {
+    pub fn set_hot_water_flow_rate(&self, ml_per_s: f32) -> JsValue {
         json(self.core.set_hot_water_flow_rate(ml_per_s))
     }
 
     /// Set the flush flow rate, ml/s. Scaled `int(10 × rate)`; MMR
     /// `0x803840`, 2-byte.
-    pub fn set_flush_flow_rate(&self, ml_per_s: f32) -> String {
+    pub fn set_flush_flow_rate(&self, ml_per_s: f32) -> JsValue {
         json(self.core.set_flush_flow_rate(ml_per_s))
     }
 
     /// Set the flush water target temperature, °C — the temperature the
     /// DE1 holds during a group-flush cycle. Wire value is `°C × 10`;
     /// MMR `0x803844`, 4-byte.
-    pub fn set_flush_temp(&self, temp_c: f32) -> String {
+    pub fn set_flush_temp(&self, temp_c: f32) -> JsValue {
         json(self.core.set_flush_temp(temp_c))
     }
 
     /// Set the flush timeout. `ms` is milliseconds; the wire scale is
     /// `int(10 × seconds)`. MMR `0x803848`, 2-byte.
-    pub fn set_flush_timeout(&self, ms: u32) -> String {
+    pub fn set_flush_timeout(&self, ms: u32) -> JsValue {
         json(
             self.core
                 .set_flush_timeout(std::time::Duration::from_millis(u64::from(ms))),
@@ -1276,26 +1279,26 @@ impl CremaBridge {
 
     /// Enable / disable the tablet's USB charging output. MMR `0x803854`,
     /// 1-byte.
-    pub fn set_usb_charger_on(&self, enabled: bool) -> String {
+    pub fn set_usb_charger_on(&self, enabled: bool) -> JsValue {
         json(self.core.set_usb_charger_on(enabled))
     }
 
     /// Tell the firmware whether the user is currently present at the
     /// machine. **Distinct register** from `set_feature_flags`. MMR
     /// `0x803860`, 1-byte.
-    pub fn set_user_present(&self, present: bool) -> String {
+    pub fn set_user_present(&self, present: bool) -> JsValue {
         json(self.core.set_user_present(present))
     }
 
     /// Set the firmware feature-flag bitmask. **Distinct register** from
     /// `set_user_present`. MMR `0x803858`, 2-byte.
-    pub fn set_feature_flags(&self, flags: u16) -> String {
+    pub fn set_feature_flags(&self, flags: u16) -> JsValue {
         json(self.core.set_feature_flags(flags))
     }
 
     /// Override the refill-kit presence flag (`0`/`1`/`2`). MMR `0x80385C`,
     /// 4-byte.
-    pub fn set_refill_kit_present(&self, state: u8) -> String {
+    pub fn set_refill_kit_present(&self, state: u8) -> JsValue {
         json(self.core.set_refill_kit_present(state))
     }
 
@@ -1312,11 +1315,11 @@ impl CremaBridge {
     ///
     /// Returns the [`AppError`](de1_app::AppError) display string when the
     /// core rejects `volts` for being out of `{120, 230}`.
-    pub fn set_heater_voltage(&self, volts: u8) -> Result<String, String> {
+    pub fn set_heater_voltage(&self, volts: u8) -> Result<JsValue, JsValue> {
         self.core
             .set_heater_voltage(volts)
             .map(json)
-            .map_err(|e| e.to_string())
+            .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
     /// Reset 8 machine settings to factory baseline — mirrors reaprime's
@@ -1336,50 +1339,50 @@ impl CremaBridge {
     ///
     /// Returns the [`AppError`](de1_app::AppError) display string when
     /// the core rejects the request (none today).
-    pub fn reset_machine_defaults(&self) -> Result<String, String> {
+    pub fn reset_machine_defaults(&self) -> Result<JsValue, JsValue> {
         self.core
             .reset_machine_defaults()
             .map(json)
-            .map_err(|e| e.to_string())
+            .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
     /// Set the cup-warmer temperature, °C (Bengle models only). MMR
     /// `0x803874`, 2-byte.
-    pub fn set_cup_warmer_temperature(&self, temp_c: u8) -> String {
+    pub fn set_cup_warmer_temperature(&self, temp_c: u8) -> JsValue {
         json(self.core.set_cup_warmer_temperature(temp_c))
     }
 
     /// Set the flow-calibration multiplier. Scaled `int(1000 × multiplier)`;
     /// MMR `0x80383C`, 2-byte.
-    pub fn set_calibration_flow_multiplier(&self, multiplier: f32) -> String {
+    pub fn set_calibration_flow_multiplier(&self, multiplier: f32) -> JsValue {
         json(self.core.set_calibration_flow_multiplier(multiplier))
     }
 
     /// Set the hot-water phase-1 flow rate (legacy `heater_tweaks`
     /// `phase_1_flow_rate`). Scaled `int(10 × rate)`; MMR `0x803810`,
     /// 4-byte LE.
-    pub fn set_phase_1_flow_rate(&self, rate_ml_per_s: f32) -> String {
+    pub fn set_phase_1_flow_rate(&self, rate_ml_per_s: f32) -> JsValue {
         json(self.core.set_phase_1_flow_rate(rate_ml_per_s))
     }
 
     /// Set the hot-water phase-2 flow rate (legacy `heater_tweaks`
     /// `phase_2_flow_rate`). Scaled `int(10 × rate)`; MMR `0x803814`,
     /// 4-byte LE.
-    pub fn set_phase_2_flow_rate(&self, rate_ml_per_s: f32) -> String {
+    pub fn set_phase_2_flow_rate(&self, rate_ml_per_s: f32) -> JsValue {
         json(self.core.set_phase_2_flow_rate(rate_ml_per_s))
     }
 
     /// Set the hot-water boiler idle target temperature, °C (legacy
     /// `heater_tweaks` `hot_water_idle_temp`). MMR `0x803818`, 4-byte LE.
     /// Wire value is `°C × 10` (per reaprime `writeScale: 10.0`).
-    pub fn set_hot_water_idle_temp(&self, temp_c: f32) -> String {
+    pub fn set_hot_water_idle_temp(&self, temp_c: f32) -> JsValue {
         json(self.core.set_hot_water_idle_temp(temp_c))
     }
 
     /// Set the espresso group warmup timeout (legacy `heater_tweaks`
     /// `espresso_warmup_timeout`). MMR `0x803838`, 4-byte LE. `seconds`
     /// is scaled to deciseconds on the wire (`int(10 × seconds)`).
-    pub fn set_espresso_warmup_timeout(&self, seconds: f32) -> String {
+    pub fn set_espresso_warmup_timeout(&self, seconds: f32) -> JsValue {
         let dur = if seconds.is_finite() && seconds > 0.0 {
             // Convert seconds (f32) to a Duration with millisecond precision —
             // the setter scales ms → deciseconds before writing.
@@ -1395,7 +1398,7 @@ impl CremaBridge {
     /// Set the steam two-tap-stop (legacy `heater_tweaks`
     /// `steam_two_tap_stop`; reaprime `steamPurgeMode`). MMR `0x803850`,
     /// 4-byte LE int. `0` disables, `1` enables.
-    pub fn set_steam_two_tap_stop(&self, value: u8) -> String {
+    pub fn set_steam_two_tap_stop(&self, value: u8) -> JsValue {
         json(self.core.set_steam_two_tap_stop(value))
     }
 
@@ -1421,7 +1424,7 @@ impl CremaBridge {
     /// Subsequent acks arrive via `on_notification(De1FrameAck, …)`; the
     /// core emits `ProfileUploadProgress` / `ProfileUploadCompleted` /
     /// `ProfileUploadFailed` from those.
-    pub fn upload_profile(&mut self, profile_json: String, now_ms: f64) -> String {
+    pub fn upload_profile(&mut self, profile_json: String, now_ms: f64) -> JsValue {
         let profile: Profile = match serde_json::from_str(&profile_json) {
             Ok(p) => p,
             Err(e) => {
@@ -1469,7 +1472,7 @@ impl CremaBridge {
     /// Cancel an in-progress profile upload. Returns the
     /// `ProfileUploadFailed { Aborted }` `CoreOutput`, or an empty one if
     /// no upload is in flight.
-    pub fn cancel_profile_upload(&mut self) -> String {
+    pub fn cancel_profile_upload(&mut self) -> JsValue {
         json(self.core.cancel_profile_upload())
     }
 
@@ -1579,22 +1582,50 @@ impl CremaBridge {
     }
 }
 
-/// Serialize a [`CoreOutput`] to JSON for the shell. `CoreOutput` is flat plain
-/// data, so serialization is infallible in practice — a failure would be a bug.
-fn json(output: CoreOutput) -> String {
-    output
-        .to_json()
-        .expect("CoreOutput is plain data and always serializes")
+/// Serialize a [`CoreOutput`] to a structured-clone `JsValue` for the
+/// shell. Previously this returned a JSON string the shell `JSON.parse`d
+/// on receipt; `serde-wasm-bindgen` lets us hand the shell a native JS
+/// object directly — no string round-trip on the ~25 Hz live notification
+/// path. The Rust-side serialization is infallible in practice (CoreOutput
+/// is flat plain data); a failure would be a bug, so it panics rather
+/// than propagating an error to the bridge surface.
+///
+/// The wasm-side return-type story is unchanged in spirit: callers
+/// previously got `string` and cast to `CoreOutput` via `parseOutput`;
+/// now they get `JsValue` and cast to `CoreOutput` directly. Neither path
+/// is compile-time-checked at the JS boundary — wasm-bindgen has no way
+/// to do that without type-emitting wrappers like `tsify`. The TS
+/// caller's `as CoreOutput` is the same wall as today, just over a
+/// faster transport.
+fn json(output: CoreOutput) -> JsValue {
+    serde_wasm_bindgen::to_value(&output).expect("CoreOutput is plain data and always serializes")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// Round-trip a bridge-returned `JsValue` back into a JSON string for
+    /// substring-based test assertions.
+    ///
+    /// Phase 2 of the bridge collapse moved CoreOutput-returning methods
+    /// from `String` to `JsValue` to drop the JSON-parse cost on the
+    /// hot path. Tests still want substring matches against the JSON
+    /// representation; this helper deserializes the JsValue through
+    /// serde to a `serde_json::Value`, then re-serializes to a String.
+    /// The round-trip is cheap and reflects the same bytes the JS shell
+    /// would observe after structured-clone deserialization.
+    fn jv_to_string(jv: &JsValue) -> String {
+        let v: serde_json::Value =
+            serde_wasm_bindgen::from_value(jv.clone()).expect("JsValue round-trips via serde");
+        serde_json::to_string(&v).expect("serde_json::Value re-serializes")
+    }
+
     #[test]
     fn on_notification_returns_core_output_json() {
         let mut bridge = CremaBridge::new();
-        let json = bridge.on_notification(NotificationSource::De1State, vec![4, 5], 1_000.0);
+        let out = bridge.on_notification(NotificationSource::De1State, vec![4, 5], 1_000.0);
+        let json = jv_to_string(&out);
         assert!(json.contains("\"events\""));
         assert!(json.contains("\"ShotStarted\""));
     }
@@ -1602,7 +1633,7 @@ mod tests {
     #[test]
     fn request_machine_state_produces_a_write_command() {
         let bridge = CremaBridge::new();
-        let json = bridge.request_machine_state(MachineRequest::Idle);
+        let json = jv_to_string(&bridge.request_machine_state(MachineRequest::Idle));
         assert!(json.contains("\"commands\""));
         assert!(json.contains("WriteCharacteristic"));
     }
@@ -1610,7 +1641,7 @@ mod tests {
     #[test]
     fn read_mmr_produces_a_write_command() {
         let bridge = CremaBridge::new();
-        let json = bridge.read_mmr(MmrReg::SerialNumber);
+        let json = jv_to_string(&bridge.read_mmr(MmrReg::SerialNumber));
         assert!(json.contains("\"commands\""));
         assert!(json.contains("WriteCharacteristic"));
         assert!(json.contains("De1MmrRequest"));
@@ -1619,10 +1650,11 @@ mod tests {
     #[test]
     fn read_calibration_produces_a_write_command() {
         let bridge = CremaBridge::new();
-        for json in [
+        for jv in [
             bridge.read_calibration(CalSensor::Pressure),
             bridge.read_factory_calibration(CalSensor::Flow),
         ] {
+            let json = jv_to_string(&jv);
             assert!(json.contains("WriteCharacteristic"));
             assert!(json.contains("De1Calibration"));
         }
@@ -1631,10 +1663,11 @@ mod tests {
     #[test]
     fn write_and_reset_calibration_produce_write_commands() {
         let bridge = CremaBridge::new();
-        for json in [
+        for jv in [
             bridge.write_calibration(CalSensor::Temperature, 92.5, 93.0),
             bridge.reset_calibration_to_factory(CalSensor::Pressure),
         ] {
+            let json = jv_to_string(&jv);
             assert!(json.contains("WriteCharacteristic"));
             assert!(json.contains("De1Calibration"));
         }
@@ -1646,10 +1679,11 @@ mod tests {
         // settings-reset endpoint — the JSON should carry exactly 8
         // `WriteCharacteristic` commands targeting `De1MmrWrite`.
         let bridge = CremaBridge::new();
-        let json = bridge
+        let jv = bridge
             .reset_machine_defaults()
             .expect("infallible without a firmware lockout");
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let parsed: serde_json::Value =
+            serde_wasm_bindgen::from_value(jv).expect("CoreOutput round-trips");
         let commands = parsed["commands"].as_array().unwrap();
         assert_eq!(commands.len(), 8);
         for cmd in commands {
@@ -1723,7 +1757,9 @@ mod tests {
 
     /// Apply representative steam / hot-water settings to `bridge`.
     fn set_steam_settings(bridge: &mut CremaBridge) -> String {
-        bridge.set_steam_hotwater_settings(0, 150.0, 120.0, 85.0, 50.0, 30.0, 36.0, 92.0)
+        jv_to_string(
+            &bridge.set_steam_hotwater_settings(0, 150.0, 120.0, 85.0, 50.0, 30.0, 36.0, 92.0),
+        )
     }
 
     #[test]
@@ -1741,7 +1777,7 @@ mod tests {
         set_steam_settings(&mut bridge);
         bridge.enable_steam_eco_mode(true, 0.0);
         // After the idle delay a tick engages eco mode and rewrites the target.
-        let json = bridge.on_tick(600_000.0);
+        let json = jv_to_string(&bridge.on_tick(600_000.0));
         assert!(json.contains("SteamEcoModeChanged"));
     }
 
@@ -1844,7 +1880,7 @@ mod tests {
     fn set_scale_volume_produces_a_write_scale_command_for_a_capable_scale() {
         let mut bridge = CremaBridge::new();
         bridge.connect_scale("BOOKOO_SC".to_owned());
-        let json = bridge.set_scale_volume(3);
+        let json = jv_to_string(&bridge.set_scale_volume(3));
         assert!(json.contains("\"commands\""));
         assert!(json.contains("WriteScale"));
     }
@@ -1854,7 +1890,7 @@ mod tests {
         let mut bridge = CremaBridge::new();
         bridge.connect_scale("BOOKOO_SC".to_owned());
         let json = bridge.set_scale_mode(1);
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let parsed: serde_json::Value = serde_wasm_bindgen::from_value(json.clone()).unwrap();
         // Three mode writes plus the appended 0x0f settings query.
         assert_eq!(parsed["commands"].as_array().unwrap().len(), 4);
     }
@@ -1864,7 +1900,7 @@ mod tests {
         let mut bridge = CremaBridge::new();
         bridge.connect_scale("BOOKOO_SC".to_owned());
         let json = bridge.query_scale_settings();
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let parsed: serde_json::Value = serde_wasm_bindgen::from_value(json.clone()).unwrap();
         let commands = parsed["commands"].as_array().unwrap();
         assert_eq!(commands.len(), 1);
         assert_eq!(commands[0]["type"], "WriteScale");
@@ -1883,7 +1919,7 @@ mod tests {
             bridge.set_scale_auto_stop(0),
             bridge.query_scale_settings(),
         ] {
-            let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+            let parsed: serde_json::Value = serde_wasm_bindgen::from_value(json.clone()).unwrap();
             assert!(parsed["commands"].as_array().unwrap().is_empty());
         }
     }
@@ -1897,9 +1933,9 @@ mod tests {
             bridge.disable_scale_lcd().unwrap(),
             bridge.scale_heartbeat().unwrap(),
         ] {
-            let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+            let parsed: serde_json::Value = serde_wasm_bindgen::from_value(json.clone()).unwrap();
             let commands = parsed["commands"].as_array().unwrap();
-            assert_eq!(commands.len(), 1, "expected one WriteScale command: {json}");
+            assert_eq!(commands.len(), 1, "expected one WriteScale command");
             assert_eq!(commands[0]["type"], "WriteScale");
         }
     }
@@ -1915,9 +1951,10 @@ mod tests {
             bridge.disable_scale_lcd().unwrap_err(),
             bridge.scale_heartbeat().unwrap_err(),
         ] {
+            let msg = err.as_string().unwrap_or_default();
             assert!(
-                err.contains("scale_") || err.contains("connected scale"),
-                "expected capability-named error: {err}"
+                msg.contains("scale_") || msg.contains("connected scale"),
+                "expected capability-named error: {msg}"
             );
         }
     }
@@ -1927,7 +1964,7 @@ mod tests {
         let mut bridge = CremaBridge::new();
         bridge.connect_scale("Decent Scale ABC".to_owned());
         let json = bridge.enable_scale_lcd("ounces").unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let parsed: serde_json::Value = serde_wasm_bindgen::from_value(json.clone()).unwrap();
         let commands = parsed["commands"].as_array().unwrap();
         assert_eq!(commands.len(), 1);
         // The wire bytes are the LCD_ENABLE_OUNCES constant; the JSON
@@ -1960,7 +1997,7 @@ mod tests {
         // Power-off is sent unconditionally on a Decent Scale; older
         // firmware silently no-ops on the byte sequence.
         let json = bridge.power_off_scale().expect("decent scale connected");
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let parsed: serde_json::Value = serde_wasm_bindgen::from_value(json.clone()).unwrap();
         let commands = parsed["commands"].as_array().unwrap();
         assert_eq!(commands.len(), 1);
         let data: Vec<u8> = commands[0]["content"]["data"]
@@ -1981,9 +2018,10 @@ mod tests {
         let mut bridge = CremaBridge::new();
         bridge.connect_scale("BOOKOO_SC".to_owned());
         let err = bridge.power_off_scale().unwrap_err();
+        let msg = err.as_string().unwrap_or_default();
         assert!(
-            err.contains("scale_power_off"),
-            "error should name the feature: {err}"
+            msg.contains("scale_power_off"),
+            "error should name the feature: {msg}"
         );
     }
 
@@ -2100,8 +2138,8 @@ mod tests {
             // rather than being skipped for want of a scale.
             bridge.connect_scale("BOOKOO_SC".to_owned());
             let out = bridge.on_notification(source, Vec::new(), 1_000.0);
-            let parsed: serde_json::Value =
-                serde_json::from_str(&out).expect("bridge returned malformed JSON");
+            let parsed: serde_json::Value = serde_wasm_bindgen::from_value(out.clone())
+                .expect("bridge returned malformed JSON");
             assert!(parsed.get("events").is_some());
             assert!(parsed.get("commands").is_some());
         }
@@ -2114,8 +2152,8 @@ mod tests {
             let mut bridge = CremaBridge::new();
             bridge.connect_scale("BOOKOO_SC".to_owned());
             let out = bridge.on_notification(source, garbage.clone(), 2_000.0);
-            let parsed: serde_json::Value =
-                serde_json::from_str(&out).expect("bridge returned malformed JSON");
+            let parsed: serde_json::Value = serde_wasm_bindgen::from_value(out.clone())
+                .expect("bridge returned malformed JSON");
             assert!(parsed["events"].is_array());
         }
     }
@@ -2125,7 +2163,11 @@ mod tests {
         let mut bridge = CremaBridge::new();
         // A one-byte StateInfo packet cannot be decoded — the bridge must
         // surface a DecodeError event, not panic or drop the input silently.
-        let out = bridge.on_notification(NotificationSource::De1State, vec![0x01], 1_000.0);
+        let out = jv_to_string(&bridge.on_notification(
+            NotificationSource::De1State,
+            vec![0x01],
+            1_000.0,
+        ));
         assert!(out.contains("DecodeError"));
     }
 
@@ -2219,7 +2261,11 @@ mod tests {
     #[test]
     fn on_notification_reports_a_decode_error_for_a_truncated_water_levels_packet() {
         let mut bridge = CremaBridge::new();
-        let out = bridge.on_notification(NotificationSource::De1WaterLevels, vec![0x00], 1_000.0);
+        let out = jv_to_string(&bridge.on_notification(
+            NotificationSource::De1WaterLevels,
+            vec![0x00],
+            1_000.0,
+        ));
         assert!(out.contains("DecodeError"));
     }
 }
