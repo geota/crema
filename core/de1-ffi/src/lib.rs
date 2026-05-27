@@ -69,40 +69,96 @@ impl From<NotificationSource> for Source {
     }
 }
 
-/// Register [`de1_protocol::MmrRegister`] with UniFFI as a remote type
-/// — the canonical definition lives in `de1-protocol`, this re-declares
-/// the variant list so uniffi's code-gen knows the shape. No new type
-/// is introduced: `MmrRegister` here IS `de1_protocol::MmrRegister`,
-/// so a public method taking it gets the protocol type at the seam
-/// without a `From` round-trip.
-#[uniffi::remote(Enum)]
-pub enum MmrRegister {
+/// A DE1 memory-mapped register the shell can ask the core to read — mirrors
+/// [`de1_protocol::MmrRegister`] across the FFI boundary.
+#[derive(uniffi::Enum)]
+pub enum MmrReg {
+    /// CPU-board revision (raw value / 1000 → e.g. PCB v1.1).
     CpuBoardVersion,
+    /// Machine model identifier (1=DE1, 2=DE1+, 3=DE1PRO, 4=DE1XL, …).
     MachineModel,
+    /// Firmware build number.
     FirmwareVersion,
+    /// Group Head Controller info bitmask.
     GhcInfo,
+    /// Tank desired water-temperature threshold, °C.
     TankTempThreshold,
+    /// Fan-on temperature threshold, °C.
     FanThreshold,
+    /// Machine serial number.
     SerialNumber,
+    /// Steam flow rate.
     SteamFlow,
+    /// Refill-kit presence.
     RefillKit,
+    /// Flush flow rate.
     FlushFlowRate,
+    /// Flush water target temperature, °C × 10 (modelled by reaprime; the
+    /// legacy TCL de1app doesn't reference this address).
     FlushTemp,
+    /// Hot-water flow rate.
     HotWaterFlowRate,
+    /// Hot-water dispense phase-1 flow rate.
     Phase1FlowRate,
+    /// Hot-water dispense phase-2 flow rate.
     Phase2FlowRate,
+    /// Hot-water idle temperature, °C.
     HotWaterIdleTemp,
+    /// Group head control mode.
     GhcMode,
+    /// Seconds of high-flow steam at the start of a steam cycle.
     SteamHighFlowStart,
+    /// Mains heater voltage.
     HeaterVoltage,
+    /// Espresso warmup timeout.
     EspressoWarmupTimeout,
+    /// Calibration flow multiplier.
     CalibrationFlowMultiplier,
+    /// Flush timeout.
     FlushTimeout,
+    /// USB charger on.
     UsbChargerOn,
+    /// Feature-flag bitmask.
     FeatureFlags,
+    /// Whether the user is currently present at the machine.
     UserPresent,
+    /// Steam two-tap-stop register.
     SteamTwoTapStop,
+    /// Cup-warmer temperature (Bengle models only).
     CupWarmerTemp,
+}
+
+impl From<MmrReg> for MmrRegister {
+    fn from(reg: MmrReg) -> MmrRegister {
+        match reg {
+            MmrReg::CpuBoardVersion => MmrRegister::CpuBoardVersion,
+            MmrReg::MachineModel => MmrRegister::MachineModel,
+            MmrReg::FirmwareVersion => MmrRegister::FirmwareVersion,
+            MmrReg::GhcInfo => MmrRegister::GhcInfo,
+            MmrReg::TankTempThreshold => MmrRegister::TankTempThreshold,
+            MmrReg::FanThreshold => MmrRegister::FanThreshold,
+            MmrReg::SerialNumber => MmrRegister::SerialNumber,
+            MmrReg::SteamFlow => MmrRegister::SteamFlow,
+            MmrReg::RefillKit => MmrRegister::RefillKit,
+            MmrReg::FlushFlowRate => MmrRegister::FlushFlowRate,
+            MmrReg::FlushTemp => MmrRegister::FlushTemp,
+            MmrReg::HotWaterFlowRate => MmrRegister::HotWaterFlowRate,
+            MmrReg::Phase1FlowRate => MmrRegister::Phase1FlowRate,
+            MmrReg::Phase2FlowRate => MmrRegister::Phase2FlowRate,
+            MmrReg::HotWaterIdleTemp => MmrRegister::HotWaterIdleTemp,
+            MmrReg::GhcMode => MmrRegister::GhcMode,
+            MmrReg::SteamHighFlowStart => MmrRegister::SteamHighFlowStart,
+            MmrReg::HeaterVoltage => MmrRegister::HeaterVoltage,
+            MmrReg::EspressoWarmupTimeout => MmrRegister::EspressoWarmupTimeout,
+            MmrReg::CalibrationFlowMultiplier => MmrRegister::CalibrationFlowMultiplier,
+            MmrReg::FlushTimeout => MmrRegister::FlushTimeout,
+            MmrReg::UsbChargerOn => MmrRegister::UsbChargerOn,
+            MmrReg::FeatureFlags => MmrRegister::FeatureFlags,
+            MmrReg::UserPresent => MmrRegister::UserPresent,
+            MmrReg::SteamTwoTapStop => MmrRegister::SteamTwoTapStop,
+            MmrReg::CupWarmerTemp => MmrRegister::CupWarmerTemp,
+        }
+    }
 }
 
 /// A DE1 sensor the shell can ask the core to read calibration for — mirrors
@@ -462,8 +518,8 @@ impl CremaBridge {
     /// Build a [`CoreOutput`] (JSON) whose command reads one DE1 memory-mapped
     /// register. The DE1 answers with a notification on the `De1MmrRead`
     /// characteristic, which decodes to an `MmrValue` event.
-    pub fn read_mmr(&self, register: MmrRegister) -> String {
-        json(self.core().read_mmr(register))
+    pub fn read_mmr(&self, register: MmrReg) -> String {
+        json(self.core().read_mmr(register.into()))
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command reads `sensor`'s current
@@ -752,8 +808,8 @@ impl CremaBridge {
     /// Write one DE1 memory-mapped register. `value` is the raw little-endian
     /// word the register expects, already scaled. `byte_len` is 1, 2, or 4 —
     /// the wire `Len` byte of the resulting `WriteToMMR` packet.
-    pub fn write_mmr(&self, register: MmrRegister, value: u32, byte_len: u8) -> String {
-        json(self.core().write_mmr(register, value, byte_len))
+    pub fn write_mmr(&self, register: MmrReg, value: u32, byte_len: u8) -> String {
+        json(self.core().write_mmr(register.into(), value, byte_len))
     }
 
     /// Set the fan-on temperature threshold, °C. Legacy
@@ -1317,7 +1373,7 @@ mod tests {
     #[test]
     fn read_mmr_produces_a_write_command() {
         let bridge = CremaBridge::new();
-        let json = bridge.read_mmr(MmrRegister::SerialNumber);
+        let json = bridge.read_mmr(MmrReg::SerialNumber);
         assert!(json.contains("\"commands\""));
         assert!(json.contains("WriteCharacteristic"));
         assert!(json.contains("De1MmrRequest"));
