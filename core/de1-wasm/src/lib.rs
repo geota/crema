@@ -424,6 +424,16 @@ pub fn has_cup_warmer(raw: u32) -> bool {
     de1_protocol::has_cup_warmer(raw)
 }
 
+/// Human-readable English message for an error substate name (the
+/// wire-side variant the FFI emits, e.g. `"ErrorTSensor"`). Returns
+/// `null` for non-error substates and unknown names. Mirrors
+/// [`de1_protocol::SubState::error_message_for_name`].
+#[wasm_bindgen(js_name = subStateErrorMessage)]
+#[must_use]
+pub fn sub_state_error_message(name: &str) -> Option<String> {
+    de1_protocol::SubState::error_message_for_name(name).map(str::to_owned)
+}
+
 /// Format the Bookoo scale's `u16` firmware version as a `"M.m.p"`
 /// string (e.g. `141` → `"1.4.1"`). The Bookoo encodes its firmware as
 /// `major × 100 + minor × 10 + patch`. Centralised here so every shell

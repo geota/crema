@@ -30,7 +30,8 @@ import { EMPTY_DE1_DIAGNOSTICS } from '$lib/ble/de1';
 import type { ScaleState } from '$lib/ble/scale';
 import {
 	water_tank_ml as wasmWaterTankMl,
-	format_bookoo_firmware as wasmFormatBookooFirmware
+	format_bookoo_firmware as wasmFormatBookooFirmware,
+	subStateErrorMessage
 } from '$lib/wasm/de1_wasm';
 
 /** Default scale beeper-volume step shown before the first live reading. */
@@ -627,43 +628,17 @@ export function formatFirmware(encoded: number): string {
 }
 
 /**
- * Readable text for every DE1 error substate (R5) — keyed by the `SubState`
- * variant name the core emits in `MachineStateChanged`. The DE1's ~18 firmware
- * fault codes (`Error*`, discriminant ≥ 200) each map to a one-line
- * explanation; a non-error substate is absent from the map. Ported from the
- * legacy de1app `de1plus/machine.tcl` substate table, with the bare
- * `Error_NoAC`-style labels expanded into human-readable sentences.
- */
-const MACHINE_ERROR_TEXT: Readonly<Record<string, string>> = {
-	ErrorNaN: 'Firmware error: a calculation produced an invalid number (NaN).',
-	ErrorInf: 'Firmware error: a calculation produced an infinite value.',
-	ErrorGeneric: 'The machine reported a generic firmware error.',
-	ErrorAcc: 'Accelerometer not responding — the machine may have been moved or tipped.',
-	ErrorTSensor: 'A temperature sensor failed or is reading out of range.',
-	ErrorPSensor: 'The pressure sensor failed or is reading out of range.',
-	ErrorWLevel: 'The water-level sensor failed or is reading out of range.',
-	ErrorDip: 'The DIP switches forced the machine into an error state.',
-	ErrorAssertion: 'Firmware error: an internal assertion failed.',
-	ErrorUnsafe: 'Firmware error: an unsafe value was assigned.',
-	ErrorInvalidParm: 'Firmware error: an invalid parameter was supplied.',
-	ErrorFlash: 'The machine could not access its internal flash storage.',
-	ErrorOom: 'Firmware error: the machine ran out of memory.',
-	ErrorDeadline: 'Firmware error: a realtime deadline was missed.',
-	ErrorHiCurrent: 'Heater current too high — the machine shut down for safety.',
-	ErrorLoCurrent: 'Heater current too low — check the mains power supply.',
-	ErrorBootFill: 'The boot pressure test failed — the machine may be out of water.',
-	ErrorNoAc: 'The front power switch is off — turn the machine on at the switch.'
-};
-
-/**
  * Readable text for an error substate (R5), or `null` for a healthy
- * (non-error) substate. `substate` is the bare `SubState` variant name the
- * core emits — an unknown name (a substate added to the firmware but not yet
- * to {@link MACHINE_ERROR_TEXT}) also yields `null`.
+ * (non-error) substate. `substate` is the bare `SubState` variant name
+ * the core emits — an unknown name (a substate added to the firmware
+ * but not yet to the lookup) also yields `null`.
+ *
+ * Sourced from `de1_protocol::SubState::error_message_for_name` via the
+ * wasm bridge, so both shells render the identical English copy.
  */
 export function machineErrorText(substate: string | null | undefined): string | null {
 	if (substate == null) return null;
-	return MACHINE_ERROR_TEXT[substate] ?? null;
+	return subStateErrorMessage(substate) ?? null;
 }
 
 // The puck-resistance derivation moved to the core 2026-05-22 (audit #3 —
