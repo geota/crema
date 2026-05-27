@@ -757,37 +757,16 @@ async function createCore(): Promise<CremaCore> {
 	const bridge = new wasm.CremaBridge();
 
 	/**
-	 * Map a facade `NotificationSource` string onto the wasm numeric enum.
-	 * Confining the wasm enum here means no caller ever imports a wasm type.
+	 * Map a facade `NotificationSource` string onto the wasm-bindgen
+	 * numeric enum. Confining the wasm enum here means no caller ever
+	 * imports a wasm type. The wasm enum is named `Source` upstream
+	 * (`de1_app::Source`); the facade keeps the longer
+	 * `NotificationSource` label since that's the user-facing concept
+	 * on the JS side (a BLE characteristic notification).
 	 */
 	const toWasmSource = (
 		source: NotificationSource
-	): (typeof wasm.NotificationSource)[keyof typeof wasm.NotificationSource] => {
-		switch (source) {
-			case 'De1State':
-				return wasm.NotificationSource.De1State;
-			case 'De1ShotSample':
-				return wasm.NotificationSource.De1ShotSample;
-			case 'ScaleWeight':
-				return wasm.NotificationSource.ScaleWeight;
-			case 'ScaleCommand':
-				return wasm.NotificationSource.ScaleCommand;
-			case 'De1WaterLevels':
-				return wasm.NotificationSource.De1WaterLevels;
-			case 'De1Version':
-				return wasm.NotificationSource.De1Version;
-			case 'De1MmrRead':
-				return wasm.NotificationSource.De1MmrRead;
-			case 'De1Calibration':
-				return wasm.NotificationSource.De1Calibration;
-			case 'De1ShotSettings':
-				return wasm.NotificationSource.De1ShotSettings;
-			case 'De1ProfileHeader':
-				return wasm.NotificationSource.De1ProfileHeader;
-			case 'De1FrameAck':
-				return wasm.NotificationSource.De1FrameAck;
-		}
-	};
+	): (typeof wasm.Source)[keyof typeof wasm.Source] => wasm.Source[source];
 
 	/**
 	 * Map a typeshare `MmrRegister` string onto the wasm-bindgen numeric
@@ -802,10 +781,14 @@ async function createCore(): Promise<CremaCore> {
 	): (typeof wasm.MmrRegister)[keyof typeof wasm.MmrRegister] =>
 		wasm.MmrRegister[register];
 
-	/** Map a typeshare `CalTarget` string onto the wasm numeric `CalSensor`. */
-	const toWasmCalSensor = (
+	/**
+	 * Map a typeshare `CalTarget` string onto the wasm-bindgen numeric
+	 * enum. Same Rust source of truth as the string form
+	 * (`de1_protocol::CalTarget`); the variant names line up.
+	 */
+	const toWasmCalTarget = (
 		sensor: CalTarget
-	): (typeof wasm.CalSensor)[keyof typeof wasm.CalSensor] => wasm.CalSensor[sensor];
+	): (typeof wasm.CalTarget)[keyof typeof wasm.CalTarget] => wasm.CalTarget[sensor];
 
 	/** Parse a bridge JSON string into a typed `CoreOutput`. */
 	const parseOutput = (raw: string): CoreOutput => JSON.parse(raw) as CoreOutput;
@@ -901,7 +884,7 @@ async function createCore(): Promise<CremaCore> {
 			return parseOutput(bridge.read_mmr(toWasmMmrRegister(register)));
 		},
 		async readCalibration(sensor, factory = false) {
-			const wasmSensor = toWasmCalSensor(sensor);
+			const wasmSensor = toWasmCalTarget(sensor);
 			return parseOutput(
 				factory
 					? bridge.read_factory_calibration(wasmSensor)
@@ -910,11 +893,11 @@ async function createCore(): Promise<CremaCore> {
 		},
 		async writeCalibration(sensor, reported, measured) {
 			return parseOutput(
-				bridge.write_calibration(toWasmCalSensor(sensor), reported, measured)
+				bridge.write_calibration(toWasmCalTarget(sensor), reported, measured)
 			);
 		},
 		async resetCalibrationToFactory(sensor) {
-			return parseOutput(bridge.reset_calibration_to_factory(toWasmCalSensor(sensor)));
+			return parseOutput(bridge.reset_calibration_to_factory(toWasmCalTarget(sensor)));
 		},
 		async tareScale() {
 			return parseOutput(bridge.tare_scale());
