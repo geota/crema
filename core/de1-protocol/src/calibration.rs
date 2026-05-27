@@ -18,15 +18,10 @@ const WRITE_KEY_WRITE: u32 = 0xCAFE_F00D;
 /// `WriteKey` magic for a calibration read request.
 const WRITE_KEY_READ: u32 = 1;
 
-/// Which sensor a calibration applies to. Under the `wasm-bindgen`
-/// feature this enum doubles as the wasm boundary type, and
-/// `de1-ffi` registers it via `#[uniffi::remote(Enum)]` — one Rust
-/// source of truth for typeshare JSON, the wasm-bindgen numeric ABI,
-/// and uniffi.
+/// Which sensor a calibration applies to.
 #[typeshare]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "wasm-bindgen", wasm_bindgen::prelude::wasm_bindgen)]
 #[repr(u8)]
 pub enum CalTarget {
     /// The flow-rate sensor.
