@@ -573,38 +573,43 @@ impl CremaBridge {
     /// Returns an error string (rather than a JSON `CoreOutput`) when
     /// `unit` is not one of the known wire strings — `"grams"` or
     /// `"ounces"`.
-    pub fn enable_decent_scale_lcd(&self, unit: &str) -> Result<String, String> {
+    pub fn enable_scale_lcd(&self, unit: &str) -> Result<String, String> {
         let unit = de1_domain::WeightUnit::from_str_lower(unit)
             .ok_or_else(|| format!("unknown weight unit: {unit}"))?;
-        Ok(json(self.core().enable_decent_scale_lcd(unit)))
-    }
-
-    /// Build a [`CoreOutput`] (JSON) whose command disables a connected
-    /// Decent Scale's on-scale LCD. Decent-Scale-only; empty otherwise.
-    pub fn disable_decent_scale_lcd(&self) -> String {
-        json(self.core().disable_decent_scale_lcd())
-    }
-
-    /// Build a [`CoreOutput`] (JSON) whose command emits one heartbeat write
-    /// to a connected Decent Scale. The shell schedules the clock at roughly
-    /// `decent_scale::HEARTBEAT_INTERVAL_MS` ms between calls.
-    /// Decent-Scale-only; empty otherwise.
-    pub fn decent_scale_heartbeat(&self) -> String {
-        json(self.core().decent_scale_heartbeat())
-    }
-
-    /// Build a [`CoreOutput`] (JSON) whose command powers off a connected
-    /// Decent Scale on v1.2+ firmware. Decent-Scale-only.
-    ///
-    /// Returns an error string (and no `CoreOutput`) when no scale is
-    /// connected, the connected scale is not a Decent Scale, or the Decent
-    /// Scale's firmware version is not yet known / is v1.0 / v1.1 (which
-    /// silently ignore the byte). The shell catches the error and shows
-    /// a "long-press the button" instruction so the user gets actionable
-    /// feedback rather than a silent no-op.
-    pub fn power_off_decent_scale(&self) -> Result<String, String> {
         self.core()
-            .power_off_decent_scale()
+            .enable_scale_lcd(unit)
+            .map(json)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Build a [`CoreOutput`] (JSON) whose commands disable the connected
+    /// scale's on-scale LCD. Capability-driven.
+    pub fn disable_scale_lcd(&self) -> Result<String, String> {
+        self.core()
+            .disable_scale_lcd()
+            .map(json)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Build a [`CoreOutput`] (JSON) whose command emits one keep-alive
+    /// heartbeat to the connected scale. The shell schedules the clock
+    /// (Decent Scale's interval is ~`HEARTBEAT_INTERVAL_MS` ms).
+    /// Capability-driven — returns an error when the scale doesn't need
+    /// a heartbeat.
+    pub fn scale_heartbeat(&self) -> Result<String, String> {
+        self.core()
+            .scale_heartbeat()
+            .map(json)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Build a [`CoreOutput`] (JSON) whose commands power off the
+    /// connected scale. Capability-driven — Decent / Eureka / Solo
+    /// support it; every other scale errors with
+    /// `UnsupportedOnHardware`.
+    pub fn power_off_scale(&self) -> Result<String, String> {
+        self.core()
+            .power_off_scale()
             .map(json)
             .map_err(|e| e.to_string())
     }
@@ -620,62 +625,51 @@ impl CremaBridge {
         Ok(())
     }
 
-    /// Build a [`CoreOutput`] (JSON) whose commands enable the Skale II's
-    /// on-scale LCD. Skale-II-only.
-    pub fn enable_skale_lcd(&self, unit: &str) -> Result<String, String> {
-        let unit = de1_domain::WeightUnit::from_str_lower(unit)
-            .ok_or_else(|| format!("unknown weight unit: {unit}"))?;
-        Ok(json(self.core().enable_skale_lcd(unit)))
+    /// Build a [`CoreOutput`] (JSON) whose command fires a beep on the
+    /// connected scale. Capability-driven — Eureka / Solo support it.
+    pub fn scale_beep(&self) -> Result<String, String> {
+        self.core()
+            .scale_beep()
+            .map(json)
+            .map_err(|e| e.to_string())
     }
 
-    /// Build a [`CoreOutput`] (JSON) whose command disables the Skale II's
-    /// on-scale LCD. Skale-II-only.
-    pub fn disable_skale_lcd(&self) -> String {
-        json(self.core().disable_skale_lcd())
+    /// Build a [`CoreOutput`] (JSON) whose command sets the connected
+    /// scale's display unit to grams. Capability-driven — Eureka / Solo
+    /// / Difluid expose this. For scales whose unit lives in the
+    /// LCD-enable bytes (Decent / Skale) the unit is set via
+    /// `enable_scale_lcd`; for toggle-only scales (Hiroia) use
+    /// `toggle_scale_unit`.
+    pub fn set_scale_unit_grams(&self) -> Result<String, String> {
+        self.core()
+            .set_scale_unit_grams()
+            .map(json)
+            .map_err(|e| e.to_string())
     }
 
-    /// Build a [`CoreOutput`] (JSON) whose command turns off the Eureka
-    /// Precisa / Solo Barista. Empty for every other scale.
-    pub fn turn_off_eureka_precisa(&self) -> String {
-        json(self.core().turn_off_eureka_precisa())
+    /// Build a [`CoreOutput`] (JSON) whose command toggles the connected
+    /// scale's display unit. Capability-driven — Hiroia is the only
+    /// scale that exposes a toggle today.
+    pub fn toggle_scale_unit(&self) -> Result<String, String> {
+        self.core()
+            .toggle_scale_unit()
+            .map(json)
+            .map_err(|e| e.to_string())
     }
 
-    /// Build a [`CoreOutput`] (JSON) whose command beeps the Eureka Precisa /
-    /// Solo Barista twice. Empty for every other scale.
-    pub fn beep_eureka_precisa(&self) -> String {
-        json(self.core().beep_eureka_precisa())
+    /// Toggle whether the connected scale should be powered off on
+    /// machine Sleep entry. Off by default. Capability-driven — the
+    /// reactive auto-policy fires `power_off_command` on Sleep when this
+    /// is true and the scale exposes a power-off (Decent / Eureka /
+    /// Solo today).
+    pub fn set_auto_off_scale_on_sleep(&self, enabled: bool) {
+        self.core().set_auto_off_scale_on_sleep(enabled);
     }
 
-    /// Build a [`CoreOutput`] (JSON) whose command sets the Eureka Precisa /
-    /// Solo Barista's display unit to grams; ounces is a no-op.
-    pub fn set_eureka_precisa_unit(&self, unit: &str) -> Result<String, String> {
-        let unit = de1_domain::WeightUnit::from_str_lower(unit)
-            .ok_or_else(|| format!("unknown weight unit: {unit}"))?;
-        Ok(json(self.core().set_eureka_precisa_unit(unit)))
-    }
-
-    /// Build a [`CoreOutput`] (JSON) whose command toggles the Hiroia Jimmy's
-    /// display unit. Empty for every other scale.
-    pub fn toggle_hiroia_jimmy_unit(&self) -> String {
-        json(self.core().toggle_hiroia_jimmy_unit())
-    }
-
-    /// Build a [`CoreOutput`] (JSON) whose command sets the Difluid's display
-    /// unit to grams. Empty for every other scale.
-    pub fn set_difluid_unit_grams(&self) -> String {
-        json(self.core().set_difluid_unit_grams())
-    }
-
-    /// Toggle whether the Eureka Precisa / Solo Barista should be powered
-    /// off on machine Sleep entry. Off by default.
-    pub fn set_eureka_precisa_auto_off_on_sleep(&self, enabled: bool) {
-        self.core().set_eureka_precisa_auto_off_on_sleep(enabled);
-    }
-
-    /// Whether the Eureka Precisa / Solo Barista is configured to power off
-    /// on machine Sleep entry.
-    pub fn eureka_precisa_auto_off_on_sleep(&self) -> bool {
-        self.core().eureka_precisa_auto_off_on_sleep()
+    /// Whether the connected scale is configured to power off on machine
+    /// Sleep entry.
+    pub fn auto_off_scale_on_sleep(&self) -> bool {
+        self.core().auto_off_scale_on_sleep()
     }
 
     /// What the currently-connected scale can do beyond reporting a bare

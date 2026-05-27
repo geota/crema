@@ -340,13 +340,14 @@ export class CremaApp {
 		| null = null;
 
 	/**
-	 * Active `setInterval` id for the Decent Scale heartbeat loop, or `null`
-	 * when no Decent Scale is connected. The Decent Scale's on-scale LCD goes
-	 * back to sleep after a few seconds of silence; the host has to fire
-	 * `decentScaleHeartbeat` every ~2 s to keep it awake. The core is sans-IO
-	 * — the clock lives here.
+	 * Active `setInterval` id for the scale-heartbeat loop, or `null` when
+	 * no heartbeat-needing scale is connected. The Decent Scale's on-scale
+	 * LCD sleeps after a few seconds of silence; the host fires
+	 * `scaleHeartbeat` every ~2 s to keep it awake. The core is sans-IO
+	 * — the clock lives here. Capability-gated via
+	 * `ScaleCapabilities.needsHeartbeat`.
 	 */
-	private decentScaleHeartbeatId: ReturnType<typeof setInterval> | null = null;
+	private scaleHeartbeatId: ReturnType<typeof setInterval> | null = null;
 
 	/**
 	 * The Quick Sheet's `BrewParams` at shot start, stashed by the brew
@@ -910,8 +911,8 @@ export class CremaApp {
 
 	/** Disconnect the scale and clear every scale-derived field. */
 	async disconnectScale(): Promise<void> {
-		// Tear down the Decent-Scale heartbeat clock before the GATT teardown,
-		// so an in-flight `decentScaleHeartbeat` write doesn't race against the
+		// Tear down the scale-heartbeat clock before the GATT teardown,
+		// so an in-flight `scaleHeartbeat` write doesn't race against the
 		// disconnect.
 		this.clearDecentScaleHeartbeat();
 		await this.scale.disconnect();
@@ -970,14 +971,20 @@ export class CremaApp {
 	 * old timer down).
 	 */
 	private armDecentScaleHeartbeat(advertisedName: string): void {
+		// Still uses the BLE-name prefix gate today — wiring this through
+		// the async `scaleCapabilities()` query would force every connect
+		// flow to await before scheduling. The capability-driven
+		// `scaleHeartbeat()` call below itself rejects with
+		// `UnsupportedOnHardware` for scales without a heartbeat, so an
+		// over-eager arm would be silently no-op'd by the catch arm.
 		const isDecent = CremaApp.DECENT_SCALE_NAME_PREFIXES.some((p) =>
 			advertisedName.startsWith(p)
 		);
 		this.clearDecentScaleHeartbeat();
 		if (!isDecent) return;
-		this.decentScaleHeartbeatId = setInterval(() => {
+		this.scaleHeartbeatId = setInterval(() => {
 			void this.core
-				.decentScaleHeartbeat()
+				.scaleHeartbeat()
 				.then((output) => this.applyCoreOutput(output))
 				.catch(() => {
 					// Best-effort; the next interval retries.
@@ -985,11 +992,11 @@ export class CremaApp {
 		}, CremaApp.DECENT_SCALE_HEARTBEAT_INTERVAL_MS);
 	}
 
-	/** Clear the Decent-Scale heartbeat clock if one is running. */
+	/** Clear the scale-heartbeat clock if one is running. */
 	private clearDecentScaleHeartbeat(): void {
-		if (this.decentScaleHeartbeatId !== null) {
-			clearInterval(this.decentScaleHeartbeatId);
-			this.decentScaleHeartbeatId = null;
+		if (this.scaleHeartbeatId !== null) {
+			clearInterval(this.scaleHeartbeatId);
+			this.scaleHeartbeatId = null;
 		}
 	}
 
@@ -1154,11 +1161,17 @@ export class CremaApp {
 	 */
 	async refreshScaleLcd(): Promise<void> {
 		const unit = getSettingsStore().current.weightUnit;
-		this.applyCoreOutput(await this.core.enableDecentScaleLcd(unit));
-		this.applyCoreOutput(await this.core.enableSkaleLcd(unit));
-		this.applyCoreOutput(await this.core.setEurekaPrecisaUnit(unit));
+		// Capability-driven now: one `enableScaleLcd` (handles Decent +
+		// Skale) and, on grams, one `setScaleUnitGrams` (handles Eureka /
+		// Solo / Difluid). Both reject with `UnsupportedOnHardware` for
+		// scales without the capability — caught and silently ignored,
+		// since this method is called for whatever scale happens to be
+		// connected and a no-op on the wrong shape is intended.
+		const ignoreUnsupported = (out: Promise<CoreOutput>) =>
+			out.then((o) => this.applyCoreOutput(o)).catch(() => undefined);
+		await ignoreUnsupported(this.core.enableScaleLcd(unit));
 		if (unit === 'g') {
-			this.applyCoreOutput(await this.core.setDifluidUnitGrams());
+			await ignoreUnsupported(this.core.setScaleUnitGrams());
 		}
 	}
 
@@ -1173,35 +1186,34 @@ export class CremaApp {
 	}
 
 	/**
-	 * Toggle whether the connected Eureka Precisa / Solo Barista should be
-	 * powered off when the DE1 enters Sleep. Off by default; the user
-	 * opts in via the Machine settings page.
+	 * Toggle whether the connected scale should be powered off when the
+	 * DE1 enters Sleep. Off by default; the user opts in via the Machine
+	 * settings page. Capability-driven — applies to any scale with a
+	 * host-driven power-off (Decent / Eureka / Solo today).
 	 */
-	async setEurekaPrecisaAutoOffOnSleep(enabled: boolean): Promise<void> {
-		await this.core.setEurekaPrecisaAutoOffOnSleep(enabled);
+	async setAutoOffScaleOnSleep(enabled: boolean): Promise<void> {
+		await this.core.setAutoOffScaleOnSleep(enabled);
 	}
 
 	/**
-	 * Whether the Eureka Precisa / Solo Barista is configured to power
-	 * off on Sleep entry. Read by the Machine settings page to populate
-	 * the toggle.
+	 * Whether the connected scale is configured to power off on Sleep
+	 * entry. Read by the Machine settings page to populate the toggle.
 	 */
-	async eurekaPrecisaAutoOffOnSleep(): Promise<boolean> {
-		return this.core.eurekaPrecisaAutoOffOnSleep();
+	async autoOffScaleOnSleep(): Promise<boolean> {
+		return this.core.autoOffScaleOnSleep();
 	}
 
 	/**
-	 * Power off a connected Decent Scale. The byte sequence is sent
-	 * unconditionally — older firmware versions silently no-op on it.
-	 * Throws only when no scale is connected or the connected scale
-	 * isn't a Decent Scale.
+	 * Power off the connected scale. Capability-driven — Decent / Eureka
+	 * / Solo expose this; every other scale rejects with
+	 * `UnsupportedOnHardware`.
 	 *
 	 * No UI surface for this today; exposed here so a future Settings
 	 * action or Disconnect-button affordance can call it without touching
 	 * the core wiring again.
 	 */
-	async powerOffDecentScale(): Promise<void> {
-		this.applyCoreOutput(await this.core.powerOffDecentScale());
+	async powerOffScale(): Promise<void> {
+		this.applyCoreOutput(await this.core.powerOffScale());
 	}
 
 	/**
