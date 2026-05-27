@@ -224,9 +224,9 @@
 		margin-top: 1px;
 	}
 	.fu-banner-warn {
-		background: rgba(220, 80, 0, 0.12);
-		border: 1px solid rgba(220, 80, 0, 0.35);
-		color: #c64500;
+		background: rgba(var(--warning-rgb), 0.12);
+		border: 1px solid rgba(var(--warning-rgb), 0.35);
+		color: var(--warning);
 	}
 
 	/* ---- Body ------------------------------------------------------------- */
