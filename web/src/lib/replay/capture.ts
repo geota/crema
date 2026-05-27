@@ -116,7 +116,12 @@ export interface ReplayMeta {
 	readonly autoTare?: boolean;
 	/** Active bean snapshot at shot start — same shape as the v2 export. */
 	readonly bean?: {
-		readonly type?: string;
+		/**
+		 * Bean name. Older captures may carry a `type` key instead; the
+		 * Rust folder reads either, so this shape only spells the
+		 * canonical key.
+		 */
+		readonly name?: string;
 		readonly roaster?: string;
 		readonly roastedOn?: string;
 		readonly roastLevel?: number;

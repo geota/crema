@@ -191,9 +191,9 @@ function composeReplayStartMessage(
 	if (meta.brewTemp != null) parts.push(`${meta.brewTemp} °C`);
 	if (meta.grinderModel) parts.push(meta.grinderModel);
 	const beanLabel =
-		meta.bean?.roaster && meta.bean.type
-			? `${meta.bean.roaster} · ${meta.bean.type}`
-			: meta.bean?.type ?? meta.bean?.roaster ?? null;
+		meta.bean?.roaster && meta.bean.name
+			? `${meta.bean.roaster} · ${meta.bean.name}`
+			: meta.bean?.name ?? meta.bean?.roaster ?? null;
 	if (beanLabel) parts.push(beanLabel);
 	const suffix = parts.length > 0 ? ` (${parts.join(' · ')})` : '';
 	return `Replaying ${eventCount} events from ${fileName}…${suffix}`;
@@ -216,7 +216,7 @@ function replayMetaToActiveShot(meta: ReplayMeta): ActiveShotData {
 	const beanSnapshot: ShotBean | null = bean
 		? {
 				beanId: null,
-				name: bean.type ?? '',
+				name: bean.name ?? '',
 				roasterName: bean.roaster ?? null,
 				roastedOn: bean.roastedOn ?? null,
 				roastLevel: bean.roastLevel ?? null,
