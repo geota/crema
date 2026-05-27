@@ -37,6 +37,7 @@
 	import { bleStateLabel, type De1State } from '$lib/ble';
 	import type { FirmwareUpdateStatus } from '$lib/core';
 	import { MachineState, MmrRegister } from '$lib/core/crema-core';
+	import { machineModelName, hasCupWarmer } from '$lib/wasm/de1_wasm';
 	import { getSettingsStore } from '$lib/settings';
 	import StSectionHead from '../StSectionHead.svelte';
 	import StGroup from '../StGroup.svelte';
@@ -127,34 +128,28 @@
 	 * `snapshot.de1MachineInfo`. Falls back to a dash until they arrive.
 	 *
 	 * `MachineModel` is a small integer per the legacy lookup
-	 * (`vars.tcl:3883`); `CpuBoardVersion` is encoded as
+	 * (`vars.tcl:3883`) — the name table + cup-warmer gate now live in
+	 * `de1-protocol::machine_model_name` / `has_cup_warmer`, surfaced
+	 * to the shell via the wasm bridge so the Android shell inherits
+	 * the same table. `CpuBoardVersion` is encoded as
 	 * `board_revision × 1000` (raw 1100 → PCB v1.1, 1300 → PCB v1.3).
 	 */
-	const MACHINE_MODEL_NAMES = [
-		'unknown',
-		'DE1',
-		'DE1+',
-		'DE1PRO',
-		'DE1XL',
-		'DE1CAFE',
-		'DE1XXL',
-		'DE1XXXL'
-	] as const;
 	const modelLabel = $derived.by(() => {
 		const m = machine.machineModel;
 		if (m === null) return '—';
-		return MACHINE_MODEL_NAMES[m] ?? `model ${m}`;
+		return machineModelName(m);
 	});
 	/**
 	 * Whether the connected DE1 has the Bengle cup-warmer plate hardware.
-	 * The cup-warmer setter is gated by `MachineModel ∈
-	 * {DE1XL, DE1XXL, DE1XXXL, DE1CAFE}` — indices 4..7 in the model
-	 * table above. Returns `false` until the `MachineModel` MMR read
-	 * lands so the card stays hidden on first paint.
+	 * Routed through `de1-protocol::has_cup_warmer` via the wasm
+	 * bridge — the gate's "model 4..7 = Bengle" semantics live in the
+	 * protocol crate, not as magic numbers here. Returns `false` until
+	 * the `MachineModel` MMR read lands so the card stays hidden on
+	 * first paint.
 	 */
 	const isBengle = $derived.by<boolean>(() => {
 		const m = machine.machineModel;
-		return m !== null && m >= 4 && m <= 7;
+		return m !== null && hasCupWarmer(m);
 	});
 	/**
 	 * Live cup-warmer plate temperature read from

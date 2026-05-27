@@ -49,6 +49,39 @@ pub fn write_request(address: u32, data: &[u8]) -> [u8; MMR_PACKET_LEN] {
     packet
 }
 
+/// Human-readable name for a raw `MachineModel` MMR value. Mirrors the
+/// legacy de1app lookup (`vars.tcl:3883`) — `0` is the firmware's "unset
+/// / unknown" sentinel; `1..=7` are the released hardware models. Values
+/// past the table are reported as `"model N"` so a future-DE1 model
+/// surfaces something diagnostic rather than crashing the row.
+///
+/// Why it lives in `de1-protocol`: it is firmware-enum semantics — a
+/// pure lookup over a raw byte the firmware emits — so every shell
+/// (web, future Android, future iOS) inherits the same table from one
+/// source of truth.
+#[must_use]
+pub fn machine_model_name(raw: u32) -> String {
+    const NAMES: &[&str] = &[
+        "unknown", "DE1", "DE1+", "DE1PRO", "DE1XL", "DE1CAFE", "DE1XXL", "DE1XXXL",
+    ];
+    if let Ok(idx) = usize::try_from(raw)
+        && let Some(name) = NAMES.get(idx)
+    {
+        return (*name).to_owned();
+    }
+    format!("model {raw}")
+}
+
+/// Whether the connected DE1 has the Bengle cup-warmer plate hardware —
+/// a capability gate the shell uses to show / hide the cup-warmer card.
+/// Today the gate is `MachineModel ∈ {DE1XL, DE1CAFE, DE1XXL, DE1XXXL}`
+/// (raw values `4..=7`); naming the function instead of grepping for a
+/// numeric range keeps the gate honest if the table ever shifts.
+#[must_use]
+pub const fn has_cup_warmer(raw: u32) -> bool {
+    matches!(raw, 4..=7)
+}
+
 /// A decoded `ReadFromMMR` reply: the address echoed back and its data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MmrReadReply {
@@ -482,5 +515,31 @@ mod tests {
             // Touch the method so every variant participates.
             let _ = reg.scale();
         }
+    }
+
+    #[test]
+    fn machine_model_name_covers_known_table_and_falls_through() {
+        assert_eq!(machine_model_name(0), "unknown");
+        assert_eq!(machine_model_name(1), "DE1");
+        assert_eq!(machine_model_name(2), "DE1+");
+        assert_eq!(machine_model_name(3), "DE1PRO");
+        assert_eq!(machine_model_name(4), "DE1XL");
+        assert_eq!(machine_model_name(5), "DE1CAFE");
+        assert_eq!(machine_model_name(6), "DE1XXL");
+        assert_eq!(machine_model_name(7), "DE1XXXL");
+        assert_eq!(machine_model_name(8), "model 8");
+        assert_eq!(machine_model_name(255), "model 255");
+    }
+
+    #[test]
+    fn has_cup_warmer_matches_bengle_range() {
+        for raw in 0..=3 {
+            assert!(!has_cup_warmer(raw), "raw {raw} should not have cup warmer");
+        }
+        for raw in 4..=7 {
+            assert!(has_cup_warmer(raw), "raw {raw} should have cup warmer");
+        }
+        assert!(!has_cup_warmer(8));
+        assert!(!has_cup_warmer(255));
     }
 }
