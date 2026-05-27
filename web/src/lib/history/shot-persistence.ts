@@ -236,9 +236,9 @@ function buildAtShotStartMeta(tMs: number): CaptureEntry | null {
 	}
 	if (active.bean) {
 		const bean: Record<string, unknown> = {};
-		const type = active.bean.name?.trim() ?? '';
+		const name = active.bean.name?.trim() ?? '';
 		const roaster = active.bean.roasterName?.trim() ?? '';
-		if (type) bean.type = type;
+		if (name) bean.name = name;
 		if (roaster) bean.roaster = roaster;
 		if (active.bean.roastedOn) bean.roastedOn = active.bean.roastedOn;
 		if (active.bean.roastLevel != null) bean.roastLevel = active.bean.roastLevel;

@@ -27,9 +27,11 @@ use typeshare::typeshare;
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReplayMetaBean {
-    /// Bean type / name (`"Yirgacheffe"`, …).
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub r#type: Option<String>,
+    /// Bean name (`"Yirgacheffe"`, …). Older captures spell this `type`;
+    /// the manual fold in [`fold_one`] accepts either key for read-side
+    /// backward compatibility.
+    #[serde(skip_serializing_if = "Option::is_none", default, alias = "type")]
+    pub name: Option<String>,
     /// Roaster's display name.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub roaster: Option<String>,
@@ -168,8 +170,14 @@ fn fold_one(acc: &mut ReplayMeta, obj: &serde_json::Map<String, Value>) {
     }
     if let Some(raw) = obj.get("bean").and_then(Value::as_object) {
         let mut bean = acc.bean.take().unwrap_or_default();
-        if let Some(s) = raw.get("type").and_then(Value::as_str) {
-            bean.r#type = Some(s.to_owned());
+        // Read `name` first; fall back to legacy `type` key for older
+        // captures (see the `ReplayMetaBean::name` serde alias).
+        if let Some(s) = raw
+            .get("name")
+            .or_else(|| raw.get("type"))
+            .and_then(Value::as_str)
+        {
+            bean.name = Some(s.to_owned());
         }
         if let Some(s) = raw.get("roaster").and_then(Value::as_str) {
             bean.roaster = Some(s.to_owned());
@@ -188,7 +196,7 @@ fn fold_one(acc: &mut ReplayMeta, obj: &serde_json::Map<String, Value>) {
         if let Some(s) = raw.get("grinderSetting").and_then(Value::as_str) {
             bean.grinder_setting = Some(s.to_owned());
         }
-        let bean_has_any = bean.r#type.is_some()
+        let bean_has_any = bean.name.is_some()
             || bean.roaster.is_some()
             || bean.roasted_on.is_some()
             || bean.roast_level.is_some()
@@ -285,7 +293,7 @@ mod tests {
             "stopOnWeight": true,
             "autoTare": true,
             "bean": {
-                "type": "Yirgacheffe",
+                "name": "Yirgacheffe",
                 "roaster": "Onyx",
                 "roastLevel": 4
             },
@@ -303,22 +311,33 @@ mod tests {
         assert_eq!(got.auto_tare, Some(true));
         assert_eq!(got.grinder_model.as_deref(), Some("Niche Zero"));
         let bean = got.bean.unwrap();
-        assert_eq!(bean.r#type.as_deref(), Some("Yirgacheffe"));
+        assert_eq!(bean.name.as_deref(), Some("Yirgacheffe"));
         assert_eq!(bean.roaster.as_deref(), Some("Onyx"));
         assert_eq!(bean.roast_level, Some(4.0));
     }
 
     #[test]
     fn fold_bean_partial_merge_keeps_prior_fields() {
-        // First payload sets type + roaster; second payload sets only
+        // First payload sets name + roaster; second payload sets only
         // roastLevel. The merged bean carries all three.
-        let a = r#"{"bean": {"type": "Yirg", "roaster": "Onyx"}}"#;
+        let a = r#"{"bean": {"name": "Yirg", "roaster": "Onyx"}}"#;
         let b = r#"{"bean": {"roastLevel": 4}}"#;
         let got = fold_meta_jsonl(&[a, b]).unwrap();
         let bean = got.bean.unwrap();
-        assert_eq!(bean.r#type.as_deref(), Some("Yirg"));
+        assert_eq!(bean.name.as_deref(), Some("Yirg"));
         assert_eq!(bean.roaster.as_deref(), Some("Onyx"));
         assert_eq!(bean.roast_level, Some(4.0));
+    }
+
+    #[test]
+    fn fold_bean_accepts_legacy_type_key() {
+        // Captures written before the rename used `type`; fold_one accepts
+        // either key so old archives still replay cleanly.
+        let payload = r#"{"bean": {"type": "Yirg", "roaster": "Onyx"}}"#;
+        let got = fold_meta_jsonl(&[payload]).unwrap();
+        let bean = got.bean.unwrap();
+        assert_eq!(bean.name.as_deref(), Some("Yirg"));
+        assert_eq!(bean.roaster.as_deref(), Some("Onyx"));
     }
 
     #[test]
