@@ -25,6 +25,7 @@
 	import RoasterAutocomplete from '$lib/components/beans/RoasterAutocomplete.svelte';
 	import QuickStepper from './QuickStepper.svelte';
 	import { getSettingsStore } from '$lib/settings';
+	import { getBrewContext } from '$lib/state';
 	import type { Roast } from '$lib/profiles';
 
 	let {
@@ -43,8 +44,14 @@
 		onEditingChange?: (editing: boolean) => void;
 	} = $props();
 
-	/** The shared library store. */
+	/** The shared library store — used for editor write paths only. */
 	const library = getBeanStore();
+	/**
+	 * The brew context — the unified read-side seam. Resolves live library
+	 * vs. in-flight snapshot, so the card follows a replay correctly
+	 * without bypassing into `library.activeBean`.
+	 */
+	const brew = getBrewContext();
 	/** App preferences — supplies the equipment-level default grinder. */
 	const settings = getSettingsStore();
 	/**
@@ -54,29 +61,32 @@
 	 * precedence (ShotDetail handles that path).
 	 */
 	const defaultGrinder = $derived(settings.current.grinderModel?.trim() ?? '');
-	/** The currently-selected bean, or `null`. */
-	const bean = $derived(library.activeBean);
-	/** The roaster row for the active bean, or `null`. */
-	const roaster = $derived(
-		bean?.roasterId ? library.getRoaster(bean.roasterId) : null
-	);
+	/** The display view (live or in-flight snapshot), or `null`. */
+	const display = $derived(brew.activeBean);
+	/**
+	 * The underlying library `Bean` when the card can mutate it (a live
+	 * shot with a known library row, or no shot in flight with a live
+	 * library selection). `null` during replay — edit / quick-add are
+	 * suppressed because there's no library row to write to.
+	 */
+	const editableBean = $derived(display?.source ?? null);
 
 	/** Display line — roaster · name, or a neutral fallback. */
 	const beanName = $derived.by(() => {
-		if (!bean) return 'No bean selected';
-		const r = roaster?.name.trim() ?? '';
-		const t = bean.name.trim();
+		if (!display) return 'No bean selected';
+		const r = display.roasterName?.trim() ?? '';
+		const t = display.name.trim();
 		if (r && t) return `${r} · ${t}`;
 		return r || t || 'Untitled bean';
 	});
 	const roastLabel = $derived.by(() => {
-		if (!bean) return '—';
-		const band = roastBand(bean.roastLevel);
+		if (!display) return '—';
+		const band = roastBand(display.roastLevel);
 		return band ? band[0].toUpperCase() + band.slice(1) : '—';
 	});
-	const daysOff = $derived(bean ? daysOffRoast(bean.roastedOn) : null);
+	const daysOff = $derived(display ? daysOffRoast(display.roastedOn) : null);
 	const freshness = $derived(
-		bean ? roastFreshness(roastBand(bean.roastLevel), daysOff) : null
+		display ? roastFreshness(roastBand(display.roastLevel), daysOff) : null
 	);
 	const freshColor = $derived(
 		freshness === 'best'
@@ -88,30 +98,30 @@
 					: 'rgba(var(--tint-rgb), 0.4)'
 	);
 	const roastDate = $derived.by(() => {
-		if (!bean?.roastedOn) return '—';
-		const d = new Date(`${bean.roastedOn}T00:00:00`);
+		if (!display?.roastedOn) return '—';
+		const d = new Date(`${display.roastedOn}T00:00:00`);
 		if (Number.isNaN(d.getTime())) return '—';
 		return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 	});
 	/**
 	 * The grinder label shown on the card. Resolution order:
-	 *   1. Bean-level override (`bean.grinder`)
+	 *   1. Snapshot / Bean-level override (carried on `DisplayBean.grinder`)
 	 *   2. Equipment default from Settings (`prefs.grinderModel`)
 	 *   3. Empty — user can still set a per-shot value on the History
 	 *      page after the shot lands.
 	 */
-	const grinder = $derived(
-		(bean?.grinder.trim() || defaultGrinder) ?? ''
-	);
+	const grinder = $derived(display?.grinder.trim() || defaultGrinder);
 	/** Burn-down: "2 shots left" warning when bag is near empty. */
 	const reorderHint = $derived.by<string | null>(() => {
-		if (!bean || bean.bagSize <= 0 || bean.remaining <= 0) return null;
+		const bagSize = display?.bagSize ?? 0;
+		const remaining = display?.remaining ?? 0;
+		if (bagSize <= 0 || remaining <= 0) return null;
 		// Threshold: 2 doses' worth (the brew-page default dose isn't reachable
 		// here without the param state, so use 18g as the proxy — same default
 		// the history ratio uses).
 		const proxyDose = 18;
-		if (bean.remaining <= proxyDose * 2) {
-			const shotsLeft = Math.max(1, Math.floor(bean.remaining / proxyDose));
+		if (remaining <= proxyDose * 2) {
+			const shotsLeft = Math.max(1, Math.floor(remaining / proxyDose));
 			return `${shotsLeft} shot${shotsLeft === 1 ? '' : 's'} left — reorder?`;
 		}
 		return null;
@@ -159,13 +169,15 @@
 	let eRoastLevel = $state<number | null>(null);
 
 	function loadBufferFromBean(): void {
-		if (!bean) return;
-		eName = bean.name;
-		eRoasterName = roaster?.name ?? '';
-		eResolvedRoaster = roaster;
-		eGrinder = bean.grinder;
-		eRoastedOn = bean.roastedOn;
-		eRoastLevel = bean.roastLevel;
+		const live = editableBean;
+		if (!live) return;
+		const r = live.roasterId ? library.getRoaster(live.roasterId) : null;
+		eName = live.name;
+		eRoasterName = r?.name ?? '';
+		eResolvedRoaster = r;
+		eGrinder = live.grinder;
+		eRoastedOn = live.roastedOn;
+		eRoastLevel = live.roastLevel;
 	}
 
 	function resetBufferForCreate(): void {
@@ -178,10 +190,10 @@
 	}
 
 	function startEdit(): void {
-		// No active bean → route to the library page instead of opening an
-		// editor that has nothing to edit.
-		if (!bean) {
-			void goto(resolve('/beans'));
+		// No editable library row → route to the library page (or no-op
+		// during replay, since the snapshot isn't a writable record).
+		if (!editableBean) {
+			if (!display) void goto(resolve('/beans'));
 			return;
 		}
 		creating = false;
@@ -217,8 +229,8 @@
 			fresh.roastLevel = eRoastLevel;
 			library.upsertBean(fresh);
 			library.setActiveBean(fresh.id);
-		} else if (bean) {
-			library.updateBean(bean.id, {
+		} else if (editableBean) {
+			library.updateBean(editableBean.id, {
 				name: eName,
 				roasterId,
 				grinder: eGrinder,
@@ -249,7 +261,7 @@
 	}
 </script>
 
-{#if editing && (bean || creating)}
+{#if editing && (editableBean || creating)}
 	<div class="crema-target crema-bean">
 		<div class="crema-bean-head">
 			<div class="t-eyebrow">{creating ? 'Add bean' : 'Edit bean'}</div>
@@ -365,16 +377,16 @@
 				startEdit();
 			}
 		}}
-		aria-label={bean ? 'Edit current bean' : 'Pick a bean from the library'}
+		aria-label={display ? 'Edit current bean' : 'Pick a bean from the library'}
 	>
 		<div class="crema-bean-head">
 			<div class="t-eyebrow">Bean</div>
-			{#if bean && daysOff != null}
+			{#if display && daysOff != null}
 				<div class="crema-bean-rest" style:color={freshColor}>
 					<span class="crema-bean-rest-dot" style:background={freshColor}></span>
 					{daysOff}d off roast
 				</div>
-			{:else if !bean}
+			{:else if !display}
 				<button
 					class="bean-quick-add"
 					aria-label="Quick-add a new bean"
@@ -389,7 +401,7 @@
 		</div>
 		<div class="crema-bean-name">{beanName}</div>
 		<div class="crema-bean-origin">
-			{#if bean}
+			{#if display}
 				{roastLabel} roast
 				{#if reorderHint}
 					· <span class="bean-reorder">{reorderHint}</span>
