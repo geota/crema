@@ -18,55 +18,22 @@ use de1_protocol::{CalTarget, MachineState, MmrRegister, ShotSettings};
 
 uniffi::setup_scaffolding!();
 
-/// Which BLE characteristic an incoming notification came from — mirrors
-/// [`de1_app::Source`] across the FFI boundary.
-#[derive(uniffi::Enum)]
-pub enum NotificationSource {
-    /// The DE1 machine state / substate characteristic.
+/// Register [`de1_app::Source`] with UniFFI as a remote type. Same
+/// pattern as `MmrRegister` / `CalTarget` below — the protocol /
+/// orchestrator type is the FFI boundary type, no mirror.
+#[uniffi::remote(Enum)]
+pub enum Source {
     De1State,
-    /// The DE1 shot-telemetry characteristic.
     De1ShotSample,
-    /// The connected scale's weight notification.
     ScaleWeight,
-    /// The connected scale's command-characteristic notification (the Bookoo's
-    /// `ff12` serial / settings responses).
     ScaleCommand,
-    /// The DE1 water-tank level characteristic.
     De1WaterLevels,
-    /// The DE1 version characteristic — BLE + firmware versions.
     De1Version,
-    /// The DE1 `ReadFromMMR` characteristic — memory-mapped register replies.
     De1MmrRead,
-    /// The DE1 `Calibration` characteristic — sensor-calibration replies.
     De1Calibration,
-    /// The DE1 `ShotSettings` characteristic (`cuuid_0B`) — steam /
-    /// hot-water / group-temp settings, notify + read.
     De1ShotSettings,
-    /// **DORMANT** — mirrors `de1_app::Source::De1ProfileHeader`, which the
-    /// BLE shell no longer dispatches. Kept in the mirror
-    /// enum for forward-compat. See the core variant for the longer note.
     De1ProfileHeader,
-    /// The DE1 `FrameWrite` characteristic — per-frame ack echoes during a
-    /// profile upload.
     De1FrameAck,
-}
-
-impl From<NotificationSource> for Source {
-    fn from(source: NotificationSource) -> Source {
-        match source {
-            NotificationSource::De1State => Source::De1State,
-            NotificationSource::De1ShotSample => Source::De1ShotSample,
-            NotificationSource::ScaleWeight => Source::ScaleWeight,
-            NotificationSource::ScaleCommand => Source::ScaleCommand,
-            NotificationSource::De1WaterLevels => Source::De1WaterLevels,
-            NotificationSource::De1Version => Source::De1Version,
-            NotificationSource::De1MmrRead => Source::De1MmrRead,
-            NotificationSource::De1Calibration => Source::De1Calibration,
-            NotificationSource::De1ShotSettings => Source::De1ShotSettings,
-            NotificationSource::De1ProfileHeader => Source::De1ProfileHeader,
-            NotificationSource::De1FrameAck => Source::De1FrameAck,
-        }
-    }
 }
 
 /// Register [`de1_protocol::MmrRegister`] with UniFFI as a remote type
@@ -105,26 +72,14 @@ pub enum MmrRegister {
     CupWarmerTemp,
 }
 
-/// A DE1 sensor the shell can ask the core to read calibration for — mirrors
-/// [`de1_protocol::CalTarget`] across the FFI boundary.
-#[derive(uniffi::Enum)]
-pub enum CalSensor {
-    /// The flow-rate sensor.
+/// Register [`de1_protocol::CalTarget`] with UniFFI as a remote type.
+/// Same pattern as `MmrRegister` above — no mirror enum, no `From`
+/// round-trip; the protocol type IS the FFI boundary type.
+#[uniffi::remote(Enum)]
+pub enum CalTarget {
     Flow,
-    /// The pressure sensor.
     Pressure,
-    /// The temperature sensor.
     Temperature,
-}
-
-impl From<CalSensor> for CalTarget {
-    fn from(sensor: CalSensor) -> CalTarget {
-        match sensor {
-            CalSensor::Flow => CalTarget::Flow,
-            CalSensor::Pressure => CalTarget::Pressure,
-            CalSensor::Temperature => CalTarget::Temperature,
-        }
-    }
 }
 
 /// A machine state the shell can ask the DE1 to enter.
@@ -381,13 +336,8 @@ impl CremaBridge {
     }
 
     /// Feed a raw GATT notification. Returns a JSON-encoded [`CoreOutput`].
-    pub fn on_notification(
-        &self,
-        source: NotificationSource,
-        data: Vec<u8>,
-        now_ms: u64,
-    ) -> String {
-        json(self.core().on_notification(source.into(), &data, now_ms))
+    pub fn on_notification(&self, source: Source, data: Vec<u8>, now_ms: u64) -> String {
+        json(self.core().on_notification(source, &data, now_ms))
     }
 
     /// Feed a periodic clock tick. Returns a JSON-encoded [`CoreOutput`].
@@ -469,14 +419,14 @@ impl CremaBridge {
     /// Build a [`CoreOutput`] (JSON) whose command reads `sensor`'s current
     /// (in-use) calibration. The DE1 answers on the `De1Calibration`
     /// characteristic, which decodes to a `Calibration` event.
-    pub fn read_calibration(&self, sensor: CalSensor) -> String {
-        json(self.core().read_calibration(sensor.into()))
+    pub fn read_calibration(&self, sensor: CalTarget) -> String {
+        json(self.core().read_calibration(sensor))
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command reads `sensor`'s factory
     /// calibration — the calibration the machine shipped with.
-    pub fn read_factory_calibration(&self, sensor: CalSensor) -> String {
-        json(self.core().read_factory_calibration(sensor.into()))
+    pub fn read_factory_calibration(&self, sensor: CalTarget) -> String {
+        json(self.core().read_factory_calibration(sensor))
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command tares the connected scale.
@@ -1090,7 +1040,7 @@ mod tests {
     #[test]
     fn on_notification_returns_core_output_json() {
         let bridge = CremaBridge::new();
-        let json = bridge.on_notification(NotificationSource::De1State, vec![4, 5], 1_000);
+        let json = bridge.on_notification(Source::De1State, vec![4, 5], 1_000);
         assert!(json.contains("\"events\""));
         assert!(json.contains("\"ShotStarted\""));
     }
@@ -1327,29 +1277,29 @@ mod tests {
     fn read_calibration_produces_a_write_command() {
         let bridge = CremaBridge::new();
         for json in [
-            bridge.read_calibration(CalSensor::Pressure),
-            bridge.read_factory_calibration(CalSensor::Flow),
+            bridge.read_calibration(CalTarget::Pressure),
+            bridge.read_factory_calibration(CalTarget::Flow),
         ] {
             assert!(json.contains("WriteCharacteristic"));
             assert!(json.contains("De1Calibration"));
         }
     }
 
-    /// Every `NotificationSource` the FFI enum can name — used to fuzz the
-    /// bridge against malformed input on every characteristic.
-    fn every_source() -> [NotificationSource; 11] {
+    /// Every `Source` variant the FFI bridge can receive — used to
+    /// fuzz the bridge against malformed input on every characteristic.
+    fn every_source() -> [Source; 11] {
         [
-            NotificationSource::De1State,
-            NotificationSource::De1ShotSample,
-            NotificationSource::ScaleWeight,
-            NotificationSource::ScaleCommand,
-            NotificationSource::De1WaterLevels,
-            NotificationSource::De1Version,
-            NotificationSource::De1MmrRead,
-            NotificationSource::De1Calibration,
-            NotificationSource::De1ShotSettings,
-            NotificationSource::De1ProfileHeader,
-            NotificationSource::De1FrameAck,
+            Source::De1State,
+            Source::De1ShotSample,
+            Source::ScaleWeight,
+            Source::ScaleCommand,
+            Source::De1WaterLevels,
+            Source::De1Version,
+            Source::De1MmrRead,
+            Source::De1Calibration,
+            Source::De1ShotSettings,
+            Source::De1ProfileHeader,
+            Source::De1FrameAck,
         ]
     }
 
@@ -1387,14 +1337,14 @@ mod tests {
         let bridge = CremaBridge::new();
         // A one-byte StateInfo packet cannot be decoded — the bridge must
         // surface a DecodeError event, not panic or drop the input silently.
-        let out = bridge.on_notification(NotificationSource::De1State, vec![0x01], 1_000);
+        let out = bridge.on_notification(Source::De1State, vec![0x01], 1_000);
         assert!(out.contains("DecodeError"));
     }
 
     #[test]
     fn on_notification_reports_a_decode_error_for_a_truncated_water_levels_packet() {
         let bridge = CremaBridge::new();
-        let out = bridge.on_notification(NotificationSource::De1WaterLevels, vec![0x00], 1_000);
+        let out = bridge.on_notification(Source::De1WaterLevels, vec![0x00], 1_000);
         assert!(out.contains("DecodeError"));
     }
 }
