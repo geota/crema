@@ -407,6 +407,23 @@ pub fn reconcile_shots(payload: &str) -> Result<String, String> {
     de1_domain::reconcile_shots_json(payload)
 }
 
+/// Human-readable name for a raw `MachineModel` MMR value (e.g. `1` →
+/// `"DE1"`, `4` → `"DE1XL"`). Values past the table are reported as
+/// `"model N"`. Mirrors [`de1_protocol::machine_model_name`].
+#[wasm_bindgen(js_name = machineModelName)]
+#[must_use]
+pub fn machine_model_name(raw: u32) -> String {
+    de1_protocol::machine_model_name(raw)
+}
+
+/// Whether the DE1 with raw `MachineModel` value `raw` has the Bengle
+/// cup-warmer plate hardware. Mirrors [`de1_protocol::has_cup_warmer`].
+#[wasm_bindgen(js_name = hasCupWarmer)]
+#[must_use]
+pub fn has_cup_warmer(raw: u32) -> bool {
+    de1_protocol::has_cup_warmer(raw)
+}
+
 /// Format the Bookoo scale's `u16` firmware version as a `"M.m.p"`
 /// string (e.g. `141` → `"1.4.1"`). The Bookoo encodes its firmware as
 /// `major × 100 + minor × 10 + patch`. Centralised here so every shell
