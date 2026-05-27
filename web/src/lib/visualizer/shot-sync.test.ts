@@ -95,11 +95,39 @@ function signatureForRoaster(roaster: { name: string }): string {
 	return wasmSignatureForRoaster(roaster.name);
 }
 
+// Mirror of `toLocalShotRef` in `shot-sync-signatures.ts` — the Rust
+// `LocalShotRef` shape the planner deserialises is FLAT camelCase
+// (top-level `duration`, `finalWeight`), but the shell's `StoredShot`
+// nests them (`record.duration`, `metadata.yieldOut`). The test's
+// fixtures have empty `samples`, so we read `metadata.yieldOut`
+// directly rather than dragging in `peaksOf` (which calls into wasm
+// and would return null for the fixtures anyway).
+function toLocalShotRef(shot: StoredShot): {
+	id: string;
+	completedAt: number;
+	duration: number;
+	profileName: string | null;
+	finalWeight: number | null;
+	visualizerId: string | null;
+	deletedAt: number | null;
+} {
+	return {
+		id: shot.id,
+		completedAt: shot.completedAt,
+		duration: shot.record.duration,
+		profileName: shot.profileName ?? null,
+		finalWeight: shot.metadata?.yieldOut ?? null,
+		visualizerId: shot.visualizerId ?? null,
+		deletedAt: shot.deletedAt ?? null
+	};
+}
+
 function reconcileShots(
 	local: readonly StoredShot[],
 	remote: readonly WireShot[]
 ): ReconcileAction[] {
-	const raw = wasmReconcileShots(JSON.stringify({ local, remote }));
+	const slim = local.map(toLocalShotRef);
+	const raw = wasmReconcileShots(JSON.stringify({ local: slim, remote }));
 	return JSON.parse(raw) as ReconcileAction[];
 }
 

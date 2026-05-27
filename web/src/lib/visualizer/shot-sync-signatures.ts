@@ -89,6 +89,18 @@ export type ReconcileAction =
 // ── Signature helpers ────────────────────────────────────────────────
 
 /**
+ * The shot's canonical final weight for de-dup matching — peaks first
+ * (real samples win for a live local), then `metadata.yieldOut` (a
+ * `storedShotFromWire` stub has empty samples but carries the wire's
+ * `final_weight_g` here). Both must agree where present; the cascade
+ * ensures a stub created from a pull signature-matches the original.
+ */
+function shotFinalWeight(shot: StoredShot): number | null {
+	const peaks = peaksOf(shot);
+	return peaks.finalWeight ?? peaks.peakWeight ?? shot.metadata?.yieldOut ?? null;
+}
+
+/**
  * The shot de-dup signature: a djb2 hash of `(startedAtMs, durationMs,
  * profileId, finalWeightG)`. Shots are inherently unique by time + final
  * weight — collisions are intentional ID matches.
@@ -97,8 +109,7 @@ export type ReconcileAction =
  * shape the existing TS callers use.
  */
 export function signatureForShot(shot: StoredShot): string {
-	const peaks = peaksOf(shot);
-	const finalWeight = peaks.finalWeight ?? peaks.peakWeight ?? null;
+	const finalWeight = shotFinalWeight(shot);
 	return wasmSignatureForShot(
 		shot.completedAt,
 		shot.record.duration,
@@ -128,6 +139,35 @@ export function signatureForRoaster(roaster: { name: string }): string {
 // ── Reconciliation ────────────────────────────────────────────────────
 
 /**
+ * Project a full `StoredShot` onto the slim `LocalShotRef` shape the
+ * Rust planner deserialises — top-level camelCase `duration` and
+ * `finalWeight` rather than the shell's `record.duration` and
+ * peaks-derived final weight. Mirrors `de1_domain::visualizer_sync::LocalShotRef`
+ * field-for-field; the doc on that struct still claims the JSON shape
+ * "lines up 1:1" with `StoredShot`, but the shell's persistence model
+ * nests these fields, so we project at this boundary instead.
+ */
+function toLocalShotRef(shot: StoredShot): {
+	id: string;
+	completedAt: number;
+	duration: number;
+	profileName: string | null;
+	finalWeight: number | null;
+	visualizerId: string | null;
+	deletedAt: number | null;
+} {
+	return {
+		id: shot.id,
+		completedAt: shot.completedAt,
+		duration: shot.record.duration,
+		profileName: shot.profileName ?? null,
+		finalWeight: shotFinalWeight(shot),
+		visualizerId: shot.visualizerId ?? null,
+		deletedAt: shot.deletedAt ?? null
+	};
+}
+
+/**
  * Reconcile a remote pull against the local history. Returns the list
  * of actions the caller must apply to the store; this function is
  * pure (no side effects) so it is easy to test.
@@ -141,16 +181,18 @@ export function signatureForRoaster(roaster: { name: string }): string {
  *   3. Else ADD.
  *
  * Adapts the wasm `reconcileShots` (JSON in, JSON out) to the TS array
- * surface. The wasm side only reads the slim subset of `StoredShot`
- * (id, completedAt, duration, profileName, finalWeight, visualizerId,
- * deletedAt) — extra fields (`series`, `bean`, …) are dropped at the
- * JSON boundary.
+ * surface. Locals are projected onto the slim
+ * `de1_domain::visualizer_sync::LocalShotRef` shape via
+ * {@link toLocalShotRef} — the wasm side reads top-level `duration` /
+ * `finalWeight`, not the shell's nested `record.duration` /
+ * `metadata.yieldOut`.
  */
 export function reconcileShots(
 	local: readonly StoredShot[],
 	remote: readonly WireShot[]
 ): ReconcileAction[] {
-	const raw = wasmReconcileShots(JSON.stringify({ local, remote }));
+	const slim = local.map(toLocalShotRef);
+	const raw = wasmReconcileShots(JSON.stringify({ local: slim, remote }));
 	return JSON.parse(raw) as ReconcileAction[];
 }
 

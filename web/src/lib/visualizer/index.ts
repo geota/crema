@@ -49,9 +49,11 @@ export { migrateLegacyBasicAuth } from './migrate-basic-auth';
 
 // ── Shot sync ──────────────────────────────────────────────────────
 export {
+	applyShotReconciliation,
 	deleteShot,
 	patchShot,
 	pullAllShotsSince,
+	pullAndReconcileShots,
 	pullShots,
 	reconcileShots,
 	signatureForBean,
@@ -59,6 +61,7 @@ export {
 	signatureForShot,
 	storedShotFromWire,
 	uploadShot,
+	uploadUnsyncedShots,
 	type PullProgress,
 	type ReconcileAction,
 	type WireShot
