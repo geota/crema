@@ -289,19 +289,19 @@
 		margin-top: 1px;
 	}
 	.mc-banner-warn {
-		background: rgba(220, 80, 0, 0.12);
-		border: 1px solid rgba(220, 80, 0, 0.35);
-		color: #c64500;
+		background: rgba(var(--warning-rgb), 0.12);
+		border: 1px solid rgba(var(--warning-rgb), 0.35);
+		color: var(--warning);
 	}
 	.mc-banner-danger {
-		background: rgba(220, 30, 30, 0.16);
-		border: 1px solid rgba(220, 30, 30, 0.5);
-		color: #b80000;
+		background: rgba(var(--danger-rgb), 0.16);
+		border: 1px solid rgba(var(--danger-rgb), 0.5);
+		color: var(--danger);
 		font-weight: 500;
 	}
 	.mc-banner-info {
-		background: rgba(60, 120, 200, 0.1);
-		border: 1px solid rgba(60, 120, 200, 0.3);
+		background: rgba(var(--info-rgb), 0.1);
+		border: 1px solid rgba(var(--info-rgb), 0.3);
 		color: var(--fg-1);
 	}
 
