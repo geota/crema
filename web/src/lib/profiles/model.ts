@@ -90,8 +90,8 @@ export interface ProfileSegment {
 	time: number;
 	/** Structured early-exit condition, or null when the segment has none. */
 	exit: SegmentExit | null;
-	/** Target temperature, °C — round-trips the core step. */
-	temperatureC: number;
+	/** Target temperature — round-trips the core step. Celsius is the canonical unit (see docs/25 §7). */
+	temp: number;
 	/** Which temperature sensor the segment regulates. */
 	tempSensor: TempSensor;
 	/** Per-segment dispensed-volume limit, ml, range 0–1023 (0 = no limit). */
@@ -291,7 +291,7 @@ function segmentFromStep(step: ProfileStep, index: number): ProfileSegment {
 		// every sub-second step.
 		time: step.duration_seconds,
 		exit,
-		temperatureC: step.temperature_c,
+		temp: step.temperature_c,
 		tempSensor: step.temp_sensor,
 		volumeLimitMl: step.volume_limit_ml,
 		limiter
@@ -308,7 +308,7 @@ export function segmentToStep(seg: ProfileSegment): ProfileStep {
 		name: seg.name,
 		pump: seg.mode,
 		target: seg.target,
-		temperature_c: seg.temperatureC,
+		temperature_c: seg.temp,
 		temp_sensor: seg.tempSensor,
 		transition: seg.ramp,
 		duration_seconds: seg.time,
@@ -526,7 +526,7 @@ export function defaultSegments(): ProfileSegment[] {
 			ramp: 'smooth',
 			time: 8,
 			exit: { metric: 'flow', compare: 'over', threshold: 4 },
-			temperatureC: 92,
+			temp: 92,
 			tempSensor: 'coffee',
 			volumeLimitMl: 0,
 			limiter: null
@@ -539,7 +539,7 @@ export function defaultSegments(): ProfileSegment[] {
 			ramp: 'smooth',
 			time: 4,
 			exit: null,
-			temperatureC: 92,
+			temp: 92,
 			tempSensor: 'coffee',
 			volumeLimitMl: 0,
 			limiter: null
@@ -552,7 +552,7 @@ export function defaultSegments(): ProfileSegment[] {
 			ramp: 'fast',
 			time: 12,
 			exit: null,
-			temperatureC: 92,
+			temp: 92,
 			tempSensor: 'coffee',
 			volumeLimitMl: 0,
 			limiter: null
@@ -565,7 +565,7 @@ export function defaultSegments(): ProfileSegment[] {
 			ramp: 'smooth',
 			time: 8,
 			exit: null,
-			temperatureC: 92,
+			temp: 92,
 			tempSensor: 'coffee',
 			volumeLimitMl: 0,
 			limiter: null

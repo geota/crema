@@ -601,10 +601,10 @@ export interface CremaCore {
 	 * (already scaled); `byteLen` is `1`, `2`, or `4`.
 	 */
 	writeMmr(register: MmrRegister, value: number, byteLen: number): Promise<CoreOutput>;
-	/** Set the fan-on temperature threshold, °C. */
-	setFanThreshold(tempC: number): Promise<CoreOutput>;
-	/** Set the tank desired water-temperature threshold, °C. */
-	setTankThreshold(tempC: number): Promise<CoreOutput>;
+	/** Set the fan-on temperature threshold. Celsius is the canonical unit (see docs/25 §7). */
+	setFanThreshold(celsius: number): Promise<CoreOutput>;
+	/** Set the tank desired water-temperature threshold. Celsius is the canonical unit (see docs/25 §7). */
+	setTankThreshold(celsius: number): Promise<CoreOutput>;
 	/** Set the steam flow rate, ml/s. */
 	setSteamFlow(mlPerS: number): Promise<CoreOutput>;
 	/** Set the seconds of high-flow steam at the start of a steam cycle. */
@@ -615,8 +615,8 @@ export interface CremaCore {
 	setHotWaterFlowRate(mlPerS: number): Promise<CoreOutput>;
 	/** Set the flush flow rate, ml/s. */
 	setFlushFlowRate(mlPerS: number): Promise<CoreOutput>;
-	/** Set the flush water target temperature, °C. Wire value is `°C × 10`. */
-	setFlushTemp(tempC: number): Promise<CoreOutput>;
+	/** Set the flush water target temperature. Celsius is the canonical unit; wire value is `celsius × 10`. */
+	setFlushTemp(celsius: number): Promise<CoreOutput>;
 	/** Set the flush timeout, milliseconds. */
 	setFlushTimeout(ms: number): Promise<CoreOutput>;
 	/** Enable / disable the tablet's USB charging output. */
@@ -653,16 +653,16 @@ export interface CremaCore {
 	 * preferences are untouched.
 	 */
 	resetMachineDefaults(): Promise<CoreOutput>;
-	/** Set the cup-warmer temperature, °C (Bengle models only). */
-	setCupWarmerTemperature(tempC: number): Promise<CoreOutput>;
+	/** Set the cup-warmer temperature (Bengle models only). Celsius is the canonical unit (see docs/25 §7). */
+	setCupWarmerTemp(celsius: number): Promise<CoreOutput>;
 	/** Set the flow-calibration multiplier (scaled `int(1000 × multiplier)`). */
 	setCalibrationFlowMultiplier(multiplier: number): Promise<CoreOutput>;
 	/** Set the hot-water phase-1 flow rate, ml/s (scaled `int(10 × rate)` on the wire). MMR `0x803810`, 4-byte LE. */
 	setPhase1FlowRate(mlPerS: number): Promise<CoreOutput>;
 	/** Set the hot-water phase-2 flow rate, ml/s (scaled `int(10 × rate)` on the wire). MMR `0x803814`, 4-byte LE. */
 	setPhase2FlowRate(mlPerS: number): Promise<CoreOutput>;
-	/** Set the hot-water boiler idle target temperature, °C (scaled `int(10 × °C)` on the wire). MMR `0x803818`, 4-byte LE. */
-	setHotWaterIdleTemp(tempC: number): Promise<CoreOutput>;
+	/** Set the hot-water boiler idle target temperature; Celsius is canonical (see docs/25 §7). Wire value is `celsius × 10` (MMR `0x803818`, 4-byte LE). */
+	setHotWaterIdleTemp(celsius: number): Promise<CoreOutput>;
 	/** Set the espresso group warmup timeout, seconds (scaled `int(10 × s)` on the wire). MMR `0x803838`, 4-byte LE. */
 	setEspressoWarmupTimeout(seconds: number): Promise<CoreOutput>;
 	/** Set the steam two-tap-stop (`steamPurgeMode`), 0/1. MMR `0x803850`, 4-byte LE int. */
@@ -1008,11 +1008,11 @@ async function createCore(): Promise<CremaCore> {
 		async writeMmr(register, value, byteLen) {
 			return parseOutput(bridge.write_mmr(toWasmMmrReg(register), value, byteLen));
 		},
-		async setFanThreshold(tempC) {
-			return parseOutput(bridge.set_fan_threshold(tempC));
+		async setFanThreshold(celsius) {
+			return parseOutput(bridge.set_fan_threshold(celsius));
 		},
-		async setTankThreshold(tempC) {
-			return parseOutput(bridge.set_tank_threshold(tempC));
+		async setTankThreshold(celsius) {
+			return parseOutput(bridge.set_tank_threshold(celsius));
 		},
 		async setSteamFlow(mlPerS) {
 			return parseOutput(bridge.set_steam_flow(mlPerS));
@@ -1029,8 +1029,8 @@ async function createCore(): Promise<CremaCore> {
 		async setFlushFlowRate(mlPerS) {
 			return parseOutput(bridge.set_flush_flow_rate(mlPerS));
 		},
-		async setFlushTemp(tempC) {
-			return parseOutput(bridge.set_flush_temp(tempC));
+		async setFlushTemp(celsius) {
+			return parseOutput(bridge.set_flush_temp(celsius));
 		},
 		async setFlushTimeout(ms) {
 			return parseOutput(bridge.set_flush_timeout(ms));
@@ -1096,8 +1096,8 @@ async function createCore(): Promise<CremaCore> {
 			// shaped for forward symmetry with `setHeaterVoltage`.
 			return parseOutput(bridge.reset_machine_defaults());
 		},
-		async setCupWarmerTemperature(tempC) {
-			return parseOutput(bridge.set_cup_warmer_temperature(tempC));
+		async setCupWarmerTemp(celsius) {
+			return parseOutput(bridge.set_cup_warmer_temperature(celsius));
 		},
 		async setCalibrationFlowMultiplier(multiplier) {
 			return parseOutput(bridge.set_calibration_flow_multiplier(multiplier));
@@ -1108,8 +1108,8 @@ async function createCore(): Promise<CremaCore> {
 		async setPhase2FlowRate(mlPerS) {
 			return parseOutput(bridge.set_phase_2_flow_rate(mlPerS));
 		},
-		async setHotWaterIdleTemp(tempC) {
-			return parseOutput(bridge.set_hot_water_idle_temp(tempC));
+		async setHotWaterIdleTemp(celsius) {
+			return parseOutput(bridge.set_hot_water_idle_temp(celsius));
 		},
 		async setEspressoWarmupTimeout(seconds) {
 			return parseOutput(bridge.set_espresso_warmup_timeout(seconds));

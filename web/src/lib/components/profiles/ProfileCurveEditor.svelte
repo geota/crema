@@ -96,10 +96,10 @@
 	function tempAt(segs: readonly ProfileSegment[], x: number): number {
 		let t = 0;
 		for (const s of segs) {
-			if (x < t + s.time) return s.temperatureC;
+			if (x < t + s.time) return s.temp;
 			t += s.time;
 		}
-		return segs[segs.length - 1]?.temperatureC ?? 93;
+		return segs[segs.length - 1]?.temp ?? 93;
 	}
 
 	/** Round-numbered second marks — every 5 s, or 10 s on a long shot. */

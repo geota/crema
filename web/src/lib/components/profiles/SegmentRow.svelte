@@ -310,12 +310,12 @@
 			/>
 			<div class="pe-seg-cell-input">
 				<QuickStepper
-					value={seg.temperatureC}
+					value={seg.temp}
 					dimension="temp"
 					min={80}
 					max={105}
 					step={0.5}
-					onChange={(v) => onEdit({ temperatureC: v })}
+					onChange={(v) => onEdit({ temp: v })}
 				/>
 			</div>
 		</div>

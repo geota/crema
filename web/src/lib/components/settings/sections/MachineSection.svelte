@@ -494,7 +494,7 @@
 					max={80}
 					onCommit={(v) => {
 						if (!connected) return;
-						void app?.setCupWarmerTemperature(Math.round(v));
+						void app?.setCupWarmerTemp(Math.round(v));
 					}}
 				/>
 			{/snippet}
