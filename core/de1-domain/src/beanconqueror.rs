@@ -557,11 +557,20 @@ pub fn parse_export(json: &str) -> Result<BcExport, String> {
 ///
 /// The shell handles ZIP packaging + sibling photo files; this fn
 /// just produces the main `Beanconqueror.json` payload.
+/// `shot_bean_ids` is a parallel slice to `shots`: each entry is the
+/// Crema-side bean id (e.g. `"bean:019e65a5-…"`) the shot was pulled
+/// against, or `None` for a beanless shot. We strip the `bean:` prefix
+/// at write-time so the emitted BC brew's `bean` field matches the
+/// emitted BC bean record's `config.uuid` (which is also the
+/// prefix-stripped form). The shell-side adapter
+/// [`crema_to_bc_main_json_from_envelope`] derives this vec from each
+/// shot's `bean.beanId` snapshot before handing the rest to the core.
 #[must_use]
 pub fn crema_to_bc_main_json(
     beans: &[Bean],
     roasters: &[Roaster],
     shots: &[StoredShot],
+    shot_bean_ids: &[Option<String>],
     now_unix_ms: i64,
 ) -> String {
     let roaster_by_id: std::collections::HashMap<&str, &Roaster> =
@@ -780,7 +789,7 @@ pub fn crema_to_bc_main_json(
     }
 
     let mut brews_json: Vec<serde_json::Value> = Vec::with_capacity(shots.len());
-    for shot in shots {
+    for (i, shot) in shots.iter().enumerate() {
         // Cap at u32::MAX ms (~49 days) — well within f64 mantissa
         // precision; longer durations are theoretical.
         #[allow(clippy::cast_precision_loss)]
@@ -792,15 +801,23 @@ pub fn crema_to_bc_main_json(
         // timestamp so BC sees a unique uuid-shaped string per brew.
         // The shell's id round-trip can be done by the shell adapter
         // if exact-id preservation is needed.
-        let synth_uuid = format!("crema-shot-{}", shot.recorded_at);
+        let synth_uuid = format!("crema-shot-{}", shot.completed_at);
         obj.insert(
             "config".to_owned(),
             serde_json::json!({
                 "uuid": synth_uuid,
-                "unix_timestamp": (shot.recorded_at / 1000) as i64
+                "unix_timestamp": (shot.completed_at / 1000) as i64
             }),
         );
-        obj.insert("bean".to_owned(), serde_json::Value::String(String::new()));
+        // Strip the `bean:` prefix so the brew's FK matches the
+        // emitted bean record's `config.uuid` (same transformation
+        // applied at the bean-record emission above).
+        let bc_bean_uuid = shot_bean_ids
+            .get(i)
+            .and_then(Option::as_deref)
+            .map(|id| id.strip_prefix("bean:").unwrap_or(id).to_owned())
+            .unwrap_or_default();
+        obj.insert("bean".to_owned(), serde_json::Value::String(bc_bean_uuid));
         obj.insert("mill".to_owned(), serde_json::Value::String(String::new()));
         obj.insert(
             "method_of_preparation".to_owned(),
@@ -888,14 +905,35 @@ pub fn crema_to_bc_main_json_from_envelope(
         beans: Vec<Bean>,
         #[serde(default)]
         roasters: Vec<Roaster>,
+        // Shots arrive as raw JSON values so the shell-only `bean`
+        // sub-object can be extracted before the Rust `StoredShot`
+        // parse (which drops unknown keys). The two-pass deserialize
+        // — once as Value to pull `bean.beanId`, then per-entry into
+        // `StoredShot` — keeps the cross-shell envelope shape free of
+        // a Rust-level `bean` field while preserving the shot→bean
+        // link the brew's `bean` UUID needs.
         #[serde(default)]
-        shots: Vec<StoredShot>,
+        shots: Vec<serde_json::Value>,
     }
     let inp: In = serde_json::from_str(envelope_json).map_err(|e| e.to_string())?;
+    let mut shots: Vec<StoredShot> = Vec::with_capacity(inp.shots.len());
+    let mut shot_bean_ids: Vec<Option<String>> = Vec::with_capacity(inp.shots.len());
+    for value in inp.shots {
+        let bean_id = value
+            .get("bean")
+            .and_then(serde_json::Value::as_object)
+            .and_then(|obj| obj.get("beanId"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned);
+        let shot: StoredShot = serde_json::from_value(value).map_err(|e| e.to_string())?;
+        shots.push(shot);
+        shot_bean_ids.push(bean_id);
+    }
     Ok(crema_to_bc_main_json(
         &inp.beans,
         &inp.roasters,
-        &inp.shots,
+        &shots,
+        &shot_bean_ids,
         now_unix_ms,
     ))
 }
@@ -1473,7 +1511,7 @@ mod tests {
             }
         });
 
-        let json = crema_to_bc_main_json(&[bean], &[roaster], &[], 1_700_000_000_000);
+        let json = crema_to_bc_main_json(&[bean], &[roaster], &[], &[], 1_700_000_000_000);
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         let beans = v["BEANS"].as_array().expect("BEANS array");
         assert_eq!(beans.len(), 1);
@@ -1656,7 +1694,7 @@ mod tests {
         assert_eq!(plan.diagnostics.shots_imported, 1);
 
         let shot = &plan.shots[0];
-        assert_eq!(shot.stored_shot.recorded_at, 1_730_000_000_000); // seconds → ms
+        assert_eq!(shot.stored_shot.completed_at, 1_730_000_000_000); // seconds → ms
         assert_eq!(
             shot.stored_shot.record.duration,
             Duration::from_millis(28_000)
@@ -1788,7 +1826,7 @@ mod tests {
             b.created_at = 1;
             b.updated_at = 1;
         }
-        let bc_json2 = crema_to_bc_main_json(&beans, &roasters, &[], 1);
+        let bc_json2 = crema_to_bc_main_json(&beans, &roasters, &[], &[], 1);
 
         // Re-import.
         let plan2 = bc_to_crema(&parse_export(&bc_json2).unwrap(), 1, seq_id());
@@ -1838,7 +1876,11 @@ mod tests {
             assert_eq!(b1.origin, b2.origin, "origin");
             // archivedAt may change on a finished-bag round-trip
             // (now_unix_ms is re-stamped). Compare on presence only.
-            assert_eq!(b1.archived_at.is_some(), b2.archived_at.is_some(), "archived");
+            assert_eq!(
+                b1.archived_at.is_some(),
+                b2.archived_at.is_some(),
+                "archived"
+            );
             // The unmapped stash must round-trip verbatim.
             let stash1 = b1
                 .metadata
@@ -1883,7 +1925,7 @@ mod tests {
             return;
         };
         let plan1 = bc_to_crema(&parse_export(&text1).unwrap(), 1, seq_id());
-        let bc_json2 = crema_to_bc_main_json(&plan1.beans, &plan1.roasters, &[], 1);
+        let bc_json2 = crema_to_bc_main_json(&plan1.beans, &plan1.roasters, &[], &[], 1);
         let plan2 = bc_to_crema(&parse_export(&bc_json2).unwrap(), 1, seq_id());
 
         // Same photo references on each side.

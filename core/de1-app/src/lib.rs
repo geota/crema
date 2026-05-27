@@ -19,7 +19,7 @@ pub use error::AppError;
 pub use event::{Command, CoreOutput, Event, ProfileUploadFailure, Source, WriteTarget};
 pub use firmware_info::{FirmwareUpdateStatus, LATEST_KNOWN_FIRMWARE_BUILD};
 
-use capture::{CaptureRecorder, MetaSnapshot, slice_to_jsonl};
+use capture::{CaptureRecorder, slice_to_jsonl};
 
 use std::time::Duration;
 
@@ -264,17 +264,6 @@ pub struct CremaCore {
     /// The eco-mode steam target temperature, °C.
     steam_eco_temp: f32,
     last_state: Option<StateInfo>,
-    /// The most recent `Version` characteristic reply the shell delivered.
-    /// `None` until the DE1 connects and the BLE shell reads `cuuid_01`. The
-    /// BLE block here drives the human-readable firmware label
-    /// ([`Event::Firmware`]); the user-visible build number for the
-    /// update-status check lives in [`last_firmware_build`](Self) instead.
-    last_firmware: Option<de1_protocol::Version>,
-    /// The most recent value read from MMR register `0x800010`
-    /// ([`MmrRegister::FirmwareVersion`]) — Decent's user-visible firmware
-    /// build number ("v1352"). `None` until that MMR has been read at least
-    /// once. Powers [`firmware_update_status`](Self::firmware_update_status).
-    last_firmware_build: Option<u16>,
     /// Timestamp the in-progress shot began — stamps telemetry elapsed time.
     /// `None` when no shot is in progress.
     shot_started: Option<Duration>,
@@ -386,21 +375,11 @@ pub struct CremaCore {
     /// to own this — pushed into the core so web + Android
     /// share one byte-for-byte implementation and the recorder side-effect
     /// piggybacks the existing wasm-boundary crossing.
+    /// Rolling BLE-capture buffer + identity-keeper. The identity-keeper is
+    /// the single source of truth for the META prelude (firmware build,
+    /// machine model, serial, scale name) — no parallel scalars on
+    /// `CremaCore`. See [`CaptureRecorder::meta_snapshot`].
     capture: CaptureRecorder,
-    /// BLE advertised name of the most recently `connect_scale`'d scale, so
-    /// the META prelude can carry it. `None` until a scale identifies; reset
-    /// by [`reset`](Self::reset) and re-set on every [`connect_scale`](Self::connect_scale).
-    last_scale_advertised_name: Option<String>,
-    /// Most recent value read from MMR register `0x80000C`
-    /// ([`MmrRegister::MachineModel`]). `None` until the MMR has been read at
-    /// least once. Feeds the capture META prelude alongside
-    /// [`last_firmware_build`](Self::last_firmware_build) and
-    /// [`last_serial_number`](Self).
-    last_machine_model: Option<u32>,
-    /// Most recent value read from MMR register `0x803830`
-    /// ([`MmrRegister::SerialNumber`]). `None` until the MMR has been read at
-    /// least once. Feeds the capture META prelude.
-    last_serial_number: Option<u32>,
     /// The user's chosen display unit for weight, mirrored from the shell's
     /// settings store via [`set_weight_unit_pref`](Self::set_weight_unit_pref).
     ///
@@ -475,8 +454,6 @@ impl CremaCore {
             steam_hotwater_settings: None,
             steam_eco_temp: STEAM_ECO_TEMPERATURE_C,
             last_state: None,
-            last_firmware: None,
-            last_firmware_build: None,
             shot_started: None,
             scale: None,
             flow: FlowEstimator::new(FlowAlgorithm::default()),
@@ -500,9 +477,6 @@ impl CremaCore {
             line_freq_override: None,
             shot_metrics: ShotMetricsAccumulator::default(),
             capture: CaptureRecorder::default(),
-            last_scale_advertised_name: None,
-            last_machine_model: None,
-            last_serial_number: None,
             weight_unit_pref: WeightUnit::default(),
             eureka_precisa_auto_off_on_sleep: false,
             #[cfg(test)]
@@ -582,21 +556,19 @@ impl CremaCore {
     /// Identify and connect a scale from its BLE advertised name. Returns the
     /// connected scale's display label (`Scale::label`), or `None` if the name
     /// matched no supported scale.
+    ///
+    /// The shell-supplied `advertised_name` is **not cached** anywhere — the
+    /// capture META prelude derives its scale-name field from the first
+    /// SCALE_WEIGHT packet's wire signature
+    /// ([`Scale::guess_from_first_weight_packet`]), which a replay can do
+    /// just as well. Round-trip preserves the canonical scale type, not a
+    /// user-customised BLE name.
     pub fn connect_scale(&mut self, advertised_name: &str) -> Option<String> {
         self.scale = Scale::identify(advertised_name);
         // A newly connected scale has not yet been asked for its serial /
         // settings; re-arm the one-shot connect-time queries.
         self.scale_config_queried = false;
-        // Remember the advertised name for the capture META prelude — the
-        // replay tool reads it to call `connectScale(name)` BEFORE iterating
-        // the bytes (so subsequent SCALE_WEIGHT entries can decode). Only
-        // stamped when the name identifies a supported scale, since the
-        // capture is only useful when there's a decoder.
-        let label = self.scale.as_ref().map(|scale| scale.label().to_owned());
-        if label.is_some() {
-            self.last_scale_advertised_name = Some(advertised_name.to_owned());
-        }
-        label
+        self.scale.as_ref().map(|scale| scale.label().to_owned())
     }
 
     /// What the connected scale can do beyond reporting a bare weight — see
@@ -2111,9 +2083,8 @@ impl CremaCore {
         // bytes regardless of whether the decode that follows succeeds, and
         // running it here (rather than at each shell's BLE-manager layer)
         // means the recorder lives in one place and rides the same wasm
-        // boundary crossing as the decode. Suppressed during a capture
-        // replay so a replay doesn't re-record itself; see
-        // [`set_replay_mode`](Self::set_replay_mode).
+        // boundary crossing as the decode. Replay-driven bytes record too:
+        // a replayed shot lands in history with its own faithful capture.
         self.capture.record(source, data, now_ms);
         let now = ms_to_duration(now_ms);
         let mut out = CoreOutput::default();
@@ -2178,7 +2149,7 @@ impl CremaCore {
     /// line, with an optional `{"src":"META","meta":{…}}` first line. Empty
     /// when the recorder is empty.
     pub fn capture_slice_jsonl(&self, from_ms: u64, to_ms: u64) -> String {
-        slice_to_jsonl(&self.capture, &self.meta_snapshot(), from_ms, to_ms)
+        slice_to_jsonl(&self.capture, &self.capture.meta_snapshot(), from_ms, to_ms)
     }
 
     /// Drop every captured entry — used by the shell on BLE disconnect, where
@@ -2187,27 +2158,6 @@ impl CremaCore {
     /// [`reset`](Self::reset), which wipes everything.
     pub fn capture_clear(&mut self) {
         self.capture.clear();
-    }
-
-    /// Silence the rolling capture buffer (during a replay, when the shell
-    /// is feeding the core its own recorded notifications and re-recording
-    /// them would double-write IndexedDB on the next ShotCompleted). The
-    /// shell wraps `replayCapture` with `set_replay_mode(true)` /
-    /// `set_replay_mode(false)` in a try/finally.
-    pub fn set_replay_mode(&mut self, on: bool) {
-        self.capture.set_suppressed(on);
-    }
-
-    /// Build the [`MetaSnapshot`] handed to the capture slicer. The fields
-    /// are pulled from the live state the decoders maintain — same source
-    /// of truth the shell's `de1MachineInfo` snapshot would read.
-    fn meta_snapshot(&self) -> MetaSnapshot {
-        MetaSnapshot {
-            scale_name: self.last_scale_advertised_name.clone(),
-            de1_firmware_version: self.last_firmware_build.map(u32::from),
-            de1_machine_model: self.last_machine_model,
-            de1_serial_number: self.last_serial_number,
-        }
     }
 
     /// Discard all session state — e.g. on disconnect. The connected scale and
@@ -2521,14 +2471,10 @@ impl CremaCore {
     }
 
     /// Decode and process a `Version` notification — the DE1's BLE-interface
-    /// and CPU-board firmware versions. Caches the decoded value on
-    /// `self.last_firmware` so
-    /// [`firmware_update_status`](Self::firmware_update_status) can compare it
-    /// against [`LATEST_KNOWN_FIRMWARE`](firmware_info::LATEST_KNOWN_FIRMWARE).
+    /// and CPU-board firmware versions.
     fn handle_version(&mut self, data: &[u8], out: &mut CoreOutput) {
         match Version::decode(data) {
             Ok(version) => {
-                self.last_firmware = Some(version);
                 out.events.push(Event::Firmware {
                     release: version.ble.release,
                     commits: version.ble.commits,
@@ -2556,7 +2502,7 @@ impl CremaCore {
     /// The check is a pure read against cached state — no BLE traffic, no
     /// network.
     pub fn firmware_update_status(&self) -> FirmwareUpdateStatus {
-        firmware_info::compare(self.last_firmware_build)
+        firmware_info::compare(self.capture.firmware_build())
     }
 
     // ── Profile upload (write side) ───────────────────────────────────────
@@ -2783,30 +2729,12 @@ impl CremaCore {
         if let Some(register) = MmrRegister::from_address(reply.address)
             && let Some(value) = reply.word(0)
         {
-            // Side-effect cache: the FirmwareVersion register feeds
-            // `firmware_update_status`. The wire word's value fits a `u16`
-            // for every shipped DE1 build (latest is ~1352, well below
-            // 65535); saturate on the impossible overflow path so the
-            // comparison still pins "newer than Crema knows" instead of
-            // silently truncating.
-            //
-            // MachineModel + SerialNumber land in the capture META prelude
-            // (so the replay tool can `connectScale(name)` and know which
-            // DE1 model + serial the bytes came from); cached unscaled
-            // because META carries the integers exactly as the shell wrote
-            // them in the pre-core implementation.
-            match register {
-                MmrRegister::FirmwareVersion => {
-                    self.last_firmware_build = Some(u16::try_from(value).unwrap_or(u16::MAX));
-                }
-                MmrRegister::MachineModel => {
-                    self.last_machine_model = Some(value);
-                }
-                MmrRegister::SerialNumber => {
-                    self.last_serial_number = Some(value);
-                }
-                _ => {}
-            }
+            // The FirmwareVersion / MachineModel / SerialNumber registers
+            // used to be cached on `CremaCore` so `firmware_update_status`
+            // and the capture META prelude could read them. They are now
+            // recovered on demand from the recorder's identity-keeper —
+            // see `CaptureRecorder::meta_snapshot` / `firmware_build` —
+            // so this arm just emits the typed value for shell consumers.
             out.events.push(Event::MmrValue { register, value });
         }
     }

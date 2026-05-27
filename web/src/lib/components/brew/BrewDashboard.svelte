@@ -43,6 +43,7 @@
 	import { getBeanStore, type Bean } from '$lib/bean';
 	import { getMaintenanceStore } from '$lib/maintenance';
 	import { getCremaAppContext } from '$lib/shell/app-context';
+	import { getActiveShotStore } from '$lib/state';
 	import { BrewParamState, type BrewParamSeed } from './brew-params.svelte';
 	import ExtractionTimer from './ExtractionTimer.svelte';
 	import ChannelReadout from './ChannelReadout.svelte';
@@ -446,8 +447,17 @@
 	 * click and the upload completing, then to a neutral fallback for
 	 * first-launch / no-profile-ever.
 	 */
+	// During an in-flight shot (live or replay), prefer the ActiveShot's
+	// frozen profile name — it's the authoritative answer to "what is
+	// the shot in progress brewing against?" For replay specifically
+	// this is essential: the user's loaded profile is unrelated to the
+	// replayed shot. See docs/49 §3.
+	const activeShot = getActiveShotStore();
 	const profileName = $derived(
-		ui.activeProfileName ?? activeProfile?.name ?? 'No profile selected'
+		activeShot.profileName ??
+			ui.activeProfileName ??
+			activeProfile?.name ??
+			'No profile selected'
 	);
 	/**
 	 * Compact summary of the profile the DE1 firmware actually has loaded

@@ -22,6 +22,9 @@
 
 use std::collections::HashMap;
 
+use de1_protocol::{MmrReadReply, MmrRegister};
+use de1_scale::Scale;
+
 use crate::event::Source;
 
 /// Rolling-buffer cap. Sized for ~8 minutes at ~35 notifications/s — well
@@ -66,18 +69,17 @@ fn is_identity_source(source: Source) -> bool {
 
 /// Key under which to track an identity entry's "latest". For everything but
 /// MMR, the source itself is the key; MMR replies bucket by the register's
-/// 3-byte little-endian address (`data[0..3]`) so a sweep across multiple
-/// registers keeps every reply independently. Matches the shell-side
-/// `${src}:${data[0]},${data[1]},${data[2]}` key.
+/// 3-byte big-endian address living at `data[1..4]` (after the wire `Len`
+/// byte at `data[0]`) so a sweep across multiple registers keeps every reply
+/// independently. Matches `MmrReadReply::decode`'s byte positions, so the
+/// bucket key corresponds to the real register address.
 fn identity_key(source: Source, data: &[u8]) -> Option<IdentityKey> {
     if !is_identity_source(source) {
         return None;
     }
-    if matches!(source, Source::De1MmrRead) && data.len() >= 3 {
+    if matches!(source, Source::De1MmrRead) && data.len() >= 4 {
         Some(IdentityKey::Mmr {
-            addr_lo: data[0],
-            addr_mid: data[1],
-            addr_hi: data[2],
+            addr_bytes: [data[1], data[2], data[3]],
         })
     } else {
         Some(IdentityKey::Source(source))
@@ -88,10 +90,11 @@ fn identity_key(source: Source, data: &[u8]) -> Option<IdentityKey> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum IdentityKey {
     Source(Source),
+    /// 3 wire bytes carrying the MMR register address (big-endian u24 per
+    /// `de1_protocol::mmr`), used as the bucket so two registers never
+    /// collide.
     Mmr {
-        addr_lo: u8,
-        addr_mid: u8,
-        addr_hi: u8,
+        addr_bytes: [u8; 3],
     },
 }
 
@@ -136,20 +139,12 @@ pub(crate) struct CaptureRecorder {
     /// it. Distinct from the latest-keeper because the replay sniffer needs
     /// the *first* packet, not the most recent.
     first_scale_weight: Option<RawEntry>,
-    /// `true` while a replay is feeding the core. Recording is short-circuited
-    /// so the replay's own notifications don't get re-recorded.
-    suppressed: bool,
 }
 
 impl CaptureRecorder {
-    /// Append one inbound notification.
-    ///
-    /// No-op when `suppressed` (replay mode). The rolling buffer is trimmed
+    /// Append one inbound notification. The rolling buffer is trimmed
     /// in batches so the `drain` cost amortises.
     pub(crate) fn record(&mut self, source: Source, data: &[u8], now_ms: u64) {
-        if self.suppressed {
-            return;
-        }
         let entry = RawEntry {
             t_ms: now_ms,
             source,
@@ -226,9 +221,51 @@ impl CaptureRecorder {
         self.first_scale_weight = None;
     }
 
-    /// `true` to silence recording during a capture replay.
-    pub(crate) fn set_suppressed(&mut self, on: bool) {
-        self.suppressed = on;
+    /// The META prelude the slicer prepends — derived from the bytes already
+    /// in the recorder, with no parallel cache on [`CremaCore`].
+    ///
+    /// Scale name comes from sniffing [`first_scale_weight`](Self) via
+    /// [`Scale::guess_from_first_weight_packet`]; the three identity MMR
+    /// values are decoded on demand out of [`identity_latest`](Self).
+    /// `meta_snapshot()` is called once per capture-slice (on
+    /// `ShotCompleted` or an explicit `capture_slice_jsonl`), so the
+    /// on-demand decode is cheap.
+    pub(crate) fn meta_snapshot(&self) -> MetaSnapshot {
+        MetaSnapshot {
+            scale_name: self
+                .first_scale_weight
+                .as_ref()
+                .and_then(|e| Scale::guess_from_first_weight_packet(&e.data))
+                .map(str::to_owned),
+            de1_firmware_version: self.read_mmr_word(MmrRegister::FirmwareVersion),
+            de1_machine_model: self.read_mmr_word(MmrRegister::MachineModel),
+            de1_serial_number: self.read_mmr_word(MmrRegister::SerialNumber),
+        }
+    }
+
+    /// The DE1's firmware build number, saturating to `u16::MAX` on the
+    /// impossible overflow path — same shape the legacy
+    /// `last_firmware_build` cache had. Read by
+    /// [`CremaCore::firmware_update_status`](crate::CremaCore::firmware_update_status).
+    pub(crate) fn firmware_build(&self) -> Option<u16> {
+        self.read_mmr_word(MmrRegister::FirmwareVersion)
+            .map(|v| u16::try_from(v).unwrap_or(u16::MAX))
+    }
+
+    /// First 32-bit word held for `register` in the identity keeper, or
+    /// `None` if Crema hasn't read this register yet. Walks
+    /// [`identity_latest`](Self) and parses each MMR reply via
+    /// [`MmrReadReply::decode`]; the map is small (one entry per identity
+    /// source / register) so the linear scan is unmeasurable.
+    fn read_mmr_word(&self, register: MmrRegister) -> Option<u32> {
+        let target = register.address();
+        self.identity_latest
+            .values()
+            .filter(|e| matches!(e.source, Source::De1MmrRead))
+            .find_map(|e| {
+                let reply = MmrReadReply::decode(&e.data).ok()?;
+                (reply.address == target).then(|| reply.word(0)).flatten()
+            })
     }
 }
 
@@ -532,22 +569,6 @@ mod tests {
     }
 
     #[test]
-    fn replay_suppression_drops_recordings() {
-        let mut rec = CaptureRecorder::default();
-        rec.set_suppressed(true);
-        rec.record(Source::De1State, &[0x04, 0x05], 100);
-        rec.record(Source::De1ShotSample, &[0x01, 0x02], 200);
-        let entries = rec.slice(0, 1000);
-        assert!(entries.is_empty(), "suppressed records are dropped");
-        // Disabling suppression resumes recording.
-        rec.set_suppressed(false);
-        rec.record(Source::De1State, &[0x06, 0x07], 300);
-        let entries = rec.slice(0, 1000);
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].t_ms, 300);
-    }
-
-    #[test]
     fn clear_drops_buffer_identity_and_first_weight() {
         let mut rec = CaptureRecorder::default();
         rec.record(Source::De1Version, &[0xaa, 0xbb], 0);
@@ -591,6 +612,109 @@ mod tests {
         assert!(json.ends_with('\n'));
         // No double-newline anywhere in the body.
         assert!(!json.contains("\n\n"));
+    }
+
+    /// Build a real-shape MMR read reply: Len byte + 24-bit address + first
+    /// 32-bit word. Mirrors `de1_protocol::mmr::read_request` but for the
+    /// reply direction Crema decodes.
+    fn mmr_reply_packet(register: MmrRegister, value: u32) -> [u8; de1_protocol::MMR_PACKET_LEN] {
+        let mut packet = [0u8; de1_protocol::MMR_PACKET_LEN];
+        // u24p0 is big-endian — the high byte goes at packet[1].
+        let addr = register.address();
+        packet[1] = ((addr >> 16) & 0xff) as u8;
+        packet[2] = ((addr >> 8) & 0xff) as u8;
+        packet[3] = (addr & 0xff) as u8;
+        packet[4..8].copy_from_slice(&value.to_le_bytes());
+        packet
+    }
+
+    #[test]
+    fn meta_snapshot_empty_before_any_record() {
+        let rec = CaptureRecorder::default();
+        let meta = rec.meta_snapshot();
+        assert!(meta.is_empty());
+    }
+
+    #[test]
+    fn meta_snapshot_derives_mmr_values_from_identity_keeper() {
+        let mut rec = CaptureRecorder::default();
+        rec.record(
+            Source::De1MmrRead,
+            &mmr_reply_packet(MmrRegister::FirmwareVersion, 1352),
+            10,
+        );
+        rec.record(
+            Source::De1MmrRead,
+            &mmr_reply_packet(MmrRegister::MachineModel, 4),
+            20,
+        );
+        rec.record(
+            Source::De1MmrRead,
+            &mmr_reply_packet(MmrRegister::SerialNumber, 98_765),
+            30,
+        );
+        let meta = rec.meta_snapshot();
+        assert_eq!(meta.de1_firmware_version, Some(1352));
+        assert_eq!(meta.de1_machine_model, Some(4));
+        assert_eq!(meta.de1_serial_number, Some(98_765));
+    }
+
+    #[test]
+    fn meta_snapshot_derives_scale_name_from_first_weight_packet() {
+        let mut rec = CaptureRecorder::default();
+        // Bookoo wire-signature header — `Scale::guess_from_first_weight_packet`
+        // returns "BOOKOO_SC".
+        rec.record(Source::ScaleWeight, &[0x03, 0x0b, 0x00, 0x00, 0x00], 0);
+        let meta = rec.meta_snapshot();
+        assert_eq!(meta.scale_name.as_deref(), Some("BOOKOO_SC"));
+    }
+
+    #[test]
+    fn meta_snapshot_omits_scale_name_when_first_weight_is_unidentifiable() {
+        let mut rec = CaptureRecorder::default();
+        // A weight packet whose header doesn't match any known scale.
+        rec.record(Source::ScaleWeight, &[0xff, 0xff, 0x00, 0x00, 0x00], 0);
+        let meta = rec.meta_snapshot();
+        assert_eq!(meta.scale_name, None);
+    }
+
+    #[test]
+    fn firmware_build_saturates_u16_overflow() {
+        let mut rec = CaptureRecorder::default();
+        // An impossible-in-practice build number that overflows u16.
+        rec.record(
+            Source::De1MmrRead,
+            &mmr_reply_packet(MmrRegister::FirmwareVersion, 100_000),
+            0,
+        );
+        assert_eq!(rec.firmware_build(), Some(u16::MAX));
+    }
+
+    #[test]
+    fn firmware_build_none_before_firmware_version_read() {
+        let mut rec = CaptureRecorder::default();
+        // A MachineModel reply must not be mistaken for FirmwareVersion.
+        rec.record(
+            Source::De1MmrRead,
+            &mmr_reply_packet(MmrRegister::MachineModel, 4),
+            0,
+        );
+        assert_eq!(rec.firmware_build(), None);
+    }
+
+    #[test]
+    fn meta_snapshot_clears_with_recorder() {
+        let mut rec = CaptureRecorder::default();
+        rec.record(
+            Source::De1MmrRead,
+            &mmr_reply_packet(MmrRegister::FirmwareVersion, 1352),
+            0,
+        );
+        rec.record(Source::ScaleWeight, &[0x03, 0x0b, 0x00, 0x00, 0x00], 1);
+        assert!(!rec.meta_snapshot().is_empty());
+        rec.clear();
+        assert!(rec.meta_snapshot().is_empty());
+        assert_eq!(rec.firmware_build(), None);
     }
 
     #[test]

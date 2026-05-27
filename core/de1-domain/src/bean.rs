@@ -287,6 +287,7 @@ pub enum BeanRoastType {
 /// 1:1.
 #[typeshare]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct BeanOrigin {
     /// Country of origin — `"Ethiopia"`, `"Ethiopia / Colombia"` for a blend.
     pub country: Option<String>,
@@ -321,6 +322,7 @@ pub struct BeanOrigin {
 /// and persistence).
 #[typeshare]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Bean {
     /// Stable id — `"bean:<uuid>"`. The shell mints this on create.
     pub id: String,
@@ -530,6 +532,7 @@ impl Bean {
 /// shell promotes unique strings into [`Roaster`] rows on import.
 #[typeshare]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Roaster {
     /// Stable id — `"roaster:<uuid>"`.
     pub id: String,
@@ -610,21 +613,36 @@ impl Roaster {
 /// render the shot without re-fetching the bag — the user-facing
 /// strings plus the dates that drive the freshness pill.
 #[typeshare]
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ShotBean {
     /// FK back to the [`Bean`] in the library, if it still exists. The
     /// History row can resolve the link to open the bean detail; an
     /// archived / deleted bean falls back to the snapshot strings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bean_id: Option<String>,
     /// Bag name at the time of the shot — `"Geisha Esmeralda Lot 3"`.
     pub name: String,
     /// Roaster name at the time of the shot. Not the roaster id — the
     /// id might dangle, but a string survives.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub roaster_name: Option<String>,
     /// ISO `yyyy-mm-dd` roast date at the time of the shot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub roasted_on: Option<String>,
     /// Roast level (1..10) at the time of the shot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub roast_level: Option<u8>,
+    /// The bean's tags at the time of the shot.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    /// Per-bean grinder setting at the time of the shot — distinct
+    /// from the equipment-level `grinder_model` on [`StoredShot`]
+    /// (the *machine* used) and `ShotMetadata::grinder_setting`
+    /// (the *dial used for this shot*). This is the bean's own
+    /// recommended dial recorded with the bag.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grinder_setting: Option<String>,
 }
 
 impl ShotBean {
@@ -638,6 +656,12 @@ impl ShotBean {
             roaster_name: roaster_name.map(str::to_owned),
             roasted_on: bean.roasted_on.clone(),
             roast_level: bean.roast_level,
+            tags: bean.tags.clone(),
+            grinder_setting: if bean.grinder_setting.is_empty() {
+                None
+            } else {
+                Some(bean.grinder_setting.clone())
+            },
         }
     }
 }
@@ -893,31 +917,36 @@ mod tests {
         roaster.country = Some("Arkansas, USA".to_owned());
         roaster.canonical_roaster_id = Some("roaster:canonical".to_owned());
         let json = serde_json::to_string(&roaster).unwrap();
-        // Sanity: the snake_case wire keys must be present so the
-        // Visualizer mapping in the shell sync layer matches.
-        assert!(json.contains("\"image_url\":\"https://onyxcoffeelab.com/logo.png\""));
+        // Wire keys are camelCase — matches the TS shell's hand-written
+        // Roaster shape in `web/src/lib/bean/model.ts`. The
+        // Visualizer-side mapping (`visualizer-sync.ts`) reads
+        // `bean.imageUrl` (camelCase) and writes its own snake_case
+        // keys to Visualizer's API; this struct's serde shape never
+        // reaches Visualizer directly.
+        assert!(json.contains("\"imageUrl\":\"https://onyxcoffeelab.com/logo.png\""));
         assert!(json.contains("\"city\":\"Rogers\""));
-        assert!(json.contains("\"canonical_roaster_id\":\"roaster:canonical\""));
+        assert!(json.contains("\"canonicalRoasterId\":\"roaster:canonical\""));
         let parsed: Roaster = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, roaster);
     }
 
     #[test]
     fn roaster_deserialises_legacy_record_without_new_fields() {
-        // Pre-extension Roaster records on disk (and in localStorage) only
-        // had the original fields. `#[serde(default)]` on the three new
-        // optional fields must keep the legacy shape parseable so the next
-        // load after upgrade is not a wipe.
+        // Pre-extension Roaster records that ride through the JSONL
+        // round-trip use the same camelCase shape as the TS shell.
+        // The three new optional fields (image_url / canonical_roaster_id /
+        // deleted_at) carry `#[serde(default)]` so legacy records
+        // without them still parse.
         let legacy = serde_json::json!({
             "id": "roaster:legacy",
             "name": "Counter Culture",
             "website": "https://counterculturecoffee.com",
             "country": "USA",
             "notes": "Durham NC",
-            "visualizer_id": null,
+            "visualizerId": null,
             "metadata": null,
-            "created_at": 1700000000_i64,
-            "updated_at": 1700000000_i64
+            "createdAt": 1700000000_i64,
+            "updatedAt": 1700000000_i64
         });
         let parsed: Roaster = serde_json::from_value(legacy).unwrap();
         assert_eq!(parsed.id, "roaster:legacy");

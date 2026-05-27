@@ -74,7 +74,7 @@
   display: inline-flex; align-items: center; justify-content: center;
   gap: 8px;
   font-family: var(--font-sans); font-weight: 600; letter-spacing: -0.005em;
-  border: 1px solid transparent; border-radius: 8px; cursor: pointer;
+  border: 1px solid transparent; border-radius: var(--radius-pill); cursor: pointer;
   transition: all 120ms var(--ease);
   white-space: nowrap;
 }

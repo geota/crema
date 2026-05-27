@@ -162,14 +162,57 @@ pub fn parse_jsonl(text: &str) -> Result<ImportPlan, String> {
                 }
             }
             "shot" => {
+                // Pull the shell-only `bean` sub-object out BEFORE the
+                // `StoredShot` parse — Rust `StoredShot` has no `bean`
+                // field, so `from_value` would silently drop it and a
+                // Crema → JSONL → Crema round-trip would land every
+                // shot with `bean: null`. The flat-form fields
+                // (`beanId`, `name`, …) feed `ImportedShot` so the
+                // shell's `prepareShot` rebuilds the snapshot.
+                let bean_obj = value
+                    .get("bean")
+                    .and_then(serde_json::Value::as_object)
+                    .cloned();
                 if let Ok(s) = serde_json::from_value::<StoredShot>(value) {
+                    let (bean_id, bean_name, roaster_name, roasted_on, roast_level) = bean_obj
+                        .as_ref()
+                        .map(|obj| {
+                            let bean_id = obj
+                                .get("beanId")
+                                .and_then(serde_json::Value::as_str)
+                                .map(str::to_owned);
+                            let bean_name = obj
+                                .get("name")
+                                .and_then(serde_json::Value::as_str)
+                                .map(str::to_owned)
+                                .unwrap_or_default();
+                            let roaster_name = obj
+                                .get("roasterName")
+                                .and_then(serde_json::Value::as_str)
+                                .map(str::to_owned);
+                            let roasted_on = obj
+                                .get("roastedOn")
+                                .and_then(serde_json::Value::as_str)
+                                .map(str::to_owned);
+                            // `ShotBean.roastLevel` is a number on the wire;
+                            // round to the integer the `ImportedShot` slot
+                            // accepts (matches the BC importer's behaviour).
+                            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                            let roast_level = obj
+                                .get("roastLevel")
+                                .and_then(serde_json::Value::as_f64)
+                                .filter(|n| n.is_finite())
+                                .map(|n| n.round() as u8);
+                            (bean_id, bean_name, roaster_name, roasted_on, roast_level)
+                        })
+                        .unwrap_or_else(|| (None, String::new(), None, None, None));
                     let imported = crate::beanconqueror::ImportedShot {
                         stored_shot: s,
-                        bean_id: None,
-                        bean_name: String::new(),
-                        roaster_name: None,
-                        roasted_on: None,
-                        roast_level: None,
+                        bean_id,
+                        bean_name,
+                        roaster_name,
+                        roasted_on,
+                        roast_level,
                         grinder_model: None,
                     };
                     plan.shots.push(imported);
@@ -304,17 +347,17 @@ mod tests {
                 "decaf": false,
                 "favourite": false,
                 "origin": {},
-                "bag_size": 0,
+                "bagSize": 0,
                 "remaining": 0,
-                "quality_score": "",
-                "tasting_notes": "",
+                "qualityScore": "",
+                "tastingNotes": "",
                 "rating": 0,
                 "notes": "",
                 "grinder": "",
-                "grinder_setting": "",
+                "grinderSetting": "",
                 "metadata": null,
-                "created_at": 0,
-                "updated_at": 0,
+                "createdAt": 0,
+                "updatedAt": 0,
                 "tags": []
             }))
             .unwrap(),
@@ -343,11 +386,11 @@ mod tests {
             "beans": [],
             "roasters": [{
                 "id": "roaster:r1", "name": "Onyx",
-                "website": null, "image_url": null, "city": null,
+                "website": null, "imageUrl": null, "city": null,
                 "country": null, "notes": "",
-                "canonical_roaster_id": null, "visualizer_id": null,
-                "deleted_at": null, "metadata": null,
-                "created_at": 0, "updated_at": 0
+                "canonicalRoasterId": null, "visualizerId": null,
+                "deletedAt": null, "metadata": null,
+                "createdAt": 0, "updatedAt": 0
             }],
             "shots": []
         }"#;

@@ -25,6 +25,7 @@
 		drainQueue,
 		enqueue as enqueueSyncOp,
 		isConnected as isVisualizerConnected,
+		onSyncConfigChange,
 		pullAllShotsSince,
 		readSyncConfig,
 		reconcileShots,
@@ -54,6 +55,12 @@
 	onMount(() => {
 		// Refresh in case another tab edited it while this one was open.
 		config = readSyncConfig();
+		// Pick up writes from elsewhere in the app — most notably the
+		// Sharing card's Test handler probing the premium tier, which
+		// needs to immediately unlock the bean/roaster push pills here.
+		return onSyncConfigChange((next) => {
+			config = next;
+		});
 	});
 
 	/** Every direction selector lists the same four modes. */

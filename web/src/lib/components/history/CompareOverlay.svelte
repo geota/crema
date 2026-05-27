@@ -15,7 +15,7 @@
 	 * require resampling every shot to a common grid; SVG paths sidestep that.
 	 */
 	import type { StoredShot } from '$lib/history';
-	import { ratioLabel } from '$lib/history';
+	import { ratioLabel, peaksOf, flatSamplesOf } from '$lib/history';
 	import type { TelemetrySample } from '$lib/state';
 	import {
 		getSettingsStore,
@@ -81,8 +81,14 @@
 	 * comparing a paired + unpaired shot the magnitudes won't line up
 	 * perfectly anyway — that's a property of the data, not a unit bug.
 	 */
+	/** Flat samples per shot, cached via `flatSamplesOf`. */
+	const flatByShot = $derived(new Map(shots.map((s) => [s.id, flatSamplesOf(s)])));
+	function seriesFor(shot: StoredShot): TelemetrySample[] {
+		return flatByShot.get(shot.id) ?? [];
+	}
+
 	const anyResistanceFromWeight = $derived.by(() =>
-		shots.some((shot) => shot.series.some((s) => s.resistanceWeight != null))
+		shots.some((shot) => seriesFor(shot).some((s) => s.resistanceWeight != null))
 	);
 
 	/** Y-axis unit label, by channel + user pref. */
@@ -130,7 +136,10 @@
 	/** Max time across the selected shots, seconds, with a tiny ceiling pad. */
 	const maxTimeSec = $derived(
 		Math.max(
-			...shots.map((s) => (s.series.length === 0 ? 0 : s.series[s.series.length - 1].elapsed / 1000)),
+			...shots.map((s) => {
+				const series = seriesFor(s);
+				return series.length === 0 ? 0 : series[series.length - 1].elapsed / 1000;
+			}),
 			15
 		)
 	);
@@ -139,7 +148,7 @@
 	const maxYDisplay = $derived.by(() => {
 		let m = 0;
 		for (const s of shots) {
-			for (const sample of s.series) {
+			for (const sample of seriesFor(s)) {
 				const v = valueAt(sample, channel);
 				if (v != null && v > m) m = v;
 			}
@@ -190,7 +199,7 @@
 	function pathFor(shot: StoredShot, ch: Channel): string {
 		const segs: string[] = [];
 		let drawing = false;
-		for (const s of shot.series) {
+		for (const s of seriesFor(shot)) {
 			const v = valueAt(s, ch);
 			if (v == null) {
 				drawing = false;
@@ -233,7 +242,8 @@
 
 	/** Yield (final or peak) in the user's weight unit. */
 	function shotYield(shot: StoredShot): string {
-		const y = shot.finalWeight ?? shot.peakWeight;
+		const p = peaksOf(shot);
+		const y = p.finalWeight ?? p.peakWeight;
 		const m = convertWeight(y, prefs.weightUnit);
 		return m.unit ? `${m.value} ${m.unit}` : m.value;
 	}
@@ -426,8 +436,10 @@
 				</thead>
 				<tbody>
 					{#each shots as shot, idx (shot.id)}
-						{@const pkP = convertPressure(shot.peakPressure, prefs.pressureUnit)}
-						{@const pkT = convertTemp(shot.peakTemp, prefs.tempUnit)}
+						{@const rowPeaks = peaksOf(shot)}
+						{@const pkP = convertPressure(rowPeaks.peakPressure, prefs.pressureUnit)}
+						{@const pkT = convertTemp(rowPeaks.peakTemp, prefs.tempUnit)}
+						{@const rowRating = shot.metadata.rating ?? 0}
 						<tr>
 							<td class="cmp-td-shot">
 								<i class="cmp-dot" style="--c:{colorFor(idx)}"></i>
@@ -438,14 +450,14 @@
 									<div class="cmp-td-shot-meta">{shotDate(shot)}</div>
 								</div>
 							</td>
-							<td>{(shot.duration / 1000).toFixed(0)} s</td>
+							<td>{(shot.record.duration / 1000).toFixed(0)} s</td>
 							<td>{pkP.value} {pkP.unit}</td>
 							<td>{pkT.value} {pkT.unit}</td>
 							<td>{shotYield(shot)}</td>
 							<td>{ratioLabel(shot)}</td>
 							<td>
-								<span class="cmp-stars" class:is-unrated={shot.rating <= 0}>
-									{'★'.repeat(Math.max(0, Math.min(5, Math.round(shot.rating))))}
+								<span class="cmp-stars" class:is-unrated={rowRating <= 0}>
+									{'★'.repeat(Math.max(0, Math.min(5, Math.round(rowRating))))}
 								</span>
 							</td>
 						</tr>

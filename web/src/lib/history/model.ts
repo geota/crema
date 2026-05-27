@@ -18,6 +18,12 @@
  */
 
 import type { Bean, Roaster } from '$lib/bean';
+import type {
+	RustShotMetadata,
+	RustStoredShot,
+	RustTimedSample
+} from '$lib/core';
+import { peaksForShot as wasmPeaksForShot } from '$lib/wasm/de1_wasm';
 import type { TelemetrySample } from '$lib/state';
 import { filenameStamp } from '$lib/utils/download';
 import { formatRatio } from '$lib/utils/ratio';
@@ -61,32 +67,29 @@ export interface ShotBean {
 	 * Also the live-lookup key for {@link
 	 * $lib/visualizer/shot-sync.resolveCoffeeBagId} (which reads the live
 	 * `Bean.visualizerId` as the upload's `coffee_bag_id` link pointer)
-	 * and for the /history tag-filter live-fallback (so historical shots
-	 * pulled before the bean→shot tag copy still see their bean's tags
-	 * in the filter facets).
+	 * and for the /history tag-filter live-fallback.
 	 */
 	readonly beanId?: string | null;
-	/** The roastery when the shot was pulled (Visualizer `bean_brand`). */
-	readonly roaster: string;
-	/** The coffee itself when the shot was pulled (Visualizer `bean_type`). */
-	readonly type: string;
+	/** The bean / coffee name at the time of the shot (Visualizer `bean_type`). */
+	readonly name: string;
+	/** The roastery at the time of the shot (Visualizer `bean_brand`). */
+	readonly roasterName?: string | null;
 	/** ISO `yyyy-mm-dd` roast date when the shot was pulled, or `null`. */
-	readonly roastedOn: string | null;
+	readonly roastedOn?: string | null;
 	/** Roast level on the 1..10 scale when the shot was pulled, or `null`. */
-	readonly roastLevel: number | null;
+	readonly roastLevel?: number | null;
+	/** The bean's tags at shot-completion time. */
+	readonly tags?: string[];
 	/**
-	 * The bean's free-form notes at shot-completion time. Optional — legacy
-	 * snapshots without this field deserialise cleanly. Wires to Visualizer's
-	 * `bean_notes` on shot upload.
+	 * The bean's free-form notes at shot-completion time. Optional —
+	 * legacy snapshots without this field deserialise cleanly.
+	 * Wires to Visualizer's `bean_notes` on shot upload.
 	 */
 	readonly notes?: string;
 	/**
-	 * The bean's grinder click setting at shot-completion time (e.g. `"2.5"`,
-	 * `"40"`). Optional — legacy snapshots without this field deserialise
-	 * cleanly. Wires to Visualizer's `grinder_setting` on shot upload.
-	 *
-	 * NOTE: task #81 adds equipment-level `grinderModel` (e.g. "Niche Zero")
-	 * — not in scope here. Only the bean-scoped click setting rides today.
+	 * The bean's grinder click setting at shot-completion time
+	 * (e.g. `"2.5"`, `"40"`). Wires to Visualizer's `grinder_setting`
+	 * on shot upload.
 	 */
 	readonly grinderSetting?: string;
 }
@@ -112,17 +115,36 @@ export function snapshotFromBean(
 	if (!bean) return null;
 	return {
 		beanId: bean.id,
-		roaster: roaster?.name.trim() ?? '',
-		type: bean.name.trim(),
+		name: bean.name.trim(),
+		roasterName: roaster?.name.trim() ?? null,
 		roastedOn: bean.roastedOn,
 		roastLevel: bean.roastLevel,
+		tags: [...bean.tags],
 		...(bean.notes ? { notes: bean.notes } : {}),
 		...(bean.grinderSetting ? { grinderSetting: bean.grinderSetting } : {})
 	};
 }
 
-/** A short id for a stored shot — `crypto.randomUUID` if present. */
+/**
+ * Mint a stable id for a stored shot. Routes through the Rust core's
+ * UUID v7 minter (`newShotId` in wasm — see `de1_domain::new_shot_id`)
+ * once the wasm bundle is loaded, so shot ids match the same
+ * lexicographically-sortable, time-prefixed scheme as profile ids.
+ * Falls back to `crypto.randomUUID` during boot / SSR / tests where
+ * the wasm core hasn't initialised yet.
+ */
 export function shotId(): string {
+	if (typeof window !== 'undefined') {
+		const cached = (window as { __cremaWasmCore?: { newShotId?: () => string } })
+			.__cremaWasmCore;
+		if (cached?.newShotId) {
+			try {
+				return cached.newShotId();
+			} catch {
+				// Fall through to the crypto fallback below.
+			}
+		}
+	}
 	const rnd =
 		typeof crypto !== 'undefined' && 'randomUUID' in crypto
 			? crypto.randomUUID()
@@ -131,25 +153,13 @@ export function shotId(): string {
 }
 
 /**
- * One finished shot, persisted by the shell. Everything needed to render a
- * History `ShotRow` and `ShotDetail` without a device present. Named to
- * mirror Rust's `de1_domain::StoredShot`.
+ * Summary peaks over a shot's telemetry — derived on demand by
+ * {@link peaksOf}. Mirrors Rust's `ShotPeaks` (the canonical
+ * derivation lives in `de1_domain::shot::ShotRecord::peaks`); the
+ * shell calls it via wasm so every shell consumes the identical
+ * numbers.
  */
-export interface StoredShot {
-	/** Stable id — `shot:<uuid>`. */
-	readonly id: string;
-	/** Unix epoch milliseconds the shot completed. */
-	readonly completedAt: number;
-	/** The active profile's name when the shot was pulled, or `null`. */
-	readonly profileName: string | null;
-	/** Total shot duration, milliseconds (the `ShotCompleted` duration). */
-	readonly duration: number;
-	/**
-	 * The brew dose, grams — the active profile's dose at the time of the
-	 * shot. Optional: a shot recorded before this field existed (or with no
-	 * active profile) simply has none, and {@link ratioLabel} falls back.
-	 */
-	readonly dose?: number | null;
+export interface ShotPeaks {
 	/** Peak scale weight reached during the shot, grams, or `null`. */
 	readonly peakWeight: number | null;
 	/** Final scale weight at shot end, grams, or `null` if no scale. */
@@ -158,109 +168,169 @@ export interface StoredShot {
 	readonly peakPressure: number;
 	/** Peak group-head temperature reached, °C. */
 	readonly peakTemp: number;
-	/** The buffered telemetry series — what the curve chart redraws from. */
-	readonly series: readonly TelemetrySample[];
+}
+
+/**
+ * The shell-side `ShotMetadata` — mirrors Rust's `ShotMetadata`
+ * camelCase wire shape so the shell and Rust hold the same record on
+ * read and write.
+ */
+export interface ShotMetadata {
+	/** Dry coffee dose, grams. */
+	dose?: number | null;
+	/** Weight in the cup, grams. */
+	yieldOut?: number | null;
+	/** Bean / roaster description (legacy single-line "brand · type"). */
+	beans?: string | null;
+	/** Grinder setting used. */
+	grinderSetting?: string | null;
+	/** Free-form tasting notes. Editable. */
+	notes?: string | null;
+	/** Personal rating, 0..5. `0` means unrated. Editable. */
+	rating?: number | null;
+	/** Total dissolved solids in the beverage, percent. */
+	tds?: number | null;
+	/** Extraction yield, percent. */
+	extractionYield?: number | null;
+}
+
+/**
+ * One finished shot, persisted by the shell.
+ *
+ * Storage / wire shape — matches Rust's `de1_domain::StoredShot` field
+ * for field (camelCase serde) so the same JSON round-trips through the
+ * core's Crema JSONL exporter without translation. Pre-computed
+ * derived metrics (peaks) are NOT stored here — derive them via
+ * {@link peaksOf}. Chart-friendly flat samples come from
+ * {@link flatSamplesOf}.
+ *
+ * Records persisted before this PR carried a denormalized shape
+ * (`peakWeight` / `series` / top-level `dose`/`rating`/`notes`); the
+ * history-store loader upcasts them in place on first read.
+ */
+export interface StoredShot {
+	/** Schema version — `3` post-unification. */
+	readonly formatVersion: number;
+	/** Stable id — `shot:<uuid-v7>`. */
+	readonly id: string;
+	/** Unix epoch milliseconds the shot completed. */
+	readonly completedAt: number;
+	/** The active profile's name at the time of the shot, or `null`. */
+	readonly profileName: string | null;
 	/**
-	 * A snapshot of the current bean when the shot was pulled, or `null` when
-	 * no bean was logged. Pre-existing records have no `bean` — treat it as
-	 * optional everywhere it is read.
+	 * The active profile, if known — full `Profile` JSON. Optional;
+	 * shots recorded without a live profile only carry `profileName`.
 	 */
-	readonly bean?: ShotBean | null;
+	readonly profile?: unknown | null;
+	/** Why the shot stopped, if an AutoStop drove it. */
+	readonly stopReason?: unknown | null;
+	/** Barista journal metadata (dose / yield / rating / notes …). */
+	metadata: ShotMetadata;
 	/**
-	 * The equipment-level grinder model at shot-completion time (e.g.
-	 * "Niche Zero"). Snapshotted from `settings.prefs.grinderModel`
-	 * exactly like {@link bean} — so a later change to the settings
-	 * default doesn't retroactively rewrite history.
-	 *
-	 * `null` means "no value at completion time"; the upload-time
-	 * cascade in {@link $lib/visualizer/shot-sync} falls back to the
-	 * current settings default for legacy shots without a snapshot.
-	 *
-	 * Editable post-completion via the shot-detail panel: an empty
-	 * string from the editor saves as `null` so the cascade re-engages
-	 * (rather than persisting an empty override that masks the default).
-	 *
-	 * Wires to Visualizer's shot-level `grinder_model` field (top-level
-	 * on `ShotUpdateRequest.shot`, not nested under a bean — siblings
-	 * with `grinder_setting`).
-	 *
-	 * Optional on the type so legacy localStorage records without the
-	 * field deserialise cleanly.
+	 * The recorded telemetry. `duration` is shot length in ms; `samples`
+	 * is the wire-shape sample series the Rust core emits — flat
+	 * `elapsed` (ms) + a nested DE1 `sample` + scale overlays.
+	 */
+	readonly record: {
+		readonly duration: number;
+		readonly samples: readonly RustTimedSample[];
+	};
+	/** Frozen-at-completion bean snapshot, or `null` if none was logged. */
+	bean?: ShotBean | null;
+	/**
+	 * Equipment-level grinder model at completion time (e.g. "Niche
+	 * Zero"). `null` means no value; the upload-time cascade falls
+	 * back to the settings default. Editable post-completion.
 	 */
 	grinderModel?: string | null;
-	/** User star rating 0–5; `0` means unrated. Editable. */
-	rating: number;
-	/** User tasting notes. Editable. */
-	notes: string;
-	/**
-	 * Shot-level free-form tags (e.g. `["daily-driver", "comp"]`) —
-	 * surfaced from / pushed to Visualizer's `tags` (detail) / `tag_list`
-	 * (PATCH) field. Mutable metadata, NOT part of the de-dup signature
-	 * (`signatureForShot`) — a re-tag doesn't change shot identity.
-	 *
-	 * Optional on the type so legacy localStorage records without the
-	 * field deserialise cleanly; the history-store loader normalises
-	 * missing / non-array values to `[]` at load time. The bean library's
-	 * `Bean.tags` is the analogous frozen-at-completion
-	 * snapshot — the on-upload PATCH unions the two (shot.tags first,
-	 * bean.tags second, dedup case-sensitive preserving first occurrence)
-	 * per `shot-sync.ts`.
-	 */
+	/** Shot-level free-form tags. Mutable. */
 	tags?: string[];
-	/**
-	 * Yield target the user dialed in for this shot, grams — the
-	 * stop-on-weight target from `BrewParams.yield` at completion time.
-	 * Distinct from {@link finalWeight} (what the scale actually
-	 * measured): the target is the *intent* a barista pulled the shot
-	 * against, the final weight is the *outcome*. Frozen at completion
-	 * so a later QC dial change cannot rewrite history.
-	 *
-	 * Optional on the type so legacy localStorage records pre-dating
-	 * this snapshot deserialise cleanly; the v2 export rides it under
-	 * `metadata.crema.yield_target`.
-	 */
+	/** Yield target the user dialed in, grams (stop-on-weight target). */
 	yieldTarget?: number | null;
-	/**
-	 * Brew water temperature the user dialed in, °C — `BrewParams.brewTemp`
-	 * at completion time. Frozen at completion the same way
-	 * {@link yieldTarget} is. Optional; rides under
-	 * `metadata.crema.brew_temp_target` in the v2 export.
-	 */
-	brewTemp?: number | null;
-	/**
-	 * Pre-infuse duration the user dialed in, seconds — `BrewParams.preinf`
-	 * at completion time. Frozen at completion. Optional; rides under
-	 * `metadata.crema.preinfuse_target` in the v2 export.
-	 */
+	/** Brew water temperature the user dialed in, °C. */
+	brewTempTarget?: number | null;
+	/** Pre-infuse duration the user dialed in, seconds. */
 	preinfuseTarget?: number | null;
-	/**
-	 * Whether stop-on-weight was armed for this shot — `BrewParams.stopOnWeight`
-	 * at completion time. Frozen at completion. Optional; rides under
-	 * `metadata.crema.stop_on_weight` in the v2 export.
-	 */
+	/** Whether stop-on-weight was armed for this shot. */
 	stopOnWeight?: boolean;
-	/**
-	 * Whether auto-tare was armed for this shot — `BrewParams.autoTare`
-	 * at completion time. Frozen at completion. Optional; rides under
-	 * `metadata.crema.auto_tare` in the v2 export.
-	 */
+	/** Whether auto-tare was armed for this shot. */
 	autoTare?: boolean;
-	/**
-	 * Visualizer `shot.id` once uploaded — the sync identity that
-	 * persists across local-id changes. `null` until the
-	 * shot has been pushed; the upload round-trip writes it back so
-	 * subsequent syncs PATCH the same row instead of POSTing a
-	 * duplicate. Optional on the type so legacy localStorage records
-	 * without the field deserialise cleanly.
-	 */
+	/** Visualizer `shot.id` once uploaded; `null` until pushed. */
 	visualizerId?: string | null;
-	/**
-	 * Unix epoch ms when this shot was soft-deleted, or `null` when
-	 * active. The History UI filters tombstones out; the next sync push
-	 * DELETEs the remote row, then garbage-collects the tombstone.
-	 * Optional so legacy records deserialise.
-	 */
+	/** Unix epoch ms when this shot was soft-deleted, or `null`. */
 	deletedAt?: number | null;
+}
+
+/**
+ * Derive a shot's peaks via the Rust core (`ShotRecord::peaks`).
+ * Cached per-shot id + record-length so repeated reads inside one
+ * render pass don't re-call wasm.
+ *
+ * Returns zero-shaped peaks (all `null` / `0`) when the wasm call
+ * fails — defensive only; the core's parser is infallible for the
+ * wire-shape inputs the shell stores.
+ */
+const peaksCache = new Map<string, ShotPeaks>();
+export function peaksOf(shot: StoredShot): ShotPeaks {
+	const key = `${shot.id}:${shot.record.samples.length}`;
+	const cached = peaksCache.get(key);
+	if (cached) return cached;
+	try {
+		const json = wasmPeaksForShot(JSON.stringify(shot));
+		const peaks = JSON.parse(json) as ShotPeaks;
+		peaksCache.set(key, peaks);
+		return peaks;
+	} catch {
+		const fallback: ShotPeaks = {
+			peakWeight: null,
+			finalWeight: null,
+			peakPressure: 0,
+			peakTemp: 0
+		};
+		return fallback;
+	}
+}
+
+/**
+ * Flatten the wire-shape sample series into the chart-friendly
+ * {@link TelemetrySample} shape the live + history charts consume.
+ * Cheap (per-sample object spread); cached per shot id + record-length.
+ */
+const flatCache = new Map<string, TelemetrySample[]>();
+export function flatSamplesOf(shot: StoredShot): TelemetrySample[] {
+	const key = `${shot.id}:${shot.record.samples.length}`;
+	const cached = flatCache.get(key);
+	if (cached) return cached;
+	const out: TelemetrySample[] = shot.record.samples.map((t) => {
+		const sw = t.scaleWeight;
+		const sfw = t.scaleFlowWeight;
+		const dv = t.dispensedVolume;
+		const r = t.resistance;
+		const rw = t.resistanceWeight;
+		return {
+			elapsed: t.elapsed,
+			pressure: t.sample.groupPressure,
+			flow: t.sample.groupFlow,
+			temp: t.sample.headTemp,
+			mixTemp: t.sample.mixTemp,
+			steamTemp: t.sample.steamTemp,
+			weight: sw != null && sw > 0 ? sw : null,
+			weightFlow: sfw != null && sfw > 0 ? sfw : null,
+			dispensedVolume: dv != null && dv > 0 ? dv : 0,
+			resistance:
+				r != null && r > 0
+					? r
+					: t.sample.groupFlow > 0.05
+						? t.sample.groupPressure / (t.sample.groupFlow * t.sample.groupFlow)
+						: null,
+			resistanceWeight: rw != null && rw > 0 ? rw : null,
+			setHeadTemp: t.sample.setHeadTemp,
+			setGroupPressure: t.sample.setGroupPressure,
+			setGroupFlow: t.sample.setGroupFlow
+		};
+	});
+	flatCache.set(key, out);
+	return out;
 }
 
 /**
@@ -276,8 +346,12 @@ export interface StoredShot {
  * shot-level fields and the 18 g dose fallback.
  */
 export function ratioLabel(record: StoredShot): string {
-	const yieldOut = record.finalWeight ?? record.peakWeight;
-	const dose = record.dose != null && record.dose > 0 ? record.dose : 18;
+	const peaks = peaksOf(record);
+	const yieldOut = peaks.finalWeight ?? peaks.peakWeight;
+	const dose =
+		record.metadata.dose != null && record.metadata.dose > 0
+			? record.metadata.dose
+			: 18;
 	return formatRatio(dose, yieldOut);
 }
 

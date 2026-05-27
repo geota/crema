@@ -230,8 +230,8 @@
 
 .st-btn {
   display: inline-flex; align-items: center; gap: 6px;
-  padding: 7px 12px;
-  border-radius: var(--radius-sm);
+  padding: 7px 14px;
+  border-radius: var(--radius-pill);
   font-family: var(--font-sans);
   font-size: 12px;
   cursor: pointer;

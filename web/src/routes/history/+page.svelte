@@ -18,9 +18,15 @@
 	 *
 	 * Save-as-profile from a history row is a planned follow-on.
 	 */
-	import { getHistoryStore, exportStoredShotAsV2Json, shotFilename } from '$lib/history';
+	import {
+		getHistoryStore,
+		exportStoredShotAsV2Json,
+		shotFilename,
+		peaksOf
+	} from '$lib/history';
 	import type { StoredShot } from '$lib/history';
 	import { ShotRow, ShotDetail, CompareOverlay } from '$lib/components/history';
+	import ShotImportDialog from '$lib/components/history/ShotImportDialog.svelte';
 	import { getCremaAppContext } from '$lib/shell/app-context';
 	import { getSettingsStore, convertWeight } from '$lib/settings';
 	import { getCaptureStore, captureJsonl } from '$lib/capture';
@@ -28,6 +34,7 @@
 	import { zip as fflateZip, strToU8 } from 'fflate';
 	import FilterPills from '$lib/components/shared/FilterPills.svelte';
 	import SortPill from '$lib/components/shared/SortPill.svelte';
+	import SplitButton from '$lib/components/shared/SplitButton.svelte';
 	import { getBeanStore } from '$lib/bean';
 	import {
 		appendSyncLog,
@@ -106,6 +113,9 @@
 		exporting = true;
 		try {
 			exportAllAsV2Jsonl();
+		} catch (err) {
+			console.error('History export failed', err);
+			alert(`Export failed: ${err instanceof Error ? err.message : String(err)}`);
 		} finally {
 			exporting = false;
 		}
@@ -115,14 +125,12 @@
 		exporting = true;
 		try {
 			await exportAllAsReplayZip();
+		} catch (err) {
+			console.error('History replay export failed', err);
+			alert(`Export failed: ${err instanceof Error ? err.message : String(err)}`);
 		} finally {
 			exporting = false;
 		}
-	}
-
-	let exportMenuOpen = $state(false);
-	function closeMenusOnDocClick(): void {
-		exportMenuOpen = false;
 	}
 
 	function exportAllAsV2Jsonl(): void {
@@ -167,7 +175,7 @@
 			console.log(
 				`[history export] No replayable captures found. ${skipped} shot${
 					skipped === 1 ? '' : 's'
-				} have no raw bytes — switch Settings → "Shot export format" to Community v2 to export them.`
+				} have no raw bytes — use the Export dropdown's "Community v2" option to export them.`
 			);
 			return;
 		}
@@ -184,17 +192,16 @@
 		);
 	}
 
-	async function onImportFilesChosen(event: Event): Promise<void> {
-		const input = event.currentTarget as HTMLInputElement;
-		const files = input.files;
-		input.value = '';
+	let importOpen = $state(false);
+
+	async function runImport(files: File[]): Promise<void> {
 		const app = appCtx().app;
-		if (!app || !files || files.length === 0) return;
+		if (!app || files.length === 0) return;
 		importing = true;
 		importBanner = null;
 		let imported = 0;
 		const errors: string[] = [];
-		for (const file of Array.from(files)) {
+		for (const file of files) {
 			const { record, error } = await app.importShotFile(file);
 			if (record) {
 				imported += 1;
@@ -445,7 +452,7 @@
 			if (query === '') return true;
 			return (
 				(s.profileName ?? '').toLowerCase().includes(query) ||
-				s.notes.toLowerCase().includes(query) ||
+				(s.metadata.notes ?? '').toLowerCase().includes(query) ||
 				effectiveShotTags(s).some((t) => t.toLowerCase().includes(query))
 			);
 		});
@@ -467,13 +474,13 @@
 					k = cmpNum(a.completedAt, b.completedAt);
 					break;
 				case 'rating':
-					k = cmpNum(a.rating, b.rating);
+					k = cmpNum(a.metadata.rating ?? 0, b.metadata.rating ?? 0);
 					break;
 				case 'profileName':
 					k = cmpStr(a.profileName, b.profileName);
 					break;
 				case 'beanName':
-					k = cmpStr(a.bean?.type ?? null, b.bean?.type ?? null);
+					k = cmpStr(a.bean?.name ?? null, b.bean?.name ?? null);
 					break;
 			}
 			// Tie-break on completedAt desc so equal-keyed rows stay
@@ -505,7 +512,10 @@
 	 */
 	const avgYield = $derived.by(() => {
 		const yields = shots
-			.map((s) => s.finalWeight ?? s.peakWeight)
+			.map((s) => {
+				const p = peaksOf(s);
+				return p.finalWeight ?? p.peakWeight;
+			})
 			.filter((y): y is number => y != null && y > 0);
 		if (yields.length === 0) return null;
 		const mean = yields.reduce((a, y) => a + y, 0) / yields.length;
@@ -514,14 +524,17 @@
 	/** Mean shot duration, seconds. */
 	const avgTime = $derived.by(() => {
 		if (shots.length === 0) return null;
-		const mean = shots.reduce((a, s) => a + s.duration, 0) / shots.length / 1000;
+		const mean =
+			shots.reduce((a, s) => a + s.record.duration, 0) / shots.length / 1000;
 		return Math.round(mean);
 	});
 	/** Mean star rating across rated shots. */
 	const avgRating = $derived.by(() => {
-		const rated = shots.filter((s) => s.rating > 0);
+		const rated = shots.filter((s) => (s.metadata.rating ?? 0) > 0);
 		if (rated.length === 0) return null;
-		return (rated.reduce((a, s) => a + s.rating, 0) / rated.length).toFixed(1);
+		return (
+			rated.reduce((a, s) => a + (s.metadata.rating ?? 0), 0) / rated.length
+		).toFixed(1);
 	});
 
 	/** Select a shot. */
@@ -590,8 +603,6 @@
 	<title>Crema — History</title>
 </svelte:head>
 
-<svelte:window onclick={closeMenusOnDocClick} />
-
 <div class="qcontain hi-page">
 	<!-- Header -->
 	<div class="hi-head">
@@ -608,96 +619,45 @@
 				<i class="ph ph-magnifying-glass" aria-hidden="true"></i>
 				<input bind:value={q} placeholder="Search profile, notes…" />
 			</div>
-			<!-- Import: pick one-or-many legacy de1app `.shot` files or
-			     modern `.shot.json` files. The file picker is a hidden
-			     <input> styled by its wrapping <label>, so the button
-			     matches the existing `.st-btn-secondary` rhythm. The
-			     CremaApp.importShotFile method picks the parser by
-			     extension and prepends each parsed shot to the history
-			     store. -->
-			<label
-				class="st-btn st-btn-secondary hi-import"
-				class:hi-import-disabled={importing}
+			<!-- Import: opens the ShotImportDialog so users get a
+			     draggable picker that matches the BeanImportDialog
+			     pattern. The dialog calls `runImport` with the chosen
+			     files; the banner below the header reports the result. -->
+			<button
+				class="st-btn st-btn-secondary"
+				disabled={importing}
+				onclick={() => (importOpen = true)}
 				title="Import legacy de1app .shot or .shot.json files"
 			>
 				<i class="ph ph-upload-simple" aria-hidden="true"></i>
 				<span>{importing ? 'Importing…' : 'Import'}</span>
-				<input
-					type="file"
-					accept=".shot,.json,.shot.json"
-					multiple
-					disabled={importing}
-					onchange={onImportFilesChosen}
-				/>
-			</label>
-			<!-- Export split-button — primary fires the community v2
-			     bulk export immediately; the caret menu surfaces the
-			     replay-capture zip variant. Mirrors the /beans pattern. -->
-			<!-- svelte-ignore a11y_click_events_have_key_events -->
-			<!-- svelte-ignore a11y_no_static_element_interactions -->
-			<div class="hi-split" onclick={(e) => e.stopPropagation()}>
-				<button
-					class="st-btn st-btn-secondary hi-split-main"
-					disabled={shots.length === 0 || exporting}
-					onclick={exportAllCommunity}
-					title="Download every shot as one .jsonl file — community-v2 JSON, one shot per line"
-				>
-					<i class="ph ph-download-simple" aria-hidden="true"></i>
-					{exporting ? 'Exporting…' : 'Export'}
-				</button>
-				<button
-					class="st-btn st-btn-secondary hi-split-caret-btn"
-					disabled={shots.length === 0 || exporting}
-					onclick={(e) => {
-						e.stopPropagation();
-						exportMenuOpen = !exportMenuOpen;
-					}}
-					aria-haspopup="menu"
-					aria-expanded={exportMenuOpen}
-					aria-label="Choose export format"
-				>
-					<i class="ph ph-caret-down" aria-hidden="true"></i>
-				</button>
-				{#if exportMenuOpen}
-					<div class="hi-split-menu" role="menu">
-						<div class="hi-split-menu-head">Export as</div>
-						<button
-							class="hi-split-menu-item"
-							role="menuitem"
-							onclick={() => {
-								exportMenuOpen = false;
-								void exportAllCommunity();
-							}}
-						>
-							<i class="ph-duotone ph-file-text" aria-hidden="true"></i>
-							<div class="hi-split-menu-text">
-								<div class="hi-split-menu-title">Community v2 (.jsonl)</div>
-								<div class="hi-split-menu-sub">
-									One JSON per shot, one shot per line. Portable across
-									reaprime / Visualizer / de1app.
-								</div>
-							</div>
-						</button>
-						<button
-							class="hi-split-menu-item"
-							role="menuitem"
-							onclick={() => {
-								exportMenuOpen = false;
-								void exportAllReplay();
-							}}
-						>
-							<i class="ph-duotone ph-file-zip" aria-hidden="true"></i>
-							<div class="hi-split-menu-text">
-								<div class="hi-split-menu-title">Replayable captures (.zip)</div>
-								<div class="hi-split-menu-sub">
-									Per-shot raw BLE bytes. Imports / pre-recorder shots
-									are skipped (no raw bytes).
-								</div>
-							</div>
-						</button>
-					</div>
-				{/if}
-			</div>
+			</button>
+			<!-- Export split-button — primary fires community v2 bulk
+			     export; caret surfaces the replay-capture zip variant.
+			     Shares geometry with /beans via the SplitButton primitive. -->
+			<SplitButton
+				icon="ph ph-download-simple"
+				label={exporting ? 'Exporting…' : 'Export'}
+				title="Download every shot as one .jsonl file — community-v2 JSON, one shot per line"
+				disabled={shots.length === 0 || exporting}
+				onPrimary={() => void exportAllCommunity()}
+				caretAriaLabel="Choose export format"
+				menuHead="Export as"
+				items={[
+					{
+						icon: 'ph-duotone ph-file-text',
+						title: 'Community v2 (.jsonl)',
+						sub: 'One JSON per shot, one shot per line. Portable across reaprime / Visualizer / de1app.',
+						onclick: () => void exportAllCommunity()
+					},
+					{
+						icon: 'ph-duotone ph-file-zip',
+						title: 'Replayable captures (.zip)',
+						sub: 'Per-shot raw BLE bytes. Imports / pre-recorder shots are skipped (no raw bytes).',
+						onclick: () => void exportAllReplay()
+					}
+				]}
+			/>
 			{#if canPushShots && unsyncedShots.length > 0}
 				<button
 					class="st-btn st-btn-secondary"
@@ -785,21 +745,15 @@
 			     with no shots, surface the import path next to the
 			     "pull a shot" instructions. Auto-disappears the moment
 			     there's one shot in history. -->
-			<label
-				class="st-btn st-btn-secondary hi-import hi-empty-import"
-				class:hi-import-disabled={importing}
+			<button
+				class="st-btn st-btn-secondary hi-empty-import"
+				disabled={importing}
+				onclick={() => (importOpen = true)}
 				title="Import legacy de1app .shot or .shot.json files"
 			>
 				<i class="ph ph-upload-simple" aria-hidden="true"></i>
 				<span>{importing ? 'Importing…' : 'Import from de1app'}</span>
-				<input
-					type="file"
-					accept=".shot,.json,.shot.json"
-					multiple
-					disabled={importing}
-					onchange={onImportFilesChosen}
-				/>
-			</label>
+			</button>
 		</div>
 	{:else}
 		<!-- Stats strip -->
@@ -986,84 +940,15 @@
 	<CompareOverlay shots={compareShots} onClose={closeCompare} />
 {/if}
 
-<style>
-	/* Export split-button — primary fires the default format,
-	   caret opens a menu with both options. Same pattern + class
-	   names as ShotDetail.svelte; scoped here to the history page. */
-	.hi-split {
-		position: relative;
-		display: inline-flex;
-	}
-	.hi-split-main {
-		border-radius: var(--radius-pill) 0 0 var(--radius-pill);
-	}
-	.hi-split-caret-btn {
-		border-radius: 0 var(--radius-pill) var(--radius-pill) 0;
-		padding-left: 8px;
-		padding-right: 10px;
-		margin-left: -1px;
-	}
-	.hi-split-menu {
-		position: absolute;
-		top: calc(100% + 6px);
-		right: 0;
-		min-width: 320px;
-		background: var(--bg-page);
-		border: 1px solid rgba(var(--tint-rgb), 0.12);
-		border-radius: var(--radius-md, 10px);
-		padding: 6px;
-		z-index: 60;
-		box-shadow: 0 8px 28px rgba(0, 0, 0, 0.32);
-		display: flex;
-		flex-direction: column;
-		gap: 2px;
-	}
-	.hi-split-menu-head {
-		font-family: var(--font-sans);
-		font-size: 10px;
-		font-weight: 700;
-		letter-spacing: var(--track-allcaps);
-		text-transform: uppercase;
-		color: rgba(var(--tint-rgb), 0.5);
-		padding: 6px 10px 4px;
-	}
-	.hi-split-menu-item {
-		display: flex;
-		gap: 12px;
-		align-items: flex-start;
-		background: transparent;
-		border: 0;
-		color: var(--fg-1);
-		text-align: left;
-		font-family: var(--font-sans);
-		font-size: 13px;
-		padding: 10px 12px;
-		border-radius: var(--radius-sm);
-		cursor: pointer;
-	}
-	.hi-split-menu-item:hover {
-		background: rgba(var(--tint-rgb), 0.06);
-	}
-	.hi-split-menu-item i {
-		font-size: 18px;
-		color: var(--copper-400);
-		flex-shrink: 0;
-		margin-top: 1px;
-	}
-	.hi-split-menu-text {
-		display: flex;
-		flex-direction: column;
-		gap: 2px;
-	}
-	.hi-split-menu-title {
-		font-weight: 600;
-	}
-	.hi-split-menu-sub {
-		font-size: 12px;
-		color: rgba(var(--tint-rgb), 0.6);
-		line-height: 1.4;
-	}
+{#if importOpen}
+	<ShotImportDialog
+		{importing}
+		onClose={() => (importOpen = false)}
+		onImport={runImport}
+	/>
+{/if}
 
+<style>
 	.hi-page {
 		background: var(--bg-page);
 		color: var(--fg-1);
@@ -1387,23 +1272,7 @@
 		max-width: 420px;
 	}
 
-	/* ── Import (header button + empty-state CTA + result banner) ──────── */
-	.hi-import {
-		position: relative;
-		cursor: pointer;
-	}
-	.hi-import input[type='file'] {
-		position: absolute;
-		inset: 0;
-		opacity: 0;
-		cursor: pointer;
-	}
-	.hi-import-disabled,
-	.hi-import-disabled input[type='file'] {
-		opacity: 0.5;
-		cursor: not-allowed;
-		pointer-events: none;
-	}
+	/* ── Import (empty-state CTA + result banner) ──────── */
 	.hi-empty-import {
 		margin-top: 18px;
 	}

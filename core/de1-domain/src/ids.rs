@@ -36,6 +36,17 @@ pub fn new_profile_id() -> String {
     Uuid::now_v7().to_string()
 }
 
+/// Mint a fresh stored-shot ID — same UUID v7 scheme as
+/// [`new_profile_id`], but with the `shot:` prefix the shell uses to
+/// scope shot ids in its history store and routes. Centralising the
+/// minter here means every shell (web wasm, Android UniFFI) produces
+/// time-ordered, collision-free shot ids without depending on
+/// browser-specific APIs like `crypto.randomUUID`.
+#[must_use]
+pub fn new_shot_id() -> String {
+    format!("shot:{}", Uuid::now_v7())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

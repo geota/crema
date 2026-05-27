@@ -31,6 +31,7 @@
 		type Roaster
 	} from '$lib/bean';
 	import { getHistoryStore, type StoredShot, type ShotBean } from '$lib/history';
+	import FileDropZone from '$lib/components/shared/FileDropZone.svelte';
 
 	let { onClose }: { onClose: () => void } = $props();
 
@@ -71,43 +72,9 @@
 	 * serialiser). We treat it as JSON-shaped data; the fields below are
 	 * the ones the UI consumes.
 	 */
-	/**
-	 * Recursively rewrite an object's keys from `snake_case` to
-	 * `camelCase`. Leaves arrays, scalars, and the special `metadata`
-	 * field (which carries opaque user JSON whose keys we must not
-	 * touch) alone.
-	 *
-	 * Crema's web `Bean` / `Roaster` types use camelCase
-	 * (`bagSize`, `roastLevel`, …); the Rust core's `Bean` /
-	 * `Roaster` JSON serialize as snake_case (`bag_size_g`,
-	 * `roast_level`, …) — they intentionally don't carry
-	 * `rename_all = "camelCase"` because the Visualizer sync layer
-	 * expects snake_case Roaster keys on the wire. So at the wasm
-	 * boundary we translate to match the shell's persisted shape.
-	 */
-	function snakeToCamel<T>(value: unknown): T {
-		if (Array.isArray(value)) {
-			return value.map((v) => snakeToCamel(v)) as unknown as T;
-		}
-		if (value === null || typeof value !== 'object') {
-			return value as T;
-		}
-		const out: Record<string, unknown> = {};
-		for (const [k, v] of Object.entries(value)) {
-			if (k === 'metadata') {
-				// User-opaque JSON — keys must round-trip verbatim.
-				out[k] = v;
-				continue;
-			}
-			const camel = k.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase());
-			out[camel] = snakeToCamel(v);
-		}
-		return out as T;
-	}
-
 	interface CorePlan {
-		readonly beans: BeanWireSnake[];
-		readonly roasters: RoasterWireSnake[];
+		readonly beans: Bean[];
+		readonly roasters: Roaster[];
 		readonly shots: CoreImportedShot[];
 		readonly diagnostics: {
 			readonly nonEspressoBrewsSkipped: number;
@@ -122,16 +89,6 @@
 		};
 	}
 
-	/**
-	 * Marker types — the wasm output is snake_case JSON; we cast it
-	 * through these placeholders before `snakeToCamel` projects it
-	 * onto the shell's camelCase `Bean` / `Roaster`. The types are
-	 * deliberately opaque (`unknown`) so we never accidentally read
-	 * a snake_case field via the camelCase interface.
-	 */
-	type BeanWireSnake = Record<string, unknown>;
-	type RoasterWireSnake = Record<string, unknown>;
-
 	/** One BC brew mapped to a Rust-shape StoredShot + the resolved snapshot strings. */
 	interface CoreImportedShot {
 		readonly storedShot: RustStoredShotWire;
@@ -143,18 +100,22 @@
 		readonly grinderModel: string | null;
 	}
 
-	/** The Rust StoredShot's wire shape (just the fields the shell uses). */
+	/** The Rust StoredShot's wire shape (just the fields the shell uses).
+	    The struct tree carries `#[serde(rename_all = "camelCase")]`, so
+	    the wire keys are camelCase. `record.duration` is a u64 ms via
+	    the core's `duration_ms` serde adapter — see
+	    `core::de1_domain::shot::duration_ms`. */
 	interface RustStoredShotWire {
-		readonly recorded_at: number;
+		readonly completedAt: number;
 		readonly record: {
-			readonly duration: { secs: number; nanos: number };
+			readonly duration: number;
 		};
 		readonly metadata: {
 			readonly dose?: number | null;
-			readonly yield_out?: number | null;
+			readonly yieldOut?: number | null;
 			readonly rating?: number | null;
 			readonly notes?: string | null;
-			readonly grinder_setting?: string | null;
+			readonly grinderSetting?: string | null;
 		};
 	}
 
@@ -176,19 +137,6 @@
 	/** A shell-ready StoredShot pre-built from a core ImportedShot. */
 	interface PreparedShot {
 		shot: StoredShot;
-	}
-
-	async function onFileChosen(event: Event): Promise<void> {
-		const input = event.currentTarget as HTMLInputElement;
-		const files = input.files ? [...input.files] : [];
-		input.value = '';
-		await ingestFiles(files);
-	}
-
-	async function onDrop(event: DragEvent): Promise<void> {
-		event.preventDefault();
-		const files = event.dataTransfer?.files ? [...event.dataTransfer.files] : [];
-		await ingestFiles(files);
 	}
 
 	/**
@@ -214,7 +162,25 @@
 		);
 		if (!zip) {
 			step = 'error';
-			errorMessage = 'Pick the Beanconqueror .zip or a Crema .jsonl export. Drop the whole export folder for BC with photos.';
+			errorMessage =
+				'Pick a Crema .crema.zip / .jsonl export or a Beanconqueror .zip. ' +
+				'Drop the whole export folder for BC with photos.';
+			return;
+		}
+		// Branch zip vs zip: a Crema bundle holds `crema.jsonl` + an
+		// `images/` folder; BC ships `Beanconqueror.json` + per-chunk
+		// JSONs. Peek inside before committing the parse path.
+		const buf = new Uint8Array(await zip.arrayBuffer());
+		const entries = await new Promise<Record<string, Uint8Array>>(
+			(resolve, reject) =>
+				unzip(buf, (err, data) => (err ? reject(err) : resolve(data)))
+		);
+		const cremaJsonlKey = Object.keys(entries).find(
+			(k) => k.toLowerCase().endsWith('crema.jsonl')
+		);
+		if (cremaJsonlKey !== undefined) {
+			droppedPhotoFiles = [];
+			await ingestCremaZip(entries, cremaJsonlKey, zip.name);
 			return;
 		}
 		droppedPhotoFiles = files.filter(
@@ -224,6 +190,49 @@
 					/\.(jpe?g|png|webp|heic|gif)$/i.test(f.name))
 		);
 		await ingest(zip);
+	}
+
+	/**
+	 * Ingest a Crema `.crema.zip` bundle (jsonl + `images/<beanId>`).
+	 * The JSONL drives the bean / roaster / shot import; the images
+	 * are stashed for the commit pass which writes them to IDB and
+	 * rebinds each bean's `imageRef`.
+	 */
+	let cremaZipImages = $state<Record<string, Uint8Array>>({});
+	async function ingestCremaZip(
+		entries: Record<string, Uint8Array>,
+		jsonlKey: string,
+		filename: string
+	): Promise<void> {
+		step = 'parsing';
+		errorMessage = '';
+		try {
+			const text = strFromU8(entries[jsonlKey]);
+			let planJson: string;
+			try {
+				planJson = wasmImportCremaJsonl(text);
+			} catch (e) {
+				step = 'error';
+				errorMessage = `Core parser rejected the bundle: ${e instanceof Error ? e.message : String(e)}`;
+				return;
+			}
+			const plan = JSON.parse(planJson) as CorePlan;
+			// Stash photo blobs keyed by bean id so the commit pass
+			// can write them to IndexedDB alongside each bean record.
+			const images: Record<string, Uint8Array> = {};
+			for (const [name, bytes] of Object.entries(entries)) {
+				const m = name.match(/^images\/(.+)$/i);
+				if (!m) continue;
+				images[m[1]] = bytes;
+			}
+			cremaZipImages = images;
+			preview = buildPreview(plan, filename);
+			step = 'preview';
+		} catch (e) {
+			step = 'error';
+			errorMessage =
+				e instanceof Error ? e.message : 'Could not read the bundle.';
+		}
 	}
 
 	async function ingestCremaJsonl(file: File): Promise<void> {
@@ -370,11 +379,8 @@
 	 * re-importing the same history.)
 	 */
 	function buildPreview(plan: CorePlan, filename: string): Preview {
-		// snake_case → camelCase on the wasm-returned beans / roasters
-		// so they match the shell's persisted shape (`bagSize`,
-		// `roasterId`, …) before we touch anything else.
-		const wireBeans = plan.beans.map((b) => snakeToCamel<Bean>(b));
-		const wireRoasters = plan.roasters.map((r) => snakeToCamel<Roaster>(r));
+		const wireBeans = plan.beans;
+		const wireRoasters = plan.roasters;
 
 		const existingRoasterByLc = new Map<string, Roaster>();
 		for (const r of library.roasters) {
@@ -504,33 +510,34 @@
 	 * the wasm result again.
 	 */
 	function prepareShot(imp: CoreImportedShot): StoredShot {
-		const dur = imp.storedShot.record.duration;
-		const durationMs = dur.secs * 1000 + dur.nanos / 1_000_000;
 		const bean: ShotBean | null = imp.beanName
 			? {
 					beanId: imp.beanId,
-					roaster: imp.roasterName ?? '',
-					type: imp.beanName,
+					name: imp.beanName,
+					roasterName: imp.roasterName ?? null,
 					roastedOn: imp.roastedOn,
 					roastLevel: imp.roastLevel
 				}
 			: null;
 		const meta = imp.storedShot.metadata;
 		return {
+			formatVersion: 3,
 			id: `shot:bc:${crypto.randomUUID()}`,
-			completedAt: imp.storedShot.recorded_at,
+			completedAt: imp.storedShot.completedAt,
 			profileName: null,
-			duration: durationMs,
-			dose: meta.dose ?? null,
-			peakWeight: null,
-			finalWeight: meta.yield_out ?? null,
-			peakPressure: 0,
-			peakTemp: 0,
-			series: [],
+			metadata: {
+				dose: meta.dose ?? null,
+				yieldOut: meta.yieldOut ?? null,
+				rating: meta.rating ?? null,
+				notes: meta.notes ?? null,
+				grinderSetting: meta.grinderSetting ?? null
+			},
+			record: {
+				duration: imp.storedShot.record.duration,
+				samples: []
+			},
 			bean,
 			grinderModel: imp.grinderModel,
-			rating: meta.rating ?? 0,
-			notes: meta.notes ?? '',
 			tags: []
 		};
 	}
@@ -591,7 +598,21 @@
 				}
 			}
 
-			progress = { done: 0, total: photoTasks.length };
+			// Crema-bundle photos — `images/<beanId>` blobs from the
+			// `.crema.zip`. Different shape from BC's
+			// `photo_<uuid>.jpg` sibling files (which the BC dropped-photo
+			// flow above handles), so we walk them as a separate task
+			// list, deduping against `taskedIds` so a bean that already
+			// got a photo from the BC path isn't overwritten.
+			const cremaImageTasks: { beanId: string; bytes: Uint8Array }[] = [];
+			for (const [beanId, bytes] of Object.entries(cremaZipImages)) {
+				if (taskedIds.has(beanId)) continue;
+				cremaImageTasks.push({ beanId, bytes });
+				taskedIds.add(beanId);
+			}
+
+			const totalPhotos = photoTasks.length + cremaImageTasks.length;
+			progress = { done: 0, total: totalPhotos };
 			let photosStored = 0;
 			for (const task of photoTasks) {
 				const ref = beanImageRefFor(task.beanId);
@@ -603,6 +624,28 @@
 					// IndexedDB failed (private mode, quota, …) —
 					// the bean stays photo-less; a future import of the
 					// same .zip can retry via the resume-photos path.
+				}
+				progress = { done: progress.done + 1, total: progress.total };
+			}
+			for (const task of cremaImageTasks) {
+				const ref = beanImageRefFor(task.beanId);
+				// Wrap the Uint8Array in a Blob — IDB stores the binary
+				// transparently and BeanImage's createObjectURL works
+				// equally well off a generic Blob, so we don't need to
+				// sniff the MIME (the .crema.zip is opaque-encoded).
+				try {
+					// Copy into a fresh ArrayBuffer to satisfy DOM's
+					// BlobPart shape (SharedArrayBuffer-aware Uint8Array
+					// fails strict typing). Cheap; the bytes are already
+					// in memory.
+					const ab = new ArrayBuffer(task.bytes.byteLength);
+					new Uint8Array(ab).set(task.bytes);
+					await imageStore.put(ref, new Blob([ab]));
+					library.updateBean(task.beanId, { imageRef: ref });
+					photosStored += 1;
+				} catch {
+					// Same fall-back as above: keep going, don't fail
+					// the whole import on one image.
 				}
 				progress = { done: progress.done + 1, total: progress.total };
 			}
@@ -656,31 +699,20 @@
 	</header>
 
 	{#if step === 'pick'}
-		<div
-			class="bd-drop"
-			ondragover={(e) => e.preventDefault()}
-			ondrop={onDrop}
-			role="region"
-			aria-label="Drop a Beanconqueror .zip file"
-		>
-			<i class="ph-duotone ph-file-zip" aria-hidden="true"></i>
-			<div class="bd-drop-title">Drop a Crema or Beanconqueror export</div>
-			<div class="bd-drop-sub">
-				A Crema <code>.jsonl</code> round-trips losslessly. A
-				Beanconqueror <code>.zip</code> imports the high-value
-				subset; drop the photo files alongside for the
-				"with photos" variant. Crema is espresso-only — BC
-				V60 / AeroPress brews are skipped + counted.
-			</div>
-			<label class="bd-pickbtn">
-				<input
-					type="file"
-					accept=".zip,.jsonl,application/zip,application/jsonl,image/*"
-					multiple
-					onchange={onFileChosen}
-				/>
-				<span>Choose files…</span>
-			</label>
+		<div class="bd-drop-wrap">
+			<FileDropZone
+				icon="ph-duotone ph-file-zip"
+				title="Drop a Crema or Beanconqueror export"
+				subtitle={
+					'A Crema <code>.crema.zip</code> bundles beans + roasters + shots + photos for ' +
+					'lossless round-trip (a bare <code>.jsonl</code> also works — photos stay device-local). ' +
+					'A Beanconqueror <code>.zip</code> imports the high-value subset; drop the photo files ' +
+					'alongside for the "with photos" variant. Crema is espresso-only — BC V60 / AeroPress brews ' +
+					'are skipped + counted.'
+				}
+				accept=".zip,.jsonl,application/zip,application/jsonl,image/*"
+				onFiles={ingestFiles}
+			/>
 		</div>
 	{:else if step === 'parsing'}
 		<div class="bd-status">
@@ -854,53 +886,8 @@
 		cursor: pointer;
 		padding: 4px;
 	}
-	.bd-drop {
-		padding: 40px 24px;
-		text-align: center;
-		display: flex;
-		flex-direction: column;
-		gap: 12px;
-		border: 2px dashed rgba(var(--tint-rgb), 0.16);
-		border-radius: var(--radius-lg, 14px);
+	.bd-drop-wrap {
 		margin: 20px;
-	}
-	.bd-drop i {
-		font-size: 48px;
-		color: var(--copper-400);
-	}
-	.bd-drop-title {
-		font-family: var(--font-sans);
-		font-size: 15px;
-		font-weight: 600;
-		color: var(--fg-1);
-	}
-	.bd-drop-sub {
-		font-family: var(--font-sans);
-		font-size: 12px;
-		color: rgba(var(--tint-rgb), 0.55);
-		max-width: 380px;
-		margin: 0 auto;
-		line-height: 1.5;
-	}
-	.bd-pickbtn {
-		display: inline-flex;
-		position: relative;
-		background: var(--copper-500);
-		color: var(--fg-on-accent);
-		font-family: var(--font-sans);
-		font-size: 13px;
-		font-weight: 600;
-		border-radius: var(--radius-pill);
-		padding: 8px 18px;
-		cursor: pointer;
-		margin: 6px auto 0;
-		max-width: 200px;
-	}
-	.bd-pickbtn input[type='file'] {
-		position: absolute;
-		inset: 0;
-		opacity: 0;
-		cursor: pointer;
 	}
 	.bd-status {
 		padding: 24px;

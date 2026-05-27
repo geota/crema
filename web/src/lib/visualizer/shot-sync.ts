@@ -280,12 +280,12 @@ function wireShotFromDetail(summary: ShotSummary, detail: ShotDetail): WireShot 
 export function inlineBeanPatch(bean: ShotBean | null | undefined): Record<string, unknown> {
 	const out: Record<string, unknown> = {};
 	if (!bean) return out;
-	const roaster = bean.roaster?.trim();
+	const roaster = bean.roasterName?.trim();
 	if (roaster) out.bean_brand = roaster;
-	const type = bean.type?.trim();
+	const type = bean.name?.trim();
 	if (type) out.bean_type = type;
 	if (bean.roastedOn) out.roast_date = bean.roastedOn;
-	const roastLevelStr = roastLevelToWire(bean.roastLevel);
+	const roastLevelStr = roastLevelToWire(bean.roastLevel ?? null);
 	if (roastLevelStr) out.roast_level = roastLevelStr;
 	const notes = bean.notes?.trim();
 	if (notes) out.bean_notes = notes;

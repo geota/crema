@@ -25,7 +25,12 @@ import {
 import { MachineState, MmrRegister } from '$lib/core/crema-core';
 import { De1Manager, EMPTY_DE1_DIAGNOSTICS, ScaleManager } from '$lib/ble';
 import { getBeanStore } from '$lib/bean';
-import { getHistoryStore, snapshotFromBean, extractCremaExtras } from '$lib/history';
+import {
+	getHistoryStore,
+	snapshotFromBean,
+	extractCremaExtras,
+	type ShotBean
+} from '$lib/history';
 import { getCaptureStore, type CaptureEntry } from '$lib/capture';
 import {
 	getProfileStore,
@@ -56,6 +61,11 @@ import {
 	EMPTY_DE1_CALIBRATION,
 	type UiSnapshot
 } from './ui-state.svelte';
+import {
+	getActiveShotStore,
+	type ActiveShotBrewParams,
+	type ActiveShotData
+} from './active-shot.svelte';
 
 /**
  * Thrown by {@link CremaApp.startShot} when the user taps Coffee without an
@@ -201,6 +211,60 @@ function composeReplayStartMessage(
 	if (beanLabel) parts.push(beanLabel);
 	const suffix = parts.length > 0 ? ` (${parts.join(' · ')})` : '';
 	return `Replaying ${eventCount} events from ${fileName}…${suffix}`;
+}
+
+/**
+ * Adapt a `ReplayMeta` (the wire-shape parsed from a capture file's
+ * `src:"META"` lines) into an `ActiveShotData` the brew UI + history
+ * record-builder consume. The replay's bean snapshot is a flat subset
+ * of `ShotBean` (no `beanId` — the bean isn't necessarily in this
+ * device's library), so the resulting `ShotBean` has `beanId: null`
+ * and any History UI click-through to the bean falls back gracefully.
+ *
+ * Replay META is the source of truth for the at-shot-start context;
+ * `source: 'replay'` lets the orchestrator's burn-down + webhook
+ * branches skip themselves (those are live-only side effects).
+ */
+function replayMetaToActiveShot(meta: ReplayMeta): ActiveShotData {
+	const bean = meta.bean;
+	const beanSnapshot: ShotBean | null = bean
+		? {
+				beanId: null,
+				name: bean.type ?? '',
+				roasterName: bean.roaster ?? null,
+				roastedOn: bean.roastedOn ?? null,
+				roastLevel: bean.roastLevel ?? null,
+				notes: bean.notes,
+				grinderSetting: bean.grinderSetting
+			}
+		: null;
+	const hasBrewParams =
+		meta.yieldTarget != null ||
+		meta.brewTemp != null ||
+		meta.preinfuseTarget != null ||
+		meta.stopOnWeight !== undefined ||
+		meta.autoTare !== undefined;
+	const brewParams: ActiveShotBrewParams | null = hasBrewParams
+		? {
+				yieldTarget: meta.yieldTarget ?? 0,
+				brewTemp: meta.brewTemp ?? 0,
+				preinfuseTarget: meta.preinfuseTarget ?? 0,
+				stopOnWeight: meta.stopOnWeight ?? false,
+				autoTare: meta.autoTare ?? false
+			}
+		: null;
+	return {
+		bean: beanSnapshot,
+		profileName: meta.profileName ?? null,
+		// `ReplayMeta` doesn't carry a separate dose; downstream
+		// readers (History ratio, burn-down) tolerate `null` and fall
+		// back. The yieldTarget covers the QC dial; pre-flow dose lives
+		// only in the embedded profile (which the replay doesn't carry).
+		dose: null,
+		brewParams,
+		grinderModel: meta.grinderModel ?? null,
+		source: 'replay'
+	};
 }
 
 /**
@@ -517,7 +581,25 @@ export class CremaApp {
 			if (event.type === 'ShotStarted') {
 				// Mark the shot's start so ShotCompleted can slice the raw BLE
 				// capture (with a lead-in) for the IndexedDB capture store.
-				this.shotStartedAtMs = performance.now();
+				// Use the core's most-recent notification timestamp rather
+				// than `performance.now()`: the rolling capture buffer is
+				// keyed in whatever timebase the caller hands the core, and
+				// during replay that's the replay file's original
+				// timestamps. Falling back to wall clock here would put the
+				// slice bounds in a different timebase than the buffer's
+				// entries, missing every byte. The `?? performance.now()`
+				// guard covers the rare path where ShotStarted somehow folds
+				// before any notification has reached the core.
+				this.shotStartedAtMs =
+					this.core.lastNotificationAtMs ?? performance.now();
+				// Populate the ActiveShot store with the live shell's view
+				// of the user's intent. Replay populates it itself before
+				// the events fire, so when a replay's `ShotStarted` event
+				// arrives the store is already set — we leave it alone.
+				// See docs/49-replay-architecture-activeshot.md §3.
+				if (!getActiveShotStore().isActive) {
+					getActiveShotStore().set(this.buildLiveActiveShot());
+				}
 			}
 			if (event.type === 'ProfileUploadCompleted') {
 				// Open the profile-download race window — see the comment on
@@ -594,65 +676,28 @@ export class CremaApp {
 			}
 			if (event.type === 'ShotCompleted') {
 				const snapshot = this.state.current;
-				// Stamp a snapshot of the active library bean onto the record, so a
-				// later edit / archive / delete cannot rewrite history (the
-				// snapshot-wins design). An
-				// unselected bean stores `null`; the History UI treats it as
-				// optional.
-				const library = getBeanStore();
-				const activeBean = library.activeBean;
-				const activeRoaster = activeBean?.roasterId
-					? library.getRoaster(activeBean.roasterId)
+				// The in-flight shot's context — populated at ShotStarted
+				// for live, populated by `replayCapture()` for replay.
+				// Both paths converge here on one source of truth so the
+				// history-record + at-shot-start META authoring no longer
+				// branch on replay-vs-live. See docs/49 §3.
+				const activeShot = getActiveShotStore().current;
+				const bean = activeShot?.bean ?? null;
+				const brewParams = activeShot?.brewParams ?? null;
+				// Tags: the bean's tags at *current* library state. We
+				// look up the live row via `bean.beanId` to grab tags
+				// (the snapshot doesn't carry them). For replay paths
+				// where the bean doesn't exist in this library, the
+				// lookup returns undefined and tags stays empty — fine.
+				const liveBeanForTags = bean?.beanId
+					? getBeanStore().getBean(bean.beanId)
 					: null;
-				// Capture the brew dose from the active profile so the History
-				// ratio divides by the real dose, not a nominal 18 g. `null` when
-				// no profile is active or the library has not loaded yet.
-				const profiles = getProfileStore();
-				const activeProfile = profiles.activeId
-					? profiles.get(profiles.activeId)
-					: undefined;
-				// Equipment-level grinder model — frozen at completion the
-				// same way the bean snapshot is. Three-tier write-time
-				// cascade (most-specific wins):
-				//   1. `bean.grinder` — the bag was ground on this specific
-				//      grinder. Wins when set.
-				//   2. `settings.grinderModel` — the user's global default
-				//      (their daily-driver gear).
-				//   3. `null` — nothing configured; upload skips the field.
-				// Resolved at WRITE time (not read time) so settings changes
-				// later don't rewrite a historical shot's record. The bean
-				// tier reads from the *live* bean here because we snapshot
-				// the resolved string straight onto `shot.grinderModel`; a
-				// later bean edit doesn't reach back. The user can still
-				// override per-shot via ShotDetail → `HistoryStore.setGrinderModel`.
-				const grinderModelDefault =
-					activeBean?.grinder?.trim() ||
-					getSettingsStore().current.grinderModel?.trim() ||
-					null;
-				// `ShotBean` is the *snapshot* of the live bean at the moment
-				// the shot finished — `snapshotFromBean` is the ONE shared
-				// helper used both here and on retroactive bean-rebind
-				// (`HistoryStore.setBeanFromLive`), so the snapshot shape
-				// can never drift between the two call sites. Downstream
-				// Visualizer uploader reads ONLY this snapshot for bean
-				// content (`bean_brand`, `bean_type`, `roast_date`,
-				// `roast_level`, `bean_notes`, `grinder_setting`); the live
-				// row is consulted only as a link pointer for `coffee_bag_id`.
-				const beanSnapshot = snapshotFromBean(activeBean, activeRoaster);
-				// Quick-control overrides snapshot — the BrewDashboard pushes
-				// the live `BrewParams` here just before `startShot()`. A
-				// manual on-machine start (or replay) without going through
-				// the dashboard leaves the snapshot at its previous value
-				// or `null`; in the `null` case the QC fields stay absent
-				// on the persisted `StoredShot` so downstream readers fall
-				// back to the embedded profile slot.
-				const brewParams = this.brewParamsAtShotStart;
 				const record = getHistoryStore().record({
 					duration: event.content.duration,
-					profileName: snapshot.activeProfileName,
-					dose: activeProfile?.dose ?? null,
+					profileName: activeShot?.profileName ?? snapshot.activeProfileName,
+					dose: activeShot?.dose ?? null,
 					series: snapshot.shotTelemetry,
-					grinderModel: grinderModelDefault,
+					grinderModel: activeShot?.grinderModel ?? null,
 					// Peak / final metrics ride on the event itself — the
 					// core's `ShotMetricsAccumulator` tracks them in real
 					// time, removing three sites of buffered-series
@@ -662,7 +707,7 @@ export class CremaApp {
 					peakTemp: event.content.peak_temp ?? null,
 					peakWeight: event.content.peak_weight ?? null,
 					finalWeight: event.content.final_weight ?? null,
-					bean: beanSnapshot,
+					bean,
 					yieldTarget: brewParams?.yieldTarget ?? null,
 					brewTemp: brewParams?.brewTemp ?? null,
 					preinfuseTarget: brewParams?.preinfuseTarget ?? null,
@@ -675,8 +720,8 @@ export class CremaApp {
 					// (the copy is one-shot). See `HistoryStore.setBeanFromLive`
 					// for the same copy on retroactive rebind.
 					tags:
-						activeBean?.tags && activeBean.tags.length > 0
-							? [...activeBean.tags]
+						liveBeanForTags?.tags && liveBeanForTags.tags.length > 0
+							? [...liveBeanForTags.tags]
 							: []
 				});
 				// `brewParamsAtShotStart` is intentionally NOT cleared here
@@ -685,24 +730,28 @@ export class CremaApp {
 				// would race. Cleared at the end of the `ShotCompleted`
 				// fold instead (see the `null` assignment after the
 				// capture write).
-				// Burn-down: debit the active bag by the profile's dose so the
-				// brew-page chip reads the remaining grams accurately. No-op
-				// when the user hasn't filled in a bag size.
-				if (activeBean && activeProfile?.dose) {
-					library.debitFromActive(activeProfile.dose);
+
+				// Burn-down + webhook are LIVE-ONLY side effects — they
+				// reach into user state (debit the user's bag) and emit
+				// user-visible notifications. Skip during replay so a
+				// replay leaves no side effects on user data.
+				const isLive = activeShot?.source !== 'replay';
+				if (isLive && bean?.beanId && activeShot?.dose) {
+					getBeanStore().debitFromActive(activeShot.dose);
 				}
-				// Fire the `shotCompleted` webhook after the History
-				// record is in. Brew ratio = final weight / dose when both
-				// are known; `null` otherwise.
-				{
+				if (isLive) {
 					const finalWeight = event.content.final_weight ?? null;
-					const dose = activeProfile?.dose ?? null;
+					const dose = activeShot?.dose ?? null;
 					const brewRatio =
 						finalWeight !== null && dose !== null && dose > 0
 							? finalWeight / dose
 							: null;
+					const profiles = getProfileStore();
+					const activeProfile = profiles.activeId
+						? profiles.get(profiles.activeId)
+						: undefined;
 					this.fireWebhook('shotCompleted', {
-						profileName: snapshot.activeProfileName,
+						profileName: activeShot?.profileName ?? snapshot.activeProfileName,
 						profileId: activeProfile?.id ?? null,
 						duration: event.content.duration,
 						finalWeight,
@@ -726,7 +775,17 @@ export class CremaApp {
 				// the recorder has no entries for replayed shots (the replay
 				// driver feeds the core directly, bypassing the BLE managers),
 				// so a put would persist a mismatched slice.
-				if (record && this.shotStartedAtMs !== null && this.replayAbort === null) {
+				// Replayed shots are first-class history rows now — they
+				// land here too, with their own capture sliced from the
+				// rolling buffer the replay just refilled. The recorded
+				// `data` bytes the core wrote are byte-for-byte the same
+				// payload we fed in via `replayCapture`, so a
+				// pull → capture → replay → re-capture cycle round-trips
+				// the bytes faithfully. The bounds (`fromMs` / `toMs`)
+				// below are pinned to the core's own timebase via
+				// `lastNotificationAtMs`, matching whatever timestamp the
+				// rolling buffer keyed its entries under.
+				if (record && this.shotStartedAtMs !== null) {
 					// The core owns the rolling buffer (`core/de1-app/src/capture.rs`)
 					// and prepends both the identity-keeper entries and the META
 					// prelude with the scale's advertised name + DE1 firmware /
@@ -735,7 +794,14 @@ export class CremaApp {
 					// the web replay parser all consume — parse it back into the
 					// `CaptureEntry[]` IndexedDB structured-clones.
 					const fromMs = this.shotStartedAtMs - CAPTURE_LEAD_MS;
-					const toMs = performance.now();
+					// Same timebase rationale as `shotStartedAtMs`: pin the
+					// upper bound to the core's last-seen notification
+					// timestamp so live and replay shots both slice the
+					// correct window. Fall back to wall clock only if the
+					// core somehow has no record (it does here — we are
+					// inside a ShotCompleted handler triggered by a
+					// notification).
+					const toMs = this.core.lastNotificationAtMs ?? performance.now();
 					const shotId = record.id;
 					// Build the at-shot-start META payload once. The core's
 					// JSONL already prepends a connect-phase META line
@@ -757,14 +823,27 @@ export class CremaApp {
 					// slot carries the structured stub.
 					const shotMeta = this.buildAtShotStartMeta(toMs);
 					void this.core.captureSliceJsonl(fromMs, toMs).then((jsonl) => {
-						if (!jsonl) return;
+						if (!jsonl) {
+							console.log('[capture gate] captureSliceJsonl returned empty', {
+								fromMs,
+								toMs,
+								shotId
+							});
+							return;
+						}
 						const entries: CaptureEntry[] = jsonl
 							.split('\n')
 							.filter((line) => line.length > 0)
 							.map((line) => JSON.parse(line) as CaptureEntry);
 						if (shotMeta) entries.push(shotMeta);
 						if (entries.length > 0) {
+							console.log('[capture gate] persisting', {
+								shotId,
+								entryCount: entries.length
+							});
 							void getCaptureStore().put(shotId, entries);
+						} else {
+							console.log('[capture gate] parsed entries empty', { shotId });
 						}
 					});
 				}
@@ -776,6 +855,12 @@ export class CremaApp {
 				// to `null` here. Cleared AFTER the at-shot-start META
 				// build above so the snapshot survives into the JSONL.
 				this.brewParamsAtShotStart = null;
+				// Drop the ActiveShot context now that the shot's history
+				// row + capture slice have committed. The replay path
+				// clears it again in its `finally` — that's harmless
+				// (clear() is idempotent) and covers the abort/error
+				// paths where ShotCompleted never fires.
+				getActiveShotStore().clear();
 			}
 		}
 		for (const command of output.commands) {
@@ -798,27 +883,78 @@ export class CremaApp {
 	 * the BLE wire (the core's prelude) come first and don't get
 	 * delayed by the advisory context.
 	 */
-	private buildAtShotStartMeta(tMs: number): CaptureEntry | null {
-		const meta: Record<string, unknown> = {};
-		const snapshot = this.state.current;
+	/**
+	 * Build the at-shot-start `META` capture entry the shell appends
+	 * onto the slice the IndexedDB capture stores. Lives in the shell
+	 * for now (the core only owns the connect-phase META); a future
+	 * cross-shell move could push this into the core to remove the
+	 * per-shell rebuild, with the trade-off of a wider core surface.
+	 *
+	 * Build an `ActiveShotData` from current shell state — the active
+	 * library bean, the active profile (for dose + name), the
+	 * pre-tap Quick Sheet snapshot, and the grinder-model cascade.
+	 * Called at `ShotStarted` to populate the in-flight context.
+	 *
+	 * The replay path populates `ActiveShot` directly from `parsed.meta`
+	 * and never invokes this helper — so live-store reads are scoped
+	 * exclusively to live shots.
+	 */
+	private buildLiveActiveShot(): ActiveShotData {
+		const library = getBeanStore();
+		const activeBean = library.activeBean;
+		const activeRoaster = activeBean?.roasterId
+			? library.getRoaster(activeBean.roasterId)
+			: null;
+		const beanSnapshot = snapshotFromBean(activeBean, activeRoaster);
+
 		const profiles = getProfileStore();
 		const activeProfile = profiles.activeId
 			? profiles.get(profiles.activeId)
 			: undefined;
+
+		// Three-tier cascade for grinder model (most-specific wins) —
+		// matches the resolution that today's ShotCompleted handler
+		// performs inline. Resolved at WRITE time (now) so a later
+		// settings change can't rewrite the historical record.
+		const grinderModel =
+			activeBean?.grinder?.trim() ||
+			getSettingsStore().current.grinderModel?.trim() ||
+			null;
+
+		const snapshot = this.state.current;
 		const profileName = snapshot.activeProfileName ?? activeProfile?.name ?? null;
-		if (profileName) meta.profileName = profileName;
-		// `profileBytesHex` — deliberately absent. The core does not
-		// surface the byte-exact upload payload from `uploadProfile`;
-		// cheaply caching it would require teeing every `WriteCharacteristic`
-		// `De1ProfileFrame` write into a buffer and stamping it onto
-		// `ProfileUploadCompleted`. Multi-file plumbing per the task spec
-		// — deferred. TODO: when the core exposes the upload byte
-		// stream (e.g. via a `last_uploaded_profile_bytes()` accessor
-		// or by riding the bytes on the `ProfileUploadCompleted`
-		// event), wire them here so an analyst can re-derive what the
-		// firmware was executing without hunting for the matching
-		// profile file.
+		const dose = activeProfile?.dose ?? null;
 		const brewParams = this.brewParamsAtShotStart;
+
+		return {
+			bean: beanSnapshot,
+			profileName,
+			dose,
+			brewParams: brewParams ? { ...brewParams } : null,
+			grinderModel,
+			source: 'live'
+		};
+	}
+
+	/**
+	 * Build the at-shot-start META `CaptureEntry` the capture-slice path
+	 * appends after the core's connect-phase META prelude. Reads from
+	 * the `ActiveShot` store — the single source of truth for the
+	 * in-flight shot's context, populated identically by live and
+	 * replay paths. Returns `null` when no in-flight context exists
+	 * or every field is empty (the JSONL slice then omits the
+	 * at-shot-start META line).
+	 *
+	 * See docs/49 §3 for the lifecycle, doc 48 §4 for the broader
+	 * replay architecture.
+	 */
+	private buildAtShotStartMeta(tMs: number): CaptureEntry | null {
+		const active = getActiveShotStore().current;
+		if (!active) return null;
+
+		const meta: Record<string, unknown> = {};
+		if (active.profileName) meta.profileName = active.profileName;
+		const brewParams = active.brewParams;
 		if (brewParams) {
 			meta.yieldTarget = brewParams.yieldTarget;
 			meta.brewTemp = brewParams.brewTemp;
@@ -826,31 +962,19 @@ export class CremaApp {
 			meta.stopOnWeight = brewParams.stopOnWeight;
 			meta.autoTare = brewParams.autoTare;
 		}
-		const library = getBeanStore();
-		const activeBean = library.activeBean;
-		const activeRoaster = activeBean?.roasterId
-			? library.getRoaster(activeBean.roasterId)
-			: null;
-		if (activeBean) {
+		if (active.bean) {
 			const bean: Record<string, unknown> = {};
-			const type = activeBean.name.trim();
-			const roaster = activeRoaster?.name.trim() ?? '';
+			const type = active.bean.name?.trim() ?? '';
+			const roaster = active.bean.roasterName?.trim() ?? '';
 			if (type) bean.type = type;
 			if (roaster) bean.roaster = roaster;
-			if (activeBean.roastedOn) bean.roastedOn = activeBean.roastedOn;
-			if (activeBean.roastLevel != null) bean.roastLevel = activeBean.roastLevel;
-			if (activeBean.notes) bean.notes = activeBean.notes;
-			if (activeBean.grinderSetting) bean.grinderSetting = activeBean.grinderSetting;
+			if (active.bean.roastedOn) bean.roastedOn = active.bean.roastedOn;
+			if (active.bean.roastLevel != null) bean.roastLevel = active.bean.roastLevel;
+			if (active.bean.notes) bean.notes = active.bean.notes;
+			if (active.bean.grinderSetting) bean.grinderSetting = active.bean.grinderSetting;
 			if (Object.keys(bean).length > 0) meta.bean = bean;
 		}
-		// Replay META `grinderModel` mirrors the History capture cascade:
-		// bean.grinder beats the global settings default. Three-tier
-		// (bean → settings → omit) so a replay reader sees the same
-		// effective grinder model the History shot's record carries.
-		const grinderModel =
-			activeBean?.grinder?.trim() ||
-			getSettingsStore().current.grinderModel?.trim();
-		if (grinderModel) meta.grinderModel = grinderModel;
+		if (active.grinderModel) meta.grinderModel = active.grinderModel;
 		if (Object.keys(meta).length === 0) return null;
 		return {
 			t: Math.round(tMs),
@@ -2139,58 +2263,65 @@ export class CremaApp {
 			return;
 		}
 
-		// Start from a clean core session so the replayed shot is not blended
-		// with any prior (or live) session's state.
-		await this.core.reset();
-		// Suppress the core's rolling capture buffer for the duration of the
-		// replay — without this the replay's own notifications would be
-		// re-recorded and the next `ShotCompleted` would persist a slice of
-		// replayed bytes back to IndexedDB, double-writing the capture. The
-		// flag is paired with the `finally` below that unconditionally
-		// clears it.
-		await this.core.setReplayMode(true);
-		// The replay also drops the telemetry wall-clock anchor — replayed
-		// timestamps must not integrate the gap since the last live sample.
-		this.lastTelemetryAtMs = null;
-
-		// Identify the scale so SCALE_WEIGHT bytes decode into ScaleReading
-		// events on the way through. Without a `connectScale` call the core
-		// has no decoder selected and the bytes are dropped, leaving the
-		// replayed shot's weight series empty.
-		//
-		// Preference order: the explicit META prelude (Crema captures now
-		// prepend one with the scale's advertised name on persist) → the
-		// first SCALE_WEIGHT payload's header bytes for a known signature
-		// (legacy fallback for captures pre-dating META).
-		const scaleNameToConnect =
-			parsed.meta.scaleName ??
-			(() => {
-				const firstScale = parsed.events.find((e) => e.source === 'ScaleWeight');
-				return firstScale ? guessScaleAdvertisedName(firstScale.data) : undefined;
-			})();
-		if (scaleNameToConnect) {
-			try {
-				await this.core.connectScale(scaleNameToConnect);
-			} catch {
-				// Non-fatal — if identification fails, weight just stays empty.
-			}
-		}
-		this.state.patch({
-			...CLEARED_DE1_READOUT,
-			// Replay starts from a clean session — clear the fingerprint
-			// cache too so a follow-on shot start (against a real DE1
-			// after the replay finishes) re-uploads defensively.
-			activeProfileFingerprint: null,
-			replay: {
-				phase: 'running',
-				fileName: file.name,
-				done: 0,
-				total: parsed.events.length,
-				message: composeReplayStartMessage(file.name, parsed.events.length, parsed.meta)
-			}
-		});
+		// Shadow-core swap: stash the live core in the wasm bridge and
+		// install a fresh CremaCore for the replay. The live core's
+		// preferences (weight unit, line freq, heater tweaks), connected
+		// scale, and identity-keeper state survive untouched — we never
+		// mutated them. `endReplay()` in the finally restores it; it's
+		// idempotent, so an exception before `endReplay()` is fine.
+		// See docs/48-replay-architecture-problem-statement.md §4.
+		await this.core.beginReplay();
 
 		try {
+			// Populate the ActiveShot store from the replay's parsed
+			// META BEFORE any events fire. The brew UI follows ActiveShot
+			// (doc 49 §3), so this is what makes the dashboard reflect
+			// the replayed shot's context. The replay's ShotStarted
+			// fold sees `activeShot.isActive === true` and leaves the
+			// store alone — no live-store reads occur on the replay path.
+			getActiveShotStore().set(replayMetaToActiveShot(parsed.meta));
+			// The replay also drops the telemetry wall-clock anchor —
+			// replayed timestamps must not integrate the gap since the
+			// last live sample.
+			this.lastTelemetryAtMs = null;
+
+			// Identify the scale so SCALE_WEIGHT bytes decode into ScaleReading
+			// events on the way through. Without a `connectScale` call the core
+			// has no decoder selected and the bytes are dropped, leaving the
+			// replayed shot's weight series empty.
+			//
+			// Preference order: the explicit META prelude (Crema captures now
+			// prepend one with the scale's advertised name on persist) → the
+			// first SCALE_WEIGHT payload's header bytes for a known signature
+			// (legacy fallback for captures pre-dating META).
+			const scaleNameToConnect =
+				parsed.meta.scaleName ??
+				(() => {
+					const firstScale = parsed.events.find((e) => e.source === 'ScaleWeight');
+					return firstScale ? guessScaleAdvertisedName(firstScale.data) : undefined;
+				})();
+			if (scaleNameToConnect) {
+				try {
+					await this.core.connectScale(scaleNameToConnect);
+				} catch {
+					// Non-fatal — if identification fails, weight just stays empty.
+				}
+			}
+			this.state.patch({
+				...CLEARED_DE1_READOUT,
+				// Replay starts from a clean session — clear the fingerprint
+				// cache too so a follow-on shot start (against a real DE1
+				// after the replay finishes) re-uploads defensively.
+				activeProfileFingerprint: null,
+				replay: {
+					phase: 'running',
+					fileName: file.name,
+					done: 0,
+					total: parsed.events.length,
+					message: composeReplayStartMessage(file.name, parsed.events.length, parsed.meta)
+				}
+			});
+
 			await replayEvents(
 				parsed.events,
 				async (event) => {
@@ -2253,9 +2384,22 @@ export class CremaApp {
 			}
 		} finally {
 			this.replayAbort = null;
-			// Always clear the replay-mode flag — including on the abort /
-			// error paths — so the next live BLE session resumes capturing.
-			await this.core.setReplayMode(false);
+			// Clear ActiveShot — the brew UI returns to reading live
+			// stores via its `?? liveStore` fallback. Idempotent on
+			// the success path (the ShotCompleted handler already
+			// cleared it), but the abort + error paths rely on this
+			// clear to avoid a stale replay context leaking into a
+			// follow-on live shot's brew dashboard.
+			getActiveShotStore().clear();
+			// Restore the live core. Idempotent: no-op if the shadow
+			// wasn't installed (e.g. beginReplay threw before
+			// completing). Errors here would only mask the real
+			// exception, so we swallow them defensively.
+			try {
+				await this.core.endReplay();
+			} catch (e) {
+				console.error('[replay] endReplay failed', e);
+			}
 		}
 	}
 

@@ -24,6 +24,7 @@
 		testConnection,
 		type VisualizerAccount
 	} from '$lib/bean';
+	import { onSyncConfigChange, readSyncConfig } from '$lib/visualizer';
 	import StSectionHead from '../StSectionHead.svelte';
 	import StGroup from '../StGroup.svelte';
 	import StRow from '../StRow.svelte';
@@ -43,9 +44,12 @@
 		| { kind: 'ok'; message: string }
 		| { kind: 'error'; message: string }
 	>({ kind: 'idle' });
+	/** Cached premium-tier flag, kept in sync with the persisted config so
+	   the eyebrow line picks up Test results without a reload. */
+	let premium = $state<boolean | null>(readSyncConfig().premium);
 
 	onMount(() => {
-		const off = onVisualizerTokenChange((set) => {
+		const offToken = onVisualizerTokenChange((set) => {
 			connected = set !== null;
 			if (!connected) {
 				account = null;
@@ -55,8 +59,14 @@
 				void loadAccount();
 			}
 		});
+		const offConfig = onSyncConfigChange((next) => {
+			premium = next.premium;
+		});
 		if (connected) void loadAccount();
-		return off;
+		return () => {
+			offToken();
+			offConfig();
+		};
 	});
 
 	async function loadAccount(): Promise<void> {
@@ -109,12 +119,17 @@
 	}
 
 	/** Card eyebrow — connection state + account identity + public/private
-	   profile state. Stays put when transient status (test results,
-	   errors) takes over the meta line. The public/private suffix comes
-	   from `MeResponse.public`; the
-	   API has no `PATCH /me` so this is display-only — the user toggles
-	   it in their visualizer.coffee account settings. We omit the suffix
-	   gracefully when an older `/me` cache lacks the field. */
+	   profile state + cached tier. Stays put when transient status
+	   (test results, errors) takes over the meta line.
+
+	   - public/private comes from `MeResponse.public`; the API has no
+	     `PATCH /me`, so it's display-only — the user toggles it on
+	     visualizer.coffee. Omitted when an older `/me` cache lacks the
+	     field.
+	   - The tier segment reads the cached `premium` flag. It's
+	     `null` until the first probe (initial load on a fresh sign-in)
+	     and we omit the suffix in that case rather than show a
+	     potentially-wrong label. Click "Test" to populate it. */
 	const cardEyebrow = $derived.by(() => {
 		if (!connected) {
 			return oauthConfigured ? 'Not connected' : 'OAuth not configured';
@@ -128,7 +143,9 @@
 					? ' · public profile'
 					: ' · private'
 				: '';
-		return `Connected · ${account.name}${visibility}`;
+		const tier =
+			premium === true ? ' · Premium' : premium === false ? ' · Free' : '';
+		return `Connected · ${account.name}${visibility}${tier}`;
 	});
 
 	/** Status message shown in the card meta line — transient. */

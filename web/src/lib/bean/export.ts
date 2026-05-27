@@ -1,15 +1,15 @@
 /**
- * `$lib/bean/export` — emit Crema's data (beans + roasters + shots)
- * in one of two formats:
+ * `$lib/bean/export` — emit the bean library in one of two formats:
  *
  *  - **Crema JSONL** — one record per line, header first. Round-trip
- *    lossless against Crema. Doesn't bundle photo blobs (those stay
- *    device-local for v1; same-device re-import keeps the imageRef
- *    pointers valid).
+ *    lossless against Crema. Covers **beans + roasters + photo blobs**.
+ *    Shots live in their own export (Settings → Sharing → History
+ *    export) so the library bundle stays small and library-focused.
  *  - **Beanconqueror ZIP** — `Beanconqueror.json` + per-bean
  *    `photo_<uuid>.jpg` sibling files. Slightly lossy (Crema-only
  *    fields like tags / Visualizer ids drop), but BC users can
- *    re-import in their app.
+ *    re-import in their app. BC's own format is brew-aware, so
+ *    shot history rides along here by convention.
  *
  * Format selection lives at the export action (split-button on
  * `/beans`); per-format download triggers via a temporary
@@ -55,22 +55,49 @@ function fileStamp(now: Date): string {
 }
 
 /**
- * Export the user's beans + roasters + shots as a Crema `.jsonl`
- * download. Lossless on Crema → Crema round-trip. Photos stay in
- * IndexedDB on the source device.
+ * Export the user's bean library as a Crema bundle.
+ *
+ * Output is a `.crema.zip` containing:
+ *  - `crema.jsonl` — the line-delimited core export (header + beans +
+ *    roasters), produced by the Rust core. Shots are intentionally
+ *    excluded; they have their own export path.
+ *  - `images/<beanId>` — one blob per bean with an `imageRef`,
+ *    extension-free (the blob's MIME survives on re-import). Re-import
+ *    rebinds the `imageRef` and replays the blob into IndexedDB.
+ *
+ * Beans with no `imageRef` add no entry; an export with zero photos
+ * is still a single-entry zip so the import path is uniform.
  */
-export function exportCrema(
+export async function exportCrema(
 	beans: readonly Bean[],
 	roasters: readonly Roaster[],
-	shots: readonly StoredShot[],
 	cremaVersion: string
-): void {
-	const envelope = JSON.stringify({ beans, roasters, shots });
+): Promise<void> {
+	const envelope = JSON.stringify({ beans, roasters, shots: [] });
 	const jsonl = exportCremaJsonl(envelope, Date.now(), cremaVersion);
+	const entries: Record<string, Uint8Array> = {
+		'crema.jsonl': strToU8(jsonl)
+	};
+	const imageStore = getBeanImageStore();
+	for (const bean of beans) {
+		if (!bean.imageRef) continue;
+		try {
+			const blob = await imageStore.get(bean.imageRef);
+			if (!blob) continue;
+			const buf = new Uint8Array(await blob.arrayBuffer());
+			entries[`images/${bean.id}`] = buf;
+		} catch {
+			// IDB miss / blob read error — skip this bean's photo,
+			// don't fail the whole export. The .jsonl still carries the
+			// `imageRef` pointer so subsequent re-imports onto the same
+			// device with the blob intact still link up.
+		}
+	}
+	const zipped = zipSync(entries);
 	downloadBlob(
-		jsonl,
-		`crema-${fileStamp(new Date())}.jsonl`,
-		'application/jsonl'
+		zipped,
+		`crema-${fileStamp(new Date())}.crema.zip`,
+		'application/zip'
 	);
 }
 

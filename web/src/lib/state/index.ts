@@ -34,3 +34,9 @@ export {
 	ProfileSyncFailedError,
 	type ReplayCaptureOptions
 } from './app.svelte';
+export {
+	ActiveShotStore,
+	getActiveShotStore,
+	type ActiveShotData,
+	type ActiveShotBrewParams
+} from './active-shot.svelte';
