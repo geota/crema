@@ -41,7 +41,9 @@ use de1_protocol::{
 /// A 5-second margin is ~100× the typical real-DE1 round-trip and clears
 /// Web Bluetooth's worst-case back-pressure window.
 pub const PROFILE_UPLOAD_ACK_TIMEOUT: Duration = Duration::from_secs(5);
-use de1_scale::{Scale, ScaleCapabilities, ScaleUuids, TimerCommand, decent_scale};
+use de1_scale::{Scale, ScaleCapabilities, ScaleUuids, TimerCommand};
+#[cfg(test)]
+use de1_scale::decent_scale;
 
 /// Re-export of `de1_scale::bookoo` so the wasm + future Android bridges
 /// can reach scale-side helpers (e.g. [`bookoo::format_firmware_version`])
@@ -2234,20 +2236,13 @@ impl CremaCore {
             }
         }
         let Some(reading) = scale.parse_reading(data) else {
-            // Not a weight packet — for the Decent Scale, this might be a
-            // `0x0A` LCD / heartbeat reply carrying the firmware-version
-            // sentinel. The legacy app extracts the firmware version from
-            // the same frame (`de1plus/bluetooth.tcl:2738-2749`); we
-            // mirror that here so the version is available diagnostically
-            // (connection-info / future telemetry). A non-Decent scale (or
-            // any frame that isn't a `0x0A` reply) silently returns from
-            // this path.
-            if let Some(decent_scale::CommandResponse::LcdAck {
-                firmware_version, ..
-            }) = scale.parse_decent_scale_command_response(data)
-            {
-                scale.record_decent_scale_firmware_version(firmware_version);
-            }
+            // Not a weight packet — delegate to the per-device absorber.
+            // The Decent variant uses this to snap the firmware version
+            // from its `0x0A` LCD-ack frame (mirroring legacy
+            // `de1plus/bluetooth.tcl:2738-2749`); other scales no-op.
+            // The generic handler stops naming Decent — adding a future
+            // "Bookoo emits firmware on connect" lands in the same shape.
+            scale.absorb_unmatched_frame(data);
             return;
         };
         // A fresh reading re-arms the lost-scale watchdog.
