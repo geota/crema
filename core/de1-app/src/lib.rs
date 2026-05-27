@@ -41,10 +41,7 @@ use de1_protocol::{
 /// A 5-second margin is ~100× the typical real-DE1 round-trip and clears
 /// Web Bluetooth's worst-case back-pressure window.
 pub const PROFILE_UPLOAD_ACK_TIMEOUT: Duration = Duration::from_secs(5);
-use de1_scale::{
-    Scale, ScaleCapabilities, ScaleUuids, TimerCommand, decent_scale, difluid, eureka_precisa,
-    hiroia_jimmy, skale,
-};
+use de1_scale::{Scale, ScaleCapabilities, ScaleUuids, TimerCommand, decent_scale};
 
 /// Re-export of `de1_scale::bookoo` so the wasm + future Android bridges
 /// can reach scale-side helpers (e.g. [`bookoo::format_firmware_version`])
@@ -392,15 +389,15 @@ pub struct CremaCore {
     /// Defaults to [`WeightUnit::Grams`] (matches the legacy app default
     /// and the canonical storage unit).
     weight_unit_pref: WeightUnit,
-    /// Whether the Eureka Precisa / Solo Barista should be powered off when
-    /// the DE1 enters [`MachineState::Sleep`]. Off by default; toggled by the
-    /// shell via [`set_eureka_precisa_auto_off_on_sleep`](Self::set_eureka_precisa_auto_off_on_sleep).
+    /// Whether the connected scale should be powered off when the DE1
+    /// enters [`MachineState::Sleep`]. Off by default; toggled by the
+    /// shell via [`set_auto_off_scale_on_sleep`](Self::set_auto_off_scale_on_sleep).
     ///
-    /// Gated on the connected scale being an Eureka Precisa (or its
-    /// codec-identical Solo Barista) — every other scale ignores the
-    /// setting. The reactive auto-policy in [`handle_state`](Self::handle_state)
-    /// fires [`eureka_precisa::TURN_OFF`] on Sleep entry when this is true.
-    eureka_precisa_auto_off_on_sleep: bool,
+    /// Capability-gated by the scale's [`Scale::power_off_command`] — the
+    /// reactive auto-policy in [`handle_state`](Self::handle_state) asks
+    /// the scale for its power-off bytes and silently no-ops when the
+    /// scale lacks one. Today that covers Decent / Eureka / Solo.
+    auto_off_scale_on_sleep: bool,
     /// Test-only override that flips [`firmware_locks_writes`](Self::firmware_locks_writes)
     /// to `true` so unit tests can verify the per-setter lockout-attribution
     /// path. v1's lockout state is a stub (always `false`); v2 will replace
@@ -478,7 +475,7 @@ impl CremaCore {
             shot_metrics: ShotMetricsAccumulator::default(),
             capture: CaptureRecorder::default(),
             weight_unit_pref: WeightUnit::default(),
-            eureka_precisa_auto_off_on_sleep: false,
+            auto_off_scale_on_sleep: false,
             #[cfg(test)]
             firmware_lock_override: false,
         }
@@ -1563,90 +1560,86 @@ impl CremaCore {
         }
     }
 
-    /// Build a [`Command`] that enables the connected scale's on-scale LCD,
-    /// in the unit the user has chosen.
-    ///
-    /// Decent-Scale-only: the LCD enable/disable surface is unique to the
-    /// Decent Scale, so the command is emitted only when
-    /// [`Scale::is_decent_scale`] is `true`. Every other scale — and an
-    /// unconnected core — returns an empty [`CoreOutput`].
-    ///
-    /// `unit` picks between the two wire packets — [`decent_scale::LCD_ENABLE_GRAMS`]
-    /// for [`WeightUnit::Grams`] and [`decent_scale::LCD_ENABLE_OUNCES`] for
-    /// [`WeightUnit::Ounces`]. Both packets set the "send heartbeat" flag,
-    /// so callers must follow up with periodic
-    /// [`decent_scale_heartbeat`](Self::decent_scale_heartbeat) writes —
-    /// the shell schedules the clock; the core is sans-IO. The reactive
-    /// auto-policy in [`handle_state`](Self::handle_state) wires this to
-    /// the DE1's [`MachineState::Idle`] transition, using the cached
-    /// [`weight_unit_pref`](Self) so an Idle entry picks the right variant.
-    pub fn enable_decent_scale_lcd(&self, unit: WeightUnit) -> CoreOutput {
-        let mut out = CoreOutput::default();
-        Self::push_decent_scale_write(&self.scale, &Self::lcd_enable_bytes(unit), &mut out);
-        out
-    }
-
-    /// Pick the wire packet for [`enable_decent_scale_lcd`] based on the
-    /// user's chosen weight unit.
-    fn lcd_enable_bytes(unit: WeightUnit) -> [u8; 7] {
-        match unit {
-            WeightUnit::Grams => decent_scale::LCD_ENABLE_GRAMS,
-            WeightUnit::Ounces => decent_scale::LCD_ENABLE_OUNCES,
-        }
-    }
-
-    /// Build a [`Command`] that disables the connected scale's on-scale LCD.
-    ///
-    /// Decent-Scale-only, mirroring [`enable_decent_scale_lcd`](Self::enable_decent_scale_lcd).
-    /// The reactive auto-policy fires this on the DE1's
-    /// [`MachineState::Sleep`] transition.
-    pub fn disable_decent_scale_lcd(&self) -> CoreOutput {
-        let mut out = CoreOutput::default();
-        Self::push_decent_scale_write(&self.scale, &decent_scale::LCD_DISABLE, &mut out);
-        out
-    }
-
-    /// Build a [`Command`] that emits one heartbeat write to a connected
-    /// Decent Scale.
-    ///
-    /// The Decent Scale's LCD goes back to sleep after a few seconds of
-    /// silence; the host has to send [`decent_scale::HEARTBEAT`] roughly every
-    /// [`decent_scale::HEARTBEAT_INTERVAL_MS`] ms to keep the display awake.
-    /// The shell schedules the clock — the core is sans-IO and only builds
-    /// the one-shot command on demand.
-    ///
-    /// Decent-Scale-only; empty for every other scale.
-    pub fn decent_scale_heartbeat(&self) -> CoreOutput {
-        let mut out = CoreOutput::default();
-        Self::push_decent_scale_write(&self.scale, &decent_scale::HEARTBEAT, &mut out);
-        out
-    }
-
-    /// Build a [`Command`] that powers off the connected Decent Scale.
+    /// Build a [`Command`] sequence that enables the connected scale's
+    /// on-scale LCD in the unit the user has chosen — capability-driven,
+    /// not device-typed.
     ///
     /// Returns [`AppError::UnsupportedOnHardware`] when no scale is
-    /// connected or the connected scale is not a Decent Scale (mirroring
-    /// [`enable_decent_scale_lcd`]'s gating). The byte sequence is sent
-    /// unconditionally on a Decent Scale — older firmware versions
-    /// silently no-op on it rather than erroring.
+    /// connected or the connected scale has no LCD-enable command
+    /// ([`Scale::lcd_enable_command`] returns `None`). The shell can
+    /// pre-gate the UI off
+    /// [`ScaleCapabilities::can_lcd`](de1_scale::ScaleCapabilities::can_lcd)
+    /// to avoid the error path.
     ///
-    /// The byte sequence comes from the legacy app
-    /// (`de1plus/bluetooth.tcl:1289`).
-    pub fn power_off_decent_scale(&self) -> Result<CoreOutput, AppError> {
-        let Some(scale) = self.scale.as_ref() else {
-            return Err(AppError::UnsupportedOnHardware {
-                feature: "decent_scale_power_off".to_owned(),
-                reason: "no scale is connected".to_owned(),
-            });
-        };
-        if !scale.is_decent_scale() {
-            return Err(AppError::UnsupportedOnHardware {
-                feature: "decent_scale_power_off".to_owned(),
-                reason: "connected scale is not a Decent Scale".to_owned(),
-            });
-        }
+    /// The unit picks variants where the scale's codec exposes them
+    /// (Decent has two LCD-enable packets; Skale only emits its trailing
+    /// `ENABLE_GRAMS` byte for grams). The reactive auto-policy in
+    /// [`handle_state`](Self::handle_state) wires this to the DE1's
+    /// [`MachineState::Idle`] transition with the cached
+    /// [`weight_unit_pref`](Self) so an Idle entry picks the right
+    /// variant.
+    ///
+    /// For scales that need a periodic heartbeat to keep the LCD awake
+    /// (the Decent Scale's [`Scale::heartbeat_command`] returns `Some`),
+    /// callers must follow up with periodic
+    /// [`scale_heartbeat`](Self::scale_heartbeat) writes — the shell
+    /// schedules the clock; the core is sans-IO.
+    pub fn enable_scale_lcd(&self, unit: WeightUnit) -> Result<CoreOutput, AppError> {
+        let scale = Self::scale_for("scale_lcd_enable", self.scale.as_ref())?;
+        let writes = scale
+            .lcd_enable_command(matches!(unit, WeightUnit::Grams))
+            .ok_or_else(|| Self::unsupported(scale, "scale_lcd_enable", "no LCD-enable command"))?;
         let mut out = CoreOutput::default();
-        Self::push_decent_scale_write(&self.scale, &decent_scale::POWER_OFF, &mut out);
+        Self::push_scale_writes(&mut out, writes);
+        Ok(out)
+    }
+
+    /// Build a [`Command`] sequence that disables the connected scale's
+    /// on-scale LCD — capability-driven sibling of
+    /// [`enable_scale_lcd`](Self::enable_scale_lcd). Returns
+    /// [`AppError::UnsupportedOnHardware`] when no scale or no
+    /// LCD-disable command. The reactive auto-policy fires this on
+    /// [`MachineState::Sleep`] entry.
+    pub fn disable_scale_lcd(&self) -> Result<CoreOutput, AppError> {
+        let scale = Self::scale_for("scale_lcd_disable", self.scale.as_ref())?;
+        let writes = scale.lcd_disable_command().ok_or_else(|| {
+            Self::unsupported(scale, "scale_lcd_disable", "no LCD-disable command")
+        })?;
+        let mut out = CoreOutput::default();
+        Self::push_scale_writes(&mut out, writes);
+        Ok(out)
+    }
+
+    /// Build a [`Command`] sequence that emits one heartbeat write to
+    /// the connected scale — the Decent Scale's LCD sleeps after a few
+    /// seconds of host silence and needs a keep-alive every
+    /// [`decent_scale::HEARTBEAT_INTERVAL_MS`] ms. The shell schedules
+    /// the clock; the core is sans-IO and builds the one-shot command
+    /// on demand. Returns [`AppError::UnsupportedOnHardware`] when no
+    /// scale or the scale doesn't need a heartbeat
+    /// ([`ScaleCapabilities::needs_heartbeat`](de1_scale::ScaleCapabilities::needs_heartbeat)
+    /// is `false`).
+    pub fn scale_heartbeat(&self) -> Result<CoreOutput, AppError> {
+        let scale = Self::scale_for("scale_heartbeat", self.scale.as_ref())?;
+        let writes = scale
+            .heartbeat_command()
+            .ok_or_else(|| Self::unsupported(scale, "scale_heartbeat", "no heartbeat command"))?;
+        let mut out = CoreOutput::default();
+        Self::push_scale_writes(&mut out, writes);
+        Ok(out)
+    }
+
+    /// Build a [`Command`] sequence that powers off the connected scale.
+    /// Returns [`AppError::UnsupportedOnHardware`] when no scale or the
+    /// scale lacks a host-driven power-off (Decent / Eureka / Solo
+    /// support it; everything else returns `None`).
+    pub fn power_off_scale(&self) -> Result<CoreOutput, AppError> {
+        let scale = Self::scale_for("scale_power_off", self.scale.as_ref())?;
+        let writes = scale
+            .power_off_command()
+            .ok_or_else(|| Self::unsupported(scale, "scale_power_off", "no power-off command"))?;
+        let mut out = CoreOutput::default();
+        Self::push_scale_writes(&mut out, writes);
         Ok(out)
     }
 
@@ -1671,197 +1664,99 @@ impl CremaCore {
         self.weight_unit_pref
     }
 
-    /// Build a [`Command`] that enables the Skale II's on-scale LCD.
-    ///
-    /// Skale-II-only: the LCD enable surface is unique to the Skale among the
-    /// non-Decent-Scale codecs, so the command is emitted only when
-    /// [`Scale::is_skale`] is `true`. Every other scale — and an unconnected
-    /// core — returns an empty [`CoreOutput`].
-    ///
-    /// Legacy sequence (`de1plus/bluetooth.tcl:238-253`): write `ED`
-    /// (screen-on) then `EC` (display-weight) — two single-byte writes
-    /// queued in order. The reactive auto-policy in
-    /// [`handle_state`](Self::handle_state) wires this to the DE1's
-    /// [`MachineState::Idle`] transition, mirroring the Decent Scale's
-    /// LCD-enable wiring established by PR-E.
-    ///
-    /// `unit` picks an additional `0x03` write (Skale's "enable grams"
-    /// command) when the user's pref is grams; the Skale doesn't expose an
-    /// ounces-LCD variant so the ounces case skips the unit write —
-    /// matches legacy de1app, which never sends an ounces command for the
-    /// Skale (`bluetooth.tcl:224-236`).
-    pub fn enable_skale_lcd(&self, unit: WeightUnit) -> CoreOutput {
+    /// Build a [`Command`] sequence that fires a beep on the connected
+    /// scale. Returns [`AppError::UnsupportedOnHardware`] when no scale
+    /// or the scale lacks a beep command (Eureka / Solo support it).
+    pub fn scale_beep(&self) -> Result<CoreOutput, AppError> {
+        let scale = Self::scale_for("scale_beep", self.scale.as_ref())?;
+        let writes = scale
+            .beep_command()
+            .ok_or_else(|| Self::unsupported(scale, "scale_beep", "no beep command"))?;
         let mut out = CoreOutput::default();
-        Self::push_skale_write(&self.scale, &[skale::CMD_SCREEN_ON], &mut out);
-        Self::push_skale_write(&self.scale, &[skale::CMD_DISPLAY_WEIGHT], &mut out);
-        if matches!(unit, WeightUnit::Grams) {
-            Self::push_skale_write(&self.scale, &[skale::CMD_ENABLE_GRAMS], &mut out);
-        }
-        out
+        Self::push_scale_writes(&mut out, writes);
+        Ok(out)
     }
 
-    /// Build a [`Command`] that disables the Skale II's on-scale LCD.
+    /// Build a [`Command`] sequence that explicitly sets the connected
+    /// scale's display unit to grams. Eureka / Solo / Difluid expose
+    /// this; scales whose unit lives in the LCD-enable bytes (Decent /
+    /// Skale) return `None` and the caller gets
+    /// [`AppError::UnsupportedOnHardware`]. For scales that only expose
+    /// a toggle (Hiroia), call [`toggle_scale_unit`](Self::toggle_scale_unit)
+    /// instead.
+    pub fn set_scale_unit_grams(&self) -> Result<CoreOutput, AppError> {
+        let scale = Self::scale_for("scale_set_unit_grams", self.scale.as_ref())?;
+        let writes = scale.set_unit_grams_command().ok_or_else(|| {
+            Self::unsupported(scale, "scale_set_unit_grams", "no set-unit-grams command")
+        })?;
+        let mut out = CoreOutput::default();
+        Self::push_scale_writes(&mut out, writes);
+        Ok(out)
+    }
+
+    /// Build a [`Command`] sequence that toggles the connected scale's
+    /// display unit. Hiroia Jimmy is the only scale that exposes a
+    /// toggle today; every other scale returns
+    /// [`AppError::UnsupportedOnHardware`].
+    pub fn toggle_scale_unit(&self) -> Result<CoreOutput, AppError> {
+        let scale = Self::scale_for("scale_toggle_unit", self.scale.as_ref())?;
+        let writes = scale.toggle_unit_command().ok_or_else(|| {
+            Self::unsupported(scale, "scale_toggle_unit", "no toggle-unit command")
+        })?;
+        let mut out = CoreOutput::default();
+        Self::push_scale_writes(&mut out, writes);
+        Ok(out)
+    }
+
+    /// Toggle whether the connected scale should be powered off on
+    /// [`MachineState::Sleep`] entry. Off by default. Behaviour-driven by
+    /// the scale's [`Scale::power_off_command`] capability — scales
+    /// without a power-off command silently skip this on Sleep even
+    /// when the pref is on.
     ///
-    /// Skale-II-only, mirroring [`enable_skale_lcd`](Self::enable_skale_lcd).
-    /// The reactive auto-policy fires this on the DE1's
-    /// [`MachineState::Sleep`] transition.
-    pub fn disable_skale_lcd(&self) -> CoreOutput {
-        let mut out = CoreOutput::default();
-        Self::push_skale_write(&self.scale, &[skale::CMD_SCREEN_OFF], &mut out);
-        out
+    /// Replaces the previous Eureka-specific
+    /// `set_eureka_precisa_auto_off_on_sleep`; the pref now generalises
+    /// to any scale that exposes a power-off command (Decent / Eureka /
+    /// Solo today).
+    pub fn set_auto_off_scale_on_sleep(&mut self, enabled: bool) {
+        self.auto_off_scale_on_sleep = enabled;
     }
 
-    /// Build a [`Command`] that turns off the connected Eureka Precisa or
-    /// Solo Barista. Returns an empty [`CoreOutput`] for every other scale
-    /// (and an unconnected core).
-    ///
-    /// The byte sequence (`AA 02 32 32`, see [`eureka_precisa::TURN_OFF`])
-    /// is the same for both scales — the Solo Barista is codec-identical to
-    /// the Eureka Precisa. Legacy de1app exposes this as
-    /// `eureka_precisa_turn_off` (`de1plus/bluetooth.tcl:750-756`);
-    /// reaprime does not implement it.
-    pub fn turn_off_eureka_precisa(&self) -> CoreOutput {
-        let mut out = CoreOutput::default();
-        Self::push_eureka_precisa_write(&self.scale, &eureka_precisa::TURN_OFF, &mut out);
-        out
+    /// Whether the connected scale is configured to power off on machine
+    /// Sleep entry. See
+    /// [`set_auto_off_scale_on_sleep`](Self::set_auto_off_scale_on_sleep).
+    pub fn auto_off_scale_on_sleep(&self) -> bool {
+        self.auto_off_scale_on_sleep
     }
 
-    /// Build a [`Command`] that fires the Eureka Precisa / Solo Barista
-    /// "beep twice" command. Empty for every other scale.
-    pub fn beep_eureka_precisa(&self) -> CoreOutput {
-        let mut out = CoreOutput::default();
-        Self::push_eureka_precisa_write(&self.scale, &eureka_precisa::BEEP, &mut out);
-        out
+    /// Resolve `&self.scale` for a capability-named feature, returning a
+    /// shared `AppError` on a missing scale. Shared by every public
+    /// scale-write method below so the "no scale connected" branch has
+    /// one home.
+    fn scale_for<'a>(feature: &str, scale: Option<&'a Scale>) -> Result<&'a Scale, AppError> {
+        scale.ok_or_else(|| AppError::UnsupportedOnHardware {
+            feature: feature.to_owned(),
+            reason: "no scale is connected".to_owned(),
+        })
     }
 
-    /// Build a [`Command`] that sets the Eureka Precisa / Solo Barista's
-    /// display unit to grams.
-    ///
-    /// Empty for every other scale. The Eureka Precisa only exposes a
-    /// "set to grams" command in its codec — there is no per-unit selector
-    /// — so the `unit` argument is currently only consumed via the
-    /// reactive path: an ounces pref means "do not send" (legacy de1app
-    /// only sends the grams command, and only when the user wants grams).
-    pub fn set_eureka_precisa_unit(&self, unit: WeightUnit) -> CoreOutput {
-        let mut out = CoreOutput::default();
-        if matches!(unit, WeightUnit::Grams) {
-            Self::push_eureka_precisa_write(&self.scale, &eureka_precisa::SET_UNIT_GRAMS, &mut out);
-        }
-        out
-    }
-
-    /// Build a [`Command`] that toggles the Hiroia Jimmy's display unit
-    /// (grams ↔ oz / ml). Empty for every other scale.
-    ///
-    /// Reaprime's auto-recovery (`hiroia_scale.dart:120-128`) fires this
-    /// `[0x0B, 0x00]` byte sequence when the scale's mode byte indicates
-    /// a non-grams unit. The core wires it both as an explicit method
-    /// here and as an automatic recovery from the weight-notification
-    /// path (see `handle_scale_weight`).
-    pub fn toggle_hiroia_jimmy_unit(&self) -> CoreOutput {
-        let mut out = CoreOutput::default();
-        Self::push_hiroia_jimmy_write(&self.scale, &hiroia_jimmy::TOGGLE_UNIT, &mut out);
-        out
-    }
-
-    /// Build a [`Command`] that sets the Difluid Microbalance's display
-    /// unit to grams. Empty for every other scale.
-    ///
-    /// The Difluid only accepts a "set to grams" command — no other unit
-    /// is exposed in the codec. The core fires this automatically from
-    /// the weight-notification path when [`difluid::is_grams_unit`]
-    /// returns `Some(false)`, mirroring reaprime's auto-recovery
-    /// (`difluid_scale.dart:147-154`).
-    pub fn set_difluid_unit_grams(&self) -> CoreOutput {
-        let mut out = CoreOutput::default();
-        Self::push_difluid_write(&self.scale, &difluid::SET_UNIT_GRAMS, &mut out);
-        out
-    }
-
-    /// Toggle whether the Eureka Precisa / Solo Barista should be powered
-    /// off on [`MachineState::Sleep`] entry. Off by default; the user opts
-    /// in via the Machine settings page (the only UI surface introduced
-    /// by PR G beyond the existing LCD / unit-pref wiring).
-    pub fn set_eureka_precisa_auto_off_on_sleep(&mut self, enabled: bool) {
-        self.eureka_precisa_auto_off_on_sleep = enabled;
-    }
-
-    /// Whether the Eureka Precisa / Solo Barista is configured to power
-    /// off on machine Sleep entry. See
-    /// [`set_eureka_precisa_auto_off_on_sleep`](Self::set_eureka_precisa_auto_off_on_sleep).
-    pub fn eureka_precisa_auto_off_on_sleep(&self) -> bool {
-        self.eureka_precisa_auto_off_on_sleep
-    }
-
-    /// Internal: append a fixed Skale write to `out` if the connected scale
-    /// is a Skale II.
-    fn push_skale_write(scale: &Option<Scale>, bytes: &[u8], out: &mut CoreOutput) {
-        if let Some(scale) = scale
-            && scale.is_skale()
-        {
-            out.commands.push(Command::WriteScale {
-                data: bytes.to_vec(),
-            });
+    /// Build an `AppError::UnsupportedOnHardware` naming the connected
+    /// scale and the missing capability — used by the public methods
+    /// when [`Scale`]'s capability accessor returns `None`.
+    fn unsupported(scale: &Scale, feature: &str, what: &str) -> AppError {
+        AppError::UnsupportedOnHardware {
+            feature: feature.to_owned(),
+            reason: format!("connected scale ({}) has {what}", scale.label()),
         }
     }
 
-    /// Internal: append a fixed Eureka Precisa / Solo Barista write to `out`
-    /// if the connected scale is one of those two codec-identical scales.
-    fn push_eureka_precisa_write(scale: &Option<Scale>, bytes: &[u8], out: &mut CoreOutput) {
-        if let Some(scale) = scale
-            && scale.is_eureka_precisa()
-        {
-            out.commands.push(Command::WriteScale {
-                data: bytes.to_vec(),
-            });
-        }
-    }
-
-    /// Internal: append a fixed Hiroia Jimmy write to `out` if the connected
-    /// scale is a Hiroia Jimmy.
-    fn push_hiroia_jimmy_write(scale: &Option<Scale>, bytes: &[u8], out: &mut CoreOutput) {
-        if let Some(scale) = scale
-            && scale.is_hiroia_jimmy()
-        {
-            out.commands.push(Command::WriteScale {
-                data: bytes.to_vec(),
-            });
-        }
-    }
-
-    /// Internal: append a fixed Difluid write to `out` if the connected
-    /// scale is a Difluid Microbalance.
-    fn push_difluid_write(scale: &Option<Scale>, bytes: &[u8], out: &mut CoreOutput) {
-        if let Some(scale) = scale
-            && scale.is_difluid()
-        {
-            out.commands.push(Command::WriteScale {
-                data: bytes.to_vec(),
-            });
-        }
-    }
-
-    /// Internal: append a fixed Decent-Scale write to `out` if the connected
-    /// scale is a Decent Scale.
-    ///
-    /// Shared by every Decent-Scale public method and by the reactive
-    /// auto-policy in [`handle_state`](Self::handle_state). Returns silently
-    /// when no scale is connected or the connected scale is anything else.
-    ///
-    /// Single write per command. Legacy de1app double-sends as a paranoia
-    /// workaround for v1.0 firmware buffer drops
-    /// (`de1plus/bluetooth.tcl:1327-1330`, repeated for every LCD / timer
-    /// / tare proc); reaprime does not (uses a data-flow watchdog
-    /// mitigation instead — see `reaprime/.../decent_scale/scale.dart`).
-    /// Per the project's "defer to reaprime on inconsistent missing
-    /// capabilities" rule, we trust the modern BLE stack to deliver
-    /// writes reliably. If real-hardware testing shows drops, the
-    /// reaprime-style watchdog retry is the right addition — not blind
-    /// double-send.
-    fn push_decent_scale_write(scale: &Option<Scale>, bytes: &[u8; 7], out: &mut CoreOutput) {
-        if let Some(scale) = scale
-            && scale.is_decent_scale()
-        {
+    /// Wrap each `&[u8]` in `writes` as a `Command::WriteScale` and push
+    /// onto `out`. The capability-driven sibling of the five
+    /// `push_X_write` helpers it replaces: callers ask the scale for the
+    /// bytes (via `lcd_enable_command`, `power_off_command`, …) and
+    /// hand the resulting `Vec` here.
+    fn push_scale_writes(out: &mut CoreOutput, writes: Vec<&'static [u8]>) {
+        for bytes in writes {
             out.commands.push(Command::WriteScale {
                 data: bytes.to_vec(),
             });
@@ -2186,57 +2081,45 @@ impl CremaCore {
                 state: info.state,
                 substate: info.substate,
             });
-            // Reactive Decent-Scale LCD auto-policy: enable the on-scale LCD
-            // when the DE1 enters Idle (wake-with-DE1) and disable it when the
-            // DE1 enters Sleep (sleep-with-DE1). Both writes are gated by
-            // `push_decent_scale_write` on the connected scale being a Decent
-            // Scale, so every other scale stays silent. We fire on *entry*
-            // into the state — not on every tick — by checking the previous
-            // top-level state, mirroring the audit §7.10/§7.11 design.
-            if prev_state != Some(info.state) {
+            // Reactive scale auto-policy on state-entry. Capability-driven:
+            // for each transition we ask the connected scale for the bytes
+            // (via `lcd_enable_command` / `lcd_disable_command` /
+            // `set_unit_grams_command` / `power_off_command`); scales that
+            // don't expose the capability stay silent. Fires on state
+            // *entry* — not on every tick — via the prev-state guard.
+            if prev_state != Some(info.state)
+                && let Some(scale) = self.scale.as_ref()
+            {
+                let grams = matches!(self.weight_unit_pref, WeightUnit::Grams);
                 match info.state {
-                    // The LCD-enable variant follows the user's chosen
-                    // weight unit, cached on the core by the shell via
-                    // `set_weight_unit_pref` — so an Idle entry picks
-                    // grams or ounces to match what the shell is showing.
+                    // The LCD-enable bytes follow the user's chosen weight
+                    // unit, cached on the core by the shell via
+                    // `set_weight_unit_pref` — so an Idle entry picks the
+                    // right variant to match what the shell is showing.
                     MachineState::Idle => {
-                        Self::push_decent_scale_write(
-                            &self.scale,
-                            &Self::lcd_enable_bytes(self.weight_unit_pref),
-                            out,
-                        );
-                        // Mirror the LCD-enable wiring for the Skale II:
-                        // legacy de1app fires `ED EC` on the same "scale is
-                        // present + machine is Idle" trigger. Each push is
-                        // separately capability-gated, so non-Skale scales
-                        // see no writes here.
-                        Self::push_skale_write(&self.scale, &[skale::CMD_SCREEN_ON], out);
-                        Self::push_skale_write(&self.scale, &[skale::CMD_DISPLAY_WEIGHT], out);
-                        if matches!(self.weight_unit_pref, WeightUnit::Grams) {
-                            Self::push_skale_write(&self.scale, &[skale::CMD_ENABLE_GRAMS], out);
-                            // Eureka Precisa / Solo Barista also accept a
-                            // "set unit to grams" command — fire it on
-                            // Idle entry when the pref is grams so the
-                            // on-scale display follows.
-                            Self::push_eureka_precisa_write(
-                                &self.scale,
-                                &eureka_precisa::SET_UNIT_GRAMS,
-                                out,
-                            );
+                        if let Some(writes) = scale.lcd_enable_command(grams) {
+                            Self::push_scale_writes(out, writes);
+                        }
+                        // Independent of LCD: when the pref is grams,
+                        // explicit "set to grams" scales (Eureka / Solo /
+                        // Difluid) get nudged so the on-scale display
+                        // unit follows the shell's unit.
+                        if grams && let Some(writes) = scale.set_unit_grams_command() {
+                            Self::push_scale_writes(out, writes);
                         }
                     }
                     MachineState::Sleep => {
-                        Self::push_decent_scale_write(&self.scale, &decent_scale::LCD_DISABLE, out);
-                        Self::push_skale_write(&self.scale, &[skale::CMD_SCREEN_OFF], out);
-                        // Eureka Precisa auto-off on Sleep is an opt-in
-                        // setting (default off); fire `TURN_OFF` only when
-                        // the user has enabled it.
-                        if self.eureka_precisa_auto_off_on_sleep {
-                            Self::push_eureka_precisa_write(
-                                &self.scale,
-                                &eureka_precisa::TURN_OFF,
-                                out,
-                            );
+                        if let Some(writes) = scale.lcd_disable_command() {
+                            Self::push_scale_writes(out, writes);
+                        }
+                        // Power-off-on-sleep is opt-in (default off).
+                        // Fires for any scale whose `power_off_command`
+                        // returns `Some` — generalised from the
+                        // previous Eureka-only path.
+                        if self.auto_off_scale_on_sleep
+                            && let Some(writes) = scale.power_off_command()
+                        {
+                            Self::push_scale_writes(out, writes);
                         }
                     }
                     _ => {}
@@ -2993,6 +2876,10 @@ mod tests {
     use super::*;
     use de1_domain::ShotPhase;
     use de1_protocol::{MachineState, SubState};
+    // Per-scale protocol modules used by the tests; the production lib
+    // no longer reaches into these directly (the capability-driven
+    // refactor consolidated everything through `Scale::*_command`).
+    use de1_scale::{difluid, eureka_precisa, hiroia_jimmy, skale};
 
     /// A valid 19-byte `ShotSample` packet (the `de1-protocol` doctest fixture).
     const SAMPLE: [u8; 19] = [
@@ -3349,91 +3236,101 @@ mod tests {
     }
 
     #[test]
-    fn enable_decent_scale_lcd_emits_the_known_wire_bytes() {
+    fn enable_scale_lcd_on_decent_emits_the_known_wire_bytes() {
         let mut core = CremaCore::new();
         core.connect_scale("Decent Scale ABC");
-        let out = core.enable_decent_scale_lcd(WeightUnit::Grams);
-        // The single emitted command must carry exactly `LCD_ENABLE_GRAMS`.
+        let out = core
+            .enable_scale_lcd(WeightUnit::Grams)
+            .expect("decent scale supports lcd");
         assert_eq!(the_only_scale_write(&out), decent_scale::LCD_ENABLE_GRAMS);
     }
 
     #[test]
-    fn enable_decent_scale_lcd_in_ounces_emits_the_ounces_packet() {
+    fn enable_scale_lcd_on_decent_in_ounces_emits_the_ounces_packet() {
         let mut core = CremaCore::new();
         core.connect_scale("Decent Scale ABC");
-        let out = core.enable_decent_scale_lcd(WeightUnit::Ounces);
-        // The ounces variant only differs from the grams variant in byte
-        // [4] (the unit flag) and the trailing checksum.
+        let out = core
+            .enable_scale_lcd(WeightUnit::Ounces)
+            .expect("decent scale supports lcd");
         assert_eq!(the_only_scale_write(&out), decent_scale::LCD_ENABLE_OUNCES);
     }
 
     #[test]
-    fn disable_decent_scale_lcd_emits_the_known_wire_bytes() {
+    fn disable_scale_lcd_on_decent_emits_the_known_wire_bytes() {
         let mut core = CremaCore::new();
         core.connect_scale("Decent Scale ABC");
-        let out = core.disable_decent_scale_lcd();
+        let out = core.disable_scale_lcd().expect("decent scale supports lcd");
         assert_eq!(the_only_scale_write(&out), decent_scale::LCD_DISABLE);
     }
 
     #[test]
-    fn decent_scale_heartbeat_emits_the_known_wire_bytes() {
+    fn scale_heartbeat_on_decent_emits_the_known_wire_bytes() {
         let mut core = CremaCore::new();
         core.connect_scale("Decent Scale ABC");
-        let out = core.decent_scale_heartbeat();
+        let out = core
+            .scale_heartbeat()
+            .expect("decent scale needs heartbeat");
         assert_eq!(the_only_scale_write(&out), decent_scale::HEARTBEAT);
     }
 
     #[test]
-    fn the_decent_scale_writes_are_silent_with_no_scale_connected() {
+    fn scale_methods_error_when_no_scale_is_connected() {
         let core = CremaCore::new();
-        assert!(
-            core.enable_decent_scale_lcd(WeightUnit::Grams)
-                .commands
-                .is_empty()
-        );
-        assert!(core.disable_decent_scale_lcd().commands.is_empty());
-        assert!(core.decent_scale_heartbeat().commands.is_empty());
+        assert!(matches!(
+            core.enable_scale_lcd(WeightUnit::Grams).unwrap_err(),
+            AppError::UnsupportedOnHardware { .. }
+        ));
+        assert!(matches!(
+            core.disable_scale_lcd().unwrap_err(),
+            AppError::UnsupportedOnHardware { .. }
+        ));
+        assert!(matches!(
+            core.scale_heartbeat().unwrap_err(),
+            AppError::UnsupportedOnHardware { .. }
+        ));
+        assert!(matches!(
+            core.power_off_scale().unwrap_err(),
+            AppError::UnsupportedOnHardware { .. }
+        ));
     }
 
     #[test]
-    fn the_decent_scale_writes_are_silent_for_a_non_decent_scale() {
-        // Every Decent-Scale-specific write is gated by `is_decent_scale`,
-        // so connecting a Bookoo (or any other) must yield nothing.
+    fn lcd_methods_error_for_a_scale_without_lcd() {
+        // Bookoo has no settable on-scale LCD — every LCD method must
+        // surface `UnsupportedOnHardware` rather than silently no-op.
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC");
-        assert!(
-            core.enable_decent_scale_lcd(WeightUnit::Grams)
-                .commands
-                .is_empty()
-        );
-        assert!(core.disable_decent_scale_lcd().commands.is_empty());
-        assert!(core.decent_scale_heartbeat().commands.is_empty());
+        assert!(matches!(
+            core.enable_scale_lcd(WeightUnit::Grams).unwrap_err(),
+            AppError::UnsupportedOnHardware { .. }
+        ));
+        assert!(matches!(
+            core.disable_scale_lcd().unwrap_err(),
+            AppError::UnsupportedOnHardware { .. }
+        ));
+        assert!(matches!(
+            core.scale_heartbeat().unwrap_err(),
+            AppError::UnsupportedOnHardware { .. }
+        ));
     }
 
     #[test]
-    fn power_off_decent_scale_errors_when_no_scale_is_connected() {
-        let core = CremaCore::new();
-        let err = core.power_off_decent_scale().unwrap_err();
+    fn power_off_scale_errors_for_a_scale_without_power_off() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC");
+        let err = core.power_off_scale().unwrap_err();
         assert!(matches!(err, AppError::UnsupportedOnHardware { .. }));
     }
 
     #[test]
-    fn power_off_decent_scale_errors_for_a_non_decent_scale() {
-        let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC");
-        let err = core.power_off_decent_scale().unwrap_err();
-        assert!(matches!(err, AppError::UnsupportedOnHardware { .. }));
-    }
-
-    #[test]
-    fn power_off_decent_scale_emits_the_known_wire_bytes() {
+    fn power_off_scale_on_decent_emits_the_known_wire_bytes() {
         // The byte sequence is sent unconditionally on any connected
         // Decent Scale — older firmware versions silently no-op on it.
         let mut core = CremaCore::new();
         core.connect_scale("Decent Scale ABC");
         let out = core
-            .power_off_decent_scale()
-            .expect("decent scale connected");
+            .power_off_scale()
+            .expect("decent scale supports power-off");
         assert_eq!(the_only_scale_write(&out), decent_scale::POWER_OFF);
     }
 
@@ -3555,10 +3452,12 @@ mod tests {
     // ----- Skale II LCD auto-policy ---------------------------------------
 
     #[test]
-    fn enable_skale_lcd_emits_screen_on_and_display_weight() {
+    fn enable_scale_lcd_on_skale_emits_screen_on_and_display_weight() {
         let mut core = CremaCore::new();
         core.connect_scale("Skale-9");
-        let out = core.enable_skale_lcd(WeightUnit::Grams);
+        let out = core
+            .enable_scale_lcd(WeightUnit::Grams)
+            .expect("skale supports lcd");
         let writes = scale_writes(&out);
         // Legacy sends `ED` (screen-on) then `EC` (display-weight), in order.
         // Grams pref also sends `03` (enable-grams).
@@ -3573,10 +3472,12 @@ mod tests {
     }
 
     #[test]
-    fn enable_skale_lcd_skips_the_unit_write_when_pref_is_ounces() {
+    fn enable_scale_lcd_on_skale_skips_the_unit_write_when_pref_is_ounces() {
         let mut core = CremaCore::new();
         core.connect_scale("Skale-9");
-        let out = core.enable_skale_lcd(WeightUnit::Ounces);
+        let out = core
+            .enable_scale_lcd(WeightUnit::Ounces)
+            .expect("skale supports lcd");
         let writes = scale_writes(&out);
         // No `0x03` enable-grams write when the user prefers ounces.
         assert!(!writes.contains(&[skale::CMD_ENABLE_GRAMS].as_slice()));
@@ -3585,20 +3486,12 @@ mod tests {
     }
 
     #[test]
-    fn disable_skale_lcd_emits_screen_off() {
+    fn disable_scale_lcd_on_skale_emits_screen_off() {
         let mut core = CremaCore::new();
         core.connect_scale("Skale-9");
-        let out = core.disable_skale_lcd();
+        let out = core.disable_scale_lcd().expect("skale supports lcd");
         let writes = scale_writes(&out);
         assert_eq!(writes, vec![[skale::CMD_SCREEN_OFF].as_slice()]);
-    }
-
-    #[test]
-    fn skale_lcd_methods_are_silent_for_a_non_skale_scale() {
-        let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC");
-        assert!(core.enable_skale_lcd(WeightUnit::Grams).commands.is_empty());
-        assert!(core.disable_skale_lcd().commands.is_empty());
     }
 
     #[test]
@@ -3625,10 +3518,10 @@ mod tests {
     // ----- Eureka Precisa methods + auto-off-on-sleep ---------------------
 
     #[test]
-    fn turn_off_eureka_precisa_emits_the_known_bytes() {
+    fn power_off_scale_on_eureka_emits_the_known_bytes() {
         let mut core = CremaCore::new();
         core.connect_scale("CFS-9002");
-        let out = core.turn_off_eureka_precisa();
+        let out = core.power_off_scale().expect("eureka supports power-off");
         let writes = scale_writes(&out);
         assert_eq!(writes, vec![eureka_precisa::TURN_OFF.as_slice()]);
     }
@@ -3636,66 +3529,61 @@ mod tests {
     #[test]
     fn solo_barista_accepts_the_eureka_precisa_commands() {
         // Solo Barista is codec-identical to Eureka Precisa — the same
-        // bytes go out via the `is_eureka_precisa()` gate.
+        // bytes go out via the capability dispatch.
         let mut core = CremaCore::new();
         core.connect_scale("LSJ-001");
-        let out = core.turn_off_eureka_precisa();
+        let out = core
+            .power_off_scale()
+            .expect("solo barista supports power-off");
         let writes = scale_writes(&out);
         assert_eq!(writes, vec![eureka_precisa::TURN_OFF.as_slice()]);
     }
 
     #[test]
-    fn beep_eureka_precisa_emits_the_known_bytes() {
+    fn scale_beep_on_eureka_emits_the_known_bytes() {
         let mut core = CremaCore::new();
         core.connect_scale("CFS-9002");
-        let out = core.beep_eureka_precisa();
+        let out = core.scale_beep().expect("eureka supports beep");
         let writes = scale_writes(&out);
         assert_eq!(writes, vec![eureka_precisa::BEEP.as_slice()]);
     }
 
     #[test]
-    fn set_eureka_precisa_unit_grams_emits_the_set_unit_bytes() {
+    fn set_scale_unit_grams_on_eureka_emits_the_set_unit_bytes() {
         let mut core = CremaCore::new();
         core.connect_scale("CFS-9002");
-        let out = core.set_eureka_precisa_unit(WeightUnit::Grams);
+        let out = core
+            .set_scale_unit_grams()
+            .expect("eureka supports set-unit-grams");
         let writes = scale_writes(&out);
         assert_eq!(writes, vec![eureka_precisa::SET_UNIT_GRAMS.as_slice()]);
     }
 
     #[test]
-    fn set_eureka_precisa_unit_ounces_emits_nothing() {
-        // The Eureka Precisa codec only has a "set to grams" command —
-        // ounces is a no-op (legacy de1app never sends the ounces variant).
-        let mut core = CremaCore::new();
-        core.connect_scale("CFS-9002");
-        let out = core.set_eureka_precisa_unit(WeightUnit::Ounces);
-        assert!(out.commands.is_empty());
-    }
-
-    #[test]
-    fn eureka_precisa_methods_are_silent_for_a_non_eureka_scale() {
+    fn beep_and_set_unit_error_for_a_scale_without_them() {
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC");
-        assert!(core.turn_off_eureka_precisa().commands.is_empty());
-        assert!(core.beep_eureka_precisa().commands.is_empty());
-        assert!(
-            core.set_eureka_precisa_unit(WeightUnit::Grams)
-                .commands
-                .is_empty()
-        );
+        assert!(matches!(
+            core.scale_beep().unwrap_err(),
+            AppError::UnsupportedOnHardware { .. }
+        ));
+        assert!(matches!(
+            core.set_scale_unit_grams().unwrap_err(),
+            AppError::UnsupportedOnHardware { .. }
+        ));
     }
 
     #[test]
-    fn eureka_precisa_auto_off_on_sleep_default_is_false() {
+    fn auto_off_scale_on_sleep_default_is_false() {
         let core = CremaCore::new();
-        assert!(!core.eureka_precisa_auto_off_on_sleep());
+        assert!(!core.auto_off_scale_on_sleep());
     }
 
     #[test]
-    fn entering_sleep_fires_eureka_turn_off_when_the_opt_in_is_on() {
+    fn entering_sleep_fires_scale_power_off_when_the_opt_in_is_on() {
         let mut core = CremaCore::new();
         core.connect_scale("CFS-9002");
-        core.set_eureka_precisa_auto_off_on_sleep(true);
+        core.set_auto_off_scale_on_sleep(true);
         core.on_notification(Source::De1State, &[MachineState::Idle as u8, 0], 1_000);
         let out = core.on_notification(Source::De1State, &[MachineState::Sleep as u8, 0], 2_000);
         let writes = scale_writes(&out);
@@ -3703,7 +3591,7 @@ mod tests {
     }
 
     #[test]
-    fn entering_sleep_does_not_fire_eureka_turn_off_when_the_opt_in_is_off() {
+    fn entering_sleep_does_not_fire_scale_power_off_when_the_opt_in_is_off() {
         let mut core = CremaCore::new();
         core.connect_scale("CFS-9002");
         core.on_notification(Source::De1State, &[MachineState::Idle as u8, 0], 1_000);
@@ -3715,19 +3603,24 @@ mod tests {
     // ----- Hiroia Jimmy toggle-unit + auto-recovery -----------------------
 
     #[test]
-    fn toggle_hiroia_jimmy_unit_emits_the_known_bytes() {
+    fn toggle_scale_unit_on_hiroia_emits_the_known_bytes() {
         let mut core = CremaCore::new();
         core.connect_scale("HIROIA JIMMY-X");
-        let out = core.toggle_hiroia_jimmy_unit();
+        let out = core
+            .toggle_scale_unit()
+            .expect("hiroia supports toggle-unit");
         let writes = scale_writes(&out);
         assert_eq!(writes, vec![hiroia_jimmy::TOGGLE_UNIT.as_slice()]);
     }
 
     #[test]
-    fn toggle_hiroia_jimmy_unit_is_silent_for_a_non_hiroia_scale() {
+    fn toggle_scale_unit_errors_for_a_scale_without_toggle() {
         let mut core = CremaCore::new();
         core.connect_scale("BOOKOO_SC");
-        assert!(core.toggle_hiroia_jimmy_unit().commands.is_empty());
+        assert!(matches!(
+            core.toggle_scale_unit().unwrap_err(),
+            AppError::UnsupportedOnHardware { .. }
+        ));
     }
 
     #[test]
@@ -3755,19 +3648,14 @@ mod tests {
     // ----- Difluid SET_UNIT_GRAMS auto-recovery ---------------------------
 
     #[test]
-    fn set_difluid_unit_grams_emits_the_known_bytes() {
+    fn set_scale_unit_grams_on_difluid_emits_the_known_bytes() {
         let mut core = CremaCore::new();
         core.connect_scale("Microbalance-X");
-        let out = core.set_difluid_unit_grams();
+        let out = core
+            .set_scale_unit_grams()
+            .expect("difluid supports set-unit-grams");
         let writes = scale_writes(&out);
         assert_eq!(writes, vec![difluid::SET_UNIT_GRAMS.as_slice()]);
-    }
-
-    #[test]
-    fn set_difluid_unit_grams_is_silent_for_a_non_difluid_scale() {
-        let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC");
-        assert!(core.set_difluid_unit_grams().commands.is_empty());
     }
 
     #[test]

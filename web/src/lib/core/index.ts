@@ -452,38 +452,41 @@ export interface CremaCore {
 	/** Build a `CoreOutput` whose command resets the connected scale's built-in timer to zero. */
 	resetTimer(): Promise<CoreOutput>;
 	/**
-	 * Build a `CoreOutput` whose command enables a connected Decent Scale's
-	 * on-scale LCD in the unit the user has chosen. Decent-Scale-only:
-	 * empty for every other scale, and for an unconnected core. The shell
-	 * schedules periodic `decentScaleHeartbeat` writes once the LCD is
-	 * enabled. `unit` is the shell's legacy `'g' | 'oz'` pref; the bridge
-	 * maps it to the core's `'grams' | 'ounces'` wire form.
+	 * Build a `CoreOutput` whose commands enable the connected scale's
+	 * on-scale LCD in the unit the user has chosen. Capability-driven:
+	 * the bridge asks the scale for its LCD-enable wire bytes (Decent
+	 * one packet, Skale 2–3 writes); scales without an LCD reject with
+	 * an `UnsupportedOnHardware` error. The shell schedules periodic
+	 * `scaleHeartbeat` writes once the LCD is enabled for scales whose
+	 * `ScaleCapabilities.needsHeartbeat` is `true`. `unit` is the
+	 * shell's legacy `'g' | 'oz'` pref; the bridge maps it to the
+	 * core's `'grams' | 'ounces'` wire form.
 	 */
-	enableDecentScaleLcd(unit: ShellWeightUnit): Promise<CoreOutput>;
+	enableScaleLcd(unit: ShellWeightUnit): Promise<CoreOutput>;
 	/**
-	 * Build a `CoreOutput` whose command disables a connected Decent Scale's
-	 * on-scale LCD. Decent-Scale-only; empty otherwise.
+	 * Build a `CoreOutput` whose commands disable the connected scale's
+	 * on-scale LCD. Capability-driven; rejects on scales without a
+	 * settable LCD.
 	 */
-	disableDecentScaleLcd(): Promise<CoreOutput>;
+	disableScaleLcd(): Promise<CoreOutput>;
 	/**
-	 * Build a `CoreOutput` whose command emits one heartbeat write to a
-	 * connected Decent Scale. The shell schedules the clock at roughly
-	 * 2 s between calls. Decent-Scale-only; empty otherwise.
+	 * Build a `CoreOutput` whose command emits one keep-alive heartbeat
+	 * to the connected scale (Decent Scale needs this every ~2 s).
+	 * Capability-driven; rejects on scales that don't need a heartbeat.
 	 */
-	decentScaleHeartbeat(): Promise<CoreOutput>;
+	scaleHeartbeat(): Promise<CoreOutput>;
 	/**
-	 * Build a `CoreOutput` whose command powers off a connected Decent
-	 * Scale. The byte sequence is sent unconditionally — older firmware
-	 * versions silently no-op on it. Rejects with an error string only
-	 * when no scale is connected or the connected scale isn't a Decent
-	 * Scale.
+	 * Build a `CoreOutput` whose commands power off the connected scale.
+	 * Capability-driven — Decent / Eureka / Solo expose this today;
+	 * scales without a host-driven power-off reject with an
+	 * `UnsupportedOnHardware` error.
 	 */
-	powerOffDecentScale(): Promise<CoreOutput>;
+	powerOffScale(): Promise<CoreOutput>;
 	/**
 	 * Cache the user's chosen weight unit on the core, so the Decent
 	 * Scale LCD-enable auto-policy (triggered on the DE1's Idle entry)
 	 * picks the right wire packet without the shell re-dispatching
-	 * `enableDecentScaleLcd` on every state change. The shell calls this
+	 * `enableScaleLcd` on every state change. The shell calls this
 	 * whenever the `weightUnit` settings pref changes.
 	 */
 	setWeightUnitPref(unit: ShellWeightUnit): Promise<void>;
@@ -542,54 +545,38 @@ export interface CremaCore {
 	 */
 	setMaxShotDuration(seconds: number | undefined): Promise<void>;
 	/**
-	 * Build a `CoreOutput` whose commands enable the Skale II's on-scale
-	 * LCD (legacy `ED EC` sequence, plus an optional `0x03` enable-grams
-	 * write when `unit === 'g'`). Skale-II-only; empty otherwise.
+	 * Build a `CoreOutput` whose command fires a beep on the connected
+	 * scale. Capability-driven — Eureka / Solo support it; other scales
+	 * reject with `UnsupportedOnHardware`.
 	 */
-	enableSkaleLcd(unit: ShellWeightUnit): Promise<CoreOutput>;
+	scaleBeep(): Promise<CoreOutput>;
 	/**
-	 * Build a `CoreOutput` whose command disables the Skale II's on-scale
-	 * LCD. Skale-II-only.
+	 * Build a `CoreOutput` whose command explicitly sets the connected
+	 * scale's display unit to grams. Capability-driven — Eureka / Solo
+	 * / Difluid expose this. For scales whose unit lives in the
+	 * LCD-enable bytes (Decent / Skale) the unit is set via
+	 * `enableScaleLcd`; for toggle-only scales (Hiroia) use
+	 * `toggleScaleUnit`.
 	 */
-	disableSkaleLcd(): Promise<CoreOutput>;
+	setScaleUnitGrams(): Promise<CoreOutput>;
 	/**
-	 * Build a `CoreOutput` whose command turns off the connected Eureka
-	 * Precisa or Solo Barista. Empty for every other scale.
+	 * Build a `CoreOutput` whose command toggles the connected scale's
+	 * display unit. Capability-driven — Hiroia is the only scale that
+	 * exposes a toggle today.
 	 */
-	turnOffEurekaPrecisa(): Promise<CoreOutput>;
+	toggleScaleUnit(): Promise<CoreOutput>;
 	/**
-	 * Build a `CoreOutput` whose command beeps the Eureka Precisa / Solo
-	 * Barista twice. Empty for every other scale.
+	 * Toggle whether the connected scale should be powered off on machine
+	 * Sleep entry. Off by default. Capability-gated by the scale's
+	 * `power_off_command` — applies to any scale with a host-driven
+	 * power-off (Decent / Eureka / Solo today).
 	 */
-	beepEurekaPrecisa(): Promise<CoreOutput>;
+	setAutoOffScaleOnSleep(enabled: boolean): Promise<void>;
 	/**
-	 * Build a `CoreOutput` whose command sets the Eureka Precisa / Solo
-	 * Barista's display unit. Only grams is supported on the wire — the
-	 * ounces case emits nothing (matches legacy de1app).
+	 * Whether the connected scale is configured to power off on machine
+	 * Sleep entry.
 	 */
-	setEurekaPrecisaUnit(unit: ShellWeightUnit): Promise<CoreOutput>;
-	/**
-	 * Build a `CoreOutput` whose command toggles the Hiroia Jimmy's
-	 * display unit (the codec exposes no "set unit directly" command —
-	 * only a toggle-to-next-unit). Empty for every other scale.
-	 */
-	toggleHiroiaJimmyUnit(): Promise<CoreOutput>;
-	/**
-	 * Build a `CoreOutput` whose command sets the Difluid Microbalance's
-	 * display unit to grams. Empty for every other scale.
-	 */
-	setDifluidUnitGrams(): Promise<CoreOutput>;
-	/**
-	 * Toggle whether the Eureka Precisa / Solo Barista should be powered
-	 * off on machine Sleep entry. Off by default; the user opts in via
-	 * the Machine settings page.
-	 */
-	setEurekaPrecisaAutoOffOnSleep(enabled: boolean): Promise<void>;
-	/**
-	 * Whether the Eureka Precisa / Solo Barista is configured to power
-	 * off on machine Sleep entry.
-	 */
-	eurekaPrecisaAutoOffOnSleep(): Promise<boolean>;
+	autoOffScaleOnSleep(): Promise<boolean>;
 	/** Build a `CoreOutput` whose command sets the scale beeper volume. */
 	setScaleVolume(level: number): Promise<CoreOutput>;
 	/** Build a `CoreOutput` whose command sets the scale auto-standby timeout. */
@@ -937,20 +924,20 @@ async function createCore(): Promise<CremaCore> {
 		async resetTimer() {
 			return parseOutput(bridge.reset_timer());
 		},
-		async enableDecentScaleLcd(unit: ShellWeightUnit) {
-			return parseOutput(bridge.enable_decent_scale_lcd(weightUnitToWire(unit)));
+		async enableScaleLcd(unit: ShellWeightUnit) {
+			return parseOutput(bridge.enable_scale_lcd(weightUnitToWire(unit)));
 		},
-		async disableDecentScaleLcd() {
-			return parseOutput(bridge.disable_decent_scale_lcd());
+		async disableScaleLcd() {
+			return parseOutput(bridge.disable_scale_lcd());
 		},
-		async decentScaleHeartbeat() {
-			return parseOutput(bridge.decent_scale_heartbeat());
+		async scaleHeartbeat() {
+			return parseOutput(bridge.scale_heartbeat());
 		},
-		async powerOffDecentScale() {
+		async powerOffScale() {
 			// The bridge throws a string on unsupported-hardware; surface it
 			// as a JS Error so callers can `try/catch` it normally and pull
 			// the user-facing reason out of `error.message`.
-			return parseOutput(bridge.power_off_decent_scale());
+			return parseOutput(bridge.power_off_scale());
 		},
 		async setWeightUnitPref(unit: ShellWeightUnit) {
 			bridge.set_weight_unit_pref(weightUnitToWire(unit));
@@ -982,32 +969,20 @@ async function createCore(): Promise<CremaCore> {
 		async setMaxShotDuration(seconds) {
 			bridge.set_max_shot_duration(seconds);
 		},
-		async enableSkaleLcd(unit: ShellWeightUnit) {
-			return parseOutput(bridge.enable_skale_lcd(weightUnitToWire(unit)));
+		async scaleBeep() {
+			return parseOutput(bridge.scale_beep());
 		},
-		async disableSkaleLcd() {
-			return parseOutput(bridge.disable_skale_lcd());
+		async setScaleUnitGrams() {
+			return parseOutput(bridge.set_scale_unit_grams());
 		},
-		async turnOffEurekaPrecisa() {
-			return parseOutput(bridge.turn_off_eureka_precisa());
+		async toggleScaleUnit() {
+			return parseOutput(bridge.toggle_scale_unit());
 		},
-		async beepEurekaPrecisa() {
-			return parseOutput(bridge.beep_eureka_precisa());
+		async setAutoOffScaleOnSleep(enabled: boolean) {
+			bridge.set_auto_off_scale_on_sleep(enabled);
 		},
-		async setEurekaPrecisaUnit(unit: ShellWeightUnit) {
-			return parseOutput(bridge.set_eureka_precisa_unit(weightUnitToWire(unit)));
-		},
-		async toggleHiroiaJimmyUnit() {
-			return parseOutput(bridge.toggle_hiroia_jimmy_unit());
-		},
-		async setDifluidUnitGrams() {
-			return parseOutput(bridge.set_difluid_unit_grams());
-		},
-		async setEurekaPrecisaAutoOffOnSleep(enabled: boolean) {
-			bridge.set_eureka_precisa_auto_off_on_sleep(enabled);
-		},
-		async eurekaPrecisaAutoOffOnSleep() {
-			return bridge.eureka_precisa_auto_off_on_sleep();
+		async autoOffScaleOnSleep() {
+			return bridge.auto_off_scale_on_sleep();
 		},
 		async setScaleVolume(level) {
 			return parseOutput(bridge.set_scale_volume(level));

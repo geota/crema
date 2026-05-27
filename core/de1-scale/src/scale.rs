@@ -153,6 +153,27 @@ pub struct ScaleCapabilities {
     /// the scale has no switchable modes. Each entry carries the mode's wire
     /// `id` and a display `name`.
     pub modes: Vec<ModeInfo>,
+    /// True when the scale's on-scale LCD is settable — drives the
+    /// shell's "Enable on-scale LCD" toggle UI. Mirrors
+    /// [`Scale::lcd_enable_command`] returning `Some`.
+    pub can_lcd: bool,
+    /// True when the scale accepts a host-driven power-off command.
+    /// Mirrors [`Scale::power_off_command`] returning `Some`.
+    pub can_power_off: bool,
+    /// True when the scale accepts a beep command. Mirrors
+    /// [`Scale::beep_command`] returning `Some`.
+    pub can_beep: bool,
+    /// True when the scale exposes an explicit "set unit to grams"
+    /// command (Eureka, Solo, Difluid). Mirrors
+    /// [`Scale::set_unit_grams_command`] returning `Some`.
+    pub can_set_unit_grams: bool,
+    /// True when the scale exposes a toggle-unit command (Hiroia).
+    /// Mirrors [`Scale::toggle_unit_command`] returning `Some`.
+    pub can_toggle_unit: bool,
+    /// True when the scale needs periodic heartbeats to keep its LCD
+    /// awake (Decent). Mirrors [`Scale::heartbeat_command`] returning
+    /// `Some`.
+    pub needs_heartbeat: bool,
 }
 
 /// A timer command a scale may support.
@@ -473,7 +494,23 @@ impl Scale {
     /// concrete scale model: Crema is capability-driven, never device-driven.
     /// Weight-only scales return [`ScaleCapabilities::default`] (all `false`);
     /// the Bookoo, a "first-class" scale, reports the capabilities it supports.
+    ///
+    /// The `can_lcd` / `can_power_off` / `can_beep` / `can_set_unit_grams` /
+    /// `can_toggle_unit` / `needs_heartbeat` flags mirror the corresponding
+    /// `*_command` methods returning `Some` — populated here in a single
+    /// place so a shell can gate UI without invoking each capability and
+    /// catching the `Unsupported` error.
     pub fn capabilities(&self) -> ScaleCapabilities {
+        // The Some-ness of each command method IS the capability flag; derive
+        // here so the two surfaces can never drift. `_unit` is irrelevant for
+        // the `_lcd` flag — the flag is about whether the capability exists,
+        // not what bytes the unit picks.
+        let can_lcd = self.lcd_enable_command(true).is_some();
+        let can_power_off = self.power_off_command().is_some();
+        let can_beep = self.beep_command().is_some();
+        let can_set_unit_grams = self.set_unit_grams_command().is_some();
+        let can_toggle_unit = self.toggle_unit_command().is_some();
+        let needs_heartbeat = self.heartbeat_command().is_some();
         match &self.inner {
             // The Bookoo carries native flow and a built-in timer in its
             // weight notification, and exposes a settable beeper volume
@@ -505,8 +542,18 @@ impl Scale {
                         name: "Auto".to_owned(),
                     },
                 ],
+                can_lcd,
+                can_power_off,
+                can_beep,
+                can_set_unit_grams,
+                can_toggle_unit,
+                needs_heartbeat,
             },
-            // Every other supported scale is weight-only for this slice.
+            // Every other supported scale is weight-only for the
+            // first-class flags above (flow / timer / volume / standby /
+            // smoothing / anti-mistouch / auto-stop / modes), but each
+            // may still light up one or more of the per-command flags
+            // derived above.
             Inner::Decent(_)
             | Inner::Skale
             | Inner::Felicita
@@ -518,7 +565,123 @@ impl Scale {
             | Inner::Difluid
             | Inner::Smartchef(_)
             | Inner::HiroiaJimmy
-            | Inner::VariaAku => ScaleCapabilities::default(),
+            | Inner::VariaAku => ScaleCapabilities {
+                can_lcd,
+                can_power_off,
+                can_beep,
+                can_set_unit_grams,
+                can_toggle_unit,
+                needs_heartbeat,
+                ..ScaleCapabilities::default()
+            },
+        }
+    }
+
+    /// The wire bytes that put the connected scale's on-scale LCD into
+    /// "show weight" mode. `None` when the scale has no settable LCD,
+    /// `Some(writes)` otherwise — each entry is one separate write the
+    /// core should emit (Skale's enable sequence is 2–3 writes; Decent's
+    /// is one).
+    ///
+    /// `grams` picks between byte variants where the scale's codec
+    /// exposes both — Decent has separate `LCD_ENABLE_GRAMS` /
+    /// `LCD_ENABLE_OUNCES` packets; Skale only sends the trailing
+    /// `ENABLE_GRAMS` byte when grams is requested (no ounces-side
+    /// variant exists). Take a bare bool here rather than the shell's
+    /// `WeightUnit` enum so `de1-scale` doesn't have to depend on
+    /// `de1-domain` (protocol layer stays free of domain types — see
+    /// docs/25 naming conventions).
+    #[must_use]
+    pub fn lcd_enable_command(&self, grams: bool) -> Option<Vec<&'static [u8]>> {
+        match &self.inner {
+            Inner::Decent(_) => Some(vec![if grams {
+                &decent_scale::LCD_ENABLE_GRAMS
+            } else {
+                &decent_scale::LCD_ENABLE_OUNCES
+            }]),
+            Inner::Skale => {
+                let mut writes: Vec<&'static [u8]> =
+                    vec![&[skale::CMD_SCREEN_ON], &[skale::CMD_DISPLAY_WEIGHT]];
+                if grams {
+                    writes.push(&[skale::CMD_ENABLE_GRAMS]);
+                }
+                Some(writes)
+            }
+            _ => None,
+        }
+    }
+
+    /// The wire bytes that turn off the connected scale's on-scale LCD.
+    /// `None` when the scale has no settable LCD.
+    #[must_use]
+    pub fn lcd_disable_command(&self) -> Option<Vec<&'static [u8]>> {
+        match &self.inner {
+            Inner::Decent(_) => Some(vec![&decent_scale::LCD_DISABLE]),
+            Inner::Skale => Some(vec![&[skale::CMD_SCREEN_OFF]]),
+            _ => None,
+        }
+    }
+
+    /// The wire bytes that power-off the connected scale. `None` when
+    /// the scale has no host-driven power-off. Used by both the
+    /// explicit button-driven path and the optional sleep-on-DE1-sleep
+    /// auto-policy.
+    #[must_use]
+    pub fn power_off_command(&self) -> Option<Vec<&'static [u8]>> {
+        match &self.inner {
+            Inner::Decent(_) => Some(vec![&decent_scale::POWER_OFF]),
+            Inner::EurekaPrecisa | Inner::SoloBarista => Some(vec![&eureka_precisa::TURN_OFF]),
+            _ => None,
+        }
+    }
+
+    /// The wire bytes that fire a beep on the connected scale. `None`
+    /// when the scale has no beep command.
+    #[must_use]
+    pub fn beep_command(&self) -> Option<Vec<&'static [u8]>> {
+        match &self.inner {
+            Inner::EurekaPrecisa | Inner::SoloBarista => Some(vec![&eureka_precisa::BEEP]),
+            _ => None,
+        }
+    }
+
+    /// The wire bytes that explicitly set the scale's display unit to
+    /// grams. `None` when the scale has no set-to-grams command —
+    /// either because it has no unit toggling at all (Decent, Skale —
+    /// their unit lives in the LCD-enable bytes) or because it only
+    /// exposes a toggle (Hiroia — see [`toggle_unit_command`](Self::toggle_unit_command)).
+    #[must_use]
+    pub fn set_unit_grams_command(&self) -> Option<Vec<&'static [u8]>> {
+        match &self.inner {
+            Inner::EurekaPrecisa | Inner::SoloBarista => {
+                Some(vec![&eureka_precisa::SET_UNIT_GRAMS])
+            }
+            Inner::Difluid => Some(vec![&difluid::SET_UNIT_GRAMS]),
+            _ => None,
+        }
+    }
+
+    /// The wire bytes that toggle the scale's display unit (grams ↔
+    /// ounces/ml). `None` when the scale has no toggle command — most
+    /// scales prefer an explicit set (see
+    /// [`set_unit_grams_command`](Self::set_unit_grams_command)).
+    #[must_use]
+    pub fn toggle_unit_command(&self) -> Option<Vec<&'static [u8]>> {
+        match &self.inner {
+            Inner::HiroiaJimmy => Some(vec![&hiroia_jimmy::TOGGLE_UNIT]),
+            _ => None,
+        }
+    }
+
+    /// The wire bytes for one keep-alive heartbeat. `None` when the
+    /// scale's LCD doesn't need periodic refresh. The Decent Scale's
+    /// LCD sleeps after a few seconds of host silence; the shell
+    /// schedules the heartbeat clock.
+    #[must_use]
+    pub fn heartbeat_command(&self) -> Option<Vec<&'static [u8]>> {
+        match &self.inner {
+            Inner::Decent(_) => Some(vec![&decent_scale::HEARTBEAT]),
+            _ => None,
         }
     }
 
@@ -1189,6 +1352,11 @@ mod tests {
     #[test]
     fn weight_only_scales_report_no_capabilities() {
         // Every non-Bookoo scale is weight-only for this slice.
+        // First-class capabilities (flow / timer / volume / standby /
+        // smoothing / anti_mistouch / auto_stop / modes) are Bookoo-only;
+        // the per-command capability flags (can_lcd / can_power_off / …)
+        // legitimately fire for the scales that expose those bytes — see
+        // `each_per_command_capability_flag_mirrors_its_command_method`.
         for label in [
             "Decent Scale",
             "Skale II",
@@ -1204,12 +1372,60 @@ mod tests {
             "Varia Aku",
         ] {
             let caps = Scale::from_label(label).unwrap().capabilities();
-            assert_eq!(
-                caps,
-                ScaleCapabilities::default(),
-                "{label} should report no capabilities"
-            );
+            assert!(!caps.reports_flow, "{label} reports_flow");
+            assert!(!caps.reports_timer, "{label} reports_timer");
+            assert_eq!(caps.volume, None, "{label} volume");
+            assert_eq!(caps.standby, None, "{label} standby");
+            assert!(!caps.flow_smoothing, "{label} flow_smoothing");
+            assert!(!caps.anti_mistouch, "{label} anti_mistouch");
+            assert!(!caps.auto_stop, "{label} auto_stop");
+            assert!(caps.modes.is_empty(), "{label} modes");
         }
+    }
+
+    #[test]
+    fn each_per_command_capability_flag_mirrors_its_command_method() {
+        // The flag fields on ScaleCapabilities (can_lcd, can_power_off, …)
+        // are derived from the corresponding `*_command` methods, so the
+        // two surfaces can never drift. One scale per row pins the
+        // expected matrix.
+        let decent = Scale::from_label("Decent Scale").unwrap().capabilities();
+        assert!(decent.can_lcd);
+        assert!(decent.can_power_off);
+        assert!(!decent.can_beep);
+        assert!(!decent.can_set_unit_grams);
+        assert!(!decent.can_toggle_unit);
+        assert!(decent.needs_heartbeat);
+
+        let skale = Scale::from_label("Skale II").unwrap().capabilities();
+        assert!(skale.can_lcd);
+        assert!(!skale.can_power_off);
+        assert!(!skale.needs_heartbeat);
+
+        let eureka = Scale::from_label("Eureka Precisa").unwrap().capabilities();
+        assert!(!eureka.can_lcd);
+        assert!(eureka.can_power_off);
+        assert!(eureka.can_beep);
+        assert!(eureka.can_set_unit_grams);
+
+        let hiroia = Scale::from_label("Hiroia Jimmy").unwrap().capabilities();
+        assert!(!hiroia.can_set_unit_grams);
+        assert!(hiroia.can_toggle_unit);
+
+        let difluid = Scale::from_label("Difluid Microbalance")
+            .unwrap()
+            .capabilities();
+        assert!(difluid.can_set_unit_grams);
+        assert!(!difluid.can_toggle_unit);
+
+        let felicita = Scale::from_label("Felicita Arc").unwrap().capabilities();
+        // A truly weight-only scale: every per-command flag is false.
+        assert!(!felicita.can_lcd);
+        assert!(!felicita.can_power_off);
+        assert!(!felicita.can_beep);
+        assert!(!felicita.can_set_unit_grams);
+        assert!(!felicita.can_toggle_unit);
+        assert!(!felicita.needs_heartbeat);
     }
 
     #[test]
