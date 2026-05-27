@@ -43,7 +43,7 @@
 	import { getBeanStore, type Bean } from '$lib/bean';
 	import { getMaintenanceStore } from '$lib/maintenance';
 	import { getCremaAppContext } from '$lib/shell/app-context';
-	import { getActiveShotStore } from '$lib/state';
+	import { getActiveShotStore, getBrewContext, getMachineReadout } from '$lib/state';
 	import { BrewParamState, type BrewParamSeed } from './brew-params.svelte';
 	import ExtractionTimer from './ExtractionTimer.svelte';
 	import ChannelReadout from './ChannelReadout.svelte';
@@ -72,6 +72,8 @@
 	// ── Profile library (real — the lib/profiles store) ──────────────────
 	/** The shared profile library — the source of pinned favorites + active. */
 	const profileStore = getProfileStore();
+	const brew = getBrewContext();
+	const machine = getMachineReadout();
 	void profileStore.ensureLoaded();
 
 	// ── Mode chips (Steam / Hot water / Flush) ───────────────────────────
@@ -175,9 +177,9 @@
 	 * payload's 0 falls through.
 	 */
 	const flushTempC = $derived.by<number>(() => {
-		const raw = ui.de1MachineInfo[MmrRegister.FlushTemp];
-		const machine = raw != null && Number.isFinite(raw) ? raw / 10 : NaN;
-		return posOr(machine, posOr(params.current.flushTemp, 95));
+		const raw = machine.flushTempC;
+		const fromMachine = raw != null && Number.isFinite(raw) ? raw / 10 : NaN;
+		return posOr(fromMachine, posOr(params.current.flushTemp, 95));
 	});
 
 	/**
@@ -451,14 +453,11 @@
 	// frozen profile name — it's the authoritative answer to "what is
 	// the shot in progress brewing against?" For replay specifically
 	// this is essential: the user's loaded profile is unrelated to the
-	// replayed shot. See docs/49 §3.
+	// replayed shot. See docs/49 §3. The full fallback chain
+	// (in-flight → snapshot.activeProfileName → library → placeholder)
+	// lives in `BrewContext.displayProfileName`.
 	const activeShot = getActiveShotStore();
-	const profileName = $derived(
-		activeShot.profileName ??
-			ui.activeProfileName ??
-			activeProfile?.name ??
-			'No profile selected'
-	);
+	const profileName = $derived(brew.displayProfileName);
 	/**
 	 * Compact summary of the profile the DE1 firmware actually has loaded
 	 * — drawn from `loadedProfileShape` (the `ProfileHeaderRead` cached at

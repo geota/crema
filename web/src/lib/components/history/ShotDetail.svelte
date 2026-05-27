@@ -24,6 +24,7 @@
 	import { getCremaAppContext } from '$lib/shell/app-context';
 	import { downloadBlob } from '$lib/utils/download';
 	import { getBeanStore } from '$lib/bean';
+	import { getHistoryContext } from '$lib/state';
 	import TagInput from '$lib/components/profiles/TagInput.svelte';
 	import SplitButton from '$lib/components/shared/SplitButton.svelte';
 	import StaticShotChart from './StaticShotChart.svelte';
@@ -84,10 +85,10 @@
 		return [...set].sort();
 	});
 
+	const history = getHistoryContext();
+	const view = $derived(history.viewFor(shot));
 	/** The currently-bound live bean (if any), for the roaster name etc. */
-	const boundLiveBean = $derived(
-		shot.bean?.beanId ? library.getBean(shot.bean.beanId) : null
-	);
+	const boundLiveBean = $derived(view.liveBean);
 	const boundRoasterName = $derived.by(() => {
 		// Snapshot roaster wins (history is content-snapshot-authoritative);
 		// fall back to the live row's roaster only when the snapshot string

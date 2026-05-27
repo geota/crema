@@ -59,6 +59,9 @@ import {
 	type ActiveShotBrewParams,
 	type ActiveShotData
 } from './active-shot.svelte';
+import { bindBrewContext } from './brew-context.svelte';
+import { bindHistoryContext } from './history-context.svelte';
+import { bindMachineReadout } from './machine-readout.svelte';
 
 /**
  * Thrown by {@link CremaApp.startShot} when the user taps Coffee without an
@@ -2128,6 +2131,22 @@ export class CremaApp {
 export async function createCremaApp(): Promise<CremaApp> {
 	const core = await loadCore();
 	const app = new CremaApp(core);
+	// Wire the read-side seam singletons (BrewContext, MachineReadout,
+	// HistoryContext) — see $lib/state/{brew-context,machine-readout,
+	// history-context}.svelte. They join the underlying stores into typed
+	// views the components read instead of reaching into store internals.
+	bindMachineReadout(app.state);
+	bindBrewContext({
+		beans: getBeanStore(),
+		profiles: getProfileStore(),
+		settings: getSettingsStore(),
+		active: getActiveShotStore(),
+		state: app.state
+	});
+	bindHistoryContext({
+		beans: getBeanStore(),
+		profiles: getProfileStore()
+	});
 	// Push the persisted AC mains-frequency preference into the core's
 	// volume integrator. `0` = auto (the core's auto-detector decides);
 	// `50` / `60` pin the value. Done once at construction; subsequent
