@@ -790,13 +790,17 @@ async function createCore(): Promise<CremaCore> {
 	};
 
 	/**
-	 * Map a typeshare `MmrRegister` string onto the wasm numeric `MmrReg`
-	 * enum. The two enums are kept name-for-name in sync — `MmrRegister` is
-	 * generated from the core's register list, `MmrReg` is its wasm mirror.
+	 * Map a typeshare `MmrRegister` string onto the wasm-bindgen numeric
+	 * enum. Both come from the same Rust source of truth
+	 * (`de1_protocol::MmrRegister`) — typeshare emits the string form
+	 * for JSON CoreOutput payloads, wasm-bindgen emits the numeric form
+	 * for the direct-call ABI used by `read_mmr` / `write_mmr`. The
+	 * variant names line up, so this is one bracket lookup.
 	 */
-	const toWasmMmrReg = (
+	const toWasmMmrRegister = (
 		register: MmrRegister
-	): (typeof wasm.MmrReg)[keyof typeof wasm.MmrReg] => wasm.MmrReg[register];
+	): (typeof wasm.MmrRegister)[keyof typeof wasm.MmrRegister] =>
+		wasm.MmrRegister[register];
 
 	/** Map a typeshare `CalTarget` string onto the wasm numeric `CalSensor`. */
 	const toWasmCalSensor = (
@@ -894,7 +898,7 @@ async function createCore(): Promise<CremaCore> {
 			return parseOutput(bridge.query_scale_settings());
 		},
 		async readMmr(register) {
-			return parseOutput(bridge.read_mmr(toWasmMmrReg(register)));
+			return parseOutput(bridge.read_mmr(toWasmMmrRegister(register)));
 		},
 		async readCalibration(sensor, factory = false) {
 			const wasmSensor = toWasmCalSensor(sensor);
@@ -1006,7 +1010,7 @@ async function createCore(): Promise<CremaCore> {
 			return parseOutput(bridge.set_refill_threshold(thresholdMm));
 		},
 		async writeMmr(register, value, byteLen) {
-			return parseOutput(bridge.write_mmr(toWasmMmrReg(register), value, byteLen));
+			return parseOutput(bridge.write_mmr(toWasmMmrRegister(register), value, byteLen));
 		},
 		async setFanThreshold(celsius) {
 			return parseOutput(bridge.set_fan_threshold(celsius));

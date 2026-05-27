@@ -126,9 +126,23 @@ impl MmrReadReply {
 /// This covers the registers Crema reads or writes.
 /// [`address`](Self::address) gives the raw 24-bit address to pass to
 /// [`read_request`] / [`write_request`].
+///
+/// Under the `wasm-bindgen` feature this enum doubles as the wasm
+/// boundary type — `de1-wasm`'s `read_mmr` / `write_mmr` take it as a
+/// function arg without a per-crate mirror enum. For UniFFI, the
+/// bridge crate `de1-ffi` registers this as a remote type via
+/// `#[uniffi::remote(Enum)]` (uniffi's procedural derive can't be
+/// applied here — its `UniFfiTag` scaffolding context lives in the
+/// bridge crate, not the protocol crate). Either way, one Rust
+/// source of truth backs all three representations:
+/// typeshare emits the string-valued TS enum used in CoreOutput JSON
+/// (`"FlushTemp"`), wasm-bindgen emits the numeric enum at the
+/// direct-call ABI (`0`, `1`, …), uniffi emits the Kotlin / Swift
+/// sealed enum over FFI.
 #[typeshare]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "wasm-bindgen", wasm_bindgen::prelude::wasm_bindgen)]
 pub enum MmrRegister {
     /// CPU-board revision, encoded `cpu_board_version × 1000` (e.g. raw
     /// `1100` → PCB v1.1, raw `1300` → PCB v1.3). Read at connect time

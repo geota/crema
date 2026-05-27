@@ -68,98 +68,6 @@ impl From<NotificationSource> for Source {
     }
 }
 
-/// A DE1 memory-mapped register the shell can ask the core to read — mirrors
-/// [`de1_protocol::MmrRegister`] across the wasm boundary.
-#[wasm_bindgen]
-pub enum MmrReg {
-    /// CPU-board revision (raw value / 1000 → e.g. PCB v1.1).
-    CpuBoardVersion,
-    /// Machine model identifier (1=DE1, 2=DE1+, 3=DE1PRO, 4=DE1XL, …).
-    MachineModel,
-    /// Firmware build number.
-    FirmwareVersion,
-    /// Group Head Controller info bitmask.
-    GhcInfo,
-    /// Tank desired water-temperature threshold, °C.
-    TankTempThreshold,
-    /// Fan-on temperature threshold, °C.
-    FanThreshold,
-    /// Machine serial number.
-    SerialNumber,
-    /// Steam flow rate.
-    SteamFlow,
-    /// Refill-kit presence.
-    RefillKit,
-    /// Flush flow rate.
-    FlushFlowRate,
-    /// Flush water target temperature, °C × 10 (modelled by reaprime; the
-    /// legacy TCL de1app doesn't reference this address).
-    FlushTemp,
-    /// Hot-water flow rate.
-    HotWaterFlowRate,
-    /// Hot-water dispense phase-1 flow rate.
-    Phase1FlowRate,
-    /// Hot-water dispense phase-2 flow rate.
-    Phase2FlowRate,
-    /// Hot-water idle temperature, °C.
-    HotWaterIdleTemp,
-    /// Group head control mode.
-    GhcMode,
-    /// Seconds of high-flow steam at the start of a steam cycle.
-    SteamHighFlowStart,
-    /// Mains heater voltage.
-    HeaterVoltage,
-    /// Espresso warmup timeout.
-    EspressoWarmupTimeout,
-    /// Calibration flow multiplier.
-    CalibrationFlowMultiplier,
-    /// Flush timeout.
-    FlushTimeout,
-    /// USB charger on.
-    UsbChargerOn,
-    /// Feature-flag bitmask.
-    FeatureFlags,
-    /// Whether the user is currently present at the machine.
-    UserPresent,
-    /// Steam two-tap-stop register.
-    SteamTwoTapStop,
-    /// Cup-warmer temperature (Bengle models only).
-    CupWarmerTemp,
-}
-
-impl From<MmrReg> for MmrRegister {
-    fn from(reg: MmrReg) -> MmrRegister {
-        match reg {
-            MmrReg::CpuBoardVersion => MmrRegister::CpuBoardVersion,
-            MmrReg::MachineModel => MmrRegister::MachineModel,
-            MmrReg::FirmwareVersion => MmrRegister::FirmwareVersion,
-            MmrReg::GhcInfo => MmrRegister::GhcInfo,
-            MmrReg::TankTempThreshold => MmrRegister::TankTempThreshold,
-            MmrReg::FanThreshold => MmrRegister::FanThreshold,
-            MmrReg::SerialNumber => MmrRegister::SerialNumber,
-            MmrReg::SteamFlow => MmrRegister::SteamFlow,
-            MmrReg::RefillKit => MmrRegister::RefillKit,
-            MmrReg::FlushFlowRate => MmrRegister::FlushFlowRate,
-            MmrReg::FlushTemp => MmrRegister::FlushTemp,
-            MmrReg::HotWaterFlowRate => MmrRegister::HotWaterFlowRate,
-            MmrReg::Phase1FlowRate => MmrRegister::Phase1FlowRate,
-            MmrReg::Phase2FlowRate => MmrRegister::Phase2FlowRate,
-            MmrReg::HotWaterIdleTemp => MmrRegister::HotWaterIdleTemp,
-            MmrReg::GhcMode => MmrRegister::GhcMode,
-            MmrReg::SteamHighFlowStart => MmrRegister::SteamHighFlowStart,
-            MmrReg::HeaterVoltage => MmrRegister::HeaterVoltage,
-            MmrReg::EspressoWarmupTimeout => MmrRegister::EspressoWarmupTimeout,
-            MmrReg::CalibrationFlowMultiplier => MmrRegister::CalibrationFlowMultiplier,
-            MmrReg::FlushTimeout => MmrRegister::FlushTimeout,
-            MmrReg::UsbChargerOn => MmrRegister::UsbChargerOn,
-            MmrReg::FeatureFlags => MmrRegister::FeatureFlags,
-            MmrReg::UserPresent => MmrRegister::UserPresent,
-            MmrReg::SteamTwoTapStop => MmrRegister::SteamTwoTapStop,
-            MmrReg::CupWarmerTemp => MmrRegister::CupWarmerTemp,
-        }
-    }
-}
-
 /// A DE1 sensor the shell can ask the core to read calibration for — mirrors
 /// [`de1_protocol::CalTarget`] across the wasm boundary.
 #[wasm_bindgen]
@@ -900,8 +808,8 @@ impl CremaBridge {
     /// Build a [`CoreOutput`] (JSON) whose command reads one DE1 memory-mapped
     /// register. The DE1 answers with a notification on the `De1MmrRead`
     /// characteristic, which decodes to an `MmrValue` event.
-    pub fn read_mmr(&self, register: MmrReg) -> String {
-        json(self.core.read_mmr(register.into()))
+    pub fn read_mmr(&self, register: MmrRegister) -> String {
+        json(self.core.read_mmr(register))
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command reads `sensor`'s current
@@ -1237,8 +1145,8 @@ impl CremaBridge {
     /// Write one DE1 memory-mapped register. `value` is the raw little-endian
     /// word the register expects, already scaled. `byte_len` is 1, 2, or 4 —
     /// the wire `Len` byte of the resulting `WriteToMMR` packet.
-    pub fn write_mmr(&self, register: MmrReg, value: u32, byte_len: u8) -> String {
-        json(self.core.write_mmr(register.into(), value, byte_len))
+    pub fn write_mmr(&self, register: MmrRegister, value: u32, byte_len: u8) -> String {
+        json(self.core.write_mmr(register, value, byte_len))
     }
 
     /// Set the fan-on temperature threshold, °C. Legacy
@@ -1637,7 +1545,7 @@ mod tests {
     #[test]
     fn read_mmr_produces_a_write_command() {
         let bridge = CremaBridge::new();
-        let json = bridge.read_mmr(MmrReg::SerialNumber);
+        let json = bridge.read_mmr(MmrRegister::SerialNumber);
         assert!(json.contains("\"commands\""));
         assert!(json.contains("WriteCharacteristic"));
         assert!(json.contains("De1MmrRequest"));
@@ -2020,55 +1928,6 @@ mod tests {
         assert!(bridge.set_weight_unit_pref("ounces").is_ok());
         assert!(bridge.set_weight_unit_pref("grams").is_ok());
         assert!(bridge.set_weight_unit_pref("kilograms").is_err());
-    }
-
-    #[test]
-    fn mmr_reg_mirror_covers_every_mmr_register() {
-        // `MmrReg` is a hand-maintained mirror of `MmrRegister`. This builds
-        // one `MmrReg` per `MmrRegister` variant — the match is exhaustive, so
-        // adding a core register without a mirror variant fails to compile —
-        // then asserts the mirror maps back to the same register, name and
-        // count, catching any drift at `cargo test`.
-        let mirror: Vec<(MmrReg, MmrRegister)> = MmrRegister::ALL
-            .into_iter()
-            .map(|core_reg| {
-                let mirror = match core_reg {
-                    MmrRegister::CpuBoardVersion => MmrReg::CpuBoardVersion,
-                    MmrRegister::MachineModel => MmrReg::MachineModel,
-                    MmrRegister::FirmwareVersion => MmrReg::FirmwareVersion,
-                    MmrRegister::GhcInfo => MmrReg::GhcInfo,
-                    MmrRegister::TankTempThreshold => MmrReg::TankTempThreshold,
-                    MmrRegister::FanThreshold => MmrReg::FanThreshold,
-                    MmrRegister::SerialNumber => MmrReg::SerialNumber,
-                    MmrRegister::SteamFlow => MmrReg::SteamFlow,
-                    MmrRegister::RefillKit => MmrReg::RefillKit,
-                    MmrRegister::FlushFlowRate => MmrReg::FlushFlowRate,
-                    MmrRegister::FlushTemp => MmrReg::FlushTemp,
-                    MmrRegister::HotWaterFlowRate => MmrReg::HotWaterFlowRate,
-                    MmrRegister::Phase1FlowRate => MmrReg::Phase1FlowRate,
-                    MmrRegister::Phase2FlowRate => MmrReg::Phase2FlowRate,
-                    MmrRegister::HotWaterIdleTemp => MmrReg::HotWaterIdleTemp,
-                    MmrRegister::GhcMode => MmrReg::GhcMode,
-                    MmrRegister::SteamHighFlowStart => MmrReg::SteamHighFlowStart,
-                    MmrRegister::HeaterVoltage => MmrReg::HeaterVoltage,
-                    MmrRegister::EspressoWarmupTimeout => MmrReg::EspressoWarmupTimeout,
-                    MmrRegister::CalibrationFlowMultiplier => MmrReg::CalibrationFlowMultiplier,
-                    MmrRegister::FlushTimeout => MmrReg::FlushTimeout,
-                    MmrRegister::UsbChargerOn => MmrReg::UsbChargerOn,
-                    MmrRegister::FeatureFlags => MmrReg::FeatureFlags,
-                    MmrRegister::UserPresent => MmrReg::UserPresent,
-                    MmrRegister::SteamTwoTapStop => MmrReg::SteamTwoTapStop,
-                    MmrRegister::CupWarmerTemp => MmrReg::CupWarmerTemp,
-                };
-                (mirror, core_reg)
-            })
-            .collect();
-        // One mirror variant per core register — no extras, none missing.
-        assert_eq!(mirror.len(), MmrRegister::ALL.len());
-        // Each mirror round-trips back to the register it was built from.
-        for (mirror_reg, core_reg) in mirror {
-            assert_eq!(MmrRegister::from(mirror_reg), core_reg);
-        }
     }
 
     #[test]
