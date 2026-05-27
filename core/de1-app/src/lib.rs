@@ -1617,8 +1617,8 @@ impl CremaCore {
     /// the clock; the core is sans-IO and builds the one-shot command
     /// on demand. Returns [`AppError::UnsupportedOnHardware`] when no
     /// scale or the scale doesn't need a heartbeat
-    /// ([`ScaleCapabilities::needs_heartbeat`](de1_scale::ScaleCapabilities::needs_heartbeat)
-    /// is `false`).
+    /// ([`ScaleCapabilities::heartbeat_interval_ms`](de1_scale::ScaleCapabilities::heartbeat_interval_ms)
+    /// is `None`).
     pub fn scale_heartbeat(&self) -> Result<CoreOutput, AppError> {
         let scale = Self::scale_for("scale_heartbeat", self.scale.as_ref())?;
         let writes = scale

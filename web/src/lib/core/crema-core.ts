@@ -565,6 +565,13 @@ export interface ScaleCapabilities {
 	 * `id` and a display `name`.
 	 */
 	modes: ModeInfo[];
+	/**
+	 * Recommended cadence (milliseconds) between heartbeat writes when
+	 * the scale needs periodic keep-alives — non-null for the Decent
+	 * Scale (keeps its on-scale LCD awake), null for every other scale.
+	 * Mirrors `de1_scale::ScaleCapabilities::heartbeat_interval_ms`.
+	 */
+	heartbeat_interval_ms?: number;
 }
 
 /**

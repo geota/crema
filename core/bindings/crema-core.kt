@@ -65,7 +65,7 @@ data class BeanOrigin (
 	/// same reason as `elevation`.
 	val processing: String? = null,
 	/// Harvest time — `"2024 Spring"`, `"October 2024"`.
-	val harvest_time: String? = null
+	val harvestTime: String? = null
 )
 
 /// One bag of coffee — a row in the bean library. This is
@@ -88,23 +88,23 @@ data class Bean (
 	/// FK into the roaster directory. `None` for a bag whose roaster was
 	/// not recorded; the shell may opportunistically promote the
 	/// roaster name from import to a proper [`Roaster`] row.
-	val roaster_id: String? = null,
+	val roasterId: String? = null,
 	/// ISO `yyyy-mm-dd` roast date.
-	val roasted_on: String? = null,
+	val roastedOn: String? = null,
 	/// ISO `yyyy-mm-dd` opened-on date. Crema-only — drives the
 	/// staleness signal alongside `roasted_on`.
-	val opened_on: String? = null,
+	val openedOn: String? = null,
 	/// ISO `yyyy-mm-dd` frozen-on date. Drives the freshness math's
 	/// freeze-pause: a frozen bag's freshness counter is the days
 	/// between `roasted_on` and `frozen_on`, paused while frozen.
-	val frozen_on: String? = null,
+	val frozenOn: String? = null,
 	/// ISO `yyyy-mm-dd` defrosted-on date. Resumes the freshness
 	/// counter from `defrosted_on`.
-	val defrosted_on: String? = null,
+	val defrostedOn: String? = null,
 	/// Roast level on Visualizer's 1..10 scale. The shell typically
 	/// inputs via a 3-band quick-set (light=1, medium=5, dark=10) and
 	/// uses [`roast_band`] to bucket back into the band word.
-	val roast_level: UByte? = null,
+	val roastLevel: UByte? = null,
 	/// Single-origin vs blend. `None` = not classified.
 	val mix: BeanMix? = null,
 	/// What the bag was roasted for — espresso, filter, or omni. `None`
@@ -112,7 +112,7 @@ data class Bean (
 	/// records (pre-this-field) deserialise cleanly. Imported from
 	/// Beanconqueror's `bean_roasting_type` (its `Unknown` value maps
 	/// to `None`).
-	val roast_type: BeanRoastType? = null,
+	val roastType: BeanRoastType? = null,
 	/// Decaf flag — `false` by default.
 	val decaf: Boolean,
 	/// Provenance metadata. Empty struct by default.
@@ -120,19 +120,19 @@ data class Bean (
 	/// Bag size, grams. `0.0` when unknown. Unit lives in the doc
 	/// comment, not the field name, per the locked-in naming rule
 	/// (`docs/44-pre-android-handoff.md`).
-	val bag_size: Float,
+	val bagSize: Float,
 	/// Remaining weight in the bag, grams. Auto-debited per shot when
 	/// the shell enables `Track bag remaining weight`. `0.0` when
 	/// unknown.
 	val remaining: Float,
 	/// Quality score — free text per Visualizer (`"88"`, `"A-"`).
-	val quality_score: String,
+	val qualityScore: String,
 	/// Tasting notes — multi-line free text.
-	val tasting_notes: String,
+	val tastingNotes: String,
 	/// User star rating 0..5; `0` = unrated.
 	val rating: UByte,
 	/// Where the bag was bought — `"Counter Culture · Durham"`.
-	val place_of_purchase: String? = null,
+	val placeOfPurchase: String? = null,
 	/// What the bag cost — currency-less number in the user's local
 	/// units (Crema doesn't track currency yet). `None` = unrecorded.
 	/// Imported from Beanconqueror's `cost` field when present.
@@ -144,30 +144,30 @@ data class Bean (
 	/// Pinned to the brew-page bean picker strip.
 	val favourite: Boolean,
 	/// Unix epoch ms when the bag was archived; `None` = active.
-	val archived_at: Long? = null,
+	val archivedAt: Long? = null,
 	/// Bean-scoped grinder name — `"Niche Zero"`. Bean-scoped because a
 	/// grind setting only means something paired with the grinder it
 	/// was measured on.
 	val grinder: String,
 	/// Bean-scoped grinder click / setting — `"1.2"`, `"6 + a tooth"`.
-	val grinder_setting: String,
+	val grinderSetting: String,
 	/// Free-form user tags — e.g. `"daily-driver"`, `"comp"`, `"experimental"`.
 	/// Defaults to an empty list. Serialised as `tags` so the JSON contract
 	/// matches the [`crate::Profile`] tag pattern.
 	val tags: List<String>? = null,
 	/// Visualizer `coffee_bag.id` once pushed.
-	val visualizer_id: String? = null,
+	val visualizerId: String? = null,
 	/// Unix epoch ms when this bag was soft-deleted, or `None` when
 	/// active. Required for cross-device sync tombstone propagation:
 	/// on the next sync push, the remote row is DELETEd and the local
 	/// tombstone is garbage-collected. Defaults to `None` so older
 	/// `Bean` JSON deserialises cleanly.
-	val deleted_at: Long? = null,
+	val deletedAt: Long? = null,
 	/// Beanconqueror `bean.config.uuid` from a Bc import. Tracks
 	/// provenance so a re-import skips beans we already know.
-	val beanconqueror_id: String? = null,
+	val beanconquerorId: String? = null,
 	/// IndexedDB blob ref for the bag photo, if any.
-	val image_ref: String? = null,
+	val imageRef: String? = null,
 	/// Open JSON metadata. The escape valve for fields neither
 	/// Visualizer nor Crema model first-class, but that an import
 	/// (Beanconqueror) or future feature needs to keep round-tripping.
@@ -175,9 +175,9 @@ data class Bean (
 	/// nested object.
 	val metadata: Value,
 	/// Unix epoch ms when this bag was created.
-	val created_at: Long,
+	val createdAt: Long,
 	/// Unix epoch ms when this bag was last updated.
-	val updated_at: Long
+	val updatedAt: Long
 )
 
 /// Generated type representing the anonymous struct variant `MachineStateChanged` of the `Event` Rust enum
@@ -846,8 +846,10 @@ data class RangeCapability (
 /// (in part) on the shell's at-shot-start line.
 @Serializable
 data class ReplayMetaBean (
-	/// Bean type / name (`"Yirgacheffe"`, …).
-	val type: String? = null,
+	/// Bean name (`"Yirgacheffe"`, …). Older captures spell this `type`;
+	/// the manual fold in [`fold_one`] accepts either key for read-side
+	/// backward compatibility.
+	val name: String? = null,
 	/// Roaster's display name.
 	val roaster: String? = null,
 	/// ISO `yyyy-mm-dd` roast date.
@@ -912,7 +914,7 @@ data class Roaster (
 	/// Logo / hero image URL. Mirrors Visualizer's `RoasterDetail.image_url`
 	/// — round-trips losslessly on sync. Renders as a small thumbnail in
 	/// the roaster card and the editor's preview slot.
-	val image_url: String? = null,
+	val imageUrl: String? = null,
 	/// City — e.g. `"Portland"`. Crema-only; rides in `metadata.crema.city`
 	/// on Visualizer round-trip so the wire format stays lossless.
 	val city: String? = null,
@@ -925,19 +927,19 @@ data class Roaster (
 	/// deduped). Mirrors Visualizer's `RoasterDetail.canonical_roaster_id`
 	/// — round-trips directly. Beans pointing at a duplicate are typically
 	/// re-pointed at the canonical id on merge.
-	val canonical_roaster_id: String? = null,
+	val canonicalRoasterId: String? = null,
 	/// Visualizer `roaster.id` once pushed.
-	val visualizer_id: String? = null,
+	val visualizerId: String? = null,
 	/// Unix epoch ms when this roaster was soft-deleted, or `None` when
 	/// active. See [`Bean::deleted_at`] for the rationale. Defaults to
 	/// `None` so older JSON deserialises cleanly.
-	val deleted_at: Long? = null,
+	val deletedAt: Long? = null,
 	/// Open JSON metadata — escape valve symmetric with [`Bean::metadata`].
 	val metadata: Value,
 	/// Unix epoch ms.
-	val created_at: Long,
+	val createdAt: Long,
 	/// Unix epoch ms.
-	val updated_at: Long
+	val updatedAt: Long
 )
 
 /// What a connected scale can do, beyond reporting a bare weight.
@@ -981,7 +983,31 @@ data class ScaleCapabilities (
 	/// The selectable display/behaviour modes the scale exposes — empty when
 	/// the scale has no switchable modes. Each entry carries the mode's wire
 	/// `id` and a display `name`.
-	val modes: List<ModeInfo>
+	val modes: List<ModeInfo>,
+	/// True when the scale's on-scale LCD is settable — drives the
+	/// shell's "Enable on-scale LCD" toggle UI. Mirrors
+	/// [`Scale::lcd_enable_command`] returning `Some`.
+	val can_lcd: Boolean,
+	/// True when the scale accepts a host-driven power-off command.
+	/// Mirrors [`Scale::power_off_command`] returning `Some`.
+	val can_power_off: Boolean,
+	/// True when the scale accepts a beep command. Mirrors
+	/// [`Scale::beep_command`] returning `Some`.
+	val can_beep: Boolean,
+	/// True when the scale exposes an explicit "set unit to grams"
+	/// command (Eureka, Solo, Difluid). Mirrors
+	/// [`Scale::set_unit_grams_command`] returning `Some`.
+	val can_set_unit_grams: Boolean,
+	/// True when the scale exposes a toggle-unit command (Hiroia).
+	/// Mirrors [`Scale::toggle_unit_command`] returning `Some`.
+	val can_toggle_unit: Boolean,
+	/// Recommended cadence (milliseconds) between heartbeat writes when
+	/// the scale needs periodic keep-alives — `Some(2000)` for the
+	/// Decent Scale (keeps its on-scale LCD awake), `None` for every
+	/// scale that does not. Mirrors [`Scale::heartbeat_command`]
+	/// returning `Some`, with the cadence now living next to the bytes
+	/// so the shell no longer carries a parallel constant.
+	val heartbeat_interval_ms: UInt? = null
 )
 
 /// The BLE UUIDs a scale's transport layer needs.
@@ -1021,16 +1047,24 @@ data class ShotBean (
 	/// FK back to the [`Bean`] in the library, if it still exists. The
 	/// History row can resolve the link to open the bean detail; an
 	/// archived / deleted bean falls back to the snapshot strings.
-	val bean_id: String? = null,
+	val beanId: String? = null,
 	/// Bag name at the time of the shot — `"Geisha Esmeralda Lot 3"`.
 	val name: String,
 	/// Roaster name at the time of the shot. Not the roaster id — the
 	/// id might dangle, but a string survives.
-	val roaster_name: String? = null,
+	val roasterName: String? = null,
 	/// ISO `yyyy-mm-dd` roast date at the time of the shot.
-	val roasted_on: String? = null,
+	val roastedOn: String? = null,
 	/// Roast level (1..10) at the time of the shot.
-	val roast_level: UByte? = null
+	val roastLevel: UByte? = null,
+	/// The bean's tags at the time of the shot.
+	val tags: List<String>? = null,
+	/// Per-bean grinder setting at the time of the shot — distinct
+	/// from the equipment-level `grinder_model` on [`StoredShot`]
+	/// (the *machine* used) and `ShotMetadata::grinder_setting`
+	/// (the *dial used for this shot*). This is the bean's own
+	/// recommended dial recorded with the bag.
+	val grinderSetting: String? = null
 )
 
 /// The fields the planner reads from a remote shot row. Visualizer's
