@@ -5,7 +5,7 @@
 	 * profile name, the ratio + yield metrics and a star rating.
 	 */
 	import type { StoredShot } from '$lib/history';
-	import { ratioLabel, stars } from '$lib/history';
+	import { ratioLabel, stars, peaksOf, flatSamplesOf } from '$lib/history';
 	import { getSettingsStore, convertWeight } from '$lib/settings';
 	import MiniShotChart from './MiniShotChart.svelte';
 
@@ -69,18 +69,25 @@
 		return `${Math.round(d / 7)} wk ago`;
 	});
 
+	/** Peaks derived once from the shot's wire-shape record. */
+	const peaks = $derived(peaksOf(shot));
 	/** Final (or peak) yield weight, grams, for the yield metric. */
-	const yieldOut = $derived(shot.finalWeight ?? shot.peakWeight);
+	const yieldOut = $derived(peaks.finalWeight ?? peaks.peakWeight);
 	/** The yield weight in the chosen weight unit (D1). */
 	const settings = getSettingsStore();
 	const yieldM = $derived(convertWeight(yieldOut, settings.current.weightUnit));
 
+	/** Sparkline samples — flat shape derived from the wire record. */
+	const sparkSeries = $derived(flatSamplesOf(shot));
+
+	/** Star rating (0..5); coerce undefined/null to 0 (unrated). */
+	const rating = $derived(shot.metadata.rating ?? 0);
 	/**
 	 * The always-5-glyph star string — filled glyphs for the rating, empty for
 	 * the rest. An unrated shot (`rating === 0`) shows five empty stars, so the
 	 * column keeps a consistent rhythm rather than collapsing to a lone dash.
 	 */
-	const starString = $derived(stars(shot.rating));
+	const starString = $derived(stars(rating));
 </script>
 
 <button
@@ -101,11 +108,11 @@
 		<div class="hi-row-time-d">{ago}</div>
 	</div>
 	<div class="hi-row-spark">
-		<MiniShotChart series={shot.series} width={96} height={32} />
+		<MiniShotChart series={sparkSeries} width={96} height={32} />
 	</div>
 	<div class="hi-row-main">
 		<div class="hi-row-name">{shot.profileName ?? 'Untitled shot'}</div>
-		<div class="hi-row-bean">{(shot.duration / 1000).toFixed(0)} s extraction</div>
+		<div class="hi-row-bean">{(shot.record.duration / 1000).toFixed(0)} s extraction</div>
 	</div>
 	<div class="hi-row-metric">
 		<div class="hi-row-metric-val">{ratioLabel(shot)}</div>
@@ -119,8 +126,8 @@
 	</div>
 	<div
 		class="hi-row-stars"
-		class:is-unrated={shot.rating <= 0}
-		aria-label="{Math.max(0, Math.min(5, Math.round(shot.rating)))} of 5 stars"
+		class:is-unrated={rating <= 0}
+		aria-label="{Math.max(0, Math.min(5, Math.round(rating)))} of 5 stars"
 	>
 		{starString}
 	</div>

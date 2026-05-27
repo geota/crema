@@ -10,11 +10,15 @@
 export {
 	type StoredShot,
 	type ShotBean,
+	type ShotMetadata,
+	type ShotPeaks,
 	shotId,
 	ratioLabel,
 	stars,
 	shotFilename,
-	snapshotFromBean
+	snapshotFromBean,
+	peaksOf,
+	flatSamplesOf
 } from './model';
 
 export {

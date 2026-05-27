@@ -643,6 +643,33 @@ pub fn new_profile_id() -> String {
     de1_domain::new_profile_id()
 }
 
+/// Mint a fresh stored-shot ID — `shot:<uuid-v7>`. Same UUID v7
+/// minter as [`new_profile_id`], with the `shot:` prefix the shell's
+/// history store expects. Exposed under the JS name `newShotId`.
+#[wasm_bindgen(js_name = newShotId)]
+pub fn new_shot_id() -> String {
+    de1_domain::new_shot_id()
+}
+
+/// Derive [`de1_domain::ShotPeaks`] from a [`de1_domain::StoredShot`]
+/// JSON. Returns the peaks as a JSON object so the shell consumes the
+/// identical numbers each time (`peakWeight`, `finalWeight`,
+/// `peakPressure`, `peakTemp`). Used by the History list + detail
+/// readouts — peaks are not stored on `StoredShot`, they are derived
+/// on read.
+///
+/// # Errors
+///
+/// Returns the JSON parse error string when `stored_shot_json` is
+/// not a valid `StoredShot`.
+#[wasm_bindgen(js_name = peaksForShot)]
+pub fn peaks_for_shot(stored_shot_json: &str) -> Result<String, String> {
+    let shot: de1_domain::StoredShot =
+        serde_json::from_str(stored_shot_json).map_err(|e| e.to_string())?;
+    let peaks = shot.peaks();
+    serde_json::to_string(&peaks).map_err(|e| e.to_string())
+}
+
 /// Hard wire-protocol bounds for DE1 profile fields, exposed to shells as
 /// a single JSON snapshot so steppers / validators / form widgets reach
 /// for the same numbers. The shell parses the result once at module load
@@ -686,6 +713,11 @@ pub fn profile_bounds_json() -> String {
 #[wasm_bindgen]
 pub struct CremaBridge {
     core: CremaCore,
+    /// Stashed live core during replay. `None` outside replay mode;
+    /// `Some(prev)` after `begin_replay()` until `end_replay()` swaps
+    /// it back. See docs/48-replay-architecture-problem-statement.md
+    /// §4 for the design.
+    stashed: Option<CremaCore>,
 }
 
 impl Default for CremaBridge {
@@ -701,7 +733,44 @@ impl CremaBridge {
     pub fn new() -> CremaBridge {
         CremaBridge {
             core: CremaCore::new(),
+            stashed: None,
         }
+    }
+
+    /// Begin replay mode: stash the live core into a hidden slot, install
+    /// a fresh [`CremaCore`] for the replay to run against. Returns an
+    /// `Err` if a replay is already in progress (double-begin is a
+    /// programming error and would lose the original live core).
+    ///
+    /// The shadow core is `CremaCore::new()` — no user preferences, no
+    /// identity-keeper state, no connected scale. The shell calls
+    /// `connect_scale(...)` against the shadow core to install the
+    /// scale decoder for replay events, then feeds the recorded BLE
+    /// bytes via `on_notification(...)`.
+    ///
+    /// `end_replay()` discards the replay core and restores the live one.
+    pub fn begin_replay(&mut self) -> Result<(), String> {
+        if self.stashed.is_some() {
+            return Err("already in replay mode".to_owned());
+        }
+        self.stashed = Some(std::mem::replace(&mut self.core, CremaCore::new()));
+        Ok(())
+    }
+
+    /// End replay mode: discard the replay-driven core, restore the
+    /// previously-stashed live core. Idempotent: a no-op outside replay
+    /// mode, so exception-path callers can call it unconditionally in
+    /// their `finally` blocks.
+    pub fn end_replay(&mut self) {
+        if let Some(prev) = self.stashed.take() {
+            self.core = prev;
+        }
+    }
+
+    /// True while the replay shadow core is installed (i.e. between
+    /// `begin_replay()` and `end_replay()`).
+    pub fn in_replay(&self) -> bool {
+        self.stashed.is_some()
     }
 
     /// Feed a raw GATT notification. Returns a JSON-encoded [`CoreOutput`].
@@ -740,14 +809,6 @@ impl CremaBridge {
     /// Distinct from [`reset`](Self::reset), which wipes the whole core.
     pub fn capture_clear(&mut self) {
         self.core.capture_clear();
-    }
-
-    /// Suppress the rolling capture-buffer recorder while feeding the core a
-    /// replay (so the replay's own notifications don't get re-recorded). The
-    /// shell wraps `replayCapture` with `set_replay_mode(true)` /
-    /// `set_replay_mode(false)` in a try/finally.
-    pub fn set_replay_mode(&mut self, on: bool) {
-        self.core.set_replay_mode(on);
     }
 
     /// Identify and connect a scale from its BLE advertised name. Returns the
@@ -1612,6 +1673,59 @@ mod tests {
             Some("Bookoo".to_owned())
         );
         assert_eq!(bridge.connect_scale("Not A Scale".to_owned()), None);
+    }
+
+    /// Replay swap: live core's identity (scale name, weight unit pref)
+    /// must be untouched by the begin/end-replay round-trip.
+    #[test]
+    fn replay_swap_preserves_live_core_state() {
+        let mut bridge = CremaBridge::new();
+        // Establish some live-core state.
+        let scale = bridge.connect_scale("BOOKOO_SC".to_owned());
+        assert_eq!(scale, Some("Bookoo".to_owned()));
+        // Enter replay. The shadow core has no scale; calling
+        // scale_capabilities should return None.
+        assert!(!bridge.in_replay());
+        bridge.begin_replay().expect("fresh begin");
+        assert!(bridge.in_replay());
+        assert!(
+            bridge.scale_capabilities().is_none(),
+            "shadow core has no scale"
+        );
+        // Pretend a replay connected a scale to the shadow core.
+        bridge.connect_scale("ACAIA_LUNAR_001".to_owned());
+        // End replay. Live core must be restored intact.
+        bridge.end_replay();
+        assert!(!bridge.in_replay());
+        // Scale capabilities should be available again — the live Bookoo's
+        // decoder is restored across the swap. Presence is enough to prove
+        // the live core's connection state survived; the exact caps JSON
+        // shape is covered by the scale module's own tests.
+        assert!(bridge.scale_capabilities().is_some(), "live scale restored");
+    }
+
+    #[test]
+    fn replay_swap_double_begin_errors() {
+        let mut bridge = CremaBridge::new();
+        bridge.begin_replay().expect("first begin");
+        let err = bridge.begin_replay().expect_err("second begin must error");
+        assert!(err.contains("already in replay"));
+        // Cleanup: caller would still need end_replay to leave bridge sane.
+        bridge.end_replay();
+        assert!(!bridge.in_replay());
+    }
+
+    #[test]
+    fn replay_swap_end_is_idempotent() {
+        let mut bridge = CremaBridge::new();
+        // End without a prior begin: must not panic and must leave state sane.
+        bridge.end_replay();
+        assert!(!bridge.in_replay());
+        // After a real begin+end, a second end is also a no-op.
+        bridge.begin_replay().unwrap();
+        bridge.end_replay();
+        bridge.end_replay();
+        assert!(!bridge.in_replay());
     }
 
     /// Apply representative steam / hot-water settings to `bridge`.

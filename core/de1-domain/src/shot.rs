@@ -13,6 +13,27 @@ use typeshare::typeshare;
 
 use crate::session::SessionTimer;
 
+/// Custom serde adapter for `Duration` ↔ millisecond integer on the
+/// wire. Keeps Rust's internal `Duration` semantics intact while
+/// emitting a plain `u32` on the JSON side so the web shell + Crema
+/// JSONL bundle consume a chart-ready number without unpacking
+/// `{ secs, nanos }`.
+mod duration_ms {
+    use serde::{Deserialize, Deserializer, Serializer};
+    use std::time::Duration;
+
+    pub fn serialize<S: Serializer>(d: &Duration, s: S) -> Result<S::Ok, S::Error> {
+        // `Duration::as_millis` returns `u128`; saturating to `u64` covers
+        // the impossible-in-practice overflow (`u64` ms ≈ 584M years).
+        s.serialize_u64(u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Duration, D::Error> {
+        let ms = u64::deserialize(d)?;
+        Ok(Duration::from_millis(ms))
+    }
+}
+
 /// Hard cap on the number of telemetry samples retained for one shot.
 ///
 /// A shot ends when the DE1 leaves the `Espresso` state — an untrusted signal
@@ -85,8 +106,12 @@ impl ShotPhase {
 /// scale paired carries no `scale_*` values. `#[serde(default)]` so an
 /// older record deserialises cleanly with the new fields absent.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TimedSample {
-    /// Time since the shot started.
+    /// Time since the shot started. Serialises as a millisecond
+    /// integer (`u32`) on the wire so the JSON shape is JS-friendly
+    /// — Rust keeps the internal `Duration` for arithmetic.
+    #[serde(with = "duration_ms")]
     pub elapsed: Duration,
     /// The telemetry sample.
     pub sample: ShotSample,
@@ -129,8 +154,11 @@ pub struct TimedSample {
 /// phase before flow; consumers can use the [`ShotEvent::PhaseChanged`] stream
 /// to locate flow-start.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ShotRecord {
-    /// Total shot duration.
+    /// Total shot duration. Serialises as a millisecond integer
+    /// (`u32`) on the wire — the chart consumes a plain number.
+    #[serde(with = "duration_ms")]
     pub duration: Duration,
     /// Every telemetry sample collected during the shot, in order.
     pub samples: Vec<TimedSample>,
@@ -150,6 +178,32 @@ pub struct ShotMetrics {
     pub total_water: f32,
     /// Shot duration (from [`ShotRecord::duration`]).
     pub duration: Duration,
+}
+
+/// Pre-computed summary peaks over a [`ShotRecord`]'s telemetry —
+/// what the History list and detail readouts surface above the chart.
+/// Returned by [`ShotRecord::peaks`] so each shell consumes the
+/// identical numbers without re-deriving the formula or threshold.
+///
+/// Distinct from [`ShotMetrics`]: this struct adds the scale-derived
+/// `peak_weight` / `final_weight` (which `ShotMetrics` skips because
+/// they depend on a paired scale) and surfaces `peak_temp`, which
+/// `ShotMetrics` doesn't track.
+#[derive(Debug, Clone, Copy, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShotPeaks {
+    /// Peak scale weight reached during the shot, grams. `None` when
+    /// no scale was paired (no sample carried a `scale_weight`).
+    pub peak_weight: Option<f32>,
+    /// Final scale weight at shot end, grams. `None` for the same
+    /// reason. NOT the same as `peak_weight`: a long drip-off makes
+    /// `final_weight` exceed `peak_weight` after the user pulls the
+    /// cup away.
+    pub final_weight: Option<f32>,
+    /// Peak group pressure reached, bar.
+    pub peak_pressure: f32,
+    /// Peak group-head temperature reached, °C.
+    pub peak_temp: f32,
 }
 
 impl ShotRecord {
@@ -184,6 +238,35 @@ impl ShotRecord {
             peak_flow,
             total_water,
             duration: self.duration,
+        }
+    }
+
+    /// Derive [`ShotPeaks`] from the sample series.
+    ///
+    /// `peak_weight` / `final_weight` are `None` when no sample carries
+    /// a `scale_weight` (no scale paired); otherwise `peak_weight` is
+    /// the max scale weight observed and `final_weight` is the last
+    /// sample's reading. Pressure / temp peaks are always present —
+    /// they come from the DE1 itself, not an external sensor.
+    #[must_use]
+    pub fn peaks(&self) -> ShotPeaks {
+        let mut peak_weight: Option<f32> = None;
+        let mut final_weight: Option<f32> = None;
+        let mut peak_pressure = 0.0f32;
+        let mut peak_temp = 0.0f32;
+        for timed in &self.samples {
+            peak_pressure = peak_pressure.max(timed.sample.group_pressure);
+            peak_temp = peak_temp.max(timed.sample.head_temp);
+            if let Some(w) = timed.scale_weight {
+                peak_weight = Some(peak_weight.map_or(w, |p| p.max(w)));
+                final_weight = Some(w);
+            }
+        }
+        ShotPeaks {
+            peak_weight,
+            final_weight,
+            peak_pressure,
+            peak_temp,
         }
     }
 }

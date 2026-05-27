@@ -586,7 +586,7 @@ settings {
     fn legacy_tcl_shot_imports_metadata() {
         let shot = import_legacy_tcl_shot(LEGACY_FIXTURE).expect("imports cleanly");
         // Clock is Unix seconds; recorded_at is Unix ms.
-        assert_eq!(shot.recorded_at, 1_699_432_544 * 1000);
+        assert_eq!(shot.completed_at, 1_699_432_544 * 1000);
         assert_eq!(shot.format_version, STORED_SHOT_FORMAT_VERSION);
         // Bean label combines brand + type.
         assert_eq!(
@@ -673,7 +673,7 @@ settings {
     #[test]
     fn v2_json_shot_imports_metadata_and_profile() {
         let shot = import_v2_json_shot(V2_JSON_FIXTURE).expect("imports cleanly");
-        assert_eq!(shot.recorded_at, 1_710_510_622 * 1000);
+        assert_eq!(shot.completed_at, 1_710_510_622 * 1000);
         assert_eq!(shot.metadata.dose, Some(18.0));
         assert_eq!(shot.metadata.yield_out, Some(36.0));
         assert_eq!(shot.metadata.tds, Some(8.5));

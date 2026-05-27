@@ -24,7 +24,7 @@
 
 import { export_v2_json_shot } from '$lib/wasm/de1_wasm';
 import type { Profile, RustStoredShot } from '$lib/core';
-import type { StoredShot } from './model';
+import { peaksOf, type StoredShot } from './model';
 
 /**
  * Emit a {@link StoredShot} as a pretty-printed community-v2
@@ -74,7 +74,7 @@ function cremaExtras(shot: StoredShot): Record<string, unknown> | null {
 	if (shot.grinderModel) out.grinder_model = shot.grinderModel;
 	if (shot.tags && shot.tags.length > 0) out.tags = [...shot.tags];
 	if (shot.yieldTarget != null) out.yield_target = shot.yieldTarget;
-	if (shot.brewTemp != null) out.brew_temp_target = shot.brewTemp;
+	if (shot.brewTempTarget != null) out.brew_temp_target = shot.brewTempTarget;
 	if (shot.preinfuseTarget != null) out.preinfuse_target = shot.preinfuseTarget;
 	if (shot.stopOnWeight !== undefined) out.stop_on_weight = shot.stopOnWeight;
 	if (shot.autoTare !== undefined) out.auto_tare = shot.autoTare;
@@ -87,66 +87,46 @@ function cremaExtras(shot: StoredShot): Record<string, unknown> | null {
 	return Object.keys(out).length > 0 ? out : null;
 }
 
-/** Build the Rust-shape `StoredShot` the wasm exporter consumes. */
+/** Build the Rust-shape `StoredShot` the wasm exporter consumes. The
+   wire format is camelCase — the Rust struct tree (StoredShot,
+   ShotMetadata, ShotRecord, TimedSample, ShotSample) all carry
+   `#[serde(rename_all = "camelCase")]`. Only the embedded `Profile`
+   keeps snake_case (its struct has no rename_all). */
 function toRustStoredShot(shot: StoredShot): RustStoredShot {
+	const peaks = peaksOf(shot);
+	const finalYield = peaks.finalWeight ?? peaks.peakWeight ?? null;
 	return {
-		format_version: 2,
-		recorded_at: shot.completedAt,
-		profile: profileFromName(shot.profileName, shot.finalWeight, shot.dose),
-		stop_reason: null,
+		formatVersion: shot.formatVersion,
+		completedAt: shot.completedAt,
+		profile: profileFromName(shot.profileName, finalYield, shot.metadata.dose ?? null),
+		stopReason: shot.stopReason ?? null,
 		metadata: {
-			dose: shot.dose ?? null,
-			yield_out: shot.finalWeight ?? null,
+			dose: shot.metadata.dose ?? null,
+			yieldOut: shot.metadata.yieldOut ?? finalYield,
 			beans: beanLabel(shot),
 			// Bean-scoped grinder click setting — the v2 schema's
 			// `metadata.grinder.setting` slot. The equipment-level
 			// `grinderModel` (e.g. "Niche Zero") rides in
-			// `metadata.crema.grinder_model` instead — the v2 schema's
-			// `grinder.model` slot is left empty on the Rust side
-			// because Crema's bean-scoped vs equipment-scoped split
-			// doesn't map cleanly onto the legacy single `grinder` block.
-			grinder_setting: shot.bean?.grinderSetting ?? null,
-			notes: shot.notes && shot.notes.length > 0 ? shot.notes : null,
-			rating: shot.rating > 0 ? shot.rating : null,
-			tds: null,
-			extraction_yield: null
+			// `metadata.crema.grinder_model` instead.
+			grinderSetting: shot.metadata.grinderSetting ?? shot.bean?.grinderSetting ?? null,
+			notes:
+				shot.metadata.notes && shot.metadata.notes.length > 0
+					? shot.metadata.notes
+					: null,
+			rating:
+				shot.metadata.rating != null && shot.metadata.rating > 0
+					? shot.metadata.rating
+					: null,
+			tds: shot.metadata.tds ?? null,
+			extractionYield: shot.metadata.extractionYield ?? null
 		},
+		// The shell's `StoredShot.record` is already the Rust wire shape
+		// (camelCase, ms `elapsed`, nested `sample`). No conversion needed.
 		record: {
-			duration: msToRustDuration(shot.duration),
-			samples: shot.series.map((s) => ({
-				elapsed: msToRustDuration(s.elapsed),
-				sample: {
-					sample_time: 0,
-					group_pressure: s.pressure,
-					group_flow: s.flow,
-					head_temp: s.temp,
-					mix_temp: s.mixTemp,
-					set_head_temp: s.setHeadTemp,
-					// The core's `temperature.goal` collapses to one channel
-					// on export; copy `setHeadTemp` into both so a round
-					// trip through `import_v2_json_shot` reproduces the
-					// same set_head / set_mix pair the shell carried.
-					set_mix_temp: s.setHeadTemp,
-					set_group_pressure: s.setGroupPressure,
-					set_group_flow: s.setGroupFlow,
-					frame_number: 0,
-					steam_temp: s.steamTemp
-				},
-				// Overlay channels — forwarded onto the Rust `TimedSample`
-				// so the v2 exporter can emit them into the
-				// `totals.weight` / `flow.by_weight` / `totals.water_dispensed`
-				// columns the spec defines. `undefined` / `null` /
-				// missing values stay missing on the wire (the Rust
-				// side maps absent → `0.0` only when assembling the
-				// sample-aligned series). Each rider is what makes the
-				// new channels ride through `buildShotPayload` →
-				// `POST /shots/upload` without an explicit Visualizer
-				// adapter change.
-				scale_weight: s.weight ?? undefined,
-				scale_flow_weight: s.weightFlow ?? undefined,
-				dispensed_volume: s.dispensedVolume ?? undefined,
-				resistance: s.resistance ?? undefined,
-				resistance_weight: s.resistanceWeight ?? undefined
+			duration: Math.max(0, Math.round(shot.record.duration)),
+			samples: shot.record.samples.map((s) => ({
+				...s,
+				elapsed: Math.max(0, Math.round(s.elapsed))
 			}))
 		}
 	};
@@ -163,8 +143,8 @@ function toRustStoredShot(shot: StoredShot): RustStoredShot {
 function beanLabel(shot: StoredShot): string | null {
 	const bean = shot.bean;
 	if (!bean) return null;
-	const roaster = bean.roaster?.trim() ?? '';
-	const type = bean.type?.trim() ?? '';
+	const roaster = bean.roasterName?.trim() ?? '';
+	const type = bean.name?.trim() ?? '';
 	if (roaster && type) return `${roaster} · ${type}`;
 	if (roaster) return roaster;
 	if (type) return type;
@@ -203,14 +183,6 @@ function profileFromName(
 		tank_temperature: 0,
 		version: '2'
 	};
-}
-
-/** Encode plain milliseconds into the Rust core's `{secs, nanos}` Duration. */
-function msToRustDuration(ms: number): { secs: number; nanos: number } {
-	const total = Math.max(0, ms);
-	const secs = Math.floor(total / 1000);
-	const nanos = Math.round((total - secs * 1000) * 1_000_000);
-	return { secs, nanos };
 }
 
 /**

@@ -106,20 +106,19 @@ function reconcileShots(
 function storedShotFromWire(remote: WireShot): StoredShot {
 	const id = `shot:remote:${remote.id}`;
 	return {
+		formatVersion: 3,
 		id,
 		completedAt: remote.clock,
 		profileName: remote.profile_title,
-		duration: remote.duration_ms,
-		dose: null,
-		peakWeight: null,
-		finalWeight: remote.final_weight_g,
-		peakPressure: 0,
-		peakTemp: 0,
-		series: [],
+		metadata: {
+			dose: null,
+			yieldOut: remote.final_weight_g ?? null,
+			rating: remote.rating ?? null,
+			notes: remote.notes ?? null
+		},
+		record: { duration: remote.duration_ms, samples: [] },
 		bean: null,
 		grinderModel: null,
-		rating: remote.rating ?? 0,
-		notes: remote.notes ?? '',
 		tags: [...(remote.tag_list ?? [])],
 		visualizerId: remote.id,
 		deletedAt: null
@@ -151,12 +150,12 @@ function roastLevelToWire(level: number | null): string | null {
 function inlineBeanPatch(bean: ShotBean | null | undefined): Record<string, unknown> {
 	const out: Record<string, unknown> = {};
 	if (!bean) return out;
-	const roaster = bean.roaster?.trim();
+	const roaster = bean.roasterName?.trim();
 	if (roaster) out.bean_brand = roaster;
-	const type = bean.type?.trim();
+	const type = bean.name?.trim();
 	if (type) out.bean_type = type;
 	if (bean.roastedOn) out.roast_date = bean.roastedOn;
-	const roastLevelStr = roastLevelToWire(bean.roastLevel);
+	const roastLevelStr = roastLevelToWire(bean.roastLevel ?? null);
 	if (roastLevelStr) out.roast_level = roastLevelStr;
 	const notes = bean.notes?.trim();
 	if (notes) out.bean_notes = notes;
@@ -201,20 +200,19 @@ before(async () => {
 
 function shot(over: Partial<StoredShot> = {}): StoredShot {
 	return {
+		formatVersion: 3,
 		id: 'shot:local-1',
 		completedAt: 1_700_000_000_000,
 		profileName: 'best of decent',
-		duration: 30_000,
-		dose: 18,
-		peakWeight: 36,
-		finalWeight: 36,
-		peakPressure: 9,
-		peakTemp: 93,
-		series: [],
+		metadata: {
+			dose: 18,
+			yieldOut: 36,
+			rating: 4,
+			notes: null
+		},
+		record: { duration: 30_000, samples: [] },
 		bean: null,
 		grinderModel: null,
-		rating: 4,
-		notes: '',
 		tags: [],
 		visualizerId: null,
 		deletedAt: null,
@@ -416,9 +414,9 @@ describe('reconcileShots', () => {
 		const local = shot({
 			id: 'shot:l-1',
 			completedAt: 1_700_000_000_000,
-			duration: 30_000,
+			record: { duration: 30_000, samples: [] },
 			profileName: 'best of decent',
-			finalWeight: 36,
+			metadata: { yieldOut: 36, dose: null, rating: null, notes: null },
 			visualizerId: null
 		});
 		const remote = wire({
@@ -450,9 +448,9 @@ describe('reconcileShots', () => {
 		const unbound = shot({
 			id: 'shot:unbound',
 			completedAt: 1_700_000_010_000,
-			duration: 25_000,
+			record: { duration: 25_000, samples: [] },
 			profileName: 'p',
-			finalWeight: 40,
+			metadata: { yieldOut: 40, dose: null, rating: null, notes: null },
 			visualizerId: null
 		});
 		const remotes: WireShot[] = [
@@ -497,10 +495,10 @@ describe('storedShotFromWire', () => {
 		const remote = wire({ id: 'r-77', notes: 'lovely', rating: 5 });
 		const local = storedShotFromWire(remote);
 		assert.equal(local.visualizerId, 'r-77');
-		assert.equal(local.notes, 'lovely');
-		assert.equal(local.rating, 5);
+		assert.equal(local.metadata.notes, 'lovely');
+		assert.equal(local.metadata.rating, 5);
 		assert.equal(local.deletedAt, null);
-		assert.deepEqual(local.series, []);
+		assert.deepEqual(local.record.samples, []);
 		assert.ok(local.id.startsWith('shot:remote:'));
 	});
 });
@@ -513,8 +511,8 @@ describe('inlineBeanPatch', () => {
 
 	it('returns an empty object when every snapshot field is empty', () => {
 		const bean: ShotBean = {
-			roaster: '',
-			type: '',
+			roasterName: '',
+			name: '',
 			roastedOn: null,
 			roastLevel: null
 		};
@@ -524,8 +522,8 @@ describe('inlineBeanPatch', () => {
 	it('maps the v1 ShotBean fields onto bean_brand / bean_type / roast_date / roast_level', () => {
 		const bean: ShotBean = {
 			beanId: 'bean:abc',
-			roaster: 'Onyx Coffee Lab',
-			type: 'Geisha Esmeralda',
+			roasterName: 'Onyx Coffee Lab',
+			name: 'Geisha Esmeralda',
 			roastedOn: '2026-05-16',
 			roastLevel: 2
 		};
@@ -539,8 +537,8 @@ describe('inlineBeanPatch', () => {
 
 	it('maps the new snapshot fields onto bean_notes + grinder_setting', () => {
 		const bean: ShotBean = {
-			roaster: 'Sey',
-			type: 'Kenya Kii',
+			roasterName: 'Sey',
+			name: 'Kenya Kii',
 			roastedOn: null,
 			roastLevel: 4,
 			notes: 'Floral, blackcurrant.',
@@ -557,8 +555,8 @@ describe('inlineBeanPatch', () => {
 
 	it('trims whitespace on string fields and omits empty results', () => {
 		const bean: ShotBean = {
-			roaster: '   ',
-			type: '  Heirloom  ',
+			roasterName: '   ',
+			name: '  Heirloom  ',
 			roastedOn: '2026-05-08',
 			roastLevel: null,
 			notes: '   ',
@@ -585,8 +583,8 @@ describe('inlineBeanPatch', () => {
 		];
 		for (const [level, wireValue] of cases) {
 			const bean: ShotBean = {
-				roaster: 'R',
-				type: 'T',
+				roasterName: 'R',
+				name: 'T',
 				roastedOn: null,
 				roastLevel: level
 			};
@@ -600,8 +598,8 @@ describe('inlineBeanPatch', () => {
 		// `bean_brand: ''` / `bean_notes: ''` / etc — those would
 		// overwrite the user's Visualizer-side edits with blanks.
 		const bean: ShotBean = {
-			roaster: '',
-			type: '',
+			roasterName: '',
+			name: '',
 			roastedOn: '2026-05-08',
 			roastLevel: null,
 			notes: '',
@@ -619,8 +617,8 @@ describe('inlineBeanPatch', () => {
 		// live every upload).
 		const bean: ShotBean = {
 			beanId: 'bean:xyz',
-			roaster: 'R',
-			type: 'T',
+			roasterName: 'R',
+			name: 'T',
 			roastedOn: null,
 			roastLevel: null
 		};

@@ -49,7 +49,7 @@ fn build_v2_document(shot: &StoredShot) -> V2DocumentOut {
     let samples = &shot.record.samples;
 
     // `clock` is Unix seconds in v2; Crema stores `recorded_at` as Unix ms.
-    let clock = shot.recorded_at / 1000;
+    let clock = shot.completed_at / 1000;
 
     let mut elapsed = Vec::with_capacity(samples.len());
     let mut pressure = Vec::with_capacity(samples.len());
@@ -569,7 +569,7 @@ mod tests {
         let parsed = import_v2_json_shot(&exported).expect("re-imports cleanly");
 
         // Timestamp (Unix ms) survives the seconds round-trip.
-        assert_eq!(parsed.recorded_at, shot.recorded_at);
+        assert_eq!(parsed.completed_at, shot.completed_at);
         // Metadata fields the v2 schema carries all round-trip.
         assert_eq!(parsed.metadata.dose, shot.metadata.dose);
         assert_eq!(parsed.metadata.yield_out, shot.metadata.yield_out);

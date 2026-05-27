@@ -10,7 +10,13 @@
 	 * Share are stubs (`// TODO`).
 	 */
 	import type { StoredShot } from '$lib/history';
-	import { ratioLabel, shotFilename, exportStoredShotAsV2Json } from '$lib/history';
+	import {
+		ratioLabel,
+		shotFilename,
+		exportStoredShotAsV2Json,
+		peaksOf,
+		flatSamplesOf
+	} from '$lib/history';
 	import { getCaptureStore, captureJsonl } from '$lib/capture';
 	import { daysOffRoast, roastBand, type Bean, type Roaster } from '$lib/bean';
 	import { getSettingsStore, convertWeight, convertTemp, convertPressure } from '$lib/settings';
@@ -19,6 +25,7 @@
 	import { downloadBlob } from '$lib/utils/download';
 	import { getBeanStore } from '$lib/bean';
 	import TagInput from '$lib/components/profiles/TagInput.svelte';
+	import SplitButton from '$lib/components/shared/SplitButton.svelte';
 	import StaticShotChart from './StaticShotChart.svelte';
 	import BeanPicker from './BeanPicker.svelte';
 
@@ -86,7 +93,7 @@
 		// fall back to the live row's roaster only when the snapshot string
 		// is empty (typical for shots imported with the legacy "roaster · type"
 		// label split, which sometimes left roaster blank).
-		const fromSnap = shot.bean?.roaster?.trim();
+		const fromSnap = shot.bean?.roasterName?.trim();
 		if (fromSnap) return fromSnap;
 		const liveRoasterId = boundLiveBean?.roasterId ?? null;
 		if (!liveRoasterId) return null;
@@ -101,19 +108,23 @@
 		return `${date} · ${time}`;
 	});
 
+	/** Derived peaks — `peakWeight` / `finalWeight` / `peakPressure` / `peakTemp`. */
+	const peaks = $derived(peaksOf(shot));
+	/** Flat chart-friendly samples — derived from `shot.record.samples`. */
+	const flatSeries = $derived(flatSamplesOf(shot));
 	/** Final (or peak) yield, grams. */
-	const yieldOut = $derived(shot.finalWeight ?? shot.peakWeight);
+	const yieldOut = $derived(peaks.finalWeight ?? peaks.peakWeight);
 
 	// Unit-aware metric readouts — driven by the Settings unit prefs (D1).
 	const settings = getSettingsStore();
 	/** Yield in the chosen weight unit. */
 	const yieldM = $derived(convertWeight(yieldOut, settings.current.weightUnit));
 	/** Peak weight in the chosen weight unit. */
-	const peakWeightM = $derived(convertWeight(shot.peakWeight, settings.current.weightUnit));
+	const peakWeightM = $derived(convertWeight(peaks.peakWeight, settings.current.weightUnit));
 	/** Peak pressure in the chosen pressure unit. */
-	const peakPressureM = $derived(convertPressure(shot.peakPressure, settings.current.pressureUnit));
+	const peakPressureM = $derived(convertPressure(peaks.peakPressure, settings.current.pressureUnit));
 	/** Peak temperature in the chosen temperature unit. */
-	const peakTempM = $derived(convertTemp(shot.peakTemp, settings.current.tempUnit));
+	const peakTempM = $derived(convertTemp(peaks.peakTemp, settings.current.tempUnit));
 
 	// ── Grinder model override (#81) ─────────────────────────────────────
 	// The shot's own override wins; empty input clears it and the
@@ -142,23 +153,25 @@
 	const beanLine = $derived.by(() => {
 		const bean = shot.bean;
 		if (!bean) return null;
-		const label = bean.type?.trim() || bean.roaster?.trim() || 'Bean';
+		const name = bean.name?.trim();
+		const roasterName = bean.roasterName?.trim();
+		const label = name || roasterName || 'Bean';
 		const parts: string[] = [];
-		if (bean.roaster?.trim() && bean.type?.trim()) {
-			parts.push(`${bean.roaster.trim()} · ${bean.type.trim()}`);
+		if (roasterName && name) {
+			parts.push(`${roasterName} · ${name}`);
 		} else {
 			parts.push(label);
 		}
-		const band = roastBand(bean.roastLevel);
+		const band = roastBand(bean.roastLevel ?? null);
 		if (band) parts.push(band[0].toUpperCase() + band.slice(1));
-		const days = daysOffRoast(bean.roastedOn, shot.completedAt);
+		const days = daysOffRoast(bean.roastedOn ?? null, shot.completedAt);
 		if (days != null) parts.push(`${days}d off roast`);
 		return parts.join(' · ');
 	});
 
 	/** Open the notes editor, seeding the draft from the current notes. */
 	function startEdit(): void {
-		draft = shot.notes;
+		draft = shot.metadata.notes ?? '';
 		editing = true;
 	}
 	/** Save the draft notes and leave edit mode. */
@@ -167,10 +180,34 @@
 		editing = false;
 	}
 
+	/** Current star rating (0..5); coerce undefined/null to 0. */
+	const rating = $derived(shot.metadata.rating ?? 0);
 	/** Set the star rating (clicking the same star again clears it). */
 	function setStar(n: number): void {
-		onRatingChange(shot.rating === n ? 0 : n);
+		onRatingChange(rating === n ? 0 : n);
 	}
+
+	/**
+	 * Whether a raw BLE capture exists for this shot in IndexedDB.
+	 * `null` while the lookup is in flight (treat as "unknown — leave
+	 * enabled"). Re-runs whenever `shot.id` changes — the parent keys
+	 * `ShotDetail` on the shot, but the local capture cache should still
+	 * stay correct if the props somehow swap without remount.
+	 */
+	let hasCapture = $state<boolean | null>(null);
+	$effect(() => {
+		const id = shot.id;
+		hasCapture = null;
+		void getCaptureStore()
+			.has(id)
+			.then((present) => {
+				// Guard against a stale resolve landing after the shot changed.
+				if (shot.id === id) hasCapture = present;
+			})
+			.catch(() => {
+				if (shot.id === id) hasCapture = null;
+			});
+	});
 
 	/**
 	 * Download this shot in the community v2 `.shot.json` format —
@@ -179,38 +216,55 @@
 	 * split-button.
 	 */
 	function downloadCommunity(): void {
-		const json = exportStoredShotAsV2Json(shot);
-		const blob = new Blob([json], { type: 'application/json' });
-		downloadBlob(shotFilename(shot), blob);
+		try {
+			const json = exportStoredShotAsV2Json(shot);
+			const blob = new Blob([json], { type: 'application/json' });
+			downloadBlob(shotFilename(shot), blob);
+		} catch (err) {
+			console.error('Shot export failed', err);
+			alert(`Export failed: ${err instanceof Error ? err.message : String(err)}`);
+		}
 	}
 
 	/**
 	 * Download this shot's raw BLE capture (`.jsonl`) — every wire
 	 * byte preserved, bit-exact playback via Crema's Replay tool.
-	 * Crema-only; right for bug reports + development. Falls back
-	 * to community v2 with a console warn if the shot has no
-	 * IndexedDB capture (older shots from before the recorder
-	 * shipped, or imported shots — neither has the wire bytes).
+	 * Crema-only; right for bug reports + development. Surfaces a
+	 * clear alert (and bails) when the shot has no IndexedDB
+	 * capture (older shots from before the recorder shipped, or
+	 * imported shots — neither has the wire bytes). Silent
+	 * fall-through to community v2 was the prior behaviour, but
+	 * that quietly hands the user the wrong file format; better to
+	 * tell them explicitly.
 	 */
 	async function downloadReplayCapture(): Promise<void> {
-		const entries = await getCaptureStore().get(shot.id);
-		if (entries && entries.length > 0) {
-			const stamp = shotFilename(shot).replace(/\.shot\.json$/, '');
-			const blob = new Blob([captureJsonl(entries)], {
-				type: 'application/x-ndjson'
-			});
-			downloadBlob(`${stamp}.jsonl`, blob);
-			return;
+		try {
+			const store = getCaptureStore();
+			const entries = await store.get(shot.id);
+			if (entries && entries.length > 0) {
+				const stamp = shotFilename(shot).replace(/\.shot\.json$/, '');
+				const blob = new Blob([captureJsonl(entries)], {
+					type: 'application/x-ndjson'
+				});
+				downloadBlob(`${stamp}.jsonl`, blob);
+				return;
+			}
+			// Surface diagnostics as flat console lines so an unexpected
+			// miss is debuggable without expanding any objects.
+			// `pruneTo` (orchestrator startup GC) drops captures whose
+			// shot row has been evicted; an ID mismatch is the other
+			// way this branch can fire when the user expects bytes.
+			const keys = await store.keys().catch(() => [] as string[]);
+			console.log('[replay download] miss — shotId:', shot.id);
+			console.log('[replay download] capture key count:', keys.length);
+			for (const k of keys) console.log('[replay download] key:', k);
+			alert(
+				'No raw BLE capture for this shot. See the console — the shot id and every capture key on file are logged there.'
+			);
+		} catch (err) {
+			console.error('Replay capture download failed', err);
+			alert(`Download failed: ${err instanceof Error ? err.message : String(err)}`);
 		}
-		console.warn(
-			`No raw capture available for ${shot.id}; falling back to v2 JSON export.`
-		);
-		downloadCommunity();
-	}
-
-	let downloadMenuOpen = $state(false);
-	function closeDownloadMenuOnDocClick(): void {
-		downloadMenuOpen = false;
 	}
 
 	const ctx = getCremaAppContext();
@@ -278,15 +332,13 @@
 	}
 </script>
 
-<svelte:window onclick={closeDownloadMenuOnDocClick} />
-
 <div class="hi-detail">
 	<div class="hi-detail-head">
 		<div>
 			<div class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">{stamp}</div>
 			<div class="hi-detail-title">{shot.profileName ?? 'Untitled shot'}</div>
 			<div class="hi-detail-sub">
-				{(shot.duration / 1000).toFixed(0)} s
+				{(shot.record.duration / 1000).toFixed(0)} s
 				{#if yieldOut != null}· {yieldM.value} {yieldM.unit} · {ratioLabel(shot)}{/if}
 			</div>
 			{#if beanLine}
@@ -294,68 +346,32 @@
 			{/if}
 		</div>
 		<div class="hi-detail-actions">
-			<!-- svelte-ignore a11y_click_events_have_key_events -->
-			<!-- svelte-ignore a11y_no_static_element_interactions -->
-			<div class="hi-split" onclick={(e) => e.stopPropagation()}>
-				<button
-					class="st-btn st-btn-secondary hi-split-main"
-					onclick={downloadCommunity}
-					title="Download as community v2 .shot.json — re-importable to Crema, reaprime, Visualizer or de1app"
-				>
-					<i class="ph ph-download-simple" aria-hidden="true"></i> Download
-				</button>
-				<button
-					class="st-btn st-btn-secondary hi-split-caret-btn"
-					onclick={(e) => {
-						e.stopPropagation();
-						downloadMenuOpen = !downloadMenuOpen;
-					}}
-					aria-haspopup="menu"
-					aria-expanded={downloadMenuOpen}
-					aria-label="Choose download format"
-				>
-					<i class="ph ph-caret-down" aria-hidden="true"></i>
-				</button>
-				{#if downloadMenuOpen}
-					<div class="hi-split-menu" role="menu">
-						<div class="hi-split-menu-head">Download as</div>
-						<button
-							class="hi-split-menu-item"
-							role="menuitem"
-							onclick={() => {
-								downloadMenuOpen = false;
-								downloadCommunity();
-							}}
-						>
-							<i class="ph-duotone ph-file-text" aria-hidden="true"></i>
-							<div class="hi-split-menu-text">
-								<div class="hi-split-menu-title">Community v2 (.shot.json)</div>
-								<div class="hi-split-menu-sub">
-									Portable across reaprime / Visualizer / de1app.
-									Pre-decoded telemetry, user-readable.
-								</div>
-							</div>
-						</button>
-						<button
-							class="hi-split-menu-item"
-							role="menuitem"
-							onclick={() => {
-								downloadMenuOpen = false;
-								void downloadReplayCapture();
-							}}
-						>
-							<i class="ph-duotone ph-file-code" aria-hidden="true"></i>
-							<div class="hi-split-menu-text">
-								<div class="hi-split-menu-title">Replayable capture (.jsonl)</div>
-								<div class="hi-split-menu-sub">
-									Raw BLE bytes — bit-exact playback via Replay. Crema-only;
-									right for bug reports.
-								</div>
-							</div>
-						</button>
-					</div>
-				{/if}
-			</div>
+			<SplitButton
+				icon="ph ph-download-simple"
+				label="Download"
+				title="Download as community v2 .shot.json — re-importable to Crema, reaprime, Visualizer or de1app"
+				onPrimary={downloadCommunity}
+				caretAriaLabel="Choose download format"
+				menuHead="Download as"
+				items={[
+					{
+						icon: 'ph-duotone ph-file-text',
+						title: 'Community v2 (.shot.json)',
+						sub: 'Portable across reaprime / Visualizer / de1app. Pre-decoded telemetry, user-readable.',
+						onclick: downloadCommunity
+					},
+					{
+						icon: 'ph-duotone ph-file-code',
+						title: 'Replayable capture (.jsonl)',
+						sub:
+							hasCapture === false
+								? 'No raw BLE bytes recorded for this shot.'
+								: 'Raw BLE bytes — bit-exact playback via Replay. Crema-only; right for bug reports.',
+						disabled: hasCapture === false,
+						onclick: () => void downloadReplayCapture()
+					}
+				]}
+			/>
 			<button class="st-btn st-btn-secondary" onclick={loadOnBrew}>
 				<i class="ph ph-coffee" aria-hidden="true"></i> Load on Brew
 			</button>
@@ -370,7 +386,7 @@
 
 	<!-- Chart -->
 	<div class="hi-chart">
-		<StaticShotChart series={shot.series} height={380} />
+		<StaticShotChart series={flatSeries} height={380} />
 		<!--
 			Legend grouped into 4 channel families — mirrors the brew
 			dashboard's Quick Controls "Chart" toggle layout. Each group
@@ -410,7 +426,7 @@
 	<div class="hi-metrics">
 		<div class="hi-metric">
 			<div class="hi-metric-l">Time</div>
-			<div class="hi-metric-v">{(shot.duration / 1000).toFixed(0)}<em>s</em></div>
+			<div class="hi-metric-v">{(shot.record.duration / 1000).toFixed(0)}<em>s</em></div>
 		</div>
 		<div class="hi-metric">
 			<div class="hi-metric-l">Peak pressure</div>
@@ -434,7 +450,7 @@
 		</div>
 		<div class="hi-metric">
 			<div class="hi-metric-l">Samples</div>
-			<div class="hi-metric-v">{shot.series.length}</div>
+			<div class="hi-metric-v">{flatSeries.length}</div>
 		</div>
 	</div>
 
@@ -445,11 +461,11 @@
 			{#each [1, 2, 3, 4, 5] as n (n)}
 				<button
 					class="hi-star"
-					class:is-on={n <= shot.rating}
+					class:is-on={n <= rating}
 					onclick={() => setStar(n)}
 					aria-label="{n} star{n === 1 ? '' : 's'}"
 				>
-					<i class={n <= shot.rating ? 'ph-fill ph-star' : 'ph ph-star'} aria-hidden="true"
+					<i class={n <= rating ? 'ph-fill ph-star' : 'ph ph-star'} aria-hidden="true"
 					></i>
 				</button>
 			{/each}
@@ -475,17 +491,17 @@
 						<span class="hi-bean-roaster">{boundRoasterName}</span>
 						<span class="hi-bean-sep">·</span>
 					{/if}
-					<span class="hi-bean-name">{shot.bean.type || 'Untitled bean'}</span>
+					<span class="hi-bean-name">{shot.bean.name || 'Untitled bean'}</span>
 				</div>
 				<div class="hi-bean-meta">
 					{#if shot.bean.roastedOn}
 						<span>Roasted {shot.bean.roastedOn}</span>
 					{/if}
-					{#if roastBand(shot.bean.roastLevel)}
+					{#if roastBand(shot.bean.roastLevel ?? null)}
 						{#if shot.bean.roastedOn}<span class="hi-bean-sep">·</span>{/if}
 						<span class="hi-bean-roast"
-							>{roastBand(shot.bean.roastLevel)?.[0].toUpperCase()}{roastBand(
-								shot.bean.roastLevel
+							>{roastBand(shot.bean.roastLevel ?? null)?.[0].toUpperCase()}{roastBand(
+								shot.bean.roastLevel ?? null
 							)?.slice(1)} roast</span
 						>
 					{/if}
@@ -554,8 +570,8 @@
 				rows="3"
 			></textarea>
 		{:else}
-			<div class="hi-notes-body" class:is-empty={!shot.notes}>
-				{shot.notes || 'No notes for this shot yet.'}
+			<div class="hi-notes-body" class:is-empty={!shot.metadata.notes}>
+				{shot.metadata.notes || 'No notes for this shot yet.'}
 			</div>
 		{/if}
 	</div>
@@ -617,82 +633,6 @@
 	/* .st-btn / .st-btn-secondary come from the global settings kit
 	   (styles/settings-page.css) — no scoped re-declaration needed. */
 
-	/* Download split-button — primary + caret pair the user can click
-	   for a quick default or a format menu. Mirrors `/beans`'s
-	   `bn-split-*`; renamed to hi-split for scope-safety. */
-	.hi-split {
-		position: relative;
-		display: inline-flex;
-	}
-	.hi-split-main {
-		border-radius: var(--radius-pill) 0 0 var(--radius-pill);
-	}
-	.hi-split-caret-btn {
-		border-radius: 0 var(--radius-pill) var(--radius-pill) 0;
-		padding-left: 8px;
-		padding-right: 10px;
-		margin-left: -1px;
-	}
-	.hi-split-menu {
-		position: absolute;
-		top: calc(100% + 6px);
-		right: 0;
-		min-width: 320px;
-		background: var(--bg-page);
-		border: 1px solid rgba(var(--tint-rgb), 0.12);
-		border-radius: var(--radius-md, 10px);
-		padding: 6px;
-		z-index: 60;
-		box-shadow: 0 8px 28px rgba(0, 0, 0, 0.32);
-		display: flex;
-		flex-direction: column;
-		gap: 2px;
-	}
-	.hi-split-menu-head {
-		font-family: var(--font-sans);
-		font-size: 10px;
-		font-weight: 700;
-		letter-spacing: var(--track-allcaps);
-		text-transform: uppercase;
-		color: rgba(var(--tint-rgb), 0.5);
-		padding: 6px 10px 4px;
-	}
-	.hi-split-menu-item {
-		display: flex;
-		gap: 12px;
-		align-items: flex-start;
-		background: transparent;
-		border: 0;
-		color: var(--fg-1);
-		text-align: left;
-		font-family: var(--font-sans);
-		font-size: 13px;
-		padding: 10px 12px;
-		border-radius: var(--radius-sm);
-		cursor: pointer;
-	}
-	.hi-split-menu-item:hover {
-		background: rgba(var(--tint-rgb), 0.06);
-	}
-	.hi-split-menu-item i {
-		font-size: 18px;
-		color: var(--copper-400);
-		flex-shrink: 0;
-		margin-top: 1px;
-	}
-	.hi-split-menu-text {
-		display: flex;
-		flex-direction: column;
-		gap: 2px;
-	}
-	.hi-split-menu-title {
-		font-weight: 600;
-	}
-	.hi-split-menu-sub {
-		font-size: 12px;
-		color: rgba(var(--tint-rgb), 0.6);
-		line-height: 1.4;
-	}
 
 	.hi-chart {
 		background: var(--bg-page);

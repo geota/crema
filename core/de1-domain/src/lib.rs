@@ -86,7 +86,7 @@ pub use flow::{Estimate, FlowAlgorithm, FlowEstimator};
 pub use history::{STORED_SHOT_FORMAT_VERSION, ShotMetadata, StoredShot, brew_ratio};
 pub use history_export::export_v2_json_shot;
 pub use history_import::{import_legacy_tcl_shot, import_v2_json_shot};
-pub use ids::new_profile_id;
+pub use ids::{new_profile_id, new_shot_id};
 pub use maintenance::{
     MaintenanceReadout, MaintenanceState, maintenance_readout, maintenance_readout_json,
 };
@@ -100,7 +100,8 @@ pub use replay::{ReplayMeta, ReplayMetaBean, fold_meta_jsonl, fold_meta_jsonl_js
 pub use session::SessionTimer;
 pub use settings_import::{ImportedDe1AppSettings, import_settings_tdb};
 pub use shot::{
-    MAX_SHOT_SAMPLES, ShotEvent, ShotMetrics, ShotMonitor, ShotPhase, ShotRecord, TimedSample,
+    MAX_SHOT_SAMPLES, ShotEvent, ShotMetrics, ShotMonitor, ShotPeaks, ShotPhase, ShotRecord,
+    TimedSample,
 };
 pub use steam::{
     MAX_STEAM_SAMPLES, STEAM_ECO_DELAY, SteamClogReason, SteamEvent, SteamMonitor, SteamRecord,

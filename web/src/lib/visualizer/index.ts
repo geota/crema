@@ -1,8 +1,8 @@
 /**
- * `$lib/visualizer` — OAuth 2.0 + PKCE plumbing for Crema ↔ Visualizer.
+ * `$lib/visualizer` — top-level barrel for the Visualizer integration.
  *
- * Three layers:
- *   - {@link ./oauth}        — pure flow / crypto / endpoint constants
+ * Modules:
+ *   - {@link ./oauth}        — OAuth 2.0 + PKCE redirect flow
  *   - {@link ./token-store}  — localStorage persistence + `withFreshToken`
  *   - {@link ./account}      — the `/api/me` helper
  *
@@ -84,6 +84,7 @@ export {
 	DEFAULT_SYNC_CONFIG,
 	directionPulls,
 	directionPushes,
+	onSyncConfigChange,
 	readSyncConfig,
 	updateSyncConfig,
 	writeSyncConfig,

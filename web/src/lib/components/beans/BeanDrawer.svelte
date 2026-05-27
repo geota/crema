@@ -455,6 +455,7 @@
 					<div class="bn-group-body">
 						<div class="bn-shotrows">
 							{#each shotsWithThis.slice(0, 5) as s (s.id)}
+								{@const sRating = s.metadata.rating ?? 0}
 								<div class="bn-shotrow">
 									<div class="bn-shotrow-time">
 										{new Date(s.completedAt).toLocaleDateString(undefined, {
@@ -465,9 +466,9 @@
 									<div class="bn-shotrow-meta">
 										<span class="bn-shotrow-profile">{s.profileName ?? '—'}</span>
 									</div>
-									<div class="bn-shotrow-rating" aria-label="{s.rating} of 5">
+									<div class="bn-shotrow-rating" aria-label="{sRating} of 5">
 										{#each [1, 2, 3, 4, 5] as i (i)}
-											<i class={i <= s.rating ? 'ph-fill ph-star' : 'ph ph-star'}></i>
+											<i class={i <= sRating ? 'ph-fill ph-star' : 'ph ph-star'}></i>
 										{/each}
 									</div>
 								</div>

@@ -172,29 +172,26 @@ export interface Profile {
 }
 
 /**
- * A `Duration` as serialized by the Rust core — `{secs, nanos}`. The
- * bridge emits this for `StoredShot.record.duration` and every
- * `TimedSample.elapsed`; the shell folds it to plain milliseconds at
- * the import boundary.
+ * A `Duration` as serialized by the Rust core — a `u64` of milliseconds
+ * via the `duration_ms` serde adapter. Used on the wire for
+ * `StoredShot.record.duration` and every `TimedSample.elapsed`;
+ * the shell holds the same shape so no boundary conversion is needed.
  */
-export interface RustDuration {
-	secs: number;
-	nanos: number;
-}
+export type RustDuration = number;
 
 /** One telemetry sample as the Rust core emits it. */
 export interface RustShotSample {
-	sample_time: number;
-	group_pressure: number;
-	group_flow: number;
-	head_temp: number;
-	mix_temp: number;
-	set_head_temp: number;
-	set_mix_temp: number;
-	set_group_pressure: number;
-	set_group_flow: number;
-	frame_number: number;
-	steam_temp: number;
+	sampleTime: number;
+	groupPressure: number;
+	groupFlow: number;
+	headTemp: number;
+	mixTemp: number;
+	setHeadTemp: number;
+	setMixTemp: number;
+	setGroupPressure: number;
+	setGroupFlow: number;
+	frameNumber: number;
+	steamTemp: number;
 }
 
 /** One timestamped sample in a `RustStoredShot.record.samples` array. */
@@ -209,38 +206,41 @@ export interface RustTimedSample {
 	 * same-length series of floats in the v2 doc (`None` → `0.0`), so a
 	 * re-import sees `Some(0.0)` for absent values; the shell treats both
 	 * `undefined` and `0` as "no signal" for the resistance / scale
-	 * fallback path. Names are snake_case to match the Rust struct.
+	 * fallback path. Wire shape is `camelCase` (Rust struct uses
+	 * `#[serde(rename_all = "camelCase")]`).
 	 */
-	scale_weight?: number;
-	scale_flow_weight?: number;
-	dispensed_volume?: number;
+	scaleWeight?: number;
+	scaleFlowWeight?: number;
+	dispensedVolume?: number;
 	resistance?: number;
-	resistance_weight?: number;
+	resistanceWeight?: number;
 }
 
 /** Barista journal metadata as the Rust core emits it. */
 export interface RustShotMetadata {
 	dose: number | null;
-	yield_out: number | null;
+	yieldOut: number | null;
 	beans: string | null;
-	grinder_setting: string | null;
+	grinderSetting: string | null;
 	notes: string | null;
 	rating: number | null;
 	tds: number | null;
-	extraction_yield: number | null;
+	extractionYield: number | null;
 }
 
 /**
  * The Rust-shape `StoredShot` the bridge returns from
  * `importLegacyTclShot` / `importV2JsonShot`. Field names match the
- * Rust struct (snake_case). The shell maps this onto its own
- * (`$lib/history` `StoredShot`) shape at the import boundary.
+ * Rust struct's serde projection (`#[serde(rename_all = "camelCase")]`),
+ * so this is the actual wire shape — not the Rust source-level names.
+ * The shell maps this onto its own (`$lib/history` `StoredShot`) shape
+ * at the import boundary.
  */
 export interface RustStoredShot {
-	format_version: number;
-	recorded_at: number;
+	formatVersion: number;
+	completedAt: number;
 	profile: Profile | null;
-	stop_reason: unknown | null;
+	stopReason: unknown | null;
 	metadata: RustShotMetadata;
 	record: {
 		duration: RustDuration;
@@ -278,6 +278,14 @@ export interface CremaCore {
 	 * Resolves to the parsed `CoreOutput`.
 	 */
 	onNotification(source: NotificationSource, data: Uint8Array, nowMs: number): Promise<CoreOutput>;
+	/**
+	 * The `nowMs` of the most recent `onNotification` call, or `null` before
+	 * the first call. Lets the shell pin shot-slice bounds to the same
+	 * timebase the rolling capture buffer uses — `performance.now()` during
+	 * live BLE, the replay file's original timestamps during a replay — so
+	 * `captureSliceJsonl` finds the right entries regardless of source.
+	 */
+	readonly lastNotificationAtMs: number | null;
 	/** Feed a periodic clock tick. Resolves to the parsed `CoreOutput`. */
 	onTick(nowMs: number): Promise<CoreOutput>;
 	/** Discard all session state — e.g. on disconnect. */
@@ -299,12 +307,25 @@ export interface CremaCore {
 	 */
 	captureClear(): Promise<void>;
 	/**
-	 * Suppress the rolling capture-buffer recorder while feeding the core a
-	 * replay. The orchestrator wraps `replayCapture` with
-	 * `setReplayMode(true)` / `setReplayMode(false)` in a try/finally so the
-	 * replay's own notifications don't get re-recorded.
+	 * Enter replay mode: stash the live core into a hidden slot on the
+	 * bridge and install a fresh {@link CremaCore} for the replay to run
+	 * against. All subsequent {@link onNotification}, {@link captureSliceJsonl},
+	 * {@link connectScale}, etc. calls target the shadow core.
+	 *
+	 * Rejects if a replay is already in progress (double-begin would lose
+	 * the live core). Pair with {@link endReplay} in a try/finally.
+	 *
+	 * See `docs/48-replay-architecture-problem-statement.md` §4 for design.
 	 */
-	setReplayMode(on: boolean): Promise<void>;
+	beginReplay(): Promise<void>;
+	/**
+	 * Leave replay mode: discard the replay-driven shadow core and
+	 * restore the previously-stashed live core. Idempotent — safe to
+	 * call from a `finally` whether or not {@link beginReplay} ran.
+	 */
+	endReplay(): Promise<void>;
+	/** True while a replay shadow core is installed. */
+	inReplay(): Promise<boolean>;
 	/**
 	 * Identify and connect a scale from its BLE advertised name. Resolves to
 	 * the scale's display label, or `undefined` if the name matched no
@@ -738,6 +759,14 @@ async function createCore(): Promise<CremaCore> {
 	// async facade — these helpers run from synchronous edit-shell
 	// paths (create / duplicate / import a profile).
 	wasmModule = wasm;
+	// Mirror the wasm namespace onto `window` so deep modules that
+	// can't import `$lib/core` without a cycle (e.g. `$lib/history/model`'s
+	// `shotId` minter) can still reach into the Rust UUID-v7 minter
+	// once the core is loaded. SSR / test paths fall back to
+	// `crypto.randomUUID`.
+	if (typeof window !== 'undefined') {
+		(window as { __cremaWasmCore?: typeof wasm }).__cremaWasmCore = wasm;
+	}
 	const bridge = new wasm.CremaBridge();
 
 	/**
@@ -790,9 +819,19 @@ async function createCore(): Promise<CremaCore> {
 	/** Parse a bridge JSON string into a typed `CoreOutput`. */
 	const parseOutput = (raw: string): CoreOutput => JSON.parse(raw) as CoreOutput;
 
+	// `lastNotificationAtMs` is mutated inside `onNotification` so it stays
+	// in lockstep with whatever timestamp the core just stamped into its
+	// rolling capture buffer. Held in a closure-captured `let` and read via
+	// a getter so the facade's interface still presents it as a `readonly`
+	// number from the outside.
+	let lastNotificationAtMs: number | null = null;
 	return {
 		async onNotification(source, data, nowMs) {
+			lastNotificationAtMs = nowMs;
 			return parseOutput(bridge.on_notification(toWasmSource(source), data, nowMs));
+		},
+		get lastNotificationAtMs(): number | null {
+			return lastNotificationAtMs;
 		},
 		async onTick(nowMs) {
 			return parseOutput(bridge.on_tick(nowMs));
@@ -806,8 +845,14 @@ async function createCore(): Promise<CremaCore> {
 		async captureClear() {
 			bridge.capture_clear();
 		},
-		async setReplayMode(on) {
-			bridge.set_replay_mode(on);
+		async beginReplay() {
+			bridge.begin_replay();
+		},
+		async endReplay() {
+			bridge.end_replay();
+		},
+		async inReplay() {
+			return bridge.in_replay();
 		},
 		async connectScale(advertisedName) {
 			return bridge.connect_scale(advertisedName);

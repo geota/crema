@@ -28,7 +28,7 @@ import {
 	signatureForRoaster as wasmSignatureForRoaster,
 	reconcileShots as wasmReconcileShots
 } from '$lib/wasm/de1_wasm';
-import type { StoredShot } from '$lib/history/model';
+import { peaksOf, type StoredShot } from '$lib/history/model';
 
 // ── Types ─────────────────────────────────────────────────────────────
 
@@ -96,17 +96,14 @@ export type ReconcileAction =
  * Adapts the wasm `signatureForShot` (positional args) to the object
  * shape the existing TS callers use.
  */
-export function signatureForShot(shot: {
-	completedAt: number;
-	duration: number;
-	profileName: string | null;
-	finalWeight: number | null;
-}): string {
+export function signatureForShot(shot: StoredShot): string {
+	const peaks = peaksOf(shot);
+	const finalWeight = peaks.finalWeight ?? peaks.peakWeight ?? null;
 	return wasmSignatureForShot(
 		shot.completedAt,
-		shot.duration,
+		shot.record.duration,
 		shot.profileName ?? undefined,
-		shot.finalWeight ?? undefined
+		finalWeight ?? undefined
 	);
 }
 
@@ -173,24 +170,23 @@ export function reconcileShots(
 export function storedShotFromWire(remote: WireShot): StoredShot {
 	const id = `shot:remote:${remote.id}`;
 	return {
+		formatVersion: 3,
 		id,
 		completedAt: remote.clock,
 		profileName: remote.profile_title,
-		duration: remote.duration_ms,
-		dose: null,
-		peakWeight: null,
-		finalWeight: remote.final_weight_g,
-		peakPressure: 0,
-		peakTemp: 0,
-		series: [],
+		metadata: {
+			dose: null,
+			yieldOut: remote.final_weight_g ?? null,
+			rating: remote.rating ?? null,
+			notes: remote.notes ?? null
+		},
+		record: { duration: remote.duration_ms, samples: [] },
 		bean: null,
 		// `WireShot` doesn't carry the remote shot's `grinder_model`
 		// today — pulled rows leave the snapshot empty, and the
 		// upload-time cascade in `shot-sync.ts` re-applies the user's
 		// current settings default if they push the row back.
 		grinderModel: null,
-		rating: remote.rating ?? 0,
-		notes: remote.notes ?? '',
 		// Defensive `?? []` even though the type says `string[]` — the
 		// boundary in `shot-sync.ts` is the single producer of `tag_list`
 		// and it already supplies `[]` on missing, but a fresh contract

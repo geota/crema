@@ -17,11 +17,53 @@
  * {@link getHistoryStore}. It loads synchronously from `localStorage`.
  */
 
-import type { RustStoredShot } from '$lib/core';
+import type { RustStoredShot, RustTimedSample } from '$lib/core';
 import type { TelemetrySample } from '$lib/state';
 import { readJson, writeJson } from '$lib/utils/storage';
-import { shotId, snapshotFromBean, type ShotBean, type StoredShot } from './model';
+import {
+	shotId,
+	snapshotFromBean,
+	type ShotBean,
+	type ShotMetadata,
+	type StoredShot
+} from './model';
 import type { Bean, Roaster } from '$lib/bean';
+
+/** Current persisted-shot schema version — matches Rust's `STORED_SHOT_FORMAT_VERSION`. */
+const STORED_SHOT_FORMAT_VERSION = 3;
+
+/**
+ * Convert a shell `TelemetrySample` to the Rust wire-shape `TimedSample`.
+ * Used at shot-completion time to write the live buffer into the
+ * canonical wire shape. The fields the live buffer doesn't track
+ * (`sampleTime` / `setMixTemp` / `frameNumber`) zero-fill — they're
+ * non-load-bearing for chart playback and only exist for v2 .shot.json
+ * cross-app compatibility (where they're already optional / zeroed).
+ */
+function wireFromTelemetry(t: TelemetrySample): RustTimedSample {
+	const out: RustTimedSample = {
+		elapsed: t.elapsed,
+		sample: {
+			sampleTime: 0,
+			groupPressure: t.pressure,
+			groupFlow: t.flow,
+			headTemp: t.temp,
+			mixTemp: t.mixTemp,
+			setHeadTemp: t.setHeadTemp ?? 0,
+			setMixTemp: 0,
+			setGroupPressure: t.setGroupPressure ?? 0,
+			setGroupFlow: t.setGroupFlow ?? 0,
+			frameNumber: 0,
+			steamTemp: t.steamTemp
+		}
+	};
+	if (t.weight != null) out.scaleWeight = t.weight;
+	if (t.weightFlow != null) out.scaleFlowWeight = t.weightFlow;
+	if (t.dispensedVolume != null) out.dispensedVolume = t.dispensedVolume;
+	if (t.resistance != null) out.resistance = t.resistance;
+	if (t.resistanceWeight != null) out.resistanceWeight = t.resistanceWeight;
+	return out;
+}
 
 /**
  * localStorage key for the recorded shots (a `StoredShot[]`, newest first).
@@ -151,34 +193,29 @@ export class HistoryStore {
 	record(completion: ShotCompletion): StoredShot | null {
 		const series = completion.series;
 		if (series.length === 0) return null;
-
+		const samples = series.map(wireFromTelemetry);
+		const metadata: ShotMetadata = {
+			dose: completion.dose ?? null,
+			rating: null,
+			notes: null
+		};
 		const record: StoredShot = {
+			formatVersion: STORED_SHOT_FORMAT_VERSION,
 			id: shotId(),
 			completedAt: Date.now(),
 			profileName: completion.profileName,
-			duration: completion.duration,
-			dose: completion.dose,
-			peakWeight: completion.peakWeight,
-			finalWeight: completion.finalWeight,
-			// `peakPressure` / `peakTemp` are non-nullable on `StoredShot`;
-			// fall back to `0` when no telemetry arrived (matches the empty-
-			// series behaviour of the previous re-derivation).
-			peakPressure: completion.peakPressure ?? 0,
-			peakTemp: completion.peakTemp ?? 0,
-			series: [...series],
+			metadata,
+			record: {
+				duration: completion.duration,
+				samples
+			},
 			bean: completion.bean,
 			grinderModel: completion.grinderModel,
-			// QC-override snapshot — each rides only when the caller
-			// supplied it, so a headless / replay completion (no live Quick
-			// Sheet) leaves them absent and downstream readers fall back to
-			// the embedded profile's defaults.
 			yieldTarget: completion.yieldTarget ?? null,
-			brewTemp: completion.brewTemp ?? null,
+			brewTempTarget: completion.brewTemp ?? null,
 			preinfuseTarget: completion.preinfuseTarget ?? null,
 			stopOnWeight: completion.stopOnWeight,
 			autoTare: completion.autoTare,
-			rating: 0,
-			notes: '',
 			tags: completion.tags ? [...completion.tags] : []
 		};
 		this.shots = [record, ...this.shots].slice(0, MAX_RECORDS);
@@ -190,9 +227,10 @@ export class HistoryStore {
 	setNotes(id: string, notes: string): void {
 		const idx = this.shots.findIndex((s) => s.id === id);
 		if (idx < 0) return;
+		const target = this.shots[idx];
 		this.shots = [
 			...this.shots.slice(0, idx),
-			{ ...this.shots[idx], notes },
+			{ ...target, metadata: { ...target.metadata, notes } },
 			...this.shots.slice(idx + 1)
 		];
 		this.persist();
@@ -280,9 +318,10 @@ export class HistoryStore {
 		const idx = this.shots.findIndex((s) => s.id === id);
 		if (idx < 0) return;
 		const clamped = Math.max(0, Math.min(5, Math.round(rating)));
+		const target = this.shots[idx];
 		this.shots = [
 			...this.shots.slice(0, idx),
-			{ ...this.shots[idx], rating: clamped },
+			{ ...target, metadata: { ...target.metadata, rating: clamped } },
 			...this.shots.slice(idx + 1)
 		];
 		this.persist();
@@ -371,65 +410,37 @@ export class HistoryStore {
 	 * UI treats this as a "couldn't parse" error and toasts).
 	 */
 	addImported(imported: RustStoredShot, extras?: ImportExtras): StoredShot | null {
-		const series = mapTimedSamples(imported.record.samples);
-		if (series.length === 0) return null;
-
-		let peakWeight: number | null = null;
-		let peakPressure = 0;
-		let peakTemp = 0;
-		for (const s of series) {
-			if (s.weight != null && (peakWeight == null || s.weight > peakWeight)) {
-				peakWeight = s.weight;
-			}
-			if (s.pressure > peakPressure) peakPressure = s.pressure;
-			if (s.temp > peakTemp) peakTemp = s.temp;
-		}
-
-		const finalWeight = imported.metadata.yield_out ?? peakWeight;
+		if (imported.record.samples.length === 0) return null;
 		const bean = beanFromImported(
 			imported.metadata.beans ?? null,
-			imported.metadata.grinder_setting ?? null,
+			imported.metadata.grinderSetting ?? null,
 			extras?.bean ?? null
 		);
 		const record: StoredShot = {
+			formatVersion: STORED_SHOT_FORMAT_VERSION,
 			id: shotId(),
-			completedAt: imported.recorded_at,
+			completedAt: imported.completedAt,
 			profileName: imported.profile?.title ?? null,
-			duration: durationToMs(imported.record.duration),
-			dose: imported.metadata.dose ?? null,
-			peakWeight,
-			finalWeight,
-			peakPressure,
-			peakTemp,
-			series,
+			profile: imported.profile ?? null,
+			metadata: {
+				...imported.metadata,
+				notes: imported.metadata.notes ?? null,
+				rating: imported.metadata.rating ?? null
+			},
+			record: imported.record,
 			bean,
-			// Imported `.shot.json` files post-this-PR carry the equipment-
-			// level grinder model in `metadata.crema.grinder_model`; legacy
-			// files don't, so leave it `null` and the upload-time cascade
-			// re-reads the current settings default.
 			grinderModel: extras?.grinderModel ?? null,
 			yieldTarget: extras?.yieldTarget ?? null,
-			brewTemp: extras?.brewTemp ?? null,
+			brewTempTarget: extras?.brewTemp ?? null,
 			preinfuseTarget: extras?.preinfuseTarget ?? null,
 			stopOnWeight: extras?.stopOnWeight,
 			autoTare: extras?.autoTare,
-			rating: imported.metadata.rating ?? 0,
-			notes: imported.metadata.notes ?? '',
 			tags: extras?.tags ? [...extras.tags] : []
 		};
 		this.shots = [record, ...this.shots].slice(0, MAX_RECORDS);
 		this.persist();
 		return record;
 	}
-}
-
-/**
- * Translate a Rust `Duration { secs, nanos }` into plain milliseconds —
- * Crema's TS shot records store every elapsed value as `ms` for parity
- * with `performance.now()` math.
- */
-function durationToMs(d: { secs: number; nanos: number }): number {
-	return d.secs * 1000 + d.nanos / 1_000_000;
 }
 
 /**
@@ -450,18 +461,18 @@ function mapTimedSamples(
 		// for the resistance fallback path — the chart auto-switch
 		// uses per-sample `resistanceWeight ?? resistance`, and an
 		// absent value cleanly defers to the DE1-flow sibling.
-		const sw = t.scale_weight;
-		const sfw = t.scale_flow_weight;
-		const dv = t.dispensed_volume;
+		const sw = t.scaleWeight;
+		const sfw = t.scaleFlowWeight;
+		const dv = t.dispensedVolume;
 		const r = t.resistance;
-		const rw = t.resistance_weight;
+		const rw = t.resistanceWeight;
 		return {
-			elapsed: durationToMs(t.elapsed),
-			pressure: t.sample.group_pressure,
-			flow: t.sample.group_flow,
-			temp: t.sample.head_temp,
-			mixTemp: t.sample.mix_temp,
-			steamTemp: t.sample.steam_temp,
+			elapsed: t.elapsed,
+			pressure: t.sample.groupPressure,
+			flow: t.sample.groupFlow,
+			temp: t.sample.headTemp,
+			mixTemp: t.sample.mixTemp,
+			steamTemp: t.sample.steamTemp,
 			// Imported weight: present whenever the source file recorded
 			// a non-trivial scale series; a uniformly-zero placeholder
 			// (no scale paired) leaves the channel `null` so the chart
@@ -475,16 +486,16 @@ function mapTimedSamples(
 			resistance:
 				r != null && r > 0
 					? r
-					: t.sample.group_flow > 0.05
-						? t.sample.group_pressure / (t.sample.group_flow * t.sample.group_flow)
+					: t.sample.groupFlow > 0.05
+						? t.sample.groupPressure / (t.sample.groupFlow * t.sample.groupFlow)
 						: null,
 			resistanceWeight: rw != null && rw > 0 ? rw : null,
 			// The legacy log records one `temperature_goal` per sample —
 			// fan it into `setHeadTemp` (the chart's dashed overlay channel)
 			// per `applyEvent` in ui-state.svelte.ts.
-			setHeadTemp: t.sample.set_head_temp,
-			setGroupPressure: t.sample.set_group_pressure,
-			setGroupFlow: t.sample.set_group_flow
+			setHeadTemp: t.sample.setHeadTemp,
+			setGroupPressure: t.sample.setGroupPressure,
+			setGroupFlow: t.sample.setGroupFlow
 		};
 	});
 }
@@ -521,8 +532,8 @@ function beanFromImported(
 		}
 	}
 	const out: Record<string, unknown> = {
-		roaster,
-		type,
+		name: type,
+		roasterName: roaster.length > 0 ? roaster : null,
 		roastedOn: extras?.roastedOn ?? null,
 		roastLevel: extras?.roastLevel ?? null
 	};
@@ -586,13 +597,25 @@ function coerceShotBean(raw: unknown): ShotBean | null {
 	// and ShotBean's `readonly` modifier doesn't prevent assembling the
 	// object literal in pieces, so build a plain mutable scratch object
 	// and return it as `ShotBean`.
+	// Accept both the new wire-shape field names (`name`/`roasterName`)
+	// and the legacy v2 shape (`type`/`roaster`) so localStorage records
+	// written before Task #21 upcast cleanly on first load. The legacy
+	// keys are dropped from `out` so re-saved rows are clean.
+	const legacyType = typeof obj.type === 'string' ? obj.type : null;
+	const legacyRoaster = typeof obj.roaster === 'string' ? obj.roaster : null;
+	const name = typeof obj.name === 'string' ? obj.name : (legacyType ?? '');
+	const roasterName =
+		typeof obj.roasterName === 'string' ? obj.roasterName : legacyRoaster;
 	const out: Record<string, unknown> = {
-		roaster: typeof obj.roaster === 'string' ? obj.roaster : '',
-		type: typeof obj.type === 'string' ? obj.type : '',
+		name,
+		roasterName,
 		roastedOn: typeof obj.roastedOn === 'string' ? obj.roastedOn : null,
 		roastLevel: typeof obj.roastLevel === 'number' ? obj.roastLevel : null
 	};
 	if (typeof obj.beanId === 'string' || obj.beanId === null) out.beanId = obj.beanId;
+	if (Array.isArray(obj.tags)) {
+		out.tags = obj.tags.filter((t): t is string => typeof t === 'string');
+	}
 	if (typeof obj.notes === 'string' && obj.notes.length > 0) out.notes = obj.notes;
 	if (typeof obj.grinderSetting === 'string' && obj.grinderSetting.length > 0) {
 		out.grinderSetting = obj.grinderSetting;
@@ -614,68 +637,114 @@ function loadShots(): StoredShot[] {
 		if (typeof item !== 'object' || item === null) continue;
 		const obj = item as Record<string, unknown>;
 		if (typeof obj.id !== 'string') continue;
-		// Trust the shape for the existing fields — they have been
-		// stable through v2 — and only normalise the new sync fields
-		// so missing keys become `null`, not `undefined`.
-		// Defensive normalisation for the optional sync fields and the
-		// post-v2 `tags` field — older records have none of them.
-		// `tags` falls back to `[]`; non-string entries are filtered so a
-		// corrupted store doesn't taint the in-memory list.
-		const tagsRaw = obj.tags;
-		const tags = Array.isArray(tagsRaw)
-			? tagsRaw.filter((t): t is string => typeof t === 'string')
-			: [];
-		// `bean` is the inline-bean snapshot (notes, grinderSetting). Older
-		// records without these fields still parse — `coerceShotBean` reads
-		// each one defensively and omits it when absent.
-		const bean = coerceShotBean(obj.bean ?? null);
-		// `grinderModel` (added in #81) is the equipment-level snapshot.
-		// Legacy records pre-#81 have no field at all — leave it `null`
-		// so the upload-time cascade re-reads the current settings
-		// default. A persisted empty string is normalised to `null` too,
-		// so "no override" is one canonical shape.
-		const grinderModelRaw = obj.grinderModel;
-		const grinderModel =
-			typeof grinderModelRaw === 'string' && grinderModelRaw.length > 0
-				? grinderModelRaw
-				: null;
-		// QC-override snapshot — `yieldTarget` / `brewTemp` /
-		// `preinfuseTarget` / `stopOnWeight` / `autoTare` are frozen on the
-		// shot at completion time (see `ShotCompleted` handler in
-		// `app.svelte.ts`). Legacy records pre-this-PR have none of them;
-		// read each defensively so a non-number / non-bool / missing key
-		// lands as `null` or `undefined` and downstream readers fall back
-		// to the embedded profile slot's defaults.
-		const yieldTarget =
-			typeof obj.yieldTarget === 'number' && Number.isFinite(obj.yieldTarget)
-				? obj.yieldTarget
-				: null;
-		const brewTemp =
-			typeof obj.brewTemp === 'number' && Number.isFinite(obj.brewTemp)
-				? obj.brewTemp
-				: null;
-		const preinfuseTarget =
-			typeof obj.preinfuseTarget === 'number' && Number.isFinite(obj.preinfuseTarget)
-				? obj.preinfuseTarget
-				: null;
-		const stopOnWeight =
-			typeof obj.stopOnWeight === 'boolean' ? obj.stopOnWeight : undefined;
-		const autoTare = typeof obj.autoTare === 'boolean' ? obj.autoTare : undefined;
-		out.push({
-			...(obj as unknown as StoredShot),
-			bean,
-			grinderModel,
-			tags,
-			yieldTarget,
-			brewTemp,
-			preinfuseTarget,
-			stopOnWeight,
-			autoTare,
-			visualizerId: typeof obj.visualizerId === 'string' ? obj.visualizerId : null,
-			deletedAt: typeof obj.deletedAt === 'number' ? obj.deletedAt : null
-		});
+		const migrated = coerceStoredShot(obj);
+		if (migrated) out.push(migrated);
 	}
 	return out;
+}
+
+/**
+ * Upcast a persisted shot row to the v3 wire shape.
+ *
+ * v3 records pass through untouched (already `{ formatVersion: 3,
+ * metadata, record, … }`). v2 records (denormalized, with top-level
+ * `dose` / `rating` / `notes` / `series` / `duration` / `peakWeight`
+ * / `brewTemp`) are folded into the wire shape:
+ *
+ *  - `dose` / `rating` / `notes` move under `metadata`.
+ *  - `series` (`TelemetrySample[]`) becomes `record.samples`
+ *    (`RustTimedSample[]`) via {@link wireFromTelemetry}.
+ *  - `duration` moves under `record.duration`.
+ *  - `brewTemp` renames to `brewTempTarget`.
+ *  - The pre-derived peaks are dropped — re-derived on demand by
+ *    {@link peaksOf}.
+ *
+ * Returns `null` only when the record is too corrupt to recover.
+ */
+function coerceStoredShot(obj: Record<string, unknown>): StoredShot | null {
+	const tagsRaw = obj.tags;
+	const tags = Array.isArray(tagsRaw)
+		? tagsRaw.filter((t): t is string => typeof t === 'string')
+		: [];
+	const bean = coerceShotBean(obj.bean ?? null);
+	const grinderModelRaw = obj.grinderModel;
+	const grinderModel =
+		typeof grinderModelRaw === 'string' && grinderModelRaw.length > 0
+			? grinderModelRaw
+			: null;
+	const yieldTarget =
+		typeof obj.yieldTarget === 'number' && Number.isFinite(obj.yieldTarget)
+			? obj.yieldTarget
+			: null;
+	// v3 wire records carry `brewTempTarget`; v2 carried `brewTemp`.
+	const brewTempRaw =
+		typeof obj.brewTempTarget === 'number' && Number.isFinite(obj.brewTempTarget)
+			? (obj.brewTempTarget as number)
+			: typeof obj.brewTemp === 'number' && Number.isFinite(obj.brewTemp)
+				? (obj.brewTemp as number)
+				: null;
+	const preinfuseTarget =
+		typeof obj.preinfuseTarget === 'number' && Number.isFinite(obj.preinfuseTarget)
+			? obj.preinfuseTarget
+			: null;
+	const stopOnWeight = typeof obj.stopOnWeight === 'boolean' ? obj.stopOnWeight : undefined;
+	const autoTare = typeof obj.autoTare === 'boolean' ? obj.autoTare : undefined;
+	const visualizerId = typeof obj.visualizerId === 'string' ? obj.visualizerId : null;
+	const deletedAt = typeof obj.deletedAt === 'number' ? obj.deletedAt : null;
+
+	// v3 wire records carry `metadata` + `record`. v2 records have
+	// top-level `dose` / `rating` / `notes` + `series` / `duration`.
+	const isV3 =
+		typeof obj.formatVersion === 'number' &&
+		obj.formatVersion >= 3 &&
+		typeof obj.metadata === 'object' &&
+		obj.metadata !== null &&
+		typeof obj.record === 'object' &&
+		obj.record !== null;
+
+	let metadata: ShotMetadata;
+	let recordField: StoredShot['record'];
+	if (isV3) {
+		metadata = (obj.metadata ?? {}) as ShotMetadata;
+		recordField = (obj.record ?? { duration: 0, samples: [] }) as StoredShot['record'];
+	} else {
+		// v2 migration path
+		const legacySeries = Array.isArray(obj.series) ? (obj.series as TelemetrySample[]) : [];
+		const samples = legacySeries.map(wireFromTelemetry);
+		const duration =
+			typeof obj.duration === 'number' && Number.isFinite(obj.duration) ? obj.duration : 0;
+		recordField = { duration, samples };
+		metadata = {
+			dose:
+				typeof obj.dose === 'number' && Number.isFinite(obj.dose) ? (obj.dose as number) : null,
+			rating:
+				typeof obj.rating === 'number' && Number.isFinite(obj.rating)
+					? (obj.rating as number)
+					: null,
+			notes: typeof obj.notes === 'string' ? (obj.notes as string) : null
+		};
+	}
+
+	return {
+		formatVersion: STORED_SHOT_FORMAT_VERSION,
+		id: obj.id as string,
+		completedAt: typeof obj.completedAt === 'number' ? (obj.completedAt as number) : 0,
+		profileName: typeof obj.profileName === 'string' ? (obj.profileName as string) : null,
+		profile: (obj.profile as unknown) ?? null,
+		stopReason: (obj.stopReason as unknown) ?? null,
+		metadata,
+		record: recordField,
+		bean,
+		grinderModel,
+		tags,
+		yieldTarget,
+		brewTempTarget: brewTempRaw,
+		preinfuseTarget,
+		stopOnWeight,
+		autoTare,
+		visualizerId,
+		deletedAt
+	};
 }
 
 /** The process-wide singleton — one history shared by every route. */

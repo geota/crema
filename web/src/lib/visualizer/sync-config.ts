@@ -110,6 +110,7 @@ export function readSyncConfig(): VisualizerSyncConfig {
 /** Replace the persisted config wholesale. */
 export function writeSyncConfig(config: VisualizerSyncConfig): void {
 	writeJson(SYNC_KEY, config);
+	for (const cb of listeners) cb(config);
 }
 
 /** Patch-merge the persisted config. */
@@ -117,6 +118,23 @@ export function updateSyncConfig(patch: Partial<VisualizerSyncConfig>): Visualiz
 	const next = { ...readSyncConfig(), ...patch };
 	writeSyncConfig(next);
 	return next;
+}
+
+/**
+ * In-tab change subscription. Every `writeSyncConfig` / `updateSyncConfig` /
+ * `appendSyncLog` / `clearSyncLog` call fans out to subscribers — sections
+ * that hold a `$state` snapshot can refresh themselves when another part of
+ * the app mutates the config (e.g. Sharing's Test handler probing the
+ * premium tier).
+ */
+type SyncConfigListener = (config: VisualizerSyncConfig) => void;
+const listeners = new Set<SyncConfigListener>();
+
+export function onSyncConfigChange(cb: SyncConfigListener): () => void {
+	listeners.add(cb);
+	return () => {
+		listeners.delete(cb);
+	};
 }
 
 /** Append a sync-log entry, capped at {@link MAX_LOG_ENTRIES}. */

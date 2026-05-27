@@ -14,6 +14,7 @@ pub const SHOT_SAMPLE_LEN: usize = 19;
 /// copies are not a good default — pass it by reference.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct ShotSample {
     /// Free-running 16-bit AC half-cycle counter; wraps at 65536 (protocol §3.3).
     pub sample_time: u16,

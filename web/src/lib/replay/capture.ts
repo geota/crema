@@ -146,6 +146,18 @@ export function sourceFromName(name: string): NotificationSource | undefined {
 			return 'De1ShotSample';
 		case 'DE1_WATER_LEVELS':
 			return 'De1WaterLevels';
+		case 'DE1_VERSION':
+			return 'De1Version';
+		case 'DE1_MMR_READ':
+			return 'De1MmrRead';
+		case 'DE1_CALIBRATION':
+			return 'De1Calibration';
+		case 'DE1_SHOT_SETTINGS':
+			return 'De1ShotSettings';
+		case 'DE1_PROFILE_HEADER':
+			return 'De1ProfileHeader';
+		case 'DE1_FRAME_ACK':
+			return 'De1FrameAck';
 		case 'SCALE_WEIGHT':
 			return 'ScaleWeight';
 		case 'SCALE_FF12':

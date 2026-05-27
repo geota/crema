@@ -12,7 +12,9 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::bean::ShotBean;
 use crate::error::DomainError;
+use crate::ids::new_shot_id;
 use crate::profile::Profile;
 use crate::shot::ShotRecord;
 use crate::stop::StopReason;
@@ -25,11 +27,12 @@ use crate::stop::StopReason;
 /// `yield_out_g`), [`StoredShot::recorded_at`] (was `recorded_at_unix_ms`),
 /// [`ShotRecord::duration`] / [`TimedSample::elapsed`] (were `_ms` `u64`s,
 /// now serde-default `Duration`s with `{secs, nanos}`).
-pub const STORED_SHOT_FORMAT_VERSION: u32 = 2;
+pub const STORED_SHOT_FORMAT_VERSION: u32 = 3;
 
 /// Barista-supplied journal metadata for a shot. Every field is optional — a
 /// shot can be stored with none of it and annotated afterwards.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ShotMetadata {
     /// Dry coffee dose, grams.
     pub dose: Option<f32>,
@@ -101,13 +104,32 @@ mod ratio_tests {
 
 /// A completed shot persisted to history: the telemetry plus everything
 /// needed to interpret it.
+///
+/// **Storage shape, not view shape.** Peaks (`peak_weight`,
+/// `peak_pressure`, …) are NOT stored — call [`ShotRecord::peaks`] to
+/// derive them. The shell's denormalized History rows / detail panel
+/// pull peaks from that helper on demand instead of caching them on
+/// the record.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StoredShot {
     /// Schema version — see [`STORED_SHOT_FORMAT_VERSION`].
     pub format_version: u32,
+    /// Stable id — `shot:<uuid-v7>`. Minted via [`new_shot_id`] for
+    /// fresh records; legacy records that pre-date this field get one
+    /// stamped in by the serde default so cross-device sync (Visualizer
+    /// / future Crema cloud) has a stable handle.
+    #[serde(default = "new_shot_id")]
+    pub id: String,
     /// When the shot was pulled, Unix epoch milliseconds. The core has no
     /// clock; the shell supplies this.
-    pub recorded_at: u64,
+    pub completed_at: u64,
+    /// The active profile's display name at completion time, or `None`
+    /// when no active profile was set. Stored separately from the
+    /// full `profile` so the History UI can read the name without
+    /// paying the JSON cost of the full profile body.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_name: Option<String>,
     /// The profile pulled, if known.
     pub profile: Option<Profile>,
     /// Why the shot stopped, if an [`AutoStop`](crate::AutoStop) drove it.
@@ -116,33 +138,81 @@ pub struct StoredShot {
     pub metadata: ShotMetadata,
     /// The recorded telemetry.
     pub record: ShotRecord,
+    /// Frozen-at-completion snapshot of the bean / roaster that drove
+    /// the shot. `None` when no bean was logged. The History UI reads
+    /// from this so a later bean rename / archive does not retroactively
+    /// rewrite history.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bean: Option<ShotBean>,
+    /// Equipment-level grinder model at completion time
+    /// (e.g. `"Niche Zero"`). Snapshotted from the shell's
+    /// `settings.prefs.grinderModel` — distinct from `metadata.grinder_setting`
+    /// (the *dial*) and `bean.grinder_setting` (the bean's recorded dial).
+    /// `None` when no value was set at completion time; the upload-time
+    /// cascade in the shell's Visualizer sync falls back to the current
+    /// settings default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grinder_model: Option<String>,
+    /// Shot-level free-form tags. Independent from `bean.tags` — the
+    /// shell unions them at upload time. Mutable post-completion via
+    /// the shot-detail panel.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    /// Yield target the user dialed in for this shot, grams — the
+    /// stop-on-weight target. Distinct from the *measured* yield (which
+    /// lives on `metadata.yield_out` and as the final scale weight on
+    /// the telemetry samples).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub yield_target: Option<f32>,
+    /// Brew water temperature the user dialed in, °C.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brew_temp_target: Option<f32>,
+    /// Pre-infuse duration the user dialed in, seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preinfuse_target: Option<f32>,
+    /// Whether stop-on-weight was armed for this shot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_on_weight: Option<bool>,
+    /// Whether auto-tare was armed for this shot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_tare: Option<bool>,
     /// Visualizer `shot.id` once pushed. `None` until the shot has been
     /// uploaded; the upload round-trip writes it back so subsequent syncs
-    /// PATCH the same row instead of POSTing a duplicate. Defaults to
-    /// `None` so older `StoredShot` JSON deserialises cleanly.
+    /// PATCH the same row instead of POSTing a duplicate.
     #[serde(default)]
     pub visualizer_id: Option<String>,
     /// Unix epoch milliseconds when this shot was soft-deleted, or `None`
     /// when active. The shell filters tombstones out of the History UI;
     /// the next sync DELETEs the remote row, then garbage-collects the
-    /// tombstone. Defaults to `None` so older records deserialise.
+    /// tombstone.
     #[serde(default)]
     pub deleted_at: Option<i64>,
 }
 
 impl StoredShot {
     /// Wrap a freshly completed `record` for storage, stamped with the current
-    /// [`STORED_SHOT_FORMAT_VERSION`] and `recorded_at` (Unix epoch ms; the
-    /// core has no clock, the shell supplies this). Profile, stop reason, and
-    /// metadata start empty — attach them with the `with_*` setters.
-    pub fn new(recorded_at: u64, record: ShotRecord) -> StoredShot {
+    /// [`STORED_SHOT_FORMAT_VERSION`] and `completed_at` (Unix epoch ms; the
+    /// core has no clock, the shell supplies this). Mints a fresh
+    /// [`new_shot_id`]. Profile, stop reason, and metadata start empty —
+    /// attach them with the `with_*` setters.
+    pub fn new(completed_at: u64, record: ShotRecord) -> StoredShot {
         StoredShot {
             format_version: STORED_SHOT_FORMAT_VERSION,
-            recorded_at,
+            id: new_shot_id(),
+            completed_at,
+            profile_name: None,
             profile: None,
             stop_reason: None,
             metadata: ShotMetadata::default(),
             record,
+            bean: None,
+            grinder_model: None,
+            tags: Vec::new(),
+            yield_target: None,
+            brew_temp_target: None,
+            preinfuse_target: None,
+            stop_on_weight: None,
+            auto_tare: None,
             visualizer_id: None,
             deleted_at: None,
         }
@@ -167,6 +237,14 @@ impl StoredShot {
     pub fn with_metadata(mut self, metadata: ShotMetadata) -> StoredShot {
         self.metadata = metadata;
         self
+    }
+
+    /// Derive the chart-friendly summary peaks for this shot — sugar
+    /// for `self.record.peaks()`. Peaks are not stored on `StoredShot`;
+    /// they are derived on read so the storage shape stays minimal.
+    #[must_use]
+    pub fn peaks(&self) -> crate::shot::ShotPeaks {
+        self.record.peaks()
     }
 
     /// Serialize to pretty JSON — a stable, human-readable format the shell
@@ -310,8 +388,8 @@ mod tests {
         let json = shot.to_json().unwrap();
         // Re-stamp the version field to one this build does not know.
         let future = json.replace(
-            &format!("\"format_version\": {STORED_SHOT_FORMAT_VERSION}"),
-            "\"format_version\": 9999",
+            &format!("\"formatVersion\": {STORED_SHOT_FORMAT_VERSION}"),
+            "\"formatVersion\": 9999",
         );
         assert_ne!(future, json, "the version field must have been rewritten");
         let parsed = StoredShot::from_json(&future).unwrap();
@@ -319,7 +397,7 @@ mod tests {
         assert_eq!(parsed.format_version, 9999);
         // Every other field survives intact.
         assert_eq!(parsed.record, shot.record);
-        assert_eq!(parsed.recorded_at, shot.recorded_at);
+        assert_eq!(parsed.completed_at, shot.completed_at);
     }
 
     #[test]
@@ -327,8 +405,8 @@ mod tests {
         let shot = StoredShot::new(1_700_000_000_000, sample_record());
         let json = shot.to_json().unwrap();
         let older = json.replace(
-            &format!("\"format_version\": {STORED_SHOT_FORMAT_VERSION}"),
-            "\"format_version\": 0",
+            &format!("\"formatVersion\": {STORED_SHOT_FORMAT_VERSION}"),
+            "\"formatVersion\": 0",
         );
         let parsed = StoredShot::from_json(&older).unwrap();
         assert_eq!(parsed.format_version, 0);
@@ -339,8 +417,8 @@ mod tests {
         // A future version does not excuse a missing required field: dropping
         // `record` must still fail, so a stale reader cannot silently accept
         // garbage just because the version is unfamiliar.
-        let bad = r#"{"format_version": 9999, "recorded_at": 0,
-            "profile": null, "stop_reason": null, "metadata": {}}"#;
+        let bad = r#"{"formatVersion": 9999, "completedAt": 0,
+            "profile": null, "stopReason": null, "metadata": {}}"#;
         assert!(StoredShot::from_json(bad).is_err());
     }
 
