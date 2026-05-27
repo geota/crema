@@ -27,6 +27,7 @@ import { peaksForShot as wasmPeaksForShot } from '$lib/wasm/de1_wasm';
 import type { TelemetrySample } from '$lib/state';
 import { filenameStamp } from '$lib/utils/download';
 import { formatRatio } from '$lib/utils/ratio';
+import { fromWire } from './telemetry-wire';
 
 /**
  * A snapshot of the current bean at the moment a shot was pulled. Stored on
@@ -294,6 +295,17 @@ export function peaksOf(shot: StoredShot): ShotPeaks {
 /**
  * Flatten the wire-shape sample series into the chart-friendly
  * {@link TelemetrySample} shape the live + history charts consume.
+ *
+ * Two responsibilities, kept separate:
+ *  - **Cell-by-cell projection** — `fromWire` in `./telemetry-wire`
+ *    handles each sample as a pure inverse of `toWire`.
+ *  - **Resistance fallback** — when a stored sample has no resistance
+ *    signal, compute it from the per-sample pressure / flow²
+ *    (the de1app/DSx P/F² formula) so the history chart can still
+ *    show a resistance trace for shots recorded before the field
+ *    was carried on the wire. This is NOT inverse of `toWire`; it's
+ *    a chart-side enrichment.
+ *
  * Cheap (per-sample object spread); cached per shot id + record-length.
  */
 const flatCache = new Map<string, TelemetrySample[]>();
@@ -302,32 +314,17 @@ export function flatSamplesOf(shot: StoredShot): TelemetrySample[] {
 	const cached = flatCache.get(key);
 	if (cached) return cached;
 	const out: TelemetrySample[] = shot.record.samples.map((t) => {
-		const sw = t.scaleWeight;
-		const sfw = t.scaleFlowWeight;
-		const dv = t.dispensedVolume;
-		const r = t.resistance;
-		const rw = t.resistanceWeight;
-		return {
-			elapsed: t.elapsed,
-			pressure: t.sample.groupPressure,
-			flow: t.sample.groupFlow,
-			temp: t.sample.headTemp,
-			mixTemp: t.sample.mixTemp,
-			steamTemp: t.sample.steamTemp,
-			weight: sw != null && sw > 0 ? sw : null,
-			weightFlow: sfw != null && sfw > 0 ? sfw : null,
-			dispensedVolume: dv != null && dv > 0 ? dv : 0,
-			resistance:
-				r != null && r > 0
-					? r
-					: t.sample.groupFlow > 0.05
-						? t.sample.groupPressure / (t.sample.groupFlow * t.sample.groupFlow)
-						: null,
-			resistanceWeight: rw != null && rw > 0 ? rw : null,
-			setHeadTemp: t.sample.setHeadTemp,
-			setGroupPressure: t.sample.setGroupPressure,
-			setGroupFlow: t.sample.setGroupFlow
-		};
+		const sample = fromWire(t);
+		// Chart-side enrichment: derive resistance from pressure / flow²
+		// when no per-sample signal is recorded — legacy shots and any
+		// pulled remote that didn't carry the resistance channel.
+		if (sample.resistance === null && t.sample.groupFlow > 0.05) {
+			return {
+				...sample,
+				resistance: t.sample.groupPressure / (t.sample.groupFlow * t.sample.groupFlow)
+			};
+		}
+		return sample;
 	});
 	flatCache.set(key, out);
 	return out;

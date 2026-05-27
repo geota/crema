@@ -19,6 +19,7 @@
 
 import type { RustStoredShot, RustTimedSample } from '$lib/core';
 import type { TelemetrySample } from '$lib/state';
+import { toWire } from './telemetry-wire';
 import { readJson, writeJson } from '$lib/utils/storage';
 import {
 	shotId,
@@ -32,38 +33,10 @@ import type { Bean, Roaster } from '$lib/bean';
 /** Current persisted-shot schema version — matches Rust's `STORED_SHOT_FORMAT_VERSION`. */
 const STORED_SHOT_FORMAT_VERSION = 3;
 
-/**
- * Convert a shell `TelemetrySample` to the Rust wire-shape `TimedSample`.
- * Used at shot-completion time to write the live buffer into the
- * canonical wire shape. The fields the live buffer doesn't track
- * (`sampleTime` / `setMixTemp` / `frameNumber`) zero-fill — they're
- * non-load-bearing for chart playback and only exist for v2 .shot.json
- * cross-app compatibility (where they're already optional / zeroed).
- */
-function wireFromTelemetry(t: TelemetrySample): RustTimedSample {
-	const out: RustTimedSample = {
-		elapsed: t.elapsed,
-		sample: {
-			sampleTime: 0,
-			groupPressure: t.pressure,
-			groupFlow: t.flow,
-			headTemp: t.temp,
-			mixTemp: t.mixTemp,
-			setHeadTemp: t.setHeadTemp ?? 0,
-			setMixTemp: 0,
-			setGroupPressure: t.setGroupPressure ?? 0,
-			setGroupFlow: t.setGroupFlow ?? 0,
-			frameNumber: 0,
-			steamTemp: t.steamTemp
-		}
-	};
-	if (t.weight != null) out.scaleWeight = t.weight;
-	if (t.weightFlow != null) out.scaleFlowWeight = t.weightFlow;
-	if (t.dispensedVolume != null) out.dispensedVolume = t.dispensedVolume;
-	if (t.resistance != null) out.resistance = t.resistance;
-	if (t.resistanceWeight != null) out.resistanceWeight = t.resistanceWeight;
-	return out;
-}
+// `toWire` (the TelemetrySample → RustTimedSample mapper) lives in
+// `./telemetry-wire` alongside its inverse `fromWire`. A round-trip
+// test pins the two as a forward/inverse pair so a new sample channel
+// can't drift between record and read paths.
 
 /**
  * localStorage key for the recorded shots (a `StoredShot[]`, newest first).
@@ -193,7 +166,7 @@ export class HistoryStore {
 	record(completion: ShotCompletion): StoredShot | null {
 		const series = completion.series;
 		if (series.length === 0) return null;
-		const samples = series.map(wireFromTelemetry);
+		const samples = series.map(toWire);
 		const metadata: ShotMetadata = {
 			dose: completion.dose ?? null,
 			rating: null,
@@ -653,7 +626,7 @@ function loadShots(): StoredShot[] {
  *
  *  - `dose` / `rating` / `notes` move under `metadata`.
  *  - `series` (`TelemetrySample[]`) becomes `record.samples`
- *    (`RustTimedSample[]`) via {@link wireFromTelemetry}.
+ *    (`RustTimedSample[]`) via `toWire` from `./telemetry-wire`.
  *  - `duration` moves under `record.duration`.
  *  - `brewTemp` renames to `brewTempTarget`.
  *  - The pre-derived peaks are dropped — re-derived on demand by
@@ -710,7 +683,7 @@ function coerceStoredShot(obj: Record<string, unknown>): StoredShot | null {
 	} else {
 		// v2 migration path
 		const legacySeries = Array.isArray(obj.series) ? (obj.series as TelemetrySample[]) : [];
-		const samples = legacySeries.map(wireFromTelemetry);
+		const samples = legacySeries.map(toWire);
 		const duration =
 			typeof obj.duration === 'number' && Number.isFinite(obj.duration) ? obj.duration : 0;
 		recordField = { duration, samples };
