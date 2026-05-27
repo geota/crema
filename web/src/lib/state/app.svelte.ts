@@ -1272,18 +1272,19 @@ export class CremaApp {
 	 * `de1MachineInfo[FlushTemp]`, and the BrewDashboard's `flushTempC`
 	 * derive already prefers the live machine value when present.
 	 */
-	async setFlushTemp(tempC: number): Promise<void> {
-		this.applyCoreOutput(await this.core.setFlushTemp(tempC));
+	async setFlushTemp(celsius: number): Promise<void> {
+		this.applyCoreOutput(await this.core.setFlushTemp(celsius));
 	}
 
 	/**
-	 * Set the cup-warmer plate temperature, °C — Bengle hardware only.
-	 * MMR `CupWarmerTemp` (`0x803874`). `0` turns the plate off; the
-	 * firmware ignores the write on non-Bengle models so the call is
-	 * safe to gate UI-side without core-side guards.
+	 * Set the cup-warmer plate temperature — Bengle hardware only.
+	 * Celsius is the canonical unit (see docs/25 §7). MMR `CupWarmerTemp`
+	 * (`0x803874`). `0` turns the plate off; the firmware ignores the
+	 * write on non-Bengle models so the call is safe to gate UI-side
+	 * without core-side guards.
 	 */
-	async setCupWarmerTemperature(tempC: number): Promise<void> {
-		this.applyCoreOutput(await this.core.setCupWarmerTemperature(tempC));
+	async setCupWarmerTemp(celsius: number): Promise<void> {
+		this.applyCoreOutput(await this.core.setCupWarmerTemp(celsius));
 	}
 
 	/**

@@ -219,7 +219,7 @@
 			ramp: 'smooth',
 			time: 6,
 			exit: null,
-			temperatureC: last?.temperatureC ?? draft.brewTemp,
+			temp: last?.temp ?? draft.brewTemp,
 			tempSensor: last?.tempSensor ?? 'coffee',
 			volumeLimitMl: 0,
 			limiter: null
