@@ -1003,7 +1003,7 @@ impl CremaBridge {
     /// heartbeat to the connected scale. The shell schedules the clock
     /// (Decent Scale's interval is ~`HEARTBEAT_INTERVAL_MS` ms).
     /// Capability-driven — returns an error when the scale doesn't need
-    /// a heartbeat (`ScaleCapabilities::needs_heartbeat == false`).
+    /// a heartbeat (`ScaleCapabilities::heartbeat_interval_ms == None`).
     pub fn scale_heartbeat(&self) -> Result<String, String> {
         self.core
             .scale_heartbeat()

@@ -458,7 +458,7 @@ export interface CremaCore {
 	 * one packet, Skale 2–3 writes); scales without an LCD reject with
 	 * an `UnsupportedOnHardware` error. The shell schedules periodic
 	 * `scaleHeartbeat` writes once the LCD is enabled for scales whose
-	 * `ScaleCapabilities.needsHeartbeat` is `true`. `unit` is the
+	 * `ScaleCapabilities.heartbeat_interval_ms` is non-null. `unit` is the
 	 * shell's legacy `'g' | 'oz'` pref; the bridge maps it to the
 	 * core's `'grams' | 'ounces'` wire form.
 	 */

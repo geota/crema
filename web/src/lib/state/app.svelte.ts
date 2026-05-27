@@ -346,7 +346,8 @@ export class CremaApp {
 	 * LCD sleeps after a few seconds of silence; the host fires
 	 * `scaleHeartbeat` every ~2 s to keep it awake. The core is sans-IO
 	 * — the clock lives here. Capability-gated via
-	 * `ScaleCapabilities.needsHeartbeat`.
+	 * `ScaleCapabilities.heartbeat_interval_ms` (non-null = arm a clock
+	 * at that cadence; the core owns both the device gate and the cadence).
 	 */
 	private scaleHeartbeatId: ReturnType<typeof setInterval> | null = null;
 
@@ -915,7 +916,7 @@ export class CremaApp {
 		// Tear down the scale-heartbeat clock before the GATT teardown,
 		// so an in-flight `scaleHeartbeat` write doesn't race against the
 		// disconnect.
-		this.clearDecentScaleHeartbeat();
+		this.clearScaleHeartbeat();
 		await this.scale.disconnect();
 		this.state.patch({
 			scaleWeight: null,
@@ -949,40 +950,19 @@ export class CremaApp {
 	private async refreshScaleCapabilities(advertisedName: string): Promise<void> {
 		const caps = await this.core.scaleCapabilities();
 		this.state.patch({ scaleCapabilities: caps ?? null, scaleName: advertisedName });
-		this.armDecentScaleHeartbeat(advertisedName);
+		this.armScaleHeartbeat(caps?.heartbeat_interval_ms ?? null);
 	}
 
 	/**
-	 * The Decent Scale's advertised-name prefixes — kept in sync with
-	 * `Scale::identify` in `core/de1-scale/src/scale.rs`.
+	 * Start (or restart) the scale-heartbeat clock when the connected
+	 * scale's capability declares a non-null cadence; clear any existing
+	 * clock otherwise. The cadence + device identification both live in
+	 * the core (`ScaleCapabilities::heartbeat_interval_ms`); the shell
+	 * just owns the host clock.
 	 */
-	private static readonly DECENT_SCALE_NAME_PREFIXES = ['Decent Scale', 'ButtsHaus Scale'];
-
-	/**
-	 * Heartbeat cadence, ms. Matches `decent_scale::HEARTBEAT_INTERVAL_MS`
-	 * in the core (2 s — comfortably under the scale's 5 s spec ceiling,
-	 * quieter than the legacy 1 s cadence).
-	 */
-	private static readonly DECENT_SCALE_HEARTBEAT_INTERVAL_MS = 2_000;
-
-	/**
-	 * Start (or restart) the Decent-Scale heartbeat clock when the connected
-	 * scale's advertised name matches a Decent Scale; clear any existing clock
-	 * otherwise (so re-identifying as a Bookoo after a Decent Scale tears the
-	 * old timer down).
-	 */
-	private armDecentScaleHeartbeat(advertisedName: string): void {
-		// Still uses the BLE-name prefix gate today — wiring this through
-		// the async `scaleCapabilities()` query would force every connect
-		// flow to await before scheduling. The capability-driven
-		// `scaleHeartbeat()` call below itself rejects with
-		// `UnsupportedOnHardware` for scales without a heartbeat, so an
-		// over-eager arm would be silently no-op'd by the catch arm.
-		const isDecent = CremaApp.DECENT_SCALE_NAME_PREFIXES.some((p) =>
-			advertisedName.startsWith(p)
-		);
-		this.clearDecentScaleHeartbeat();
-		if (!isDecent) return;
+	private armScaleHeartbeat(intervalMs: number | null): void {
+		this.clearScaleHeartbeat();
+		if (intervalMs == null || intervalMs <= 0) return;
 		this.scaleHeartbeatId = setInterval(() => {
 			void this.core
 				.scaleHeartbeat()
@@ -990,11 +970,11 @@ export class CremaApp {
 				.catch(() => {
 					// Best-effort; the next interval retries.
 				});
-		}, CremaApp.DECENT_SCALE_HEARTBEAT_INTERVAL_MS);
+		}, intervalMs);
 	}
 
 	/** Clear the scale-heartbeat clock if one is running. */
-	private clearDecentScaleHeartbeat(): void {
+	private clearScaleHeartbeat(): void {
 		if (this.scaleHeartbeatId !== null) {
 			clearInterval(this.scaleHeartbeatId);
 			this.scaleHeartbeatId = null;

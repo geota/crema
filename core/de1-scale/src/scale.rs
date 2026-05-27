@@ -170,10 +170,13 @@ pub struct ScaleCapabilities {
     /// True when the scale exposes a toggle-unit command (Hiroia).
     /// Mirrors [`Scale::toggle_unit_command`] returning `Some`.
     pub can_toggle_unit: bool,
-    /// True when the scale needs periodic heartbeats to keep its LCD
-    /// awake (Decent). Mirrors [`Scale::heartbeat_command`] returning
-    /// `Some`.
-    pub needs_heartbeat: bool,
+    /// Recommended cadence (milliseconds) between heartbeat writes when
+    /// the scale needs periodic keep-alives — `Some(2000)` for the
+    /// Decent Scale (keeps its on-scale LCD awake), `None` for every
+    /// scale that does not. Mirrors [`Scale::heartbeat_command`]
+    /// returning `Some`, with the cadence now living next to the bytes
+    /// so the shell no longer carries a parallel constant.
+    pub heartbeat_interval_ms: Option<u32>,
 }
 
 /// A timer command a scale may support.
@@ -496,10 +499,10 @@ impl Scale {
     /// the Bookoo, a "first-class" scale, reports the capabilities it supports.
     ///
     /// The `can_lcd` / `can_power_off` / `can_beep` / `can_set_unit_grams` /
-    /// `can_toggle_unit` / `needs_heartbeat` flags mirror the corresponding
-    /// `*_command` methods returning `Some` — populated here in a single
-    /// place so a shell can gate UI without invoking each capability and
-    /// catching the `Unsupported` error.
+    /// `can_toggle_unit` flags + `heartbeat_interval_ms` mirror the
+    /// corresponding `*_command` methods returning `Some` — populated
+    /// here in a single place so a shell can gate UI without invoking
+    /// each capability and catching the `Unsupported` error.
     pub fn capabilities(&self) -> ScaleCapabilities {
         // The Some-ness of each command method IS the capability flag; derive
         // here so the two surfaces can never drift. `_unit` is irrelevant for
@@ -510,7 +513,12 @@ impl Scale {
         let can_beep = self.beep_command().is_some();
         let can_set_unit_grams = self.set_unit_grams_command().is_some();
         let can_toggle_unit = self.toggle_unit_command().is_some();
-        let needs_heartbeat = self.heartbeat_command().is_some();
+        let heartbeat_interval_ms = if self.heartbeat_command().is_some() {
+            // u64 → u32 saturating; the constant is 2_000.
+            Some(u32::try_from(decent_scale::HEARTBEAT_INTERVAL_MS).unwrap_or(u32::MAX))
+        } else {
+            None
+        };
         match &self.inner {
             // The Bookoo carries native flow and a built-in timer in its
             // weight notification, and exposes a settable beeper volume
@@ -547,7 +555,7 @@ impl Scale {
                 can_beep,
                 can_set_unit_grams,
                 can_toggle_unit,
-                needs_heartbeat,
+                heartbeat_interval_ms,
             },
             // Every other supported scale is weight-only for the
             // first-class flags above (flow / timer / volume / standby /
@@ -571,7 +579,7 @@ impl Scale {
                 can_beep,
                 can_set_unit_grams,
                 can_toggle_unit,
-                needs_heartbeat,
+                heartbeat_interval_ms,
                 ..ScaleCapabilities::default()
             },
         }
@@ -1395,12 +1403,12 @@ mod tests {
         assert!(!decent.can_beep);
         assert!(!decent.can_set_unit_grams);
         assert!(!decent.can_toggle_unit);
-        assert!(decent.needs_heartbeat);
+        assert_eq!(decent.heartbeat_interval_ms, Some(2_000));
 
         let skale = Scale::from_label("Skale II").unwrap().capabilities();
         assert!(skale.can_lcd);
         assert!(!skale.can_power_off);
-        assert!(!skale.needs_heartbeat);
+        assert!(skale.heartbeat_interval_ms.is_none());
 
         let eureka = Scale::from_label("Eureka Precisa").unwrap().capabilities();
         assert!(!eureka.can_lcd);
@@ -1425,7 +1433,7 @@ mod tests {
         assert!(!felicita.can_beep);
         assert!(!felicita.can_set_unit_grams);
         assert!(!felicita.can_toggle_unit);
-        assert!(!felicita.needs_heartbeat);
+        assert!(felicita.heartbeat_interval_ms.is_none());
     }
 
     #[test]

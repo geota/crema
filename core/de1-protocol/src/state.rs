@@ -178,9 +178,7 @@ impl SubState {
             ErrorNaN => "Firmware error: a calculation produced an invalid number (NaN).",
             ErrorInf => "Firmware error: a calculation produced an infinite value.",
             ErrorGeneric => "The machine reported a generic firmware error.",
-            ErrorAcc => {
-                "Accelerometer not responding — the machine may have been moved or tipped."
-            }
+            ErrorAcc => "Accelerometer not responding — the machine may have been moved or tipped.",
             ErrorTSensor => "A temperature sensor failed or is reading out of range.",
             ErrorPSensor => "The pressure sensor failed or is reading out of range.",
             ErrorWLevel => "The water-level sensor failed or is reading out of range.",

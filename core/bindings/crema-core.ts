@@ -62,7 +62,7 @@ export interface BeanOrigin {
 	 */
 	processing?: string;
 	/** Harvest time — `"2024 Spring"`, `"October 2024"`. */
-	harvest_time?: string;
+	harvestTime?: string;
 }
 
 /**
@@ -88,31 +88,31 @@ export interface Bean {
 	 * not recorded; the shell may opportunistically promote the
 	 * roaster name from import to a proper [`Roaster`] row.
 	 */
-	roaster_id?: string;
+	roasterId?: string;
 	/** ISO `yyyy-mm-dd` roast date. */
-	roasted_on?: string;
+	roastedOn?: string;
 	/**
 	 * ISO `yyyy-mm-dd` opened-on date. Crema-only — drives the
 	 * staleness signal alongside `roasted_on`.
 	 */
-	opened_on?: string;
+	openedOn?: string;
 	/**
 	 * ISO `yyyy-mm-dd` frozen-on date. Drives the freshness math's
 	 * freeze-pause: a frozen bag's freshness counter is the days
 	 * between `roasted_on` and `frozen_on`, paused while frozen.
 	 */
-	frozen_on?: string;
+	frozenOn?: string;
 	/**
 	 * ISO `yyyy-mm-dd` defrosted-on date. Resumes the freshness
 	 * counter from `defrosted_on`.
 	 */
-	defrosted_on?: string;
+	defrostedOn?: string;
 	/**
 	 * Roast level on Visualizer's 1..10 scale. The shell typically
 	 * inputs via a 3-band quick-set (light=1, medium=5, dark=10) and
 	 * uses [`roast_band`] to bucket back into the band word.
 	 */
-	roast_level?: number;
+	roastLevel?: number;
 	/** Single-origin vs blend. `None` = not classified. */
 	mix?: BeanMix;
 	/**
@@ -122,7 +122,7 @@ export interface Bean {
 	 * Beanconqueror's `bean_roasting_type` (its `Unknown` value maps
 	 * to `None`).
 	 */
-	roast_type?: BeanRoastType;
+	roastType?: BeanRoastType;
 	/** Decaf flag — `false` by default. */
 	decaf: boolean;
 	/** Provenance metadata. Empty struct by default. */
@@ -132,7 +132,7 @@ export interface Bean {
 	 * comment, not the field name, per the locked-in naming rule
 	 * (`docs/44-pre-android-handoff.md`).
 	 */
-	bag_size: number;
+	bagSize: number;
 	/**
 	 * Remaining weight in the bag, grams. Auto-debited per shot when
 	 * the shell enables `Track bag remaining weight`. `0.0` when
@@ -140,13 +140,13 @@ export interface Bean {
 	 */
 	remaining: number;
 	/** Quality score — free text per Visualizer (`"88"`, `"A-"`). */
-	quality_score: string;
+	qualityScore: string;
 	/** Tasting notes — multi-line free text. */
-	tasting_notes: string;
+	tastingNotes: string;
 	/** User star rating 0..5; `0` = unrated. */
 	rating: number;
 	/** Where the bag was bought — `"Counter Culture · Durham"`. */
-	place_of_purchase?: string;
+	placeOfPurchase?: string;
 	/**
 	 * What the bag cost — currency-less number in the user's local
 	 * units (Crema doesn't track currency yet). `None` = unrecorded.
@@ -160,7 +160,7 @@ export interface Bean {
 	/** Pinned to the brew-page bean picker strip. */
 	favourite: boolean;
 	/** Unix epoch ms when the bag was archived; `None` = active. */
-	archived_at?: number;
+	archivedAt?: number;
 	/**
 	 * Bean-scoped grinder name — `"Niche Zero"`. Bean-scoped because a
 	 * grind setting only means something paired with the grinder it
@@ -168,7 +168,7 @@ export interface Bean {
 	 */
 	grinder: string;
 	/** Bean-scoped grinder click / setting — `"1.2"`, `"6 + a tooth"`. */
-	grinder_setting: string;
+	grinderSetting: string;
 	/**
 	 * Free-form user tags — e.g. `"daily-driver"`, `"comp"`, `"experimental"`.
 	 * Defaults to an empty list. Serialised as `tags` so the JSON contract
@@ -176,7 +176,7 @@ export interface Bean {
 	 */
 	tags?: string[];
 	/** Visualizer `coffee_bag.id` once pushed. */
-	visualizer_id?: string;
+	visualizerId?: string;
 	/**
 	 * Unix epoch ms when this bag was soft-deleted, or `None` when
 	 * active. Required for cross-device sync tombstone propagation:
@@ -184,14 +184,14 @@ export interface Bean {
 	 * tombstone is garbage-collected. Defaults to `None` so older
 	 * `Bean` JSON deserialises cleanly.
 	 */
-	deleted_at?: number;
+	deletedAt?: number;
 	/**
 	 * Beanconqueror `bean.config.uuid` from a Bc import. Tracks
 	 * provenance so a re-import skips beans we already know.
 	 */
-	beanconqueror_id?: string;
+	beanconquerorId?: string;
 	/** IndexedDB blob ref for the bag photo, if any. */
-	image_ref?: string;
+	imageRef?: string;
 	/**
 	 * Open JSON metadata. The escape valve for fields neither
 	 * Visualizer nor Crema model first-class, but that an import
@@ -201,9 +201,9 @@ export interface Bean {
 	 */
 	metadata: Value;
 	/** Unix epoch ms when this bag was created. */
-	created_at: number;
+	createdAt: number;
 	/** Unix epoch ms when this bag was last updated. */
-	updated_at: number;
+	updatedAt: number;
 }
 
 /**
@@ -803,8 +803,12 @@ export interface RangeCapability {
  * (in part) on the shell's at-shot-start line.
  */
 export interface ReplayMetaBean {
-	/** Bean type / name (`"Yirgacheffe"`, …). */
-	type?: string;
+	/**
+	 * Bean name (`"Yirgacheffe"`, …). Older captures spell this `type`;
+	 * the manual fold in [`fold_one`] accepts either key for read-side
+	 * backward compatibility.
+	 */
+	name?: string;
 	/** Roaster's display name. */
 	roaster?: string;
 	/** ISO `yyyy-mm-dd` roast date. */
@@ -873,7 +877,7 @@ export interface Roaster {
 	 * — round-trips losslessly on sync. Renders as a small thumbnail in
 	 * the roaster card and the editor's preview slot.
 	 */
-	image_url?: string;
+	imageUrl?: string;
 	/**
 	 * City — e.g. `"Portland"`. Crema-only; rides in `metadata.crema.city`
 	 * on Visualizer round-trip so the wire format stays lossless.
@@ -890,21 +894,21 @@ export interface Roaster {
 	 * — round-trips directly. Beans pointing at a duplicate are typically
 	 * re-pointed at the canonical id on merge.
 	 */
-	canonical_roaster_id?: string;
+	canonicalRoasterId?: string;
 	/** Visualizer `roaster.id` once pushed. */
-	visualizer_id?: string;
+	visualizerId?: string;
 	/**
 	 * Unix epoch ms when this roaster was soft-deleted, or `None` when
 	 * active. See [`Bean::deleted_at`] for the rationale. Defaults to
 	 * `None` so older JSON deserialises cleanly.
 	 */
-	deleted_at?: number;
+	deletedAt?: number;
 	/** Open JSON metadata — escape valve symmetric with [`Bean::metadata`]. */
 	metadata: Value;
 	/** Unix epoch ms. */
-	created_at: number;
+	createdAt: number;
 	/** Unix epoch ms. */
-	updated_at: number;
+	updatedAt: number;
 }
 
 /**
@@ -962,6 +966,42 @@ export interface ScaleCapabilities {
 	 * `id` and a display `name`.
 	 */
 	modes: ModeInfo[];
+	/**
+	 * True when the scale's on-scale LCD is settable — drives the
+	 * shell's "Enable on-scale LCD" toggle UI. Mirrors
+	 * [`Scale::lcd_enable_command`] returning `Some`.
+	 */
+	can_lcd: boolean;
+	/**
+	 * True when the scale accepts a host-driven power-off command.
+	 * Mirrors [`Scale::power_off_command`] returning `Some`.
+	 */
+	can_power_off: boolean;
+	/**
+	 * True when the scale accepts a beep command. Mirrors
+	 * [`Scale::beep_command`] returning `Some`.
+	 */
+	can_beep: boolean;
+	/**
+	 * True when the scale exposes an explicit "set unit to grams"
+	 * command (Eureka, Solo, Difluid). Mirrors
+	 * [`Scale::set_unit_grams_command`] returning `Some`.
+	 */
+	can_set_unit_grams: boolean;
+	/**
+	 * True when the scale exposes a toggle-unit command (Hiroia).
+	 * Mirrors [`Scale::toggle_unit_command`] returning `Some`.
+	 */
+	can_toggle_unit: boolean;
+	/**
+	 * Recommended cadence (milliseconds) between heartbeat writes when
+	 * the scale needs periodic keep-alives — `Some(2000)` for the
+	 * Decent Scale (keeps its on-scale LCD awake), `None` for every
+	 * scale that does not. Mirrors [`Scale::heartbeat_command`]
+	 * returning `Some`, with the cadence now living next to the bytes
+	 * so the shell no longer carries a parallel constant.
+	 */
+	heartbeat_interval_ms?: number;
 }
 
 /**
@@ -1007,18 +1047,28 @@ export interface ShotBean {
 	 * History row can resolve the link to open the bean detail; an
 	 * archived / deleted bean falls back to the snapshot strings.
 	 */
-	bean_id?: string;
+	beanId?: string;
 	/** Bag name at the time of the shot — `"Geisha Esmeralda Lot 3"`. */
 	name: string;
 	/**
 	 * Roaster name at the time of the shot. Not the roaster id — the
 	 * id might dangle, but a string survives.
 	 */
-	roaster_name?: string;
+	roasterName?: string;
 	/** ISO `yyyy-mm-dd` roast date at the time of the shot. */
-	roasted_on?: string;
+	roastedOn?: string;
 	/** Roast level (1..10) at the time of the shot. */
-	roast_level?: number;
+	roastLevel?: number;
+	/** The bean's tags at the time of the shot. */
+	tags?: string[];
+	/**
+	 * Per-bean grinder setting at the time of the shot — distinct
+	 * from the equipment-level `grinder_model` on [`StoredShot`]
+	 * (the *machine* used) and `ShotMetadata::grinder_setting`
+	 * (the *dial used for this shot*). This is the bean's own
+	 * recommended dial recorded with the bag.
+	 */
+	grinderSetting?: string;
 }
 
 /**
