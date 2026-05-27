@@ -23,19 +23,14 @@
 		directionPulls,
 		directionPushes,
 		drainQueue,
-		enqueue as enqueueSyncOp,
 		isConnected as isVisualizerConnected,
 		onSyncConfigChange,
-		pullAllShotsSince,
+		pullAndReconcileShots,
 		readSyncConfig,
-		reconcileShots,
-		storedShotFromWire,
 		updateSyncConfig,
-		uploadShot,
-		type SyncDirection,
-		type WireShot
+		uploadUnsyncedShots,
+		type SyncDirection
 	} from '$lib/visualizer';
-	import { VisualizerError } from '$lib/bean';
 	import StGroup from '../StGroup.svelte';
 	import StRow from '../StRow.svelte';
 	import StSegment from '../StSegment.svelte';
@@ -145,11 +140,13 @@
 					});
 				}
 			}
-			// 2a. Shot pull — paginated. Walks `next_cursor` until exhausted
-			//     (page size 50 default). Progress drives a status line below.
+			// 2a. Shot pull — paginated. The visualizer module walks
+			//     `next_cursor` and reconciles each page against the local
+			//     history store. Progress drives a status line below.
 			if (directionPulls(config.direction.shots)) {
 				try {
-					const { shots: remote, truncated } = await pullAllShotsSince(
+					const { truncated } = await pullAndReconcileShots(
+						history,
 						config.lastSyncAt.shots ?? 0,
 						{
 							itemsPerPage: 50,
@@ -157,9 +154,6 @@
 								(pullProgress = { fetched: p.fetched, page: p.page })
 						}
 					);
-					if (remote.length > 0) {
-						applyShotReconciliation(remote);
-					}
 					if (truncated) {
 						appendSyncLog({
 							direction: 'skip',
@@ -176,7 +170,7 @@
 			}
 			// 2b. Shot push — upload any local shots that aren't on Visualizer.
 			if (directionPushes(config.direction.shots)) {
-				await uploadUnsyncedShots();
+				await uploadUnsyncedShots(history);
 				config = updateSyncConfig({
 					lastSyncAt: { ...config.lastSyncAt, shots: Date.now() }
 				});
@@ -186,96 +180,6 @@
 			config = readSyncConfig();
 		} finally {
 			syncing = false;
-		}
-	}
-
-	/**
-	 * Apply the {@link reconcileShots} plan against the local history store.
-	 * - `add` → insertPulled (brand-new shot from remote)
-	 * - `bind` → bindVisualizerId (local shot existed pre-sign-in; adopt
-	 *   the remote id without creating a duplicate via the de-dup
-	 *   signature flow)
-	 * - `update` → flow the editable annotations Visualizer mutates server-
-	 *   side (currently `tags`) onto the bound local row. Notes / rating
-	 *   are still owner-edited locally only — those don't loop back from
-	 *   the remote in v1 (we don't surface remote authorship), so we
-	 *   restrict the LWW patch to `tags` for now. The bind itself is
-	 *   already in place (this branch fires when `visualizerId` matches),
-	 *   so no extra binding step is needed.
-	 */
-	function applyShotReconciliation(remote: WireShot[]): void {
-		const local = history.all;
-		const actions = reconcileShots(local, remote);
-		for (const action of actions) {
-			if (action.kind === 'add') {
-				const stored = storedShotFromWire(action.remote);
-				if (stored) history.insertPulled(stored);
-				appendSyncLog({
-					direction: 'pull',
-					entity: 'shot',
-					id: stored?.id ?? action.remote.id ?? '',
-					name: stored?.profileName ?? 'Shot',
-					at: Date.now()
-				});
-			} else if (action.kind === 'bind') {
-				history.bindVisualizerId(action.localId, action.visualizerId);
-				appendSyncLog({
-					direction: 'pull',
-					entity: 'shot',
-					id: action.localId,
-					name: 'Shot (bound)',
-					at: Date.now()
-				});
-			} else if (action.kind === 'update') {
-				// Flow remote-side tag edits down. The wire `tag_list` is
-				// always present (defaults to `[]` server-omit), so this
-				// patch is idempotent — re-applying an empty list to a
-				// local that has none is a no-op write.
-				history.setTags(action.localId, action.remote.tag_list ?? []);
-			}
-		}
-	}
-
-	async function uploadUnsyncedShots(): Promise<void> {
-		for (const shot of history.all.filter((s) => !s.visualizerId)) {
-			try {
-				const { visualizerId } = await uploadShot(shot);
-				history.bindVisualizerId(shot.id, visualizerId);
-				appendSyncLog({
-					direction: 'push',
-					entity: 'shot',
-					id: shot.id,
-					name: shot.profileName ?? 'Shot',
-					at: Date.now()
-				});
-			} catch (e) {
-				const recoverable =
-					e instanceof VisualizerError
-						? e.kind === 'network' ||
-							(e.status >= 500 && e.status < 600) ||
-							e.status === 408
-						: true;
-				if (recoverable) {
-					enqueueSyncOp({
-						entity: 'shot',
-						id: shot.id,
-						op: 'create',
-						error: e instanceof Error ? e.message : String(e)
-					});
-				}
-				appendSyncLog({
-					direction: 'skip',
-					entity: 'shot',
-					id: shot.id,
-					name: shot.profileName ?? 'Shot',
-					at: Date.now(),
-					error: e instanceof Error ? e.message : String(e)
-				});
-				if (e instanceof VisualizerError && (e.kind === 'auth' || e.kind === 'premium')) {
-					// Don't keep hammering for the rest of the loop.
-					return;
-				}
-			}
 		}
 	}
 

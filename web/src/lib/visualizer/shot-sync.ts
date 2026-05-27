@@ -36,6 +36,7 @@ import { getBeanStore } from '$lib/bean/store.svelte';
 import { roastLevelToWire } from '$lib/bean/visualizer-sync';
 import { exportStoredShotAsV2Json } from '$lib/history/v2-export';
 import type { ShotBean, StoredShot } from '$lib/history/model';
+import type { HistoryStore } from '$lib/history/store.svelte';
 import { getSettingsStore } from '$lib/settings';
 import { isConnected, NotAuthenticatedError, withFreshToken } from './token-store';
 import type { components } from './openapi';
@@ -48,6 +49,8 @@ import {
 	type ReconcileAction,
 	type WireShot
 } from './shot-sync-signatures';
+import { appendSyncLog } from './sync-config';
+import { enqueue as enqueueSyncOp } from './upload-queue';
 
 /** Visualizer API base. */
 const API_BASE = 'https://visualizer.coffee/api';
@@ -650,6 +653,126 @@ export async function pullAllShotsSince(
 	return { shots: wireShots, truncated: true };
 }
 
+
+// ── Shot reconciliation executor ──────────────────────────────────────
+//
+// The pure planner (`reconcileShots` in `./shot-sync-signatures.ts`)
+// returns an action plan; these executors apply it against a
+// `HistoryStore` and log each step. Settings-panel "Sync now",
+// ShotDetail's per-shot push, and any future background sync converge
+// here so the planner-to-store translation has one home.
+
+/**
+ * Apply a {@link reconcileShots} plan against `history`. Logs each
+ * action via {@link appendSyncLog}; does not throw.
+ *
+ * - `add` → insertPulled (brand-new shot from remote)
+ * - `bind` → bindVisualizerId (local shot existed pre-sign-in; adopt
+ *   the remote id without creating a duplicate)
+ * - `update` → flow remote-side `tag_list` onto the bound local row.
+ *   Notes / rating are still owner-edited locally only in v1.
+ */
+export function applyShotReconciliation(
+	history: HistoryStore,
+	remote: WireShot[]
+): void {
+	const local = history.all;
+	const actions = reconcileShots(local, remote);
+	for (const action of actions) {
+		if (action.kind === 'add') {
+			const stored = storedShotFromWire(action.remote);
+			if (stored) history.insertPulled(stored);
+			appendSyncLog({
+				direction: 'pull',
+				entity: 'shot',
+				id: stored?.id ?? action.remote.id ?? '',
+				name: stored?.profileName ?? 'Shot',
+				at: Date.now()
+			});
+		} else if (action.kind === 'bind') {
+			history.bindVisualizerId(action.localId, action.visualizerId);
+			appendSyncLog({
+				direction: 'pull',
+				entity: 'shot',
+				id: action.localId,
+				name: 'Shot (bound)',
+				at: Date.now()
+			});
+		} else if (action.kind === 'update') {
+			// Wire `tag_list` defaults to `[]` server-side, so this patch is
+			// idempotent — re-applying an empty list to a local with none
+			// is a no-op write.
+			history.setTags(action.localId, action.remote.tag_list ?? []);
+		}
+	}
+}
+
+/**
+ * Pull every shot updated since `sinceMs` from Visualizer, reconcile
+ * against `history`, and apply the resulting actions. Returns the
+ * shape callers need to surface a truncation warning — the message
+ * varies by surface (settings panel vs background sync), so logging
+ * the truncation itself stays in the caller.
+ */
+export async function pullAndReconcileShots(
+	history: HistoryStore,
+	sinceMs: number,
+	opts: {
+		itemsPerPage?: number;
+		maxPages?: number;
+		onProgress?: (p: PullProgress) => void;
+	} = {}
+): Promise<{ pulled: number; truncated: boolean }> {
+	const { shots, truncated } = await pullAllShotsSince(sinceMs, opts);
+	if (shots.length > 0) applyShotReconciliation(history, shots);
+	return { pulled: shots.length, truncated };
+}
+
+/**
+ * Upload every local shot that lacks a `visualizerId`. Recoverable
+ * failures route to the persistent retry queue; auth / premium
+ * failures abort the loop (continuing would just keep hammering the
+ * same wall).
+ */
+export async function uploadUnsyncedShots(history: HistoryStore): Promise<void> {
+	for (const shot of history.all.filter((s) => !s.visualizerId)) {
+		try {
+			const { visualizerId } = await uploadShot(shot);
+			history.bindVisualizerId(shot.id, visualizerId);
+			appendSyncLog({
+				direction: 'push',
+				entity: 'shot',
+				id: shot.id,
+				name: shot.profileName ?? 'Shot',
+				at: Date.now()
+			});
+		} catch (e) {
+			const recoverable =
+				e instanceof VisualizerError
+					? e.kind === 'network' || (e.status >= 500 && e.status < 600) || e.status === 408
+					: true;
+			if (recoverable) {
+				enqueueSyncOp({
+					entity: 'shot',
+					id: shot.id,
+					op: 'create',
+					error: e instanceof Error ? e.message : String(e)
+				});
+			}
+			appendSyncLog({
+				direction: 'skip',
+				entity: 'shot',
+				id: shot.id,
+				name: shot.profileName ?? 'Shot',
+				at: Date.now(),
+				error: e instanceof Error ? e.message : String(e)
+			});
+			if (e instanceof VisualizerError && (e.kind === 'auth' || e.kind === 'premium')) {
+				return;
+			}
+		}
+	}
+}
 
 // Reconciliation, signature helpers, and the WireShot type live in
 // `./shot-sync-signatures.ts` — pure, no wasm / fetch / settings.
