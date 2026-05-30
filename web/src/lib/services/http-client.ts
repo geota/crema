@@ -28,6 +28,13 @@ export interface HttpRequest {
 	readonly body?: string;
 	/** When set, the request fails with `NetworkError` after this many ms. */
 	readonly timeoutMs?: number;
+	/**
+	 * `fetch` request mode. Defaults to the browser default (`cors`). Set
+	 * `'no-cors'` for fire-and-forget cross-origin POSTs (webhooks): the
+	 * response comes back *opaque* (unreadable status/body) but a successful
+	 * dispatch resolves rather than failing — see the opaque handling below.
+	 */
+	readonly mode?: RequestMode;
 }
 
 export class HttpClient extends Context.Tag('crema/HttpClient')<
@@ -49,6 +56,7 @@ const request = Effect.fn('HttpClient.request')(function* (req: HttpRequest) {
 				method: req.method ?? 'GET',
 				headers: req.headers,
 				body: req.body,
+				mode: req.mode,
 				signal
 			}),
 		catch: (cause) => new NetworkError({ cause, url: req.url })
@@ -67,7 +75,10 @@ const request = Effect.fn('HttpClient.request')(function* (req: HttpRequest) {
 				})
 			));
 
-	if (res.ok) return res;
+	// `res.ok` covers normal 2xx; an opaque response (from a `no-cors` request)
+	// has `ok === false` / `status === 0` but represents a successful dispatch —
+	// the body/status are deliberately unreadable, so treat it as success.
+	if (res.ok || res.type === 'opaque') return res;
 
 	// Non-2xx: capture the body text (best-effort) for the typed error so
 	// callers don't have to re-read a consumed stream.

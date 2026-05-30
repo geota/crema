@@ -17,13 +17,14 @@ import { TokenVaultLive } from '../services/token-vault.ts';
 import { ShotSyncLive } from '../services/shot-sync.ts';
 import { BeanSyncLive } from '../services/bean-sync.ts';
 import { UploadQueueLive } from '../services/upload-queue.ts';
+import { WebhooksLive } from '../services/webhooks.ts';
 
 /**
  * The composed application layer. Services join here as they land.
  * Dependency graph: OAuth consumes HttpClient; TokenVault consumes OAuth;
  * ShotSync + BeanSync each consume HttpClient + TokenVault; UploadQueue
- * consumes ShotSync + BeanSync — every dependency is provided in, leaving no
- * open requirements.
+ * consumes ShotSync + BeanSync; Webhooks consumes HttpClient — every dependency
+ * is provided in, leaving no open requirements.
  */
 const OAuthProvided = Layer.provide(OAuthLive, HttpClientLive);
 const TokenVaultProvided = Layer.provide(TokenVaultLive, OAuthProvided);
@@ -35,6 +36,7 @@ const UploadQueueProvided = Layer.provide(
 	UploadQueueLive,
 	Layer.merge(ShotSyncProvided, BeanSyncProvided)
 );
+const WebhooksProvided = Layer.provide(WebhooksLive, HttpClientLive);
 
 export const AppLayer = Layer.mergeAll(
 	HttpClientLive,
@@ -42,7 +44,8 @@ export const AppLayer = Layer.mergeAll(
 	TokenVaultProvided,
 	ShotSyncProvided,
 	BeanSyncProvided,
-	UploadQueueProvided
+	UploadQueueProvided,
+	WebhooksProvided
 );
 
 /** The services the app runtime provides. `never` while `AppLayer` is empty. */
