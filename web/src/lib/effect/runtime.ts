@@ -13,12 +13,17 @@
 import { Layer, ManagedRuntime } from 'effect';
 import { HttpClientLive } from '../services/http-client.ts';
 import { OAuthLive } from '../services/oauth.ts';
+import { TokenVaultLive } from '../services/token-vault.ts';
 
 /**
  * The composed application layer. Services join here as they land
- * (TokenVaultLive, ShotSyncLive, …).
+ * (ShotSyncLive, …). TokenVault consumes OAuth, so OAuth is provided into it.
  */
-export const AppLayer = Layer.mergeAll(HttpClientLive, OAuthLive);
+export const AppLayer = Layer.mergeAll(
+	HttpClientLive,
+	OAuthLive,
+	Layer.provide(TokenVaultLive, OAuthLive)
+);
 
 /** The services the app runtime provides. `never` while `AppLayer` is empty. */
 export type AppServices = Layer.Layer.Success<typeof AppLayer>;
