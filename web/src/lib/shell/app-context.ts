@@ -14,6 +14,7 @@
 
 import { getContext, setContext } from 'svelte';
 import type { CremaApp } from '$lib/state';
+import type { AppRuntime } from '$lib/effect/runtime';
 
 /** How the wasm core load is progressing — drives the shell's gate UI. */
 export type CoreLoadState = 'loading' | 'ready' | 'failed';
@@ -26,6 +27,12 @@ export type CoreLoadState = 'loading' | 'ready' | 'failed';
 export interface CremaAppContext {
 	/** The shared orchestrator, or `null` while the core is still loading. */
 	readonly app: CremaApp | null;
+	/**
+	 * The app-wide Effect runtime, mounted alongside `app` at the shell, or
+	 * `null` before mount / on unsupported browsers. Services run on this
+	 * runtime; the `Promise`-shaped boundary crosses it via `runtimePromise`.
+	 */
+	readonly runtime: AppRuntime | null;
 	/** Lifecycle of the one-time core load. */
 	readonly loadState: CoreLoadState;
 	/** The failure message when `loadState === 'failed'`. */

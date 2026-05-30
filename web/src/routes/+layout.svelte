@@ -14,13 +14,14 @@
 	 *  3. The chrome — the fixed `CremaSidebar` rail plus the page content area,
 	 *     which is inset by the rail's 72px width.
 	 */
-	import { onMount } from 'svelte';
+	import { onMount, onDestroy } from 'svelte';
 	import '../app.css';
 	import { createCremaApp, type CremaApp } from '$lib/state';
 	import { CremaSidebar } from '$lib/components';
 	import DebugPanel from '$lib/shell/DebugPanel.svelte';
 	import { describeError } from '$lib/utils/error';
 	import { setCremaAppContext, type CoreLoadState } from '$lib/shell/app-context';
+	import { createAppRuntime, type AppRuntime } from '$lib/effect/runtime';
 
 	let { children } = $props();
 
@@ -29,12 +30,13 @@
 		typeof navigator !== 'undefined' && 'bluetooth' in navigator;
 
 	let app = $state<CremaApp | null>(null);
+	let runtime = $state<AppRuntime | null>(null);
 	let loadState = $state<CoreLoadState>('loading');
 	let loadError = $state('');
 
 	// Publish the shared-app context — a getter so routes read live values as
 	// the core loads and the BLE state changes.
-	setCremaAppContext(() => ({ app, loadState, loadError }));
+	setCremaAppContext(() => ({ app, runtime, loadState, loadError }));
 
 	onMount(async () => {
 		// `createCremaApp()` dynamic-imports and instantiates the wasm core —
@@ -45,6 +47,10 @@
 			loadError = 'Web Bluetooth unavailable';
 			return;
 		}
+		// Mount the Effect runtime here, in onMount — never module scope — so
+		// adapter-static's build-time evaluation never touches localStorage /
+		// navigator / wasm (docs/53 D-03). Unused until services land in Phase 3.
+		runtime = createAppRuntime();
 		try {
 			app = await createCremaApp();
 			loadState = 'ready';
@@ -52,6 +58,12 @@
 			loadState = 'failed';
 			loadError = describeError(err);
 		}
+	});
+
+	// Tear the runtime's fibers + finalizers down when the shell unmounts
+	// (also fires on HMR), so a dev reload doesn't leak runtimes.
+	onDestroy(() => {
+		void runtime?.dispose();
 	});
 </script>
 
