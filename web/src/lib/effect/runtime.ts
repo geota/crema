@@ -17,13 +17,13 @@ import { TokenVaultLive } from '../services/token-vault.ts';
 
 /**
  * The composed application layer. Services join here as they land
- * (ShotSyncLive, …). TokenVault consumes OAuth, so OAuth is provided into it.
+ * (ShotSyncLive, …). Dependency graph: OAuth consumes HttpClient; TokenVault
+ * consumes OAuth — each dependency is provided in, leaving no open requirements.
  */
-export const AppLayer = Layer.mergeAll(
-	HttpClientLive,
-	OAuthLive,
-	Layer.provide(TokenVaultLive, OAuthLive)
-);
+const OAuthProvided = Layer.provide(OAuthLive, HttpClientLive);
+const TokenVaultProvided = Layer.provide(TokenVaultLive, OAuthProvided);
+
+export const AppLayer = Layer.mergeAll(HttpClientLive, OAuthProvided, TokenVaultProvided);
 
 /** The services the app runtime provides. `never` while `AppLayer` is empty. */
 export type AppServices = Layer.Layer.Success<typeof AppLayer>;
