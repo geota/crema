@@ -11,6 +11,9 @@ local.properties
 *.apk
 *.aab
 
+# Cloudflare Pages / Wrangler local state + cache
+.wrangler/
+
 # IDE
 .idea/
 *.iml
