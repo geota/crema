@@ -51,6 +51,11 @@ import {
 	type WireShot
 } from './shot-sync-signatures';
 import { appendSyncLog } from './sync-config';
+import {
+	ShotUploadResultSchema,
+	ShotListResponseSchema,
+	decodeResponse
+} from '$lib/effect/schema/visualizer';
 import { enqueue as enqueueSyncOp } from './upload-queue';
 
 /** Visualizer API base. */
@@ -59,11 +64,9 @@ const API_BASE = 'https://visualizer.coffee/api';
 // Spec-typed aliases — these ride DIRECTLY on the wire so they stay
 // in lock-step with the OpenAPI spec (regenerate via `pnpm openapi`).
 type ShotSummary = components['schemas']['ShotSummary'];
-type ShotListResponse = components['schemas']['ShotListResponse'];
 type Paging = components['schemas']['Paging'];
 type DefaultShotDetail = components['schemas']['DefaultShotDetail'];
 type ShotDetail = components['schemas']['ShotDetail'];
-type ShotUploadResult = components['schemas']['ShotUploadResult'];
 type ShotUpdateRequest = components['schemas']['ShotUpdateRequest'];
 type DeleteResult = components['schemas']['DeleteResult'];
 
@@ -486,9 +489,11 @@ export async function uploadShot(shot: StoredShot): Promise<{ visualizerId: stri
 		throw new VisualizerError(401, 'auth', 'Sign in to Visualizer first.');
 	}
 	const body = buildShotPayload(shot);
-	const result = (await call('/shots/upload', { method: 'POST', body })) as
-		| ShotUploadResult
-		| null;
+	const result = decodeResponse(
+		ShotUploadResultSchema,
+		await call('/shots/upload', { method: 'POST', body }),
+		'POST /shots/upload'
+	);
 	if (!result || !result.id) {
 		throw new VisualizerError(
 			0,
@@ -637,11 +642,14 @@ export async function pullShots(
 		throw new VisualizerError(401, 'auth', 'Sign in to Visualizer first.');
 	}
 	const items = Math.min(100, Math.max(1, Math.floor(itemsPerPage)));
-	const body = (await call(
-		`/shots?page=${page}&items=${items}&sort=updated_at`
-	)) as ShotListResponse;
+	const body = decodeResponse(
+		ShotListResponseSchema,
+		await call(`/shots?page=${page}&items=${items}&sort=updated_at`),
+		'GET /shots'
+	);
 	return {
-		summaries: body?.data ?? [],
+		// Spread to a mutable array — `Schema.Array` decodes to `readonly`.
+		summaries: body ? [...body.data] : [],
 		paging: body?.paging ?? { count: 0, page, limit: items, pages: 1 }
 	};
 }
