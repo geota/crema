@@ -36,7 +36,9 @@
 		onRatingChange,
 		onGrinderModelChange,
 		onTagsChange,
-		onBeanChange
+		onBeanChange,
+		onDelete,
+		canDeleteRemote = false
 	}: {
 		/** The selected stored shot. */
 		shot: StoredShot;
@@ -59,6 +61,18 @@
 		 * clears the binding (shot becomes bean-less).
 		 */
 		onBeanChange: (bean: Bean | null, roaster: Roaster | null) => void;
+		/**
+		 * Delete this shot. `remote: false` removes it from the local
+		 * history only; `remote: true` also pushes a DELETE to Visualizer.
+		 * Optional — the delete control is hidden when not supplied.
+		 */
+		onDelete?: (opts: { remote: boolean }) => void;
+		/**
+		 * Whether the "delete on Visualizer too" option is available — the
+		 * shot is uploaded (`visualizerId` set) and Visualizer push is on.
+		 * Gates the menu item; the local delete is always available.
+		 */
+		canDeleteRemote?: boolean;
 	} = $props();
 
 	/** Whether the notes block is in edit mode. */
@@ -382,6 +396,34 @@
 			<button class="st-btn st-btn-secondary" onclick={share}>
 				<i class="ph ph-share" aria-hidden="true"></i> Share
 			</button>
+			{#if onDelete}
+				<SplitButton
+					variant="danger"
+					icon="ph ph-trash"
+					label="Delete"
+					title="Delete this shot from your local history"
+					onPrimary={() => onDelete?.({ remote: false })}
+					caretAriaLabel="Choose delete scope"
+					menuHead="Delete shot"
+					items={[
+						{
+							icon: 'ph-duotone ph-device-mobile',
+							title: 'Delete from this device',
+							sub: 'Removes the shot from your local history. Anything uploaded to Visualizer stays there.',
+							onclick: () => onDelete?.({ remote: false })
+						},
+						{
+							icon: 'ph-duotone ph-cloud-slash',
+							title: 'Delete here and on Visualizer',
+							sub: canDeleteRemote
+								? 'Removes it locally and deletes the uploaded copy from Visualizer too.'
+								: 'Unavailable — this shot is not on Visualizer, or sync is off / signed out.',
+							disabled: !canDeleteRemote,
+							onclick: () => onDelete?.({ remote: true })
+						}
+					]}
+				/>
+			{/if}
 		</div>
 	</div>
 

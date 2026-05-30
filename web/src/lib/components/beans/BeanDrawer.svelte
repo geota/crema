@@ -22,6 +22,7 @@
 	import { getHistoryStore } from '$lib/history';
 	import BeanImage from './BeanImage.svelte';
 	import RoastSlider from './RoastSlider.svelte';
+	import BeanDeleteSplit from './BeanDeleteSplit.svelte';
 
 	let {
 		bean,
@@ -31,7 +32,6 @@
 		onSetActive,
 		onEdit,
 		onToggleArchived,
-		onDelete,
 		onToggleFavourite
 	}: {
 		bean: Bean;
@@ -41,7 +41,6 @@
 		onSetActive: (id: string) => void;
 		onEdit: (id: string) => void;
 		onToggleArchived: (id: string) => void;
-		onDelete: (id: string) => void;
 		onToggleFavourite: (id: string) => void;
 	} = $props();
 
@@ -108,11 +107,6 @@
 		}
 	}
 
-	function confirmDelete(): void {
-		if (confirm(`Delete "${bean.name || 'this bag'}"? This cannot be undone.`)) {
-			onDelete(bean.id);
-		}
-	}
 </script>
 
 <div
@@ -487,9 +481,13 @@
 				<i class={isArchived ? 'ph ph-archive-box' : 'ph ph-archive'}></i>
 				{isArchived ? 'Restore' : 'Archive'}
 			</button>
-			<button class="bn-foot-btn bn-foot-btn-danger" onclick={confirmDelete}>
-				<i class="ph ph-trash"></i> Delete
-			</button>
+			<BeanDeleteSplit
+				beanId={bean.id}
+				beanName={bean.name || 'this bag'}
+				label="Delete"
+				size="md"
+				onDeleted={onClose}
+			/>
 			{#if !isActive && !isArchived}
 				<button class="bn-foot-btn bn-foot-btn-primary" onclick={() => onSetActive(bean.id)}>
 					<i class="ph ph-coffee"></i> Set active

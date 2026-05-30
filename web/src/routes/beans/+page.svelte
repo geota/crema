@@ -35,7 +35,6 @@
 	import BeanDrawer from '$lib/components/beans/BeanDrawer.svelte';
 	import BeanQuickAdd from '$lib/components/beans/BeanQuickAdd.svelte';
 	import BeanImportDialog from '$lib/components/beans/BeanImportDialog.svelte';
-	import RoasterDeleteDialog from '$lib/components/beans/RoasterDeleteDialog.svelte';
 	import { exportCrema, exportBeanconqueror } from '$lib/bean/export';
 	import { getHistoryStore } from '$lib/history';
 	import BeansEmptyState from '$lib/components/beans/BeansEmptyState.svelte';
@@ -525,13 +524,6 @@
 	function toggleArchived(id: string): void {
 		library.toggleArchived(id);
 	}
-	function deleteBean(id: string): void {
-		const bean = library.getBean(id);
-		if (!bean) return;
-		if (!confirm(`Delete "${bean.name || 'this bag'}"? This cannot be undone.`)) return;
-		library.deleteBean(id);
-		if (drawerBeanId === id) drawerBeanId = null;
-	}
 
 	/**
 	 * Clone a bag inline. The duplicate keeps the original's metadata
@@ -581,11 +573,6 @@
 			createdAt: Date.now(),
 			updatedAt: Date.now()
 		});
-	}
-
-	let roasterToDelete = $state<{ id: string; name: string; count: number } | null>(null);
-	function deleteRoaster(r: Roaster, count: number): void {
-		roasterToDelete = { id: r.id, name: r.name, count };
 	}
 
 	function editRoaster(id: string): void {
@@ -919,8 +906,7 @@
 									onSetActive={setActive}
 									onDuplicate={duplicateBean}
 									onEdit={gotoEdit}
-									onDelete={deleteBean}
-								/>
+															/>
 							{/each}
 							<button class="bn-tile-new" onclick={() => (quickAddOpen = true)}>
 								<div class="bn-tile-new-glyph"><i class="ph ph-plus"></i></div>
@@ -953,8 +939,7 @@
 									onSetActive={setActive}
 									onDuplicate={duplicateBean}
 									onEdit={gotoEdit}
-									onDelete={deleteBean}
-								/>
+															/>
 							{/each}
 						</div>
 					</section>
@@ -981,8 +966,7 @@
 									onSetActive={setActive}
 									onDuplicate={duplicateBean}
 									onEdit={gotoEdit}
-									onDelete={deleteBean}
-								/>
+															/>
 							{/each}
 						</div>
 					</section>
@@ -1047,7 +1031,6 @@
 							onOpen={editRoaster}
 							onEdit={editRoaster}
 							onDuplicate={duplicateRoaster}
-							onDelete={deleteRoaster}
 							onUnmerge={unmergeRoaster}
 						/>
 					{/each}
@@ -1091,7 +1074,6 @@
 			gotoEdit(id);
 		}}
 		onToggleArchived={toggleArchived}
-		onDelete={deleteBean}
 		onToggleFavourite={toggleFavourite}
 	/>
 {/if}
@@ -1110,17 +1092,6 @@
 <!-- Import -->
 {#if importOpen}
 	<BeanImportDialog onClose={() => (importOpen = false)} />
-{/if}
-
-<!-- Roaster delete (detach vs cascade) -->
-{#if roasterToDelete}
-	<RoasterDeleteDialog
-		roasterId={roasterToDelete.id}
-		roasterName={roasterToDelete.name}
-		linkedBeanCount={roasterToDelete.count}
-		onClose={() => (roasterToDelete = null)}
-		onDeleted={() => (roasterToDelete = null)}
-	/>
 {/if}
 
 <style>

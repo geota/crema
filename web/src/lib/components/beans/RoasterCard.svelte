@@ -21,6 +21,7 @@
 	 */
 	import { roasterMarkTone, type Roaster } from '$lib/bean';
 	import LibraryCardShell from '$lib/components/shared/LibraryCardShell.svelte';
+	import RoasterDeleteSplit from './RoasterDeleteSplit.svelte';
 
 	let {
 		roaster,
@@ -29,7 +30,6 @@
 		onOpen,
 		onEdit,
 		onDuplicate,
-		onDelete,
 		onUnmerge
 	}: {
 		roaster: Roaster;
@@ -41,7 +41,6 @@
 		onOpen: (id: string) => void;
 		onEdit: (id: string) => void;
 		onDuplicate: (id: string) => void;
-		onDelete: (roaster: Roaster, count: number) => void;
 		onUnmerge: (id: string) => void;
 	} = $props();
 
@@ -68,10 +67,6 @@
 	function onDuplicateClick(e: MouseEvent): void {
 		e.stopPropagation();
 		onDuplicate(roaster.id);
-	}
-	function onDeleteClick(e: MouseEvent): void {
-		e.stopPropagation();
-		onDelete(roaster, count);
 	}
 	function onUnmergeClick(e: MouseEvent): void {
 		e.stopPropagation();
@@ -185,15 +180,14 @@
 		>
 			<i class="ph ph-copy"></i>
 		</button>
-		<button
-			type="button"
-			class="lcs-action-icon lcs-action-icon-danger"
-			title="Delete roastery"
-			aria-label="Delete roastery"
-			onclick={onDeleteClick}
-		>
-			<i class="ph ph-trash"></i>
-		</button>
+		<!-- Delete: compact danger split — primary detaches bags + deletes the
+		     roaster locally; the caret menu adds cascade and Visualizer scopes. -->
+		<RoasterDeleteSplit
+			roasterId={roaster.id}
+			roasterName={roaster.name}
+			linkedBeanCount={count}
+			size="sm"
+		/>
 	{/snippet}
 </LibraryCardShell>
 

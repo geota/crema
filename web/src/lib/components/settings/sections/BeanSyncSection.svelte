@@ -42,6 +42,7 @@
 	let config = $state(readSyncConfig());
 	let beanLastSync = $state(readSyncSettings().lastSyncAt);
 	let syncing = $state(false);
+	let resyncing = $state(false);
 	let lastResult = $state<BeanSyncResult | null>(null);
 	let logCollapsed = $state(true);
 	/** Pull-pagination progress — non-null only while shots are streaming in. */
@@ -231,6 +232,64 @@
 		}
 	}
 
+	/**
+	 * Re-pull EVERY shot from Visualizer, ignoring the saved cursor (starts
+	 * from time 0). Reconciliation still de-dupes by signature, so this only
+	 * fills gaps — e.g. after clearing local history or switching devices —
+	 * rather than creating duplicates. On a clean (non-truncated) finish the
+	 * cursor is advanced to now so the next incremental "Sync now" is cheap.
+	 */
+	async function resyncAllShots(): Promise<void> {
+		if (syncing || resyncing) return;
+		if (
+			!confirm(
+				'Re-pull every shot from Visualizer from the beginning? Existing shots are de-duplicated, so this only adds ones missing locally.'
+			)
+		) {
+			return;
+		}
+		resyncing = true;
+		const pullStartedAt = Date.now() - 60_000;
+		try {
+			const { pulled, truncated } = await pullAndReconcileShots(history, 0, {
+				itemsPerPage: 50,
+				onProgress: (p) => (pullProgress = { fetched: p.fetched, page: p.page })
+			});
+			if (truncated) {
+				appendSyncLog({
+					direction: 'skip',
+					entity: 'shot',
+					id: '',
+					name: 'Full re-pull',
+					at: Date.now(),
+					error: 'Pull truncated at safety cap — run again to continue.'
+				});
+			} else {
+				config = updateSyncConfig({ shotPullCursor: pullStartedAt });
+				appendSyncLog({
+					direction: 'pull',
+					entity: 'shot',
+					id: '',
+					name: `Full re-pull — ${pulled} shot${pulled === 1 ? '' : 's'} reconciled`,
+					at: Date.now()
+				});
+			}
+		} catch (err) {
+			appendSyncLog({
+				direction: 'pull',
+				entity: 'shot',
+				id: '',
+				name: 'Full re-pull',
+				at: Date.now(),
+				error: err instanceof Error ? err.message : String(err)
+			});
+		} finally {
+			pullProgress = null;
+			resyncing = false;
+			config = readSyncConfig();
+		}
+	}
+
 	function fmtTime(at: number | null): string {
 		if (!at) return 'never';
 		const elapsed = (Date.now() - at) / 1000;
@@ -364,6 +423,26 @@
 						aria-hidden="true"
 					></i>
 					{syncing ? 'Syncing…' : 'Sync now'}
+				</button>
+			{/snippet}
+		</StRow>
+
+		<StRow
+			title="Re-sync shots"
+			sub="Re-pull every shot from Visualizer from the start. De-duplicated against what you already have — use it to fill gaps after clearing history or on a new device."
+		>
+			{#snippet control()}
+				<button
+					type="button"
+					class="bs-btn"
+					disabled={syncing || resyncing}
+					onclick={resyncAllShots}
+				>
+					<i
+						class={resyncing ? 'ph ph-spinner-gap bs-spin' : 'ph ph-clock-counter-clockwise'}
+						aria-hidden="true"
+					></i>
+					{resyncing ? 'Re-syncing…' : 'Re-sync all'}
 				</button>
 			{/snippet}
 		</StRow>

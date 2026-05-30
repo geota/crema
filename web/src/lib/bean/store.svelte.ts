@@ -204,11 +204,16 @@ export class BeanLibraryStore {
 	}
 
 	/**
-	 * Hard-delete a bean (and clear the active pointer if it was active). Also
-	 * fires a best-effort DELETE against Visualizer so the remote stays in
-	 * sync — failure is logged and dropped, never blocks the local delete.
+	 * Hard-delete a bean (and clear the active pointer if it was active).
+	 *
+	 * `remote` (default `false`) governs whether the uploaded Visualizer copy
+	 * is also deleted: when `true` a best-effort DELETE fires against
+	 * Visualizer (failure logged + dropped, never blocks the local delete);
+	 * when `false` the local row is removed but the remote copy is left alone.
+	 * The caller (the delete dialog) surfaces this as the local-vs-also-remote
+	 * choice, mirroring the shot-delete split.
 	 */
-	deleteBean(id: string): void {
+	deleteBean(id: string, opts: { remote?: boolean } = {}): void {
 		const bean = this.getBean(id);
 		const beans = this.envelope.beans.filter((b) => b.id !== id);
 		if (beans.length === this.envelope.beans.length) return;
@@ -218,9 +223,9 @@ export class BeanLibraryStore {
 			this.activeId = null;
 			this.persistActive();
 		}
-		// Fire-and-forget remote delete. Import inline to avoid pulling the
-		// sync module into the store's circular-dep surface.
-		if (bean?.visualizerId) {
+		// Fire-and-forget remote delete, only when asked. Import inline to avoid
+		// pulling the sync module into the store's circular-dep surface.
+		if (opts.remote && bean?.visualizerId) {
 			void import('./visualizer-sync').then(({ deleteRemoteBean }) =>
 				deleteRemoteBean(bean).then((r) => {
 					if (!r.ok) console.warn('Visualizer delete failed:', r.error);
@@ -325,10 +330,10 @@ export class BeanLibraryStore {
 	/**
 	 * Delete a roaster. Beans pointing at it have their `roasterId`
 	 * cleared rather than disappearing — losing a roastery's name is
-	 * less destructive than losing the bag. Fires a best-effort DELETE
-	 * against Visualizer to keep the remote in sync.
+	 * less destructive than losing the bag. `remote` (default `false`) gates
+	 * the best-effort Visualizer DELETE, same as {@link deleteBean}.
 	 */
-	deleteRoaster(id: string): void {
+	deleteRoaster(id: string, opts: { remote?: boolean } = {}): void {
 		const roaster = this.getRoaster(id);
 		const roasters = this.envelope.roasters.filter((r) => r.id !== id);
 		if (roasters.length === this.envelope.roasters.length) return;
@@ -337,7 +342,7 @@ export class BeanLibraryStore {
 		);
 		this.envelope = { ...this.envelope, beans, roasters };
 		this.persist();
-		if (roaster?.visualizerId) {
+		if (opts.remote && roaster?.visualizerId) {
 			void import('./visualizer-sync').then(({ deleteRemoteRoaster }) =>
 				deleteRemoteRoaster(roaster).then((r) => {
 					if (!r.ok) console.warn('Visualizer delete failed:', r.error);
@@ -356,12 +361,12 @@ export class BeanLibraryStore {
 	 * uses the soft-detach path (the beans have already been
 	 * removed, so the detach is a no-op).
 	 */
-	deleteRoasterAndBeans(id: string): void {
+	deleteRoasterAndBeans(id: string, opts: { remote?: boolean } = {}): void {
 		const beanIds = this.envelope.beans
 			.filter((b) => b.roasterId === id)
 			.map((b) => b.id);
-		for (const beanId of beanIds) this.deleteBean(beanId);
-		this.deleteRoaster(id);
+		for (const beanId of beanIds) this.deleteBean(beanId, opts);
+		this.deleteRoaster(id, opts);
 	}
 
 	/**

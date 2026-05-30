@@ -35,7 +35,7 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { getBeanStore, roasterMarkTone, type Roaster } from '$lib/bean';
-	import RoasterDeleteDialog from './RoasterDeleteDialog.svelte';
+	import RoasterDeleteSplit from './RoasterDeleteSplit.svelte';
 
 	let {
 		roaster,
@@ -155,13 +155,7 @@
 		back();
 	}
 
-	let confirmingDelete = $state(false);
-	function onDelete(): void {
-		if (isNew) return;
-		confirmingDelete = true;
-	}
-	function onDeleted(): void {
-		confirmingDelete = false;
+	function onRoasterDeleted(): void {
 		goto(resolve('/beans?tab=roasters'));
 	}
 </script>
@@ -366,9 +360,16 @@
 
 		<div class="rd-foot">
 			{#if !isNew}
-				<button type="button" class="rd-foot-danger" onclick={onDelete}>
-					<i class="ph ph-trash"></i> Delete roaster
-				</button>
+				<div class="rd-foot-del">
+					<RoasterDeleteSplit
+						roasterId={current.id}
+						roasterName={current.name}
+						linkedBeanCount={beanCount}
+						label="Delete roaster"
+						size="md"
+						onDeleted={onRoasterDeleted}
+					/>
+				</div>
 			{/if}
 			<button class="rd-btn rd-btn-ghost" onclick={discard}>Cancel</button>
 			<button class="rd-btn rd-btn-primary rd-btn-lg" onclick={save}>
@@ -378,16 +379,6 @@
 		</div>
 	</main>
 </div>
-
-{#if confirmingDelete}
-	<RoasterDeleteDialog
-		roasterId={current.id}
-		roasterName={current.name}
-		linkedBeanCount={beanCount}
-		onClose={() => (confirmingDelete = false)}
-		onDeleted={onDeleted}
-	/>
-{/if}
 
 <style>
 	.rd-page {
@@ -688,22 +679,8 @@
 		align-items: center;
 		padding-top: 8px;
 	}
-	.rd-foot-danger {
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
-		background: transparent;
-		border: 0;
-		color: var(--danger);
-		font-family: var(--font-sans);
-		font-size: 12px;
-		font-weight: 500;
-		cursor: pointer;
-		padding: 8px 10px;
-		border-radius: var(--radius-sm);
+	/* Pushes the delete control to the left edge; Cancel/Save stay right. */
+	.rd-foot-del {
 		margin-right: auto;
-	}
-	.rd-foot-danger:hover {
-		background: rgba(var(--danger-rgb), 0.08);
 	}
 </style>
