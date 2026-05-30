@@ -33,6 +33,7 @@
 	} from '$lib/bean';
 	import LibraryCardShell from '$lib/components/shared/LibraryCardShell.svelte';
 	import BeanImage from './BeanImage.svelte';
+	import BeanDeleteSplit from './BeanDeleteSplit.svelte';
 
 	let {
 		bean,
@@ -42,8 +43,7 @@
 		onToggleFavourite,
 		onSetActive,
 		onDuplicate,
-		onEdit,
-		onDelete
+		onEdit
 	}: {
 		bean: Bean;
 		roaster: Roaster | null;
@@ -53,7 +53,6 @@
 		onSetActive: (id: string) => void;
 		onDuplicate: (id: string) => void;
 		onEdit: (id: string) => void;
-		onDelete: (id: string) => void;
 	} = $props();
 
 	const mt = $derived(roasterMarkTone(roaster));
@@ -109,10 +108,6 @@
 	function onEditClick(e: MouseEvent): void {
 		e.stopPropagation();
 		onEdit(bean.id);
-	}
-	function onDeleteClick(e: MouseEvent): void {
-		e.stopPropagation();
-		onDelete(bean.id);
 	}
 </script>
 
@@ -243,12 +238,13 @@
 			class="lcs-action lcs-action-primary"
 			class:is-on={isActive}
 			onclick={onSetActiveClick}
+			title={isActive ? 'Active on Brew' : 'Set as the active bag on the Brew page'}
 		>
 			<i
 				class={isActive ? 'ph-fill ph-check-circle' : 'ph ph-coffee'}
 				aria-hidden="true"
 			></i>
-			<span>{isActive ? 'Active on Brew' : 'Set active'}</span>
+			<span>{isActive ? 'Active' : 'Set active'}</span>
 		</button>
 		<button
 			type="button"
@@ -268,15 +264,10 @@
 		>
 			<i class="ph ph-pencil" aria-hidden="true"></i>
 		</button>
-		<button
-			type="button"
-			class="lcs-action-icon lcs-action-icon-danger"
-			title="Delete"
-			aria-label="Delete"
-			onclick={onDeleteClick}
-		>
-			<i class="ph ph-trash" aria-hidden="true"></i>
-		</button>
+		<!-- Delete: compact danger split — primary deletes locally, the caret
+		     menu adds "delete on Visualizer too". `stopPropagation` on the
+		     wrapper (in SplitButton) keeps a click off the card-open handler. -->
+		<BeanDeleteSplit beanId={bean.id} beanName={bean.name || 'this bag'} size="sm" />
 	{/snippet}
 </LibraryCardShell>
 

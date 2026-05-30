@@ -303,6 +303,34 @@
 		}
 	}
 
+	/**
+	 * Delete a shot. `remote: false` removes it from the local history only
+	 * (a synced shot is tombstoned so it never re-pulls; an unsynced one is
+	 * hard-removed). `remote: true` additionally enqueues a Visualizer DELETE
+	 * and drains it now, so the uploaded copy is removed too.
+	 */
+	async function handleDelete(shot: StoredShot, opts: { remote: boolean }): Promise<void> {
+		const label = shot.profileName ?? 'this shot';
+		const msg = opts.remote
+			? `Delete "${label}" from this device and Visualizer? This cannot be undone.`
+			: `Delete "${label}" from this device? This cannot be undone.`;
+		if (!confirm(msg)) return;
+		const visualizerId = shot.visualizerId ?? null;
+		const wasSelected = selected?.id === shot.id;
+		store.delete(shot.id);
+		if (opts.remote && visualizerId) {
+			enqueueSyncOp({ entity: 'shot', id: shot.id, op: 'delete', visualizerId });
+			try {
+				await drainQueue();
+			} catch (e) {
+				console.error('[history] Visualizer delete failed', e);
+			}
+		}
+		// Drop the selection so the detail pane falls back to the next shot.
+		if (wasSelected) selectedId = null;
+		refreshSyncState();
+	}
+
 	// ── Sort state ───────────────────────────────────────────────────────
 	type SortField = 'completedAt' | 'rating' | 'profileName' | 'beanName';
 	type SortDir = 'asc' | 'desc';
@@ -927,6 +955,8 @@
 						onTagsChange={(tags) => store.setTags(selected.id, tags)}
 						onBeanChange={(bean, roaster) =>
 							store.setBeanFromLive(selected.id, bean, roaster)}
+						onDelete={(opts) => handleDelete(selected, opts)}
+						canDeleteRemote={canPushShots && !!selected.visualizerId}
 					/>
 				{/key}
 			{:else}

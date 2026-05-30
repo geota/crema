@@ -28,10 +28,14 @@
 	interface Props {
 		/** Phosphor icon class on the primary button (left half). */
 		icon: string;
-		/** Visible label on the primary button. */
-		label: string;
+		/** Visible label on the primary button. Omit for an icon-only button. */
+		label?: string;
+		/** Accessible name for the primary button when it's icon-only. */
+		primaryAriaLabel?: string;
 		/** Native `title` tooltip on the primary button. */
 		title?: string;
+		/** `md` (default) for toolbar buttons, `sm` for compact in-card controls. */
+		size?: 'sm' | 'md';
 		/** Fired when the primary half is clicked. */
 		onPrimary: () => void;
 		/** Items shown in the dropdown — caret half toggles the menu. */
@@ -42,8 +46,11 @@
 		caretAriaLabel?: string;
 		/** Disable both buttons. */
 		disabled?: boolean;
-		/** Variant: `ghost` for secondary actions, `primary` for the page's CTA. */
-		variant?: 'ghost' | 'primary';
+		/**
+		 * Variant: `ghost` for secondary actions, `primary` for the page's CTA,
+		 * `danger` for destructive actions (red text + icon).
+		 */
+		variant?: 'ghost' | 'primary' | 'danger';
 		/** Slot override for the primary button content. Defaults to icon + label. */
 		primarySlot?: Snippet;
 	}
@@ -51,7 +58,9 @@
 	let {
 		icon,
 		label,
+		primaryAriaLabel,
 		title,
+		size = 'md',
 		onPrimary,
 		items,
 		menuHead,
@@ -78,15 +87,21 @@
 
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="sb" onclick={(e) => e.stopPropagation()}>
+<div
+	class="sb"
+	class:is-danger={variant === 'danger'}
+	class:sb-sm={size === 'sm'}
+	onclick={(e) => e.stopPropagation()}
+>
 	<button
 		class="sb-btn sb-{variant} sb-main"
 		{disabled}
 		onclick={onPrimary}
 		{title}
+		aria-label={primaryAriaLabel}
 	>
 		{#if primarySlot}{@render primarySlot()}{:else}
-			<i class={icon} aria-hidden="true"></i> {label}
+			<i class={icon} aria-hidden="true"></i>{#if label}<span>{label}</span>{/if}
 		{/if}
 	</button>
 	<button
@@ -147,6 +162,33 @@
 	.sb-btn i {
 		font-size: 13px;
 	}
+	.sb-btn > span {
+		display: inline-flex;
+	}
+	/* Compact size — for in-card action rows (icon-only trash, tiny caret). */
+	.sb-sm .sb-btn {
+		padding: 6px 8px;
+		font-size: 11px;
+		gap: 4px;
+	}
+	.sb-sm .sb-btn i {
+		font-size: 13px;
+	}
+	.sb-sm .sb-caret-btn {
+		padding-left: 6px;
+		padding-right: 7px;
+	}
+	/* Squared corners (not pill) so the compact split sits flush with the
+	   `--radius-sm` icon buttons on the library cards. */
+	.sb-sm .sb-main {
+		border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+	}
+	.sb-sm .sb-caret-btn {
+		border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+	}
+	.sb-sm .sb-menu {
+		min-width: 248px;
+	}
 	.sb-btn:disabled {
 		opacity: 0.5;
 		cursor: not-allowed;
@@ -166,6 +208,19 @@
 	}
 	.sb-primary:hover:not(:disabled) {
 		background: var(--copper-600);
+	}
+	/* Destructive variant — red text + icon over a faint red wash. */
+	.sb-danger {
+		background: rgba(var(--danger-rgb), 0.06);
+		border-color: rgba(var(--danger-rgb), 0.28);
+		color: var(--danger);
+	}
+	.sb-danger:hover:not(:disabled) {
+		background: rgba(var(--danger-rgb), 0.12);
+	}
+	/* Tint the menu's leading icons red too when the trigger is destructive. */
+	.is-danger .sb-menu-item i {
+		color: var(--danger);
 	}
 	.sb-main {
 		border-radius: var(--radius-pill) 0 0 var(--radius-pill);

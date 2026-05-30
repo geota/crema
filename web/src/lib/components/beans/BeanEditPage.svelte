@@ -36,6 +36,7 @@
 		type Roaster
 	} from '$lib/bean';
 	import BeanImage from './BeanImage.svelte';
+	import BeanDeleteSplit from './BeanDeleteSplit.svelte';
 	import QuickStepper from '$lib/components/brew/QuickStepper.svelte';
 	import StToggle from '$lib/components/settings/StToggle.svelte';
 	import RoasterAutocomplete from './RoasterAutocomplete.svelte';
@@ -1217,22 +1218,15 @@
 
 			<div class="be-foot">
 				{#if !isNew}
-					<button
-						type="button"
-						class="be-foot-danger"
-						onclick={() => {
-							if (
-								confirm(
-									`Delete "${current.name || 'this bag'}"? This cannot be undone.`
-								)
-							) {
-								library.deleteBean(current.id);
-								goto(resolve('/beans'));
-							}
-						}}
-					>
-						<i class="ph ph-trash"></i> Delete bean
-					</button>
+					<div class="be-foot-del">
+						<BeanDeleteSplit
+							beanId={current.id}
+							beanName={current.name || 'this bag'}
+							label="Delete bean"
+							size="md"
+							onDeleted={() => goto(resolve('/beans'))}
+						/>
+					</div>
 				{/if}
 				<button class="be-btn be-btn-ghost" onclick={discard}>Cancel</button>
 				<button class="be-btn be-btn-primary be-btn-lg" onclick={() => save(false)}>
@@ -1857,21 +1851,8 @@
 		padding-top: 8px;
 		flex-wrap: wrap;
 	}
-	.be-foot-danger {
-		background: transparent;
-		border: 1px solid rgba(var(--danger-rgb), 0.35);
-		color: var(--danger);
-		font-family: var(--font-sans);
-		font-size: 12px;
-		padding: 7px 14px;
-		border-radius: var(--radius-pill);
-		cursor: pointer;
+	/* Pushes the delete control to the left edge; Cancel/Save stay right. */
+	.be-foot-del {
 		margin-right: auto;
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
-	}
-	.be-foot-danger:hover {
-		background: rgba(var(--danger-rgb), 0.08);
 	}
 </style>
