@@ -12,7 +12,8 @@
  * the full shapes.
  */
 
-import { Either, Schema } from 'effect';
+import { Schema } from 'effect';
+import { decodeOr } from './decode.ts';
 
 // ── `POST /shots/upload` result ─────────────────────────────────────────
 
@@ -61,8 +62,5 @@ export function decodeResponse<A, I>(
 	input: unknown,
 	context: string
 ): A | null {
-	return Either.getOrElse(Schema.decodeUnknownEither(schema)(input), (error) => {
-		console.warn(`[visualizer] response decode failed (${context})`, error);
-		return null;
-	});
+	return decodeOr(schema, input, null, `visualizer ${context}`);
 }

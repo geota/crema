@@ -19,6 +19,8 @@
 
 import { Cause, Effect, Exit } from 'effect';
 import { readJson, writeJson } from '$lib/utils/storage';
+import { decodeOr } from '$lib/effect/schema/decode';
+import { TokenSetSchema } from '$lib/effect/schema/tokens';
 import { refreshAccessToken, type TokenSet } from './oauth';
 
 /** localStorage key for the persisted token set. */
@@ -28,13 +30,14 @@ const REFRESH_BUFFER_MS = 5 * 60 * 1000;
 
 // ── Persistence ────────────────────────────────────────────────────────
 
-/** Read the persisted token set, or `null` if unset / unparseable. */
+/** Read the persisted token set, or `null` if unset / invalid. */
 export function getStoredTokens(): TokenSet | null {
-	const raw = readJson<TokenSet | null>(TOKEN_KEY, null);
-	if (!raw || typeof raw !== 'object' || typeof raw.accessToken !== 'string') {
-		return null;
-	}
-	return raw;
+	const raw = readJson<unknown>(TOKEN_KEY, null);
+	// Absent / unparseable JSON → null with no warning (the signed-out case).
+	if (raw === null) return null;
+	// Present-but-invalid → null + a logged warning (forces a clean re-auth,
+	// matching the prior shallow guard's behavior; docs/53 §4.2).
+	return decodeOr(TokenSetSchema, raw, null, TOKEN_KEY);
 }
 
 /** Write a fresh token set. Notifies any {@link onTokenChange} subscribers. */
