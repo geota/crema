@@ -15,6 +15,7 @@
 	 *     which is inset by the rail's 72px width.
 	 */
 	import { onMount, onDestroy } from 'svelte';
+	import { Effect } from 'effect';
 	import '../app.css';
 	import { createCremaApp, type CremaApp } from '$lib/state';
 	import { CremaSidebar } from '$lib/components';
@@ -22,6 +23,7 @@
 	import { describeError } from '$lib/utils/error';
 	import { setCremaAppContext, type CoreLoadState } from '$lib/shell/app-context';
 	import { createAppRuntime, type AppRuntime } from '$lib/effect/runtime';
+	import { UploadQueue } from '$lib/services/upload-queue';
 
 	let { children } = $props();
 
@@ -38,6 +40,14 @@
 	// the core loads and the BLE state changes.
 	setCremaAppContext(() => ({ app, runtime, loadState, loadError }));
 
+	// Upload-queue drain triggers, wired to network / visibility regains
+	// (Option 3, T-16). `UploadQueue.armLifecycle` (fired in CremaApp) owns the
+	// on-launch drain + 5-min foreground tick; these DOM listeners live at the
+	// shell because they need the runtime handle and a destroy seam. Kept in
+	// scope so `onDestroy` can detach them.
+	let onOnline: (() => void) | null = null;
+	let onVisibility: (() => void) | null = null;
+
 	onMount(async () => {
 		// `createCremaApp()` dynamic-imports and instantiates the wasm core —
 		// genuinely async. Skip it entirely on browsers without Web Bluetooth:
@@ -49,10 +59,24 @@
 		}
 		// Mount the Effect runtime here, in onMount — never module scope — so
 		// adapter-static's build-time evaluation never touches localStorage /
-		// navigator / wasm (docs/53 D-03). Unused until services land in Phase 3.
+		// navigator / wasm (docs/53 D-03).
 		runtime = createAppRuntime();
+		// Best-effort drain on reconnect / tab-refocus. `runFork` is detached
+		// fire-and-forget; `drain` is offline-guarded + single-flight, so a
+		// spurious trigger is cheap.
+		const drainNow = (): void => {
+			void runtime?.runFork(Effect.flatMap(UploadQueue, (q) => q.drain));
+		};
+		onOnline = () => drainNow();
+		onVisibility = () => {
+			if (document.visibilityState === 'visible') drainNow();
+		};
+		window.addEventListener('online', onOnline);
+		document.addEventListener('visibilitychange', onVisibility);
 		try {
-			app = await createCremaApp();
+			// Thread the runtime into the orchestrator so its Visualizer side
+			// effects (queue lifecycle, shot-completion upload) run on it.
+			app = await createCremaApp(runtime);
 			loadState = 'ready';
 		} catch (err) {
 			loadState = 'failed';
@@ -61,8 +85,10 @@
 	});
 
 	// Tear the runtime's fibers + finalizers down when the shell unmounts
-	// (also fires on HMR), so a dev reload doesn't leak runtimes.
+	// (also fires on HMR), so a dev reload doesn't leak runtimes or listeners.
 	onDestroy(() => {
+		if (onOnline) window.removeEventListener('online', onOnline);
+		if (onVisibility) document.removeEventListener('visibilitychange', onVisibility);
 		void runtime?.dispose();
 	});
 </script>

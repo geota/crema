@@ -16,19 +16,18 @@
  * for the live-only side effects (bean burn-down, webhook).
  */
 
+import { Effect } from 'effect';
 import type { CaptureEntry } from '$lib/capture';
 import { getCaptureStore } from '$lib/capture';
-import { getBeanStore, VisualizerError } from '$lib/bean';
+import { getBeanStore } from '$lib/bean';
 import { getProfileStore } from '$lib/profiles';
 import { getSettingsStore } from '$lib/settings';
 import { getActiveShotStore, type ActiveShotData } from '$lib/state/active-shot.svelte';
-import {
-	appendSyncLog,
-	directionPushes,
-	enqueue as enqueueSyncOp,
-	readSyncConfig,
-	uploadShot
-} from '$lib/visualizer';
+import { appendSyncLog, directionPushes, readSyncConfig } from '$lib/visualizer';
+import { runtimePromise } from '$lib/effect/bridge';
+import type { AppRuntime } from '$lib/effect/runtime';
+import { ShotSync } from '$lib/services/shot-sync';
+import { UploadQueue } from '$lib/services/upload-queue';
 import { getHistoryStore } from './store.svelte';
 import type { UiSnapshot } from '$lib/state/ui-state.svelte';
 
@@ -72,6 +71,12 @@ export interface ShotCompletionContext {
 	sliceJsonl(fromMs: number, toMs: number): Promise<string>;
 	/** Fire a webhook (gated by user prefs inside the callback). */
 	fireWebhook(eventType: string, payload: object): void;
+	/**
+	 * The app-wide Effect runtime (Option 3, T-16). The Visualizer push routes
+	 * through it (`ShotSync.uploadShot` / `UploadQueue.enqueue`); `null` (no
+	 * runtime) skips the push, same fire-and-forget non-fatal posture as before.
+	 */
+	readonly runtime: AppRuntime | null;
 }
 
 /**
@@ -96,7 +101,7 @@ export function commitShotCompletion(
 			runLiveOnlySideEffects(event, activeShot, ctx.snapshot, ctx.fireWebhook);
 		}
 		// Visualizer push — fire-and-forget; failures land in the retry queue.
-		tryUploadShot(record.id);
+		tryUploadShot(record.id, ctx.runtime);
 		// Capture persistence — only when we observed a ShotStarted (replays
 		// always do; manual / phantom completions might not).
 		if (ctx.shotStartedAtMs !== null) {
@@ -252,18 +257,43 @@ function buildAtShotStartMeta(tMs: number): CaptureEntry | null {
 }
 
 /**
+ * Whether a squashed `ShotSync` failure is worth a time-based retry. Mirrors
+ * the old `VisualizerError`-based probe, but reads the `Data.TaggedError`'s
+ * `_tag` (the `runtimePromise` boundary rejects with the original tagged-error
+ * instance): transport / 5xx / 408 / aborted are recoverable; auth / premium /
+ * not-found / decode need user action. An unknown shape is recoverable (worst
+ * case the queue's 3-attempt ceiling drops it), matching the old fallback.
+ */
+function isRecoverableUploadError(e: unknown): boolean {
+	if (!e || typeof e !== 'object' || !('_tag' in e)) return true;
+	const tagged = e as { _tag: string; status?: number };
+	if (tagged._tag === 'NetworkError') return true;
+	if (tagged._tag === 'HttpStatusError') {
+		const s = tagged.status ?? 0;
+		return s === 0 || s === 408 || (s >= 500 && s < 600);
+	}
+	return false;
+}
+
+/**
  * Fire-and-forget Visualizer shot upload, gated on the user's shot sync
  * direction + the `visualizerAutoUpload` setting. Recoverable failures
  * route through the persistent retry queue; auth + premium errors
  * bypass the queue (the user has to fix something).
+ *
+ * Routes through the app runtime (Option 3): `ShotSync.uploadShot` does the
+ * authenticated POST + soft follow-up PATCH; the `runtimePromise` boundary
+ * rejects with the original tagged error so the recoverable probe + sync log
+ * keep their pre-swap behaviour. No runtime → skip (non-fatal).
  */
-function tryUploadShot(shotId: string): void {
+function tryUploadShot(shotId: string, runtime: AppRuntime | null): void {
+	if (!runtime) return;
 	const config = readSyncConfig();
 	if (!directionPushes(config.direction.shots)) return;
 	if (!getSettingsStore().current.visualizerAutoUpload) return;
 	const shot = getHistoryStore().get(shotId);
 	if (!shot) return;
-	void uploadShot(shot)
+	void runtimePromise(runtime, ShotSync.pipe(Effect.flatMap((s) => s.uploadShot(shot))))
 		.then(({ visualizerId }) => {
 			getHistoryStore().bindVisualizerId(shotId, visualizerId);
 			appendSyncLog({
@@ -275,17 +305,20 @@ function tryUploadShot(shotId: string): void {
 			});
 		})
 		.catch((e) => {
-			const recoverable =
-				e instanceof VisualizerError
-					? e.kind === 'network' || (e.status >= 500 && e.status < 600) || e.status === 408
-					: true;
-			if (recoverable) {
-				enqueueSyncOp({
-					entity: 'shot',
-					id: shotId,
-					op: 'create',
-					error: e instanceof Error ? e.message : String(e)
-				});
+			if (isRecoverableUploadError(e)) {
+				void runtimePromise(
+					runtime,
+					UploadQueue.pipe(
+						Effect.flatMap((q) =>
+							q.enqueue({
+								entity: 'shot',
+								id: shotId,
+								op: 'create',
+								error: e instanceof Error ? e.message : String(e)
+							})
+						)
+					)
+				);
 			}
 			appendSyncLog({
 				direction: 'skip',

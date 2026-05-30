@@ -43,64 +43,20 @@ import type {
 	VisualizerNotFoundError,
 	VisualizerPremiumGatedError
 } from '../effect/errors.ts';
-import { readJson, writeJson } from '../utils/storage.ts';
+import {
+	clearQueue as clearQueueStore,
+	dequeueEntry,
+	enqueueEntry,
+	isPendingId,
+	MAX_ATTEMPTS,
+	persistRetry,
+	readQueue,
+	type EnqueueInput,
+	type QueueEntry
+} from './queue-store.ts';
 import { getHistoryStore } from '$lib/history';
 
-/** localStorage key for the upload queue. */
-const QUEUE_KEY = 'crema.visualizer.uploadQueue.v1';
-
-/** Per-entry hard ceiling on retry attempts; after this it's dropped. */
-const MAX_ATTEMPTS = 3;
-
-/** One queued sync op. */
-export interface QueueEntry {
-	entity: 'shot' | 'bean' | 'roaster';
-	id: string;
-	op: 'create' | 'update' | 'delete';
-	/** For DELETE we need the visualizer id (the local row may already be gone). */
-	visualizerId?: string;
-	/** Failed-attempts made so far. Capped at {@link MAX_ATTEMPTS}. */
-	attempts: number;
-	lastError?: string;
-	enqueuedAt: number;
-	/** Earliest Unix epoch ms when the queue may retry this entry. */
-	nextAttemptAt: number;
-}
-
-interface QueueState {
-	entries: QueueEntry[];
-}
-
-const EMPTY: QueueState = { entries: [] };
-
-function read(): QueueState {
-	const raw = readJson<QueueState>(QUEUE_KEY, EMPTY);
-	if (!raw || !Array.isArray(raw.entries)) return EMPTY;
-	return raw;
-}
-
-function write(state: QueueState): void {
-	writeJson(QUEUE_KEY, state);
-}
-
-/** Exponential backoff (2s, 4s, 8s, … capped at 60s) keyed on attempts made. */
-function backoffMs(attempt: number): number {
-	const base = 1000 * Math.pow(2, Math.max(0, attempt));
-	return Math.min(60_000, base);
-}
-
-const sameEntry =
-	(entity: QueueEntry['entity'], id: string, op: QueueEntry['op']) => (e: QueueEntry) =>
-		e.entity === entity && e.id === id && e.op === op;
-
-/** Input shape for {@link UploadQueue.enqueue}. */
-export interface EnqueueInput {
-	entity: QueueEntry['entity'];
-	id: string;
-	op: QueueEntry['op'];
-	visualizerId?: string;
-	error?: string;
-}
+export type { EnqueueInput, QueueEntry } from './queue-store.ts';
 
 export interface DrainResult {
 	processed: number;
@@ -190,74 +146,19 @@ export const UploadQueueLive = Layer.effect(
 		const lifecycleArmed = yield* Ref.make(false);
 
 		const enqueue = (input: EnqueueInput): Effect.Effect<void> =>
-			Effect.sync(() => {
-				const state = read();
-				const idx = state.entries.findIndex(sameEntry(input.entity, input.id, input.op));
-				const now = Date.now();
-				if (idx >= 0) {
-					// Set-like refresh — DON'T bump attempts (the drain owns that).
-					const prev = state.entries[idx];
-					state.entries = [
-						...state.entries.slice(0, idx),
-						{
-							...prev,
-							lastError: input.error ?? prev.lastError,
-							visualizerId: input.visualizerId ?? prev.visualizerId
-						},
-						...state.entries.slice(idx + 1)
-					];
-				} else {
-					state.entries = [
-						...state.entries,
-						{
-							entity: input.entity,
-							id: input.id,
-							op: input.op,
-							visualizerId: input.visualizerId,
-							attempts: 0,
-							lastError: input.error,
-							enqueuedAt: now,
-							nextAttemptAt: now
-						}
-					];
-				}
-				write(state);
-			});
+			Effect.sync(() => enqueueEntry(input));
 
 		const dequeue = (
 			entity: QueueEntry['entity'],
 			id: string,
 			op: QueueEntry['op']
-		): Effect.Effect<void> =>
-			Effect.sync(() => {
-				const state = read();
-				const next = state.entries.filter((e) => !sameEntry(entity, id, op)(e));
-				if (next.length !== state.entries.length) write({ entries: next });
-			});
-
-		/** Persist a failed entry's bumped attempt count + next-retry time. */
-		const persistRetry = (entry: QueueEntry, made: number, error: string): void => {
-			const state = read();
-			const idx = state.entries.findIndex(sameEntry(entry.entity, entry.id, entry.op));
-			if (idx < 0) return; // dequeued meanwhile
-			state.entries = [
-				...state.entries.slice(0, idx),
-				{
-					...state.entries[idx],
-					attempts: made,
-					lastError: error,
-					nextAttemptAt: Date.now() + backoffMs(made)
-				},
-				...state.entries.slice(idx + 1)
-			];
-			write(state);
-		};
+		): Effect.Effect<void> => Effect.sync(() => dequeueEntry(entity, id, op));
 
 		const isPending = (entity: QueueEntry['entity'], id: string): Effect.Effect<boolean> =>
-			Effect.sync(() => read().entries.some((e) => e.entity === entity && e.id === id));
+			Effect.sync(() => isPendingId(entity, id));
 
-		const getQueue = Effect.sync(() => read().entries as readonly QueueEntry[]);
-		const clearQueue = Effect.sync(() => write(EMPTY));
+		const getQueue = Effect.sync(() => readQueue().entries as readonly QueueEntry[]);
+		const clearQueue = Effect.sync(() => clearQueueStore());
 
 		/** Perform the actual sync call for one entry. */
 		const runEntry = (entry: QueueEntry): Effect.Effect<void, UploadError> =>
@@ -289,7 +190,7 @@ export const UploadQueueLive = Layer.effect(
 		const doDrain = Effect.gen(function* () {
 			const out: DrainResult = { processed: 0, succeeded: 0, dropped: 0, deferred: 0 };
 			const now = Date.now();
-			const ready = read().entries.filter((e) => e.nextAttemptAt <= now);
+			const ready = readQueue().entries.filter((e) => e.nextAttemptAt <= now);
 			for (const entry of ready) {
 				out.processed += 1;
 				const result = yield* Effect.either(runEntry(entry));
