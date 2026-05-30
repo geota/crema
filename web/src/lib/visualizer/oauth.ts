@@ -197,6 +197,33 @@ export async function startVisualizerLogin(
 	window.location.assign(`${AUTHORIZE_URL}?${params.toString()}`);
 }
 
+/**
+ * Stash the PKCE verifier + CSRF state for the redirect round-trip. SSR-safe
+ * (no-op without `sessionStorage`). Exported for the Effect `OAuth` service's
+ * `startLogin`.
+ */
+export function stashPkceState(verifier: string, state: string, returnTo?: string): void {
+	if (typeof sessionStorage === 'undefined') return;
+	sessionStorage.setItem(VERIFIER_KEY, verifier);
+	sessionStorage.setItem(STATE_KEY, state);
+	if (returnTo) sessionStorage.setItem(RETURN_KEY, returnTo);
+	else sessionStorage.removeItem(RETURN_KEY);
+}
+
+/**
+ * Read + clear (single-use) the PKCE verifier and CSRF state. SSR-safe —
+ * returns nulls without `sessionStorage`. Exported for the Effect `OAuth`
+ * service's `exchangeCode`.
+ */
+export function takePkceState(): { verifier: string | null; state: string | null } {
+	if (typeof sessionStorage === 'undefined') return { verifier: null, state: null };
+	const verifier = sessionStorage.getItem(VERIFIER_KEY);
+	const state = sessionStorage.getItem(STATE_KEY);
+	sessionStorage.removeItem(VERIFIER_KEY);
+	sessionStorage.removeItem(STATE_KEY);
+	return { verifier, state };
+}
+
 /** Read + clear the return path the caller stashed before redirecting. */
 export function takeReturnPath(fallback: string = '/settings'): string {
 	const v = sessionStorage.getItem(RETURN_KEY);
@@ -206,7 +233,7 @@ export function takeReturnPath(fallback: string = '/settings'): string {
 
 // ── Token exchange ─────────────────────────────────────────────────────
 
-interface TokenWire {
+export interface TokenWire {
 	access_token?: string;
 	token_type?: string;
 	expires_in?: number;
@@ -216,7 +243,13 @@ interface TokenWire {
 	error_description?: string;
 }
 
-function tokenSetFromWire(wire: TokenWire): TokenSet {
+/**
+ * Convert a `/oauth/token` wire response into a {@link TokenSet}. Pure; throws
+ * when `access_token` is absent (the server returned an error body). Exported
+ * so the Effect `OAuth` service can reuse the exact same `expires_in → expiresAt`
+ * math and scope/type defaults rather than re-deriving them.
+ */
+export function tokenSetFromWire(wire: TokenWire): TokenSet {
 	if (!wire.access_token) {
 		const msg = wire.error_description ?? wire.error ?? 'Missing access_token.';
 		throw new Error(`Visualizer token endpoint: ${msg}`);

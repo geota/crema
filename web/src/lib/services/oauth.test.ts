@@ -14,8 +14,12 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { Cause, Effect, Exit } from 'effect';
+import { Cause, Effect, Exit, Layer } from 'effect';
+import { HttpClientLive } from './http-client.ts';
 import { OAuth, OAuthLive } from './oauth.ts';
+
+/** OAuthLive with its HttpClient dependency satisfied. */
+const OAuthProvided = Layer.provide(OAuthLive, HttpClientLive);
 
 function failTag(exit: Exit.Exit<unknown, { readonly _tag?: string }>): string | undefined {
 	if (!Exit.isFailure(exit)) return undefined;
@@ -28,7 +32,7 @@ describe('OAuth service', () => {
 		const exit = await Effect.runPromiseExit(
 			OAuth.pipe(
 				Effect.flatMap((o) => o.refreshToken('some-refresh-token')),
-				Effect.provide(OAuthLive)
+				Effect.provide(OAuthProvided)
 			)
 		);
 		assert.equal(failTag(exit), 'TokenRefreshFailedError');

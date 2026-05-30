@@ -15,6 +15,24 @@
 import { Schema } from 'effect';
 import { decodeOr } from './decode.ts';
 
+// ── `POST /oauth/token` response ────────────────────────────────────────
+
+/**
+ * The Doorkeeper token-endpoint wire body. Every field is optional: success
+ * carries `access_token` (+ friends), failure carries `error` /
+ * `error_description`. `tokenSetFromWire` does the success/failure disambiguation
+ * downstream — this schema only validates field *types*.
+ */
+export const TokenWireSchema = Schema.Struct({
+	access_token: Schema.optional(Schema.String),
+	token_type: Schema.optional(Schema.String),
+	expires_in: Schema.optional(Schema.Number),
+	refresh_token: Schema.optional(Schema.String),
+	scope: Schema.optional(Schema.String),
+	error: Schema.optional(Schema.String),
+	error_description: Schema.optional(Schema.String)
+});
+
 // ── `POST /shots/upload` result ─────────────────────────────────────────
 
 /** `{ id }` — the only field `uploadShot` reads off the upload result. */
