@@ -9,11 +9,19 @@
 	 *  - **local vs also-remote** — also delete the uploaded Visualizer copies.
 	 *
 	 * The primary click is the safe default: detach + local (or plain local
-	 * delete when nothing links here). Self-contained: talks to the bean store
-	 * directly and reports via `onDeleted`.
+	 * delete when nothing links here). Self-contained: deletes from the bean
+	 * store directly and reports via `onDeleted`. Remote DELETEs run
+	 * `BeanSync.deleteRoaster` / `.deleteBean` on the app runtime (Option 3,
+	 * T-16); the store stays pure-local. Best-effort + free-tier skip mirror the
+	 * old `deleteRemoteRoaster` / `deleteRemoteBean` they replaced.
 	 */
-	import { getBeanStore } from '$lib/bean';
-	import { isConnected as isVisualizerConnected } from '$lib/visualizer';
+	import { onMount } from 'svelte';
+	import { Effect } from 'effect';
+	import { getBeanStore, readSyncSettings } from '$lib/bean';
+	import { getCremaAppContext } from '$lib/shell/app-context';
+	import { runtimePromise } from '$lib/effect/bridge';
+	import { TokenVault } from '$lib/services/token-vault';
+	import { BeanSync } from '$lib/services/bean-sync';
 	import SplitButton from '$lib/components/shared/SplitButton.svelte';
 
 	let {
@@ -33,25 +41,63 @@
 	} = $props();
 
 	const library = getBeanStore();
+	const appCtx = getCremaAppContext();
+
+	/** Connection gate (Option 3): `TokenVault.getTokens !== null`, read once. */
+	let connected = $state(false);
+	onMount(() => {
+		void (async () => {
+			const runtime = appCtx().runtime;
+			connected = runtime
+				? (await runtimePromise(runtime, TokenVault.pipe(Effect.flatMap((v) => v.getTokens)))) !==
+					null
+				: false;
+		})();
+	});
 
 	/**
 	 * Remote is meaningful when connected AND something here is on Visualizer —
 	 * the roaster itself, or (for the cascade) one of its linked bags.
 	 */
 	const remoteAvailable = $derived(
-		isVisualizerConnected() &&
+		connected &&
 			(!!library.getRoaster(roasterId)?.visualizerId ||
 				library.beans.some((b) => b.roasterId === roasterId && !!b.visualizerId))
 	);
 
 	const beansLabel = $derived(`${linkedBeanCount} bag${linkedBeanCount === 1 ? '' : 's'}`);
 
+	/**
+	 * Best-effort Visualizer deletes for a captured set of remote ids. Free-tier
+	 * (premium === false) skips silently; failures are logged, not surfaced —
+	 * mirrors the old `deleteRemoteRoaster` / `deleteRemoteBean`. Ids are
+	 * captured by the caller BEFORE the local delete removes the rows.
+	 */
+	async function fireRemoteDeletes(roasterVizId: string | null, beanVizIds: string[]): Promise<void> {
+		if (readSyncSettings().premium === false) return;
+		const runtime = appCtx().runtime;
+		if (!runtime) return;
+		const run = (eff: Effect.Effect<void, unknown, BeanSync>): Promise<void> =>
+			runtimePromise(runtime, eff).catch((e) =>
+				console.warn('Visualizer delete failed:', e instanceof Error ? e.message : String(e))
+			);
+		// Bags first, then the roaster — matches the old cascade's order
+		// (`deleteRoasterAndBeans` deleted each bag before the roaster).
+		for (const id of beanVizIds) {
+			await run(BeanSync.pipe(Effect.flatMap((b) => b.deleteBean(id))));
+		}
+		if (roasterVizId) await run(BeanSync.pipe(Effect.flatMap((b) => b.deleteRoaster(roasterVizId))));
+	}
+
 	function detach(remote: boolean): void {
 		const msg = remote
 			? `Delete "${roasterName}" (and its Visualizer copy)? Linked bags are kept and detached.`
 			: `Delete "${roasterName}" from this device? Linked bags are kept and detached.`;
 		if (!confirm(msg)) return;
-		library.deleteRoaster(roasterId, { remote });
+		// Detach deletes only the roaster remotely; bags are kept (detached).
+		const roasterVizId = remote ? (library.getRoaster(roasterId)?.visualizerId ?? null) : null;
+		library.deleteRoaster(roasterId);
+		if (remote) void fireRemoteDeletes(roasterVizId, []);
 		onDeleted?.();
 	}
 	function cascade(remote: boolean): void {
@@ -59,7 +105,16 @@
 			? `Delete "${roasterName}" and its ${beansLabel}, here and on Visualizer? This cannot be undone.`
 			: `Delete "${roasterName}" and its ${beansLabel} from this device? This cannot be undone.`;
 		if (!confirm(msg)) return;
-		library.deleteRoasterAndBeans(roasterId, { remote });
+		// Capture the roaster + every linked bag's remote id BEFORE the cascade
+		// removes the rows, then delete locally and fire the remote DELETEs.
+		const roasterVizId = remote ? (library.getRoaster(roasterId)?.visualizerId ?? null) : null;
+		const beanVizIds = remote
+			? library.beans
+					.filter((b) => b.roasterId === roasterId && !!b.visualizerId)
+					.map((b) => b.visualizerId as string)
+			: [];
+		library.deleteRoasterAndBeans(roasterId);
+		if (remote) void fireRemoteDeletes(roasterVizId, beanVizIds);
 		onDeleted?.();
 	}
 

@@ -944,42 +944,6 @@ export async function runSync(library: BeanLibraryStore): Promise<SyncResult> {
 	}
 }
 
-/**
- * Push a deletion for a single bean. Called from the library store after the
- * user deletes a bag locally so the remote stays in sync. Best-effort — a
- * failed deletion is logged but doesn't crash the local delete.
- */
-export async function deleteRemoteBean(
-	bean: Bean
-): Promise<{ ok: boolean; error?: string }> {
-	if (!bean.visualizerId) return { ok: true };
-	if (!isConnected()) return { ok: true };
-	const settings = readSyncSettings();
-	if (settings.premium === false) return { ok: true }; // free tier — skip
-	try {
-		await call(`/coffee_bags/${bean.visualizerId}`, {
-			method: 'DELETE'
-		});
-		return { ok: true };
-	} catch (e) {
-		return { ok: false, error: e instanceof Error ? e.message : String(e) };
-	}
-}
-
-/** Push a roaster deletion. Same best-effort policy as {@link deleteRemoteBean}. */
-export async function deleteRemoteRoaster(
-	roaster: Roaster
-): Promise<{ ok: boolean; error?: string }> {
-	if (!roaster.visualizerId) return { ok: true };
-	if (!isConnected()) return { ok: true };
-	const settings = readSyncSettings();
-	if (settings.premium === false) return { ok: true };
-	try {
-		await call(`/roasters/${roaster.visualizerId}`, {
-			method: 'DELETE'
-		});
-		return { ok: true };
-	} catch (e) {
-		return { ok: false, error: e instanceof Error ? e.message : String(e) };
-	}
-}
+// Bean / roaster remote DELETE moved to `BeanSync.deleteBean` / `.deleteRoaster`
+// (T-16). The delete-split components run them on the app runtime after the
+// local delete, replicating the old best-effort + free-tier-skip posture.
