@@ -333,7 +333,7 @@ export function roasterFromWire(wire: RoasterWire): Roaster {
 // keys) — every write was a no-op. These two helpers wrap each body in
 // the right envelope so the writes actually land.
 
-function roasterBodyToWriteRequest(body: RoasterWire): RoasterWriteRequest {
+export function roasterBodyToWriteRequest(body: RoasterWire): RoasterWriteRequest {
 	return {
 		roaster: {
 			name: body.name,
@@ -343,7 +343,7 @@ function roasterBodyToWriteRequest(body: RoasterWire): RoasterWriteRequest {
 	};
 }
 
-function bagBodyToWriteRequest(body: BagWire): CoffeeBagWriteRequest {
+export function bagBodyToWriteRequest(body: BagWire): CoffeeBagWriteRequest {
 	return {
 		coffee_bag: {
 			name: body.name,
