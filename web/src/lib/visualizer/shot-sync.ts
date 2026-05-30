@@ -35,6 +35,7 @@ import { VisualizerError } from '$lib/bean';
 import { getBeanStore } from '$lib/bean/store.svelte';
 import { roastLevelToWire } from '$lib/bean/visualizer-sync';
 import { exportStoredShotAsV2Json } from '$lib/history/v2-export';
+import type { RustTimedSample } from '$lib/core';
 import type { ShotBean, StoredShot } from '$lib/history/model';
 import type { HistoryStore } from '$lib/history/store.svelte';
 import { getSettingsStore } from '$lib/settings';
@@ -252,6 +253,80 @@ function wireShotFromDetail(summary: ShotSummary, detail: ShotDetail): WireShot 
 		updated_at_ms: summary.updated_at * 1000, // unix sec → ms
 		tag_list: tagList
 	};
+}
+
+/**
+ * Reconstruct Crema's per-sample telemetry from a Visualizer shot detail.
+ *
+ * Visualizer stores the curve as parallel columns — a time axis plus one
+ * array per channel — so we zip them by index into the row-shaped
+ * {@link RustTimedSample} the history chart + peak derivation consume.
+ * Units line up with Crema/DE1 conventions (bar, ml/s, °C, g); the only
+ * conversion is the time axis: Visualizer's `timeframe` is SECONDS,
+ * `RustTimedSample.elapsed` is MILLISECONDS (the chart divides by 1000).
+ *
+ * Reads the decoded `timeframe` + `data` (ShotSeriesData) columns that
+ * `DefaultShotDetail` exposes uniformly across upload sources. A detail
+ * with no time axis (a Beanconqueror row, or a shot stored without a
+ * curve) yields `[]`, and the row stays a metadata-only stub.
+ */
+function samplesFromVisualizerDetail(detail: ShotDetail): RustTimedSample[] {
+	const d = detail as DefaultShotDetail;
+	const time = d.timeframe;
+	if (!Array.isArray(time) || time.length === 0) return [];
+	const data = d.data ?? {};
+
+	type Series = components['schemas']['ShotSeries'];
+	const num = (arr: Series | undefined, i: number): number => {
+		const v = arr?.[i];
+		const n = typeof v === 'number' ? v : Number(v);
+		return Number.isFinite(n) ? n : 0;
+	};
+	// Scale-derived channels: absent/zero means "no signal" downstream.
+	const opt = (arr: Series | undefined, i: number): number | null => {
+		const n = num(arr, i);
+		return n > 0 ? n : null;
+	};
+
+	const pressure = data.espresso_pressure;
+	const flow = data.espresso_flow;
+	const weight = data.espresso_weight;
+	const flowWeight = data.espresso_flow_weight;
+	const pressureGoal = data.espresso_pressure_goal;
+	const flowGoal = data.espresso_flow_goal;
+	const tempGoal = data.espresso_temperature_goal;
+	const tempMix = data.espresso_temperature_mix;
+	const tempBasket = data.espresso_temperature_basket;
+	const water = data.espresso_water_dispensed;
+
+	const out: RustTimedSample[] = [];
+	for (let i = 0; i < time.length; i++) {
+		const tSec = num(time, i);
+		const row: RustTimedSample = {
+			elapsed: Math.round(tSec * 1000), // Visualizer seconds → Crema ms
+			sample: {
+				sampleTime: 0,
+				groupPressure: num(pressure, i),
+				groupFlow: num(flow, i),
+				headTemp: num(tempBasket, i),
+				mixTemp: num(tempMix, i),
+				setHeadTemp: num(tempGoal, i),
+				setMixTemp: 0,
+				setGroupPressure: num(pressureGoal, i),
+				setGroupFlow: num(flowGoal, i),
+				frameNumber: 0,
+				steamTemp: 0
+			}
+		};
+		const w = opt(weight, i);
+		if (w != null) row.scaleWeight = w;
+		const wf = opt(flowWeight, i);
+		if (wf != null) row.scaleFlowWeight = wf;
+		const wd = opt(water, i);
+		if (wd != null) row.dispensedVolume = wd;
+		out.push(row);
+	}
+	return out;
 }
 
 // ── Public surface ────────────────────────────────────────────────────
@@ -611,11 +686,17 @@ export async function pullAllShotsSince(
 		maxPages?: number;
 		onProgress?: (p: PullProgress) => void;
 	} = {}
-): Promise<{ shots: WireShot[]; truncated: boolean }> {
+): Promise<{
+	shots: WireShot[];
+	/** Per-shot telemetry keyed by Visualizer id — applied on the `add` step. */
+	samplesById: Map<string, RustTimedSample[]>;
+	truncated: boolean;
+}> {
 	const items = Math.min(100, Math.max(1, Math.floor(opts.itemsPerPage ?? 50)));
 	const maxPages = opts.maxPages ?? 200;
 	const cursorSec = Math.floor(sinceMs / 1000);
 	const wireShots: WireShot[] = [];
+	const samplesById = new Map<string, RustTimedSample[]>();
 	let totalPages = 1;
 	let reachedOlder = false;
 
@@ -632,6 +713,7 @@ export async function pullAllShotsSince(
 			try {
 				const detail = await fetchShotDetail(summary.id);
 				wireShots.push(wireShotFromDetail(summary, detail));
+				samplesById.set(summary.id, samplesFromVisualizerDetail(detail));
 			} catch (e) {
 				// One failed detail fetch shouldn't blow up the whole sync —
 				// re-throw only on auth (no point continuing). Other errors
@@ -647,10 +729,10 @@ export async function pullAllShotsSince(
 			hasMore
 		});
 		if (!hasMore) {
-			return { shots: wireShots, truncated: false };
+			return { shots: wireShots, samplesById, truncated: false };
 		}
 	}
-	return { shots: wireShots, truncated: true };
+	return { shots: wireShots, samplesById, truncated: true };
 }
 
 
@@ -671,16 +753,25 @@ export async function pullAllShotsSince(
  *   the remote id without creating a duplicate)
  * - `update` → flow remote-side `tag_list` onto the bound local row.
  *   Notes / rating are still owner-edited locally only in v1.
+ *
+ * `samplesById` carries the telemetry reconstructed from each shot's
+ * Visualizer detail (see {@link pullAllShotsSince}); it's spliced into
+ * the StoredShot on the `add` step so pulled shots render a real curve
+ * instead of an empty stub.
  */
 export function applyShotReconciliation(
 	history: HistoryStore,
-	remote: WireShot[]
+	remote: WireShot[],
+	samplesById?: ReadonlyMap<string, RustTimedSample[]>
 ): void {
 	const local = history.all;
 	const actions = reconcileShots(local, remote);
 	for (const action of actions) {
 		if (action.kind === 'add') {
-			const stored = storedShotFromWire(action.remote);
+			const stored = storedShotFromWire(
+				action.remote,
+				samplesById?.get(action.remote.id)
+			);
 			if (stored) history.insertPulled(stored);
 			appendSyncLog({
 				direction: 'pull',
@@ -703,6 +794,12 @@ export function applyShotReconciliation(
 			// idempotent — re-applying an empty list to a local with none
 			// is a no-op write.
 			history.setTags(action.localId, action.remote.tag_list ?? []);
+			// Heal pre-telemetry-import stubs: if this bound row has no curve
+			// locally but the pull carries one, backfill it (no-op otherwise).
+			const samples = samplesById?.get(action.remote.id);
+			if (samples && samples.length > 0) {
+				history.backfillTelemetry(action.localId, samples, action.remote.duration_ms);
+			}
 		}
 	}
 }
@@ -723,8 +820,8 @@ export async function pullAndReconcileShots(
 		onProgress?: (p: PullProgress) => void;
 	} = {}
 ): Promise<{ pulled: number; truncated: boolean }> {
-	const { shots, truncated } = await pullAllShotsSince(sinceMs, opts);
-	if (shots.length > 0) applyShotReconciliation(history, shots);
+	const { shots, samplesById, truncated } = await pullAllShotsSince(sinceMs, opts);
+	if (shots.length > 0) applyShotReconciliation(history, shots, samplesById);
 	return { pulled: shots.length, truncated };
 }
 
