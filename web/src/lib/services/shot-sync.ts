@@ -66,7 +66,7 @@ import {
 	type WireShot
 } from '$lib/visualizer/shot-sync-signatures';
 import { appendSyncLog } from '$lib/visualizer/sync-config';
-import { enqueue as enqueueSyncOp } from '$lib/visualizer/upload-queue';
+import { enqueueEntry as enqueueSyncOp } from './queue-store.ts';
 
 /** Visualizer API base. */
 const API_BASE = 'https://visualizer.coffee/api';

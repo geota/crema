@@ -47,38 +47,13 @@ export { fetchAccount, type VisualizerAccount } from './account';
 
 export { migrateLegacyBasicAuth } from './migrate-basic-auth';
 
-// ── Shot sync ──────────────────────────────────────────────────────
-export {
-	applyShotReconciliation,
-	deleteShot,
-	patchShot,
-	pullAllShotsSince,
-	pullAndReconcileShots,
-	pullShots,
-	reconcileShots,
-	signatureForBean,
-	signatureForRoaster,
-	signatureForShot,
-	storedShotFromWire,
-	uploadShot,
-	uploadUnsyncedShots,
-	type PullProgress,
-	type ReconcileAction,
-	type WireShot
-} from './shot-sync';
-
-// ── Upload queue ───────────────────────────────────────────────────
-export {
-	armQueueLifecycle,
-	clearQueue,
-	dequeue,
-	drainQueue,
-	enqueue,
-	getQueue,
-	isPending,
-	type DrainResult,
-	type QueueEntry
-} from './upload-queue';
+// ── Shot sync + upload queue (T-16) ────────────────────────────────
+// Moved to the Effect services `$lib/services/{shot-sync,upload-queue}` and the
+// pure `$lib/services/queue-store`. Call sites run them on the app runtime
+// (Option 3) — there is no Promise-shaped facade here. The wasm-side
+// de-dup/signature helpers (`reconcileShots`, `signatureFor*`,
+// `storedShotFromWire`, `WireShot`) live in `./shot-sync-signatures` and are
+// imported there directly by the services.
 
 // ── Unified sync config ────────────────────────────────────────────
 export {

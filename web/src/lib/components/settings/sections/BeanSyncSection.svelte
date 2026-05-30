@@ -11,6 +11,7 @@
 	 * The name predates the unification — kept for git-blame continuity.
 	 */
 	import { onMount } from 'svelte';
+	import { Effect } from 'effect';
 	import {
 		getBeanStore,
 		readSyncSettings,
@@ -22,15 +23,16 @@
 		appendSyncLog,
 		directionPulls,
 		directionPushes,
-		drainQueue,
-		isConnected as isVisualizerConnected,
 		onSyncConfigChange,
-		pullAndReconcileShots,
 		readSyncConfig,
 		updateSyncConfig,
-		uploadUnsyncedShots,
 		type SyncDirection
 	} from '$lib/visualizer';
+	import { getCremaAppContext } from '$lib/shell/app-context';
+	import { runtimePromise } from '$lib/effect/bridge';
+	import { TokenVault } from '$lib/services/token-vault';
+	import { ShotSync, type PullOptions } from '$lib/services/shot-sync';
+	import { UploadQueue } from '$lib/services/upload-queue';
 	import StGroup from '../StGroup.svelte';
 	import StRow from '../StRow.svelte';
 	import StSegment from '../StSegment.svelte';
@@ -38,6 +40,36 @@
 
 	const library = getBeanStore();
 	const history = getHistoryStore();
+	const appCtx = getCremaAppContext();
+
+	// ── Service seams (Option 3, T-16) ────────────────────────────────────
+	// Shot pull / push / queue drain run on the app runtime. The card only
+	// renders when connected (which requires the runtime), so a missing runtime
+	// is the defensive unsupported-browser case.
+	async function svcPullAndReconcile(
+		sinceMs: number,
+		opts: PullOptions
+	): Promise<{ pulled: number; truncated: boolean }> {
+		const runtime = appCtx().runtime;
+		if (!runtime) throw new Error('Visualizer runtime unavailable');
+		return runtimePromise(
+			runtime,
+			ShotSync.pipe(Effect.flatMap((s) => s.pullAndReconcileShots(history, sinceMs, opts)))
+		);
+	}
+	async function svcUploadUnsynced(): Promise<void> {
+		const runtime = appCtx().runtime;
+		if (!runtime) return;
+		await runtimePromise(
+			runtime,
+			ShotSync.pipe(Effect.flatMap((s) => s.uploadUnsyncedShots(history)))
+		);
+	}
+	async function svcDrain(): Promise<void> {
+		const runtime = appCtx().runtime;
+		if (!runtime) return;
+		await runtimePromise(runtime, UploadQueue.pipe(Effect.flatMap((q) => q.drain)));
+	}
 
 	let config = $state(readSyncConfig());
 	let beanLastSync = $state(readSyncSettings().lastSyncAt);
@@ -49,6 +81,7 @@
 	let pullProgress = $state<{ fetched: number; page: number } | null>(null);
 
 	onMount(() => {
+		void refreshConnected();
 		// Refresh in case another tab edited it while this one was open.
 		config = readSyncConfig();
 		// Pick up writes from elsewhere in the app — most notably the
@@ -167,8 +200,7 @@
 				// idempotent), missing one is data loss.
 				const pullStartedAt = Date.now() - 60_000;
 				try {
-					const { pulled, truncated } = await pullAndReconcileShots(
-						history,
+					const { pulled, truncated } = await svcPullAndReconcile(
 						config.shotPullCursor ?? 0,
 						{
 							itemsPerPage: 50,
@@ -212,7 +244,7 @@
 			// 2b. Shot push — upload any local shots that aren't on Visualizer.
 			if (directionPushes(config.direction.shots)) {
 				try {
-					await uploadUnsyncedShots(history);
+					await svcUploadUnsynced();
 					config = updateSyncConfig({
 						lastSyncAt: { ...config.lastSyncAt, shots: Date.now() }
 					});
@@ -222,7 +254,7 @@
 			}
 			// 3. Drain the retry queue so anything backlogged flushes.
 			try {
-				await drainQueue();
+				await svcDrain();
 			} catch (err) {
 				logError('push', 'shot', err);
 			}
@@ -251,7 +283,7 @@
 		resyncing = true;
 		const pullStartedAt = Date.now() - 60_000;
 		try {
-			const { pulled, truncated } = await pullAndReconcileShots(history, 0, {
+			const { pulled, truncated } = await svcPullAndReconcile(0, {
 				itemsPerPage: 50,
 				onProgress: (p) => (pullProgress = { fetched: p.fetched, page: p.page })
 			});
@@ -317,7 +349,16 @@
 		return 'Shot';
 	}
 
-	const connected = $derived(isVisualizerConnected());
+	// Connection gate (Option 3): `TokenVault.getTokens !== null`, read through
+	// the runtime into a `$state`. Refreshed on mount (the card is already
+	// gated by SharingSection's connected check, so this is rarely false here).
+	let connected = $state(false);
+	async function refreshConnected(): Promise<void> {
+		const runtime = appCtx().runtime;
+		connected = runtime
+			? (await runtimePromise(runtime, TokenVault.pipe(Effect.flatMap((v) => v.getTokens)))) !== null
+			: false;
+	}
 	const unsyncedShotCount = $derived(history.all.filter((s) => !s.visualizerId).length);
 </script>
 

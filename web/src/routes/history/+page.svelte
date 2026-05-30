@@ -36,17 +36,14 @@
 	import SortPill from '$lib/components/shared/SortPill.svelte';
 	import SplitButton from '$lib/components/shared/SplitButton.svelte';
 	import { getBeanStore } from '$lib/bean';
-	import {
-		appendSyncLog,
-		directionPushes,
-		drainQueue,
-		enqueue as enqueueSyncOp,
-		getQueue,
-		isConnected as isVisualizerConnected,
-		readSyncConfig,
-		uploadShot
-	} from '$lib/visualizer';
-	import { VisualizerError } from '$lib/bean';
+	import { onMount } from 'svelte';
+	import { Effect } from 'effect';
+	import { appendSyncLog, directionPushes, readSyncConfig } from '$lib/visualizer';
+	import { runtimePromise } from '$lib/effect/bridge';
+	import { TokenVault } from '$lib/services/token-vault';
+	import { ShotSync } from '$lib/services/shot-sync';
+	import { UploadQueue } from '$lib/services/upload-queue';
+	import { readQueue } from '$lib/services/queue-store';
 
 	const store = getHistoryStore();
 	const appCtx = getCremaAppContext();
@@ -234,14 +231,32 @@
 	// ── Visualizer upload state ──────────────────────────────────────────
 	let syncConfig = $state(readSyncConfig());
 	let uploadingAll = $state(false);
+	/**
+	 * Connection gate (Option 3, T-16). `TokenVault.getTokens !== null`, read
+	 * through the runtime into a `$state` — the old `isConnected()` was likewise
+	 * a non-reactive read evaluated at mount + on each sync-state refresh.
+	 */
+	let connected = $state(false);
 	/** Reactive count of queued shot ops — drives the pip + Upload-all label. */
 	let pendingShotIds = $state<Set<string>>(
-		new Set(getQueue().filter((q) => q.entity === 'shot').map((q) => q.id))
+		new Set(readQueue().entries.filter((q) => q.entity === 'shot').map((q) => q.id))
 	);
+	async function refreshConnected(): Promise<void> {
+		const runtime = appCtx().runtime;
+		connected = runtime
+			? (await runtimePromise(runtime, TokenVault.pipe(Effect.flatMap((v) => v.getTokens)))) !== null
+			: false;
+	}
 	function refreshSyncState(): void {
 		syncConfig = readSyncConfig();
-		pendingShotIds = new Set(getQueue().filter((q) => q.entity === 'shot').map((q) => q.id));
+		pendingShotIds = new Set(
+			readQueue().entries.filter((q) => q.entity === 'shot').map((q) => q.id)
+		);
+		void refreshConnected();
 	}
+	onMount(() => {
+		void refreshConnected();
+	});
 	/** Pip kind for the per-row indicator. */
 	function pipFor(shot: { id: string; visualizerId?: string | null }): 'uploaded' | 'pending' | 'local' {
 		if (shot.visualizerId) return 'uploaded';
@@ -249,54 +264,24 @@
 		return 'local';
 	}
 	/** Are we connected + push-enabled? Gates the "Upload all" button. */
-	const canPushShots = $derived(
-		isVisualizerConnected() && directionPushes(syncConfig.direction.shots)
-	);
+	const canPushShots = $derived(connected && directionPushes(syncConfig.direction.shots));
 	/** Shots that need an upload — no `visualizerId` and not soft-deleted. */
 	const unsyncedShots = $derived(shots.filter((s) => !s.visualizerId));
 
 	async function uploadAll(): Promise<void> {
 		if (uploadingAll || !canPushShots) return;
+		const runtime = appCtx().runtime;
+		if (!runtime) return;
 		uploadingAll = true;
 		try {
-			for (const shot of unsyncedShots) {
-				try {
-					const { visualizerId } = await uploadShot(shot);
-					store.bindVisualizerId(shot.id, visualizerId);
-					appendSyncLog({
-						direction: 'push',
-						entity: 'shot',
-						id: shot.id,
-						name: shot.profileName ?? 'Shot',
-						at: Date.now()
-					});
-				} catch (e) {
-					const recoverable =
-						e instanceof VisualizerError
-							? e.kind === 'network' ||
-								(e.status >= 500 && e.status < 600) ||
-								e.status === 408
-							: true;
-					if (recoverable) {
-						enqueueSyncOp({
-							entity: 'shot',
-							id: shot.id,
-							op: 'create',
-							error: e instanceof Error ? e.message : String(e)
-						});
-					}
-					appendSyncLog({
-						direction: 'skip',
-						entity: 'shot',
-						id: shot.id,
-						name: shot.profileName ?? 'Shot',
-						at: Date.now(),
-						error: e instanceof Error ? e.message : String(e)
-					});
-				}
-			}
-			// Drain whatever fell into the retry queue.
-			await drainQueue();
+			// `ShotSync.uploadUnsyncedShots` reproduces the old per-shot loop:
+			// upload + bind + sync-log each unsynced shot, routing recoverable
+			// failures to the retry queue; then drain whatever it enqueued.
+			await runtimePromise(
+				runtime,
+				ShotSync.pipe(Effect.flatMap((s) => s.uploadUnsyncedShots(store)))
+			);
+			await runtimePromise(runtime, UploadQueue.pipe(Effect.flatMap((q) => q.drain)));
 		} finally {
 			refreshSyncState();
 			uploadingAll = false;
@@ -318,10 +303,18 @@
 		const visualizerId = shot.visualizerId ?? null;
 		const wasSelected = selected?.id === shot.id;
 		store.delete(shot.id);
-		if (opts.remote && visualizerId) {
-			enqueueSyncOp({ entity: 'shot', id: shot.id, op: 'delete', visualizerId });
+		const runtime = appCtx().runtime;
+		if (opts.remote && visualizerId && runtime) {
 			try {
-				await drainQueue();
+				await runtimePromise(
+					runtime,
+					UploadQueue.pipe(
+						Effect.flatMap((q) =>
+							q.enqueue({ entity: 'shot', id: shot.id, op: 'delete', visualizerId })
+						)
+					)
+				);
+				await runtimePromise(runtime, UploadQueue.pipe(Effect.flatMap((q) => q.drain)));
 			} catch (e) {
 				console.error('[history] Visualizer delete failed', e);
 			}

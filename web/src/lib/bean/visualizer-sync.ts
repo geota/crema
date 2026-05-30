@@ -34,13 +34,8 @@
  */
 
 import { readJson, writeJson } from '$lib/utils/storage';
-import {
-	isConnected,
-	NotAuthenticatedError,
-	signatureForBean,
-	signatureForRoaster,
-	withFreshToken
-} from '$lib/visualizer';
+import { isConnected, NotAuthenticatedError, withFreshToken } from '$lib/visualizer';
+import { signatureForBean, signatureForRoaster } from '$lib/visualizer/shot-sync-signatures';
 import { updateSyncConfig } from '$lib/visualizer/sync-config';
 import type { components } from '$lib/visualizer/openapi';
 import {

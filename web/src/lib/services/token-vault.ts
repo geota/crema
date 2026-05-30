@@ -63,7 +63,22 @@ export const TokenVaultLive = Layer.effect(
 		const oauth = yield* OAuth;
 		const ref = yield* SubscriptionRef.make<TokenSet | null>(loadTokens());
 
-		const getTokens = Ref.get(ref);
+		/**
+		 * The persisted token set is the source of truth. During the T-16 phase
+		 * the old `visualizer/token-store.ts` still owns sign-in / sign-out and the
+		 * bean-pull auth (option A), sharing this exact localStorage key — so a
+		 * sign-in routed through it must be visible here immediately, with no stale
+		 * in-memory cache. We therefore read localStorage fresh on every
+		 * `getTokens` (matching token-store's own cache-free reads) and only fall
+		 * back to the `SubscriptionRef` when localStorage is unavailable (node:test,
+		 * where the tests seed state via `storeTokens`). The ref stays the reactive
+		 * mirror that `.changes` exposes (writes go through `storeTokens` /
+		 * `clearTokens`); once token-store is deleted next phase the ref can become
+		 * the sole source again.
+		 */
+		const getTokens: Effect.Effect<TokenSet | null> = Effect.suspend(() =>
+			typeof localStorage !== 'undefined' ? Effect.sync(loadTokens) : Ref.get(ref)
+		);
 
 		const storeTokens = (t: TokenSet) =>
 			Effect.zipRight(

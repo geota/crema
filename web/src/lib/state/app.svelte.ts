@@ -46,7 +46,9 @@ import { getMaintenanceStore } from '$lib/maintenance';
 import { parseCaptureFile, replayEvents, ReplayAbortedError, type ReplayMeta } from '$lib/replay';
 import { guessScaleFromFirstWeightPacket as wasmGuessScaleFromFirstWeightPacket } from '$lib/wasm/de1_wasm';
 import { describeError } from '$lib/utils/error';
-import { armQueueLifecycle } from '$lib/visualizer';
+import { Effect } from 'effect';
+import type { AppRuntime } from '$lib/effect/runtime';
+import { UploadQueue } from '$lib/services/upload-queue';
 import {
 	CremaUiState,
 	DEFAULT_SCALE_STANDBY,
@@ -375,7 +377,16 @@ export class CremaApp {
 		autoTare: boolean;
 	} | null = null;
 
-	constructor(private readonly core: CremaCore) {
+	constructor(
+		private readonly core: CremaCore,
+		/**
+		 * The app-wide Effect runtime (Option 3, T-16). `null` only on
+		 * unsupported browsers where the shell never mounts it; every Visualizer
+		 * side effect this orchestrator owns (`UploadQueue.armLifecycle`, the
+		 * shot-completion upload) routes through it and is a no-op when absent.
+		 */
+		private readonly runtime: AppRuntime | null = null
+	) {
 		this.de1 = new De1Manager(core, {
 			onCoreOutput: (output) => this.applyCoreOutput(output),
 			// A DE1 status line is both the live status and an event-log entry,
@@ -492,9 +503,11 @@ export class CremaApp {
 		// any captures whose StoredShot no longer exists. Fire and forget —
 		// neither is on the critical path of app readiness.
 		void this.bootCaptureStore();
-		// Wire the Visualizer upload-queue lifecycle (drain on online,
-		// every 5 min foreground tick, and once on app start).
-		armQueueLifecycle();
+		// Wire the Visualizer upload-queue lifecycle (drain once on app start +
+		// every 5 min foreground tick). The `online` / `visibilitychange` DOM
+		// listeners are wired at the shell (`+layout.svelte`), which owns the
+		// runtime's lifetime. No-op when there's no runtime (unsupported browser).
+		void this.runtime?.runPromise(Effect.flatMap(UploadQueue, (q) => q.armLifecycle));
 	}
 
 	/**
@@ -672,7 +685,8 @@ export class CremaApp {
 					shotStartedAtMs: this.shotStartedAtMs,
 					lastNotificationAtMs: this.core.lastNotificationAtMs,
 					sliceJsonl: (from, to) => this.core.captureSliceJsonl(from, to),
-					fireWebhook: (eventType, payload) => this.fireWebhook(eventType, payload)
+					fireWebhook: (eventType, payload) => this.fireWebhook(eventType, payload),
+					runtime: this.runtime
 				});
 				// Orchestrator-owned timers / snapshot caches still clear
 				// here — they're our state, not the persistence module's.
@@ -2138,9 +2152,9 @@ export class CremaApp {
  * Load the wasm core and construct the orchestrator. Call once at app start,
  * e.g. in the screen's `onMount`.
  */
-export async function createCremaApp(): Promise<CremaApp> {
+export async function createCremaApp(runtime: AppRuntime | null = null): Promise<CremaApp> {
 	const core = await loadCore();
-	const app = new CremaApp(core);
+	const app = new CremaApp(core, runtime);
 	// The read-side context singletons (BrewContext, MachineReadout,
 	// HistoryContext) construct themselves lazily on first access via
 	// the shared store + `getCremaUiState()` singletons — no bind step
