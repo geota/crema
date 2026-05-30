@@ -40,8 +40,6 @@ export { roasterFaviconUrl } from './roaster-favicon';
 
 export {
 	clearVisualizerPremiumCache,
-	deleteRemoteBean,
-	deleteRemoteRoaster,
 	readSyncSettings,
 	runSync,
 	testConnection,
