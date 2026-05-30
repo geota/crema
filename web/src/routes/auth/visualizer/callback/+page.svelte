@@ -5,10 +5,10 @@
 	 * Visualizer (Doorkeeper) sends the browser here after the user grants
 	 * or denies access. We:
 	 *   1. Parse `code` + `state` from the URL.
-	 *   2. Hand them to `exchangeCodeForToken`, which double-checks `state`
-	 *      against the value `startVisualizerLogin` stashed in
-	 *      `sessionStorage`, then POSTs to `/oauth/token` with the
-	 *      `code_verifier` (PKCE).
+	 *   2. Hand them to the Effect `OAuth.exchangeCode` service, which
+	 *      double-checks `state` against the value stashed in `sessionStorage`,
+	 *      then POSTs to `/oauth/token` with the `code_verifier` (PKCE) via the
+	 *      HttpClient service. Run on a dedicated short-lived runtime.
 	 *   3. Persist the returned token set and bounce to the page the user
 	 *      came from (defaults to `/settings`).
 	 *
@@ -23,14 +23,12 @@
 	 *     surface the message + a retry link.
 	 */
 	import { onMount } from 'svelte';
+	import { Cause, Effect, Exit, Layer, ManagedRuntime } from 'effect';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import {
-		exchangeCodeForToken,
-		getStoredTokens,
-		storeTokens,
-		takeReturnPath
-	} from '$lib/visualizer';
+	import { OAuth, OAuthLive } from '$lib/services/oauth';
+	import { HttpClientLive } from '$lib/services/http-client';
+	import { getStoredTokens, storeTokens, takeReturnPath } from '$lib/visualizer';
 
 	type Status =
 		| { kind: 'working' }
@@ -72,8 +70,17 @@
 			return;
 		}
 
+		// Exchange the code via the Effect OAuth service (OAuth -> HttpClient).
+		// A dedicated short-lived runtime keeps this independent of the app
+		// shell's runtime — OAuth + HttpClient hold no shared state, and this
+		// page runs at redirect time before the shell has finished mounting.
+		const runtime = ManagedRuntime.make(Layer.provide(OAuthLive, HttpClientLive));
 		try {
-			const tokens = await exchangeCodeForToken({ code, state });
+			const exit = await runtime.runPromiseExit(
+				Effect.flatMap(OAuth, (o) => o.exchangeCode(code, state))
+			);
+			if (Exit.isFailure(exit)) throw Cause.squash(exit.cause);
+			const tokens = exit.value;
 			storeTokens(tokens);
 			const returnTo = takeReturnPath('/settings');
 			status = { kind: 'done', returnTo };
@@ -86,6 +93,8 @@
 				kind: 'error',
 				message: e instanceof Error ? e.message : String(e)
 			};
+		} finally {
+			void runtime.dispose();
 		}
 	});
 </script>
