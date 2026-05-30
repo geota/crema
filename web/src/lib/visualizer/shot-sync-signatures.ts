@@ -28,6 +28,7 @@ import {
 	signatureForRoaster as wasmSignatureForRoaster,
 	reconcileShots as wasmReconcileShots
 } from '$lib/wasm/de1_wasm';
+import type { RustTimedSample } from '$lib/core';
 import { peaksOf, type StoredShot } from '$lib/history/model';
 
 // ── Types ─────────────────────────────────────────────────────────────
@@ -200,16 +201,20 @@ export function reconcileShots(
 
 /**
  * Convert a {@link WireShot} into a local {@link StoredShot} for the
- * "ADD" branch of reconcile. Telemetry isn't carried in the pull list
- * response — we materialise a stub StoredShot good enough for the
- * History list; the detail panel surfaces a "Profile / telemetry not
- * local" placeholder.
+ * "ADD" branch of reconcile. `samples` is the telemetry reconstructed
+ * from the shot's Visualizer detail (see `samplesFromVisualizerDetail`
+ * in `shot-sync.ts`); pass it through so the pulled row renders a real
+ * curve + peaks. Omitted (or `[]`) → a metadata-only stub, e.g. a
+ * Beanconqueror row or a shot stored without a curve.
  *
- * Stays in TS because it builds a shell-specific `StoredShot` shape
- * (`series: []`, `peakPressure: 0`, etc) — the Rust core owns the
- * algorithm, the shell owns the persistence record.
+ * Stays in TS because it builds a shell-specific `StoredShot` shape —
+ * the Rust core owns the algorithm, the shell owns the persistence
+ * record.
  */
-export function storedShotFromWire(remote: WireShot): StoredShot {
+export function storedShotFromWire(
+	remote: WireShot,
+	samples?: readonly RustTimedSample[]
+): StoredShot {
 	const id = `shot:remote:${remote.id}`;
 	return {
 		formatVersion: 3,
@@ -222,7 +227,7 @@ export function storedShotFromWire(remote: WireShot): StoredShot {
 			rating: remote.rating ?? null,
 			notes: remote.notes ?? null
 		},
-		record: { duration: remote.duration_ms, samples: [] },
+		record: { duration: remote.duration_ms, samples: samples ? [...samples] : [] },
 		bean: null,
 		// `WireShot` doesn't carry the remote shot's `grinder_model`
 		// today — pulled rows leave the snapshot empty, and the

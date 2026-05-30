@@ -364,6 +364,37 @@ export class HistoryStore {
 	}
 
 	/**
+	 * Backfill telemetry onto a shot that was pulled as a metadata-only
+	 * stub (empty `record.samples`) before telemetry import existed.
+	 * Called by the sync reconciler when a later pull carries the curve
+	 * for an already-local shot, so old stubs gain a graph on the next
+	 * Sync without a manual delete + re-pull.
+	 *
+	 * No-op when the incoming series is empty or the local shot already
+	 * has samples — never clobber a locally-recorded curve with a pulled
+	 * one.
+	 */
+	backfillTelemetry(id: string, samples: readonly RustTimedSample[], durationMs: number): void {
+		if (samples.length === 0) return;
+		const idx = this.shots.findIndex((s) => s.id === id);
+		if (idx < 0) return;
+		const target = this.shots[idx];
+		if (target.record.samples.length > 0) return;
+		this.shots = [
+			...this.shots.slice(0, idx),
+			{
+				...target,
+				record: {
+					duration: durationMs || target.record.duration,
+					samples: [...samples]
+				}
+			},
+			...this.shots.slice(idx + 1)
+		];
+		this.persist();
+	}
+
+	/**
 	 * Adopt a shot the user imported from a legacy de1app `.shot` or
 	 * modern `.shot.json` file. The Rust core does the
 	 * parsing — the shell maps the Rust-shape `StoredShot` onto Crema's
