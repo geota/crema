@@ -41,6 +41,20 @@ export const ShotUploadResultSchema = Schema.Struct({
 });
 export type ShotUploadResult = Schema.Schema.Type<typeof ShotUploadResultSchema>;
 
+// ── `POST /coffee_bags` / `POST /roasters` results ──────────────────────
+
+/** `{ id }` — the remote id `BeanSync.uploadBean` binds onto the local bag. */
+export const BeanUploadResultSchema = Schema.Struct({
+	id: Schema.String
+});
+export type BeanUploadResult = Schema.Schema.Type<typeof BeanUploadResultSchema>;
+
+/** `{ id }` — the remote id `BeanSync.uploadRoaster` binds onto the roaster. */
+export const RoasterUploadResultSchema = Schema.Struct({
+	id: Schema.String
+});
+export type RoasterUploadResult = Schema.Schema.Type<typeof RoasterUploadResultSchema>;
+
 // ── `GET /me` account ───────────────────────────────────────────────────
 
 /** The `/me` response: the four fields the Settings UI projects + reads. */
