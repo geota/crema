@@ -17,6 +17,7 @@
  * non-Svelte modules like `visualizer-sync.ts`.
  */
 
+import { Cause, Effect, Exit } from 'effect';
 import { readJson, writeJson } from '$lib/utils/storage';
 import { refreshAccessToken, type TokenSet } from './oauth';
 
@@ -130,37 +131,83 @@ export async function getFreshAccessToken(): Promise<string> {
  * disagrees with us about freshness — perhaps the token was revoked
  * server-side, or the clock drifted), we force a refresh and retry once.
  * A second 401 clears the tokens and re-throws.
+ *
+ * --- Phase 0 Effect-TS spike (docs/53, T-00) ----------------------------
+ * The internals below are expressed as an `Effect` program purely to
+ * measure the bundle/ergonomics cost of adopting Effect (see §2.1). The
+ * public contract is unchanged: this still returns a `Promise<T>` and,
+ * crucially, still *rejects with the original error instance* — the
+ * `runPromiseExit` + `Cause.squash` boundary flattens Effect's `Cause`
+ * back to the thrown value so callers' `instanceof NotAuthenticatedError`
+ * checks (shot-sync.ts, bean/visualizer-sync.ts) keep working. The
+ * token-acquisition path delegates to the unchanged `getFreshAccessToken`
+ * so behavior is identical to the prior imperative version.
  */
 export async function withFreshToken<T>(
 	fn: (accessToken: string) => Promise<T>
 ): Promise<T> {
-	const token = await getFreshAccessToken();
-	try {
-		return await fn(token);
-	} catch (e) {
-		if (!is401(e)) throw e;
-		// Force a refresh by zeroing the expiry on the in-memory copy and
-		// re-asking. We bypass the buffer-only check by deleting + re-fetching.
+	const program = Effect.gen(function* () {
+		const token = yield* Effect.tryPromise({
+			try: () => getFreshAccessToken(),
+			// Preserve the original error instance (NotAuthenticatedError, …).
+			catch: (e) => e
+		});
+		return yield* Effect.tryPromise({ try: () => fn(token), catch: (e) => e }).pipe(
+			Effect.catchAll((e) =>
+				is401(e) ? retryAfterForcedRefresh(fn) : Effect.fail(e)
+			)
+		);
+	});
+	return runPreservingErrors(program);
+}
+
+/**
+ * The 401 recovery path: force a refresh and retry `fn` exactly once.
+ * Mirrors the prior imperative branch (clear-on-no-refresh-token,
+ * clear-on-refresh-failure, replay `fn` with the new token).
+ */
+function retryAfterForcedRefresh<T>(
+	fn: (accessToken: string) => Promise<T>
+): Effect.Effect<T, unknown> {
+	return Effect.gen(function* () {
 		const set = getStoredTokens();
 		if (!set?.refreshToken) {
 			clearTokens();
-			throw new NotAuthenticatedError(
-				'Visualizer rejected the access token and there is no refresh token. Please sign in again.'
+			return yield* Effect.fail(
+				new NotAuthenticatedError(
+					'Visualizer rejected the access token and there is no refresh token. Please sign in again.'
+				)
 			);
 		}
-		const refreshed = await refreshAccessToken(set.refreshToken).catch((err) => {
-			clearTokens();
-			throw new NotAuthenticatedError(
-				`Failed to refresh Visualizer access token: ${err instanceof Error ? err.message : String(err)}`
-			);
+		const refreshToken = set.refreshToken;
+		const refreshed = yield* Effect.tryPromise({
+			try: () => refreshAccessToken(refreshToken),
+			catch: (err) => {
+				clearTokens();
+				return new NotAuthenticatedError(
+					`Failed to refresh Visualizer access token: ${err instanceof Error ? err.message : String(err)}`
+				);
+			}
 		});
 		const merged: TokenSet = {
 			...refreshed,
-			refreshToken: refreshed.refreshToken ?? set.refreshToken
+			refreshToken: refreshed.refreshToken ?? refreshToken
 		};
 		storeTokens(merged);
-		return fn(merged.accessToken);
-	}
+		return yield* Effect.tryPromise({ try: () => fn(merged.accessToken), catch: (e) => e });
+	});
+}
+
+/**
+ * Run an Effect to a `Promise`, but reject with the *original* error value
+ * rather than Effect's `FiberFailure` wrapper. `Cause.squash` extracts the
+ * underlying failure (or defect) instance, so `instanceof` checks at call
+ * sites behave exactly as they did before the Effect refactor.
+ */
+async function runPreservingErrors<T>(program: Effect.Effect<T, unknown>): Promise<T> {
+	const exit = await Effect.runPromiseExit(program);
+	if (Exit.isSuccess(exit)) return exit.value;
+	throw Cause.squash(exit.cause);
 }
 
 /**
