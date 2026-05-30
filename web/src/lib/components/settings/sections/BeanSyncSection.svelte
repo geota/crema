@@ -160,10 +160,15 @@
 			//     `next_cursor` and reconciles each page against the local
 			//     history store. Progress drives a status line below.
 			if (directionPulls(config.direction.shots)) {
+				// Capture the cursor BEFORE fetching so shots updated mid-pull
+				// aren't skipped next time. Minus a 60s slop for client/server
+				// clock skew — re-pulling a row is a no-op (reconcile is
+				// idempotent), missing one is data loss.
+				const pullStartedAt = Date.now() - 60_000;
 				try {
 					const { pulled, truncated } = await pullAndReconcileShots(
 						history,
-						config.lastSyncAt.shots ?? 0,
+						config.shotPullCursor ?? 0,
 						{
 							itemsPerPage: 50,
 							onProgress: (p) =>
@@ -171,6 +176,8 @@
 						}
 					);
 					if (truncated) {
+						// Hit the page cap — older shots remain unpulled, so DON'T
+						// advance the cursor or the next run would skip them.
 						appendSyncLog({
 							direction: 'skip',
 							entity: 'shot',
@@ -179,17 +186,21 @@
 							at: Date.now(),
 							error: 'Pull truncated at safety cap — re-run Sync to continue.'
 						});
-					} else if (pulled === 0) {
-						// Reconciled adds/binds log themselves; a zero-row pull
-						// otherwise leaves no trace, which reads as "nothing
-						// happened". Log it so every Sync run has a visible result.
-						appendSyncLog({
-							direction: 'pull',
-							entity: 'shot',
-							id: '',
-							name: 'No new shots from Visualizer',
-							at: Date.now()
-						});
+					} else {
+						// Caught up to the end — advance the cursor (added rows log
+						// themselves via reconciliation).
+						config = updateSyncConfig({ shotPullCursor: pullStartedAt });
+						if (pulled === 0) {
+							// A zero-row pull otherwise leaves no trace, which reads
+							// as "nothing happened" — log it so every run has a result.
+							appendSyncLog({
+								direction: 'pull',
+								entity: 'shot',
+								id: '',
+								name: 'No new shots from Visualizer',
+								at: Date.now()
+							});
+						}
 					}
 				} catch (err) {
 					logError('pull', 'shot', err);
