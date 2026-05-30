@@ -10,11 +10,8 @@
  * tier — do not add a `premium` field here.
  */
 
-import type { components } from './openapi';
+import { decodeResponse, VisualizerAccountSchema } from '$lib/effect/schema/visualizer';
 import { withFreshToken } from './token-store';
-
-/** Spec-typed wire response — regenerate via `pnpm openapi`. */
-type MeResponse = components['schemas']['MeResponse'];
 
 /** Crema-side projection of the `/me` response (camel-cased). */
 export interface VisualizerAccount {
@@ -44,7 +41,14 @@ export async function fetchAccount(): Promise<VisualizerAccount> {
 				status: res.status
 			});
 		}
-		const body = (await res.json()) as MeResponse;
+		// Validate the body instead of trusting an `as` cast: a malformed /me
+		// is a real error (surface it), not a silent {id: undefined, …}.
+		const body = decodeResponse(VisualizerAccountSchema, await res.json(), 'GET /me');
+		if (!body) {
+			throw Object.assign(new Error('Visualizer /me returned an unexpected shape.'), {
+				status: res.status
+			});
+		}
 		return {
 			id: body.id,
 			name: body.name,

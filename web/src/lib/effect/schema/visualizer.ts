@@ -41,6 +41,17 @@ export const ShotUploadResultSchema = Schema.Struct({
 });
 export type ShotUploadResult = Schema.Schema.Type<typeof ShotUploadResultSchema>;
 
+// ── `GET /me` account ───────────────────────────────────────────────────
+
+/** The `/me` response: the four fields the Settings UI projects + reads. */
+export const VisualizerAccountSchema = Schema.Struct({
+	id: Schema.String,
+	name: Schema.String,
+	public: Schema.Boolean,
+	avatar_url: Schema.String
+});
+export type VisualizerAccountWire = Schema.Schema.Type<typeof VisualizerAccountSchema>;
+
 // ── `GET /shots` page ───────────────────────────────────────────────────
 
 /** A shot summary row: the `{ id, clock, updated_at }` triple. */
