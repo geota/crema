@@ -44,6 +44,14 @@ export interface VisualizerSyncConfig {
 		roasters: number | null;
 		shots: number | null;
 	};
+	/**
+	 * Incremental pull cursor for shots (unix ms); `null` pulls everything.
+	 * Advanced ONLY by a successful pull — never by a push. A single cursor
+	 * shared with the push path silently starved the pull: pushing (incl. the
+	 * default `backup` direction) jumped the cursor to "now", so the next pull
+	 * skipped every pre-existing remote shot and reported "No new shots".
+	 */
+	shotPullCursor: number | null;
 	/** Cached premium-status flag. `null` until probed. */
 	premium: boolean | null;
 	/** Recent sync log — capped at 20 entries, newest first. */
@@ -60,6 +68,7 @@ export const DEFAULT_SYNC_CONFIG: VisualizerSyncConfig = {
 		shots: 'backup'
 	},
 	lastSyncAt: { beans: null, roasters: null, shots: null },
+	shotPullCursor: null,
 	premium: null,
 	log: []
 };
