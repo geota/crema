@@ -110,6 +110,18 @@
 	async function syncNow(): Promise<void> {
 		if (syncing) return;
 		syncing = true;
+		// Surface any step failure in the activity log instead of letting it
+		// bubble out as a silent unhandled rejection — a failed pull/push used
+		// to do nothing AND log nothing, leaving the user with no signal.
+		const logError = (direction: 'push' | 'pull', entity: 'shot' | 'bean', err: unknown): void =>
+			appendSyncLog({
+				direction,
+				entity,
+				id: '',
+				name: 'sync',
+				at: Date.now(),
+				error: err instanceof Error ? err.message : String(err)
+			});
 		try {
 			// 1. Beans + roasters share the existing runSync(library) call.
 			//    We respect the direction selector by skipping the call when
@@ -117,27 +129,31 @@
 			const beansOn = config.direction.beans !== 'off';
 			const roastersOn = config.direction.roasters !== 'off';
 			if (beansOn || roastersOn) {
-				lastResult = await runBeanSync(library);
-				beanLastSync = readSyncSettings().lastSyncAt;
-				config = updateSyncConfig({
-					lastSyncAt: {
-						...config.lastSyncAt,
-						beans: beansOn ? Date.now() : config.lastSyncAt.beans,
-						roasters: roastersOn ? Date.now() : config.lastSyncAt.roasters
-					},
-					premium: lastResult.premiumLocked ? false : (config.premium ?? true)
-				});
-				// Mirror the bean log into the unified log (one tag per entry
-				// so the user can filter mentally).
-				for (const entry of lastResult.log.slice(0, 10).reverse()) {
-					appendSyncLog({
-						direction: entry.direction,
-						entity: entry.kind,
-						id: entry.id,
-						name: entry.name,
-						at: entry.at,
-						error: entry.error
+				try {
+					lastResult = await runBeanSync(library);
+					beanLastSync = readSyncSettings().lastSyncAt;
+					config = updateSyncConfig({
+						lastSyncAt: {
+							...config.lastSyncAt,
+							beans: beansOn ? Date.now() : config.lastSyncAt.beans,
+							roasters: roastersOn ? Date.now() : config.lastSyncAt.roasters
+						},
+						premium: lastResult.premiumLocked ? false : (config.premium ?? true)
 					});
+					// Mirror the bean log into the unified log (one tag per entry
+					// so the user can filter mentally).
+					for (const entry of lastResult.log.slice(0, 10).reverse()) {
+						appendSyncLog({
+							direction: entry.direction,
+							entity: entry.kind,
+							id: entry.id,
+							name: entry.name,
+							at: entry.at,
+							error: entry.error
+						});
+					}
+				} catch (err) {
+					logError('pull', 'bean', err);
 				}
 			}
 			// 2a. Shot pull — paginated. The visualizer module walks
@@ -145,7 +161,7 @@
 			//     history store. Progress drives a status line below.
 			if (directionPulls(config.direction.shots)) {
 				try {
-					const { truncated } = await pullAndReconcileShots(
+					const { pulled, truncated } = await pullAndReconcileShots(
 						history,
 						config.lastSyncAt.shots ?? 0,
 						{
@@ -163,20 +179,41 @@
 							at: Date.now(),
 							error: 'Pull truncated at safety cap — re-run Sync to continue.'
 						});
+					} else if (pulled === 0) {
+						// Reconciled adds/binds log themselves; a zero-row pull
+						// otherwise leaves no trace, which reads as "nothing
+						// happened". Log it so every Sync run has a visible result.
+						appendSyncLog({
+							direction: 'pull',
+							entity: 'shot',
+							id: '',
+							name: 'No new shots from Visualizer',
+							at: Date.now()
+						});
 					}
+				} catch (err) {
+					logError('pull', 'shot', err);
 				} finally {
 					pullProgress = null;
 				}
 			}
 			// 2b. Shot push — upload any local shots that aren't on Visualizer.
 			if (directionPushes(config.direction.shots)) {
-				await uploadUnsyncedShots(history);
-				config = updateSyncConfig({
-					lastSyncAt: { ...config.lastSyncAt, shots: Date.now() }
-				});
+				try {
+					await uploadUnsyncedShots(history);
+					config = updateSyncConfig({
+						lastSyncAt: { ...config.lastSyncAt, shots: Date.now() }
+					});
+				} catch (err) {
+					logError('push', 'shot', err);
+				}
 			}
 			// 3. Drain the retry queue so anything backlogged flushes.
-			await drainQueue();
+			try {
+				await drainQueue();
+			} catch (err) {
+				logError('push', 'shot', err);
+			}
 			config = readSyncConfig();
 		} finally {
 			syncing = false;
