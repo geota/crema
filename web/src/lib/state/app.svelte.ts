@@ -742,13 +742,22 @@ export class CremaApp {
 	 * matching `webhookEvents.<eventType>` toggle).
 	 *
 	 * Fire-and-forget — the caller does not await, the response is
-	 * discarded, and any error (network, CORS, abort) lands as a log
-	 * line in the BLE debug panel instead of surfacing to the user. No
-	 * retries; if the user's endpoint is down, that's their problem.
+	 * discarded, and any error (network, abort) lands as a log line in
+	 * the BLE debug panel instead of surfacing to the user. No retries;
+	 * if the user's endpoint is down, that's their problem.
+	 *
+	 * Sent with `mode: 'no-cors'` so it reaches endpoints that don't
+	 * return CORS headers (most webhook receivers). Two consequences,
+	 * both intentional: (1) no-cors only permits a "safelisted"
+	 * Content-Type, so we send `text/plain` — the body is still a JSON
+	 * string the receiver can `JSON.parse`, just not labelled
+	 * `application/json`; endpoints that *require* that header AND lack
+	 * CORS (e.g. Discord) are unreachable from any browser regardless.
+	 * (2) The response is opaque, so status is unreadable — fine here
+	 * since we discard it.
 	 *
 	 * The "Send test" button in Advanced → Webhooks uses
-	 * {@link sendTestWebhook} instead, which awaits and returns the
-	 * outcome so the UI can show success / failure.
+	 * {@link sendTestWebhook} instead, which surfaces the outcome.
 	 */
 	private fireWebhook(eventType: string, payload: object): void {
 		const prefs = getSettingsStore().current;
@@ -760,7 +769,8 @@ export class CremaApp {
 		const body = JSON.stringify({ type: eventType, payload, timestamp: Date.now() });
 		void fetch(url, {
 			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
+			mode: 'no-cors',
+			headers: { 'Content-Type': 'text/plain' },
 			body,
 			signal: AbortSignal.timeout(5000)
 		}).catch((err) => {
@@ -770,11 +780,17 @@ export class CremaApp {
 	}
 
 	/**
-	 * Send a one-shot test webhook to the configured URL — awaits the
-	 * response and returns a human-readable outcome string the
-	 * `AdvancedSection` test button surfaces inline. Unlike
-	 * {@link fireWebhook}, this path surfaces errors directly so the
-	 * user can verify their endpoint works.
+	 * Send a one-shot test webhook to the configured URL and return a
+	 * human-readable outcome the `AdvancedSection` test button surfaces
+	 * inline.
+	 *
+	 * Tries a normal (CORS) request first so it can report a real HTTP
+	 * status when the endpoint supports CORS. If that's blocked — the
+	 * common case, since most receivers send no CORS headers — it retries
+	 * with `mode: 'no-cors'`, exactly how {@link fireWebhook} delivers
+	 * live events. The opaque retry can't be inspected, so success there
+	 * means "dispatched without a network/CSP error"; delivery itself
+	 * can't be confirmed from the browser, which the message says plainly.
 	 */
 	async sendTestWebhook(): Promise<{ ok: boolean; message: string }> {
 		const prefs = getSettingsStore().current;
@@ -794,13 +810,28 @@ export class CremaApp {
 				body,
 				signal: AbortSignal.timeout(5000)
 			});
-			if (res.ok) {
-				return { ok: true, message: `Sent (HTTP ${res.status})` };
+			return res.ok
+				? { ok: true, message: `Sent (HTTP ${res.status})` }
+				: { ok: false, message: `HTTP ${res.status}` };
+		} catch {
+			// The readable (CORS) attempt was blocked — preflight failed, so
+			// the POST never left. Retry opaque, mirroring fireWebhook.
+			try {
+				await fetch(url, {
+					method: 'POST',
+					mode: 'no-cors',
+					headers: { 'Content-Type': 'text/plain' },
+					body,
+					signal: AbortSignal.timeout(5000)
+				});
+				return {
+					ok: true,
+					message: 'Sent — opaque response; delivery not confirmable (endpoint lacks CORS)'
+				};
+			} catch (err) {
+				const reason = err instanceof Error ? err.message : String(err);
+				return { ok: false, message: reason };
 			}
-			return { ok: false, message: `HTTP ${res.status}` };
-		} catch (err) {
-			const reason = err instanceof Error ? err.message : String(err);
-			return { ok: false, message: reason };
 		}
 	}
 
