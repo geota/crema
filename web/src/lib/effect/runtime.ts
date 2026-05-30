@@ -12,12 +12,13 @@
 
 import { Layer, ManagedRuntime } from 'effect';
 import { HttpClientLive } from '../services/http-client.ts';
+import { OAuthLive } from '../services/oauth.ts';
 
 /**
  * The composed application layer. Services join here as they land
- * (OAuthLive, TokenVaultLive, …).
+ * (TokenVaultLive, ShotSyncLive, …).
  */
-export const AppLayer = Layer.mergeAll(HttpClientLive);
+export const AppLayer = Layer.mergeAll(HttpClientLive, OAuthLive);
 
 /** The services the app runtime provides. `never` while `AppLayer` is empty. */
 export type AppServices = Layer.Layer.Success<typeof AppLayer>;
