@@ -1,2 +1,13 @@
+# Security headers applied by Cloudflare Pages to every response.
+#
+# The resource CSP (script-src + its inline-bootstrap hash, style-src,
+# font-src, connect-src, img-src, base-uri) is emitted as a <meta> CSP by
+# SvelteKit — see web/svelte.config.js (kit.csp, hash mode). It lives there
+# because the inline-script hash is recomputed on every build.
+#
+# `frame-ancestors` cannot be expressed in a <meta> CSP, so the anti-clickjacking
+# policy lives here as a real header (with X-Frame-Options for old browsers).
 /*
-  Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'
+  Content-Security-Policy: frame-ancestors 'none'
+  X-Frame-Options: DENY
+  X-Content-Type-Options: nosniff
