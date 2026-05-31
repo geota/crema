@@ -299,7 +299,18 @@ export class ProfileStore {
 			this.custom = this.custom.filter((p) => p.id !== id);
 			this.persistCustom();
 		}
-		if (this.activeId === id) this.setActive(null);
+		if (this.activeId === id) {
+			// GEN10: defer the full re-point (core push + onActivate upload) until
+			// the wasm-backed library has loaded — calling `setActive(null)` mid-load
+			// can race the boot that seeds `activeId`. Before then just clear the
+			// pointer so a deleted profile can't linger as active.
+			if (this.loaded) {
+				this.setActive(null);
+			} else {
+				this.activeId = null;
+				writeJson(ACTIVE_KEY, null);
+			}
+		}
 	}
 
 	/** Persist the hidden-builtins set to localStorage. */

@@ -52,10 +52,11 @@ import { fromWire } from './telemetry-wire';
  * legitimate). Snapshotting it would leak the link into the snapshot
  * layer for no gain.
  *
- * `tags` is deliberately NOT carried here either — bean tags at completion
- * time are copied straight into {@link StoredShot.tags} so there's one
- * source of truth for shot-level tags. The completion-time copy lives in
- * `app.svelte.ts`'s `ShotCompleted` handler.
+ * `tags` ARE carried here — a frozen snapshot of the bean's tags at
+ * shot-completion time (see the `tags` field below + {@link snapshotFromBean}),
+ * distinct from the mutable {@link StoredShot.tags} on the shot row, which the
+ * user can re-tag freely without rewriting this snapshot. The shot row's own
+ * tag copy is taken in `app.svelte.ts`'s `ShotCompleted` handler.
  */
 export interface ShotBean {
 	/**
@@ -271,7 +272,42 @@ export interface StoredShot {
  * fails — defensive only; the core's parser is infallible for the
  * wire-shape inputs the shell stores.
  */
-const peaksCache = new Map<string, ShotPeaks>();
+/**
+ * Insertion-ordered bounded cache: a `Map` that evicts its least-recently-used
+ * key once it passes `cap`, and re-inserts a key on `get` so hot entries stay
+ * at the tail. Bounds the per-session peaks / flat-sample memoisation so a long
+ * browse of history can't grow these module-level Maps without limit (GEN5 —
+ * `flatCache` could otherwise reach tens of MB and get the mobile tab killed).
+ */
+class BoundedCache<V> {
+	private readonly map = new Map<string, V>();
+	private readonly cap: number;
+	constructor(cap: number) {
+		this.cap = cap;
+	}
+	get(key: string): V | undefined {
+		const v = this.map.get(key);
+		if (v !== undefined) {
+			// Re-insert to mark most-recently-used (Map keeps insertion order).
+			this.map.delete(key);
+			this.map.set(key, v);
+		}
+		return v;
+	}
+	set(key: string, value: V): void {
+		if (this.map.has(key)) {
+			this.map.delete(key);
+		} else if (this.map.size >= this.cap) {
+			const oldest = this.map.keys().next().value;
+			if (oldest !== undefined) this.map.delete(oldest);
+		}
+		this.map.set(key, value);
+	}
+}
+
+// Peaks are tiny (4 numbers) but each is derived via a wasm call, so cache a
+// generous number of shots.
+const peaksCache = new BoundedCache<ShotPeaks>(512);
 export function peaksOf(shot: StoredShot): ShotPeaks {
 	const key = `${shot.id}:${shot.record.samples.length}`;
 	const cached = peaksCache.get(key);
@@ -308,7 +344,9 @@ export function peaksOf(shot: StoredShot): ShotPeaks {
  *
  * Cheap (per-sample object spread); cached per shot id + record-length.
  */
-const flatCache = new Map<string, TelemetrySample[]>();
+// Flat samples are memory-heavy (full per-sample arrays) but cheap to recompute,
+// so cap tighter than peaks — a generous viewport's worth.
+const flatCache = new BoundedCache<TelemetrySample[]>(128);
 export function flatSamplesOf(shot: StoredShot): TelemetrySample[] {
 	const key = `${shot.id}:${shot.record.samples.length}`;
 	const cached = flatCache.get(key);

@@ -211,14 +211,25 @@ async function persistCaptureSlice(
 		console.log('[capture gate] captureSliceJsonl returned empty', { fromMs, toMs, shotId });
 		return;
 	}
-	const entries: CaptureEntry[] = jsonl
-		.split('\n')
-		.filter((line) => line.length > 0)
-		.map((line) => JSON.parse(line) as CaptureEntry);
+	// GEN3: parse per-line so ONE malformed JSONL line can't throw out of the
+	// whole function (it's `void`-ed at the call site, which would silently cost
+	// the shot its entire replay capture) — skip the bad line and keep the rest.
+	const entries: CaptureEntry[] = [];
+	for (const line of jsonl.split('\n')) {
+		if (line.length === 0) continue;
+		try {
+			entries.push(JSON.parse(line) as CaptureEntry);
+		} catch (err) {
+			console.warn('[capture gate] skipping malformed capture line', { shotId, err });
+		}
+	}
 	if (shotMeta) entries.push(shotMeta);
 	if (entries.length > 0) {
 		console.log('[capture gate] persisting', { shotId, entryCount: entries.length });
-		void getCaptureStore().put(shotId, entries);
+		// GEN3: surface a rejected `put` instead of dropping it on the floor.
+		void getCaptureStore()
+			.put(shotId, entries)
+			.catch((err) => console.warn('[capture gate] failed to persist capture', { shotId, err }));
 	} else {
 		console.log('[capture gate] parsed entries empty', { shotId });
 	}

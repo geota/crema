@@ -135,9 +135,15 @@
 
 	// ── Patch + commit ────────────────────────────────────────────────
 	function patch(p: Partial<Bean>): void {
-		// Special-case: bumping bag size silently re-seeds remaining.
+		// Bumping bag size re-seeds `remaining` — but ONLY for a brand-new bean
+		// (the draft path) or one that's already empty. On the live path with
+		// burn-down in progress, reseeding would silently discard the
+		// remaining-grams the user has been tracking (GEN2): editing the bag size
+		// of a half-finished bag must not reset it to full.
 		if (Object.prototype.hasOwnProperty.call(p, 'bagSize') && p.bagSize != null) {
-			(p as Partial<Bean>).remaining = p.bagSize;
+			if (isNew || current.remaining === 0) {
+				(p as Partial<Bean>).remaining = p.bagSize;
+			}
 		}
 		if (live) {
 			library.updateBean(bean.id, p);
