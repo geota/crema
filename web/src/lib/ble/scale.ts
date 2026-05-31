@@ -23,8 +23,11 @@
  * the core-reported UUIDs drive the actual subscriptions.
  */
 
+import { Cause, Exit } from 'effect';
 import type { CoreOutput, CremaCore, NotificationSource, ScaleUuids } from '$lib/core';
 import { describeError } from '$lib/utils/error';
+import type { AppRuntime } from '$lib/effect/runtime';
+import { scaleConnectProgram } from '$lib/services/scale-orchestrator';
 import type { BleConnectionState } from './connection-state';
 import { BleDevice, requestDevice, type ConnState } from './transport';
 
@@ -82,7 +85,10 @@ export class ScaleManager {
 
 	constructor(
 		private readonly core: CremaCore,
-		private readonly callbacks: ScaleManagerCallbacks
+		private readonly callbacks: ScaleManagerCallbacks,
+		/** The app runtime the connect program runs on (T-19); `null` only on
+		 *  unsupported browsers — `connect()` then fails gracefully. */
+		private readonly runtime: AppRuntime | null = null
 	) {}
 
 	/** The current GATT link state, for the scale card. */
@@ -105,104 +111,92 @@ export class ScaleManager {
 		// loop may still be armed.
 		this.device?.disconnect();
 		this.device = null;
+		this.uuids = null;
 		this.callbacks.onStatus('Requesting a scale…');
+
+		// ── Phase 1: gesture-bound discovery + lifecycle wiring (manager) ──
+		let device: BleDevice;
 		try {
-			const device = await requestDevice({
+			device = await requestDevice({
 				filters: [{ namePrefix: BOOKOO_NAME_PREFIX }],
 				optionalServices: [BOOKOO_SERVICE_UUID]
 			});
-			this.device = device;
-			// A terminal disconnect — a user-initiated `disconnect()` or the
-			// auto-reconnect loop giving up after exhausting its attempts.
-			device.onDisconnected(() => {
-				this.callbacks.onState('disconnected');
-				this.callbacks.onStatus('Scale disconnected');
-			});
-			// The transport's auto-reconnect backoff loop reports each attempt
-			// and the eventual recovery; surface both to the UI. On recovery,
-			// the manager re-fires a settings query so the read-back refreshes.
-			device.onReconnectAttempt((attempt) => {
-				this.callbacks.onState('reconnecting');
-				this.callbacks.onStatus(`Reconnecting to scale… (attempt ${attempt})`);
-			});
-			device.onReconnected(() => {
-				this.callbacks.onState('ready');
-				this.callbacks.onStatus('Reconnected — receiving scale weight');
-				this.callbacks.onReconnected();
-			});
-
-			this.callbacks.onStatus(`Connecting to ${device.name}…`);
-			await device.connectGatt();
-
-			// Identify the scale with the core so it picks the right codec.
-			const advertisedName = device.name;
-			const label = await this.core.connectScale(advertisedName);
-			if (label === undefined) {
-				this.callbacks.onStatus(`Core did not recognise scale '${advertisedName}'`);
-				this.device = null;
-				device.disconnect();
-				this.callbacks.onState('failed');
-				return;
-			}
-			this.callbacks.onStatus(`Core recognised scale: ${label}`);
-
-			// The core now knows the scale's GATT UUIDs — fetch them to learn
-			// which characteristics to subscribe to.
-			const uuids = await this.core.scaleUuids();
-			if (uuids === undefined) {
-				throw new Error('Core reported no scale UUIDs after connect');
-			}
-			this.uuids = uuids;
-
-			// One sink for both characteristics — preserves arrival order.
-			device.setSink((notification) => {
-				const source = this.sourceFor(notification.characteristic);
-				if (source === null) {
-					return;
-				}
-				// The core's `onNotification` captures the raw bytes itself —
-				// see `core/de1-app/src/capture.rs`. No separate tee here.
-				void this.core
-					.onNotification(source, notification.data, notification.atMs)
-					.then(this.callbacks.onCoreOutput)
-					.catch((error: unknown) => {
-						// A rejection here — a wasm panic or a bad-packet JSON
-						// parse error — would otherwise silently kill the
-						// notification pipeline. Surface it instead.
-						this.callbacks.onStatus(
-							`Scale notification processing failed: ${describeError(error)}`
-						);
-					});
-			});
-
-			this.callbacks.onState('subscribing');
-			this.callbacks.onStatus('Subscribing to scale weight…');
-			await device.startNotifications(uuids.service, uuids.weight_notify);
-			// The Bookoo's command characteristic also has the NOTIFY property
-			// (its `ff12` serial / settings responses). Subscribe to it too —
-			// unless it is the same characteristic as weight-notify, in which
-			// case the one subscription already covers it.
-			if (uuids.command_write.toLowerCase() !== uuids.weight_notify.toLowerCase()) {
-				await device.startNotifications(uuids.service, uuids.command_write);
-			}
-
-			this.callbacks.onState('ready');
-			this.callbacks.onStatus('Ready — receiving scale weight');
-
-			// Let the orchestrator read capabilities and render gated UI.
-			this.callbacks.onScaleIdentified(advertisedName);
-
-			// Fire a baseline settings query so the scale's `03 0e` response
-			// lands — capability-gated, empty for a weight-only scale.
-			const query = await this.core.queryScaleSettings();
-			this.callbacks.onCoreOutput(query);
 		} catch (error) {
-			this.device?.disconnect();
+			this.device = null;
+			this.callbacks.onState('failed');
+			this.callbacks.onStatus(`Scale connection failed: ${describeError(error)}`);
+			return;
+		}
+		this.device = device;
+		// A terminal disconnect — user-initiated or auto-reconnect giving up.
+		device.onDisconnected(() => {
+			this.callbacks.onState('disconnected');
+			this.callbacks.onStatus('Scale disconnected');
+		});
+		// On recovery the manager re-fires a settings query (via onReconnected).
+		device.onReconnectAttempt((attempt) => {
+			this.callbacks.onState('reconnecting');
+			this.callbacks.onStatus(`Reconnecting to scale… (attempt ${attempt})`);
+		});
+		device.onReconnected(() => {
+			this.callbacks.onState('ready');
+			this.callbacks.onStatus('Reconnected — receiving scale weight');
+			this.callbacks.onReconnected();
+		});
+
+		if (this.runtime === null) {
+			device.disconnect();
+			this.device = null;
+			this.callbacks.onState('failed');
+			this.callbacks.onStatus('Scale connection failed: app runtime unavailable');
+			return;
+		}
+
+		// ── Phase 2: connect → identify → UUIDs → subscribe → query (Effect) ──
+		this.callbacks.onState('subscribing');
+		const exit = await this.runtime.runPromiseExit(
+			scaleConnectProgram({
+				device,
+				core: this.core,
+				advertisedName: device.name,
+				onStatus: (line) => this.callbacks.onStatus(line),
+				onCoreOutput: (output) => this.callbacks.onCoreOutput(output),
+				onScaleIdentified: (name) => this.callbacks.onScaleIdentified(name),
+				// Store the UUIDs + install the sink HERE — before the program
+				// subscribes — so the sink's UUID→source mapping is ready.
+				onUuidsResolved: (uuids) => {
+					this.uuids = uuids;
+					device.setSink((notification) => {
+						const source = this.sourceFor(notification.characteristic);
+						if (source === null) {
+							return;
+						}
+						// The core's `onNotification` captures the raw bytes itself.
+						void this.core
+							.onNotification(source, notification.data, notification.atMs)
+							.then(this.callbacks.onCoreOutput)
+							.catch((error: unknown) => {
+								this.callbacks.onStatus(
+									`Scale notification processing failed: ${describeError(error)}`
+								);
+							});
+					});
+				}
+			})
+		);
+		if (Exit.isFailure(exit)) {
+			device.disconnect();
 			this.device = null;
 			this.uuids = null;
 			this.callbacks.onState('failed');
-			this.callbacks.onStatus(`Scale connection failed: ${describeError(error)}`);
+			const failure = Cause.failureOption(exit.cause);
+			const step = failure._tag === 'Some' ? failure.value.step : 'connect';
+			const cause = failure._tag === 'Some' ? failure.value.cause : exit.cause;
+			this.callbacks.onStatus(`Scale connection failed at "${step}": ${describeError(cause)}`);
+			return;
 		}
+		this.callbacks.onState('ready');
+		this.callbacks.onStatus('Ready — receiving scale weight');
 	}
 
 	/** Disconnect the scale. */
