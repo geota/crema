@@ -37,6 +37,7 @@ import {
 	VisualizerNotFoundError,
 	VisualizerPremiumGatedError
 } from '../effect/errors.ts';
+import { isRecoverable as wasmIsRecoverable } from '$lib/wasm/de1_wasm';
 
 /** Visualizer API base. */
 export const API_BASE = 'https://visualizer.coffee/api';
@@ -122,6 +123,12 @@ export const visualizerCall = (
  * response. Auth / premium / not-found / decode failures need user action, not
  * time, so they're terminal.
  *
+ * The retry POLICY (which tags / statuses are recoverable) now lives in the
+ * Rust core (`de1_domain::VisualizerCallError::is_recoverable`, CORE5) so every
+ * shell shares one rule; this wrapper marshals the tagged error into the
+ * `(tag, status)` the core reads. (`describeVisualizerError` below stays
+ * shell-side — it's display copy, not policy.)
+ *
  * (`status === 0` is the canonical resolution of a pre-consolidation drift: the
  * old `UploadQueue` counted it recoverable, `ShotSync` did not. A status-0
  * `HttpStatusError` is a transport-blocked response, indistinguishable from a
@@ -130,11 +137,7 @@ export const visualizerCall = (
  * `NetworkError`.)
  */
 export function isRecoverable(e: VisualizerCallError | ResponseDecodeError): boolean {
-	return (
-		e._tag === 'NetworkError' ||
-		(e._tag === 'HttpStatusError' &&
-			(e.status === 0 || e.status === 408 || (e.status >= 500 && e.status < 600)))
-	);
+	return wasmIsRecoverable(e._tag, e._tag === 'HttpStatusError' ? e.status : undefined);
 }
 
 /**

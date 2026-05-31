@@ -575,6 +575,16 @@ pub fn roast_from_profile(title: &str, notes: &str) -> Option<String> {
     de1_domain::roast_from_profile(title, notes).map(str::to_owned)
 }
 
+/// The Visualizer-call retry policy (CORE5): whether an error tagged `tag`
+/// (with `status` for the HTTP case) is worth a time-based retry. The shell
+/// marshals its tagged error into `(tag, status)`. See
+/// `de1_domain::VisualizerCallError::is_recoverable`.
+#[wasm_bindgen(js_name = isRecoverable)]
+#[must_use]
+pub fn is_recoverable(tag: &str, status: Option<u32>) -> bool {
+    de1_domain::is_recoverable(tag, status.and_then(|s| u16::try_from(s).ok()))
+}
+
 /// Human-readable name for a raw `MachineModel` MMR value (e.g. `1` →
 /// `"DE1"`, `4` → `"DE1XL"`). Values past the table are reported as
 /// `"model N"`. Mirrors [`de1_protocol::machine_model_name`].

@@ -13,7 +13,7 @@
  * Run: `cd web && pnpm test:vitest` (or `vitest run upload-queue`).
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Effect, Layer } from 'effect';
 
 // runEntry reaches the history store via `$lib/history`; mock it so no real
@@ -30,6 +30,13 @@ import { ShotSync } from './shot-sync.ts';
 import { BeanSync } from './bean-sync.ts';
 import { HttpStatusError, NetworkError, VisualizerPremiumGatedError } from '../effect/errors.ts';
 import { enqueueEntry, readQueue } from './queue-store.ts';
+import { initTestWasm } from '../wasm/test-init.ts';
+
+// The drain's recoverable-vs-drop decision goes through the wasm-backed
+// `isRecoverable` (CORE5), so init the bundle first.
+beforeAll(async () => {
+	await initTestWasm();
+});
 
 const die = (label: string) => () => Effect.die(`unused: ${label}`);
 
