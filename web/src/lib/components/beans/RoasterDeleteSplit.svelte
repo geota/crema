@@ -16,12 +16,8 @@
 	 * old `deleteRemoteRoaster` / `deleteRemoteBean` they replaced.
 	 */
 	import { onMount } from 'svelte';
-	import { Effect } from 'effect';
 	import { getBeanStore, readSyncSettings } from '$lib/bean';
 	import { getCremaAppContext } from '$lib/shell/app-context';
-	import { runtimePromise } from '$lib/effect/bridge';
-	import { TokenVault } from '$lib/services/token-vault';
-	import { BeanSync } from '$lib/services/bean-sync';
 	import SplitButton from '$lib/components/shared/SplitButton.svelte';
 
 	let {
@@ -47,11 +43,7 @@
 	let connected = $state(false);
 	onMount(() => {
 		void (async () => {
-			const runtime = appCtx().runtime;
-			connected = runtime
-				? (await runtimePromise(runtime, TokenVault.pipe(Effect.flatMap((v) => v.getTokens)))) !==
-					null
-				: false;
+			connected = (await appCtx().services?.tokens.isConnected()) ?? false;
 		})();
 	});
 
@@ -75,18 +67,16 @@
 	 */
 	async function fireRemoteDeletes(roasterVizId: string | null, beanVizIds: string[]): Promise<void> {
 		if (readSyncSettings().premium === false) return;
-		const runtime = appCtx().runtime;
-		if (!runtime) return;
-		const run = (eff: Effect.Effect<void, unknown, BeanSync>): Promise<void> =>
-			runtimePromise(runtime, eff).catch((e) =>
-				console.warn('Visualizer delete failed:', e instanceof Error ? e.message : String(e))
-			);
+		const api = appCtx().services;
+		if (!api) return;
+		const warn = (e: unknown): void =>
+			console.warn('Visualizer delete failed:', e instanceof Error ? e.message : String(e));
 		// Bags first, then the roaster — matches the old cascade's order
 		// (`deleteRoasterAndBeans` deleted each bag before the roaster).
 		for (const id of beanVizIds) {
-			await run(BeanSync.pipe(Effect.flatMap((b) => b.deleteBean(id))));
+			await api.beans.deleteBean(id).catch(warn);
 		}
-		if (roasterVizId) await run(BeanSync.pipe(Effect.flatMap((b) => b.deleteRoaster(roasterVizId))));
+		if (roasterVizId) await api.beans.deleteRoaster(roasterVizId).catch(warn);
 	}
 
 	function detach(remote: boolean): void {

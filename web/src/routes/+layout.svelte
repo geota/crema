@@ -15,7 +15,6 @@
 	 *     which is inset by the rail's 72px width.
 	 */
 	import { onMount, onDestroy } from 'svelte';
-	import { Effect } from 'effect';
 	import '../app.css';
 	import { createCremaApp, type CremaApp } from '$lib/state';
 	import { CremaSidebar } from '$lib/components';
@@ -23,7 +22,7 @@
 	import { describeError } from '$lib/utils/error';
 	import { setCremaAppContext, type CoreLoadState } from '$lib/shell/app-context';
 	import { createAppRuntime, type AppRuntime } from '$lib/effect/runtime';
-	import { UploadQueue } from '$lib/services/upload-queue';
+	import { createCremaServices, type CremaServices } from '$lib/effect/crema-services';
 
 	let { children } = $props();
 
@@ -33,12 +32,13 @@
 
 	let app = $state<CremaApp | null>(null);
 	let runtime = $state<AppRuntime | null>(null);
+	let services = $state<CremaServices | null>(null);
 	let loadState = $state<CoreLoadState>('loading');
 	let loadError = $state('');
 
 	// Publish the shared-app context — a getter so routes read live values as
 	// the core loads and the BLE state changes.
-	setCremaAppContext(() => ({ app, runtime, loadState, loadError }));
+	setCremaAppContext(() => ({ app, runtime, services, loadState, loadError }));
 
 	// Upload-queue drain triggers, wired to network / visibility regains
 	// (Option 3, T-16). `UploadQueue.armLifecycle` (fired in CremaApp) owns the
@@ -61,11 +61,15 @@
 		// adapter-static's build-time evaluation never touches localStorage /
 		// navigator / wasm (docs/53 D-03).
 		runtime = createAppRuntime();
-		// Best-effort drain on reconnect / tab-refocus. `runFork` is detached
-		// fire-and-forget; `drain` is offline-guarded + single-flight, so a
-		// spurious trigger is cheap.
+		// Bind the Promise-shaped service facade to the runtime here at the shell
+		// and publish it via context (D-04): components call `services.*` instead
+		// of crossing the Effect boundary by hand.
+		services = createCremaServices(runtime);
+		// Best-effort drain on reconnect / tab-refocus. Fire-and-forget (not
+		// awaited); `drain` is offline-guarded + single-flight, so a spurious
+		// trigger is cheap.
 		const drainNow = (): void => {
-			void runtime?.runFork(Effect.flatMap(UploadQueue, (q) => q.drain));
+			void services?.queue.drain();
 		};
 		onOnline = () => drainNow();
 		onVisibility = () => {

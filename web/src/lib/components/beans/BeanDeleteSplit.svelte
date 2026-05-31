@@ -15,12 +15,8 @@
 	 * old `deleteRemoteBean` it replaced.
 	 */
 	import { onMount } from 'svelte';
-	import { Effect } from 'effect';
 	import { getBeanStore, readSyncSettings } from '$lib/bean';
 	import { getCremaAppContext } from '$lib/shell/app-context';
-	import { runtimePromise } from '$lib/effect/bridge';
-	import { TokenVault } from '$lib/services/token-vault';
-	import { BeanSync } from '$lib/services/bean-sync';
 	import SplitButton from '$lib/components/shared/SplitButton.svelte';
 
 	let {
@@ -46,11 +42,7 @@
 	let connected = $state(false);
 	onMount(() => {
 		void (async () => {
-			const runtime = appCtx().runtime;
-			connected = runtime
-				? (await runtimePromise(runtime, TokenVault.pipe(Effect.flatMap((v) => v.getTokens)))) !==
-					null
-				: false;
+			connected = (await appCtx().services?.tokens.isConnected()) ?? false;
 		})();
 	});
 
@@ -66,10 +58,10 @@
 	 */
 	async function deleteRemoteBean(visualizerId: string): Promise<void> {
 		if (readSyncSettings().premium === false) return;
-		const runtime = appCtx().runtime;
-		if (!runtime) return;
+		const api = appCtx().services;
+		if (!api) return;
 		try {
-			await runtimePromise(runtime, BeanSync.pipe(Effect.flatMap((b) => b.deleteBean(visualizerId))));
+			await api.beans.deleteBean(visualizerId);
 		} catch (e) {
 			console.warn('Visualizer delete failed:', e instanceof Error ? e.message : String(e));
 		}

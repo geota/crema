@@ -11,7 +11,6 @@
 	 * The name predates the unification — kept for git-blame continuity.
 	 */
 	import { onMount } from 'svelte';
-	import { Effect } from 'effect';
 	import { getBeanStore, readSyncSettings, type SyncResult as BeanSyncResult } from '$lib/bean';
 	import { getHistoryStore } from '$lib/history';
 	import {
@@ -24,11 +23,7 @@
 		type SyncDirection
 	} from '$lib/visualizer';
 	import { getCremaAppContext } from '$lib/shell/app-context';
-	import { runtimePromise } from '$lib/effect/bridge';
-	import { TokenVault } from '$lib/services/token-vault';
-	import { ShotSync, type PullOptions } from '$lib/services/shot-sync';
-	import { BeanSync } from '$lib/services/bean-sync';
-	import { UploadQueue } from '$lib/services/upload-queue';
+	import type { PullOptions } from '$lib/services/shot-sync';
 	import StGroup from '../StGroup.svelte';
 	import StRow from '../StRow.svelte';
 	import StSegment from '../StSegment.svelte';
@@ -46,30 +41,20 @@
 		sinceMs: number,
 		opts: PullOptions
 	): Promise<{ pulled: number; truncated: boolean }> {
-		const runtime = appCtx().runtime;
-		if (!runtime) throw new Error('Visualizer runtime unavailable');
-		return runtimePromise(
-			runtime,
-			ShotSync.pipe(Effect.flatMap((s) => s.pullAndReconcileShots(history, sinceMs, opts)))
-		);
+		const api = appCtx().services;
+		if (!api) throw new Error('Visualizer runtime unavailable');
+		return api.shots.pullAndReconcile(history, sinceMs, opts);
 	}
 	async function svcUploadUnsynced(): Promise<void> {
-		const runtime = appCtx().runtime;
-		if (!runtime) return;
-		await runtimePromise(
-			runtime,
-			ShotSync.pipe(Effect.flatMap((s) => s.uploadUnsyncedShots(history)))
-		);
+		await appCtx().services?.shots.uploadUnsynced(history);
 	}
 	async function svcDrain(): Promise<void> {
-		const runtime = appCtx().runtime;
-		if (!runtime) return;
-		await runtimePromise(runtime, UploadQueue.pipe(Effect.flatMap((q) => q.drain)));
+		await appCtx().services?.queue.drain();
 	}
 	async function svcRunBeanSync(): Promise<BeanSyncResult> {
-		const runtime = appCtx().runtime;
-		if (!runtime) throw new Error('Visualizer runtime unavailable');
-		return runtimePromise(runtime, BeanSync.pipe(Effect.flatMap((b) => b.runSync(library))));
+		const api = appCtx().services;
+		if (!api) throw new Error('Visualizer runtime unavailable');
+		return api.beans.runSync(library);
 	}
 
 	let config = $state(readSyncConfig());
@@ -355,10 +340,7 @@
 	// gated by SharingSection's connected check, so this is rarely false here).
 	let connected = $state(false);
 	async function refreshConnected(): Promise<void> {
-		const runtime = appCtx().runtime;
-		connected = runtime
-			? (await runtimePromise(runtime, TokenVault.pipe(Effect.flatMap((v) => v.getTokens)))) !== null
-			: false;
+		connected = (await appCtx().services?.tokens.isConnected()) ?? false;
 	}
 	const unsyncedShotCount = $derived(history.all.filter((s) => !s.visualizerId).length);
 </script>
