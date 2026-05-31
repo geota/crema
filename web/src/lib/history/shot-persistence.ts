@@ -24,8 +24,16 @@ import { getProfileStore } from '$lib/profiles';
 import { getSettingsStore } from '$lib/settings';
 import { getActiveShotStore, type ActiveShotData } from '$lib/state/active-shot.svelte';
 import { appendSyncLog, directionPushes, readSyncConfig } from '$lib/visualizer';
-import { runtimePromise } from '$lib/effect/bridge';
 import type { AppRuntime } from '$lib/effect/runtime';
+import type {
+	HttpStatusError,
+	NetworkError,
+	NotAuthenticatedError,
+	ResponseDecodeError,
+	TokenRefreshFailedError,
+	VisualizerNotFoundError,
+	VisualizerPremiumGatedError
+} from '$lib/effect/errors';
 import { ShotSync } from '$lib/services/shot-sync';
 import { UploadQueue } from '$lib/services/upload-queue';
 import { getHistoryStore } from './store.svelte';
@@ -100,8 +108,11 @@ export function commitShotCompletion(
 		if (isLive) {
 			runLiveOnlySideEffects(event, activeShot, ctx.snapshot, ctx.fireWebhook);
 		}
-		// Visualizer push — fire-and-forget; failures land in the retry queue.
-		tryUploadShot(record.id, ctx.runtime);
+		// Visualizer push — fire-and-forget; recoverable failures land in the
+		// retry queue. Runs on the app runtime (T-22) so it sees ShotSync /
+		// UploadQueue and the REAL typed errors (no boundary squash); `runFork`
+		// is detached, same posture as before. No runtime → skip (non-fatal).
+		if (ctx.runtime) ctx.runtime.runFork(pushShotToVisualizer(record.id));
 		// Capture persistence — only when we observed a ShotStarted (replays
 		// always do; manual / phantom completions might not).
 		if (ctx.shotStartedAtMs !== null) {
@@ -256,77 +267,110 @@ function buildAtShotStartMeta(tMs: number): CaptureEntry | null {
 	return { t: Math.round(tMs), dir: 'in', src: 'META', hex: '', meta };
 }
 
+/** Every failure `ShotSync.uploadShot` can surface. */
+type ShotPushError =
+	| NetworkError
+	| HttpStatusError
+	| NotAuthenticatedError
+	| TokenRefreshFailedError
+	| VisualizerPremiumGatedError
+	| VisualizerNotFoundError
+	| ResponseDecodeError;
+
 /**
- * Whether a squashed `ShotSync` failure is worth a time-based retry. Mirrors
- * the old `VisualizerError`-based probe, but reads the `Data.TaggedError`'s
- * `_tag` (the `runtimePromise` boundary rejects with the original tagged-error
- * instance): transport / 5xx / 408 / aborted are recoverable; auth / premium /
- * not-found / decode need user action. An unknown shape is recoverable (worst
- * case the queue's 3-attempt ceiling drops it), matching the old fallback.
+ * Whether a `ShotSync.uploadShot` failure is worth a time-based retry:
+ * transport / 5xx / 408 are recoverable; auth / premium / not-found / decode
+ * need user action. Matches `UploadQueue`'s own classifier — same recoverable
+ * set, now switched on the REAL tagged error rather than the old squashed
+ * boundary shape.
  */
-function isRecoverableUploadError(e: unknown): boolean {
-	if (!e || typeof e !== 'object' || !('_tag' in e)) return true;
-	const tagged = e as { _tag: string; status?: number };
-	if (tagged._tag === 'NetworkError') return true;
-	if (tagged._tag === 'HttpStatusError') {
-		const s = tagged.status ?? 0;
-		return s === 0 || s === 408 || (s >= 500 && s < 600);
+function isRecoverable(e: ShotPushError): boolean {
+	switch (e._tag) {
+		case 'NetworkError':
+			return true;
+		case 'HttpStatusError':
+			return e.status === 0 || e.status === 408 || (e.status >= 500 && e.status < 600);
+		default:
+			return false;
 	}
-	return false;
+}
+
+/** Human-readable one-liner for the sync-log entry / queued retry. */
+function describePushError(e: ShotPushError): string {
+	switch (e._tag) {
+		case 'HttpStatusError':
+			return `HTTP ${e.status}: ${e.body ?? ''}`.trim();
+		case 'NetworkError':
+			return `Network error: ${e.cause instanceof Error ? e.cause.message : String(e.cause)}`;
+		case 'VisualizerPremiumGatedError':
+			return 'Premium subscription required for writes.';
+		case 'VisualizerNotFoundError':
+			return `Visualizer row not found: ${e.visualizerId}`;
+		case 'NotAuthenticatedError':
+			return 'Not signed in to Visualizer.';
+		case 'TokenRefreshFailedError':
+			return 'Visualizer session expired.';
+		case 'ResponseDecodeError':
+			return 'Unexpected Visualizer response.';
+	}
 }
 
 /**
- * Fire-and-forget Visualizer shot upload, gated on the user's shot sync
- * direction + the `visualizerAutoUpload` setting. Recoverable failures
- * route through the persistent retry queue; auth + premium errors
- * bypass the queue (the user has to fix something).
+ * Fire-and-forget Visualizer shot push as an Effect (T-22), gated on the user's
+ * shot sync direction + the `visualizerAutoUpload` setting. `ShotSync.uploadShot`
+ * does the authenticated POST + soft follow-up PATCH; on success it binds the
+ * returned id + logs the push.
  *
- * Routes through the app runtime (Option 3): `ShotSync.uploadShot` does the
- * authenticated POST + soft follow-up PATCH; the `runtimePromise` boundary
- * rejects with the original tagged error so the recoverable probe + sync log
- * keep their pre-swap behaviour. No runtime → skip (non-fatal).
+ * Recoverable failures route through the persistent retry queue; auth / premium
+ * / not-found / decode bypass it (the user has to fix something). Because this
+ * runs *on the app runtime* — not across the Promise boundary — the classifier
+ * + log see the original `Data.TaggedError`s directly via `catchAll`, retiring
+ * the `isRecoverableUploadError` string-`_tag` probe the boundary forced (R-05).
+ *
+ * The error channel is `never`: every failure is caught here (queued and/or
+ * logged), so the orchestrator's `runFork` stays a clean detached fire.
  */
-function tryUploadShot(shotId: string, runtime: AppRuntime | null): void {
-	if (!runtime) return;
-	const config = readSyncConfig();
-	if (!directionPushes(config.direction.shots)) return;
-	if (!getSettingsStore().current.visualizerAutoUpload) return;
-	const shot = getHistoryStore().get(shotId);
-	if (!shot) return;
-	void runtimePromise(runtime, ShotSync.pipe(Effect.flatMap((s) => s.uploadShot(shot))))
-		.then(({ visualizerId }) => {
-			getHistoryStore().bindVisualizerId(shotId, visualizerId);
-			appendSyncLog({
-				direction: 'push',
-				entity: 'shot',
-				id: shotId,
-				name: shot.profileName ?? 'Shot',
-				at: Date.now()
-			});
-		})
-		.catch((e) => {
-			if (isRecoverableUploadError(e)) {
-				void runtimePromise(
-					runtime,
-					UploadQueue.pipe(
-						Effect.flatMap((q) =>
-							q.enqueue({
-								entity: 'shot',
-								id: shotId,
-								op: 'create',
-								error: e instanceof Error ? e.message : String(e)
-							})
-						)
-					)
-				);
-			}
-			appendSyncLog({
-				direction: 'skip',
-				entity: 'shot',
-				id: shotId,
-				name: shot.profileName ?? 'Shot',
-				at: Date.now(),
-				error: e instanceof Error ? e.message : String(e)
-			});
-		});
+export function pushShotToVisualizer(
+	shotId: string
+): Effect.Effect<void, never, ShotSync | UploadQueue> {
+	return Effect.gen(function* () {
+		const config = readSyncConfig();
+		if (!directionPushes(config.direction.shots)) return;
+		if (!getSettingsStore().current.visualizerAutoUpload) return;
+		const shot = getHistoryStore().get(shotId);
+		if (!shot) return;
+
+		const shotSync = yield* ShotSync;
+		const queue = yield* UploadQueue;
+		const name = shot.profileName ?? 'Shot';
+
+		yield* shotSync.uploadShot(shot).pipe(
+			Effect.flatMap(({ visualizerId }) =>
+				Effect.sync(() => {
+					getHistoryStore().bindVisualizerId(shotId, visualizerId);
+					appendSyncLog({ direction: 'push', entity: 'shot', id: shotId, name, at: Date.now() });
+				})
+			),
+			Effect.catchAll((e) =>
+				Effect.gen(function* () {
+					if (isRecoverable(e)) {
+						yield* queue.enqueue({
+							entity: 'shot',
+							id: shotId,
+							op: 'create',
+							error: describePushError(e)
+						});
+					}
+					appendSyncLog({
+						direction: 'skip',
+						entity: 'shot',
+						id: shotId,
+						name,
+						at: Date.now(),
+						error: describePushError(e)
+					});
+				})
+			)
+		);
+	});
 }
