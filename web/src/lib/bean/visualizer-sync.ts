@@ -35,13 +35,14 @@ import { readJson, writeJson } from '$lib/utils/storage';
 import { updateSyncConfig } from '$lib/visualizer/sync-config';
 import type { components } from '$lib/visualizer/openapi';
 import {
-	blankBean,
-	blankRoaster,
-	type Bean,
-	type BeanMix,
-	type BeanOrigin,
-	type Roaster
-} from './model';
+	beanFromWire as wasmBeanFromWire,
+	beanToWire as wasmBeanToWire,
+	roastLevelFromWire as wasmRoastLevelFromWire,
+	roastLevelToWire as wasmRoastLevelToWire,
+	roasterFromWire as wasmRoasterFromWire,
+	roasterToWire as wasmRoasterToWire
+} from '$lib/wasm/de1_wasm';
+import { mintBeanId, mintRoasterId, type Bean, type Roaster } from './model';
 
 // Spec-typed aliases so the wire shape stays in lock-step with the
 // vendored OpenAPI spec (`pnpm openapi` regenerates `openapi.d.ts`).
@@ -145,191 +146,69 @@ type RoasterWire = Omit<RoasterDetail, 'id' | 'name'> & {
 	canonical_roaster_id?: string | null;
 };
 
-// ── Mapping helpers ────────────────────────────────────────────────────
+// ── Mapping helpers (delegated to the Rust core via wasm — CORE1) ────────
+//
+// `beanToWire` / `beanFromWire` / `roasterToWire` / `roasterFromWire` /
+// `roastLevelToWire` / `roastLevelFromWire` (and the former `mixFromMetadata`)
+// moved to `de1_domain::visualizer_wire` so every shell shares one
+// byte-identical mapping. These TS wrappers preserve the historical API
+// surface (the `roasterIdLookup` closure, the `BagWire` / `RoasterWire`
+// shapes) so existing callers + the round-trip vitest don't change — only
+// the bodies marshal JSON across the wasm boundary now. The pinned
+// round-trip lives in `visualizer-sync.vitest.ts` (it now exercises wasm).
 
 /**
- * Crema's 1..10 roast scale ⇄ Visualizer's free-text `roast_level`. Exported so
- * the shot uploader (`$lib/visualizer/shot-sync`) can encode the inline bean
- * snapshot's `roastLevel` with the same banding the bean library uses.
- *
- * **Lossy by design.** Crema has 10 levels; Visualizer recognises 5 bands
- * (Light / Medium-Light / Medium / Medium-Dark / Dark). Encoding collapses two
- * Crema levels into one band, so a push→pull round-trip *must* lose the
- * within-band distinction — there is no richer wire field to preserve it. What
- * we DO guarantee is **idempotence after the first hop**: each label decodes to
- * a level that lands back inside the encode range that produced the label, so a
- * value that has round-tripped once never drifts again. The decode
- * representatives are pinned in-band for exactly that reason (GEN1):
- *   Light→2 (∈[1,2]) · Medium-Light→3 (∈[3,4]) · Medium→5 (∈[5,6]) ·
- *   Medium-Dark→7 (∈[7,8]) · Dark→9 (∈[9,10]).
- * (Pinned by the round-trip in `visualizer-sync.vitest.ts`.)
+ * Crema's 1..10 roast scale → Visualizer's free-text `roast_level`. Lossy by
+ * design (10 levels → 5 bands) but idempotent after the first hop; the band
+ * midpoints are pinned in `de1_domain::visualizer_wire::roast_level_*`.
+ * Exported so the shot uploader can encode the inline bean snapshot's
+ * `roastLevel` with the same banding the bean library uses.
  */
 export function roastLevelToWire(level: number | null): string | null {
-	if (level == null) return null;
-	if (level <= 2) return 'Light';
-	if (level <= 4) return 'Medium-Light';
-	if (level <= 6) return 'Medium';
-	if (level <= 8) return 'Medium-Dark';
-	return 'Dark';
+	return wasmRoastLevelToWire(level ?? undefined) ?? null;
 }
 /** Visualizer's free-text `roast_level` → Crema's 1..10 scale. See {@link roastLevelToWire}. */
 export function roastLevelFromWire(label: string | null | undefined): number | null {
-	if (!label) return null;
-	const norm = label.trim().toLowerCase();
-	if (norm.includes('cinnamon') || norm === 'light') return 2;
-	if (norm.includes('medium-light') || norm.includes('city')) return 3;
-	// Medium-Dark decodes to 7 (∈[7,8]), NOT 6: `roastLevelToWire` maps 6→'Medium',
-	// so a 'medium-dark' label that decoded to 6 would drift to 5 on the next hop.
-	// 7 is the in-band representative that keeps the round-trip idempotent (GEN1).
-	if (norm.includes('medium-dark') || norm.includes('full city')) return 7;
-	if (norm.includes('dark') || norm.includes('french') || norm.includes('italian'))
-		return 9;
-	if (norm.includes('medium')) return 5;
-	return null;
-}
-
-function mixFromMetadata(meta: Record<string, unknown> | null | undefined): BeanMix | null {
-	const mix = meta?.crema_mix;
-	return mix === 'single' || mix === 'blend' ? mix : null;
+	return wasmRoastLevelFromWire(label ?? undefined) ?? null;
 }
 
 /** Encode a Crema bean → Visualizer's POST/PATCH wire body. */
 export function beanToWire(bean: Bean, roasterRemoteId: string | null): BagWire {
-	const crema: Record<string, unknown> = {
-		crema_id: bean.id,
-		crema_mix: bean.mix,
-		crema_decaf: bean.decaf,
-		crema_favourite: bean.favourite,
-		crema_bag_size_g: bean.bagSize,
-		crema_remaining_g: bean.remaining,
-		crema_rating: bean.rating,
-		crema_grinder: bean.grinder,
-		crema_grinder_setting: bean.grinderSetting,
-		crema_beanconqueror_id: bean.beanconquerorId,
-		crema_opened_on: bean.openedOn,
-		crema_updated_at: bean.updatedAt
-	};
-	// Round-trip the Crema metadata blob too (lossless escape valve).
-	const meta = { ...(bean.metadata ?? {}), crema };
-	return {
-		id: bean.visualizerId ?? undefined,
-		name: bean.name || 'Untitled bag',
-		roaster_id: roasterRemoteId,
-		roast_date: bean.roastedOn,
-		frozen_date: bean.frozenOn,
-		defrosted_date: bean.defrostedOn,
-		roast_level: roastLevelToWire(bean.roastLevel),
-		country: bean.origin.country,
-		region: bean.origin.region,
-		farm: bean.origin.farm,
-		farmer: bean.origin.farmer,
-		variety: bean.origin.variety,
-		elevation: bean.origin.elevation,
-		processing: bean.origin.processing,
-		harvest_time: bean.origin.harvestTime,
-		quality_score: bean.qualityScore || null,
-		tasting_notes: bean.tastingNotes || null,
-		place_of_purchase: bean.placeOfPurchase,
-		url: bean.url,
-		notes: bean.notes || null,
-		archived_at: bean.archivedAt ? new Date(bean.archivedAt).toISOString() : null,
-		metadata: meta
-	};
+	return JSON.parse(wasmBeanToWire(JSON.stringify(bean), roasterRemoteId ?? undefined)) as BagWire;
 }
 
 /**
  * Decode a Visualizer bag → Crema bean. Reuses the local roaster id when the
  * caller's `roasterIdLookup` resolves the remote `roaster_id`. The Crema-only
  * fields (favourite, bag size, grinder, mix, …) ride out of the wire body's
- * `metadata.crema` block so a round-trip is lossless.
+ * `metadata.crema` block so a round-trip is lossless. The lookup stays a TS
+ * closure (it reads the shell's roaster store); the resolved local id + a
+ * freshly-minted fallback id + `Date.now()` cross the boundary into wasm.
  */
 export function beanFromWire(
 	wire: BagWire,
 	roasterIdLookup: (remoteId: string | null | undefined) => string | null
 ): Bean {
-	const meta = (wire.metadata ?? {}) as Record<string, unknown>;
-	const crema = (meta.crema ?? {}) as Record<string, unknown>;
-	const bean = blankBean(typeof crema.crema_id === 'string' ? crema.crema_id : undefined);
-	bean.visualizerId = wire.id ?? null;
-	bean.name = wire.name;
-	bean.roasterId = roasterIdLookup(wire.roaster_id);
-	bean.roastedOn = wire.roast_date ?? null;
-	bean.frozenOn = wire.frozen_date ?? null;
-	bean.defrostedOn = wire.defrosted_date ?? null;
-	bean.openedOn = typeof crema.crema_opened_on === 'string' ? crema.crema_opened_on : null;
-	bean.roastLevel = roastLevelFromWire(wire.roast_level);
-	// Read `crema_mix` from the `crema` sub-block where `beanToWire` writes it —
-	// NOT the top-level `meta` (that path always missed, so `mix` silently never
-	// round-tripped). Caught by the GEN11 converter round-trip test.
-	bean.mix = mixFromMetadata(crema);
-	bean.decaf = crema.crema_decaf === true;
-	bean.origin = {
-		country: wire.country ?? null,
-		region: wire.region ?? null,
-		farm: wire.farm ?? null,
-		farmer: wire.farmer ?? null,
-		variety: wire.variety ?? null,
-		elevation: wire.elevation ?? null,
-		processing: wire.processing ?? null,
-		harvestTime: wire.harvest_time ?? null
-	} satisfies BeanOrigin;
-	bean.bagSize =
-		typeof crema.crema_bag_size_g === 'number' ? crema.crema_bag_size_g : 0;
-	bean.remaining =
-		typeof crema.crema_remaining_g === 'number' ? crema.crema_remaining_g : 0;
-	bean.qualityScore = wire.quality_score ?? '';
-	bean.tastingNotes = wire.tasting_notes ?? '';
-	bean.rating = typeof crema.crema_rating === 'number' ? crema.crema_rating : 0;
-	bean.placeOfPurchase = wire.place_of_purchase ?? null;
-	bean.url = wire.url ?? null;
-	bean.notes = wire.notes ?? '';
-	bean.favourite = crema.crema_favourite === true;
-	bean.archivedAt = wire.archived_at ? Date.parse(wire.archived_at) : null;
-	bean.grinder = typeof crema.crema_grinder === 'string' ? crema.crema_grinder : '';
-	bean.grinderSetting =
-		typeof crema.crema_grinder_setting === 'string' ? crema.crema_grinder_setting : '';
-	bean.beanconquerorId =
-		typeof crema.crema_beanconqueror_id === 'string'
-			? crema.crema_beanconqueror_id
-			: null;
-	bean.updatedAt =
-		typeof crema.crema_updated_at === 'number'
-			? crema.crema_updated_at
-			: wire.updated_at
-				? Date.parse(wire.updated_at)
-				: Date.now();
-	bean.metadata = {
-		...meta,
-		crema: undefined // keep Crema-only out of the visible blob
-	};
-	delete (bean.metadata as Record<string, unknown>).crema;
-	return bean;
+	const localRoasterId = roasterIdLookup(wire.roaster_id);
+	const raw = wasmBeanFromWire(
+		JSON.stringify(wire),
+		localRoasterId ?? undefined,
+		mintBeanId(),
+		Date.now()
+	);
+	return JSON.parse(raw) as Bean;
 }
 
 export function roasterToWire(roaster: Roaster): RoasterWire {
-	// Tuck the Crema-only `city` field into the metadata escape valve.
-	// Visualizer's `RoasterWire` does not (yet) model `metadata`, so we
-	// can't push the city as an extension key on the parent body — for
-	// the moment we round-trip it through the roaster's own `metadata`
-	// blob when (and if) Visualizer adds the field. Until then, `city`
-	// stays local. This keeps the wire shape strict and the round-trip
-	// non-lossy for the fields Visualizer does model.
-	return {
-		id: roaster.visualizerId ?? undefined,
-		name: roaster.name,
-		website: roaster.website,
-		image_url: roaster.imageUrl,
-		canonical_roaster_id: roaster.canonicalRoasterId
-	};
+	// The Crema-only `city` field stays local (Visualizer doesn't model it);
+	// the Rust `roaster_to_wire` only emits the Visualizer-modelled fields.
+	return JSON.parse(wasmRoasterToWire(JSON.stringify(roaster))) as RoasterWire;
 }
 
 export function roasterFromWire(wire: RoasterWire): Roaster {
-	const r = blankRoaster(wire.name);
-	r.visualizerId = wire.id ?? null;
-	r.website = wire.website ?? null;
-	r.imageUrl = wire.image_url ?? null;
-	r.canonicalRoasterId = wire.canonical_roaster_id ?? null;
-	return r;
+	return JSON.parse(
+		wasmRoasterFromWire(JSON.stringify(wire), mintRoasterId(), Date.now())
+	) as Roaster;
 }
 
 // ── Spec-envelope helpers ──────────────────────────────────────────────

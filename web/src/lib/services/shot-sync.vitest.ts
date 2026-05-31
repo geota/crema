@@ -16,12 +16,20 @@
  */
 
 import { Cause, Effect, Exit, Layer } from 'effect';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { ShotSync, ShotSyncLive } from './shot-sync.ts';
 import { HttpClient, type HttpRequest } from './http-client.ts';
 import { TokenVault } from './token-vault.ts';
 import { HttpStatusError } from '../effect/errors.ts';
 import type { TokenSet } from '../visualizer/oauth.ts';
+import { initTestWasm } from '../wasm/test-init.ts';
+
+// `pullAllShotsSince` now materialises each row through the wasm-backed
+// `wireShotFromDetail` / `samplesFromVisualizerDetail` (CORE1), so the bundle
+// must be initialised before the pagination tests run.
+beforeAll(async () => {
+	await initTestWasm();
+});
 
 type Reply =
 	| { ok: true; status?: number; json?: unknown }

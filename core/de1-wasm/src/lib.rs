@@ -407,6 +407,123 @@ pub fn reconcile_shots(payload: &str) -> Result<String, String> {
     de1_domain::reconcile_shots_json(payload)
 }
 
+// ─── Visualizer wire converters (CORE1) ─────────────────────────────────
+//
+// The bean / roaster ⇄ Visualizer-wire converters + the `ShotDetail`
+// parsers, ported from the web shell into `de1_domain::visualizer_wire` so
+// every shell shares one byte-identical mapping. JSON-in / JSON-out at the
+// boundary; the shell hands `Date.now()` (`now_ms`) + a freshly-minted
+// fallback id + the resolved local roaster id in. Siblings of the
+// `reconcile_shots` planner above — wasm-only today, like that planner,
+// because Android has no bean library / Visualizer sync surface yet (AND6,
+// deferred). The pure fns + JSON facades live in `de1_domain`, so a future
+// UniFFI mirror is a one-liner when the Android surface grows.
+
+/// Encode a Crema `Bean` JSON → the Visualizer coffee-bag wire body JSON.
+/// `roaster_remote_id` is the bag's roaster's Visualizer id. See
+/// `de1_domain::bean_to_wire`.
+///
+/// # Errors
+/// The JSON error string when `bean_json` can't be deserialised.
+#[wasm_bindgen(js_name = beanToWire)]
+pub fn bean_to_wire(bean_json: &str, roaster_remote_id: Option<String>) -> Result<String, String> {
+    de1_domain::bean_to_wire_json(bean_json, roaster_remote_id.as_deref())
+}
+
+/// Decode a Visualizer coffee-bag wire body JSON → a Crema `Bean` JSON.
+/// `local_roaster_id` is the shell-resolved local roaster id; `fallback_id`
+/// a freshly-minted `bean:<uuid>` used only when no `crema_id` rides in the
+/// metadata; `now_ms` seeds `createdAt` + the `updatedAt` fallback. See
+/// `de1_domain::bean_from_wire`.
+///
+/// # Errors
+/// The JSON error string when `wire_json` can't be deserialised.
+#[wasm_bindgen(js_name = beanFromWire)]
+pub fn bean_from_wire(
+    wire_json: &str,
+    local_roaster_id: Option<String>,
+    fallback_id: String,
+    now_ms: f64,
+) -> Result<String, String> {
+    de1_domain::bean_from_wire_json(
+        wire_json,
+        local_roaster_id.as_deref(),
+        &fallback_id,
+        f64_to_ms(now_ms),
+    )
+}
+
+/// Encode a Crema `Roaster` JSON → the Visualizer roaster wire body JSON.
+/// See `de1_domain::roaster_to_wire`.
+///
+/// # Errors
+/// The JSON error string when `roaster_json` can't be deserialised.
+#[wasm_bindgen(js_name = roasterToWire)]
+pub fn roaster_to_wire(roaster_json: &str) -> Result<String, String> {
+    de1_domain::roaster_to_wire_json(roaster_json)
+}
+
+/// Decode a Visualizer roaster wire body JSON → a Crema `Roaster` JSON. See
+/// `de1_domain::roaster_from_wire`.
+///
+/// # Errors
+/// The JSON error string when `wire_json` can't be deserialised.
+#[wasm_bindgen(js_name = roasterFromWire)]
+pub fn roaster_from_wire(
+    wire_json: &str,
+    fallback_id: String,
+    now_ms: f64,
+) -> Result<String, String> {
+    de1_domain::roaster_from_wire_json(wire_json, &fallback_id, f64_to_ms(now_ms))
+}
+
+/// Crema's 1..10 roast level → Visualizer's free-text band, or `None`. See
+/// `de1_domain::roast_level_to_wire`.
+#[wasm_bindgen(js_name = roastLevelToWire)]
+#[must_use]
+pub fn roast_level_to_wire(level: Option<f64>) -> Option<String> {
+    de1_domain::roast_level_to_wire(level)
+}
+
+/// Visualizer's free-text band → Crema's 1..10 level (in-band rep), or
+/// `None`. See `de1_domain::roast_level_from_wire`.
+#[wasm_bindgen(js_name = roastLevelFromWire)]
+#[must_use]
+pub fn roast_level_from_wire(label: Option<String>) -> Option<i32> {
+    de1_domain::roast_level_from_wire(label.as_deref()).map(i32::from)
+}
+
+/// Convert a Visualizer `ShotSummary` + `ShotDetail` into Crema's `WireShot`
+/// JSON. `payload` is `{"summary": {"id", "clock", "updated_at"}, "detail":
+/// <ShotDetail>}` (`clock` / `updated_at` unix sec). See
+/// `de1_domain::wire_shot_from_detail`.
+///
+/// # Errors
+/// The JSON error string when `payload` can't be deserialised.
+#[wasm_bindgen(js_name = wireShotFromDetail)]
+pub fn wire_shot_from_detail(payload: &str) -> Result<String, String> {
+    de1_domain::wire_shot_from_detail_json(payload)
+}
+
+/// Reconstruct Crema's per-sample telemetry (`TimedSample[]` JSON) from a
+/// Visualizer `ShotDetail` JSON. See
+/// `de1_domain::samples_from_visualizer_detail`.
+///
+/// # Errors
+/// The JSON error string when `detail_json` can't be deserialised.
+#[wasm_bindgen(js_name = samplesFromVisualizerDetail)]
+pub fn samples_from_visualizer_detail(detail_json: &str) -> Result<String, String> {
+    de1_domain::samples_from_visualizer_detail_json(detail_json)
+}
+
+/// JS hands integer-valued `f64`s for unix-ms timestamps (a plain `i64`
+/// doesn't cross the wasm-bindgen ABI cleanly); truncate defensively,
+/// non-finite → 0 rather than a panic. Mirrors the `signatureForShot` guard.
+#[allow(clippy::cast_possible_truncation)]
+fn f64_to_ms(now_ms: f64) -> i64 {
+    if now_ms.is_finite() { now_ms as i64 } else { 0 }
+}
+
 /// Human-readable name for a raw `MachineModel` MMR value (e.g. `1` →
 /// `"DE1"`, `4` → `"DE1XL"`). Values past the table are reported as
 /// `"model N"`. Mirrors [`de1_protocol::machine_model_name`].

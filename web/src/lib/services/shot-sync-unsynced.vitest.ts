@@ -16,8 +16,15 @@
  */
 
 import { Effect, Exit, Layer } from 'effect';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReconcileAction } from '$lib/visualizer/shot-sync-signatures';
+import { initTestWasm } from '$lib/wasm/test-init';
+
+// The self-heal pull materialises rows through the wasm-backed
+// `wireShotFromDetail` (CORE1; not mocked here), so init the bundle first.
+beforeAll(async () => {
+	await initTestWasm();
+});
 
 // Hoisted controllables: per test, what the (mocked) wasm `reconcileShots`
 // returns for the self-heal pull, plus the queue + sync-log spies (hoisted so

@@ -66,13 +66,16 @@ import {
 	type WireShot
 } from '$lib/visualizer/shot-sync-signatures';
 import { appendSyncLog } from '$lib/visualizer/sync-config';
+import {
+	samplesFromVisualizerDetail as wasmSamplesFromVisualizerDetail,
+	wireShotFromDetail as wasmWireShotFromDetail
+} from '$lib/wasm/de1_wasm';
 import { enqueueEntry as enqueueSyncOp } from './queue-store.ts';
 
 // Spec-typed aliases — these ride DIRECTLY on the wire so they stay
 // in lock-step with the OpenAPI spec (regenerate via `pnpm openapi`).
 type ShotSummary = components['schemas']['ShotSummary'];
 type Paging = components['schemas']['Paging'];
-type DefaultShotDetail = components['schemas']['DefaultShotDetail'];
 type ShotDetail = components['schemas']['ShotDetail'];
 type ShotUpdateRequest = components['schemas']['ShotUpdateRequest'];
 
@@ -121,126 +124,32 @@ function buildShotPayload(shot: StoredShot): Record<string, unknown> {
  * originating summary's `clock` / `updated_at` into Crema's {@link WireShot}
  * (unix MS, normalised field names). Visualizer's default detail flattens
  * scoring + journal fields onto the shot row; Beanconqueror's variant nests them
- * under `meta.visualizer` — we read from both shapes defensively.
+ * under `meta.visualizer` — both shapes are read defensively in the Rust core
+ * (`de1_domain::visualizer_wire::wire_shot_from_detail`, CORE1). `clock` /
+ * `updated_at` ride in as unix SECONDS; the core converts to ms.
  */
 function wireShotFromDetail(summary: ShotSummary, detail: ShotDetail): WireShot {
-	const fallback = detail as DefaultShotDetail;
-	const bcMeta = (detail as components['schemas']['BeanconquerorShotDetail']).meta?.visualizer;
-	const profileTitle = fallback.profile_title ?? null;
-	// `duration` in the spec is seconds (the BC payload's `meta.visualizer.duration`
-	// is also seconds). Convert to milliseconds so the de-dup signature lines up
-	// with Crema's `StoredShot.duration` (ms).
-	const durationSec = fallback.duration ?? bcMeta?.duration ?? null;
-	const durationMs = durationSec != null ? Math.round(durationSec * 1000) : 0;
-	// drink_weight is a stringified gram value in the default response.
-	const drinkWeightG = ((): number | null => {
-		const raw = fallback.drink_weight;
-		if (raw == null) return null;
-		const n = Number(raw);
-		return Number.isFinite(n) ? n : null;
-	})();
-	const espressoNotes =
-		fallback.private_notes ?? bcMeta?.private_notes ?? fallback.espresso_notes ?? null;
-	// Crema rating is 0..5; the wire's cupping slots are 0..15. We write
-	// `flavor = rating * 3` on PATCH, so the pull does the inverse: prefer
-	// `flavor`, fall back to the legacy `espresso_enjoyment` field for shots
-	// uploaded before the switch, then round-trip back to the 0..5 scale.
-	const flavorRaw =
-		fallback.flavor ??
-		bcMeta?.flavor ??
-		fallback.espresso_enjoyment ??
-		bcMeta?.espresso_enjoyment ??
-		null;
-	const rating = flavorRaw != null ? Math.max(0, Math.min(5, Math.round(flavorRaw / 3))) : null;
-	// Spec note (`openapi.json` v1.8.2): the read-side detail field is `tags` on
-	// `DefaultShotDetail`; the write-side PATCH field is `tag_list` on
-	// `ShotUpdateRequest`. The Beanconqueror detail variant has no shot-level
-	// tags. We surface both shapes defensively in case a future serializer
-	// renames the read field too.
-	const fallbackTags = Array.isArray(fallback.tags) ? fallback.tags : null;
-	const tagList: string[] = fallbackTags
-		? fallbackTags.filter((t): t is string => typeof t === 'string')
-		: [];
-	return {
-		id: summary.id,
-		clock: summary.clock * 1000, // unix sec → ms
-		duration_ms: durationMs,
-		profile_title: profileTitle,
-		final_weight_g: drinkWeightG,
-		notes: espressoNotes,
-		rating,
-		updated_at_ms: summary.updated_at * 1000, // unix sec → ms
-		tag_list: tagList
-	};
+	const raw = wasmWireShotFromDetail(
+		JSON.stringify({
+			summary: { id: summary.id, clock: summary.clock, updated_at: summary.updated_at },
+			detail
+		})
+	);
+	return JSON.parse(raw) as WireShot;
 }
 
 /**
  * Reconstruct Crema's per-sample telemetry from a Visualizer shot detail.
  *
  * Visualizer stores the curve as parallel columns — a time axis plus one array
- * per channel — so we zip them by index into the row-shaped
- * {@link RustTimedSample} the history chart + peak derivation consume. The only
- * conversion is the time axis: Visualizer's `timeframe` is SECONDS,
- * `RustTimedSample.elapsed` is MILLISECONDS. A detail with no time axis (a
- * Beanconqueror row, or a shot stored without a curve) yields `[]`.
+ * per channel — zipped by index into the row-shaped {@link RustTimedSample} the
+ * history chart + peak derivation consume (time axis SECONDS → ms). A detail
+ * with no time axis (a Beanconqueror row, or a curveless shot) yields `[]`.
+ * Delegates to `de1_domain::visualizer_wire::samples_from_visualizer_detail`
+ * (CORE1) so every shell zips the columns identically.
  */
 function samplesFromVisualizerDetail(detail: ShotDetail): RustTimedSample[] {
-	const d = detail as DefaultShotDetail;
-	const time = d.timeframe;
-	if (!Array.isArray(time) || time.length === 0) return [];
-	const data = d.data ?? {};
-
-	type Series = components['schemas']['ShotSeries'];
-	const num = (arr: Series | undefined, i: number): number => {
-		const v = arr?.[i];
-		const n = typeof v === 'number' ? v : Number(v);
-		return Number.isFinite(n) ? n : 0;
-	};
-	// Scale-derived channels: absent/zero means "no signal" downstream.
-	const opt = (arr: Series | undefined, i: number): number | null => {
-		const n = num(arr, i);
-		return n > 0 ? n : null;
-	};
-
-	const pressure = data.espresso_pressure;
-	const flow = data.espresso_flow;
-	const weight = data.espresso_weight;
-	const flowWeight = data.espresso_flow_weight;
-	const pressureGoal = data.espresso_pressure_goal;
-	const flowGoal = data.espresso_flow_goal;
-	const tempGoal = data.espresso_temperature_goal;
-	const tempMix = data.espresso_temperature_mix;
-	const tempBasket = data.espresso_temperature_basket;
-	const water = data.espresso_water_dispensed;
-
-	const out: RustTimedSample[] = [];
-	for (let i = 0; i < time.length; i++) {
-		const tSec = num(time, i);
-		const row: RustTimedSample = {
-			elapsed: Math.round(tSec * 1000), // Visualizer seconds → Crema ms
-			sample: {
-				sampleTime: 0,
-				groupPressure: num(pressure, i),
-				groupFlow: num(flow, i),
-				headTemp: num(tempBasket, i),
-				mixTemp: num(tempMix, i),
-				setHeadTemp: num(tempGoal, i),
-				setMixTemp: 0,
-				setGroupPressure: num(pressureGoal, i),
-				setGroupFlow: num(flowGoal, i),
-				frameNumber: 0,
-				steamTemp: 0
-			}
-		};
-		const w = opt(weight, i);
-		if (w != null) row.scaleWeight = w;
-		const wf = opt(flowWeight, i);
-		if (wf != null) row.scaleFlowWeight = wf;
-		const wd = opt(water, i);
-		if (wd != null) row.dispensedVolume = wd;
-		out.push(row);
-	}
-	return out;
+	return JSON.parse(wasmSamplesFromVisualizerDetail(JSON.stringify(detail))) as RustTimedSample[];
 }
 
 // ── PATCH-body resolvers (copied verbatim from the old module) ────────────
