@@ -23,7 +23,7 @@
  * the core-reported UUIDs drive the actual subscriptions.
  */
 
-import { Cause, Exit } from 'effect';
+import { parseConnectExit } from './connect-exit.ts';
 import type { CoreOutput, CremaCore, NotificationSource, ScaleUuids } from '$lib/core';
 import { describeError } from '$lib/utils/error';
 import type { AppRuntime } from '$lib/effect/runtime';
@@ -184,15 +184,15 @@ export class ScaleManager {
 				}
 			})
 		);
-		if (Exit.isFailure(exit)) {
+		const outcome = parseConnectExit(exit);
+		if (!outcome.ok) {
 			device.disconnect();
 			this.device = null;
 			this.uuids = null;
 			this.callbacks.onState('failed');
-			const failure = Cause.failureOption(exit.cause);
-			const step = failure._tag === 'Some' ? failure.value.step : 'connect';
-			const cause = failure._tag === 'Some' ? failure.value.cause : exit.cause;
-			this.callbacks.onStatus(`Scale connection failed at "${step}": ${describeError(cause)}`);
+			this.callbacks.onStatus(
+				`Scale connection failed at "${outcome.step}": ${describeError(outcome.cause)}`
+			);
 			return;
 		}
 		this.callbacks.onState('ready');
