@@ -9,22 +9,21 @@
 	 * (Sync now + last-result log).
 	 */
 	import { onMount } from 'svelte';
+	import { Effect } from 'effect';
 	import { getHistoryStore } from '$lib/history';
 	import { downloadBlob } from '$lib/utils/download';
 	import {
 		clearVisualizerPremiumCache,
-		clearVisualizerTokens,
-		fetchVisualizerAccount,
-		getStoredVisualizerTokens,
-		isVisualizerConnected,
 		isVisualizerOauthConfigured,
-		onVisualizerTokenChange,
 		revokeVisualizerToken,
 		startVisualizerLogin,
-		testConnection,
 		type VisualizerAccount
 	} from '$lib/bean';
 	import { onSyncConfigChange, readSyncConfig } from '$lib/visualizer';
+	import { getCremaAppContext } from '$lib/shell/app-context';
+	import { runtimePromise } from '$lib/effect/bridge';
+	import { TokenVault } from '$lib/services/token-vault';
+	import { BeanSync } from '$lib/services/bean-sync';
 	import StSectionHead from '../StSectionHead.svelte';
 	import StGroup from '../StGroup.svelte';
 	import StRow from '../StRow.svelte';
@@ -32,9 +31,10 @@
 	import BeanSyncSection from './BeanSyncSection.svelte';
 
 	const history = getHistoryStore();
+	const appCtx = getCremaAppContext();
 	const oauthConfigured = isVisualizerOauthConfigured();
 
-	let connected = $state(isVisualizerConnected());
+	let connected = $state(false);
 	let account = $state<VisualizerAccount | null>(null);
 	let accountError = $state<string | null>(null);
 	let signingIn = $state(false);
@@ -48,31 +48,33 @@
 	   the eyebrow line picks up Test results without a reload. */
 	let premium = $state<boolean | null>(readSyncConfig().premium);
 
+	/** Connection gate (Option 3): `TokenVault.getTokens !== null`, read once at
+	 *  mount. Sign-in arrives via a full-page OAuth redirect → this remounts and
+	 *  re-reads; sign-out is handled locally in `disconnect`. */
+	async function refreshConnected(): Promise<void> {
+		const runtime = appCtx().runtime;
+		connected = runtime
+			? (await runtimePromise(runtime, TokenVault.pipe(Effect.flatMap((v) => v.getTokens)))) !== null
+			: false;
+	}
+
 	onMount(() => {
-		const offToken = onVisualizerTokenChange((set) => {
-			connected = set !== null;
-			if (!connected) {
-				account = null;
-				accountError = null;
-				testStatus = { kind: 'idle' };
-			} else {
-				void loadAccount();
-			}
-		});
+		void (async () => {
+			await refreshConnected();
+			if (connected) void loadAccount();
+		})();
 		const offConfig = onSyncConfigChange((next) => {
 			premium = next.premium;
 		});
-		if (connected) void loadAccount();
-		return () => {
-			offToken();
-			offConfig();
-		};
+		return offConfig;
 	});
 
 	async function loadAccount(): Promise<void> {
+		const runtime = appCtx().runtime;
+		if (!runtime) return;
 		accountError = null;
 		try {
-			account = await fetchVisualizerAccount();
+			account = await runtimePromise(runtime, BeanSync.pipe(Effect.flatMap((b) => b.fetchAccount)));
 		} catch (e) {
 			accountError = e instanceof Error ? e.message : String(e);
 		}
@@ -90,19 +92,30 @@
 	}
 
 	async function disconnect(): Promise<void> {
-		const tokens = getStoredVisualizerTokens();
-		if (tokens?.accessToken) {
-			await revokeVisualizerToken(tokens.accessToken);
+		const runtime = appCtx().runtime;
+		if (runtime) {
+			const tokens = await runtimePromise(
+				runtime,
+				TokenVault.pipe(Effect.flatMap((v) => v.getTokens))
+			);
+			if (tokens?.accessToken) await revokeVisualizerToken(tokens.accessToken);
+			await runtimePromise(runtime, TokenVault.pipe(Effect.flatMap((v) => v.clearTokens)));
 		}
-		clearVisualizerTokens();
 		// Tier flag is per-account — a fresh sign-in (or the same account
 		// after a tier change on visualizer.coffee) shouldn't inherit it.
 		clearVisualizerPremiumCache();
+		// Reflect the disconnect locally (we own this transition; no listener).
+		connected = false;
+		account = null;
+		accountError = null;
+		testStatus = { kind: 'idle' };
 	}
 
 	async function testNow(): Promise<void> {
+		const runtime = appCtx().runtime;
+		if (!runtime) return;
 		testStatus = { kind: 'testing' };
-		const r = await testConnection();
+		const r = await runtimePromise(runtime, BeanSync.pipe(Effect.flatMap((b) => b.testConnection)));
 		if (r.ok) {
 			testStatus = {
 				kind: 'ok',

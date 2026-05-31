@@ -12,12 +12,7 @@
 	 */
 	import { onMount } from 'svelte';
 	import { Effect } from 'effect';
-	import {
-		getBeanStore,
-		readSyncSettings,
-		runSync as runBeanSync,
-		type SyncResult as BeanSyncResult
-	} from '$lib/bean';
+	import { getBeanStore, readSyncSettings, type SyncResult as BeanSyncResult } from '$lib/bean';
 	import { getHistoryStore } from '$lib/history';
 	import {
 		appendSyncLog,
@@ -32,6 +27,7 @@
 	import { runtimePromise } from '$lib/effect/bridge';
 	import { TokenVault } from '$lib/services/token-vault';
 	import { ShotSync, type PullOptions } from '$lib/services/shot-sync';
+	import { BeanSync } from '$lib/services/bean-sync';
 	import { UploadQueue } from '$lib/services/upload-queue';
 	import StGroup from '../StGroup.svelte';
 	import StRow from '../StRow.svelte';
@@ -69,6 +65,11 @@
 		const runtime = appCtx().runtime;
 		if (!runtime) return;
 		await runtimePromise(runtime, UploadQueue.pipe(Effect.flatMap((q) => q.drain)));
+	}
+	async function svcRunBeanSync(): Promise<BeanSyncResult> {
+		const runtime = appCtx().runtime;
+		if (!runtime) throw new Error('Visualizer runtime unavailable');
+		return runtimePromise(runtime, BeanSync.pipe(Effect.flatMap((b) => b.runSync(library))));
 	}
 
 	let config = $state(readSyncConfig());
@@ -164,7 +165,7 @@
 			const roastersOn = config.direction.roasters !== 'off';
 			if (beansOn || roastersOn) {
 				try {
-					lastResult = await runBeanSync(library);
+					lastResult = await svcRunBeanSync();
 					beanLastSync = readSyncSettings().lastSyncAt;
 					config = updateSyncConfig({
 						lastSyncAt: {

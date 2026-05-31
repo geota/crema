@@ -28,7 +28,8 @@
 	import { page } from '$app/state';
 	import { OAuth, OAuthLive } from '$lib/services/oauth';
 	import { HttpClientLive } from '$lib/services/http-client';
-	import { getStoredTokens, storeTokens, takeReturnPath } from '$lib/visualizer';
+	import { TokenVault, TokenVaultLive } from '$lib/services/token-vault';
+	import { takeReturnPath } from '$lib/visualizer';
 
 	type Status =
 		| { kind: 'working' }
@@ -55,33 +56,33 @@
 			return;
 		}
 
-		// 2. No code at all — likely a refresh after the dance already
-		// completed.
-		if (!code || !state) {
-			if (getStoredTokens()) {
-				status = { kind: 'already' };
+		// Dedicated short-lived runtime — independent of the app shell's runtime
+		// (this page runs at redirect time before the shell has mounted). It
+		// carries OAuth (-> HttpClient) for the exchange AND TokenVault for
+		// persistence: TokenVault.storeTokens writes the shared localStorage key,
+		// so the shell's TokenVault reads it fresh on the next navigation.
+		const base = Layer.provide(OAuthLive, HttpClientLive);
+		const runtime = ManagedRuntime.make(Layer.merge(base, Layer.provide(TokenVaultLive, base)));
+		try {
+			// 2. No code at all — likely a refresh after the dance already completed.
+			if (!code || !state) {
+				const existing = await runtime.runPromise(Effect.flatMap(TokenVault, (v) => v.getTokens));
+				status = existing
+					? { kind: 'already' }
+					: {
+							kind: 'error',
+							message: 'Missing authorization code. Start the sign-in again from Settings.'
+						};
 				return;
 			}
-			status = {
-				kind: 'error',
-				message:
-					'Missing authorization code. Start the sign-in again from Settings.'
-			};
-			return;
-		}
 
-		// Exchange the code via the Effect OAuth service (OAuth -> HttpClient).
-		// A dedicated short-lived runtime keeps this independent of the app
-		// shell's runtime — OAuth + HttpClient hold no shared state, and this
-		// page runs at redirect time before the shell has finished mounting.
-		const runtime = ManagedRuntime.make(Layer.provide(OAuthLive, HttpClientLive));
-		try {
+			// 3. Exchange the code via the OAuth service, then persist via TokenVault.
 			const exit = await runtime.runPromiseExit(
 				Effect.flatMap(OAuth, (o) => o.exchangeCode(code, state))
 			);
 			if (Exit.isFailure(exit)) throw Cause.squash(exit.cause);
 			const tokens = exit.value;
-			storeTokens(tokens);
+			await runtime.runPromise(Effect.flatMap(TokenVault, (v) => v.storeTokens(tokens)));
 			const returnTo = takeReturnPath('/settings');
 			status = { kind: 'done', returnTo };
 			// Tiny delay so the user sees the success state before navigating.

@@ -41,8 +41,6 @@ export { roasterFaviconUrl } from './roaster-favicon';
 export {
 	clearVisualizerPremiumCache,
 	readSyncSettings,
-	runSync,
-	testConnection,
 	writeSyncSettings,
 	VisualizerError,
 	type SyncLogEntry,
@@ -56,16 +54,14 @@ export {
 	refForBean as beanImageRefFor
 } from './image-storage';
 
+// Account identity now comes from the `BeanSync` service (it owns the authed
+// `/me` call); token storage + the OAuth redirect helpers stay in `$lib/visualizer`.
+export { type VisualizerAccount } from '$lib/services/bean-sync';
+
 export {
-	clearTokens as clearVisualizerTokens,
-	fetchAccount as fetchVisualizerAccount,
 	isConfigured as isVisualizerOauthConfigured,
-	isConnected as isVisualizerConnected,
-	onTokenChange as onVisualizerTokenChange,
 	revokeToken as revokeVisualizerToken,
 	startVisualizerLogin,
-	getStoredTokens as getStoredVisualizerTokens,
 	OAUTH_SCOPES as VISUALIZER_OAUTH_SCOPES,
-	type TokenSet as VisualizerTokenSet,
-	type VisualizerAccount
+	type TokenSet as VisualizerTokenSet
 } from '$lib/visualizer';
