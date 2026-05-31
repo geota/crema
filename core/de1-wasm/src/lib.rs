@@ -548,6 +548,24 @@ fn f64_to_ms(now_ms: f64) -> i64 {
     if now_ms.is_finite() { now_ms as i64 } else { 0 }
 }
 
+/// Coerce a stored bean row JSON → a normalised `Bean` JSON (CORE2), or
+/// `null` when the row isn't an object or lacks a string `id` / `name`.
+/// `now_ms` seeds the timestamp defaults. Tolerant: wrong-typed fields are
+/// skipped, not rejected. See `de1_domain::coerce_bean`.
+#[wasm_bindgen(js_name = coerceBean)]
+#[must_use]
+pub fn coerce_bean(raw_json: &str, now_ms: f64) -> Option<String> {
+    de1_domain::coerce_bean_json(raw_json, f64_to_ms(now_ms))
+}
+
+/// Coerce a stored roaster row JSON → a normalised `Roaster` JSON (CORE2), or
+/// `null`. See `de1_domain::coerce_roaster`.
+#[wasm_bindgen(js_name = coerceRoaster)]
+#[must_use]
+pub fn coerce_roaster(raw_json: &str, now_ms: f64) -> Option<String> {
+    de1_domain::coerce_roaster_json(raw_json, f64_to_ms(now_ms))
+}
+
 /// Human-readable name for a raw `MachineModel` MMR value (e.g. `1` →
 /// `"DE1"`, `4` → `"DE1XL"`). Values past the table are reported as
 /// `"model N"`. Mirrors [`de1_protocol::machine_model_name`].

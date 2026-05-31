@@ -17,7 +17,9 @@ import type { Roast } from '$lib/profiles';
 import {
 	roast_band as wasmRoastBand,
 	days_off_roast as wasmDaysOffRoast,
-	roast_freshness as wasmRoastFreshness
+	roast_freshness as wasmRoastFreshness,
+	coerceBean as wasmCoerceBean,
+	coerceRoaster as wasmCoerceRoaster
 } from '$lib/wasm/de1_wasm';
 
 // ── Wire types (mirrored from de1_domain::bean) ─────────────────────────
@@ -438,107 +440,22 @@ export function migrateLegacyCurrentBean(raw: unknown): {
 
 /**
  * Coerce a stored `unknown` into a valid {@link Bean}, filling missing fields
- * from {@link blankBean}. Never throws — used on load so a stale shape cannot
- * crash the app.
+ * from defaults and silently skipping wrong-typed ones. Never throws — used on
+ * load so a stale shape cannot crash the app. Delegates to
+ * `de1_domain::coerce_bean` via wasm (CORE2) so every shell normalises stored
+ * rows identically; `null` when the row isn't an object or lacks `id`/`name`.
+ * The legacy `bagSizeG`/`remainingG` keys still migrate on read (core-side).
  */
 export function coerceBean(raw: unknown): Bean | null {
-	if (typeof raw !== 'object' || raw === null) return null;
-	const obj = raw as Record<string, unknown>;
-	if (typeof obj.id !== 'string' || typeof obj.name !== 'string') return null;
-	const base = blankBean(obj.id);
-	base.name = obj.name;
-	if (typeof obj.roasterId === 'string') base.roasterId = obj.roasterId;
-	if (typeof obj.roastedOn === 'string') base.roastedOn = obj.roastedOn;
-	if (typeof obj.openedOn === 'string') base.openedOn = obj.openedOn;
-	if (typeof obj.frozenOn === 'string') base.frozenOn = obj.frozenOn;
-	if (typeof obj.defrostedOn === 'string') base.defrostedOn = obj.defrostedOn;
-	if (typeof obj.roastLevel === 'number') base.roastLevel = obj.roastLevel;
-	if (obj.mix === 'single' || obj.mix === 'blend') base.mix = obj.mix;
-	if (
-		obj.roastType === 'espresso' ||
-		obj.roastType === 'filter' ||
-		obj.roastType === 'omni'
-	) {
-		base.roastType = obj.roastType;
-	}
-	if (typeof obj.decaf === 'boolean') base.decaf = obj.decaf;
-	if (typeof obj.origin === 'object' && obj.origin !== null) {
-		const o = obj.origin as Record<string, unknown>;
-		const origin = blankOrigin();
-		const keys: (keyof BeanOrigin)[] = [
-			'country',
-			'region',
-			'farm',
-			'farmer',
-			'variety',
-			'elevation',
-			'processing',
-			'harvestTime'
-		];
-		for (const k of keys) {
-			const v = o[k];
-			if (typeof v === 'string') origin[k] = v;
-		}
-		base.origin = origin;
-	}
-	// Accept new + legacy names so existing localStorage records (which
-	// carry the pre-rename `bagSizeG` / `remainingG` keys) migrate on
-	// load. Next persist writes the new names.
-	if (typeof obj.bagSize === 'number') base.bagSize = obj.bagSize;
-	else if (typeof (obj as Record<string, unknown>).bagSizeG === 'number') {
-		base.bagSize = (obj as Record<string, number>).bagSizeG;
-	}
-	if (typeof obj.remaining === 'number') base.remaining = obj.remaining;
-	else if (typeof (obj as Record<string, unknown>).remainingG === 'number') {
-		base.remaining = (obj as Record<string, number>).remainingG;
-	}
-	if (typeof obj.qualityScore === 'string') base.qualityScore = obj.qualityScore;
-	if (typeof obj.tastingNotes === 'string') base.tastingNotes = obj.tastingNotes;
-	if (typeof obj.rating === 'number') base.rating = obj.rating;
-	if (typeof obj.placeOfPurchase === 'string') base.placeOfPurchase = obj.placeOfPurchase;
-	if (typeof obj.url === 'string') base.url = obj.url;
-	if (typeof obj.notes === 'string') base.notes = obj.notes;
-	if (typeof obj.favourite === 'boolean') base.favourite = obj.favourite;
-	if (typeof obj.archivedAt === 'number') base.archivedAt = obj.archivedAt;
-	if (typeof obj.deletedAt === 'number') base.deletedAt = obj.deletedAt;
-	if (typeof obj.grinder === 'string') base.grinder = obj.grinder;
-	if (typeof obj.grinderSetting === 'string') base.grinderSetting = obj.grinderSetting;
-	if (Array.isArray(obj.tags)) {
-		base.tags = obj.tags.filter((t): t is string => typeof t === 'string');
-	}
-	if (typeof obj.visualizerId === 'string') base.visualizerId = obj.visualizerId;
-	if (typeof obj.beanconquerorId === 'string') base.beanconquerorId = obj.beanconquerorId;
-	if (typeof obj.imageRef === 'string') base.imageRef = obj.imageRef;
-	if (typeof obj.cost === 'number' && Number.isFinite(obj.cost) && obj.cost >= 0) {
-		base.cost = obj.cost;
-	}
-	if (typeof obj.metadata === 'object' && obj.metadata !== null) {
-		base.metadata = obj.metadata as Record<string, unknown>;
-	}
-	if (typeof obj.createdAt === 'number') base.createdAt = obj.createdAt;
-	if (typeof obj.updatedAt === 'number') base.updatedAt = obj.updatedAt;
-	return base;
+	const out = wasmCoerceBean(JSON.stringify(raw) ?? 'null', Date.now());
+	return out == null ? null : (JSON.parse(out) as Bean);
 }
 
-/** Coerce a stored `unknown` into a valid {@link Roaster}; `null` on garbage. */
+/**
+ * Coerce a stored `unknown` into a valid {@link Roaster}; `null` on garbage.
+ * Delegates to `de1_domain::coerce_roaster` via wasm (CORE2).
+ */
 export function coerceRoaster(raw: unknown): Roaster | null {
-	if (typeof raw !== 'object' || raw === null) return null;
-	const obj = raw as Record<string, unknown>;
-	if (typeof obj.id !== 'string' || typeof obj.name !== 'string') return null;
-	const base = blankRoaster(obj.name, obj.id);
-	if (typeof obj.website === 'string') base.website = obj.website;
-	if (typeof obj.imageUrl === 'string') base.imageUrl = obj.imageUrl;
-	if (typeof obj.city === 'string') base.city = obj.city;
-	if (typeof obj.country === 'string') base.country = obj.country;
-	if (typeof obj.notes === 'string') base.notes = obj.notes;
-	if (typeof obj.canonicalRoasterId === 'string')
-		base.canonicalRoasterId = obj.canonicalRoasterId;
-	if (typeof obj.visualizerId === 'string') base.visualizerId = obj.visualizerId;
-	if (typeof obj.deletedAt === 'number') base.deletedAt = obj.deletedAt;
-	if (typeof obj.metadata === 'object' && obj.metadata !== null) {
-		base.metadata = obj.metadata as Record<string, unknown>;
-	}
-	if (typeof obj.createdAt === 'number') base.createdAt = obj.createdAt;
-	if (typeof obj.updatedAt === 'number') base.updatedAt = obj.updatedAt;
-	return base;
+	const out = wasmCoerceRoaster(JSON.stringify(raw) ?? 'null', Date.now());
+	return out == null ? null : (JSON.parse(out) as Roaster);
 }
