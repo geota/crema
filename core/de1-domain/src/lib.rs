@@ -42,6 +42,7 @@
 //!   UniFFI bridges.
 
 pub mod bean;
+pub mod bean_coerce;
 pub mod beanconqueror;
 pub mod builtin;
 pub mod crema_jsonl;
@@ -74,6 +75,7 @@ pub use bean::{
     Bean, BeanMix, BeanOrigin, BeanRoastType, RoastBand, RoastFreshness, Roaster, ShotBean,
     days_off_roast, roast_band, roast_freshness,
 };
+pub use bean_coerce::{coerce_bean, coerce_bean_json, coerce_roaster, coerce_roaster_json};
 pub use beanconqueror::{
     ImportDiagnostics, ImportPlan, ImportedShot, crema_to_bc_main_json,
     crema_to_bc_main_json_from_envelope, import_beanconqueror_json,
