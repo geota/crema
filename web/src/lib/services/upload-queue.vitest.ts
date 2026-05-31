@@ -65,7 +65,9 @@ function fakeBeanSync(over: {
 			uploadRoaster: die('uploadRoaster') as never,
 			deleteBean: (over.deleteBean ?? die('deleteBean')) as never,
 			deleteRoaster: (over.deleteRoaster ?? die('deleteRoaster')) as never,
-			runSync: die('runSync') as never
+			runSync: die('runSync') as never,
+			fetchAccount: Effect.die('unused: fetchAccount') as never,
+			testConnection: Effect.die('unused: testConnection') as never
 		})
 	);
 }
