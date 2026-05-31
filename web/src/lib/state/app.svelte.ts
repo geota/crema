@@ -25,12 +25,7 @@ import {
 import { MachineState, MmrRegister } from '$lib/core/crema-core';
 import { De1Manager, EMPTY_DE1_DIAGNOSTICS, ScaleManager } from '$lib/ble';
 import { getBeanStore } from '$lib/bean';
-import {
-	getHistoryStore,
-	snapshotFromBean,
-	extractCremaExtras,
-	type ShotBean
-} from '$lib/history';
+import { getHistoryStore, snapshotFromBean, extractCremaExtras } from '$lib/history';
 import { commitShotCompletion } from '$lib/history/shot-persistence';
 import { getCaptureStore } from '$lib/capture';
 import {
@@ -43,15 +38,15 @@ import {
 import { readJson, writeJson } from '$lib/utils/storage';
 import { getSettingsStore } from '$lib/settings';
 import { getMaintenanceStore } from '$lib/maintenance';
-import { parseCaptureFile, replayEvents, ReplayAbortedError, type ReplayMeta } from '$lib/replay';
-import { guessScaleFromFirstWeightPacket as wasmGuessScaleFromFirstWeightPacket } from '$lib/wasm/de1_wasm';
+import { parseCaptureFile } from '$lib/replay';
 import { describeError } from '$lib/utils/error';
-import { Effect } from 'effect';
+import { Effect, Fiber } from 'effect';
 import type { AppRuntime } from '$lib/effect/runtime';
 import { runtimePromise } from '$lib/effect/bridge';
 import { UploadQueue } from '$lib/services/upload-queue';
 import { Webhooks } from '$lib/services/webhooks';
 import { ProfileSync } from '$lib/services/profile-sync';
+import { replayCaptureProgram } from '$lib/services/replay';
 import {
 	CremaUiState,
 	DEFAULT_SCALE_STANDBY,
@@ -60,11 +55,7 @@ import {
 	getCremaUiState,
 	type UiSnapshot
 } from './ui-state.svelte';
-import {
-	getActiveShotStore,
-	type ActiveShotBrewParams,
-	type ActiveShotData
-} from './active-shot.svelte';
+import { getActiveShotStore, type ActiveShotData } from './active-shot.svelte';
 
 /**
  * Thrown by {@link CremaApp.startShot} when the user taps Coffee without an
@@ -164,100 +155,10 @@ const WATER_COUNTING_STATES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Compose the user-facing "now replaying" message, folding the parsed
- * {@link ReplayMeta} into a short suffix so an analyst sees the context
- * the META prelude carries (active profile, yield target, grinder
- * model) without having to inspect the file. Legacy captures without
- * the at-shot-start META line produce the bare message.
- *
- * Format: `"Replaying N events from foo.jsonl… (Profile X · 36 g · Niche Zero)"`
- * — the parenthetical is dropped when no advisory META fields are set.
+ * The replay-specific helpers — `composeReplayStartMessage`,
+ * `replayMetaToActiveShot`, `guessScaleAdvertisedName` — moved to
+ * `$lib/services/replay` alongside the `replayCaptureProgram` they serve (T-28).
  */
-function composeReplayStartMessage(
-	fileName: string,
-	eventCount: number,
-	meta: ReplayMeta
-): string {
-	const parts: string[] = [];
-	if (meta.profileName) parts.push(`Profile ${meta.profileName}`);
-	if (meta.yieldTarget != null) parts.push(`${meta.yieldTarget} g target`);
-	if (meta.brewTemp != null) parts.push(`${meta.brewTemp} °C`);
-	if (meta.grinderModel) parts.push(meta.grinderModel);
-	const beanLabel =
-		meta.bean?.roaster && meta.bean.name
-			? `${meta.bean.roaster} · ${meta.bean.name}`
-			: meta.bean?.name ?? meta.bean?.roaster ?? null;
-	if (beanLabel) parts.push(beanLabel);
-	const suffix = parts.length > 0 ? ` (${parts.join(' · ')})` : '';
-	return `Replaying ${eventCount} events from ${fileName}…${suffix}`;
-}
-
-/**
- * Adapt a `ReplayMeta` (the wire-shape parsed from a capture file's
- * `src:"META"` lines) into an `ActiveShotData` the brew UI + history
- * record-builder consume. The replay's bean snapshot is a flat subset
- * of `ShotBean` (no `beanId` — the bean isn't necessarily in this
- * device's library), so the resulting `ShotBean` has `beanId: null`
- * and any History UI click-through to the bean falls back gracefully.
- *
- * Replay META is the source of truth for the at-shot-start context;
- * `source: 'replay'` lets the orchestrator's burn-down + webhook
- * branches skip themselves (those are live-only side effects).
- */
-function replayMetaToActiveShot(meta: ReplayMeta): ActiveShotData {
-	const bean = meta.bean;
-	const beanSnapshot: ShotBean | null = bean
-		? {
-				beanId: null,
-				name: bean.name ?? '',
-				roasterName: bean.roaster ?? null,
-				roastedOn: bean.roastedOn ?? null,
-				roastLevel: bean.roastLevel ?? null,
-				notes: bean.notes,
-				grinderSetting: bean.grinderSetting
-			}
-		: null;
-	const hasBrewParams =
-		meta.yieldTarget != null ||
-		meta.brewTemp != null ||
-		meta.preinfuseTarget != null ||
-		meta.stopOnWeight !== undefined ||
-		meta.autoTare !== undefined;
-	const brewParams: ActiveShotBrewParams | null = hasBrewParams
-		? {
-				yieldTarget: meta.yieldTarget ?? 0,
-				brewTemp: meta.brewTemp ?? 0,
-				preinfuseTarget: meta.preinfuseTarget ?? 0,
-				stopOnWeight: meta.stopOnWeight ?? false,
-				autoTare: meta.autoTare ?? false
-			}
-		: null;
-	return {
-		bean: beanSnapshot,
-		profileName: meta.profileName ?? null,
-		// `ReplayMeta` doesn't carry a separate dose; downstream
-		// readers (History ratio, burn-down) tolerate `null` and fall
-		// back. The yieldTarget covers the QC dial; pre-flow dose lives
-		// only in the embedded profile (which the replay doesn't carry).
-		dose: null,
-		brewParams,
-		grinderModel: meta.grinderModel ?? null,
-		source: 'replay'
-	};
-}
-
-/**
- * Best-effort scale identification from the first SCALE_WEIGHT payload.
- * The signature table lives in core
- * (`de1_scale::Scale::guess_from_first_weight_packet`); this shell
- * adapter just hands the bytes to the wasm export so both shells share
- * one identification path. Returns `undefined` when no signature
- * matches, in which case the replay proceeds with no scale identified
- * (empty weight series).
- */
-function guessScaleAdvertisedName(firstWeightBytes: Uint8Array): string | undefined {
-	return wasmGuessScaleFromFirstWeightPacket(firstWeightBytes) ?? undefined;
-}
 
 /** Options for {@link CremaApp.replayCapture}. */
 export interface ReplayCaptureOptions {
@@ -277,10 +178,11 @@ export class CremaApp {
 	private readonly scale: ScaleManager;
 
 	/**
-	 * The abort controller for an in-progress capture replay, or `null` when no
-	 * replay is running. {@link cancelReplay} aborts it.
+	 * The fiber running an in-progress capture replay, or `null` when none is
+	 * running. {@link cancelReplay} interrupts it (T-28 — the old
+	 * `AbortController`; `Effect.sleep` pacing is interrupted for free).
 	 */
-	private replayAbort: AbortController | null = null;
+	private replayFiber: Fiber.RuntimeFiber<void> | null = null;
 
 	/**
 	 * `performance.now()` of the previous `Telemetry` event, or `null` before
@@ -1827,8 +1729,9 @@ export class CremaApp {
 	 * and readouts, and `ShotCompleted` into the History store.
 	 *
 	 * The replay is paced at real time by the events' timestamps (see
-	 * `replayEvents`); `opts.speed` scales the pace. Progress and outcome are
-	 * exposed on `state.current.replay`; {@link cancelReplay} stops it.
+	 * `$lib/services/replay`'s `replayCaptureProgram`); `opts.speed` scales the
+	 * pace. Progress and outcome are exposed on `state.current.replay`;
+	 * {@link cancelReplay} stops it.
 	 *
 	 * Only one replay runs at a time — a second call while one is in progress is
 	 * ignored. The replay does not interact with any live BLE connection: it
@@ -1836,199 +1739,69 @@ export class CremaApp {
 	 * is strictly an offline diagnostic.
 	 */
 	async replayCapture(file: File, opts: ReplayCaptureOptions = {}): Promise<void> {
-		if (this.replayAbort) return;
+		if (this.replayFiber) return;
 
+		// Pre-flight (no shadow core touched yet, so a failure just paints
+		// `error` and returns): the file-size cap, the parse, and the empty check.
 		const MAX_REPLAY_FILE_BYTES = 50 * 1024 * 1024; // 50 MB
+		const errorState = (message: string) =>
+			this.state.patch({ replay: { phase: 'error', fileName: file.name, done: 0, total: 0, message } });
+
 		if (file.size > MAX_REPLAY_FILE_BYTES) {
-			this.state.patch({
-				replay: {
-					phase: 'error',
-					fileName: file.name,
-					done: 0,
-					total: 0,
-					message: `Capture file is ${(file.size / 1024 / 1024).toFixed(1)} MB — Crema caps replay at ${MAX_REPLAY_FILE_BYTES / 1024 / 1024} MB to keep the tab responsive. Trim the file or replay it through the Rust CLI.`
-				}
-			});
+			errorState(
+				`Capture file is ${(file.size / 1024 / 1024).toFixed(1)} MB — Crema caps replay at ${MAX_REPLAY_FILE_BYTES / 1024 / 1024} MB to keep the tab responsive. Trim the file or replay it through the Rust CLI.`
+			);
 			return;
 		}
-
-		const abort = new AbortController();
-		this.replayAbort = abort;
 
 		let parsed;
 		try {
 			parsed = await parseCaptureFile(file);
 		} catch (error) {
-			this.replayAbort = null;
-			this.state.patch({
-				replay: {
-					phase: 'error',
-					fileName: file.name,
-					done: 0,
-					total: 0,
-					message: `Could not read capture: ${describeError(error)}`
-				}
-			});
+			errorState(`Could not read capture: ${describeError(error)}`);
 			return;
 		}
-
 		if (parsed.events.length === 0) {
-			this.replayAbort = null;
-			this.state.patch({
-				replay: {
-					phase: 'error',
-					fileName: file.name,
-					done: 0,
-					total: 0,
-					message: 'No replayable notifications found in this capture.'
-				}
-			});
+			errorState('No replayable notifications found in this capture.');
 			return;
 		}
 
-		// Shadow-core swap: stash the live core in the wasm bridge and
-		// install a fresh CremaCore for the replay. The live core's
-		// preferences (weight unit, line freq, heater tweaks), connected
-		// scale, and identity-keeper state survive untouched — we never
-		// mutated them. `endReplay()` in the finally restores it; it's
-		// idempotent, so an exception before `endReplay()` is fine.
-		// See docs/48-replay-architecture-problem-statement.md §4.
-		await this.core.beginReplay();
-
-		try {
-			// Populate the ActiveShot store from the replay's parsed
-			// META BEFORE any events fire. The brew UI follows ActiveShot
-			// (doc 49 §3), so this is what makes the dashboard reflect
-			// the replayed shot's context. The replay's ShotStarted
-			// fold sees `activeShot.isActive === true` and leaves the
-			// store alone — no live-store reads occur on the replay path.
-			getActiveShotStore().set(replayMetaToActiveShot(parsed.meta));
-			// The replay also drops the telemetry wall-clock anchor —
-			// replayed timestamps must not integrate the gap since the
-			// last live sample.
-			this.lastTelemetryAtMs = null;
-
-			// Identify the scale so SCALE_WEIGHT bytes decode into ScaleReading
-			// events on the way through. Without a `connectScale` call the core
-			// has no decoder selected and the bytes are dropped, leaving the
-			// replayed shot's weight series empty.
-			//
-			// Preference order: the explicit META prelude (Crema captures now
-			// prepend one with the scale's advertised name on persist) → the
-			// first SCALE_WEIGHT payload's header bytes for a known signature
-			// (legacy fallback for captures pre-dating META).
-			const scaleNameToConnect =
-				parsed.meta.scaleName ??
-				(() => {
-					const firstScale = parsed.events.find((e) => e.source === 'ScaleWeight');
-					return firstScale ? guessScaleAdvertisedName(firstScale.data) : undefined;
-				})();
-			if (scaleNameToConnect) {
-				try {
-					await this.core.connectScale(scaleNameToConnect);
-				} catch {
-					// Non-fatal — if identification fails, weight just stays empty.
-				}
-			}
-			this.state.patch({
-				...CLEARED_DE1_READOUT,
-				// Replay starts from a clean session — clear the fingerprint
-				// cache too so a follow-on shot start (against a real DE1
-				// after the replay finishes) re-uploads defensively.
-				activeProfileFingerprint: null,
-				replay: {
-					phase: 'running',
-					fileName: file.name,
-					done: 0,
-					total: parsed.events.length,
-					message: composeReplayStartMessage(file.name, parsed.events.length, parsed.meta)
-				}
-			});
-
-			await replayEvents(
-				parsed.events,
-				async (event) => {
-					// Feed the raw bytes straight through the core, exactly as a
-					// live notification would arrive — then fold the output.
-					const output = await this.core.onNotification(
-						event.source,
-						event.data,
-						event.t
-					);
-					this.applyCoreOutput(output);
+		// The shadow-core swap + paced loop run as an Effect (T-28). It needs no
+		// services (everything's injected), so it runs on Effect's *default*
+		// runtime — offline replay keeps working even where the Web-Bluetooth-
+		// gated `AppRuntime` never mounts. The fiber is held for `cancelReplay`
+		// → `Fiber.interrupt`; the program restores the live core + clears
+		// ActiveShot in its `acquireUseRelease` release, no matter how it ends.
+		const fiber = Effect.runFork(
+			replayCaptureProgram({
+				core: this.core,
+				parsed,
+				fileName: file.name,
+				speed: opts.speed,
+				clearedReadout: CLEARED_DE1_READOUT,
+				applyOutput: (output) => this.applyCoreOutput(output),
+				patch: (snapshot) => this.state.patch(snapshot),
+				setActiveShot: (data) => getActiveShotStore().set(data),
+				clearActiveShot: () => getActiveShotStore().clear(),
+				resetTelemetryAnchor: () => {
+					this.lastTelemetryAtMs = null;
 				},
-				{
-					speed: opts.speed,
-					signal: abort.signal,
-					onProgress: (index, total) => {
-						this.state.patch({
-							replay: {
-								phase: 'running',
-								fileName: file.name,
-								done: index + 1,
-								total,
-								message: `Replaying ${file.name} — ${index + 1} / ${total}`
-							}
-						});
-					}
-				}
-			);
-			this.state.patch({
-				replay: {
-					phase: 'done',
-					fileName: file.name,
-					done: parsed.events.length,
-					total: parsed.events.length,
-					message: `Replay finished — ${parsed.events.length} events from ${file.name}.`
-				}
-			});
-		} catch (error) {
-			if (error instanceof ReplayAbortedError) {
-				const status = this.state.current.replay;
-				this.state.patch({
-					replay: {
-						phase: 'cancelled',
-						fileName: file.name,
-						done: status?.done ?? 0,
-						total: parsed.events.length,
-						message: `Replay cancelled — ${status?.done ?? 0} / ${parsed.events.length} events.`
-					}
-				});
-			} else {
-				this.state.patch({
-					replay: {
-						phase: 'error',
-						fileName: file.name,
-						done: this.state.current.replay?.done ?? 0,
-						total: parsed.events.length,
-						message: `Replay failed: ${describeError(error)}`
-					}
-				});
-			}
+				currentDone: () => this.state.current.replay?.done ?? 0
+			})
+		);
+		this.replayFiber = fiber;
+		try {
+			await Effect.runPromise(Fiber.await(fiber));
 		} finally {
-			this.replayAbort = null;
-			// Clear ActiveShot — the brew UI returns to reading live
-			// stores via its `?? liveStore` fallback. Idempotent on
-			// the success path (the ShotCompleted handler already
-			// cleared it), but the abort + error paths rely on this
-			// clear to avoid a stale replay context leaking into a
-			// follow-on live shot's brew dashboard.
-			getActiveShotStore().clear();
-			// Restore the live core. Idempotent: no-op if the shadow
-			// wasn't installed (e.g. beginReplay threw before
-			// completing). Errors here would only mask the real
-			// exception, so we swallow them defensively.
-			try {
-				await this.core.endReplay();
-			} catch (e) {
-				console.error('[replay] endReplay failed', e);
-			}
+			this.replayFiber = null;
 		}
 	}
 
-	/** Cancel an in-progress capture replay, if one is running. */
+	/** Cancel an in-progress capture replay, if one is running. Interrupting the
+	 *  fiber cancels the in-flight `Effect.sleep` and runs the program's release
+	 *  (restore live core + clear ActiveShot) → `cancelled` state. */
 	cancelReplay(): void {
-		this.replayAbort?.abort();
+		if (this.replayFiber) Effect.runFork(Fiber.interrupt(this.replayFiber));
 	}
 }
 
