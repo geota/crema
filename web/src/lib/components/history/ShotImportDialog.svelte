@@ -46,12 +46,6 @@
 		<FileDropZone
 			icon="ph-duotone ph-file-arrow-down"
 			title="Drop legacy .shot or .shot.json files"
-			subtitle={
-				'Multi-select supported — drop a whole <code>history/</code> ' +
-				'folder of de1app shots in one go. Each parsed shot is ' +
-				'prepended to the local history; duplicates by filename + ' +
-				'timestamp are skipped.'
-			}
 			accept=".shot,.json,.shot.json"
 			disabled={importing}
 			pickLabel={importing ? 'Importing…' : 'Choose files…'}
@@ -59,7 +53,13 @@
 				await onImport(files);
 				if (!importing) onClose();
 			}}
-		/>
+		>
+			{#snippet subtitle()}
+				Multi-select supported — drop a whole <code>history/</code> folder of de1app
+				shots in one go. Each parsed shot is prepended to the local history;
+				duplicates by filename + timestamp are skipped.
+			{/snippet}
+		</FileDropZone>
 	</div>
 </div>
 

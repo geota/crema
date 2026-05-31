@@ -10,13 +10,19 @@
 	 * gets the same affordance without duplicating styles.
 	 */
 
+	import type { Snippet } from 'svelte';
+
 	interface Props {
 		/** Phosphor icon class — defaults to a generic file glyph. */
 		icon?: string;
 		/** Headline above the drop instructions. */
 		title: string;
-		/** Smaller helper line under the title — explains accepted formats. */
-		subtitle: string;
+		/**
+		 * Smaller helper line under the title — explains accepted formats. A
+		 * snippet (SEC1), so callers pass real markup (e.g. `<code>`) without the
+		 * `{@html}` raw-HTML footgun the string prop used to invite.
+		 */
+		subtitle: Snippet;
 		/** Native `accept` value on the file picker. */
 		accept: string;
 		/** Allow multi-select on the file picker. */
@@ -80,7 +86,7 @@
 >
 	<i class={icon} aria-hidden="true"></i>
 	<div class="fdz-title">{title}</div>
-	<div class="fdz-sub">{@html subtitle}</div>
+	<div class="fdz-sub">{@render subtitle()}</div>
 	<label class="fdz-pick" class:is-disabled={disabled}>
 		<input
 			type="file"

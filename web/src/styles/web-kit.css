@@ -3,6 +3,25 @@
    All look-and-feel pulled from ../../colors_and_type.css tokens.
    ============================================================================ */
 
+/* ── Global keyboard focus ring (FD1) ─────────────────────────────────────
+   One :focus-visible convention for interactive controls (nav, Start/Stop,
+   chips, toggles, inputs, links). Wires the previously-unused --shadow-focus
+   token (a 2px page-coloured gap + a 4px copper ring); only fires on keyboard /
+   AT focus, never a mouse click. Element-level selectors (not :where) so the
+   ring out-specifies single-class component box-shadows. The transparent
+   outline is the Windows High-Contrast (forced-colors) fallback, where
+   box-shadow is dropped. */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+summary:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid transparent;
+  box-shadow: var(--shadow-focus);
+}
+
 .crema-app {
   width: 100%;
   height: 100%;

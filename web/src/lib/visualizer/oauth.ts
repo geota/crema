@@ -228,7 +228,10 @@ export function takePkceState(): { verifier: string | null; state: string | null
 export function takeReturnPath(fallback: string = '/settings'): string {
 	const v = sessionStorage.getItem(RETURN_KEY);
 	if (v) sessionStorage.removeItem(RETURN_KEY);
-	return v && v.startsWith('/') ? v : fallback;
+	// SEC4: only same-origin absolute paths. `//evil.com` (and `/\evil.com`) are
+	// protocol-relative URLs that start with `/` but navigate off-site — reject
+	// them so a poisoned `returnTo` can't open-redirect after sign-in.
+	return v && v.startsWith('/') && !v.startsWith('//') && !v.startsWith('/\\') ? v : fallback;
 }
 
 // ── Token exchange ─────────────────────────────────────────────────────
