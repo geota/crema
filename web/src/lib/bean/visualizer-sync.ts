@@ -148,9 +148,21 @@ type RoasterWire = Omit<RoasterDetail, 'id' | 'name'> & {
 // ── Mapping helpers ────────────────────────────────────────────────────
 
 /**
- * Crema 1..10 → Visualizer's free-text `roast_level`. Exported so the shot
- * uploader (`$lib/visualizer/shot-sync`) can encode the inline bean snapshot's
- * `roastLevel` with the same banding the bean library uses.
+ * Crema's 1..10 roast scale ⇄ Visualizer's free-text `roast_level`. Exported so
+ * the shot uploader (`$lib/visualizer/shot-sync`) can encode the inline bean
+ * snapshot's `roastLevel` with the same banding the bean library uses.
+ *
+ * **Lossy by design.** Crema has 10 levels; Visualizer recognises 5 bands
+ * (Light / Medium-Light / Medium / Medium-Dark / Dark). Encoding collapses two
+ * Crema levels into one band, so a push→pull round-trip *must* lose the
+ * within-band distinction — there is no richer wire field to preserve it. What
+ * we DO guarantee is **idempotence after the first hop**: each label decodes to
+ * a level that lands back inside the encode range that produced the label, so a
+ * value that has round-tripped once never drifts again. The decode
+ * representatives are pinned in-band for exactly that reason (GEN1):
+ *   Light→2 (∈[1,2]) · Medium-Light→3 (∈[3,4]) · Medium→5 (∈[5,6]) ·
+ *   Medium-Dark→7 (∈[7,8]) · Dark→9 (∈[9,10]).
+ * (Pinned by the round-trip in `visualizer-sync.vitest.ts`.)
  */
 export function roastLevelToWire(level: number | null): string | null {
 	if (level == null) return null;
@@ -160,13 +172,16 @@ export function roastLevelToWire(level: number | null): string | null {
 	if (level <= 8) return 'Medium-Dark';
 	return 'Dark';
 }
-/** Visualizer's free-text `roast_level` → Crema's 1..10 scale. */
-function roastLevelFromWire(label: string | null | undefined): number | null {
+/** Visualizer's free-text `roast_level` → Crema's 1..10 scale. See {@link roastLevelToWire}. */
+export function roastLevelFromWire(label: string | null | undefined): number | null {
 	if (!label) return null;
 	const norm = label.trim().toLowerCase();
 	if (norm.includes('cinnamon') || norm === 'light') return 2;
 	if (norm.includes('medium-light') || norm.includes('city')) return 3;
-	if (norm.includes('medium-dark') || norm.includes('full city')) return 6;
+	// Medium-Dark decodes to 7 (∈[7,8]), NOT 6: `roastLevelToWire` maps 6→'Medium',
+	// so a 'medium-dark' label that decoded to 6 would drift to 5 on the next hop.
+	// 7 is the in-band representative that keeps the round-trip idempotent (GEN1).
+	if (norm.includes('medium-dark') || norm.includes('full city')) return 7;
 	if (norm.includes('dark') || norm.includes('french') || norm.includes('italian'))
 		return 9;
 	if (norm.includes('medium')) return 5;
@@ -243,7 +258,10 @@ export function beanFromWire(
 	bean.defrostedOn = wire.defrosted_date ?? null;
 	bean.openedOn = typeof crema.crema_opened_on === 'string' ? crema.crema_opened_on : null;
 	bean.roastLevel = roastLevelFromWire(wire.roast_level);
-	bean.mix = mixFromMetadata(meta);
+	// Read `crema_mix` from the `crema` sub-block where `beanToWire` writes it —
+	// NOT the top-level `meta` (that path always missed, so `mix` silently never
+	// round-tripped). Caught by the GEN11 converter round-trip test.
+	bean.mix = mixFromMetadata(crema);
 	bean.decaf = crema.crema_decaf === true;
 	bean.origin = {
 		country: wire.country ?? null,

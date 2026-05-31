@@ -194,6 +194,11 @@ export function sampleCurve(
 	segments: readonly ProfileSegment[],
 	damp?: (target: number) => number
 ): CurveSamples {
+	// GEN9: an empty segment list has no curve — return empty columns rather than
+	// the lone seed point `(0, 0)`, which uPlot auto-ranges into a misleading
+	// non-zero x-span. Every caller already guards `time.length === 0` / a
+	// non-finite data-max.
+	if (segments.length === 0) return { time: [], value: [] };
 	const time: number[] = [0];
 	const value: number[] = [0];
 	let t = 0;

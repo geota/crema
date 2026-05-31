@@ -342,11 +342,27 @@ export class BeanLibraryStore {
 	 * for the roaster + each cascaded bag (it collects their ids first).
 	 */
 	deleteRoasterAndBeans(id: string): void {
+		// GEN6: do the whole cascade as ONE envelope update + ONE persist, rather
+		// than N `deleteBean` calls (each persisting) + a trailing `deleteRoaster`
+		// (another). Removing every bean that points at the roaster means no
+		// survivor needs its `roasterId` detached.
 		const beanIds = this.envelope.beans
 			.filter((b) => b.roasterId === id)
 			.map((b) => b.id);
-		for (const beanId of beanIds) this.deleteBean(beanId);
-		this.deleteRoaster(id);
+		const beans = this.envelope.beans.filter((b) => b.roasterId !== id);
+		const roasters = this.envelope.roasters.filter((r) => r.id !== id);
+		const changed =
+			beans.length !== this.envelope.beans.length ||
+			roasters.length !== this.envelope.roasters.length;
+		if (!changed) return;
+		this.envelope = { ...this.envelope, beans, roasters };
+		this.persist();
+		// Clear the active-bean pointer if it pointed at a cascaded bag (mirrors
+		// `deleteBean`'s active-pointer cleanup).
+		if (this.activeId !== null && beanIds.includes(this.activeId)) {
+			this.activeId = null;
+			this.persistActive();
+		}
 	}
 
 	/**

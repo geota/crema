@@ -584,13 +584,13 @@ export interface ImportExtras {
  * records also carry `notes`, `grinderSetting`. Each extra field is read
  * defensively so a stored-shape regression cannot crash the History route.
  *
- * Older records may still carry persisted `tags` / `visualizerId` on the
- * snapshot from before the bean→shot tag copy and the coffee-bag-id live
- * lookup landed. We deliberately DROP those on read — `tags` now lives on
- * the shot row (`StoredShot.tags`), and the visualizer id is resolved
- * live via `resolveCoffeeBagId`. Leaving the old keys in memory would
- * tempt callers to read them again and re-introduce the snapshot-vs-live
- * leak we're closing here.
+ * Older records may still carry a persisted `visualizerId` on the snapshot
+ * from before the coffee-bag-id live lookup landed. We deliberately DROP that
+ * on read — the visualizer id is resolved live via `resolveCoffeeBagId`, and
+ * leaving the stale key in memory would tempt callers to read it again and
+ * re-introduce the snapshot-vs-live leak we're closing here. The snapshot's
+ * `tags`, by contrast, ARE kept — they're the bean's tags frozen at shot time
+ * (see {@link ShotBean.tags}), distinct from the mutable `StoredShot.tags`.
  */
 function coerceShotBean(raw: unknown): ShotBean | null {
 	if (typeof raw !== 'object' || raw === null) return null;
@@ -732,7 +732,12 @@ function coerceStoredShot(obj: Record<string, unknown>): StoredShot | null {
 	return {
 		formatVersion: STORED_SHOT_FORMAT_VERSION,
 		id: obj.id as string,
-		completedAt: typeof obj.completedAt === 'number' ? (obj.completedAt as number) : 0,
+		// GEN4: 0 / non-finite / negative completedAt is a corrupt record that
+		// would render as a 1970 epoch row; fall back to "now" (re-save heals it).
+		completedAt:
+			typeof obj.completedAt === 'number' && Number.isFinite(obj.completedAt) && obj.completedAt > 0
+				? (obj.completedAt as number)
+				: Date.now(),
 		profileName: typeof obj.profileName === 'string' ? (obj.profileName as string) : null,
 		profile: (obj.profile as unknown) ?? null,
 		stopReason: (obj.stopReason as unknown) ?? null,
