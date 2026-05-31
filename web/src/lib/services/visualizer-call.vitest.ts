@@ -14,13 +14,19 @@
  */
 
 import { Cause, Effect, Exit, Layer } from 'effect';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import {
 	describeVisualizerError,
 	isRecoverable,
 	visualizerCall,
 	type VisualizerCallError
 } from './visualizer-call.ts';
+import { initTestWasm } from '../wasm/test-init.ts';
+
+// `isRecoverable` now delegates the retry policy to the wasm core (CORE5).
+beforeAll(async () => {
+	await initTestWasm();
+});
 import { HttpClient, type HttpRequest } from './http-client.ts';
 import { TokenVault } from './token-vault.ts';
 import {
