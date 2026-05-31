@@ -22,7 +22,7 @@
  * `Command::WriteCharacteristic` the core emits.
  */
 
-import { Cause, Exit } from 'effect';
+import { parseConnectExit } from './connect-exit.ts';
 import type { CremaCore, NotificationSource } from '$lib/core';
 import { WriteTarget } from '$lib/core/crema-core';
 import { describeError } from '$lib/utils/error';
@@ -260,7 +260,8 @@ export class De1Manager {
 				onGattVerified: () => this.patchDiagnostics({ gattVerified: true })
 			})
 		);
-		if (Exit.isFailure(exit)) {
+		const outcome = parseConnectExit(exit);
+		if (!outcome.ok) {
 			// Disconnect before nulling — nulling alone leaves the transport's
 			// auto-reconnect loop running on a half-dead device.
 			device.disconnect();
@@ -269,10 +270,9 @@ export class De1Manager {
 			this.callbacks.onState('failed');
 			// Name the failed step — a service / characteristic failure means the
 			// selected device is almost certainly NOT a DE1.
-			const failure = Cause.failureOption(exit.cause);
-			const step = failure._tag === 'Some' ? failure.value.step : 'connect';
-			const cause = failure._tag === 'Some' ? failure.value.cause : exit.cause;
-			this.callbacks.onStatus(`DE1 connection failed at "${step}": ${describeError(cause)}`);
+			this.callbacks.onStatus(
+				`DE1 connection failed at "${outcome.step}": ${describeError(outcome.cause)}`
+			);
 			return;
 		}
 		this.callbacks.onState('ready');
