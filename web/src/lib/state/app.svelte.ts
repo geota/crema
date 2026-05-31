@@ -487,7 +487,7 @@ export class CremaApp {
 			onReconnected: () => {
 				void this.core.queryScaleSettings().then((output) => this.applyCoreOutput(output));
 			}
-		});
+		}, runtime);
 		// Hydrate the last-uploaded profile fingerprint from localStorage,
 		// so a page reload that kept the DE1 connected (or a quick
 		// reconnect to the same machine) skips the defensive auto-upload
