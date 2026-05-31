@@ -49,6 +49,7 @@ import { describeError } from '$lib/utils/error';
 import { Effect } from 'effect';
 import type { AppRuntime } from '$lib/effect/runtime';
 import { UploadQueue } from '$lib/services/upload-queue';
+import { Webhooks } from '$lib/services/webhooks';
 import {
 	CremaUiState,
 	DEFAULT_SCALE_STANDBY,
@@ -774,23 +775,13 @@ export class CremaApp {
 	 * {@link sendTestWebhook} instead, which surfaces the outcome.
 	 */
 	private fireWebhook(eventType: string, payload: object): void {
-		const prefs = getSettingsStore().current;
-		if (!prefs.webhookEnabled) return;
-		const url = prefs.webhookUrl.trim();
-		if (url.length === 0) return;
-		const enabled = prefs.webhookEvents[eventType as keyof typeof prefs.webhookEvents];
-		if (!enabled) return;
-		const body = JSON.stringify({ type: eventType, payload, timestamp: Date.now() });
-		void fetch(url, {
-			method: 'POST',
-			mode: 'no-cors',
-			headers: { 'Content-Type': 'text/plain' },
-			body,
-			signal: AbortSignal.timeout(5000)
-		}).catch((err) => {
-			const reason = err instanceof Error ? err.message : String(err);
-			this.state.log(`webhook ${eventType} failed: ${reason}`);
-		});
+		// Delegated to the `Webhooks` service (T-23): it owns the same gating
+		// (enabled + non-empty URL + per-event toggle), the no-cors `text/plain`
+		// delivery, and the never-fail posture. `runFork` is detached fire-and-
+		// forget — same as the old `void fetch()`. No-op when there's no runtime.
+		// (Observability change per plan T-15: a delivery failure is now an
+		// `Effect.logError` rather than a BLE-debug-panel line.)
+		this.runtime?.runFork(Effect.flatMap(Webhooks, (w) => w.fire(eventType, payload)));
 	}
 
 	/**
@@ -807,46 +798,12 @@ export class CremaApp {
 	 * can't be confirmed from the browser, which the message says plainly.
 	 */
 	async sendTestWebhook(): Promise<{ ok: boolean; message: string }> {
-		const prefs = getSettingsStore().current;
-		const url = prefs.webhookUrl.trim();
-		if (url.length === 0) {
-			return { ok: false, message: 'No URL configured.' };
-		}
-		const body = JSON.stringify({
-			type: 'test',
-			payload: { message: 'Hello from Crema' },
-			timestamp: Date.now()
-		});
-		try {
-			const res = await fetch(url, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body,
-				signal: AbortSignal.timeout(5000)
-			});
-			return res.ok
-				? { ok: true, message: `Sent (HTTP ${res.status})` }
-				: { ok: false, message: `HTTP ${res.status}` };
-		} catch {
-			// The readable (CORS) attempt was blocked — preflight failed, so
-			// the POST never left. Retry opaque, mirroring fireWebhook.
-			try {
-				await fetch(url, {
-					method: 'POST',
-					mode: 'no-cors',
-					headers: { 'Content-Type': 'text/plain' },
-					body,
-					signal: AbortSignal.timeout(5000)
-				});
-				return {
-					ok: true,
-					message: 'Sent — opaque response; delivery not confirmable (endpoint lacks CORS)'
-				};
-			} catch (err) {
-				const reason = err instanceof Error ? err.message : String(err);
-				return { ok: false, message: reason };
-			}
-		}
+		// Delegated to `Webhooks.sendTest` (T-23): same CORS-first → opaque-
+		// fallback ladder + readable outcome. `runPromise` is safe (the service's
+		// error channel is `never`).
+		if (this.runtime === null) return { ok: false, message: 'App runtime unavailable.' };
+		const url = getSettingsStore().current.webhookUrl;
+		return this.runtime.runPromise(Effect.flatMap(Webhooks, (w) => w.sendTest(url)));
 	}
 
 	/**
