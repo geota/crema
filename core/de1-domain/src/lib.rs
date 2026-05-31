@@ -115,8 +115,10 @@ pub use units::{
     ml_to_fl_oz, oz_to_grams, psi_to_bar,
 };
 pub use visualizer_sync::{
-    LocalShotRef, ReconcileAction, WireShot, reconcile_shots, reconcile_shots_json,
-    signature_for_bean, signature_for_roaster, signature_for_shot,
+    BeanReconcileAction, LocalShotRef, ReconcileAction, RoasterReconcileAction, WireShot,
+    reconcile_beans, reconcile_beans_json, reconcile_roasters, reconcile_roasters_json,
+    reconcile_shots, reconcile_shots_json, signature_for_bean, signature_for_roaster,
+    signature_for_shot,
 };
 pub use visualizer_wire::{
     BagWire, RoasterWire, bean_from_wire, bean_from_wire_json, bean_to_wire, bean_to_wire_json,

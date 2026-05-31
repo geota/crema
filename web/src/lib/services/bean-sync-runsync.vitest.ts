@@ -7,8 +7,11 @@
  * row with no visualizerId binds to the matching remote rather than duplicating),
  * push (local create → POST → bind id), the premium downshift (a 403 on the
  * first write flips the run read-only + caches premium=false), and the
- * not-signed-in early return. The wasm signatures are mocked (deterministic by
- * name); beanFromWire/roasterFromWire stay real. Run: `pnpm test:vitest`.
+ * not-signed-in early return. As of CORE4 the pull-reconcile runs through the
+ * real wasm kernel (`reconcileRoasters`/`reconcileBeans`), and
+ * beanFromWire/roasterFromWire/beanToWire are real too — so the test exercises
+ * the actual cross-shell matching. The `shot-sync-signatures` mock below is now
+ * vestigial (bean-sync no longer imports it) but harmless. Run: `pnpm test:vitest`.
  */
 
 import { Effect, Layer } from 'effect';
