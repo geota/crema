@@ -39,12 +39,28 @@ import {
 	decodeResponse
 } from '../effect/schema/visualizer.ts';
 import type { Bean, Roaster } from '$lib/bean';
+import type { BeanLibraryStore } from '$lib/bean/store.svelte';
 import {
 	bagBodyToWriteRequest,
+	beanFromWire,
 	beanToWire,
+	readSyncSettings,
 	roasterBodyToWriteRequest,
-	roasterToWire
+	roasterFromWire,
+	roasterToWire,
+	writeSyncSettings,
+	type SyncLogEntry,
+	type SyncResult
 } from '$lib/bean/visualizer-sync';
+import { signatureForBean, signatureForRoaster } from '$lib/visualizer/shot-sync-signatures';
+import type { components } from '$lib/visualizer/openapi';
+
+type RoasterListResponse = components['schemas']['RoasterListResponse'];
+type CoffeeBagListResponse = components['schemas']['CoffeeBagListResponse'];
+/** The raw wire shapes `beanFromWire` / `roasterFromWire` accept (local to
+ *  `visualizer-sync`, so we borrow them via the converters' parameter types). */
+type BagWire = Parameters<typeof beanFromWire>[0];
+type RoasterWire = Parameters<typeof roasterFromWire>[0];
 
 /** Visualizer API base. */
 const API_BASE = 'https://visualizer.coffee/api';
@@ -57,6 +73,26 @@ type VisualizerCallError =
 	| TokenRefreshFailedError
 	| VisualizerPremiumGatedError
 	| VisualizerNotFoundError;
+
+/** Human-readable summary for the sync log / `SyncResult.error` (display only). */
+function describeCallError(e: VisualizerCallError | ResponseDecodeError): string {
+	switch (e._tag) {
+		case 'HttpStatusError':
+			return `HTTP ${e.status}: ${e.body ?? ''}`.trim();
+		case 'NetworkError':
+			return `Network error: ${e.cause instanceof Error ? e.cause.message : String(e.cause)}`;
+		case 'VisualizerPremiumGatedError':
+			return 'Premium subscription required for writes.';
+		case 'VisualizerNotFoundError':
+			return `Visualizer row not found: ${e.visualizerId}`;
+		case 'NotAuthenticatedError':
+			return 'Sign in to Visualizer first.';
+		case 'TokenRefreshFailedError':
+			return 'Visualizer rejected the access token. Please sign in again.';
+		case 'ResponseDecodeError':
+			return 'Unexpected Visualizer response.';
+	}
+}
 
 interface FetchOptions {
 	method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
@@ -88,6 +124,16 @@ export class BeanSync extends Context.Tag('crema/BeanSync')<
 		readonly deleteRoaster: (
 			visualizerId: string
 		) => Effect.Effect<void, Exclude<VisualizerCallError, VisualizerNotFoundError>>;
+		/**
+		 * The full bidirectional bean/roaster sync (replaces
+		 * `bean/visualizer-sync.ts` `runSync`): pull every remote roaster + bag and
+		 * reconcile (remote-wins LWW, bind by visualizer-id → signature → name),
+		 * then push every local create/update. Premium-gated writes downshift the
+		 * run to read-only on the first 402/403. Mutates `library` in place and
+		 * returns the aggregate {@link SyncResult}. Never fails (errors land in the
+		 * result's `log` / `error`), so the boundary stays a plain `Promise`.
+		 */
+		readonly runSync: (library: BeanLibraryStore) => Effect.Effect<SyncResult>;
 	}
 >() {}
 
@@ -196,6 +242,238 @@ export const BeanSyncLive = Layer.effect(
 			);
 		});
 
-		return BeanSync.of({ uploadBean, uploadRoaster, deleteBean, deleteRoaster });
+		// ── Pull helpers (paginated; `items=100` is the spec max) ──────────────
+		// A 50-page safety cap mirrors the old `runSync`. The list endpoints carry
+		// summaries Crema treats as thin wire bodies — the same approach the old
+		// module used (a full per-row GET round-trip is a documented follow-up).
+		const pullPaged = <T>(base: string) =>
+			Effect.gen(function* () {
+				const out: T[] = [];
+				let page = 1;
+				while (page < 50) {
+					const body = (yield* call(`${base}?items=100&page=${page}`)) as {
+						data?: T[];
+						paging?: { pages?: number };
+					} | null;
+					const data = body?.data ?? [];
+					out.push(...data);
+					const totalPages = body?.paging?.pages ?? page;
+					if (page >= totalPages || data.length === 0) break;
+					page += 1;
+				}
+				return out;
+			});
+
+		const runSync = Effect.fn('BeanSync.runSync')(function* (library: BeanLibraryStore) {
+			const settings = readSyncSettings();
+			const log: SyncLogEntry[] = [];
+			const result: SyncResult = {
+				ok: false,
+				pulled: 0,
+				pushed: 0,
+				deleted: 0,
+				skipped: 0,
+				premiumLocked: settings.premium === false,
+				log
+			};
+
+			// Bail (gracefully) if not signed in — mirrors the old `isConnected()`.
+			const tokens = yield* vault.getTokens;
+			if (tokens === null) {
+				result.error = 'Sign in to Visualizer first.';
+				return result;
+			}
+
+			const program = Effect.gen(function* () {
+				// 1) Pull remote roasters → reconcile (id → signature → name).
+				const remoteRoasters = (yield* pullPaged<RoasterListResponse['data'][number]>(
+					'/roasters'
+				)) as RoasterWire[];
+				const remoteRoasterIdToLocal = new Map<string, string>();
+				for (const wire of remoteRoasters) {
+					if (!wire.id) continue;
+					const wireSig = signatureForRoaster({ name: wire.name });
+					const localById = library.roasters.find((r) => r.visualizerId === wire.id);
+					const localBySig =
+						localById ??
+						library.roasters.find(
+							(r) =>
+								r.visualizerId === null &&
+								r.deletedAt == null &&
+								signatureForRoaster({ name: r.name }) === wireSig
+						);
+					const localByName = localBySig ?? library.findRoasterByName(wire.name);
+					if (localById) {
+						library.updateRoaster(localById.id, {
+							name: wire.name,
+							website: wire.website ?? null,
+							imageUrl: wire.image_url ?? null,
+							canonicalRoasterId: wire.canonical_roaster_id ?? null,
+							visualizerId: wire.id
+						});
+						remoteRoasterIdToLocal.set(wire.id, localById.id);
+					} else if (localByName) {
+						library.updateRoaster(localByName.id, { visualizerId: wire.id });
+						remoteRoasterIdToLocal.set(wire.id, localByName.id);
+						log.push({ direction: 'pull', kind: 'roaster', id: localByName.id, name: wire.name, at: Date.now() });
+					} else {
+						const fresh = roasterFromWire(wire);
+						library.upsertRoaster(fresh);
+						remoteRoasterIdToLocal.set(wire.id, fresh.id);
+						result.pulled += 1;
+						log.push({ direction: 'pull', kind: 'roaster', id: fresh.id, name: wire.name, at: Date.now() });
+					}
+				}
+
+				// 2) Push local roasters with no visualizer id (premium-gated).
+				let premiumLocked = settings.premium === false;
+				let premiumBannerLogged = settings.premium === false;
+				const logPremiumBannerOnce = () => {
+					if (premiumBannerLogged) return;
+					premiumBannerLogged = true;
+					log.push({
+						direction: 'skip',
+						kind: 'bean',
+						id: '',
+						name: 'Premium required',
+						at: Date.now(),
+						error:
+							'Premium required — beans + roasters disabled from push. Upgrade at visualizer.coffee/premium.'
+					});
+				};
+				for (const local of library.roasters) {
+					if (local.visualizerId) continue;
+					if (premiumLocked) {
+						result.skipped += 1;
+						log.push({ direction: 'skip', kind: 'roaster', id: local.id, name: local.name, at: Date.now(), error: 'premium required' });
+						continue;
+					}
+					const res = yield* Effect.either(
+						call('/roasters', { method: 'POST', body: roasterBodyToWriteRequest(roasterToWire(local)) })
+					);
+					if (res._tag === 'Right') {
+						const wire = res.right as RoasterWire | null;
+						if (wire?.id) {
+							library.updateRoaster(local.id, { visualizerId: wire.id });
+							remoteRoasterIdToLocal.set(wire.id, local.id);
+						}
+						result.pushed += 1;
+						writeSyncSettings({ premium: true });
+						log.push({ direction: 'push', kind: 'roaster', id: local.id, name: local.name, at: Date.now() });
+					} else if (res.left._tag === 'VisualizerPremiumGatedError') {
+						premiumLocked = true;
+						writeSyncSettings({ premium: false });
+						logPremiumBannerOnce();
+						log.push({ direction: 'skip', kind: 'roaster', id: local.id, name: local.name, at: Date.now(), error: 'premium required' });
+					} else {
+						result.error = describeCallError(res.left);
+						log.push({ direction: 'skip', kind: 'roaster', id: local.id, name: local.name, at: Date.now(), error: result.error });
+					}
+				}
+
+				// 3) Pull remote bags → reconcile (id/crema_id → signature).
+				const remoteBags = (yield* pullPaged<CoffeeBagListResponse['data'][number]>(
+					'/coffee_bags'
+				)) as BagWire[];
+				const localBeans = library.beans;
+				for (const wire of remoteBags) {
+					const decoded = beanFromWire(wire, (rid) =>
+						rid ? (remoteRoasterIdToLocal.get(rid) ?? null) : null
+					);
+					const decodedSig = signatureForBean({
+						name: decoded.name,
+						roasterName: (decoded.roasterId && library.getRoaster(decoded.roasterId)?.name) ?? null,
+						roastedOn: decoded.roastedOn
+					});
+					const existing =
+						localBeans.find(
+							(b) =>
+								(decoded.visualizerId && b.visualizerId === decoded.visualizerId) ||
+								b.id === decoded.id
+						) ??
+						localBeans.find(
+							(b) =>
+								b.visualizerId === null &&
+								b.deletedAt == null &&
+								signatureForBean({
+									name: b.name,
+									roasterName: (b.roasterId && library.getRoaster(b.roasterId)?.name) ?? null,
+									roastedOn: b.roastedOn
+								}) === decodedSig
+						);
+					if (existing) {
+						library.replaceBean({ ...decoded, id: existing.id });
+						log.push({ direction: 'pull', kind: 'bean', id: existing.id, name: decoded.name, at: Date.now() });
+					} else {
+						library.upsertBean(decoded);
+						result.pulled += 1;
+						log.push({ direction: 'pull', kind: 'bean', id: decoded.id, name: decoded.name, at: Date.now() });
+					}
+				}
+
+				// 4) Push local bags: insert (no visualizerId) + update (updatedAt > lastSync).
+				const lastSync = settings.lastSyncAt ?? 0;
+				for (const local of library.beans) {
+					if (premiumLocked) {
+						if (!local.visualizerId) {
+							result.skipped += 1;
+							log.push({ direction: 'skip', kind: 'bean', id: local.id, name: local.name, at: Date.now(), error: 'premium required' });
+						}
+						continue;
+					}
+					const remoteRoasterId = local.roasterId
+						? (library.getRoaster(local.roasterId)?.visualizerId ?? null)
+						: null;
+					const body = bagBodyToWriteRequest(beanToWire(local, remoteRoasterId));
+					if (!local.visualizerId) {
+						const res = yield* Effect.either(call('/coffee_bags', { method: 'POST', body }));
+						if (res._tag === 'Right') {
+							const wire = res.right as BagWire | null;
+							if (wire?.id) library.updateBean(local.id, { visualizerId: wire.id });
+							result.pushed += 1;
+							log.push({ direction: 'push', kind: 'bean', id: local.id, name: local.name, at: Date.now() });
+						} else if (res.left._tag === 'VisualizerPremiumGatedError') {
+							premiumLocked = true;
+							writeSyncSettings({ premium: false });
+							logPremiumBannerOnce();
+							log.push({ direction: 'skip', kind: 'bean', id: local.id, name: local.name, at: Date.now(), error: 'premium required' });
+						} else {
+							log.push({ direction: 'skip', kind: 'bean', id: local.id, name: local.name, at: Date.now(), error: describeCallError(res.left) });
+						}
+					} else if (local.updatedAt > lastSync) {
+						const res = yield* Effect.either(call(`/coffee_bags/${local.visualizerId}`, { method: 'PATCH', body }));
+						if (res._tag === 'Right') {
+							result.pushed += 1;
+							log.push({ direction: 'push', kind: 'bean', id: local.id, name: local.name, at: Date.now() });
+						} else {
+							if (res.left._tag === 'VisualizerPremiumGatedError') {
+								premiumLocked = true;
+								writeSyncSettings({ premium: false });
+								logPremiumBannerOnce();
+							}
+							log.push({ direction: 'skip', kind: 'bean', id: local.id, name: local.name, at: Date.now(), error: describeCallError(res.left) });
+						}
+					}
+				}
+
+				// 5) Mark complete.
+				writeSyncSettings({ lastSyncAt: Date.now(), premium: premiumLocked ? false : (settings.premium ?? true) });
+				result.ok = true;
+				result.premiumLocked = premiumLocked;
+			});
+
+			// The pull legs surface unrecoverable failures (auth/network) as the
+			// run's `error`, matching the old top-level try/catch.
+			yield* program.pipe(
+				Effect.catchAll((e) =>
+					Effect.sync(() => {
+						result.error = describeCallError(e);
+					})
+				)
+			);
+			return result;
+		});
+
+		return BeanSync.of({ uploadBean, uploadRoaster, deleteBean, deleteRoaster, runSync });
 	})
 );
