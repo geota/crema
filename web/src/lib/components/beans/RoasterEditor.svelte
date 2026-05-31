@@ -36,6 +36,7 @@
 	import { resolve } from '$app/paths';
 	import { getBeanStore, roasterMarkTone, type Roaster } from '$lib/bean';
 	import RoasterDeleteSplit from './RoasterDeleteSplit.svelte';
+	import { confirmDialog } from '$lib/components/shared/confirm-dialog.svelte';
 
 	let {
 		roaster,
@@ -140,7 +141,7 @@
 		goto(resolve('/beans?tab=roasters'));
 	}
 
-	function discard(): void {
+	async function discard(): Promise<void> {
 		if (isNew) {
 			// Nothing to lose unless the draft is non-empty.
 			const dirty =
@@ -150,7 +151,7 @@
 				draftRecord.city ||
 				draftRecord.country ||
 				draftRecord.notes.trim();
-			if (dirty && !confirm('Discard new roaster?')) return;
+			if (dirty && !(await confirmDialog({ message: 'Discard new roaster?', confirmLabel: 'Discard' }))) return;
 		}
 		back();
 	}

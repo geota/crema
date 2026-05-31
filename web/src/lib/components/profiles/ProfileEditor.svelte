@@ -42,6 +42,7 @@
 	import PeNumber from './PeNumber.svelte';
 	import { getSettingsStore } from '$lib/settings';
 	import { getCremaAppContext } from '$lib/shell/app-context';
+	import { confirmDialog } from '$lib/components/shared/confirm-dialog.svelte';
 	import {
 		MAX_TOTAL_VOLUME_ML,
 		MIN_TOTAL_VOLUME_ML,
@@ -310,8 +311,8 @@
 	}
 
 	/** Discard edits — revert the draft to its loaded baseline. */
-	function discard(): void {
-		if (dirty && !confirm('Discard all changes to this profile?')) return;
+	async function discard(): Promise<void> {
+		if (dirty && !(await confirmDialog({ message: 'Discard all changes to this profile?', confirmLabel: 'Discard' }))) return;
 		const base = baseline ?? blankProfile();
 		draft = { ...base, segments: base.segments.map((s) => ({ ...s })) };
 		isCreateOverride = null;
@@ -327,8 +328,8 @@
 	}
 
 	/** Back to wherever the user came from (Brew or Profiles per `returnPath`). */
-	function back(): void {
-		if (dirty && !confirm('Leave the editor? Unsaved changes will be lost.')) return;
+	async function back(): Promise<void> {
+		if (dirty && !(await confirmDialog({ message: 'Leave the editor? Unsaved changes will be lost.', confirmLabel: 'Leave' }))) return;
 		void goto(returnPath);
 	}
 

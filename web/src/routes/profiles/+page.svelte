@@ -31,6 +31,7 @@
 	import SortPill from '$lib/components/shared/SortPill.svelte';
 	import FilterPills from '$lib/components/shared/FilterPills.svelte';
 	import { downloadBlob, filenameStamp } from '$lib/utils/download';
+	import { confirmDialog } from '$lib/components/shared/confirm-dialog.svelte';
 
 	const store = getProfileStore();
 	const ctx = getCremaAppContext();
@@ -388,7 +389,7 @@
 	 * surface via the "Hidden" filter pill, where this same handler
 	 * runs the unhide branch.
 	 */
-	function remove(id: string): void {
+	async function remove(id: string): Promise<void> {
 		const profile = store.get(id) ?? store.hiddenBuiltinProfiles.find((p) => p.id === id);
 		if (!profile) return;
 		if (showingHidden && profile.source === 'builtin') {
@@ -401,12 +402,12 @@
 			return;
 		}
 		if (profile.source === 'builtin') {
-			if (confirm(`Hide "${profile.name}" from the library?`)) {
+			if (await confirmDialog({ message: `Hide "${profile.name}" from the library?`, confirmLabel: 'Hide' })) {
 				store.delete(id);
 			}
 			return;
 		}
-		if (confirm(`Delete "${profile.name}"? This cannot be undone.`)) {
+		if (await confirmDialog({ message: `Delete "${profile.name}"? This cannot be undone.`, confirmLabel: 'Delete', danger: true })) {
 			store.delete(id);
 		}
 	}

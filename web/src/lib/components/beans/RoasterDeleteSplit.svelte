@@ -19,6 +19,7 @@
 	import { getBeanStore, readSyncSettings } from '$lib/bean';
 	import { getCremaAppContext } from '$lib/shell/app-context';
 	import SplitButton from '$lib/components/shared/SplitButton.svelte';
+	import { confirmDialog } from '$lib/components/shared/confirm-dialog.svelte';
 
 	let {
 		roasterId,
@@ -82,22 +83,22 @@
 		if (roasterVizId) await api.beans.deleteRoaster(roasterVizId).catch(warn);
 	}
 
-	function detach(remote: boolean): void {
+	async function detach(remote: boolean): Promise<void> {
 		const msg = remote
 			? `Delete "${roasterName}" (and its Visualizer copy)? Linked bags are kept and detached.`
 			: `Delete "${roasterName}" from this device? Linked bags are kept and detached.`;
-		if (!confirm(msg)) return;
+		if (!(await confirmDialog({ message: msg, confirmLabel: 'Delete', danger: true }))) return;
 		// Detach deletes only the roaster remotely; bags are kept (detached).
 		const roasterVizId = remote ? (library.getRoaster(roasterId)?.visualizerId ?? null) : null;
 		library.deleteRoaster(roasterId);
 		if (remote) void fireRemoteDeletes(roasterVizId, []);
 		onDeleted?.();
 	}
-	function cascade(remote: boolean): void {
+	async function cascade(remote: boolean): Promise<void> {
 		const msg = remote
 			? `Delete "${roasterName}" and its ${beansLabel}, here and on Visualizer? This cannot be undone.`
 			: `Delete "${roasterName}" and its ${beansLabel} from this device? This cannot be undone.`;
-		if (!confirm(msg)) return;
+		if (!(await confirmDialog({ message: msg, confirmLabel: 'Delete', danger: true }))) return;
 		// Capture the roaster + every linked bag's remote id BEFORE the cascade
 		// removes the rows, then delete locally and fire the remote DELETEs.
 		const roasterVizId = remote ? (library.getRoaster(roasterId)?.visualizerId ?? null) : null;

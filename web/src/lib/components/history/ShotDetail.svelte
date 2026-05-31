@@ -27,6 +27,7 @@
 	import { getHistoryContext } from '$lib/state';
 	import TagInput from '$lib/components/profiles/TagInput.svelte';
 	import SplitButton from '$lib/components/shared/SplitButton.svelte';
+	import { toast } from '$lib/components/shared/toast.svelte';
 	import StaticShotChart from './StaticShotChart.svelte';
 	import BeanPicker from './BeanPicker.svelte';
 
@@ -237,7 +238,7 @@
 			downloadBlob(shotFilename(shot), blob);
 		} catch (err) {
 			console.error('Shot export failed', err);
-			alert(`Export failed: ${err instanceof Error ? err.message : String(err)}`);
+			toast.error(`Export failed: ${err instanceof Error ? err.message : String(err)}`);
 		}
 	}
 
@@ -273,12 +274,12 @@
 			console.log('[replay download] miss — shotId:', shot.id);
 			console.log('[replay download] capture key count:', keys.length);
 			for (const k of keys) console.log('[replay download] key:', k);
-			alert(
+			toast.error(
 				'No raw BLE capture for this shot. See the console — the shot id and every capture key on file are logged there.'
 			);
 		} catch (err) {
 			console.error('Replay capture download failed', err);
-			alert(`Download failed: ${err instanceof Error ? err.message : String(err)}`);
+			toast.error(`Download failed: ${err instanceof Error ? err.message : String(err)}`);
 		}
 	}
 
@@ -295,17 +296,17 @@
 	function loadOnBrew(): void {
 		const app = ctx().app;
 		if (!app) {
-			alert('App is still loading — try again in a moment.');
+			toast.info('App is still loading — try again in a moment.');
 			return;
 		}
 		if (!shot.profileName) {
-			alert("This shot wasn't tagged with a profile name; nothing to load.");
+			toast.info("This shot wasn't tagged with a profile name; nothing to load.");
 			return;
 		}
 		const store = getProfileStore();
 		const profile = store.all.find((p) => p.name === shot.profileName);
 		if (!profile) {
-			alert(
+			toast.info(
 				`Profile "${shot.profileName}" was renamed or deleted since this shot. Open Profiles to load a current profile manually.`
 			);
 			return;
@@ -321,13 +322,13 @@
 	// Save-as-profile needs a curve-to-profile deriver (not the same as the
 	// v2 profile importer); deferred.
 	function saveAsProfile(): void {
-		alert('Save-as-profile is coming in a later step.');
+		toast.info('Save-as-profile is coming in a later step.');
 	}
 	// Visualizer sharing is wired via Settings → Sharing — shots upload
 	// automatically when sync is on, and a manual "Sync now" force-pushes
 	// the queue. This button just nudges the user there.
 	function share(): void {
-		alert('Open Settings → Sharing to sign in to Visualizer and sync shots. Synced shots are visible at visualizer.coffee/shots.');
+		toast.info('Open Settings → Sharing to sign in to Visualizer and sync shots. Synced shots are visible at visualizer.coffee/shots.');
 	}
 
 	// ── Bean rebind (retroactive) ────────────────────────────────────────

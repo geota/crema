@@ -18,6 +18,7 @@
 	import { getBeanStore, readSyncSettings } from '$lib/bean';
 	import { getCremaAppContext } from '$lib/shell/app-context';
 	import SplitButton from '$lib/components/shared/SplitButton.svelte';
+	import { confirmDialog } from '$lib/components/shared/confirm-dialog.svelte';
 
 	let {
 		beanId,
@@ -70,11 +71,11 @@
 		}
 	}
 
-	function run(remote: boolean): void {
+	async function run(remote: boolean): Promise<void> {
 		const msg = remote
 			? `Delete "${beanName}" from this device and Visualizer? This cannot be undone.`
 			: `Delete "${beanName}" from this device? This cannot be undone.`;
-		if (!confirm(msg)) return;
+		if (!(await confirmDialog({ message: msg, confirmLabel: 'Delete', danger: true }))) return;
 		// Capture the remote id BEFORE the local delete removes the row.
 		const visualizerId = remote ? (library.getBean(beanId)?.visualizerId ?? null) : null;
 		library.deleteBean(beanId);

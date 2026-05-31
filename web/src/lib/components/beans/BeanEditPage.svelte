@@ -43,6 +43,7 @@
 	import TagInput from '$lib/components/profiles/TagInput.svelte';
 	import RoastSlider from './RoastSlider.svelte';
 	import { getSettingsStore } from '$lib/settings';
+	import { confirmDialog } from '$lib/components/shared/confirm-dialog.svelte';
 
 	let {
 		bean,
@@ -278,8 +279,8 @@
 		goto(resolve('/beans'));
 	}
 
-	function discard(): void {
-		if (!confirm('Discard changes?')) return;
+	async function discard(): Promise<void> {
+		if (!(await confirmDialog({ message: 'Discard changes?', confirmLabel: 'Discard' }))) return;
 		if (isNew) {
 			back();
 		} else {
