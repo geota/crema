@@ -21,6 +21,7 @@
 
 import type { Profile, ProfileStep, SparkShape } from './core-types';
 import { newProfileId } from '$lib/core';
+import { roastFromProfile as wasmRoastFromProfile } from '$lib/wasm/de1_wasm';
 import { formatRatio } from '$lib/utils/ratio';
 import { getSettingsStore } from '$lib/settings/store.svelte';
 
@@ -340,89 +341,19 @@ function isTeaProfile(title: string): boolean {
 }
 
 /**
- * Built-in profiles whose title is the leaf of a non-coffee utility group —
- * cleaning, calibration / leak tests, or steam-only. These never have a roast.
- */
-function isUtilityProfile(title: string): boolean {
-	const t = title.toLowerCase();
-	return (
-		t.startsWith('cleaning/') ||
-		t.startsWith('test/') ||
-		t.startsWith('ghc/') ||
-		t === 'steam only'
-	);
-}
-
-/**
- * Explicit roast overrides keyed by **exact built-in title**. Used where the
- * title + notes heuristic in {@link roastFromProfile} would mis-read a profile
- * — typically because the notes mention roast comparatively ("works from
- * lighter to darker roasts") rather than prescriptively. Accuracy first.
- */
-const ROAST_OVERRIDES: Record<string, Roast | null> = {
-	// Adaptive / "wide grind range" profiles: notes name *both* light and dark
-	// roasts to describe their span, so no single roast applies.
-	'Gagné/Adaptive Shot 92C v1.0': null,
-	'Easy blooming - active pressure decline': null,
-	'Adaptive v2': null,
-	'I got your back': null,
-	// Turbo profiles target high-extraction grinders, not a roast level.
-	TurboBloom: null,
-	TurboTurbo: null,
-	'Extractamundo Dos!': null
-};
-
-/**
- * Ordered roast phrases, most-specific first. Each maps a phrase that may
- * appear in a profile's title or notes to a roast level. "medium to dark" must
- * be tested before the bare "dark" / "medium" words so a range resolves to its
- * dominant end the same way a barista would read it.
- */
-const ROAST_PHRASES: ReadonlyArray<readonly [RegExp, Roast]> = [
-	// Explicit prescriptive ranges — resolve to the end the notes lead with.
-	[/\bmedium[\s-]*to[\s-]*dark\b/, 'dark'],
-	[/\bmedium[\s-]*dark\b/, 'dark'],
-	[/\bdark[\s-]*to[\s-]*medium\b/, 'dark'],
-	[/\bmedium[\s-]*to[\s-]*light\b/, 'light'],
-	[/\bmedium[\s-]*light\b/, 'light'],
-	[/\blight[\s-]*to[\s-]*medium\b/, 'light'],
-	// Single prescriptive roast words / phrases.
-	[/\b(?:very[\s-]+)?dark[\s-]+roast(?:ed|s)?\b/, 'dark'],
-	[/\b(?:a\s+)?dark[\s-]+roast\b/, 'dark'],
-	[/\bdark[\s-]+roasted\b/, 'dark'],
-	[/\bmedium[\s-]+roast(?:ed|s)?\b/, 'medium'],
-	[/\b(?:light(?:ly)?)[\s-]+roast(?:ed|s)?\b/, 'light']
-];
-
-/**
- * Classify a built-in profile's roast by reading its **title and notes**
- * together (case-insensitive). Tea / cleaning / calibration / pour-over /
- * steam profiles have no roast and resolve to `null`; espresso profiles
- * resolve from an explicit roast phrase, or `null` when the notes never
- * commit to one. An explicit {@link ROAST_OVERRIDES} entry always wins — it
- * is the escape hatch for profiles the phrase heuristic mis-reads.
+ * Classify a built-in profile's roast suitability by reading its **title and
+ * notes** together. Tea / cleaning / calibration / pour-over / steam profiles
+ * have no roast (`null`); espresso profiles resolve from an explicit roast
+ * phrase (most-specific first), a titled `default-*` slug, or `null` when the
+ * notes never commit to one. Per-title overrides win. Roast stays **optional**:
+ * `null` means "no roast clearly known", never "medium by default".
  *
- * Roast stays **optional**: `null` means "no roast clearly known", never
- * "medium by default".
+ * Delegates to `de1_domain::roast_from_profile` via wasm (CORE3) — the phrase
+ * table + overrides + tea/utility prefixes now live in the core so the
+ * Profiles-page roast filter agrees across shells.
  */
 function roastFromProfile(profile: Profile): Roast | null {
-	if (profile.title in ROAST_OVERRIDES) return ROAST_OVERRIDES[profile.title];
-	// Non-coffee and pour-over profiles never carry a roast.
-	if (isTeaProfile(profile.title) || isUtilityProfile(profile.title)) {
-		return null;
-	}
-	const text = `${profile.title}\n${profile.notes}`.toLowerCase();
-	for (const [phrase, roast] of ROAST_PHRASES) {
-		if (phrase.test(text)) return roast;
-	}
-	// Titled roast hints used by the A-Flow family (`default-dark`,
-	// `default-very-dark`, `default-medium`) — these carry the roast in the
-	// title slug, not in the notes.
-	const title = profile.title.toLowerCase();
-	if (/\bvery[\s-]*dark\b|\bdefault-dark\b/.test(title)) return 'dark';
-	if (/\bdefault-medium\b/.test(title)) return 'medium';
-	if (/\bdefault-light\b/.test(title)) return 'light';
-	return null;
+	return (wasmRoastFromProfile(profile.title, profile.notes) ?? null) as Roast | null;
 }
 
 /**

@@ -13,6 +13,12 @@ thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 typeshare = "1.0.5"
+# Dependency-free, size-conscious regex engine (~10× smaller wasm footprint
+# than the full `regex` crate — no Unicode tables / SIMD). Used only by
+# `profile_roast` to port the built-in roast-suitability heuristic. The
+# patterns are ASCII (the input is lowercased title/notes), so regex-lite's
+# ASCII `\b` / `\s` semantics match the TS source exactly.
+regex-lite = "0.1"
 # UUID v7 (RFC 9562, 2024) for stable profile IDs — timestamp-prefixed +
 # 74 bits of randomness, lexicographically sortable by creation time.
 # Used by `new_profile_id` for custom profiles + the `gen-builtin-ids`
