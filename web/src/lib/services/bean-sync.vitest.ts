@@ -11,13 +11,20 @@
  */
 
 import { Cause, Effect, Exit, Layer } from 'effect';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { BeanSync, BeanSyncLive } from './bean-sync.ts';
 import { HttpClient, type HttpRequest } from './http-client.ts';
 import { TokenVault } from './token-vault.ts';
 import { HttpStatusError } from '../effect/errors.ts';
 import { blankBean, blankRoaster } from '$lib/bean';
 import type { TokenSet } from '../visualizer/oauth.ts';
+import { initTestWasm } from '../wasm/test-init.ts';
+
+// `uploadBean` / `uploadRoaster` build their bodies through the wasm-backed
+// `beanToWire` / `roasterToWire` (CORE1), so init the bundle first.
+beforeAll(async () => {
+	await initTestWasm();
+});
 
 type Reply = { ok: true; status?: number; json?: unknown } | { ok: false; status: number };
 

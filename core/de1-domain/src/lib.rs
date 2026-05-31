@@ -66,6 +66,7 @@ pub mod stop;
 pub mod tank;
 pub mod units;
 pub mod visualizer_sync;
+pub mod visualizer_wire;
 pub mod volume;
 pub mod water;
 
@@ -116,6 +117,12 @@ pub use units::{
 pub use visualizer_sync::{
     LocalShotRef, ReconcileAction, WireShot, reconcile_shots, reconcile_shots_json,
     signature_for_bean, signature_for_roaster, signature_for_shot,
+};
+pub use visualizer_wire::{
+    BagWire, RoasterWire, bean_from_wire, bean_from_wire_json, bean_to_wire, bean_to_wire_json,
+    roast_level_from_wire, roast_level_to_wire, roaster_from_wire, roaster_from_wire_json,
+    roaster_to_wire, roaster_to_wire_json, samples_from_visualizer_detail,
+    samples_from_visualizer_detail_json, wire_shot_from_detail, wire_shot_from_detail_json,
 };
 pub use volume::{LineFreqDetector, VolumeIntegrator};
 pub use water::{WaterEvent, WaterMonitor, WaterRecord, WaterSessionKind};

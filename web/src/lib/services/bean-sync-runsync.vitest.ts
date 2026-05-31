@@ -12,7 +12,7 @@
  */
 
 import { Effect, Layer } from 'effect';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('$lib/visualizer/shot-sync-signatures', () => ({
 	signatureForRoaster: ({ name }: { name: string }) => `rs:${name.trim().toLowerCase()}`,
@@ -29,6 +29,14 @@ import { HttpStatusError } from '../effect/errors.ts';
 import { blankBean, blankRoaster, type Bean, type Roaster } from '$lib/bean';
 import type { BeanLibraryStore } from '$lib/bean/store.svelte';
 import type { TokenSet } from '../visualizer/oauth.ts';
+import { initTestWasm } from '../wasm/test-init.ts';
+
+// `runSync` decodes each remote row through the wasm-backed `beanFromWire` /
+// `roasterFromWire` and encodes pushes through `beanToWire` (CORE1), so the
+// bundle must be initialised first. (`shot-sync-signatures` stays mocked.)
+beforeAll(async () => {
+	await initTestWasm();
+});
 
 type Reply = { ok: true; json?: unknown } | { ok: false; status: number };
 
