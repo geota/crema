@@ -11,6 +11,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.buffer
@@ -20,6 +21,7 @@ import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.shareIn
 import no.nordicsemi.kotlin.ble.client.RemoteCharacteristic
 import no.nordicsemi.kotlin.ble.client.RemoteServices
 import no.nordicsemi.kotlin.ble.client.android.CentralManager
@@ -110,12 +112,27 @@ class NordicBleTransport(context: Context) : BleTransport {
 
     // ---- Scan -------------------------------------------------------------
 
-    override fun scan(matches: (name: String) -> Boolean): Flow<BleTransport.ScanMatch> =
-        // Unfiltered Nordic scan (empty filter block). Neither the DE1 nor the
-        // Bookoo scale reliably advertises its 128-bit service UUID, so a
-        // ServiceUuid scan filter never matches — match the resolved name in
-        // Kotlin instead, the same rule the legacy de1app uses.
+    /**
+     * The single shared raw scan. `centralManager.scan {}` is a COLD flow —
+     * every collector would otherwise start its OWN radio scan — so it is
+     * shared via `shareIn(WhileSubscribed)`: the one physical scan runs while
+     * at least one [scan] caller is collecting and stops when the last drops.
+     * Each [scan] is a thin name-filter over this one upstream, so N concurrent
+     * "wants" (a DE1 + a scale outstanding together) share ONE radio scan
+     * instead of opening two (AND3). `replay = 0`: a late subscriber waits for
+     * a fresh advertisement rather than replaying a stale one.
+     *
+     * Unfiltered (empty Nordic filter block): neither the DE1 nor the Bookoo
+     * scale reliably advertises its 128-bit service UUID, so a ServiceUuid scan
+     * filter never matches — the name is matched in Kotlin instead, the same
+     * rule the legacy de1app uses.
+     */
+    private val rawScan =
         centralManager.scan { /* no filter — see above */ }
+            .shareIn(scope, SharingStarted.WhileSubscribed(), replay = 0)
+
+    override fun scan(matches: (name: String) -> Boolean): Flow<BleTransport.ScanMatch> =
+        rawScan
             .mapNotNull { result ->
                 val peripheral = result.peripheral
                 val name = result.advertisingData.name ?: peripheral.name
