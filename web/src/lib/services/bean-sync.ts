@@ -24,15 +24,14 @@
 import { Context, Effect, Layer } from 'effect';
 import { HttpClient } from './http-client.ts';
 import { TokenVault } from './token-vault.ts';
+import { ResponseDecodeError, VisualizerNotFoundError } from '../effect/errors.ts';
 import {
-	HttpStatusError,
-	NetworkError,
-	NotAuthenticatedError,
-	ResponseDecodeError,
-	TokenRefreshFailedError,
-	VisualizerNotFoundError,
-	VisualizerPremiumGatedError
-} from '../effect/errors.ts';
+	API_BASE,
+	describeVisualizerError,
+	visualizerCall,
+	type VisualizerCallError,
+	type VisualizerCallOptions
+} from './visualizer-call.ts';
 import {
 	BeanUploadResultSchema,
 	RoasterUploadResultSchema,
@@ -76,44 +75,6 @@ type CoffeeBagListResponse = components['schemas']['CoffeeBagListResponse'];
  *  `visualizer-sync`, so we borrow them via the converters' parameter types). */
 type BagWire = Parameters<typeof beanFromWire>[0];
 type RoasterWire = Parameters<typeof roasterFromWire>[0];
-
-/** Visualizer API base. */
-const API_BASE = 'https://visualizer.coffee/api';
-
-/** The closed error union every `call`-backed method can surface. */
-type VisualizerCallError =
-	| NetworkError
-	| HttpStatusError
-	| NotAuthenticatedError
-	| TokenRefreshFailedError
-	| VisualizerPremiumGatedError
-	| VisualizerNotFoundError;
-
-/** Human-readable summary for the sync log / `SyncResult.error` (display only). */
-function describeCallError(e: VisualizerCallError | ResponseDecodeError): string {
-	switch (e._tag) {
-		case 'HttpStatusError':
-			return `HTTP ${e.status}: ${e.body ?? ''}`.trim();
-		case 'NetworkError':
-			return `Network error: ${e.cause instanceof Error ? e.cause.message : String(e.cause)}`;
-		case 'VisualizerPremiumGatedError':
-			return 'Premium subscription required for writes.';
-		case 'VisualizerNotFoundError':
-			return `Visualizer row not found: ${e.visualizerId}`;
-		case 'NotAuthenticatedError':
-			return 'Sign in to Visualizer first.';
-		case 'TokenRefreshFailedError':
-			return 'Visualizer rejected the access token. Please sign in again.';
-		case 'ResponseDecodeError':
-			return 'Unexpected Visualizer response.';
-	}
-}
-
-interface FetchOptions {
-	method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
-	/** Decoded JSON body — stringified before it rides the wire. */
-	body?: unknown;
-}
 
 export class BeanSync extends Context.Tag('crema/BeanSync')<
 	BeanSync,
@@ -168,53 +129,18 @@ export const BeanSyncLive = Layer.effect(
 		const vault = yield* TokenVault;
 
 		/**
-		 * Single authenticated HTTP entry point — funnels through
-		 * `TokenVault.withFreshToken` (401 → refresh-once) and maps `HttpClient`'s
-		 * `HttpStatusError` back onto the Visualizer taxonomy (402/403 → premium,
-		 * 404 → not-found). Returns parsed JSON for 2xx + body; `null` for 204.
+		 * `BeanSync`'s authenticated entry point: the shared {@link visualizerCall}
+		 * with this layer's captured `http` / `vault` provided, so every method
+		 * built on it stays `R = never`.
 		 */
-		const call = (path: string, opts: FetchOptions = {}): Effect.Effect<unknown, VisualizerCallError> =>
-			vault
-				.withFreshToken((token) => {
-					const headers: Record<string, string> = {
-						Authorization: `Bearer ${token}`,
-						Accept: 'application/json'
-					};
-					if (opts.body !== undefined) headers['Content-Type'] = 'application/json';
-					return http.request({
-						url: `${API_BASE}${path}`,
-						method: opts.method ?? 'GET',
-						headers,
-						body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined
-					});
-				})
-				.pipe(
-					Effect.catchTag(
-						'HttpStatusError',
-						(
-							err
-						): Effect.Effect<never, VisualizerPremiumGatedError | VisualizerNotFoundError | HttpStatusError> => {
-							if (err.status === 402 || err.status === 403) {
-								return Effect.fail(new VisualizerPremiumGatedError({ endpoint: path }));
-							}
-							if (err.status === 404) {
-								return Effect.fail(new VisualizerNotFoundError({ visualizerId: path }));
-							}
-							return Effect.fail(err);
-						}
-					),
-					Effect.flatMap((res) =>
-						res.status === 204
-							? Effect.succeed(null)
-							: // A malformed 2xx body is effectively a transport anomaly; surface
-								// it as NetworkError (recoverable), matching the old module's raw
-								// res.json() rejection path.
-								Effect.tryPromise({
-									try: () => res.json(),
-									catch: (cause) => new NetworkError({ cause, url: `${API_BASE}${path}` })
-								})
-					)
-				);
+		const call = (
+			path: string,
+			opts: VisualizerCallOptions = {}
+		): Effect.Effect<unknown, VisualizerCallError> =>
+			visualizerCall(path, opts).pipe(
+				Effect.provideService(HttpClient, http),
+				Effect.provideService(TokenVault, vault)
+			);
 
 		const uploadBean = Effect.fn('BeanSync.uploadBean')(function* (
 			bean: Bean,
@@ -390,7 +316,7 @@ export const BeanSyncLive = Layer.effect(
 						logPremiumBannerOnce();
 						log.push({ direction: 'skip', kind: 'roaster', id: local.id, name: local.name, at: Date.now(), error: 'premium required' });
 					} else {
-						result.error = describeCallError(res.left);
+						result.error = describeVisualizerError(res.left);
 						log.push({ direction: 'skip', kind: 'roaster', id: local.id, name: local.name, at: Date.now(), error: result.error });
 					}
 				}
@@ -462,7 +388,7 @@ export const BeanSyncLive = Layer.effect(
 							logPremiumBannerOnce();
 							log.push({ direction: 'skip', kind: 'bean', id: local.id, name: local.name, at: Date.now(), error: 'premium required' });
 						} else {
-							log.push({ direction: 'skip', kind: 'bean', id: local.id, name: local.name, at: Date.now(), error: describeCallError(res.left) });
+							log.push({ direction: 'skip', kind: 'bean', id: local.id, name: local.name, at: Date.now(), error: describeVisualizerError(res.left) });
 						}
 					} else if (local.updatedAt > lastSync) {
 						const res = yield* Effect.either(call(`/coffee_bags/${local.visualizerId}`, { method: 'PATCH', body }));
@@ -475,7 +401,7 @@ export const BeanSyncLive = Layer.effect(
 								writeSyncSettings({ premium: false });
 								logPremiumBannerOnce();
 							}
-							log.push({ direction: 'skip', kind: 'bean', id: local.id, name: local.name, at: Date.now(), error: describeCallError(res.left) });
+							log.push({ direction: 'skip', kind: 'bean', id: local.id, name: local.name, at: Date.now(), error: describeVisualizerError(res.left) });
 						}
 					}
 				}
@@ -491,7 +417,7 @@ export const BeanSyncLive = Layer.effect(
 			yield* program.pipe(
 				Effect.catchAll((e) =>
 					Effect.sync(() => {
-						result.error = describeCallError(e);
+						result.error = describeVisualizerError(e);
 					})
 				)
 			);
@@ -546,7 +472,7 @@ export const BeanSyncLive = Layer.effect(
 			const tokens = yield* vault.getTokens;
 			if (tokens === null) return { ok: false, error: 'Sign in to Visualizer first.' };
 			const check = yield* Effect.either(call('/coffee_bags?items=1'));
-			if (check._tag === 'Left') return { ok: false, error: describeCallError(check.left) };
+			if (check._tag === 'Left') return { ok: false, error: describeVisualizerError(check.left) };
 			const premium = yield* probePremium;
 			// Mirror into both caches so every UI surface agrees (matches the old impl).
 			writeSyncSettings({ premium });

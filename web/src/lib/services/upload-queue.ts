@@ -34,15 +34,8 @@
 import { Context, Effect, Layer, Ref, Schedule } from 'effect';
 import { ShotSync } from './shot-sync.ts';
 import { BeanSync } from './bean-sync.ts';
-import type {
-	HttpStatusError,
-	NetworkError,
-	NotAuthenticatedError,
-	ResponseDecodeError,
-	TokenRefreshFailedError,
-	VisualizerNotFoundError,
-	VisualizerPremiumGatedError
-} from '../effect/errors.ts';
+import type { ResponseDecodeError } from '../effect/errors.ts';
+import { describeVisualizerError, isRecoverable, type VisualizerCallError } from './visualizer-call.ts';
 import {
 	clearQueue as clearQueueStore,
 	dequeueEntry,
@@ -67,50 +60,12 @@ export interface DrainResult {
 
 const DEFERRED: DrainResult = { processed: 0, succeeded: 0, dropped: 0, deferred: 1 };
 
-/** Every failure `runEntry` can surface (from ShotSync / BeanSync). */
-type UploadError =
-	| NetworkError
-	| HttpStatusError
-	| NotAuthenticatedError
-	| TokenRefreshFailedError
-	| VisualizerPremiumGatedError
-	| VisualizerNotFoundError
-	| ResponseDecodeError;
-
 /**
- * Recoverable = worth a time-based retry: a transport failure, or a transient
- * 5xx / 408 / aborted status. Auth / premium / not-found / decode failures need
- * user action, not time, so they're dropped on the first drain.
+ * Every failure `runEntry` can surface (from ShotSync / BeanSync). The shared
+ * `isRecoverable` (which of these is worth a timed retry) and
+ * `describeVisualizerError` live in `visualizer-call.ts`.
  */
-function isRecoverable(e: UploadError): boolean {
-	switch (e._tag) {
-		case 'NetworkError':
-			return true;
-		case 'HttpStatusError':
-			return e.status === 0 || e.status === 408 || (e.status >= 500 && e.status < 600);
-		default:
-			return false;
-	}
-}
-
-function describeError(e: UploadError): string {
-	switch (e._tag) {
-		case 'HttpStatusError':
-			return `HTTP ${e.status}: ${e.body ?? ''}`.trim();
-		case 'NetworkError':
-			return `Network error: ${e.cause instanceof Error ? e.cause.message : String(e.cause)}`;
-		case 'VisualizerPremiumGatedError':
-			return 'Premium subscription required for writes.';
-		case 'VisualizerNotFoundError':
-			return `Visualizer row not found: ${e.visualizerId}`;
-		case 'NotAuthenticatedError':
-			return 'Not signed in to Visualizer.';
-		case 'TokenRefreshFailedError':
-			return 'Visualizer session expired.';
-		case 'ResponseDecodeError':
-			return 'Unexpected Visualizer response.';
-	}
-}
+type UploadError = VisualizerCallError | ResponseDecodeError;
 
 export class UploadQueue extends Context.Tag('crema/UploadQueue')<
 	UploadQueue,
@@ -203,7 +158,7 @@ export const UploadQueueLive = Layer.effect(
 						yield* dequeue(entry.entity, entry.id, entry.op);
 						out.dropped += 1;
 					} else {
-						yield* Effect.sync(() => persistRetry(entry, made, describeError(result.left)));
+						yield* Effect.sync(() => persistRetry(entry, made, describeVisualizerError(result.left)));
 					}
 				}
 			}
