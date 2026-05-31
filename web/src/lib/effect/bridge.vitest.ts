@@ -15,7 +15,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { describe, it } from 'vitest';
 import { Effect, Layer, ManagedRuntime } from 'effect';
 import { runtimePromise } from './bridge.ts';
 import { HttpStatusError, NetworkError } from './errors.ts';

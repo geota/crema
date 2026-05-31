@@ -16,7 +16,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { describe, it } from 'vitest';
 import { Effect, Layer } from 'effect';
 import type { TokenSet } from '../visualizer/oauth.ts';
 
