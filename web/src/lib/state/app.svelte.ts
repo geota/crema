@@ -454,7 +454,7 @@ export class CremaApp {
 			},
 			// The connection-diagnostics snapshot — fold it straight in.
 			onDiagnostics: (de1Diagnostics) => this.state.patch({ de1Diagnostics })
-		});
+		}, runtime);
 		this.scale = new ScaleManager(core, {
 			onCoreOutput: (output) => this.applyCoreOutput(output),
 			// Like DE1 onStatus: the scale's connect/disconnect/reconnect
