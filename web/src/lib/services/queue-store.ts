@@ -44,12 +44,18 @@ interface QueueState {
 	entries: QueueEntry[];
 }
 
-const EMPTY: QueueState = { entries: [] };
-
-/** Read + validate the persisted queue (empty on absent / malformed). */
+/**
+ * Read + validate the persisted queue (empty on absent / malformed).
+ *
+ * Returns a FRESH `{ entries: [] }` on the empty/malformed path — never a shared
+ * constant. `enqueueEntry` / `dequeueEntry` reassign `state.entries`, so handing
+ * back a shared empty object would let an enqueue-into-empty mutate it and
+ * corrupt every later empty read (a latent bug carried over from the old
+ * `visualizer/upload-queue.ts`; see queue-store.test.ts).
+ */
 export function readQueue(): QueueState {
-	const raw = readJson<QueueState>(QUEUE_KEY, EMPTY);
-	if (!raw || !Array.isArray(raw.entries)) return EMPTY;
+	const raw = readJson<QueueState | null>(QUEUE_KEY, null);
+	if (!raw || !Array.isArray(raw.entries)) return { entries: [] };
 	return raw;
 }
 
@@ -150,5 +156,5 @@ export function isPendingId(entity: QueueEntry['entity'], id: string): boolean {
 
 /** Wipe the queue. */
 export function clearQueue(): void {
-	writeQueue(EMPTY);
+	writeQueue({ entries: [] });
 }
