@@ -41,6 +41,8 @@
 	import SortPill from '$lib/components/shared/SortPill.svelte';
 	import FilterPills from '$lib/components/shared/FilterPills.svelte';
 	import SplitButton from '$lib/components/shared/SplitButton.svelte';
+	import { toast } from '$lib/components/shared/toast.svelte';
+	import { confirmDialog } from '$lib/components/shared/confirm-dialog.svelte';
 
 	const library = getBeanStore();
 	const history = getHistoryStore();
@@ -51,7 +53,7 @@
 				await exportCrema(library.beans, library.roasters, '0.0.1');
 			} catch (err) {
 				console.error('Crema export failed', err);
-				alert(`Export failed: ${err instanceof Error ? err.message : String(err)}`);
+				toast.error(`Export failed: ${err instanceof Error ? err.message : String(err)}`);
 			}
 		})();
 	}
@@ -61,7 +63,7 @@
 				await exportBeanconqueror(library.beans, library.roasters, history.rawAll);
 			} catch (err) {
 				console.error('Beanconqueror export failed', err);
-				alert(`Export failed: ${err instanceof Error ? err.message : String(err)}`);
+				toast.error(`Export failed: ${err instanceof Error ? err.message : String(err)}`);
 			}
 		})();
 	}
@@ -592,15 +594,16 @@
 	 * round-trips through Visualizer's `canonical_roaster_id` field on
 	 * the next sync push.
 	 */
-	function mergeRoaster(
+	async function mergeRoaster(
 		canonical: (typeof allRoasters)[number],
 		dupe: (typeof allRoasters)[number]
-	): void {
+	): Promise<void> {
 		const moveCount = allBeans.filter((b) => b.roasterId === dupe.id).length;
 		if (
-			!confirm(
-				`Move ${moveCount} bag(s) from "${dupe.name}" to "${canonical.name}" and tag "${dupe.name}" as a duplicate of "${canonical.name}"?`
-			)
+			!(await confirmDialog({
+				message: `Move ${moveCount} bag(s) from "${dupe.name}" to "${canonical.name}" and tag "${dupe.name}" as a duplicate of "${canonical.name}"?`,
+				confirmLabel: 'Merge'
+			}))
 		)
 			return;
 		for (const b of allBeans) {

@@ -19,6 +19,8 @@
 	import { createCremaApp, type CremaApp } from '$lib/state';
 	import { CremaSidebar } from '$lib/components';
 	import DebugPanel from '$lib/shell/DebugPanel.svelte';
+	import ToastHost from '$lib/components/shared/ToastHost.svelte';
+	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import { describeError } from '$lib/utils/error';
 	import { setCremaAppContext, type CoreLoadState } from '$lib/shell/app-context';
 	import { createAppRuntime, type AppRuntime } from '$lib/effect/runtime';
@@ -121,6 +123,10 @@
 	<div class="shell-content">
 		{@render children?.()}
 	</div>
+	<!-- App-wide in-app dialog + toast hosts (FD4) — replace native
+	     confirm/alert/prompt. Single instances, driven by the shared stores. -->
+	<ConfirmDialog />
+	<ToastHost />
 {/if}
 
 <style>

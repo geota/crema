@@ -55,6 +55,7 @@
 	import PowerButton from '$lib/components/PowerButton.svelte';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
+	import { promptDialog } from '$lib/components/shared/confirm-dialog.svelte';
 
 	let {
 		ui
@@ -370,13 +371,19 @@
 	 * ProfileStore and (per #83 wiring) activated + eagerly uploaded to
 	 * the DE1 if connected.
 	 */
-	function savePreset(): void {
+	async function savePreset(): Promise<void> {
 		const base = activeProfile;
 		if (!base) return;
-		if (typeof window === 'undefined') return;
 		const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
 		const suggested = `${base.name} — preset ${stamp}`;
-		const name = window.prompt('Name for the new preset:', suggested)?.trim();
+		const name = (
+			await promptDialog({
+				title: 'Save preset',
+				message: 'Name for the new preset:',
+				initialValue: suggested,
+				confirmLabel: 'Save'
+			})
+		)?.trim();
 		if (!name) return;
 		const live = params.current;
 		const cloned: CremaProfile = {

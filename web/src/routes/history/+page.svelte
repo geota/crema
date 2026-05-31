@@ -39,6 +39,8 @@
 	import { onMount } from 'svelte';
 	import { appendSyncLog, directionPushes, readSyncConfig } from '$lib/visualizer';
 	import { readQueue } from '$lib/services/queue-store';
+	import { toast } from '$lib/components/shared/toast.svelte';
+	import { confirmDialog } from '$lib/components/shared/confirm-dialog.svelte';
 
 	const store = getHistoryStore();
 	const appCtx = getCremaAppContext();
@@ -107,7 +109,7 @@
 			exportAllAsV2Jsonl();
 		} catch (err) {
 			console.error('History export failed', err);
-			alert(`Export failed: ${err instanceof Error ? err.message : String(err)}`);
+			toast.error(`Export failed: ${err instanceof Error ? err.message : String(err)}`);
 		} finally {
 			exporting = false;
 		}
@@ -119,7 +121,7 @@
 			await exportAllAsReplayZip();
 		} catch (err) {
 			console.error('History replay export failed', err);
-			alert(`Export failed: ${err instanceof Error ? err.message : String(err)}`);
+			toast.error(`Export failed: ${err instanceof Error ? err.message : String(err)}`);
 		} finally {
 			exporting = false;
 		}
@@ -291,7 +293,7 @@
 		const msg = opts.remote
 			? `Delete "${label}" from this device and Visualizer? This cannot be undone.`
 			: `Delete "${label}" from this device? This cannot be undone.`;
-		if (!confirm(msg)) return;
+		if (!(await confirmDialog({ message: msg, confirmLabel: 'Delete', danger: true }))) return;
 		const visualizerId = shot.visualizerId ?? null;
 		const wasSelected = selected?.id === shot.id;
 		store.delete(shot.id);

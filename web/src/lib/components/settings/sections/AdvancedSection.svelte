@@ -35,6 +35,7 @@
 	import StButton from '../StButton.svelte';
 	import MainsConfirmModal from '../MainsConfirmModal.svelte';
 	import { onMount } from 'svelte';
+	import { confirmDialog } from '$lib/components/shared/confirm-dialog.svelte';
 
 	/** The shared orchestrator, or `null` while the wasm core is still loading. */
 	let { app, snapshot }: { app: CremaApp | null; snapshot: UiSnapshot } = $props();
@@ -169,8 +170,11 @@
 	async function resetMachineSettings(): Promise<void> {
 		if (!app || resetBusy) return;
 		if (
-			typeof window === 'undefined' ||
-			!window.confirm('Reset the 8 DE1 machine settings to factory defaults?')
+			!(await confirmDialog({
+				message: 'Reset the 8 DE1 machine settings to factory defaults?',
+				confirmLabel: 'Reset',
+				danger: true
+			}))
 		) {
 			return;
 		}
@@ -209,12 +213,13 @@
 		if (file && app) void app.replayCapture(file);
 	}
 
-	function resetPreferences(): void {
+	async function resetPreferences(): Promise<void> {
 		if (
-			typeof window === 'undefined' ||
-			window.confirm(
-				'Restore default brew, display, sound and advanced settings? Profiles and shot history are untouched.'
-			)
+			await confirmDialog({
+				message:
+					'Restore default brew, display, sound and advanced settings? Profiles and shot history are untouched.',
+				confirmLabel: 'Restore'
+			})
 		) {
 			settings.reset();
 		}
@@ -227,18 +232,21 @@
 	 * Gated behind a `window.confirm` so a stray tap doesn't nuke user
 	 * data. Documented in the row's sub-copy.
 	 */
-	function factoryReset(): void {
+	async function factoryReset(): Promise<void> {
 		if (typeof window === 'undefined') return;
-		const ok = window.confirm(
-			'Reset the Crema app on this device?\n\n' +
+		const ok = await confirmDialog({
+			title: 'Reset the Crema app on this device?',
+			message:
 				'This permanently erases:\n' +
 				'  • custom profiles + library overrides\n' +
 				'  • shot history + per-shot captures\n' +
 				'  • bean library + roasters\n' +
 				'  • all app preferences\n\n' +
 				'Your DE1 is NOT affected — uploaded profiles, calibration, and\n' +
-				'machine settings stay on the firmware. The page will reload.'
-		);
+				'machine settings stay on the firmware. The page will reload.',
+			confirmLabel: 'Reset app',
+			danger: true
+		});
 		if (!ok) return;
 		const keys: string[] = [];
 		for (let i = 0; i < localStorage.length; i++) {

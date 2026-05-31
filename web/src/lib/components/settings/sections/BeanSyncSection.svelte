@@ -28,6 +28,7 @@
 	import StRow from '../StRow.svelte';
 	import StSegment from '../StSegment.svelte';
 	import StToggle from '../StToggle.svelte';
+	import { confirmDialog } from '$lib/components/shared/confirm-dialog.svelte';
 
 	const library = getBeanStore();
 	const history = getHistoryStore();
@@ -260,9 +261,11 @@
 	async function resyncAllShots(): Promise<void> {
 		if (syncing || resyncing) return;
 		if (
-			!confirm(
-				'Re-pull every shot from Visualizer from the beginning? Existing shots are de-duplicated, so this only adds ones missing locally.'
-			)
+			!(await confirmDialog({
+				message:
+					'Re-pull every shot from Visualizer from the beginning? Existing shots are de-duplicated, so this only adds ones missing locally.',
+				confirmLabel: 'Re-pull'
+			}))
 		) {
 			return;
 		}
