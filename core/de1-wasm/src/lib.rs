@@ -566,6 +566,15 @@ pub fn coerce_roaster(raw_json: &str, now_ms: f64) -> Option<String> {
     de1_domain::coerce_roaster_json(raw_json, f64_to_ms(now_ms))
 }
 
+/// Classify a profile's roast suitability from its `title` + `notes` (CORE3) →
+/// `"light"` / `"medium"` / `"dark"`, or `null` when no roast is clearly known.
+/// See `de1_domain::roast_from_profile`.
+#[wasm_bindgen(js_name = roastFromProfile)]
+#[must_use]
+pub fn roast_from_profile(title: &str, notes: &str) -> Option<String> {
+    de1_domain::roast_from_profile(title, notes).map(str::to_owned)
+}
+
 /// Human-readable name for a raw `MachineModel` MMR value (e.g. `1` →
 /// `"DE1"`, `4` → `"DE1XL"`). Values past the table are reported as
 /// `"model N"`. Mirrors [`de1_protocol::machine_model_name`].
