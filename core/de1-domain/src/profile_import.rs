@@ -355,9 +355,12 @@ struct V2ProfileOut {
 /// value, the other is `0.0` — exactly as [`v2_step_to_profile_step`] reads
 /// them back.
 ///
-/// This is infallible: an in-memory [`Profile`] always serializes, so a plain
-/// [`String`] is returned rather than a `Result`.
-pub fn export_v2_json(profile: &Profile) -> String {
+/// # Errors
+///
+/// [`serde_json::Error`] if the document fails to serialize. In practice
+/// unreachable (a `Profile` is plain scalars + strings with bounded floats),
+/// but RS5: surfaced rather than silently yielding an empty string.
+pub fn export_v2_json(profile: &Profile) -> Result<String, serde_json::Error> {
     let steps = profile.steps.iter().map(step_to_v2).collect();
 
     let out = V2ProfileOut {
@@ -382,9 +385,9 @@ pub fn export_v2_json(profile: &Profile) -> String {
         grinder_dose_weight: profile.dose,
     };
 
-    // A struct of plain scalars and strings always serializes; the legacy app
-    // pretty-prints its profiles, so do the same for human-readable output.
-    serde_json::to_string_pretty(&out).unwrap_or_default()
+    // The legacy app pretty-prints its profiles, so do the same for
+    // human-readable output. RS5: surface a serialize error rather than emit "".
+    serde_json::to_string_pretty(&out)
 }
 
 /// Convert one [`ProfileStep`] into its emitted v2 JSON step.
@@ -1422,7 +1425,7 @@ mod tests {
         }"#;
         let original = import_v2_json(json).unwrap();
         assert_eq!(original.dose, 20.0);
-        let reimported = import_v2_json(&export_v2_json(&original)).unwrap();
+        let reimported = import_v2_json(&export_v2_json(&original).unwrap()).unwrap();
         assert_eq!(reimported, original);
         assert_eq!(reimported.dose, 20.0);
     }
@@ -1435,7 +1438,7 @@ mod tests {
         // exercising exit, limiter, per-step volume and a non-zero
         // target_weight in one go.
         let original = import_v2_json(V2_ADVANCED).unwrap();
-        let exported = export_v2_json(&original);
+        let exported = export_v2_json(&original).unwrap();
         let reimported = import_v2_json(&exported).unwrap();
         assert_eq!(reimported, original);
     }
@@ -1456,7 +1459,7 @@ mod tests {
         let original = import_v2_json(json).unwrap();
         assert_eq!(original.steps[0].temp_sensor, TempSensor::Water);
         assert_eq!(original.steps[0].volume_limit_ml, 250);
-        let reimported = import_v2_json(&export_v2_json(&original)).unwrap();
+        let reimported = import_v2_json(&export_v2_json(&original).unwrap()).unwrap();
         assert_eq!(reimported, original);
         assert_eq!(reimported.steps[0].temp_sensor, TempSensor::Water);
     }
@@ -1497,7 +1500,7 @@ mod tests {
             tank_temperature: 0.0,
             version: "2".into(),
         };
-        let exported = export_v2_json(&original);
+        let exported = export_v2_json(&original).unwrap();
         let reimported = import_v2_json(&exported).unwrap();
         assert_eq!(reimported.notes, notes_with_newlines);
         assert_eq!(reimported, original);
@@ -1536,7 +1539,7 @@ mod tests {
             tank_temperature: 60.0,
             version: "2".into(),
         };
-        let exported = export_v2_json(&original);
+        let exported = export_v2_json(&original).unwrap();
         // Each new key must appear in the emitted JSON.
         assert!(exported.contains("\"author\": \"Adrian\""));
         assert!(exported.contains("\"beverage_type\": \"pourover\""));
@@ -1585,7 +1588,7 @@ mod tests {
         // must keep it across the round trip.
         let original = import_v2_json(V2_ADVANCED).unwrap();
         assert!(original.target_weight > 0.0);
-        let reimported = import_v2_json(&export_v2_json(&original)).unwrap();
+        let reimported = import_v2_json(&export_v2_json(&original).unwrap()).unwrap();
         assert_eq!(reimported.target_weight, original.target_weight);
     }
 
@@ -1605,7 +1608,7 @@ mod tests {
             .expect("at least one built-in profile");
         let mut expected = builtin.clone();
         expected.id = String::new();
-        let reimported = import_v2_json(&export_v2_json(builtin)).unwrap();
+        let reimported = import_v2_json(&export_v2_json(builtin).unwrap()).unwrap();
         assert_eq!(reimported, expected);
     }
 
@@ -1615,7 +1618,7 @@ mod tests {
         // As above, the v2 JSON contract has no `id` field, so compare
         // each profile minus its id.
         for builtin in crate::builtin_profiles() {
-            let reimported = import_v2_json(&export_v2_json(builtin))
+            let reimported = import_v2_json(&export_v2_json(builtin).unwrap())
                 .unwrap_or_else(|e| panic!("re-import of {:?} failed: {e}", builtin.title));
             let mut expected = builtin.clone();
             expected.id = String::new();

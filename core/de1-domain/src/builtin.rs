@@ -49,13 +49,15 @@ pub const BUILTIN_PROFILE_COUNT: usize = 88;
 ///
 /// This accessor takes no [`Result`]: `builtin.json` is a compile-time-embedded
 /// asset, so a parse failure is a build/source bug, not a runtime condition.
-/// It is caught by the crate's tests; in the field the `expect` below would
-/// fire deterministically rather than silently yielding an empty corpus.
+///
+/// RS5/RS1: it must not `expect`/panic, though — this runs behind the wasm + ffi
+/// bridges, where a panic aborts the wasm module and poisons the ffi mutex. A
+/// broken asset can never reach the field anyway: the `builtin_profiles_all_load`
+/// test asserts the corpus parses non-empty, so the build fails first. So on the
+/// unreachable parse error degrade to an empty corpus rather than crashing the
+/// shell at the boundary.
 pub fn builtin_profiles() -> &'static [Profile] {
-    BUILTIN.get_or_init(|| {
-        serde_json::from_str(BUILTIN_JSON)
-            .expect("builtin.json is a compile-time asset and must parse")
-    })
+    BUILTIN.get_or_init(|| serde_json::from_str(BUILTIN_JSON).unwrap_or_default())
 }
 
 #[cfg(test)]

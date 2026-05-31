@@ -195,10 +195,20 @@ impl CaptureRecorder {
         {
             candidates.push(first.clone());
         }
-        // Keep their original relative order — just bump timestamps so they
-        // land before the window. Spacing 1 ms apart preserves chronology;
-        // matches the shell's `fromT - (candidates.length - i)` arithmetic.
-        candidates.sort_by_key(|e| e.t_ms);
+        // Order the prelude deterministically before bumping timestamps. RS4:
+        // the candidates are drawn from `identity_latest` (a HashMap) whose
+        // iteration order is nondeterministic AND differs between the wasm and
+        // native builds — so a plain `sort_by_key(t_ms)` left same-ms ties
+        // ordered by hash, producing byte-divergent replay captures across
+        // shells. Break ties by canonical source name, then by the raw bytes,
+        // for an order identical on every target. Spacing 1 ms apart preserves
+        // chronology; matches the shell's `fromT - (candidates.length - i)`.
+        candidates.sort_by(|a, b| {
+            a.t_ms
+                .cmp(&b.t_ms)
+                .then_with(|| source_name(a.source).cmp(source_name(b.source)))
+                .then_with(|| a.data.cmp(&b.data))
+        });
         // `Vec::len()` is `usize`; on every target we run on (wasm32 and
         // 64-bit native) it fits a `u64`. `try_from` keeps clippy quiet about
         // the implied cast without needing an `#[allow]`.
