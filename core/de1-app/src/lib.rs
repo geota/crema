@@ -1052,13 +1052,14 @@ impl CremaCore {
     /// MMR `0x803848`, 4-byte LE (one MMR word). TCL `de1_comms.tcl:1199`
     /// and reaprime `de1.models.dart:flushTimeout writeScale: 10.0`
     /// both write a 4-byte payload with Len=4; matched here.
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     pub fn set_flush_timeout(&self, dur: Duration) -> CoreOutput {
         if let Some(out) = self.refuse_if_firmware_locked("set_flush_timeout") {
             return out;
         }
         // Scale ms-resolution into deciseconds (the legacy `int(10 * s)` form).
-        let raw = (dur.as_millis() / 100).min(65_535) as u32;
+        // RS6: `try_from` over `as` — the `.min(65_535)` already bounds it, so the
+        // `unwrap_or(MAX)` is unreachable, but it drops the cast + the `#[allow]`.
+        let raw = u32::try_from((dur.as_millis() / 100).min(65_535)).unwrap_or(u32::MAX);
         mmr_write_command(MmrRegister::FlushTimeout, raw, 4)
     }
 
@@ -1391,13 +1392,14 @@ impl CremaCore {
     /// Refused while a firmware upload is in progress
     /// (see [`firmware_locks_writes`](Self::firmware_locks_writes)) — emits
     /// one [`Event::FirmwareLockoutHit`] and no command.
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     pub fn set_espresso_warmup_timeout(&self, timeout: Duration) -> CoreOutput {
         if let Some(out) = self.refuse_if_firmware_locked("set_espresso_warmup_timeout") {
             return out;
         }
         // dur.as_millis() / 100 gives deciseconds — the legacy `int(10 × s)` form.
-        let raw = (timeout.as_millis() / 100).min(65_535) as u32;
+        // RS6: `try_from` over `as` (the `.min(65_535)` bounds it); drops the cast
+        // + the `#[allow]`.
+        let raw = u32::try_from((timeout.as_millis() / 100).min(65_535)).unwrap_or(u32::MAX);
         mmr_write_command(MmrRegister::EspressoWarmupTimeout, raw, 4)
     }
 
@@ -2587,7 +2589,6 @@ impl CremaCore {
                 return;
             }
         };
-        self.steam_hotwater_settings = Some(settings.clone());
         out.events.push(Event::ShotSettingsRead {
             steam_temp: settings.steam_temp_c,
             steam_timeout: settings.steam_timeout_s,
@@ -2597,6 +2598,9 @@ impl CremaCore {
             espresso_volume: settings.espresso_volume_ml,
             group_temp: settings.group_temp_c,
         });
+        // RS6: cache by move after the event has copied its scalar fields out,
+        // rather than cloning up front.
+        self.steam_hotwater_settings = Some(settings);
     }
 
     /// Translate a domain [`ShotEvent`] into FFI [`Event`]s, maintaining the

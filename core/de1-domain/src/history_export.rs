@@ -34,10 +34,15 @@ use crate::profile::{BeverageType, Profile};
 /// emit empty arrays so v2 consumers that index by sample index get
 /// a same-length series.
 ///
-/// Infallible: a [`StoredShot`] is always serializable.
-pub fn export_v2_json_shot(shot: &StoredShot) -> String {
+/// # Errors
+///
+/// [`serde_json::Error`] if the document fails to serialize. In practice
+/// unreachable (a `StoredShot`'s telemetry floats are finite by construction),
+/// but RS5: surfaced as an error rather than silently yielding an empty string
+/// (a `unwrap_or_default()` would have written an empty export file on failure).
+pub fn export_v2_json_shot(shot: &StoredShot) -> Result<String, serde_json::Error> {
     let doc = build_v2_document(shot);
-    serde_json::to_string_pretty(&doc).unwrap_or_default()
+    serde_json::to_string_pretty(&doc)
 }
 
 // ---------------------------------------------------------------------------
@@ -478,7 +483,7 @@ mod tests {
     #[test]
     fn exports_a_v2_document_with_the_expected_top_level_shape() {
         let shot = fixture();
-        let json = export_v2_json_shot(&shot);
+        let json = export_v2_json_shot(&shot).unwrap();
         let v: serde_json::Value = serde_json::from_str(&json).expect("export emits valid JSON");
 
         // Top-level keys the v2 schema names.
@@ -565,7 +570,7 @@ mod tests {
     #[test]
     fn v2_shot_round_trips_through_export_import() {
         let shot = fixture();
-        let exported = export_v2_json_shot(&shot);
+        let exported = export_v2_json_shot(&shot).unwrap();
         let parsed = import_v2_json_shot(&exported).expect("re-imports cleanly");
 
         // Timestamp (Unix ms) survives the seconds round-trip.
@@ -672,7 +677,7 @@ mod tests {
     fn export_handles_an_empty_metadata_shot() {
         let mut shot = fixture();
         shot.metadata = ShotMetadata::default();
-        let exported = export_v2_json_shot(&shot);
+        let exported = export_v2_json_shot(&shot).unwrap();
         let v: serde_json::Value = serde_json::from_str(&exported).unwrap();
         // Bean object: missing.
         assert!(v["meta"]["bean"].is_null());
@@ -717,7 +722,7 @@ mod tests {
             version: "2".to_string(),
         };
         shot = shot.with_profile(profile);
-        let exported = export_v2_json_shot(&shot);
+        let exported = export_v2_json_shot(&shot).unwrap();
         let v: serde_json::Value = serde_json::from_str(&exported).unwrap();
         assert_eq!(v["profile"]["title"], "Best Practice");
         assert_eq!(v["profile"]["author"], "Decent");

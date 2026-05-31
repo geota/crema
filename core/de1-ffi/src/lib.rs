@@ -9,6 +9,27 @@
 //! `unsafe` is unavoidable here — UniFFI generates the `extern "C"` FFI
 //! scaffolding — which is why this crate opts out of the workspace's
 //! `unsafe_code = "forbid"` lint (see `Cargo.toml`).
+//!
+//! ## Intentional parity gaps vs `de1-wasm` (RS3)
+//!
+//! The web (`de1-wasm`) bridge exposes two surfaces this FFI bridge deliberately
+//! does NOT mirror yet, because the Android shell has no feature that consumes
+//! them — mirroring them now would be dead exports (and uniffi scaffolding the
+//! Kotlin side would never call):
+//!
+//! - **`MachineRequest` / machine-state requests** (`ShortCal`, `SelfTest`,
+//!   Sleep/Idle/Espresso/… transitions). Android has no machine-control surface
+//!   yet — its `WriteCharacteristic` path is unimplemented (tracked as AND5) —
+//!   so the request enum + command plumbing has no caller. Mirror it when
+//!   Android gains machine control.
+//! - **`profile_bounds_json`** (the firmware profile-field bounds). Android has
+//!   no profile-editing / validation UI, the only consumer of those bounds.
+//!   Mirror it when Android gains profile editing.
+//!
+//! These are tracked divergences, not oversights: the shared `de1-app` /
+//! `de1-domain` logic is identical across shells — only the thin per-shell
+//! *exports* differ, scoped to what each shell uses today. Keep this list in
+//! sync as the Android surface grows.
 
 use std::sync::{Mutex, MutexGuard};
 
@@ -681,10 +702,12 @@ impl CremaBridge {
     /// off it: Crema is capability-driven, never device-driven. Returned as a
     /// JSON string, consistent with the rest of the bridge's JSON surface.
     pub fn scale_capabilities(&self) -> Option<String> {
-        self.core().scale_capabilities().map(|caps| {
-            serde_json::to_string(&caps)
-                .expect("ScaleCapabilities is plain data and always serializes")
-        })
+        // RS1: never panic at the boundary — a panic here poisons the ffi mutex
+        // (and aborts the wasm sibling). Degrade to `None` on the unreachable
+        // serialize error.
+        self.core()
+            .scale_capabilities()
+            .and_then(|caps| serde_json::to_string(&caps).ok())
     }
 
     /// The connected scale's BLE service and characteristic UUIDs, as a
@@ -695,9 +718,10 @@ impl CremaBridge {
     /// Returned as a JSON string, consistent with the rest of the bridge's
     /// JSON surface; wired exactly like [`scale_capabilities`](Self::scale_capabilities).
     pub fn scale_uuids(&self) -> Option<String> {
-        self.core().scale_uuids().map(|uuids| {
-            serde_json::to_string(&uuids).expect("ScaleUuids is plain data and always serializes")
-        })
+        // RS1: degrade to `None` on the (unreachable) serialize error, never panic.
+        self.core()
+            .scale_uuids()
+            .and_then(|uuids| serde_json::to_string(&uuids).ok())
     }
 
     /// The firmware-update check result, as a JSON-encoded
@@ -705,8 +729,10 @@ impl CremaBridge {
     /// no BLE traffic. Returns the `Unknown` variant until the DE1's `Version`
     /// characteristic has been observed via `on_notification`.
     pub fn firmware_update_status(&self) -> String {
+        // RS1: fall back to `{"type":"Unknown"}` on the unreachable serialize
+        // error instead of poisoning the mutex.
         serde_json::to_string(&self.core().firmware_update_status())
-            .expect("FirmwareUpdateStatus is plain data and always serializes")
+            .unwrap_or_else(|_| r#"{"type":"Unknown"}"#.to_string())
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command sets the connected scale's
@@ -1117,7 +1143,7 @@ impl CremaBridge {
     pub fn export_v2_json_profile(&self, profile_json: String) -> Result<String, String> {
         let profile: de1_domain::Profile =
             serde_json::from_str(&profile_json).map_err(|e| e.to_string())?;
-        Ok(de1_domain::export_v2_json(&profile))
+        de1_domain::export_v2_json(&profile).map_err(|e| e.to_string())
     }
 
     /// Parse a legacy de1app `settings.tdb` file. Returns the parsed
@@ -1132,11 +1158,17 @@ impl CremaBridge {
 /// Serialize a [`CoreOutput`] to JSON for the shell.
 ///
 /// `CoreOutput` is a flat structure of enums, numbers, strings and vectors, so
-/// serialization is infallible in practice — a failure would be a bug here.
+/// serialization is infallible in practice.
+///
+/// RS1: a panic here poisons the `Mutex` guarding the core — every later call
+/// then fails on the poisoned lock. The only realistic failure is a non-finite
+/// `f32` in a telemetry event (today's parsers never emit one, but the boundary
+/// must not crash on it). Fall back to an empty `CoreOutput` so the shell sees
+/// no events/commands for that tick — degraded, not dead.
 fn json(output: CoreOutput) -> String {
     output
         .to_json()
-        .expect("CoreOutput is plain data and always serializes")
+        .unwrap_or_else(|_| r#"{"events":[],"commands":[]}"#.to_string())
 }
 
 #[cfg(test)]
