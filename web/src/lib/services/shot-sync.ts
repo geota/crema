@@ -349,6 +349,31 @@ function shouldAbortLoop(e: VisualizerCallError | ResponseDecodeError): boolean 
 	);
 }
 
+/**
+ * An AMBIGUOUS-SUCCESS upload failure: a `ResponseDecodeError` (the server
+ * returned a 2xx with no parseable `id`) or a `NetworkError` (a malformed 2xx
+ * body — `visualizerCall` can't tell that apart from a real transport drop).
+ * In both, `POST /shots/upload` may already have created the shot server-side
+ * even though we never read its id, so re-POSTing it — exactly what an
+ * `op: 'create'` retry-queue entry does — would create a REAL duplicate on the
+ * account. These route to the self-heal-by-reconcile path in
+ * `uploadUnsyncedShots` instead of the naive enqueue.
+ *
+ * (Fully duplicate-proof uploads ultimately need a server-side idempotency key
+ * on `POST /shots/upload`; that's a Visualizer-side change, out of scope here.)
+ */
+function isAmbiguousSuccess(e: VisualizerCallError | ResponseDecodeError): boolean {
+	return e._tag === 'ResponseDecodeError' || e._tag === 'NetworkError';
+}
+
+/**
+ * Slop (ms) subtracted from a shot's `completedAt` to seed the self-heal pull
+ * cursor. A just-uploaded shot's remote `updated_at` is ~now (≥ `completedAt`),
+ * so any non-negative slop already includes it; the margin only guards against
+ * clock skew between the device and the server.
+ */
+const SELF_HEAL_SLOP_MS = 60_000;
+
 // ── Public surface ──────────────────────────────────────────────────────
 
 export interface ShotPatch {
@@ -719,6 +744,47 @@ export const ShotSyncLive = Layer.effect(
 		) {
 			const list = history.all.filter((s) => !s.visualizerId);
 
+			/**
+			 * Record a non-success outcome: enqueue a recoverable error for a timed
+			 * retry through `UploadQueue`, and append a `skip` line to the sync log.
+			 * Shared by the plain-failure path and the self-heal "couldn't bind"
+			 * fallback.
+			 */
+			const skipOrQueue = (shot: StoredShot, e: VisualizerCallError | ResponseDecodeError): void => {
+				if (isRecoverable(e)) {
+					enqueueSyncOp({
+						entity: 'shot',
+						id: shot.id,
+						op: 'create',
+						error: describeVisualizerError(e)
+					});
+				}
+				appendSyncLog({
+					direction: 'skip',
+					entity: 'shot',
+					id: shot.id,
+					name: shot.profileName ?? 'Shot',
+					at: Date.now(),
+					error: describeVisualizerError(e)
+				});
+			};
+
+			/**
+			 * Self-heal an {@link isAmbiguousSuccess} upload: the shot may already
+			 * be on the server, so rather than re-POST (→ duplicate) we PULL the
+			 * shots updated around this one's completion and let `reconcileShots`
+			 * bind the unsynced local to its freshly-created remote by djb2
+			 * signature. Resolves `true` once the bind has landed (the local now
+			 * carries a `visualizerId`). Never throws — a failed self-heal pull
+			 * simply means "not bound yet", and the caller falls back to
+			 * {@link skipOrQueue}.
+			 */
+			const selfHealBind = (shot: StoredShot): Effect.Effect<boolean> =>
+				pullAndReconcileShots(history, shot.completedAt - SELF_HEAL_SLOP_MS).pipe(
+					Effect.ignore,
+					Effect.map(() => Boolean(history.get(shot.id)?.visualizerId))
+				);
+
 			/** Upload one shot; returns `true` when the loop should abort. */
 			const uploadOne = (shot: StoredShot): Effect.Effect<boolean> =>
 				uploadShot(shot).pipe(
@@ -736,25 +802,33 @@ export const ShotSyncLive = Layer.effect(
 						})
 					),
 					Effect.catchAll((e) =>
-						Effect.sync(() => {
-							if (isRecoverable(e)) {
-								enqueueSyncOp({
-									entity: 'shot',
-									id: shot.id,
-									op: 'create',
-									error: describeVisualizerError(e)
-								});
-							}
-							appendSyncLog({
-								direction: 'skip',
-								entity: 'shot',
-								id: shot.id,
-								name: shot.profileName ?? 'Shot',
-								at: Date.now(),
-								error: describeVisualizerError(e)
-							});
-							return shouldAbortLoop(e);
-						})
+						isAmbiguousSuccess(e)
+							? // The POST may already have landed — bind by reconcile, never
+								// re-POST. A successful bind is logged as a push (the reconcile
+								// pull also logs its own `bind` line); a miss falls back to the
+								// queue ONLY when recoverable (so a 2xx-no-id is never re-POSTed).
+								selfHealBind(shot).pipe(
+									Effect.map((bound) => {
+										if (bound) {
+											appendSyncLog({
+												direction: 'push',
+												entity: 'shot',
+												id: shot.id,
+												name: shot.profileName ?? 'Shot',
+												at: Date.now()
+											});
+										} else {
+											skipOrQueue(shot, e);
+										}
+										// Ambiguous-success errors never abort the loop: they aren't
+										// an auth/premium wall, and the remaining shots are unaffected.
+										return false;
+									})
+								)
+							: Effect.sync(() => {
+									skipOrQueue(shot, e);
+									return shouldAbortLoop(e);
+								})
 					)
 				);
 

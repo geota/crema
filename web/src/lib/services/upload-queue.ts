@@ -192,12 +192,17 @@ export const UploadQueueLive = Layer.effect(
 		const armLifecycle = Effect.gen(function* () {
 			const already = yield* Ref.getAndSet(lifecycleArmed, true);
 			if (already) return;
-			// Flush any backlog now, then drain every 5 min. `forkDaemon` matches
-			// the old never-cleared `setInterval` lifetime (lives until the runtime
-			// is disposed). The `online` / `visibilitychange` DOM listeners are
-			// wired at the call site at T-16, where the runtime is in scope —
-			// bridging DOM events into a fiber needs the runtime handle (D-07).
-			yield* Effect.forkDaemon(drain);
+			// `Effect.repeat` runs `tick` ONCE immediately (the startup flush) and
+			// then every 5 min thereafter, so a single daemon covers both. The old
+			// code also armed a separate `forkDaemon(drain)`, double-draining on
+			// launch (EF4) — dropped. (Lone nuance: the startup flush now rides
+			// `tick`, which skips while the tab is hidden/offline; at app launch the
+			// tab is visible, and the `online` event + each sync tail still drain, so
+			// a backlog is never stranded.) `forkDaemon` matches the old never-cleared
+			// `setInterval` lifetime (lives until the runtime is disposed). The
+			// `online` / `visibilitychange` DOM listeners are wired at the call site
+			// at T-16, where the runtime is in scope — bridging DOM events into a
+			// fiber needs the runtime handle (D-07).
 			yield* Effect.forkDaemon(Effect.repeat(tick, Schedule.spaced('5 minutes')));
 		});
 
