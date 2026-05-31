@@ -48,8 +48,10 @@ import { guessScaleFromFirstWeightPacket as wasmGuessScaleFromFirstWeightPacket 
 import { describeError } from '$lib/utils/error';
 import { Effect } from 'effect';
 import type { AppRuntime } from '$lib/effect/runtime';
+import { runtimePromise } from '$lib/effect/bridge';
 import { UploadQueue } from '$lib/services/upload-queue';
 import { Webhooks } from '$lib/services/webhooks';
+import { ProfileSync } from '$lib/services/profile-sync';
 import {
 	CremaUiState,
 	DEFAULT_SCALE_STANDBY,
@@ -146,18 +148,6 @@ const MAX_TELEMETRY_GAP_S = 2;
  * the machine still has the bytes we last sent.
  */
 const LAST_FINGERPRINT_KEY = 'crema.profile-sync.lastFingerprint.v1';
-
-/**
- * Minimum ms between `ProfileUploadCompleted` and the next
- * `requestMachineState` write. The DE1 firmware finishes the final
- * flash write inside `APIView::write` for the tail frame, and only
- * clears `ProfileDownloadInProgress` when that write returns. A
- * state-request that hits the firmware task loop inside the window
- * aborts the shot to HeaterDown after preinfuse — BC 9788201734.
- * Reaprime's value (`ConnectionTimings.profileDownloadGuard`); Crema
- * matches.
- */
-const PROFILE_DOWNLOAD_GUARD_MS = 500;
 
 /**
  * The DE1 top-level states whose group flow counts toward the water-filter /
@@ -306,42 +296,12 @@ export class CremaApp {
 	 */
 	private shotStartedAtMs: number | null = null;
 
-	/**
-	 * `performance.now()` of the most recent `ProfileUploadCompleted` event,
-	 * or `null` before any upload. `requestMachineState` consults this to
-	 * defer a state-request that hits the firmware too soon after a
-	 * profile upload — the BC 9788201734 race: the DE1 only clears
-	 * `ProfileDownloadInProgress` after the final flash write returns; a
-	 * state=Espresso request before that aborts the shot to HeaterDown
-	 * after preinfuse. Reaprime's `ConnectionTimings.profileDownloadGuard`
-	 * is 500 ms; Crema matches.
-	 */
-	private lastProfileUploadCompletedAtMs: number | null = null;
-
-	/**
-	 * Fingerprint of the profile-upload currently in flight, stamped onto
-	 * the snapshot once `ProfileUploadCompleted` lands. `null` between
-	 * uploads. `pending` carries the *desired* fingerprint — `uploadProfile`
-	 * sets it just before issuing the writes, and the `ProfileUploadCompleted`
-	 * fold in `applyCoreOutput` commits it.
-	 *
-	 * A failed upload (`ProfileUploadFailed`) clears `pending` without
-	 * committing — the DE1 is left running whatever it had before the
-	 * failed upload, so the snapshot's `activeProfileFingerprint`
-	 * intentionally stays at its pre-upload value.
-	 */
-	private pendingUploadFingerprint: string | null = null;
-
-	/**
-	 * One-shot waiter resolved when `ProfileUploadCompleted` (or
-	 * `ProfileUploadFailed`) lands — used by `syncActiveProfile` to await
-	 * the upload before returning, so `startShot()` only proceeds to
-	 * `requestMachineState(Espresso)` once the DE1 has acknowledged the
-	 * tail frame. Cleared in the same fold that resolves it.
-	 */
-	private pendingUploadCompletion:
-		| { resolve: (ok: boolean) => void; timeoutId: number }
-		| null = null;
+	// The profile-upload coordination state — the download-guard clock, the
+	// in-flight fingerprint, and the completion waiter — moved into the
+	// `ProfileSync` service (T-21). `syncActiveProfile` drives it; the
+	// `ProfileUploadCompleted` / `ProfileUploadFailed` fold arms call
+	// `ProfileSync.completed` / `.failed`; `requestMachineState` awaits
+	// `ProfileSync.profileDownloadGuard`.
 
 	/**
 	 * Active `setInterval` id for the scale-heartbeat loop, or `null` when
@@ -604,25 +564,25 @@ export class CremaApp {
 				}
 			}
 			if (event.type === 'ProfileUploadCompleted') {
-				// Open the profile-download race window — see the comment on
-				// `lastProfileUploadCompletedAtMs`. `requestMachineState`
-				// reads the value to delay any state-request that lands
-				// inside the 500 ms guard window.
-				this.lastProfileUploadCompletedAtMs = performance.now();
-				// Commit the pending fingerprint into the snapshot, persist
-				// it across reloads, and release any `syncActiveProfile`
-				// waiter (the lazy re-upload path on `startShot()`).
-				if (this.pendingUploadFingerprint !== null) {
-					this.state.patch({
-						activeProfileFingerprint: this.pendingUploadFingerprint
-					});
-					writeJson(LAST_FINGERPRINT_KEY, this.pendingUploadFingerprint);
-					this.pendingUploadFingerprint = null;
-				}
-				if (this.pendingUploadCompletion) {
-					window.clearTimeout(this.pendingUploadCompletion.timeoutId);
-					this.pendingUploadCompletion.resolve(true);
-					this.pendingUploadCompletion = null;
+				// Hand the completion to the `ProfileSync` service (T-21): it
+				// stamps the download-guard clock (opening the BC 9788201734
+				// window `profileDownloadGuard` reads), resolves the
+				// `syncActiveProfile` waiter (the lazy re-upload path on
+				// `startShot()`), and returns the just-landed fingerprint — or
+				// `null` if no upload was pending. `runSync` is safe: `completed`
+				// is fully synchronous, so the supersession `cancel` in `sync`
+				// observes the cleared pending before it returns. No runtime ⇒ no
+				// DE1 ⇒ this event never fires, so the guard is belt-and-braces.
+				const committed = this.runtime
+					? this.runtime.runSync(ProfileSync.pipe(Effect.flatMap((ps) => ps.completed)))
+					: null;
+				// Commit the fingerprint into the snapshot + persist it across
+				// reloads (the rune store + localStorage stay here — the service
+				// owns coordination, not persistence). Skip when nothing was
+				// pending (e.g. a late completion after a 15 s timeout).
+				if (committed !== null) {
+					this.state.patch({ activeProfileFingerprint: committed });
+					writeJson(LAST_FINGERPRINT_KEY, committed);
 				}
 				// Fire `profileUploaded` webhook — the core gives us the
 				// title; the dose / yield come from the active profile in
@@ -642,17 +602,11 @@ export class CremaApp {
 				}
 			}
 			if (event.type === 'ProfileUploadFailed') {
-				// The DE1 is still running whatever it had before the
-				// failed upload, so the cached fingerprint is unchanged —
-				// just drop the pending desired fingerprint and release
-				// the waiter with a failure signal so `syncActiveProfile`
-				// surfaces the problem to its caller.
-				this.pendingUploadFingerprint = null;
-				if (this.pendingUploadCompletion) {
-					window.clearTimeout(this.pendingUploadCompletion.timeoutId);
-					this.pendingUploadCompletion.resolve(false);
-					this.pendingUploadCompletion = null;
-				}
+				// The DE1 still runs whatever it had before the failed upload, so
+				// the cached fingerprint is unchanged — `ProfileSync.failed`
+				// resolves the waiter `false` and clears the pending entry so
+				// `syncActiveProfile` surfaces the problem to its caller (T-21).
+				this.runtime?.runSync(ProfileSync.pipe(Effect.flatMap((ps) => ps.failed)));
 			}
 			if (
 				event.type === 'WaterSessionCompleted' &&
@@ -1488,55 +1442,31 @@ export class CremaApp {
 		qc: ProfileFingerprintOverrides
 	): Promise<boolean> {
 		const desired = profileFingerprint(profile, qc);
-		if (this.state.current.activeProfileFingerprint === desired) {
-			return true;
-		}
-		// Already-pending upload on the same desired fingerprint? Let it
-		// land — second callers piggy-back on the in-flight completion.
-		if (
-			this.pendingUploadFingerprint === desired &&
-			this.pendingUploadCompletion !== null
-		) {
-			return new Promise<boolean>((resolve) => {
-				const prior = this.pendingUploadCompletion;
-				if (!prior) {
-					resolve(false);
-					return;
-				}
-				const priorResolve = prior.resolve;
-				prior.resolve = (ok) => {
-					priorResolve(ok);
-					resolve(ok);
-				};
-			});
-		}
-		// Cancel any in-flight upload aimed at a *different* fingerprint
-		// — the new intent supersedes the old one. The cancellation
-		// fires `ProfileUploadFailed{Aborted}` which releases the prior
-		// waiter with `false`; safe to do before we install our own
-		// waiter below.
-		if (this.pendingUploadCompletion !== null) {
-			await this.cancelProfileUpload();
-		}
-		this.pendingUploadFingerprint = desired;
-		const completion = new Promise<boolean>((resolve) => {
-			// Backstop timeout: a never-arriving Completed / Failed
-			// shouldn't trap the caller forever. 15 s is comfortably
-			// beyond a full profile upload (~1-2 s on a healthy link).
-			const timeoutId = window.setTimeout(() => {
-				if (this.pendingUploadCompletion) {
-					this.state.log(
-						'Profile sync timed out waiting for ProfileUploadCompleted — proceeding anyway.'
-					);
-					this.pendingUploadCompletion = null;
-					this.pendingUploadFingerprint = null;
-					resolve(false);
-				}
-			}, 15_000);
-			this.pendingUploadCompletion = { resolve, timeoutId };
-		});
-		await this.uploadProfile(toCoreProfile(profile));
-		return completion;
+		const alreadyLoaded = this.state.current.activeProfileFingerprint === desired;
+		// No runtime ⇒ no Effect-routed services (and no Web Bluetooth ⇒ no DE1
+		// to upload to). The cache check is the only meaningful answer; a real
+		// upload can't happen, so report "loaded" only on a hit.
+		if (this.runtime === null) return alreadyLoaded;
+		// All coordination — the cache short-circuit, piggyback on an in-flight
+		// upload of the same fingerprint, supersession of a different one
+		// (`cancel` → `ProfileUploadFailed{Aborted}` → waiter resolves `false`),
+		// and the 15 s backstop — lives in the `ProfileSync` service (T-21). The
+		// upload still leaves through the core + BLE write cascade, confirmed by
+		// the `ProfileUploadCompleted` fold calling `ProfileSync.completed`.
+		return runtimePromise(
+			this.runtime,
+			ProfileSync.pipe(
+				Effect.flatMap((ps) =>
+					ps.sync({
+						desired,
+						alreadyLoaded,
+						upload: Effect.promise(() => this.uploadProfile(toCoreProfile(profile))),
+						cancel: Effect.promise(() => this.cancelProfileUpload()),
+						log: (line) => this.state.log(line)
+					})
+				)
+			)
+		);
 	}
 
 	/** Tare the connected scale. Routes the core's `WriteScale` to the scale. */
@@ -1866,20 +1796,17 @@ export class CremaApp {
 	 * buttons; the shell exposes them for completeness.
 	 */
 	async requestMachineState(state: MachineState): Promise<void> {
-		// Profile-download race guard. The DE1 firmware
-		// holds `ProfileDownloadInProgress` for a short window after the
-		// final frame write — a state-request that arrives inside the
-		// window is aborted to HeaterDown after preinfuse (BC 9788201734).
-		// Mirrors reaprime's 500 ms `ConnectionTimings.profileDownloadGuard`.
-		if (this.lastProfileUploadCompletedAtMs !== null) {
-			const remaining =
-				PROFILE_DOWNLOAD_GUARD_MS -
-				(performance.now() - this.lastProfileUploadCompletedAtMs);
-			if (remaining > 0) {
-				await new Promise<void>((resolve) =>
-					window.setTimeout(resolve, remaining)
-				);
-			}
+		// Profile-download race guard (BC 9788201734): the DE1 firmware holds
+		// `ProfileDownloadInProgress` for a short window after the final frame
+		// write — a state-request inside it is aborted to HeaterDown after
+		// preinfuse. `ProfileSync.profileDownloadGuard` waits out the remaining
+		// 500 ms window since the last `ProfileUploadCompleted` (T-21). No-op
+		// when no upload has completed, or when there's no runtime.
+		if (this.runtime !== null) {
+			await runtimePromise(
+				this.runtime,
+				ProfileSync.pipe(Effect.flatMap((ps) => ps.profileDownloadGuard))
+			);
 		}
 		this.applyCoreOutput(await this.core.requestMachineState(state));
 	}
