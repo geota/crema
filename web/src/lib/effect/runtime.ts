@@ -18,6 +18,7 @@ import { ShotSyncLive } from '../services/shot-sync.ts';
 import { BeanSyncLive } from '../services/bean-sync.ts';
 import { UploadQueueLive } from '../services/upload-queue.ts';
 import { WebhooksLive } from '../services/webhooks.ts';
+import { ProfileSyncLive } from '../services/profile-sync.ts';
 
 /**
  * The composed application layer. Services join here as they land.
@@ -37,6 +38,9 @@ const UploadQueueProvided = Layer.provide(
 	Layer.merge(ShotSyncProvided, BeanSyncProvided)
 );
 const WebhooksProvided = Layer.provide(WebhooksLive, HttpClientLive);
+// ProfileSync is self-contained (Refs/Deferred/Clock/Semaphore only) — no deps.
+// It coordinates the DE1 profile-upload lifecycle (T-21); the actual bytes still
+// leave through the core + BLE write cascade the orchestrator drives.
 
 export const AppLayer = Layer.mergeAll(
 	HttpClientLive,
@@ -45,7 +49,8 @@ export const AppLayer = Layer.mergeAll(
 	ShotSyncProvided,
 	BeanSyncProvided,
 	UploadQueueProvided,
-	WebhooksProvided
+	WebhooksProvided,
+	ProfileSyncLive
 );
 
 /** The services the app runtime provides. `never` while `AppLayer` is empty. */
