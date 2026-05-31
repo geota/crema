@@ -9,7 +9,6 @@
 	 * (Sync now + last-result log).
 	 */
 	import { onMount } from 'svelte';
-	import { Effect } from 'effect';
 	import { getHistoryStore } from '$lib/history';
 	import { downloadBlob } from '$lib/utils/download';
 	import {
@@ -21,9 +20,6 @@
 	} from '$lib/bean';
 	import { onSyncConfigChange, readSyncConfig } from '$lib/visualizer';
 	import { getCremaAppContext } from '$lib/shell/app-context';
-	import { runtimePromise } from '$lib/effect/bridge';
-	import { TokenVault } from '$lib/services/token-vault';
-	import { BeanSync } from '$lib/services/bean-sync';
 	import StSectionHead from '../StSectionHead.svelte';
 	import StGroup from '../StGroup.svelte';
 	import StRow from '../StRow.svelte';
@@ -52,10 +48,7 @@
 	 *  mount. Sign-in arrives via a full-page OAuth redirect → this remounts and
 	 *  re-reads; sign-out is handled locally in `disconnect`. */
 	async function refreshConnected(): Promise<void> {
-		const runtime = appCtx().runtime;
-		connected = runtime
-			? (await runtimePromise(runtime, TokenVault.pipe(Effect.flatMap((v) => v.getTokens)))) !== null
-			: false;
+		connected = (await appCtx().services?.tokens.isConnected()) ?? false;
 	}
 
 	onMount(() => {
@@ -70,11 +63,11 @@
 	});
 
 	async function loadAccount(): Promise<void> {
-		const runtime = appCtx().runtime;
-		if (!runtime) return;
+		const api = appCtx().services;
+		if (!api) return;
 		accountError = null;
 		try {
-			account = await runtimePromise(runtime, BeanSync.pipe(Effect.flatMap((b) => b.fetchAccount)));
+			account = await api.beans.fetchAccount();
 		} catch (e) {
 			accountError = e instanceof Error ? e.message : String(e);
 		}
@@ -92,14 +85,11 @@
 	}
 
 	async function disconnect(): Promise<void> {
-		const runtime = appCtx().runtime;
-		if (runtime) {
-			const tokens = await runtimePromise(
-				runtime,
-				TokenVault.pipe(Effect.flatMap((v) => v.getTokens))
-			);
+		const api = appCtx().services;
+		if (api) {
+			const tokens = await api.tokens.getTokens();
 			if (tokens?.accessToken) await revokeVisualizerToken(tokens.accessToken);
-			await runtimePromise(runtime, TokenVault.pipe(Effect.flatMap((v) => v.clearTokens)));
+			await api.tokens.clearTokens();
 		}
 		// Tier flag is per-account — a fresh sign-in (or the same account
 		// after a tier change on visualizer.coffee) shouldn't inherit it.
@@ -112,10 +102,10 @@
 	}
 
 	async function testNow(): Promise<void> {
-		const runtime = appCtx().runtime;
-		if (!runtime) return;
+		const api = appCtx().services;
+		if (!api) return;
 		testStatus = { kind: 'testing' };
-		const r = await runtimePromise(runtime, BeanSync.pipe(Effect.flatMap((b) => b.testConnection)));
+		const r = await api.beans.testConnection();
 		if (r.ok) {
 			testStatus = {
 				kind: 'ok',

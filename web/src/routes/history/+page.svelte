@@ -37,12 +37,7 @@
 	import SplitButton from '$lib/components/shared/SplitButton.svelte';
 	import { getBeanStore } from '$lib/bean';
 	import { onMount } from 'svelte';
-	import { Effect } from 'effect';
 	import { appendSyncLog, directionPushes, readSyncConfig } from '$lib/visualizer';
-	import { runtimePromise } from '$lib/effect/bridge';
-	import { TokenVault } from '$lib/services/token-vault';
-	import { ShotSync } from '$lib/services/shot-sync';
-	import { UploadQueue } from '$lib/services/upload-queue';
 	import { readQueue } from '$lib/services/queue-store';
 
 	const store = getHistoryStore();
@@ -242,10 +237,7 @@
 		new Set(readQueue().entries.filter((q) => q.entity === 'shot').map((q) => q.id))
 	);
 	async function refreshConnected(): Promise<void> {
-		const runtime = appCtx().runtime;
-		connected = runtime
-			? (await runtimePromise(runtime, TokenVault.pipe(Effect.flatMap((v) => v.getTokens)))) !== null
-			: false;
+		connected = (await appCtx().services?.tokens.isConnected()) ?? false;
 	}
 	function refreshSyncState(): void {
 		syncConfig = readSyncConfig();
@@ -270,18 +262,15 @@
 
 	async function uploadAll(): Promise<void> {
 		if (uploadingAll || !canPushShots) return;
-		const runtime = appCtx().runtime;
-		if (!runtime) return;
+		const api = appCtx().services;
+		if (!api) return;
 		uploadingAll = true;
 		try {
-			// `ShotSync.uploadUnsyncedShots` reproduces the old per-shot loop:
-			// upload + bind + sync-log each unsynced shot, routing recoverable
-			// failures to the retry queue; then drain whatever it enqueued.
-			await runtimePromise(
-				runtime,
-				ShotSync.pipe(Effect.flatMap((s) => s.uploadUnsyncedShots(store)))
-			);
-			await runtimePromise(runtime, UploadQueue.pipe(Effect.flatMap((q) => q.drain)));
+			// `shots.uploadUnsynced` reproduces the old per-shot loop: upload +
+			// bind + sync-log each unsynced shot, routing recoverable failures to
+			// the retry queue; then drain whatever it enqueued.
+			await api.shots.uploadUnsynced(store);
+			await api.queue.drain();
 		} finally {
 			refreshSyncState();
 			uploadingAll = false;
@@ -303,18 +292,11 @@
 		const visualizerId = shot.visualizerId ?? null;
 		const wasSelected = selected?.id === shot.id;
 		store.delete(shot.id);
-		const runtime = appCtx().runtime;
-		if (opts.remote && visualizerId && runtime) {
+		const api = appCtx().services;
+		if (opts.remote && visualizerId && api) {
 			try {
-				await runtimePromise(
-					runtime,
-					UploadQueue.pipe(
-						Effect.flatMap((q) =>
-							q.enqueue({ entity: 'shot', id: shot.id, op: 'delete', visualizerId })
-						)
-					)
-				);
-				await runtimePromise(runtime, UploadQueue.pipe(Effect.flatMap((q) => q.drain)));
+				await api.queue.enqueue({ entity: 'shot', id: shot.id, op: 'delete', visualizerId });
+				await api.queue.drain();
 			} catch (e) {
 				console.error('[history] Visualizer delete failed', e);
 			}

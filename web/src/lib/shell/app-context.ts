@@ -15,6 +15,7 @@
 import { getContext, setContext } from 'svelte';
 import type { CremaApp } from '$lib/state';
 import type { AppRuntime } from '$lib/effect/runtime';
+import type { CremaServices } from '$lib/effect/crema-services';
 
 /** How the wasm core load is progressing — drives the shell's gate UI. */
 export type CoreLoadState = 'loading' | 'ready' | 'failed';
@@ -33,6 +34,13 @@ export interface CremaAppContext {
 	 * runtime; the `Promise`-shaped boundary crosses it via `runtimePromise`.
 	 */
 	readonly runtime: AppRuntime | null;
+	/**
+	 * The `Promise`-shaped facade over the Visualizer sync services, bound to
+	 * `runtime` at the shell (`null` whenever `runtime` is). Components call
+	 * `services.shots.uploadUnsynced(…)` etc. instead of crossing the Effect
+	 * boundary by hand — see `$lib/effect/crema-services`.
+	 */
+	readonly services: CremaServices | null;
 	/** Lifecycle of the one-time core load. */
 	readonly loadState: CoreLoadState;
 	/** The failure message when `loadState === 'failed'`. */
