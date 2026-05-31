@@ -200,7 +200,7 @@ export const BeanSyncLive = Layer.effect(
 			Effect.gen(function* () {
 				const out: T[] = [];
 				let page = 1;
-				while (page < 50) {
+				while (page <= 50) {
 					const body = (yield* call(`${base}?items=100&page=${page}`)) as {
 						data?: T[];
 						paging?: { pages?: number };
@@ -298,15 +298,15 @@ export const BeanSyncLive = Layer.effect(
 						log.push({ direction: 'skip', kind: 'roaster', id: local.id, name: local.name, at: Date.now(), error: 'premium required' });
 						continue;
 					}
-					const res = yield* Effect.either(
-						call('/roasters', { method: 'POST', body: roasterBodyToWriteRequest(roasterToWire(local)) })
-					);
+					// EF2: route the push through the `uploadRoaster` service method
+					// rather than re-implementing the POST wire inline. `local` has no
+					// `visualizerId` here (filtered above), so `uploadRoaster` POSTs the
+					// same `roasterBodyToWriteRequest(roasterToWire(local))` body and
+					// returns the bound id.
+					const res = yield* Effect.either(uploadRoaster(local));
 					if (res._tag === 'Right') {
-						const wire = res.right as RoasterWire | null;
-						if (wire?.id) {
-							library.updateRoaster(local.id, { visualizerId: wire.id });
-							remoteRoasterIdToLocal.set(wire.id, local.id);
-						}
+						library.updateRoaster(local.id, { visualizerId: res.right.visualizerId });
+						remoteRoasterIdToLocal.set(res.right.visualizerId, local.id);
 						result.pushed += 1;
 						writeSyncSettings({ premium: true });
 						log.push({ direction: 'push', kind: 'roaster', id: local.id, name: local.name, at: Date.now() });
@@ -374,12 +374,14 @@ export const BeanSyncLive = Layer.effect(
 					const remoteRoasterId = local.roasterId
 						? (library.getRoaster(local.roasterId)?.visualizerId ?? null)
 						: null;
-					const body = bagBodyToWriteRequest(beanToWire(local, remoteRoasterId));
+					// EF2: both legs route through `uploadBean` rather than re-implementing
+					// the POST/PATCH wire. `uploadBean` builds the identical
+					// `bagBodyToWriteRequest(beanToWire(local, remoteRoasterId))` body and
+					// PATCHes (id present) or POSTs (id absent) by inspecting the bean.
 					if (!local.visualizerId) {
-						const res = yield* Effect.either(call('/coffee_bags', { method: 'POST', body }));
+						const res = yield* Effect.either(uploadBean(local, remoteRoasterId));
 						if (res._tag === 'Right') {
-							const wire = res.right as BagWire | null;
-							if (wire?.id) library.updateBean(local.id, { visualizerId: wire.id });
+							library.updateBean(local.id, { visualizerId: res.right.visualizerId });
 							result.pushed += 1;
 							log.push({ direction: 'push', kind: 'bean', id: local.id, name: local.name, at: Date.now() });
 						} else if (res.left._tag === 'VisualizerPremiumGatedError') {
@@ -391,7 +393,7 @@ export const BeanSyncLive = Layer.effect(
 							log.push({ direction: 'skip', kind: 'bean', id: local.id, name: local.name, at: Date.now(), error: describeVisualizerError(res.left) });
 						}
 					} else if (local.updatedAt > lastSync) {
-						const res = yield* Effect.either(call(`/coffee_bags/${local.visualizerId}`, { method: 'PATCH', body }));
+						const res = yield* Effect.either(uploadBean(local, remoteRoasterId));
 						if (res._tag === 'Right') {
 							result.pushed += 1;
 							log.push({ direction: 'push', kind: 'bean', id: local.id, name: local.name, at: Date.now() });
