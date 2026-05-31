@@ -13,7 +13,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { describe, it } from 'vitest';
 import { Cause, Effect, Exit, Layer } from 'effect';
 import { HttpClientLive } from './http-client.ts';
 import { OAuth, OAuthLive } from './oauth.ts';

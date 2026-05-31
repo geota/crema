@@ -7,7 +7,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { afterEach, describe, it } from 'node:test';
+import { afterEach, describe, it } from 'vitest';
 import { Cause, Effect, Exit } from 'effect';
 import { HttpClient, HttpClientLive, type HttpRequest } from './http-client.ts';
 

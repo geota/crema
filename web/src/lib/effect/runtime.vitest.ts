@@ -25,7 +25,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { describe, it } from 'vitest';
 import { Effect, Layer, ManagedRuntime } from 'effect';
 import { HttpClientLive } from '../services/http-client.ts';
 import { OAuthLive } from '../services/oauth.ts';

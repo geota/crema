@@ -17,7 +17,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { describe, it } from 'vitest';
 
 // In-memory localStorage polyfill (node has no DOM). `utils/storage` reads
 // `globalThis.localStorage` at call time, so installing it before the tests run

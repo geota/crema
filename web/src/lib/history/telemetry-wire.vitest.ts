@@ -18,7 +18,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { describe, it } from 'vitest';
 import type { TelemetrySample } from '../state/ui-state.svelte.ts';
 import { fromWire, toWire } from './telemetry-wire.ts';
 

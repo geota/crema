@@ -26,14 +26,14 @@
  */
 
 import assert from 'node:assert/strict';
-import { describe, it, before } from 'node:test';
+import { beforeAll, describe, it } from 'vitest';
 import {
-	default as initWasm,
 	signatureForShot as wasmSignatureForShot,
 	signatureForBean as wasmSignatureForBean,
 	signatureForRoaster as wasmSignatureForRoaster,
 	reconcileShots as wasmReconcileShots
 } from '../wasm/de1_wasm.js';
+import { initTestWasm } from '../wasm/test-init.ts';
 import type { ShotBean, StoredShot } from '../history/model.ts';
 
 // ── Types (mirrored from shot-sync-signatures.ts) ────────────────────
@@ -209,20 +209,10 @@ function resolveGrinderModel(
 }
 
 // ── Wasm bootstrap ────────────────────────────────────────────────────
-
-// The wasm bundle is built with `--target web`, so its default
-// initializer calls `fetch(<url to .wasm>)`. Node's `fetch` does not
-// support `file://` URLs (undici raises "not implemented... yet"),
-// so the test reads the .wasm file off disk and hands the bytes to
-// the initializer directly. The bundler-mode init accepts a Buffer
-// (or ArrayBuffer / WebAssembly.Module) as a single-arg shortcut and
-// skips the fetch path entirely.
-before(async () => {
-	const { readFile } = await import('node:fs/promises');
-	const wasmUrl = new URL('../wasm/de1_wasm_bg.wasm', import.meta.url);
-	const bytes = await readFile(wasmUrl);
-	await initWasm({ module_or_path: bytes });
-});
+// The `--target web` bundle's default init `fetch`es the `.wasm` by URL, which
+// vitest can't do over `file://`; `initTestWasm` reads the bytes off disk and
+// hands them to the initializer (`$lib/wasm/test-init`).
+beforeAll(initTestWasm);
 
 // ── Fixtures ─────────────────────────────────────────────────────────
 
