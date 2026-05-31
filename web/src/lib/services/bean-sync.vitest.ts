@@ -11,7 +11,7 @@
  */
 
 import { Cause, Effect, Exit, Layer } from 'effect';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { BeanSync, BeanSyncLive } from './bean-sync.ts';
 import { HttpClient, type HttpRequest } from './http-client.ts';
 import { TokenVault } from './token-vault.ts';
@@ -137,5 +137,51 @@ describe('BeanSync delete', () => {
 		const { layer } = mkHttp(() => ({ ok: false, status: 500 }));
 		const tag = await failTag(BeanSync.pipe(Effect.flatMap((b) => b.deleteRoaster('vr-1'))), layer);
 		expect(tag).toBe('HttpStatusError');
+	});
+});
+
+describe('BeanSync.fetchAccount', () => {
+	it('decodes /me into the camel-cased account', async () => {
+		const { layer } = mkHttp(() => ({
+			ok: true,
+			json: { id: 'u1', name: 'Ada', public: true, avatar_url: 'http://x/a.png' }
+		}));
+		const out = await run(BeanSync.pipe(Effect.flatMap((b) => b.fetchAccount)), layer);
+		expect(out).toEqual({ id: 'u1', name: 'Ada', public: true, avatarUrl: 'http://x/a.png' });
+	});
+
+	it('fails ResponseDecodeError on a malformed /me', async () => {
+		const { layer } = mkHttp(() => ({ ok: true, json: { nope: true } }));
+		const tag = await failTag(BeanSync.pipe(Effect.flatMap((b) => b.fetchAccount)), layer);
+		expect(tag).toBe('ResponseDecodeError');
+	});
+});
+
+describe('BeanSync.testConnection', () => {
+	beforeEach(() => localStorage.clear());
+
+	it('reports premium when the sentinel write succeeds', async () => {
+		const { layer } = mkHttp((req) => {
+			if (req.method === 'POST') return { ok: true, json: { id: 'sentinel' } };
+			return { ok: true, json: { data: [], paging: { pages: 1 } } }; // GET check + DELETE
+		});
+		const out = await run(BeanSync.pipe(Effect.flatMap((b) => b.testConnection)), layer);
+		expect(out).toEqual({ ok: true, premium: true });
+	});
+
+	it('reports free tier when the sentinel write is premium-gated', async () => {
+		const { layer } = mkHttp((req) =>
+			req.method === 'POST' ? { ok: false, status: 403 } : { ok: true, json: { data: [] } }
+		);
+		const out = await run(BeanSync.pipe(Effect.flatMap((b) => b.testConnection)), layer);
+		expect(out).toEqual({ ok: true, premium: false });
+	});
+
+	it('reports not-ok when the initial read fails auth', async () => {
+		const { layer } = mkHttp(() => ({ ok: false, status: 401 }));
+		const out = (await run(BeanSync.pipe(Effect.flatMap((b) => b.testConnection)), layer)) as {
+			ok: boolean;
+		};
+		expect(out.ok).toBe(false);
 	});
 });

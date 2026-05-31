@@ -36,6 +36,7 @@ import {
 import {
 	BeanUploadResultSchema,
 	RoasterUploadResultSchema,
+	VisualizerAccountSchema,
 	decodeResponse
 } from '../effect/schema/visualizer.ts';
 import type { Bean, Roaster } from '$lib/bean';
@@ -53,7 +54,21 @@ import {
 	type SyncResult
 } from '$lib/bean/visualizer-sync';
 import { signatureForBean, signatureForRoaster } from '$lib/visualizer/shot-sync-signatures';
+import { updateSyncConfig } from '$lib/visualizer/sync-config';
 import type { components } from '$lib/visualizer/openapi';
+
+/** Crema-side projection of the Visualizer `/me` response (camel-cased). */
+export interface VisualizerAccount {
+	id: string;
+	name: string;
+	public: boolean;
+	avatarUrl: string;
+}
+
+/** Outcome of {@link BeanSync.testConnection} — surfaced inline in Settings. */
+export type ConnectionTestResult =
+	| { readonly ok: true; readonly premium: boolean | null }
+	| { readonly ok: false; readonly error: string };
 
 type RoasterListResponse = components['schemas']['RoasterListResponse'];
 type CoffeeBagListResponse = components['schemas']['CoffeeBagListResponse'];
@@ -134,6 +149,15 @@ export class BeanSync extends Context.Tag('crema/BeanSync')<
 		 * result's `log` / `error`), so the boundary stays a plain `Promise`.
 		 */
 		readonly runSync: (library: BeanLibraryStore) => Effect.Effect<SyncResult>;
+		/** Fetch the signed-in user's `/me` profile (replaces `visualizer/account.ts`). */
+		readonly fetchAccount: Effect.Effect<VisualizerAccount, VisualizerCallError | ResponseDecodeError>;
+		/**
+		 * Verify the connection + probe the premium tier (replaces
+		 * `visualizer-sync.ts` `testConnection`): a read to catch auth errors, then
+		 * a sentinel `POST /roasters` whose status is the one authoritative premium
+		 * signal. Caches the result into both sync stores. Never fails.
+		 */
+		readonly testConnection: Effect.Effect<ConnectionTestResult>;
 	}
 >() {}
 
@@ -474,6 +498,70 @@ export const BeanSyncLive = Layer.effect(
 			return result;
 		});
 
-		return BeanSync.of({ uploadBean, uploadRoaster, deleteBean, deleteRoaster, runSync });
+		const fetchAccount = Effect.gen(function* () {
+			const raw = yield* call('/me');
+			const body = decodeResponse(VisualizerAccountSchema, raw, 'GET /me');
+			if (!body) {
+				return yield* new ResponseDecodeError({
+					url: `${API_BASE}/me`,
+					cause: 'Visualizer /me returned an unexpected shape.'
+				});
+			}
+			return { id: body.id, name: body.name, public: body.public, avatarUrl: body.avatar_url };
+		});
+
+		/**
+		 * Premium probe: `POST /roasters` with a sentinel name (one of Visualizer's
+		 * premium-gated endpoints), then delete it. 201→premium, 402/403→free,
+		 * anything else→unknown (null). A failed cleanup is non-fatal — the next
+		 * full sync's reconcile tidies it.
+		 */
+		const probePremium = Effect.gen(function* () {
+			const sentinelName = `__crema_premium_probe_${Date.now()}`;
+			const created = yield* Effect.either(
+				call('/roasters', {
+					method: 'POST',
+					body: { roaster: { name: sentinelName, website: null, canonical_roaster_id: null } }
+				})
+			);
+			if (created._tag === 'Left') {
+				return created.left._tag === 'VisualizerPremiumGatedError' ? false : null;
+			}
+			const wire = created.right as { id?: string } | null;
+			if (wire?.id) {
+				yield* call(`/roasters/${wire.id}`, { method: 'DELETE' }).pipe(
+					Effect.catchAll(() =>
+						Effect.sync(() =>
+							console.warn(
+								`[visualizer] premium-probe sentinel ${sentinelName} not cleaned up; will be removed on next full Sync`
+							)
+						)
+					)
+				);
+			}
+			return true;
+		});
+
+		const testConnection: Effect.Effect<ConnectionTestResult> = Effect.gen(function* () {
+			const tokens = yield* vault.getTokens;
+			if (tokens === null) return { ok: false, error: 'Sign in to Visualizer first.' };
+			const check = yield* Effect.either(call('/coffee_bags?items=1'));
+			if (check._tag === 'Left') return { ok: false, error: describeCallError(check.left) };
+			const premium = yield* probePremium;
+			// Mirror into both caches so every UI surface agrees (matches the old impl).
+			writeSyncSettings({ premium });
+			updateSyncConfig({ premium });
+			return { ok: true, premium };
+		});
+
+		return BeanSync.of({
+			uploadBean,
+			uploadRoaster,
+			deleteBean,
+			deleteRoaster,
+			runSync,
+			fetchAccount,
+			testConnection
+		});
 	})
 );
