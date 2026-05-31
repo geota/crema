@@ -407,6 +407,30 @@ pub fn reconcile_shots(payload: &str) -> Result<String, String> {
     de1_domain::reconcile_shots_json(payload)
 }
 
+/// Reconcile a remote roaster pull against the local directory (CORE4).
+/// `payload` is `{"local": Roaster[], "remote": RoasterWire[]}`; the result
+/// is a JSON array of `RoasterReconcileAction` (`{"kind":"update"|"bind"|
+/// "add", ...}`). See `de1_domain::reconcile_roasters`.
+///
+/// # Errors
+/// The JSON error string when `payload` can't be deserialised.
+#[wasm_bindgen(js_name = reconcileRoasters)]
+pub fn reconcile_roasters(payload: &str) -> Result<String, String> {
+    de1_domain::reconcile_roasters_json(payload)
+}
+
+/// Reconcile a remote bean pull against the local library (CORE4). `payload`
+/// is `{"local": Bean[], "remote": Bean[], "roasterNames": {id: name}}` (the
+/// remote beans are already decoded via `beanFromWire`); the result is a JSON
+/// array of `BeanReconcileAction`. See `de1_domain::reconcile_beans`.
+///
+/// # Errors
+/// The JSON error string when `payload` can't be deserialised.
+#[wasm_bindgen(js_name = reconcileBeans)]
+pub fn reconcile_beans(payload: &str) -> Result<String, String> {
+    de1_domain::reconcile_beans_json(payload)
+}
+
 // ─── Visualizer wire converters (CORE1) ─────────────────────────────────
 //
 // The bean / roaster ⇄ Visualizer-wire converters + the `ShotDetail`

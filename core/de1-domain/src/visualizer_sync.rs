@@ -27,7 +27,10 @@
 //! `StoredShot` shape and depends on the shell's `shotId()` /
 //! `localStorage` constructors. Only the pure-data fns move.
 
+use crate::bean::{Bean, Roaster};
+use crate::visualizer_wire::RoasterWire;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use typeshare::typeshare;
 
 // ── Types ─────────────────────────────────────────────────────────────
@@ -400,6 +403,212 @@ pub fn reconcile_shots_json(payload: &str) -> Result<String, String> {
     }
     let inp: In = serde_json::from_str(payload).map_err(|e| e.to_string())?;
     let actions = reconcile_shots(&inp.local, &inp.remote);
+    serde_json::to_string(&actions).map_err(|e| e.to_string())
+}
+
+// ── Bean / roaster reconcile (CORE4) ──────────────────────────────────
+//
+// The bidirectional bean/roaster sync's **pull-reconcile decision kernel**,
+// ported from `bean-sync.ts`'s `runSync` so every shell matches remote rows
+// against the local library identically. Pure data in, an action list out;
+// the shell applies the actions (the HTTP, the store mutations, the
+// premium-gating, and the push legs stay in the shell). Siblings of
+// [`reconcile_shots`]; they reuse [`signature_for_bean`] /
+// [`signature_for_roaster`] for the by-signature match.
+
+/// One reconciliation outcome for a remote **roaster** pull. Internally
+/// tagged (`{ kind, ... }`, lowercase) like [`ReconcileAction`] so the TS
+/// shell pattern-matches on `kind` without unwrapping a `content` envelope.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum RoasterReconcileAction {
+    /// A local already bound to this remote's `visualizer_id` → refresh all
+    /// of its Visualizer-modelled fields (and re-affirm the binding).
+    Update {
+        /// The local roaster to update.
+        #[serde(rename = "localId")]
+        local_id: String,
+        /// The remote wire carrying the fresh fields.
+        remote: RoasterWire,
+    },
+    /// An unbound local matches by signature, or any local matches by name →
+    /// bind it to this remote's `visualizer_id` (fields untouched).
+    Bind {
+        /// The local roaster to bind.
+        #[serde(rename = "localId")]
+        local_id: String,
+        /// The remote wire whose id binds in.
+        remote: RoasterWire,
+    },
+    /// No local match → materialise a fresh local roaster from this wire.
+    Add {
+        /// The remote roaster to add locally.
+        remote: RoasterWire,
+    },
+}
+
+/// One reconciliation outcome for a remote **bean** pull. The remote is
+/// already DECODED (the shell runs `bean_from_wire` first, because the
+/// signature match reads the decoded `name` / `roaster` / `roasted_on`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum BeanReconcileAction {
+    /// A local matches (by `visualizer_id`, by `id`, or by signature) →
+    /// replace it in place, keeping the local `id`.
+    Replace {
+        /// The local bean to replace.
+        #[serde(rename = "localId")]
+        local_id: String,
+        /// The decoded remote bean.
+        remote: Bean,
+    },
+    /// No local match → insert the decoded remote bean.
+    Add {
+        /// The decoded remote bean to add.
+        remote: Bean,
+    },
+}
+
+/// Reconcile a remote roaster pull against the local directory. Mirrors
+/// `runSync` step 1: bound-by-id → [`RoasterReconcileAction::Update`];
+/// else unbound-non-deleted-by-signature OR any-by-name →
+/// [`RoasterReconcileAction::Bind`]; else [`RoasterReconcileAction::Add`].
+/// Remotes with no `id` are skipped (mirrors the TS `if (!wire.id) continue`).
+#[must_use]
+pub fn reconcile_roasters(local: &[Roaster], remote: &[RoasterWire]) -> Vec<RoasterReconcileAction> {
+    let mut actions = Vec::with_capacity(remote.len());
+    for wire in remote {
+        let Some(remote_id) = wire.id.as_deref() else {
+            continue;
+        };
+        if let Some(by_id) = local
+            .iter()
+            .find(|r| r.visualizer_id.as_deref() == Some(remote_id))
+        {
+            actions.push(RoasterReconcileAction::Update {
+                local_id: by_id.id.clone(),
+                remote: wire.clone(),
+            });
+            continue;
+        }
+        let wire_sig = signature_for_roaster(&wire.name);
+        let by_sig = local.iter().find(|r| {
+            r.visualizer_id.is_none()
+                && r.deleted_at.is_none()
+                && signature_for_roaster(&r.name) == wire_sig
+        });
+        // `findRoasterByName`: case-insensitive exact match, any row (NOT
+        // filtered on bound / deleted), first hit. Empty name → no match.
+        let by_name = by_sig.or_else(|| {
+            let needle = wire.name.trim().to_lowercase();
+            if needle.is_empty() {
+                return None;
+            }
+            local.iter().find(|r| r.name.trim().to_lowercase() == needle)
+        });
+        if let Some(m) = by_name {
+            actions.push(RoasterReconcileAction::Bind {
+                local_id: m.id.clone(),
+                remote: wire.clone(),
+            });
+        } else {
+            actions.push(RoasterReconcileAction::Add {
+                remote: wire.clone(),
+            });
+        }
+    }
+    actions
+}
+
+/// Reconcile a remote bean pull against the local library. Mirrors `runSync`
+/// step 3: match by (`visualizer_id` both-set-and-equal) OR (same `id`);
+/// else by signature over an unbound, non-deleted local →
+/// [`BeanReconcileAction::Replace`]; else [`BeanReconcileAction::Add`].
+///
+/// `roaster_names` maps a local roaster id → its display name, so the
+/// signature can fold in the roaster name for both the remote and each local
+/// bean (the TS resolves this via `library.getRoaster(id)?.name`).
+#[must_use]
+pub fn reconcile_beans(
+    local: &[Bean],
+    remote: &[Bean],
+    roaster_names: &HashMap<String, String>,
+) -> Vec<BeanReconcileAction> {
+    let name_of = |roaster_id: &Option<String>| -> Option<String> {
+        roaster_id
+            .as_ref()
+            .and_then(|id| roaster_names.get(id).cloned())
+    };
+    let mut actions = Vec::with_capacity(remote.len());
+    for decoded in remote {
+        let decoded_sig = signature_for_bean(
+            &decoded.name,
+            name_of(&decoded.roaster_id).as_deref(),
+            decoded.roasted_on.as_deref(),
+        );
+        let by_id = local.iter().find(|b| {
+            (decoded.visualizer_id.is_some() && b.visualizer_id == decoded.visualizer_id)
+                || b.id == decoded.id
+        });
+        let existing = by_id.or_else(|| {
+            local.iter().find(|b| {
+                b.visualizer_id.is_none()
+                    && b.deleted_at.is_none()
+                    && signature_for_bean(
+                        &b.name,
+                        name_of(&b.roaster_id).as_deref(),
+                        b.roasted_on.as_deref(),
+                    ) == decoded_sig
+            })
+        });
+        if let Some(m) = existing {
+            actions.push(BeanReconcileAction::Replace {
+                local_id: m.id.clone(),
+                remote: decoded.clone(),
+            });
+        } else {
+            actions.push(BeanReconcileAction::Add {
+                remote: decoded.clone(),
+            });
+        }
+    }
+    actions
+}
+
+/// JSON-bridged [`reconcile_roasters`]. Input:
+/// `{"local": Roaster[], "remote": RoasterWire[]}`. Output:
+/// `RoasterReconcileAction[]`.
+///
+/// # Errors
+/// The JSON parse / serialise error string on malformed input.
+pub fn reconcile_roasters_json(payload: &str) -> Result<String, String> {
+    #[derive(Deserialize)]
+    struct In {
+        local: Vec<Roaster>,
+        remote: Vec<RoasterWire>,
+    }
+    let inp: In = serde_json::from_str(payload).map_err(|e| e.to_string())?;
+    let actions = reconcile_roasters(&inp.local, &inp.remote);
+    serde_json::to_string(&actions).map_err(|e| e.to_string())
+}
+
+/// JSON-bridged [`reconcile_beans`]. Input:
+/// `{"local": Bean[], "remote": Bean[], "roasterNames": {id: name}}` (the
+/// remote beans are already decoded via `bean_from_wire`). Output:
+/// `BeanReconcileAction[]`.
+///
+/// # Errors
+/// The JSON parse / serialise error string on malformed input.
+pub fn reconcile_beans_json(payload: &str) -> Result<String, String> {
+    #[derive(Deserialize)]
+    struct In {
+        local: Vec<Bean>,
+        remote: Vec<Bean>,
+        #[serde(default, rename = "roasterNames")]
+        roaster_names: HashMap<String, String>,
+    }
+    let inp: In = serde_json::from_str(payload).map_err(|e| e.to_string())?;
+    let actions = reconcile_beans(&inp.local, &inp.remote, &inp.roaster_names);
     serde_json::to_string(&actions).map_err(|e| e.to_string())
 }
 
@@ -789,5 +998,177 @@ mod tests {
         let json = serde_json::to_string(&actions).unwrap();
         assert!(json.contains("\"kind\":\"update\""));
         assert!(json.contains("\"localId\":\"shot:l-1\""));
+    }
+
+    // ── reconcile_roasters (CORE4) ─────────────────────────────────────
+
+    fn roaster(id: &str, name: &str, visualizer_id: Option<&str>) -> Roaster {
+        let mut r = Roaster::new(id.to_owned(), name.to_owned(), 0);
+        r.visualizer_id = visualizer_id.map(str::to_owned);
+        r
+    }
+
+    fn roaster_wire(id: &str, name: &str) -> RoasterWire {
+        RoasterWire {
+            id: Some(id.to_owned()),
+            name: name.to_owned(),
+            ..RoasterWire::default()
+        }
+    }
+
+    #[test]
+    fn reconcile_roasters_adds_a_new_remote() {
+        let actions = reconcile_roasters(&[], &[roaster_wire("r1", "Acme")]);
+        assert_eq!(
+            actions,
+            vec![RoasterReconcileAction::Add {
+                remote: roaster_wire("r1", "Acme")
+            }]
+        );
+    }
+
+    #[test]
+    fn reconcile_roasters_updates_a_local_bound_by_visualizer_id() {
+        let local = roaster("roaster:l1", "Acme", Some("r1"));
+        let actions = reconcile_roasters(&[local], &[roaster_wire("r1", "Acme Renamed")]);
+        assert!(matches!(
+            actions.as_slice(),
+            [RoasterReconcileAction::Update { local_id, .. }] if local_id == "roaster:l1"
+        ));
+    }
+
+    #[test]
+    fn reconcile_roasters_binds_an_unbound_local_by_name() {
+        let local = roaster("roaster:l1", "Acme", None);
+        let actions = reconcile_roasters(&[local], &[roaster_wire("r1", "Acme")]);
+        assert!(matches!(
+            actions.as_slice(),
+            [RoasterReconcileAction::Bind { local_id, .. }] if local_id == "roaster:l1"
+        ));
+    }
+
+    #[test]
+    fn reconcile_roasters_binds_by_signature_despite_punctuation_drift() {
+        // Signature normalises punctuation/whitespace, so "Onyx-Coffee_Lab"
+        // binds to a local "Onyx Coffee Lab" even though the exact-name
+        // match would miss.
+        let local = roaster("roaster:l1", "Onyx Coffee Lab", None);
+        let actions = reconcile_roasters(&[local], &[roaster_wire("r1", "onyx-coffee_lab")]);
+        assert!(matches!(
+            actions.as_slice(),
+            [RoasterReconcileAction::Bind { local_id, .. }] if local_id == "roaster:l1"
+        ));
+    }
+
+    #[test]
+    fn reconcile_roasters_skips_remotes_without_an_id() {
+        let wire = RoasterWire {
+            id: None,
+            name: "No Id".to_owned(),
+            ..RoasterWire::default()
+        };
+        assert!(reconcile_roasters(&[], &[wire]).is_empty());
+    }
+
+    // ── reconcile_beans (CORE4) ────────────────────────────────────────
+
+    fn bean(id: &str, name: &str, visualizer_id: Option<&str>) -> Bean {
+        let mut b = Bean::new(id.to_owned(), name.to_owned(), 0);
+        b.visualizer_id = visualizer_id.map(str::to_owned);
+        b
+    }
+
+    #[test]
+    fn reconcile_beans_adds_a_new_remote() {
+        let decoded = bean("bean:remote", "Yirg", Some("b1"));
+        let actions = reconcile_beans(&[], std::slice::from_ref(&decoded), &HashMap::new());
+        assert_eq!(actions, vec![BeanReconcileAction::Add { remote: decoded }]);
+    }
+
+    #[test]
+    fn reconcile_beans_replaces_a_local_bound_by_visualizer_id() {
+        let local = bean("bean:l1", "Yirg", Some("b1"));
+        let decoded = bean("bean:remote", "Yirg", Some("b1"));
+        let actions = reconcile_beans(&[local], &[decoded], &HashMap::new());
+        assert!(matches!(
+            actions.as_slice(),
+            [BeanReconcileAction::Replace { local_id, .. }] if local_id == "bean:l1"
+        ));
+    }
+
+    #[test]
+    fn reconcile_beans_replaces_a_local_with_the_same_id() {
+        // A crema-pushed bag round-trips its `crema_id` → decoded.id matches
+        // the local id even when the local is unbound.
+        let local = bean("bean:shared", "Yirg", None);
+        let decoded = bean("bean:shared", "Yirg", Some("b1"));
+        let actions = reconcile_beans(&[local], &[decoded], &HashMap::new());
+        assert!(matches!(
+            actions.as_slice(),
+            [BeanReconcileAction::Replace { local_id, .. }] if local_id == "bean:shared"
+        ));
+    }
+
+    #[test]
+    fn reconcile_beans_binds_by_signature_including_roaster_name() {
+        // Two unbound beans share a name but differ by roaster → the
+        // signature (which folds in the roaster name) must NOT match them.
+        let mut local = bean("bean:l1", "Yirg", None);
+        local.roaster_id = Some("roaster:a".to_owned());
+        local.roasted_on = Some("2026-05-01".to_owned());
+        let mut decoded = bean("bean:remote", "Yirg", None);
+        decoded.roaster_id = Some("roaster:b".to_owned());
+        decoded.roasted_on = Some("2026-05-01".to_owned());
+
+        let mut names = HashMap::new();
+        names.insert("roaster:a".to_owned(), "Acme".to_owned());
+        names.insert("roaster:b".to_owned(), "Onyx".to_owned());
+        // Different roaster names → different signatures → no bind → Add.
+        let actions = reconcile_beans(
+            std::slice::from_ref(&local),
+            std::slice::from_ref(&decoded),
+            &names,
+        );
+        assert!(matches!(actions.as_slice(), [BeanReconcileAction::Add { .. }]));
+
+        // Same roaster name → signatures match → Replace.
+        names.insert("roaster:b".to_owned(), "Acme".to_owned());
+        let actions = reconcile_beans(&[local], &[decoded], &names);
+        assert!(matches!(
+            actions.as_slice(),
+            [BeanReconcileAction::Replace { local_id, .. }] if local_id == "bean:l1"
+        ));
+    }
+
+    #[test]
+    fn reconcile_beans_does_not_bind_a_tombstoned_local() {
+        let mut local = bean("bean:l1", "Yirg", None);
+        local.deleted_at = Some(1);
+        let decoded = bean("bean:remote", "Yirg", None);
+        let actions = reconcile_beans(&[local], &[decoded], &HashMap::new());
+        assert!(matches!(actions.as_slice(), [BeanReconcileAction::Add { .. }]));
+    }
+
+    #[test]
+    fn reconcile_json_facades_round_trip_and_tag_lowercase() {
+        let payload = serde_json::json!({
+            "local": [],
+            "remote": [{ "id": "r1", "name": "Acme" }]
+        })
+        .to_string();
+        let out = reconcile_roasters_json(&payload).unwrap();
+        assert!(out.contains("\"kind\":\"add\""));
+
+        let bean_payload = serde_json::json!({
+            "local": [],
+            "remote": [serde_json::to_value(bean("bean:1", "Yirg", Some("b1"))).unwrap()],
+            "roasterNames": {}
+        })
+        .to_string();
+        let out = reconcile_beans_json(&bean_payload).unwrap();
+        assert!(out.contains("\"kind\":\"add\""));
+
+        assert!(reconcile_roasters_json("not json").is_err());
+        assert!(reconcile_beans_json("not json").is_err());
     }
 }

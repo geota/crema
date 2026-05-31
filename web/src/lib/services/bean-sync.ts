@@ -52,7 +52,10 @@ import {
 	type SyncLogEntry,
 	type SyncResult
 } from '$lib/bean/visualizer-sync';
-import { signatureForBean, signatureForRoaster } from '$lib/visualizer/shot-sync-signatures';
+import {
+	reconcileBeans as wasmReconcileBeans,
+	reconcileRoasters as wasmReconcileRoasters
+} from '$lib/wasm/de1_wasm';
 import { updateSyncConfig } from '$lib/visualizer/sync-config';
 import type { components } from '$lib/visualizer/openapi';
 
@@ -75,6 +78,45 @@ type CoffeeBagListResponse = components['schemas']['CoffeeBagListResponse'];
  *  `visualizer-sync`, so we borrow them via the converters' parameter types). */
 type BagWire = Parameters<typeof beanFromWire>[0];
 type RoasterWire = Parameters<typeof roasterFromWire>[0];
+
+// ── Pull-reconcile kernel (CORE4) ────────────────────────────────────────
+//
+// The id → signature → name matching for the pull legs moved to
+// `de1_domain::visualizer_sync::reconcile_{roasters,beans}` (siblings of the
+// shot reconcile planner) so every shell matches identically. These thin
+// wrappers marshal JSON across the wasm boundary; the shell still owns the
+// HTTP, the store mutations, the premium-gating + the push legs. The action
+// wire shapes mirror the Rust enums (lowercase `kind`, camelCase `localId`).
+
+type RoasterReconcileAction =
+	| { kind: 'update'; localId: string; remote: RoasterWire }
+	| { kind: 'bind'; localId: string; remote: RoasterWire }
+	| { kind: 'add'; remote: RoasterWire };
+
+type BeanReconcileAction =
+	| { kind: 'replace'; localId: string; remote: Bean }
+	| { kind: 'add'; remote: Bean };
+
+/** Reconcile a remote roaster pull against the local directory (CORE4). */
+function reconcileRoasters(local: Roaster[], remote: RoasterWire[]): RoasterReconcileAction[] {
+	return JSON.parse(
+		wasmReconcileRoasters(JSON.stringify({ local, remote }))
+	) as RoasterReconcileAction[];
+}
+
+/** Reconcile decoded remote beans against the local library (CORE4). The
+ *  `roasterNames` map (local roaster id → name) lets the kernel fold the
+ *  roaster name into each bean's signature, exactly as the TS did via
+ *  `library.getRoaster(id)?.name`. */
+function reconcileBeans(
+	local: Bean[],
+	remote: Bean[],
+	roasterNames: Record<string, string>
+): BeanReconcileAction[] {
+	return JSON.parse(
+		wasmReconcileBeans(JSON.stringify({ local, remote, roasterNames }))
+	) as BeanReconcileAction[];
+}
 
 export class BeanSync extends Context.Tag('crema/BeanSync')<
 	BeanSync,
@@ -235,41 +277,34 @@ export const BeanSyncLive = Layer.effect(
 			}
 
 			const program = Effect.gen(function* () {
-				// 1) Pull remote roasters → reconcile (id → signature → name).
+				// 1) Pull remote roasters → reconcile in the core kernel (CORE4),
+				//    apply the action list shell-side (store mutations + the
+				//    remote→local id map subsequent bag decode reads).
 				const remoteRoasters = (yield* pullPaged<RoasterListResponse['data'][number]>(
 					'/roasters'
 				)) as RoasterWire[];
 				const remoteRoasterIdToLocal = new Map<string, string>();
-				for (const wire of remoteRoasters) {
-					if (!wire.id) continue;
-					const wireSig = signatureForRoaster({ name: wire.name });
-					const localById = library.roasters.find((r) => r.visualizerId === wire.id);
-					const localBySig =
-						localById ??
-						library.roasters.find(
-							(r) =>
-								r.visualizerId === null &&
-								r.deletedAt == null &&
-								signatureForRoaster({ name: r.name }) === wireSig
-						);
-					const localByName = localBySig ?? library.findRoasterByName(wire.name);
-					if (localById) {
-						library.updateRoaster(localById.id, {
+				for (const action of reconcileRoasters(library.roasters, remoteRoasters)) {
+					const wire = action.remote;
+					// The kernel only emits actions for remotes that carry an id.
+					const remoteId = wire.id as string;
+					if (action.kind === 'update') {
+						library.updateRoaster(action.localId, {
 							name: wire.name,
 							website: wire.website ?? null,
 							imageUrl: wire.image_url ?? null,
 							canonicalRoasterId: wire.canonical_roaster_id ?? null,
-							visualizerId: wire.id
+							visualizerId: remoteId
 						});
-						remoteRoasterIdToLocal.set(wire.id, localById.id);
-					} else if (localByName) {
-						library.updateRoaster(localByName.id, { visualizerId: wire.id });
-						remoteRoasterIdToLocal.set(wire.id, localByName.id);
-						log.push({ direction: 'pull', kind: 'roaster', id: localByName.id, name: wire.name, at: Date.now() });
+						remoteRoasterIdToLocal.set(remoteId, action.localId);
+					} else if (action.kind === 'bind') {
+						library.updateRoaster(action.localId, { visualizerId: remoteId });
+						remoteRoasterIdToLocal.set(remoteId, action.localId);
+						log.push({ direction: 'pull', kind: 'roaster', id: action.localId, name: wire.name, at: Date.now() });
 					} else {
 						const fresh = roasterFromWire(wire);
 						library.upsertRoaster(fresh);
-						remoteRoasterIdToLocal.set(wire.id, fresh.id);
+						remoteRoasterIdToLocal.set(remoteId, fresh.id);
 						result.pulled += 1;
 						log.push({ direction: 'pull', kind: 'roaster', id: fresh.id, name: wire.name, at: Date.now() });
 					}
@@ -321,39 +356,23 @@ export const BeanSyncLive = Layer.effect(
 					}
 				}
 
-				// 3) Pull remote bags → reconcile (id/crema_id → signature).
+				// 3) Pull remote bags → decode (beanFromWire) → reconcile in the
+				//    core kernel (CORE4), apply the action list shell-side.
 				const remoteBags = (yield* pullPaged<CoffeeBagListResponse['data'][number]>(
 					'/coffee_bags'
 				)) as BagWire[];
-				const localBeans = library.beans;
-				for (const wire of remoteBags) {
-					const decoded = beanFromWire(wire, (rid) =>
-						rid ? (remoteRoasterIdToLocal.get(rid) ?? null) : null
-					);
-					const decodedSig = signatureForBean({
-						name: decoded.name,
-						roasterName: (decoded.roasterId && library.getRoaster(decoded.roasterId)?.name) ?? null,
-						roastedOn: decoded.roastedOn
-					});
-					const existing =
-						localBeans.find(
-							(b) =>
-								(decoded.visualizerId && b.visualizerId === decoded.visualizerId) ||
-								b.id === decoded.id
-						) ??
-						localBeans.find(
-							(b) =>
-								b.visualizerId === null &&
-								b.deletedAt == null &&
-								signatureForBean({
-									name: b.name,
-									roasterName: (b.roasterId && library.getRoaster(b.roasterId)?.name) ?? null,
-									roastedOn: b.roastedOn
-								}) === decodedSig
-						);
-					if (existing) {
-						library.replaceBean({ ...decoded, id: existing.id });
-						log.push({ direction: 'pull', kind: 'bean', id: existing.id, name: decoded.name, at: Date.now() });
+				const decodedBags = remoteBags.map((wire) =>
+					beanFromWire(wire, (rid) => (rid ? (remoteRoasterIdToLocal.get(rid) ?? null) : null))
+				);
+				// Local roaster id → name, so the kernel folds the roaster name into
+				// each bean's signature (matching the TS `library.getRoaster(id)?.name`).
+				const roasterNames: Record<string, string> = {};
+				for (const r of library.roasters) roasterNames[r.id] = r.name;
+				for (const action of reconcileBeans(library.beans, decodedBags, roasterNames)) {
+					const decoded = action.remote;
+					if (action.kind === 'replace') {
+						library.replaceBean({ ...decoded, id: action.localId });
+						log.push({ direction: 'pull', kind: 'bean', id: action.localId, name: decoded.name, at: Date.now() });
 					} else {
 						library.upsertBean(decoded);
 						result.pulled += 1;
