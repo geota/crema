@@ -215,6 +215,10 @@ class ScaleBleManager(
         observeJob?.cancel()
         observeJob = null
         device = null
+        // Reset the core's scale slice so a vanished scale leaves no stale
+        // weight and a reconnect starts clean (AND4). The De1 manager resets
+        // the whole core on its disconnect; this is the scale-only equivalent.
+        bridge.disconnectScale()
         if (d != null) {
             scope.launch { transport.disconnect(d) }
         }

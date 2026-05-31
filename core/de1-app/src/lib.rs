@@ -51,6 +51,17 @@ use de1_scale::{bookoo, decent_scale};
 /// without each bridge crate taking a direct dep on `de1-scale`.
 pub use de1_scale::Scale as ScaleId;
 
+/// The Bookoo scale's static GATT UUIDs — the **pre-connect** scan / subscribe
+/// set — re-exported from `de1_scale::bookoo` so the FFI bridge can source them
+/// from the core instead of the Android shell hardcoding duplicates (AND2). The
+/// per-model **connected** set rides on `scale_uuids()` post-connect; the
+/// `2902` CCCD (universal) and the `BOOKOO_SC` advertised-name prefix (a scan
+/// discovery detail, not a protocol UUID) stay shell-side.
+pub use de1_scale::bookoo::{
+    COMMAND_UUID as BOOKOO_COMMAND_UUID, NOTIFY_UUID as BOOKOO_NOTIFY_UUID,
+    SERVICE_UUID as BOOKOO_SERVICE_UUID,
+};
+
 /// Scale sensor lag assumed when no scale is connected — a representative
 /// value across the supported scales (380 ms, the legacy default).
 const DEFAULT_SCALE_LAG: Duration = Duration::from_millis(380);
@@ -552,6 +563,29 @@ impl CremaCore {
         // settings; re-arm the one-shot connect-time queries.
         self.scale_config_queried = false;
         self.scale.as_ref().map(|scale| scale.label().to_owned())
+    }
+
+    /// Disconnect the scale: drop the identified codec and reset every
+    /// scale-derived runtime reading back to the fresh state [`CremaCore::new`]
+    /// seeds (the stream smoother, the last weight / estimate, the
+    /// stale-watchdog flag, the one-shot connect-time query latch, and the
+    /// scale-derived peaks). User prefs (auto-tare, stop-on-weight) and the
+    /// shot / profile config are intentionally NOT touched — only the live
+    /// scale connection + its readings.
+    ///
+    /// The shell calls this when the scale's BLE link drops, so a reconnect
+    /// starts clean and a vanished scale can't leave a ghost weight on the next
+    /// `Telemetry`. (The De1 sibling drops the whole machine link via
+    /// [`reset`](Self::reset); this is the narrower scale-only equivalent —
+    /// AND4 — and benefits every shell.)
+    pub fn disconnect_scale(&mut self) {
+        self.scale = None;
+        self.flow = FlowEstimator::new(FlowAlgorithm::default());
+        self.last_scale_weight = None;
+        self.last_scale_estimate = None;
+        self.scale_stale_reported = false;
+        self.scale_config_queried = false;
+        self.shot_metrics.reset_scale();
     }
 
     /// What the connected scale can do beyond reporting a bare weight — see
@@ -2953,6 +2987,32 @@ mod tests {
         core.on_notification(Source::ScaleWeight, &bookoo_packet(2_100), 3_000);
         assert!(core.on_tick(3_500).events.is_empty());
         assert!(core.on_tick(4_100).events.contains(&Event::ScaleStale));
+    }
+
+    #[test]
+    fn disconnect_scale_clears_the_scale_slice_but_not_user_prefs() {
+        let mut core = CremaCore::new();
+        core.connect_scale("BOOKOO_SC");
+        core.on_notification(Source::ScaleWeight, &bookoo_packet(2_000), 1_000);
+        // The scale slice is populated.
+        assert!(core.scale_capabilities().is_some());
+        assert!(core.scale_uuids().is_some());
+        assert!(core.last_scale_weight.is_some());
+        // A user pref to confirm it survives the disconnect.
+        core.set_auto_tare(false);
+
+        core.disconnect_scale();
+
+        // Scale identity + every scale-derived reading is cleared...
+        assert!(core.scale_capabilities().is_none());
+        assert!(core.scale_uuids().is_none());
+        assert!(core.last_scale_weight.is_none());
+        assert!(core.last_scale_estimate.is_none());
+        assert!(!core.scale_config_queried);
+        // ...the stale watchdog is disarmed (no scale → no stale episode)...
+        assert!(core.on_tick(9_999).events.is_empty());
+        // ...but the user pref is untouched.
+        assert!(!core.auto_tare);
     }
 
     #[test]

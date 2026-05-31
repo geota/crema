@@ -8,6 +8,7 @@ import coffee.crema.core.CoreOutput
 import coffee.crema.core.CremaBridge
 import coffee.crema.core.Event
 import coffee.crema.core.ScaleCapabilities
+import coffee.crema.core.formatBookooFirmwareVersion
 import coffee.crema.ble.BleScanner
 import coffee.crema.ble.BleSessionRecorder
 import coffee.crema.ble.De1BleManager
@@ -636,7 +637,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     // The `03 0c` serial response carries firmware + serial;
                     // the `03 0e` settings response leaves both null — fold in
                     // whatever is present and keep the last value otherwise.
-                    scaleFirmware = c.firmware_version?.let { formatFirmware(it.toInt()) }
+                    scaleFirmware = c.firmware_version?.let { formatBookooFirmwareVersion(it) }
                         ?: _ui.value.scaleFirmware,
                     scaleSerial = c.serial ?: _ui.value.scaleSerial,
                 )
@@ -646,7 +647,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                             "Scale config: anti-mistouch=${c.anti_mistouch}" +
                                 (c.serial?.let { ", serial=$it" } ?: "") +
                                 (c.firmware_version?.let {
-                                    ", fw=${formatFirmware(it.toInt())}"
+                                    ", fw=${formatBookooFirmwareVersion(it)}"
                                 } ?: ""),
                         )
                     c.active_mode != null ->
@@ -678,20 +679,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         event.content.method,
                 )
         }
-    }
-
-    /**
-     * Format the Bookoo's `u16` firmware version into a `"M.m.p"` string.
-     *
-     * The scale encodes its version as `major × 100 + minor × 10 + patch`
-     * (e.g. `141` is firmware `1.4.1`), so the three components peel off with
-     * `n / 100`, `(n / 10) % 10`, and `n % 10`.
-     */
-    private fun formatFirmware(encoded: Int): String {
-        val major = encoded / 100
-        val minor = (encoded / 10) % 10
-        val patch = encoded % 10
-        return "$major.$minor.$patch"
     }
 
     private fun appendLog(line: String) {
