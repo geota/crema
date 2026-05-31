@@ -37,15 +37,15 @@
 import { Context, Effect, Layer, Option } from 'effect';
 import { HttpClient } from './http-client.ts';
 import { TokenVault } from './token-vault.ts';
+import { NotAuthenticatedError, ResponseDecodeError, VisualizerNotFoundError } from '../effect/errors.ts';
 import {
-	HttpStatusError,
-	NetworkError,
-	NotAuthenticatedError,
-	ResponseDecodeError,
-	TokenRefreshFailedError,
-	VisualizerNotFoundError,
-	VisualizerPremiumGatedError
-} from '../effect/errors.ts';
+	API_BASE,
+	describeVisualizerError,
+	isRecoverable,
+	visualizerCall,
+	type VisualizerCallError,
+	type VisualizerCallOptions
+} from './visualizer-call.ts';
 import {
 	ShotUploadResultSchema,
 	ShotListResponseSchema,
@@ -68,9 +68,6 @@ import {
 import { appendSyncLog } from '$lib/visualizer/sync-config';
 import { enqueueEntry as enqueueSyncOp } from './queue-store.ts';
 
-/** Visualizer API base. */
-const API_BASE = 'https://visualizer.coffee/api';
-
 // Spec-typed aliases — these ride DIRECTLY on the wire so they stay
 // in lock-step with the OpenAPI spec (regenerate via `pnpm openapi`).
 type ShotSummary = components['schemas']['ShotSummary'];
@@ -90,7 +87,7 @@ export type { ShotSummary, ShotDetail, Paging };
  * user's choices ride on the wire, plus a Crema-side escape-valve block so the
  * round-trip back can re-bind.
  */
-function buildShotPayload(shot: StoredShot): string {
+function buildShotPayload(shot: StoredShot): Record<string, unknown> {
 	const settings = getSettingsStore().current;
 	const json = JSON.parse(exportStoredShotAsV2Json(shot)) as Record<string, unknown>;
 
@@ -114,7 +111,7 @@ function buildShotPayload(shot: StoredShot): string {
 		}
 	};
 
-	return JSON.stringify(json);
+	return json;
 }
 
 // ── Wire / Crema boundary helpers (copied verbatim from the old module) ───
@@ -327,21 +324,11 @@ function resolveTagList(shot: StoredShot): string[] | null {
 	return merged.length > 0 ? merged : null;
 }
 
-// ── HTTP plumbing ─────────────────────────────────────────────────────────
-
-interface FetchOptions {
-	method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
-	body?: string;
-}
-
-/** The closed error union every `call`-backed method can surface. */
-type VisualizerCallError =
-	| NetworkError
-	| HttpStatusError
-	| NotAuthenticatedError
-	| TokenRefreshFailedError
-	| VisualizerPremiumGatedError
-	| VisualizerNotFoundError;
+// ── Call-error policy local to ShotSync ───────────────────────────────────
+// The shared call + taxonomy + `isRecoverable` + `describeVisualizerError` live
+// in `visualizer-call.ts`. These two predicates have a single caller each
+// (`pullAllShotsSince` / `uploadUnsyncedShots`), so they stay local rather than
+// being hoisted into a shared module they'd be the only outside user of.
 
 /** `'auth'`-equivalent failures — re-thrown rather than swallowed on a pull. */
 function isAuthError(e: VisualizerCallError): boolean {
@@ -349,34 +336,6 @@ function isAuthError(e: VisualizerCallError): boolean {
 		e._tag === 'NotAuthenticatedError' ||
 		e._tag === 'TokenRefreshFailedError' ||
 		(e._tag === 'HttpStatusError' && e.status === 401)
-	);
-}
-
-/** Human-readable summary for the sync log / console warn (display only). */
-function describeError(e: VisualizerCallError | ResponseDecodeError): string {
-	switch (e._tag) {
-		case 'HttpStatusError':
-			return `HTTP ${e.status}: ${e.body ?? ''}`.trim();
-		case 'NetworkError':
-			return `Network error: ${e.cause instanceof Error ? e.cause.message : String(e.cause)}`;
-		case 'VisualizerPremiumGatedError':
-			return 'Premium subscription required for writes.';
-		case 'VisualizerNotFoundError':
-			return `Visualizer shot not found: ${e.visualizerId}`;
-		case 'NotAuthenticatedError':
-			return 'Sign in to Visualizer first.';
-		case 'TokenRefreshFailedError':
-			return 'Visualizer rejected the access token. Please sign in again.';
-		case 'ResponseDecodeError':
-			return 'Unexpected Visualizer response.';
-	}
-}
-
-/** A `recoverable` upload failure routes to the persistent retry queue. */
-function isRecoverable(e: VisualizerCallError | ResponseDecodeError): boolean {
-	return (
-		e._tag === 'NetworkError' ||
-		(e._tag === 'HttpStatusError' && ((e.status >= 500 && e.status < 600) || e.status === 408))
 	);
 }
 
@@ -482,54 +441,19 @@ export const ShotSyncLive = Layer.effect(
 		);
 
 		/**
-		 * Single authenticated HTTP entry point. Funnels through
-		 * `TokenVault.withFreshToken` (401 → refresh-once is automatic) and maps
-		 * `HttpClient`'s `HttpStatusError` back onto the Visualizer taxonomy.
-		 * Returns parsed JSON for 2xx + body; `null` for 204.
+		 * `ShotSync`'s authenticated entry point: the shared {@link visualizerCall}
+		 * with this layer's captured `http` / `vault` provided, so every method
+		 * built on it stays `R = never` (which is what lets `UploadQueue` call
+		 * `ShotSync` without itself holding `HttpClient` / `TokenVault`).
 		 */
-		const call = (path: string, opts: FetchOptions = {}): Effect.Effect<unknown, VisualizerCallError> =>
-			vault
-				.withFreshToken((token) => {
-					const headers: Record<string, string> = {
-						Authorization: `Bearer ${token}`,
-						Accept: 'application/json'
-					};
-					if (opts.body !== undefined) headers['Content-Type'] = 'application/json';
-					return http.request({
-						url: `${API_BASE}${path}`,
-						method: opts.method ?? 'GET',
-						headers,
-						body: opts.body
-					});
-				})
-				.pipe(
-					Effect.catchTag(
-						'HttpStatusError',
-						(
-							err
-						): Effect.Effect<never, VisualizerPremiumGatedError | VisualizerNotFoundError | HttpStatusError> => {
-							if (err.status === 402 || err.status === 403) {
-								return Effect.fail(new VisualizerPremiumGatedError({ endpoint: path }));
-							}
-							if (err.status === 404) {
-								return Effect.fail(new VisualizerNotFoundError({ visualizerId: path }));
-							}
-							return Effect.fail(err);
-						}
-					),
-					Effect.flatMap((res) =>
-						res.status === 204
-							? Effect.succeed(null)
-							: // A malformed 2xx body is effectively a transport anomaly; surface it
-								// as a `NetworkError` so it stays recoverable (matches the old
-								// module, where a raw `res.json()` rejection was a non-VisualizerError
-								// → treated as recoverable on upload, swallowed on a detail pull).
-								Effect.tryPromise({
-									try: () => res.json(),
-									catch: (cause) => new NetworkError({ cause, url: `${API_BASE}${path}` })
-								})
-					)
-				);
+		const call = (
+			path: string,
+			opts: VisualizerCallOptions = {}
+		): Effect.Effect<unknown, VisualizerCallError> =>
+			visualizerCall(path, opts).pipe(
+				Effect.provideService(HttpClient, http),
+				Effect.provideService(TokenVault, vault)
+			);
 
 		/**
 		 * Upload a single shot, then fire a soft follow-up PATCH (bag link +
@@ -572,7 +496,7 @@ export const ShotSyncLive = Layer.effect(
 						Effect.sync(() =>
 							console.warn(
 								'[Crema] post-upload PATCH (coffee_bag_id / tag_list / inline bean / grinder_model) failed:',
-								describeError(e)
+								describeVisualizerError(e)
 							)
 						)
 					)
@@ -623,7 +547,7 @@ export const ShotSyncLive = Layer.effect(
 			const envelope: ShotUpdateRequest = { shot: shotBody };
 			yield* call(`/shots/${visualizerId}`, {
 				method: 'PATCH',
-				body: JSON.stringify(envelope)
+				body: envelope
 			});
 		});
 
@@ -818,7 +742,7 @@ export const ShotSyncLive = Layer.effect(
 									entity: 'shot',
 									id: shot.id,
 									op: 'create',
-									error: describeError(e)
+									error: describeVisualizerError(e)
 								});
 							}
 							appendSyncLog({
@@ -827,7 +751,7 @@ export const ShotSyncLive = Layer.effect(
 								id: shot.id,
 								name: shot.profileName ?? 'Shot',
 								at: Date.now(),
-								error: describeError(e)
+								error: describeVisualizerError(e)
 							});
 							return shouldAbortLoop(e);
 						})
