@@ -342,6 +342,9 @@
 	async function refreshConnected(): Promise<void> {
 		connected = (await appCtx().services?.tokens.isConnected()) ?? false;
 	}
+	// SV1: a sign-in / sign-out from any surface propagates here (the
+	// subscription's first emission also seeds the current state).
+	$effect(() => appCtx().services?.tokens.onConnectionChange((c) => (connected = c)));
 	const unsyncedShotCount = $derived(history.all.filter((s) => !s.visualizerId).length);
 </script>
 

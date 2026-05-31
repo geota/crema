@@ -41,6 +41,22 @@ function describe(e: NetworkError | HttpStatusError): string {
 	return e.cause instanceof Error ? e.cause.message : String(e.cause);
 }
 
+/**
+ * SEC2: the same allow-list the Settings UI enforces (`webhookUrlValid` in
+ * `AdvancedSection.svelte`) — `https://…`, or `http://localhost` / `127.0.0.1`
+ * / `[::1]` for dev. `fire()` / `sendTest()` re-check it so a URL that slipped
+ * past the UI (an import, a hand-edited localStorage row) can't make the shell
+ * POST to an arbitrary scheme.
+ */
+function isAllowedWebhookUrl(url: string): boolean {
+	return (
+		url.startsWith('https://') ||
+		url.startsWith('http://localhost') ||
+		url.startsWith('http://127.0.0.1') ||
+		url.startsWith('http://[::1]')
+	);
+}
+
 export class Webhooks extends Context.Tag('crema/Webhooks')<
 	Webhooks,
 	{
@@ -66,6 +82,7 @@ export const WebhooksLive = Layer.effect(
 				if (!prefs.webhookEnabled) return;
 				const url = prefs.webhookUrl.trim();
 				if (url.length === 0) return;
+				if (!isAllowedWebhookUrl(url)) return; // SEC2: enforce the scheme at the send boundary
 				const enabled = prefs.webhookEvents[eventType as keyof typeof prefs.webhookEvents];
 				if (!enabled) return;
 				const body = JSON.stringify({ type: eventType, payload, timestamp: Date.now() });
@@ -93,6 +110,9 @@ export const WebhooksLive = Layer.effect(
 				const trimmed = url.trim();
 				if (trimmed.length === 0) {
 					return { ok: false, message: 'No URL configured.' };
+				}
+				if (!isAllowedWebhookUrl(trimmed)) {
+					return { ok: false, message: 'Webhook URL must be https:// (or http://localhost for dev).' };
 				}
 				const body = JSON.stringify({
 					type: 'test',

@@ -703,16 +703,17 @@
 			<FileDropZone
 				icon="ph-duotone ph-file-zip"
 				title="Drop a Crema or Beanconqueror export"
-				subtitle={
-					'A Crema <code>.crema.zip</code> bundles beans + roasters + shots + photos for ' +
-					'lossless round-trip (a bare <code>.jsonl</code> also works — photos stay device-local). ' +
-					'A Beanconqueror <code>.zip</code> imports the high-value subset; drop the photo files ' +
-					'alongside for the "with photos" variant. Crema is espresso-only — BC V60 / AeroPress brews ' +
-					'are skipped + counted.'
-				}
 				accept=".zip,.jsonl,application/zip,application/jsonl,image/*"
 				onFiles={ingestFiles}
-			/>
+			>
+				{#snippet subtitle()}
+					A Crema <code>.crema.zip</code> bundles beans + roasters + shots + photos for
+					lossless round-trip (a bare <code>.jsonl</code> also works — photos stay
+					device-local). A Beanconqueror <code>.zip</code> imports the high-value subset;
+					drop the photo files alongside for the "with photos" variant. Crema is
+					espresso-only — BC V60 / AeroPress brews are skipped + counted.
+				{/snippet}
+			</FileDropZone>
 		</div>
 	{:else if step === 'parsing'}
 		<div class="bd-status">

@@ -170,7 +170,11 @@ jobs:
         with:
           node-version: 24
 
-      - name: pnpm audit (prod)
+      - name: pnpm audit (prod, high+)
         working-directory: web
-        run: pnpm audit --prod
+        # SEC6: gate the advisory on high/critical severity in production deps
+        # only — devDep advisories don't ship. Stays advisory (continue-on-error)
+        # by the job's design: a flared-up transitive advisory annotates the run
+        # but never blocks a merge.
+        run: pnpm audit --prod --audit-level=high
         continue-on-error: true

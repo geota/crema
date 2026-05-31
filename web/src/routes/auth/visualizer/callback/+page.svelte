@@ -40,6 +40,23 @@
 
 	let status = $state<Status>({ kind: 'working' });
 
+	/**
+	 * SEC5: build a safe, short denial message from the OAuth redirect's `error`
+	 * code + optional `error_description`. The description is arbitrary text from
+	 * the URL — strip control chars, collapse whitespace, and clip to 140 chars
+	 * so it can't render long phishing copy (Svelte already escapes the markup).
+	 */
+	function sanitizeOAuthError(code: string, desc: string | null): string {
+		const cleanCode = code.replace(/[^\w-]/g, '').slice(0, 64) || 'error';
+		if (!desc) return cleanCode;
+		const cleanDesc = desc
+			.replace(/\p{Cc}+/gu, ' ')
+			.replace(/\s+/g, ' ')
+			.trim()
+			.slice(0, 140);
+		return cleanDesc ? `${cleanCode}: ${cleanDesc}` : cleanCode;
+	}
+
 	onMount(async () => {
 		const params = page.url.searchParams;
 		const code = params.get('code');
@@ -49,10 +66,9 @@
 
 		// 1. User-denied or other authorize-side error.
 		if (error) {
-			status = {
-				kind: 'denied',
-				detail: errorDesc ?? error
-			};
+			// SEC5: prefer the short, known `error` code; clip + sanitise the
+			// arbitrary `error_description` so it can't render phishing copy.
+			status = { kind: 'denied', detail: sanitizeOAuthError(error, errorDesc) };
 			return;
 		}
 

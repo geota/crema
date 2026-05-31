@@ -78,12 +78,40 @@ export default defineConfig(({ command }) => ({
 				]
 			},
 			workbox: {
-				// Precache the app shell *and* the wasm core: `**/*.wasm` is added
-				// to the default glob so the de1-wasm binary is cached for offline
-				// / instant-load. `.svg` covers the icon sources.
-				globPatterns: ['**/*.{js,css,html,ico,png,svg,webmanifest,wasm}'],
+				// Precache the app shell + the wasm core (`**/*.wasm` caches the
+				// de1-wasm binary for offline / instant-load). We deliberately do
+				// NOT glob `svg`: the Phosphor icon font ships ~7 MiB of `.svg`
+				// sprite files that would bloat the precache from ~2.85 MiB to
+				// ~10 MiB (PERF1) — icons load on demand, not from the precache.
+				// `globIgnores` belt-and-suspenders the Phosphor sprites in case a
+				// future glob re-adds svg.
+				globPatterns: ['**/*.{js,css,html,ico,png,webmanifest,wasm}'],
+				globIgnores: ['**/Phosphor*.svg'],
 				// The wasm bundle exceeds Workbox's 2 MiB default cache limit.
-				maximumFileSizeToCacheInBytes: 8 * 1024 * 1024
+				maximumFileSizeToCacheInBytes: 8 * 1024 * 1024,
+				// PERF4 (offline half): the design fonts load from Google Fonts, which
+				// the precache can't reach (cross-origin) — so the app rendered
+				// font-less offline. Runtime-cache the stylesheet (SWR) + the woff2
+				// binaries (CacheFirst, opaque-cacheable) so a return / offline visit
+				// has them. This is the standard vite-plugin-pwa Google-Fonts recipe;
+				// fully self-hosting woff2 subsets (to also drop the first-paint
+				// render-blocking on a COLD visit) remains a follow-up polish.
+				runtimeCaching: [
+					{
+						urlPattern: ({ url }: { url: URL }) => url.origin === 'https://fonts.googleapis.com',
+						handler: 'StaleWhileRevalidate',
+						options: { cacheName: 'google-fonts-stylesheets' }
+					},
+					{
+						urlPattern: ({ url }: { url: URL }) => url.origin === 'https://fonts.gstatic.com',
+						handler: 'CacheFirst',
+						options: {
+							cacheName: 'google-fonts-webfonts',
+							expiration: { maxEntries: 32, maxAgeSeconds: 60 * 60 * 24 * 365 },
+							cacheableResponse: { statuses: [0, 200] }
+						}
+					}
+				]
 			}
 		})] : [])
 	]

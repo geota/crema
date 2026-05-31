@@ -28,7 +28,7 @@
  * reaching for a service, so neither routes through here.
  */
 
-import { Effect } from 'effect';
+import { Effect, Fiber, Stream } from 'effect';
 import type { AppRuntime, AppServices } from './runtime.ts';
 import { runtimePromise } from './bridge.ts';
 import { TokenVault } from '../services/token-vault.ts';
@@ -53,6 +53,15 @@ export interface CremaServices {
 		getTokens(): Promise<TokenSet | null>;
 		/** Forget the stored tokens (local sign-out). */
 		clearTokens(): Promise<void>;
+		/**
+		 * Subscribe to Visualizer connection changes (SV1). `cb(connected)` fires
+		 * once immediately with the current state, then on every token change
+		 * (sign-in / sign-out / refresh) from ANY surface — so a component's
+		 * `connected` gate stays coherent instead of going stale after a sign-out
+		 * elsewhere. Returns an unsubscribe; call it from the component's teardown
+		 * (e.g. an `$effect` cleanup).
+		 */
+		onConnectionChange(cb: (connected: boolean) => void): () => void;
 	};
 	/** Bean / roaster sync + account (the `BeanSync` service). */
 	readonly beans: {
@@ -100,7 +109,22 @@ export function createCremaServices(runtime: AppRuntime): CremaServices {
 		tokens: {
 			isConnected: () => run(Effect.flatMap(TokenVault, (v) => v.getTokens)).then((t) => t !== null),
 			getTokens: () => run(Effect.flatMap(TokenVault, (v) => v.getTokens)),
-			clearTokens: () => run(Effect.flatMap(TokenVault, (v) => v.clearTokens))
+			clearTokens: () => run(Effect.flatMap(TokenVault, (v) => v.clearTokens)),
+			onConnectionChange: (cb) => {
+				// `TokenVault.changes` is a `SubscriptionRef`; its `.changes` Stream
+				// emits the current token state immediately, then every subsequent
+				// write (`storeTokens` / `clearTokens`). Fork a consumer on the app
+				// runtime that maps each emission to a connected boolean; the returned
+				// unsubscribe interrupts that fiber.
+				const fiber = runtime.runFork(
+					Effect.flatMap(TokenVault, (v) =>
+						Stream.runForEach(v.changes.changes, (t) => Effect.sync(() => cb(t !== null)))
+					)
+				);
+				return () => {
+					runtime.runFork(Fiber.interrupt(fiber));
+				};
+			}
 		},
 		beans: {
 			fetchAccount: () => run(Effect.flatMap(BeanSync, (b) => b.fetchAccount)),
