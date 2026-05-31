@@ -22,9 +22,12 @@
  * `Command::WriteCharacteristic` the core emits.
  */
 
+import { Cause, Exit } from 'effect';
 import type { CremaCore, NotificationSource } from '$lib/core';
-import { MmrRegister, WriteTarget } from '$lib/core/crema-core';
+import { WriteTarget } from '$lib/core/crema-core';
 import { describeError } from '$lib/utils/error';
+import type { AppRuntime } from '$lib/effect/runtime';
+import { de1ConnectProgram } from '$lib/services/de1-orchestrator';
 import type { BleConnectionState } from './connection-state';
 import { De1Uuids } from './de1-uuids';
 import { requestDevice, type ConnState } from './transport';
@@ -125,7 +128,13 @@ export class De1Manager {
 
 	constructor(
 		private readonly core: CremaCore,
-		private readonly callbacks: De1ManagerCallbacks
+		private readonly callbacks: De1ManagerCallbacks,
+		/**
+		 * The app runtime the connect program runs on (T-17/T-18). `null` only on
+		 * unsupported browsers where the shell never mounts it — `connect()` then
+		 * fails gracefully.
+		 */
+		private readonly runtime: AppRuntime | null = null
 	) {}
 
 	/** The current GATT link state, for the connection card. */
@@ -158,23 +167,17 @@ export class De1Manager {
 		// Start each connect from a clean diagnostics slate.
 		this.patchDiagnostics(EMPTY_DE1_DIAGNOSTICS);
 		this.notificationCounts = freshCounts();
-		// `step` names the diagnostics stage in flight, so a thrown error can be
-		// attributed precisely — "DE1 service A000" vs. a specific characteristic
-		// — which is how the user learns a non-DE1 device was selected.
-		let step = 'device chooser';
-		// Hoisted out of the `try` so the `catch` can disconnect this exact
-		// device — nulling `this.device` alone would leave the transport's
-		// auto-reconnect loop running on it.
-		let device: De1Transport | null = null;
 		this.callbacks.onStatus('Requesting a DE1…');
+
+		// ── Phase 1: gesture-bound discovery + device wiring ───────────────
+		// The chooser MUST run synchronously off the user gesture, and the sink +
+		// lifecycle listeners are callback-driven (they mutate this manager's
+		// diagnostics counts) — so this stays in the manager, not the program.
+		let device: De1Transport;
 		try {
-			// Scope the chooser instead of listing every device: match the DE1
-			// by the A000 service it offers (the recommended Web Bluetooth
-			// practice), OR by the DE1 / BENGLE name prefix as a fallback —
-			// `filters` is an OR-list. The DE1 reliably advertises its name but
-			// may not advertise the A000 service UUID, so the name entries keep
-			// discovery working either way; `optionalServices` grants A000
-			// access once connected regardless of which filter matched.
+			// Match the DE1 by its A000 service OR by the DE1/BENGLE name prefix
+			// (`filters` is an OR-list); `optionalServices` grants A000 access
+			// once connected regardless of which filter matched.
 			device = await requestDevice({
 				filters: [
 					{ services: [De1Uuids.SERVICE] },
@@ -182,301 +185,97 @@ export class De1Manager {
 				],
 				optionalServices: [De1Uuids.SERVICE]
 			});
-			this.device = device;
-			// Record and surface exactly which device the chooser selected — the
-			// name (which a DE1's Nordic module may show as "nRF5x") and the
-			// browser's opaque per-origin device id.
-			this.patchDiagnostics({ deviceName: device.name, deviceId: device.id });
-			this.callbacks.onStatus(`Selected device: ${device.name} (id ${device.id})`);
-			// A terminal disconnect — a user-initiated `disconnect()` or the
-			// auto-reconnect loop giving up after exhausting its attempts.
-			device.onDisconnected(() => {
-				this.callbacks.onState('disconnected');
-				this.callbacks.onStatus('DE1 disconnected');
-			});
-			// The transport's auto-reconnect backoff loop reports each attempt
-			// and the eventual recovery; surface both to the UI.
-			device.onReconnectAttempt((attempt) => {
-				this.callbacks.onState('reconnecting');
-				this.callbacks.onStatus(`Reconnecting to DE1… (attempt ${attempt})`);
-			});
-			device.onReconnected(() => {
-				this.callbacks.onState('ready');
-				this.callbacks.onStatus('Reconnected — receiving DE1 notifications');
-			});
-
-			step = 'GATT connect';
-			this.callbacks.onStatus(`Connecting to ${device.name}…`);
-			await device.connectGatt();
-			this.callbacks.onStatus('GATT connected');
-
-			// One sink for all three characteristics — preserves arrival order.
-			device.setSink((notification) => {
-				const source = sourceFor(notification.characteristic);
-				if (source === null) {
-					return;
-				}
-				// Count the notification per source and stamp the arrival — live
-				// proof the device is streaming decodable DE1 data.
-				this.notificationCounts[source] += 1;
-				const total = Object.values(this.notificationCounts).reduce(
-					(sum, n) => sum + n,
-					0
-				);
-				this.patchDiagnostics({
-					notificationCount: total,
-					lastNotificationAtMs: notification.atMs
-				});
-				// The core's `onNotification` captures the raw bytes itself —
-				// see `core/de1-app/src/capture.rs`. No separate tee here.
-				void this.core
-					.onNotification(source, notification.data, notification.atMs)
-					.then(this.callbacks.onCoreOutput)
-					.catch((error: unknown) => {
-						// A rejection here — a wasm panic or a bad-packet JSON
-						// parse error — would otherwise silently kill the
-						// notification pipeline. Surface it instead.
-						this.callbacks.onStatus(
-							`DE1 notification processing failed: ${describeError(error)}`
-						);
-					});
-			});
-
-			this.callbacks.onState('subscribing');
-			// Subscribe in series — Web Bluetooth serialises GATT ops anyway,
-			// and the device's shared sink keeps cross-characteristic order. Each
-			// subscribe resolves the `A000` service then the characteristic, so a
-			// failure here is the structural tell that the device is not a DE1.
-			step = 'DE1 service A000';
-			this.callbacks.onStatus('Resolving DE1 service A000…');
-			step = 'StateInfo characteristic A00E';
-			await device.startNotifications(De1Uuids.SERVICE, De1Uuids.STATE_INFO);
-			this.callbacks.onStatus('DE1 service A000 resolved ✓');
-			this.callbacks.onStatus('StateInfo A00E subscribed ✓');
-
-			step = 'ShotSample characteristic A00D';
-			await device.startNotifications(De1Uuids.SERVICE, De1Uuids.SHOT_SAMPLE);
-			this.callbacks.onStatus('ShotSample A00D subscribed ✓');
-
-			step = 'WaterLevels characteristic A011';
-			await device.startNotifications(De1Uuids.SERVICE, De1Uuids.WATER_LEVELS);
-			this.callbacks.onStatus('WaterLevels A011 subscribed ✓');
-
-			// MMR_READ (cuuid_05) is the request/reply channel for memory-mapped
-			// register reads. Subscribe to its notify side here so the DE1's
-			// reply to a `read_mmr` request lands in the same notification sink
-			// that StateInfo/ShotSample/WaterLevels use.
-			step = 'MMR_READ characteristic A005';
-			await device.startNotifications(De1Uuids.SERVICE, De1Uuids.MMR_READ);
-			this.callbacks.onStatus('MMR_READ A005 subscribed ✓');
-
-			// ShotSettings (cuuid_0B) — the DE1 notifies on this characteristic
-			// when steam / hot-water / group-temp settings change (either from
-			// the on-machine UI or from a host Write), and the connect-time
-			// Read below seeds the initial snapshot. Matches reaprime's
-			// `transport.shotSettings` notify stream and the legacy de1app's
-			// `de1_read_hotwater` flow (`bluetooth.tcl:1707`).
-			step = 'ShotSettings characteristic A00B';
-			await device.startNotifications(De1Uuids.SERVICE, De1Uuids.SHOT_SETTINGS);
-			this.callbacks.onStatus('ShotSettings A00B subscribed ✓');
-
-			// FRAME_WRITE (cuuid_10) notify subscription was removed
-			// 2026-05-22. The 2026-05-21 HCI snoop of a
-			// legacy de1app session confirmed the DE1 firmware never emits
-			// HVNs on this characteristic — only empty ATT Write Responses
-			// (opcode 0x13) come back per frame, and the orchestrator
-			// synthesizes its per-frame ack from the bytes it just wrote
-			// (commit 49f0803). Reaprime doesn't subscribe to A010 either.
-			// Subscribing here was harmless but dormant; the
-			// `De1FrameAck` Source variant stays in the codec since the
-			// shell still synthesizes ack notifications for the
-			// orchestrator's state machine — only the BLE-level
-			// `startNotifications` call is dropped.
-
-			// All five GATT objects resolved — the device is verified as a DE1.
-			this.patchDiagnostics({ gattVerified: true });
-
-			// The Version characteristic (A001) is a one-shot Read, not a
-			// Notify — read it once now and route it through the core so the
-			// Machine card can show the DE1's firmware label. A read failure
-			// here is non-fatal: the connection is already verified, so log it
-			// and carry on rather than failing the whole connect.
-			step = 'Version characteristic A001';
-			try {
-				const versionBytes = await device.readCharacteristic(
-					De1Uuids.SERVICE,
-					De1Uuids.VERSION
-				);
-				const now = performance.now();
-				const output = await this.core.onNotification(
-					'De1Version',
-					versionBytes,
-					now
-				);
-				this.callbacks.onCoreOutput(output);
-				this.callbacks.onStatus('DE1 firmware version read ✓');
-			} catch (versionError) {
-				this.callbacks.onStatus(
-					`DE1 version read skipped: ${describeError(versionError)}`
-				);
-			}
-
-			// StateInfo (A00E) — one-shot Read at connect to seed the dashboard's
-			// MACHINE readout. The DE1 firmware emits StateInfo HVNs only on
-			// transitions, not on subscribe — so without this read the footer
-			// would show `—` until the next state change. Mirrors the legacy
-			// de1app's `de1_read_state` (`de1_comms.tcl`). Non-fatal: a failed
-			// read just leaves the footer empty until the first transition.
-			step = 'StateInfo read A00E';
-			try {
-				const stateBytes = await device.readCharacteristic(
-					De1Uuids.SERVICE,
-					De1Uuids.STATE_INFO
-				);
-				const now = performance.now();
-				const output = await this.core.onNotification('De1State', stateBytes, now);
-				this.callbacks.onCoreOutput(output);
-				this.callbacks.onStatus('DE1 machine state read ✓');
-			} catch (stateError) {
-				this.callbacks.onStatus(
-					`DE1 state read skipped: ${describeError(stateError)}`
-				);
-			}
-
-			// ShotSettings (A00B) — one-shot Read at connect to seed the
-			// initial steam / hot-water / group-temp snapshot. The subscribe
-			// above will surface any subsequent on-machine changes; this
-			// Read covers the gap between connect and the first change.
-			// Matches reaprime's `_initializeShotSettings()` flow + the
-			// legacy de1app's `de1_read_hotwater` (`bluetooth.tcl:1707`).
-			// Non-fatal — the field defaults to `None` on the
-			// core if this read fails.
-			step = 'ShotSettings read A00B';
-			try {
-				const shotSettingsBytes = await device.readCharacteristic(
-					De1Uuids.SERVICE,
-					De1Uuids.SHOT_SETTINGS
-				);
-				const now = performance.now();
-				const output = await this.core.onNotification(
-					'De1ShotSettings',
-					shotSettingsBytes,
-					now
-				);
-				this.callbacks.onCoreOutput(output);
-				this.callbacks.onStatus('DE1 shot-settings read ✓');
-			} catch (shotSettingsError) {
-				this.callbacks.onStatus(
-					`DE1 shot-settings read skipped: ${describeError(shotSettingsError)}`
-				);
-			}
-
-			// Trigger an MMR read of register 0x800010 (FirmwareVersion) — the
-			// canonical "v1352" build number the firmware-update check compares
-			// against (see `firmware_info::compare`). The core builds the
-			// 20-byte read-request packet; routing it through `onCoreOutput`
-			// dispatches `executeCommand → writeCharacteristic`, and the DE1's
-			// reply lands on the MMR_READ notify subscription configured above.
-			// Best-effort: a write failure here is non-fatal, the user can
-			// still trigger a manual check later.
-			step = 'MMR read FirmwareVersion';
-			try {
-				const mmrOut = await this.core.readMmr(MmrRegister.FirmwareVersion);
-				this.callbacks.onCoreOutput(mmrOut);
-				this.callbacks.onStatus('DE1 firmware-build MMR read dispatched ✓');
-			} catch (mmrError) {
-				this.callbacks.onStatus(
-					`DE1 firmware-build MMR read skipped: ${describeError(mmrError)}`
-				);
-			}
-
-			// Connect-time MMR sweep — mirrors the legacy
-			// `later_new_de1_connection_setup` block (`bluetooth.tcl:2054-2114`).
-			// Legacy issues each read in declaration order, with `get_heater_voltage`
-			// staggered by 7 s for older BLE-stack reasons (`bluetooth.tcl:2110`);
-			// modern stacks queue writes serially so we send the burst back-to-back.
-			//
-			// The six legacy-equivalent reads:
-			//   CpuBoardVersion       (0x800008) — get_3_mmr_…             (2074)
-			//   MachineModel          (0x80000C) — same multi-word read
-			//   GhcInfo               (0x80381C) — get_ghc_is_installed    (2069)
-			//   RefillKit             (0x80385C) — get_refill_kit_present  (2083)
-			//   SerialNumber          (0x803830) — get_sn                  (2084)
-			//   HeaterVoltage         (0x803834) — get_heater_voltage      (2110, +7s)
-			//
-			// FirmwareVersion (0x800010) was already dispatched above, so it's
-			// the seventh register Crema reads at connect time. The legacy's
-			// `get_3_mmr_cpuboard_machinemodel_firmwareversion` packs all three
-			// into a single multi-word read (length 2); Crema issues them as
-			// three single-word reads, which the DE1 handles the same way.
-			//
-			// All failures are non-fatal — each register's UI consumer falls
-			// back to "—" / null until the value lands.
-			const connectMmrSweep = [
-				MmrRegister.CpuBoardVersion,
-				MmrRegister.MachineModel,
-				MmrRegister.GhcInfo,
-				MmrRegister.RefillKit,
-				MmrRegister.SerialNumber,
-				MmrRegister.HeaterVoltage,
-				// Flush water target temp — surfaced as the Flush chip's
-				// sub-label on the Brew dashboard. Wire value is `°C × 10`.
-				MmrRegister.FlushTemp,
-				// Group Head Controller mode — read here so the Settings →
-				// Machine GHC toggle reflects the firmware's current state.
-				// Wire value 0 = off; non-zero = on (touch-to-confirm).
-				MmrRegister.GhcMode,
-				// Flow-calibration multiplier — surfaced in the Calibration
-				// settings section as the current flow multiplier. Wire
-				// value is `int(1000 × multiplier)`.
-				MmrRegister.CalibrationFlowMultiplier
-			];
-			for (const reg of connectMmrSweep) {
-				step = `MMR read ${reg}`;
-				try {
-					const out = await this.core.readMmr(reg);
-					this.callbacks.onCoreOutput(out);
-				} catch (e) {
-					this.callbacks.onStatus(
-						`DE1 MMR read ${reg} skipped: ${describeError(e)}`
-					);
-				}
-			}
-
-			// HeaderWrite (cuuid_0F) Read at connect time was a speculative
-			// active-profile indicator. Removed 2026-05-21 after a Bluetooth
-			// HCI snoop of a legacy DE1-app session confirmed the legacy app
-			// never Reads cuuid_0F — the only operations on that handle are
-			// 5-byte Write Requests during a profile upload. The DE1's Read
-			// side returned all-zero bytes in our testing, which matches
-			// "the firmware does not expose the loaded-profile buffer on
-			// Read."
-			//
-			// The active-profile identity comes from tracking our own
-			// successful uploads (`Event::ProfileUploadCompleted` → set
-			// `ui.activeProfileName`) — same model the legacy uses
-			// (`save_settings_to_de1` re-uploads on every connect; the
-			// "active profile" name is shell-only).
-
-			this.callbacks.onState('ready');
-			this.callbacks.onStatus(
-				'DE1 GATT verified ✓ — A000 + StateInfo/ShotSample/WaterLevels resolved'
-			);
-			this.callbacks.onStatus('Ready — receiving DE1 notifications');
 		} catch (error) {
-			// Disconnect the local device reference before nulling it — nulling
-			// alone leaves the transport's auto-reconnect backoff loop running on
-			// a half-dead device.
-			device?.disconnect();
+			this.device = null;
+			this.callbacks.onState('failed');
+			this.callbacks.onStatus(
+				`DE1 connection failed at "device chooser": ${describeError(error)}`
+			);
+			return;
+		}
+		this.device = device;
+		this.patchDiagnostics({ deviceName: device.name, deviceId: device.id });
+		this.callbacks.onStatus(`Selected device: ${device.name} (id ${device.id})`);
+		// A terminal disconnect — user-initiated or auto-reconnect giving up.
+		device.onDisconnected(() => {
+			this.callbacks.onState('disconnected');
+			this.callbacks.onStatus('DE1 disconnected');
+		});
+		device.onReconnectAttempt((attempt) => {
+			this.callbacks.onState('reconnecting');
+			this.callbacks.onStatus(`Reconnecting to DE1… (attempt ${attempt})`);
+		});
+		device.onReconnected(() => {
+			this.callbacks.onState('ready');
+			this.callbacks.onStatus('Reconnected — receiving DE1 notifications');
+		});
+		// One sink for all characteristics — preserves arrival order + tallies
+		// diagnostics. Set before the program subscribes so early HVNs are caught.
+		device.setSink((notification) => {
+			const source = sourceFor(notification.characteristic);
+			if (source === null) {
+				return;
+			}
+			// Count the notification per source and stamp the arrival — live
+			// proof the device is streaming decodable DE1 data.
+			this.notificationCounts[source] += 1;
+			const total = Object.values(this.notificationCounts).reduce((sum, n) => sum + n, 0);
+			this.patchDiagnostics({
+				notificationCount: total,
+				lastNotificationAtMs: notification.atMs
+			});
+			// The core's `onNotification` captures the raw bytes itself —
+			// see `core/de1-app/src/capture.rs`. No separate tee here.
+			void this.core
+				.onNotification(source, notification.data, notification.atMs)
+				.then(this.callbacks.onCoreOutput)
+				.catch((error: unknown) => {
+					// A rejection here — a wasm panic or a bad-packet JSON parse
+					// error — would otherwise silently kill the notification
+					// pipeline. Surface it instead.
+					this.callbacks.onStatus(
+						`DE1 notification processing failed: ${describeError(error)}`
+					);
+				});
+		});
+
+		if (this.runtime === null) {
+			device.disconnect();
+			this.device = null;
+			this.callbacks.onState('failed');
+			this.callbacks.onStatus('DE1 connection failed: app runtime unavailable');
+			return;
+		}
+
+		// ── Phase 2: GATT connect → subscribe → seed reads → MMR sweep ─────
+		// Delegated to the Effect connect program (T-17): step-tagged fatal
+		// errors, serial best-effort sweep. The manager just maps the outcome.
+		this.callbacks.onState('subscribing');
+		const exit = await this.runtime.runPromiseExit(
+			de1ConnectProgram({
+				device,
+				core: this.core,
+				onStatus: (line) => this.callbacks.onStatus(line),
+				onCoreOutput: (output) => this.callbacks.onCoreOutput(output),
+				onGattVerified: () => this.patchDiagnostics({ gattVerified: true })
+			})
+		);
+		if (Exit.isFailure(exit)) {
+			// Disconnect before nulling — nulling alone leaves the transport's
+			// auto-reconnect loop running on a half-dead device.
+			device.disconnect();
 			this.device = null;
 			this.patchDiagnostics({ gattVerified: false });
 			this.callbacks.onState('failed');
 			// Name the failed step — a service / characteristic failure means the
 			// selected device is almost certainly NOT a DE1.
-			this.callbacks.onStatus(
-				`DE1 connection failed at "${step}": ${describeError(error)}`
-			);
+			const failure = Cause.failureOption(exit.cause);
+			const step = failure._tag === 'Some' ? failure.value.step : 'connect';
+			const cause = failure._tag === 'Some' ? failure.value.cause : exit.cause;
+			this.callbacks.onStatus(`DE1 connection failed at "${step}": ${describeError(cause)}`);
+			return;
 		}
+		this.callbacks.onState('ready');
 	}
 
 	/**
