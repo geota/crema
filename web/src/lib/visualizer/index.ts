@@ -2,12 +2,14 @@
  * `$lib/visualizer` — top-level barrel for the Visualizer integration.
  *
  * Modules:
- *   - {@link ./oauth}        — OAuth 2.0 + PKCE redirect flow
- *   - {@link ./token-store}  — localStorage persistence + `withFreshToken`
- *   - {@link ./account}      — the `/api/me` helper
+ *   - {@link ./oauth}            — OAuth 2.0 + PKCE redirect flow + crypto helpers
+ *   - {@link ./sync-config}      — pure localStorage sync-config CRUD
+ *   - {@link ./migrate-basic-auth} — one-shot legacy-credential cleanup
  *
- * The bean-sync code in `$lib/bean/visualizer-sync` consumes
- * `withFreshToken` and stays unaware of the redirect dance.
+ * Token persistence + refresh and the authed HTTP now live in the Effect
+ * services (`$lib/services/{token-vault,http-client,shot-sync,bean-sync}`); the
+ * shot/queue work runs on the app runtime (Option 3). The wasm-side de-dup
+ * helpers live in {@link ./shot-sync-signatures}.
  */
 
 export {
@@ -32,18 +34,10 @@ export {
 	type ExchangeCodeOptions
 } from './oauth';
 
-export {
-	getStoredTokens,
-	storeTokens,
-	clearTokens,
-	isConnected,
-	onTokenChange,
-	getFreshAccessToken,
-	withFreshToken,
-	NotAuthenticatedError
-} from './token-store';
-
-export { fetchAccount, type VisualizerAccount } from './account';
+// Token storage + the authed `/me` call moved to the Effect services
+// (`TokenVault` / `BeanSync.fetchAccount`) at the token-store retirement; the
+// OAuth redirect/crypto helpers above stay here. `token-store.ts` + `account.ts`
+// are deleted.
 
 export { migrateLegacyBasicAuth } from './migrate-basic-auth';
 
