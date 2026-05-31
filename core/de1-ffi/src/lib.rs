@@ -339,6 +339,48 @@ pub fn guess_scale_from_first_weight_packet(bytes: Vec<u8>) -> Option<String> {
     de1_app::ScaleId::guess_from_first_weight_packet(&bytes).map(str::to_owned)
 }
 
+/// Format a Bookoo scale's `u16` firmware version as a `"M.m.p"` string
+/// (e.g. `141` → `"1.4.1"`). Centralised in the core so every shell renders the
+/// version identically — the Android shell used to carry its own Kotlin
+/// `formatFirmware` arithmetic (AND1). Mirrors the wasm `format_bookoo_firmware`.
+/// See [`de1_scale::bookoo::format_firmware_version`].
+#[uniffi::export]
+pub fn format_bookoo_firmware_version(encoded: u16) -> String {
+    de1_app::ScaleId::format_bookoo_firmware_version(encoded)
+}
+
+/// The Bookoo scale's static **pre-connect** GATT UUIDs (the service,
+/// weight-notify, and command characteristics), sourced from the core's
+/// `de1_scale::bookoo` constants so the Android shell stops hardcoding
+/// duplicates (AND2). The
+/// per-model **connected** set still rides on `CremaBridge::scale_uuids()`
+/// post-connect; the universal `2902` CCCD and the `BOOKOO_SC` advertised-name
+/// prefix stay shell-side (a CCCD is not Bookoo-specific; the name prefix is a
+/// scan-discovery detail the core doesn't model).
+///
+/// FFI-only (no wasm twin): the web shell hardcodes the same three for its
+/// `requestDevice` pre-connect filter and isn't being rewired here.
+#[derive(uniffi::Record)]
+pub struct BookooGattUuids {
+    /// The Bookoo GATT service UUID (`0ffe`).
+    pub service: String,
+    /// The weight-notify characteristic UUID (`ff11`).
+    pub notify: String,
+    /// The command-write characteristic UUID (`ff12`).
+    pub command: String,
+}
+
+/// Return the core-canonical Bookoo pre-connect GATT UUIDs. See
+/// [`BookooGattUuids`].
+#[uniffi::export]
+pub fn bookoo_gatt_uuids() -> BookooGattUuids {
+    BookooGattUuids {
+        service: de1_app::BOOKOO_SERVICE_UUID.to_owned(),
+        notify: de1_app::BOOKOO_NOTIFY_UUID.to_owned(),
+        command: de1_app::BOOKOO_COMMAND_UUID.to_owned(),
+    }
+}
+
 /// Fold a JSON array of `src:"META"` payload objects into a merged
 /// `ReplayMeta` JSON. See [`de1_domain::fold_meta_jsonl_json`] for
 /// the canonical implementation.
@@ -482,6 +524,14 @@ impl CremaBridge {
     /// supported scale.
     pub fn connect_scale(&self, advertised_name: String) -> Option<String> {
         self.core().connect_scale(&advertised_name)
+    }
+
+    /// Disconnect the scale: reset the core's scale slice (the identified
+    /// codec + every scale-derived reading) without touching user prefs or the
+    /// shot / profile config (AND4). The shell calls this when the scale's BLE
+    /// link drops. See [`de1_app::CremaCore::disconnect_scale`].
+    pub fn disconnect_scale(&self) {
+        self.core().disconnect_scale();
     }
 
     /// Enable or disable auto-tare on shot start.
