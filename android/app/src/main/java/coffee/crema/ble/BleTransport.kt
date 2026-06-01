@@ -27,9 +27,9 @@ import java.util.UUID
  * ## Types, not Nordic types
  *
  * Nordic 2.0 models UUIDs as `kotlin.uuid.Uuid` and connection state as a
- * sealed `ConnectionState` hierarchy. Crema's existing UUID maps
- * ([De1Uuids], [ScaleUuids]) and managers speak `java.util.UUID`, so this
- * interface speaks `java.util.UUID` too and exposes a flat [ConnState] enum.
+ * sealed `ConnectionState` hierarchy. Crema's [De1Uuids] map and the
+ * core-sourced scale UUIDs the managers resolve all speak `java.util.UUID`, so
+ * this interface speaks `java.util.UUID` too and exposes a flat [ConnState] enum.
  * No Nordic type crosses this boundary.
  *
  * ## Threading

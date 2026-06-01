@@ -4,6 +4,7 @@ import android.os.SystemClock
 import android.util.Log
 import coffee.crema.core.CremaBridge
 import coffee.crema.core.NotificationSource
+import coffee.crema.core.ScaleUuids as CoreScaleUuids
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -14,6 +15,8 @@ import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.Json
+import java.util.UUID
 
 /**
  * BLE manager for a Bookoo coffee scale, on top of [BleTransport].
@@ -23,12 +26,12 @@ import kotlinx.coroutines.launch
  *  1. Connect to a Bookoo scale via [BleTransport], which discovers services,
  *     and tell the core which scale it is via [CremaBridge.connectScale] so the
  *     core selects the right codec.
- *  2. Observe the weight-notify characteristic ([ScaleUuids.WEIGHT_NOTIFY]).
+ *  2. Observe the weight-notify characteristic (the weight-notify characteristic).
  *  3. On every weight notification, hand the raw bytes to
  *     [CremaBridge.onNotification] and forward the returned JSON `CoreOutput`
  *     string to [onCoreOutput].
- *  4. Write tare / timer commands to [ScaleUuids.COMMAND] via [writeCommand].
- *  5. Also observe the command characteristic ([ScaleUuids.COMMAND], `ff12`),
+ *  4. Write tare / timer commands to the command characteristic via [writeCommand].
+ *  5. Also observe the command characteristic (the command characteristic, `ff12`),
  *     which the GATT dump shows has the NOTIFY property: the scale pushes its
  *     serial / settings responses back on it. Each such notification is
  *     recorded as a `SCALE_FF12` `dir:"in"` line AND fed to the core under the
@@ -109,6 +112,19 @@ class ScaleBleManager(
      */
     private var recording = false
 
+    /** Parses the core's `scaleUuids()` JSON into [CoreScaleUuids]. */
+    private val json = Json { ignoreUnknownKeys = true }
+
+    /**
+     * The connected scale's GATT characteristics, sourced from the core
+     * (`bridge.scaleUuids()`) once it identifies the scale — NOT hardcoded, so
+     * the manager subscribes / writes to whatever scale the core recognised
+     * (the web shell does the same). `null` until a scale is connected.
+     */
+    private var serviceUuid: UUID? = null
+    private var weightNotifyUuid: UUID? = null
+    private var commandUuid: UUID? = null
+
     // ---- Connect ----------------------------------------------------------
 
     /**
@@ -147,46 +163,52 @@ class ScaleBleManager(
                 recorder.open()?.let { onStatus("Recording session to $it") }
 
                 // Identify the scale with the core so it selects the right codec.
+                // An unrecognised scale can't be decoded — bail rather than
+                // subscribe to a guessed characteristic.
                 val label = runCatching { bridge.connectScale(advertisedName) }.getOrNull()
-                if (label != null) {
-                    onStatus("Core recognised scale: $label")
-                    // The core now knows the scale's codec; let the owner read
-                    // its capabilities and render capability-gated config UI.
-                    // The advertised name goes along so the owner can show the
-                    // scale's identity in the card right away.
-                    onScaleIdentified(advertisedName)
-                } else {
-                    onStatus("Core did not recognise scale '$advertisedName'")
-                }
+                    ?: error("Core did not recognise scale '$advertisedName'")
+                onStatus("Core recognised scale: $label")
+
+                // Source the GATT characteristics from the CONNECTED scale: the
+                // core knows them per model (`scaleUuids()`), so this manager no
+                // longer hardcodes one scale's UUIDs — it subscribes to whatever
+                // scale the core identified. (The web shell does the same.)
+                val coreUuids = json.decodeFromString(
+                    CoreScaleUuids.serializer(),
+                    bridge.scaleUuids() ?: error("Core reported no UUIDs for '$label'"),
+                )
+                serviceUuid = UUID.fromString(coreUuids.service)
+                weightNotifyUuid = UUID.fromString(coreUuids.weight_notify)
+                commandUuid = UUID.fromString(coreUuids.command_write)
+
+                // The core now knows the scale's codec; let the owner read its
+                // capabilities and render capability-gated config UI. The
+                // advertised name goes along so the owner can show the scale's
+                // identity in the card right away.
+                onScaleIdentified(advertisedName)
 
                 _state.value = State.SUBSCRIBING
                 onStatus("Subscribing to scale weight…")
-                // Observe BOTH Bookoo characteristics on the 0ffe service:
-                //  - WEIGHT_NOTIFY (ff11) — the live weight stream the core
-                //    decodes; this is the real product path.
-                //  - COMMAND (ff12) — the command channel. The app WRITES
-                //    tare/timer/query commands to it, and the GATT dump shows
-                //    ff12 also has the NOTIFY property: the scale pushes its
-                //    serial / settings responses back on it. Those inbound
-                //    notifications are recorded AND fed to the core under the
-                //    SCALE_COMMAND source — see handleCommandNotification.
-                // The two streams are merged into one collected flow so
-                // per-device notification ordering is preserved — see
-                // BleTransport.observe's contract.
-                observeJob = merge(
-                    transport.observe(
-                        device,
-                        ScaleUuids.SERVICE,
-                        ScaleUuids.WEIGHT_NOTIFY,
-                    ),
-                    transport.observe(
-                        device,
-                        ScaleUuids.SERVICE,
-                        ScaleUuids.COMMAND,
-                    ),
-                )
-                    .onEach { handleNotification(it) }
-                    .launchIn(scope)
+                // Observe the weight-notify characteristic, plus the command
+                // characteristic when it's distinct (some scales use a single
+                // characteristic for both — Bookoo splits them ff11 / ff12). The
+                // command channel also NOTIFYs the scale's serial / settings
+                // responses, fed to the core under SCALE_COMMAND — see
+                // handleCommandNotification. The streams merge into one collected
+                // flow so per-device notification ordering is preserved (see
+                // BleTransport.observe's contract).
+                val service = serviceUuid!!
+                val weight = weightNotifyUuid!!
+                val command = commandUuid!!
+                val notifications = if (command == weight) {
+                    transport.observe(device, service, weight)
+                } else {
+                    merge(
+                        transport.observe(device, service, weight),
+                        transport.observe(device, service, command),
+                    )
+                }
+                observeJob = notifications.onEach { handleNotification(it) }.launchIn(scope)
 
                 _state.value = State.READY
                 onStatus("Ready — receiving scale weight")
@@ -215,6 +237,9 @@ class ScaleBleManager(
         observeJob?.cancel()
         observeJob = null
         device = null
+        serviceUuid = null
+        weightNotifyUuid = null
+        commandUuid = null
         // Reset the core's scale slice so a vanished scale leaves no stale
         // weight and a reconnect starts clean (AND4). The De1 manager resets
         // the whole core on its disconnect; this is the scale-only equivalent.
@@ -229,7 +254,7 @@ class ScaleBleManager(
     // ---- Command write ----------------------------------------------------
 
     /**
-     * Write [data] to the Bookoo command characteristic ([ScaleUuids.COMMAND]).
+     * Write [data] to the Bookoo command characteristic (the command characteristic).
      *
      * Used for tare (and, later, timer) commands. The exact bytes come from the
      * Rust core via a `Command.WriteScale`; this manager owns no protocol.
@@ -246,8 +271,14 @@ class ScaleBleManager(
             onStatus("Cannot write scale command — scale not connected")
             return false
         }
+        val service = serviceUuid
+        val command = commandUuid
+        if (service == null || command == null) {
+            onStatus("Cannot write scale command — scale not connected")
+            return false
+        }
         return runCatching {
-            transport.write(d, ScaleUuids.SERVICE, ScaleUuids.COMMAND, data)
+            transport.write(d, service, command, data)
             // Record the write as a dir:"out" SCALE_COMMAND line so tare/timer
             // writes appear in the interleaved capture. Stamp it with the same
             // elapsedRealtime() clock the recorder and inbound lines use.
@@ -267,15 +298,15 @@ class ScaleBleManager(
      * -> UI.
      *
      * Routes by source characteristic:
-     *  - [ScaleUuids.WEIGHT_NOTIFY] (`ff11`) — the live weight stream: record
+     *  - the weight-notify characteristic (`ff11`) — the live weight stream: record
      *    it as a `SCALE_WEIGHT` `dir:"in"` line and feed it to the core.
-     *  - [ScaleUuids.COMMAND] (`ff12`) — see [handleCommandNotification]:
+     *  - the command characteristic (`ff12`) — see [handleCommandNotification]:
      *    record it as a `SCALE_FF12` `dir:"in"` line and feed it to the core.
      */
     private fun handleNotification(notification: BleTransport.Notification) {
         when (notification.characteristic) {
-            ScaleUuids.WEIGHT_NOTIFY -> handleWeightNotification(notification)
-            ScaleUuids.COMMAND -> handleCommandNotification(notification)
+            weightNotifyUuid -> handleWeightNotification(notification)
+            commandUuid -> handleCommandNotification(notification)
             else -> Log.w(
                 TAG,
                 "Notification from unmapped characteristic ${notification.characteristic}",
@@ -331,6 +362,14 @@ class ScaleBleManager(
         private const val TAG = "ScaleBleManager"
 
         /**
+         * The advertised-name prefix a Bookoo scale is discovered by. This is a
+         * scan-discovery detail (not a GATT UUID — those come from the core's
+         * connected `scaleUuids()`); the core's generic `scale_scan_uuids()`
+         * carries the full multi-scale set for a future multi-scale scan (AND6).
+         */
+        private const val BOOKOO_NAME_PREFIX: String = "BOOKOO_SC"
+
+        /**
          * Capture `src` label for inbound notifications from the Bookoo command
          * characteristic (`ff12`). Distinct from the `SCALE_WEIGHT` label so the
          * replay tool can route it to the core's [NotificationSource.SCALE_COMMAND]
@@ -358,6 +397,6 @@ class ScaleBleManager(
          * stays device-agnostic, so this rule lives with the scale manager.
          */
         fun isBookooName(name: String): Boolean =
-            name.uppercase().startsWith(ScaleUuids.BOOKOO_NAME_PREFIX)
+            name.uppercase().startsWith(BOOKOO_NAME_PREFIX)
     }
 }
