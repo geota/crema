@@ -333,6 +333,14 @@ export interface CremaCore {
 	 */
 	connectScale(advertisedName: string): Promise<string | undefined>;
 	/**
+	 * Disconnect the scale: reset the core's scale slice (the identified codec +
+	 * every scale-derived reading) without touching user prefs or the shot /
+	 * profile config. Called when the scale's BLE link drops, so a vanished
+	 * scale leaves no ghost weight and a reconnect starts clean. The scale-only
+	 * sibling of {@link reset}.
+	 */
+	disconnectScale(): Promise<void>;
+	/**
 	 * What the connected scale can do beyond reporting a bare weight, or
 	 * `undefined` when no scale is connected. Drives capability-gated UI.
 	 */
@@ -843,6 +851,9 @@ async function createCore(): Promise<CremaCore> {
 		},
 		async connectScale(advertisedName) {
 			return bridge.connect_scale(advertisedName);
+		},
+		async disconnectScale() {
+			bridge.disconnect_scale();
 		},
 		async scaleCapabilities() {
 			const raw = bridge.scale_capabilities();

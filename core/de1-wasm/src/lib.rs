@@ -623,6 +623,25 @@ pub fn format_bookoo_firmware(encoded: u16) -> String {
     de1_app::ScaleId::format_bookoo_firmware_version(encoded)
 }
 
+/// The **generic** pre-connect BLE scan filter set across ALL supported scales
+/// — the service-UUID union + the advertised-name-prefix union — as JSON
+/// `{"service_uuids":[…],"name_prefixes":[…]}`. The core owns
+/// `Scale::identify`, so it owns the scan filters; a shell lists
+/// `name_prefixes` in its scan filter + `service_uuids` in a Web Bluetooth
+/// `optionalServices`, then learns the connected scale's per-model
+/// characteristics from `CremaBridge::scale_uuids()` post-connect. This keeps
+/// the scan generic instead of each shell hardcoding one scale. A free fn (no
+/// bridge instance) so the gesture-bound BLE-scan path reads it synchronously.
+/// See `de1_scale::Scale::scan_uuids`.
+#[wasm_bindgen(js_name = scaleScanUuids)]
+#[must_use]
+pub fn scale_scan_uuids() -> String {
+    // `to_string` of two `Vec<&str>` is infallible; fall back rather than
+    // panic at the boundary (RS1).
+    serde_json::to_string(&de1_app::ScaleId::scan_uuids())
+        .unwrap_or_else(|_| r#"{"service_uuids":[],"name_prefixes":[]}"#.to_owned())
+}
+
 /// Sniff a first weight-notify packet for a known-scale signature.
 /// Returns the BLE advertised-name prefix the connect path would
 /// consume, or `None` when no signature matches. Today only the
@@ -1021,6 +1040,15 @@ impl CremaBridge {
     /// supported scale.
     pub fn connect_scale(&mut self, advertised_name: String) -> Option<String> {
         self.core.connect_scale(&advertised_name)
+    }
+
+    /// Disconnect the scale: reset the core's scale slice (the identified
+    /// codec + every scale-derived reading) without touching user prefs or the
+    /// shot / profile config. The web shell calls this when the scale's BLE
+    /// link drops (the wasm twin of the ffi `disconnect_scale`, AND4 follow-up).
+    /// See `de1_app::CremaCore::disconnect_scale`.
+    pub fn disconnect_scale(&mut self) {
+        self.core.disconnect_scale();
     }
 
     /// Enable or disable auto-tare on shot start.

@@ -35,6 +35,58 @@ pub struct ScaleUuids {
     pub command_write: &'static str,
 }
 
+/// The **pre-connect** BLE scan filter set, shared across shells: the union of
+/// every supported scale's advertised-name prefixes and GATT service UUIDs.
+///
+/// A scan happens *before* the core has identified the scale (so there is no
+/// capability to gate on yet), and the core is the authority on which scales
+/// exist — it owns [`Scale::identify`] — so it owns the scan filter set. A
+/// shell lists `name_prefixes` in its scan filter and `service_uuids` in a Web
+/// Bluetooth `optionalServices`, then connects and learns the exact per-model
+/// characteristics from [`Scale::uuids`]. This keeps the scan generic instead
+/// of each shell hardcoding one scale's UUIDs.
+// Serialize only: emitted to the shells as JSON, never deserialised in Rust —
+// `Deserialize` can't be derived for the `Vec<&'static str>` fields (a
+// deserialised `&str` borrows the input, so it isn't `'static`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct ScaleScanUuids {
+    /// Distinct GATT service UUIDs across all supported scales (deduplicated —
+    /// several scales share `0000fff0`). For a Web Bluetooth `optionalServices`.
+    pub service_uuids: Vec<&'static str>,
+    /// Every advertised-name prefix [`Scale::identify`] matches a scale by.
+    pub name_prefixes: Vec<&'static str>,
+}
+
+/// One row of the scan registry: the advertised-name `prefixes` a scale is
+/// recognised by, and the [`Scale::from_label`] `label` that builds it. The
+/// single source [`Scale::identify`] and [`Scale::scan_uuids`] both read, so
+/// the scan filter set can never drift from what `identify` recognises.
+struct ScaleScanEntry {
+    prefixes: &'static [&'static str],
+    label: &'static str,
+}
+
+/// Every scale Crema can identify, in the order [`Scale::identify`] tests them
+/// (first prefix match wins — order is load-bearing for overlapping families
+/// like Acaia Pyxis vs gen-1). Adding a scale = a row here + a
+/// [`Scale::from_label`] arm.
+const SCALE_SCAN: &[ScaleScanEntry] = &[
+    ScaleScanEntry { prefixes: &["Decent Scale", "ButtsHaus Scale"], label: "Decent Scale" },
+    ScaleScanEntry { prefixes: &["Skale"], label: "Skale II" },
+    ScaleScanEntry { prefixes: &["FELICITA"], label: "Felicita Arc" },
+    ScaleScanEntry { prefixes: &["BOOKOO_SC"], label: "Bookoo" },
+    ScaleScanEntry { prefixes: &["PEARLS", "PEARL-", "LUNAR", "PYXIS"], label: "Acaia Pyxis" },
+    ScaleScanEntry { prefixes: &["ACAIA", "PROCH"], label: "Acaia" },
+    ScaleScanEntry { prefixes: &["ECLAIR"], label: "Atomheart Eclair" },
+    ScaleScanEntry { prefixes: &["CFS-9002"], label: "Eureka Precisa" },
+    ScaleScanEntry { prefixes: &["LSJ-001"], label: "Solo Barista" },
+    ScaleScanEntry { prefixes: &["Microbalance"], label: "Difluid Microbalance" },
+    ScaleScanEntry { prefixes: &["smartchef"], label: "Smartchef" },
+    ScaleScanEntry { prefixes: &["HIROIA JIMMY"], label: "Hiroia Jimmy" },
+    ScaleScanEntry { prefixes: &["AKU MINI", "Varia AKU"], label: "Varia Aku" },
+];
+
 /// One decoded scale notification.
 ///
 /// Every scale reports a `weight_g`. A few scales report more in the same
@@ -313,37 +365,38 @@ impl Scale {
     /// assert!(Scale::identify("Some Phone").is_none());
     /// ```
     pub fn identify(advertised_name: &str) -> Option<Scale> {
-        let any = |prefixes: &[&str]| prefixes.iter().any(|p| advertised_name.starts_with(p));
-        let inner = if any(&["Decent Scale", "ButtsHaus Scale"]) {
-            Inner::Decent(DecentScale::new())
-        } else if advertised_name.starts_with("Skale") {
-            Inner::Skale
-        } else if advertised_name.starts_with("FELICITA") {
-            Inner::Felicita
-        } else if advertised_name.starts_with("BOOKOO_SC") {
-            Inner::Bookoo
-        } else if any(&["PEARLS", "PEARL-", "LUNAR", "PYXIS"]) {
-            Inner::AcaiaPyxis(AcaiaDecoder::new())
-        } else if any(&["ACAIA", "PROCH"]) {
-            Inner::AcaiaGen1(AcaiaDecoder::new())
-        } else if advertised_name.starts_with("ECLAIR") {
-            Inner::AtomheartEclair
-        } else if advertised_name.starts_with("CFS-9002") {
-            Inner::EurekaPrecisa
-        } else if advertised_name.starts_with("LSJ-001") {
-            Inner::SoloBarista
-        } else if advertised_name.starts_with("Microbalance") {
-            Inner::Difluid
-        } else if advertised_name.starts_with("smartchef") {
-            Inner::Smartchef(SmartchefScale::new())
-        } else if advertised_name.starts_with("HIROIA JIMMY") {
-            Inner::HiroiaJimmy
-        } else if any(&["AKU MINI", "Varia AKU"]) {
-            Inner::VariaAku
-        } else {
-            return None;
-        };
-        Some(Scale { inner })
+        // First prefix match wins, in registry order — then build via the same
+        // `from_label` the rest of the codebase uses, so identification and the
+        // scan filter set (below) share one source of truth.
+        SCALE_SCAN
+            .iter()
+            .find(|e| e.prefixes.iter().any(|p| advertised_name.starts_with(p)))
+            .and_then(|e| Self::from_label(e.label))
+    }
+
+    /// The pre-connect BLE scan filter set across **all** supported scales —
+    /// see [`ScaleScanUuids`]. Derived from the same [`SCALE_SCAN`] registry
+    /// `identify` reads (name prefixes) and each variant's [`Scale::uuids`]
+    /// (service UUIDs, deduplicated), so it stays generic + drift-free as
+    /// scales are added. The shell scans with this, connects, then reads the
+    /// connected scale's per-model characteristics from [`Scale::uuids`].
+    #[must_use]
+    pub fn scan_uuids() -> ScaleScanUuids {
+        let mut service_uuids: Vec<&'static str> = Vec::new();
+        let mut name_prefixes: Vec<&'static str> = Vec::new();
+        for entry in SCALE_SCAN {
+            name_prefixes.extend_from_slice(entry.prefixes);
+            if let Some(scale) = Self::from_label(entry.label) {
+                let service = scale.uuids().service;
+                if !service_uuids.contains(&service) {
+                    service_uuids.push(service);
+                }
+            }
+        }
+        ScaleScanUuids {
+            service_uuids,
+            name_prefixes,
+        }
     }
 
     /// Sniff the first weight-notify packet to guess an advertised-name
@@ -1306,6 +1359,37 @@ mod tests {
     #[test]
     fn an_unknown_scan_name_is_not_identified() {
         assert!(Scale::identify("Random Phone").is_none());
+    }
+
+    #[test]
+    fn scan_uuids_cover_every_identifiable_scale_generically() {
+        let scan = Scale::scan_uuids();
+        // No drift from `identify`: every advertised-name prefix in the scan
+        // set actually identifies a scale (both read the SCALE_SCAN registry).
+        for prefix in &scan.name_prefixes {
+            assert!(
+                Scale::identify(prefix).is_some(),
+                "scan prefix {prefix:?} should identify a scale"
+            );
+        }
+        // It's generic — not Bookoo-only: prefixes from several families are
+        // present (Bookoo, Decent, Acaia, Felicita).
+        for p in ["BOOKOO_SC", "Decent Scale", "PYXIS", "FELICITA"] {
+            assert!(scan.name_prefixes.contains(&p), "missing prefix {p}");
+        }
+        // Service UUIDs are deduplicated: the four scales sharing `0000fff0`
+        // (decent / eureka / smartchef / varia) collapse to one entry.
+        let fff0 = "0000fff0-0000-1000-8000-00805f9b34fb";
+        assert_eq!(
+            scan.service_uuids.iter().filter(|u| **u == fff0).count(),
+            1,
+            "the shared fff0 service must appear once"
+        );
+        // The Bookoo service is present, and every UUID is a 128-bit dashed form.
+        assert!(scan.service_uuids.contains(&crate::bookoo::SERVICE_UUID));
+        for uuid in &scan.service_uuids {
+            assert_eq!(uuid.len(), 36, "service uuid {uuid:?} should be 128-bit");
+        }
     }
 
     #[test]

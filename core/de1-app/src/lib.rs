@@ -51,17 +51,6 @@ use de1_scale::{bookoo, decent_scale};
 /// without each bridge crate taking a direct dep on `de1-scale`.
 pub use de1_scale::Scale as ScaleId;
 
-/// The Bookoo scale's static GATT UUIDs — the **pre-connect** scan / subscribe
-/// set — re-exported from `de1_scale::bookoo` so the FFI bridge can source them
-/// from the core instead of the Android shell hardcoding duplicates (AND2). The
-/// per-model **connected** set rides on `scale_uuids()` post-connect; the
-/// `2902` CCCD (universal) and the `BOOKOO_SC` advertised-name prefix (a scan
-/// discovery detail, not a protocol UUID) stay shell-side.
-pub use de1_scale::bookoo::{
-    COMMAND_UUID as BOOKOO_COMMAND_UUID, NOTIFY_UUID as BOOKOO_NOTIFY_UUID,
-    SERVICE_UUID as BOOKOO_SERVICE_UUID,
-};
-
 /// Scale sensor lag assumed when no scale is connected — a representative
 /// value across the supported scales (380 ms, the legacy default).
 const DEFAULT_SCALE_LAG: Duration = Duration::from_millis(380);
