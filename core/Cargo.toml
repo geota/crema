@@ -33,3 +33,15 @@ cast_precision_loss = "deny"
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# Release builds: fat LTO + one codegen unit. Cross-crate inlining + dead-code elimination trims
+# the release binaries — the de1-wasm bundle (web) and the de1-ffi `.so`
+# (Android) — at no runtime cost; on the per-frame decode path it measures
+# marginally *faster*, since LTO inlines across the protocol/domain crate
+# boundary. Applies to release builds only; `cargo test` (dev profile) is
+# unaffected. We deliberately keep the default `opt-level = 3`: dropping to
+# "s"/"z" would shrink the wasm a further ~17–24 % but makes the core 1.4–2×
+# slower per frame (measured) — a poor trade for a precached asset.
+[profile.release]
+lto = true
+codegen-units = 1
