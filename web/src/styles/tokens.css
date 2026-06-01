@@ -8,15 +8,16 @@
 
 /* ---- Phosphor icons ------------------------------------------------------
    The design renders icons as <i class="ph ph-…"> / ph-duotone / ph-fill.
-   Sourced from the `@phosphor-icons/web` npm package and imported locally so
-   Vite bundles and fingerprints the icon fonts. (A *remote* @import nested in
-   this file is hoisted below other rules when the stylesheet is bundled,
-   becomes an invalid mid-sheet @import, and is dropped — which is why the
-   icons went missing.) Regular + duotone + fill cover every icon used.
+   Sourced from `@phosphor-icons/web`, but SUBSET to only the icons this app
+   references: scripts/subset-phosphor.mjs (run from a Vite buildStart hook, or
+   `pnpm icons`) emits src/lib/icons/phosphor.css + trimmed woff2 fonts into the
+   gitignored src/lib/icons/, cutting ~1530 icons × 3 weights down to <10 %.
+   The import is local + relative so Vite bundles and fingerprints the fonts (a
+   *remote* @import nested here would be hoisted below other rules, become an
+   invalid mid-sheet @import, and get dropped — which is why icons once went
+   missing). A fresh checkout generates the subset on first dev/build.
    -------------------------------------------------------------------------- */
-@import '@phosphor-icons/web/regular';
-@import '@phosphor-icons/web/duotone';
-@import '@phosphor-icons/web/fill';
+@import '../lib/icons/phosphor.css';
 
 /* ---- Fonts ---------------------------------------------------------------
    Newsreader / Hanken Grotesk / JetBrains Mono load via a <link> in app.html
