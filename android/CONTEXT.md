@@ -43,11 +43,15 @@ streams notifications. The bytes it surfaces are fed straight to **CremaBridge**
 — the transport never interprets them.
 _Avoid_: the GATT layer (that's an implementation detail beneath the transport).
 
-**ScaleUuids / De1Uuids**:
-The GATT service + characteristic UUIDs the BLE layer scans and subscribes for.
-The DE1 and scale UUID sets are sourced from the core (the canonical owner) so
-every shell agrees on what to scan for, rather than each hard-coding its own.
-_Avoid_: the magic numbers, the hardcoded UUIDs.
+**Scale UUIDs (core-sourced) / De1Uuids**:
+The GATT service + characteristic UUIDs the BLE layer subscribes / writes to.
+**Scales are multi-vendor**, so the shell hardcodes none of theirs: the
+connected scale's characteristics come from the core's `scaleUuids()` (the core
+identifies the model + knows them), and the multi-scale pre-connect scan set
+from `scale_scan_uuids()`. The **DE1** is a single fixed device, so **De1Uuids**
+stays a small hardcoded shell map — there is only one DE1 GATT layout.
+_Avoid_: hardcoding a scale's UUIDs in the shell (that's the cross-shell-drift
+trap the FFI seam exists to prevent).
 
 ## Example dialogue
 
@@ -58,7 +62,9 @@ _Avoid_: the magic numbers, the hardcoded UUIDs.
 > telemetry `Event`s. The Compose layer just renders them. Kotlin owning the
 > decode would re-introduce exactly the cross-shell drift the FFI seam exists to
 > prevent.
-> **Dev:** And the UUIDs we scan for — those are ours to define?
-> **Domain expert:** No, source them from the core (the same set the Web shell
-> reads). The core is the canonical owner of **ScaleUuids** / **De1Uuids** so a
-> new model's UUIDs land everywhere at once.
+> **Dev:** And a scale's GATT UUIDs — those are ours to hardcode?
+> **Domain expert:** No — scales are multi-vendor, so the core owns them: it
+> identifies the model and reports its characteristics via `scaleUuids()` (the
+> same set the Web shell reads), and the generic `scale_scan_uuids()` is the
+> pre-connect scan set. The shell hardcodes none. The DE1 is the exception — one
+> fixed device, one GATT layout, so **De1Uuids** stays a small shell map.
