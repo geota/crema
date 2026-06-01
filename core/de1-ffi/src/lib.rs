@@ -349,37 +349,16 @@ pub fn format_bookoo_firmware_version(encoded: u16) -> String {
     de1_app::ScaleId::format_bookoo_firmware_version(encoded)
 }
 
-/// The Bookoo scale's static **pre-connect** GATT UUIDs (the service,
-/// weight-notify, and command characteristics), sourced from the core's
-/// `de1_scale::bookoo` constants so the Android shell stops hardcoding
-/// duplicates (AND2). The
-/// per-model **connected** set still rides on `CremaBridge::scale_uuids()`
-/// post-connect; the universal `2902` CCCD and the `BOOKOO_SC` advertised-name
-/// prefix stay shell-side (a CCCD is not Bookoo-specific; the name prefix is a
-/// scan-discovery detail the core doesn't model).
-///
-/// FFI-only (no wasm twin): the web shell hardcodes the same three for its
-/// `requestDevice` pre-connect filter and isn't being rewired here.
-#[derive(uniffi::Record)]
-pub struct BookooGattUuids {
-    /// The Bookoo GATT service UUID (`0ffe`).
-    pub service: String,
-    /// The weight-notify characteristic UUID (`ff11`).
-    pub notify: String,
-    /// The command-write characteristic UUID (`ff12`).
-    pub command: String,
-}
-
-/// Return the core-canonical Bookoo pre-connect GATT UUIDs. See
-/// [`BookooGattUuids`].
-#[uniffi::export]
-pub fn bookoo_gatt_uuids() -> BookooGattUuids {
-    BookooGattUuids {
-        service: de1_app::BOOKOO_SERVICE_UUID.to_owned(),
-        notify: de1_app::BOOKOO_NOTIFY_UUID.to_owned(),
-        command: de1_app::BOOKOO_COMMAND_UUID.to_owned(),
-    }
-}
+// NOTE (AND2 redesign): a `bookoo_gatt_uuids` accessor was removed here. Baking
+// one specific scale into the core's public FFI surface was the wrong
+// abstraction — the core identifies ~13 scales (`Scale::identify`) and is
+// capability-driven, so the pre-connect scan filter belongs in a GENERIC
+// `Scale::scan_uuids()` (exposed to the web via the wasm `scaleScanUuids`). It
+// is intentionally NOT mirrored to FFI yet: the Android shell still subscribes
+// only to the Bookoo characteristics (its `ScaleUuids` holds them as documented
+// shell-side constants), and a UniFFI mirror would be a dead export until
+// Android's multi-scale pass (AND6) makes it scan via `scale_scan_uuids()` and
+// subscribe via the connected `scale_uuids()`.
 
 /// Fold a JSON array of `src:"META"` payload objects into a merged
 /// `ReplayMeta` JSON. See [`de1_domain::fold_meta_jsonl_json`] for

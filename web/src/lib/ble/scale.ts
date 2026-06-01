@@ -30,19 +30,27 @@ import type { AppRuntime } from '$lib/effect/runtime';
 import { scaleConnectProgram } from '$lib/services/scale-orchestrator';
 import type { BleConnectionState } from './connection-state';
 import { BleDevice, requestDevice, type ConnState } from './transport';
+import { scaleScanUuids } from '$lib/wasm/de1_wasm';
+
+/** The pre-connect scan filter set across all supported scales (the core owns
+ *  `Scale::identify`, so it owns the scan filters). */
+interface ScaleScanFilters {
+	/** GATT service UUIDs to list in `requestDevice`'s `optionalServices`. */
+	service_uuids: string[];
+	/** Advertised-name prefixes to filter the scan on. */
+	name_prefixes: string[];
+}
 
 /**
- * The Bookoo scale's advertised-name prefix — the `requestDevice` name filter.
- * Mirrors the Android shell's `ScaleUuids.BOOKOO_NAME_PREFIX`.
+ * The generic scan filter set across ALL supported scales, sourced from the
+ * Rust core (`scaleScanUuids` → `Scale::scan_uuids`) rather than hardcoding one
+ * scale. A free wasm fn (synchronous), so it's safe to call inside the
+ * gesture-bound `requestDevice` path — no `await` to consume the user
+ * activation, and never at module scope (the wasm bundle loads first).
  */
-const BOOKOO_NAME_PREFIX = 'BOOKOO_SC';
-
-/**
- * The Bookoo GATT service UUID (`0ffe`), needed in `requestDevice`'s
- * `optionalServices` before the core can report the per-scale UUIDs. Web
- * Bluetooth blocks access to any service not listed at request time.
- */
-const BOOKOO_SERVICE_UUID = '00000ffe-0000-1000-8000-00805f9b34fb';
+function scanFilters(): ScaleScanFilters {
+	return JSON.parse(scaleScanUuids()) as ScaleScanFilters;
+}
 
 /**
  * Coarse state of the scale connection — an alias of
@@ -97,11 +105,13 @@ export class ScaleManager {
 	}
 
 	/**
-	 * Discover, select, and connect a Bookoo scale.
+	 * Discover, select, and connect a supported scale.
 	 *
-	 * Must be called from a user gesture. Filters on the `BOOKOO_SC` name
-	 * prefix; `optionalServices` carries the known Bookoo service so its
-	 * characteristics become accessible once the core reports the exact UUIDs.
+	 * Must be called from a user gesture. Filters on the core's generic scan
+	 * set ({@link scanFilters} — every supported scale's name prefixes);
+	 * `optionalServices` carries every supported scale's service UUID so the
+	 * connected scale's characteristics become accessible once the core
+	 * identifies it and reports the exact per-model UUIDs.
 	 */
 	async connect(): Promise<void> {
 		this.callbacks.onState('connecting');
@@ -117,9 +127,13 @@ export class ScaleManager {
 		// ── Phase 1: gesture-bound discovery + lifecycle wiring (manager) ──
 		let device: BleDevice;
 		try {
+			// Synchronous (free wasm fn) — read it here, inside the gesture,
+			// without an `await` before `requestDevice` (a microtask wouldn't
+			// clear the user activation, but the sync read keeps it simplest).
+			const scan = scanFilters();
 			device = await requestDevice({
-				filters: [{ namePrefix: BOOKOO_NAME_PREFIX }],
-				optionalServices: [BOOKOO_SERVICE_UUID]
+				filters: scan.name_prefixes.map((namePrefix) => ({ namePrefix })),
+				optionalServices: scan.service_uuids
 			});
 		} catch (error) {
 			this.device = null;
@@ -204,6 +218,10 @@ export class ScaleManager {
 		this.device?.disconnect();
 		this.device = null;
 		this.uuids = null;
+		// Reset the core's scale slice so a vanished scale leaves no stale
+		// weight + a reconnect starts clean (the same gap AND4 closed for
+		// Android's ScaleBleManager). Best-effort — never blocks the teardown.
+		await this.core.disconnectScale();
 		this.callbacks.onState('disconnected');
 		this.callbacks.onStatus('Scale disconnected');
 	}
