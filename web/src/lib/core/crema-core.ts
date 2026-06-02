@@ -566,6 +566,33 @@ export interface ScaleCapabilities {
 	 */
 	modes: ModeInfo[];
 	/**
+	 * True when the scale's on-scale LCD is settable — drives the
+	 * shell's "Enable on-scale LCD" toggle UI. Mirrors
+	 * [`Scale::lcd_enable_command`] returning `Some`.
+	 */
+	can_lcd: boolean;
+	/**
+	 * True when the scale accepts a host-driven power-off command.
+	 * Mirrors [`Scale::power_off_command`] returning `Some`.
+	 */
+	can_power_off: boolean;
+	/**
+	 * True when the scale accepts a beep command. Mirrors
+	 * [`Scale::beep_command`] returning `Some`.
+	 */
+	can_beep: boolean;
+	/**
+	 * True when the scale exposes an explicit "set unit to grams"
+	 * command (Eureka, Solo, Difluid). Mirrors
+	 * [`Scale::set_unit_grams_command`] returning `Some`.
+	 */
+	can_set_unit_grams: boolean;
+	/**
+	 * True when the scale exposes a toggle-unit command (Hiroia).
+	 * Mirrors [`Scale::toggle_unit_command`] returning `Some`.
+	 */
+	can_toggle_unit: boolean;
+	/**
 	 * Recommended cadence (milliseconds) between heartbeat writes when
 	 * the scale needs periodic keep-alives — non-null for the Decent
 	 * Scale (keeps its on-scale LCD awake), null for every other scale.

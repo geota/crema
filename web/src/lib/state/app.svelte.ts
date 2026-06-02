@@ -1055,6 +1055,11 @@ export class CremaApp {
 		this.applyCoreOutput(await this.core.powerOffScale());
 	}
 
+	/** Beep the connected scale's buzzer — a test tone / locate-my-scale ping. */
+	async scaleBeep(): Promise<void> {
+		this.applyCoreOutput(await this.core.scaleBeep());
+	}
+
 	/**
 	 * Commit the mains heater voltage to MMR `0x803834`. **Hardware-damaging
 	 * if mis-set** — the caller MUST have gone through `MainsConfirmModal`
