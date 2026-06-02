@@ -48,6 +48,7 @@
 	import ExtractionTimer from './ExtractionTimer.svelte';
 	import ChannelReadout from './ChannelReadout.svelte';
 	import PhaseIndicatorCard from './PhaseIndicatorCard.svelte';
+	import MaxStopConditionsCard, { type StopConditionRow } from './MaxStopConditionsCard.svelte';
 	import BeanContextCard from './BeanContextCard.svelte';
 	import LiveChart from './LiveChart.svelte';
 	import QuickSheet from './QuickSheet.svelte';
@@ -789,13 +790,13 @@
 	}
 
 	/**
-	 * Whether the Yield brew target card should render — gated on
-	 * (a) the active profile having a configured target, AND
-	 * (b) the user having engaged the per-shot dot (above). When either
-	 * is missing the card hides; the user only sees a yield surface when
-	 * a weight-stop is actually going to fire.
+	 * Whether the Yield stop-condition row should render — gated on the active
+	 * profile having a configured weight target (`yieldOut > 0`, the SAW source
+	 * the core stops on) and a positive live target. Deliberately independent of
+	 * the per-shot dot, so the row reflects the profile's configured stop even
+	 * when the dot is toggled off for the current shot.
 	 */
-	const yieldCardVisible = $derived(yieldTargetOn && p.yield > 0);
+	const yieldCardVisible = $derived((activeProfile?.yieldOut ?? 0) > 0 && p.yield > 0);
 	/** Whether to render the Max Volume target card. */
 	const maxVolumeCardVisible = $derived((activeProfile?.maxTotalVolumeMl ?? 0) > 0);
 	/** Volume progress as 0..100 % for the max-volume card's bar. */
@@ -811,6 +812,50 @@
 		const cap = prefs.maxShotDurationS;
 		if (cap <= 0) return 0;
 		return Math.min(100, (elapsedSec / cap) * 100);
+	});
+
+	/**
+	 * Stop-condition rows for `MaxStopConditionsCard`, built from the SAME
+	 * gates/values as the old inline `.crema-target-stack` — only the
+	 * presentation changes, not what shows or when. Yield = weight (scales /
+	 * --tel-weight), Volume = flow (drop-half / --tel-flow), Time = neutral.
+	 */
+	const stopConditionRows = $derived.by<StopConditionRow[]>(() => {
+		const out: StopConditionRow[] = [];
+		if (yieldCardVisible)
+			out.push({
+				key: 'yield',
+				label: 'Yield',
+				icon: 'scales',
+				color: 'var(--tel-weight)',
+				live: shotWeightM.value,
+				target: yieldTarget.value,
+				unit: yieldTarget.unit,
+				pct: yieldPct
+			});
+		if (maxVolumeCardVisible)
+			out.push({
+				key: 'volume',
+				label: 'Volume',
+				icon: 'drop-half',
+				color: 'var(--tel-flow)',
+				live: (ui.dispensedVolume ?? 0).toFixed(0),
+				target: String(activeProfile?.maxTotalVolumeMl ?? ''),
+				unit: 'ml',
+				pct: maxVolumePct
+			});
+		if (maxDurationCardVisible)
+			out.push({
+				key: 'time',
+				label: 'Time',
+				icon: 'timer',
+				color: 'rgba(var(--tint-rgb), 0.6)',
+				live: elapsedSec.toFixed(0),
+				target: String(prefs.maxShotDurationS),
+				unit: 's',
+				pct: maxDurationPct
+			});
+		return out;
 	});
 	/**
 	 * Water-tank volume (ml) for the foot readout — the DE1's `WaterLevel`
@@ -1123,68 +1168,10 @@
 			<div class="crema-dash-timercol">
 				<ExtractionTimer seconds={elapsedSec} step={phaseLabel} />
 				<div class="crema-dash-targets">
-					{#if !beanEditing && (yieldCardVisible || maxVolumeCardVisible || maxDurationCardVisible)}
-						<!-- Consolidated stop-conditions card. Each row is
-						     independently gated on its own target; the card
-						     itself only renders when at least one row would
-						     show. Keeps the left column compact when the
-						     user has multiple guards configured, so the
-						     chart on the right doesn't stretch the layout
-						     past the viewport. -->
-						<div class="crema-target crema-target-stack">
-							<div class="t-eyebrow">Max</div>
-							{#if yieldCardVisible}
-								<div class="crema-target-stack-row">
-									<span class="crema-target-stack-label">Yield</span>
-									<span class="crema-target-stack-val">
-										<span class="crema-target-stack-live">{shotWeightM.value}</span>
-										/ {yieldTarget.value}<span class="crema-target-unit"
-											>{yieldTarget.unit}</span
-										>
-									</span>
-									<div class="crema-target-bar">
-										<div style="width:{yieldPct}%"></div>
-									</div>
-								</div>
-							{/if}
-							{#if maxVolumeCardVisible}
-								<div class="crema-target-stack-row">
-									<span class="crema-target-stack-label">Volume</span>
-									<span class="crema-target-stack-val">
-										<span class="crema-target-stack-live"
-											>{(ui.dispensedVolume ?? 0).toFixed(0)}</span
-										>
-										/ {activeProfile?.maxTotalVolumeMl}<span class="crema-target-unit"
-											>ml</span
-										>
-									</span>
-									<div class="crema-target-bar">
-										<div style="width:{maxVolumePct}%"></div>
-									</div>
-								</div>
-							{/if}
-							{#if maxDurationCardVisible}
-								<div class="crema-target-stack-row">
-									<span class="crema-target-stack-label">Time</span>
-									<span class="crema-target-stack-val">
-										<span class="crema-target-stack-live">{elapsedSec.toFixed(0)}</span>
-										/ {prefs.maxShotDurationS}<span class="crema-target-unit">s</span>
-									</span>
-									<div class="crema-target-bar">
-										<div style="width:{maxDurationPct}%"></div>
-									</div>
-								</div>
-							{/if}
-						</div>
-					{/if}
 					{#if !beanEditing}
-						<div class="crema-target">
-							<div class="t-eyebrow">Ratio</div>
-							<div class="crema-target-val">
-								<span>1:{shotWeight == null ? '—' : (shotWeight / p.dose).toFixed(2)}</span>
-								<span class="crema-target-unit"> · target 1:{ratio}</span>
-							</div>
-						</div>
+						<!-- Consolidated stop-conditions card (Yield / Volume / Time) — one
+						     row per active guard; renders nothing when none apply. -->
+						<MaxStopConditionsCard rows={stopConditionRows} />
 					{/if}
 					<!-- The "Volume" card was retired 2026-05-22: the dispensed
 					     volume now lives as the secondary metric on the Flow

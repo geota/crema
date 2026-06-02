@@ -2,21 +2,31 @@
 	/**
 	 * `PhaseIndicatorCard` — the left-column "where in the shot are we" card.
 	 *
-	 * Renders one row per profile segment, stacked vertically; each row shows
-	 * the segment name (horizontal), its duration, and a slim progress bar.
-	 * This scales to many-phase profiles (8+) gracefully where the older
-	 * horizontal-pill layout got cramped — each row carries its label inline
-	 * instead of stuffing it under a too-narrow segment.
+	 * One row per profile segment: name, duration (with the segment's
+	 * pressure/flow early-exit symbol when it has one), and a progress bar. The
+	 * active row fills from when the DE1 entered that frame
+	 * (`Event::ShotFrameChanged` → `UiSnapshot.shotFrame`), so an early frame
+	 * exit never desyncs the fill from the timer. Falls back to a single
+	 * "No profile" row when no profile is active.
 	 *
-	 * The DE1 reports which frame it is executing via `Event::ShotFrameChanged`,
-	 * folded into `UiSnapshot.shotFrame`; that index drives the active row,
-	 * and the live shot elapsed time fills the active row's bar.
+	 * Aligned to the Crema Android (Compose) reference:
+	 *  - the overall strip flex-GROWS per segment (`flex: <span> 1 0`) instead of
+	 *    a fixed `%` width, so inter-segment gaps are absorbed inside the track
+	 *    rather than pushing the last segment past the card edge;
+	 *  - the per-phase list flex-fills the card's leftover height and scrolls
+	 *    with a scroll-aware edge fade + an auto-centred active row (hidden
+	 *    scrollbar);
+	 *  - each row is a bordered cell; the active one is copper-accented.
 	 *
-	 * Falls back to a single "No profile" row when no profile is active.
+	 * #4a — a segment whose `exit` watches pressure or flow shows that channel's
+	 * symbol by its seconds. Per the product rule, if the DE1 advances to the
+	 * next frame before the segment's set time elapses we treat it as an early
+	 * exit on that criterion and draw a small bar in the channel colour.
 	 *
-	 * Only mounted on the resting Brew dashboard (Quick Sheet closed).
+	 * Presentational — data contract unchanged: `seconds`, `frame`, `segments`.
 	 */
-	import { totalTime, type ProfileSegment } from '$lib/profiles';
+	import { SvelteSet } from 'svelte/reactivity';
+	import type { ExitMetric, ProfileSegment } from '$lib/profiles';
 
 	let {
 		seconds,
@@ -27,10 +37,7 @@
 		seconds: number;
 		/** Zero-based index of the profile frame the DE1 is executing. */
 		frame: number;
-		/**
-		 * The active profile's segments — one row each. `undefined` when no
-		 * profile is active, in which case a neutral placeholder row shows.
-		 */
+		/** The active profile's segments — one row each; `undefined` shows a placeholder. */
 		segments?: readonly ProfileSegment[];
 	} = $props();
 
@@ -39,35 +46,62 @@
 		return seg.name?.trim() || `Frame ${i + 1}`;
 	}
 
-	/**
-	 * Track the shot elapsed-time at which the current `frame` became
-	 * active. The DE1 advances frames on its own schedule — exit
-	 * conditions can end a phase early, so the actual phase boundaries
-	 * are NOT the nominal cumulative `seg.time` sums. Driving the active
-	 * bar off `seconds - activeStartedAt` keeps the fill anchored to the
-	 * frame's REAL start; past frames render full, future frames empty.
-	 *
-	 * Reset on shot start (frame goes back to 0 with seconds ≈ 0) is
-	 * automatic — the `frame !== prevFrame` branch captures the new start.
-	 */
+	/** Phosphor icon for a pressure/flow early-exit channel. */
+	function exitIcon(metric: ExitMetric): string {
+		return metric === 'pressure' ? 'gauge' : 'drop';
+	}
+	/** Channel colour token for a pressure/flow early-exit. */
+	function exitColor(metric: ExitMetric): string {
+		return metric === 'pressure' ? 'var(--tel-pressure)' : 'var(--tel-flow)';
+	}
+
+	// Track the shot elapsed-time at which the current `frame` became active —
+	// the DE1 advances frames on its own schedule (exit conditions end a phase
+	// early), so the real phase boundaries are NOT the nominal cumulative
+	// `seg.time` sums. `earlyExited` collects the ids of frames that ended short
+	// of their set duration, which (per the product rule) means they hit their
+	// pressure/flow exit criterion.
 	let activeStartedAt = $state(0);
 	let prevFrame = $state(-1);
+	const earlyExited = new SvelteSet<string>();
+	/** Slack before a short frame counts as an early exit, seconds. */
+	const EARLY_EXIT_EPS = 0.25;
+
 	$effect(() => {
-		if (frame !== prevFrame) {
-			activeStartedAt = Math.max(0, seconds);
-			prevFrame = frame;
+		const t = Math.max(0, seconds);
+		if (frame === prevFrame) return;
+		// A rewind to an earlier frame means a fresh shot — clear the markers.
+		if (frame < prevFrame) earlyExited.clear();
+		// The frame we're leaving ended at `t`; if that's short of its set
+		// duration, the DE1 hit the segment's early-exit criterion.
+		const segs = segments;
+		if (segs && prevFrame >= 0 && prevFrame < segs.length) {
+			const left = segs[prevFrame];
+			if (left.exit && t - activeStartedAt < left.time - EARLY_EXIT_EPS) {
+				earlyExited.add(left.id);
+			}
 		}
+		activeStartedAt = t;
+		prevFrame = frame;
 	});
 
+	type Row = {
+		id: string;
+		name: string;
+		duration: number;
+		fillPct: number;
+		isActive: boolean;
+		isPast: boolean;
+		exitMetric: ExitMetric | null;
+		exited: boolean;
+	};
+
 	/**
-	 * One row per segment with its progress fill and past/active flags.
-	 * Past frames are always full; the active frame fills from when the
-	 * frame became active until its nominal span elapses; future frames
-	 * are empty. Decoupling fill from cumulative nominal time fixes the
-	 * "next phase doesn't start until the timer catches up" artifact when
-	 * a phase exits early.
+	 * One row per segment with its progress fill, past/active flags, and the
+	 * pressure/flow exit symbol + early-exit marker. Past frames render full;
+	 * the active frame fills from when it became active; future frames empty.
 	 */
-	const rows = $derived.by(() => {
+	const rows = $derived.by<Row[]>(() => {
 		if (!segments || segments.length === 0) {
 			return [
 				{
@@ -76,7 +110,9 @@
 					duration: 0,
 					fillPct: 0,
 					isActive: true,
-					isPast: false
+					isPast: false,
+					exitMetric: null,
+					exited: false
 				}
 			];
 		}
@@ -87,18 +123,17 @@
 			const isPast = i < activeIdx;
 			const isActive = i === activeIdx;
 			let fillPct = 0;
-			if (isPast) {
-				fillPct = 100;
-			} else if (isActive && span > 0) {
-				fillPct = Math.min(100, ((t - activeStartedAt) / span) * 100);
-			}
+			if (isPast) fillPct = 100;
+			else if (isActive && span > 0) fillPct = Math.min(100, ((t - activeStartedAt) / span) * 100);
 			return {
 				id: seg.id,
 				name: tickFor(seg, i),
 				duration: span,
 				fillPct,
 				isActive,
-				isPast
+				isPast,
+				exitMetric: seg.exit?.metric ?? null,
+				exited: earlyExited.has(seg.id)
 			};
 		});
 	});
@@ -107,18 +142,13 @@
 	const activeLabel = $derived(rows.find((r) => r.isActive)?.name ?? 'Ready');
 
 	/**
-	 * Overall-progress strip above the per-phase list: one width-proportional
-	 * pill per segment, no labels. Reuses the same fill / active / past
-	 * state as the per-row bars; widths are proportional to segment time so
-	 * a glance gives a "where in the shot am I" sense even when the list
-	 * below is tall.
+	 * Overall-progress strip: one flex-grow-proportional pill per segment, no
+	 * labels. The `grow` weight ∝ duration (floored so a 0s frame keeps a
+	 * sliver), so the gaps live inside the track and the strip never overflows.
 	 */
-	const totalSec = $derived(
-		segments && segments.length > 0 ? totalTime(segments) : 1
-	);
 	const overall = $derived.by(() => {
 		if (!segments || segments.length === 0) {
-			return [{ id: 'none', widthPct: 100, fillPct: 0, isActive: true, isPast: false }];
+			return [{ id: 'none', grow: 1, fillPct: 0, isActive: true, isPast: false }];
 		}
 		const t = Math.max(0, seconds);
 		const activeIdx = Math.max(0, Math.min(frame, segments.length - 1));
@@ -127,18 +157,9 @@
 			const isPast = i < activeIdx;
 			const isActive = i === activeIdx;
 			let fillPct = 0;
-			if (isPast) {
-				fillPct = 100;
-			} else if (isActive && span > 0) {
-				fillPct = Math.min(100, ((t - activeStartedAt) / span) * 100);
-			}
-			return {
-				id: seg.id,
-				widthPct: totalSec > 0 ? (span / totalSec) * 100 : 0,
-				fillPct,
-				isActive,
-				isPast
-			};
+			if (isPast) fillPct = 100;
+			else if (isActive && span > 0) fillPct = Math.min(100, ((t - activeStartedAt) / span) * 100);
+			return { id: seg.id, grow: Math.max(0.0001, span), fillPct, isActive, isPast };
 		});
 	});
 
@@ -147,6 +168,38 @@
 		if (s <= 0) return '—';
 		return s < 1 ? `${s.toFixed(1)}s` : `${Math.round(s)}s`;
 	}
+
+	// ── Scroll-aware edge fades + active-row auto-centre ──────────────────
+	// An edge only fades when a row is actually scrolled past it, so the
+	// first/last row stays crisp at the extremes (never a half-clipped row).
+	let listEl = $state<HTMLDivElement | null>(null);
+	let atTop = $state(true);
+	let atBottom = $state(true);
+	function updateEdges(): void {
+		const c = listEl;
+		if (!c) return;
+		atTop = c.scrollTop <= 1;
+		atBottom = c.scrollTop + c.clientHeight >= c.scrollHeight - 1;
+	}
+	// Recompute edges after the rows (and thus the scroll height) change.
+	$effect(() => {
+		void rows;
+		requestAnimationFrame(updateEdges);
+	});
+	// Keep the active row centred within the capped list.
+	$effect(() => {
+		const c = listEl;
+		if (!c) return;
+		const el = c.querySelector('.crema-phase-row.is-active') as HTMLElement | null;
+		if (!el) {
+			c.scrollTo({ top: 0, behavior: 'smooth' });
+			return;
+		}
+		const cRect = c.getBoundingClientRect();
+		const eRect = el.getBoundingClientRect();
+		const target = c.scrollTop + (eRect.top - cRect.top) - (c.clientHeight - eRect.height) / 2;
+		c.scrollTo({ top: Math.max(0, target), behavior: 'smooth' });
+	});
 </script>
 
 <div class="crema-target crema-phase">
@@ -154,26 +207,52 @@
 		<div class="t-eyebrow">Phase</div>
 		<div class="crema-phase-name">{activeLabel}</div>
 	</div>
-	<!-- Overall progress: one width-proportional pill per segment, no labels.
-	     Gives the at-a-glance "where am I in the shot" without crowding the
-	     vertical list below. -->
+
+	<!-- Overall progress: one flex-grow-proportional pill per segment.
+	     Never overflows — gaps are absorbed inside the track. -->
 	<div class="crema-phase-overall" aria-hidden="true">
 		{#each overall as seg (seg.id)}
 			<span
 				class="crema-phase-overall-seg"
 				class:is-active={seg.isActive}
 				class:is-past={seg.isPast}
-				style="flex: 0 0 {seg.widthPct}%"
+				style="flex: {seg.grow} 1 0"
 			>
 				<span class="crema-phase-overall-fill" style="width:{seg.fillPct}%"></span>
 			</span>
 		{/each}
 	</div>
-	<div class="crema-phase-list">
+
+	<!-- Per-phase list: flex-fills the card, scrolls with edge fades + a hidden
+	     scrollbar; the active row auto-centres. -->
+	<div
+		class="crema-phase-list"
+		class:at-top={atTop}
+		class:at-bottom={atBottom}
+		bind:this={listEl}
+		onscroll={updateEdges}
+	>
 		{#each rows as row (row.id)}
 			<div class="crema-phase-row" class:is-active={row.isActive} class:is-past={row.isPast}>
 				<span class="crema-phase-row-name">{row.name}</span>
-				<span class="crema-phase-row-time">{formatDuration(row.duration)}</span>
+				<span class="crema-phase-row-time">
+					{#if row.exitMetric}
+						{#if row.exited}
+							<span
+								class="crema-phase-exitbar"
+								style="background:{exitColor(row.exitMetric)}"
+								title="Exited early on {row.exitMetric}"
+							></span>
+						{/if}
+						<i
+							class={'ph ph-' + exitIcon(row.exitMetric)}
+							class:is-fired={row.exited}
+							style="color:{exitColor(row.exitMetric)}"
+							aria-hidden="true"
+						></i>
+					{/if}
+					{formatDuration(row.duration)}
+				</span>
 				<span class="crema-phase-row-bar">
 					<span class="crema-phase-row-fill" style="width:{row.fillPct}%"></span>
 				</span>
