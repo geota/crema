@@ -40,7 +40,15 @@
 		formatWeight
 	} from '$lib/settings';
 	import { getProfileStore, newProfileId, preinfuseSeconds, type CremaProfile } from '$lib/profiles';
-	import { getBeanStore, type Bean } from '$lib/bean';
+	import {
+		getBeanStore,
+		roasterMarkTone,
+		daysOffRoast,
+		roastBand,
+		roastFreshness,
+		type Bean,
+		type Roaster
+	} from '$lib/bean';
 	import { getMaintenanceStore } from '$lib/maintenance';
 	import { getCremaAppContext } from '$lib/shell/app-context';
 	import { getActiveShotStore, getBrewContext, getMachineReadout } from '$lib/state';
@@ -49,7 +57,8 @@
 	import ChannelReadout from './ChannelReadout.svelte';
 	import PhaseIndicatorCard from './PhaseIndicatorCard.svelte';
 	import MaxStopConditionsCard, { type StopConditionRow } from './MaxStopConditionsCard.svelte';
-	import BeanContextCard from './BeanContextCard.svelte';
+	import BrewHeader from './BrewHeader.svelte';
+	import { type PickerItem } from './HeaderPicker.svelte';
 	import LiveChart from './LiveChart.svelte';
 	import QuickSheet from './QuickSheet.svelte';
 	import LastShotCard from './LastShotCard.svelte';
@@ -761,15 +770,6 @@
 	);
 
 	/**
-	 * Whether the BeanContextCard's inline editor is open. Drives the
-	 * collapse of sibling cards in the left column — when the bean form
-	 * is expanded, the Max stack / Ratio / PhaseIndicator / LastShot
-	 * cards hide so the form fits in the column without pushing the
-	 * foot strip out of viewport. Reverts on save / cancel.
-	 */
-	let beanEditing = $state(false);
-
-	/**
 	 * Whether the per-shot weight target is engaged for the next / current
 	 * shot. Reseeds on every active-profile change to mirror the profile's
 	 * own intent: a profile with `yieldOut > 0` engages the target on
@@ -857,6 +857,143 @@
 			});
 		return out;
 	});
+
+	// ── BrewHeader wiring (presentational; reuses the profile + bean stores) ──
+	/** Profile rows for the header's ▾ picker — all profiles, pinned first. */
+	const profilePickerItems = $derived.by<PickerItem[]>(() =>
+		profileStore.all.map((pr) => ({
+			id: pr.id,
+			primary: pr.name,
+			secondary: pr.author || (pr.tags.length ? pr.tags.join(' · ') : undefined),
+			pinned: pr.pinned,
+			segments: pr.segments,
+			search: `${pr.name} ${pr.author ?? ''} ${pr.tags.join(' ')}`.toLowerCase()
+		}))
+	);
+
+	/** The active bean's roaster record (for the avatar mark/tone), or null. */
+	/** Profile identity line — non-espresso beverage type, roast level, tags. */
+	const profileIdentity = $derived.by(() => {
+		const pr = activeProfile;
+		if (!pr) return '';
+		const parts: string[] = [];
+		if (pr.beverageType) parts.push(pr.beverageType[0].toUpperCase() + pr.beverageType.slice(1));
+		if (pr.roast) parts.push(pr.roast[0].toUpperCase() + pr.roast.slice(1));
+		const author = pr.author?.trim();
+		if (author) parts.push(author);
+		return parts.join(' · ');
+	});
+	/** Profile tags — the faint third line. */
+	const profileTags = $derived(
+		activeProfile ? activeProfile.tags.filter((t) => t && t !== 'Built-in').join(' · ') : ''
+	);
+	const activeRoaster = $derived.by<Roaster | null>(() => {
+		const b = beanLibrary.activeBean;
+		if (!b?.roasterId) return null;
+		return beanLibrary.roasters.find((r) => r.id === b.roasterId) ?? null;
+	});
+	const headerBeanName = $derived.by(() => {
+		const b = beanLibrary.activeBean;
+		if (!b) return 'No bean selected';
+		const r = activeRoaster?.name?.trim() ?? '';
+		const t = b.name.trim();
+		return r && t ? `${r} · ${t}` : r || t || 'Untitled bean';
+	});
+	const headerBeanRoast = $derived.by(() => {
+		const b = beanLibrary.activeBean;
+		if (!b) return null;
+		const band = roastBand(b.roastLevel);
+		return band ? band[0].toUpperCase() + band.slice(1) : null;
+	});
+	const headerBeanDaysOff = $derived(
+		beanLibrary.activeBean ? daysOffRoast(beanLibrary.activeBean.roastedOn) : null
+	);
+	const headerFreshLabel = $derived(
+		headerBeanDaysOff != null ? `${headerBeanDaysOff}d off roast` : null
+	);
+	const headerFreshColor = $derived.by(() => {
+		const b = beanLibrary.activeBean;
+		const f = b ? roastFreshness(roastBand(b.roastLevel), headerBeanDaysOff) : null;
+		return f === 'best'
+			? 'var(--success)'
+			: f === 'ok'
+				? 'var(--warning)'
+				: f === 'bad'
+					? 'var(--danger)'
+					: 'rgba(var(--tint-rgb), 0.4)';
+	});
+	const headerBeanMeta = $derived.by(() => {
+		const b = beanLibrary.activeBean;
+		if (!b) return 'Tap ▾ to choose a bag';
+		const loc = [b.origin.country, b.origin.region]
+			.filter((x): x is string => !!x && x.trim() !== '')
+			.map((x) => x.trim())
+			.join(', ');
+		const parts: string[] = [];
+		if (loc) parts.push(loc);
+		const variety = b.origin.variety?.trim();
+		if (variety) parts.push(variety);
+		const proc = b.origin.processing?.trim();
+		if (proc) parts.push(proc);
+		return parts.join(' · ');
+	});
+	/** Second bean meta line — roast level + grind. */
+	/** Bean tags — the faint third line. */
+	const headerBeanTags = $derived(
+		beanLibrary.activeBean ? beanLibrary.activeBean.tags.filter(Boolean).join(' · ') : ''
+	);
+	const headerBeanPrep = $derived.by(() => {
+		const b = beanLibrary.activeBean;
+		if (!b) return '';
+		const parts: string[] = [];
+		if (headerBeanRoast) parts.push(headerBeanRoast);
+		if (b.roastType) parts.push(b.roastType[0].toUpperCase() + b.roastType.slice(1));
+		if (b.mix) parts.push(b.mix[0].toUpperCase() + b.mix.slice(1));
+		parts.push(`Grind ${p.grind}`);
+		return parts.join(' · ');
+	});
+
+	/** Bean rows for the header's ▾ picker — all non-archived, favourites first. */
+	const beanPickerItems = $derived.by<PickerItem[]>(() =>
+		beanLibrary.beans
+			.filter((b) => b.archivedAt == null)
+			.map((b) => {
+				const r = b.roasterId ? (beanLibrary.roasters.find((x) => x.id === b.roasterId) ?? null) : null;
+				const mt = roasterMarkTone(r);
+				const rn = r?.name?.trim() ?? '';
+				const tn = b.name.trim();
+				return {
+					id: b.id,
+					primary: rn && tn ? `${rn} · ${tn}` : rn || tn || 'Untitled bean',
+					secondary: b.origin.country || undefined,
+					pinned: b.favourite,
+					mark: mt.mark,
+					tone: mt.tone,
+					search: `${rn} ${tn} ${b.origin.country ?? ''} ${b.tags.join(' ')}`.toLowerCase()
+				};
+			})
+	);
+
+	/** Profile-upload sync chip for the header, or null when idle. */
+	const profileSyncLabel = $derived(
+		ui.profileUploadProgress
+			? `Uploading… ${ui.profileUploadProgress.acksReceived}/${ui.profileUploadProgress.totalAcks}`
+			: null
+	);
+	const profileSyncTitle = $derived(
+		ui.profileUploadProgress
+			? `Uploading ${ui.profileUploadProgress.title} (${ui.profileUploadProgress.acksReceived}/${ui.profileUploadProgress.totalAcks})`
+			: ''
+	);
+
+	function editActiveProfile(): void {
+		const id = profileStore.activeId;
+		if (id) void goto(resolve(`/profiles/${encodeURIComponent(id)}/edit?from=brew`));
+	}
+	function editActiveBean(): void {
+		const id = beanLibrary.activeBeanId;
+		void goto(resolve(id ? `/beans/${encodeURIComponent(id)}/edit?from=brew` : '/beans'));
+	}
 	/**
 	 * Water-tank volume (ml) for the foot readout — the DE1's `WaterLevel`
 	 * depth (mm) mapped through the de1app tank-geometry table, or `null`
@@ -1034,168 +1171,95 @@
 <div class="qcontain">
 	<div class="crema-dash">
 		<!-- Profile header strip -->
-		<div class="crema-dash-head" class:has-status={modeState !== 'idle'}>
-			<div class="crema-dash-head-l">
-				<div class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Profile</div>
-				<div class="crema-dash-profile">
-					{profileName}
-					<!-- Upload-syncing chip — visible while a profile upload is in
-					     flight (auto-upload-on-connect or manual Load-on-Brew). The
-					     chip vanishes once `ProfileUploadCompleted` clears the
-					     `profileUploadProgress` field. Subtle by design: the user
-					     should notice "it's syncing" without it dominating the
-					     header. -->
-					{#if ui.profileUploadProgress}
-						<span
-							class="crema-profile-sync"
-							title="Uploading {ui.profileUploadProgress.title} ({ui
-								.profileUploadProgress.acksReceived}/{ui.profileUploadProgress.totalAcks})"
-						>
-							<i class="ph ph-arrows-clockwise" aria-hidden="true"></i>
-							Uploading… {ui.profileUploadProgress.acksReceived}/{ui.profileUploadProgress
-								.totalAcks}
-						</span>
-					{/if}
-				</div>
-				<div class="crema-dash-profile-meta">
-					Pre-inf {p.preinf}s · 1:{ratio} ratio · {formatWeight(p.yield, prefs.weightUnit)} target · {formatTemp(p.brewTemp, prefs.tempUnit)}
-				</div>
-				{#if loadedShapeSubline}
-					<!-- DE1-side shape summary — the structure the firmware
-					     actually has loaded (from the connect-time HeaderRead).
-					     Hides itself pre-connect / pre-handshake. The DE1's
-					     HeaderWrite characteristic carries no profile title,
-					     so this is shape-only and complements the title above. -->
-					<div class="crema-dash-profile-loaded">{loadedShapeSubline}</div>
+		<BrewHeader
+			{profileName}
+			profileMeta={`Pre-inf ${p.preinf}s · 1:${ratio} · ${formatWeight(p.yield, prefs.weightUnit)} · ${formatTemp(p.brewTemp, prefs.tempUnit)}`}
+			profileSpec={profileIdentity}
+			profileTags={profileTags}
+			loadedSubline={loadedShapeSubline}
+			syncLabel={profileSyncLabel}
+			syncTitle={profileSyncTitle}
+			canEditProfile={!!profileStore.activeId}
+			profileItems={profilePickerItems}
+			activeProfileId={profileStore.activeId}
+			beanName={headerBeanName}
+			beanMeta={headerBeanMeta}
+			beanPrep={headerBeanPrep}
+			beanTags={headerBeanTags}
+			freshLabel={headerFreshLabel}
+			freshColor={headerFreshColor}
+			beanItems={beanPickerItems}
+			activeBeanId={beanLibrary.activeBeanId}
+			{quickSheetOpen}
+			onEditProfile={editActiveProfile}
+			onSelectProfile={(id) => {
+				profileStore.setActive(id);
+				shotStartError = null;
+			}}
+			onAddProfile={() => void goto(resolve('/profiles/new'))}
+			onProfileLibrary={() => void goto(resolve('/profiles'))}
+			onEditBean={editActiveBean}
+			onSelectBean={(id) => beanLibrary.setActiveBean(id)}
+			onAddBean={() => void goto(resolve('/beans/new'))}
+			onBeanLibrary={() => void goto(resolve('/beans'))}
+			onOpenQuick={() => (quickSheetOpen = true)}
+		>
+			{#snippet status()}
+				{#if ui.machineError != null}
+					<div class="crema-dash-head-mid"><MachineErrorBanner text={ui.machineError} /></div>
+				{:else if shotStartError != null}
+					<div class="crema-dash-head-mid">
+						<MachineErrorBanner text={shotStartError} title="Can't start shot" onDismiss={() => (shotStartError = null)} />
+					</div>
+				{:else if maintVisibleText !== ''}
+					<div class="crema-dash-head-mid">
+						<MachineErrorBanner
+							text={maintVisibleText}
+							title="Maintenance due"
+							variant="warning"
+							onClick={openMaintenance}
+							onDismiss={dismissMaintenance}
+						/>
+					</div>
+				{:else if modeState !== 'idle'}
+					<div class="crema-dash-head-mid">
+						<ModeHeadStatus
+							state={modeState}
+							nameLabel={headStatusName}
+							metaLabel={headStatusMeta}
+							progressPct={modeProgressPct}
+							onCancel={cancelMode}
+						/>
+					</div>
 				{/if}
-			</div>
-			{#if ui.machineError != null}
-				<!-- Firmware-fault banner. Sits in the same header slot as the
-				     mode pill and re-uses its visual skeleton (.mc-head-status
-				     `.is-error` variant) with a red palette so an error reads
-				     with one visual language across the dashboard. Wins over
-				     the mode pill when both could show — an error is the more
-				     important signal. -->
-				<div class="crema-dash-head-mid">
-					<MachineErrorBanner text={ui.machineError} />
-				</div>
-			{:else if shotStartError != null}
-				<!-- Shot-start blocker — the user tapped Coffee in an
-				     invalid state (no active profile selected, or a lazy
-				     re-upload just failed). Re-uses the same `.is-error`
-				     skeleton so the dashboard has one visual language for
-				     "you can't start a shot right now" banners. Dismisses
-				     itself when the user picks a profile (via
-				     `selectFavorite`) or via the inline ✕. -->
-				<div class="crema-dash-head-mid">
-					<MachineErrorBanner
-						text={shotStartError}
-						title="Can't start shot"
-						onDismiss={() => (shotStartError = null)}
-					/>
-				</div>
-			{:else if maintVisibleText !== ''}
-				<!-- Maintenance advisory — yellow banner shown when one of
-				     filter / descale / clean has tripped. Re-uses the
-				     MachineErrorBanner skeleton with the `'warning'`
-				     variant so the dashboard has one visual language for
-				     header advisories. Click routes to Settings → Water &
-				     maintenance; the ✕ dismisses for the session only
-				     (re-shows on next reload so the user can't silence a
-				     real maintenance need permanently). -->
-				<div class="crema-dash-head-mid">
-					<MachineErrorBanner
-						text={maintVisibleText}
-						title="Maintenance due"
-						variant="warning"
-						onClick={openMaintenance}
-						onDismiss={dismissMaintenance}
-					/>
-				</div>
-			{:else if modeState !== 'idle'}
-				<!-- Header mode pill — visible only while a service mode is
-				     running. Sits between the profile-info block (left) and
-				     the Edit / Switch actions (right). -->
-				<div class="crema-dash-head-mid">
-					<ModeHeadStatus
-						state={modeState}
-						nameLabel={headStatusName}
-						metaLabel={headStatusMeta}
-						progressPct={modeProgressPct}
-						onCancel={cancelMode}
-					/>
-				</div>
-			{/if}
-			<div class="crema-dash-head-r">
-				{#if !quickSheetOpen}
-					<!-- QuickPill — reopens the docked Quick Sheet once it's closed. -->
-					<button class="qcpill is-dark" onclick={() => (quickSheetOpen = true)}>
-						<i class="ph ph-sliders-horizontal" aria-hidden="true"></i>
-						<span>Quick Controls</span>
-					</button>
-				{/if}
-				<!--
-					Edit jumps to the profile editor for the active library
-					profile. Disabled when no profile is selected (matches the
-					Coffee button's no-profile gate). "Switch profile" used to
-					live here too — retired since the same affordance is in
-					the Profiles tab + the unified FavoritesStrip's pinned chips
-					(profiles + beans) in Quick Controls.
-				-->
-				<button
-					class="crema-btn crema-btn-secondaryDark crema-btn-sm"
-					disabled={!profileStore.activeId}
-					onclick={() => {
-						const id = profileStore.activeId;
-						if (id) {
-							// `?from=brew` so the editor's Back + Save return to
-							// the brew page rather than dumping the user in the
-							// profile library.
-							void goto(
-								resolve(`/profiles/${encodeURIComponent(id)}/edit?from=brew`)
-							);
-						}
-					}}
-				>
-					<i class="ph ph-pencil-simple" aria-hidden="true"></i>
-					<span>Edit</span>
-				</button>
-			</div>
-		</div>
+			{/snippet}
+		</BrewHeader>
 
 		<!-- Main grid: timer + targets | readouts + chart -->
 		<div class="crema-dash-main">
 			<div class="crema-dash-timercol">
 				<ExtractionTimer seconds={elapsedSec} step={phaseLabel} />
 				<div class="crema-dash-targets">
-					{#if !beanEditing}
-						<!-- Consolidated stop-conditions card (Yield / Volume / Time) — one
-						     row per active guard; renders nothing when none apply. -->
-						<MaxStopConditionsCard rows={stopConditionRows} />
-					{/if}
-					<!-- The "Volume" card was retired 2026-05-22: the dispensed
-					     volume now lives as the secondary metric on the Flow
-					     channel card (right column), and the water-tank level
-					     stays on the foot strip. The card's left-column slot is
-					     left empty so PhaseIndicator / Bean / LastShot fill the
-					     space naturally. -->
-					<!-- Phase + Bean cards only fit the left column when the Quick
-					     Sheet is closed; the open sheet would overlap them. -->
+					<!-- Stop-conditions (Yield / Volume / Time) — renders nothing when none apply. -->
+					<MaxStopConditionsCard rows={stopConditionRows} />
+					<!-- Brew ratio — live during a shot, then the last shot's, vs target. -->
+					<div class="crema-target">
+						<div class="t-eyebrow">Ratio</div>
+						<div class="crema-target-val">
+							<span>1:{shotWeight == null ? '—' : (shotWeight / p.dose).toFixed(2)}</span>
+							<span class="crema-target-unit"> · target 1:{ratio}</span>
+						</div>
+					</div>
+					<!-- Phase + Last-shot only fit the left column when the Quick Sheet is
+					     closed; the open sheet would overlap them. The Phase card flex-grows
+					     to fill the column's remaining height. -->
 					{#if !quickSheetOpen}
-						{#if !beanEditing}
-							<PhaseIndicatorCard
-								seconds={elapsedSec}
-								frame={ui.shotFrame}
-								segments={activeProfile?.segments}
-							/>
-						{/if}
-						<BeanContextCard
-							grind={p.grind}
-							onEditingChange={(v) => (beanEditing = v)}
+						<PhaseIndicatorCard
+							seconds={elapsedSec}
+							frame={ui.shotFrame}
+							segments={activeProfile?.segments}
 						/>
-						{#if !beanEditing && showLastShot && lastShot}
-							<!-- The just-finished shot's result — the bottom card of
-							     the left column, shown until the next shot starts. -->
+						{#if showLastShot && lastShot}
 							<LastShotCard shot={lastShot} dose={p.dose} />
 						{/if}
 					{/if}
