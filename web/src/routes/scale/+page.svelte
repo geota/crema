@@ -33,23 +33,24 @@
 	const ctx = getCremaAppContext();
 	const profiles = getProfileStore();
 	const settings = getSettingsStore();
-	/** The reactive preference bundle — `prefs.weightUnit` drives the LCD-unit row. */
+	/** The reactive preference bundle — `prefs.weightUnit` drives the display-unit row. */
 	const prefs = $derived(settings.current);
 
 	/** The shared orchestrator, or `null` while the wasm core loads. */
 	const app = $derived(ctx().app);
 
 	/**
-	 * Toggle the Decent Scale LCD unit. Bound to the global
-	 * `Settings.weightUnit`, so toggling here mirrors the Display
-	 * section. The push to the core + immediate LCD re-emit handle
-	 * the visible-on-scale behaviour.
+	 * Set the connected scale's on-display weight unit. Bound to the global
+	 * `Settings.weightUnit`, so toggling here mirrors the Display section.
+	 * `refreshScaleLcd` re-emits the per-scale unit/LCD packet — itself
+	 * capability-gated, so it's a no-op on scales without a software-set
+	 * unit (the row is only shown when one of those capabilities is present).
 	 */
 	async function setLcdUnit(unit: 'g' | 'oz'): Promise<void> {
 		settings.set('weightUnit', unit);
 		if (!app) return;
 		await app.applyWeightUnitPref(unit);
-		await app.refreshDecentScaleLcd();
+		await app.refreshScaleLcd();
 	}
 	/** The reactive UI snapshot — the screen renders off this. */
 	const snap = $derived(app?.state.current ?? null);
@@ -154,6 +155,28 @@
 	/** Whether auto-standby is "on" — i.e. a non-zero timeout. */
 	const autoSleepOn = $derived(standbyMinutes > 0);
 
+	/**
+	 * Whether the connected scale exposes any *adjustable* setting — drives the
+	 * Quick-settings empty state so an empty card never reads as a bug. Sensor
+	 * capabilities (`reports_flow` / `reports_timer`) and the heartbeat cadence
+	 * don't count: they produce readouts, not controls. False when no scale is
+	 * linked (`caps` is null) or a plain weight-only scale is connected.
+	 */
+	const hasScaleSettings = $derived(
+		!!caps &&
+			(caps.flow_smoothing ||
+				caps.anti_mistouch ||
+				caps.auto_stop ||
+				!!caps.standby ||
+				!!caps.volume ||
+				caps.modes.length > 0 ||
+				caps.can_lcd ||
+				caps.can_set_unit_grams ||
+				caps.can_toggle_unit ||
+				caps.can_beep ||
+				caps.can_power_off)
+	);
+
 	// Brew-behaviour toggles (auto-tare on shot start, stop on weight)
 	// moved to Settings → Brew defaults → Shot behaviour, mirrored on
 	// the Quick Controls. The Scale page surfaces only scale-capability
@@ -198,6 +221,16 @@
 	function toggleAutoStop(): void {
 		if (!caps?.auto_stop) return;
 		app?.setScaleAutoStop(autoStopOn ? 0 : 1);
+	}
+
+	/** Beep the scale's buzzer — a locate / test-tone ping. Capability-gated. */
+	function beep(): void {
+		if (caps?.can_beep) void app?.scaleBeep();
+	}
+
+	/** Power the scale off (re-power + reconnect to use it again). Capability-gated. */
+	function powerOff(): void {
+		if (caps?.can_power_off) void app?.powerOffScale();
 	}
 
 	// ── Reset-peak ───────────────────────────────────────────────────────
@@ -470,37 +503,54 @@
 		<div class="sc-settings">
 			<div class="sc-settings-head">Quick settings</div>
 
-			<!-- Filter strength → flow-smoothing (real capability) -->
-			<div class="sc-set-row">
-				<div>
-					<div class="sc-set-title">Flow smoothing</div>
-					<div class="sc-set-sub">
-						Smooths the scale's live mass-flow readout. Calmer, slower to settle.
-					</div>
+			<!-- Empty state — settings are capability-gated, so a scale with no
+			     adjustable features (or no scale at all) would otherwise leave
+			     this card blank and looking broken. Spell out why. -->
+			{#if !hasScaleSettings}
+				<div class="sc-settings-empty">
+					{#if connected && caps}
+						<i class="ph ph-sliders-horizontal" aria-hidden="true"></i>
+						<span>This scale reports no adjustable settings — it works as a plain weight readout.</span>
+					{:else}
+						<i class="ph ph-plugs" aria-hidden="true"></i>
+						<span>Connect a scale to adjust its settings — they'll appear here automatically.</span>
+					{/if}
 				</div>
-				<button
-					class="qmini-tog"
-					class:on={flowSmoothing}
-					onclick={toggleFlowSmoothing}
-					disabled={!caps?.flow_smoothing}
-					aria-label="Flow smoothing"
-				></button>
-			</div>
+			{/if}
+
+			<!-- Filter strength → flow-smoothing (real capability) -->
+			{#if caps?.flow_smoothing}
+				<div class="sc-set-row">
+					<div>
+						<div class="sc-set-title">Flow smoothing</div>
+						<div class="sc-set-sub">
+							Smooths the scale's live mass-flow readout. Calmer, slower to settle.
+						</div>
+					</div>
+					<button
+						class="qmini-tog"
+						class:on={flowSmoothing}
+						onclick={toggleFlowSmoothing}
+						aria-label="Flow smoothing"
+					></button>
+				</div>
+			{/if}
 
 			<!-- Anti-mistouch (real capability) -->
-			<div class="sc-set-row">
-				<div>
-					<div class="sc-set-title">Anti-mistouch</div>
-					<div class="sc-set-sub">Ignore accidental taps on the scale's buttons.</div>
+			{#if caps?.anti_mistouch}
+				<div class="sc-set-row">
+					<div>
+						<div class="sc-set-title">Anti-mistouch</div>
+						<div class="sc-set-sub">Ignore accidental taps on the scale's buttons.</div>
+					</div>
+					<button
+						class="qmini-tog"
+						class:on={antiMistouch}
+						onclick={toggleAntiMistouch}
+						aria-label="Anti-mistouch"
+					></button>
 				</div>
-				<button
-					class="qmini-tog"
-					class:on={antiMistouch}
-					onclick={toggleAntiMistouch}
-					disabled={!caps?.anti_mistouch}
-					aria-label="Anti-mistouch"
-				></button>
-			</div>
+			{/if}
 
 			<!-- Auto-stop (capability-gated, hidden when not supported) -->
 			{#if caps?.auto_stop}
@@ -523,25 +573,26 @@
 			{/if}
 
 			<!-- Auto-sleep ↔ standby timeout (real capability) -->
-			<div class="sc-set-row">
-				<div>
-					<div class="sc-set-title">Auto-sleep</div>
-					<div class="sc-set-sub">
-						{#if autoSleepOn}
-							Sleeps after {standbyMinutes} min of no activity.
-						{:else}
-							Put the scale to sleep after a few minutes of no activity.
-						{/if}
+			{#if caps?.standby}
+				<div class="sc-set-row">
+					<div>
+						<div class="sc-set-title">Auto-sleep</div>
+						<div class="sc-set-sub">
+							{#if autoSleepOn}
+								Sleeps after {standbyMinutes} min of no activity.
+							{:else}
+								Put the scale to sleep after a few minutes of no activity.
+							{/if}
+						</div>
 					</div>
+					<button
+						class="qmini-tog"
+						class:on={autoSleepOn}
+						onclick={toggleAutoSleep}
+						aria-label="Auto-sleep"
+					></button>
 				</div>
-				<button
-					class="qmini-tog"
-					class:on={autoSleepOn}
-					onclick={toggleAutoSleep}
-					disabled={!caps?.standby}
-					aria-label="Auto-sleep"
-				></button>
-			</div>
+			{/if}
 
 			<!-- Beeper volume ↔ volume RangeCapability (F2 — real capability).
 			     The polished page dropped this control; the volume range and
@@ -580,15 +631,18 @@
 				</div>
 			{/if}
 
-			<!-- Decent Scale LCD unit — the on-scale LCD displays the user's
-			     preferred weight unit. Bound to the global `Settings.weightUnit`
-			     so toggling here mirrors the Display section (and vice versa).
-			     Capability-gated to scales that have a software-controlled
-			     LCD (Decent today). -->
-			{#if scaleName === 'Decent Scale'}
+			<!-- On-scale display unit — the scale's own LCD/readout shows the
+			     user's preferred weight unit. Bound to the global
+			     `Settings.weightUnit` so toggling here mirrors the Display
+			     section (and vice versa). Capability-gated to scales whose
+			     displayed unit is software-controlled (Decent LCD, Skale,
+			     Eureka, Difluid, Hiroia …); the handler re-emits via
+			     `refreshScaleLcd`, itself a no-op on scales without the
+			     underlying command. -->
+			{#if caps?.can_lcd || caps?.can_set_unit_grams || caps?.can_toggle_unit}
 				<div class="sc-set-row">
 					<div>
-						<div class="sc-set-title">LCD unit</div>
+						<div class="sc-set-title">Display unit</div>
 						<div class="sc-set-sub">
 							What the on-scale display reads in. Mirrors the global Display
 							setting.
@@ -604,6 +658,39 @@
 							onclick={() => setLcdUnit('oz')}>oz</button
 						>
 					</div>
+				</div>
+			{/if}
+
+			<!-- Beep — a capability action: pulse the scale's buzzer to locate
+			     it or test the tone. -->
+			{#if caps?.can_beep}
+				<div class="sc-set-row">
+					<div>
+						<div class="sc-set-title">Beep</div>
+						<div class="sc-set-sub">Pulse the scale's buzzer — handy to locate it or test the tone.</div>
+					</div>
+					<button type="button" class="sc-secondary" onclick={beep} disabled={!connected}>
+						<i class="ph ph-speaker-high" aria-hidden="true"></i>Beep
+					</button>
+				</div>
+			{/if}
+
+			<!-- Power off — a capability action; last in the list since it ends
+			     the session (re-power the scale + reconnect to use it again). -->
+			{#if caps?.can_power_off}
+				<div class="sc-set-row">
+					<div>
+						<div class="sc-set-title">Power off</div>
+						<div class="sc-set-sub">Turn the scale off. You'll need to power it back on to reconnect.</div>
+					</div>
+					<button
+						type="button"
+						class="sc-secondary sc-set-danger"
+						onclick={powerOff}
+						disabled={!connected}
+					>
+						<i class="ph ph-power" aria-hidden="true"></i>Power off
+					</button>
 				</div>
 			{/if}
 
@@ -868,6 +955,12 @@
 	.sc-secondary:disabled {
 		opacity: 0.45;
 		cursor: not-allowed;
+	}
+	/* Power-off: a destructive action — stays neutral until hovered, then reds. */
+	.sc-set-danger:hover:not(:disabled) {
+		background: rgba(var(--danger-rgb), 0.12);
+		border-color: rgba(var(--danger-rgb), 0.4);
+		color: var(--danger);
 	}
 	.sc-timer-row {
 		display: flex;
@@ -1134,6 +1227,27 @@
 		font-family: var(--font-sans);
 		font-size: 12px;
 		color: rgba(var(--tint-rgb), 0.4);
+	}
+	/* Quick-settings empty state — centred icon + line, reads as deliberate
+	   (not a failed load) when the scale exposes no adjustable settings. */
+	.sc-settings-empty {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		text-align: center;
+		gap: 10px;
+		padding: 28px 16px 12px;
+		font-family: var(--font-sans);
+		font-size: 12.5px;
+		line-height: 1.5;
+		color: rgba(var(--tint-rgb), 0.45);
+	}
+	.sc-settings-empty i {
+		font-size: 24px;
+		color: rgba(var(--tint-rgb), 0.3);
+	}
+	.sc-settings-empty span {
+		max-width: 32ch;
 	}
 
 	@media (max-width: 900px) {
