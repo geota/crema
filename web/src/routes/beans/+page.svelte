@@ -1,4 +1,18 @@
 <script lang="ts">
+	import Icon from '$lib/icons/Icon.svelte';
+	import ArchiveIcon from 'phosphor-svelte/lib/ArchiveIcon';
+	import CaretDownIcon from 'phosphor-svelte/lib/CaretDownIcon';
+	import CoffeeBeanIcon from 'phosphor-svelte/lib/CoffeeBeanIcon';
+	import FunnelXIcon from 'phosphor-svelte/lib/FunnelXIcon';
+	import LightningIcon from 'phosphor-svelte/lib/LightningIcon';
+	import LinkIcon from 'phosphor-svelte/lib/LinkIcon';
+	import ListChecksIcon from 'phosphor-svelte/lib/ListChecksIcon';
+	import MagnifyingGlassIcon from 'phosphor-svelte/lib/MagnifyingGlassIcon';
+	import PlusIcon from 'phosphor-svelte/lib/PlusIcon';
+	import SnowflakeIcon from 'phosphor-svelte/lib/SnowflakeIcon';
+	import StorefrontIcon from 'phosphor-svelte/lib/StorefrontIcon';
+	import UploadSimpleIcon from 'phosphor-svelte/lib/UploadSimpleIcon';
+	import XIcon from 'phosphor-svelte/lib/XIcon';
 	/**
 	 * `/beans` — the bean library + roaster directory.
 	 *
@@ -645,7 +659,7 @@
 		</div>
 		<div class="bn-head-r">
 			<label class="bn-search">
-				<i class="ph ph-magnifying-glass" aria-hidden="true"></i>
+				<MagnifyingGlassIcon aria-hidden="true" />
 				<input bind:value={q} placeholder="Search beans, roasters, origin…" />
 				{#if q}
 					<button
@@ -653,7 +667,7 @@
 						onclick={() => (q = '')}
 						aria-label="Clear"
 					>
-						<i class="ph ph-x"></i>
+						<XIcon aria-hidden="true" />
 					</button>
 				{/if}
 			</label>
@@ -662,7 +676,7 @@
 				onclick={() => (importOpen = true)}
 				title="Import a Crema .jsonl or Beanconqueror .zip"
 			>
-				<i class="ph ph-upload-simple"></i> Import
+				<UploadSimpleIcon aria-hidden="true" /> Import
 			</button>
 
 			<!-- Export split-button — primary fires the Crema .jsonl
@@ -710,8 +724,8 @@
 					aria-expanded={addMenuOpen}
 					title="Add bean, roaster, or import"
 				>
-					<i class="ph ph-plus"></i> Add
-					<i class="ph ph-caret-down bn-split-caret"></i>
+					<PlusIcon aria-hidden="true" /> Add
+					<CaretDownIcon class="bn-split-caret" aria-hidden="true" />
 				</button>
 				{#if addMenuOpen}
 					<div class="bn-split-menu" role="menu">
@@ -724,7 +738,7 @@
 								quickAddOpen = true;
 							}}
 						>
-							<i class="ph-duotone ph-lightning" aria-hidden="true"></i>
+							<LightningIcon weight="duotone" aria-hidden="true" />
 							<div class="bn-split-menu-text">
 								<div class="bn-split-menu-title">Quick add bean</div>
 								<div class="bn-split-menu-sub">
@@ -740,7 +754,7 @@
 								gotoNew();
 							}}
 						>
-							<i class="ph-duotone ph-list-checks" aria-hidden="true"></i>
+							<ListChecksIcon weight="duotone" aria-hidden="true" />
 							<div class="bn-split-menu-text">
 								<div class="bn-split-menu-title">Full editor bean</div>
 								<div class="bn-split-menu-sub">
@@ -756,7 +770,7 @@
 								gotoNewRoaster();
 							}}
 						>
-							<i class="ph-duotone ph-storefront" aria-hidden="true"></i>
+							<StorefrontIcon weight="duotone" aria-hidden="true" />
 							<div class="bn-split-menu-text">
 								<div class="bn-split-menu-title">Roaster</div>
 								<div class="bn-split-menu-sub">
@@ -773,7 +787,7 @@
 								importOpen = true;
 							}}
 						>
-							<i class="ph-duotone ph-upload-simple" aria-hidden="true"></i>
+							<UploadSimpleIcon weight="duotone" aria-hidden="true" />
 							<div class="bn-split-menu-text">
 								<div class="bn-split-menu-title">Import from Beanconqueror</div>
 								<div class="bn-split-menu-sub">
@@ -798,7 +812,7 @@
 				class:is-active={tab === 'bags'}
 				onclick={() => (tab = 'bags')}
 			>
-				<i class="ph-duotone ph-coffee-bean" aria-hidden="true"></i>
+				<CoffeeBeanIcon weight="duotone" aria-hidden="true" />
 				<span>Bags</span>
 				<span class="bn-tab-count">{counts.all}</span>
 			</button>
@@ -807,7 +821,7 @@
 				class:is-active={tab === 'roasters'}
 				onclick={() => (tab = 'roasters')}
 			>
-				<i class="ph-duotone ph-storefront" aria-hidden="true"></i>
+				<StorefrontIcon weight="duotone" aria-hidden="true" />
 				<span>Roasters</span>
 				<span class="bn-tab-count">{allRoasters.length}</span>
 			</button>
@@ -819,7 +833,7 @@
 			</div>
 			{#if status !== 'all' || roast !== null || selectedTags.length > 0}
 				<button class="bn-chip-clear" onclick={clearFilters}>
-					<i class="ph ph-x"></i> Clear
+					<XIcon aria-hidden="true" /> Clear
 				</button>
 			{/if}
 			<div class="bn-toolbar-r">
@@ -841,7 +855,7 @@
 			{/if}
 			{#if roasterRegion !== 'all'}
 				<button class="bn-chip-clear" onclick={() => (roasterRegion = 'all')}>
-					<i class="ph ph-x"></i> Clear
+					<XIcon aria-hidden="true" /> Clear
 				</button>
 			{/if}
 			<div class="bn-toolbar-r">
@@ -855,7 +869,7 @@
 						onclick={() => (showDuplicates = !showDuplicates)}
 						title={showDuplicates ? 'Hide merged duplicates' : 'Show merged duplicates'}
 					>
-						<i class={showDuplicates ? 'ph-fill ph-eye' : 'ph ph-eye-slash'}></i>
+						<Icon cls={showDuplicates ? 'ph-fill ph-eye' : 'ph ph-eye-slash'} />
 						{showDuplicates ? 'Hide dupes' : 'Show dupes'}
 					</button>
 				{/if}
@@ -875,7 +889,7 @@
 					onclick={gotoNewRoaster}
 					title="Create a new roaster"
 				>
-					<i class="ph ph-plus"></i> New roaster
+					<PlusIcon aria-hidden="true" /> New roaster
 				</button>
 			</div>
 		{/if}
@@ -912,7 +926,7 @@
 															/>
 							{/each}
 							<button class="bn-tile-new" onclick={() => (quickAddOpen = true)}>
-								<div class="bn-tile-new-glyph"><i class="ph ph-plus"></i></div>
+								<div class="bn-tile-new-glyph"><PlusIcon aria-hidden="true" /></div>
 								<div class="bn-tile-new-label">Add a bean</div>
 								<div class="bn-tile-new-sub">
 									Or paste a Beanconqueror link, drop a label photo.
@@ -925,7 +939,7 @@
 					<section class="bn-section">
 						<header class="bn-section-head">
 							<h2 class="bn-section-title">
-								<i class="ph ph-snowflake" style="color: var(--info)"></i> Frozen
+								<SnowflakeIcon style="color: var(--info)" aria-hidden="true" /> Frozen
 							</h2>
 							<span class="bn-section-count">{sectionedBags.frozen.length}</span>
 							<span class="bn-section-rule"></span>
@@ -951,8 +965,7 @@
 					<section class="bn-section bn-section-archived">
 						<header class="bn-section-head">
 							<h2 class="bn-section-title">
-								<i class="ph ph-archive" style="color: rgba(var(--tint-rgb), 0.4)"
-								></i>
+								<ArchiveIcon style="color: rgba(var(--tint-rgb), 0.4)" aria-hidden="true" />
 								Archived
 							</h2>
 							<span class="bn-section-count">{sectionedBags.archived.length}</span>
@@ -976,10 +989,10 @@
 				{/if}
 				{#if filtered.length === 0}
 					<div class="bn-empty-filter">
-						<i class="ph-duotone ph-funnel-x" aria-hidden="true"></i>
+						<FunnelXIcon weight="duotone" aria-hidden="true" />
 						<div>No bags match these filters.</div>
 						<button class="bn-btn bn-btn-ghost" onclick={clearFilters}>
-							<i class="ph ph-x"></i> Clear filters
+							<XIcon aria-hidden="true" /> Clear filters
 						</button>
 					</div>
 				{/if}
@@ -992,7 +1005,7 @@
 				{#each dupes as d (d.dupe.id)}
 					<section class="bn-merge-banner">
 						<div class="bn-merge-banner-mark">
-							<i class="ph ph-link"></i>
+							<LinkIcon aria-hidden="true" />
 						</div>
 						<div class="bn-merge-banner-text">
 							<div class="bn-merge-banner-title">
@@ -1042,7 +1055,7 @@
 					     a bean" dashed tile so the two directories share an
 					     identical entry-point shape. -->
 					<button class="bn-roaster-tile-new" onclick={gotoNewRoaster}>
-						<div class="bn-tile-new-glyph"><i class="ph ph-plus"></i></div>
+						<div class="bn-tile-new-glyph"><PlusIcon aria-hidden="true" /></div>
 						<div class="bn-tile-new-label">New roaster</div>
 						<div class="bn-tile-new-sub">
 							Add a roastery before (or instead of) attaching it to a bag.
@@ -1051,7 +1064,7 @@
 				</div>
 				{#if roasterRows.length === 0}
 					<div class="bn-empty-filter">
-						<i class="ph-duotone ph-storefront" aria-hidden="true"></i>
+						<StorefrontIcon weight="duotone" aria-hidden="true" />
 						<div>
 							{allRoasters.length === 0
 								? "No roasters yet. Click " + 'New roaster' + " to add one."
@@ -1147,7 +1160,7 @@
 	.bn-search:focus-within {
 		border-color: rgba(var(--tint-rgb), 0.2);
 	}
-	.bn-search i {
+	.bn-search :global(svg) {
 		color: rgba(var(--tint-rgb), 0.45);
 		font-size: 14px;
 	}
@@ -1219,7 +1232,7 @@
 	.bn-split-main.bn-split-solo {
 		border-radius: var(--radius-pill);
 	}
-	.bn-split-caret {
+	:global(.bn-split-caret) {
 		margin-left: 4px;
 		font-size: 11px;
 		opacity: 0.75;
@@ -1263,7 +1276,7 @@
 	.bn-split-menu-item:hover {
 		background: rgba(var(--tint-rgb), 0.06);
 	}
-	.bn-split-menu-item i {
+	.bn-split-menu-item :global(svg) {
 		font-size: 18px;
 		color: var(--copper-400);
 		margin-top: 2px;
@@ -1357,7 +1370,7 @@
 		border-radius: var(--radius-pill);
 		transition: all var(--dur-1) var(--ease);
 	}
-	.bn-tab i {
+	.bn-tab :global(svg) {
 		font-size: 16px;
 	}
 	.bn-tab:hover {
@@ -1429,7 +1442,7 @@
 		color: var(--fg-1);
 		margin: 0;
 	}
-	.bn-section-title i {
+	.bn-section-title :global(svg) {
 		font-size: 13px;
 	}
 	.bn-section-count {
@@ -1519,7 +1532,7 @@
 		font-size: 13px;
 		color: rgba(var(--tint-rgb), 0.55);
 	}
-	.bn-empty-filter i {
+	.bn-empty-filter :global(svg) {
 		font-size: 48px;
 		color: rgba(var(--tint-rgb), 0.3);
 		margin-bottom: 4px;

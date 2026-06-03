@@ -1,4 +1,5 @@
 <script lang="ts">
+	import Icon from '$lib/icons/Icon.svelte';
 	/**
 	 * `StMaintenanceCard` — one maintenance metric card (filter / descale /
 	 * clean). Ported from the design's `MaintenanceCard`.
@@ -54,7 +55,7 @@
 
 <div class="st-maint" class:is-wide={wide}>
 	<div class="st-maint-head">
-		<i class={'ph-duotone ph-' + icon} aria-hidden="true"></i>
+		<Icon cls={'ph-duotone ph-' + icon} aria-hidden="true" />
 		<div class="st-maint-title">{title}</div>
 	</div>
 	<div class="st-maint-state" class:is-warn={!stateOk}>{stateText}</div>

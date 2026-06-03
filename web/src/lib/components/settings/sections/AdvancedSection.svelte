@@ -1,4 +1,6 @@
 <script lang="ts">
+	import UploadSimpleIcon from 'phosphor-svelte/lib/UploadSimpleIcon';
+	import WarningIcon from 'phosphor-svelte/lib/WarningIcon';
 	/**
 	 * Advanced section — telemetry display toggles, integration stubs, and the
 	 * reset actions.
@@ -492,7 +494,7 @@
 		{#snippet control()}
 			<div class="rp-control">
 				<label class="st-btn st-btn-secondary rp-pick" class:rp-disabled={!app || replayRunning}>
-					<i class="ph ph-upload-simple" aria-hidden="true"></i>
+					<UploadSimpleIcon aria-hidden="true" />
 					<span>Choose file…</span>
 					<input
 						type="file"
@@ -604,7 +606,7 @@
 	>
 		{#snippet control()}
 			<button type="button" class="st-btn st-btn-danger" onclick={factoryReset}>
-				<i class="ph ph-warning" aria-hidden="true"></i>Factory reset
+				<WarningIcon aria-hidden="true" />Factory reset
 			</button>
 		{/snippet}
 	</StRow>

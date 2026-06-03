@@ -29,7 +29,7 @@
   cursor: pointer;
 }
 .pe-back:hover { background: rgba(var(--tint-rgb), 0.08); }
-.pe-back i { font-size: 13px; }
+.pe-back :is(i, svg) { font-size: 13px; }
 
 .pe-topbar-r {
   display: flex; align-items: center; gap: 8px;
@@ -198,7 +198,7 @@
   transition: all var(--dur-1) var(--ease);
 }
 .pe-tag-add:hover { color: var(--fg-1); border-color: rgba(var(--tint-rgb), 0.4); }
-.pe-tag-add i { font-size: 12px; }
+.pe-tag-add :is(i, svg) { font-size: 12px; }
 .pe-tag-input {
   background: rgba(var(--tint-rgb), 0.05);
   border: 1px solid var(--copper-500);
@@ -433,4 +433,4 @@
   transition: all var(--dur-1) var(--ease);
 }
 .pe-btn-ghost:hover { color: var(--fg-1); border-color: rgba(var(--tint-rgb), 0.18); }
-.pe-btn-ghost i { font-size: 13px; }
+.pe-btn-ghost :is(i, svg) { font-size: 13px; }

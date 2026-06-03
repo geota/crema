@@ -1,4 +1,7 @@
 <script lang="ts">
+	import BugIcon from 'phosphor-svelte/lib/BugIcon';
+	import MinusIcon from 'phosphor-svelte/lib/MinusIcon';
+	import XIcon from 'phosphor-svelte/lib/XIcon';
 	/**
 	 * `DebugPanel` — middle-right floating overlay that mirrors the shared
 	 * `UiSnapshot.eventLog`, shown when `prefs.showDebugPanel` is on
@@ -50,13 +53,13 @@
 			aria-label="Open debug panel"
 			title="Open debug panel"
 		>
-			<i class="ph ph-bug" aria-hidden="true"></i>
+			<BugIcon aria-hidden="true" />
 		</button>
 	{:else}
 		<aside class="dbg" role="region" aria-label="Debug event log">
 			<div class="dbg-head">
 				<div class="dbg-title">
-					<i class="ph ph-bug" aria-hidden="true"></i>
+					<BugIcon aria-hidden="true" />
 					Debug
 				</div>
 				<div class="dbg-meta">{eventLog.length}</div>
@@ -67,7 +70,7 @@
 					aria-label="Minimize"
 					title="Minimize (click the chip on the right edge to re-open)"
 				>
-					<i class="ph ph-minus" aria-hidden="true"></i>
+					<MinusIcon aria-hidden="true" />
 				</button>
 				<button
 					type="button"
@@ -76,7 +79,7 @@
 					aria-label="Disable debug panel"
 					title="Disable (Settings → Advanced → Show debug panel re-enables)"
 				>
-					<i class="ph ph-x" aria-hidden="true"></i>
+					<XIcon aria-hidden="true" />
 				</button>
 			</div>
 			<div class="dbg-body">

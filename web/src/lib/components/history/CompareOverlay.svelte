@@ -1,4 +1,6 @@
 <script lang="ts">
+	import Icon from '$lib/icons/Icon.svelte';
+	import XIcon from 'phosphor-svelte/lib/XIcon';
 	/**
 	 * `CompareOverlay` — full-screen modal that overlays multiple recorded
 	 * shots on a single chart so the user can compare them side-by-side. One
@@ -320,7 +322,7 @@
 				</div>
 			</div>
 			<button class="cmp-close" type="button" onclick={close} aria-label="Close">
-				<i class="ph ph-x" aria-hidden="true"></i>
+				<XIcon aria-hidden="true" />
 			</button>
 		</div>
 
@@ -335,7 +337,7 @@
 					<span class="cmp-ch-rule" aria-hidden="true"></span>
 				{/if}
 				<span class="cmp-ch-group">
-					<i class={`ph ph-${group.icon} cmp-ch-icon`} aria-hidden="true"></i>
+					<Icon cls={`ph ph-${group.icon} cmp-ch-icon`} aria-hidden="true" />
 					{#each group.options as ch (ch)}
 						<button
 							type="button"
@@ -549,7 +551,7 @@
 		align-items: center;
 		gap: 5px;
 	}
-	.cmp-ch-icon {
+	:global(.cmp-ch-icon) {
 		font-size: 13px;
 		color: rgba(var(--tint-rgb), 0.55);
 		margin-right: 2px;

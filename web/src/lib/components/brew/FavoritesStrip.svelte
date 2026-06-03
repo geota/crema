@@ -1,4 +1,10 @@
 <script lang="ts">
+	import CaretLeftIcon from 'phosphor-svelte/lib/CaretLeftIcon';
+	import CaretRightIcon from 'phosphor-svelte/lib/CaretRightIcon';
+	import CoffeeBeanIcon from 'phosphor-svelte/lib/CoffeeBeanIcon';
+	import ListBulletsIcon from 'phosphor-svelte/lib/ListBulletsIcon';
+	import MagnifyingGlassIcon from 'phosphor-svelte/lib/MagnifyingGlassIcon';
+	import XIcon from 'phosphor-svelte/lib/XIcon';
 	/**
 	 * `FavoritesStrip` — the unified pinned-favourites strip at the top of the
 	 * Quick Sheet. Renders **both** pinned profiles and pinned beans as
@@ -153,7 +159,7 @@
 
 <div class="qfstrip-wrap">
 	<div class="qfstrip-search-inline">
-		<i class="ph ph-magnifying-glass" aria-hidden="true"></i>
+		<MagnifyingGlassIcon aria-hidden="true" />
 		<input
 			bind:value={query}
 			placeholder="Search profiles + beans"
@@ -161,7 +167,7 @@
 		/>
 		{#if query}
 			<button class="qfstrip-search-clear" onclick={() => (query = '')} aria-label="Clear search">
-				<i class="ph ph-x" aria-hidden="true"></i>
+				<XIcon aria-hidden="true" />
 			</button>
 		{/if}
 	</div>
@@ -172,15 +178,11 @@
 		tabindex={canScrollLeft ? 0 : -1}
 		aria-label="Scroll favorites left"
 	>
-		<i class="ph ph-caret-left" aria-hidden="true"></i>
+		<CaretLeftIcon aria-hidden="true" />
 	</button>
 	<div class="qfstrip" {@attach trackScroll} onscroll={syncArrows}>
 		{#if profileItems.length > 0}
-			<i
-				class="ph ph-list-bullets qfstrip-section-icon"
-				aria-label="Profiles"
-				title="Profiles"
-			></i>
+			<ListBulletsIcon class="qfstrip-section-icon" aria-label="Profiles" />
 		{/if}
 		{#each profileItems as profile (profile.id)}
 			<button
@@ -201,11 +203,7 @@
 			<span class="qfstrip-divider" aria-hidden="true"></span>
 		{/if}
 		{#if beanItems.length > 0}
-			<i
-				class="ph ph-coffee-bean qfstrip-section-icon"
-				aria-label="Beans"
-				title="Beans"
-			></i>
+			<CoffeeBeanIcon class="qfstrip-section-icon" aria-label="Beans" />
 		{/if}
 		{#each beanItems as bean (bean.id)}
 			{@const roaster = bean.roasterId ? (roasterById.get(bean.roasterId) ?? null) : null}
@@ -237,7 +235,7 @@
 		tabindex={canScrollRight ? 0 : -1}
 		aria-label="Scroll favorites right"
 	>
-		<i class="ph ph-caret-right" aria-hidden="true"></i>
+		<CaretRightIcon aria-hidden="true" />
 	</button>
 </div>
 
@@ -259,7 +257,7 @@
 	/* Section-leader glyph — the sidebar's Profiles / Beans icons,
 	   reused here so the strip's two halves are recognisable at a glance
 	   even when chips look similar (e.g. small viewport, search-filtered). */
-	.qfstrip-section-icon {
+	:global(.qfstrip-section-icon) {
 		flex: 0 0 auto;
 		align-self: center;
 		font-size: 14px;

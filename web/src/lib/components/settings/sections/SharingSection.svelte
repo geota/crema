@@ -1,4 +1,11 @@
 <script lang="ts">
+	import ArrowSquareOutIcon from 'phosphor-svelte/lib/ArrowSquareOutIcon';
+	import ChatsCircleIcon from 'phosphor-svelte/lib/ChatsCircleIcon';
+	import CubeIcon from 'phosphor-svelte/lib/CubeIcon';
+	import GearIcon from 'phosphor-svelte/lib/GearIcon';
+	import HouseIcon from 'phosphor-svelte/lib/HouseIcon';
+	import LinkIcon from 'phosphor-svelte/lib/LinkIcon';
+	import SignOutIcon from 'phosphor-svelte/lib/SignOutIcon';
 	/**
 	 * Sharing section — the Visualizer integration.
 	 *
@@ -231,7 +238,7 @@
 				target="_blank"
 				rel="noreferrer noopener"
 			>
-				visualizer.coffee <i class="ph ph-arrow-square-out" aria-hidden="true"></i>
+				visualizer.coffee <ArrowSquareOutIcon aria-hidden="true" />
 			</a>
 		</div>
 	</div>
@@ -244,7 +251,7 @@
 				onClick={testNow}
 			/>
 			<button type="button" class="st-btn st-btn-danger" onclick={disconnect}>
-				<i class="ph ph-sign-out" aria-hidden="true"></i>Disconnect
+				<SignOutIcon aria-hidden="true" />Disconnect
 			</button>
 		{:else}
 			<StButton
@@ -278,31 +285,31 @@
 	<div class="st-group-title">Other integrations</div>
 	<div class="st-otherint-grid">
 		<div class="st-otherint-card">
-			<i class="ph-duotone ph-chats-circle" aria-hidden="true"></i>
+			<ChatsCircleIcon weight="duotone" aria-hidden="true" />
 			<div class="st-otherint-title">DecentForum</div>
 			<div class="st-otherint-sub">
 				Share a profile from the library straight to a forum post.
 			</div>
 			<button type="button" class="st-btn st-btn-secondary" disabled>
-				<i class="ph ph-link" aria-hidden="true"></i>Connect
+				<LinkIcon aria-hidden="true" />Connect
 			</button>
 		</div>
 		<div class="st-otherint-card">
-			<i class="ph-duotone ph-cube" aria-hidden="true"></i>
+			<CubeIcon weight="duotone" aria-hidden="true" />
 			<div class="st-otherint-title">Insight</div>
 			<div class="st-otherint-sub">
 				Decent's profile marketplace. Import and rate profiles.
 			</div>
 			<button type="button" class="st-btn st-btn-secondary" disabled>
-				<i class="ph ph-link" aria-hidden="true"></i>Connect
+				<LinkIcon aria-hidden="true" />Connect
 			</button>
 		</div>
 		<div class="st-otherint-card">
-			<i class="ph-duotone ph-house" aria-hidden="true"></i>
+			<HouseIcon weight="duotone" aria-hidden="true" />
 			<div class="st-otherint-title">Home Assistant</div>
 			<div class="st-otherint-sub">Expose shot events as MQTT topics.</div>
 			<button type="button" class="st-btn st-btn-secondary" disabled>
-				<i class="ph ph-gear" aria-hidden="true"></i>Configure in Advanced
+				<GearIcon aria-hidden="true" />Configure in Advanced
 			</button>
 		</div>
 	</div>

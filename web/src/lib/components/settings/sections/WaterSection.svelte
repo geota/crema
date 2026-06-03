@@ -1,4 +1,5 @@
 <script lang="ts">
+	import InfoIcon from 'phosphor-svelte/lib/InfoIcon';
 	/**
 	 * Water & maintenance section — filter life, descaling, clean cycle, and the
 	 * water-chemistry block.
@@ -382,7 +383,7 @@
 				<h2 id="cyc-title">{pendingSpec.title}</h2>
 			</div>
 			<div class="cyc-banner" role="alert">
-				<i class="ph ph-info" aria-hidden="true"></i>
+				<InfoIcon aria-hidden="true" />
 				<span>{pendingSpec.copy}</span>
 			</div>
 			<div class="cyc-actions">
@@ -452,7 +453,7 @@
 		border: 1px solid rgba(var(--copper-rgb), 0.25);
 		color: var(--fg-1);
 	}
-	.cyc-banner i {
+	.cyc-banner :global(svg) {
 		flex-shrink: 0;
 		font-size: 18px;
 		margin-top: 1px;

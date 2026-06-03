@@ -1,4 +1,5 @@
 <script lang="ts">
+	import XIcon from 'phosphor-svelte/lib/XIcon';
 	/**
 	 * `ShotImportDialog` — drop or pick legacy `.shot` / `.shot.json`
 	 * files to import into the shot library. Mirrors the BeanImportDialog
@@ -38,7 +39,7 @@
 	<header class="sid-head">
 		<h2 class="sid-title" id="sid-title">Import shot files</h2>
 		<button class="sid-close" onclick={onClose} aria-label="Close">
-			<i class="ph ph-x" aria-hidden="true"></i>
+			<XIcon aria-hidden="true" />
 		</button>
 	</header>
 

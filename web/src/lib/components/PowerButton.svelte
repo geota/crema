@@ -1,4 +1,5 @@
 <script lang="ts">
+	import Icon from '$lib/icons/Icon.svelte';
 	/**
 	 * `PowerButton` — a compact circular power control for the DE1.
 	 *
@@ -65,14 +66,14 @@
 			? 'Wake DE1'
 			: 'Sleep DE1'}
 >
-	<i
-		class={state === 'disconnected'
+	<Icon
+		cls={state === 'disconnected'
 			? 'ph-fill ph-plugs'
 			: state === 'asleep'
 				? 'ph-fill ph-moon'
 				: 'ph-fill ph-sun'}
 		aria-hidden="true"
-	></i>
+	 />
 </button>
 
 <style>

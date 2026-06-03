@@ -1,4 +1,6 @@
 <script lang="ts">
+	import PlusIcon from 'phosphor-svelte/lib/PlusIcon';
+	import XIcon from 'phosphor-svelte/lib/XIcon';
 	/**
 	 * `TagInput` — the custom-tag chip input, ported from `TagList` in
 	 * `profile-edit-page.jsx`.
@@ -57,7 +59,7 @@
 		<span class="pe-tagchip">
 			{t}
 			<button class="pe-tagchip-x" onclick={() => remove(t)} aria-label="Remove {t}">
-				<i class="ph ph-x" aria-hidden="true"></i>
+				<XIcon aria-hidden="true" />
 			</button>
 		</span>
 	{/each}
@@ -74,7 +76,7 @@
 		/>
 	{:else}
 		<button class="pe-tag-add" onclick={() => (adding = true)}>
-			<i class="ph ph-plus" aria-hidden="true"></i> Add tag
+			<PlusIcon aria-hidden="true" /> Add tag
 		</button>
 	{/if}
 	<datalist id={listId}>
@@ -143,7 +145,7 @@
 		color: var(--fg-1);
 		border-color: rgba(var(--tint-rgb), 0.4);
 	}
-	.pe-tag-add i {
+	.pe-tag-add :global(svg) {
 		font-size: 12px;
 	}
 	.pe-tag-input {

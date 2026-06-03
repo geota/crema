@@ -1,4 +1,9 @@
 <script lang="ts">
+	import CheckCircleIcon from 'phosphor-svelte/lib/CheckCircleIcon';
+	import PlugsConnectedIcon from 'phosphor-svelte/lib/PlugsConnectedIcon';
+	import SpinnerGapIcon from 'phosphor-svelte/lib/SpinnerGapIcon';
+	import WarningCircleIcon from 'phosphor-svelte/lib/WarningCircleIcon';
+	import WarningIcon from 'phosphor-svelte/lib/WarningIcon';
 	/**
 	 * `/auth/visualizer/callback` — the OAuth redirect target.
 	 *
@@ -123,47 +128,31 @@
 <main class="cb-shell">
 	<div class="cb-card">
 		{#if status.kind === 'working'}
-			<i class="ph ph-spinner-gap cb-spinner" aria-hidden="true"></i>
+			<SpinnerGapIcon class="cb-spinner" aria-hidden="true" />
 			<h1 class="t-h3">Connecting to Visualizer…</h1>
 			<p class="t-body-sm">Exchanging the authorization code for an access token.</p>
 		{:else if status.kind === 'done'}
-			<i
-				class="ph-fill ph-check-circle"
-				aria-hidden="true"
-				style:color="var(--success)"
-				style:font-size="32px"
-			></i>
+			<CheckCircleIcon weight="fill" aria-hidden="true"
+				style="color: var(--success); font-size: 32px" />
 			<h1 class="t-h3">Connected to Visualizer</h1>
 			<p class="t-body-sm">Returning to {status.returnTo}…</p>
 		{:else if status.kind === 'already'}
-			<i
-				class="ph ph-plugs-connected"
-				aria-hidden="true"
-				style:color="var(--copper-400)"
-				style:font-size="32px"
-			></i>
+			<PlugsConnectedIcon aria-hidden="true"
+				style="color: var(--copper-400); font-size: 32px" />
 			<h1 class="t-h3">Already connected</h1>
 			<p class="t-body-sm">
 				You're already signed in to Visualizer. Open
 				<a href="/settings">Settings</a> to manage the connection.
 			</p>
 		{:else if status.kind === 'denied'}
-			<i
-				class="ph ph-warning"
-				aria-hidden="true"
-				style:color="var(--warn)"
-				style:font-size="32px"
-			></i>
+			<WarningIcon aria-hidden="true"
+				style="color: var(--warn); font-size: 32px" />
 			<h1 class="t-h3">Sign-in cancelled</h1>
 			<p class="t-body-sm">Visualizer reported: {status.detail}</p>
 			<a class="cb-link" href="/settings">Back to Settings</a>
 		{:else}
-			<i
-				class="ph ph-warning-circle"
-				aria-hidden="true"
-				style:color="var(--danger)"
-				style:font-size="32px"
-			></i>
+			<WarningCircleIcon aria-hidden="true"
+				style="color: var(--danger); font-size: 32px" />
 			<h1 class="t-h3">Sign-in failed</h1>
 			<p class="t-body-sm">{status.message}</p>
 			<a class="cb-link" href="/settings">Try again</a>
@@ -192,7 +181,7 @@
 		box-shadow: var(--shadow-md);
 		padding: var(--space-6);
 	}
-	.cb-spinner {
+	:global(.cb-spinner) {
 		font-size: 32px;
 		color: var(--copper-400);
 		animation: cb-spin 1.1s linear infinite;

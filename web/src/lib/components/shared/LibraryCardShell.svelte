@@ -1,4 +1,5 @@
 <script lang="ts">
+	import Icon from '$lib/icons/Icon.svelte';
 	/**
 	 * `LibraryCardShell` — shared chrome for the `/beans` library cards.
 	 *
@@ -113,10 +114,10 @@
 			aria-label={favourite ? 'Unpin' : 'Pin'}
 			title={favourite ? 'Pinned' : 'Pin'}
 		>
-			<i
-				class={favourite ? 'ph-fill ph-star' : 'ph ph-star'}
+			<Icon
+				cls={favourite ? 'ph-fill ph-star' : 'ph ph-star'}
 				aria-hidden="true"
-			></i>
+			 />
 		</button>
 	{/if}
 

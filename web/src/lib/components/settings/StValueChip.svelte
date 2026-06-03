@@ -1,4 +1,5 @@
 <script lang="ts">
+	import PencilSimpleLineIcon from 'phosphor-svelte/lib/PencilSimpleLineIcon';
 	/**
 	 * `StValueChip` — a mono value chip with a pencil affordance. In the design
 	 * it is a tap target for editing a read-only-looking value; here it is wired
@@ -89,6 +90,6 @@
 {:else}
 	<button type="button" class="st-valuechip" onclick={begin}>
 		<span>{display}</span>
-		<i class="ph ph-pencil-simple-line" aria-hidden="true"></i>
+		<PencilSimpleLineIcon aria-hidden="true" />
 	</button>
 {/if}

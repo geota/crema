@@ -1,4 +1,5 @@
 <script lang="ts">
+	import WarningOctagonIcon from 'phosphor-svelte/lib/WarningOctagonIcon';
 	/**
 	 * Calibration section — read + write of the DE1's sensor calibration.
 	 *
@@ -560,7 +561,7 @@
 			</div>
 
 			<div class="cal-modal-warn" role="alert">
-				<i class="ph ph-warning-octagon" aria-hidden="true"></i>
+				<WarningOctagonIcon aria-hidden="true" />
 				<span>
 					{#if mode === 'apply'}
 						Calibration changes how the DE1 interprets {nameOf(target)}
@@ -697,7 +698,7 @@
 			</div>
 
 			<div class="cal-modal-warn" role="alert">
-				<i class="ph ph-warning-octagon" aria-hidden="true"></i>
+				<WarningOctagonIcon aria-hidden="true" />
 				<span>
 					{#if flowEditing === 'apply'}
 						This changes how the DE1 estimates dispensed mass from its
@@ -888,7 +889,7 @@
 		border: 1px solid rgba(var(--warning-rgb), 0.35);
 		color: var(--warning);
 	}
-	.cal-modal-warn i {
+	.cal-modal-warn :global(svg) {
 		flex-shrink: 0;
 		font-size: 18px;
 		margin-top: 1px;

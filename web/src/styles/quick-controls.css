@@ -116,7 +116,7 @@
   border-color: var(--copper-500);
   color: var(--fg-on-accent);
 }
-.qcpill i { font-size: 16px; }
+.qcpill :is(i, svg) { font-size: 16px; }
 
 /* ───────────────────────────────────────────────── Variant A: Quick Sheet (web/tablet) */
 .qsheet {
@@ -231,7 +231,7 @@
   font-variant-numeric: tabular-nums;
   color: var(--fg-1);
 }
-.qbtarget i { font-size: 12px; opacity: 0.4; }
+.qbtarget :is(i, svg) { font-size: 12px; opacity: 0.4; }
 
 .qbedit { /* expanded inline-edit panel */
   margin-top: 8px;
@@ -314,8 +314,8 @@
   margin-left: 12px;
 }
 .qrail-toggle:hover { background: rgba(var(--tint-rgb), 0.04); }
-.qrail-toggle i { font-size: 14px; transition: transform var(--dur-2) var(--ease); }
-.qrail-toggle.is-open i { transform: rotate(180deg); }
+.qrail-toggle :is(i, svg) { font-size: 14px; transition: transform var(--dur-2) var(--ease); }
+.qrail-toggle.is-open :is(i, svg) { transform: rotate(180deg); }
 
 .qrail-steppers {
   display: grid; grid-template-columns: repeat(5, 1fr);

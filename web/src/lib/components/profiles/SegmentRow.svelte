@@ -1,4 +1,6 @@
 <script lang="ts">
+	import DotsSixVerticalIcon from 'phosphor-svelte/lib/DotsSixVerticalIcon';
+	import TrashIcon from 'phosphor-svelte/lib/TrashIcon';
 	/**
 	 * `SegmentRow` — one editable row of the segment list, ported from
 	 * `SegmentRow` in `profile-edit-page.jsx`.
@@ -209,7 +211,7 @@
 			ondragstart={onDragStart}
 			onclick={(e) => e.stopPropagation()}
 		>
-			<i class="ph ph-dots-six-vertical" aria-hidden="true"></i>
+			<DotsSixVerticalIcon aria-hidden="true" />
 		</button>
 		<input
 			class="pe-seg-num"
@@ -420,7 +422,7 @@
 			onDelete();
 		}}
 	>
-		<i class="ph ph-trash" aria-hidden="true"></i>
+		<TrashIcon aria-hidden="true" />
 	</button>
 </div>
 

@@ -1,4 +1,6 @@
 <script lang="ts">
+	import Icon from '$lib/icons/Icon.svelte';
+	import LockKeyIcon from 'phosphor-svelte/lib/LockKeyIcon';
 	/**
 	 * `BeanSyncSection` — Settings → Sharing → "Sync" card.
 	 *
@@ -379,7 +381,7 @@
 							rel="noopener noreferrer"
 							title="Visualizer Premium required for push. Upgrade at visualizer.coffee/premium."
 						>
-							<i class="ph ph-lock-key" aria-hidden="true"></i>
+							<LockKeyIcon aria-hidden="true" />
 							<span>Premium required for push</span>
 						</a>
 					{/if}
@@ -406,7 +408,7 @@
 							rel="noopener noreferrer"
 							title="Visualizer Premium required for push. Upgrade at visualizer.coffee/premium."
 						>
-							<i class="ph ph-lock-key" aria-hidden="true"></i>
+							<LockKeyIcon aria-hidden="true" />
 							<span>Premium required for push</span>
 						</a>
 					{/if}
@@ -448,10 +450,10 @@
 					disabled={syncing}
 					onclick={syncNow}
 				>
-					<i
-						class={syncing ? 'ph ph-spinner-gap bs-spin' : 'ph ph-arrows-clockwise'}
+					<Icon
+						cls={syncing ? 'ph ph-spinner-gap bs-spin' : 'ph ph-arrows-clockwise'}
 						aria-hidden="true"
-					></i>
+					 />
 					{syncing ? 'Syncing…' : 'Sync now'}
 				</button>
 			{/snippet}
@@ -468,10 +470,10 @@
 					disabled={syncing || resyncing}
 					onclick={resyncAllShots}
 				>
-					<i
-						class={resyncing ? 'ph ph-spinner-gap bs-spin' : 'ph ph-clock-counter-clockwise'}
+					<Icon
+						cls={resyncing ? 'ph ph-spinner-gap bs-spin' : 'ph ph-clock-counter-clockwise'}
 						aria-hidden="true"
-					></i>
+					 />
 					{resyncing ? 'Re-syncing…' : 'Re-sync all'}
 				</button>
 			{/snippet}
@@ -487,10 +489,10 @@
 					class="bs-btn"
 					onclick={() => (logCollapsed = !logCollapsed)}
 				>
-					<i
-						class={logCollapsed ? 'ph ph-caret-down' : 'ph ph-caret-up'}
+					<Icon
+						cls={logCollapsed ? 'ph ph-caret-down' : 'ph ph-caret-up'}
 						aria-hidden="true"
-					></i>
+					 />
 					{logCollapsed ? 'Show log' : 'Hide log'}
 				</button>
 			{/snippet}
@@ -557,7 +559,7 @@
 	.bs-btn-primary:hover:not([disabled]) {
 		background: var(--copper-600);
 	}
-	.bs-spin {
+	:global(.bs-spin) {
 		animation: bs-spin 1.1s linear infinite;
 	}
 	@keyframes bs-spin {
@@ -590,14 +592,14 @@
 		color: rgba(var(--tint-rgb), 0.55);
 		text-decoration: none;
 	}
-	.bs-premium-tag i {
+	.bs-premium-tag :global(svg) {
 		font-size: 12px;
 		opacity: 0.75;
 	}
 	.bs-premium-tag:hover {
 		color: var(--copper-400);
 	}
-	.bs-premium-tag:hover i {
+	.bs-premium-tag:hover :global(svg) {
 		opacity: 1;
 	}
 	.bs-premium {

@@ -1,4 +1,7 @@
 <script lang="ts">
+	import CheckIcon from 'phosphor-svelte/lib/CheckIcon';
+	import PlusIcon from 'phosphor-svelte/lib/PlusIcon';
+	import XIcon from 'phosphor-svelte/lib/XIcon';
 	/**
 	 * `BeanContextCard` — the brew dashboard's "what bag of coffee you're
 	 * pulling" card. Reads from the bean library's `activeBean`;
@@ -351,7 +354,7 @@
 					aria-label="Cancel"
 					title="Cancel"
 				>
-					<i class="ph ph-x" aria-hidden="true"></i>
+					<XIcon aria-hidden="true" />
 				</button>
 				<button
 					class="bean-edit-btn bean-edit-save"
@@ -359,7 +362,7 @@
 					aria-label="Save"
 					title="Save"
 				>
-					<i class="ph ph-check" aria-hidden="true"></i>
+					<CheckIcon aria-hidden="true" />
 				</button>
 			</div>
 			<a class="bean-fullopen" href={resolve('/beans')}>Open in library →</a>
@@ -395,7 +398,7 @@
 						quickAdd();
 					}}
 				>
-					<i class="ph ph-plus" aria-hidden="true"></i>
+					<PlusIcon aria-hidden="true" />
 				</button>
 			{/if}
 		</div>

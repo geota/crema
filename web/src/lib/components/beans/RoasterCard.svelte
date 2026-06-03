@@ -1,4 +1,8 @@
 <script lang="ts">
+	import CopyIcon from 'phosphor-svelte/lib/CopyIcon';
+	import GlobeIcon from 'phosphor-svelte/lib/GlobeIcon';
+	import LinkBreakIcon from 'phosphor-svelte/lib/LinkBreakIcon';
+	import PencilIcon from 'phosphor-svelte/lib/PencilIcon';
 	/**
 	 * `RoasterCard` — one roastery row in the `/beans` Roasters directory.
 	 *
@@ -140,7 +144,7 @@
 					onclick={(e) => e.stopPropagation()}
 					title={roaster.website}
 				>
-					<i class="ph ph-globe"></i>{websiteDomain}
+					<GlobeIcon aria-hidden="true" />{websiteDomain}
 				</a>
 			{/if}
 			<span class="rcd-count">
@@ -160,7 +164,7 @@
 				aria-label="Un-merge"
 				onclick={onUnmergeClick}
 			>
-				<i class="ph ph-link-break"></i>
+				<LinkBreakIcon aria-hidden="true" />
 			</button>
 		{/if}
 		<button
@@ -168,7 +172,7 @@
 			class="lcs-action lcs-action-primary"
 			onclick={onEditClick}
 		>
-			<i class="ph ph-pencil" aria-hidden="true"></i>
+			<PencilIcon aria-hidden="true" />
 			<span>Edit</span>
 		</button>
 		<button
@@ -178,7 +182,7 @@
 			aria-label="Duplicate"
 			onclick={onDuplicateClick}
 		>
-			<i class="ph ph-copy"></i>
+			<CopyIcon aria-hidden="true" />
 		</button>
 		<!-- Delete: compact danger split — primary detaches bags + deletes the
 		     roaster locally; the caret menu adds cascade and Visualizer scopes. -->
@@ -285,7 +289,7 @@
 		color: var(--copper-400);
 		text-decoration: underline;
 	}
-	.rcd-site i {
+	.rcd-site :global(svg) {
 		font-size: 11px;
 	}
 	.rcd-count {

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import Icon from '$lib/icons/Icon.svelte';
 	/**
 	 * Settings — the `/settings` route, ported from `SettingsPage` in
 	 * `settings-page.jsx`.
@@ -114,7 +115,7 @@
 						aria-current={active === s.id ? 'page' : undefined}
 						onclick={() => (active = s.id)}
 					>
-						<i class={'ph-duotone ph-' + s.icon} aria-hidden="true"></i>
+						<Icon cls={'ph-duotone ph-' + s.icon} aria-hidden="true" />
 						<span>{s.label}</span>
 					</button>
 				{/each}
@@ -217,7 +218,7 @@
 		background: rgba(var(--tint-rgb), 0.03);
 		color: var(--fg-1);
 	}
-	.st-nav-item i {
+	.st-nav-item :global(svg) {
 		font-size: 16px;
 		color: rgba(var(--tint-rgb), 0.5);
 		flex: 0 0 auto;
@@ -226,7 +227,7 @@
 		background: rgba(var(--tint-rgb), 0.05);
 		color: var(--fg-1);
 	}
-	.st-nav-item.is-active i {
+	.st-nav-item.is-active :global(svg) {
 		color: var(--copper-400);
 	}
 	.st-nav-item.is-active::before {
@@ -800,7 +801,7 @@
 		border: 1px solid rgba(var(--tint-rgb), 0.05);
 		border-radius: var(--radius-md);
 	}
-	:global(.st-content .st-otherint-card > i:first-child) {
+	:global(.st-content .st-otherint-card > :is(i, svg):first-child) {
 		font-size: 22px;
 		color: var(--copper-400);
 	}

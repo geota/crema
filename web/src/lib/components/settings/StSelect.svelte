@@ -1,4 +1,5 @@
 <script lang="ts">
+	import CaretDownIcon from 'phosphor-svelte/lib/CaretDownIcon';
 	/**
 	 * `StSelect` — a styled `<select>` with a caret affordance. Ported from the
 	 * design's `StSelect` (`settings-page.jsx`).
@@ -51,5 +52,5 @@
 			<option value={o.value}>{o.label}</option>
 		{/each}
 	</select>
-	<i class="ph ph-caret-down" aria-hidden="true"></i>
+	<CaretDownIcon aria-hidden="true" />
 </div>

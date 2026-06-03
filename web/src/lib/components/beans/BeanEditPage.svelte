@@ -1,4 +1,11 @@
 <script lang="ts">
+	import Icon from '$lib/icons/Icon.svelte';
+	import ArrowLeftIcon from 'phosphor-svelte/lib/ArrowLeftIcon';
+	import CheckCircleIcon from 'phosphor-svelte/lib/CheckCircleIcon';
+	import CheckIcon from 'phosphor-svelte/lib/CheckIcon';
+	import DropHalfIcon from 'phosphor-svelte/lib/DropHalfIcon';
+	import InfoIcon from 'phosphor-svelte/lib/InfoIcon';
+	import StarIcon from 'phosphor-svelte/lib/StarIcon';
 	/**
 	 * `BeanEditPage` — full-page bean editor. Replaces the old drawer-style
 	 * `BeanEditor` for both create and edit flows. Layout follows the
@@ -347,7 +354,7 @@
 	<!-- Topbar -->
 	<header class="be-bar">
 		<button class="be-back" onclick={back}>
-			<i class="ph ph-arrow-left" aria-hidden="true"></i> Beans
+			<ArrowLeftIcon aria-hidden="true" /> Beans
 		</button>
 		<div class="be-bar-mid">
 			<div class="t-eyebrow">{isNew ? 'New bean' : 'Edit bean'}</div>
@@ -356,7 +363,7 @@
 		<div class="be-bar-actions">
 			<button class="be-btn be-btn-ghost" onclick={discard}>Cancel</button>
 			<button class="be-btn be-btn-primary" onclick={() => save(false)}>
-				<i class="ph ph-check" aria-hidden="true"></i>
+				<CheckIcon aria-hidden="true" />
 				Save
 			</button>
 		</div>
@@ -417,7 +424,7 @@
 				{/each}
 			</nav>
 			<div class="be-rail-help">
-				<i class="ph-duotone ph-info" aria-hidden="true"></i>
+				<InfoIcon weight="duotone" aria-hidden="true" />
 				<span>
 					Required fields are marked <span class="be-req">*</span>. Everything
 					else is optional and editable later.
@@ -523,7 +530,7 @@
 								     Effectively replaces the "& make active" half of the
 								     prior Save button. -->
 								<div class="be-flag" class:is-on={isActive}>
-									<i class="ph-fill ph-check-circle" aria-hidden="true"></i>
+									<CheckCircleIcon weight="fill" aria-hidden="true" />
 									<span>Active</span>
 									<StToggle
 										on={isActive}
@@ -535,7 +542,7 @@
 									/>
 								</div>
 								<div class="be-flag" class:is-on={current.favourite}>
-									<i class="ph-fill ph-star" aria-hidden="true"></i>
+									<StarIcon weight="fill" aria-hidden="true" />
 									<span>Pinned</span>
 									<StToggle
 										on={current.favourite}
@@ -544,7 +551,7 @@
 									/>
 								</div>
 								<div class="be-flag" class:is-on={current.decaf}>
-									<i class="ph ph-drop-half" aria-hidden="true"></i>
+									<DropHalfIcon aria-hidden="true" />
 									<span>Decaf</span>
 									<StToggle
 										on={current.decaf}
@@ -1072,8 +1079,10 @@
 											onclick={() => setRating(i)}
 											aria-label="{i} of 5"
 										>
-											<i class={i <= current.rating ? 'ph-fill ph-star' : 'ph ph-star'}
-											></i>
+											<Icon
+												cls={i <= current.rating ? 'ph-fill ph-star' : 'ph ph-star'}
+												color={i <= current.rating ? 'var(--copper-400)' : 'rgba(var(--tint-rgb), 0.18)'}
+											/>
 										</button>
 									{/each}
 								</div>
@@ -1237,7 +1246,7 @@
 				{/if}
 				<button class="be-btn be-btn-ghost" onclick={discard}>Cancel</button>
 				<button class="be-btn be-btn-primary be-btn-lg" onclick={() => save(false)}>
-					<i class="ph ph-check"></i>
+					<CheckIcon aria-hidden="true" />
 					Save
 				</button>
 			</div>
@@ -1514,7 +1523,7 @@
 		padding: 10px;
 		line-height: 1.5;
 	}
-	.be-rail-help i {
+	.be-rail-help :global(svg) {
 		color: var(--copper-400);
 		font-size: 14px;
 	}
@@ -1775,7 +1784,7 @@
 		font-family: var(--font-sans);
 		font-size: 12px;
 	}
-	.be-flag i {
+	.be-flag :global(svg) {
 		font-size: 13px;
 		color: rgba(var(--tint-rgb), 0.55);
 	}
@@ -1784,7 +1793,7 @@
 		border-color: var(--copper-400);
 		background: rgba(var(--copper-rgb), 0.08);
 	}
-	.be-flag.is-on i {
+	.be-flag.is-on :global(svg) {
 		color: var(--copper-400);
 	}
 
@@ -1839,11 +1848,8 @@
 		display: inline-flex;
 		align-items: center;
 	}
-	.be-rating-btn .ph {
+	.be-rating-btn :global(svg) {
 		color: rgba(var(--tint-rgb), 0.18);
-	}
-	.be-rating-btn .ph-fill {
-		color: var(--copper-400);
 	}
 	.be-rating-btn:hover {
 		transform: scale(1.05);

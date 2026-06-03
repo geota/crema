@@ -1,4 +1,9 @@
 <script lang="ts">
+	import Icon from '$lib/icons/Icon.svelte';
+	import CopyIcon from 'phosphor-svelte/lib/CopyIcon';
+	import PackageIcon from 'phosphor-svelte/lib/PackageIcon';
+	import PencilIcon from 'phosphor-svelte/lib/PencilIcon';
+	import SnowflakeIcon from 'phosphor-svelte/lib/SnowflakeIcon';
 	/**
 	 * `BeanTile` — one bag of coffee in the `/beans` library grid.
 	 *
@@ -133,7 +138,7 @@
 			{/if}
 			{#if isFrozen}
 				<div class="bn-tile-frozen" title="Frozen storage">
-					<i class="ph-fill ph-snowflake" aria-hidden="true"></i>
+					<SnowflakeIcon weight="fill" aria-hidden="true" />
 				</div>
 			{/if}
 		</div>
@@ -177,13 +182,13 @@
 			</div>
 			<div class="bn-tile-stat bn-tile-stat-lifecycle">
 				{#if frozenDays != null}
-					<i class="ph ph-snowflake" aria-hidden="true"></i>
+					<SnowflakeIcon aria-hidden="true" />
 					<div class="bn-tile-stat-text">
 						<span class="bn-tile-stat-val">{frozenDays}d</span>
 						<span class="bn-tile-stat-lab">frozen</span>
 					</div>
 				{:else if openedDays != null}
-					<i class="ph ph-package" aria-hidden="true"></i>
+					<PackageIcon aria-hidden="true" />
 					<div class="bn-tile-stat-text">
 						<span class="bn-tile-stat-val">{openedDays}d</span>
 						<span class="bn-tile-stat-lab">open</span>
@@ -196,10 +201,11 @@
 			</div>
 			<div class="bn-tile-stat bn-tile-stat-rating" aria-label="{bean.rating} of 5">
 				{#each [1, 2, 3, 4, 5] as i (i)}
-					<i
-						class={i <= bean.rating ? 'ph-fill ph-star' : 'ph ph-star'}
+					<Icon
+						cls={i <= bean.rating ? 'ph-fill ph-star' : 'ph ph-star'}
+						color={i <= bean.rating ? 'var(--copper-400)' : 'rgba(var(--tint-rgb), 0.2)'}
 						aria-hidden="true"
-					></i>
+					 />
 				{/each}
 			</div>
 		</div>
@@ -240,10 +246,10 @@
 			onclick={onSetActiveClick}
 			title={isActive ? 'Active on Brew' : 'Set as the active bag on the Brew page'}
 		>
-			<i
-				class={isActive ? 'ph-fill ph-check-circle' : 'ph ph-coffee'}
+			<Icon
+				cls={isActive ? 'ph-fill ph-check-circle' : 'ph ph-coffee'}
 				aria-hidden="true"
-			></i>
+			 />
 			<span>{isActive ? 'Active' : 'Set active'}</span>
 		</button>
 		<button
@@ -253,7 +259,7 @@
 			aria-label="Duplicate"
 			onclick={onDuplicateClick}
 		>
-			<i class="ph ph-copy" aria-hidden="true"></i>
+			<CopyIcon aria-hidden="true" />
 		</button>
 		<button
 			type="button"
@@ -262,7 +268,7 @@
 			aria-label="Edit"
 			onclick={onEditClick}
 		>
-			<i class="ph ph-pencil" aria-hidden="true"></i>
+			<PencilIcon aria-hidden="true" />
 		</button>
 		<!-- Delete: compact danger split — primary deletes locally, the caret
 		     menu adds "delete on Visualizer too". `stopPropagation` on the
@@ -426,7 +432,7 @@
 		gap: 6px;
 		font-family: var(--font-sans);
 	}
-	.bn-tile-stat i {
+	.bn-tile-stat :global(svg) {
 		font-size: 11px;
 		color: rgba(var(--tint-rgb), 0.45);
 	}
@@ -460,11 +466,10 @@
 		color: var(--copper-400);
 		justify-self: end;
 	}
-	.bn-tile-stat-rating .ph,
-	.bn-tile-stat-rating .ph-fill {
+	.bn-tile-stat-rating :global(svg) {
 		font-size: 10px;
 	}
-	.bn-tile-stat-rating .ph {
+	.bn-tile-stat-rating :global(svg) {
 		color: rgba(var(--tint-rgb), 0.2);
 	}
 

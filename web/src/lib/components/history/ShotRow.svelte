@@ -8,6 +8,7 @@
 	import { ratioLabel, stars, peaksOf, flatSamplesOf } from '$lib/history';
 	import { getSettingsStore, convertWeight } from '$lib/settings';
 	import MiniShotChart from './MiniShotChart.svelte';
+	import Icon from '$lib/icons/Icon.svelte';
 
 	let {
 		shot,
@@ -100,7 +101,7 @@
 >
 	{#if selectable}
 		<div class="hi-row-check" aria-hidden="true">
-			<i class="ph-fill {selected ? 'ph-check-square' : 'ph-square'}"></i>
+			<Icon name={selected ? 'check-square' : 'square'} weight="fill" />
 		</div>
 	{/if}
 	<div class="hi-row-time">

@@ -1,4 +1,9 @@
 <script lang="ts">
+	import CheckCircleIcon from 'phosphor-svelte/lib/CheckCircleIcon';
+	import InfoIcon from 'phosphor-svelte/lib/InfoIcon';
+	import SpinnerGapIcon from 'phosphor-svelte/lib/SpinnerGapIcon';
+	import WarningIcon from 'phosphor-svelte/lib/WarningIcon';
+	import XIcon from 'phosphor-svelte/lib/XIcon';
 	/**
 	 * `BeanImportDialog` — drop / pick a Beanconqueror `.zip` export, parse
 	 * it with `fflate`, hand the merged main JSON to the core's
@@ -694,7 +699,7 @@
 	<header class="bd-head">
 		<h2 class="bd-title" id="bd-title">Import from Beanconqueror</h2>
 		<button class="bd-close" onclick={onClose} aria-label="Close">
-			<i class="ph ph-x" aria-hidden="true"></i>
+			<XIcon aria-hidden="true" />
 		</button>
 	</header>
 
@@ -717,12 +722,12 @@
 		</div>
 	{:else if step === 'parsing'}
 		<div class="bd-status">
-			<i class="ph ph-spinner-gap bd-spinner" aria-hidden="true"></i>
+			<SpinnerGapIcon class="bd-spinner" aria-hidden="true" />
 			Parsing your archive…
 		</div>
 	{:else if step === 'committing'}
 		<div class="bd-status bd-status-progress">
-			<i class="ph ph-spinner-gap bd-spinner" aria-hidden="true"></i>
+			<SpinnerGapIcon class="bd-spinner" aria-hidden="true" />
 			<div class="bd-progress-text">
 				{#if progress.total > 0}
 					Saving photo {progress.done} of {progress.total}…
@@ -747,7 +752,7 @@
 		</div>
 	{:else if step === 'error'}
 		<div class="bd-status bd-status-err">
-			<i class="ph ph-warning" aria-hidden="true"></i>
+			<WarningIcon aria-hidden="true" />
 			<div>
 				<div class="bd-status-title">Couldn't read that file</div>
 				<div>{errorMessage}</div>
@@ -783,7 +788,7 @@
 		</div>
 		{#if preview.nonEspressoBrewsSkipped > 0 || preview.brewsDanglingPreparation > 0 || preview.droppedCategories.length > 0 || preview.photosReferenced > preview.photosMatched}
 			<div class="bd-dropped">
-				<i class="ph ph-info" aria-hidden="true"></i>
+				<InfoIcon aria-hidden="true" />
 				<div>
 					<div class="bd-dropped-title">Not migrated:</div>
 					<ul>
@@ -824,7 +829,7 @@
 		</div>
 	{:else if step === 'done' && committed}
 		<div class="bd-status">
-			<i class="ph-fill ph-check-circle" aria-hidden="true"></i>
+			<CheckCircleIcon weight="fill" aria-hidden="true" />
 			<div>
 				<div class="bd-status-title">
 					Imported {committed.beansImported} bean{committed.beansImported === 1 ? '' : 's'}
@@ -899,17 +904,17 @@
 		font-size: 13px;
 		color: var(--fg-1);
 	}
-	.bd-status i {
+	.bd-status :global(svg) {
 		font-size: 24px;
 		color: var(--copper-400);
 	}
-	.bd-status-err i {
+	.bd-status-err :global(svg) {
 		color: var(--danger);
 	}
 	.bd-status-title {
 		font-weight: 600;
 	}
-	.bd-spinner {
+	:global(.bd-spinner) {
 		animation: bd-spin 1.1s linear infinite;
 	}
 	@keyframes bd-spin {
@@ -922,7 +927,7 @@
 		gap: 10px;
 		padding: 28px 24px;
 	}
-	.bd-status-progress i {
+	.bd-status-progress :global(svg) {
 		align-self: center;
 	}
 	.bd-progress-text {
@@ -973,7 +978,7 @@
 		font-size: 12px;
 		color: rgba(var(--tint-rgb), 0.7);
 	}
-	.bd-dropped i {
+	.bd-dropped :global(svg) {
 		color: var(--warning);
 		font-size: 16px;
 	}

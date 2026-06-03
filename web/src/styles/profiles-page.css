@@ -44,7 +44,7 @@
   transition: border-color var(--dur-1) var(--ease);
 }
 .pp-search:focus-within { border-color: rgba(var(--tint-rgb), 0.2); }
-.pp-search i { color: rgba(var(--tint-rgb), 0.45); font-size: 14px; }
+.pp-search :is(i, svg) { color: rgba(var(--tint-rgb), 0.45); font-size: 14px; }
 .pp-search input {
   flex: 1 1 auto;
   background: transparent; border: 0; outline: 0;
@@ -71,7 +71,7 @@
   transition: all var(--dur-1) var(--ease);
   border: 1px solid transparent;
 }
-.pp-btn i { font-size: 14px; }
+.pp-btn :is(i, svg) { font-size: 14px; }
 .pp-btn-secondary {
   background: rgba(var(--tint-rgb), 0.04);
   border-color: rgba(var(--tint-rgb), 0.10);
@@ -317,14 +317,14 @@
   text-transform: uppercase;
   color: rgba(var(--tint-rgb), 0.55);
 }
-.pp-preview-chip i {
+.pp-preview-chip :is(i, svg) {
   width: 6px; height: 6px;
   border-radius: 50%;
   background: var(--c);
   display: inline-block;
   box-shadow: 0 0 0 2px rgba(0,0,0,0.25);
 }
-.pp-preview-chip-dashed i {
+.pp-preview-chip-dashed :is(i, svg) {
   width: 10px; height: 0;
   border-radius: 0;
   background: transparent;
@@ -450,7 +450,7 @@
   color: var(--copper-400);
   cursor: default;
 }
-.pp-action-primary.is-on i { color: var(--copper-400); }
+.pp-action-primary.is-on :is(i, svg) { color: var(--copper-400); }
 .pp-action-icon {
   width: 32px; height: 32px;
   flex: 0 0 32px;

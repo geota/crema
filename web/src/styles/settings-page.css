@@ -55,12 +55,12 @@
   position: relative;
 }
 .st-nav-item:hover { background: rgba(var(--tint-rgb), 0.03); color: var(--fg-1); }
-.st-nav-item i { font-size: 16px; color: rgba(var(--tint-rgb), 0.5); flex: 0 0 auto; }
+.st-nav-item :is(i, svg) { font-size: 16px; color: rgba(var(--tint-rgb), 0.5); flex: 0 0 auto; }
 .st-nav-item.is-active {
   background: rgba(var(--tint-rgb), 0.05);
   color: var(--fg-1);
 }
-.st-nav-item.is-active i { color: var(--copper-400); }
+.st-nav-item.is-active :is(i, svg) { color: var(--copper-400); }
 .st-nav-item.is-active::before {
   content: '';
   position: absolute;
@@ -197,7 +197,7 @@
   appearance: none;
   -webkit-appearance: none;
 }
-.st-select-wrap i {
+.st-select-wrap :is(i, svg) {
   position: absolute;
   right: 8px; top: 50%;
   transform: translateY(-50%);
@@ -238,7 +238,7 @@
   transition: all var(--dur-1) var(--ease);
   border: 1px solid transparent;
 }
-.st-btn i { font-size: 13px; }
+.st-btn :is(i, svg) { font-size: 13px; }
 .st-btn-secondary {
   background: rgba(var(--tint-rgb), 0.04);
   border-color: rgba(var(--tint-rgb), 0.10);
@@ -272,7 +272,7 @@
   transition: all var(--dur-1) var(--ease);
 }
 .st-valuechip:hover { background: rgba(var(--tint-rgb), 0.08); border-color: rgba(var(--tint-rgb), 0.18); }
-.st-valuechip i { color: rgba(var(--tint-rgb), 0.4); font-size: 11px; }
+.st-valuechip :is(i, svg) { color: rgba(var(--tint-rgb), 0.4); font-size: 11px; }
 
 .st-statusdot {
   display: inline-flex; align-items: center; gap: 8px;
@@ -386,7 +386,7 @@
 .st-maint-head {
   display: flex; align-items: center; gap: 8px;
 }
-.st-maint-head i { font-size: 18px; color: var(--copper-400); }
+.st-maint-head :is(i, svg) { font-size: 18px; color: var(--copper-400); }
 .st-maint-title {
   font-family: var(--font-sans);
   font-size: 12px;
@@ -483,7 +483,7 @@
   text-decoration: none;
   cursor: pointer;
 }
-.st-visualizer-link i { font-size: 11px; }
+.st-visualizer-link :is(i, svg) { font-size: 11px; }
 .st-visualizer-actions {
   display: flex; flex-direction: column; gap: 8px;
 }
@@ -506,7 +506,7 @@
   border: 1px solid rgba(var(--tint-rgb), 0.05);
   border-radius: var(--radius-md);
 }
-.st-otherint-card > i:first-child {
+.st-otherint-card > :is(i, svg):first-child {
   font-size: 22px;
   color: var(--copper-400);
 }

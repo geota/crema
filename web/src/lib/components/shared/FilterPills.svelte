@@ -1,4 +1,5 @@
 <script lang="ts">
+	import Icon from '$lib/icons/Icon.svelte';
 	/**
 	 * `FilterPills` — a horizontal row of selectable filter pills, the shared
 	 * surface for filter-chip rails across the app.
@@ -57,7 +58,7 @@
 				onclick={() => onclick(p.id)}
 			>
 				{#if p.icon}
-					<i class={p.icon} style={p.iconStyle} aria-hidden="true"></i>
+					<Icon cls={p.icon} style={p.iconStyle} aria-hidden="true" />
 				{/if}
 				{#if p.label}<span>{p.label}</span>{/if}
 				{#if p.count != null}<span class="pp-tag-count">{p.count}</span>{/if}

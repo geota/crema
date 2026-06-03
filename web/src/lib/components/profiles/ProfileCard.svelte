@@ -1,4 +1,8 @@
 <script lang="ts">
+	import Icon from '$lib/icons/Icon.svelte';
+	import CopyIcon from 'phosphor-svelte/lib/CopyIcon';
+	import DownloadSimpleIcon from 'phosphor-svelte/lib/DownloadSimpleIcon';
+	import PencilSimpleIcon from 'phosphor-svelte/lib/PencilSimpleIcon';
 	/**
 	 * `ProfileCard` — one profile in the `/profiles` library grid, ported from
 	 * `ProfileCard` in `profiles-page.jsx`.
@@ -114,7 +118,7 @@
 			title={profile.pinned ? 'Pinned to favorites' : 'Pin to favorites'}
 			onclick={() => onTogglePin(profile.id)}
 		>
-			<i class={profile.pinned ? 'ph-fill ph-star' : 'ph ph-star'} aria-hidden="true"></i>
+			<Icon cls={profile.pinned ? 'ph-fill ph-star' : 'ph ph-star'} aria-hidden="true" />
 		</button>
 	</div>
 
@@ -163,10 +167,10 @@
 				class:is-on={active}
 				onclick={() => !active && onLoad(profile.id)}
 			>
-				<i
-					class={active ? 'ph-fill ph-check-circle' : 'ph ph-coffee'}
+				<Icon
+					cls={active ? 'ph-fill ph-check-circle' : 'ph ph-coffee'}
 					aria-hidden="true"
-				></i>
+				 />
 				<span>{active ? 'Loaded on Brew' : 'Load on Brew'}</span>
 			</button>
 			<button
@@ -174,10 +178,10 @@
 				title="Duplicate"
 				onclick={() => onDuplicate(profile.id)}
 			>
-				<i class="ph ph-copy" aria-hidden="true"></i>
+				<CopyIcon aria-hidden="true" />
 			</button>
 			<button class="pp-action-icon" title="Edit" onclick={() => onEdit(profile.id)}>
-				<i class="ph ph-pencil-simple" aria-hidden="true"></i>
+				<PencilSimpleIcon aria-hidden="true" />
 			</button>
 			{#if onExport}
 				<button
@@ -185,7 +189,7 @@
 					title="Download as community v2 .json — re-importable to Crema, reaprime, Visualizer or de1app"
 					onclick={() => onExport(profile.id)}
 				>
-					<i class="ph ph-download-simple" aria-hidden="true"></i>
+					<DownloadSimpleIcon aria-hidden="true" />
 				</button>
 			{/if}
 			<button
@@ -194,7 +198,7 @@
 				title={removeTitle}
 				onclick={() => onDelete(profile.id)}
 			>
-				<i class={`ph ${removeIcon}`} aria-hidden="true"></i>
+				<Icon cls={`ph ${removeIcon}`} aria-hidden="true" />
 			</button>
 		</div>
 	</div>

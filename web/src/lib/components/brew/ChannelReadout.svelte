@@ -1,4 +1,5 @@
 <script lang="ts">
+	import Icon from '$lib/icons/Icon.svelte';
 	/**
 	 * `ChannelReadout` — one telemetry-channel tile, ported from the design's
 	 * `ChannelReadout` in `ds/web-components.jsx`. Reuses the `.crema-readout*`
@@ -53,11 +54,11 @@
 <div class="crema-readout" class:has-secondary={hasSecondary}>
 	<div class="crema-readout-side crema-readout-primary">
 		<div class="crema-readout-head">
-			<i
-				class={'ph-duotone ph-' + icon}
+			<Icon
+				cls={'ph-duotone ph-' + icon}
 				style="font-size:14px;color:{color}"
 				aria-hidden="true"
-			></i>
+			 />
 			<span class="crema-readout-label" style="color:{color}">{label}</span>
 		</div>
 		<div class="crema-readout-val">

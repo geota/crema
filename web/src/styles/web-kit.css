@@ -215,7 +215,7 @@ summary:focus-visible,
   letter-spacing: 0.01em;
   font-variant-numeric: tabular-nums;
 }
-.crema-profile-sync > i { animation: crema-spin 1.2s linear infinite; font-size: 12px; }
+.crema-profile-sync > :is(i, svg) { animation: crema-spin 1.2s linear infinite; font-size: 12px; }
 @keyframes crema-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 .crema-dash-profile-meta { font-family: var(--font-sans); font-size: 12px; color: rgba(var(--tint-rgb), 0.55); }
 /* DE1-side shape summary — sits one line below the user-side meta and
@@ -269,7 +269,7 @@ summary:focus-visible,
 .crema-stopcond-row:first-of-type { margin-top: 6px; }
 .crema-stopcond-top { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
 .crema-stopcond-label { display: inline-flex; align-items: center; gap: 7px; font-family: var(--font-sans); font-size: 12px; color: rgba(var(--tint-rgb), 0.7); }
-.crema-stopcond-label > i { font-size: 14px; }
+.crema-stopcond-label > :is(i, svg) { font-size: 14px; }
 .crema-stopcond-val { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: 14px; color: rgba(var(--tint-rgb), 0.55); }
 .crema-stopcond-val em { font-style: normal; font-size: 10px; opacity: 0.7; margin-left: 1px; }
 .crema-stopcond-live { color: var(--copper-400); }
@@ -392,7 +392,7 @@ summary:focus-visible,
   color: rgba(var(--tint-rgb), 0.45);
 }
 /* The channel symbol is dim until the segment actually exits on it. */
-.crema-phase-row-time > i { font-size: 12px; opacity: 0.5; }
+.crema-phase-row-time > :is(i, svg) { font-size: 12px; opacity: 0.5; }
 .crema-phase-row-time > i.is-fired { opacity: 1; }
 /* Small vertical bar = "this segment early-exited on its pressure/flow criterion". */
 .crema-phase-exitbar { width: 2px; height: 11px; border-radius: 1px; flex: 0 0 auto; }
@@ -522,7 +522,7 @@ summary:focus-visible,
   gap: 12px;
   min-width: 0;
 }
-.crema-foot-scale > i {
+.crema-foot-scale > :is(i, svg) {
   font-size: 32px;
   color: var(--tel-weight, var(--success));
 }
@@ -766,7 +766,7 @@ summary:focus-visible,
 .bh-spec { color: rgba(var(--tint-rgb), 0.42); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .bh-tags { font-family: var(--font-sans); font-size: 10px; color: rgba(var(--tint-rgb), 0.34); letter-spacing: 0.01em; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .bh-sync { display: inline-flex; align-items: center; gap: 4px; font-family: var(--font-sans); font-size: 10.5px; color: var(--copper-400); }
-.bh-sync > i { font-size: 12px; animation: bh-spin 1.1s linear infinite; }
+.bh-sync > :is(i, svg) { font-size: 12px; animation: bh-spin 1.1s linear infinite; }
 @keyframes bh-spin { to { transform: rotate(360deg); } }
 .bh-bean-eyebrow { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .bh-fresh { display: inline-flex; align-items: center; gap: 5px; font-family: var(--font-sans); font-size: 11px; font-weight: 500; white-space: nowrap; }
@@ -775,7 +775,7 @@ summary:focus-visible,
 .bh-icon:hover { background: rgba(var(--tint-rgb), 0.14); color: var(--fg-1); }
 .bh-icon:disabled { opacity: 0.4; cursor: default; }
 .bh-icon.is-open { background: rgba(var(--copper-rgb), 0.16); color: var(--copper-400); }
-.bh-icon > i { font-size: 15px; }
+.bh-icon > :is(i, svg) { font-size: 15px; }
 .bh-divider { width: 1px; align-self: stretch; background: rgba(var(--tint-rgb), 0.12); margin: 2px 4px; flex: 0 0 auto; }
 .bh-status { flex: 0 1 auto; align-self: center; min-width: 0; }
 .bh-actions { align-self: center; flex: 0 0 auto; }
@@ -783,7 +783,7 @@ summary:focus-visible,
 .hpick { position: absolute; top: calc(100% + 6px); left: 0; z-index: 40; width: min(340px, 80vw); display: flex; flex-direction: column; max-height: 380px; background: var(--bg-surface); border: 1px solid rgba(var(--tint-rgb), 0.12); border-radius: 12px; box-shadow: var(--shadow-lg); overflow: hidden; }
 .bh-block-bean .hpick { left: auto; right: 0; }
 .hpick-search { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid rgba(var(--tint-rgb), 0.08); }
-.hpick-search > i { font-size: 15px; color: rgba(var(--tint-rgb), 0.45); }
+.hpick-search > :is(i, svg) { font-size: 15px; color: rgba(var(--tint-rgb), 0.45); }
 .hpick-search input { flex: 1; min-width: 0; border: 0; background: transparent; outline: none; font-family: var(--font-sans); font-size: 14px; color: var(--fg-1); }
 .hpick-list { flex: 1; min-height: 0; overflow-y: auto; padding: 6px; display: flex; flex-direction: column; gap: 2px; }
 .hpick-item { display: flex; align-items: center; gap: 9px; width: 100%; text-align: left; padding: 7px 8px; border: 0; border-radius: 8px; background: transparent; cursor: pointer; color: var(--fg-1); transition: background 120ms var(--ease); }
@@ -803,4 +803,4 @@ summary:focus-visible,
 .hpick-foot-icon { flex: 0 0 auto; width: 36px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid rgba(var(--tint-rgb), 0.12); border-radius: 8px; background: transparent; cursor: pointer; color: var(--fg-2); transition: background 120ms var(--ease), border-color 120ms var(--ease); }
 .hpick-foot-icon:hover { background: rgba(var(--tint-rgb), 0.06); border-color: rgba(var(--tint-rgb), 0.2); color: var(--fg-1); }
 .hpick-foot-icon:disabled { opacity: 0.4; cursor: default; }
-.hpick-foot-lib > i, .hpick-foot-icon > i { font-size: 15px; }
+.hpick-foot-lib > :is(i, svg), .hpick-foot-icon > :is(i, svg) { font-size: 15px; }

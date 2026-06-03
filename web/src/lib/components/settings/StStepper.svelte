@@ -1,4 +1,6 @@
 <script lang="ts">
+	import MinusIcon from 'phosphor-svelte/lib/MinusIcon';
+	import PlusIcon from 'phosphor-svelte/lib/PlusIcon';
 	/**
 	 * `StStepper` — a `−` / value / `+` numeric stepper that also supports
 	 * **click-to-type**: clicking the value flips it into an inline number
@@ -195,7 +197,7 @@
 			onclick={() => inc(-1)}
 			aria-label="Decrease {label ?? 'value'}"
 		>
-			<i class="ph ph-minus" aria-hidden="true"></i>
+			<MinusIcon aria-hidden="true" />
 		</button>
 		<div class="st-stepper-val">
 			{#if editing}
@@ -223,7 +225,7 @@
 			onclick={() => inc(1)}
 			aria-label="Increase {label ?? 'value'}"
 		>
-			<i class="ph ph-plus" aria-hidden="true"></i>
+			<PlusIcon aria-hidden="true" />
 		</button>
 	</div>
 </div>

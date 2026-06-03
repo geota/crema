@@ -1,4 +1,6 @@
 <script lang="ts">
+	import BuildingsIcon from 'phosphor-svelte/lib/BuildingsIcon';
+	import PlusIcon from 'phosphor-svelte/lib/PlusIcon';
 	/**
 	 * `RoasterAutocomplete` — a typeahead input over the existing roaster
 	 * directory.
@@ -203,14 +205,14 @@
 						}}
 						onmouseenter={() => (activeIdx = i)}
 					>
-						<i class="ph ph-buildings" aria-hidden="true"></i>
+						<BuildingsIcon aria-hidden="true" />
 						<span>{r.name}</span>
 					</button>
 				</li>
 			{/each}
 			{#if value.trim() && !exactMatch}
 				<li class="ra-hint">
-					<i class="ph ph-plus" aria-hidden="true"></i>
+					<PlusIcon aria-hidden="true" />
 					New roaster <strong>"{value.trim()}"</strong> will be created on save
 				</li>
 			{/if}
@@ -281,7 +283,7 @@
 		border-radius: var(--radius-sm, 6px);
 		cursor: pointer;
 	}
-	.ra-item i {
+	.ra-item :global(svg) {
 		font-size: 13px;
 		color: rgba(var(--tint-rgb), 0.45);
 	}
@@ -289,7 +291,7 @@
 		background: rgba(193, 124, 79, 0.16);
 		color: var(--copper-300);
 	}
-	.ra-item.is-active i {
+	.ra-item.is-active :global(svg) {
 		color: var(--copper-300);
 	}
 	.ra-hint {
@@ -303,7 +305,7 @@
 		border-top: 1px solid rgba(var(--tint-rgb), 0.08);
 		margin-top: 2px;
 	}
-	.ra-hint i {
+	.ra-hint :global(svg) {
 		font-size: 12px;
 	}
 	.ra-hint strong {

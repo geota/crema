@@ -1,4 +1,8 @@
 <script lang="ts">
+	import CheckIcon from 'phosphor-svelte/lib/CheckIcon';
+	import MagnifyingGlassIcon from 'phosphor-svelte/lib/MagnifyingGlassIcon';
+	import XCircleIcon from 'phosphor-svelte/lib/XCircleIcon';
+	import XIcon from 'phosphor-svelte/lib/XIcon';
 	/**
 	 * `BeanPicker` — a small modal that lists every bag in the bean
 	 * library and lets the user pick one to retroactively bind to a
@@ -101,12 +105,12 @@
 				<div class="bp-title">Choose a bean</div>
 			</div>
 			<button class="bp-close" onclick={onClose} aria-label="Close">
-				<i class="ph ph-x" aria-hidden="true"></i>
+				<XIcon aria-hidden="true" />
 			</button>
 		</div>
 
 		<div class="bp-search">
-			<i class="ph ph-magnifying-glass" aria-hidden="true"></i>
+			<MagnifyingGlassIcon aria-hidden="true" />
 			<input
 				bind:value={query}
 				placeholder="Search bag or roaster…"
@@ -127,7 +131,7 @@
 							<span class="bp-row-sub">{beanSubtitle(b)}</span>
 						</span>
 						{#if b.id === currentBeanId}
-							<i class="ph ph-check bp-row-current" aria-hidden="true"></i>
+							<CheckIcon class="bp-row-current" aria-hidden="true" />
 						{/if}
 					</button>
 				</li>
@@ -144,7 +148,7 @@
 		<div class="bp-foot">
 			{#if currentBeanId}
 				<button class="bp-clear" onclick={onClear}>
-					<i class="ph ph-x-circle" aria-hidden="true"></i> Clear binding
+					<XCircleIcon aria-hidden="true" /> Clear binding
 				</button>
 			{/if}
 			<button class="bp-cancel" onclick={onClose}>Cancel</button>
@@ -209,7 +213,7 @@
 	.bp-search:focus-within {
 		border-color: rgba(var(--tint-rgb), 0.25);
 	}
-	.bp-search i {
+	.bp-search :global(svg) {
 		color: rgba(var(--tint-rgb), 0.45);
 		font-size: 13px;
 	}
@@ -278,7 +282,7 @@
 		font-size: 11px;
 		color: rgba(var(--tint-rgb), 0.55);
 	}
-	.bp-row-current {
+	:global(.bp-row-current) {
 		color: var(--copper-400);
 		font-size: 14px;
 	}

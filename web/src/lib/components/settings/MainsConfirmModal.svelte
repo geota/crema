@@ -1,4 +1,7 @@
 <script lang="ts">
+	import InfoIcon from 'phosphor-svelte/lib/InfoIcon';
+	import WarningCircleIcon from 'phosphor-svelte/lib/WarningCircleIcon';
+	import WarningOctagonIcon from 'phosphor-svelte/lib/WarningOctagonIcon';
 	/**
 	 * `MainsConfirmModal` — the type-to-confirm gate the user must pass
 	 * before committing the mains heater voltage (`kind="voltage"`) or the
@@ -148,7 +151,7 @@
 
 		<!-- Always-shown loud red banner: damage / impact copy. -->
 		<div class="mc-banner mc-banner-warn" role="alert">
-			<i class="ph ph-warning-octagon" aria-hidden="true"></i>
+			<WarningOctagonIcon aria-hidden="true" />
 			<span>{damageCopy}</span>
 		</div>
 
@@ -160,7 +163,7 @@
 		-->
 		{#if hasMismatch && country}
 			<div class="mc-banner mc-banner-danger" role="alert">
-				<i class="ph ph-warning-circle" aria-hidden="true"></i>
+				<WarningCircleIcon aria-hidden="true" />
 				<span>
 					Detected location: <strong>{countryName(country)}</strong> — expected
 					<strong>{expectedFromCountry}{unit}</strong>. You are setting
@@ -169,7 +172,7 @@
 			</div>
 		{:else if inCountryVariation}
 			<div class="mc-banner mc-banner-info" role="status">
-				<i class="ph ph-info" aria-hidden="true"></i>
+				<InfoIcon aria-hidden="true" />
 				<span>
 					Your region ({countryName(country!)}) uses more than one mains
 					standard — please verify your outlet directly.
@@ -283,7 +286,7 @@
 		font-size: 13px;
 		line-height: 1.4;
 	}
-	.mc-banner i {
+	.mc-banner :global(svg) {
 		flex-shrink: 0;
 		font-size: 18px;
 		margin-top: 1px;
