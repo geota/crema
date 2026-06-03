@@ -59,10 +59,10 @@ import com.patrykandpatrick.vico.compose.common.data.ExtraStore
  *
  * M2 scope: curves + dual-labelled axes + auto-growing ranges + the copper
  * "now" playhead with per-channel end-dots (uPlot's markerPlugin, via a custom
- * persistent CartesianMarker — see PlayheadMarker). Channel-visibility toggles
- * arrive with the Quick Controls sheet; pin/drag is a later increment. Defaults
- * match the web (pressure, flow, weight) plus head temp (so the right axis is
- * always exercised) and the pressure setpoint.
+ * persistent CartesianMarker — see PlayheadMarker). Channels are chosen from
+ * Quick Controls via [enabledChannels] (defaults match the web: pressure, flow,
+ * weight); the dashed pressure setpoint rides along when pressure is shown.
+ * Pin/drag is a later increment.
  */
 
 // Shared range: y pinned [0, max(10, dataMax + 0.3)]; x pinned [0, max(60, dataMax)].
@@ -79,6 +79,21 @@ private val ShotRangeProvider =
 private val LeftAxisFormatter = CartesianValueFormatter { _, v, _ -> v.toInt().toString() }
 private val RightAxisFormatter = CartesianValueFormatter { _, v, _ -> (v * 10).toInt().toString() }
 private val TimeAxisFormatter = CartesianValueFormatter { _, v, _ -> "${v.toInt()}s" }
+
+/**
+ * One toggleable chart channel: its stable key, its pre-remembered Vico line,
+ * an [available] predicate that gates nullable (scale-only / low-flow) channels
+ * so we never plot an all-zero ghost, and [valueOf] which already applies the
+ * channel's plot transform (raw, ÷10, clamp). The enabled + available subset is
+ * the single source of order for both the line provider and the series push, so
+ * Vico's line→series index mapping always lines up.
+ */
+private class ChartChannelSpec(
+    val key: String,
+    val line: LineCartesianLayer.Line,
+    val available: (List<TelemetrySample>) -> Boolean,
+    val valueOf: (TelemetrySample) -> Float,
+)
 
 /*
  * The copper "now" playhead — a custom CartesianMarker. (Vico's
@@ -137,47 +152,18 @@ private fun rememberPlayheadMarker(lineColor: Color): CartesianMarker {
 }
 
 @Composable
-fun ShotChart(samples: List<TelemetrySample>, modifier: Modifier = Modifier) {
+fun ShotChart(
+    samples: List<TelemetrySample>,
+    enabledChannels: Set<String>,
+    modifier: Modifier = Modifier,
+) {
     val tel = CremaTheme.telemetry
     val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
     val gridColor = MaterialTheme.colorScheme.outlineVariant
 
     val modelProducer = remember { CartesianChartModelProducer() }
-    // Weight rides the chart only when a scale is paired (it's the one nullable
-    // channel). Both the line list and the series push key off this so their
-    // index order always matches (Vico maps lines→series by position).
-    val hasWeight = samples.any { it.weight != null }
-
-    // Real-time feed. Empty buffer (resting) → a flat baseline so the axes/grid
-    // still render the empty frame, matching uPlot's at-rest look.
-    LaunchedEffect(modelProducer, samples, hasWeight) {
-        if (samples.isEmpty()) {
-            modelProducer.runTransaction {
-                lineModel {
-                    series(x = listOf(0f, 60f), y = listOf(0f, 0f), key = "pressure")
-                    series(x = listOf(0f, 60f), y = listOf(0f, 0f), key = "flow")
-                    series(x = listOf(0f, 60f), y = listOf(0f, 0f), key = "temp")
-                    series(x = listOf(0f, 60f), y = listOf(0f, 0f), key = "setPressure")
-                }
-            }
-            return@LaunchedEffect
-        }
-        val xs = samples.map { it.elapsedMs / 1000f }
-        modelProducer.runTransaction {
-            lineModel {
-                series(x = xs, y = samples.map { it.pressure }, key = "pressure")
-                series(x = xs, y = samples.map { it.flow }, key = "flow")
-                series(x = xs, y = samples.map { it.headTemp / 10f }, key = "temp")
-                if (hasWeight) {
-                    series(x = xs, y = samples.map { (it.weight ?: 0f) / 10f }, key = "weight")
-                }
-                series(x = xs, y = samples.map { it.setGroupPressure }, key = "setPressure")
-            }
-        }
-    }
-
-    // All lines created unconditionally (stable remember slots); the weight line
-    // is only added to the provider when a scale is present (see hasWeight).
+    // One line per channel, all created unconditionally (stable remember slots).
+    // Colours/widths from the theme; temp/weight/volume ride the ÷10 scale.
     val pressureLine = LineCartesianLayer.rememberLine(
         fill = LineCartesianLayer.LineFill.single(Fill(tel.pressure)),
         stroke = LineCartesianLayer.LineStroke.Continuous(thickness = 2.6.dp),
@@ -186,26 +172,78 @@ fun ShotChart(samples: List<TelemetrySample>, modifier: Modifier = Modifier) {
         fill = LineCartesianLayer.LineFill.single(Fill(tel.flow)),
         stroke = LineCartesianLayer.LineStroke.Continuous(thickness = 2.2.dp),
     )
-    val tempLine = LineCartesianLayer.rememberLine(
+    val headTempLine = LineCartesianLayer.rememberLine(
         fill = LineCartesianLayer.LineFill.single(Fill(tel.temp)),
         stroke = LineCartesianLayer.LineStroke.Continuous(thickness = 2.2.dp),
+    )
+    val mixTempLine = LineCartesianLayer.rememberLine(
+        fill = LineCartesianLayer.LineFill.single(Fill(tel.temp2)),
+        stroke = LineCartesianLayer.LineStroke.Continuous(thickness = 1.5.dp),
     )
     val weightLine = LineCartesianLayer.rememberLine(
         fill = LineCartesianLayer.LineFill.single(Fill(tel.weight)),
         stroke = LineCartesianLayer.LineStroke.Continuous(thickness = 2.2.dp),
+    )
+    val weightFlowLine = LineCartesianLayer.rememberLine(
+        fill = LineCartesianLayer.LineFill.single(Fill(tel.weight2)),
+        stroke = LineCartesianLayer.LineStroke.Continuous(thickness = 1.5.dp),
+    )
+    val volumeLine = LineCartesianLayer.rememberLine(
+        fill = LineCartesianLayer.LineFill.single(Fill(tel.flow2)),
+        stroke = LineCartesianLayer.LineStroke.Continuous(thickness = 1.5.dp),
+    )
+    val resistanceLine = LineCartesianLayer.rememberLine(
+        fill = LineCartesianLayer.LineFill.single(Fill(tel.pressure2)),
+        stroke = LineCartesianLayer.LineStroke.Continuous(thickness = 1.5.dp),
     )
     val setpointLine = LineCartesianLayer.rememberLine(
         fill = LineCartesianLayer.LineFill.single(Fill(tel.pressure.copy(alpha = 0.6f))),
         stroke = LineCartesianLayer.LineStroke.Dashed(thickness = 1.2.dp, dashLength = 3.dp, gapLength = 3.dp),
     )
 
-    // Order MUST match the series() push order above.
-    val lines = buildList {
-        add(pressureLine)
-        add(flowLine)
-        add(tempLine)
-        if (hasWeight) add(weightLine)
-        add(setpointLine)
+    // The toggleable channels in a fixed order. `available` gates the nullable
+    // (scale-only / low-flow) channels so a disabled-by-data channel is dropped
+    // rather than drawn as a flat zero.
+    val specs = listOf(
+        ChartChannelSpec("pressure", pressureLine, { true }) { it.pressure },
+        ChartChannelSpec("flow", flowLine, { true }) { it.flow },
+        ChartChannelSpec("headTemp", headTempLine, { true }) { it.headTemp / 10f },
+        ChartChannelSpec("mixTemp", mixTempLine, { true }) { it.mixTemp / 10f },
+        ChartChannelSpec("weight", weightLine, { s -> s.any { it.weight != null } }) { (it.weight ?: 0f) / 10f },
+        ChartChannelSpec("weightFlow", weightFlowLine, { s -> s.any { it.weightFlow != null } }) { it.weightFlow ?: 0f },
+        ChartChannelSpec("dispensedVolume", volumeLine, { true }) { it.dispensedVolume / 10f },
+        ChartChannelSpec(
+            "resistance",
+            resistanceLine,
+            { s -> s.any { (it.resistanceWeight ?: it.resistance) != null } },
+        ) { ((it.resistanceWeight ?: it.resistance) ?: 0f).coerceIn(0f, 10f) },
+    )
+    val active = specs.filter { it.key in enabledChannels && it.available(samples) }
+    // The dashed pressure setpoint rides along whenever pressure is shown (web parity).
+    val setpointSpec = ChartChannelSpec("setPressure", setpointLine, { true }) { it.setGroupPressure }
+    val withSetpoint = if ("pressure" in enabledChannels) active + setpointSpec else active
+    // Always keep ≥1 series — Vico requires it, and it draws the resting frame.
+    val effective = withSetpoint.ifEmpty { listOf(specs[0]) }
+    val providerLines = effective.map { it.line }
+
+    // Real-time feed: one transaction per buffer / channel-set change. Empty
+    // buffer (resting) → a flat baseline so the axes/grid still render the frame,
+    // matching uPlot's at-rest look. The push order matches [providerLines].
+    LaunchedEffect(modelProducer, samples, enabledChannels) {
+        modelProducer.runTransaction {
+            lineModel {
+                if (samples.isEmpty()) {
+                    effective.forEach { spec ->
+                        series(x = listOf(0f, 60f), y = listOf(0f, 0f), key = spec.key)
+                    }
+                } else {
+                    val xs = samples.map { it.elapsedMs / 1000f }
+                    effective.forEach { spec ->
+                        series(x = xs, y = samples.map { spec.valueOf(it) }, key = spec.key)
+                    }
+                }
+            }
+        }
     }
 
     val labelStyle = TextStyle(color = labelColor, fontSize = 11.sp, fontFamily = JetBrainsMono)
@@ -219,7 +257,7 @@ fun ShotChart(samples: List<TelemetrySample>, modifier: Modifier = Modifier) {
 
     val chart = rememberCartesianChart(
         rememberLineCartesianLayer(
-            lineProvider = LineCartesianLayer.LineProvider.series(lines),
+            lineProvider = LineCartesianLayer.LineProvider.series(providerLines),
             rangeProvider = ShotRangeProvider,
             // verticalAxisPosition left null → one shared range read by both axes.
         ),

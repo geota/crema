@@ -140,6 +140,7 @@ fun BrewScreen(
                     ) {
                         ShotChart(
                             samples = ui.shotTelemetry,
+                            enabledChannels = ui.chartChannels,
                             modifier = Modifier
                                 .fillMaxSize()
                                 .padding(start = 4.dp, end = 8.dp, top = 8.dp, bottom = 4.dp),
@@ -165,9 +166,11 @@ fun BrewScreen(
                     autoTare = ui.autoTare,
                     stopOnWeight = ui.stopOnWeight,
                     steamEco = ui.steamEco,
+                    channels = ui.chartChannels,
                     onAutoTare = vm::setAutoTare,
                     onStopOnWeight = vm::setStopOnWeight,
                     onSteamEco = vm::setSteamEco,
+                    onToggleChannel = vm::toggleChartChannel,
                     onDismiss = { quickOpen = false },
                 )
             }

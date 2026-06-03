@@ -145,6 +145,13 @@ data class MainUiState(
     val autoTare: Boolean = false,
     val stopOnWeight: Boolean = false,
     val steamEco: Boolean = false,
+    /**
+     * Which telemetry channels the live chart draws — keys: `pressure`, `flow`,
+     * `headTemp`, `mixTemp`, `weight`, `weightFlow`, `dispensedVolume`,
+     * `resistance`. A local display pref toggled from Quick Controls; defaults
+     * match the web (pressure / flow / weight).
+     */
+    val chartChannels: Set<String> = setOf("pressure", "flow", "weight"),
     /** Latest scale weight in grams, or null before the first reading. */
     val scaleWeightG: Float? = null,
     /**
@@ -562,6 +569,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         onCoreOutputJson(raw)
+    }
+
+    /** Show/hide a live-chart channel (Quick Controls). Local display pref only. */
+    fun toggleChartChannel(key: String, enabled: Boolean) {
+        val next = _ui.value.chartChannels.toMutableSet().apply {
+            if (enabled) add(key) else remove(key)
+        }
+        _ui.value = _ui.value.copy(chartChannels = next)
     }
 
     /** Scan for and connect to a Bookoo scale. Independent of the DE1. */
