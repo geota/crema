@@ -136,6 +136,15 @@ data class MainUiState(
     val profileUploading: Boolean = false,
     /** Upload progress as `"received/total"` acks while uploading, or null. */
     val profileUploadProgress: String? = null,
+    /**
+     * Shot-behaviour toggles surfaced in Quick Controls. Shell-managed and
+     * optimistic — the core applies them via its setters but does not echo them
+     * back as events, so these hold the last user choice (the same pattern the
+     * scale config toggles use).
+     */
+    val autoTare: Boolean = false,
+    val stopOnWeight: Boolean = false,
+    val steamEco: Boolean = false,
     /** Latest scale weight in grams, or null before the first reading. */
     val scaleWeightG: Float? = null,
     /**
@@ -520,6 +529,40 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Stop a running shot (return to idle). */
     fun stopShot() = requestMachineState(MachineRequest.IDLE)
+
+    /** Enable/disable auto-tare at shot start (Quick Controls). Optimistic. */
+    fun setAutoTare(enabled: Boolean) {
+        _ui.value = _ui.value.copy(autoTare = enabled)
+        runCatching { bridge.setAutoTare(enabled) }.onFailure {
+            appendLog("Set auto-tare failed: ${it.message}")
+        }
+    }
+
+    /**
+     * Enable/disable stop-on-weight (Quick Controls). The yield target comes from
+     * the active profile; this just arms/disarms the behaviour. Optimistic.
+     */
+    fun setStopOnWeight(enabled: Boolean) {
+        _ui.value = _ui.value.copy(stopOnWeight = enabled)
+        runCatching { bridge.setStopOnWeight(enabled) }.onFailure {
+            appendLog("Set stop-on-weight failed: ${it.message}")
+        }
+    }
+
+    /**
+     * Enable/disable steam eco mode (Quick Controls). Returns a `CoreOutput` (an
+     * MMR write) routed through the shared command path. Optimistic.
+     */
+    fun setSteamEco(enabled: Boolean) {
+        _ui.value = _ui.value.copy(steamEco = enabled)
+        val raw = runCatching {
+            bridge.enableSteamEcoMode(enabled, System.currentTimeMillis().toULong())
+        }.getOrElse {
+            appendLog("Set steam eco failed: ${it.message}")
+            return
+        }
+        onCoreOutputJson(raw)
+    }
 
     /** Scan for and connect to a Bookoo scale. Independent of the DE1. */
     fun connectScale() {

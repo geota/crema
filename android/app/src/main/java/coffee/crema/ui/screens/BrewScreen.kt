@@ -83,6 +83,7 @@ fun BrewScreen(
     val active = ui.profiles.firstOrNull { it.id == ui.activeProfileId }
     val running = ui.shotInProgress
     val espressoActive = ui.machineStateName == "Espresso"
+    var quickOpen by remember { mutableStateOf(false) }
 
     Row(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         CremaNavigationRail(
@@ -99,6 +100,7 @@ fun BrewScreen(
                 onSelectProfile = vm::setActiveProfile,
                 uploading = ui.profileUploading,
                 uploadProgress = ui.profileUploadProgress,
+                onOpenQuick = { quickOpen = true },
             )
             Row(
                 modifier = Modifier
@@ -158,6 +160,17 @@ fun BrewScreen(
                 // then Espresso (vm.startShot). Stop is a direct Idle request.
                 onCoffee = { if (espressoActive) vm.stopShot() else vm.startShot() },
             )
+            if (quickOpen) {
+                QuickControlsSheet(
+                    autoTare = ui.autoTare,
+                    stopOnWeight = ui.stopOnWeight,
+                    steamEco = ui.steamEco,
+                    onAutoTare = vm::setAutoTare,
+                    onStopOnWeight = vm::setStopOnWeight,
+                    onSteamEco = vm::setSteamEco,
+                    onDismiss = { quickOpen = false },
+                )
+            }
         }
     }
 }
@@ -176,6 +189,7 @@ private fun BrewHeader(
     onSelectProfile: (String) -> Unit,
     uploading: Boolean,
     uploadProgress: String?,
+    onOpenQuick: () -> Unit,
 ) {
     Row(
         modifier = Modifier
@@ -194,7 +208,7 @@ private fun BrewHeader(
         Spacer(Modifier.weight(1f))
         Box(Modifier.width(1.dp).height(44.dp).background(MaterialTheme.colorScheme.outlineVariant))
         BeanBlock()
-        QuickControlsPill()
+        QuickControlsPill(onClick = onOpenQuick)
     }
 }
 
@@ -310,11 +324,11 @@ private fun BeanBlock() {
 }
 
 @Composable
-private fun QuickControlsPill() {
-    // M1: present for layout fidelity; the Quick Controls bottom sheet is M2.
+private fun QuickControlsPill(onClick: () -> Unit) {
     Row(
         modifier = Modifier
             .clip(RoundedCornerShape(999.dp))
+            .clickable(onClick = onClick)
             .background(MaterialTheme.colorScheme.secondaryContainer)
             .padding(horizontal = 18.dp, vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
