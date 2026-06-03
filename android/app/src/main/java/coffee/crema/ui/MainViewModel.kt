@@ -98,6 +98,14 @@ data class MainUiState(
     val shotFrame: Int = 0,
     /** True between `ShotStarted` and `ShotCompleted` — drives resting↔extracting UI. */
     val shotInProgress: Boolean = false,
+    /**
+     * Buffered per-sample telemetry for the live shot chart — appended on each
+     * `Event.Telemetry` while [shotInProgress], reset on `ShotStarted`, capped at
+     * [SHOT_TELEMETRY_CAP]. Empty when no shot is running. The scalar fields
+     * above stay live outside a shot (for the resting channel cards); this series
+     * only fills during extraction (when the chart draws curves).
+     */
+    val shotTelemetry: List<TelemetrySample> = emptyList(),
     /** Raw machine-state name (e.g. `"Espresso"`) for `==` comparisons, or null. */
     val machineStateName: String? = null,
     /** Raw machine-substate name (e.g. `"Pouring"`), or null. */
@@ -393,6 +401,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             shotElapsedMs = 0,
             shotFrame = 0,
             shotInProgress = false,
+            shotTelemetry = emptyList(),
             waterLevelMm = null,
         )
     }
@@ -751,6 +760,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     shotFrame = 0,
                     shotElapsedMs = 0,
                     dispensedVolume = 0f,
+                    shotTelemetry = emptyList(),
                 )
                 appendLog("Shot started")
             }
@@ -765,12 +775,41 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
             is Event.Telemetry -> {
                 val t = event.content
+                val prev = _ui.value
                 val line = "t=%dms  P=%.1fbar  flow=%.1fmL/s  head=%.1f°C".format(
                     t.elapsed.toLong(), t.group_pressure, t.group_flow, t.head_temp,
                 )
+                // Append a chart sample while a shot is running (the buffer fills
+                // only during extraction, like the web). Fold in the latest scale
+                // weight/flow so the WEIGHT curves track the cup. FIFO-capped.
+                val nextBuffer = if (prev.shotInProgress) {
+                    val sample = TelemetrySample(
+                        elapsedMs = t.elapsed.toLong(),
+                        pressure = t.group_pressure,
+                        flow = t.group_flow,
+                        headTemp = t.head_temp,
+                        mixTemp = t.mix_temp,
+                        weight = prev.scaleWeightG,
+                        weightFlow = prev.scaleFlowGPerS,
+                        dispensedVolume = t.dispensed_volume,
+                        resistance = t.resistance,
+                        resistanceWeight = t.resistance_weight,
+                        setHeadTemp = t.set_head_temp,
+                        setGroupPressure = t.set_group_pressure,
+                        setGroupFlow = t.set_group_flow,
+                    )
+                    val appended = prev.shotTelemetry + sample
+                    if (appended.size > SHOT_TELEMETRY_CAP) {
+                        appended.takeLast(SHOT_TELEMETRY_CAP)
+                    } else {
+                        appended
+                    }
+                } else {
+                    prev.shotTelemetry
+                }
                 // Keep the debug string AND project the structured channels the
                 // Brew dashboard reads. High-rate; no log line.
-                _ui.value = _ui.value.copy(
+                _ui.value = prev.copy(
                     telemetry = line,
                     pressure = t.group_pressure,
                     flow = t.group_flow,
@@ -781,6 +820,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     resistance = t.resistance,
                     resistanceWeight = t.resistance_weight,
                     shotElapsedMs = t.elapsed.toLong(),
+                    shotTelemetry = nextBuffer,
                 )
             }
             is Event.ScaleReading -> {
