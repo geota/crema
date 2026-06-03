@@ -37,6 +37,7 @@ import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager
 import coffee.crema.core.ModeInfo
 import coffee.crema.core.RangeCapability
+import coffee.crema.ui.screens.BrewScreen
 import coffee.crema.ui.screens.ScaleScreen
 import coffee.crema.ui.theme.CremaTheme
 
@@ -94,6 +95,9 @@ class MainActivity : ComponentActivity() {
                     machineConnected = machineConnected,
                     scaleConnected = scaleConnected,
                     onRailConnect = onRailConnect,
+                    brewContent = { navTo ->
+                        BrewScreen(viewModel, onNav = navTo, onConnect = onRailConnect)
+                    },
                     scaleContent = { navTo ->
                         ScaleScreen(viewModel, onNav = navTo, onConnect = onRailConnect)
                     },
