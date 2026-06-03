@@ -9,88 +9,100 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import coffee.crema.ble.De1BleManager
+import coffee.crema.ble.ScaleBleManager
+import coffee.crema.ui.MainUiState
+import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.components.*
 import coffee.crema.ui.theme.CremaTheme
-import kotlinx.coroutines.delay
 
 /*
- * ScaleScreen — the calm, focused weighing view (/scale).
+ * ScaleScreen — the calm, focused weighing view (/scale), wired to LIVE state.
  *
  * The most important pattern in the app: this screen is CAPABILITY-DRIVEN.
  *   • The Scale-settings panel is HIDDEN until a scale connects, and then
- *     renders only the rows the connected scale actually supports (caps.*).
+ *     renders only the rows the connected scale actually supports — gated on the
+ *     core's `ScaleCapabilities`, never on a concrete scale model.
  *   • Pairing / disconnect are NOT in the header — Connect happens from the
  *     nav-rail Scale pip or the on-screen empty state; Disconnect is inlined as
  *     the last action inside the settings panel.
  *   • Brew-behaviour (auto-tare, stop-on-weight) is NOT a scale capability —
  *     it lives in Settings → Brew defaults. This panel is scale-state only.
  *
- * Layout (tablet, 1280×800): NavigationRail | content Column {
- *     header,
- *     Row [ left Column (readout hero row + dose helper + recent activity)
- *           : weight 1 ,
- *           right Column (scale-settings panel) : fixed ~372dp ]
- * }
- * Recent activity sits UNDER the readout (left column slack) so the right rail
- * is entirely the settings panel — room for ~5+ capability rows without scroll.
+ * Live state + actions come from [MainViewModel] (the same funnel the Phase-0
+ * readout uses); when the CremaCoreClient / AppState seam lands this swaps to
+ * AppState with no layout change.
  */
 
-// ── Capability model — mirrors core ScaleCapabilities (de1-scale/scale.rs). ─
-// Null / false fields collapse the matching row. A Bookoo Themis exposes the
-// full set; a plain Acaia would null most of these → the panel shows its
-// "no adjustable settings" empty state instead of a blank card.
+// ── The screen's view-model of a scale's settings, derived from the core's
+// `ScaleCapabilities`. Null / false fields collapse the matching row; a
+// weight-only scale maps to an empty settings panel, never a blank card.
 data class ScaleCapabilities(
     val name: String,
-    val meta: String,                 // "Connected · 12 ms · 86% · FW 1.3.3"
+    val meta: String,
     val flowSmoothing: Boolean = false,
     val antiMistouch: Boolean = false,
     val autoStop: Boolean = false,
-    val standby: IntRange? = null,     // auto-sleep timeout (minutes)
-    val volume: IntRange? = null,      // beeper volume steps
-    val canSetUnit: Boolean = false,   // on-scale display unit (g / oz)
-    val canBeep: Boolean = false,      // locate / test-tone action
+    val standby: IntRange? = null, // auto-sleep timeout (minutes)
+    val volume: IntRange? = null,  // beeper volume steps
+    val canSetUnit: Boolean = false,
+    val canBeep: Boolean = false,
 )
 
-private val SampleScaleCaps = ScaleCapabilities(
-    name = "Sample scale",
-    meta = "Connected · 12 ms · 86% · FW 1.3.3",
-    flowSmoothing = true,
-    antiMistouch = true,
-    autoStop = true,
-    standby = 0..30,
-    volume = 0..3,
-    canSetUnit = true,
-    canBeep = true,
-)
+/** Adapt the core's `ScaleCapabilities` into the screen's row-gating model. */
+private fun mapCaps(core: coffee.crema.core.ScaleCapabilities, name: String, meta: String) =
+    ScaleCapabilities(
+        name = name,
+        meta = meta,
+        flowSmoothing = core.flow_smoothing,
+        antiMistouch = core.anti_mistouch,
+        autoStop = core.auto_stop,
+        standby = core.standby?.let { it.min.toInt()..it.max.toInt() },
+        volume = core.volume?.let { it.min.toInt()..it.max.toInt() },
+        // On-scale display-unit (g / oz) control is a later pass — the core
+        // models it as set-grams / toggle, not a clean g↔oz segmented yet.
+        canSetUnit = false,
+        canBeep = core.can_beep,
+    )
+
+/** The header meta line, built from the live scale identity. */
+private fun scaleMeta(ui: MainUiState): String =
+    buildList {
+        add("Connected")
+        ui.scaleBatteryPercent?.let { add("$it%") }
+        ui.scaleFirmware?.let { add("FW $it") }
+    }.joinToString(" · ")
 
 @Composable
-fun ScaleScreen(onNav: (String) -> Unit) {
+fun ScaleScreen(
+    vm: MainViewModel,
+    onNav: (String) -> Unit,
+    onConnect: (String) -> Unit,
+) {
     val sp = CremaTheme.spacing
-    var connected by remember { mutableStateOf(true) }
-    val caps = if (connected) SampleScaleCaps else null
+    val ui by vm.ui.collectAsState()
 
-    // Live weight sim — only ticks while connected.
-    var weight by remember { mutableStateOf(17.4) }
-    LaunchedEffect(connected) {
-        if (!connected) return@LaunchedEffect
-        while (true) {
-            delay(600)
-            val noise = (Math.random() - 0.5) * 0.04
-            val nudge = if (Math.random() < 0.3) 0.1 else 0.0
-            weight = (weight + noise + nudge).coerceAtLeast(0.0)
+    val connected = ui.scaleState == ScaleBleManager.State.READY
+    val machineConnected = ui.bleState == De1BleManager.State.READY
+    val coreCaps = ui.scaleCapabilities
+    val caps: ScaleCapabilities? =
+        if (connected && coreCaps != null) {
+            mapCaps(coreCaps, name = ui.scaleName ?: "Scale", meta = scaleMeta(ui))
+        } else {
+            null
         }
-    }
+    val weight = (ui.scaleWeightG ?: 0f).toDouble()
     val target = 18.0
 
     Row(Modifier.fillMaxSize()) {
         CremaNavigationRail(
             active = "scale",
             onNav = onNav,
+            machineConnected = machineConnected,
             scaleConnected = connected,
-            onConnect = { which -> if (which == "scale") connected = !connected },
+            onConnect = onConnect,
         )
         Column(
             Modifier.fillMaxSize().padding(start = sp.edge, top = sp.s4, end = sp.edge, bottom = sp.s5),
@@ -100,14 +112,32 @@ fun ScaleScreen(onNav: (String) -> Unit) {
             Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(sp.s5)) {
                 // Left column — readout, dose helper, recent activity
                 Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(sp.s4)) {
-                    ScaleHeroRow(connected, weight, target, onTare = { weight = 0.0 }, onConnect = { connected = true })
+                    ScaleHeroRow(
+                        connected = connected,
+                        weight = weight,
+                        onTare = vm::tareScale,
+                        onConnect = { onConnect("scale") },
+                        onResetPeak = vm::resetScalePeaks,
+                        onStartTimer = vm::startScaleTimer,
+                    )
                     DoseHelper(connected, weight, target)
                     RecentActivity(connected, Modifier.weight(1f))
                 }
                 // Right column — capability-driven settings panel
                 ScaleSettingsPanel(
                     caps = caps,
-                    onDisconnect = { connected = false },
+                    flowSmoothing = ui.scaleFlowSmoothing,
+                    antiMistouch = ui.scaleAntiMistouch,
+                    autoStopMode = ui.scaleAutoStop,
+                    volume = ui.scaleVolume,
+                    standbyMinutes = ui.scaleStandbyMinutes,
+                    onFlowSmoothing = vm::setScaleFlowSmoothing,
+                    onAntiMistouch = vm::setScaleAntiMistouch,
+                    onAutoStop = vm::setScaleAutoStop,
+                    onVolume = vm::setScaleVolume,
+                    onStandby = vm::setScaleStandbyMinutes,
+                    onBeep = vm::beepScale,
+                    onDisconnect = vm::disconnectScale,
                     modifier = Modifier.width(372.dp).fillMaxHeight(),
                 )
             }
@@ -120,12 +150,12 @@ private fun ScaleHeader(connected: Boolean, caps: ScaleCapabilities?) {
     Column {
         Eyebrow(if (connected) "Connected scale" else "Scale")
         Text(
-            if (connected) caps!!.name else "No scale connected",
+            if (connected && caps != null) caps.name else "No scale connected",
             style = MaterialTheme.typography.headlineLarge,
             color = MaterialTheme.colorScheme.onSurface,
         )
         Text(
-            if (connected) caps!!.meta else "Pair a scale to weigh your dose and stop shots by weight.",
+            if (connected && caps != null) caps.meta else "Pair a scale to weigh your dose and stop shots by weight.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -134,8 +164,12 @@ private fun ScaleHeader(connected: Boolean, caps: ScaleCapabilities?) {
 
 @Composable
 private fun ScaleHeroRow(
-    connected: Boolean, weight: Double, target: Double,
-    onTare: () -> Unit, onConnect: () -> Unit,
+    connected: Boolean,
+    weight: Double,
+    onTare: () -> Unit,
+    onConnect: () -> Unit,
+    onResetPeak: () -> Unit,
+    onStartTimer: () -> Unit,
 ) {
     val sp = CremaTheme.spacing
     Row(horizontalArrangement = Arrangement.spacedBy(sp.s4)) {
@@ -155,9 +189,6 @@ private fun ScaleHeroRow(
         // Tare column (connected) OR Connect column (disconnected) — fixed width
         Column(Modifier.width(280.dp), verticalArrangement = Arrangement.spacedBy(sp.s3)) {
             if (connected) {
-                // Big copper TARE — note the radius is LARGE (16dp) here; the
-                // readout card is MEDIUM (12dp): the step-down rule in reverse
-                // (the hero control may equal the card; secondary btns step down).
                 Surface(
                     onClick = onTare,
                     shape = MaterialTheme.shapes.large,
@@ -169,8 +200,8 @@ private fun ScaleHeroRow(
                         Text("0.0 g", style = CremaTheme.readout.readoutLg, color = MaterialTheme.colorScheme.onPrimary)
                     }
                 }
-                CremaButton(onClick = {}, variant = CremaButtonVariant.Tonal, icon = "arrow-counter-clockwise", label = "Reset peak")
-                CremaButton(onClick = {}, variant = CremaButtonVariant.Tonal, icon = "timer", label = "Start timer")
+                CremaButton(onClick = onResetPeak, variant = CremaButtonVariant.Tonal, icon = "arrow-counter-clockwise", label = "Reset peak")
+                CremaButton(onClick = onStartTimer, variant = CremaButtonVariant.Tonal, icon = "timer", label = "Start timer")
             } else {
                 Spacer(Modifier.weight(0.4f))
                 CremaButton(onClick = onConnect, variant = CremaButtonVariant.Filled, icon = "bluetooth", label = "Connect scale")
@@ -192,13 +223,10 @@ private fun DoseHelper(connected: Boolean, weight: Double, target: Double) {
         Column(Modifier.padding(horizontal = 20.dp, vertical = sp.s4), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    if (connected) "Dose helper · weighing for Rao 80% · target ${"%.1f".format(target)} g"
-                    else "Dose helper · target ${"%.1f".format(target)} g",
+                    "Dose helper · target ${"%.1f".format(target)} g",
                     style = MaterialTheme.typography.bodyMedium,
                 )
-                if (connected) CremaButton(onClick = {}, variant = CremaButtonVariant.Text, icon = "shuffle", label = "Switch profile")
             }
-            // progress track
             val pct = if (connected) (weight / target).coerceIn(0.0, 1.0).toFloat() else 0f
             LinearProgressIndicator(
                 progress = { pct },
@@ -208,7 +236,7 @@ private fun DoseHelper(connected: Boolean, weight: Double, target: Double) {
             )
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text(
-                    if (connected) "Add 0.5 g" else "Connect a scale to weigh your dose",
+                    if (connected) "Weighing…" else "Connect a scale to weigh your dose",
                     style = MaterialTheme.typography.labelMedium,
                     color = if (connected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -221,42 +249,39 @@ private fun DoseHelper(connected: Boolean, weight: Double, target: Double) {
 @Composable
 private fun RecentActivity(connected: Boolean, modifier: Modifier = Modifier) {
     val sp = CremaTheme.spacing
-    val rows = listOf(
-        Triple("14:38", "Tare · before dose", "0.0 g"),
-        Triple("14:38", "Weigh · dose for Rao 80%", "17.9 g"),
-        Triple("14:36", "Shot end · Rao 80%", "36.2 g"),
-        Triple("14:35", "Tare · on shot start", "0.0 g"),
-        Triple("13:58", "Connect · BLE handshake", "12 ms"),
-    )
     CremaCard(modifier) {
         Column(Modifier.padding(horizontal = 18.dp, vertical = sp.s4)) {
             Eyebrow("Recent activity")
             Spacer(Modifier.height(8.dp))
-            if (!connected) {
-                Text("No scale activity yet — connect a scale to begin.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            } else {
-                Column(Modifier.verticalScroll(rememberScrollState())) {
-                    rows.forEach { (time, label, value) ->
-                        // One compact line: {time}  {message} ............ {value}
-                        Row(
-                            Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            Text(time, style = CremaTheme.readout.readoutSm.copy(fontSize = androidx.compose.ui.unit.TextUnit(10f, androidx.compose.ui.unit.TextUnitType.Sp)), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text(label, style = MaterialTheme.typography.bodySmall.copy(fontSize = androidx.compose.ui.unit.TextUnit(11f, androidx.compose.ui.unit.TextUnitType.Sp)), color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
-                            Text(value, style = CremaTheme.readout.readoutSm.copy(fontSize = androidx.compose.ui.unit.TextUnit(11f, androidx.compose.ui.unit.TextUnitType.Sp)), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                    }
-                }
-            }
+            // A real per-scale activity log is a later feature; for now this is
+            // an honest empty state rather than fabricated rows.
+            Text(
+                if (connected) "No scale activity yet this session."
+                else "No scale activity yet — connect a scale to begin.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
 
 @Composable
-private fun ScaleSettingsPanel(caps: ScaleCapabilities?, onDisconnect: () -> Unit, modifier: Modifier = Modifier) {
+private fun ScaleSettingsPanel(
+    caps: ScaleCapabilities?,
+    flowSmoothing: Boolean,
+    antiMistouch: Boolean,
+    autoStopMode: Int?,
+    volume: Int,
+    standbyMinutes: Int,
+    onFlowSmoothing: (Boolean) -> Unit,
+    onAntiMistouch: (Boolean) -> Unit,
+    onAutoStop: (Int) -> Unit,
+    onVolume: (Int) -> Unit,
+    onStandby: (Int) -> Unit,
+    onBeep: () -> Unit,
+    onDisconnect: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val sp = CremaTheme.spacing
     CremaCard(modifier) {
         Column(Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = sp.s4)) {
@@ -282,34 +307,50 @@ private fun ScaleSettingsPanel(caps: ScaleCapabilities?, onDisconnect: () -> Uni
                 }
             } else {
                 Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
-                    var flow by remember { mutableStateOf(true) }
-                    var anti by remember { mutableStateOf(false) }
-                    var stop by remember { mutableStateOf(true) }
-                    var sleep by remember { mutableStateOf(true) }
-                    var vol by remember { mutableStateOf(2) }
-                    var unit by remember { mutableStateOf("g") }
-
-                    if (caps.flowSmoothing) ToggleRow("Flow smoothing", "Smooths the live mass-flow readout. Calmer, slower to settle.", flow) { flow = it }
-                    if (caps.antiMistouch) ToggleRow("Anti-mistouch", "Ignore accidental taps on the scale's buttons.", anti) { anti = it }
-                    if (caps.autoStop) ToggleRow("Auto-stop on flow drop", "Stop the scale's built-in timer when outflow drops to zero.", stop) { stop = it }
-                    if (caps.standby != null) ToggleRow("Auto-sleep", "Sleep after 5 min of no activity.", sleep) { sleep = it }
-                    if (caps.volume != null) SegRow("Beeper volume", "Button & target tone loudness.") {
-                        CremaSegmentedButton(
-                            options = (caps.volume).map { SegOption(it.toString(), it.toString()) },
-                            value = vol.toString(), onChange = { vol = it.toInt() },
-                        )
+                    if (caps.flowSmoothing) {
+                        ToggleRow("Flow smoothing", "Smooths the live mass-flow readout. Calmer, slower to settle.", flowSmoothing, onFlowSmoothing)
                     }
-                    if (caps.canSetUnit) SegRow("Display unit", "What the on-scale display reads in.") {
-                        CremaSegmentedButton(
-                            options = listOf(SegOption("g", "g"), SegOption("oz", "oz")),
-                            value = unit, onChange = { unit = it },
-                        )
+                    if (caps.antiMistouch) {
+                        ToggleRow("Anti-mistouch", "Ignore accidental taps on the scale's buttons.", antiMistouch, onAntiMistouch)
+                    }
+                    if (caps.autoStop) {
+                        SegRow("Auto-stop", "How the scale's built-in timer ends.") {
+                            CremaSegmentedButton(
+                                options = listOf(SegOption("0", "Flow-stop"), SegOption("1", "Cup-removal")),
+                                value = (autoStopMode ?: 0).toString(),
+                                onChange = { onAutoStop(it.toInt()) },
+                            )
+                        }
+                    }
+                    val standby = caps.standby
+                    if (standby != null) {
+                        SegRow("Auto-sleep", "Minutes of inactivity before the scale sleeps.") {
+                            CremaStepper(
+                                value = standbyMinutes.toDouble(),
+                                unit = "min",
+                                onChange = { onStandby(it.toInt()) },
+                                step = 1.0,
+                                min = standby.first.toDouble(),
+                                max = standby.last.toDouble(),
+                                fmt = { String.format("%.0f", it) },
+                            )
+                        }
+                    }
+                    val vol = caps.volume
+                    if (vol != null) {
+                        SegRow("Beeper volume", "Button & target tone loudness.") {
+                            CremaSegmentedButton(
+                                options = vol.map { SegOption(it.toString(), it.toString()) },
+                                value = volume.toString(),
+                                onChange = { onVolume(it.toInt()) },
+                            )
+                        }
                     }
                 }
                 // Action footer — pinned to the bottom of the panel.
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant, modifier = Modifier.padding(top = 6.dp))
                 Row(Modifier.fillMaxWidth().padding(top = sp.s3), verticalAlignment = Alignment.CenterVertically) {
-                    if (caps.canBeep) CremaButton(onClick = {}, variant = CremaButtonVariant.Tonal, icon = "speaker-high", label = "Beep")
+                    if (caps.canBeep) CremaButton(onClick = onBeep, variant = CremaButtonVariant.Tonal, icon = "speaker-high", label = "Beep")
                     Spacer(Modifier.weight(1f))
                     CremaButton(onClick = onDisconnect, variant = CremaButtonVariant.Text, icon = "link-break", danger = true, label = "Disconnect")
                 }
@@ -335,7 +376,7 @@ private fun ToggleRow(title: String, sub: String, checked: Boolean, onChange: (B
     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 }
 
-// A row whose control is a compact segmented button on the right.
+// A row whose control sits on the right (segmented button or stepper).
 @Composable
 private fun SegRow(title: String, sub: String, control: @Composable () -> Unit) {
     Row(

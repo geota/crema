@@ -37,6 +37,7 @@ import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager
 import coffee.crema.core.ModeInfo
 import coffee.crema.core.RangeCapability
+import coffee.crema.ui.screens.ScaleScreen
 import coffee.crema.ui.theme.CremaTheme
 
 /**
@@ -79,18 +80,22 @@ class MainActivity : ComponentActivity() {
                 val ui by viewModel.ui.collectAsState()
                 val machineConnected = ui.bleState == De1BleManager.State.READY
                 val scaleConnected = ui.scaleState == ScaleBleManager.State.READY
+                val onRailConnect: (String) -> Unit = { which ->
+                    when (which) {
+                        "machine" ->
+                            if (machineConnected) viewModel.disconnect()
+                            else withBlePermission(viewModel::connect)
+                        "scale" ->
+                            if (scaleConnected) viewModel.disconnectScale()
+                            else withBlePermission(viewModel::connectScale)
+                    }
+                }
                 AppNavHost(
                     machineConnected = machineConnected,
                     scaleConnected = scaleConnected,
-                    onRailConnect = { which ->
-                        when (which) {
-                            "machine" ->
-                                if (machineConnected) viewModel.disconnect()
-                                else withBlePermission(viewModel::connect)
-                            "scale" ->
-                                if (scaleConnected) viewModel.disconnectScale()
-                                else withBlePermission(viewModel::connectScale)
-                        }
+                    onRailConnect = onRailConnect,
+                    scaleContent = { navTo ->
+                        ScaleScreen(viewModel, onNav = navTo, onConnect = onRailConnect)
                     },
                     debugContent = {
                         Surface(modifier = Modifier.fillMaxSize()) {

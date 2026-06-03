@@ -10,7 +10,6 @@ import coffee.crema.ui.screens.BrewScreen
 import coffee.crema.ui.screens.HistoryScreen
 import coffee.crema.ui.screens.ProfileEditScreen
 import coffee.crema.ui.screens.ProfilesScreen
-import coffee.crema.ui.screens.ScaleScreen
 import coffee.crema.ui.screens.SettingsScreen
 
 /**
@@ -34,6 +33,9 @@ fun AppNavHost(
     machineConnected: Boolean,
     scaleConnected: Boolean,
     onRailConnect: (String) -> Unit,
+    /** The live Scale screen. Receives the nav-rail `onNav` from this host (it
+     *  needs the nav controller) while the caller binds the ViewModel + connect. */
+    scaleContent: @Composable (onNav: (String) -> Unit) -> Unit,
     debugContent: @Composable () -> Unit,
 ) {
     val nav = rememberNavController()
@@ -49,9 +51,8 @@ fun AppNavHost(
         composable("profiles") { ProfilesScreen(onNav, machineConnected, scaleConnected, onRailConnect) }
         composable("beans") { BeansScreen(onNav, machineConnected, scaleConnected, onRailConnect) }
         composable("history") { HistoryScreen(onNav, machineConnected, scaleConnected, onRailConnect) }
-        // The fully-designed exemplar. Still on its internal simulation until the
-        // core-seam task wires it to live AppState.
-        composable("scale") { ScaleScreen(onNav = onNav) }
+        // The fully-designed exemplar, wired to live VM state by the caller.
+        composable("scale") { scaleContent(onNav) }
         composable("settings") {
             SettingsScreen(onNav, machineConnected, scaleConnected, onRailConnect, onOpenDebug = { onPush("debug") })
         }
