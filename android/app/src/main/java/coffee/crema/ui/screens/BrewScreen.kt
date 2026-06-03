@@ -24,6 +24,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -126,7 +127,20 @@ fun BrewScreen(
                     verticalArrangement = Arrangement.spacedBy(9.dp),
                 ) {
                     ChannelsRow(ui = ui, active = active)
-                    ChartPlaceholder(modifier = Modifier.weight(1f))
+                    // The live chart fills the remainder. Hosted in a Surface
+                    // (not CremaCard) so the Vico chart can fillMaxSize.
+                    Surface(
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                        shape = MaterialTheme.shapes.medium,
+                        color = MaterialTheme.colorScheme.surfaceContainer,
+                    ) {
+                        ShotChart(
+                            samples = ui.shotTelemetry,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(start = 4.dp, end = 8.dp, top = 8.dp, bottom = 4.dp),
+                        )
+                    }
                 }
             }
             BrewFoot(
@@ -612,19 +626,6 @@ private fun ChannelCard(
                     Text(secValue, style = CremaTheme.readout.readoutSm.copy(fontSize = 19.sp, lineHeight = 23.sp), color = secColor)
                     Text(" $secUnit", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ChartPlaceholder(modifier: Modifier = Modifier) {
-    CremaCard(modifier.fillMaxWidth()) {
-        Box(Modifier.fillMaxSize().padding(12.dp), contentAlignment = Alignment.Center) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                PhIcon("chart-line", sizeDp = 32, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text("Live chart", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text("Animated curves arrive in M2", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f))
             }
         }
     }
