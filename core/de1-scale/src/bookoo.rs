@@ -404,6 +404,16 @@ pub fn parse_weight(data: &[u8]) -> Option<f32> {
     })
 }
 
+/// Whether `bytes` begin with the Bookoo weight-notification header
+/// (`0x03 0x0b`). Lets a Bookoo be identified from its first weight packet
+/// when no advertised name is available (replay back-compat) — the byte
+/// signature lives here, in the codec that owns the encoding, not in the
+/// generic [`crate::Scale`] dispatcher.
+#[must_use]
+pub fn matches_weight_header(bytes: &[u8]) -> bool {
+    bytes.len() >= 2 && bytes[0] == 0x03 && bytes[1] == 0x0b
+}
+
 /// Decode a full 20-byte Bookoo weight notification.
 ///
 /// Returns `None` for anything that is not exactly [`FULL_PACKET_LEN`] bytes.

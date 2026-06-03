@@ -11,11 +11,15 @@
 //! — every notification carries a monotonic `now_ms` from the shell.
 
 mod capture;
+pub mod de1_uuids;
 pub mod error;
 pub mod event;
 pub mod firmware_info;
 
 pub use error::AppError;
+pub use de1_uuids::{
+    De1Uuids, de1_uuids, de1_uuids_json, de1_write_target_uuid, de1_write_target_uuid_by_name,
+};
 pub use event::{Command, CoreOutput, Event, ProfileUploadFailure, Source, WriteTarget};
 pub use firmware_info::{FirmwareUpdateStatus, LATEST_KNOWN_FIRMWARE_BUILD};
 
@@ -2259,7 +2263,7 @@ impl CremaCore {
         };
         let event = match response {
             ScaleConfigUpdate::SerialInfo {
-                firmware_version,
+                firmware,
                 serial,
                 anti_mistouch,
             } => Event::ScaleConfig {
@@ -2267,7 +2271,7 @@ impl CremaCore {
                 active_mode: None,
                 enabled_modes: None,
                 serial: Some(serial),
-                firmware_version: Some(firmware_version),
+                firmware: Some(firmware),
             },
             ScaleConfigUpdate::Settings {
                 active_mode,
@@ -2277,7 +2281,7 @@ impl CremaCore {
                 active_mode: Some(active_mode),
                 enabled_modes: Some(enabled_modes),
                 serial: None,
-                firmware_version: None,
+                firmware: None,
             },
         };
         out.events.push(event);
@@ -3065,7 +3069,7 @@ mod tests {
             active_mode: None,
             enabled_modes: None,
             serial: Some("SN2400d66a89e7".to_owned()),
-            firmware_version: Some(141),
+            firmware: Some("1.4.1".to_owned()),
         }));
     }
 
@@ -3081,7 +3085,7 @@ mod tests {
             active_mode: Some(2),
             enabled_modes: Some(0b100),
             serial: None,
-            firmware_version: None,
+            firmware: None,
         }));
     }
 

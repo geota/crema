@@ -314,7 +314,6 @@
 		return (
 			d.includes('scale') ||
 			d.includes('tare') ||
-			d.includes('bookoo') ||
 			d.startsWith('→ scale') ||
 			d.includes('beeper') ||
 			d.includes('anti-mistouch') ||

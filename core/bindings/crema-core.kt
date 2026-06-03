@@ -172,8 +172,10 @@ data class Bean (
 	/// Visualizer nor Crema model first-class, but that an import
 	/// (Beanconqueror) or future feature needs to keep round-tripping.
 	/// Serialised as `serde_json::Value` so the wire format is a plain
-	/// nested object.
-	val metadata: Value,
+	/// nested object. `serialized_as = "Json"` maps it to a real JSON type in
+	/// the generated bindings (Kotlin `JsonElement`, TS `unknown`); without it
+	/// typeshare emits a bare, unresolved `Value`.
+	val metadata: kotlinx.serialization.json.JsonElement,
 	/// Unix epoch ms when this bag was created.
 	val createdAt: Long,
 	/// Unix epoch ms when this bag was last updated.
@@ -386,10 +388,10 @@ data class EventScaleConfigInner (
 	/// The scale's serial number — `Some` only for a `03 0c` serial
 	/// response.
 	val serial: String? = null,
-	/// The scale's firmware version, encoded `major × 100 + minor × 10 +
-	/// patch` (e.g. `141` is firmware 1.4.1) — `Some` only for a `03 0c`
-	/// serial response.
-	val firmware_version: UShort? = null
+	/// The scale's firmware version, formatted for display (e.g.
+	/// `"1.4.1"`) — `Some` only for a `03 0c` serial response. The scale's
+	/// codec formats it, so no scale-specific encoding reaches the shells.
+	val firmware: String? = null
 )
 
 /// Generated type representing the anonymous struct variant `Firmware` of the `Event` Rust enum
@@ -737,6 +739,41 @@ data class CoreOutput (
 	val commands: List<Command>
 )
 
+/// The DE1's GATT service + characteristic UUIDs (full lowercase 128-bit
+/// strings). The shells scan on [`service`](Self::service), subscribe to the
+/// notify characteristics, and address writes via [`de1_write_target_uuid`].
+@Serializable
+data class De1Uuids (
+	/// GATT service (`A000`) — the scan filter.
+	val service: String,
+	/// `A001` Version — the BLE + firmware version block (read).
+	val version: String,
+	/// `A002` RequestedState — a 1-byte state request is written here.
+	val requestedState: String,
+	/// `A00B` ShotSettings — steam / hot-water settings (notify + write).
+	val shotSettings: String,
+	/// `A005` ReadFromMMR — a read request is written here; the DE1 answers on
+	/// the same characteristic's notify.
+	val mmrRead: String,
+	/// `A006` WriteToMMR — an MMR write packet is sent here.
+	val mmrWrite: String,
+	/// `A00D` ShotSample — the ~4–10 Hz telemetry notify stream.
+	val shotSample: String,
+	/// `A00E` StateInfo — the 2-byte machine state + substate notify.
+	val stateInfo: String,
+	/// `A011` WaterLevels — the tank-level notify (also written to set the
+	/// refill threshold).
+	val waterLevels: String,
+	/// `A012` Calibration — a read request is written here; the DE1 answers on
+	/// the same characteristic's notify.
+	val calibration: String,
+	/// `A00F` HeaderWrite — the 5-byte profile-upload header (write).
+	val headerWrite: String,
+	/// `A010` FrameWrite — profile frame writes. The DE1 sends NO notification
+	/// here (it only ACKs the ATT write) — the shell synthesizes a frame-ack.
+	val frameWrite: String
+)
+
 /// A slim view onto the shell's `StoredShot`: only the fields the
 /// reconcile planner reads. Lets the shell project its full record
 /// (web `StoredShot` in `$lib/history/model.ts`, Android equivalent)
@@ -935,7 +972,7 @@ data class Roaster (
 	/// `None` so older JSON deserialises cleanly.
 	val deletedAt: Long? = null,
 	/// Open JSON metadata — escape valve symmetric with [`Bean::metadata`].
-	val metadata: Value,
+	val metadata: kotlinx.serialization.json.JsonElement,
 	/// Unix epoch ms.
 	val createdAt: Long,
 	/// Unix epoch ms.

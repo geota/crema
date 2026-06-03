@@ -39,6 +39,43 @@ use de1_protocol::{CalTarget, MachineState, MmrRegister, ShotSettings};
 
 uniffi::setup_scaffolding!();
 
+/// The error every fallible FFI export throws.
+///
+/// UniFFI's bindgen cannot lower a bare `String` throw type — it panics with
+/// "unknown throw type: Some(String)" — so each fallible export returns this
+/// instead. `#[uniffi(flat_error)]` keeps the wire shape minimal: only the
+/// `Display` message crosses to Kotlin, surfaced as a thrown `CremaException`
+/// carrying that text (the same message the old `String` error held).
+#[derive(Debug, uniffi::Error)]
+#[uniffi(flat_error)]
+pub enum CremaError {
+    /// A human-readable failure message from the core, serde, or argument
+    /// validation.
+    Failed(String),
+}
+
+impl std::fmt::Display for CremaError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CremaError::Failed(message) => f.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for CremaError {}
+
+impl From<String> for CremaError {
+    fn from(message: String) -> Self {
+        CremaError::Failed(message)
+    }
+}
+
+/// Convert any `Display` error into a [`CremaError`] — the FFI-safe replacement
+/// for the old `.map_err(crema_err)`.
+fn crema_err<E: std::fmt::Display>(e: E) -> CremaError {
+    CremaError::Failed(e.to_string())
+}
+
 /// Which BLE characteristic an incoming notification came from — mirrors
 /// [`de1_app::Source`] across the FFI boundary.
 #[derive(uniffi::Enum)]
@@ -325,8 +362,8 @@ pub fn new_profile_id() -> String {
 pub fn profile_fingerprint(
     profile_json: String,
     qc_json: Option<String>,
-) -> Result<String, String> {
-    de1_domain::profile_fingerprint(&profile_json, qc_json.as_deref())
+) -> Result<String, CremaError> {
+    de1_domain::profile_fingerprint(&profile_json, qc_json.as_deref()).map_err(crema_err)
 }
 
 /// Sniff a first weight-notify packet for a known-scale signature.
@@ -337,16 +374,6 @@ pub fn profile_fingerprint(
 #[uniffi::export]
 pub fn guess_scale_from_first_weight_packet(bytes: Vec<u8>) -> Option<String> {
     de1_app::ScaleId::guess_from_first_weight_packet(&bytes).map(str::to_owned)
-}
-
-/// Format a Bookoo scale's `u16` firmware version as a `"M.m.p"` string
-/// (e.g. `141` → `"1.4.1"`). Centralised in the core so every shell renders the
-/// version identically — the Android shell used to carry its own Kotlin
-/// `formatFirmware` arithmetic (AND1). Mirrors the wasm `format_bookoo_firmware`.
-/// See [`de1_scale::bookoo::format_firmware_version`].
-#[uniffi::export]
-pub fn format_bookoo_firmware_version(encoded: u16) -> String {
-    de1_app::ScaleId::format_bookoo_firmware_version(encoded)
 }
 
 // NOTE (AND2 redesign): a `bookoo_gatt_uuids` accessor was removed here. Baking
@@ -369,8 +396,8 @@ pub fn format_bookoo_firmware_version(encoded: u16) -> String {
 /// Returns the JSON parse error string when the outer payload isn't a
 /// JSON array of objects or any inner payload is malformed.
 #[uniffi::export]
-pub fn fold_replay_meta_jsonl(payloads_json: String) -> Result<String, String> {
-    de1_domain::fold_meta_jsonl_json(&payloads_json)
+pub fn fold_replay_meta_jsonl(payloads_json: String) -> Result<String, CremaError> {
+    de1_domain::fold_meta_jsonl_json(&payloads_json).map_err(crema_err)
 }
 
 /// Build a Beanconqueror main JSON from a Crema envelope. See
@@ -383,8 +410,8 @@ pub fn fold_replay_meta_jsonl(payloads_json: String) -> Result<String, String> {
 pub fn export_beanconqueror_main_json(
     envelope_json: String,
     now_unix_ms: i64,
-) -> Result<String, String> {
-    de1_domain::crema_to_bc_main_json_from_envelope(&envelope_json, now_unix_ms)
+) -> Result<String, CremaError> {
+    de1_domain::crema_to_bc_main_json_from_envelope(&envelope_json, now_unix_ms).map_err(crema_err)
 }
 
 /// Build a Crema JSONL export from an envelope JSON. See
@@ -399,8 +426,9 @@ pub fn export_crema_jsonl(
     envelope_json: String,
     exported_at_unix_ms: i64,
     crema_version: String,
-) -> Result<String, String> {
+) -> Result<String, CremaError> {
     de1_domain::export_jsonl_from_json(&envelope_json, exported_at_unix_ms, &crema_version)
+        .map_err(crema_err)
 }
 
 /// Parse a Crema JSONL export into an `ImportPlan` JSON. See
@@ -410,8 +438,8 @@ pub fn export_crema_jsonl(
 ///
 /// Currently always Ok; reserved for future schema-version errors.
 #[uniffi::export]
-pub fn import_crema_jsonl(text: String) -> Result<String, String> {
-    de1_domain::import_jsonl_to_plan_json(&text)
+pub fn import_crema_jsonl(text: String) -> Result<String, CremaError> {
+    de1_domain::import_jsonl_to_plan_json(&text).map_err(crema_err)
 }
 
 /// Import a Beanconqueror main export JSON. See
@@ -425,8 +453,8 @@ pub fn import_crema_jsonl(text: String) -> Result<String, String> {
 pub fn import_beanconqueror_json(
     merged_main_json: String,
     now_unix_ms: i64,
-) -> Result<String, String> {
-    de1_domain::import_beanconqueror_json(&merged_main_json, now_unix_ms)
+) -> Result<String, CremaError> {
+    de1_domain::import_beanconqueror_json(&merged_main_json, now_unix_ms).map_err(crema_err)
 }
 
 /// Derive the maintenance readout (filter capacity %, litres since
@@ -438,8 +466,78 @@ pub fn import_beanconqueror_json(
 /// Returns the JSON parse error string when `state_json` doesn't
 /// deserialise into a `MaintenanceState`.
 #[uniffi::export]
-pub fn maintenance_readout(state_json: String, now_ms: i64) -> Result<String, String> {
-    de1_domain::maintenance_readout_json(&state_json, now_ms)
+pub fn maintenance_readout(state_json: String, now_ms: i64) -> Result<String, CremaError> {
+    de1_domain::maintenance_readout_json(&state_json, now_ms).map_err(crema_err)
+}
+
+/// Convert an editable `CremaProfile` JSON into the wire `Profile` JSON the DE1
+/// upload / v2-export path speaks. The segment↔step adapter lives in the core
+/// so every shell shares one mapping. See
+/// [`de1_domain::crema_profile_to_wire_json`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] when the JSON is malformed.
+#[uniffi::export]
+pub fn crema_profile_to_wire(crema_json: String) -> Result<String, CremaError> {
+    de1_domain::crema_profile_to_wire_json(&crema_json).map_err(crema_err)
+}
+
+/// Convert a wire `Profile` JSON into an editable `CremaProfile` JSON (the
+/// editor / library shape), synthesising roast / tags / defaults. See
+/// [`de1_domain::crema_profile_from_wire_json`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] when the JSON is malformed.
+#[uniffi::export]
+pub fn crema_profile_from_wire(wire_json: String) -> Result<String, CremaError> {
+    de1_domain::crema_profile_from_wire_json(&wire_json).map_err(crema_err)
+}
+
+/// Build a fresh, empty custom `CremaProfile` (JSON) seeded from the user's
+/// brew defaults (`{doseG, ratio, brewTempC, preinfusionS}` JSON). See
+/// [`de1_domain::blank_crema_profile_json`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] when the defaults JSON is malformed.
+#[uniffi::export]
+pub fn blank_crema_profile(defaults_json: String) -> Result<String, CremaError> {
+    de1_domain::blank_crema_profile_json(&defaults_json).map_err(crema_err)
+}
+
+/// The default segment list for a brand-new profile, as a JSON array of
+/// `ProfileSegment`. See [`de1_domain::default_segments_json`].
+#[uniffi::export]
+pub fn default_profile_segments() -> String {
+    de1_domain::default_segments_json()
+}
+
+/// Every built-in profile adapted into the editable `CremaProfile` shape, as a
+/// JSON array — the library store's single read at startup. See
+/// [`de1_domain::builtin_crema_profiles_json`].
+#[uniffi::export]
+pub fn builtin_crema_profiles() -> String {
+    de1_domain::builtin_crema_profiles_json()
+}
+
+/// The DE1's fixed GATT layout (UUIDs) as JSON. The shell scans + subscribes
+/// using these instead of hardcoding the map, so the web + Android shells share
+/// one source. The core stays sans-IO — it only describes the layout. See
+/// `de1_app::de1_uuids`.
+#[uniffi::export]
+pub fn de1_uuids() -> String {
+    de1_app::de1_uuids_json()
+}
+
+/// The DE1 characteristic UUID a `Command.WriteCharacteristic`'s `WriteTarget`
+/// (passed by its serde name, e.g. `"De1ProfileFrame"`) is written to, or
+/// `None` for an unknown target. The one `WriteTarget` → UUID map. See
+/// `de1_app::de1_write_target_uuid`.
+#[uniffi::export]
+pub fn de1_write_target_uuid(target: String) -> Option<String> {
+    de1_app::de1_write_target_uuid_by_name(&target)
 }
 
 /// The Crema core, exposed to the Kotlin shell.
@@ -623,22 +721,22 @@ impl CremaBridge {
     /// Returns an error string (rather than a JSON `CoreOutput`) when
     /// `unit` is not one of the known wire strings — `"grams"` or
     /// `"ounces"`.
-    pub fn enable_scale_lcd(&self, unit: &str) -> Result<String, String> {
+    pub fn enable_scale_lcd(&self, unit: &str) -> Result<String, CremaError> {
         let unit = de1_domain::WeightUnit::from_str_lower(unit)
             .ok_or_else(|| format!("unknown weight unit: {unit}"))?;
         self.core()
             .enable_scale_lcd(unit)
             .map(json)
-            .map_err(|e| e.to_string())
+            .map_err(crema_err)
     }
 
     /// Build a [`CoreOutput`] (JSON) whose commands disable the connected
     /// scale's on-scale LCD. Capability-driven.
-    pub fn disable_scale_lcd(&self) -> Result<String, String> {
+    pub fn disable_scale_lcd(&self) -> Result<String, CremaError> {
         self.core()
             .disable_scale_lcd()
             .map(json)
-            .map_err(|e| e.to_string())
+            .map_err(crema_err)
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command emits one keep-alive
@@ -646,29 +744,29 @@ impl CremaBridge {
     /// (Decent Scale's interval is ~`HEARTBEAT_INTERVAL_MS` ms).
     /// Capability-driven — returns an error when the scale doesn't need
     /// a heartbeat.
-    pub fn scale_heartbeat(&self) -> Result<String, String> {
+    pub fn scale_heartbeat(&self) -> Result<String, CremaError> {
         self.core()
             .scale_heartbeat()
             .map(json)
-            .map_err(|e| e.to_string())
+            .map_err(crema_err)
     }
 
     /// Build a [`CoreOutput`] (JSON) whose commands power off the
     /// connected scale. Capability-driven — Decent / Eureka / Solo
     /// support it; every other scale errors with
     /// `UnsupportedOnHardware`.
-    pub fn power_off_scale(&self) -> Result<String, String> {
+    pub fn power_off_scale(&self) -> Result<String, CremaError> {
         self.core()
             .power_off_scale()
             .map(json)
-            .map_err(|e| e.to_string())
+            .map_err(crema_err)
     }
 
     /// Cache the user's chosen weight unit on the core so the LCD-enable
     /// auto-policy (triggered on the DE1's Idle entry) picks the right
     /// wire packet. `unit` is the same lowercase string the shell keeps
     /// in its settings (`"grams"` / `"ounces"`).
-    pub fn set_weight_unit_pref(&self, unit: &str) -> Result<(), String> {
+    pub fn set_weight_unit_pref(&self, unit: &str) -> Result<(), CremaError> {
         let unit = de1_domain::WeightUnit::from_str_lower(unit)
             .ok_or_else(|| format!("unknown weight unit: {unit}"))?;
         self.core().set_weight_unit_pref(unit);
@@ -677,11 +775,11 @@ impl CremaBridge {
 
     /// Build a [`CoreOutput`] (JSON) whose command fires a beep on the
     /// connected scale. Capability-driven — Eureka / Solo support it.
-    pub fn scale_beep(&self) -> Result<String, String> {
+    pub fn scale_beep(&self) -> Result<String, CremaError> {
         self.core()
             .scale_beep()
             .map(json)
-            .map_err(|e| e.to_string())
+            .map_err(crema_err)
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command sets the connected
@@ -690,21 +788,21 @@ impl CremaBridge {
     /// LCD-enable bytes (Decent / Skale) the unit is set via
     /// `enable_scale_lcd`; for toggle-only scales (Hiroia) use
     /// `toggle_scale_unit`.
-    pub fn set_scale_unit_grams(&self) -> Result<String, String> {
+    pub fn set_scale_unit_grams(&self) -> Result<String, CremaError> {
         self.core()
             .set_scale_unit_grams()
             .map(json)
-            .map_err(|e| e.to_string())
+            .map_err(crema_err)
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command toggles the connected
     /// scale's display unit. Capability-driven — Hiroia is the only
     /// scale that exposes a toggle today.
-    pub fn toggle_scale_unit(&self) -> Result<String, String> {
+    pub fn toggle_scale_unit(&self) -> Result<String, CremaError> {
         self.core()
             .toggle_scale_unit()
             .map(json)
-            .map_err(|e| e.to_string())
+            .map_err(crema_err)
     }
 
     /// Toggle whether the connected scale should be powered off on
@@ -956,18 +1054,18 @@ impl CremaBridge {
     /// (user-committed marker).
     ///
     /// `volts` must be `120` or `230`; the core rejects any other value.
-    /// Returns `Result<String, String>` so UniFFI surfaces a thrown
+    /// Returns `Result<String, CremaError>` so UniFFI surfaces a thrown
     /// exception on bad inputs.
     ///
     /// # Errors
     ///
     /// Returns the [`AppError`](de1_app::AppError) display string when
     /// `volts` is out of `{120, 230}`.
-    pub fn set_heater_voltage(&self, volts: u8) -> Result<String, String> {
+    pub fn set_heater_voltage(&self, volts: u8) -> Result<String, CremaError> {
         self.core()
             .set_heater_voltage(volts)
             .map(json)
-            .map_err(|e| e.to_string())
+            .map_err(crema_err)
     }
 
     /// Set the cup-warmer temperature, °C (Bengle models only). MMR
@@ -1118,15 +1216,15 @@ impl CremaBridge {
     /// # Errors
     ///
     /// Returns an error string when `hz` is not `0.0`, `50.0`, or `60.0`.
-    pub fn set_line_frequency_override(&self, hz: f32) -> Result<(), String> {
+    pub fn set_line_frequency_override(&self, hz: f32) -> Result<(), CremaError> {
         let override_hz = match hz as i32 {
             0 => None,
             50 => Some(50.0),
             60 => Some(60.0),
             _ => {
-                return Err(format!(
+                return Err(CremaError::Failed(format!(
                     "invalid argument for hz: {hz} (must be 0, 50, or 60)"
-                ));
+                )));
             }
         };
         self.core().set_line_frequency_override(override_hz);
@@ -1138,49 +1236,49 @@ impl CremaBridge {
     /// can deserialize into its Room history store.
     /// Stateless — `&self` is required for the UniFFI instance-method
     /// ABI but the import does not touch the core.
-    pub fn import_legacy_tcl_shot(&self, content: String) -> Result<String, String> {
+    pub fn import_legacy_tcl_shot(&self, content: String) -> Result<String, CremaError> {
         de1_domain::import_legacy_tcl_shot(&content)
-            .map_err(|e| e.to_string())
-            .and_then(|shot| shot.to_json().map_err(|e| e.to_string()))
+            .map_err(crema_err)
+            .and_then(|shot| shot.to_json().map_err(crema_err))
     }
 
     /// Parse a modern de1app v2 `.shot.json` history file. Same return
     /// convention as `import_legacy_tcl_shot`.
-    pub fn import_v2_json_shot(&self, content: String) -> Result<String, String> {
+    pub fn import_v2_json_shot(&self, content: String) -> Result<String, CremaError> {
         de1_domain::import_v2_json_shot(&content)
-            .map_err(|e| e.to_string())
-            .and_then(|shot| shot.to_json().map_err(|e| e.to_string()))
+            .map_err(crema_err)
+            .and_then(|shot| shot.to_json().map_err(crema_err))
     }
 
     /// Parse a community-v2 `.json` profile file. Returns the parsed
     /// `Profile` as JSON.
-    pub fn import_v2_json_profile(&self, content: String) -> Result<String, String> {
+    pub fn import_v2_json_profile(&self, content: String) -> Result<String, CremaError> {
         de1_domain::import_v2_json(&content)
-            .map_err(|e| e.to_string())
-            .and_then(|p| serde_json::to_string(&p).map_err(|e| e.to_string()))
+            .map_err(crema_err)
+            .and_then(|p| serde_json::to_string(&p).map_err(crema_err))
     }
 
     /// Parse a legacy de1app `.tcl` profile file.
-    pub fn import_legacy_tcl_profile(&self, content: String) -> Result<String, String> {
+    pub fn import_legacy_tcl_profile(&self, content: String) -> Result<String, CremaError> {
         de1_domain::import_legacy_tcl(&content)
-            .map_err(|e| e.to_string())
-            .and_then(|p| serde_json::to_string(&p).map_err(|e| e.to_string()))
+            .map_err(crema_err)
+            .and_then(|p| serde_json::to_string(&p).map_err(crema_err))
     }
 
     /// Export a Crema `Profile` (as JSON) as a community-v2 `.json`
     /// document. Pure encoder.
-    pub fn export_v2_json_profile(&self, profile_json: String) -> Result<String, String> {
+    pub fn export_v2_json_profile(&self, profile_json: String) -> Result<String, CremaError> {
         let profile: de1_domain::Profile =
-            serde_json::from_str(&profile_json).map_err(|e| e.to_string())?;
-        de1_domain::export_v2_json(&profile).map_err(|e| e.to_string())
+            serde_json::from_str(&profile_json).map_err(crema_err)?;
+        de1_domain::export_v2_json(&profile).map_err(crema_err)
     }
 
     /// Parse a legacy de1app `settings.tdb` file. Returns the parsed
     /// settings as a JSON string.
-    pub fn import_settings_tdb(&self, content: String) -> Result<String, String> {
+    pub fn import_settings_tdb(&self, content: String) -> Result<String, CremaError> {
         de1_domain::import_settings_tdb(&content)
-            .map_err(|e| e.to_string())
-            .and_then(|s| serde_json::to_string(&s).map_err(|e| e.to_string()))
+            .map_err(crema_err)
+            .and_then(|s| serde_json::to_string(&s).map_err(crema_err))
     }
 }
 

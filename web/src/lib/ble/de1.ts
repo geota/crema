@@ -25,6 +25,7 @@
 import { parseConnectExit } from './connect-exit.ts';
 import type { CremaCore, NotificationSource } from '$lib/core';
 import { WriteTarget } from '$lib/core/crema-core';
+import { de1WriteTargetUuid as wasmDe1WriteTargetUuid } from '$lib/wasm/de1_wasm';
 import { describeError } from '$lib/utils/error';
 import type { AppRuntime } from '$lib/effect/runtime';
 import { de1ConnectProgram } from '$lib/services/de1-orchestrator';
@@ -326,26 +327,10 @@ export class De1Manager {
  * side — the orchestrator surfaces this as a "no UUID for target" log entry.
  */
 function uuidForWriteTarget(target: WriteTarget): string | null {
-	switch (target) {
-		case WriteTarget.De1RequestedState:
-			return De1Uuids.REQUESTED_STATE;
-		case WriteTarget.De1ShotSettings:
-			return De1Uuids.SHOT_SETTINGS;
-		case WriteTarget.De1MmrRequest:
-			return De1Uuids.MMR_READ;
-		case WriteTarget.De1MmrWrite:
-			return De1Uuids.MMR_WRITE;
-		case WriteTarget.De1Calibration:
-			return De1Uuids.CALIBRATION;
-		case WriteTarget.De1WaterLevels:
-			return De1Uuids.WATER_LEVELS;
-		case WriteTarget.De1ProfileHeader:
-			return De1Uuids.HEADER_WRITE;
-		case WriteTarget.De1ProfileFrame:
-			return De1Uuids.FRAME_WRITE;
-		default:
-			return null;
-	}
+	// Delegates to the core's single `WriteTarget` → UUID map so the web and
+	// Android shells don't each carry their own switch. `null` for an unknown
+	// target — the orchestrator surfaces it as a "no UUID for target" log entry.
+	return wasmDe1WriteTargetUuid(target) ?? null;
 }
 
 /**

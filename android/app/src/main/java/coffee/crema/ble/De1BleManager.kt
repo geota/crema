@@ -1,8 +1,10 @@
 package coffee.crema.ble
 
+import android.os.SystemClock
 import android.util.Log
 import coffee.crema.core.CremaBridge
 import coffee.crema.core.NotificationSource
+import coffee.crema.core.WriteTarget
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -172,7 +174,13 @@ class De1BleManager(
     private fun startObserving(device: BleTransport.DeviceHandle) {
         val stateInfo = transport.observe(device, De1Uuids.SERVICE, De1Uuids.STATE_INFO)
         val shotSample = transport.observe(device, De1Uuids.SERVICE, De1Uuids.SHOT_SAMPLE)
-        observeJob = merge(stateInfo, shotSample)
+        // The core needs these too: tank level, shot-settings read-backs, and
+        // MMR answers (firmware / model / GHC / calibration). All NOTIFY chars
+        // on a real DE1 — the same fatal set the web connect program subscribes.
+        val waterLevels = transport.observe(device, De1Uuids.SERVICE, De1Uuids.WATER_LEVELS)
+        val shotSettings = transport.observe(device, De1Uuids.SERVICE, De1Uuids.SHOT_SETTINGS)
+        val mmr = transport.observe(device, De1Uuids.SERVICE, De1Uuids.MMR_READ)
+        observeJob = merge(stateInfo, shotSample, waterLevels, shotSettings, mmr)
             .onEach { handleNotification(it) }
             .launchIn(scope)
     }
@@ -188,6 +196,8 @@ class De1BleManager(
             De1Uuids.STATE_INFO -> NotificationSource.DE1_STATE
             De1Uuids.SHOT_SAMPLE -> NotificationSource.DE1_SHOT_SAMPLE
             De1Uuids.WATER_LEVELS -> NotificationSource.DE1_WATER_LEVELS
+            De1Uuids.SHOT_SETTINGS -> NotificationSource.DE1_SHOT_SETTINGS
+            De1Uuids.MMR_READ -> NotificationSource.DE1_MMR_READ
             else -> {
                 Log.w(TAG, "Notification from unmapped characteristic ${notification.characteristic}")
                 return
@@ -201,6 +211,31 @@ class De1BleManager(
         // CremaBridge.onNotification returns the CoreOutput as a JSON string.
         val json = bridge.onNotification(source, notification.data, tMs.toULong())
         onCoreOutput(json)
+    }
+
+    // ---- Machine control (AND5) -------------------------------------------
+
+    /**
+     * Write a core-issued `Command.WriteCharacteristic` to the DE1: map the
+     * [target] to its GATT characteristic and write [bytes].
+     *
+     * The DE1 emits NO notification on a `FrameWrite` (it only ACKs the ATT
+     * write), so after a [WriteTarget.De1ProfileFrame] write we synthesize a
+     * `De1FrameAck` by feeding the just-written bytes back into the core — that
+     * is what advances the core's profile-upload state machine. Mirrors the web
+     * shell's `De1FrameAck` synthesis.
+     */
+    suspend fun writeCharacteristic(target: WriteTarget, bytes: ByteArray) {
+        val d = device ?: run {
+            onStatus("Write ignored — DE1 not connected")
+            return
+        }
+        transport.write(d, De1Uuids.SERVICE, De1Uuids.forWriteTarget(target), bytes)
+        if (target == WriteTarget.De1ProfileFrame) {
+            val tMs = SystemClock.elapsedRealtime()
+            val json = bridge.onNotification(NotificationSource.DE1_FRAME_ACK, bytes, tMs.toULong())
+            onCoreOutput(json)
+        }
     }
 
     companion object {

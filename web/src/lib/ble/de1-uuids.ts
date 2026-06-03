@@ -1,93 +1,76 @@
 /**
- * DE1 GATT service and characteristic UUIDs — the web shell's mirror of the
- * Android shell's `De1Uuids.kt`.
+ * DE1 GATT service and characteristic UUIDs.
  *
- * All DE1 characteristics share the Bluetooth-SIG base UUID
- * `0000xxxx-0000-1000-8000-00805f9b34fb` with a 16-bit value in the
- * `xxxx` slot (`A000`..`A012`).
+ * Sourced from the Rust core (`de1Uuids()` wasm export), **not** hardcoded — so
+ * the web and Android shells share ONE map for the DE1's single fixed GATT
+ * layout (no cross-shell drift). The core stays **sans-IO**: it only
+ * *describes* the layout as data; the shell does the GATT I/O. Writes are
+ * addressed via the core's `WriteTarget` → UUID map (`uuidForWriteTarget` in
+ * `de1.ts` calls the `de1WriteTargetUuid` export).
  *
- * Web Bluetooth wants **lowercase** 128-bit UUID strings (or 16-bit numbers);
- * these are pre-expanded to the lowercase 128-bit form. The shell subscribes
- * to the notify characteristics — `StateInfo`, `ShotSample`, `WaterLevels`,
- * and `ReadFromMMR` (for MMR read replies) — and writes to the matching
- * write/read-request characteristics for memory-mapped register access.
+ * Web Bluetooth wants **lowercase** 128-bit UUID strings; the core already
+ * returns them lowercase. Resolved once at module load — `+layout.ts` awaits
+ * `loadCore()` before any module evaluates, so the wasm export is ready here.
  */
 
-/** Expand a 16-bit short UUID into the full lowercase 128-bit Bluetooth-SIG UUID. */
-function short(value: string): string {
-	return `0000${value.toLowerCase()}-0000-1000-8000-00805f9b34fb`;
-}
+import { de1Uuids as wasmDe1Uuids } from '$lib/wasm/de1_wasm';
+
+const map = JSON.parse(wasmDe1Uuids()) as {
+	service: string;
+	version: string;
+	requestedState: string;
+	shotSettings: string;
+	mmrRead: string;
+	mmrWrite: string;
+	shotSample: string;
+	stateInfo: string;
+	waterLevels: string;
+	calibration: string;
+	headerWrite: string;
+	frameWrite: string;
+};
 
 export const De1Uuids = {
-	/** The DE1 GATT service (`suuid`, `A000`). */
-	SERVICE: short('a000'),
+	/** The DE1 GATT service (`A000`). */
+	SERVICE: map.service,
 
 	/** `cuuid_01` / `A001` — Version: the BLE + firmware version block (Read). */
-	VERSION: short('a001'),
+	VERSION: map.version,
 
-	/**
-	 * `cuuid_02` / `A002` — RequestedState: write a 1-byte state-machine
-	 * request (Sleep / Idle / Espresso / …) to ask the DE1 to transition.
-	 */
-	REQUESTED_STATE: short('a002'),
+	/** `cuuid_02` / `A002` — RequestedState: write a 1-byte state request. */
+	REQUESTED_STATE: map.requestedState,
 
-	/**
-	 * `cuuid_0B` / `A00B` — ShotSettings: steam and hot-water targets; one
-	 * packet sets the steam temperature, steam duration, hot-water target
-	 * temperature, etc.
-	 */
-	SHOT_SETTINGS: short('a00b'),
+	/** `cuuid_0B` / `A00B` — ShotSettings: steam / hot-water targets (notify + write). */
+	SHOT_SETTINGS: map.shotSettings,
 
-	/**
-	 * `cuuid_05` / `A005` — ReadFromMMR: the memory-mapped register window. A
-	 * read request is *written* to it and the DE1 answers with a notification
-	 * on the same characteristic (request/reply).
-	 */
-	MMR_READ: short('a005'),
+	/** `cuuid_05` / `A005` — ReadFromMMR: write a read request; reply on this char's notify. */
+	MMR_READ: map.mmrRead,
 
-	/**
-	 * `cuuid_06` / `A006` — WriteToMMR: writes a value to a memory-mapped
-	 * register. Sibling of {@link MMR_READ} on the write side; one packet per
-	 * register.
-	 */
-	MMR_WRITE: short('a006'),
+	/** `cuuid_06` / `A006` — WriteToMMR: write a register value. */
+	MMR_WRITE: map.mmrWrite,
 
 	/** `cuuid_0D` / `A00D` — ShotSample: the ~4-10 Hz telemetry notify stream. */
-	SHOT_SAMPLE: short('a00d'),
+	SHOT_SAMPLE: map.shotSample,
 
 	/** `cuuid_0E` / `A00E` — StateInfo: 2-byte machine state + substate notify. */
-	STATE_INFO: short('a00e'),
+	STATE_INFO: map.stateInfo,
 
 	/** `cuuid_11` / `A011` — WaterLevels: 4-byte tank level notify. */
-	WATER_LEVELS: short('a011'),
+	WATER_LEVELS: map.waterLevels,
+
+	/** `cuuid_12` / `A012` — Calibration: write a read request; reply on this char's notify. */
+	CALIBRATION: map.calibration,
+
+	/** `cuuid_0F` / `A00F` — HeaderWrite: the 5-byte profile-upload header (write). */
+	HEADER_WRITE: map.headerWrite,
+
+	/** `cuuid_10` / `A010` — FrameWrite: one 8-byte profile frame (write; no notify). */
+	FRAME_WRITE: map.frameWrite,
 
 	/**
-	 * `cuuid_12` / `A012` — Calibration: sensor calibration. A read request is
-	 * *written* to it and the DE1 answers with a notification on the same
-	 * characteristic (request/reply).
-	 */
-	CALIBRATION: short('a012'),
-
-	/**
-	 * `cuuid_0F` / `A00F` — HeaderWrite: the 5-byte profile header. Crema
-	 * writes here at the start of a profile upload; a one-shot Read returns
-	 * the currently-loaded profile's header (read at connect time).
-	 */
-	HEADER_WRITE: short('a00f'),
-
-	/**
-	 * `cuuid_10` / `A010` — FrameWrite: one 8-byte profile frame. Crema
-	 * writes one packet per frame (normal frame, extension frame, tail)
-	 * during a profile upload; the DE1 echoes each write back as a
-	 * notification used to ack the upload.
-	 */
-	FRAME_WRITE: short('a010'),
-
-	/**
-	 * The DE1 advertises with a name beginning "DE1"; some units advertise
-	 * "BENGLE". Its Nordic nRF5x BLE module can also surface under the chip's
-	 * default name "nRF5x" — kept as a prefix for now so the chooser still
-	 * scopes to the DE1. `requestDevice` filters on these name prefixes.
+	 * Advertised-name prefixes for the device chooser. Shell-level scan config
+	 * (the `nRF5x` chip-default name is a web-only fallback), kept here — the
+	 * core owns the GATT UUIDs, not the chooser UX.
 	 */
 	NAME_PREFIXES: ['DE1', 'BENGLE', 'nRF5x'] as const
 } as const;

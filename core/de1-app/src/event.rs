@@ -280,10 +280,10 @@ pub enum Event {
         /// The scale's serial number — `Some` only for a `03 0c` serial
         /// response.
         serial: Option<String>,
-        /// The scale's firmware version, encoded `major × 100 + minor × 10 +
-        /// patch` (e.g. `141` is firmware 1.4.1) — `Some` only for a `03 0c`
-        /// serial response.
-        firmware_version: Option<u16>,
+        /// The scale's firmware version, formatted for display (e.g.
+        /// `"1.4.1"`) — `Some` only for a `03 0c` serial response. The scale's
+        /// codec formats it, so no scale-specific encoding reaches the shells.
+        firmware: Option<String>,
     },
     /// The DE1 reported its firmware version (the `Version` characteristic).
     /// Carries the **BLE-block** identity — the primary firmware identity per

@@ -25,11 +25,11 @@ export {
 	totalTime,
 	preinfuseSeconds,
 	sparkShape,
-	segmentToStep,
 	fromCoreProfile,
 	toCoreProfile,
 	defaultSegments,
 	blankProfile,
+	builtinCremaProfiles,
 	duplicateProfile
 } from './model';
 

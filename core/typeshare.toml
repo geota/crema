@@ -11,10 +11,10 @@ module_name = "core"
 # 2^53 precision cliff), so every 64-bit field is annotated
 # `#[typeshare(serialized_as = "I64")]` and we map the alias here. Kotlin
 # `Long` is lossless. See `de1-domain/src/bean.rs` + `visualizer_sync.rs`.
-type_mappings = { "I64" = "Long", "U64" = "Long" }
+type_mappings = { "I64" = "Long", "U64" = "Long", "Json" = "kotlinx.serialization.json.JsonElement" }
 
 [typescript]
 # See `[kotlin]` comment. TS `number` is a float64 — exact for integers up
 # to 2^53; every value typed `I64` here is a unix-epoch-ms timestamp (good
 # through year 285_000) or a duration in ms, well within range.
-type_mappings = { "I64" = "number", "U64" = "number" }
+type_mappings = { "I64" = "number", "U64" = "number", "Json" = "unknown" }
