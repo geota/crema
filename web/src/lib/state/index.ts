@@ -8,7 +8,6 @@ export {
 	CremaUiState,
 	getCremaUiState,
 	applyEvent,
-	formatFirmware,
 	waterTankMl,
 	waterRefillSoon,
 	machineErrorText,

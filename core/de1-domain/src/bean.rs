@@ -421,7 +421,10 @@ pub struct Bean {
     /// Visualizer nor Crema model first-class, but that an import
     /// (Beanconqueror) or future feature needs to keep round-tripping.
     /// Serialised as `serde_json::Value` so the wire format is a plain
-    /// nested object.
+    /// nested object. `serialized_as = "Json"` maps it to a real JSON type in
+    /// the generated bindings (Kotlin `JsonElement`, TS `unknown`); without it
+    /// typeshare emits a bare, unresolved `Value`.
+    #[typeshare(serialized_as = "Json")]
     pub metadata: serde_json::Value,
     /// Unix epoch ms when this bag was created.
     #[typeshare(serialized_as = "I64")]
@@ -569,6 +572,7 @@ pub struct Roaster {
     #[typeshare(serialized_as = "Option<I64>")]
     pub deleted_at: Option<i64>,
     /// Open JSON metadata — escape valve symmetric with [`Bean::metadata`].
+    #[typeshare(serialized_as = "Json")]
     pub metadata: serde_json::Value,
     /// Unix epoch ms.
     #[typeshare(serialized_as = "I64")]

@@ -271,11 +271,11 @@ export type Event =
 	 */
 	serial?: string;
 	/**
-	 * The scale's firmware version, encoded `major × 100 + minor × 10 +
-	 * patch` (e.g. `141` is firmware 1.4.1) — `Some` only for a `03 0c`
-	 * serial response.
+	 * The scale's firmware version, formatted for display (e.g. `"1.4.1"`)
+	 * — `Some` only for a `03 0c` serial response. The scale's codec
+	 * formats it, so no scale-specific encoding reaches the shell.
 	 */
-	firmware_version?: number;
+	firmware?: string;
 }}
 	/**
 	 * The DE1 reported its firmware version (the `Version` characteristic).

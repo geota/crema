@@ -245,8 +245,11 @@ pub enum ScaleConfigUpdate {
     /// [`Scale::query_serial_command`]. Bookoo's `0x0c` reply today;
     /// other scales may surface analogous info under the same variant.
     SerialInfo {
-        /// The scale's firmware version encoding (Bookoo: `major × 100 + minor × 10 + patch`).
-        firmware_version: u16,
+        /// The scale's firmware version, already formatted for display (e.g.
+        /// `"1.4.1"`). The scale's own codec formats it at decode, so no
+        /// scale-specific version encoding leaks past this boundary into the
+        /// app or the shells.
+        firmware: String,
         /// The scale's serial number, decoded to a display string.
         serial: String,
         /// Whether anti-mistouch protection is currently enabled.
@@ -270,7 +273,10 @@ impl From<bookoo::CommandResponse> for ScaleConfigUpdate {
                 serial,
                 anti_mistouch,
             } => ScaleConfigUpdate::SerialInfo {
-                firmware_version,
+                // Format the Bookoo `u16` encoding to a display string HERE, in
+                // the codec that owns the encoding — the app + shells only ever
+                // see the formatted string.
+                firmware: bookoo::format_firmware_version(firmware_version),
                 serial,
                 anti_mistouch,
             },
@@ -423,7 +429,10 @@ impl Scale {
     /// ```
     #[must_use]
     pub fn guess_from_first_weight_packet(bytes: &[u8]) -> Option<&'static str> {
-        if bytes.len() >= 2 && bytes[0] == 0x03 && bytes[1] == 0x0b {
+        // Each codec owns its own weight-packet signature; the dispatcher only
+        // asks. Only Bookoo has a recognisable fixed header today — the byte
+        // magic lives in `bookoo`, not here.
+        if bookoo::matches_weight_header(bytes) {
             return Some("BOOKOO_SC");
         }
         None
@@ -1179,16 +1188,6 @@ impl Scale {
         }
     }
 
-    /// Format the Bookoo scale's `u16` encoded firmware version as a
-    /// `"M.m.p"` string (e.g. `141` → `"1.4.1"`). Bookoo-only today —
-    /// wraps [`bookoo::format_firmware_version`] so a wasm/UniFFI
-    /// bridge can format the version without taking a direct dep on
-    /// the per-device bookoo module.
-    #[must_use]
-    pub fn format_bookoo_firmware_version(encoded: u16) -> String {
-        bookoo::format_firmware_version(encoded)
-    }
-
     /// Build a tare command to write to the [command characteristic](ScaleUuids).
     /// Returns `None` if the scale tares purely client-side and there is no
     /// command to send (the Smartchef — see [`crate::smartchef::SmartchefScale`]).
@@ -1499,7 +1498,7 @@ mod tests {
         assert_eq!(
             bookoo.parse_command_response(&frame),
             Some(ScaleConfigUpdate::SerialInfo {
-                firmware_version: 141,
+                firmware: "1.4.1".to_owned(),
                 serial: "SN2400d66a89e7".to_owned(),
                 anti_mistouch: true,
             })

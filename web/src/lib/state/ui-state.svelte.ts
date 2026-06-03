@@ -30,7 +30,6 @@ import { EMPTY_DE1_DIAGNOSTICS } from '$lib/ble/de1';
 import type { ScaleState } from '$lib/ble/scale';
 import {
 	water_tank_ml as wasmWaterTankMl,
-	format_bookoo_firmware as wasmFormatBookooFirmware,
 	subStateErrorMessage
 } from '$lib/wasm/de1_wasm';
 
@@ -618,16 +617,6 @@ export function waterRefillSoon(
 }
 
 /**
- * Format the Bookoo's `u16` firmware version into a `"M.m.p"` string —
- * delegates to the core's `format_bookoo_firmware` (see
- * `core/de1-scale/src/bookoo.rs::format_firmware_version`). The decode
- * lives in core so every shell renders the version identically.
- */
-export function formatFirmware(encoded: number): string {
-	return wasmFormatBookooFirmware(encoded);
-}
-
-/**
  * Readable text for an error substate (R5), or `null` for a healthy
  * (non-error) substate. `substate` is the bare `SubState` variant name
  * the core emits — an unknown name (a substate added to the firmware
@@ -920,18 +909,12 @@ export function applyEvent(snapshot: UiSnapshot, event: Event): UiSnapshot {
 				...snapshot,
 				scaleAntiMistouch: c.anti_mistouch ?? snapshot.scaleAntiMistouch,
 				scaleActiveMode: c.active_mode ?? snapshot.scaleActiveMode,
-				scaleFirmware:
-					c.firmware_version !== undefined
-						? formatFirmware(c.firmware_version)
-						: snapshot.scaleFirmware,
+				scaleFirmware: c.firmware ?? snapshot.scaleFirmware,
 				scaleSerial: c.serial ?? snapshot.scaleSerial
 			};
 			if (c.anti_mistouch !== undefined) {
 				const serial = c.serial !== undefined ? `, serial=${c.serial}` : '';
-				const fw =
-					c.firmware_version !== undefined
-						? `, fw=${formatFirmware(c.firmware_version)}`
-						: '';
+				const fw = c.firmware !== undefined ? `, fw=${c.firmware}` : '';
 				return {
 					...next,
 					eventLog: appendLog(

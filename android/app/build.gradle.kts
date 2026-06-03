@@ -85,6 +85,13 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
+    // Google Fonts (Newsreader / Hanken Grotesk / JetBrains Mono) for CremaTheme's
+    // Type.kt. BOM-managed (no explicit version). The GMS font-provider certs ship
+    // in this artifact; on a device without the provider, fonts fall back to the
+    // system families and the type scale still renders.
+    implementation("androidx.compose.ui:ui-text-google-fonts")
+    // Navigation for the 6-destination rail + 2 pushed editors (AppNavHost).
+    implementation("androidx.navigation:navigation-compose:2.8.5")
     debugImplementation("androidx.compose.ui:ui-tooling")
 
     // UniFFI's generated Kotlin depends on JNA for the FFI calls and on

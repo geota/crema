@@ -28,7 +28,7 @@ import { SvelteSet } from 'svelte/reactivity';
 import { loadCore } from '$lib/core';
 import { readJson, writeJson } from '$lib/utils/storage';
 import {
-	fromCoreProfile,
+	builtinCremaProfiles,
 	type CremaProfile
 } from './model';
 
@@ -197,9 +197,12 @@ export class ProfileStore {
 	/** The actual one-time built-in load, memoized by {@link ensureLoaded}. */
 	private async _load(): Promise<void> {
 		try {
-			const core = await loadCore();
-			const profiles = await core.builtinProfiles();
-			this.builtins = profiles.map((p, i) => fromCoreProfile(p, i));
+			// Ensure the wasm core is initialised, then adapt the whole built-in
+			// corpus in ONE core call — a single JSON boundary crossing for all of
+			// them, not one per profile. The segment↔step adapter lives in the
+			// core (`de1_domain::crema_profile`).
+			await loadCore();
+			this.builtins = builtinCremaProfiles();
 		} catch {
 			// If the wasm core fails to load the grid still works — it just
 			// shows the custom profiles. A failure here is non-fatal.

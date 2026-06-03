@@ -7,8 +7,8 @@ import coffee.crema.core.Command
 import coffee.crema.core.CoreOutput
 import coffee.crema.core.CremaBridge
 import coffee.crema.core.Event
+import coffee.crema.core.MachineRequest
 import coffee.crema.core.ScaleCapabilities
-import coffee.crema.core.formatBookooFirmwareVersion
 import coffee.crema.ble.BleScanner
 import coffee.crema.ble.BleSessionRecorder
 import coffee.crema.ble.De1BleManager
@@ -282,6 +282,34 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         )
     }
 
+    // ---- Machine control (AND5) -------------------------------------------
+
+    /**
+     * Ask the DE1 to enter [state]. The core returns a `CoreOutput` whose
+     * `Command.WriteCharacteristic(De1RequestedState)` is dispatched through the
+     * shared command path — the same path the scale writes use. The Brew screen
+     * (M1/M2) builds its Coffee / Stop / mode controls on this.
+     */
+    fun requestMachineState(state: MachineRequest) {
+        val raw = runCatching { bridge.requestMachineState(state) }.getOrElse {
+            appendLog("requestMachineState failed: ${it.message}")
+            return
+        }
+        onCoreOutputJson(raw)
+    }
+
+    /** Wake the DE1 / return to idle (also stops a running shot). */
+    fun wake() = requestMachineState(MachineRequest.IDLE)
+
+    /** Put the DE1 to sleep. */
+    fun sleep() = requestMachineState(MachineRequest.SLEEP)
+
+    /** Start an espresso shot. */
+    fun startEspresso() = requestMachineState(MachineRequest.ESPRESSO)
+
+    /** Stop a running shot (return to idle). */
+    fun stopShot() = requestMachineState(MachineRequest.IDLE)
+
     /** Scan for and connect to a Bookoo scale. Independent of the DE1. */
     fun connectScale() {
         scale.markScanning()
@@ -395,7 +423,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * `Event.ScaleReading.device_standby` stream then catches up.
      */
     fun setScaleStandbyMinutes(minutes: Int) {
-        val range = _ui.value.scaleCapabilities?.standby_minutes
+        val range = _ui.value.scaleCapabilities?.standby
         val clamped = if (range != null) {
             minutes.coerceIn(range.min.toInt(), range.max.toInt())
         } else {
@@ -403,7 +431,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         _ui.value = _ui.value.copy(scaleStandbyMinutes = clamped)
         val raw = runCatching {
-            bridge.setScaleStandbyMinutes(clamped.toUByte())
+            bridge.setScaleStandby(clamped.toUByte())
         }.getOrElse {
             appendLog("Set standby failed: ${it.message}")
             return
@@ -545,9 +573,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 viewModelScope.launch { scale.writeCommand(bytes) }
             }
             is Command.WriteCharacteristic -> {
-                // DE1 characteristic writes are not yet routed from here; the
-                // app does not currently drive machine control. Left for a
-                // follow-up so this stays a single, complete command sink.
+                // The core hands the exact bytes + which DE1 characteristic to
+                // write them to. The BLE manager maps the target to a UUID and
+                // writes; a profile-frame write also gets a synthesized
+                // De1FrameAck. This is the machine-control path (AND5).
+                val bytes = command.content.data
+                    .map { it.toByte() }
+                    .toByteArray()
+                viewModelScope.launch { ble.writeCharacteristic(command.content.target, bytes) }
             }
         }
     }
@@ -637,8 +670,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     // The `03 0c` serial response carries firmware + serial;
                     // the `03 0e` settings response leaves both null — fold in
                     // whatever is present and keep the last value otherwise.
-                    scaleFirmware = c.firmware_version?.let { formatBookooFirmwareVersion(it) }
-                        ?: _ui.value.scaleFirmware,
+                    scaleFirmware = c.firmware ?: _ui.value.scaleFirmware,
                     scaleSerial = c.serial ?: _ui.value.scaleSerial,
                 )
                 when {
@@ -646,9 +678,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         appendLog(
                             "Scale config: anti-mistouch=${c.anti_mistouch}" +
                                 (c.serial?.let { ", serial=$it" } ?: "") +
-                                (c.firmware_version?.let {
-                                    ", fw=${formatBookooFirmwareVersion(it)}"
-                                } ?: ""),
+                                (c.firmware?.let { ", fw=$it" } ?: ""),
                         )
                     c.active_mode != null ->
                         appendLog(
@@ -678,6 +708,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     "Write refused (firmware update in progress): " +
                         event.content.method,
                 )
+            // Profile-upload + shot-settings-read events surface in the real
+            // screens (M2 / M5), not this Phase-0 debug readout. An explicit
+            // else keeps the sealed `when` exhaustive as `Event` grows.
+            else -> Unit
         }
     }
 

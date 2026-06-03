@@ -46,6 +46,7 @@ pub mod bean_coerce;
 pub mod beanconqueror;
 pub mod builtin;
 pub mod crema_jsonl;
+pub mod crema_profile;
 pub mod error;
 pub mod filter;
 pub mod flow;
@@ -85,6 +86,11 @@ pub use beanconqueror::{
 pub use builtin::{BUILTIN_PROFILE_COUNT, builtin_profiles};
 pub use crema_jsonl::{
     CremaExportHeader, export_jsonl, export_jsonl_from_json, import_jsonl_to_plan_json, parse_jsonl,
+};
+pub use crema_profile::{
+    BrewDefaults, CremaProfile, ProfileSegment, ProfileSource, Roast, blank_crema_profile_json,
+    blank_profile, builtin_crema_profiles_json, crema_profile_from_wire_json,
+    crema_profile_to_wire_json, default_segments, default_segments_json, from_wire, to_wire,
 };
 pub use error::{DomainError, ImportError};
 pub use flow::{Estimate, FlowAlgorithm, FlowEstimator};

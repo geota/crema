@@ -389,6 +389,77 @@ pub fn profile_fingerprint(profile_json: &str, qc_json: Option<String>) -> Resul
     de1_domain::profile_fingerprint(profile_json, qc_json.as_deref())
 }
 
+/// Convert an editable `CremaProfile` JSON into the wire `Profile` JSON the DE1
+/// upload / v2-export path speaks. The segment↔step adapter lives in the core
+/// (`de1_domain::crema_profile`) so every shell shares one mapping — replacing
+/// the web's former TypeScript `toCoreProfile`.
+///
+/// # Errors
+///
+/// Returns the JSON error string when `crema_json` is malformed.
+#[wasm_bindgen(js_name = cremaProfileToWire)]
+pub fn crema_profile_to_wire(crema_json: &str) -> Result<String, String> {
+    de1_domain::crema_profile_to_wire_json(crema_json)
+}
+
+/// Convert a wire `Profile` JSON into an editable `CremaProfile` JSON (the
+/// editor / library shape), synthesising roast / tags / defaults — replacing
+/// the web's former TypeScript `fromCoreProfile`. See
+/// `de1_domain::crema_profile_from_wire_json`.
+///
+/// # Errors
+///
+/// Returns the JSON error string when `wire_json` is malformed.
+#[wasm_bindgen(js_name = cremaProfileFromWire)]
+pub fn crema_profile_from_wire(wire_json: &str) -> Result<String, String> {
+    de1_domain::crema_profile_from_wire_json(wire_json)
+}
+
+/// Build a fresh, empty custom `CremaProfile` (JSON) seeded from the user's
+/// brew defaults (`{doseG, ratio, brewTempC, preinfusionS}` JSON) — replacing
+/// the web's former TypeScript `blankProfile`. See
+/// `de1_domain::blank_crema_profile_json`.
+///
+/// # Errors
+///
+/// Returns the JSON error string when `defaults_json` is malformed.
+#[wasm_bindgen(js_name = blankCremaProfile)]
+pub fn blank_crema_profile(defaults_json: &str) -> Result<String, String> {
+    de1_domain::blank_crema_profile_json(defaults_json)
+}
+
+/// The default segment list for a brand-new profile, as a JSON array of
+/// `ProfileSegment` — replacing the web's former TypeScript `defaultSegments`.
+/// See `de1_domain::default_segments_json`.
+#[wasm_bindgen(js_name = defaultProfileSegments)]
+pub fn default_profile_segments() -> String {
+    de1_domain::default_segments_json()
+}
+
+/// Every built-in profile adapted into the editable `CremaProfile` shape, as a
+/// JSON array — the library store's single read at startup. See
+/// `de1_domain::builtin_crema_profiles_json`.
+#[wasm_bindgen(js_name = builtinCremaProfiles)]
+pub fn builtin_crema_profiles() -> String {
+    de1_domain::builtin_crema_profiles_json()
+}
+
+/// The DE1's fixed GATT layout (UUIDs) as JSON — the shell scans + subscribes
+/// using these instead of hardcoding the map. The core stays sans-IO; it only
+/// describes the layout. See `de1_app::de1_uuids`.
+#[wasm_bindgen(js_name = de1Uuids)]
+pub fn de1_uuids() -> String {
+    de1_app::de1_uuids_json()
+}
+
+/// The DE1 characteristic UUID a `WriteTarget` (by its serde name) is written
+/// to, or `None` for an unknown target. The one `WriteTarget` → UUID map. See
+/// `de1_app::de1_write_target_uuid`.
+#[wasm_bindgen(js_name = de1WriteTargetUuid)]
+pub fn de1_write_target_uuid(target: &str) -> Option<String> {
+    de1_app::de1_write_target_uuid_by_name(target)
+}
+
 /// Reconcile a remote Visualizer pull against the local history.
 /// `payload` is the JSON of `{"local": StoredShot[], "remote":
 /// WireShot[]}`; the planner only reads the slim subset of
@@ -610,17 +681,6 @@ pub fn has_cup_warmer(raw: u32) -> bool {
 #[must_use]
 pub fn sub_state_error_message(name: &str) -> Option<String> {
     de1_protocol::SubState::error_message_for_name(name).map(str::to_owned)
-}
-
-/// Format the Bookoo scale's `u16` firmware version as a `"M.m.p"`
-/// string (e.g. `141` → `"1.4.1"`). The Bookoo encodes its firmware as
-/// `major × 100 + minor × 10 + patch`. Centralised here so every shell
-/// renders the version identically.
-#[wasm_bindgen]
-pub fn format_bookoo_firmware(encoded: u16) -> String {
-    // Routed through `Scale::format_bookoo_firmware_version` so this
-    // crate doesn't reach into per-device namespaces.
-    de1_app::ScaleId::format_bookoo_firmware_version(encoded)
 }
 
 /// The **generic** pre-connect BLE scan filter set across ALL supported scales

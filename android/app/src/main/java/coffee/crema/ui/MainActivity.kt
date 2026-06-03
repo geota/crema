@@ -37,6 +37,7 @@ import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager
 import coffee.crema.core.ModeInfo
 import coffee.crema.core.RangeCapability
+import coffee.crema.ui.theme.CremaTheme
 
 /**
  * The app's current single screen: a Connect button and a live readout of the
@@ -74,23 +75,42 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            MaterialTheme {
-                Surface(modifier = Modifier.fillMaxSize()) {
-                    MainScreen(
-                        viewModel = viewModel,
-                        onConnect = { withBlePermission(viewModel::connect) },
-                        onDisconnect = viewModel::disconnect,
-                        onConnectScale = { withBlePermission(viewModel::connectScale) },
-                        onDisconnectScale = viewModel::disconnectScale,
-                        onTareScale = viewModel::tareScale,
-                        onSetScaleVolume = viewModel::setScaleVolume,
-                        onSetScaleStandbyMinutes = viewModel::setScaleStandbyMinutes,
-                        onSetScaleFlowSmoothing = viewModel::setScaleFlowSmoothing,
-                        onSetScaleAntiMistouch = viewModel::setScaleAntiMistouch,
-                        onSetScaleMode = viewModel::setScaleMode,
-                        onSetScaleAutoStop = viewModel::setScaleAutoStop,
-                    )
-                }
+            CremaTheme {
+                val ui by viewModel.ui.collectAsState()
+                val machineConnected = ui.bleState == De1BleManager.State.READY
+                val scaleConnected = ui.scaleState == ScaleBleManager.State.READY
+                AppNavHost(
+                    machineConnected = machineConnected,
+                    scaleConnected = scaleConnected,
+                    onRailConnect = { which ->
+                        when (which) {
+                            "machine" ->
+                                if (machineConnected) viewModel.disconnect()
+                                else withBlePermission(viewModel::connect)
+                            "scale" ->
+                                if (scaleConnected) viewModel.disconnectScale()
+                                else withBlePermission(viewModel::connectScale)
+                        }
+                    },
+                    debugContent = {
+                        Surface(modifier = Modifier.fillMaxSize()) {
+                            MainScreen(
+                                viewModel = viewModel,
+                                onConnect = { withBlePermission(viewModel::connect) },
+                                onDisconnect = viewModel::disconnect,
+                                onConnectScale = { withBlePermission(viewModel::connectScale) },
+                                onDisconnectScale = viewModel::disconnectScale,
+                                onTareScale = viewModel::tareScale,
+                                onSetScaleVolume = viewModel::setScaleVolume,
+                                onSetScaleStandbyMinutes = viewModel::setScaleStandbyMinutes,
+                                onSetScaleFlowSmoothing = viewModel::setScaleFlowSmoothing,
+                                onSetScaleAntiMistouch = viewModel::setScaleAntiMistouch,
+                                onSetScaleMode = viewModel::setScaleMode,
+                                onSetScaleAutoStop = viewModel::setScaleAutoStop,
+                            )
+                        }
+                    },
+                )
             }
         }
     }
@@ -158,6 +178,17 @@ private fun MainScreen(
             ) { Text("Disconnect") }
         }
 
+        // Machine control (AND5) — proves requestMachineState round-trips to a
+        // real DE1. The Brew screen replaces these with the real controls in M1/M2.
+        val de1Ready = ui.bleState == De1BleManager.State.READY
+        Text("Machine control", style = MaterialTheme.typography.titleMedium)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = viewModel::wake, enabled = de1Ready) { Text("Wake") }
+            Button(onClick = viewModel::sleep, enabled = de1Ready) { Text("Sleep") }
+            Button(onClick = viewModel::startEspresso, enabled = de1Ready) { Text("Espresso") }
+            OutlinedButton(onClick = viewModel::stopShot, enabled = de1Ready) { Text("Stop") }
+        }
+
         ScaleSection(
             scaleState = ui.scaleState,
             scaleName = ui.scaleName,
@@ -169,7 +200,7 @@ private fun MainScreen(
             scaleBatteryPercent = ui.scaleBatteryPercent,
             volumeRange = ui.scaleCapabilities?.volume,
             scaleVolume = ui.scaleVolume,
-            standbyRange = ui.scaleCapabilities?.standby_minutes,
+            standbyRange = ui.scaleCapabilities?.standby,
             scaleStandbyMinutes = ui.scaleStandbyMinutes,
             flowSmoothingSupported = ui.scaleCapabilities?.flow_smoothing == true,
             scaleFlowSmoothing = ui.scaleFlowSmoothing,

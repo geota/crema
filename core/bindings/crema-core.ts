@@ -197,9 +197,11 @@ export interface Bean {
 	 * Visualizer nor Crema model first-class, but that an import
 	 * (Beanconqueror) or future feature needs to keep round-tripping.
 	 * Serialised as `serde_json::Value` so the wire format is a plain
-	 * nested object.
+	 * nested object. `serialized_as = "Json"` maps it to a real JSON type in
+	 * the generated bindings (Kotlin `JsonElement`, TS `unknown`); without it
+	 * typeshare emits a bare, unresolved `Value`.
 	 */
-	metadata: Value;
+	metadata: unknown;
 	/** Unix epoch ms when this bag was created. */
 	createdAt: number;
 	/** Unix epoch ms when this bag was last updated. */
@@ -476,11 +478,11 @@ export type Event =
 	 */
 	serial?: string;
 	/**
-	 * The scale's firmware version, encoded `major × 100 + minor × 10 +
-	 * patch` (e.g. `141` is firmware 1.4.1) — `Some` only for a `03 0c`
-	 * serial response.
+	 * The scale's firmware version, formatted for display (e.g.
+	 * `"1.4.1"`) — `Some` only for a `03 0c` serial response. The scale's
+	 * codec formats it, so no scale-specific encoding reaches the shells.
 	 */
-	firmware_version?: number;
+	firmware?: string;
 }}
 	/**
 	 * The DE1 reported its firmware version (the `Version` characteristic).
@@ -682,6 +684,50 @@ export interface CoreOutput {
 	events: Event[];
 	/** BLE writes the shell should perform, in order. */
 	commands: Command[];
+}
+
+/**
+ * The DE1's GATT service + characteristic UUIDs (full lowercase 128-bit
+ * strings). The shells scan on [`service`](Self::service), subscribe to the
+ * notify characteristics, and address writes via [`de1_write_target_uuid`].
+ */
+export interface De1Uuids {
+	/** GATT service (`A000`) — the scan filter. */
+	service: string;
+	/** `A001` Version — the BLE + firmware version block (read). */
+	version: string;
+	/** `A002` RequestedState — a 1-byte state request is written here. */
+	requestedState: string;
+	/** `A00B` ShotSettings — steam / hot-water settings (notify + write). */
+	shotSettings: string;
+	/**
+	 * `A005` ReadFromMMR — a read request is written here; the DE1 answers on
+	 * the same characteristic's notify.
+	 */
+	mmrRead: string;
+	/** `A006` WriteToMMR — an MMR write packet is sent here. */
+	mmrWrite: string;
+	/** `A00D` ShotSample — the ~4–10 Hz telemetry notify stream. */
+	shotSample: string;
+	/** `A00E` StateInfo — the 2-byte machine state + substate notify. */
+	stateInfo: string;
+	/**
+	 * `A011` WaterLevels — the tank-level notify (also written to set the
+	 * refill threshold).
+	 */
+	waterLevels: string;
+	/**
+	 * `A012` Calibration — a read request is written here; the DE1 answers on
+	 * the same characteristic's notify.
+	 */
+	calibration: string;
+	/** `A00F` HeaderWrite — the 5-byte profile-upload header (write). */
+	headerWrite: string;
+	/**
+	 * `A010` FrameWrite — profile frame writes. The DE1 sends NO notification
+	 * here (it only ACKs the ATT write) — the shell synthesizes a frame-ack.
+	 */
+	frameWrite: string;
 }
 
 /**
@@ -904,7 +950,7 @@ export interface Roaster {
 	 */
 	deletedAt?: number;
 	/** Open JSON metadata — escape valve symmetric with [`Bean::metadata`]. */
-	metadata: Value;
+	metadata: unknown;
 	/** Unix epoch ms. */
 	createdAt: number;
 	/** Unix epoch ms. */
