@@ -9,15 +9,18 @@ import coffee.crema.core.CremaBridge
 import coffee.crema.core.Event
 import coffee.crema.core.MachineRequest
 import coffee.crema.core.ScaleCapabilities
+import coffee.crema.core.builtinCremaProfiles
 import coffee.crema.ble.BleScanner
 import coffee.crema.ble.BleSessionRecorder
 import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.NordicBleTransport
 import coffee.crema.ble.ScaleBleManager
+import coffee.crema.profiles.CremaProfile
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 
 /**
@@ -42,6 +45,22 @@ const val DEFAULT_SCALE_VOLUME: Int = 3
  */
 const val DEFAULT_SCALE_STANDBY_MINUTES: Int = 15
 
+/**
+ * Summary of the most recently completed espresso shot — assembled from
+ * `Event.ShotCompleted` for the Brew screen's "Last shot" card. Null until a
+ * shot finishes; held until the next shot starts.
+ */
+data class LastShot(
+    /** Total shot duration, milliseconds. */
+    val durationMs: Long,
+    /** Final scale weight before the shot ended (the yield), grams, or null. */
+    val yieldG: Float?,
+    /** Peak group pressure across the shot, bar, or null. */
+    val peakPressure: Float?,
+    /** Peak group-head temperature across the shot, °C, or null. */
+    val peakTemp: Float?,
+)
+
 /** A flat snapshot of everything the current screen shows. */
 data class MainUiState(
     val bleState: De1BleManager.State = De1BleManager.State.IDLE,
@@ -53,8 +72,48 @@ data class MainUiState(
     val machineState: String? = null,
     /** Latest shot phase. */
     val shotPhase: String? = null,
-    /** Latest telemetry sample, pre-formatted. */
+    /** Latest telemetry sample, pre-formatted (debug readout). */
     val telemetry: String? = null,
+    // ── Structured live telemetry (Brew dashboard) ───────────────────────────
+    // Projected from `Event.Telemetry`; null until the first sample of a session.
+    /** Group pressure, bar. */
+    val pressure: Float? = null,
+    /** Group flow, ml/s. */
+    val flow: Float? = null,
+    /** Group-head temperature, °C (the COFFEE channel). */
+    val headTemp: Float? = null,
+    /** Mix temperature, °C — the DE1's blended group water (COFFEE-card secondary). */
+    val mixTemp: Float? = null,
+    /** Steam-heater temperature, °C (foot "Steam" readout). */
+    val steamTemp: Float? = null,
+    /** Running shot volume dispensed so far, ml — integrated by the core. */
+    val dispensedVolume: Float? = null,
+    /** Puck resistance, `bar/(ml/s)²` — pump-flow derived, or null near zero flow. */
+    val resistance: Float? = null,
+    /** Scale-derived puck resistance, `bar/(g/s)²` — preferred when a scale is paired. */
+    val resistanceWeight: Float? = null,
+    /** Milliseconds since the shot began (`Event.Telemetry.elapsed`); resets each shot. */
+    val shotElapsedMs: Long = 0,
+    /** Zero-based active frame index (`Event.ShotFrameChanged`); resets each shot. */
+    val shotFrame: Int = 0,
+    /** True between `ShotStarted` and `ShotCompleted` — drives resting↔extracting UI. */
+    val shotInProgress: Boolean = false,
+    /** Raw machine-state name (e.g. `"Espresso"`) for `==` comparisons, or null. */
+    val machineStateName: String? = null,
+    /** Raw machine-substate name (e.g. `"Pouring"`), or null. */
+    val machineSubstate: String? = null,
+    /** Latest tank level, mm (`Event.WaterLevel`), or null before the first report. */
+    val waterLevelMm: Float? = null,
+    /** Summary of the last completed shot (Last-shot card), or null. */
+    val lastShot: LastShot? = null,
+    /**
+     * Built-in profiles from the core (`builtinCremaProfiles()`), loaded once at
+     * startup. The Brew header picker chooses from these until the profile
+     * library (M3) adds user profiles.
+     */
+    val profiles: List<CremaProfile> = emptyList(),
+    /** The selected profile's id (the Brew header's active profile), or null. */
+    val activeProfileId: String? = null,
     /** Latest scale weight in grams, or null before the first reading. */
     val scaleWeightG: Float? = null,
     /**
@@ -255,7 +314,47 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 _ui.value = _ui.value.copy(scaleState = state)
             }
         }
+        loadBuiltinProfiles()
     }
+
+    /**
+     * Load the core's built-in profiles once and seed the Brew header's active
+     * selection. `builtinCremaProfiles()` is a sans-IO core call returning a
+     * JSON array of `CremaProfile`; the adapter logic lives in the Rust core
+     * (de1_domain::crema_profile) and every shell shares it. Failures are
+     * swallowed — the header just shows "No profile selected".
+     */
+    private fun loadBuiltinProfiles() {
+        val raw = runCatching { builtinCremaProfiles() }.getOrElse {
+            appendLog("Load built-in profiles failed: ${it.message}")
+            return
+        }
+        val list = runCatching {
+            json.decodeFromString(ListSerializer(CremaProfile.serializer()), raw)
+        }.getOrElse {
+            appendLog("Parse built-in profiles failed: ${it.message}")
+            return
+        }
+        _ui.value = _ui.value.copy(
+            profiles = list,
+            activeProfileId = _ui.value.activeProfileId ?: list.firstOrNull()?.id,
+        )
+    }
+
+    /** Select the Brew header's active profile. (M1: display only — uploading the
+     *  profile to the DE1 on Coffee is the M2 gated-start sequence.) */
+    fun setActiveProfile(id: String) {
+        _ui.value = _ui.value.copy(activeProfileId = id)
+    }
+
+    /** Start steaming. */
+    fun steam() = requestMachineState(MachineRequest.STEAM)
+
+    /** Start hot water. */
+    fun hotWater() = requestMachineState(MachineRequest.HOT_WATER)
+
+    /** Start a group-head flush / rinse. */
+    fun flush() = requestMachineState(MachineRequest.FLUSH)
 
     /** Called from the UI once the BLE runtime permissions have been granted. */
     fun connect() {
@@ -277,8 +376,24 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _ui.value = _ui.value.copy(
             bleState = De1BleManager.State.DISCONNECTED,
             machineState = null,
+            machineStateName = null,
+            machineSubstate = null,
             shotPhase = null,
             telemetry = null,
+            // Drop the live telemetry so the Brew cards clear to "—" for the
+            // next connection rather than freezing on the last machine's values.
+            pressure = null,
+            flow = null,
+            headTemp = null,
+            mixTemp = null,
+            steamTemp = null,
+            dispensedVolume = null,
+            resistance = null,
+            resistanceWeight = null,
+            shotElapsedMs = 0,
+            shotFrame = 0,
+            shotInProgress = false,
+            waterLevelMm = null,
         )
     }
 
@@ -623,24 +738,50 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 val c = event.content
                 _ui.value = _ui.value.copy(
                     machineState = "${c.state.string} / ${c.substate.string}",
+                    machineStateName = c.state.string,
+                    machineSubstate = c.substate.string,
                 )
                 appendLog("MachineState -> ${c.state.string} / ${c.substate.string}")
             }
-            is Event.ShotStarted -> appendLog("Shot started")
+            is Event.ShotStarted -> {
+                // Entering a shot: flip the resting↔extracting flag and zero the
+                // per-shot counters so the Brew timer / phase / volume restart.
+                _ui.value = _ui.value.copy(
+                    shotInProgress = true,
+                    shotFrame = 0,
+                    shotElapsedMs = 0,
+                    dispensedVolume = 0f,
+                )
+                appendLog("Shot started")
+            }
             is Event.ShotPhaseChanged -> {
                 val phase = event.content.phase.string
                 _ui.value = _ui.value.copy(shotPhase = phase)
                 appendLog("Shot phase -> $phase")
             }
-            is Event.ShotFrameChanged ->
+            is Event.ShotFrameChanged -> {
+                _ui.value = _ui.value.copy(shotFrame = event.content.frame.toInt())
                 appendLog("Shot frame -> ${event.content.frame}")
+            }
             is Event.Telemetry -> {
                 val t = event.content
                 val line = "t=%dms  P=%.1fbar  flow=%.1fmL/s  head=%.1f°C".format(
                     t.elapsed.toLong(), t.group_pressure, t.group_flow, t.head_temp,
                 )
-                _ui.value = _ui.value.copy(telemetry = line)
-                // Telemetry is high-rate; do not flood the log with it.
+                // Keep the debug string AND project the structured channels the
+                // Brew dashboard reads. High-rate; no log line.
+                _ui.value = _ui.value.copy(
+                    telemetry = line,
+                    pressure = t.group_pressure,
+                    flow = t.group_flow,
+                    headTemp = t.head_temp,
+                    mixTemp = t.mix_temp,
+                    steamTemp = t.steam_temp,
+                    dispensedVolume = t.dispensed_volume,
+                    resistance = t.resistance,
+                    resistanceWeight = t.resistance_weight,
+                    shotElapsedMs = t.elapsed.toLong(),
+                )
             }
             is Event.ScaleReading -> {
                 val r = event.content
@@ -665,13 +806,27 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 )
                 // Weight is high-rate; do not flood the log with every reading.
             }
-            is Event.WaterLevel ->
+            is Event.WaterLevel -> {
+                _ui.value = _ui.value.copy(waterLevelMm = event.content.level)
                 appendLog("Water level: %.0fmm".format(event.content.level))
+            }
             is Event.StopTriggered ->
                 appendLog("Auto-stop: ${event.content.reason.string}")
-            is Event.ShotCompleted ->
-                appendLog("Shot completed: ${event.content.duration}ms, " +
-                    "${event.content.sample_count} samples")
+            is Event.ShotCompleted -> {
+                val c = event.content
+                // Leaving a shot: clear the extracting flag and capture the
+                // summary for the Brew "Last shot" card.
+                _ui.value = _ui.value.copy(
+                    shotInProgress = false,
+                    lastShot = LastShot(
+                        durationMs = c.duration.toLong(),
+                        yieldG = c.final_weight,
+                        peakPressure = c.peak_pressure,
+                        peakTemp = c.peak_temp,
+                    ),
+                )
+                appendLog("Shot completed: ${c.duration}ms, ${c.sample_count} samples")
+            }
             is Event.WaterSessionStarted ->
                 appendLog("Water session started: ${event.content.kind.string}")
             is Event.WaterSessionCompleted ->

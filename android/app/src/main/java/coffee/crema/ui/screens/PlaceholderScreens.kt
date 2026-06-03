@@ -29,9 +29,8 @@ import coffee.crema.ui.theme.CremaTheme
  * *editor* screens render a back + breadcrumb header instead of the rail.
  *
  * These get replaced screen-by-screen in later milestones; see
- * android/IMPLEMENTATION-PLAN.md §2. The one fully-designed screen,
- * ScaleScreen.kt, is the exemplar already dropped in (still on its internal
- * simulation until the core-seam task wires it to live AppState).
+ * android/IMPLEMENTATION-PLAN.md §2. Brew (BrewScreen.kt) and Scale
+ * (ScaleScreen.kt) are now live, VM-driven screens; the rest follow.
  */
 
 @Composable
@@ -69,16 +68,6 @@ private fun ComingSoon(title: String, sub: String, extra: @Composable () -> Unit
         Text(sub, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         extra()
     }
-}
-
-@Composable
-fun BrewScreen(
-    onNav: (String) -> Unit,
-    machineConnected: Boolean,
-    scaleConnected: Boolean,
-    onConnect: (String) -> Unit,
-) = RailScaffold("brew", onNav, machineConnected, scaleConnected, onConnect) {
-    ComingSoon("Brew", "Live telemetry dashboard — milestones M1 / M2.")
 }
 
 @Composable
