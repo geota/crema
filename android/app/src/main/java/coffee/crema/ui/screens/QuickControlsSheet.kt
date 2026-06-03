@@ -5,6 +5,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -28,15 +30,29 @@ import coffee.crema.ui.components.Eyebrow
  * follow in later increments (they need a brew-params model + the ShotChart
  * channel generalization).
  */
+/** Chart channel keys → display labels, in the order shown in the sheet. */
+private val CHART_CHANNELS = listOf(
+    "pressure" to "Pressure",
+    "flow" to "Flow",
+    "headTemp" to "Coffee temp",
+    "mixTemp" to "Water temp",
+    "weight" to "Weight",
+    "weightFlow" to "Weight flow",
+    "dispensedVolume" to "Volume",
+    "resistance" to "Resistance",
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun QuickControlsSheet(
     autoTare: Boolean,
     stopOnWeight: Boolean,
     steamEco: Boolean,
+    channels: Set<String>,
     onAutoTare: (Boolean) -> Unit,
     onStopOnWeight: (Boolean) -> Unit,
     onSteamEco: (Boolean) -> Unit,
+    onToggleChannel: (String, Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
     ModalBottomSheet(
@@ -46,6 +62,7 @@ fun QuickControlsSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 24.dp)
                 .padding(bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -59,8 +76,12 @@ fun QuickControlsSheet(
             ToggleRow("Auto-tare", autoTare, onAutoTare)
             ToggleRow("Stop on weight", stopOnWeight, onStopOnWeight)
             ToggleRow("Steam eco", steamEco, onSteamEco)
+            Eyebrow("Chart channels", modifier = Modifier.padding(top = 12.dp))
+            CHART_CHANNELS.forEach { (key, label) ->
+                ToggleRow(label, key in channels) { onToggleChannel(key, it) }
+            }
             Text(
-                "Chart channels and dose / yield steppers arrive next.",
+                "Dose / yield steppers and favorites arrive next.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 8.dp),
