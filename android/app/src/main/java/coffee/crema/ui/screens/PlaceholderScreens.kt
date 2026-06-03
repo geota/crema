@@ -71,16 +71,6 @@ private fun ComingSoon(title: String, sub: String, extra: @Composable () -> Unit
 }
 
 @Composable
-fun ProfilesScreen(
-    onNav: (String) -> Unit,
-    machineConnected: Boolean,
-    scaleConnected: Boolean,
-    onConnect: (String) -> Unit,
-) = RailScaffold("profiles", onNav, machineConnected, scaleConnected, onConnect) {
-    ComingSoon("Profiles", "Profile library + curve previews — milestone M3.")
-}
-
-@Composable
 fun BeansScreen(
     onNav: (String) -> Unit,
     machineConnected: Boolean,
