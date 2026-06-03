@@ -10,18 +10,23 @@ import coffee.crema.core.Event
 import coffee.crema.core.MachineRequest
 import coffee.crema.core.ScaleCapabilities
 import coffee.crema.core.builtinCremaProfiles
+import coffee.crema.core.cremaProfileToWire
 import coffee.crema.ble.BleScanner
 import coffee.crema.ble.BleSessionRecorder
 import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.NordicBleTransport
 import coffee.crema.ble.ScaleBleManager
 import coffee.crema.profiles.CremaProfile
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 /**
  * Default scale beeper-volume step shown before the first live reading.
@@ -122,6 +127,15 @@ data class MainUiState(
     val profiles: List<CremaProfile> = emptyList(),
     /** The selected profile's id (the Brew header's active profile), or null. */
     val activeProfileId: String? = null,
+    /**
+     * True while a profile is being uploaded to the DE1 (between
+     * `ProfileUploadStarted` and `ProfileUploadCompleted`/`Failed`) — drives the
+     * header "Uploading…" hint and the Coffee button's syncing state during the
+     * gated shot start.
+     */
+    val profileUploading: Boolean = false,
+    /** Upload progress as `"received/total"` acks while uploading, or null. */
+    val profileUploadProgress: String? = null,
     /** Latest scale weight in grams, or null before the first reading. */
     val scaleWeightG: Float? = null,
     /**
@@ -257,6 +271,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val ui: StateFlow<MainUiState> = _ui.asStateFlow()
 
     /**
+     * Raw built-in profile JSON, keyed by id — the full `CremaProfile` shape, kept
+     * for upload because [MainUiState.profiles]'s thin model drops fields the wire
+     * conversion ([cremaProfileToWire]) needs. Populated in [loadBuiltinProfiles].
+     */
+    private var builtinProfileJson: Map<String, String> = emptyMap()
+
+    /**
+     * Set when [startShot] kicks off a profile upload that should be followed by an
+     * Espresso request once the upload completes (the gated start). Cleared on
+     * `ProfileUploadCompleted` (after firing Espresso), on `ProfileUploadFailed`,
+     * on the upload timeout, and on disconnect.
+     */
+    private var pendingBrew = false
+
+    /**
      * The app-wide BLE transport — the one Nordic-backed [NordicBleTransport].
      * Created once here and [NordicBleTransport.close]d from [onCleared]; it
      * owns the Nordic `Environment` (a broadcast receiver that must be closed).
@@ -343,6 +372,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             appendLog("Parse built-in profiles failed: ${it.message}")
             return
         }
+        // Retain the full per-profile JSON (keyed by id) for upload — the thin
+        // CremaProfile model decoded above is for display only and drops fields
+        // the wire conversion needs.
+        builtinProfileJson = runCatching {
+            json.parseToJsonElement(raw).jsonArray.associate { element ->
+                val id = element.jsonObject["id"]?.jsonPrimitive?.content.orEmpty()
+                id to element.toString()
+            }
+        }.getOrElse { emptyMap() }
         _ui.value = _ui.value.copy(
             profiles = list,
             activeProfileId = _ui.value.activeProfileId ?: list.firstOrNull()?.id,
@@ -364,6 +402,52 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Start a group-head flush / rinse. */
     fun flush() = requestMachineState(MachineRequest.FLUSH)
 
+    /**
+     * Start an espresso shot the gated way (web parity): upload the active
+     * profile to the DE1, wait for the upload to complete, observe the firmware's
+     * profile-download guard window, then request the Espresso state. The Espresso
+     * request itself fires from [applyEvent] on `ProfileUploadCompleted`.
+     *
+     * The active profile is converted from the editable `CremaProfile` shape to
+     * the wire `Profile` the DE1 expects by the sans-IO core
+     * ([cremaProfileToWire]); the upload's frame-write commands + the
+     * `ProfileUploadStarted` event come back as a `CoreOutput` and run through the
+     * shared command path.
+     *
+     * M2 v1 always uploads (no fingerprint-skip optimisation yet) and has no
+     * pre-shot flush (no settings store on Android yet) — both are later refinements.
+     */
+    fun startShot() {
+        val cremaJson = _ui.value.activeProfileId?.let { builtinProfileJson[it] }
+        if (cremaJson == null) {
+            appendLog("Can't start shot: no active profile")
+            return
+        }
+        val wireJson = runCatching { cremaProfileToWire(cremaJson) }.getOrElse {
+            appendLog("Profile convert failed: ${it.message}")
+            return
+        }
+        val raw = runCatching {
+            bridge.uploadProfile(wireJson, System.currentTimeMillis().toULong())
+        }.getOrElse {
+            appendLog("Upload profile failed: ${it.message}")
+            return
+        }
+        pendingBrew = true
+        _ui.value = _ui.value.copy(profileUploading = true, profileUploadProgress = null)
+        onCoreOutputJson(raw)
+        // Backstop: if no ProfileUploadCompleted arrives, clear the pending brew
+        // so the UI doesn't hang in "uploading" forever.
+        viewModelScope.launch {
+            delay(PROFILE_UPLOAD_TIMEOUT_MS)
+            if (pendingBrew) {
+                pendingBrew = false
+                _ui.value = _ui.value.copy(profileUploading = false, profileUploadProgress = null)
+                appendLog("Profile upload timed out; shot not started")
+            }
+        }
+    }
+
     /** Called from the UI once the BLE runtime permissions have been granted. */
     fun connect() {
         _ui.value = _ui.value.copy(eventLog = emptyList())
@@ -381,6 +465,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // Drop any outstanding scan want too — the user may disconnect mid-scan.
         bleScanner.cancel(SCAN_LABEL_DE1)
         ble.disconnect()
+        pendingBrew = false
         _ui.value = _ui.value.copy(
             bleState = De1BleManager.State.DISCONNECTED,
             machineState = null,
@@ -403,6 +488,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             shotInProgress = false,
             shotTelemetry = emptyList(),
             waterLevelMm = null,
+            profileUploading = false,
+            profileUploadProgress = null,
         )
     }
 
@@ -935,9 +1022,38 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     "Write refused (firmware update in progress): " +
                         event.content.method,
                 )
-            // Profile-upload + shot-settings-read events surface in the real
-            // screens (M2 / M5), not this Phase-0 debug readout. An explicit
-            // else keeps the sealed `when` exhaustive as `Event` grows.
+            is Event.ProfileUploadStarted -> {
+                _ui.value = _ui.value.copy(profileUploading = true, profileUploadProgress = null)
+                appendLog("Uploading profile: ${event.content.title}")
+            }
+            is Event.ProfileUploadProgress -> {
+                val c = event.content
+                // High-rate (one per frame ack); update the progress hint, no log.
+                _ui.value = _ui.value.copy(
+                    profileUploadProgress = "${c.acks_received}/${c.total_acks}",
+                )
+            }
+            is Event.ProfileUploadCompleted -> {
+                _ui.value = _ui.value.copy(profileUploading = false, profileUploadProgress = null)
+                appendLog("Profile uploaded: ${event.content.title}")
+                // Gated start: the profile is now on the DE1. Observe the
+                // firmware's profile-download guard window, then request Espresso.
+                if (pendingBrew) {
+                    pendingBrew = false
+                    viewModelScope.launch {
+                        delay(PROFILE_DOWNLOAD_GUARD_MS)
+                        requestMachineState(MachineRequest.ESPRESSO)
+                    }
+                }
+            }
+            is Event.ProfileUploadFailed -> {
+                pendingBrew = false
+                _ui.value = _ui.value.copy(profileUploading = false, profileUploadProgress = null)
+                appendLog("Profile upload failed: ${event.content.reason}")
+            }
+            // Shot-settings-read events surface in the real screens (M5), not this
+            // Phase-0 debug readout. An explicit else keeps the sealed `when`
+            // exhaustive as `Event` grows.
             else -> Unit
         }
     }
@@ -966,6 +1082,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private companion object {
         const val MAX_LOG_LINES = 200
+
+        /**
+         * Wait after `ProfileUploadCompleted` before requesting Espresso — the
+         * firmware's profile-download guard window. A state request inside it is
+         * aborted to HeaterDown (BC 9788201734); the web uses the same 500 ms.
+         */
+        const val PROFILE_DOWNLOAD_GUARD_MS = 500L
+
+        /** Abort a pending gated-start brew if the upload never completes. */
+        const val PROFILE_UPLOAD_TIMEOUT_MS = 15_000L
 
         /** [BleScanner] want labels — one per device the app discovers. */
         const val SCAN_LABEL_DE1 = "DE1"

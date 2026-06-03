@@ -97,6 +97,8 @@ fun BrewScreen(
                 active = active,
                 profiles = ui.profiles,
                 onSelectProfile = vm::setActiveProfile,
+                uploading = ui.profileUploading,
+                uploadProgress = ui.profileUploadProgress,
             )
             Row(
                 modifier = Modifier
@@ -152,7 +154,9 @@ fun BrewScreen(
                 onSteam = { if (ui.machineStateName == "Steam") vm.stopShot() else vm.steam() },
                 onHotWater = { if (ui.machineStateName == "HotWater") vm.stopShot() else vm.hotWater() },
                 onFlush = vm::flush,
-                onCoffee = { if (espressoActive) vm.stopShot() else vm.startEspresso() },
+                // Gated start: upload the active profile, await completion, guard,
+                // then Espresso (vm.startShot). Stop is a direct Idle request.
+                onCoffee = { if (espressoActive) vm.stopShot() else vm.startShot() },
             )
         }
     }
@@ -170,6 +174,8 @@ private fun BrewHeader(
     active: CremaProfile?,
     profiles: List<CremaProfile>,
     onSelectProfile: (String) -> Unit,
+    uploading: Boolean,
+    uploadProgress: String?,
 ) {
     Row(
         modifier = Modifier
@@ -178,7 +184,13 @@ private fun BrewHeader(
         verticalAlignment = Alignment.Top,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        ProfileBlock(active = active, profiles = profiles, onSelect = onSelectProfile)
+        ProfileBlock(
+            active = active,
+            profiles = profiles,
+            onSelect = onSelectProfile,
+            uploading = uploading,
+            uploadProgress = uploadProgress,
+        )
         Spacer(Modifier.weight(1f))
         Box(Modifier.width(1.dp).height(44.dp).background(MaterialTheme.colorScheme.outlineVariant))
         BeanBlock()
@@ -191,6 +203,8 @@ private fun ProfileBlock(
     active: CremaProfile?,
     profiles: List<CremaProfile>,
     onSelect: (String) -> Unit,
+    uploading: Boolean,
+    uploadProgress: String?,
 ) {
     var open by remember { mutableStateOf(false) }
     Box {
@@ -201,7 +215,16 @@ private fun ProfileBlock(
                 .padding(horizontal = 8.dp, vertical = 6.dp),
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
-            Eyebrow("Profile")
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Eyebrow("Profile")
+                if (uploading) {
+                    Text(
+                        uploadProgress?.let { "Uploading… $it" } ?: "Uploading…",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
             Text(
                 active?.name ?: "No profile selected",
                 style = MaterialTheme.typography.titleLarge.copy(fontSize = 20.sp, lineHeight = 24.sp),
@@ -667,7 +690,7 @@ private fun BrewFoot(
                 ModeChip("Steam", "148 °C · 90 s", "cloud", CremaTheme.telemetry.modeSteam, active = ui.machineStateName == "Steam", enabled = connected, onTap = onSteam)
                 ModeChip("Hot water", "90 °C · 250 ml", "drop", CremaTheme.telemetry.modeWater, active = ui.machineStateName == "HotWater", enabled = connected, onTap = onHotWater)
                 ModeChip("Flush", "91 °C · 4 s", "sparkle", CremaTheme.telemetry.modeFlush, active = false, enabled = connected, onTap = onFlush)
-                CoffeeButton(running = espressoActive, enabled = connected, onClick = onCoffee)
+                CoffeeButton(running = espressoActive, uploading = ui.profileUploading, enabled = connected, onClick = onCoffee)
             }
         }
     }
@@ -746,23 +769,27 @@ private fun ModeChip(
 }
 
 @Composable
-private fun CoffeeButton(running: Boolean, enabled: Boolean, onClick: () -> Unit) {
+private fun CoffeeButton(running: Boolean, uploading: Boolean, enabled: Boolean, onClick: () -> Unit) {
     val stopColor = Color(0xFFD26456)
     val bg = if (running) stopColor else MaterialTheme.colorScheme.primary
     val fg = if (running) Color(0xFF2A0B07) else MaterialTheme.colorScheme.onPrimary
+    // Tappable to start (Coffee) or stop (Stop); inert while a profile uploads.
+    val clickable = enabled && !uploading
+    val label = when { running -> "Stop"; uploading -> "Uploading…"; else -> "Coffee" }
+    val icon = when { running -> "stop"; uploading -> "arrows-clockwise"; else -> "coffee" }
     Row(
         modifier = Modifier
             .height(56.dp)
             .clip(RoundedCornerShape(999.dp))
-            .background(if (enabled) bg else bg.copy(alpha = 0.4f))
-            .clickable(enabled = enabled, onClick = onClick)
+            .background(if (clickable || running) bg else bg.copy(alpha = 0.4f))
+            .clickable(enabled = clickable, onClick = onClick)
             .padding(horizontal = 24.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        PhIcon(if (running) "stop" else "coffee", sizeDp = 20, tint = fg)
+        PhIcon(icon, sizeDp = 20, tint = fg)
         Text(
-            if (running) "Stop" else "Coffee",
+            label,
             style = MaterialTheme.typography.titleMedium.copy(fontSize = 16.sp, fontWeight = FontWeight.SemiBold),
             color = fg,
         )
