@@ -1,4 +1,8 @@
 <script lang="ts">
+	import Icon from '$lib/icons/Icon.svelte';
+	import ArrowCounterClockwiseIcon from 'phosphor-svelte/lib/ArrowCounterClockwiseIcon';
+	import BookmarkSimpleIcon from 'phosphor-svelte/lib/BookmarkSimpleIcon';
+	import XIcon from 'phosphor-svelte/lib/XIcon';
 	/**
 	 * `QuickSheet` — the docked Quick Sheet, variant G, ported from the
 	 * `variant === 'g'` path of `WebQDashV2` in `web-dashboard-v2.jsx`.
@@ -164,14 +168,14 @@
 		<div class="qsheet-v2-actions">
 			{#if onSavePreset}
 				<button class="qsheet-cta" onclick={onSavePreset}>
-					<i class="ph ph-bookmark-simple" aria-hidden="true"></i> Save preset
+					<BookmarkSimpleIcon aria-hidden="true" /> Save preset
 				</button>
 			{/if}
 			<button class="qsheet-cta" onclick={() => params.reset()}>
-				<i class="ph ph-arrow-counter-clockwise" aria-hidden="true"></i> Reset
+				<ArrowCounterClockwiseIcon aria-hidden="true" /> Reset
 			</button>
 			<button class="qsheet-cta" onclick={onClose}>
-				<i class="ph ph-x" aria-hidden="true"></i> Close
+				<XIcon aria-hidden="true" /> Close
 			</button>
 		</div>
 	</div>
@@ -207,11 +211,11 @@
 				{@const on2 = prefs[g.secondary.key] as boolean}
 				{#if idx > 0}<span class="qsheet-chart-div" aria-hidden="true"></span>{/if}
 				<div class="qsheet-chart-group">
-					<i
-						class={'ph-duotone ph-' + g.icon}
+					<Icon
+						cls={'ph-duotone ph-' + g.icon}
 						style="font-size:14px;color:{g.color}"
 						aria-hidden="true"
-					></i>
+					 />
 					<label class="qsheet-ch-tog">
 						<button
 							type="button"

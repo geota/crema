@@ -1,4 +1,9 @@
 <script lang="ts">
+	import Icon from '$lib/icons/Icon.svelte';
+	import CoffeeIcon from 'phosphor-svelte/lib/CoffeeIcon';
+	import PencilSimpleIcon from 'phosphor-svelte/lib/PencilSimpleIcon';
+	import SnowflakeIcon from 'phosphor-svelte/lib/SnowflakeIcon';
+	import XIcon from 'phosphor-svelte/lib/XIcon';
 	/**
 	 * `BeanDrawer` — read-only detail panel that slides in from the right
 	 * when a bean tile is clicked. Mirrors the design's `BeanDrawer.svelte`
@@ -144,10 +149,10 @@
 				title={bean.favourite ? 'Unpin from brew picker' : 'Pin to brew picker'}
 				aria-label={bean.favourite ? 'Unpin' : 'Pin'}
 			>
-				<i
-					class={bean.favourite ? 'ph-fill ph-star' : 'ph ph-star'}
-					style:color={bean.favourite ? 'var(--copper-400)' : undefined}
-				></i>
+				<Icon
+					cls={bean.favourite ? 'ph-fill ph-star' : 'ph ph-star'}
+					color={bean.favourite ? 'var(--copper-400)' : undefined}
+				 />
 			</button>
 			<button
 				class="bn-drawer-icon"
@@ -155,7 +160,7 @@
 				title="Edit"
 				aria-label="Edit"
 			>
-				<i class="ph ph-pencil-simple"></i>
+				<PencilSimpleIcon aria-hidden="true" />
 			</button>
 			<button
 				class="bn-drawer-icon"
@@ -163,7 +168,7 @@
 				title="Close"
 				aria-label="Close"
 			>
-				<i class="ph ph-x"></i>
+				<XIcon aria-hidden="true" />
 			</button>
 		</div>
 	</header>
@@ -179,7 +184,7 @@
 				</BeanImage>
 				{#if isFrozen}
 					<div class="bn-drawer-photo-frozen" title="Frozen storage">
-						<i class="ph-fill ph-snowflake"></i>
+						<SnowflakeIcon weight="fill" aria-hidden="true" />
 					</div>
 				{/if}
 			</div>
@@ -210,7 +215,10 @@
 					{/if}
 					<span class="bn-drawer-rating" aria-label="{bean.rating} of 5">
 						{#each [1, 2, 3, 4, 5] as i (i)}
-							<i class={i <= bean.rating ? 'ph-fill ph-star' : 'ph ph-star'}></i>
+							<Icon
+									cls={i <= bean.rating ? 'ph-fill ph-star' : 'ph ph-star'}
+									color={i <= bean.rating ? 'var(--copper-400)' : 'rgba(var(--tint-rgb), 0.2)'}
+								/>
 						{/each}
 					</span>
 				</div>
@@ -267,7 +275,7 @@
 					onclick={() => (openIdentity = !openIdentity)}
 					aria-label={openIdentity ? 'Collapse' : 'Expand'}
 				>
-					<i class={openIdentity ? 'ph ph-caret-up' : 'ph ph-caret-down'}></i>
+					<Icon cls={openIdentity ? 'ph ph-caret-up' : 'ph ph-caret-down'} />
 				</button>
 			</header>
 			{#if openIdentity}
@@ -304,7 +312,7 @@
 					aria-expanded={openDates}
 					aria-label={openDates ? 'Collapse Dates' : 'Expand Dates'}
 				>
-					<i class={openDates ? 'ph ph-caret-up' : 'ph ph-caret-down'}></i>
+					<Icon cls={openDates ? 'ph ph-caret-up' : 'ph ph-caret-down'} />
 				</button>
 			</header>
 			{#if openDates}
@@ -327,7 +335,7 @@
 					aria-expanded={openBag}
 					aria-label={openBag ? 'Collapse Bag' : 'Expand Bag'}
 				>
-					<i class={openBag ? 'ph ph-caret-up' : 'ph ph-caret-down'}></i>
+					<Icon cls={openBag ? 'ph ph-caret-up' : 'ph ph-caret-down'} />
 				</button>
 			</header>
 			{#if openBag}
@@ -350,7 +358,7 @@
 					aria-expanded={openOrigin}
 					aria-label={openOrigin ? 'Collapse Origin' : 'Expand Origin'}
 				>
-					<i class={openOrigin ? 'ph ph-caret-up' : 'ph ph-caret-down'}></i>
+					<Icon cls={openOrigin ? 'ph ph-caret-up' : 'ph ph-caret-down'} />
 				</button>
 			</header>
 			{#if openOrigin}
@@ -376,7 +384,7 @@
 					aria-expanded={openTasting}
 					aria-label={openTasting ? 'Collapse Tasting' : 'Expand Tasting'}
 				>
-					<i class={openTasting ? 'ph ph-caret-up' : 'ph ph-caret-down'}></i>
+					<Icon cls={openTasting ? 'ph ph-caret-up' : 'ph ph-caret-down'} />
 				</button>
 			</header>
 			{#if openTasting}
@@ -384,7 +392,10 @@
 					<div class="bn-row"><div class="bn-row-label">Score</div><div class="bn-row-val">{bean.qualityScore || '—'}</div></div>
 					<div class="bn-row"><div class="bn-row-label">Rating</div><div class="bn-row-val bn-row-rating">
 						{#each [1, 2, 3, 4, 5] as i (i)}
-							<i class={i <= bean.rating ? 'ph-fill ph-star' : 'ph ph-star'}></i>
+							<Icon
+									cls={i <= bean.rating ? 'ph-fill ph-star' : 'ph ph-star'}
+									color={i <= bean.rating ? 'var(--copper-400)' : 'rgba(var(--tint-rgb), 0.2)'}
+								/>
 						{/each}
 					</div></div>
 					{#if bean.tastingNotes}
@@ -407,7 +418,7 @@
 					aria-expanded={openBuyAgain}
 					aria-label={openBuyAgain ? 'Collapse Buy again' : 'Expand Buy again'}
 				>
-					<i class={openBuyAgain ? 'ph ph-caret-up' : 'ph ph-caret-down'}></i>
+					<Icon cls={openBuyAgain ? 'ph ph-caret-up' : 'ph ph-caret-down'} />
 				</button>
 			</header>
 			{#if openBuyAgain}
@@ -442,7 +453,7 @@
 						aria-expanded={openShots}
 						aria-label={openShots ? 'Collapse Shots' : 'Expand Shots'}
 					>
-						<i class={openShots ? 'ph ph-caret-up' : 'ph ph-caret-down'}></i>
+						<Icon cls={openShots ? 'ph ph-caret-up' : 'ph ph-caret-down'} />
 					</button>
 				</header>
 				{#if openShots}
@@ -462,7 +473,10 @@
 									</div>
 									<div class="bn-shotrow-rating" aria-label="{sRating} of 5">
 										{#each [1, 2, 3, 4, 5] as i (i)}
-											<i class={i <= sRating ? 'ph-fill ph-star' : 'ph ph-star'}></i>
+											<Icon
+											cls={i <= sRating ? 'ph-fill ph-star' : 'ph ph-star'}
+											color={i <= sRating ? 'var(--copper-400)' : 'rgba(var(--tint-rgb), 0.2)'}
+										/>
 										{/each}
 									</div>
 								</div>
@@ -478,7 +492,7 @@
 				class="bn-foot-btn bn-foot-btn-danger"
 				onclick={() => onToggleArchived(bean.id)}
 			>
-				<i class={isArchived ? 'ph ph-archive-box' : 'ph ph-archive'}></i>
+				<Icon cls={isArchived ? 'ph ph-archive-box' : 'ph ph-archive'} />
 				{isArchived ? 'Restore' : 'Archive'}
 			</button>
 			<BeanDeleteSplit
@@ -490,7 +504,7 @@
 			/>
 			{#if !isActive && !isArchived}
 				<button class="bn-foot-btn bn-foot-btn-primary" onclick={() => onSetActive(bean.id)}>
-					<i class="ph ph-coffee"></i> Set active
+					<CoffeeIcon aria-hidden="true" /> Set active
 				</button>
 			{/if}
 		</div>
@@ -722,7 +736,7 @@
 		font-size: 11px;
 		color: var(--copper-400);
 	}
-	.bn-drawer-rating .ph {
+	.bn-drawer-rating :global(svg) {
 		color: rgba(var(--tint-rgb), 0.2);
 	}
 
@@ -878,7 +892,7 @@
 		gap: 1px;
 		color: var(--copper-400);
 	}
-	.bn-row-rating .ph {
+	.bn-row-rating :global(svg) {
 		color: rgba(var(--tint-rgb), 0.2);
 	}
 	.bn-row-notes {
@@ -927,7 +941,7 @@
 		color: var(--copper-400);
 		font-size: 10px;
 	}
-	.bn-shotrow-rating .ph {
+	.bn-shotrow-rating :global(svg) {
 		color: rgba(var(--tint-rgb), 0.2);
 	}
 

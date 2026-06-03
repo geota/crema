@@ -1,4 +1,6 @@
 <script lang="ts">
+	import ArrowsClockwiseIcon from 'phosphor-svelte/lib/ArrowsClockwiseIcon';
+	import SlidersHorizontalIcon from 'phosphor-svelte/lib/SlidersHorizontalIcon';
 	/**
 	 * `BrewHeader` — the brew dashboard's top strip. The bean lives as a second
 	 * block to the right of the Profile block:
@@ -130,7 +132,7 @@
 				<span class="bh-title">{profileName}</span>
 				{#if syncLabel}
 					<span class="bh-sync" title={syncTitle}>
-						<i class="ph ph-arrows-clockwise" aria-hidden="true"></i>{syncLabel}
+						<ArrowsClockwiseIcon aria-hidden="true" />{syncLabel}
 					</span>
 				{/if}
 			</div>
@@ -205,7 +207,7 @@
 	<div class="crema-dash-head-r bh-actions">
 		{#if !quickSheetOpen}
 			<button class="qcpill is-dark" onclick={onOpenQuick}>
-				<i class="ph ph-sliders-horizontal" aria-hidden="true"></i>
+				<SlidersHorizontalIcon aria-hidden="true" />
 				<span>Quick Controls</span>
 			</button>
 		{/if}

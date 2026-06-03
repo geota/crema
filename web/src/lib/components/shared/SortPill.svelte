@@ -1,4 +1,7 @@
 <script lang="ts">
+	import Icon from '$lib/icons/Icon.svelte';
+	import CaretDownIcon from 'phosphor-svelte/lib/CaretDownIcon';
+	import CheckIcon from 'phosphor-svelte/lib/CheckIcon';
 	/**
 	 * `SortPill` — a two-half pill control for picking a sort field + direction.
 	 *
@@ -100,10 +103,10 @@
 		title={value.direction === 'asc' ? descLabel : ascLabel}
 		aria-label={value.direction === 'asc' ? ascLabel : descLabel}
 	>
-		<i
-			class={value.direction === 'asc' ? 'ph ph-arrow-up' : 'ph ph-arrow-down'}
+		<Icon
+			cls={value.direction === 'asc' ? 'ph ph-arrow-up' : 'ph ph-arrow-down'}
 			aria-hidden="true"
-		></i>
+		 />
 	</button>
 	<div class="sortpill-sep" aria-hidden="true"></div>
 	<button
@@ -117,10 +120,10 @@
 		aria-expanded={open}
 	>
 		{#if currentOption?.icon}
-			<i class={`ph ph-${currentOption.icon}`} aria-hidden="true"></i>
+			<Icon cls={`ph ph-${currentOption.icon}`} aria-hidden="true" />
 		{/if}
 		<span class="sortpill-label">{currentOption?.label ?? 'Sort'}</span>
-		<i class="ph ph-caret-down sortpill-chev" aria-hidden="true"></i>
+		<CaretDownIcon class="sortpill-chev" aria-hidden="true" />
 	</button>
 	{#if open}
 		<div class="sortpill-menu" role="menu">
@@ -134,11 +137,11 @@
 					onclick={() => pickField(o.field)}
 				>
 					{#if o.icon}
-						<i class={`ph ph-${o.icon}`} aria-hidden="true"></i>
+						<Icon cls={`ph ph-${o.icon}`} aria-hidden="true" />
 					{/if}
 					<span>{o.label}</span>
 					{#if o.field === value.field}
-						<i class="ph ph-check" aria-hidden="true"></i>
+						<CheckIcon aria-hidden="true" />
 					{/if}
 				</button>
 			{/each}
@@ -192,7 +195,7 @@
 		border-top-right-radius: var(--radius-pill);
 		border-bottom-right-radius: var(--radius-pill);
 	}
-	.sortpill-dir i {
+	.sortpill-dir :global(svg) {
 		font-size: 13px;
 	}
 	.sortpill-dir:hover {
@@ -206,7 +209,7 @@
 	.sortpill-field:hover {
 		background: rgba(var(--tint-rgb), 0.06);
 	}
-	.sortpill-field i {
+	.sortpill-field :global(svg) {
 		font-size: 12px;
 		color: rgba(var(--tint-rgb), 0.55);
 	}
@@ -214,7 +217,7 @@
 		font-weight: 500;
 		color: var(--fg-1);
 	}
-	.sortpill-chev {
+	:global(.sortpill-chev) {
 		font-size: 11px !important;
 		opacity: 0.6;
 	}
@@ -255,11 +258,11 @@
 		background: rgba(var(--copper-rgb), 0.1);
 		color: var(--copper-300);
 	}
-	.sortpill-menu-item i {
+	.sortpill-menu-item :global(svg) {
 		font-size: 12px;
 		color: rgba(var(--tint-rgb), 0.55);
 	}
-	.sortpill-menu-item.is-active i {
+	.sortpill-menu-item.is-active :global(svg) {
 		color: var(--copper-400);
 	}
 	.sortpill-menu-item span {

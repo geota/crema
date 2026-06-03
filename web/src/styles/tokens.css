@@ -6,18 +6,13 @@
    Import once at the document root; everything else references these vars.
    ============================================================================ */
 
-/* ---- Phosphor icons ------------------------------------------------------
-   The design renders icons as <i class="ph ph-…"> / ph-duotone / ph-fill.
-   Sourced from `@phosphor-icons/web`, but SUBSET to only the icons this app
-   references: scripts/subset-phosphor.mjs (run from a Vite buildStart hook, or
-   `pnpm icons`) emits src/lib/icons/phosphor.css + trimmed woff2 fonts into the
-   gitignored src/lib/icons/, cutting ~1530 icons × 3 weights down to <10 %.
-   The import is local + relative so Vite bundles and fingerprints the fonts (a
-   *remote* @import nested here would be hoisted below other rules, become an
-   invalid mid-sheet @import, and get dropped — which is why icons once went
-   missing). A fresh checkout generates the subset on first dev/build.
+/* ---- Icons ----------------------------------------------------------------
+   Icons render as inline SVG via `phosphor-svelte` — static usages import the
+   per-icon component directly (`phosphor-svelte/lib/CoffeeIcon`); runtime-named
+   ones go through `$lib/icons/Icon.svelte`. Each SVG defaults to width/height
+   `1em` + `fill: currentColor`, so `font-size` and `color` size and tint it
+   (matching the prior icon-font behaviour). No icon font, no FOIT.
    -------------------------------------------------------------------------- */
-@import '../lib/icons/phosphor.css';
 
 /* ---- Fonts ---------------------------------------------------------------
    Newsreader / Hanken Grotesk / JetBrains Mono load via a <link> in app.html

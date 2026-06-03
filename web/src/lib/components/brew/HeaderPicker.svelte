@@ -1,4 +1,10 @@
 <script lang="ts" module>
+	import BooksIcon from 'phosphor-svelte/lib/BooksIcon';
+	import CheckIcon from 'phosphor-svelte/lib/CheckIcon';
+	import MagnifyingGlassIcon from 'phosphor-svelte/lib/MagnifyingGlassIcon';
+	import PencilSimpleIcon from 'phosphor-svelte/lib/PencilSimpleIcon';
+	import PlusIcon from 'phosphor-svelte/lib/PlusIcon';
+	import StarIcon from 'phosphor-svelte/lib/StarIcon';
 	import type { ProfileSegment } from '$lib/profiles';
 
 	/** One row in a header picker — a profile or a bean, normalised. */
@@ -93,7 +99,7 @@
 {#if open}
 	<div class="hpick" role="dialog" aria-label="Quick picker">
 		<div class="hpick-search">
-			<i class="ph ph-magnifying-glass" aria-hidden="true"></i>
+			<MagnifyingGlassIcon aria-hidden="true" />
 			<input
 				bind:this={inputEl}
 				bind:value={query}
@@ -122,8 +128,8 @@
 						<span class="hpick-primary">{it.primary}</span>
 						{#if it.secondary}<span class="hpick-secondary">{it.secondary}</span>{/if}
 					</span>
-					{#if it.pinned}<i class="ph-fill ph-star hpick-pin" aria-hidden="true"></i>{/if}
-					{#if it.id === activeId}<i class="ph ph-check hpick-check" aria-hidden="true"></i>{/if}
+					{#if it.pinned}<StarIcon weight="fill" class="hpick-pin" aria-hidden="true" />{/if}
+					{#if it.id === activeId}<CheckIcon class="hpick-check" aria-hidden="true" />{/if}
 				</button>
 			{:else}
 				<div class="hpick-empty">No matches</div>
@@ -132,7 +138,7 @@
 
 		<div class="hpick-foot">
 			<button type="button" class="hpick-foot-lib" onclick={() => { onLibrary?.(); onClose?.(); }}>
-				<i class="ph ph-books" aria-hidden="true"></i>Open library
+				<BooksIcon aria-hidden="true" />Open library
 			</button>
 			<button
 				type="button"
@@ -141,7 +147,7 @@
 				title={addLabel}
 				onclick={() => { onAdd?.(); onClose?.(); }}
 			>
-				<i class="ph ph-plus" aria-hidden="true"></i>
+				<PlusIcon aria-hidden="true" />
 			</button>
 			<button
 				type="button"
@@ -151,7 +157,7 @@
 				disabled={!canEdit}
 				onclick={() => { onEdit?.(); onClose?.(); }}
 			>
-				<i class="ph ph-pencil-simple" aria-hidden="true"></i>
+				<PencilSimpleIcon aria-hidden="true" />
 			</button>
 		</div>
 	</div>

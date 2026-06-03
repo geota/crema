@@ -99,7 +99,7 @@
 .mc-chip.is-flush:hover {
 	background: rgba(107, 140, 95, 0.22);
 }
-.mc-chip > i {
+.mc-chip > :is(i, svg) {
 	font-size: 18px;
 	color: rgba(var(--tint-rgb), 0.7);
 }
@@ -134,19 +134,19 @@
 .mc-chip.is-steam {
 	background: var(--mc-steam-15);
 }
-.mc-chip.is-steam > i {
+.mc-chip.is-steam > :is(i, svg) {
 	color: var(--mc-steam);
 }
 .mc-chip.is-water {
 	background: var(--mc-water-15);
 }
-.mc-chip.is-water > i {
+.mc-chip.is-water > :is(i, svg) {
 	color: var(--mc-water);
 }
 .mc-chip.is-flush {
 	background: var(--mc-flush-15);
 }
-.mc-chip.is-flush > i {
+.mc-chip.is-flush > :is(i, svg) {
 	color: var(--mc-flush);
 }
 
@@ -173,7 +173,7 @@
 	background: rgba(var(--tint-rgb), 0.1);
 	margin-left: 2px;
 }
-.mc-chip-cancel > i {
+.mc-chip-cancel > :is(i, svg) {
 	font-size: 10px;
 	color: rgba(var(--tint-rgb), 0.7);
 }
@@ -228,7 +228,7 @@
 	background: rgba(var(--tint-rgb), 0.08);
 	flex: 0 0 auto;
 }
-.mc-head-status-icon > i {
+.mc-head-status-icon > :is(i, svg) {
 	font-size: 14px;
 }
 /* Icon color uses the full mode token (not a lighter custom hex) so the
@@ -318,7 +318,7 @@
 .mc-head-status-cancel:hover {
 	background: rgba(var(--danger-rgb), 0.28);
 }
-.mc-head-status-cancel > i {
+.mc-head-status-cancel > :is(i, svg) {
 	font-size: 11px;
 }
 

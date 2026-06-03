@@ -37,7 +37,7 @@
   width: 260px;
 }
 .hi-search:focus-within { border-color: rgba(var(--tint-rgb), 0.2); }
-.hi-search i { color: rgba(var(--tint-rgb), 0.4); font-size: 13px; }
+.hi-search :is(i, svg) { color: rgba(var(--tint-rgb), 0.4); font-size: 13px; }
 .hi-search input {
   flex: 1 1 auto; min-width: 0;
   background: transparent; border: 0; outline: 0;

@@ -8,9 +8,6 @@ importers:
 
   .:
     dependencies:
-      '@phosphor-icons/web':
-        specifier: ^2.1.2
-        version: 2.1.2
       bits-ui:
         specifier: ^2.18.1
         version: 2.18.1(@internationalized/date@3.12.1)(@sveltejs/kit@2.60.1(@sveltejs/vite-plugin-svelte@7.1.2(svelte@5.55.7)(vite@8.0.13(@types/node@25.8.0)(jiti@2.7.0)(terser@5.47.1)))(svelte@5.55.7)(typescript@6.0.3)(vite@8.0.13(@types/node@25.8.0)(jiti@2.7.0)(terser@5.47.1)))(svelte@5.55.7)
@@ -20,6 +17,9 @@ importers:
       fflate:
         specifier: ^0.8.3
         version: 0.8.3
+      phosphor-svelte:
+        specifier: ^3.1.0
+        version: 3.1.0(svelte@5.55.7)(vite@8.0.13(@types/node@25.8.0)(jiti@2.7.0)(terser@5.47.1))
       uplot:
         specifier: ^1.6.32
         version: 1.6.32
@@ -701,9 +701,6 @@ packages:
 
   '@oxc-project/types@0.130.0':
     resolution: {integrity: sha512-ibD2usx9JRu7f5pu2tMKMI4cpA4NgXJQoYRP4pQ7Pxmn1l6k/53qWtQWZayhYy3X4QZkt90Ot+mJEaeXouio6Q==}
-
-  '@phosphor-icons/web@2.1.2':
-    resolution: {integrity: sha512-rPAR9o/bEcp4Cw4DEeZHXf+nlGCMNGkNDRizYHM47NLxz9vvEHp/Tt6FMK1NcWadzw/pFDPnRBGi/ofRya958A==}
 
   '@polka/url@1.0.0-next.29':
     resolution: {integrity: sha512-wwQAWhWSuHaag8c4q/KN/vCoeOJYshAIvMQwD4GpSb3OiZklFfvAgmj0VCBBImRpuF/aFgIRzllXlVX93Jevww==}
@@ -2029,6 +2026,15 @@ packages:
 
   pathe@2.0.3:
     resolution: {integrity: sha512-WUjGcAqP1gQacoQe+OBJsFA7Ld4DyXuUIjZ5cc75cLHvJ7dtNsTugphxIADwspS+AraAUePCKrSVtPLFj/F88w==}
+
+  phosphor-svelte@3.1.0:
+    resolution: {integrity: sha512-nldtxx+XCgNREvrb7O5xgDsefytXpSkPTx8Rnu3f2qQCUZLDV1rLxYSd2Jcwckuo9lZB1qKMqGR17P4UDC0PrA==}
+    peerDependencies:
+      svelte: ^5.0.0 || ^5.0.0-next.96
+      vite: '>=5'
+    peerDependenciesMeta:
+      vite:
+        optional: true
 
   picocolors@1.1.1:
     resolution: {integrity: sha512-xceH2snhtb5M9liqDsmEw56le376mTZkEX/jEb/RxNFyegNul7eNslCXP9FDj/Lcu0X8KEyMceP2ntpaHrDEVA==}
@@ -3451,8 +3457,6 @@ snapshots:
 
   '@oxc-project/types@0.130.0': {}
 
-  '@phosphor-icons/web@2.1.2': {}
-
   '@polka/url@1.0.0-next.29': {}
 
   '@redocly/ajv@8.11.2':
@@ -4678,6 +4682,14 @@ snapshots:
       minipass: 7.1.3
 
   pathe@2.0.3: {}
+
+  phosphor-svelte@3.1.0(svelte@5.55.7)(vite@8.0.13(@types/node@25.8.0)(jiti@2.7.0)(terser@5.47.1)):
+    dependencies:
+      estree-walker: 3.0.3
+      magic-string: 0.30.21
+      svelte: 5.55.7
+    optionalDependencies:
+      vite: 8.0.13(@types/node@25.8.0)(jiti@2.7.0)(terser@5.47.1)
 
   picocolors@1.1.1: {}
 

@@ -1,6 +1,5 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { sveltekit } from '@sveltejs/kit/vite';
 import { SvelteKitPWA } from '@vite-pwa/sveltekit';
 import tailwindcss from '@tailwindcss/vite';
@@ -35,21 +34,6 @@ export default defineConfig(({ command }) => ({
 			}
 			: undefined,
 	plugins: [
-		// Subset the Phosphor icon font to only the icons the app references,
-		// regenerating `src/lib/icons/` (gitignored) before the build/dev graph is
-		// read. The full `@phosphor-icons/web` set is ~440 KiB woff2 + ~130 KiB CSS
-		// for ~1530 icons; the app uses <10 %. A used-set fingerprint makes warm
-		// restarts a no-op. Loaded via a dynamic absolute-path import so the
-		// subsetter (and its WASM harfbuzz dep) is never bundled into the config.
-		{
-			name: 'phosphor-subset',
-			enforce: 'pre',
-			async buildStart() {
-				const url = pathToFileURL(path.resolve('scripts/subset-phosphor.mjs')).href;
-				const { generatePhosphorSubset } = await import(/* @vite-ignore */ url);
-				await generatePhosphorSubset();
-			}
-		},
 		tailwindcss(),
 		sveltekit(),
 		// The PWA plugin only matters for production builds (it generates the
@@ -95,15 +79,12 @@ export default defineConfig(({ command }) => ({
 			},
 			workbox: {
 				// Precache the app shell + the wasm core (`**/*.wasm` caches the
-				// de1-wasm binary for offline / instant-load) + the Phosphor icon
-				// fonts (`woff2`). The icons are SUBSET to only those the app uses
-				// (scripts/subset-phosphor.mjs) — ~41 KiB across three weights vs the
-				// full ~440 KiB — so precaching is cheap and renders icons instantly +
-				// offline on a cold load. Only LOCAL woff2 match: the design fonts
-				// (Newsreader / Hanken / JetBrains) are cross-origin Google Fonts,
-				// runtime-cached below. The subsetter's woff2-only @font-face also
-				// stops Vite emitting the ~7 MiB of Phosphor `.svg` sprite fallbacks
-				// the old PERF1 `globIgnores` excluded — gone at the source now.
+				// de1-wasm binary for offline / instant-load). Icons are inline SVG
+				// (phosphor-svelte) bundled into the JS chunks, so there's no icon
+				// font to precache — they render instantly + offline by construction.
+				// The `woff2` glob now only matches design fonts if ever self-hosted;
+				// today those (Newsreader / Hanken / JetBrains) are cross-origin
+				// Google Fonts, runtime-cached below.
 				globPatterns: ['**/*.{js,css,html,ico,png,webmanifest,wasm,woff2}'],
 				// The wasm bundle exceeds Workbox's 2 MiB default cache limit.
 				maximumFileSizeToCacheInBytes: 8 * 1024 * 1024,

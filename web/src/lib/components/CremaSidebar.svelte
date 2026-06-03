@@ -1,4 +1,5 @@
 <script lang="ts">
+	import Icon from '$lib/icons/Icon.svelte';
 	/**
 	 * `CremaSidebar` — the fixed 72px left rail, ported from the design's
 	 * `CremaSidebar` in `web-dashboard-v2.jsx` and the `.cside` rules in
@@ -100,7 +101,7 @@
 				href={it.href}
 				aria-current={activeHref === it.href ? 'page' : undefined}
 			>
-				<i class={'ph-duotone ph-' + it.icon} aria-hidden="true"></i>
+				<Icon cls={'ph-duotone ph-' + it.icon} aria-hidden="true" />
 				<span>{it.label}</span>
 			</a>
 		{/each}
@@ -118,7 +119,7 @@
 			<span class="cside-status-dot" class:off={!machineConnected}></span>
 			<span class="cside-status-label">DE1</span>
 			<span class="cside-status-cta">
-				<i class={'ph ph-' + (machineConnected ? 'check' : 'bluetooth')} aria-hidden="true"></i>
+				<Icon cls={'ph ph-' + (machineConnected ? 'check' : 'bluetooth')} aria-hidden="true" />
 			</span>
 		</button>
 		<button
@@ -132,7 +133,7 @@
 			<span class="cside-status-dot" class:off={!scaleConnected}></span>
 			<span class="cside-status-label">Scale</span>
 			<span class="cside-status-cta">
-				<i class={'ph ph-' + (scaleConnected ? 'check' : 'bluetooth')} aria-hidden="true"></i>
+				<Icon cls={'ph ph-' + (scaleConnected ? 'check' : 'bluetooth')} aria-hidden="true" />
 			</span>
 		</button>
 	</div>

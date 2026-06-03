@@ -1,4 +1,5 @@
 <script lang="ts">
+	import Icon from '$lib/icons/Icon.svelte';
 	/**
 	 * `PlaceholderPanel` — the Step-1 stand-in for a real screen.
 	 *
@@ -28,7 +29,7 @@
 
 <main class="placeholder">
 	<section class="panel">
-		<i class={'ph-duotone ph-' + icon} aria-hidden="true"></i>
+		<Icon cls={'ph-duotone ph-' + icon} aria-hidden="true" />
 		<h1 class="t-h2">{title}</h1>
 		<p class="t-body-sm">{blurb}</p>
 		<div class="status">
@@ -64,7 +65,7 @@
 		box-shadow: var(--shadow-md);
 		padding: var(--space-8);
 	}
-	.panel i {
+	.panel :global(svg) {
 		font-size: 40px;
 		color: var(--fg-accent);
 	}

@@ -25,7 +25,7 @@
   color: rgba(var(--tint-rgb), 0.55);
   margin-top: 6px;
 }
-.sc-head-meta i { font-size: 14px; }
+.sc-head-meta :is(i, svg) { font-size: 14px; }
 .sc-sep { color: rgba(var(--tint-rgb), 0.2); }
 .sc-head-r {
   display: flex; gap: 8px;
@@ -135,7 +135,7 @@
   font-size: 13px;
 }
 .sc-secondary:hover { background: rgba(var(--tint-rgb), 0.08); }
-.sc-secondary i { font-size: 14px; }
+.sc-secondary :is(i, svg) { font-size: 14px; }
 
 /* ───────────────────────────── Dose helper */
 .sc-dose {
@@ -192,7 +192,7 @@
   font-size: 14px;
 }
 .sc-dose-ok   { color: var(--success); display: inline-flex; align-items: center; gap: 6px; }
-.sc-dose-ok i { font-size: 16px; }
+.sc-dose-ok :is(i, svg) { font-size: 16px; }
 .sc-dose-warn { color: var(--copper-400); }
 .sc-dose-bad  { color: var(--warning); }
 

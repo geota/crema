@@ -6,7 +6,6 @@
   "packageManager": "pnpm@11.5.0",
   "scripts": {
     "wasm": "wasm-pack build ../core/de1-wasm --target web --out-dir ../../web/src/lib/wasm --out-name de1_wasm",
-    "icons": "node scripts/subset-phosphor.mjs",
     "dev": "vite dev",
     "build": "pnpm wasm && vite build",
     "preview": "vite preview",
@@ -37,10 +36,10 @@
     "vitest": "^4.1.7"
   },
   "dependencies": {
-    "@phosphor-icons/web": "^2.1.2",
     "bits-ui": "^2.18.1",
     "effect": "^3.21.2",
     "fflate": "^0.8.3",
+    "phosphor-svelte": "^3.1.0",
     "uplot": "^1.6.32"
   }
 }

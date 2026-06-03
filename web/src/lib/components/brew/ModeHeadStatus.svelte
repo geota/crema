@@ -1,4 +1,6 @@
 <script lang="ts">
+	import Icon from '$lib/icons/Icon.svelte';
+	import StopIcon from 'phosphor-svelte/lib/StopIcon';
 	/**
 	 * `ModeHeadStatus` — the colored pill that appears in the dashboard
 	 * header while a Steam / Hot-water / Flush mode is running. Sits in
@@ -41,7 +43,7 @@
 
 <div class={`mc-head-status ${kindClass}`}>
 	<span class="mc-head-status-icon">
-		<i class={`ph-duotone ph-${iconName}`} aria-hidden="true"></i>
+		<Icon cls={`ph-duotone ph-${iconName}`} aria-hidden="true" />
 	</span>
 	<span class="mc-head-status-text">
 		<span class="mc-head-status-name">{nameLabel}</span>
@@ -56,6 +58,6 @@
 		onclick={() => onCancel?.()}
 		aria-label="Stop {nameLabel}"
 	>
-		<i class="ph ph-stop-fill" aria-hidden="true"></i> Stop
+		<StopIcon weight="fill" aria-hidden="true" /> Stop
 	</button>
 </div>

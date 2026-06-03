@@ -1,4 +1,6 @@
 <script lang="ts">
+	import Icon from '$lib/icons/Icon.svelte';
+	import ArrowsClockwiseIcon from 'phosphor-svelte/lib/ArrowsClockwiseIcon';
 	/**
 	 * `BrewDashboard` — the Brew route's centrepiece, ported from the
 	 * `variant === 'g'` path of `WebQDashV2` in `web-dashboard-v2.jsx`.
@@ -1434,13 +1436,13 @@
 						     "Syncing to DE1…" caption replaces the usual
 						     coffee icon + label for the 1-2 s upload
 						     window. -->
-						<i class="ph ph-arrows-clockwise crema-bigbtn-spinner" aria-hidden="true"></i>
+						<ArrowsClockwiseIcon class="crema-bigbtn-spinner" aria-hidden="true" />
 						<span>Syncing to DE1…</span>
 					{:else}
-						<i
-							class={'ph-fill ph-' + (running ? 'stop' : 'coffee')}
+						<Icon
+							cls={'ph-fill ph-' + (running ? 'stop' : 'coffee')}
 							aria-hidden="true"
-						></i>
+						 />
 						<span>{running ? 'Stop' : 'Coffee'}</span>
 					{/if}
 				</button>

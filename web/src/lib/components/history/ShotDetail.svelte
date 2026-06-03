@@ -1,4 +1,14 @@
 <script lang="ts">
+	import Icon from '$lib/icons/Icon.svelte';
+	import BookmarkSimpleIcon from 'phosphor-svelte/lib/BookmarkSimpleIcon';
+	import CheckIcon from 'phosphor-svelte/lib/CheckIcon';
+	import CoffeeIcon from 'phosphor-svelte/lib/CoffeeIcon';
+	import DropIcon from 'phosphor-svelte/lib/DropIcon';
+	import GaugeIcon from 'phosphor-svelte/lib/GaugeIcon';
+	import PencilSimpleIcon from 'phosphor-svelte/lib/PencilSimpleIcon';
+	import ScalesIcon from 'phosphor-svelte/lib/ScalesIcon';
+	import ShareIcon from 'phosphor-svelte/lib/ShareIcon';
+	import ThermometerIcon from 'phosphor-svelte/lib/ThermometerIcon';
 	/**
 	 * `ShotDetail` — the History page's right pane, ported from `ShotDetail` in
 	 * `history-page.jsx`. Header, the stored-curve chart, a metric strip and an
@@ -389,13 +399,13 @@
 				]}
 			/>
 			<button class="st-btn st-btn-secondary" onclick={loadOnBrew}>
-				<i class="ph ph-coffee" aria-hidden="true"></i> Load on Brew
+				<CoffeeIcon aria-hidden="true" /> Load on Brew
 			</button>
 			<button class="st-btn st-btn-secondary" onclick={saveAsProfile}>
-				<i class="ph ph-bookmark-simple" aria-hidden="true"></i> Save as profile
+				<BookmarkSimpleIcon aria-hidden="true" /> Save as profile
 			</button>
 			<button class="st-btn st-btn-secondary" onclick={share}>
-				<i class="ph ph-share" aria-hidden="true"></i> Share
+				<ShareIcon aria-hidden="true" /> Share
 			</button>
 			{#if onDelete}
 				<SplitButton
@@ -441,25 +451,25 @@
 		-->
 		<div class="hi-chart-legend">
 			<span class="hi-leg-group">
-				<i class="ph ph-gauge hi-leg-icon" aria-hidden="true"></i>
+				<GaugeIcon class="hi-leg-icon" aria-hidden="true" />
 				<span class="hi-leg-item"><i class="hi-leg" style="background:var(--tel-pressure)"></i>Pressure</span>
 				<span class="hi-leg-item"><i class="hi-leg" style="background:var(--tel-pressure-2)"></i>Resistance</span>
 			</span>
 			<span class="hi-leg-rule" aria-hidden="true"></span>
 			<span class="hi-leg-group">
-				<i class="ph ph-drop hi-leg-icon" aria-hidden="true"></i>
+				<DropIcon class="hi-leg-icon" aria-hidden="true" />
 				<span class="hi-leg-item"><i class="hi-leg" style="background:var(--tel-flow)"></i>Flow</span>
 				<span class="hi-leg-item"><i class="hi-leg" style="background:var(--tel-flow-2)"></i>Water</span>
 			</span>
 			<span class="hi-leg-rule" aria-hidden="true"></span>
 			<span class="hi-leg-group">
-				<i class="ph ph-thermometer hi-leg-icon" aria-hidden="true"></i>
+				<ThermometerIcon class="hi-leg-icon" aria-hidden="true" />
 				<span class="hi-leg-item"><i class="hi-leg" style="background:var(--tel-temp)"></i>Coffee</span>
 				<span class="hi-leg-item"><i class="hi-leg" style="background:var(--tel-temp-2)"></i>Water</span>
 			</span>
 			<span class="hi-leg-rule" aria-hidden="true"></span>
 			<span class="hi-leg-group">
-				<i class="ph ph-scales hi-leg-icon" aria-hidden="true"></i>
+				<ScalesIcon class="hi-leg-icon" aria-hidden="true" />
 				<span class="hi-leg-item"><i class="hi-leg" style="background:var(--tel-weight)"></i>Weight</span>
 				<span class="hi-leg-item"><i class="hi-leg" style="background:var(--tel-weight-2)"></i>Flow</span>
 			</span>
@@ -509,8 +519,8 @@
 					onclick={() => setStar(n)}
 					aria-label="{n} star{n === 1 ? '' : 's'}"
 				>
-					<i class={n <= rating ? 'ph-fill ph-star' : 'ph ph-star'} aria-hidden="true"
-					></i>
+					<Icon cls={n <= rating ? 'ph-fill ph-star' : 'ph ph-star'} aria-hidden="true"
+					 />
 				</button>
 			{/each}
 		</div>
@@ -524,7 +534,7 @@
 		<div class="hi-bean-head">
 			<span class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Bean</span>
 			<button class="hi-bean-action" onclick={openPicker}>
-				<i class="ph ph-pencil-simple" aria-hidden="true"></i>
+				<PencilSimpleIcon aria-hidden="true" />
 				{shot.bean ? 'Change bean' : 'Assign bean'}
 			</button>
 		</div>
@@ -598,11 +608,11 @@
 			<span class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Tasting notes</span>
 			{#if editing}
 				<button class="hi-notes-edit" onclick={saveNotes}>
-					<i class="ph ph-check" aria-hidden="true"></i> Save
+					<CheckIcon aria-hidden="true" /> Save
 				</button>
 			{:else}
 				<button class="hi-notes-edit" onclick={startEdit}>
-					<i class="ph ph-pencil-simple" aria-hidden="true"></i> Edit
+					<PencilSimpleIcon aria-hidden="true" /> Edit
 				</button>
 			{/if}
 		</div>
@@ -698,7 +708,7 @@
 		align-items: center;
 		gap: 10px;
 	}
-	.hi-leg-icon {
+	:global(.hi-leg-icon) {
 		font-size: 14px;
 		color: rgba(var(--tint-rgb), 0.5);
 	}

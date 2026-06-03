@@ -1,4 +1,5 @@
 <script lang="ts">
+	import Icon from '$lib/icons/Icon.svelte';
 	/**
 	 * `FileDropZone` — drag-drop file region with a hidden file-picker
 	 * button. Hands the chosen / dropped files back to the caller as a
@@ -84,7 +85,7 @@
 	role="region"
 	aria-label={title}
 >
-	<i class={icon} aria-hidden="true"></i>
+	<Icon cls={icon} aria-hidden="true" />
 	<div class="fdz-title">{title}</div>
 	<div class="fdz-sub">{@render subtitle()}</div>
 	<label class="fdz-pick" class:is-disabled={disabled}>
@@ -119,7 +120,7 @@
 		opacity: 0.6;
 		pointer-events: none;
 	}
-	.fdz > i {
+	.fdz > :global(svg) {
 		font-size: 48px;
 		color: var(--copper-400);
 	}

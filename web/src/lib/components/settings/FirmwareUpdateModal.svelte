@@ -1,4 +1,5 @@
 <script lang="ts">
+	import WarningOctagonIcon from 'phosphor-svelte/lib/WarningOctagonIcon';
 	/**
 	 * `FirmwareUpdateModal` — the type-to-confirm gate the user must pass
 	 * before any firmware-update flow is allowed to run.
@@ -106,7 +107,7 @@
 
 		<!-- Always-shown loud red banner: damage / impact copy. -->
 		<div class="fu-banner fu-banner-warn" role="alert">
-			<i class="ph ph-warning-octagon" aria-hidden="true"></i>
+			<WarningOctagonIcon aria-hidden="true" />
 			<span
 				>Flashing the wrong firmware, or losing power mid-flash, can
 				leave the DE1 unbootable. Make sure the machine is plugged in,
@@ -218,7 +219,7 @@
 		font-size: 13px;
 		line-height: 1.4;
 	}
-	.fu-banner i {
+	.fu-banner :global(svg) {
 		flex-shrink: 0;
 		font-size: 18px;
 		margin-top: 1px;

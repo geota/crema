@@ -1,4 +1,6 @@
 <script lang="ts">
+	import WarningIcon from 'phosphor-svelte/lib/WarningIcon';
+	import XIcon from 'phosphor-svelte/lib/XIcon';
 	/**
 	 * `MachineErrorBanner` — the red dashboard header pill that surfaces a
 	 * DE1 firmware fault. Reuses the `.mc-head-status` shape from
@@ -66,7 +68,7 @@
 	role="alert"
 >
 	<span class="mc-head-status-icon">
-		<i class="ph-duotone ph-warning" aria-hidden="true"></i>
+		<WarningIcon weight="duotone" aria-hidden="true" />
 	</span>
 	{#if onClick}
 		<button
@@ -93,7 +95,7 @@
 			}}
 			aria-label="Dismiss"
 		>
-			<i class="ph ph-x" aria-hidden="true"></i>
+			<XIcon aria-hidden="true" />
 		</button>
 	{/if}
 </div>

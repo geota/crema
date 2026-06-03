@@ -1,4 +1,5 @@
 <script lang="ts">
+	import ArrowSquareOutIcon from 'phosphor-svelte/lib/ArrowSquareOutIcon';
 	/**
 	 * About section — app identity, the open-source libraries Crema is built
 	 * on, and the project's terms of use.
@@ -87,7 +88,7 @@
 					target="_blank"
 					rel="noreferrer noopener"
 				>
-					<i class="ph ph-arrow-square-out" aria-hidden="true"></i><span>Open</span>
+					<ArrowSquareOutIcon aria-hidden="true" /><span>Open</span>
 				</a>
 			</div>
 		</div>
@@ -103,7 +104,7 @@
 					target="_blank"
 					rel="noreferrer noopener"
 				>
-					<i class="ph ph-arrow-square-out" aria-hidden="true"></i><span>Visit</span>
+					<ArrowSquareOutIcon aria-hidden="true" /><span>Visit</span>
 				</a>
 			</div>
 		</div>
@@ -119,7 +120,7 @@
 					target="_blank"
 					rel="noreferrer noopener"
 				>
-					<i class="ph ph-arrow-square-out" aria-hidden="true"></i><span>Visit</span>
+					<ArrowSquareOutIcon aria-hidden="true" /><span>Visit</span>
 				</a>
 			</div>
 		</div>
@@ -145,7 +146,7 @@
 					target="_blank"
 					rel="noreferrer noopener"
 				>
-					<i class="ph ph-arrow-square-out" aria-hidden="true"></i><span>Visit</span>
+					<ArrowSquareOutIcon aria-hidden="true" /><span>Visit</span>
 				</a>
 			</div>
 		</div>
@@ -172,7 +173,7 @@
 					rel="noreferrer noopener"
 				>
 					{lib.name}
-					<i class="ph ph-arrow-square-out" aria-hidden="true"></i>
+					<ArrowSquareOutIcon aria-hidden="true" />
 				</a>
 				<span class="ab-lib-desc">{lib.desc}</span>
 			</li>
@@ -204,7 +205,7 @@
 					target="_blank"
 					rel="noreferrer noopener"
 				>
-					<i class="ph ph-arrow-square-out" aria-hidden="true"></i><span>Read</span>
+					<ArrowSquareOutIcon aria-hidden="true" /><span>Read</span>
 				</a>
 			</div>
 		</div>
@@ -223,7 +224,7 @@
 					target="_blank"
 					rel="noreferrer noopener"
 				>
-					<i class="ph ph-arrow-square-out" aria-hidden="true"></i><span>Read</span>
+					<ArrowSquareOutIcon aria-hidden="true" /><span>Read</span>
 				</a>
 			</div>
 		</div>
@@ -265,14 +266,14 @@
 		color: var(--fg-1);
 		text-decoration: none;
 	}
-	.ab-lib-name i {
+	.ab-lib-name :global(svg) {
 		font-size: 11px;
 		color: rgba(var(--tint-rgb), 0.5);
 	}
 	.ab-lib-name:hover {
 		color: var(--copper-400);
 	}
-	.ab-lib-name:hover i {
+	.ab-lib-name:hover :global(svg) {
 		color: var(--copper-400);
 	}
 	.ab-lib-desc {

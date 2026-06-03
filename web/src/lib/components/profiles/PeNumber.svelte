@@ -1,4 +1,6 @@
 <script lang="ts">
+	import MinusIcon from 'phosphor-svelte/lib/MinusIcon';
+	import PlusIcon from 'phosphor-svelte/lib/PlusIcon';
 	/**
 	 * `PeNumber` — a labelled −/+ number stepper, ported from `PeNumber` in
 	 * `profile-edit-page.jsx`. Used in the editor's Targets grid.
@@ -147,7 +149,7 @@
 	</div>
 	<div class="pe-num-row" class:is-off={dot && !dotOn}>
 		<button class="pe-num-btn" aria-label="Decrease {label}" onclick={() => inc(-1)}>
-			<i class="ph ph-minus" aria-hidden="true"></i>
+			<MinusIcon aria-hidden="true" />
 		</button>
 		<div class="pe-num-val">
 			{#if editing}
@@ -170,7 +172,7 @@
 			<span class="pe-num-unit">{effectiveUnit}</span>
 		</div>
 		<button class="pe-num-btn" aria-label="Increase {label}" onclick={() => inc(1)}>
-			<i class="ph ph-plus" aria-hidden="true"></i>
+			<PlusIcon aria-hidden="true" />
 		</button>
 	</div>
 </div>

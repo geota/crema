@@ -1,4 +1,8 @@
 <script lang="ts">
+	import ArrowSquareOutIcon from 'phosphor-svelte/lib/ArrowSquareOutIcon';
+	import CoffeeIcon from 'phosphor-svelte/lib/CoffeeIcon';
+	import InfoIcon from 'phosphor-svelte/lib/InfoIcon';
+	import XIcon from 'phosphor-svelte/lib/XIcon';
 	/**
 	 * `BeanQuickAdd` — the 10-second new-bag popover. Mounts as a modal
 	 * over the library; the user types Name + Roaster + Roasted-on +
@@ -130,7 +134,7 @@
 			</div>
 		</div>
 		<button class="bn-qadd-x" onclick={onClose} aria-label="Close">
-			<i class="ph ph-x" aria-hidden="true"></i>
+			<XIcon aria-hidden="true" />
 		</button>
 	</header>
 
@@ -200,7 +204,7 @@
 		</div>
 
 		<div class="bn-qadd-hint">
-			<i class="ph ph-info" aria-hidden="true"></i>
+			<InfoIcon aria-hidden="true" />
 			<span>
 				Tip — open the full editor to add origin, processing, tasting notes
 				and grinder setting.
@@ -210,10 +214,10 @@
 
 	<footer class="bn-qadd-foot">
 		<button class="bn-btn bn-btn-ghost" onclick={gotoFullEditor}>
-			<i class="ph ph-arrow-square-out" aria-hidden="true"></i> Open full editor
+			<ArrowSquareOutIcon aria-hidden="true" /> Open full editor
 		</button>
 		<button class="bn-btn bn-btn-primary" onclick={() => attemptSave(true)}>
-			<i class="ph ph-coffee" aria-hidden="true"></i>
+			<CoffeeIcon aria-hidden="true" />
 			Save &amp; make active
 		</button>
 	</footer>
@@ -425,7 +429,7 @@
 		border-radius: var(--radius-sm);
 		line-height: 1.4;
 	}
-	.bn-qadd-hint i {
+	.bn-qadd-hint :global(svg) {
 		font-size: 13px;
 		color: var(--copper-400);
 		margin-top: 1px;

@@ -280,14 +280,14 @@
   cursor: pointer;
   transition: all var(--dur-1) var(--ease);
 }
-.qmtab i { font-size: 18px; }
+.qmtab :is(i, svg) { font-size: 18px; }
 .qmtab:hover { background: rgba(var(--tint-rgb), 0.04); color: var(--fg-1); }
 .qmtab.is-active {
   background: rgba(var(--tint-rgb), 0.08);
   color: var(--fg-1);
   box-shadow: inset 0 1px 0 rgba(var(--tint-rgb), 0.06);
 }
-.qmtab.is-active i { color: var(--copper-400); }
+.qmtab.is-active :is(i, svg) { color: var(--copper-400); }
 
 /* ───────────────────────────── Mode-aware big Start button */
 .qmstart {
@@ -304,7 +304,7 @@
   transition: background var(--dur-1) var(--ease), transform 80ms var(--ease);
   box-shadow: 0 1px 0 rgba(0,0,0,0.2), inset 0 1px 0 rgba(255,255,255,0.18);
 }
-.qmstart i { font-size: 20px; }
+.qmstart :is(i, svg) { font-size: 20px; }
 .qmstart:hover { background: var(--copper-600); }
 .qmstart:active { transform: scale(0.985); }
 .qmstart.is-running {
@@ -312,7 +312,7 @@
   color: #fff;
 }
 .qmstart.is-compact { height: 40px; padding: 0 18px; font-size: 13px; }
-.qmstart.is-compact i { font-size: 16px; }
+.qmstart.is-compact :is(i, svg) { font-size: 16px; }
 
 /* ───────────────────────────── Favorites strip (top of sheet, horizontal) */
 .qfstrip {
@@ -428,7 +428,7 @@
 .qsheet-e-sec-label {
   display: flex; align-items: center; gap: 8px;
 }
-.qsheet-e-sec-label i { font-size: 20px; color: var(--copper-400); }
+.qsheet-e-sec-label :is(i, svg) { font-size: 20px; color: var(--copper-400); }
 .qsheet-e-sec-label-text {
   display: flex; flex-direction: column;
 }
@@ -506,10 +506,10 @@
   letter-spacing: 0.02em;
   transition: color var(--dur-1) var(--ease);
 }
-.cside-item i { font-size: 22px; }
+.cside-item :is(i, svg) { font-size: 22px; }
 .cside-item:hover { color: var(--fg-1); }
 .cside-item.is-active { color: var(--fg-1); }
-.cside-item.is-active i { color: var(--copper-400); }
+.cside-item.is-active :is(i, svg) { color: var(--copper-400); }
 .cside-item.is-active::before {
   content: '';
   position: absolute;
@@ -628,7 +628,7 @@
 .qc-pop-head-l {
   display: flex; gap: 10px; align-items: flex-start;
 }
-.qc-pop-head-l > i {
+.qc-pop-head-l > :is(i, svg) {
   font-size: 22px;
   color: var(--copper-400);
   line-height: 1;
@@ -723,7 +723,7 @@
 .qc-pop-device.is-suggested {
   border-color: rgba(var(--copper-rgb), 0.3);
 }
-.qc-pop-device > i {
+.qc-pop-device > :is(i, svg) {
   font-size: 18px;
   color: rgba(var(--tint-rgb), 0.6);
 }
@@ -847,7 +847,7 @@
   border-radius: var(--radius-sm);
   padding: 0 10px;
 }
-.qflyout-search i { color: rgba(var(--tint-rgb), 0.4); font-size: 14px; }
+.qflyout-search :is(i, svg) { color: rgba(var(--tint-rgb), 0.4); font-size: 14px; }
 .qflyout-search input {
   flex: 1 1 auto;
   background: transparent; border: 0; outline: 0;
@@ -995,7 +995,7 @@
 }
 .qfstrip-search-inline:hover { border-color: rgba(var(--tint-rgb), 0.16); background: rgba(var(--tint-rgb), 0.04); }
 .qfstrip-search-inline:focus-within { border-color: rgba(var(--tint-rgb), 0.2); background: rgba(var(--tint-rgb), 0.05); }
-.qfstrip-search-inline i { color: rgba(var(--tint-rgb), 0.4); font-size: 13px; }
+.qfstrip-search-inline :is(i, svg) { color: rgba(var(--tint-rgb), 0.4); font-size: 13px; }
 .qfstrip-search-inline input {
   flex: 1 1 auto;
   min-width: 0;
@@ -1020,7 +1020,7 @@
   cursor: pointer;
   transition: all var(--dur-1) var(--ease);
 }
-.qfstrip-arrow i { font-size: 14px; }
+.qfstrip-arrow :is(i, svg) { font-size: 14px; }
 .qfstrip-arrow:hover { background: rgba(var(--tint-rgb), 0.08); }
 .qfstrip-arrow.is-off { opacity: 0.25; pointer-events: none; }
 
@@ -1109,8 +1109,8 @@
   transition: all var(--dur-1) var(--ease);
 }
 .qhwchip:hover { background: rgba(var(--tint-rgb), 0.07); border-color: rgba(var(--tint-rgb), 0.15); }
-.qhwchip > i:first-child { color: var(--copper-400); font-size: 18px; }
-.qhwchip > i:last-child { color: rgba(var(--tint-rgb), 0.4); font-size: 14px; }
+.qhwchip > :is(i, svg):first-child { color: var(--copper-400); font-size: 18px; }
+.qhwchip > :is(i, svg):last-child { color: rgba(var(--tint-rgb), 0.4); font-size: 14px; }
 .qhwchip-text {
   display: flex; flex-direction: column; gap: 2px;
   align-items: flex-start;

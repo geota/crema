@@ -1,4 +1,5 @@
 <script lang="ts">
+	import Icon from '$lib/icons/Icon.svelte';
 	/**
 	 * `StButton` — the settings-kit button: secondary (default), primary, or
 	 * danger, with an optional leading Phosphor icon. Ported from the design's
@@ -25,6 +26,6 @@
 	{disabled}
 	onclick={() => onClick?.()}
 >
-	{#if icon}<i class={'ph ph-' + icon} aria-hidden="true"></i>{/if}
+	{#if icon}<Icon cls={'ph ph-' + icon} aria-hidden="true" />{/if}
 	<span>{label}</span>
 </button>

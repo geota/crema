@@ -1,4 +1,10 @@
 <script lang="ts">
+	import Icon from '$lib/icons/Icon.svelte';
+	import DownloadSimpleIcon from 'phosphor-svelte/lib/DownloadSimpleIcon';
+	import MagnifyingGlassIcon from 'phosphor-svelte/lib/MagnifyingGlassIcon';
+	import PlusIcon from 'phosphor-svelte/lib/PlusIcon';
+	import UploadSimpleIcon from 'phosphor-svelte/lib/UploadSimpleIcon';
+	import XIcon from 'phosphor-svelte/lib/XIcon';
 	/**
 	 * Profiles — the `/profiles` route: the profile library, ported from
 	 * `ProfilesPage` in `profiles-page.jsx`.
@@ -572,11 +578,11 @@
 		</div>
 		<div class="pp-head-r">
 			<div class="pp-search">
-				<i class="ph ph-magnifying-glass" aria-hidden="true"></i>
+				<MagnifyingGlassIcon aria-hidden="true" />
 				<input bind:value={q} placeholder="Search profiles, beans, notes…" />
 				{#if q}
 					<button class="pp-search-clear" aria-label="Clear search" onclick={() => (q = '')}>
-						<i class="ph ph-x" aria-hidden="true"></i>
+						<XIcon aria-hidden="true" />
 					</button>
 				{/if}
 			</div>
@@ -589,7 +595,7 @@
 				class:pp-import-disabled={importing}
 				title="Import community v2 .json or legacy .tcl files, or a .jsonl bundle (one v2 profile per line)"
 			>
-				<i class="ph ph-upload-simple" aria-hidden="true"></i>
+				<UploadSimpleIcon aria-hidden="true" />
 				<span>{importing ? 'Importing…' : 'Import'}</span>
 				<input
 					type="file"
@@ -605,10 +611,10 @@
 				onclick={exportAllAsV2Jsonl}
 				title="Download every profile as one .jsonl file — one community-v2 profile per line"
 			>
-				<i class="ph ph-download-simple" aria-hidden="true"></i> Export
+				<DownloadSimpleIcon aria-hidden="true" /> Export
 			</button>
 			<button class="pp-btn pp-btn-primary" onclick={() => goto(resolve('/profiles/new'))}>
-				<i class="ph ph-plus" aria-hidden="true"></i> New profile
+				<PlusIcon aria-hidden="true" /> New profile
 			</button>
 		</div>
 	</div>
@@ -620,10 +626,10 @@
 			class:pp-import-banner-err={importBanner.kind === 'error'}
 			role="status"
 		>
-			<i
-				class={importBanner.kind === 'success' ? 'ph ph-check-circle' : 'ph ph-warning'}
+			<Icon
+				cls={importBanner.kind === 'success' ? 'ph ph-check-circle' : 'ph ph-warning'}
 				aria-hidden="true"
-			></i>
+			 />
 			<span>{importBanner.message}</span>
 			<button
 				type="button"
@@ -631,7 +637,7 @@
 				aria-label="Dismiss"
 				onclick={() => (importBanner = null)}
 			>
-				<i class="ph ph-x" aria-hidden="true"></i>
+				<XIcon aria-hidden="true" />
 			</button>
 		</div>
 	{/if}
@@ -686,7 +692,7 @@
 			/>
 		{/each}
 		<button class="pp-card-new" onclick={() => goto(resolve('/profiles/new'))}>
-			<div class="pp-card-new-glyph"><i class="ph ph-plus" aria-hidden="true"></i></div>
+			<div class="pp-card-new-glyph"><PlusIcon aria-hidden="true" /></div>
 			<div class="pp-card-new-label">New profile</div>
 			<div class="pp-card-new-sub">Start from a template or scratch</div>
 		</button>
@@ -755,7 +761,7 @@
 	.pp-search:focus-within {
 		border-color: rgba(var(--tint-rgb), 0.2);
 	}
-	.pp-search i {
+	.pp-search :global(svg) {
 		color: rgba(var(--tint-rgb), 0.45);
 		font-size: 14px;
 	}
@@ -795,7 +801,7 @@
 		border: 1px solid transparent;
 		white-space: nowrap;
 	}
-	.pp-btn i {
+	.pp-btn :global(svg) {
 		font-size: 14px;
 	}
 	.pp-btn-secondary {

@@ -14,7 +14,8 @@
 	 * again to cancel" — the same click handler fires from any state, the
 	 * orchestrator decides whether to request the mode or return to Idle.
 	 */
-	import type { Snippet } from 'svelte';
+	import Icon from '$lib/icons/Icon.svelte';
+	import XIcon from 'phosphor-svelte/lib/XIcon';
 
 	type Kind = 'steam' | 'water' | 'flush';
 
@@ -56,7 +57,7 @@
 	aria-label={active ? `Cancel ${label}` : `Start ${label}`}
 	onclick={() => onTap?.()}
 >
-	<i class={`ph-duotone ph-${icon}`} aria-hidden="true"></i>
+	<Icon name={icon} weight="duotone" aria-hidden="true" />
 	<span class="mc-chip-text">
 		<span>{label}</span>
 		{#if sub}
@@ -65,7 +66,7 @@
 	</span>
 	{#if active}
 		<span class="mc-chip-cancel" aria-hidden="true">
-			<i class="ph ph-x"></i>
+			<XIcon />
 		</span>
 	{/if}
 </button>

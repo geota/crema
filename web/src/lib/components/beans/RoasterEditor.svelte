@@ -1,4 +1,6 @@
 <script lang="ts">
+	import ArrowLeftIcon from 'phosphor-svelte/lib/ArrowLeftIcon';
+	import CheckIcon from 'phosphor-svelte/lib/CheckIcon';
 	/**
 	 * `RoasterEditor` — standalone page editor for a {@link Roaster} row.
 	 *
@@ -165,7 +167,7 @@
 	<!-- Topbar -->
 	<header class="rd-bar">
 		<button class="rd-back" onclick={back}>
-			<i class="ph ph-arrow-left" aria-hidden="true"></i> Beans
+			<ArrowLeftIcon aria-hidden="true" /> Beans
 		</button>
 		<div class="rd-bar-mid">
 			<div class="t-eyebrow">{isNew ? 'New roaster' : 'Edit roaster'}</div>
@@ -174,7 +176,7 @@
 		<div class="rd-bar-actions">
 			<button class="rd-btn rd-btn-ghost" onclick={discard}>Cancel</button>
 			<button class="rd-btn rd-btn-primary" onclick={save}>
-				<i class="ph ph-check" aria-hidden="true"></i>
+				<CheckIcon aria-hidden="true" />
 				Save
 			</button>
 		</div>
@@ -374,7 +376,7 @@
 			{/if}
 			<button class="rd-btn rd-btn-ghost" onclick={discard}>Cancel</button>
 			<button class="rd-btn rd-btn-primary rd-btn-lg" onclick={save}>
-				<i class="ph ph-check"></i>
+				<CheckIcon aria-hidden="true" />
 				Save
 			</button>
 		</div>

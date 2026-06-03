@@ -1,4 +1,6 @@
 <script lang="ts">
+	import Icon from '$lib/icons/Icon.svelte';
+	import CaretDownIcon from 'phosphor-svelte/lib/CaretDownIcon';
 	/**
 	 * `SplitButton` — primary action + caret-revealed menu of variants.
 	 *
@@ -101,7 +103,7 @@
 		aria-label={primaryAriaLabel}
 	>
 		{#if primarySlot}{@render primarySlot()}{:else}
-			<i class={icon} aria-hidden="true"></i>{#if label}<span>{label}</span>{/if}
+			<Icon cls={icon} aria-hidden="true" />{#if label}<span>{label}</span>{/if}
 		{/if}
 	</button>
 	<button
@@ -115,7 +117,7 @@
 		aria-expanded={open}
 		aria-label={caretAriaLabel}
 	>
-		<i class="ph ph-caret-down sb-caret" aria-hidden="true"></i>
+		<CaretDownIcon class="sb-caret" aria-hidden="true" />
 	</button>
 	{#if open}
 		<div class="sb-menu" role="menu">
@@ -127,7 +129,7 @@
 					disabled={it.disabled}
 					onclick={() => pickItem(it)}
 				>
-					<i class={it.icon} aria-hidden="true"></i>
+					<Icon cls={it.icon} aria-hidden="true" />
 					<div class="sb-menu-text">
 						<div class="sb-menu-title">{it.title}</div>
 						<div class="sb-menu-sub">{it.sub}</div>
@@ -159,7 +161,7 @@
 		transition: all var(--dur-1) var(--ease);
 		white-space: nowrap;
 	}
-	.sb-btn i {
+	.sb-btn :global(svg) {
 		font-size: 13px;
 	}
 	.sb-btn > span {
@@ -171,7 +173,7 @@
 		font-size: 11px;
 		gap: 4px;
 	}
-	.sb-sm .sb-btn i {
+	.sb-sm .sb-btn :global(svg) {
 		font-size: 13px;
 	}
 	.sb-sm .sb-caret-btn {
@@ -219,7 +221,7 @@
 		background: rgba(var(--danger-rgb), 0.12);
 	}
 	/* Tint the menu's leading icons red too when the trigger is destructive. */
-	.is-danger .sb-menu-item i {
+	.is-danger .sb-menu-item :global(svg) {
 		color: var(--danger);
 	}
 	.sb-main {
@@ -278,7 +280,7 @@
 		opacity: 0.45;
 		cursor: not-allowed;
 	}
-	.sb-menu-item i {
+	.sb-menu-item :global(svg) {
 		font-size: 18px;
 		color: var(--copper-400);
 		margin-top: 2px;

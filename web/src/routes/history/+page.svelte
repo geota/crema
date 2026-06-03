@@ -1,4 +1,10 @@
 <script lang="ts">
+	import Icon from '$lib/icons/Icon.svelte';
+	import ArrowsLeftRightIcon from 'phosphor-svelte/lib/ArrowsLeftRightIcon';
+	import ChartLineIcon from 'phosphor-svelte/lib/ChartLineIcon';
+	import MagnifyingGlassIcon from 'phosphor-svelte/lib/MagnifyingGlassIcon';
+	import UploadSimpleIcon from 'phosphor-svelte/lib/UploadSimpleIcon';
+	import XIcon from 'phosphor-svelte/lib/XIcon';
 	/**
 	 * History — the `/history` route: the shot library, ported from
 	 * `HistoryPage` in `history-page.jsx`.
@@ -624,7 +630,7 @@
 		</div>
 		<div class="hi-head-r">
 			<div class="hi-search">
-				<i class="ph ph-magnifying-glass" aria-hidden="true"></i>
+				<MagnifyingGlassIcon aria-hidden="true" />
 				<input bind:value={q} placeholder="Search profile, notes…" />
 			</div>
 			<!-- Import: opens the ShotImportDialog so users get a
@@ -637,7 +643,7 @@
 				onclick={() => (importOpen = true)}
 				title="Import legacy de1app .shot or .shot.json files"
 			>
-				<i class="ph ph-upload-simple" aria-hidden="true"></i>
+				<UploadSimpleIcon aria-hidden="true" />
 				<span>{importing ? 'Importing…' : 'Import'}</span>
 			</button>
 			<!-- Export split-button — primary fires community v2 bulk
@@ -673,10 +679,10 @@
 					onclick={uploadAll}
 					title={`Upload ${unsyncedShots.length} unsynced shot${unsyncedShots.length === 1 ? '' : 's'} to Visualizer`}
 				>
-					<i
-						class={uploadingAll ? 'ph ph-spinner-gap hi-spin' : 'ph ph-cloud-arrow-up'}
+					<Icon
+						cls={uploadingAll ? 'ph ph-spinner-gap hi-spin' : 'ph ph-cloud-arrow-up'}
 						aria-hidden="true"
-					></i>
+					 />
 					{uploadingAll
 						? 'Uploading…'
 						: `Upload all (${unsyncedShots.length})`}
@@ -688,7 +694,7 @@
 					onclick={toggleSelectMode}
 					title="Cancel compare selection"
 				>
-					<i class="ph ph-x" aria-hidden="true"></i> Cancel
+					<XIcon aria-hidden="true" /> Cancel
 				</button>
 				<button
 					class="st-btn st-btn-primary"
@@ -698,7 +704,7 @@
 						? 'Pick at least 2 shots to compare'
 						: `Open compare overlay (${selectedIds.length} shots)`}
 				>
-					<i class="ph ph-arrows-left-right" aria-hidden="true"></i>
+					<ArrowsLeftRightIcon aria-hidden="true" />
 					Compare ({selectedIds.length})
 				</button>
 			{:else}
@@ -710,7 +716,7 @@
 						? 'Need at least 2 shots to compare'
 						: 'Pick 2–5 shots to overlay on one chart'}
 				>
-					<i class="ph ph-arrows-left-right" aria-hidden="true"></i> Compare
+					<ArrowsLeftRightIcon aria-hidden="true" /> Compare
 				</button>
 			{/if}
 		</div>
@@ -723,10 +729,10 @@
 			class:hi-import-banner-err={importBanner.kind === 'error'}
 			role="status"
 		>
-			<i
-				class={importBanner.kind === 'success' ? 'ph ph-check-circle' : 'ph ph-warning'}
+			<Icon
+				cls={importBanner.kind === 'success' ? 'ph ph-check-circle' : 'ph ph-warning'}
 				aria-hidden="true"
-			></i>
+			 />
 			<span>{importBanner.message}</span>
 			<button
 				type="button"
@@ -734,7 +740,7 @@
 				aria-label="Dismiss"
 				onclick={() => (importBanner = null)}
 			>
-				<i class="ph ph-x" aria-hidden="true"></i>
+				<XIcon aria-hidden="true" />
 			</button>
 		</div>
 	{/if}
@@ -743,7 +749,7 @@
 	{#if shots.length === 0}
 		<!-- Empty state — no shots recorded yet. -->
 		<div class="hi-empty-page">
-			<div class="hi-empty-glyph"><i class="ph ph-chart-line" aria-hidden="true"></i></div>
+			<div class="hi-empty-glyph"><ChartLineIcon aria-hidden="true" /></div>
 			<div class="hi-empty-title">No shots recorded yet</div>
 			<div class="hi-empty-sub">
 				Pull a shot on the Brew page with a connected DE1 — when it completes it is
@@ -759,7 +765,7 @@
 				onclick={() => (importOpen = true)}
 				title="Import legacy de1app .shot or .shot.json files"
 			>
-				<i class="ph ph-upload-simple" aria-hidden="true"></i>
+				<UploadSimpleIcon aria-hidden="true" />
 				<span>{importing ? 'Importing…' : 'Import from de1app'}</span>
 			</button>
 		</div>
@@ -811,7 +817,7 @@
 					onclick={() => (selectedTags = [])}
 					title="Clear all selected tag filters"
 				>
-					<i class="ph ph-x"></i> Clear tags
+					<XIcon aria-hidden="true" /> Clear tags
 				</button>
 			{/if}
 			<div class="pp-sort hi-range">
@@ -851,7 +857,7 @@
 		<!-- Compare-select hint banner -->
 		{#if selectMode}
 			<div class="hi-select-banner" role="status">
-				<i class="ph ph-arrows-left-right" aria-hidden="true"></i>
+				<ArrowsLeftRightIcon aria-hidden="true" />
 				<span>
 					Pick 2–{COMPARE_MAX} shots to overlay on one chart.
 					{selectedIds.length === 0
@@ -912,7 +918,7 @@
 										aria-label="Remove from compare"
 										onclick={() => toggleCompareSelection(cs.id)}
 									>
-										<i class="ph ph-x"></i>
+										<XIcon aria-hidden="true" />
 									</button>
 								</li>
 							{/each}
@@ -1007,7 +1013,7 @@
 	.hi-search:focus-within {
 		border-color: rgba(var(--tint-rgb), 0.2);
 	}
-	.hi-search i {
+	.hi-search :global(svg) {
 		color: rgba(var(--tint-rgb), 0.4);
 		font-size: 13px;
 	}
@@ -1321,7 +1327,7 @@
 		opacity: 1;
 	}
 
-	.hi-spin {
+	:global(.hi-spin) {
 		animation: hi-spin 1.1s linear infinite;
 		display: inline-block;
 	}

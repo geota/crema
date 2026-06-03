@@ -1,4 +1,9 @@
 <script lang="ts">
+	import ArrowCounterClockwiseIcon from 'phosphor-svelte/lib/ArrowCounterClockwiseIcon';
+	import ArrowLeftIcon from 'phosphor-svelte/lib/ArrowLeftIcon';
+	import CheckIcon from 'phosphor-svelte/lib/CheckIcon';
+	import CopyIcon from 'phosphor-svelte/lib/CopyIcon';
+	import PlusIcon from 'phosphor-svelte/lib/PlusIcon';
 	/**
 	 * `ProfileEditor` — the Edit / Create profile page body, ported from
 	 * `ProfileEditPage` in `profile-edit-page.jsx`.
@@ -357,7 +362,7 @@
 	<div class="pe-topbar">
 		<div class="pe-topbar-l">
 			<button class="pe-back" onclick={back}>
-				<i class="ph ph-arrow-left" aria-hidden="true"></i> Profiles
+				<ArrowLeftIcon aria-hidden="true" /> Profiles
 			</button>
 			<div class="pe-trail">
 				<span class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.45)">{heading}</span>
@@ -368,10 +373,10 @@
 				Discard changes
 			</button>
 			<button class="pp-btn pp-btn-secondary" onclick={duplicateDraft}>
-				<i class="ph ph-copy" aria-hidden="true"></i> Duplicate
+				<CopyIcon aria-hidden="true" /> Duplicate
 			</button>
 			<button class="pp-btn pp-btn-primary" onclick={save}>
-				<i class="ph ph-check" aria-hidden="true"></i> Save profile
+				<CheckIcon aria-hidden="true" /> Save profile
 			</button>
 		</div>
 	</div>
@@ -585,7 +590,7 @@
 						</div>
 						<div class="pe-section-actions">
 							<button class="pe-btn-ghost" onclick={resetSegments}>
-								<i class="ph ph-arrow-counter-clockwise" aria-hidden="true"></i> Reset
+								<ArrowCounterClockwiseIcon aria-hidden="true" /> Reset
 							</button>
 						</div>
 					</div>
@@ -601,7 +606,7 @@
 					<div class="pe-section-head">
 						<div class="pe-section-title">Segments</div>
 						<button class="pe-btn-ghost" onclick={addSegment}>
-							<i class="ph ph-plus" aria-hidden="true"></i> Add segment
+							<PlusIcon aria-hidden="true" /> Add segment
 						</button>
 					</div>
 					<!-- Every per-segment field — including the exit condition and
@@ -670,7 +675,7 @@
 	.pe-back:hover {
 		background: rgba(var(--tint-rgb), 0.08);
 	}
-	.pe-back i {
+	.pe-back :global(svg) {
 		font-size: 13px;
 	}
 	.pe-topbar-r {
@@ -710,7 +715,7 @@
 		border: 1px solid transparent;
 		white-space: nowrap;
 	}
-	.pp-btn i {
+	.pp-btn :global(svg) {
 		font-size: 14px;
 	}
 	.pp-btn-secondary {
@@ -999,7 +1004,7 @@
 		color: var(--fg-1);
 		border-color: rgba(var(--tint-rgb), 0.18);
 	}
-	.pe-btn-ghost i {
+	.pe-btn-ghost :global(svg) {
 		font-size: 13px;
 	}
 </style>

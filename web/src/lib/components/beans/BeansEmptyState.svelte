@@ -1,4 +1,7 @@
 <script lang="ts">
+	import ListChecksIcon from 'phosphor-svelte/lib/ListChecksIcon';
+	import PlusCircleIcon from 'phosphor-svelte/lib/PlusCircleIcon';
+	import UploadSimpleIcon from 'phosphor-svelte/lib/UploadSimpleIcon';
 	/**
 	 * `BeansEmptyState` — first-run state for `/beans`. Three CTA cards:
 	 * Quick add, Full editor, Import. The first two go to the new-bean
@@ -42,21 +45,21 @@
 	</div>
 	<div class="bn-empty-actions">
 		<button class="bn-empty-card" onclick={onQuickAdd}>
-			<i class="ph-duotone ph-plus-circle" aria-hidden="true"></i>
+			<PlusCircleIcon weight="duotone" aria-hidden="true" />
 			<div class="bn-empty-card-l">
 				<div class="bn-empty-card-title">Quick add</div>
 				<div class="bn-empty-card-sub">Name, roaster, roast date — about 10 seconds.</div>
 			</div>
 		</button>
 		<button class="bn-empty-card" onclick={onFullEditor}>
-			<i class="ph-duotone ph-list-checks" aria-hidden="true"></i>
+			<ListChecksIcon weight="duotone" aria-hidden="true" />
 			<div class="bn-empty-card-l">
 				<div class="bn-empty-card-title">Full editor</div>
 				<div class="bn-empty-card-sub">All fields — origin, processing, tasting notes.</div>
 			</div>
 		</button>
 		<button class="bn-empty-card" onclick={onImport}>
-			<i class="ph-duotone ph-upload-simple" aria-hidden="true"></i>
+			<UploadSimpleIcon weight="duotone" aria-hidden="true" />
 			<div class="bn-empty-card-l">
 				<div class="bn-empty-card-title">Import from Beanconqueror</div>
 				<div class="bn-empty-card-sub">Drop a <code>.zip</code> export — roasters, bags, dates.</div>
@@ -123,7 +126,7 @@
 		background: rgba(var(--tint-rgb), 0.07);
 		border-color: rgba(var(--tint-rgb), 0.16);
 	}
-	.bn-empty-card i {
+	.bn-empty-card :global(svg) {
 		font-size: 26px;
 		color: var(--copper-400);
 		flex-shrink: 0;

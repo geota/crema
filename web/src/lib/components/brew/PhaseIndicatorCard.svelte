@@ -1,4 +1,5 @@
 <script lang="ts">
+	import Icon from '$lib/icons/Icon.svelte';
 	/**
 	 * `PhaseIndicatorCard` — the left-column "where in the shot are we" card.
 	 *
@@ -244,12 +245,12 @@
 								title="Exited early on {row.exitMetric}"
 							></span>
 						{/if}
-						<i
-							class={'ph ph-' + exitIcon(row.exitMetric)}
-							class:is-fired={row.exited}
+						<Icon
+							cls={'ph ph-' + exitIcon(row.exitMetric)}
+							class={row.exited ? 'is-fired' : undefined}
 							style="color:{exitColor(row.exitMetric)}"
 							aria-hidden="true"
-						></i>
+						 />
 					{/if}
 					{formatDuration(row.duration)}
 				</span>

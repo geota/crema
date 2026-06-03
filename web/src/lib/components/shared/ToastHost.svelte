@@ -1,4 +1,6 @@
 <script lang="ts">
+	import XIcon from 'phosphor-svelte/lib/XIcon';
+	import Icon from '$lib/icons/Icon.svelte';
 	/**
 	 * `ToastHost` — renders the live {@link toast} queue. Mounted once in the
 	 * root layout (FD4). Bottom-right stack; each toast auto-dismisses (the
@@ -8,16 +10,16 @@
 	import { getToasts, dismissToast, type ToastKind } from './toast.svelte';
 
 	const ICON: Record<ToastKind, string> = {
-		info: 'ph-info',
-		success: 'ph-check-circle',
-		error: 'ph-warning-circle'
+		info: 'info',
+		success: 'check-circle',
+		error: 'warning-circle'
 	};
 </script>
 
 <div class="toast-host">
 	{#each getToasts() as t (t.id)}
 		<div class={['toast', `toast-${t.kind}`]} role={t.kind === 'error' ? 'alert' : 'status'}>
-			<i class={['ph', ICON[t.kind]]} aria-hidden="true"></i>
+			<Icon name={ICON[t.kind]} aria-hidden="true" />
 			<span class="toast-msg">{t.message}</span>
 			<button
 				type="button"
@@ -25,7 +27,7 @@
 				onclick={() => dismissToast(t.id)}
 				aria-label="Dismiss notification"
 			>
-				<i class="ph ph-x" aria-hidden="true"></i>
+				<XIcon aria-hidden="true" />
 			</button>
 		</div>
 	{/each}
@@ -60,7 +62,7 @@
 		line-height: 1.4;
 		animation: toast-in 160ms ease-out;
 	}
-	.toast > .ph {
+	.toast > :global(svg) {
 		flex-shrink: 0;
 		font-size: 18px;
 		margin-top: 1px;
@@ -73,16 +75,16 @@
 	.toast-error {
 		border-color: rgba(var(--danger-rgb), 0.5);
 	}
-	.toast-error > .ph:first-child {
+	.toast-error > :global(svg:first-child) {
 		color: var(--danger);
 	}
 	.toast-success {
 		border-color: rgba(var(--success-rgb, var(--tint-rgb)), 0.45);
 	}
-	.toast-success > .ph:first-child {
+	.toast-success > :global(svg:first-child) {
 		color: var(--success, var(--fg-accent));
 	}
-	.toast-info > .ph:first-child {
+	.toast-info > :global(svg:first-child) {
 		color: var(--fg-accent);
 	}
 	.toast-close {

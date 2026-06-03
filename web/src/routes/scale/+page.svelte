@@ -1,4 +1,15 @@
 <script lang="ts">
+	import ArrowClockwiseIcon from 'phosphor-svelte/lib/ArrowClockwiseIcon';
+	import ArrowCounterClockwiseIcon from 'phosphor-svelte/lib/ArrowCounterClockwiseIcon';
+	import BatteryHighIcon from 'phosphor-svelte/lib/BatteryHighIcon';
+	import CheckCircleIcon from 'phosphor-svelte/lib/CheckCircleIcon';
+	import MagnifyingGlassIcon from 'phosphor-svelte/lib/MagnifyingGlassIcon';
+	import PlugsIcon from 'phosphor-svelte/lib/PlugsIcon';
+	import PowerIcon from 'phosphor-svelte/lib/PowerIcon';
+	import SlidersHorizontalIcon from 'phosphor-svelte/lib/SlidersHorizontalIcon';
+	import SpeakerHighIcon from 'phosphor-svelte/lib/SpeakerHighIcon';
+	import TimerIcon from 'phosphor-svelte/lib/TimerIcon';
+	import XIcon from 'phosphor-svelte/lib/XIcon';
 	/**
 	 * Scale — the `/scale` route: the calm, focused weighing view, ported from
 	 * `ScalePage` in `scale-page.jsx`.
@@ -373,7 +384,7 @@
 				<span>{statusLabel}</span>
 				{#if battery != null}
 					<span class="sc-sep">·</span>
-					<i class="ph ph-battery-high" aria-hidden="true"></i>
+					<BatteryHighIcon aria-hidden="true" />
 					<span>{Math.round(battery)}%</span>
 				{/if}
 				{#if firmware}
@@ -425,7 +436,7 @@
 				<span class="sc-tare-num">{tareZero.value}<em>{tareZero.unit}</em></span>
 			</button>
 			<button class="sc-secondary" onclick={resetPeak}>
-				<i class="ph ph-arrow-clockwise" aria-hidden="true"></i>
+				<ArrowClockwiseIcon aria-hidden="true" />
 				<span>Reset peak</span>
 			</button>
 			{#if timerSupported}
@@ -440,7 +451,7 @@
 						onclick={toggleTimer}
 						disabled={!timerActionable}
 					>
-						<i class="ph ph-timer" aria-hidden="true"></i>
+						<TimerIcon aria-hidden="true" />
 						<span>{timerRunning ? 'Stop timer' : 'Start timer'}</span>
 					</button>
 					<button
@@ -449,7 +460,7 @@
 						disabled={!timerActionable}
 						aria-label="Reset scale timer"
 					>
-						<i class="ph ph-arrow-counter-clockwise" aria-hidden="true"></i>
+						<ArrowCounterClockwiseIcon aria-hidden="true" />
 						<span>Reset</span>
 					</button>
 				</div>
@@ -481,7 +492,7 @@
 				<span class="sc-dose-warn">Connect a scale to weigh your dose</span>
 			{:else if within}
 				<span class="sc-dose-ok">
-					<i class="ph-fill ph-check-circle" aria-hidden="true"></i>
+					<CheckCircleIcon weight="fill" aria-hidden="true" />
 					On target — {formatWeight(weightG, settings.current.weightUnit)}
 				</span>
 			{:else if tooFar}
@@ -508,10 +519,10 @@
 			{#if !hasScaleSettings}
 				<div class="sc-settings-empty">
 					{#if connected && caps}
-						<i class="ph ph-sliders-horizontal" aria-hidden="true"></i>
+						<SlidersHorizontalIcon aria-hidden="true" />
 						<span>This scale reports no adjustable settings — it works as a plain weight readout.</span>
 					{:else}
-						<i class="ph ph-plugs" aria-hidden="true"></i>
+						<PlugsIcon aria-hidden="true" />
 						<span>Connect a scale to adjust its settings — they'll appear here automatically.</span>
 					{/if}
 				</div>
@@ -669,7 +680,7 @@
 						<div class="sc-set-sub">Pulse the scale's buzzer — handy to locate it or test the tone.</div>
 					</div>
 					<button type="button" class="sc-secondary" onclick={beep} disabled={!connected}>
-						<i class="ph ph-speaker-high" aria-hidden="true"></i>Beep
+						<SpeakerHighIcon aria-hidden="true" />Beep
 					</button>
 				</div>
 			{/if}
@@ -688,7 +699,7 @@
 						onclick={powerOff}
 						disabled={!connected}
 					>
-						<i class="ph ph-power" aria-hidden="true"></i>Power off
+						<PowerIcon aria-hidden="true" />Power off
 					</button>
 				</div>
 			{/if}
@@ -703,7 +714,7 @@
 				<span class="sc-activity-count">{activityRows.length} / {scaleEventLog.length}</span>
 			</div>
 			<div class="sc-activity-search">
-				<i class="ph ph-magnifying-glass sc-activity-search-icon" aria-hidden="true"></i>
+				<MagnifyingGlassIcon class="sc-activity-search-icon" aria-hidden="true" />
 				<input
 					type="search"
 					placeholder="Filter the log…"
@@ -717,7 +728,7 @@
 						aria-label="Clear filter"
 						onclick={() => (activitySearch = '')}
 					>
-						<i class="ph ph-x" aria-hidden="true"></i>
+						<XIcon aria-hidden="true" />
 					</button>
 				{/if}
 			</div>
@@ -775,7 +786,7 @@
 		color: rgba(var(--tint-rgb), 0.55);
 		margin-top: 6px;
 	}
-	.sc-head-meta i {
+	.sc-head-meta :global(svg) {
 		font-size: 14px;
 	}
 	.sc-sep {
@@ -948,7 +959,7 @@
 	.sc-secondary:hover {
 		background: rgba(var(--tint-rgb), 0.08);
 	}
-	.sc-secondary i {
+	.sc-secondary :global(svg) {
 		font-size: 14px;
 	}
 	.sc-secondary:disabled {
@@ -1042,7 +1053,7 @@
 		align-items: center;
 		gap: 6px;
 	}
-	.sc-dose-ok i {
+	.sc-dose-ok :global(svg) {
 		font-size: 16px;
 	}
 	.sc-dose-warn {
@@ -1114,7 +1125,7 @@
 	.sc-activity-search input::placeholder {
 		color: rgba(var(--tint-rgb), 0.35);
 	}
-	.sc-activity-search-icon {
+	:global(.sc-activity-search-icon) {
 		position: absolute;
 		left: 9px;
 		font-size: 13px;
@@ -1241,7 +1252,7 @@
 		line-height: 1.5;
 		color: rgba(var(--tint-rgb), 0.45);
 	}
-	.sc-settings-empty i {
+	.sc-settings-empty :global(svg) {
 		font-size: 24px;
 		color: rgba(var(--tint-rgb), 0.3);
 	}

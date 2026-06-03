@@ -1,4 +1,6 @@
 <script lang="ts">
+	import MinusIcon from 'phosphor-svelte/lib/MinusIcon';
+	import PlusIcon from 'phosphor-svelte/lib/PlusIcon';
 	/**
 	 * `QuickStepper` — the dark `−` / value / `+` stepper, ported from the design's
 	 * `QuickStepper` in `quick-controls.jsx`. Reuses the `.qcs*` class names so the
@@ -167,7 +169,7 @@
 	{/if}
 	<div class="qcs-row">
 		<button class="qcs-btn" onclick={() => inc(-1)} aria-label="Decrease {label ?? 'value'}">
-			<i class="ph ph-minus" aria-hidden="true"></i>
+			<MinusIcon aria-hidden="true" />
 		</button>
 		<div class="qcs-val" class:is-overridden={overridden}>
 			{@render prefix?.()}
@@ -193,7 +195,7 @@
 			<span class="qcs-unit">{effectiveUnit}</span>
 		</div>
 		<button class="qcs-btn" onclick={() => inc(1)} aria-label="Increase {label ?? 'value'}">
-			<i class="ph ph-plus" aria-hidden="true"></i>
+			<PlusIcon aria-hidden="true" />
 		</button>
 	</div>
 </div>

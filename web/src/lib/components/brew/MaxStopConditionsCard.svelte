@@ -1,4 +1,5 @@
 <script lang="ts">
+	import Icon from '$lib/icons/Icon.svelte';
 	/**
 	 * `MaxStopConditionsCard` — the consolidated "Max · stop conditions" card in
 	 * the brew dashboard's left column. Replaces the inline `.crema-target-stack`
@@ -42,7 +43,7 @@
 			<div class="crema-stopcond-row">
 				<div class="crema-stopcond-top">
 					<span class="crema-stopcond-label">
-						<i class={'ph ph-' + row.icon} style="color:{row.color}" aria-hidden="true"></i>
+						<Icon cls={'ph ph-' + row.icon} style="color:{row.color}" aria-hidden="true" />
 						{row.label}
 					</span>
 					<span class="crema-stopcond-val">
