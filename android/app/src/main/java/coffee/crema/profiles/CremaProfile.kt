@@ -66,6 +66,11 @@ data class ProfileSegment(
     val id: String = "",
     /** Human-readable segment name. */
     val name: String = "",
+    /** Pressure- or flow-priority — `"pressure"` | `"flow"` (wire `Pump`). */
+    val mode: String? = null,
+    /** Target value — bar (pressure) or ml/s (flow), per [mode]. Drives the
+     *  profile-card curve preview. */
+    val target: Float = 0f,
     /** Segment duration, seconds (float — the DE1 carries 0.1 s frames). */
     val time: Float = 0f,
     /** Structured early-exit condition, or null. */
