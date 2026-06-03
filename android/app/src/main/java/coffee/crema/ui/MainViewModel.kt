@@ -535,6 +535,38 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
+     * Beep the connected scale (locate / test tone). Capability-gated — the
+     * core only emits a command for a scale that supports it; it throws
+     * `CremaException` for one that doesn't, which we surface and swallow.
+     */
+    fun beepScale() {
+        val raw = runCatching { bridge.scaleBeep() }.getOrElse {
+            appendLog("Beep failed: ${it.message}")
+            return
+        }
+        onCoreOutputJson(raw)
+    }
+
+    /** Clear the scale's tracked peak + final weight (Scale page "Reset peak"). */
+    fun resetScalePeaks() {
+        runCatching { bridge.resetScalePeaks() }.onFailure {
+            appendLog("Reset peak failed: ${it.message}")
+        }
+    }
+
+    /**
+     * Start the connected scale's built-in timer. Capability-gated like
+     * [beepScale]; routed through the shared command path.
+     */
+    fun startScaleTimer() {
+        val raw = runCatching { bridge.startTimer() }.getOrElse {
+            appendLog("Start timer failed: ${it.message}")
+            return
+        }
+        onCoreOutputJson(raw)
+    }
+
+    /**
      * The FFI/BLE seam: a JSON `CoreOutput` string came back from
      * [CremaBridge.onNotification]. Deserialize it and fold its [Event]s into
      * the UI state.
