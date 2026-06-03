@@ -1,13 +1,16 @@
 package coffee.crema.ui.screens
 
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coffee.crema.ui.TelemetrySample
@@ -28,7 +31,13 @@ import com.patrykandpatrick.vico.compose.cartesian.layer.rememberLineCartesianLa
 import com.patrykandpatrick.vico.compose.cartesian.rememberCartesianChart
 import com.patrykandpatrick.vico.compose.cartesian.rememberVicoScrollState
 import com.patrykandpatrick.vico.compose.cartesian.rememberVicoZoomState
-import com.patrykandpatrick.vico.compose.common.Fill
+import com.patrykandpatrick.vico.compose.cartesian.CartesianDrawingContext
+import com.patrykandpatrick.vico.compose.cartesian.marker.CartesianMarker
+import com.patrykandpatrick.vico.compose.cartesian.marker.LineCartesianLayerMarkerTarget
+import com.patrykandpatrick.vico.compose.common.* // Fill, pixels, half (the .pixels/.half extensions live here)
+import com.patrykandpatrick.vico.compose.common.component.Component
+import com.patrykandpatrick.vico.compose.common.component.LineComponent
+import com.patrykandpatrick.vico.compose.common.component.ShapeComponent
 import com.patrykandpatrick.vico.compose.common.data.ExtraStore
 
 /*
@@ -48,11 +57,12 @@ import com.patrykandpatrick.vico.compose.common.data.ExtraStore
  * List<TelemetrySample>. Real-time: one runTransaction per new buffer; diff +
  * enter animations are off (the data is already ~25 Hz).
  *
- * M2 v1 scope: the curves + dual-labelled axes + auto-growing ranges. The
- * copper "now" playhead + per-channel end-dots (uPlot's markerPlugin) are a
- * Compose overlay in the next increment; channel-visibility toggles arrive with
- * the Quick Controls sheet. Defaults match the web (pressure, flow, weight) plus
- * head temp (so the right axis is always exercised) and the pressure setpoint.
+ * M2 scope: curves + dual-labelled axes + auto-growing ranges + the copper
+ * "now" playhead with per-channel end-dots (uPlot's markerPlugin, via a custom
+ * persistent CartesianMarker — see PlayheadMarker). Channel-visibility toggles
+ * arrive with the Quick Controls sheet; pin/drag is a later increment. Defaults
+ * match the web (pressure, flow, weight) plus head temp (so the right axis is
+ * always exercised) and the pressure setpoint.
  */
 
 // Shared range: y pinned [0, max(10, dataMax + 0.3)]; x pinned [0, max(60, dataMax)].
@@ -69,6 +79,62 @@ private val ShotRangeProvider =
 private val LeftAxisFormatter = CartesianValueFormatter { _, v, _ -> v.toInt().toString() }
 private val RightAxisFormatter = CartesianValueFormatter { _, v, _ -> (v * 10).toInt().toString() }
 private val TimeAxisFormatter = CartesianValueFormatter { _, v, _ -> "${v.toInt()}s" }
+
+/*
+ * The copper "now" playhead — a custom CartesianMarker. (Vico's
+ * DefaultCartesianMarker always draws a label bubble, which we don't want; a
+ * custom marker draws only what we render and reserves no plot margin.) Mirrors
+ * uPlot's markerPlugin: one vertical guideline at the marked x spanning the plot
+ * height, plus a filled dot per line series at its current value in that series'
+ * colour. Drawn over the curves and pinned at the latest sample via
+ * persistentMarkers. The draw idiom (drawVertical / pixels.half / ShapeComponent
+ * .draw) mirrors Vico's own DefaultCartesianMarker.
+ */
+private class PlayheadMarker(
+    private val guideline: LineComponent,
+    private val indicator: (Color) -> Component,
+    private val indicatorSizeDp: Dp,
+) : CartesianMarker {
+    override fun drawOverLayers(
+        context: CartesianDrawingContext,
+        targets: List<CartesianMarker.Target>,
+    ) {
+        with(context) {
+            targets.map { it.canvasX }.toSet().forEach { x ->
+                guideline.drawVertical(this, x, layerBounds.top, layerBounds.bottom)
+            }
+            // .pixels (Dp→px) is public; Vico's Float.half is internal, so halve manually.
+            val half = indicatorSizeDp.pixels / 2f
+            targets.forEach { target ->
+                if (target is LineCartesianLayerMarkerTarget) {
+                    target.points.forEach { point ->
+                        indicator(point.color).draw(
+                            this,
+                            target.canvasX - half,
+                            point.canvasY - half,
+                            target.canvasX + half,
+                            point.canvasY + half,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun rememberPlayheadMarker(lineColor: Color): CartesianMarker {
+    val guideline = remember(lineColor) {
+        LineComponent(fill = Fill(lineColor), thickness = 1.5.dp)
+    }
+    return remember(lineColor) {
+        PlayheadMarker(
+            guideline = guideline,
+            indicator = { color -> ShapeComponent(fill = Fill(color), shape = CircleShape) },
+            indicatorSizeDp = 7.dp,
+        )
+    }
+}
 
 @Composable
 fun ShotChart(samples: List<TelemetrySample>, modifier: Modifier = Modifier) {
@@ -144,6 +210,13 @@ fun ShotChart(samples: List<TelemetrySample>, modifier: Modifier = Modifier) {
 
     val labelStyle = TextStyle(color = labelColor, fontSize = 11.sp, fontFamily = JetBrainsMono)
 
+    val playhead = rememberPlayheadMarker(MaterialTheme.colorScheme.primary.copy(alpha = 0.7f))
+    // Pin the playhead at the latest sample's x (data-space). Null while resting
+    // (the synthetic baseline) → no playhead. Captured fresh each recomposition
+    // so Vico rebuilds the marker as the shot advances (persistentMarkers diffs
+    // by the lambda's hashCode).
+    val playheadX: Float? = samples.lastOrNull()?.let { it.elapsedMs / 1000f }
+
     val chart = rememberCartesianChart(
         rememberLineCartesianLayer(
             lineProvider = LineCartesianLayer.LineProvider.series(lines),
@@ -172,6 +245,10 @@ fun ShotChart(samples: List<TelemetrySample>, modifier: Modifier = Modifier) {
         // Pin the x-step so "aligned" ticks land on whole 10-second marks
         // regardless of the (dense) sample spacing.
         getXStep = { _, _, _ -> 10.0 },
+        // The "now" playhead: a persistent marker at the latest sample's x.
+        persistentMarkers = { _ ->
+            if (playheadX != null) playhead at playheadX
+        },
     )
 
     CartesianChartHost(
