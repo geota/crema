@@ -178,7 +178,7 @@ private fun ShotDetail(shot: StoredShot, channels: Set<String>, modifier: Modifi
                     )
                 }
             } else {
-                ShotChart(
+                CanvasShotChart(
                     samples = shot.samples,
                     enabledChannels = channels,
                     live = false,
