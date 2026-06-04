@@ -27,7 +27,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
@@ -84,7 +84,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            val ui by viewModel.ui.collectAsState()
+            val ui by viewModel.ui.collectAsStateWithLifecycle()
             // Theme mode is a persisted app pref (Settings → Display).
             val darkTheme = when (ui.themeMode) {
                 "light" -> false
@@ -184,7 +184,7 @@ private fun MainScreen(
     onSetScaleMode: (Int) -> Unit,
     onSetScaleAutoStop: (Int) -> Unit,
 ) {
-    val ui by viewModel.ui.collectAsState()
+    val ui by viewModel.ui.collectAsStateWithLifecycle()
 
     Column(
         modifier = Modifier
