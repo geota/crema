@@ -104,9 +104,6 @@ fun CanvasProfilePreview(
 ) {
     val tel = CremaTheme.telemetry
     val gridColor = MaterialTheme.colorScheme.outlineVariant
-    val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
-    val textMeasurer = rememberTextMeasurer()
-    val labelStyle = remember(labelColor) { TextStyle(color = labelColor, fontSize = 9.sp, fontFamily = JetBrainsMono) }
 
     val pressure = remember(segments) { sampleCurve(segments) }
     val flow = remember(segments) { sampleCurve(segments) { t -> min(4f, t * 0.35f + 0.5f) } }
@@ -130,37 +127,23 @@ fun CanvasProfilePreview(
         fun yBar(v: Float) = plotB - (v.coerceIn(0f, Y_MAX) / Y_MAX) * plotH
         fun yTemp(c: Float) = plotB - ((c.coerceIn(TEMP_MIN, TEMP_MAX) - TEMP_MIN) / (TEMP_MAX - TEMP_MIN)) * plotH
 
-        // Grid + axis labels (full mode only).
+        // Minimal card sparkline chrome: one faint mid gridline + a dashed
+        // reference at 9 bar. The web ProfilePreview strips numeric axes on the
+        // card (legend lives as an overlay instead) — full axes are the editor's.
         if (!compact) {
-            listOf(0, 3, 6, 9, 12).forEach { bar ->
-                val y = yBar(bar.toFloat())
-                drawLine(gridColor, Offset(plotL, y), Offset(plotR, y), strokeWidth = 1f)
-            }
-            listOf(0, 6, 12).forEach { bar ->
-                val lt = textMeasurer.measure("$bar", labelStyle)
-                drawText(lt, topLeft = Offset(plotL - lt.size.width - 3.dp.toPx(), yBar(bar.toFloat()) - lt.size.height / 2f))
-            }
-            listOf(80, 90, 100).forEach { c ->
-                val rt = textMeasurer.measure("$c°", labelStyle)
-                drawText(rt, topLeft = Offset(plotR + 3.dp.toPx(), yTemp(c.toFloat()) - rt.size.height / 2f))
-            }
-            val vDash = PathEffect.dashPathEffect(floatArrayOf(2.dp.toPx(), 4.dp.toPx()))
-            var tv = 10
-            while (tv < total) {
-                val x = xPx(tv.toFloat())
-                drawLine(gridColor, Offset(x, plotT), Offset(x, plotB), strokeWidth = 1f, pathEffect = vDash)
-                val lt = textMeasurer.measure("${tv}s", labelStyle)
-                drawText(lt, topLeft = Offset(x - lt.size.width / 2f, plotB + 1.dp.toPx()))
-                tv += 10
-            }
+            drawLine(gridColor.copy(alpha = 0.5f), Offset(plotL, yBar(6f)), Offset(plotR, yBar(6f)), strokeWidth = 1f)
+            drawLine(
+                gridColor, Offset(plotL, yBar(9f)), Offset(plotR, yBar(9f)), strokeWidth = 1f,
+                pathEffect = PathEffect.dashPathEffect(floatArrayOf(2.dp.toPx(), 3.dp.toPx())),
+            )
         }
 
         // Flow ghost (dashed, light fill) — drawn first so pressure sits on top.
-        drawCurve(flow.first, flow.second, { xPx(it) }, { yBar(it) }, tel.flow, 0.14f, true, if (compact) 1.2f else 1.4f, plotT, plotB)
+        drawCurve(flow.first, flow.second, { xPx(it) }, { yBar(it) }, tel.flow.copy(alpha = 0.85f), 0.22f, true, if (compact) 1.2f else 1.4f, plotT, plotB)
         // Pressure (hero, gradient fill).
-        drawCurve(pressure.first, pressure.second, { xPx(it) }, { yBar(it) }, tel.pressure, 0.30f, false, if (compact) 1.6f else 2.4f, plotT, plotB)
+        drawCurve(pressure.first, pressure.second, { xPx(it) }, { yBar(it) }, tel.pressure, 0.30f, false, if (compact) 1.6f else 1.8f, plotT, plotB)
 
-        // Stepped temperature line on the right °C scale (full mode only).
+        // Temperature on the right °C scale (full mode only) — light + dashed.
         if (!compact && temps.isNotEmpty()) {
             val path = Path()
             path.moveTo(xPx(0f), yTemp(temps[0].second))
@@ -171,7 +154,13 @@ fun CanvasProfilePreview(
                 path.lineTo(xPx(prevEnd), yTemp(temp)) // vertical jump at the boundary
                 path.lineTo(xPx(cumEnd), yTemp(temp))  // hold across the segment
             }
-            drawPath(path, color = tel.temp, style = Stroke(width = 1.6.dp.toPx(), cap = StrokeCap.Round))
+            drawPath(
+                path, color = tel.temp.copy(alpha = 0.7f),
+                style = Stroke(
+                    width = 1.2.dp.toPx(), cap = StrokeCap.Round,
+                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(3.dp.toPx(), 2.dp.toPx())),
+                ),
+            )
         }
     }
 }
