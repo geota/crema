@@ -10,6 +10,7 @@ local.properties
 .cxx/
 *.apk
 *.aab
+android/.kotlin
 
 # Cloudflare Pages / Wrangler local state + cache
 .wrangler/
