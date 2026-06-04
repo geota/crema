@@ -146,13 +146,17 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                 .padding(bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            // ── Curve (live preview of the segment steppers below) ────────────
+            // ── Curve (drag the points; stays in lockstep with the steppers) ──
             EditorCard {
-                Eyebrow("Curve")
+                Eyebrow("Curve · drag the points")
                 ProfileCurveChart(
                     targets = segTargets.toList(),
                     times = segTimes.toList(),
                     modifier = Modifier.fillMaxWidth().height(200.dp),
+                    onSegmentEdit = { i, target, time ->
+                        if (i in segTargets.indices) segTargets[i] = target
+                        if (i in segTimes.indices) segTimes[i] = time
+                    },
                 )
             }
 
