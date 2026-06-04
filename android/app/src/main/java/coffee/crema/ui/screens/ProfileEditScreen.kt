@@ -16,7 +16,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -58,7 +58,7 @@ private val ROAST_OPTIONS = listOf(
 
 @Composable
 fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
-    val ui by vm.ui.collectAsState()
+    val ui by vm.ui.collectAsStateWithLifecycle()
     // A new / duplicated profile lives in `draftProfile` (not yet in `profiles`);
     // an existing custom is found in the merged list. Both keyed by editingProfileId.
     val profile = ui.profiles.firstOrNull { it.id == ui.editingProfileId }

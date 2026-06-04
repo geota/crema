@@ -6,6 +6,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -82,7 +83,7 @@ fun ScaleScreen(
     onConnect: (String) -> Unit,
 ) {
     val sp = CremaTheme.spacing
-    val ui by vm.ui.collectAsState()
+    val ui by vm.ui.collectAsStateWithLifecycle()
 
     val connected = ui.scaleState == ScaleBleManager.State.READY
     val machineConnected = ui.bleState == De1BleManager.State.READY
