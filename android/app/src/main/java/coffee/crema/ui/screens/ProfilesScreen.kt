@@ -1,5 +1,6 @@
 package coffee.crema.ui.screens
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -16,6 +17,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -35,7 +37,9 @@ import coffee.crema.ui.components.CremaButton
 import coffee.crema.ui.components.CremaButtonVariant
 import coffee.crema.ui.components.CremaCard
 import coffee.crema.ui.components.CremaNavigationRail
+import coffee.crema.ui.components.Eyebrow
 import coffee.crema.ui.components.PhIcon
+import coffee.crema.ui.theme.JetBrainsMono
 
 /*
  * Profiles (library) — M3 v1. A grid of profile cards over the core's built-in
@@ -89,11 +93,11 @@ fun ProfilesScreen(
                 )
             }
             LazyVerticalGrid(
-                columns = GridCells.Adaptive(minSize = 260.dp),
-                modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 20.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                contentPadding = PaddingValues(top = 4.dp, bottom = 20.dp),
+                columns = GridCells.Fixed(3),
+                modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 24.dp),
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+                contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp),
             ) {
                 items(ui.profiles, key = { it.id }) { profile ->
                     ProfileCard(
@@ -120,11 +124,17 @@ private fun ProfileCard(
     onDelete: () -> Unit,
 ) {
     val isCustom = profile.source == "custom"
-    CremaCard(Modifier.fillMaxWidth()) {
+    CremaCard(
+        modifier = Modifier.fillMaxWidth(),
+        container = if (isActive) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainer,
+        shape = RoundedCornerShape(16.dp),
+        border = if (isActive) BorderStroke(1.dp, MaterialTheme.colorScheme.primary) else null,
+    ) {
         Column(
-            Modifier.fillMaxWidth().padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            Modifier.fillMaxWidth().padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
+            if (isActive) LoadedBadge()
             Box(
                 Modifier.fillMaxWidth().height(96.dp)
                     .clip(MaterialTheme.shapes.medium)
@@ -135,62 +145,102 @@ private fun ProfileCard(
                     modifier = Modifier.fillMaxSize(),
                 )
             }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    profile.name,
-                    modifier = Modifier.weight(1f),
-                    style = MaterialTheme.typography.titleLarge.copy(fontSize = 18.sp, lineHeight = 22.sp),
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    // Built-ins are read-only: customise via Duplicate. Customs
-                    // also get Edit + Delete.
-                    if (isCustom) {
-                        FilledTonalIconButton(onClick = onEdit) { PhIcon("pencil-simple", sizeDp = 18) }
-                    }
-                    FilledTonalIconButton(onClick = onDuplicate) { PhIcon("copy", sizeDp = 18) }
-                    if (isCustom) {
-                        FilledTonalIconButton(onClick = onDelete) { PhIcon("trash", sizeDp = 18) }
-                    }
-                }
-            }
             Text(
-                "1:%.2f · %.1f g · %.0f °C".format(profile.ratio, profile.yieldOut, profile.brewTemp),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                profile.name,
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            val pills = listOfNotNull(profile.roast?.replaceFirstChar { it.uppercase() }) +
-                profile.tags.filter { it.isNotBlank() && it != "Built-in" }
-            if (pills.isNotEmpty()) {
+            ProfileMetricsRow(profile)
+            val tagPills = profile.tags.filter { it.isNotBlank() && it != "Built-in" }
+            if (profile.roast != null || tagPills.isNotEmpty()) {
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    pills.take(3).forEach { Pill(it) }
+                    profile.roast?.let { Pill(it, roast = true) }
+                    tagPills.take(2).forEach { Pill(it) }
                 }
             }
-            if (isActive) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    PhIcon("check", sizeDp = 16, tint = MaterialTheme.colorScheme.primary)
-                    Text("Loaded", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                CremaButton(
+                    onClick = onLoad,
+                    modifier = Modifier.weight(1f),
+                    variant = if (isActive) CremaButtonVariant.Outlined else CremaButtonVariant.Tonal,
+                    icon = if (isActive) "check-circle" else "coffee",
+                    label = if (isActive) "Loaded on Brew" else "Load on Brew",
+                )
+                FilledTonalIconButton(onClick = onDuplicate) { PhIcon("copy", sizeDp = 18) }
+                if (isCustom) {
+                    FilledTonalIconButton(onClick = onEdit) { PhIcon("pencil-simple", sizeDp = 18) }
+                    FilledTonalIconButton(onClick = onDelete) { PhIcon("trash", sizeDp = 18) }
                 }
-            } else {
-                CremaButton(onClick = onLoad, variant = CremaButtonVariant.Tonal, icon = "coffee", label = "Load on Brew")
             }
         }
     }
 }
 
+// Roast variant = uppercase copper-tinted (primary @12%); tags = neutral.
 @Composable
-private fun Pill(text: String) {
+private fun Pill(text: String, roast: Boolean = false) {
     Box(
         Modifier
             .clip(RoundedCornerShape(999.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+            .background(if (roast) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceContainerHighest)
             .padding(horizontal = 10.dp, vertical = 3.dp),
     ) {
-        Text(text, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(
+            if (roast) text.uppercase() else text,
+            style = MaterialTheme.typography.labelSmall,
+            color = if (roast) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+// The 4-up recipe metrics grid (Ratio / Dose / Temp / Pre-inf), mono values
+// between hairline rules — the web profile-card metrics row.
+@Composable
+private fun ProfileMetricsRow(profile: CremaProfile) {
+    Column {
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        Row(
+            Modifier.fillMaxWidth().padding(vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            ProfileMetric("Ratio", "1:%.1f".format(profile.ratio), "", Modifier.weight(1f))
+            ProfileMetric("Dose", "%.1f".format(profile.dose), "g", Modifier.weight(1f))
+            ProfileMetric("Temp", "%.0f".format(profile.brewTemp), "°C", Modifier.weight(1f))
+            ProfileMetric("Pre-inf", "${profile.preinfuseSeconds}", "s", Modifier.weight(1f))
+        }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+    }
+}
+
+@Composable
+private fun ProfileMetric(label: String, value: String, unit: String, modifier: Modifier = Modifier) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Eyebrow(label)
+        Row(verticalAlignment = Alignment.Bottom) {
+            Text(
+                value,
+                style = MaterialTheme.typography.bodyMedium.copy(fontFamily = JetBrainsMono, fontFeatureSettings = "tnum"),
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            if (unit.isNotBlank()) {
+                Text(unit, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 1.dp))
+            }
+        }
+    }
+}
+
+// Copper "LOADED" badge — the active-card head pill.
+@Composable
+private fun LoadedBadge() {
+    Box(
+        Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(MaterialTheme.colorScheme.primary)
+            .padding(horizontal = 10.dp, vertical = 3.dp),
+    ) {
+        Text("LOADED", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onPrimary)
     }
 }
 
