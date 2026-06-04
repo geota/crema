@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.InputChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -38,6 +39,7 @@ import coffee.crema.profiles.SegmentEdit
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.theme.CremaTheme
 import coffee.crema.ui.components.CremaButton
+import coffee.crema.ui.components.CremaButtonVariant
 import coffee.crema.ui.components.CremaCard
 import coffee.crema.ui.components.CremaIconButton
 import coffee.crema.ui.components.CremaSegmentedButton
@@ -139,6 +141,13 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                 if (isNew) "Profiles › New profile" else "Profiles › Edit profile",
                 Modifier.weight(1f),
             )
+            CremaButton(onClick = back, variant = CremaButtonVariant.Text, label = "Discard changes")
+            CremaButton(
+                onClick = { vm.duplicateProfile(profile.id) },
+                variant = CremaButtonVariant.Tonal,
+                icon = "copy",
+                label = "Duplicate",
+            )
             CremaButton(
                 onClick = {
                     vm.saveProfile(
@@ -156,9 +165,10 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                     onBack()
                 },
                 icon = "check",
-                label = "Save",
+                label = "Save profile",
             )
         }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         // Two-pane: metadata/targets on the left, the curve + segments on the
         // right (web ProfileEditor layout). Each pane scrolls independently.
         Row(Modifier.weight(1f).fillMaxWidth()) {
@@ -186,7 +196,7 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                     TagChips(tags)
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            "Pinned to favorites",
+                            "Pin to favorites strip in Quick Controls",
                             Modifier.weight(1f),
                             style = MaterialTheme.typography.bodyLarge,
                             color = MaterialTheme.colorScheme.onSurface,
@@ -236,7 +246,33 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 EditorCard {
-                    Eyebrow("Curve · drag the points")
+                    Row(verticalAlignment = Alignment.Bottom) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                "Pressure profile",
+                                style = MaterialTheme.typography.titleLarge,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                            Text(
+                                "${segs.size} segments · ${segs.sumOf { it.time.toDouble() }.toInt()}s total · drag the dots or edit below",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        CremaButton(
+                            onClick = {
+                                segs.clear()
+                                segs.addAll(
+                                    profile.segments.map {
+                                        SegmentEdit(it.name, it.mode ?: "pressure", it.ramp ?: "smooth", it.target, it.time, it.temp ?: profile.brewTemp)
+                                    },
+                                )
+                            },
+                            variant = CremaButtonVariant.Text,
+                            icon = "arrow-counter-clockwise",
+                            label = "Reset",
+                        )
+                    }
                     ProfileCurveChart(
                         targets = segs.map { it.target },
                         times = segs.map { it.time },
