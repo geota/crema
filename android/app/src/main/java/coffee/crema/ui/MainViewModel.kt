@@ -9,8 +9,14 @@ import coffee.crema.core.CremaBridge
 import coffee.crema.core.Event
 import coffee.crema.core.MachineRequest
 import coffee.crema.core.ScaleCapabilities
+import coffee.crema.core.Bean
+import coffee.crema.core.Roaster
 import coffee.crema.core.builtinCremaProfiles
 import coffee.crema.core.cremaProfileToWire
+import coffee.crema.beans.BeanLibrary
+import coffee.crema.beans.LibraryStore
+import coffee.crema.beans.newBean
+import coffee.crema.beans.newRoaster
 import coffee.crema.ble.BleScanner
 import coffee.crema.ble.BleSessionRecorder
 import coffee.crema.ble.De1BleManager
@@ -152,6 +158,12 @@ data class MainUiState(
      * match the web (pressure / flow / weight).
      */
     val chartChannels: Set<String> = setOf("pressure", "flow", "weight"),
+    /** The bean library — user bean bags, persisted via [LibraryStore]. */
+    val beans: List<Bean> = emptyList(),
+    /** The roaster directory (FK target for [beans]). */
+    val roasters: List<Roaster> = emptyList(),
+    /** The active bean id — the Brew bean block + burn-down, or null. */
+    val activeBeanId: String? = null,
     /** Latest scale weight in grams, or null before the first reading. */
     val scaleWeightG: Float? = null,
     /**
@@ -301,6 +313,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      */
     private var pendingBrew = false
 
+    /** Bean-library persistence — a JSON file in filesDir. */
+    private val library = LibraryStore(app, json)
+
     /**
      * The app-wide BLE transport — the one Nordic-backed [NordicBleTransport].
      * Created once here and [NordicBleTransport.close]d from [onCleared]; it
@@ -368,6 +383,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
         loadBuiltinProfiles()
+        viewModelScope.launch { loadLibrary() }
     }
 
     /**
@@ -577,6 +593,74 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             if (enabled) add(key) else remove(key)
         }
         _ui.value = _ui.value.copy(chartChannels = next)
+    }
+
+    // ── Bean library ────────────────────────────────────────────────────────
+
+    /** Load the persisted bean library into the UI snapshot at startup. */
+    private suspend fun loadLibrary() {
+        val lib = library.load()
+        _ui.value = _ui.value.copy(
+            beans = lib.beans,
+            roasters = lib.roasters,
+            activeBeanId = lib.activeBeanId ?: lib.beans.firstOrNull()?.id,
+        )
+    }
+
+    /** Persist the current bean library (beans + roasters + active selection). */
+    private fun persistLibrary() {
+        val s = _ui.value
+        val lib = BeanLibrary(s.beans, s.roasters, s.activeBeanId)
+        viewModelScope.launch { library.save(lib) }
+    }
+
+    /**
+     * Add a bean bag. [roasterName] is matched case-insensitively against the
+     * roaster directory; an unseen roaster is minted. The new bean becomes the
+     * active selection. Persisted immediately.
+     */
+    fun addBean(name: String, roasterName: String, roastLevel: Int?, roastedOn: String?) {
+        if (name.isBlank()) return
+        val now = System.currentTimeMillis()
+        val trimmedRoaster = roasterName.trim()
+        var roasters = _ui.value.roasters
+        val roasterId = when {
+            trimmedRoaster.isEmpty() -> null
+            else -> {
+                val existing = roasters.firstOrNull { it.name.equals(trimmedRoaster, ignoreCase = true) }
+                if (existing != null) {
+                    existing.id
+                } else {
+                    val r = newRoaster(trimmedRoaster, now)
+                    roasters = roasters + r
+                    r.id
+                }
+            }
+        }
+        val bean = newBean(name.trim(), roasterId, roastLevel, roastedOn?.takeIf { it.isNotBlank() }, now)
+        _ui.value = _ui.value.copy(
+            beans = _ui.value.beans + bean,
+            roasters = roasters,
+            activeBeanId = bean.id,
+        )
+        persistLibrary()
+    }
+
+    /** Set the active bean (the Brew bean block). Persisted. */
+    fun setActiveBean(id: String) {
+        _ui.value = _ui.value.copy(activeBeanId = id)
+        persistLibrary()
+    }
+
+    /** Remove a bean bag; reselect the first remaining if it was active. Persisted. */
+    fun deleteBean(id: String) {
+        val remaining = _ui.value.beans.filterNot { it.id == id }
+        val wasActive = _ui.value.activeBeanId == id
+        _ui.value = _ui.value.copy(
+            beans = remaining,
+            activeBeanId = if (wasActive) remaining.firstOrNull()?.id else _ui.value.activeBeanId,
+        )
+        persistLibrary()
     }
 
     /** Scan for and connect to a Bookoo scale. Independent of the DE1. */

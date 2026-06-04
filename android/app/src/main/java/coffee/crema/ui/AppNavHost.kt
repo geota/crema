@@ -5,7 +5,6 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import coffee.crema.ui.screens.BeanEditScreen
-import coffee.crema.ui.screens.BeansScreen
 import coffee.crema.ui.screens.HistoryScreen
 import coffee.crema.ui.screens.ProfileEditScreen
 import coffee.crema.ui.screens.SettingsScreen
@@ -36,6 +35,8 @@ fun AppNavHost(
     brewContent: @Composable (onNav: (String) -> Unit) -> Unit,
     /** The live Profiles library, wired to the ViewModel by the caller. */
     profilesContent: @Composable (onNav: (String) -> Unit) -> Unit,
+    /** The live Beans library, wired to the ViewModel by the caller. */
+    beansContent: @Composable (onNav: (String) -> Unit) -> Unit,
     /** The live Scale screen. Receives the nav-rail `onNav` from this host (it
      *  needs the nav controller) while the caller binds the ViewModel + connect. */
     scaleContent: @Composable (onNav: (String) -> Unit) -> Unit,
@@ -53,7 +54,7 @@ fun AppNavHost(
         // The hero dashboard, wired to live VM telemetry by the caller.
         composable("brew") { brewContent(onNav) }
         composable("profiles") { profilesContent(onNav) }
-        composable("beans") { BeansScreen(onNav, machineConnected, scaleConnected, onRailConnect) }
+        composable("beans") { beansContent(onNav) }
         composable("history") { HistoryScreen(onNav, machineConnected, scaleConnected, onRailConnect) }
         // The fully-designed exemplar, wired to live VM state by the caller.
         composable("scale") { scaleContent(onNav) }

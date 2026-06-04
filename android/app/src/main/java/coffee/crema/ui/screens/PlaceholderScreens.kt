@@ -71,16 +71,6 @@ private fun ComingSoon(title: String, sub: String, extra: @Composable () -> Unit
 }
 
 @Composable
-fun BeansScreen(
-    onNav: (String) -> Unit,
-    machineConnected: Boolean,
-    scaleConnected: Boolean,
-    onConnect: (String) -> Unit,
-) = RailScaffold("beans", onNav, machineConnected, scaleConnected, onConnect) {
-    ComingSoon("Beans", "Bean bags + roasters — milestone M3.")
-}
-
-@Composable
 fun HistoryScreen(
     onNav: (String) -> Unit,
     machineConnected: Boolean,
