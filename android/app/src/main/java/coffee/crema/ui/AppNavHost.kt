@@ -6,7 +6,6 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import coffee.crema.ui.screens.BeanEditScreen
 import coffee.crema.ui.screens.ProfileEditScreen
-import coffee.crema.ui.screens.SettingsScreen
 
 /**
  * The app shell: the six rail destinations + two pushed editors from the
@@ -41,6 +40,8 @@ fun AppNavHost(
     /** The live Scale screen. Receives the nav-rail `onNav` from this host (it
      *  needs the nav controller) while the caller binds the ViewModel + connect. */
     scaleContent: @Composable (onNav: (String) -> Unit) -> Unit,
+    /** The live Settings screen, wired to the ViewModel by the caller. */
+    settingsContent: @Composable (onNav: (String) -> Unit) -> Unit,
     debugContent: @Composable () -> Unit,
 ) {
     val nav = rememberNavController()
@@ -48,7 +49,6 @@ fun AppNavHost(
     // editors + debug are pushed on top and pop back. Full tab state-saving is a
     // later polish item.
     val onNav: (String) -> Unit = { dest -> nav.navigate(dest) { launchSingleTop = true } }
-    val onPush: (String) -> Unit = { route -> nav.navigate(route) }
     val onBack: () -> Unit = { nav.popBackStack() }
 
     NavHost(navController = nav, startDestination = "brew") {
@@ -59,9 +59,7 @@ fun AppNavHost(
         composable("history") { historyContent(onNav) }
         // The fully-designed exemplar, wired to live VM state by the caller.
         composable("scale") { scaleContent(onNav) }
-        composable("settings") {
-            SettingsScreen(onNav, machineConnected, scaleConnected, onRailConnect, onOpenDebug = { onPush("debug") })
-        }
+        composable("settings") { settingsContent(onNav) }
         composable("profile-edit") { ProfileEditScreen(onBack = onBack) }
         composable("bean-edit") { BeanEditScreen(onBack = onBack) }
         composable("debug") { debugContent() }

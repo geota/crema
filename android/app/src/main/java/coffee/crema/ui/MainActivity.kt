@@ -7,6 +7,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -42,6 +43,7 @@ import coffee.crema.ui.screens.BrewScreen
 import coffee.crema.ui.screens.HistoryScreen
 import coffee.crema.ui.screens.ProfilesScreen
 import coffee.crema.ui.screens.ScaleScreen
+import coffee.crema.ui.screens.SettingsScreen
 import coffee.crema.ui.theme.CremaTheme
 
 /**
@@ -80,8 +82,14 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            CremaTheme {
-                val ui by viewModel.ui.collectAsState()
+            val ui by viewModel.ui.collectAsState()
+            // Theme mode is a persisted app pref (Settings → Display).
+            val darkTheme = when (ui.themeMode) {
+                "light" -> false
+                "dark" -> true
+                else -> isSystemInDarkTheme()
+            }
+            CremaTheme(darkTheme = darkTheme, forceDark = false) {
                 val machineConnected = ui.bleState == De1BleManager.State.READY
                 val scaleConnected = ui.scaleState == ScaleBleManager.State.READY
                 val onRailConnect: (String) -> Unit = { which ->
@@ -112,6 +120,9 @@ class MainActivity : ComponentActivity() {
                     },
                     scaleContent = { navTo ->
                         ScaleScreen(viewModel, onNav = navTo, onConnect = onRailConnect)
+                    },
+                    settingsContent = { navTo ->
+                        SettingsScreen(viewModel, onNav = navTo, onConnect = onRailConnect)
                     },
                     debugContent = {
                         Surface(modifier = Modifier.fillMaxSize()) {

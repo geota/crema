@@ -20,6 +20,8 @@ import coffee.crema.beans.newRoaster
 import coffee.crema.history.HistoryStore
 import coffee.crema.history.StoredShot
 import coffee.crema.history.downsampleForStorage
+import coffee.crema.settings.AppPrefs
+import coffee.crema.settings.SettingsStore
 import coffee.crema.ble.BleScanner
 import coffee.crema.ble.BleSessionRecorder
 import coffee.crema.ble.De1BleManager
@@ -169,6 +171,8 @@ data class MainUiState(
     val activeBeanId: String? = null,
     /** Completed-shot log (newest first), persisted via [HistoryStore]. */
     val history: List<StoredShot> = emptyList(),
+    /** Theme mode — `"system" | "light" | "dark"` (Settings), persisted. */
+    val themeMode: String = "dark",
     /** Latest scale weight in grams, or null before the first reading. */
     val scaleWeightG: Float? = null,
     /**
@@ -324,6 +328,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Shot-history persistence — a JSON file in filesDir. */
     private val historyStore = HistoryStore(app, json)
 
+    /** App-preferences persistence — a JSON file in filesDir. */
+    private val settingsStore = SettingsStore(app, json)
+
     /**
      * The app-wide BLE transport — the one Nordic-backed [NordicBleTransport].
      * Created once here and [NordicBleTransport.close]d from [onCleared]; it
@@ -396,6 +403,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             loadLibrary()
             loadHistory()
+            loadPrefs()
         }
     }
 
@@ -720,6 +728,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val next = (listOf(shot) + s.history).take(HistoryStore.MAX_SHOTS)
         _ui.value = _ui.value.copy(history = next)
         viewModelScope.launch { historyStore.save(next) }
+    }
+
+    // ── App settings ──────────────────────────────────────────────────────────
+
+    /** Load persisted app preferences at startup. */
+    private suspend fun loadPrefs() {
+        _ui.value = _ui.value.copy(themeMode = settingsStore.load().themeMode)
+    }
+
+    /** Set the theme mode (`"system"` / `"light"` / `"dark"`) and persist. */
+    fun setThemeMode(mode: String) {
+        _ui.value = _ui.value.copy(themeMode = mode)
+        viewModelScope.launch { settingsStore.save(AppPrefs(mode)) }
     }
 
     /** Scan for and connect to a Bookoo scale. Independent of the DE1. */
