@@ -155,6 +155,7 @@ private fun rememberPlayheadMarker(lineColor: Color): CartesianMarker {
 fun ShotChart(
     samples: List<TelemetrySample>,
     enabledChannels: Set<String>,
+    live: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     val tel = CremaTheme.telemetry
@@ -284,8 +285,9 @@ fun ShotChart(
         // regardless of the (dense) sample spacing.
         getXStep = { _, _, _ -> 10.0 },
         // The "now" playhead: a persistent marker at the latest sample's x.
+        // Live only — a static history chart shows the whole shot, no playhead.
         persistentMarkers = { _ ->
-            if (playheadX != null) playhead at playheadX
+            if (live && playheadX != null) playhead at playheadX
         },
     )
 
