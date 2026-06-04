@@ -169,6 +169,8 @@ data class MainUiState(
     val roasters: List<Roaster> = emptyList(),
     /** The active bean id — the Brew bean block + burn-down, or null. */
     val activeBeanId: String? = null,
+    /** The bean currently open in the editor (`bean-edit` route), or null. */
+    val editingBeanId: String? = null,
     /** Completed-shot log (newest first), persisted via [HistoryStore]. */
     val history: List<StoredShot> = emptyList(),
     /** Theme mode — `"system" | "light" | "dark"` (Settings), persisted. */
@@ -643,26 +645,80 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun addBean(name: String, roasterName: String, roastLevel: Int?, roastedOn: String?) {
         if (name.isBlank()) return
         val now = System.currentTimeMillis()
-        val trimmedRoaster = roasterName.trim()
-        var roasters = _ui.value.roasters
-        val roasterId = when {
-            trimmedRoaster.isEmpty() -> null
-            else -> {
-                val existing = roasters.firstOrNull { it.name.equals(trimmedRoaster, ignoreCase = true) }
-                if (existing != null) {
-                    existing.id
-                } else {
-                    val r = newRoaster(trimmedRoaster, now)
-                    roasters = roasters + r
-                    r.id
-                }
-            }
-        }
+        val (roasterId, roasters) = resolveRoaster(roasterName, _ui.value.roasters, now)
         val bean = newBean(name.trim(), roasterId, roastLevel, roastedOn?.takeIf { it.isNotBlank() }, now)
         _ui.value = _ui.value.copy(
             beans = _ui.value.beans + bean,
             roasters = roasters,
             activeBeanId = bean.id,
+        )
+        persistLibrary()
+    }
+
+    /**
+     * Find a roaster by name (case-insensitive) or mint one. Returns the roaster
+     * id (null for a blank name) and the possibly-extended roaster directory.
+     */
+    private fun resolveRoaster(
+        name: String,
+        roasters: List<Roaster>,
+        nowMs: Long,
+    ): Pair<String?, List<Roaster>> {
+        val trimmed = name.trim()
+        if (trimmed.isEmpty()) return null to roasters
+        val existing = roasters.firstOrNull { it.name.equals(trimmed, ignoreCase = true) }
+        return if (existing != null) {
+            existing.id to roasters
+        } else {
+            val r = newRoaster(trimmed, nowMs)
+            r.id to (roasters + r)
+        }
+    }
+
+    /** Open a bean in the editor (the `bean-edit` route reads this). */
+    fun startEditBean(id: String) {
+        _ui.value = _ui.value.copy(editingBeanId = id)
+    }
+
+    /**
+     * Apply edits to an existing bean (the editor's Save). Resolves the roaster
+     * by name (find-or-create), stamps `updatedAt`, and persists.
+     */
+    fun updateBean(
+        id: String,
+        name: String,
+        roasterName: String,
+        roastLevel: Int?,
+        roastedOn: String?,
+        country: String?,
+        processing: String?,
+        grinder: String,
+        grinderSetting: String,
+        rating: Int,
+        notes: String,
+    ) {
+        val s = _ui.value
+        val existing = s.beans.firstOrNull { it.id == id } ?: return
+        val now = System.currentTimeMillis()
+        val (roasterId, roasters) = resolveRoaster(roasterName, s.roasters, now)
+        val updated = existing.copy(
+            name = name.trim().ifBlank { existing.name },
+            roasterId = roasterId,
+            roastLevel = roastLevel?.toUByte(),
+            roastedOn = roastedOn?.takeIf { it.isNotBlank() },
+            origin = existing.origin.copy(
+                country = country?.takeIf { it.isNotBlank() },
+                processing = processing?.takeIf { it.isNotBlank() },
+            ),
+            grinder = grinder.trim(),
+            grinderSetting = grinderSetting.trim(),
+            rating = rating.coerceIn(0, 5).toUByte(),
+            notes = notes,
+            updatedAt = now,
+        )
+        _ui.value = _ui.value.copy(
+            beans = s.beans.map { if (it.id == id) updated else it },
+            roasters = roasters,
         )
         persistLibrary()
     }

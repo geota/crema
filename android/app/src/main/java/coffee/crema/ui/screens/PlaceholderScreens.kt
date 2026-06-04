@@ -28,9 +28,6 @@ import coffee.crema.ui.components.Eyebrow
 fun ProfileEditScreen(onBack: () -> Unit) = EditorPlaceholder("Profiles", "Edit profile", onBack)
 
 @Composable
-fun BeanEditScreen(onBack: () -> Unit) = EditorPlaceholder("Beans", "Edit bean", onBack)
-
-@Composable
 private fun EditorPlaceholder(crumbRoot: String, crumbLeaf: String, onBack: () -> Unit) {
     Column(Modifier.fillMaxSize()) {
         Row(
