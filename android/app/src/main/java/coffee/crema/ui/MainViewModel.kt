@@ -11,6 +11,7 @@ import coffee.crema.core.MachineRequest
 import coffee.crema.core.ScaleCapabilities
 import coffee.crema.core.Bean
 import coffee.crema.core.Roaster
+import coffee.crema.core.blankCremaProfile
 import coffee.crema.core.builtinCremaProfiles
 import coffee.crema.core.cremaProfileToWire
 import coffee.crema.beans.BeanLibrary
@@ -28,6 +29,11 @@ import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.NordicBleTransport
 import coffee.crema.ble.ScaleBleManager
 import coffee.crema.profiles.CremaProfile
+import coffee.crema.profiles.CustomProfileStore
+import coffee.crema.profiles.brewDefaultsJson
+import coffee.crema.profiles.duplicatedCustomProfileJson
+import coffee.crema.profiles.patchCremaProfileJson
+import coffee.crema.profiles.profileIdOf
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -171,6 +177,15 @@ data class MainUiState(
     val activeBeanId: String? = null,
     /** The bean currently open in the editor (`bean-edit` route), or null. */
     val editingBeanId: String? = null,
+    /** The profile currently open in the editor (`profile-edit` route), or null. */
+    val editingProfileId: String? = null,
+    /**
+     * A brand-new or duplicated profile being edited but not yet saved. The editor
+     * seeds from this when [editingProfileId] names a profile not yet in [profiles]
+     * (New / Duplicate); null when editing an existing saved custom profile. Cleared
+     * on save or cancel.
+     */
+    val draftProfile: CremaProfile? = null,
     /** Completed-shot log (newest first), persisted via [HistoryStore]. */
     val history: List<StoredShot> = emptyList(),
     /** Theme mode — `"system" | "light" | "dark"` (Settings), persisted. */
@@ -316,6 +331,29 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      */
     private var builtinProfileJson: Map<String, String> = emptyMap()
 
+    /** Built-in profiles parsed into the thin display model, cached for [refreshProfiles]. */
+    private var builtinProfiles: List<CremaProfile> = emptyList()
+
+    /**
+     * Custom (user) profiles as complete `CremaProfile` JSON, newest first — the
+     * editor's save target, persisted via [CustomProfileStore]. Kept as full JSON
+     * (not the thin model) so every wire-relevant field round-trips on upload; see
+     * [coffee.crema.profiles.patchCremaProfileJson].
+     */
+    private var customProfilesJson: List<String> = emptyList()
+
+    /**
+     * Complete `CremaProfile` JSON by id — built-ins + customs — the lookup
+     * [startShot] feeds to [cremaProfileToWire]. Rebuilt by [refreshProfiles].
+     */
+    private var profileJsonById: Map<String, String> = emptyMap()
+
+    /**
+     * A new / duplicated profile's complete base JSON, held between [startNewProfile]
+     * / [duplicateProfile] and the editor's [saveProfile]; null otherwise.
+     */
+    private var draftProfileJson: String? = null
+
     /**
      * Set when [startShot] kicks off a profile upload that should be followed by an
      * Espresso request once the upload completes (the gated start). Cleared on
@@ -332,6 +370,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** App-preferences persistence — a JSON file in filesDir. */
     private val settingsStore = SettingsStore(app, json)
+
+    /** Custom-profile persistence — a JSON file in filesDir. */
+    private val customProfileStore = CustomProfileStore(app, json)
 
     /**
      * The app-wide BLE transport — the one Nordic-backed [NordicBleTransport].
@@ -406,6 +447,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             loadLibrary()
             loadHistory()
             loadPrefs()
+            loadCustomProfiles()
         }
     }
 
@@ -436,16 +478,182 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 id to element.toString()
             }
         }.getOrElse { emptyMap() }
+        builtinProfiles = list
+        refreshProfiles()
+    }
+
+    /**
+     * Recompute the merged profile list (customs first, then built-ins) and the
+     * id → full-JSON upload map from the two raw-JSON sources. Seeds the active
+     * selection to the first profile when none is set. Called whenever the
+     * built-in or custom sources change.
+     */
+    private fun refreshProfiles() {
+        val customThin = customProfilesJson.mapNotNull { raw ->
+            runCatching { json.decodeFromString(CremaProfile.serializer(), raw) }.getOrNull()
+        }
+        val all = customThin + builtinProfiles
+        profileJsonById = buildMap {
+            putAll(builtinProfileJson)
+            customProfilesJson.forEach { raw ->
+                profileIdOf(raw, json)?.takeIf { it.isNotEmpty() }?.let { put(it, raw) }
+            }
+        }
         _ui.value = _ui.value.copy(
-            profiles = list,
-            activeProfileId = _ui.value.activeProfileId ?: list.firstOrNull()?.id,
+            profiles = all,
+            activeProfileId = _ui.value.activeProfileId ?: all.firstOrNull()?.id,
         )
+    }
+
+    /** Load the persisted custom profiles into the merged list at startup. */
+    private suspend fun loadCustomProfiles() {
+        customProfilesJson = customProfileStore.load()
+        refreshProfiles()
+    }
+
+    /** Persist the current custom profiles (best-effort, off the main thread). */
+    private fun persistCustomProfiles() {
+        val snapshot = customProfilesJson
+        viewModelScope.launch { customProfileStore.save(snapshot) }
     }
 
     /** Select the Brew header's active profile. (M1: display only — uploading the
      *  profile to the DE1 on Coffee is the M2 gated-start sequence.) */
     fun setActiveProfile(id: String) {
         _ui.value = _ui.value.copy(activeProfileId = id)
+    }
+
+    // ── Profile editor (the `profile-edit` route) ─────────────────────────────
+
+    /** Open an existing saved (custom) profile in the editor. */
+    fun startEditProfile(id: String) {
+        draftProfileJson = null
+        _ui.value = _ui.value.copy(editingProfileId = id, draftProfile = null)
+    }
+
+    /**
+     * Begin a brand-new custom profile: the core mints a complete blank
+     * `CremaProfile` (a fresh id, `source: "custom"`, the default segment list)
+     * seeded from the user's brew defaults. Held as a draft until the editor saves.
+     */
+    fun startNewProfile() {
+        val blank = runCatching { blankCremaProfile(brewDefaultsJson()) }.getOrElse {
+            appendLog("New profile failed: ${it.message}")
+            return
+        }
+        beginDraft(blank)
+    }
+
+    /**
+     * Duplicate any profile (built-in or custom) into a fresh custom draft — the
+     * full recipe (every segment, temp, limiter) is preserved verbatim so the copy
+     * uploads identically; only id / source / name / pinned change. Opens the editor.
+     */
+    fun duplicateProfile(id: String) {
+        val base = profileJsonById[id] ?: run {
+            appendLog("Duplicate: profile $id not found")
+            return
+        }
+        val copy = runCatching { duplicatedCustomProfileJson(base, json) }.getOrElse {
+            appendLog("Duplicate failed: ${it.message}")
+            return
+        }
+        beginDraft(copy)
+    }
+
+    /** Stash a complete profile JSON as the editor's draft and route the editor to it. */
+    private fun beginDraft(fullJson: String) {
+        val thin = runCatching {
+            json.decodeFromString(CremaProfile.serializer(), fullJson)
+        }.getOrElse {
+            appendLog("Draft parse failed: ${it.message}")
+            return
+        }
+        draftProfileJson = fullJson
+        _ui.value = _ui.value.copy(editingProfileId = thin.id, draftProfile = thin)
+    }
+
+    /**
+     * Save the editor's non-curve edits. Patches only the edited fields into the
+     * profile's complete JSON base (the draft for a new / duplicated profile, else
+     * the stored custom), so every wire-relevant field — per-segment temp / mode /
+     * ramp, notes, beverage type — round-trips untouched to the DE1. Upserts into
+     * the custom store (newest first for a new profile; in place for an edit),
+     * refreshes the merged list, and persists.
+     *
+     * @param segments (target, time) per existing segment, in order — the non-curve
+     *   editor never adds / removes segments, so this matches the base length.
+     */
+    fun saveProfile(
+        id: String,
+        name: String,
+        roast: String?,
+        tags: List<String>,
+        pinned: Boolean,
+        dose: Float,
+        yieldOut: Float,
+        brewTemp: Float,
+        maxTotalVolumeMl: Int,
+        segments: List<Pair<Float, Float>>,
+    ) {
+        val isExisting = customProfilesJson.any { profileIdOf(it, json) == id }
+        val base = when {
+            draftProfileJson != null && _ui.value.editingProfileId == id -> draftProfileJson
+            isExisting -> customProfilesJson.firstOrNull { profileIdOf(it, json) == id }
+            else -> null
+        }
+        if (base == null) {
+            appendLog("Save profile: base for $id not found")
+            return
+        }
+        val patched = runCatching {
+            patchCremaProfileJson(
+                baseJson = base,
+                name = name,
+                roast = roast,
+                tags = tags,
+                pinned = pinned,
+                dose = dose,
+                yieldOut = yieldOut,
+                brewTemp = brewTemp,
+                maxTotalVolumeMl = maxTotalVolumeMl,
+                segments = segments,
+                json = json,
+            )
+        }.getOrElse {
+            appendLog("Save profile failed: ${it.message}")
+            return
+        }
+        customProfilesJson = if (isExisting) {
+            customProfilesJson.map { if (profileIdOf(it, json) == id) patched else it }
+        } else {
+            listOf(patched) + customProfilesJson
+        }
+        draftProfileJson = null
+        _ui.value = _ui.value.copy(editingProfileId = null, draftProfile = null)
+        refreshProfiles()
+        persistCustomProfiles()
+    }
+
+    /** Close the editor without saving (discards any new / duplicated draft). */
+    fun cancelProfileEdit() {
+        draftProfileJson = null
+        _ui.value = _ui.value.copy(editingProfileId = null, draftProfile = null)
+    }
+
+    /**
+     * Delete a custom profile (built-ins are not deletable — they have no store
+     * entry, so this is a no-op for them). Clears the active selection if it was
+     * the deleted one; [refreshProfiles] then reseeds it to the first remaining.
+     */
+    fun deleteProfile(id: String) {
+        if (customProfilesJson.none { profileIdOf(it, json) == id }) return
+        customProfilesJson = customProfilesJson.filterNot { profileIdOf(it, json) == id }
+        if (_ui.value.activeProfileId == id) {
+            _ui.value = _ui.value.copy(activeProfileId = null)
+        }
+        refreshProfiles()
+        persistCustomProfiles()
     }
 
     /** Start steaming. */
@@ -473,7 +681,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * pre-shot flush (no settings store on Android yet) — both are later refinements.
      */
     fun startShot() {
-        val cremaJson = _ui.value.activeProfileId?.let { builtinProfileJson[it] }
+        val cremaJson = _ui.value.activeProfileId?.let { profileJsonById[it] }
         if (cremaJson == null) {
             appendLog("Can't start shot: no active profile")
             return
