@@ -51,13 +51,18 @@ export interface De1ConnectDeps {
  * The five fatal NOTIFY subscriptions, in subscribe order. A failure here is the
  * structural tell the selected device is not a DE1 (its GATT lacks A000 / the
  * characteristic), so each is attributed to its own step.
+ *
+ * `char` is a thunk, not a string: the `De1Uuids.*` getters resolve lazily from
+ * wasm (see `de1-uuids.ts`), so reading them here at module scope would fire the
+ * wasm call at import time — before `loadCore()` runs, the very race this fixes.
+ * The thunk defers each read to connect time, inside `de1ConnectProgram` below.
  */
-const SUBSCRIBE_STEPS: ReadonlyArray<{ step: string; char: string; ok: string }> = [
-	{ step: 'StateInfo characteristic A00E', char: De1Uuids.STATE_INFO, ok: 'StateInfo A00E subscribed ✓' },
-	{ step: 'ShotSample characteristic A00D', char: De1Uuids.SHOT_SAMPLE, ok: 'ShotSample A00D subscribed ✓' },
-	{ step: 'WaterLevels characteristic A011', char: De1Uuids.WATER_LEVELS, ok: 'WaterLevels A011 subscribed ✓' },
-	{ step: 'MMR_READ characteristic A005', char: De1Uuids.MMR_READ, ok: 'MMR_READ A005 subscribed ✓' },
-	{ step: 'ShotSettings characteristic A00B', char: De1Uuids.SHOT_SETTINGS, ok: 'ShotSettings A00B subscribed ✓' }
+const SUBSCRIBE_STEPS: ReadonlyArray<{ step: string; char: () => string; ok: string }> = [
+	{ step: 'StateInfo characteristic A00E', char: () => De1Uuids.STATE_INFO, ok: 'StateInfo A00E subscribed ✓' },
+	{ step: 'ShotSample characteristic A00D', char: () => De1Uuids.SHOT_SAMPLE, ok: 'ShotSample A00D subscribed ✓' },
+	{ step: 'WaterLevels characteristic A011', char: () => De1Uuids.WATER_LEVELS, ok: 'WaterLevels A011 subscribed ✓' },
+	{ step: 'MMR_READ characteristic A005', char: () => De1Uuids.MMR_READ, ok: 'MMR_READ A005 subscribed ✓' },
+	{ step: 'ShotSettings characteristic A00B', char: () => De1Uuids.SHOT_SETTINGS, ok: 'ShotSettings A00B subscribed ✓' }
 ];
 
 /**
@@ -118,7 +123,7 @@ export const de1ConnectProgram = (d: De1ConnectDeps): Effect.Effect<void, De1Con
 
 		// 2) The five NOTIFY subscriptions, in order (fatal — structural DE1 proof).
 		for (const s of SUBSCRIBE_STEPS) {
-			yield* fatal(s.step, () => d.device.startNotifications(De1Uuids.SERVICE, s.char));
+			yield* fatal(s.step, () => d.device.startNotifications(De1Uuids.SERVICE, s.char()));
 			d.onStatus(s.ok);
 		}
 

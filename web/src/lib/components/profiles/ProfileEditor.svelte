@@ -48,11 +48,7 @@
 	import { getSettingsStore } from '$lib/settings';
 	import { getCremaAppContext } from '$lib/shell/app-context';
 	import { confirmDialog } from '$lib/components/shared/confirm-dialog.svelte';
-	import {
-		MAX_TOTAL_VOLUME_ML,
-		MIN_TOTAL_VOLUME_ML,
-		MAX_TEMPERATURE_C
-	} from '$lib/profiles/bounds';
+	import { ProfileBounds } from '$lib/profiles/bounds';
 
 	const settings = getSettingsStore();
 
@@ -518,8 +514,8 @@
 							value={draft.maxTotalVolumeMl}
 							step={5}
 							dimension="volume"
-							min={MIN_TOTAL_VOLUME_ML}
-							max={MAX_TOTAL_VOLUME_ML}
+							min={ProfileBounds.MIN_TOTAL_VOLUME_ML}
+							max={ProfileBounds.MAX_TOTAL_VOLUME_ML}
 							digits={0}
 							onChange={(v) => patch({ maxTotalVolumeMl: Math.round(v) })}
 							dot
@@ -554,7 +550,7 @@
 							step={1}
 							dimension="temp"
 							min={0}
-							max={MAX_TEMPERATURE_C}
+							max={ProfileBounds.MAX_TEMPERATURE_C}
 							digits={0}
 							onChange={(v) => patch({ tankTemperatureC: Math.round(v) })}
 							dot
