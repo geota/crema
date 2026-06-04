@@ -17,6 +17,8 @@ import coffee.crema.beans.BeanLibrary
 import coffee.crema.beans.LibraryStore
 import coffee.crema.beans.newBean
 import coffee.crema.beans.newRoaster
+import coffee.crema.history.HistoryStore
+import coffee.crema.history.StoredShot
 import coffee.crema.ble.BleScanner
 import coffee.crema.ble.BleSessionRecorder
 import coffee.crema.ble.De1BleManager
@@ -164,6 +166,8 @@ data class MainUiState(
     val roasters: List<Roaster> = emptyList(),
     /** The active bean id — the Brew bean block + burn-down, or null. */
     val activeBeanId: String? = null,
+    /** Completed-shot log (newest first), persisted via [HistoryStore]. */
+    val history: List<StoredShot> = emptyList(),
     /** Latest scale weight in grams, or null before the first reading. */
     val scaleWeightG: Float? = null,
     /**
@@ -316,6 +320,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Bean-library persistence — a JSON file in filesDir. */
     private val library = LibraryStore(app, json)
 
+    /** Shot-history persistence — a JSON file in filesDir. */
+    private val historyStore = HistoryStore(app, json)
+
     /**
      * The app-wide BLE transport — the one Nordic-backed [NordicBleTransport].
      * Created once here and [NordicBleTransport.close]d from [onCleared]; it
@@ -383,7 +390,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
         loadBuiltinProfiles()
-        viewModelScope.launch { loadLibrary() }
+        // Load both persisted stores in one coroutine, sequentially, so their
+        // _ui copies don't race (read-modify-write of the shared snapshot).
+        viewModelScope.launch {
+            loadLibrary()
+            loadHistory()
+        }
     }
 
     /**
@@ -661,6 +673,49 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             activeBeanId = if (wasActive) remaining.firstOrNull()?.id else _ui.value.activeBeanId,
         )
         persistLibrary()
+    }
+
+    // ── Shot history ──────────────────────────────────────────────────────────
+
+    /** Load the persisted shot log at startup. */
+    private suspend fun loadHistory() {
+        _ui.value = _ui.value.copy(history = historyStore.load())
+    }
+
+    /**
+     * Capture a completed shot into the log (newest first, capped) and persist.
+     * Profile / bean names come from the active selections at completion. v1
+     * stores a summary only — the telemetry slice for the detail chart is a
+     * later increment.
+     */
+    private fun captureCompletedShot(
+        durationMs: Long,
+        yieldG: Float?,
+        peakPressure: Float?,
+        peakTemp: Float?,
+    ) {
+        val s = _ui.value
+        val profile = s.profiles.firstOrNull { it.id == s.activeProfileId }
+        val bean = s.beans.firstOrNull { it.id == s.activeBeanId }
+        val beanName = bean?.let { b ->
+            val roaster = b.roasterId?.let { rid -> s.roasters.firstOrNull { it.id == rid }?.name }
+            listOfNotNull(roaster, b.name).joinToString(" · ")
+        }
+        val now = System.currentTimeMillis()
+        val shot = StoredShot(
+            id = "shot:$now",
+            completedAtMs = now,
+            durationMs = durationMs,
+            yieldG = yieldG,
+            doseG = profile?.dose,
+            peakPressure = peakPressure,
+            peakTemp = peakTemp,
+            profileName = profile?.name,
+            beanName = beanName,
+        )
+        val next = (listOf(shot) + s.history).take(HistoryStore.MAX_SHOTS)
+        _ui.value = _ui.value.copy(history = next)
+        viewModelScope.launch { historyStore.save(next) }
     }
 
     /** Scan for and connect to a Bookoo scale. Independent of the DE1. */
@@ -1095,6 +1150,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     ),
                 )
                 appendLog("Shot completed: ${c.duration}ms, ${c.sample_count} samples")
+                captureCompletedShot(c.duration.toLong(), c.final_weight, c.peak_pressure, c.peak_temp)
             }
             is Event.WaterSessionStarted ->
                 appendLog("Water session started: ${event.content.kind.string}")
