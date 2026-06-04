@@ -13,82 +13,16 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import coffee.crema.ui.components.CremaButton
-import coffee.crema.ui.components.CremaButtonVariant
 import coffee.crema.ui.components.CremaIconButton
-import coffee.crema.ui.components.CremaNavigationRail
 import coffee.crema.ui.components.Eyebrow
-import coffee.crema.ui.theme.CremaTheme
 
 /*
- * M0 placeholder destinations.
+ * Pushed editor placeholders (no rail; back + breadcrumb).
  *
- * Each *rail* screen follows the prototype pattern — every screen owns its own
- * CremaNavigationRail — wired to the REAL DE1 / scale connection state and the
- * connect/disconnect action, plus a centered "coming soon" body. The pushed
- * *editor* screens render a back + breadcrumb header instead of the rail.
- *
- * These get replaced screen-by-screen in later milestones; see
- * android/IMPLEMENTATION-PLAN.md §2. Brew (BrewScreen.kt) and Scale
- * (ScaleScreen.kt) are now live, VM-driven screens; the rest follow.
+ * All six rail destinations (Brew, Profiles, Beans, History, Scale, Settings)
+ * are now live VM-driven screens; only the profile / bean editors remain stubbed
+ * (milestone: M3 editors).
  */
-
-@Composable
-private fun RailScaffold(
-    active: String,
-    onNav: (String) -> Unit,
-    machineConnected: Boolean,
-    scaleConnected: Boolean,
-    onConnect: (String) -> Unit,
-    body: @Composable () -> Unit,
-) {
-    Row(Modifier.fillMaxSize()) {
-        CremaNavigationRail(
-            active = active,
-            onNav = onNav,
-            machineConnected = machineConnected,
-            scaleConnected = scaleConnected,
-            onConnect = onConnect,
-        )
-        Box(
-            Modifier.fillMaxSize().padding(CremaTheme.spacing.edge),
-            contentAlignment = Alignment.Center,
-        ) { body() }
-    }
-}
-
-@Composable
-private fun ComingSoon(title: String, sub: String, extra: @Composable () -> Unit = {}) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        Eyebrow(title)
-        Text(title, style = MaterialTheme.typography.headlineLarge, color = MaterialTheme.colorScheme.onSurface)
-        Text(sub, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        extra()
-    }
-}
-
-@Composable
-fun SettingsScreen(
-    onNav: (String) -> Unit,
-    machineConnected: Boolean,
-    scaleConnected: Boolean,
-    onConnect: (String) -> Unit,
-    onOpenDebug: () -> Unit,
-) = RailScaffold("settings", onNav, machineConnected, scaleConnected, onConnect) {
-    ComingSoon("Settings", "Preferences, machine, sharing — milestone M5.") {
-        CremaButton(
-            onClick = onOpenDebug,
-            variant = CremaButtonVariant.Tonal,
-            icon = "bug",
-            label = "Open debug readout",
-        )
-    }
-}
-
-// ── Pushed editors (no rail; back + breadcrumb) ─────────────────────────────
 
 @Composable
 fun ProfileEditScreen(onBack: () -> Unit) = EditorPlaceholder("Profiles", "Edit profile", onBack)
@@ -108,7 +42,22 @@ private fun EditorPlaceholder(crumbRoot: String, crumbLeaf: String, onBack: () -
             Eyebrow("$crumbRoot › $crumbLeaf")
         }
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            ComingSoon(crumbLeaf, "Full editor — milestone M3.")
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Eyebrow(crumbLeaf)
+                Text(
+                    crumbLeaf,
+                    style = MaterialTheme.typography.headlineLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                    "Full editor — milestone M3.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }
