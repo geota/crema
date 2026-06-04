@@ -10,9 +10,31 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coffee.crema.ui.theme.CremaTheme
+import com.adamglin.PhosphorIcons
+import com.adamglin.phosphoricons.Regular
+import com.adamglin.phosphoricons.regular.ArrowCounterClockwise
+import com.adamglin.phosphoricons.regular.ArrowLeft
+import com.adamglin.phosphoricons.regular.Bluetooth
+import com.adamglin.phosphoricons.regular.Bug
+import com.adamglin.phosphoricons.regular.Check
+import com.adamglin.phosphoricons.regular.Coffee
+import com.adamglin.phosphoricons.regular.Copy
+import com.adamglin.phosphoricons.regular.GearSix
+import com.adamglin.phosphoricons.regular.LinkBreak
+import com.adamglin.phosphoricons.regular.Minus
+import com.adamglin.phosphoricons.regular.PencilSimple
+import com.adamglin.phosphoricons.regular.Plus
+import com.adamglin.phosphoricons.regular.Power
+import com.adamglin.phosphoricons.regular.Question
+import com.adamglin.phosphoricons.regular.SlidersHorizontal
+import com.adamglin.phosphoricons.regular.SpeakerHigh
+import com.adamglin.phosphoricons.regular.Timer
+import com.adamglin.phosphoricons.regular.Trash
+import com.adamglin.phosphoricons.regular.X
 
 /*
  * Crema component library — a faithful port of tablet/m3-components.jsx.
@@ -21,28 +43,45 @@ import coffee.crema.ui.theme.CremaTheme
  * screen code stays declarative. Names mirror the JSX (M3Button → CremaButton,
  * M3SegmentedButton → CremaSegmentedButton, …) so porting screens is mechanical.
  *
- * ICONS: the mockup uses Phosphor (regular weight; duotone for telemetry marks).
- * Add a Phosphor source to the project — recommended:
- *     implementation("com.adamglin:phosphor-icon:1.0.0")   // or the Phosphor icon font
- * and replace the PhIcon stub below. Glyph names in screen code are the exact
- * Phosphor names ("scales", "gear-six", "bluetooth", "link-break", …).
+ * ICONS: the mockup uses Phosphor (regular weight). Bound via
+ *     implementation("com.adamglin:phosphor-icon:1.0.0")
+ * in [PhIcon] below — screen code references the exact Phosphor names
+ * ("coffee", "gear-six", "bluetooth", "link-break", …).
  */
 
-// ── Icon (M0 placeholder) ───────────────────────────────────────────────────
-// A tinted rounded square so layouts render and screens stay navigable (rail
-// items carry text labels). Swap THIS ONE FUNCTION for the real Phosphor
-// binding: convert the web's subset fonts (web/src/lib/icons/*.woff2) to .ttf,
-// drop them in res/font, and map glyph `name` -> codepoint from phosphor.css,
-// rendering Text(codepoint, fontFamily = phosphor). Glyph names in screen code
-// are exact Phosphor names ("scales", "gear-six", "bluetooth", "link-break", …).
-// sizeDp ∈ {16,20,24,32} per the icon spec.
+// ── Icon — Phosphor (regular weight) via com.adamglin:phosphor-icon ──────────
+// Screen code references icons by their exact Phosphor kebab-case name; this maps
+// each to the library's PascalCase ImageVector accessor. Unknown/typo'd names
+// fall back to a question-mark glyph rather than crashing. sizeDp ∈ {16,18,20,24,
+// 32} per the icon spec; tint defaults to the current content color.
 @Composable
 fun PhIcon(name: String, modifier: Modifier = Modifier, tint: Color = LocalContentColor.current, sizeDp: Int = 20) {
-    Box(
-        modifier
-            .size(sizeDp.dp)
-            .clip(RoundedCornerShape(2.dp))
-            .background(tint.copy(alpha = 0.22f)),
+    val vector: ImageVector = when (name) {
+        "arrow-counter-clockwise" -> PhosphorIcons.Regular.ArrowCounterClockwise
+        "arrow-left" -> PhosphorIcons.Regular.ArrowLeft
+        "bluetooth" -> PhosphorIcons.Regular.Bluetooth
+        "bug" -> PhosphorIcons.Regular.Bug
+        "check" -> PhosphorIcons.Regular.Check
+        "coffee" -> PhosphorIcons.Regular.Coffee
+        "copy" -> PhosphorIcons.Regular.Copy
+        "gear-six" -> PhosphorIcons.Regular.GearSix
+        "link-break" -> PhosphorIcons.Regular.LinkBreak
+        "minus" -> PhosphorIcons.Regular.Minus
+        "pencil-simple" -> PhosphorIcons.Regular.PencilSimple
+        "plus" -> PhosphorIcons.Regular.Plus
+        "power" -> PhosphorIcons.Regular.Power
+        "sliders-horizontal" -> PhosphorIcons.Regular.SlidersHorizontal
+        "speaker-high" -> PhosphorIcons.Regular.SpeakerHigh
+        "timer" -> PhosphorIcons.Regular.Timer
+        "trash" -> PhosphorIcons.Regular.Trash
+        "x" -> PhosphorIcons.Regular.X
+        else -> PhosphorIcons.Regular.Question // unknown-name fallback
+    }
+    Icon(
+        imageVector = vector,
+        contentDescription = name,
+        modifier = modifier.size(sizeDp.dp),
+        tint = tint,
     )
 }
 
@@ -64,6 +103,7 @@ enum class CremaButtonVariant { Filled, Tonal, Outlined, Text }
 @Composable
 fun CremaButton(
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
     variant: CremaButtonVariant = CremaButtonVariant.Filled,
     icon: String? = null,
     enabled: Boolean = true,
@@ -75,11 +115,11 @@ fun CremaButton(
         Text(label, style = MaterialTheme.typography.labelLarge)
     }
     when (variant) {
-        CremaButtonVariant.Filled -> Button(onClick, enabled = enabled, shape = MaterialTheme.shapes.small, content = content)
-        CremaButtonVariant.Tonal -> FilledTonalButton(onClick, enabled = enabled, shape = MaterialTheme.shapes.small, content = content)
-        CremaButtonVariant.Outlined -> OutlinedButton(onClick, enabled = enabled, shape = MaterialTheme.shapes.small, content = content)
+        CremaButtonVariant.Filled -> Button(onClick, modifier, enabled = enabled, shape = MaterialTheme.shapes.small, content = content)
+        CremaButtonVariant.Tonal -> FilledTonalButton(onClick, modifier, enabled = enabled, shape = MaterialTheme.shapes.small, content = content)
+        CremaButtonVariant.Outlined -> OutlinedButton(onClick, modifier, enabled = enabled, shape = MaterialTheme.shapes.small, content = content)
         CremaButtonVariant.Text -> TextButton(
-            onClick, enabled = enabled,
+            onClick, modifier, enabled = enabled,
             colors = if (danger) ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error) else ButtonDefaults.textButtonColors(),
             content = content,
         )
@@ -90,11 +130,11 @@ fun CremaButton(
 enum class CremaIconTone { Standard, Filled, Tonal }
 
 @Composable
-fun CremaIconButton(icon: String, onClick: () -> Unit, tone: CremaIconTone = CremaIconTone.Standard) {
+fun CremaIconButton(icon: String, onClick: () -> Unit, modifier: Modifier = Modifier, tone: CremaIconTone = CremaIconTone.Standard) {
     when (tone) {
-        CremaIconTone.Standard -> IconButton(onClick) { PhIcon(icon, sizeDp = 24) }
-        CremaIconTone.Filled -> FilledIconButton(onClick) { PhIcon(icon, sizeDp = 24) }
-        CremaIconTone.Tonal -> FilledTonalIconButton(onClick) { PhIcon(icon, sizeDp = 24) }
+        CremaIconTone.Standard -> IconButton(onClick, modifier) { PhIcon(icon, sizeDp = 24) }
+        CremaIconTone.Filled -> FilledIconButton(onClick, modifier) { PhIcon(icon, sizeDp = 24) }
+        CremaIconTone.Tonal -> FilledTonalIconButton(onClick, modifier) { PhIcon(icon, sizeDp = 24) }
     }
 }
 
@@ -119,8 +159,8 @@ fun CremaCard(
 
 // ── Switch ──────────────────────────────────────────────────────────────────
 @Composable
-fun CremaSwitch(checked: Boolean, onCheckedChange: (Boolean) -> Unit, enabled: Boolean = true) {
-    Switch(checked = checked, onCheckedChange = onCheckedChange, enabled = enabled)
+fun CremaSwitch(checked: Boolean, onCheckedChange: (Boolean) -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true) {
+    Switch(checked = checked, onCheckedChange = onCheckedChange, modifier = modifier, enabled = enabled)
 }
 
 // ── Segmented button (single-select) ────────────────────────────────────────
@@ -146,15 +186,16 @@ fun CremaSegmentedButton(
 
 // ── Chips ─────────────────────────────────────────────────────────────────
 @Composable
-fun CremaAssistChip(label: String, icon: String? = null, onClick: () -> Unit) {
-    AssistChip(onClick = onClick, label = { Text(label) },
+fun CremaAssistChip(label: String, modifier: Modifier = Modifier, icon: String? = null, onClick: () -> Unit) {
+    AssistChip(onClick = onClick, modifier = modifier, label = { Text(label) },
         leadingIcon = icon?.let { { PhIcon(it, sizeDp = 18) } })
 }
 
 @Composable
-fun CremaFilterChip(label: String, selected: Boolean, count: Int? = null, icon: String? = null, onClick: () -> Unit) {
+fun CremaFilterChip(label: String, selected: Boolean, modifier: Modifier = Modifier, count: Int? = null, icon: String? = null, onClick: () -> Unit) {
     FilterChip(
         selected = selected, onClick = onClick,
+        modifier = modifier,
         label = { if (count != null) Text("$label  $count") else Text(label) },
         leadingIcon = icon?.let { { PhIcon(it, sizeDp = 18) } },
     )
@@ -172,8 +213,9 @@ fun CremaStepper(
     min: Double = 0.0,
     max: Double = 100.0,
     fmt: (Double) -> String = { String.format("%.1f", it) },
+    modifier: Modifier = Modifier,
 ) {
-    Column {
+    Column(modifier) {
         if (label != null) Eyebrow(label, Modifier.padding(bottom = 6.dp))
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             FilledTonalIconButton(onClick = { onChange((value - step).coerceAtLeast(min)) }) { PhIcon("minus") }

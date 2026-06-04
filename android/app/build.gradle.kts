@@ -94,6 +94,12 @@ dependencies {
     implementation("androidx.compose.ui:ui-text-google-fonts")
     // Navigation for the 6-destination rail + 2 pushed editors (AppNavHost).
     implementation("androidx.navigation:navigation-compose:2.8.5")
+    // Phosphor icons as Compose ImageVectors — the PhIcon binding in
+    // CremaComponents maps each screen's kebab-case glyph name to a regular-weight
+    // vector. Pure-Kotlin vector lib (no Compose-compiler version coupling). NOTE:
+    // with isMinifyEnabled=false the full icon set ships in the APK; enabling R8
+    // (release) prunes it to just the ~18 referenced glyphs.
+    implementation("com.adamglin:phosphor-icon:1.0.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
 
     // UniFFI's generated Kotlin depends on JNA for the FFI calls and on
