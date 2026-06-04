@@ -41,8 +41,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coffee.crema.beans.daysOffRoast
+import coffee.crema.beans.roastBand
 import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager
+import coffee.crema.core.Bean
+import coffee.crema.core.Roaster
 import coffee.crema.profiles.CremaProfile
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.components.CremaCard
@@ -81,6 +85,7 @@ fun BrewScreen(
     val connected = ui.bleState == De1BleManager.State.READY
     val scaleConnected = ui.scaleState == ScaleBleManager.State.READY
     val active = ui.profiles.firstOrNull { it.id == ui.activeProfileId }
+    val activeBean = ui.beans.firstOrNull { it.id == ui.activeBeanId }
     val running = ui.shotInProgress
     val espressoActive = ui.machineStateName == "Espresso"
     var quickOpen by remember { mutableStateOf(false) }
@@ -100,6 +105,10 @@ fun BrewScreen(
                 onSelectProfile = vm::setActiveProfile,
                 uploading = ui.profileUploading,
                 uploadProgress = ui.profileUploadProgress,
+                activeBean = activeBean,
+                beans = ui.beans,
+                roasters = ui.roasters,
+                onSelectBean = vm::setActiveBean,
                 onOpenQuick = { quickOpen = true },
             )
             Row(
@@ -192,6 +201,10 @@ private fun BrewHeader(
     onSelectProfile: (String) -> Unit,
     uploading: Boolean,
     uploadProgress: String?,
+    activeBean: Bean?,
+    beans: List<Bean>,
+    roasters: List<Roaster>,
+    onSelectBean: (String) -> Unit,
     onOpenQuick: () -> Unit,
 ) {
     Row(
@@ -210,7 +223,7 @@ private fun BrewHeader(
         )
         Spacer(Modifier.weight(1f))
         Box(Modifier.width(1.dp).height(44.dp).background(MaterialTheme.colorScheme.outlineVariant))
-        BeanBlock()
+        BeanBlock(activeBean = activeBean, beans = beans, roasters = roasters, onSelect = onSelectBean)
         QuickControlsPill(onClick = onOpenQuick)
     }
 }
@@ -307,22 +320,72 @@ private fun ProfileBlock(
 }
 
 @Composable
-private fun BeanBlock() {
-    Column(
-        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
-        verticalArrangement = Arrangement.spacedBy(2.dp),
-    ) {
-        Eyebrow("Bean")
-        Text(
-            "No bean selected",
-            style = MaterialTheme.typography.titleLarge.copy(fontSize = 18.sp, lineHeight = 22.sp),
-            color = MaterialTheme.colorScheme.onSurface,
-        )
-        Text(
-            "Bean library arrives in M3",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
-        )
+private fun BeanBlock(
+    activeBean: Bean?,
+    beans: List<Bean>,
+    roasters: List<Roaster>,
+    onSelect: (String) -> Unit,
+) {
+    var open by remember { mutableStateOf(false) }
+    val roasterNameOf: (Bean) -> String? = { b ->
+        b.roasterId?.let { rid -> roasters.firstOrNull { it.id == rid }?.name }
+    }
+    Box {
+        Column(
+            modifier = Modifier
+                .clip(RoundedCornerShape(12.dp))
+                .clickable(enabled = beans.isNotEmpty()) { open = true }
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Eyebrow("Bean")
+            Text(
+                activeBean?.let { listOfNotNull(roasterNameOf(it), it.name).joinToString(" · ") } ?: "No bean selected",
+                style = MaterialTheme.typography.titleLarge.copy(fontSize = 18.sp, lineHeight = 22.sp),
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (activeBean != null) {
+                val meta = listOfNotNull(
+                    activeBean.origin.country,
+                    activeBean.origin.processing,
+                    roastBand(activeBean.roastLevel?.toInt()),
+                    daysOffRoast(activeBean.roastedOn)?.let { "${it}d off roast" },
+                ).joinToString(" · ")
+                if (meta.isNotBlank()) {
+                    Text(
+                        meta,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            } else {
+                Text(
+                    "Add beans in the Beans tab",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                )
+            }
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            beans.forEach { b ->
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            listOfNotNull(roasterNameOf(b), b.name).joinToString(" · "),
+                            style = MaterialTheme.typography.bodyLarge,
+                        )
+                    },
+                    onClick = { onSelect(b.id); open = false },
+                    trailingIcon = if (b.id == activeBean?.id) {
+                        { PhIcon("check", sizeDp = 16, tint = MaterialTheme.colorScheme.primary) }
+                    } else null,
+                )
+            }
+        }
     }
 }
 
