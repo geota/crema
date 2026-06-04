@@ -1,6 +1,5 @@
 package coffee.crema.ui.screens
 
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -25,22 +24,18 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager
 import coffee.crema.profiles.CremaProfile
-import coffee.crema.profiles.ProfileSegment
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.components.CremaButton
 import coffee.crema.ui.components.CremaButtonVariant
 import coffee.crema.ui.components.CremaCard
 import coffee.crema.ui.components.CremaNavigationRail
 import coffee.crema.ui.components.PhIcon
-import coffee.crema.ui.theme.CremaTheme
 
 /*
  * Profiles (library) — M3 v1. A grid of profile cards over the core's built-in
@@ -124,18 +119,15 @@ private fun ProfileCard(
     onDuplicate: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    val tel = CremaTheme.telemetry
     val isCustom = profile.source == "custom"
     CremaCard(Modifier.fillMaxWidth()) {
         Column(
             Modifier.fillMaxWidth().padding(14.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            CurvePreview(
+            CanvasProfilePreview(
                 segments = profile.segments,
-                pressureColor = tel.pressure,
-                flowColor = tel.flow,
-                modifier = Modifier.fillMaxWidth().height(56.dp),
+                modifier = Modifier.fillMaxWidth().height(76.dp),
             )
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
@@ -196,35 +188,5 @@ private fun Pill(text: String) {
     }
 }
 
-/**
- * A compact pressure/flow target preview: one horizontal line per segment at its
- * target value (height ∝ target, width ∝ duration), coloured by mode
- * (pressure = sage, flow = blue). A stepped sketch of the recipe, not the
- * sampled curve — enough to recognise a profile at a glance.
- */
-@Composable
-private fun CurvePreview(
-    segments: List<ProfileSegment>,
-    pressureColor: Color,
-    flowColor: Color,
-    modifier: Modifier,
-) {
-    Canvas(modifier) {
-        if (segments.isEmpty()) return@Canvas
-        val totalTime = segments.sumOf { it.time.toDouble() }.toFloat().coerceAtLeast(0.01f)
-        val maxVal = (segments.maxOfOrNull { it.target } ?: 10f).coerceAtLeast(10f)
-        val stroke = 2.dp.toPx()
-        var x = 0f
-        segments.forEach { seg ->
-            val segW = (seg.time / totalTime) * size.width
-            val y = size.height - (seg.target / maxVal) * size.height
-            drawLine(
-                color = if (seg.mode == "flow") flowColor else pressureColor,
-                start = Offset(x, y),
-                end = Offset(x + segW, y),
-                strokeWidth = stroke,
-            )
-            x += segW
-        }
-    }
-}
+// The profile-card curve preview is now CanvasProfilePreview (a faithful Canvas
+// port of the web ProfilePreview) — see CanvasProfilePreview.kt.

@@ -71,8 +71,13 @@ data class ProfileSegment(
     /** Target value — bar (pressure) or ml/s (flow), per [mode]. Drives the
      *  profile-card curve preview. */
     val target: Float = 0f,
+    /** How the segment ramps to its target — `"smooth"` (cubic ease) | `"fast"`
+     *  (near-vertical step). Drives the sampled curve shape (web `sampleCurve`). */
+    val ramp: String? = null,
     /** Segment duration, seconds (float — the DE1 carries 0.1 s frames). */
     val time: Float = 0f,
+    /** Target temperature, °C — drives the preview's stepped temperature line. */
+    val temp: Float? = null,
     /** Structured early-exit condition, or null. */
     val exit: SegmentExit? = null,
 )
