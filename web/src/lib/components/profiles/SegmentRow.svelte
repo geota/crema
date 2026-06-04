@@ -36,7 +36,7 @@
 	import QuickStepper from '$lib/components/brew/QuickStepper.svelte';
 	import QuickSplitLabel from '$lib/components/brew/QuickSplitLabel.svelte';
 	import { getSettingsStore, unitLabel } from '$lib/settings';
-	import { MAX_TOTAL_VOLUME_ML, MIN_TOTAL_VOLUME_ML } from '$lib/profiles/bounds';
+	import { ProfileBounds } from '$lib/profiles/bounds';
 
 	const settings = getSettingsStore();
 
@@ -331,8 +331,8 @@
 				<QuickStepper
 					value={seg.volumeLimitMl}
 					dimension="volume"
-					min={MIN_TOTAL_VOLUME_ML}
-					max={MAX_TOTAL_VOLUME_ML}
+					min={ProfileBounds.MIN_TOTAL_VOLUME_ML}
+					max={ProfileBounds.MAX_TOTAL_VOLUME_ML}
 					step={5}
 					onChange={(v) => onEdit({ volumeLimitMl: Math.round(v) })}
 				/>
