@@ -1,5 +1,6 @@
 package coffee.crema.ui.screens
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -42,6 +43,7 @@ import coffee.crema.ui.components.CremaButton
 import coffee.crema.ui.components.CremaButtonVariant
 import coffee.crema.ui.components.CremaCard
 import coffee.crema.ui.components.CremaNavigationRail
+import coffee.crema.ui.components.Eyebrow
 import coffee.crema.ui.components.PhIcon
 
 /*
@@ -79,13 +81,14 @@ fun BeansScreen(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Eyebrow("Library")
                     Text(
                         "Beans",
                         style = MaterialTheme.typography.headlineLarge,
                         color = MaterialTheme.colorScheme.onSurface,
                     )
                     Text(
-                        "${ui.beans.size} bags",
+                        "${ui.beans.size} bags · ${ui.roasters.size} roasters · ${ui.beans.count { it.id == ui.activeBeanId }} active",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -102,11 +105,11 @@ fun BeansScreen(
                 }
             } else {
                 LazyVerticalGrid(
-                    columns = GridCells.Adaptive(minSize = 260.dp),
-                    modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 20.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                    contentPadding = PaddingValues(top = 4.dp, bottom = 20.dp),
+                    columns = GridCells.Fixed(3),
+                    modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 24.dp),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                    contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp),
                 ) {
                     items(ui.beans, key = { it.id }) { bean ->
                         BeanCard(
@@ -142,45 +145,72 @@ private fun BeanCard(
 ) {
     val band = roastBand(bean.roastLevel?.toInt())
     val days = daysOffRoast(bean.roastedOn)
-    CremaCard(Modifier.fillMaxWidth()) {
-        Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    if (roasterName != null) {
-                        Text(
-                            roasterName,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                    Text(
-                        bean.name,
-                        style = MaterialTheme.typography.titleLarge.copy(fontSize = 18.sp, lineHeight = 22.sp),
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    FilledTonalIconButton(onClick = onEdit) { PhIcon("pencil-simple", sizeDp = 18) }
-                    FilledTonalIconButton(onClick = onDelete) { PhIcon("trash", sizeDp = 18) }
+    val frozen = bean.frozenOn != null
+    val tagList = bean.tags?.filter { it.isNotBlank() }.orEmpty()
+    CremaCard(
+        modifier = Modifier.fillMaxWidth(),
+        container = if (isActive) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainer,
+        shape = RoundedCornerShape(16.dp),
+        border = if (isActive) BorderStroke(1.dp, MaterialTheme.colorScheme.primary) else null,
+    ) {
+        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                if (roasterName != null) Eyebrow(roasterName)
+                Text(
+                    bean.name,
+                    style = MaterialTheme.typography.titleLarge.copy(fontSize = 19.sp, lineHeight = 24.sp),
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                bean.origin.country?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
-            val meta = listOfNotNull(band, days?.let { "${it}d off roast" }).joinToString(" · ")
-            if (meta.isNotEmpty()) {
-                Text(meta, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            val pills = buildList {
+                band?.let { add(it to true) }
+                if (frozen) add("Frozen" to false)
+                if (bean.decaf) add("Decaf" to false)
+                tagList.forEach { add(it to false) }
             }
-            if (isActive) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    PhIcon("check", sizeDp = 16, tint = MaterialTheme.colorScheme.primary)
-                    Text("Active", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+            if (pills.isNotEmpty()) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    pills.take(4).forEach { (t, isRoast) -> Pill(t, roast = isRoast) }
                 }
-            } else {
-                CremaButton(onClick = onSetActive, variant = CremaButtonVariant.Tonal, label = "Set active")
+            }
+            val fresh = if (frozen) "Frozen" else days?.let { "${it}d off roast" }
+            if (fresh != null) {
+                Text(fresh, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                CremaButton(
+                    onClick = onSetActive,
+                    modifier = Modifier.weight(1f),
+                    variant = if (isActive) CremaButtonVariant.Outlined else CremaButtonVariant.Tonal,
+                    icon = if (isActive) "check-circle" else null,
+                    label = if (isActive) "Active for brew" else "Set active",
+                )
+                FilledTonalIconButton(onClick = onEdit) { PhIcon("pencil-simple", sizeDp = 18) }
+                FilledTonalIconButton(onClick = onDelete) { PhIcon("trash", sizeDp = 18) }
             }
         }
+    }
+}
+
+// Roast variant = uppercase copper-tinted; everything else = neutral.
+@Composable
+private fun Pill(text: String, roast: Boolean = false) {
+    Box(
+        Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(if (roast) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceContainerHighest)
+            .padding(horizontal = 10.dp, vertical = 3.dp),
+    ) {
+        Text(
+            if (roast) text.uppercase() else text,
+            style = MaterialTheme.typography.labelSmall,
+            color = if (roast) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
