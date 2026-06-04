@@ -4,7 +4,6 @@ import androidx.compose.runtime.Composable
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
-import coffee.crema.ui.screens.ProfileEditScreen
 
 /**
  * The app shell: the six rail destinations + two pushed editors from the
@@ -43,6 +42,8 @@ fun AppNavHost(
     settingsContent: @Composable (onNav: (String) -> Unit) -> Unit,
     /** The bean editor (pushed `bean-edit` route); receives the host's back action. */
     beanEditContent: @Composable (onBack: () -> Unit) -> Unit,
+    /** The profile editor (pushed `profile-edit` route); receives the host's back action. */
+    profileEditContent: @Composable (onBack: () -> Unit) -> Unit,
     debugContent: @Composable () -> Unit,
 ) {
     val nav = rememberNavController()
@@ -61,7 +62,7 @@ fun AppNavHost(
         // The fully-designed exemplar, wired to live VM state by the caller.
         composable("scale") { scaleContent(onNav) }
         composable("settings") { settingsContent(onNav) }
-        composable("profile-edit") { ProfileEditScreen(onBack = onBack) }
+        composable("profile-edit") { profileEditContent(onBack) }
         composable("bean-edit") { beanEditContent(onBack) }
         composable("debug") { debugContent() }
     }
