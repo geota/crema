@@ -3,6 +3,7 @@ package coffee.crema.ui.screens
 import androidx.compose.foundation.Canvas
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -62,10 +63,13 @@ fun CanvasShotChart(
     val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
     val nowColor = MaterialTheme.colorScheme.primary
     val textMeasurer = rememberTextMeasurer()
-    val labelStyle = TextStyle(color = labelColor, fontSize = 10.sp, fontFamily = JetBrainsMono)
+    val labelStyle = remember(labelColor) { TextStyle(color = labelColor, fontSize = 10.sp, fontFamily = JetBrainsMono) }
 
     // Fixed channel order + plot transforms (temp/weight/volume ride the ÷10 scale).
-    val channels = listOf(
+    // Remembered (keyed on the theme) so the 8 specs + their lambdas aren't
+    // reallocated on every telemetry frame (~25 Hz during a shot).
+    val channels = remember(tel) {
+        listOf(
         CanvasChannel("pressure", tel.pressure, 2.6f) { it.pressure },
         CanvasChannel("flow", tel.flow, 2.2f) { it.flow },
         CanvasChannel("headTemp", tel.temp, 2.2f) { it.headTemp / 10f },
@@ -79,9 +83,12 @@ fun CanvasShotChart(
             1.5f,
             available = { s -> s.any { (it.resistanceWeight ?: it.resistance) != null } },
         ) { ((it.resistanceWeight ?: it.resistance) ?: 0f).coerceIn(0f, 10f) },
-    )
+        )
+    }
     // The dashed pressure setpoint rides along whenever pressure is shown (web parity).
-    val setpoint = CanvasChannel("setPressure", tel.pressure, 1.2f, dashed = true, alpha = 0.6f) { it.setGroupPressure }
+    val setpoint = remember(tel) {
+        CanvasChannel("setPressure", tel.pressure, 1.2f, dashed = true, alpha = 0.6f) { it.setGroupPressure }
+    }
     val active = buildList {
         addAll(channels.filter { it.key in enabledChannels && it.available(samples) })
         if ("pressure" in enabledChannels) add(setpoint)

@@ -106,12 +106,13 @@ dependencies {
     // The generated `core/bindings/crema-core.kt` types are @Serializable.
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
 
-    // Vico — the Cartesian chart library behind the live shot-telemetry chart
-    // (ShotChart / brew dashboard, History static charts). The web PWA renders
-    // the same chart with uPlot; the Android chart matches that design (one
-    // shared 0–10 value scale, temp/weight ÷10, dual-labelled axes). v3.x is
-    // Compose-native; pinned exactly (3.x had breaking changes from 2.x).
-    implementation("com.patrykandpatrick.vico:compose:3.2.1")
+    // Charts are hand-rolled Compose Canvas (CanvasShotChart, ProfileCurveChart) —
+    // a faithful port of the web PWA's uPlot design (shared 0–10 scale, temp/weight
+    // ÷10, dual-labelled axes, playhead, draggable profile curve). No chart library:
+    // a 3-way bake-off (Canvas vs ComposeCharts vs Charty) found both libs are
+    // index-x category plotters with no real-seconds axis, no dual axis, and no
+    // plot-coordinate access (so no playhead / no editor drag). Canvas owns the
+    // value→pixel transform, so the whole design is just arithmetic.
 
     // Nordic Kotlin-BLE-Library (central role) — the BLE stack behind
     // `NordicBleTransport`. The hand-rolled `BluetoothGatt` layer was migrated
