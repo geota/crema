@@ -70,7 +70,8 @@ val CremaTypography = Typography(
  * or set fontFeatureSettings = "tnum" on the TextStyle directly.
  */
 class CremaReadoutType(
-    val readoutXl: TextStyle = mono(96, 96, -0.026f), // scale weight hero / huge numerals
+    val readoutHero: TextStyle = mono(132, 132, -0.038f), // scale weight hero (signature number; tablet 132sp)
+    val readoutXl: TextStyle = mono(96, 96, -0.026f), // huge numerals
     val readoutLg: TextStyle = mono(56, 56, -0.027f), // tare value, big channel
     val readoutMd: TextStyle = mono(36, 40, -0.022f), // channel values
     val readoutSm: TextStyle = mono(22, 28, -0.009f), // inline stats, list values

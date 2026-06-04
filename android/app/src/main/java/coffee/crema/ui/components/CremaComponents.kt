@@ -35,6 +35,45 @@ import com.adamglin.phosphoricons.regular.SpeakerHigh
 import com.adamglin.phosphoricons.regular.Timer
 import com.adamglin.phosphoricons.regular.Trash
 import com.adamglin.phosphoricons.regular.X
+import com.adamglin.phosphoricons.regular.CaretDown
+import com.adamglin.phosphoricons.regular.CaretRight
+import com.adamglin.phosphoricons.regular.CheckCircle
+import com.adamglin.phosphoricons.regular.DotsThreeVertical
+import com.adamglin.phosphoricons.regular.Export
+import com.adamglin.phosphoricons.regular.MagnifyingGlass
+import com.adamglin.phosphoricons.regular.Shapes
+import com.adamglin.phosphoricons.regular.Shuffle
+import com.adamglin.phosphoricons.regular.Star
+import com.adamglin.phosphoricons.regular.UploadSimple
+import com.adamglin.phosphoricons.regular.ListBullets
+import com.adamglin.phosphoricons.regular.CoffeeBean
+import com.adamglin.phosphoricons.regular.ChartLine
+import com.adamglin.phosphoricons.regular.Scales
+import com.adamglin.phosphoricons.regular.BookmarkSimple
+import com.adamglin.phosphoricons.regular.Gauge
+import com.adamglin.phosphoricons.regular.Drop
+import com.adamglin.phosphoricons.regular.DropHalf
+import com.adamglin.phosphoricons.regular.Thermometer
+import com.adamglin.phosphoricons.regular.ShareNetwork
+import com.adamglin.phosphoricons.regular.Wrench
+import com.adamglin.phosphoricons.regular.Info
+import com.adamglin.phosphoricons.regular.Snowflake
+import com.adamglin.phosphoricons.regular.Archive
+import com.adamglin.phosphoricons.regular.Storefront
+import com.adamglin.phosphoricons.regular.Monitor
+import com.adamglin.phosphoricons.regular.ArrowCircleUp
+import com.adamglin.phosphoricons.regular.ArrowSquareOut
+import com.adamglin.phosphoricons.regular.ArrowsClockwise
+import com.adamglin.phosphoricons.regular.ArrowsLeftRight
+import com.adamglin.phosphoricons.regular.DownloadSimple
+import com.adamglin.phosphoricons.regular.PaperPlaneTilt
+import com.adamglin.phosphoricons.regular.Funnel
+import com.adamglin.phosphoricons.regular.Sparkle
+import com.adamglin.phosphoricons.regular.Wind
+import com.adamglin.phosphoricons.regular.Target
+import com.adamglin.phosphoricons.regular.Play
+import com.adamglin.phosphoricons.regular.Cloud
+import com.adamglin.phosphoricons.regular.Stop
 
 /*
  * Crema component library — a faithful port of tablet/m3-components.jsx.
@@ -75,6 +114,45 @@ fun PhIcon(name: String, modifier: Modifier = Modifier, tint: Color = LocalConte
         "timer" -> PhosphorIcons.Regular.Timer
         "trash" -> PhosphorIcons.Regular.Trash
         "x" -> PhosphorIcons.Regular.X
+        "caret-down" -> PhosphorIcons.Regular.CaretDown
+        "caret-right" -> PhosphorIcons.Regular.CaretRight
+        "check-circle" -> PhosphorIcons.Regular.CheckCircle
+        "dots-three-vertical" -> PhosphorIcons.Regular.DotsThreeVertical
+        "export" -> PhosphorIcons.Regular.Export
+        "magnifying-glass" -> PhosphorIcons.Regular.MagnifyingGlass
+        "shapes" -> PhosphorIcons.Regular.Shapes
+        "shuffle" -> PhosphorIcons.Regular.Shuffle
+        "star" -> PhosphorIcons.Regular.Star
+        "upload-simple" -> PhosphorIcons.Regular.UploadSimple
+        "list-bullets" -> PhosphorIcons.Regular.ListBullets
+        "coffee-bean" -> PhosphorIcons.Regular.CoffeeBean
+        "chart-line" -> PhosphorIcons.Regular.ChartLine
+        "scales" -> PhosphorIcons.Regular.Scales
+        "bookmark-simple" -> PhosphorIcons.Regular.BookmarkSimple
+        "gauge" -> PhosphorIcons.Regular.Gauge
+        "drop" -> PhosphorIcons.Regular.Drop
+        "drop-half" -> PhosphorIcons.Regular.DropHalf
+        "thermometer" -> PhosphorIcons.Regular.Thermometer
+        "share-network" -> PhosphorIcons.Regular.ShareNetwork
+        "wrench" -> PhosphorIcons.Regular.Wrench
+        "info" -> PhosphorIcons.Regular.Info
+        "snowflake" -> PhosphorIcons.Regular.Snowflake
+        "archive" -> PhosphorIcons.Regular.Archive
+        "storefront" -> PhosphorIcons.Regular.Storefront
+        "monitor" -> PhosphorIcons.Regular.Monitor
+        "arrow-circle-up" -> PhosphorIcons.Regular.ArrowCircleUp
+        "arrow-square-out" -> PhosphorIcons.Regular.ArrowSquareOut
+        "arrows-clockwise" -> PhosphorIcons.Regular.ArrowsClockwise
+        "arrows-left-right" -> PhosphorIcons.Regular.ArrowsLeftRight
+        "download-simple" -> PhosphorIcons.Regular.DownloadSimple
+        "paper-plane-tilt" -> PhosphorIcons.Regular.PaperPlaneTilt
+        "funnel" -> PhosphorIcons.Regular.Funnel
+        "sparkle" -> PhosphorIcons.Regular.Sparkle
+        "wind" -> PhosphorIcons.Regular.Wind
+        "target" -> PhosphorIcons.Regular.Target
+        "play" -> PhosphorIcons.Regular.Play
+        "cloud" -> PhosphorIcons.Regular.Cloud
+        "stop" -> PhosphorIcons.Regular.Stop
         else -> PhosphorIcons.Regular.Question // unknown-name fallback
     }
     Icon(
