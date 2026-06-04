@@ -114,6 +114,7 @@ fun BeansScreen(
                             roasterName = ui.roasters.firstOrNull { it.id == bean.roasterId }?.name,
                             isActive = bean.id == ui.activeBeanId,
                             onSetActive = { vm.setActiveBean(bean.id) },
+                            onEdit = { vm.startEditBean(bean.id); onNav("bean-edit") },
                             onDelete = { vm.deleteBean(bean.id) },
                         )
                     }
@@ -136,6 +137,7 @@ private fun BeanCard(
     roasterName: String?,
     isActive: Boolean,
     onSetActive: () -> Unit,
+    onEdit: () -> Unit,
     onDelete: () -> Unit,
 ) {
     val band = roastBand(bean.roastLevel?.toInt())
@@ -161,7 +163,10 @@ private fun BeanCard(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                FilledTonalIconButton(onClick = onDelete) { PhIcon("trash", sizeDp = 18) }
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    FilledTonalIconButton(onClick = onEdit) { PhIcon("pencil-simple", sizeDp = 18) }
+                    FilledTonalIconButton(onClick = onDelete) { PhIcon("trash", sizeDp = 18) }
+                }
             }
             val meta = listOfNotNull(band, days?.let { "${it}d off roast" }).joinToString(" · ")
             if (meta.isNotEmpty()) {

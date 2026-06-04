@@ -38,6 +38,7 @@ import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager
 import coffee.crema.core.ModeInfo
 import coffee.crema.core.RangeCapability
+import coffee.crema.ui.screens.BeanEditScreen
 import coffee.crema.ui.screens.BeansScreen
 import coffee.crema.ui.screens.BrewScreen
 import coffee.crema.ui.screens.HistoryScreen
@@ -123,6 +124,9 @@ class MainActivity : ComponentActivity() {
                     },
                     settingsContent = { navTo ->
                         SettingsScreen(viewModel, onNav = navTo, onConnect = onRailConnect)
+                    },
+                    beanEditContent = { back ->
+                        BeanEditScreen(viewModel, onBack = back)
                     },
                     debugContent = {
                         Surface(modifier = Modifier.fillMaxSize()) {
