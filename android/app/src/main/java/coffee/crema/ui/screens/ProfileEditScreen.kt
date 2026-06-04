@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.width
+import coffee.crema.profiles.SegmentEdit
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.theme.CremaTheme
 import coffee.crema.ui.components.CremaButton
@@ -65,6 +66,8 @@ private val ROAST_OPTIONS = listOf(
     SegOption("medium", "Medium"),
     SegOption("dark", "Dark"),
 )
+private val TYPE_OPTIONS = listOf(SegOption("pressure", "Pressure"), SegOption("flow", "Flow"))
+private val RAMP_OPTIONS = listOf(SegOption("smooth", "Smooth"), SegOption("fast", "Fast"))
 
 @Composable
 fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
@@ -106,13 +109,23 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
     var yieldG by remember(profile.id) { mutableStateOf(profile.yieldOut.toDouble()) }
     var brewTemp by remember(profile.id) { mutableStateOf(profile.brewTemp.toDouble()) }
     var maxVol by remember(profile.id) { mutableStateOf(profile.maxTotalVolumeMl.toDouble()) }
-    // Per-segment target / time as parallel snapshot lists (positional with the
-    // profile's segments; the non-curve editor never changes the count).
-    val segTargets = remember(profile.id) {
-        mutableStateListOf<Float>().apply { addAll(profile.segments.map { it.target }) }
-    }
-    val segTimes = remember(profile.id) {
-        mutableStateListOf<Float>().apply { addAll(profile.segments.map { it.time }) }
+    // Per-segment editable state (positional with the profile's segments; the
+    // editor doesn't add / remove segments yet).
+    val segs = remember(profile.id) {
+        mutableStateListOf<SegmentEdit>().apply {
+            addAll(
+                profile.segments.map {
+                    SegmentEdit(
+                        name = it.name,
+                        mode = it.mode ?: "pressure",
+                        ramp = it.ramp ?: "smooth",
+                        target = it.target,
+                        time = it.time,
+                        temp = it.temp ?: profile.brewTemp,
+                    )
+                },
+            )
+        }
     }
 
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
@@ -138,9 +151,7 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                         yieldOut = yieldG.toFloat(),
                         brewTemp = brewTemp.toFloat(),
                         maxTotalVolumeMl = maxVol.toInt(),
-                        segments = profile.segments.indices.map {
-                            (segTargets.getOrNull(it) ?: 0f) to (segTimes.getOrNull(it) ?: 0f)
-                        },
+                        segments = segs.toList(),
                     )
                     onBack()
                 },
@@ -227,41 +238,81 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                 EditorCard {
                     Eyebrow("Curve · drag the points")
                     ProfileCurveChart(
-                        targets = segTargets.toList(),
-                        times = segTimes.toList(),
-                        modes = profile.segments.map { it.mode },
+                        targets = segs.map { it.target },
+                        times = segs.map { it.time },
+                        modes = segs.map { it.mode },
                         modifier = Modifier.fillMaxWidth().height(260.dp),
                         onSegmentEdit = { i, target, time ->
-                            if (i in segTargets.indices) segTargets[i] = target
-                            if (i in segTimes.indices) segTimes[i] = time
+                            if (i in segs.indices) segs[i] = segs[i].copy(target = target, time = time)
                         },
                     )
                 }
 
                 EditorCard {
-                    Eyebrow("Segments")
-                    if (profile.segments.isEmpty()) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Eyebrow("Segments", Modifier.weight(1f))
+                        CremaButton(
+                            onClick = {
+                                val last = segs.lastOrNull()
+                                segs.add(
+                                    SegmentEdit(
+                                        name = "New segment",
+                                        mode = last?.mode ?: "pressure",
+                                        ramp = last?.ramp ?: "smooth",
+                                        target = last?.target ?: 6f,
+                                        time = 6f,
+                                        temp = last?.temp ?: brewTemp.toFloat(),
+                                    ),
+                                )
+                            },
+                            icon = "plus",
+                            label = "Add",
+                        )
+                    }
+                    if (segs.isEmpty()) {
                         Text(
                             "This profile has no segments.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    profile.segments.forEachIndexed { i, seg ->
+                    segs.forEachIndexed { i, seg ->
                         val isFlow = seg.mode == "flow"
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text(
-                                "${i + 1}. ${seg.name.ifBlank { "Step ${i + 1}" }}  ·  ${if (isFlow) "Flow" else "Pressure"}",
-                                style = MaterialTheme.typography.titleSmall,
-                                color = MaterialTheme.colorScheme.onSurface,
-                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    "${i + 1}. ${seg.name.ifBlank { "Step ${i + 1}" }}",
+                                    modifier = Modifier.weight(1f),
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
+                                if (segs.size > 1) {
+                                    CremaIconButton(icon = "trash", onClick = { if (i in segs.indices) segs.removeAt(i) })
+                                }
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Box(Modifier.weight(1f)) {
+                                    CremaSegmentedButton(
+                                        options = TYPE_OPTIONS,
+                                        value = seg.mode ?: "pressure",
+                                        onChange = { if (i in segs.indices) segs[i] = segs[i].copy(mode = it) },
+                                    )
+                                }
+                                Box(Modifier.weight(1f)) {
+                                    CremaSegmentedButton(
+                                        options = RAMP_OPTIONS,
+                                        value = seg.ramp ?: "smooth",
+                                        onChange = { if (i in segs.indices) segs[i] = segs[i].copy(ramp = it) },
+                                    )
+                                }
+                            }
                             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                                 Box(Modifier.weight(1f)) {
                                     CremaStepper(
                                         label = "Target",
-                                        value = (segTargets.getOrNull(i) ?: 0f).toDouble(),
+                                        value = seg.target.toDouble(),
                                         unit = if (isFlow) "ml/s" else "bar",
-                                        onChange = { if (i < segTargets.size) segTargets[i] = it.toFloat() },
+                                        onChange = { if (i in segs.indices) segs[i] = segs[i].copy(target = it.toFloat()) },
                                         step = 0.1,
                                         min = 0.0,
                                         max = if (isFlow) 10.0 else 12.0,
@@ -270,15 +321,24 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                                 Box(Modifier.weight(1f)) {
                                     CremaStepper(
                                         label = "Time",
-                                        value = (segTimes.getOrNull(i) ?: 0f).toDouble(),
+                                        value = seg.time.toDouble(),
                                         unit = "s",
-                                        onChange = { if (i < segTimes.size) segTimes[i] = it.toFloat() },
+                                        onChange = { if (i in segs.indices) segs[i] = segs[i].copy(time = it.toFloat()) },
                                         step = 0.5,
                                         min = 0.0,
                                         max = 120.0,
                                     )
                                 }
                             }
+                            CremaStepper(
+                                label = "Temp",
+                                value = (seg.temp ?: 93f).toDouble(),
+                                unit = "°C",
+                                onChange = { if (i in segs.indices) segs[i] = segs[i].copy(temp = it.toFloat()) },
+                                step = 0.5,
+                                min = 20.0,
+                                max = 105.0,
+                            )
                         }
                     }
                 }
