@@ -19,6 +19,7 @@ import coffee.crema.beans.newBean
 import coffee.crema.beans.newRoaster
 import coffee.crema.history.HistoryStore
 import coffee.crema.history.StoredShot
+import coffee.crema.history.downsampleForStorage
 import coffee.crema.ble.BleScanner
 import coffee.crema.ble.BleSessionRecorder
 import coffee.crema.ble.De1BleManager
@@ -712,6 +713,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             peakTemp = peakTemp,
             profileName = profile?.name,
             beanName = beanName,
+            // The buffer still holds the just-finished shot (cleared on the next
+            // ShotStarted); downsample it for the detail chart.
+            samples = downsampleForStorage(s.shotTelemetry),
         )
         val next = (listOf(shot) + s.history).take(HistoryStore.MAX_SHOTS)
         _ui.value = _ui.value.copy(history = next)

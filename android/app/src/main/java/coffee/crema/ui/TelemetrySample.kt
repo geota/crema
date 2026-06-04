@@ -1,5 +1,7 @@
 package coffee.crema.ui
 
+import kotlinx.serialization.Serializable
+
 /**
  * One buffered telemetry row — the chart's data shape. Mirrors the web shell's
  * `TelemetrySample` (`$lib/state/ui-state.svelte.ts`): the per-sample channels
@@ -12,7 +14,11 @@ package coffee.crema.ui
  * lifecycle the web uses. The live scalar fields on [MainUiState] (pressure,
  * flow, …) still update outside a shot to drive the resting channel cards; this
  * series only fills during extraction, which is when the chart draws curves.
+ *
+ * `@Serializable` so a downsampled slice can persist on a `StoredShot` for the
+ * History detail chart.
  */
+@Serializable
 data class TelemetrySample(
     /** Milliseconds since the shot began; the chart's x is `elapsedMs / 1000` s. */
     val elapsedMs: Long,

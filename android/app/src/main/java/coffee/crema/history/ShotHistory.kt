@@ -1,6 +1,7 @@
 package coffee.crema.history
 
 import android.content.Context
+import coffee.crema.ui.TelemetrySample
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
@@ -37,7 +38,28 @@ data class StoredShot(
     val profileName: String? = null,
     /** Active bean ("roaster · name") at capture, or null. */
     val beanName: String? = null,
+    /**
+     * A downsampled telemetry slice for the History detail chart (≤
+     * [SHOT_SAMPLE_CAP] points). Empty for shots captured before this field
+     * existed (additive — older records deserialise cleanly).
+     */
+    val samples: List<TelemetrySample> = emptyList(),
 )
+
+/** Max telemetry points stored per shot — enough for a faithful detail chart. */
+const val SHOT_SAMPLE_CAP: Int = 200
+
+/**
+ * Downsample a shot's telemetry to ≤ [SHOT_SAMPLE_CAP] points (keep every Nth,
+ * always including the last) so the persisted history stays small while the
+ * detail chart still reads faithfully.
+ */
+fun downsampleForStorage(samples: List<TelemetrySample>): List<TelemetrySample> {
+    if (samples.size <= SHOT_SAMPLE_CAP) return samples
+    val step = samples.size / SHOT_SAMPLE_CAP
+    val kept = samples.filterIndexed { i, _ -> i % step == 0 }
+    return if (kept.last() === samples.last()) kept else kept + samples.last()
+}
 
 /** File-backed JSON persistence for the shot log (`filesDir/shots.json`). */
 class HistoryStore(private val context: Context, private val json: Json) {
