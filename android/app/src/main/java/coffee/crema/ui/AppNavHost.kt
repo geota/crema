@@ -50,7 +50,19 @@ fun AppNavHost(
     // Rail destinations replace one another (single-top, no back-stack buildup);
     // editors + debug are pushed on top and pop back. Full tab state-saving is a
     // later polish item.
-    val onNav: (String) -> Unit = { dest -> nav.navigate(dest) { launchSingleTop = true } }
+    // Rail destinations: the standard bottom-nav pattern — single-top, save the
+    // outgoing tab's state and pop back to the start so the back stack doesn't
+    // grow as tabs are visited; pushed editors/debug just navigate normally.
+    val railRoutes = setOf("brew", "profiles", "beans", "history", "scale", "settings")
+    val onNav: (String) -> Unit = { dest ->
+        nav.navigate(dest) {
+            launchSingleTop = true
+            if (dest in railRoutes) {
+                popUpTo(nav.graph.startDestinationId) { saveState = true }
+                restoreState = true
+            }
+        }
+    }
     val onBack: () -> Unit = { nav.popBackStack() }
 
     NavHost(navController = nav, startDestination = "brew") {
