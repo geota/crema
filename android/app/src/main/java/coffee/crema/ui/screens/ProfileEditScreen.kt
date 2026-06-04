@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -32,7 +31,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.width
 import coffee.crema.ui.MainViewModel
+import coffee.crema.ui.theme.CremaTheme
 import coffee.crema.ui.components.CremaButton
 import coffee.crema.ui.components.CremaCard
 import coffee.crema.ui.components.CremaIconButton
@@ -145,113 +148,138 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                 label = "Save",
             )
         }
-        Column(
-            Modifier
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp)
-                .padding(bottom = 24.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            // ── Curve (drag the points; stays in lockstep with the steppers) ──
-            EditorCard {
-                Eyebrow("Curve · drag the points")
-                ProfileCurveChart(
-                    targets = segTargets.toList(),
-                    times = segTimes.toList(),
-                    modes = profile.segments.map { it.mode },
-                    modifier = Modifier.fillMaxWidth().height(200.dp),
-                    onSegmentEdit = { i, target, time ->
-                        if (i in segTargets.indices) segTargets[i] = target
-                        if (i in segTimes.indices) segTimes[i] = time
-                    },
-                )
-            }
-
-            // ── Identity ──────────────────────────────────────────────────────
-            EditorCard {
-                Eyebrow("Identity")
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    label = { Text("Name") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Eyebrow("Roast")
-                CremaSegmentedButton(options = ROAST_OPTIONS, value = roast, onChange = { roast = it })
-                Eyebrow("Tags")
-                TagChips(tags)
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        "Pinned to favorites",
-                        Modifier.weight(1f),
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurface,
+        // Two-pane: metadata/targets on the left, the curve + segments on the
+        // right (web ProfileEditor layout). Each pane scrolls independently.
+        Row(Modifier.weight(1f).fillMaxWidth()) {
+            Column(
+                Modifier
+                    .width(380.dp)
+                    .fillMaxHeight()
+                    .verticalScroll(rememberScrollState())
+                    .padding(start = 20.dp, end = 10.dp)
+                    .padding(bottom = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                EditorCard {
+                    Eyebrow("Identity")
+                    OutlinedTextField(
+                        value = name,
+                        onValueChange = { name = it },
+                        label = { Text("Name") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
                     )
-                    CremaSwitch(checked = pinned, onCheckedChange = { pinned = it })
-                }
-            }
-
-            // ── Targets ───────────────────────────────────────────────────────
-            EditorCard {
-                Eyebrow("Targets")
-                CremaStepper(label = "Dose", value = dose, unit = "g", onChange = { dose = it }, step = 0.1, min = 1.0, max = 60.0)
-                CremaStepper(label = "Yield", value = yieldG, unit = "g", onChange = { yieldG = it }, step = 0.5, min = 1.0, max = 200.0)
-                Text(
-                    "Ratio  1:%.2f".format(if (dose > 0.0) yieldG / dose else 0.0),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                CremaStepper(label = "Brew temp", value = brewTemp, unit = "°C", onChange = { brewTemp = it }, step = 0.5, min = 20.0, max = 105.0)
-                CremaStepper(
-                    label = "Max volume (0 = none)",
-                    value = maxVol,
-                    unit = "ml",
-                    onChange = { maxVol = it },
-                    step = 10.0,
-                    min = 0.0,
-                    max = 1023.0,
-                    fmt = { "%.0f".format(it) },
-                )
-            }
-
-            // ── Segments ──────────────────────────────────────────────────────
-            EditorCard {
-                Eyebrow("Segments")
-                if (profile.segments.isEmpty()) {
-                    Text(
-                        "This profile has no segments.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                profile.segments.forEachIndexed { i, seg ->
-                    val isFlow = seg.mode == "flow"
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Eyebrow("Roast")
+                    CremaSegmentedButton(options = ROAST_OPTIONS, value = roast, onChange = { roast = it })
+                    Eyebrow("Tags")
+                    TagChips(tags)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            "${i + 1}. ${seg.name.ifBlank { "Step ${i + 1}" }}  ·  ${if (isFlow) "Flow" else "Pressure"}",
-                            style = MaterialTheme.typography.titleSmall,
+                            "Pinned to favorites",
+                            Modifier.weight(1f),
+                            style = MaterialTheme.typography.bodyLarge,
                             color = MaterialTheme.colorScheme.onSurface,
                         )
-                        CremaStepper(
-                            label = "Target",
-                            value = (segTargets.getOrNull(i) ?: 0f).toDouble(),
-                            unit = if (isFlow) "ml/s" else "bar",
-                            onChange = { if (i < segTargets.size) segTargets[i] = it.toFloat() },
-                            step = 0.1,
-                            min = 0.0,
-                            max = if (isFlow) 10.0 else 12.0,
+                        CremaSwitch(checked = pinned, onCheckedChange = { pinned = it })
+                    }
+                }
+
+                EditorCard {
+                    Eyebrow("Targets")
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Box(Modifier.weight(1f)) {
+                            CremaStepper(label = "Dose", value = dose, unit = "g", onChange = { dose = it }, step = 0.1, min = 1.0, max = 60.0)
+                        }
+                        Box(Modifier.weight(1f)) {
+                            CremaStepper(label = "Yield", value = yieldG, unit = "g", onChange = { yieldG = it }, step = 0.5, min = 1.0, max = 200.0)
+                        }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Box(Modifier.weight(1f)) {
+                            CremaStepper(label = "Brew temp", value = brewTemp, unit = "°C", onChange = { brewTemp = it }, step = 0.5, min = 20.0, max = 105.0)
+                        }
+                        Box(Modifier.weight(1f)) {
+                            RatioReadout(if (dose > 0.0) yieldG / dose else 0.0)
+                        }
+                    }
+                    CremaStepper(
+                        label = "Max volume (0 = none)",
+                        value = maxVol,
+                        unit = "ml",
+                        onChange = { maxVol = it },
+                        step = 10.0,
+                        min = 0.0,
+                        max = 1023.0,
+                        fmt = { "%.0f".format(it) },
+                    )
+                }
+            }
+
+            Column(
+                Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .verticalScroll(rememberScrollState())
+                    .padding(start = 10.dp, end = 20.dp)
+                    .padding(bottom = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                EditorCard {
+                    Eyebrow("Curve · drag the points")
+                    ProfileCurveChart(
+                        targets = segTargets.toList(),
+                        times = segTimes.toList(),
+                        modes = profile.segments.map { it.mode },
+                        modifier = Modifier.fillMaxWidth().height(260.dp),
+                        onSegmentEdit = { i, target, time ->
+                            if (i in segTargets.indices) segTargets[i] = target
+                            if (i in segTimes.indices) segTimes[i] = time
+                        },
+                    )
+                }
+
+                EditorCard {
+                    Eyebrow("Segments")
+                    if (profile.segments.isEmpty()) {
+                        Text(
+                            "This profile has no segments.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
-                        CremaStepper(
-                            label = "Time",
-                            value = (segTimes.getOrNull(i) ?: 0f).toDouble(),
-                            unit = "s",
-                            onChange = { if (i < segTimes.size) segTimes[i] = it.toFloat() },
-                            step = 0.5,
-                            min = 0.0,
-                            max = 120.0,
-                        )
+                    }
+                    profile.segments.forEachIndexed { i, seg ->
+                        val isFlow = seg.mode == "flow"
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(
+                                "${i + 1}. ${seg.name.ifBlank { "Step ${i + 1}" }}  ·  ${if (isFlow) "Flow" else "Pressure"}",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                Box(Modifier.weight(1f)) {
+                                    CremaStepper(
+                                        label = "Target",
+                                        value = (segTargets.getOrNull(i) ?: 0f).toDouble(),
+                                        unit = if (isFlow) "ml/s" else "bar",
+                                        onChange = { if (i < segTargets.size) segTargets[i] = it.toFloat() },
+                                        step = 0.1,
+                                        min = 0.0,
+                                        max = if (isFlow) 10.0 else 12.0,
+                                    )
+                                }
+                                Box(Modifier.weight(1f)) {
+                                    CremaStepper(
+                                        label = "Time",
+                                        value = (segTimes.getOrNull(i) ?: 0f).toDouble(),
+                                        unit = "s",
+                                        onChange = { if (i < segTimes.size) segTimes[i] = it.toFloat() },
+                                        step = 0.5,
+                                        min = 0.0,
+                                        max = 120.0,
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -299,10 +327,23 @@ private fun TagChips(tags: SnapshotStateList<String>) {
     )
 }
 
-/** A capped-width form section card (header pad 16, 12/14 dp inter-row spacing). */
+/** A computed-ratio readout box — mono copper value, like the web Ratio card. */
+@Composable
+private fun RatioReadout(ratio: Double) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Eyebrow("Ratio")
+        Text(
+            "1:%.2f".format(ratio),
+            style = CremaTheme.readout.readoutSm,
+            color = MaterialTheme.colorScheme.primary,
+        )
+    }
+}
+
+/** A form section card (header pad 16, 14 dp inter-row spacing). */
 @Composable
 private fun EditorCard(content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
-    CremaCard(Modifier.fillMaxWidth().widthIn(max = 640.dp)) {
+    CremaCard(Modifier.fillMaxWidth()) {
         Column(
             Modifier.fillMaxWidth().padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
