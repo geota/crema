@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -26,6 +27,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -69,13 +71,14 @@ fun HistoryScreen(
                 Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = 20.dp, bottom = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
+                Eyebrow("Library")
                 Text(
-                    "History",
+                    "Shot history",
                     style = MaterialTheme.typography.headlineLarge,
                     color = MaterialTheme.colorScheme.onSurface,
                 )
                 Text(
-                    "${ui.history.size} shots",
+                    "${ui.history.size} shots on this device",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -89,13 +92,14 @@ fun HistoryScreen(
                     )
                 }
             } else {
+                StatsStrip(ui.history)
                 Row(
-                    Modifier.weight(1f).fillMaxWidth().padding(start = 20.dp, end = 20.dp, bottom = 12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    Modifier.weight(1f).fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
                 ) {
                     LazyColumn(
-                        modifier = Modifier.width(320.dp).fillMaxHeight(),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.width(480.dp).fillMaxHeight(),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
                         contentPadding = PaddingValues(top = 4.dp, bottom = 12.dp),
                     ) {
                         items(ui.history, key = { it.id }) { shot ->
@@ -119,44 +123,110 @@ fun HistoryScreen(
     }
 }
 
+// Aggregate stats strip — 4 tiles (counts via interpolation; averages are
+// Doubles, so %f is safe). Computed once per history change.
 @Composable
-private fun ShotRow(shot: StoredShot, selected: Boolean, onClick: () -> Unit) {
-    CremaCard(
-        modifier = Modifier.fillMaxWidth(),
-        container = if (selected) {
-            MaterialTheme.colorScheme.secondaryContainer
-        } else {
-            MaterialTheme.colorScheme.surfaceContainer
-        },
+private fun StatsStrip(history: List<StoredShot>) {
+    val total = history.size
+    val yields = history.mapNotNull { it.yieldG }
+    val avgYield = if (yields.isNotEmpty()) yields.average() else null
+    val avgTime = if (history.isNotEmpty()) history.map { it.durationMs / 1000.0 }.average() else null
+    val ratios = history.mapNotNull { s ->
+        val y = s.yieldG; val d = s.doseG
+        if (y != null && d != null && d > 0f) (y / d).toDouble() else null
+    }
+    val avgRatio = if (ratios.isNotEmpty()) ratios.average() else null
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        StatTile("Shots", "$total", Modifier.weight(1f))
+        StatTile("Avg yield", avgYield?.let { "%.1f g".format(it) } ?: "—", Modifier.weight(1f))
+        StatTile("Avg time", avgTime?.let { "%.0f s".format(it) } ?: "—", Modifier.weight(1f))
+        StatTile("Avg ratio", avgRatio?.let { "1:%.1f".format(it) } ?: "—", Modifier.weight(1f))
+    }
+}
+
+@Composable
+private fun StatTile(label: String, value: String, modifier: Modifier = Modifier) {
+    CremaCard(modifier, shape = RoundedCornerShape(16.dp)) {
         Column(
-            Modifier.fillMaxWidth().clickable(onClick = onClick).padding(14.dp),
+            Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
+            Eyebrow(label)
             Text(
-                DateUtils.getRelativeTimeSpanString(shot.completedAtMs).toString(),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(
-                listOfNotNull(shot.profileName, shot.beanName).joinToString(" · ").ifEmpty { "Shot" },
-                style = MaterialTheme.typography.titleLarge.copy(fontSize = 16.sp, lineHeight = 20.sp),
+                value,
+                style = MaterialTheme.typography.headlineSmall,
                 color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                shotMetrics(shot),
-                style = CremaTheme.readout.readoutSm.copy(fontSize = 13.sp, lineHeight = 17.sp),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }
 }
 
 @Composable
+private fun ShotRow(shot: StoredShot, selected: Boolean, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(MaterialTheme.shapes.medium)
+            .then(if (selected) Modifier.background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)) else Modifier)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                listOfNotNull(shot.profileName, shot.beanName).joinToString(" · ").ifEmpty { "Shot" },
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                DateUtils.getRelativeTimeSpanString(shot.completedAtMs).toString(),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Text(
+            shotRatio(shot) ?: "—",
+            style = CremaTheme.readout.readoutSm.copy(fontSize = 13.sp, lineHeight = 17.sp),
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+        Text(
+            shot.yieldG?.let { "%.1f g".format(it) } ?: "—",
+            style = CremaTheme.readout.readoutSm.copy(fontSize = 13.sp, lineHeight = 17.sp),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
 private fun ShotDetail(shot: StoredShot, channels: Set<String>, modifier: Modifier) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        // Detail head — date eyebrow, serif profile title, recipe meta.
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Eyebrow(DateUtils.getRelativeTimeSpanString(shot.completedAtMs).toString())
+            Text(
+                shot.profileName ?: "Shot",
+                style = MaterialTheme.typography.headlineMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            val meta = buildList {
+                shot.beanName?.let { add(it) }
+                val d = shot.doseG; val y = shot.yieldG
+                if (d != null && y != null) add("%.1f g → %.1f g".format(d, y))
+                shotRatio(shot)?.let { add(it) }
+            }.joinToString(" · ")
+            if (meta.isNotBlank()) {
+                Text(meta, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             Stat("Yield", shot.yieldG?.let { "%.1f g".format(it) } ?: "—")
             Stat("Ratio", shotRatio(shot) ?: "—")
