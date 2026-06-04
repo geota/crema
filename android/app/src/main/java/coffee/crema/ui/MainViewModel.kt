@@ -629,8 +629,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         } else {
             listOf(patched) + customProfilesJson
         }
+        // Clear the draft but KEEP editingProfileId: the saved profile is now in
+        // customProfilesJson, so the editor still resolves it (no "no profile"
+        // flash before the nav pops), and a double-tap Save updates in place via
+        // the isExisting branch rather than appending a duplicate. The next
+        // start*Profile / cancel resets editingProfileId.
         draftProfileJson = null
-        _ui.value = _ui.value.copy(editingProfileId = null, draftProfile = null)
+        _ui.value = _ui.value.copy(draftProfile = null)
         refreshProfiles()
         persistCustomProfiles()
     }

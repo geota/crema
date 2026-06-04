@@ -16,6 +16,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -69,20 +70,27 @@ fun ProfilesScreen(
             onConnect = onConnect,
         )
         Column(Modifier.weight(1f).fillMaxHeight()) {
-            Column(
+            Row(
                 Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = 20.dp, bottom = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(2.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    "Profiles",
-                    style = MaterialTheme.typography.headlineLarge,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-                val pinned = ui.profiles.count { it.pinned }
-                Text(
-                    "${ui.profiles.size} profiles · $pinned pinned",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        "Profiles",
+                        style = MaterialTheme.typography.headlineLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    val pinned = ui.profiles.count { it.pinned }
+                    Text(
+                        "${ui.profiles.size} profiles · $pinned pinned",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                CremaButton(
+                    onClick = { vm.startNewProfile(); onNav("profile-edit") },
+                    icon = "plus",
+                    label = "New profile",
                 )
             }
             LazyVerticalGrid(
@@ -97,6 +105,9 @@ fun ProfilesScreen(
                         profile = profile,
                         isActive = profile.id == ui.activeProfileId,
                         onLoad = { vm.setActiveProfile(profile.id) },
+                        onEdit = { vm.startEditProfile(profile.id); onNav("profile-edit") },
+                        onDuplicate = { vm.duplicateProfile(profile.id); onNav("profile-edit") },
+                        onDelete = { vm.deleteProfile(profile.id) },
                     )
                 }
             }
@@ -105,8 +116,16 @@ fun ProfilesScreen(
 }
 
 @Composable
-private fun ProfileCard(profile: CremaProfile, isActive: Boolean, onLoad: () -> Unit) {
+private fun ProfileCard(
+    profile: CremaProfile,
+    isActive: Boolean,
+    onLoad: () -> Unit,
+    onEdit: () -> Unit,
+    onDuplicate: () -> Unit,
+    onDelete: () -> Unit,
+) {
     val tel = CremaTheme.telemetry
+    val isCustom = profile.source == "custom"
     CremaCard(Modifier.fillMaxWidth()) {
         Column(
             Modifier.fillMaxWidth().padding(14.dp),
@@ -118,13 +137,27 @@ private fun ProfileCard(profile: CremaProfile, isActive: Boolean, onLoad: () -> 
                 flowColor = tel.flow,
                 modifier = Modifier.fillMaxWidth().height(56.dp),
             )
-            Text(
-                profile.name,
-                style = MaterialTheme.typography.titleLarge.copy(fontSize = 18.sp, lineHeight = 22.sp),
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    profile.name,
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.titleLarge.copy(fontSize = 18.sp, lineHeight = 22.sp),
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    // Built-ins are read-only: customise via Duplicate. Customs
+                    // also get Edit + Delete.
+                    if (isCustom) {
+                        FilledTonalIconButton(onClick = onEdit) { PhIcon("pencil-simple", sizeDp = 18) }
+                    }
+                    FilledTonalIconButton(onClick = onDuplicate) { PhIcon("copy", sizeDp = 18) }
+                    if (isCustom) {
+                        FilledTonalIconButton(onClick = onDelete) { PhIcon("trash", sizeDp = 18) }
+                    }
+                }
+            }
             Text(
                 "1:%.2f · %.1f g · %.0f °C".format(profile.ratio, profile.yieldOut, profile.brewTemp),
                 style = MaterialTheme.typography.bodySmall,

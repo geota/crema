@@ -42,6 +42,7 @@ import coffee.crema.ui.screens.BeanEditScreen
 import coffee.crema.ui.screens.BeansScreen
 import coffee.crema.ui.screens.BrewScreen
 import coffee.crema.ui.screens.HistoryScreen
+import coffee.crema.ui.screens.ProfileEditScreen
 import coffee.crema.ui.screens.ProfilesScreen
 import coffee.crema.ui.screens.ScaleScreen
 import coffee.crema.ui.screens.SettingsScreen
@@ -127,6 +128,9 @@ class MainActivity : ComponentActivity() {
                     },
                     beanEditContent = { back ->
                         BeanEditScreen(viewModel, onBack = back)
+                    },
+                    profileEditContent = { back ->
+                        ProfileEditScreen(viewModel, onBack = back)
                     },
                     debugContent = {
                         Surface(modifier = Modifier.fillMaxSize()) {
