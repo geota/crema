@@ -12,9 +12,16 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.InputChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.runtime.snapshots.SnapshotStateList
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.runtime.Composable
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
@@ -88,8 +95,8 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
     // Field state seeded from the profile; re-seeds if the edited profile changes.
     var name by remember(profile.id) { mutableStateOf(profile.name) }
     var roast by remember(profile.id) { mutableStateOf(profile.roast ?: "none") }
-    var tagsText by remember(profile.id) {
-        mutableStateOf(profile.tags.filterNot { it.equals("Built-in", ignoreCase = true) }.joinToString(", "))
+    val tags = remember(profile.id) {
+        mutableStateListOf<String>().apply { addAll(profile.tags.filterNot { it.equals("Built-in", ignoreCase = true) }) }
     }
     var pinned by remember(profile.id) { mutableStateOf(profile.pinned) }
     var dose by remember(profile.id) { mutableStateOf(profile.dose.toDouble()) }
@@ -122,7 +129,7 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                         id = profile.id,
                         name = name,
                         roast = roast.takeIf { it != "none" },
-                        tags = tagsText.split(",").map { it.trim() }.filter { it.isNotEmpty() },
+                        tags = tags.toList(),
                         pinned = pinned,
                         dose = dose.toFloat(),
                         yieldOut = yieldG.toFloat(),
@@ -173,13 +180,8 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                 )
                 Eyebrow("Roast")
                 CremaSegmentedButton(options = ROAST_OPTIONS, value = roast, onChange = { roast = it })
-                OutlinedTextField(
-                    value = tagsText,
-                    onValueChange = { tagsText = it },
-                    label = { Text("Tags (comma-separated)") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
+                Eyebrow("Tags")
+                TagChips(tags)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         "Pinned to favorites",
@@ -255,6 +257,46 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
             }
         }
     }
+}
+
+/**
+ * The tag editor — input chips (tap to remove) over an "Add tag" field that
+ * commits on the keyboard's Done action. Mirrors the web `TagInput`.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun TagChips(tags: SnapshotStateList<String>) {
+    var input by remember { mutableStateOf("") }
+    if (tags.isNotEmpty()) {
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            tags.toList().forEach { tag ->
+                InputChip(
+                    selected = false,
+                    onClick = { tags.remove(tag) },
+                    label = { Text(tag) },
+                    trailingIcon = { Text("✕", style = MaterialTheme.typography.labelMedium) },
+                )
+            }
+        }
+    }
+    OutlinedTextField(
+        value = input,
+        onValueChange = { input = it },
+        label = { Text("Add tag") },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth(),
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+        keyboardActions = KeyboardActions(
+            onDone = {
+                val t = input.trim()
+                if (t.isNotEmpty() && tags.none { it.equals(t, ignoreCase = true) }) tags.add(t)
+                input = ""
+            },
+        ),
+    )
 }
 
 /** A capped-width form section card (header pad 16, 12/14 dp inter-row spacing). */
