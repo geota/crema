@@ -2,6 +2,7 @@ package coffee.crema.ui.screens
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -34,7 +35,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.ui.draw.clip
 import coffee.crema.profiles.SegmentEdit
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.theme.CremaTheme
@@ -314,10 +317,17 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                     }
                     segs.forEachIndexed { i, seg ->
                         val isFlow = seg.mode == "flow"
-                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
+                        CremaCard(Modifier.fillMaxWidth(), container = MaterialTheme.colorScheme.surfaceContainerHigh) {
+                          Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Box(
+                                    Modifier.size(24.dp).clip(CircleShape).background(MaterialTheme.colorScheme.secondaryContainer),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Text("${i + 1}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSecondaryContainer)
+                                }
                                 Text(
-                                    "${i + 1}. ${seg.name.ifBlank { "Step ${i + 1}" }}",
+                                    seg.name.ifBlank { "Step ${i + 1}" },
                                     modifier = Modifier.weight(1f),
                                     style = MaterialTheme.typography.titleSmall,
                                     color = MaterialTheme.colorScheme.onSurface,
@@ -375,6 +385,7 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                                 min = 20.0,
                                 max = 105.0,
                             )
+                          }
                         }
                     }
                 }
