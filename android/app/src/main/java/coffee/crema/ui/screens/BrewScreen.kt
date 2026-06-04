@@ -141,13 +141,13 @@ fun BrewScreen(
                 ) {
                     ChannelsRow(ui = ui, active = active)
                     // The live chart fills the remainder. Hosted in a Surface
-                    // (not CremaCard) so the Vico chart can fillMaxSize.
+                    // (not CremaCard) so the Canvas chart can fillMaxSize.
                     Surface(
                         modifier = Modifier.weight(1f).fillMaxWidth(),
                         shape = MaterialTheme.shapes.medium,
                         color = MaterialTheme.colorScheme.surfaceContainer,
                     ) {
-                        ShotChart(
+                        CanvasShotChart(
                             samples = ui.shotTelemetry,
                             enabledChannels = ui.chartChannels,
                             modifier = Modifier
