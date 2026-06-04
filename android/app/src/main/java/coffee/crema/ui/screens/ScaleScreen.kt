@@ -12,6 +12,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager
 import coffee.crema.ui.MainUiState
@@ -176,15 +177,19 @@ private fun ScaleHeroRow(
     Row(horizontalArrangement = Arrangement.spacedBy(sp.s4)) {
         // Readout card — fills remaining width
         CremaCard(Modifier.weight(1f)) {
-            Box(Modifier.fillMaxWidth().padding(sp.s5), contentAlignment = Alignment.Center) {
-                Row(verticalAlignment = Alignment.Bottom) {
-                    Text(
-                        String.format("%.1f", if (connected) weight else 0.0),
-                        style = CremaTheme.readout.readoutXl.copy(fontSize = androidx.compose.ui.unit.TextUnit(132f, androidx.compose.ui.unit.TextUnitType.Sp)),
-                        color = if (connected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline,
-                    )
-                    Text("  grams", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
+            Box(Modifier.fillMaxWidth().padding(sp.s5)) {
+                Text(
+                    String.format("%.1f", if (connected) weight else 0.0),
+                    style = CremaTheme.readout.readoutHero,
+                    color = if (connected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline,
+                    modifier = Modifier.align(Alignment.Center),
+                )
+                Text(
+                    "grams",
+                    style = MaterialTheme.typography.bodyLarge.copy(fontSize = 28.sp, lineHeight = 32.sp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(end = 32.dp, bottom = 32.dp),
+                )
             }
         }
         // Tare column (connected) OR Connect column (disconnected) — fixed width
@@ -198,14 +203,22 @@ private fun ScaleHeroRow(
                 ) {
                     Column(Modifier.padding(horizontal = sp.s5, vertical = 22.dp), verticalArrangement = Arrangement.Center) {
                         Eyebrow("Tare", color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.8f))
-                        Text("0.0 g", style = CremaTheme.readout.readoutLg, color = MaterialTheme.colorScheme.onPrimary)
+                        Row(verticalAlignment = Alignment.Bottom) {
+                            Text("0.0", style = CremaTheme.readout.readoutLg, color = MaterialTheme.colorScheme.onPrimary)
+                            Text(
+                                " g",
+                                style = MaterialTheme.typography.bodyLarge.copy(fontSize = 20.sp),
+                                color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.75f),
+                                modifier = Modifier.padding(start = 4.dp, bottom = 4.dp),
+                            )
+                        }
                     }
                 }
-                CremaButton(onClick = onResetPeak, variant = CremaButtonVariant.Tonal, icon = "arrow-counter-clockwise", label = "Reset peak")
-                CremaButton(onClick = onStartTimer, variant = CremaButtonVariant.Tonal, icon = "timer", label = "Start timer")
+                ScalePillButton(icon = "arrow-counter-clockwise", label = "Reset peak", onClick = onResetPeak)
+                ScalePillButton(icon = "timer", label = "Start timer", onClick = onStartTimer)
             } else {
                 Spacer(Modifier.weight(0.4f))
-                CremaButton(onClick = onConnect, variant = CremaButtonVariant.Filled, icon = "bluetooth", label = "Connect scale")
+                CremaButton(onClick = onConnect, modifier = Modifier.height(52.dp), variant = CremaButtonVariant.Filled, icon = "bluetooth", label = "Connect scale")
                 Text(
                     "Acaia, Bookoo, Decent, Felicita and more pair automatically.",
                     style = MaterialTheme.typography.bodySmall,

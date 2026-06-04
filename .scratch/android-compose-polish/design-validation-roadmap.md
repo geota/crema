@@ -98,10 +98,11 @@ Dropdowns (ProfileBlock:291, BeanBlock:373): **convert to ExposedDropdownMenuBox
 ## SUGGESTED WAVE ORDER (compile-safe batches, hand off each for build)
 1. ✅ Foundation icons + readoutHero + preview janky fix.
 2. ✅ Brew: both dropdowns→ExposedDropdownMenuBox+menuAnchor+caret+widthIn (alignment fix); right-col 8dp; Profile/Bean titles 400-weight + bean 20sp; foot meta→baseline Row; mode-chip cancel→circular badge; +cloud/stop icons. (Scale targeted folded into a later wave.)
-3. Profiles card anatomy (metrics grid, head row, legend, action bar).
-4. Profile editor rework (flat + accordion + target tiles + top bar).
-5. Settings two-pane shell + SetRow/SetGroup molecules.
-6. History flat rows + spark + stats + detail head.
-7. Beans tile + editor two-pane.
-8. QuickControls rebuild.
-9. (separate) brand fonts via GoogleFont provider; data-model unblocks (StoredShot/Bean/SegmentEdit fields).
+3. ✅ Scale targeted (readoutHero, grams bottom-right, ScalePillButton, tare mono+g, connect 52dp).
+4. ✅ Profiles card anatomy (4-up metrics grid, LOADED badge, outlined Loaded button, active border, Fixed(3), distinct roast pill, name 22, action bar). CremaCard gained shape+border params. Deferred: legend overlay, pin star (needs vm.togglePinned), bean subtitle (no field), new-profile tile, search/filter.
+5. ⏳ Profile editor: ✅ top-bar Discard/Duplicate/Save-profile + divider, serif "Pressure profile" curve header + sub + Reset, pin copy. ⏳ DEFERRED (its own wave): flatten EditorCards, accordion SegmentEditorCard (collapsed pill+summary+caret), SegFieldCell 3-up grid, TargetTile, serif title/Bean/Notes fields, dashed flow ghost in editor curve.
+6. Settings two-pane shell + SetRow/SetGroup molecules.
+7. History flat rows + spark + stats + detail head.
+8. Beans tile + editor two-pane.
+9. QuickControls rebuild.
+10. (separate) brand fonts via GoogleFont provider; data-model unblocks (StoredShot/Bean/SegmentEdit fields).

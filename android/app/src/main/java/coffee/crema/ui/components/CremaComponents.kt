@@ -1,5 +1,6 @@
 package coffee.crema.ui.components
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -10,6 +11,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -216,6 +218,25 @@ fun CremaIconButton(icon: String, onClick: () -> Unit, modifier: Modifier = Modi
     }
 }
 
+// ── Scale pill — flat 48dp neutral action (surfaceContainerHigh), icon + label.
+// The design's secondary action on Scale (Reset peak / Start timer); distinct
+// from CremaButton's M3 filled/tonal/outlined/text variants.
+@Composable
+fun ScalePillButton(icon: String, label: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Surface(
+        onClick = onClick,
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        modifier = modifier.fillMaxWidth().height(48.dp),
+    ) {
+        Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+            PhIcon(icon, sizeDp = 18)
+            Spacer(Modifier.width(8.dp))
+            Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface)
+        }
+    }
+}
+
 // ── Card ────────────────────────────────────────────────────────────────────
 // Crema "filled" card: surfaceContainer (one step up from the page). On DARK
 // there is NO border and NO bottom shadow — elevation is the lighter surface.
@@ -225,12 +246,15 @@ fun CremaIconButton(icon: String, onClick: () -> Unit, modifier: Modifier = Modi
 fun CremaCard(
     modifier: Modifier = Modifier,
     container: Color = MaterialTheme.colorScheme.surfaceContainer,
+    shape: Shape = MaterialTheme.shapes.medium, // 12dp; pass shapes.large (16) for tiles
+    border: BorderStroke? = null, // e.g. active/selected card → 1dp primary
     content: @Composable ColumnScope.() -> Unit,
 ) {
     Surface(
         modifier = modifier,
-        shape = MaterialTheme.shapes.medium, // 12dp; step buttons down to 8dp
+        shape = shape,
         color = container,
+        border = border,
         content = { Column(content = content) },
     )
 }
