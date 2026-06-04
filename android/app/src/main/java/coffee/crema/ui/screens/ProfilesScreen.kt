@@ -125,10 +125,16 @@ private fun ProfileCard(
             Modifier.fillMaxWidth().padding(14.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            CanvasProfilePreview(
-                segments = profile.segments,
-                modifier = Modifier.fillMaxWidth().height(76.dp),
-            )
+            Box(
+                Modifier.fillMaxWidth().height(96.dp)
+                    .clip(MaterialTheme.shapes.medium)
+                    .background(MaterialTheme.colorScheme.surfaceContainerLowest),
+            ) {
+                CanvasProfilePreview(
+                    segments = profile.segments,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     profile.name,
