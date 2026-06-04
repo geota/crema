@@ -34,6 +34,7 @@ import coffee.crema.profiles.brewDefaultsJson
 import coffee.crema.profiles.duplicatedCustomProfileJson
 import coffee.crema.profiles.patchCremaProfileJson
 import coffee.crema.profiles.profileIdOf
+import coffee.crema.profiles.SegmentEdit
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -594,7 +595,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         yieldOut: Float,
         brewTemp: Float,
         maxTotalVolumeMl: Int,
-        segments: List<Pair<Float, Float>>,
+        segments: List<SegmentEdit>,
     ) {
         val isExisting = customProfilesJson.any { profileIdOf(it, json) == id }
         val base = when {

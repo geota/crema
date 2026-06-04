@@ -138,21 +138,33 @@ fun patchCremaProfileJson(
     yieldOut: Float,
     brewTemp: Float,
     maxTotalVolumeMl: Int,
-    segments: List<Pair<Float, Float>>,
+    segments: List<SegmentEdit>,
     json: Json,
 ): String {
     val root = json.parseToJsonElement(baseJson).jsonObject
     val baseSegments = (root["segments"] as? JsonArray) ?: JsonArray(emptyList())
+    // Build the segment array from the EDIT list so the editor can add / remove
+    // segments: an existing index reuses that base segment (its tempSensor /
+    // volumeLimitMl / exit / limiter survive); a new index clones the first base
+    // segment as a template and gets a fresh id + name. Removed segments simply
+    // fall off the end.
+    val template = baseSegments.firstOrNull() as? JsonObject
     val patchedSegments = JsonArray(
-        baseSegments.mapIndexed { i, element ->
-            val seg = element.jsonObject
-            val edit = segments.getOrNull(i) ?: return@mapIndexed element
-            JsonObject(
-                seg + mapOf(
-                    "target" to JsonPrimitive(edit.first),
-                    "time" to JsonPrimitive(edit.second),
-                ),
-            )
+        segments.mapIndexed { i, edit ->
+            val baseSeg = baseSegments.getOrNull(i) as? JsonObject
+            val base = baseSeg ?: template ?: JsonObject(emptyMap())
+            val overlay = buildMap {
+                put("target", JsonPrimitive(edit.target))
+                put("time", JsonPrimitive(edit.time))
+                edit.mode?.let { put("mode", JsonPrimitive(it)) }
+                edit.ramp?.let { put("ramp", JsonPrimitive(it)) }
+                edit.temp?.let { put("temp", JsonPrimitive(it)) }
+                if (baseSeg == null) {
+                    put("id", JsonPrimitive("seg:" + UUID.randomUUID()))
+                    put("name", JsonPrimitive(edit.name.ifBlank { "Segment ${i + 1}" }))
+                }
+            }
+            JsonObject(base + overlay)
         },
     )
     val patched = root.toMutableMap().apply {
@@ -169,3 +181,18 @@ fun patchCremaProfileJson(
     }
     return json.encodeToString(JsonObject.serializer(), JsonObject(patched))
 }
+
+/**
+ * The editor's per-segment edit — the fields the segment editor changes, patched
+ * onto each existing segment's JSON (mode / ramp / temp are null-skipped; every
+ * other field on the base segment — tempSensor, volumeLimitMl, exit, limiter —
+ * survives). `name` is for the editor's display only (not written to the wire).
+ */
+data class SegmentEdit(
+    val name: String,
+    val mode: String?,
+    val ramp: String?,
+    val target: Float,
+    val time: Float,
+    val temp: Float?,
+)
