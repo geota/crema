@@ -45,9 +45,9 @@ import coffee.crema.ui.components.SegOption
  * complete JSON (vm.saveProfile → patchCremaProfileJson), so every wire-relevant
  * field round-trips untouched to the DE1; the editor never adds / removes segments.
  *
- * Deferred (next increment): the interactive Vico drag-curve surface — draggable
- * control points that write the SAME per-segment (target, time) these steppers do,
- * mirroring the web's uPlot drag editor. Segment add / remove rides on that work.
+ * The curve is a hand-rolled Canvas drag editor (ProfileCurveChart) — drag a
+ * handle to set a segment's (target, time), the same state these steppers write.
+ * Deferred: segment add / remove.
  */
 private val ROAST_OPTIONS = listOf(
     SegOption("none", "None"),
@@ -152,6 +152,7 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                 ProfileCurveChart(
                     targets = segTargets.toList(),
                     times = segTimes.toList(),
+                    modes = profile.segments.map { it.mode },
                     modifier = Modifier.fillMaxWidth().height(200.dp),
                     onSegmentEdit = { i, target, time ->
                         if (i in segTargets.indices) segTargets[i] = target
