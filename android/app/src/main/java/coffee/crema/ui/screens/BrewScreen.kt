@@ -14,16 +14,20 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ExposedDropdownMenuAnchorType
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -137,7 +141,7 @@ fun BrewScreen(
                 // Right column (fills remainder).
                 Column(
                     modifier = Modifier.weight(1f).fillMaxHeight(),
-                    verticalArrangement = Arrangement.spacedBy(9.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     ChannelsRow(ui = ui, active = active)
                     // The live chart fills the remainder. Hosted in a Surface
@@ -228,6 +232,7 @@ private fun BrewHeader(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ProfileBlock(
     active: CremaProfile?,
@@ -237,11 +242,11 @@ private fun ProfileBlock(
     uploadProgress: String?,
 ) {
     var open by remember { mutableStateOf(false) }
-    Box {
+    ExposedDropdownMenuBox(expanded = open, onExpandedChange = { open = it }) {
         Column(
             modifier = Modifier
+                .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable, enabled = profiles.isNotEmpty())
                 .clip(RoundedCornerShape(12.dp))
-                .clickable(enabled = profiles.isNotEmpty()) { open = true }
                 .padding(horizontal = 8.dp, vertical = 6.dp),
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
@@ -255,13 +260,18 @@ private fun ProfileBlock(
                     )
                 }
             }
-            Text(
-                active?.name ?: "No profile selected",
-                style = MaterialTheme.typography.titleLarge.copy(fontSize = 20.sp, lineHeight = 24.sp),
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    active?.name ?: "No profile selected",
+                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Normal, fontSize = 20.sp, lineHeight = 24.sp),
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (profiles.isNotEmpty()) {
+                    PhIcon("caret-down", sizeDp = 16, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
             if (active != null) {
                 Text(
                     "Pre-inf ${active.preinfuseSeconds}s · 1:%.2f · %.1f g · %.1f °C".format(
@@ -288,13 +298,18 @@ private fun ProfileBlock(
                 }
             }
         }
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+        ExposedDropdownMenu(
+            expanded = open,
+            onDismissRequest = { open = false },
+            modifier = Modifier.widthIn(min = 200.dp),
+        ) {
             // Active first, then pinned, then store order (web HeaderPicker rank).
             val sorted = profiles.sortedByDescending {
                 (if (it.id == active?.id) 2 else 0) + (if (it.pinned) 1 else 0)
             }
             sorted.forEach { p ->
                 DropdownMenuItem(
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                     text = {
                         Column {
                             Text(p.name, style = MaterialTheme.typography.bodyLarge)
@@ -319,6 +334,7 @@ private fun ProfileBlock(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun BeanBlock(
     activeBean: Bean?,
@@ -330,22 +346,27 @@ private fun BeanBlock(
     val roasterNameOf: (Bean) -> String? = { b ->
         b.roasterId?.let { rid -> roasters.firstOrNull { it.id == rid }?.name }
     }
-    Box {
+    ExposedDropdownMenuBox(expanded = open, onExpandedChange = { open = it }) {
         Column(
             modifier = Modifier
+                .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable, enabled = beans.isNotEmpty())
                 .clip(RoundedCornerShape(12.dp))
-                .clickable(enabled = beans.isNotEmpty()) { open = true }
                 .padding(horizontal = 8.dp, vertical = 6.dp),
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             Eyebrow("Bean")
-            Text(
-                activeBean?.let { listOfNotNull(roasterNameOf(it), it.name).joinToString(" · ") } ?: "No bean selected",
-                style = MaterialTheme.typography.titleLarge.copy(fontSize = 18.sp, lineHeight = 22.sp),
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    activeBean?.let { listOfNotNull(roasterNameOf(it), it.name).joinToString(" · ") } ?: "No bean selected",
+                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Normal, fontSize = 20.sp, lineHeight = 24.sp),
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (beans.isNotEmpty()) {
+                    PhIcon("caret-down", sizeDp = 16, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
             if (activeBean != null) {
                 val meta = listOfNotNull(
                     activeBean.origin.country,
@@ -370,9 +391,14 @@ private fun BeanBlock(
                 )
             }
         }
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+        ExposedDropdownMenu(
+            expanded = open,
+            onDismissRequest = { open = false },
+            modifier = Modifier.widthIn(min = 200.dp),
+        ) {
             beans.forEach { b ->
                 DropdownMenuItem(
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                     text = {
                         Text(
                             listOfNotNull(roasterNameOf(b), b.name).joinToString(" · "),
@@ -778,11 +804,15 @@ private fun BrewFoot(
 
 @Composable
 private fun RowScope.FootMeta(label: String, value: String) {
-    Column(Modifier.padding(end = 2.dp)) {
+    Row(
+        Modifier.padding(end = 2.dp),
+        verticalAlignment = Alignment.Bottom,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
         Eyebrow(label)
         Text(
             value,
-            style = CremaTheme.readout.readoutSm.copy(fontSize = 13.sp, lineHeight = 18.sp),
+            style = CremaTheme.readout.readoutSm.copy(fontSize = 13.sp, lineHeight = 18.sp, fontWeight = FontWeight.Normal),
             color = MaterialTheme.colorScheme.onSurface,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -841,9 +871,12 @@ private fun ModeChip(
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface)
             Text(sub, style = CremaTheme.readout.readoutSm.copy(fontSize = 10.5f.sp, lineHeight = 12.sp), color = MaterialTheme.colorScheme.onSurfaceVariant)
-            if (active) {
-                PhIcon("x", sizeDp = 10, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
+        }
+        if (active) {
+            Box(
+                Modifier.size(18.dp).clip(CircleShape).background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)),
+                contentAlignment = Alignment.Center,
+            ) { PhIcon("x", sizeDp = 10, tint = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
     }
 }
