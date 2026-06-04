@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -66,23 +67,27 @@ fun SettingsScreen(
                 .padding(horizontal = 24.dp, vertical = 20.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            Text(
-                "Settings",
-                style = MaterialTheme.typography.headlineLarge,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Eyebrow("Preferences")
+                Text(
+                    "Settings",
+                    style = MaterialTheme.typography.headlineLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+            }
 
             SectionCard("Display") {
-                Text("Theme", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
-                CremaSegmentedButton(
-                    options = listOf(
-                        SegOption("system", "System"),
-                        SegOption("light", "Light"),
-                        SegOption("dark", "Dark"),
-                    ),
-                    value = ui.themeMode,
-                    onChange = vm::setThemeMode,
-                )
+                SetRow("Theme", "Crema defaults to dark — the machine app is dark-skinned.") {
+                    CremaSegmentedButton(
+                        options = listOf(
+                            SegOption("system", "System"),
+                            SegOption("light", "Light"),
+                            SegOption("dark", "Dark"),
+                        ),
+                        value = ui.themeMode,
+                        onChange = vm::setThemeMode,
+                    )
+                }
             }
 
             SectionCard("Machine") {
@@ -102,9 +107,15 @@ fun SettingsScreen(
             }
 
             SectionCard("Shot behaviour") {
-                ToggleRow("Auto-tare", ui.autoTare, vm::setAutoTare)
-                ToggleRow("Stop on weight", ui.stopOnWeight, vm::setStopOnWeight)
-                ToggleRow("Steam eco", ui.steamEco, vm::setSteamEco)
+                SetRow("Auto-tare on shot start", "Zero the scale automatically when extraction begins.") {
+                    CremaSwitch(ui.autoTare, vm::setAutoTare)
+                }
+                SetRow("Stop on weight", "End the shot once the target yield is reached.") {
+                    CremaSwitch(ui.stopOnWeight, vm::setStopOnWeight)
+                }
+                SetRow("Steam eco", "Idle the steam boiler cooler between sessions to save power.") {
+                    CremaSwitch(ui.steamEco, vm::setSteamEco)
+                }
             }
 
             SectionCard("Advanced") {
@@ -135,25 +146,31 @@ private fun SectionCard(title: String, content: @Composable () -> Unit) {
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Eyebrow(title)
-        CremaCard(Modifier.fillMaxWidth()) {
+        CremaCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
             Column(
                 Modifier.fillMaxWidth().padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
             ) { content() }
         }
     }
 }
 
+// Settings row — title + optional subtitle (left, weighted) and a trailing
+// control (switch, segmented, value). The design's workhorse row.
 @Composable
-private fun ToggleRow(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text(
-            label,
-            modifier = Modifier.weight(1f),
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurface,
-        )
-        CremaSwitch(checked = checked, onCheckedChange = onCheckedChange)
+private fun SetRow(title: String, sub: String? = null, trailing: @Composable () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
+            if (sub != null) {
+                Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        trailing()
     }
 }
 
