@@ -898,38 +898,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * Apply edits to an existing bean (the editor's Save). Resolves the roaster
      * by name (find-or-create), stamps `updatedAt`, and persists.
      */
-    fun updateBean(
-        id: String,
-        name: String,
-        roasterName: String,
-        roastLevel: Int?,
-        roastedOn: String?,
-        country: String?,
-        processing: String?,
-        grinder: String,
-        grinderSetting: String,
-        rating: Int,
-        notes: String,
-    ) {
+    fun updateBean(id: String, roasterName: String, transform: (Bean) -> Bean) {
         val s = _ui.value
         val existing = s.beans.firstOrNull { it.id == id } ?: return
         val now = System.currentTimeMillis()
         val (roasterId, roasters) = resolveRoaster(roasterName, s.roasters, now)
-        val updated = existing.copy(
-            name = name.trim().ifBlank { existing.name },
-            roasterId = roasterId,
-            roastLevel = roastLevel?.toUByte(),
-            roastedOn = roastedOn?.takeIf { it.isNotBlank() },
-            origin = existing.origin.copy(
-                country = country?.takeIf { it.isNotBlank() },
-                processing = processing?.takeIf { it.isNotBlank() },
-            ),
-            grinder = grinder.trim(),
-            grinderSetting = grinderSetting.trim(),
-            rating = rating.coerceIn(0, 5).toUByte(),
-            notes = notes,
-            updatedAt = now,
-        )
+        // The shell owns the full field mapping (the core Bean already models
+        // every field); we only resolve the roaster + stamp updatedAt here.
+        val updated = transform(existing).copy(roasterId = roasterId, updatedAt = now)
         _ui.value = _ui.value.copy(
             beans = s.beans.map { if (it.id == id) updated else it },
             roasters = roasters,
