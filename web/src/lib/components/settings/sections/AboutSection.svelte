@@ -1,5 +1,6 @@
 <script lang="ts">
 	import ArrowSquareOutIcon from 'phosphor-svelte/lib/ArrowSquareOutIcon';
+	import CremaMark from '../../CremaMark.svelte';
 	/**
 	 * About section — app identity, the open-source libraries Crema is built
 	 * on, and the project's terms of use.
@@ -48,10 +49,8 @@
 
 <div class="st-about">
 	<div class="st-about-mark">
-		<!-- Matches the sidebar's brand glyph (CremaSidebar.svelte:86) — same
-		     `.cside-mark-glyph` class, just larger via the size override in
-		     `routes/settings/+page.svelte`. -->
-		<div class="cside-mark-glyph" aria-label="Crema">C</div>
+		<!-- Shared brand mark — identical to the sidebar + favicon (CremaMark.svelte). -->
+		<CremaMark size={56} />
 	</div>
 	<div class="st-about-meta">
 		<div class="st-about-line"><strong>Crema</strong></div>
