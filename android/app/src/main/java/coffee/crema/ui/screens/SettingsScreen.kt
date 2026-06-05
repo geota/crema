@@ -118,7 +118,16 @@ fun SettingsScreen(
                                     label = if (scaleConnected) "Disconnect" else "Connect",
                                 )
                             }
-                            if (scaleConnected) SetRow("Scale firmware", ui.scaleFirmware ?: "—") {}
+                        }
+                        if (scaleConnected) {
+                            SetGroup("Scale") {
+                                SetRow("Battery") {
+                                    Text(ui.scaleBatteryPercent?.let { "$it%" } ?: "—", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                SetRow("Firmware") {
+                                    Text(ui.scaleFirmware ?: "—", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
                         }
                     }
                     "brew" -> {
