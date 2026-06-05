@@ -38,6 +38,10 @@ data class StoredShot(
     val profileName: String? = null,
     /** Active bean ("roaster · name") at capture, or null. */
     val beanName: String? = null,
+    /** User star rating 0..5; null = unrated. Edited from the History detail. */
+    val rating: Int? = null,
+    /** User tasting notes for this shot; null = none. Edited from the detail. */
+    val notes: String? = null,
     /**
      * A downsampled telemetry slice for the History detail chart (≤
      * [SHOT_SAMPLE_CAP] points). Empty for shots captured before this field
