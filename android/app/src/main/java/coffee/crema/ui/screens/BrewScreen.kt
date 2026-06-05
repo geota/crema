@@ -176,10 +176,21 @@ fun BrewScreen(
             )
             if (quickOpen) {
                 QuickControlsSheet(
+                    active = active,
+                    brewParams = ui.brewParams,
+                    pinnedProfiles = ui.profiles.filter { it.pinned },
+                    favBeans = ui.beans.filter { it.favourite },
+                    activeProfileId = ui.activeProfileId,
+                    activeBeanId = ui.activeBeanId,
                     autoTare = ui.autoTare,
                     stopOnWeight = ui.stopOnWeight,
                     steamEco = ui.steamEco,
                     channels = ui.chartChannels,
+                    onSelectProfile = vm::setActiveProfile,
+                    onSelectBean = vm::setActiveBean,
+                    onAdjustBrew = vm::quickAdjustBrew,
+                    onResetBrew = vm::resetBrewParams,
+                    onSavePreset = vm::saveQuickPreset,
                     onAutoTare = vm::setAutoTare,
                     onStopOnWeight = vm::setStopOnWeight,
                     onSteamEco = vm::setSteamEco,

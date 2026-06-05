@@ -33,6 +33,8 @@ import coffee.crema.profiles.CustomProfileStore
 import coffee.crema.profiles.brewDefaultsJson
 import coffee.crema.profiles.duplicatedCustomProfileJson
 import coffee.crema.profiles.patchCremaProfileJson
+import coffee.crema.profiles.overrideBrewParamsJson
+import coffee.crema.profiles.quickPresetJson
 import coffee.crema.profiles.profileIdOf
 import coffee.crema.profiles.SegmentEdit
 import kotlinx.coroutines.delay
@@ -85,6 +87,16 @@ data class LastShot(
 )
 
 /** A flat snapshot of everything the current screen shows. */
+/**
+ * Transient Quick-Controls brew override — the dose / yield / brew-temp the user
+ * nudged in the Quick Controls sheet. NOT persisted to any profile (mirrors the
+ * web shell's BrewParamState): it is baked into the NEXT shot's uploaded profile
+ * at [MainViewModel.startShot] and cleared on profile switch / Reset. The live
+ * mid-shot SAW dial (web `setShotTargetWeight`) needs a bridge FFI not yet
+ * exposed — that's the documented Phase-B follow-up.
+ */
+data class BrewParams(val dose: Double, val yieldOut: Double, val brewTemp: Double)
+
 data class MainUiState(
     val bleState: De1BleManager.State = De1BleManager.State.IDLE,
     /** Coarse state of the scale connection. */
@@ -145,6 +157,8 @@ data class MainUiState(
     val profiles: List<CremaProfile> = emptyList(),
     /** The selected profile's id (the Brew header's active profile), or null. */
     val activeProfileId: String? = null,
+    /** Transient Quick-Controls brew override, or null = use the active profile. */
+    val brewParams: BrewParams? = null,
     /**
      * True while a profile is being uploaded to the DE1 (between
      * `ProfileUploadStarted` and `ProfileUploadCompleted`/`Failed`) — drives the
@@ -521,7 +535,43 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Select the Brew header's active profile. (M1: display only — uploading the
      *  profile to the DE1 on Coffee is the M2 gated-start sequence.) */
     fun setActiveProfile(id: String) {
-        _ui.value = _ui.value.copy(activeProfileId = id)
+        // Switching profiles clears any Quick-Controls override (re-seeds from new).
+        _ui.value = _ui.value.copy(activeProfileId = id, brewParams = null)
+    }
+
+    /** Apply a Quick-Controls brew override (dose/yield/brew-temp). Transient —
+     *  not saved to the profile; baked into the next shot's upload by [startShot]. */
+    fun quickAdjustBrew(dose: Double, yieldOut: Double, brewTemp: Double) {
+        _ui.value = _ui.value.copy(brewParams = BrewParams(dose, yieldOut, brewTemp))
+    }
+
+    /** Reset the Quick-Controls override back to the active profile's recipe. */
+    fun resetBrewParams() {
+        _ui.value = _ui.value.copy(brewParams = null)
+    }
+
+    /**
+     * Save the current Quick-Controls dial values as a NEW custom profile (the web
+     * shell's "Save preset") — clones the active profile, overwrites dose/yield/
+     * brew-temp, upserts into the custom store, makes it active. Never mutates the
+     * source profile. Pure shell (reuses the duplicate + custom-store path).
+     */
+    fun saveQuickPreset(name: String) {
+        val activeId = _ui.value.activeProfileId ?: return
+        val base = profileJsonById[activeId] ?: return
+        val bp = _ui.value.brewParams
+        val active = _ui.value.profiles.firstOrNull { it.id == activeId }
+        val d = bp?.dose?.toFloat() ?: active?.dose ?: 18f
+        val y = bp?.yieldOut?.toFloat() ?: active?.yieldOut ?: 36f
+        val t = bp?.brewTemp?.toFloat() ?: active?.brewTemp ?: 93f
+        val preset = runCatching { quickPresetJson(base, name, d, y, t, json) }.getOrElse {
+            appendLog("Save preset failed: ${it.message}")
+            return
+        }
+        customProfilesJson = listOf(preset) + customProfilesJson
+        refreshProfiles()
+        persistCustomProfiles()
+        profileIdOf(preset, json)?.let { setActiveProfile(it) }
     }
 
     // ── Profile editor (the `profile-edit` route) ─────────────────────────────
@@ -692,7 +742,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             appendLog("Can't start shot: no active profile")
             return
         }
-        val wireJson = runCatching { cremaProfileToWire(cremaJson) }.getOrElse {
+        // Quick-Controls override: bake the transient dose/yield/brew-temp into the
+        // uploaded profile (the web shell's lazy re-upload-with-overrides). The
+        // library profile is untouched; only this one upload carries the override.
+        val bp = _ui.value.brewParams
+        val effectiveJson = if (bp != null) {
+            runCatching { overrideBrewParamsJson(cremaJson, bp.dose.toFloat(), bp.yieldOut.toFloat(), bp.brewTemp.toFloat(), json) }
+                .getOrDefault(cremaJson)
+        } else {
+            cremaJson
+        }
+        val wireJson = runCatching { cremaProfileToWire(effectiveJson) }.getOrElse {
             appendLog("Profile convert failed: ${it.message}")
             return
         }
