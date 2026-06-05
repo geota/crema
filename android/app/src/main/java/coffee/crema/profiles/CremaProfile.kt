@@ -78,8 +78,12 @@ data class ProfileSegment(
     val time: Float = 0f,
     /** Target temperature, °C — drives the preview's stepped temperature line. */
     val temp: Float? = null,
-    /** Structured early-exit condition, or null. */
+    /** Per-segment dispensed-volume limit, ml, or null = no limit. */
+    val volumeLimitMl: Float? = null,
+    /** Structured early-exit condition `{metric, compare, threshold}`, or null. */
     val exit: SegmentExit? = null,
+    /** Per-segment max limiter `{value, range}` on the non-priority quantity, or null. */
+    val limiter: SegmentLimiter? = null,
 )
 
 /*
@@ -89,6 +93,22 @@ data class ProfileSegment(
  */
 @Serializable
 data class SegmentExit(
-    /** `"pressure" | "flow" | "time" | "volume" | "weight"`, or null. */
+    /** `"pressure"` | `"flow"` — the only v2 wire exit metrics — or null. */
     val metric: String? = null,
+    /** `"over"` | `"under"` — exit when the metric rises above / falls below [threshold]. */
+    val compare: String? = null,
+    /** Threshold value — bar (pressure) or ml/s (flow), per [metric]. */
+    val threshold: Float? = null,
+)
+
+/*
+ * Per-segment limiter (the editor's "Max"): caps the NON-priority quantity —
+ * ml/s on a pressure-priority segment, bar on a flow-priority one — within a
+ * tolerance [range]. Wire shape `{value, range}` (literal field names). Distinct
+ * from the per-segment `volumeLimitMl` and the whole-shot `maxTotalVolumeMl`.
+ */
+@Serializable
+data class SegmentLimiter(
+    val value: Float = 0f,
+    val range: Float = 0.6f,
 )

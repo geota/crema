@@ -41,6 +41,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import coffee.crema.profiles.SegmentEdit
+import coffee.crema.profiles.SegmentExit
+import coffee.crema.profiles.SegmentLimiter
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.theme.CremaTheme
 import coffee.crema.ui.components.CremaButton
@@ -76,6 +78,8 @@ private val ROAST_OPTIONS = listOf(
 )
 private val TYPE_OPTIONS = listOf(SegOption("pressure", "Pressure"), SegOption("flow", "Flow"))
 private val RAMP_OPTIONS = listOf(SegOption("smooth", "Smooth"), SegOption("fast", "Fast"))
+private val EXIT_METRIC_OPTIONS = listOf(SegOption("pressure", "Pressure"), SegOption("flow", "Flow"))
+private val CMP_OPTIONS = listOf(SegOption("over", "Over"), SegOption("under", "Under"))
 
 @Composable
 fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
@@ -132,6 +136,9 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                         target = it.target,
                         time = it.time,
                         temp = it.temp ?: profile.brewTemp,
+                        volume = it.volumeLimitMl,
+                        exit = it.exit,
+                        limiter = it.limiter,
                     )
                 },
             )
@@ -306,6 +313,7 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                                         target = last?.target ?: 6f,
                                         time = 6f,
                                         temp = last?.temp ?: brewTemp.toFloat(),
+                                        volume = last?.volume,
                                     ),
                                 )
                             },
@@ -397,15 +405,74 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                                     )
                                 }
                             }
-                            CremaStepper(
-                                label = "Temp",
-                                value = (seg.temp ?: 93f).toDouble(),
-                                unit = "°C",
-                                onChange = { if (i in segs.indices) segs[i] = segs[i].copy(temp = it.toFloat()) },
-                                step = 0.5,
-                                min = 20.0,
-                                max = 105.0,
-                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                Box(Modifier.weight(1f)) {
+                                    CremaStepper(
+                                        label = "Temp",
+                                        value = (seg.temp ?: 93f).toDouble(),
+                                        unit = "°C",
+                                        onChange = { if (i in segs.indices) segs[i] = segs[i].copy(temp = it.toFloat()) },
+                                        step = 0.5,
+                                        min = 20.0,
+                                        max = 105.0,
+                                    )
+                                }
+                                Box(Modifier.weight(1f)) {
+                                    CremaStepper(
+                                        label = "Volume (0 = none)",
+                                        value = (seg.volume ?: 0f).toDouble(),
+                                        unit = "ml",
+                                        onChange = { if (i in segs.indices) segs[i] = segs[i].copy(volume = it.toFloat().takeIf { v -> v > 0f }) },
+                                        step = 5.0,
+                                        min = 0.0,
+                                        max = 500.0,
+                                        fmt = { "%.0f".format(it) },
+                                    )
+                                }
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Eyebrow("Early exit", Modifier.weight(1f))
+                                CremaSwitch(
+                                    seg.exit != null,
+                                    { on -> if (i in segs.indices) segs[i] = segs[i].copy(exit = if (on) SegmentExit("flow", "over", 4f) else null) },
+                                )
+                            }
+                            seg.exit?.let { ex ->
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Box(Modifier.weight(1f)) {
+                                        CremaSegmentedButton(EXIT_METRIC_OPTIONS, ex.metric ?: "flow", { if (i in segs.indices) segs[i] = segs[i].copy(exit = ex.copy(metric = it)) })
+                                    }
+                                    Box(Modifier.weight(1f)) {
+                                        CremaSegmentedButton(CMP_OPTIONS, ex.compare ?: "over", { if (i in segs.indices) segs[i] = segs[i].copy(exit = ex.copy(compare = it)) })
+                                    }
+                                }
+                                CremaStepper(
+                                    label = "Threshold",
+                                    value = (ex.threshold ?: 4f).toDouble(),
+                                    unit = if (ex.metric == "pressure") "bar" else "ml/s",
+                                    onChange = { if (i in segs.indices) segs[i] = segs[i].copy(exit = ex.copy(threshold = it.toFloat())) },
+                                    step = 0.1,
+                                    min = 0.0,
+                                    max = 12.0,
+                                )
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Eyebrow("Max limiter", Modifier.weight(1f))
+                                CremaSwitch(
+                                    seg.limiter != null,
+                                    { on -> if (i in segs.indices) segs[i] = segs[i].copy(limiter = if (on) SegmentLimiter(6f, 0.6f) else null) },
+                                )
+                            }
+                            seg.limiter?.let { lm ->
+                                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                    Box(Modifier.weight(1f)) {
+                                        CremaStepper(label = "Max", value = lm.value.toDouble(), unit = if (seg.mode == "flow") "bar" else "ml/s", onChange = { if (i in segs.indices) segs[i] = segs[i].copy(limiter = lm.copy(value = it.toFloat())) }, step = 0.1, min = 0.0, max = 12.0)
+                                    }
+                                    Box(Modifier.weight(1f)) {
+                                        CremaStepper(label = "Tolerance", value = lm.range.toDouble(), unit = "", onChange = { if (i in segs.indices) segs[i] = segs[i].copy(limiter = lm.copy(range = it.toFloat())) }, step = 0.1, min = 0.0, max = 6.0)
+                                    }
+                                }
+                            }
                             }
                           }
                         }

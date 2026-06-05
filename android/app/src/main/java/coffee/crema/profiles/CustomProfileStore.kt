@@ -9,6 +9,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -159,6 +160,30 @@ fun patchCremaProfileJson(
                 edit.mode?.let { put("mode", JsonPrimitive(it)) }
                 edit.ramp?.let { put("ramp", JsonPrimitive(it)) }
                 edit.temp?.let { put("temp", JsonPrimitive(it)) }
+                edit.volume?.let { put("volumeLimitMl", JsonPrimitive(it)) }
+                // Exit / limiter: write the complete object when enabled, else
+                // JsonNull to CLEAR a base condition (the patch merges over base,
+                // so an omitted key would inherit it). Objects are always complete
+                // (Rust ExitCondition/Limiter have no Option fields).
+                put(
+                    "exit",
+                    edit.exit?.let { ex ->
+                        buildJsonObject {
+                            put("metric", JsonPrimitive(ex.metric ?: "flow"))
+                            put("compare", JsonPrimitive(ex.compare ?: "over"))
+                            put("threshold", JsonPrimitive(ex.threshold ?: 4f))
+                        }
+                    } ?: JsonNull,
+                )
+                put(
+                    "limiter",
+                    edit.limiter?.let { lm ->
+                        buildJsonObject {
+                            put("value", JsonPrimitive(lm.value))
+                            put("range", JsonPrimitive(lm.range))
+                        }
+                    } ?: JsonNull,
+                )
                 if (baseSeg == null) {
                     put("id", JsonPrimitive("seg:" + UUID.randomUUID()))
                     put("name", JsonPrimitive(edit.name.ifBlank { "Segment ${i + 1}" }))
@@ -195,4 +220,40 @@ data class SegmentEdit(
     val target: Float,
     val time: Float,
     val temp: Float?,
+    val volume: Float? = null,
+    /** Early-exit condition, or null = disabled. */
+    val exit: SegmentExit? = null,
+    /** Max limiter, or null = disabled. */
+    val limiter: SegmentLimiter? = null,
 )
+
+/**
+ * Override just the top-level dose / yield / brew-temp on a complete CremaProfile
+ * JSON, leaving every other field (segments, limiters, …) untouched — the
+ * Quick-Controls transient override baked into a shot upload (the web shell's
+ * re-upload-with-overrides). Does NOT persist to the library.
+ */
+fun overrideBrewParamsJson(baseJson: String, dose: Float, yieldOut: Float, brewTemp: Float, json: Json): String {
+    val root = json.parseToJsonElement(baseJson).jsonObject.toMutableMap()
+    root["dose"] = JsonPrimitive(dose)
+    root["yieldOut"] = JsonPrimitive(yieldOut)
+    root["brewTemp"] = JsonPrimitive(brewTemp)
+    return json.encodeToString(JsonObject.serializer(), JsonObject(root))
+}
+
+/**
+ * Clone the active profile into a NEW custom profile carrying the Quick-Controls
+ * dial values (the web shell's "Save preset"): fresh id + source:custom + the
+ * given name + dose/yield/brew-temp, every segment preserved. Does NOT mutate the
+ * source profile.
+ */
+fun quickPresetJson(baseJson: String, name: String, dose: Float, yieldOut: Float, brewTemp: Float, json: Json): String {
+    val dup = duplicatedCustomProfileJson(baseJson, json)
+    val root = json.parseToJsonElement(dup).jsonObject.toMutableMap()
+    root["name"] = JsonPrimitive(name.ifBlank { "Custom preset" })
+    root["dose"] = JsonPrimitive(dose)
+    root["yieldOut"] = JsonPrimitive(yieldOut)
+    root["brewTemp"] = JsonPrimitive(brewTemp)
+    root["pinned"] = JsonPrimitive(false)
+    return json.encodeToString(JsonObject.serializer(), JsonObject(root))
+}
