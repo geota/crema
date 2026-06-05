@@ -2,6 +2,7 @@ package coffee.crema.ui.screens
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -38,6 +39,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import coffee.crema.profiles.SegmentEdit
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.theme.CremaTheme
@@ -49,6 +51,7 @@ import coffee.crema.ui.components.CremaSegmentedButton
 import coffee.crema.ui.components.CremaStepper
 import coffee.crema.ui.components.CremaSwitch
 import coffee.crema.ui.components.Eyebrow
+import coffee.crema.ui.components.PhIcon
 import coffee.crema.ui.components.SegOption
 
 /*
@@ -114,6 +117,8 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
     var yieldG by remember(profile.id) { mutableStateOf(profile.yieldOut.toDouble()) }
     var brewTemp by remember(profile.id) { mutableStateOf(profile.brewTemp.toDouble()) }
     var maxVol by remember(profile.id) { mutableStateOf(profile.maxTotalVolumeMl.toDouble()) }
+    // Segment accordion: one expanded at a time (-1 = all collapsed).
+    var expandedIdx by remember(profile.id) { mutableStateOf(0) }
     // Per-segment editable state (positional with the profile's segments; the
     // editor doesn't add / remove segments yet).
     val segs = remember(profile.id) {
@@ -319,23 +324,39 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                         val isFlow = seg.mode == "flow"
                         CremaCard(Modifier.fillMaxWidth(), container = MaterialTheme.colorScheme.surfaceContainerHigh) {
                           Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(
+                                Modifier.fillMaxWidth().clickable { expandedIdx = if (expandedIdx == i) -1 else i },
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
                                 Box(
                                     Modifier.size(24.dp).clip(CircleShape).background(MaterialTheme.colorScheme.secondaryContainer),
                                     contentAlignment = Alignment.Center,
                                 ) {
                                     Text("${i + 1}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSecondaryContainer)
                                 }
-                                Text(
-                                    seg.name.ifBlank { "Step ${i + 1}" },
-                                    modifier = Modifier.weight(1f),
-                                    style = MaterialTheme.typography.titleSmall,
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                )
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        seg.name.ifBlank { "Step ${i + 1}" },
+                                        style = MaterialTheme.typography.titleSmall,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        maxLines = 1,
+                                    )
+                                    if (expandedIdx != i) {
+                                        Text(
+                                            "%.1f %s · %.0fs · %s".format(seg.target, if (isFlow) "ml/s" else "bar", seg.time, seg.ramp ?: "smooth"),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                        )
+                                    }
+                                }
+                                PhIcon("caret-down", modifier = Modifier.rotate(if (expandedIdx == i) 180f else 0f), sizeDp = 18, tint = MaterialTheme.colorScheme.onSurfaceVariant)
                                 if (segs.size > 1) {
                                     CremaIconButton(icon = "trash", onClick = { if (i in segs.indices) segs.removeAt(i) })
                                 }
                             }
+                            if (expandedIdx == i) {
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Box(Modifier.weight(1f)) {
                                     CremaSegmentedButton(
@@ -385,6 +406,7 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                                 min = 20.0,
                                 max = 105.0,
                             )
+                            }
                           }
                         }
                     }
