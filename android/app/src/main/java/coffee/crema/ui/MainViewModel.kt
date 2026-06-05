@@ -976,6 +976,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { historyStore.save(next) }
     }
 
+    /** Apply a user rating / tasting-notes edit to a logged shot. Persisted. */
+    fun updateShot(id: String, rating: Int, notes: String) {
+        val s = _ui.value
+        val next = s.history.map {
+            if (it.id == id) it.copy(rating = rating.coerceIn(0, 5).takeIf { r -> r > 0 }, notes = notes.ifBlank { null }) else it
+        }
+        _ui.value = s.copy(history = next)
+        viewModelScope.launch { historyStore.save(next) }
+    }
+
     // ── App settings ──────────────────────────────────────────────────────────
 
     /** Load persisted app preferences at startup. */

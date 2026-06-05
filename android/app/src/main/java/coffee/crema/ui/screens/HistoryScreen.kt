@@ -16,7 +16,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -38,6 +40,7 @@ import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.components.CremaCard
 import coffee.crema.ui.components.CremaNavigationRail
 import coffee.crema.ui.components.Eyebrow
+import coffee.crema.ui.components.PhIcon
 import coffee.crema.ui.theme.CremaTheme
 
 /*
@@ -114,6 +117,7 @@ fun HistoryScreen(
                         ShotDetail(
                             shot = selected,
                             channels = ui.chartChannels,
+                            onRate = { r, n -> vm.updateShot(selected.id, r, n) },
                             modifier = Modifier.weight(1f).fillMaxHeight(),
                         )
                     }
@@ -205,7 +209,7 @@ private fun ShotRow(shot: StoredShot, selected: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
-private fun ShotDetail(shot: StoredShot, channels: Set<String>, modifier: Modifier) {
+private fun ShotDetail(shot: StoredShot, channels: Set<String>, modifier: Modifier, onRate: (Int, String) -> Unit) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
         // Detail head — date eyebrow, serif profile title, recipe meta.
         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -256,6 +260,30 @@ private fun ShotDetail(shot: StoredShot, channels: Set<String>, modifier: Modifi
                         .fillMaxSize()
                         .padding(start = 4.dp, end = 8.dp, top = 8.dp, bottom = 4.dp),
                 )
+            }
+        }
+        var rating by remember(shot.id) { mutableStateOf(shot.rating ?: 0) }
+        var notes by remember(shot.id) { mutableStateOf(shot.notes ?: "") }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Eyebrow("Rating")
+            StarRating(rating) { rating = it; onRate(it, notes) }
+        }
+        OutlinedTextField(
+            value = notes,
+            onValueChange = { notes = it; onRate(rating, it) },
+            label = { Text("Tasting notes") },
+            minLines = 2,
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
+
+@Composable
+private fun StarRating(value: Int, onChange: (Int) -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+        (1..5).forEach { n ->
+            IconButton(onClick = { onChange(if (n == value) 0 else n) }) {
+                PhIcon("star", sizeDp = 22, tint = if (n <= value) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }
