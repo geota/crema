@@ -4,8 +4,11 @@ import androidx.compose.material3.Typography
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.googlefonts.Font
+import androidx.compose.ui.text.googlefonts.GoogleFont
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
+import coffee.crema.R
 
 /*
  * Crema typography — a 1:1 port of the type scale in tablet/m3-tokens.css.
@@ -24,14 +27,30 @@ import androidx.compose.ui.unit.sp
  * px in the CSS maps 1:1 to sp here (the mockup used a 1:1 px↔sp convention).
  */
 
-// M0: system font fallbacks. The brand families — Newsreader (serif), Hanken
-// Grotesk (sans), JetBrains Mono (mono) — are a follow-up: bundle the static
-// .ttf files in res/font and swap these three vals (or wire the GoogleFont
-// downloadable-font provider with the GMS certs array added to res/values).
-// The type SCALE below (sizes / weights / tabular numerals) is unchanged.
-val Newsreader = FontFamily.Serif
-val HankenGrotesk = FontFamily.SansSerif
-val JetBrainsMono = FontFamily.Monospace
+// Brand families via the GoogleFont downloadable-font provider (GMS certs in
+// res/values/font_certs.xml). On a device with Google Play services these
+// download + cache; without it, Compose falls back to the system family so the
+// type scale still renders. The SCALE below (sizes / weights / tabular) is shared.
+private val googleFontProvider = GoogleFont.Provider(
+    providerAuthority = "com.google.android.gms.fonts",
+    providerPackage = "com.google.android.gms",
+    certificates = R.array.com_google_android_gms_fonts_certs,
+)
+
+val Newsreader = FontFamily(
+    Font(GoogleFont("Newsreader"), googleFontProvider, FontWeight.Normal),
+    Font(GoogleFont("Newsreader"), googleFontProvider, FontWeight.Medium),
+    Font(GoogleFont("Newsreader"), googleFontProvider, FontWeight.SemiBold),
+)
+val HankenGrotesk = FontFamily(
+    Font(GoogleFont("Hanken Grotesk"), googleFontProvider, FontWeight.Normal),
+    Font(GoogleFont("Hanken Grotesk"), googleFontProvider, FontWeight.Medium),
+    Font(GoogleFont("Hanken Grotesk"), googleFontProvider, FontWeight.SemiBold),
+)
+val JetBrainsMono = FontFamily(
+    Font(GoogleFont("JetBrains Mono"), googleFontProvider, FontWeight.Normal),
+    Font(GoogleFont("JetBrains Mono"), googleFontProvider, FontWeight.Medium),
+)
 
 /*
  * M3 type scale, Crema families. Display/Headline + Title-Large are serif;
