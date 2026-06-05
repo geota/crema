@@ -44,6 +44,7 @@
 pub mod bean;
 pub mod bean_coerce;
 pub mod beanconqueror;
+pub mod brand;
 pub mod builtin;
 pub mod crema_jsonl;
 pub mod crema_profile;

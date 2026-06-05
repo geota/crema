@@ -15,6 +15,7 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import type { CremaApp } from '$lib/state';
+	import CremaMark from './CremaMark.svelte';
 	import type { De1State, ScaleState } from '$lib/ble';
 
 	let { app }: { app: CremaApp | null } = $props();
@@ -91,7 +92,7 @@
 
 <nav class="cside" aria-label="Primary">
 	<div class="cside-mark">
-		<div class="cside-mark-glyph">C</div>
+		<CremaMark size={34} />
 	</div>
 	<div class="cside-items">
 		{#each items as it (it.id)}

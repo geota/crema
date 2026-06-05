@@ -55,8 +55,9 @@ export default defineConfig(({ command }) => ({
 				display: 'standalone',
 				start_url: '/',
 				icons: [
-					// Placeholder art — a coffee-toned square with a "C" arc; final
-					// art is a later polish item.
+					// Crema brand mark — font-free, generated from brand/crema-mark.svg
+					// (brand/generate_mark.py). "any" = the disc mark (transparent
+					// corners); "maskable" = full-bleed copper square + centred C.
 					{
 						src: 'icon-192.png',
 						sizes: '192x192',
@@ -68,6 +69,12 @@ export default defineConfig(({ command }) => ({
 						sizes: '512x512',
 						type: 'image/png',
 						purpose: 'any'
+					},
+					{
+						src: 'icon-maskable-192.png',
+						sizes: '192x192',
+						type: 'image/png',
+						purpose: 'maskable'
 					},
 					{
 						src: 'icon-maskable-512.png',

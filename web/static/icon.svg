@@ -1,9 +1,0 @@
-<!-- Crema app icon — placeholder art (later polish item).
-     A solid daisyUI-coffee-toned square with a cream "C" drawn as a stroked
-     arc (a vector path, so it renders without a font). Standard
-     (non-maskable) variant: the glyph runs near the edges. -->
-<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
-  <rect width="512" height="512" rx="96" fill="#20161e" />
-  <path d="M 366 158 A 140 140 0 1 0 366 354"
-        fill="none" stroke="#e9c8a5" stroke-width="64" stroke-linecap="round" />
-</svg>
