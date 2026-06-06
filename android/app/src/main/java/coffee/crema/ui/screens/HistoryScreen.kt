@@ -25,7 +25,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -50,6 +49,7 @@ import coffee.crema.history.StoredShot
 import coffee.crema.ui.TelemetrySample
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.components.CremaCard
+import coffee.crema.ui.components.CremaTextField
 import coffee.crema.ui.components.CremaValueUnit
 import coffee.crema.ui.theme.HankenGrotesk
 import androidx.compose.material3.HorizontalDivider
@@ -295,7 +295,7 @@ private fun StatsStrip(history: List<StoredShot>) {
 
 @Composable
 private fun StatTile(label: String, value: String, unit: String?, modifier: Modifier = Modifier) {
-    CremaCard(modifier, shape = RoundedCornerShape(16.dp)) {
+    CremaCard(modifier, shape = RoundedCornerShape(12.dp)) {
         Column(
             Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -542,10 +542,12 @@ private fun ShotDetail(
             Eyebrow("Rating")
             StarRating(rating) { rating = it; onRate(it, notes) }
         }
-        OutlinedTextField(
+        CremaTextField(
             value = notes,
             onValueChange = { notes = it; onRate(rating, it) },
-            label = { Text("Tasting notes") },
+            label = "Tasting notes",
+            placeholder = "How did it taste?",
+            singleLine = false,
             minLines = 2,
             modifier = Modifier.fillMaxWidth(),
         )
