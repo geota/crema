@@ -2,24 +2,50 @@ package coffee.crema.ui.components
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.em
+import androidx.compose.ui.text.TextStyle
+import coffee.crema.ui.theme.Newsreader
+import androidx.compose.ui.res.painterResource
+import coffee.crema.R
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupPositionProvider
+import androidx.compose.ui.window.PopupProperties
 import coffee.crema.ui.theme.CremaTheme
 import com.adamglin.PhosphorIcons
 import com.adamglin.phosphoricons.Regular
 import com.adamglin.phosphoricons.regular.ArrowCounterClockwise
+import com.adamglin.phosphoricons.regular.ArrowDown
 import com.adamglin.phosphoricons.regular.ArrowLeft
+import com.adamglin.phosphoricons.regular.ArrowUp
 import com.adamglin.phosphoricons.regular.Bluetooth
 import com.adamglin.phosphoricons.regular.Bug
 import com.adamglin.phosphoricons.regular.Check
@@ -46,6 +72,8 @@ import com.adamglin.phosphoricons.regular.MagnifyingGlass
 import com.adamglin.phosphoricons.regular.Shapes
 import com.adamglin.phosphoricons.regular.Shuffle
 import com.adamglin.phosphoricons.regular.Star
+import com.adamglin.phosphoricons.Fill
+import com.adamglin.phosphoricons.fill.Star as StarFilled
 import com.adamglin.phosphoricons.regular.UploadSimple
 import com.adamglin.phosphoricons.regular.ListBullets
 import com.adamglin.phosphoricons.regular.CoffeeBean
@@ -99,7 +127,9 @@ import com.adamglin.phosphoricons.regular.Stop
 fun PhIcon(name: String, modifier: Modifier = Modifier, tint: Color = LocalContentColor.current, sizeDp: Int = 20) {
     val vector: ImageVector = when (name) {
         "arrow-counter-clockwise" -> PhosphorIcons.Regular.ArrowCounterClockwise
+        "arrow-down" -> PhosphorIcons.Regular.ArrowDown
         "arrow-left" -> PhosphorIcons.Regular.ArrowLeft
+        "arrow-up" -> PhosphorIcons.Regular.ArrowUp
         "bluetooth" -> PhosphorIcons.Regular.Bluetooth
         "bug" -> PhosphorIcons.Regular.Bug
         "check" -> PhosphorIcons.Regular.Check
@@ -125,6 +155,7 @@ fun PhIcon(name: String, modifier: Modifier = Modifier, tint: Color = LocalConte
         "shapes" -> PhosphorIcons.Regular.Shapes
         "shuffle" -> PhosphorIcons.Regular.Shuffle
         "star" -> PhosphorIcons.Regular.Star
+        "star-fill" -> PhosphorIcons.Fill.StarFilled
         "upload-simple" -> PhosphorIcons.Regular.UploadSimple
         "list-bullets" -> PhosphorIcons.Regular.ListBullets
         "coffee-bean" -> PhosphorIcons.Regular.CoffeeBean
@@ -237,6 +268,24 @@ fun ScalePillButton(icon: String, label: String, onClick: () -> Unit, modifier: 
     }
 }
 
+// ── Library-card geometry — ONE source of truth for the 3 library screens ────
+// Profiles / Beans / History cards each hard-coded the same paddings, radius,
+// preview height and grid gaps as inline literals (they matched, but would
+// silently drift on any edit — the "cards different sizes" risk). Pull them
+// here so the set stays provably identical. Values from the proto's v2 card
+// anatomy (screens.css). Reserved head/tag rows keep cards in a grid row
+// equal-height regardless of active/pinned/tag content.
+object CremaCardSpec {
+    val radius = 16.dp            // large corner — tiles
+    val pad = 16.dp               // card body padding
+    val gap = 12.dp               // inter-row gap inside a card
+    val gridGap = 16.dp           // gap between cards
+    val previewHeight = 96.dp     // curve/figure preview height
+    val headMinHeight = 28.dp     // reserved head row (LOADED pill / pin star)
+    val tagRowMinHeight = 22.dp   // reserved tag row (empty != collapsed)
+    val gridContentPadding = PaddingValues(top = 8.dp, bottom = 24.dp)
+}
+
 // ── Card ────────────────────────────────────────────────────────────────────
 // Crema "filled" card: surfaceContainer (one step up from the page). On DARK
 // there is NO border and NO bottom shadow — elevation is the lighter surface.
@@ -257,6 +306,161 @@ fun CremaCard(
         border = border,
         content = { Column(content = content) },
     )
+}
+
+// ── Confirm dialog — the single espresso-themed destructive-action confirm ──
+// A 1:1 port of the PWA `confirmDialog({ title, message, confirmLabel, danger })`
+// contract onto an M3 AlertDialog (M3 gives scrim/elevation/back-dismiss/a11y
+// for free; we just theme it + bake in the danger/Cancel pair). Caller owns
+// visibility: render inside `if (showConfirm) { … }`, clear the flag in both
+// onConfirm and onDismiss. Pass `requireTyped` for the nuclear "Erase all data"
+// case → the confirm stays disabled until the user types the exact word.
+@Composable
+fun CremaConfirmDialog(
+    title: String,
+    body: String,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+    confirmLabel: String = "Confirm",
+    cancelLabel: String = "Cancel",
+    danger: Boolean = false,
+    icon: String? = null,
+    requireTyped: String? = null,
+) {
+    var typed by remember { mutableStateOf("") }
+    val confirmEnabled = requireTyped == null || typed.trim() == requireTyped
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        tonalElevation = 0.dp,
+        shape = MaterialTheme.shapes.large,
+        icon = icon?.let {
+            { PhIcon(it, sizeDp = 24, tint = if (danger) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary) }
+        },
+        title = { Text(title, style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onSurface) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(body, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (requireTyped != null) {
+                    OutlinedTextField(
+                        value = typed,
+                        onValueChange = { typed = it },
+                        singleLine = true,
+                        label = { Text("Type “$requireTyped” to confirm") },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            CremaButton(onClick = onConfirm, variant = CremaButtonVariant.Text, danger = danger, enabled = confirmEnabled, label = confirmLabel)
+        },
+        // Cancel stays neutral (onSurfaceVariant) so it doesn't compete with the
+        // warm copper/rose confirm — the danger action should be the only tinted one.
+        dismissButton = {
+            TextButton(
+                onClick = onDismiss,
+                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.onSurfaceVariant),
+            ) { Text(cancelLabel, style = MaterialTheme.typography.labelLarge) }
+        },
+    )
+}
+
+// ── Overflow (⋮) menu — thin IconButton + bordered anchored popup ────────────
+// The Android answer to the proto's M3OverflowMenu. Inline icons handle the
+// frequent actions on a card; this kebab carries the low-frequency / destructive
+// rest (Export, Freeze, Archive, Delete) so the touch row stays short. `danger`
+// items render in the error color. Built on [CremaAnchoredPopup] + a bordered
+// surfaceContainerHigh card (the same chrome as the Brew header pickers) so the
+// menu reads against the dark page instead of vanishing like the stock M3
+// DropdownMenu did on same-tone backgrounds.
+data class OverflowItem(
+    val icon: String,
+    val label: String,
+    val onClick: () -> Unit,
+    val danger: Boolean = false,
+    val enabled: Boolean = true,
+)
+
+@Composable
+fun CremaOverflowMenu(items: List<OverflowItem>, icon: String = "dots-three-vertical") {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { open = true }) { PhIcon(icon, sizeDp = 20) }
+        CremaAnchoredPopup(expanded = open, onDismiss = { open = false }) {
+            CremaMenuSurface(Modifier.widthIn(min = 200.dp, max = 280.dp)) {
+                items.forEach { item ->
+                    CremaMenuItem(
+                        label = item.label,
+                        onClick = { open = false; item.onClick() },
+                        leadingIcon = item.icon,
+                        danger = item.danger,
+                        enabled = item.enabled,
+                    )
+                }
+            }
+        }
+    }
+}
+
+// ── Anchored popup — a bordered card pinned just below a tap anchor ──────────
+// The reusable substrate for the Brew header pickers (proto .bh-pop) and any
+// similar "tap a block → bordered popover card" surface. Unlike M3's
+// ExposedDropdownMenu it (a) carries NO chrome of its own — the caller supplies
+// the bordered Surface so the card reads against same-tone backgrounds, and
+// (b) lets the caller bound height + scroll + pin a footer internally.
+//
+// Positioning: the popup's top-left is placed at the anchor's bottom-left plus
+// an 8dp gap (proto `top: calc(100% + 8px); left: 0`). If the card would spill
+// past the window bottom it flips ABOVE the anchor (its bottom 8dp above the
+// anchor top); the x is clamped so the card stays on-screen. focusable = true
+// so the first tap outside dismisses (onDismiss) and back closes it.
+//
+// USAGE: wrap the anchor block + this call in a `Box` so the Popup anchors to
+// that Box's bounds, e.g.
+//   Box { AnchorBlock(); CremaAnchoredPopup(open, { open = false }) { Card() } }
+@Composable
+fun CremaAnchoredPopup(
+    expanded: Boolean,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+    gap: androidx.compose.ui.unit.Dp = 8.dp,
+    content: @Composable () -> Unit,
+) {
+    if (!expanded) return
+    val gapPx = with(androidx.compose.ui.platform.LocalDensity.current) { gap.roundToPx() }
+    val provider = remember(gapPx) {
+        object : PopupPositionProvider {
+            override fun calculatePosition(
+                anchorBounds: IntRect,
+                windowSize: IntSize,
+                layoutDirection: LayoutDirection,
+                popupContentSize: IntSize,
+            ): IntOffset {
+                // x: left-align to the anchor, clamped on-screen.
+                val maxX = (windowSize.width - popupContentSize.width).coerceAtLeast(0)
+                val x = anchorBounds.left.coerceIn(0, maxX)
+                // y: below the anchor; flip above if it would overflow the bottom.
+                val below = anchorBounds.bottom + gapPx
+                val y = if (below + popupContentSize.height <= windowSize.height) {
+                    below
+                } else {
+                    (anchorBounds.top - gapPx - popupContentSize.height)
+                        .coerceAtLeast(0)
+                }
+                return IntOffset(x, y)
+            }
+        }
+    }
+    Popup(
+        popupPositionProvider = provider,
+        onDismissRequest = onDismiss,
+        properties = PopupProperties(focusable = true),
+    ) {
+        // A no-op Box wrapper so callers can pass a sizing/test modifier; the
+        // card itself (Surface + border) is supplied by `content`.
+        Box(modifier) { content() }
+    }
 }
 
 // ── Switch ──────────────────────────────────────────────────────────────────
@@ -301,6 +505,140 @@ fun CremaFilterChip(label: String, selected: Boolean, modifier: Modifier = Modif
         label = { if (count != null) Text("$label  $count") else Text(label) },
         leadingIcon = icon?.let { { PhIcon(it, sizeDp = 18) } },
     )
+}
+
+// ── Sort control — split pill: direction toggle | key dropdown ──────────────
+// The PWA/proto sort affordance, reusable across the app. ONE bordered pill sized
+// + shaped like the filter chips (32dp tall, shapes.small, 1dp outlineVariant),
+// split by a hairline into:
+//   • a direction toggle (↑ ascending / ↓ descending), and
+//   • a key zone (current key + caret) that opens a bordered dropdown of keys.
+// So the filter row reads as one cohesive set of chips + sort. Mirrors the web
+// FavoritesStrip/ProfileLibrary sort split-button.
+data class SortKey(val id: String, val label: String, val icon: String? = null)
+
+@Composable
+fun CremaSortControl(
+    keys: List<SortKey>,
+    selectedKey: String,
+    descending: Boolean,
+    onKeyChange: (String) -> Unit,
+    onToggleDirection: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val current = keys.firstOrNull { it.id == selectedKey } ?: keys.first()
+    var menuOpen by remember { mutableStateOf(false) }
+    val shape = MaterialTheme.shapes.small
+    val hairline = MaterialTheme.colorScheme.outlineVariant
+    Row(
+        modifier
+            .height(32.dp)
+            .clip(shape)
+            .border(BorderStroke(1.dp, hairline), shape),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // Direction toggle — ↑ ascending / ↓ descending.
+        Box(
+            Modifier.fillMaxHeight().clip(shape).clickable(onClick = onToggleDirection)
+                .padding(horizontal = 10.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            PhIcon(
+                if (descending) "arrow-down" else "arrow-up",
+                sizeDp = 15,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Box(Modifier.width(1.dp).fillMaxHeight().background(hairline))
+        // Key zone — current key + caret → bordered dropdown.
+        Box {
+            Row(
+                Modifier.fillMaxHeight().clickable { menuOpen = true }
+                    .padding(start = 12.dp, end = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                current.icon?.let { PhIcon(it, sizeDp = 14, tint = MaterialTheme.colorScheme.onSurfaceVariant) }
+                Text(current.label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface)
+                PhIcon("caret-down", sizeDp = 13, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            CremaAnchoredPopup(expanded = menuOpen, onDismiss = { menuOpen = false }) {
+                CremaMenuSurface(Modifier.widthIn(min = 172.dp, max = 240.dp)) {
+                    keys.forEach { key ->
+                        CremaMenuItem(
+                            label = key.label,
+                            onClick = { menuOpen = false; onKeyChange(key.id) },
+                            leadingIcon = key.icon,
+                            active = key.id == selectedKey,
+                            showCheck = true,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ── Menu surface + item — the one polished popup-menu style ──────────────────
+// The shared chrome for every Crema popup menu (sort dropdown, card overflow,
+// and the Brew header pickers' option rows): a bordered surfaceContainerHigh
+// card whose rows are individually rounded, with a copper-tinted ACTIVE row
+// (the M3 "selected" container) + hover/press feedback, instead of flat text on
+// a flat fill. Mirrors the web `.sortpill-menu` / `.sb-menu` (rounded rows,
+// copper active wash). Pass the card a width via `modifier` (widthIn).
+@Composable
+fun CremaMenuSurface(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        tonalElevation = 0.dp,
+        shadowElevation = 10.dp,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        modifier = modifier,
+    ) {
+        Column(Modifier.padding(6.dp), verticalArrangement = Arrangement.spacedBy(2.dp), content = content)
+    }
+}
+
+// One menu row. `active` paints the copper "selected" wash + copper content (and,
+// with `showCheck`, a trailing tick); `danger` paints the error color. Each row
+// is its own rounded, ripple-clipped hit target (M3 min 48dp tall).
+@Composable
+fun CremaMenuItem(
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    leadingIcon: String? = null,
+    active: Boolean = false,
+    danger: Boolean = false,
+    showCheck: Boolean = false,
+    enabled: Boolean = true,
+) {
+    val content = when {
+        !enabled -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+        danger -> MaterialTheme.colorScheme.error
+        active -> MaterialTheme.colorScheme.primary
+        else -> MaterialTheme.colorScheme.onSurface
+    }
+    val rowShape = RoundedCornerShape(8.dp)
+    Row(
+        modifier
+            .fillMaxWidth()
+            .clip(rowShape)
+            .background(if (active) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else Color.Transparent)
+            .clickable(enabled = enabled, onClick = onClick)
+            .heightIn(min = 48.dp) // M3 min menu-item touch target
+            .padding(horizontal = 12.dp, vertical = 9.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (leadingIcon != null) {
+            PhIcon(leadingIcon, sizeDp = 18, tint = if (active || danger || !enabled) content else MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Text(label, color = content, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+        if (showCheck && active) PhIcon("check", sizeDp = 16, tint = MaterialTheme.colorScheme.primary)
+    }
 }
 
 // ── Telemetry stepper — big touch − / value / + (Brew, Settings, editors) ───
@@ -357,12 +695,14 @@ fun CremaNavigationRail(
 ) {
     NavigationRail(
         header = {
-            // Brand "C" mark
-            Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primaryContainer, modifier = Modifier.padding(top = 12.dp).size(40.dp)) {
-                Box(contentAlignment = Alignment.Center) {
-                    Text("C", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onPrimaryContainer)
-                }
-            }
+            // Brand "C" mark — the PWA favicon's Newsreader-500 glyph baked into a
+            // vector (R.drawable.ic_crema_logo) so it's font-independent + identical
+            // everywhere. Disc + off-centre serif C live in the drawable.
+            Image(
+                painter = painterResource(R.drawable.ic_crema_logo),
+                contentDescription = "Crema",
+                modifier = Modifier.padding(top = 12.dp).size(34.dp),
+            )
         },
     ) {
         Spacer(Modifier.height(8.dp))
@@ -372,6 +712,13 @@ fun CremaNavigationRail(
                 onClick = { onNav(item.id) },
                 icon = { PhIcon(item.icon, sizeDp = 24) },
                 label = { Text(item.label, style = MaterialTheme.typography.labelMedium) },
+                colors = NavigationRailItemDefaults.colors(
+                    indicatorColor = MaterialTheme.colorScheme.secondaryContainer,
+                    selectedIconColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                    selectedTextColor = MaterialTheme.colorScheme.onSurface,
+                    unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                ),
             )
         }
         Spacer(Modifier.weight(1f))
@@ -382,16 +729,65 @@ fun CremaNavigationRail(
     }
 }
 
+// Rail connection status (proto .m3-rail-status): a 56dp-wide VERTICAL column —
+// status dot ABOVE a 9sp uppercase label — that connects/disconnects on tap.
+// Connected = green success dot inside a soft glow ring (proto box-shadow
+// 0 0 0 2px success@30%). Disconnected = dim onSurface@20% dot with a small
+// circular "connect" CTA badge pinned to the dot's top-right corner (proto
+// .m3-rail-status-cta, shown via `:not(.is-connected)`); Android has no hover,
+// so show-when-disconnected is the faithful mapping of that rule.
 @Composable
 private fun ConnectionPip(label: String, connected: Boolean, onClick: () -> Unit) {
     val tel = CremaTheme.telemetry
-    TextButton(onClick = onClick, contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp)) {
-        Box(Modifier.size(8.dp).then(Modifier), contentAlignment = Alignment.Center) {
-            Surface(shape = CircleShape, color = if (connected) tel.success else MaterialTheme.colorScheme.outline, modifier = Modifier.size(8.dp)) {}
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    val pressed by interaction.collectIsPressedAsState()
+    // Proto .m3-rail-status-cta: the copper check badge appears ONLY on a
+    // CONNECTED pip while hovered (Android maps hover→hover-or-press). Never on a
+    // disconnected pip, and never at rest.
+    val showCheck = connected && (hovered || pressed)
+    Column(
+        modifier = Modifier
+            .width(56.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+            .padding(vertical = 6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        // The status dot is centered; the connect-confirm badge sits just to its
+        // right (proto cta at right:8) — beside, not overlapping.
+        Box(Modifier.fillMaxWidth().height(16.dp)) {
+            Box(Modifier.align(Alignment.Center).size(14.dp), contentAlignment = Alignment.Center) {
+                if (connected) {
+                    Box(Modifier.size(13.dp).clip(CircleShape).background(tel.success.copy(alpha = 0.28f)))
+                }
+                Box(
+                    Modifier.size(8.dp).clip(CircleShape)
+                        .background(if (connected) tel.success else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.22f)),
+                )
+            }
+            if (showCheck) {
+                Box(
+                    Modifier.align(Alignment.CenterEnd).padding(end = 6.dp).size(14.dp)
+                        .clip(CircleShape).background(MaterialTheme.colorScheme.primary),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    PhIcon("check", sizeDp = 9, tint = MaterialTheme.colorScheme.onPrimary)
+                }
+            }
         }
-        Spacer(Modifier.width(6.dp))
-        Text(label, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Spacer(Modifier.width(4.dp))
-        PhIcon(if (connected) "check" else "bluetooth", sizeDp = 16)
+        Text(
+            label.uppercase(),
+            style = MaterialTheme.typography.labelSmall.copy(
+                fontSize = 9.sp,
+                lineHeight = 12.sp,
+                fontWeight = FontWeight.Medium,
+                letterSpacing = 0.4.sp,
+            ),
+            color = if (connected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }

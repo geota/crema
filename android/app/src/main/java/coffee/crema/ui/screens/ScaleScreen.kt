@@ -177,19 +177,22 @@ private fun ScaleHeroRow(
     Row(horizontalArrangement = Arrangement.spacedBy(sp.s4)) {
         // Readout card — fills remaining width
         CremaCard(Modifier.weight(1f)) {
-            Box(Modifier.fillMaxWidth().padding(sp.s5)) {
-                Text(
-                    String.format("%.1f", if (connected) weight else 0.0),
-                    style = CremaTheme.readout.readoutHero,
-                    color = if (connected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline,
-                    modifier = Modifier.align(Alignment.Center),
-                )
-                Text(
-                    "grams",
-                    style = MaterialTheme.typography.bodyLarge.copy(fontSize = 28.sp, lineHeight = 32.sp),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.align(Alignment.BottomEnd).padding(end = 32.dp, bottom = 32.dp),
-                )
+            Box(Modifier.fillMaxWidth().padding(sp.s5), contentAlignment = Alignment.Center) {
+                // Number + unit are inline baseline siblings (never absolute) so the
+                // unit can't collide with a wide value — the bug the PWA avoids too.
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text(
+                        String.format("%.1f", if (connected) weight else 0.0),
+                        style = CremaTheme.readout.readoutHero,
+                        color = if (connected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline,
+                    )
+                    Text(
+                        "grams",
+                        style = MaterialTheme.typography.bodyLarge.copy(fontSize = 28.sp, lineHeight = 32.sp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(start = 8.dp, bottom = 24.dp),
+                    )
+                }
             }
         }
         // Tare column (connected) OR Connect column (disconnected) — fixed width

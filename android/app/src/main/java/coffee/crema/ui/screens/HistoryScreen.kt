@@ -1,6 +1,7 @@
 package coffee.crema.ui.screens
 
 import android.text.format.DateUtils
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -11,6 +12,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -30,17 +32,27 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager
 import coffee.crema.history.StoredShot
+import coffee.crema.ui.TelemetrySample
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.components.CremaCard
 import coffee.crema.ui.components.CremaNavigationRail
 import coffee.crema.ui.components.Eyebrow
 import coffee.crema.ui.components.PhIcon
+import coffee.crema.ui.components.CremaButton
+import coffee.crema.ui.components.CremaButtonVariant
+import coffee.crema.ui.components.CremaOverflowMenu
+import coffee.crema.ui.components.OverflowItem
+import coffee.crema.ui.components.CremaConfirmDialog
 import coffee.crema.ui.theme.CremaTheme
 
 /*
@@ -118,6 +130,9 @@ fun HistoryScreen(
                             shot = selected,
                             channels = ui.chartChannels,
                             onRate = { r, n -> vm.updateShot(selected.id, r, n) },
+                            onLoadOnBrew = { vm.loadProfileOnBrew(selected.profileName) },
+                            onExport = { vm.exportShot(selected.id) },
+                            onDelete = { vm.deleteShot(selected.id); selectedId = null },
                             modifier = Modifier.weight(1f).fillMaxHeight(),
                         )
                     }
@@ -127,27 +142,46 @@ fun HistoryScreen(
     }
 }
 
-// Aggregate stats strip — 4 tiles (counts via interpolation; averages are
-// Doubles, so %f is safe). Computed once per history change.
+// Aggregate stats strip — 6 tiles matching the prototype (.hist2-stats,
+// repeat(6,1fr)): Today / This week / Total / Avg yield / Avg time / Avg rating.
+// Counts interpolate ints directly ("$n", no %d/UByte crash); averages are
+// Doubles, so %f is safe. Day/week boundaries are simple millis math off
+// System.currentTimeMillis(); recomputed when `history` changes.
 @Composable
 private fun StatsStrip(history: List<StoredShot>) {
+    val now = System.currentTimeMillis()
+    val dayMs = 24L * 60L * 60L * 1000L
+    // Local midnight today: snap `now` to the device's day boundary so the
+    // "Today" bucket follows the wall clock rather than a rolling 24h window.
+    val startOfDay = run {
+        val cal = java.util.Calendar.getInstance()
+        cal.timeInMillis = now
+        cal.set(java.util.Calendar.HOUR_OF_DAY, 0)
+        cal.set(java.util.Calendar.MINUTE, 0)
+        cal.set(java.util.Calendar.SECOND, 0)
+        cal.set(java.util.Calendar.MILLISECOND, 0)
+        cal.timeInMillis
+    }
+    val startOfWeek = now - 7L * dayMs
+
+    val today = history.count { it.completedAtMs >= startOfDay }
+    val thisWeek = history.count { it.completedAtMs >= startOfWeek }
     val total = history.size
     val yields = history.mapNotNull { it.yieldG }
     val avgYield = if (yields.isNotEmpty()) yields.average() else null
     val avgTime = if (history.isNotEmpty()) history.map { it.durationMs / 1000.0 }.average() else null
-    val ratios = history.mapNotNull { s ->
-        val y = s.yieldG; val d = s.doseG
-        if (y != null && d != null && d > 0f) (y / d).toDouble() else null
-    }
-    val avgRatio = if (ratios.isNotEmpty()) ratios.average() else null
+    val ratings = history.mapNotNull { it.rating?.takeIf { r -> r > 0 } }
+    val avgRating = if (ratings.isNotEmpty()) ratings.average() else null
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        StatTile("Shots", "$total", Modifier.weight(1f))
+        StatTile("Today", "$today", Modifier.weight(1f))
+        StatTile("This week", "$thisWeek", Modifier.weight(1f))
+        StatTile("Total", "$total", Modifier.weight(1f))
         StatTile("Avg yield", avgYield?.let { "%.1f g".format(it) } ?: "—", Modifier.weight(1f))
         StatTile("Avg time", avgTime?.let { "%.0f s".format(it) } ?: "—", Modifier.weight(1f))
-        StatTile("Avg ratio", avgRatio?.let { "1:%.1f".format(it) } ?: "—", Modifier.weight(1f))
+        StatTile("Avg rating", avgRating?.let { "%.1f".format(it) } ?: "—", Modifier.weight(1f))
     }
 }
 
@@ -195,6 +229,14 @@ private fun ShotRow(shot: StoredShot, selected: Boolean, onClick: () -> Unit) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        SparkChart(
+            samples = shot.samples,
+            modifier = Modifier
+                .width(72.dp)
+                .height(32.dp)
+                .clip(RoundedCornerShape(6.dp))
+                .background(MaterialTheme.colorScheme.surfaceContainerLowest),
+        )
         Text(
             shotRatio(shot) ?: "—",
             style = CremaTheme.readout.readoutSm.copy(fontSize = 13.sp, lineHeight = 17.sp),
@@ -208,8 +250,60 @@ private fun ShotRow(shot: StoredShot, selected: Boolean, onClick: () -> Unit) {
     }
 }
 
+/*
+ * SparkChart — a tiny static silhouette of a shot's PRESSURE curve for the list
+ * rows. Single-channel mini-Canvas (proto `.hist2-row-spark`): pressure stroke
+ * in `telemetry.pressure`, round-cap ~1.8dp, no axes/grid. Unlike CanvasShotChart
+ * it stretches both axes to fill the 72×32 box (preserveAspectRatio: none) — x is
+ * normalized over the sample span, y over the pressure min..max. Empty or single-
+ * sample series draw nothing (the caller still sizes the box, so row heights stay
+ * uniform).
+ */
 @Composable
-private fun ShotDetail(shot: StoredShot, channels: Set<String>, modifier: Modifier, onRate: (Int, String) -> Unit) {
+private fun SparkChart(samples: List<TelemetrySample>, modifier: Modifier = Modifier) {
+    val stroke = CremaTheme.telemetry.pressure
+    Canvas(modifier) {
+        if (samples.size < 2) return@Canvas
+        val w = size.width
+        val h = size.height
+        if (w <= 0f || h <= 0f) return@Canvas
+        val firstT = samples.first().elapsedMs.toFloat()
+        val lastT = samples.last().elapsedMs.toFloat()
+        val tSpan = (lastT - firstT).takeIf { it > 0f } ?: 1f
+        var minP = Float.POSITIVE_INFINITY
+        var maxP = Float.NEGATIVE_INFINITY
+        samples.forEach { s ->
+            if (s.pressure < minP) minP = s.pressure
+            if (s.pressure > maxP) maxP = s.pressure
+        }
+        val pSpan = (maxP - minP).takeIf { it > 0f } ?: 1f
+        val inset = 2.dp.toPx() // keep the round caps off the rounded corners
+        val plotW = (w - inset * 2f).coerceAtLeast(1f)
+        val plotH = (h - inset * 2f).coerceAtLeast(1f)
+        val path = Path()
+        samples.forEachIndexed { i, s ->
+            val x = inset + ((s.elapsedMs.toFloat() - firstT) / tSpan) * plotW
+            val y = inset + (1f - (s.pressure - minP) / pSpan) * plotH
+            if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+        }
+        drawPath(
+            path,
+            color = stroke,
+            style = Stroke(width = 1.8.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round),
+        )
+    }
+}
+
+@Composable
+private fun ShotDetail(
+    shot: StoredShot,
+    channels: Set<String>,
+    modifier: Modifier,
+    onRate: (Int, String) -> Unit,
+    onLoadOnBrew: () -> Unit,
+    onExport: () -> Unit,
+    onDelete: () -> Unit,
+) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
         // Detail head — date eyebrow, serif profile title, recipe meta.
         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -230,6 +324,26 @@ private fun ShotDetail(shot: StoredShot, channels: Set<String>, modifier: Modifi
             if (meta.isNotBlank()) {
                 Text(meta, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
+        }
+        // Action row — Load on Brew + Export inline, Delete behind the kebab.
+        var confirmDelete by remember(shot.id) { mutableStateOf(false) }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            CremaButton(onClick = onLoadOnBrew, variant = CremaButtonVariant.Outlined, icon = "coffee", label = "Load on Brew")
+            CremaButton(onClick = onExport, variant = CremaButtonVariant.Outlined, icon = "download-simple", label = "Export")
+            CremaOverflowMenu(items = listOf(
+                OverflowItem("trash", "Delete shot", { confirmDelete = true }, danger = true),
+            ))
+        }
+        if (confirmDelete) {
+            CremaConfirmDialog(
+                title = "Delete shot?",
+                body = "This shot will be removed from this device. This can’t be undone.",
+                confirmLabel = "Delete",
+                icon = "trash",
+                danger = true,
+                onConfirm = { onDelete(); confirmDelete = false },
+                onDismiss = { confirmDelete = false },
+            )
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             Stat("Yield", shot.yieldG?.let { "%.1f g".format(it) } ?: "—")
@@ -283,7 +397,7 @@ private fun StarRating(value: Int, onChange: (Int) -> Unit) {
     Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
         (1..5).forEach { n ->
             IconButton(onClick = { onChange(if (n == value) 0 else n) }) {
-                PhIcon("star", sizeDp = 22, tint = if (n <= value) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+                PhIcon(if (n <= value) "star-fill" else "star", sizeDp = 22, tint = if (n <= value) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }

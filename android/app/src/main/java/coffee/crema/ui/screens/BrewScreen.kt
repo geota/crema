@@ -1,20 +1,22 @@
 package coffee.crema.ui.screens
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
@@ -23,11 +25,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ExposedDropdownMenuAnchorType
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -50,9 +48,11 @@ import coffee.crema.beans.roastBand
 import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager
 import coffee.crema.core.Bean
+import coffee.crema.core.MaintenanceReadout
 import coffee.crema.core.Roaster
 import coffee.crema.profiles.CremaProfile
 import coffee.crema.ui.MainViewModel
+import coffee.crema.ui.components.CremaAnchoredPopup
 import coffee.crema.ui.components.CremaCard
 import coffee.crema.ui.components.CremaNavigationRail
 import coffee.crema.ui.components.Eyebrow
@@ -114,7 +114,33 @@ fun BrewScreen(
                 roasters = ui.roasters,
                 onSelectBean = vm::setActiveBean,
                 onOpenQuick = { quickOpen = true },
+                // Footer/empty-state routes — mirror ProfilesScreen/BeansScreen wiring
+                // (start a fresh editor in the VM, then route to its screen).
+                onOpenProfiles = { onNav("profiles") },
+                onNewProfile = { vm.startNewProfile(); onNav("profile-edit") },
+                // Edit the active profile — custom edits in place, built-in edits a
+                // copy (ProfilesScreen parity); no active profile → start a new one.
+                onEditProfile = {
+                    when {
+                        active == null -> vm.startNewProfile()
+                        active.source == "custom" -> vm.startEditProfile(active.id)
+                        else -> vm.duplicateProfile(active.id)
+                    }
+                    onNav("profile-edit")
+                },
+                onOpenBeans = { onNav("beans") },
+                onNewBean = { onNav("beans") },
+                // Edit the active bag in the full bean editor (BeansScreen parity);
+                // no active bean → route to Beans to add one.
+                onEditBean = {
+                    if (activeBean != null) { vm.startEditBean(activeBean.id); onNav("bean-edit") }
+                    else onNav("beans")
+                },
             )
+            // Slim amber maintenance banner — modelled on the PWA MachineErrorBanner.
+            // Shown when any maintenance counter is past its interval (descale →
+            // clean → filter, most-urgent first); hidden when all ok or no readout.
+            BrewHeadBanner(readout = ui.maintenanceReadout, onOpenWater = { onNav("settings") })
             Row(
                 modifier = Modifier
                     .weight(1f)
@@ -221,6 +247,12 @@ private fun BrewHeader(
     roasters: List<Roaster>,
     onSelectBean: (String) -> Unit,
     onOpenQuick: () -> Unit,
+    onOpenProfiles: () -> Unit,
+    onNewProfile: () -> Unit,
+    onEditProfile: () -> Unit,
+    onOpenBeans: () -> Unit,
+    onNewBean: () -> Unit,
+    onEditBean: () -> Unit,
 ) {
     Row(
         modifier = Modifier
@@ -235,15 +267,68 @@ private fun BrewHeader(
             onSelect = onSelectProfile,
             uploading = uploading,
             uploadProgress = uploadProgress,
+            onOpenLibrary = onOpenProfiles,
+            onNew = onNewProfile,
+            onEdit = onEditProfile,
         )
         Spacer(Modifier.weight(1f))
         Box(Modifier.width(1.dp).height(44.dp).background(MaterialTheme.colorScheme.outlineVariant))
-        BeanBlock(activeBean = activeBean, beans = beans, roasters = roasters, onSelect = onSelectBean)
+        BeanBlock(
+            activeBean = activeBean,
+            beans = beans,
+            roasters = roasters,
+            onSelect = onSelectBean,
+            onOpenLibrary = onOpenBeans,
+            onNew = onNewBean,
+            onEdit = onEditBean,
+        )
         QuickControlsPill(onClick = onOpenQuick)
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+// ── Maintenance banner (PWA MachineErrorBanner, amber) ──────────────────────
+// A slim full-width amber strip shown when any maintenance counter is overdue.
+// Picks the most-urgent due item (descale → clean → filter) for the headline;
+// tapping it routes to Settings (the Water & maintenance section). Hidden when
+// every counter is ok or the readout hasn't been computed yet.
+@Composable
+private fun BrewHeadBanner(readout: MaintenanceReadout?, onOpenWater: () -> Unit) {
+    if (readout == null) return
+    val message = when {
+        !readout.descaleOk -> "Descale due"
+        !readout.cleanOk -> "Clean due"
+        !readout.filterOk -> "Filter due"
+        else -> return
+    }
+    val amber = Color(0xFFDBA764)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 20.dp, end = 20.dp, top = 2.dp, bottom = 4.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(amber.copy(alpha = 0.14f))
+            .border(1.dp, amber.copy(alpha = 0.40f), RoundedCornerShape(10.dp))
+            .clickable(onClick = onOpenWater)
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        PhIcon("wrench", sizeDp = 16, tint = amber)
+        Text(
+            message,
+            style = MaterialTheme.typography.labelLarge,
+            color = amber,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            "Maintenance",
+            style = MaterialTheme.typography.labelSmall,
+            color = amber.copy(alpha = 0.85f),
+        )
+        PhIcon("caret-right", sizeDp = 14, tint = amber.copy(alpha = 0.85f))
+    }
+}
+
 @Composable
 private fun ProfileBlock(
     active: CremaProfile?,
@@ -251,13 +336,21 @@ private fun ProfileBlock(
     onSelect: (String) -> Unit,
     uploading: Boolean,
     uploadProgress: String?,
+    onOpenLibrary: () -> Unit,
+    onNew: () -> Unit,
+    onEdit: () -> Unit,
 ) {
     var open by remember { mutableStateOf(false) }
-    ExposedDropdownMenuBox(expanded = open, onExpandedChange = { open = it }) {
+    // Box wraps the anchor block + the popup so the Popup positions against the
+    // block's bounds (proto: .bh-pop anchored to .bh-anchor at top:100%+8px).
+    Box {
         Column(
             modifier = Modifier
-                .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable, enabled = profiles.isNotEmpty())
                 .clip(RoundedCornerShape(12.dp))
+                // Open-state tint so the anchor reads as active while the menu is up
+                // (proto .bh-block.is-open = primary @13%).
+                .background(if (open) MaterialTheme.colorScheme.primary.copy(alpha = 0.13f) else Color.Transparent)
+                .clickable { open = !open }
                 .padding(horizontal = 8.dp, vertical = 6.dp),
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
@@ -279,9 +372,8 @@ private fun ProfileBlock(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                if (profiles.isNotEmpty()) {
-                    PhIcon("caret-down", sizeDp = 16, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
+                // Caret is always shown — the picker (or library route) is always reachable.
+                PhIcon("caret-down", sizeDp = 16, tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             if (active != null) {
                 Text(
@@ -293,6 +385,7 @@ private fun ProfileBlock(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                // .bh-spec — "{beverage} · {roast} · {author}".
                 val spec = listOfNotNull(
                     active.beverageType?.replaceFirstChar { it.uppercase() },
                     active.roast?.replaceFirstChar { it.uppercase() },
@@ -307,122 +400,396 @@ private fun ProfileBlock(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
+                // .bh-tags — custom tags joined " · " (the synthesised "Built-in"
+                // import tag is dropped; rendered only when something remains).
+                val tags = active.tags
+                    .filter { it.isNotBlank() && it != "Built-in" }
+                    .joinToString(" · ")
+                if (tags.isNotBlank()) {
+                    Text(
+                        tags,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
         }
-        ExposedDropdownMenu(
-            expanded = open,
-            onDismissRequest = { open = false },
-            modifier = Modifier.widthIn(min = 200.dp),
-        ) {
-            // Active first, then pinned, then store order (web HeaderPicker rank).
-            val sorted = profiles.sortedByDescending {
-                (if (it.id == active?.id) 2 else 0) + (if (it.pinned) 1 else 0)
-            }
-            sorted.forEach { p ->
-                DropdownMenuItem(
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                    text = {
-                        Column {
-                            Text(p.name, style = MaterialTheme.typography.bodyLarge)
-                            val sub = p.author.takeIf { it.isNotBlank() }
-                                ?: p.tags.filter { it.isNotBlank() && it != "Built-in" }.joinToString(" · ")
-                            if (sub.isNotBlank()) {
-                                Text(
-                                    sub,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        }
-                    },
-                    onClick = { onSelect(p.id); open = false },
-                    trailingIcon = if (p.id == active?.id) {
-                        { PhIcon("check", sizeDp = 16, tint = MaterialTheme.colorScheme.primary) }
-                    } else null,
+        CremaAnchoredPopup(expanded = open, onDismiss = { open = false }) {
+            PopCard {
+                PickerLead("Switch profile · pinned")
+                // Active first, then pinned, then store order (web HeaderPicker rank).
+                val sorted = profiles.sortedByDescending {
+                    (if (it.id == active?.id) 2 else 0) + (if (it.pinned) 1 else 0)
+                }
+                PopList {
+                    sorted.forEach { p ->
+                        val isActive = p.id == active?.id
+                        PickRow(
+                            active = isActive,
+                            onClick = { open = false; onSelect(p.id) },
+                            leading = {
+                                // 48×32 mini-curve thumbnail (proto .bh-pick-spark).
+                                Box(
+                                    Modifier
+                                        .size(width = 48.dp, height = 32.dp)
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(MaterialTheme.colorScheme.surfaceContainerLowest),
+                                ) {
+                                    CanvasProfilePreview(
+                                        segments = p.segments,
+                                        modifier = Modifier.fillMaxSize().padding(2.dp),
+                                        compact = true,
+                                    )
+                                }
+                            },
+                            name = p.name,
+                            // 2nd line = author; blank → Built-in / Custom (proto .bh-pick-meta).
+                            meta = p.author.takeIf { it.isNotBlank() }
+                                ?: if (p.source == "builtin") "Built-in" else "Custom",
+                        )
+                    }
+                }
+                PickerFootRow(
+                    onOpenLibrary = { open = false; onOpenLibrary() },
+                    onNew = { open = false; onNew() },
+                    onEdit = { open = false; onEdit() },
                 )
             }
         }
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun BeanBlock(
     activeBean: Bean?,
     beans: List<Bean>,
     roasters: List<Roaster>,
     onSelect: (String) -> Unit,
+    onOpenLibrary: () -> Unit,
+    onNew: () -> Unit,
+    onEdit: () -> Unit,
 ) {
     var open by remember { mutableStateOf(false) }
     val roasterNameOf: (Bean) -> String? = { b ->
         b.roasterId?.let { rid -> roasters.firstOrNull { it.id == rid }?.name }
     }
-    ExposedDropdownMenuBox(expanded = open, onExpandedChange = { open = it }) {
+    // With an empty library there is nothing to pick — tapping the block routes
+    // straight to Beans (proto/PWA never present a dead end).
+    val hasBeans = beans.isNotEmpty()
+    Box {
         Column(
             modifier = Modifier
-                .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable, enabled = beans.isNotEmpty())
                 .clip(RoundedCornerShape(12.dp))
+                .background(if (open && hasBeans) MaterialTheme.colorScheme.primary.copy(alpha = 0.13f) else Color.Transparent)
+                .clickable { if (hasBeans) open = !open else onOpenLibrary() }
+                // Bounded width so the freshness chip + caret right-justify WITHIN
+                // the block (not across the whole header — that ate the QC pill).
+                .width(264.dp)
                 .padding(horizontal = 8.dp, vertical = 6.dp),
+            // Bean info is LEFT-justified (like the profile block); only the
+            // green-dot freshness chip + the caret are pushed to the right edge.
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
-            Eyebrow("Bean")
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            // .bh-eyebrow-row — "Bean" + the freshness chip on the same row. The
+            // chip ("Nd off roast" / "Frozen") is coloured by freshness band and
+            // shown only when a roast date (or freeze) is known.
+            val frozen = activeBean?.frozenOn != null
+            val daysOff = activeBean?.let { daysOffRoast(it.roastedOn) }
+            val freshLabel = when {
+                activeBean == null -> null
+                frozen -> "Frozen"
+                else -> daysOff?.let { "${it}d off roast" }
+            }
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                Eyebrow("Bean")
+                if (freshLabel != null) {
+                    val freshColor = beanFreshnessColor(frozen, daysOff)
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Box(Modifier.size(8.dp).clip(CircleShape).background(freshColor))
+                        Text(freshLabel, style = MaterialTheme.typography.labelSmall, color = freshColor)
+                    }
+                }
+            }
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(
                     activeBean?.let { listOfNotNull(roasterNameOf(it), it.name).joinToString(" · ") } ?: "No bean selected",
+                    modifier = Modifier.weight(1f),
                     style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Normal, fontSize = 20.sp, lineHeight = 24.sp),
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                if (beans.isNotEmpty()) {
-                    PhIcon("caret-down", sizeDp = 16, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
+                // Caret on the right — empty taps route to the Beans library.
+                PhIcon("caret-down", sizeDp = 16, tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             if (activeBean != null) {
+                // .bh-meta — "{country} · {variety} · {process}".
                 val meta = listOfNotNull(
                     activeBean.origin.country,
+                    activeBean.origin.variety,
                     activeBean.origin.processing,
-                    roastBand(activeBean.roastLevel?.toInt()),
-                    daysOffRoast(activeBean.roastedOn)?.let { "${it}d off roast" },
                 ).joinToString(" · ")
                 if (meta.isNotBlank()) {
                     Text(
                         meta,
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                // .bh-spec — "{roastBand} · {roastType} · {mix} · Grind {grind}".
+                val spec = listOfNotNull(
+                    roastBand(activeBean.roastLevel?.toInt()),
+                    activeBean.roastType?.string?.replaceFirstChar { it.uppercase() },
+                    activeBean.mix?.string?.replaceFirstChar { it.uppercase() },
+                    activeBean.grinderSetting.takeIf { it.isNotBlank() }?.let { "Grind $it" },
+                ).joinToString(" · ")
+                if (spec.isNotBlank()) {
+                    Text(
+                        spec,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                // .bh-tags — custom tags joined " · ".
+                val tags = activeBean.tags?.filter { it.isNotBlank() }.orEmpty().joinToString(" · ")
+                if (tags.isNotBlank()) {
+                    Text(
+                        tags,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,                        maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
             } else {
                 Text(
-                    "Add beans in the Beans tab",
+                    if (hasBeans) "Tap to choose a bag" else "Tap to add your first bag",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
                 )
             }
         }
-        ExposedDropdownMenu(
-            expanded = open,
-            onDismissRequest = { open = false },
-            modifier = Modifier.widthIn(min = 200.dp),
-        ) {
-            beans.forEach { b ->
-                DropdownMenuItem(
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                    text = {
-                        Text(
-                            listOfNotNull(roasterNameOf(b), b.name).joinToString(" · "),
-                            style = MaterialTheme.typography.bodyLarge,
+        CremaAnchoredPopup(expanded = open && hasBeans, onDismiss = { open = false }) {
+            PopCard {
+                PickerLead("Switch bean · pinned")
+                // Active first, then favourite, then store order (mirrors the profile rank).
+                val sorted = beans.sortedByDescending {
+                    (if (it.id == activeBean?.id) 2 else 0) + (if (it.favourite) 1 else 0)
+                }
+                PopList {
+                    sorted.forEach { b ->
+                        val isActive = b.id == activeBean?.id
+                        val rName = roasterNameOf(b)
+                        PickRow(
+                            active = isActive,
+                            onClick = { open = false; onSelect(b.id) },
+                            leading = { RoasterAvatar(seed = rName ?: b.name) },
+                            // "roaster · name"; meta = origin (+ roast band if present).
+                            name = listOfNotNull(rName, b.name).joinToString(" · "),
+                            meta = listOfNotNull(
+                                b.origin.country,
+                                b.origin.processing,
+                                roastBand(b.roastLevel?.toInt()),
+                            ).joinToString(" · "),
                         )
-                    },
-                    onClick = { onSelect(b.id); open = false },
-                    trailingIcon = if (b.id == activeBean?.id) {
-                        { PhIcon("check", sizeDp = 16, tint = MaterialTheme.colorScheme.primary) }
-                    } else null,
+                    }
+                }
+                PickerFootRow(
+                    onOpenLibrary = { open = false; onOpenLibrary() },
+                    onNew = { open = false; onNew() },
+                    onEdit = { open = false; onEdit() },
                 )
             }
         }
+    }
+}
+
+// ── Header-picker shared bits (proto .bh-pop) ───────────────────────────────
+
+// The bordered popover card (proto .bh-pop): surfaceContainerHigh fill, 1dp
+// outline-variant border, 16dp radius, 12dp padding, level-3 shadow, width
+// clamped 320–420dp. Sets LocalContentColor to onSurface so the popup never
+// inherits a tint from the warm Brew page root.
+@Composable
+private fun PopCard(content: @Composable ColumnScope.() -> Unit) {
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        tonalElevation = 0.dp,
+        shadowElevation = 8.dp,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        modifier = Modifier.widthIn(min = 320.dp, max = 420.dp),
+    ) {
+        Column(Modifier.padding(12.dp), content = content)
+    }
+}
+
+// The scrolling row list (proto .bh-pop-list): column, 2dp gap, 10dp top margin,
+// height-bounded so the LEAD + FOOTER stay fixed while only the rows scroll.
+@Composable
+private fun PopList(content: @Composable ColumnScope.() -> Unit) {
+    Column(
+        modifier = Modifier
+            .padding(top = 10.dp)
+            .heightIn(max = 300.dp)
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+        content = content,
+    )
+}
+
+// Uppercase section header (proto .bh-pop-lead): 11sp/500, 0.6px tracking.
+@Composable
+private fun PickerLead(text: String) {
+    Text(
+        text = text.uppercase(),
+        style = MaterialTheme.typography.labelSmall.copy(
+            fontSize = 11.sp,
+            lineHeight = 16.sp,
+            fontWeight = FontWeight.Medium,
+            letterSpacing = 0.6.sp,
+        ),
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+// One picker row (proto .bh-pick): leading 48×32 spark / 32×32 avatar, a name +
+// meta text column, and a trailing check only when active. The 10dp-radius
+// rounded row sits inside the card's 12dp padding, so the active highlight reads
+// as a small inset card (secondaryContainer / onSecondaryContainer) — NOT a
+// full-bleed bar. Hover → surfaceContainerHighest (proto .bh-pick:hover).
+@Composable
+private fun PickRow(
+    active: Boolean,
+    onClick: () -> Unit,
+    leading: @Composable () -> Unit,
+    name: String,
+    meta: String,
+) {
+    // Active row = the shared copper "selected" wash (the same primary@12% used by
+    // the sort/overflow menus + the web .hpick-item.is-active), not a solid neutral
+    // card. Name stays onSurface for readability; the wash + copper check mark active.
+    val rowColor = MaterialTheme.colorScheme.onSurface
+    val metaColor = MaterialTheme.colorScheme.onSurfaceVariant
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(10.dp),
+        color = if (active) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else Color.Transparent,
+        contentColor = rowColor,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            leading()
+            // bh-pick-text: name (14sp/500) + meta (12sp/400), both ellipsised.
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                Text(
+                    name,
+                    style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp, lineHeight = 18.sp, fontWeight = FontWeight.Medium),
+                    color = rowColor,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (meta.isNotBlank()) {
+                    Text(
+                        meta,
+                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp, lineHeight = 15.sp),
+                        color = metaColor,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            // Trailing check only on the active row (proto .bh-pick-check).
+            if (active) {
+                PhIcon("check", sizeDp = 16, tint = MaterialTheme.colorScheme.primary)
+            }
+        }
+    }
+}
+
+// 32×32 rounded roaster mark with the initial (proto .bh-pick-av). Tone is a
+// deterministic theme colour keyed off the seed (no per-roaster colour field yet).
+@Composable
+private fun RoasterAvatar(seed: String) {
+    val palette = listOf(
+        MaterialTheme.colorScheme.primary,
+        MaterialTheme.colorScheme.tertiary,
+        MaterialTheme.colorScheme.secondary,
+    )
+    val color = palette[(seed.hashCode() and Int.MAX_VALUE) % palette.size]
+    Box(
+        Modifier.size(32.dp).clip(RoundedCornerShape(9.dp)).background(color),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            seed.take(1).uppercase(),
+            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+            color = MaterialTheme.colorScheme.onPrimary,
+        )
+    }
+}
+
+// Footer action row (proto .bh-pop-footrow): a flexible ghost "Open library"
+// (transparent, primary text, outline-variant border) + two 42dp icon buttons
+// ("+" new, "✏" edit) on surfaceContainerHighest. All three are 10dp-radius,
+// 42dp tall (9dp vertical padding on the 13sp ghost label).
+@Composable
+private fun PickerFootRow(onOpenLibrary: () -> Unit, onNew: () -> Unit, onEdit: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 10.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // Ghost "Open library" — flex 1, transparent, primary text, 1dp border.
+        Row(
+            modifier = Modifier
+                .weight(1f)
+                .height(42.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(10.dp))
+                .clickable(onClick = onOpenLibrary)
+                .padding(horizontal = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "Open library",
+                style = MaterialTheme.typography.labelLarge.copy(fontSize = 13.sp, fontWeight = FontWeight.Medium),
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.weight(1f),
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        PopFootIcon(icon = "plus", onClick = onNew)
+        PopFootIcon(icon = "pencil-simple", onClick = onEdit)
+    }
+}
+
+// 42dp-wide square icon button on the footer row (proto .bh-pop-icon).
+@Composable
+private fun PopFootIcon(icon: String, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .width(42.dp)
+            .height(42.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        PhIcon(icon, sizeDp = 16, tint = MaterialTheme.colorScheme.onSurface)
     }
 }
 
@@ -457,21 +824,27 @@ private fun TimerCard(running: Boolean, elapsedMs: Long, phase: String?) {
     val step = if (!running) "Ready" else phaseStepLabel(phase)
     CremaCard(Modifier.fillMaxWidth()) {
         Column(
-            modifier = Modifier.fillMaxWidth().heightIn(min = 85.dp).padding(horizontal = 16.dp, vertical = 6.dp),
+            modifier = Modifier.fillMaxWidth().height(86.dp).padding(horizontal = 16.dp, vertical = 6.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
             Eyebrow(step)
-            Row(verticalAlignment = Alignment.Bottom) {
+            // Proto .brew-timer-val: main mono value + the orange ".N" frac share
+            // ONE text baseline (display:flex; align-items:baseline). alignByBaseline()
+            // on both children is the only reliable Row baseline-align in Compose, so
+            // the frac no longer sits low/misaligned against the main readout.
+            Row {
                 Text(
                     "%02d:%02d".format(mm, ss),
                     style = CremaTheme.readout.readoutMd.copy(fontSize = 44.sp, lineHeight = 48.sp),
                     color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.alignByBaseline(),
                 )
                 Text(
                     ".$tenth",
                     style = CremaTheme.readout.readoutSm.copy(fontSize = 20.sp, lineHeight = 24.sp),
                     color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.alignByBaseline(),
                 )
             }
         }
@@ -483,7 +856,8 @@ private fun RatioCard(active: CremaProfile?, weightG: Float?) {
     val dose = active?.dose ?: 18f
     val live = if (weightG != null && dose > 0f) "1:%.2f".format(weightG / dose) else "1:0.00"
     CremaCard(Modifier.fillMaxWidth()) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)) {
+        // proto .brew-ratio padding: 5px vertical / 16px horizontal (compact).
+        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 5.dp)) {
             Eyebrow("Ratio")
             Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
@@ -674,11 +1048,28 @@ private fun LastShotCard(last: coffee.crema.ui.LastShot, dose: Float) {
             Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Eyebrow("Last shot")
+            // "Last shot · N min ago" — the relative-time eyebrow the proto
+            // shows, now that LastShot carries completedAtMs. getRelativeTimeSpanString
+            // handles "0 minutes ago" etc.; guard the pre-first-shot 0L default.
+            val ago = last.completedAtMs.takeIf { it > 0L }?.let {
+                android.text.format.DateUtils.getRelativeTimeSpanString(
+                    it,
+                    System.currentTimeMillis(),
+                    android.text.format.DateUtils.MINUTE_IN_MILLIS,
+                ).toString()
+            }
+            Eyebrow(if (ago != null) "Last shot · $ago" else "Last shot")
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 LastShotStat("Yield", if (yieldG != null) "%.1f".format(yieldG) else "—", "g", Modifier.weight(1f))
                 LastShotStat("Ratio", ratio, "", Modifier.weight(1f))
                 LastShotStat("Time", "%.1f".format(last.durationMs / 1000.0), "s", Modifier.weight(1f))
+            }
+            // PWA-borrowed peaks (peakPressure / peakTemp already on ui.lastShot).
+            // Float? — guard before %.1f (never pass an Int to %f).
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                LastShotStat("Peak", last.peakPressure?.let { "%.1f".format(it) } ?: "—", "bar", Modifier.weight(1f))
+                LastShotStat("Peak temp", last.peakTemp?.let { "%.1f".format(it) } ?: "—", "°C", Modifier.weight(1f))
+                Spacer(Modifier.weight(1f)) // keep the 3-col grid alignment
             }
         }
     }
@@ -702,23 +1093,33 @@ private fun ChannelsRow(ui: coffee.crema.ui.MainUiState, active: CremaProfile?) 
     val tel = CremaTheme.telemetry
     val resist = ui.resistanceWeight ?: ui.resistance
     val resistUnit = if (ui.resistanceWeight != null) "bar·s²/g²" else "bar·s²/ml²"
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+    // Proto .brew-channels: grid repeat(4,1fr) gap 9px — all four cards EQUAL
+    // width AND height (grid stretch). The Coffee/Weight cards carry a "target …"
+    // line the Pressure/Flow cards don't, so without an explicit height they'd be
+    // taller. IntrinsicSize.Max measures the tallest card; fillMaxHeight() then
+    // stretches the shorter two to match (the missing-line cards just gain height).
+    Row(
+        // Fixed 86dp = the timer card's height, so the top band is uniform and
+        // the cards read compact (proto .brew-channel is a slim row, not a stack).
+        Modifier.fillMaxWidth().height(86.dp),
+        horizontalArrangement = Arrangement.spacedBy(9.dp),
+    ) {
         ChannelCard(
-            modifier = Modifier.weight(1f),
+            modifier = Modifier.weight(1f).fillMaxHeight(),
             primLabel = "Pressure", primIcon = "gauge", primColor = tel.pressure,
             primValue = fmt(ui.pressure), primUnit = "bar",
             secLabel = "Resistance", secColor = tel.pressure2,
             secValue = fmt(resist, 2), secUnit = resistUnit,
         )
         ChannelCard(
-            modifier = Modifier.weight(1f),
+            modifier = Modifier.weight(1f).fillMaxHeight(),
             primLabel = "Flow", primIcon = "drop", primColor = tel.flow,
             primValue = fmt(ui.flow), primUnit = "ml/s",
             secLabel = "Water", secColor = tel.flow2,
             secValue = fmt(ui.dispensedVolume), secUnit = "ml",
         )
         ChannelCard(
-            modifier = Modifier.weight(1f),
+            modifier = Modifier.weight(1f).fillMaxHeight(),
             primLabel = "Coffee", primIcon = "thermometer", primColor = tel.temp,
             primValue = fmt(ui.headTemp), primUnit = "°C",
             secLabel = "Water", secColor = tel.temp2,
@@ -726,7 +1127,7 @@ private fun ChannelsRow(ui: coffee.crema.ui.MainUiState, active: CremaProfile?) 
             target = active?.let { "target %.1f °C".format(it.brewTemp) },
         )
         ChannelCard(
-            modifier = Modifier.weight(1f),
+            modifier = Modifier.weight(1f).fillMaxHeight(),
             primLabel = "Weight", primIcon = "scales", primColor = tel.weight,
             primValue = fmt(ui.scaleWeightG), primUnit = "g",
             secLabel = "Flow", secColor = tel.weight2,
@@ -744,6 +1145,7 @@ private fun ChannelCard(
     target: String? = null,
 ) {
     CremaCard(modifier) {
+        // proto v2 .brew-channel padding: 9px vertical / 13px horizontal (compact).
         Row(Modifier.fillMaxWidth().padding(horizontal = 13.dp, vertical = 9.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             // Primary (left).
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
@@ -752,7 +1154,7 @@ private fun ChannelCard(
                     Eyebrow(primLabel, color = primColor)
                 }
                 Row(verticalAlignment = Alignment.Bottom) {
-                    Text(primValue, style = CremaTheme.readout.readoutSm.copy(fontSize = 19.sp, lineHeight = 23.sp), color = primColor)
+                    Text(primValue, style = CremaTheme.readout.readoutSm.copy(fontSize = 24.sp, lineHeight = 26.sp), color = primColor)
                     Text(" $primUnit", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 if (target != null) {
@@ -763,7 +1165,7 @@ private fun ChannelCard(
             Column(Modifier.weight(1f), horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(5.dp)) {
                 Eyebrow(secLabel, color = secColor)
                 Row(verticalAlignment = Alignment.Bottom) {
-                    Text(secValue, style = CremaTheme.readout.readoutSm.copy(fontSize = 19.sp, lineHeight = 23.sp), color = secColor)
+                    Text(secValue, style = CremaTheme.readout.readoutSm.copy(fontSize = 24.sp, lineHeight = 26.sp), color = secColor)
                     Text(" $secUnit", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
@@ -943,6 +1345,18 @@ private fun StatBar(fraction: Float, color: Color) {
 
 private fun fmt(v: Float?, digits: Int = 1): String =
     if (v == null) "—" else "%.${digits}f".format(v)
+
+// Freshness-band colour for the bean eyebrow chip (proto .bh-fresh / web
+// freshColor). Mirrors BeansScreen.freshnessColor — kept local because that
+// one is private; frozen → blue, then the days-off-roast bands.
+private fun beanFreshnessColor(frozen: Boolean, days: Int?): Color = when {
+    frozen -> Color(0xFF7FB0E0)
+    days == null -> Color(0xFF8A8175)
+    days < 4 -> Color(0xFFDBA764)
+    days <= 21 -> Color(0xFF5FB87A)
+    days <= 40 -> Color(0xFFDBA764)
+    else -> Color(0xFFC58B8B)
+}
 
 private fun phaseStepLabel(phase: String?): String = when (phase) {
     "Heating" -> "Heating"

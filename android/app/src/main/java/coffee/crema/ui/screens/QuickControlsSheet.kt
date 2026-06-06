@@ -96,6 +96,13 @@ fun QuickControlsSheet(
 
     var showSave by remember { mutableStateOf(false) }
     var presetName by remember { mutableStateOf("") }
+    // Steam / hot-water / flush params are local (Android has no per-mode store;
+    // the mode chips run fixed params today) — the design's 6-up grid still shows them.
+    var steamTemp by remember { mutableStateOf(148.0) }
+    var hotWaterTemp by remember { mutableStateOf(90.0) }
+    var flushTemp by remember { mutableStateOf(91.0) }
+    var preFlush by remember { mutableStateOf(false) }
+    var steamPurge by remember { mutableStateOf(false) }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -126,6 +133,11 @@ fun QuickControlsSheet(
                     CremaIconButton(icon = "x", onClick = onDismiss)
                 }
             }
+            Text(
+                "Tweaks apply to the next shot — your saved profile is never changed.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
 
             // ── Favorites strip ──────────────────────────────────────────────
             if (pinnedProfiles.isNotEmpty() || favBeans.isNotEmpty()) {
@@ -150,26 +162,43 @@ fun QuickControlsSheet(
                 }
             }
 
-            // ── Brew params (transient override, baked into the next shot) ────
+            // ── Params — a 6-up grid: brew override (baked into the next shot)
+            //    on top, steam / hot-water / flush (local) below. ─────────────
             Eyebrow("Brew · applies to the next shot", Modifier.padding(top = 8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Box(Modifier.weight(1f)) {
-                    CremaStepper(label = "Dose", value = dose, unit = "g", onChange = { onAdjustBrew(it, yieldOut, brewTemp) }, step = 0.1, min = 5.0, max = 30.0)
-                }
-                Box(Modifier.weight(1f)) {
-                    CremaStepper(label = "Yield", value = yieldOut, unit = "g", onChange = { onAdjustBrew(dose, it, brewTemp) }, step = 0.5, min = 10.0, max = 80.0)
-                }
+                Box(Modifier.weight(1f)) { CremaStepper(label = "Dose", value = dose, unit = "g", onChange = { onAdjustBrew(it, yieldOut, brewTemp) }, step = 0.1, min = 5.0, max = 30.0) }
+                Box(Modifier.weight(1f)) { CremaStepper(label = "Yield", value = yieldOut, unit = "g", onChange = { onAdjustBrew(dose, it, brewTemp) }, step = 0.5, min = 10.0, max = 80.0) }
+                Box(Modifier.weight(1f)) { CremaStepper(label = "Brew temp", value = brewTemp, unit = "°C", onChange = { onAdjustBrew(dose, yieldOut, it) }, step = 0.5, min = 80.0, max = 100.0) }
             }
-            CremaStepper(label = "Brew temp", value = brewTemp, unit = "°C", onChange = { onAdjustBrew(dose, yieldOut, it) }, step = 0.5, min = 80.0, max = 100.0)
+            Eyebrow("Steam · water · flush", Modifier.padding(top = 8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Box(Modifier.weight(1f)) { CremaStepper(label = "Steam", value = steamTemp, unit = "°C", onChange = { steamTemp = it }, step = 1.0, min = 100.0, max = 160.0, fmt = { "%.0f".format(it) }) }
+                Box(Modifier.weight(1f)) { CremaStepper(label = "Hot water", value = hotWaterTemp, unit = "°C", onChange = { hotWaterTemp = it }, step = 1.0, min = 60.0, max = 100.0, fmt = { "%.0f".format(it) }) }
+                Box(Modifier.weight(1f)) { CremaStepper(label = "Flush", value = flushTemp, unit = "°C", onChange = { flushTemp = it }, step = 1.0, min = 80.0, max = 100.0, fmt = { "%.0f".format(it) }) }
+            }
 
-            // ── Shot behaviour + chart channels ──────────────────────────────
+            // ── Shot behaviour (2-up dense toggles) ──────────────────────────
             Eyebrow("Shot behaviour", Modifier.padding(top = 8.dp))
-            ToggleRow("Auto-tare", autoTare, onAutoTare)
-            ToggleRow("Stop on weight", stopOnWeight, onStopOnWeight)
-            ToggleRow("Steam eco", steamEco, onSteamEco)
+            TwoCol(
+                { ToggleRow("Stop on weight", stopOnWeight, onStopOnWeight) },
+                { ToggleRow("Auto-tare", autoTare, onAutoTare) },
+            )
+            TwoCol(
+                { ToggleRow("Pre-flush", preFlush) { preFlush = it } },
+                { ToggleRow("Steam purge", steamPurge) { steamPurge = it } },
+            )
+            TwoCol(
+                { ToggleRow("Steam eco", steamEco, onSteamEco) },
+                { },
+            )
+
+            // ── Chart channels (2-up dense toggles) ──────────────────────────
             Eyebrow("Chart channels", Modifier.padding(top = 12.dp))
-            CHART_CHANNELS.forEach { (key, label) ->
-                ToggleRow(label, key in channels) { onToggleChannel(key, it) }
+            CHART_CHANNELS.chunked(2).forEach { pair ->
+                TwoCol(
+                    { val (k, l) = pair[0]; ToggleRow(l, k in channels) { onToggleChannel(k, it) } },
+                    { if (pair.size > 1) { val (k, l) = pair[1]; ToggleRow(l, k in channels) { onToggleChannel(k, it) } } },
+                )
             }
         }
     }
@@ -195,6 +224,15 @@ fun QuickControlsSheet(
             },
             dismissButton = { TextButton(onClick = { showSave = false }) { Text("Cancel") } },
         )
+    }
+}
+
+// Two equal columns — packs the toggle rows two-up instead of a long stack.
+@Composable
+private fun TwoCol(a: @Composable () -> Unit, b: @Composable () -> Unit) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+        Box(Modifier.weight(1f)) { a() }
+        Box(Modifier.weight(1f)) { b() }
     }
 }
 

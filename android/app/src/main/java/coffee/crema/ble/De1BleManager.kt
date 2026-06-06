@@ -5,6 +5,9 @@ import android.util.Log
 import coffee.crema.core.CremaBridge
 import coffee.crema.core.NotificationSource
 import coffee.crema.core.WriteTarget
+import coffee.crema.core.de1Uuids
+import kotlinx.serialization.json.Json
+import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -180,7 +183,13 @@ class De1BleManager(
         val waterLevels = transport.observe(device, De1Uuids.SERVICE, De1Uuids.WATER_LEVELS)
         val shotSettings = transport.observe(device, De1Uuids.SERVICE, De1Uuids.SHOT_SETTINGS)
         val mmr = transport.observe(device, De1Uuids.SERVICE, De1Uuids.MMR_READ)
-        observeJob = merge(stateInfo, shotSample, waterLevels, shotSettings, mmr)
+        // The Version (A001) and Calibration (A012) characteristics: the DE1
+        // answers a read request on these via notify, so the connect-time
+        // read-sweep's firmware + calibration replies fire as Firmware /
+        // Calibration events. Both are NOTIFY chars on a real DE1.
+        val version = transport.observe(device, De1Uuids.SERVICE, VERSION)
+        val calibration = transport.observe(device, De1Uuids.SERVICE, CALIBRATION)
+        observeJob = merge(stateInfo, shotSample, waterLevels, shotSettings, mmr, version, calibration)
             .onEach { handleNotification(it) }
             .launchIn(scope)
     }
@@ -198,6 +207,8 @@ class De1BleManager(
             De1Uuids.WATER_LEVELS -> NotificationSource.DE1_WATER_LEVELS
             De1Uuids.SHOT_SETTINGS -> NotificationSource.DE1_SHOT_SETTINGS
             De1Uuids.MMR_READ -> NotificationSource.DE1_MMR_READ
+            VERSION -> NotificationSource.DE1_VERSION
+            CALIBRATION -> NotificationSource.DE1_CALIBRATION
             else -> {
                 Log.w(TAG, "Notification from unmapped characteristic ${notification.characteristic}")
                 return
@@ -240,6 +251,28 @@ class De1BleManager(
 
     companion object {
         private const val TAG = "De1BleManager"
+
+        /**
+         * The DE1 `Version` (`A001`) and `Calibration` (`A012`) characteristic
+         * UUIDs, sourced from the core's single DE1 UUID map (`de1Uuids()`) —
+         * the same source the shell's [De1Uuids] accessor parses. Resolved once
+         * here because [De1Uuids] does not surface these two accessors; this
+         * keeps every DE1 UUID literal in the core (no cross-shell drift) while
+         * letting this manager subscribe to the firmware-version and
+         * sensor-calibration notify characteristics.
+         *
+         * `DE1_VERSION` carries the BLE + firmware versions (→ `Event.Firmware`);
+         * `DE1_CALIBRATION` carries sensor-calibration replies
+         * (→ `Event.Calibration`). Both are read-request + notify on a real DE1.
+         */
+        private val coreUuids: coffee.crema.core.De1Uuids by lazy {
+            Json.decodeFromString(
+                coffee.crema.core.De1Uuids.serializer(),
+                de1Uuids(),
+            )
+        }
+        private val VERSION: UUID by lazy { UUID.fromString(coreUuids.version) }
+        private val CALIBRATION: UUID by lazy { UUID.fromString(coreUuids.calibration) }
 
         /**
          * Whether a scanned advertisement name identifies a DE1. The DE1

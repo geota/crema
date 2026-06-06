@@ -78,6 +78,7 @@ private val ROASTTYPE_OPTIONS = listOf(
 fun BeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
     val ui by vm.ui.collectAsStateWithLifecycle()
     val bean = ui.beans.firstOrNull { it.id == ui.editingBeanId }
+        ?: ui.draftBean?.takeIf { it.id == ui.editingBeanId }
 
     if (bean == null) {
         Column(Modifier.fillMaxSize().padding(14.dp)) {
@@ -87,6 +88,7 @@ fun BeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
         return
     }
 
+    val isNew = ui.beans.none { it.id == bean.id }
     val roasterName0 = bean.roasterId?.let { rid -> ui.roasters.firstOrNull { it.id == rid }?.name } ?: ""
     var name by remember(bean.id) { mutableStateOf(bean.name) }
     var roaster by remember(bean.id) { mutableStateOf(roasterName0) }
@@ -161,7 +163,7 @@ fun BeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
         ) {
             CremaIconButton(icon = "arrow-left", onClick = onBack)
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Eyebrow("Beans › Edit bean")
+                Eyebrow(if (isNew) "Beans › New bean" else "Beans › Edit bean")
                 Text(
                     listOfNotNull(roaster.ifBlank { null }, name.ifBlank { "Untitled bag" }).joinToString(" · "),
                     style = MaterialTheme.typography.titleLarge,
@@ -302,7 +304,7 @@ private fun BeBlock(n: String, title: String, sub: String, content: @Composable 
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-            Text(n, style = MaterialTheme.typography.titleMedium.copy(fontFamily = JetBrainsMono), color = MaterialTheme.colorScheme.primary)
+            Text(n, style = MaterialTheme.typography.bodyMedium.copy(fontFamily = JetBrainsMono), color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f))
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(title, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
                 Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)

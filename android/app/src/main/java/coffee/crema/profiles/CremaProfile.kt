@@ -43,6 +43,8 @@ data class CremaProfile(
     val maxTotalVolumeMl: Int = 0,
     /** Profile author — free text. */
     val author: String = "",
+    /** Free-text tasting / recipe notes (wire `notes`). */
+    val notes: String = "",
     /** Beverage kind — wire `beverage_type` (e.g. `"espresso"`); display-only here. */
     val beverageType: String? = null,
     /** The ordered pressure / flow segments (the phase track). */
