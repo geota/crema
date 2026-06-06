@@ -24,7 +24,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
+import coffee.crema.ui.theme.JetBrainsMono
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.MaterialTheme
@@ -63,6 +67,9 @@ import coffee.crema.ui.components.OverflowItem
 import coffee.crema.ui.components.CremaSegmentedButton
 import coffee.crema.ui.components.SegOption
 import coffee.crema.ui.components.CremaFilterChip
+import coffee.crema.ui.components.CremaFilterDivider
+import coffee.crema.ui.components.CremaFilterGroupLabel
+import coffee.crema.ui.components.CremaValueUnit
 import coffee.crema.ui.components.CremaSortControl
 import coffee.crema.ui.components.SortKey
 import androidx.compose.material3.IconButton
@@ -198,48 +205,45 @@ fun BeansScreen(
                     label = if (tab == "bags") "Add bean" else "Add roaster",
                 )
             }
-            // Bags / Roasters — the prototype's two-tab Beans surface.
-            CremaSegmentedButton(
-                options = listOf(
-                    SegOption("bags", "Bags  ${ui.beans.size}"),
-                    SegOption("roasters", "Roasters  ${ui.roasters.size}"),
-                ),
-                value = tab,
-                onChange = { tab = it },
-                modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 8.dp),
-            )
-            if (tab == "bags") {
-                // Filter chips (left) + sort split-button (right) — the proto's
-                // Beans command row, mirroring Profiles.
-                Row(
-                    Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    FlowRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            // Unified tab + filter rail (PWA .bn-tabs): Bags/Roasters tabs share the
+            // row with the Bags filters (STATUS + ROAST groups), split by hairline
+            // dividers + a dimmed group label, sort split-button pinned right.
+            Row(
+                Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                FlowRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    CremaFilterChip(label = "Bags", selected = tab == "bags", count = ui.beans.size, onClick = { tab = "bags" })
+                    CremaFilterChip(label = "Roasters", selected = tab == "roasters", count = ui.roasters.size, onClick = { tab = "roasters" })
+                    if (tab == "bags") {
+                        CremaFilterDivider()
                         val nonArchived = ui.beans.filter { it.archivedAt == null }
-                        listOf(
-                            "all" to "All", "active" to "Active", "favourite" to "Favourite",
-                            "frozen" to "Frozen", "archived" to "Archived",
-                            "light" to "Light", "medium" to "Medium", "dark" to "Dark",
-                        ).forEach { (id, label) ->
+                        listOf("all" to "All", "active" to "Active", "favourite" to "Favourite", "frozen" to "Frozen", "archived" to "Archived").forEach { (id, label) ->
                             val count = when (id) {
                                 "all" -> nonArchived.size
                                 "active" -> nonArchived.count { it.id == ui.activeBeanId }
                                 "favourite" -> nonArchived.count { it.favourite }
                                 "frozen" -> nonArchived.count { it.frozenOn != null }
-                                "archived" -> ui.beans.count { it.archivedAt != null }
-                                else -> nonArchived.count { roastBand(it.roastLevel?.toInt())?.equals(id, ignoreCase = true) == true }
+                                else -> ui.beans.count { it.archivedAt != null }
                             }
                             CremaFilterChip(label = label, selected = beanFilter == id, count = count, onClick = { beanFilter = id })
                         }
+                        CremaFilterDivider()
+                        CremaFilterGroupLabel("Roast")
+                        listOf("light" to "Light", "medium" to "Medium", "dark" to "Dark").forEach { (id, label) ->
+                            val count = nonArchived.count { roastBand(it.roastLevel?.toInt())?.equals(id, ignoreCase = true) == true }
+                            CremaFilterChip(label = label, selected = beanFilter == id, count = count, onClick = { beanFilter = id })
+                        }
                     }
+                }
+                if (tab == "bags") {
                     CremaSortControl(
                         keys = listOf(
-                            SortKey("freshest", "Freshest"),
-                            SortKey("name", "Name"),
-                            SortKey("roast", "Roast"),
-                            SortKey("remaining", "Remaining"),
+                            SortKey("freshest", "Freshest", "clock"),
+                            SortKey("name", "Name", "sort-ascending"),
+                            SortKey("roast", "Roast", "fire"),
+                            SortKey("remaining", "Remaining", "gauge"),
                         ),
                         selectedKey = beanSort,
                         descending = beanSortDesc,
@@ -247,6 +251,8 @@ fun BeansScreen(
                         onToggleDirection = { beanSortDesc = !beanSortDesc },
                     )
                 }
+            }
+            if (tab == "bags") {
                 if (sortedBeans.isEmpty()) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Text(
@@ -379,20 +385,30 @@ private fun BeanCard(
                     pills.take(4).forEach { (t, isRoast) -> Pill(t, roast = isRoast) }
                 }
             }
-            // Freshness line: "Nd off roast · opened Nd ago" (proto). Opened-days
-            // reuses the ISO day-diff helper; freeze pauses the off-roast clock.
+            // Stats row (PWA .bn-tile-stats): off-roast · opened/frozen · rating —
+            // three cells, each a dot/icon + mono value + dimmed uppercase label,
+            // with the 5-star rating pushed to the right.
             val openedDays = daysOffRoast(bean.openedOn)
-            val openedSuffix = openedDays?.let { " · opened ${it}d ago" } ?: ""
-            val fresh = when {
-                frozen -> "Frozen$openedSuffix"
-                days != null -> "${days}d off roast$openedSuffix"
-                openedDays != null -> "opened ${openedDays}d ago"
-                else -> null
-            }
-            if (fresh != null) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Box(Modifier.size(8.dp).clip(RoundedCornerShape(999.dp)).background(freshnessColor(frozen, days)))
-                    Text(fresh, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            val frozenDays = daysOffRoast(bean.frozenOn)
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                BeanStat(
+                    Modifier.weight(1f),
+                    leading = { Box(Modifier.size(6.dp).clip(CircleShape).background(freshnessColor(frozen, days))) },
+                    value = days?.let { "${it}d" } ?: "—",
+                    label = "off roast",
+                )
+                Box(Modifier.weight(1f)) {
+                    when {
+                        frozen -> BeanStat(leading = { PhIcon("snowflake", sizeDp = 12, tint = MaterialTheme.colorScheme.onSurfaceVariant) }, value = frozenDays?.let { "${it}d" } ?: "—", label = "frozen")
+                        openedDays != null -> BeanStat(leading = { PhIcon("package", sizeDp = 12, tint = MaterialTheme.colorScheme.onSurfaceVariant) }, value = "${openedDays}d", label = "open")
+                        else -> Text("—", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.25f))
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(1.dp)) {
+                    val r = bean.rating.toInt()
+                    (1..5).forEach { n ->
+                        PhIcon(if (n <= r) "star-fill" else "star", sizeDp = 11, tint = if (n <= r) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f))
+                    }
                 }
             }
             if (bean.bagSize > 0f) {
@@ -456,6 +472,27 @@ private fun Pill(text: String, roast: Boolean = false) {
             style = MaterialTheme.typography.labelSmall,
             color = if (roast) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
         )
+    }
+}
+
+// One bean-card stat cell — leading dot/icon + a mono value over a dimmed
+// uppercase label (PWA .bn-tile-stat: val on top, 9px caps label below).
+@Composable
+private fun BeanStat(modifier: Modifier = Modifier, leading: @Composable () -> Unit, value: String, label: String) {
+    Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        leading()
+        Column {
+            Text(
+                value,
+                style = TextStyle(fontFamily = JetBrainsMono, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, fontFeatureSettings = "tnum", lineHeight = 13.sp),
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                label.uppercase(),
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, letterSpacing = 0.5.sp, lineHeight = 11.sp),
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+            )
+        }
     }
 }
 
