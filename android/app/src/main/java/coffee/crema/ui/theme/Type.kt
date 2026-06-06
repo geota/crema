@@ -1,11 +1,13 @@
+@file:OptIn(androidx.compose.ui.text.ExperimentalTextApi::class)
+
 package coffee.crema.ui.theme
 
 import androidx.compose.material3.Typography
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontVariation
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.googlefonts.Font
-import androidx.compose.ui.text.googlefonts.GoogleFont
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import coffee.crema.R
@@ -27,30 +29,20 @@ import coffee.crema.R
  * px in the CSS maps 1:1 to sp here (the mockup used a 1:1 px↔sp convention).
  */
 
-// Brand families via the GoogleFont downloadable-font provider (GMS certs in
-// res/values/font_certs.xml). On a device with Google Play services these
-// download + cache; without it, Compose falls back to the system family so the
-// type scale still renders. The SCALE below (sizes / weights / tabular) is shared.
-private val googleFontProvider = GoogleFont.Provider(
-    providerAuthority = "com.google.android.gms.fonts",
-    providerPackage = "com.google.android.gms",
-    certificates = R.array.com_google_android_gms_fonts_certs,
-)
+// Brand families are BUNDLED as variable fonts (res/font/*.ttf) rather than
+// pulled from the GMS downloadable-font provider — the provider isn't present on
+// many emulators / non-GMS devices, which silently fell the whole type scale
+// back to the system sans (no serif titles, no tabular mono). Each weight maps
+// to the matching `wght` instance of the one variable file (minSdk 31 → variable
+// fonts are universally supported).
+private fun newsreader(w: Int) = Font(R.font.newsreader, weight = FontWeight(w), variationSettings = FontVariation.Settings(FontVariation.weight(w)))
+val Newsreader = FontFamily(newsreader(400), newsreader(500), newsreader(600))
 
-val Newsreader = FontFamily(
-    Font(GoogleFont("Newsreader"), googleFontProvider, FontWeight.Normal),
-    Font(GoogleFont("Newsreader"), googleFontProvider, FontWeight.Medium),
-    Font(GoogleFont("Newsreader"), googleFontProvider, FontWeight.SemiBold),
-)
-val HankenGrotesk = FontFamily(
-    Font(GoogleFont("Hanken Grotesk"), googleFontProvider, FontWeight.Normal),
-    Font(GoogleFont("Hanken Grotesk"), googleFontProvider, FontWeight.Medium),
-    Font(GoogleFont("Hanken Grotesk"), googleFontProvider, FontWeight.SemiBold),
-)
-val JetBrainsMono = FontFamily(
-    Font(GoogleFont("JetBrains Mono"), googleFontProvider, FontWeight.Normal),
-    Font(GoogleFont("JetBrains Mono"), googleFontProvider, FontWeight.Medium),
-)
+private fun hanken(w: Int) = Font(R.font.hanken_grotesk, weight = FontWeight(w), variationSettings = FontVariation.Settings(FontVariation.weight(w)))
+val HankenGrotesk = FontFamily(hanken(400), hanken(500), hanken(600), hanken(700))
+
+private fun jbMono(w: Int) = Font(R.font.jetbrains_mono, weight = FontWeight(w), variationSettings = FontVariation.Settings(FontVariation.weight(w)))
+val JetBrainsMono = FontFamily(jbMono(400), jbMono(500), jbMono(700))
 
 /*
  * M3 type scale, Crema families. Display/Headline + Title-Large are serif;
