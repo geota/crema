@@ -876,6 +876,24 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         shareText(text, "Share shot")
     }
 
+    /** Export the whole shot history as a JSON array — Settings → Sharing. */
+    fun exportAllShots() {
+        val shots = _ui.value.history
+        if (shots.isEmpty()) { appendLog("Export: no shots"); return }
+        val text = runCatching { json.encodeToString(ListSerializer(StoredShot.serializer()), shots) }
+            .getOrElse { appendLog("Export shots failed: ${it.message}"); return }
+        shareText(text, "Export shots")
+    }
+
+    /** Export the bean library (beans + roasters) as JSON — Settings → Sharing. */
+    fun exportBeansLibrary() {
+        val lib = BeanLibrary(beans = _ui.value.beans, roasters = _ui.value.roasters, activeBeanId = _ui.value.activeBeanId)
+        if (lib.beans.isEmpty() && lib.roasters.isEmpty()) { appendLog("Export: empty library"); return }
+        val text = runCatching { json.encodeToString(BeanLibrary.serializer(), lib) }
+            .getOrElse { appendLog("Export library failed: ${it.message}"); return }
+        shareText(text, "Export beans & roasters")
+    }
+
     /** Remove a stored shot from the local history. Persisted. */
     fun deleteShot(id: String) {
         val next = _ui.value.history.filterNot { it.id == id }
