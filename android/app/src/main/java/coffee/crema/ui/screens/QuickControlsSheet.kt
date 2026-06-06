@@ -22,8 +22,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import coffee.crema.ui.components.CremaValueUnit
-import coffee.crema.ui.components.CremaFilterDivider
-import coffee.crema.ui.components.CremaFilterGroupLabel
 import coffee.crema.ui.theme.CremaTheme
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -49,8 +47,6 @@ import coffee.crema.ui.BrewParams
 import coffee.crema.ui.components.CremaButton
 import coffee.crema.ui.components.CremaButtonVariant
 import coffee.crema.ui.components.CremaIconButton
-import coffee.crema.ui.components.CremaStepper
-import coffee.crema.ui.components.CremaSwitch
 import coffee.crema.ui.components.Eyebrow
 import coffee.crema.ui.components.PhIcon
 
@@ -70,16 +66,6 @@ import coffee.crema.ui.components.PhIcon
  * chips run fixed params, like an espresso-first client). The yield override is
  * already covered by the upload-bake above, so no core/FFI work is required.
  */
-private val CHART_CHANNELS = listOf(
-    "pressure" to "Pressure",
-    "flow" to "Flow",
-    "headTemp" to "Coffee temp",
-    "mixTemp" to "Water temp",
-    "weight" to "Weight",
-    "weightFlow" to "Weight flow",
-    "dispensedVolume" to "Volume",
-    "resistance" to "Resistance",
-)
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
