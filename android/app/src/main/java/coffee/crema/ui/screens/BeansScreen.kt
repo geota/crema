@@ -87,7 +87,6 @@ fun BeansScreen(
     val ui by vm.ui.collectAsStateWithLifecycle()
     val connected = ui.bleState == De1BleManager.State.READY
     val scaleConnected = ui.scaleState == ScaleBleManager.State.READY
-    var showAdd by remember { mutableStateOf(false) }
     var tab by remember { mutableStateOf("bags") }
     var roasterDialogOpen by remember { mutableStateOf(false) }
     var roasterEditing by remember { mutableStateOf<Roaster?>(null) }
@@ -312,12 +311,6 @@ fun BeansScreen(
         }
     }
 
-    if (showAdd) {
-        AddBeanDialog(
-            onAdd = { name, roaster, level, roasted -> vm.addBean(name, roaster, level, roasted) },
-            onDismiss = { showAdd = false },
-        )
-    }
     if (roasterDialogOpen) {
         RoasterDialog(
             initial = roasterEditing,
@@ -497,40 +490,6 @@ private fun BeanAvatar(seed: String) {
             color = MaterialTheme.colorScheme.onPrimary,
         )
     }
-}
-
-@Composable
-private fun AddBeanDialog(
-    onAdd: (name: String, roaster: String, roastLevel: Int?, roastedOn: String?) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    var name by remember { mutableStateOf("") }
-    var roaster by remember { mutableStateOf("") }
-    var roasted by remember { mutableStateOf("") }
-    var level by remember { mutableStateOf(5) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Add bean") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                OutlinedTextField(value = name, onValueChange = { name = it }, singleLine = true, label = { Text("Name") })
-                OutlinedTextField(value = roaster, onValueChange = { roaster = it }, singleLine = true, label = { Text("Roaster") })
-                OutlinedTextField(value = roasted, onValueChange = { roasted = it }, singleLine = true, label = { Text("Roasted on (YYYY-MM-DD)") })
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Roast level  $level", Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurface)
-                    FilledTonalIconButton(onClick = { level = (level - 1).coerceAtLeast(1) }) { Text("−") }
-                    FilledTonalIconButton(onClick = { level = (level + 1).coerceAtMost(10) }) { Text("+") }
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = { onAdd(name, roaster, level, roasted); onDismiss() },
-                enabled = name.isNotBlank(),
-            ) { Text("Add") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-    )
 }
 
 // A roaster directory card — avatar + name + "City · Country · N bags", with a
