@@ -104,6 +104,17 @@ class MainActivity : ComponentActivity() {
                             else withBlePermission(viewModel::connectScale)
                     }
                 }
+                // App surface — establishes the espresso background AND a real
+                // LocalContentColor (onBackground). Without it, loose icons/text
+                // that don't set an explicit colour inherit the CompositionLocal
+                // default (Color.Black) → e.g. the editor back arrow read as
+                // black-on-brown, and screens without their own background()
+                // (Scale) showed the lighter window background.
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = MaterialTheme.colorScheme.background,
+                    contentColor = MaterialTheme.colorScheme.onBackground,
+                ) {
                 AppNavHost(
                     machineConnected = machineConnected,
                     scaleConnected = scaleConnected,
@@ -151,6 +162,7 @@ class MainActivity : ComponentActivity() {
                         }
                     },
                 )
+                }
             }
         }
     }

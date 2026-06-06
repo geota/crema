@@ -1,6 +1,7 @@
 package coffee.crema.ui
 
 import android.app.Application
+import android.content.Intent
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import coffee.crema.core.Command
@@ -8,12 +9,17 @@ import coffee.crema.core.CoreOutput
 import coffee.crema.core.CremaBridge
 import coffee.crema.core.Event
 import coffee.crema.core.MachineRequest
+import coffee.crema.core.MmrReg
+import coffee.crema.core.MmrRegister
 import coffee.crema.core.ScaleCapabilities
 import coffee.crema.core.Bean
 import coffee.crema.core.Roaster
+import coffee.crema.core.MaintenanceState
+import coffee.crema.core.MaintenanceReadout
 import coffee.crema.core.blankCremaProfile
 import coffee.crema.core.builtinCremaProfiles
 import coffee.crema.core.cremaProfileToWire
+import coffee.crema.core.maintenanceReadout
 import coffee.crema.beans.BeanLibrary
 import coffee.crema.beans.LibraryStore
 import coffee.crema.beans.newBean
@@ -21,6 +27,10 @@ import coffee.crema.beans.newRoaster
 import coffee.crema.history.HistoryStore
 import coffee.crema.history.StoredShot
 import coffee.crema.history.downsampleForStorage
+import coffee.crema.maintenance.MaintenanceStore
+import coffee.crema.maintenance.MAINTENANCE_MAX_SAMPLE_DT_S
+import coffee.crema.maintenance.MAINTENANCE_MAX_SAMPLE_ML
+import coffee.crema.maintenance.defaultMaintenanceState
 import coffee.crema.settings.AppPrefs
 import coffee.crema.settings.SettingsStore
 import coffee.crema.ble.BleScanner
@@ -30,6 +40,8 @@ import coffee.crema.ble.NordicBleTransport
 import coffee.crema.ble.ScaleBleManager
 import coffee.crema.profiles.CremaProfile
 import coffee.crema.profiles.CustomProfileStore
+import coffee.crema.profiles.PinnedProfileStore
+import coffee.crema.profiles.setProfilePinnedJson
 import coffee.crema.profiles.brewDefaultsJson
 import coffee.crema.profiles.duplicatedCustomProfileJson
 import coffee.crema.profiles.patchCremaProfileJson
@@ -84,6 +96,8 @@ data class LastShot(
     val peakPressure: Float?,
     /** Peak group-head temperature across the shot, °C, or null. */
     val peakTemp: Float?,
+    /** Unix epoch ms the shot completed — drives the card's "· N min ago" eyebrow. */
+    val completedAtMs: Long = 0,
 )
 
 /** A flat snapshot of everything the current screen shows. */
@@ -147,6 +161,29 @@ data class MainUiState(
     val machineSubstate: String? = null,
     /** Latest tank level, mm (`Event.WaterLevel`), or null before the first report. */
     val waterLevelMm: Float? = null,
+    /**
+     * The DE1's pre-formatted firmware label (e.g. `"v1.0.142 (API 4)"`), or
+     * null until the machine's `Version` characteristic reply arrives.
+     * Read-only — folded from `Event.Firmware.firmware_string`. Live only with
+     * a connected DE1; the Settings machine rows show "—" otherwise.
+     */
+    val de1Firmware: String? = null,
+    /**
+     * Raw MMR register values the DE1 reported, keyed by [MmrRegister]. Folded
+     * from each `Event.MmrValue`; values are the **raw** 32-bit words — the UI
+     * applies the per-register scaling (heater-voltage − 1000, flow-multiplier ÷
+     * 1000, GHC-info bitmask, etc.). Populated by the connect-time read sweep
+     * once the DE1 reaches READY; empty when disconnected, so the Settings rows
+     * fall back to "—".
+     */
+    val de1MachineInfo: Map<MmrRegister, UInt> = emptyMap(),
+    /**
+     * The mains line frequency the core resolved (`50.0` / `60.0` Hz), or `0.0`
+     * when the override is "auto-detect", or null before it is read. A pure
+     * (no-BLE) core read, refreshed by the connect-time sweep. Surfaces the AC
+     * mains-frequency selection in Settings → Advanced.
+     */
+    val lineFreqHz: Float? = null,
     /** Summary of the last completed shot (Last-shot card), or null. */
     val lastShot: LastShot? = null,
     /**
@@ -192,6 +229,10 @@ data class MainUiState(
     val activeBeanId: String? = null,
     /** The bean currently open in the editor (`bean-edit` route), or null. */
     val editingBeanId: String? = null,
+    /** A not-yet-saved new-bean draft the full editor edits — the `bean-edit`
+     *  route resolves this when [editingBeanId] names a bean not yet in [beans]
+     *  (the "Add bean" → full-editor path). Committed to the library on Save. */
+    val draftBean: Bean? = null,
     /** The profile currently open in the editor (`profile-edit` route), or null. */
     val editingProfileId: String? = null,
     /**
@@ -203,6 +244,22 @@ data class MainUiState(
     val draftProfile: CremaProfile? = null,
     /** Completed-shot log (newest first), persisted via [HistoryStore]. */
     val history: List<StoredShot> = emptyList(),
+    /**
+     * The persisted water-accumulation & maintenance state — counters, baselines,
+     * and user-set intervals. The DE1 has no cumulative water counter, so the
+     * shell integrates group flow over telemetry into [MaintenanceState.totalLitres]
+     * (see [MainViewModel.applyEvent]'s Telemetry branch); persisted via
+     * [MaintenanceStore]. Seeded with the fresh-install default until [loadMaintenance].
+     */
+    val maintenance: MaintenanceState = defaultMaintenanceState(0L),
+    /**
+     * The derived filter / descale / clean readouts the Settings Water section +
+     * the Brew maintenance banner read, or null before the first compute. Produced
+     * from [maintenance] by the pure core FFI (`maintenanceReadout`); recomputed
+     * only at load, on shot/water-session completion, and after a mark action —
+     * NOT per telemetry sample (that would thrash at ~25–40 Hz).
+     */
+    val maintenanceReadout: MaintenanceReadout? = null,
     /** Theme mode — `"system" | "light" | "dark"` (Settings), persisted. */
     val themeMode: String = "dark",
     /** Latest scale weight in grams, or null before the first reading. */
@@ -358,6 +415,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private var customProfilesJson: List<String> = emptyList()
 
     /**
+     * Pinned BUILT-IN profile ids (the Favorites star), persisted via
+     * [PinnedProfileStore] and overlaid onto the built-ins in [refreshProfiles].
+     * Customs carry `pinned` in their own JSON, so they aren't tracked here.
+     */
+    private var pinnedIds: Set<String> = emptySet()
+
+    /**
      * Complete `CremaProfile` JSON by id — built-ins + customs — the lookup
      * [startShot] feeds to [cremaProfileToWire]. Rebuilt by [refreshProfiles].
      */
@@ -388,6 +452,30 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Custom-profile persistence — a JSON file in filesDir. */
     private val customProfileStore = CustomProfileStore(app, json)
+
+    /** Pinned built-in ids (Favorites star) — a JSON file in filesDir. */
+    private val pinnedProfileStore = PinnedProfileStore(app, json)
+
+    /** Maintenance-state persistence — a JSON file in filesDir. */
+    private val maintenanceStore = MaintenanceStore(app, json)
+
+    /**
+     * The live integrated water total, litres — seeded from the loaded
+     * [MaintenanceState.totalLitres] in [loadMaintenance] and advanced on every
+     * `Event.Telemetry` (group_flow × Δseconds / 1000). Held in a `var` rather
+     * than the ui-state so the ~25–40 Hz accumulate does NOT thrash recomposition;
+     * it is flushed into the persisted state (and the readout recomputed) only on
+     * shot / water-session completion and after a mark action.
+     */
+    private var maintenanceTotalLitres: Double = 0.0
+
+    /**
+     * Timestamp (System.currentTimeMillis) of the previous telemetry sample, for
+     * the wall-clock Δ the accumulate integrates over; null at session start.
+     * Reset to null on `ShotStarted` / `WaterSessionStarted` so the FIRST sample
+     * of a session adds no Δ (avoids a huge between-session gap being integrated).
+     */
+    private var lastTelemetryMs: Long? = null
 
     /**
      * The app-wide BLE transport — the one Nordic-backed [NordicBleTransport].
@@ -446,8 +534,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // snapshot updates promptly when either advances — rather than only
         // when an unrelated event happens to call observeBleState().
         viewModelScope.launch {
+            var wasReady = false
             ble.state.collect { state ->
                 _ui.value = _ui.value.copy(bleState = state)
+                // Fire the machine read-sweep once per connection, on the first
+                // transition into READY (services discovered + subscribed). The
+                // reads emit read-request commands whose replies arrive later as
+                // Firmware / MmrValue events; the pure reads fold straight in.
+                if (state == De1BleManager.State.READY && !wasReady) {
+                    wasReady = true
+                    readMachineInfo()
+                } else if (state != De1BleManager.State.READY) {
+                    wasReady = false
+                }
             }
         }
         viewModelScope.launch {
@@ -462,7 +561,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             loadLibrary()
             loadHistory()
             loadPrefs()
+            pinnedIds = pinnedProfileStore.load()
             loadCustomProfiles()
+            loadMaintenance()
         }
     }
 
@@ -507,7 +608,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val customThin = customProfilesJson.mapNotNull { raw ->
             runCatching { json.decodeFromString(CremaProfile.serializer(), raw) }.getOrNull()
         }
-        val all = customThin + builtinProfiles
+        // Customs carry `pinned` in their own JSON; built-ins get the Favorites
+        // star overlaid from the persisted [pinnedIds] set (they re-decode from the
+        // core each launch with pinned=false).
+        val all = customThin + builtinProfiles.map { it.copy(pinned = pinnedIds.contains(it.id)) }
         profileJsonById = buildMap {
             putAll(builtinProfileJson)
             customProfilesJson.forEach { raw ->
@@ -537,6 +641,32 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun setActiveProfile(id: String) {
         // Switching profiles clears any Quick-Controls override (re-seeds from new).
         _ui.value = _ui.value.copy(activeProfileId = id, brewParams = null)
+    }
+
+    /**
+     * Toggle a profile's Favorites star (the `pinned` flag the Quick-Controls
+     * favorites strip reads). Custom → patch + persist its own JSON; built-in →
+     * flip membership in the persisted [pinnedIds] set. Either way [refreshProfiles]
+     * re-derives the merged list so the card, header count, and favorites strip
+     * stay in lock-step.
+     */
+    fun togglePinProfile(id: String) {
+        val profile = _ui.value.profiles.firstOrNull { it.id == id } ?: return
+        val next = !profile.pinned
+        if (profile.source == "custom") {
+            val base = customProfilesJson.firstOrNull { profileIdOf(it, json) == id } ?: return
+            val patched = runCatching { setProfilePinnedJson(base, next, json) }.getOrElse {
+                appendLog("Pin profile failed: ${it.message}"); return
+            }
+            customProfilesJson = customProfilesJson.map { if (profileIdOf(it, json) == id) patched else it }
+            refreshProfiles()
+            persistCustomProfiles()
+        } else {
+            pinnedIds = if (next) pinnedIds + id else pinnedIds - id
+            refreshProfiles()
+            val snapshot = pinnedIds
+            viewModelScope.launch { pinnedProfileStore.save(snapshot) }
+        }
     }
 
     /** Apply a Quick-Controls brew override (dose/yield/brew-temp). Transient —
@@ -641,6 +771,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         roast: String?,
         tags: List<String>,
         pinned: Boolean,
+        notes: String,
         dose: Float,
         yieldOut: Float,
         brewTemp: Float,
@@ -664,6 +795,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 roast = roast,
                 tags = tags,
                 pinned = pinned,
+                notes = notes,
                 dose = dose,
                 yieldOut = yieldOut,
                 brewTemp = brewTemp,
@@ -710,6 +842,51 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         refreshProfiles()
         persistCustomProfiles()
+    }
+
+    // ── Export / share + history actions ────────────────────────────────────
+
+    /** Export a profile's full community-v2 JSON via the system share sheet. */
+    fun exportProfile(id: String) {
+        val full = profileJsonById[id]
+            ?: customProfilesJson.firstOrNull { profileIdOf(it, json) == id }
+            ?: run { appendLog("Export: profile $id not found"); return }
+        shareText(full, "Share profile")
+    }
+
+    /** Export a stored shot as JSON via the system share sheet. */
+    fun exportShot(id: String) {
+        val shot = _ui.value.history.firstOrNull { it.id == id } ?: return
+        val text = runCatching { json.encodeToString(StoredShot.serializer(), shot) }
+            .getOrElse { appendLog("Export shot failed: ${it.message}"); return }
+        shareText(text, "Share shot")
+    }
+
+    /** Remove a stored shot from the local history. Persisted. */
+    fun deleteShot(id: String) {
+        val next = _ui.value.history.filterNot { it.id == id }
+        _ui.value = _ui.value.copy(history = next)
+        viewModelScope.launch { historyStore.save(next) }
+    }
+
+    /** Load a history shot's profile onto Brew (find by name → set active). */
+    fun loadProfileOnBrew(profileName: String?) {
+        val name = profileName ?: return
+        val match = _ui.value.profiles.firstOrNull { it.name.equals(name, ignoreCase = true) }
+            ?: run { appendLog("Load on Brew: profile \"$name\" not found"); return }
+        setActiveProfile(match.id)
+    }
+
+    /** Fire an ACTION_SEND chooser with [text] (application/json). Best-effort. */
+    private fun shareText(text: String, title: String) {
+        val ctx = getApplication<Application>()
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = "application/json"
+            putExtra(Intent.EXTRA_TEXT, text)
+            putExtra(Intent.EXTRA_TITLE, title)
+        }
+        val chooser = Intent.createChooser(send, title).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+        runCatching { ctx.startActivity(chooser) }.onFailure { appendLog("Share failed: ${it.message}") }
     }
 
     /** Start steaming. */
@@ -817,6 +994,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             shotInProgress = false,
             shotTelemetry = emptyList(),
             waterLevelMm = null,
+            // Drop the machine identity / register readouts so the Settings
+            // machine rows clear to "—" for the next connection rather than
+            // freezing on the last machine's values. The firmware label and
+            // line frequency clear too (line freq is re-read on next connect).
+            de1Firmware = null,
+            de1MachineInfo = emptyMap(),
+            lineFreqHz = null,
             profileUploading = false,
             profileUploadProgress = null,
         )
@@ -849,6 +1033,148 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Stop a running shot (return to idle). */
     fun stopShot() = requestMachineState(MachineRequest.IDLE)
+
+    /**
+     * Read the DE1's identity + service registers once a connection is READY.
+     * Each [CremaBridge.readMmr] emits a `Command.WriteCharacteristic` read
+     * request (the same shared command path the scale/state writes use); the
+     * DE1 answers later on its MMR / version notify characteristics, surfacing
+     * as `Event.MmrValue` / `Event.Firmware` folded into [MainUiState].
+     *
+     * Also folds the two pure (no-BLE) core reads — the firmware-update status
+     * and the resolved line frequency — straight into the snapshot. Safe to
+     * call while disconnected: with no BLE link the read requests write nothing
+     * and the pure reads still return; the UI just shows "—" until replies land.
+     */
+    private fun readMachineInfo() {
+        // Connect-time register sweep: identity (firmware / board / model /
+        // serial), GHC presence + mode, heater voltage, flow-calibration, and
+        // refill-kit presence. Match the generated MmrReg variant spellings.
+        val registers = listOf(
+            MmrReg.FIRMWARE_VERSION,
+            MmrReg.CPU_BOARD_VERSION,
+            MmrReg.MACHINE_MODEL,
+            MmrReg.SERIAL_NUMBER,
+            MmrReg.GHC_INFO,
+            MmrReg.GHC_MODE,
+            MmrReg.HEATER_VOLTAGE,
+            MmrReg.CALIBRATION_FLOW_MULTIPLIER,
+            MmrReg.REFILL_KIT,
+        )
+        registers.forEach { reg ->
+            val raw = runCatching { bridge.readMmr(reg) }.getOrElse {
+                appendLog("Read MMR $reg failed: ${it.message}")
+                return@forEach
+            }
+            onCoreOutputJson(raw)
+        }
+        // Pure reads — no BLE traffic, safe anytime. firmwareUpdateStatus() is
+        // a JSON FirmwareUpdateStatus (logged for now; the de1Firmware label
+        // drives the Settings firmware row). lineFrequencyHz() resolves the
+        // mains frequency the core is using.
+        runCatching { bridge.firmwareUpdateStatus() }.onSuccess { status ->
+            appendLog("Firmware update status: $status")
+        }.onFailure { appendLog("Firmware update status failed: ${it.message}") }
+        val freq = runCatching { bridge.lineFrequencyHz() }.getOrNull()
+        _ui.value = _ui.value.copy(lineFreqHz = freq)
+    }
+
+    // ── Settings: machine setters (Settings → Machine / Advanced / Service) ────
+    // Thin VM wrappers so the Settings screen calls the VM (matching the
+    // theme / scale-config pattern) rather than the bridge directly. Reads /
+    // setters are safe while disconnected — the bridge returns a command JSON
+    // and with no BLE link nothing is written.
+
+    /**
+     * Enable / disable the Group Head Controller (start-shots-from-the-machine).
+     * Routes the resulting MMR write through the shared command path. Re-reads
+     * GHC_MODE so the row reflects the machine's confirmed state.
+     */
+    fun setGhcMode(enabled: Boolean) {
+        // setGhcMode takes a UByte. A CONST `1.toUByte()` trips the const-eval
+        // backend bug (Unknown function: toUByte(kotlin.Int)) — derive the Int
+        // from the runtime `enabled` first so `.toUByte()` is a runtime call.
+        val modeInt = if (enabled) 1 else 0
+        val mode: UByte = modeInt.toUByte()
+        val raw = runCatching { bridge.setGhcMode(mode) }.getOrElse {
+            appendLog("Set GHC mode failed: ${it.message}")
+            return
+        }
+        onCoreOutputJson(raw)
+        // Optimistically reflect the write so the toggle tracks immediately;
+        // the GhcMode register reply (re-read below) then confirms it.
+        _ui.value = _ui.value.copy(
+            de1MachineInfo = _ui.value.de1MachineInfo + (MmrRegister.GhcMode to (if (enabled) 1u else 0u)),
+        )
+        runCatching { bridge.readMmr(MmrReg.GHC_MODE) }.getOrNull()?.let(::onCoreOutputJson)
+    }
+
+    /**
+     * Set the mains heater voltage. The core @Throws unless [volts] is 120 or
+     * 230, so callers (the Settings segmented control behind a confirm) must
+     * only pass those — guarded here too so an out-of-range value is a no-op.
+     */
+    fun setHeaterVoltage(volts: Int) {
+        if (volts != 120 && volts != 230) {
+            appendLog("Heater voltage $volts ignored (only 120 / 230 allowed)")
+            return
+        }
+        val raw = runCatching { bridge.setHeaterVoltage(volts.toUByte()) }.getOrElse {
+            appendLog("Set heater voltage failed: ${it.message}")
+            return
+        }
+        onCoreOutputJson(raw)
+        runCatching { bridge.readMmr(MmrReg.HEATER_VOLTAGE) }.getOrNull()?.let(::onCoreOutputJson)
+    }
+
+    /**
+     * Override the AC mains frequency. The core @Throws unless [hz] is 0.0
+     * (auto-detect), 50.0, or 60.0 — guarded here so a bad value is a no-op.
+     * Returns Unit (no BLE write); the resolved value is re-read into
+     * [MainUiState.lineFreqHz].
+     */
+    fun setLineFrequency(hz: Float) {
+        if (hz != 0.0f && hz != 50.0f && hz != 60.0f) {
+            appendLog("Line frequency $hz ignored (only 0 / 50 / 60 allowed)")
+            return
+        }
+        runCatching { bridge.setLineFrequencyOverride(hz) }.onFailure {
+            appendLog("Set line frequency failed: ${it.message}")
+            return
+        }
+        val resolved = runCatching { bridge.lineFrequencyHz() }.getOrNull() ?: hz
+        _ui.value = _ui.value.copy(lineFreqHz = resolved)
+    }
+
+    /**
+     * Set the maximum shot duration, seconds (null = clear the cap). Returns
+     * Unit (a sans-IO core setting); no event echo.
+     */
+    fun setMaxShotDuration(seconds: Float?) {
+        runCatching { bridge.setMaxShotDuration(seconds) }.onFailure {
+            appendLog("Set max shot duration failed: ${it.message}")
+        }
+    }
+
+    /**
+     * Set the flow-calibration multiplier. Routes the resulting MMR write
+     * through the shared command path and re-reads the register so the row
+     * reflects the machine's confirmed value.
+     */
+    fun setFlowMultiplier(multiplier: Float) {
+        val raw = runCatching { bridge.setCalibrationFlowMultiplier(multiplier) }.getOrElse {
+            appendLog("Set flow multiplier failed: ${it.message}")
+            return
+        }
+        onCoreOutputJson(raw)
+        runCatching { bridge.readMmr(MmrReg.CALIBRATION_FLOW_MULTIPLIER) }.getOrNull()?.let(::onCoreOutputJson)
+    }
+
+    /** Start a descale cycle (Settings → Water → "Run now"). */
+    fun startDescale() = requestMachineState(MachineRequest.DESCALE)
+
+    /** Start a cleaning cycle (Settings → Water → "Run now"). */
+    fun startClean() = requestMachineState(MachineRequest.CLEAN)
 
     /** Enable/disable auto-tare at shot start (Quick Controls). Optimistic. */
     fun setAutoTare(enabled: Boolean) {
@@ -951,7 +1277,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Open a bean in the editor (the `bean-edit` route reads this). */
     fun startEditBean(id: String) {
-        _ui.value = _ui.value.copy(editingBeanId = id)
+        _ui.value = _ui.value.copy(editingBeanId = id, draftBean = null)
+    }
+
+    /** Start a brand-new bean in the full editor — stash a blank draft and point
+     *  the editor at it. Added to the library only on Save (via [updateBean]). */
+    fun startNewBean() {
+        val draft = newBean(name = "", roasterId = null, roastLevel = null, roastedOn = null, nowMs = System.currentTimeMillis())
+        _ui.value = _ui.value.copy(draftBean = draft, editingBeanId = draft.id)
     }
 
     /**
@@ -960,15 +1293,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun updateBean(id: String, roasterName: String, transform: (Bean) -> Bean) {
         val s = _ui.value
-        val existing = s.beans.firstOrNull { it.id == id } ?: return
+        // Resolve from the library, or from a new-bean draft (the "Add bean" →
+        // full-editor Save path — the bean isn't in [beans] yet).
+        val existing = s.beans.firstOrNull { it.id == id } ?: s.draftBean?.takeIf { it.id == id } ?: return
+        val isNew = s.beans.none { it.id == id }
         val now = System.currentTimeMillis()
         val (roasterId, roasters) = resolveRoaster(roasterName, s.roasters, now)
         // The shell owns the full field mapping (the core Bean already models
         // every field); we only resolve the roaster + stamp updatedAt here.
         val updated = transform(existing).copy(roasterId = roasterId, updatedAt = now)
         _ui.value = _ui.value.copy(
-            beans = s.beans.map { if (it.id == id) updated else it },
+            beans = if (isNew) s.beans + updated else s.beans.map { if (it.id == id) updated else it },
             roasters = roasters,
+            draftBean = null,
         )
         persistLibrary()
     }
@@ -988,6 +1325,102 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             activeBeanId = if (wasActive) remaining.firstOrNull()?.id else _ui.value.activeBeanId,
         )
         persistLibrary()
+    }
+
+    /** Duplicate a bag into a fresh row (new id, "name (copy)", not favourite). Persisted. */
+    fun duplicateBean(id: String) {
+        val s = _ui.value
+        val base = s.beans.firstOrNull { it.id == id } ?: return
+        val now = System.currentTimeMillis()
+        val copy = base.copy(
+            id = "bean:" + java.util.UUID.randomUUID(),
+            name = "${base.name} (copy)",
+            favourite = false,
+            createdAt = now,
+            updatedAt = now,
+        )
+        _ui.value = s.copy(beans = s.beans + copy)
+        persistLibrary()
+    }
+
+    /** Freeze a bag — stamps `frozenOn` to today (ISO yyyy-mm-dd), pausing freshness. Persisted. */
+    fun freezeBean(id: String) = mutateBean(id) { it.copy(frozenOn = isoToday(), defrostedOn = null) }
+
+    /** Defrost a bag — clears `frozenOn`, records `defrostedOn`. Persisted. */
+    fun defrostBean(id: String) = mutateBean(id) { it.copy(frozenOn = null, defrostedOn = isoToday()) }
+
+    /** Archive a bag — stamps `archivedAt`. Persisted. */
+    fun archiveBean(id: String) = mutateBean(id) { it.copy(archivedAt = System.currentTimeMillis()) }
+
+    /** Unarchive a bag — clears `archivedAt`. Persisted. */
+    fun unarchiveBean(id: String) = mutateBean(id) { it.copy(archivedAt = null) }
+
+    /** Toggle the brew-page favourite star. Persisted. */
+    fun toggleBeanFavourite(id: String) = mutateBean(id) { it.copy(favourite = !it.favourite) }
+
+    /** Map a single bean through [transform], stamp `updatedAt`, persist. */
+    private fun mutateBean(id: String, transform: (Bean) -> Bean) {
+        val s = _ui.value
+        val now = System.currentTimeMillis()
+        _ui.value = s.copy(beans = s.beans.map { if (it.id == id) transform(it).copy(updatedAt = now) else it })
+        persistLibrary()
+    }
+
+    /** Today as an ISO `yyyy-mm-dd` string (matches the Bean date fields). */
+    private fun isoToday(): String =
+        java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
+
+    // ── Roaster directory ───────────────────────────────────────────────────
+
+    /** Add a roaster to the directory. Persisted. */
+    fun addRoaster(name: String, website: String?, city: String?, country: String?, notes: String) {
+        if (name.isBlank()) return
+        val now = System.currentTimeMillis()
+        val r = newRoaster(name.trim(), now).copy(
+            website = website?.takeIf { it.isNotBlank() },
+            city = city?.takeIf { it.isNotBlank() },
+            country = country?.takeIf { it.isNotBlank() },
+            notes = notes,
+        )
+        _ui.value = _ui.value.copy(roasters = _ui.value.roasters + r)
+        persistLibrary()
+    }
+
+    /** Update a roaster's editable fields. Persisted. */
+    fun updateRoaster(id: String, name: String, website: String?, city: String?, country: String?, notes: String) {
+        if (name.isBlank()) return
+        val now = System.currentTimeMillis()
+        _ui.value = _ui.value.copy(
+            roasters = _ui.value.roasters.map {
+                if (it.id == id) it.copy(
+                    name = name.trim(),
+                    website = website?.takeIf { w -> w.isNotBlank() },
+                    city = city?.takeIf { c -> c.isNotBlank() },
+                    country = country?.takeIf { c -> c.isNotBlank() },
+                    notes = notes,
+                    updatedAt = now,
+                ) else it
+            },
+        )
+        persistLibrary()
+    }
+
+    /** Delete a roaster; detach its bags (clear their `roasterId`). Persisted. */
+    fun deleteRoaster(id: String) {
+        val s = _ui.value
+        _ui.value = s.copy(
+            roasters = s.roasters.filterNot { it.id == id },
+            beans = s.beans.map { if (it.roasterId == id) it.copy(roasterId = null) else it },
+        )
+        persistLibrary()
+    }
+
+    /** Open a roaster's website in the browser (best-effort; prepends https:// if bare). */
+    fun visitRoasterWebsite(url: String?) {
+        val u = url?.takeIf { it.isNotBlank() } ?: return
+        val full = if (u.startsWith("http", ignoreCase = true)) u else "https://$u"
+        val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(full)).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+        runCatching { getApplication<Application>().startActivity(intent) }.onFailure { appendLog("Visit failed: ${it.message}") }
     }
 
     // ── Shot history ──────────────────────────────────────────────────────────
@@ -1046,6 +1479,126 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { historyStore.save(next) }
     }
 
+    // ── Maintenance (water accumulation) ────────────────────────────────────────
+    //
+    // The DE1 has no cumulative water counter; we integrate group flow over
+    // telemetry into a running litre total (the de1app / web-shell approach) and
+    // derive the filter / descale / clean readouts from it via the pure core FFI.
+    // The live total lives in [maintenanceTotalLitres] (not the ui-state) so the
+    // ~25–40 Hz accumulate doesn't thrash recomposition; it's flushed into the
+    // persisted [MaintenanceState] (and the readout recomputed) only at load, on
+    // shot / water-session completion, and after a mark action.
+
+    /** Load the persisted maintenance state, seed the live total, compute the readout. */
+    private suspend fun loadMaintenance() {
+        val state = maintenanceStore.load()
+        maintenanceTotalLitres = state.totalLitres
+        _ui.value = _ui.value.copy(
+            maintenance = state,
+            maintenanceReadout = computeMaintenanceReadout(state),
+        )
+    }
+
+    /**
+     * Derive the filter / descale / clean readout from [state] via the pure core
+     * FFI (`maintenanceReadout` — a MaintenanceState JSON in, a MaintenanceReadout
+     * JSON out; @Throws on a bad input). The same derivation the web shell uses,
+     * so both produce byte-identical readouts. Failures fall back to null.
+     */
+    private fun computeMaintenanceReadout(state: MaintenanceState): MaintenanceReadout? = runCatching {
+        val stateJson = json.encodeToString(MaintenanceState.serializer(), state)
+        val resultJson = maintenanceReadout(stateJson, System.currentTimeMillis())
+        json.decodeFromString(MaintenanceReadout.serializer(), resultJson)
+    }.getOrElse {
+        appendLog("Maintenance readout failed: ${it.message}")
+        null
+    }
+
+    /**
+     * Flush the live integrated [maintenanceTotalLitres] into the persisted
+     * [MaintenanceState], save, and recompute the readout. Called on shot /
+     * water-session completion (the natural "a pour just finished" boundaries) —
+     * NOT per telemetry sample.
+     */
+    private fun flushMaintenance() {
+        val next = _ui.value.maintenance.copy(totalLitres = maintenanceTotalLitres)
+        _ui.value = _ui.value.copy(
+            maintenance = next,
+            maintenanceReadout = computeMaintenanceReadout(next),
+        )
+        viewModelScope.launch { maintenanceStore.save(next) }
+    }
+
+    /**
+     * Integrate one telemetry sample into [maintenanceTotalLitres]. [flowMlPerS]
+     * is the DE1's group flow; the wall-clock Δ since the previous sample is
+     * derived from [nowMs] and [lastTelemetryMs]. Mirrors the web store's clamps:
+     * the Δ is capped at [MAINTENANCE_MAX_SAMPLE_DT_S] (ignore between-session
+     * gaps), only positive flow accumulates, and an implausibly large per-sample
+     * volume (> [MAINTENANCE_MAX_SAMPLE_ML]) is dropped. Does NOT persist or
+     * recompute the readout (that happens at the completion boundaries).
+     */
+    private fun accumulateMaintenance(flowMlPerS: Float, nowMs: Long) {
+        val prevMs = lastTelemetryMs
+        lastTelemetryMs = nowMs
+        if (prevMs == null) return
+        val dtSeconds = (nowMs - prevMs) / 1000.0
+        if (dtSeconds <= 0.0 || flowMlPerS <= 0f) return
+        val cappedDt = dtSeconds.coerceAtMost(MAINTENANCE_MAX_SAMPLE_DT_S)
+        val ml = flowMlPerS.toDouble() * cappedDt
+        if (ml <= 0.0 || ml > MAINTENANCE_MAX_SAMPLE_ML) return
+        maintenanceTotalLitres += ml / 1000.0
+    }
+
+    /**
+     * Mark the water filter cleaned — rebaseline its litre counter to the current
+     * total and stamp `filterAtMs` (the web store's `markFilterCleaned`). Persists
+     * + recomputes the readout.
+     */
+    fun markFilterCleaned() {
+        val next = _ui.value.maintenance.copy(
+            totalLitres = maintenanceTotalLitres,
+            filterBaselineLitres = maintenanceTotalLitres,
+            filterAtMs = System.currentTimeMillis(),
+        )
+        saveMaintenance(next)
+    }
+
+    /**
+     * Mark a descale done — rebaseline the descale litre counter to the current
+     * total and stamp `descaleAtMs` (the web store's `markDescaled`). Persists +
+     * recomputes the readout.
+     */
+    fun markDescaled() {
+        val next = _ui.value.maintenance.copy(
+            totalLitres = maintenanceTotalLitres,
+            descaleBaselineLitres = maintenanceTotalLitres,
+            descaleAtMs = System.currentTimeMillis(),
+        )
+        saveMaintenance(next)
+    }
+
+    /**
+     * Mark a clean cycle done — reset its hour counter by stamping `cleanAtMs`
+     * (the web store's `markCleaned`). Persists + recomputes the readout.
+     */
+    fun markCleaned() {
+        val next = _ui.value.maintenance.copy(
+            totalLitres = maintenanceTotalLitres,
+            cleanAtMs = System.currentTimeMillis(),
+        )
+        saveMaintenance(next)
+    }
+
+    /** Fold a mark action's new state into the ui-state, recompute, and persist. */
+    private fun saveMaintenance(next: MaintenanceState) {
+        _ui.value = _ui.value.copy(
+            maintenance = next,
+            maintenanceReadout = computeMaintenanceReadout(next),
+        )
+        viewModelScope.launch { maintenanceStore.save(next) }
+    }
+
     // ── App settings ──────────────────────────────────────────────────────────
 
     /** Load persisted app preferences at startup. */
@@ -1057,6 +1610,46 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun setThemeMode(mode: String) {
         _ui.value = _ui.value.copy(themeMode = mode)
         viewModelScope.launch { settingsStore.save(AppPrefs(mode)) }
+    }
+
+    /** Reset Crema's preferences (theme) to defaults. Persisted. */
+    fun resetPreferences() {
+        val def = AppPrefs()
+        viewModelScope.launch { settingsStore.save(def) }
+        _ui.value = _ui.value.copy(themeMode = def.themeMode)
+    }
+
+    /**
+     * Erase ALL user data — bean library, roasters, shot history, custom
+     * profiles, and preferences. Built-in profiles remain (they aren't user
+     * data); the active profile reseeds to the first built-in via
+     * [refreshProfiles]. Every store is cleared on disk too. Irreversible.
+     */
+    fun eraseAll() {
+        customProfilesJson = emptyList()
+        // Reset the maintenance counters too — a fresh-install state (baselines and
+        // total zeroed, the three *AtMs = now so the readouts read "0 since").
+        val freshMaintenance = defaultMaintenanceState(System.currentTimeMillis())
+        maintenanceTotalLitres = 0.0
+        lastTelemetryMs = null
+        viewModelScope.launch {
+            library.save(BeanLibrary())
+            historyStore.save(emptyList())
+            customProfileStore.save(emptyList())
+            settingsStore.save(AppPrefs())
+            maintenanceStore.save(freshMaintenance)
+        }
+        _ui.value = _ui.value.copy(
+            beans = emptyList(),
+            roasters = emptyList(),
+            activeBeanId = null,
+            history = emptyList(),
+            activeProfileId = null,
+            maintenance = freshMaintenance,
+            maintenanceReadout = computeMaintenanceReadout(freshMaintenance),
+            themeMode = AppPrefs().themeMode,
+        )
+        refreshProfiles()
     }
 
     /** Scan for and connect to a Bookoo scale. Independent of the DE1. */
@@ -1380,6 +1973,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             is Event.ShotStarted -> {
                 // Entering a shot: flip the resting↔extracting flag and zero the
                 // per-shot counters so the Brew timer / phase / volume restart.
+                // Reset the maintenance dt-tracker so the first telemetry sample of
+                // this session adds no wall-clock Δ (no phantom between-session water).
+                lastTelemetryMs = null
                 _ui.value = _ui.value.copy(
                     shotInProgress = true,
                     shotFrame = 0,
@@ -1401,6 +1997,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             is Event.Telemetry -> {
                 val t = event.content
                 val prev = _ui.value
+                // Integrate group flow into the running water total (the DE1 has no
+                // cumulative counter). In-memory only — NOT persisted/recomputed per
+                // sample (~25–40 Hz); flushed on shot / water-session completion.
+                accumulateMaintenance(t.group_flow, System.currentTimeMillis())
                 val line = "t=%dms  P=%.1fbar  flow=%.1fmL/s  head=%.1f°C".format(
                     t.elapsed.toLong(), t.group_pressure, t.group_flow, t.head_temp,
                 )
@@ -1479,6 +2079,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 appendLog("Auto-stop: ${event.content.reason.string}")
             is Event.ShotCompleted -> {
                 val c = event.content
+                val now = System.currentTimeMillis()
                 // Leaving a shot: clear the extracting flag and capture the
                 // summary for the Brew "Last shot" card.
                 _ui.value = _ui.value.copy(
@@ -1488,15 +2089,26 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         yieldG = c.final_weight,
                         peakPressure = c.peak_pressure,
                         peakTemp = c.peak_temp,
+                        completedAtMs = now,
                     ),
                 )
                 appendLog("Shot completed: ${c.duration}ms, ${c.sample_count} samples")
                 captureCompletedShot(c.duration.toLong(), c.final_weight, c.peak_pressure, c.peak_temp)
+                // A pour just finished: flush the integrated water into the persisted
+                // maintenance state and recompute the filter / descale / clean readout.
+                flushMaintenance()
             }
-            is Event.WaterSessionStarted ->
+            is Event.WaterSessionStarted -> {
+                // A hot-water pour also moves water through the group — reset the
+                // dt-tracker so its first telemetry sample adds no Δ, then accumulate.
+                lastTelemetryMs = null
                 appendLog("Water session started: ${event.content.kind.string}")
-            is Event.WaterSessionCompleted ->
+            }
+            is Event.WaterSessionCompleted -> {
                 appendLog("Water session completed: ${event.content.kind.string}")
+                // Flush the integrated water (same boundary as a completed shot).
+                flushMaintenance()
+            }
             is Event.SteamSessionStarted -> appendLog("Steam session started")
             is Event.SteamSessionCompleted ->
                 appendLog("Steam session completed: ${event.content.duration}ms")
@@ -1542,18 +2154,30 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
             is Event.DecodeError ->
                 appendLog("Decode error: ${event.content.message}")
-            // The version / MMR / calibration read paths have no UI yet —
-            // log them so the data is visible until a screen consumes it.
-            is Event.Firmware ->
+            // The version / MMR read paths now feed the Settings machine rows.
+            // The preformatted firmware label is folded straight in; each MMR
+            // value lands raw in de1MachineInfo (the UI applies per-register
+            // scaling). Keep a log line so the data stays visible in the debug
+            // readout too.
+            is Event.Firmware -> {
+                _ui.value = _ui.value.copy(de1Firmware = event.content.firmware_string)
                 appendLog("Firmware: ${event.content.firmware_string}")
-            is Event.MmrValue ->
-                appendLog(
-                    "MMR ${event.content.register}: ${event.content.value}",
+            }
+            is Event.MmrValue -> {
+                val c = event.content
+                _ui.value = _ui.value.copy(
+                    de1MachineInfo = _ui.value.de1MachineInfo + (c.register to c.value),
                 )
+                appendLog("MMR ${c.register}: ${c.value}")
+            }
+            // Calibration replies (current / factory) have no settings row yet
+            // (no calibration-write core method — read-only), so keep logging
+            // the decoded values rather than modelling a half-wired type.
             is Event.Calibration ->
                 appendLog(
                     "Calibration ${event.content.target} " +
-                        "(${event.content.command})",
+                        "(${event.content.command}): de1=${event.content.de1_reported} " +
+                        "measured=${event.content.measured}",
                 )
             // v1 stub never fires this in practice.
             is Event.FirmwareLockoutHit ->

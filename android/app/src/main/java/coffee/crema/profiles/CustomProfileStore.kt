@@ -119,11 +119,11 @@ fun duplicatedCustomProfileJson(baseJson: String, json: Json): String {
  * round-trippable to the DE1.
  *
  * Overwrites only: `source` (forced to `"custom"`), `name`, `roast`
- * (`"light"|"medium"|"dark"` or null), `tags`, `pinned`, `dose`, `yieldOut`,
+ * (`"light"|"medium"|"dark"` or null), `tags`, `pinned`, `notes`, `dose`, `yieldOut`,
  * `brewTemp`, `maxTotalVolumeMl`, and per-existing-segment `target` + `time`
  * (positional — the non-curve editor never adds / removes segments). Each
  * segment's `temp` / `mode` / `ramp` / `tempSensor` / `exit` / `limiter` etc.
- * survive as-is, as do `notes` / `author` / `beverageType` / `tankTemperatureC` /
+ * survive as-is, as do `author` / `beverageType` / `tankTemperatureC` /
  * `preinfuseStepCount` / `stopOnWeight` / `autoTare` / `id`.
  *
  * @param segments (target, time) for each segment, in order; extra/missing entries
@@ -135,6 +135,7 @@ fun patchCremaProfileJson(
     roast: String?,
     tags: List<String>,
     pinned: Boolean,
+    notes: String,
     dose: Float,
     yieldOut: Float,
     brewTemp: Float,
@@ -198,6 +199,7 @@ fun patchCremaProfileJson(
         put("roast", roast?.let { JsonPrimitive(it) } ?: JsonNull)
         put("tags", JsonArray(tags.map { JsonPrimitive(it) }))
         put("pinned", JsonPrimitive(pinned))
+        put("notes", JsonPrimitive(notes))
         put("dose", JsonPrimitive(dose))
         put("yieldOut", JsonPrimitive(yieldOut))
         put("brewTemp", JsonPrimitive(brewTemp))
@@ -226,6 +228,17 @@ data class SegmentEdit(
     /** Max limiter, or null = disabled. */
     val limiter: SegmentLimiter? = null,
 )
+
+/**
+ * Flip just the top-level `pinned` flag on a complete CremaProfile JSON, leaving
+ * every other field untouched — the Favorites star toggle for a CUSTOM profile
+ * (built-ins toggle via [PinnedProfileStore] instead). Persisted by the caller.
+ */
+fun setProfilePinnedJson(baseJson: String, pinned: Boolean, json: Json): String {
+    val root = json.parseToJsonElement(baseJson).jsonObject.toMutableMap()
+    root["pinned"] = JsonPrimitive(pinned)
+    return json.encodeToString(JsonObject.serializer(), JsonObject(root))
+}
 
 /**
  * Override just the top-level dose / yield / brew-temp on a complete CremaProfile
