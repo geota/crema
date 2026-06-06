@@ -91,15 +91,22 @@ fun ProfilesScreen(
     var filter by remember { mutableStateOf("all") }
     var sort by remember { mutableStateOf("name") }
     var sortDesc by remember { mutableStateOf(false) }
+    // Fall back off the Hidden facet once nothing is archived (e.g. the last one
+    // was just restored) so the grid never strands on an empty hidden view.
+    val effectiveFilter = if (filter == "hidden" && ui.hiddenProfileIds.isEmpty()) "all" else filter
     val filtered = ui.profiles.filter { p ->
+        val isHidden = p.id in ui.hiddenProfileIds
         (query.isBlank() ||
             p.name.contains(query, ignoreCase = true) ||
             p.tags.any { it.contains(query, ignoreCase = true) } ||
             (p.roast?.contains(query, ignoreCase = true) == true)) &&
-            when (filter) {
-                "pinned" -> p.pinned
-                "all" -> true
-                else -> p.roast?.equals(filter, ignoreCase = true) == true
+            when (effectiveFilter) {
+                // The Hidden facet draws only the archived built-ins; every other
+                // facet excludes them from the active grid.
+                "hidden" -> isHidden
+                "pinned" -> !isHidden && p.pinned
+                "all" -> !isHidden
+                else -> !isHidden && p.roast?.equals(filter, ignoreCase = true) == true
             }
     }
     val roastOrder = mapOf("light" to 0, "medium" to 1, "dark" to 2)
@@ -183,13 +190,21 @@ fun ProfilesScreen(
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 FlowRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf("all" to "All", "pinned" to "Pinned", "light" to "Light", "medium" to "Medium", "dark" to "Dark").forEach { (id, label) ->
+                    val visible = ui.profiles.filter { it.id !in ui.hiddenProfileIds }
+                    val chips = buildList {
+                        add("all" to "All"); add("pinned" to "Pinned")
+                        add("light" to "Light"); add("medium" to "Medium"); add("dark" to "Dark")
+                        // Hidden facet only appears once there's something archived.
+                        if (ui.hiddenProfileIds.isNotEmpty()) add("hidden" to "Hidden")
+                    }
+                    chips.forEach { (id, label) ->
                         val count = when (id) {
-                            "all" -> ui.profiles.size
-                            "pinned" -> ui.profiles.count { it.pinned }
-                            else -> ui.profiles.count { it.roast?.equals(id, ignoreCase = true) == true }
+                            "all" -> visible.size
+                            "pinned" -> visible.count { it.pinned }
+                            "hidden" -> ui.hiddenProfileIds.size
+                            else -> visible.count { it.roast?.equals(id, ignoreCase = true) == true }
                         }
-                        CremaFilterChip(label = label, selected = filter == id, count = count, onClick = { filter = id })
+                        CremaFilterChip(label = label, selected = effectiveFilter == id, count = count, onClick = { filter = id })
                     }
                 }
                 CremaSortControl(
@@ -227,6 +242,9 @@ fun ProfilesScreen(
                         onDuplicate = { vm.duplicateProfile(profile.id); onNav("profile-edit") },
                         onExport = { vm.exportProfile(profile.id) },
                         onDelete = { vm.deleteProfile(profile.id) },
+                        isHidden = profile.id in ui.hiddenProfileIds,
+                        onArchive = { vm.archiveBuiltinProfile(profile.id) },
+                        onUnarchive = { vm.unarchiveBuiltinProfile(profile.id) },
                     )
                 }
             }
@@ -244,6 +262,9 @@ private fun ProfileCard(
     onDuplicate: () -> Unit,
     onExport: () -> Unit,
     onDelete: () -> Unit,
+    isHidden: Boolean = false,
+    onArchive: () -> Unit = {},
+    onUnarchive: () -> Unit = {},
 ) {
     val isCustom = profile.source == "custom"
     var confirmDelete by remember { mutableStateOf(false) }
@@ -338,7 +359,14 @@ private fun ProfileCard(
                 FilledTonalIconButton(onClick = onEdit) { PhIcon("pencil-simple", sizeDp = 18) }
                 CremaOverflowMenu(items = buildList {
                     add(OverflowItem("export", "Export .json", onExport))
-                    if (isCustom) add(OverflowItem("trash", "Delete profile", { confirmDelete = true }, danger = true))
+                    when {
+                        // Already archived (Hidden view) → restore.
+                        isHidden -> add(OverflowItem("arrow-counter-clockwise", "Restore profile", onUnarchive))
+                        // Custom → real delete. Built-in → archive (it can't be deleted),
+                        // styled red so it reads as the delete affordance.
+                        isCustom -> add(OverflowItem("trash", "Delete profile", { confirmDelete = true }, danger = true))
+                        else -> add(OverflowItem("archive", "Archive profile", onArchive, danger = true))
+                    }
                 })
             }
         }
