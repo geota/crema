@@ -41,6 +41,7 @@ import coffee.crema.ble.NordicBleTransport
 import coffee.crema.ble.ScaleBleManager
 import coffee.crema.profiles.CremaProfile
 import coffee.crema.profiles.CustomProfileStore
+import coffee.crema.profiles.HiddenProfileStore
 import coffee.crema.profiles.PinnedProfileStore
 import coffee.crema.profiles.setProfilePinnedJson
 import coffee.crema.profiles.brewDefaultsJson
@@ -198,6 +199,9 @@ data class MainUiState(
      * library (M3) adds user profiles.
      */
     val profiles: List<CremaProfile> = emptyList(),
+    /** Hidden (archived) built-in profile ids — filtered out of the active grid
+     *  except under the Profiles "Hidden" facet. */
+    val hiddenProfileIds: Set<String> = emptySet(),
     /** The selected profile's id (the Brew header's active profile), or null. */
     val activeProfileId: String? = null,
     /** Transient Quick-Controls brew override, or null = use the active profile. */
@@ -427,6 +431,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      */
     private var pinnedIds: Set<String> = emptySet()
 
+    /** Hidden (archived) BUILT-IN profile ids, persisted via [HiddenProfileStore].
+     *  Built-ins can't be deleted, so "archive" hides them from the active grid. */
+    private var hiddenIds: Set<String> = emptySet()
+
     /**
      * Complete `CremaProfile` JSON by id — built-ins + customs — the lookup
      * [startShot] feeds to [cremaProfileToWire]. Rebuilt by [refreshProfiles].
@@ -461,6 +469,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Pinned built-in ids (Favorites star) — a JSON file in filesDir. */
     private val pinnedProfileStore = PinnedProfileStore(app, json)
+    private val hiddenProfileStore = HiddenProfileStore(app, json)
 
     /** Maintenance-state persistence — a JSON file in filesDir. */
     private val maintenanceStore = MaintenanceStore(app, json)
@@ -568,6 +577,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             loadHistory()
             loadPrefs()
             pinnedIds = pinnedProfileStore.load()
+            hiddenIds = hiddenProfileStore.load()
             loadCustomProfiles()
             loadMaintenance()
         }
@@ -626,7 +636,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         _ui.value = _ui.value.copy(
             profiles = all,
-            activeProfileId = _ui.value.activeProfileId ?: all.firstOrNull()?.id,
+            hiddenProfileIds = hiddenIds,
+            activeProfileId = _ui.value.activeProfileId ?: all.firstOrNull { it.id !in hiddenIds }?.id,
         )
     }
 
@@ -848,6 +859,28 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         refreshProfiles()
         persistCustomProfiles()
+    }
+
+    /** Archive (hide) a built-in profile — built-ins can't be deleted, so this
+     *  hides it from the active grid. Restored from the "Hidden" filter. Persisted. */
+    fun archiveBuiltinProfile(id: String) {
+        hiddenIds = hiddenIds + id
+        // If the hidden profile was active, drop the selection so refreshProfiles
+        // re-seeds the Brew header to a still-visible profile.
+        if (_ui.value.activeProfileId == id) {
+            _ui.value = _ui.value.copy(activeProfileId = null)
+        }
+        refreshProfiles()
+        val snapshot = hiddenIds
+        viewModelScope.launch { hiddenProfileStore.save(snapshot) }
+    }
+
+    /** Restore a hidden built-in profile back to the active grid. Persisted. */
+    fun unarchiveBuiltinProfile(id: String) {
+        hiddenIds = hiddenIds - id
+        refreshProfiles()
+        val snapshot = hiddenIds
+        viewModelScope.launch { hiddenProfileStore.save(snapshot) }
     }
 
     // ── Export / share + history actions ────────────────────────────────────
