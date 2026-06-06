@@ -320,18 +320,18 @@ private fun ShotRow(shot: StoredShot, selected: Boolean, onClick: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        // Time column — wall-clock HH:mm over a compact relative (PWA .hi-row-time).
+        val timeH = remember(shot.completedAtMs) {
+            java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date(shot.completedAtMs))
+        }
+        Column(Modifier.width(58.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            CremaValueUnit(timeH, null, valueSize = 12.sp)
             Text(
-                listOfNotNull(shot.profileName, shot.beanName).joinToString(" · ").ifEmpty { "Shot" },
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.onSurface,
+                compactAgo(shot.completedAtMs),
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                DateUtils.getRelativeTimeSpanString(shot.completedAtMs).toString(),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
         SparkChart(
@@ -342,27 +342,64 @@ private fun ShotRow(shot: StoredShot, selected: Boolean, onClick: () -> Unit) {
                 .clip(RoundedCornerShape(6.dp))
                 .background(MaterialTheme.colorScheme.surfaceContainerLowest),
         )
-        Text(
-            shotRatio(shot) ?: "—",
-            style = CremaTheme.readout.readoutSm.copy(fontSize = 13.sp, lineHeight = 17.sp),
-            color = MaterialTheme.colorScheme.onSurface,
-        )
-        Text(
-            shot.yieldG?.let { "%.1f g".format(it) } ?: "—",
-            style = CremaTheme.readout.readoutSm.copy(fontSize = 13.sp, lineHeight = 17.sp),
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        // Inline rating (proto): compact stars, faint when unrated.
+        // Main — profile name over the bean (PWA .hi-row-main).
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                shot.profileName ?: "Shot",
+                style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp, fontWeight = FontWeight.Medium),
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                shot.beanName ?: "—",
+                style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        // Ratio + Yield metrics, each value over a dimmed caps label (PWA .hi-row-metric).
+        RowMetric(shotRatio(shot) ?: "—", null, "Ratio")
+        RowMetric(shot.yieldG?.let { "%.1f".format(it) } ?: "—", shot.yieldG?.let { "g" }, "Yield")
+        // Inline rating: compact stars, faint when unrated.
         val r = shot.rating ?: 0
         Row(horizontalArrangement = Arrangement.spacedBy(1.dp)) {
             (1..5).forEach { n ->
                 PhIcon(
                     if (n <= r) "star-fill" else "star",
                     sizeDp = 11,
-                    tint = if (n <= r) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f),
+                    tint = if (n <= r) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f),
                 )
             }
         }
+    }
+}
+
+// One right-aligned list-row metric: a mono value (+ small unit) over a dimmed
+// uppercase label (PWA .hi-row-metric / .hi-row-metric-l).
+@Composable
+private fun RowMetric(value: String, unit: String?, label: String) {
+    Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(1.dp)) {
+        CremaValueUnit(value, unit, valueSize = 13.sp, unitSize = 10.sp)
+        Text(
+            label.uppercase(),
+            style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, letterSpacing = 0.3.sp),
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+        )
+    }
+}
+
+// Compact "ago" label sized for the narrow time column (PWA caps at "N wk ago",
+// never an absolute date — so it always fits 58dp).
+private fun compactAgo(ms: Long): String {
+    val min = ((System.currentTimeMillis() - ms) / 60000L).coerceAtLeast(0)
+    return when {
+        min < 1L -> "just now"
+        min < 60L -> "${min}m ago"
+        min < 1440L -> "${min / 60L}h ago"
+        min < 10080L -> "${min / 1440L}d ago"
+        else -> "${min / 10080L}w ago"
     }
 }
 
