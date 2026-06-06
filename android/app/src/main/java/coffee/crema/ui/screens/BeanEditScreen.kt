@@ -49,6 +49,7 @@ import coffee.crema.ui.components.CremaIconButton
 import coffee.crema.ui.components.CremaSegmentedButton
 import coffee.crema.ui.components.CremaStepper
 import coffee.crema.ui.components.CremaSwitch
+import coffee.crema.ui.components.CremaTextField
 import coffee.crema.ui.components.Eyebrow
 import coffee.crema.ui.components.PhIcon
 import coffee.crema.ui.components.SegOption
@@ -339,10 +340,12 @@ private fun BeLabel(label: String, sub: String?) {
 
 @Composable
 private fun BeField(label: String, value: String, singleLine: Boolean = true, onChange: (String) -> Unit) {
-    OutlinedTextField(
+    // Label-above filled input (CremaTextField) — the PWA form style, replacing
+    // M3's floating-label OutlinedTextField across every editor field at once.
+    CremaTextField(
         value = value,
         onValueChange = onChange,
-        label = { Text(label) },
+        label = label,
         singleLine = singleLine,
         minLines = if (singleLine) 1 else 3,
         modifier = Modifier.fillMaxWidth(),
@@ -423,7 +426,11 @@ private fun StarRating(value: Int, onChange: (Int) -> Unit) {
     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
         (1..5).forEach { n ->
             IconButton(onClick = { onChange(if (n == value) 0 else n) }) {
-                PhIcon("star", sizeDp = 26, tint = if (n <= value) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+                PhIcon(
+                    if (n <= value) "star-fill" else "star",
+                    sizeDp = 26,
+                    tint = if (n <= value) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                )
             }
         }
     }
