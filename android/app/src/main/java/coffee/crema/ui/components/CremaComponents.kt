@@ -49,7 +49,12 @@ import com.adamglin.phosphoricons.regular.ArrowLeft
 import com.adamglin.phosphoricons.regular.ArrowUp
 import com.adamglin.phosphoricons.regular.Bluetooth
 import com.adamglin.phosphoricons.regular.Bug
+import com.adamglin.phosphoricons.regular.Calendar
 import com.adamglin.phosphoricons.regular.Check
+import com.adamglin.phosphoricons.regular.Clock
+import com.adamglin.phosphoricons.regular.Fire
+import com.adamglin.phosphoricons.regular.Package
+import com.adamglin.phosphoricons.regular.SortAscending
 import com.adamglin.phosphoricons.regular.Coffee
 import com.adamglin.phosphoricons.regular.Copy
 import com.adamglin.phosphoricons.regular.GearSix
@@ -133,7 +138,12 @@ fun PhIcon(name: String, modifier: Modifier = Modifier, tint: Color = LocalConte
         "arrow-up" -> PhosphorIcons.Regular.ArrowUp
         "bluetooth" -> PhosphorIcons.Regular.Bluetooth
         "bug" -> PhosphorIcons.Regular.Bug
+        "calendar" -> PhosphorIcons.Regular.Calendar
         "check" -> PhosphorIcons.Regular.Check
+        "clock" -> PhosphorIcons.Regular.Clock
+        "fire" -> PhosphorIcons.Regular.Fire
+        "package" -> PhosphorIcons.Regular.Package
+        "sort-ascending" -> PhosphorIcons.Regular.SortAscending
         "coffee" -> PhosphorIcons.Regular.Coffee
         "copy" -> PhosphorIcons.Regular.Copy
         "gear-six" -> PhosphorIcons.Regular.GearSix
