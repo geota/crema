@@ -4,8 +4,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -18,6 +16,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -68,6 +67,8 @@ import coffee.crema.ui.components.PhIcon
 import coffee.crema.ui.components.CremaConfirmDialog
 import coffee.crema.ui.components.CremaOverflowMenu
 import coffee.crema.ui.components.OverflowItem
+import coffee.crema.ui.components.CremaSegmentedButton
+import coffee.crema.ui.components.SegOption
 import coffee.crema.ui.components.CremaFilterChip
 import coffee.crema.ui.components.CremaFilterDivider
 import coffee.crema.ui.components.CremaFilterGroupLabel
@@ -86,7 +87,6 @@ import androidx.compose.material3.IconButton
  * Later M3 increments: the full bean editor (origin, grind, tasting notes,
  * burn-down), Beanconqueror import (import_beanconqueror_json), and roasters.
  */
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun BeansScreen(
     vm: MainViewModel,
@@ -207,39 +207,45 @@ fun BeansScreen(
                     label = if (tab == "bags") "Add bean" else "Add roaster",
                 )
             }
-            // Unified tab + filter rail (PWA .bn-tabs): Bags/Roasters tabs share the
-            // row with the Bags filters (STATUS + ROAST groups), split by hairline
-            // dividers + a dimmed group label, sort split-button pinned right.
-            Row(
-                Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                FlowRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    CremaFilterChip(label = "Bags", selected = tab == "bags", count = ui.beans.size, onClick = { tab = "bags" })
-                    CremaFilterChip(label = "Roasters", selected = tab == "roasters", count = ui.roasters.size, onClick = { tab = "roasters" })
-                    if (tab == "bags") {
-                        CremaFilterDivider()
-                        val nonArchived = ui.beans.filter { it.archivedAt == null }
-                        listOf("all" to "All", "active" to "Active", "favourite" to "Favourite", "frozen" to "Frozen", "archived" to "Archived").forEach { (id, label) ->
-                            val count = when (id) {
-                                "all" -> nonArchived.size
-                                "active" -> nonArchived.count { it.id == ui.activeBeanId }
-                                "favourite" -> nonArchived.count { it.favourite }
-                                "frozen" -> nonArchived.count { it.frozenOn != null }
-                                else -> ui.beans.count { it.archivedAt != null }
-                            }
-                            CremaFilterChip(label = label, selected = beanFilter == id, count = count, onClick = { beanFilter = id })
+            // Bags / Roasters — a split (segmented) button on its own row, above the
+            // filters: it picks WHAT you're viewing, distinct from how you filter bags.
+            CremaSegmentedButton(
+                options = listOf(
+                    SegOption("bags", "Bags  ${ui.beans.size}"),
+                    SegOption("roasters", "Roasters  ${ui.roasters.size}"),
+                ),
+                value = tab,
+                onChange = { tab = it },
+                modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 8.dp),
+            )
+            // Filter rail (Bags): STATUS group · full-height divider · ROAST group, sort
+            // pinned right. IntrinsicSize.Min lets the divider stretch the row height
+            // (PWA .bn-tabs-divider: align-self: stretch); group labels sit centered.
+            if (tab == "bags") {
+                Row(
+                    Modifier.fillMaxWidth().height(IntrinsicSize.Min).padding(start = 24.dp, end = 24.dp, bottom = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    val nonArchived = ui.beans.filter { it.archivedAt == null }
+                    CremaFilterGroupLabel("Status")
+                    listOf("all" to "All", "active" to "Active", "favourite" to "Favourite", "frozen" to "Frozen", "archived" to "Archived").forEach { (id, label) ->
+                        val count = when (id) {
+                            "all" -> nonArchived.size
+                            "active" -> nonArchived.count { it.id == ui.activeBeanId }
+                            "favourite" -> nonArchived.count { it.favourite }
+                            "frozen" -> nonArchived.count { it.frozenOn != null }
+                            else -> ui.beans.count { it.archivedAt != null }
                         }
-                        CremaFilterDivider()
-                        CremaFilterGroupLabel("Roast")
-                        listOf("light" to "Light", "medium" to "Medium", "dark" to "Dark").forEach { (id, label) ->
-                            val count = nonArchived.count { roastBand(it.roastLevel?.toInt())?.equals(id, ignoreCase = true) == true }
-                            CremaFilterChip(label = label, selected = beanFilter == id, count = count, onClick = { beanFilter = id })
-                        }
+                        CremaFilterChip(label = label, selected = beanFilter == id, count = count, onClick = { beanFilter = id })
                     }
-                }
-                if (tab == "bags") {
+                    CremaFilterDivider()
+                    CremaFilterGroupLabel("Roast")
+                    listOf("light" to "Light", "medium" to "Medium", "dark" to "Dark").forEach { (id, label) ->
+                        val count = nonArchived.count { roastBand(it.roastLevel?.toInt())?.equals(id, ignoreCase = true) == true }
+                        CremaFilterChip(label = label, selected = beanFilter == id, count = count, onClick = { beanFilter = id })
+                    }
+                    Spacer(Modifier.weight(1f))
                     CremaSortControl(
                         keys = listOf(
                             SortKey("freshest", "Freshest", "clock"),
