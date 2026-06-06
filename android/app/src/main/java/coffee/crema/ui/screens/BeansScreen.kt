@@ -104,17 +104,21 @@ fun BeansScreen(
     val roasterNameOf: (Bean) -> String? = { b -> ui.roasters.firstOrNull { it.id == b.roasterId }?.name }
     // Bags — client-side search + filter + sort over the in-memory library.
     val visibleBeans = ui.beans.filter { b ->
-        (query.isBlank() ||
+        val matchesSearch = query.isBlank() ||
             b.name.contains(query, ignoreCase = true) ||
             (roasterNameOf(b)?.contains(query, ignoreCase = true) == true) ||
-            (b.origin.country?.contains(query, ignoreCase = true) == true)) &&
-            when (beanFilter) {
-                "active" -> b.id == ui.activeBeanId
-                "favourite" -> b.favourite
-                "frozen" -> b.frozenOn != null
-                "light", "medium", "dark" -> roastBand(b.roastLevel?.toInt())?.equals(beanFilter, ignoreCase = true) == true
-                else -> true
-            }
+            (b.origin.country?.contains(query, ignoreCase = true) == true)
+        // Archived bags are hidden from every view EXCEPT the Archived filter
+        // (proto: "All" counts non-archived; "Archived" surfaces them).
+        val matchesFilter = when (beanFilter) {
+            "archived" -> b.archivedAt != null
+            "active" -> b.archivedAt == null && b.id == ui.activeBeanId
+            "favourite" -> b.archivedAt == null && b.favourite
+            "frozen" -> b.archivedAt == null && b.frozenOn != null
+            "light", "medium", "dark" -> b.archivedAt == null && roastBand(b.roastLevel?.toInt())?.equals(beanFilter, ignoreCase = true) == true
+            else -> b.archivedAt == null
+        }
+        matchesSearch && matchesFilter
     }
     val beansAsc = when (beanSort) {
         "name" -> visibleBeans.sortedBy { it.name.lowercase() }
@@ -214,16 +218,19 @@ fun BeansScreen(
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     FlowRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        val nonArchived = ui.beans.filter { it.archivedAt == null }
                         listOf(
                             "all" to "All", "active" to "Active", "favourite" to "Favourite",
-                            "frozen" to "Frozen", "light" to "Light", "medium" to "Medium", "dark" to "Dark",
+                            "frozen" to "Frozen", "archived" to "Archived",
+                            "light" to "Light", "medium" to "Medium", "dark" to "Dark",
                         ).forEach { (id, label) ->
                             val count = when (id) {
-                                "all" -> ui.beans.size
-                                "active" -> ui.beans.count { it.id == ui.activeBeanId }
-                                "favourite" -> ui.beans.count { it.favourite }
-                                "frozen" -> ui.beans.count { it.frozenOn != null }
-                                else -> ui.beans.count { roastBand(it.roastLevel?.toInt())?.equals(id, ignoreCase = true) == true }
+                                "all" -> nonArchived.size
+                                "active" -> nonArchived.count { it.id == ui.activeBeanId }
+                                "favourite" -> nonArchived.count { it.favourite }
+                                "frozen" -> nonArchived.count { it.frozenOn != null }
+                                "archived" -> ui.beans.count { it.archivedAt != null }
+                                else -> nonArchived.count { roastBand(it.roastLevel?.toInt())?.equals(id, ignoreCase = true) == true }
                             }
                             CremaFilterChip(label = label, selected = beanFilter == id, count = count, onClick = { beanFilter = id })
                         }
@@ -379,7 +386,16 @@ private fun BeanCard(
                     pills.take(4).forEach { (t, isRoast) -> Pill(t, roast = isRoast) }
                 }
             }
-            val fresh = if (frozen) "Frozen" else days?.let { "${it}d off roast" }
+            // Freshness line: "Nd off roast · opened Nd ago" (proto). Opened-days
+            // reuses the ISO day-diff helper; freeze pauses the off-roast clock.
+            val openedDays = daysOffRoast(bean.openedOn)
+            val openedSuffix = openedDays?.let { " · opened ${it}d ago" } ?: ""
+            val fresh = when {
+                frozen -> "Frozen$openedSuffix"
+                days != null -> "${days}d off roast$openedSuffix"
+                openedDays != null -> "opened ${openedDays}d ago"
+                else -> null
+            }
             if (fresh != null) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     Box(Modifier.size(8.dp).clip(RoundedCornerShape(999.dp)).background(freshnessColor(frozen, days)))

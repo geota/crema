@@ -1,7 +1,6 @@
 package coffee.crema.ui.screens
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -199,7 +198,7 @@ fun BeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     PhIcon("info", sizeDp = 16, tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(
-                        "Name & roaster are required. Everything else is optional and editable later.",
+                        "Required fields are marked *. Everything else is optional and editable later.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -213,8 +212,8 @@ fun BeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                 verticalArrangement = Arrangement.spacedBy(24.dp),
             ) {
                 BeBlock("01", "Identity", "The name and roaster this bag is filed under.") {
-                    BeField("Name", name) { name = it }
-                    BeField("Roaster", roaster) { roaster = it }
+                    BeField("Name *", name) { name = it }
+                    BeField("Roaster *", roaster) { roaster = it }
                     Eyebrow("Tags")
                     TagChips(tags)
                     Eyebrow("Flags")
@@ -380,19 +379,27 @@ private fun RoastPicker(value: Int, onChange: (Int) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
             (1..10).forEach { n ->
-                val filled = n <= value
                 val current = n == value
+                // Selected pip = solid copper (proto); pips below it = copper wash; rest = well.
+                val bg = when {
+                    current -> MaterialTheme.colorScheme.primary
+                    n < value -> MaterialTheme.colorScheme.primary.copy(alpha = 0.30f)
+                    else -> MaterialTheme.colorScheme.surfaceContainerLowest
+                }
                 Box(
                     Modifier
                         .weight(1f)
                         .height(36.dp)
                         .clip(RoundedCornerShape(7.dp))
-                        .background(if (filled) MaterialTheme.colorScheme.primary.copy(alpha = 0.30f) else MaterialTheme.colorScheme.surfaceContainerLowest)
-                        .then(if (current) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(7.dp)) else Modifier)
+                        .background(bg)
                         .clickable { onChange(n) },
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text("$n", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurface)
+                    Text(
+                        "$n",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = if (current) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                    )
                 }
             }
         }
