@@ -560,6 +560,8 @@ fun CremaValueUnit(
             value,
             style = TextStyle(fontFamily = JetBrainsMono, fontSize = valueSize, fontFeatureSettings = "tnum"),
             color = valueColor,
+            maxLines = 1,
+            softWrap = false,
             modifier = Modifier.alignByBaseline(),
         )
         if (!unit.isNullOrEmpty()) {
@@ -567,6 +569,8 @@ fun CremaValueUnit(
                 unit,
                 style = TextStyle(fontFamily = JetBrainsMono, fontSize = valueSize * 0.72f),
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                maxLines = 1,
+                softWrap = false,
                 modifier = Modifier.alignByBaseline().padding(start = 1.dp),
             )
         }
