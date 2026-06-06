@@ -590,14 +590,17 @@ fun CremaFilterGroupLabel(text: String, modifier: Modifier = Modifier) {
     )
 }
 
+// A full-height hairline between filter groups. Stretches to the row height
+// (PWA .bn-tabs-divider: align-self: stretch) — place inside a Row given a
+// bounded height (e.g. Modifier.height(IntrinsicSize.Min)).
 @Composable
 fun CremaFilterDivider(modifier: Modifier = Modifier) {
     Box(
         modifier
-            .padding(horizontal = 6.dp)
+            .padding(horizontal = 6.dp, vertical = 3.dp)
+            .fillMaxHeight()
             .width(1.dp)
-            .height(16.dp)
-            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f)),
+            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)),
     )
 }
 
