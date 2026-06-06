@@ -39,6 +39,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.text.TextStyle
 import coffee.crema.ui.theme.Newsreader
+import coffee.crema.ui.theme.HankenGrotesk
 import coffee.crema.ui.theme.JetBrainsMono
 import androidx.compose.ui.res.painterResource
 import coffee.crema.R
@@ -613,6 +614,11 @@ fun CremaValueUnit(
     modifier: Modifier = Modifier,
     valueSize: androidx.compose.ui.unit.TextUnit = 14.sp,
     valueColor: Color = MaterialTheme.colorScheme.onSurface,
+    // Unit size + face vary by context in the PWA: stat tiles use a SANS unit at
+    // half the value size (.hi-stat-val em = 11px on 22px); metric/row values use a
+    // mono unit ~0.7x. Defaults preserve the original mono 0.72x behaviour.
+    unitSize: androidx.compose.ui.unit.TextUnit = valueSize * 0.72f,
+    unitSans: Boolean = false,
 ) {
     Row(modifier) {
         Text(
@@ -626,7 +632,7 @@ fun CremaValueUnit(
         if (!unit.isNullOrEmpty()) {
             Text(
                 unit,
-                style = TextStyle(fontFamily = JetBrainsMono, fontSize = valueSize * 0.72f),
+                style = TextStyle(fontFamily = if (unitSans) HankenGrotesk else JetBrainsMono, fontSize = unitSize),
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
                 maxLines = 1,
                 softWrap = false,

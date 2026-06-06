@@ -51,6 +51,10 @@ import coffee.crema.ui.TelemetrySample
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.components.CremaCard
 import coffee.crema.ui.components.CremaValueUnit
+import coffee.crema.ui.theme.HankenGrotesk
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
 import coffee.crema.ui.components.CremaFilterChip
 import coffee.crema.ui.components.CremaSortControl
 import coffee.crema.ui.components.SortKey
@@ -297,7 +301,9 @@ private fun StatTile(label: String, value: String, unit: String?, modifier: Modi
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             Eyebrow(label)
-            CremaValueUnit(value, unit, valueSize = 22.sp)
+            // PWA .hi-stat-val (22px mono) + em (11px SANS, half-size) — the unit must
+            // be small + sans, not a 0.72x mono subscript (which read too big).
+            CremaValueUnit(value, unit, valueSize = 22.sp, unitSize = 11.sp, unitSans = true)
         }
     }
 }
@@ -415,35 +421,38 @@ private fun ShotDetail(
     onDelete: () -> Unit,
 ) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        // Detail head — date eyebrow, serif profile title, recipe meta.
-        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Eyebrow(DateUtils.getRelativeTimeSpanString(shot.completedAtMs).toString())
-            Text(
-                shot.profileName ?: "Shot",
-                style = MaterialTheme.typography.headlineMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            val meta = buildList {
-                shot.beanName?.let { add(it) }
-                val d = shot.doseG; val y = shot.yieldG
-                if (d != null && y != null) add("%.1f g → %.1f g".format(d, y))
-                shotRatio(shot)?.let { add(it) }
-            }.joinToString(" · ")
-            if (meta.isNotBlank()) {
-                Text(meta, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        var confirmDelete by remember(shot.id) { mutableStateOf(false) }
+        // Detail head — title block (left) + actions (right), bottom-aligned with a
+        // hairline rule (PWA .hi-detail-head: space-between, align-items: flex-end).
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.Bottom) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Eyebrow(DateUtils.getRelativeTimeSpanString(shot.completedAtMs).toString())
+                Text(
+                    shot.profileName ?: "Shot",
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                val meta = buildList {
+                    shot.beanName?.let { add(it) }
+                    val d = shot.doseG; val y = shot.yieldG
+                    if (d != null && y != null) add("%.1f g → %.1f g".format(d, y))
+                    shotRatio(shot)?.let { add(it) }
+                }.joinToString(" · ")
+                if (meta.isNotBlank()) {
+                    Text(meta, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                CremaButton(onClick = onLoadOnBrew, variant = CremaButtonVariant.Outlined, icon = "coffee", label = "Load on Brew")
+                CremaButton(onClick = onExport, variant = CremaButtonVariant.Outlined, icon = "download-simple", label = "Export")
+                CremaOverflowMenu(items = listOf(
+                    OverflowItem("trash", "Delete shot", { confirmDelete = true }, danger = true),
+                ))
             }
         }
-        // Action row — Load on Brew + Export inline, Delete behind the kebab.
-        var confirmDelete by remember(shot.id) { mutableStateOf(false) }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            CremaButton(onClick = onLoadOnBrew, variant = CremaButtonVariant.Outlined, icon = "coffee", label = "Load on Brew")
-            CremaButton(onClick = onExport, variant = CremaButtonVariant.Outlined, icon = "download-simple", label = "Export")
-            CremaOverflowMenu(items = listOf(
-                OverflowItem("trash", "Delete shot", { confirmDelete = true }, danger = true),
-            ))
-        }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         if (confirmDelete) {
             CremaConfirmDialog(
                 title = "Delete shot?",
@@ -455,12 +464,16 @@ private fun ShotDetail(
                 onDismiss = { confirmDelete = false },
             )
         }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-            Stat("Yield", shot.yieldG?.let { "%.1f".format(it) } ?: "—", shot.yieldG?.let { "g" })
-            Stat("Ratio", shotRatio(shot) ?: "—")
-            Stat("Time", "%.1f".format(shot.durationMs / 1000.0), "s")
-            Stat("Peak P", shot.peakPressure?.let { "%.1f".format(it) } ?: "—", shot.peakPressure?.let { "bar" })
-            Stat("Peak T", shot.peakTemp?.let { "%.0f".format(it) } ?: "—", shot.peakTemp?.let { "°C" })
+        // Metric tiles — 7-up grid of recessed cards (PWA .hi-metrics / .hi-metric).
+        val peakWt = shot.samples.mapNotNull { it.weight }.maxOrNull()
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            MetricCard("Time", "%.0f".format(shot.durationMs / 1000.0), "s", Modifier.weight(1f))
+            MetricCard("Peak pressure", shot.peakPressure?.let { "%.1f".format(it) } ?: "—", shot.peakPressure?.let { "bar" }, Modifier.weight(1f))
+            MetricCard("Peak temp", shot.peakTemp?.let { "%.0f".format(it) } ?: "—", shot.peakTemp?.let { "°C" }, Modifier.weight(1f))
+            MetricCard("Peak wt", peakWt?.let { "%.1f".format(it) } ?: "—", peakWt?.let { "g" }, Modifier.weight(1f))
+            MetricCard("Yield", shot.yieldG?.let { "%.1f".format(it) } ?: "—", shot.yieldG?.let { "g" }, Modifier.weight(1f))
+            MetricCard("Ratio", shotRatio(shot) ?: "—", null, Modifier.weight(1f), isText = true)
+            MetricCard("Samples", "${shot.samples.size}", null, Modifier.weight(1f))
         }
         Surface(
             modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -514,10 +527,28 @@ private fun StarRating(value: Int, onChange: (Int) -> Unit) {
 }
 
 @Composable
-private fun Stat(label: String, value: String, unit: String? = null) {
-    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Eyebrow(label)
-        CremaValueUnit(value, unit, valueSize = 15.sp)
+private fun MetricCard(label: String, value: String, unit: String?, modifier: Modifier = Modifier, isText: Boolean = false) {
+    // PWA .hi-metric tile: recessed card, 9px caps label, mono 15px value + 10px unit.
+    // The Ratio renders as copper sans text (.hi-metric-v.is-text).
+    Column(
+        modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainer)
+            .padding(horizontal = 8.dp, vertical = 9.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Text(
+            label.uppercase(),
+            style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.2.sp),
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.42f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        if (isText) {
+            Text(value, style = TextStyle(fontFamily = HankenGrotesk, fontSize = 13.sp), color = MaterialTheme.colorScheme.primary, maxLines = 1)
+        } else {
+            CremaValueUnit(value, unit, valueSize = 15.sp, unitSize = 10.sp)
+        }
     }
 }
 
