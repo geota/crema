@@ -1,5 +1,6 @@
 package coffee.crema.ui.screens
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -96,9 +97,11 @@ fun ScaleScreen(
             null
         }
     val weight = (ui.scaleWeightG ?: 0f).toDouble()
-    val target = 18.0
+    // Dose target = the active profile's dose (what you're weighing to), not a
+    // hardcoded 18 g — the dose helper now tracks the loaded recipe.
+    val target = (ui.profiles.firstOrNull { it.id == ui.activeProfileId }?.dose ?: 18f).toDouble()
 
-    Row(Modifier.fillMaxSize()) {
+    Row(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         CremaNavigationRail(
             active = "scale",
             onNav = onNav,
