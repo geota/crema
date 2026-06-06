@@ -1,7 +1,15 @@
 package coffee.crema.ui.screens
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -54,6 +62,9 @@ import coffee.crema.ui.components.CremaOverflowMenu
 import coffee.crema.ui.components.OverflowItem
 import coffee.crema.ui.components.CremaSegmentedButton
 import coffee.crema.ui.components.SegOption
+import coffee.crema.ui.components.CremaFilterChip
+import coffee.crema.ui.components.CremaSortControl
+import coffee.crema.ui.components.SortKey
 import androidx.compose.material3.IconButton
 
 /*
@@ -66,6 +77,7 @@ import androidx.compose.material3.IconButton
  * Later M3 increments: the full bean editor (origin, grind, tasting notes,
  * burn-down), Beanconqueror import (import_beanconqueror_json), and roasters.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun BeansScreen(
     vm: MainViewModel,
@@ -79,6 +91,43 @@ fun BeansScreen(
     var tab by remember { mutableStateOf("bags") }
     var roasterDialogOpen by remember { mutableStateOf(false) }
     var roasterEditing by remember { mutableStateOf<Roaster?>(null) }
+    var query by remember { mutableStateOf("") }
+    var beanFilter by remember { mutableStateOf("all") }
+    var beanSort by remember { mutableStateOf("freshest") }
+    var beanSortDesc by remember { mutableStateOf(false) }
+    // Beanconqueror import — the system file picker hands back a Uri the VM reads
+    // (single JSON or a .zip archive) and merges via the core importer.
+    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) vm.importBeanconquerorUri(uri)
+    }
+
+    val roasterNameOf: (Bean) -> String? = { b -> ui.roasters.firstOrNull { it.id == b.roasterId }?.name }
+    // Bags — client-side search + filter + sort over the in-memory library.
+    val visibleBeans = ui.beans.filter { b ->
+        (query.isBlank() ||
+            b.name.contains(query, ignoreCase = true) ||
+            (roasterNameOf(b)?.contains(query, ignoreCase = true) == true) ||
+            (b.origin.country?.contains(query, ignoreCase = true) == true)) &&
+            when (beanFilter) {
+                "active" -> b.id == ui.activeBeanId
+                "favourite" -> b.favourite
+                "frozen" -> b.frozenOn != null
+                "light", "medium", "dark" -> roastBand(b.roastLevel?.toInt())?.equals(beanFilter, ignoreCase = true) == true
+                else -> true
+            }
+    }
+    val beansAsc = when (beanSort) {
+        "name" -> visibleBeans.sortedBy { it.name.lowercase() }
+        "roast" -> visibleBeans.sortedBy { it.roastLevel?.toInt() ?: Int.MAX_VALUE }
+        "remaining" -> visibleBeans.sortedBy { it.remaining }
+        else -> visibleBeans.sortedBy { daysOffRoast(it.roastedOn) ?: Int.MAX_VALUE } // freshest first
+    }
+    val sortedBeans = if (beanSortDesc) beansAsc.reversed() else beansAsc
+    val visibleRoasters = ui.roasters.filter {
+        query.isBlank() || it.name.contains(query, ignoreCase = true) ||
+            (it.city?.contains(query, ignoreCase = true) == true) ||
+            (it.country?.contains(query, ignoreCase = true) == true)
+    }
 
     Row(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         CremaNavigationRail(
@@ -106,6 +155,40 @@ fun BeansScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+                // Compact search pill (matched to the 40dp button height), the
+                // command-bar sibling of Profiles' search.
+                Box(
+                    Modifier.width(240.dp).height(40.dp)
+                        .clip(MaterialTheme.shapes.small)
+                        .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                        .padding(horizontal = 12.dp),
+                    contentAlignment = Alignment.CenterStart,
+                ) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        PhIcon("magnifying-glass", sizeDp = 18, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                            if (query.isEmpty()) {
+                                Text("Search beans, roasters…", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            BasicTextField(
+                                value = query,
+                                onValueChange = { query = it },
+                                singleLine = true,
+                                textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
+                                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                    }
+                }
+                Spacer(Modifier.width(8.dp))
+                CremaButton(
+                    onClick = { importLauncher.launch(arrayOf("*/*")) },
+                    variant = CremaButtonVariant.Outlined,
+                    icon = "upload-simple",
+                    label = "Import",
+                )
+                Spacer(Modifier.width(8.dp))
                 CremaButton(
                     onClick = { if (tab == "bags") { vm.startNewBean(); onNav("bean-edit") } else { roasterEditing = null; roasterDialogOpen = true } },
                     icon = "plus",
@@ -123,10 +206,45 @@ fun BeansScreen(
                 modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 8.dp),
             )
             if (tab == "bags") {
-                if (ui.beans.isEmpty()) {
+                // Filter chips (left) + sort split-button (right) — the proto's
+                // Beans command row, mirroring Profiles.
+                Row(
+                    Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    FlowRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf(
+                            "all" to "All", "active" to "Active", "favourite" to "Favourite",
+                            "frozen" to "Frozen", "light" to "Light", "medium" to "Medium", "dark" to "Dark",
+                        ).forEach { (id, label) ->
+                            val count = when (id) {
+                                "all" -> ui.beans.size
+                                "active" -> ui.beans.count { it.id == ui.activeBeanId }
+                                "favourite" -> ui.beans.count { it.favourite }
+                                "frozen" -> ui.beans.count { it.frozenOn != null }
+                                else -> ui.beans.count { roastBand(it.roastLevel?.toInt())?.equals(id, ignoreCase = true) == true }
+                            }
+                            CremaFilterChip(label = label, selected = beanFilter == id, count = count, onClick = { beanFilter = id })
+                        }
+                    }
+                    CremaSortControl(
+                        keys = listOf(
+                            SortKey("freshest", "Freshest"),
+                            SortKey("name", "Name"),
+                            SortKey("roast", "Roast"),
+                            SortKey("remaining", "Remaining"),
+                        ),
+                        selectedKey = beanSort,
+                        descending = beanSortDesc,
+                        onKeyChange = { beanSort = it },
+                        onToggleDirection = { beanSortDesc = !beanSortDesc },
+                    )
+                }
+                if (sortedBeans.isEmpty()) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Text(
-                            "No beans yet — add a bag to get started.",
+                            if (ui.beans.isEmpty()) "No beans yet — add a bag to get started." else "No beans match your search or filters.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -139,7 +257,7 @@ fun BeansScreen(
                         verticalArrangement = Arrangement.spacedBy(16.dp),
                         contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp),
                     ) {
-                        items(ui.beans, key = { it.id }) { bean ->
+                        items(sortedBeans, key = { it.id }) { bean ->
                             BeanCard(
                                 bean = bean,
                                 roasterName = ui.roasters.firstOrNull { it.id == bean.roasterId }?.name,
@@ -156,10 +274,10 @@ fun BeansScreen(
                     }
                 }
             } else {
-                if (ui.roasters.isEmpty()) {
+                if (visibleRoasters.isEmpty()) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Text(
-                            "No roasters yet — add one to group your bags.",
+                            if (ui.roasters.isEmpty()) "No roasters yet — add one to group your bags." else "No roasters match your search.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -172,7 +290,7 @@ fun BeansScreen(
                         verticalArrangement = Arrangement.spacedBy(16.dp),
                         contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp),
                     ) {
-                        items(ui.roasters, key = { it.id }) { roaster ->
+                        items(visibleRoasters, key = { it.id }) { roaster ->
                             RoasterCard(
                                 roaster = roaster,
                                 bagCount = ui.beans.count { it.roasterId == roaster.id },

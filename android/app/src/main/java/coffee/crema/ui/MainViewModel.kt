@@ -19,6 +19,7 @@ import coffee.crema.core.MaintenanceReadout
 import coffee.crema.core.blankCremaProfile
 import coffee.crema.core.builtinCremaProfiles
 import coffee.crema.core.cremaProfileToWire
+import coffee.crema.core.importBeanconquerorJson
 import coffee.crema.core.maintenanceReadout
 import coffee.crema.beans.BeanLibrary
 import coffee.crema.beans.LibraryStore
@@ -58,6 +59,11 @@ import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonArray
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import android.net.Uri
 import kotlinx.serialization.json.jsonPrimitive
 
 /**
@@ -1273,6 +1279,137 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val r = newRoaster(trimmed, nowMs)
             r.id to (roasters + r)
         }
+    }
+
+    /**
+     * Import a Beanconqueror export (a system file-picker Uri) into the bean
+     * library. Reads the file off the main thread — a single Beanconqueror JSON,
+     * or a `.zip` archive whose chunked BEANS/BREWS files are merged back into the
+     * main JSON ([mergeBcZip], the inverse of BC's chunked writer) — hands the
+     * merged JSON to the core's [importBeanconquerorJson], then merges the
+     * resulting plan into the library via [applyBeanImportPlan]. (Shots in the
+     * plan are deferred to a later history-enrichment pass.)
+     */
+    fun importBeanconquerorUri(uri: Uri) {
+        viewModelScope.launch {
+            val merged = withContext(Dispatchers.IO) {
+                runCatching {
+                    val bytes = getApplication<Application>().contentResolver.openInputStream(uri)
+                        ?.use { it.readBytes() } ?: return@runCatching null
+                    // PK\x03\x04 magic → a zip archive; else treat as raw JSON text.
+                    if (bytes.size >= 2 && bytes[0] == 0x50.toByte() && bytes[1] == 0x4B.toByte()) {
+                        mergeBcZip(bytes)
+                    } else {
+                        String(bytes, Charsets.UTF_8)
+                    }
+                }.getOrNull()
+            }
+            if (merged.isNullOrBlank()) {
+                _ui.value = _ui.value.copy(status = "Import failed — couldn't read that file")
+                return@launch
+            }
+            val planJson = runCatching { importBeanconquerorJson(merged, System.currentTimeMillis()) }
+                .getOrElse {
+                    appendLog("Beanconqueror import failed: ${it.message}")
+                    _ui.value = _ui.value.copy(status = "Import failed — not a Beanconqueror export")
+                    return@launch
+                }
+            applyBeanImportPlan(planJson)
+        }
+    }
+
+    /**
+     * Merge a Beanconqueror `.zip` (a main `Beanconqueror.json` plus chunked
+     * `Beanconqueror_{Beans,Brews}_N.json` overflow files) into one JSON object
+     * the core can parse — the inverse of BC's chunked writer. Mirrors the web
+     * `mergeBcArchive`. Returns null if no main file is present.
+     */
+    private fun mergeBcZip(bytes: ByteArray): String? {
+        val entries = HashMap<String, String>()
+        java.util.zip.ZipInputStream(bytes.inputStream()).use { zin ->
+            var e = zin.nextEntry
+            while (e != null) {
+                if (!e.isDirectory) entries[e.name] = zin.readBytes().toString(Charsets.UTF_8)
+                zin.closeEntry()
+                e = zin.nextEntry
+            }
+        }
+        val mainKey = entries.keys.firstOrNull { it.lowercase().endsWith("beanconqueror.json") } ?: return null
+        val mainObj = runCatching { json.parseToJsonElement(entries.getValue(mainKey)).jsonObject.toMutableMap() }
+            .getOrNull() ?: return null
+        val re = Regex("Beanconqueror_(Brews|Beans)_(\\d+)\\.json$", RegexOption.IGNORE_CASE)
+        data class Chunk(val key: String, val index: Int, val name: String)
+        val chunks = entries.keys.mapNotNull { name ->
+            re.find(name)?.let { m ->
+                val key = if (m.groupValues[1].equals("brews", ignoreCase = true)) "BREWS" else "BEANS"
+                Chunk(key, m.groupValues[2].toInt(), name)
+            }
+        }.sortedWith(compareBy({ it.key }, { it.index }))
+        for (c in chunks) {
+            val arr = runCatching { json.parseToJsonElement(entries.getValue(c.name)).jsonArray }.getOrNull() ?: continue
+            val existing = (mainObj[c.key] as? JsonArray)?.toList() ?: emptyList()
+            mainObj[c.key] = JsonArray(existing + arr)
+        }
+        return json.encodeToString(JsonObject.serializer(), JsonObject(mainObj))
+    }
+
+    /**
+     * Merge a core import-plan JSON's beans + roasters into the library, applying
+     * the web's dedup rules: skip a bean whose `beanconquerorId` is already present
+     * (resumable re-import); repoint a new bean to an existing same-named roaster
+     * (dropping the duplicate roaster); skip a bean matching an existing
+     * (roaster, name, roastedOn) triple. Persisted.
+     */
+    private fun applyBeanImportPlan(planJson: String) {
+        val plan = runCatching { json.parseToJsonElement(planJson).jsonObject }.getOrElse {
+            appendLog("Import: malformed plan JSON"); return
+        }
+        fun <T> decodeList(key: String, ser: kotlinx.serialization.KSerializer<T>): List<T> =
+            runCatching { json.decodeFromString(ListSerializer(ser), (plan[key] ?: JsonArray(emptyList())).toString()) }
+                .getOrElse { emptyList() }
+        val wireBeans = decodeList("beans", Bean.serializer())
+        val wireRoasters = decodeList("roasters", Roaster.serializer())
+
+        val s = _ui.value
+        val existingRoasterByLc = s.roasters.associateBy { it.name.trim().lowercase() }
+        val existingBcIds = s.beans.mapNotNull { it.beanconquerorId }.toHashSet()
+        val wireRoasterById = wireRoasters.associateBy { it.id }
+
+        val newBeans = ArrayList<Bean>()
+        val keptRoasterIds = HashSet<String>()
+        var skipped = 0
+        for (bean in wireBeans) {
+            if (bean.beanconquerorId != null && existingBcIds.contains(bean.beanconquerorId)) { skipped++; continue }
+            val wireRoaster = bean.roasterId?.let { wireRoasterById[it] }
+            val libRoaster = wireRoaster?.name?.let { existingRoasterByLc[it.trim().lowercase()] }
+            val resolved = when {
+                libRoaster != null && wireRoaster != null && wireRoaster.id != libRoaster.id -> bean.copy(roasterId = libRoaster.id)
+                else -> { if (wireRoaster != null) keptRoasterIds.add(wireRoaster.id); bean }
+            }
+            val tripleDupe = libRoaster != null && s.beans.any {
+                it.roasterId == libRoaster.id &&
+                    it.name.trim().equals(bean.name.trim(), ignoreCase = true) &&
+                    (it.roastedOn ?: "") == (bean.roastedOn ?: "")
+            }
+            if (tripleDupe) { skipped++; continue }
+            newBeans.add(resolved)
+        }
+        val newRoasters = wireRoasters.filter { keptRoasterIds.contains(it.id) }
+
+        if (newBeans.isEmpty() && newRoasters.isEmpty()) {
+            _ui.value = _ui.value.copy(status = if (skipped > 0) "Already imported — nothing new to add" else "No beans found in that file")
+            return
+        }
+        _ui.value = s.copy(
+            beans = s.beans + newBeans,
+            roasters = s.roasters + newRoasters,
+            activeBeanId = s.activeBeanId ?: newBeans.firstOrNull()?.id,
+        )
+        persistLibrary()
+        val bn = newBeans.size; val rn = newRoasters.size
+        _ui.value = _ui.value.copy(
+            status = "Imported $bn bean${if (bn == 1) "" else "s"} · $rn roaster${if (rn == 1) "" else "s"}",
+        )
     }
 
     /** Open a bean in the editor (the `bean-edit` route reads this). */
