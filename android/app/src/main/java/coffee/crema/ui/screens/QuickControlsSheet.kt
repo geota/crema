@@ -1,15 +1,30 @@
 package coffee.crema.ui.screens
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import coffee.crema.ui.components.CremaValueUnit
+import coffee.crema.ui.components.CremaFilterDivider
+import coffee.crema.ui.components.CremaFilterGroupLabel
+import coffee.crema.ui.theme.CremaTheme
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -27,6 +42,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import coffee.crema.core.Bean
 import coffee.crema.profiles.CremaProfile
 import coffee.crema.ui.BrewParams
@@ -65,7 +81,7 @@ private val CHART_CHANNELS = listOf(
     "resistance" to "Resistance",
 )
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun QuickControlsSheet(
     active: CremaProfile?,
@@ -162,43 +178,53 @@ fun QuickControlsSheet(
                 }
             }
 
-            // ── Params — a 6-up grid: brew override (baked into the next shot)
-            //    on top, steam / hot-water / flush (local) below. ─────────────
-            Eyebrow("Brew · applies to the next shot", Modifier.padding(top = 8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Box(Modifier.weight(1f)) { CremaStepper(label = "Dose", value = dose, unit = "g", onChange = { onAdjustBrew(it, yieldOut, brewTemp) }, step = 0.1, min = 5.0, max = 30.0) }
-                Box(Modifier.weight(1f)) { CremaStepper(label = "Yield", value = yieldOut, unit = "g", onChange = { onAdjustBrew(dose, it, brewTemp) }, step = 0.5, min = 10.0, max = 80.0) }
-                Box(Modifier.weight(1f)) { CremaStepper(label = "Brew temp", value = brewTemp, unit = "°C", onChange = { onAdjustBrew(dose, yieldOut, it) }, step = 0.5, min = 80.0, max = 100.0) }
+            // ── Param steppers — compact cards (PWA qsheet-g-grid). 3-up × 2 rows
+            //    (the modal sheet is narrower than the PWA's full-width dock). ────
+            Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                QcStepperCard("Dose", "%.1f".format(dose), "g", { onAdjustBrew((dose - 0.1).coerceAtLeast(5.0), yieldOut, brewTemp) }, { onAdjustBrew((dose + 0.1).coerceAtMost(30.0), yieldOut, brewTemp) }, Modifier.weight(1f))
+                QcStepperCard("Yield", "%.1f".format(yieldOut), "g", { onAdjustBrew(dose, (yieldOut - 0.5).coerceAtLeast(10.0), brewTemp) }, { onAdjustBrew(dose, (yieldOut + 0.5).coerceAtMost(80.0), brewTemp) }, Modifier.weight(1f))
+                QcStepperCard("Brew temp", "%.1f".format(brewTemp), "°C", { onAdjustBrew(dose, yieldOut, (brewTemp - 0.5).coerceAtLeast(80.0)) }, { onAdjustBrew(dose, yieldOut, (brewTemp + 0.5).coerceAtMost(100.0)) }, Modifier.weight(1f))
             }
-            Eyebrow("Steam · water · flush", Modifier.padding(top = 8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Box(Modifier.weight(1f)) { CremaStepper(label = "Steam", value = steamTemp, unit = "°C", onChange = { steamTemp = it }, step = 1.0, min = 100.0, max = 160.0, fmt = { "%.0f".format(it) }) }
-                Box(Modifier.weight(1f)) { CremaStepper(label = "Hot water", value = hotWaterTemp, unit = "°C", onChange = { hotWaterTemp = it }, step = 1.0, min = 60.0, max = 100.0, fmt = { "%.0f".format(it) }) }
-                Box(Modifier.weight(1f)) { CremaStepper(label = "Flush", value = flushTemp, unit = "°C", onChange = { flushTemp = it }, step = 1.0, min = 80.0, max = 100.0, fmt = { "%.0f".format(it) }) }
+            Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                QcStepperCard("Steam", "%.0f".format(steamTemp), "°C", { steamTemp = (steamTemp - 1).coerceAtLeast(100.0) }, { steamTemp = (steamTemp + 1).coerceAtMost(160.0) }, Modifier.weight(1f))
+                QcStepperCard("Hot water", "%.0f".format(hotWaterTemp), "°C", { hotWaterTemp = (hotWaterTemp - 1).coerceAtLeast(60.0) }, { hotWaterTemp = (hotWaterTemp + 1).coerceAtMost(100.0) }, Modifier.weight(1f))
+                QcStepperCard("Flush", "%.0f".format(flushTemp), "°C", { flushTemp = (flushTemp - 1).coerceAtLeast(80.0) }, { flushTemp = (flushTemp + 1).coerceAtMost(100.0) }, Modifier.weight(1f))
             }
 
-            // ── Shot behaviour (2-up dense toggles) ──────────────────────────
+            // ── Chart strip — channel groups (icon + primary/secondary mini-toggles,
+            //    divider-split), then brew-behaviour mini-toggles. (PWA qsheet-foot.) ─
+            val tel = CremaTheme.telemetry
+            val groups = listOf(
+                ChannelGroup("gauge", tel.pressure, "pressure" to "Pressure", "resistance" to "Resistance"),
+                ChannelGroup("drop", tel.flow, "flow" to "Flow", "dispensedVolume" to "Volume"),
+                ChannelGroup("thermometer", tel.temp, "headTemp" to "Coffee", "mixTemp" to "Water"),
+                ChannelGroup("scales", tel.weight, "weight" to "Weight", "weightFlow" to "Flow"),
+            )
+            Eyebrow("Chart", Modifier.padding(top = 12.dp))
+            FlowRow(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                groups.forEach { g ->
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        PhIcon(g.icon, sizeDp = 14, tint = g.color)
+                        QcMiniToggle(g.primary.second, g.primary.first in channels, { onToggleChannel(g.primary.first, it) }, g.color)
+                        QcMiniToggle(g.secondary.second, g.secondary.first in channels, { onToggleChannel(g.secondary.first, it) }, g.color)
+                    }
+                }
+            }
             Eyebrow("Shot behaviour", Modifier.padding(top = 8.dp))
-            TwoCol(
-                { ToggleRow("Stop on weight", stopOnWeight, onStopOnWeight) },
-                { ToggleRow("Auto-tare", autoTare, onAutoTare) },
-            )
-            TwoCol(
-                { ToggleRow("Pre-flush", preFlush) { preFlush = it } },
-                { ToggleRow("Steam purge", steamPurge) { steamPurge = it } },
-            )
-            TwoCol(
-                { ToggleRow("Steam eco", steamEco, onSteamEco) },
-                { },
-            )
-
-            // ── Chart channels (2-up dense toggles) ──────────────────────────
-            Eyebrow("Chart channels", Modifier.padding(top = 12.dp))
-            CHART_CHANNELS.chunked(2).forEach { pair ->
-                TwoCol(
-                    { val (k, l) = pair[0]; ToggleRow(l, k in channels) { onToggleChannel(k, it) } },
-                    { if (pair.size > 1) { val (k, l) = pair[1]; ToggleRow(l, k in channels) { onToggleChannel(k, it) } } },
-                )
+            FlowRow(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                QcMiniToggle("Stop on weight", stopOnWeight, onStopOnWeight)
+                QcMiniToggle("Auto-tare", autoTare, onAutoTare)
+                QcMiniToggle("Pre-flush", preFlush, { preFlush = it })
+                QcMiniToggle("Steam purge", steamPurge, { steamPurge = it })
+                QcMiniToggle("Steam eco", steamEco, onSteamEco)
             }
         }
     }
@@ -227,27 +253,55 @@ fun QuickControlsSheet(
     }
 }
 
-// Two equal columns — packs the toggle rows two-up instead of a long stack.
+// A chart-strip channel group: an icon + two mini-toggles (primary/secondary).
+private data class ChannelGroup(
+    val icon: String,
+    val color: Color,
+    val primary: Pair<String, String>,   // key to label
+    val secondary: Pair<String, String>,
+)
+
+// Compact stepper card (PWA qcs-card): uppercase label over a [− value+unit +]
+// row, in a rounded surfaceContainerHigh tile — far lighter than CremaStepper.
 @Composable
-private fun TwoCol(a: @Composable () -> Unit, b: @Composable () -> Unit) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-        Box(Modifier.weight(1f)) { a() }
-        Box(Modifier.weight(1f)) { b() }
+private fun QcStepperCard(label: String, value: String, unit: String?, onMinus: () -> Unit, onPlus: () -> Unit, modifier: Modifier = Modifier) {
+    Column(
+        modifier.clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh).padding(horizontal = 8.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Eyebrow(label)
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+            QcStepBtn("minus", onMinus)
+            Box(Modifier.weight(1f), contentAlignment = Alignment.Center) { CremaValueUnit(value, unit, valueSize = 18.sp) }
+            QcStepBtn("plus", onPlus)
+        }
     }
 }
 
 @Composable
-private fun ToggleRow(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+private fun QcStepBtn(icon: String, onClick: () -> Unit) {
+    Box(
+        Modifier.size(30.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surfaceContainerHighest).clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) { PhIcon(icon, sizeDp = 14) }
+}
+
+// Mini pill toggle (PWA qmini-tog): a tiny switch + label, far lighter than the
+// full M3 Switch. `onColor` tints the track when on (channel color, else copper).
+@Composable
+private fun QcMiniToggle(label: String, on: Boolean, onToggle: (Boolean) -> Unit, onColor: Color = MaterialTheme.colorScheme.primary) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        Modifier.clip(RoundedCornerShape(999.dp)).clickable { onToggle(!on) }.padding(vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Text(
-            label,
-            modifier = Modifier.weight(1f),
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurface,
-        )
-        CremaSwitch(checked = checked, onCheckedChange = onCheckedChange)
+        Box(
+            Modifier.width(26.dp).height(15.dp).clip(RoundedCornerShape(999.dp))
+                .background(if (on) onColor else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f)),
+            contentAlignment = if (on) Alignment.CenterEnd else Alignment.CenterStart,
+        ) {
+            Box(Modifier.padding(horizontal = 2.dp).size(11.dp).clip(CircleShape).background(if (on) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant))
+        }
+        Text(label, style = MaterialTheme.typography.bodySmall, color = if (on) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
