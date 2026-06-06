@@ -55,6 +55,7 @@ import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.components.CremaAnchoredPopup
 import coffee.crema.ui.components.CremaCard
 import coffee.crema.ui.components.CremaNavigationRail
+import coffee.crema.ui.components.CremaValueUnit
 import coffee.crema.ui.components.Eyebrow
 import coffee.crema.ui.components.PhIcon
 import coffee.crema.ui.theme.CremaTheme
@@ -859,17 +860,19 @@ private fun RatioCard(active: CremaProfile?, weightG: Float?) {
         // proto .brew-ratio padding: 5px vertical / 16px horizontal (compact).
         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 5.dp)) {
             Eyebrow("Ratio")
-            Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
                     live,
                     style = CremaTheme.readout.readoutSm.copy(fontSize = 24.sp, lineHeight = 28.sp),
                     color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.alignByBaseline(),
                 )
                 if (active != null && active.ratio > 0f) {
                     Text(
                         "· target 1:%.2f".format(active.ratio),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
+                        modifier = Modifier.alignByBaseline(),
                     )
                 }
             }
@@ -886,7 +889,7 @@ private fun PhaseCard(active: CremaProfile?, running: Boolean, frame: Int, phase
             Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(5.dp),
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                 Eyebrow("Phase")
                 Text(
                     if (running) phaseStepLabel(phase) else "Idle",
@@ -1201,8 +1204,8 @@ private fun BrewFoot(
                 FootDivider()
                 FootMeta("Scale", if (scaleConnected) (ui.scaleName ?: "Scale") else "—")
                 FootDivider()
-                FootMeta("Steam", ui.steamTemp?.let { "%.0f °C".format(it) } ?: "—")
-                FootMeta("Tank", ui.waterLevelMm?.let { "%.0f mm".format(it) } ?: "—")
+                FootMeta("Steam", ui.steamTemp?.let { "%.0f".format(it) } ?: "—", ui.steamTemp?.let { "°C" })
+                FootMeta("Tank", ui.waterLevelMm?.let { "%.0f".format(it) } ?: "—", ui.waterLevelMm?.let { "mm" })
             }
             // Right actions.
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1216,20 +1219,24 @@ private fun BrewFoot(
 }
 
 @Composable
-private fun RowScope.FootMeta(label: String, value: String) {
+private fun RowScope.FootMeta(label: String, value: String, unit: String? = null) {
     Row(
         Modifier.padding(end = 2.dp),
-        verticalAlignment = Alignment.Bottom,
+        verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Eyebrow(label)
-        Text(
-            value,
-            style = CremaTheme.readout.readoutSm.copy(fontSize = 13.sp, lineHeight = 18.sp, fontWeight = FontWeight.Normal),
-            color = MaterialTheme.colorScheme.onSurface,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
+        if (unit != null) {
+            CremaValueUnit(value, unit, valueSize = 13.sp)
+        } else {
+            Text(
+                value,
+                style = CremaTheme.readout.readoutSm.copy(fontSize = 13.sp, lineHeight = 18.sp, fontWeight = FontWeight.Normal),
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }
 
