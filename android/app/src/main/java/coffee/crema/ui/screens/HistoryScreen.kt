@@ -15,6 +15,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -45,6 +50,9 @@ import coffee.crema.history.StoredShot
 import coffee.crema.ui.TelemetrySample
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.components.CremaCard
+import coffee.crema.ui.components.CremaFilterChip
+import coffee.crema.ui.components.CremaSortControl
+import coffee.crema.ui.components.SortKey
 import coffee.crema.ui.components.CremaNavigationRail
 import coffee.crema.ui.components.Eyebrow
 import coffee.crema.ui.components.PhIcon
@@ -60,6 +68,7 @@ import coffee.crema.ui.theme.CremaTheme
  * the left, and a detail pane on the right with a metric strip + the shot's
  * static chart (ShotChart with live=false) over its stored telemetry slice.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun HistoryScreen(
     vm: MainViewModel,
@@ -70,8 +79,44 @@ fun HistoryScreen(
     val connected = ui.bleState == De1BleManager.State.READY
     val scaleConnected = ui.scaleState == ScaleBleManager.State.READY
     var selectedId by remember { mutableStateOf<String?>(null) }
-    // Default the detail to the newest shot until the user picks one.
-    val selected = ui.history.firstOrNull { it.id == selectedId } ?: ui.history.firstOrNull()
+    var query by remember { mutableStateOf("") }
+    var range by remember { mutableStateOf("all") }
+    var sort by remember { mutableStateOf("date") }
+    var sortDesc by remember { mutableStateOf(true) } // newest / highest first
+
+    // Client-side search + time-range filter + sort over the shot log. The stat
+    // strip stays over the FULL history (global metrics); only the list filters.
+    val now = System.currentTimeMillis()
+    val dayMs = 24L * 60L * 60L * 1000L
+    val startOfDay = run {
+        val cal = java.util.Calendar.getInstance()
+        cal.timeInMillis = now
+        cal.set(java.util.Calendar.HOUR_OF_DAY, 0); cal.set(java.util.Calendar.MINUTE, 0)
+        cal.set(java.util.Calendar.SECOND, 0); cal.set(java.util.Calendar.MILLISECOND, 0)
+        cal.timeInMillis
+    }
+    val filtered = ui.history.filter { s ->
+        val matchesSearch = query.isBlank() ||
+            (s.profileName?.contains(query, ignoreCase = true) == true) ||
+            (s.beanName?.contains(query, ignoreCase = true) == true) ||
+            (s.notes?.contains(query, ignoreCase = true) == true)
+        val matchesRange = when (range) {
+            "today" -> s.completedAtMs >= startOfDay
+            "7d" -> s.completedAtMs >= now - 7L * dayMs
+            "30d" -> s.completedAtMs >= now - 30L * dayMs
+            else -> true
+        }
+        matchesSearch && matchesRange
+    }
+    val sortedAsc = when (sort) {
+        "rating" -> filtered.sortedBy { it.rating ?: 0 }
+        "yield" -> filtered.sortedBy { it.yieldG ?: 0f }
+        "time" -> filtered.sortedBy { it.durationMs }
+        else -> filtered.sortedBy { it.completedAtMs }
+    }
+    val shots = if (sortDesc) sortedAsc.reversed() else sortedAsc
+    // Default the detail to the newest (top) shot until the user picks one.
+    val selected = shots.firstOrNull { it.id == selectedId } ?: shots.firstOrNull()
 
     Row(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         CremaNavigationRail(
@@ -82,21 +127,49 @@ fun HistoryScreen(
             onConnect = onConnect,
         )
         Column(Modifier.weight(1f).fillMaxHeight()) {
-            Column(
+            Row(
                 Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = 20.dp, bottom = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(2.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Eyebrow("Library")
-                Text(
-                    "Shot history",
-                    style = MaterialTheme.typography.headlineLarge,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-                Text(
-                    "${ui.history.size} shots on this device",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Eyebrow("Library")
+                    Text(
+                        "Shot history",
+                        style = MaterialTheme.typography.headlineLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        "${ui.history.size} shots on this device",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (ui.history.isNotEmpty()) {
+                    Box(
+                        Modifier.width(260.dp).height(40.dp)
+                            .clip(MaterialTheme.shapes.small)
+                            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                            .padding(horizontal = 12.dp),
+                        contentAlignment = Alignment.CenterStart,
+                    ) {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            PhIcon("magnifying-glass", sizeDp = 18, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                                if (query.isEmpty()) {
+                                    Text("Search profile, bean, notes…", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                BasicTextField(
+                                    value = query,
+                                    onValueChange = { query = it },
+                                    singleLine = true,
+                                    textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
+                                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            }
+                        }
+                    }
+                }
             }
             if (ui.history.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -108,6 +181,36 @@ fun HistoryScreen(
                 }
             } else {
                 StatsStrip(ui.history)
+                // Range filter chips (left) + sort split-button (right).
+                Row(
+                    Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = 4.dp, bottom = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    FlowRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf("all" to "All time", "30d" to "30 days", "7d" to "7 days", "today" to "Today").forEach { (id, label) ->
+                            val count = when (id) {
+                                "today" -> ui.history.count { it.completedAtMs >= startOfDay }
+                                "7d" -> ui.history.count { it.completedAtMs >= now - 7L * dayMs }
+                                "30d" -> ui.history.count { it.completedAtMs >= now - 30L * dayMs }
+                                else -> ui.history.size
+                            }
+                            CremaFilterChip(label = label, selected = range == id, count = count, onClick = { range = id })
+                        }
+                    }
+                    CremaSortControl(
+                        keys = listOf(
+                            SortKey("date", "Date"),
+                            SortKey("rating", "Rating"),
+                            SortKey("yield", "Yield"),
+                            SortKey("time", "Time"),
+                        ),
+                        selectedKey = sort,
+                        descending = sortDesc,
+                        onKeyChange = { sort = it },
+                        onToggleDirection = { sortDesc = !sortDesc },
+                    )
+                }
                 Row(
                     Modifier.weight(1f).fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 12.dp),
                     horizontalArrangement = Arrangement.spacedBy(16.dp),
@@ -117,7 +220,7 @@ fun HistoryScreen(
                         verticalArrangement = Arrangement.spacedBy(2.dp),
                         contentPadding = PaddingValues(top = 4.dp, bottom = 12.dp),
                     ) {
-                        items(ui.history, key = { it.id }) { shot ->
+                        items(shots, key = { it.id }) { shot ->
                             ShotRow(
                                 shot = shot,
                                 selected = shot.id == selected?.id,
@@ -247,6 +350,17 @@ private fun ShotRow(shot: StoredShot, selected: Boolean, onClick: () -> Unit) {
             style = CremaTheme.readout.readoutSm.copy(fontSize = 13.sp, lineHeight = 17.sp),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        // Inline rating (proto): compact stars, faint when unrated.
+        val r = shot.rating ?: 0
+        Row(horizontalArrangement = Arrangement.spacedBy(1.dp)) {
+            (1..5).forEach { n ->
+                PhIcon(
+                    if (n <= r) "star-fill" else "star",
+                    sizeDp = 11,
+                    tint = if (n <= r) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f),
+                )
+            }
+        }
     }
 }
 
