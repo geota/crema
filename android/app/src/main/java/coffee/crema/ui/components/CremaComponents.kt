@@ -19,6 +19,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneOffset
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -695,6 +698,77 @@ fun CremaTextField(
                 modifier = Modifier.fillMaxWidth(),
             )
         }
+    }
+}
+
+// ── Date field — read-only filled field that opens a Material date picker ────
+// Same chrome as CremaTextField but tap-to-pick. `minDate`/`maxDate` (ISO
+// yyyy-MM-dd) constrain the selectable range (e.g. opened ≥ roasted, ≤ today).
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun CremaDateField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+    modifier: Modifier = Modifier,
+    placeholder: String = "Pick a date",
+    minDate: String? = null,
+    maxDate: String? = null,
+) {
+    fun isoToMillis(iso: String): Long? =
+        runCatching { LocalDate.parse(iso).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli() }.getOrNull()
+
+    var open by remember { mutableStateOf(false) }
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Box(
+            Modifier.fillMaxWidth()
+                .clip(RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp))
+                .clickable { open = true }
+                .padding(horizontal = 12.dp, vertical = 11.dp),
+        ) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(
+                    value.ifBlank { placeholder },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (value.isBlank()) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f) else MaterialTheme.colorScheme.onSurface,
+                )
+                PhIcon("calendar", sizeDp = 16, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+    if (open) {
+        val minMs = minDate?.let { isoToMillis(it) }
+        val maxMs = maxDate?.let { isoToMillis(it) }
+        val state = rememberDatePickerState(
+            initialSelectedDateMillis = value.ifBlank { null }?.let { isoToMillis(it) },
+            selectableDates = object : SelectableDates {
+                override fun isSelectableDate(utcTimeMillis: Long): Boolean {
+                    if (minMs != null && utcTimeMillis < minMs) return false
+                    if (maxMs != null && utcTimeMillis > maxMs) return false
+                    return true
+                }
+            },
+        )
+        DatePickerDialog(
+            onDismissRequest = { open = false },
+            confirmButton = {
+                TextButton(onClick = {
+                    state.selectedDateMillis?.let {
+                        onValueChange(Instant.ofEpochMilli(it).atZone(ZoneOffset.UTC).toLocalDate().toString())
+                    }
+                    open = false
+                }) { Text("OK") }
+            },
+            dismissButton = {
+                Row {
+                    if (value.isNotBlank()) TextButton(onClick = { onValueChange(""); open = false }) { Text("Clear") }
+                    TextButton(onClick = { open = false }) { Text("Cancel") }
+                }
+            },
+        ) { DatePicker(state = state) }
     }
 }
 
