@@ -37,6 +37,7 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.OutlinedTextField
 import coffee.crema.ui.components.CremaFilterChip
+import coffee.crema.ui.components.CremaValueUnit
 import coffee.crema.ui.components.CremaSortControl
 import coffee.crema.ui.components.SortKey
 import androidx.compose.ui.Alignment
@@ -132,7 +133,7 @@ fun ProfilesScreen(
                     )
                     val pinned = ui.profiles.count { it.pinned }
                     Text(
-                        "${ui.profiles.size} saved · $pinned pinned to Favorites",
+                        "${ui.profiles.size} saved · $pinned pinned to favorites",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -167,6 +168,8 @@ fun ProfilesScreen(
                 Spacer(Modifier.width(8.dp))
                 CremaButton(onClick = {}, variant = CremaButtonVariant.Outlined, icon = "upload-simple", label = "Import")
                 Spacer(Modifier.width(8.dp))
+                CremaButton(onClick = { vm.exportAllProfiles() }, variant = CremaButtonVariant.Outlined, icon = "download-simple", label = "Export")
+                Spacer(Modifier.width(8.dp))
                 CremaButton(
                     onClick = { vm.startNewProfile(); onNav("profile-edit") },
                     icon = "plus",
@@ -191,9 +194,9 @@ fun ProfilesScreen(
                 }
                 CremaSortControl(
                     keys = listOf(
-                        SortKey("name", "Name"),
-                        SortKey("roast", "Roast"),
-                        SortKey("pinned", "Pinned"),
+                        SortKey("name", "Name", "sort-ascending"),
+                        SortKey("roast", "Roast", "fire"),
+                        SortKey("pinned", "Pinned", "star"),
                     ),
                     selectedKey = sort,
                     descending = sortDesc,
@@ -318,7 +321,10 @@ private fun ProfileCard(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 profile.roast?.let { Pill(it, roast = true) }
-                tagPills.take(3).forEach { Pill(it) }
+                // Source chip (PWA's "Built-in" tag) — always present so the row
+                // never collapses and built-ins are clearly marked.
+                Pill(if (isCustom) "Custom" else "Built-in")
+                tagPills.take(2).forEach { Pill(it) }
             }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 CremaButton(
@@ -390,16 +396,7 @@ private fun ProfileMetricsRow(profile: CremaProfile) {
 private fun ProfileMetric(label: String, value: String, unit: String, modifier: Modifier = Modifier) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Eyebrow(label)
-        Row(verticalAlignment = Alignment.Bottom) {
-            Text(
-                value,
-                style = MaterialTheme.typography.bodyMedium.copy(fontFamily = JetBrainsMono, fontFeatureSettings = "tnum"),
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            if (unit.isNotBlank()) {
-                Text(unit, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 1.dp))
-            }
-        }
+        CremaValueUnit(value, unit.ifBlank { null }, valueSize = 14.sp)
     }
 }
 

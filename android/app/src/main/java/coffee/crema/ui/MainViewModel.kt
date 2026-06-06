@@ -860,6 +860,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         shareText(full, "Share profile")
     }
 
+    /** Export every profile (built-ins + customs) as a JSON array via the share
+     *  sheet — the Profiles top-bar "Export". */
+    fun exportAllProfiles() {
+        val all = _ui.value.profiles.mapNotNull { profileJsonById[it.id] }
+        if (all.isEmpty()) { appendLog("Export: no profiles"); return }
+        shareText("[${all.joinToString(",")}]", "Export profiles")
+    }
+
     /** Export a stored shot as JSON via the system share sheet. */
     fun exportShot(id: String) {
         val shot = _ui.value.history.firstOrNull { it.id == id } ?: return
