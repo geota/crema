@@ -8,6 +8,9 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.ui.window.Dialog
+import coffee.crema.ui.components.CremaTextField
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.foundation.layout.Arrangement
@@ -33,6 +36,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -591,24 +595,39 @@ private fun RoasterDialog(
     var city by remember { mutableStateOf(initial?.city ?: "") }
     var country by remember { mutableStateOf(initial?.country ?: "") }
     var notes by remember { mutableStateOf(initial?.notes ?: "") }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(if (initial == null) "Add roaster" else "Edit roaster") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                OutlinedTextField(value = name, onValueChange = { name = it }, singleLine = true, label = { Text("Name") })
-                OutlinedTextField(value = website, onValueChange = { website = it }, singleLine = true, label = { Text("Website") })
-                OutlinedTextField(value = city, onValueChange = { city = it }, singleLine = true, label = { Text("City") })
-                OutlinedTextField(value = country, onValueChange = { country = it }, singleLine = true, label = { Text("Country") })
-                OutlinedTextField(value = notes, onValueChange = { notes = it }, label = { Text("Notes") })
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surfaceContainer,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            tonalElevation = 0.dp,
+            shadowElevation = 12.dp,
+            modifier = Modifier.widthIn(max = 460.dp),
+        ) {
+            Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Text(
+                    if (initial == null) "Add roaster" else "Edit roaster",
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                CremaTextField(name, { name = it }, "Name", placeholder = "e.g. Onyx Coffee Lab")
+                CremaTextField(website, { website = it }, "Website", placeholder = "https://…")
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    CremaTextField(city, { city = it }, "City", Modifier.weight(1f))
+                    CremaTextField(country, { country = it }, "Country", Modifier.weight(1f))
+                }
+                CremaTextField(notes, { notes = it }, "Notes", placeholder = "Tasting style, subscription…", singleLine = false, minLines = 2)
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Spacer(Modifier.weight(1f))
+                    CremaButton(onClick = onDismiss, variant = CremaButtonVariant.Text, label = "Cancel")
+                    CremaButton(
+                        onClick = { onSave(name, website, city, country, notes); onDismiss() },
+                        enabled = name.isNotBlank(),
+                        label = if (initial == null) "Add roaster" else "Save",
+                    )
+                }
             }
-        },
-        confirmButton = {
-            TextButton(onClick = { onSave(name, website, city, country, notes); onDismiss() }, enabled = name.isNotBlank()) {
-                Text(if (initial == null) "Add" else "Save")
-            }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-    )
+        }
+    }
 }
 
