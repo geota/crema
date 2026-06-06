@@ -67,8 +67,8 @@ import coffee.crema.ui.components.PhIcon
 import coffee.crema.ui.components.CremaConfirmDialog
 import coffee.crema.ui.components.CremaOverflowMenu
 import coffee.crema.ui.components.OverflowItem
-import coffee.crema.ui.components.CremaSegmentedButton
-import coffee.crema.ui.components.SegOption
+import coffee.crema.ui.components.CremaTabSwitch
+import coffee.crema.ui.components.TabOption
 import coffee.crema.ui.components.CremaFilterChip
 import coffee.crema.ui.components.CremaFilterDivider
 import coffee.crema.ui.components.CremaFilterGroupLabel
@@ -209,10 +209,10 @@ fun BeansScreen(
             }
             // Bags / Roasters — a split (segmented) button on its own row, above the
             // filters: it picks WHAT you're viewing, distinct from how you filter bags.
-            CremaSegmentedButton(
+            CremaTabSwitch(
                 options = listOf(
-                    SegOption("bags", "Bags  ${ui.beans.size}"),
-                    SegOption("roasters", "Roasters  ${ui.roasters.size}"),
+                    TabOption("bags", "Bags", ui.beans.size),
+                    TabOption("roasters", "Roasters", ui.roasters.size),
                 ),
                 value = tab,
                 onChange = { tab = it },
