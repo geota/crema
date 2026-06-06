@@ -50,6 +50,7 @@ import coffee.crema.history.StoredShot
 import coffee.crema.ui.TelemetrySample
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.components.CremaCard
+import coffee.crema.ui.components.CremaValueUnit
 import coffee.crema.ui.components.CremaFilterChip
 import coffee.crema.ui.components.CremaSortControl
 import coffee.crema.ui.components.SortKey
@@ -279,29 +280,24 @@ private fun StatsStrip(history: List<StoredShot>) {
         Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        StatTile("Today", "$today", Modifier.weight(1f))
-        StatTile("This week", "$thisWeek", Modifier.weight(1f))
-        StatTile("Total", "$total", Modifier.weight(1f))
-        StatTile("Avg yield", avgYield?.let { "%.1f g".format(it) } ?: "—", Modifier.weight(1f))
-        StatTile("Avg time", avgTime?.let { "%.0f s".format(it) } ?: "—", Modifier.weight(1f))
-        StatTile("Avg rating", avgRating?.let { "%.1f".format(it) } ?: "—", Modifier.weight(1f))
+        StatTile("Today", "$today", "shots", Modifier.weight(1f))
+        StatTile("This week", "$thisWeek", "shots", Modifier.weight(1f))
+        StatTile("Total", "$total", "shots", Modifier.weight(1f))
+        StatTile("Avg yield", avgYield?.let { "%.1f".format(it) } ?: "—", avgYield?.let { "g" }, Modifier.weight(1f))
+        StatTile("Avg time", avgTime?.let { "%.0f".format(it) } ?: "—", avgTime?.let { "s" }, Modifier.weight(1f))
+        StatTile("Avg rating", avgRating?.let { "%.1f".format(it) } ?: "—", null, Modifier.weight(1f))
     }
 }
 
 @Composable
-private fun StatTile(label: String, value: String, modifier: Modifier = Modifier) {
+private fun StatTile(label: String, value: String, unit: String?, modifier: Modifier = Modifier) {
     CremaCard(modifier, shape = RoundedCornerShape(16.dp)) {
         Column(
-            Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
+            Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             Eyebrow(label)
-            Text(
-                value,
-                style = MaterialTheme.typography.headlineSmall,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-            )
+            CremaValueUnit(value, unit, valueSize = 22.sp)
         }
     }
 }
@@ -460,11 +456,11 @@ private fun ShotDetail(
             )
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-            Stat("Yield", shot.yieldG?.let { "%.1f g".format(it) } ?: "—")
+            Stat("Yield", shot.yieldG?.let { "%.1f".format(it) } ?: "—", shot.yieldG?.let { "g" })
             Stat("Ratio", shotRatio(shot) ?: "—")
-            Stat("Time", "%.1f s".format(shot.durationMs / 1000.0))
-            Stat("Peak P", shot.peakPressure?.let { "%.1f bar".format(it) } ?: "—")
-            Stat("Peak T", shot.peakTemp?.let { "%.0f °C".format(it) } ?: "—")
+            Stat("Time", "%.1f".format(shot.durationMs / 1000.0), "s")
+            Stat("Peak P", shot.peakPressure?.let { "%.1f".format(it) } ?: "—", shot.peakPressure?.let { "bar" })
+            Stat("Peak T", shot.peakTemp?.let { "%.0f".format(it) } ?: "—", shot.peakTemp?.let { "°C" })
         }
         Surface(
             modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -518,14 +514,10 @@ private fun StarRating(value: Int, onChange: (Int) -> Unit) {
 }
 
 @Composable
-private fun Stat(label: String, value: String) {
+private fun Stat(label: String, value: String, unit: String? = null) {
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Eyebrow(label)
-        Text(
-            value,
-            style = CremaTheme.readout.readoutSm.copy(fontSize = 15.sp, lineHeight = 19.sp),
-            color = MaterialTheme.colorScheme.onSurface,
-        )
+        CremaValueUnit(value, unit, valueSize = 15.sp)
     }
 }
 
