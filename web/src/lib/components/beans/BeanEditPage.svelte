@@ -199,6 +199,11 @@
 	const isNameMissing = $derived(!current.name.trim());
 	const isRoasterMissing = $derived(!roasterName.trim());
 	const isRoastedOnMissing = $derived(!current.roastedOn);
+	// A bag can't be opened before it was roasted. ISO yyyy-MM-dd strings compare
+	// lexicographically = chronologically, so a plain `<` is enough.
+	const isOpenedBeforeRoasted = $derived(
+		!!current.roastedOn && !!current.openedOn && current.openedOn < current.roastedOn
+	);
 
 	/**
 	 * URL validity gate — accepts an empty value (the field is optional),
@@ -233,6 +238,13 @@
 		// fields. Scroll the URL field into view + bounce out.
 		if (isBuyUrlInvalid) {
 			const el = document.getElementById(urlInputId) as HTMLInputElement | null;
+			el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+			el?.focus();
+			return;
+		}
+		// Opened-before-roasted is invalid for both new bags and live edits.
+		if (isOpenedBeforeRoasted) {
+			const el = document.getElementById('be-opened-input') as HTMLInputElement | null;
 			el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
 			el?.focus();
 			return;
@@ -704,8 +716,11 @@
 							</div>
 							<div class="be-frow-r">
 								<input
+									id="be-opened-input"
 									class="be-input be-input-date"
+									class:is-invalid={isOpenedBeforeRoasted}
 									type="date"
+									min={current.roastedOn ?? undefined}
 									value={current.openedOn ?? ''}
 									onchange={(e) =>
 										patch({
@@ -713,6 +728,9 @@
 												(e.currentTarget as HTMLInputElement).value || null
 										})}
 								/>
+								{#if isOpenedBeforeRoasted}
+									<div class="be-required">Can't be before the roast date</div>
+								{/if}
 							</div>
 						</div>
 					</div>

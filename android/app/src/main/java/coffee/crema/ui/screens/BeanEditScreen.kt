@@ -49,6 +49,7 @@ import coffee.crema.ui.components.CremaIconButton
 import coffee.crema.ui.components.CremaSegmentedButton
 import coffee.crema.ui.components.CremaStepper
 import coffee.crema.ui.components.CremaSwitch
+import coffee.crema.ui.components.CremaDateField
 import coffee.crema.ui.components.CremaTextField
 import coffee.crema.ui.components.Eyebrow
 import coffee.crema.ui.components.PhIcon
@@ -118,6 +119,9 @@ fun BeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
     var url by remember(bean.id) { mutableStateOf(bean.url ?: "") }
     var notes by remember(bean.id) { mutableStateOf(bean.notes) }
 
+    // Opened can't precede roasted (ISO yyyy-MM-dd sorts chronologically). Gates Save.
+    val datesValid = roasted.isBlank() || opened.isBlank() || opened >= roasted
+
     val save: () -> Unit = {
         vm.updateBean(bean.id, roaster) { b ->
             b.copy(
@@ -172,7 +176,7 @@ fun BeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                 )
             }
             CremaButton(onClick = onBack, variant = CremaButtonVariant.Text, label = "Cancel")
-            CremaButton(onClick = save, icon = "check", label = "Save")
+            CremaButton(onClick = save, icon = "check", label = "Save", enabled = datesValid)
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
@@ -238,9 +242,17 @@ fun BeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                 }
 
                 BeBlock("03", "Dates", "Roast date drives the freshness signal everywhere else.") {
+                    val today = java.time.LocalDate.now().toString()
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Box(Modifier.weight(1f)) { BeField("Roasted on (YYYY-MM-DD)", roasted) { roasted = it } }
-                        Box(Modifier.weight(1f)) { BeField("Opened on (YYYY-MM-DD)", opened) { opened = it } }
+                        Box(Modifier.weight(1f)) { CremaDateField(roasted, { roasted = it }, "Roasted on", maxDate = today) }
+                        Box(Modifier.weight(1f)) { CremaDateField(opened, { opened = it }, "Opened on", minDate = roasted.ifBlank { null }, maxDate = today) }
+                    }
+                    if (!datesValid) {
+                        Text(
+                            "Opened date can't be before the roast date.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
                     }
                     BeRow("Frozen storage", "Pauses the off-roast clock.") { CremaSwitch(frozen, { frozen = it }) }
                     BeRow("Archived", "Hide this bag from the active grid.") { CremaSwitch(archived, { archived = it }) }
