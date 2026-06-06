@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.text.TextStyle
 import coffee.crema.ui.theme.Newsreader
+import coffee.crema.ui.theme.JetBrainsMono
 import androidx.compose.ui.res.painterResource
 import coffee.crema.R
 import androidx.compose.ui.window.Popup
@@ -499,11 +500,88 @@ fun CremaAssistChip(label: String, modifier: Modifier = Modifier, icon: String? 
 
 @Composable
 fun CremaFilterChip(label: String, selected: Boolean, modifier: Modifier = Modifier, count: Int? = null, icon: String? = null, onClick: () -> Unit) {
-    FilterChip(
-        selected = selected, onClick = onClick,
-        modifier = modifier,
-        label = { if (count != null) Text("$label  $count") else Text(label) },
-        leadingIcon = icon?.let { { PhIcon(it, sizeDp = 18) } },
+    // PWA `.pp-tag`: a borderless ghost chip — faint label, subtle wash when
+    // active — with a faint count pill (`.pp-tag-count`) that turns copper when
+    // selected. NOT the bordered M3 FilterChip.
+    val fg = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+    Row(
+        modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(if (selected) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f) else Color.Transparent)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        if (icon != null) PhIcon(icon, sizeDp = 15, tint = fg)
+        Text(label, style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp), color = fg)
+        if (count != null) {
+            Box(
+                Modifier
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f))
+                    .padding(horizontal = 6.dp, vertical = 1.dp),
+            ) {
+                Text(
+                    "$count",
+                    style = TextStyle(fontFamily = JetBrainsMono, fontSize = 10.sp, fontFeatureSettings = "tnum"),
+                    color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
+                )
+            }
+        }
+    }
+}
+
+// ── Value + unit — mono value with a small, faint, baseline-aligned unit ─────
+// The PWA `.pp-metric-val em` / readout-unit pattern: unit is ~0.7× the value,
+// dimmed, and baseline-aligned (the "subscript" the cards/history/brew share).
+@Composable
+fun CremaValueUnit(
+    value: String,
+    unit: String?,
+    modifier: Modifier = Modifier,
+    valueSize: androidx.compose.ui.unit.TextUnit = 14.sp,
+    valueColor: Color = MaterialTheme.colorScheme.onSurface,
+) {
+    Row(modifier) {
+        Text(
+            value,
+            style = TextStyle(fontFamily = JetBrainsMono, fontSize = valueSize, fontFeatureSettings = "tnum"),
+            color = valueColor,
+            modifier = Modifier.alignByBaseline(),
+        )
+        if (!unit.isNullOrEmpty()) {
+            Text(
+                unit,
+                style = TextStyle(fontFamily = JetBrainsMono, fontSize = valueSize * 0.72f),
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                modifier = Modifier.alignByBaseline().padding(start = 1.dp),
+            )
+        }
+    }
+}
+
+// ── Filter-bar group label + divider (PWA `.pp-tag-grouplabel` / `.pp-tag-divider`)
+// A dimmed uppercase category label and a short vertical hairline between filter
+// groups (STATUS · ROAST · …).
+@Composable
+fun CremaFilterGroupLabel(text: String, modifier: Modifier = Modifier) {
+    Text(
+        text.uppercase(),
+        modifier = modifier.padding(horizontal = 2.dp),
+        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.6.sp),
+        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+    )
+}
+
+@Composable
+fun CremaFilterDivider(modifier: Modifier = Modifier) {
+    Box(
+        modifier
+            .padding(horizontal = 6.dp)
+            .width(1.dp)
+            .height(16.dp)
+            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f)),
     )
 }
 
