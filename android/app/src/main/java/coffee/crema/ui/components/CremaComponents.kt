@@ -503,6 +503,62 @@ fun CremaSegmentedButton(
     }
 }
 
+// A compact split (segmented) switch with a per-segment count badge — the Beans
+// page's Bags/Roasters toggle. A bordered pill groups the segments into one
+// unit; the active segment gets a neutral wash and its count pill turns copper,
+// the same treatment as CremaFilterChip. Shorter than the M3 SegmentedButton.
+data class TabOption(val id: String, val label: String, val count: Int? = null)
+
+@Composable
+fun CremaTabSwitch(
+    options: List<TabOption>,
+    value: String,
+    onChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier
+            .clip(RoundedCornerShape(999.dp))
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(999.dp))
+            .padding(2.dp),
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        options.forEach { o ->
+            val selected = value == o.id
+            val fg = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
+            Row(
+                Modifier
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(if (selected) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f) else Color.Transparent)
+                    .clickable { onChange(o.id) }
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(7.dp),
+            ) {
+                Text(
+                    o.label,
+                    style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp, fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal),
+                    color = fg,
+                )
+                if (o.count != null) {
+                    Box(
+                        Modifier
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f))
+                            .padding(horizontal = 6.dp, vertical = 1.dp),
+                    ) {
+                        Text(
+                            "${o.count}",
+                            style = TextStyle(fontFamily = JetBrainsMono, fontSize = 10.sp, fontFeatureSettings = "tnum"),
+                            color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
 // ── Chips ─────────────────────────────────────────────────────────────────
 @Composable
 fun CremaAssistChip(label: String, modifier: Modifier = Modifier, icon: String? = null, onClick: () -> Unit) {
