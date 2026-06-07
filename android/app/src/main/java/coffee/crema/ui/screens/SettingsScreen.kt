@@ -140,7 +140,6 @@ fun SettingsScreen(
     var defRatio by rememberSaveable { mutableStateOf(2.0) }
     var defTemp by rememberSaveable { mutableStateOf(93.0) }
     var defPreinf by rememberSaveable { mutableStateOf(8) }
-    var maxShotDur by rememberSaveable { mutableStateOf(45) }
     var autoPurge by rememberSaveable { mutableStateOf(false) }
     var groupFlush by rememberSaveable { mutableStateOf(false) }
     var density by rememberSaveable { mutableStateOf("comfortable") }
@@ -240,13 +239,15 @@ fun SettingsScreen(
                         SetGroup("Shot behaviour") {
                             SetRow("Auto-tare on shot start", "Zero the scale automatically when extraction begins.") { CremaSwitch(ui.autoTare, vm::setAutoTare) }
                             SetRow("Stop on weight", "End the shot once the target yield is reached.") { CremaSwitch(ui.stopOnWeight, vm::setStopOnWeight) }
-                            // Max shot duration writes to the core (a sans-IO cap);
-                            // the stepper holds the shown value and pushes each change.
-                            SetRow("Max shot duration") {
+                            // Max shot duration — persisted in AppPrefs + read from
+                            // ui.maxShotDurationS so it survives + shows on Brew's stop
+                            // conditions. The stepper pushes each change through the VM.
+                            SetRow("Max shot duration", "Hard time cap — also a Brew stop condition.") {
+                                val maxDur = ui.maxShotDurationS.toInt()
                                 SetStepper(
-                                    "$maxShotDur", "s",
-                                    { maxShotDur = (maxShotDur - 1).coerceAtLeast(20); vm.setMaxShotDuration(maxShotDur.toFloat()) },
-                                    { maxShotDur = (maxShotDur + 1).coerceAtMost(120); vm.setMaxShotDuration(maxShotDur.toFloat()) },
+                                    "$maxDur", "s",
+                                    { vm.setMaxShotDuration((maxDur - 1).coerceAtLeast(20).toFloat()) },
+                                    { vm.setMaxShotDuration((maxDur + 1).coerceAtMost(120).toFloat()) },
                                 )
                             }
                             SetRow("Group flush before each shot", "Stabilise the group temperature with a short flush.") { CremaSwitch(groupFlush, { groupFlush = it }) }

@@ -19,6 +19,9 @@ data class AppPrefs(
     /** `"system" | "light" | "dark"` — drives CremaTheme. Defaults to dark
      *  (the machine app is dark-skinned). */
     val themeMode: String = "dark",
+    /** Max shot duration cap, seconds. Pushed to the core on load + shown as a
+     *  Time stop-condition on Brew. */
+    val maxShotDurationS: Float = 45f,
 )
 
 /** File-backed JSON persistence for [AppPrefs] (`filesDir/prefs.json`). */

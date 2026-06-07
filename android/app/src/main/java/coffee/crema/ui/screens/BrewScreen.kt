@@ -993,6 +993,7 @@ private fun PhaseRow(seg: coffee.crema.profiles.ProfileSegment, isActive: Boolea
 private fun LimitsCard(active: CremaProfile?, ui: coffee.crema.ui.MainUiState) {
     val tel = CremaTheme.telemetry
     val weightG = ui.scaleWeightG
+    val timeColor = MaterialTheme.colorScheme.primary
     val rows = buildList {
         if (active != null && active.yieldOut > 0f) {
             add(LimitRow("Yield", "scales", tel.weight, weightG, active.yieldOut, "g"))
@@ -1000,7 +1001,11 @@ private fun LimitsCard(active: CremaProfile?, ui: coffee.crema.ui.MainUiState) {
         if (active != null && active.maxTotalVolumeMl > 0) {
             add(LimitRow("Volume", "drop-half", tel.flow, ui.dispensedVolume, active.maxTotalVolumeMl.toFloat(), "ml"))
         }
-        // Time limit needs the settings store (maxShotDurationS) — M3.
+        // Time cap from the persisted setting (ui.maxShotDurationS); live = elapsed
+        // shot seconds. Always shown — it's a global hard cap, not profile-scoped.
+        if (ui.maxShotDurationS > 0f) {
+            add(LimitRow("Time", "timer", timeColor, ui.shotElapsedMs / 1000f, ui.maxShotDurationS, "s"))
+        }
     }
     if (rows.isEmpty()) return
     CremaCard(Modifier.fillMaxWidth()) {
