@@ -80,6 +80,8 @@ data class ProfileSegment(
     val time: Float = 0f,
     /** Target temperature, °C — drives the preview's stepped temperature line. */
     val temp: Float? = null,
+    /** Which sensor the [temp] targets — `"coffee"` (group head) | `"water"` (mix). */
+    val tempSensor: String? = null,
     /** Per-segment dispensed-volume limit, ml, or null = no limit. */
     val volumeLimitMl: Float? = null,
     /** Structured early-exit condition `{metric, compare, threshold}`, or null. */

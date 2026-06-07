@@ -9,6 +9,8 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -703,6 +705,54 @@ fun CremaOptionalHeader(label: String, on: Boolean, onToggle: () -> Unit, modifi
     Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
         CremaDotToggle(on, onToggle)
         Eyebrow(label, color = if (on) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f))
+    }
+}
+
+// ── Split label (PWA QuickSplitLabel) ────────────────────────────────────────
+// An eyebrow-style label that's also a selector: [dot?] PREFIX  OPT | OPT, where
+// the active option is copper-underlined. Used for the segment editor's Temp
+// (Coffee|Water), Exit (Pressure|Flow) etc. `dot` adds the optional enable toggle.
+data class SplitOption(val id: String, val label: String)
+
+@Composable
+fun CremaSplitLabel(
+    prefix: String,
+    modifier: Modifier = Modifier,
+    options: List<SplitOption> = emptyList(),
+    value: String? = null,
+    onChange: ((String) -> Unit)? = null,
+    dot: Boolean = false,
+    dotOn: Boolean = false,
+    onDot: (() -> Unit)? = null,
+) {
+    val style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 0.5.sp)
+    val copper = MaterialTheme.colorScheme.primary
+    Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (dot) CremaDotToggle(dotOn, { onDot?.invoke() })
+        Text(prefix.uppercase(), style = style, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f))
+        if (options.isNotEmpty()) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                options.forEachIndexed { i, o ->
+                    if (i > 0) Text("|", style = style, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.18f))
+                    val active = value == o.id
+                    Text(
+                        o.label.uppercase(),
+                        style = style,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = if (active) 0.85f else 0.32f),
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(2.dp))
+                            .clickable(enabled = !active && onChange != null) { onChange?.invoke(o.id) }
+                            .padding(bottom = 3.dp)
+                            .drawBehind {
+                                if (active) {
+                                    val sw = 1.5.dp.toPx()
+                                    drawLine(copper, Offset(0f, size.height - sw), Offset(size.width, size.height - sw), strokeWidth = sw)
+                                }
+                            },
+                    )
+                }
+            }
+        }
     }
 }
 

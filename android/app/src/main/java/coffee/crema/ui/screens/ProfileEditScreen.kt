@@ -58,7 +58,15 @@ import coffee.crema.ui.components.CremaStepper
 import coffee.crema.ui.components.CremaSwitch
 import coffee.crema.ui.components.CremaDotToggle
 import coffee.crema.ui.components.CremaOptionalHeader
+import coffee.crema.ui.components.CremaSplitLabel
+import coffee.crema.ui.components.SplitOption
 import androidx.compose.ui.draw.alpha
+import androidx.compose.foundation.border
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
+import coffee.crema.ui.theme.JetBrainsMono
 import coffee.crema.ui.components.Eyebrow
 import coffee.crema.ui.components.PhIcon
 import coffee.crema.ui.components.SegOption
@@ -85,8 +93,6 @@ private val ROAST_OPTIONS = listOf(
 )
 private val TYPE_OPTIONS = listOf(SegOption("pressure", "Pressure"), SegOption("flow", "Flow"))
 private val RAMP_OPTIONS = listOf(SegOption("smooth", "Smooth"), SegOption("fast", "Fast"))
-private val EXIT_METRIC_OPTIONS = listOf(SegOption("pressure", "Pressure"), SegOption("flow", "Flow"))
-private val CMP_OPTIONS = listOf(SegOption("over", "Over"), SegOption("under", "Under"))
 
 @Composable
 fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
@@ -144,6 +150,7 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                         target = it.target,
                         time = it.time,
                         temp = it.temp ?: profile.brewTemp,
+                        tempSensor = it.tempSensor ?: "coffee",
                         volume = it.volumeLimitMl,
                         exit = it.exit,
                         limiter = it.limiter,
@@ -456,15 +463,24 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                             }
                             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                                 Box(Modifier.weight(1f)) {
-                                    CremaStepper(
-                                        label = "Temp",
-                                        value = (seg.temp ?: 93f).toDouble(),
-                                        unit = "°C",
-                                        onChange = { if (i in segs.indices) segs[i] = segs[i].copy(temp = it.toFloat()) },
-                                        step = 0.5,
-                                        min = 20.0,
-                                        max = 105.0,
-                                    )
+                                    // Temp — split selector for the sensor (Coffee = group
+                                    // head, Water = mix), the PWA "Temp Coffee | Water".
+                                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        CremaSplitLabel(
+                                            prefix = "Temp",
+                                            options = listOf(SplitOption("coffee", "Coffee"), SplitOption("water", "Water")),
+                                            value = seg.tempSensor ?: "coffee",
+                                            onChange = { s -> if (i in segs.indices) segs[i] = segs[i].copy(tempSensor = s) },
+                                        )
+                                        CremaStepper(
+                                            value = (seg.temp ?: 93f).toDouble(),
+                                            unit = "°C",
+                                            onChange = { if (i in segs.indices) segs[i] = segs[i].copy(temp = it.toFloat()) },
+                                            step = 0.5,
+                                            min = 20.0,
+                                            max = 105.0,
+                                        )
+                                    }
                                 }
                                 Box(Modifier.weight(1f)) {
                                     val segVolOn = (seg.volume ?: 0f) > 0f
@@ -484,41 +500,61 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                                     }
                                 }
                             }
-                            // Early exit — optional. Dot toggle; the metric/compare/
-                            // threshold controls stay visible but grey out when off (a
-                            // placeholder view feeds them while disabled).
+                            // Early exit — a grouped optional (faint copper frame): a
+                            // split metric selector (Pressure | Flow) + the enable dot,
+                            // then a >/< compare toggle + threshold, dimmed when off.
                             val exitOn = seg.exit != null
                             val exView = seg.exit ?: SegmentExit("flow", "over", 4f)
-                            CremaOptionalHeader("Early exit", exitOn, { if (i in segs.indices) segs[i] = segs[i].copy(exit = if (exitOn) null else SegmentExit("flow", "over", 4f)) })
-                            Column(Modifier.alpha(if (exitOn) 1f else 0.4f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            SegmentGroup {
+                                CremaSplitLabel(
+                                    prefix = "Exit",
+                                    dot = true,
+                                    dotOn = exitOn,
+                                    onDot = { if (i in segs.indices) segs[i] = segs[i].copy(exit = if (exitOn) null else SegmentExit("flow", "over", 4f)) },
+                                    options = listOf(SplitOption("pressure", "Pressure"), SplitOption("flow", "Flow")),
+                                    value = exView.metric ?: "flow",
+                                    onChange = { m -> if (exitOn && i in segs.indices) segs[i] = segs[i].copy(exit = segs[i].exit?.copy(metric = m)) },
+                                )
+                                Row(Modifier.alpha(if (exitOn) 1f else 0.4f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    EditCompareToggle(
+                                        compare = exView.compare ?: "over",
+                                        enabled = exitOn,
+                                        onToggle = { if (exitOn && i in segs.indices) segs[i] = segs[i].copy(exit = segs[i].exit?.copy(compare = if ((exView.compare ?: "over") == "over") "under" else "over")) },
+                                    )
                                     Box(Modifier.weight(1f)) {
-                                        CremaSegmentedButton(EXIT_METRIC_OPTIONS, exView.metric ?: "flow", { v -> if (exitOn && i in segs.indices) segs[i] = segs[i].copy(exit = segs[i].exit?.copy(metric = v)) })
-                                    }
-                                    Box(Modifier.weight(1f)) {
-                                        CremaSegmentedButton(CMP_OPTIONS, exView.compare ?: "over", { v -> if (exitOn && i in segs.indices) segs[i] = segs[i].copy(exit = segs[i].exit?.copy(compare = v)) })
+                                        CremaStepper(
+                                            value = (exView.threshold ?: 4f).toDouble(),
+                                            unit = if (exView.metric == "pressure") "bar" else "ml/s",
+                                            onChange = { v -> if (exitOn && i in segs.indices) segs[i] = segs[i].copy(exit = segs[i].exit?.copy(threshold = v.toFloat())) },
+                                            step = 0.1,
+                                            min = 0.0,
+                                            max = 12.0,
+                                        )
                                     }
                                 }
-                                CremaStepper(
-                                    label = "Threshold",
-                                    value = (exView.threshold ?: 4f).toDouble(),
-                                    unit = if (exView.metric == "pressure") "bar" else "ml/s",
-                                    onChange = { v -> if (exitOn && i in segs.indices) segs[i] = segs[i].copy(exit = segs[i].exit?.copy(threshold = v.toFloat())) },
-                                    step = 0.1,
-                                    min = 0.0,
-                                    max = 12.0,
-                                )
                             }
-                            // Max limiter — optional. Same dot + grey-out pattern.
+                            // Max limiter — grouped optional (faint frame): Max + Tolerance
+                            // gated together by the Max dot.
                             val limOn = seg.limiter != null
                             val lmView = seg.limiter ?: SegmentLimiter(6f, 0.6f)
-                            CremaOptionalHeader("Max limiter", limOn, { if (i in segs.indices) segs[i] = segs[i].copy(limiter = if (limOn) null else SegmentLimiter(6f, 0.6f)) })
-                            Row(Modifier.alpha(if (limOn) 1f else 0.4f), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                Box(Modifier.weight(1f)) {
-                                    CremaStepper(label = "Max", value = lmView.value.toDouble(), unit = if (seg.mode == "flow") "bar" else "ml/s", onChange = { v -> if (limOn && i in segs.indices) segs[i] = segs[i].copy(limiter = segs[i].limiter?.copy(value = v.toFloat())) }, step = 0.1, min = 0.0, max = 12.0)
-                                }
-                                Box(Modifier.weight(1f)) {
-                                    CremaStepper(label = "Tolerance", value = lmView.range.toDouble(), unit = "", onChange = { v -> if (limOn && i in segs.indices) segs[i] = segs[i].copy(limiter = segs[i].limiter?.copy(range = v.toFloat())) }, step = 0.1, min = 0.0, max = 6.0)
+                            SegmentGroup {
+                                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                    Box(Modifier.weight(1f)) {
+                                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                            CremaOptionalHeader("Max", limOn, { if (i in segs.indices) segs[i] = segs[i].copy(limiter = if (limOn) null else SegmentLimiter(6f, 0.6f)) })
+                                            Box(Modifier.alpha(if (limOn) 1f else 0.4f)) {
+                                                CremaStepper(value = lmView.value.toDouble(), unit = if (seg.mode == "flow") "bar" else "ml/s", onChange = { v -> if (limOn && i in segs.indices) segs[i] = segs[i].copy(limiter = segs[i].limiter?.copy(value = v.toFloat())) }, step = 0.1, min = 0.0, max = 12.0)
+                                            }
+                                        }
+                                    }
+                                    Box(Modifier.weight(1f)) {
+                                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                            Eyebrow("Tolerance")
+                                            Box(Modifier.alpha(if (limOn) 1f else 0.4f)) {
+                                                CremaStepper(value = lmView.range.toDouble(), unit = "", onChange = { v -> if (limOn && i in segs.indices) segs[i] = segs[i].copy(limiter = segs[i].limiter?.copy(range = v.toFloat())) }, step = 0.1, min = 0.0, max = 6.0)
+                                            }
+                                        }
+                                    }
                                 }
                             }
                             }
@@ -569,6 +605,40 @@ private fun TagChips(tags: SnapshotStateList<String>) {
             },
         ),
     )
+}
+
+// ── Grouped optional config — a faint copper-tinted frame around the controls
+// that enable/disable together (PWA .pe-seg-cell.is-grouped). ─────────────────
+@Composable
+private fun SegmentGroup(content: @Composable ColumnScope.() -> Unit) {
+    Column(
+        Modifier.fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.05f))
+            .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.22f), RoundedCornerShape(8.dp))
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        content = content,
+    )
+}
+
+// ── Over/under comparator — a copper >/< toggle (PWA .pe-seg-cmp), sits left of
+// the exit threshold. ─────────────────────────────────────────────────────────
+@Composable
+private fun EditCompareToggle(compare: String, enabled: Boolean, onToggle: () -> Unit) {
+    Box(
+        Modifier.size(40.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+            .clickable(enabled = enabled, onClick = onToggle),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            if (compare == "over") ">" else "<",
+            style = TextStyle(fontFamily = JetBrainsMono, fontSize = 18.sp, fontWeight = FontWeight.Bold),
+            color = MaterialTheme.colorScheme.primary,
+        )
+    }
 }
 
 // ── Target tile — compact metric tile with 32dp steppers (editor Targets) ────
