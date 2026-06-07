@@ -56,6 +56,9 @@ import coffee.crema.ui.components.CremaIconButton
 import coffee.crema.ui.components.CremaSegmentedButton
 import coffee.crema.ui.components.CremaStepper
 import coffee.crema.ui.components.CremaSwitch
+import coffee.crema.ui.components.CremaDotToggle
+import coffee.crema.ui.components.CremaOptionalHeader
+import androidx.compose.ui.draw.alpha
 import coffee.crema.ui.components.Eyebrow
 import coffee.crema.ui.components.PhIcon
 import coffee.crema.ui.components.SegOption
@@ -268,14 +271,27 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                         TargetTile("Brew temp", String.format("%.1f", brewTemp), "°C", { brewTemp = (brewTemp - 0.5).coerceAtLeast(20.0) }, { brewTemp = (brewTemp + 0.5).coerceAtMost(105.0) }, Modifier.weight(1f))
                         RatioTile(if (dose > 0.0) yieldG / dose else 0.0, Modifier.weight(1f))
                     }
-                    TargetTile(
-                        "Max volume",
-                        if (maxVol <= 0.0) "None" else String.format("%.0f", maxVol),
-                        if (maxVol <= 0.0) null else "ml",
-                        { maxVol = (maxVol - 10).coerceAtLeast(0.0) },
-                        { maxVol = (maxVol + 10).coerceAtMost(1023.0) },
-                        Modifier.fillMaxWidth(),
-                    )
+                    // Max volume — optional whole-shot cap. Dot toggle (copper on /
+                    // grey off) + the stepper greys out when off (PWA PeNumber dot).
+                    Column(
+                        Modifier.fillMaxWidth().clip(MaterialTheme.shapes.medium).background(MaterialTheme.colorScheme.surfaceContainerHigh).padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        val volOn = maxVol > 0.0
+                        CremaOptionalHeader("Max volume", volOn, { maxVol = if (volOn) 0.0 else 50.0 })
+                        Row(
+                            Modifier.fillMaxWidth().alpha(if (volOn) 1f else 0.4f),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            EditStepBtn("minus", { maxVol = (maxVol - 10).coerceAtLeast(0.0) })
+                            Row(verticalAlignment = Alignment.Bottom) {
+                                Text(String.format("%.0f", maxVol), style = CremaTheme.readout.readoutSm.copy(fontSize = 22.sp), color = MaterialTheme.colorScheme.onSurface, maxLines = 1)
+                                Text("ml", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 2.dp, bottom = 3.dp))
+                            }
+                            EditStepBtn("plus", { maxVol = (maxVol + 10).coerceAtMost(1023.0) })
+                        }
+                    }
                 }
             }
 
@@ -451,59 +467,58 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                                     )
                                 }
                                 Box(Modifier.weight(1f)) {
-                                    CremaStepper(
-                                        label = "Volume (0 = none)",
-                                        value = (seg.volume ?: 0f).toDouble(),
-                                        unit = "ml",
-                                        onChange = { if (i in segs.indices) segs[i] = segs[i].copy(volume = it.toFloat().takeIf { v -> v > 0f }) },
-                                        step = 5.0,
-                                        min = 0.0,
-                                        max = 500.0,
-                                        fmt = { "%.0f".format(it) },
-                                    )
+                                    val segVolOn = (seg.volume ?: 0f) > 0f
+                                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        CremaOptionalHeader("Volume", segVolOn, { if (i in segs.indices) segs[i] = segs[i].copy(volume = if (segVolOn) null else 50f) })
+                                        Box(Modifier.alpha(if (segVolOn) 1f else 0.4f)) {
+                                            CremaStepper(
+                                                value = (seg.volume ?: 0f).toDouble(),
+                                                unit = "ml",
+                                                onChange = { if (i in segs.indices) segs[i] = segs[i].copy(volume = it.toFloat().takeIf { v -> v > 0f }) },
+                                                step = 5.0,
+                                                min = 0.0,
+                                                max = 500.0,
+                                                fmt = { "%.0f".format(it) },
+                                            )
+                                        }
+                                    }
                                 }
                             }
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Eyebrow("Early exit", Modifier.weight(1f))
-                                CremaSwitch(
-                                    seg.exit != null,
-                                    { on -> if (i in segs.indices) segs[i] = segs[i].copy(exit = if (on) SegmentExit("flow", "over", 4f) else null) },
-                                )
-                            }
-                            seg.exit?.let { ex ->
+                            // Early exit — optional. Dot toggle; the metric/compare/
+                            // threshold controls stay visible but grey out when off (a
+                            // placeholder view feeds them while disabled).
+                            val exitOn = seg.exit != null
+                            val exView = seg.exit ?: SegmentExit("flow", "over", 4f)
+                            CremaOptionalHeader("Early exit", exitOn, { if (i in segs.indices) segs[i] = segs[i].copy(exit = if (exitOn) null else SegmentExit("flow", "over", 4f)) })
+                            Column(Modifier.alpha(if (exitOn) 1f else 0.4f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     Box(Modifier.weight(1f)) {
-                                        CremaSegmentedButton(EXIT_METRIC_OPTIONS, ex.metric ?: "flow", { if (i in segs.indices) segs[i] = segs[i].copy(exit = ex.copy(metric = it)) })
+                                        CremaSegmentedButton(EXIT_METRIC_OPTIONS, exView.metric ?: "flow", { v -> if (exitOn && i in segs.indices) segs[i] = segs[i].copy(exit = segs[i].exit?.copy(metric = v)) })
                                     }
                                     Box(Modifier.weight(1f)) {
-                                        CremaSegmentedButton(CMP_OPTIONS, ex.compare ?: "over", { if (i in segs.indices) segs[i] = segs[i].copy(exit = ex.copy(compare = it)) })
+                                        CremaSegmentedButton(CMP_OPTIONS, exView.compare ?: "over", { v -> if (exitOn && i in segs.indices) segs[i] = segs[i].copy(exit = segs[i].exit?.copy(compare = v)) })
                                     }
                                 }
                                 CremaStepper(
                                     label = "Threshold",
-                                    value = (ex.threshold ?: 4f).toDouble(),
-                                    unit = if (ex.metric == "pressure") "bar" else "ml/s",
-                                    onChange = { if (i in segs.indices) segs[i] = segs[i].copy(exit = ex.copy(threshold = it.toFloat())) },
+                                    value = (exView.threshold ?: 4f).toDouble(),
+                                    unit = if (exView.metric == "pressure") "bar" else "ml/s",
+                                    onChange = { v -> if (exitOn && i in segs.indices) segs[i] = segs[i].copy(exit = segs[i].exit?.copy(threshold = v.toFloat())) },
                                     step = 0.1,
                                     min = 0.0,
                                     max = 12.0,
                                 )
                             }
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Eyebrow("Max limiter", Modifier.weight(1f))
-                                CremaSwitch(
-                                    seg.limiter != null,
-                                    { on -> if (i in segs.indices) segs[i] = segs[i].copy(limiter = if (on) SegmentLimiter(6f, 0.6f) else null) },
-                                )
-                            }
-                            seg.limiter?.let { lm ->
-                                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                    Box(Modifier.weight(1f)) {
-                                        CremaStepper(label = "Max", value = lm.value.toDouble(), unit = if (seg.mode == "flow") "bar" else "ml/s", onChange = { if (i in segs.indices) segs[i] = segs[i].copy(limiter = lm.copy(value = it.toFloat())) }, step = 0.1, min = 0.0, max = 12.0)
-                                    }
-                                    Box(Modifier.weight(1f)) {
-                                        CremaStepper(label = "Tolerance", value = lm.range.toDouble(), unit = "", onChange = { if (i in segs.indices) segs[i] = segs[i].copy(limiter = lm.copy(range = it.toFloat())) }, step = 0.1, min = 0.0, max = 6.0)
-                                    }
+                            // Max limiter — optional. Same dot + grey-out pattern.
+                            val limOn = seg.limiter != null
+                            val lmView = seg.limiter ?: SegmentLimiter(6f, 0.6f)
+                            CremaOptionalHeader("Max limiter", limOn, { if (i in segs.indices) segs[i] = segs[i].copy(limiter = if (limOn) null else SegmentLimiter(6f, 0.6f)) })
+                            Row(Modifier.alpha(if (limOn) 1f else 0.4f), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                Box(Modifier.weight(1f)) {
+                                    CremaStepper(label = "Max", value = lmView.value.toDouble(), unit = if (seg.mode == "flow") "bar" else "ml/s", onChange = { v -> if (limOn && i in segs.indices) segs[i] = segs[i].copy(limiter = segs[i].limiter?.copy(value = v.toFloat())) }, step = 0.1, min = 0.0, max = 12.0)
+                                }
+                                Box(Modifier.weight(1f)) {
+                                    CremaStepper(label = "Tolerance", value = lmView.range.toDouble(), unit = "", onChange = { v -> if (limOn && i in segs.indices) segs[i] = segs[i].copy(limiter = segs[i].limiter?.copy(range = v.toFloat())) }, step = 0.1, min = 0.0, max = 6.0)
                                 }
                             }
                             }
