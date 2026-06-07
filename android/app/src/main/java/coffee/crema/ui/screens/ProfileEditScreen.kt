@@ -249,16 +249,21 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                 }
             }
 
-            // 2 — Target + Limits: recipe targets and optional caps, all in one row.
+            // 2 — Target + Limits: two grouped cards (Target | Limit), each a faint
+            // copper frame with its own eyebrow.
             NumberedSection("2", "Target + Limits", "Recipe targets & optional caps") {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    LabeledStepper("Dose", dose, "g", Modifier.weight(1f), 0.1, 1.0, 60.0, { dose = it })
-                    LabeledStepper("Yield", yieldG, "g", Modifier.weight(1f), 0.5, 1.0, 200.0, { yieldG = it })
-                    LabeledStepper("Brew temp", brewTemp, "°C", Modifier.weight(1f), 0.5, 20.0, 105.0, { brewTemp = it })
-                    LabeledRatio(if (dose > 0.0) yieldG / dose else 0.0, Modifier.weight(1f))
-                    LimitTile("Max volume", maxVol, "ml", Modifier.weight(1f), maxVol > 0.0, { maxVol = if (maxVol > 0.0) 0.0 else 50.0 }, 10.0, 0.0, 1023.0, { maxVol = it })
-                    LimitTile("Preinfuse steps", preinfuse, null, Modifier.weight(1f), preinfuse > 0.0, { preinfuse = if (preinfuse > 0.0) 0.0 else 1.0 }, 1.0, 0.0, 10.0, { preinfuse = it })
-                    LimitTile("Tank temp", tankTemp, "°C", Modifier.weight(1f), tankTemp > 0.0, { tankTemp = if (tankTemp > 0.0) 0.0 else 92.0 }, 1.0, 0.0, 95.0, { tankTemp = it })
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    GroupCard("Target", 4f) {
+                        LabeledStepper("Dose", dose, "g", Modifier.weight(1f), 0.1, 1.0, 60.0, { dose = it })
+                        LabeledStepper("Yield", yieldG, "g", Modifier.weight(1f), 0.5, 1.0, 200.0, { yieldG = it })
+                        LabeledStepper("Brew temp", brewTemp, "°C", Modifier.weight(1f), 0.5, 20.0, 105.0, { brewTemp = it })
+                        LabeledRatio(if (dose > 0.0) yieldG / dose else 0.0, Modifier.weight(1f))
+                    }
+                    GroupCard("Limit", 3f) {
+                        LimitTile("Max volume", maxVol, "ml", Modifier.weight(1f), maxVol > 0.0, { maxVol = if (maxVol > 0.0) 0.0 else 50.0 }, 10.0, 0.0, 1023.0, { maxVol = it })
+                        LimitTile("Preinfuse steps", preinfuse, null, Modifier.weight(1f), preinfuse > 0.0, { preinfuse = if (preinfuse > 0.0) 0.0 else 1.0 }, 1.0, 0.0, 10.0, { preinfuse = it })
+                        LimitTile("Tank temp", tankTemp, "°C", Modifier.weight(1f), tankTemp > 0.0, { tankTemp = if (tankTemp > 0.0) 0.0 else 92.0 }, 1.0, 0.0, 95.0, { tankTemp = it })
+                    }
                 }
             }
 
@@ -512,6 +517,23 @@ private fun NumberedSection(n: String, title: String, sub: String, trailing: (@C
     }
 }
 
+// ── A labelled group card (Target / Limit) — a faint copper frame with an
+// eyebrow header over a row of tiles (the PWA .pe-seg-cell.is-grouped look). ───
+@Composable
+private fun RowScope.GroupCard(label: String, weight: Float, content: @Composable RowScope.() -> Unit) {
+    Column(
+        Modifier.weight(weight)
+            .clip(RoundedCornerShape(10.dp))
+            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.05f))
+            .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.22f), RoundedCornerShape(10.dp))
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Eyebrow(label)
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), content = content)
+    }
+}
+
 // ── Targets/Limits tiles — the eyebrow (or dot header) sits ABOVE a compact
 // stepper box. ────────────────────────────────────────────────────────────────
 @Composable
@@ -574,10 +596,12 @@ private fun RoastChips(value: String?, onChange: (String?) -> Unit) {
             val active = value == id
             Box(
                 Modifier
+                    .width(84.dp)
                     .clip(RoundedCornerShape(8.dp))
                     .background(if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh)
                     .clickable { onChange(if (active) null else id) }
-                    .padding(horizontal = 14.dp, vertical = 8.dp),
+                    .padding(vertical = 8.dp),
+                contentAlignment = Alignment.Center,
             ) {
                 Text(label, style = MaterialTheme.typography.labelLarge, color = if (active) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant)
             }
@@ -638,15 +662,15 @@ private fun TagChips(tags: SnapshotStateList<String>) {
     ) {
         tags.toList().forEach { tag ->
             Row(
-                Modifier.clip(CircleShape).background(copper.copy(alpha = 0.10f)).border(1.dp, copper.copy(alpha = 0.35f), CircleShape).padding(start = 10.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+                Modifier.clip(RoundedCornerShape(8.dp)).background(copper.copy(alpha = 0.10f)).border(1.dp, copper.copy(alpha = 0.35f), RoundedCornerShape(8.dp)).padding(start = 12.dp, end = 6.dp, top = 8.dp, bottom = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(5.dp),
             ) {
-                Text(tag, style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Medium), color = copper)
+                Text(tag, style = MaterialTheme.typography.labelLarge, color = copper)
                 Box(
-                    Modifier.size(16.dp).clip(CircleShape).clickable { tags.remove(tag) },
+                    Modifier.size(18.dp).clip(CircleShape).clickable { tags.remove(tag) },
                     contentAlignment = Alignment.Center,
-                ) { PhIcon("x", sizeDp = 10, tint = copper.copy(alpha = 0.7f)) }
+                ) { PhIcon("x", sizeDp = 11, tint = copper.copy(alpha = 0.7f)) }
             }
         }
         if (adding) {
@@ -654,16 +678,16 @@ private fun TagChips(tags: SnapshotStateList<String>) {
                 value = draft,
                 onValueChange = { draft = it },
                 singleLine = true,
-                textStyle = MaterialTheme.typography.labelMedium.copy(color = tint),
+                textStyle = MaterialTheme.typography.labelLarge.copy(color = tint),
                 cursorBrush = SolidColor(copper),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                 keyboardActions = KeyboardActions(onDone = { commit() }),
                 modifier = Modifier
                     .width(132.dp)
-                    .clip(CircleShape)
+                    .clip(RoundedCornerShape(8.dp))
                     .background(tint.copy(alpha = 0.05f))
-                    .border(1.dp, copper, CircleShape)
-                    .padding(horizontal = 12.dp, vertical = 6.dp)
+                    .border(1.dp, copper, RoundedCornerShape(8.dp))
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
                     .focusRequester(focus)
                     .onFocusChanged { fs ->
                         if (fs.isFocused) wasFocused = true
@@ -671,7 +695,7 @@ private fun TagChips(tags: SnapshotStateList<String>) {
                     },
                 decorationBox = { inner ->
                     Box(contentAlignment = Alignment.CenterStart) {
-                        if (draft.isEmpty()) Text("New tag…", style = MaterialTheme.typography.labelMedium, color = tint.copy(alpha = 0.4f))
+                        if (draft.isEmpty()) Text("New tag…", style = MaterialTheme.typography.labelLarge, color = tint.copy(alpha = 0.4f))
                         inner()
                     }
                 },
@@ -679,21 +703,21 @@ private fun TagChips(tags: SnapshotStateList<String>) {
             LaunchedEffect(Unit) { focus.requestFocus() }
         } else {
             Row(
-                Modifier.dashedBorder(tint.copy(alpha = 0.35f)).clip(CircleShape).clickable { adding = true }.padding(horizontal = 12.dp, vertical = 6.dp),
+                Modifier.dashedBorder(tint.copy(alpha = 0.35f)).clip(RoundedCornerShape(8.dp)).clickable { adding = true }.padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                PhIcon("plus", sizeDp = 12, tint = tint.copy(alpha = 0.55f))
-                Text("Add tag", style = MaterialTheme.typography.labelMedium, color = tint.copy(alpha = 0.55f))
+                PhIcon("plus", sizeDp = 13, tint = tint.copy(alpha = 0.55f))
+                Text("Add tag", style = MaterialTheme.typography.labelLarge, color = tint.copy(alpha = 0.55f))
             }
         }
     }
 }
 
-/** A dashed pill outline (PWA .pe-tag-add), inset half a stroke so it stays inside. */
+/** A dashed rounded-square outline (PWA .pe-tag-add, squared to match Roast chips). */
 private fun Modifier.dashedBorder(color: Color) = this.drawBehind {
     val sw = 1.dp.toPx()
-    val r = (size.height - sw) / 2f
+    val r = 8.dp.toPx()
     drawRoundRect(
         color = color,
         topLeft = Offset(sw / 2f, sw / 2f),
