@@ -290,6 +290,8 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                         targets = segs.map { it.target },
                         times = segs.map { it.time },
                         modes = segs.map { it.mode },
+                        ramps = segs.map { it.ramp },
+                        temps = segs.map { it.temp },
                         modifier = Modifier.fillMaxWidth().height(300.dp),
                         onSegmentEdit = { i, target, time ->
                             if (i in segs.indices) segs[i] = segs[i].copy(target = target, time = time)
