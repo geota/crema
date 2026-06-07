@@ -204,64 +204,55 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                                 }
                             },
                         )
-                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Eyebrow("Notes")
-                            OutlinedTextField(
-                                value = notes,
-                                onValueChange = { notes = it },
-                                placeholder = { Text("Tasting notes, recipe intent…", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) },
-                                textStyle = MaterialTheme.typography.bodyMedium,
-                                modifier = Modifier.fillMaxWidth(),
-                                minLines = 3,
-                                maxLines = 5,
-                            )
-                        }
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                "Pin to favorites strip in Quick Controls",
-                                Modifier.weight(1f),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurface,
-                            )
-                            CremaSwitch(checked = pinned, onCheckedChange = { pinned = it })
+                        // Notes (left) beside roast / tags / pin (right) — keeps the
+                        // Details section to ~one row of height.
+                        Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+                            Column(Modifier.weight(1.3f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Eyebrow("Notes")
+                                OutlinedTextField(
+                                    value = notes,
+                                    onValueChange = { notes = it },
+                                    placeholder = { Text("Tasting notes, recipe intent…", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) },
+                                    textStyle = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    minLines = 3,
+                                    maxLines = 5,
+                                )
+                            }
+                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Eyebrow("Roast")
+                                    RoastChips(roast) { roast = it }
+                                }
+                                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Eyebrow("Tags")
+                                    TagChips(tags)
+                                }
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text("Pin to favorites strip in Quick Controls", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
+                                    CremaSwitch(checked = pinned, onCheckedChange = { pinned = it })
+                                }
+                            }
                         }
                     }
                 }
             }
 
-            // 2 — Roast & tags.
-            NumberedSection("2", "Roast & tags", "How this recipe is categorised") {
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Eyebrow("Roast")
-                    RoastChips(roast) { roast = it }
-                }
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Eyebrow("Tags")
-                    TagChips(tags)
-                }
-            }
-
-            // 3 — Targets. Eyebrow above each compact stepper box.
-            NumberedSection("3", "Targets", "Dose, yield & temperature") {
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    LabeledStepper("Dose", dose, "g", Modifier.width(160.dp), 0.1, 1.0, 60.0, { dose = it })
-                    LabeledStepper("Yield", yieldG, "g", Modifier.width(160.dp), 0.5, 1.0, 200.0, { yieldG = it })
-                    LabeledStepper("Brew temp", brewTemp, "°C", Modifier.width(160.dp), 0.5, 20.0, 105.0, { brewTemp = it })
-                    LabeledRatio(if (dose > 0.0) yieldG / dose else 0.0, Modifier.width(160.dp))
+            // 2 — Target + Limits: recipe targets and optional caps, all in one row.
+            NumberedSection("2", "Target + Limits", "Recipe targets & optional caps") {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    LabeledStepper("Dose", dose, "g", Modifier.weight(1f), 0.1, 1.0, 60.0, { dose = it })
+                    LabeledStepper("Yield", yieldG, "g", Modifier.weight(1f), 0.5, 1.0, 200.0, { yieldG = it })
+                    LabeledStepper("Brew temp", brewTemp, "°C", Modifier.weight(1f), 0.5, 20.0, 105.0, { brewTemp = it })
+                    LabeledRatio(if (dose > 0.0) yieldG / dose else 0.0, Modifier.weight(1f))
+                    LimitTile("Max volume", maxVol, "ml", Modifier.weight(1f), maxVol > 0.0, { maxVol = if (maxVol > 0.0) 0.0 else 50.0 }, 10.0, 0.0, 1023.0, { maxVol = it })
+                    LimitTile("Preinfuse steps", preinfuse, null, Modifier.weight(1f), preinfuse > 0.0, { preinfuse = if (preinfuse > 0.0) 0.0 else 1.0 }, 1.0, 0.0, 10.0, { preinfuse = it })
+                    LimitTile("Tank temp", tankTemp, "°C", Modifier.weight(1f), tankTemp > 0.0, { tankTemp = if (tankTemp > 0.0) 0.0 else 92.0 }, 1.0, 0.0, 95.0, { tankTemp = it })
                 }
             }
 
-            // 4 — Limits. Three optional caps, each a dot toggle above a stepper box.
-            NumberedSection("4", "Limits", "Optional caps — tap the dot to enable") {
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    LimitTile("Max volume", maxVol, "ml", Modifier.width(190.dp), maxVol > 0.0, { maxVol = if (maxVol > 0.0) 0.0 else 50.0 }, 10.0, 0.0, 1023.0, { maxVol = it })
-                    LimitTile("Preinfuse steps", preinfuse, null, Modifier.width(190.dp), preinfuse > 0.0, { preinfuse = if (preinfuse > 0.0) 0.0 else 1.0 }, 1.0, 0.0, 10.0, { preinfuse = it })
-                    LimitTile("Tank temp", tankTemp, "°C", Modifier.width(190.dp), tankTemp > 0.0, { tankTemp = if (tankTemp > 0.0) 0.0 else 92.0 }, 1.0, 0.0, 95.0, { tankTemp = it })
-                }
-            }
-
-            // 5 — Pressure profile: the curve, then the segments.
-            NumberedSection("5", "Pressure profile", "Drag the dots or edit the segments below") {
+            // 3 — Pressure profile: the curve, then the segments.
+            NumberedSection("3", "Pressure profile", "Drag the dots or edit the segments below") {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         "${segs.size} segments · ${segs.sumOf { it.time.toDouble() }.toInt()}s total",
