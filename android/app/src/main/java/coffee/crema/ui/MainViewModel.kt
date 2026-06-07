@@ -224,6 +224,9 @@ data class MainUiState(
     val autoTare: Boolean = false,
     val stopOnWeight: Boolean = false,
     val steamEco: Boolean = false,
+    /** Max shot duration cap, seconds (persisted in AppPrefs). Shown as a Time
+     *  stop-condition on Brew + edited in Settings → Brew defaults. */
+    val maxShotDurationS: Float = 45f,
     /**
      * Which telemetry channels the live chart draws — keys: `pressure`, `flow`,
      * `headTemp`, `mixTemp`, `weight`, `weightFlow`, `dispensedVolume`,
@@ -1219,7 +1222,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         runCatching { bridge.setMaxShotDuration(seconds) }.onFailure {
             appendLog("Set max shot duration failed: ${it.message}")
         }
+        if (seconds != null) {
+            _ui.value = _ui.value.copy(maxShotDurationS = seconds)
+            viewModelScope.launch { settingsStore.save(currentPrefs()) }
+        }
     }
+
+    /** Build a full AppPrefs from the current UI state so each setter persists
+     *  without clobbering the other fields. */
+    private fun currentPrefs() = AppPrefs(
+        themeMode = _ui.value.themeMode,
+        maxShotDurationS = _ui.value.maxShotDurationS,
+    )
 
     /**
      * Set the flow-calibration multiplier. Routes the resulting MMR write
@@ -1799,20 +1813,24 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Load persisted app preferences at startup. */
     private suspend fun loadPrefs() {
-        _ui.value = _ui.value.copy(themeMode = settingsStore.load().themeMode)
+        val p = settingsStore.load()
+        _ui.value = _ui.value.copy(themeMode = p.themeMode, maxShotDurationS = p.maxShotDurationS)
+        // Push the persisted cap to the core so the limit is live from launch.
+        runCatching { bridge.setMaxShotDuration(p.maxShotDurationS) }
     }
 
     /** Set the theme mode (`"system"` / `"light"` / `"dark"`) and persist. */
     fun setThemeMode(mode: String) {
         _ui.value = _ui.value.copy(themeMode = mode)
-        viewModelScope.launch { settingsStore.save(AppPrefs(mode)) }
+        viewModelScope.launch { settingsStore.save(currentPrefs()) }
     }
 
-    /** Reset Crema's preferences (theme) to defaults. Persisted. */
+    /** Reset Crema's preferences (theme, max shot duration) to defaults. Persisted. */
     fun resetPreferences() {
         val def = AppPrefs()
         viewModelScope.launch { settingsStore.save(def) }
-        _ui.value = _ui.value.copy(themeMode = def.themeMode)
+        _ui.value = _ui.value.copy(themeMode = def.themeMode, maxShotDurationS = def.maxShotDurationS)
+        runCatching { bridge.setMaxShotDuration(def.maxShotDurationS) }
     }
 
     /**
