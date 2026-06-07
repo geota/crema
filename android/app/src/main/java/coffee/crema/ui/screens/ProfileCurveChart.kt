@@ -13,8 +13,11 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
@@ -49,12 +52,19 @@ private const val PAD_L = 26f
 private const val PAD_R = 8f
 private const val PAD_T = 8f
 private const val PAD_B = 16f
+/** Interpolation points for a `smooth` ramp's cubic ease (web sampleCurve). */
+private const val SMOOTH_STEPS = 24
+/** Fixed temperature window (°C) the red temp line maps into. */
+private const val TEMP_MIN = 70f
+private const val TEMP_MAX = 105f
 
 @Composable
 fun ProfileCurveChart(
     targets: List<Float>,
     times: List<Float>,
     modes: List<String?> = emptyList(),
+    ramps: List<String?> = emptyList(),
+    temps: List<Float?> = emptyList(),
     modifier: Modifier = Modifier,
     /** Non-null enables draggable handles: (segmentIndex, newTarget, newTime). */
     onSegmentEdit: ((index: Int, target: Float, time: Float) -> Unit)? = null,
@@ -162,20 +172,57 @@ fun ProfileCurveChart(
             pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f)),
         )
 
-        // Curve — origin at the first target, then a line per segment to its end
-        // point, coloured by that segment's mode.
+        // Temperature — a red stepped line (held across each segment, jumps at
+        // boundaries) on a fixed 70–105 °C window. Drawn under the curve.
         if (targets.isNotEmpty()) {
-            var prev = Offset(xPx(0f), yPx(targets[0]))
-            var cum = 0f
+            fun yTemp(c: Float) = plotB - ((c.coerceIn(TEMP_MIN, TEMP_MAX) - TEMP_MIN) / (TEMP_MAX - TEMP_MIN)) * plotH
+            val tempPath = Path()
+            var tt = 0f
+            targets.indices.forEach { i ->
+                val c = temps.getOrNull(i) ?: 93f
+                val y = yTemp(c)
+                val x0 = xPx(tt)
+                val x1 = xPx(tt + times.getOrElse(i) { 0f })
+                if (i == 0) tempPath.moveTo(x0, y) else tempPath.lineTo(x0, y)
+                tempPath.lineTo(x1, y)
+                tt += times.getOrElse(i) { 0f }
+            }
+            drawPath(tempPath, tel.temp.copy(alpha = 0.8f), style = Stroke(width = 1.6.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
+        }
+
+        // Pressure/flow curve — each segment ramps from the previous value to its
+        // target over its duration: `smooth` = the web's cubic ease (3u²−2u³ via a
+        // flat-tangent Bézier), `fast` = a near-vertical step. Coloured by mode.
+        if (targets.isNotEmpty()) {
+            var t0 = 0f
+            var prev = 0f
             targets.forEachIndexed { i, target ->
-                cum += times.getOrElse(i) { 0f }
-                val p = Offset(xPx(cum), yPx(target))
+                val dt = times.getOrElse(i) { 0f }
                 val color = if (modes.getOrNull(i) == "flow") tel.flow else tel.pressure
-                drawLine(color, prev, p, strokeWidth = 2.6.dp.toPx(), cap = StrokeCap.Round)
-                prev = p
+                val path = Path()
+                path.moveTo(xPx(t0), yPx(prev))
+                if (ramps.getOrNull(i) == "fast") {
+                    path.lineTo(xPx(t0 + 0.001f), yPx(target))
+                    path.lineTo(xPx(t0 + dt), yPx(target))
+                } else {
+                    val c0x = t0 + dt * 0.4f
+                    val c1x = t0 + dt * 0.6f
+                    for (s in 1..SMOOTH_STEPS) {
+                        val u = s.toFloat() / SMOOTH_STEPS
+                        val m = 1f - u
+                        val b0 = m * m * m
+                        val b1 = 3 * m * m * u
+                        val b2 = 3 * m * u * u
+                        val b3 = u * u * u
+                        path.lineTo(xPx(b0 * t0 + b1 * c0x + b2 * c1x + b3 * (t0 + dt)), yPx((b0 + b1) * prev + (b2 + b3) * target))
+                    }
+                }
+                drawPath(path, color, style = Stroke(width = 2.6.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
+                t0 += dt
+                prev = target
             }
             // Draggable handles at each segment end.
-            cum = 0f
+            var cum = 0f
             targets.forEachIndexed { i, target ->
                 cum += times.getOrElse(i) { 0f }
                 val c = Offset(xPx(cum), yPx(target))
