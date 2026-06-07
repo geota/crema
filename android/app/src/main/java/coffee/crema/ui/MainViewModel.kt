@@ -105,6 +105,9 @@ data class LastShot(
     val peakTemp: Float?,
     /** Unix epoch ms the shot completed — drives the card's "· N min ago" eyebrow. */
     val completedAtMs: Long = 0,
+    /** The matching [StoredShot] id (same `"shot:$now"`), so tapping the card opens
+     *  it in History. Null for the pre-first-shot default. */
+    val id: String? = null,
 )
 
 /** A flat snapshot of everything the current screen shows. */
@@ -257,6 +260,9 @@ data class MainUiState(
     val draftProfile: CremaProfile? = null,
     /** Completed-shot log (newest first), persisted via [HistoryStore]. */
     val history: List<StoredShot> = emptyList(),
+    /** A shot id the History screen should select on next open (set when the Brew
+     *  "Last shot" card is tapped). Consumed + cleared by HistoryScreen. */
+    val pendingHistoryShotId: String? = null,
     /**
      * The persisted water-accumulation & maintenance state — counters, baselines,
      * and user-set intervals. The DE1 has no cumulative water counter, so the
@@ -935,6 +941,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val next = _ui.value.history.filterNot { it.id == id }
         _ui.value = _ui.value.copy(history = next)
         viewModelScope.launch { historyStore.save(next) }
+    }
+
+    /** Request that History select [id] when it next opens (the Brew "Last shot"
+     *  card tap-through). */
+    fun openShotInHistory(id: String?) {
+        if (id != null) _ui.value = _ui.value.copy(pendingHistoryShotId = id)
+    }
+
+    /** Clear the pending History selection once HistoryScreen has applied it. */
+    fun consumePendingHistoryShot() {
+        if (_ui.value.pendingHistoryShotId != null) {
+            _ui.value = _ui.value.copy(pendingHistoryShotId = null)
+        }
     }
 
     /** Load a history shot's profile onto Brew (find by name → set active). */
@@ -1651,6 +1670,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         yieldG: Float?,
         peakPressure: Float?,
         peakTemp: Float?,
+        now: Long = System.currentTimeMillis(),
     ) {
         val s = _ui.value
         val profile = s.profiles.firstOrNull { it.id == s.activeProfileId }
@@ -1659,7 +1679,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val roaster = b.roasterId?.let { rid -> s.roasters.firstOrNull { it.id == rid }?.name }
             listOfNotNull(roaster, b.name).joinToString(" · ")
         }
-        val now = System.currentTimeMillis()
         val shot = StoredShot(
             id = "shot:$now",
             completedAtMs = now,
@@ -2304,10 +2323,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         peakPressure = c.peak_pressure,
                         peakTemp = c.peak_temp,
                         completedAtMs = now,
+                        // Same id captureCompletedShot stamps, so the card links to it.
+                        id = "shot:$now",
                     ),
                 )
                 appendLog("Shot completed: ${c.duration}ms, ${c.sample_count} samples")
-                captureCompletedShot(c.duration.toLong(), c.final_weight, c.peak_pressure, c.peak_temp)
+                captureCompletedShot(c.duration.toLong(), c.final_weight, c.peak_pressure, c.peak_temp, now)
                 // A pour just finished: flush the integrated water into the persisted
                 // maintenance state and recompute the filter / descale / clean readout.
                 flushMaintenance()
