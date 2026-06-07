@@ -55,7 +55,6 @@ import coffee.crema.ui.components.CremaButton
 import coffee.crema.ui.components.CremaButtonVariant
 import coffee.crema.ui.components.CremaCard
 import coffee.crema.ui.components.CremaIconButton
-import coffee.crema.ui.components.CremaSwitch
 import coffee.crema.ui.components.CremaOptionalHeader
 import coffee.crema.ui.components.CremaSplitLabel
 import coffee.crema.ui.components.SplitOption
@@ -189,49 +188,52 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
             Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.Top) {
                     Text("1", style = MaterialTheme.typography.bodyMedium.copy(fontFamily = JetBrainsMono), color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f), modifier = Modifier.padding(top = 8.dp))
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                        BasicTextField(
-                            value = name,
-                            onValueChange = { name = it },
-                            singleLine = true,
-                            textStyle = MaterialTheme.typography.headlineMedium.copy(color = MaterialTheme.colorScheme.onSurface),
-                            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                            modifier = Modifier.fillMaxWidth(),
-                            decorationBox = { inner ->
-                                Box {
-                                    if (name.isEmpty()) Text("Profile name", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    inner()
-                                }
-                            },
-                        )
-                        // Notes (left) beside roast / tags / pin (right) — keeps the
-                        // Details section to ~one row of height.
-                        Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
-                            Column(Modifier.weight(1.3f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Eyebrow("Notes")
-                                OutlinedTextField(
-                                    value = notes,
-                                    onValueChange = { notes = it },
-                                    placeholder = { Text("Tasting notes, recipe intent…", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) },
-                                    textStyle = MaterialTheme.typography.bodyMedium,
-                                    modifier = Modifier.fillMaxWidth(),
-                                    minLines = 3,
-                                    maxLines = 5,
-                                )
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        // Title + favorite star (the pin toggle, copper when pinned).
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            BasicTextField(
+                                value = name,
+                                onValueChange = { name = it },
+                                singleLine = true,
+                                textStyle = MaterialTheme.typography.headlineMedium.copy(color = MaterialTheme.colorScheme.onSurface),
+                                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                                modifier = Modifier.weight(1f),
+                                decorationBox = { inner ->
+                                    Box {
+                                        if (name.isEmpty()) Text("Profile name", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        inner()
+                                    }
+                                },
+                            )
+                            Box(
+                                Modifier.size(40.dp).clip(CircleShape).clickable { pinned = !pinned },
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                PhIcon(if (pinned) "star-fill" else "star", sizeDp = 24, tint = if (pinned) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
                             }
-                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    Eyebrow("Roast")
-                                    RoastChips(roast) { roast = it }
-                                }
-                                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    Eyebrow("Tags")
-                                    TagChips(tags)
-                                }
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text("Pin to favorites strip in Quick Controls", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
-                                    CremaSwitch(checked = pinned, onCheckedChange = { pinned = it })
-                                }
+                        }
+                        // Notes — full width, compact height.
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Eyebrow("Notes")
+                            OutlinedTextField(
+                                value = notes,
+                                onValueChange = { notes = it },
+                                placeholder = { Text("Tasting notes, recipe intent…", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) },
+                                textStyle = MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.fillMaxWidth(),
+                                minLines = 2,
+                                maxLines = 3,
+                            )
+                        }
+                        // Roast + Tags share a full-width line.
+                        Row(horizontalArrangement = Arrangement.spacedBy(24.dp), verticalAlignment = Alignment.Top) {
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Eyebrow("Roast")
+                                RoastChips(roast) { roast = it }
+                            }
+                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Eyebrow("Tags")
+                                TagChips(tags)
                             }
                         }
                     }
@@ -251,15 +253,11 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                 }
             }
 
-            // 3 — Pressure profile: the curve, then the segments.
-            NumberedSection("3", "Pressure profile", "Drag the dots or edit the segments below") {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        "${segs.size} segments · ${segs.sumOf { it.time.toDouble() }.toInt()}s total",
-                        Modifier.weight(1f),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+            // 3 — Pressure profile: the curve, then the segments. Reset rides the
+            // title line; the total time sits in the graph's bottom-right (copper).
+            NumberedSection(
+                "3", "Pressure profile", "Drag the dots or edit the segments below",
+                trailing = {
                     CremaButton(
                         onClick = {
                             segs.clear()
@@ -269,7 +267,8 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                         icon = "arrow-counter-clockwise",
                         label = "Reset",
                     )
-                }
+                },
+            ) {
                 Box(
                     Modifier.fillMaxWidth().clip(MaterialTheme.shapes.large).background(MaterialTheme.colorScheme.surfaceContainerLowest).padding(12.dp),
                 ) {
@@ -281,6 +280,12 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                         onSegmentEdit = { i, target, time ->
                             if (i in segs.indices) segs[i] = segs[i].copy(target = target, time = time)
                         },
+                    )
+                    Text(
+                        "${segs.sumOf { it.time.toDouble() }.toInt()} s",
+                        modifier = Modifier.align(Alignment.BottomEnd).padding(end = 8.dp, bottom = 6.dp),
+                        style = TextStyle(fontFamily = JetBrainsMono, fontSize = 15.sp, fontFeatureSettings = "tnum"),
+                        color = MaterialTheme.colorScheme.primary,
                     )
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -419,9 +424,11 @@ private fun SegmentRowFull(
                     CremaOptionalHeader("Max", limOn, { onEdit(seg.copy(limiter = if (limOn) null else SegmentLimiter(6f, 0.6f))) })
                     EditStepper(lmView.value.toDouble(), if (seg.mode == "flow") "bar" else "ml/s", 0.1, 0.0, 12.0, { v -> if (limOn) onEdit(seg.copy(limiter = seg.limiter?.copy(value = v.toFloat()))) }, modifier = Modifier.alpha(if (limOn) 1f else 0.4f))
                 }
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                // Tolerance is gated by the Max dot — fade the whole cell (eyebrow
+                // included) when Max is off.
+                Column(Modifier.weight(1f).alpha(if (limOn) 1f else 0.4f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Eyebrow("Tolerance")
-                    EditStepper(lmView.range.toDouble(), null, 0.1, 0.0, 6.0, { v -> if (limOn) onEdit(seg.copy(limiter = seg.limiter?.copy(range = v.toFloat()))) }, modifier = Modifier.alpha(if (limOn) 1f else 0.4f))
+                    EditStepper(lmView.range.toDouble(), null, 0.1, 0.0, 6.0, { v -> if (limOn) onEdit(seg.copy(limiter = seg.limiter?.copy(range = v.toFloat()))) })
                 }
             }
 
@@ -479,15 +486,18 @@ private fun coffee.crema.profiles.ProfileSegment.toEdit(brewTemp: Float) = Segme
 // ── A numbered settings section: hairline rule, mono number + serif title + sub,
 // then body (matches the bean-creation BeBlock). ──────────────────────────────
 @Composable
-private fun NumberedSection(n: String, title: String, sub: String, content: @Composable ColumnScope.() -> Unit) {
+private fun NumberedSection(n: String, title: String, sub: String, trailing: (@Composable () -> Unit)? = null, content: @Composable ColumnScope.() -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-        // Number · title · sub all on one baseline (sub sits to the RIGHT of the
-        // title, not under it).
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text(n, style = MaterialTheme.typography.bodyMedium.copy(fontFamily = JetBrainsMono), color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f), modifier = Modifier.alignByBaseline())
-            Text(title, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.alignByBaseline())
-            Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.alignByBaseline())
+        // Number · title · sub on one baseline (sub to the RIGHT of the title); an
+        // optional trailing action (e.g. Reset) right-justifies on the same line.
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(n, style = MaterialTheme.typography.bodyMedium.copy(fontFamily = JetBrainsMono), color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f), modifier = Modifier.alignByBaseline())
+                Text(title, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.alignByBaseline())
+                Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.alignByBaseline())
+            }
+            if (trailing != null) trailing()
         }
         content()
     }
@@ -516,7 +526,10 @@ private fun LimitTile(label: String, value: Double, unit: String?, modifier: Mod
 @Composable
 private fun LabeledRatio(ratio: Double, modifier: Modifier) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Eyebrow("Ratio", color = MaterialTheme.colorScheme.primary)
+        Row(verticalAlignment = Alignment.Bottom) {
+            Eyebrow("Ratio", Modifier.weight(1f), color = MaterialTheme.colorScheme.primary)
+            Text("Computed", style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, letterSpacing = 0.4.sp), color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f))
+        }
         Box(
             Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)).padding(horizontal = 12.dp, vertical = 9.dp),
             contentAlignment = Alignment.CenterStart,
