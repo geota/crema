@@ -802,6 +802,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         yieldOut: Float,
         brewTemp: Float,
         maxTotalVolumeMl: Int,
+        preinfuseStepCount: Int,
+        tankTemperatureC: Float,
         segments: List<SegmentEdit>,
     ) {
         val isExisting = customProfilesJson.any { profileIdOf(it, json) == id }
@@ -826,6 +828,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 yieldOut = yieldOut,
                 brewTemp = brewTemp,
                 maxTotalVolumeMl = maxTotalVolumeMl,
+                preinfuseStepCount = preinfuseStepCount,
+                tankTemperatureC = tankTemperatureC,
                 segments = segments,
                 json = json,
             )
