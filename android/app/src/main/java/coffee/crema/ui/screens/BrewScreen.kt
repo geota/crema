@@ -2,6 +2,18 @@ package coffee.crema.ui.screens
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -149,20 +161,31 @@ fun BrewScreen(
                     .padding(horizontal = 20.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                // Left column (248dp, scrolls).
+                // Left column (248dp). Fixed cards top + bottom; the Phase card takes
+                // the flexible middle and scrolls its phase list internally, so adding
+                // the Last-shot card never pushes anything off-screen.
                 Column(
                     modifier = Modifier
                         .width(248.dp)
-                        .fillMaxHeight()
-                        .verticalScroll(rememberScrollState()),
+                        .fillMaxHeight(),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     TimerCard(running = running, elapsedMs = ui.shotElapsedMs, phase = ui.shotPhase)
                     RatioCard(active = active, weightG = ratioWeight(ui, running))
-                    PhaseCard(active = active, running = running, frame = ui.shotFrame, phase = ui.shotPhase)
+                    PhaseCard(
+                        active = active,
+                        running = running,
+                        frame = ui.shotFrame,
+                        phase = ui.shotPhase,
+                        modifier = Modifier.weight(1f),
+                    )
                     LimitsCard(active = active, ui = ui)
                     if (!running && ui.lastShot != null) {
-                        LastShotCard(last = ui.lastShot!!, dose = active?.dose ?: 18f)
+                        LastShotCard(
+                            last = ui.lastShot!!,
+                            dose = active?.dose ?: 18f,
+                            onClick = { vm.openShotInHistory(ui.lastShot!!.id); onNav("history") },
+                        )
                     }
                 }
                 // Right column (fills remainder).
@@ -881,12 +904,34 @@ private fun RatioCard(active: CremaProfile?, weightG: Float?) {
 }
 
 @Composable
-private fun PhaseCard(active: CremaProfile?, running: Boolean, frame: Int, phase: String?) {
+private fun PhaseCard(
+    active: CremaProfile?,
+    running: Boolean,
+    frame: Int,
+    phase: String?,
+    modifier: Modifier = Modifier,
+) {
     val segments = active?.segments ?: emptyList()
     val activeIdx = if (running) frame.coerceIn(0, max(0, segments.lastIndex)) else -1
-    CremaCard(Modifier.fillMaxWidth()) {
+    val listState = rememberLazyListState()
+    // Auto-advance: while a shot runs, keep the active frame centred in the list
+    // (web PhaseIndicatorCard's scrollTo-centre $effect).
+    LaunchedEffect(activeIdx, running) {
+        if (running && activeIdx >= 0) {
+            val info = listState.layoutInfo
+            val visible = info.visibleItemsInfo.firstOrNull { it.index == activeIdx }
+            if (visible != null) {
+                val vpCenter = (info.viewportStartOffset + info.viewportEndOffset) / 2f
+                val itemCenter = visible.offset + visible.size / 2f
+                listState.animateScrollBy(itemCenter - vpCenter)
+            } else {
+                listState.animateScrollToItem(activeIdx)
+            }
+        }
+    }
+    CremaCard(modifier.fillMaxWidth()) {
         Column(
-            Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp),
+            Modifier.fillMaxSize().padding(horizontal = 14.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(5.dp),
         ) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
@@ -910,11 +955,7 @@ private fun PhaseCard(active: CremaProfile?, running: Boolean, frame: Int, phase
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     segments.forEachIndexed { i, seg ->
-                        val fillFrac = when {
-                            i < activeIdx -> 1f
-                            i == activeIdx -> 1f
-                            else -> 0f
-                        }
+                        val fillFrac = if (i <= activeIdx) 1f else 0f
                         val fillColor = if (i == activeIdx) MaterialTheme.colorScheme.primary
                         else MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
                         Box(
@@ -934,11 +975,37 @@ private fun PhaseCard(active: CremaProfile?, running: Boolean, frame: Int, phase
                         }
                     }
                 }
-                // Per-segment rows (name | time | early-exit metric). No inner
-                // scroll — the left column scrolls; per-frame partial fill +
-                // auto-scroll are M2 (they pair with the live chart).
-                segments.forEachIndexed { i, seg ->
-                    PhaseRow(seg = seg, isActive = i == activeIdx, isPast = i < activeIdx)
+                // Per-segment rows — internally scrollable with a top/bottom fade
+                // (web .crema-phase-list mask-image) so a long profile never pushes
+                // the rest of the column off-screen, plus auto-advance above.
+                val density = LocalDensity.current
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                        .drawWithContent {
+                            drawContent()
+                            val h = size.height
+                            if (h <= 0f) return@drawWithContent
+                            val fade = (with(density) { 16.dp.toPx() } / h).coerceIn(0f, 0.45f)
+                            drawRect(
+                                brush = Brush.verticalGradient(
+                                    0f to (if (listState.canScrollBackward) Color.Transparent else Color.Black),
+                                    fade to Color.Black,
+                                    1f - fade to Color.Black,
+                                    1f to (if (listState.canScrollForward) Color.Transparent else Color.Black),
+                                ),
+                                blendMode = BlendMode.DstIn,
+                            )
+                        },
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    contentPadding = PaddingValues(vertical = 2.dp),
+                ) {
+                    itemsIndexed(segments) { i, seg ->
+                        PhaseRow(seg = seg, isActive = i == activeIdx, isPast = i < activeIdx)
+                    }
                 }
             }
         }
@@ -1047,18 +1114,19 @@ private fun LimitRowView(row: LimitRow) {
     }
 }
 
+// Last shot summary (web LastShotCard.svelte: a 3-col grid of 5 stats). Tapping
+// opens the matching shot in History. Shown after a shot finishes until the next
+// one starts.
 @Composable
-private fun LastShotCard(last: coffee.crema.ui.LastShot, dose: Float) {
+private fun LastShotCard(last: coffee.crema.ui.LastShot, dose: Float, onClick: () -> Unit) {
     val yieldG = last.yieldG
     val ratio = if (yieldG != null && dose > 0f) "1:%.2f".format(yieldG / dose) else "—"
-    CremaCard(Modifier.fillMaxWidth()) {
+    CremaCard(Modifier.fillMaxWidth().clickable(onClick = onClick)) {
         Column(
-            Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp),
+            Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            // "Last shot · N min ago" — the relative-time eyebrow the proto
-            // shows, now that LastShot carries completedAtMs. getRelativeTimeSpanString
-            // handles "0 minutes ago" etc.; guard the pre-first-shot 0L default.
+            // "Last shot · N min ago" eyebrow + a chevron hinting the tap-through.
             val ago = last.completedAtMs.takeIf { it > 0L }?.let {
                 android.text.format.DateUtils.getRelativeTimeSpanString(
                     it,
@@ -1066,31 +1134,36 @@ private fun LastShotCard(last: coffee.crema.ui.LastShot, dose: Float) {
                     android.text.format.DateUtils.MINUTE_IN_MILLIS,
                 ).toString()
             }
-            Eyebrow(if (ago != null) "Last shot · $ago" else "Last shot")
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                LastShotStat("Yield", if (yieldG != null) "%.1f".format(yieldG) else "—", "g", Modifier.weight(1f))
-                LastShotStat("Ratio", ratio, "", Modifier.weight(1f))
-                LastShotStat("Time", "%.1f".format(last.durationMs / 1000.0), "s", Modifier.weight(1f))
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                Eyebrow(if (ago != null) "Last shot · $ago" else "Last shot")
+                PhIcon("caret-right", sizeDp = 13, tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            // PWA-borrowed peaks (peakPressure / peakTemp already on ui.lastShot).
-            // Float? — guard before %.1f (never pass an Int to %f).
+            // 5 stats in a 3-col grid (Time · Yield · Ratio / Peak · Peak temp), the
+            // web .ls-grid order. Float? guarded before %f (never pass an Int).
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                LastShotStat("Time", "%.1f".format(last.durationMs / 1000.0), "s", Modifier.weight(1f))
+                LastShotStat("Yield", if (yieldG != null) "%.1f".format(yieldG) else "—", "g", Modifier.weight(1f))
+                LastShotStat("Ratio", ratio, null, Modifier.weight(1f))
+            }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 LastShotStat("Peak", last.peakPressure?.let { "%.1f".format(it) } ?: "—", "bar", Modifier.weight(1f))
-                LastShotStat("Peak temp", last.peakTemp?.let { "%.1f".format(it) } ?: "—", "°C", Modifier.weight(1f))
-                Spacer(Modifier.weight(1f)) // keep the 3-col grid alignment
+                LastShotStat("Peak temp", last.peakTemp?.let { "%.0f".format(it) } ?: "—", "°C", Modifier.weight(1f))
+                Spacer(Modifier.weight(1f)) // hold the 3-col grid alignment
             }
         }
     }
 }
 
 @Composable
-private fun LastShotStat(label: String, value: String, unit: String, modifier: Modifier = Modifier) {
+private fun LastShotStat(label: String, value: String, unit: String?, modifier: Modifier = Modifier) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Eyebrow(label)
-        Row(verticalAlignment = Alignment.Bottom) {
-            Text(value, style = CremaTheme.readout.readoutSm.copy(fontSize = 15.sp, lineHeight = 19.sp), color = MaterialTheme.colorScheme.onSurface)
-            if (unit.isNotBlank()) Text(" $unit", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
+        Text(
+            label.uppercase(),
+            style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.3.sp),
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
+            maxLines = 1,
+        )
+        CremaValueUnit(value, unit, valueSize = 15.sp, unitSize = 10.sp)
     }
 }
 

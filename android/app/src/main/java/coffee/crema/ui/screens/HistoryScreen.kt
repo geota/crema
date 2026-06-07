@@ -28,6 +28,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -88,6 +89,15 @@ fun HistoryScreen(
     var range by remember { mutableStateOf("all") }
     var sort by remember { mutableStateOf("date") }
     var sortDesc by remember { mutableStateOf(true) } // newest / highest first
+    // Tapping Brew's "Last shot" card requests that shot here — select it + clear
+    // any active range filter so it's guaranteed visible, then consume the request.
+    LaunchedEffect(ui.pendingHistoryShotId) {
+        ui.pendingHistoryShotId?.let {
+            selectedId = it
+            range = "all"
+            vm.consumePendingHistoryShot()
+        }
+    }
 
     // Client-side search + time-range filter + sort over the shot log. The stat
     // strip stays over the FULL history (global metrics); only the list filters.
