@@ -20,7 +20,6 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.InputChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -59,6 +58,16 @@ import coffee.crema.ui.components.CremaOptionalHeader
 import coffee.crema.ui.components.CremaSplitLabel
 import coffee.crema.ui.components.SplitOption
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.ui.text.TextStyle
@@ -601,42 +610,96 @@ private fun MiniSegmented(options: List<SegOption>, value: String, onChange: (St
 }
 
 /**
- * The tag editor — input chips (tap to remove) over an "Add tag" field that
- * commits on the keyboard's Done action. Mirrors the web `TagInput`.
+ * The tag editor (PWA TagInput) — copper tag chips each with an ✕ to remove, then
+ * a dashed faint "+ Add tag" chip that swaps to a copper-bordered inline input on
+ * tap (autofocus, "New tag…"); Enter or blur commits and the chip returns.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun TagChips(tags: SnapshotStateList<String>) {
-    var input by remember { mutableStateOf("") }
-    if (tags.isNotEmpty()) {
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            tags.toList().forEach { tag ->
-                InputChip(
-                    selected = false,
-                    onClick = { tags.remove(tag) },
-                    label = { Text(tag) },
-                    trailingIcon = { Text("✕", style = MaterialTheme.typography.labelMedium) },
-                )
+    var adding by remember { mutableStateOf(false) }
+    var draft by remember { mutableStateOf("") }
+    var wasFocused by remember { mutableStateOf(false) }
+    val focus = remember { FocusRequester() }
+    val copper = MaterialTheme.colorScheme.primary
+    val tint = MaterialTheme.colorScheme.onSurface
+
+    fun commit() {
+        val t = draft.trim()
+        if (t.isNotEmpty() && tags.none { it.equals(t, ignoreCase = true) }) tags.add(t)
+        draft = ""
+        adding = false
+        wasFocused = false
+    }
+
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        tags.toList().forEach { tag ->
+            Row(
+                Modifier.clip(CircleShape).background(copper.copy(alpha = 0.10f)).border(1.dp, copper.copy(alpha = 0.35f), CircleShape).padding(start = 10.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+            ) {
+                Text(tag, style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Medium), color = copper)
+                Box(
+                    Modifier.size(16.dp).clip(CircleShape).clickable { tags.remove(tag) },
+                    contentAlignment = Alignment.Center,
+                ) { PhIcon("x", sizeDp = 10, tint = copper.copy(alpha = 0.7f)) }
+            }
+        }
+        if (adding) {
+            BasicTextField(
+                value = draft,
+                onValueChange = { draft = it },
+                singleLine = true,
+                textStyle = MaterialTheme.typography.labelMedium.copy(color = tint),
+                cursorBrush = SolidColor(copper),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { commit() }),
+                modifier = Modifier
+                    .width(132.dp)
+                    .clip(CircleShape)
+                    .background(tint.copy(alpha = 0.05f))
+                    .border(1.dp, copper, CircleShape)
+                    .padding(horizontal = 12.dp, vertical = 6.dp)
+                    .focusRequester(focus)
+                    .onFocusChanged { fs ->
+                        if (fs.isFocused) wasFocused = true
+                        else if (wasFocused) commit()
+                    },
+                decorationBox = { inner ->
+                    Box(contentAlignment = Alignment.CenterStart) {
+                        if (draft.isEmpty()) Text("New tag…", style = MaterialTheme.typography.labelMedium, color = tint.copy(alpha = 0.4f))
+                        inner()
+                    }
+                },
+            )
+            LaunchedEffect(Unit) { focus.requestFocus() }
+        } else {
+            Row(
+                Modifier.dashedBorder(tint.copy(alpha = 0.35f)).clip(CircleShape).clickable { adding = true }.padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                PhIcon("plus", sizeDp = 12, tint = tint.copy(alpha = 0.55f))
+                Text("Add tag", style = MaterialTheme.typography.labelMedium, color = tint.copy(alpha = 0.55f))
             }
         }
     }
-    OutlinedTextField(
-        value = input,
-        onValueChange = { input = it },
-        label = { Text("Add tag") },
-        singleLine = true,
-        modifier = Modifier.fillMaxWidth(),
-        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-        keyboardActions = KeyboardActions(
-            onDone = {
-                val t = input.trim()
-                if (t.isNotEmpty() && tags.none { it.equals(t, ignoreCase = true) }) tags.add(t)
-                input = ""
-            },
-        ),
+}
+
+/** A dashed pill outline (PWA .pe-tag-add), inset half a stroke so it stays inside. */
+private fun Modifier.dashedBorder(color: Color) = this.drawBehind {
+    val sw = 1.dp.toPx()
+    val r = (size.height - sw) / 2f
+    drawRoundRect(
+        color = color,
+        topLeft = Offset(sw / 2f, sw / 2f),
+        size = Size(size.width - sw, size.height - sw),
+        cornerRadius = CornerRadius(r, r),
+        style = Stroke(width = sw, pathEffect = PathEffect.dashPathEffect(floatArrayOf(7f, 5f), 0f)),
     )
 }
 

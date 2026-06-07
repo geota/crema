@@ -681,7 +681,9 @@ fun CremaFilterDivider(modifier: Modifier = Modifier) {
 @Composable
 fun CremaDotToggle(on: Boolean, onToggle: () -> Unit, modifier: Modifier = Modifier) {
     Box(
-        modifier.size(18.dp).clip(CircleShape).clickable(onClick = onToggle),
+        // 16dp keeps the dot header the same height as a plain eyebrow, so dot
+        // and non-dot tiles line up in the Target + Limits row.
+        modifier.size(16.dp).clip(CircleShape).clickable(onClick = onToggle),
         contentAlignment = Alignment.Center,
     ) {
         Box(
