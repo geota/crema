@@ -482,12 +482,12 @@ private fun coffee.crema.profiles.ProfileSegment.toEdit(brewTemp: Float) = Segme
 private fun NumberedSection(n: String, title: String, sub: String, content: @Composable ColumnScope.() -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-        Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-            Text(n, style = MaterialTheme.typography.bodyMedium.copy(fontFamily = JetBrainsMono), color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f))
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(title, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
-                Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
+        // Number · title · sub all on one baseline (sub sits to the RIGHT of the
+        // title, not under it).
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(n, style = MaterialTheme.typography.bodyMedium.copy(fontFamily = JetBrainsMono), color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f), modifier = Modifier.alignByBaseline())
+            Text(title, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.alignByBaseline())
+            Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.alignByBaseline())
         }
         content()
     }
