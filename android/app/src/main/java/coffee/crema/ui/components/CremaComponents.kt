@@ -619,6 +619,9 @@ fun CremaValueUnit(
     // mono unit ~0.7x. Defaults preserve the original mono 0.72x behaviour.
     unitSize: androidx.compose.ui.unit.TextUnit = valueSize * 0.72f,
     unitSans: Boolean = false,
+    // Gap between the value and its unit. A hair wider than the PWA's 1px so the
+    // unit (esp. word units like "shots") doesn't crowd the value.
+    unitGap: androidx.compose.ui.unit.Dp = 3.dp,
 ) {
     Row(modifier) {
         Text(
@@ -636,7 +639,7 @@ fun CremaValueUnit(
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
                 maxLines = 1,
                 softWrap = false,
-                modifier = Modifier.alignByBaseline().padding(start = 1.dp),
+                modifier = Modifier.alignByBaseline().padding(start = unitGap),
             )
         }
     }
