@@ -729,11 +729,13 @@ fun CremaSplitLabel(
     val copper = MaterialTheme.colorScheme.primary
     Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         if (dot) CremaDotToggle(dotOn, { onDot?.invoke() })
-        Text(prefix.uppercase(), style = style, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f))
+        // The prefix carries the same 3dp bottom padding the options use to clear
+        // their underline, so prefix + options share a baseline (no high options).
+        Text(prefix.uppercase(), style = style, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f), modifier = Modifier.padding(bottom = 3.dp))
         if (options.isNotEmpty()) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 options.forEachIndexed { i, o ->
-                    if (i > 0) Text("|", style = style, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.18f))
+                    if (i > 0) Text("|", style = style, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.18f), modifier = Modifier.padding(bottom = 3.dp))
                     val active = value == o.id
                     Text(
                         o.label.uppercase(),
