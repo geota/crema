@@ -193,10 +193,11 @@ fun ProfileCurveChart(
 
         // Pressure / flow curve — de1app convention: each line shows ONLY its own
         // mode's frames (pressure line = pressure-frame targets, flow line =
-        // flow-frame targets). At a mode switch the inactive line drops out and the
-        // other appears rising from 0 — a hand-off, not one line carried across.
-        // Within a run each segment ramps from the previous value: `smooth` = the
-        // web's cubic ease (3u²−2u³ flat-tangent Bézier), `fast` = a vertical step.
+        // flow-frame targets). At a mode switch the inactive line ends and the other
+        // picks up from where it left off — a smooth hand-off (the value is carried
+        // across modes; only the colour changes). Within a run each segment ramps
+        // from the previous value: `smooth` = the web's cubic ease (3u²−2u³
+        // flat-tangent Bézier), `fast` = a near-vertical step.
         if (targets.isNotEmpty()) {
             fun drawModeLine(wantFlow: Boolean, color: Color) {
                 var t0 = 0f
@@ -206,8 +207,7 @@ fun ProfileCurveChart(
                     val dt = times.getOrElse(i) { 0f }
                     if ((modes.getOrNull(i) == "flow") == wantFlow) {
                         if (path == null) {
-                            path = Path().apply { moveTo(xPx(t0), yPx(0f)) }
-                            prev = 0f
+                            path = Path().apply { moveTo(xPx(t0), yPx(prev)) }
                         }
                         val p = path!!
                         if (ramps.getOrNull(i) == "fast") {
@@ -226,11 +226,13 @@ fun ProfileCurveChart(
                                 p.lineTo(xPx(b0 * t0 + b1 * c0x + b2 * c1x + b3 * (t0 + dt)), yPx((b0 + b1) * prev + (b2 + b3) * target))
                             }
                         }
-                        prev = target
                     } else {
                         path?.let { drawPath(it, color, style = Stroke(width = 2.6.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)) }
                         path = null
                     }
+                    // Carry every segment's end value forward (across modes) so the
+                    // next run hands off from where the other line left off.
+                    prev = target
                     t0 += dt
                 }
                 path?.let { drawPath(it, color, style = Stroke(width = 2.6.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)) }
