@@ -672,6 +672,40 @@ fun CremaFilterDivider(modifier: Modifier = Modifier) {
     )
 }
 
+// ── Optional-config dot toggle (PWA .pe-num-dot / .qsplit-dot) ───────────────
+// A small circular button that enables/disables an optional setting: filled
+// copper when ON, a hollow grey ring when OFF. Pair with Modifier.alpha(0.4) on
+// the control it gates. The hit target is padded out around the 9dp visual dot.
+@Composable
+fun CremaDotToggle(on: Boolean, onToggle: () -> Unit, modifier: Modifier = Modifier) {
+    Box(
+        modifier.size(18.dp).clip(CircleShape).clickable(onClick = onToggle),
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            Modifier
+                .size(9.dp)
+                .clip(CircleShape)
+                .background(if (on) MaterialTheme.colorScheme.primary else Color.Transparent)
+                .border(
+                    1.dp,
+                    if (on) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f),
+                    CircleShape,
+                ),
+        )
+    }
+}
+
+// Header for an optional config block: the dot toggle + an eyebrow label. The
+// caller greys out the gated control with Modifier.alpha(if (on) 1f else 0.4f).
+@Composable
+fun CremaOptionalHeader(label: String, on: Boolean, onToggle: () -> Unit, modifier: Modifier = Modifier) {
+    Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+        CremaDotToggle(on, onToggle)
+        Eyebrow(label, color = if (on) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f))
+    }
+}
+
 // ── Text field — label-above + filled input (PWA form style) ─────────────────
 // A calmer alternative to M3's floating-label OutlinedTextField for forms: a
 // sentence-case label over a filled, 1dp-bordered, 8dp-rounded input box.

@@ -846,6 +846,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         draftProfileJson = null
         _ui.value = _ui.value.copy(draftProfile = null)
         refreshProfiles()
+        // Make the just-saved profile the active one so the edit is reflected on
+        // Brew. Editing a built-in saves to a fresh custom copy (built-ins are
+        // read-only), so without this the original would still be loaded and the
+        // change would look like it "didn't save".
+        setActiveProfile(id)
         persistCustomProfiles()
     }
 
