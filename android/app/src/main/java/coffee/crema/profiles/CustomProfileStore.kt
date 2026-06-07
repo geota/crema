@@ -161,6 +161,7 @@ fun patchCremaProfileJson(
                 edit.mode?.let { put("mode", JsonPrimitive(it)) }
                 edit.ramp?.let { put("ramp", JsonPrimitive(it)) }
                 edit.temp?.let { put("temp", JsonPrimitive(it)) }
+                edit.tempSensor?.let { put("tempSensor", JsonPrimitive(it)) }
                 edit.volume?.let { put("volumeLimitMl", JsonPrimitive(it)) }
                 // Exit / limiter: write the complete object when enabled, else
                 // JsonNull to CLEAR a base condition (the patch merges over base,
@@ -222,6 +223,8 @@ data class SegmentEdit(
     val target: Float,
     val time: Float,
     val temp: Float?,
+    /** Which sensor [temp] targets — `"coffee"` | `"water"`. */
+    val tempSensor: String? = null,
     val volume: Float? = null,
     /** Early-exit condition, or null = disabled. */
     val exit: SegmentExit? = null,
