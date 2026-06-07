@@ -54,7 +54,6 @@ import coffee.crema.ui.components.CremaButtonVariant
 import coffee.crema.ui.components.CremaCard
 import coffee.crema.ui.components.CremaIconButton
 import coffee.crema.ui.components.CremaSegmentedButton
-import coffee.crema.ui.components.CremaStepper
 import coffee.crema.ui.components.CremaSwitch
 import coffee.crema.ui.components.CremaDotToggle
 import coffee.crema.ui.components.CremaOptionalHeader
@@ -423,136 +422,69 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                             if (expandedIdx == i) {
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Box(Modifier.weight(1f)) {
-                                    CremaSegmentedButton(
-                                        options = TYPE_OPTIONS,
-                                        value = seg.mode ?: "pressure",
-                                        onChange = { if (i in segs.indices) segs[i] = segs[i].copy(mode = it) },
-                                    )
+                                    CremaSegmentedButton(options = TYPE_OPTIONS, value = seg.mode ?: "pressure", onChange = { if (i in segs.indices) segs[i] = segs[i].copy(mode = it) })
                                 }
                                 Box(Modifier.weight(1f)) {
-                                    CremaSegmentedButton(
-                                        options = RAMP_OPTIONS,
-                                        value = seg.ramp ?: "smooth",
-                                        onChange = { if (i in segs.indices) segs[i] = segs[i].copy(ramp = it) },
-                                    )
+                                    CremaSegmentedButton(options = RAMP_OPTIONS, value = seg.ramp ?: "smooth", onChange = { if (i in segs.indices) segs[i] = segs[i].copy(ramp = it) })
                                 }
                             }
-                            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                Box(Modifier.weight(1f)) {
-                                    CremaStepper(
-                                        label = "Target",
-                                        value = seg.target.toDouble(),
-                                        unit = if (isFlow) "ml/s" else "bar",
-                                        onChange = { if (i in segs.indices) segs[i] = segs[i].copy(target = it.toFloat()) },
-                                        step = 0.1,
-                                        min = 0.0,
-                                        max = if (isFlow) 10.0 else 12.0,
-                                    )
+                            // Compact field grid (PWA cells): a small header over a filled
+                            // stepper bar — Target · Time · Temp · Volume four-up.
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    Eyebrow("Target")
+                                    EditStepper(seg.target.toDouble(), if (isFlow) "ml/s" else "bar", 0.1, 0.0, if (isFlow) 10.0 else 12.0, { if (i in segs.indices) segs[i] = segs[i].copy(target = it.toFloat()) })
                                 }
-                                Box(Modifier.weight(1f)) {
-                                    CremaStepper(
-                                        label = "Time",
-                                        value = seg.time.toDouble(),
-                                        unit = "s",
-                                        onChange = { if (i in segs.indices) segs[i] = segs[i].copy(time = it.toFloat()) },
-                                        step = 0.5,
-                                        min = 0.0,
-                                        max = 120.0,
-                                    )
+                                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    Eyebrow("Time")
+                                    EditStepper(seg.time.toDouble(), "s", 0.5, 0.0, 120.0, { if (i in segs.indices) segs[i] = segs[i].copy(time = it.toFloat()) })
                                 }
-                            }
-                            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                Box(Modifier.weight(1f)) {
-                                    // Temp — split selector for the sensor (Coffee = group
-                                    // head, Water = mix), the PWA "Temp Coffee | Water".
-                                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                        CremaSplitLabel(
-                                            prefix = "Temp",
-                                            options = listOf(SplitOption("coffee", "Coffee"), SplitOption("water", "Water")),
-                                            value = seg.tempSensor ?: "coffee",
-                                            onChange = { s -> if (i in segs.indices) segs[i] = segs[i].copy(tempSensor = s) },
-                                        )
-                                        CremaStepper(
-                                            value = (seg.temp ?: 93f).toDouble(),
-                                            unit = "°C",
-                                            onChange = { if (i in segs.indices) segs[i] = segs[i].copy(temp = it.toFloat()) },
-                                            step = 0.5,
-                                            min = 20.0,
-                                            max = 105.0,
-                                        )
-                                    }
+                                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    CremaSplitLabel(prefix = "Temp", options = listOf(SplitOption("coffee", "Coffee"), SplitOption("water", "Water")), value = seg.tempSensor ?: "coffee", onChange = { s -> if (i in segs.indices) segs[i] = segs[i].copy(tempSensor = s) })
+                                    EditStepper((seg.temp ?: 93f).toDouble(), "°C", 0.5, 20.0, 105.0, { if (i in segs.indices) segs[i] = segs[i].copy(temp = it.toFloat()) })
                                 }
-                                Box(Modifier.weight(1f)) {
+                                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                     val segVolOn = (seg.volume ?: 0f) > 0f
-                                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                        CremaOptionalHeader("Volume", segVolOn, { if (i in segs.indices) segs[i] = segs[i].copy(volume = if (segVolOn) null else 50f) })
-                                        Box(Modifier.alpha(if (segVolOn) 1f else 0.4f)) {
-                                            CremaStepper(
-                                                value = (seg.volume ?: 0f).toDouble(),
-                                                unit = "ml",
-                                                onChange = { if (i in segs.indices) segs[i] = segs[i].copy(volume = it.toFloat().takeIf { v -> v > 0f }) },
-                                                step = 5.0,
-                                                min = 0.0,
-                                                max = 500.0,
-                                                fmt = { "%.0f".format(it) },
-                                            )
-                                        }
-                                    }
+                                    CremaOptionalHeader("Volume", segVolOn, { if (i in segs.indices) segs[i] = segs[i].copy(volume = if (segVolOn) null else 50f) })
+                                    EditStepper((seg.volume ?: 0f).toDouble(), "ml", 5.0, 0.0, 500.0, { if (i in segs.indices) segs[i] = segs[i].copy(volume = it.toFloat().takeIf { v -> v > 0f }) }, modifier = Modifier.alpha(if (segVolOn) 1f else 0.4f), fmt = { "%.0f".format(it) })
                                 }
                             }
-                            // Early exit — a grouped optional (faint copper frame): a
-                            // split metric selector (Pressure | Flow) + the enable dot,
-                            // then a >/< compare toggle + threshold, dimmed when off.
+                            // Exit + Max — grouped optionals, two-up in faint copper frames.
+                            // The >/< compare sits INSIDE the threshold stepper (PWA .pe-seg-cmp).
                             val exitOn = seg.exit != null
                             val exView = seg.exit ?: SegmentExit("flow", "over", 4f)
-                            SegmentGroup {
-                                CremaSplitLabel(
-                                    prefix = "Exit",
-                                    dot = true,
-                                    dotOn = exitOn,
-                                    onDot = { if (i in segs.indices) segs[i] = segs[i].copy(exit = if (exitOn) null else SegmentExit("flow", "over", 4f)) },
-                                    options = listOf(SplitOption("pressure", "Pressure"), SplitOption("flow", "Flow")),
-                                    value = exView.metric ?: "flow",
-                                    onChange = { m -> if (exitOn && i in segs.indices) segs[i] = segs[i].copy(exit = segs[i].exit?.copy(metric = m)) },
-                                )
-                                Row(Modifier.alpha(if (exitOn) 1f else 0.4f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    EditCompareToggle(
-                                        compare = exView.compare ?: "over",
-                                        enabled = exitOn,
-                                        onToggle = { if (exitOn && i in segs.indices) segs[i] = segs[i].copy(exit = segs[i].exit?.copy(compare = if ((exView.compare ?: "over") == "over") "under" else "over")) },
-                                    )
-                                    Box(Modifier.weight(1f)) {
-                                        CremaStepper(
-                                            value = (exView.threshold ?: 4f).toDouble(),
-                                            unit = if (exView.metric == "pressure") "bar" else "ml/s",
-                                            onChange = { v -> if (exitOn && i in segs.indices) segs[i] = segs[i].copy(exit = segs[i].exit?.copy(threshold = v.toFloat())) },
-                                            step = 0.1,
-                                            min = 0.0,
-                                            max = 12.0,
-                                        )
-                                    }
-                                }
-                            }
-                            // Max limiter — grouped optional (faint frame): Max + Tolerance
-                            // gated together by the Max dot.
                             val limOn = seg.limiter != null
                             val lmView = seg.limiter ?: SegmentLimiter(6f, 0.6f)
-                            SegmentGroup {
-                                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                    Box(Modifier.weight(1f)) {
-                                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                SegmentGroup(Modifier.weight(1f)) {
+                                    CremaSplitLabel(
+                                        prefix = "Exit",
+                                        dot = true,
+                                        dotOn = exitOn,
+                                        onDot = { if (i in segs.indices) segs[i] = segs[i].copy(exit = if (exitOn) null else SegmentExit("flow", "over", 4f)) },
+                                        options = listOf(SplitOption("pressure", "Pressure"), SplitOption("flow", "Flow")),
+                                        value = exView.metric ?: "flow",
+                                        onChange = { m -> if (exitOn && i in segs.indices) segs[i] = segs[i].copy(exit = segs[i].exit?.copy(metric = m)) },
+                                    )
+                                    EditStepper(
+                                        (exView.threshold ?: 4f).toDouble(),
+                                        if (exView.metric == "pressure") "bar" else "ml/s",
+                                        0.1, 0.0, 12.0,
+                                        { v -> if (exitOn && i in segs.indices) segs[i] = segs[i].copy(exit = segs[i].exit?.copy(threshold = v.toFloat())) },
+                                        modifier = Modifier.alpha(if (exitOn) 1f else 0.4f),
+                                        compareSymbol = if ((exView.compare ?: "over") == "over") ">" else "<",
+                                        onCompare = { if (exitOn && i in segs.indices) segs[i] = segs[i].copy(exit = segs[i].exit?.copy(compare = if ((exView.compare ?: "over") == "over") "under" else "over")) },
+                                    )
+                                }
+                                SegmentGroup(Modifier.weight(1f)) {
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                             CremaOptionalHeader("Max", limOn, { if (i in segs.indices) segs[i] = segs[i].copy(limiter = if (limOn) null else SegmentLimiter(6f, 0.6f)) })
-                                            Box(Modifier.alpha(if (limOn) 1f else 0.4f)) {
-                                                CremaStepper(value = lmView.value.toDouble(), unit = if (seg.mode == "flow") "bar" else "ml/s", onChange = { v -> if (limOn && i in segs.indices) segs[i] = segs[i].copy(limiter = segs[i].limiter?.copy(value = v.toFloat())) }, step = 0.1, min = 0.0, max = 12.0)
-                                            }
+                                            EditStepper(lmView.value.toDouble(), if (seg.mode == "flow") "bar" else "ml/s", 0.1, 0.0, 12.0, { v -> if (limOn && i in segs.indices) segs[i] = segs[i].copy(limiter = segs[i].limiter?.copy(value = v.toFloat())) }, modifier = Modifier.alpha(if (limOn) 1f else 0.4f))
                                         }
-                                    }
-                                    Box(Modifier.weight(1f)) {
-                                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                            Eyebrow("Tolerance")
-                                            Box(Modifier.alpha(if (limOn) 1f else 0.4f)) {
-                                                CremaStepper(value = lmView.range.toDouble(), unit = "", onChange = { v -> if (limOn && i in segs.indices) segs[i] = segs[i].copy(limiter = segs[i].limiter?.copy(range = v.toFloat())) }, step = 0.1, min = 0.0, max = 6.0)
-                                            }
+                                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                            Eyebrow("Tol")
+                                            EditStepper(lmView.range.toDouble(), null, 0.1, 0.0, 6.0, { v -> if (limOn && i in segs.indices) segs[i] = segs[i].copy(limiter = segs[i].limiter?.copy(range = v.toFloat())) }, modifier = Modifier.alpha(if (limOn) 1f else 0.4f))
                                         }
                                     }
                                 }
@@ -610,34 +542,55 @@ private fun TagChips(tags: SnapshotStateList<String>) {
 // ── Grouped optional config — a faint copper-tinted frame around the controls
 // that enable/disable together (PWA .pe-seg-cell.is-grouped). ─────────────────
 @Composable
-private fun SegmentGroup(content: @Composable ColumnScope.() -> Unit) {
+private fun SegmentGroup(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
     Column(
-        Modifier.fillMaxWidth()
+        modifier.fillMaxWidth()
             .clip(RoundedCornerShape(8.dp))
             .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.05f))
             .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.22f), RoundedCornerShape(8.dp))
-            .padding(10.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+            .padding(8.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
         content = content,
     )
 }
 
-// ── Over/under comparator — a copper >/< toggle (PWA .pe-seg-cmp), sits left of
-// the exit threshold. ─────────────────────────────────────────────────────────
+// ── Compact stepper — a filled −/value/+ bar (PWA QuickStepper). Far tighter
+// than CremaStepper: 32dp buttons, 16sp value, and an optional inline >/< compare
+// symbol rendered INSIDE the value box (PWA .pe-seg-cmp), tappable to flip. ─────
 @Composable
-private fun EditCompareToggle(compare: String, enabled: Boolean, onToggle: () -> Unit) {
-    Box(
-        Modifier.size(40.dp)
+private fun EditStepper(
+    value: Double,
+    unit: String?,
+    step: Double,
+    min: Double,
+    max: Double,
+    onChange: (Double) -> Unit,
+    modifier: Modifier = Modifier,
+    fmt: (Double) -> String = { String.format("%.1f", it) },
+    compareSymbol: String? = null,
+    onCompare: (() -> Unit)? = null,
+) {
+    Row(
+        modifier
             .clip(RoundedCornerShape(8.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainerHighest)
-            .clickable(enabled = enabled, onClick = onToggle),
-        contentAlignment = Alignment.Center,
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .padding(4.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            if (compare == "over") ">" else "<",
-            style = TextStyle(fontFamily = JetBrainsMono, fontSize = 18.sp, fontWeight = FontWeight.Bold),
-            color = MaterialTheme.colorScheme.primary,
-        )
+        EditStepBtn("minus", { onChange((value - step).coerceIn(min, max)) })
+        Row(Modifier.weight(1f), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.Bottom) {
+            if (compareSymbol != null) {
+                Text(
+                    compareSymbol,
+                    style = TextStyle(fontFamily = JetBrainsMono, fontSize = 15.sp, fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = (onCompare?.let { Modifier.clip(RoundedCornerShape(4.dp)).clickable(onClick = it) } ?: Modifier).padding(end = 4.dp),
+                )
+            }
+            Text(fmt(value), style = TextStyle(fontFamily = JetBrainsMono, fontSize = 16.sp, fontFeatureSettings = "tnum"), color = MaterialTheme.colorScheme.onSurface, maxLines = 1)
+            if (unit != null) Text(unit, style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp), color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), modifier = Modifier.padding(start = 1.dp, bottom = 2.dp))
+        }
+        EditStepBtn("plus", { onChange((value + step).coerceIn(min, max)) })
     }
 }
 
