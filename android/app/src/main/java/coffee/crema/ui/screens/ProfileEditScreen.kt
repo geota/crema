@@ -2,11 +2,14 @@ package coffee.crema.ui.screens
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -67,18 +70,17 @@ import coffee.crema.ui.components.PhIcon
 import coffee.crema.ui.components.SegOption
 
 /*
- * Profile editor (the pushed `profile-edit` route) — M3, single full page.
+ * Profile editor (the pushed `profile-edit` route) — M3, single full-width page.
  *
  * Edits the profile opened via MainViewModel.startEditProfile (an existing custom)
- * or startNewProfile / duplicateProfile (a draft): metadata (name, roast, tags,
- * pin), recipe targets (dose / yield / brew-temp / max-volume), and every segment.
- * Save patches only these fields into the profile's complete JSON
- * (vm.saveProfile → patchCremaProfileJson), so every wire-relevant field
- * round-trips untouched to the DE1.
+ * or startNewProfile / duplicateProfile (a draft). Save patches only these fields
+ * into the profile's complete JSON (vm.saveProfile → patchCremaProfileJson), so
+ * every wire-relevant field round-trips untouched to the DE1.
  *
- * Layout: one vertical scroll — numbered settings sections (left) beside the curve
- * (right), then the segments full-width, each a single horizontal row (web
- * ProfileEditor). The curve is a hand-rolled Canvas drag editor (ProfileCurveChart).
+ * Layout: one vertical scroll of full-width numbered sections — 1 Details,
+ * 2 Targets, 3 Limits, 4 Pressure profile (the curve + the segments). Each segment
+ * is a single horizontal row (web .pe-seg). The curve is a hand-rolled Canvas drag
+ * editor (ProfileCurveChart).
  */
 private val TYPE_OPTIONS = listOf(SegOption("pressure", "Pressure"), SegOption("flow", "Flow"))
 private val RAMP_OPTIONS = listOf(SegOption("smooth", "Smooth"), SegOption("fast", "Fast"))
@@ -172,8 +174,7 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
-        // One page scroll: settings (left, numbered) beside the curve (right),
-        // then the segments full-width below.
+        // One scroll of full-width numbered sections.
         Column(
             Modifier
                 .weight(1f)
@@ -181,38 +182,40 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp)
                 .padding(top = 16.dp, bottom = 32.dp),
-            verticalArrangement = Arrangement.spacedBy(24.dp),
+            verticalArrangement = Arrangement.spacedBy(20.dp),
         ) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(28.dp), verticalAlignment = Alignment.Top) {
-                // LEFT — numbered settings sections.
-                Column(Modifier.width(440.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
-                    BasicTextField(
-                        value = name,
-                        onValueChange = { name = it },
-                        singleLine = true,
-                        textStyle = MaterialTheme.typography.headlineMedium.copy(color = MaterialTheme.colorScheme.onSurface),
-                        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                        modifier = Modifier.fillMaxWidth(),
-                        decorationBox = { inner ->
-                            Box {
-                                if (name.isEmpty()) Text("Profile name", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                inner()
-                            }
-                        },
-                    )
-                    NumberedSection("1", "Details", "Roast, tags & tasting notes") {
-                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Eyebrow("Notes")
-                            OutlinedTextField(
-                                value = notes,
-                                onValueChange = { notes = it },
-                                placeholder = { Text("Tasting notes, recipe intent…", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) },
-                                textStyle = MaterialTheme.typography.bodyMedium,
-                                modifier = Modifier.fillMaxWidth(),
-                                minLines = 2,
-                                maxLines = 4,
-                            )
-                        }
+            // Serif name H1.
+            BasicTextField(
+                value = name,
+                onValueChange = { name = it },
+                singleLine = true,
+                textStyle = MaterialTheme.typography.headlineMedium.copy(color = MaterialTheme.colorScheme.onSurface),
+                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                modifier = Modifier.fillMaxWidth(),
+                decorationBox = { inner ->
+                    Box {
+                        if (name.isEmpty()) Text("Profile name", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        inner()
+                    }
+                },
+            )
+
+            // 1 — Details. Notes on the left, roast / tags / pin on the right.
+            NumberedSection("1", "Details", "Roast, tags & tasting notes") {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Eyebrow("Notes")
+                        OutlinedTextField(
+                            value = notes,
+                            onValueChange = { notes = it },
+                            placeholder = { Text("Tasting notes, recipe intent…", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) },
+                            textStyle = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.fillMaxWidth(),
+                            minLines = 3,
+                            maxLines = 5,
+                        )
+                    }
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             Eyebrow("Roast")
                             RoastChips(roast) { roast = it }
@@ -231,80 +234,78 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                             CremaSwitch(checked = pinned, onCheckedChange = { pinned = it })
                         }
                     }
-                    NumberedSection("2", "Targets", "Dose, yield & temperature") {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            TargetTile("Dose", String.format("%.1f", dose), "g", { dose = (dose - 0.1).coerceAtLeast(1.0) }, { dose = (dose + 0.1).coerceAtMost(60.0) }, Modifier.weight(1f))
-                            TargetTile("Yield", String.format("%.1f", yieldG), "g", { yieldG = (yieldG - 0.5).coerceAtLeast(1.0) }, { yieldG = (yieldG + 0.5).coerceAtMost(200.0) }, Modifier.weight(1f))
-                        }
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            TargetTile("Brew temp", String.format("%.1f", brewTemp), "°C", { brewTemp = (brewTemp - 0.5).coerceAtLeast(20.0) }, { brewTemp = (brewTemp + 0.5).coerceAtMost(105.0) }, Modifier.weight(1f))
-                            RatioTile(if (dose > 0.0) yieldG / dose else 0.0, Modifier.weight(1f))
-                        }
-                    }
-                    NumberedSection("3", "Limits", "Optional whole-shot volume cap") {
-                        // Max volume — optional cap. Dot toggle (copper on / grey off)
-                        // + the stepper greys out when off (PWA PeNumber dot).
-                        Column(
-                            Modifier.fillMaxWidth().clip(MaterialTheme.shapes.medium).background(MaterialTheme.colorScheme.surfaceContainerHigh).padding(horizontal = 12.dp, vertical = 10.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp),
-                        ) {
-                            val volOn = maxVol > 0.0
-                            CremaOptionalHeader("Max volume", volOn, { maxVol = if (volOn) 0.0 else 50.0 })
-                            Row(
-                                Modifier.fillMaxWidth().alpha(if (volOn) 1f else 0.4f),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                            ) {
-                                EditStepBtn("minus", { maxVol = (maxVol - 10).coerceAtLeast(0.0) })
-                                Row(verticalAlignment = Alignment.Bottom) {
-                                    Text(String.format("%.0f", maxVol), style = CremaTheme.readout.readoutSm.copy(fontSize = 22.sp), color = MaterialTheme.colorScheme.onSurface, maxLines = 1)
-                                    Text("ml", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 2.dp, bottom = 3.dp))
-                                }
-                                EditStepBtn("plus", { maxVol = (maxVol + 10).coerceAtMost(1023.0) })
-                            }
-                        }
-                    }
-                }
-
-                // RIGHT — the curve.
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Row(verticalAlignment = Alignment.Bottom) {
-                        Column(Modifier.weight(1f)) {
-                            Text("Pressure profile", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onSurface)
-                            Text(
-                                "${segs.size} segments · ${segs.sumOf { it.time.toDouble() }.toInt()}s total · drag the dots or edit below",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        CremaButton(
-                            onClick = {
-                                segs.clear()
-                                segs.addAll(profile.segments.map { it.toEdit(profile.brewTemp) })
-                            },
-                            variant = CremaButtonVariant.Text,
-                            icon = "arrow-counter-clockwise",
-                            label = "Reset",
-                        )
-                    }
-                    Box(
-                        Modifier.fillMaxWidth().clip(MaterialTheme.shapes.large).background(MaterialTheme.colorScheme.surfaceContainerLowest).padding(12.dp),
-                    ) {
-                        ProfileCurveChart(
-                            targets = segs.map { it.target },
-                            times = segs.map { it.time },
-                            modes = segs.map { it.mode },
-                            modifier = Modifier.fillMaxWidth().height(260.dp),
-                            onSegmentEdit = { i, target, time ->
-                                if (i in segs.indices) segs[i] = segs[i].copy(target = target, time = time)
-                            },
-                        )
-                    }
                 }
             }
 
-            // SEGMENTS — full width, one row each.
-            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            // 2 — Targets. Dose · Yield · Brew temp · Ratio, four-up.
+            NumberedSection("2", "Targets", "Dose, yield & temperature") {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TargetTile("Dose", String.format("%.1f", dose), "g", { dose = (dose - 0.1).coerceAtLeast(1.0) }, { dose = (dose + 0.1).coerceAtMost(60.0) }, Modifier.weight(1f))
+                    TargetTile("Yield", String.format("%.1f", yieldG), "g", { yieldG = (yieldG - 0.5).coerceAtLeast(1.0) }, { yieldG = (yieldG + 0.5).coerceAtMost(200.0) }, Modifier.weight(1f))
+                    TargetTile("Brew temp", String.format("%.1f", brewTemp), "°C", { brewTemp = (brewTemp - 0.5).coerceAtLeast(20.0) }, { brewTemp = (brewTemp + 0.5).coerceAtMost(105.0) }, Modifier.weight(1f))
+                    RatioTile(if (dose > 0.0) yieldG / dose else 0.0, Modifier.weight(1f))
+                }
+            }
+
+            // 3 — Limits. The optional whole-shot volume cap (quarter width, aligned
+            // with the Targets tiles).
+            NumberedSection("3", "Limits", "Optional whole-shot volume cap") {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Column(
+                        Modifier.weight(1f).clip(MaterialTheme.shapes.medium).background(MaterialTheme.colorScheme.surfaceContainerHigh).padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        val volOn = maxVol > 0.0
+                        CremaOptionalHeader("Max volume", volOn, { maxVol = if (volOn) 0.0 else 50.0 })
+                        Row(
+                            Modifier.fillMaxWidth().alpha(if (volOn) 1f else 0.4f),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            EditStepBtn("minus", { maxVol = (maxVol - 10).coerceAtLeast(0.0) })
+                            Row(verticalAlignment = Alignment.Bottom) {
+                                Text(String.format("%.0f", maxVol), style = CremaTheme.readout.readoutSm.copy(fontSize = 22.sp), color = MaterialTheme.colorScheme.onSurface, maxLines = 1)
+                                Text("ml", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 2.dp, bottom = 3.dp))
+                            }
+                            EditStepBtn("plus", { maxVol = (maxVol + 10).coerceAtMost(1023.0) })
+                        }
+                    }
+                    Spacer(Modifier.weight(3f))
+                }
+            }
+
+            // 4 — Pressure profile: the curve, then the segments.
+            NumberedSection("4", "Pressure profile", "Drag the dots or edit the segments below") {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "${segs.size} segments · ${segs.sumOf { it.time.toDouble() }.toInt()}s total",
+                        Modifier.weight(1f),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    CremaButton(
+                        onClick = {
+                            segs.clear()
+                            segs.addAll(profile.segments.map { it.toEdit(profile.brewTemp) })
+                        },
+                        variant = CremaButtonVariant.Text,
+                        icon = "arrow-counter-clockwise",
+                        label = "Reset",
+                    )
+                }
+                Box(
+                    Modifier.fillMaxWidth().clip(MaterialTheme.shapes.large).background(MaterialTheme.colorScheme.surfaceContainerLowest).padding(12.dp),
+                ) {
+                    ProfileCurveChart(
+                        targets = segs.map { it.target },
+                        times = segs.map { it.time },
+                        modes = segs.map { it.mode },
+                        modifier = Modifier.fillMaxWidth().height(300.dp),
+                        onSegmentEdit = { i, target, time ->
+                            if (i in segs.indices) segs[i] = segs[i].copy(target = target, time = time)
+                        },
+                    )
+                }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Eyebrow("Segments", Modifier.weight(1f))
                     CremaButton(
@@ -345,8 +346,8 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
 }
 
 // ── A full segment as ONE horizontal row (web .pe-seg): number · name+mode ·
-// Target · Time · Temp · Volume · Exit · Max · Tolerance · delete. The steppers
-// bottom-align (Alignment.Bottom) so every field's bar sits on the same line. ──
+// Target · Time · Temp · Volume · Exit · Max+Tolerance · delete. Cells bottom-pad
+// 6dp so every stepper bottom-aligns with the grouped Max+Tolerance frame. ─────
 @Composable
 private fun SegmentRowFull(
     index: Int,
@@ -367,13 +368,13 @@ private fun SegmentRowFull(
             verticalAlignment = Alignment.Bottom,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            // Number.
+            // Number — vertically centred on the row.
             Box(
                 Modifier.align(Alignment.CenterVertically).size(22.dp).clip(CircleShape).background(MaterialTheme.colorScheme.secondaryContainer),
                 contentAlignment = Alignment.Center,
             ) { Text("${index + 1}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSecondaryContainer) }
 
-            // Name + stacked Type / Ramp mini-pills.
+            // Name + stacked Type / Ramp mini-pills (the tallest cell — sets row height).
             Column(Modifier.width(150.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                 BasicTextField(
                     value = seg.name,
@@ -393,28 +394,23 @@ private fun SegmentRowFull(
                 MiniSegmented(RAMP_OPTIONS, seg.ramp ?: "smooth") { onEdit(seg.copy(ramp = it)) }
             }
 
-            // Target.
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            SegCell(1f) {
                 Eyebrow("Target")
                 EditStepper(seg.target.toDouble(), if (isFlow) "ml/s" else "bar", 0.1, 0.0, if (isFlow) 10.0 else 12.0, { onEdit(seg.copy(target = it.toFloat())) })
             }
-            // Time.
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            SegCell(1f) {
                 Eyebrow("Time")
                 EditStepper(seg.time.toDouble(), "s", 0.5, 0.0, 120.0, { onEdit(seg.copy(time = it.toFloat())) })
             }
-            // Temp + sensor split.
-            Column(Modifier.weight(1.15f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            SegCell(1.15f) {
                 CremaSplitLabel(prefix = "Temp", options = listOf(SplitOption("coffee", "Coffee"), SplitOption("water", "Water")), value = seg.tempSensor ?: "coffee", onChange = { onEdit(seg.copy(tempSensor = it)) })
                 EditStepper((seg.temp ?: 93f).toDouble(), "°C", 0.5, 20.0, 105.0, { onEdit(seg.copy(temp = it.toFloat())) })
             }
-            // Volume (optional).
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            SegCell(1f) {
                 CremaOptionalHeader("Volume", segVolOn, { onEdit(seg.copy(volume = if (segVolOn) null else 50f)) })
                 EditStepper((seg.volume ?: 0f).toDouble(), "ml", 5.0, 0.0, 500.0, { onEdit(seg.copy(volume = it.toFloat().takeIf { v -> v > 0f })) }, modifier = Modifier.alpha(if (segVolOn) 1f else 0.4f), fmt = { "%.0f".format(it) })
             }
-            // Exit (optional) — split metric + inline >/< compare in the stepper.
-            Column(Modifier.weight(1.5f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            SegCell(1.5f) {
                 CremaSplitLabel(
                     prefix = "Exit",
                     dot = true,
@@ -434,14 +430,16 @@ private fun SegmentRowFull(
                     onCompare = { if (exitOn) onEdit(seg.copy(exit = seg.exit?.copy(compare = if ((exView.compare ?: "over") == "over") "under" else "over"))) },
                 )
             }
-            // Max limiter (optional) + Tolerance — gated together by the Max dot.
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                CremaOptionalHeader("Max", limOn, { onEdit(seg.copy(limiter = if (limOn) null else SegmentLimiter(6f, 0.6f))) })
-                EditStepper(lmView.value.toDouble(), if (seg.mode == "flow") "bar" else "ml/s", 0.1, 0.0, 12.0, { v -> if (limOn) onEdit(seg.copy(limiter = seg.limiter?.copy(value = v.toFloat()))) }, modifier = Modifier.alpha(if (limOn) 1f else 0.4f))
-            }
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Eyebrow("Tolerance")
-                EditStepper(lmView.range.toDouble(), null, 0.1, 0.0, 6.0, { v -> if (limOn) onEdit(seg.copy(limiter = seg.limiter?.copy(range = v.toFloat()))) }, modifier = Modifier.alpha(if (limOn) 1f else 0.4f))
+            // Max + Tolerance — a paired, gated group in a faint copper card.
+            SegCellGroup(2f) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    CremaOptionalHeader("Max", limOn, { onEdit(seg.copy(limiter = if (limOn) null else SegmentLimiter(6f, 0.6f))) })
+                    EditStepper(lmView.value.toDouble(), if (seg.mode == "flow") "bar" else "ml/s", 0.1, 0.0, 12.0, { v -> if (limOn) onEdit(seg.copy(limiter = seg.limiter?.copy(value = v.toFloat()))) }, modifier = Modifier.alpha(if (limOn) 1f else 0.4f))
+                }
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Eyebrow("Tolerance")
+                    EditStepper(lmView.range.toDouble(), null, 0.1, 0.0, 6.0, { v -> if (limOn) onEdit(seg.copy(limiter = seg.limiter?.copy(range = v.toFloat()))) }, modifier = Modifier.alpha(if (limOn) 1f else 0.4f))
+                }
             }
 
             // Delete.
@@ -452,6 +450,32 @@ private fun SegmentRowFull(
             }
         }
     }
+}
+
+// A plain field cell: header + stepper, bottom-aligned within the row (6dp bottom
+// pad matches the grouped frame's inset so all steppers sit on one line).
+@Composable
+private fun RowScope.SegCell(weight: Float, content: @Composable ColumnScope.() -> Unit) {
+    Column(
+        Modifier.weight(weight).padding(bottom = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+        content = content,
+    )
+}
+
+// A paired group of cells in a faint copper-tinted card (PWA .pe-seg-cell.is-grouped).
+@Composable
+private fun RowScope.SegCellGroup(weight: Float, content: @Composable RowScope.() -> Unit) {
+    Row(
+        Modifier.weight(weight)
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.05f))
+            .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.25f), RoundedCornerShape(8.dp))
+            .padding(6.dp),
+        verticalAlignment = Alignment.Bottom,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        content = content,
+    )
 }
 
 /** Map a stored ProfileSegment to the editor's SegmentEdit (fills sensible defaults). */
@@ -569,8 +593,8 @@ private fun TagChips(tags: SnapshotStateList<String>) {
     )
 }
 
-// ── Compact stepper — a filled −/value/+ bar (PWA QuickStepper). 32dp buttons,
-// 16sp value, and an optional inline >/< compare symbol rendered INSIDE the value
+// ── Compact stepper — a filled −/value/+ bar (PWA QuickStepper). 28dp buttons,
+// 15sp value, and an optional inline >/< compare symbol rendered INSIDE the value
 // box (PWA .pe-seg-cmp), tappable to flip. ────────────────────────────────────
 @Composable
 private fun EditStepper(
