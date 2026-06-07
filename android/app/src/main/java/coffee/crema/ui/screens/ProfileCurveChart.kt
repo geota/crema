@@ -13,6 +13,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
@@ -190,37 +191,52 @@ fun ProfileCurveChart(
             drawPath(tempPath, tel.temp.copy(alpha = 0.8f), style = Stroke(width = 1.6.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
         }
 
-        // Pressure/flow curve — each segment ramps from the previous value to its
-        // target over its duration: `smooth` = the web's cubic ease (3u²−2u³ via a
-        // flat-tangent Bézier), `fast` = a near-vertical step. Coloured by mode.
+        // Pressure / flow curve — de1app convention: each line shows ONLY its own
+        // mode's frames (pressure line = pressure-frame targets, flow line =
+        // flow-frame targets). At a mode switch the inactive line drops out and the
+        // other appears rising from 0 — a hand-off, not one line carried across.
+        // Within a run each segment ramps from the previous value: `smooth` = the
+        // web's cubic ease (3u²−2u³ flat-tangent Bézier), `fast` = a vertical step.
         if (targets.isNotEmpty()) {
-            var t0 = 0f
-            var prev = 0f
-            targets.forEachIndexed { i, target ->
-                val dt = times.getOrElse(i) { 0f }
-                val color = if (modes.getOrNull(i) == "flow") tel.flow else tel.pressure
-                val path = Path()
-                path.moveTo(xPx(t0), yPx(prev))
-                if (ramps.getOrNull(i) == "fast") {
-                    path.lineTo(xPx(t0 + 0.001f), yPx(target))
-                    path.lineTo(xPx(t0 + dt), yPx(target))
-                } else {
-                    val c0x = t0 + dt * 0.4f
-                    val c1x = t0 + dt * 0.6f
-                    for (s in 1..SMOOTH_STEPS) {
-                        val u = s.toFloat() / SMOOTH_STEPS
-                        val m = 1f - u
-                        val b0 = m * m * m
-                        val b1 = 3 * m * m * u
-                        val b2 = 3 * m * u * u
-                        val b3 = u * u * u
-                        path.lineTo(xPx(b0 * t0 + b1 * c0x + b2 * c1x + b3 * (t0 + dt)), yPx((b0 + b1) * prev + (b2 + b3) * target))
+            fun drawModeLine(wantFlow: Boolean, color: Color) {
+                var t0 = 0f
+                var prev = 0f
+                var path: Path? = null
+                targets.forEachIndexed { i, target ->
+                    val dt = times.getOrElse(i) { 0f }
+                    if ((modes.getOrNull(i) == "flow") == wantFlow) {
+                        if (path == null) {
+                            path = Path().apply { moveTo(xPx(t0), yPx(0f)) }
+                            prev = 0f
+                        }
+                        val p = path!!
+                        if (ramps.getOrNull(i) == "fast") {
+                            p.lineTo(xPx(t0 + 0.001f), yPx(target))
+                            p.lineTo(xPx(t0 + dt), yPx(target))
+                        } else {
+                            val c0x = t0 + dt * 0.4f
+                            val c1x = t0 + dt * 0.6f
+                            for (s in 1..SMOOTH_STEPS) {
+                                val u = s.toFloat() / SMOOTH_STEPS
+                                val m = 1f - u
+                                val b0 = m * m * m
+                                val b1 = 3 * m * m * u
+                                val b2 = 3 * m * u * u
+                                val b3 = u * u * u
+                                p.lineTo(xPx(b0 * t0 + b1 * c0x + b2 * c1x + b3 * (t0 + dt)), yPx((b0 + b1) * prev + (b2 + b3) * target))
+                            }
+                        }
+                        prev = target
+                    } else {
+                        path?.let { drawPath(it, color, style = Stroke(width = 2.6.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)) }
+                        path = null
                     }
+                    t0 += dt
                 }
-                drawPath(path, color, style = Stroke(width = 2.6.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
-                t0 += dt
-                prev = target
+                path?.let { drawPath(it, color, style = Stroke(width = 2.6.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)) }
             }
+            drawModeLine(wantFlow = false, color = tel.pressure)
+            drawModeLine(wantFlow = true, color = tel.flow)
             // Draggable handles at each segment end.
             var cum = 0f
             targets.forEachIndexed { i, target ->
