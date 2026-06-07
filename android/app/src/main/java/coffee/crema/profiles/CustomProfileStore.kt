@@ -140,6 +140,8 @@ fun patchCremaProfileJson(
     yieldOut: Float,
     brewTemp: Float,
     maxTotalVolumeMl: Int,
+    preinfuseStepCount: Int,
+    tankTemperatureC: Float,
     segments: List<SegmentEdit>,
     json: Json,
 ): String {
@@ -205,6 +207,8 @@ fun patchCremaProfileJson(
         put("yieldOut", JsonPrimitive(yieldOut))
         put("brewTemp", JsonPrimitive(brewTemp))
         put("maxTotalVolumeMl", JsonPrimitive(maxTotalVolumeMl))
+        put("preinfuseStepCount", JsonPrimitive(preinfuseStepCount))
+        put("tankTemperatureC", JsonPrimitive(tankTemperatureC))
         put("segments", patchedSegments)
     }
     return json.encodeToString(JsonObject.serializer(), JsonObject(patched))

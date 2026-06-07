@@ -41,6 +41,8 @@ data class CremaProfile(
     val preinfuseStepCount: Int = 0,
     /** Whole-shot dispensed-volume limit, ml, 0 = no limit. */
     val maxTotalVolumeMl: Int = 0,
+    /** Tank water temperature target, °C, 0 = unset (wire `tankTemperatureC`, an f32). */
+    val tankTemperatureC: Float = 0f,
     /** Profile author — free text. */
     val author: String = "",
     /** Free-text tasting / recipe notes (wire `notes`). */

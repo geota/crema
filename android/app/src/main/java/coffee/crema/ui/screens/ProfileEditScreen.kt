@@ -72,15 +72,12 @@ import coffee.crema.ui.components.SegOption
 /*
  * Profile editor (the pushed `profile-edit` route) — M3, single full-width page.
  *
- * Edits the profile opened via MainViewModel.startEditProfile (an existing custom)
- * or startNewProfile / duplicateProfile (a draft). Save patches only these fields
- * into the profile's complete JSON (vm.saveProfile → patchCremaProfileJson), so
- * every wire-relevant field round-trips untouched to the DE1.
- *
- * Layout: one vertical scroll of full-width numbered sections — 1 Details,
- * 2 Targets, 3 Limits, 4 Pressure profile (the curve + the segments). Each segment
- * is a single horizontal row (web .pe-seg). The curve is a hand-rolled Canvas drag
- * editor (ProfileCurveChart).
+ * One vertical scroll of full-width numbered sections — 1 Details (name, notes,
+ * pin), 2 Roast & tags, 3 Targets, 4 Limits (max volume / preinfuse steps / tank
+ * temp), 5 Pressure profile (curve + segments). Save patches only these fields
+ * into the profile's complete JSON (vm.saveProfile → patchCremaProfileJson) so
+ * every wire-relevant field round-trips untouched to the DE1. Each segment is a
+ * single horizontal row; the curve is a hand-rolled Canvas drag editor.
  */
 private val TYPE_OPTIONS = listOf(SegOption("pressure", "Pressure"), SegOption("flow", "Flow"))
 private val RAMP_OPTIONS = listOf(SegOption("smooth", "Smooth"), SegOption("fast", "Fast"))
@@ -126,6 +123,8 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
     var yieldG by remember(profile.id) { mutableStateOf(profile.yieldOut.toDouble()) }
     var brewTemp by remember(profile.id) { mutableStateOf(profile.brewTemp.toDouble()) }
     var maxVol by remember(profile.id) { mutableStateOf(profile.maxTotalVolumeMl.toDouble()) }
+    var preinfuse by remember(profile.id) { mutableStateOf(profile.preinfuseStepCount.toDouble()) }
+    var tankTemp by remember(profile.id) { mutableStateOf(profile.tankTemperatureC.toDouble()) }
     // Per-segment editable state (positional with the profile's segments).
     val segs = remember(profile.id) {
         mutableStateListOf<SegmentEdit>().apply {
@@ -164,6 +163,8 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                         yieldOut = yieldG.toFloat(),
                         brewTemp = brewTemp.toFloat(),
                         maxTotalVolumeMl = maxVol.toInt(),
+                        preinfuseStepCount = preinfuse.toInt(),
+                        tankTemperatureC = tankTemp.toFloat(),
                         segments = segs.toList(),
                     )
                     onBack()
@@ -184,45 +185,36 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                 .padding(top = 16.dp, bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(20.dp),
         ) {
-            // Serif name H1.
-            BasicTextField(
-                value = name,
-                onValueChange = { name = it },
-                singleLine = true,
-                textStyle = MaterialTheme.typography.headlineMedium.copy(color = MaterialTheme.colorScheme.onSurface),
-                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                modifier = Modifier.fillMaxWidth(),
-                decorationBox = { inner ->
-                    Box {
-                        if (name.isEmpty()) Text("Profile name", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        inner()
-                    }
-                },
-            )
-
-            // 1 — Details. Notes on the left, roast / tags / pin on the right.
-            NumberedSection("1", "Details", "Roast, tags & tasting notes") {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(24.dp)) {
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Eyebrow("Notes")
-                        OutlinedTextField(
-                            value = notes,
-                            onValueChange = { notes = it },
-                            placeholder = { Text("Tasting notes, recipe intent…", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) },
-                            textStyle = MaterialTheme.typography.bodyMedium,
+            // 1 — Details: the name (title), notes, and pin.
+            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.Top) {
+                    Text("1", style = MaterialTheme.typography.bodyMedium.copy(fontFamily = JetBrainsMono), color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f), modifier = Modifier.padding(top = 8.dp))
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                        BasicTextField(
+                            value = name,
+                            onValueChange = { name = it },
+                            singleLine = true,
+                            textStyle = MaterialTheme.typography.headlineMedium.copy(color = MaterialTheme.colorScheme.onSurface),
+                            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                             modifier = Modifier.fillMaxWidth(),
-                            minLines = 3,
-                            maxLines = 5,
+                            decorationBox = { inner ->
+                                Box {
+                                    if (name.isEmpty()) Text("Profile name", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    inner()
+                                }
+                            },
                         )
-                    }
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Eyebrow("Roast")
-                            RoastChips(roast) { roast = it }
-                        }
-                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Eyebrow("Tags")
-                            TagChips(tags)
+                            Eyebrow("Notes")
+                            OutlinedTextField(
+                                value = notes,
+                                onValueChange = { notes = it },
+                                placeholder = { Text("Tasting notes, recipe intent…", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) },
+                                textStyle = MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.fillMaxWidth(),
+                                minLines = 3,
+                                maxLines = 5,
+                            )
                         }
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
@@ -237,45 +229,39 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                 }
             }
 
-            // 2 — Targets. Dose · Yield · Brew temp · Ratio, four-up.
-            NumberedSection("2", "Targets", "Dose, yield & temperature") {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TargetTile("Dose", String.format("%.1f", dose), "g", { dose = (dose - 0.1).coerceAtLeast(1.0) }, { dose = (dose + 0.1).coerceAtMost(60.0) }, Modifier.weight(1f))
-                    TargetTile("Yield", String.format("%.1f", yieldG), "g", { yieldG = (yieldG - 0.5).coerceAtLeast(1.0) }, { yieldG = (yieldG + 0.5).coerceAtMost(200.0) }, Modifier.weight(1f))
-                    TargetTile("Brew temp", String.format("%.1f", brewTemp), "°C", { brewTemp = (brewTemp - 0.5).coerceAtLeast(20.0) }, { brewTemp = (brewTemp + 0.5).coerceAtMost(105.0) }, Modifier.weight(1f))
-                    RatioTile(if (dose > 0.0) yieldG / dose else 0.0, Modifier.weight(1f))
+            // 2 — Roast & tags.
+            NumberedSection("2", "Roast & tags", "How this recipe is categorised") {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Eyebrow("Roast")
+                    RoastChips(roast) { roast = it }
+                }
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Eyebrow("Tags")
+                    TagChips(tags)
                 }
             }
 
-            // 3 — Limits. The optional whole-shot volume cap (quarter width, aligned
-            // with the Targets tiles).
-            NumberedSection("3", "Limits", "Optional whole-shot volume cap") {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Column(
-                        Modifier.weight(1f).clip(MaterialTheme.shapes.medium).background(MaterialTheme.colorScheme.surfaceContainerHigh).padding(horizontal = 12.dp, vertical = 10.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        val volOn = maxVol > 0.0
-                        CremaOptionalHeader("Max volume", volOn, { maxVol = if (volOn) 0.0 else 50.0 })
-                        Row(
-                            Modifier.fillMaxWidth().alpha(if (volOn) 1f else 0.4f),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                        ) {
-                            EditStepBtn("minus", { maxVol = (maxVol - 10).coerceAtLeast(0.0) })
-                            Row(verticalAlignment = Alignment.Bottom) {
-                                Text(String.format("%.0f", maxVol), style = CremaTheme.readout.readoutSm.copy(fontSize = 22.sp), color = MaterialTheme.colorScheme.onSurface, maxLines = 1)
-                                Text("ml", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 2.dp, bottom = 3.dp))
-                            }
-                            EditStepBtn("plus", { maxVol = (maxVol + 10).coerceAtMost(1023.0) })
-                        }
-                    }
-                    Spacer(Modifier.weight(3f))
+            // 3 — Targets. Eyebrow above each compact stepper box.
+            NumberedSection("3", "Targets", "Dose, yield & temperature") {
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    LabeledStepper("Dose", dose, "g", Modifier.width(160.dp), 0.1, 1.0, 60.0, { dose = it })
+                    LabeledStepper("Yield", yieldG, "g", Modifier.width(160.dp), 0.5, 1.0, 200.0, { yieldG = it })
+                    LabeledStepper("Brew temp", brewTemp, "°C", Modifier.width(160.dp), 0.5, 20.0, 105.0, { brewTemp = it })
+                    LabeledRatio(if (dose > 0.0) yieldG / dose else 0.0, Modifier.width(160.dp))
                 }
             }
 
-            // 4 — Pressure profile: the curve, then the segments.
-            NumberedSection("4", "Pressure profile", "Drag the dots or edit the segments below") {
+            // 4 — Limits. Three optional caps, each a dot toggle above a stepper box.
+            NumberedSection("4", "Limits", "Optional caps — tap the dot to enable") {
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    LimitTile("Max volume", maxVol, "ml", Modifier.width(190.dp), maxVol > 0.0, { maxVol = if (maxVol > 0.0) 0.0 else 50.0 }, 10.0, 0.0, 1023.0, { maxVol = it })
+                    LimitTile("Preinfuse steps", preinfuse, null, Modifier.width(190.dp), preinfuse > 0.0, { preinfuse = if (preinfuse > 0.0) 0.0 else 1.0 }, 1.0, 0.0, 10.0, { preinfuse = it })
+                    LimitTile("Tank temp", tankTemp, "°C", Modifier.width(190.dp), tankTemp > 0.0, { tankTemp = if (tankTemp > 0.0) 0.0 else 92.0 }, 1.0, 0.0, 95.0, { tankTemp = it })
+                }
+            }
+
+            // 5 — Pressure profile: the curve, then the segments.
+            NumberedSection("5", "Pressure profile", "Drag the dots or edit the segments below") {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         "${segs.size} segments · ${segs.sumOf { it.time.toDouble() }.toInt()}s total",
@@ -345,9 +331,9 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
     }
 }
 
-// ── A full segment as ONE horizontal row (web .pe-seg): number · name+mode ·
-// Target · Time · Temp · Volume · Exit · Max+Tolerance · delete. Cells bottom-pad
-// 6dp so every stepper bottom-aligns with the grouped Max+Tolerance frame. ─────
+// ── A full segment as ONE horizontal row (web .pe-seg). The name column carries
+// the number (top-left), name, and labelled Type / Ramp pills; the field cells
+// bottom-pad 6dp so every stepper bottom-aligns with the Max+Tolerance card. ───
 @Composable
 private fun SegmentRowFull(
     index: Int,
@@ -368,30 +354,36 @@ private fun SegmentRowFull(
             verticalAlignment = Alignment.Bottom,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            // Number — vertically centred on the row.
-            Box(
-                Modifier.align(Alignment.CenterVertically).size(22.dp).clip(CircleShape).background(MaterialTheme.colorScheme.secondaryContainer),
-                contentAlignment = Alignment.Center,
-            ) { Text("${index + 1}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSecondaryContainer) }
-
-            // Name + stacked Type / Ramp mini-pills (the tallest cell — sets row height).
-            Column(Modifier.width(150.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                BasicTextField(
-                    value = seg.name,
-                    onValueChange = { onEdit(seg.copy(name = it)) },
-                    singleLine = true,
-                    textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
-                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                    modifier = Modifier.fillMaxWidth(),
-                    decorationBox = { inner ->
-                        Box {
-                            if (seg.name.isEmpty()) Text("Segment ${index + 1}", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
-                            inner()
-                        }
-                    },
-                )
-                MiniSegmented(TYPE_OPTIONS, seg.mode ?: "pressure") { onEdit(seg.copy(mode = it)) }
-                MiniSegmented(RAMP_OPTIONS, seg.ramp ?: "smooth") { onEdit(seg.copy(ramp = it)) }
+            // Name column: number + name (top), then labelled Type / Ramp pills.
+            Column(Modifier.width(178.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Box(
+                        Modifier.size(20.dp).clip(CircleShape).background(MaterialTheme.colorScheme.secondaryContainer),
+                        contentAlignment = Alignment.Center,
+                    ) { Text("${index + 1}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSecondaryContainer) }
+                    BasicTextField(
+                        value = seg.name,
+                        onValueChange = { onEdit(seg.copy(name = it)) },
+                        singleLine = true,
+                        textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
+                        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                        modifier = Modifier.weight(1f),
+                        decorationBox = { inner ->
+                            Box {
+                                if (seg.name.isEmpty()) Text("Segment ${index + 1}", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                                inner()
+                            }
+                        },
+                    )
+                }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Eyebrow("Type", Modifier.width(34.dp))
+                    Box(Modifier.weight(1f)) { MiniSegmented(TYPE_OPTIONS, seg.mode ?: "pressure") { onEdit(seg.copy(mode = it)) } }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Eyebrow("Ramp", Modifier.width(34.dp))
+                    Box(Modifier.weight(1f)) { MiniSegmented(RAMP_OPTIONS, seg.ramp ?: "smooth") { onEdit(seg.copy(ramp = it)) } }
+                }
             }
 
             SegCell(1f) {
@@ -442,11 +434,12 @@ private fun SegmentRowFull(
                 }
             }
 
-            // Delete.
+            // Delete — subtle, faded (PWA .pe-seg-del).
             if (deletable) {
-                Box(Modifier.align(Alignment.CenterVertically)) {
-                    CremaIconButton(icon = "trash", onClick = onDelete)
-                }
+                Box(
+                    Modifier.align(Alignment.CenterVertically).size(26.dp).clip(CircleShape).clickable(onClick = onDelete),
+                    contentAlignment = Alignment.Center,
+                ) { PhIcon("trash", sizeDp = 13, tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)) }
             }
         }
     }
@@ -506,6 +499,56 @@ private fun NumberedSection(n: String, title: String, sub: String, content: @Com
             }
         }
         content()
+    }
+}
+
+// ── Targets/Limits tiles — the eyebrow (or dot header) sits ABOVE a compact
+// stepper box. ────────────────────────────────────────────────────────────────
+@Composable
+private fun LabeledStepper(label: String, value: Double, unit: String?, modifier: Modifier, step: Double, min: Double, max: Double, onChange: (Double) -> Unit, fmt: (Double) -> String = { String.format("%.1f", it) }) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Eyebrow(label)
+        StepperBox(fmt(value), unit, { onChange((value - step).coerceIn(min, max)) }, { onChange((value + step).coerceIn(min, max)) })
+    }
+}
+
+@Composable
+private fun LimitTile(label: String, value: Double, unit: String?, modifier: Modifier, on: Boolean, onToggle: () -> Unit, step: Double, min: Double, max: Double, onChange: (Double) -> Unit) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        CremaOptionalHeader(label, on, onToggle)
+        Box(Modifier.alpha(if (on) 1f else 0.4f)) {
+            StepperBox(String.format("%.0f", value), unit, { onChange((value - step).coerceIn(min, max)) }, { onChange((value + step).coerceIn(min, max)) })
+        }
+    }
+}
+
+@Composable
+private fun LabeledRatio(ratio: Double, modifier: Modifier) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Eyebrow("Ratio", color = MaterialTheme.colorScheme.primary)
+        Box(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)).padding(horizontal = 12.dp, vertical = 9.dp),
+            contentAlignment = Alignment.CenterStart,
+        ) {
+            Text("1:%.2f".format(ratio), style = CremaTheme.readout.readoutSm.copy(fontSize = 18.sp), color = MaterialTheme.colorScheme.primary, maxLines = 1)
+        }
+    }
+}
+
+// A compact filled −/value/+ stepper box (no internal label).
+@Composable
+private fun StepperBox(value: String, unit: String?, onMinus: () -> Unit, onPlus: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh).padding(horizontal = 6.dp, vertical = 5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        EditStepBtn("minus", onMinus, size = 30)
+        Row(verticalAlignment = Alignment.Bottom) {
+            Text(value, style = CremaTheme.readout.readoutSm.copy(fontSize = 18.sp), color = MaterialTheme.colorScheme.onSurface, maxLines = 1)
+            if (unit != null) Text(unit, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 2.dp, bottom = 2.dp))
+        }
+        EditStepBtn("plus", onPlus, size = 30)
     }
 }
 
@@ -630,37 +673,6 @@ private fun EditStepper(
             if (unit != null) Text(unit, style = MaterialTheme.typography.bodySmall.copy(fontSize = 9.sp), color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), maxLines = 1, softWrap = false, modifier = Modifier.padding(start = 1.dp, bottom = 2.dp))
         }
         EditStepBtn("plus", { onChange((value + step).coerceIn(min, max)) }, size = 28)
-    }
-}
-
-// ── Target tile — compact metric tile with 32dp steppers (editor Targets) ────
-@Composable
-private fun TargetTile(label: String, value: String, unit: String?, onMinus: () -> Unit, onPlus: () -> Unit, modifier: Modifier = Modifier) {
-    Column(
-        modifier.clip(MaterialTheme.shapes.medium).background(MaterialTheme.colorScheme.surfaceContainerHigh).padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        Eyebrow(label)
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-            EditStepBtn("minus", onMinus)
-            Row(verticalAlignment = Alignment.Bottom) {
-                Text(value, style = CremaTheme.readout.readoutSm.copy(fontSize = 22.sp), color = MaterialTheme.colorScheme.onSurface, maxLines = 1)
-                if (unit != null) Text(unit, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 2.dp, bottom = 3.dp))
-            }
-            EditStepBtn("plus", onPlus)
-        }
-    }
-}
-
-// Copper Ratio tile — computed, no stepper.
-@Composable
-private fun RatioTile(ratio: Double, modifier: Modifier = Modifier) {
-    Column(
-        modifier.clip(MaterialTheme.shapes.medium).background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)).padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        Eyebrow("Ratio", color = MaterialTheme.colorScheme.primary)
-        Text("1:%.2f".format(ratio), style = CremaTheme.readout.readoutSm.copy(fontSize = 22.sp), color = MaterialTheme.colorScheme.primary, maxLines = 1)
     }
 }
 
