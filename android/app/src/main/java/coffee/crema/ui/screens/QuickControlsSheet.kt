@@ -1,6 +1,7 @@
 package coffee.crema.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -8,6 +9,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -23,6 +25,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import coffee.crema.ui.components.CremaValueUnit
 import coffee.crema.ui.theme.CremaTheme
+import coffee.crema.ui.theme.JetBrainsMono
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -47,25 +50,26 @@ import coffee.crema.ui.BrewParams
 import coffee.crema.ui.components.CremaButton
 import coffee.crema.ui.components.CremaButtonVariant
 import coffee.crema.ui.components.CremaIconButton
+import coffee.crema.ui.components.CremaSplitLabel
 import coffee.crema.ui.components.Eyebrow
 import coffee.crema.ui.components.PhIcon
+import coffee.crema.ui.components.SplitOption
 
 /*
  * Quick Controls — the Brew header's bottom sheet, modeled on the web shell's
- * QuickSheet. Three parts (top→bottom):
- *  • Favorites strip — pinned profiles + favourite beans, quick-pick the active
- *    one (vm.setActiveProfile / setActiveBean — the web FavoritesStrip).
- *  • Brew params — dose / yield / brew-temp as a TRANSIENT override (web's
- *    BrewParamState): edits don't touch the profile; they're baked into the next
- *    shot's uploaded profile (MainViewModel.startShot) and Reset snaps back.
- *    Save preset clones a NEW custom profile with these values (web savePreset).
- *  • Shot-behaviour + chart-channel toggles (Settings-backed).
+ * full-width docked QuickSheet (variant G — one row of six steppers):
+ *  • Favorites strip — pinned profiles + favourite beans.
+ *  • Six steppers, full width. Each has a header that's either a plain label or a
+ *    CremaSplitLabel whose selectable options swap which value the single stepper +
+ *    chip row edit (Dose|Grind, Brew temp|pre-infuse, Steam time|flow|temp, Hot
+ *    water temp|volume, Flush time|temp). A 5-chip quick-select row sits under each.
+ *  • Full-width toggle buttons (shot behaviour) + the chart-channel toggles.
  *
- * Deferred (OPTIONAL, not core-blocked): the live mid-shot SAW dial + the
- * steam/water/flush param cards (Android has no per-mode param store; the mode
- * chips run fixed params, like an espresso-first client). The yield override is
- * already covered by the upload-bake above, so no core/FFI work is required.
+ * dose / yield / brew-temp are a TRANSIENT override (BrewParams via onAdjustBrew);
+ * grind / pre-infuse / steam / water / flush are local (Android has no per-mode
+ * param store yet — the chips/steppers drive the next shot's fixed params).
  */
+private val niceFmt: (Double) -> String = { v -> if (v == kotlin.math.floor(v)) "%.0f".format(v) else "%.1f".format(v) }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -91,24 +95,35 @@ fun QuickControlsSheet(
     onToggleChannel: (String, Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    // Effective values: the transient override if set, else the active profile.
+    // Effective brew values: the transient override if set, else the active profile.
     val dose = brewParams?.dose ?: (active?.dose?.toDouble() ?: 18.0)
     val yieldOut = brewParams?.yieldOut ?: (active?.yieldOut?.toDouble() ?: 36.0)
     val brewTemp = brewParams?.brewTemp ?: (active?.brewTemp?.toDouble() ?: 93.0)
 
     var showSave by remember { mutableStateOf(false) }
     var presetName by remember { mutableStateOf("") }
-    // Steam / hot-water / flush params are local (Android has no per-mode store;
-    // the mode chips run fixed params today) — the design's 6-up grid still shows them.
+    // Per-stepper mode + the non-brew (local) values — web brew-params defaults.
+    var doseGrindMode by remember { mutableStateOf("dose") }
+    var grind by remember { mutableStateOf(4.2) }
+    var brewMode by remember { mutableStateOf("temp") }
+    var preinf by remember { mutableStateOf(8.0) }
+    var steamMode by remember { mutableStateOf("time") }
+    var steamTime by remember { mutableStateOf(12.0) }
+    var steamFlow by remember { mutableStateOf(1.2) }
     var steamTemp by remember { mutableStateOf(148.0) }
-    var hotWaterTemp by remember { mutableStateOf(90.0) }
-    var flushTemp by remember { mutableStateOf(91.0) }
+    var waterMode by remember { mutableStateOf("volume") }
+    var waterTemp by remember { mutableStateOf(80.0) }
+    var waterVolume by remember { mutableStateOf(150.0) }
+    var flushMode by remember { mutableStateOf("time") }
+    var flushTime by remember { mutableStateOf(4.0) }
+    var flushTemp by remember { mutableStateOf(95.0) }
     var preFlush by remember { mutableStateOf(false) }
     var steamPurge by remember { mutableStateOf(false) }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(),
+        sheetMaxWidth = 1400.dp,
     ) {
         Column(
             modifier = Modifier
@@ -116,7 +131,7 @@ fun QuickControlsSheet(
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 24.dp)
                 .padding(bottom = 32.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             // ── Header ───────────────────────────────────────────────────────
             Row(
@@ -124,7 +139,14 @@ fun QuickControlsSheet(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("Quick Controls", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
+                Column {
+                    Text("Quick Controls", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onSurface)
+                    Text(
+                        "Tweaks apply to the next shot — your saved profile is never changed.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     if (active != null) {
                         CremaButton(onClick = { showSave = true }, variant = CremaButtonVariant.Text, icon = "bookmark-simple", label = "Save preset")
@@ -135,15 +157,9 @@ fun QuickControlsSheet(
                     CremaIconButton(icon = "x", onClick = onDismiss)
                 }
             }
-            Text(
-                "Tweaks apply to the next shot — your saved profile is never changed.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
 
             // ── Favorites strip ──────────────────────────────────────────────
             if (pinnedProfiles.isNotEmpty() || favBeans.isNotEmpty()) {
-                Eyebrow("Favorites", Modifier.padding(top = 4.dp))
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(pinnedProfiles, key = { "p:${it.id}" }) { p ->
                         FilterChip(
@@ -164,21 +180,98 @@ fun QuickControlsSheet(
                 }
             }
 
-            // ── Param steppers — compact cards (PWA qsheet-g-grid). 3-up × 2 rows
-            //    (the modal sheet is narrower than the PWA's full-width dock). ────
-            Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                QcStepperCard("Dose", "%.1f".format(dose), "g", { onAdjustBrew((dose - 0.1).coerceAtLeast(5.0), yieldOut, brewTemp) }, { onAdjustBrew((dose + 0.1).coerceAtMost(30.0), yieldOut, brewTemp) }, Modifier.weight(1f))
-                QcStepperCard("Yield", "%.1f".format(yieldOut), "g", { onAdjustBrew(dose, (yieldOut - 0.5).coerceAtLeast(10.0), brewTemp) }, { onAdjustBrew(dose, (yieldOut + 0.5).coerceAtMost(80.0), brewTemp) }, Modifier.weight(1f))
-                QcStepperCard("Brew temp", "%.1f".format(brewTemp), "°C", { onAdjustBrew(dose, yieldOut, (brewTemp - 0.5).coerceAtLeast(80.0)) }, { onAdjustBrew(dose, yieldOut, (brewTemp + 0.5).coerceAtMost(100.0)) }, Modifier.weight(1f))
-            }
-            Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                QcStepperCard("Steam", "%.0f".format(steamTemp), "°C", { steamTemp = (steamTemp - 1).coerceAtLeast(100.0) }, { steamTemp = (steamTemp + 1).coerceAtMost(160.0) }, Modifier.weight(1f))
-                QcStepperCard("Hot water", "%.0f".format(hotWaterTemp), "°C", { hotWaterTemp = (hotWaterTemp - 1).coerceAtLeast(60.0) }, { hotWaterTemp = (hotWaterTemp + 1).coerceAtMost(100.0) }, Modifier.weight(1f))
-                QcStepperCard("Flush", "%.0f".format(flushTemp), "°C", { flushTemp = (flushTemp - 1).coerceAtLeast(80.0) }, { flushTemp = (flushTemp + 1).coerceAtMost(100.0) }, Modifier.weight(1f))
+            // ── Six steppers — one full-width row (PWA qsheet-g-grid is-six). ──
+            Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                // 1 — Dose | Grind (no prefix).
+                QcStepper(
+                    Modifier.weight(1f),
+                    value = if (doseGrindMode == "dose") dose else grind,
+                    unit = if (doseGrindMode == "dose") "g" else null,
+                    min = if (doseGrindMode == "dose") 5.0 else 0.0,
+                    max = if (doseGrindMode == "dose") 30.0 else 20.0,
+                    step = 0.1,
+                    chips = if (doseGrindMode == "dose") listOf(16.0, 17.0, 18.0, 19.0, 20.0) else listOf(3.8, 4.0, 4.2, 4.4, 4.6),
+                    onChange = { if (doseGrindMode == "dose") onAdjustBrew(it, yieldOut, brewTemp) else grind = it },
+                ) {
+                    CremaSplitLabel(prefix = "", options = listOf(SplitOption("dose", "Dose"), SplitOption("grind", "Grind")), value = doseGrindMode, onChange = { doseGrindMode = it })
+                }
+                // 2 — Yield (+ live ratio).
+                QcStepper(
+                    Modifier.weight(1f),
+                    value = yieldOut, unit = "g", min = 10.0, max = 80.0, step = 0.5,
+                    chips = listOf(28.0, 32.0, 36.0, 40.0, 45.0),
+                    onChange = { onAdjustBrew(dose, it, brewTemp) },
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Eyebrow("Yield", Modifier.weight(1f).padding(bottom = 3.dp))
+                        Text("1:%.1f".format(if (dose > 0) yieldOut / dose else 0.0), style = MaterialTheme.typography.labelSmall.copy(fontFamily = JetBrainsMono), color = MaterialTheme.colorScheme.primary)
+                    }
+                }
+                // 3 — Brew temp | pre-infuse.
+                QcStepper(
+                    Modifier.weight(1f),
+                    value = if (brewMode == "temp") brewTemp else preinf,
+                    unit = if (brewMode == "temp") "°C" else "s",
+                    min = if (brewMode == "temp") 80.0 else 0.0,
+                    max = if (brewMode == "temp") 100.0 else 30.0,
+                    step = if (brewMode == "temp") 0.5 else 1.0,
+                    chips = if (brewMode == "temp") listOf(88.0, 91.0, 93.0, 95.0, 97.0) else listOf(0.0, 4.0, 8.0, 12.0, 16.0),
+                    onChange = { if (brewMode == "temp") onAdjustBrew(dose, yieldOut, it) else preinf = it },
+                ) {
+                    CremaSplitLabel(prefix = "Brew", options = listOf(SplitOption("temp", "Temp"), SplitOption("preinf", "Pre-inf")), value = brewMode, onChange = { brewMode = it })
+                }
+                // 4 — Steam time | flow | temp.
+                QcStepper(
+                    Modifier.weight(1f),
+                    value = when (steamMode) { "flow" -> steamFlow; "temp" -> steamTemp; else -> steamTime },
+                    unit = when (steamMode) { "flow" -> "ml/s"; "temp" -> "°C"; else -> "s" },
+                    min = when (steamMode) { "flow" -> 0.2; "temp" -> 120.0; else -> 1.0 },
+                    max = when (steamMode) { "flow" -> 3.0; "temp" -> 170.0; else -> 60.0 },
+                    step = when (steamMode) { "flow" -> 0.1; "temp" -> 0.5; else -> 1.0 },
+                    chips = when (steamMode) { "flow" -> listOf(0.6, 0.9, 1.2, 1.6, 2.0); "temp" -> listOf(140.0, 145.0, 148.0, 150.0, 155.0); else -> listOf(5.0, 10.0, 15.0, 20.0, 30.0) },
+                    onChange = { when (steamMode) { "flow" -> steamFlow = it; "temp" -> steamTemp = it; else -> steamTime = it } },
+                ) {
+                    CremaSplitLabel(prefix = "Steam", options = listOf(SplitOption("time", "Time"), SplitOption("flow", "Flow"), SplitOption("temp", "Temp")), value = steamMode, onChange = { steamMode = it })
+                }
+                // 5 — Hot water temp | volume.
+                QcStepper(
+                    Modifier.weight(1f),
+                    value = if (waterMode == "temp") waterTemp else waterVolume,
+                    unit = if (waterMode == "temp") "°C" else "ml",
+                    min = if (waterMode == "temp") 40.0 else 20.0,
+                    max = if (waterMode == "temp") 98.0 else 500.0,
+                    step = if (waterMode == "temp") 1.0 else 10.0,
+                    chips = if (waterMode == "temp") listOf(60.0, 75.0, 85.0, 92.0, 96.0) else listOf(60.0, 120.0, 180.0, 250.0, 350.0),
+                    onChange = { if (waterMode == "temp") waterTemp = it else waterVolume = it },
+                ) {
+                    CremaSplitLabel(prefix = "Water", options = listOf(SplitOption("temp", "Temp"), SplitOption("volume", "Vol")), value = waterMode, onChange = { waterMode = it })
+                }
+                // 6 — Flush time | temp.
+                QcStepper(
+                    Modifier.weight(1f),
+                    value = if (flushMode == "time") flushTime else flushTemp,
+                    unit = if (flushMode == "time") "s" else "°C",
+                    min = if (flushMode == "time") 1.0 else 60.0,
+                    max = if (flushMode == "time") 20.0 else 100.0,
+                    step = if (flushMode == "time") 1.0 else 0.5,
+                    chips = if (flushMode == "time") listOf(2.0, 4.0, 6.0, 8.0, 10.0) else listOf(88.0, 92.0, 95.0, 97.0, 99.0),
+                    onChange = { if (flushMode == "time") flushTime = it else flushTemp = it },
+                ) {
+                    CremaSplitLabel(prefix = "Flush", options = listOf(SplitOption("time", "Time"), SplitOption("temp", "Temp")), value = flushMode, onChange = { flushMode = it })
+                }
             }
 
-            // ── Chart strip — channel groups (icon + primary/secondary mini-toggles,
-            //    divider-split), then brew-behaviour mini-toggles. (PWA qsheet-foot.) ─
+            // ── Shot-behaviour toggles — full-width buttons across the row. ────
+            Eyebrow("Shot behaviour", Modifier.padding(top = 8.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                QcTogglePill("Stop on weight", stopOnWeight) { onStopOnWeight(it) }
+                QcTogglePill("Auto-tare", autoTare) { onAutoTare(it) }
+                QcTogglePill("Pre-flush", preFlush) { preFlush = it }
+                QcTogglePill("Steam purge", steamPurge) { steamPurge = it }
+                QcTogglePill("Steam eco", steamEco) { onSteamEco(it) }
+            }
+
+            // ── Chart-channel toggles (icon + primary/secondary mini-toggles). ─
             val tel = CremaTheme.telemetry
             val groups = listOf(
                 ChannelGroup("gauge", tel.pressure, "pressure" to "Pressure", "resistance" to "Resistance"),
@@ -186,7 +279,7 @@ fun QuickControlsSheet(
                 ChannelGroup("thermometer", tel.temp, "headTemp" to "Coffee", "mixTemp" to "Water"),
                 ChannelGroup("scales", tel.weight, "weight" to "Weight", "weightFlow" to "Flow"),
             )
-            Eyebrow("Chart", Modifier.padding(top = 12.dp))
+            Eyebrow("Chart", Modifier.padding(top = 4.dp))
             FlowRow(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(16.dp),
@@ -199,18 +292,6 @@ fun QuickControlsSheet(
                         QcMiniToggle(g.secondary.second, g.secondary.first in channels, { onToggleChannel(g.secondary.first, it) }, g.color)
                     }
                 }
-            }
-            Eyebrow("Shot behaviour", Modifier.padding(top = 8.dp))
-            FlowRow(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                QcMiniToggle("Stop on weight", stopOnWeight, onStopOnWeight)
-                QcMiniToggle("Auto-tare", autoTare, onAutoTare)
-                QcMiniToggle("Pre-flush", preFlush, { preFlush = it })
-                QcMiniToggle("Steam purge", steamPurge, { steamPurge = it })
-                QcMiniToggle("Steam eco", steamEco, onSteamEco)
             }
         }
     }
@@ -247,20 +328,77 @@ private data class ChannelGroup(
     val secondary: Pair<String, String>,
 )
 
-// Compact stepper card (PWA qcs-card): uppercase label over a [− value+unit +]
-// row, in a rounded surfaceContainerHigh tile — far lighter than CremaStepper.
+// One Quick-Controls stepper: a header (plain label or split-label) over a filled
+// −/value/+ bar, with a 5-chip quick-select row beneath (PWA QuickStepper + chips).
 @Composable
-private fun QcStepperCard(label: String, value: String, unit: String?, onMinus: () -> Unit, onPlus: () -> Unit, modifier: Modifier = Modifier) {
-    Column(
-        modifier.clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh).padding(horizontal = 8.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        Eyebrow(label)
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-            QcStepBtn("minus", onMinus)
-            Box(Modifier.weight(1f), contentAlignment = Alignment.Center) { CremaValueUnit(value, unit, valueSize = 18.sp) }
-            QcStepBtn("plus", onPlus)
+private fun QcStepper(
+    modifier: Modifier,
+    value: Double,
+    unit: String?,
+    min: Double,
+    max: Double,
+    step: Double,
+    chips: List<Double>,
+    onChange: (Double) -> Unit,
+    header: @Composable () -> Unit,
+) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        header()
+        Row(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh).padding(4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            QcStepBtn("minus") { onChange((value - step).coerceIn(min, max)) }
+            Box(Modifier.weight(1f), contentAlignment = Alignment.Center) { CremaValueUnit(niceFmt(value), unit, valueSize = 18.sp) }
+            QcStepBtn("plus") { onChange((value + step).coerceIn(min, max)) }
         }
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            chips.forEach { c -> QcChip(niceFmt(c), kotlin.math.abs(value - c) < 0.05) { onChange(c) } }
+        }
+    }
+}
+
+// A quick-select value chip — copper fill when it matches the current value,
+// a faint hairline otherwise (PWA .qchip).
+@Composable
+private fun RowScope.QcChip(label: String, active: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .weight(1f)
+            .clip(RoundedCornerShape(8.dp))
+            .then(if (active) Modifier.background(MaterialTheme.colorScheme.primary) else Modifier.border(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f), RoundedCornerShape(8.dp)))
+            .clickable(onClick = onClick)
+            .padding(vertical = 5.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelSmall.copy(fontFamily = JetBrainsMono, fontSize = 10.sp),
+            color = if (active) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f),
+            maxLines = 1,
+        )
+    }
+}
+
+// A full-width shot-behaviour toggle button — copper-filled when on.
+@Composable
+private fun RowScope.QcTogglePill(label: String, on: Boolean, onToggle: (Boolean) -> Unit) {
+    Box(
+        Modifier
+            .weight(1f)
+            .clip(RoundedCornerShape(10.dp))
+            .background(if (on) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh)
+            .clickable { onToggle(!on) }
+            .padding(vertical = 11.dp, horizontal = 8.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelLarge,
+            color = if (on) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+        )
     }
 }
 
@@ -272,8 +410,7 @@ private fun QcStepBtn(icon: String, onClick: () -> Unit) {
     ) { PhIcon(icon, sizeDp = 14) }
 }
 
-// Mini pill toggle (PWA qmini-tog): a tiny switch + label, far lighter than the
-// full M3 Switch. `onColor` tints the track when on (channel color, else copper).
+// Mini pill toggle (PWA qmini-tog) — a tiny switch + label, for the chart strip.
 @Composable
 private fun QcMiniToggle(label: String, on: Boolean, onToggle: (Boolean) -> Unit, onColor: Color = MaterialTheme.colorScheme.primary) {
     Row(
