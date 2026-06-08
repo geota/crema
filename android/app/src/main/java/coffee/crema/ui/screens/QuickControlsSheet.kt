@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -277,25 +278,36 @@ fun QuickControlsSheet(
                 ChannelGroup("thermometer", tel.temp, "headTemp" to "Coffee", "mixTemp" to "Water"),
                 ChannelGroup("scales", tel.weight, "weight" to "Weight", "weightFlow" to "Flow"),
             )
-            // Chart channels — full-width, single line.
-            Eyebrow("Chart", Modifier.padding(top = 6.dp))
-            FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                groups.forEach { g ->
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        PhIcon(g.icon, sizeDp = 14, tint = g.color)
-                        QcMiniToggle(g.primary.second, g.primary.first in channels, { onToggleChannel(g.primary.first, it) }, g.color)
-                        QcMiniToggle(g.secondary.second, g.secondary.first in channels, { onToggleChannel(g.secondary.first, it) }, g.color)
+            // Chart channels + Shot behaviour, all on one line, divided in the
+            // middle (scrolls horizontally only if it can't quite fit).
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(top = 8.dp),
+                verticalAlignment = Alignment.Top,
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Eyebrow("Chart")
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(11.dp)) {
+                        groups.forEach { g ->
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                PhIcon(g.icon, sizeDp = 14, tint = g.color)
+                                QcMiniToggle(g.primary.second, g.primary.first in channels, { onToggleChannel(g.primary.first, it) }, g.color)
+                                QcMiniToggle(g.secondary.second, g.secondary.first in channels, { onToggleChannel(g.secondary.first, it) }, g.color)
+                            }
+                        }
                     }
                 }
-            }
-            // Shot behaviour — full-width, single line.
-            Eyebrow("Shot behaviour", Modifier.padding(top = 6.dp))
-            FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                QcMiniToggle("Stop on weight", stopOnWeight, onStopOnWeight)
-                QcMiniToggle("Auto-tare", autoTare, onAutoTare)
-                QcMiniToggle("Pre-flush", preFlush, { preFlush = it })
-                QcMiniToggle("Steam purge", steamPurge, { steamPurge = it })
-                QcMiniToggle("Steam eco", steamEco, onSteamEco)
+                Box(Modifier.width(1.dp).height(44.dp).background(MaterialTheme.colorScheme.outlineVariant))
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Eyebrow("Behavior")
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(11.dp)) {
+                        QcMiniToggle("Stop on weight", stopOnWeight, onStopOnWeight)
+                        QcMiniToggle("Auto-tare", autoTare, onAutoTare)
+                        QcMiniToggle("Pre-flush", preFlush, { preFlush = it })
+                        QcMiniToggle("Steam purge", steamPurge, { steamPurge = it })
+                        QcMiniToggle("Steam eco", steamEco, onSteamEco)
+                    }
+                }
             }
         }
     }
@@ -403,14 +415,14 @@ private fun QcMiniToggle(label: String, on: Boolean, onToggle: (Boolean) -> Unit
     Row(
         Modifier.clip(RoundedCornerShape(999.dp)).clickable { onToggle(!on) }.padding(vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
     ) {
         Box(
-            Modifier.width(26.dp).height(15.dp).clip(RoundedCornerShape(999.dp))
+            Modifier.width(24.dp).height(14.dp).clip(RoundedCornerShape(999.dp))
                 .background(if (on) onColor else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.15f)),
             contentAlignment = if (on) Alignment.CenterEnd else Alignment.CenterStart,
         ) {
-            Box(Modifier.padding(horizontal = 2.dp).size(11.dp).clip(CircleShape).background(if (on) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant))
+            Box(Modifier.padding(horizontal = 2.dp).size(10.dp).clip(CircleShape).background(if (on) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant))
         }
         Text(label, style = MaterialTheme.typography.bodySmall, color = if (on) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant)
     }
