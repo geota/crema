@@ -254,8 +254,8 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
             NumberedSection("2", "Target + Limits", "Recipe targets & optional caps") {
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     GroupCard("Target", 4f) {
-                        LabeledStepper("Dose", dose, "g", Modifier.weight(1f), 0.1, 1.0, 60.0, { dose = it })
                         LabeledStepper("Brew temp", brewTemp, "°C", Modifier.weight(1f), 0.5, 20.0, 105.0, { brewTemp = it })
+                        LabeledStepper("Dose", dose, "g", Modifier.weight(1f), 0.1, 1.0, 60.0, { dose = it })
                         LabeledStepper("Yield", yieldG, "g", Modifier.weight(1f), 0.5, 1.0, 200.0, { yieldG = it })
                         LabeledRatio(if (dose > 0.0) yieldG / dose else 0.0, Modifier.weight(1f))
                     }
