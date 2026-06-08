@@ -1325,10 +1325,17 @@ private fun FootDivider() {
 
 @Composable
 private fun PowerButton(connected: Boolean, asleep: Boolean, onClick: () -> Unit) {
+    // Mirrors the web PowerButton: disconnected → red plug, asleep → moon,
+    // awake → sun. The icon shows the current state; clicking toggles it.
     val tint = when {
-        !connected -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+        !connected -> MaterialTheme.colorScheme.error
         asleep -> MaterialTheme.colorScheme.onSurfaceVariant
         else -> CremaTheme.telemetry.success
+    }
+    val icon = when {
+        !connected -> "plugs"
+        asleep -> "moon"
+        else -> "sun"
     }
     Box(
         modifier = Modifier
@@ -1338,7 +1345,7 @@ private fun PowerButton(connected: Boolean, asleep: Boolean, onClick: () -> Unit
             .clickable(enabled = connected, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        PhIcon("power", sizeDp = 18, tint = tint)
+        PhIcon(icon, sizeDp = 18, tint = tint)
     }
 }
 

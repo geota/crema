@@ -87,6 +87,9 @@ import com.adamglin.phosphoricons.regular.Shapes
 import com.adamglin.phosphoricons.regular.Shuffle
 import com.adamglin.phosphoricons.regular.Star
 import com.adamglin.phosphoricons.Fill
+import com.adamglin.phosphoricons.fill.Moon
+import com.adamglin.phosphoricons.fill.Plugs
+import com.adamglin.phosphoricons.fill.Sun
 import com.adamglin.phosphoricons.fill.Star as StarFilled
 import com.adamglin.phosphoricons.regular.UploadSimple
 import com.adamglin.phosphoricons.regular.ListBullets
@@ -160,6 +163,9 @@ fun PhIcon(name: String, modifier: Modifier = Modifier, tint: Color = LocalConte
         "pencil-simple" -> PhosphorIcons.Regular.PencilSimple
         "plus" -> PhosphorIcons.Regular.Plus
         "power" -> PhosphorIcons.Regular.Power
+        "plugs" -> PhosphorIcons.Fill.Plugs
+        "moon" -> PhosphorIcons.Fill.Moon
+        "sun" -> PhosphorIcons.Fill.Sun
         "sliders-horizontal" -> PhosphorIcons.Regular.SlidersHorizontal
         "speaker-high" -> PhosphorIcons.Regular.SpeakerHigh
         "timer" -> PhosphorIcons.Regular.Timer
