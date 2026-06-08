@@ -124,7 +124,8 @@ fun QuickControlsSheet(
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
-        sheetState = rememberModalBottomSheetState(),
+        // Open fully expanded — the footer toggles sit below a half-height fold.
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         sheetMaxWidth = 1400.dp,
     ) {
         Column(
