@@ -1337,11 +1337,15 @@ private fun PowerButton(connected: Boolean, asleep: Boolean, onClick: () -> Unit
         asleep -> "moon"
         else -> "sun"
     }
+    // Disconnected mirrors the web button: faint-red fill + red border, and the
+    // whole control dropped to 0.65 opacity so the red reads muted/greyed.
     Box(
         modifier = Modifier
             .size(40.dp)
+            .then(if (!connected) Modifier.alpha(0.65f) else Modifier)
             .clip(CircleShape)
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .background(if (!connected) MaterialTheme.colorScheme.error.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceContainerHigh)
+            .then(if (!connected) Modifier.border(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.35f), CircleShape) else Modifier)
             .clickable(enabled = connected, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
