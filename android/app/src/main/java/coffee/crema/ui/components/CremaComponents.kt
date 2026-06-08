@@ -733,7 +733,8 @@ fun CremaSplitLabel(
         if (dot) CremaDotToggle(dotOn, { onDot?.invoke() })
         // The prefix carries the same 3dp bottom padding the options use to clear
         // their underline, so prefix + options share a baseline (no high options).
-        Text(prefix.uppercase(), style = style, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f), modifier = Modifier.padding(bottom = 3.dp))
+        // Blank prefix (e.g. the Dose|Grind header) renders options only.
+        if (prefix.isNotBlank()) Text(prefix.uppercase(), style = style, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f), modifier = Modifier.padding(bottom = 3.dp))
         if (options.isNotEmpty()) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 options.forEachIndexed { i, o ->
