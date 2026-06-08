@@ -209,9 +209,9 @@ fun QuickControlsSheet(
                     enabled = stopOnWeight,
                     onChange = { onAdjustBrew(dose, it, brewTemp) },
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                         CremaDotToggle(stopOnWeight, { onStopOnWeight(!stopOnWeight) })
-                        Eyebrow("Yield", Modifier.weight(1f).padding(bottom = 3.dp))
+                        Eyebrow("Yield", Modifier.weight(1f))
                         Text("1:%.1f".format(if (dose > 0) yieldOut / dose else 0.0), style = MaterialTheme.typography.labelSmall.copy(fontFamily = JetBrainsMono), color = MaterialTheme.colorScheme.primary)
                     }
                 }
