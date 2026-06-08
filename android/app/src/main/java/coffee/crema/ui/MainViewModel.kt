@@ -20,6 +20,7 @@ import coffee.crema.core.blankCremaProfile
 import coffee.crema.core.builtinCremaProfiles
 import coffee.crema.core.cremaProfileToWire
 import coffee.crema.core.importBeanconquerorJson
+import coffee.crema.core.exportBeanconquerorMainJson
 import coffee.crema.core.maintenanceReadout
 import coffee.crema.beans.BeanLibrary
 import coffee.crema.beans.LibraryStore
@@ -66,6 +67,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import android.net.Uri
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.JsonPrimitive
 
 /**
  * Default scale beeper-volume step shown before the first live reading.
@@ -943,6 +945,121 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val text = runCatching { json.encodeToString(BeanLibrary.serializer(), lib) }
             .getOrElse { appendLog("Export library failed: ${it.message}"); return }
         shareText(text, "Export beans & roasters")
+    }
+
+    // ── Export-content builders (file export via SAF; share-sheet can't carry the
+    //    large telemetry payloads — the Binder transaction limit). Return null +
+    //    set a status when there's nothing to export. ──────────────────────────
+
+    /** Bean library as Crema JSON (beans + roasters). */
+    fun beansLibraryJson(): String? {
+        val lib = BeanLibrary(beans = _ui.value.beans, roasters = _ui.value.roasters, activeBeanId = _ui.value.activeBeanId)
+        if (lib.beans.isEmpty() && lib.roasters.isEmpty()) { _ui.value = _ui.value.copy(status = "Export — empty library"); return null }
+        return runCatching { json.encodeToString(BeanLibrary.serializer(), lib) }.getOrNull()
+    }
+
+    /** Library in Beanconqueror's format (via the core). */
+    fun beansBeanconquerorJson(): String? {
+        val beans = _ui.value.beans
+        if (beans.isEmpty()) { _ui.value = _ui.value.copy(status = "Export — no beans"); return null }
+        val beansJson = runCatching { json.encodeToString(ListSerializer(Bean.serializer()), beans) }.getOrElse { "[]" }
+        val roastersJson = runCatching { json.encodeToString(ListSerializer(Roaster.serializer()), _ui.value.roasters) }.getOrElse { "[]" }
+        val envelope = "{\"beans\":$beansJson,\"roasters\":$roastersJson,\"shots\":[]}"
+        return runCatching { exportBeanconquerorMainJson(envelope, System.currentTimeMillis()) }
+            .getOrElse { appendLog("Beanconqueror export failed: ${it.message}"); _ui.value = _ui.value.copy(status = "Beanconqueror export failed"); null }
+    }
+
+    /** Shots as Crema JSON — all (ids null) or only the given ids. */
+    fun shotsJson(ids: List<String>?): String? {
+        val shots = if (ids == null) _ui.value.history else { val w = ids.toHashSet(); _ui.value.history.filter { it.id in w } }
+        if (shots.isEmpty()) { _ui.value = _ui.value.copy(status = "Export — no shots"); return null }
+        return runCatching { json.encodeToString(ListSerializer(StoredShot.serializer()), shots) }.getOrNull()
+    }
+
+    /** All profiles (built-ins + customs) as a JSON array. */
+    fun allProfilesJson(): String? {
+        val all = _ui.value.profiles.mapNotNull { profileJsonById[it.id] }
+        if (all.isEmpty()) { _ui.value = _ui.value.copy(status = "Export — no profiles"); return null }
+        return "[${all.joinToString(",")}]"
+    }
+
+    /** Write export [text] to a SAF document Uri (large-payload safe). */
+    fun writeTextToUri(uri: Uri, text: String) {
+        viewModelScope.launch {
+            val ok = withContext(Dispatchers.IO) {
+                runCatching {
+                    getApplication<Application>().contentResolver.openOutputStream(uri)?.use { it.write(text.toByteArray(Charsets.UTF_8)) }
+                    true
+                }.getOrDefault(false)
+            }
+            _ui.value = _ui.value.copy(status = if (ok) "Exported to file" else "Export failed — couldn't write")
+        }
+    }
+
+    /** Read a content Uri as UTF-8 text, off the main thread. */
+    private suspend fun readUriText(uri: Uri): String? = withContext(Dispatchers.IO) {
+        runCatching {
+            getApplication<Application>().contentResolver.openInputStream(uri)?.use { String(it.readBytes(), Charsets.UTF_8) }
+        }.getOrNull()
+    }
+
+    /** Re-stamp an exported profile's JSON as a fresh custom (new id, source,
+     *  Built-in tag stripped) while preserving every other wire field. */
+    private fun adoptProfileJson(raw: String): String? {
+        val obj = runCatching { json.parseToJsonElement(raw).jsonObject.toMutableMap() }.getOrNull() ?: return null
+        if (!obj.containsKey("name") && !obj.containsKey("segments")) return null
+        obj["id"] = JsonPrimitive(java.util.UUID.randomUUID().toString())
+        obj["source"] = JsonPrimitive("custom")
+        (obj["tags"] as? JsonArray)?.let { tags ->
+            obj["tags"] = JsonArray(tags.filterNot { runCatching { it.jsonPrimitive.content }.getOrNull() == "Built-in" })
+        }
+        return runCatching { json.encodeToString(JsonObject.serializer(), JsonObject(obj)) }.getOrNull()
+    }
+
+    /** Import profiles from a Crema .json export (array / single object / .jsonl).
+     *  Each becomes a new custom profile. */
+    fun importProfiles(uri: Uri) {
+        viewModelScope.launch {
+            val text = readUriText(uri)?.trim()
+            if (text.isNullOrBlank()) { _ui.value = _ui.value.copy(status = "Import failed — couldn't read that file"); return@launch }
+            val elements = runCatching {
+                when {
+                    text.startsWith("[") -> json.parseToJsonElement(text).jsonArray.map { it.toString() }
+                    text.startsWith("{") -> listOf(text)
+                    else -> text.lineSequence().map { it.trim() }.filter { it.startsWith("{") }.toList()
+                }
+            }.getOrElse { emptyList() }
+            val adopted = elements.mapNotNull { adoptProfileJson(it) }
+            if (adopted.isEmpty()) { _ui.value = _ui.value.copy(status = "No profiles imported"); return@launch }
+            customProfilesJson = adopted + customProfilesJson
+            refreshProfiles()
+            persistCustomProfiles()
+            _ui.value = _ui.value.copy(status = "Imported ${adopted.size} profile(s)")
+        }
+    }
+
+    /** Import shots from a Crema .json export (array / single / .jsonl), skipping
+     *  ids already in history. */
+    fun importShots(uri: Uri) {
+        viewModelScope.launch {
+            val text = readUriText(uri)?.trim()
+            if (text.isNullOrBlank()) { _ui.value = _ui.value.copy(status = "Import failed — couldn't read that file"); return@launch }
+            val shots = runCatching {
+                if (text.startsWith("[")) json.decodeFromString(ListSerializer(StoredShot.serializer()), text)
+                else listOf(json.decodeFromString(StoredShot.serializer(), text))
+            }.getOrElse {
+                runCatching {
+                    text.lineSequence().map { it.trim() }.filter { it.startsWith("{") }
+                        .map { json.decodeFromString(StoredShot.serializer(), it) }.toList()
+                }.getOrElse { emptyList() }
+            }
+            if (shots.isEmpty()) { _ui.value = _ui.value.copy(status = "No shots imported"); return@launch }
+            val existing = _ui.value.history.map { it.id }.toHashSet()
+            val toAdd = shots.filterNot { it.id in existing }
+            val next = toAdd + _ui.value.history
+            _ui.value = _ui.value.copy(history = next, status = "Imported ${toAdd.size} shot(s)")
+            historyStore.save(next)
+        }
     }
 
     /** Remove a stored shot from the local history. Persisted. */

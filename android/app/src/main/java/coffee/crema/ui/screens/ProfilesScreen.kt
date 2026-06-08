@@ -26,6 +26,8 @@ import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
@@ -91,6 +93,15 @@ fun ProfilesScreen(
     var filter by remember { mutableStateOf("all") }
     var sort by remember { mutableStateOf("name") }
     var sortDesc by remember { mutableStateOf(false) }
+    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) vm.importProfiles(uri)
+    }
+    var pendingExport by remember { mutableStateOf<String?>(null) }
+    val saveLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        val t = pendingExport; pendingExport = null
+        if (uri != null && t != null) vm.writeTextToUri(uri, t)
+    }
+    val launchSave: (String, String?) -> Unit = { name, content -> if (content != null) { pendingExport = content; saveLauncher.launch(name) } }
     // Fall back off the Hidden facet once nothing is archived (e.g. the last one
     // was just restored) so the grid never strands on an empty hidden view.
     val effectiveFilter = if (filter == "hidden" && ui.hiddenProfileIds.isEmpty()) "all" else filter
@@ -173,9 +184,9 @@ fun ProfilesScreen(
                     }
                 }
                 Spacer(Modifier.width(8.dp))
-                CremaButton(onClick = {}, variant = CremaButtonVariant.Outlined, icon = "upload-simple", label = "Import")
+                CremaButton(onClick = { importLauncher.launch(arrayOf("application/json", "text/*", "*/*")) }, variant = CremaButtonVariant.Outlined, icon = "upload-simple", label = "Import")
                 Spacer(Modifier.width(8.dp))
-                CremaButton(onClick = { vm.exportAllProfiles() }, variant = CremaButtonVariant.Outlined, icon = "download-simple", label = "Export")
+                CremaButton(onClick = { launchSave("crema-profiles.json", vm.allProfilesJson()) }, variant = CremaButtonVariant.Outlined, icon = "download-simple", label = "Export")
                 Spacer(Modifier.width(8.dp))
                 CremaButton(
                     onClick = { vm.startNewProfile(); onNav("profile-edit") },

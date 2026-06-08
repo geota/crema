@@ -62,8 +62,12 @@ import coffee.crema.ui.components.SortKey
 import coffee.crema.ui.components.CremaNavigationRail
 import coffee.crema.ui.components.Eyebrow
 import coffee.crema.ui.components.PhIcon
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import coffee.crema.ui.components.CremaButton
 import coffee.crema.ui.components.CremaButtonVariant
+import coffee.crema.ui.components.CremaSplitButton
+import coffee.crema.ui.components.SplitMenuItem
 import coffee.crema.ui.components.CremaOverflowMenu
 import coffee.crema.ui.components.OverflowItem
 import coffee.crema.ui.components.CremaConfirmDialog
@@ -98,6 +102,16 @@ fun HistoryScreen(
             vm.consumePendingHistoryShot()
         }
     }
+
+    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) vm.importShots(uri)
+    }
+    var pendingExport by remember { mutableStateOf<String?>(null) }
+    val saveLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        val t = pendingExport; pendingExport = null
+        if (uri != null && t != null) vm.writeTextToUri(uri, t)
+    }
+    val launchSave: (String, String?) -> Unit = { name, content -> if (content != null) { pendingExport = content; saveLauncher.launch(name) } }
 
     // Client-side search + time-range filter + sort over the shot log. The stat
     // strip stays over the FULL history (global metrics); only the list filters.
@@ -183,6 +197,26 @@ fun HistoryScreen(
                                 )
                             }
                         }
+                    }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(start = 8.dp)) {
+                    CremaButton(
+                        onClick = { importLauncher.launch(arrayOf("application/json", "text/*", "*/*")) },
+                        variant = CremaButtonVariant.Outlined,
+                        icon = "upload-simple",
+                        label = "Import",
+                    )
+                    if (ui.history.isNotEmpty()) {
+                        CremaSplitButton(
+                            icon = "download-simple",
+                            label = "Export",
+                            menuHead = "Export as",
+                            onPrimary = { launchSave("crema-history.json", vm.shotsJson(null)) },
+                            items = listOf(
+                                SplitMenuItem("file-text", "All shots", "Every shot as one Crema JSON file. Re-importable in Crema.") { launchSave("crema-history.json", vm.shotsJson(null)) },
+                                SplitMenuItem("file-code", "Current filter", "Only the ${filtered.size} shot(s) matching your search and date range.") { launchSave("crema-history-filtered.json", vm.shotsJson(filtered.map { it.id })) },
+                            ),
+                        )
                     }
                 }
             }
