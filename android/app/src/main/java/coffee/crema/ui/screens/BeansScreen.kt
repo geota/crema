@@ -60,6 +60,8 @@ import coffee.crema.core.Roaster
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.components.CremaButton
 import coffee.crema.ui.components.CremaButtonVariant
+import coffee.crema.ui.components.CremaSplitButton
+import coffee.crema.ui.components.SplitMenuItem
 import coffee.crema.ui.components.CremaCard
 import coffee.crema.ui.components.CremaNavigationRail
 import coffee.crema.ui.components.Eyebrow
@@ -108,6 +110,12 @@ fun BeansScreen(
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) vm.importBeanconquerorUri(uri)
     }
+    var pendingExport by remember { mutableStateOf<String?>(null) }
+    val saveLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        val t = pendingExport; pendingExport = null
+        if (uri != null && t != null) vm.writeTextToUri(uri, t)
+    }
+    val launchSave: (String, String?) -> Unit = { name, content -> if (content != null) { pendingExport = content; saveLauncher.launch(name) } }
 
     val roasterNameOf: (Bean) -> String? = { b -> ui.roasters.firstOrNull { it.id == b.roasterId }?.name }
     // Bags — client-side search + filter + sort over the in-memory library.
@@ -199,6 +207,17 @@ fun BeansScreen(
                     variant = CremaButtonVariant.Outlined,
                     icon = "upload-simple",
                     label = "Import",
+                )
+                Spacer(Modifier.width(8.dp))
+                CremaSplitButton(
+                    icon = "download-simple",
+                    label = "Export",
+                    menuHead = "Export as",
+                    onPrimary = { launchSave("crema-beans.json", vm.beansLibraryJson()) },
+                    items = listOf(
+                        SplitMenuItem("file-text", "Crema backup", "Lossless round-trip — beans and roasters. Re-importable in Crema.") { launchSave("crema-beans.json", vm.beansLibraryJson()) },
+                        SplitMenuItem("file-zip", "Beanconqueror", "For sharing with Beanconqueror users. Crema-only fields like tags don't survive.") { launchSave("crema-to-beanconqueror.json", vm.beansBeanconquerorJson()) },
+                    ),
                 )
                 Spacer(Modifier.width(8.dp))
                 CremaButton(

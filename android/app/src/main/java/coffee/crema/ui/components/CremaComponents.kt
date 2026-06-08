@@ -9,6 +9,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.SolidColor
@@ -91,6 +92,10 @@ import com.adamglin.phosphoricons.fill.Moon
 import com.adamglin.phosphoricons.fill.Plugs
 import com.adamglin.phosphoricons.fill.Sun
 import com.adamglin.phosphoricons.fill.Star as StarFilled
+import com.adamglin.phosphoricons.Duotone
+import com.adamglin.phosphoricons.duotone.FileText
+import com.adamglin.phosphoricons.duotone.FileZip
+import com.adamglin.phosphoricons.duotone.FileCode
 import com.adamglin.phosphoricons.regular.UploadSimple
 import com.adamglin.phosphoricons.regular.ListBullets
 import com.adamglin.phosphoricons.regular.CoffeeBean
@@ -163,6 +168,9 @@ fun PhIcon(name: String, modifier: Modifier = Modifier, tint: Color = LocalConte
         "pencil-simple" -> PhosphorIcons.Regular.PencilSimple
         "plus" -> PhosphorIcons.Regular.Plus
         "power" -> PhosphorIcons.Regular.Power
+        "file-text" -> PhosphorIcons.Duotone.FileText
+        "file-zip" -> PhosphorIcons.Duotone.FileZip
+        "file-code" -> PhosphorIcons.Duotone.FileCode
         "plugs" -> PhosphorIcons.Fill.Plugs
         "moon" -> PhosphorIcons.Fill.Moon
         "sun" -> PhosphorIcons.Fill.Sun
@@ -271,6 +279,85 @@ fun CremaIconButton(icon: String, onClick: () -> Unit, modifier: Modifier = Modi
         CremaIconTone.Standard -> IconButton(onClick, modifier) { PhIcon(icon, sizeDp = 24) }
         CremaIconTone.Filled -> FilledIconButton(onClick, modifier) { PhIcon(icon, sizeDp = 24) }
         CremaIconTone.Tonal -> FilledTonalIconButton(onClick, modifier) { PhIcon(icon, sizeDp = 24) }
+    }
+}
+
+// ── Split button (PWA SplitButton) — a primary action butted against a caret ──
+// that opens a format menu: eyebrow head + rows of [duotone icon · title · sub].
+data class SplitMenuItem(
+    val icon: String,
+    val title: String,
+    val sub: String,
+    val enabled: Boolean = true,
+    val onClick: () -> Unit,
+)
+
+@Composable
+fun CremaSplitButton(
+    icon: String,
+    label: String,
+    menuHead: String,
+    items: List<SplitMenuItem>,
+    onPrimary: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+) {
+    var open by remember { mutableStateOf(false) }
+    val shape = RoundedCornerShape(999.dp)
+    val border = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)
+    val content = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+    Box(modifier) {
+        Row(
+            Modifier.clip(shape).border(1.dp, border, shape),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            // Primary half.
+            Row(
+                Modifier
+                    .clickable(enabled = enabled, onClick = onPrimary)
+                    .padding(start = 16.dp, end = 14.dp, top = 9.dp, bottom = 9.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(7.dp),
+            ) {
+                PhIcon(icon, sizeDp = 16, tint = content)
+                Text(label, style = MaterialTheme.typography.labelLarge, color = content)
+            }
+            Box(Modifier.width(1.dp).height(22.dp).background(border))
+            // Caret half.
+            Box(
+                Modifier
+                    .clip(shape)
+                    .clickable(enabled = enabled) { open = true }
+                    .padding(horizontal = 10.dp, vertical = 9.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                PhIcon("caret-down", sizeDp = 13, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        DropdownMenu(
+            expanded = open,
+            onDismissRequest = { open = false },
+            modifier = Modifier.widthIn(min = 288.dp),
+        ) {
+            Eyebrow(menuHead, Modifier.padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 4.dp))
+            items.forEach { item ->
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable(enabled = item.enabled) { item.onClick(); open = false }
+                        .padding(horizontal = 12.dp, vertical = 9.dp)
+                        .alpha(if (item.enabled) 1f else 0.45f),
+                    horizontalArrangement = Arrangement.spacedBy(11.dp),
+                    verticalAlignment = Alignment.Top,
+                ) {
+                    PhIcon(item.icon, sizeDp = 20, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 1.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(item.title, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
+                        Text(item.sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, lineHeight = 15.sp)
+                    }
+                }
+            }
+        }
     }
 }
 
