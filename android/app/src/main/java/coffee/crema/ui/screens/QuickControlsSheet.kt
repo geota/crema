@@ -47,8 +47,10 @@ import androidx.compose.ui.unit.sp
 import coffee.crema.core.Bean
 import coffee.crema.profiles.CremaProfile
 import coffee.crema.ui.BrewParams
+import androidx.compose.ui.draw.alpha
 import coffee.crema.ui.components.CremaButton
 import coffee.crema.ui.components.CremaButtonVariant
+import coffee.crema.ui.components.CremaDotToggle
 import coffee.crema.ui.components.CremaIconButton
 import coffee.crema.ui.components.CremaSplitLabel
 import coffee.crema.ui.components.Eyebrow
@@ -195,14 +197,18 @@ fun QuickControlsSheet(
                 ) {
                     CremaSplitLabel(prefix = "", options = listOf(SplitOption("dose", "Dose"), SplitOption("grind", "Grind")), value = doseGrindMode, onChange = { doseGrindMode = it })
                 }
-                // 2 — Yield (+ live ratio).
+                // 2 — Yield (+ live ratio). The dot toggles the weight target
+                // (stop-on-weight); the value resolves Quick Controls override →
+                // profile (whichever is set). Greys out when the target is off.
                 QcStepper(
                     Modifier.weight(1f),
                     value = yieldOut, unit = "g", min = 10.0, max = 80.0, step = 0.5,
                     chips = listOf(28.0, 32.0, 36.0, 40.0, 45.0),
+                    enabled = stopOnWeight,
                     onChange = { onAdjustBrew(dose, it, brewTemp) },
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        CremaDotToggle(stopOnWeight, { onStopOnWeight(!stopOnWeight) })
                         Eyebrow("Yield", Modifier.weight(1f).padding(bottom = 3.dp))
                         Text("1:%.1f".format(if (dose > 0) yieldOut / dose else 0.0), style = MaterialTheme.typography.labelSmall.copy(fontFamily = JetBrainsMono), color = MaterialTheme.colorScheme.primary)
                     }
@@ -337,21 +343,25 @@ private fun QcStepper(
     step: Double,
     chips: List<Double>,
     onChange: (Double) -> Unit,
+    enabled: Boolean = true,
     header: @Composable () -> Unit,
 ) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
         header()
-        Row(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh).padding(4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            QcStepBtn("minus") { onChange((value - step).coerceIn(min, max)) }
-            Box(Modifier.weight(1f), contentAlignment = Alignment.Center) { CremaValueUnit(niceFmt(value), unit, valueSize = 18.sp) }
-            QcStepBtn("plus") { onChange((value + step).coerceIn(min, max)) }
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            chips.forEach { c -> QcChip(niceFmt(c), kotlin.math.abs(value - c) < 0.05) { onChange(c) } }
+        // The header (with its dot) stays lit; the bar + chips grey out when off.
+        Column(Modifier.alpha(if (enabled) 1f else 0.4f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh).padding(4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                QcStepBtn("minus") { onChange((value - step).coerceIn(min, max)) }
+                Box(Modifier.weight(1f), contentAlignment = Alignment.Center) { CremaValueUnit(niceFmt(value), unit, valueSize = 18.sp) }
+                QcStepBtn("plus") { onChange((value + step).coerceIn(min, max)) }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                chips.forEach { c -> QcChip(niceFmt(c), kotlin.math.abs(value - c) < 0.05) { onChange(c) } }
+            }
         }
     }
 }
