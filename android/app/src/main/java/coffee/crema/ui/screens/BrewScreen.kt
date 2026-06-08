@@ -1327,8 +1327,11 @@ private fun FootDivider() {
 private fun PowerButton(connected: Boolean, asleep: Boolean, onClick: () -> Unit) {
     // Mirrors the web PowerButton: disconnected → red plug, asleep → moon,
     // awake → sun. The icon shows the current state; clicking toggles it.
+    // The web --danger (dark theme) is #D26456 — a saturated terracotta, not
+    // Material's washed-out pink error, which read too whitish when dimmed.
+    val danger = Color(0xFFD26456)
     val tint = when {
-        !connected -> MaterialTheme.colorScheme.error
+        !connected -> danger
         asleep -> MaterialTheme.colorScheme.onSurfaceVariant
         else -> CremaTheme.telemetry.success
     }
@@ -1344,8 +1347,8 @@ private fun PowerButton(connected: Boolean, asleep: Boolean, onClick: () -> Unit
             .size(40.dp)
             .then(if (!connected) Modifier.alpha(0.65f) else Modifier)
             .clip(CircleShape)
-            .background(if (!connected) MaterialTheme.colorScheme.error.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceContainerHigh)
-            .then(if (!connected) Modifier.border(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.35f), CircleShape) else Modifier)
+            .background(if (!connected) danger.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceContainerHigh)
+            .then(if (!connected) Modifier.border(1.dp, danger.copy(alpha = 0.35f), CircleShape) else Modifier)
             .clickable(enabled = connected, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
