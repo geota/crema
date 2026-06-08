@@ -261,17 +261,8 @@ fun QuickControlsSheet(
                 }
             }
 
-            // ── Shot-behaviour toggles — full-width buttons across the row. ────
-            Eyebrow("Shot behaviour", Modifier.padding(top = 8.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                QcTogglePill("Stop on weight", stopOnWeight) { onStopOnWeight(it) }
-                QcTogglePill("Auto-tare", autoTare) { onAutoTare(it) }
-                QcTogglePill("Pre-flush", preFlush) { preFlush = it }
-                QcTogglePill("Steam purge", steamPurge) { steamPurge = it }
-                QcTogglePill("Steam eco", steamEco) { onSteamEco(it) }
-            }
-
-            // ── Chart-channel toggles (icon + primary/secondary mini-toggles). ─
+            // ── Footer — Chart channel toggles (left) and Shot-behaviour toggles
+            //    (right), both small mini-toggles, split by a vertical divider. ──
             val tel = CremaTheme.telemetry
             val groups = listOf(
                 ChannelGroup("gauge", tel.pressure, "pressure" to "Pressure", "resistance" to "Resistance"),
@@ -279,12 +270,9 @@ fun QuickControlsSheet(
                 ChannelGroup("thermometer", tel.temp, "headTemp" to "Coffee", "mixTemp" to "Water"),
                 ChannelGroup("scales", tel.weight, "weight" to "Weight", "weightFlow" to "Flow"),
             )
-            Eyebrow("Chart", Modifier.padding(top = 4.dp))
-            FlowRow(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
+            // Chart channels — full-width, single line.
+            Eyebrow("Chart", Modifier.padding(top = 6.dp))
+            FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 groups.forEach { g ->
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         PhIcon(g.icon, sizeDp = 14, tint = g.color)
@@ -292,6 +280,15 @@ fun QuickControlsSheet(
                         QcMiniToggle(g.secondary.second, g.secondary.first in channels, { onToggleChannel(g.secondary.first, it) }, g.color)
                     }
                 }
+            }
+            // Shot behaviour — full-width, single line.
+            Eyebrow("Shot behaviour", Modifier.padding(top = 6.dp))
+            FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                QcMiniToggle("Stop on weight", stopOnWeight, onStopOnWeight)
+                QcMiniToggle("Auto-tare", autoTare, onAutoTare)
+                QcMiniToggle("Pre-flush", preFlush, { preFlush = it })
+                QcMiniToggle("Steam purge", steamPurge, { steamPurge = it })
+                QcMiniToggle("Steam eco", steamEco, onSteamEco)
             }
         }
     }
@@ -376,27 +373,6 @@ private fun RowScope.QcChip(label: String, active: Boolean, onClick: () -> Unit)
             label,
             style = MaterialTheme.typography.labelSmall.copy(fontFamily = JetBrainsMono, fontSize = 10.sp),
             color = if (active) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f),
-            maxLines = 1,
-        )
-    }
-}
-
-// A full-width shot-behaviour toggle button — copper-filled when on.
-@Composable
-private fun RowScope.QcTogglePill(label: String, on: Boolean, onToggle: (Boolean) -> Unit) {
-    Box(
-        Modifier
-            .weight(1f)
-            .clip(RoundedCornerShape(10.dp))
-            .background(if (on) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh)
-            .clickable { onToggle(!on) }
-            .padding(vertical = 11.dp, horizontal = 8.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            label,
-            style = MaterialTheme.typography.labelLarge,
-            color = if (on) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,
         )
     }
