@@ -34,6 +34,9 @@ import coffee.crema.maintenance.MAINTENANCE_MAX_SAMPLE_DT_S
 import coffee.crema.maintenance.MAINTENANCE_MAX_SAMPLE_ML
 import coffee.crema.maintenance.defaultMaintenanceState
 import coffee.crema.settings.AppPrefs
+import coffee.crema.visualizer.VisualizerClient
+import coffee.crema.visualizer.VisualizerStore
+import coffee.crema.visualizer.VisualizerSync
 import coffee.crema.settings.SettingsStore
 import coffee.crema.ble.BleScanner
 import coffee.crema.ble.BleSessionRecorder
@@ -281,6 +284,9 @@ data class MainUiState(
     val draftProfile: CremaProfile? = null,
     /** Completed-shot log (newest first), persisted via [HistoryStore]. */
     val history: List<StoredShot> = emptyList(),
+    /** Visualizer sync state (account / prefs / in-flight uploads) — mirrored
+     *  from [MainViewModel.visualizer]'s controller flow. */
+    val visualizer: VisualizerSync.UiState = VisualizerSync.UiState(),
     /** A shot id the History screen should select on next open (set when the Brew
      *  "Last shot" card is tapped). Consumed + cleared by HistoryScreen. */
     val pendingHistoryShotId: String? = null,
@@ -505,6 +511,25 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val maintenanceStore = MaintenanceStore(app, json)
 
     /**
+     * Visualizer sync — sign-in, account, shot upload. A self-contained
+     * controller (deliberately NOT folded into this ViewModel); its [state]
+     * is mirrored into [MainUiState.visualizer] below and the UI calls its
+     * methods through this public handle.
+     */
+    val visualizer: VisualizerSync = VisualizerSync(
+        store = VisualizerStore(app, json),
+        client = VisualizerClient(json),
+        json = json,
+        scope = viewModelScope,
+        clientId = coffee.crema.BuildConfig.VISUALIZER_CLIENT_ID,
+        appVersion = runCatching {
+            app.packageManager.getPackageInfo(app.packageName, 0).versionName
+        }.getOrNull() ?: "dev",
+        notify = { msg -> notifyUser(msg) },
+        onShotSynced = { localId, visualizerId -> markShotSynced(localId, visualizerId) },
+    )
+
+    /**
      * The live integrated water total, litres — seeded from the loaded
      * [MaintenanceState.totalLitres] in [loadMaintenance] and advanced on every
      * `Event.Telemetry` (group_flow × Δseconds / 1000). Held in a `var` rather
@@ -610,7 +635,23 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             hiddenIds = hiddenProfileStore.load()
             loadCustomProfiles()
             loadMaintenance()
+            visualizer.load()
         }
+        // Mirror the Visualizer controller's state into the UI snapshot.
+        viewModelScope.launch {
+            visualizer.state.collect { vs ->
+                _ui.update { it.copy(visualizer = vs) }
+            }
+        }
+    }
+
+    /** Stamp a successful Visualizer upload onto the local shot. Persisted. */
+    private fun markShotSynced(localId: String, visualizerId: String) {
+        _ui.update { st ->
+            st.copy(history = st.history.map { if (it.id == localId) it.copy(visualizerId = visualizerId) else it })
+        }
+        val snapshot = _ui.value.history
+        viewModelScope.launch { historyStore.save(snapshot) }
     }
 
     /**
@@ -1912,16 +1953,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val next = (listOf(shot) + s.history).take(HistoryStore.MAX_SHOTS)
         _ui.update { it.copy(history = next) }
         viewModelScope.launch { historyStore.save(next) }
+        // Auto-sync: push the fresh shot to Visualizer when armed + signed in.
+        visualizer.maybeAutoUpload(shot)
     }
 
     /** Apply a user rating / tasting-notes edit to a logged shot. Persisted. */
     fun updateShot(id: String, rating: Int, notes: String) {
-        val s = _ui.value
-        val next = s.history.map {
-            if (it.id == id) it.copy(rating = rating.coerceIn(0, 5).takeIf { r -> r > 0 }, notes = notes.ifBlank { null }) else it
+        _ui.update { st ->
+            st.copy(
+                history = st.history.map {
+                    if (it.id == id) it.copy(rating = rating.coerceIn(0, 5).takeIf { r -> r > 0 }, notes = notes.ifBlank { null }) else it
+                },
+            )
         }
-        _ui.value = s.copy(history = next)
-        viewModelScope.launch { historyStore.save(next) }
+        val snapshot = _ui.value.history
+        viewModelScope.launch { historyStore.save(snapshot) }
     }
 
     // ── Maintenance (water accumulation) ────────────────────────────────────────

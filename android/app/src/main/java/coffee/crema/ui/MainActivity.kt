@@ -1,6 +1,7 @@
 package coffee.crema.ui
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.view.WindowManager
 import android.os.Bundle
@@ -91,6 +92,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // A cold start can itself be the OAuth redirect (process died while
+        // the user was in the browser).
+        handleVisualizerCallback(intent)
         setContent {
             val ui by viewModel.ui.collectAsStateWithLifecycle()
             // Theme mode is a persisted app pref (Settings → Display).
@@ -201,6 +205,24 @@ class MainActivity : ComponentActivity() {
                 }
                 }
             }
+        }
+    }
+
+    /** singleTask re-entry — the Visualizer OAuth redirect lands here. */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleVisualizerCallback(intent)
+    }
+
+    /** Route a `crema://visualizer/callback?code&state` redirect to the controller. */
+    private fun handleVisualizerCallback(intent: Intent?) {
+        val uri = intent?.data ?: return
+        if (uri.scheme == "crema" && uri.host == "visualizer") {
+            viewModel.visualizer.handleCallback(
+                code = uri.getQueryParameter("code"),
+                returnedState = uri.getQueryParameter("state"),
+                error = uri.getQueryParameter("error"),
+            )
         }
     }
 

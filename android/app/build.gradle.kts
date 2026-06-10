@@ -32,6 +32,16 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "0.1"
+
+        // Visualizer Doorkeeper application client_id (a PUBLIC client — PKCE,
+        // no secret to keep). Per-environment like the web shell's
+        // VITE_VISUALIZER_CLIENT_ID:
+        //   ./gradlew assembleDebug -PvisualizerClientId=…   (or the env var)
+        // Blank = Settings → Sharing renders "not configured", same as web.
+        val visualizerClientId =
+            (project.findProperty("visualizerClientId") as String?)
+                ?: System.getenv("VISUALIZER_CLIENT_ID") ?: ""
+        buildConfigField("String", "VISUALIZER_CLIENT_ID", "\"$visualizerClientId\"")
     }
 
     buildTypes {
@@ -50,6 +60,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     packaging {

@@ -48,6 +48,11 @@ data class StoredShot(
      * existed (additive — older records deserialise cleanly).
      */
     val samples: List<TelemetrySample> = emptyList(),
+    /**
+     * Visualizer `shot.id` once uploaded; null until pushed (mirrors the web
+     * StoredShot field — drives the History sync pip + "Upload all unsynced").
+     */
+    val visualizerId: String? = null,
 )
 
 /** Max telemetry points stored per shot — enough for a faithful detail chart. */
