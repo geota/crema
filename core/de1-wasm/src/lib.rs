@@ -611,6 +611,14 @@ pub fn samples_from_visualizer_detail(detail_json: &str) -> Result<String, Strin
     de1_domain::samples_from_visualizer_detail_json(detail_json)
 }
 
+/// The Rust core's crate version (workspace-versioned) — the Settings →
+/// About "Core" identity row. Mirrors the FFI `core_version`.
+#[wasm_bindgen(js_name = coreVersion)]
+#[must_use]
+pub fn core_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
 /// JS hands integer-valued `f64`s for unix-ms timestamps (a plain `i64`
 /// doesn't cross the wasm-bindgen ABI cleanly); truncate defensively,
 /// non-finite → 0 rather than a panic. Mirrors the `signatureForShot` guard.

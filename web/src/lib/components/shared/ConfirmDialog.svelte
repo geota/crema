@@ -14,13 +14,22 @@
 	let typed = $state('');
 	let inputEl = $state<HTMLInputElement | null>(null);
 
+	/** The confirm gate: prompts are always submittable; a `requireTyped`
+	 *  confirm arms only on an exact (trimmed) match. */
+	const confirmArmed = $derived.by(() => {
+		const d = dialog;
+		if (!d || d.kind === 'prompt') return true;
+		const expected = d.options.requireTyped;
+		return expected == null || typed.trim() === expected;
+	});
+
 	// Seed (prompt) / clear the input each time a dialog opens, and focus the
 	// prompt input so the user can type immediately.
 	$effect(() => {
 		const d = dialog;
 		if (!d) return;
 		typed = d.kind === 'prompt' ? (d.options.initialValue ?? '') : '';
-		if (d.kind === 'prompt') {
+		if (d.kind === 'prompt' || d.options.requireTyped != null) {
 			// Focus after the input renders.
 			queueMicrotask(() => inputEl?.focus());
 		}
@@ -28,7 +37,7 @@
 
 	function confirm(): void {
 		const d = dialog;
-		if (!d) return;
+		if (!d || !confirmArmed) return;
 		resolveActive(d.kind === 'prompt' ? typed : true);
 	}
 	function cancel(): void {
@@ -71,14 +80,16 @@
 			{/if}
 			<p class="cd-message">{dialog.options.message}</p>
 
-			{#if dialog.kind === 'prompt'}
+			{#if dialog.kind === 'prompt' || dialog.options.requireTyped != null}
 				<input
 					bind:this={inputEl}
 					bind:value={typed}
 					class="cd-input"
 					type="text"
 					autocomplete="off"
-					placeholder={dialog.options.placeholder ?? ''}
+					placeholder={dialog.kind === 'prompt'
+						? (dialog.options.placeholder ?? '')
+						: `Type \u201c${dialog.options.requireTyped}\u201d to confirm`}
 					aria-label={dialog.options.message}
 					onkeydown={(e) => {
 						if (e.key === 'Enter') {
@@ -96,6 +107,7 @@
 				<button
 					type="button"
 					class={['st-btn', dialog.options.danger ? 'st-btn-danger' : 'st-btn-primary']}
+					disabled={!confirmArmed}
 					onclick={confirm}
 				>
 					{dialog.options.confirmLabel ?? (dialog.kind === 'prompt' ? 'OK' : 'Confirm')}

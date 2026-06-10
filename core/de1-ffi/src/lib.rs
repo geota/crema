@@ -458,6 +458,14 @@ pub fn export_v2_json_shot(shot_json: String) -> Result<String, CremaError> {
     de1_domain::export_v2_json_shot(&shot).map_err(crema_err)
 }
 
+/// The Rust core's crate version (workspace-versioned) — the Settings →
+/// About "Core" identity row. Mirrors the wasm `coreVersion`.
+#[uniffi::export]
+#[must_use]
+pub fn core_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
 /// Reconcile a remote Visualizer pull against the local shot refs. Payload
 /// `{"local": LocalShotRef[], "remote": WireShot[]}` → `ReconcileAction[]`
 /// JSON (`kind: add | update | bind`). Mirrors the wasm `reconcileShots`

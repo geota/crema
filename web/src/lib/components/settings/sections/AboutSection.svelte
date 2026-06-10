@@ -14,6 +14,20 @@
 	import pkg from '../../../../../package.json';
 
 	const version = pkg.version;
+
+	/** The Rust core's crate version, read live from the wasm module — the
+	 * same identity the tablet shows over UniFFI. Defensive: on the
+	 * no-Web-Bluetooth path the wasm module may not have loaded. */
+	let coreVer = $state('—');
+	$effect(() => {
+		void import('$lib/wasm/de1_wasm')
+			.then((m) => {
+				coreVer = m.coreVersion();
+			})
+			.catch(() => {
+				coreVer = '—';
+			});
+	});
 	const name = pkg.name;
 
 	/**
@@ -58,6 +72,29 @@
 		<div class="st-about-line">
 			For the Decent DE1 family. Local-only — no Crema account required. Not
 			affiliated with Decent Espresso.
+		</div>
+	</div>
+</div>
+
+<!-- ── Version — App / Core / Machine identity rows (tablet parity: the
+     Android shell shows the same trio; Core reads the wasm crate version
+     live, the analogue of its UniFFI core_version). ─────────────────── -->
+<div class="st-group">
+	<div class="st-group-head">
+		<div class="st-group-title">Version</div>
+	</div>
+	<div class="st-group-rows">
+		<div class="st-row">
+			<div class="st-row-text"><div class="st-row-title">App</div></div>
+			<div class="st-row-control"><span class="st-about-mono">v{version}</span></div>
+		</div>
+		<div class="st-row">
+			<div class="st-row-text"><div class="st-row-title">Core</div></div>
+			<div class="st-row-control"><span class="st-about-mono">de1-core v{coreVer} · wasm</span></div>
+		</div>
+		<div class="st-row">
+			<div class="st-row-text"><div class="st-row-title">Machine</div></div>
+			<div class="st-row-control"><span class="st-about-mono">Decent DE1</span></div>
 		</div>
 	</div>
 </div>
@@ -231,6 +268,12 @@
 </div>
 
 <style>
+	.st-about-mono {
+		font-family: var(--font-mono);
+		font-size: 12px;
+		color: var(--fg-1);
+	}
+
 	/* ── Open-source libraries list ──────────────────────────────────────
 	   A compact two-column grid of library entries inside the group's
 	   bordered card. Each entry is a link (name) followed by a one-line

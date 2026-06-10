@@ -10,6 +10,21 @@ authors.workspace = true
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+# wasm-pack runs binaryen's `wasm-opt` over the wasm-bindgen output. We pin the
+# level here rather than lean on wasm-pack's implicit default so it's a
+# documented, reproducible decision that can't silently drift if wasm-pack
+# changes its default (or skip the pass — wasm-pack only WARNs if it can't run).
+#
+# `-O` is the sweet spot, measured on this bundle: it trims the raw module
+# ~209 KB (1.65 MB → 1.44 MB) over no wasm-opt, and over the wire — Cloudflare
+# serves it brotli/gzip-compressed — every other level lands within <0.3 %.
+# `-Oz` shaves a further ~20 KB *raw* but that win reverses after compression
+# (brotli 326.3 KB vs 325.3 KB), and its size-first passes cost per-frame decode
+# speed — the same trade the `[profile.release]` opt-level note (core/Cargo.toml)
+# deliberately rejects. So: keep `-O`.
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ['-O']
+
 [dependencies]
 de1-app = { path = "../de1-app" }
 de1-domain = { path = "../de1-domain" }

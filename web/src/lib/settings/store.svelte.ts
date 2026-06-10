@@ -140,6 +140,13 @@ export interface Settings {
 	 */
 	grinderModel: string;
 
+	/**
+	 * Hold a Screen Wake Lock while a shot is pulling so the display can't
+	 * sleep mid-extraction. Consumed by the shell layout's effect via
+	 * `$lib/shell/wake-lock`; a no-op on browsers without the API.
+	 */
+	keepScreenOnBrew: boolean;
+
 	// ── Sharing (Visualizer) ─────────────────────────────────────────────
 	/** Auto-upload finished shots to Visualizer. */
 	visualizerAutoUpload: boolean;
@@ -232,6 +239,8 @@ export const DEFAULT_SETTINGS: Settings = {
 	suppressDe1Sleep: true,
 
 	grinderModel: '',
+
+	keepScreenOnBrew: false,
 
 	// preserved for future visualizer.coffee upload queue — not currently read anywhere
 	visualizerAutoUpload: true,
