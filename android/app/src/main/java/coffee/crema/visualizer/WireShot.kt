@@ -27,8 +27,9 @@ fun shotFinalWeight(shot: StoredShot): Float? {
     return weights.lastOrNull() ?: weights.maxOrNull() ?: shot.yieldG
 }
 
-/** Assemble the Rust wire `StoredShot` JSON for [shot]. */
-fun wireShotJson(shot: StoredShot): JsonObject {
+/** Assemble the Rust wire `StoredShot` JSON for [shot]. [grinderModel] is the
+ *  equipment-level settings cascade value (web `resolveGrinderModel`). */
+fun wireShotJson(shot: StoredShot, grinderModel: String? = null): JsonObject {
     val (roasterName, _, beanShort) = beanNameParts(shot.beanName)
     return buildJsonObject {
         put("formatVersion", 3)
@@ -104,7 +105,7 @@ fun wireShotJson(shot: StoredShot): JsonObject {
                 }
             },
         )
-        put("grinderModel", JsonNull)
+        grinderModel?.let { put("grinderModel", it) } ?: put("grinderModel", JsonNull)
         put("tags", buildJsonArray {})
         put("yieldTarget", JsonNull)
         put("brewTempTarget", JsonNull)

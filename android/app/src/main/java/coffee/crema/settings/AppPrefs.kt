@@ -41,6 +41,12 @@ data class AppPrefs(
     val defaultRatio: Float = 2f,
     val defaultBrewTempC: Float = 93f,
     val defaultPreinfuseS: Float = 8f,
+    /** Equipment-level grinder model (web `grinderModel`) — free text shown on
+     *  Brew + sent with Visualizer uploads/patches. Blank = unset. */
+    val grinderModel: String = "",
+    /** Keep the DE1 awake while Crema is open (web `suppressDe1Sleep`) — a
+     *  60 s UserPresent (MMR 0x803858) heartbeat resets the sleep timer. */
+    val suppressDe1Sleep: Boolean = true,
     // ── Session restore ──────────────────────────────────────────────────────
     /** The last active profile id, restored on launch (web `crema.profiles.activeId`). */
     val activeProfileId: String? = null,
