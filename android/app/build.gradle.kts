@@ -144,6 +144,9 @@ dependencies {
     // emulators (16 KB memory pages). Older JNA fails to dlopen on them.
     implementation("net.java.dev.jna:jna:5.17.0@aar")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+    // Visualizer HTTP — OkHttp because HttpURLConnection rejects the PATCH
+    // verb (shot edits sync via PATCH /api/shots/{id}).
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
     // The de1-app `CoreOutput` JSON is deserialized with kotlinx.serialization.
     // The generated `core/bindings/crema-core.kt` types are @Serializable.

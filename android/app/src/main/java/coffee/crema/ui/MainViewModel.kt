@@ -1957,7 +1957,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         visualizer.maybeAutoUpload(shot)
     }
 
-    /** Apply a user rating / tasting-notes edit to a logged shot. Persisted. */
+    /** Apply a user rating / tasting-notes edit to a logged shot. Persisted.
+     *  An already-uploaded shot mirrors the edit to Visualizer (soft). */
     fun updateShot(id: String, rating: Int, notes: String) {
         _ui.update { st ->
             st.copy(
@@ -1968,6 +1969,32 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         val snapshot = _ui.value.history
         viewModelScope.launch { historyStore.save(snapshot) }
+        schedulePatchEdited(id)
+    }
+
+    /**
+     * Set (or with null, clear) a shot's per-upload Visualizer privacy
+     * override. Persisted; mirrors to the uploaded copy like [updateShot].
+     */
+    fun setShotPrivacy(id: String, privacy: String?) {
+        _ui.update { st ->
+            st.copy(history = st.history.map { if (it.id == id) it.copy(privacy = privacy) else it })
+        }
+        val snapshot = _ui.value.history
+        viewModelScope.launch { historyStore.save(snapshot) }
+        schedulePatchEdited(id)
+    }
+
+    /** Debounced edit→Visualizer mirror: the notes field fires per keystroke
+     *  and star taps come in bursts — one PATCH goes out 1.5 s after the last
+     *  edit, with the shot's then-current state. */
+    private var shotPatchJob: kotlinx.coroutines.Job? = null
+    private fun schedulePatchEdited(id: String) {
+        shotPatchJob?.cancel()
+        shotPatchJob = viewModelScope.launch {
+            delay(1_500)
+            _ui.value.history.firstOrNull { it.id == id }?.let { visualizer.patchEditedShot(it) }
+        }
     }
 
     // ── Maintenance (water accumulation) ────────────────────────────────────────
