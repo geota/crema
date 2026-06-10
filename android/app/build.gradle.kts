@@ -33,23 +33,47 @@ android {
         versionCode = 1
         versionName = "0.1"
 
-        // Visualizer Doorkeeper application client_id (a PUBLIC client — PKCE,
-        // no secret to keep). Per-environment like the web shell's
-        // VITE_VISUALIZER_CLIENT_ID:
-        //   ./gradlew assembleDebug -PvisualizerClientId=…   (or the env var)
-        // Blank = Settings → Sharing renders "not configured", same as web.
-        val visualizerClientId =
-            (project.findProperty("visualizerClientId") as String?)
-                ?: System.getenv("VISUALIZER_CLIENT_ID") ?: ""
-        buildConfigField("String", "VISUALIZER_CLIENT_ID", "\"$visualizerClientId\"")
+    }
+
+    // Visualizer Doorkeeper application client_id (a PUBLIC client — PKCE, no
+    // secret to keep). Per-environment like the web's VITE_VISUALIZER_CLIENT_ID.
+    // Resolution order: -PvisualizerClientId=… → VISUALIZER_CLIENT_ID env var →
+    // (debug only) visualizerClientId in the gitignored local.properties.
+    // Nothing is committed; release has no baked fallback — the production OID
+    // must come from the flag/env. Blank = Settings → Sharing renders
+    // "not configured", same as web.
+    val visualizerClientIdOverride =
+        (project.findProperty("visualizerClientId") as String?)
+            ?: System.getenv("VISUALIZER_CLIENT_ID")
+    val visualizerClientIdDev = run {
+        // local.properties is AGP-only (sdk.dir) — not auto-exposed as a Gradle
+        // property, so read it explicitly.
+        val f = rootProject.file("local.properties")
+        if (!f.exists()) {
+            ""
+        } else {
+            val props = Properties()
+            f.inputStream().use { props.load(it) }
+            props.getProperty("visualizerClientId") ?: ""
+        }
     }
 
     buildTypes {
         debug {
             isMinifyEnabled = false
+            buildConfigField(
+                "String",
+                "VISUALIZER_CLIENT_ID",
+                "\"${visualizerClientIdOverride ?: visualizerClientIdDev}\"",
+            )
         }
         release {
             isMinifyEnabled = false
+            buildConfigField(
+                "String",
+                "VISUALIZER_CLIENT_ID",
+                "\"${visualizerClientIdOverride ?: ""}\"",
+            )
         }
     }
 
