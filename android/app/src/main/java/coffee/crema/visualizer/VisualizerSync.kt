@@ -173,6 +173,24 @@ class VisualizerSync(
         }
     }
 
+    /** The Sharing card's "Test" — a `/me` round-trip with a visible verdict. */
+    fun testConnection() {
+        if (persisted.tokens == null) {
+            notify("Not signed in to Visualizer")
+            return
+        }
+        _state.update { it.copy(busy = true) }
+        scope.launch {
+            runCatching { withFreshToken { client.fetchAccount(it) } }
+                .onSuccess { account ->
+                    persist { it.copy(account = account) }
+                    notify("Visualizer connection OK — signed in as ${account.name}")
+                }
+                .onFailure { notify("Visualizer connection failed: ${it.message}") }
+            _state.update { it.copy(busy = false) }
+        }
+    }
+
     // ── Preferences ──────────────────────────────────────────────────────────
 
     fun setAutoSync(enabled: Boolean) = scope.launch { persist { it.copy(autoSync = enabled) } }

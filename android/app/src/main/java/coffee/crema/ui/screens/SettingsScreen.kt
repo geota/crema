@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -412,88 +413,102 @@ fun SettingsScreen(
                         }
                     }
                     "sharing" -> {
-                        SetHead("Sync", "Sharing", "Sync shots and libraries to Visualizer and export your data.")
+                        SetHead("Third-party", "Sharing", "Crema is local-only — there's no Crema account. Shots and profiles live on this device. Connect Visualizer if you want to back up, share, or compare shots online.")
                         val vz = ui.visualizer
                         val context = androidx.compose.ui.platform.LocalContext.current
                         // Re-validate the cached account whenever the section opens.
                         LaunchedEffect(Unit) { vm.visualizer.refreshAccount() }
-                        SetGroup("Visualizer") {
-                            when {
-                                !vz.configured -> SetRow(
-                                    "Account",
-                                    "This build has no Visualizer client id — build with -PvisualizerClientId=… to enable sync.",
-                                    notImplemented = true,
-                                ) { SetSelect("Unavailable") }
-                                !vz.signedIn -> SetRow("Account", "Sign in to sync shots to visualizer.coffee.") {
-                                    CremaButton(
-                                        onClick = {
-                                            vm.visualizer.beginSignIn { url ->
-                                                context.startActivity(
-                                                    android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)),
-                                                )
-                                            }
-                                        },
-                                        variant = CremaButtonVariant.Tonal,
-                                        enabled = !vz.busy,
-                                        label = if (vz.busy) "Signing in…" else "Sign in",
+                        val openUrl: (String) -> Unit = { url ->
+                            context.startActivity(
+                                android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)),
+                            )
+                        }
+                        VisualizerHeroCard(
+                            vz = vz,
+                            onSignIn = { vm.visualizer.beginSignIn(openUrl) },
+                            onSignOut = { vm.visualizer.signOut() },
+                            onTest = { vm.visualizer.testConnection() },
+                            onOpenSite = { openUrl("https://visualizer.coffee") },
+                        )
+                        // Connected-state sync controls (web shows BeanSyncSection here;
+                        // Android v1 = the shots-push controls).
+                        if (vz.signedIn) {
+                            SetGroup("Sync") {
+                                SetRow("Auto-sync new shots", "Upload each shot as it finishes.") {
+                                    CremaSwitch(vz.autoSync, vm.visualizer::setAutoSync)
+                                }
+                                SetRow("Privacy", "Who can see shots you upload.") {
+                                    CremaSegmentedButton(
+                                        options = listOf(SegOption("public", "Public"), SegOption("unlisted", "Unlisted"), SegOption("private", "Private")),
+                                        value = vz.privacy,
+                                        onChange = vm.visualizer::setPrivacy,
                                     )
                                 }
-                                else -> SetRow("Account", vz.account?.name ?: "Signed in") {
-                                    CremaButton(onClick = { vm.visualizer.signOut() }, variant = CremaButtonVariant.Text, danger = true, label = "Sign out")
+                                SetRow("Include profile", "Attach the full recipe to uploads.") { CremaSwitch(vz.includeProfile, vm.visualizer::setIncludeProfile) }
+                                SetRow("Include tasting notes", "Attach your notes to uploads.") { CremaSwitch(vz.includeNotes, vm.visualizer::setIncludeNotes) }
+                                val unsynced = ui.history.count { it.visualizerId == null }
+                                SetRow(
+                                    "Upload backlog",
+                                    if (unsynced == 0) "All ${ui.history.size} shots are on Visualizer."
+                                    else "$unsynced shot(s) not uploaded yet.",
+                                ) {
+                                    val uploading = vz.uploadingShotIds.isNotEmpty()
+                                    CremaButton(
+                                        onClick = { vm.visualizer.uploadAllUnsynced(ui.history) },
+                                        variant = CremaButtonVariant.Outlined,
+                                        icon = "cloud-arrow-up",
+                                        enabled = unsynced > 0 && !vz.busy && !uploading,
+                                        label = if (uploading) "Uploading…" else "Upload all",
+                                    )
+                                }
+                                SetRow("Last sync", "Most recent successful shot upload.", last = true) {
+                                    MonoReadout(
+                                        vz.lastShotSyncAt?.let {
+                                            android.text.format.DateUtils.getRelativeTimeSpanString(it).toString()
+                                        } ?: "—",
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                    )
                                 }
                             }
-                            SetRow("Auto-sync new shots", "Upload each shot as it finishes.", last = true) {
-                                CremaSwitch(vz.autoSync, vm.visualizer::setAutoSync, enabled = vz.signedIn)
-                            }
-                        }
-                        SetGroup("Upload options") {
-                            SetRow("Privacy", "Who can see shots you upload.") {
-                                CremaSegmentedButton(
-                                    options = listOf(SegOption("public", "Public"), SegOption("unlisted", "Unlisted"), SegOption("private", "Private")),
-                                    value = vz.privacy,
-                                    onChange = vm.visualizer::setPrivacy,
-                                )
-                            }
-                            SetRow("Include profile", "Attach the full recipe to uploads.") { CremaSwitch(vz.includeProfile, vm.visualizer::setIncludeProfile) }
-                            SetRow("Include tasting notes", "Attach your notes to uploads.", last = true) { CremaSwitch(vz.includeNotes, vm.visualizer::setIncludeNotes) }
-                        }
-                        SetGroup("Sync now") {
-                            val unsynced = ui.history.count { it.visualizerId == null }
-                            SetRow(
-                                "Shots",
-                                if (unsynced == 0) "All ${ui.history.size} shots are on Visualizer."
-                                else "$unsynced shot(s) not uploaded yet.",
-                            ) {
-                                // busy also covers the sign-in exchange — only call it
-                                // "Uploading" when shots are actually in flight.
-                                val uploading = vz.uploadingShotIds.isNotEmpty()
-                                CremaButton(
-                                    onClick = { vm.visualizer.uploadAllUnsynced(ui.history) },
-                                    variant = CremaButtonVariant.Outlined,
-                                    icon = "cloud-arrow-up",
-                                    enabled = vz.signedIn && unsynced > 0 && !vz.busy && !uploading,
-                                    label = if (uploading) "Uploading…" else "Upload all",
-                                )
-                            }
-                            SetRow("Last sync", "Most recent successful shot upload.", last = true) {
-                                MonoReadout(
-                                    vz.lastShotSyncAt?.let {
-                                        android.text.format.DateUtils.getRelativeTimeSpanString(it).toString()
-                                    } ?: "—",
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                )
-                            }
-                        }
-                        SetGroup("What to sync") {
-                            SetRow("Shots", "Pushed to Visualizer on completion (this device → cloud).") { SetSelect("Backup") }
-                            SetRow("Beans & roasters", "Two-way library sync is web-only for now.", last = true, notImplemented = true) { SetSelect("Off") }
                         }
                         SetGroup("Local export") {
-                            // SAF file saves — the share-sheet Intent-extra path tops out
-                            // around the 1 MB Binder limit, which a real shot history
-                            // exceeds easily; CreateDocument streams to disk instead.
-                            SetRow("History (.json)", "Export every stored shot.") { CremaButton(onClick = { launchSave("crema-history.json", vm.shotsJson(null)) }, variant = CremaButtonVariant.Text, icon = "download-simple", label = "Export") }
-                            SetRow("Beans & roasters", "Export your bean library.", last = true) { CremaButton(onClick = { launchSave("crema-beans.json", vm.beansLibraryJson()) }, variant = CremaButtonVariant.Text, icon = "download-simple", label = "Export") }
+                            SetRow(
+                                "History export",
+                                "One-shot download of your entire shot history as JSON. Useful for spreadsheets and other tools.",
+                                last = true,
+                            ) {
+                                CremaButton(onClick = { launchSave("crema-history.json", vm.shotsJson(null)) }, variant = CremaButtonVariant.Outlined, icon = "download-simple", label = "Export")
+                            }
+                        }
+                        // Other integrations — the web's stub trio, disabled until real.
+                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Eyebrow("Other integrations")
+                            Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                OtherIntegrationCard(
+                                    icon = "chats-circle",
+                                    title = "DecentForum",
+                                    sub = "Share a profile from the library straight to a forum post.",
+                                    buttonIcon = "link",
+                                    buttonLabel = "Connect",
+                                    modifier = Modifier.weight(1f).fillMaxHeight(),
+                                )
+                                OtherIntegrationCard(
+                                    icon = "cube",
+                                    title = "Insight",
+                                    sub = "Decent's profile marketplace. Import and rate profiles.",
+                                    buttonIcon = "link",
+                                    buttonLabel = "Connect",
+                                    modifier = Modifier.weight(1f).fillMaxHeight(),
+                                )
+                                OtherIntegrationCard(
+                                    icon = "house",
+                                    title = "Home Assistant",
+                                    sub = "Expose shot events as MQTT topics.",
+                                    buttonIcon = "gear-six",
+                                    buttonLabel = "Configure in Advanced",
+                                    modifier = Modifier.weight(1f).fillMaxHeight(),
+                                )
+                            }
                         }
                     }
                     "calibration" -> {
@@ -733,7 +748,11 @@ private fun MonoReadout(text: String, color: Color = MaterialTheme.colorScheme.o
     Text(text, style = TextStyle(fontFamily = JetBrainsMono, fontSize = 12.sp, fontFeatureSettings = "tnum"), color = color)
 }
 
-// ── Machine hero — image well + status/meta + firmware tile ──────────────────
+// ── Machine hero — artwork well + info inner card + firmware inner card ──────
+// Web .st-machinecard: grid 120px | 1fr | 280px, gap 24, padding 20×22. The two
+// info panels share one inner-card treatment (tinted fill, hairline, 14dp pad,
+// eyebrow at top, action pushed to the bottom) — the connection card neutral,
+// the firmware card copper.
 @Composable
 private fun MachineHeroCard(
     connected: Boolean,
@@ -747,43 +766,72 @@ private fun MachineHeroCard(
     onUpdateFirmware: (() -> Unit)?,
 ) {
     CremaCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
-        Row(Modifier.fillMaxWidth().padding(20.dp), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+        Row(
+            Modifier.fillMaxWidth().height(IntrinsicSize.Min).padding(horizontal = 22.dp, vertical = 20.dp),
+            horizontalArrangement = Arrangement.spacedBy(24.dp),
+        ) {
+            // Artwork well — page-dark fill, the stylised DE1 drawing centred.
             Box(
-                Modifier.size(120.dp).clip(MaterialTheme.shapes.medium).background(MaterialTheme.colorScheme.surfaceContainerLowest),
+                Modifier.width(120.dp).fillMaxHeight()
+                    .clip(MaterialTheme.shapes.medium)
+                    .background(MaterialTheme.colorScheme.surfaceContainerLowest)
+                    .border(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.04f), MaterialTheme.shapes.medium),
                 contentAlignment = Alignment.Center,
-            ) { PhIcon("coffee", sizeDp = 44, tint = MaterialTheme.colorScheme.onSurfaceVariant) }
+            ) { De1Artwork(Modifier.size(width = 88.dp, height = 104.dp)) }
 
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            // Machine info inner card — the neutral twin of the firmware card.
+            Column(
+                Modifier.weight(1f).fillMaxHeight()
+                    .clip(MaterialTheme.shapes.medium)
+                    .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.04f))
+                    .border(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f), MaterialTheme.shapes.medium)
+                    .padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     StatusDot(connected)
-                    Text(stateLabel, style = MaterialTheme.typography.labelMedium, color = if (connected) CremaTheme.telemetry.success else MaterialTheme.colorScheme.onSurfaceVariant)
+                    Eyebrow(stateLabel, color = if (connected) CremaTheme.telemetry.success else MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                Text("Decent DE1", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onSurface)
-                Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                if (connected) {
+                    Text("Decent DE1", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
+                }
+                Column(Modifier.padding(top = 4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     HeroMeta("Firmware", firmware ?: "—")
                     HeroMeta("Model", model ?: "—")
                     HeroMeta("Board", board ?: "—")
-                    HeroMeta("Bluetooth", ble ?: "—")
+                    HeroMeta("BLE", ble ?: "—")
                 }
+                Spacer(Modifier.weight(1f))
                 CremaButton(
                     onClick = onConnect,
-                    variant = CremaButtonVariant.Tonal,
+                    modifier = Modifier.fillMaxWidth(),
+                    variant = if (connected) CremaButtonVariant.Tonal else CremaButtonVariant.Filled,
                     icon = if (connected) "link-break" else "bluetooth",
                     label = if (connected) "Disconnect" else "Connect",
                 )
             }
 
+            // Firmware inner card — copper-tinted variant of the same shape.
             Column(
-                Modifier.weight(1.1f).clip(MaterialTheme.shapes.medium).background(MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)).padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                Modifier.width(280.dp).fillMaxHeight()
+                    .clip(MaterialTheme.shapes.medium)
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.06f))
+                    .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.30f), MaterialTheme.shapes.medium)
+                    .padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                Eyebrow("Firmware", color = MaterialTheme.colorScheme.primary)
-                Text(if (connected) "Up to date" else "No update info", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                    Eyebrow("Firmware", color = MaterialTheme.colorScheme.primary)
+                    if (!connected) ConnectDe1Pill()
+                }
+                Text(if (connected) "Up to date" else "No update info", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
                 Text(
-                    if (connected) "Your DE1 is running the latest firmware." else "Connect your DE1 to check for firmware updates.",
+                    if (connected) "Your DE1 is running the latest firmware Crema knows about."
+                    else "Connect your DE1 to compare its installed firmware against the latest.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                Spacer(Modifier.weight(1f))
                 if (onUpdateFirmware != null) {
                     CremaButton(onClick = onUpdateFirmware, variant = CremaButtonVariant.Filled, enabled = connected, icon = "arrow-circle-up", label = "Check for updates")
                 } else {
@@ -794,11 +842,246 @@ private fun MachineHeroCard(
     }
 }
 
+/** The "needs a connected DE1" pill on the firmware card head (web .fw-conn-pill). */
+@Composable
+private fun ConnectDe1Pill() {
+    Box(
+        Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f), RoundedCornerShape(999.dp))
+            .padding(horizontal = 8.dp, vertical = 2.dp),
+    ) {
+        Text(
+            "CONNECT DE1",
+            style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, letterSpacing = 0.5.sp),
+            color = MaterialTheme.colorScheme.primary,
+        )
+    }
+}
+
+/**
+ * The stylised DE1 drawing — a 1:1 Canvas port of the web MachineSection's
+ * inline SVG (viewBox 110×130): body shell, dark screen with the copper
+ * status LED, group head, portafilter, drop shadow.
+ */
+@Composable
+private fun De1Artwork(modifier: Modifier = Modifier) {
+    val tint = MaterialTheme.colorScheme.onSurface
+    val copper = MaterialTheme.colorScheme.primary
+    androidx.compose.foundation.Canvas(modifier) {
+        val sx = size.width / 110f
+        val sy = size.height / 130f
+        fun x(v: Float) = v * sx
+        fun y(v: Float) = v * sy
+        // Drop shadow first so the body sits on it.
+        drawOval(
+            color = Color.Black.copy(alpha = 0.4f),
+            topLeft = androidx.compose.ui.geometry.Offset(x(55f - 32f), y(110f - 4f)),
+            size = androidx.compose.ui.geometry.Size(x(64f), y(8f)),
+        )
+        // Body shell.
+        drawRoundRect(
+            color = Color(0xFF3A2A1D),
+            topLeft = androidx.compose.ui.geometry.Offset(x(20f), y(20f)),
+            size = androidx.compose.ui.geometry.Size(x(70f), y(80f)),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(x(6f)),
+        )
+        drawRoundRect(
+            color = tint.copy(alpha = 0.18f),
+            topLeft = androidx.compose.ui.geometry.Offset(x(20f), y(20f)),
+            size = androidx.compose.ui.geometry.Size(x(70f), y(80f)),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(x(6f)),
+            style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.dp.toPx()),
+        )
+        // Screen.
+        drawRoundRect(
+            color = Color(0xFF0D0907),
+            topLeft = androidx.compose.ui.geometry.Offset(x(28f), y(28f)),
+            size = androidx.compose.ui.geometry.Size(x(54f), y(34f)),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(x(3f)),
+        )
+        drawRoundRect(
+            color = tint.copy(alpha = 0.12f),
+            topLeft = androidx.compose.ui.geometry.Offset(x(28f), y(28f)),
+            size = androidx.compose.ui.geometry.Size(x(54f), y(34f)),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(x(3f)),
+            style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.dp.toPx()),
+        )
+        // Status LED.
+        drawCircle(color = copper, radius = x(2f), center = androidx.compose.ui.geometry.Offset(x(55f), y(45f)))
+        // Group head + portafilter.
+        drawRoundRect(
+            color = tint.copy(alpha = 0.18f),
+            topLeft = androidx.compose.ui.geometry.Offset(x(42f), y(68f)),
+            size = androidx.compose.ui.geometry.Size(x(26f), y(6f)),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(x(2f)),
+        )
+        drawRoundRect(
+            color = tint.copy(alpha = 0.10f),
+            topLeft = androidx.compose.ui.geometry.Offset(x(48f), y(74f)),
+            size = androidx.compose.ui.geometry.Size(x(14f), y(20f)),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(x(2f)),
+        )
+    }
+}
+
+/** The Visualizer hero card (web .st-visualizer): glyph well | identity | actions. */
+@Composable
+private fun VisualizerHeroCard(
+    vz: coffee.crema.visualizer.VisualizerSync.UiState,
+    onSignIn: () -> Unit,
+    onSignOut: () -> Unit,
+    onTest: () -> Unit,
+    onOpenSite: () -> Unit,
+) {
+    CremaCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 20.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(20.dp),
+        ) {
+            // Glyph well — the copper pulse-curve mark.
+            Box(
+                Modifier.size(64.dp)
+                    .clip(MaterialTheme.shapes.medium)
+                    .background(MaterialTheme.colorScheme.surfaceContainerLowest)
+                    .border(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f), MaterialTheme.shapes.medium),
+                contentAlignment = Alignment.Center,
+            ) { VisualizerGlyph(Modifier.size(40.dp)) }
+
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                val eyebrow = when {
+                    !vz.configured -> "OAuth not configured"
+                    !vz.signedIn -> "Not connected"
+                    else -> buildString {
+                        append("Connected")
+                        vz.account?.let { a ->
+                            append(" · ${a.name}")
+                            append(if (a.public) " · public profile" else " · private")
+                        }
+                    }
+                }
+                Eyebrow(
+                    eyebrow,
+                    color = when {
+                        vz.signedIn -> MaterialTheme.colorScheme.primary
+                        vz.configured -> MaterialTheme.colorScheme.onSurfaceVariant
+                        else -> Color(0xFFDBA764)
+                    },
+                )
+                Text(
+                    "visualizer.coffee",
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                    when {
+                        !vz.configured -> "Build with -PvisualizerClientId=… (or put visualizerClientId in local.properties) to enable sync."
+                        !vz.signedIn -> "Free community service for sharing and comparing espresso shots"
+                        else -> "Signed in"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(
+                    Modifier.clip(RoundedCornerShape(6.dp)).clickable(onClick = onOpenSite).padding(vertical = 4.dp, horizontal = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        "visualizer.coffee",
+                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = JetBrainsMono, fontSize = 11.sp),
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    PhIcon("arrow-square-out", sizeDp = 11, tint = MaterialTheme.colorScheme.primary)
+                }
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (vz.signedIn) {
+                    CremaButton(
+                        onClick = onTest,
+                        variant = CremaButtonVariant.Outlined,
+                        icon = "plugs-connected",
+                        enabled = !vz.busy,
+                        label = if (vz.busy) "Testing…" else "Test",
+                    )
+                    CremaButton(onClick = onSignOut, variant = CremaButtonVariant.Text, danger = true, icon = "sign-out", label = "Disconnect")
+                } else {
+                    CremaButton(
+                        onClick = onSignIn,
+                        variant = CremaButtonVariant.Filled,
+                        icon = "sign-in",
+                        enabled = vz.configured && !vz.busy,
+                        label = if (vz.busy) "Signing in…" else "Sign in",
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** The Visualizer pulse-curve glyph — a Canvas port of the web's inline SVG. */
+@Composable
+private fun VisualizerGlyph(modifier: Modifier = Modifier) {
+    val copper = MaterialTheme.colorScheme.primary
+    val tint = MaterialTheme.colorScheme.onSurface
+    androidx.compose.foundation.Canvas(modifier) {
+        val sc = size.width / 48f
+        fun p(v: Float) = v * sc
+        val path = androidx.compose.ui.graphics.Path().apply {
+            moveTo(p(4f), p(36f))
+            quadraticBezierTo(p(12f), p(8f), p(24f), p(24f))
+            // The SVG's T (smooth quadratic): control = reflection of (12,8) about (24,24).
+            quadraticBezierTo(p(36f), p(40f), p(44f), p(12f))
+        }
+        drawPath(
+            path,
+            color = copper,
+            style = androidx.compose.ui.graphics.drawscope.Stroke(
+                width = p(2.5f),
+                cap = androidx.compose.ui.graphics.StrokeCap.Round,
+            ),
+        )
+        drawCircle(color = copper, radius = p(3.5f), center = androidx.compose.ui.geometry.Offset(p(24f), p(24f)))
+        drawCircle(color = tint.copy(alpha = 0.6f), radius = p(2.5f), center = androidx.compose.ui.geometry.Offset(p(44f), p(12f)))
+        drawCircle(color = tint.copy(alpha = 0.6f), radius = p(2.5f), center = androidx.compose.ui.geometry.Offset(p(4f), p(36f)))
+    }
+}
+
+/** One "Other integrations" stub card (web .st-otherint-card) — disabled until real. */
+@Composable
+private fun OtherIntegrationCard(
+    icon: String,
+    title: String,
+    sub: String,
+    buttonIcon: String,
+    buttonLabel: String,
+    modifier: Modifier = Modifier,
+) {
+    CremaCard(modifier) {
+        Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            PhIcon(icon, sizeDp = 22, tint = MaterialTheme.colorScheme.primary)
+            Text(title, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
+            Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.weight(1f))
+            CremaButton(onClick = {}, variant = CremaButtonVariant.Outlined, icon = buttonIcon, label = buttonLabel, enabled = false)
+        }
+    }
+}
+
 @Composable
 private fun HeroMeta(key: String, value: String) {
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(key, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.width(76.dp))
-        MonoReadout(value, color = MaterialTheme.colorScheme.onSurface)
+    // Web .st-machinecard-info-row: 72px key column, values stacked + aligned;
+    // placeholder dashes render lighter so the empty stack reads uniform.
+    val placeholder = value == "—"
+    Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(key, style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp), color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f), modifier = Modifier.width(72.dp))
+        if (placeholder) {
+            Text("—", style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp), color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f))
+        } else {
+            MonoReadout(value, color = MaterialTheme.colorScheme.onSurface)
+        }
     }
 }
 

@@ -59,6 +59,13 @@ import com.adamglin.phosphoricons.regular.ArrowUp
 import com.adamglin.phosphoricons.regular.Bluetooth
 import com.adamglin.phosphoricons.regular.Bug
 import com.adamglin.phosphoricons.regular.Calendar
+import com.adamglin.phosphoricons.regular.ChatsCircle
+import com.adamglin.phosphoricons.regular.Cube
+import com.adamglin.phosphoricons.regular.House
+import com.adamglin.phosphoricons.regular.Link
+import com.adamglin.phosphoricons.regular.PlugsConnected
+import com.adamglin.phosphoricons.regular.SignIn
+import com.adamglin.phosphoricons.regular.SignOut
 import com.adamglin.phosphoricons.regular.Cloud
 import com.adamglin.phosphoricons.regular.CloudArrowUp
 import com.adamglin.phosphoricons.regular.CloudCheck
@@ -158,10 +165,17 @@ fun PhIcon(name: String, modifier: Modifier = Modifier, tint: Color = LocalConte
         "bluetooth" -> PhosphorIcons.Regular.Bluetooth
         "bug" -> PhosphorIcons.Regular.Bug
         "calendar" -> PhosphorIcons.Regular.Calendar
+        "chats-circle" -> PhosphorIcons.Regular.ChatsCircle
         "cloud" -> PhosphorIcons.Regular.Cloud
         "cloud-arrow-up" -> PhosphorIcons.Regular.CloudArrowUp
         "cloud-check" -> PhosphorIcons.Regular.CloudCheck
         "check" -> PhosphorIcons.Regular.Check
+        "cube" -> PhosphorIcons.Regular.Cube
+        "house" -> PhosphorIcons.Regular.House
+        "link" -> PhosphorIcons.Regular.Link
+        "plugs-connected" -> PhosphorIcons.Regular.PlugsConnected
+        "sign-in" -> PhosphorIcons.Regular.SignIn
+        "sign-out" -> PhosphorIcons.Regular.SignOut
         "clock" -> PhosphorIcons.Regular.Clock
         "fire" -> PhosphorIcons.Regular.Fire
         "package" -> PhosphorIcons.Regular.Package
@@ -223,6 +237,7 @@ fun PhIcon(name: String, modifier: Modifier = Modifier, tint: Color = LocalConte
         "wind" -> PhosphorIcons.Regular.Wind
         "target" -> PhosphorIcons.Regular.Target
         "play" -> PhosphorIcons.Regular.Play
+        "chats-circle" -> PhosphorIcons.Regular.ChatsCircle
         "cloud" -> PhosphorIcons.Regular.Cloud
         "stop" -> PhosphorIcons.Regular.Stop
         else -> PhosphorIcons.Regular.Question // unknown-name fallback
