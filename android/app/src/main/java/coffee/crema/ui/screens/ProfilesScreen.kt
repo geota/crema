@@ -3,6 +3,7 @@ package coffee.crema.ui.screens
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Arrangement
@@ -64,6 +65,7 @@ import coffee.crema.ui.components.CremaCard
 import coffee.crema.ui.components.CremaCardSpec
 import coffee.crema.ui.components.CremaNavigationRail
 import coffee.crema.ui.components.Eyebrow
+import coffee.crema.ui.components.CremaSearchPill
 import coffee.crema.ui.components.PhIcon
 import coffee.crema.ui.components.CremaConfirmDialog
 import coffee.crema.ui.components.CremaOverflowMenu
@@ -110,6 +112,8 @@ fun ProfilesScreen(
         (query.isBlank() ||
             p.name.contains(query, ignoreCase = true) ||
             p.tags.any { it.contains(query, ignoreCase = true) } ||
+            p.notes.contains(query, ignoreCase = true) ||
+            p.author.contains(query, ignoreCase = true) ||
             (p.roast?.contains(query, ignoreCase = true) == true)) &&
             when (effectiveFilter) {
                 // The Hidden facet draws only the archived built-ins; every other
@@ -159,30 +163,12 @@ fun ProfilesScreen(
                 // Compact search pill — matched to the 40dp button height so the
                 // command-bar row reads as one set (the stock 56dp OutlinedTextField
                 // towered over Import / New profile).
-                Box(
-                    Modifier.width(240.dp).height(40.dp)
-                        .clip(MaterialTheme.shapes.small)
-                        .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                        .padding(horizontal = 12.dp),
-                    contentAlignment = Alignment.CenterStart,
-                ) {
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        PhIcon("magnifying-glass", sizeDp = 18, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
-                            if (query.isEmpty()) {
-                                Text("Search profiles…", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                            BasicTextField(
-                                value = query,
-                                onValueChange = { query = it },
-                                singleLine = true,
-                                textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
-                                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-                        }
-                    }
-                }
+                CremaSearchPill(
+                    query = query,
+                    onQueryChange = { query = it },
+                    placeholder = "Search profiles…",
+                    modifier = Modifier.width(240.dp),
+                )
                 Spacer(Modifier.width(8.dp))
                 CremaButton(onClick = { importLauncher.launch(arrayOf("application/json", "text/*", "*/*")) }, variant = CremaButtonVariant.Outlined, icon = "upload-simple", label = "Import")
                 Spacer(Modifier.width(8.dp))
@@ -296,7 +282,7 @@ private fun ProfileCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                if (isActive) LoadedBadge() else Spacer(Modifier.size(1.dp))
+                if (isActive) ActiveBadge() else Spacer(Modifier.size(1.dp))
                 // Favorite star — always present, tappable: outline when off,
                 // copper-filled when pinned (to the Quick Controls favorites strip).
                 Box(
@@ -485,16 +471,17 @@ private fun LegendItem(label: String, color: Color, dashed: Boolean) {
     }
 }
 
-// Copper "LOADED" badge — the active-card head pill.
+// Copper "ACTIVE" badge — the active-card head pill (web .pp-active: outlined
+// copper pill, not a solid fill; same term as the web shell).
 @Composable
-private fun LoadedBadge() {
+private fun ActiveBadge() {
     Box(
         Modifier
             .clip(RoundedCornerShape(999.dp))
-            .background(MaterialTheme.colorScheme.primary)
+            .border(1.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(999.dp))
             .padding(horizontal = 10.dp, vertical = 3.dp),
     ) {
-        Text("LOADED", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onPrimary)
+        Text("ACTIVE", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
     }
 }
 

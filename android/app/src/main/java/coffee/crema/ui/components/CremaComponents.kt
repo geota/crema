@@ -660,12 +660,6 @@ fun CremaTabSwitch(
 
 // ── Chips ─────────────────────────────────────────────────────────────────
 @Composable
-fun CremaAssistChip(label: String, modifier: Modifier = Modifier, icon: String? = null, onClick: () -> Unit) {
-    AssistChip(onClick = onClick, modifier = modifier, label = { Text(label) },
-        leadingIcon = icon?.let { { PhIcon(it, sizeDp = 18) } })
-}
-
-@Composable
 fun CremaFilterChip(label: String, selected: Boolean, modifier: Modifier = Modifier, count: Int? = null, icon: String? = null, onClick: () -> Unit) {
     // PWA `.pp-tag`: a borderless ghost chip — faint label, subtle wash when
     // active — with a faint count pill (`.pp-tag-count`) that turns copper when
@@ -1245,5 +1239,61 @@ private fun ConnectionPip(label: String, connected: Boolean, onClick: () -> Unit
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
+    }
+}
+
+/**
+ * The app-wide search pill (web `.pp-search` / picker "Search …" input): a
+ * magnifying-glass + borderless text field on a rounded surface. One
+ * implementation for the Profiles / Beans / History command bars (40dp tall on
+ * surfaceContainerHigh) and the Brew picker popups (compact 36dp, bordered on
+ * surfaceContainerLowest so it reads inside the popup card).
+ */
+@Composable
+fun CremaSearchPill(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    placeholder: String,
+    modifier: Modifier = Modifier,
+    compact: Boolean = false,
+) {
+    val height = if (compact) 36.dp else 40.dp
+    val iconSize = if (compact) 14 else 18
+    val style = if (compact) {
+        MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp)
+    } else {
+        MaterialTheme.typography.bodyMedium
+    }
+    Box(
+        modifier
+            .height(height)
+            .clip(MaterialTheme.shapes.small)
+            .background(
+                if (compact) MaterialTheme.colorScheme.surfaceContainerLowest
+                else MaterialTheme.colorScheme.surfaceContainerHigh,
+            )
+            .then(
+                if (compact) Modifier.border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.small)
+                else Modifier,
+            )
+            .padding(horizontal = 12.dp),
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            PhIcon("magnifying-glass", sizeDp = iconSize, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                if (query.isEmpty()) {
+                    Text(placeholder, style = style, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                }
+                BasicTextField(
+                    value = query,
+                    onValueChange = onQueryChange,
+                    singleLine = true,
+                    textStyle = style.copy(color = MaterialTheme.colorScheme.onSurface),
+                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
     }
 }

@@ -1,5 +1,7 @@
 package coffee.crema.ui.screens
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -29,6 +31,7 @@ import androidx.compose.runtime.Composable
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -135,15 +138,20 @@ fun SettingsScreen(
         )
     }
 
+    // SAF export-to-file plumbing (same pattern as History / Beans / Profiles).
+    var pendingExport by rememberSaveable { mutableStateOf<String?>(null) }
+    val saveLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        val t = pendingExport; pendingExport = null
+        if (uri != null && t != null) vm.writeTextToUri(uri, t)
+    }
+    val launchSave: (String, String?) -> Unit = { name, content ->
+        if (content != null) { pendingExport = content; saveLauncher.launch(name) }
+    }
+
     // ── Local design-faithful prefs (persistence deferred to a SettingsStore) ──
-    var defDose by rememberSaveable { mutableStateOf(18.0) }
-    var defRatio by rememberSaveable { mutableStateOf(2.0) }
-    var defTemp by rememberSaveable { mutableStateOf(93.0) }
-    var defPreinf by rememberSaveable { mutableStateOf(8) }
-    var autoPurge by rememberSaveable { mutableStateOf(false) }
-    var groupFlush by rememberSaveable { mutableStateOf(false) }
+    // Pilled placeholder rows keep local state only (their pills mark them
+    // not-implemented); everything functional reads ui.* / AppPrefs.
     var density by rememberSaveable { mutableStateOf("comfortable") }
-    var keepScreenOn by rememberSaveable { mutableStateOf(true) }
     var unitTemp by rememberSaveable { mutableStateOf("c") }
     var unitWeight by rememberSaveable { mutableStateOf("g") }
     var keepAwake by rememberSaveable { mutableStateOf(true) }
@@ -194,11 +202,11 @@ fun SettingsScreen(
                             board = if (connected) cpuBoardLabel(ui.de1MachineInfo).takeIf { it != "—" } else null,
                             ble = if (connected) "Paired" else null,
                             onConnect = { onConnect("machine") },
-                            onUpdateFirmware = {},
+                            onUpdateFirmware = null,
                         )
                         SetGroup("Connection") {
                             SetRow("Telemetry rate", "How often the chart samples live data.", notImplemented = true) { SetSelect("50 Hz") }
-                            SetRow("Keep DE1 awake", "Hold a keep-alive so the machine stays ready.") { CremaSwitch(keepAwake, { keepAwake = it }) }
+                            SetRow("Keep DE1 awake", "Hold a keep-alive so the machine stays ready.", notImplemented = true) { CremaSwitch(keepAwake, { keepAwake = it }) }
                             // GHC start-from-machine mode — driven by the live GhcMode
                             // register; the toggle writes via the VM. Disabled until the
                             // machine is connected and the GHC is reported present.
@@ -231,10 +239,14 @@ fun SettingsScreen(
                     "brew" -> {
                         SetHead("Defaults", "Brew defaults", "Seed values for a fresh shot. Per-profile recipes override these.")
                         SetGroup("Targets") {
-                            SetRow("Default dose", "Starting dose for a fresh shot.") { SetStepper(String.format("%.1f", defDose), "g", { defDose = (defDose - 0.1).coerceAtLeast(5.0) }, { defDose = (defDose + 0.1).coerceAtMost(30.0) }) }
-                            SetRow("Default ratio", "Target brew ratio (yield ÷ dose).") { SetStepper("1:" + String.format("%.1f", defRatio), null, { defRatio = (defRatio - 0.1).coerceAtLeast(1.0) }, { defRatio = (defRatio + 0.1).coerceAtMost(4.0) }) }
-                            SetRow("Default brew temp", "Starting group temperature.") { SetStepper(String.format("%.1f", defTemp), "°C", { defTemp = (defTemp - 0.5).coerceAtLeast(80.0) }, { defTemp = (defTemp + 0.5).coerceAtMost(100.0) }) }
-                            SetRow("Default pre-infusion", "Low-pressure soak before the main shot.", last = true) { SetStepper("$defPreinf", "s", { defPreinf = (defPreinf - 1).coerceAtLeast(0) }, { defPreinf = (defPreinf + 1).coerceAtMost(30) }) }
+                            // Persisted (AppPrefs) — these seed "New profile" via
+                            // brewDefaultsJson, so the dialled numbers are real.
+                            val setDefs = { d: Float, r: Float, t: Float, p: Float -> vm.setBrewDefaults(d, r, t, p) }
+                            val dD = ui.defaultDoseG; val dR = ui.defaultRatio; val dT = ui.defaultBrewTempC; val dP = ui.defaultPreinfuseS
+                            SetRow("Default dose", "Starting dose for a fresh shot.") { SetStepper(String.format("%.1f", dD), "g", { setDefs((dD - 0.1f).coerceAtLeast(5f), dR, dT, dP) }, { setDefs((dD + 0.1f).coerceAtMost(30f), dR, dT, dP) }) }
+                            SetRow("Default ratio", "Target brew ratio (yield ÷ dose).") { SetStepper("1:" + String.format("%.1f", dR), null, { setDefs(dD, (dR - 0.1f).coerceAtLeast(1f), dT, dP) }, { setDefs(dD, (dR + 0.1f).coerceAtMost(4f), dT, dP) }) }
+                            SetRow("Default brew temp", "Starting group temperature.") { SetStepper(String.format("%.1f", dT), "°C", { setDefs(dD, dR, (dT - 0.5f).coerceAtLeast(80f), dP) }, { setDefs(dD, dR, (dT + 0.5f).coerceAtMost(100f), dP) }) }
+                            SetRow("Default pre-infusion", "Low-pressure soak before the main shot.", last = true) { SetStepper("${dP.toInt()}", "s", { setDefs(dD, dR, dT, (dP - 1f).coerceAtLeast(0f)) }, { setDefs(dD, dR, dT, (dP + 1f).coerceAtMost(30f)) }) }
                         }
                         SetGroup("Shot behaviour") {
                             SetRow("Auto-tare on shot start", "Zero the scale automatically when extraction begins.") { CremaSwitch(ui.autoTare, vm::setAutoTare) }
@@ -250,8 +262,8 @@ fun SettingsScreen(
                                     { vm.setMaxShotDuration((maxDur + 1).coerceAtMost(120).toFloat()) },
                                 )
                             }
-                            SetRow("Group flush before each shot", "Stabilise the group temperature with a short flush.") { CremaSwitch(groupFlush, { groupFlush = it }) }
-                            SetRow("Auto-purge after steam", "Clear the steam wand automatically after steaming.") { CremaSwitch(autoPurge, { autoPurge = it }) }
+                            SetRow("Group flush before each shot", "Stabilise the group temperature with a short flush.", notImplemented = true) { CremaSwitch(ui.preFlush, vm::setPreFlush) }
+                            SetRow("Auto-purge after steam", "Clear the steam wand automatically after steaming.", notImplemented = true) { CremaSwitch(ui.steamPurge, vm::setSteamPurge) }
                             SetRow("Steam eco", "Idle the steam boiler cooler between sessions to save power.", last = true) { CremaSwitch(ui.steamEco, vm::setSteamEco) }
                         }
                     }
@@ -367,7 +379,7 @@ fun SettingsScreen(
                                     onChange = vm::setThemeMode,
                                 )
                             }
-                            SetRow("Density", "Comfortable spacing or a denser layout.") {
+                            SetRow("Density", "Comfortable spacing or a denser layout.", notImplemented = true) {
                                 CremaSegmentedButton(
                                     options = listOf(SegOption("comfortable", "Comfortable"), SegOption("compact", "Compact")),
                                     value = density,
@@ -375,17 +387,17 @@ fun SettingsScreen(
                                 )
                             }
                             SetRow("Screensaver", "Dim the display after a period idle.", notImplemented = true) { SetSelect("After 10 min") }
-                            SetRow("Keep screen on while brewing", "Hold the display awake during a shot.", last = true) { CremaSwitch(keepScreenOn, { keepScreenOn = it }) }
+                            SetRow("Keep screen on while brewing", "Hold the display awake during a shot.", last = true) { CremaSwitch(ui.keepScreenOnBrew, vm::setKeepScreenOnBrew) }
                         }
                         SetGroup("Units") {
-                            SetRow("Temperature", "Units for every temperature readout.") {
+                            SetRow("Temperature", "Units for every temperature readout.", notImplemented = true) {
                                 CremaSegmentedButton(
                                     options = listOf(SegOption("c", "°C"), SegOption("f", "°F")),
                                     value = unitTemp,
                                     onChange = { unitTemp = it },
                                 )
                             }
-                            SetRow("Weight", "Units for dose and yield.") {
+                            SetRow("Weight", "Units for dose and yield.", notImplemented = true) {
                                 CremaSegmentedButton(
                                     options = listOf(SegOption("g", "Grams"), SegOption("oz", "Ounces")),
                                     value = unitWeight,
@@ -409,8 +421,11 @@ fun SettingsScreen(
                             SetRow("Roasters", "Sync direction for roasters.", last = true, notImplemented = true) { SetSelect("Two-way") }
                         }
                         SetGroup("Local export") {
-                            SetRow("History (.json)", "Export every stored shot.") { CremaButton(onClick = { vm.exportAllShots() }, variant = CremaButtonVariant.Text, icon = "download-simple", label = "Export") }
-                            SetRow("Beans & roasters", "Export your bean library.", last = true) { CremaButton(onClick = { vm.exportBeansLibrary() }, variant = CremaButtonVariant.Text, icon = "download-simple", label = "Export") }
+                            // SAF file saves — the share-sheet Intent-extra path tops out
+                            // around the 1 MB Binder limit, which a real shot history
+                            // exceeds easily; CreateDocument streams to disk instead.
+                            SetRow("History (.json)", "Export every stored shot.") { CremaButton(onClick = { launchSave("crema-history.json", vm.shotsJson(null)) }, variant = CremaButtonVariant.Text, icon = "download-simple", label = "Export") }
+                            SetRow("Beans & roasters", "Export your bean library.", last = true) { CremaButton(onClick = { launchSave("crema-beans.json", vm.beansLibraryJson()) }, variant = CremaButtonVariant.Text, icon = "download-simple", label = "Export") }
                         }
                     }
                     "calibration" -> {
@@ -482,13 +497,20 @@ fun SettingsScreen(
                     "about" -> {
                         SetHead("About", "Crema", "A fast, native control surface for the Decent DE1 espresso machine.")
                         SetGroup("Version") {
-                            SetRow("App") { MonoReadout("0.1.0", color = MaterialTheme.colorScheme.onSurface) }
+                            val appVersion = run {
+                                val ctx = androidx.compose.ui.platform.LocalContext.current
+                                remember { runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull() ?: "dev" }
+                            }
+                            SetRow("App") { MonoReadout(appVersion, color = MaterialTheme.colorScheme.onSurface) }
                             SetRow("Core") { MonoReadout("de1-core · UniFFI", color = MaterialTheme.colorScheme.onSurface) }
                             SetRow("Machine", last = true) { MonoReadout("Decent DE1", color = MaterialTheme.colorScheme.onSurface) }
                         }
                         SetGroup("Project") {
-                            SetRow("Source", "Crema is open source.") { CremaButton(onClick = {}, variant = CremaButtonVariant.Text, icon = "arrow-square-out", label = "Open") }
-                            SetRow("Licenses", "Open-source components.", last = true) { CremaButton(onClick = {}, variant = CremaButtonVariant.Text, label = "View") }
+                            // No public repo / licenses surface to link yet — rows render
+                            // as plain acknowledgements instead of dead buttons (the same
+                            // call as the removed factory-reset row).
+                            SetRow("Source", "Crema is open source.", notImplemented = true) { SetSelect("Link coming") }
+                            SetRow("Licenses", "Built on uPlot, fflate, wasm-bindgen, the Decent de1app protocol docs and more.", last = true, notImplemented = true) { SetSelect("List coming") }
                         }
                     }
                 }
@@ -653,7 +675,8 @@ private fun MachineHeroCard(
     board: String?,
     ble: String?,
     onConnect: () -> Unit,
-    onUpdateFirmware: () -> Unit,
+    /** Null = firmware updating isn't implemented yet — the tile drops the button. */
+    onUpdateFirmware: (() -> Unit)?,
 ) {
     CremaCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
         Row(Modifier.fillMaxWidth().padding(20.dp), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
@@ -693,7 +716,11 @@ private fun MachineHeroCard(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                CremaButton(onClick = onUpdateFirmware, variant = CremaButtonVariant.Filled, enabled = connected, icon = "arrow-circle-up", label = "Check for updates")
+                if (onUpdateFirmware != null) {
+                    CremaButton(onClick = onUpdateFirmware, variant = CremaButtonVariant.Filled, enabled = connected, icon = "arrow-circle-up", label = "Check for updates")
+                } else {
+                    Text("Update checks aren\u2019t implemented yet.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
         }
     }

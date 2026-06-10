@@ -50,6 +50,7 @@ import coffee.crema.profiles.CremaProfile
 import coffee.crema.ui.BrewParams
 import androidx.compose.ui.draw.alpha
 import coffee.crema.ui.components.CremaButton
+import coffee.crema.ui.components.CremaSearchPill
 import coffee.crema.ui.components.CremaButtonVariant
 import coffee.crema.ui.components.CremaDotToggle
 import coffee.crema.ui.components.CremaIconButton
@@ -86,6 +87,8 @@ fun QuickControlsSheet(
     autoTare: Boolean,
     stopOnWeight: Boolean,
     steamEco: Boolean,
+    preFlush: Boolean,
+    steamPurge: Boolean,
     channels: Set<String>,
     onSelectProfile: (String) -> Unit,
     onSelectBean: (String) -> Unit,
@@ -95,6 +98,8 @@ fun QuickControlsSheet(
     onAutoTare: (Boolean) -> Unit,
     onStopOnWeight: (Boolean) -> Unit,
     onSteamEco: (Boolean) -> Unit,
+    onPreFlush: (Boolean) -> Unit,
+    onSteamPurge: (Boolean) -> Unit,
     onToggleChannel: (String, Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -120,8 +125,6 @@ fun QuickControlsSheet(
     var flushMode by remember { mutableStateOf("time") }
     var flushTime by remember { mutableStateOf(4.0) }
     var flushTemp by remember { mutableStateOf(95.0) }
-    var preFlush by remember { mutableStateOf(false) }
-    var steamPurge by remember { mutableStateOf(false) }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -155,31 +158,45 @@ fun QuickControlsSheet(
                     if (active != null) {
                         CremaButton(onClick = { showSave = true }, variant = CremaButtonVariant.Text, icon = "bookmark-simple", label = "Save preset")
                     }
-                    if (brewParams != null) {
-                        CremaButton(onClick = onResetBrew, variant = CremaButtonVariant.Text, icon = "arrow-counter-clockwise", label = "Reset")
-                    }
+                    // Always visible like the web QuickSheet; enabled only once a
+                    // tweak exists so it never reads as a dead control.
+                    CremaButton(onClick = onResetBrew, variant = CremaButtonVariant.Text, icon = "arrow-counter-clockwise", label = "Reset", enabled = brewParams != null)
                     CremaIconButton(icon = "x", onClick = onDismiss)
                 }
             }
 
             // ── Favorites strip ──────────────────────────────────────────────
+            // Web FavoritesStrip: a type-to-filter search box ahead of the pinned
+            // profiles + favourite beans chips.
             if (pinnedProfiles.isNotEmpty() || favBeans.isNotEmpty()) {
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(pinnedProfiles, key = { "p:${it.id}" }) { p ->
-                        FilterChip(
-                            selected = p.id == activeProfileId,
-                            onClick = { onSelectProfile(p.id) },
-                            label = { Text(p.name, maxLines = 1) },
-                            leadingIcon = { PhIcon("coffee", sizeDp = 16) },
-                        )
-                    }
-                    items(favBeans, key = { "b:${it.id}" }) { b ->
-                        FilterChip(
-                            selected = b.id == activeBeanId,
-                            onClick = { onSelectBean(b.id) },
-                            label = { Text(b.name, maxLines = 1) },
-                            leadingIcon = { PhIcon("coffee-bean", sizeDp = 16) },
-                        )
+                var favQuery by remember { mutableStateOf("") }
+                val shownProfiles = pinnedProfiles.filter { favQuery.isBlank() || it.name.contains(favQuery, ignoreCase = true) }
+                val shownBeans = favBeans.filter { favQuery.isBlank() || it.name.contains(favQuery, ignoreCase = true) }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    CremaSearchPill(
+                        query = favQuery,
+                        onQueryChange = { favQuery = it },
+                        placeholder = "Search profiles + beans",
+                        modifier = Modifier.width(220.dp),
+                        compact = true,
+                    )
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.weight(1f)) {
+                        items(shownProfiles, key = { "p:${it.id}" }) { p ->
+                            FilterChip(
+                                selected = p.id == activeProfileId,
+                                onClick = { onSelectProfile(p.id) },
+                                label = { Text(p.name, maxLines = 1) },
+                                leadingIcon = { PhIcon("coffee", sizeDp = 16) },
+                            )
+                        }
+                        items(shownBeans, key = { "b:${it.id}" }) { b ->
+                            FilterChip(
+                                selected = b.id == activeBeanId,
+                                onClick = { onSelectBean(b.id) },
+                                label = { Text(b.name, maxLines = 1) },
+                                leadingIcon = { PhIcon("coffee-bean", sizeDp = 16) },
+                            )
+                        }
                     }
                 }
             }
@@ -212,7 +229,7 @@ fun QuickControlsSheet(
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                         CremaDotToggle(stopOnWeight, { onStopOnWeight(!stopOnWeight) })
                         Eyebrow("Yield", Modifier.weight(1f))
-                        Text("1:%.1f".format(if (dose > 0) yieldOut / dose else 0.0), style = MaterialTheme.typography.labelSmall.copy(fontFamily = JetBrainsMono), color = MaterialTheme.colorScheme.primary)
+                        Text("1:%.2f".format(if (dose > 0) yieldOut / dose else 0.0), style = MaterialTheme.typography.labelSmall.copy(fontFamily = JetBrainsMono), color = MaterialTheme.colorScheme.primary)
                     }
                 }
                 // 3 — Brew temp | pre-infuse.
@@ -226,7 +243,7 @@ fun QuickControlsSheet(
                     chips = if (brewMode == "temp") listOf(88.0, 91.0, 93.0, 95.0, 97.0) else listOf(0.0, 4.0, 8.0, 12.0, 16.0),
                     onChange = { if (brewMode == "temp") onAdjustBrew(dose, yieldOut, it) else preinf = it },
                 ) {
-                    CremaSplitLabel(prefix = "Brew", options = listOf(SplitOption("temp", "Temp"), SplitOption("preinf", "Pre-inf")), value = brewMode, onChange = { brewMode = it })
+                    CremaSplitLabel(prefix = "Brew", options = listOf(SplitOption("temp", "Temp"), SplitOption("preinf", "Pre-infuse")), value = brewMode, onChange = { brewMode = it })
                 }
                 // 4 — Steam time | flow | temp.
                 QcStepper(
@@ -252,7 +269,7 @@ fun QuickControlsSheet(
                     chips = if (waterMode == "temp") listOf(60.0, 75.0, 85.0, 92.0, 96.0) else listOf(60.0, 120.0, 180.0, 250.0, 350.0),
                     onChange = { if (waterMode == "temp") waterTemp = it else waterVolume = it },
                 ) {
-                    CremaSplitLabel(prefix = "Water", options = listOf(SplitOption("temp", "Temp"), SplitOption("volume", "Vol")), value = waterMode, onChange = { waterMode = it })
+                    CremaSplitLabel(prefix = "Hot water", options = listOf(SplitOption("temp", "Temp"), SplitOption("volume", "Volume")), value = waterMode, onChange = { waterMode = it })
                 }
                 // 6 — Flush time | temp.
                 QcStepper(
@@ -303,8 +320,8 @@ fun QuickControlsSheet(
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(11.dp)) {
                         QcMiniToggle("Stop on weight", stopOnWeight, onStopOnWeight)
                         QcMiniToggle("Auto-tare", autoTare, onAutoTare)
-                        QcMiniToggle("Pre-flush", preFlush, { preFlush = it })
-                        QcMiniToggle("Steam purge", steamPurge, { steamPurge = it })
+                        QcMiniToggle("Pre-flush", preFlush, onPreFlush)
+                        QcMiniToggle("Steam purge", steamPurge, onSteamPurge)
                         QcMiniToggle("Steam eco", steamEco, onSteamEco)
                     }
                 }

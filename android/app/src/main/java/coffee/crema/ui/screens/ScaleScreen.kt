@@ -223,14 +223,16 @@ private fun ScaleHeroRow(
                 ScalePillButton(icon = "arrow-counter-clockwise", label = "Reset peak", onClick = onResetPeak)
                 ScalePillButton(icon = "timer", label = "Start timer", onClick = onStartTimer)
             } else {
-                Spacer(Modifier.weight(0.4f))
+                // FIXED spacers — a weighted Spacer makes this Column expand to the
+                // incoming max height, which inflates the whole hero Row and shoves
+                // the Dose helper + Recent activity cards off screen.
+                Spacer(Modifier.height(40.dp))
                 CremaButton(onClick = onConnect, modifier = Modifier.height(52.dp), variant = CremaButtonVariant.Filled, icon = "bluetooth", label = "Connect scale")
                 Text(
                     "Acaia, Bookoo, Decent, Felicita and more pair automatically.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Spacer(Modifier.weight(0.6f))
             }
         }
     }

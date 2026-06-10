@@ -52,7 +52,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coffee.crema.beans.daysOffRoast
+import coffee.crema.beans.isFrozen
 import coffee.crema.beans.roastBand
+import coffee.crema.beans.roastBand5
 import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager
 import coffee.crema.core.Bean
@@ -64,8 +66,10 @@ import coffee.crema.ui.components.CremaSplitButton
 import coffee.crema.ui.components.SplitMenuItem
 import coffee.crema.ui.components.CremaCard
 import coffee.crema.ui.components.CremaNavigationRail
+import coffee.crema.ui.components.CremaSearchPill
 import coffee.crema.ui.components.Eyebrow
 import coffee.crema.ui.components.PhIcon
+import coffee.crema.ui.components.RoasterMarkAvatar
 import coffee.crema.ui.components.CremaConfirmDialog
 import coffee.crema.ui.components.CremaOverflowMenu
 import coffee.crema.ui.components.OverflowItem
@@ -128,9 +132,11 @@ fun BeansScreen(
         // (proto: "All" counts non-archived; "Archived" surfaces them).
         val matchesFilter = when (beanFilter) {
             "archived" -> b.archivedAt != null
-            "active" -> b.archivedAt == null && b.id == ui.activeBeanId
+            // "Active" = in rotation (web semantics): not archived, not frozen.
+            // The brew-loaded bag is the card's "Active for brew" state, not a facet.
+            "active" -> b.archivedAt == null && !b.isFrozen
             "favourite" -> b.archivedAt == null && b.favourite
-            "frozen" -> b.archivedAt == null && b.frozenOn != null
+            "frozen" -> b.archivedAt == null && b.isFrozen
             "light", "medium", "dark" -> b.archivedAt == null && roastBand(b.roastLevel?.toInt())?.equals(beanFilter, ignoreCase = true) == true
             else -> b.archivedAt == null
         }
@@ -169,38 +175,26 @@ fun BeansScreen(
                         style = MaterialTheme.typography.headlineLarge,
                         color = MaterialTheme.colorScheme.onSurface,
                     )
+                    // Web /beans sub-header: status counts, not totals.
                     Text(
-                        "${ui.beans.size} bags · ${ui.roasters.size} roasters · ${ui.beans.count { it.id == ui.activeBeanId }} active",
+                        run {
+                            val act = ui.beans.count { it.archivedAt == null && !it.isFrozen }
+                            val froz = ui.beans.count { it.archivedAt == null && it.isFrozen }
+                            val arch = ui.beans.count { it.archivedAt != null }
+                            "$act active · $froz frozen · $arch archived · ${ui.roasters.size} roasters"
+                        },
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 // Compact search pill (matched to the 40dp button height), the
                 // command-bar sibling of Profiles' search.
-                Box(
-                    Modifier.width(240.dp).height(40.dp)
-                        .clip(MaterialTheme.shapes.small)
-                        .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                        .padding(horizontal = 12.dp),
-                    contentAlignment = Alignment.CenterStart,
-                ) {
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        PhIcon("magnifying-glass", sizeDp = 18, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
-                            if (query.isEmpty()) {
-                                Text("Search beans, roasters…", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                            BasicTextField(
-                                value = query,
-                                onValueChange = { query = it },
-                                singleLine = true,
-                                textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
-                                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-                        }
-                    }
-                }
+                CremaSearchPill(
+                    query = query,
+                    onQueryChange = { query = it },
+                    placeholder = "Search beans, roasters…",
+                    modifier = Modifier.width(240.dp),
+                )
                 Spacer(Modifier.width(8.dp))
                 CremaButton(
                     onClick = { importLauncher.launch(arrayOf("*/*")) },
@@ -251,9 +245,9 @@ fun BeansScreen(
                     listOf("all" to "All", "active" to "Active", "favourite" to "Favourite", "frozen" to "Frozen", "archived" to "Archived").forEach { (id, label) ->
                         val count = when (id) {
                             "all" -> nonArchived.size
-                            "active" -> nonArchived.count { it.id == ui.activeBeanId }
+                            "active" -> nonArchived.count { !it.isFrozen }
                             "favourite" -> nonArchived.count { it.favourite }
-                            "frozen" -> nonArchived.count { it.frozenOn != null }
+                            "frozen" -> nonArchived.count { it.isFrozen }
                             else -> ui.beans.count { it.archivedAt != null }
                         }
                         CremaFilterChip(label = label, selected = beanFilter == id, count = count, onClick = { beanFilter = id })
@@ -304,7 +298,7 @@ fun BeansScreen(
                                 onSetActive = { vm.setActiveBean(bean.id) },
                                 onEdit = { vm.startEditBean(bean.id); onNav("bean-edit") },
                                 onDuplicate = { vm.duplicateBean(bean.id) },
-                                onFreezeToggle = { if (bean.frozenOn != null) vm.defrostBean(bean.id) else vm.freezeBean(bean.id) },
+                                onFreezeToggle = { if (bean.isFrozen) vm.defrostBean(bean.id) else vm.freezeBean(bean.id) },
                                 onArchiveToggle = { if (bean.archivedAt != null) vm.unarchiveBean(bean.id) else vm.archiveBean(bean.id) },
                                 onToggleFavourite = { vm.toggleBeanFavourite(bean.id) },
                                 onDelete = { vm.deleteBean(bean.id) },
@@ -370,9 +364,11 @@ private fun BeanCard(
     onToggleFavourite: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    val band = roastBand(bean.roastLevel?.toInt())
+    // Tile pill shows the finer 5-band display label (web roastBand5);
+    // filters/freshness elsewhere stay on the canonical 3-band roastBand.
+    val band = roastBand5(bean.roastLevel?.toInt())
     val days = daysOffRoast(bean.roastedOn)
-    val frozen = bean.frozenOn != null
+    val frozen = bean.isFrozen
     val tagList = bean.tags?.filter { it.isNotBlank() }.orEmpty()
     var confirmDelete by remember { mutableStateOf(false) }
     CremaCard(
@@ -383,7 +379,8 @@ private fun BeanCard(
     ) {
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.Top) {
-                BeanAvatar(roasterName ?: bean.name)
+                // Web: the mark is the roaster's; a roasterless bag renders "?".
+                BeanAvatar(roasterName)
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     if (roasterName != null) Eyebrow(roasterName)
                     Text(
@@ -535,25 +532,11 @@ private fun freshnessColor(frozen: Boolean, days: Int?): Color = when {
     else -> Color(0xFFC58B8B)
 }
 
-// A 44dp roaster-mark avatar — a theme-color square keyed off the seed name.
+// A 44dp roaster-mark avatar — the shared deterministic two-letter mark
+// (components/RoasterMark.kt, ported from web roaster-mark.ts).
 @Composable
-private fun BeanAvatar(seed: String) {
-    val palette = listOf(
-        MaterialTheme.colorScheme.primary,
-        MaterialTheme.colorScheme.tertiary,
-        MaterialTheme.colorScheme.secondary,
-    )
-    val color = palette[(seed.hashCode() and Int.MAX_VALUE) % palette.size]
-    Box(
-        Modifier.size(44.dp).clip(RoundedCornerShape(12.dp)).background(color),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            seed.take(1).uppercase(),
-            style = MaterialTheme.typography.titleLarge,
-            color = MaterialTheme.colorScheme.onPrimary,
-        )
-    }
+private fun BeanAvatar(seed: String?) {
+    RoasterMarkAvatar(name = seed, sizeDp = 44, cornerDp = 12, fontSize = 16.sp)
 }
 
 // A roaster directory card — avatar + name + "City · Country · N bags", with a

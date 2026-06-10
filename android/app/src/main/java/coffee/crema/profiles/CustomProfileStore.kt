@@ -119,12 +119,11 @@ fun duplicatedCustomProfileJson(baseJson: String, json: Json): String {
  * round-trippable to the DE1.
  *
  * Overwrites only: `source` (forced to `"custom"`), `name`, `roast`
- * (`"light"|"medium"|"dark"` or null), `tags`, `pinned`, `notes`, `dose`, `yieldOut`,
- * `brewTemp`, `maxTotalVolumeMl`, and per-existing-segment `target` + `time`
- * (positional — the non-curve editor never adds / removes segments). Each
- * segment's `temp` / `mode` / `ramp` / `tempSensor` / `exit` / `limiter` etc.
- * survive as-is, as do `author` / `beverageType` / `tankTemperatureC` /
- * `preinfuseStepCount` / `stopOnWeight` / `autoTare` / `id`.
+ * (`"light"|"medium"|"dark"` or null), `tags`, `pinned`, `notes`, `author`,
+ * `beverageType`, `dose`, `yieldOut`, `brewTemp`, `maxTotalVolumeMl`, and
+ * per-existing-segment `target` + `time` (positional). Each segment's `temp` /
+ * `mode` / `ramp` / `tempSensor` / `exit` / `limiter` etc. survive as-is, as do
+ * `tankTemperatureC` / `preinfuseStepCount` / `stopOnWeight` / `autoTare` / `id`.
  *
  * @param segments (target, time) for each segment, in order; extra/missing entries
  *   are ignored so a length mismatch degrades gracefully.
@@ -136,6 +135,8 @@ fun patchCremaProfileJson(
     tags: List<String>,
     pinned: Boolean,
     notes: String,
+    author: String,
+    beverageType: String?,
     dose: Float,
     yieldOut: Float,
     brewTemp: Float,
@@ -203,6 +204,8 @@ fun patchCremaProfileJson(
         put("tags", JsonArray(tags.map { JsonPrimitive(it) }))
         put("pinned", JsonPrimitive(pinned))
         put("notes", JsonPrimitive(notes))
+        put("author", JsonPrimitive(author))
+        put("beverageType", beverageType?.let { JsonPrimitive(it) } ?: JsonNull)
         put("dose", JsonPrimitive(dose))
         put("yieldOut", JsonPrimitive(yieldOut))
         put("brewTemp", JsonPrimitive(brewTemp))

@@ -61,6 +61,7 @@ import coffee.crema.ui.components.CremaSortControl
 import coffee.crema.ui.components.SortKey
 import coffee.crema.ui.components.CremaNavigationRail
 import coffee.crema.ui.components.Eyebrow
+import coffee.crema.ui.components.CremaSearchPill
 import coffee.crema.ui.components.PhIcon
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -91,6 +92,8 @@ fun HistoryScreen(
     var selectedId by remember { mutableStateOf<String?>(null) }
     var query by remember { mutableStateOf("") }
     var range by remember { mutableStateOf("all") }
+    // Web history: per-profile filter pills ahead of the range chips.
+    var profileFilter by remember { mutableStateOf<String?>(null) }
     var sort by remember { mutableStateOf("date") }
     var sortDesc by remember { mutableStateOf(true) } // newest / highest first
     // Tapping Brew's "Last shot" card requests that shot here — select it + clear
@@ -135,7 +138,8 @@ fun HistoryScreen(
             "30d" -> s.completedAtMs >= now - 30L * dayMs
             else -> true
         }
-        matchesSearch && matchesRange
+        val matchesProfile = profileFilter == null || s.profileName == profileFilter
+        matchesSearch && matchesRange && matchesProfile
     }
     val sortedAsc = when (sort) {
         "rating" -> filtered.sortedBy { it.rating ?: 0 }
@@ -174,30 +178,12 @@ fun HistoryScreen(
                     )
                 }
                 if (ui.history.isNotEmpty()) {
-                    Box(
-                        Modifier.width(260.dp).height(40.dp)
-                            .clip(MaterialTheme.shapes.small)
-                            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                            .padding(horizontal = 12.dp),
-                        contentAlignment = Alignment.CenterStart,
-                    ) {
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            PhIcon("magnifying-glass", sizeDp = 18, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
-                                if (query.isEmpty()) {
-                                    Text("Search profile, bean, notes…", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                }
-                                BasicTextField(
-                                    value = query,
-                                    onValueChange = { query = it },
-                                    singleLine = true,
-                                    textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
-                                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                                    modifier = Modifier.fillMaxWidth(),
-                                )
-                            }
-                        }
-                    }
+                    CremaSearchPill(
+                        query = query,
+                        onQueryChange = { query = it },
+                        placeholder = "Search profile, bean, notes…",
+                        modifier = Modifier.width(260.dp),
+                    )
                 }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(start = 8.dp)) {
                     CremaButton(
@@ -222,11 +208,21 @@ fun HistoryScreen(
             }
             if (ui.history.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(
-                        "No shots yet — pull one on Brew.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text(
+                            "No shots yet — pull one on Brew.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        // Web hi-empty-page: an import CTA so a fresh install can
+                        // bring an existing history straight in.
+                        CremaButton(
+                            onClick = { importLauncher.launch(arrayOf("application/json", "text/*", "*/*")) },
+                            variant = CremaButtonVariant.Outlined,
+                            icon = "upload-simple",
+                            label = "Import shots",
+                        )
+                    }
                 }
             } else {
                 StatsStrip(ui.history)
@@ -236,7 +232,25 @@ fun HistoryScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    FlowRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FlowRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        // Per-profile pills (web .hi-filter p: pills) — only profiles
+                        // that actually have shots, ordered by shot count.
+                        val byProfile = ui.history.mapNotNull { it.profileName }
+                            .groupingBy { it }.eachCount().entries.sortedByDescending { it.value }
+                        CremaFilterChip(
+                            label = "All profiles",
+                            selected = profileFilter == null,
+                            count = ui.history.size,
+                            onClick = { profileFilter = null },
+                        )
+                        byProfile.take(6).forEach { (name, count) ->
+                            CremaFilterChip(
+                                label = name,
+                                selected = profileFilter == name,
+                                count = count,
+                                onClick = { profileFilter = if (profileFilter == name) null else name },
+                            )
+                        }
                         listOf("all" to "All time", "30d" to "30 days", "7d" to "7 days", "today" to "Today").forEach { (id, label) ->
                             val count = when (id) {
                                 "today" -> ui.history.count { it.completedAtMs >= startOfDay }
@@ -280,7 +294,9 @@ fun HistoryScreen(
                     if (selected != null) {
                         ShotDetail(
                             shot = selected,
-                            channels = ui.chartChannels,
+                            // Fixed archival set (web detail chart): pressure + flow +
+                            // coffee temp + weight — not the QC live-chart selection.
+                            channels = setOf("pressure", "flow", "headTemp", "weight"),
                             onRate = { r, n -> vm.updateShot(selected.id, r, n) },
                             onLoadOnBrew = { vm.loadProfileOnBrew(selected.profileName) },
                             onExport = { vm.exportShot(selected.id) },
@@ -458,7 +474,7 @@ private fun compactAgo(ms: Long): String {
  */
 @Composable
 private fun SparkChart(samples: List<TelemetrySample>, modifier: Modifier = Modifier) {
-    val stroke = CremaTheme.telemetry.pressure
+    val tel = CremaTheme.telemetry
     Canvas(modifier) {
         if (samples.size < 2) return@Canvas
         val w = size.width
@@ -467,27 +483,29 @@ private fun SparkChart(samples: List<TelemetrySample>, modifier: Modifier = Modi
         val firstT = samples.first().elapsedMs.toFloat()
         val lastT = samples.last().elapsedMs.toFloat()
         val tSpan = (lastT - firstT).takeIf { it > 0f } ?: 1f
-        var minP = Float.POSITIVE_INFINITY
-        var maxP = Float.NEGATIVE_INFINITY
-        samples.forEach { s ->
-            if (s.pressure < minP) minP = s.pressure
-            if (s.pressure > maxP) maxP = s.pressure
-        }
-        val pSpan = (maxP - minP).takeIf { it > 0f } ?: 1f
         val inset = 2.dp.toPx() // keep the round caps off the rounded corners
         val plotW = (w - inset * 2f).coerceAtLeast(1f)
         val plotH = (h - inset * 2f).coerceAtLeast(1f)
-        val path = Path()
-        samples.forEachIndexed { i, s ->
-            val x = inset + ((s.elapsedMs.toFloat() - firstT) / tSpan) * plotW
-            val y = inset + (1f - (s.pressure - minP) / pSpan) * plotH
-            if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+        // Web .hi-row mini chart: temp + flow behind, pressure on top — each
+        // channel min-max normalised to the box on its own scale.
+        fun channel(color: androidx.compose.ui.graphics.Color, widthDp: Float, value: (TelemetrySample) -> Float?) {
+            var mn = Float.POSITIVE_INFINITY
+            var mx = Float.NEGATIVE_INFINITY
+            samples.forEach { s -> value(s)?.let { v -> if (v < mn) mn = v; if (v > mx) mx = v } }
+            val span = (mx - mn).takeIf { it > 0f } ?: return
+            val path = Path()
+            var started = false
+            samples.forEach { s ->
+                val v = value(s) ?: return@forEach
+                val x = inset + ((s.elapsedMs.toFloat() - firstT) / tSpan) * plotW
+                val y = inset + (1f - (v - mn) / span) * plotH
+                if (!started) { path.moveTo(x, y); started = true } else path.lineTo(x, y)
+            }
+            drawPath(path, color = color, style = Stroke(width = widthDp.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
         }
-        drawPath(
-            path,
-            color = stroke,
-            style = Stroke(width = 1.8.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round),
-        )
+        channel(tel.temp.copy(alpha = 0.75f), 1.1f) { it.headTemp }
+        channel(tel.flow.copy(alpha = 0.9f), 1.3f) { it.flow }
+        channel(tel.pressure, 1.8f) { it.pressure }
     }
 }
 
@@ -507,7 +525,14 @@ private fun ShotDetail(
         // hairline rule (PWA .hi-detail-head: space-between, align-items: flex-end).
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.Bottom) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Eyebrow(DateUtils.getRelativeTimeSpanString(shot.completedAtMs).toString())
+                // Web detail eyebrow: absolute "JUN 9 · 20:01" (a shot is an archival
+                // record; relative time still rides on every list row).
+                Eyebrow(
+                    remember(shot.completedAtMs) {
+                        java.text.SimpleDateFormat("MMM d · HH:mm", java.util.Locale.getDefault())
+                            .format(java.util.Date(shot.completedAtMs))
+                    },
+                )
                 Text(
                     shot.profileName ?: "Shot",
                     style = MaterialTheme.typography.headlineMedium,
@@ -641,8 +666,3 @@ private fun shotRatio(shot: StoredShot): String? {
     return if (y != null && d != null && d > 0f) "1:%.2f".format(y / d) else null
 }
 
-private fun shotMetrics(shot: StoredShot): String = listOfNotNull(
-    shot.yieldG?.let { "%.1f g".format(it) },
-    shotRatio(shot),
-    "%.1f s".format(shot.durationMs / 1000.0),
-).joinToString(" · ")
