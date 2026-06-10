@@ -105,6 +105,21 @@ import com.adamglin.phosphoricons.fill.Moon
 import com.adamglin.phosphoricons.fill.Plugs
 import com.adamglin.phosphoricons.fill.Sun
 import com.adamglin.phosphoricons.fill.Star as StarFilled
+import com.adamglin.phosphoricons.fill.Scales as ScalesFilled
+import com.adamglin.phosphoricons.fill.ListBullets as ListBulletsFilled
+import com.adamglin.phosphoricons.fill.CoffeeBean as CoffeeBeanFilled
+import com.adamglin.phosphoricons.fill.ChartLine as ChartLineFilled
+import com.adamglin.phosphoricons.regular.ArrowLineDown
+import com.adamglin.phosphoricons.regular.ArrowRight
+import com.adamglin.phosphoricons.regular.BluetoothConnected
+import com.adamglin.phosphoricons.regular.BluetoothSlash
+import com.adamglin.phosphoricons.regular.CalendarBlank
+import com.adamglin.phosphoricons.regular.Camera
+import com.adamglin.phosphoricons.regular.CircleHalf
+import com.adamglin.phosphoricons.regular.DeviceMobile
+import com.adamglin.phosphoricons.regular.FloppyDisk
+import com.adamglin.phosphoricons.regular.List
+import com.adamglin.phosphoricons.regular.WifiHigh
 import com.adamglin.phosphoricons.Duotone
 import com.adamglin.phosphoricons.duotone.FileText
 import com.adamglin.phosphoricons.duotone.FileZip
@@ -247,6 +262,22 @@ fun PhIcon(name: String, modifier: Modifier = Modifier, tint: Color = LocalConte
         "clock-counter-clockwise" -> PhosphorIcons.Regular.ClockCounterClockwise
         "cloud" -> PhosphorIcons.Regular.Cloud
         "stop" -> PhosphorIcons.Regular.Stop
+        // Phone (handset) chrome + screens.
+        "scales-fill" -> PhosphorIcons.Fill.ScalesFilled
+        "list-bullets-fill" -> PhosphorIcons.Fill.ListBulletsFilled
+        "coffee-bean-fill" -> PhosphorIcons.Fill.CoffeeBeanFilled
+        "chart-line-fill" -> PhosphorIcons.Fill.ChartLineFilled
+        "arrow-line-down" -> PhosphorIcons.Regular.ArrowLineDown
+        "arrow-right" -> PhosphorIcons.Regular.ArrowRight
+        "bluetooth-connected" -> PhosphorIcons.Regular.BluetoothConnected
+        "bluetooth-slash" -> PhosphorIcons.Regular.BluetoothSlash
+        "calendar-blank" -> PhosphorIcons.Regular.CalendarBlank
+        "camera" -> PhosphorIcons.Regular.Camera
+        "circle-half" -> PhosphorIcons.Regular.CircleHalf
+        "device-mobile" -> PhosphorIcons.Regular.DeviceMobile
+        "floppy-disk" -> PhosphorIcons.Regular.FloppyDisk
+        "list" -> PhosphorIcons.Regular.List
+        "wifi-high" -> PhosphorIcons.Regular.WifiHigh
         else -> PhosphorIcons.Regular.Question // unknown-name fallback
     }
     Icon(
