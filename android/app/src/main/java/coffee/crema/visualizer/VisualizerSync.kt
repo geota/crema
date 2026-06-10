@@ -250,7 +250,8 @@ class VisualizerSync(
         if (!persisted.includeNotes && metadata.containsKey("notes")) {
             metadata["notes"] = JsonNull
         }
-        doc["privacy"] = JsonPrimitive(persisted.privacy)
+        // Per-shot override wins; null inherits the Sharing default (web parity).
+        doc["privacy"] = JsonPrimitive(shot.privacy ?: persisted.privacy)
         metadata["crema"] = buildJsonObject {
             put("localId", JsonPrimitive(shot.id))
             put(
@@ -294,6 +295,39 @@ class VisualizerSync(
         val id = withFreshToken { client.uploadShot(it, payload) }
         persist { it.copy(lastShotSyncAt = System.currentTimeMillis()) }
         return id
+    }
+
+    /**
+     * Mirror a History-panel edit onto the shot's already-uploaded Visualizer
+     * copy (web ShotSync.patchEditedShot): rating → `flavor` (0–15, ×3),
+     * notes → `private_notes` (gated on include-notes so an opt-out never
+     * leaks via an edit), effective privacy, and the inline bean fields the
+     * flat capture label carries. No-op for never-uploaded shots; soft —
+     * a failure notifies but never blocks the local edit.
+     */
+    fun patchEditedShot(shot: StoredShot) {
+        val vid = shot.visualizerId ?: return
+        if (persisted.tokens == null) return
+        val body = buildJsonObject {
+            val rating = shot.rating ?: 0
+            if (rating > 0) put("flavor", JsonPrimitive((rating * 3).coerceIn(0, 15)))
+            if (persisted.includeNotes) put("private_notes", JsonPrimitive(shot.notes ?: ""))
+            put("privacy", JsonPrimitive(shot.privacy ?: persisted.privacy))
+            // Inline bean from the flat "Roaster · Name" capture label.
+            shot.beanName?.let { label ->
+                val idx = label.indexOf(" · ")
+                if (idx >= 0) {
+                    put("bean_brand", JsonPrimitive(label.substring(0, idx)))
+                    put("bean_type", JsonPrimitive(label.substring(idx + 3)))
+                } else {
+                    put("bean_type", JsonPrimitive(label))
+                }
+            }
+        }
+        scope.launch {
+            runCatching { withFreshToken { client.patchShot(it, vid, body) } }
+                .onFailure { notify("Visualizer update failed: ${it.message}") }
+        }
     }
 
     /** Called on `ShotCompleted` — uploads when auto-sync is armed + signed in. */

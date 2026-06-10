@@ -3,6 +3,7 @@ package coffee.crema.ui.screens
 import android.text.format.DateUtils
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -311,6 +312,8 @@ fun HistoryScreen(
                             } else {
                                 null
                             },
+                            defaultPrivacy = ui.visualizer.privacy,
+                            onPrivacyChange = { p -> vm.setShotPrivacy(selected.id, p) },
                             onViewVisualizer = selected.visualizerId?.let { vid ->
                                 {
                                     detailContext.startActivity(
@@ -553,6 +556,10 @@ private fun ShotDetail(
     onUploadVisualizer: (() -> Unit)? = null,
     /** Open the shot on visualizer.coffee; null until it has been uploaded. */
     onViewVisualizer: (() -> Unit)? = null,
+    /** The Sharing default the "Default" privacy chip names. */
+    defaultPrivacy: String = "unlisted",
+    /** Per-shot privacy override edit; null reverts to the Sharing default. */
+    onPrivacyChange: (String?) -> Unit = {},
 ) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
         var confirmDelete by remember(shot.id) { mutableStateOf(false) }
@@ -648,6 +655,17 @@ private fun ShotDetail(
             Eyebrow("Rating")
             StarRating(rating) { rating = it; onRate(it, notes) }
         }
+        // Privacy — the per-shot Visualizer visibility override (web .hi-privacy):
+        // "Default" follows Settings → Sharing; a pinned chip overrides this shot.
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Eyebrow("Privacy")
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                PrivacyChip("Default · $defaultPrivacy", shot.privacy == null) { onPrivacyChange(null) }
+                listOf("public" to "Public", "unlisted" to "Unlisted", "private" to "Private").forEach { (v, label) ->
+                    PrivacyChip(label, shot.privacy == v) { onPrivacyChange(v) }
+                }
+            }
+        }
         CremaTextField(
             value = notes,
             onValueChange = { notes = it; onRate(rating, it) },
@@ -656,6 +674,29 @@ private fun ShotDetail(
             singleLine = false,
             minLines = 2,
             modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
+
+// One privacy pill (web .hi-privacy-chip): ghost border, copper wash when on.
+@Composable
+private fun PrivacyChip(label: String, on: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(if (on) MaterialTheme.colorScheme.primary.copy(alpha = 0.10f) else androidx.compose.ui.graphics.Color.Transparent)
+            .border(
+                1.dp,
+                if (on) MaterialTheme.colorScheme.primary.copy(alpha = 0.55f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.14f),
+                RoundedCornerShape(999.dp),
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 4.dp),
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+            color = if (on) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }

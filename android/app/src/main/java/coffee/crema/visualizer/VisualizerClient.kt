@@ -8,14 +8,18 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import java.net.HttpURLConnection
-import java.net.URL
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import java.util.concurrent.TimeUnit
 
 /*
  * The authenticated Visualizer API client — the Android `visualizerCall`
  * (web `$lib/services/visualizer-call.ts`): one entry point, the same error
  * taxonomy (401 → auth, 402/403 → premium-gated, 404 → not-found, transport
- * → network), JSON bodies in and out over plain HttpURLConnection.
+ * → network), JSON bodies in and out over OkHttp (HttpURLConnection can't
+ * send the PATCH verb shot-edit sync needs).
  *
  * Token freshness (proactive refresh + the one-shot 401 retry) lives in
  * [VisualizerSync.withFreshToken], which owns the store — this client is
@@ -45,6 +49,13 @@ sealed class VisualizerError(message: String) : Exception(message) {
 
 class VisualizerClient(private val json: Json) {
 
+    // OkHttp rather than HttpURLConnection: the latter rejects the PATCH verb,
+    // which shot-edit sync (PATCH /shots/{id}) requires.
+    private val http = OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .build()
+
     /**
      * One authenticated request. Returns the parsed JSON body for a 2xx (null
      * for 204 / empty); throws a [VisualizerError] otherwise.
@@ -55,32 +66,26 @@ class VisualizerClient(private val json: Json) {
         accessToken: String,
         body: JsonElement? = null,
     ): JsonElement? = withContext(Dispatchers.IO) {
-        val conn = try {
-            (URL("$API_BASE$path").openConnection() as HttpURLConnection).apply {
-                requestMethod = method
-                connectTimeout = 15_000
-                readTimeout = 30_000
-                setRequestProperty("Authorization", "Bearer $accessToken")
-                setRequestProperty("Accept", "application/json")
-                if (body != null) {
-                    doOutput = true
-                    setRequestProperty("Content-Type", "application/json")
-                }
-            }
+        val req = Request.Builder()
+            .url("$API_BASE$path")
+            .header("Authorization", "Bearer $accessToken")
+            .header("Accept", "application/json")
+            .method(
+                method,
+                body?.let {
+                    json.encodeToString(JsonElement.serializer(), it)
+                        .toRequestBody("application/json".toMediaType())
+                },
+            )
+            .build()
+        val response = try {
+            http.newCall(req).execute()
         } catch (e: Exception) {
             throw VisualizerError.Network("Couldn't reach Visualizer: ${e.message}")
         }
-        try {
-            if (body != null) {
-                conn.outputStream.use { it.write(json.encodeToString(JsonElement.serializer(), body).toByteArray(Charsets.UTF_8)) }
-            }
-            val status = try {
-                conn.responseCode
-            } catch (e: Exception) {
-                throw VisualizerError.Network("Couldn't reach Visualizer: ${e.message}")
-            }
-            val text = (if (status in 200..299) conn.inputStream else conn.errorStream)
-                ?.use { String(it.readBytes(), Charsets.UTF_8) }.orEmpty()
+        response.use { res ->
+            val status = res.code
+            val text = res.body?.string().orEmpty()
             when {
                 status == 401 -> throw VisualizerError.Auth()
                 status == 402 || status == 403 -> throw VisualizerError.PremiumGated()
@@ -90,8 +95,6 @@ class VisualizerClient(private val json: Json) {
                 else -> runCatching { json.parseToJsonElement(text) }
                     .getOrElse { throw VisualizerError.Network("Visualizer returned a malformed body") }
             }
-        } finally {
-            conn.disconnect()
         }
     }
 
@@ -117,5 +120,15 @@ class VisualizerClient(private val json: Json) {
             ?: throw VisualizerError.Network("Visualizer accepted the shot but returned no body")
         return res["id"]?.jsonPrimitive?.contentOrNull
             ?: throw VisualizerError.Network("Visualizer accepted the shot but returned no id")
+    }
+
+    /** `PATCH /api/shots/{id}` with a `{"shot": {…}}` envelope. */
+    suspend fun patchShot(accessToken: String, visualizerId: String, shotBody: JsonObject) {
+        request(
+            "PATCH",
+            "/shots/$visualizerId",
+            accessToken,
+            kotlinx.serialization.json.buildJsonObject { put("shot", shotBody) },
+        )
     }
 }

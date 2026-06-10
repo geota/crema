@@ -49,6 +49,12 @@ data class StoredShot(
      */
     val samples: List<TelemetrySample> = emptyList(),
     /**
+     * Per-shot Visualizer privacy override — `"public" | "unlisted" |
+     * "private"`, or null to inherit the Sharing default at upload/patch
+     * time (mirrors the web StoredShot field).
+     */
+    val privacy: String? = null,
+    /**
      * Visualizer `shot.id` once uploaded; null until pushed (mirrors the web
      * StoredShot field — drives the History sync pip + "Upload all unsynced").
      */
