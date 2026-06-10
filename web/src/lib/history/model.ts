@@ -257,6 +257,13 @@ export interface StoredShot {
 	stopOnWeight?: boolean;
 	/** Whether auto-tare was armed for this shot. */
 	autoTare?: boolean;
+	/**
+	 * Per-shot Visualizer privacy override — `'public' | 'unlisted' |
+	 * 'private'`, or `null`/absent to inherit the settings default
+	 * (`Settings.visualizerPrivacy`) at upload/patch time. Editable from
+	 * the History detail's Sharing block.
+	 */
+	privacy?: 'public' | 'unlisted' | 'private' | null;
 	/** Visualizer `shot.id` once uploaded; `null` until pushed. */
 	visualizerId?: string | null;
 	/** Unix epoch ms when this shot was soft-deleted, or `null`. */

@@ -50,6 +50,7 @@ function fakeShotSync(over: {
 		ShotSync.of({
 			uploadShot: (over.uploadShot ?? die('uploadShot')) as never,
 			deleteShot: (over.deleteShot ?? die('deleteShot')) as never,
+			patchEditedShot: undefined as never,
 			patchShot: die('patchShot') as never,
 			pullShots: die('pullShots') as never,
 			fetchShotDetail: die('fetchShotDetail') as never,

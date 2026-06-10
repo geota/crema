@@ -104,7 +104,8 @@ function buildShotPayload(shot: StoredShot): Record<string, unknown> {
 		}
 	}
 
-	json.privacy = settings.visualizerPrivacy;
+	// Per-shot override wins; absent/null inherits the settings default.
+	json.privacy = shot.privacy ?? settings.visualizerPrivacy;
 	json.metadata = {
 		...((json.metadata as Record<string, unknown> | undefined) ?? {}),
 		crema: {
@@ -292,6 +293,13 @@ export interface ShotPatch {
 	tagList?: string[];
 	inlineBean?: Record<string, unknown>;
 	grinderModel?: string;
+	/**
+	 * Per-shot visibility. Sent as the same `privacy` vocabulary the upload
+	 * document uses; the PATCH schema's `shot` object is
+	 * `additionalProperties: true`, so the key is accepted — server-side
+	 * application is best-effort (the formal schema doesn't model it).
+	 */
+	privacy?: 'public' | 'unlisted' | 'private';
 }
 
 /**
@@ -340,6 +348,13 @@ export class ShotSync extends Context.Tag('crema/ShotSync')<
 			visualizerId: string
 		) => Effect.Effect<void, Exclude<VisualizerCallError, VisualizerNotFoundError>>;
 		readonly patchShot: (visualizerId: string, patch: ShotPatch) => Effect.Effect<void, VisualizerCallError>;
+		/**
+		 * Push a local shot's editable fields onto its already-uploaded
+		 * Visualizer copy — rating, notes (respecting the include-notes
+		 * setting), effective privacy, bean binding, tags, grinder model.
+		 * No-op when the shot has no `visualizerId`.
+		 */
+		readonly patchEditedShot: (history: HistoryStore, id: string) => Effect.Effect<void, VisualizerCallError>;
 		readonly pullShots: (
 			page?: number,
 			itemsPerPage?: number
@@ -478,6 +493,7 @@ export const ShotSyncLive = Layer.effect(
 			if (patch.coffeeBagId !== undefined) shotBody.coffee_bag_id = patch.coffeeBagId;
 			if (patch.tagList !== undefined) shotBody.tag_list = patch.tagList;
 			if (patch.grinderModel !== undefined) shotBody.grinder_model = patch.grinderModel;
+			if (patch.privacy !== undefined) shotBody.privacy = patch.privacy;
 			const envelope: ShotUpdateRequest = { shot: shotBody };
 			yield* call(`/shots/${visualizerId}`, {
 				method: 'PATCH',
@@ -749,10 +765,46 @@ export const ShotSyncLive = Layer.effect(
 			});
 		});
 
+		/**
+		 * Map a local shot's editable surface onto a [ShotPatch] — the same
+		 * resolvers the upload follow-up uses, plus the journal fields the
+		 * History panel edits. Notes respect `visualizerIncludeNotes` (a user
+		 * who opted out of uploading notes must not have an edit leak them).
+		 * Privacy sends the EFFECTIVE value (per-shot override, else the
+		 * settings default) so the server always matches what the user sees.
+		 */
+		const buildEditPatch = (shot: StoredShot): ShotPatch => {
+			const settings = getSettingsStore().current;
+			const coffeeBagId = resolveCoffeeBagId(shot);
+			const tagList = resolveTagList(shot);
+			const inlineBean = inlineBeanPatch(shot.bean);
+			const grinderModel = resolveGrinderModel(shot, settings.grinderModel);
+			return {
+				rating: (shot.metadata.rating ?? 0) > 0 ? (shot.metadata.rating ?? null) : null,
+				...(settings.visualizerIncludeNotes ? { notes: shot.metadata.notes ?? '' } : {}),
+				privacy: shot.privacy ?? settings.visualizerPrivacy,
+				...(coffeeBagId != null ? { coffeeBagId } : {}),
+				...(tagList != null && tagList.length > 0 ? { tagList } : {}),
+				...(Object.keys(inlineBean).length > 0 ? { inlineBean } : {}),
+				...(grinderModel != null ? { grinderModel } : {})
+			};
+		};
+
+		const patchEditedShot = Effect.fn('ShotSync.patchEditedShot')(function* (
+			history: HistoryStore,
+			id: string
+		) {
+			const shot = history.all.find((s) => s.id === id);
+			const vid = shot?.visualizerId;
+			if (!shot || !vid) return;
+			yield* patchShot(vid, buildEditPatch(shot));
+		});
+
 		return ShotSync.of({
 			uploadShot,
 			deleteShot,
 			patchShot,
+			patchEditedShot,
 			pullShots,
 			fetchShotDetail,
 			pullAllShotsSince,

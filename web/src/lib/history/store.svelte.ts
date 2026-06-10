@@ -286,6 +286,23 @@ export class HistoryStore {
 		this.persist();
 	}
 
+	/**
+	 * Update a shot's per-upload privacy override and persist. `null`
+	 * clears the override — the upload/patch cascade then falls back to
+	 * the `Settings.visualizerPrivacy` default. Mirrors {@link setNotes}.
+	 */
+	setPrivacy(id: string, privacy: 'public' | 'unlisted' | 'private' | null): void {
+		const idx = this.shots.findIndex((s) => s.id === id);
+		if (idx < 0) return;
+		const target = this.shots[idx];
+		this.shots = [
+			...this.shots.slice(0, idx),
+			{ ...target, privacy },
+			...this.shots.slice(idx + 1)
+		];
+		this.persist();
+	}
+
 	/** Update a shot's star rating (0–5) and persist. */
 	setRating(id: string, rating: number): void {
 		const idx = this.shots.findIndex((s) => s.id === id);

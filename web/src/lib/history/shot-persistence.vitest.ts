@@ -54,6 +54,7 @@ function fakeShotSync(uploadShot: (shot: unknown) => Effect.Effect<{ visualizerI
 		ShotSync.of({
 			uploadShot: uploadShot as never,
 			deleteShot: die('deleteShot') as never,
+			patchEditedShot: undefined as never,
 			patchShot: die('patchShot') as never,
 			pullShots: die('pullShots') as never,
 			fetchShotDetail: die('fetchShotDetail') as never,
