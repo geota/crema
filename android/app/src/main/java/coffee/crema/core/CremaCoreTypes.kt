@@ -155,6 +155,10 @@ data class Bean (
 	/// Defaults to an empty list. Serialised as `tags` so the JSON contract
 	/// matches the [`crate::Profile`] tag pattern.
 	val tags: List<String>? = null,
+	/// The profile auto-loaded when this bean is activated (the "linked
+	/// profile"); null = no link. Dangling ids tolerated. Local-only —
+	/// never pushed to Visualizer. Mirrors `de1_domain::Bean.linked_profile_id`.
+	val linkedProfileId: String? = null,
 	/// Visualizer `coffee_bag.id` once pushed.
 	val visualizerId: String? = null,
 	/// Unix epoch ms when this bag was soft-deleted, or `None` when

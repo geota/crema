@@ -2,7 +2,10 @@ package coffee.crema.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -25,6 +28,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.InputChip
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -50,7 +54,10 @@ import coffee.crema.core.BeanRoastType
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.components.roasterMark
 import coffee.crema.ui.components.roasterTone
+import coffee.crema.ui.components.CremaAnchoredPopup
 import coffee.crema.ui.components.CremaButton
+import coffee.crema.ui.components.CremaMenuItem
+import coffee.crema.ui.components.CremaMenuSurface
 import coffee.crema.ui.components.CremaButtonVariant
 import coffee.crema.ui.components.CremaIconButton
 import coffee.crema.ui.components.CremaSegmentedButton
@@ -114,6 +121,7 @@ fun BeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
     var bagSize by remember(bean.id) { mutableStateOf(bean.bagSize.toDouble()) }
     var remaining by remember(bean.id) { mutableStateOf(bean.remaining.toDouble()) }
     var grinder by remember(bean.id) { mutableStateOf(bean.grinder) }
+    var linkedProfileId by remember(bean.id) { mutableStateOf(bean.linkedProfileId) }
     var grind by remember(bean.id) { mutableStateOf(bean.grinderSetting) }
     var country by remember(bean.id) { mutableStateOf(bean.origin.country ?: "") }
     var region by remember(bean.id) { mutableStateOf(bean.origin.region ?: "") }
@@ -167,6 +175,7 @@ fun BeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                 ),
                 grinder = grinder.trim(),
                 grinderSetting = grind.trim(),
+                linkedProfileId = linkedProfileId,
                 rating = rating.coerceIn(0, 5).toUByte(),
                 tastingNotes = tastingNotes,
                 url = url.ifBlank { null },
@@ -304,6 +313,42 @@ fun BeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         Box(Modifier.weight(1f)) { BeField("Grinder", grinder) { grinder = it } }
                         Box(Modifier.weight(1f)) { BeField("Grind setting", grind) { grind = it } }
+                    }
+                    // Linked profile — auto-loads when this bean is activated on
+                    // Brew/Beans (web BeanEditPage parity). "(missing profile)"
+                    // marks a dangling link the user can clear via None.
+                    BeRow("Linked profile", sub = "Auto-loads when this bean is selected on Brew.", stack = true) {
+                        var lpOpen by remember { mutableStateOf(false) }
+                        val lpName = linkedProfileId?.let { lid ->
+                            ui.profiles.firstOrNull { it.id == lid }?.name ?: "(missing profile)"
+                        } ?: "None"
+                        Box {
+                            Surface(
+                                onClick = { lpOpen = true },
+                                shape = RoundedCornerShape(10.dp),
+                                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                            ) {
+                                Row(
+                                    Modifier.padding(horizontal = 14.dp, vertical = 11.dp).widthIn(min = 220.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                ) {
+                                    Text(lpName, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
+                                    PhIcon("caret-down", sizeDp = 14, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                            CremaAnchoredPopup(expanded = lpOpen, onDismiss = { lpOpen = false }) {
+                                CremaMenuSurface(Modifier.widthIn(min = 260.dp, max = 340.dp)) {
+                                    Column(Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState())) {
+                                        CremaMenuItem(label = "None", onClick = { lpOpen = false; linkedProfileId = null })
+                                        ui.profiles.forEach { p ->
+                                            CremaMenuItem(label = p.name, onClick = { lpOpen = false; linkedProfileId = p.id })
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
 
