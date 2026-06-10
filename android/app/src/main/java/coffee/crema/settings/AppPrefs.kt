@@ -36,6 +36,9 @@ data class AppPrefs(
     val chartChannels: Set<String> = setOf("pressure", "flow", "weight"),
     /** Hold FLAG_KEEP_SCREEN_ON while a shot is pulling. */
     val keepScreenOnBrew: Boolean = false,
+    /** Show the inline debug / event-log panel in Settings → Advanced
+     *  (web `showDebugPanel`). */
+    val showDebugPanel: Boolean = false,
     // ── Brew defaults (seed new profiles + the Quick-Controls fallbacks) ─────
     val defaultDoseG: Float = 18f,
     val defaultRatio: Float = 2f,

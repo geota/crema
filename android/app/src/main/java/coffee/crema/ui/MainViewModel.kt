@@ -310,6 +310,7 @@ data class MainUiState(
     val themeMode: String = "dark",
     val grinderModel: String = "",
     val suppressDe1Sleep: Boolean = true,
+    val showDebugPanel: Boolean = false,
     /** Latest scale weight in grams, or null before the first reading. */
     val scaleWeightG: Float? = null,
     /**
@@ -1504,6 +1505,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         keepScreenOnBrew = _ui.value.keepScreenOnBrew,
         grinderModel = _ui.value.grinderModel,
         suppressDe1Sleep = _ui.value.suppressDe1Sleep,
+        showDebugPanel = _ui.value.showDebugPanel,
         defaultDoseG = _ui.value.defaultDoseG,
         defaultRatio = _ui.value.defaultRatio,
         defaultBrewTempC = _ui.value.defaultBrewTempC,
@@ -2178,6 +2180,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             keepScreenOnBrew = p.keepScreenOnBrew,
             grinderModel = p.grinderModel,
             suppressDe1Sleep = p.suppressDe1Sleep,
+            showDebugPanel = p.showDebugPanel,
             defaultDoseG = p.defaultDoseG,
             defaultRatio = p.defaultRatio,
             defaultBrewTempC = p.defaultBrewTempC,
@@ -2253,6 +2256,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         onCoreOutputJson(raw)
         runCatching { bridge.readMmr(MmrReg.CUP_WARMER_TEMP) }.getOrNull()?.let(::onCoreOutputJson)
+    }
+
+    /** Show/hide the inline debug panel (Settings → Advanced). Persisted. */
+    fun setShowDebugPanel(on: Boolean) {
+        _ui.update { it.copy(showDebugPanel = on) }
+        persistPrefs()
     }
 
     /** Set the theme mode (`"system"` / `"light"` / `"dark"`) and persist. */
