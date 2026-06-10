@@ -1001,6 +1001,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (_ui.value.activeProfileId == id) {
             _ui.update { it.copy(activeProfileId = null) }
         }
+        // Cascade: a deleted custom is gone for good — clear bean links so
+        // the auto-load never chases a tombstone (web onDeleted parity).
+        if (_ui.value.beans.any { it.linkedProfileId == id }) {
+            _ui.update { st ->
+                st.copy(beans = st.beans.map { if (it.linkedProfileId == id) it.copy(linkedProfileId = null) else it })
+            }
+            persistLibrary()
+        }
         refreshProfiles()
         persistCustomProfiles()
     }
@@ -1842,6 +1850,34 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun setActiveBean(id: String?) {
         _ui.update { it.copy(activeBeanId = id) }
         persistLibrary()
+        // Linked-profile auto-load (web activateBean parity). Only user acts
+        // reach this fun — boot/library restore writes activeBeanId directly —
+        // so firing here matches the "explicit activation only" rule.
+        if (id != null) maybeLoadLinkedProfile(id)
+    }
+
+    /**
+     * Fire the bean's linked-profile auto-load: no-op when unset or already
+     * active; dangling link → notify; shot in progress → skip (profile
+     * activation reseeds brew params — not mid-extraction); else activate
+     * the profile with a toast naming the link.
+     */
+    private fun maybeLoadLinkedProfile(beanId: String) {
+        val s = _ui.value
+        val bean = s.beans.firstOrNull { it.id == beanId } ?: return
+        val linkedId = bean.linkedProfileId ?: return
+        if (s.activeProfileId == linkedId) return
+        val profile = s.profiles.firstOrNull { it.id == linkedId }
+        if (profile == null) {
+            notifyUser("${bean.name}’s linked profile no longer exists")
+            return
+        }
+        if (s.shotInProgress) {
+            notifyUser("Shot in progress — “${profile.name}” not loaded")
+            return
+        }
+        setActiveProfile(linkedId)
+        notifyUser("Loaded “${profile.name}” — linked to ${bean.name}")
     }
 
     /** Remove a bean bag; reselect the first remaining if it was active. Persisted. */

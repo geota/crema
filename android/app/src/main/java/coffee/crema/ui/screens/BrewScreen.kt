@@ -670,6 +670,7 @@ private fun BeanBlock(
                                 roastBand(b.roastLevel?.toInt()),
                             ).joinToString(" · "),
                             favourite = b.favourite,
+                            linked = b.linkedProfileId != null,
                         )
                     }
                 }
@@ -746,6 +747,8 @@ private fun PickRow(
     name: String,
     meta: String,
     favourite: Boolean = false,
+    /** Bean rows: has a linked profile (renders a small link glyph — web .hpick-link). */
+    linked: Boolean = false,
 ) {
     // Active row = the shared copper "selected" wash (the same primary@12% used by
     // the sort/overflow menus + the web .hpick-item.is-active), not a solid neutral
@@ -784,8 +787,11 @@ private fun PickRow(
                     )
                 }
             }
-            // Trailing favourite star (web .hpick-fav) then the active check
-            // (proto .bh-pick-check) — an active favourite shows both, web-style.
+            // Trailing link glyph, then favourite star (web .hpick-fav), then the
+            // active check (proto .bh-pick-check) — web-style, all can coexist.
+            if (linked) {
+                PhIcon("link", sizeDp = 13, tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f))
+            }
             if (favourite) {
                 PhIcon("star-fill", sizeDp = 14, tint = MaterialTheme.colorScheme.primary)
             }
