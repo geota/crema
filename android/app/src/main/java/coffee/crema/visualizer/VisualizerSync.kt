@@ -16,6 +16,7 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 
 /*
@@ -47,7 +48,16 @@ class VisualizerSync(
     private val notify: (String) -> Unit,
     /** Persist a successful upload: stamp `visualizerId` onto the local shot. */
     private val onShotSynced: (localId: String, visualizerId: String) -> Unit,
+    /** Insert pulled remote stubs into the local history (dedup by id). */
+    private val onPulledShots: (List<StoredShot>) -> Unit = {},
+    /** Backfill a bound local's telemetry from a pull (no-op when it has a curve). */
+    private val onBackfillTelemetry: (localId: String, samples: List<coffee.crema.ui.TelemetrySample>, durationMs: Long) -> Unit = { _, _, _ -> },
 ) {
+
+    private companion object {
+        /** Backstop on the pull walk — mirrors the web's maxPages default. */
+        const val MAX_PULL_PAGES = 200
+    }
 
     /** What the Settings/History UI binds to. */
     data class UiState(
@@ -60,8 +70,14 @@ class VisualizerSync(
         val includeProfile: Boolean = true,
         val includeNotes: Boolean = false,
         val lastShotSyncAt: Long? = null,
+        /** Shots sync direction: `"off" | "backup" | "pull" | "two-way"`. */
+        val shotsDirection: String = "backup",
+        /** Recent sync activity (capped 20, newest first). */
+        val log: List<SyncLogEntry> = emptyList(),
         /** True while a sign-in exchange or bulk upload runs. */
         val busy: Boolean = false,
+        /** True while a Sync-now pull/push pass runs. */
+        val syncing: Boolean = false,
         /** Shot ids with an upload in flight (History pip spinners). */
         val uploadingShotIds: Set<String> = emptySet(),
     )
@@ -90,6 +106,8 @@ class VisualizerSync(
                 includeProfile = p.includeProfile,
                 includeNotes = p.includeNotes,
                 lastShotSyncAt = p.lastShotSyncAt,
+                shotsDirection = p.shotsDirection,
+                log = p.log,
             )
         }
     }
@@ -194,9 +212,19 @@ class VisualizerSync(
     // ── Preferences ──────────────────────────────────────────────────────────
 
     fun setAutoSync(enabled: Boolean) = scope.launch { persist { it.copy(autoSync = enabled) } }
+    fun setShotsDirection(direction: String) = scope.launch { persist { it.copy(shotsDirection = direction) } }
     fun setPrivacy(privacy: String) = scope.launch { persist { it.copy(privacy = privacy) } }
     fun setIncludeProfile(enabled: Boolean) = scope.launch { persist { it.copy(includeProfile = enabled) } }
     fun setIncludeNotes(enabled: Boolean) = scope.launch { persist { it.copy(includeNotes = enabled) } }
+
+    private fun directionPushes(d: String) = d == "backup" || d == "two-way"
+    private fun directionPulls(d: String) = d == "pull" || d == "two-way"
+
+    /** Append a sync-activity line (capped at 20, newest first). Persisted. */
+    private suspend fun logSync(direction: String, id: String, name: String, error: String? = null) {
+        val entry = SyncLogEntry(direction = direction, entity = "shot", id = id, name = name, at = System.currentTimeMillis(), error = error)
+        persist { it.copy(log = (listOf(entry) + it.log).take(20)) }
+    }
 
     // ── Token freshness (web TokenVault.withFreshToken semantics) ───────────
 
@@ -289,11 +317,12 @@ class VisualizerSync(
         }
     }
 
-    /** The suspend upload itself — payload → POST → lastSyncAt. */
+    /** The suspend upload itself — payload → POST → lastSyncAt + log line. */
     private suspend fun uploadShotNow(shot: StoredShot): String {
         val payload = buildShotPayload(shot)
         val id = withFreshToken { client.uploadShot(it, payload) }
         persist { it.copy(lastShotSyncAt = System.currentTimeMillis()) }
+        logSync("push", shot.id, shot.profileName ?: "Shot")
         return id
     }
 
@@ -308,6 +337,7 @@ class VisualizerSync(
     fun patchEditedShot(shot: StoredShot) {
         val vid = shot.visualizerId ?: return
         if (persisted.tokens == null) return
+        if (!directionPushes(persisted.shotsDirection)) return
         val body = buildJsonObject {
             val rating = shot.rating ?: 0
             if (rating > 0) put("flavor", JsonPrimitive((rating * 3).coerceIn(0, 15)))
@@ -330,9 +360,198 @@ class VisualizerSync(
         }
     }
 
-    /** Called on `ShotCompleted` — uploads when auto-sync is armed + signed in. */
+    /** Called on `ShotCompleted` — uploads when auto-sync is armed, signed in,
+     *  and the shots direction pushes. */
     fun maybeAutoUpload(shot: StoredShot) {
-        if (persisted.autoSync && persisted.tokens != null) uploadShot(shot, silent = true)
+        if (persisted.autoSync && persisted.tokens != null && directionPushes(persisted.shotsDirection)) {
+            uploadShot(shot, silent = true)
+        }
+    }
+
+    // ── Pull / reconcile (web pullAllShotsSince + applyShotReconciliation) ──
+
+    /**
+     * Walk `GET /shots` newest-updated-first, collecting every shot updated at
+     * or after [sinceMs] as core `WireShot` JSON (+ reconstructed telemetry).
+     * Stops at the cursor, page exhaustion, or the 200-page cap. One failed
+     * detail fetch skips that row (auth failures abort — no point continuing).
+     */
+    private suspend fun pullAllShotsSince(sinceMs: Long): Pair<List<JsonObject>, Map<String, String>> {
+        val cursorSec = sinceMs / 1000
+        val wires = mutableListOf<JsonObject>()
+        val samplesById = mutableMapOf<String, String>()
+        var page = 1
+        var totalPages = 1
+        var reachedOlder = false
+        while (!reachedOlder && page <= totalPages.coerceAtMost(MAX_PULL_PAGES)) {
+            val (summaries, pages) = withFreshToken { client.listShots(it, page, 50) }
+            totalPages = pages
+            if (summaries.isEmpty()) break
+            for (summary in summaries) {
+                if (summary.updatedAtSec < cursorSec) {
+                    // Sorted by updated_at desc — crossing the cursor ends the walk.
+                    reachedOlder = true
+                    continue
+                }
+                val detail = runCatching { withFreshToken { client.fetchShotDetail(it, summary.id) } }
+                    .getOrElse { e ->
+                        if (e is VisualizerError.Auth) throw e
+                        continue
+                    }
+                val detailStr = json.encodeToString(kotlinx.serialization.json.JsonElement.serializer(), detail)
+                val payload = buildJsonObject {
+                    put(
+                        "summary",
+                        buildJsonObject {
+                            put("id", JsonPrimitive(summary.id))
+                            put("clock", JsonPrimitive(summary.clockSec))
+                            put("updated_at", JsonPrimitive(summary.updatedAtSec))
+                        },
+                    )
+                    put("detail", detail)
+                }
+                val wire = runCatching {
+                    json.parseToJsonElement(
+                        coffee.crema.core.wireShotFromDetail(json.encodeToString(JsonObject.serializer(), payload)),
+                    ).jsonObject
+                }.getOrNull() ?: continue
+                wires += wire
+                runCatching { coffee.crema.core.samplesFromVisualizerDetail(detailStr) }
+                    .getOrNull()?.let { samplesById[summary.id] = it }
+            }
+            page++
+        }
+        return wires to samplesById
+    }
+
+    /**
+     * Reconcile pulled wires against the local history via the CORE planner
+     * (`reconcile_shots` over the FFI — the identical algorithm the web runs)
+     * and apply the actions through the VM callbacks. Returns pulled-count.
+     */
+    private suspend fun reconcileAndApply(localShots: List<StoredShot>, wires: List<JsonObject>, samplesById: Map<String, String>): Int {
+        if (wires.isEmpty()) return 0
+        val payload = buildJsonObject {
+            put(
+                "local",
+                kotlinx.serialization.json.buildJsonArray {
+                    localShots.forEach { shot ->
+                        add(
+                            buildJsonObject {
+                                put("id", JsonPrimitive(shot.id))
+                                put("completedAt", JsonPrimitive(shot.completedAtMs))
+                                put("duration", JsonPrimitive(shot.durationMs))
+                                put("profileName", shot.profileName?.let { JsonPrimitive(it) } ?: JsonNull)
+                                put("finalWeight", shotFinalWeight(shot)?.let { JsonPrimitive(it) } ?: JsonNull)
+                                put("visualizerId", shot.visualizerId?.let { JsonPrimitive(it) } ?: JsonNull)
+                                put("deletedAt", JsonNull)
+                            },
+                        )
+                    }
+                },
+            )
+            put("remote", kotlinx.serialization.json.JsonArray(wires))
+        }
+        val actions = runCatching {
+            json.parseToJsonElement(
+                coffee.crema.core.reconcileShots(json.encodeToString(JsonObject.serializer(), payload)),
+            ) as kotlinx.serialization.json.JsonArray
+        }.getOrElse { return 0 }
+        var pulled = 0
+        val stubs = mutableListOf<StoredShot>()
+        for (el in actions) {
+            val action = el as? JsonObject ?: continue
+            fun fld(k: String) = (action[k] as? JsonPrimitive)?.contentOrNull
+            when (fld("kind")) {
+                "add" -> {
+                    val remote = action["remote"] as? JsonObject ?: continue
+                    val vid = (remote["id"] as? JsonPrimitive)?.contentOrNull
+                    storedShotFromWire(remote, vid?.let { samplesById[it] }, json)?.let { stub ->
+                        stubs += stub
+                        pulled++
+                        logSync("pull", stub.id, stub.profileName ?: "Shot")
+                    }
+                }
+                "bind" -> {
+                    val localId = fld("localId") ?: continue
+                    val vid = fld("visualizerId") ?: continue
+                    onShotSynced(localId, vid)
+                    logSync("pull", localId, "Shot (bound)")
+                }
+                "update" -> {
+                    val localId = fld("localId") ?: continue
+                    val remote = action["remote"] as? JsonObject ?: continue
+                    val vid = (remote["id"] as? JsonPrimitive)?.contentOrNull
+                    val durationMs = (remote["duration_ms"] as? JsonPrimitive)?.contentOrNull?.toDoubleOrNull()?.toLong() ?: 0L
+                    vid?.let { samplesById[it] }?.let { samplesJson ->
+                        val samples = parseTimedSamples(samplesJson, json)
+                        if (samples.isNotEmpty()) onBackfillTelemetry(localId, samples, durationMs)
+                    }
+                }
+            }
+        }
+        if (stubs.isNotEmpty()) onPulledShots(stubs)
+        return pulled
+    }
+
+    /**
+     * "Sync now": pull-then-push per the shots direction (web BeanSyncSection
+     * order). The pull cursor advances ONLY on a successful pull — never on a
+     * push. Soft per-step: a failure logs + notifies, the other step still runs.
+     */
+    fun syncNow(shots: List<StoredShot>) {
+        if (persisted.tokens == null) {
+            notify("Sign in to Visualizer first (Settings → Sharing)")
+            return
+        }
+        val direction = persisted.shotsDirection
+        if (direction == "off") {
+            notify("Shot sync is off — pick a direction first")
+            return
+        }
+        _state.update { it.copy(syncing = true) }
+        scope.launch {
+            var pulled = 0
+            var pushed = 0
+            var failed = false
+            if (directionPulls(direction)) {
+                runCatching {
+                    val since = persisted.shotPullCursor ?: 0L
+                    val (wires, samples) = pullAllShotsSince(since)
+                    pulled = reconcileAndApply(shots, wires, samples)
+                    persist { it.copy(shotPullCursor = System.currentTimeMillis()) }
+                }.onFailure { e ->
+                    failed = true
+                    logSync("pull", "", "Pull failed", e.message)
+                }
+            }
+            if (directionPushes(direction)) {
+                val unsynced = shots.filter { it.visualizerId == null }
+                for (shot in unsynced) {
+                    _state.update { it.copy(uploadingShotIds = it.uploadingShotIds + shot.id) }
+                    runCatching { uploadShotNow(shot) }
+                        .onSuccess { id ->
+                            pushed++
+                            onShotSynced(shot.id, id)
+                        }
+                        .onFailure { e ->
+                            failed = true
+                            logSync("skip", shot.id, shot.profileName ?: "Shot", e.message)
+                        }
+                    _state.update { it.copy(uploadingShotIds = it.uploadingShotIds - shot.id) }
+                }
+            }
+            _state.update { it.copy(syncing = false) }
+            notify(
+                buildString {
+                    append("Visualizer sync: ")
+                    if (directionPulls(direction)) append("$pulled pulled")
+                    if (directionPulls(direction) && directionPushes(direction)) append(" · ")
+                    if (directionPushes(direction)) append("$pushed pushed")
+                    if (failed) append(" · some steps failed (see log)")
+                },
+            )
+        }
     }
 
     /** Upload every shot without a `visualizerId`, sequentially, with a summary. */

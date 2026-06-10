@@ -122,6 +122,36 @@ class VisualizerClient(private val json: Json) {
             ?: throw VisualizerError.Network("Visualizer accepted the shot but returned no id")
     }
 
+    /** One row of `GET /api/shots` — the fields the pull walk needs. */
+    data class ShotSummary(val id: String, val clockSec: Long, val updatedAtSec: Long)
+
+    /**
+     * `GET /api/shots?page=…&items=…&sort=updated_at` — newest-updated first,
+     * so the pull walk can stop at the cursor. Returns the summaries + total
+     * page count.
+     */
+    suspend fun listShots(accessToken: String, page: Int, items: Int): Pair<List<ShotSummary>, Int> {
+        val body = request("GET", "/shots?page=$page&items=$items&sort=updated_at", accessToken)?.jsonObject
+            ?: return emptyList<ShotSummary>() to 1
+        val data = (body["data"] as? kotlinx.serialization.json.JsonArray) ?: return emptyList<ShotSummary>() to 1
+        val summaries = data.mapNotNull { el ->
+            val o = el as? JsonObject ?: return@mapNotNull null
+            val id = o["id"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+            ShotSummary(
+                id = id,
+                clockSec = o["clock"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull()?.toLong() ?: 0L,
+                updatedAtSec = o["updated_at"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull()?.toLong() ?: 0L,
+            )
+        }
+        val pages = body["paging"]?.jsonObject?.get("pages")?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 1
+        return summaries to pages
+    }
+
+    /** `GET /api/shots/{id}` — the full detail, passed VERBATIM to the core. */
+    suspend fun fetchShotDetail(accessToken: String, id: String): JsonElement =
+        request("GET", "/shots/$id", accessToken)
+            ?: throw VisualizerError.Network("Empty shot detail")
+
     /** `PATCH /api/shots/{id}` with a `{"shot": {…}}` envelope. */
     suspend fun patchShot(accessToken: String, visualizerId: String, shotBody: JsonObject) {
         request(

@@ -527,6 +527,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }.getOrNull() ?: "dev",
         notify = { msg -> notifyUser(msg) },
         onShotSynced = { localId, visualizerId -> markShotSynced(localId, visualizerId) },
+        onPulledShots = { stubs -> insertPulledShots(stubs) },
+        onBackfillTelemetry = { localId, samples, durationMs -> backfillShotTelemetry(localId, samples, durationMs) },
     )
 
     /**
@@ -643,6 +645,42 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 _ui.update { it.copy(visualizer = vs) }
             }
         }
+    }
+
+    /** Insert pulled Visualizer stubs into the history (dedup by id, newest first). Persisted. */
+    private fun insertPulledShots(stubs: List<StoredShot>) {
+        if (stubs.isEmpty()) return
+        _ui.update { st ->
+            val existing = st.history.map { it.id }.toHashSet()
+            val fresh = stubs.filter { it.id !in existing }
+            if (fresh.isEmpty()) {
+                st
+            } else {
+                st.copy(history = (fresh + st.history).sortedByDescending { it.completedAtMs }.take(HistoryStore.MAX_SHOTS))
+            }
+        }
+        val snapshot = _ui.value.history
+        viewModelScope.launch { historyStore.save(snapshot) }
+    }
+
+    /** Backfill a curve-less local shot's telemetry from a Visualizer pull. Persisted. */
+    private fun backfillShotTelemetry(localId: String, samples: List<TelemetrySample>, durationMs: Long) {
+        _ui.update { st ->
+            st.copy(
+                history = st.history.map {
+                    if (it.id == localId && it.samples.isEmpty()) {
+                        it.copy(
+                            samples = downsampleForStorage(samples),
+                            durationMs = if (it.durationMs > 0) it.durationMs else durationMs,
+                        )
+                    } else {
+                        it
+                    }
+                },
+            )
+        }
+        val snapshot = _ui.value.history
+        viewModelScope.launch { historyStore.save(snapshot) }
     }
 
     /** Stamp a successful Visualizer upload onto the local shot. Persisted. */

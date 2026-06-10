@@ -458,6 +458,44 @@ pub fn export_v2_json_shot(shot_json: String) -> Result<String, CremaError> {
     de1_domain::export_v2_json_shot(&shot).map_err(crema_err)
 }
 
+/// Reconcile a remote Visualizer pull against the local shot refs. Payload
+/// `{"local": LocalShotRef[], "remote": WireShot[]}` → `ReconcileAction[]`
+/// JSON (`kind: add | update | bind`). Mirrors the wasm `reconcileShots`
+/// so both shells run the identical core planner. See
+/// [`de1_domain::reconcile_shots_json`].
+///
+/// # Errors
+///
+/// The JSON error string when the payload can't be deserialised.
+#[uniffi::export]
+pub fn reconcile_shots(payload_json: String) -> Result<String, CremaError> {
+    de1_domain::reconcile_shots_json(&payload_json).map_err(crema_err)
+}
+
+/// Convert a Visualizer `ShotSummary` + `ShotDetail` into Crema's `WireShot`
+/// JSON. Payload `{"summary": {"id","clock","updated_at"}, "detail": …}`
+/// (`clock` / `updated_at` unix sec — the core converts to ms). Mirrors the
+/// wasm `wireShotFromDetail`.
+///
+/// # Errors
+///
+/// The JSON error string when the payload can't be deserialised.
+#[uniffi::export]
+pub fn wire_shot_from_detail(payload_json: String) -> Result<String, CremaError> {
+    de1_domain::wire_shot_from_detail_json(&payload_json).map_err(crema_err)
+}
+
+/// Reconstruct per-sample telemetry (`TimedSample[]` JSON) from a Visualizer
+/// `ShotDetail` JSON. Mirrors the wasm `samplesFromVisualizerDetail`.
+///
+/// # Errors
+///
+/// The JSON error string when `detail_json` can't be deserialised.
+#[uniffi::export]
+pub fn samples_from_visualizer_detail(detail_json: String) -> Result<String, CremaError> {
+    de1_domain::samples_from_visualizer_detail_json(&detail_json).map_err(crema_err)
+}
+
 /// The shot de-dup signature — a pinned djb2 digest of
 /// `(completed_at_unix_ms, duration_ms, profile_name, final_weight_g)`.
 /// Mirrors the wasm `signatureForShot` so a Kotlin / JS call on the

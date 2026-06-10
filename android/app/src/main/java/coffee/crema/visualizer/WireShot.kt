@@ -4,6 +4,7 @@ import coffee.crema.history.StoredShot
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
@@ -114,6 +115,60 @@ fun wireShotJson(shot: StoredShot): JsonObject {
         put("deletedAt", JsonNull)
     }
 }
+
+/**
+ * Materialise a pulled remote shot as a local flat [StoredShot] stub — the
+ * Android mirror of web `storedShotFromWire`. `wire` is the core's `WireShot`
+ * JSON (`clock` already unix MS); `samplesJson` is the core's `TimedSample[]`
+ * JSON from `samples_from_visualizer_detail` (empty → metadata-only stub).
+ */
+fun storedShotFromWire(wire: JsonObject, samplesJson: String?, json: kotlinx.serialization.json.Json): StoredShot? {
+    fun str(k: String) = wire[k]?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull }
+    fun num(k: String) = str(k)?.toDoubleOrNull()
+    val vid = str("id") ?: return null
+    val samples = samplesJson?.let { parseTimedSamples(it, json) } ?: emptyList()
+    return StoredShot(
+        id = "shot:remote:$vid",
+        completedAtMs = num("clock")?.toLong() ?: 0L,
+        durationMs = num("duration_ms")?.toLong() ?: 0L,
+        yieldG = num("final_weight_g")?.toFloat(),
+        doseG = null,
+        peakPressure = samples.maxOfOrNull { it.pressure },
+        peakTemp = samples.maxOfOrNull { it.headTemp },
+        profileName = str("profile_title"),
+        beanName = null,
+        rating = num("rating")?.toInt()?.takeIf { it > 0 },
+        notes = str("notes"),
+        samples = coffee.crema.history.downsampleForStorage(samples),
+        visualizerId = vid,
+    )
+}
+
+/** Parse the core's `TimedSample[]` JSON into flat [TelemetrySample]s. */
+fun parseTimedSamples(samplesJson: String, json: kotlinx.serialization.json.Json): List<coffee.crema.ui.TelemetrySample> =
+    runCatching {
+        json.parseToJsonElement(samplesJson).let { it as kotlinx.serialization.json.JsonArray }.mapNotNull { el ->
+            val o = el as? JsonObject ?: return@mapNotNull null
+            fun p(k: String) = (o[k] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull?.toFloatOrNull()
+            val sample = o["sample"] as? JsonObject ?: return@mapNotNull null
+            fun sp(k: String) = (sample[k] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull?.toFloatOrNull()
+            coffee.crema.ui.TelemetrySample(
+                elapsedMs = p("elapsed")?.toLong() ?: 0L,
+                pressure = sp("groupPressure") ?: 0f,
+                flow = sp("groupFlow") ?: 0f,
+                headTemp = sp("headTemp") ?: 0f,
+                mixTemp = sp("mixTemp") ?: 0f,
+                weight = p("scaleWeight")?.takeIf { it != 0f },
+                weightFlow = p("scaleFlowWeight")?.takeIf { it != 0f },
+                dispensedVolume = p("dispensedVolume") ?: 0f,
+                resistance = p("resistance")?.takeIf { it != 0f },
+                resistanceWeight = p("resistanceWeight")?.takeIf { it != 0f },
+                setHeadTemp = sp("setHeadTemp") ?: 0f,
+                setGroupPressure = sp("setGroupPressure") ?: 0f,
+                setGroupFlow = sp("setGroupFlow") ?: 0f,
+            )
+        }
+    }.getOrDefault(emptyList())
 
 /** Split the flat "Roaster · Bean" capture label into its parts. */
 private fun beanNameParts(beanName: String?): Triple<String?, String?, String?> {
