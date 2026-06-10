@@ -23,8 +23,7 @@
 		ROAST_PILL_LEVEL,
 		roastBand,
 		roastFreshness,
-		type Roaster
-	} from '$lib/bean';
+		type Roaster, activateBean } from '$lib/bean';
 	import RoasterAutocomplete from '$lib/components/beans/RoasterAutocomplete.svelte';
 	import QuickStepper from './QuickStepper.svelte';
 	import { getSettingsStore } from '$lib/settings';
@@ -230,8 +229,11 @@
 			fresh.grinder = eGrinder;
 			fresh.roastedOn = eRoastedOn;
 			fresh.roastLevel = eRoastLevel;
+			// Re-buy: same coffee, same recipe — the fresh bag inherits the
+			// linked profile (and activating it fires the auto-load).
+			fresh.linkedProfileId = editableBean?.linkedProfileId ?? null;
 			library.upsertBean(fresh);
-			library.setActiveBean(fresh.id);
+			activateBean(fresh.id);
 		} else if (editableBean) {
 			library.updateBean(editableBean.id, {
 				name: eName,

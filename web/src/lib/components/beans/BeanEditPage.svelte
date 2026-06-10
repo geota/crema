@@ -29,6 +29,7 @@
 	 * on Save; edit-mode commits each patch immediately.
 	 */
 	import { tick, untrack } from 'svelte';
+	import { getProfileStore } from '$lib/profiles';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import {
@@ -40,8 +41,7 @@
 		roasterMarkTone,
 		blankBean,
 		type Bean,
-		type Roaster
-	} from '$lib/bean';
+		type Roaster, activateBean } from '$lib/bean';
 	import BeanImage from './BeanImage.svelte';
 	import BeanDeleteSplit from './BeanDeleteSplit.svelte';
 	import QuickStepper from '$lib/components/brew/QuickStepper.svelte';
@@ -78,6 +78,21 @@
 		untrack(() => ({ ...bean, origin: { ...bean.origin }, tags: [...bean.tags] }))
 	);
 	const current: Bean = $derived(live ? bean : draftRecord);
+
+	// ── Linked profile (bean → profile auto-load) ────────────────────────
+	const profileStore = getProfileStore();
+	// The built-in library loads lazily (wasm) — kick it so the select has
+	// options even when this editor is the first profile consumer.
+	void profileStore.ensureLoaded();
+	/** All loadable profiles for the Linked-profile select. */
+	const profileOptions = $derived(profileStore.all.map((p) => ({ id: p.id, name: p.name })));
+	/** The select's value — '' for none. */
+	const linkedProfileValue = $derived(current.linkedProfileId ?? '');
+	/** Dangling link (profile deleted / device-local import) — keep it
+	 *  selectable so the user sees it and can clear it. */
+	const linkedMissing = $derived(
+		current.linkedProfileId != null && !profileStore.all.some((p) => p.id === current.linkedProfileId)
+	);
 
 	// Roaster + autocomplete state.
 	const initialRoaster = untrack(() =>
@@ -276,7 +291,7 @@
 				updatedAt: Date.now()
 			};
 			library.upsertBean(persisted);
-			if (activate) library.setActiveBean(persisted.id);
+			if (activate) activateBean(persisted.id);
 			goto(resolve('/beans'));
 		} else {
 			// Live mode — already saved every patch. Just commit any pending
@@ -289,7 +304,7 @@
 					patch({ roasterId: r.id });
 				}
 			}
-			if (activate && !isActive) library.setActiveBean(current.id);
+			if (activate && !isActive) activateBean(current.id);
 			goto(resolve('/beans'));
 		}
 	}
@@ -547,7 +562,7 @@
 									<StToggle
 										on={isActive}
 										onChange={(v) => {
-											if (v) library.setActiveBean(current.id);
+											if (v) activateBean(current.id);
 											else if (isActive) library.setActiveBean(null);
 										}}
 										label="Active"
@@ -927,6 +942,31 @@
 									step={0.1}
 									onChange={setGrind}
 								/>
+							</div>
+						</div>
+						<!-- Linked profile — auto-loads on activation (bean → profile). -->
+						<div class="be-frow be-frow-stack">
+							<div class="be-frow-l">
+								<div class="be-frow-label">Linked profile</div>
+								<div class="be-frow-sub">Auto-loads when this bean is selected on Brew.</div>
+							</div>
+							<div class="be-frow-r">
+								<select
+									class="be-input"
+									value={linkedProfileValue}
+									onchange={(e) => {
+										const v = (e.currentTarget as HTMLSelectElement).value;
+										patch({ linkedProfileId: v === '' ? null : v });
+									}}
+								>
+									<option value="">None</option>
+									{#each profileOptions as p (p.id)}
+										<option value={p.id}>{p.name}</option>
+									{/each}
+									{#if linkedMissing}
+										<option value={current.linkedProfileId}>(missing profile)</option>
+									{/if}
+								</select>
 							</div>
 						</div>
 					</div>

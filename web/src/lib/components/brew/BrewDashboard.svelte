@@ -49,8 +49,7 @@
 		roastBand,
 		roastFreshness,
 		type Bean,
-		type Roaster
-	} from '$lib/bean';
+		type Roaster, activateBean } from '$lib/bean';
 	import { getMaintenanceStore } from '$lib/maintenance';
 	import { getCremaAppContext } from '$lib/shell/app-context';
 	import { getActiveShotStore, getBrewContext, getMachineReadout } from '$lib/state';
@@ -338,7 +337,7 @@
 	 * profiles, so picking a bag from the QC strip activates it for the brew.
 	 */
 	function selectBean(bean: Bean): void {
-		beanLibrary.setActiveBean(bean.id);
+		activateBean(bean.id, { shotInProgress: ui.shotInProgress });
 	}
 
 	// ── Quick Sheet local control state ──────────────────────────────────
@@ -971,6 +970,7 @@
 					pinned: b.favourite,
 					mark: mt.mark,
 					tone: mt.tone,
+					linked: b.linkedProfileId != null,
 					search: `${rn} ${tn} ${b.origin.country ?? ''} ${b.tags.join(' ')}`.toLowerCase()
 				};
 			})
@@ -1201,7 +1201,7 @@
 			onAddProfile={() => void goto(resolve('/profiles/new'))}
 			onProfileLibrary={() => void goto(resolve('/profiles'))}
 			onEditBean={editActiveBean}
-			onSelectBean={(id) => beanLibrary.setActiveBean(id)}
+			onSelectBean={(id) => activateBean(id, { shotInProgress: ui.shotInProgress })}
 			onAddBean={() => void goto(resolve('/beans/new'))}
 			onBeanLibrary={() => void goto(resolve('/beans'))}
 			onOpenQuick={() => (quickSheetOpen = true)}

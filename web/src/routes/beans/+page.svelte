@@ -42,8 +42,7 @@
 		mintBeanId,
 		mintRoasterId,
 		type Bean,
-		type Roaster
-	} from '$lib/bean';
+		type Roaster, activateBean } from '$lib/bean';
 	import BeanTile from '$lib/components/beans/BeanTile.svelte';
 	import RoasterCard from '$lib/components/beans/RoasterCard.svelte';
 	import BeanDrawer from '$lib/components/beans/BeanDrawer.svelte';
@@ -532,7 +531,7 @@
 		goto(resolve(`/beans/roasters/${encodeURIComponent(id)}/edit`));
 	}
 	function setActive(id: string): void {
-		library.setActiveBean(id);
+		activateBean(id);
 	}
 	function toggleFavourite(id: string): void {
 		library.toggleFavourite(id);

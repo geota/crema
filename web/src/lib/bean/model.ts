@@ -102,6 +102,13 @@ export interface Bean {
 	url: string | null;
 	notes: string;
 	favourite: boolean;
+	/**
+	 * The profile auto-loaded when this bean is activated on Brew/Beans
+	 * (the "linked profile"); `null` = no link. Dangling ids (profile
+	 * deleted, cross-device import) are tolerated everywhere. Local-only —
+	 * never pushed to Visualizer. Mirrors `de1_domain::Bean.linked_profile_id`.
+	 */
+	linkedProfileId: string | null;
 	/** Unix epoch ms; `null` = active. */
 	archivedAt: number | null;
 	/**
@@ -163,6 +170,7 @@ export function blankBean(id?: string): Bean {
 		url: null,
 		notes: '',
 		favourite: false,
+		linkedProfileId: null,
 		archivedAt: null,
 		deletedAt: null,
 		grinder: '',
