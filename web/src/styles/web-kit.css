@@ -795,6 +795,8 @@ summary:focus-visible,
 .hpick-primary { font-family: var(--font-sans); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .hpick-secondary { font-family: var(--font-sans); font-size: 11px; color: rgba(var(--tint-rgb), 0.5); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .hpick-pin { font-size: 11px; color: var(--copper-400); flex: 0 0 auto; }
+/* Bean rows with a linked profile — small quiet glyph before the pin star. */
+.hpick-link { font-size: 11px; color: rgba(var(--tint-rgb), 0.55); flex: 0 0 auto; }
 .hpick-check { font-size: 13px; color: var(--copper-500); flex: 0 0 auto; }
 .hpick-empty { padding: 16px; text-align: center; font-family: var(--font-sans); font-size: 12px; color: rgba(var(--tint-rgb), 0.45); }
 .hpick-foot { display: flex; gap: 6px; padding: 8px; border-top: 1px solid rgba(var(--tint-rgb), 0.08); }

@@ -380,6 +380,18 @@ export class BeanLibraryStore {
 		return fresh;
 	}
 
+	/**
+	 * Clear every bean's linked-profile reference to [profileId] — the
+	 * profile-deletion cascade (wired via `ProfileStore.onDeleted` at boot).
+	 */
+	clearLinksTo(profileId: string): void {
+		for (const b of this.envelope.beans) {
+			if (b.linkedProfileId === profileId) {
+				this.updateBean(b.id, { linkedProfileId: null });
+			}
+		}
+	}
+
 	// ── Active-bean pointer ──────────────────────────────────────────
 
 	/** Set the active bean (or `null` to clear). Drives the brew picker. */

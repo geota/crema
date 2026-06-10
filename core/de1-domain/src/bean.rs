@@ -402,6 +402,14 @@ pub struct Bean {
     /// matches the [`crate::Profile`] tag pattern.
     #[serde(default)]
     pub tags: Vec<String>,
+    /// The profile auto-loaded when this bean is activated on the Brew
+    /// page (the "linked profile"). `None` = no link. Stores the profile
+    /// id only; a dangling id (profile deleted, cross-device import of a
+    /// device-local custom) is tolerated by every consumer. Local-only —
+    /// never pushed to Visualizer. Defaults so older Bean JSON
+    /// deserialises cleanly.
+    #[serde(default)]
+    pub linked_profile_id: Option<String>,
     /// Visualizer `coffee_bag.id` once pushed.
     pub visualizer_id: Option<String>,
     /// Unix epoch ms when this bag was soft-deleted, or `None` when
@@ -466,6 +474,7 @@ impl Bean {
             grinder: String::new(),
             grinder_setting: String::new(),
             tags: Vec::new(),
+            linked_profile_id: None,
             visualizer_id: None,
             deleted_at: None,
             beanconqueror_id: None,

@@ -4,6 +4,7 @@
 	import MagnifyingGlassIcon from 'phosphor-svelte/lib/MagnifyingGlassIcon';
 	import PencilSimpleIcon from 'phosphor-svelte/lib/PencilSimpleIcon';
 	import PlusIcon from 'phosphor-svelte/lib/PlusIcon';
+	import LinkSimpleIcon from 'phosphor-svelte/lib/LinkSimpleIcon';
 	import StarIcon from 'phosphor-svelte/lib/StarIcon';
 	import type { ProfileSegment } from '$lib/profiles';
 
@@ -25,6 +26,8 @@
 		segments?: ProfileSegment[];
 		/** Lowercased haystack for search; falls back to primary + secondary. */
 		search?: string;
+		/** Bean rows: has a linked profile (renders a small link glyph). */
+		linked?: boolean;
 	};
 </script>
 
@@ -128,6 +131,7 @@
 						<span class="hpick-primary">{it.primary}</span>
 						{#if it.secondary}<span class="hpick-secondary">{it.secondary}</span>{/if}
 					</span>
+					{#if it.linked}<LinkSimpleIcon class="hpick-link" aria-hidden="true" />{/if}
 					{#if it.pinned}<StarIcon weight="fill" class="hpick-pin" aria-hidden="true" />{/if}
 					{#if it.id === activeId}<CheckIcon class="hpick-check" aria-hidden="true" />{/if}
 				</button>

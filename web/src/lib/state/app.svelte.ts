@@ -24,7 +24,7 @@ import {
 } from '$lib/core';
 import { MachineState, MmrRegister } from '$lib/core/crema-core';
 import { De1Manager, EMPTY_DE1_DIAGNOSTICS, ScaleManager } from '$lib/ble';
-import { getBeanStore } from '$lib/bean';
+import { getBeanStore, getBeanLibraryStore } from '$lib/bean';
 import { getHistoryStore, snapshotFromBean, extractCremaExtras } from '$lib/history';
 import { commitShotCompletion } from '$lib/history/shot-persistence';
 import { getCaptureStore } from '$lib/capture';
@@ -1890,6 +1890,12 @@ export async function createCremaApp(runtime: AppRuntime | null = null): Promise
 	// `profileUploadProgress` / log UI.
 	{
 		const profiles = getProfileStore();
+		// Profile-deletion cascade: clear bean linked-profile references so
+		// activation never chases a tombstone (registered here, not imported
+		// in the store — $lib/bean/activate imports $lib/profiles).
+		profiles.onDeleted = (id) => {
+			getBeanLibraryStore().clearLinksTo(id);
+		};
 		profiles.onActivate = (profile) => {
 			if (profile == null) return;
 			if (app.state.current.de1State !== 'ready') return;

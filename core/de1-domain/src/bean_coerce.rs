@@ -49,6 +49,9 @@ pub fn coerce_bean(raw: &Value, now_ms: i64) -> Option<Bean> {
     if let Some(v) = str_field(obj, "roasterId") {
         bean.roaster_id = Some(v);
     }
+    if let Some(v) = str_field(obj, "linkedProfileId") {
+        bean.linked_profile_id = Some(v);
+    }
     if let Some(v) = str_field(obj, "roastedOn") {
         bean.roasted_on = Some(v);
     }

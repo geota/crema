@@ -35,6 +35,8 @@ export {
 	getBeanStore
 } from './store.svelte';
 
+export { activateBean } from './activate';
+
 export { roasterMark, roasterTone, roasterMarkTone } from './roaster-mark';
 export { roasterFaviconUrl } from './roaster-favicon';
 

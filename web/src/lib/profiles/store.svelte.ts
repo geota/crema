@@ -117,6 +117,14 @@ export class ProfileStore {
 	 * for free without needing a direct `CremaApp` reference.
 	 */
 	onActivate?: (profile: CremaProfile | null) => void;
+	/**
+	 * Optional hook fired from {@link delete} after a profile is removed,
+	 * passing its id. The orchestrator registers this at boot to clear any
+	 * bean linked-profile references (the bean store can't be imported here
+	 * — `$lib/bean/activate` imports this module, so a static import would
+	 * cycle).
+	 */
+	onDeleted?: (id: string) => void;
 	/** Whether the built-in load has finished (drives the grid's loading state). */
 	loaded = $state(false);
 
@@ -301,6 +309,10 @@ export class ProfileStore {
 		} else {
 			this.custom = this.custom.filter((p) => p.id !== id);
 			this.persistCustom();
+			// Custom profiles are gone for good — clear bean links so the
+			// auto-load never chases a tombstone. (Hidden BUILT-INS keep
+			// their links: the profile still exists and loads fine.)
+			this.onDeleted?.(id);
 		}
 		if (this.activeId === id) {
 			// GEN10: defer the full re-point (core push + onActivate upload) until
