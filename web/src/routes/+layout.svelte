@@ -25,6 +25,8 @@
 	import { setCremaAppContext, type CoreLoadState } from '$lib/shell/app-context';
 	import { createAppRuntime, type AppRuntime } from '$lib/effect/runtime';
 	import { createCremaServices, type CremaServices } from '$lib/effect/crema-services';
+	import { setBrewWakeLock } from '$lib/shell/wake-lock';
+	import { getSettingsStore } from '$lib/settings';
 
 	let { children } = $props();
 
@@ -88,6 +90,20 @@
 			loadState = 'failed';
 			loadError = describeError(err);
 		}
+	});
+
+	// "Keep screen on while brewing" — hold a Screen Wake Lock exactly while a
+	// shot is pulling and the Display setting is on. Reactive over both the
+	// snapshot and the setting; setBrewWakeLock is idempotent and a no-op on
+	// browsers without the API. Lives here at the shell because the lock is
+	// app-wide, not page-scoped (the user may navigate mid-shot).
+	$effect(() => {
+		const a = app;
+		const on =
+			a !== null &&
+			getSettingsStore().current.keepScreenOnBrew &&
+			a.state.current.shotInProgress;
+		setBrewWakeLock(on);
 	});
 
 	// Tear the runtime's fibers + finalizers down when the shell unmounts

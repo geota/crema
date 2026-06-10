@@ -13,6 +13,7 @@
 	 * are persisted app preferences.
 	 */
 	import { getSettingsStore } from '$lib/settings';
+	import { wakeLockSupported } from '$lib/shell/wake-lock';
 	import { getCremaAppContext } from '$lib/shell/app-context';
 	import StSectionHead from '../StSectionHead.svelte';
 	import StGroup from '../StGroup.svelte';
@@ -91,6 +92,24 @@
 				on={prefs.screensaver}
 				onChange={(v) => settings.set('screensaver', v)}
 				label="Screensaver"
+			/>
+		{/snippet}
+	</StRow>
+	<!-- Screen Wake Lock while a shot pulls — the layout's effect consumes
+	     this (`$lib/shell/wake-lock`). Disabled with a note on browsers
+	     without the API (pre-16.4 Safari, insecure contexts). -->
+	<StRow
+		title="Keep screen on while brewing"
+		sub={wakeLockSupported
+			? 'Holds a screen wake lock while a shot is pulling so the display can\u2019t sleep mid-extraction.'
+			: 'Not supported by this browser \u2014 needs the Screen Wake Lock API.'}
+	>
+		{#snippet control()}
+			<StToggle
+				on={prefs.keepScreenOnBrew}
+				onChange={(v) => settings.set('keepScreenOnBrew', v)}
+				disabled={!wakeLockSupported}
+				label="Keep screen on while brewing"
 			/>
 		{/snippet}
 	</StRow>

@@ -247,7 +247,10 @@
 				'Your DE1 is NOT affected — uploaded profiles, calibration, and\n' +
 				'machine settings stay on the firmware. The page will reload.',
 			confirmLabel: 'Reset app',
-			danger: true
+			danger: true,
+			// Tablet-parity: the highest-blast-radius action gets the GitHub
+			// type-to-confirm gate (the Android shell shipped this first).
+			requireTyped: 'ERASE'
 		});
 		if (!ok) return;
 		const keys: string[] = [];

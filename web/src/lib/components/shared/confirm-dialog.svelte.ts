@@ -28,6 +28,12 @@ export interface ConfirmOptions {
 	cancelLabel?: string;
 	/** Render the confirm button as destructive (`st-btn-danger`). */
 	danger?: boolean;
+	/**
+	 * Type-to-confirm gate (GitHub delete-repo pattern): the confirm button
+	 * stays disabled until the user types this exact string. For the
+	 * highest-blast-radius actions (erase-all); plain confirms stay frictionless.
+	 */
+	requireTyped?: string;
 }
 
 /** Prompt-only extras. */
