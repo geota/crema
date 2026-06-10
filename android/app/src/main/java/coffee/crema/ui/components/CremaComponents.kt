@@ -317,10 +317,13 @@ fun CremaButton(
         if (icon != null) { PhIcon(icon, sizeDp = 18); Spacer(Modifier.width(8.dp)) }
         Text(label, style = MaterialTheme.typography.labelLarge)
     }
+    // Stock M3 pill shape (no shapes.small override) — the handset design uses
+    // full pills everywhere, and the tablet now matches it instead of the PWA's
+    // squared 8dp buttons.
     when (variant) {
-        CremaButtonVariant.Filled -> Button(onClick, modifier, enabled = enabled, shape = MaterialTheme.shapes.small, content = content)
-        CremaButtonVariant.Tonal -> FilledTonalButton(onClick, modifier, enabled = enabled, shape = MaterialTheme.shapes.small, content = content)
-        CremaButtonVariant.Outlined -> OutlinedButton(onClick, modifier, enabled = enabled, shape = MaterialTheme.shapes.small, content = content)
+        CremaButtonVariant.Filled -> Button(onClick, modifier, enabled = enabled, content = content)
+        CremaButtonVariant.Tonal -> FilledTonalButton(onClick, modifier, enabled = enabled, content = content)
+        CremaButtonVariant.Outlined -> OutlinedButton(onClick, modifier, enabled = enabled, content = content)
         CremaButtonVariant.Text -> TextButton(
             onClick, modifier, enabled = enabled,
             colors = if (danger) ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error) else ButtonDefaults.textButtonColors(),
@@ -427,7 +430,7 @@ fun CremaSplitButton(
 fun ScalePillButton(icon: String, label: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
     Surface(
         onClick = onClick,
-        shape = MaterialTheme.shapes.medium,
+        shape = RoundedCornerShape(999.dp), // a real pill — matches the handset chrome
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
         modifier = modifier.fillMaxWidth().height(48.dp),
     ) {
@@ -1021,7 +1024,7 @@ fun CremaDateField(
 
 // ── Sort control — split pill: direction toggle | key dropdown ──────────────
 // The PWA/proto sort affordance, reusable across the app. ONE bordered pill sized
-// + shaped like the filter chips (32dp tall, shapes.small, 1dp outlineVariant),
+// + shaped like the filter chips (32dp tall, full pill, 1dp outlineVariant),
 // split by a hairline into:
 //   • a direction toggle (↑ ascending / ↓ descending), and
 //   • a key zone (current key + caret) that opens a bordered dropdown of keys.
@@ -1040,7 +1043,7 @@ fun CremaSortControl(
 ) {
     val current = keys.firstOrNull { it.id == selectedKey } ?: keys.first()
     var menuOpen by remember { mutableStateOf(false) }
-    val shape = MaterialTheme.shapes.small
+    val shape = RoundedCornerShape(999.dp) // pill — sits beside the pill filter chips
     val hairline = MaterialTheme.colorScheme.outlineVariant
     Row(
         modifier
@@ -1326,19 +1329,21 @@ fun CremaSearchPill(
     } else {
         MaterialTheme.typography.bodyMedium
     }
+    // Full pill (matches the handset search field; was the PWA's squared 8dp).
+    val pill = RoundedCornerShape(999.dp)
     Box(
         modifier
             .height(height)
-            .clip(MaterialTheme.shapes.small)
+            .clip(pill)
             .background(
                 if (compact) MaterialTheme.colorScheme.surfaceContainerLowest
                 else MaterialTheme.colorScheme.surfaceContainerHigh,
             )
             .then(
-                if (compact) Modifier.border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.small)
+                if (compact) Modifier.border(1.dp, MaterialTheme.colorScheme.outlineVariant, pill)
                 else Modifier,
             )
-            .padding(horizontal = 12.dp),
+            .padding(horizontal = 14.dp),
         contentAlignment = Alignment.CenterStart,
     ) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {

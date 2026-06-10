@@ -161,7 +161,6 @@ fun CremaPhoneBackBarWithSave(
             Button(
                 onClick = onSave,
                 enabled = saveEnabled,
-                shape = MaterialTheme.shapes.small,
                 modifier = Modifier.padding(start = 4.dp, end = 8.dp),
             ) { Text("Save") }
         },

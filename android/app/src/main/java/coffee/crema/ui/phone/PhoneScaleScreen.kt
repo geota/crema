@@ -301,7 +301,7 @@ private fun ConnectedBody(
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                if (caps.can_beep) FilledTonalButton(onClick = vm::beepScale, shape = MaterialTheme.shapes.small) {
+                if (caps.can_beep) FilledTonalButton(onClick = vm::beepScale) {
                     PhIcon("speaker-high", sizeDp = 18); Spacer(Modifier.width(6.dp)); Text("Beep")
                 }
                 Spacer(Modifier.weight(1f))

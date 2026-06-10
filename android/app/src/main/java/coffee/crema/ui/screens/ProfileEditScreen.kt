@@ -624,7 +624,7 @@ private fun RoastChips(value: String?, onChange: (String?) -> Unit) {
             Box(
                 Modifier
                     .width(84.dp)
-                    .clip(RoundedCornerShape(8.dp))
+                    .clip(RoundedCornerShape(999.dp))
                     .background(if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh)
                     .clickable { onChange(if (active) null else id) }
                     .padding(vertical = 8.dp),
@@ -653,7 +653,7 @@ private fun BeverageChips(value: String?, onChange: (String?) -> Unit) {
             val active = value == id
             Box(
                 Modifier
-                    .clip(RoundedCornerShape(8.dp))
+                    .clip(RoundedCornerShape(999.dp))
                     .background(if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh)
                     .clickable { onChange(id) }
                     .padding(horizontal = 14.dp, vertical = 8.dp),
@@ -718,7 +718,7 @@ private fun TagChips(tags: SnapshotStateList<String>) {
     ) {
         tags.toList().forEach { tag ->
             Row(
-                Modifier.clip(RoundedCornerShape(8.dp)).background(copper.copy(alpha = 0.10f)).border(1.dp, copper.copy(alpha = 0.35f), RoundedCornerShape(8.dp)).padding(start = 12.dp, end = 6.dp, top = 8.dp, bottom = 8.dp),
+                Modifier.clip(RoundedCornerShape(999.dp)).background(copper.copy(alpha = 0.10f)).border(1.dp, copper.copy(alpha = 0.35f), RoundedCornerShape(999.dp)).padding(start = 12.dp, end = 6.dp, top = 8.dp, bottom = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(5.dp),
             ) {
@@ -740,9 +740,9 @@ private fun TagChips(tags: SnapshotStateList<String>) {
                 keyboardActions = KeyboardActions(onDone = { commit() }),
                 modifier = Modifier
                     .width(132.dp)
-                    .clip(RoundedCornerShape(8.dp))
+                    .clip(RoundedCornerShape(999.dp))
                     .background(tint.copy(alpha = 0.05f))
-                    .border(1.dp, copper, RoundedCornerShape(8.dp))
+                    .border(1.dp, copper, RoundedCornerShape(999.dp))
                     .padding(horizontal = 12.dp, vertical = 8.dp)
                     .focusRequester(focus)
                     .onFocusChanged { fs ->
@@ -759,7 +759,7 @@ private fun TagChips(tags: SnapshotStateList<String>) {
             LaunchedEffect(Unit) { focus.requestFocus() }
         } else {
             Row(
-                Modifier.dashedBorder(tint.copy(alpha = 0.35f)).clip(RoundedCornerShape(8.dp)).clickable { adding = true }.padding(horizontal = 12.dp, vertical = 8.dp),
+                Modifier.dashedBorder(tint.copy(alpha = 0.35f)).clip(RoundedCornerShape(999.dp)).clickable { adding = true }.padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
@@ -773,7 +773,7 @@ private fun TagChips(tags: SnapshotStateList<String>) {
 /** A dashed rounded-square outline (PWA .pe-tag-add, squared to match Roast chips). */
 private fun Modifier.dashedBorder(color: Color) = this.drawBehind {
     val sw = 1.dp.toPx()
-    val r = 8.dp.toPx()
+    val r = size.height / 2f // pill — follows the chip's rounded shape
     drawRoundRect(
         color = color,
         topLeft = Offset(sw / 2f, sw / 2f),
