@@ -45,6 +45,7 @@
 		shot,
 		onNotesChange,
 		onRatingChange,
+		onPrivacyChange,
 		onGrinderModelChange,
 		onTagsChange,
 		onBeanChange,
@@ -57,6 +58,11 @@
 		onNotesChange: (notes: string) => void;
 		/** Persist an edited star rating. */
 		onRatingChange: (rating: number) => void;
+		/**
+		 * Persist a per-shot Visualizer privacy override; `null` reverts to
+		 * the `Settings.visualizerPrivacy` default.
+		 */
+		onPrivacyChange: (privacy: 'public' | 'unlisted' | 'private' | null) => void;
 		/**
 		 * Persist an edited equipment-level grinder model. `null` clears
 		 * the override (cascade re-engages → settings default), a string
@@ -526,6 +532,32 @@
 		</div>
 	</div>
 
+	<!-- Privacy — the per-shot Visualizer visibility override. "Default"
+	     inherits Settings → Sharing's upload privacy at upload/patch time;
+	     a chip pins this shot regardless of the default. -->
+	<div class="hi-privacy">
+		<span class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Privacy</span>
+		<div class="hi-privacy-chips">
+			<button
+				class="hi-privacy-chip"
+				class:is-on={shot.privacy == null}
+				onclick={() => onPrivacyChange(null)}
+				title="Follow the Settings → Sharing default"
+			>
+				Default · {settings.current.visualizerPrivacy}
+			</button>
+			{#each ['public', 'unlisted', 'private'] as const as p (p)}
+				<button
+					class="hi-privacy-chip"
+					class:is-on={shot.privacy === p}
+					onclick={() => onPrivacyChange(p)}
+				>
+					{p[0].toUpperCase() + p.slice(1)}
+				</button>
+			{/each}
+		</div>
+	</div>
+
 	<!-- Bean — the bound bag snapshot + roaster, with a button to rebind
 	     retroactively. Shows the snapshot (so a later rename of the live
 	     bag can't rewrite history). "Change bean" opens the BeanPicker;
@@ -769,6 +801,34 @@
 		display: flex;
 		align-items: center;
 		gap: 14px;
+	}
+
+	/* Privacy block — eyebrow + chip row (same rhythm as .hi-rating). */
+	.hi-privacy {
+		display: flex;
+		align-items: center;
+		gap: 14px;
+	}
+	.hi-privacy-chips {
+		display: flex;
+		gap: 6px;
+		flex-wrap: wrap;
+	}
+	.hi-privacy-chip {
+		font-family: var(--font-sans);
+		font-size: 11px;
+		color: rgba(var(--tint-rgb), 0.6);
+		background: transparent;
+		border: 1px solid rgba(var(--tint-rgb), 0.14);
+		border-radius: 999px;
+		padding: 4px 12px;
+		cursor: pointer;
+		text-transform: capitalize;
+	}
+	.hi-privacy-chip.is-on {
+		color: var(--copper-400);
+		border-color: rgba(193, 116, 75, 0.55);
+		background: rgba(193, 116, 75, 0.1);
 	}
 
 	/* Bean block — snapshot summary plus the Change/Assign button. */

@@ -31,10 +31,14 @@
 	import StGroup from '../StGroup.svelte';
 	import StRow from '../StRow.svelte';
 	import StButton from '../StButton.svelte';
+	import StSelect from '../StSelect.svelte';
+	import StToggle from '../StToggle.svelte';
 	import BeanSyncSection from './BeanSyncSection.svelte';
+	import { getSettingsStore, type SharingPrivacy } from '$lib/settings';
 
 	const history = getHistoryStore();
 	const appCtx = getCremaAppContext();
+	const settings = getSettingsStore();
 	const oauthConfigured = isVisualizerOauthConfigured();
 
 	let connected = $state(false);
@@ -268,6 +272,52 @@
 <!-- Connected-state sync controls + log. -->
 {#if connected}
 	<BeanSyncSection />
+
+	<!-- Upload options — the three settings buildShotPayload has always
+	     applied on the wire (privacy / include profile / include notes);
+	     surfaced here so they're no longer invisible defaults. The privacy
+	     value is the DEFAULT for new uploads — each shot can override it
+	     from the History detail's Sharing block. -->
+	<StGroup title="Upload options" sub="Defaults applied to every shot upload.">
+		<StRow
+			title="Default privacy"
+			sub="Who can see uploaded shots. Public = community feed; unlisted = direct link only; private = just you. Individual shots can override this in History."
+		>
+			{#snippet control()}
+				<StSelect
+					value={settings.current.visualizerPrivacy}
+					options={[
+						{ value: 'public', label: 'Public' },
+						{ value: 'unlisted', label: 'Unlisted' },
+						{ value: 'private', label: 'Private' }
+					]}
+					onChange={(v) => settings.set('visualizerPrivacy', v as SharingPrivacy)}
+				/>
+			{/snippet}
+		</StRow>
+		<StRow
+			title="Include profile"
+			sub="Attach the full recipe (every segment) to uploads. Off = share the telemetry, keep the recipe."
+		>
+			{#snippet control()}
+				<StToggle
+					on={settings.current.visualizerIncludeProfile}
+					onChange={(v) => settings.set('visualizerIncludeProfile', v)}
+				/>
+			{/snippet}
+		</StRow>
+		<StRow
+			title="Include tasting notes"
+			sub="Attach your journal text to uploads. Ratings and numbers always ride along."
+		>
+			{#snippet control()}
+				<StToggle
+					on={settings.current.visualizerIncludeNotes}
+					onChange={(v) => settings.set('visualizerIncludeNotes', v)}
+				/>
+			{/snippet}
+		</StRow>
+	</StGroup>
 {/if}
 
 <StGroup title="Local export" sub="Download a copy of your local data.">

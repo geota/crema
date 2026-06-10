@@ -32,7 +32,7 @@ import { Effect, Fiber, Stream } from 'effect';
 import type { AppRuntime, AppServices } from './runtime.ts';
 import { runtimePromise } from './bridge.ts';
 import { TokenVault } from '../services/token-vault.ts';
-import { ShotSync, type PullOptions } from '../services/shot-sync.ts';
+import { ShotSync, type PullOptions, type ShotPatch } from '../services/shot-sync.ts';
 import { BeanSync, type ConnectionTestResult, type VisualizerAccount } from '../services/bean-sync.ts';
 import { UploadQueue, type DrainResult, type EnqueueInput } from '../services/upload-queue.ts';
 import type { TokenSet } from '$lib/visualizer/oauth';
@@ -86,6 +86,10 @@ export interface CremaServices {
 		): Promise<{ pulled: number; truncated: boolean }>;
 		/** Upload every local shot lacking a `visualizerId`. */
 		uploadUnsynced(history: HistoryStore): Promise<void>;
+		/** PATCH an already-uploaded shot (rating / notes / privacy / …). */
+		patch(visualizerId: string, patch: ShotPatch): Promise<void>;
+		/** Push a local shot's edited fields to its uploaded copy (no-op when unsynced). */
+		patchEdited(history: HistoryStore, id: string): Promise<void>;
 	};
 	/** The persistent retry queue (the `UploadQueue` service). */
 	readonly queue: {
@@ -136,7 +140,11 @@ export function createCremaServices(runtime: AppRuntime): CremaServices {
 		shots: {
 			pullAndReconcile: (history, sinceMs, opts) =>
 				run(Effect.flatMap(ShotSync, (s) => s.pullAndReconcileShots(history, sinceMs, opts))),
-			uploadUnsynced: (history) => run(Effect.flatMap(ShotSync, (s) => s.uploadUnsyncedShots(history)))
+			uploadUnsynced: (history) => run(Effect.flatMap(ShotSync, (s) => s.uploadUnsyncedShots(history))),
+			patch: (visualizerId, patch) =>
+				run(Effect.flatMap(ShotSync, (s) => s.patchShot(visualizerId, patch))),
+			patchEdited: (history, id) =>
+				run(Effect.flatMap(ShotSync, (s) => s.patchEditedShot(history, id)))
 		},
 		queue: {
 			enqueue: (input) => run(Effect.flatMap(UploadQueue, (q) => q.enqueue(input))),

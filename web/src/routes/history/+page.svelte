@@ -268,6 +268,37 @@
 	}
 	/** Are we connected + push-enabled? Gates the "Upload all" button. */
 	const canPushShots = $derived(connected && directionPushes(syncConfig.direction.shots));
+
+	/**
+	 * Best-effort: mirror a History-panel edit (rating / notes / privacy /
+	 * tags / bean / grinder) onto the shot's already-uploaded Visualizer
+	 * copy. Gated like every push (connected + shots direction pushes) and
+	 * a no-op for never-uploaded shots; success and failure both land in
+	 * the sync activity log.
+	 */
+	function syncEditToVisualizer(id: string): void {
+		if (!canPushShots) return;
+		const shot = store.all.find((s) => s.id === id);
+		if (!shot?.visualizerId) return;
+		const api = appCtx().services;
+		if (!api) return;
+		const name = shot.profileName ?? 'Shot';
+		void api.shots
+			.patchEdited(store, id)
+			.then(() =>
+				appendSyncLog({ direction: 'push', entity: 'shot', id, name, at: Date.now() })
+			)
+			.catch((e) =>
+				appendSyncLog({
+					direction: 'push',
+					entity: 'shot',
+					id,
+					name,
+					at: Date.now(),
+					error: e instanceof Error ? e.message : String(e)
+				})
+			);
+	}
 	/** Shots that need an upload — no `visualizerId` and not soft-deleted. */
 	const unsyncedShots = $derived(shots.filter((s) => !s.visualizerId));
 
@@ -934,13 +965,30 @@
 				{#key selected.id}
 					<ShotDetail
 						shot={selected}
-						onNotesChange={(notes) => store.setNotes(selected.id, notes)}
-						onRatingChange={(rating) => store.setRating(selected.id, rating)}
-						onGrinderModelChange={(grinderModel) =>
-							store.setGrinderModel(selected.id, grinderModel)}
-						onTagsChange={(tags) => store.setTags(selected.id, tags)}
-						onBeanChange={(bean, roaster) =>
-							store.setBeanFromLive(selected.id, bean, roaster)}
+						onNotesChange={(notes) => {
+							store.setNotes(selected.id, notes);
+							syncEditToVisualizer(selected.id);
+						}}
+						onRatingChange={(rating) => {
+							store.setRating(selected.id, rating);
+							syncEditToVisualizer(selected.id);
+						}}
+						onPrivacyChange={(privacy) => {
+							store.setPrivacy(selected.id, privacy);
+							syncEditToVisualizer(selected.id);
+						}}
+						onGrinderModelChange={(grinderModel) => {
+							store.setGrinderModel(selected.id, grinderModel);
+							syncEditToVisualizer(selected.id);
+						}}
+						onTagsChange={(tags) => {
+							store.setTags(selected.id, tags);
+							syncEditToVisualizer(selected.id);
+						}}
+						onBeanChange={(bean, roaster) => {
+							store.setBeanFromLive(selected.id, bean, roaster);
+							syncEditToVisualizer(selected.id);
+						}}
 						onDelete={(opts) => handleDelete(selected, opts)}
 						canDeleteRemote={canPushShots && !!selected.visualizerId}
 					/>
