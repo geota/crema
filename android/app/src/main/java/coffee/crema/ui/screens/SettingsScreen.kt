@@ -585,11 +585,14 @@ fun SettingsScreen(
                         if (vz.signedIn) {
                             SetGroup("Sync") {
                                 val unsyncedCount = ui.history.count { it.visualizerId == null }
+                                val lastSyncLabel = vz.lastShotSyncAt?.let {
+                                    android.text.format.DateUtils.getRelativeTimeSpanString(it).toString()
+                                } ?: "never"
                                 SetRow(
                                     "Shots",
                                     "${ui.history.size} shot(s)" +
                                         (if (unsyncedCount > 0) " · $unsyncedCount unsynced" else "") +
-                                        ". Backup pushes, Pull brings remote shots here, Two-way does both. Free.",
+                                        ". Last sync: $lastSyncLabel. Free.",
                                 ) {
                                     CremaSegmentedButton(
                                         options = listOf(
@@ -618,21 +621,13 @@ fun SettingsScreen(
                                         label = if (vz.syncing) "Syncing…" else "Sync now",
                                     )
                                 }
-                                SetRow("Re-sync shots", "Re-pull everything from Visualizer, de-duplicated.") {
+                                SetRow("Re-sync shots", "Re-pull everything from Visualizer, de-duplicated.", last = true) {
                                     CremaButton(
                                         onClick = { pendingResync = true },
                                         variant = CremaButtonVariant.Outlined,
                                         icon = "clock-counter-clockwise",
                                         enabled = !vz.busy && !vz.syncing,
                                         label = "Re-sync all",
-                                    )
-                                }
-                                SetRow("Last sync", "Most recent successful shot upload.", last = true) {
-                                    MonoReadout(
-                                        vz.lastShotSyncAt?.let {
-                                            android.text.format.DateUtils.getRelativeTimeSpanString(it).toString()
-                                        } ?: "—",
-                                        color = MaterialTheme.colorScheme.onSurface,
                                     )
                                 }
                             }
@@ -775,7 +770,45 @@ fun SettingsScreen(
                             SetRow("Smooth pressure curve", "Filter chart noise on the live readout.", last = true, notImplemented = true) { CremaSwitch(smoothPressure, { smoothPressure = it }) }
                         }
                         SetGroup("Diagnostics") {
-                            SetRow("Debug readout", "The live Phase-0 telemetry + event log.", last = true) { CremaButton(onClick = { onNav("debug") }, variant = CremaButtonVariant.Tonal, icon = "bug", label = "Open") }
+                            // Web parity: a persisted toggle revealing the event log
+                            // INLINE (web DebugPanel) rather than a separate screen.
+                            // The full Phase-0 console stays reachable from the panel.
+                            SetRow(
+                                "Show debug / event-log panel",
+                                "Surfaces the raw BLE event log below.",
+                                last = !ui.showDebugPanel,
+                            ) { CremaSwitch(ui.showDebugPanel, vm::setShowDebugPanel) }
+                            if (ui.showDebugPanel) {
+                                Column(
+                                    Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    Column(
+                                        Modifier.fillMaxWidth()
+                                            .height(280.dp)
+                                            .clip(MaterialTheme.shapes.medium)
+                                            .background(MaterialTheme.colorScheme.surfaceContainerLowest)
+                                            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.medium)
+                                            .padding(12.dp)
+                                            .verticalScroll(rememberScrollState()),
+                                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                                    ) {
+                                        val lines = ui.eventLog.takeLast(100)
+                                        if (lines.isEmpty()) {
+                                            Text("No events yet.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        } else {
+                                            lines.forEach { line ->
+                                                Text(
+                                                    line,
+                                                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = JetBrainsMono, fontSize = 10.sp),
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                )
+                                            }
+                                        }
+                                    }
+                                    CremaButton(onClick = { onNav("debug") }, variant = CremaButtonVariant.Text, icon = "bug", label = "Open full console")
+                                }
+                            }
                         }
                         SetGroup("Service-grade") {
                             // Mains heater voltage — service-grade, gated behind a danger
@@ -809,7 +842,8 @@ fun SettingsScreen(
                                 remember { runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull() ?: "dev" }
                             }
                             SetRow("App") { MonoReadout(appVersion, color = MaterialTheme.colorScheme.onSurface) }
-                            SetRow("Core") { MonoReadout("de1-core · UniFFI", color = MaterialTheme.colorScheme.onSurface) }
+                            val coreVer = remember { runCatching { coffee.crema.core.coreVersion() }.getOrNull() ?: "—" }
+                            SetRow("Core") { MonoReadout("de1-core v$coreVer · UniFFI", color = MaterialTheme.colorScheme.onSurface) }
                             SetRow("Machine", last = true) { MonoReadout("Decent DE1", color = MaterialTheme.colorScheme.onSurface) }
                         }
                         val aboutContext = androidx.compose.ui.platform.LocalContext.current
