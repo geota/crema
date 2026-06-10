@@ -27,6 +27,20 @@ data class VisualizerAccount(
     val avatarUrl: String = "",
 )
 
+/** One sync activity-log line (web `SyncLogEntry`) — capped, newest first. */
+@Serializable
+data class SyncLogEntry(
+    /** `"push" | "pull" | "skip" | "delete"`. */
+    val direction: String,
+    /** `"shot" | "bean" | "roaster"`. */
+    val entity: String,
+    val id: String,
+    val name: String,
+    /** Unix ms. */
+    val at: Long,
+    val error: String? = null,
+)
+
 /** Everything Visualizer-related the shell persists. */
 @Serializable
 data class VisualizerState(
@@ -49,6 +63,16 @@ data class VisualizerState(
     val includeNotes: Boolean = false,
     /** Unix ms of the last successful shot push, or null. */
     val lastShotSyncAt: Long? = null,
+    /** Shots sync direction: `"off" | "backup" | "pull" | "two-way"` (web default: backup). */
+    val shotsDirection: String = "backup",
+    /**
+     * Incremental pull cursor (unix ms); null pulls everything. Advanced ONLY
+     * by a successful pull — never by a push (the web learned this the hard
+     * way: a shared cursor starved the pull).
+     */
+    val shotPullCursor: Long? = null,
+    /** Recent sync activity — capped at 20 entries, newest first. */
+    val log: List<SyncLogEntry> = emptyList(),
 )
 
 /** File-backed JSON persistence for [VisualizerState] (`filesDir/visualizer.json`). */

@@ -434,8 +434,20 @@ fun SettingsScreen(
                         // Android v1 = the shots-push controls).
                         if (vz.signedIn) {
                             SetGroup("Sync") {
-                                SetRow("Auto-sync new shots", "Upload each shot as it finishes.") {
-                                    CremaSwitch(vz.autoSync, vm.visualizer::setAutoSync)
+                                SetRow("Shots", "Off · nothing moves. Backup · push this device's shots. Pull · bring remote shots here. Two-way · both.") {
+                                    CremaSegmentedButton(
+                                        options = listOf(
+                                            SegOption("off", "Off"),
+                                            SegOption("backup", "Backup"),
+                                            SegOption("pull", "Pull"),
+                                            SegOption("two-way", "Two-way"),
+                                        ),
+                                        value = vz.shotsDirection,
+                                        onChange = vm.visualizer::setShotsDirection,
+                                    )
+                                }
+                                SetRow("Auto-sync new shots", "Upload each shot as it finishes (needs a pushing direction).") {
+                                    CremaSwitch(vz.autoSync, vm.visualizer::setAutoSync, enabled = vz.shotsDirection == "backup" || vz.shotsDirection == "two-way")
                                 }
                                 SetRow("Privacy", "Who can see shots you upload.") {
                                     CremaSegmentedButton(
@@ -448,17 +460,16 @@ fun SettingsScreen(
                                 SetRow("Include tasting notes", "Attach your notes to uploads.") { CremaSwitch(vz.includeNotes, vm.visualizer::setIncludeNotes) }
                                 val unsynced = ui.history.count { it.visualizerId == null }
                                 SetRow(
-                                    "Upload backlog",
-                                    if (unsynced == 0) "All ${ui.history.size} shots are on Visualizer."
-                                    else "$unsynced shot(s) not uploaded yet.",
+                                    "Sync now",
+                                    if (unsynced == 0) "All ${ui.history.size} local shots are on Visualizer."
+                                    else "$unsynced local shot(s) not uploaded yet.",
                                 ) {
-                                    val uploading = vz.uploadingShotIds.isNotEmpty()
                                     CremaButton(
-                                        onClick = { vm.visualizer.uploadAllUnsynced(ui.history) },
+                                        onClick = { vm.visualizer.syncNow(ui.history) },
                                         variant = CremaButtonVariant.Outlined,
-                                        icon = "cloud-arrow-up",
-                                        enabled = unsynced > 0 && !vz.busy && !uploading,
-                                        label = if (uploading) "Uploading…" else "Upload all",
+                                        icon = if (vz.shotsDirection == "pull") "cloud-arrow-down" else "cloud-arrow-up",
+                                        enabled = vz.shotsDirection != "off" && !vz.busy && !vz.syncing,
+                                        label = if (vz.syncing) "Syncing…" else "Sync now",
                                     )
                                 }
                                 SetRow("Last sync", "Most recent successful shot upload.", last = true) {
@@ -468,6 +479,29 @@ fun SettingsScreen(
                                         } ?: "—",
                                         color = MaterialTheme.colorScheme.onSurface,
                                     )
+                                }
+                            }
+                        }
+                        if (vz.signedIn) {
+                            var showLog by remember { mutableStateOf(false) }
+                            SetGroup("Recent activity") {
+                                SetRow(
+                                    "Sync log",
+                                    if (vz.log.isEmpty()) "No sync activity yet."
+                                    else "${vz.log.size} recent event(s).",
+                                    last = !showLog || vz.log.isEmpty(),
+                                ) {
+                                    CremaButton(
+                                        onClick = { showLog = !showLog },
+                                        variant = CremaButtonVariant.Text,
+                                        label = if (showLog) "Hide log" else "Show log",
+                                        enabled = vz.log.isNotEmpty(),
+                                    )
+                                }
+                                if (showLog) {
+                                    vz.log.forEachIndexed { i, entry ->
+                                        SyncLogRow(entry, last = i == vz.log.lastIndex)
+                                    }
                                 }
                             }
                         }
@@ -840,6 +874,46 @@ private fun MachineHeroCard(
             }
         }
     }
+}
+
+/** One sync-activity line (web BeanSyncSection log): direction glyph + name + ago + error. */
+@Composable
+private fun SyncLogRow(entry: coffee.crema.visualizer.SyncLogEntry, last: Boolean) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            PhIcon(
+                when (entry.direction) {
+                    "pull" -> "cloud-arrow-down"
+                    "push" -> "cloud-arrow-up"
+                    "delete" -> "trash"
+                    else -> "warning"
+                },
+                sizeDp = 14,
+                tint = if (entry.error != null) Color(0xFFD26456) else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                entry.name,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+            )
+            Text(
+                "${entry.direction} · ${android.text.format.DateUtils.getRelativeTimeSpanString(entry.at)}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        entry.error?.let {
+            Text(
+                it,
+                style = MaterialTheme.typography.labelSmall,
+                color = Color(0xFFD26456),
+                modifier = Modifier.padding(start = 24.dp, top = 2.dp),
+            )
+        }
+    }
+    if (!last) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 }
 
 /** The "needs a connected DE1" pill on the firmware card head (web .fw-conn-pill). */

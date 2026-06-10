@@ -66,7 +66,9 @@ import com.adamglin.phosphoricons.regular.Link
 import com.adamglin.phosphoricons.regular.PlugsConnected
 import com.adamglin.phosphoricons.regular.SignIn
 import com.adamglin.phosphoricons.regular.SignOut
+import com.adamglin.phosphoricons.regular.Warning
 import com.adamglin.phosphoricons.regular.Cloud
+import com.adamglin.phosphoricons.regular.CloudArrowDown
 import com.adamglin.phosphoricons.regular.CloudArrowUp
 import com.adamglin.phosphoricons.regular.CloudCheck
 import com.adamglin.phosphoricons.regular.Check
@@ -167,6 +169,7 @@ fun PhIcon(name: String, modifier: Modifier = Modifier, tint: Color = LocalConte
         "calendar" -> PhosphorIcons.Regular.Calendar
         "chats-circle" -> PhosphorIcons.Regular.ChatsCircle
         "cloud" -> PhosphorIcons.Regular.Cloud
+        "cloud-arrow-down" -> PhosphorIcons.Regular.CloudArrowDown
         "cloud-arrow-up" -> PhosphorIcons.Regular.CloudArrowUp
         "cloud-check" -> PhosphorIcons.Regular.CloudCheck
         "check" -> PhosphorIcons.Regular.Check
@@ -220,6 +223,7 @@ fun PhIcon(name: String, modifier: Modifier = Modifier, tint: Color = LocalConte
         "drop-half" -> PhosphorIcons.Regular.DropHalf
         "thermometer" -> PhosphorIcons.Regular.Thermometer
         "share-network" -> PhosphorIcons.Regular.ShareNetwork
+        "warning" -> PhosphorIcons.Regular.Warning
         "wrench" -> PhosphorIcons.Regular.Wrench
         "info" -> PhosphorIcons.Regular.Info
         "snowflake" -> PhosphorIcons.Regular.Snowflake
