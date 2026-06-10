@@ -48,6 +48,8 @@ class VisualizerSync(
     private val notify: (String) -> Unit,
     /** Persist a successful upload: stamp `visualizerId` onto the local shot. */
     private val onShotSynced: (localId: String, visualizerId: String) -> Unit,
+    /** The user's equipment-level grinder model (Settings → Machine); null = unset. */
+    private val grinderModel: () -> String? = { null },
     /** Insert pulled remote stubs into the local history (dedup by id). */
     private val onPulledShots: (List<StoredShot>) -> Unit = {},
     /** Backfill a bound local's telemetry from a pull (no-op when it has a curve). */
@@ -270,7 +272,7 @@ class VisualizerSync(
      * `metadata.crema{localId, signature, appVersion}` escape valve.
      */
     internal fun buildShotPayload(shot: StoredShot): JsonObject {
-        val wire = wireShotJson(shot)
+        val wire = wireShotJson(shot, grinderModel())
         val v2 = exportV2JsonShot(json.encodeToString(JsonObject.serializer(), wire))
         val doc = json.parseToJsonElement(v2).jsonObject.toMutableMap()
         if (!persisted.includeProfile) doc.remove("profile")
@@ -343,6 +345,7 @@ class VisualizerSync(
             if (rating > 0) put("flavor", JsonPrimitive((rating * 3).coerceIn(0, 15)))
             if (persisted.includeNotes) put("private_notes", JsonPrimitive(shot.notes ?: ""))
             put("privacy", JsonPrimitive(shot.privacy ?: persisted.privacy))
+            grinderModel()?.let { put("grinder_model", JsonPrimitive(it)) }
             // Inline bean from the flat "Roaster · Name" capture label.
             shot.beanName?.let { label ->
                 val idx = label.indexOf(" · ")
@@ -551,6 +554,18 @@ class VisualizerSync(
                     if (failed) append(" · some steps failed (see log)")
                 },
             )
+        }
+    }
+
+    /**
+     * Re-pull the entire Visualizer history from the beginning (web "Re-sync
+     * shots"): clear the incremental cursor, then run a normal sync pass. The
+     * reconcile planner de-duplicates against existing locals.
+     */
+    fun resyncAllShots(shots: List<StoredShot>) {
+        scope.launch {
+            persist { it.copy(shotPullCursor = null) }
+            syncNow(shots)
         }
     }
 

@@ -68,6 +68,7 @@ import com.adamglin.phosphoricons.regular.SignIn
 import com.adamglin.phosphoricons.regular.SignOut
 import com.adamglin.phosphoricons.regular.Warning
 import com.adamglin.phosphoricons.regular.Cloud
+import com.adamglin.phosphoricons.regular.ClockCounterClockwise
 import com.adamglin.phosphoricons.regular.CloudArrowDown
 import com.adamglin.phosphoricons.regular.CloudArrowUp
 import com.adamglin.phosphoricons.regular.CloudCheck
@@ -168,6 +169,7 @@ fun PhIcon(name: String, modifier: Modifier = Modifier, tint: Color = LocalConte
         "bug" -> PhosphorIcons.Regular.Bug
         "calendar" -> PhosphorIcons.Regular.Calendar
         "chats-circle" -> PhosphorIcons.Regular.ChatsCircle
+        "clock-counter-clockwise" -> PhosphorIcons.Regular.ClockCounterClockwise
         "cloud" -> PhosphorIcons.Regular.Cloud
         "cloud-arrow-down" -> PhosphorIcons.Regular.CloudArrowDown
         "cloud-arrow-up" -> PhosphorIcons.Regular.CloudArrowUp
@@ -242,6 +244,7 @@ fun PhIcon(name: String, modifier: Modifier = Modifier, tint: Color = LocalConte
         "target" -> PhosphorIcons.Regular.Target
         "play" -> PhosphorIcons.Regular.Play
         "chats-circle" -> PhosphorIcons.Regular.ChatsCircle
+        "clock-counter-clockwise" -> PhosphorIcons.Regular.ClockCounterClockwise
         "cloud" -> PhosphorIcons.Regular.Cloud
         "stop" -> PhosphorIcons.Regular.Stop
         else -> PhosphorIcons.Regular.Question // unknown-name fallback
@@ -615,10 +618,12 @@ fun CremaSegmentedButton(
     value: String,
     onChange: (String) -> Unit,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
 ) {
     SingleChoiceSegmentedButtonRow(modifier) {
         options.forEachIndexed { i, o ->
             SegmentedButton(
+                enabled = enabled,
                 selected = value == o.id,
                 onClick = { onChange(o.id) },
                 shape = SegmentedButtonDefaults.itemShape(i, options.size),
@@ -880,14 +885,15 @@ fun CremaSplitLabel(
 fun CremaTextField(
     value: String,
     onValueChange: (String) -> Unit,
-    label: String,
+    /** Blank = no header line (the host row already carries the title). */
+    label: String = "",
     modifier: Modifier = Modifier,
     placeholder: String? = null,
     singleLine: Boolean = true,
     minLines: Int = 1,
 ) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (label.isNotEmpty()) Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Box(
             Modifier.fillMaxWidth()
                 .clip(RoundedCornerShape(8.dp))

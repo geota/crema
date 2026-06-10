@@ -308,6 +308,8 @@ data class MainUiState(
     val maintenanceReadout: MaintenanceReadout? = null,
     /** Theme mode — `"system" | "light" | "dark"` (Settings), persisted. */
     val themeMode: String = "dark",
+    val grinderModel: String = "",
+    val suppressDe1Sleep: Boolean = true,
     /** Latest scale weight in grams, or null before the first reading. */
     val scaleWeightG: Float? = null,
     /**
@@ -527,6 +529,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }.getOrNull() ?: "dev",
         notify = { msg -> notifyUser(msg) },
         onShotSynced = { localId, visualizerId -> markShotSynced(localId, visualizerId) },
+        grinderModel = { _ui.value.grinderModel.trim().takeIf { it.isNotEmpty() } },
         onPulledShots = { stubs -> insertPulledShots(stubs) },
         onBackfillTelemetry = { localId, samples, durationMs -> backfillShotTelemetry(localId, samples, durationMs) },
     )
@@ -639,6 +642,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             loadMaintenance()
             visualizer.load()
         }
+        startDe1KeepAlive()
         // Mirror the Visualizer controller's state into the UI snapshot.
         viewModelScope.launch {
             visualizer.state.collect { vs ->
@@ -1498,6 +1502,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         steamPurge = _ui.value.steamPurge,
         chartChannels = _ui.value.chartChannels,
         keepScreenOnBrew = _ui.value.keepScreenOnBrew,
+        grinderModel = _ui.value.grinderModel,
+        suppressDe1Sleep = _ui.value.suppressDe1Sleep,
         defaultDoseG = _ui.value.defaultDoseG,
         defaultRatio = _ui.value.defaultRatio,
         defaultBrewTempC = _ui.value.defaultBrewTempC,
@@ -2170,6 +2176,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             steamPurge = p.steamPurge,
             chartChannels = p.chartChannels,
             keepScreenOnBrew = p.keepScreenOnBrew,
+            grinderModel = p.grinderModel,
+            suppressDe1Sleep = p.suppressDe1Sleep,
             defaultDoseG = p.defaultDoseG,
             defaultRatio = p.defaultRatio,
             defaultBrewTempC = p.defaultBrewTempC,
@@ -2184,6 +2192,67 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         runCatching { bridge.setAutoTare(p.autoTare) }
         runCatching { bridge.setStopOnWeight(p.stopOnWeight) }
         prefsLoaded = true
+    }
+
+    /** Equipment-level grinder model (free text). Persisted; rides Visualizer
+     *  uploads/patches as `grinder_model`. */
+    fun setGrinderModel(model: String) {
+        _ui.update { it.copy(grinderModel = model) }
+        persistPrefs()
+    }
+
+    /** Keep the DE1 awake while Crema is open (web `suppressDe1Sleep`). The
+     *  [de1KeepAlive] heartbeat consumes this; an enable pokes it immediately. */
+    fun setSuppressDe1Sleep(on: Boolean) {
+        _ui.update { it.copy(suppressDe1Sleep = on) }
+        persistPrefs()
+        if (on) pokeUserPresent()
+    }
+
+    /** One UserPresent write (MMR 0x803858) — resets the DE1's sleep timer. */
+    private fun pokeUserPresent() {
+        if (_ui.value.bleState != De1BleManager.State.READY) return
+        runCatching { bridge.setUserPresent(true) }.getOrNull()?.let(::onCoreOutputJson)
+    }
+
+    /** The keep-awake heartbeat: while connected with the pref on, rewrite
+     *  UserPresent every 60 s (the DE1's sleep timer is minutes-scale, so a
+     *  minute cadence keeps it pinned without chattering the bus). */
+    private fun startDe1KeepAlive() {
+        viewModelScope.launch {
+            while (true) {
+                delay(60_000)
+                if (_ui.value.suppressDe1Sleep) pokeUserPresent()
+            }
+        }
+    }
+
+    // ── Maintenance intervals (web WaterSection "Maintenance intervals") ─────
+
+    /** Set the water-filter capacity (litres). Persisted + readout recomputed. */
+    fun setFilterCapacity(litres: Double) =
+        saveMaintenance(_ui.value.maintenance.copy(filterCapacityLitres = litres.coerceIn(5.0, 500.0)))
+
+    /** Set the descale interval (litres). Persisted + readout recomputed. */
+    fun setDescaleInterval(litres: Double) =
+        saveMaintenance(_ui.value.maintenance.copy(descaleIntervalLitres = litres.coerceIn(10.0, 1000.0)))
+
+    /** Set the clean-cycle interval (hours). Persisted + readout recomputed. */
+    fun setCleanInterval(hours: Double) =
+        saveMaintenance(_ui.value.maintenance.copy(cleanIntervalHours = hours.coerceIn(1.0, 500.0)))
+
+    /** Start a steam-rinse cycle (Settings → Water → "Run now"). */
+    fun startSteamRinse() = requestMachineState(MachineRequest.STEAM_RINSE)
+
+    /** Set the Bengle cup-warmer plate temperature (0–80 °C) and re-read the
+     *  register so the UI reflects what the machine accepted. */
+    fun setCupWarmerTemp(tempC: Int) {
+        val raw = runCatching { bridge.setCupWarmerTemperature(tempC.coerceIn(0, 80).toUByte()) }.getOrElse {
+            appendLog("Set cup warmer temp failed: ${it.message}")
+            return
+        }
+        onCoreOutputJson(raw)
+        runCatching { bridge.readMmr(MmrReg.CUP_WARMER_TEMP) }.getOrNull()?.let(::onCoreOutputJson)
     }
 
     /** Set the theme mode (`"system"` / `"light"` / `"dark"`) and persist. */
