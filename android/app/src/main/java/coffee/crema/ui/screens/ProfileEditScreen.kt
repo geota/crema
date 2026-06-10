@@ -127,6 +127,8 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
     }
     var pinned by remember(profile.id) { mutableStateOf(profile.pinned) }
     var notes by remember(profile.id) { mutableStateOf(profile.notes) }
+    var author by remember(profile.id) { mutableStateOf(profile.author) }
+    var beverage by remember(profile.id) { mutableStateOf(profile.beverageType) }
     var dose by remember(profile.id) { mutableStateOf(profile.dose.toDouble()) }
     var yieldG by remember(profile.id) { mutableStateOf(profile.yieldOut.toDouble()) }
     var brewTemp by remember(profile.id) { mutableStateOf(profile.brewTemp.toDouble()) }
@@ -167,6 +169,8 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                         tags = tags.toList(),
                         pinned = pinned,
                         notes = notes,
+                        author = author,
+                        beverageType = beverage,
                         dose = dose.toFloat(),
                         yieldOut = yieldG.toFloat(),
                         brewTemp = brewTemp.toFloat(),
@@ -234,15 +238,33 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                                 maxLines = 3,
                             )
                         }
-                        // Roast + Tags share a full-width line.
+                        // Author (web pe-author) shares a line with Tags.
+                        Row(horizontalArrangement = Arrangement.spacedBy(24.dp), verticalAlignment = Alignment.Top) {
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Eyebrow("Author")
+                                OutlinedTextField(
+                                    value = author,
+                                    onValueChange = { author = it },
+                                    placeholder = { Text("Who designed this profile?", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) },
+                                    textStyle = MaterialTheme.typography.bodyMedium,
+                                    singleLine = true,
+                                    modifier = Modifier.width(320.dp),
+                                )
+                            }
+                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Eyebrow("Tags")
+                                TagChips(tags)
+                            }
+                        }
+                        // Roast + Beverage type share a full-width line.
                         Row(horizontalArrangement = Arrangement.spacedBy(24.dp), verticalAlignment = Alignment.Top) {
                             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 Eyebrow("Roast")
                                 RoastChips(roast) { roast = it }
                             }
-                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Eyebrow("Tags")
-                                TagChips(tags)
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Eyebrow("Beverage type")
+                                BeverageChips(beverage) { beverage = it }
                             }
                         }
                     }
@@ -269,8 +291,11 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
 
             // 3 — Pressure profile: the curve, then the segments. Reset rides the
             // title line; the total time sits in the graph's bottom-right (copper).
+            val totalS = segs.sumOf { it.time.toDouble() }
             NumberedSection(
-                "3", "Pressure profile", "Drag the dots or edit the segments below",
+                "3", "Pressure profile",
+                // Web pe-chart sub: "N segments · Xs total · drag the dots or edit the rows below".
+                "${segs.size} segments · ${"%.0f".format(totalS)}s total · drag the dots or edit the segments below",
                 trailing = {
                     CremaButton(
                         onClick = {
@@ -603,6 +628,33 @@ private fun RoastChips(value: String?, onChange: (String?) -> Unit) {
                     .background(if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh)
                     .clickable { onChange(if (active) null else id) }
                     .padding(vertical = 8.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(label, style = MaterialTheme.typography.labelLarge, color = if (active) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+}
+
+// Beverage-type chips (web beverageTypeOptions) — same deselectable pattern as
+// RoastChips; lowercase wire values match the web/core `beverageType` strings.
+@Composable
+private fun BeverageChips(value: String?, onChange: (String?) -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        listOf(
+            "espresso" to "Espresso",
+            "pourover" to "Pourover",
+            "manual" to "Manual",
+            "cleaning" to "Cleaning",
+            "calibrate" to "Calibrate",
+        ).forEach { (id, label) ->
+            val active = value == id
+            Box(
+                Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh)
+                    .clickable { onChange(if (active) null else id) }
+                    .padding(horizontal = 14.dp, vertical = 8.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(label, style = MaterialTheme.typography.labelLarge, color = if (active) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant)

@@ -229,6 +229,23 @@ data class MainUiState(
     val autoTare: Boolean = false,
     val stopOnWeight: Boolean = false,
     val steamEco: Boolean = false,
+    /** Persisted pre-shot flush / post-steam purge preferences (not yet consumed
+     *  by the shot sequence — Settings rows carry the pill until then). */
+    val preFlush: Boolean = false,
+    val steamPurge: Boolean = false,
+    /** Hold the screen on while a shot is pulling (Settings → Display). */
+    val keepScreenOnBrew: Boolean = false,
+    /** Brew defaults (Settings → Brew defaults) — seed new profiles + QC fallbacks. */
+    val defaultDoseG: Float = 18f,
+    val defaultRatio: Float = 2f,
+    val defaultBrewTempC: Float = 93f,
+    val defaultPreinfuseS: Float = 8f,
+    /**
+     * One-shot user-facing feedback line (imports, exports, blocked actions).
+     * MainActivity surfaces it as a snackbar and clears it via
+     * [MainViewModel.consumeUserMessage] — the web shell's ToastHost equivalent.
+     */
+    val userMessage: String? = null,
     /** Max shot duration cap, seconds (persisted in AppPrefs). Shown as a Time
      *  stop-condition on Brew + edited in Settings → Brew defaults. */
     val maxShotDurationS: Float = 45f,
@@ -645,10 +662,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 profileIdOf(raw, json)?.takeIf { it.isNotEmpty() }?.let { put(it, raw) }
             }
         }
+        // Self-heal a stale selection (deleted custom, hidden built-in restored
+        // from prefs) by reseeding to the first visible profile.
+        val current = _ui.value.activeProfileId?.takeIf { id -> all.any { it.id == id } }
         _ui.value = _ui.value.copy(
             profiles = all,
             hiddenProfileIds = hiddenIds,
-            activeProfileId = _ui.value.activeProfileId ?: all.firstOrNull { it.id !in hiddenIds }?.id,
+            activeProfileId = current ?: all.firstOrNull { it.id !in hiddenIds }?.id,
         )
     }
 
@@ -665,10 +685,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Select the Brew header's active profile. (M1: display only — uploading the
-     *  profile to the DE1 on Coffee is the M2 gated-start sequence.) */
+     *  profile to the DE1 on Coffee is the M2 gated-start sequence.) Persisted
+     *  (AppPrefs.activeProfileId) so the selection survives a restart. */
     fun setActiveProfile(id: String) {
         // Switching profiles clears any Quick-Controls override (re-seeds from new).
         _ui.value = _ui.value.copy(activeProfileId = id, brewParams = null)
+        persistPrefs()
     }
 
     /**
@@ -746,7 +768,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * seeded from the user's brew defaults. Held as a draft until the editor saves.
      */
     fun startNewProfile() {
-        val blank = runCatching { blankCremaProfile(brewDefaultsJson()) }.getOrElse {
+        // Seed from the persisted Settings → Brew defaults (the wiring point
+        // brewDefaultsJson documents).
+        val defaults = brewDefaultsJson(
+            doseG = _ui.value.defaultDoseG,
+            ratio = _ui.value.defaultRatio,
+            brewTempC = _ui.value.defaultBrewTempC,
+            preinfusionS = _ui.value.defaultPreinfuseS,
+        )
+        val blank = runCatching { blankCremaProfile(defaults) }.getOrElse {
             appendLog("New profile failed: ${it.message}")
             return
         }
@@ -759,10 +789,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * uploads identically; only id / source / name / pinned change. Opens the editor.
      */
     fun duplicateProfile(id: String) {
-        val base = profileJsonById[id] ?: run {
-            appendLog("Duplicate: profile $id not found")
-            return
-        }
+        // An unsaved new/duplicated draft isn't in profileJsonById yet — fall back
+        // to the draft JSON so "Duplicate" inside the editor never silently no-ops.
+        val base = profileJsonById[id]
+            ?: draftProfileJson?.takeIf { _ui.value.editingProfileId == id }
+            ?: run {
+                appendLog("Duplicate: profile $id not found")
+                return
+            }
         val copy = runCatching { duplicatedCustomProfileJson(base, json) }.getOrElse {
             appendLog("Duplicate failed: ${it.message}")
             return
@@ -800,6 +834,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         tags: List<String>,
         pinned: Boolean,
         notes: String,
+        author: String,
+        beverageType: String?,
         dose: Float,
         yieldOut: Float,
         brewTemp: Float,
@@ -826,6 +862,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 tags = tags,
                 pinned = pinned,
                 notes = notes,
+                author = author,
+                beverageType = beverageType,
                 dose = dose,
                 yieldOut = yieldOut,
                 brewTemp = brewTemp,
@@ -913,14 +951,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         shareText(full, "Share profile")
     }
 
-    /** Export every profile (built-ins + customs) as a JSON array via the share
-     *  sheet — the Profiles top-bar "Export". */
-    fun exportAllProfiles() {
-        val all = _ui.value.profiles.mapNotNull { profileJsonById[it.id] }
-        if (all.isEmpty()) { appendLog("Export: no profiles"); return }
-        shareText("[${all.joinToString(",")}]", "Export profiles")
-    }
-
     /** Export a stored shot as JSON via the system share sheet. */
     fun exportShot(id: String) {
         val shot = _ui.value.history.firstOrNull { it.id == id } ?: return
@@ -954,32 +984,32 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Bean library as Crema JSON (beans + roasters). */
     fun beansLibraryJson(): String? {
         val lib = BeanLibrary(beans = _ui.value.beans, roasters = _ui.value.roasters, activeBeanId = _ui.value.activeBeanId)
-        if (lib.beans.isEmpty() && lib.roasters.isEmpty()) { _ui.value = _ui.value.copy(status = "Export — empty library"); return null }
+        if (lib.beans.isEmpty() && lib.roasters.isEmpty()) { notifyUser("Export — empty library"); return null }
         return runCatching { json.encodeToString(BeanLibrary.serializer(), lib) }.getOrNull()
     }
 
     /** Library in Beanconqueror's format (via the core). */
     fun beansBeanconquerorJson(): String? {
         val beans = _ui.value.beans
-        if (beans.isEmpty()) { _ui.value = _ui.value.copy(status = "Export — no beans"); return null }
+        if (beans.isEmpty()) { notifyUser("Export — no beans"); return null }
         val beansJson = runCatching { json.encodeToString(ListSerializer(Bean.serializer()), beans) }.getOrElse { "[]" }
         val roastersJson = runCatching { json.encodeToString(ListSerializer(Roaster.serializer()), _ui.value.roasters) }.getOrElse { "[]" }
         val envelope = "{\"beans\":$beansJson,\"roasters\":$roastersJson,\"shots\":[]}"
         return runCatching { exportBeanconquerorMainJson(envelope, System.currentTimeMillis()) }
-            .getOrElse { appendLog("Beanconqueror export failed: ${it.message}"); _ui.value = _ui.value.copy(status = "Beanconqueror export failed"); null }
+            .getOrElse { notifyUser("Beanconqueror export failed"); null }
     }
 
     /** Shots as Crema JSON — all (ids null) or only the given ids. */
     fun shotsJson(ids: List<String>?): String? {
         val shots = if (ids == null) _ui.value.history else { val w = ids.toHashSet(); _ui.value.history.filter { it.id in w } }
-        if (shots.isEmpty()) { _ui.value = _ui.value.copy(status = "Export — no shots"); return null }
+        if (shots.isEmpty()) { notifyUser("Export — no shots"); return null }
         return runCatching { json.encodeToString(ListSerializer(StoredShot.serializer()), shots) }.getOrNull()
     }
 
     /** All profiles (built-ins + customs) as a JSON array. */
     fun allProfilesJson(): String? {
         val all = _ui.value.profiles.mapNotNull { profileJsonById[it.id] }
-        if (all.isEmpty()) { _ui.value = _ui.value.copy(status = "Export — no profiles"); return null }
+        if (all.isEmpty()) { notifyUser("Export — no profiles"); return null }
         return "[${all.joinToString(",")}]"
     }
 
@@ -992,7 +1022,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     true
                 }.getOrDefault(false)
             }
-            _ui.value = _ui.value.copy(status = if (ok) "Exported to file" else "Export failed — couldn't write")
+            notifyUser(if (ok) "Exported to file" else "Export failed — couldn't write")
         }
     }
 
@@ -1021,7 +1051,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun importProfiles(uri: Uri) {
         viewModelScope.launch {
             val text = readUriText(uri)?.trim()
-            if (text.isNullOrBlank()) { _ui.value = _ui.value.copy(status = "Import failed — couldn't read that file"); return@launch }
+            if (text.isNullOrBlank()) { notifyUser("Import failed — couldn't read that file"); return@launch }
             val elements = runCatching {
                 when {
                     text.startsWith("[") -> json.parseToJsonElement(text).jsonArray.map { it.toString() }
@@ -1030,11 +1060,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }.getOrElse { emptyList() }
             val adopted = elements.mapNotNull { adoptProfileJson(it) }
-            if (adopted.isEmpty()) { _ui.value = _ui.value.copy(status = "No profiles imported"); return@launch }
+            if (adopted.isEmpty()) { notifyUser("No profiles imported — unrecognised file"); return@launch }
             customProfilesJson = adopted + customProfilesJson
             refreshProfiles()
             persistCustomProfiles()
-            _ui.value = _ui.value.copy(status = "Imported ${adopted.size} profile(s)")
+            notifyUser("Imported ${adopted.size} profile(s)")
         }
     }
 
@@ -1043,7 +1073,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun importShots(uri: Uri) {
         viewModelScope.launch {
             val text = readUriText(uri)?.trim()
-            if (text.isNullOrBlank()) { _ui.value = _ui.value.copy(status = "Import failed — couldn't read that file"); return@launch }
+            if (text.isNullOrBlank()) { notifyUser("Import failed — couldn't read that file"); return@launch }
             val shots = runCatching {
                 if (text.startsWith("[")) json.decodeFromString(ListSerializer(StoredShot.serializer()), text)
                 else listOf(json.decodeFromString(StoredShot.serializer(), text))
@@ -1053,11 +1083,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         .map { json.decodeFromString(StoredShot.serializer(), it) }.toList()
                 }.getOrElse { emptyList() }
             }
-            if (shots.isEmpty()) { _ui.value = _ui.value.copy(status = "No shots imported"); return@launch }
+            if (shots.isEmpty()) { notifyUser("No shots imported — unrecognised file"); return@launch }
             val existing = _ui.value.history.map { it.id }.toHashSet()
             val toAdd = shots.filterNot { it.id in existing }
             val next = toAdd + _ui.value.history
-            _ui.value = _ui.value.copy(history = next, status = "Imported ${toAdd.size} shot(s)")
+            _ui.value = _ui.value.copy(history = next)
+            notifyUser("Imported ${toAdd.size} shot(s)")
             historyStore.save(next)
         }
     }
@@ -1086,8 +1117,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun loadProfileOnBrew(profileName: String?) {
         val name = profileName ?: return
         val match = _ui.value.profiles.firstOrNull { it.name.equals(name, ignoreCase = true) }
-            ?: run { appendLog("Load on Brew: profile \"$name\" not found"); return }
+            ?: run { notifyUser("Profile \u201c$name\u201d isn\u2019t in your library"); return }
         setActiveProfile(match.id)
+        notifyUser("Loaded \u201c${match.name}\u201d on Brew")
     }
 
     /** Fire an ACTION_SEND chooser with [text] (application/json). Best-effort. */
@@ -1129,7 +1161,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun startShot() {
         val cremaJson = _ui.value.activeProfileId?.let { profileJsonById[it] }
         if (cremaJson == null) {
-            appendLog("Can't start shot: no active profile")
+            notifyUser("Can\u2019t start shot \u2014 no profile selected")
             return
         }
         // Quick-Controls override: bake the transient dose/yield/brew-temp into the
@@ -1143,13 +1175,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             cremaJson
         }
         val wireJson = runCatching { cremaProfileToWire(effectiveJson) }.getOrElse {
-            appendLog("Profile convert failed: ${it.message}")
+            notifyUser("Can\u2019t start shot \u2014 profile conversion failed")
             return
         }
         val raw = runCatching {
             bridge.uploadProfile(wireJson, System.currentTimeMillis().toULong())
         }.getOrElse {
-            appendLog("Upload profile failed: ${it.message}")
+            notifyUser("Can\u2019t start shot \u2014 profile upload failed")
             return
         }
         pendingBrew = true
@@ -1162,7 +1194,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             if (pendingBrew) {
                 pendingBrew = false
                 _ui.value = _ui.value.copy(profileUploading = false, profileUploadProgress = null)
-                appendLog("Profile upload timed out; shot not started")
+                notifyUser("Profile upload timed out \u2014 shot not started")
             }
         }
     }
@@ -1227,7 +1259,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * shared command path — the same path the scale writes use. The Brew screen
      * (M1/M2) builds its Coffee / Stop / mode controls on this.
      */
-    fun requestMachineState(state: MachineRequest) {
+    private fun requestMachineState(state: MachineRequest) {
         val raw = runCatching { bridge.requestMachineState(state) }.getOrElse {
             appendLog("requestMachineState failed: ${it.message}")
             return
@@ -1378,7 +1410,36 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private fun currentPrefs() = AppPrefs(
         themeMode = _ui.value.themeMode,
         maxShotDurationS = _ui.value.maxShotDurationS,
+        autoTare = _ui.value.autoTare,
+        stopOnWeight = _ui.value.stopOnWeight,
+        steamEco = _ui.value.steamEco,
+        preFlush = _ui.value.preFlush,
+        steamPurge = _ui.value.steamPurge,
+        chartChannels = _ui.value.chartChannels,
+        keepScreenOnBrew = _ui.value.keepScreenOnBrew,
+        defaultDoseG = _ui.value.defaultDoseG,
+        defaultRatio = _ui.value.defaultRatio,
+        defaultBrewTempC = _ui.value.defaultBrewTempC,
+        defaultPreinfuseS = _ui.value.defaultPreinfuseS,
+        activeProfileId = _ui.value.activeProfileId,
     )
+
+    /** Persist the current prefs snapshot (best-effort, off the main thread). */
+    private fun persistPrefs() {
+        val snapshot = currentPrefs()
+        viewModelScope.launch { settingsStore.save(snapshot) }
+    }
+
+    /** Surface a one-shot user-facing message (snackbar) + keep it in the log. */
+    private fun notifyUser(message: String) {
+        appendLog(message)
+        _ui.value = _ui.value.copy(userMessage = message, status = message)
+    }
+
+    /** MainActivity consumed the snackbar message. */
+    fun consumeUserMessage() {
+        _ui.value = _ui.value.copy(userMessage = null)
+    }
 
     /**
      * Set the flow-calibration multiplier. Routes the resulting MMR write
@@ -1400,12 +1461,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Start a cleaning cycle (Settings → Water → "Run now"). */
     fun startClean() = requestMachineState(MachineRequest.CLEAN)
 
-    /** Enable/disable auto-tare at shot start (Quick Controls). Optimistic. */
+    /** Enable/disable auto-tare at shot start (Quick Controls). Optimistic. Persisted. */
     fun setAutoTare(enabled: Boolean) {
         _ui.value = _ui.value.copy(autoTare = enabled)
         runCatching { bridge.setAutoTare(enabled) }.onFailure {
             appendLog("Set auto-tare failed: ${it.message}")
         }
+        persistPrefs()
     }
 
     /**
@@ -1417,6 +1479,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         runCatching { bridge.setStopOnWeight(enabled) }.onFailure {
             appendLog("Set stop-on-weight failed: ${it.message}")
         }
+        persistPrefs()
     }
 
     /**
@@ -1425,6 +1488,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun setSteamEco(enabled: Boolean) {
         _ui.value = _ui.value.copy(steamEco = enabled)
+        persistPrefs()
         val raw = runCatching {
             bridge.enableSteamEcoMode(enabled, System.currentTimeMillis().toULong())
         }.getOrElse {
@@ -1434,12 +1498,43 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         onCoreOutputJson(raw)
     }
 
-    /** Show/hide a live-chart channel (Quick Controls). Local display pref only. */
+    /** Show/hide a live-chart channel (Quick Controls). Persisted display pref. */
     fun toggleChartChannel(key: String, enabled: Boolean) {
         val next = _ui.value.chartChannels.toMutableSet().apply {
             if (enabled) add(key) else remove(key)
         }
         _ui.value = _ui.value.copy(chartChannels = next)
+        persistPrefs()
+    }
+
+    /** Persist the pre-shot flush preference (consumed by a later shot-sequence pass). */
+    fun setPreFlush(enabled: Boolean) {
+        _ui.value = _ui.value.copy(preFlush = enabled)
+        persistPrefs()
+    }
+
+    /** Persist the post-steam purge preference (consumed by a later shot-sequence pass). */
+    fun setSteamPurge(enabled: Boolean) {
+        _ui.value = _ui.value.copy(steamPurge = enabled)
+        persistPrefs()
+    }
+
+    /** Keep the screen awake while a shot pulls (Settings → Display). Persisted. */
+    fun setKeepScreenOnBrew(enabled: Boolean) {
+        _ui.value = _ui.value.copy(keepScreenOnBrew = enabled)
+        persistPrefs()
+    }
+
+    /** Settings → Brew defaults: the dose / ratio / temp / pre-infusion a NEW
+     *  profile seeds from ([startNewProfile] → brewDefaultsJson). Persisted. */
+    fun setBrewDefaults(doseG: Float, ratio: Float, brewTempC: Float, preinfuseS: Float) {
+        _ui.value = _ui.value.copy(
+            defaultDoseG = doseG,
+            defaultRatio = ratio,
+            defaultBrewTempC = brewTempC,
+            defaultPreinfuseS = preinfuseS,
+        )
+        persistPrefs()
     }
 
     // ── Bean library ────────────────────────────────────────────────────────
@@ -1459,24 +1554,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val s = _ui.value
         val lib = BeanLibrary(s.beans, s.roasters, s.activeBeanId)
         viewModelScope.launch { library.save(lib) }
-    }
-
-    /**
-     * Add a bean bag. [roasterName] is matched case-insensitively against the
-     * roaster directory; an unseen roaster is minted. The new bean becomes the
-     * active selection. Persisted immediately.
-     */
-    fun addBean(name: String, roasterName: String, roastLevel: Int?, roastedOn: String?) {
-        if (name.isBlank()) return
-        val now = System.currentTimeMillis()
-        val (roasterId, roasters) = resolveRoaster(roasterName, _ui.value.roasters, now)
-        val bean = newBean(name.trim(), roasterId, roastLevel, roastedOn?.takeIf { it.isNotBlank() }, now)
-        _ui.value = _ui.value.copy(
-            beans = _ui.value.beans + bean,
-            roasters = roasters,
-            activeBeanId = bean.id,
-        )
-        persistLibrary()
     }
 
     /**
@@ -1523,13 +1600,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }.getOrNull()
             }
             if (merged.isNullOrBlank()) {
-                _ui.value = _ui.value.copy(status = "Import failed — couldn't read that file")
+                notifyUser("Import failed — couldn't read that file")
                 return@launch
             }
             val planJson = runCatching { importBeanconquerorJson(merged, System.currentTimeMillis()) }
                 .getOrElse {
                     appendLog("Beanconqueror import failed: ${it.message}")
-                    _ui.value = _ui.value.copy(status = "Import failed — not a Beanconqueror export")
+                    notifyUser("Import failed — not a Beanconqueror export")
                     return@launch
                 }
             applyBeanImportPlan(planJson)
@@ -1615,7 +1692,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val newRoasters = wireRoasters.filter { keptRoasterIds.contains(it.id) }
 
         if (newBeans.isEmpty() && newRoasters.isEmpty()) {
-            _ui.value = _ui.value.copy(status = if (skipped > 0) "Already imported — nothing new to add" else "No beans found in that file")
+            notifyUser(if (skipped > 0) "Already imported — nothing new to add" else "No beans found in that file")
             return
         }
         _ui.value = s.copy(
@@ -1665,8 +1742,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         persistLibrary()
     }
 
-    /** Set the active bean (the Brew bean block). Persisted. */
-    fun setActiveBean(id: String) {
+    /** Set (or with `null`, clear) the active bean (the Brew bean block). Persisted. */
+    fun setActiveBean(id: String?) {
         _ui.value = _ui.value.copy(activeBeanId = id)
         persistLibrary()
     }
@@ -1701,8 +1778,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Freeze a bag — stamps `frozenOn` to today (ISO yyyy-mm-dd), pausing freshness. Persisted. */
     fun freezeBean(id: String) = mutateBean(id) { it.copy(frozenOn = isoToday(), defrostedOn = null) }
 
-    /** Defrost a bag — clears `frozenOn`, records `defrostedOn`. Persisted. */
-    fun defrostBean(id: String) = mutateBean(id) { it.copy(frozenOn = null, defrostedOn = isoToday()) }
+    /**
+     * Defrost a bag — records `defrostedOn` and KEEPS `frozenOn` (web semantics:
+     * the freeze window `frozenOn..defrostedOn` is history the freshness math
+     * may use; "currently frozen" is `frozenOn != null && defrostedOn == null`).
+     */
+    fun defrostBean(id: String) = mutateBean(id) { it.copy(defrostedOn = isoToday()) }
 
     /** Archive a bag — stamps `archivedAt`. Persisted. */
     fun archiveBean(id: String) = mutateBean(id) { it.copy(archivedAt = System.currentTimeMillis()) }
@@ -1959,9 +2040,29 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Load persisted app preferences at startup. */
     private suspend fun loadPrefs() {
         val p = settingsStore.load()
-        _ui.value = _ui.value.copy(themeMode = p.themeMode, maxShotDurationS = p.maxShotDurationS)
-        // Push the persisted cap to the core so the limit is live from launch.
+        _ui.value = _ui.value.copy(
+            themeMode = p.themeMode,
+            maxShotDurationS = p.maxShotDurationS,
+            autoTare = p.autoTare,
+            stopOnWeight = p.stopOnWeight,
+            steamEco = p.steamEco,
+            preFlush = p.preFlush,
+            steamPurge = p.steamPurge,
+            chartChannels = p.chartChannels,
+            keepScreenOnBrew = p.keepScreenOnBrew,
+            defaultDoseG = p.defaultDoseG,
+            defaultRatio = p.defaultRatio,
+            defaultBrewTempC = p.defaultBrewTempC,
+            defaultPreinfuseS = p.defaultPreinfuseS,
+            // Restore the last session's profile selection; refreshProfiles
+            // self-heals if the id no longer resolves (e.g. deleted custom).
+            activeProfileId = p.activeProfileId ?: _ui.value.activeProfileId,
+        )
+        // Push the persisted cap + behaviour toggles to the core so they're live
+        // from launch (the core doesn't echo these back as events).
         runCatching { bridge.setMaxShotDuration(p.maxShotDurationS) }
+        runCatching { bridge.setAutoTare(p.autoTare) }
+        runCatching { bridge.setStopOnWeight(p.stopOnWeight) }
     }
 
     /** Set the theme mode (`"system"` / `"light"` / `"dark"`) and persist. */
@@ -1974,7 +2075,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun resetPreferences() {
         val def = AppPrefs()
         viewModelScope.launch { settingsStore.save(def) }
-        _ui.value = _ui.value.copy(themeMode = def.themeMode, maxShotDurationS = def.maxShotDurationS)
+        _ui.value = _ui.value.copy(
+            themeMode = def.themeMode,
+            maxShotDurationS = def.maxShotDurationS,
+            autoTare = def.autoTare,
+            stopOnWeight = def.stopOnWeight,
+            steamEco = def.steamEco,
+            preFlush = def.preFlush,
+            steamPurge = def.steamPurge,
+            chartChannels = def.chartChannels,
+            keepScreenOnBrew = def.keepScreenOnBrew,
+            defaultDoseG = def.defaultDoseG,
+            defaultRatio = def.defaultRatio,
+            defaultBrewTempC = def.defaultBrewTempC,
+            defaultPreinfuseS = def.defaultPreinfuseS,
+        )
         runCatching { bridge.setMaxShotDuration(def.maxShotDurationS) }
     }
 

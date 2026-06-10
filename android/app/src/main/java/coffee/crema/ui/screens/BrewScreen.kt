@@ -56,6 +56,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coffee.crema.beans.daysOffRoast
+import coffee.crema.beans.isFrozen
 import coffee.crema.beans.roastBand
 import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager
@@ -67,9 +68,11 @@ import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.components.CremaAnchoredPopup
 import coffee.crema.ui.components.CremaCard
 import coffee.crema.ui.components.CremaNavigationRail
+import coffee.crema.ui.components.CremaSearchPill
 import coffee.crema.ui.components.CremaValueUnit
 import coffee.crema.ui.components.Eyebrow
 import coffee.crema.ui.components.PhIcon
+import coffee.crema.ui.components.RoasterMarkAvatar
 import coffee.crema.ui.theme.CremaTheme
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -235,6 +238,8 @@ fun BrewScreen(
                     autoTare = ui.autoTare,
                     stopOnWeight = ui.stopOnWeight,
                     steamEco = ui.steamEco,
+                    preFlush = ui.preFlush,
+                    steamPurge = ui.steamPurge,
                     channels = ui.chartChannels,
                     onSelectProfile = vm::setActiveProfile,
                     onSelectBean = vm::setActiveBean,
@@ -244,6 +249,8 @@ fun BrewScreen(
                     onAutoTare = vm::setAutoTare,
                     onStopOnWeight = vm::setStopOnWeight,
                     onSteamEco = vm::setSteamEco,
+                    onPreFlush = vm::setPreFlush,
+                    onSteamPurge = vm::setSteamPurge,
                     onToggleChannel = vm::toggleChartChannel,
                     onDismiss = { quickOpen = false },
                 )
@@ -443,12 +450,34 @@ private fun ProfileBlock(
         CremaAnchoredPopup(expanded = open, onDismiss = { open = false }) {
             PopCard {
                 PickerLead("Switch profile · pinned")
+                // Type-to-filter (web HeaderPicker "Search profiles…"). State lives in
+                // the popup content, so closing the picker resets the query.
+                var query by remember { mutableStateOf("") }
+                CremaSearchPill(
+                    query = query,
+                    onQueryChange = { query = it },
+                    placeholder = "Search profiles…",
+                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+                    compact = true,
+                )
                 // Active first, then pinned, then store order (web HeaderPicker rank).
                 val sorted = profiles.sortedByDescending {
                     (if (it.id == active?.id) 2 else 0) + (if (it.pinned) 1 else 0)
                 }
+                val shown = sorted.filter {
+                    query.isBlank() || it.name.contains(query, ignoreCase = true) ||
+                        it.author.contains(query, ignoreCase = true)
+                }
+                if (shown.isEmpty()) {
+                    Text(
+                        "No profiles match “$query”",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 12.dp, bottom = 4.dp),
+                    )
+                }
                 PopList {
-                    sorted.forEach { p ->
+                    shown.forEach { p ->
                         val isActive = p.id == active?.id
                         PickRow(
                             active = isActive,
@@ -519,7 +548,7 @@ private fun BeanBlock(
             // .bh-eyebrow-row — "Bean" + the freshness chip on the same row. The
             // chip ("Nd off roast" / "Frozen") is coloured by freshness band and
             // shown only when a roast date (or freeze) is known.
-            val frozen = activeBean?.frozenOn != null
+            val frozen = activeBean?.isFrozen == true
             val daysOff = activeBean?.let { daysOffRoast(it.roastedOn) }
             val freshLabel = when {
                 activeBean == null -> null
@@ -599,18 +628,40 @@ private fun BeanBlock(
         CremaAnchoredPopup(expanded = open && hasBeans, onDismiss = { open = false }) {
             PopCard {
                 PickerLead("Switch bean · pinned")
+                var query by remember { mutableStateOf("") }
+                CremaSearchPill(
+                    query = query,
+                    onQueryChange = { query = it },
+                    placeholder = "Search beans…",
+                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+                    compact = true,
+                )
                 // Active first, then favourite, then store order (mirrors the profile rank).
                 val sorted = beans.sortedByDescending {
                     (if (it.id == activeBean?.id) 2 else 0) + (if (it.favourite) 1 else 0)
                 }
+                val shown = sorted.filter { b ->
+                    query.isBlank() || b.name.contains(query, ignoreCase = true) ||
+                        (roasterNameOf(b)?.contains(query, ignoreCase = true) ?: false) ||
+                        (b.origin.country?.contains(query, ignoreCase = true) ?: false)
+                }
+                if (shown.isEmpty()) {
+                    Text(
+                        "No beans match “$query”",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 12.dp, bottom = 4.dp),
+                    )
+                }
                 PopList {
-                    sorted.forEach { b ->
+                    shown.forEach { b ->
                         val isActive = b.id == activeBean?.id
                         val rName = roasterNameOf(b)
                         PickRow(
                             active = isActive,
                             onClick = { open = false; onSelect(b.id) },
-                            leading = { RoasterAvatar(seed = rName ?: b.name) },
+                            // Web: the mark is the ROASTER's; a roasterless bag shows "?".
+                            leading = { RoasterMarkAvatar(name = rName) },
                             // "roaster · name"; meta = origin (+ roast band if present).
                             name = listOfNotNull(rName, b.name).joinToString(" · "),
                             meta = listOfNotNull(
@@ -618,6 +669,7 @@ private fun BeanBlock(
                                 b.origin.processing,
                                 roastBand(b.roastLevel?.toInt()),
                             ).joinToString(" · "),
+                            favourite = b.favourite,
                         )
                     }
                 }
@@ -693,6 +745,7 @@ private fun PickRow(
     leading: @Composable () -> Unit,
     name: String,
     meta: String,
+    favourite: Boolean = false,
 ) {
     // Active row = the shared copper "selected" wash (the same primary@12% used by
     // the sort/overflow menus + the web .hpick-item.is-active), not a solid neutral
@@ -731,33 +784,15 @@ private fun PickRow(
                     )
                 }
             }
-            // Trailing check only on the active row (proto .bh-pick-check).
+            // Trailing favourite star (web .hpick-fav) then the active check
+            // (proto .bh-pick-check) — an active favourite shows both, web-style.
+            if (favourite) {
+                PhIcon("star-fill", sizeDp = 14, tint = MaterialTheme.colorScheme.primary)
+            }
             if (active) {
                 PhIcon("check", sizeDp = 16, tint = MaterialTheme.colorScheme.primary)
             }
         }
-    }
-}
-
-// 32×32 rounded roaster mark with the initial (proto .bh-pick-av). Tone is a
-// deterministic theme colour keyed off the seed (no per-roaster colour field yet).
-@Composable
-private fun RoasterAvatar(seed: String) {
-    val palette = listOf(
-        MaterialTheme.colorScheme.primary,
-        MaterialTheme.colorScheme.tertiary,
-        MaterialTheme.colorScheme.secondary,
-    )
-    val color = palette[(seed.hashCode() and Int.MAX_VALUE) % palette.size]
-    Box(
-        Modifier.size(32.dp).clip(RoundedCornerShape(9.dp)).background(color),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            seed.take(1).uppercase(),
-            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-            color = MaterialTheme.colorScheme.onPrimary,
-        )
     }
 }
 
@@ -878,7 +913,8 @@ private fun TimerCard(running: Boolean, elapsedMs: Long, phase: String?) {
 @Composable
 private fun RatioCard(active: CremaProfile?, weightG: Float?) {
     val dose = active?.dose ?: 18f
-    val live = if (weightG != null && dose > 0f) "1:%.2f".format(weightG / dose) else "1:0.00"
+    // Web BrewDashboard: `1:{shotWeight == null ? '—' : …}` — em-dash, never a fake 0.
+    val live = if (weightG != null && dose > 0f) "1:%.2f".format(weightG / dose) else "1:—"
     CremaCard(Modifier.fillMaxWidth()) {
         // proto .brew-ratio padding: 5px vertical / 16px horizontal (compact).
         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 5.dp)) {
@@ -1066,12 +1102,12 @@ private fun LimitsCard(active: CremaProfile?, ui: coffee.crema.ui.MainUiState) {
             add(LimitRow("Yield", "scales", tel.weight, weightG, active.yieldOut, "g"))
         }
         if (active != null && active.maxTotalVolumeMl > 0) {
-            add(LimitRow("Volume", "drop-half", tel.flow, ui.dispensedVolume, active.maxTotalVolumeMl.toFloat(), "ml"))
+            add(LimitRow("Volume", "drop-half", tel.flow, ui.dispensedVolume ?: 0f, active.maxTotalVolumeMl.toFloat(), "ml", decimals = 0))
         }
         // Time cap from the persisted setting (ui.maxShotDurationS); live = elapsed
         // shot seconds. Always shown — it's a global hard cap, not profile-scoped.
         if (ui.maxShotDurationS > 0f) {
-            add(LimitRow("Time", "timer", timeColor, ui.shotElapsedMs / 1000f, ui.maxShotDurationS, "s"))
+            add(LimitRow("Time", "timer", timeColor, ui.shotElapsedMs / 1000f, ui.maxShotDurationS, "s", decimals = 0))
         }
     }
     if (rows.isEmpty()) return
@@ -1093,6 +1129,8 @@ private data class LimitRow(
     val live: Float?,
     val target: Float,
     val unit: String,
+    // Web: Yield reads 1-decimal ("36.0 g"); Volume/Time read whole ("0 / 120 ml", "0 / 45 s").
+    val decimals: Int = 1,
 )
 
 @Composable
@@ -1104,8 +1142,11 @@ private fun LimitRowView(row: LimitRow) {
                 PhIcon(row.icon, sizeDp = 16, tint = row.color)
                 Text(row.label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
+            // Web MaxStopConditionsCard: a null live (no scale weight yet) renders "—",
+            // never a fake "0.0" — the value is unknown, not zero.
+            val liveStr = row.live?.let { "%.${row.decimals}f".format(it) } ?: "—"
             Text(
-                "%.1f / %.1f%s".format(row.live ?: 0f, row.target, row.unit),
+                "$liveStr / %.${row.decimals}f%s".format(row.target, row.unit),
                 style = CremaTheme.readout.readoutSm.copy(fontSize = 15.sp, lineHeight = 19.sp),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

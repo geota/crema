@@ -36,13 +36,20 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import coffee.crema.beans.isFrozen
+import coffee.crema.beans.roastBand5
 import coffee.crema.core.BeanMix
 import coffee.crema.core.BeanRoastType
 import coffee.crema.ui.MainViewModel
+import coffee.crema.ui.components.roasterMark
+import coffee.crema.ui.components.roasterTone
 import coffee.crema.ui.components.CremaButton
 import coffee.crema.ui.components.CremaButtonVariant
 import coffee.crema.ui.components.CremaIconButton
@@ -102,7 +109,7 @@ fun BeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
     var roastTypeSel by remember(bean.id) { mutableStateOf(bean.roastType?.string ?: "") }
     var roasted by remember(bean.id) { mutableStateOf(bean.roastedOn ?: "") }
     var opened by remember(bean.id) { mutableStateOf(bean.openedOn ?: "") }
-    var frozen by remember(bean.id) { mutableStateOf(bean.frozenOn != null) }
+    var frozen by remember(bean.id) { mutableStateOf(bean.isFrozen) }
     var archived by remember(bean.id) { mutableStateOf(bean.archivedAt != null) }
     var bagSize by remember(bean.id) { mutableStateOf(bean.bagSize.toDouble()) }
     var remaining by remember(bean.id) { mutableStateOf(bean.remaining.toDouble()) }
@@ -154,7 +161,13 @@ fun BeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                 tags = tags.toList().ifEmpty { null },
             )
         }
-        if (active) vm.setActiveBean(bean.id)
+        if (active) {
+            vm.setActiveBean(bean.id)
+        } else if (ui.activeBeanId == bean.id) {
+            // The flag was switched OFF for the currently-active bag — clear it
+            // (previously a silent one-way no-op).
+            vm.setActiveBean(null)
+        }
         onBack()
     }
 
@@ -227,6 +240,11 @@ fun BeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                         BeFlag("star", "Pinned", pinned) { pinned = it }
                         BeFlag("drop-half", "Decaf", decaf) { decaf = it }
                     }
+                    Text(
+                        "Active selects this bag on Brew. Pin keeps it on the brew strip; decaf is a filter facet.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
 
                 BeBlock("02", "Roast & mix", "Roast level drives the freshness window.") {
@@ -364,24 +382,22 @@ private fun BeField(label: String, value: String, singleLine: Boolean = true, on
     )
 }
 
-/** Left-rail bag photo placeholder — colored roaster mark + caption. */
+/** Left-rail bag photo placeholder — full-bleed roaster mark (web hero) + caption. */
 @Composable
 private fun BeanPhoto(roaster: String, name: String) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        // Web BeanEditPage hero: the whole well IS the tone square with the big
+        // two-letter mark (shared roasterMark/roasterTone — see RoasterMark.kt).
         Box(
-            Modifier.fillMaxWidth().height(120.dp).clip(RoundedCornerShape(14.dp)).background(MaterialTheme.colorScheme.surfaceContainerHighest),
+            Modifier.fillMaxWidth().height(120.dp).clip(RoundedCornerShape(14.dp))
+                .background(roasterTone(roaster.ifBlank { null })),
             contentAlignment = Alignment.Center,
         ) {
-            Box(
-                Modifier.size(48.dp).clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.primary),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    roaster.ifBlank { name }.take(1).uppercase(),
-                    style = MaterialTheme.typography.titleLarge,
-                    color = MaterialTheme.colorScheme.onPrimary,
-                )
-            }
+            Text(
+                roasterMark(roaster.ifBlank { null }),
+                style = MaterialTheme.typography.displayMedium.copy(fontWeight = FontWeight.SemiBold),
+                color = Color(0xFFF4EDE3),
+            )
         }
         Text(roaster.ifBlank { "No roaster" }, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface)
         Text("Bag photo upload is coming soon.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -418,16 +434,34 @@ private fun RoastPicker(value: Int, onChange: (Int) -> Unit) {
                 }
             }
         }
-        val band = if (value <= 3) "light" else if (value <= 6) "medium" else "dark"
+        // Web RoastSlider: FIVE band anchors under the 1..10 track, weighted to
+        // sit under their pip spans (1-2 / 3-4 / 5 / 6-7 / 8-10).
+        val band5 = roastBand5(value)
         Row(Modifier.fillMaxWidth()) {
-            listOf("light" to "Light", "medium" to "Medium", "dark" to "Dark").forEach { (id, lbl) ->
+            listOf(
+                Triple("Light", 2f, false),
+                Triple("Med-light", 2f, false),
+                Triple("Medium", 1f, true),
+                Triple("Med-dark", 2f, true),
+                Triple("Dark", 3f, true),
+            ).forEach { (lbl, w, center) ->
                 Text(
                     lbl.uppercase(),
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(w),
                     style = MaterialTheme.typography.labelSmall,
-                    color = if (band == id) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                    textAlign = if (center) TextAlign.Center else TextAlign.Start,
+                    color = if (band5 == lbl) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
                 )
             }
+        }
+        // Current readout (web "2 /10 · Light").
+        Row(verticalAlignment = Alignment.Bottom) {
+            Text("$value", style = MaterialTheme.typography.titleMedium.copy(fontFamily = JetBrainsMono), color = MaterialTheme.colorScheme.onSurface)
+            Text(
+                "/10${band5?.let { " · $it" }.orEmpty()}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }

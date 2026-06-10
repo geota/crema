@@ -2,6 +2,7 @@ package coffee.crema.ui
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.view.WindowManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -12,6 +13,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -23,17 +25,23 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.launch
 import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager
 import coffee.crema.core.ModeInfo
@@ -110,11 +118,33 @@ class MainActivity : ComponentActivity() {
                 // default (Color.Black) → e.g. the editor back arrow read as
                 // black-on-brown, and screens without their own background()
                 // (Scale) showed the lighter window background.
+                // One-shot user feedback (imports / exports / blocked actions) —
+                // the web shell's ToastHost equivalent. The VM sets userMessage;
+                // we show it and hand it back.
+                val snackbarHostState = remember { SnackbarHostState() }
+                val snackbarScope = rememberCoroutineScope()
+                LaunchedEffect(ui.userMessage) {
+                    ui.userMessage?.let { msg ->
+                        // Consume FIRST (clears the key), and show from a scope that
+                        // survives this effect's restart — showSnackbar inside the
+                        // effect would be cancelled by its own consumption.
+                        viewModel.consumeUserMessage()
+                        snackbarScope.launch { snackbarHostState.showSnackbar(msg) }
+                    }
+                }
+                // "Keep screen on while brewing" (Settings → Display): hold
+                // FLAG_KEEP_SCREEN_ON only while a shot is actually pulling.
+                val keepOn = ui.keepScreenOnBrew && ui.shotInProgress
+                LaunchedEffect(keepOn) {
+                    if (keepOn) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                }
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background,
                     contentColor = MaterialTheme.colorScheme.onBackground,
                 ) {
+                Box(Modifier.fillMaxSize()) {
                 AppNavHost(
                     machineConnected = machineConnected,
                     scaleConnected = scaleConnected,
@@ -162,6 +192,11 @@ class MainActivity : ComponentActivity() {
                         }
                     },
                 )
+                SnackbarHost(
+                    hostState = snackbarHostState,
+                    modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 16.dp),
+                )
+                }
                 }
             }
         }
