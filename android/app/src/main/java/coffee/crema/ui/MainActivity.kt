@@ -123,11 +123,13 @@ class MainActivity : ComponentActivity() {
                 // we show it and hand it back.
                 val snackbarHostState = remember { SnackbarHostState() }
                 val snackbarScope = rememberCoroutineScope()
-                LaunchedEffect(ui.userMessage) {
-                    ui.userMessage?.let { msg ->
-                        // Consume FIRST (clears the key), and show from a scope that
-                        // survives this effect's restart — showSnackbar inside the
-                        // effect would be cancelled by its own consumption.
+                LaunchedEffect(ui.userMessages) {
+                    ui.userMessages.firstOrNull()?.let { msg ->
+                        // Dequeue FIRST (changes the key → effect re-fires for the
+                        // next message), and show from a scope that survives the
+                        // restart — showSnackbar inside the effect would be
+                        // cancelled by its own consumption. SnackbarHostState
+                        // serialises concurrent shows internally.
                         viewModel.consumeUserMessage()
                         snackbarScope.launch { snackbarHostState.showSnackbar(msg) }
                     }

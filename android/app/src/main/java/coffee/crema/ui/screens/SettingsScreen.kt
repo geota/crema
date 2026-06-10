@@ -139,7 +139,9 @@ fun SettingsScreen(
     }
 
     // SAF export-to-file plumbing (same pattern as History / Beans / Profiles).
-    var pendingExport by rememberSaveable { mutableStateOf<String?>(null) }
+    // Plain remember — a multi-MB history JSON in saved-instance-state would
+    // blow the 1 MB Binder cap on background; losing it on process death is fine.
+    var pendingExport by remember { mutableStateOf<String?>(null) }
     val saveLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         val t = pendingExport; pendingExport = null
         if (uri != null && t != null) vm.writeTextToUri(uri, t)

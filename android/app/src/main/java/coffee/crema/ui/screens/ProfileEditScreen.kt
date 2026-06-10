@@ -636,8 +636,10 @@ private fun RoastChips(value: String?, onChange: (String?) -> Unit) {
     }
 }
 
-// Beverage-type chips (web beverageTypeOptions) — same deselectable pattern as
-// RoastChips; lowercase wire values match the web/core `beverageType` strings.
+// Beverage-type chips (web beverageTypeOptions); lowercase wire values match
+// the web/core `beverageType` strings. NOT deselectable: the Rust
+// CremaProfile.beverage_type is a non-optional enum (no "none" on the wire),
+// so a cleared chip would silently revert to the stored value on save.
 @Composable
 private fun BeverageChips(value: String?, onChange: (String?) -> Unit) {
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -653,7 +655,7 @@ private fun BeverageChips(value: String?, onChange: (String?) -> Unit) {
                 Modifier
                     .clip(RoundedCornerShape(8.dp))
                     .background(if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh)
-                    .clickable { onChange(if (active) null else id) }
+                    .clickable { onChange(id) }
                     .padding(horizontal = 14.dp, vertical = 8.dp),
                 contentAlignment = Alignment.Center,
             ) {

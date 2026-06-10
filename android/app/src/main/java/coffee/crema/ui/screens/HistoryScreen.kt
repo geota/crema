@@ -102,6 +102,7 @@ fun HistoryScreen(
         ui.pendingHistoryShotId?.let {
             selectedId = it
             range = "all"
+            profileFilter = null // an active profile pill must not hide the deep-linked shot
             vm.consumePendingHistoryShot()
         }
     }
