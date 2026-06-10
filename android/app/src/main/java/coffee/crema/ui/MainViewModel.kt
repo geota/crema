@@ -241,11 +241,12 @@ data class MainUiState(
     val defaultBrewTempC: Float = 93f,
     val defaultPreinfuseS: Float = 8f,
     /**
-     * One-shot user-facing feedback line (imports, exports, blocked actions).
-     * MainActivity surfaces it as a snackbar and clears it via
+     * Queued user-facing feedback lines (imports, exports, blocked actions).
+     * MainActivity surfaces them as snackbars, dequeuing via
      * [MainViewModel.consumeUserMessage] — the web shell's ToastHost equivalent.
+     * A queue, not a single field, so two rapid notifications both surface.
      */
-    val userMessage: String? = null,
+    val userMessages: List<String> = emptyList(),
     /** Max shot duration cap, seconds (persisted in AppPrefs). Shown as a Time
      *  stop-condition on Brew + edited in Settings → Brew defaults. */
     val maxShotDurationS: Float = 45f,
@@ -1424,21 +1425,28 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         activeProfileId = _ui.value.activeProfileId,
     )
 
-    /** Persist the current prefs snapshot (best-effort, off the main thread). */
+    /** True once [loadPrefs] has hydrated the UI from disk — writes before that
+     *  would snapshot half-initialised state and clobber the saved prefs (e.g.
+     *  erase the restored activeProfileId during boot). */
+    @Volatile private var prefsLoaded = false
+
+    /** Persist the current prefs snapshot (best-effort, off the main thread).
+     *  No-op until the initial [loadPrefs] hydration completes. */
     private fun persistPrefs() {
+        if (!prefsLoaded) return
         val snapshot = currentPrefs()
         viewModelScope.launch { settingsStore.save(snapshot) }
     }
 
-    /** Surface a one-shot user-facing message (snackbar) + keep it in the log. */
+    /** Queue a user-facing message (snackbar) + keep it in the log. */
     private fun notifyUser(message: String) {
         appendLog(message)
-        _ui.value = _ui.value.copy(userMessage = message, status = message)
+        _ui.value = _ui.value.copy(userMessages = _ui.value.userMessages + message, status = message)
     }
 
-    /** MainActivity consumed the snackbar message. */
+    /** MainActivity consumed the head snackbar message. */
     fun consumeUserMessage() {
-        _ui.value = _ui.value.copy(userMessage = null)
+        _ui.value = _ui.value.copy(userMessages = _ui.value.userMessages.drop(1))
     }
 
     /**
@@ -1804,7 +1812,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Today as an ISO `yyyy-mm-dd` string (matches the Bean date fields). */
     private fun isoToday(): String =
-        java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
+        java.time.LocalDate.now(java.time.ZoneOffset.UTC).toString()
 
     // ── Roaster directory ───────────────────────────────────────────────────
 
@@ -2063,12 +2071,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         runCatching { bridge.setMaxShotDuration(p.maxShotDurationS) }
         runCatching { bridge.setAutoTare(p.autoTare) }
         runCatching { bridge.setStopOnWeight(p.stopOnWeight) }
+        prefsLoaded = true
     }
 
     /** Set the theme mode (`"system"` / `"light"` / `"dark"`) and persist. */
     fun setThemeMode(mode: String) {
         _ui.value = _ui.value.copy(themeMode = mode)
-        viewModelScope.launch { settingsStore.save(currentPrefs()) }
+        persistPrefs()
     }
 
     /** Reset Crema's preferences (theme, max shot duration) to defaults. Persisted. */

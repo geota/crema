@@ -205,7 +205,11 @@ fun patchCremaProfileJson(
         put("pinned", JsonPrimitive(pinned))
         put("notes", JsonPrimitive(notes))
         put("author", JsonPrimitive(author))
-        put("beverageType", beverageType?.let { JsonPrimitive(it) } ?: JsonNull)
+        // beverageType: Rust CremaProfile.beverage_type is a NON-optional enum with
+        // no serde default — JsonNull AND a missing key both fail cremaProfileToWire
+        // (which would silently block shot starts). A null editor value therefore
+        // leaves the base profile's value untouched.
+        beverageType?.let { put("beverageType", JsonPrimitive(it)) }
         put("dose", JsonPrimitive(dose))
         put("yieldOut", JsonPrimitive(yieldOut))
         put("brewTemp", JsonPrimitive(brewTemp))

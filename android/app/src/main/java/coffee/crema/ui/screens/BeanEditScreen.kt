@@ -138,7 +138,20 @@ fun BeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                 roastType = roastTypeSel.ifBlank { null }?.let { v -> BeanRoastType.entries.firstOrNull { it.string == v } },
                 roastedOn = roasted.ifBlank { null },
                 openedOn = opened.ifBlank { null },
-                frozenOn = if (frozen) (b.frozenOn ?: java.time.LocalDate.now().toString()) else null,
+                // Freeze/defrost transitions preserve the freeze-window history
+                // (web semantics — see MainViewModel.defrostBean): unchecking the
+                // switch on a frozen bag DEFROSTS it (stamps defrostedOn, keeps
+                // frozenOn); re-freezing stamps a fresh frozenOn.
+                frozenOn = when {
+                    frozen && b.isFrozen -> b.frozenOn
+                    frozen -> java.time.LocalDate.now(java.time.ZoneOffset.UTC).toString()
+                    else -> b.frozenOn
+                },
+                defrostedOn = when {
+                    frozen -> null
+                    b.isFrozen -> java.time.LocalDate.now(java.time.ZoneOffset.UTC).toString()
+                    else -> b.defrostedOn
+                },
                 archivedAt = if (archived) (b.archivedAt ?: System.currentTimeMillis()) else null,
                 decaf = decaf,
                 favourite = pinned,
