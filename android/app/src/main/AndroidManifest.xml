@@ -15,6 +15,10 @@
         android:name="android.permission.BLUETOOTH_CONNECT"
         tools:targetApi="s" />
 
+    <!-- Visualizer sync — OAuth token exchange + shot uploads to
+         visualizer.coffee. The only network feature in the app. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <!-- Require BLE hardware. -->
     <uses-feature
         android:name="android.hardware.bluetooth_le"
@@ -27,14 +31,24 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.Crema">
 
+        <!-- singleTask: the Visualizer OAuth redirect re-enters the existing
+             task via onNewIntent instead of stacking a second instance. -->
         <activity
             android:name=".ui.MainActivity"
             android:exported="true"
             android:label="@string/app_name"
+            android:launchMode="singleTask"
             android:theme="@style/Theme.Crema">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- Visualizer OAuth callback: crema://visualizer/callback -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="crema" android:host="visualizer" />
             </intent-filter>
         </activity>
     </application>

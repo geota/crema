@@ -28,6 +28,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -412,15 +413,80 @@ fun SettingsScreen(
                     }
                     "sharing" -> {
                         SetHead("Sync", "Sharing", "Sync shots and libraries to Visualizer and export your data.")
+                        val vz = ui.visualizer
+                        val context = androidx.compose.ui.platform.LocalContext.current
+                        // Re-validate the cached account whenever the section opens.
+                        LaunchedEffect(Unit) { vm.visualizer.refreshAccount() }
                         SetGroup("Visualizer") {
-                            SetRow("Account", "Sign in to sync shots to Visualizer.", notImplemented = true) { CremaButton(onClick = {}, variant = CremaButtonVariant.Tonal, label = "Sign in") }
-                            SetRow("Auto-sync new shots", "Upload each shot as it finishes.", last = true, notImplemented = true) { CremaSwitch(autoSync, { autoSync = it }) }
+                            when {
+                                !vz.configured -> SetRow(
+                                    "Account",
+                                    "This build has no Visualizer client id — build with -PvisualizerClientId=… to enable sync.",
+                                    notImplemented = true,
+                                ) { SetSelect("Unavailable") }
+                                !vz.signedIn -> SetRow("Account", "Sign in to sync shots to visualizer.coffee.") {
+                                    CremaButton(
+                                        onClick = {
+                                            vm.visualizer.beginSignIn { url ->
+                                                context.startActivity(
+                                                    android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)),
+                                                )
+                                            }
+                                        },
+                                        variant = CremaButtonVariant.Tonal,
+                                        enabled = !vz.busy,
+                                        label = if (vz.busy) "Signing in…" else "Sign in",
+                                    )
+                                }
+                                else -> SetRow("Account", vz.account?.name ?: "Signed in") {
+                                    CremaButton(onClick = { vm.visualizer.signOut() }, variant = CremaButtonVariant.Text, danger = true, label = "Sign out")
+                                }
+                            }
+                            SetRow("Auto-sync new shots", "Upload each shot as it finishes.", last = true) {
+                                CremaSwitch(vz.autoSync, vm.visualizer::setAutoSync, enabled = vz.signedIn)
+                            }
+                        }
+                        SetGroup("Upload options") {
+                            SetRow("Privacy", "Who can see shots you upload.") {
+                                CremaSegmentedButton(
+                                    options = listOf(SegOption("public", "Public"), SegOption("unlisted", "Unlisted"), SegOption("private", "Private")),
+                                    value = vz.privacy,
+                                    onChange = vm.visualizer::setPrivacy,
+                                )
+                            }
+                            SetRow("Include profile", "Attach the full recipe to uploads.") { CremaSwitch(vz.includeProfile, vm.visualizer::setIncludeProfile) }
+                            SetRow("Include tasting notes", "Attach your notes to uploads.", last = true) { CremaSwitch(vz.includeNotes, vm.visualizer::setIncludeNotes) }
+                        }
+                        SetGroup("Sync now") {
+                            val unsynced = ui.history.count { it.visualizerId == null }
+                            SetRow(
+                                "Shots",
+                                if (unsynced == 0) "All ${ui.history.size} shots are on Visualizer."
+                                else "$unsynced shot(s) not uploaded yet.",
+                            ) {
+                                // busy also covers the sign-in exchange — only call it
+                                // "Uploading" when shots are actually in flight.
+                                val uploading = vz.uploadingShotIds.isNotEmpty()
+                                CremaButton(
+                                    onClick = { vm.visualizer.uploadAllUnsynced(ui.history) },
+                                    variant = CremaButtonVariant.Outlined,
+                                    icon = "cloud-arrow-up",
+                                    enabled = vz.signedIn && unsynced > 0 && !vz.busy && !uploading,
+                                    label = if (uploading) "Uploading…" else "Upload all",
+                                )
+                            }
+                            SetRow("Last sync", "Most recent successful shot upload.", last = true) {
+                                MonoReadout(
+                                    vz.lastShotSyncAt?.let {
+                                        android.text.format.DateUtils.getRelativeTimeSpanString(it).toString()
+                                    } ?: "—",
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
+                            }
                         }
                         SetGroup("What to sync") {
-                            SetRow("Shots", "Sync direction for shot history.", notImplemented = true) { SetSelect("Push") }
-                            SetRow("Profiles", "Sync direction for profiles.", notImplemented = true) { SetSelect("Two-way") }
-                            SetRow("Beans", "Sync direction for the bean library.", notImplemented = true) { SetSelect("Two-way") }
-                            SetRow("Roasters", "Sync direction for roasters.", last = true, notImplemented = true) { SetSelect("Two-way") }
+                            SetRow("Shots", "Pushed to Visualizer on completion (this device → cloud).") { SetSelect("Backup") }
+                            SetRow("Beans & roasters", "Two-way library sync is web-only for now.", last = true, notImplemented = true) { SetSelect("Off") }
                         }
                         SetGroup("Local export") {
                             // SAF file saves — the share-sheet Intent-extra path tops out

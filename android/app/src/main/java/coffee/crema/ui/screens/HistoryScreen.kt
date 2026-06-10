@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -23,6 +24,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -288,11 +290,13 @@ fun HistoryScreen(
                             ShotRow(
                                 shot = shot,
                                 selected = shot.id == selected?.id,
+                                syncing = shot.id in ui.visualizer.uploadingShotIds,
                                 onClick = { selectedId = shot.id },
                             )
                         }
                     }
                     if (selected != null) {
+                        val detailContext = androidx.compose.ui.platform.LocalContext.current
                         ShotDetail(
                             shot = selected,
                             // Fixed archival set (web detail chart): pressure + flow +
@@ -302,6 +306,21 @@ fun HistoryScreen(
                             onLoadOnBrew = { vm.loadProfileOnBrew(selected.profileName) },
                             onExport = { vm.exportShot(selected.id) },
                             onDelete = { vm.deleteShot(selected.id); selectedId = null },
+                            onUploadVisualizer = if (ui.visualizer.signedIn && selected.visualizerId == null) {
+                                { vm.visualizer.uploadShot(selected) }
+                            } else {
+                                null
+                            },
+                            onViewVisualizer = selected.visualizerId?.let { vid ->
+                                {
+                                    detailContext.startActivity(
+                                        android.content.Intent(
+                                            android.content.Intent.ACTION_VIEW,
+                                            android.net.Uri.parse("https://visualizer.coffee/shots/$vid"),
+                                        ),
+                                    )
+                                }
+                            },
                             modifier = Modifier.weight(1f).fillMaxHeight(),
                         )
                     }
@@ -370,7 +389,7 @@ private fun StatTile(label: String, value: String, unit: String?, modifier: Modi
 }
 
 @Composable
-private fun ShotRow(shot: StoredShot, selected: Boolean, onClick: () -> Unit) {
+private fun ShotRow(shot: StoredShot, selected: Boolean, syncing: Boolean, onClick: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -433,6 +452,17 @@ private fun ShotRow(shot: StoredShot, selected: Boolean, onClick: () -> Unit) {
                     tint = if (n <= r) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f),
                 )
             }
+        }
+        // Visualizer sync pip (web .hi-row pip): cloud-check once uploaded,
+        // a spinner mid-upload, a faint cloud when local-only.
+        when {
+            syncing -> CircularProgressIndicator(
+                modifier = Modifier.size(12.dp),
+                strokeWidth = 1.5.dp,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            shot.visualizerId != null -> PhIcon("cloud-check", sizeDp = 13, tint = CremaTheme.telemetry.success)
+            else -> PhIcon("cloud", sizeDp = 13, tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.25f))
         }
     }
 }
@@ -519,6 +549,10 @@ private fun ShotDetail(
     onLoadOnBrew: () -> Unit,
     onExport: () -> Unit,
     onDelete: () -> Unit,
+    /** Push this shot to Visualizer; null when signed out or already synced. */
+    onUploadVisualizer: (() -> Unit)? = null,
+    /** Open the shot on visualizer.coffee; null until it has been uploaded. */
+    onViewVisualizer: (() -> Unit)? = null,
 ) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
         var confirmDelete by remember(shot.id) { mutableStateOf(false) }
@@ -554,9 +588,11 @@ private fun ShotDetail(
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 CremaButton(onClick = onLoadOnBrew, variant = CremaButtonVariant.Outlined, icon = "coffee", label = "Load on Brew")
                 CremaButton(onClick = onExport, variant = CremaButtonVariant.Outlined, icon = "download-simple", label = "Export")
-                CremaOverflowMenu(items = listOf(
-                    OverflowItem("trash", "Delete shot", { confirmDelete = true }, danger = true),
-                ))
+                CremaOverflowMenu(items = buildList {
+                    onUploadVisualizer?.let { add(OverflowItem("cloud-arrow-up", "Upload to Visualizer", it)) }
+                    onViewVisualizer?.let { add(OverflowItem("cloud-check", "View on Visualizer", it)) }
+                    add(OverflowItem("trash", "Delete shot", { confirmDelete = true }, danger = true))
+                })
             }
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)

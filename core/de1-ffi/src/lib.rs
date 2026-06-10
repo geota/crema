@@ -442,6 +442,42 @@ pub fn import_crema_jsonl(text: String) -> Result<String, CremaError> {
     de1_domain::import_jsonl_to_plan_json(&text).map_err(crema_err)
 }
 
+/// Export a Rust-shape `StoredShot` JSON (the same shape
+/// `import_v2_json_shot` returns) as a pretty-printed community-v2
+/// `.shot.json` document — the Visualizer upload / archive payload.
+/// Mirrors the wasm export of the same name so both shells emit
+/// identical wire bytes.
+///
+/// # Errors
+///
+/// Returns the JSON parse error when `shot_json` is not a valid
+/// `de1_domain::StoredShot`.
+#[uniffi::export]
+pub fn export_v2_json_shot(shot_json: String) -> Result<String, CremaError> {
+    let shot: de1_domain::StoredShot = serde_json::from_str(&shot_json).map_err(crema_err)?;
+    de1_domain::export_v2_json_shot(&shot).map_err(crema_err)
+}
+
+/// The shot de-dup signature — a pinned djb2 digest of
+/// `(completed_at_unix_ms, duration_ms, profile_name, final_weight_g)`.
+/// Mirrors the wasm `signatureForShot` so a Kotlin / JS call on the
+/// same inputs emits the same hex string (Visualizer sync rides this
+/// in `metadata.crema.signature` for cross-device matching).
+#[uniffi::export]
+pub fn signature_for_shot(
+    completed_at_unix_ms: i64,
+    duration_ms: i64,
+    profile_name: Option<String>,
+    final_weight_g: Option<f32>,
+) -> String {
+    de1_domain::signature_for_shot(
+        completed_at_unix_ms,
+        duration_ms,
+        profile_name.as_deref(),
+        final_weight_g,
+    )
+}
+
 /// Import a Beanconqueror main export JSON. See
 /// [`de1_domain::import_beanconqueror_json`].
 ///

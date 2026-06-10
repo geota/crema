@@ -59,6 +59,9 @@ import com.adamglin.phosphoricons.regular.ArrowUp
 import com.adamglin.phosphoricons.regular.Bluetooth
 import com.adamglin.phosphoricons.regular.Bug
 import com.adamglin.phosphoricons.regular.Calendar
+import com.adamglin.phosphoricons.regular.Cloud
+import com.adamglin.phosphoricons.regular.CloudArrowUp
+import com.adamglin.phosphoricons.regular.CloudCheck
 import com.adamglin.phosphoricons.regular.Check
 import com.adamglin.phosphoricons.regular.Clock
 import com.adamglin.phosphoricons.regular.Fire
@@ -155,6 +158,9 @@ fun PhIcon(name: String, modifier: Modifier = Modifier, tint: Color = LocalConte
         "bluetooth" -> PhosphorIcons.Regular.Bluetooth
         "bug" -> PhosphorIcons.Regular.Bug
         "calendar" -> PhosphorIcons.Regular.Calendar
+        "cloud" -> PhosphorIcons.Regular.Cloud
+        "cloud-arrow-up" -> PhosphorIcons.Regular.CloudArrowUp
+        "cloud-check" -> PhosphorIcons.Regular.CloudCheck
         "check" -> PhosphorIcons.Regular.Check
         "clock" -> PhosphorIcons.Regular.Clock
         "fire" -> PhosphorIcons.Regular.Fire
