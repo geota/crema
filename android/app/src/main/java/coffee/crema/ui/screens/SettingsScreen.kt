@@ -1474,7 +1474,7 @@ private fun MaintenanceRow(
 // landed). Ints are interpolated (never passed to String.format("%f")).
 
 /** Machine-model id → marketing name (`0 = Unset`, `1 = DE1` … `7 = DE1XXXL`). */
-private fun machineModelLabel(info: Map<MmrRegister, UInt>): String =
+internal fun machineModelLabel(info: Map<MmrRegister, UInt>): String =
     when (info[MmrRegister.MachineModel]?.toInt()) {
         1 -> "DE1"
         2 -> "DE1+"
@@ -1489,42 +1489,42 @@ private fun machineModelLabel(info: Map<MmrRegister, UInt>): String =
     }
 
 /** CPU-board revision — raw is `version × 1000` (raw 1100 → "v1.1"). */
-private fun cpuBoardLabel(info: Map<MmrRegister, UInt>): String {
+internal fun cpuBoardLabel(info: Map<MmrRegister, UInt>): String {
     val raw = info[MmrRegister.CpuBoardVersion]?.toInt() ?: return "—"
     // raw/1000 = major, (raw%1000)/100 = minor — interpolate Ints, no %f.
     return "v${raw / 1000}.${(raw % 1000) / 100}"
 }
 
 /** Machine serial number — raw word, shown as-is. */
-private fun serialLabel(info: Map<MmrRegister, UInt>): String =
+internal fun serialLabel(info: Map<MmrRegister, UInt>): String =
     info[MmrRegister.SerialNumber]?.let { "$it" } ?: "—"
 
 /** Heater mains voltage — wire value is `volts + 1000` (raw 1230 → 230 V). */
-private fun heaterVoltageLabel(info: Map<MmrRegister, UInt>): String {
+internal fun heaterVoltageLabel(info: Map<MmrRegister, UInt>): String {
     val raw = info[MmrRegister.HeaterVoltage]?.toInt() ?: return "—"
     return "${raw - 1000} V"
 }
 
 /** The current heater-voltage selection ("120" / "230") for the segmented control, or null. */
-private fun heaterVoltageValue(info: Map<MmrRegister, UInt>): String? =
+internal fun heaterVoltageValue(info: Map<MmrRegister, UInt>): String? =
     info[MmrRegister.HeaterVoltage]?.toInt()?.let { (it - 1000).toString() }
 
 /** Bengle cup-warmer plate present? Models 4–7 (core `has_cup_warmer`). */
-private fun hasCupWarmerPlate(info: Map<MmrRegister, UInt>): Boolean =
+internal fun hasCupWarmerPlate(info: Map<MmrRegister, UInt>): Boolean =
     (info[MmrRegister.MachineModel]?.toInt() ?: 0) in 4..7
 
 /** Cup-warmer plate temperature (°C), or null when the register is unread. */
-private fun cupWarmerTempValue(info: Map<MmrRegister, UInt>): Int? =
+internal fun cupWarmerTempValue(info: Map<MmrRegister, UInt>): Int? =
     info[MmrRegister.CupWarmerTemp]?.toInt()
 
 /** Flow-calibration multiplier — raw is `int(1000 × multiplier)` (raw 1000 → ×1.00). */
-private fun flowMultiplierValue(info: Map<MmrRegister, UInt>): Double? =
+internal fun flowMultiplierValue(info: Map<MmrRegister, UInt>): Double? =
     info[MmrRegister.CalibrationFlowMultiplier]?.let { it.toInt() / 1000.0 }
 
 /** Whether the GHC is present (GhcInfo bit 0). Null when the register is unread. */
-private fun ghcPresent(info: Map<MmrRegister, UInt>): Boolean? =
+internal fun ghcPresent(info: Map<MmrRegister, UInt>): Boolean? =
     info[MmrRegister.GhcInfo]?.let { (it.toInt() and 0x1) != 0 }
 
 /** Whether GHC start-from-machine mode is on (GhcMode != 0). Null when unread. */
-private fun ghcModeOn(info: Map<MmrRegister, UInt>): Boolean? =
+internal fun ghcModeOn(info: Map<MmrRegister, UInt>): Boolean? =
     info[MmrRegister.GhcMode]?.let { it.toInt() != 0 }

@@ -47,6 +47,17 @@ import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager
 import coffee.crema.core.ModeInfo
 import coffee.crema.core.RangeCapability
+import androidx.compose.ui.platform.LocalConfiguration
+import coffee.crema.ui.phone.PhoneBeanEditScreen
+import coffee.crema.ui.phone.PhoneBeansScreen
+import coffee.crema.ui.phone.PhoneBrewScreen
+import coffee.crema.ui.phone.PhoneHistoryScreen
+import coffee.crema.ui.phone.PhoneNavHost
+import coffee.crema.ui.phone.PhoneProfileEditScreen
+import coffee.crema.ui.phone.PhoneProfilesScreen
+import coffee.crema.ui.phone.PhoneRoasterEditScreen
+import coffee.crema.ui.phone.PhoneScaleScreen
+import coffee.crema.ui.phone.PhoneSettingsScreen
 import coffee.crema.ui.screens.BeanEditScreen
 import coffee.crema.ui.screens.BeansScreen
 import coffee.crema.ui.screens.BrewScreen
@@ -145,12 +156,68 @@ class MainActivity : ComponentActivity() {
                     if (keepOn) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                     else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 }
+                // Re-usable debug-panel slot (Phase-0 readout) — hosted at the
+                // `debug` route on both form factors.
+                val debugSlot: @Composable () -> Unit = {
+                    Surface(modifier = Modifier.fillMaxSize()) {
+                        MainScreen(
+                            viewModel = viewModel,
+                            onConnect = { withBlePermission(viewModel::connect) },
+                            onDisconnect = viewModel::disconnect,
+                            onConnectScale = { withBlePermission(viewModel::connectScale) },
+                            onDisconnectScale = viewModel::disconnectScale,
+                            onTareScale = viewModel::tareScale,
+                            onSetScaleVolume = viewModel::setScaleVolume,
+                            onSetScaleStandbyMinutes = viewModel::setScaleStandbyMinutes,
+                            onSetScaleFlowSmoothing = viewModel::setScaleFlowSmoothing,
+                            onSetScaleAntiMistouch = viewModel::setScaleAntiMistouch,
+                            onSetScaleMode = viewModel::setScaleMode,
+                            onSetScaleAutoStop = viewModel::setScaleAutoStop,
+                        )
+                    }
+                }
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background,
                     contentColor = MaterialTheme.colorScheme.onBackground,
                 ) {
                 Box(Modifier.fillMaxSize()) {
+                // ONE adaptive APK: compact width (< 600dp — a handset, or a
+                // tiny split-screen window) gets the phone shell (bottom nav +
+                // push details); anything wider keeps the tablet rail layout.
+                val isCompact = LocalConfiguration.current.screenWidthDp < 600
+                if (isCompact) {
+                    PhoneNavHost(
+                        brewContent = { navTo ->
+                            PhoneBrewScreen(viewModel, onNav = navTo, onConnect = onRailConnect)
+                        },
+                        scaleContent = { navTo ->
+                            PhoneScaleScreen(viewModel, onNav = navTo, onConnect = onRailConnect)
+                        },
+                        profilesContent = { navTo ->
+                            PhoneProfilesScreen(viewModel, onNav = navTo, onConnect = onRailConnect)
+                        },
+                        beansContent = { navTo ->
+                            PhoneBeansScreen(viewModel, onNav = navTo, onConnect = onRailConnect)
+                        },
+                        historyContent = { navTo ->
+                            PhoneHistoryScreen(viewModel, onNav = navTo, onConnect = onRailConnect)
+                        },
+                        settingsContent = { navTo ->
+                            PhoneSettingsScreen(viewModel, onNav = navTo, onConnect = onRailConnect)
+                        },
+                        profileEditContent = { back ->
+                            PhoneProfileEditScreen(viewModel, onBack = back)
+                        },
+                        beanEditContent = { back ->
+                            PhoneBeanEditScreen(viewModel, onBack = back)
+                        },
+                        roasterEditContent = { back ->
+                            PhoneRoasterEditScreen(viewModel, onBack = back)
+                        },
+                        debugContent = debugSlot,
+                    )
+                } else {
                 AppNavHost(
                     machineConnected = machineConnected,
                     scaleConnected = scaleConnected,
@@ -179,25 +246,9 @@ class MainActivity : ComponentActivity() {
                     profileEditContent = { back ->
                         ProfileEditScreen(viewModel, onBack = back)
                     },
-                    debugContent = {
-                        Surface(modifier = Modifier.fillMaxSize()) {
-                            MainScreen(
-                                viewModel = viewModel,
-                                onConnect = { withBlePermission(viewModel::connect) },
-                                onDisconnect = viewModel::disconnect,
-                                onConnectScale = { withBlePermission(viewModel::connectScale) },
-                                onDisconnectScale = viewModel::disconnectScale,
-                                onTareScale = viewModel::tareScale,
-                                onSetScaleVolume = viewModel::setScaleVolume,
-                                onSetScaleStandbyMinutes = viewModel::setScaleStandbyMinutes,
-                                onSetScaleFlowSmoothing = viewModel::setScaleFlowSmoothing,
-                                onSetScaleAntiMistouch = viewModel::setScaleAntiMistouch,
-                                onSetScaleMode = viewModel::setScaleMode,
-                                onSetScaleAutoStop = viewModel::setScaleAutoStop,
-                            )
-                        }
-                    },
+                    debugContent = debugSlot,
                 )
+                }
                 SnackbarHost(
                     hostState = snackbarHostState,
                     modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 16.dp),

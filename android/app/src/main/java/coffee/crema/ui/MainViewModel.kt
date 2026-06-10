@@ -269,6 +269,9 @@ data class MainUiState(
     val activeBeanId: String? = null,
     /** The bean currently open in the editor (`bean-edit` route), or null. */
     val editingBeanId: String? = null,
+    /** The roaster open in the pushed `roaster-edit` route (phone), or null =
+     *  a new-roaster draft when that route is open. */
+    val editingRoasterId: String? = null,
     /** A not-yet-saved new-bean draft the full editor edits — the `bean-edit`
      *  route resolves this when [editingBeanId] names a bean not yet in [beans]
      *  (the "Add bean" → full-editor path). Committed to the library on Save. */
@@ -1939,6 +1942,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         java.time.LocalDate.now(java.time.ZoneOffset.UTC).toString()
 
     // ── Roaster directory ───────────────────────────────────────────────────
+
+    /**
+     * Select the roaster the pushed `roaster-edit` route edits (phone form
+     * factor; the tablet edits roasters in an inline dialog). Null = a new
+     * roaster draft.
+     */
+    fun startEditRoaster(id: String?) {
+        _ui.update { it.copy(editingRoasterId = id) }
+    }
 
     /** Add a roaster to the directory. Persisted. */
     fun addRoaster(name: String, website: String?, city: String?, country: String?, notes: String) {
