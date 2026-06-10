@@ -53,6 +53,7 @@ import coffee.crema.profiles.quickPresetJson
 import coffee.crema.profiles.profileIdOf
 import coffee.crema.profiles.SegmentEdit
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -536,7 +537,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      */
     private val bleScanner = BleScanner(
         transport = bleTransport,
-        onStatus = { line -> _ui.value = _ui.value.copy(status = line) },
+        onStatus = { line -> _ui.update { it.copy(status = line) } },
     )
 
     /**
@@ -554,7 +555,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         bridge = bridge,
         recorder = bleRecorder,
         onCoreOutput = ::onCoreOutputJson,
-        onStatus = { line -> _ui.value = _ui.value.copy(status = line) },
+        onStatus = { line -> _ui.update { it.copy(status = line) } },
     )
 
     /**
@@ -569,7 +570,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         bridge = bridge,
         recorder = bleRecorder,
         onCoreOutput = ::onCoreOutputJson,
-        onStatus = { line -> _ui.value = _ui.value.copy(status = line) },
+        onStatus = { line -> _ui.update { it.copy(status = line) } },
         onScaleIdentified = ::refreshScaleCapabilities,
     )
 
@@ -580,7 +581,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             var wasReady = false
             ble.state.collect { state ->
-                _ui.value = _ui.value.copy(bleState = state)
+                _ui.update { it.copy(bleState = state) }
                 // Fire the machine read-sweep once per connection, on the first
                 // transition into READY (services discovered + subscribed). The
                 // reads emit read-request commands whose replies arrive later as
@@ -595,7 +596,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         viewModelScope.launch {
             scale.state.collect { state ->
-                _ui.value = _ui.value.copy(scaleState = state)
+                _ui.update { it.copy(scaleState = state) }
             }
         }
         loadBuiltinProfiles()
@@ -666,11 +667,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // Self-heal a stale selection (deleted custom, hidden built-in restored
         // from prefs) by reseeding to the first visible profile.
         val current = _ui.value.activeProfileId?.takeIf { id -> all.any { it.id == id } }
-        _ui.value = _ui.value.copy(
+        _ui.update { it.copy(
             profiles = all,
             hiddenProfileIds = hiddenIds,
             activeProfileId = current ?: all.firstOrNull { it.id !in hiddenIds }?.id,
-        )
+        ) }
     }
 
     /** Load the persisted custom profiles into the merged list at startup. */
@@ -690,7 +691,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  (AppPrefs.activeProfileId) so the selection survives a restart. */
     fun setActiveProfile(id: String) {
         // Switching profiles clears any Quick-Controls override (re-seeds from new).
-        _ui.value = _ui.value.copy(activeProfileId = id, brewParams = null)
+        _ui.update { it.copy(activeProfileId = id, brewParams = null) }
         persistPrefs()
     }
 
@@ -723,12 +724,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Apply a Quick-Controls brew override (dose/yield/brew-temp). Transient —
      *  not saved to the profile; baked into the next shot's upload by [startShot]. */
     fun quickAdjustBrew(dose: Double, yieldOut: Double, brewTemp: Double) {
-        _ui.value = _ui.value.copy(brewParams = BrewParams(dose, yieldOut, brewTemp))
+        _ui.update { it.copy(brewParams = BrewParams(dose, yieldOut, brewTemp)) }
     }
 
     /** Reset the Quick-Controls override back to the active profile's recipe. */
     fun resetBrewParams() {
-        _ui.value = _ui.value.copy(brewParams = null)
+        _ui.update { it.copy(brewParams = null) }
     }
 
     /**
@@ -760,7 +761,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Open an existing saved (custom) profile in the editor. */
     fun startEditProfile(id: String) {
         draftProfileJson = null
-        _ui.value = _ui.value.copy(editingProfileId = id, draftProfile = null)
+        _ui.update { it.copy(editingProfileId = id, draftProfile = null) }
     }
 
     /**
@@ -814,7 +815,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         draftProfileJson = fullJson
-        _ui.value = _ui.value.copy(editingProfileId = thin.id, draftProfile = thin)
+        _ui.update { it.copy(editingProfileId = thin.id, draftProfile = thin) }
     }
 
     /**
@@ -889,7 +890,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // the isExisting branch rather than appending a duplicate. The next
         // start*Profile / cancel resets editingProfileId.
         draftProfileJson = null
-        _ui.value = _ui.value.copy(draftProfile = null)
+        _ui.update { it.copy(draftProfile = null) }
         refreshProfiles()
         // Make the just-saved profile the active one so the edit is reflected on
         // Brew. Editing a built-in saves to a fresh custom copy (built-ins are
@@ -902,7 +903,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Close the editor without saving (discards any new / duplicated draft). */
     fun cancelProfileEdit() {
         draftProfileJson = null
-        _ui.value = _ui.value.copy(editingProfileId = null, draftProfile = null)
+        _ui.update { it.copy(editingProfileId = null, draftProfile = null) }
     }
 
     /**
@@ -914,7 +915,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (customProfilesJson.none { profileIdOf(it, json) == id }) return
         customProfilesJson = customProfilesJson.filterNot { profileIdOf(it, json) == id }
         if (_ui.value.activeProfileId == id) {
-            _ui.value = _ui.value.copy(activeProfileId = null)
+            _ui.update { it.copy(activeProfileId = null) }
         }
         refreshProfiles()
         persistCustomProfiles()
@@ -927,7 +928,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // If the hidden profile was active, drop the selection so refreshProfiles
         // re-seeds the Brew header to a still-visible profile.
         if (_ui.value.activeProfileId == id) {
-            _ui.value = _ui.value.copy(activeProfileId = null)
+            _ui.update { it.copy(activeProfileId = null) }
         }
         refreshProfiles()
         val snapshot = hiddenIds
@@ -1088,7 +1089,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val existing = _ui.value.history.map { it.id }.toHashSet()
             val toAdd = shots.filterNot { it.id in existing }
             val next = toAdd + _ui.value.history
-            _ui.value = _ui.value.copy(history = next)
+            _ui.update { it.copy(history = next) }
             notifyUser("Imported ${toAdd.size} shot(s)")
             historyStore.save(next)
         }
@@ -1097,20 +1098,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Remove a stored shot from the local history. Persisted. */
     fun deleteShot(id: String) {
         val next = _ui.value.history.filterNot { it.id == id }
-        _ui.value = _ui.value.copy(history = next)
+        _ui.update { it.copy(history = next) }
         viewModelScope.launch { historyStore.save(next) }
     }
 
     /** Request that History select [id] when it next opens (the Brew "Last shot"
      *  card tap-through). */
     fun openShotInHistory(id: String?) {
-        if (id != null) _ui.value = _ui.value.copy(pendingHistoryShotId = id)
+        if (id != null) _ui.update { it.copy(pendingHistoryShotId = id) }
     }
 
     /** Clear the pending History selection once HistoryScreen has applied it. */
     fun consumePendingHistoryShot() {
         if (_ui.value.pendingHistoryShotId != null) {
-            _ui.value = _ui.value.copy(pendingHistoryShotId = null)
+            _ui.update { it.copy(pendingHistoryShotId = null) }
         }
     }
 
@@ -1186,7 +1187,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         pendingBrew = true
-        _ui.value = _ui.value.copy(profileUploading = true, profileUploadProgress = null)
+        _ui.update { it.copy(profileUploading = true, profileUploadProgress = null) }
         onCoreOutputJson(raw)
         // Backstop: if no ProfileUploadCompleted arrives, clear the pending brew
         // so the UI doesn't hang in "uploading" forever.
@@ -1194,7 +1195,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             delay(PROFILE_UPLOAD_TIMEOUT_MS)
             if (pendingBrew) {
                 pendingBrew = false
-                _ui.value = _ui.value.copy(profileUploading = false, profileUploadProgress = null)
+                _ui.update { it.copy(profileUploading = false, profileUploadProgress = null) }
                 notifyUser("Profile upload timed out \u2014 shot not started")
             }
         }
@@ -1202,7 +1203,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Called from the UI once the BLE runtime permissions have been granted. */
     fun connect() {
-        _ui.value = _ui.value.copy(eventLog = emptyList())
+        _ui.update { it.copy(eventLog = emptyList()) }
         // Show "scanning" on the connection-status UI while the shared scanner
         // hunts; the scanner's onFound hands the matched DE1 to ble.connect.
         ble.markScanning()
@@ -1218,7 +1219,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         bleScanner.cancel(SCAN_LABEL_DE1)
         ble.disconnect()
         pendingBrew = false
-        _ui.value = _ui.value.copy(
+        _ui.update { it.copy(
             bleState = De1BleManager.State.DISCONNECTED,
             machineState = null,
             machineStateName = null,
@@ -1249,7 +1250,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             lineFreqHz = null,
             profileUploading = false,
             profileUploadProgress = null,
-        )
+        ) }
     }
 
     // ---- Machine control (AND5) -------------------------------------------
@@ -1322,7 +1323,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             appendLog("Firmware update status: $status")
         }.onFailure { appendLog("Firmware update status failed: ${it.message}") }
         val freq = runCatching { bridge.lineFrequencyHz() }.getOrNull()
-        _ui.value = _ui.value.copy(lineFreqHz = freq)
+        _ui.update { it.copy(lineFreqHz = freq) }
     }
 
     // ── Settings: machine setters (Settings → Machine / Advanced / Service) ────
@@ -1349,9 +1350,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         onCoreOutputJson(raw)
         // Optimistically reflect the write so the toggle tracks immediately;
         // the GhcMode register reply (re-read below) then confirms it.
-        _ui.value = _ui.value.copy(
-            de1MachineInfo = _ui.value.de1MachineInfo + (MmrRegister.GhcMode to (if (enabled) 1u else 0u)),
-        )
+        _ui.update { it.copy(
+            de1MachineInfo = it.de1MachineInfo + (MmrRegister.GhcMode to (if (enabled) 1u else 0u)),
+        ) }
         runCatching { bridge.readMmr(MmrReg.GHC_MODE) }.getOrNull()?.let(::onCoreOutputJson)
     }
 
@@ -1389,7 +1390,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         val resolved = runCatching { bridge.lineFrequencyHz() }.getOrNull() ?: hz
-        _ui.value = _ui.value.copy(lineFreqHz = resolved)
+        _ui.update { it.copy(lineFreqHz = resolved) }
     }
 
     /**
@@ -1401,7 +1402,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             appendLog("Set max shot duration failed: ${it.message}")
         }
         if (seconds != null) {
-            _ui.value = _ui.value.copy(maxShotDurationS = seconds)
+            _ui.update { it.copy(maxShotDurationS = seconds) }
             viewModelScope.launch { settingsStore.save(currentPrefs()) }
         }
     }
@@ -1441,12 +1442,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Queue a user-facing message (snackbar) + keep it in the log. */
     private fun notifyUser(message: String) {
         appendLog(message)
-        _ui.value = _ui.value.copy(userMessages = _ui.value.userMessages + message, status = message)
+        _ui.update { it.copy(userMessages = it.userMessages + message, status = message) }
     }
 
     /** MainActivity consumed the head snackbar message. */
     fun consumeUserMessage() {
-        _ui.value = _ui.value.copy(userMessages = _ui.value.userMessages.drop(1))
+        _ui.update { it.copy(userMessages = it.userMessages.drop(1)) }
     }
 
     /**
@@ -1471,7 +1472,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Enable/disable auto-tare at shot start (Quick Controls). Optimistic. Persisted. */
     fun setAutoTare(enabled: Boolean) {
-        _ui.value = _ui.value.copy(autoTare = enabled)
+        _ui.update { it.copy(autoTare = enabled) }
         runCatching { bridge.setAutoTare(enabled) }.onFailure {
             appendLog("Set auto-tare failed: ${it.message}")
         }
@@ -1483,7 +1484,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * the active profile; this just arms/disarms the behaviour. Optimistic.
      */
     fun setStopOnWeight(enabled: Boolean) {
-        _ui.value = _ui.value.copy(stopOnWeight = enabled)
+        _ui.update { it.copy(stopOnWeight = enabled) }
         runCatching { bridge.setStopOnWeight(enabled) }.onFailure {
             appendLog("Set stop-on-weight failed: ${it.message}")
         }
@@ -1495,7 +1496,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * MMR write) routed through the shared command path. Optimistic.
      */
     fun setSteamEco(enabled: Boolean) {
-        _ui.value = _ui.value.copy(steamEco = enabled)
+        _ui.update { it.copy(steamEco = enabled) }
         persistPrefs()
         val raw = runCatching {
             bridge.enableSteamEcoMode(enabled, System.currentTimeMillis().toULong())
@@ -1511,37 +1512,37 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val next = _ui.value.chartChannels.toMutableSet().apply {
             if (enabled) add(key) else remove(key)
         }
-        _ui.value = _ui.value.copy(chartChannels = next)
+        _ui.update { it.copy(chartChannels = next) }
         persistPrefs()
     }
 
     /** Persist the pre-shot flush preference (consumed by a later shot-sequence pass). */
     fun setPreFlush(enabled: Boolean) {
-        _ui.value = _ui.value.copy(preFlush = enabled)
+        _ui.update { it.copy(preFlush = enabled) }
         persistPrefs()
     }
 
     /** Persist the post-steam purge preference (consumed by a later shot-sequence pass). */
     fun setSteamPurge(enabled: Boolean) {
-        _ui.value = _ui.value.copy(steamPurge = enabled)
+        _ui.update { it.copy(steamPurge = enabled) }
         persistPrefs()
     }
 
     /** Keep the screen awake while a shot pulls (Settings → Display). Persisted. */
     fun setKeepScreenOnBrew(enabled: Boolean) {
-        _ui.value = _ui.value.copy(keepScreenOnBrew = enabled)
+        _ui.update { it.copy(keepScreenOnBrew = enabled) }
         persistPrefs()
     }
 
     /** Settings → Brew defaults: the dose / ratio / temp / pre-infusion a NEW
      *  profile seeds from ([startNewProfile] → brewDefaultsJson). Persisted. */
     fun setBrewDefaults(doseG: Float, ratio: Float, brewTempC: Float, preinfuseS: Float) {
-        _ui.value = _ui.value.copy(
+        _ui.update { it.copy(
             defaultDoseG = doseG,
             defaultRatio = ratio,
             defaultBrewTempC = brewTempC,
             defaultPreinfuseS = preinfuseS,
-        )
+        ) }
         persistPrefs()
     }
 
@@ -1550,11 +1551,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Load the persisted bean library into the UI snapshot at startup. */
     private suspend fun loadLibrary() {
         val lib = library.load()
-        _ui.value = _ui.value.copy(
+        _ui.update { it.copy(
             beans = lib.beans,
             roasters = lib.roasters,
             activeBeanId = lib.activeBeanId ?: lib.beans.firstOrNull()?.id,
-        )
+        ) }
     }
 
     /** Persist the current bean library (beans + roasters + active selection). */
@@ -1710,21 +1711,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         )
         persistLibrary()
         val bn = newBeans.size; val rn = newRoasters.size
-        _ui.value = _ui.value.copy(
+        _ui.update { it.copy(
             status = "Imported $bn bean${if (bn == 1) "" else "s"} · $rn roaster${if (rn == 1) "" else "s"}",
-        )
+        ) }
     }
 
     /** Open a bean in the editor (the `bean-edit` route reads this). */
     fun startEditBean(id: String) {
-        _ui.value = _ui.value.copy(editingBeanId = id, draftBean = null)
+        _ui.update { it.copy(editingBeanId = id, draftBean = null) }
     }
 
     /** Start a brand-new bean in the full editor — stash a blank draft and point
      *  the editor at it. Added to the library only on Save (via [updateBean]). */
     fun startNewBean() {
         val draft = newBean(name = "", roasterId = null, roastLevel = null, roastedOn = null, nowMs = System.currentTimeMillis())
-        _ui.value = _ui.value.copy(draftBean = draft, editingBeanId = draft.id)
+        _ui.update { it.copy(draftBean = draft, editingBeanId = draft.id) }
     }
 
     /**
@@ -1742,17 +1743,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // The shell owns the full field mapping (the core Bean already models
         // every field); we only resolve the roaster + stamp updatedAt here.
         val updated = transform(existing).copy(roasterId = roasterId, updatedAt = now)
-        _ui.value = _ui.value.copy(
+        _ui.update { it.copy(
             beans = if (isNew) s.beans + updated else s.beans.map { if (it.id == id) updated else it },
             roasters = roasters,
             draftBean = null,
-        )
+        ) }
         persistLibrary()
     }
 
     /** Set (or with `null`, clear) the active bean (the Brew bean block). Persisted. */
     fun setActiveBean(id: String?) {
-        _ui.value = _ui.value.copy(activeBeanId = id)
+        _ui.update { it.copy(activeBeanId = id) }
         persistLibrary()
     }
 
@@ -1760,10 +1761,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun deleteBean(id: String) {
         val remaining = _ui.value.beans.filterNot { it.id == id }
         val wasActive = _ui.value.activeBeanId == id
-        _ui.value = _ui.value.copy(
+        _ui.update { it.copy(
             beans = remaining,
-            activeBeanId = if (wasActive) remaining.firstOrNull()?.id else _ui.value.activeBeanId,
-        )
+            activeBeanId = if (wasActive) remaining.firstOrNull()?.id else it.activeBeanId,
+        ) }
         persistLibrary()
     }
 
@@ -1826,7 +1827,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             country = country?.takeIf { it.isNotBlank() },
             notes = notes,
         )
-        _ui.value = _ui.value.copy(roasters = _ui.value.roasters + r)
+        _ui.update { it.copy(roasters = it.roasters + r) }
         persistLibrary()
     }
 
@@ -1834,8 +1835,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun updateRoaster(id: String, name: String, website: String?, city: String?, country: String?, notes: String) {
         if (name.isBlank()) return
         val now = System.currentTimeMillis()
-        _ui.value = _ui.value.copy(
-            roasters = _ui.value.roasters.map {
+        _ui.update { it.copy(
+            roasters = it.roasters.map {
                 if (it.id == id) it.copy(
                     name = name.trim(),
                     website = website?.takeIf { w -> w.isNotBlank() },
@@ -1845,7 +1846,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     updatedAt = now,
                 ) else it
             },
-        )
+        ) }
         persistLibrary()
     }
 
@@ -1871,7 +1872,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Load the persisted shot log at startup. */
     private suspend fun loadHistory() {
-        _ui.value = _ui.value.copy(history = historyStore.load())
+        _ui.update { it.copy(history = historyStore.load()) }
     }
 
     /**
@@ -1909,7 +1910,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             samples = downsampleForStorage(s.shotTelemetry),
         )
         val next = (listOf(shot) + s.history).take(HistoryStore.MAX_SHOTS)
-        _ui.value = _ui.value.copy(history = next)
+        _ui.update { it.copy(history = next) }
         viewModelScope.launch { historyStore.save(next) }
     }
 
@@ -1937,10 +1938,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private suspend fun loadMaintenance() {
         val state = maintenanceStore.load()
         maintenanceTotalLitres = state.totalLitres
-        _ui.value = _ui.value.copy(
+        _ui.update { it.copy(
             maintenance = state,
             maintenanceReadout = computeMaintenanceReadout(state),
-        )
+        ) }
     }
 
     /**
@@ -1966,10 +1967,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      */
     private fun flushMaintenance() {
         val next = _ui.value.maintenance.copy(totalLitres = maintenanceTotalLitres)
-        _ui.value = _ui.value.copy(
+        _ui.update { it.copy(
             maintenance = next,
             maintenanceReadout = computeMaintenanceReadout(next),
-        )
+        ) }
         viewModelScope.launch { maintenanceStore.save(next) }
     }
 
@@ -2036,10 +2037,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Fold a mark action's new state into the ui-state, recompute, and persist. */
     private fun saveMaintenance(next: MaintenanceState) {
-        _ui.value = _ui.value.copy(
+        _ui.update { it.copy(
             maintenance = next,
             maintenanceReadout = computeMaintenanceReadout(next),
-        )
+        ) }
         viewModelScope.launch { maintenanceStore.save(next) }
     }
 
@@ -2048,7 +2049,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Load persisted app preferences at startup. */
     private suspend fun loadPrefs() {
         val p = settingsStore.load()
-        _ui.value = _ui.value.copy(
+        _ui.update { it.copy(
             themeMode = p.themeMode,
             maxShotDurationS = p.maxShotDurationS,
             autoTare = p.autoTare,
@@ -2064,8 +2065,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             defaultPreinfuseS = p.defaultPreinfuseS,
             // Restore the last session's profile selection; refreshProfiles
             // self-heals if the id no longer resolves (e.g. deleted custom).
-            activeProfileId = p.activeProfileId ?: _ui.value.activeProfileId,
-        )
+            activeProfileId = p.activeProfileId ?: it.activeProfileId,
+        ) }
         // Push the persisted cap + behaviour toggles to the core so they're live
         // from launch (the core doesn't echo these back as events).
         runCatching { bridge.setMaxShotDuration(p.maxShotDurationS) }
@@ -2076,7 +2077,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Set the theme mode (`"system"` / `"light"` / `"dark"`) and persist. */
     fun setThemeMode(mode: String) {
-        _ui.value = _ui.value.copy(themeMode = mode)
+        _ui.update { it.copy(themeMode = mode) }
         persistPrefs()
     }
 
@@ -2084,7 +2085,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun resetPreferences() {
         val def = AppPrefs()
         viewModelScope.launch { settingsStore.save(def) }
-        _ui.value = _ui.value.copy(
+        _ui.update { it.copy(
             themeMode = def.themeMode,
             maxShotDurationS = def.maxShotDurationS,
             autoTare = def.autoTare,
@@ -2098,7 +2099,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             defaultRatio = def.defaultRatio,
             defaultBrewTempC = def.defaultBrewTempC,
             defaultPreinfuseS = def.defaultPreinfuseS,
-        )
+        ) }
         runCatching { bridge.setMaxShotDuration(def.maxShotDurationS) }
     }
 
@@ -2122,7 +2123,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             settingsStore.save(AppPrefs())
             maintenanceStore.save(freshMaintenance)
         }
-        _ui.value = _ui.value.copy(
+        _ui.update { it.copy(
             beans = emptyList(),
             roasters = emptyList(),
             activeBeanId = null,
@@ -2131,7 +2132,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             maintenance = freshMaintenance,
             maintenanceReadout = computeMaintenanceReadout(freshMaintenance),
             themeMode = AppPrefs().themeMode,
-        )
+        ) }
         refreshProfiles()
     }
 
@@ -2146,7 +2147,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun disconnectScale() {
         bleScanner.cancel(SCAN_LABEL_SCALE)
         scale.disconnect()
-        _ui.value = _ui.value.copy(
+        _ui.update { it.copy(
             scaleState = ScaleBleManager.State.DISCONNECTED,
             scaleWeightG = null,
             scaleFlowGPerS = null,
@@ -2164,7 +2165,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             scaleName = null,
             scaleFirmware = null,
             scaleSerial = null,
-        )
+        ) }
     }
 
     /**
@@ -2193,10 +2194,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 json.decodeFromString(ScaleCapabilities.serializer(), it)
             }.getOrNull()
         }
-        _ui.value = _ui.value.copy(
+        _ui.update { it.copy(
             scaleCapabilities = caps,
             scaleName = advertisedName,
-        )
+        ) }
 
         val queryRaw = runCatching { bridge.queryScaleSettings() }.getOrElse {
             appendLog("Query scale settings failed: ${it.message}")
@@ -2225,7 +2226,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         } else {
             level
         }
-        _ui.value = _ui.value.copy(scaleVolume = clamped)
+        _ui.update { it.copy(scaleVolume = clamped) }
         val raw = runCatching {
             bridge.setScaleVolume(clamped.toUByte())
         }.getOrElse {
@@ -2254,7 +2255,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         } else {
             minutes
         }
-        _ui.value = _ui.value.copy(scaleStandbyMinutes = clamped)
+        _ui.update { it.copy(scaleStandbyMinutes = clamped) }
         val raw = runCatching {
             bridge.setScaleStandby(clamped.toUByte())
         }.getOrElse {
@@ -2273,7 +2274,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * stream then catches up and confirms the scale's real state.
      */
     fun setScaleFlowSmoothing(enabled: Boolean) {
-        _ui.value = _ui.value.copy(scaleFlowSmoothing = enabled)
+        _ui.update { it.copy(scaleFlowSmoothing = enabled) }
         val raw = runCatching {
             bridge.setScaleFlowSmoothing(enabled)
         }.getOrElse {
@@ -2291,7 +2292,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * optimistically (the value is not read back).
      */
     fun setScaleAntiMistouch(enabled: Boolean) {
-        _ui.value = _ui.value.copy(scaleAntiMistouch = enabled)
+        _ui.update { it.copy(scaleAntiMistouch = enabled) }
         val raw = runCatching {
             bridge.setScaleAntiMistouch(enabled)
         }.getOrElse {
@@ -2315,7 +2316,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * response) then catches up and confirms the scale's real mode.
      */
     fun setScaleMode(modeId: Int) {
-        _ui.value = _ui.value.copy(scaleActiveMode = modeId)
+        _ui.update { it.copy(scaleActiveMode = modeId) }
         val raw = runCatching {
             bridge.setScaleMode(modeId.toUByte())
         }.getOrElse {
@@ -2336,7 +2337,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * the scale's real mode.
      */
     fun setScaleAutoStop(modeId: Int) {
-        _ui.value = _ui.value.copy(scaleAutoStop = modeId)
+        _ui.update { it.copy(scaleAutoStop = modeId) }
         val raw = runCatching {
             bridge.setScaleAutoStop(modeId.toUByte())
         }.getOrElse {
@@ -2446,11 +2447,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         when (event) {
             is Event.MachineStateChanged -> {
                 val c = event.content
-                _ui.value = _ui.value.copy(
+                _ui.update { it.copy(
                     machineState = "${c.state.string} / ${c.substate.string}",
                     machineStateName = c.state.string,
                     machineSubstate = c.substate.string,
-                )
+                ) }
                 appendLog("MachineState -> ${c.state.string} / ${c.substate.string}")
             }
             is Event.ShotStarted -> {
@@ -2459,22 +2460,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 // Reset the maintenance dt-tracker so the first telemetry sample of
                 // this session adds no wall-clock Δ (no phantom between-session water).
                 lastTelemetryMs = null
-                _ui.value = _ui.value.copy(
+                _ui.update { it.copy(
                     shotInProgress = true,
                     shotFrame = 0,
                     shotElapsedMs = 0,
                     dispensedVolume = 0f,
                     shotTelemetry = emptyList(),
-                )
+                ) }
                 appendLog("Shot started")
             }
             is Event.ShotPhaseChanged -> {
                 val phase = event.content.phase.string
-                _ui.value = _ui.value.copy(shotPhase = phase)
+                _ui.update { it.copy(shotPhase = phase) }
                 appendLog("Shot phase -> $phase")
             }
             is Event.ShotFrameChanged -> {
-                _ui.value = _ui.value.copy(shotFrame = event.content.frame.toInt())
+                _ui.update { it.copy(shotFrame = event.content.frame.toInt()) }
                 appendLog("Shot frame -> ${event.content.frame}")
             }
             is Event.Telemetry -> {
@@ -2538,24 +2539,24 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 // show the scale's real current state — `device_*` is null for
                 // scales that do not report a setting, in which case the
                 // control keeps its last value.
-                _ui.value = _ui.value.copy(
+                _ui.update { it.copy(
                     scaleWeightG = r.weight,
                     scaleFlowGPerS = r.device_flow,
                     scaleTimerMs = r.device_timer?.toLong(),
-                    scaleVolume = r.device_volume?.toInt() ?: _ui.value.scaleVolume,
+                    scaleVolume = r.device_volume?.toInt() ?: it.scaleVolume,
                     scaleStandbyMinutes = r.device_standby?.toInt()
-                        ?: _ui.value.scaleStandbyMinutes,
+                        ?: it.scaleStandbyMinutes,
                     scaleBatteryPercent = r.device_battery?.toInt()
-                        ?: _ui.value.scaleBatteryPercent,
+                        ?: it.scaleBatteryPercent,
                     scaleFlowSmoothing = r.device_flow_smoothing
-                        ?: _ui.value.scaleFlowSmoothing,
+                        ?: it.scaleFlowSmoothing,
                     scaleAutoStop = r.device_auto_stop?.toInt()
-                        ?: _ui.value.scaleAutoStop,
-                )
+                        ?: it.scaleAutoStop,
+                ) }
                 // Weight is high-rate; do not flood the log with every reading.
             }
             is Event.WaterLevel -> {
-                _ui.value = _ui.value.copy(waterLevelMm = event.content.level)
+                _ui.update { it.copy(waterLevelMm = event.content.level) }
                 appendLog("Water level: %.0fmm".format(event.content.level))
             }
             is Event.StopTriggered ->
@@ -2565,7 +2566,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 val now = System.currentTimeMillis()
                 // Leaving a shot: clear the extracting flag and capture the
                 // summary for the Brew "Last shot" card.
-                _ui.value = _ui.value.copy(
+                _ui.update { it.copy(
                     shotInProgress = false,
                     lastShot = LastShot(
                         durationMs = c.duration.toLong(),
@@ -2576,7 +2577,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         // Same id captureCompletedShot stamps, so the card links to it.
                         id = "shot:$now",
                     ),
-                )
+                ) }
                 appendLog("Shot completed: ${c.duration}ms, ${c.sample_count} samples")
                 captureCompletedShot(c.duration.toLong(), c.final_weight, c.peak_pressure, c.peak_temp, now)
                 // A pour just finished: flush the integrated water into the persisted
@@ -2602,7 +2603,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             is Event.SteamEcoModeChanged ->
                 appendLog("Steam eco mode: ${event.content.eco}")
             is Event.ScaleStale -> {
-                _ui.value = _ui.value.copy(scaleWeightG = null)
+                _ui.update { it.copy(scaleWeightG = null) }
                 appendLog("Scale stale")
             }
             is Event.ScaleConfig -> {
@@ -2614,15 +2615,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 // other fields are null — fold in whatever is present and keep
                 // the last value for the rest, the same two-way pattern the
                 // weight-stream settings use.
-                _ui.value = _ui.value.copy(
-                    scaleAntiMistouch = c.anti_mistouch ?: _ui.value.scaleAntiMistouch,
-                    scaleActiveMode = c.active_mode?.toInt() ?: _ui.value.scaleActiveMode,
+                _ui.update { it.copy(
+                    scaleAntiMistouch = c.anti_mistouch ?: it.scaleAntiMistouch,
+                    scaleActiveMode = c.active_mode?.toInt() ?: it.scaleActiveMode,
                     // The `03 0c` serial response carries firmware + serial;
                     // the `03 0e` settings response leaves both null — fold in
                     // whatever is present and keep the last value otherwise.
-                    scaleFirmware = c.firmware ?: _ui.value.scaleFirmware,
-                    scaleSerial = c.serial ?: _ui.value.scaleSerial,
-                )
+                    scaleFirmware = c.firmware ?: it.scaleFirmware,
+                    scaleSerial = c.serial ?: it.scaleSerial,
+                ) }
                 when {
                     c.anti_mistouch != null ->
                         appendLog(
@@ -2645,14 +2646,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // scaling). Keep a log line so the data stays visible in the debug
             // readout too.
             is Event.Firmware -> {
-                _ui.value = _ui.value.copy(de1Firmware = event.content.firmware_string)
+                _ui.update { it.copy(de1Firmware = event.content.firmware_string) }
                 appendLog("Firmware: ${event.content.firmware_string}")
             }
             is Event.MmrValue -> {
                 val c = event.content
-                _ui.value = _ui.value.copy(
-                    de1MachineInfo = _ui.value.de1MachineInfo + (c.register to c.value),
-                )
+                _ui.update { it.copy(
+                    de1MachineInfo = it.de1MachineInfo + (c.register to c.value),
+                ) }
                 appendLog("MMR ${c.register}: ${c.value}")
             }
             // Calibration replies (current / factory) have no settings row yet
@@ -2671,18 +2672,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         event.content.method,
                 )
             is Event.ProfileUploadStarted -> {
-                _ui.value = _ui.value.copy(profileUploading = true, profileUploadProgress = null)
+                _ui.update { it.copy(profileUploading = true, profileUploadProgress = null) }
                 appendLog("Uploading profile: ${event.content.title}")
             }
             is Event.ProfileUploadProgress -> {
                 val c = event.content
                 // High-rate (one per frame ack); update the progress hint, no log.
-                _ui.value = _ui.value.copy(
+                _ui.update { it.copy(
                     profileUploadProgress = "${c.acks_received}/${c.total_acks}",
-                )
+                ) }
             }
             is Event.ProfileUploadCompleted -> {
-                _ui.value = _ui.value.copy(profileUploading = false, profileUploadProgress = null)
+                _ui.update { it.copy(profileUploading = false, profileUploadProgress = null) }
                 appendLog("Profile uploaded: ${event.content.title}")
                 // Gated start: the profile is now on the DE1. Observe the
                 // firmware's profile-download guard window, then request Espresso.
@@ -2696,7 +2697,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
             is Event.ProfileUploadFailed -> {
                 pendingBrew = false
-                _ui.value = _ui.value.copy(profileUploading = false, profileUploadProgress = null)
+                _ui.update { it.copy(profileUploading = false, profileUploadProgress = null) }
                 appendLog("Profile upload failed: ${event.content.reason}")
             }
             // Shot-settings-read events surface in the real screens (M5), not this
@@ -2712,7 +2713,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             line,
         )
         val log = (listOf(stamped) + _ui.value.eventLog).take(MAX_LOG_LINES)
-        _ui.value = _ui.value.copy(eventLog = log)
+        _ui.update { it.copy(eventLog = log) }
     }
 
     override fun onCleared() {
