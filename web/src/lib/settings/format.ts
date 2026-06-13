@@ -215,17 +215,21 @@ export function displayDecimals(dim: Dimension, s: Settings): number {
 	}
 }
 
-/** Canonical → display number (just the number — no formatting). */
+/**
+ * Canonical → display number (just the number — no formatting). The inverse of
+ * {@link displayToCanonical}; both delegate to the core's `de1_domain::units`
+ * helpers so the conversion constants live in exactly one place.
+ */
 export function canonicalToDisplay(dim: Dimension, canonical: number, s: Settings): number {
 	switch (dim) {
 		case 'weight':
-			return s.weightUnit === 'oz' ? canonical / 28.3495 : canonical;
+			return s.weightUnit === 'oz' ? wasmGramsToOz(canonical) : canonical;
 		case 'temp':
-			return s.tempUnit === 'F' ? canonical * 1.8 + 32 : canonical;
+			return s.tempUnit === 'F' ? wasmCelsiusToFahrenheit(canonical) : canonical;
 		case 'pressure':
-			return s.pressureUnit === 'psi' ? canonical * 14.5038 : canonical;
+			return s.pressureUnit === 'psi' ? wasmBarToPsi(canonical) : canonical;
 		case 'volume':
-			return s.volumeUnit === 'floz' ? canonical / 29.5735 : canonical;
+			return s.volumeUnit === 'floz' ? wasmMlToFlOz(canonical) : canonical;
 	}
 }
 
