@@ -1,6 +1,6 @@
 # 11 — Wire Android profile-fingerprint upload-skip
 
-- **Status:** deferred (brew-critical, not verifiable without on-device test — see Comments)
+- **Status:** done (implemented blind; decision unit-tested, end-to-end DE1-gated — see Comments)
 - **Severity:** P3
 - **Area:** Android
 - **Punchlist:** T1-11 — `../PUNCHLIST.md`
@@ -51,3 +51,27 @@ re-upload mirror of `ensureLoadedMatches`.
 P3 pure optimization vs. risk of breaking shot-start, unverifiable here →
 deferred until it can be exercised on an emulator. The FFI (`profileFingerprint`)
 is already present, so it's ready to wire when that's possible.
+
+### 2026-06-13 — implemented (blind, per request)
+
+Implemented in `MainViewModel`, mirroring the web `ProfileSync` semantics:
+
+- `startShot` computes `profileFingerprint(effectiveJson, null)` (the effective
+  profile fully determines the upload, so this is self-consistent); if it matches
+  `lastUploadedFingerprint` on a still-READY DE1, it **skips the upload** and goes
+  straight to the gated Espresso request.
+- `ProfileUploadCompleted` commits the in-flight fingerprint to
+  `lastUploadedFingerprint` (the DE1 now holds it); `ProfileUploadFailed` + the
+  upload-timeout clear the in-flight one.
+- **Invalidation:** the `ble.state` collector clears `lastUploadedFingerprint` on
+  any drop out of READY — so a skip never brews against a stale/absent profile
+  after a reconnect (the brew-safety concern; matches web's clear-on-disconnect).
+- **Safe degradation:** a null fingerprint (hash failure) ⇒ never skip ⇒ the
+  previous always-upload behaviour.
+
+**Verification:** the pure decision is extracted to a top-level `shouldSkipProfileUpload`
+and unit-tested (`ProfileUploadSkipTest`, 5 cases) — match/ready, differ, not-ready,
+null-fp, nothing-uploaded. The **end-to-end skip cannot be exercised** without a DE1
+(no simulator; the fingerprint cache only populates on a real `ProfileUploadCompleted`)
+— shipped unverified at that layer, per the explicit "implement blind" request.
+App builds + runs on both emulators with no regression.

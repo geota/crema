@@ -70,3 +70,29 @@ web-idiomatic TS, so deduping them is an enum/optional **migration**, not a sync
 These don't reintroduce the staleness risk (the canonical generated types now
 exist + are CI-guarded). Truly unifying them is a separate "adopt typeshare enums
 on the web" refactor — left as follow-up cleanup rather than forced here.
+
+### 2026-06-13 — decision: keep the web idioms (recommended **wontfix** for the dedup)
+
+Asked to explain rather than implement. The remaining hand-decls are a deliberate
+TS idiom, not stale copies, so deduping them is a *downgrade*, not cleanup:
+
+1. **String unions vs `enum`.** typeshare emits `enum BeanMix { Single = "single" }`;
+   the web uses `type BeanMix = 'single' | 'blend'`. Unions are idiomatic modern TS
+   — zero runtime cost, structural, write `'single'` not `BeanMix.Single`, and the
+   wire literally *is* the string. TS `enum`s are a heavier runtime construct with
+   known footguns. Switching means rewriting every `'single'`/`'espresso'`/… literal
+   across all consumers — large, mechanical, worse DX.
+2. **`| null` vs optional `?:`.** typeshare emits `Option<T>` as `field?: T`
+   (`T | undefined`); the web's `WireShot` uses `field: T | null`. The JSON over the
+   FFI carries `null` (serde), so `| null` is the runtime-accurate type — adopting
+   `?:` would make `=== null` checks type-wrong and could mask real nulls,
+   correctness bugs `npm run check` won't catch.
+3. **Web-only fields.** `Bean`/`Roaster` carry shell-only fields (`BagState`,
+   freshness helpers) on top of the union types; the generated types are the wire
+   shape — not drop-in interchangeable.
+
+The issue's actual problem ("a new Rust field silently won't appear web-side") is
+**solved** — the generated types are in `crema-core.ts`, regenerated + CI-gated,
+and the genuine duplicates (`MaintenanceState`/`MaintenanceReadout`) are deduped.
+Forcing bean/`WireShot` onto typeshare conventions is a separate, larger migration
+that trades DX + risks `null`/`undefined` correctness. **Recommend not doing it.**

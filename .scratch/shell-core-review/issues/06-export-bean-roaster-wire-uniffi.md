@@ -1,6 +1,6 @@
 # 06 — Export bean/roaster wire converters via UniFFI; delete Android hand-built wire
 
-- **Status:** done (UniFFI exports; Android hand-wire replacement deferred — see Comments)
+- **Status:** done (UniFFI exports + Android wire migration — see Comments)
 - **Severity:** P2
 - **Area:** Core (UniFFI · WASM) · Android
 - **Punchlist:** T1-06 — `../PUNCHLIST.md`
@@ -68,3 +68,28 @@ round-trip test through the exported FFI fns with realistic fake bean/roaster da
 round-trip, `coerce_bean` tolerance, and `roast_level_to/from_wire`. All green
 (`de1-ffi` 32 tests). So once Android threads a full `Bean` to the wire site, the
 fix is a thin call to `beanToWire` — the shared logic already round-trips losslessly.
+
+### 2026-06-13 — Android wire migration DONE (the StoredShot snapshot)
+
+Did the migration. The wire-build site needs roast data the shot didn't carry, so:
+
+- **`StoredShot` gains `bean: ShotBean?`** (the core's `@Serializable` wire type,
+  reused directly) — additive, default null, so the 12 old-format seeded shots
+  still deserialise (verified live on both emulators). `beanName` stays for display.
+- **Captured at shot time** (`MainViewModel.logShot`): the active `Bean` was already
+  resolved there for the flat label; now also snapshotted into `ShotBean` (beanId,
+  roaster name, roastedOn, roastLevel, tags, grinderSetting).
+- **`wireShotJson`** emits the snapshot's roaster / roastedOn / roastLevel instead
+  of the old `JsonNull`s (falls back to the flat-label split for legacy shots).
+- **`VisualizerSync.patchEditedShot`** prefers the snapshot for `bean_brand`/`bean_type`
+  (a clean roaster/name split — a name containing " · " broke the label split).
+- **Bug found + fixed via the new test:** `profileName`/`grinderModel` used
+  `x?.let { put } ?: put(JsonNull)`, which *always overwrote the set value with
+  null* (`put` returns the previous value, so the elvis fires) — they'd been
+  emitted as null in the wire. Now `put(key, value?)` (auto-null).
+
+**Verified:** new JVM unit tests (`WireShotTest`) — snapshot emitted (roastLevel +
+roastedOn), legacy fallback, beanless, and the profileName/grinderModel regression
+— all green; backward-compat (old shots load) confirmed on phone + tablet. The
+actual Visualizer *upload* still needs auth/network (unverified, as for any
+remote push), but the emitted wire shape is now unit-pinned.

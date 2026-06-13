@@ -18,13 +18,13 @@ Sequencing lives at the bottom of `../PUNCHLIST.md`. Recommended first wave:
 | 02 | Export roast band/days-off-roast/freshness via UniFFI; unify freshness label+color | P1 | ✅ done (web vocab deferred) |
 | 03 | Export `profile_bounds_json` via UniFFI; replace hardcoded editor limits | P1 | ✅ done |
 | 04 | Web `canonicalToDisplay` — route through WASM unit helpers | P1 | ✅ done |
-| 05 | Generate web `crema-core.ts` from `core/bindings/` + CI freshness check | P1 | ✅ done (bean/wire dedup deferred) |
-| 06 | Export bean/roaster wire converters via UniFFI; delete Android hand-built wire | P2 | ✅ done (Android replace deferred) |
+| 05 | Generate web `crema-core.ts` from `core/bindings/` + CI freshness check | P1 | ✅ done (bean/wire dedup: wontfix — idiom) |
+| 06 | Export bean/roaster wire converters via UniFFI; delete Android hand-built wire | P2 | ✅ done (incl. Android wire migration) |
 | 07 | Export `sub_state_error_message` + machine model/feature fns via UniFFI | P2 | ✅ done |
 | 08 | Add core brew-defaults source; both shells read it | P2 | ✅ done |
 | 09 | Add `roast_band5` to core + both bindings | P2 | ✅ done |
 | 10 | Proactively export bean/roaster sync surface via UniFFI | P2 | ✅ done |
-| 11 | Wire Android profile-fingerprint upload-skip | P3 | ⏸️ deferred (brew-critical, needs on-device test) |
+| 11 | Wire Android profile-fingerprint upload-skip | P3 | ✅ done (blind; decision unit-tested, E2E DE1-gated) |
 
 ## Theme 2 — Wiring completeness
 
