@@ -54,3 +54,17 @@ through to wire-build time — the same prerequisite the issue flags ("lower urg
 until Android bean-sync ships"). Replacing blindly would change a **live Visualizer
 upload** I can't test on-device. Left for when Android gains the shot→Bean link;
 the export is in place so that work is a thin wiring step.
+
+### 2026-06-13 — fake-data verification of the converters (de1-ffi tests)
+
+Confirmed `StoredShot` (`history/ShotHistory.kt`) carries only `beanName: String?`
+(a flat `"Roaster · Name"`) — no `beanId`/`roastLevel`/`roastedOn` — so the data
+the wire needs genuinely isn't there (this is the documented StoredShot-migration
+debt; building/running the app can't conjure it). To prove the **core converters**
+are correct (i.e. the gap is purely Android plumbing), added a device-independent
+round-trip test through the exported FFI fns with realistic fake bean/roaster data:
+`bean_to_wire → bean_from_wire` preserves `name` + `roastLevel` (7) + `roastedOn`
+("2026-05-20") — the exact fields the Android shot wire drops; plus roaster
+round-trip, `coerce_bean` tolerance, and `roast_level_to/from_wire`. All green
+(`de1-ffi` 32 tests). So once Android threads a full `Bean` to the wire site, the
+fix is a thin call to `beanToWire` — the shared logic already round-trips losslessly.

@@ -1966,4 +1966,71 @@ mod tests {
         let out = bridge.on_notification(NotificationSource::De1WaterLevels, vec![0x00], 1_000);
         assert!(out.contains("DecodeError"));
     }
+
+    // ── Bean / roaster sync surface (issues 06 + 10), exercised with fake data ──
+    //
+    // Device-independent proof that the exported converters preserve a bean's
+    // `roastLevel` / `roastedOn` — the exact fields the Android *shot* wire emits
+    // as null today (issue 06). So that divergence is purely Android not yet
+    // plumbing a full `Bean` to the wire site (the StoredShot only carries a flat
+    // name), not a gap in the shared core converters.
+
+    /// A realistic library bean, in the shell's persisted shape (the seed data).
+    const FAKE_BEAN: &str = r#"{"id":"bean:test","name":"Monarch","roasterId":"roaster:test",
+        "roastedOn":"2026-05-20","roastLevel":7,"decaf":false,
+        "origin":{"country":"Colombia","variety":"Castillo","processing":"Washed"},
+        "bagSize":340.0,"remaining":300.0,"qualityScore":"","tastingNotes":"Cocoa, cherry",
+        "rating":0,"notes":"","favourite":false,"grinder":"Niche","grinderSetting":"18",
+        "metadata":{},"createdAt":1779238864574,"updatedAt":1779325264574}"#;
+
+    #[test]
+    fn bean_wire_round_trip_preserves_roast_level_and_date() {
+        // Bean → Visualizer coffee-bag wire → Bean.
+        let wire = bean_to_wire(FAKE_BEAN.to_owned(), Some("remote-roaster-9".to_owned()))
+            .expect("encode to wire");
+        let back = bean_from_wire(
+            wire,
+            Some("roaster:test".to_owned()),
+            "bean:fallback".to_owned(),
+            1_790_000_000_000,
+        )
+        .expect("decode from wire");
+        let b: serde_json::Value = serde_json::from_str(&back).unwrap();
+        // The roast data the Android shot wire drops survives the round-trip.
+        assert_eq!(b["name"], "Monarch");
+        assert_eq!(b["roastLevel"], 7);
+        assert_eq!(b["roastedOn"], "2026-05-20");
+    }
+
+    #[test]
+    fn roaster_wire_round_trip_preserves_name() {
+        let roaster = r#"{"id":"roaster:test","name":"Onyx Coffee Lab",
+            "website":"https://onyx.com","city":"Rogers","country":"USA","notes":"",
+            "metadata":{},"createdAt":1770685264574,"updatedAt":1770685264574}"#;
+        let wire = roaster_to_wire(roaster.to_owned()).expect("encode");
+        let back = roaster_from_wire(wire, "roaster:fallback".to_owned(), 1_790_000_000_000)
+            .expect("decode");
+        let r: serde_json::Value = serde_json::from_str(&back).unwrap();
+        assert_eq!(r["name"], "Onyx Coffee Lab");
+    }
+
+    #[test]
+    fn coerce_bean_normalises_a_messy_row_and_rejects_a_keyless_one() {
+        // A row with a wrong-typed field + junk still coerces, keeping id + name.
+        let raw = r#"{"id":"bean:x","name":"Mystery","roastLevel":"not-a-number","junk":42}"#;
+        let coerced = coerce_bean(raw.to_owned(), 1_790_000_000_000).expect("coerces");
+        let c: serde_json::Value = serde_json::from_str(&coerced).unwrap();
+        assert_eq!(c["id"], "bean:x");
+        assert_eq!(c["name"], "Mystery");
+        // A row missing a string id / name is not a bean.
+        assert!(coerce_bean(r#"{"foo":1}"#.to_owned(), 1_790_000_000_000).is_none());
+    }
+
+    #[test]
+    fn roast_level_wire_maps_band_labels_both_ways() {
+        assert!(roast_level_to_wire(Some(7.0)).is_some());
+        assert!(roast_level_to_wire(None).is_none());
+        assert!(roast_level_from_wire(roast_level_to_wire(Some(2.0))).is_some());
+        assert!(roast_level_from_wire(None).is_none());
+    }
 }
