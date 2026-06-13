@@ -349,6 +349,17 @@ pub fn new_profile_id() -> String {
     de1_domain::new_profile_id()
 }
 
+/// Compute the brew ratio (yield ÷ dose) for a pair of weights in grams.
+/// Returns `None` when the ratio is undefined — non-positive dose,
+/// non-finite operand, or non-finite quotient. The shell formats the
+/// `1:N` label; this is just the number. Mirrors the wasm `brew_ratio`
+/// so the web and Android shells share one implementation
+/// (`de1_domain::brew_ratio`) — no drift in the ratio math.
+#[uniffi::export]
+pub fn brew_ratio(dose: f32, yield_out: f32) -> Option<f32> {
+    de1_domain::brew_ratio(dose, yield_out)
+}
+
 /// djb2 base-36 fingerprint of an effective profile (library profile
 /// merged with optional Quick-Controls overrides). Both payloads are
 /// JSON strings; see [`de1_domain::profile_fingerprint`] for the

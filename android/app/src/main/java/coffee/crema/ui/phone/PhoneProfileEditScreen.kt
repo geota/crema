@@ -23,6 +23,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coffee.crema.profiles.SegmentEdit
 import coffee.crema.profiles.SegmentExit
+import coffee.crema.ui.formatRatio
 import coffee.crema.profiles.SegmentLimiter
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.components.*
@@ -177,7 +178,7 @@ fun PhoneProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                 EdRow("Yield") { EdStepper(yieldG, "g", 0.5, 10.0, 120.0, { "%.0f".format(it) }) { yieldG = it } }
                 EdRow("Ratio", sub = "Computed") {
                     Text(
-                        if (dose > 0) "1:%.1f".format(yieldG / dose) else "—",
+                        formatRatio(dose, yieldG),
                         style = TextStyle(fontFamily = JetBrainsMono, fontWeight = FontWeight.Medium, fontSize = 18.sp, fontFeatureSettings = "tnum"),
                         color = MaterialTheme.colorScheme.primary,
                     )

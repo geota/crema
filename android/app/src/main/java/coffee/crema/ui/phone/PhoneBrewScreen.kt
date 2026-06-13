@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coffee.crema.beans.daysOffRoast
 import coffee.crema.beans.isFrozen
+import coffee.crema.ui.formatRatio
 import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager
 import coffee.crema.profiles.CremaProfile
@@ -286,7 +287,7 @@ private fun SwapDropdown(
                                 maxLines = 1, overflow = TextOverflow.Ellipsis,
                             )
                             Text(
-                                "1:%.1f · %.0fg · %.0f°".format(p.ratio, p.dose, p.brewTemp),
+                                "${formatRatio(p.dose, p.yieldOut)} · %.0fg · %.0f°".format(p.dose, p.brewTemp),
                                 style = TextStyle(fontFamily = JetBrainsMono, fontSize = 11.sp),
                                 color = if (activeRow) LocalContentColor.current.copy(alpha = 0.8f) else MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -472,7 +473,7 @@ private fun RunningBody(ui: MainUiState, active: CremaProfile?, modifier: Modifi
                 // Yield row + bar.
                 Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                        Eyebrow("Yield · 1:%.2f".format(if (dose > 0f) weight / dose else 0f))
+                        Eyebrow("Yield · ${formatRatio(dose, weight)}")
                         Text(
                             "%.1f / %.1f g".format(weight, target),
                             style = TextStyle(fontFamily = JetBrainsMono, fontSize = 14.sp, fontWeight = FontWeight.Medium, fontFeatureSettings = "tnum"),
@@ -666,7 +667,7 @@ private fun RestingBody(
                     TargetNumber(yieldOut)
                     Spacer(Modifier.weight(1f))
                     Text(
-                        "1:%.1f".format(if (dose > 0) yieldOut / dose else 0.0),
+                        formatRatio(dose, yieldOut),
                         style = TextStyle(fontFamily = JetBrainsMono, fontWeight = FontWeight.Medium, fontSize = 20.sp, fontFeatureSettings = "tnum"),
                         color = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.padding(bottom = 6.dp),
@@ -763,7 +764,7 @@ private fun RestingBody(
                         }
                         val ratio = lastStored?.let { s ->
                             val y = s.yieldG; val d = s.doseG
-                            if (y != null && d != null && d > 0f) "1:%.1f".format(y / d) else null
+                            if (y != null && d != null && d > 0f) formatRatio(d, y) else null
                         }
                         Text(
                             listOfNotNull(ratio, "%.0fs".format(last.durationMs / 1000.0)).joinToString(" · "),

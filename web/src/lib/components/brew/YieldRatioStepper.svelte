@@ -8,6 +8,7 @@
 	import QuickStepper from './QuickStepper.svelte';
 	import QuickChipRow from './QuickChipRow.svelte';
 	import { getSettingsStore, formatWeight } from '$lib/settings';
+	import { formatRatio } from '$lib/utils/ratio';
 
 	let {
 		params,
@@ -28,8 +29,8 @@
 
 	const p = $derived(params.current);
 	const prefs = $derived(getSettingsStore().current);
-	/** Live yield-to-dose ratio. */
-	const ratio = $derived((p.yield / p.dose).toFixed(2));
+	/** Live yield-to-dose ratio (`1:N`, one decimal — canonical formatter). */
+	const ratio = $derived(formatRatio(p.dose, p.yield));
 	/**
 	 * Whether the live yield differs from the active profile / brew-default
 	 * seed — drives the italics + copper tint on the value, and the
@@ -56,7 +57,7 @@
 			{/if}
 			Yield
 		</span>
-		<span class="qcs-sup">1:{ratio}</span>
+		<span class="qcs-sup">{ratio}</span>
 	</div>
 	<QuickStepper
 		value={p.yield}

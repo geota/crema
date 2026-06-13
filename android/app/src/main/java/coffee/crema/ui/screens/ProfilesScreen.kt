@@ -41,6 +41,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material3.OutlinedTextField
 import coffee.crema.ui.components.CremaFilterChip
 import coffee.crema.ui.components.CremaValueUnit
+import coffee.crema.ui.formatRatio
 import coffee.crema.ui.components.CremaSortControl
 import coffee.crema.ui.components.SortKey
 import androidx.compose.ui.Alignment
@@ -408,7 +409,7 @@ private fun ProfileMetricsRow(profile: CremaProfile) {
             Modifier.fillMaxWidth().padding(vertical = 10.dp),
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            ProfileMetric("Ratio", "1:%.1f".format(profile.ratio), "", Modifier.weight(1f))
+            ProfileMetric("Ratio", formatRatio(profile.dose, profile.yieldOut), "", Modifier.weight(1f))
             ProfileMetric("Dose", "%.1f".format(profile.dose), "g", Modifier.weight(1f))
             ProfileMetric("Temp", "%.0f".format(profile.brewTemp), "°C", Modifier.weight(1f))
             ProfileMetric("Pre-inf", "${profile.preinfuseSeconds}", "s", Modifier.weight(1f))

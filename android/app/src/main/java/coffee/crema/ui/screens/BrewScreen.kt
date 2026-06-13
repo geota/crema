@@ -57,6 +57,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coffee.crema.beans.daysOffRoast
 import coffee.crema.beans.isFrozen
+import coffee.crema.ui.formatRatio
 import coffee.crema.beans.roastBand
 import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager
@@ -408,8 +409,8 @@ private fun ProfileBlock(
             }
             if (active != null) {
                 Text(
-                    "Pre-inf ${active.preinfuseSeconds}s · 1:%.2f · %.1f g · %.1f °C".format(
-                        active.ratio, active.yieldOut, active.brewTemp,
+                    "Pre-inf ${active.preinfuseSeconds}s · ${formatRatio(active.dose, active.yieldOut)} · %.1f g · %.1f °C".format(
+                        active.yieldOut, active.brewTemp,
                     ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -920,7 +921,7 @@ private fun TimerCard(running: Boolean, elapsedMs: Long, phase: String?) {
 private fun RatioCard(active: CremaProfile?, weightG: Float?) {
     val dose = active?.dose ?: 18f
     // Web BrewDashboard: `1:{shotWeight == null ? '—' : …}` — em-dash, never a fake 0.
-    val live = if (weightG != null && dose > 0f) "1:%.2f".format(weightG / dose) else "1:—"
+    val live = formatRatio(dose, weightG)
     CremaCard(Modifier.fillMaxWidth()) {
         // proto .brew-ratio padding: 5px vertical / 16px horizontal (compact).
         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 5.dp)) {
@@ -934,7 +935,7 @@ private fun RatioCard(active: CremaProfile?, weightG: Float?) {
                 )
                 if (active != null && active.ratio > 0f) {
                     Text(
-                        "· target 1:%.2f".format(active.ratio),
+                        "· target ${formatRatio(active.dose, active.yieldOut)}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
                         modifier = Modifier.alignByBaseline(),
@@ -1167,7 +1168,7 @@ private fun LimitRowView(row: LimitRow) {
 @Composable
 private fun LastShotCard(last: coffee.crema.ui.LastShot, dose: Float, onClick: () -> Unit) {
     val yieldG = last.yieldG
-    val ratio = if (yieldG != null && dose > 0f) "1:%.2f".format(yieldG / dose) else "—"
+    val ratio = formatRatio(dose, yieldG)
     CremaCard(Modifier.fillMaxWidth().clickable(onClick = onClick)) {
         Column(
             Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp),

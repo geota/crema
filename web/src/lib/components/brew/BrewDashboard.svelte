@@ -42,6 +42,7 @@
 		formatWeight
 	} from '$lib/settings';
 	import { getProfileStore, newProfileId, preinfuseSeconds, type CremaProfile } from '$lib/profiles';
+	import { formatRatio } from '$lib/utils/ratio';
 	import {
 		getBeanStore,
 		roasterMarkTone,
@@ -460,8 +461,8 @@
 	const p = $derived(params.current);
 
 	// ── Header meta ──────────────────────────────────────────────────────
-	/** Live yield-to-dose ratio for the header / target cards. */
-	const ratio = $derived((p.yield / p.dose).toFixed(2));
+	/** Live yield-to-dose ratio for the header / target cards (`1:N`, one decimal). */
+	const ratio = $derived(formatRatio(p.dose, p.yield));
 	/**
 	 * The header profile name. Prefers the DE1's *real* active profile —
 	 * the name Crema most recently uploaded successfully
@@ -1175,7 +1176,7 @@
 		<!-- Profile header strip -->
 		<BrewHeader
 			{profileName}
-			profileMeta={`Pre-inf ${p.preinf}s · 1:${ratio} · ${formatWeight(p.yield, prefs.weightUnit)} · ${formatTemp(p.brewTemp, prefs.tempUnit)}`}
+			profileMeta={`Pre-inf ${p.preinf}s · ${ratio} · ${formatWeight(p.yield, prefs.weightUnit)} · ${formatTemp(p.brewTemp, prefs.tempUnit)}`}
 			profileSpec={profileIdentity}
 			profileTags={profileTags}
 			loadedSubline={loadedShapeSubline}
@@ -1248,8 +1249,8 @@
 					<div class="crema-target">
 						<div class="t-eyebrow">Ratio</div>
 						<div class="crema-target-val">
-							<span>1:{shotWeight == null ? '—' : (shotWeight / p.dose).toFixed(2)}</span>
-							<span class="crema-target-unit"> · target 1:{ratio}</span>
+							<span>{formatRatio(p.dose, shotWeight)}</span>
+							<span class="crema-target-unit"> · target {ratio}</span>
 						</div>
 					</div>
 					<!-- Phase + Last-shot only fit the left column when the Quick Sheet is
