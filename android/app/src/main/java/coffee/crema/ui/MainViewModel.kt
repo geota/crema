@@ -43,6 +43,8 @@ import coffee.crema.ble.BleSessionRecorder
 import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.NordicBleTransport
 import coffee.crema.ble.ScaleBleManager
+import coffee.crema.core.ShotBean
+import coffee.crema.core.profileFingerprint
 import coffee.crema.core.subStateErrorMessage
 import coffee.crema.profiles.BrewDefaults
 import coffee.crema.profiles.CremaProfile
@@ -504,6 +506,24 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      */
     private var pendingBrew = false
 
+    /**
+     * Profile-upload-skip cache (issue 11, mirrors the web shell). The djb2
+     * fingerprint of the profile last successfully uploaded to the *currently
+     * connected* DE1 — so a re-`startShot` of the same profile skips the
+     * redundant upload and goes straight to Espresso. [pendingUploadFingerprint]
+     * holds the in-flight upload's fingerprint, committed to [lastUploadedFingerprint]
+     * on `ProfileUploadCompleted`. The cache is invalidated on any drop out of
+     * READY (the DE1 no longer holds our bytes) — without that, a skip after a
+     * power-cycle would start a shot against a stale/absent profile.
+     *
+     * NOTE: unverified — there is no DE1 simulator, so the skip→Espresso path
+     * cannot be exercised in CI/emulator. The decision is unit-tested
+     * ([shouldSkipProfileUpload]); the wiring degrades safely (a null fingerprint
+     * ⇒ never skip ⇒ the previous always-upload behaviour).
+     */
+    private var lastUploadedFingerprint: String? = null
+    private var pendingUploadFingerprint: String? = null
+
     /** Bean-library persistence — a JSON file in filesDir. */
     private val library = LibraryStore(app, json)
 
@@ -632,6 +652,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     readMachineInfo()
                 } else if (state != De1BleManager.State.READY) {
                     wasReady = false
+                    // The DE1 no longer holds our profile — drop the upload-skip
+                    // cache so the next shot re-uploads (issue 11). Without this, a
+                    // skip after a reconnect would brew against a stale/absent profile.
+                    lastUploadedFingerprint = null
                 }
             }
         }
@@ -1279,6 +1303,24 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         } else {
             cremaJson
         }
+        // Issue 11: if the connected DE1 already holds this exact effective profile
+        // (fingerprint match), skip the redundant upload and go straight to the
+        // gated Espresso request. A null fingerprint (hash failure) ⇒ never skip.
+        val fingerprint = runCatching { profileFingerprint(effectiveJson, null) }.getOrNull()
+        if (shouldSkipProfileUpload(
+                fingerprint,
+                lastUploadedFingerprint,
+                _ui.value.bleState == De1BleManager.State.READY,
+            )
+        ) {
+            appendLog("Profile unchanged on DE1 (fingerprint match) — skipping re-upload")
+            viewModelScope.launch {
+                delay(PROFILE_DOWNLOAD_GUARD_MS)
+                requestMachineState(MachineRequest.ESPRESSO)
+            }
+            return
+        }
+        pendingUploadFingerprint = fingerprint
         val wireJson = runCatching { cremaProfileToWire(effectiveJson) }.getOrElse {
             notifyUser("Can\u2019t start shot \u2014 profile conversion failed")
             return
@@ -1298,6 +1340,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             delay(PROFILE_UPLOAD_TIMEOUT_MS)
             if (pendingBrew) {
                 pendingBrew = false
+                pendingUploadFingerprint = null
                 _ui.update { it.copy(profileUploading = false, profileUploadProgress = null) }
                 notifyUser("Profile upload timed out \u2014 shot not started")
             }
@@ -2034,9 +2077,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val s = _ui.value
         val profile = s.profiles.firstOrNull { it.id == s.activeProfileId }
         val bean = s.beans.firstOrNull { it.id == s.activeBeanId }
-        val beanName = bean?.let { b ->
-            val roaster = b.roasterId?.let { rid -> s.roasters.firstOrNull { it.id == rid }?.name }
-            listOfNotNull(roaster, b.name).joinToString(" · ")
+        val roasterName = bean?.roasterId?.let { rid -> s.roasters.firstOrNull { it.id == rid }?.name }
+        val beanName = bean?.let { b -> listOfNotNull(roasterName, b.name).joinToString(" · ") }
+        // Freeze a full bean snapshot (the core wire shape) at shot time so the
+        // Visualizer wire carries roaster / roast date / roast level — issue 06.
+        val beanSnapshot = bean?.let { b ->
+            ShotBean(
+                beanId = b.id,
+                name = b.name,
+                roasterName = roasterName,
+                roastedOn = b.roastedOn,
+                roastLevel = b.roastLevel,
+                tags = b.tags,
+                grinderSetting = b.grinderSetting.takeIf { it.isNotBlank() },
+            )
         }
         val shot = StoredShot(
             id = "shot:$now",
@@ -2048,6 +2102,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             peakTemp = peakTemp,
             profileName = profile?.name,
             beanName = beanName,
+            bean = beanSnapshot,
             // The buffer still holds the just-finished shot (cleared on the next
             // ShotStarted); downsample it for the detail chart.
             samples = downsampleForStorage(s.shotTelemetry),
@@ -2933,6 +2988,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             is Event.ProfileUploadCompleted -> {
                 _ui.update { it.copy(profileUploading = false, profileUploadProgress = null) }
                 appendLog("Profile uploaded: ${event.content.title}")
+                // The DE1 now holds this profile — cache its fingerprint so an
+                // unchanged re-start skips the upload (issue 11).
+                lastUploadedFingerprint = pendingUploadFingerprint
+                pendingUploadFingerprint = null
                 // Gated start: the profile is now on the DE1. Observe the
                 // firmware's profile-download guard window, then request Espresso.
                 if (pendingBrew) {
@@ -2945,6 +3004,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
             is Event.ProfileUploadFailed -> {
                 pendingBrew = false
+                pendingUploadFingerprint = null
                 _ui.update { it.copy(profileUploading = false, profileUploadProgress = null) }
                 appendLog("Profile upload failed: ${event.content.reason}")
             }
@@ -2995,3 +3055,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         const val SCAN_LABEL_SCALE = "Scale"
     }
 }
+
+/**
+ * Whether [MainViewModel.startShot] can skip the profile upload (issue 11): a
+ * non-null effective-profile fingerprint that matches what a still-connected DE1
+ * already holds. Top-level + `internal` so it's pure and unit-testable without a
+ * device (the FFI fingerprint compute and the BLE/DE1 round-trip aren't).
+ */
+internal fun shouldSkipProfileUpload(
+    effectiveFingerprint: String?,
+    lastUploaded: String?,
+    de1Ready: Boolean,
+): Boolean = de1Ready && effectiveFingerprint != null && effectiveFingerprint == lastUploaded

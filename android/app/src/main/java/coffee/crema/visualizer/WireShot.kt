@@ -3,6 +3,7 @@ package coffee.crema.visualizer
 import coffee.crema.history.StoredShot
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.buildJsonObject
@@ -35,7 +36,10 @@ fun wireShotJson(shot: StoredShot, grinderModel: String? = null): JsonObject {
         put("formatVersion", 3)
         put("id", shot.id)
         put("completedAt", shot.completedAtMs)
-        shot.profileName?.let { put("profileName", it) } ?: put("profileName", JsonNull)
+        // `put(key, String?)` emits JsonNull for null; the old
+        // `?.let { put } ?: put(JsonNull)` form silently overwrote a set value
+        // with null (put returns the previous value, so the elvis always fired).
+        put("profileName", shot.profileName)
         put(
             "metadata",
             buildJsonObject {
@@ -92,7 +96,22 @@ fun wireShotJson(shot: StoredShot, grinderModel: String? = null): JsonObject {
         )
         put(
             "bean",
-            if (shot.beanName == null) {
+            // Prefer the full snapshot frozen at shot time (roaster / roast date /
+            // roast level) — issue 06. Legacy shots have only the flat label, so
+            // fall back to the split, still emitting nulls for the unknown fields.
+            shot.bean?.let { b ->
+                buildJsonObject {
+                    // The `put(key, value?)` overloads emit JsonNull for null — do
+                    // NOT use `x?.let { put } ?: put(JsonNull)` (put returns the
+                    // *previous* value, so the elvis always overwrites with null).
+                    put("beanId", b.beanId)
+                    put("name", b.name)
+                    put("roasterName", b.roasterName)
+                    put("roastedOn", b.roastedOn)
+                    put("roastLevel", b.roastLevel?.toInt())
+                    put("tags", buildJsonArray { b.tags?.forEach { add(JsonPrimitive(it)) } })
+                }
+            } ?: if (shot.beanName == null) {
                 JsonNull
             } else {
                 buildJsonObject {
@@ -105,7 +124,7 @@ fun wireShotJson(shot: StoredShot, grinderModel: String? = null): JsonObject {
                 }
             },
         )
-        grinderModel?.let { put("grinderModel", it) } ?: put("grinderModel", JsonNull)
+        put("grinderModel", grinderModel)
         put("tags", buildJsonArray {})
         put("yieldTarget", JsonNull)
         put("brewTempTarget", JsonNull)

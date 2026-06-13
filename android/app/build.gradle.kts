@@ -35,6 +35,14 @@ android {
 
     }
 
+    // JVM unit tests (`./gradlew :app:testDebugUnitTest`) for the pure shell logic
+    // — wire assembly, fingerprint-skip decisions, formatters. They never touch the
+    // BLE/DE1 or the native FFI (those need a device), so stubbed android.* calls
+    // return defaults rather than throwing.
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
+
     // Visualizer Doorkeeper application client_id (a PUBLIC client — PKCE, no
     // secret to keep). Per-environment like the web's VITE_VISUALIZER_CLIENT_ID.
     // Resolution order: -PvisualizerClientId=… → VISUALIZER_CLIENT_ID env var →
@@ -177,6 +185,11 @@ dependencies {
     implementation("no.nordicsemi.kotlin.ble:core:$nordicBle")
     implementation("no.nordicsemi.kotlin.ble:client-android:$nordicBle")
     implementation("no.nordicsemi.kotlin.ble:environment-android:$nordicBle")
+
+    // JVM unit tests for pure shell logic (no device / FFI). kotlin-test mapped
+    // onto the JUnit 4 runner AGP's unit-test task uses.
+    testImplementation("org.jetbrains.kotlin:kotlin-test-junit:2.2.20")
+    testImplementation("junit:junit:4.13.2")
 }
 
 // ---------------------------------------------------------------------------
