@@ -43,6 +43,7 @@ import coffee.crema.ble.BleSessionRecorder
 import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.NordicBleTransport
 import coffee.crema.ble.ScaleBleManager
+import coffee.crema.profiles.BrewDefaults
 import coffee.crema.profiles.CremaProfile
 import coffee.crema.profiles.CustomProfileStore
 import coffee.crema.profiles.HiddenProfileStore
@@ -239,11 +240,12 @@ data class MainUiState(
     val steamPurge: Boolean = false,
     /** Hold the screen on while a shot is pulling (Settings → Display). */
     val keepScreenOnBrew: Boolean = false,
-    /** Brew defaults (Settings → Brew defaults) — seed new profiles + QC fallbacks. */
-    val defaultDoseG: Float = 18f,
-    val defaultRatio: Float = 2f,
-    val defaultBrewTempC: Float = 93f,
-    val defaultPreinfuseS: Float = 8f,
+    /** Brew defaults (Settings → Brew defaults) — seed new profiles + QC fallbacks.
+     *  Seeded from the core's [BrewDefaults] so web + Android share one source. */
+    val defaultDoseG: Float = BrewDefaults.INSTANCE.doseG,
+    val defaultRatio: Float = BrewDefaults.INSTANCE.ratio,
+    val defaultBrewTempC: Float = BrewDefaults.INSTANCE.brewTempC,
+    val defaultPreinfuseS: Float = BrewDefaults.INSTANCE.preinfusionS,
     /**
      * Queued user-facing feedback lines (imports, exports, blocked actions).
      * MainActivity surfaces them as snackbars, dequeuing via
@@ -830,9 +832,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val base = profileJsonById[activeId] ?: return
         val bp = _ui.value.brewParams
         val active = _ui.value.profiles.firstOrNull { it.id == activeId }
-        val d = bp?.dose?.toFloat() ?: active?.dose ?: 18f
-        val y = bp?.yieldOut?.toFloat() ?: active?.yieldOut ?: 36f
-        val t = bp?.brewTemp?.toFloat() ?: active?.brewTemp ?: 93f
+        val d = bp?.dose?.toFloat() ?: active?.dose ?: BrewDefaults.INSTANCE.doseG
+        val y = bp?.yieldOut?.toFloat() ?: active?.yieldOut
+            ?: (BrewDefaults.INSTANCE.doseG * BrewDefaults.INSTANCE.ratio)
+        val t = bp?.brewTemp?.toFloat() ?: active?.brewTemp ?: BrewDefaults.INSTANCE.brewTempC
         val preset = runCatching { quickPresetJson(base, name, d, y, t, json) }.getOrElse {
             appendLog("Save preset failed: ${it.message}")
             return
