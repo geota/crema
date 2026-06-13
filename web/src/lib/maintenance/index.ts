@@ -8,9 +8,6 @@
  * `store.svelte.ts`.
  */
 
-export {
-	MaintenanceStore,
-	getMaintenanceStore,
-	type MaintenanceState,
-	type MaintenanceReadout
-} from './store.svelte';
+export { MaintenanceStore, getMaintenanceStore } from './store.svelte';
+// The state/readout shapes are the typeshare-generated core types — one source.
+export type { MaintenanceState, MaintenanceReadout } from '$lib/core/crema-core';

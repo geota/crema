@@ -3,6 +3,212 @@
 */
 
 /**
+ * Whether a bag of coffee is a single-origin lot or a blend. `None` =
+ * unknown / unset. Serialises as the lowercase wire string
+ * (`"single"` / `"blend"`) to match the TS shell's typed string union.
+ */
+export enum BeanMix {
+	/** A single-origin lot (one farm / region / process). */
+	Single = "single",
+	/** A blend of two or more components. */
+	Blend = "blend",
+}
+
+/**
+ * Whether a bag is roasted for espresso, filter, or both. `None` on the
+ * owning [`Bean`] = unset; the value never serialises as `"unknown"`
+ * (the user picks one of the three or leaves it blank). Lowercase wire
+ * strings match the TS shell convention.
+ * 
+ * Imported from Beanconqueror's `bean_roasting_type` field, which uses
+ * the same three categories plus an `Unknown` sentinel that we map to
+ * `None` on the bag.
+ */
+export enum BeanRoastType {
+	/** Roasted for espresso pulls — typically a darker development. */
+	Espresso = "espresso",
+	/** Roasted for filter / pour-over. */
+	Filter = "filter",
+	/** Roasted to work for both espresso and filter (industry term). */
+	Omni = "omni",
+}
+
+/**
+ * Origin metadata for a bag — country, region, farm, and the rest of
+ * the upstream provenance fields. All optional: a fresh bean's origin
+ * starts empty and the user fills in whatever the bag label shows.
+ * Mirrors Visualizer's CoffeeBag origin fields so the sync mapping is
+ * 1:1.
+ */
+export interface BeanOrigin {
+	/** Country of origin — `"Ethiopia"`, `"Ethiopia / Colombia"` for a blend. */
+	country?: string;
+	/** Region within the country — `"Yirgacheffe"`, `"Nyeri"`. */
+	region?: string;
+	/** Farm name — `"Hambela Estate"`. */
+	farm?: string;
+	/** Farmer / producer name — `"Tarekech Geleta"`. */
+	farmer?: string;
+	/** Cultivar / variety — `"Geisha"`, `"SL28 / SL34"`. */
+	variety?: string;
+	/**
+	 * Elevation, free text — `"1900-2100 masl"`. Free-form because real
+	 * bags inconsistently report m / masl / ft / a range / a single.
+	 */
+	elevation?: string;
+	/**
+	 * Process — `"Washed"`, `"Natural"`, `"Anaerobic"`. Free-form for the
+	 * same reason as `elevation`.
+	 */
+	processing?: string;
+	/** Harvest time — `"2024 Spring"`, `"October 2024"`. */
+	harvestTime?: string;
+}
+
+/**
+ * One bag of coffee — a row in the bean library. This is
+ * the central entity: shots reference one by id, and a snapshot
+ * ([`ShotBean`]) is frozen onto each completed shot. The core owns the
+ * shape so every shell (web, Android, future iOS) consumes the same
+ * type via `#[typeshare]`.
+ * 
+ * CRUD lives in the shell — the core stays sans-IO and only defines
+ * the shape, the conversion helpers and the pure classifiers. A fresh
+ * bag is built via [`Bean::new`]; further edits ride on plain field
+ * assignment (the shell store is responsible for `updated_at` bumps
+ * and persistence).
+ */
+export interface Bean {
+	/** Stable id — `"bean:<uuid>"`. The shell mints this on create. */
+	id: string;
+	/** Bean name — e.g. `"Geisha Esmeralda Lot 3"`. **Required.** */
+	name: string;
+	/**
+	 * FK into the roaster directory. `None` for a bag whose roaster was
+	 * not recorded; the shell may opportunistically promote the
+	 * roaster name from import to a proper [`Roaster`] row.
+	 */
+	roasterId?: string;
+	/** ISO `yyyy-mm-dd` roast date. */
+	roastedOn?: string;
+	/**
+	 * ISO `yyyy-mm-dd` opened-on date. Crema-only — drives the
+	 * staleness signal alongside `roasted_on`.
+	 */
+	openedOn?: string;
+	/**
+	 * ISO `yyyy-mm-dd` frozen-on date. Drives the freshness math's
+	 * freeze-pause: a frozen bag's freshness counter is the days
+	 * between `roasted_on` and `frozen_on`, paused while frozen.
+	 */
+	frozenOn?: string;
+	/**
+	 * ISO `yyyy-mm-dd` defrosted-on date. Resumes the freshness
+	 * counter from `defrosted_on`.
+	 */
+	defrostedOn?: string;
+	/**
+	 * Roast level on Visualizer's 1..10 scale. The shell typically
+	 * inputs via a 3-band quick-set (light=1, medium=5, dark=10) and
+	 * uses [`roast_band`] to bucket back into the band word.
+	 */
+	roastLevel?: number;
+	/** Single-origin vs blend. `None` = not classified. */
+	mix?: BeanMix;
+	/**
+	 * What the bag was roasted for — espresso, filter, or omni. `None`
+	 * when the user hasn't picked. `#[serde(default)]` so older Bean
+	 * records (pre-this-field) deserialise cleanly. Imported from
+	 * Beanconqueror's `bean_roasting_type` (its `Unknown` value maps
+	 * to `None`).
+	 */
+	roastType?: BeanRoastType;
+	/** Decaf flag — `false` by default. */
+	decaf: boolean;
+	/** Provenance metadata. Empty struct by default. */
+	origin: BeanOrigin;
+	/**
+	 * Bag size, grams. `0.0` when unknown. Unit lives in the doc
+	 * comment, not the field name, per the locked-in naming rule
+	 * (`docs/44-pre-android-handoff.md`).
+	 */
+	bagSize: number;
+	/**
+	 * Remaining weight in the bag, grams. Auto-debited per shot when
+	 * the shell enables `Track bag remaining weight`. `0.0` when
+	 * unknown.
+	 */
+	remaining: number;
+	/** Quality score — free text per Visualizer (`"88"`, `"A-"`). */
+	qualityScore: string;
+	/** Tasting notes — multi-line free text. */
+	tastingNotes: string;
+	/** User star rating 0..5; `0` = unrated. */
+	rating: number;
+	/** Where the bag was bought — `"Counter Culture · Durham"`. */
+	placeOfPurchase?: string;
+	/**
+	 * What the bag cost — currency-less number in the user's local
+	 * units (Crema doesn't track currency yet). `None` = unrecorded.
+	 * Imported from Beanconqueror's `cost` field when present.
+	 */
+	cost?: number;
+	/** URL to buy again — Visualizer / roaster / store link. */
+	url?: string;
+	/** Free-form notes (not the tasting box). */
+	notes: string;
+	/** Pinned to the brew-page bean picker strip. */
+	favourite: boolean;
+	/** Unix epoch ms when the bag was archived; `None` = active. */
+	archivedAt?: number;
+	/**
+	 * Bean-scoped grinder name — `"Niche Zero"`. Bean-scoped because a
+	 * grind setting only means something paired with the grinder it
+	 * was measured on.
+	 */
+	grinder: string;
+	/** Bean-scoped grinder click / setting — `"1.2"`, `"6 + a tooth"`. */
+	grinderSetting: string;
+	/**
+	 * Free-form user tags — e.g. `"daily-driver"`, `"comp"`, `"experimental"`.
+	 * Defaults to an empty list. Serialised as `tags` so the JSON contract
+	 * matches the [`crate::Profile`] tag pattern.
+	 */
+	tags?: string[];
+	/** Visualizer `coffee_bag.id` once pushed. */
+	visualizerId?: string;
+	/**
+	 * Unix epoch ms when this bag was soft-deleted, or `None` when
+	 * active. Required for cross-device sync tombstone propagation:
+	 * on the next sync push, the remote row is DELETEd and the local
+	 * tombstone is garbage-collected. Defaults to `None` so older
+	 * `Bean` JSON deserialises cleanly.
+	 */
+	deletedAt?: number;
+	/**
+	 * Beanconqueror `bean.config.uuid` from a Bc import. Tracks
+	 * provenance so a re-import skips beans we already know.
+	 */
+	beanconquerorId?: string;
+	/** IndexedDB blob ref for the bag photo, if any. */
+	imageRef?: string;
+	/**
+	 * Open JSON metadata. The escape valve for fields neither
+	 * Visualizer nor Crema model first-class, but that an import
+	 * (Beanconqueror) or future feature needs to keep round-tripping.
+	 * Serialised as `serde_json::Value` so the wire format is a plain
+	 * nested object. `serialized_as = "Json"` maps it to a real JSON type in
+	 * the generated bindings (Kotlin `JsonElement`, TS `unknown`); without it
+	 * typeshare emits a bare, unresolved `Value`.
+	 */
+	metadata: unknown;
+	/** Unix epoch ms when this bag was created. */
+	createdAt: number;
+	/** Unix epoch ms when this bag was last updated. */
+	updatedAt: number;
+}
+
+/**
  * Something the core observed that the UI may want to react to.
  * 
  * Serialized adjacently tagged — a JSON event reads `{"type":"ShotStarted"}`
@@ -81,17 +287,18 @@ export type Event =
 	 */
 	resistance?: number;
 	/**
-	 * Scale-derived puck resistance — `group_pressure / weight_flow²`
-	 * where `weight_flow` is the scale's mass-flow rate (g/s). The
-	 * truer extraction signal during the pour because it measures
-	 * what exits the puck into the cup, not what the pump pushes in.
-	 * `None` when no scale is paired (no estimate yet), when the
-	 * scale's flow is below the resistance floor, or when any input
-	 * is non-finite. Units: `bar / (g/s)²`. The chart prefers this
-	 * over `resistance` per-sample (with the DE1-flow value as
-	 * fallback when this is `None`) so shots with and without a
-	 * scale render coherently. The legacy de1app TCL computes the
-	 * same metric — see `de1plus/gui.tcl:3414-3416`.
+	 * Scale-derived puck resistance — `group_pressure /
+	 * weight_flow²` where `weight_flow` is the scale's mass-flow
+	 * rate (g/s). The truer extraction signal during the pour
+	 * because it measures what exits the puck into the cup, not
+	 * what the pump pushes in. `None` when no scale is paired (no
+	 * estimate yet), when the scale's flow is below the resistance
+	 * floor, or when any input is non-finite. Units: `bar / (g/s)²`.
+	 * The chart prefers this over [`Self::resistance`] per-sample
+	 * (with the DE1-flow value as fallback when this is `None`)
+	 * so shots with and without a scale render coherently. The
+	 * legacy de1app TCL computes the same metric — see
+	 * `de1plus/gui.tcl:3414-3416`.
 	 */
 	resistance_weight?: number;
 }}
@@ -271,9 +478,9 @@ export type Event =
 	 */
 	serial?: string;
 	/**
-	 * The scale's firmware version, formatted for display (e.g. `"1.4.1"`)
-	 * — `Some` only for a `03 0c` serial response. The scale's codec
-	 * formats it, so no scale-specific encoding reaches the shell.
+	 * The scale's firmware version, formatted for display (e.g.
+	 * `"1.4.1"`) — `Some` only for a `03 0c` serial response. The scale's
+	 * codec formats it, so no scale-specific encoding reaches the shells.
 	 */
 	firmware?: string;
 }}
@@ -480,6 +687,131 @@ export interface CoreOutput {
 }
 
 /**
+ * The DE1's GATT service + characteristic UUIDs (full lowercase 128-bit
+ * strings). The shells scan on [`service`](Self::service), subscribe to the
+ * notify characteristics, and address writes via [`de1_write_target_uuid`].
+ */
+export interface De1Uuids {
+	/** GATT service (`A000`) — the scan filter. */
+	service: string;
+	/** `A001` Version — the BLE + firmware version block (read). */
+	version: string;
+	/** `A002` RequestedState — a 1-byte state request is written here. */
+	requestedState: string;
+	/** `A00B` ShotSettings — steam / hot-water settings (notify + write). */
+	shotSettings: string;
+	/**
+	 * `A005` ReadFromMMR — a read request is written here; the DE1 answers on
+	 * the same characteristic's notify.
+	 */
+	mmrRead: string;
+	/** `A006` WriteToMMR — an MMR write packet is sent here. */
+	mmrWrite: string;
+	/** `A00D` ShotSample — the ~4–10 Hz telemetry notify stream. */
+	shotSample: string;
+	/** `A00E` StateInfo — the 2-byte machine state + substate notify. */
+	stateInfo: string;
+	/**
+	 * `A011` WaterLevels — the tank-level notify (also written to set the
+	 * refill threshold).
+	 */
+	waterLevels: string;
+	/**
+	 * `A012` Calibration — a read request is written here; the DE1 answers on
+	 * the same characteristic's notify.
+	 */
+	calibration: string;
+	/** `A00F` HeaderWrite — the 5-byte profile-upload header (write). */
+	headerWrite: string;
+	/**
+	 * `A010` FrameWrite — profile frame writes. The DE1 sends NO notification
+	 * here (it only ACKs the ATT write) — the shell synthesizes a frame-ack.
+	 */
+	frameWrite: string;
+}
+
+/**
+ * A slim view onto the shell's `StoredShot`: only the fields the
+ * reconcile planner reads. Lets the shell project its full record
+ * (web `StoredShot` in `$lib/history/model.ts`, Android equivalent)
+ * into a stable cross-shell shape without dragging the rest of the
+ * record (`series`, `bean`, `metadata`) through the FFI.
+ * 
+ * Field names are camelCase on the wire — the JSON shape lines up
+ * 1:1 with the web shell's `StoredShot`, so callers can hand a
+ * `StoredShot` straight to `JSON.stringify` and `serde_json::from_str`
+ * parses it cleanly (extra fields are ignored).
+ */
+export interface LocalShotRef {
+	/** Local stable id — `shot:<uuid>` in the web shell. */
+	id: string;
+	/** Unix epoch ms the shot completed. */
+	completedAt: number;
+	/** Total shot duration, milliseconds. */
+	duration: number;
+	/** Active profile's name when the shot was pulled, or `null`. */
+	profileName?: string;
+	/** Final scale weight at shot end, grams, or `null`. */
+	finalWeight?: number;
+	/**
+	 * Visualizer `shot.id` once uploaded — the binding key. `null` /
+	 * missing for an unbound local.
+	 */
+	visualizerId?: string;
+	/**
+	 * Unix epoch ms when this shot was soft-deleted, or `null` / missing
+	 * when active. Tombstoned locals must NOT bind to a remote.
+	 */
+	deletedAt?: number;
+}
+
+/**
+ * A derived maintenance readout — counters, percentages, and due/ok
+ * verdicts. Mirrors the TS `MaintenanceReadout`.
+ */
+export interface MaintenanceReadout {
+	/** Litres since the last filter change. */
+	filterUsedLitres: number;
+	/** Filter capacity remaining, 0–100 %. */
+	filterPercent: number;
+	/** Whether the filter still has usable capacity. */
+	filterOk: boolean;
+	/** Litres dispensed since the last descale. */
+	descaleSinceLitres: number;
+	/** Whether the descale interval has not yet been exceeded. */
+	descaleOk: boolean;
+	/** Whole hours since the last clean cycle. */
+	cleanSinceHours: number;
+	/** Whether the clean interval has not yet been exceeded. */
+	cleanOk: boolean;
+}
+
+/**
+ * The persisted maintenance state — counters, baselines, and
+ * user-set intervals. Mirrors the TS `MaintenanceState`.
+ */
+export interface MaintenanceState {
+	/** Total litres of water dispensed, ever — the integrated flow counter. */
+	totalLitres: number;
+	/** `total_litres` at the last filter clean. */
+	filterBaselineLitres: number;
+	/** `total_litres` at the last descale. */
+	descaleBaselineLitres: number;
+	/** Unix epoch ms of the last clean cycle. */
+	cleanAtMs: number;
+	/** Unix epoch ms of the last filter clean. */
+	filterAtMs: number;
+	/** Unix epoch ms of the last descale. */
+	descaleAtMs: number;
+	/** Filter clean-interval threshold, litres. */
+	filterCapacityLitres: number;
+	/** Descale interval, litres. */
+	descaleIntervalLitres: number;
+	/** Clean cycle interval, hours. */
+	cleanIntervalHours: number;
+}
+
+/**
  * One selectable display/behaviour mode a scale exposes.
  * 
  * A "first-class" scale (the Bookoo) lets the user switch the active display
@@ -508,6 +840,121 @@ export interface RangeCapability {
 	min: number;
 	/** The largest value the setting accepts. */
 	max: number;
+}
+
+/**
+ * Bean snapshot at shot start; nested under [`ReplayMeta::bean`].
+ * 
+ * All fields optional; absent on the connect-phase prelude, present
+ * (in part) on the shell's at-shot-start line.
+ */
+export interface ReplayMetaBean {
+	/**
+	 * Bean name (`"Yirgacheffe"`, …). Older captures spell this `type`;
+	 * the manual fold in [`fold_one`] accepts either key for read-side
+	 * backward compatibility.
+	 */
+	name?: string;
+	/** Roaster's display name. */
+	roaster?: string;
+	/** ISO `yyyy-mm-dd` roast date. */
+	roastedOn?: string;
+	/** 1..10 roast level. */
+	roastLevel?: number;
+	/** Free-text tasting / dial notes. */
+	notes?: string;
+	/** Grinder click / setting label. */
+	grinderSetting?: string;
+}
+
+/**
+ * Merged metadata from one or more `src:"META"` prelude entries.
+ * 
+ * Every field is optional; META omits any unset field, and the
+ * folder leaves every absent field unchanged. Field names are
+ * camelCase in the wire / TS / Kotlin shapes; Rust uses snake_case
+ * and typeshare renames at the boundary.
+ */
+export interface ReplayMeta {
+	/** Scale's BLE advertised name (`"BOOKOO_SC"`, `"ACAIA…"`, …). */
+	scaleName?: string;
+	/** DE1's firmware build number (MMR `FirmwareVersion`). */
+	de1FirmwareVersion?: number;
+	/** DE1's machine-model identifier (MMR `MachineModel`). */
+	de1MachineModel?: number;
+	/** DE1's serial number (MMR `SerialNumber`). */
+	de1SerialNumber?: number;
+	/** Active profile's display name at shot start. */
+	profileName?: string;
+	/** Byte-exact upload payload as lowercase no-separator hex. */
+	profileBytesHex?: string;
+	/** QC yield target at shot start, grams. */
+	yieldTarget?: number;
+	/** QC brew-temperature override at shot start, °C. */
+	brewTemp?: number;
+	/** QC pre-infusion target at shot start, seconds. */
+	preinfuseTarget?: number;
+	/** SAW toggle at shot start. */
+	stopOnWeight?: boolean;
+	/** Auto-tare toggle at shot start. */
+	autoTare?: boolean;
+	/** Active bean snapshot at shot start. */
+	bean?: ReplayMetaBean;
+	/** Equipment-level grinder model at shot start. */
+	grinderModel?: string;
+}
+
+/**
+ * One roastery — a record in the roaster directory. Sparse on
+ * purpose, mirroring Visualizer's `RoasterDetail` (which is itself
+ * minimal: id + name + website + image). Beanconqueror has no
+ * first-class roaster entity — its `bean.roaster` is free text; the
+ * shell promotes unique strings into [`Roaster`] rows on import.
+ */
+export interface Roaster {
+	/** Stable id — `"roaster:<uuid>"`. */
+	id: string;
+	/** Roastery name. **Required.** */
+	name: string;
+	/** Roastery website / store URL. */
+	website?: string;
+	/**
+	 * Logo / hero image URL. Mirrors Visualizer's `RoasterDetail.image_url`
+	 * — round-trips losslessly on sync. Renders as a small thumbnail in
+	 * the roaster card and the editor's preview slot.
+	 */
+	imageUrl?: string;
+	/**
+	 * City — e.g. `"Portland"`. Crema-only; rides in `metadata.crema.city`
+	 * on Visualizer round-trip so the wire format stays lossless.
+	 */
+	city?: string;
+	/** Country / state / region — free text. Crema-only. */
+	country?: string;
+	/** Free-form notes (private to the user — not pushed to Visualizer). */
+	notes: string;
+	/**
+	 * Pointer to the canonical roaster id when this row was tagged as a
+	 * duplicate. `None` = this row is itself canonical (or has not been
+	 * deduped). Mirrors Visualizer's `RoasterDetail.canonical_roaster_id`
+	 * — round-trips directly. Beans pointing at a duplicate are typically
+	 * re-pointed at the canonical id on merge.
+	 */
+	canonicalRoasterId?: string;
+	/** Visualizer `roaster.id` once pushed. */
+	visualizerId?: string;
+	/**
+	 * Unix epoch ms when this roaster was soft-deleted, or `None` when
+	 * active. See [`Bean::deleted_at`] for the rationale. Defaults to
+	 * `None` so older JSON deserialises cleanly.
+	 */
+	deletedAt?: number;
+	/** Open JSON metadata — escape valve symmetric with [`Bean::metadata`]. */
+	metadata: unknown;
+	/** Unix epoch ms. */
+	createdAt: number;
+	/** Unix epoch ms. */
+	updatedAt: number;
 }
 
 /**
@@ -594,9 +1041,11 @@ export interface ScaleCapabilities {
 	can_toggle_unit: boolean;
 	/**
 	 * Recommended cadence (milliseconds) between heartbeat writes when
-	 * the scale needs periodic keep-alives — non-null for the Decent
-	 * Scale (keeps its on-scale LCD awake), null for every other scale.
-	 * Mirrors `de1_scale::ScaleCapabilities::heartbeat_interval_ms`.
+	 * the scale needs periodic keep-alives — `Some(2000)` for the
+	 * Decent Scale (keeps its on-scale LCD awake), `None` for every
+	 * scale that does not. Mirrors [`Scale::heartbeat_command`]
+	 * returning `Some`, with the cadence now living next to the bytes
+	 * so the shell no longer carries a parallel constant.
 	 */
 	heartbeat_interval_ms?: number;
 }
@@ -621,6 +1070,94 @@ export interface ScaleUuids {
 	 * scales that use a single characteristic for both.
 	 */
 	command_write: string;
+}
+
+/**
+ * A snapshot of the active bean at the moment a shot was pulled.
+ * Frozen onto each [`crate::history::StoredShot`] (in the shell's
+ * extended record) so a later rename / archive / delete of the bag
+ * does not retroactively rewrite history.
+ * 
+ * Beanconqueror reads the bean *live* off the brew (`Brew.bean: uuid`,
+ * see `Beanconqueror/src/classes/brew/brew.ts:60`). Crema takes the
+ * other approach: snapshot wins. A shot recorded under "Onyx Geisha"
+ * stays "Onyx Geisha" forever, even if the user later renames the bag.
+ * 
+ * Holds the strict minimum the History list / detail panel needs to
+ * render the shot without re-fetching the bag — the user-facing
+ * strings plus the dates that drive the freshness pill.
+ */
+export interface ShotBean {
+	/**
+	 * FK back to the [`Bean`] in the library, if it still exists. The
+	 * History row can resolve the link to open the bean detail; an
+	 * archived / deleted bean falls back to the snapshot strings.
+	 */
+	beanId?: string;
+	/** Bag name at the time of the shot — `"Geisha Esmeralda Lot 3"`. */
+	name: string;
+	/**
+	 * Roaster name at the time of the shot. Not the roaster id — the
+	 * id might dangle, but a string survives.
+	 */
+	roasterName?: string;
+	/** ISO `yyyy-mm-dd` roast date at the time of the shot. */
+	roastedOn?: string;
+	/** Roast level (1..10) at the time of the shot. */
+	roastLevel?: number;
+	/** The bean's tags at the time of the shot. */
+	tags?: string[];
+	/**
+	 * Per-bean grinder setting at the time of the shot — distinct
+	 * from the equipment-level `grinder_model` on [`StoredShot`]
+	 * (the *machine* used) and `ShotMetadata::grinder_setting`
+	 * (the *dial used for this shot*). This is the bean's own
+	 * recommended dial recorded with the bag.
+	 */
+	grinderSetting?: string;
+}
+
+/**
+ * The fields the planner reads from a remote shot row. Visualizer's
+ * API returns a superset; we only care about identity + the de-dup
+ * hash inputs + editable annotations. Mirrors the TS `WireShot` in
+ * `shot-sync-signatures.ts`. Unix MS (converted at the spec boundary
+ * from the spec's unix-sec `clock` / `updated_at`).
+ * 
+ * `#[serde(default)]` on the optional fields so a shell that omits them
+ * deserialises cleanly. The wasm / FFI bridges JSON-marshal this.
+ */
+export interface WireShot {
+	/** Visualizer shot id — the remote primary key. */
+	id: string;
+	/** Shot start timestamp, unix MS (converted from spec's unix-sec `clock`). */
+	clock: number;
+	/** Total shot duration, milliseconds. */
+	duration_ms: number;
+	/** Display name of the profile pulled. */
+	profile_title?: string;
+	/** Final scale weight at shot end (grams), or `None`. */
+	final_weight_g?: number;
+	/** Annotations the user has typed remotely. */
+	notes?: string;
+	/** Star rating (0..5), or `None`. */
+	rating?: number;
+	/**
+	 * Last server-side update, unix MS (from spec's unix-sec
+	 * `updated_at`). Drives LWW conflict resolution.
+	 */
+	updated_at_ms?: number;
+	/**
+	 * Shot-level tags pulled from the remote — the `tags` array on
+	 * `DefaultShotDetail` (Visualizer's native serializer; the
+	 * Beanconqueror variant doesn't carry shot tags). These are
+	 * mutable metadata, NOT part of the de-dup signature: a remote
+	 * re-tagging doesn't change the shot's identity.
+	 * 
+	 * `#[serde(default)]` so older shells / responses without the
+	 * field still deserialise cleanly to an empty Vec.
+	 */
+	tag_list?: string[];
 }
 
 /**
@@ -992,6 +1529,28 @@ export enum WaterSessionKind {
 	HotWater = "HotWater",
 	/** A group-head flush / rinse (DE1 `HotWaterRinse` state). */
 	Flush = "Flush",
+}
+
+/**
+ * The user's chosen *display unit* for weight.
+ * 
+ * Canonical storage is always grams; this enum names the unit the shell
+ * surfaces — and crucially, the unit the Decent Scale's on-scale LCD must
+ * be told to render. The Decent Scale exposes two LCD-enable wire packets
+ * (one with byte `[4] = 0x00` for grams, one with byte `[4] = 0x01` for
+ * ounces); the core picks the right packet based on this enum so the
+ * on-scale display matches the shell.
+ * 
+ * `#[typeshare]` + serde: the web shell already keeps a TypeScript
+ * `WeightUnit` (`'g' | 'oz'`) in its settings store; carrying the same
+ * shape through the bridge means the shell can pass its existing pref
+ * straight through without a lookup table.
+ */
+export enum WeightUnit {
+	/** Grams — the canonical unit and the Decent Scale's default LCD mode. */
+	Grams = "grams",
+	/** US avoirdupois ounces — the only imperial display alternative. */
+	Ounces = "ounces",
 }
 
 /**
