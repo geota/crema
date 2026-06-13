@@ -275,7 +275,7 @@ private fun SwapDropdown(
                         ) {
                             MiniProfileSpark(
                                 profile = p,
-                                color = if (activeRow) MaterialTheme.colorScheme.primary else CremaTheme.telemetry.pressure,
+                                active = activeRow,
                                 modifier = Modifier.fillMaxSize().padding(3.dp),
                             )
                         }
@@ -370,31 +370,58 @@ private fun DdRow(active: Boolean, onClick: () -> Unit, content: @Composable Row
     }
 }
 
-/** Tiny pressure silhouette of a profile's segment plan (proto MiniSpark). */
+/**
+ * Tiny silhouette of a profile's segment plan (proto MiniSpark), coloured like
+ * the full card preview: pressure phases solid sage, flow phases dashed blue.
+ * The active row tints everything primary (the proto's active treatment).
+ */
 @Composable
-private fun MiniProfileSpark(profile: CremaProfile, color: Color, modifier: Modifier = Modifier) {
-    val pressureSegs = profile.segments
+private fun MiniProfileSpark(profile: CremaProfile, active: Boolean, modifier: Modifier = Modifier) {
+    val tel = CremaTheme.telemetry
+    val primary = MaterialTheme.colorScheme.primary
     Canvas(modifier) {
-        val segs = pressureSegs.filter { it.time > 0f }
+        val segs = profile.segments.filter { it.time > 0f }
         if (segs.isEmpty()) return@Canvas
         val total = segs.sumOf { it.time.toDouble() }.toFloat().takeIf { it > 0f } ?: return@Canvas
         val maxV = (segs.maxOf { it.target }).coerceAtLeast(1f)
-        val path = Path()
+        val stroke = 2.dp.toPx()
+        val dash = androidx.compose.ui.graphics.PathEffect.dashPathEffect(
+            floatArrayOf(3.dp.toPx(), 2.5.dp.toPx()),
+        )
+        fun yOf(v: Float) = (1f - (v / maxV)) * (size.height * 0.9f) + size.height * 0.05f
         var t = 0f
-        var lastY = size.height
-        segs.forEachIndexed { i, s ->
+        var lastY = size.height * 0.95f
+        segs.forEach { s ->
+            val isFlow = s.mode == "flow"
             val x0 = (t / total) * size.width
             t += s.time
             val x1 = (t / total) * size.width
-            val y = (1f - (s.target / maxV)) * (size.height * 0.9f) + size.height * 0.05f
-            if (i == 0) { path.moveTo(x0, size.height * 0.95f); path.lineTo(x0, y) } else {
-                if (s.ramp == "fast") path.lineTo(x0, y)
-                else path.cubicTo(x0 + (x1 - x0) * 0.0f, lastY, x0, y, x0 + (x1 - x0) * 0.15f, y)
+            val y = yOf(s.target)
+            val path = Path()
+            path.moveTo(x0, lastY)
+            if (s.ramp == "fast") {
+                path.lineTo(x0, y)
+            } else {
+                // Quick ease into the new level over the first ~20% of the phase.
+                path.cubicTo(x0, lastY, x0, y, x0 + (x1 - x0) * 0.2f, y)
             }
             path.lineTo(x1, y)
+            drawPath(
+                path,
+                color = when {
+                    active -> primary
+                    isFlow -> tel.flow
+                    else -> tel.pressure
+                },
+                style = Stroke(
+                    width = stroke,
+                    cap = StrokeCap.Round,
+                    join = StrokeJoin.Round,
+                    pathEffect = if (isFlow) dash else null,
+                ),
+            )
             lastY = y
         }
-        drawPath(path, color = color, style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
     }
 }
 
@@ -677,14 +704,14 @@ private fun RestingBody(
             }
         }
 
-        // ── Machine readiness strip ──────────────────────────────────────────
+        // ── Machine readiness strip — group temp · steam temp · tank · scale ─
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             val groupOk = connected && ui.headTemp != null &&
                 active != null && ui.headTemp >= active.brewTemp - 2f
-            MStat("thermometer", ui.headTemp?.let { "%.1f°".format(it) } ?: "—", groupOk, Modifier.weight(1f))
-            MStat("cloud", ui.steamTemp?.let { "%.0f°".format(it) } ?: "—", false, Modifier.weight(1f))
-            MStat("drop-half", ui.waterLevelMm?.let { "%.0fmm".format(it) } ?: "—", false, Modifier.weight(1f))
-            MStat("scales", if (scaleConnected) "%.1fg".format(ui.scaleWeightG ?: 0f) else "—", scaleConnected, Modifier.weight(1f))
+            MStat("Group", "thermometer", ui.headTemp?.let { "%.1f°".format(it) } ?: "—", groupOk, Modifier.weight(1f))
+            MStat("Steam", "cloud", ui.steamTemp?.let { "%.0f°".format(it) } ?: "—", false, Modifier.weight(1f))
+            MStat("Tank", "drop-half", ui.waterLevelMm?.let { "%.0fmm".format(it) } ?: "—", false, Modifier.weight(1f))
+            MStat("Scale", "scales", if (scaleConnected) "%.1fg".format(ui.scaleWeightG ?: 0f) else "—", scaleConnected, Modifier.weight(1f))
         }
 
         // ── Last shot peek ───────────────────────────────────────────────────
@@ -792,24 +819,32 @@ private fun ReadyParam(label: String, value: String, unit: String, modifier: Mod
     }
 }
 
-// Machine-readiness tile (proto .pf-mstat-i).
+// Machine-readiness tile (proto .pf-mstat-i) — a labelled live machine stat
+// (NOT a chart channel): group temp / steam temp / tank level / scale weight.
 @Composable
-private fun MStat(icon: String, value: String, ok: Boolean, modifier: Modifier = Modifier) {
+private fun MStat(label: String, icon: String, value: String, ok: Boolean, modifier: Modifier = Modifier) {
     val tel = CremaTheme.telemetry
     Surface(shape = RoundedCornerShape(11.dp), color = MaterialTheme.colorScheme.surfaceContainer, modifier = modifier) {
-        Row(
-            Modifier.padding(vertical = 9.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.Center,
+        Column(
+            Modifier.padding(vertical = 8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(3.dp),
         ) {
-            PhIcon(icon, sizeDp = 16, tint = if (ok) tel.success else MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(Modifier.width(5.dp))
             Text(
-                value,
-                style = TextStyle(fontFamily = JetBrainsMono, fontWeight = FontWeight.Medium, fontSize = 12.5.sp, fontFeatureSettings = "tnum"),
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
+                label.uppercase(),
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.5.sp, letterSpacing = 0.6.sp, fontWeight = FontWeight.SemiBold),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                PhIcon(icon, sizeDp = 15, tint = if (ok) tel.success else MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.width(5.dp))
+                Text(
+                    value,
+                    style = TextStyle(fontFamily = JetBrainsMono, fontWeight = FontWeight.Medium, fontSize = 12.5.sp, fontFeatureSettings = "tnum"),
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                )
+            }
         }
     }
 }

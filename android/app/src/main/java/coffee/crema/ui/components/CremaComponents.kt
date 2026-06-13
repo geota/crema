@@ -366,8 +366,12 @@ fun CremaSplitButton(
 ) {
     var open by remember { mutableStateOf(false) }
     val shape = RoundedCornerShape(999.dp)
-    val border = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)
-    val content = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+    // Same hairline as M3's OutlinedButton (outlineVariant) so Import / Export
+    // read as one family — the old outline@50% was visibly brighter.
+    val border = MaterialTheme.colorScheme.outlineVariant
+    // onSurfaceVariant — what the stock OutlinedButton beside it (Import)
+    // resolves its label to, so the pair share the same off-white.
+    val content = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
     Box(modifier) {
         Row(
             Modifier.clip(shape).border(1.dp, border, shape),
@@ -540,7 +544,7 @@ fun CremaConfirmDialog(
     )
 }
 
-// ── Overflow (⋮) menu — thin IconButton + bordered anchored popup ────────────
+// ── Overflow (⋮) menu — circular tonal kebab + bordered anchored popup ───────
 // The Android answer to the proto's M3OverflowMenu. Inline icons handle the
 // frequent actions on a card; this kebab carries the low-frequency / destructive
 // rest (Export, Freeze, Archive, Delete) so the touch row stays short. `danger`
@@ -560,7 +564,9 @@ data class OverflowItem(
 fun CremaOverflowMenu(items: List<OverflowItem>, icon: String = "dots-three-vertical") {
     var open by remember { mutableStateOf(false) }
     Box {
-        IconButton(onClick = { open = true }) { PhIcon(icon, sizeDp = 20) }
+        // Circular tonal trigger — matches the card's other FilledTonalIconButtons
+        // (the bare IconButton had no circle and read as a stray glyph).
+        FilledTonalIconButton(onClick = { open = true }) { PhIcon(icon, sizeDp = 20) }
         CremaAnchoredPopup(expanded = open, onDismiss = { open = false }) {
             CremaMenuSurface(Modifier.widthIn(min = 200.dp, max = 280.dp)) {
                 items.forEach { item ->
@@ -1074,7 +1080,64 @@ fun CremaSortControl(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 current.icon?.let { PhIcon(it, sizeDp = 14, tint = MaterialTheme.colorScheme.onSurfaceVariant) }
-                Text(current.label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface)
+                // onSurfaceVariant — the same off-white as its icons and the
+                // outlined Import/Export pair (onSurface read as bright white).
+                Text(current.label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                PhIcon("caret-down", sizeDp = 13, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            CremaAnchoredPopup(expanded = menuOpen, onDismiss = { menuOpen = false }) {
+                CremaMenuSurface(Modifier.widthIn(min = 172.dp, max = 240.dp)) {
+                    keys.forEach { key ->
+                        CremaMenuItem(
+                            label = key.label,
+                            onClick = { menuOpen = false; onKeyChange(key.id) },
+                            leadingIcon = key.icon,
+                            active = key.id == selectedKey,
+                            showCheck = true,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ── Filter dropdown — CremaSortControl's sibling for picking a FILTER value ──
+// Same split-pill anatomy (icon zone · hairline · current value + caret →
+// bordered dropdown), minus the direction toggle: the left half is a static
+// glyph naming the dimension (e.g. calendar = date range). Replaces a row of
+// mutually-exclusive filter pills when the choice is low-frequency.
+@Composable
+fun CremaFilterDropdown(
+    icon: String,
+    keys: List<SortKey>,
+    selectedKey: String,
+    onKeyChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val current = keys.firstOrNull { it.id == selectedKey } ?: keys.first()
+    var menuOpen by remember { mutableStateOf(false) }
+    val shape = RoundedCornerShape(999.dp)
+    val hairline = MaterialTheme.colorScheme.outlineVariant
+    Row(
+        modifier
+            .height(32.dp)
+            .clip(shape)
+            .border(BorderStroke(1.dp, hairline), shape),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.fillMaxHeight().padding(horizontal = 10.dp), contentAlignment = Alignment.Center) {
+            PhIcon(icon, sizeDp = 15, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Box(Modifier.width(1.dp).fillMaxHeight().background(hairline))
+        Box {
+            Row(
+                Modifier.fillMaxHeight().clickable { menuOpen = true }
+                    .padding(start = 12.dp, end = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text(current.label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 PhIcon("caret-down", sizeDp = 13, tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             CremaAnchoredPopup(expanded = menuOpen, onDismiss = { menuOpen = false }) {

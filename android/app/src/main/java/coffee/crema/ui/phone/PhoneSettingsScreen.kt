@@ -935,7 +935,12 @@ private fun PRow(
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Column(Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            // FlowRow: a tight column drops the pill to its own line WHOLE
+            // (a plain Row squeezed it into letter-per-line wrapping).
+            androidx.compose.foundation.layout.FlowRow(
+                verticalArrangement = Arrangement.Center,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 if (title.isNotEmpty()) Text(title, style = MaterialTheme.typography.bodyLarge)
                 if (notImplemented) PPill("Soon")
                 else if (needsConnection) PPill("Connect DE1", copper = true)
