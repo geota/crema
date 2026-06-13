@@ -31,6 +31,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coffee.crema.history.StoredShot
+import coffee.crema.history.beanLabel
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.formatRatio
 import coffee.crema.ui.TelemetrySample
@@ -100,7 +101,7 @@ fun PhoneHistoryScreen(
     val filtered = ui.history.filter { s ->
         val matchesSearch = query.isBlank() ||
             (s.profileName?.contains(query, ignoreCase = true) == true) ||
-            (s.beanName?.contains(query, ignoreCase = true) == true) ||
+            (s.beanLabel?.contains(query, ignoreCase = true) == true) ||
             (s.notes?.contains(query, ignoreCase = true) == true)
         val matchesRange = when (range) {
             "today" -> s.completedAtMs >= startOfDay
@@ -114,7 +115,7 @@ fun PhoneHistoryScreen(
         val asc = when (sort) {
             "rating" -> list.sortedBy { it.rating ?: 0 }
             "profile" -> list.sortedBy { it.profileName?.lowercase() ?: "" }
-            "bean" -> list.sortedBy { it.beanName?.lowercase() ?: "" }
+            "bean" -> list.sortedBy { it.beanLabel?.lowercase() ?: "" }
             "yield" -> list.sortedBy { it.yieldG ?: 0f }
             "time" -> list.sortedBy { it.durationMs }
             else -> list.sortedBy { it.completedAtMs }
@@ -375,7 +376,7 @@ private fun PhoneShotRow(shot: StoredShot, syncing: Boolean, onOpen: () -> Unit)
                 )
             }
             Text(
-                shot.beanName ?: "—",
+                shot.beanLabel ?: "—",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
@@ -473,7 +474,7 @@ private fun PhoneShotDetail(
             CremaPhoneBackBar(
                 title = shot.profileName ?: "Shot",
                 subtitle = buildList {
-                    shot.beanName?.let { add(it) }
+                    shot.beanLabel?.let { add(it) }
                     add(
                         remember(shot.completedAtMs) {
                             java.text.SimpleDateFormat("MMM d · HH:mm", java.util.Locale.getDefault())

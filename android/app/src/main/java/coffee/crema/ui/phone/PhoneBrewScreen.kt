@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coffee.crema.beans.daysOffRoast
 import coffee.crema.beans.isFrozen
+import coffee.crema.history.beanLabel
 import coffee.crema.ui.formatRatio
 import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager
@@ -748,7 +749,7 @@ private fun RestingBody(
                             }
                         }
                         Text(
-                            listOfNotNull(lastStored?.profileName, lastStored?.beanName).joinToString(" · ").ifEmpty { "Shot" },
+                            listOfNotNull(lastStored?.profileName, lastStored?.beanLabel).joinToString(" · ").ifEmpty { "Shot" },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1, overflow = TextOverflow.Ellipsis,
