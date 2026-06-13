@@ -403,6 +403,72 @@ pub fn roast_freshness(band: Option<String>, days: Option<i64>) -> Option<String
     Some(de1_domain::roast_freshness(band, days?).as_str().to_owned())
 }
 
+// ── Bean / roaster sync surface ──────────────────────────────────────────
+//
+// The six fns the Visualizer bean-sync flow needs (reconcile + de-dup
+// signatures + row coercion). Exported here proactively: Android bean sync is
+// still web-only (`visualizer/VisualizerSync.kt`), but exporting now means the
+// future Android path routes through the same core logic from day one — no
+// re-port. Each mirrors the wasm export of the same name.
+
+/// Reconcile a remote bean pull against the local library → a JSON array of
+/// `BeanReconcileAction`. `payload` is the sync-input JSON. Mirrors the wasm
+/// `reconcileBeans`; see [`de1_domain::reconcile_beans_json`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] when `payload` can't be deserialised.
+#[uniffi::export]
+pub fn reconcile_beans(payload: String) -> Result<String, CremaError> {
+    de1_domain::reconcile_beans_json(&payload).map_err(crema_err)
+}
+
+/// Reconcile a remote roaster pull against the local library → a JSON array of
+/// `RoasterReconcileAction`. Mirrors the wasm `reconcileRoasters`; see
+/// [`de1_domain::reconcile_roasters_json`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] when `payload` can't be deserialised.
+#[uniffi::export]
+pub fn reconcile_roasters(payload: String) -> Result<String, CremaError> {
+    de1_domain::reconcile_roasters_json(&payload).map_err(crema_err)
+}
+
+/// djb2 hex de-dup signature for a bean — `(name, roasterName, roastedOn)`.
+/// Mirrors the wasm `signatureForBean`; see [`de1_domain::signature_for_bean`].
+#[uniffi::export]
+pub fn signature_for_bean(
+    name: String,
+    roaster_name: Option<String>,
+    roasted_on: Option<String>,
+) -> String {
+    de1_domain::signature_for_bean(&name, roaster_name.as_deref(), roasted_on.as_deref())
+}
+
+/// djb2 hex de-dup signature for a roaster — its normalised name. Mirrors the
+/// wasm `signatureForRoaster`; see [`de1_domain::signature_for_roaster`].
+#[uniffi::export]
+pub fn signature_for_roaster(name: String) -> String {
+    de1_domain::signature_for_roaster(&name)
+}
+
+/// Coerce a stored bean row JSON → a normalised `Bean` JSON, or `None` when the
+/// row isn't an object or lacks a string `id` / `name`. `now_unix_ms` seeds the
+/// timestamp defaults. Tolerant: wrong-typed fields are skipped, not rejected.
+/// Mirrors the wasm `coerceBean`; see [`de1_domain::coerce_bean_json`].
+#[uniffi::export]
+pub fn coerce_bean(raw_json: String, now_unix_ms: i64) -> Option<String> {
+    de1_domain::coerce_bean_json(&raw_json, now_unix_ms)
+}
+
+/// Coerce a stored roaster row JSON → a normalised `Roaster` JSON, or `None`.
+/// Mirrors the wasm `coerceRoaster`; see [`de1_domain::coerce_roaster_json`].
+#[uniffi::export]
+pub fn coerce_roaster(raw_json: String, now_unix_ms: i64) -> Option<String> {
+    de1_domain::coerce_roaster_json(&raw_json, now_unix_ms)
+}
+
 /// Hard wire-protocol bounds for DE1 profile fields, as a single JSON
 /// snapshot the Android profile editors parse once at module load so their
 /// steppers / validators reach for the same firmware caps as the core (and

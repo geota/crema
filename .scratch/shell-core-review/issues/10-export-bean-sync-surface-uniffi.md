@@ -1,6 +1,6 @@
 # 10 — Proactively export bean/roaster sync surface via UniFFI
 
-- **Status:** ready-for-agent
+- **Status:** done
 - **Severity:** P2
 - **Area:** Core (UniFFI · WASM) · Android
 - **Punchlist:** T1-10 — `../PUNCHLIST.md`
@@ -26,3 +26,16 @@ All six fns appear in the UniFFI bindings (`de1-ffi`); no implementation logic n
 
 ## Comments
 <!-- triage + progress notes append below -->
+
+### 2026-06-13 — done
+
+Exported all six via `#[uniffi::export]` in `de1-ffi`, each a one-line delegate
+mirroring the wasm export of the same name: `reconcile_beans` /
+`reconcile_roasters` (→ `Result<String, CremaError>` via `crema_err`),
+`signature_for_bean` / `signature_for_roaster` (→ `String`), `coerce_bean` /
+`coerce_roaster` (→ `Option<String>`, taking native `i64` `now_unix_ms` instead
+of the wasm `f64`). Bindgen confirms all six: `reconcileBeans`,
+`reconcileRoasters`, `signatureForBean`, `signatureForRoaster`, `coerceBean`,
+`coerceRoaster`. Latent — no Android caller yet (`VisualizerSync.kt` bean sync
+stays web-only); when wired, the Android path routes through core with zero
+re-ported logic. No shell changes.
