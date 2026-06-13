@@ -29,6 +29,7 @@ import coffee.crema.beans.roastBand5
 import coffee.crema.core.Bean
 import coffee.crema.core.Roaster
 import coffee.crema.ui.MainViewModel
+import coffee.crema.ui.freshnessColor
 import coffee.crema.ui.components.*
 import coffee.crema.ui.phone.components.*
 import coffee.crema.ui.theme.CremaTheme
@@ -409,12 +410,11 @@ private fun PhoneBeanTile(
                 if (frozen) FrozenPill()
                 if (bean.decaf) NeutralPill("DECAF")
                 Spacer(Modifier.weight(1f))
-                val (freshColor, freshLabel) = when {
-                    frozen -> tel.flow to "frozen · paused"
-                    days == null -> MaterialTheme.colorScheme.onSurfaceVariant to "no roast date"
-                    days <= 3 -> tel.weight to "${days}d · resting"
-                    days <= 21 -> tel.success to "${days}d off roast"
-                    else -> tel.temp to "${days}d · past peak"
+                val freshColor = freshnessColor(frozen, bean.roastLevel?.toInt(), days)
+                val freshLabel = when {
+                    frozen -> "frozen"
+                    days == null -> "no roast date"
+                    else -> "${days}d off roast"
                 }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                     Box(Modifier.size(6.dp).clip(CircleShape).background(freshColor))

@@ -1,5 +1,7 @@
 package coffee.crema.ui
 
+import androidx.compose.ui.graphics.Color
+import coffee.crema.beans.freshnessVerdict
 import coffee.crema.core.brewRatio
 
 /**
@@ -21,3 +23,20 @@ fun formatRatio(dose: Float?, yieldOut: Float?): String {
 /** [Double] overload for call sites holding `Double` dose/yield values. */
 fun formatRatio(dose: Double?, yieldOut: Double?): String =
     formatRatio(dose?.toFloat(), yieldOut?.toFloat())
+
+/**
+ * Band-aware freshness status colour for the bean dot — the single palette
+ * shared by the Beans library, the Brew bean block, and the phone bean card
+ * (was three byte-divergent copies). The verdict, and its roast-band rest
+ * window, comes from core via [freshnessVerdict]; this only maps the verdict
+ * to a hue. Frozen → icy blue; best → green; ok → amber; bad → muted red;
+ * unknown (no roast date) → neutral.
+ */
+fun freshnessColor(frozen: Boolean, level: Int?, days: Int?): Color =
+    when (freshnessVerdict(frozen, level, days)) {
+        "frozen" -> Color(0xFF7FB0E0)
+        "best" -> Color(0xFF5FB87A)
+        "ok" -> Color(0xFFDBA764)
+        "bad" -> Color(0xFFC58B8B)
+        else -> Color(0xFF8A8175)
+    }
