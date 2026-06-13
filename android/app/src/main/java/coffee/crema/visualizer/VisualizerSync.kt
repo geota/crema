@@ -346,14 +346,22 @@ class VisualizerSync(
             if (persisted.includeNotes) put("private_notes", JsonPrimitive(shot.notes ?: ""))
             put("privacy", JsonPrimitive(shot.privacy ?: persisted.privacy))
             grinderModel()?.let { put("grinder_model", JsonPrimitive(it)) }
-            // Inline bean from the flat "Roaster · Name" capture label.
-            shot.beanName?.let { label ->
-                val idx = label.indexOf(" · ")
-                if (idx >= 0) {
-                    put("bean_brand", JsonPrimitive(label.substring(0, idx)))
-                    put("bean_type", JsonPrimitive(label.substring(idx + 3)))
-                } else {
-                    put("bean_type", JsonPrimitive(label))
+            // Inline bean — prefer the full snapshot frozen at shot time (issue 06);
+            // it splits roaster/name cleanly (a name containing " · " breaks the
+            // label split). Fall back to splitting the flat label for legacy shots.
+            val snap = shot.bean
+            if (snap != null) {
+                snap.roasterName?.let { put("bean_brand", JsonPrimitive(it)) }
+                put("bean_type", JsonPrimitive(snap.name))
+            } else {
+                shot.beanName?.let { label ->
+                    val idx = label.indexOf(" · ")
+                    if (idx >= 0) {
+                        put("bean_brand", JsonPrimitive(label.substring(0, idx)))
+                        put("bean_type", JsonPrimitive(label.substring(idx + 3)))
+                    } else {
+                        put("bean_type", JsonPrimitive(label))
+                    }
                 }
             }
         }

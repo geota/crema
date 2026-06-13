@@ -1,6 +1,7 @@
 package coffee.crema.history
 
 import android.content.Context
+import coffee.crema.core.ShotBean
 import coffee.crema.ui.TelemetrySample
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -36,8 +37,17 @@ data class StoredShot(
     val peakTemp: Float? = null,
     /** Active profile name at capture, or null. */
     val profileName: String? = null,
-    /** Active bean ("roaster · name") at capture, or null. */
+    /** Active bean ("roaster · name") at capture, or null. Kept for display +
+     *  backward compat; the rich snapshot below is the wire source of truth. */
     val beanName: String? = null,
+    /**
+     * Full bean snapshot at capture (the core wire shape) — roaster, roast date,
+     * and roast level frozen at shot time, so the Visualizer wire carries them
+     * instead of the old `null`s (the StoredShot-migration that unblocks the
+     * hand-built bean wire). Null for shots captured before this field existed
+     * (additive — older records deserialise cleanly) and for beanless shots.
+     */
+    val bean: ShotBean? = null,
     /** User star rating 0..5; null = unrated. Edited from the History detail. */
     val rating: Int? = null,
     /** User tasting notes for this shot; null = none. Edited from the detail. */
