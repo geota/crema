@@ -16,6 +16,7 @@
 import type { Roast } from '$lib/profiles';
 import {
 	roast_band as wasmRoastBand,
+	roast_band5 as wasmRoastBand5,
 	days_off_roast as wasmDaysOffRoast,
 	roast_freshness as wasmRoastFreshness,
 	coerceBean as wasmCoerceBean,
@@ -304,16 +305,13 @@ export const ROAST_PILL_LEVEL: Readonly<Record<Roast, number>> = {
  *
  * The 3-band {@link roastBand} stays canonical and rides on every
  * `RoastBand` comparison in the freshness math — this is purely a
- * UI-display helper for the slider.
+ * UI-display helper for the slider. Delegates to `de1_domain::roast_band5`
+ * via the wasm bridge so web and Android share the one mapping; the `'—'`
+ * placeholder for an unset level stays shell-side.
  */
 export function roastBand5(level: number | null): string {
 	if (level == null) return '—';
-	const n = Math.round(level);
-	if (n <= 2) return 'Light';
-	if (n <= 4) return 'Med-light';
-	if (n === 5) return 'Medium';
-	if (n <= 7) return 'Med-dark';
-	return 'Dark';
+	return wasmRoastBand5(Math.round(level)) ?? '—';
 }
 
 /**

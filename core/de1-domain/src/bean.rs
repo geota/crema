@@ -137,6 +137,57 @@ pub fn roast_band(level: i32) -> RoastBand {
     }
 }
 
+/// Finer 5-bucket **display** label for a 1..10 roast level — the roast
+/// slider caption and library tile pill:
+///
+/// - `1..=2`  → `"Light"`
+/// - `3..=4`  → `"Med-light"`
+/// - `5`      → `"Medium"`
+/// - `6..=7`  → `"Med-dark"`
+/// - `8..=10` → `"Dark"`
+///
+/// Values outside 1..10 are clamped into range first. This is **display
+/// only**: every freshness comparison and filter rides on the canonical
+/// 3-band [`roast_band`] — this just gives the UI a finer caption. Both
+/// shells render these exact strings.
+pub fn roast_band5(level: i32) -> &'static str {
+    match level.clamp(1, 10) {
+        1..=2 => "Light",
+        3..=4 => "Med-light",
+        5 => "Medium",
+        6..=7 => "Med-dark",
+        _ => "Dark",
+    }
+}
+
+#[cfg(test)]
+mod roast_band5_tests {
+    use super::roast_band5;
+
+    #[test]
+    fn maps_every_bucket_and_clamps_out_of_range() {
+        // The exact strings both shells used to hand-roll.
+        let cases = [
+            (1, "Light"),
+            (2, "Light"),
+            (3, "Med-light"),
+            (4, "Med-light"),
+            (5, "Medium"),
+            (6, "Med-dark"),
+            (7, "Med-dark"),
+            (8, "Dark"),
+            (10, "Dark"),
+        ];
+        for (level, label) in cases {
+            assert_eq!(roast_band5(level), label, "level {level}");
+        }
+        // Out of range clamps into 1..=10 (≤0 → Light, >10 → Dark).
+        assert_eq!(roast_band5(0), "Light");
+        assert_eq!(roast_band5(-3), "Light");
+        assert_eq!(roast_band5(99), "Dark");
+    }
+}
+
 /// Whole calendar days (UTC) between an ISO `yyyy-mm-dd` roast date and
 /// the `now_unix_ms` reference time — the bean's "days off roast".
 ///

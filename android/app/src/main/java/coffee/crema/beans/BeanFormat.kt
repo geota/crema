@@ -2,6 +2,7 @@ package coffee.crema.beans
 
 import coffee.crema.core.daysOffRoast as coreDaysOffRoast
 import coffee.crema.core.roastBand as coreRoastBand
+import coffee.crema.core.roastBand5 as coreRoastBand5
 import coffee.crema.core.roastFreshness as coreRoastFreshness
 
 /*
@@ -28,19 +29,12 @@ fun roastBand(level: Int?): String? =
     coreRoastBand(level)?.replaceFirstChar { it.uppercase() }
 
 /**
- * Finer 5-band DISPLAY label (web `roastBand5`): Light / Med-light / Medium /
- * Med-dark / Dark over the 1..10 scale. Purely for tile pills + the roast
- * slider caption — every comparison/filter stays on the canonical 3-band
- * [roastBand]. (No core equivalent yet — tracked as issue 09.)
+ * Finer 5-band DISPLAY label: Light / Med-light / Medium / Med-dark / Dark over
+ * the 1..10 scale. Purely for tile pills + the roast slider caption — every
+ * comparison/filter stays on the canonical 3-band [roastBand]. Delegates to core
+ * `roastBand5` so web and Android share the one mapping; null when unset.
  */
-fun roastBand5(level: Int?): String? = when {
-    level == null -> null
-    level <= 2 -> "Light"
-    level <= 4 -> "Med-light"
-    level == 5 -> "Medium"
-    level <= 7 -> "Med-dark"
-    else -> "Dark"
-}
+fun roastBand5(level: Int?): String? = coreRoastBand5(level)
 
 /**
  * Whole UTC days between the ISO `yyyy-mm-dd` roast date and today; null if
