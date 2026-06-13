@@ -1,6 +1,6 @@
 # 09 — Add `roast_band5` to core + both bindings
 
-- **Status:** ready-for-agent
+- **Status:** done
 - **Severity:** P2
 - **Area:** Core (UniFFI · WASM) · Android · Web
 - **Punchlist:** T1-09 — `../PUNCHLIST.md`
@@ -30,3 +30,22 @@ Identical 5-bucket roast-band display label mapping is hand-rolled twice — web
 
 ## Comments
 <!-- triage + progress notes append below -->
+
+### 2026-06-13 — done
+
+Added `de1_domain::roast_band5(level: i32) -> &'static str` next to `roast_band`
+(clamps 1..10, returns the exact display labels both shells used) + a domain test
+covering every bucket and out-of-range clamping. Re-exported at the crate root;
+exported via `de1-wasm` `roast_band5` and `de1-ffi` `#[uniffi::export] roast_band5`
+(both `Option<i32> -> Option<String>`, matching `roast_band`). Binding verified:
+`fun roastBand5(level: Int?): String?`.
+
+- **Android** `BeanFormat.kt`: `roastBand5` is now a one-line delegate to
+  `coreRoastBand5` (was a 6-arm `when`).
+- **Web** `bean/model.ts`: `roastBand5` delegates to `wasmRoastBand5(Math.round(level))`,
+  keeping only the `'—'` placeholder for null shell-side (rebuilt the wasm pkg so
+  the `.d.ts` declares it).
+
+Acceptance met — the 5-bucket mapping lives solely in `de1-domain`; both shell
+functions are thin wrappers, all other refs are call sites. `cargo test` green;
+`npm run check` 1203 files / 0 errors.

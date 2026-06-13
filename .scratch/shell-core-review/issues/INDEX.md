@@ -22,7 +22,7 @@ Sequencing lives at the bottom of `../PUNCHLIST.md`. Recommended first wave:
 | 06 | Export bean/roaster wire converters via UniFFI; delete Android hand-built wire | P2 | ready-for-agent |
 | 07 | Export `sub_state_error_message` + machine model/feature fns via UniFFI | P2 | ready-for-agent |
 | 08 | Add core brew-defaults source; both shells read it | P2 | ready-for-agent |
-| 09 | Add `roast_band5` to core + both bindings | P2 | ready-for-agent |
+| 09 | Add `roast_band5` to core + both bindings | P2 | ✅ done |
 | 10 | Proactively export bean/roaster sync surface via UniFFI | P2 | ready-for-agent |
 | 11 | Wire Android profile-fingerprint upload-skip | P3 | ready-for-agent |
 

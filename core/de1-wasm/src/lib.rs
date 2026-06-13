@@ -850,6 +850,15 @@ pub fn roast_band(level: Option<i32>) -> Option<String> {
     level.map(|n| de1_domain::roast_band(n).as_str().to_owned())
 }
 
+/// Finer 5-bucket **display** label for a 1..10 roast level (`"Light"` /
+/// `"Med-light"` / `"Medium"` / `"Med-dark"` / `"Dark"`), or `undefined` for a
+/// missing (`None`) level. Display-only — comparisons ride on the 3-band
+/// `roast_band`. See `de1_domain::roast_band5` for the canonical mapping.
+#[wasm_bindgen]
+pub fn roast_band5(level: Option<i32>) -> Option<String> {
+    level.map(|n| de1_domain::roast_band5(n).to_owned())
+}
+
 /// Whole calendar days (UTC) between an ISO `yyyy-mm-dd` roast date and
 /// `now_unix_ms` — the bean's "days off roast". Returns `undefined` when
 /// the date string is malformed or empty. See `de1_domain::days_off_roast`
