@@ -47,6 +47,8 @@ import androidx.compose.ui.unit.sp
 import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager
 import coffee.crema.core.MmrRegister
+import coffee.crema.core.hasCupWarmer
+import coffee.crema.core.machineModelName
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.components.CremaButton
 import coffee.crema.ui.components.CremaButtonVariant
@@ -310,6 +312,11 @@ fun SettingsScreen(
                             SetRow("Connection state") { MonoReadout(if (connected) "Ready" else "Disconnected", color = MaterialTheme.colorScheme.onSurface) }
                             SetRow("GATT verified") { StatusDot(connected) }
                             SetRow("Machine state") { MonoReadout(ui.machineState ?: "—", color = MaterialTheme.colorScheme.onSurface) }
+                            // Readable error copy (core `subStateErrorMessage`, web parity),
+                            // shown only while the substate is an error.
+                            ui.machineError?.let { err ->
+                                SetRow("Machine error") { MonoReadout(err, color = MaterialTheme.colorScheme.error) }
+                            }
                             SetRow("Notifications received", last = true) { MonoReadout(if (connected) "—" else "0", color = MaterialTheme.colorScheme.onSurface) }
                         }
                         SetGroup("Peripherals") {
@@ -1473,20 +1480,11 @@ private fun MaintenanceRow(
 // has not been read yet (disconnected, or the connect-time sweep reply hasn't
 // landed). Ints are interpolated (never passed to String.format("%f")).
 
-/** Machine-model id → marketing name (`0 = Unset`, `1 = DE1` … `7 = DE1XXXL`). */
+/** Machine-model id → marketing name, via core `machineModelName` (the firmware
+ *  enum table — `1 = DE1` … `7 = DE1XXXL`, `"model N"` past the table) so web and
+ *  Android render the same string. `—` only when the register is unread. */
 internal fun machineModelLabel(info: Map<MmrRegister, UInt>): String =
-    when (info[MmrRegister.MachineModel]?.toInt()) {
-        1 -> "DE1"
-        2 -> "DE1+"
-        3 -> "DE1PRO"
-        4 -> "DE1XL"
-        5 -> "DE1CAFE"
-        6 -> "DE1XXL"
-        7 -> "DE1XXXL"
-        0 -> "Unknown"
-        null -> "—"
-        else -> "Model ${info[MmrRegister.MachineModel]?.toInt()}"
-    }
+    info[MmrRegister.MachineModel]?.let { machineModelName(it) } ?: "—"
 
 /** CPU-board revision — raw is `version × 1000` (raw 1100 → "v1.1"). */
 internal fun cpuBoardLabel(info: Map<MmrRegister, UInt>): String {
@@ -1511,7 +1509,7 @@ internal fun heaterVoltageValue(info: Map<MmrRegister, UInt>): String? =
 
 /** Bengle cup-warmer plate present? Models 4–7 (core `has_cup_warmer`). */
 internal fun hasCupWarmerPlate(info: Map<MmrRegister, UInt>): Boolean =
-    (info[MmrRegister.MachineModel]?.toInt() ?: 0) in 4..7
+    info[MmrRegister.MachineModel]?.let { hasCupWarmer(it) } ?: false
 
 /** Cup-warmer plate temperature (°C), or null when the register is unread. */
 internal fun cupWarmerTempValue(info: Map<MmrRegister, UInt>): Int? =

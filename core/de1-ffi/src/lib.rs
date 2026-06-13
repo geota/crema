@@ -469,6 +469,43 @@ pub fn coerce_roaster(raw_json: String, now_unix_ms: i64) -> Option<String> {
     de1_domain::coerce_roaster_json(&raw_json, now_unix_ms)
 }
 
+// ── Machine error / model strings ────────────────────────────────────────
+//
+// Human-readable machine text the shells show instead of raw enum / register
+// values. The web shell reaches these through the wasm exports of the same
+// name; exported here so Android renders the same strings.
+
+/// Human-readable English message for an error substate **name** (the variant
+/// name as it crosses the wire, e.g. `"NoWater"`), or `None` when the substate
+/// isn't an error (or isn't recognised). Mirrors the wasm `subStateErrorMessage`;
+/// see [`de1_protocol::SubState::error_message_for_name`].
+#[uniffi::export]
+pub fn sub_state_error_message(name: String) -> Option<String> {
+    de1_protocol::SubState::error_message_for_name(&name).map(str::to_owned)
+}
+
+/// Whether a Visualizer call error (`tag` + optional HTTP `status`) is worth
+/// retrying. Mirrors the wasm `isRecoverable`; see [`de1_domain::is_recoverable`].
+#[uniffi::export]
+pub fn is_recoverable(tag: String, status: Option<u16>) -> bool {
+    de1_domain::is_recoverable(&tag, status)
+}
+
+/// Human-readable name for a raw `MachineModel` MMR value (e.g. `1` → `"DE1"`),
+/// falling back to `"model N"`. Mirrors the wasm `machineModelName`; see
+/// [`de1_protocol::machine_model_name`].
+#[uniffi::export]
+pub fn machine_model_name(raw: u32) -> String {
+    de1_protocol::machine_model_name(raw)
+}
+
+/// Whether the DE1 with raw `MachineModel` value `raw` has the cup-warmer plate
+/// hardware. Mirrors the wasm `hasCupWarmer`; see [`de1_protocol::has_cup_warmer`].
+#[uniffi::export]
+pub fn has_cup_warmer(raw: u32) -> bool {
+    de1_protocol::has_cup_warmer(raw)
+}
+
 /// Hard wire-protocol bounds for DE1 profile fields, as a single JSON
 /// snapshot the Android profile editors parse once at module load so their
 /// steppers / validators reach for the same firmware caps as the core (and
