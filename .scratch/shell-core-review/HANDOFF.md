@@ -1,7 +1,18 @@
 # Handoff — T1 core-export issues
 
-**Updated:** 2026-06-13 · **Branch:** `effect/phase-0-spike` · **Worktree:** clean (only
-pre-existing untracked `.scratch/android-compose-polish/`, `.scratch/phone-impl/`, `Task`).
+**Updated:** 2026-06-13 (T1 01–11 all addressed) · **Branch:** `effect/phase-0-spike`
+· **Worktree:** clean (only pre-existing untracked `.scratch/android-compose-polish/`,
+`.scratch/phone-impl/`, `Task`).
+
+## TL;DR — T1 is complete
+
+All 11 T1 issues are done or consciously deferred. Issues 01–10 landed; 11 is
+deferred (brew-critical, can't be tested without an emulator). Two issues landed
+their safe core half and deferred a risky Android/refactor half with rationale in
+the issue file (06 Android wire-replacement, 05 bean/wire-shot type dedup). See
+the per-issue tables below. No Android build was possible (no NDK) — all Kotlin
+was reviewed by eye; all Rust + web changes were verified (`cargo test`,
+uniffi-bindgen, `npm run check`).
 
 ## What this is
 
@@ -17,8 +28,17 @@ Rust core and route every shell through it.
 | `3829149` | docs: punchlist + 49 issue files + INDEX. |
 | `68e4975` | **issue 01** (T1-01+T3-01) — `brew_ratio` via UniFFI; one 1-decimal `formatRatio`. ✅ |
 | `e43cfa2` | **issue 02** (T1-02+T4-12) — band-aware freshness via UniFFI `roast_band`/`days_off_roast`/`roast_freshness`; shared `freshnessColor`. ✅ (web label-vocab T3-02 deferred) |
+| `43022b0` | **issue 03** — `profile_bounds_json` via UniFFI; both Android editors source firmware caps from core (hoisted the JSON builder into `de1-domain`). ✅ |
+| `034d3d9` | **issue 04** — web `canonicalToDisplay` routes through the wasm unit helpers (no more open-coded constants). ✅ |
+| `938b48b` | **issue 09** — `roast_band5` added to core + both bindings; web & Android delegate. ✅ |
+| `7cc6ae0` | **issue 08** — `default_brew_defaults_json()` in core; web `DEFAULT_SETTINGS` (lazy getters) + Android `BrewDefaults.INSTANCE` read it. ✅ |
+| `8504ee3` | **issue 10** — bean/roaster sync surface (6 fns) exported via UniFFI (latent, no Android caller yet). ✅ |
+| `3e2d6fd` | **issue 07** — machine error/model text (4 fns) via UniFFI; Android model-name/cup-warmer routed through core + readable substate-error row. ✅ (`is_recoverable` exported, unwired) |
+| `fe87d0e` | **issue 05** — web `crema-core.ts` regenerated from `core/bindings/` + `generate-bindings.sh` sync + CI freshness gate; `MaintenanceState/Readout` deduped. ✅ (bean/wire-shot dedup deferred — idiom divergence) |
+| `1485f40` | **issue 06** — bean/roaster wire converters (6 fns) via UniFFI. ✅ (Android hand-wire replacement deferred — blocked on shot→Bean data model) |
 
-Remaining T1: **03–11** (see INDEX.md). 03 is the last P1.
+All T1 issues are now done or deferred — see **Deferred work** below and the
+per-issue `## Comments` for full rationale.
 
 ## The recipe (followed for 01 & 02 — reuse it)
 
@@ -58,55 +78,42 @@ Remaining T1: **03–11** (see INDEX.md). 03 is the last P1.
 - Kotlin import ordering isn't enforced (ktlint is skipped in the gradle bindgen step), so
   insertion point doesn't break the build.
 
-## Next: issue 03 — `profile_bounds_json` via UniFFI (P1, the bug)
+## Deferred work (all needs an Android emulator + on-device verification)
 
-**Bug:** Android profile editors hardcode bounds that don't match core, so you can author
-firmware-invalid profiles. Core (`core/de1-domain/src/profile_bounds.rs`) is the truth:
-frame time **25.5s**, brew/seg temp **100°C** (steam 170), pressure/flow **15.9375**,
-volume **1023ml**, steps **32**. Web already parses these (`web/src/lib/profiles/bounds.ts`).
+Three pieces were consciously left for when Android can be built and run (no NDK
+here). Each is documented in full in its issue's `## Comments`:
 
-**Plan:**
-1. Export `profile_bounds_json() -> String` via UniFFI (mirror wasm `profile_bounds_json`,
-   `core/de1-wasm/src/lib.rs:971`). JSON keys (snake_case): `max_profile_steps,
-   max_total_volume_ml, min_total_volume_ml, min_pressure_bar, max_pressure_bar,
-   min_flow_ml_per_s, max_flow_ml_per_s, min_temperature_c, max_temperature_c,
-   max_steam_temperature_c, min_frame_seconds, max_frame_seconds, max_preinfuse_steps`.
-2. Android: parse once into a `ProfileBounds` (kotlinx.serialization, like other JSON-string
-   FFI returns) — e.g. a `profiles/ProfileBounds.kt` with a lazily-parsed singleton.
-3. Replace the wrong literals (both editors):
-   - **`ui/screens/ProfileEditScreen.kt`**: L280 brew temp `…, 105.0` → `max_temperature_c`
-     (100); L437 seg temp `20.0, 105.0` → 100; L433 seg time `0.0, 120.0` → `max_frame_seconds`
-     (25.5); L429/L456 target/exit pressure `12.0` → `max_pressure_bar` (15.9375), flow `10.0`
-     → `max_flow_ml_per_s`; L286 max volume `1023.0` is already right (keep, but source it).
-   - **`ui/phone/PhoneProfileEditScreen.kt`**: L186 brew temp `80.0, 100.0` (already correct
-     ceiling — source it); L378 seg temp `…105.0` → 100; L361 seg time `0.0, 127.0` → 25.5;
-     L356 target `12.0` → 15.9375.
-   Note flow vs pressure unit: segs switch unit by mode (`isFlow`) — bound by the matching
-   max (`max_flow_ml_per_s` vs `max_pressure_bar`).
-4. Verify: cargo + uniffi-bindgen emits `profileBoundsJson(): String`; eyeball editors.
+- **11 — fingerprint upload-skip** (`⏸️ deferred`, P3). Not a one-liner: skipping
+  the `startShot()` upload means rerouting the Espresso-request trigger (today it
+  fires only from `ProfileUploadCompleted`), AND invalidating the cached
+  fingerprint on DE1 disconnect (the web clears it — `app.svelte.ts:758`) so a
+  skip never starts a shot against a stale/absent profile. P3 optimisation vs.
+  brew-safety risk, unverifiable here. FFI (`profileFingerprint`) is ready.
+- **06 — Android wire-replacement** (export done; replacement deferred). The
+  hand-assembly (`WireShot.kt`, `VisualizerSync.kt`) builds the bean wire from a
+  flat `"Roaster · Name"` label, not a full `Bean` — so it can't call the new
+  `beanToWire` (needs a full Bean) until Android threads the shot→Bean record
+  through to the wire site (i.e. when bean-sync ships). Changing it now would alter
+  a live Visualizer upload, untestable here.
+- **05 — bean/wire-shot type dedup** (staleness+CI done; dedup deferred). The
+  remaining hand-declared types (`bean/model.ts` string-union enums, `WireShot`'s
+  `| null`) are deliberate web idioms, not stale copies — unifying them is an
+  enum/optional migration across many consumers, a separate refactor. The
+  staleness risk is already gone (generated types + CI gate).
 
-## Issues 04–11 (pointers — read each issue file)
+Also still open from earlier: **T3-02** web freshness label-vocab (deferred in
+issue 02). Other tiers (T2–T5, issues 12–49) are untouched by this pass.
 
-- **04** web `canonicalToDisplay` hardcoded constants → route through the wasm unit helpers
-  it already imports (`web/src/lib/settings/format.ts:219`). Web-only; `npm run check`.
-- **05** generate web `crema-core.ts` from `core/bindings/crema-core.ts` + CI freshness check
-  (web binding is a stale hand-maintained copy missing 13 types). Bigger; mostly web/tooling.
-- **06** export `bean_to_wire`/`bean_from_wire`/`roaster_to_wire`/… via UniFFI; delete the
-  hand-built wire in `android/.../visualizer/WireShot.kt` + `VisualizerSync.kt`.
-- **07** export `sub_state_error_message` (+ `is_recoverable`, `machine_model_name`,
-  `has_cup_warmer`) via UniFFI; wire Android machine-error text (`MainViewModel.kt:2690`).
-- **08** add core `default_brew_defaults_json()` (NEW core fn — no existing value source);
-  both shells read it instead of hardcoded 18/2.0/93/8.
-- **09** add `roast_band5` to core (NEW) + both bindings; replace web `bean/model.ts:309`
-  and android `BeanFormat.kt:roastBand5`.
-- **10** proactively export `reconcile_beans`/`reconcile_roasters`/`signature_for_bean`/
-  `signature_for_roaster`/`coerce_bean`/`coerce_roaster` via UniFFI (latent; no Android caller
-  yet — just the exports + a smoke check).
-- **11** wire Android profile-fingerprint upload-skip (`profile_fingerprint` already on FFI;
-  `MainViewModel.kt:1255` "v1 always uploads"). Android-only logic.
-
-04, 08, 09, 11 are the lowest-risk next picks; 05 and 06 are the largest.
+## CI note (can't run GH Actions locally)
+Issue 05 added a `typeshare bindings freshness` step to the `rust` job in
+`.github/workflows/ci.yml` (install pinned `typeshare-cli 1.13.4`, re-run
+`core/generate-bindings.sh`, `git diff --exit-code`). It mirrors the existing
+`gen-builtin-ids` idempotency gate but was authored blind — **watch its first CI
+run**: if the installed typeshare emits any formatting/version drift vs. the
+committed bindings, the diff will fail and the version pin or the committed files
+need a refresh.
 
 ## Resume prompt
-"Continue T1 from issue 03 using `.scratch/shell-core-review/HANDOFF.md`. Commit after each
-issue; handoff again when context gets heavy."
+"T1 (01–11) is complete in `.scratch/shell-core-review/HANDOFF.md`. If continuing:
+pick up the three emulator-gated deferrals (11, 06 Android-replace, 05 dedup) once
+Android can be built, or start a new tier (T2–T5, issues 12–49) from INDEX.md."
