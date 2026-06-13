@@ -1,6 +1,6 @@
 # 01 — Export `brew_ratio` via UniFFI + one 1-decimal ratio formatter everywhere
 
-- **Status:** ready-for-agent
+- **Status:** done
 - **Severity:** P1
 - **Area:** Core (UniFFI · WASM) · Android (tablet + phone)
 - **Punchlist:** T1-01, T3-01 — `../PUNCHLIST.md`
@@ -44,3 +44,18 @@ Additionally (T3-01): web canonical `formatRatio` = 1 decimal, but Brew dashboar
 
 ## Comments
 <!-- triage + progress notes append below -->
+
+**2026-06-13 — done.** Added `#[uniffi::export] fn brew_ratio` to `de1-ffi`
+(mirrors the wasm export → `de1_domain::brew_ratio`). New shared Kotlin helper
+`coffee.crema.ui.formatRatio(dose, yield)` (Float + Double overloads) calls core
+`brewRatio` and formats `1:N` at one decimal, `1:—` when undefined. Routed all 14
+Android sites + `CremaProfile.ratio` (now `brewRatio(...) ?: 0f`). Web Brew
+dashboard + YieldRatioStepper now use the canonical `formatRatio` (was `.toFixed(2)`).
+Left alone (not dose/yield pairs / already 1-decimal): the "Default ratio" setting
+steppers, the avg-ratio stat, and the ratio-mode stepper value formatter.
+
+Verified: `cargo build -p de1-ffi` ok; `uniffi-bindgen` emits
+`fun brewRatio(dose: Float, yieldOut: Float): Float?` in `coffee.crema.core`
+(matches the call sites); web `svelte-check` 0 errors/0 warnings. Full Android
+gradle build (NDK cross-compile) not run in this env — binding contract verified
+via host uniffi-bindgen instead.

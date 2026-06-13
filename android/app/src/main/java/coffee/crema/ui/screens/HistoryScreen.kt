@@ -49,6 +49,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager
+import coffee.crema.ui.formatRatio
 import coffee.crema.history.StoredShot
 import coffee.crema.ui.TelemetrySample
 import coffee.crema.ui.MainViewModel
@@ -760,6 +761,6 @@ private fun MetricCard(label: String, value: String, unit: String?, modifier: Mo
 private fun shotRatio(shot: StoredShot): String? {
     val y = shot.yieldG
     val d = shot.doseG
-    return if (y != null && d != null && d > 0f) "1:%.2f".format(y / d) else null
+    return if (y != null && d != null && d > 0f) formatRatio(d, y) else null
 }
 

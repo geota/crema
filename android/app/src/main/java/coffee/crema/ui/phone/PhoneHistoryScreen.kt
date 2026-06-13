@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coffee.crema.history.StoredShot
 import coffee.crema.ui.MainViewModel
+import coffee.crema.ui.formatRatio
 import coffee.crema.ui.TelemetrySample
 import coffee.crema.ui.components.*
 import coffee.crema.ui.phone.components.*
@@ -703,5 +704,5 @@ private fun PrivacyPill(label: String, on: Boolean, onClick: () -> Unit) {
 private fun shotRatioLabel(shot: StoredShot): String? {
     val y = shot.yieldG
     val d = shot.doseG
-    return if (y != null && d != null && d > 0f) "1:%.1f".format(y / d) else null
+    return if (y != null && d != null && d > 0f) formatRatio(d, y) else null
 }

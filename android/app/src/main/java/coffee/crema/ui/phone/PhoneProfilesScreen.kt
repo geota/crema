@@ -20,6 +20,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coffee.crema.profiles.CremaProfile
 import coffee.crema.ui.MainViewModel
+import coffee.crema.ui.formatRatio
 import coffee.crema.ui.components.*
 import coffee.crema.ui.phone.components.*
 import coffee.crema.ui.screens.CanvasProfilePreview
@@ -276,7 +277,7 @@ private fun PhoneProfileCard(
                 profile.roast?.let { RoastPill(it) }
                 Spacer(Modifier.weight(1f))
                 Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                    CardMetric("1:%.1f".format(profile.ratio), "RATIO")
+                    CardMetric(formatRatio(profile.dose, profile.yieldOut), "RATIO")
                     CardMetric("%.0fg".format(profile.dose), "DOSE")
                     CardMetric("%.0f°".format(profile.brewTemp), "TEMP")
                     CardMetric("${profile.preinfuseSeconds}s", "PRE")

@@ -14,7 +14,7 @@ Sequencing lives at the bottom of `../PUNCHLIST.md`. Recommended first wave:
 
 | # | Title | Sev | Status |
 |---|-------|-----|--------|
-| 01 | Export `brew_ratio` via UniFFI + one 1-decimal ratio formatter everywhere | P1 | ready-for-agent |
+| 01 | Export `brew_ratio` via UniFFI + one 1-decimal ratio formatter everywhere | P1 | ✅ done |
 | 02 | Export roast band/days-off-roast/freshness via UniFFI; unify freshness label+color | P1 | ready-for-agent |
 | 03 | Export `profile_bounds_json` via UniFFI; replace hardcoded editor limits | P1 | ready-for-agent |
 | 04 | Web `canonicalToDisplay` — route through WASM unit helpers | P1 | ready-for-agent |

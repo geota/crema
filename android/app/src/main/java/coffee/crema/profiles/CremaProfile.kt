@@ -1,5 +1,6 @@
 package coffee.crema.profiles
 
+import coffee.crema.core.brewRatio
 import kotlinx.serialization.Serializable
 
 /*
@@ -53,7 +54,7 @@ data class CremaProfile(
     val segments: List<ProfileSegment> = emptyList(),
 ) {
     /** Live yield-to-dose ratio target, the x in `1:x` (0 when dose is unset). */
-    val ratio: Float get() = if (dose > 0f) yieldOut / dose else 0f
+    val ratio: Float get() = brewRatio(dose, yieldOut) ?: 0f
 
     /** Pre-infusion seconds — the first segment's duration, rounded (web parity). */
     val preinfuseSeconds: Int get() = segments.firstOrNull()?.time?.let { Math.round(it) } ?: 0

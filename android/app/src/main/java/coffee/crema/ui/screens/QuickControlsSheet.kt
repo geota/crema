@@ -25,6 +25,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import coffee.crema.ui.components.CremaValueUnit
+import coffee.crema.ui.formatRatio
 import coffee.crema.ui.theme.CremaTheme
 import coffee.crema.ui.theme.JetBrainsMono
 import androidx.compose.material3.AlertDialog
@@ -229,7 +230,7 @@ fun QuickControlsSheet(
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                         CremaDotToggle(stopOnWeight, { onStopOnWeight(!stopOnWeight) })
                         Eyebrow("Yield", Modifier.weight(1f))
-                        Text("1:%.2f".format(if (dose > 0) yieldOut / dose else 0.0), style = MaterialTheme.typography.labelSmall.copy(fontFamily = JetBrainsMono), color = MaterialTheme.colorScheme.primary)
+                        Text(formatRatio(dose, yieldOut), style = MaterialTheme.typography.labelSmall.copy(fontFamily = JetBrainsMono), color = MaterialTheme.colorScheme.primary)
                     }
                 }
                 // 3 — Brew temp | pre-infuse.

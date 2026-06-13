@@ -47,6 +47,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.ui.draw.clip
 import coffee.crema.profiles.SegmentEdit
 import coffee.crema.profiles.SegmentExit
+import coffee.crema.ui.formatRatio
 import coffee.crema.profiles.SegmentLimiter
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.theme.CremaTheme
@@ -279,7 +280,7 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                         LabeledStepper("Brew temp", brewTemp, "°C", Modifier.weight(1f), 0.5, 20.0, 105.0, { brewTemp = it })
                         LabeledStepper("Dose", dose, "g", Modifier.weight(1f), 0.1, 1.0, 60.0, { dose = it })
                         LabeledStepper("Yield", yieldG, "g", Modifier.weight(1f), 0.5, 1.0, 200.0, { yieldG = it })
-                        LabeledRatio(if (dose > 0.0) yieldG / dose else 0.0, Modifier.weight(1f))
+                        LabeledRatio(dose, yieldG, Modifier.weight(1f))
                     }
                     GroupCard("Limit", 3f) {
                         LimitTile("Max volume", maxVol, "ml", Modifier.weight(1f), maxVol > 0.0, { maxVol = if (maxVol > 0.0) 0.0 else 50.0 }, 10.0, 0.0, 1023.0, { maxVol = it })
@@ -582,7 +583,7 @@ private fun LimitTile(label: String, value: Double, unit: String?, modifier: Mod
 }
 
 @Composable
-private fun LabeledRatio(ratio: Double, modifier: Modifier) {
+private fun LabeledRatio(dose: Double, yieldG: Double, modifier: Modifier) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(verticalAlignment = Alignment.Bottom) {
             Eyebrow("Ratio", Modifier.weight(1f), color = MaterialTheme.colorScheme.primary)
@@ -592,7 +593,7 @@ private fun LabeledRatio(ratio: Double, modifier: Modifier) {
             Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)).padding(horizontal = 12.dp, vertical = 9.dp),
             contentAlignment = Alignment.CenterStart,
         ) {
-            Text("1:%.2f".format(ratio), style = CremaTheme.readout.readoutSm.copy(fontSize = 18.sp), color = MaterialTheme.colorScheme.primary, maxLines = 1)
+            Text(formatRatio(dose, yieldG), style = CremaTheme.readout.readoutSm.copy(fontSize = 18.sp), color = MaterialTheme.colorScheme.primary, maxLines = 1)
         }
     }
 }
