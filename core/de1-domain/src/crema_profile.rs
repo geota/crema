@@ -264,6 +264,10 @@ pub fn from_wire(profile: &Profile) -> CremaProfile {
         .map(|s| s.temperature_c)
         .filter(|t| *t > 0.0)
         .collect();
+    // `temps.len()` is a small frame count, so the f32 cast for the mean is
+    // lossless in practice — the same benign-cast `#[allow]` the rest of the
+    // crate uses (e.g. `maintenance.rs`, `volume.rs`).
+    #[allow(clippy::cast_precision_loss)]
     let mean_temp = if temps.is_empty() {
         92.0
     } else {
