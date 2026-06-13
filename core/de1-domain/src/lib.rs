@@ -91,7 +91,8 @@ pub use crema_jsonl::{
 pub use crema_profile::{
     BrewDefaults, CremaProfile, ProfileSegment, ProfileSource, Roast, blank_crema_profile_json,
     blank_profile, builtin_crema_profiles_json, crema_profile_from_wire_json,
-    crema_profile_to_wire_json, default_segments, default_segments_json, from_wire, to_wire,
+    crema_profile_to_wire_json, default_brew_defaults_json, default_segments,
+    default_segments_json, from_wire, to_wire,
 };
 pub use error::{DomainError, ImportError};
 pub use flow::{Estimate, FlowAlgorithm, FlowEstimator};

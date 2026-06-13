@@ -18,10 +18,31 @@
  * {@link getSettingsStore}. It loads synchronously from `localStorage`.
  */
 
+import { defaultBrewDefaults } from '$lib/wasm/de1_wasm';
 import { readJson, writeJson } from '$lib/utils/storage';
 
 /** localStorage key for the bundle of app preferences ({@link Settings}). */
 const SETTINGS_KEY = 'crema.settings.v1';
+
+/**
+ * The core's out-of-box brew defaults (`{doseG, ratio, brewTempC, preinfusionS}`),
+ * parsed once on first read and memoized. {@link DEFAULT_SETTINGS} surfaces these
+ * through getters so the seed values live in the Rust core, not hardcoded here.
+ *
+ * Lazy — *never* at module scope: the wasm export is only callable once
+ * `loadCore()` has run (the rule `$lib/profiles/bounds.ts` follows). The getters
+ * fire when the settings store is first constructed at render time, long after
+ * boot. See `de1_domain::default_brew_defaults_json`.
+ */
+interface RawBrewDefaults {
+	doseG: number;
+	ratio: number;
+	brewTempC: number;
+	preinfusionS: number;
+}
+let rawBrewDefaults: RawBrewDefaults | null = null;
+const brewDefaults = (): RawBrewDefaults =>
+	(rawBrewDefaults ??= JSON.parse(defaultBrewDefaults()) as RawBrewDefaults);
 
 /** Light/dark theme. The design ships dark; dark stays the default. */
 export type ThemePref = 'dark' | 'light';
@@ -223,10 +244,18 @@ export const DEFAULT_SETTINGS: Settings = {
 	volumeUnit: 'ml',
 	pressureUnit: 'bar',
 
-	defaultDoseG: 18.0,
-	defaultRatio: 2.0,
-	defaultBrewTempC: 93.0,
-	defaultPreinfusionS: 8,
+	get defaultDoseG() {
+		return brewDefaults().doseG;
+	},
+	get defaultRatio() {
+		return brewDefaults().ratio;
+	},
+	get defaultBrewTempC() {
+		return brewDefaults().brewTempC;
+	},
+	get defaultPreinfusionS() {
+		return brewDefaults().preinfusionS;
+	},
 	autoPurgeAfterSteam: true,
 	groupFlushBeforeShot: false,
 	steamEcoMode: false,

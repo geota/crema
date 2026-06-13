@@ -655,6 +655,15 @@ pub fn blank_crema_profile(defaults_json: String) -> Result<String, CremaError> 
     de1_domain::blank_crema_profile_json(&defaults_json).map_err(crema_err)
 }
 
+/// The out-of-box brew defaults (`{doseG, ratio, brewTempC, preinfusionS}` JSON)
+/// the settings store seeds from — so the Android shell no longer hardcodes
+/// `18` / `2.0` / `93` / `8`. Mirrors the wasm `defaultBrewDefaults`; see
+/// [`de1_domain::default_brew_defaults_json`].
+#[uniffi::export]
+pub fn default_brew_defaults_json() -> String {
+    de1_domain::default_brew_defaults_json()
+}
+
 /// The default segment list for a brand-new profile, as a JSON array of
 /// `ProfileSegment`. See [`de1_domain::default_segments_json`].
 #[uniffi::export]

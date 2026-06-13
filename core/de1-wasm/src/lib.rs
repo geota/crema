@@ -428,6 +428,14 @@ pub fn blank_crema_profile(defaults_json: &str) -> Result<String, String> {
     de1_domain::blank_crema_profile_json(defaults_json)
 }
 
+/// The out-of-box brew defaults (`{doseG, ratio, brewTempC, preinfusionS}` JSON)
+/// the settings store seeds from — so the web shell no longer hardcodes
+/// `18` / `2.0` / `93` / `8`. See `de1_domain::default_brew_defaults_json`.
+#[wasm_bindgen(js_name = defaultBrewDefaults)]
+pub fn default_brew_defaults() -> String {
+    de1_domain::default_brew_defaults_json()
+}
+
 /// The default segment list for a brand-new profile, as a JSON array of
 /// `ProfileSegment` — replacing the web's former TypeScript `defaultSegments`.
 /// See `de1_domain::default_segments_json`.

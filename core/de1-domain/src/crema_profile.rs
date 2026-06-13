@@ -172,6 +172,29 @@ pub struct BrewDefaults {
     pub preinfusion_s: f32,
 }
 
+impl Default for BrewDefaults {
+    /// The out-of-box brew defaults — a balanced 1:2 espresso at 93 °C with an
+    /// 8 s pre-infusion, the same numbers both shells used to hardcode. This is
+    /// the one source so a tweak here reaches every shell at once.
+    fn default() -> Self {
+        Self {
+            dose_g: 18.0,
+            ratio: 2.0,
+            brew_temp_c: 93.0,
+            preinfusion_s: 8.0,
+        }
+    }
+}
+
+/// The out-of-box [`BrewDefaults`] as a camelCase JSON object
+/// (`doseG` / `ratio` / `brewTempC` / `preinfusionS`) — the seed values a
+/// shell's settings store starts from. Both shells read this instead of
+/// hardcoding `18` / `2.0` / `93` / `8`, so the defaults live in one place.
+pub fn default_brew_defaults_json() -> String {
+    // Infallible: a fixed struct of finite f32s always serialises.
+    serde_json::to_string(&BrewDefaults::default()).unwrap_or_default()
+}
+
 // ── Core ⇄ shell mapping ────────────────────────────────────────────────────
 
 /// Map a wire [`ProfileStep`] into an editable [`ProfileSegment`].
@@ -466,6 +489,22 @@ mod tests {
     /// exactly representable, so the epsilon is just hygiene.
     fn close(a: f32, b: f32) -> bool {
         (a - b).abs() < 1e-6
+    }
+
+    #[test]
+    fn default_brew_defaults_json_carries_the_camel_case_seed() {
+        let v: serde_json::Value =
+            serde_json::from_str(&default_brew_defaults_json()).expect("valid JSON");
+        // The exact keys + values both shells used to hardcode.
+        assert_eq!(v["doseG"], 18.0);
+        assert_eq!(v["ratio"], 2.0);
+        assert_eq!(v["brewTempC"], 93.0);
+        assert_eq!(v["preinfusionS"], 8.0);
+        assert_eq!(v.as_object().map(|o| o.len()), Some(4));
+        // Round-trips back into the struct blank_profile consumes.
+        let d: BrewDefaults =
+            serde_json::from_str(&default_brew_defaults_json()).expect("round-trips");
+        assert!(close(d.dose_g, 18.0) && close(d.ratio, 2.0));
     }
 
     fn wire_step(name: &str, target: f32) -> ProfileStep {
