@@ -32,6 +32,7 @@
  * key; obtain the singleton with {@link getMaintenanceStore}.
  */
 
+import type { MaintenanceState, MaintenanceReadout } from '$lib/core/crema-core';
 import { readJson, writeJson } from '$lib/utils/storage';
 import { maintenanceReadout as wasmMaintenanceReadout } from '$lib/wasm/de1_wasm';
 
@@ -51,33 +52,9 @@ const MAINTENANCE_KEY_V1 = 'crema.maintenance.v1';
  */
 const MAX_SAMPLE_ML = 1000;
 
-/** The persisted maintenance state — counters plus user-set intervals. */
-export interface MaintenanceState {
-	/** Total litres of water dispensed, ever — the integrated flow counter. */
-	totalLitres: number;
-	/** `totalLitres` at the last filter clean. The DE1's in-tank filter is
-	 * a small mesh screen that catches debris before the pump — the user
-	 * pulls it out and rinses it, doesn't replace it (the user-manual
-	 * recommends mineral-controlled water; the in-tank piece is reusable).
-	 * "Capacity" here is a heuristic for how often a clean is due based
-	 * on litres dispensed, not a hard limit. */
-	filterBaselineLitres: number;
-	/** `totalLitres` at the last descale. */
-	descaleBaselineLitres: number;
-	/** Unix epoch ms of the last clean cycle (DE1 `MachineState::Clean`). */
-	cleanAtMs: number;
-	/** Unix epoch ms of the last filter clean. */
-	filterAtMs: number;
-	/** Unix epoch ms of the last descale. */
-	descaleAtMs: number;
-	/** Filter clean-interval threshold, litres — clean (rinse) when this
-	 * many litres have passed through since the last clean. */
-	filterCapacityLitres: number;
-	/** Descale interval, litres — descale is due past this many litres. */
-	descaleIntervalLitres: number;
-	/** Clean cycle interval, hours — clean is due past this many hours. */
-	cleanIntervalHours: number;
-}
+// `MaintenanceState` and `MaintenanceReadout` are the typeshare-generated
+// types from `$lib/core/crema-core` (the Rust `de1_domain::maintenance` shapes)
+// — imported above, not re-declared here, so the field set has one source.
 
 /**
  * The default maintenance state — a fresh install. The baselines and the
@@ -147,24 +124,6 @@ function loadPersisted(): Partial<MaintenanceState> {
 		if (migrated[k] === undefined) delete migrated[k];
 	}
 	return migrated;
-}
-
-/** A derived maintenance readout — a counter, its limit, and a due/ok verdict. */
-export interface MaintenanceReadout {
-	/** Litres since the last filter change. */
-	filterUsedLitres: number;
-	/** Filter capacity remaining, 0–100 %. */
-	filterPercent: number;
-	/** Whether the filter still has usable capacity. */
-	filterOk: boolean;
-	/** Litres dispensed since the last descale. */
-	descaleSinceLitres: number;
-	/** Whether the descale interval has not yet been exceeded. */
-	descaleOk: boolean;
-	/** Whole hours since the last clean cycle. */
-	cleanSinceHours: number;
-	/** Whether the clean interval has not yet been exceeded. */
-	cleanOk: boolean;
 }
 
 /** The reactive water-accumulation & maintenance store — {@link getMaintenanceStore}. */

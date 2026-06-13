@@ -1,6 +1,6 @@
 # 05 — Generate web `crema-core.ts` from `core/bindings/` + CI freshness check
 
-- **Status:** ready-for-agent
+- **Status:** done (staleness + CI fixed; bean/wire-shot dedup deferred — see Comments)
 - **Severity:** P1
 - **Area:** Web · Core (WASM bindings)
 - **Punchlist:** T1-05 — `../PUNCHLIST.md`
@@ -32,3 +32,41 @@ CI fails on a stale binding; `MaintenanceState`/`WireShot`/`Bean` imported from 
 
 ## Comments
 <!-- triage + progress notes append below -->
+
+### 2026-06-13 — staleness + CI done; type dedup partly deferred
+
+**Done (the P1 — "a new Rust field silently won't appear web-side"):**
+
+- `web/src/lib/core/crema-core.ts` is now a *generated artifact*: regenerated it
+  from `core/bindings/crema-core.ts` (1043 → 1602 lines), gaining all 14
+  previously-missing types (`Bean`, `BeanMix`, …, `WireShot`, `De1Uuids`).
+  Confirmed web's old file was a strict stale **subset** (no divergent types).
+- `core/generate-bindings.sh` now `cp`s the TS output into the web shell, so one
+  generation keeps both in sync.
+- **CI freshness check** (`.github/workflows/ci.yml`, `rust` job): installs
+  pinned `typeshare-cli 1.13.4`, re-runs `generate-bindings.sh`, and
+  `git diff --exit-code core/bindings web/src/lib/core/crema-core.ts` — a stale
+  binding (Rust type changed without regen, or web copy out of sync) fails CI.
+  Mirrors the existing `gen-builtin-ids` idempotency gate. (Can't run GH Actions
+  locally; step is modelled on that established pattern.)
+- **Deduped `MaintenanceState` / `MaintenanceReadout`**: field-identical to the
+  generated types, so `maintenance/store.svelte.ts` now imports them from
+  `$lib/core/crema-core` (index re-exports from there). `npm run check`: 0 errors.
+
+**Deferred — NOT a stale copy, a deliberate web idiom (finding):** the remaining
+hand declarations are *not* outdated duplicates; they re-shape the core types to
+web-idiomatic TS, so deduping them is an enum/optional **migration**, not a sync:
+
+- `bean/model.ts`: `BeanMix`/`BeanRoastType` are string unions (`'single' |
+  'blend'`) where typeshare emits TS `enum`s; `Bean`/`Roaster`/`BeanOrigin` build
+  on those. Switching means every `'single'` literal → `BeanMix.Single` across all
+  consumers.
+- `visualizer/shot-sync-signatures.ts` + the `WireShot` mirror: use `field: T |
+  null` where typeshare emits optional `field?: T`. `| null` vs `?:`
+  (null-vs-undefined) differ at runtime, so consumers' null-handling must be
+  audited, not just retyped.
+- `history/model.ts` `ShotBean`: same string-union basis as `bean/model.ts`.
+
+These don't reintroduce the staleness risk (the canonical generated types now
+exist + are CI-guarded). Truly unifying them is a separate "adopt typeshare enums
+on the web" refactor — left as follow-up cleanup rather than forced here.
