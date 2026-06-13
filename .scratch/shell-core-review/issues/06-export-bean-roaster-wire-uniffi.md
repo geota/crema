@@ -93,3 +93,14 @@ roastedOn), legacy fallback, beanless, and the profileName/grinderModel regressi
 — all green; backward-compat (old shots load) confirmed on phone + tablet. The
 actual Visualizer *upload* still needs auth/network (unverified, as for any
 remote push), but the emitted wire shape is now unit-pinned.
+
+### 2026-06-13 (follow-up) — dropped the denormalized `beanName` entirely
+
+Per review (no backward compat needed), removed `StoredShot.beanName` (the flat
+string) completely. The `bean: ShotBean?` snapshot is now the **single** source;
+the "Roaster · Name" UX derives from it via a canonical `StoredShot.beanLabel`
+(mirrors web `beanLabel`). All consumers (History search/sort/display/share on
+tablet + phone, PhoneBrew last-shot, the wire `metadata.beans`, the patch inline
+bean) read `beanLabel`/`bean`; the flat-label fallback + `beanNameParts` are gone.
+Seed generator updated to emit structured snapshots. Verified on both emulators —
+History shows the derived labels identically.
