@@ -43,6 +43,7 @@ import coffee.crema.ble.BleSessionRecorder
 import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.NordicBleTransport
 import coffee.crema.ble.ScaleBleManager
+import coffee.crema.core.subStateErrorMessage
 import coffee.crema.profiles.BrewDefaults
 import coffee.crema.profiles.CremaProfile
 import coffee.crema.profiles.CustomProfileStore
@@ -176,6 +177,10 @@ data class MainUiState(
     val machineStateName: String? = null,
     /** Raw machine-substate name (e.g. `"Pouring"`), or null. */
     val machineSubstate: String? = null,
+    /** Human-readable message when the current substate is an *error* (e.g.
+     *  `"No water — refill the tank"`), else null. Sourced from core
+     *  `subStateErrorMessage` so it matches the web shell's copy verbatim. */
+    val machineError: String? = null,
     /** Latest tank level, mm (`Event.WaterLevel`), or null before the first report. */
     val waterLevelMm: Float? = null,
     /**
@@ -2691,6 +2696,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     machineState = "${c.state.string} / ${c.substate.string}",
                     machineStateName = c.state.string,
                     machineSubstate = c.substate.string,
+                    // Readable error copy for an error substate (null otherwise),
+                    // from core so it matches web. Healthy substates clear it.
+                    machineError = subStateErrorMessage(c.substate.string),
                 ) }
                 appendLog("MachineState -> ${c.state.string} / ${c.substate.string}")
             }

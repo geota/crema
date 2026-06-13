@@ -395,7 +395,11 @@ private fun MachineSection(
     SettingsGroup("Diagnostics") {
         PRow("Connection state") { PMono(if (connected) "Ready" else "Disconnected", strong = true) }
         PRow("GATT verified") { PStatusDot(connected) }
-        PRow("Machine state", last = true) { PMono(ui.machineState ?: "—", strong = true) }
+        PRow("Machine state", last = ui.machineError == null) { PMono(ui.machineState ?: "—", strong = true) }
+        // Readable error copy (core `subStateErrorMessage`, web parity), only while erroring.
+        ui.machineError?.let { err ->
+            PRow("Machine error", last = true) { PMono(err, strong = true, color = MaterialTheme.colorScheme.error) }
+        }
     }
     if (hasCupWarmerPlate(ui.de1MachineInfo)) {
         SettingsGroup("Cup warmer") {
