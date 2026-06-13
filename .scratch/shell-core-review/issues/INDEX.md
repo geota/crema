@@ -19,7 +19,7 @@ Sequencing lives at the bottom of `../PUNCHLIST.md`. Recommended first wave:
 | 03 | Export `profile_bounds_json` via UniFFI; replace hardcoded editor limits | P1 | ✅ done |
 | 04 | Web `canonicalToDisplay` — route through WASM unit helpers | P1 | ✅ done |
 | 05 | Generate web `crema-core.ts` from `core/bindings/` + CI freshness check | P1 | ✅ done (bean/wire dedup deferred) |
-| 06 | Export bean/roaster wire converters via UniFFI; delete Android hand-built wire | P2 | ready-for-agent |
+| 06 | Export bean/roaster wire converters via UniFFI; delete Android hand-built wire | P2 | ✅ done (Android replace deferred) |
 | 07 | Export `sub_state_error_message` + machine model/feature fns via UniFFI | P2 | ✅ done |
 | 08 | Add core brew-defaults source; both shells read it | P2 | ✅ done |
 | 09 | Add `roast_band5` to core + both bindings | P2 | ✅ done |

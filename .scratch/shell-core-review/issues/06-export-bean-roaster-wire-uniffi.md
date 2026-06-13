@@ -1,6 +1,6 @@
 # 06 — Export bean/roaster wire converters via UniFFI; delete Android hand-built wire
 
-- **Status:** ready-for-agent
+- **Status:** done (UniFFI exports; Android hand-wire replacement deferred — see Comments)
 - **Severity:** P2
 - **Area:** Core (UniFFI · WASM) · Android
 - **Punchlist:** T1-06 — `../PUNCHLIST.md`
@@ -30,3 +30,27 @@ Android emitted wire JSON matches the web-emitted wire JSON field-for-field (inc
 
 ## Comments
 <!-- triage + progress notes append below -->
+
+### 2026-06-13 — exports done; Android replacement deferred (architecturally premature)
+
+**Done:** exported all six via `#[uniffi::export]` in `de1-ffi`, each mirroring
+the wasm export of the same name (native `i64` `now_unix_ms`, not the wasm `f64`):
+`bean_to_wire` / `bean_from_wire` / `roaster_to_wire` / `roaster_from_wire`
+(→ `Result<String, CremaError>`), `roast_level_to_wire(Option<f64>) ->
+Option<String>`, `roast_level_from_wire(Option<String>) -> Option<i32>`. Bindgen:
+`beanToWire`, `beanFromWire`, `roasterToWire`, `roasterFromWire`,
+`roastLevelToWire`, `roastLevelFromWire`. (Same proactive-export approach as
+issue 10 — the shared converter is now available to Android.)
+
+**Deferred — the hand-wire replacement isn't a swap, it's blocked on the data
+model:** `WireShot.kt:93-107` builds the `bean` sub-object from a *flat label*
+(`shot.beanName`, plus `beanShort`/`roasterName`), NOT a full `Bean` — which is
+exactly why it emits `roastLevel`/`roastedOn` as `JsonNull`. `VisualizerSync.kt:349-358`
+likewise splits a `"Roaster · Name"` string into `bean_brand`/`bean_type`. The
+core `bean_to_wire` needs a full `Bean` JSON; Android doesn't carry one to the
+shot-wire site until bean-sync ships (it stores only the denormalized label on
+the shot). So fixing the divergence means first threading the full `Bean` record
+through to wire-build time — the same prerequisite the issue flags ("lower urgency
+until Android bean-sync ships"). Replacing blindly would change a **live Visualizer
+upload** I can't test on-device. Left for when Android gains the shot→Bean link;
+the export is in place so that work is a thin wiring step.

@@ -506,6 +506,92 @@ pub fn has_cup_warmer(raw: u32) -> bool {
     de1_protocol::has_cup_warmer(raw)
 }
 
+// ── Visualizer bean / roaster wire converters ────────────────────────────
+//
+// Encode/decode the Crema bean & roaster shapes ⇄ the Visualizer coffee-bag /
+// roaster wire bodies. The web shell reaches these via the wasm exports
+// (`bean/visualizer-sync.ts`); Android still hand-assembles the wire today
+// (`visualizer/WireShot.kt`, `VisualizerSync.kt`) and has drifted (it emits
+// `roastLevel`/`roastedOn` as JsonNull). Exported here so that hand assembly
+// can be deleted in favour of one shared converter — see issue 06's Comments
+// for why the Android replacement is staged separately. Each mirrors the wasm
+// export of the same name (native `i64` `now_unix_ms` instead of the wasm `f64`).
+
+/// Encode a Crema `Bean` JSON → a Visualizer coffee-bag wire body JSON.
+/// `roaster_remote_id` links the bag to an already-synced roaster. Mirrors the
+/// wasm `beanToWire`; see [`de1_domain::bean_to_wire_json`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] when `bean_json` can't be deserialised.
+#[uniffi::export]
+pub fn bean_to_wire(bean_json: String, roaster_remote_id: Option<String>) -> Result<String, CremaError> {
+    de1_domain::bean_to_wire_json(&bean_json, roaster_remote_id.as_deref()).map_err(crema_err)
+}
+
+/// Decode a Visualizer coffee-bag wire body JSON → a Crema `Bean` JSON.
+/// `local_roaster_id` binds it to a local roaster; `fallback_id` is used when
+/// the wire body carries no id; `now_unix_ms` seeds timestamp defaults. Mirrors
+/// the wasm `beanFromWire`; see [`de1_domain::bean_from_wire_json`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] when `wire_json` can't be deserialised.
+#[uniffi::export]
+pub fn bean_from_wire(
+    wire_json: String,
+    local_roaster_id: Option<String>,
+    fallback_id: String,
+    now_unix_ms: i64,
+) -> Result<String, CremaError> {
+    de1_domain::bean_from_wire_json(&wire_json, local_roaster_id.as_deref(), &fallback_id, now_unix_ms)
+        .map_err(crema_err)
+}
+
+/// Encode a Crema `Roaster` JSON → a Visualizer roaster wire body JSON. Mirrors
+/// the wasm `roasterToWire`; see [`de1_domain::roaster_to_wire_json`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] when `roaster_json` can't be deserialised.
+#[uniffi::export]
+pub fn roaster_to_wire(roaster_json: String) -> Result<String, CremaError> {
+    de1_domain::roaster_to_wire_json(&roaster_json).map_err(crema_err)
+}
+
+/// Decode a Visualizer roaster wire body JSON → a Crema `Roaster` JSON.
+/// `fallback_id` is used when the wire body carries no id; `now_unix_ms` seeds
+/// timestamp defaults. Mirrors the wasm `roasterFromWire`; see
+/// [`de1_domain::roaster_from_wire_json`].
+///
+/// # Errors
+///
+/// Returns a [`CremaError`] when `wire_json` can't be deserialised.
+#[uniffi::export]
+pub fn roaster_from_wire(
+    wire_json: String,
+    fallback_id: String,
+    now_unix_ms: i64,
+) -> Result<String, CremaError> {
+    de1_domain::roaster_from_wire_json(&wire_json, &fallback_id, now_unix_ms).map_err(crema_err)
+}
+
+/// Crema's 1..10 roast level → Visualizer's free-text band label (e.g. `"light"`),
+/// or `None` when the level is unset. Mirrors the wasm `roastLevelToWire`; see
+/// [`de1_domain::roast_level_to_wire`].
+#[uniffi::export]
+pub fn roast_level_to_wire(level: Option<f64>) -> Option<String> {
+    de1_domain::roast_level_to_wire(level)
+}
+
+/// Visualizer's free-text band label → Crema's 1..10 level (in-band representative),
+/// or `None` when unrecognised. Mirrors the wasm `roastLevelFromWire`; see
+/// [`de1_domain::roast_level_from_wire`].
+#[uniffi::export]
+pub fn roast_level_from_wire(label: Option<String>) -> Option<i32> {
+    de1_domain::roast_level_from_wire(label.as_deref()).map(i32::from)
+}
+
 /// Hard wire-protocol bounds for DE1 profile fields, as a single JSON
 /// snapshot the Android profile editors parse once at module load so their
 /// steppers / validators reach for the same firmware caps as the core (and
