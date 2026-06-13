@@ -92,6 +92,7 @@ fun PhoneBeansScreen(
     val beansAsc = when (sort) {
         "name" -> visibleBeans.sortedBy { it.name.lowercase() }
         "roast" -> visibleBeans.sortedBy { it.roastLevel?.toInt() ?: Int.MAX_VALUE }
+        "rating" -> visibleBeans.sortedBy { it.rating.toInt() }
         "remaining" -> visibleBeans.sortedBy { it.remaining }
         else -> visibleBeans.sortedBy { daysOffRoast(it.roastedOn) ?: Int.MAX_VALUE }
     }
@@ -149,6 +150,7 @@ fun PhoneBeansScreen(
                                 SortKey("freshest", "Freshest", "clock"),
                                 SortKey("name", "Name", "sort-ascending"),
                                 SortKey("roast", "Roast", "fire"),
+                                SortKey("rating", "Rating", "star"),
                                 SortKey("remaining", "Remaining", "gauge"),
                             ),
                             selectedKey = sort,

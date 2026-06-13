@@ -60,6 +60,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import coffee.crema.ui.components.CremaFilterChip
+import coffee.crema.ui.components.CremaFilterDropdown
 import coffee.crema.ui.components.CremaSortControl
 import coffee.crema.ui.components.SortKey
 import coffee.crema.ui.components.CremaNavigationRail
@@ -83,6 +84,17 @@ import coffee.crema.ui.theme.CremaTheme
  * static chart (ShotChart with live=false) over its stored telemetry slice.
  */
 @OptIn(ExperimentalLayoutApi::class)
+// Shot-log sort fields — icons match the web history SortPill; shared by the
+// tablet sort control here and the phone history screen.
+val historySortKeys = listOf(
+    SortKey("date", "Date", "calendar"),
+    SortKey("rating", "Rating", "star"),
+    SortKey("profile", "Profile", "list-bullets"),
+    SortKey("bean", "Bean", "coffee-bean"),
+    SortKey("yield", "Yield", "scales"),
+    SortKey("time", "Time", "timer"),
+)
+
 @Composable
 fun HistoryScreen(
     vm: MainViewModel,
@@ -147,6 +159,8 @@ fun HistoryScreen(
     }
     val sortedAsc = when (sort) {
         "rating" -> filtered.sortedBy { it.rating ?: 0 }
+        "profile" -> filtered.sortedBy { it.profileName?.lowercase() ?: "" }
+        "bean" -> filtered.sortedBy { it.beanName?.lowercase() ?: "" }
         "yield" -> filtered.sortedBy { it.yieldG ?: 0f }
         "time" -> filtered.sortedBy { it.durationMs }
         else -> filtered.sortedBy { it.completedAtMs }
@@ -242,7 +256,7 @@ fun HistoryScreen(
                         val byProfile = ui.history.mapNotNull { it.profileName }
                             .groupingBy { it }.eachCount().entries.sortedByDescending { it.value }
                         CremaFilterChip(
-                            label = "All profiles",
+                            label = "All",
                             selected = profileFilter == null,
                             count = ui.history.size,
                             onClick = { profileFilter = null },
@@ -255,26 +269,30 @@ fun HistoryScreen(
                                 onClick = { profileFilter = if (profileFilter == name) null else name },
                             )
                         }
-                        listOf("all" to "All time", "30d" to "30 days", "7d" to "7 days", "today" to "Today").forEach { (id, label) ->
-                            val count = when (id) {
-                                "today" -> ui.history.count { it.completedAtMs >= startOfDay }
-                                "7d" -> ui.history.count { it.completedAtMs >= now - 7L * dayMs }
-                                "30d" -> ui.history.count { it.completedAtMs >= now - 30L * dayMs }
-                                else -> ui.history.size
-                            }
-                            CremaFilterChip(label = label, selected = range == id, count = count, onClick = { range = id })
-                        }
                     }
-                    CremaSortControl(
+                    // Date range — a split dropdown (calendar glyph · value),
+                    // not pills: it's a low-frequency pick beside the sort.
+                    CremaFilterDropdown(
+                        icon = "calendar",
                         keys = listOf(
-                            SortKey("date", "Date"),
-                            SortKey("rating", "Rating"),
-                            SortKey("yield", "Yield"),
-                            SortKey("time", "Time"),
+                            SortKey("all", "All time"),
+                            SortKey("30d", "30 days"),
+                            SortKey("7d", "7 days"),
+                            SortKey("today", "Today"),
                         ),
+                        selectedKey = range,
+                        onKeyChange = { range = it },
+                    )
+                    CremaSortControl(
+                        keys = historySortKeys,
                         selectedKey = sort,
                         descending = sortDesc,
-                        onKeyChange = { sort = it },
+                        onKeyChange = { key ->
+                            sort = key
+                            // A fresh field lands on its obvious direction (web
+                            // DEFAULT_DIR): newest/highest first, names A→Z.
+                            sortDesc = key !in setOf("profile", "bean")
+                        },
                         onToggleDirection = { sortDesc = !sortDesc },
                     )
                 }
@@ -538,6 +556,7 @@ private fun SparkChart(samples: List<TelemetrySample>, modifier: Modifier = Modi
             drawPath(path, color = color, style = Stroke(width = widthDp.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
         }
         channel(tel.temp.copy(alpha = 0.75f), 1.1f) { it.headTemp }
+        channel(tel.weight.copy(alpha = 0.9f), 1.3f) { it.weight }
         channel(tel.flow.copy(alpha = 0.9f), 1.3f) { it.flow }
         channel(tel.pressure, 1.8f) { it.pressure }
     }

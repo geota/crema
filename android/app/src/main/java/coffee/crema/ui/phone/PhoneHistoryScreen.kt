@@ -36,6 +36,7 @@ import coffee.crema.ui.TelemetrySample
 import coffee.crema.ui.components.*
 import coffee.crema.ui.phone.components.*
 import coffee.crema.ui.screens.CanvasShotChart
+import coffee.crema.ui.screens.historySortKeys
 import coffee.crema.ui.theme.CremaTheme
 import coffee.crema.ui.theme.JetBrainsMono
 
@@ -60,6 +61,8 @@ fun PhoneHistoryScreen(
     var searchOpen by remember { mutableStateOf(false) }
     var profileFilter by remember { mutableStateOf<String?>(null) }
     var range by remember { mutableStateOf("all") }
+    var sort by remember { mutableStateOf("date") }
+    var sortDesc by remember { mutableStateOf(true) } // newest / highest first
     var exportSheet by remember { mutableStateOf(false) }
 
     // Brew's "Last shot" peek deep-links here: open that shot's detail.
@@ -106,7 +109,17 @@ fun PhoneHistoryScreen(
         }
         val matchesProfile = profileFilter == null || s.profileName == profileFilter
         matchesSearch && matchesRange && matchesProfile
-    }.sortedByDescending { it.completedAtMs }
+    }.let { list ->
+        val asc = when (sort) {
+            "rating" -> list.sortedBy { it.rating ?: 0 }
+            "profile" -> list.sortedBy { it.profileName?.lowercase() ?: "" }
+            "bean" -> list.sortedBy { it.beanName?.lowercase() ?: "" }
+            "yield" -> list.sortedBy { it.yieldG ?: 0f }
+            "time" -> list.sortedBy { it.durationMs }
+            else -> list.sortedBy { it.completedAtMs }
+        }
+        if (sortDesc) asc.reversed() else asc
+    }
 
     val detail = detailId?.let { id -> ui.history.firstOrNull { it.id == id } }
 
@@ -128,11 +141,14 @@ fun PhoneHistoryScreen(
 
     Scaffold(
         topBar = {
+            // Import / Export are separate bar actions — same pairing as the
+            // Profiles and Beans top bars.
             CremaPhoneTopBar(
                 title = "History",
                 actions = listOf(
                     BarAction("magnifying-glass") { searchOpen = !searchOpen },
-                    BarAction("export") { exportSheet = true },
+                    BarAction("upload-simple") { importLauncher.launch(arrayOf("application/json", "text/*", "*/*")) },
+                    BarAction("download-simple") { exportSheet = true },
                     BarAction("gear-six") { onNav("settings") },
                 ),
             )
@@ -162,24 +178,45 @@ fun PhoneHistoryScreen(
             // Stats strip — Today / Avg ratio / Avg rating over the FULL history.
             PhoneStatsStrip(ui.history, startOfDay)
 
-            // Filter chips: per-profile pills, then time ranges.
+            // Filter chips: per-profile pills, then the date dropdown + sort.
             val byProfile = ui.history.mapNotNull { it.profileName }
                 .groupingBy { it }.eachCount().entries.sortedByDescending { it.value }
             CremaFilterChipRow(
                 chips = buildList {
                     add(FilterChipSpec("all", "All", ui.history.size))
                     byProfile.take(6).forEach { (name, count) -> add(FilterChipSpec("p:$name", name, count)) }
-                    add(FilterChipSpec("r:today", "Today", ui.history.count { it.completedAtMs >= startOfDay }))
-                    add(FilterChipSpec("r:7d", "7 days", ui.history.count { it.completedAtMs >= now - 7L * dayMs }))
-                    add(FilterChipSpec("r:30d", "30 days", ui.history.count { it.completedAtMs >= now - 30L * dayMs }))
                 },
-                selected = profileFilter?.let { "p:$it" } ?: if (range != "all") "r:$range" else "all",
+                selected = profileFilter?.let { "p:$it" } ?: "all",
                 onSelect = { id ->
                     when {
-                        id == "all" -> { profileFilter = null; range = "all" }
-                        id.startsWith("p:") -> { profileFilter = id.removePrefix("p:"); }
-                        id.startsWith("r:") -> { profileFilter = null; range = id.removePrefix("r:") }
+                        id == "all" -> profileFilter = null
+                        id.startsWith("p:") -> profileFilter = id.removePrefix("p:")
                     }
+                },
+                trailing = {
+                    // Date range as a split dropdown (tablet parity) — the
+                    // range pills crowded the profile chips out of the row.
+                    CremaFilterDropdown(
+                        icon = "calendar",
+                        keys = listOf(
+                            SortKey("all", "All time"),
+                            SortKey("30d", "30 days"),
+                            SortKey("7d", "7 days"),
+                            SortKey("today", "Today"),
+                        ),
+                        selectedKey = range,
+                        onKeyChange = { range = it },
+                    )
+                    CremaSortControl(
+                        keys = historySortKeys,
+                        selectedKey = sort,
+                        descending = sortDesc,
+                        onKeyChange = { key ->
+                            sort = key
+                            sortDesc = key !in setOf("profile", "bean")
+                        },
+                        onToggleDirection = { sortDesc = !sortDesc },
+                    )
                 },
             )
 
@@ -189,7 +226,8 @@ fun PhoneHistoryScreen(
                 }
             }
 
-            // Day-grouped shot list.
+            // Day-grouped shot list (headers only under the date sort —
+            // rating/name orders interleave days, so groups would repeat).
             LazyColumn(
                 modifier = Modifier.weight(1f).fillMaxWidth(),
                 contentPadding = PaddingValues(start = CremaEdge, end = CremaEdge, top = 4.dp, bottom = 24.dp),
@@ -198,7 +236,7 @@ fun PhoneHistoryScreen(
                 var lastDay: String? = null
                 filtered.forEach { shot ->
                     val day = dayLabel(shot.completedAtMs, startOfDay, dayMs)
-                    if (day != lastDay) {
+                    if (day != lastDay && sort == "date") {
                         lastDay = day
                         item(key = "day-$day-${shot.id}") {
                             Text(
@@ -233,19 +271,15 @@ fun PhoneHistoryScreen(
 
     if (exportSheet) {
         CremaOverflowSheet(
-            title = "Shots",
-            items = buildList {
-                add(SheetItem("upload-simple", "Import shots", sub = "Crema JSON from another device") {
-                    importLauncher.launch(arrayOf("application/json", "text/*", "*/*"))
-                })
-                add(SheetItem(divider = true))
-                add(SheetItem("file-text", "Export all shots", sub = "Every shot as one Crema JSON file") {
+            title = "Export as",
+            items = listOf(
+                SheetItem("file-text", "All shots", sub = "Every shot as one Crema JSON file. Re-importable in Crema.") {
                     launchSave("crema-history.json", vm.shotsJson(null))
-                })
-                add(SheetItem("file-code", "Export current filter", sub = "Only the ${filtered.size} shot(s) matching your filters") {
+                },
+                SheetItem("file-code", "Current filter", sub = "Only the ${filtered.size} shot(s) matching your search and filters.") {
                     launchSave("crema-history-filtered.json", vm.shotsJson(filtered.map { it.id }))
-                })
-            },
+                },
+            ),
             onDismiss = { exportSheet = false },
         )
     }
@@ -378,7 +412,9 @@ private fun RowMono(text: String) {
     )
 }
 
-// Tiny static pressure silhouette for a row (proto ShotSpark).
+// Tiny static shot silhouette for a row — the SAME channel set as the detail
+// chart (temp + weight + flow behind, pressure on top), each min-max
+// normalised to the box on its own scale.
 @Composable
 private fun PhoneSpark(samples: List<TelemetrySample>, modifier: Modifier = Modifier) {
     val tel = CremaTheme.telemetry
@@ -389,19 +425,25 @@ private fun PhoneSpark(samples: List<TelemetrySample>, modifier: Modifier = Modi
         val inset = 3.dp.toPx()
         val plotW = (size.width - inset * 2f).coerceAtLeast(1f)
         val plotH = (size.height - inset * 2f).coerceAtLeast(1f)
-        var mn = Float.POSITIVE_INFINITY
-        var mx = Float.NEGATIVE_INFINITY
-        samples.forEach { s -> s.pressure?.let { if (it < mn) mn = it; if (it > mx) mx = it } }
-        val vSpan = (mx - mn).takeIf { it > 0f } ?: return@Canvas
-        val path = Path()
-        var started = false
-        samples.forEach { s ->
-            val v = s.pressure ?: return@forEach
-            val x = inset + ((s.elapsedMs.toFloat() - firstT) / span) * plotW
-            val y = inset + (1f - (v - mn) / vSpan) * plotH
-            if (!started) { path.moveTo(x, y); started = true } else path.lineTo(x, y)
+        fun channel(color: androidx.compose.ui.graphics.Color, widthDp: Float, value: (TelemetrySample) -> Float?) {
+            var mn = Float.POSITIVE_INFINITY
+            var mx = Float.NEGATIVE_INFINITY
+            samples.forEach { s -> value(s)?.let { v -> if (v < mn) mn = v; if (v > mx) mx = v } }
+            val vSpan = (mx - mn).takeIf { it > 0f } ?: return
+            val path = Path()
+            var started = false
+            samples.forEach { s ->
+                val v = value(s) ?: return@forEach
+                val x = inset + ((s.elapsedMs.toFloat() - firstT) / span) * plotW
+                val y = inset + (1f - (v - mn) / vSpan) * plotH
+                if (!started) { path.moveTo(x, y); started = true } else path.lineTo(x, y)
+            }
+            drawPath(path, color = color, style = Stroke(width = widthDp.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
         }
-        drawPath(path, color = tel.pressure, style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
+        channel(tel.temp.copy(alpha = 0.75f), 1.0f) { it.headTemp }
+        channel(tel.weight.copy(alpha = 0.9f), 1.2f) { it.weight }
+        channel(tel.flow.copy(alpha = 0.9f), 1.2f) { it.flow }
+        channel(tel.pressure, 1.8f) { it.pressure }
     }
 }
 

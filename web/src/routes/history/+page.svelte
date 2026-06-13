@@ -436,7 +436,7 @@
 		const items: FilterPillItem[] = [
 			{
 				id: 'p:all',
-				label: 'All profiles',
+				label: 'All',
 				count: shots.length,
 				selected: filterProfile === 'all'
 			}
