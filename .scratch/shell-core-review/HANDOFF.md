@@ -75,6 +75,16 @@ per-issue `## Comments` for full rationale.
   verify web via `cd web && npm run check` (svelte-check, ~1200 files, was 0/0). Review
   Kotlin by eye (watch overload resolution: `formatRatio` has Float+Double overloads —
   don't pass mixed Float/Double).
+- **CI core gates (`.github/workflows/ci.yml` `rust` job): also run `cargo fmt --all -- --check`
+  and `cargo clippy --workspace --all-targets -- -D warnings`** before calling a core change
+  done — they bite. The workspace `[lints]` (root `Cargo.toml`) **denies `cast_precision_loss`**
+  (so a `len() as f32` average needs `#[allow(clippy::cast_precision_loss)]` — see
+  `maintenance.rs`/`volume.rs`); keep UniFFI signatures ≤100 cols or rustfmt wraps them.
+- **rustfmt version skew (pre-existing):** local `rustfmt 1.9.0` reformats ~8 *untouched*
+  committed files (chain collapse/expand heuristics) — the repo was formatted with an older
+  stable. **Do NOT `cargo fmt --all`** (it'd rewrite untouched code repo-wide). Only hand-fix
+  fmt in your own lines (≤100-col wraps are version-stable). If CI fmt fails on files you
+  didn't touch, that's this skew, not your change.
 - Kotlin import ordering isn't enforced (ktlint is skipped in the gradle bindgen step), so
   insertion point doesn't break the build.
 
