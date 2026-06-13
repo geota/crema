@@ -71,10 +71,17 @@ per-issue `## Comments` for full rationale.
   slice to register, then Edit.
 - **Line numbers drift** after the `6c41640` checkpoint — grep the *expression*, don't
   trust issue-file line numbers.
-- **No Android NDK in this env** → can't `./gradlew`. Verify Rust via `cargo` + uniffi-bindgen;
-  verify web via `cd web && npm run check` (svelte-check, ~1200 files, was 0/0). Review
-  Kotlin by eye (watch overload resolution: `formatRatio` has Float+Double overloads —
-  don't pass mixed Float/Double).
+- **~~No Android NDK~~ — WRONG (corrected 2026-06-13).** The NDK *is* installed
+  (`~/Library/Android/sdk/ndk/30.0.14904198`, matches `app/build.gradle.kts`);
+  `./gradlew :app:assembleDebug` builds (Rust cross-compiles arm64 via
+  `net.mullvad.rust-android`; ~90s). On Apple-Silicon, `targets = listOf("arm64")`
+  runs on an **arm64 emulator** as-is (AVDs `Pixel_10_Pro`, `Medium_Tablet`).
+  Gotcha: a fresh emulator can show `adb` **`unauthorized`** → `adb kill-server &&
+  adb start-server` clears it. Still verify Rust via `cargo` + uniffi-bindgen and
+  web via `npm run check`; but Kotlin/UI **can be run + screenshotted** now (MCP
+  `mcp__android__*`). Issues 03/07/08 were emulator-verified on both form factors
+  2026-06-13 (editors open ⇒ `ProfileBounds.INSTANCE` parses; brew defaults render).
+  Watch Kotlin overload resolution (`formatRatio` Float+Double).
 - **CI core gates (`.github/workflows/ci.yml` `rust` job): also run `cargo fmt --all -- --check`
   and `cargo clippy --workspace --all-targets -- -D warnings`** before calling a core change
   done — they bite. The workspace `[lints]` (root `Cargo.toml`) **denies `cast_precision_loss`**
@@ -88,10 +95,14 @@ per-issue `## Comments` for full rationale.
 - Kotlin import ordering isn't enforced (ktlint is skipped in the gradle bindgen step), so
   insertion point doesn't break the build.
 
-## Deferred work (all needs an Android emulator + on-device verification)
+## Deferred work — re-investigated 2026-06-13 with full build+emulator capability
 
-Three pieces were consciously left for when Android can be built and run (no NDK
-here). Each is documented in full in its issue's `## Comments`:
+The emulator (now confirmed working) verified the *shipped* Android work but does
+**not** unblock the three deferred pieces — each has a non-emulator blocker:
+**06** = a data-model gap (the shot doesn't carry the bean fields to emit), **11**
+= no DE1/sim to verify a brew-critical change (user-confirmed) + it's a blind
+hand-port of a 200-line web service, **05** = a web design divergence (not an
+Android issue at all). Details per issue's `## Comments`:
 
 - **11 — fingerprint upload-skip** (`⏸️ deferred`, P3). Not a one-liner: skipping
   the `startShot()` upload means rerouting the Espresso-request trigger (today it
