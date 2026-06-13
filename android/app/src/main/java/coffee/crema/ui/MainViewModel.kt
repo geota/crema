@@ -2078,9 +2078,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val profile = s.profiles.firstOrNull { it.id == s.activeProfileId }
         val bean = s.beans.firstOrNull { it.id == s.activeBeanId }
         val roasterName = bean?.roasterId?.let { rid -> s.roasters.firstOrNull { it.id == rid }?.name }
-        val beanName = bean?.let { b -> listOfNotNull(roasterName, b.name).joinToString(" · ") }
-        // Freeze a full bean snapshot (the core wire shape) at shot time so the
-        // Visualizer wire carries roaster / roast date / roast level — issue 06.
+        // Freeze a full bean snapshot (the core wire shape) at shot time — the
+        // single source for the Visualizer wire and the "Roaster · Name" display.
         val beanSnapshot = bean?.let { b ->
             ShotBean(
                 beanId = b.id,
@@ -2101,7 +2100,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             peakPressure = peakPressure,
             peakTemp = peakTemp,
             profileName = profile?.name,
-            beanName = beanName,
             bean = beanSnapshot,
             // The buffer still holds the just-finished shot (cleared on the next
             // ShotStarted); downsample it for the detail chart.

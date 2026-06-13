@@ -1,6 +1,7 @@
 package coffee.crema.visualizer
 
 import coffee.crema.history.StoredShot
+import coffee.crema.history.beanLabel
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -31,7 +32,6 @@ fun shotFinalWeight(shot: StoredShot): Float? {
 /** Assemble the Rust wire `StoredShot` JSON for [shot]. [grinderModel] is the
  *  equipment-level settings cascade value (web `resolveGrinderModel`). */
 fun wireShotJson(shot: StoredShot, grinderModel: String? = null): JsonObject {
-    val (roasterName, _, beanShort) = beanNameParts(shot.beanName)
     return buildJsonObject {
         put("formatVersion", 3)
         put("id", shot.id)
@@ -45,7 +45,7 @@ fun wireShotJson(shot: StoredShot, grinderModel: String? = null): JsonObject {
             buildJsonObject {
                 put("dose", shot.doseG)
                 put("yieldOut", shot.yieldG)
-                put("beans", shot.beanName)
+                put("beans", shot.beanLabel)
                 put("grinderSetting", JsonNull)
                 put("notes", shot.notes)
                 put("rating", shot.rating ?: 0)
@@ -96,14 +96,12 @@ fun wireShotJson(shot: StoredShot, grinderModel: String? = null): JsonObject {
         )
         put(
             "bean",
-            // Prefer the full snapshot frozen at shot time (roaster / roast date /
-            // roast level) — issue 06. Legacy shots have only the flat label, so
-            // fall back to the split, still emitting nulls for the unknown fields.
+            // The bean snapshot (roaster / roast date / roast level) frozen at shot
+            // time — issue 06. `put(key, value?)` emits JsonNull for null; do NOT use
+            // `x?.let { put } ?: put(JsonNull)` (put returns the *previous* value, so
+            // the elvis always overwrites with null).
             shot.bean?.let { b ->
                 buildJsonObject {
-                    // The `put(key, value?)` overloads emit JsonNull for null — do
-                    // NOT use `x?.let { put } ?: put(JsonNull)` (put returns the
-                    // *previous* value, so the elvis always overwrites with null).
                     put("beanId", b.beanId)
                     put("name", b.name)
                     put("roasterName", b.roasterName)
@@ -111,18 +109,7 @@ fun wireShotJson(shot: StoredShot, grinderModel: String? = null): JsonObject {
                     put("roastLevel", b.roastLevel?.toInt())
                     put("tags", buildJsonArray { b.tags?.forEach { add(JsonPrimitive(it)) } })
                 }
-            } ?: if (shot.beanName == null) {
-                JsonNull
-            } else {
-                buildJsonObject {
-                    put("beanId", JsonNull)
-                    put("name", beanShort ?: shot.beanName)
-                    put("roasterName", roasterName)
-                    put("roastedOn", JsonNull)
-                    put("roastLevel", JsonNull)
-                    put("tags", buildJsonArray {})
-                }
-            },
+            } ?: JsonNull,
         )
         put("grinderModel", grinderModel)
         put("tags", buildJsonArray {})
@@ -156,7 +143,6 @@ fun storedShotFromWire(wire: JsonObject, samplesJson: String?, json: kotlinx.ser
         peakPressure = samples.maxOfOrNull { it.pressure },
         peakTemp = samples.maxOfOrNull { it.headTemp },
         profileName = str("profile_title"),
-        beanName = null,
         rating = num("rating")?.toInt()?.takeIf { it > 0 },
         notes = str("notes"),
         samples = coffee.crema.history.downsampleForStorage(samples),
@@ -189,14 +175,3 @@ fun parseTimedSamples(samplesJson: String, json: kotlinx.serialization.json.Json
             )
         }
     }.getOrDefault(emptyList())
-
-/** Split the flat "Roaster · Bean" capture label into its parts. */
-private fun beanNameParts(beanName: String?): Triple<String?, String?, String?> {
-    if (beanName.isNullOrBlank()) return Triple(null, null, null)
-    val idx = beanName.indexOf(" · ")
-    return if (idx < 0) {
-        Triple(null, null, beanName)
-    } else {
-        Triple(beanName.substring(0, idx), null, beanName.substring(idx + 3))
-    }
-}

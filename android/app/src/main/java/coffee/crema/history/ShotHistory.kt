@@ -37,15 +37,11 @@ data class StoredShot(
     val peakTemp: Float? = null,
     /** Active profile name at capture, or null. */
     val profileName: String? = null,
-    /** Active bean ("roaster · name") at capture, or null. Kept for display +
-     *  backward compat; the rich snapshot below is the wire source of truth. */
-    val beanName: String? = null,
     /**
      * Full bean snapshot at capture (the core wire shape) — roaster, roast date,
-     * and roast level frozen at shot time, so the Visualizer wire carries them
-     * instead of the old `null`s (the StoredShot-migration that unblocks the
-     * hand-built bean wire). Null for shots captured before this field existed
-     * (additive — older records deserialise cleanly) and for beanless shots.
+     * and roast level frozen at shot time. The single source for both the
+     * Visualizer wire and the shell's "Roaster · Name" display (derived via
+     * [beanLabel]); null for a beanless shot.
      */
     val bean: ShotBean? = null,
     /** User star rating 0..5; null = unrated. Edited from the History detail. */
@@ -70,6 +66,25 @@ data class StoredShot(
      */
     val visualizerId: String? = null,
 )
+
+/**
+ * The flat "Roaster · Name" label for a shot's bean, derived from the structured
+ * [StoredShot.bean] snapshot (the canonical model) rather than a stored string —
+ * the History UX line and the wire's `metadata.beans`. Mirrors the web
+ * `beanLabel`: roaster + name when both, else whichever is present, else null.
+ */
+val StoredShot.beanLabel: String?
+    get() {
+        val b = bean ?: return null
+        val roaster = b.roasterName?.trim().orEmpty()
+        val type = b.name.trim()
+        return when {
+            roaster.isNotEmpty() && type.isNotEmpty() -> "$roaster · $type"
+            roaster.isNotEmpty() -> roaster
+            type.isNotEmpty() -> type
+            else -> null
+        }
+    }
 
 /** Max telemetry points stored per shot — enough for a faithful detail chart. */
 const val SHOT_SAMPLE_CAP: Int = 200

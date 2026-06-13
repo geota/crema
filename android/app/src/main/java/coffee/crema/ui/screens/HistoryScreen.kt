@@ -51,6 +51,7 @@ import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager
 import coffee.crema.ui.formatRatio
 import coffee.crema.history.StoredShot
+import coffee.crema.history.beanLabel
 import coffee.crema.ui.TelemetrySample
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.components.CremaCard
@@ -147,7 +148,7 @@ fun HistoryScreen(
     val filtered = ui.history.filter { s ->
         val matchesSearch = query.isBlank() ||
             (s.profileName?.contains(query, ignoreCase = true) == true) ||
-            (s.beanName?.contains(query, ignoreCase = true) == true) ||
+            (s.beanLabel?.contains(query, ignoreCase = true) == true) ||
             (s.notes?.contains(query, ignoreCase = true) == true)
         val matchesRange = when (range) {
             "today" -> s.completedAtMs >= startOfDay
@@ -161,7 +162,7 @@ fun HistoryScreen(
     val sortedAsc = when (sort) {
         "rating" -> filtered.sortedBy { it.rating ?: 0 }
         "profile" -> filtered.sortedBy { it.profileName?.lowercase() ?: "" }
-        "bean" -> filtered.sortedBy { it.beanName?.lowercase() ?: "" }
+        "bean" -> filtered.sortedBy { it.beanLabel?.lowercase() ?: "" }
         "yield" -> filtered.sortedBy { it.yieldG ?: 0f }
         "time" -> filtered.sortedBy { it.durationMs }
         else -> filtered.sortedBy { it.completedAtMs }
@@ -454,7 +455,7 @@ private fun ShotRow(shot: StoredShot, selected: Boolean, syncing: Boolean, onCli
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                shot.beanName ?: "—",
+                shot.beanLabel ?: "—",
                 style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
                 maxLines = 1,
@@ -603,7 +604,7 @@ private fun ShotDetail(
                     overflow = TextOverflow.Ellipsis,
                 )
                 val meta = buildList {
-                    shot.beanName?.let { add(it) }
+                    shot.beanLabel?.let { add(it) }
                     val d = shot.doseG; val y = shot.yieldG
                     if (d != null && y != null) add("%.1f g → %.1f g".format(d, y))
                     shotRatio(shot)?.let { add(it) }
