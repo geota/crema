@@ -1,6 +1,6 @@
 # 04 — Web `canonicalToDisplay` — route through WASM unit helpers
 
-- **Status:** ready-for-agent
+- **Status:** done
 - **Severity:** P1
 - **Area:** Web
 - **Punchlist:** T1-04 — `../PUNCHLIST.md`
@@ -26,3 +26,15 @@ No literal conversion constant remains in `format.ts`; round-trip `displayToCano
 
 ## Comments
 <!-- triage + progress notes append below -->
+
+### 2026-06-13 — done
+
+Rewrote `canonicalToDisplay` to delegate to the already-imported forward WASM
+helpers (`wasmGramsToOz`, `wasmCelsiusToFahrenheit`, `wasmBarToPsi`,
+`wasmMlToFlOz`) — mirroring its inverse `displayToCanonical`. The four open-coded
+constants (`/28.3495`, `*1.8+32`, `*14.5038`, `/29.5735`) are gone; the only
+remaining mentions of those numbers are in doc comments documenting each helper's
+factor. Round-trip (`displayToCanonical(canonicalToDisplay(x)) ≈ x`) is now
+structurally inherited from the core's tested `de1_domain::units` inverse pairs
+rather than depending on two hand-kept constants agreeing. `npm run check`: 1203
+files, 0 errors.
