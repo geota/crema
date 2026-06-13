@@ -360,6 +360,42 @@ pub fn brew_ratio(dose: f32, yield_out: f32) -> Option<f32> {
     de1_domain::brew_ratio(dose, yield_out)
 }
 
+/// Classify a 1..10 roast level into a named band — the lowercase wire
+/// string (`"light"` / `"medium"` / `"dark"`), or `None` for a missing
+/// level. Values outside 1..10 are clamped first. Mirrors the wasm
+/// `roast_band`; see [`de1_domain::roast_band`] for the canonical impl.
+#[uniffi::export]
+pub fn roast_band(level: Option<i32>) -> Option<String> {
+    level.map(|n| de1_domain::roast_band(n).as_str().to_owned())
+}
+
+/// Whole calendar days (UTC) between an ISO `yyyy-mm-dd` roast date and
+/// `now_unix_ms` — the bean's "days off roast". `None` when the date is
+/// malformed or empty. Mirrors the wasm `days_off_roast`; see
+/// [`de1_domain::days_off_roast`].
+#[uniffi::export]
+pub fn days_off_roast(roasted_on: Option<String>, now_unix_ms: i64) -> Option<i64> {
+    de1_domain::days_off_roast(roasted_on.as_deref()?, now_unix_ms)
+}
+
+/// Rate how a bean's `days` off roast sits against the ideal rest window
+/// for its `band` (the lowercase wire string). The window is **band-aware**
+/// — dark roasts degas fastest, light slowest — so this is the canonical
+/// freshness verdict shared with the web shell. Returns the lowercase
+/// verdict (`"best"` / `"ok"` / `"bad"`), or `None` when an input is missing
+/// or `band` is not recognised. Mirrors the wasm `roast_freshness`; see
+/// [`de1_domain::roast_freshness`].
+#[uniffi::export]
+pub fn roast_freshness(band: Option<String>, days: Option<i64>) -> Option<String> {
+    let band = match band.as_deref()? {
+        "light" => de1_domain::RoastBand::Light,
+        "medium" => de1_domain::RoastBand::Medium,
+        "dark" => de1_domain::RoastBand::Dark,
+        _ => return None,
+    };
+    Some(de1_domain::roast_freshness(band, days?).as_str().to_owned())
+}
+
 /// djb2 base-36 fingerprint of an effective profile (library profile
 /// merged with optional Quick-Controls overrides). Both payloads are
 /// JSON strings; see [`de1_domain::profile_fingerprint`] for the

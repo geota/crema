@@ -58,6 +58,7 @@ import androidx.compose.ui.unit.sp
 import coffee.crema.beans.daysOffRoast
 import coffee.crema.beans.isFrozen
 import coffee.crema.ui.formatRatio
+import coffee.crema.ui.freshnessColor
 import coffee.crema.beans.roastBand
 import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager
@@ -559,7 +560,7 @@ private fun BeanBlock(
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                 Eyebrow("Bean")
                 if (freshLabel != null) {
-                    val freshColor = beanFreshnessColor(frozen, daysOff)
+                    val freshColor = freshnessColor(frozen, activeBean?.roastLevel?.toInt(), daysOff)
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         Box(Modifier.size(8.dp).clip(CircleShape).background(freshColor))
                         Text(freshLabel, style = MaterialTheme.typography.labelSmall, color = freshColor)
@@ -1493,17 +1494,6 @@ private fun StatBar(fraction: Float, color: Color) {
 private fun fmt(v: Float?, digits: Int = 1): String =
     if (v == null) "—" else "%.${digits}f".format(v)
 
-// Freshness-band colour for the bean eyebrow chip (proto .bh-fresh / web
-// freshColor). Mirrors BeansScreen.freshnessColor — kept local because that
-// one is private; frozen → blue, then the days-off-roast bands.
-private fun beanFreshnessColor(frozen: Boolean, days: Int?): Color = when {
-    frozen -> Color(0xFF7FB0E0)
-    days == null -> Color(0xFF8A8175)
-    days < 4 -> Color(0xFFDBA764)
-    days <= 21 -> Color(0xFF5FB87A)
-    days <= 40 -> Color(0xFFDBA764)
-    else -> Color(0xFFC58B8B)
-}
 
 private fun phaseStepLabel(phase: String?): String = when (phase) {
     "Heating" -> "Heating"

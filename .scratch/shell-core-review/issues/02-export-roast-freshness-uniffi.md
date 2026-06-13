@@ -1,6 +1,6 @@
 # 02 — Export roast band / days-off-roast / freshness via UniFFI; unify freshness label+color
 
-- **Status:** ready-for-agent
+- **Status:** done (web label-vocab T3-02 deferred — see comment)
 - **Severity:** P1
 - **Area:** Core (UniFFI · WASM) · Android (tablet + phone) · Web
 - **Punchlist:** T1-02, T3-02, T4-12 — `../PUNCHLIST.md`
@@ -41,3 +41,29 @@ A dark-roast bean (level ≥7) at 16 days shows the same status/color on web, ta
 
 ## Comments
 <!-- triage + progress notes append below -->
+
+**2026-06-13 — done (core bug fixed).** Exported `roast_band`, `days_off_roast`,
+`roast_freshness` via UniFFI (mirror the wasm exports → `de1_domain`). Backed
+`BeanFormat.roastBand`/`daysOffRoast` with core (capitalised band label / Int days
+kept). Added a Compose-free, **band-aware** `freshnessVerdict(frozen, level, days)`
+in the `beans` pkg (core `roast_freshness`) and one shared
+`coffee.crema.ui.freshnessColor(frozen, level, days)` mapping verdict→hue —
+replacing the two byte-identical tablet copies (`BeansScreen`, `BrewScreen`, T4-12)
+and the phone's telemetry-palette block. Threaded `bean.roastLevel` into all three
+sites. **The bug is fixed:** a dark roast at 16d is now core-verdict `bad` (red)
+everywhere, not "peak green".
+
+Phone freshness label unified to the tablet's "Nd off roast" + band-aware dot
+(dropped the band-agnostic resting/past-peak wording and telemetry colours).
+
+Verified: `cargo build -p de1-ffi`; `uniffi-bindgen` emits `roastBand(Int?):String?`,
+`daysOffRoast(String?,Long):Long?`, `roastFreshness(String?,Long?):String?`; no
+leftover `beanFreshnessColor`/2-arg `freshnessColor` callers. Android NDK build not
+run in this env.
+
+**Deferred (T3-02 web half):** the web BeanDrawer still shows verdict *words*
+("In window / Fading / Stale") rather than the Android "Nd off roast" + dot. Both
+are core-backed and correct; choosing one cross-shell vocabulary is a presentation
+decision, tracked as a follow-up rather than guessed here. The phone
+`RoastPicker` pip-colour thresholds (`PhoneBeanEditScreen`) are roast-band colouring,
+not freshness — they belong with issue 42 (T3-03).

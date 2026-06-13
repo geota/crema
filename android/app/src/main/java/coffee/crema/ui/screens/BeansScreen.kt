@@ -60,6 +60,7 @@ import coffee.crema.ble.ScaleBleManager
 import coffee.crema.core.Bean
 import coffee.crema.core.Roaster
 import coffee.crema.ui.MainViewModel
+import coffee.crema.ui.freshnessColor
 import coffee.crema.ui.components.CremaButton
 import coffee.crema.ui.components.CremaButtonVariant
 import coffee.crema.ui.components.CremaSplitButton
@@ -419,7 +420,7 @@ private fun BeanCard(
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 BeanStat(
                     Modifier.weight(1f),
-                    leading = { Box(Modifier.size(6.dp).clip(CircleShape).background(freshnessColor(frozen, days))) },
+                    leading = { Box(Modifier.size(6.dp).clip(CircleShape).background(freshnessColor(frozen, bean.roastLevel?.toInt(), days))) },
                     value = days?.let { "${it}d" } ?: "—",
                     label = "off roast",
                 )
@@ -520,18 +521,6 @@ private fun BeanStat(modifier: Modifier = Modifier, leading: @Composable () -> U
             )
         }
     }
-}
-
-// Freshness status colour, keyed off days-off-roast (freeze pauses the counter).
-// Resting (<4d) / aging (22–40d) = amber; peak (4–21d) = green; past-peak = muted
-// red; frozen = icy blue; unknown = neutral. Semantic status hues (not theme tokens).
-private fun freshnessColor(frozen: Boolean, days: Int?): Color = when {
-    frozen -> Color(0xFF7FB0E0)
-    days == null -> Color(0xFF8A8175)
-    days < 4 -> Color(0xFFDBA764)
-    days <= 21 -> Color(0xFF5FB87A)
-    days <= 40 -> Color(0xFFDBA764)
-    else -> Color(0xFFC58B8B)
 }
 
 // A 44dp roaster-mark avatar — the shared deterministic two-letter mark
