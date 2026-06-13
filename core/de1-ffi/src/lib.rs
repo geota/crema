@@ -22,9 +22,6 @@
 //!   yet — its `WriteCharacteristic` path is unimplemented (tracked as AND5) —
 //!   so the request enum + command plumbing has no caller. Mirror it when
 //!   Android gains machine control.
-//! - **`profile_bounds_json`** (the firmware profile-field bounds). Android has
-//!   no profile-editing / validation UI, the only consumer of those bounds.
-//!   Mirror it when Android gains profile editing.
 //!
 //! These are tracked divergences, not oversights: the shared `de1-app` /
 //! `de1-domain` logic is identical across shells — only the thin per-shell
@@ -394,6 +391,18 @@ pub fn roast_freshness(band: Option<String>, days: Option<i64>) -> Option<String
         _ => return None,
     };
     Some(de1_domain::roast_freshness(band, days?).as_str().to_owned())
+}
+
+/// Hard wire-protocol bounds for DE1 profile fields, as a single JSON
+/// snapshot the Android profile editors parse once at module load so their
+/// steppers / validators reach for the same firmware caps as the core (and
+/// the web shell). Keys are snake_case, mirroring the constant names. Steam
+/// targets can exceed brew temp — see `max_steam_temperature_c`. Mirrors the
+/// wasm `profile_bounds_json`; both delegate to
+/// [`de1_domain::profile_bounds::profile_bounds_json`].
+#[uniffi::export]
+pub fn profile_bounds_json() -> String {
+    de1_domain::profile_bounds::profile_bounds_json()
 }
 
 /// djb2 base-36 fingerprint of an effective profile (library profile

@@ -21,6 +21,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coffee.crema.profiles.ProfileBounds
 import coffee.crema.profiles.SegmentEdit
 import coffee.crema.profiles.SegmentExit
 import coffee.crema.ui.formatRatio
@@ -183,7 +184,7 @@ fun PhoneProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                         color = MaterialTheme.colorScheme.primary,
                     )
                 }
-                EdRow("Brew temp") { EdStepper(brewTemp, "°C", 0.5, 80.0, 100.0, { "%.1f".format(it) }) { brewTemp = it } }
+                EdRow("Brew temp") { EdStepper(brewTemp, "°C", 0.5, 80.0, ProfileBounds.INSTANCE.maxTemperatureC.toDouble(), { "%.1f".format(it) }) { brewTemp = it } }
                 EdRow("Max total volume", sub = "0 = no limit") { EdStepper(maxVol, "ml", 5.0, 0.0, 500.0, { "%.0f".format(it) }) { maxVol = it } }
                 EdRow("Pre-infuse phases", sub = "Leading phases counted as pre-infusion") { EdStepper(preinfuse, null, 1.0, 0.0, segs.size.toDouble(), { "%.0f".format(it) }) { preinfuse = it } }
                 EdRow("Tank temp", sub = "0 = unset") { EdStepper(tankTemp, "°C", 1.0, 0.0, 60.0, { "%.0f".format(it) }) { tankTemp = it } }
@@ -288,6 +289,7 @@ private fun PhaseRow(
     val isPressure = seg.mode != "flow"
     val dotColor = if (isPressure) tel.pressure else tel.flow
     val tUnit = if (isPressure) "bar" else "ml/s"
+    val bounds = ProfileBounds.INSTANCE
     val summary = buildString {
         append(if (isPressure) "Pressure" else "Flow")
         append(" · %.1f %s · %.0fs".format(seg.target, tUnit, seg.time))
@@ -353,12 +355,12 @@ private fun PhaseRow(
                 )
             }
             FieldRow("Target") {
-                EdStepper(seg.target.toDouble(), tUnit, 0.1, 0.0, 12.0, { "%.1f".format(it) }) {
+                EdStepper(seg.target.toDouble(), tUnit, 0.1, 0.0, if (isPressure) bounds.maxPressureBar.toDouble() else bounds.maxFlowMlPerS.toDouble(), { "%.1f".format(it) }) {
                     onChange(seg.copy(target = it.toFloat()))
                 }
             }
             FieldRow("Duration") {
-                EdStepper(seg.time.toDouble(), "s", 1.0, 0.0, 127.0, { "%.0f".format(it) }) {
+                EdStepper(seg.time.toDouble(), "s", 1.0, 0.0, bounds.maxFrameSeconds.toDouble(), { "%.0f".format(it) }) {
                     onChange(seg.copy(time = it.toFloat()))
                 }
             }
@@ -375,7 +377,7 @@ private fun PhaseRow(
                         value = seg.tempSensor ?: "coffee",
                         onChange = { onChange(seg.copy(tempSensor = it)) },
                     )
-                    EdStepper((seg.temp ?: 93f).toDouble(), "°", 0.5, 70.0, 105.0, { "%.1f".format(it) }) {
+                    EdStepper((seg.temp ?: 93f).toDouble(), "°", 0.5, 70.0, bounds.maxTemperatureC.toDouble(), { "%.1f".format(it) }) {
                         onChange(seg.copy(temp = it.toFloat()))
                     }
                 }
@@ -421,7 +423,7 @@ private fun PhaseRow(
                         )
                     }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                        EdStepper((exit.threshold ?: 1.5f).toDouble(), null, 0.1, 0.0, 12.0, { "%.1f".format(it) }) {
+                        EdStepper((exit.threshold ?: 1.5f).toDouble(), null, 0.1, 0.0, if (exit.metric == "pressure") bounds.maxPressureBar.toDouble() else bounds.maxFlowMlPerS.toDouble(), { "%.1f".format(it) }) {
                             onChange(seg.copy(exit = exit.copy(threshold = it.toFloat())))
                         }
                     }
@@ -437,7 +439,7 @@ private fun PhaseRow(
                 },
             ) {
                 val lim = seg.limiter ?: SegmentLimiter()
-                EdStepper(lim.value.toDouble(), if (isPressure) "ml/s" else "bar", 0.1, 0.0, 12.0, { "%.1f".format(it) }) {
+                EdStepper(lim.value.toDouble(), if (isPressure) "ml/s" else "bar", 0.1, 0.0, if (isPressure) bounds.maxFlowMlPerS.toDouble() else bounds.maxPressureBar.toDouble(), { "%.1f".format(it) }) {
                     onChange(seg.copy(limiter = lim.copy(value = it.toFloat())))
                 }
             }
