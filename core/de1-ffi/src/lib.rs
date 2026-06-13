@@ -525,7 +525,10 @@ pub fn has_cup_warmer(raw: u32) -> bool {
 ///
 /// Returns a [`CremaError`] when `bean_json` can't be deserialised.
 #[uniffi::export]
-pub fn bean_to_wire(bean_json: String, roaster_remote_id: Option<String>) -> Result<String, CremaError> {
+pub fn bean_to_wire(
+    bean_json: String,
+    roaster_remote_id: Option<String>,
+) -> Result<String, CremaError> {
     de1_domain::bean_to_wire_json(&bean_json, roaster_remote_id.as_deref()).map_err(crema_err)
 }
 
@@ -544,8 +547,13 @@ pub fn bean_from_wire(
     fallback_id: String,
     now_unix_ms: i64,
 ) -> Result<String, CremaError> {
-    de1_domain::bean_from_wire_json(&wire_json, local_roaster_id.as_deref(), &fallback_id, now_unix_ms)
-        .map_err(crema_err)
+    de1_domain::bean_from_wire_json(
+        &wire_json,
+        local_roaster_id.as_deref(),
+        &fallback_id,
+        now_unix_ms,
+    )
+    .map_err(crema_err)
 }
 
 /// Encode a Crema `Roaster` JSON → a Visualizer roaster wire body JSON. Mirrors
