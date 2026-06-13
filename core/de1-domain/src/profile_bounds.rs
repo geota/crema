@@ -81,3 +81,59 @@ pub const MIN_FRAME_SECONDS: f32 = 0.0;
 /// Maximum pre-infusion step count — must be ≤ the profile's own step
 /// count, but the absolute wire ceiling is [`MAX_PROFILE_STEPS`].
 pub const MAX_PREINFUSE_STEPS: u8 = MAX_PROFILE_STEPS;
+
+// ── Serialised snapshot ───────────────────────────────────────────────────
+
+/// Serialise every bound above into one JSON object, so each shell parses
+/// the same numbers from a single source. The web shell reaches this via the
+/// wasm `profile_bounds_json`, Android via the UniFFI export — both delegate
+/// here, so the two shells can never drift. Keys mirror the constant names
+/// (snake_case) to let a reader pattern-match either way. The shell parses
+/// the result once at module load — these are constants, not live values.
+///
+/// Hand-rolled rather than serde-derived to keep this module free of a
+/// serde-of-statics struct; the field list is small and stable.
+pub fn profile_bounds_json() -> String {
+    format!(
+        "{{\"max_profile_steps\":{},\"max_total_volume_ml\":{},\
+         \"min_total_volume_ml\":{},\"min_pressure_bar\":{},\
+         \"max_pressure_bar\":{},\"min_flow_ml_per_s\":{},\
+         \"max_flow_ml_per_s\":{},\"min_temperature_c\":{},\
+         \"max_temperature_c\":{},\"max_steam_temperature_c\":{},\
+         \"min_frame_seconds\":{},\"max_frame_seconds\":{},\
+         \"max_preinfuse_steps\":{}}}",
+        MAX_PROFILE_STEPS,
+        MAX_TOTAL_VOLUME_ML,
+        MIN_TOTAL_VOLUME_ML,
+        MIN_PRESSURE_BAR,
+        MAX_PRESSURE_BAR,
+        MIN_FLOW_ML_PER_S,
+        MAX_FLOW_ML_PER_S,
+        MIN_TEMPERATURE_C,
+        MAX_TEMPERATURE_C,
+        MAX_STEAM_TEMPERATURE_C,
+        MIN_FRAME_SECONDS,
+        MAX_FRAME_SECONDS,
+        MAX_PREINFUSE_STEPS
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bounds_json_is_valid_and_carries_the_caps() {
+        let v: serde_json::Value =
+            serde_json::from_str(&profile_bounds_json()).expect("valid JSON");
+        // The shells key off snake_case names; spot-check the caps that the
+        // editors clamp against so a constant edit can't silently drift them.
+        assert_eq!(v["max_profile_steps"], MAX_PROFILE_STEPS);
+        assert_eq!(v["max_total_volume_ml"], MAX_TOTAL_VOLUME_ML);
+        assert_eq!(v["max_pressure_bar"], MAX_PRESSURE_BAR);
+        assert_eq!(v["max_flow_ml_per_s"], MAX_FLOW_ML_PER_S);
+        assert_eq!(v["max_temperature_c"], MAX_TEMPERATURE_C);
+        assert_eq!(v["max_frame_seconds"], MAX_FRAME_SECONDS);
+        assert_eq!(v.as_object().map(|o| o.len()), Some(13));
+    }
+}

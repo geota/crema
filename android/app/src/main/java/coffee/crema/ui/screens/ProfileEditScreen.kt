@@ -45,6 +45,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.ui.draw.clip
+import coffee.crema.profiles.ProfileBounds
 import coffee.crema.profiles.SegmentEdit
 import coffee.crema.profiles.SegmentExit
 import coffee.crema.ui.formatRatio
@@ -277,13 +278,13 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
             NumberedSection("2", "Target + Limits", "Recipe targets & optional caps") {
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     GroupCard("Target", 4f) {
-                        LabeledStepper("Brew temp", brewTemp, "°C", Modifier.weight(1f), 0.5, 20.0, 105.0, { brewTemp = it })
+                        LabeledStepper("Brew temp", brewTemp, "°C", Modifier.weight(1f), 0.5, 20.0, ProfileBounds.INSTANCE.maxTemperatureC.toDouble(), { brewTemp = it })
                         LabeledStepper("Dose", dose, "g", Modifier.weight(1f), 0.1, 1.0, 60.0, { dose = it })
                         LabeledStepper("Yield", yieldG, "g", Modifier.weight(1f), 0.5, 1.0, 200.0, { yieldG = it })
                         LabeledRatio(dose, yieldG, Modifier.weight(1f))
                     }
                     GroupCard("Limit", 3f) {
-                        LimitTile("Max volume", maxVol, "ml", Modifier.weight(1f), maxVol > 0.0, { maxVol = if (maxVol > 0.0) 0.0 else 50.0 }, 10.0, 0.0, 1023.0, { maxVol = it })
+                        LimitTile("Max volume", maxVol, "ml", Modifier.weight(1f), maxVol > 0.0, { maxVol = if (maxVol > 0.0) 0.0 else 50.0 }, 10.0, ProfileBounds.INSTANCE.minTotalVolumeMl.toDouble(), ProfileBounds.INSTANCE.maxTotalVolumeMl.toDouble(), { maxVol = it })
                         LimitTile("Preinfuse steps", preinfuse, null, Modifier.weight(1f), preinfuse > 0.0, { preinfuse = if (preinfuse > 0.0) 0.0 else 1.0 }, 1.0, 0.0, 10.0, { preinfuse = it })
                         LimitTile("Tank temp", tankTemp, "°C", Modifier.weight(1f), tankTemp > 0.0, { tankTemp = if (tankTemp > 0.0) 0.0 else 92.0 }, 1.0, 0.0, 95.0, { tankTemp = it })
                     }
@@ -386,6 +387,7 @@ private fun SegmentRowFull(
     val limOn = seg.limiter != null
     val lmView = seg.limiter ?: SegmentLimiter(6f, 0.6f)
     val segVolOn = (seg.volume ?: 0f) > 0f
+    val bounds = ProfileBounds.INSTANCE
     CremaCard(Modifier.fillMaxWidth(), container = MaterialTheme.colorScheme.surfaceContainerHigh) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 12.dp),
@@ -426,15 +428,15 @@ private fun SegmentRowFull(
 
             SegCell(1f) {
                 Eyebrow("Target")
-                EditStepper(seg.target.toDouble(), if (isFlow) "ml/s" else "bar", 0.1, 0.0, if (isFlow) 10.0 else 12.0, { onEdit(seg.copy(target = it.toFloat())) })
+                EditStepper(seg.target.toDouble(), if (isFlow) "ml/s" else "bar", 0.1, 0.0, if (isFlow) bounds.maxFlowMlPerS.toDouble() else bounds.maxPressureBar.toDouble(), { onEdit(seg.copy(target = it.toFloat())) })
             }
             SegCell(1f) {
                 Eyebrow("Time")
-                EditStepper(seg.time.toDouble(), "s", 0.5, 0.0, 120.0, { onEdit(seg.copy(time = it.toFloat())) })
+                EditStepper(seg.time.toDouble(), "s", 0.5, 0.0, bounds.maxFrameSeconds.toDouble(), { onEdit(seg.copy(time = it.toFloat())) })
             }
             SegCell(1.15f) {
                 CremaSplitLabel(prefix = "Temp", options = listOf(SplitOption("coffee", "Coffee"), SplitOption("water", "Water")), value = seg.tempSensor ?: "coffee", onChange = { onEdit(seg.copy(tempSensor = it)) })
-                EditStepper((seg.temp ?: 93f).toDouble(), "°C", 0.5, 20.0, 105.0, { onEdit(seg.copy(temp = it.toFloat())) })
+                EditStepper((seg.temp ?: 93f).toDouble(), "°C", 0.5, 20.0, bounds.maxTemperatureC.toDouble(), { onEdit(seg.copy(temp = it.toFloat())) })
             }
             SegCell(1f) {
                 CremaOptionalHeader("Volume", segVolOn, { onEdit(seg.copy(volume = if (segVolOn) null else 50f)) })
@@ -453,7 +455,7 @@ private fun SegmentRowFull(
                 EditStepper(
                     (exView.threshold ?: 4f).toDouble(),
                     if (exView.metric == "pressure") "bar" else "ml/s",
-                    0.1, 0.0, 12.0,
+                    0.1, 0.0, if (exView.metric == "pressure") bounds.maxPressureBar.toDouble() else bounds.maxFlowMlPerS.toDouble(),
                     { v -> if (exitOn) onEdit(seg.copy(exit = seg.exit?.copy(threshold = v.toFloat()))) },
                     modifier = Modifier.alpha(if (exitOn) 1f else 0.4f),
                     compareSymbol = if ((exView.compare ?: "over") == "over") ">" else "<",
@@ -464,7 +466,7 @@ private fun SegmentRowFull(
             SegCellGroup(2f) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     CremaOptionalHeader("Max", limOn, { onEdit(seg.copy(limiter = if (limOn) null else SegmentLimiter(6f, 0.6f))) })
-                    EditStepper(lmView.value.toDouble(), if (seg.mode == "flow") "bar" else "ml/s", 0.1, 0.0, 12.0, { v -> if (limOn) onEdit(seg.copy(limiter = seg.limiter?.copy(value = v.toFloat()))) }, modifier = Modifier.alpha(if (limOn) 1f else 0.4f))
+                    EditStepper(lmView.value.toDouble(), if (seg.mode == "flow") "bar" else "ml/s", 0.1, 0.0, if (seg.mode == "flow") bounds.maxPressureBar.toDouble() else bounds.maxFlowMlPerS.toDouble(), { v -> if (limOn) onEdit(seg.copy(limiter = seg.limiter?.copy(value = v.toFloat()))) }, modifier = Modifier.alpha(if (limOn) 1f else 0.4f))
                 }
                 // Tolerance is gated by the Max dot — fade the whole cell (eyebrow
                 // included) when Max is off.
