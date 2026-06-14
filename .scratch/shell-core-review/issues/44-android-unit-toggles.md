@@ -1,7 +1,14 @@
 # 44 — Implement or hide Android °C/°F & g/oz unit toggles
 
-- **Status:** ready-for-human
+- **Status:** ready-for-agent (decided 2026-06-14: implement conversion)
 - **Severity:** P2
+
+> **Decision (2026-06-14):** Implement, don't hide. Export the unit-conversion
+> fns via UniFFI (the Theme-1 pattern), add unit prefs to an Android settings
+> store, and route every brew/scale/history readout through the core conversions
+> so the °C/°F and g/oz toggles work end-to-end. Standardize formatting to
+> "18.0 g" / "93.0 °C" across tablet + phone. Fully emulator-verifiable (pure
+> display; flip toggle → seeded readouts change), no DE1 needed. Mirrors web.
 - **Area:** Android tablet (`SettingsScreen.kt`), Android phone (`PhoneSettingsScreen.kt`)
 - **Punchlist:** T3-05 — `../PUNCHLIST.md`
 - **Depends on:** 01-style core export — specifically a UniFFI unit-conversion export (mirrors T1-08's pattern of exporting domain helpers via UniFFI so Android can route display through core unit conversions)

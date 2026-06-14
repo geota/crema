@@ -1,7 +1,13 @@
 # 15 — Resolve Android grind/preinf dead-ends + flush/purge prefs
 
-- **Status:** ready-for-human
+- **Status:** ready-for-agent (decided 2026-06-14: implement everything)
 - **Severity:** P2
+
+> **Decision (2026-06-14):** Implement, don't stub. Wire the pre-shot-flush /
+> post-steam-purge consumers into the shot/steam sequence, AND make the grind +
+> pre-infuse steppers actually affect the shot/record (not local-only state).
+> End-to-end behaviour is DE1-gated (no simulator) — verify the shell logic +
+> build/run; the on-machine effect can't be confirmed here.
 - **Area:** Android tablet — `ui/screens/QuickControlsSheet.kt`, `MainViewModel.kt`, `ui/screens/BrewScreen.kt`
 - **Punchlist:** T2-04 — `../PUNCHLIST.md`
 - **Depends on:** none

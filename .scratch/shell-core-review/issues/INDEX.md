@@ -33,7 +33,7 @@ Sequencing lives at the bottom of `../PUNCHLIST.md`. Recommended first wave:
 | 12 | Remove false "Not implemented yet" pills from CalibrationSection | P1 | ready-for-agent |
 | 13 | Add `visualizerAutoUpload` UI toggle + fix stale comment | P1 | ready-for-agent |
 | 14 | Wire Android QuickControls steam/water/flush steppers | P1 | ready-for-agent |
-| 15 | Resolve Android grind/preinf dead-ends + flush/purge prefs | P2 | ready-for-human |
+| 15 | Resolve Android grind/preinf dead-ends + flush/purge prefs | P2 | 🟢 ready-for-agent (decided: implement) |
 | 16 | Fix Android phone wiring regressions vs tablet | P1 | ready-for-agent |
 | 17 | Refresh stale web doc-comment headers | P3 | ready-for-agent |
 
@@ -76,12 +76,15 @@ Sequencing lives at the bottom of `../PUNCHLIST.md`. Recommended first wave:
 | # | Title | Sev | Status |
 |---|-------|-----|--------|
 | 42 | Drop the phone roast→color map | P1 | ready-for-agent |
-| 43 | One relative-time vocabulary per shell | P2 | ready-for-human |
-| 44 | Implement or hide Android °C/°F & g/oz unit toggles | P2 | ready-for-human |
+| 43 | One relative-time vocabulary per shell | P2 | 🟢 ready-for-agent (decided: compact relative) |
+| 44 | Implement or hide Android °C/°F & g/oz unit toggles | P2 | 🟢 ready-for-agent (decided: implement) |
 | 45 | Reconcile design tokens (Copper300, paper-300, sheet radius) | P2 | ready-for-agent |
 | 46 | Standardize Android weight/temp formatting + move freshness hex to theme | P3 | ready-for-agent |
 | 47 | Title-case the web ProfileCard roast chip | P3 | ready-for-agent |
-| 48 | Pick a canonical History stats set (tablet vs phone) | P3 | ready-for-human |
+| 48 | Pick a canonical History stats set (tablet vs phone) | P3 | 🟢 ready-for-agent (decided) |
 | 49 | Casing nit: "Frozen" vs "frozen" | P3 | ready-for-agent |
+| 50 | Phone segment-options: match QuickControls selectors + inline the `>`/`<` | P3 | ready-for-agent |
 
 **Folded into other issues:** T3-01→01, T3-02→02, T4-12→02, T3-12 (empty-state half)→37.
+
+**Added post-review:** 50 (2026-06-14, phone profile segment-option UI consistency).

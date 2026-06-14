@@ -1,7 +1,13 @@
 # 43 — One relative-time vocabulary per shell
 
-- **Status:** ready-for-human
+- **Status:** ready-for-agent (decided 2026-06-14: compact relative, full scale)
 - **Severity:** P2
+
+> **Decision (2026-06-14):** Adopt one compact-relative vocabulary, scaled across
+> all units, on every shell (web ShotRow, web Profiles, Android tablet + phone
+> History): `just now` / `2h ago` / `6d ago` / `5w ago` / `3mo ago` / `2y ago`.
+> One helper per platform. (The History list keeps its day-section headers
+> independently of the per-row relative time.)
 - **Area:** Web (`ShotRow.svelte`, `profiles/model.ts`), Android tablet (`HistoryScreen.kt`), Android phone (`PhoneHistoryScreen.kt`)
 - **Punchlist:** T3-04 — `../PUNCHLIST.md`
 - **Depends on:** none

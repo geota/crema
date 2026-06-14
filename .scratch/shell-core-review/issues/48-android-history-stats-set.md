@@ -1,7 +1,17 @@
 # 48 — Pick a canonical History stats set (tablet vs phone)
 
-- **Status:** ready-for-human
+- **Status:** ready-for-agent (decided 2026-06-14)
 - **Severity:** P3
+
+> **Decision (2026-06-14):** Stats are scoped to the **current filter / time-range**
+> (not all-time). Form factors need not be identical, but **tablet should match
+> the web (PWA)**.
+> - **Tablet + PWA (6 tiles):** Shots (count) · Weight (total g) · Avg weight ·
+>   Avg ratio · Avg time · Avg rating.
+> - **Phone (3 tiles):** Avg ratio · Avg time · Avg rating.
+>
+> Note this expands scope to the **web** History strip (align it to the tablet 6).
+> "Weight" = total dispensed; "Avg weight" = per-shot average (both shown).
 - **Area:** Android tablet (`ui/screens/HistoryScreen.kt`), Android phone (`ui/phone/PhoneHistoryScreen.kt`)
 - **Punchlist:** T3-11 — `../PUNCHLIST.md`
 - **Depends on:** none
