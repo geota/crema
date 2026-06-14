@@ -332,18 +332,15 @@ internal fun RoundIconButton(icon: String, onClick: () -> Unit) {
     }
 }
 
-// Roast pill (proto .pp-roast — light/medium/dark tints over the roast ramp).
+// Roast pill — copper-wash (primary @12%), matching the tablet + web. No per-band
+// tints (issue 42): a Light bean reads the same copper as every other roast, and
+// the corner radius is fully rounded (999dp) like the tablet pill.
 @Composable
 internal fun RoastPill(roast: String) {
-    val (bg, fg) = when (roast.lowercase()) {
-        "light" -> androidx.compose.ui.graphics.Color(0xFFC99A5B).copy(alpha = 0.26f) to androidx.compose.ui.graphics.Color(0xFFE8C088)
-        "dark" -> androidx.compose.ui.graphics.Color(0xFF6E4326).copy(alpha = 0.32f) to androidx.compose.ui.graphics.Color(0xFFBA8A66)
-        else -> androidx.compose.ui.graphics.Color(0xFFA56A39).copy(alpha = 0.28f) to androidx.compose.ui.graphics.Color(0xFFD89A63)
-    }
     Box(
         Modifier
-            .clip(RoundedCornerShape(7.dp))
-            .background(bg)
+            .clip(RoundedCornerShape(999.dp))
+            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
             .height(24.dp)
             .padding(horizontal = 10.dp),
         contentAlignment = Alignment.Center,
@@ -351,7 +348,7 @@ internal fun RoastPill(roast: String) {
         Text(
             roast.uppercase(),
             style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp, letterSpacing = 0.3.sp, fontWeight = FontWeight.SemiBold),
-            color = fg,
+            color = MaterialTheme.colorScheme.primary,
         )
     }
 }

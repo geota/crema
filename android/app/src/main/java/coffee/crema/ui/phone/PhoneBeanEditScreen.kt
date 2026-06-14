@@ -235,7 +235,7 @@ fun PhoneBeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
             NumberedGroup("04", "Bag & grind") {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     EdRow("Bag size") {
-                        EdStepper(bagSize, "g", 10.0, 0.0, 5000.0, { "%.0f".format(it) }) { bagSize = it }
+                        EdStepper(bagSize, "g", 10.0, 0.0, 2000.0, { "%.0f".format(it) }) { bagSize = it }
                     }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         BAG_PRESETS.forEach { g ->
@@ -259,7 +259,7 @@ fun PhoneBeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                     }
                 }
                 EdRow("Remaining") {
-                    EdStepper(remaining, "g", 1.0, 0.0, bagSize.coerceAtLeast(0.0), { "%.0f".format(it) }) { remaining = it }
+                    EdStepper(remaining, "g", 5.0, 0.0, bagSize.coerceAtLeast(0.0), { "%.0f".format(it) }) { remaining = it }
                 }
                 CremaTextField(value = grinder, onValueChange = { grinder = it }, label = "Grinder", placeholder = "e.g. Niche Zero")
                 CremaTextField(value = grind, onValueChange = { grind = it }, label = "Grind setting", placeholder = "e.g. 4.2, 6 + a tooth")

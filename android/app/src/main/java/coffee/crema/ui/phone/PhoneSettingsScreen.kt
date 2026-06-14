@@ -916,8 +916,8 @@ private fun AboutSection() {
         }
     }
     SettingsGroup("Legal") {
-        PRow("Terms of Service", "License, hardware-risk disclaimer, limitation of liability.", notImplemented = true) {}
-        PRow("Privacy Policy", "Crema is local-only. No analytics, no tracking.", last = true, notImplemented = true) {}
+        PRow("Terms of Service", "License, hardware-risk disclaimer, limitation of liability.", notImplemented = true) { PMono("Ships with 1.0") }
+        PRow("Privacy Policy", "Crema is local-only. No analytics, no tracking.", last = true, notImplemented = true) { PMono("Ships with 1.0") }
     }
 }
 

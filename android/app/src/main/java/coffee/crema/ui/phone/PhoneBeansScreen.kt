@@ -84,9 +84,9 @@ fun PhoneBeansScreen(
             "favourite" -> b.archivedAt == null && b.favourite
             "frozen" -> b.archivedAt == null && b.isFrozen
             "light", "medium", "dark" -> b.archivedAt == null && roastBand(b.roastLevel?.toInt())?.equals(filter, ignoreCase = true) == true
-            // "All" shows everything, archived included — the status sections
-            // below keep them apart (proto groups by status).
-            else -> true
+            // "All" excludes archived (matches tablet); the dedicated Archived
+            // chip is the only place they surface.
+            else -> b.archivedAt == null
         }
         matchesSearch && matchesFilter
     }
