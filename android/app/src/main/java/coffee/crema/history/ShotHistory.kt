@@ -86,6 +86,40 @@ val StoredShot.beanLabel: String?
         }
     }
 
+/**
+ * Summary metrics for a (filter/range-scoped) set of shots — issue 48. Computed
+ * once here so the tablet's six-tile strip and the phone's three-average strip
+ * stay consistent. `null` averages/weights mean "no data" (render as "—").
+ */
+data class HistoryStats(
+    val shots: Int,
+    val totalWeightG: Double?,
+    val avgWeightG: Double?,
+    val avgRatio: Double?,
+    val avgTimeS: Double?,
+    val avgRating: Double?,
+)
+
+/** Derive [HistoryStats] over [shots]. Yields drive total/avg weight; ratio is the
+ *  mean of per-shot yield÷dose (where both are present); rating averages 1..5. */
+fun historyStats(shots: List<StoredShot>): HistoryStats {
+    val yields = shots.mapNotNull { it.yieldG }
+    val ratios = shots.mapNotNull { s ->
+        val y = s.yieldG
+        val d = s.doseG
+        if (y != null && d != null && d > 0f) y / d else null
+    }
+    val ratings = shots.mapNotNull { it.rating?.takeIf { r -> r > 0 } }
+    return HistoryStats(
+        shots = shots.size,
+        totalWeightG = if (yields.isNotEmpty()) yields.sum().toDouble() else null,
+        avgWeightG = if (yields.isNotEmpty()) yields.average() else null,
+        avgRatio = if (ratios.isNotEmpty()) ratios.average() else null,
+        avgTimeS = if (shots.isNotEmpty()) shots.map { it.durationMs / 1000.0 }.average() else null,
+        avgRating = if (ratings.isNotEmpty()) ratings.average() else null,
+    )
+}
+
 /** Max telemetry points stored per shot — enough for a faithful detail chart. */
 const val SHOT_SAMPLE_CAP: Int = 200
 

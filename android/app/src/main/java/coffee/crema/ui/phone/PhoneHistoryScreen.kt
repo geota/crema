@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coffee.crema.history.StoredShot
 import coffee.crema.history.beanLabel
+import coffee.crema.history.historyStats
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.formatRatio
 import coffee.crema.ui.TelemetrySample
@@ -177,8 +178,9 @@ fun PhoneHistoryScreen(
                 return@Column
             }
 
-            // Stats strip — Today / Avg ratio / Avg rating over the FULL history.
-            PhoneStatsStrip(ui.history, startOfDay)
+            // Stats strip — the three averages (ratio / time / rating), scoped to
+            // the filtered set (issue 48; tablet/PWA add count + weights).
+            PhoneStatsStrip(filtered)
 
             // Filter chips: per-profile pills, then the date dropdown + sort.
             val byProfile = ui.history.mapNotNull { it.profileName }
@@ -296,22 +298,17 @@ private fun dayLabel(ms: Long, startOfDay: Long, dayMs: Long): String = when {
 
 // ── Stats strip (proto .ph-stats — 3-up) ─────────────────────────────────────
 @Composable
-private fun PhoneStatsStrip(history: List<StoredShot>, startOfDay: Long) {
-    val today = history.count { it.completedAtMs >= startOfDay }
-    val ratios = history.mapNotNull { s ->
-        val y = s.yieldG; val d = s.doseG
-        if (y != null && d != null && d > 0f) y / d else null
-    }
-    val avgRatio = if (ratios.isNotEmpty()) ratios.average() else null
-    val ratings = history.mapNotNull { it.rating?.takeIf { r -> r > 0 } }
-    val avgRating = if (ratings.isNotEmpty()) ratings.average() else null
+private fun PhoneStatsStrip(history: List<StoredShot>) {
+    // The three averages, scoped to the filtered set (issue 48). The tablet/PWA
+    // add Shots + total/avg Weight; the phone keeps it to the three.
+    val s = historyStats(history)
     Row(
         Modifier.fillMaxWidth().padding(horizontal = CremaEdge, vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        PhoneStatTile("Today", "$today", Modifier.weight(1f))
-        PhoneStatTile("Avg ratio", avgRatio?.let { "1:%.1f".format(it) } ?: "—", Modifier.weight(1f))
-        PhoneStatTile("Avg rating", avgRating?.let { "%.1f★".format(it) } ?: "—", Modifier.weight(1f))
+        PhoneStatTile("Avg ratio", s.avgRatio?.let { "1:%.1f".format(it) } ?: "—", Modifier.weight(1f))
+        PhoneStatTile("Avg time", s.avgTimeS?.let { "%.0fs".format(it) } ?: "—", Modifier.weight(1f))
+        PhoneStatTile("Avg rating", s.avgRating?.let { "%.1f★".format(it) } ?: "—", Modifier.weight(1f))
     }
 }
 
