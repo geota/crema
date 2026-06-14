@@ -540,42 +540,61 @@
 		(selectedId ? store.get(selectedId) : undefined) ?? filtered[0]
 	);
 
-	// ── Stats ────────────────────────────────────────────────────────────
-	/** Shots pulled today. */
-	const todayCount = $derived(
-		shots.filter((s) => Date.now() - s.completedAt < dayMs).length
-	);
-	/** Shots pulled in the last 7 days. */
-	const weekCount = $derived(
-		shots.filter((s) => Date.now() - s.completedAt < 7 * dayMs).length
-	);
-	/**
-	 * Mean yield weight (grams) across the history. Reported as a weight, not a
-	 * ratio: a `yield ÷ dose` ratio would have to assume one fixed dose and
-	 * mislead for every other (pre-`dose` records aside, the dose varies per
-	 * shot).
-	 */
-	const avgYield = $derived.by(() => {
-		const yields = shots
+	// ── Stats (issue 48) ──────────────────────────────────────────────────
+	// Scoped to the FILTERED set (reflects the active filter/range, not all-time).
+	// Six tiles matching the Android tablet: Shots, total Weight, Avg weight, then
+	// the three averages (ratio / time / rating). Weights honour the unit pref.
+	/** Yields (g) of the filtered shots that recorded a weight. */
+	const statYields = $derived(
+		filtered
 			.map((s) => {
 				const p = peaksOf(s);
 				return p.finalWeight ?? p.peakWeight;
 			})
-			.filter((y): y is number => y != null && y > 0);
-		if (yields.length === 0) return null;
-		const mean = yields.reduce((a, y) => a + y, 0) / yields.length;
-		return convertWeight(mean, settings.current.weightUnit);
+			.filter((y): y is number => y != null && y > 0)
+	);
+	/** Total weight dispensed across the filtered shots. */
+	const totalWeight = $derived.by(() =>
+		statYields.length === 0
+			? null
+			: convertWeight(
+					statYields.reduce((a, y) => a + y, 0),
+					settings.current.weightUnit
+				)
+	);
+	/** Mean yield weight across the filtered shots ("Avg weight"). */
+	const avgYield = $derived.by(() =>
+		statYields.length === 0
+			? null
+			: convertWeight(
+					statYields.reduce((a, y) => a + y, 0) / statYields.length,
+					settings.current.weightUnit
+				)
+	);
+	/** Mean brew ratio (yield ÷ dose) over filtered shots that recorded both. */
+	const avgRatio = $derived.by(() => {
+		const ratios = filtered
+			.map((s) => {
+				const p = peaksOf(s);
+				const y = p.finalWeight ?? p.peakWeight;
+				const d = s.metadata.dose;
+				return y != null && y > 0 && d != null && d > 0 ? y / d : null;
+			})
+			.filter((r): r is number => r != null);
+		return ratios.length === 0
+			? null
+			: ratios.reduce((a, r) => a + r, 0) / ratios.length;
 	});
 	/** Mean shot duration, seconds. */
 	const avgTime = $derived.by(() => {
-		if (shots.length === 0) return null;
+		if (filtered.length === 0) return null;
 		const mean =
-			shots.reduce((a, s) => a + s.record.duration, 0) / shots.length / 1000;
+			filtered.reduce((a, s) => a + s.record.duration, 0) / filtered.length / 1000;
 		return Math.round(mean);
 	});
-	/** Mean star rating across rated shots. */
+	/** Mean star rating across rated filtered shots. */
 	const avgRating = $derived.by(() => {
-		const rated = shots.filter((s) => (s.metadata.rating ?? 0) > 0);
+		const rated = filtered.filter((s) => (s.metadata.rating ?? 0) > 0);
 		if (rated.length === 0) return null;
 		return (
 			rated.reduce((a, s) => a + (s.metadata.rating ?? 0), 0) / rated.length
@@ -804,21 +823,27 @@
 		<!-- Stats strip -->
 		<div class="hi-stats">
 			<div class="hi-stat">
-				<div class="hi-stat-label">Today</div>
-				<div class="hi-stat-val"><span>{todayCount}</span><em>shots</em></div>
+				<div class="hi-stat-label">Shots</div>
+				<div class="hi-stat-val"><span>{filtered.length}</span><em>shots</em></div>
 			</div>
 			<div class="hi-stat">
-				<div class="hi-stat-label">This week</div>
-				<div class="hi-stat-val"><span>{weekCount}</span><em>shots</em></div>
+				<div class="hi-stat-label">Weight</div>
+				<div class="hi-stat-val">
+					<span>{totalWeight?.value ?? '—'}</span>{#if totalWeight != null}<em
+							>{totalWeight.unit}</em
+						>{/if}
+				</div>
 			</div>
 			<div class="hi-stat">
-				<div class="hi-stat-label">Total</div>
-				<div class="hi-stat-val"><span>{shots.length}</span><em>shots</em></div>
-			</div>
-			<div class="hi-stat">
-				<div class="hi-stat-label">Avg yield</div>
+				<div class="hi-stat-label">Avg weight</div>
 				<div class="hi-stat-val">
 					<span>{avgYield?.value ?? '—'}</span>{#if avgYield != null}<em>{avgYield.unit}</em>{/if}
+				</div>
+			</div>
+			<div class="hi-stat">
+				<div class="hi-stat-label">Avg ratio</div>
+				<div class="hi-stat-val">
+					<span>{avgRatio != null ? `1:${avgRatio.toFixed(1)}` : '—'}</span>
 				</div>
 			</div>
 			<div class="hi-stat">

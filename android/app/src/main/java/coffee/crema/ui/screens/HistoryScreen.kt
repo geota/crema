@@ -52,6 +52,7 @@ import coffee.crema.ble.ScaleBleManager
 import coffee.crema.ui.formatRatio
 import coffee.crema.history.StoredShot
 import coffee.crema.history.beanLabel
+import coffee.crema.history.historyStats
 import coffee.crema.ui.TelemetrySample
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.components.CremaCard
@@ -135,7 +136,8 @@ fun HistoryScreen(
     val launchSave: (String, String?) -> Unit = { name, content -> if (content != null) { pendingExport = content; saveLauncher.launch(name) } }
 
     // Client-side search + time-range filter + sort over the shot log. The stat
-    // strip stays over the FULL history (global metrics); only the list filters.
+    // strip is scoped to the same filtered set (issue 48) — it reflects what the
+    // current filter / range shows, not all-time.
     val now = System.currentTimeMillis()
     val dayMs = 24L * 60L * 60L * 1000L
     val startOfDay = run {
@@ -245,7 +247,7 @@ fun HistoryScreen(
                     }
                 }
             } else {
-                StatsStrip(ui.history)
+                StatsStrip(filtered)
                 // Range filter chips (left) + sort split-button (right).
                 Row(
                     Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = 4.dp, bottom = 8.dp),
@@ -360,39 +362,20 @@ fun HistoryScreen(
 // System.currentTimeMillis(); recomputed when `history` changes.
 @Composable
 private fun StatsStrip(history: List<StoredShot>) {
-    val now = System.currentTimeMillis()
-    val dayMs = 24L * 60L * 60L * 1000L
-    // Local midnight today: snap `now` to the device's day boundary so the
-    // "Today" bucket follows the wall clock rather than a rolling 24h window.
-    val startOfDay = run {
-        val cal = java.util.Calendar.getInstance()
-        cal.timeInMillis = now
-        cal.set(java.util.Calendar.HOUR_OF_DAY, 0)
-        cal.set(java.util.Calendar.MINUTE, 0)
-        cal.set(java.util.Calendar.SECOND, 0)
-        cal.set(java.util.Calendar.MILLISECOND, 0)
-        cal.timeInMillis
-    }
-    val startOfWeek = now - 7L * dayMs
-
-    val today = history.count { it.completedAtMs >= startOfDay }
-    val thisWeek = history.count { it.completedAtMs >= startOfWeek }
-    val total = history.size
-    val yields = history.mapNotNull { it.yieldG }
-    val avgYield = if (yields.isNotEmpty()) yields.average() else null
-    val avgTime = if (history.isNotEmpty()) history.map { it.durationMs / 1000.0 }.average() else null
-    val ratings = history.mapNotNull { it.rating?.takeIf { r -> r > 0 } }
-    val avgRating = if (ratings.isNotEmpty()) ratings.average() else null
+    // Stats over the passed (filter/range-scoped) list — issue 48. Six tiles,
+    // matching the web (PWA): count, total + average weight, then the three
+    // averages (ratio / time / rating). The phone shows just the three averages.
+    val s = historyStats(history)
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        StatTile("Today", "$today", "shots", Modifier.weight(1f))
-        StatTile("This week", "$thisWeek", "shots", Modifier.weight(1f))
-        StatTile("Total", "$total", "shots", Modifier.weight(1f))
-        StatTile("Avg yield", avgYield?.let { "%.1f".format(it) } ?: "—", avgYield?.let { "g" }, Modifier.weight(1f))
-        StatTile("Avg time", avgTime?.let { "%.0f".format(it) } ?: "—", avgTime?.let { "s" }, Modifier.weight(1f))
-        StatTile("Avg rating", avgRating?.let { "%.1f".format(it) } ?: "—", null, Modifier.weight(1f))
+        StatTile("Shots", "${s.shots}", "shots", Modifier.weight(1f))
+        StatTile("Weight", s.totalWeightG?.let { "%.0f".format(it) } ?: "—", s.totalWeightG?.let { "g" }, Modifier.weight(1f))
+        StatTile("Avg weight", s.avgWeightG?.let { "%.1f".format(it) } ?: "—", s.avgWeightG?.let { "g" }, Modifier.weight(1f))
+        StatTile("Avg ratio", s.avgRatio?.let { "1:%.1f".format(it) } ?: "—", null, Modifier.weight(1f))
+        StatTile("Avg time", s.avgTimeS?.let { "%.0f".format(it) } ?: "—", s.avgTimeS?.let { "s" }, Modifier.weight(1f))
+        StatTile("Avg rating", s.avgRating?.let { "%.1f".format(it) } ?: "—", null, Modifier.weight(1f))
     }
 }
 
