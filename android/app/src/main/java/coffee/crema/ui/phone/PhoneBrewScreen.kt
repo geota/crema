@@ -710,9 +710,13 @@ private fun RestingBody(
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             val groupOk = connected && ui.headTemp != null &&
                 active != null && ui.headTemp >= active.brewTemp - 2f
+            // Ready tints derived (was hardcoded false): steam boiler up to temp,
+            // tank above the low-water mark. Mirrors the Group tile's pattern.
+            val steamOk = connected && (ui.steamTemp ?: 0f) >= 130f
+            val tankOk = connected && (ui.waterLevelMm ?: 0f) > 5f
             MStat("Group", "thermometer", ui.headTemp?.let { "%.1f°".format(it) } ?: "—", groupOk, Modifier.weight(1f))
-            MStat("Steam", "cloud", ui.steamTemp?.let { "%.0f°".format(it) } ?: "—", false, Modifier.weight(1f))
-            MStat("Tank", "drop-half", ui.waterLevelMm?.let { "%.0fmm".format(it) } ?: "—", false, Modifier.weight(1f))
+            MStat("Steam", "cloud", ui.steamTemp?.let { "%.0f°".format(it) } ?: "—", steamOk, Modifier.weight(1f))
+            MStat("Tank", "drop-half", ui.waterLevelMm?.let { "%.0fmm".format(it) } ?: "—", tankOk, Modifier.weight(1f))
             MStat("Scale", "scales", if (scaleConnected) "%.1fg".format(ui.scaleWeightG ?: 0f) else "—", scaleConnected, Modifier.weight(1f))
         }
 
