@@ -280,6 +280,17 @@
 	     from the History detail's Sharing block. -->
 	<StGroup title="Upload options" sub="Defaults applied to every shot upload.">
 		<StRow
+			title="Auto-upload finished shots"
+			sub="Push each shot to Visualizer when it completes. Off = upload manually from History."
+		>
+			{#snippet control()}
+				<StToggle
+					on={settings.current.visualizerAutoUpload}
+					onChange={(v) => settings.set('visualizerAutoUpload', v)}
+				/>
+			{/snippet}
+		</StRow>
+		<StRow
 			title="Default privacy"
 			sub="Who can see uploaded shots. Public = community feed; unlisted = direct link only; private = just you. Individual shots can override this in History."
 		>

@@ -376,7 +376,6 @@
 	<StRow
 		title="Temperature"
 		needsConnection={!connected}
-		notImplemented
 		sub="The DE1's group-head thermocouple offset, {unitLabel('temp', prefs)}."
 	>
 		{#snippet control()}
@@ -416,7 +415,6 @@
 	<StRow
 		title="Pressure"
 		needsConnection={!connected}
-		notImplemented
 		sub="The DE1's group-pressure sensor offset, {unitLabel('pressure', prefs)}."
 	>
 		{#snippet control()}
@@ -456,7 +454,6 @@
 	<StRow
 		title="Flow"
 		needsConnection={!connected}
-		notImplemented
 		sub="Calibrate when an external scale disagrees with the DE1's estimate."
 	>
 		{#snippet control()}

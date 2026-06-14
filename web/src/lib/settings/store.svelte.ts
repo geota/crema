@@ -271,7 +271,8 @@ export const DEFAULT_SETTINGS: Settings = {
 
 	keepScreenOnBrew: false,
 
-	// preserved for future visualizer.coffee upload queue — not currently read anywhere
+	// Read at upload time (`history/shot-persistence.ts`) — gates the auto-upload
+	// of a finished shot; surfaced as a toggle in Settings → Sharing. Default on.
 	visualizerAutoUpload: true,
 	visualizerPrivacy: 'unlisted',
 	visualizerIncludeProfile: true,
