@@ -91,6 +91,16 @@ fun QuickControlsSheet(
     preFlush: Boolean,
     steamPurge: Boolean,
     channels: Set<String>,
+    // Persisted QC steam / hot-water / flush values (issue 14). These stick
+    // across opens and drive the machine on change (steam temp/time + hot-water
+    // temp/vol via RMW; steam flow + flush temp/time standalone).
+    qcSteamTimeS: Double,
+    qcSteamFlowMlS: Double,
+    qcSteamTempC: Double,
+    qcHotWaterTempC: Double,
+    qcHotWaterVolumeMl: Double,
+    qcFlushTimeS: Double,
+    qcFlushTempC: Double,
     onSelectProfile: (String) -> Unit,
     onSelectBean: (String) -> Unit,
     onAdjustBrew: (dose: Double, yieldOut: Double, brewTemp: Double) -> Unit,
@@ -101,6 +111,13 @@ fun QuickControlsSheet(
     onSteamEco: (Boolean) -> Unit,
     onPreFlush: (Boolean) -> Unit,
     onSteamPurge: (Boolean) -> Unit,
+    onSteamTime: (Double) -> Unit,
+    onSteamFlow: (Double) -> Unit,
+    onSteamTemp: (Double) -> Unit,
+    onHotWaterTemp: (Double) -> Unit,
+    onHotWaterVolume: (Double) -> Unit,
+    onFlushTime: (Double) -> Unit,
+    onFlushTemp: (Double) -> Unit,
     onToggleChannel: (String, Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -116,16 +133,11 @@ fun QuickControlsSheet(
     var grind by remember { mutableStateOf(4.2) }
     var brewMode by remember { mutableStateOf("temp") }
     var preinf by remember { mutableStateOf(8.0) }
+    // Steam / water / flush *values* are persisted props (issue 14); only which
+    // sub-value each stepper edits ("mode") is local view state.
     var steamMode by remember { mutableStateOf("time") }
-    var steamTime by remember { mutableStateOf(12.0) }
-    var steamFlow by remember { mutableStateOf(1.2) }
-    var steamTemp by remember { mutableStateOf(148.0) }
     var waterMode by remember { mutableStateOf("volume") }
-    var waterTemp by remember { mutableStateOf(80.0) }
-    var waterVolume by remember { mutableStateOf(150.0) }
     var flushMode by remember { mutableStateOf("time") }
-    var flushTime by remember { mutableStateOf(4.0) }
-    var flushTemp by remember { mutableStateOf(95.0) }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -249,39 +261,39 @@ fun QuickControlsSheet(
                 // 4 — Steam time | flow | temp.
                 QcStepper(
                     Modifier.weight(1f),
-                    value = when (steamMode) { "flow" -> steamFlow; "temp" -> steamTemp; else -> steamTime },
+                    value = when (steamMode) { "flow" -> qcSteamFlowMlS; "temp" -> qcSteamTempC; else -> qcSteamTimeS },
                     unit = when (steamMode) { "flow" -> "ml/s"; "temp" -> "°C"; else -> "s" },
                     min = when (steamMode) { "flow" -> 0.2; "temp" -> 120.0; else -> 1.0 },
                     max = when (steamMode) { "flow" -> 3.0; "temp" -> 170.0; else -> 60.0 },
                     step = when (steamMode) { "flow" -> 0.1; "temp" -> 0.5; else -> 1.0 },
                     chips = when (steamMode) { "flow" -> listOf(0.6, 0.9, 1.2, 1.6, 2.0); "temp" -> listOf(140.0, 145.0, 148.0, 150.0, 155.0); else -> listOf(5.0, 10.0, 15.0, 20.0, 30.0) },
-                    onChange = { when (steamMode) { "flow" -> steamFlow = it; "temp" -> steamTemp = it; else -> steamTime = it } },
+                    onChange = { when (steamMode) { "flow" -> onSteamFlow(it); "temp" -> onSteamTemp(it); else -> onSteamTime(it) } },
                 ) {
                     CremaSplitLabel(prefix = "Steam", options = listOf(SplitOption("time", "Time"), SplitOption("flow", "Flow"), SplitOption("temp", "Temp")), value = steamMode, onChange = { steamMode = it })
                 }
                 // 5 — Hot water temp | volume.
                 QcStepper(
                     Modifier.weight(1f),
-                    value = if (waterMode == "temp") waterTemp else waterVolume,
+                    value = if (waterMode == "temp") qcHotWaterTempC else qcHotWaterVolumeMl,
                     unit = if (waterMode == "temp") "°C" else "ml",
                     min = if (waterMode == "temp") 40.0 else 20.0,
                     max = if (waterMode == "temp") 98.0 else 500.0,
                     step = if (waterMode == "temp") 1.0 else 10.0,
                     chips = if (waterMode == "temp") listOf(60.0, 75.0, 85.0, 92.0, 96.0) else listOf(60.0, 120.0, 180.0, 250.0, 350.0),
-                    onChange = { if (waterMode == "temp") waterTemp = it else waterVolume = it },
+                    onChange = { if (waterMode == "temp") onHotWaterTemp(it) else onHotWaterVolume(it) },
                 ) {
                     CremaSplitLabel(prefix = "Hot water", options = listOf(SplitOption("temp", "Temp"), SplitOption("volume", "Volume")), value = waterMode, onChange = { waterMode = it })
                 }
                 // 6 — Flush time | temp.
                 QcStepper(
                     Modifier.weight(1f),
-                    value = if (flushMode == "time") flushTime else flushTemp,
+                    value = if (flushMode == "time") qcFlushTimeS else qcFlushTempC,
                     unit = if (flushMode == "time") "s" else "°C",
                     min = if (flushMode == "time") 1.0 else 60.0,
                     max = if (flushMode == "time") 20.0 else 100.0,
                     step = if (flushMode == "time") 1.0 else 0.5,
                     chips = if (flushMode == "time") listOf(2.0, 4.0, 6.0, 8.0, 10.0) else listOf(88.0, 92.0, 95.0, 97.0, 99.0),
-                    onChange = { if (flushMode == "time") flushTime = it else flushTemp = it },
+                    onChange = { if (flushMode == "time") onFlushTime(it) else onFlushTemp(it) },
                 ) {
                     CremaSplitLabel(prefix = "Flush", options = listOf(SplitOption("time", "Time"), SplitOption("temp", "Temp")), value = flushMode, onChange = { flushMode = it })
                 }
