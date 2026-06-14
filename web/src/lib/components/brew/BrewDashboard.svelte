@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import Icon from '$lib/icons/Icon.svelte';
 	import ArrowsClockwiseIcon from 'phosphor-svelte/lib/ArrowsClockwiseIcon';
 	/**
@@ -416,23 +417,75 @@
 		profileStore.setActive(cloned.id);
 	}
 
+	// Quick Sheet steam/hot-water key → its persisted Settings field (issue 14).
+	// Only the four fields that share the cuuid_0B packet need the map; the rest
+	// persist via literal keys in their own `case`.
+	const QC_SETTING = {
+		steamTime: 'qcSteamTimeS',
+		steamTemp: 'qcSteamTempC',
+		waterTemp: 'qcHotWaterTempC',
+		waterVolume: 'qcHotWaterVolumeMl'
+	} as const;
+
 	const params = new BrewParamState(
 		() => paramSeed,
 		(key, value) => {
-			// Route Flush-bucket `flushTemp` stepper edits through to the
-			// MMR `FlushTemp` setter so the user's QC value reaches the
-			// machine immediately.
-			if (key === 'flushTemp' && typeof value === 'number') {
-				void app?.setFlushTemp(value);
+			if (typeof value !== 'number') return;
+			switch (key) {
+				// Yield → the core's per-shot dial override. The core composes
+				// (dial > profile-recipe) at shot-start, so a QC bump on top of
+				// an active profile takes effect on the very next shot — GHC
+				// shots included.
+				case 'yield':
+					void app?.applyShotTargetWeight(value);
+					break;
+				// Steam temp/time + hot-water temp/vol share the one cuuid_0B
+				// packet — persist + read-modify-write all four together (issue
+				// 14), reading the just-updated `params.current`.
+				case 'steamTime':
+				case 'steamTemp':
+				case 'waterTemp':
+				case 'waterVolume': {
+					settings.set(QC_SETTING[key as keyof typeof QC_SETTING], value);
+					const c = params.current;
+					void app?.setSteamHotwater({
+						steamTempC: c.steamTemp,
+						steamTimeoutS: c.steamTime,
+						hotWaterTempC: c.waterTemp,
+						hotWaterVolumeMl: c.waterVolume
+					});
+					break;
+				}
+				// Steam flow + flush temp/time are standalone MMR writes.
+				case 'steamFlow':
+					settings.set('qcSteamFlowMlS', value);
+					void app?.setSteamFlow(value);
+					break;
+				case 'flushTime':
+					settings.set('qcFlushTimeS', value);
+					void app?.setFlushTimeoutS(value);
+					break;
+				case 'flushTemp':
+					settings.set('qcFlushTempC', value);
+					void app?.setFlushTemp(value);
+					break;
 			}
-			// Route Yield stepper edits to the core's per-shot dial
-			// override. The core composes (dial > profile-recipe) at
-			// shot-start, so a QC bump on top of an active profile takes
-			// effect on the very next shot — GHC-initiated shots included.
-			if (key === 'yield' && typeof value === 'number') {
-				void app?.applyShotTargetWeight(value);
-			}
-		}
+		},
+		// Seed the steam / hot-water / flush params from the persisted Quick
+		// Sheet values so they stick across reloads. Read `untrack`ed: this is a
+		// one-time default source, not a live dependency — otherwise every QC
+		// edit (which persists to `prefs`) would re-run `current` and wipe the
+		// user's dose / yield / brew overrides back to the profile seed.
+		() =>
+			untrack(() => ({
+				steamTime: prefs.qcSteamTimeS,
+				steamFlow: prefs.qcSteamFlowMlS,
+				steamTemp: prefs.qcSteamTempC,
+				waterTemp: prefs.qcHotWaterTempC,
+				waterVolume: prefs.qcHotWaterVolumeMl,
+				flushTime: prefs.qcFlushTimeS,
+				flushTemp: prefs.qcFlushTempC
+			}))
 	);
 	/**
 	 * Whether the Quick Sheet is docked open. Starts hidden — the dashboard is

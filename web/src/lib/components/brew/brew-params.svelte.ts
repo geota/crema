@@ -120,22 +120,31 @@ export class BrewParamState {
 	 * `$derived`), after which it tracks the component, not the seed, until a
 	 * seed input changes and the `$derived` body re-runs.
 	 */
-	current = $derived.by<BrewParams>(() => ({ ...DEFAULT_BREW_PARAMS, ...this.seed() }));
+	current = $derived.by<BrewParams>(() => ({
+		...DEFAULT_BREW_PARAMS,
+		...this.qcSeed?.(),
+		...this.seed()
+	}));
 
 	/**
 	 * @param seed A getter for the current brew-target seed. Read inside the
 	 *   `current` `$derived`, so it must touch reactive state to track changes.
 	 * @param onWrite Optional per-key write hook fired when {@link set} mutates
-	 *   the given key — used by `BrewDashboard` to route the Flush bucket's
-	 *   `flushTemp` stepper through to the MMR `FlushTemp` setter. Other keys
-	 *   remain local-only UI for this porting step.
+	 *   the given key — used by `BrewDashboard` to route steam / hot-water /
+	 *   flush steppers through to the machine (RMW + Settings persistence).
+	 * @param qcSeed Optional getter for the persisted steam / hot-water / flush
+	 *   values (issue 14). Merged *under* the profile seed so the Quick Sheet
+	 *   seeds those machine params from the user's last choice rather than the
+	 *   hardcoded {@link DEFAULT_BREW_PARAMS}. Not part of the profile-drift
+	 *   logic (`isOverridden` / `qcOverrides` stay on the four seed keys).
 	 */
 	constructor(
 		private readonly seed: () => BrewParamSeed,
 		private readonly onWrite?: <K extends keyof BrewParams>(
 			key: K,
 			value: BrewParams[K]
-		) => void
+		) => void,
+		private readonly qcSeed?: () => Partial<BrewParams>
 	) {}
 
 	/** Set one parameter — the steppers' `onChange`. */
@@ -150,7 +159,7 @@ export class BrewParamState {
 
 	/** Restore the params to the current seed — the sheet's "Reset" action. */
 	reset(): void {
-		this.current = { ...DEFAULT_BREW_PARAMS, ...this.seed() };
+		this.current = { ...DEFAULT_BREW_PARAMS, ...this.qcSeed?.(), ...this.seed() };
 	}
 
 	/**

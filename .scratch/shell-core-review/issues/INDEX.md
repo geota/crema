@@ -32,7 +32,7 @@ Sequencing lives at the bottom of `../PUNCHLIST.md`. Recommended first wave:
 |---|-------|-----|--------|
 | 12 | Remove false "Not implemented yet" pills from CalibrationSection | P1 | ✅ done |
 | 13 | Add `visualizerAutoUpload` UI toggle + fix stale comment | P1 | ✅ done |
-| 14 | Wire Android QuickControls steam/water/flush steppers | P1 | ready-for-agent |
+| 14 | Wire Android QuickControls steam/water/flush steppers | P1 | ✅ done |
 | 15 | Resolve Android grind/preinf dead-ends + flush/purge prefs | P2 | 🟢 ready-for-agent (decided: implement) |
 | 16 | Fix Android phone wiring regressions vs tablet | P1 | ✅ done |
 | 17 | Refresh stale web doc-comment headers | P3 | ready-for-agent |

@@ -43,7 +43,9 @@ import coffee.crema.ble.BleSessionRecorder
 import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.NordicBleTransport
 import coffee.crema.ble.ScaleBleManager
+import coffee.crema.core.EventShotSettingsReadInner
 import coffee.crema.core.ShotBean
+import coffee.crema.core.SteamHotWaterSettings
 import coffee.crema.core.profileFingerprint
 import coffee.crema.core.subStateErrorMessage
 import coffee.crema.profiles.BrewDefaults
@@ -253,6 +255,15 @@ data class MainUiState(
     val defaultRatio: Float = BrewDefaults.INSTANCE.ratio,
     val defaultBrewTempC: Float = BrewDefaults.INSTANCE.brewTempC,
     val defaultPreinfuseS: Float = BrewDefaults.INSTANCE.preinfusionS,
+    /** Persisted Quick-Controls steam / hot-water / flush overrides (issue 14) —
+     *  seed the QC steppers + applied to the machine on change (read-modify-write). */
+    val qcSteamTimeS: Float = 12f,
+    val qcSteamFlowMlS: Float = 1.2f,
+    val qcSteamTempC: Float = 148f,
+    val qcHotWaterTempC: Float = 80f,
+    val qcHotWaterVolumeMl: Float = 150f,
+    val qcFlushTimeS: Float = 4f,
+    val qcFlushTempC: Float = 95f,
     /**
      * Queued user-facing feedback lines (imports, exports, blocked actions).
      * MainActivity surfaces them as snackbars, dequeuing via
@@ -523,6 +534,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      */
     private var lastUploadedFingerprint: String? = null
     private var pendingUploadFingerprint: String? = null
+
+    /** The machine's last-reported steam/hot-water settings (from
+     *  `Event.ShotSettingsRead`). Used to read-modify-write QC steam/water
+     *  changes so the unmodeled fields (timeouts, espresso volume, group temp)
+     *  are preserved rather than reset (issue 14). Null until the DE1 reports. */
+    private var machineShotSettings: EventShotSettingsReadInner? = null
 
     /** Bean-library persistence — a JSON file in filesDir. */
     private val library = LibraryStore(app, json)
@@ -1572,6 +1589,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         defaultRatio = _ui.value.defaultRatio,
         defaultBrewTempC = _ui.value.defaultBrewTempC,
         defaultPreinfuseS = _ui.value.defaultPreinfuseS,
+        qcSteamTimeS = _ui.value.qcSteamTimeS,
+        qcSteamFlowMlS = _ui.value.qcSteamFlowMlS,
+        qcSteamTempC = _ui.value.qcSteamTempC,
+        qcHotWaterTempC = _ui.value.qcHotWaterTempC,
+        qcHotWaterVolumeMl = _ui.value.qcHotWaterVolumeMl,
+        qcFlushTimeS = _ui.value.qcFlushTimeS,
+        qcFlushTempC = _ui.value.qcFlushTempC,
         activeProfileId = _ui.value.activeProfileId,
     )
 
@@ -1654,6 +1678,87 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         onCoreOutputJson(raw)
+    }
+
+    // ── Quick-Controls steam / hot-water / flush (issue 14) ──────────────────
+    // Persisted QC overrides that stick + take priority. On change we update
+    // UiState, persist, and write to the machine. Steam temp/time + hot-water
+    // temp/vol share one packet (cuuid_0B) written read-modify-write so the
+    // fields QC doesn't model (timeouts, espresso volume, group temp) survive;
+    // steam flow + flush temp/time are separate writes.
+
+    /** Route a core-output-producing machine write through the shared command
+     *  path, logging (not throwing) on failure. */
+    private fun routeWrite(label: String, block: () -> String) {
+        val raw = runCatching { block() }.getOrElse {
+            appendLog("$label failed: ${it.message}")
+            return
+        }
+        onCoreOutputJson(raw)
+    }
+
+    /** Write the combined steam + hot-water packet via read-modify-write,
+     *  seeding the unmodeled fields from the machine's last-reported settings
+     *  (or legacy defaults pre-read). */
+    private fun applySteamHotWater() {
+        val ui = _ui.value
+        val settings = buildSteamHotWaterSettings(
+            steamTempC = ui.qcSteamTempC,
+            steamTimeoutS = ui.qcSteamTimeS,
+            hotWaterTempC = ui.qcHotWaterTempC,
+            hotWaterVolumeMl = ui.qcHotWaterVolumeMl,
+            machine = machineShotSettings,
+        )
+        routeWrite("Set steam/hot-water") { bridge.setSteamHotwaterSettings(settings) }
+    }
+
+    /** Steam timeout, seconds (Quick Controls). Persisted; RMW write. */
+    fun setQcSteamTime(seconds: Float) {
+        _ui.update { it.copy(qcSteamTimeS = seconds) }
+        persistPrefs()
+        applySteamHotWater()
+    }
+
+    /** Steam flow rate, ml/s (Quick Controls). Persisted; standalone write. */
+    fun setQcSteamFlow(mlPerS: Float) {
+        _ui.update { it.copy(qcSteamFlowMlS = mlPerS) }
+        persistPrefs()
+        routeWrite("Set steam flow") { bridge.setSteamFlow(mlPerS) }
+    }
+
+    /** Steam temperature, °C (Quick Controls). Persisted; RMW write. */
+    fun setQcSteamTemp(tempC: Float) {
+        _ui.update { it.copy(qcSteamTempC = tempC) }
+        persistPrefs()
+        applySteamHotWater()
+    }
+
+    /** Hot-water temperature, °C (Quick Controls). Persisted; RMW write. */
+    fun setQcHotWaterTemp(tempC: Float) {
+        _ui.update { it.copy(qcHotWaterTempC = tempC) }
+        persistPrefs()
+        applySteamHotWater()
+    }
+
+    /** Hot-water volume, ml (Quick Controls). Persisted; RMW write. */
+    fun setQcHotWaterVolume(ml: Float) {
+        _ui.update { it.copy(qcHotWaterVolumeMl = ml) }
+        persistPrefs()
+        applySteamHotWater()
+    }
+
+    /** Flush timeout, seconds (Quick Controls). Persisted; standalone write. */
+    fun setQcFlushTime(seconds: Float) {
+        _ui.update { it.copy(qcFlushTimeS = seconds) }
+        persistPrefs()
+        routeWrite("Set flush time") { bridge.setFlushTimeout((seconds * 1000f).toUInt()) }
+    }
+
+    /** Flush temperature, °C (Quick Controls). Persisted; standalone write. */
+    fun setQcFlushTemp(tempC: Float) {
+        _ui.update { it.copy(qcFlushTempC = tempC) }
+        persistPrefs()
+        routeWrite("Set flush temp") { bridge.setFlushTemp(tempC) }
     }
 
     /** Show/hide a live-chart channel (Quick Controls). Persisted display pref. */
@@ -2294,6 +2399,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             defaultRatio = p.defaultRatio,
             defaultBrewTempC = p.defaultBrewTempC,
             defaultPreinfuseS = p.defaultPreinfuseS,
+            qcSteamTimeS = p.qcSteamTimeS,
+            qcSteamFlowMlS = p.qcSteamFlowMlS,
+            qcSteamTempC = p.qcSteamTempC,
+            qcHotWaterTempC = p.qcHotWaterTempC,
+            qcHotWaterVolumeMl = p.qcHotWaterVolumeMl,
+            qcFlushTimeS = p.qcFlushTimeS,
+            qcFlushTempC = p.qcFlushTempC,
             // Restore the last session's profile selection; refreshProfiles
             // self-heals if the id no longer resolves (e.g. deleted custom).
             activeProfileId = p.activeProfileId ?: it.activeProfileId,
@@ -2860,6 +2972,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 _ui.update { it.copy(waterLevelMm = event.content.level) }
                 appendLog("Water level: %.0fmm".format(event.content.level))
             }
+            is Event.ShotSettingsRead -> {
+                // Cache the machine's reported steam/hot-water settings so QC
+                // changes can read-modify-write without clobbering the fields QC
+                // doesn't model (timeouts, espresso volume, group temp) — issue 14.
+                machineShotSettings = event.content
+            }
             is Event.StopTriggered ->
                 appendLog("Auto-stop: ${event.content.reason.string}")
             is Event.ShotCompleted -> {
@@ -3065,3 +3183,30 @@ internal fun shouldSkipProfileUpload(
     lastUploaded: String?,
     de1Ready: Boolean,
 ): Boolean = de1Ready && effectiveFingerprint != null && effectiveFingerprint == lastUploaded
+
+/**
+ * Build the steam + hot-water settings packet (cuuid_0B) for a read-modify-write
+ * (issue 14). The four QC-modeled fields come from the persisted Quick-Controls
+ * values; the rest are preserved from the machine's last-reported settings
+ * ([machine], via `Event.ShotSettingsRead`) so a QC steam/water change doesn't
+ * reset the machine's timeouts / espresso volume / group temp. Pre-read, the
+ * legacy-app defaults stand in. `steamFlags` is always 0 (legacy parity; bits
+ * undocumented). Top-level + `internal` so it's pure and unit-testable without a
+ * device (the actual BLE write isn't).
+ */
+internal fun buildSteamHotWaterSettings(
+    steamTempC: Float,
+    steamTimeoutS: Float,
+    hotWaterTempC: Float,
+    hotWaterVolumeMl: Float,
+    machine: EventShotSettingsReadInner?,
+): SteamHotWaterSettings = SteamHotWaterSettings(
+    steamFlags = 0u,
+    steamTempC = steamTempC,
+    steamTimeoutS = steamTimeoutS,
+    hotWaterTempC = hotWaterTempC,
+    hotWaterVolumeMl = hotWaterVolumeMl,
+    hotWaterTimeoutS = machine?.hot_water_timeout ?: 60f,
+    espressoVolumeMl = machine?.espresso_volume ?: 200f,
+    groupTempC = machine?.group_temp ?: 92f,
+)

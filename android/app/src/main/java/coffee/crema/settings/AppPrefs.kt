@@ -50,6 +50,19 @@ data class AppPrefs(
     /** Keep the DE1 awake while Crema is open (web `suppressDe1Sleep`) — a
      *  60 s UserPresent (MMR 0x803858) heartbeat resets the sleep timer. */
     val suppressDe1Sleep: Boolean = true,
+    // ── Quick-Controls steam / hot-water / flush (issue 14) ──────────────────
+    /** Persisted QC overrides for the machine's steam / hot-water / flush params.
+     *  These stick (no throwaway state) and take priority; on change they're
+     *  applied to the machine via read-modify-write (the machine's reported
+     *  timeouts / espresso volume / group temp are preserved). Defaults mirror
+     *  the former QuickControls seed values. */
+    val qcSteamTimeS: Float = 12f,
+    val qcSteamFlowMlS: Float = 1.2f,
+    val qcSteamTempC: Float = 148f,
+    val qcHotWaterTempC: Float = 80f,
+    val qcHotWaterVolumeMl: Float = 150f,
+    val qcFlushTimeS: Float = 4f,
+    val qcFlushTempC: Float = 95f,
     // ── Session restore ──────────────────────────────────────────────────────
     /** The last active profile id, restored on launch (web `crema.profiles.activeId`). */
     val activeProfileId: String? = null,

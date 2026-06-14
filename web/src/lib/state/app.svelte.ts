@@ -1120,6 +1120,46 @@ export class CremaApp {
 	}
 
 	/**
+	 * Write the four QC-modeled steam / hot-water fields via read-modify-write
+	 * (issue 14). The combined cuuid_0B packet carries eight fields; the
+	 * timeouts / espresso volume / group temp the Quick Sheet doesn't model are
+	 * seeded from the machine's last `ShotSettingsRead` (`de1ShotSettings`) so
+	 * this change doesn't reset them. Pre-read, the legacy-app defaults stand
+	 * in. `steamFlags` is always 0 (legacy parity; bits undocumented).
+	 */
+	async setSteamHotwater(values: {
+		steamTempC: number;
+		steamTimeoutS: number;
+		hotWaterTempC: number;
+		hotWaterVolumeMl: number;
+	}): Promise<void> {
+		const m = this.state.current.de1ShotSettings;
+		this.applyCoreOutput(
+			await this.core.setSteamHotwaterSettings({
+				steamFlags: 0,
+				steamTempC: values.steamTempC,
+				steamTimeoutS: values.steamTimeoutS,
+				hotWaterTempC: values.hotWaterTempC,
+				hotWaterVolumeMl: values.hotWaterVolumeMl,
+				hotWaterTimeoutS: m?.hotWaterTimeout ?? 60,
+				espressoVolumeMl: m?.espressoVolume ?? 200,
+				groupTempC: m?.groupTemp ?? 92
+			})
+		);
+	}
+
+	/** Set the steam flow rate, ml/s — the Quick Sheet Steam→Flow stepper. */
+	async setSteamFlow(mlPerS: number): Promise<void> {
+		this.applyCoreOutput(await this.core.setSteamFlow(mlPerS));
+	}
+
+	/** Set the group-flush timeout, seconds — the Quick Sheet Flush→Time
+	 *  stepper. The core's setter takes milliseconds. */
+	async setFlushTimeoutS(seconds: number): Promise<void> {
+		this.applyCoreOutput(await this.core.setFlushTimeout(Math.round(seconds * 1000)));
+	}
+
+	/**
 	 * Set the cup-warmer plate temperature — Bengle hardware only.
 	 * Celsius is the canonical unit (see docs/25 §7). MMR `CupWarmerTemp`
 	 * (`0x803874`). `0` turns the plate off; the firmware ignores the

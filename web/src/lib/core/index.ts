@@ -267,6 +267,23 @@ export type NotificationSource =
 	| 'De1FrameAck';
 
 /**
+ * The eight fields of the DE1's steam / hot-water settings packet (cuuid_0B),
+ * the argument to {@link CremaCore.setSteamHotwaterSettings}. Canonical units
+ * (°C, s, ml); the wire scaling lives in the core. `steamFlags` is the legacy
+ * flag byte (always 0 — bits undocumented).
+ */
+export interface SteamHotwaterSettings {
+	steamFlags: number;
+	steamTempC: number;
+	steamTimeoutS: number;
+	hotWaterTempC: number;
+	hotWaterVolumeMl: number;
+	hotWaterTimeoutS: number;
+	espressoVolumeMl: number;
+	groupTempC: number;
+}
+
+/**
  * The async core facade. One instance owns one `CremaBridge`; obtain it from
  * {@link loadCore}. Methods that take raw bytes / produce a `CoreOutput`
  * mirror the bridge surface; `reset` is passed through.
@@ -613,6 +630,14 @@ export interface CremaCore {
 	setFanThreshold(celsius: number): Promise<CoreOutput>;
 	/** Set the tank desired water-temperature threshold. Celsius is the canonical unit (see docs/25 §7). */
 	setTankThreshold(celsius: number): Promise<CoreOutput>;
+	/**
+	 * Write the combined steam + hot-water settings packet (cuuid_0B). All
+	 * eight fields ship in one write, so callers read-modify-write: seed the
+	 * fields the UI doesn't model (timeouts, espresso volume, group temp) from
+	 * the machine's last `ShotSettingsRead` so a steam/water change doesn't
+	 * reset them. `steamFlags` is 0 (legacy parity; bits undocumented).
+	 */
+	setSteamHotwaterSettings(settings: SteamHotwaterSettings): Promise<CoreOutput>;
 	/** Set the steam flow rate, ml/s. */
 	setSteamFlow(mlPerS: number): Promise<CoreOutput>;
 	/** Set the seconds of high-flow steam at the start of a steam cycle. */
@@ -1024,6 +1049,20 @@ async function createCore(): Promise<CremaCore> {
 		},
 		async setTankThreshold(celsius) {
 			return parseOutput(bridge.set_tank_threshold(celsius));
+		},
+		async setSteamHotwaterSettings(s) {
+			return parseOutput(
+				bridge.set_steam_hotwater_settings(
+					s.steamFlags,
+					s.steamTempC,
+					s.steamTimeoutS,
+					s.hotWaterTempC,
+					s.hotWaterVolumeMl,
+					s.hotWaterTimeoutS,
+					s.espressoVolumeMl,
+					s.groupTempC
+				)
+			);
 		},
 		async setSteamFlow(mlPerS) {
 			return parseOutput(bridge.set_steam_flow(mlPerS));

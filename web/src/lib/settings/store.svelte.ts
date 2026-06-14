@@ -168,6 +168,28 @@ export interface Settings {
 	 */
 	keepScreenOnBrew: boolean;
 
+	// ── Quick-Controls steam / hot-water / flush (issue 14) ──────────────────
+	// Persisted Quick Sheet values for the machine's steam / hot-water / flush
+	// params. Unlike most of this store these *are* machine settings — but they
+	// stick across reloads (so the Quick Sheet seeds from the user's last
+	// choice, not a hardcoded default) and take priority, and on change they're
+	// read-modify-written to the DE1 (steam temp/time + hot-water temp/vol share
+	// one cuuid_0B packet; steam flow + flush temp/time are separate MMR writes).
+	/** Steam duration, seconds. */
+	qcSteamTimeS: number;
+	/** Steam flow rate, ml/s. */
+	qcSteamFlowMlS: number;
+	/** Steam boiler target temperature, °C. */
+	qcSteamTempC: number;
+	/** Hot-water temperature, °C. */
+	qcHotWaterTempC: number;
+	/** Hot-water volume, ml. */
+	qcHotWaterVolumeMl: number;
+	/** Group-flush duration, seconds. */
+	qcFlushTimeS: number;
+	/** Group-flush target temperature, °C. */
+	qcFlushTempC: number;
+
 	// ── Sharing (Visualizer) ─────────────────────────────────────────────
 	/** Auto-upload finished shots to Visualizer. */
 	visualizerAutoUpload: boolean;
@@ -270,6 +292,16 @@ export const DEFAULT_SETTINGS: Settings = {
 	grinderModel: '',
 
 	keepScreenOnBrew: false,
+
+	// Quick-Controls steam / hot-water / flush — match DEFAULT_BREW_PARAMS so a
+	// fresh install seeds the Quick Sheet identically to before persistence.
+	qcSteamTimeS: 12,
+	qcSteamFlowMlS: 1.2,
+	qcSteamTempC: 148,
+	qcHotWaterTempC: 80,
+	qcHotWaterVolumeMl: 150,
+	qcFlushTimeS: 4,
+	qcFlushTempC: 95,
 
 	// Read at upload time (`history/shot-persistence.ts`) — gates the auto-upload
 	// of a finished shot; surfaced as a toggle in Settings → Sharing. Default on.
