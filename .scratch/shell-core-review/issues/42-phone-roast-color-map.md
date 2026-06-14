@@ -1,6 +1,6 @@
 # 42 — Drop the phone roast→color map
 
-- **Status:** ready-for-agent
+- **Status:** ✅ done (2026-06-14, commit 9cbdd9c) — copper-wash + 999dp radius; verified on phone Profiles
 - **Severity:** P1
 - **Area:** Android phone — `ui/phone/PhoneProfilesScreen.kt`
 - **Punchlist:** T3-03 — `../PUNCHLIST.md`

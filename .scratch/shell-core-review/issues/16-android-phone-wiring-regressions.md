@@ -1,6 +1,6 @@
 # 16 — Fix Android phone wiring regressions vs tablet
 
-- **Status:** ready-for-agent
+- **Status:** ✅ done (2026-06-14, commit 9cbdd9c) — all 4 regressions fixed (Terms/Privacy readout, All excludes archived, restock steppers, steam/tank tints)
 - **Severity:** P1
 - **Area:** Android phone — `ui/phone/PhoneSettingsScreen.kt`, `ui/phone/PhoneBeansScreen.kt`, `ui/phone/PhoneBeanEditScreen.kt`, `ui/phone/PhoneBrewScreen.kt`
 - **Punchlist:** T2-05 — `../PUNCHLIST.md`

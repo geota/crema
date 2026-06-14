@@ -1,6 +1,6 @@
 # 13 — Add `visualizerAutoUpload` UI toggle + fix stale comment
 
-- **Status:** ready-for-agent
+- **Status:** ✅ done (2026-06-14, commit fd64879) — toggle added to Sharing → Upload options; stale comment fixed
 - **Severity:** P1
 - **Area:** web — `components/settings/sections/SharingSection.svelte`, `settings/store.svelte.ts`
 - **Punchlist:** T2-02 — `../PUNCHLIST.md`

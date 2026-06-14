@@ -1,6 +1,6 @@
 # 12 — Remove false "Not implemented yet" pills from CalibrationSection
 
-- **Status:** ready-for-agent
+- **Status:** ✅ done (2026-06-14, commit fd64879) — removed `notImplemented` from the 3 rows; `npm run check` clean
 - **Severity:** P1
 - **Area:** web — `components/settings/sections/CalibrationSection.svelte`
 - **Punchlist:** T2-01 — `../PUNCHLIST.md`
