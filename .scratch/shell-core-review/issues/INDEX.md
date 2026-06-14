@@ -81,7 +81,7 @@ Sequencing lives at the bottom of `../PUNCHLIST.md`. Recommended first wave:
 | 45 | Reconcile design tokens (Copper300, paper-300, sheet radius) | P2 | ready-for-agent |
 | 46 | Standardize Android weight/temp formatting + move freshness hex to theme | P3 | ready-for-agent |
 | 47 | Title-case the web ProfileCard roast chip | P3 | ready-for-agent |
-| 48 | Pick a canonical History stats set (tablet vs phone) | P3 | 🟢 ready-for-agent (decided) |
+| 48 | Pick a canonical History stats set (tablet vs phone) | P3 | ✅ done |
 | 49 | Casing nit: "Frozen" vs "frozen" | P3 | ready-for-agent |
 | 50 | Phone segment-options: match QuickControls selectors + inline the `>`/`<` | P3 | ready-for-agent |
 

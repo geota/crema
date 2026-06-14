@@ -1,7 +1,13 @@
 # 48 — Pick a canonical History stats set (tablet vs phone)
 
-- **Status:** ready-for-agent (decided 2026-06-14)
+- **Status:** done (2026-06-14)
 - **Severity:** P3
+
+> **Done (2026-06-14):** Shared pure `historyStats(shots)` in
+> `history/ShotHistory.kt` (+ unit test) drives all three. Stats scoped to the
+> filtered list. Tablet + web (PWA) show six tiles (Shots · Weight · Avg weight ·
+> Avg ratio · Avg time · Avg rating); phone shows the three averages. Verified on
+> both emulators + `npm run check`. Commit `e637438`.
 
 > **Decision (2026-06-14):** Stats are scoped to the **current filter / time-range**
 > (not all-time). Form factors need not be identical, but **tablet should match
