@@ -63,6 +63,10 @@ data class AppPrefs(
     val qcHotWaterVolumeMl: Float = 150f,
     val qcFlushTimeS: Float = 4f,
     val qcFlushTempC: Float = 95f,
+    /** Persisted Quick-Controls grinder click (issue 15). Null = never dialed —
+     *  the stepper shows a seed value and shots record no grind until the user
+     *  sets it; once set it sticks and is recorded onto each shot. */
+    val qcGrind: Float? = null,
     // ── Session restore ──────────────────────────────────────────────────────
     /** The last active profile id, restored on launch (web `crema.profiles.activeId`). */
     val activeProfileId: String? = null,

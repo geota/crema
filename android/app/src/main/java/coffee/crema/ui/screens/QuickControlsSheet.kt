@@ -103,7 +103,7 @@ fun QuickControlsSheet(
     qcFlushTempC: Double,
     onSelectProfile: (String) -> Unit,
     onSelectBean: (String) -> Unit,
-    onAdjustBrew: (dose: Double, yieldOut: Double, brewTemp: Double) -> Unit,
+    onAdjustBrew: (dose: Double, yieldOut: Double, brewTemp: Double, preinf: Double?) -> Unit,
     onResetBrew: () -> Unit,
     onSavePreset: (String) -> Unit,
     onAutoTare: (Boolean) -> Unit,
@@ -118,6 +118,9 @@ fun QuickControlsSheet(
     onHotWaterVolume: (Double) -> Unit,
     onFlushTime: (Double) -> Unit,
     onFlushTemp: (Double) -> Unit,
+    // Persisted QC grind click + pre-infuse transient override (issue 15).
+    qcGrind: Double?,
+    onGrind: (Double) -> Unit,
     onToggleChannel: (String, Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -125,14 +128,20 @@ fun QuickControlsSheet(
     val dose = brewParams?.dose ?: (active?.dose?.toDouble() ?: 18.0)
     val yieldOut = brewParams?.yieldOut ?: (active?.yieldOut?.toDouble() ?: 36.0)
     val brewTemp = brewParams?.brewTemp ?: (active?.brewTemp?.toDouble() ?: 93.0)
+    // Pre-infusion is the leading segment's time (no separate machine setting); a
+    // transient override caps it, else show the active profile's own (issue 15).
+    val preinf = brewParams?.preinf ?: (active?.preinfuseSeconds?.toDouble() ?: 8.0)
+    // The current pre-infuse override state (null = not overridden) — preserved
+    // when other brew steppers fire so a dose tweak doesn't drop a preinf override.
+    val preinfOverride = brewParams?.preinf
+    // Grind: persisted QC click (issue 15); show the saved value, else the seed.
+    val grind = qcGrind ?: 4.2
 
     var showSave by remember { mutableStateOf(false) }
     var presetName by remember { mutableStateOf("") }
-    // Per-stepper mode + the non-brew (local) values — web brew-params defaults.
+    // Per-stepper mode — which sub-value each combined stepper edits (local view state).
     var doseGrindMode by remember { mutableStateOf("dose") }
-    var grind by remember { mutableStateOf(4.2) }
     var brewMode by remember { mutableStateOf("temp") }
-    var preinf by remember { mutableStateOf(8.0) }
     // Steam / water / flush *values* are persisted props (issue 14); only which
     // sub-value each stepper edits ("mode") is local view state.
     var steamMode by remember { mutableStateOf("time") }
@@ -225,7 +234,7 @@ fun QuickControlsSheet(
                     max = if (doseGrindMode == "dose") 30.0 else 20.0,
                     step = 0.1,
                     chips = if (doseGrindMode == "dose") listOf(16.0, 17.0, 18.0, 19.0, 20.0) else listOf(3.8, 4.0, 4.2, 4.4, 4.6),
-                    onChange = { if (doseGrindMode == "dose") onAdjustBrew(it, yieldOut, brewTemp) else grind = it },
+                    onChange = { if (doseGrindMode == "dose") onAdjustBrew(it, yieldOut, brewTemp, preinfOverride) else onGrind(it) },
                 ) {
                     CremaSplitLabel(prefix = "", options = listOf(SplitOption("dose", "Dose"), SplitOption("grind", "Grind")), value = doseGrindMode, onChange = { doseGrindMode = it })
                 }
@@ -237,7 +246,7 @@ fun QuickControlsSheet(
                     value = yieldOut, unit = "g", min = 10.0, max = 80.0, step = 0.5,
                     chips = listOf(28.0, 32.0, 36.0, 40.0, 45.0),
                     enabled = stopOnWeight,
-                    onChange = { onAdjustBrew(dose, it, brewTemp) },
+                    onChange = { onAdjustBrew(dose, it, brewTemp, preinfOverride) },
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                         CremaDotToggle(stopOnWeight, { onStopOnWeight(!stopOnWeight) })
@@ -254,7 +263,7 @@ fun QuickControlsSheet(
                     max = if (brewMode == "temp") 100.0 else 30.0,
                     step = if (brewMode == "temp") 0.5 else 1.0,
                     chips = if (brewMode == "temp") listOf(88.0, 91.0, 93.0, 95.0, 97.0) else listOf(0.0, 4.0, 8.0, 12.0, 16.0),
-                    onChange = { if (brewMode == "temp") onAdjustBrew(dose, yieldOut, it) else preinf = it },
+                    onChange = { if (brewMode == "temp") onAdjustBrew(dose, yieldOut, it, preinfOverride) else onAdjustBrew(dose, yieldOut, brewTemp, it) },
                 ) {
                     CremaSplitLabel(prefix = "Brew", options = listOf(SplitOption("temp", "Temp"), SplitOption("preinf", "Pre-infuse")), value = brewMode, onChange = { brewMode = it })
                 }

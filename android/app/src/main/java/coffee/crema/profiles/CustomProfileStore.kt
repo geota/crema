@@ -255,16 +255,38 @@ fun setProfilePinnedJson(baseJson: String, pinned: Boolean, json: Json): String 
 }
 
 /**
- * Override just the top-level dose / yield / brew-temp on a complete CremaProfile
+ * Override the top-level dose / yield / brew-temp on a complete CremaProfile
  * JSON, leaving every other field (segments, limiters, …) untouched — the
  * Quick-Controls transient override baked into a shot upload (the web shell's
  * re-upload-with-overrides). Does NOT persist to the library.
+ *
+ * When [preinf] is non-null it also caps the **leading pre-infuse segment's**
+ * time (issue 15): pre-infusion isn't a separate machine setting — it's just the
+ * duration of the first segment (`CremaProfile.preinfuseSeconds`,
+ * `core/de1-domain` `blank_profile`), so a per-shot pre-infuse override rewrites
+ * exactly that one frame. A null leaves the profile's own pre-infusion intact.
  */
-fun overrideBrewParamsJson(baseJson: String, dose: Float, yieldOut: Float, brewTemp: Float, json: Json): String {
+fun overrideBrewParamsJson(
+    baseJson: String,
+    dose: Float,
+    yieldOut: Float,
+    brewTemp: Float,
+    preinf: Float? = null,
+    json: Json,
+): String {
     val root = json.parseToJsonElement(baseJson).jsonObject.toMutableMap()
     root["dose"] = JsonPrimitive(dose)
     root["yieldOut"] = JsonPrimitive(yieldOut)
     root["brewTemp"] = JsonPrimitive(brewTemp)
+    if (preinf != null) {
+        val segments = (root["segments"] as? JsonArray)?.toMutableList()
+        val first = segments?.firstOrNull() as? JsonObject
+        if (first != null) {
+            val firstMap = first.toMutableMap().apply { put("time", JsonPrimitive(preinf)) }
+            segments[0] = JsonObject(firstMap)
+            root["segments"] = JsonArray(segments)
+        }
+    }
     return json.encodeToString(JsonObject.serializer(), JsonObject(root))
 }
 

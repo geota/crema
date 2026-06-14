@@ -267,6 +267,8 @@ fun BrewScreen(
                     onHotWaterVolume = { vm.setQcHotWaterVolume(it.toFloat()) },
                     onFlushTime = { vm.setQcFlushTime(it.toFloat()) },
                     onFlushTemp = { vm.setQcFlushTemp(it.toFloat()) },
+                    qcGrind = ui.qcGrind?.toDouble(),
+                    onGrind = { vm.setQcGrind(it.toFloat()) },
                     onToggleChannel = vm::toggleChartChannel,
                     onDismiss = { quickOpen = false },
                 )
