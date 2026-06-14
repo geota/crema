@@ -9,6 +9,7 @@ import coffee.crema.core.CoreOutput
 import coffee.crema.core.CremaBridge
 import coffee.crema.core.Event
 import coffee.crema.core.MachineRequest
+import coffee.crema.core.WaterSessionKind
 import coffee.crema.core.MmrReg
 import coffee.crema.core.MmrRegister
 import coffee.crema.core.ScaleCapabilities
@@ -61,7 +62,9 @@ import coffee.crema.profiles.overrideBrewParamsJson
 import coffee.crema.profiles.quickPresetJson
 import coffee.crema.profiles.profileIdOf
 import coffee.crema.profiles.SegmentEdit
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -131,7 +134,19 @@ data class LastShot(
  * mid-shot SAW dial (web `setShotTargetWeight`) needs a bridge FFI not yet
  * exposed — that's the documented Phase-B follow-up.
  */
-data class BrewParams(val dose: Double, val yieldOut: Double, val brewTemp: Double)
+/**
+ * The transient Quick-Controls brew override baked into the next shot's upload
+ * (the library profile is untouched). dose/yield/brewTemp always carry the
+ * effective value; [preinf] is null until the user touches the pre-infuse
+ * stepper — pre-infusion isn't a separate machine setting, so an override just
+ * caps the leading pre-infuse segment's time (issue 15).
+ */
+data class BrewParams(
+    val dose: Double,
+    val yieldOut: Double,
+    val brewTemp: Double,
+    val preinf: Double? = null,
+)
 
 data class MainUiState(
     val bleState: De1BleManager.State = De1BleManager.State.IDLE,
@@ -264,6 +279,8 @@ data class MainUiState(
     val qcHotWaterVolumeMl: Float = 150f,
     val qcFlushTimeS: Float = 4f,
     val qcFlushTempC: Float = 95f,
+    /** Persisted Quick-Controls grinder click (issue 15); null = never dialed. */
+    val qcGrind: Float? = null,
     /**
      * Queued user-facing feedback lines (imports, exports, blocked actions).
      * MainActivity surfaces them as snackbars, dequeuing via
@@ -534,6 +551,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      */
     private var lastUploadedFingerprint: String? = null
     private var pendingUploadFingerprint: String? = null
+
+    /** Resolved by `Event.WaterSessionCompleted(Flush)` to release the pre-shot
+     *  flush waiter in [proceedToEspresso] (issue 15). Null when no pre-shot
+     *  flush is in flight. */
+    private var pendingPreshotFlush: (() -> Unit)? = null
+    /** True while a shot/flush sequence owns the group, so a just-finished steam
+     *  session's auto-purge bails instead of racing it (issue 15). */
+    private var rinsePending: Boolean = false
 
     /** The machine's last-reported steam/hot-water settings (from
      *  `Event.ShotSettingsRead`). Used to read-modify-write QC steam/water
@@ -858,8 +883,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Apply a Quick-Controls brew override (dose/yield/brew-temp). Transient —
      *  not saved to the profile; baked into the next shot's upload by [startShot]. */
-    fun quickAdjustBrew(dose: Double, yieldOut: Double, brewTemp: Double) {
-        _ui.update { it.copy(brewParams = BrewParams(dose, yieldOut, brewTemp)) }
+    fun quickAdjustBrew(dose: Double, yieldOut: Double, brewTemp: Double, preinf: Double? = null) {
+        _ui.update { it.copy(brewParams = BrewParams(dose, yieldOut, brewTemp, preinf)) }
     }
 
     /** Reset the Quick-Controls override back to the active profile's recipe. */
@@ -1315,8 +1340,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // library profile is untouched; only this one upload carries the override.
         val bp = _ui.value.brewParams
         val effectiveJson = if (bp != null) {
-            runCatching { overrideBrewParamsJson(cremaJson, bp.dose.toFloat(), bp.yieldOut.toFloat(), bp.brewTemp.toFloat(), json) }
-                .getOrDefault(cremaJson)
+            runCatching {
+                overrideBrewParamsJson(
+                    cremaJson,
+                    bp.dose.toFloat(),
+                    bp.yieldOut.toFloat(),
+                    bp.brewTemp.toFloat(),
+                    bp.preinf?.toFloat(),
+                    json,
+                )
+            }.getOrDefault(cremaJson)
         } else {
             cremaJson
         }
@@ -1331,10 +1364,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             )
         ) {
             appendLog("Profile unchanged on DE1 (fingerprint match) — skipping re-upload")
-            viewModelScope.launch {
-                delay(PROFILE_DOWNLOAD_GUARD_MS)
-                requestMachineState(MachineRequest.ESPRESSO)
-            }
+            proceedToEspresso()
             return
         }
         pendingUploadFingerprint = fingerprint
@@ -1361,6 +1391,53 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 _ui.update { it.copy(profileUploading = false, profileUploadProgress = null) }
                 notifyUser("Profile upload timed out \u2014 shot not started")
             }
+        }
+    }
+
+    /**
+     * Issue the Espresso state request, optionally preceded by a pre-shot group
+     * flush (issue 15 — Quick Controls / Settings "Pre-flush"). Mirrors the web
+     * orchestration: observe the firmware's profile-download guard, then — when
+     * pre-flush is on — request a FLUSH and wait for its `WaterSessionCompleted
+     * (Flush)` (or a ceiling) before Espresso; otherwise go straight to Espresso.
+     * The shot sequence owns the group while this runs (`rinsePending`) so a
+     * concurrent steam auto-purge stands down. The machine writes are DE1-gated.
+     */
+    private fun proceedToEspresso() {
+        viewModelScope.launch {
+            delay(PROFILE_DOWNLOAD_GUARD_MS)
+            if (!_ui.value.preFlush) {
+                requestMachineState(MachineRequest.ESPRESSO)
+                return@launch
+            }
+            rinsePending = true
+            try {
+                val flushed = CompletableDeferred<Unit>()
+                pendingPreshotFlush = { flushed.complete(Unit) }
+                requestMachineState(MachineRequest.FLUSH)
+                // Wait out the flush (the WaterSessionCompleted(Flush) event
+                // resolves the waiter); the ceiling is the backstop if missed.
+                withTimeoutOrNull(PRESHOT_FLUSH_TIMEOUT_MS) { flushed.await() }
+            } finally {
+                pendingPreshotFlush = null
+                rinsePending = false
+            }
+            requestMachineState(MachineRequest.ESPRESSO)
+        }
+    }
+
+    /**
+     * Auto-purge after a steam session (issue 15): a short deferred group flush
+     * that clears the steam plumbing. Deferred so a user who immediately starts a
+     * shot (which sets `rinsePending`) wins — the purge stands down rather than
+     * racing the shot's own flush. DE1-gated.
+     */
+    private fun scheduleAutoPurge() {
+        viewModelScope.launch {
+            delay(AUTO_PURGE_DELAY_MS)
+            // Bail if a shot/flush sequence grabbed the group during the defer.
+            if (rinsePending || pendingBrew) return@launch
+            requestMachineState(MachineRequest.FLUSH)
         }
     }
 
@@ -1596,6 +1673,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         qcHotWaterVolumeMl = _ui.value.qcHotWaterVolumeMl,
         qcFlushTimeS = _ui.value.qcFlushTimeS,
         qcFlushTempC = _ui.value.qcFlushTempC,
+        qcGrind = _ui.value.qcGrind,
         activeProfileId = _ui.value.activeProfileId,
     )
 
@@ -1759,6 +1837,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _ui.update { it.copy(qcFlushTempC = tempC) }
         persistPrefs()
         routeWrite("Set flush temp") { bridge.setFlushTemp(tempC) }
+    }
+
+    /**
+     * Grinder click (Quick Controls). Persisted so it sticks + recorded onto the
+     * next shot (issue 15). Grind never reaches the machine — it's a log/record
+     * value — so there's no machine write, just persistence.
+     */
+    fun setQcGrind(clicks: Float) {
+        _ui.update { it.copy(qcGrind = clicks) }
+        persistPrefs()
     }
 
     /** Show/hide a live-chart channel (Quick Controls). Persisted display pref. */
@@ -2202,6 +2290,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             durationMs = durationMs,
             yieldG = yieldG,
             doseG = profile?.dose,
+            // The QC grind dial actually used (issue 15) — null until the user sets one.
+            grindSetting = s.qcGrind,
             peakPressure = peakPressure,
             peakTemp = peakTemp,
             profileName = profile?.name,
@@ -2406,6 +2496,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             qcHotWaterVolumeMl = p.qcHotWaterVolumeMl,
             qcFlushTimeS = p.qcFlushTimeS,
             qcFlushTempC = p.qcFlushTempC,
+            qcGrind = p.qcGrind,
             // Restore the last session's profile selection; refreshProfiles
             // self-heals if the id no longer resolves (e.g. deleted custom).
             activeProfileId = p.activeProfileId ?: it.activeProfileId,
@@ -3013,10 +3104,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 appendLog("Water session completed: ${event.content.kind.string}")
                 // Flush the integrated water (same boundary as a completed shot).
                 flushMaintenance()
+                // Release the pre-shot flush waiter so the shot can proceed to
+                // Espresso (issue 15) — only for a group flush, not a hot-water pour.
+                if (event.content.kind == WaterSessionKind.Flush) {
+                    pendingPreshotFlush?.invoke()
+                }
             }
             is Event.SteamSessionStarted -> appendLog("Steam session started")
-            is Event.SteamSessionCompleted ->
+            is Event.SteamSessionCompleted -> {
                 appendLog("Steam session completed: ${event.content.duration}ms")
+                // Auto-purge after steam (issue 15 — Quick Controls / Settings
+                // "Steam purge"). A short group flush clears the plumbing once the
+                // user releases steam; gated on the pref + stands down if a shot
+                // flush already owns the group. DE1-gated.
+                if (_ui.value.steamPurge) scheduleAutoPurge()
+            }
             is Event.SteamClogSuspected ->
                 appendLog("Steam clog suspected: ${event.content.reason.string}")
             is Event.SteamEcoModeChanged ->
@@ -3109,13 +3211,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 lastUploadedFingerprint = pendingUploadFingerprint
                 pendingUploadFingerprint = null
                 // Gated start: the profile is now on the DE1. Observe the
-                // firmware's profile-download guard window, then request Espresso.
+                // firmware's profile-download guard window, optionally pre-flush,
+                // then request Espresso (issue 15).
                 if (pendingBrew) {
                     pendingBrew = false
-                    viewModelScope.launch {
-                        delay(PROFILE_DOWNLOAD_GUARD_MS)
-                        requestMachineState(MachineRequest.ESPRESSO)
-                    }
+                    proceedToEspresso()
                 }
             }
             is Event.ProfileUploadFailed -> {
@@ -3165,6 +3265,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
         /** Abort a pending gated-start brew if the upload never completes. */
         const val PROFILE_UPLOAD_TIMEOUT_MS = 15_000L
+
+        /** Ceiling on the pre-shot group flush before proceeding to Espresso
+         *  anyway (issue 15) — the backstop if WaterSessionCompleted is missed.
+         *  Matches the web shell's 30 s. */
+        const val PRESHOT_FLUSH_TIMEOUT_MS = 30_000L
+
+        /** Defer before a post-steam auto-purge so an immediate shot wins the
+         *  group (issue 15). */
+        const val AUTO_PURGE_DELAY_MS = 1_500L
 
         /** [BleScanner] want labels — one per device the app discovers. */
         const val SCAN_LABEL_DE1 = "DE1"

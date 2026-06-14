@@ -482,8 +482,8 @@ private fun BrewDefaultsSection(vm: MainViewModel, ui: coffee.crema.ui.MainUiSta
                 { vm.setMaxShotDuration((maxDur + 5).coerceAtMost(300).toFloat()) },
             )
         }
-        PRow("Group flush before each shot", "Stabilise the group temperature with a short flush.", notImplemented = true) { CremaSwitch(ui.preFlush, vm::setPreFlush) }
-        PRow("Auto-purge after steam", "Clear the steam wand automatically after steaming.", notImplemented = true) { CremaSwitch(ui.steamPurge, vm::setSteamPurge) }
+        PRow("Group flush before each shot", "Stabilise the group temperature with a short flush.") { CremaSwitch(ui.preFlush, vm::setPreFlush) }
+        PRow("Auto-purge after steam", "Clear the steam wand automatically after steaming.") { CremaSwitch(ui.steamPurge, vm::setSteamPurge) }
         PRow("Steam eco", "Idle the steam boiler cooler between sessions to save power.", last = true) { CremaSwitch(ui.steamEco, vm::setSteamEco) }
     }
 }

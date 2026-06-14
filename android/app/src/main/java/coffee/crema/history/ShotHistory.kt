@@ -31,6 +31,13 @@ data class StoredShot(
     val yieldG: Float? = null,
     /** Dose at capture (from the active profile), g — for the ratio. */
     val doseG: Float? = null,
+    /**
+     * Grinder click dialed in Quick Controls at capture (issue 15), or null when
+     * the user never set one. The grind actually used for this shot — distinct
+     * from the bean's catalog [ShotBean.grinderSetting] (the bag's reference
+     * setting). Additive — older records deserialise cleanly.
+     */
+    val grindSetting: Float? = null,
     /** Peak group pressure across the shot, bar, or null. */
     val peakPressure: Float? = null,
     /** Peak group-head temperature across the shot, °C, or null. */
