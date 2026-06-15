@@ -63,6 +63,7 @@ import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.freshnessColor
 import coffee.crema.ui.components.CremaButton
 import coffee.crema.ui.components.CremaButtonVariant
+import coffee.crema.ui.components.CremaStarRating
 import coffee.crema.ui.components.CremaSplitButton
 import coffee.crema.ui.components.SplitMenuItem
 import coffee.crema.ui.components.CremaCard
@@ -431,12 +432,11 @@ private fun BeanCard(
                         else -> Text("—", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.25f))
                     }
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(1.dp)) {
-                    val r = bean.rating.toInt()
-                    (1..5).forEach { n ->
-                        PhIcon(if (n <= r) "star-fill" else "star", sizeDp = 11, tint = if (n <= r) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f))
-                    }
-                }
+                CremaStarRating(
+                    bean.rating.toInt(),
+                    starDp = 11,
+                    emptyTint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f),
+                )
             }
             if (bean.bagSize > 0f) {
                 val pct = (bean.remaining / bean.bagSize).coerceIn(0f, 1f)
