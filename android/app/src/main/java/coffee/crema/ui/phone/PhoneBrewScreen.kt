@@ -261,7 +261,7 @@ private fun SwapDropdown(
     val ddWidth = LocalConfiguration.current.screenWidthDp.dp - CremaEdge * 2
     CremaAnchoredPopup(expanded = true, onDismiss = onDismiss) {
         Surface(
-            shape = RoundedCornerShape(18.dp),
+            shape = RoundedCornerShape(CremaCardSpec.phoneRadius),
             color = MaterialTheme.colorScheme.surfaceContainerHigh,
             shadowElevation = 18.dp,
             modifier = Modifier.width(ddWidth).heightIn(max = 560.dp),

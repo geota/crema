@@ -1,6 +1,6 @@
 # 38 — Route phone cards through `CremaCardSpec`
 
-- **Status:** ready-for-agent
+- **Status:** ✅ done (2026-06-15)
 - **Severity:** P2
 - **Area:** Android phone — `ui/phone/PhoneProfilesScreen.kt`, `ui/phone/PhoneBeansScreen.kt`, `ui/components/CremaComponents.kt`
 - **Punchlist:** T4-14 — `../PUNCHLIST.md`
@@ -24,3 +24,19 @@ Consume `CremaCardSpec` for phone cards (with a single phone override if 18dp is
 
 ## Comments
 <!-- triage + progress notes append below -->
+
+### 2026-06-15 — done
+Added `CremaCardSpec.phoneRadius = 18.dp` (named, documented as the handset
+large-surface corner — intentionally softer than the 16dp tablet tile) and
+routed every raw `RoundedCornerShape(18.dp)` on phone through it. The review
+named the profile card + beans tile, but the acceptance grep surfaced 3 more of
+the same 18dp handset corner, so all are routed (no silent drift left):
+- `PhoneProfileCard` (PhoneProfilesScreen)
+- phone beans tile (PhoneBeansScreen)
+- machine-hero card ×2 (PhoneSettingsScreen — the section push + the hero panel)
+- profile/bean picker dropdown sheet (PhoneBrewScreen)
+
+`grep -rn "RoundedCornerShape(18.dp)" .../phone` → 0; the 18dp now lives only in
+`CremaCardSpec.phoneRadius`. Both phone files already wildcard-import
+`coffee.crema.ui.components.*`, so no import churn. Value-identical (18→18 via
+token); `:app:compileDebugKotlin` green. Phone cards verified on the emulator.

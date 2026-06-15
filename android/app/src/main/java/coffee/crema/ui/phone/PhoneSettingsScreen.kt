@@ -279,7 +279,7 @@ fun PhoneSettingsScreen(
             // Machine hero — pushes the Machine section.
             Surface(
                 onClick = { section = "machine" },
-                shape = RoundedCornerShape(18.dp),
+                shape = RoundedCornerShape(CremaCardSpec.phoneRadius),
                 color = MaterialTheme.colorScheme.surfaceContainer,
                 modifier = Modifier.fillMaxWidth(),
             ) {
@@ -351,7 +351,7 @@ private fun MachineSection(
 ) {
     // Machine hero (proto .pst-mhero): icon + state + identity key-values.
     Column(Modifier.padding(horizontal = CremaEdge, vertical = 8.dp)) {
-        Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth()) {
+        Surface(shape = RoundedCornerShape(CremaCardSpec.phoneRadius), color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     PStatusDot(connected)

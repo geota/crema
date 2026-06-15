@@ -342,7 +342,7 @@ private fun PhoneBeanTile(
         else MaterialTheme.colorScheme.surfaceContainer
 
     Surface(
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(CremaCardSpec.phoneRadius),
         color = tileBg,
         border = if (isActive) BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary) else null,
         modifier = Modifier.fillMaxWidth(),
