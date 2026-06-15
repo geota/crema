@@ -56,7 +56,7 @@ Sequencing lives at the bottom of `../PUNCHLIST.md`. Recommended first wave:
 |---|-------|-----|--------|
 | 26 | Collapse the three Android settings-row systems | P2 | ready-for-agent |
 | 27 | Extract `SettingsConfirmDialogs(...)` (copied verbatim phone↔tablet) | P2 | ✅ done |
-| 28 | Hoist per-domain filter/sort + brew-fallback helpers (Android) | P2 | ready-for-agent |
+| 28 | Hoist per-domain filter/sort + brew-fallback helpers (Android) | P2 | ready-for-agent (pure-dedup now; split into 4 parts — see note; do after 35) |
 | 29 | Reconcile low-tank threshold (phone 20f vs tablet 5f) | P3 | ready-for-agent |
 | 30 | Hoist maintenance burn-down math (Android) | P2 | ✅ done |
 | 31 | Extract `applyBeanEdits(bean, draft)` + share bag presets | P2 | ✅ done |
@@ -76,7 +76,7 @@ Sequencing lives at the bottom of `../PUNCHLIST.md`. Recommended first wave:
 | # | Title | Sev | Status |
 |---|-------|-----|--------|
 | 42 | Drop the phone roast→color map | P1 | ✅ done |
-| 43 | One relative-time vocabulary per shell | P2 | 🟡 Android done; web side pending |
+| 43 | One relative-time vocabulary per shell | P2 | ✅ done |
 | 44 | Implement or hide Android °C/°F & g/oz unit toggles | P2 | ✅ done (readouts + toggles; editable steppers deferred) |
 | 45 | Reconcile design tokens (Copper300, paper-300, sheet radius) | P2 | ready-for-agent |
 | 46 | Standardize Android weight/temp formatting + move freshness hex to theme | P3 | ✅ done (formatting via #44; freshness hex → CremaFreshnessColors) |

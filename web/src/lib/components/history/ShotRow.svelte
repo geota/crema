@@ -9,6 +9,7 @@
 	import { getSettingsStore, convertWeight } from '$lib/settings';
 	import MiniShotChart from './MiniShotChart.svelte';
 	import Icon from '$lib/icons/Icon.svelte';
+	import { relativeAgo } from '$lib/utils/relative-time';
 
 	let {
 		shot,
@@ -57,18 +58,8 @@
 		})
 	);
 
-	/** A relative "ago" label for the shot. */
-	const ago = $derived.by(() => {
-		const ms = Date.now() - shot.completedAt;
-		const min = Math.round(ms / 60000);
-		if (min < 1) return 'just now';
-		if (min < 60) return `${min} min ago`;
-		const hr = Math.round(min / 60);
-		if (hr < 24) return `${hr} hour${hr === 1 ? '' : 's'} ago`;
-		const d = Math.round(hr / 24);
-		if (d < 7) return `${d} day${d === 1 ? '' : 's'} ago`;
-		return `${Math.round(d / 7)} wk ago`;
-	});
+	/** A relative "ago" label for the shot — shared compact vocabulary (issue 43). */
+	const ago = $derived(relativeAgo(shot.completedAt));
 
 	/** Peaks derived once from the shot's wire-shape record. */
 	const peaks = $derived(peaksOf(shot));

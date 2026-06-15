@@ -1,6 +1,6 @@
 # 43 — One relative-time vocabulary per shell
 
-- **Status:** 🟡 Android done (2026-06-15); web side pending
+- **Status:** ✅ done (2026-06-15) — both shells
 - **Severity:** P2
 
 > **Decision (2026-06-14):** Adopt one compact-relative vocabulary, scaled across
@@ -37,6 +37,29 @@ form factors.
 
 ## Comments
 <!-- triage + progress notes append below -->
+
+### 2026-06-15 — web side done (closes the issue)
+New `$lib/utils/relative-time.ts` `relativeAgo(ms, asOf?)` — one compact
+`Nm/Nh/Nd/Nw/Nmo/Ny ago` formatter (the `$lib/utils/ratio` pattern), matching
+the Android `Format.relativeAgo` thresholds exactly. Both web sites now route
+through it:
+- `profiles/model.ts` `relativeLastUsed` keeps its `null`→"never used" /
+  unparseable→as-is handling, then delegates the math to `relativeAgo` (was a
+  verbatim copy of the same thresholds).
+- `ShotRow.svelte` `ago` drops its bespoke verbose, week-capped, `Math.round`
+  logic ("3 hours ago" / "2 wk ago") for `relativeAgo(shot.completedAt)` — now
+  compact and unbounded (mo/y), matching Profiles + Android. (The row keeps its
+  separate `HH:mm` `timeH` div; web rows show clock + relative, unlike the
+  Android phone which replaced the clock.)
+
+**Quirk preserved per the decision:** days ∈ [360, 364] → "0y ago" lives in the
+one shared `relativeAgo` now and is locked by a test, so web + Android can only
+diverge deliberately.
+
+Verified: `relative-time.vitest.ts` (21 threshold cases + the [360,364] quirk +
+future-clamp) and `profiles/model.vitest.ts` green (24 tests); `svelte-check`
+clean (0/0 across 1205 files). Browser spot-check skipped — `ago` is now a
+pure, unit-tested function rendered into the existing `{ago}` div.
 
 ### 2026-06-15 — Android side done (operator decided: replace phone clock with relative)
 **Operator decision (2026-06-15):** phone History rows **replace the HH:mm clock**
