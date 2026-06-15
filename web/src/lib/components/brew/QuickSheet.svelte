@@ -14,9 +14,9 @@
 	 * Pre-Infuse|Flush), and the footer (just the two mini-toggles — the big
 	 * Start button lives on the dash-foot, which stays visible behind the sheet).
 	 *
-	 * The whole brew-CONTROL surface is **UI-only** in this porting step — the
-	 * core treats the DE1 as read-only. Every action that would reach the
-	 * machine is marked `// TODO: wire to DE1 control`.
+	 * The brew-control surface drives the real DE1: the steppers edit the live
+	 * Quick-Sheet params and the dash-foot Start button runs / stops an actual
+	 * shot through the orchestrator (`app.startShot` / `app.stopShot`).
 	 */
 	import type { BrewParamState } from './brew-params.svelte';
 	import type { CremaProfile } from '$lib/profiles';

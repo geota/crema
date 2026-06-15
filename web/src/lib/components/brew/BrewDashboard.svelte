@@ -11,15 +11,15 @@
 	 * `ChannelReadout` grid above the `LiveChart`), and the docked Quick Sheet
 	 * (variant G).
 	 *
-	 * ## What is wired to real data vs. UI-only
+	 * ## What is wired to real data
 	 *
 	 * The **display** side is wired to `lib/state`'s telemetry — the timer, the
 	 * four readouts, the Yield / Ratio cards and the chart all read the live
 	 * `UiSnapshot`. The **control** side (the Quick Sheet steppers, favorites
-	 * selection and the Start / Stop button) is faithful UI backed by local
-	 * component state — the core treats the DE1 as read-only in this step, so
-	 * driving the machine is a separate net-new feature (see the `// TODO: wire
-	 * to DE1 control` markers in `QuickSheet.svelte` and `brew-params`).
+	 * selection and the Start / Stop button) drives the real DE1 through the
+	 * orchestrator — `toggleRun` runs / stops a shot (`app.startShot` /
+	 * `app.stopShot`, with lazy profile re-upload + optional group flush), and
+	 * the steppers edit the live Quick-Sheet params.
 	 */
 	import {
 		waterTankMl,
@@ -373,9 +373,8 @@
 	/**
 	 * The Quick Sheet's parameter model. Its dose / yield / temp / pre-infusion
 	 * track {@link paramSeed} so the header, the ratio readout and the steppers
-	 * all agree; the steppers may then edit it locally. The CONTROL side never
-	 * reaches the machine in this porting step — see the `// TODO: wire to DE1
-	 * control` notes.
+	 * all agree; the steppers may then edit it locally. On Start the live
+	 * snapshot is frozen onto the orchestrator and drives the actual shot.
 	 */
 	/**
 	 * Save the current QC dial values as a new custom profile, cloned
