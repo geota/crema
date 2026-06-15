@@ -403,6 +403,62 @@ pub fn roast_freshness(band: Option<String>, days: Option<i64>) -> Option<String
     Some(de1_domain::roast_freshness(band, days?).as_str().to_owned())
 }
 
+// ── Unit conversions ──────────────────────────────────────────────────────
+//
+// The eight canonical-unit conversions, mirroring the wasm free fns of the same
+// names (issue 44). Crema's canonical units are grams / °C / bar / ml; these let
+// Android route every display readout through the same `de1_domain::units` math
+// the web shell already uses, so the °C/°F & g/oz toggles work without any
+// duplicated conversion constants drifting on the Kotlin side.
+
+/// Convert a weight in grams to ounces. See [`de1_domain::grams_to_oz`].
+#[uniffi::export]
+pub fn grams_to_oz(grams: f32) -> f32 {
+    de1_domain::grams_to_oz(grams)
+}
+
+/// Convert a weight in ounces to grams. See [`de1_domain::oz_to_grams`].
+#[uniffi::export]
+pub fn oz_to_grams(oz: f32) -> f32 {
+    de1_domain::oz_to_grams(oz)
+}
+
+/// Convert a temperature in Celsius to Fahrenheit. See [`de1_domain::celsius_to_fahrenheit`].
+#[uniffi::export]
+pub fn celsius_to_fahrenheit(celsius: f32) -> f32 {
+    de1_domain::celsius_to_fahrenheit(celsius)
+}
+
+/// Convert a temperature in Fahrenheit to Celsius. See [`de1_domain::fahrenheit_to_celsius`].
+#[uniffi::export]
+pub fn fahrenheit_to_celsius(fahrenheit: f32) -> f32 {
+    de1_domain::fahrenheit_to_celsius(fahrenheit)
+}
+
+/// Convert a pressure in bar to psi. See [`de1_domain::bar_to_psi`].
+#[uniffi::export]
+pub fn bar_to_psi(bar: f32) -> f32 {
+    de1_domain::bar_to_psi(bar)
+}
+
+/// Convert a pressure in psi to bar. See [`de1_domain::psi_to_bar`].
+#[uniffi::export]
+pub fn psi_to_bar(psi: f32) -> f32 {
+    de1_domain::psi_to_bar(psi)
+}
+
+/// Convert a volume in ml to US fluid ounces. See [`de1_domain::ml_to_fl_oz`].
+#[uniffi::export]
+pub fn ml_to_fl_oz(ml: f32) -> f32 {
+    de1_domain::ml_to_fl_oz(ml)
+}
+
+/// Convert a volume in US fluid ounces to ml. See [`de1_domain::fl_oz_to_ml`].
+#[uniffi::export]
+pub fn fl_oz_to_ml(fl_oz: f32) -> f32 {
+    de1_domain::fl_oz_to_ml(fl_oz)
+}
+
 // ── Bean / roaster sync surface ──────────────────────────────────────────
 //
 // The six fns the Visualizer bean-sync flow needs (reconcile + de-dup
