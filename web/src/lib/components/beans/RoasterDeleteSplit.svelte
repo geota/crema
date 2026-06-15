@@ -10,14 +10,15 @@
 	 *
 	 * The primary click is the safe default: detach + local (or plain local
 	 * delete when nothing links here). Self-contained: deletes from the bean
-	 * store directly and reports via `onDeleted`. Remote DELETEs run
-	 * `BeanSync.deleteRoaster` / `.deleteBean` on the app runtime (Option 3,
-	 * T-16); the store stays pure-local. Best-effort + free-tier skip mirror the
-	 * old `deleteRemoteRoaster` / `deleteRemoteBean` they replaced.
+	 * store directly and reports via `onDeleted`. Remote DELETEs run through the
+	 * shared `bestEffortRemoteDelete` on the app runtime (Option 3, T-16); the
+	 * store stays pure-local, and the free-tier skip + best-effort warn (plus
+	 * the bags-before-roaster order) live in that helper.
 	 */
 	import { onMount } from 'svelte';
-	import { getBeanStore, readSyncSettings } from '$lib/bean';
+	import { getBeanStore } from '$lib/bean';
 	import { getCremaAppContext } from '$lib/shell/app-context';
+	import { bestEffortRemoteDelete } from '$lib/visualizer';
 	import SplitButton from '$lib/components/shared/SplitButton.svelte';
 	import { confirmDialog } from '$lib/components/shared/confirm-dialog.svelte';
 
@@ -63,26 +64,6 @@
 
 	const beansLabel = $derived(`${linkedBeanCount} bag${linkedBeanCount === 1 ? '' : 's'}`);
 
-	/**
-	 * Best-effort Visualizer deletes for a captured set of remote ids. Free-tier
-	 * (premium === false) skips silently; failures are logged, not surfaced —
-	 * mirrors the old `deleteRemoteRoaster` / `deleteRemoteBean`. Ids are
-	 * captured by the caller BEFORE the local delete removes the rows.
-	 */
-	async function fireRemoteDeletes(roasterVizId: string | null, beanVizIds: string[]): Promise<void> {
-		if (readSyncSettings().premium === false) return;
-		const api = appCtx().services;
-		if (!api) return;
-		const warn = (e: unknown): void =>
-			console.warn('Visualizer delete failed:', e instanceof Error ? e.message : String(e));
-		// Bags first, then the roaster — matches the old cascade's order
-		// (`deleteRoasterAndBeans` deleted each bag before the roaster).
-		for (const id of beanVizIds) {
-			await api.beans.deleteBean(id).catch(warn);
-		}
-		if (roasterVizId) await api.beans.deleteRoaster(roasterVizId).catch(warn);
-	}
-
 	async function detach(remote: boolean): Promise<void> {
 		const msg = remote
 			? `Delete "${roasterName}" (and its Visualizer copy)? Linked bags are kept and detached.`
@@ -91,7 +72,7 @@
 		// Detach deletes only the roaster remotely; bags are kept (detached).
 		const roasterVizId = remote ? (library.getRoaster(roasterId)?.visualizerId ?? null) : null;
 		library.deleteRoaster(roasterId);
-		if (remote) void fireRemoteDeletes(roasterVizId, []);
+		if (remote) void bestEffortRemoteDelete(appCtx().services, [], roasterVizId);
 		onDeleted?.();
 	}
 	async function cascade(remote: boolean): Promise<void> {
@@ -108,7 +89,7 @@
 					.map((b) => b.visualizerId as string)
 			: [];
 		library.deleteRoasterAndBeans(roasterId);
-		if (remote) void fireRemoteDeletes(roasterVizId, beanVizIds);
+		if (remote) void bestEffortRemoteDelete(appCtx().services, beanVizIds, roasterVizId);
 		onDeleted?.();
 	}
 
