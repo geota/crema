@@ -31,6 +31,15 @@ data class AppPrefs(
      *  "not implemented" pill until it does). */
     val preFlush: Boolean = false,
     val steamPurge: Boolean = false,
+    // ── Units (issue 44) ──────────────────────────────────────────────────────
+    /** Weight unit for dose/yield/scale readouts — `"g" | "oz"`. */
+    val weightUnit: String = "g",
+    /** Temperature unit for every temp readout — `"C" | "F"`. */
+    val tempUnit: String = "C",
+    /** Pressure unit for the pressure channel — `"bar" | "psi"`. */
+    val pressureUnit: String = "bar",
+    /** Volume unit for water/dispensed readouts — `"ml" | "floz"`. */
+    val volumeUnit: String = "ml",
     // ── Display ──────────────────────────────────────────────────────────────
     /** Live-chart channel keys (Quick Controls chart strip). */
     val chartChannels: Set<String> = setOf("pressure", "flow", "weight"),
