@@ -209,7 +209,7 @@ private fun beanLine(ui: MainUiState): String {
         roaster,
         bean.name,
         when {
-            bean.isFrozen -> "frozen"
+            bean.isFrozen -> "Frozen"
             days != null -> "${days}d off roast"
             else -> null
         },

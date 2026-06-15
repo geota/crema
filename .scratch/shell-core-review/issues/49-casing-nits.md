@@ -1,6 +1,6 @@
 # 49 — Casing nit: "Frozen" vs "frozen"
 
-- **Status:** ready-for-agent
+- **Status:** ✅ done (2026-06-15)
 - **Severity:** P3
 - **Area:** Android tablet (`ui/screens/BrewScreen.kt` area), Android phone (`ui/phone/PhoneBrewScreen.kt`)
 - **Punchlist:** T3-12 (casing half) — `../PUNCHLIST.md`
@@ -22,3 +22,8 @@ Align casing to "Frozen" (title-case, matching tablet) in `PhoneBrewScreen.kt:20
 
 ## Comments
 <!-- triage + progress notes append below -->
+
+### 2026-06-15 — done
+`PhoneBrewScreen.beanLine` now emits `"Frozen"` (title-case) matching the tablet's
+`BrewScreen` freshness chip. The lowercase `"frozen"` *verdict key*
+(`freshnessVerdict` → `freshnessColor`) is unrelated and left untouched.

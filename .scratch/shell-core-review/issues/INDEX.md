@@ -82,7 +82,7 @@ Sequencing lives at the bottom of `../PUNCHLIST.md`. Recommended first wave:
 | 46 | Standardize Android weight/temp formatting + move freshness hex to theme | P3 | ✅ done (formatting via #44; freshness hex → CremaFreshnessColors) |
 | 47 | Title-case the web ProfileCard roast chip | P3 | ready-for-agent |
 | 48 | Pick a canonical History stats set (tablet vs phone) | P3 | ✅ done |
-| 49 | Casing nit: "Frozen" vs "frozen" | P3 | ready-for-agent |
+| 49 | Casing nit: "Frozen" vs "frozen" | P3 | ✅ done |
 | 50 | Phone segment-options: match QuickControls selectors + inline the `>`/`<` | P3 | ready-for-agent |
 
 **Folded into other issues:** T3-01→01, T3-02→02, T4-12→02, T3-12 (empty-state half)→37.
