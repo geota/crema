@@ -47,7 +47,7 @@ Sequencing lives at the bottom of `../PUNCHLIST.md`. Recommended first wave:
 | 21 | Fix `set_line_frequency_override` truncating cast | P3 | ready-for-agent |
 | 22 | Replace `u64::MAX as f32` warmup clamp ceiling | P3 | ready-for-agent |
 | 23 | Add `RoastBand::from_wire_str` instead of inline match | P3 | ready-for-agent |
-| 24 | Document or remove stranded `brand::mark_svg()` | P3 | ready-for-agent |
+| 24 | Document or remove stranded `brand::mark_svg()` | P3 | ✅ done (already satisfied) |
 | 25 | Avoid per-call alloc in `core_version` | P3 | ready-for-agent |
 
 ## Theme 4 — Intra-shell consolidation
