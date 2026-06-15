@@ -1837,7 +1837,7 @@ impl CremaCore {
     /// clamped to the scale's [`ScaleCapabilities::volume`] range. Empty
     /// [`CoreOutput`] when no scale is connected or the volume isn't
     /// settable. Routed through the per-scale [`Scale::set_volume_command`].
-    pub fn set_scale_volume(&mut self, level: u8) -> CoreOutput {
+    pub fn set_scale_volume(&self, level: u8) -> CoreOutput {
         let mut out = CoreOutput::default();
         if let Some(scale) = &self.scale
             && let Some(bytes) = scale.set_volume_command(level)
@@ -1853,7 +1853,7 @@ impl CremaCore {
     /// [`ScaleCapabilities::standby`] range. Empty [`CoreOutput`] when the
     /// scale exposes no configurable standby. Routed through
     /// [`Scale::set_standby_command`].
-    pub fn set_scale_standby(&mut self, minutes: u8) -> CoreOutput {
+    pub fn set_scale_standby(&self, minutes: u8) -> CoreOutput {
         let mut out = CoreOutput::default();
         if let Some(scale) = &self.scale
             && let Some(bytes) = scale.set_standby_command(minutes)
@@ -1867,7 +1867,7 @@ impl CremaCore {
     /// Build a [`Command`] that toggles the connected scale's flow
     /// smoothing — empty when the capability is absent. Routed through
     /// [`Scale::set_flow_smoothing_command`].
-    pub fn set_scale_flow_smoothing(&mut self, enabled: bool) -> CoreOutput {
+    pub fn set_scale_flow_smoothing(&self, enabled: bool) -> CoreOutput {
         let mut out = CoreOutput::default();
         if let Some(scale) = &self.scale
             && let Some(bytes) = scale.set_flow_smoothing_command(enabled)
@@ -1881,7 +1881,7 @@ impl CremaCore {
     /// Build a [`Command`] that toggles the connected scale's
     /// anti-mistouch — empty when the capability is absent. Routed
     /// through [`Scale::set_anti_mistouch_command`].
-    pub fn set_scale_anti_mistouch(&mut self, enabled: bool) -> CoreOutput {
+    pub fn set_scale_anti_mistouch(&self, enabled: bool) -> CoreOutput {
         let mut out = CoreOutput::default();
         if let Some(scale) = &self.scale
             && let Some(bytes) = scale.set_anti_mistouch_command(enabled)
@@ -1898,7 +1898,7 @@ impl CremaCore {
     /// target mode is enabled first, then the other two are disabled —
     /// at least one mode is always enabled mid-sequence). The shell must
     /// perform the returned writes in order.
-    pub fn set_scale_mode(&mut self, mode_id: u8) -> CoreOutput {
+    pub fn set_scale_mode(&self, mode_id: u8) -> CoreOutput {
         let mut out = CoreOutput::default();
         if let Some(scale) = &self.scale
             && let Some(writes) = scale.select_mode_command(mode_id)
@@ -1915,7 +1915,7 @@ impl CremaCore {
     /// mode (`0` = flow-stop, `1` = cup-removal). Routed through
     /// [`Scale::set_auto_stop_command`]; empty [`CoreOutput`] when the
     /// capability is absent or `mode_id` is out of range.
-    pub fn set_scale_auto_stop(&mut self, mode_id: u8) -> CoreOutput {
+    pub fn set_scale_auto_stop(&self, mode_id: u8) -> CoreOutput {
         let mut out = CoreOutput::default();
         if let Some(scale) = &self.scale
             && let Some(bytes) = scale.set_auto_stop_command(mode_id)
@@ -3944,7 +3944,7 @@ mod tests {
 
     #[test]
     fn set_scale_volume_emits_nothing_without_a_scale() {
-        let mut core = CremaCore::new();
+        let core = CremaCore::new();
         assert!(core.set_scale_volume(3).commands.is_empty());
     }
 
@@ -4073,7 +4073,7 @@ mod tests {
 
     #[test]
     fn set_scale_mode_emits_nothing_without_a_scale() {
-        let mut core = CremaCore::new();
+        let core = CremaCore::new();
         assert!(core.set_scale_mode(0).commands.is_empty());
     }
 
@@ -4128,7 +4128,7 @@ mod tests {
 
     #[test]
     fn set_scale_auto_stop_emits_nothing_without_a_scale() {
-        let mut core = CremaCore::new();
+        let core = CremaCore::new();
         assert!(core.set_scale_auto_stop(0).commands.is_empty());
     }
 
