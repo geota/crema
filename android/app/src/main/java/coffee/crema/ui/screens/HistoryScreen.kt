@@ -1,7 +1,6 @@
 package coffee.crema.ui.screens
 
 import android.text.format.DateUtils
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -39,10 +38,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.StrokeJoin
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -57,10 +52,10 @@ import coffee.crema.ui.relativeAgo
 import coffee.crema.history.StoredShot
 import coffee.crema.history.beanLabel
 import coffee.crema.history.historyStats
-import coffee.crema.ui.TelemetrySample
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.components.CremaCard
 import coffee.crema.ui.components.CremaStarRating
+import coffee.crema.ui.components.CremaSparkChart
 import coffee.crema.ui.components.CremaTextField
 import coffee.crema.ui.components.CremaValueUnit
 import coffee.crema.ui.theme.HankenGrotesk
@@ -431,7 +426,7 @@ private fun ShotRow(shot: StoredShot, selected: Boolean, syncing: Boolean, weigh
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        SparkChart(
+        CremaSparkChart(
             samples = shot.samples,
             modifier = Modifier
                 .width(72.dp)
@@ -491,53 +486,6 @@ private fun RowMetric(value: String, unit: String?, label: String) {
             style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, letterSpacing = 0.3.sp),
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
         )
-    }
-}
-
-/*
- * SparkChart — a tiny static silhouette of a shot's PRESSURE curve for the list
- * rows. Single-channel mini-Canvas (proto `.hist2-row-spark`): pressure stroke
- * in `telemetry.pressure`, round-cap ~1.8dp, no axes/grid. Unlike CanvasShotChart
- * it stretches both axes to fill the 72×32 box (preserveAspectRatio: none) — x is
- * normalized over the sample span, y over the pressure min..max. Empty or single-
- * sample series draw nothing (the caller still sizes the box, so row heights stay
- * uniform).
- */
-@Composable
-private fun SparkChart(samples: List<TelemetrySample>, modifier: Modifier = Modifier) {
-    val tel = CremaTheme.telemetry
-    Canvas(modifier) {
-        if (samples.size < 2) return@Canvas
-        val w = size.width
-        val h = size.height
-        if (w <= 0f || h <= 0f) return@Canvas
-        val firstT = samples.first().elapsedMs.toFloat()
-        val lastT = samples.last().elapsedMs.toFloat()
-        val tSpan = (lastT - firstT).takeIf { it > 0f } ?: 1f
-        val inset = 2.dp.toPx() // keep the round caps off the rounded corners
-        val plotW = (w - inset * 2f).coerceAtLeast(1f)
-        val plotH = (h - inset * 2f).coerceAtLeast(1f)
-        // Web .hi-row mini chart: temp + flow behind, pressure on top — each
-        // channel min-max normalised to the box on its own scale.
-        fun channel(color: androidx.compose.ui.graphics.Color, widthDp: Float, value: (TelemetrySample) -> Float?) {
-            var mn = Float.POSITIVE_INFINITY
-            var mx = Float.NEGATIVE_INFINITY
-            samples.forEach { s -> value(s)?.let { v -> if (v < mn) mn = v; if (v > mx) mx = v } }
-            val span = (mx - mn).takeIf { it > 0f } ?: return
-            val path = Path()
-            var started = false
-            samples.forEach { s ->
-                val v = value(s) ?: return@forEach
-                val x = inset + ((s.elapsedMs.toFloat() - firstT) / tSpan) * plotW
-                val y = inset + (1f - (v - mn) / span) * plotH
-                if (!started) { path.moveTo(x, y); started = true } else path.lineTo(x, y)
-            }
-            drawPath(path, color = color, style = Stroke(width = widthDp.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
-        }
-        channel(tel.temp.copy(alpha = 0.75f), 1.1f) { it.headTemp }
-        channel(tel.weight.copy(alpha = 0.9f), 1.3f) { it.weight }
-        channel(tel.flow.copy(alpha = 0.9f), 1.3f) { it.flow }
-        channel(tel.pressure, 1.8f) { it.pressure }
     }
 }
 

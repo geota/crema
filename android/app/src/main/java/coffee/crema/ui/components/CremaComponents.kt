@@ -31,6 +31,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
@@ -50,6 +55,7 @@ import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
 import coffee.crema.ui.theme.CremaTheme
+import coffee.crema.ui.TelemetrySample
 import com.adamglin.PhosphorIcons
 import com.adamglin.phosphoricons.Regular
 import com.adamglin.phosphoricons.regular.ArrowCounterClockwise
@@ -321,6 +327,56 @@ fun CremaStarRating(
                 PhIcon(icon, sizeDp = starDp, tint = tint)
             }
         }
+    }
+}
+
+/**
+ * CremaSparkChart — the tiny multi-channel shot silhouette for history list rows
+ * (issue 34, was `SparkChart` on tablet ≡ `PhoneSpark` on phone, byte-identical
+ * but for stroke/inset). Web `.hi-row` mini chart: temp + weight + flow behind,
+ * pressure on top, each channel min-max normalised to the box on its own scale
+ * (preserveAspectRatio: none — both axes stretch to fill). Series with <2 samples
+ * draw nothing (the caller still sizes the box so row heights stay uniform).
+ * [insetDp] keeps the round caps off the rounded corners; stroke widths are
+ * per-channel so the denser phone row can run slightly thinner.
+ */
+@Composable
+fun CremaSparkChart(
+    samples: List<TelemetrySample>,
+    modifier: Modifier = Modifier,
+    insetDp: Float = 2f,
+    tempStroke: Float = 1.1f,
+    weightStroke: Float = 1.3f,
+    flowStroke: Float = 1.3f,
+    pressureStroke: Float = 1.8f,
+) {
+    val tel = CremaTheme.telemetry
+    Canvas(modifier) {
+        if (samples.size < 2) return@Canvas
+        val firstT = samples.first().elapsedMs.toFloat()
+        val tSpan = (samples.last().elapsedMs.toFloat() - firstT).takeIf { it > 0f } ?: 1f
+        val inset = insetDp.dp.toPx()
+        val plotW = (size.width - inset * 2f).coerceAtLeast(1f)
+        val plotH = (size.height - inset * 2f).coerceAtLeast(1f)
+        fun channel(color: Color, widthDp: Float, value: (TelemetrySample) -> Float?) {
+            var mn = Float.POSITIVE_INFINITY
+            var mx = Float.NEGATIVE_INFINITY
+            samples.forEach { s -> value(s)?.let { v -> if (v < mn) mn = v; if (v > mx) mx = v } }
+            val span = (mx - mn).takeIf { it > 0f } ?: return
+            val path = Path()
+            var started = false
+            samples.forEach { s ->
+                val v = value(s) ?: return@forEach
+                val x = inset + ((s.elapsedMs.toFloat() - firstT) / tSpan) * plotW
+                val y = inset + (1f - (v - mn) / span) * plotH
+                if (!started) { path.moveTo(x, y); started = true } else path.lineTo(x, y)
+            }
+            drawPath(path, color = color, style = Stroke(width = widthDp.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
+        }
+        channel(tel.temp.copy(alpha = 0.75f), tempStroke) { it.headTemp }
+        channel(tel.weight.copy(alpha = 0.9f), weightStroke) { it.weight }
+        channel(tel.flow.copy(alpha = 0.9f), flowStroke) { it.flow }
+        channel(tel.pressure, pressureStroke) { it.pressure }
     }
 }
 
