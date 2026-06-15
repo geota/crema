@@ -79,7 +79,7 @@ Sequencing lives at the bottom of `../PUNCHLIST.md`. Recommended first wave:
 | 43 | One relative-time vocabulary per shell | P2 | 🟢 ready-for-agent (decided: compact relative) |
 | 44 | Implement or hide Android °C/°F & g/oz unit toggles | P2 | ✅ done (readouts + toggles; editable steppers deferred) |
 | 45 | Reconcile design tokens (Copper300, paper-300, sheet radius) | P2 | ready-for-agent |
-| 46 | Standardize Android weight/temp formatting + move freshness hex to theme | P3 | ready-for-agent |
+| 46 | Standardize Android weight/temp formatting + move freshness hex to theme | P3 | ✅ done (formatting via #44; freshness hex → CremaFreshnessColors) |
 | 47 | Title-case the web ProfileCard roast chip | P3 | ready-for-agent |
 | 48 | Pick a canonical History stats set (tablet vs phone) | P3 | ✅ done |
 | 49 | Casing nit: "Frozen" vs "frozen" | P3 | ready-for-agent |

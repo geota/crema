@@ -1,7 +1,9 @@
 package coffee.crema.ui
 
+import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import coffee.crema.beans.freshnessVerdict
+import coffee.crema.ui.theme.CremaTheme
 import coffee.crema.core.barToPsi
 import coffee.crema.core.brewRatio
 import coffee.crema.core.celsiusToFahrenheit
@@ -104,11 +106,14 @@ fun formatVolume(ml: Float?, unit: String): String = convertVolume(ml, unit).joi
  * to a hue. Frozen → icy blue; best → green; ok → amber; bad → muted red;
  * unknown (no roast date) → neutral.
  */
-fun freshnessColor(frozen: Boolean, level: Int?, days: Int?): Color =
-    when (freshnessVerdict(frozen, level, days)) {
-        "frozen" -> Color(0xFF7FB0E0)
-        "best" -> Color(0xFF5FB87A)
-        "ok" -> Color(0xFFDBA764)
-        "bad" -> Color(0xFFC58B8B)
-        else -> Color(0xFF8A8175)
+@Composable
+fun freshnessColor(frozen: Boolean, level: Int?, days: Int?): Color {
+    val c = CremaTheme.freshness
+    return when (freshnessVerdict(frozen, level, days)) {
+        "frozen" -> c.frozen
+        "best" -> c.best
+        "ok" -> c.ok
+        "bad" -> c.bad
+        else -> c.unknown
     }
+}
