@@ -26,3 +26,34 @@ Add a compact variant to `CremaStepper` (parameterised by size/padding), then ro
 
 ## Comments
 <!-- triage + progress notes append below -->
+
+### 2026-06-15 — triage: scoped (focused session; entangled with 26 + 50)
+Read all 8 reimpls. They split into **two API shapes** that both need absorbing
+into `CremaStepper(label,value,unit,onChange,step,min,max,fmt)`:
+- **numeric** (`value/step/min/max/onChange`): `EditStepper`
+  (ProfileEditScreen), `QcStepper` (QuickControlsSheet), `EdStepper`
+  (PhoneProfileEditScreen) — closest to `CremaStepper`.
+- **value-string + onMinus/onPlus**: `StepperBox` (ProfileEditScreen),
+  `SetStepper` (SettingsScreen), `PStepper` (PhoneSettingsScreen) — the caller
+  pre-formats the string and computes ±deltas inline, so each call site must be
+  converted to the numeric API.
+
+`CremaStepper` is the 56dp telemetry stepper (plain Row, `FilledTonalIconButton`,
+`readoutSm`). The reimpls are deliberately **compact + boxed** (28–32dp
+Surface-circle buttons, `surfaceContainerHigh/Highest` rounded box,
+`JetBrainsMono` 15–18sp value). Unifying needs a `compact`/`boxed` variant on
+`CremaStepper` (button size, container, value style) — ~5 new params — plus
+per-call-site conversion (~15 sites across the profile editor, QC sheet, and
+both settings shells).
+
+**Entanglements (do these together, one focused session):**
+- **Issue 26** also rehomes `SetStepper`/`PStepper` (they're part of the
+  settings-row set). Coordinate so the steppers aren't unified twice.
+- **Issue 50**: `EditStepper` carries a `compareSymbol`/`onCompare` inline
+  `>`/`<` control — that's exactly issue 50's "inline the `>`/`<`". The compact
+  `CremaStepper` variant should grow an optional `compareSymbol` so 50 lands here
+  too.
+
+Not started — visual-fidelity-sensitive (dense editors) and best done as its own
+pass. Left `ready-for-agent`. Prereq for the deferred 44-Category-B
+(unit-aware steppers).
