@@ -333,25 +333,12 @@ pub fn signature_for_shot(
     profile_name: Option<String>,
     final_weight: Option<f32>,
 ) -> String {
-    // JS hands us integer-valued `f64`s for the unix-ms timestamps
-    // (a plain `i64` doesn't cross the wasm-bindgen ABI cleanly).
-    // Truncate defensively; non-finite operands fall through to 0
-    // rather than a panic.
-    #[allow(clippy::cast_possible_truncation)]
-    let completed_at = if completed_at.is_finite() {
-        completed_at as i64
-    } else {
-        0
-    };
-    #[allow(clippy::cast_possible_truncation)]
-    let duration = if duration.is_finite() {
-        duration as i64
-    } else {
-        0
-    };
+    // JS hands us integer-valued `f64`s for the unix-ms timestamps (a
+    // plain `i64` doesn't cross the wasm-bindgen ABI cleanly); `f64_to_ms`
+    // truncates defensively, non-finite → 0 rather than a panic.
     de1_domain::signature_for_shot(
-        completed_at,
-        duration,
+        f64_to_ms(completed_at),
+        f64_to_ms(duration),
         profile_name.as_deref(),
         final_weight,
     )
@@ -755,13 +742,7 @@ pub fn export_beanconqueror_main_json(
     envelope_json: &str,
     now_unix_ms: f64,
 ) -> Result<String, String> {
-    #[allow(clippy::cast_possible_truncation)]
-    let now = if now_unix_ms.is_finite() {
-        now_unix_ms as i64
-    } else {
-        0
-    };
-    de1_domain::crema_to_bc_main_json_from_envelope(envelope_json, now)
+    de1_domain::crema_to_bc_main_json_from_envelope(envelope_json, f64_to_ms(now_unix_ms))
 }
 
 /// Build a Crema JSONL export from an envelope JSON
@@ -779,12 +760,7 @@ pub fn export_crema_jsonl(
     exported_at_unix_ms: f64,
     crema_version: &str,
 ) -> Result<String, String> {
-    #[allow(clippy::cast_possible_truncation)]
-    let exported_at = if exported_at_unix_ms.is_finite() {
-        exported_at_unix_ms as i64
-    } else {
-        0
-    };
+    let exported_at = f64_to_ms(exported_at_unix_ms);
     de1_domain::export_jsonl_from_json(envelope_json, exported_at, crema_version)
 }
 
@@ -819,15 +795,7 @@ pub fn import_beanconqueror_json(
     merged_main_json: &str,
     now_unix_ms: f64,
 ) -> Result<String, String> {
-    // JS `Date.now()` is an integer-valued `f64`. Truncate defensively;
-    // a non-finite value falls through to 0 rather than panicking.
-    #[allow(clippy::cast_possible_truncation)]
-    let now = if now_unix_ms.is_finite() {
-        now_unix_ms as i64
-    } else {
-        0
-    };
-    de1_domain::import_beanconqueror_json(merged_main_json, now)
+    de1_domain::import_beanconqueror_json(merged_main_json, f64_to_ms(now_unix_ms))
 }
 
 /// Derive the maintenance readout (filter capacity %, litres since
@@ -842,11 +810,7 @@ pub fn import_beanconqueror_json(
 /// deserialise into a `MaintenanceState`.
 #[wasm_bindgen(js_name = maintenanceReadout)]
 pub fn maintenance_readout(state_json: &str, now_ms: f64) -> Result<String, String> {
-    // JS `Date.now()` is an integer-valued `f64`. Truncate defensively;
-    // a non-finite value falls through to 0 instead of panicking.
-    #[allow(clippy::cast_possible_truncation)]
-    let now = if now_ms.is_finite() { now_ms as i64 } else { 0 };
-    de1_domain::maintenance_readout_json(state_json, now)
+    de1_domain::maintenance_readout_json(state_json, f64_to_ms(now_ms))
 }
 
 /// Classify a 1..10 roast level into a named band — returns the lowercase
