@@ -76,7 +76,7 @@ Sequencing lives at the bottom of `../PUNCHLIST.md`. Recommended first wave:
 | # | Title | Sev | Status |
 |---|-------|-----|--------|
 | 42 | Drop the phone roast→color map | P1 | ✅ done |
-| 43 | One relative-time vocabulary per shell | P2 | 🟢 ready-for-agent (decided: compact relative) |
+| 43 | One relative-time vocabulary per shell | P2 | 🟡 Android done; web side pending |
 | 44 | Implement or hide Android °C/°F & g/oz unit toggles | P2 | ✅ done (readouts + toggles; editable steppers deferred) |
 | 45 | Reconcile design tokens (Copper300, paper-300, sheet radius) | P2 | ready-for-agent |
 | 46 | Standardize Android weight/temp formatting + move freshness hex to theme | P3 | ✅ done (formatting via #44; freshness hex → CremaFreshnessColors) |

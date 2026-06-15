@@ -53,6 +53,7 @@ import coffee.crema.ui.convertTemp
 import coffee.crema.ui.convertWeight
 import coffee.crema.ui.formatRatio
 import coffee.crema.ui.formatWeight
+import coffee.crema.ui.relativeAgo
 import coffee.crema.history.StoredShot
 import coffee.crema.history.beanLabel
 import coffee.crema.history.historyStats
@@ -423,7 +424,7 @@ private fun ShotRow(shot: StoredShot, selected: Boolean, syncing: Boolean, weigh
         Column(Modifier.width(58.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             CremaValueUnit(timeH, null, valueSize = 12.sp)
             Text(
-                compactAgo(shot.completedAtMs),
+                relativeAgo(shot.completedAtMs),
                 style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
                 maxLines = 1,
@@ -490,19 +491,6 @@ private fun RowMetric(value: String, unit: String?, label: String) {
             style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, letterSpacing = 0.3.sp),
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
         )
-    }
-}
-
-// Compact "ago" label sized for the narrow time column (PWA caps at "N wk ago",
-// never an absolute date — so it always fits 58dp).
-private fun compactAgo(ms: Long): String {
-    val min = ((System.currentTimeMillis() - ms) / 60000L).coerceAtLeast(0)
-    return when {
-        min < 1L -> "just now"
-        min < 60L -> "${min}m ago"
-        min < 1440L -> "${min / 60L}h ago"
-        min < 10080L -> "${min / 1440L}d ago"
-        else -> "${min / 10080L}w ago"
     }
 }
 
