@@ -18,6 +18,8 @@ import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager
 import coffee.crema.ui.MainUiState
 import coffee.crema.ui.MainViewModel
+import coffee.crema.ui.convertWeight
+import coffee.crema.ui.formatWeight
 import coffee.crema.ui.components.*
 import coffee.crema.ui.theme.CremaTheme
 
@@ -120,12 +122,13 @@ fun ScaleScreen(
                     ScaleHeroRow(
                         connected = connected,
                         weight = weight,
+                        weightUnit = ui.weightUnit,
                         onTare = vm::tareScale,
                         onConnect = { onConnect("scale") },
                         onResetPeak = vm::resetScalePeaks,
                         onStartTimer = vm::startScaleTimer,
                     )
-                    DoseHelper(connected, weight, target)
+                    DoseHelper(connected, weight, target, ui.weightUnit)
                     RecentActivity(connected, Modifier.weight(1f))
                 }
                 // Right column — capability-driven settings panel
@@ -171,6 +174,7 @@ private fun ScaleHeader(connected: Boolean, caps: ScaleCapabilities?) {
 private fun ScaleHeroRow(
     connected: Boolean,
     weight: Double,
+    weightUnit: String,
     onTare: () -> Unit,
     onConnect: () -> Unit,
     onResetPeak: () -> Unit,
@@ -184,13 +188,16 @@ private fun ScaleHeroRow(
                 // Number + unit are inline baseline siblings (never absolute) so the
                 // unit can't collide with a wide value — the bug the PWA avoids too.
                 Row(verticalAlignment = Alignment.Bottom) {
+                    // Hero readout in the chosen unit. The unit gets the full word
+                    // for grams (the design's spelled-out hero label); oz stays short.
+                    val hero = convertWeight((if (connected) weight else 0.0).toFloat(), weightUnit)
                     Text(
-                        String.format("%.1f", if (connected) weight else 0.0),
+                        hero.value,
                         style = CremaTheme.readout.readoutHero,
                         color = if (connected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline,
                     )
                     Text(
-                        "grams",
+                        if (weightUnit == "oz") "oz" else "grams",
                         style = MaterialTheme.typography.bodyLarge.copy(fontSize = 28.sp, lineHeight = 32.sp),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(start = 8.dp, bottom = 24.dp),
@@ -210,9 +217,10 @@ private fun ScaleHeroRow(
                     Column(Modifier.padding(horizontal = sp.s5, vertical = 22.dp), verticalArrangement = Arrangement.Center) {
                         Eyebrow("Tare", color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.8f))
                         Row(verticalAlignment = Alignment.Bottom) {
-                            Text("0.0", style = CremaTheme.readout.readoutLg, color = MaterialTheme.colorScheme.onPrimary)
+                            val tareZero = convertWeight(0f, weightUnit)
+                            Text(tareZero.value, style = CremaTheme.readout.readoutLg, color = MaterialTheme.colorScheme.onPrimary)
                             Text(
-                                " g",
+                                " ${tareZero.unit}",
                                 style = MaterialTheme.typography.bodyLarge.copy(fontSize = 20.sp),
                                 color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.75f),
                                 modifier = Modifier.padding(start = 4.dp, bottom = 4.dp),
@@ -239,13 +247,14 @@ private fun ScaleHeroRow(
 }
 
 @Composable
-private fun DoseHelper(connected: Boolean, weight: Double, target: Double) {
+private fun DoseHelper(connected: Boolean, weight: Double, target: Double, weightUnit: String) {
     val sp = CremaTheme.spacing
+    val targetW = formatWeight(target.toFloat(), weightUnit)
     CremaCard(Modifier.fillMaxWidth().alpha(if (connected) 1f else 0.6f)) {
         Column(Modifier.padding(horizontal = 20.dp, vertical = sp.s4), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    "Dose helper · target ${"%.1f".format(target)} g",
+                    "Dose helper · target $targetW",
                     style = MaterialTheme.typography.bodyMedium,
                 )
             }
@@ -262,7 +271,7 @@ private fun DoseHelper(connected: Boolean, weight: Double, target: Double) {
                     style = MaterialTheme.typography.labelMedium,
                     color = if (connected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Eyebrow("Target ${"%.1f".format(target)} g")
+                Eyebrow("Target $targetW")
             }
         }
     }

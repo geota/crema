@@ -1,6 +1,6 @@
 # 44 — Implement or hide Android °C/°F & g/oz unit toggles
 
-- **Status:** ready-for-agent (decided 2026-06-14: implement conversion)
+- **Status:** ✅ done (2026-06-15) — readouts + toggles wired; editable steppers deferred
 - **Severity:** P2
 
 > **Decision (2026-06-14):** Implement, don't hide. Export the unit-conversion
@@ -37,3 +37,41 @@ Back a SettingsStore with units, route display through the core unit conversions
 
 ## Comments
 <!-- triage + progress notes append below -->
+
+### 2026-06-15 — implemented (readouts + toggles)
+Completes the WIP scaffolding (`126f19c`: UniFFI conversions + `Format.kt` +
+`AppPrefs` unit fields). This commit:
+
+- **MainViewModel:** `weightUnit`/`tempUnit`/`pressureUnit`/`volumeUnit` added to
+  `MainUiState` + `currentPrefs`/`loadPrefs`/`resetPreferences` round-trip + four
+  `set*Unit` setters (pure display prefs — no machine write).
+- **Readout sweep** — every brew/scale/history/profile **display** readout routed
+  through `Format.kt`'s `convert*`/`format*`, so flipping a unit re-renders them:
+  tablet BrewScreen (channel cards, foot steam, last-shot, profile summary,
+  **LimitsCard** yield/volume), HistoryScreen (stats, rows, detail), ScaleScreen
+  (hero, tare, dose helper), ProfilesScreen (card metrics); phone PhoneBrewScreen
+  (dose→yield, ready params, **DualChip channel legend**, machine-readiness strip,
+  last-shot), PhoneHistoryScreen (row + detail), PhoneProfilesScreen (card),
+  PhoneSettingsScreen (machine-info temp).
+- **Settings toggles** wired on both shells (tablet `SettingsScreen` Units group;
+  phone `DisplaySection` Units group) — real segmented buttons bound to the prefs
+  + setters; `notImplemented`/`SOON` pills dropped. Option keys are the canonical
+  vocab (`g`/`oz`, `C`/`F`, `bar`/`psi`, `ml`/`floz`).
+
+**Verified** on emulator (tablet 5556 + phone 5554, no DE1 needed — pure display):
+flip °C→°F / g→oz / bar→psi / ml→fl oz → all readouts update. e.g. profile
+"36.0 g · 79.0 °C" → "1.27 oz · 174.2 °F"; History detail "132 psi / 199.4 °F";
+phone "0.63 oz → 1.27 oz · 194.0 °F · 109 psi". `:app:testDebugUnitTest` green.
+
+**Deferred (follow-ups, NOT in this issue's acceptance):**
+- **Editable steppers** (Quick Controls steam/water/flush temp+vol, dose/yield,
+  profile-editor segment temp/pressure/volume, bean bag/remaining, Settings brew
+  defaults). The web makes these unit-aware via a `dimension`-prop stepper with
+  display-grid stepping + inverse conversion; porting that across the ~6 bespoke
+  Android stepper helpers is a larger change. They still commit canonical, so this
+  is cosmetic, not a correctness gap. **Worth a dedicated issue.**
+- **Hardcoded mode-chip labels** ("148 °C · 90 s" etc. on the Steam/Water/Flush
+  chips) don't reflect live QC settings yet, so they don't track the toggle —
+  pre-existing (issue 14/50 territory); fix when they're bound to real state.
+- The Settings **calibration** offset steppers (temp/pressure re-zero) are still
+  `notImplemented`, so left alone.

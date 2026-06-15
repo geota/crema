@@ -49,7 +49,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager
+import coffee.crema.ui.convertPressure
+import coffee.crema.ui.convertTemp
+import coffee.crema.ui.convertWeight
 import coffee.crema.ui.formatRatio
+import coffee.crema.ui.formatWeight
 import coffee.crema.history.StoredShot
 import coffee.crema.history.beanLabel
 import coffee.crema.history.historyStats
@@ -247,7 +251,7 @@ fun HistoryScreen(
                     }
                 }
             } else {
-                StatsStrip(filtered)
+                StatsStrip(filtered, ui.weightUnit)
                 // Range filter chips (left) + sort split-button (right).
                 Row(
                     Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = 4.dp, bottom = 8.dp),
@@ -314,6 +318,7 @@ fun HistoryScreen(
                                 shot = shot,
                                 selected = shot.id == selected?.id,
                                 syncing = shot.id in ui.visualizer.uploadingShotIds,
+                                weightUnit = ui.weightUnit,
                                 onClick = { selectedId = shot.id },
                             )
                         }
@@ -325,6 +330,9 @@ fun HistoryScreen(
                             // Fixed archival set (web detail chart): pressure + flow +
                             // coffee temp + weight — not the QC live-chart selection.
                             channels = setOf("pressure", "flow", "headTemp", "weight"),
+                            weightUnit = ui.weightUnit,
+                            tempUnit = ui.tempUnit,
+                            pressureUnit = ui.pressureUnit,
                             onRate = { r, n -> vm.updateShot(selected.id, r, n) },
                             onLoadOnBrew = { vm.loadProfileOnBrew(selected.profileName) },
                             onExport = { vm.exportShot(selected.id) },
@@ -361,7 +369,7 @@ fun HistoryScreen(
 // Doubles, so %f is safe. Day/week boundaries are simple millis math off
 // System.currentTimeMillis(); recomputed when `history` changes.
 @Composable
-private fun StatsStrip(history: List<StoredShot>) {
+private fun StatsStrip(history: List<StoredShot>, weightUnit: String) {
     // Stats over the passed (filter/range-scoped) list — issue 48. Six tiles,
     // matching the web (PWA): count, total + average weight, then the three
     // averages (ratio / time / rating). The phone shows just the three averages.
@@ -370,9 +378,11 @@ private fun StatsStrip(history: List<StoredShot>) {
         Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        val totalWt = convertWeight(s.totalWeightG?.toFloat(), weightUnit)
+        val avgWt = convertWeight(s.avgWeightG?.toFloat(), weightUnit)
         StatTile("Shots", "${s.shots}", "shots", Modifier.weight(1f))
-        StatTile("Weight", s.totalWeightG?.let { "%.0f".format(it) } ?: "—", s.totalWeightG?.let { "g" }, Modifier.weight(1f))
-        StatTile("Avg weight", s.avgWeightG?.let { "%.1f".format(it) } ?: "—", s.avgWeightG?.let { "g" }, Modifier.weight(1f))
+        StatTile("Weight", totalWt.value, s.totalWeightG?.let { totalWt.unit }, Modifier.weight(1f))
+        StatTile("Avg weight", avgWt.value, s.avgWeightG?.let { avgWt.unit }, Modifier.weight(1f))
         StatTile("Avg ratio", s.avgRatio?.let { "1:%.1f".format(it) } ?: "—", null, Modifier.weight(1f))
         StatTile("Avg time", s.avgTimeS?.let { "%.0f".format(it) } ?: "—", s.avgTimeS?.let { "s" }, Modifier.weight(1f))
         StatTile("Avg rating", s.avgRating?.let { "%.1f".format(it) } ?: "—", null, Modifier.weight(1f))
@@ -395,7 +405,7 @@ private fun StatTile(label: String, value: String, unit: String?, modifier: Modi
 }
 
 @Composable
-private fun ShotRow(shot: StoredShot, selected: Boolean, syncing: Boolean, onClick: () -> Unit) {
+private fun ShotRow(shot: StoredShot, selected: Boolean, syncing: Boolean, weightUnit: String, onClick: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -447,7 +457,8 @@ private fun ShotRow(shot: StoredShot, selected: Boolean, syncing: Boolean, onCli
         }
         // Ratio + Yield metrics, each value over a dimmed caps label (PWA .hi-row-metric).
         RowMetric(shotRatio(shot) ?: "—", null, "Ratio")
-        RowMetric(shot.yieldG?.let { "%.1f".format(it) } ?: "—", shot.yieldG?.let { "g" }, "Yield")
+        val rowYield = convertWeight(shot.yieldG, weightUnit)
+        RowMetric(rowYield.value, shot.yieldG?.let { rowYield.unit }, "Yield")
         // Inline rating: compact stars, faint when unrated.
         val r = shot.rating ?: 0
         Row(horizontalArrangement = Arrangement.spacedBy(1.dp)) {
@@ -551,6 +562,9 @@ private fun SparkChart(samples: List<TelemetrySample>, modifier: Modifier = Modi
 private fun ShotDetail(
     shot: StoredShot,
     channels: Set<String>,
+    weightUnit: String,
+    tempUnit: String,
+    pressureUnit: String,
     modifier: Modifier,
     onRate: (Int, String) -> Unit,
     onLoadOnBrew: () -> Unit,
@@ -589,7 +603,7 @@ private fun ShotDetail(
                 val meta = buildList {
                     shot.beanLabel?.let { add(it) }
                     val d = shot.doseG; val y = shot.yieldG
-                    if (d != null && y != null) add("%.1f g → %.1f g".format(d, y))
+                    if (d != null && y != null) add("${formatWeight(d, weightUnit)} → ${formatWeight(y, weightUnit)}")
                     shotRatio(shot)?.let { add(it) }
                 }.joinToString(" · ")
                 if (meta.isNotBlank()) {
@@ -621,11 +635,15 @@ private fun ShotDetail(
         // Metric tiles — 7-up grid of recessed cards (PWA .hi-metrics / .hi-metric).
         val peakWt = shot.samples.mapNotNull { it.weight }.maxOrNull()
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            val mPeakP = convertPressure(shot.peakPressure, pressureUnit)
+            val mPeakT = convertTemp(shot.peakTemp, tempUnit)
+            val mPeakWt = convertWeight(peakWt, weightUnit)
+            val mYield = convertWeight(shot.yieldG, weightUnit)
             MetricCard("Time", "%.0f".format(shot.durationMs / 1000.0), "s", Modifier.weight(1f))
-            MetricCard("Peak pressure", shot.peakPressure?.let { "%.1f".format(it) } ?: "—", shot.peakPressure?.let { "bar" }, Modifier.weight(1f))
-            MetricCard("Peak temp", shot.peakTemp?.let { "%.0f".format(it) } ?: "—", shot.peakTemp?.let { "°C" }, Modifier.weight(1f))
-            MetricCard("Peak wt", peakWt?.let { "%.1f".format(it) } ?: "—", peakWt?.let { "g" }, Modifier.weight(1f))
-            MetricCard("Yield", shot.yieldG?.let { "%.1f".format(it) } ?: "—", shot.yieldG?.let { "g" }, Modifier.weight(1f))
+            MetricCard("Peak pressure", mPeakP.value, shot.peakPressure?.let { mPeakP.unit }, Modifier.weight(1f))
+            MetricCard("Peak temp", mPeakT.value, shot.peakTemp?.let { mPeakT.unit }, Modifier.weight(1f))
+            MetricCard("Peak wt", mPeakWt.value, peakWt?.let { mPeakWt.unit }, Modifier.weight(1f))
+            MetricCard("Yield", mYield.value, shot.yieldG?.let { mYield.unit }, Modifier.weight(1f))
             MetricCard("Ratio", shotRatio(shot) ?: "—", null, Modifier.weight(1f), isText = true)
             MetricCard("Samples", "${shot.samples.size}", null, Modifier.weight(1f))
         }

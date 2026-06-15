@@ -30,7 +30,13 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coffee.crema.beans.daysOffRoast
 import coffee.crema.beans.isFrozen
 import coffee.crema.history.beanLabel
+import coffee.crema.ui.convertPressure
+import coffee.crema.ui.convertTemp
+import coffee.crema.ui.convertVolume
+import coffee.crema.ui.convertWeight
 import coffee.crema.ui.formatRatio
+import coffee.crema.ui.formatTemp
+import coffee.crema.ui.formatWeight
 import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager
 import coffee.crema.profiles.CremaProfile
@@ -288,7 +294,7 @@ private fun SwapDropdown(
                                 maxLines = 1, overflow = TextOverflow.Ellipsis,
                             )
                             Text(
-                                "${formatRatio(p.dose, p.yieldOut)} · %.0fg · %.0f°".format(p.dose, p.brewTemp),
+                                "${formatRatio(p.dose, p.yieldOut)} · ${formatWeight(p.dose, ui.weightUnit)} · ${formatTemp(p.brewTemp, ui.tempUnit)}",
                                 style = TextStyle(fontFamily = JetBrainsMono, fontSize = 11.sp),
                                 color = if (activeRow) LocalContentColor.current.copy(alpha = 0.8f) else MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -314,7 +320,7 @@ private fun SwapDropdown(
                             Text(
                                 listOfNotNull(
                                     days?.let { "${it}d off roast" },
-                                    b.remaining.takeIf { b.bagSize > 0f }?.let { "%.0f g left".format(it) },
+                                    b.remaining.takeIf { b.bagSize > 0f }?.let { "${formatWeight(it, ui.weightUnit)} left" },
                                 ).joinToString(" · ").ifEmpty { "—" },
                                 style = TextStyle(fontFamily = JetBrainsMono, fontSize = 11.sp),
                                 color = if (activeRow) LocalContentColor.current.copy(alpha = 0.8f) else MaterialTheme.colorScheme.onSurfaceVariant,
@@ -475,8 +481,10 @@ private fun RunningBody(ui: MainUiState, active: CremaProfile?, modifier: Modifi
                 Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                         Eyebrow("Yield · ${formatRatio(dose, weight)}")
+                        val wNow = convertWeight(weight, ui.weightUnit)
+                        val wTarget = convertWeight(target, ui.weightUnit)
                         Text(
-                            "%.1f / %.1f g".format(weight, target),
+                            "${wNow.value} / ${wTarget.value} ${wNow.unit}",
                             style = TextStyle(fontFamily = JetBrainsMono, fontSize = 14.sp, fontWeight = FontWeight.Medium, fontFeatureSettings = "tnum"),
                         )
                     }
@@ -495,28 +503,35 @@ private fun RunningBody(ui: MainUiState, active: CremaProfile?, modifier: Modifi
         }
 
         // 2×2 dual-channel chips — these are the chart legend.
+        // Unit-aware (issue 44): pressure / volume / temp / weight convert to the
+        // chosen unit; flow (ml/s, g/s) and resistance are not toggled dimensions.
         val resist = ui.resistanceWeight ?: ui.resistance
+        val cPressure = convertPressure(ui.pressure, ui.pressureUnit)
+        val cVolume = convertVolume(ui.dispensedVolume, ui.volumeUnit)
+        val cCoffee = convertTemp(ui.headTemp, ui.tempUnit)
+        val cWater = convertTemp(ui.mixTemp, ui.tempUnit)
+        val cWeight = convertWeight(ui.scaleWeightG, ui.weightUnit)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             DualChip(
                 Modifier.weight(1f),
-                "PRESSURE", fmtF(ui.pressure), "bar", tel.pressure,
+                "PRESSURE", cPressure.value, cPressure.unit, tel.pressure,
                 "RESISTANCE", fmtF(resist, 2), "", tel.pressure2,
             )
             DualChip(
                 Modifier.weight(1f),
                 "FLOW", fmtF(ui.flow), "ml/s", tel.flow,
-                "VOLUME", fmtF(ui.dispensedVolume, 0), "ml", tel.flow2,
+                "VOLUME", cVolume.value, cVolume.unit, tel.flow2,
             )
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             DualChip(
                 Modifier.weight(1f),
-                "COFFEE", fmtF(ui.headTemp), "°C", tel.temp,
-                "WATER", fmtF(ui.mixTemp), "°C", tel.temp2,
+                "COFFEE", cCoffee.value, cCoffee.unit, tel.temp,
+                "WATER", cWater.value, cWater.unit, tel.temp2,
             )
             DualChip(
                 Modifier.weight(1f),
-                "WEIGHT", fmtF(ui.scaleWeightG), "g", tel.weight,
+                "WEIGHT", cWeight.value, cWeight.unit, tel.weight,
                 "FLOW", fmtF(ui.scaleFlowGPerS), "g/s", tel.weight2,
             )
         }
@@ -650,7 +665,7 @@ private fun RestingBody(
                         )
                     }
                     Text(
-                        ui.headTemp?.let { "Group %.1f°C".format(it) } ?: "Group —",
+                        ui.headTemp?.let { "Group ${formatTemp(it, ui.tempUnit)}" } ?: "Group —",
                         style = TextStyle(fontFamily = JetBrainsMono, fontSize = 12.sp, fontFeatureSettings = "tnum"),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -659,13 +674,13 @@ private fun RestingBody(
                 val dose = ui.brewParams?.dose ?: active?.dose?.toDouble() ?: 18.0
                 val yieldOut = ui.brewParams?.yieldOut ?: active?.yieldOut?.toDouble() ?: 36.0
                 Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    TargetNumber(dose)
+                    TargetNumber(dose, ui.weightUnit)
                     PhIcon(
                         "arrow-right", sizeDp = 18,
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(bottom = 8.dp),
                     )
-                    TargetNumber(yieldOut)
+                    TargetNumber(yieldOut, ui.weightUnit)
                     Spacer(Modifier.weight(1f))
                     Text(
                         formatRatio(dose, yieldOut),
@@ -698,9 +713,11 @@ private fun RestingBody(
                 val peakBar = active?.segments?.filter { it.mode != "flow" }?.maxOfOrNull { it.target }
                 val estTime = active?.segments?.sumOf { it.time.toDouble() }?.toInt()
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    ReadyParam("TEMP", "%.1f".format(ui.brewParams?.brewTemp ?: active?.brewTemp?.toDouble() ?: 93.0), "°C", Modifier.weight(1f))
+                    val readyTemp = convertTemp((ui.brewParams?.brewTemp ?: active?.brewTemp?.toDouble() ?: 93.0).toFloat(), ui.tempUnit)
+                    val readyPress = convertPressure(peakBar?.toFloat(), ui.pressureUnit)
+                    ReadyParam("TEMP", readyTemp.value, readyTemp.unit, Modifier.weight(1f))
                     ReadyParam("PRE-INF", "${active?.preinfuseSeconds ?: 0}", "s", Modifier.weight(1f))
-                    ReadyParam("PRESSURE", peakBar?.let { "%.1f".format(it) } ?: "—", if (peakBar != null) "bar" else "", Modifier.weight(1f))
+                    ReadyParam("PRESSURE", if (peakBar != null) readyPress.value else "—", if (peakBar != null) readyPress.unit else "", Modifier.weight(1f))
                     ReadyParam("EST. TIME", estTime?.let { "~$it" } ?: "—", if (estTime != null) "s" else "", Modifier.weight(1f))
                 }
             }
@@ -714,10 +731,15 @@ private fun RestingBody(
             // tank above the low-water mark. Mirrors the Group tile's pattern.
             val steamOk = connected && (ui.steamTemp ?: 0f) >= 130f
             val tankOk = connected && (ui.waterLevelMm ?: 0f) > 5f
-            MStat("Group", "thermometer", ui.headTemp?.let { "%.1f°".format(it) } ?: "—", groupOk, Modifier.weight(1f))
-            MStat("Steam", "cloud", ui.steamTemp?.let { "%.0f°".format(it) } ?: "—", steamOk, Modifier.weight(1f))
+            // Compact, unit-aware status (issue 44): converted value + explicit
+            // glyph, no space — this dense 4-up strip can't fit "148.0 °C".
+            val groupM = convertTemp(ui.headTemp, ui.tempUnit)
+            val steamM = convertTemp(ui.steamTemp, ui.tempUnit)
+            val scaleM = convertWeight(ui.scaleWeightG ?: 0f, ui.weightUnit)
+            MStat("Group", "thermometer", ui.headTemp?.let { "${groupM.value}${groupM.unit}" } ?: "—", groupOk, Modifier.weight(1f))
+            MStat("Steam", "cloud", ui.steamTemp?.let { "${steamM.value}${steamM.unit}" } ?: "—", steamOk, Modifier.weight(1f))
             MStat("Tank", "drop-half", ui.waterLevelMm?.let { "%.0fmm".format(it) } ?: "—", tankOk, Modifier.weight(1f))
-            MStat("Scale", "scales", if (scaleConnected) "%.1fg".format(ui.scaleWeightG ?: 0f) else "—", scaleConnected, Modifier.weight(1f))
+            MStat("Scale", "scales", if (scaleConnected) "${scaleM.value}${scaleM.unit}" else "—", scaleConnected, Modifier.weight(1f))
         }
 
         // ── Last shot peek ───────────────────────────────────────────────────
@@ -761,11 +783,12 @@ private fun RestingBody(
                     }
                     Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(3.dp)) {
                         Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                            val lastYield = convertWeight(last.yieldG, ui.weightUnit)
                             Text(
-                                last.yieldG?.let { "%.1f".format(it) } ?: "—",
+                                lastYield.value,
                                 style = TextStyle(fontFamily = JetBrainsMono, fontWeight = FontWeight.Medium, fontSize = 20.sp, fontFeatureSettings = "tnum"),
                             )
-                            Text("g", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(lastYield.unit, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         val ratio = lastStored?.let { s ->
                             val y = s.yieldG; val d = s.doseG
@@ -785,17 +808,18 @@ private fun RestingBody(
 }
 
 @Composable
-private fun TargetNumber(value: Double) {
+private fun TargetNumber(value: Double, weightUnit: String) {
+    val w = convertWeight(value.toFloat(), weightUnit)
     Row(verticalAlignment = Alignment.Bottom) {
         Text(
-            "%.0f".format(value),
+            w.value,
             style = TextStyle(
                 fontFamily = JetBrainsMono, fontWeight = FontWeight.Medium,
                 fontSize = 40.sp, lineHeight = 40.sp, letterSpacing = (-1.5).sp, fontFeatureSettings = "tnum",
             ),
         )
         Text(
-            "g",
+            w.unit,
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(start = 1.dp, bottom = 5.dp),

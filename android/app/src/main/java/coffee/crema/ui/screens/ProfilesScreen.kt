@@ -41,6 +41,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material3.OutlinedTextField
 import coffee.crema.ui.components.CremaFilterChip
 import coffee.crema.ui.components.CremaValueUnit
+import coffee.crema.ui.convertTemp
+import coffee.crema.ui.convertWeight
 import coffee.crema.ui.formatRatio
 import coffee.crema.ui.components.CremaSortControl
 import coffee.crema.ui.components.SortKey
@@ -228,6 +230,8 @@ fun ProfilesScreen(
                     ProfileCard(
                         profile = profile,
                         isActive = profile.id == ui.activeProfileId,
+                        weightUnit = ui.weightUnit,
+                        tempUnit = ui.tempUnit,
                         onLoad = { vm.setActiveProfile(profile.id) },
                         onTogglePin = { vm.togglePinProfile(profile.id) },
                         onEdit = {
@@ -254,6 +258,8 @@ fun ProfilesScreen(
 private fun ProfileCard(
     profile: CremaProfile,
     isActive: Boolean,
+    weightUnit: String,
+    tempUnit: String,
     onLoad: () -> Unit,
     onTogglePin: () -> Unit,
     onEdit: () -> Unit,
@@ -330,7 +336,7 @@ private fun ProfileCard(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            ProfileMetricsRow(profile)
+            ProfileMetricsRow(profile, weightUnit, tempUnit)
             // Tag row — always present at a reserved min height so an untagged
             // card doesn't collapse shorter than its tagged neighbour.
             val tagPills = profile.tags.filter { it.isNotBlank() && it != "Built-in" }
@@ -402,7 +408,9 @@ private fun Pill(text: String, roast: Boolean = false) {
 // The 4-up recipe metrics grid (Ratio / Dose / Temp / Pre-inf), mono values
 // between hairline rules — the web profile-card metrics row.
 @Composable
-private fun ProfileMetricsRow(profile: CremaProfile) {
+private fun ProfileMetricsRow(profile: CremaProfile, weightUnit: String, tempUnit: String) {
+    val dose = convertWeight(profile.dose, weightUnit)
+    val temp = convertTemp(profile.brewTemp, tempUnit)
     Column {
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         Row(
@@ -410,8 +418,8 @@ private fun ProfileMetricsRow(profile: CremaProfile) {
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             ProfileMetric("Ratio", formatRatio(profile.dose, profile.yieldOut), "", Modifier.weight(1f))
-            ProfileMetric("Dose", "%.1f".format(profile.dose), "g", Modifier.weight(1f))
-            ProfileMetric("Temp", "%.0f".format(profile.brewTemp), "°C", Modifier.weight(1f))
+            ProfileMetric("Dose", dose.value, dose.unit, Modifier.weight(1f))
+            ProfileMetric("Temp", temp.value, temp.unit, Modifier.weight(1f))
             ProfileMetric("Pre-inf", "${profile.preinfuseSeconds}", "s", Modifier.weight(1f))
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
