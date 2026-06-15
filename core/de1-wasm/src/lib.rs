@@ -1169,6 +1169,12 @@ impl CremaBridge {
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command tares the connected scale.
+    ///
+    /// `&mut self` (unlike the `set_scale_*` siblings): taring bumps the
+    /// Decent scale's command sequence counter via `Scale::tare`, so this
+    /// genuinely mutates the connected-scale state. The FFI twin is `&self`
+    /// only because it wraps the core in a `Mutex`; the WASM bridge owns the
+    /// core directly and JS is single-threaded, so `&mut self` is honest here.
     pub fn tare_scale(&mut self) -> String {
         json(self.core.tare_scale())
     }
@@ -1368,7 +1374,7 @@ impl CremaBridge {
     /// `[min, max]` bounds. Capability-gated: the command is present only when
     /// the connected scale exposes a settable volume. Empty otherwise. Wired
     /// exactly like [`tare_scale`](Self::tare_scale).
-    pub fn set_scale_volume(&mut self, level: u8) -> String {
+    pub fn set_scale_volume(&self, level: u8) -> String {
         json(self.core.set_scale_volume(level))
     }
 
@@ -1380,7 +1386,7 @@ impl CremaBridge {
     /// gated: the command is present only when the connected scale exposes a
     /// configurable auto-standby. Empty otherwise. Wired exactly like
     /// [`set_scale_volume`](Self::set_scale_volume).
-    pub fn set_scale_standby(&mut self, minutes: u8) -> String {
+    pub fn set_scale_standby(&self, minutes: u8) -> String {
         json(self.core.set_scale_standby(minutes))
     }
 
@@ -1390,7 +1396,7 @@ impl CremaBridge {
     /// Capability-gated: the command is present only when the connected scale
     /// supports flow smoothing. Empty otherwise. Wired exactly like
     /// [`set_scale_volume`](Self::set_scale_volume).
-    pub fn set_scale_flow_smoothing(&mut self, enabled: bool) -> String {
+    pub fn set_scale_flow_smoothing(&self, enabled: bool) -> String {
         json(self.core.set_scale_flow_smoothing(enabled))
     }
 
@@ -1400,7 +1406,7 @@ impl CremaBridge {
     /// Capability-gated: the command is present only when the connected scale
     /// supports anti-mistouch. Empty otherwise. Wired exactly like
     /// [`set_scale_volume`](Self::set_scale_volume).
-    pub fn set_scale_anti_mistouch(&mut self, enabled: bool) -> String {
+    pub fn set_scale_anti_mistouch(&self, enabled: bool) -> String {
         json(self.core.set_scale_anti_mistouch(enabled))
     }
 
@@ -1412,7 +1418,7 @@ impl CremaBridge {
     /// modes. Switching a mode is **three** `WriteScale` commands, emitted in
     /// order — the shell must perform them in that order. Empty otherwise.
     /// Wired exactly like [`set_scale_volume`](Self::set_scale_volume).
-    pub fn set_scale_mode(&mut self, mode_id: u8) -> String {
+    pub fn set_scale_mode(&self, mode_id: u8) -> String {
         json(self.core.set_scale_mode(mode_id))
     }
 
@@ -1423,7 +1429,7 @@ impl CremaBridge {
     /// supports an auto-stop-mode setting and `mode_id` is in range. An
     /// out-of-range `mode_id` yields an empty `CoreOutput`. Wired exactly like
     /// [`set_scale_volume`](Self::set_scale_volume).
-    pub fn set_scale_auto_stop(&mut self, mode_id: u8) -> String {
+    pub fn set_scale_auto_stop(&self, mode_id: u8) -> String {
         json(self.core.set_scale_auto_stop(mode_id))
     }
 
