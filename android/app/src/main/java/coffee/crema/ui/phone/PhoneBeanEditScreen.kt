@@ -5,7 +5,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
@@ -338,20 +337,7 @@ fun PhoneBeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
             // 06 · Tasting
             NumberedGroup("06", "Tasting") {
                 EdRow("Rating") {
-                    Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                        (1..5).forEach { n ->
-                            Box(
-                                Modifier.size(36.dp).clip(CircleShape).clickable { rating = if (n == rating) 0 else n },
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                PhIcon(
-                                    if (n <= rating) "star-fill" else "star",
-                                    sizeDp = 22,
-                                    tint = if (n <= rating) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        }
-                    }
+                    CremaStarRating(rating, onChange = { rating = it }, touchDp = 36)
                 }
                 CremaTextField(
                     value = tastingNotes,

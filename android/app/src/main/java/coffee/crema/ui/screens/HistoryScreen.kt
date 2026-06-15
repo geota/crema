@@ -26,7 +26,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -60,6 +59,7 @@ import coffee.crema.history.historyStats
 import coffee.crema.ui.TelemetrySample
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.components.CremaCard
+import coffee.crema.ui.components.CremaStarRating
 import coffee.crema.ui.components.CremaTextField
 import coffee.crema.ui.components.CremaValueUnit
 import coffee.crema.ui.theme.HankenGrotesk
@@ -460,16 +460,11 @@ private fun ShotRow(shot: StoredShot, selected: Boolean, syncing: Boolean, weigh
         val rowYield = convertWeight(shot.yieldG, weightUnit)
         RowMetric(rowYield.value, shot.yieldG?.let { rowYield.unit }, "Yield")
         // Inline rating: compact stars, faint when unrated.
-        val r = shot.rating ?: 0
-        Row(horizontalArrangement = Arrangement.spacedBy(1.dp)) {
-            (1..5).forEach { n ->
-                PhIcon(
-                    if (n <= r) "star-fill" else "star",
-                    sizeDp = 11,
-                    tint = if (n <= r) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f),
-                )
-            }
-        }
+        CremaStarRating(
+            shot.rating ?: 0,
+            starDp = 11,
+            emptyTint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f),
+        )
         // Visualizer sync pip (web .hi-row pip): cloud-check once uploaded,
         // a spinner mid-upload, a faint cloud when local-only.
         when {
@@ -675,7 +670,7 @@ private fun ShotDetail(
         var notes by remember(shot.id) { mutableStateOf(shot.notes ?: "") }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Eyebrow("Rating")
-            StarRating(rating) { rating = it; onRate(it, notes) }
+            CremaStarRating(rating, onChange = { rating = it; onRate(it, notes) })
         }
         // Privacy — the per-shot Visualizer visibility override (web .hi-privacy):
         // "Default" follows Settings → Sharing; a pinned chip overrides this shot.
@@ -720,17 +715,6 @@ private fun PrivacyChip(label: String, on: Boolean, onClick: () -> Unit) {
             style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
             color = if (on) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
         )
-    }
-}
-
-@Composable
-private fun StarRating(value: Int, onChange: (Int) -> Unit) {
-    Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-        (1..5).forEach { n ->
-            IconButton(onClick = { onChange(if (n == value) 0 else n) }) {
-                PhIcon(if (n <= value) "star-fill" else "star", sizeDp = 22, tint = if (n <= value) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
     }
 }
 

@@ -55,6 +55,7 @@ import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.components.roasterMark
 import coffee.crema.ui.components.roasterTone
 import coffee.crema.ui.components.CremaAnchoredPopup
+import coffee.crema.ui.components.CremaStarRating
 import coffee.crema.ui.components.CremaButton
 import coffee.crema.ui.components.CremaMenuItem
 import coffee.crema.ui.components.CremaMenuSurface
@@ -368,7 +369,7 @@ fun BeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                 }
 
                 BeBlock("06", "Tasting", "How the bag is drinking — surfaces on the brew card and history.") {
-                    BeRow("Rating", stack = true) { StarRating(rating) { rating = it } }
+                    BeRow("Rating", stack = true) { CremaStarRating(rating, onChange = { rating = it }) }
                     BeField("Tasting notes", tastingNotes, singleLine = false) { tastingNotes = it }
                 }
 
@@ -520,22 +521,6 @@ private fun RoastPicker(value: Int, onChange: (Int) -> Unit) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-        }
-    }
-}
-
-/** 5-star rating; tap the current value to clear to 0. */
-@Composable
-private fun StarRating(value: Int, onChange: (Int) -> Unit) {
-    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-        (1..5).forEach { n ->
-            IconButton(onClick = { onChange(if (n == value) 0 else n) }) {
-                PhIcon(
-                    if (n <= value) "star-fill" else "star",
-                    sizeDp = 26,
-                    tint = if (n <= value) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
-                )
-            }
         }
     }
 }

@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
@@ -386,16 +385,11 @@ private fun PhoneShotRow(shot: StoredShot, syncing: Boolean, weightUnit: String,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                val r = shot.rating ?: 0
-                Row(horizontalArrangement = Arrangement.spacedBy(1.dp)) {
-                    (1..5).forEach { n ->
-                        PhIcon(
-                            if (n <= r) "star-fill" else "star",
-                            sizeDp = 11,
-                            tint = if (n <= r) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f),
-                        )
-                    }
-                }
+                CremaStarRating(
+                    shot.rating ?: 0,
+                    starDp = 11,
+                    emptyTint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f),
+                )
                 RowMono(shotRatioLabel(shot) ?: "—")
                 RowMono(shot.yieldG?.let { convertWeight(it, weightUnit).let { m -> "${m.value}${m.unit}" } } ?: "—")
                 RowMono("%.0fs".format(shot.durationMs / 1000.0))
@@ -576,23 +570,11 @@ private fun PhoneShotDetail(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Eyebrow("Your rating")
-                        Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                            (1..5).forEach { n ->
-                                Box(
-                                    Modifier.size(34.dp).clip(CircleShape).clickable {
-                                        rating = if (n == rating) 0 else n
-                                        vm.updateShot(shot.id, rating, notes)
-                                    },
-                                    contentAlignment = Alignment.Center,
-                                ) {
-                                    PhIcon(
-                                        if (n <= rating) "star-fill" else "star",
-                                        sizeDp = 22,
-                                        tint = if (n <= rating) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                }
-                            }
-                        }
+                        CremaStarRating(
+                            rating,
+                            onChange = { rating = it; vm.updateShot(shot.id, rating, notes) },
+                            touchDp = 34,
+                        )
                     }
                     CremaTextField(
                         value = notes,

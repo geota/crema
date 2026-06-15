@@ -1,6 +1,6 @@
 # 36 — Extract `CremaStarRating(...)`
 
-- **Status:** ready-for-agent
+- **Status:** ✅ done (2026-06-15)
 - **Severity:** P2
 - **Area:** Android tablet — `ui/screens/BeanEditScreen.kt`, `ui/screens/HistoryScreen.kt`, `ui/screens/BeansScreen.kt`
 - **Punchlist:** T4-11 — `../PUNCHLIST.md`
@@ -25,3 +25,20 @@ Extract a shared `CremaStarRating(value, onChange, sizeDp, readOnly)` composable
 
 ## Comments
 <!-- triage + progress notes append below -->
+
+### 2026-06-15 — done
+Added `CremaStarRating(value, onChange?, starDp, touchDp, spacingDp, filledTint,
+emptyTint, max)` to `CremaComponents.kt` (`grep "fun CremaStarRating"` → 1).
+`onChange == null` = read-only plain stars; otherwise each star gets a circular
+`touchDp` tap area with tap-to-clear (the editors' shared behaviour). `starDp`/
+`emptyTint` keep each site's existing density (compact inline rows vs full editor).
+
+Replaced **8** sites + removed the two private `StarRating` defs:
+- Tablet: BeanEditScreen (editor), HistoryScreen (editor + read-only list row),
+  BeansScreen (read-only card).
+- Phone: PhoneHistoryScreen (read-only row + editor detail), PhoneBeansScreen
+  (card), PhoneBeanEditScreen (editor), PhoneBrewScreen (last-shot peek).
+
+Single pin/favourite star icons (not 5-star ratings) were left as-is. Verified on
+the tablet emulator: list-row + detail ratings render correctly. Removed the
+now-unused `IconButton` / `CircleShape` imports the inline rows had left behind.

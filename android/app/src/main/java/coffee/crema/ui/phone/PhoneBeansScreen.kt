@@ -391,16 +391,11 @@ private fun PhoneBeanTile(
                         }
                     }
                 } else {
-                    Row(horizontalArrangement = Arrangement.spacedBy(1.dp)) {
-                        val r = bean.rating.toInt()
-                        (1..5).forEach { n ->
-                            PhIcon(
-                                if (n <= r) "star-fill" else "star",
-                                sizeDp = 14,
-                                tint = if (n <= r) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
-                            )
-                        }
-                    }
+                    CremaStarRating(
+                        bean.rating.toInt(),
+                        starDp = 14,
+                        emptyTint = MaterialTheme.colorScheme.outline,
+                    )
                 }
             }
 

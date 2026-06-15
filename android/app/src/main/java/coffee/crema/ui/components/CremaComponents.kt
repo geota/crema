@@ -288,6 +288,42 @@ fun PhIcon(name: String, modifier: Modifier = Modifier, tint: Color = LocalConte
     )
 }
 
+/**
+ * The one 5-star rating row (issue 36) — was hand-rolled at ~8 sites across both
+ * shells with byte-divergent sizes/tints. `onChange == null` is the read-only
+ * variant (plain stars, no touch target); otherwise each star gets a circular
+ * [touchDp] tap area and tapping the current value clears to 0 (the editors'
+ * shared behaviour). `starDp`/[emptyTint] are configurable so a compact inline
+ * row (history list, bean card) and a full editor control share one impl.
+ */
+@Composable
+fun CremaStarRating(
+    value: Int,
+    modifier: Modifier = Modifier,
+    onChange: ((Int) -> Unit)? = null,
+    starDp: Int = 22,
+    touchDp: Int = 40,
+    spacingDp: Int = if (onChange != null) 2 else 1,
+    filledTint: Color = MaterialTheme.colorScheme.primary,
+    emptyTint: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+    max: Int = 5,
+) {
+    Row(modifier, horizontalArrangement = Arrangement.spacedBy(spacingDp.dp)) {
+        (1..max).forEach { n ->
+            val icon = if (n <= value) "star-fill" else "star"
+            val tint = if (n <= value) filledTint else emptyTint
+            if (onChange != null) {
+                Box(
+                    Modifier.size(touchDp.dp).clip(CircleShape).clickable { onChange(if (n == value) 0 else n) },
+                    contentAlignment = Alignment.Center,
+                ) { PhIcon(icon, sizeDp = starDp, tint = tint) }
+            } else {
+                PhIcon(icon, sizeDp = starDp, tint = tint)
+            }
+        }
+    }
+}
+
 // ── Eyebrow — the small all-caps meta-label above readouts/sections ─────────
 // 10.5sp, +0.7 tracking, uppercase, on-surface-variant. Used everywhere.
 @Composable

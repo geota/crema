@@ -764,16 +764,12 @@ private fun RestingBody(
                                     .format(java.util.Date(last.completedAtMs))
                             },
                         )
-                        val r = lastStored?.rating ?: 0
-                        Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                            (1..5).forEach { n ->
-                                PhIcon(
-                                    if (n <= r) "star-fill" else "star",
-                                    sizeDp = 13,
-                                    tint = if (n <= r) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
-                                )
-                            }
-                        }
+                        CremaStarRating(
+                            lastStored?.rating ?: 0,
+                            starDp = 13,
+                            spacingDp = 2,
+                            emptyTint = MaterialTheme.colorScheme.outline,
+                        )
                         Text(
                             listOfNotNull(lastStored?.profileName, lastStored?.beanLabel).joinToString(" · ").ifEmpty { "Shot" },
                             style = MaterialTheme.typography.bodySmall,
