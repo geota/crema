@@ -1777,7 +1777,9 @@ impl CremaBridge {
     ///
     /// Returns an error string when `hz` is not `0.0`, `50.0`, or `60.0`.
     pub fn set_line_frequency_override(&mut self, hz: f32) -> Result<(), String> {
-        let override_hz = match hz as i32 {
+        // Round, don't truncate: a stray `50.9` must reject (rounds to 51), not
+        // silently pass as 50 the way a bare `hz as i32` truncation would.
+        let override_hz = match hz.round() as i32 {
             0 => None,
             50 => Some(50.0),
             60 => Some(60.0),
@@ -1914,6 +1916,20 @@ mod tests {
             assert!(json.contains("WriteCharacteristic"));
             assert!(json.contains("De1Calibration"));
         }
+    }
+
+    #[test]
+    fn set_line_frequency_override_rounds_rather_than_truncates() {
+        let mut bridge = CremaBridge::new();
+        // The three valid mains settings pass and actually pin the value.
+        assert!(bridge.set_line_frequency_override(50.0).is_ok());
+        assert_eq!(bridge.line_frequency_hz(), Some(50.0));
+        assert!(bridge.set_line_frequency_override(60.0).is_ok());
+        assert!(bridge.set_line_frequency_override(0.0).is_ok());
+        // A stray fractional value rejects — it must NOT silently truncate
+        // `50.9` down to `50` the way the old bare `hz as i32` cast did.
+        assert!(bridge.set_line_frequency_override(50.9).is_err());
+        assert!(bridge.set_line_frequency_override(49.0).is_err());
     }
 
     #[test]

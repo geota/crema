@@ -1627,7 +1627,9 @@ impl CremaBridge {
     ///
     /// Returns an error string when `hz` is not `0.0`, `50.0`, or `60.0`.
     pub fn set_line_frequency_override(&self, hz: f32) -> Result<(), CremaError> {
-        let override_hz = match hz as i32 {
+        // Round, don't truncate: a stray `50.9` must reject (rounds to 51), not
+        // silently pass as 50 the way a bare `hz as i32` truncation would.
+        let override_hz = match hz.round() as i32 {
             0 => None,
             50 => Some(50.0),
             60 => Some(60.0),
