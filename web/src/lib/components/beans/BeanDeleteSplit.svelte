@@ -10,13 +10,14 @@
 	 *  - Caret menu → the same, plus "delete on Visualizer too" when the bag is
 	 *    uploaded and Visualizer is connected.
 	 *
-	 * The remote DELETE runs `BeanSync.deleteBean` on the app runtime (Option 3,
-	 * T-16) — the store stays pure-local. Best-effort + free-tier skip mirror the
-	 * old `deleteRemoteBean` it replaced.
+	 * The remote DELETE runs through the shared `bestEffortRemoteDelete` on the
+	 * app runtime (Option 3, T-16) — the store stays pure-local; the free-tier
+	 * skip + best-effort warn live in that helper.
 	 */
 	import { onMount } from 'svelte';
-	import { getBeanStore, readSyncSettings } from '$lib/bean';
+	import { getBeanStore } from '$lib/bean';
 	import { getCremaAppContext } from '$lib/shell/app-context';
+	import { bestEffortRemoteDelete } from '$lib/visualizer';
 	import SplitButton from '$lib/components/shared/SplitButton.svelte';
 	import { confirmDialog } from '$lib/components/shared/confirm-dialog.svelte';
 
@@ -55,22 +56,6 @@
 		connected && !!library.getBean(beanId)?.visualizerId
 	);
 
-	/**
-	 * Best-effort Visualizer bag delete. Free-tier (premium === false) skips
-	 * silently and a failure is logged, not surfaced — exactly the old
-	 * `deleteRemoteBean` posture; the local delete already happened.
-	 */
-	async function deleteRemoteBean(visualizerId: string): Promise<void> {
-		if (readSyncSettings().premium === false) return;
-		const api = appCtx().services;
-		if (!api) return;
-		try {
-			await api.beans.deleteBean(visualizerId);
-		} catch (e) {
-			console.warn('Visualizer delete failed:', e instanceof Error ? e.message : String(e));
-		}
-	}
-
 	async function run(remote: boolean): Promise<void> {
 		const msg = remote
 			? `Delete "${beanName}" from this device and Visualizer? This cannot be undone.`
@@ -79,7 +64,7 @@
 		// Capture the remote id BEFORE the local delete removes the row.
 		const visualizerId = remote ? (library.getBean(beanId)?.visualizerId ?? null) : null;
 		library.deleteBean(beanId);
-		if (visualizerId) void deleteRemoteBean(visualizerId);
+		if (visualizerId) void bestEffortRemoteDelete(appCtx().services, [visualizerId]);
 		onDeleted?.();
 	}
 

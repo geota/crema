@@ -41,6 +41,10 @@ export {
 
 export { migrateLegacyBasicAuth } from './migrate-basic-auth';
 
+// Best-effort remote (Visualizer) delete, shared by the bean + roaster delete
+// split-buttons. The store stays pure-local; this fires the cloud DELETEs.
+export { bestEffortRemoteDelete } from './bestEffortRemoteDelete';
+
 // ── Shot sync + upload queue (T-16) ────────────────────────────────
 // Moved to the Effect services `$lib/services/{shot-sync,upload-queue}` and the
 // pure `$lib/services/queue-store`. Call sites run them on the app runtime

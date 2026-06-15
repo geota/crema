@@ -1,6 +1,6 @@
 # 40 — Share `bestEffortRemoteDelete(ids)`
 
-- **Status:** ready-for-agent
+- **Status:** ✅ done
 - **Severity:** P2
 - **Area:** Web — `web/src/lib/components/beans/BeanDeleteSplit.svelte`, `web/src/lib/components/beans/RoasterDeleteSplit.svelte`
 - **Punchlist:** T4-16 — `../PUNCHLIST.md`
@@ -24,3 +24,23 @@ Extract a shared `bestEffortRemoteDelete(ids)` function (e.g. in `web/src/lib/vi
 
 ## Comments
 <!-- triage + progress notes append below -->
+
+### 2026-06-15 (session 5) — done
+
+Extracted `web/src/lib/visualizer/bestEffortRemoteDelete.ts` and exported it from
+the `$lib/visualizer` barrel. Unified signature (covers all 3 call patterns):
+`bestEffortRemoteDelete(services: CremaServices | null, beanIds: string[], roasterId?: string | null)`
+— free-tier skip + null-services guard + bags-before-roaster order + best-effort
+`console.warn`, all in one place.
+
+- `services` is passed in (not read via `appCtx`) because `getCremaAppContext` is
+  `getContext`-based and can't run in a plain module — call sites pass `appCtx().services`.
+- No import cycle: `$lib/bean` doesn't import `$lib/visualizer`, and the
+  `CremaServices` import is type-only (erased).
+- Call sites: Bean `(_, [visualizerId])`; Roaster detach `(_, [], roasterVizId)`;
+  cascade `(_, beanVizIds, roasterVizId)` — behaviour byte-identical to the old
+  `deleteRemoteBean` / `fireRemoteDeletes`.
+
+Verified: acceptance grep shows only import + call (no logic) in `components/beans`;
+`pnpm run check` 0 errors/0 warnings; `pnpm exec vitest run` 261/261. Commit on
+`effect/phase-0-spike`.
