@@ -772,12 +772,16 @@ pub fn export_v2_json_shot(shot_json: String) -> Result<String, CremaError> {
     de1_domain::export_v2_json_shot(&shot).map_err(crema_err)
 }
 
+/// The core crate version as a borrowed static; [`core_version`] owns a copy
+/// only at the binding boundary (uniffi can't return a borrowed `&str`).
+const CORE_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 /// The Rust core's crate version (workspace-versioned) — the Settings →
 /// About "Core" identity row. Mirrors the wasm `coreVersion`.
 #[uniffi::export]
 #[must_use]
 pub fn core_version() -> String {
-    env!("CARGO_PKG_VERSION").to_string()
+    CORE_VERSION.to_owned()
 }
 
 /// Reconcile a remote Visualizer pull against the local shot refs. Payload
