@@ -1937,22 +1937,26 @@ mod tests {
 
     #[test]
     fn set_espresso_warmup_timeout_rounds_and_clamps_to_an_hour() {
-        let bridge = CremaBridge::new();
         // Decode the wire deciseconds: a single MMR write whose `data` is
         // [len, addr×3, value×4 LE]; `int(10 × seconds)` lives at data[4..8].
-        let deciseconds = |json: String| -> u32 {
-            let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        fn deciseconds(json: &str) -> u64 {
+            let parsed: serde_json::Value = serde_json::from_str(json).unwrap();
             let data = parsed["commands"][0]["content"]["data"].as_array().unwrap();
-            let byte = |v: &serde_json::Value| u8::try_from(v.as_u64().unwrap()).unwrap();
-            u32::from_le_bytes([byte(&data[4]), byte(&data[5]), byte(&data[6]), byte(&data[7])])
-        };
+            let mut v = 0u64;
+            for (i, b) in data[4..8].iter().enumerate() {
+                v |= b.as_u64().unwrap() << (8 * i);
+            }
+            v
+        }
+        let bridge = CremaBridge::new();
+        let ds = |s: f32| deciseconds(&bridge.set_espresso_warmup_timeout(s));
         // Whole/half seconds are exact; 5.1 s must round to 5100 ms = 51 ds —
         // the f32-error compensation a bare `from_secs_f32` would drop (→ 50).
-        assert_eq!(deciseconds(bridge.set_espresso_warmup_timeout(3.0)), 30);
-        assert_eq!(deciseconds(bridge.set_espresso_warmup_timeout(5.1)), 51);
-        // Absurd input clamps to the 1-hour ceiling (3600 s = 36000 ds) rather
-        // than the old `u64::MAX`-derived multi-year duration.
-        assert_eq!(deciseconds(bridge.set_espresso_warmup_timeout(7200.0)), 36000);
+        assert_eq!(ds(3.0), 30);
+        assert_eq!(ds(5.1), 51);
+        // Absurd input clamps to the 1-hour ceiling (3600 s = 36000 ds), not the
+        // old `u64::MAX`-derived multi-year duration.
+        assert_eq!(ds(7200.0), 36000);
     }
 
     #[test]
