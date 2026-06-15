@@ -1,6 +1,6 @@
 # 30 — Hoist maintenance burn-down math
 
-- **Status:** ready-for-agent
+- **Status:** ✅ done (2026-06-15)
 - **Severity:** P2
 - **Area:** Android phone + tablet — `ui/phone/PhoneSettingsScreen.kt`, `ui/screens/SettingsScreen.kt`
 - **Punchlist:** T4-05 — `../PUNCHLIST.md`
@@ -23,3 +23,18 @@ A pure helper on the maintenance readout model — e.g. an extension function or
 
 ## Comments
 <!-- triage + progress notes append below -->
+
+### 2026-06-15 — done
+New `ui/screens/MaintenanceBurndown.kt` (package `coffee.crema.ui.screens`, the
+same home as the other shared settings helpers PhoneSettingsScreen already
+imports). Three pure `MaintenanceReadout.filterRow/descaleRow/cleanRow(m)`
+extensions return a `MaintenanceRowReadout(note, value, unit, pct, due)` — the
+filter %, descale L/L, clean h/h math + note strings, formerly inlined verbatim
+at both call sites.
+
+`SettingsScreen` (tablet `MaintenanceRow`) uses `value`/`unit` split as before;
+`PhoneSettingsScreen` (`PMaintRow`) combines them (filter `"42%"` no-space,
+descale `"12 L"`, clean `"8 h"` — preserving the phone's exact prior strings).
+The `?: "Awaiting data."` / `"—"` null-readout fallback stays at each call site.
+Value-identical: notes/pct/due were already byte-identical phone↔tablet, so one
+helper covers both. `:app:compileDebugKotlin` + `:app:testDebugUnitTest` green.

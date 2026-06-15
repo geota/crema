@@ -31,7 +31,10 @@ import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.formatTemp
 import coffee.crema.ui.components.*
 import coffee.crema.ui.phone.components.*
+import coffee.crema.ui.screens.cleanRow
 import coffee.crema.ui.screens.cpuBoardLabel
+import coffee.crema.ui.screens.descaleRow
+import coffee.crema.ui.screens.filterRow
 import coffee.crema.ui.screens.cupWarmerTempValue
 import coffee.crema.ui.screens.flowMultiplierValue
 import coffee.crema.ui.screens.ghcModeOn
@@ -533,28 +536,31 @@ private fun WaterSection(
     SettingsGroup("Reminders") {
         val ro = ui.maintenanceReadout
         val m = ui.maintenance
+        val filter = ro?.filterRow(m)
         PMaintRow(
             title = "Water filter",
-            note = ro?.let { "${String.format("%.1f", it.filterUsedLitres)} L of ${m.filterCapacityLitres.toInt()} L used" } ?: "Awaiting data.",
-            value = ro?.let { "${it.filterPercent.toInt()}%" } ?: "—",
-            pct = ro?.let { (it.filterPercent / 100.0).toFloat() } ?: 0f,
-            due = ro?.let { !it.filterOk } ?: false,
+            note = filter?.note ?: "Awaiting data.",
+            value = filter?.let { "${it.value}${it.unit}" } ?: "—",
+            pct = filter?.pct ?: 0f,
+            due = filter?.due ?: false,
             onMarkDone = { vm.markFilterCleaned() },
         )
+        val descale = ro?.descaleRow(m)
         PMaintRow(
             title = "Descale",
-            note = ro?.let { "${String.format("%.0f", it.descaleSinceLitres)} L since last descale · every ${m.descaleIntervalLitres.toInt()} L" } ?: "Awaiting data.",
-            value = ro?.let { "${String.format("%.0f", it.descaleSinceLitres)} L" } ?: "—",
-            pct = ro?.let { if (m.descaleIntervalLitres > 0.0) (it.descaleSinceLitres / m.descaleIntervalLitres).toFloat() else 0f } ?: 0f,
-            due = ro?.let { !it.descaleOk } ?: false,
+            note = descale?.note ?: "Awaiting data.",
+            value = descale?.let { "${it.value} ${it.unit}" } ?: "—",
+            pct = descale?.pct ?: 0f,
+            due = descale?.due ?: false,
             onMarkDone = { vm.markDescaled() },
         )
+        val clean = ro?.cleanRow(m)
         PMaintRow(
             title = "Group clean",
-            note = ro?.let { "${it.cleanSinceHours} h since last clean · every ${m.cleanIntervalHours.toInt()} h" } ?: "Awaiting data.",
-            value = ro?.let { "${it.cleanSinceHours} h" } ?: "—",
-            pct = ro?.let { if (m.cleanIntervalHours > 0.0) (it.cleanSinceHours.toDouble() / m.cleanIntervalHours).toFloat() else 0f } ?: 0f,
-            due = ro?.let { !it.cleanOk } ?: false,
+            note = clean?.note ?: "Awaiting data.",
+            value = clean?.let { "${it.value} ${it.unit}" } ?: "—",
+            pct = clean?.pct ?: 0f,
+            due = clean?.due ?: false,
             onMarkDone = { vm.markCleaned() },
             last = true,
         )
