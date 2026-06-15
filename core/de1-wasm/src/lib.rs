@@ -606,12 +606,16 @@ pub fn samples_from_visualizer_detail(detail_json: &str) -> Result<String, Strin
     de1_domain::samples_from_visualizer_detail_json(detail_json)
 }
 
+/// The core crate version as a borrowed static; [`core_version`] owns a copy
+/// only at the binding boundary (wasm-bindgen can't return a borrowed `&str`).
+const CORE_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 /// The Rust core's crate version (workspace-versioned) — the Settings →
 /// About "Core" identity row. Mirrors the FFI `core_version`.
 #[wasm_bindgen(js_name = coreVersion)]
 #[must_use]
 pub fn core_version() -> String {
-    env!("CARGO_PKG_VERSION").to_string()
+    CORE_VERSION.to_owned()
 }
 
 /// JS hands integer-valued `f64`s for unix-ms timestamps (a plain `i64`
