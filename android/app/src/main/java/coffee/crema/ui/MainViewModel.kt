@@ -298,6 +298,18 @@ data class MainUiState(
      * match the web (pressure / flow / weight).
      */
     val chartChannels: Set<String> = setOf("pressure", "flow", "weight"),
+    // ── Display units (issue 44) ─────────────────────────────────────────────
+    // The user's chosen display unit per dimension; everything is stored
+    // canonical (g / °C / bar / ml) and routed through `Format.kt` for display.
+    // Persisted in AppPrefs; defaults match the web shell.
+    /** Weight unit for dose/yield/scale readouts — `"g" | "oz"`. */
+    val weightUnit: String = "g",
+    /** Temperature unit for every temp readout — `"C" | "F"`. */
+    val tempUnit: String = "C",
+    /** Pressure unit for the pressure channel — `"bar" | "psi"`. */
+    val pressureUnit: String = "bar",
+    /** Volume unit for water/dispensed readouts — `"ml" | "floz"`. */
+    val volumeUnit: String = "ml",
     /** The bean library — user bean bags, persisted via [LibraryStore]. */
     val beans: List<Bean> = emptyList(),
     /** The roaster directory (FK target for [beans]). */
@@ -1666,6 +1678,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         defaultRatio = _ui.value.defaultRatio,
         defaultBrewTempC = _ui.value.defaultBrewTempC,
         defaultPreinfuseS = _ui.value.defaultPreinfuseS,
+        weightUnit = _ui.value.weightUnit,
+        tempUnit = _ui.value.tempUnit,
+        pressureUnit = _ui.value.pressureUnit,
+        volumeUnit = _ui.value.volumeUnit,
         qcSteamTimeS = _ui.value.qcSteamTimeS,
         qcSteamFlowMlS = _ui.value.qcSteamFlowMlS,
         qcSteamTempC = _ui.value.qcSteamTempC,
@@ -1855,6 +1871,35 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             if (enabled) add(key) else remove(key)
         }
         _ui.update { it.copy(chartChannels = next) }
+        persistPrefs()
+    }
+
+    // ── Display units (issue 44) ──────────────────────────────────────────────
+    // Pure display prefs: nothing is sent to the machine and no canonical value
+    // changes — flipping a unit only re-renders existing readouts through
+    // `Format.kt`. Persisted so the choice survives a restart.
+
+    /** Weight readout unit (`"g" | "oz"`). Persisted display pref. */
+    fun setWeightUnit(unit: String) {
+        _ui.update { it.copy(weightUnit = unit) }
+        persistPrefs()
+    }
+
+    /** Temperature readout unit (`"C" | "F"`). Persisted display pref. */
+    fun setTempUnit(unit: String) {
+        _ui.update { it.copy(tempUnit = unit) }
+        persistPrefs()
+    }
+
+    /** Pressure readout unit (`"bar" | "psi"`). Persisted display pref. */
+    fun setPressureUnit(unit: String) {
+        _ui.update { it.copy(pressureUnit = unit) }
+        persistPrefs()
+    }
+
+    /** Volume readout unit (`"ml" | "floz"`). Persisted display pref. */
+    fun setVolumeUnit(unit: String) {
+        _ui.update { it.copy(volumeUnit = unit) }
         persistPrefs()
     }
 
@@ -2489,6 +2534,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             defaultRatio = p.defaultRatio,
             defaultBrewTempC = p.defaultBrewTempC,
             defaultPreinfuseS = p.defaultPreinfuseS,
+            weightUnit = p.weightUnit,
+            tempUnit = p.tempUnit,
+            pressureUnit = p.pressureUnit,
+            volumeUnit = p.volumeUnit,
             qcSteamTimeS = p.qcSteamTimeS,
             qcSteamFlowMlS = p.qcSteamFlowMlS,
             qcSteamTempC = p.qcSteamTempC,
@@ -2595,6 +2644,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             preFlush = def.preFlush,
             steamPurge = def.steamPurge,
             chartChannels = def.chartChannels,
+            weightUnit = def.weightUnit,
+            tempUnit = def.tempUnit,
+            pressureUnit = def.pressureUnit,
+            volumeUnit = def.volumeUnit,
             keepScreenOnBrew = def.keepScreenOnBrew,
             defaultDoseG = def.defaultDoseG,
             defaultRatio = def.defaultRatio,

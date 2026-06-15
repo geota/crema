@@ -28,6 +28,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager
 import coffee.crema.ui.MainViewModel
+import coffee.crema.ui.formatTemp
 import coffee.crema.ui.components.*
 import coffee.crema.ui.phone.components.*
 import coffee.crema.ui.screens.cpuBoardLabel
@@ -190,8 +191,6 @@ fun PhoneSettingsScreen(
 
     // Local design-faithful prefs (pilled rows keep local state only).
     var density by rememberSaveable { mutableStateOf("comfortable") }
-    var unitTemp by rememberSaveable { mutableStateOf("c") }
-    var unitWeight by rememberSaveable { mutableStateOf("g") }
     var smoothPressure by rememberSaveable { mutableStateOf(true) }
     var tempOffset by rememberSaveable { mutableStateOf(0.0) }
     var screensaver by rememberSaveable { mutableStateOf(false) }
@@ -234,8 +233,10 @@ fun PhoneSettingsScreen(
                         vm, ui.themeMode, ui.keepScreenOnBrew,
                         density, { density = it },
                         screensaver, { screensaver = it },
-                        unitTemp, { unitTemp = it },
-                        unitWeight, { unitWeight = it },
+                        tempUnit = ui.tempUnit,
+                        weightUnit = ui.weightUnit,
+                        pressureUnit = ui.pressureUnit,
+                        volumeUnit = ui.volumeUnit,
                     )
                     "sharing" -> SharingSection(vm, ui.let { it }, launchSave, onResync = { pendingResync = true })
                     "calibration" -> CalibrationSection(
@@ -292,7 +293,7 @@ fun PhoneSettingsScreen(
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Text("Decent DE1", style = MaterialTheme.typography.titleMedium)
                         Text(
-                            if (connected) listOfNotNull(ui.de1Firmware?.let { "Firmware $it" }, ui.headTemp?.let { "%.1f °C".format(it) }).joinToString(" · ").ifEmpty { "Connected" }
+                            if (connected) listOfNotNull(ui.de1Firmware?.let { "Firmware $it" }, ui.headTemp?.let { formatTemp(it, ui.tempUnit) }).joinToString(" · ").ifEmpty { "Connected" }
                             else "Not connected",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -594,8 +595,10 @@ private fun DisplaySection(
     keepScreenOnBrew: Boolean,
     density: String, onDensity: (String) -> Unit,
     screensaver: Boolean, onScreensaver: (Boolean) -> Unit,
-    unitTemp: String, onUnitTemp: (String) -> Unit,
-    unitWeight: String, onUnitWeight: (String) -> Unit,
+    tempUnit: String,
+    weightUnit: String,
+    pressureUnit: String,
+    volumeUnit: String,
 ) {
     SettingsGroup("Appearance") {
         PRow("Theme", "Crema defaults to dark — the machine app is dark-skinned.") {
@@ -616,22 +619,34 @@ private fun DisplaySection(
         PRow("Keep screen on while brewing", "Hold the display awake during a shot.", last = true) { CremaSwitch(keepScreenOnBrew, vm::setKeepScreenOnBrew) }
     }
     SettingsGroup("Units") {
-        PRow("Temperature", "Units for every temperature readout.", notImplemented = true) {
+        PRow("Temperature", "Units for every temperature readout.") {
             CremaSegmentedButton(
-                options = listOf(SegOption("c", "°C"), SegOption("f", "°F")),
-                value = unitTemp,
-                onChange = onUnitTemp,
+                options = listOf(SegOption("C", "°C"), SegOption("F", "°F")),
+                value = tempUnit,
+                onChange = vm::setTempUnit,
             )
         }
-        PRow("Weight", "Units for dose and yield.", notImplemented = true) {
+        PRow("Weight", "Units for dose and yield.") {
             CremaSegmentedButton(
                 options = listOf(SegOption("g", "g"), SegOption("oz", "oz")),
-                value = unitWeight,
-                onChange = onUnitWeight,
+                value = weightUnit,
+                onChange = vm::setWeightUnit,
             )
         }
-        PRow("Pressure", "Units for the pressure channel.", notImplemented = true) { PSelect("bar") }
-        PRow("Volume", "Units for water and yield volume.", last = true, notImplemented = true) { PSelect("ml") }
+        PRow("Pressure", "Units for the pressure channel.") {
+            CremaSegmentedButton(
+                options = listOf(SegOption("bar", "bar"), SegOption("psi", "psi")),
+                value = pressureUnit,
+                onChange = vm::setPressureUnit,
+            )
+        }
+        PRow("Volume", "Units for water and yield volume.", last = true) {
+            CremaSegmentedButton(
+                options = listOf(SegOption("ml", "ml"), SegOption("floz", "fl oz")),
+                value = volumeUnit,
+                onChange = vm::setVolumeUnit,
+            )
+        }
     }
 }
 

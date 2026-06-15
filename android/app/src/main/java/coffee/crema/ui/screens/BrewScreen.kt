@@ -57,7 +57,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coffee.crema.beans.daysOffRoast
 import coffee.crema.beans.isFrozen
+import coffee.crema.ui.convertPressure
+import coffee.crema.ui.convertTemp
+import coffee.crema.ui.convertVolume
+import coffee.crema.ui.convertWeight
 import coffee.crema.ui.formatRatio
+import coffee.crema.ui.formatTemp
+import coffee.crema.ui.formatWeight
 import coffee.crema.ui.freshnessColor
 import coffee.crema.beans.roastBand
 import coffee.crema.ble.De1BleManager
@@ -127,6 +133,8 @@ fun BrewScreen(
                 onSelectProfile = vm::setActiveProfile,
                 uploading = ui.profileUploading,
                 uploadProgress = ui.profileUploadProgress,
+                weightUnit = ui.weightUnit,
+                tempUnit = ui.tempUnit,
                 activeBean = activeBean,
                 beans = ui.beans,
                 roasters = ui.roasters,
@@ -189,6 +197,9 @@ fun BrewScreen(
                         LastShotCard(
                             last = ui.lastShot!!,
                             dose = active?.dose ?: 18f,
+                            weightUnit = ui.weightUnit,
+                            tempUnit = ui.tempUnit,
+                            pressureUnit = ui.pressureUnit,
                             onClick = { vm.openShotInHistory(ui.lastShot!!.id); onNav("history") },
                         )
                     }
@@ -291,6 +302,8 @@ private fun BrewHeader(
     onSelectProfile: (String) -> Unit,
     uploading: Boolean,
     uploadProgress: String?,
+    weightUnit: String,
+    tempUnit: String,
     activeBean: Bean?,
     beans: List<Bean>,
     roasters: List<Roaster>,
@@ -316,6 +329,8 @@ private fun BrewHeader(
             onSelect = onSelectProfile,
             uploading = uploading,
             uploadProgress = uploadProgress,
+            weightUnit = weightUnit,
+            tempUnit = tempUnit,
             onOpenLibrary = onOpenProfiles,
             onNew = onNewProfile,
             onEdit = onEditProfile,
@@ -385,6 +400,8 @@ private fun ProfileBlock(
     onSelect: (String) -> Unit,
     uploading: Boolean,
     uploadProgress: String?,
+    weightUnit: String,
+    tempUnit: String,
     onOpenLibrary: () -> Unit,
     onNew: () -> Unit,
     onEdit: () -> Unit,
@@ -426,9 +443,8 @@ private fun ProfileBlock(
             }
             if (active != null) {
                 Text(
-                    "Pre-inf ${active.preinfuseSeconds}s · ${formatRatio(active.dose, active.yieldOut)} · %.1f g · %.1f °C".format(
-                        active.yieldOut, active.brewTemp,
-                    ),
+                    "Pre-inf ${active.preinfuseSeconds}s · ${formatRatio(active.dose, active.yieldOut)} · " +
+                        "${formatWeight(active.yieldOut, weightUnit)} · ${formatTemp(active.brewTemp, tempUnit)}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
@@ -1123,15 +1139,23 @@ private fun LimitsCard(active: CremaProfile?, ui: coffee.crema.ui.MainUiState) {
     val timeColor = MaterialTheme.colorScheme.primary
     val rows = buildList {
         if (active != null && active.yieldOut > 0f) {
-            add(LimitRow("Yield", "scales", tel.weight, weightG, active.yieldOut, "g"))
+            // Unit-aware (issue 44): live + target convert to the chosen weight unit;
+            // the progress fraction stays canonical (ratio is unit-independent).
+            val liveW = convertWeight(weightG, ui.weightUnit)
+            val targetW = convertWeight(active.yieldOut, ui.weightUnit)
+            add(LimitRow("Yield", "scales", tel.weight, weightG, active.yieldOut, liveW.value, targetW.value, targetW.unit))
         }
         if (active != null && active.maxTotalVolumeMl > 0) {
-            add(LimitRow("Volume", "drop-half", tel.flow, ui.dispensedVolume ?: 0f, active.maxTotalVolumeMl.toFloat(), "ml", decimals = 0))
+            val liveV = convertVolume(ui.dispensedVolume ?: 0f, ui.volumeUnit)
+            val targetV = convertVolume(active.maxTotalVolumeMl.toFloat(), ui.volumeUnit)
+            add(LimitRow("Volume", "drop-half", tel.flow, ui.dispensedVolume ?: 0f, active.maxTotalVolumeMl.toFloat(), liveV.value, targetV.value, targetV.unit))
         }
         // Time cap from the persisted setting (ui.maxShotDurationS); live = elapsed
         // shot seconds. Always shown — it's a global hard cap, not profile-scoped.
         if (ui.maxShotDurationS > 0f) {
-            add(LimitRow("Time", "timer", timeColor, ui.shotElapsedMs / 1000f, ui.maxShotDurationS, "s", decimals = 0))
+            val liveS = "%.0f".format(ui.shotElapsedMs / 1000f)
+            val targetS = "%.0f".format(ui.maxShotDurationS)
+            add(LimitRow("Time", "timer", timeColor, ui.shotElapsedMs / 1000f, ui.maxShotDurationS, liveS, targetS, "s"))
         }
     }
     if (rows.isEmpty()) return
@@ -1150,11 +1174,14 @@ private data class LimitRow(
     val label: String,
     val icon: String,
     val color: Color,
+    /** Canonical live / target — drive the progress fraction (unit-independent). */
     val live: Float?,
     val target: Float,
+    /** Pre-formatted display values in the user's unit (issue 44): "12.0", "36.0", or "—". */
+    val liveStr: String,
+    val targetStr: String,
+    /** The display unit label ("g"/"oz", "ml"/"fl oz", "s"). */
     val unit: String,
-    // Web: Yield reads 1-decimal ("36.0 g"); Volume/Time read whole ("0 / 120 ml", "0 / 45 s").
-    val decimals: Int = 1,
 )
 
 @Composable
@@ -1167,10 +1194,10 @@ private fun LimitRowView(row: LimitRow) {
                 Text(row.label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             // Web MaxStopConditionsCard: a null live (no scale weight yet) renders "—",
-            // never a fake "0.0" — the value is unknown, not zero.
-            val liveStr = row.live?.let { "%.${row.decimals}f".format(it) } ?: "—"
+            // never a fake "0.0" — the value is unknown, not zero. Both parts are
+            // pre-formatted in the user's unit (issue 44).
             Text(
-                "$liveStr / %.${row.decimals}f%s".format(row.target, row.unit),
+                "${row.liveStr} / ${row.targetStr}${row.unit}",
                 style = CremaTheme.readout.readoutSm.copy(fontSize = 15.sp, lineHeight = 19.sp),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -1183,9 +1210,19 @@ private fun LimitRowView(row: LimitRow) {
 // opens the matching shot in History. Shown after a shot finishes until the next
 // one starts.
 @Composable
-private fun LastShotCard(last: coffee.crema.ui.LastShot, dose: Float, onClick: () -> Unit) {
+private fun LastShotCard(
+    last: coffee.crema.ui.LastShot,
+    dose: Float,
+    weightUnit: String,
+    tempUnit: String,
+    pressureUnit: String,
+    onClick: () -> Unit,
+) {
     val yieldG = last.yieldG
     val ratio = formatRatio(dose, yieldG)
+    val yield_ = convertWeight(yieldG, weightUnit)
+    val peakP = convertPressure(last.peakPressure, pressureUnit)
+    val peakT = convertTemp(last.peakTemp, tempUnit)
     CremaCard(Modifier.fillMaxWidth().clickable(onClick = onClick)) {
         Column(
             Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp),
@@ -1207,12 +1244,12 @@ private fun LastShotCard(last: coffee.crema.ui.LastShot, dose: Float, onClick: (
             // web .ls-grid order. Float? guarded before %f (never pass an Int).
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 LastShotStat("Time", "%.1f".format(last.durationMs / 1000.0), "s", Modifier.weight(1f))
-                LastShotStat("Yield", if (yieldG != null) "%.1f".format(yieldG) else "—", "g", Modifier.weight(1f))
+                LastShotStat("Yield", yield_.value, yieldG?.let { yield_.unit }, Modifier.weight(1f))
                 LastShotStat("Ratio", ratio, null, Modifier.weight(1f))
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                LastShotStat("Peak", last.peakPressure?.let { "%.1f".format(it) } ?: "—", "bar", Modifier.weight(1f))
-                LastShotStat("Peak temp", last.peakTemp?.let { "%.0f".format(it) } ?: "—", "°C", Modifier.weight(1f))
+                LastShotStat("Peak", peakP.value, last.peakPressure?.let { peakP.unit }, Modifier.weight(1f))
+                LastShotStat("Peak temp", peakT.value, last.peakTemp?.let { peakT.unit }, Modifier.weight(1f))
                 Spacer(Modifier.weight(1f)) // hold the 3-col grid alignment
             }
         }
@@ -1250,10 +1287,18 @@ private fun ChannelsRow(ui: coffee.crema.ui.MainUiState, active: CremaProfile?) 
         Modifier.fillMaxWidth().height(86.dp),
         horizontalArrangement = Arrangement.spacedBy(9.dp),
     ) {
+        // Unit-aware readouts (issue 44): pressure / temp / weight / volume route
+        // through the canonical→display converters; flow (ml/s, g/s) and resistance
+        // are not user-toggled dimensions, so they stay as-is.
+        val pressure = convertPressure(ui.pressure, ui.pressureUnit)
+        val water = convertVolume(ui.dispensedVolume, ui.volumeUnit)
+        val coffeeTemp = convertTemp(ui.headTemp, ui.tempUnit)
+        val mixTempM = convertTemp(ui.mixTemp, ui.tempUnit)
+        val weight = convertWeight(ui.scaleWeightG, ui.weightUnit)
         ChannelCard(
             modifier = Modifier.weight(1f).fillMaxHeight(),
             primLabel = "Pressure", primIcon = "gauge", primColor = tel.pressure,
-            primValue = fmt(ui.pressure), primUnit = "bar",
+            primValue = pressure.value, primUnit = pressure.unit,
             secLabel = "Resistance", secColor = tel.pressure2,
             secValue = fmt(resist, 2), secUnit = resistUnit,
         )
@@ -1262,23 +1307,23 @@ private fun ChannelsRow(ui: coffee.crema.ui.MainUiState, active: CremaProfile?) 
             primLabel = "Flow", primIcon = "drop", primColor = tel.flow,
             primValue = fmt(ui.flow), primUnit = "ml/s",
             secLabel = "Water", secColor = tel.flow2,
-            secValue = fmt(ui.dispensedVolume), secUnit = "ml",
+            secValue = water.value, secUnit = water.unit,
         )
         ChannelCard(
             modifier = Modifier.weight(1f).fillMaxHeight(),
             primLabel = "Coffee", primIcon = "thermometer", primColor = tel.temp,
-            primValue = fmt(ui.headTemp), primUnit = "°C",
+            primValue = coffeeTemp.value, primUnit = coffeeTemp.unit,
             secLabel = "Water", secColor = tel.temp2,
-            secValue = fmt(ui.mixTemp), secUnit = "°C",
-            target = active?.let { "target %.1f °C".format(it.brewTemp) },
+            secValue = mixTempM.value, secUnit = mixTempM.unit,
+            target = active?.let { "target ${formatTemp(it.brewTemp, ui.tempUnit)}" },
         )
         ChannelCard(
             modifier = Modifier.weight(1f).fillMaxHeight(),
             primLabel = "Weight", primIcon = "scales", primColor = tel.weight,
-            primValue = fmt(ui.scaleWeightG), primUnit = "g",
+            primValue = weight.value, primUnit = weight.unit,
             secLabel = "Flow", secColor = tel.weight2,
             secValue = fmt(ui.scaleFlowGPerS), secUnit = "g/s",
-            target = active?.let { "target %.1f g".format(it.yieldOut) },
+            target = active?.let { "target ${formatWeight(it.yieldOut, ui.weightUnit)}" },
         )
     }
 }
@@ -1347,7 +1392,8 @@ private fun BrewFoot(
                 FootDivider()
                 FootMeta("Scale", if (scaleConnected) (ui.scaleName ?: "Scale") else "—")
                 FootDivider()
-                FootMeta("Steam", ui.steamTemp?.let { "%.0f".format(it) } ?: "—", ui.steamTemp?.let { "°C" })
+                val steam = convertTemp(ui.steamTemp, ui.tempUnit)
+                FootMeta("Steam", steam.value, ui.steamTemp?.let { steam.unit })
                 FootMeta("Tank", ui.waterLevelMm?.let { "%.0f".format(it) } ?: "—", ui.waterLevelMm?.let { "mm" })
             }
             // Right actions.

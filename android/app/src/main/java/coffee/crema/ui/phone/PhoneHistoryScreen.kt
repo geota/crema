@@ -34,6 +34,9 @@ import coffee.crema.history.StoredShot
 import coffee.crema.history.beanLabel
 import coffee.crema.history.historyStats
 import coffee.crema.ui.MainViewModel
+import coffee.crema.ui.convertPressure
+import coffee.crema.ui.convertTemp
+import coffee.crema.ui.convertWeight
 import coffee.crema.ui.formatRatio
 import coffee.crema.ui.TelemetrySample
 import coffee.crema.ui.components.*
@@ -134,6 +137,9 @@ fun PhoneHistoryScreen(
             signedIn = ui.visualizer.signedIn,
             syncing = detail.id in ui.visualizer.uploadingShotIds,
             defaultPrivacy = ui.visualizer.privacy,
+            weightUnit = ui.weightUnit,
+            tempUnit = ui.tempUnit,
+            pressureUnit = ui.pressureUnit,
             onBack = { detailId = null },
             onDeleted = { detailId = null },
             onLoadOnBrew = { vm.loadProfileOnBrew(detail.profileName); onNav("brew") },
@@ -255,6 +261,7 @@ fun PhoneHistoryScreen(
                         PhoneShotRow(
                             shot = shot,
                             syncing = shot.id in ui.visualizer.uploadingShotIds,
+                            weightUnit = ui.weightUnit,
                             onOpen = { detailId = shot.id },
                         )
                     }
@@ -336,7 +343,7 @@ private fun PhoneStatTile(label: String, value: String, modifier: Modifier = Mod
 
 // ── Shot row (proto .ph-row) ─────────────────────────────────────────────────
 @Composable
-private fun PhoneShotRow(shot: StoredShot, syncing: Boolean, onOpen: () -> Unit) {
+private fun PhoneShotRow(shot: StoredShot, syncing: Boolean, weightUnit: String, onOpen: () -> Unit) {
     val tel = CremaTheme.telemetry
     Row(
         Modifier
@@ -390,7 +397,7 @@ private fun PhoneShotRow(shot: StoredShot, syncing: Boolean, onOpen: () -> Unit)
                     }
                 }
                 RowMono(shotRatioLabel(shot) ?: "—")
-                RowMono(shot.yieldG?.let { "%.1fg".format(it) } ?: "—")
+                RowMono(shot.yieldG?.let { convertWeight(it, weightUnit).let { m -> "${m.value}${m.unit}" } } ?: "—")
                 RowMono("%.0fs".format(shot.durationMs / 1000.0))
             }
         }
@@ -454,6 +461,9 @@ private fun PhoneShotDetail(
     signedIn: Boolean,
     syncing: Boolean,
     defaultPrivacy: String,
+    weightUnit: String,
+    tempUnit: String,
+    pressureUnit: String,
     onBack: () -> Unit,
     onDeleted: () -> Unit,
     onLoadOnBrew: () -> Unit,
@@ -548,10 +558,13 @@ private fun PhoneShotDetail(
 
             // 4-up metric strip (proto .ph-dmetrics).
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                val dPeakP = convertPressure(shot.peakPressure, pressureUnit)
+                val dPeakT = convertTemp(shot.peakTemp, tempUnit)
+                val dYield = convertWeight(shot.yieldG, weightUnit)
                 DetailMetric("%.0fs".format(shot.durationMs / 1000.0), "Time", null, Modifier.weight(1f))
-                DetailMetric(shot.peakPressure?.let { "%.1f".format(it) } ?: "—", "Peak bar", tel.pressure, Modifier.weight(1f))
-                DetailMetric(shot.peakTemp?.let { "%.1f°".format(it) } ?: "—", "Peak temp", tel.temp, Modifier.weight(1f))
-                DetailMetric(shot.yieldG?.let { "%.1fg".format(it) } ?: "—", "Yield", tel.weight, Modifier.weight(1f))
+                DetailMetric(shot.peakPressure?.let { dPeakP.value } ?: "—", "Peak ${dPeakP.unit}", tel.pressure, Modifier.weight(1f))
+                DetailMetric(shot.peakTemp?.let { "${dPeakT.value}${dPeakT.unit}" } ?: "—", "Peak temp", tel.temp, Modifier.weight(1f))
+                DetailMetric(shot.yieldG?.let { "${dYield.value}${dYield.unit}" } ?: "—", "Yield", tel.weight, Modifier.weight(1f))
             }
 
             // Rating + privacy + notes.

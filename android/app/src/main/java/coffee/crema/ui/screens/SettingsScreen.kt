@@ -230,8 +230,6 @@ fun SettingsScreen(
     // Pilled placeholder rows keep local state only (their pills mark them
     // not-implemented); everything functional reads ui.* / AppPrefs.
     var density by rememberSaveable { mutableStateOf("comfortable") }
-    var unitTemp by rememberSaveable { mutableStateOf("c") }
-    var unitWeight by rememberSaveable { mutableStateOf("g") }
     var autoSync by rememberSaveable { mutableStateOf(false) }
     var smoothPressure by rememberSaveable { mutableStateOf(true) }
     var tempOffset by rememberSaveable { mutableStateOf(0.0) }
@@ -551,22 +549,34 @@ fun SettingsScreen(
                             SetRow("Keep screen on while brewing", "Hold the display awake during a shot.", last = true) { CremaSwitch(ui.keepScreenOnBrew, vm::setKeepScreenOnBrew) }
                         }
                         SetGroup("Units") {
-                            SetRow("Temperature", "Units for every temperature readout.", notImplemented = true) {
+                            SetRow("Temperature", "Units for every temperature readout.") {
                                 CremaSegmentedButton(
-                                    options = listOf(SegOption("c", "°C"), SegOption("f", "°F")),
-                                    value = unitTemp,
-                                    onChange = { unitTemp = it },
+                                    options = listOf(SegOption("C", "°C"), SegOption("F", "°F")),
+                                    value = ui.tempUnit,
+                                    onChange = vm::setTempUnit,
                                 )
                             }
-                            SetRow("Weight", "Units for dose and yield.", notImplemented = true) {
+                            SetRow("Weight", "Units for dose and yield.") {
                                 CremaSegmentedButton(
                                     options = listOf(SegOption("g", "Grams"), SegOption("oz", "Ounces")),
-                                    value = unitWeight,
-                                    onChange = { unitWeight = it },
+                                    value = ui.weightUnit,
+                                    onChange = vm::setWeightUnit,
                                 )
                             }
-                            SetRow("Pressure", "Units for the pressure channel.", notImplemented = true) { SetSelect("bar") }
-                            SetRow("Volume", "Units for water and yield volume.", last = true, notImplemented = true) { SetSelect("ml") }
+                            SetRow("Pressure", "Units for the pressure channel.") {
+                                CremaSegmentedButton(
+                                    options = listOf(SegOption("bar", "bar"), SegOption("psi", "psi")),
+                                    value = ui.pressureUnit,
+                                    onChange = vm::setPressureUnit,
+                                )
+                            }
+                            SetRow("Volume", "Units for water and yield volume.", last = true) {
+                                CremaSegmentedButton(
+                                    options = listOf(SegOption("ml", "ml"), SegOption("floz", "fl oz")),
+                                    value = ui.volumeUnit,
+                                    onChange = vm::setVolumeUnit,
+                                )
+                            }
                         }
                     }
                     "sharing" -> {

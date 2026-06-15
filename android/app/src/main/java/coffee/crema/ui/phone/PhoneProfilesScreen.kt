@@ -20,6 +20,8 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coffee.crema.profiles.CremaProfile
 import coffee.crema.ui.MainViewModel
+import coffee.crema.ui.convertTemp
+import coffee.crema.ui.convertWeight
 import coffee.crema.ui.formatRatio
 import coffee.crema.ui.components.*
 import coffee.crema.ui.phone.components.*
@@ -140,6 +142,8 @@ fun PhoneProfilesScreen(
                     PhoneProfileCard(
                         profile = profile,
                         isLoaded = profile.id == ui.activeProfileId,
+                        weightUnit = ui.weightUnit,
+                        tempUnit = ui.tempUnit,
                         onLoad = { vm.setActiveProfile(profile.id) },
                         onEdit = {
                             if (profile.source == "custom") vm.startEditProfile(profile.id) else vm.duplicateProfile(profile.id)
@@ -201,6 +205,8 @@ fun PhoneProfilesScreen(
 private fun PhoneProfileCard(
     profile: CremaProfile,
     isLoaded: Boolean,
+    weightUnit: String,
+    tempUnit: String,
     onLoad: () -> Unit,
     onEdit: () -> Unit,
     onMenu: () -> Unit,
@@ -277,9 +283,11 @@ private fun PhoneProfileCard(
                 profile.roast?.let { RoastPill(it) }
                 Spacer(Modifier.weight(1f))
                 Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    val cardDose = convertWeight(profile.dose, weightUnit)
+                    val cardTemp = convertTemp(profile.brewTemp, tempUnit)
                     CardMetric(formatRatio(profile.dose, profile.yieldOut), "RATIO")
-                    CardMetric("%.0fg".format(profile.dose), "DOSE")
-                    CardMetric("%.0f°".format(profile.brewTemp), "TEMP")
+                    CardMetric("${cardDose.value}${cardDose.unit}", "DOSE")
+                    CardMetric("${cardTemp.value}${cardTemp.unit}", "TEMP")
                     CardMetric("${profile.preinfuseSeconds}s", "PRE")
                 }
             }
