@@ -546,7 +546,8 @@ fun ScalePillButton(icon: String, label: String, onClick: () -> Unit, modifier: 
 // anatomy (screens.css). Reserved head/tag rows keep cards in a grid row
 // equal-height regardless of active/pinned/tag content.
 object CremaCardSpec {
-    val radius = 16.dp            // large corner — tiles
+    val radius = 16.dp            // large corner — tablet tiles
+    val phoneRadius = 18.dp       // handset large-surface corner (cards, hero panels, dropdown sheets) — intentionally softer than the 16dp tablet tile
     val pad = 16.dp               // card body padding
     val gap = 12.dp               // inter-row gap inside a card
     val gridGap = 16.dp           // gap between cards

@@ -216,7 +216,7 @@ private fun PhoneProfileCard(
             .compositeOverSurface(MaterialTheme.colorScheme.surfaceContainer)
         else MaterialTheme.colorScheme.surfaceContainer
     Surface(
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(CremaCardSpec.phoneRadius),
         color = loadedBg,
         border = if (isLoaded) BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary) else null,
         modifier = Modifier.fillMaxWidth(),
