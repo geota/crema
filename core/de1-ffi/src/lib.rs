@@ -394,12 +394,7 @@ pub fn days_off_roast(roasted_on: Option<String>, now_unix_ms: i64) -> Option<i6
 /// [`de1_domain::roast_freshness`].
 #[uniffi::export]
 pub fn roast_freshness(band: Option<String>, days: Option<i64>) -> Option<String> {
-    let band = match band.as_deref()? {
-        "light" => de1_domain::RoastBand::Light,
-        "medium" => de1_domain::RoastBand::Medium,
-        "dark" => de1_domain::RoastBand::Dark,
-        _ => return None,
-    };
+    let band = de1_domain::RoastBand::from_wire_str(band.as_deref()?)?;
     Some(de1_domain::roast_freshness(band, days?).as_str().to_owned())
 }
 

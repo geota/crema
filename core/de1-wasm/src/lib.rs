@@ -869,12 +869,7 @@ pub fn roast_freshness(band: Option<String>, days: Option<f64>) -> Option<String
     }
     #[allow(clippy::cast_possible_truncation)]
     let days_i = days as i64;
-    let band = match band.as_str() {
-        "light" => de1_domain::RoastBand::Light,
-        "medium" => de1_domain::RoastBand::Medium,
-        "dark" => de1_domain::RoastBand::Dark,
-        _ => return None,
-    };
+    let band = de1_domain::RoastBand::from_wire_str(&band)?;
     Some(
         de1_domain::roast_freshness(band, days_i)
             .as_str()

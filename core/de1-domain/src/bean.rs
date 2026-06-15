@@ -53,6 +53,19 @@ impl RoastBand {
             RoastBand::Dark => "dark",
         }
     }
+
+    /// Parse a lowercase wire string (`"light"` / `"medium"` / `"dark"`) back
+    /// into a [`RoastBand`]; `None` for any other spelling. The inverse of
+    /// [`as_str`](Self::as_str) — the typed parse the bridges call instead of
+    /// re-matching the wire strings inline.
+    pub fn from_wire_str(s: &str) -> Option<RoastBand> {
+        match s {
+            "light" => Some(RoastBand::Light),
+            "medium" => Some(RoastBand::Medium),
+            "dark" => Some(RoastBand::Dark),
+            _ => None,
+        }
+    }
 }
 
 /// A bean's rest verdict against the ideal degas window for its
@@ -766,6 +779,17 @@ mod tests {
             "\"medium\""
         );
         assert_eq!(serde_json::to_string(&RoastBand::Dark).unwrap(), "\"dark\"");
+    }
+
+    #[test]
+    fn roast_band_from_wire_str_round_trips_as_str() {
+        for band in [RoastBand::Light, RoastBand::Medium, RoastBand::Dark] {
+            assert_eq!(RoastBand::from_wire_str(band.as_str()), Some(band));
+        }
+        // Unknown / wrong-case spellings reject (the wire is lowercase).
+        assert_eq!(RoastBand::from_wire_str("Light"), None);
+        assert_eq!(RoastBand::from_wire_str("medium-dark"), None);
+        assert_eq!(RoastBand::from_wire_str(""), None);
     }
 
     // -- days_off_roast -----------------------------------------------
