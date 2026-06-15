@@ -37,6 +37,7 @@ import coffee.crema.ui.convertPressure
 import coffee.crema.ui.convertTemp
 import coffee.crema.ui.convertWeight
 import coffee.crema.ui.formatRatio
+import coffee.crema.ui.relativeAgo
 import coffee.crema.ui.TelemetrySample
 import coffee.crema.ui.components.*
 import coffee.crema.ui.phone.components.*
@@ -370,10 +371,10 @@ private fun PhoneShotRow(shot: StoredShot, syncing: Boolean, weightUnit: String,
                     modifier = Modifier.weight(1f),
                 )
                 Text(
-                    remember(shot.completedAtMs) {
-                        java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
-                            .format(java.util.Date(shot.completedAtMs))
-                    },
+                    // Compact-relative per-row time (issue 43), replacing the HH:mm
+                    // clock — matches tablet/web vocabulary. Day-section headers
+                    // (dayLabel) keep the absolute date context.
+                    relativeAgo(shot.completedAtMs),
                     style = TextStyle(fontFamily = JetBrainsMono, fontSize = 11.sp),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

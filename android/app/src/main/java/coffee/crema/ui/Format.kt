@@ -99,6 +99,29 @@ fun formatPressure(bar: Float?, unit: String): String = convertPressure(bar, uni
 fun formatVolume(ml: Float?, unit: String): String = convertVolume(ml, unit).joined()
 
 /**
+ * One compact-relative "time ago" label, shared by both Android shells (issue 43):
+ * `just now` / `5m ago` / `2h ago` / `6d ago` / `4w ago` / `3mo ago` / `2y ago`.
+ *
+ * Thresholds match the web `relativeLastUsed` (`$lib/profiles/model`) exactly, so a
+ * given shot reads identically on web ShotRow, web Profiles, tablet History, and
+ * phone History. [now] defaults to the wall clock; pass it for deterministic tests.
+ */
+fun relativeAgo(epochMs: Long, now: Long = System.currentTimeMillis()): String {
+    val min = ((now - epochMs) / 60_000L).coerceAtLeast(0L)
+    if (min < 1L) return "just now"
+    if (min < 60L) return "${min}m ago"
+    val hours = min / 60L
+    if (hours < 24L) return "${hours}h ago"
+    val days = hours / 24L
+    if (days < 7L) return "${days}d ago"
+    val weeks = days / 7L
+    if (weeks < 5L) return "${weeks}w ago"
+    val months = days / 30L
+    if (months < 12L) return "${months}mo ago"
+    return "${days / 365L}y ago"
+}
+
+/**
  * Band-aware freshness status colour for the bean dot — the single palette
  * shared by the Beans library, the Brew bean block, and the phone bean card
  * (was three byte-divergent copies). The verdict, and its roast-band rest
