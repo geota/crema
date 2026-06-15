@@ -45,7 +45,7 @@ Sequencing lives at the bottom of `../PUNCHLIST.md`. Recommended first wave:
 | 19 | Use the `f64_to_ms` helper everywhere in de1-wasm | P2 | ✅ done |
 | 20 | Align scale-command receivers `&mut self` → `&self` in WASM | P2 | ✅ done (6/7; tare mutates — exception) |
 | 21 | Fix `set_line_frequency_override` truncating cast | P3 | ✅ done |
-| 22 | Replace `u64::MAX as f32` warmup clamp ceiling | P3 | ready-for-agent |
+| 22 | Replace `u64::MAX as f32` warmup clamp ceiling | P3 | ✅ done |
 | 23 | Add `RoastBand::from_wire_str` instead of inline match | P3 | ready-for-agent |
 | 24 | Document or remove stranded `brand::mark_svg()` | P3 | ✅ done (already satisfied) |
 | 25 | Avoid per-call alloc in `core_version` | P3 | ready-for-agent |

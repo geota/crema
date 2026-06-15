@@ -1649,12 +1649,16 @@ impl CremaBridge {
     /// `espresso_warmup_timeout`). MMR `0x803838`, 4-byte LE. `seconds`
     /// is scaled to deciseconds on the wire (`int(10 × seconds)`).
     pub fn set_espresso_warmup_timeout(&self, seconds: f32) -> String {
+        // 1-hour domain ceiling (ms), replacing the old `u64::MAX as f32` clamp.
+        // Far above any real DE1 warmup; it only bounds the conversion below.
+        const MAX_WARMUP_TIMEOUT_MS: f32 = 60.0 * 60.0 * 1000.0;
         let dur = if seconds.is_finite() && seconds > 0.0 {
-            // Convert seconds (f32) to a Duration with millisecond precision —
-            // the setter scales ms → deciseconds before writing.
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let ms = (seconds * 1000.0).round().clamp(0.0, u64::MAX as f32) as u64;
-            std::time::Duration::from_millis(ms)
+            // Round to whole ms (compensates f32 error, e.g. 5.1 s → 5100 ms),
+            // clamp to the ceiling, then widen to f64: `from_secs_f64` rounds to
+            // the nearest nanosecond and recovers the integer ms — no float→int
+            // cast, hence no `cast_*` allow.
+            let ms = (seconds * 1000.0).round().clamp(0.0, MAX_WARMUP_TIMEOUT_MS);
+            std::time::Duration::from_secs_f64(f64::from(ms) / 1000.0)
         } else {
             std::time::Duration::ZERO
         };
@@ -1930,6 +1934,26 @@ mod tests {
         // `50.9` down to `50` the way the old bare `hz as i32` cast did.
         assert!(bridge.set_line_frequency_override(50.9).is_err());
         assert!(bridge.set_line_frequency_override(49.0).is_err());
+    }
+
+    #[test]
+    fn set_espresso_warmup_timeout_rounds_and_clamps_to_an_hour() {
+        let bridge = CremaBridge::new();
+        // Decode the wire deciseconds: a single MMR write whose `data` is
+        // [len, addr×3, value×4 LE]; `int(10 × seconds)` lives at data[4..8].
+        let deciseconds = |json: String| -> u32 {
+            let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+            let data = parsed["commands"][0]["content"]["data"].as_array().unwrap();
+            let byte = |v: &serde_json::Value| u8::try_from(v.as_u64().unwrap()).unwrap();
+            u32::from_le_bytes([byte(&data[4]), byte(&data[5]), byte(&data[6]), byte(&data[7])])
+        };
+        // Whole/half seconds are exact; 5.1 s must round to 5100 ms = 51 ds —
+        // the f32-error compensation a bare `from_secs_f32` would drop (→ 50).
+        assert_eq!(deciseconds(bridge.set_espresso_warmup_timeout(3.0)), 30);
+        assert_eq!(deciseconds(bridge.set_espresso_warmup_timeout(5.1)), 51);
+        // Absurd input clamps to the 1-hour ceiling (3600 s = 36000 ds) rather
+        // than the old `u64::MAX`-derived multi-year duration.
+        assert_eq!(deciseconds(bridge.set_espresso_warmup_timeout(7200.0)), 36000);
     }
 
     #[test]

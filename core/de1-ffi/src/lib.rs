@@ -1515,12 +1515,16 @@ impl CremaBridge {
     /// `espresso_warmup_timeout`). MMR `0x803838`, 4-byte LE. `seconds`
     /// is scaled to deciseconds on the wire (`int(10 × seconds)`).
     pub fn set_espresso_warmup_timeout(&self, seconds: f32) -> String {
+        // 1-hour domain ceiling (ms), replacing the old `u64::MAX as f32` clamp.
+        // Far above any real DE1 warmup; it only bounds the conversion below.
+        const MAX_WARMUP_TIMEOUT_MS: f32 = 60.0 * 60.0 * 1000.0;
         let dur = if seconds.is_finite() && seconds > 0.0 {
-            // Convert seconds (f32) to a Duration with millisecond precision —
-            // the setter scales ms → deciseconds before writing.
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let ms = (seconds * 1000.0).round().clamp(0.0, u64::MAX as f32) as u64;
-            std::time::Duration::from_millis(ms)
+            // Round to whole ms (compensates f32 error, e.g. 5.1 s → 5100 ms),
+            // clamp to the ceiling, then widen to f64: `from_secs_f64` rounds to
+            // the nearest nanosecond and recovers the integer ms — no float→int
+            // cast, hence no `cast_*` allow.
+            let ms = (seconds * 1000.0).round().clamp(0.0, MAX_WARMUP_TIMEOUT_MS);
+            std::time::Duration::from_secs_f64(f64::from(ms) / 1000.0)
         } else {
             std::time::Duration::ZERO
         };
