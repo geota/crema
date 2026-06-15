@@ -4,7 +4,6 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -19,10 +18,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.StrokeJoin
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -38,7 +33,6 @@ import coffee.crema.ui.convertTemp
 import coffee.crema.ui.convertWeight
 import coffee.crema.ui.formatRatio
 import coffee.crema.ui.relativeAgo
-import coffee.crema.ui.TelemetrySample
 import coffee.crema.ui.components.*
 import coffee.crema.ui.phone.components.*
 import coffee.crema.ui.screens.CanvasShotChart
@@ -354,8 +348,12 @@ private fun PhoneShotRow(shot: StoredShot, syncing: Boolean, weightUnit: String,
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        PhoneSpark(
+        CremaSparkChart(
             samples = shot.samples,
+            insetDp = 3f,
+            tempStroke = 1.0f,
+            weightStroke = 1.2f,
+            flowStroke = 1.2f,
             modifier = Modifier
                 .width(58.dp)
                 .height(36.dp)
@@ -413,40 +411,6 @@ private fun RowMono(text: String) {
     )
 }
 
-// Tiny static shot silhouette for a row — the SAME channel set as the detail
-// chart (temp + weight + flow behind, pressure on top), each min-max
-// normalised to the box on its own scale.
-@Composable
-private fun PhoneSpark(samples: List<TelemetrySample>, modifier: Modifier = Modifier) {
-    val tel = CremaTheme.telemetry
-    Canvas(modifier) {
-        if (samples.size < 2) return@Canvas
-        val firstT = samples.first().elapsedMs.toFloat()
-        val span = (samples.last().elapsedMs.toFloat() - firstT).takeIf { it > 0f } ?: 1f
-        val inset = 3.dp.toPx()
-        val plotW = (size.width - inset * 2f).coerceAtLeast(1f)
-        val plotH = (size.height - inset * 2f).coerceAtLeast(1f)
-        fun channel(color: androidx.compose.ui.graphics.Color, widthDp: Float, value: (TelemetrySample) -> Float?) {
-            var mn = Float.POSITIVE_INFINITY
-            var mx = Float.NEGATIVE_INFINITY
-            samples.forEach { s -> value(s)?.let { v -> if (v < mn) mn = v; if (v > mx) mx = v } }
-            val vSpan = (mx - mn).takeIf { it > 0f } ?: return
-            val path = Path()
-            var started = false
-            samples.forEach { s ->
-                val v = value(s) ?: return@forEach
-                val x = inset + ((s.elapsedMs.toFloat() - firstT) / span) * plotW
-                val y = inset + (1f - (v - mn) / vSpan) * plotH
-                if (!started) { path.moveTo(x, y); started = true } else path.lineTo(x, y)
-            }
-            drawPath(path, color = color, style = Stroke(width = widthDp.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
-        }
-        channel(tel.temp.copy(alpha = 0.75f), 1.0f) { it.headTemp }
-        channel(tel.weight.copy(alpha = 0.9f), 1.2f) { it.weight }
-        channel(tel.flow.copy(alpha = 0.9f), 1.2f) { it.flow }
-        channel(tel.pressure, 1.8f) { it.pressure }
-    }
-}
 
 // ── Pushed detail (proto HistoryDetail) ──────────────────────────────────────
 @Composable
