@@ -59,7 +59,7 @@ Sequencing lives at the bottom of `../PUNCHLIST.md`. Recommended first wave:
 | 28 | Hoist per-domain filter/sort + brew-fallback helpers (Android) | P2 | ready-for-agent |
 | 29 | Reconcile low-tank threshold (phone 20f vs tablet 5f) | P3 | ready-for-agent |
 | 30 | Hoist maintenance burn-down math (Android) | P2 | ✅ done |
-| 31 | Extract `applyBeanEdits(bean, draft)` + share bag presets | P2 | ready-for-agent |
+| 31 | Extract `applyBeanEdits(bean, draft)` + share bag presets | P2 | ✅ done |
 | 32 | Add `SegmentEdit` unit helpers + promote `toEdit` | P2 | ready-for-agent |
 | 33 | Share scale metadata + capability body (Android) | P2 | ready-for-agent |
 | 34 | Hoist the multi-channel spark chart (Android) | P2 | ✅ done |

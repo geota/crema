@@ -1,6 +1,6 @@
 # 31 — Extract `applyBeanEdits(bean, draft)` + share bag presets
 
-- **Status:** ready-for-agent
+- **Status:** ✅ done (2026-06-15)
 - **Severity:** P2
 - **Area:** Android phone + tablet — `ui/phone/PhoneBeanEditScreen.kt`, `ui/screens/BeanEditScreen.kt`
 - **Punchlist:** T4-06 — `../PUNCHLIST.md`
@@ -25,3 +25,21 @@ Extract a shared `applyBeanEdits(bean, draft): Bean` pure function (or extension
 
 ## Comments
 <!-- triage + progress notes append below -->
+
+### 2026-06-15 — done
+New `beans/BeanEdits.kt` (package `coffee.crema.beans`, alongside `BeanFormat`
+and the `Bean.isFrozen` extension it relies on):
+- `applyBeanEdits(b: Bean, draft: BeanDraft): Bean` — the field-for-field save
+  mapping (trim/ifBlank defaults, freeze-window history, UByte/Float coercions)
+  both editors had inlined verbatim. `grep "fun applyBeanEdits"` → 1.
+- `BeanDraft` — the ~26 editable form fields as plain values; each editor builds
+  one from its local state and calls `vm.updateBean(id, roaster) { applyBeanEdits(it, draft) }`.
+- `BAG_PRESETS = listOf(113, 227, 250, 340, 454, 1000)` — replaces the tablet's
+  `BE_BAG_PRESETS` and the phone's `BAG_PRESETS`. `grep "BE_BAG_PRESETS"` → 0;
+  single `BAG_PRESETS` definition.
+
+The active-bean toggle + `onBack()` stay at each call site (unchanged). Dropped
+the now-orphaned `core.BeanMix`/`core.BeanRoastType` imports both editors left
+behind (the mix/roast-type selector options are hardcoded `SegOption`s, not enum
+`entries`). Value-identical; `:app:compileDebugKotlin` + `:app:testDebugUnitTest`
+green. Bean-save flow to be re-confirmed in the batched emulator pass.

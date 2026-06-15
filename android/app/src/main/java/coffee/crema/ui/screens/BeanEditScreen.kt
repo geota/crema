@@ -47,10 +47,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import coffee.crema.beans.BAG_PRESETS
+import coffee.crema.beans.BeanDraft
+import coffee.crema.beans.applyBeanEdits
 import coffee.crema.beans.isFrozen
 import coffee.crema.beans.roastBand5
-import coffee.crema.core.BeanMix
-import coffee.crema.core.BeanRoastType
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.components.roasterMark
 import coffee.crema.ui.components.roasterTone
@@ -80,7 +81,6 @@ import coffee.crema.ui.theme.JetBrainsMono
  * field already exists on the core type, so this is pure shell wiring (no FFI).
  */
 private val BE_TOC = listOf("Identity", "Roast & mix", "Dates", "Bag & Grind", "Origin", "Tasting", "Buy again", "Notes")
-private val BE_BAG_PRESETS = listOf(113, 227, 250, 340, 454, 1000)
 private val MIX_OPTIONS = listOf(SegOption("single", "Single"), SegOption("blend", "Blend"))
 private val ROASTTYPE_OPTIONS = listOf(
     SegOption("", "None"),
@@ -140,49 +140,15 @@ fun BeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
 
     val save: () -> Unit = {
         vm.updateBean(bean.id, roaster) { b ->
-            b.copy(
-                name = name.trim().ifBlank { b.name },
-                roastLevel = roast.toUByte(),
-                mix = BeanMix.entries.firstOrNull { it.string == mixSel } ?: b.mix,
-                roastType = roastTypeSel.ifBlank { null }?.let { v -> BeanRoastType.entries.firstOrNull { it.string == v } },
-                roastedOn = roasted.ifBlank { null },
-                openedOn = opened.ifBlank { null },
-                // Freeze/defrost transitions preserve the freeze-window history
-                // (web semantics — see MainViewModel.defrostBean): unchecking the
-                // switch on a frozen bag DEFROSTS it (stamps defrostedOn, keeps
-                // frozenOn); re-freezing stamps a fresh frozenOn.
-                frozenOn = when {
-                    frozen && b.isFrozen -> b.frozenOn
-                    frozen -> java.time.LocalDate.now(java.time.ZoneOffset.UTC).toString()
-                    else -> b.frozenOn
-                },
-                defrostedOn = when {
-                    frozen -> null
-                    b.isFrozen -> java.time.LocalDate.now(java.time.ZoneOffset.UTC).toString()
-                    else -> b.defrostedOn
-                },
-                archivedAt = if (archived) (b.archivedAt ?: System.currentTimeMillis()) else null,
-                decaf = decaf,
-                favourite = pinned,
-                bagSize = bagSize.toFloat(),
-                remaining = remaining.toFloat(),
-                origin = b.origin.copy(
-                    country = country.ifBlank { null },
-                    region = region.ifBlank { null },
-                    farm = farm.ifBlank { null },
-                    variety = variety.ifBlank { null },
-                    elevation = elevation.ifBlank { null },
-                    processing = processing.ifBlank { null },
-                ),
-                grinder = grinder.trim(),
-                grinderSetting = grind.trim(),
-                linkedProfileId = linkedProfileId,
-                rating = rating.coerceIn(0, 5).toUByte(),
-                tastingNotes = tastingNotes,
-                url = url.ifBlank { null },
-                notes = notes,
-                tags = tags.toList().ifEmpty { null },
-            )
+            applyBeanEdits(b, BeanDraft(
+                name = name, roast = roast, mixSel = mixSel, roastTypeSel = roastTypeSel,
+                roasted = roasted, opened = opened, frozen = frozen, archived = archived,
+                decaf = decaf, pinned = pinned, bagSize = bagSize, remaining = remaining,
+                country = country, region = region, farm = farm, variety = variety,
+                elevation = elevation, processing = processing, grinder = grinder, grind = grind,
+                linkedProfileId = linkedProfileId, rating = rating, tastingNotes = tastingNotes,
+                url = url, notes = notes, tags = tags.toList(),
+            ))
         }
         if (active) {
             vm.setActiveBean(bean.id)
@@ -304,7 +270,7 @@ fun BeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             CremaStepper(value = bagSize, unit = "g", onChange = { bagSize = it }, step = 10.0, min = 0.0, max = 2000.0, fmt = { "%.0f".format(it) })
                             FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                BE_BAG_PRESETS.forEach { g -> PresetChip(g, bagSize.toInt() == g) { bagSize = g.toDouble() } }
+                                BAG_PRESETS.forEach { g -> PresetChip(g, bagSize.toInt() == g) { bagSize = g.toDouble() } }
                             }
                         }
                     }
