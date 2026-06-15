@@ -56,6 +56,19 @@ data class CremaTelemetryColors(
     val modeFlush: Color = TelemetryPalette.ModeFlush,
 )
 
+/**
+ * Bean-freshness dot hues as a theme local (issue 46), mirroring
+ * [CremaTelemetryColors]. Keyed by the core's roast-freshness verdict; the
+ * mapping lives in `Format.freshnessColor`, which reads this off the theme.
+ */
+data class CremaFreshnessColors(
+    val frozen: Color = FreshnessPalette.Frozen,
+    val best: Color = FreshnessPalette.Best,
+    val ok: Color = FreshnessPalette.Ok,
+    val bad: Color = FreshnessPalette.Bad,
+    val unknown: Color = FreshnessPalette.Unknown,
+)
+
 // ── Motion (single calm ease-out; no springs / bounces / parallax) ──────────
 object CremaMotion {
     val standardEasing = CubicBezierEasing(0.2f, 0f, 0f, 1f)
@@ -68,6 +81,7 @@ object CremaMotion {
 
 val LocalCremaSpacing = staticCompositionLocalOf { CremaSpacing() }
 val LocalCremaTelemetry = staticCompositionLocalOf { CremaTelemetryColors() }
+val LocalCremaFreshness = staticCompositionLocalOf { CremaFreshnessColors() }
 val LocalCremaReadout = staticCompositionLocalOf { CremaReadoutType() }
 
 @Composable
@@ -84,6 +98,7 @@ fun CremaTheme(
     CompositionLocalProvider(
         LocalCremaSpacing provides CremaSpacing(),
         LocalCremaTelemetry provides CremaTelemetryColors(),
+        LocalCremaFreshness provides CremaFreshnessColors(),
         LocalCremaReadout provides CremaReadoutType(),
     ) {
         MaterialTheme(
@@ -101,6 +116,8 @@ object CremaTheme {
         @Composable get() = LocalCremaSpacing.current
     val telemetry: CremaTelemetryColors
         @Composable get() = LocalCremaTelemetry.current
+    val freshness: CremaFreshnessColors
+        @Composable get() = LocalCremaFreshness.current
     val readout: CremaReadoutType
         @Composable get() = LocalCremaReadout.current
 }

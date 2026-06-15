@@ -43,6 +43,19 @@ object TelemetryPalette {
     val ModeFlush = Color(0xFF6B8C5F)
 }
 
+/**
+ * Bean-freshness dot hues, keyed by the core's roast-freshness verdict. Was
+ * inlined in `Format.freshnessColor`; lifted here so the palette lives beside
+ * [TelemetryPalette] (issue 46) and is themable via [CremaFreshnessColors].
+ */
+object FreshnessPalette {
+    val Frozen = Color(0xFF7FB0E0)   // icy blue — frozen storage
+    val Best = Color(0xFF5FB87A)     // green — in the rest window
+    val Ok = Color(0xFFDBA764)       // amber — drinkable, past peak
+    val Bad = Color(0xFFC58B8B)      // muted red — stale / too fresh
+    val Unknown = Color(0xFF8A8175)  // neutral — no roast date
+}
+
 // ── Dark scheme (default) ───────────────────────────────────────────────────
 val CremaDarkColors = darkColorScheme(
     primary = Copper500,
