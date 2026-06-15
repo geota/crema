@@ -184,8 +184,9 @@
   border-radius: 999px;
   font-family: var(--font-sans);
   font-size: 10px;
-  letter-spacing: var(--track-allcaps);
-  text-transform: uppercase;
+  /* Title-case ("Light"/"Medium"/"Dark") to match every other roast surface
+     (issue 47); the all-caps letter-spacing is dropped with the uppercase. */
+  text-transform: capitalize;
   color: rgba(var(--tint-rgb), 0.6);
 }
 
