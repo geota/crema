@@ -1,8 +1,6 @@
 package coffee.crema.ui.phone
 
 import androidx.activity.compose.BackHandler
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -32,7 +30,9 @@ import coffee.crema.ui.formatTemp
 import coffee.crema.ui.components.*
 import coffee.crema.ui.phone.components.*
 import coffee.crema.ui.screens.cleanRow
+import coffee.crema.ui.screens.SettingsConfirmDialogs
 import coffee.crema.ui.screens.cpuBoardLabel
+import coffee.crema.ui.screens.rememberSettingsConfirmState
 import coffee.crema.ui.screens.descaleRow
 import coffee.crema.ui.screens.filterRow
 import coffee.crema.ui.screens.cupWarmerTempValue
@@ -89,108 +89,11 @@ fun PhoneSettingsScreen(
     val scaleConnected = ui.scaleState == ScaleBleManager.State.READY
     var section by rememberSaveable { mutableStateOf<String?>(null) }
 
-    // ── Staged destructive-action confirms (tablet parity) ──────────────────
-    var confirmResetPrefs by rememberSaveable { mutableStateOf(false) }
-    var confirmErase by rememberSaveable { mutableStateOf(false) }
-    var pendingHeaterVoltage by rememberSaveable { mutableStateOf<String?>(null) }
-    var pendingLineFreq by rememberSaveable { mutableStateOf<String?>(null) }
-    var pendingFlowMultiplier by rememberSaveable { mutableStateOf<Float?>(null) }
-    var pendingCycle by rememberSaveable { mutableStateOf<String?>(null) }
-    var pendingResync by rememberSaveable { mutableStateOf(false) }
+    // Staged destructive-action confirms + SAF export — shared with the tablet
+    // shell (issue 27). Rows flip confirm.* flags; SettingsConfirmDialogs renders.
+    val confirm = rememberSettingsConfirmState(vm)
 
-    if (confirmResetPrefs) CremaConfirmDialog(
-        title = "Reset preferences?",
-        body = "Crema's settings return to their defaults. Your beans, profiles and shots are kept.",
-        confirmLabel = "Reset",
-        onConfirm = { vm.resetPreferences(); confirmResetPrefs = false },
-        onDismiss = { confirmResetPrefs = false },
-    )
-    if (confirmErase) CremaConfirmDialog(
-        title = "Erase all data?",
-        body = "Every bean, roaster, shot and custom profile will be permanently deleted. Built-in profiles remain. This can't be undone.",
-        confirmLabel = "Erase everything",
-        icon = "trash",
-        danger = true,
-        requireTyped = "ERASE",
-        onConfirm = { vm.eraseAll(); confirmErase = false },
-        onDismiss = { confirmErase = false },
-    )
-    pendingHeaterVoltage?.let { volts ->
-        CremaConfirmDialog(
-            title = "Confirm machine voltage",
-            body = "Wrong voltage on your mains can permanently damage your heater. Verify your wall outlet matches before proceeding, then type $volts to confirm.",
-            confirmLabel = "Set $volts V",
-            danger = true,
-            requireTyped = volts,
-            onConfirm = {
-                volts.toIntOrNull()?.let { vm.setHeaterVoltage(it) }
-                pendingHeaterVoltage = null
-            },
-            onDismiss = { pendingHeaterVoltage = null },
-        )
-    }
-    pendingLineFreq?.let { hz ->
-        CremaConfirmDialog(
-            title = "Confirm AC mains frequency",
-            body = "Wrong AC frequency mis-calibrates the volume integrator (no hardware damage, but shot volumes drift up to 5 %). Verify your mains frequency, then type $hz to confirm.",
-            confirmLabel = "Set $hz Hz",
-            danger = true,
-            requireTyped = hz,
-            onConfirm = {
-                hz.toFloatOrNull()?.let { vm.setLineFrequency(it) }
-                pendingLineFreq = null
-            },
-            onDismiss = { pendingLineFreq = null },
-        )
-    }
-    pendingFlowMultiplier?.let { mult ->
-        CremaConfirmDialog(
-            title = "Apply flow calibration?",
-            body = "Every flow and volume estimate scales by this multiplier (×${String.format("%.2f", mult)}). Calibrate only against a known reference. Type flow to confirm.",
-            confirmLabel = "Apply ×${String.format("%.2f", mult)}",
-            requireTyped = "flow",
-            onConfirm = { vm.setFlowMultiplier(mult); pendingFlowMultiplier = null },
-            onDismiss = { pendingFlowMultiplier = null },
-        )
-    }
-    pendingCycle?.let { cycle ->
-        val label = when (cycle) { "descale" -> "descale"; "clean" -> "cleaning"; else -> "steam rinse" }
-        CremaConfirmDialog(
-            title = "Start the $label cycle?",
-            body = when (cycle) {
-                "descale" -> "Have descaling solution in the tank and a container under the group. The cycle takes several minutes."
-                "clean" -> "Fit the blind basket with cleaning tablet before starting. The cycle takes several minutes."
-                else -> "Runs a short steam-wand rinse. Keep the wand over the drip tray."
-            },
-            confirmLabel = "Start",
-            onConfirm = {
-                when (cycle) {
-                    "descale" -> vm.startDescale()
-                    "clean" -> vm.startClean()
-                    else -> vm.startSteamRinse()
-                }
-                pendingCycle = null
-            },
-            onDismiss = { pendingCycle = null },
-        )
-    }
-    if (pendingResync) CremaConfirmDialog(
-        title = "Re-pull every shot?",
-        body = "Re-pulls your entire Visualizer history from the beginning. Existing shots are de-duplicated against what you already have.",
-        confirmLabel = "Re-pull",
-        onConfirm = { vm.visualizer.resyncAllShots(ui.history); pendingResync = false },
-        onDismiss = { pendingResync = false },
-    )
-
-    // SAF export plumbing.
-    var pendingExport by remember { mutableStateOf<String?>(null) }
-    val saveLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
-        val t = pendingExport; pendingExport = null
-        if (uri != null && t != null) vm.writeTextToUri(uri, t)
-    }
-    val launchSave: (String, String?) -> Unit = { name, content ->
-        if (content != null) { pendingExport = content; saveLauncher.launch(name) }
-    }
+    SettingsConfirmDialogs(confirm, vm, ui)
 
     // Local design-faithful prefs (pilled rows keep local state only).
     var density by rememberSaveable { mutableStateOf("comfortable") }
@@ -227,7 +130,7 @@ fun PhoneSettingsScreen(
                     "brew" -> BrewDefaultsSection(vm, ui.let { it })
                     "water" -> WaterSection(
                         vm, ui.let { it }, connected,
-                        onRunCycle = { pendingCycle = it },
+                        onRunCycle = { confirm.pendingCycle = it },
                         waterSource = waterSource, onWaterSource = { waterSource = it },
                         hardnessPpm = hardnessPpm, onHardness = { hardnessPpm = it },
                         tdsPpm = tdsPpm, onTds = { tdsPpm = it },
@@ -241,19 +144,19 @@ fun PhoneSettingsScreen(
                         pressureUnit = ui.pressureUnit,
                         volumeUnit = ui.volumeUnit,
                     )
-                    "sharing" -> SharingSection(vm, ui.let { it }, launchSave, onResync = { pendingResync = true })
+                    "sharing" -> SharingSection(vm, ui.let { it }, confirm.launchSave, onResync = { confirm.pendingResync = true })
                     "calibration" -> CalibrationSection(
                         vm, ui.let { it }, connected,
                         tempOffset, { tempOffset = it },
-                        onApplyFlow = { pendingFlowMultiplier = it },
+                        onApplyFlow = { confirm.pendingFlowMultiplier = it },
                     )
                     "advanced" -> AdvancedSection(
                         vm, ui.let { it }, connected, onNav,
                         smoothPressure, { smoothPressure = it },
-                        onStageLineFreq = { pendingLineFreq = it },
-                        onStageHeaterVoltage = { pendingHeaterVoltage = it },
-                        onResetPrefs = { confirmResetPrefs = true },
-                        onErase = { confirmErase = true },
+                        onStageLineFreq = { confirm.pendingLineFreq = it },
+                        onStageHeaterVoltage = { confirm.pendingHeaterVoltage = it },
+                        onResetPrefs = { confirm.confirmResetPrefs = true },
+                        onErase = { confirm.confirmErase = true },
                     )
                     "about" -> AboutSection()
                 }

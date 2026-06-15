@@ -1,7 +1,5 @@
 package coffee.crema.ui.screens
 
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -104,127 +102,10 @@ fun SettingsScreen(
     val connected = ui.bleState == De1BleManager.State.READY
     val scaleConnected = ui.scaleState == ScaleBleManager.State.READY
     var active by rememberSaveable { mutableStateOf("machine") }
-    // Destructive-action confirms (the dead stubs the delete-dialogs audit flagged).
-    var confirmResetPrefs by rememberSaveable { mutableStateOf(false) }
-    var confirmErase by rememberSaveable { mutableStateOf(false) }
-    // Heater-voltage confirm gate: the segmented control stages the chosen
-    // voltage here and shows a CremaConfirmDialog before the destructive write.
-    var pendingHeaterVoltage by rememberSaveable { mutableStateOf<String?>(null) }
-    // AC mains frequency 50/60 stage (Auto commits directly, web parity).
-    var pendingLineFreq by rememberSaveable { mutableStateOf<String?>(null) }
-    // Flow-calibration stage: the value Apply/Reset wants to write.
-    var pendingFlowMultiplier by rememberSaveable { mutableStateOf<Float?>(null) }
-    // Maintenance cycle stage: "descale" | "clean" | "steam-rinse".
-    var pendingCycle by rememberSaveable { mutableStateOf<String?>(null) }
-    // Visualizer full re-pull confirm.
-    var pendingResync by rememberSaveable { mutableStateOf(false) }
-    if (confirmResetPrefs) CremaConfirmDialog(
-        title = "Reset preferences?",
-        body = "Crema's settings return to their defaults. Your beans, profiles and shots are kept.",
-        confirmLabel = "Reset",
-        onConfirm = { vm.resetPreferences(); confirmResetPrefs = false },
-        onDismiss = { confirmResetPrefs = false },
-    )
-    if (confirmErase) CremaConfirmDialog(
-        title = "Erase all data?",
-        body = "Every bean, roaster, shot and custom profile will be permanently deleted. Built-in profiles remain. This can't be undone.",
-        confirmLabel = "Erase everything",
-        icon = "trash",
-        danger = true,
-        requireTyped = "ERASE",
-        onConfirm = { vm.eraseAll(); confirmErase = false },
-        onDismiss = { confirmErase = false },
-    )
-    // Heater voltage is service-grade and HARDWARE-DAMAGING if mis-set: the
-    // web's MainsConfirmModal makes the user literally type the voltage, so the
-    // dialog here requires the same typed value before Confirm arms.
-    pendingHeaterVoltage?.let { volts ->
-        CremaConfirmDialog(
-            title = "Confirm machine voltage",
-            body = "Wrong voltage on your mains can permanently damage your heater. Verify your wall outlet matches before proceeding, then type $volts to confirm.",
-            confirmLabel = "Set $volts V",
-            danger = true,
-            requireTyped = volts,
-            onConfirm = {
-                volts.toIntOrNull()?.let { vm.setHeaterVoltage(it) }
-                pendingHeaterVoltage = null
-            },
-            onDismiss = { pendingHeaterVoltage = null },
-        )
-    }
-    // AC mains frequency — same type-to-confirm treatment (web MainsConfirmModal
-    // kind="hz"): no hardware damage, but the volume integrator drifts ~5 % when
-    // mis-set, and the two mains settings should feel equally deliberate.
-    pendingLineFreq?.let { hz ->
-        CremaConfirmDialog(
-            title = "Confirm AC mains frequency",
-            body = "Wrong AC frequency mis-calibrates the volume integrator (no hardware damage, but shot volumes drift up to 5 %). Verify your mains frequency, then type $hz to confirm.",
-            confirmLabel = "Set $hz Hz",
-            danger = true,
-            requireTyped = hz,
-            onConfirm = {
-                hz.toFloatOrNull()?.let { vm.setLineFrequency(it) }
-                pendingLineFreq = null
-            },
-            onDismiss = { pendingLineFreq = null },
-        )
-    }
-    // Flow-calibration write — web gates Apply/Reset behind typing "flow".
-    pendingFlowMultiplier?.let { mult ->
-        CremaConfirmDialog(
-            title = "Apply flow calibration?",
-            body = "Every flow and volume estimate scales by this multiplier (×${String.format("%.2f", mult)}). Calibrate only against a known reference. Type flow to confirm.",
-            confirmLabel = "Apply ×${String.format("%.2f", mult)}",
-            requireTyped = "flow",
-            onConfirm = {
-                vm.setFlowMultiplier(mult)
-                pendingFlowMultiplier = null
-            },
-            onDismiss = { pendingFlowMultiplier = null },
-        )
-    }
-    // Maintenance cycles take minutes and need the kit fitted — confirm first
-    // (web WaterSection's cycle ConfirmDialog).
-    pendingCycle?.let { cycle ->
-        val label = when (cycle) { "descale" -> "descale"; "clean" -> "cleaning"; else -> "steam rinse" }
-        CremaConfirmDialog(
-            title = "Start the $label cycle?",
-            body = when (cycle) {
-                "descale" -> "Have descaling solution in the tank and a container under the group. The cycle takes several minutes."
-                "clean" -> "Fit the blind basket with cleaning tablet before starting. The cycle takes several minutes."
-                else -> "Runs a short steam-wand rinse. Keep the wand over the drip tray."
-            },
-            confirmLabel = "Start",
-            onConfirm = {
-                when (cycle) {
-                    "descale" -> vm.startDescale()
-                    "clean" -> vm.startClean()
-                    else -> vm.startSteamRinse()
-                }
-                pendingCycle = null
-            },
-            onDismiss = { pendingCycle = null },
-        )
-    }
-    if (pendingResync) CremaConfirmDialog(
-        title = "Re-pull every shot?",
-        body = "Re-pulls your entire Visualizer history from the beginning. Existing shots are de-duplicated against what you already have.",
-        confirmLabel = "Re-pull",
-        onConfirm = { vm.visualizer.resyncAllShots(ui.history); pendingResync = false },
-        onDismiss = { pendingResync = false },
-    )
-
-    // SAF export-to-file plumbing (same pattern as History / Beans / Profiles).
-    // Plain remember — a multi-MB history JSON in saved-instance-state would
-    // blow the 1 MB Binder cap on background; losing it on process death is fine.
-    var pendingExport by remember { mutableStateOf<String?>(null) }
-    val saveLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
-        val t = pendingExport; pendingExport = null
-        if (uri != null && t != null) vm.writeTextToUri(uri, t)
-    }
-    val launchSave: (String, String?) -> Unit = { name, content ->
-        if (content != null) { pendingExport = content; saveLauncher.launch(name) }
-    }
+    // Staged destructive-action confirms + SAF export — shared with the phone
+    // shell (issue 27). Rows flip confirm.* flags; SettingsConfirmDialogs renders.
+    val confirm = rememberSettingsConfirmState(vm)
+    SettingsConfirmDialogs(confirm, vm, ui)
 
     // ── Local design-faithful prefs (persistence deferred to a SettingsStore) ──
     // Pilled placeholder rows keep local state only (their pills mark them
@@ -414,13 +295,13 @@ fun SettingsScreen(
                             val cycleReady = connected && machineIdle
                             val cycleSub = if (connected && !machineIdle) " Machine must be idle." else ""
                             SetRow("Descale", "Run the DE1's descale cycle.$cycleSub", needsConnection = !connected) {
-                                CremaButton(onClick = { pendingCycle = "descale" }, variant = CremaButtonVariant.Outlined, enabled = cycleReady, icon = "play", label = "Run now")
+                                CremaButton(onClick = { confirm.pendingCycle = "descale" }, variant = CremaButtonVariant.Outlined, enabled = cycleReady, icon = "play", label = "Run now")
                             }
                             SetRow("Group clean", "Run the DE1's cleaning cycle.$cycleSub", needsConnection = !connected) {
-                                CremaButton(onClick = { pendingCycle = "clean" }, variant = CremaButtonVariant.Outlined, enabled = cycleReady, icon = "play", label = "Run now")
+                                CremaButton(onClick = { confirm.pendingCycle = "clean" }, variant = CremaButtonVariant.Outlined, enabled = cycleReady, icon = "play", label = "Run now")
                             }
                             SetRow("Steam rinse", "Flush the steam wand.$cycleSub", last = true, needsConnection = !connected) {
-                                CremaButton(onClick = { pendingCycle = "steam-rinse" }, variant = CremaButtonVariant.Outlined, enabled = cycleReady, icon = "play", label = "Run now")
+                                CremaButton(onClick = { confirm.pendingCycle = "steam-rinse" }, variant = CremaButtonVariant.Outlined, enabled = cycleReady, icon = "play", label = "Run now")
                             }
                         }
                         SetGroup("Reminders") {
@@ -625,7 +506,7 @@ fun SettingsScreen(
                                 }
                                 SetRow("Re-sync shots", "Re-pull everything from Visualizer, de-duplicated.", last = true) {
                                     CremaButton(
-                                        onClick = { pendingResync = true },
+                                        onClick = { confirm.pendingResync = true },
                                         variant = CremaButtonVariant.Outlined,
                                         icon = "clock-counter-clockwise",
                                         enabled = !vz.busy && !vz.syncing,
@@ -676,7 +557,7 @@ fun SettingsScreen(
                                 "One-shot download of your entire shot history as JSON. Useful for spreadsheets and other tools.",
                                 last = true,
                             ) {
-                                CremaButton(onClick = { launchSave("crema-history.json", vm.shotsJson(null)) }, variant = CremaButtonVariant.Outlined, icon = "download-simple", label = "Export")
+                                CremaButton(onClick = { confirm.launchSave("crema-history.json", vm.shotsJson(null)) }, variant = CremaButtonVariant.Outlined, icon = "download-simple", label = "Export")
                             }
                         }
                         // Other integrations — the web's stub trio, disabled until real.
@@ -731,13 +612,13 @@ fun SettingsScreen(
                                         { flowDraft = (flowDraft + 0.01).coerceAtMost(1.5) },
                                     )
                                     CremaButton(
-                                        onClick = { pendingFlowMultiplier = flowDraft.toFloat() },
+                                        onClick = { confirm.pendingFlowMultiplier = flowDraft.toFloat() },
                                         variant = CremaButtonVariant.Filled,
                                         enabled = connected && flowDirty,
                                         label = "Apply",
                                     )
                                     CremaButton(
-                                        onClick = { pendingFlowMultiplier = 1.0f },
+                                        onClick = { confirm.pendingFlowMultiplier = 1.0f },
                                         variant = CremaButtonVariant.Outlined,
                                         enabled = connected && kotlin.math.abs(mult - 1.0) > 0.0001,
                                         label = "Reset",
@@ -765,7 +646,7 @@ fun SettingsScreen(
                                     value = freqValue,
                                     // Auto commits directly; 50/60 stage a type-to-confirm
                                     // (web MainsConfirmModal parity).
-                                    onChange = { if (it == "auto") vm.setLineFrequency(0.0f) else pendingLineFreq = it },
+                                    onChange = { if (it == "auto") vm.setLineFrequency(0.0f) else confirm.pendingLineFreq = it },
                                     enabled = connected,
                                 )
                             }
@@ -823,7 +704,7 @@ fun SettingsScreen(
                                     value = hv,
                                     // Stages the type-to-confirm dialog; ignore re-taps on
                                     // the current value (web disables the matching button).
-                                    onChange = { if (it != hv) pendingHeaterVoltage = it },
+                                    onChange = { if (it != hv) confirm.pendingHeaterVoltage = it },
                                     enabled = connected,
                                 )
                             }
@@ -832,8 +713,8 @@ fun SettingsScreen(
                             // action is impossible; a dead button would be misleading.
                         }
                         SetGroup("Reset") {
-                            SetRow("Reset preferences", "Restore Crema's settings to defaults.") { CremaButton(onClick = { confirmResetPrefs = true }, variant = CremaButtonVariant.Text, label = "Reset") }
-                            SetRow("Erase all data", "Delete every profile, bean and shot.", last = true) { CremaButton(onClick = { confirmErase = true }, variant = CremaButtonVariant.Text, danger = true, label = "Erase") }
+                            SetRow("Reset preferences", "Restore Crema's settings to defaults.") { CremaButton(onClick = { confirm.confirmResetPrefs = true }, variant = CremaButtonVariant.Text, label = "Reset") }
+                            SetRow("Erase all data", "Delete every profile, bean and shot.", last = true) { CremaButton(onClick = { confirm.confirmErase = true }, variant = CremaButtonVariant.Text, danger = true, label = "Erase") }
                         }
                     }
                     "about" -> {
