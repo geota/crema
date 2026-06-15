@@ -35,7 +35,7 @@ Sequencing lives at the bottom of `../PUNCHLIST.md`. Recommended first wave:
 | 14 | Wire Android QuickControls steam/water/flush steppers | P1 | ✅ done |
 | 15 | Resolve Android grind/preinf dead-ends + flush/purge prefs | P2 | ✅ done |
 | 16 | Fix Android phone wiring regressions vs tablet | P1 | ✅ done |
-| 17 | Refresh stale web doc-comment headers | P3 | ready-for-agent |
+| 17 | Refresh stale web doc-comment headers | P3 | ✅ done |
 
 ## Theme 5 — Core-internal (Rust)
 

@@ -32,9 +32,10 @@
 	 * config setters, gated on `scaleCapabilities`. The recent-activity log is
 	 * the shared `UiSnapshot.eventLog`.
 	 *
-	 * **UI-only** — Reset-peak and Start-timer have no core backing; the design's
-	 * dose target and the brew-behaviour toggles (auto-tare / stop-on-weight)
-	 * are local UI state. Each is marked with a `// TODO`.
+	 * Reset-peak and Start-timer call the scale's native commands
+	 * (`app.resetScalePeaks()` / `app.startTimer()`); the dose target tracks the
+	 * active profile. The auto-tare / stop-on-weight brew-behaviour toggles have
+	 * moved to Settings → Brew defaults.
 	 */
 	import { bleStateLabel } from '$lib/ble';
 	import { getCremaAppContext } from '$lib/shell/app-context';
