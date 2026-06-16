@@ -38,6 +38,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
@@ -962,6 +963,49 @@ fun CremaStatusDot(on: Boolean, modifier: Modifier = Modifier) {
         Box(modifier.size(10.dp).clip(CircleShape).background(CremaTheme.telemetry.success))
     } else {
         Box(modifier.size(10.dp).clip(CircleShape).border(1.5.dp, MaterialTheme.colorScheme.outline, CircleShape))
+    }
+}
+
+// ── Empty state — one centred placeholder for the library / log / scale screens.
+// Optional [icon] disc on top, the [message] line, an optional [description]
+// sentence, and an optional [action] (e.g. an Import button). One type scale for
+// the message across both shells (was titleLarge on tablet vs titleSmall on phone).
+@Composable
+fun CremaEmptyState(
+    message: String,
+    modifier: Modifier = Modifier,
+    icon: String? = null,
+    description: String? = null,
+    action: (@Composable () -> Unit)? = null,
+) {
+    Column(
+        modifier,
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        if (icon != null) {
+            Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surfaceContainerHighest, modifier = Modifier.size(56.dp)) {
+                Box(contentAlignment = Alignment.Center) { PhIcon(icon, sizeDp = 28, tint = MaterialTheme.colorScheme.onSurfaceVariant) }
+            }
+        }
+        Text(
+            message,
+            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Medium),
+            color = MaterialTheme.colorScheme.onSurface,
+            textAlign = TextAlign.Center,
+        )
+        if (description != null) {
+            Text(
+                description,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+            )
+        }
+        if (action != null) {
+            Spacer(Modifier.height(4.dp))
+            action()
+        }
     }
 }
 

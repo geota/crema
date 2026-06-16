@@ -187,11 +187,9 @@ fun PhoneBeansScreen(
                     }
                     if (sortedBeans.isEmpty()) {
                         item {
-                            Text(
+                            CremaEmptyState(
                                 if (ui.beans.isEmpty()) "No beans yet — add a bag to get started." else "No beans match your search or filters.",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(vertical = 24.dp),
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
                             )
                         }
                     }
@@ -205,11 +203,9 @@ fun PhoneBeansScreen(
                     }
                     if (visibleRoasters.isEmpty()) {
                         item {
-                            Text(
+                            CremaEmptyState(
                                 if (ui.roasters.isEmpty()) "No roasters yet — add one to group your bags." else "No roasters match your search.",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(vertical = 24.dp),
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
                             )
                         }
                     }

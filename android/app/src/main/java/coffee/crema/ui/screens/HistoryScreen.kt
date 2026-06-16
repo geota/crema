@@ -55,6 +55,7 @@ import coffee.crema.history.beanLabel
 import coffee.crema.history.historyStats
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.components.CremaCard
+import coffee.crema.ui.components.CremaEmptyState
 import coffee.crema.ui.components.CremaStarRating
 import coffee.crema.ui.components.CremaSparkChart
 import coffee.crema.ui.components.CremaTextField
@@ -200,21 +201,19 @@ fun HistoryScreen(
             }
             if (ui.history.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Text(
-                            "No shots yet — pull one on Brew.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                    CremaEmptyState(
+                        message = "No shots yet — pull one on Brew.",
                         // Web hi-empty-page: an import CTA so a fresh install can
                         // bring an existing history straight in.
-                        CremaButton(
-                            onClick = { importLauncher.launch(arrayOf("application/json", "text/*", "*/*")) },
-                            variant = CremaButtonVariant.Outlined,
-                            icon = "upload-simple",
-                            label = "Import shots",
-                        )
-                    }
+                        action = {
+                            CremaButton(
+                                onClick = { importLauncher.launch(arrayOf("application/json", "text/*", "*/*")) },
+                                variant = CremaButtonVariant.Outlined,
+                                icon = "upload-simple",
+                                label = "Import shots",
+                            )
+                        },
+                    )
                 }
             } else {
                 StatsStrip(shots, ui.weightUnit)
