@@ -63,7 +63,7 @@ Sequencing lives at the bottom of `../PUNCHLIST.md`. Recommended first wave:
 | 32 | Add `SegmentEdit` unit helpers + promote `toEdit` | P2 | ready-for-agent |
 | 33 | Share scale metadata + capability body (Android) | P2 | ready-for-agent (do after 26+35; body-merge unverifiable w/o scale — see note) |
 | 34 | Hoist the multi-channel spark chart (Android) | P2 | ✅ done |
-| 35 | Route all Android steppers through `CremaStepper` | P2 | ready-for-agent |
+| 35 | Route all Android steppers through `CremaStepper` | P2 | ✅ done (5-preset `CremaStepperStyle`; 55 sites; folds 50's compare control) |
 | 36 | Extract `CremaStarRating(...)` | P2 | ✅ done |
 | 37 | Extract `CremaEmptyState(...)` (+ Scale empty-state type-scale nit) | P3 | ready-for-agent |
 | 38 | Route phone cards through `CremaCardSpec` | P2 | ✅ done |

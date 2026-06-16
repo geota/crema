@@ -1,7 +1,6 @@
 package coffee.crema.ui.screens
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -10,7 +9,6 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -24,7 +22,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import coffee.crema.ui.components.CremaValueUnit
 import coffee.crema.ui.formatRatio
 import coffee.crema.ui.theme.CremaTheme
 import coffee.crema.ui.theme.JetBrainsMono
@@ -52,6 +49,8 @@ import coffee.crema.ui.BrewParams
 import androidx.compose.ui.draw.alpha
 import coffee.crema.ui.components.CremaButton
 import coffee.crema.ui.components.CremaSearchPill
+import coffee.crema.ui.components.CremaStepper
+import coffee.crema.ui.components.CremaStepperStyle
 import coffee.crema.ui.components.CremaButtonVariant
 import coffee.crema.ui.components.CremaDotToggle
 import coffee.crema.ui.components.CremaIconButton
@@ -226,86 +225,104 @@ fun QuickControlsSheet(
             // ── Six steppers — one full-width row (PWA qsheet-g-grid is-six). ──
             Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 // 1 — Dose | Grind (no prefix).
-                QcStepper(
-                    Modifier.weight(1f),
+                CremaStepper(
+                    modifier = Modifier.weight(1f),
                     value = if (doseGrindMode == "dose") dose else grind,
                     unit = if (doseGrindMode == "dose") "g" else null,
                     min = if (doseGrindMode == "dose") 5.0 else 0.0,
                     max = if (doseGrindMode == "dose") 30.0 else 20.0,
                     step = 0.1,
+                    fmt = niceFmt,
                     chips = if (doseGrindMode == "dose") listOf(16.0, 17.0, 18.0, 19.0, 20.0) else listOf(3.8, 4.0, 4.2, 4.4, 4.6),
                     onChange = { if (doseGrindMode == "dose") onAdjustBrew(it, yieldOut, brewTemp, preinfOverride) else onGrind(it) },
-                ) {
-                    CremaSplitLabel(prefix = "", options = listOf(SplitOption("dose", "Dose"), SplitOption("grind", "Grind")), value = doseGrindMode, onChange = { doseGrindMode = it })
-                }
+                    style = CremaStepperStyle.Boxed,
+                    header = {
+                        CremaSplitLabel(prefix = "", options = listOf(SplitOption("dose", "Dose"), SplitOption("grind", "Grind")), value = doseGrindMode, onChange = { doseGrindMode = it })
+                    },
+                )
                 // 2 — Yield (+ live ratio). The dot toggles the weight target
                 // (stop-on-weight); the value resolves Quick Controls override →
                 // profile (whichever is set). Greys out when the target is off.
-                QcStepper(
-                    Modifier.weight(1f),
+                CremaStepper(
+                    modifier = Modifier.weight(1f),
                     value = yieldOut, unit = "g", min = 10.0, max = 80.0, step = 0.5,
+                    fmt = niceFmt,
                     chips = listOf(28.0, 32.0, 36.0, 40.0, 45.0),
                     enabled = stopOnWeight,
                     onChange = { onAdjustBrew(dose, it, brewTemp, preinfOverride) },
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                        CremaDotToggle(stopOnWeight, { onStopOnWeight(!stopOnWeight) })
-                        Eyebrow("Yield", Modifier.weight(1f))
-                        Text(formatRatio(dose, yieldOut), style = MaterialTheme.typography.labelSmall.copy(fontFamily = JetBrainsMono), color = MaterialTheme.colorScheme.primary)
-                    }
-                }
+                    style = CremaStepperStyle.Boxed,
+                    header = {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                            CremaDotToggle(stopOnWeight, { onStopOnWeight(!stopOnWeight) })
+                            Eyebrow("Yield", Modifier.weight(1f))
+                            Text(formatRatio(dose, yieldOut), style = MaterialTheme.typography.labelSmall.copy(fontFamily = JetBrainsMono), color = MaterialTheme.colorScheme.primary)
+                        }
+                    },
+                )
                 // 3 — Brew temp | pre-infuse.
-                QcStepper(
-                    Modifier.weight(1f),
+                CremaStepper(
+                    modifier = Modifier.weight(1f),
                     value = if (brewMode == "temp") brewTemp else preinf,
                     unit = if (brewMode == "temp") "°C" else "s",
                     min = if (brewMode == "temp") 80.0 else 0.0,
                     max = if (brewMode == "temp") 100.0 else 30.0,
                     step = if (brewMode == "temp") 0.5 else 1.0,
+                    fmt = niceFmt,
                     chips = if (brewMode == "temp") listOf(88.0, 91.0, 93.0, 95.0, 97.0) else listOf(0.0, 4.0, 8.0, 12.0, 16.0),
                     onChange = { if (brewMode == "temp") onAdjustBrew(dose, yieldOut, it, preinfOverride) else onAdjustBrew(dose, yieldOut, brewTemp, it) },
-                ) {
-                    CremaSplitLabel(prefix = "Brew", options = listOf(SplitOption("temp", "Temp"), SplitOption("preinf", "Pre-infuse")), value = brewMode, onChange = { brewMode = it })
-                }
+                    style = CremaStepperStyle.Boxed,
+                    header = {
+                        CremaSplitLabel(prefix = "Brew", options = listOf(SplitOption("temp", "Temp"), SplitOption("preinf", "Pre-infuse")), value = brewMode, onChange = { brewMode = it })
+                    },
+                )
                 // 4 — Steam time | flow | temp.
-                QcStepper(
-                    Modifier.weight(1f),
+                CremaStepper(
+                    modifier = Modifier.weight(1f),
                     value = when (steamMode) { "flow" -> qcSteamFlowMlS; "temp" -> qcSteamTempC; else -> qcSteamTimeS },
                     unit = when (steamMode) { "flow" -> "ml/s"; "temp" -> "°C"; else -> "s" },
                     min = when (steamMode) { "flow" -> 0.2; "temp" -> 120.0; else -> 1.0 },
                     max = when (steamMode) { "flow" -> 3.0; "temp" -> 170.0; else -> 60.0 },
                     step = when (steamMode) { "flow" -> 0.1; "temp" -> 0.5; else -> 1.0 },
+                    fmt = niceFmt,
                     chips = when (steamMode) { "flow" -> listOf(0.6, 0.9, 1.2, 1.6, 2.0); "temp" -> listOf(140.0, 145.0, 148.0, 150.0, 155.0); else -> listOf(5.0, 10.0, 15.0, 20.0, 30.0) },
                     onChange = { when (steamMode) { "flow" -> onSteamFlow(it); "temp" -> onSteamTemp(it); else -> onSteamTime(it) } },
-                ) {
-                    CremaSplitLabel(prefix = "Steam", options = listOf(SplitOption("time", "Time"), SplitOption("flow", "Flow"), SplitOption("temp", "Temp")), value = steamMode, onChange = { steamMode = it })
-                }
+                    style = CremaStepperStyle.Boxed,
+                    header = {
+                        CremaSplitLabel(prefix = "Steam", options = listOf(SplitOption("time", "Time"), SplitOption("flow", "Flow"), SplitOption("temp", "Temp")), value = steamMode, onChange = { steamMode = it })
+                    },
+                )
                 // 5 — Hot water temp | volume.
-                QcStepper(
-                    Modifier.weight(1f),
+                CremaStepper(
+                    modifier = Modifier.weight(1f),
                     value = if (waterMode == "temp") qcHotWaterTempC else qcHotWaterVolumeMl,
                     unit = if (waterMode == "temp") "°C" else "ml",
                     min = if (waterMode == "temp") 40.0 else 20.0,
                     max = if (waterMode == "temp") 98.0 else 500.0,
                     step = if (waterMode == "temp") 1.0 else 10.0,
+                    fmt = niceFmt,
                     chips = if (waterMode == "temp") listOf(60.0, 75.0, 85.0, 92.0, 96.0) else listOf(60.0, 120.0, 180.0, 250.0, 350.0),
                     onChange = { if (waterMode == "temp") onHotWaterTemp(it) else onHotWaterVolume(it) },
-                ) {
-                    CremaSplitLabel(prefix = "Hot water", options = listOf(SplitOption("temp", "Temp"), SplitOption("volume", "Volume")), value = waterMode, onChange = { waterMode = it })
-                }
+                    style = CremaStepperStyle.Boxed,
+                    header = {
+                        CremaSplitLabel(prefix = "Hot water", options = listOf(SplitOption("temp", "Temp"), SplitOption("volume", "Volume")), value = waterMode, onChange = { waterMode = it })
+                    },
+                )
                 // 6 — Flush time | temp.
-                QcStepper(
-                    Modifier.weight(1f),
+                CremaStepper(
+                    modifier = Modifier.weight(1f),
                     value = if (flushMode == "time") qcFlushTimeS else qcFlushTempC,
                     unit = if (flushMode == "time") "s" else "°C",
                     min = if (flushMode == "time") 1.0 else 60.0,
                     max = if (flushMode == "time") 20.0 else 100.0,
                     step = if (flushMode == "time") 1.0 else 0.5,
+                    fmt = niceFmt,
                     chips = if (flushMode == "time") listOf(2.0, 4.0, 6.0, 8.0, 10.0) else listOf(88.0, 92.0, 95.0, 97.0, 99.0),
                     onChange = { if (flushMode == "time") onFlushTime(it) else onFlushTemp(it) },
-                ) {
-                    CremaSplitLabel(prefix = "Flush", options = listOf(SplitOption("time", "Time"), SplitOption("temp", "Temp")), value = flushMode, onChange = { flushMode = it })
-                }
+                    style = CremaStepperStyle.Boxed,
+                    header = {
+                        CremaSplitLabel(prefix = "Flush", options = listOf(SplitOption("time", "Time"), SplitOption("temp", "Temp")), value = flushMode, onChange = { flushMode = it })
+                    },
+                )
             }
 
             // ── Footer — Chart channel toggles (left) and Shot-behaviour toggles
@@ -383,70 +400,8 @@ private data class ChannelGroup(
     val secondary: Pair<String, String>,
 )
 
-// One Quick-Controls stepper: a header (plain label or split-label) over a filled
-// −/value/+ bar, with a 5-chip quick-select row beneath (PWA QuickStepper + chips).
-@Composable
-private fun QcStepper(
-    modifier: Modifier,
-    value: Double,
-    unit: String?,
-    min: Double,
-    max: Double,
-    step: Double,
-    chips: List<Double>,
-    onChange: (Double) -> Unit,
-    enabled: Boolean = true,
-    header: @Composable () -> Unit,
-) {
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        header()
-        // The header (with its dot) stays lit; the bar + chips grey out when off.
-        Column(Modifier.alpha(if (enabled) 1f else 0.4f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Row(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh).padding(4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                QcStepBtn("minus") { onChange((value - step).coerceIn(min, max)) }
-                Box(Modifier.weight(1f), contentAlignment = Alignment.Center) { CremaValueUnit(niceFmt(value), unit, valueSize = 18.sp) }
-                QcStepBtn("plus") { onChange((value + step).coerceIn(min, max)) }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                chips.forEach { c -> QcChip(niceFmt(c), kotlin.math.abs(value - c) < 0.05) { onChange(c) } }
-            }
-        }
-    }
-}
-
-// A quick-select value chip — copper fill when it matches the current value,
-// a faint hairline otherwise (PWA .qchip).
-@Composable
-private fun RowScope.QcChip(label: String, active: Boolean, onClick: () -> Unit) {
-    Box(
-        Modifier
-            .weight(1f)
-            .clip(RoundedCornerShape(8.dp))
-            .then(if (active) Modifier.background(MaterialTheme.colorScheme.primary) else Modifier.border(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f), RoundedCornerShape(8.dp)))
-            .clickable(onClick = onClick)
-            .padding(vertical = 5.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            label,
-            style = MaterialTheme.typography.labelSmall.copy(fontFamily = JetBrainsMono, fontSize = 10.sp),
-            color = if (active) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f),
-            maxLines = 1,
-        )
-    }
-}
-
-@Composable
-private fun QcStepBtn(icon: String, onClick: () -> Unit) {
-    Box(
-        Modifier.size(30.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surfaceContainerHighest).clickable(onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) { PhIcon(icon, sizeDp = 14) }
-}
+// (QcStepper / QcChip / QcStepBtn removed — routed through CremaStepper with its
+// header slot + quick-select chips; see CremaStepperStyle.Boxed.)
 
 // Mini pill toggle (PWA qmini-tog) — a tiny switch + label, for the chart strip.
 @Composable

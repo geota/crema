@@ -18,6 +18,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -42,6 +43,8 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.em
@@ -1312,8 +1315,44 @@ fun CremaMenuItem(
     }
 }
 
-// ── Telemetry stepper — big touch − / value / + (Brew, Settings, editors) ───
-// 56dp tall, mono value. fmt formats the number; presets render below if given.
+// ── Stepper — one −/value/+ control for every shell surface. ──────────────────
+// The numeric core (step/min/max, 2-decimal snap, optional quick-select chips) is
+// identical everywhere; only the *look* changes, captured by CremaStepperStyle.
+// Presets (Telemetry / Boxed / BoxedDense / Bare / BareCompact) cover the brew &
+// scale readouts, the profile editors, Quick Controls, and both settings shells,
+// so a call site picks a named style instead of re-deriving pixels. This replaced
+// eight hand-rolled copies (Edit/StepperBox/Qc/Set/P/Ed steppers + their buttons).
+
+/** Filled box drawn behind the whole −/value/+ bar (boxed variants); None = bare. */
+enum class StepperFill { None, High, Highest }
+
+@Immutable
+data class CremaStepperStyle(
+    val tonalButtons: Boolean = false, // true ⇒ FilledTonalIconButton (telemetry); else circle Surface
+    val box: StepperFill = StepperFill.None,
+    val boxShape: Dp = 10.dp,
+    val boxPadding: PaddingValues = PaddingValues(0.dp),
+    val buttonSize: Dp = 34.dp, // ignored when tonalButtons
+    val iconSize: Int = 14,
+    val valueSize: TextUnit = 15.sp, // ignored when tonalButtons (uses readoutSm)
+    val fillWidth: Boolean = false, // weight the value + SpaceBetween the buttons
+    val spacedBy: Dp = 8.dp, // gap when NOT fillWidth
+    val valueMinWidth: Dp = 0.dp, // floor for the bare value column
+) {
+    companion object {
+        /** Brew / scale readouts — tonal buttons, big mono readout (default, unchanged). */
+        val Telemetry = CremaStepperStyle(tonalButtons = true, spacedBy = 12.dp)
+        /** Prominent boxed editor field — 30dp buttons, 18sp value (target tiles, Quick Controls). */
+        val Boxed = CremaStepperStyle(box = StepperFill.High, boxShape = 10.dp, boxPadding = PaddingValues(horizontal = 6.dp, vertical = 5.dp), buttonSize = 30.dp, iconSize = 14, valueSize = 18.sp, fillWidth = true)
+        /** Dense boxed editor field — 28dp buttons, 15sp value (profile segment rows). */
+        val BoxedDense = CremaStepperStyle(box = StepperFill.Highest, boxShape = 8.dp, boxPadding = PaddingValues(3.dp), buttonSize = 28.dp, iconSize = 12, valueSize = 15.sp, fillWidth = true)
+        /** Bare settings-row stepper — 36dp buttons, 16sp value (tablet settings). */
+        val Bare = CremaStepperStyle(buttonSize = 36.dp, iconSize = 15, valueSize = 16.sp, spacedBy = 8.dp, valueMinWidth = 64.dp)
+        /** Compact bare stepper — 34dp buttons, 15sp value (phone settings + editors). */
+        val BareCompact = CremaStepperStyle(buttonSize = 34.dp, iconSize = 14, valueSize = 15.sp, spacedBy = 6.dp, valueMinWidth = 58.dp)
+    }
+}
+
 @Composable
 fun CremaStepper(
     label: String? = null,
@@ -1325,17 +1364,107 @@ fun CremaStepper(
     max: Double = 100.0,
     fmt: (Double) -> String = { String.format("%.1f", it) },
     modifier: Modifier = Modifier,
+    style: CremaStepperStyle = CremaStepperStyle.Telemetry,
+    enabled: Boolean = true,
+    header: (@Composable () -> Unit)? = null,
+    chips: List<Double>? = null,
+    compareSymbol: String? = null,
+    onCompare: (() -> Unit)? = null,
 ) {
-    Column(modifier) {
-        if (label != null) Eyebrow(label, Modifier.padding(bottom = 6.dp))
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            FilledTonalIconButton(onClick = { onChange((value - step).coerceAtLeast(min)) }) { PhIcon("minus") }
-            Row(verticalAlignment = Alignment.Bottom) {
-                Text(fmt(value), style = CremaTheme.readout.readoutSm, color = MaterialTheme.colorScheme.onSurface)
-                if (unit != null) Text(" $unit", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    fun snap(x: Double) = (kotlin.math.round(x * 100) / 100).coerceIn(min, max)
+    val dec = { onChange(snap(value - step)) }
+    val inc = { onChange(snap(value + step)) }
+
+    // Telemetry keeps its exact original chrome (big tonal buttons, readoutSm).
+    if (style.tonalButtons) {
+        Column(modifier) {
+            if (label != null) Eyebrow(label, Modifier.padding(bottom = 6.dp))
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                FilledTonalIconButton(onClick = dec) { PhIcon("minus") }
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text(fmt(value), style = CremaTheme.readout.readoutSm, color = MaterialTheme.colorScheme.onSurface)
+                    if (unit != null) Text(" $unit", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                FilledTonalIconButton(onClick = inc) { PhIcon("plus") }
             }
-            FilledTonalIconButton(onClick = { onChange((value + step).coerceAtMost(max)) }) { PhIcon("plus") }
         }
+        return
+    }
+
+    // Compact (boxed / bare): optional header (or eyebrow label) above the bar,
+    // optional quick-select chips below. enabled greys the bar + chips while the
+    // header stays lit — the Quick-Controls "target off" behaviour.
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        when {
+            header != null -> header()
+            label != null -> Eyebrow(label)
+        }
+        Column(Modifier.alpha(if (enabled) 1f else 0.4f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            var barMod: Modifier = if (style.fillWidth) Modifier.fillMaxWidth() else Modifier
+            if (style.box != StepperFill.None) {
+                val fill = if (style.box == StepperFill.High) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surfaceContainerHighest
+                barMod = barMod.clip(RoundedCornerShape(style.boxShape)).background(fill).padding(style.boxPadding)
+            }
+            Row(
+                barMod,
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = if (style.fillWidth) Arrangement.SpaceBetween else Arrangement.spacedBy(style.spacedBy),
+            ) {
+                StepperCircleBtn("minus", style.buttonSize, style.iconSize, dec)
+                val valueMod = when {
+                    style.fillWidth -> Modifier.weight(1f)
+                    style.valueMinWidth > 0.dp -> Modifier.widthIn(min = style.valueMinWidth)
+                    else -> Modifier
+                }
+                Row(valueMod, horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.Bottom) {
+                    if (compareSymbol != null) {
+                        Text(
+                            compareSymbol,
+                            style = TextStyle(fontFamily = JetBrainsMono, fontSize = style.valueSize, fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = (onCompare?.let { Modifier.clip(RoundedCornerShape(4.dp)).clickable(onClick = it) } ?: Modifier).padding(end = 3.dp),
+                        )
+                    }
+                    CremaValueUnit(fmt(value), unit, valueSize = style.valueSize)
+                }
+                StepperCircleBtn("plus", style.buttonSize, style.iconSize, inc)
+            }
+            if (chips != null) {
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    chips.forEach { c -> StepperChip(fmt(c), kotlin.math.abs(value - c) < 0.05) { onChange(snap(c)) } }
+                }
+            }
+        }
+    }
+}
+
+// Small circular −/+ button (surfaceContainerHighest) used by every compact stepper.
+@Composable
+private fun StepperCircleBtn(icon: String, size: Dp, iconSize: Int, onClick: () -> Unit) {
+    Surface(onClick = onClick, shape = CircleShape, color = MaterialTheme.colorScheme.surfaceContainerHighest, modifier = Modifier.size(size)) {
+        Box(contentAlignment = Alignment.Center) { PhIcon(icon, sizeDp = iconSize) }
+    }
+}
+
+// Quick-select value chip — copper fill when it matches the current value, faint
+// hairline otherwise (Quick Controls .qchip).
+@Composable
+private fun RowScope.StepperChip(label: String, active: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .weight(1f)
+            .clip(RoundedCornerShape(8.dp))
+            .then(if (active) Modifier.background(MaterialTheme.colorScheme.primary) else Modifier.border(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f), RoundedCornerShape(8.dp)))
+            .clickable(onClick = onClick)
+            .padding(vertical = 5.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelSmall.copy(fontFamily = JetBrainsMono, fontSize = 10.sp),
+            color = if (active) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f),
+            maxLines = 1,
+        )
     }
 }
 

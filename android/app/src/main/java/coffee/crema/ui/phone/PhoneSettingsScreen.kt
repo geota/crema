@@ -312,10 +312,10 @@ private fun MachineSection(
         SettingsGroup("Cup warmer") {
             val plate = cupWarmerTempValue(ui.de1MachineInfo) ?: 25
             PRow("Plate temperature", "The Bengle warming plate's target.", last = true, needsConnection = !connected) {
-                PStepper(
-                    "$plate", "°C",
-                    { if (connected) vm.setCupWarmerTemp((plate - 1).coerceAtLeast(0)) },
-                    { if (connected) vm.setCupWarmerTemp((plate + 1).coerceAtMost(80)) },
+                CremaStepper(
+                    value = plate.toDouble(), unit = "°C", step = 1.0, min = 0.0, max = 80.0,
+                    fmt = { "%.0f".format(it) }, style = CremaStepperStyle.BareCompact,
+                    onChange = { if (connected) vm.setCupWarmerTemp(it.toInt()) },
                 )
             }
         }
@@ -366,16 +366,16 @@ private fun BrewDefaultsSection(vm: MainViewModel, ui: coffee.crema.ui.MainUiSta
         val setDefs = { d: Float, r: Float, t: Float, p: Float -> vm.setBrewDefaults(d, r, t, p) }
         val dD = ui.defaultDoseG; val dR = ui.defaultRatio; val dT = ui.defaultBrewTempC; val dP = ui.defaultPreinfuseS
         PRow("Default dose", "Starting dose for a fresh shot.") {
-            PStepper(String.format("%.1f", dD), "g", { setDefs((dD - 0.1f).coerceAtLeast(5f), dR, dT, dP) }, { setDefs((dD + 0.1f).coerceAtMost(30f), dR, dT, dP) })
+            CremaStepper(value = dD.toDouble(), unit = "g", step = 0.1, min = 5.0, max = 30.0, fmt = { "%.1f".format(it) }, style = CremaStepperStyle.BareCompact, onChange = { setDefs(it.toFloat(), dR, dT, dP) })
         }
         PRow("Default ratio", "Target brew ratio (yield ÷ dose).") {
-            PStepper("1:" + String.format("%.1f", dR), null, { setDefs(dD, (dR - 0.1f).coerceAtLeast(1f), dT, dP) }, { setDefs(dD, (dR + 0.1f).coerceAtMost(5f), dT, dP) })
+            CremaStepper(value = dR.toDouble(), unit = null, step = 0.1, min = 1.0, max = 5.0, fmt = { "1:%.1f".format(it) }, style = CremaStepperStyle.BareCompact, onChange = { setDefs(dD, it.toFloat(), dT, dP) })
         }
         PRow("Default brew temp", "Starting group temperature.") {
-            PStepper(String.format("%.1f", dT), "°C", { setDefs(dD, dR, (dT - 0.5f).coerceAtLeast(80f), dP) }, { setDefs(dD, dR, (dT + 0.5f).coerceAtMost(100f), dP) })
+            CremaStepper(value = dT.toDouble(), unit = "°C", step = 0.5, min = 80.0, max = 100.0, fmt = { "%.1f".format(it) }, style = CremaStepperStyle.BareCompact, onChange = { setDefs(dD, dR, it.toFloat(), dP) })
         }
         PRow("Default pre-infusion", "Low-pressure soak before the main shot.", last = true) {
-            PStepper("${dP.toInt()}", "s", { setDefs(dD, dR, dT, (dP - 1f).coerceAtLeast(0f)) }, { setDefs(dD, dR, dT, (dP + 1f).coerceAtMost(60f)) })
+            CremaStepper(value = dP.toDouble(), unit = "s", step = 1.0, min = 0.0, max = 60.0, fmt = { "%.0f".format(it) }, style = CremaStepperStyle.BareCompact, onChange = { setDefs(dD, dR, dT, it.toFloat()) })
         }
     }
     SettingsGroup("Shot behaviour") {
@@ -383,10 +383,10 @@ private fun BrewDefaultsSection(vm: MainViewModel, ui: coffee.crema.ui.MainUiSta
         PRow("Stop on weight", "End the shot once the target yield is reached.") { CremaSwitch(ui.stopOnWeight, vm::setStopOnWeight) }
         PRow("Max shot duration", "Hard time cap — also a Brew stop condition.") {
             val maxDur = ui.maxShotDurationS.toInt()
-            PStepper(
-                "$maxDur", "s",
-                { vm.setMaxShotDuration((maxDur - 5).coerceAtLeast(0).toFloat()) },
-                { vm.setMaxShotDuration((maxDur + 5).coerceAtMost(300).toFloat()) },
+            CremaStepper(
+                value = maxDur.toDouble(), unit = "s", step = 5.0, min = 0.0, max = 300.0,
+                fmt = { "%.0f".format(it) }, style = CremaStepperStyle.BareCompact,
+                onChange = { vm.setMaxShotDuration(it.toFloat()) },
             )
         }
         PRow("Group flush before each shot", "Stabilise the group temperature with a short flush.") { CremaSwitch(ui.preFlush, vm::setPreFlush) }
@@ -471,13 +471,13 @@ private fun WaterSection(
     SettingsGroup("Maintenance intervals") {
         val m2 = ui.maintenance
         PRow("Filter capacity", "Litres before a filter change is due.") {
-            PStepper("${m2.filterCapacityLitres.toInt()}", "L", { vm.setFilterCapacity(m2.filterCapacityLitres - 5.0) }, { vm.setFilterCapacity(m2.filterCapacityLitres + 5.0) })
+            CremaStepper(value = m2.filterCapacityLitres, unit = "L", step = 5.0, min = 5.0, max = 500.0, fmt = { "%.0f".format(it) }, style = CremaStepperStyle.BareCompact, onChange = { vm.setFilterCapacity(it) })
         }
         PRow("Descale interval", "Litres of brew water between descales.") {
-            PStepper("${m2.descaleIntervalLitres.toInt()}", "L", { vm.setDescaleInterval(m2.descaleIntervalLitres - 10.0) }, { vm.setDescaleInterval(m2.descaleIntervalLitres + 10.0) })
+            CremaStepper(value = m2.descaleIntervalLitres, unit = "L", step = 10.0, min = 10.0, max = 1000.0, fmt = { "%.0f".format(it) }, style = CremaStepperStyle.BareCompact, onChange = { vm.setDescaleInterval(it) })
         }
         PRow("Clean cycle interval", "Hours of machine-on time between cleans.", last = true) {
-            PStepper("${m2.cleanIntervalHours.toInt()}", "h", { vm.setCleanInterval(m2.cleanIntervalHours - 1.0) }, { vm.setCleanInterval(m2.cleanIntervalHours + 1.0) })
+            CremaStepper(value = m2.cleanIntervalHours, unit = "h", step = 1.0, min = 1.0, max = 500.0, fmt = { "%.0f".format(it) }, style = CremaStepperStyle.BareCompact, onChange = { vm.setCleanInterval(it) })
         }
     }
     SettingsGroup("Water chemistry") {
@@ -489,10 +489,10 @@ private fun WaterSection(
             )
         }
         PRow("Hardness", "General hardness (GH).", notImplemented = true) {
-            PStepper("$hardnessPpm", "ppm", { onHardness((hardnessPpm - 1).coerceAtLeast(0)) }, { onHardness((hardnessPpm + 1).coerceAtMost(500)) })
+            CremaStepper(value = hardnessPpm.toDouble(), unit = "ppm", step = 1.0, min = 0.0, max = 500.0, fmt = { "%.0f".format(it) }, style = CremaStepperStyle.BareCompact, onChange = { onHardness(it.toInt()) })
         }
         PRow("Total dissolved solids", "Measured TDS of your water.", last = true, notImplemented = true) {
-            PStepper("$tdsPpm", "ppm", { onTds((tdsPpm - 1).coerceAtLeast(0)) }, { onTds((tdsPpm + 1).coerceAtMost(1000)) })
+            CremaStepper(value = tdsPpm.toDouble(), unit = "ppm", step = 1.0, min = 0.0, max = 1000.0, fmt = { "%.0f".format(it) }, style = CremaStepperStyle.BareCompact, onChange = { onTds(it.toInt()) })
         }
     }
 }
@@ -692,14 +692,14 @@ private fun CalibrationSection(
 ) {
     SettingsGroup("Sensor calibration") {
         PRow("Temperature", "Shift every temperature reading.", notImplemented = true) {
-            PStepper(String.format("%+.1f", tempOffset), "°C", { onTempOffset((tempOffset - 0.1).coerceAtLeast(-5.0)) }, { onTempOffset((tempOffset + 0.1).coerceAtMost(5.0)) })
+            CremaStepper(value = tempOffset, unit = "°C", step = 0.1, min = -5.0, max = 5.0, fmt = { "%+.1f".format(it) }, style = CremaStepperStyle.BareCompact, onChange = onTempOffset)
         }
         PRow("Pressure", "Re-zero the pressure sensor at idle.", notImplemented = true) { PMono("0.0 bar", strong = true) }
         val mult = flowMultiplierValue(ui.de1MachineInfo) ?: 1.0
         var flowDraft by remember(mult) { mutableStateOf(mult) }
         val flowDirty = kotlin.math.abs(flowDraft - mult) > 0.0001
         PRow("Flow", "Scale the flow-meter reading. Apply commits after a typed confirm.", needsConnection = !connected) {
-            PStepper(String.format("%.2f", flowDraft), "×", { flowDraft = (flowDraft - 0.01).coerceAtLeast(0.5) }, { flowDraft = (flowDraft + 0.01).coerceAtMost(1.5) })
+            CremaStepper(value = flowDraft, unit = "×", step = 0.01, min = 0.5, max = 1.5, fmt = { "%.2f".format(it) }, style = CremaStepperStyle.BareCompact, onChange = { flowDraft = it })
         }
         PRow("", null) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -918,23 +918,7 @@ private fun PSelect(value: String, onClick: () -> Unit = {}) {
     }
 }
 
-@Composable
-private fun PStepper(value: String, unit: String?, onMinus: () -> Unit, onPlus: () -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        PStepBtn("minus", onMinus)
-        Box(Modifier.widthIn(min = 56.dp), contentAlignment = Alignment.Center) {
-            CremaValueUnit(value, unit, valueSize = 15.sp)
-        }
-        PStepBtn("plus", onPlus)
-    }
-}
-
-@Composable
-private fun PStepBtn(icon: String, onClick: () -> Unit) {
-    Surface(onClick = onClick, shape = CircleShape, color = MaterialTheme.colorScheme.surfaceContainerHighest, modifier = Modifier.size(34.dp)) {
-        Box(contentAlignment = Alignment.Center) { PhIcon(icon, sizeDp = 14) }
-    }
-}
+// (PStepper / PStepBtn removed — phone settings rows route through CremaStepper / BareCompact.)
 
 @Composable
 private fun PStatusDot(on: Boolean) {
