@@ -23,7 +23,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.ui.graphics.Color
@@ -55,6 +54,8 @@ import coffee.crema.ui.theme.CremaTheme
 import coffee.crema.ui.components.CremaButton
 import coffee.crema.ui.components.CremaButtonVariant
 import coffee.crema.ui.components.CremaCard
+import coffee.crema.ui.components.CremaStepper
+import coffee.crema.ui.components.CremaStepperStyle
 import coffee.crema.ui.components.CremaIconButton
 import coffee.crema.ui.components.CremaOptionalHeader
 import coffee.crema.ui.components.CremaSplitLabel
@@ -428,19 +429,19 @@ private fun SegmentRowFull(
 
             SegCell(1f) {
                 Eyebrow("Target")
-                EditStepper(seg.target.toDouble(), if (isFlow) "ml/s" else "bar", 0.1, 0.0, if (isFlow) bounds.maxFlowMlPerS.toDouble() else bounds.maxPressureBar.toDouble(), { onEdit(seg.copy(target = it.toFloat())) })
+                CremaStepper(value = seg.target.toDouble(), unit = if (isFlow) "ml/s" else "bar", step = 0.1, min = 0.0, max = if (isFlow) bounds.maxFlowMlPerS.toDouble() else bounds.maxPressureBar.toDouble(), onChange = { onEdit(seg.copy(target = it.toFloat())) }, style = CremaStepperStyle.BoxedDense)
             }
             SegCell(1f) {
                 Eyebrow("Time")
-                EditStepper(seg.time.toDouble(), "s", 0.5, 0.0, bounds.maxFrameSeconds.toDouble(), { onEdit(seg.copy(time = it.toFloat())) })
+                CremaStepper(value = seg.time.toDouble(), unit = "s", step = 0.5, min = 0.0, max = bounds.maxFrameSeconds.toDouble(), onChange = { onEdit(seg.copy(time = it.toFloat())) }, style = CremaStepperStyle.BoxedDense)
             }
             SegCell(1.15f) {
                 CremaSplitLabel(prefix = "Temp", options = listOf(SplitOption("coffee", "Coffee"), SplitOption("water", "Water")), value = seg.tempSensor ?: "coffee", onChange = { onEdit(seg.copy(tempSensor = it)) })
-                EditStepper((seg.temp ?: 93f).toDouble(), "°C", 0.5, 20.0, bounds.maxTemperatureC.toDouble(), { onEdit(seg.copy(temp = it.toFloat())) })
+                CremaStepper(value = (seg.temp ?: 93f).toDouble(), unit = "°C", step = 0.5, min = 20.0, max = bounds.maxTemperatureC.toDouble(), onChange = { onEdit(seg.copy(temp = it.toFloat())) }, style = CremaStepperStyle.BoxedDense)
             }
             SegCell(1f) {
                 CremaOptionalHeader("Volume", segVolOn, { onEdit(seg.copy(volume = if (segVolOn) null else 50f)) })
-                EditStepper((seg.volume ?: 0f).toDouble(), "ml", 5.0, 0.0, 500.0, { onEdit(seg.copy(volume = it.toFloat().takeIf { v -> v > 0f })) }, modifier = Modifier.alpha(if (segVolOn) 1f else 0.4f), fmt = { "%.0f".format(it) })
+                CremaStepper(value = (seg.volume ?: 0f).toDouble(), unit = "ml", step = 5.0, min = 0.0, max = 500.0, onChange = { onEdit(seg.copy(volume = it.toFloat().takeIf { v -> v > 0f })) }, fmt = { "%.0f".format(it) }, style = CremaStepperStyle.BoxedDense, enabled = segVolOn)
             }
             SegCell(1.5f) {
                 CremaSplitLabel(
@@ -452,12 +453,13 @@ private fun SegmentRowFull(
                     value = exView.metric ?: "flow",
                     onChange = { m -> if (exitOn) onEdit(seg.copy(exit = seg.exit?.copy(metric = m))) },
                 )
-                EditStepper(
-                    (exView.threshold ?: 4f).toDouble(),
-                    if (exView.metric == "pressure") "bar" else "ml/s",
-                    0.1, 0.0, if (exView.metric == "pressure") bounds.maxPressureBar.toDouble() else bounds.maxFlowMlPerS.toDouble(),
-                    { v -> if (exitOn) onEdit(seg.copy(exit = seg.exit?.copy(threshold = v.toFloat()))) },
-                    modifier = Modifier.alpha(if (exitOn) 1f else 0.4f),
+                CremaStepper(
+                    value = (exView.threshold ?: 4f).toDouble(),
+                    unit = if (exView.metric == "pressure") "bar" else "ml/s",
+                    step = 0.1, min = 0.0, max = if (exView.metric == "pressure") bounds.maxPressureBar.toDouble() else bounds.maxFlowMlPerS.toDouble(),
+                    onChange = { v -> if (exitOn) onEdit(seg.copy(exit = seg.exit?.copy(threshold = v.toFloat()))) },
+                    style = CremaStepperStyle.BoxedDense,
+                    enabled = exitOn,
                     compareSymbol = if ((exView.compare ?: "over") == "over") ">" else "<",
                     onCompare = { if (exitOn) onEdit(seg.copy(exit = seg.exit?.copy(compare = if ((exView.compare ?: "over") == "over") "under" else "over"))) },
                 )
@@ -466,13 +468,13 @@ private fun SegmentRowFull(
             SegCellGroup(2f) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     CremaOptionalHeader("Max", limOn, { onEdit(seg.copy(limiter = if (limOn) null else SegmentLimiter(6f, 0.6f))) })
-                    EditStepper(lmView.value.toDouble(), if (seg.mode == "flow") "bar" else "ml/s", 0.1, 0.0, if (seg.mode == "flow") bounds.maxPressureBar.toDouble() else bounds.maxFlowMlPerS.toDouble(), { v -> if (limOn) onEdit(seg.copy(limiter = seg.limiter?.copy(value = v.toFloat()))) }, modifier = Modifier.alpha(if (limOn) 1f else 0.4f))
+                    CremaStepper(value = lmView.value.toDouble(), unit = if (seg.mode == "flow") "bar" else "ml/s", step = 0.1, min = 0.0, max = if (seg.mode == "flow") bounds.maxPressureBar.toDouble() else bounds.maxFlowMlPerS.toDouble(), onChange = { v -> if (limOn) onEdit(seg.copy(limiter = seg.limiter?.copy(value = v.toFloat()))) }, style = CremaStepperStyle.BoxedDense, enabled = limOn)
                 }
                 // Tolerance is gated by the Max dot — fade the whole cell (eyebrow
                 // included) when Max is off.
                 Column(Modifier.weight(1f).alpha(if (limOn) 1f else 0.4f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Eyebrow("Tolerance")
-                    EditStepper(lmView.range.toDouble(), null, 0.1, 0.0, 6.0, { v -> if (limOn) onEdit(seg.copy(limiter = seg.limiter?.copy(range = v.toFloat()))) })
+                    CremaStepper(value = lmView.range.toDouble(), unit = null, step = 0.1, min = 0.0, max = 6.0, onChange = { v -> if (limOn) onEdit(seg.copy(limiter = seg.limiter?.copy(range = v.toFloat()))) }, style = CremaStepperStyle.BoxedDense)
                 }
             }
 
@@ -568,20 +570,16 @@ private fun RowScope.GroupCard(label: String, weight: Float, content: @Composabl
 // stepper box. ────────────────────────────────────────────────────────────────
 @Composable
 private fun LabeledStepper(label: String, value: Double, unit: String?, modifier: Modifier, step: Double, min: Double, max: Double, onChange: (Double) -> Unit, fmt: (Double) -> String = { String.format("%.1f", it) }) {
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Eyebrow(label)
-        StepperBox(fmt(value), unit, { onChange((value - step).coerceIn(min, max)) }, { onChange((value + step).coerceIn(min, max)) })
-    }
+    CremaStepper(label = label, value = value, unit = unit, onChange = onChange, step = step, min = min, max = max, fmt = fmt, modifier = modifier, style = CremaStepperStyle.Boxed)
 }
 
 @Composable
 private fun LimitTile(label: String, value: Double, unit: String?, modifier: Modifier, on: Boolean, onToggle: () -> Unit, step: Double, min: Double, max: Double, onChange: (Double) -> Unit) {
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        CremaOptionalHeader(label, on, onToggle)
-        Box(Modifier.alpha(if (on) 1f else 0.4f)) {
-            StepperBox(String.format("%.0f", value), unit, { onChange((value - step).coerceIn(min, max)) }, { onChange((value + step).coerceIn(min, max)) })
-        }
-    }
+    CremaStepper(
+        value = value, unit = unit, onChange = onChange, step = step, min = min, max = max,
+        fmt = { String.format("%.0f", it) }, modifier = modifier, style = CremaStepperStyle.Boxed,
+        enabled = on, header = { CremaOptionalHeader(label, on, onToggle) },
+    )
 }
 
 @Composable
@@ -597,23 +595,6 @@ private fun LabeledRatio(dose: Double, yieldG: Double, modifier: Modifier) {
         ) {
             Text(formatRatio(dose, yieldG), style = CremaTheme.readout.readoutSm.copy(fontSize = 18.sp), color = MaterialTheme.colorScheme.primary, maxLines = 1)
         }
-    }
-}
-
-// A compact filled −/value/+ stepper box (no internal label).
-@Composable
-private fun StepperBox(value: String, unit: String?, onMinus: () -> Unit, onPlus: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh).padding(horizontal = 6.dp, vertical = 5.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
-    ) {
-        EditStepBtn("minus", onMinus, size = 30)
-        Row(verticalAlignment = Alignment.Bottom) {
-            Text(value, style = CremaTheme.readout.readoutSm.copy(fontSize = 18.sp), color = MaterialTheme.colorScheme.onSurface, maxLines = 1)
-            if (unit != null) Text(unit, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 2.dp, bottom = 2.dp))
-        }
-        EditStepBtn("plus", onPlus, size = 30)
     }
 }
 
@@ -786,49 +767,4 @@ private fun Modifier.dashedBorder(color: Color) = this.drawBehind {
     )
 }
 
-// ── Compact stepper — a filled −/value/+ bar (PWA QuickStepper). 28dp buttons,
-// 15sp value, and an optional inline >/< compare symbol rendered INSIDE the value
-// box (PWA .pe-seg-cmp), tappable to flip. ────────────────────────────────────
-@Composable
-private fun EditStepper(
-    value: Double,
-    unit: String?,
-    step: Double,
-    min: Double,
-    max: Double,
-    onChange: (Double) -> Unit,
-    modifier: Modifier = Modifier,
-    fmt: (Double) -> String = { String.format("%.1f", it) },
-    compareSymbol: String? = null,
-    onCompare: (() -> Unit)? = null,
-) {
-    Row(
-        modifier
-            .clip(RoundedCornerShape(8.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainerHighest)
-            .padding(3.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        EditStepBtn("minus", { onChange((value - step).coerceIn(min, max)) }, size = 28)
-        Row(Modifier.weight(1f).padding(horizontal = 1.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.Bottom) {
-            if (compareSymbol != null) {
-                Text(
-                    compareSymbol,
-                    style = TextStyle(fontFamily = JetBrainsMono, fontSize = 15.sp, fontWeight = FontWeight.Bold),
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = (onCompare?.let { Modifier.clip(RoundedCornerShape(4.dp)).clickable(onClick = it) } ?: Modifier).padding(end = 3.dp),
-                )
-            }
-            Text(fmt(value), style = TextStyle(fontFamily = JetBrainsMono, fontSize = 15.sp, fontFeatureSettings = "tnum"), color = MaterialTheme.colorScheme.onSurface, maxLines = 1, softWrap = false)
-            if (unit != null) Text(unit, style = MaterialTheme.typography.bodySmall.copy(fontSize = 9.sp), color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f), maxLines = 1, softWrap = false, modifier = Modifier.padding(start = 1.dp, bottom = 2.dp))
-        }
-        EditStepBtn("plus", { onChange((value + step).coerceIn(min, max)) }, size = 28)
-    }
-}
-
-@Composable
-private fun EditStepBtn(icon: String, onClick: () -> Unit, size: Int = 32) {
-    Surface(onClick = onClick, shape = CircleShape, color = MaterialTheme.colorScheme.surfaceContainerHighest, modifier = Modifier.size(size.dp)) {
-        Box(contentAlignment = Alignment.Center) { PhIcon(icon, sizeDp = if (size <= 28) 12 else 14) }
-    }
-}
+// (EditStepper / StepperBox / EditStepBtn removed — routed through CremaStepper.)
