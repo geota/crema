@@ -22,7 +22,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coffee.crema.beans.beanFilterCounts
 import coffee.crema.beans.daysOffRoast
+import coffee.crema.beans.filterAndSortBeans
 import coffee.crema.beans.isFrozen
 import coffee.crema.beans.roastBand
 import coffee.crema.beans.roastBand5
@@ -73,31 +75,7 @@ fun PhoneBeansScreen(
     }
 
     val roasterNameOf: (Bean) -> String? = { b -> ui.roasters.firstOrNull { it.id == b.roasterId }?.name }
-    val visibleBeans = ui.beans.filter { b ->
-        val matchesSearch = query.isBlank() ||
-            b.name.contains(query, ignoreCase = true) ||
-            (roasterNameOf(b)?.contains(query, ignoreCase = true) == true) ||
-            (b.origin.country?.contains(query, ignoreCase = true) == true)
-        val matchesFilter = when (filter) {
-            "archived" -> b.archivedAt != null
-            "active" -> b.archivedAt == null && !b.isFrozen
-            "favourite" -> b.archivedAt == null && b.favourite
-            "frozen" -> b.archivedAt == null && b.isFrozen
-            "light", "medium", "dark" -> b.archivedAt == null && roastBand(b.roastLevel?.toInt())?.equals(filter, ignoreCase = true) == true
-            // "All" excludes archived (matches tablet); the dedicated Archived
-            // chip is the only place they surface.
-            else -> b.archivedAt == null
-        }
-        matchesSearch && matchesFilter
-    }
-    val beansAsc = when (sort) {
-        "name" -> visibleBeans.sortedBy { it.name.lowercase() }
-        "roast" -> visibleBeans.sortedBy { it.roastLevel?.toInt() ?: Int.MAX_VALUE }
-        "rating" -> visibleBeans.sortedBy { it.rating.toInt() }
-        "remaining" -> visibleBeans.sortedBy { it.remaining }
-        else -> visibleBeans.sortedBy { daysOffRoast(it.roastedOn) ?: Int.MAX_VALUE }
-    }
-    val sortedBeans = if (sortDesc) beansAsc.reversed() else beansAsc
+    val sortedBeans = filterAndSortBeans(ui.beans, ui.roasters, query, filter, sort, sortDesc)
     val visibleRoasters = ui.roasters.filter {
         query.isBlank() || it.name.contains(query, ignoreCase = true) ||
             (it.city?.contains(query, ignoreCase = true) == true) ||
@@ -131,17 +109,17 @@ fun PhoneBeansScreen(
             )
             if (tab == "bags") {
                 Spacer(Modifier.height(6.dp))
-                val nonArchived = ui.beans.filter { it.archivedAt == null }
+                val counts = beanFilterCounts(ui.beans)
                 CremaFilterChipRow(
                     chips = buildList {
-                        add(FilterChipSpec("all", "All", ui.beans.size))
-                        add(FilterChipSpec("active", "Active", nonArchived.count { !it.isFrozen }))
-                        add(FilterChipSpec("favourite", "Favourite", nonArchived.count { it.favourite }, icon = "star"))
-                        add(FilterChipSpec("frozen", "Frozen", nonArchived.count { it.isFrozen }))
-                        add(FilterChipSpec("archived", "Archived", ui.beans.count { it.archivedAt != null }))
-                        add(FilterChipSpec("light", "Light", nonArchived.count { roastBand(it.roastLevel?.toInt()).equals("light", true) }))
-                        add(FilterChipSpec("medium", "Medium", nonArchived.count { roastBand(it.roastLevel?.toInt()).equals("medium", true) }))
-                        add(FilterChipSpec("dark", "Dark", nonArchived.count { roastBand(it.roastLevel?.toInt()).equals("dark", true) }))
+                        add(FilterChipSpec("all", "All", counts["all"] ?: 0))
+                        add(FilterChipSpec("active", "Active", counts["active"] ?: 0))
+                        add(FilterChipSpec("favourite", "Favourite", counts["favourite"] ?: 0, icon = "star"))
+                        add(FilterChipSpec("frozen", "Frozen", counts["frozen"] ?: 0))
+                        add(FilterChipSpec("archived", "Archived", counts["archived"] ?: 0))
+                        add(FilterChipSpec("light", "Light", counts["light"] ?: 0))
+                        add(FilterChipSpec("medium", "Medium", counts["medium"] ?: 0))
+                        add(FilterChipSpec("dark", "Dark", counts["dark"] ?: 0))
                     },
                     selected = filter,
                     onSelect = { filter = it },

@@ -83,6 +83,22 @@ dose+temp fold. Build green; phone Brew readouts unchanged (0.63→1.27 oz, 1:2.
 different concepts (see triage caveat) and stay. **Remaining: sub-tasks 2 (beans),
 3 (history), 4 (profiles).**
 
+Follow-up (review): `effectiveBrew`'s yield seed is now `dose * 2` (ratio-preserving)
+rather than a flat 36 — a no-op (that branch only fires at the 18 g dose seed) but
+self-documenting. "Add 0.5 g" keeps its own `bumpedDose * 2`.
+
+### 2026-06-15 — sub-task 2 of 4 done: beans (commit tagged 28)
+New `coffee.crema.beans.BeanFilter.kt` — pure `filterAndSortBeans(beans, roasters,
+query, filter, sort, sortDesc)` + `beanFilterCounts(beans): Map<String,Int>` (lives
+in the `beans` package next to `roastBand`/`daysOffRoast`, not a UI file — testable,
+no Compose). Routed BeansScreen (tablet) + PhoneBeansScreen. The predicate/sort were
+already byte-identical; the **fix** is the phone "All" chip badge: was `ui.beans.size`
+(incl. archived), now `beanFilterCounts` (non-archived, matching tablet). Validated
+live on both shells — chips match (All 7 / Active 6 / Fav 2 / Frozen 1); archiving a
+bean on phone correctly drops All 7→6 + surfaces it only under Archived=1, Restore →7.
+Aside still open: the roaster-list sort drift (phone sorts by name, tablet doesn't) and
+the shared SAF `launchSave` launcher — both out of this sub-task. **Remaining: 3, 4.**
+
 (Aside, out of scope: `ProfilesScreen`/Beans/History each carry their own SAF
 `launchSave` launcher too — a sibling of the issue-27 Settings dedup. Worth a
 follow-up "share SAF export launcher" issue.)
