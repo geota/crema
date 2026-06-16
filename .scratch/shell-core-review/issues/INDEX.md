@@ -57,7 +57,7 @@ Sequencing lives at the bottom of `../PUNCHLIST.md`. Recommended first wave:
 | 26 | Collapse the three Android settings-row systems | P2 | ready-for-agent |
 | 27 | Extract `SettingsConfirmDialogs(...)` (copied verbatim phone↔tablet) | P2 | ✅ done |
 | 28 | Hoist per-domain filter/sort + brew-fallback helpers (Android) | P2 | ✅ done (4 helpers: effectiveBrew + Bean/Shot/ProfileFilter; phone "All" badge fixed) |
-| 29 | Reconcile low-tank threshold (phone 20f vs tablet 5f) | P3 | ready-for-agent |
+| 29 | Reconcile low-tank threshold (phone 20f vs tablet 5f) | P3 | ✅ done (defer to machine `refill_threshold`; web parity; one `refillSoon`) |
 | 30 | Hoist maintenance burn-down math (Android) | P2 | ✅ done |
 | 31 | Extract `applyBeanEdits(bean, draft)` + share bag presets | P2 | ✅ done |
 | 32 | Add `SegmentEdit` unit helpers + promote `toEdit` | P2 | ✅ done (SegmentEditExt: targetUnit/limiterUnit/exit unit + shared toEdit) |

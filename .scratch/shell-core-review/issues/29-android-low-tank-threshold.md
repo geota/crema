@@ -1,6 +1,6 @@
 # 29 — Reconcile low-tank threshold (phone 20f vs tablet 5f)
 
-- **Status:** ready-for-agent — **rescoped 2026-06-15** (configurable, not a constant)
+- **Status:** ✅ done 2026-06-15 — defer to the DE1's reported refill threshold (web parity)
 - **Severity:** P3
 - **Area:** Android phone + tablet — `ui/phone/PhoneSettingsScreen.kt`, `ui/screens/SettingsScreen.kt`
 - **Punchlist:** T4-04 — `../PUNCHLIST.md`
@@ -42,3 +42,39 @@ the DE1, matches de1app) or stays a **shell-only** override. Leaning machine-wri
 for true de1app parity. Bigger than a P3 nit now — needs a UniFFI surface check +
 a Settings control + the default. Emulator can verify the setting UI + default;
 the live-threshold tracking is DE1-gated.
+
+### 2026-06-15 — DONE (simpler than the rescope: defer to the machine value)
+**The rescope's premise was wrong.** It assumed the firmware refill threshold was
+unreadable, so a configurable setting seeded from the de1app default was the
+workaround. But the **DE1 reports its own refill threshold live** — it rides in the
+*same* `Event.WaterLevel` packet as the level (`EventWaterLevelInner.refill_threshold`,
+already on the generated Kotlin type). The **web shell already defers to it**
+(`waterRefillThreshold` + `waterRefillSoon(level, threshold) = level ≤ threshold + 5mm`,
+`web/src/lib/state/ui-state.svelte.ts`). Android was the only shell ignoring it and
+hardcoding a constant. **Operator confirmed in-session: just default to the machine
+value** — no setting, no machine-write, no de1app constant. This fixes the
+phone/tablet split *and* gives Android↔web parity.
+
+**What shipped:**
+- `MainUiState.waterRefillThresholdMm` captures `event.content.refill_threshold` in
+  the `Event.WaterLevel` handler (alongside the existing level).
+- New shared `MainUiState.refillSoon()` + `const REFILL_SOON_MARGIN_MM = 5f` in
+  `ui/MainViewModel.kt`, mirroring web (`level ≤ threshold + 5mm`; false when either
+  reading is null → naturally suppressed before the first packet / while disconnected).
+- 3 hardcoded tank checks routed through it: tablet `SettingsScreen` (was `LOW_TANK_MM=5f`),
+  phone `PhoneSettingsScreen` (was `LOW_TANK_MM_PHONE=20f`), **and** phone `PhoneBrewScreen`
+  tank tile (was a third hardcoded `> 5f`) — so there is now genuinely one definition.
+- Both constants deleted. **No FFI change** (`refill_threshold` already delivered;
+  `setRefillThreshold` also already exists on both bridges if a write is ever wanted).
+
+**Acceptance:** `grep -rn "LOW_TANK" android/` → 0; `grep -rn "fun refillSoon" android/` → 1.
+Build green (`:app:assembleDebug`). Phone + tablet render the Tank section identically
+when disconnected ("Connect the DE1 to read the tank level." / "—"); the live cue is
+DE1-gated (no DE1 sim, same as web).
+
+**For the record (not used):** the parked research found de1app's
+`$::settings(water_refill_point)` defaults to ≈ **5 mm** (low–med confidence; the
+agent's session had WebFetch blocked, couldn't read the raw `vars.tcl`/`machine.tcl`),
+min 3 mm, full tank ≈ 70–90 mm. That 5 mm matched the old tablet constant; the phone's
+20 mm was the outlier. Decenza's default wasn't web-discoverable. All moot — Android
+now tracks whatever the machine reports.

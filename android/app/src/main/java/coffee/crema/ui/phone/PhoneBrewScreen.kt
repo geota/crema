@@ -43,6 +43,7 @@ import coffee.crema.profiles.CremaProfile
 import coffee.crema.ui.MainUiState
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.effectiveBrew
+import coffee.crema.ui.refillSoon
 import coffee.crema.ui.components.*
 import coffee.crema.ui.phone.components.*
 import coffee.crema.ui.screens.CanvasProfilePreview
@@ -731,7 +732,7 @@ private fun RestingBody(
             // Ready tints derived (was hardcoded false): steam boiler up to temp,
             // tank above the low-water mark. Mirrors the Group tile's pattern.
             val steamOk = connected && (ui.steamTemp ?: 0f) >= 130f
-            val tankOk = connected && (ui.waterLevelMm ?: 0f) > 5f
+            val tankOk = connected && ui.waterLevelMm != null && !ui.refillSoon()
             // Compact, unit-aware status (issue 44): converted value + explicit
             // glyph, no space — this dense 4-up strip can't fit "148.0 °C".
             val groupM = convertTemp(ui.headTemp, ui.tempUnit)

@@ -174,6 +174,29 @@ fun effectiveBrew(brewParams: BrewParams?, active: CremaProfile?): EffectiveBrew
 fun MainUiState.effectiveBrew(): EffectiveBrew =
     effectiveBrew(brewParams, profiles.firstOrNull { it.id == activeProfileId })
 
+/**
+ * Headroom (mm) above the DE1's refill threshold at or below which the "refill
+ * soon" cue shows — the tank is close to, but not yet at, the machine's own
+ * refill point. Mirrors the web shell's `REFILL_SOON_MARGIN_MM`
+ * (`web/src/lib/state/ui-state.svelte.ts`) so every shell warns at the same level.
+ */
+const val REFILL_SOON_MARGIN_MM = 5f
+
+/**
+ * Whether the tank is low enough to warrant a "refill soon" cue: the live level
+ * is within [REFILL_SOON_MARGIN_MM] of (or already below) the DE1's *reported*
+ * refill threshold. Both readings arrive together in one `Event.WaterLevel`
+ * packet, so the cue is naturally suppressed before the first report and while
+ * disconnected (the level is null). Mirrors web `waterRefillSoon` — the shell
+ * defers to the machine's own refill point rather than a hardcoded threshold,
+ * reconciling the former phone 20 mm vs tablet 5 mm constants (issue 29).
+ */
+fun MainUiState.refillSoon(): Boolean {
+    val level = waterLevelMm ?: return false
+    val threshold = waterRefillThresholdMm ?: return false
+    return level <= threshold + REFILL_SOON_MARGIN_MM
+}
+
 data class MainUiState(
     val bleState: De1BleManager.State = De1BleManager.State.IDLE,
     /** Coarse state of the scale connection. */
@@ -228,6 +251,12 @@ data class MainUiState(
     val machineError: String? = null,
     /** Latest tank level, mm (`Event.WaterLevel`), or null before the first report. */
     val waterLevelMm: Float? = null,
+    /** The DE1's own refill threshold, mm — reported alongside the level in the
+     *  same `Event.WaterLevel` packet (null before the first report / while
+     *  disconnected). The shell defers to this live machine value for the
+     *  "refill soon" cue rather than a hardcoded constant, matching the web
+     *  shell's `waterRefillThreshold` (issue 29). */
+    val waterRefillThresholdMm: Float? = null,
     /**
      * The DE1's pre-formatted firmware label (e.g. `"v1.0.142 (API 4)"`), or
      * null until the machine's `Version` characteristic reply arrives.
@@ -3139,7 +3168,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 // Weight is high-rate; do not flood the log with every reading.
             }
             is Event.WaterLevel -> {
-                _ui.update { it.copy(waterLevelMm = event.content.level) }
+                _ui.update { it.copy(
+                    waterLevelMm = event.content.level,
+                    waterRefillThresholdMm = event.content.refill_threshold,
+                ) }
                 appendLog("Water level: %.0fmm".format(event.content.level))
             }
             is Event.ShotSettingsRead -> {
