@@ -57,3 +57,21 @@ its value field:
 
 ## Comments
 <!-- triage + progress notes append below -->
+
+### 2026-06-15 — Part 1 done (inline `>`/`<`); Part 2 needs a design call
+**Part 1 (the primary acceptance) — done + verified on the phone.** Now that issue 35
+unified `CremaStepper` with `compareSymbol`/`onCompare`, the phone's Exit-early
+threshold stepper (`BareCompact`) just takes those params: the `>`/`<` renders as a
+tappable copper prefix INSIDE the value field, and the separate over/under
+`CremaSegmentedButton` is gone. The metric selector + threshold-with-compare now share
+one row, matching the tablet (`BoxedDense`) + PWA. Live-confirmed: `Pressure | > 4.5`.
+
+**Part 2 (selectors match QuickControls) — deferred, needs the user's call.** The phone
+segment selectors (Type Pressure/Flow, Transition Smooth/Fast, Exit metric) use
+`CremaSegmentedButton` — the app's *discrete-selector* idiom. QuickControls' `CremaSplitLabel`
+is specifically a *mode-swap* label (its options swap which value one stepper edits).
+These are semantically different: a segment's Type genuinely IS pressure-or-flow (a
+discrete choice), not a stepper mode. `CremaSplitLabel` is generic enough to render them
+(prefix + options), so a conversion is *possible* and would visually match QC — but it's
+a notable look change to the dense editor and a subjective preference, so leaving it for
+a product decision rather than unilaterally reshaping the editor.
