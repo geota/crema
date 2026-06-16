@@ -42,6 +42,7 @@ import coffee.crema.ble.ScaleBleManager
 import coffee.crema.profiles.CremaProfile
 import coffee.crema.ui.MainUiState
 import coffee.crema.ui.MainViewModel
+import coffee.crema.ui.effectiveBrew
 import coffee.crema.ui.components.*
 import coffee.crema.ui.phone.components.*
 import coffee.crema.ui.screens.CanvasProfilePreview
@@ -444,8 +445,9 @@ private fun RunningBody(ui: MainUiState, active: CremaProfile?, modifier: Modifi
         val mm = (totalS.toInt() / 60).toString().padStart(2, '0')
         val ss = (totalS.toInt() % 60).toString().padStart(2, '0')
         val frac = ((totalS % 1) * 10).toInt().toString()
-        val dose = (ui.brewParams?.dose ?: active?.dose?.toDouble() ?: 18.0).toFloat()
-        val target = (ui.brewParams?.yieldOut ?: active?.yieldOut?.toDouble() ?: 36.0).toFloat()
+        val eb = ui.effectiveBrew()
+        val dose = eb.dose.toFloat()
+        val target = eb.yieldOut.toFloat()
         val weight = ui.scaleWeightG ?: 0f
         Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surfaceContainer) {
             Column(
@@ -671,8 +673,7 @@ private fun RestingBody(
                     )
                 }
                 // Target line: dose → yield, ratio.
-                val dose = ui.brewParams?.dose ?: active?.dose?.toDouble() ?: 18.0
-                val yieldOut = ui.brewParams?.yieldOut ?: active?.yieldOut?.toDouble() ?: 36.0
+                val (dose, yieldOut) = ui.effectiveBrew()
                 Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     TargetNumber(dose, ui.weightUnit)
                     PhIcon(
@@ -713,7 +714,7 @@ private fun RestingBody(
                 val peakBar = active?.segments?.filter { it.mode != "flow" }?.maxOfOrNull { it.target }
                 val estTime = active?.segments?.sumOf { it.time.toDouble() }?.toInt()
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    val readyTemp = convertTemp((ui.brewParams?.brewTemp ?: active?.brewTemp?.toDouble() ?: 93.0).toFloat(), ui.tempUnit)
+                    val readyTemp = convertTemp(ui.effectiveBrew().brewTemp.toFloat(), ui.tempUnit)
                     val readyPress = convertPressure(peakBar?.toFloat(), ui.pressureUnit)
                     ReadyParam("TEMP", readyTemp.value, readyTemp.unit, Modifier.weight(1f))
                     ReadyParam("PRE-INF", "${active?.preinfuseSeconds ?: 0}", "s", Modifier.weight(1f))

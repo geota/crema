@@ -46,6 +46,7 @@ import androidx.compose.ui.unit.sp
 import coffee.crema.core.Bean
 import coffee.crema.profiles.CremaProfile
 import coffee.crema.ui.BrewParams
+import coffee.crema.ui.effectiveBrew
 import androidx.compose.ui.draw.alpha
 import coffee.crema.ui.components.CremaButton
 import coffee.crema.ui.components.CremaSearchPill
@@ -124,9 +125,7 @@ fun QuickControlsSheet(
     onDismiss: () -> Unit,
 ) {
     // Effective brew values: the transient override if set, else the active profile.
-    val dose = brewParams?.dose ?: (active?.dose?.toDouble() ?: 18.0)
-    val yieldOut = brewParams?.yieldOut ?: (active?.yieldOut?.toDouble() ?: 36.0)
-    val brewTemp = brewParams?.brewTemp ?: (active?.brewTemp?.toDouble() ?: 93.0)
+    val (dose, yieldOut, brewTemp) = effectiveBrew(brewParams, active)
     // Pre-infusion is the leading segment's time (no separate machine setting); a
     // transient override caps it, else show the active profile's own (issue 15).
     val preinf = brewParams?.preinf ?: (active?.preinfuseSeconds?.toDouble() ?: 8.0)

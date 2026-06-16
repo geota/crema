@@ -23,6 +23,7 @@ import coffee.crema.ble.ScaleBleManager
 import coffee.crema.profiles.CremaProfile
 import coffee.crema.ui.MainUiState
 import coffee.crema.ui.MainViewModel
+import coffee.crema.ui.effectiveBrew
 import coffee.crema.ui.components.*
 import coffee.crema.ui.phone.components.CremaEdge
 import coffee.crema.ui.theme.CremaTheme
@@ -49,9 +50,7 @@ fun PhoneQuickSheet(
     vm: MainViewModel,
     onDismiss: () -> Unit,
 ) {
-    val dose = ui.brewParams?.dose ?: (active?.dose?.toDouble() ?: 18.0)
-    val yieldOut = ui.brewParams?.yieldOut ?: (active?.yieldOut?.toDouble() ?: 36.0)
-    val brewTemp = ui.brewParams?.brewTemp ?: (active?.brewTemp?.toDouble() ?: 93.0)
+    val (dose, yieldOut, brewTemp) = ui.effectiveBrew()
 
     var tab by remember { mutableStateOf("dial") }
     var showSave by remember { mutableStateOf(false) }

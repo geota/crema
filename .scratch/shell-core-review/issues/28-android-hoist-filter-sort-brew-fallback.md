@@ -70,6 +70,19 @@ tagged issue 28):**
 **Sequencing:** lower leverage than 35 (which unblocks 44-B). Do 35 first, then
 this. No code landed yet — left `ready-for-agent`.
 
+### 2026-06-15 — sub-task 1 of 4 done: `effectiveBrew` (commit tagged 28)
+Added `EffectiveBrew(dose,yieldOut,brewTemp)` + free `effectiveBrew(brewParams,
+active)` + `MainUiState.effectiveBrew()` in `MainViewModel.kt` (by `BrewParams`).
+Folded the 3-way override→profile→18/36/93 triple at all true sites: QuickControls
+(free fn — no `ui`), PhoneBrewSheets, PhoneBrewScreen ×3 (447/674/716), PhoneScale
+×2 (`ui.effectiveBrew()` / free fn). **Per-site caveat confirmed live:** PhoneScale's
+"Add 0.5 g" `yieldOut` keeps its own `?: (dose*2)` fallback (NOT 36 g) — only its
+dose+temp fold. Build green; phone Brew readouts unchanged (0.63→1.27 oz, 1:2.0,
+194 °F). The acceptance grep is deliberately *not* 0 — the segment-temp
+(`seg.temp ?: 93f`) and 2-way profile-only (`active?.dose ?: 18f`) matches are
+different concepts (see triage caveat) and stay. **Remaining: sub-tasks 2 (beans),
+3 (history), 4 (profiles).**
+
 (Aside, out of scope: `ProfilesScreen`/Beans/History each carry their own SAF
 `launchSave` launcher too — a sibling of the issue-27 Settings dedup. Worth a
 follow-up "share SAF export launcher" issue.)
