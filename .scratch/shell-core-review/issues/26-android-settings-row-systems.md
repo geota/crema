@@ -68,3 +68,8 @@ pill, and "Model —" mono — all roomy; phone Machine shows the same dense, wi
 
 **For 33:** route the `PhoneScaleScreen` `SettingsRow` usages onto the canonical row
 (add a `last`/no-divider story) and retire `SettingsRow` then.
+
+### 2026-06-16 — deferral CLOSED in issue 33
+Issue 33 merged the scale capability body onto `CremaSettingsRow` (via the shared
+`ScaleCapabilityRows`), which removed the phone scale screen's last `SettingsRow` calls.
+The dead `SettingsRow` (`CremaPhoneComponents.kt`) is now deleted. 26 fully complete.

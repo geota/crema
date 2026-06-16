@@ -381,9 +381,9 @@ fun CremaPushRow(icon: String, title: String, sub: String? = null, onClick: () -
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// SETTINGS DETAIL PRIMITIVES  (prototype: SGroup / SRow — `.pst-group` / `.pst-row`)
-// Every settings detail page is built from these two, exactly like the tablet:
-//   SettingsGroup("Targets") { SettingsRow("Default dose", "…") { CremaStepper(...) } }
+// SETTINGS GROUP  (prototype: SGroup — `.pst-group`)
+// Wraps a settings detail section; rows inside are the shared CremaSettingsRow:
+//   SettingsGroup("Targets") { CremaSettingsRow("Default dose", "…") { CremaStepper(...) } }
 // ════════════════════════════════════════════════════════════════════════════
 @Composable
 fun SettingsGroup(title: String, content: @Composable ColumnScope.() -> Unit) {
@@ -402,24 +402,5 @@ fun SettingsGroup(title: String, content: @Composable ColumnScope.() -> Unit) {
         ) {
             Column(content = content)
         }
-    }
-}
-
-@Composable
-fun SettingsRow(title: String, sub: String? = null, danger: Boolean = false, control: @Composable () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(
-                title,
-                style = MaterialTheme.typography.bodyLarge,
-                color = if (danger) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
-            )
-            if (sub != null) Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        control()
     }
 }

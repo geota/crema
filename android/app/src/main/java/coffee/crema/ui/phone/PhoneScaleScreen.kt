@@ -22,6 +22,8 @@ import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.effectiveBrew
 import coffee.crema.ui.components.*
 import coffee.crema.ui.phone.components.*
+import coffee.crema.ui.screens.ScaleCapabilityRows
+import coffee.crema.ui.screens.ScaleSettingsFooter
 import coffee.crema.ui.screens.scaleMeta
 import coffee.crema.ui.theme.CremaTheme
 import kotlinx.coroutines.delay
@@ -237,75 +239,17 @@ private fun ConnectedBody(
     }
 
     // Scale settings — capability-driven. Only render rows the scale supports.
+    // Body shared with the tablet (issue 33); dense rows via LocalSettingsRowDense.
     Eyebrow("Scale settings")
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainer,
         shape = MaterialTheme.shapes.medium,
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Column {
-            if (caps.flow_smoothing) SettingsRow(
-                "Flow smoothing", "Smooths the live mass-flow readout.",
-            ) { CremaSwitch(ui.scaleFlowSmoothing, vm::setScaleFlowSmoothing) }
-            if (caps.anti_mistouch) SettingsRow(
-                "Anti-mistouch", "Ignore accidental taps on the scale.",
-            ) { CremaSwitch(ui.scaleAntiMistouch, vm::setScaleAntiMistouch) }
-            if (caps.auto_stop) SettingsRow(
-                "Auto-stop", "How the scale's built-in timer ends.",
-            ) {
-                CremaSegmentedButton(
-                    options = listOf(SegOption("0", "Flow"), SegOption("1", "Cup")),
-                    value = (ui.scaleAutoStop ?: 0).toString(),
-                    onChange = { vm.setScaleAutoStop(it.toInt()) },
-                )
-            }
-            if (caps.modes.isNotEmpty()) SettingsRow(
-                "Display mode", "What the on-scale display reads out.",
-            ) {
-                CremaSegmentedButton(
-                    options = caps.modes.map { SegOption(it.id.toInt().toString(), it.name) },
-                    value = (ui.scaleActiveMode ?: caps.modes.first().id.toInt()).toString(),
-                    onChange = { vm.setScaleMode(it.toInt()) },
-                )
-            }
-            val standby = caps.standby
-            if (standby != null) SettingsRow(
-                "Auto-sleep", "Minutes of inactivity before the scale sleeps.",
-            ) {
-                CremaStepper(
-                    value = ui.scaleStandbyMinutes.toDouble(),
-                    unit = "min",
-                    onChange = { vm.setScaleStandbyMinutes(it.toInt()) },
-                    step = 1.0,
-                    min = standby.min.toDouble(),
-                    max = standby.max.toDouble(),
-                    fmt = { String.format("%.0f", it) },
-                )
-            }
-            val vol = caps.volume
-            if (vol != null) SettingsRow(
-                "Beeper volume", "Button & target tone loudness.",
-            ) {
-                CremaSegmentedButton(
-                    options = (vol.min.toInt()..vol.max.toInt()).map { SegOption(it.toString(), it.toString()) },
-                    value = ui.scaleVolume.toString(),
-                    onChange = { vm.setScaleVolume(it.toInt()) },
-                )
-            }
-            // Action footer: Beep + Disconnect (error-tinted, the last action).
-            Row(
-                Modifier.fillMaxWidth().padding(14.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                if (caps.can_beep) FilledTonalButton(onClick = vm::beepScale) {
-                    PhIcon("speaker-high", sizeDp = 18); Spacer(Modifier.width(6.dp)); Text("Beep")
-                }
-                Spacer(Modifier.weight(1f))
-                TextButton(
-                    onClick = vm::disconnectScale,
-                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
-                ) { PhIcon("link-break", sizeDp = 18); Spacer(Modifier.width(6.dp)); Text("Disconnect") }
+        CompositionLocalProvider(LocalSettingsRowDense provides true) {
+            Column {
+                ScaleCapabilityRows(vm, ui, caps)
+                ScaleSettingsFooter(vm, caps.can_beep, Modifier.padding(16.dp))
             }
         }
     }
