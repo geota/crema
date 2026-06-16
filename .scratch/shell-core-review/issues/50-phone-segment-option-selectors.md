@@ -1,6 +1,6 @@
 # 50 — Phone profile segment-options: match QuickControls selectors + inline the `>`/`<`
 
-- **Status:** ready-for-agent
+- **Status:** ✅ done 2026-06-16 (part 1 inline `>`/`<` + part 2 design call: keep `CremaSegmentedButton`, add a compact uniform-width variant)
 - **Severity:** P3
 - **Area:** Android phone — `ui/phone/PhoneProfileEditScreen.kt`
 - **Punchlist:** (added 2026-06-14 from user review; not in original PUNCHLIST)
@@ -75,3 +75,21 @@ discrete choice), not a stepper mode. `CremaSplitLabel` is generic enough to ren
 (prefix + options), so a conversion is *possible* and would visually match QC — but it's
 a notable look change to the dense editor and a subjective preference, so leaving it for
 a product decision rather than unilaterally reshaping the editor.
+
+### 2026-06-16 — Part 2 DONE (design call: keep segmented, make it compact + uniform)
+Prototyped **both** on the phone emulator and showed the operator side-by-side
+(variant A = `CremaSegmentedButton` pills; variant B = `CremaSplitLabel`). **Operator
+chose to keep the segmented idiom** (a segment's Type genuinely *is* a discrete
+pressure-or-flow choice — the right affordance) **but shrink the pills** for density,
+then asked for **uniform width** so they line up.
+
+Shipped:
+- New `compact` flag on `CremaSegmentedButton` (`CremaComponents.kt`): height 40→32 dp,
+  tighter content padding, `labelMedium` text, **no check icon** (selection reads from
+  the fill), and **equal-weight segments** so a fixed-width pill splits 50/50.
+- The four phase-editor selectors (Type, Transition, Temperature, Exit metric) pass
+  `compact = true` + a shared `SegmentPillWidth = 176.dp`, so all four are identical
+  size and the right-aligned Type/Transition pair lines up (no more ragged left edges).
+- `compact` defaults `false` → every other segmented button (roast/beverage, scale
+  auto-stop, …) is untouched. Verified live on the phone emulator. Throwaway prototype
+  screenshots discarded.

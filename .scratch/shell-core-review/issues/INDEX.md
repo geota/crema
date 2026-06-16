@@ -83,7 +83,7 @@ Sequencing lives at the bottom of `../PUNCHLIST.md`. Recommended first wave:
 | 47 | Title-case the web ProfileCard roast chip | P3 | ✅ done |
 | 48 | Pick a canonical History stats set (tablet vs phone) | P3 | ✅ done |
 | 49 | Casing nit: "Frozen" vs "frozen" | P3 | ✅ done |
-| 50 | Phone segment-options: match QuickControls selectors + inline the `>`/`<` | P3 | ready-for-agent |
+| 50 | Phone segment-options: match QuickControls selectors + inline the `>`/`<` | P3 | ✅ done (part 1 inline `>`/`<`; part 2 design call → keep segmented, compact + uniform pills) |
 
 **Folded into other issues:** T3-01→01, T3-02→02, T4-12→02, T3-12 (empty-state half)→37.
 
