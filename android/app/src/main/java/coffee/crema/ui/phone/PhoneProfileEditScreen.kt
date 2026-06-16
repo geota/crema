@@ -409,24 +409,22 @@ private fun PhaseRow(
                 },
             ) {
                 val exit = seg.exit ?: SegmentExit("flow", "over", 1.5f)
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                        CremaSegmentedButton(
-                            options = listOf(SegOption("pressure", "Pressure"), SegOption("flow", "Flow")),
-                            value = exit.metric ?: "flow",
-                            onChange = { onChange(seg.copy(exit = exit.copy(metric = it))) },
-                        )
-                        CremaSegmentedButton(
-                            options = listOf(SegOption("over", ">"), SegOption("under", "<")),
-                            value = exit.compare ?: "over",
-                            onChange = { onChange(seg.copy(exit = exit.copy(compare = it))) },
-                        )
-                    }
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                        CremaStepper(value = (exit.threshold ?: 1.5f).toDouble(), unit = null, step = 0.1, min = 0.0, max = if (exit.metric == "pressure") bounds.maxPressureBar.toDouble() else bounds.maxFlowMlPerS.toDouble(), fmt = { "%.1f".format(it) }, style = CremaStepperStyle.BareCompact, onChange = {
-                            onChange(seg.copy(exit = exit.copy(threshold = it.toFloat())))
-                        })
-                    }
+                // Over/under renders as a tappable >/< INSIDE the threshold field (issue 50 —
+                // matching the tablet + PWA), so the metric selector + value share one row.
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    CremaSegmentedButton(
+                        options = listOf(SegOption("pressure", "Pressure"), SegOption("flow", "Flow")),
+                        value = exit.metric ?: "flow",
+                        onChange = { onChange(seg.copy(exit = exit.copy(metric = it))) },
+                    )
+                    CremaStepper(
+                        value = (exit.threshold ?: 1.5f).toDouble(), unit = null, step = 0.1, min = 0.0,
+                        max = if (exit.metric == "pressure") bounds.maxPressureBar.toDouble() else bounds.maxFlowMlPerS.toDouble(),
+                        fmt = { "%.1f".format(it) }, style = CremaStepperStyle.BareCompact,
+                        compareSymbol = if ((exit.compare ?: "over") == "over") ">" else "<",
+                        onCompare = { onChange(seg.copy(exit = exit.copy(compare = if ((exit.compare ?: "over") == "over") "under" else "over"))) },
+                        onChange = { onChange(seg.copy(exit = exit.copy(threshold = it.toFloat()))) },
+                    )
                 }
             }
             // Max limiter (optional) — caps the non-priority quantity.
