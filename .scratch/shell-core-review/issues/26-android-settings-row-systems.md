@@ -26,3 +26,14 @@ One parameterized row set (pill/connection semantics shared); delete the dead `S
 
 ## Comments
 <!-- triage + progress notes append below -->
+
+### 2026-06-15 — scope shrunk: steppers + status dot already extracted
+Two of the six row widgets are already unified, so this issue no longer owns them:
+- **`SetStepper`/`PStepper`** → done in **issue 35** (now `CremaStepper`/`CremaStepperStyle.Bare`/`BareCompact`).
+- **`StatusDot`/`PStatusDot`** → extracted to shared **`CremaStatusDot`** (`CremaComponents.kt`),
+  byte-identical to both originals; all 8 call sites routed. (Prompted during 35.)
+
+**Remaining for 26:** the row chrome + the other shared widgets —
+`PRow/PPill/PSelect/PMono` ↔ `SetRow/SetPill/SetSelect/MonoReadout`, plus the dead
+`SettingsRow` at `CremaPhoneComponents.kt:408`. Update the acceptance greps: drop
+`PStepper`/`SetStepper`/`PStatusDot`/`StatusDot` (already 0), keep the rest.

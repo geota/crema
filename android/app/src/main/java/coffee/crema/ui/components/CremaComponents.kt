@@ -953,6 +953,18 @@ fun CremaDotToggle(on: Boolean, onToggle: () -> Unit, modifier: Modifier = Modif
     }
 }
 
+// ── Connection status dot — 10dp; ON = success fill, OFF = hairline ring. ─────
+// A non-interactive read-out (vs the interactive CremaDotToggle above) — both
+// settings shells use it for GATT/scale/grinder connection state.
+@Composable
+fun CremaStatusDot(on: Boolean, modifier: Modifier = Modifier) {
+    if (on) {
+        Box(modifier.size(10.dp).clip(CircleShape).background(CremaTheme.telemetry.success))
+    } else {
+        Box(modifier.size(10.dp).clip(CircleShape).border(1.5.dp, MaterialTheme.colorScheme.outline, CircleShape))
+    }
+}
+
 // Header for an optional config block: the dot toggle + an eyebrow label. The
 // caller greys out the gated control with Modifier.alpha(if (on) 1f else 0.4f).
 @Composable
