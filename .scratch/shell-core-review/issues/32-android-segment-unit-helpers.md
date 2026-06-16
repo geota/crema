@@ -1,6 +1,6 @@
 # 32 — Add `SegmentEdit` unit helpers + promote `toEdit`
 
-- **Status:** ready-for-agent
+- **Status:** ✅ done
 - **Severity:** P2
 - **Area:** Android phone + tablet — `ui/phone/PhoneProfileEditScreen.kt`, `ui/screens/ProfileEditScreen.kt`
 - **Punchlist:** T4-07 — `../PUNCHLIST.md`
@@ -27,3 +27,17 @@
 
 ## Comments
 <!-- triage + progress notes append below -->
+
+### 2026-06-15 — done (one commit)
+New `coffee.crema.profiles.SegmentEditExt.kt`: `SegmentEdit.isPressure`,
+`targetUnit()`, `limiterUnit()` (the OTHER channel), `SegmentExit.unit()`, and the
+promoted `ProfileSegment.toEdit(brewTemp)`. Routed both shells — tablet target/limiter/
+exit unit strings + phone `tUnit`/limiter label/limiter stepper; the phone's 12-field
+inline `SegmentEdit{…}` map (was `:85-104`) is now `it.toEdit(profile.brewTemp)`, and
+the tablet's `private` `toEdit` is deleted. **Naming note:** the exit-unit helper is
+`SegmentExit.unit()` (not `SegmentEdit.exitUnit()` as the issue drafted) — the exit
+carries its own metric and the call sites use a *defaulted* exit view (`exView =
+seg.exit ?: …`), so keying off the exit instance is correct. The phone exit threshold
+shows no unit label (`unit = null`), so only the tablet uses `exView.unit()`. Build
+green; acceptance greps clean (inline `isPressure→unit` = 0; no inline toEdit). Unit
+labels already confirmed in the #35/#50 segment screenshots (bar / ml/s / "> 4.5").

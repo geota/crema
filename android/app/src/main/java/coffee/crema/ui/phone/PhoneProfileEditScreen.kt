@@ -24,6 +24,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coffee.crema.profiles.ProfileBounds
 import coffee.crema.profiles.SegmentEdit
 import coffee.crema.profiles.SegmentExit
+import coffee.crema.profiles.isPressure
+import coffee.crema.profiles.limiterUnit
+import coffee.crema.profiles.targetUnit
+import coffee.crema.profiles.toEdit
 import coffee.crema.ui.formatRatio
 import coffee.crema.profiles.SegmentLimiter
 import coffee.crema.ui.MainViewModel
@@ -86,22 +90,7 @@ fun PhoneProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
     var tankTemp by remember(profile.id) { mutableStateOf(profile.tankTemperatureC.toDouble()) }
     val segs = remember(profile.id) {
         mutableStateListOf<SegmentEdit>().apply {
-            addAll(
-                profile.segments.map { s ->
-                    SegmentEdit(
-                        name = s.name,
-                        mode = s.mode ?: "pressure",
-                        ramp = s.ramp ?: "smooth",
-                        target = s.target,
-                        time = s.time,
-                        temp = s.temp ?: profile.brewTemp,
-                        tempSensor = s.tempSensor ?: "coffee",
-                        volume = s.volumeLimitMl,
-                        exit = s.exit,
-                        limiter = s.limiter,
-                    )
-                },
-            )
+            addAll(profile.segments.map { it.toEdit(profile.brewTemp) })
         }
     }
     var openPhase by remember(profile.id) { mutableStateOf(-1) }
@@ -286,9 +275,9 @@ private fun PhaseRow(
     last: Boolean,
 ) {
     val tel = CremaTheme.telemetry
-    val isPressure = seg.mode != "flow"
+    val isPressure = seg.isPressure
     val dotColor = if (isPressure) tel.pressure else tel.flow
-    val tUnit = if (isPressure) "bar" else "ml/s"
+    val tUnit = seg.targetUnit()
     val bounds = ProfileBounds.INSTANCE
     val summary = buildString {
         append(if (isPressure) "Pressure" else "Flow")
@@ -429,7 +418,7 @@ private fun PhaseRow(
             }
             // Max limiter (optional) — caps the non-priority quantity.
             OptionalField(
-                label = "Max ${if (isPressure) "ml/s" else "bar"} limit",
+                label = "Max ${seg.limiterUnit()} limit",
                 sub = "Safety ceiling on the other channel",
                 on = seg.limiter != null,
                 onToggle = {
@@ -437,7 +426,7 @@ private fun PhaseRow(
                 },
             ) {
                 val lim = seg.limiter ?: SegmentLimiter()
-                CremaStepper(value = lim.value.toDouble(), unit = if (isPressure) "ml/s" else "bar", step = 0.1, min = 0.0, max = if (isPressure) bounds.maxFlowMlPerS.toDouble() else bounds.maxPressureBar.toDouble(), fmt = { "%.1f".format(it) }, style = CremaStepperStyle.BareCompact, onChange = {
+                CremaStepper(value = lim.value.toDouble(), unit = seg.limiterUnit(), step = 0.1, min = 0.0, max = if (isPressure) bounds.maxFlowMlPerS.toDouble() else bounds.maxPressureBar.toDouble(), fmt = { "%.1f".format(it) }, style = CremaStepperStyle.BareCompact, onChange = {
                     onChange(seg.copy(limiter = lim.copy(value = it.toFloat())))
                 })
             }

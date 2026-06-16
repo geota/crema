@@ -47,6 +47,10 @@ import androidx.compose.ui.draw.clip
 import coffee.crema.profiles.ProfileBounds
 import coffee.crema.profiles.SegmentEdit
 import coffee.crema.profiles.SegmentExit
+import coffee.crema.profiles.limiterUnit
+import coffee.crema.profiles.targetUnit
+import coffee.crema.profiles.toEdit
+import coffee.crema.profiles.unit
 import coffee.crema.ui.formatRatio
 import coffee.crema.profiles.SegmentLimiter
 import coffee.crema.ui.MainViewModel
@@ -429,7 +433,7 @@ private fun SegmentRowFull(
 
             SegCell(1f) {
                 Eyebrow("Target")
-                CremaStepper(value = seg.target.toDouble(), unit = if (isFlow) "ml/s" else "bar", step = 0.1, min = 0.0, max = if (isFlow) bounds.maxFlowMlPerS.toDouble() else bounds.maxPressureBar.toDouble(), onChange = { onEdit(seg.copy(target = it.toFloat())) }, style = CremaStepperStyle.BoxedDense)
+                CremaStepper(value = seg.target.toDouble(), unit = seg.targetUnit(), step = 0.1, min = 0.0, max = if (isFlow) bounds.maxFlowMlPerS.toDouble() else bounds.maxPressureBar.toDouble(), onChange = { onEdit(seg.copy(target = it.toFloat())) }, style = CremaStepperStyle.BoxedDense)
             }
             SegCell(1f) {
                 Eyebrow("Time")
@@ -455,7 +459,7 @@ private fun SegmentRowFull(
                 )
                 CremaStepper(
                     value = (exView.threshold ?: 4f).toDouble(),
-                    unit = if (exView.metric == "pressure") "bar" else "ml/s",
+                    unit = exView.unit(),
                     step = 0.1, min = 0.0, max = if (exView.metric == "pressure") bounds.maxPressureBar.toDouble() else bounds.maxFlowMlPerS.toDouble(),
                     onChange = { v -> if (exitOn) onEdit(seg.copy(exit = seg.exit?.copy(threshold = v.toFloat()))) },
                     style = CremaStepperStyle.BoxedDense,
@@ -468,7 +472,7 @@ private fun SegmentRowFull(
             SegCellGroup(2f) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     CremaOptionalHeader("Max", limOn, { onEdit(seg.copy(limiter = if (limOn) null else SegmentLimiter(6f, 0.6f))) })
-                    CremaStepper(value = lmView.value.toDouble(), unit = if (seg.mode == "flow") "bar" else "ml/s", step = 0.1, min = 0.0, max = if (seg.mode == "flow") bounds.maxPressureBar.toDouble() else bounds.maxFlowMlPerS.toDouble(), onChange = { v -> if (limOn) onEdit(seg.copy(limiter = seg.limiter?.copy(value = v.toFloat()))) }, style = CremaStepperStyle.BoxedDense, enabled = limOn)
+                    CremaStepper(value = lmView.value.toDouble(), unit = seg.limiterUnit(), step = 0.1, min = 0.0, max = if (seg.mode == "flow") bounds.maxPressureBar.toDouble() else bounds.maxFlowMlPerS.toDouble(), onChange = { v -> if (limOn) onEdit(seg.copy(limiter = seg.limiter?.copy(value = v.toFloat()))) }, style = CremaStepperStyle.BoxedDense, enabled = limOn)
                 }
                 // Tolerance is gated by the Max dot — fade the whole cell (eyebrow
                 // included) when Max is off.
@@ -516,18 +520,7 @@ private fun RowScope.SegCellGroup(weight: Float, content: @Composable RowScope.(
 }
 
 /** Map a stored ProfileSegment to the editor's SegmentEdit (fills sensible defaults). */
-private fun coffee.crema.profiles.ProfileSegment.toEdit(brewTemp: Float) = SegmentEdit(
-    name = name,
-    mode = mode ?: "pressure",
-    ramp = ramp ?: "smooth",
-    target = target,
-    time = time,
-    temp = temp ?: brewTemp,
-    tempSensor = tempSensor ?: "coffee",
-    volume = volumeLimitMl,
-    exit = exit,
-    limiter = limiter,
-)
+// (ProfileSegment.toEdit moved to coffee.crema.profiles.SegmentEditExt — shared with phone.)
 
 // ── A numbered settings section: hairline rule, mono number + serif title + sub,
 // then body (matches the bean-creation BeBlock). ──────────────────────────────
