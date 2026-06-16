@@ -51,7 +51,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coffee.crema.beans.beanFilterCounts
 import coffee.crema.beans.daysOffRoast
+import coffee.crema.beans.filterAndSortBeans
 import coffee.crema.beans.isFrozen
 import coffee.crema.beans.roastBand
 import coffee.crema.beans.roastBand5
@@ -125,33 +127,7 @@ fun BeansScreen(
 
     val roasterNameOf: (Bean) -> String? = { b -> ui.roasters.firstOrNull { it.id == b.roasterId }?.name }
     // Bags — client-side search + filter + sort over the in-memory library.
-    val visibleBeans = ui.beans.filter { b ->
-        val matchesSearch = query.isBlank() ||
-            b.name.contains(query, ignoreCase = true) ||
-            (roasterNameOf(b)?.contains(query, ignoreCase = true) == true) ||
-            (b.origin.country?.contains(query, ignoreCase = true) == true)
-        // Archived bags are hidden from every view EXCEPT the Archived filter
-        // (proto: "All" counts non-archived; "Archived" surfaces them).
-        val matchesFilter = when (beanFilter) {
-            "archived" -> b.archivedAt != null
-            // "Active" = in rotation (web semantics): not archived, not frozen.
-            // The brew-loaded bag is the card's "Active for brew" state, not a facet.
-            "active" -> b.archivedAt == null && !b.isFrozen
-            "favourite" -> b.archivedAt == null && b.favourite
-            "frozen" -> b.archivedAt == null && b.isFrozen
-            "light", "medium", "dark" -> b.archivedAt == null && roastBand(b.roastLevel?.toInt())?.equals(beanFilter, ignoreCase = true) == true
-            else -> b.archivedAt == null
-        }
-        matchesSearch && matchesFilter
-    }
-    val beansAsc = when (beanSort) {
-        "name" -> visibleBeans.sortedBy { it.name.lowercase() }
-        "roast" -> visibleBeans.sortedBy { it.roastLevel?.toInt() ?: Int.MAX_VALUE }
-        "rating" -> visibleBeans.sortedBy { it.rating.toInt() }
-        "remaining" -> visibleBeans.sortedBy { it.remaining }
-        else -> visibleBeans.sortedBy { daysOffRoast(it.roastedOn) ?: Int.MAX_VALUE } // freshest first
-    }
-    val sortedBeans = if (beanSortDesc) beansAsc.reversed() else beansAsc
+    val sortedBeans = filterAndSortBeans(ui.beans, ui.roasters, query, beanFilter, beanSort, beanSortDesc)
     val visibleRoasters = ui.roasters.filter {
         query.isBlank() || it.name.contains(query, ignoreCase = true) ||
             (it.city?.contains(query, ignoreCase = true) == true) ||
@@ -243,23 +219,15 @@ fun BeansScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    val nonArchived = ui.beans.filter { it.archivedAt == null }
+                    val counts = beanFilterCounts(ui.beans)
                     CremaFilterGroupLabel("Status")
                     listOf("all" to "All", "active" to "Active", "favourite" to "Favourite", "frozen" to "Frozen", "archived" to "Archived").forEach { (id, label) ->
-                        val count = when (id) {
-                            "all" -> nonArchived.size
-                            "active" -> nonArchived.count { !it.isFrozen }
-                            "favourite" -> nonArchived.count { it.favourite }
-                            "frozen" -> nonArchived.count { it.isFrozen }
-                            else -> ui.beans.count { it.archivedAt != null }
-                        }
-                        CremaFilterChip(label = label, selected = beanFilter == id, count = count, onClick = { beanFilter = id })
+                        CremaFilterChip(label = label, selected = beanFilter == id, count = counts[id] ?: 0, onClick = { beanFilter = id })
                     }
                     CremaFilterDivider()
                     CremaFilterGroupLabel("Roast")
                     listOf("light" to "Light", "medium" to "Medium", "dark" to "Dark").forEach { (id, label) ->
-                        val count = nonArchived.count { roastBand(it.roastLevel?.toInt())?.equals(id, ignoreCase = true) == true }
-                        CremaFilterChip(label = label, selected = beanFilter == id, count = count, onClick = { beanFilter = id })
+                        CremaFilterChip(label = label, selected = beanFilter == id, count = counts[id] ?: 0, onClick = { beanFilter = id })
                     }
                     Spacer(Modifier.weight(1f))
                     CremaSortControl(
