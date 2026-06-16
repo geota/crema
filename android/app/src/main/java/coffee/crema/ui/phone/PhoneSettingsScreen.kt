@@ -26,6 +26,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager
 import coffee.crema.ui.MainViewModel
+import coffee.crema.ui.refillSoon
 import coffee.crema.ui.formatTemp
 import coffee.crema.ui.components.*
 import coffee.crema.ui.phone.components.*
@@ -395,8 +396,6 @@ private fun BrewDefaultsSection(vm: MainViewModel, ui: coffee.crema.ui.MainUiSta
     }
 }
 
-private const val LOW_TANK_MM_PHONE = 20f
-
 @Composable
 private fun WaterSection(
     vm: MainViewModel,
@@ -409,7 +408,7 @@ private fun WaterSection(
 ) {
     SettingsGroup("Tank") {
         val mm = ui.waterLevelMm
-        val low = mm != null && mm < LOW_TANK_MM_PHONE
+        val low = ui.refillSoon()
         PRow(
             "Water tank",
             when {

@@ -48,6 +48,7 @@ import coffee.crema.core.MmrRegister
 import coffee.crema.core.hasCupWarmer
 import coffee.crema.core.machineModelName
 import coffee.crema.ui.MainViewModel
+import coffee.crema.ui.refillSoon
 import coffee.crema.ui.components.CremaButton
 import coffee.crema.ui.components.CremaButtonVariant
 import coffee.crema.ui.components.CremaCard
@@ -77,12 +78,6 @@ import coffee.crema.ui.theme.JetBrainsMono
  * persistence behind a SettingsStore is a deferred follow-up, exactly the
  * "render the structure, wire the source later" policy the PWA uses.
  */
-/**
- * Tank level (mm) below which the Water section shows a "low — refill soon"
- * note. A coarse heuristic on the live `Event.WaterLevel` reading; the precise
- * low/refill thresholds belong to the deferred maintenance store.
- */
-private const val LOW_TANK_MM = 5f
 
 private val SETTINGS_SECTIONS = listOf(
     Triple("machine", "sliders-horizontal", "Machine"),
@@ -273,7 +268,7 @@ fun SettingsScreen(
                         // counter, then derives the readouts via the pure core FFI).
                         SetGroup("Tank") {
                             val mm = ui.waterLevelMm
-                            val low = mm != null && mm < LOW_TANK_MM
+                            val low = ui.refillSoon()
                             SetRow(
                                 "Water tank",
                                 when {
