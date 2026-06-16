@@ -1,6 +1,5 @@
 package coffee.crema.ui.screens
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -39,7 +38,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coffee.crema.ble.De1BleManager
@@ -61,6 +59,9 @@ import coffee.crema.ui.components.CremaSegmentedButton
 import coffee.crema.ui.components.CremaSwitch
 import coffee.crema.ui.components.CremaValueUnit
 import coffee.crema.ui.components.Eyebrow
+import coffee.crema.ui.components.CremaSettingsRow
+import coffee.crema.ui.components.CremaSettingsSelect
+import coffee.crema.ui.components.CremaMonoReadout
 import coffee.crema.ui.components.PhIcon
 import coffee.crema.ui.components.SegOption
 import coffee.crema.ui.components.CremaConfirmDialog
@@ -163,10 +164,10 @@ fun SettingsScreen(
                             onUpdateFirmware = null,
                         )
                         SetGroup("Connection") {
-                            SetRow("Telemetry rate", "How often the chart samples live data.", notImplemented = true) { SetSelect("50 Hz") }
+                            CremaSettingsRow("Telemetry rate", "How often the chart samples live data.", notImplemented = true) { CremaSettingsSelect("50 Hz") }
                             // Keep-awake is REAL: a 60 s UserPresent (MMR 0x803858)
                             // heartbeat in the VM resets the DE1's sleep timer while on.
-                            SetRow("Keep DE1 awake while Crema is open", "Re-arms the DE1's sleep timer every minute so the machine stays ready.") {
+                            CremaSettingsRow("Keep DE1 awake while Crema is open", "Re-arms the DE1's sleep timer every minute so the machine stays ready.") {
                                 CremaSwitch(ui.suppressDe1Sleep, vm::setSuppressDe1Sleep)
                             }
                             // GHC start-from-machine mode — driven by the live GhcMode
@@ -174,36 +175,36 @@ fun SettingsScreen(
                             // machine is connected and the GHC is reported present.
                             val ghcOn = ghcModeOn(ui.de1MachineInfo) ?: false
                             val ghcAvailable = connected && (ghcPresent(ui.de1MachineInfo) == true)
-                            SetRow("Group Head Controller (GHC)", "Start shots from the machine's touch panel.", last = true, needsConnection = !connected) {
+                            CremaSettingsRow("Group Head Controller (GHC)", "Start shots from the machine's touch panel.", last = true, needsConnection = !connected) {
                                 CremaSwitch(ghcOn, { vm.setGhcMode(it) }, enabled = ghcAvailable)
                             }
                         }
                         SetGroup("Identity") {
-                            SetRow("Model") { MonoReadout(machineModelLabel(ui.de1MachineInfo), color = MaterialTheme.colorScheme.onSurface) }
-                            SetRow("Serial number") { MonoReadout(serialLabel(ui.de1MachineInfo), color = MaterialTheme.colorScheme.onSurface) }
-                            SetRow("CPU board") { MonoReadout(cpuBoardLabel(ui.de1MachineInfo), color = MaterialTheme.colorScheme.onSurface) }
-                            SetRow("Firmware") { MonoReadout(ui.de1Firmware ?: "—", color = MaterialTheme.colorScheme.onSurface) }
-                            SetRow("Heater voltage", last = true) { MonoReadout(heaterVoltageLabel(ui.de1MachineInfo), color = MaterialTheme.colorScheme.onSurface) }
+                            CremaSettingsRow("Model") { CremaMonoReadout(machineModelLabel(ui.de1MachineInfo), color = MaterialTheme.colorScheme.onSurface) }
+                            CremaSettingsRow("Serial number") { CremaMonoReadout(serialLabel(ui.de1MachineInfo), color = MaterialTheme.colorScheme.onSurface) }
+                            CremaSettingsRow("CPU board") { CremaMonoReadout(cpuBoardLabel(ui.de1MachineInfo), color = MaterialTheme.colorScheme.onSurface) }
+                            CremaSettingsRow("Firmware") { CremaMonoReadout(ui.de1Firmware ?: "—", color = MaterialTheme.colorScheme.onSurface) }
+                            CremaSettingsRow("Heater voltage", last = true) { CremaMonoReadout(heaterVoltageLabel(ui.de1MachineInfo), color = MaterialTheme.colorScheme.onSurface) }
                         }
                         SetGroup("Diagnostics") {
-                            SetRow("Connection state") { MonoReadout(if (connected) "Ready" else "Disconnected", color = MaterialTheme.colorScheme.onSurface) }
-                            SetRow("GATT verified") { CremaStatusDot(connected) }
-                            SetRow("Machine state") { MonoReadout(ui.machineState ?: "—", color = MaterialTheme.colorScheme.onSurface) }
+                            CremaSettingsRow("Connection state") { CremaMonoReadout(if (connected) "Ready" else "Disconnected", color = MaterialTheme.colorScheme.onSurface) }
+                            CremaSettingsRow("GATT verified") { CremaStatusDot(connected) }
+                            CremaSettingsRow("Machine state") { CremaMonoReadout(ui.machineState ?: "—", color = MaterialTheme.colorScheme.onSurface) }
                             // Readable error copy (core `subStateErrorMessage`, web parity),
                             // shown only while the substate is an error.
                             ui.machineError?.let { err ->
-                                SetRow("Machine error") { MonoReadout(err, color = MaterialTheme.colorScheme.error) }
+                                CremaSettingsRow("Machine error") { CremaMonoReadout(err, color = MaterialTheme.colorScheme.error) }
                             }
-                            SetRow("Notifications received", last = true) { MonoReadout(if (connected) "—" else "0", color = MaterialTheme.colorScheme.onSurface) }
+                            CremaSettingsRow("Notifications received", last = true) { CremaMonoReadout(if (connected) "—" else "0", color = MaterialTheme.colorScheme.onSurface) }
                         }
                         SetGroup("Peripherals") {
-                            SetRow("Scale", if (scaleConnected) (ui.scaleName ?: "Connected") else "Not paired") {
+                            CremaSettingsRow("Scale", if (scaleConnected) (ui.scaleName ?: "Connected") else "Not paired") {
                                 if (scaleConnected) CremaStatusDot(true) else CremaButton(onClick = { onConnect("scale") }, variant = CremaButtonVariant.Outlined, label = "Pair")
                             }
-                            SetRow("Grinder", "No grinder support yet.") { CremaStatusDot(false) }
+                            CremaSettingsRow("Grinder", "No grinder support yet.") { CremaStatusDot(false) }
                             // Equipment-level grinder model (web `grinderModel`): free
                             // text, persisted, shown on Brew + sent to Visualizer.
-                            SetRow("Grinder model", "Stamped on shots and Visualizer uploads.", last = true) {
+                            CremaSettingsRow("Grinder model", "Stamped on shots and Visualizer uploads.", last = true) {
                                 CremaTextField(
                                     value = ui.grinderModel,
                                     onValueChange = vm::setGrinderModel,
@@ -218,7 +219,7 @@ fun SettingsScreen(
                         if (hasCupWarmerPlate(ui.de1MachineInfo)) {
                             SetGroup("Cup warmer") {
                                 val plate = cupWarmerTempValue(ui.de1MachineInfo) ?: 25
-                                SetRow("Plate temperature", "The Bengle warming plate's target.", last = true, needsConnection = !connected) {
+                                CremaSettingsRow("Plate temperature", "The Bengle warming plate's target.", last = true, needsConnection = !connected) {
                                     CremaStepper(
                                         value = plate.toDouble(), unit = "°C", step = 1.0, min = 0.0, max = 80.0,
                                         fmt = { "%.0f".format(it) }, style = CremaStepperStyle.Bare,
@@ -235,18 +236,18 @@ fun SettingsScreen(
                             // brewDefaultsJson, so the dialled numbers are real.
                             val setDefs = { d: Float, r: Float, t: Float, p: Float -> vm.setBrewDefaults(d, r, t, p) }
                             val dD = ui.defaultDoseG; val dR = ui.defaultRatio; val dT = ui.defaultBrewTempC; val dP = ui.defaultPreinfuseS
-                            SetRow("Default dose", "Starting dose for a fresh shot.") { CremaStepper(value = dD.toDouble(), unit = "g", step = 0.1, min = 5.0, max = 30.0, fmt = { "%.1f".format(it) }, style = CremaStepperStyle.Bare, onChange = { setDefs(it.toFloat(), dR, dT, dP) }) }
-                            SetRow("Default ratio", "Target brew ratio (yield ÷ dose).") { CremaStepper(value = dR.toDouble(), unit = null, step = 0.1, min = 1.0, max = 5.0, fmt = { "1:%.1f".format(it) }, style = CremaStepperStyle.Bare, onChange = { setDefs(dD, it.toFloat(), dT, dP) }) }
-                            SetRow("Default brew temp", "Starting group temperature.") { CremaStepper(value = dT.toDouble(), unit = "°C", step = 0.5, min = 80.0, max = 100.0, fmt = { "%.1f".format(it) }, style = CremaStepperStyle.Bare, onChange = { setDefs(dD, dR, it.toFloat(), dP) }) }
-                            SetRow("Default pre-infusion", "Low-pressure soak before the main shot.", last = true) { CremaStepper(value = dP.toDouble(), unit = "s", step = 1.0, min = 0.0, max = 60.0, fmt = { "%.0f".format(it) }, style = CremaStepperStyle.Bare, onChange = { setDefs(dD, dR, dT, it.toFloat()) }) }
+                            CremaSettingsRow("Default dose", "Starting dose for a fresh shot.") { CremaStepper(value = dD.toDouble(), unit = "g", step = 0.1, min = 5.0, max = 30.0, fmt = { "%.1f".format(it) }, style = CremaStepperStyle.Bare, onChange = { setDefs(it.toFloat(), dR, dT, dP) }) }
+                            CremaSettingsRow("Default ratio", "Target brew ratio (yield ÷ dose).") { CremaStepper(value = dR.toDouble(), unit = null, step = 0.1, min = 1.0, max = 5.0, fmt = { "1:%.1f".format(it) }, style = CremaStepperStyle.Bare, onChange = { setDefs(dD, it.toFloat(), dT, dP) }) }
+                            CremaSettingsRow("Default brew temp", "Starting group temperature.") { CremaStepper(value = dT.toDouble(), unit = "°C", step = 0.5, min = 80.0, max = 100.0, fmt = { "%.1f".format(it) }, style = CremaStepperStyle.Bare, onChange = { setDefs(dD, dR, it.toFloat(), dP) }) }
+                            CremaSettingsRow("Default pre-infusion", "Low-pressure soak before the main shot.", last = true) { CremaStepper(value = dP.toDouble(), unit = "s", step = 1.0, min = 0.0, max = 60.0, fmt = { "%.0f".format(it) }, style = CremaStepperStyle.Bare, onChange = { setDefs(dD, dR, dT, it.toFloat()) }) }
                         }
                         SetGroup("Shot behaviour") {
-                            SetRow("Auto-tare on shot start", "Zero the scale automatically when extraction begins.") { CremaSwitch(ui.autoTare, vm::setAutoTare) }
-                            SetRow("Stop on weight", "End the shot once the target yield is reached.") { CremaSwitch(ui.stopOnWeight, vm::setStopOnWeight) }
+                            CremaSettingsRow("Auto-tare on shot start", "Zero the scale automatically when extraction begins.") { CremaSwitch(ui.autoTare, vm::setAutoTare) }
+                            CremaSettingsRow("Stop on weight", "End the shot once the target yield is reached.") { CremaSwitch(ui.stopOnWeight, vm::setStopOnWeight) }
                             // Max shot duration — persisted in AppPrefs + read from
                             // ui.maxShotDurationS so it survives + shows on Brew's stop
                             // conditions. The stepper pushes each change through the VM.
-                            SetRow("Max shot duration", "Hard time cap — also a Brew stop condition.") {
+                            CremaSettingsRow("Max shot duration", "Hard time cap — also a Brew stop condition.") {
                                 val maxDur = ui.maxShotDurationS.toInt()
                                 CremaStepper(
                                     value = maxDur.toDouble(), unit = "s", step = 5.0, min = 0.0, max = 300.0,
@@ -254,9 +255,9 @@ fun SettingsScreen(
                                     onChange = { vm.setMaxShotDuration(it.toFloat()) },
                                 )
                             }
-                            SetRow("Group flush before each shot", "Stabilise the group temperature with a short flush.") { CremaSwitch(ui.preFlush, vm::setPreFlush) }
-                            SetRow("Auto-purge after steam", "Clear the steam wand automatically after steaming.") { CremaSwitch(ui.steamPurge, vm::setSteamPurge) }
-                            SetRow("Steam eco", "Idle the steam boiler cooler between sessions to save power.", last = true) { CremaSwitch(ui.steamEco, vm::setSteamEco) }
+                            CremaSettingsRow("Group flush before each shot", "Stabilise the group temperature with a short flush.") { CremaSwitch(ui.preFlush, vm::setPreFlush) }
+                            CremaSettingsRow("Auto-purge after steam", "Clear the steam wand automatically after steaming.") { CremaSwitch(ui.steamPurge, vm::setSteamPurge) }
+                            CremaSettingsRow("Steam eco", "Idle the steam boiler cooler between sessions to save power.", last = true) { CremaSwitch(ui.steamEco, vm::setSteamEco) }
                         }
                     }
                     "water" -> {
@@ -269,7 +270,7 @@ fun SettingsScreen(
                         SetGroup("Tank") {
                             val mm = ui.waterLevelMm
                             val low = ui.refillSoon()
-                            SetRow(
+                            CremaSettingsRow(
                                 "Water tank",
                                 when {
                                     mm == null -> "Connect the DE1 to read the tank level."
@@ -278,7 +279,7 @@ fun SettingsScreen(
                                 },
                                 last = true,
                             ) {
-                                MonoReadout(
+                                CremaMonoReadout(
                                     if (mm != null) "${mm.toInt()} mm" else "—",
                                     color = if (low) Color(0xFFDBA764) else MaterialTheme.colorScheme.onSurface,
                                 )
@@ -292,13 +293,13 @@ fun SettingsScreen(
                             val machineIdle = ui.machineState?.startsWith("Idle") == true
                             val cycleReady = connected && machineIdle
                             val cycleSub = if (connected && !machineIdle) " Machine must be idle." else ""
-                            SetRow("Descale", "Run the DE1's descale cycle.$cycleSub", needsConnection = !connected) {
+                            CremaSettingsRow("Descale", "Run the DE1's descale cycle.$cycleSub", needsConnection = !connected) {
                                 CremaButton(onClick = { confirm.pendingCycle = "descale" }, variant = CremaButtonVariant.Outlined, enabled = cycleReady, icon = "play", label = "Run now")
                             }
-                            SetRow("Group clean", "Run the DE1's cleaning cycle.$cycleSub", needsConnection = !connected) {
+                            CremaSettingsRow("Group clean", "Run the DE1's cleaning cycle.$cycleSub", needsConnection = !connected) {
                                 CremaButton(onClick = { confirm.pendingCycle = "clean" }, variant = CremaButtonVariant.Outlined, enabled = cycleReady, icon = "play", label = "Run now")
                             }
-                            SetRow("Steam rinse", "Flush the steam wand.$cycleSub", last = true, needsConnection = !connected) {
+                            CremaSettingsRow("Steam rinse", "Flush the steam wand.$cycleSub", last = true, needsConnection = !connected) {
                                 CremaButton(onClick = { confirm.pendingCycle = "steam-rinse" }, variant = CremaButtonVariant.Outlined, enabled = cycleReady, icon = "play", label = "Run now")
                             }
                         }
@@ -352,21 +353,21 @@ fun SettingsScreen(
                         // WaterSection's "Maintenance intervals" group, same ranges.
                         SetGroup("Maintenance intervals") {
                             val m2 = ui.maintenance
-                            SetRow("Filter capacity", "Litres before a filter change is due.") {
+                            CremaSettingsRow("Filter capacity", "Litres before a filter change is due.") {
                                 CremaStepper(
                                     value = m2.filterCapacityLitres, unit = "L", step = 5.0, min = 5.0, max = 500.0,
                                     fmt = { "%.0f".format(it) }, style = CremaStepperStyle.Bare,
                                     onChange = { vm.setFilterCapacity(it) },
                                 )
                             }
-                            SetRow("Descale interval", "Litres of brew water between descales.") {
+                            CremaSettingsRow("Descale interval", "Litres of brew water between descales.") {
                                 CremaStepper(
                                     value = m2.descaleIntervalLitres, unit = "L", step = 10.0, min = 10.0, max = 1000.0,
                                     fmt = { "%.0f".format(it) }, style = CremaStepperStyle.Bare,
                                     onChange = { vm.setDescaleInterval(it) },
                                 )
                             }
-                            SetRow("Clean cycle interval", "Hours of machine-on time between cleans.", last = true) {
+                            CremaSettingsRow("Clean cycle interval", "Hours of machine-on time between cleans.", last = true) {
                                 CremaStepper(
                                     value = m2.cleanIntervalHours, unit = "h", step = 1.0, min = 1.0, max = 500.0,
                                     fmt = { "%.0f".format(it) }, style = CremaStepperStyle.Bare,
@@ -377,17 +378,17 @@ fun SettingsScreen(
                         SetGroup("Water chemistry") {
                             // No core method for water hardness / TDS yet — the controls
                             // mirror the web's (segment + steppers), pilled until real.
-                            SetRow("Water source", "Your feed water — tunes descale intervals.", notImplemented = true) {
+                            CremaSettingsRow("Water source", "Your feed water — tunes descale intervals.", notImplemented = true) {
                                 CremaSegmentedButton(
                                     options = listOf(SegOption("tap", "Tap"), SegOption("filtered", "Filtered"), SegOption("bottled", "Bottled"), SegOption("rpavlis", "RPavlis")),
                                     value = waterSource,
                                     onChange = { waterSource = it },
                                 )
                             }
-                            SetRow("Hardness", "General hardness (GH).", notImplemented = true) {
+                            CremaSettingsRow("Hardness", "General hardness (GH).", notImplemented = true) {
                                 CremaStepper(value = hardnessPpm.toDouble(), unit = "ppm", step = 1.0, min = 0.0, max = 500.0, fmt = { "%.0f".format(it) }, style = CremaStepperStyle.Bare, onChange = { hardnessPpm = it.toInt() })
                             }
-                            SetRow("Total dissolved solids", "Measured TDS of your water.", last = true, notImplemented = true) {
+                            CremaSettingsRow("Total dissolved solids", "Measured TDS of your water.", last = true, notImplemented = true) {
                                 CremaStepper(value = tdsPpm.toDouble(), unit = "ppm", step = 1.0, min = 0.0, max = 1000.0, fmt = { "%.0f".format(it) }, style = CremaStepperStyle.Bare, onChange = { tdsPpm = it.toInt() })
                             }
                         }
@@ -395,46 +396,46 @@ fun SettingsScreen(
                     "display" -> {
                         SetHead("Appearance", "Display & units", "How Crema looks and the units it shows across every readout.")
                         SetGroup("Appearance") {
-                            SetRow("Theme", "Crema defaults to dark — the machine app is dark-skinned.") {
+                            CremaSettingsRow("Theme", "Crema defaults to dark — the machine app is dark-skinned.") {
                                 CremaSegmentedButton(
                                     options = listOf(SegOption("light", "Light"), SegOption("dark", "Dark")),
                                     value = if (ui.themeMode == "light") "light" else "dark",
                                     onChange = vm::setThemeMode,
                                 )
                             }
-                            SetRow("Density", "Card padding and control sizing.", notImplemented = true) {
+                            CremaSettingsRow("Density", "Card padding and control sizing.", notImplemented = true) {
                                 CremaSegmentedButton(
                                     options = listOf(SegOption("compact", "Compact"), SegOption("comfortable", "Comfortable"), SegOption("spacious", "Spacious")),
                                     value = density,
                                     onChange = { density = it },
                                 )
                             }
-                            SetRow("Screensaver", "Dim the display after a period idle.", notImplemented = true) { CremaSwitch(screensaver, { screensaver = it }) }
-                            SetRow("Keep screen on while brewing", "Hold the display awake during a shot.", last = true) { CremaSwitch(ui.keepScreenOnBrew, vm::setKeepScreenOnBrew) }
+                            CremaSettingsRow("Screensaver", "Dim the display after a period idle.", notImplemented = true) { CremaSwitch(screensaver, { screensaver = it }) }
+                            CremaSettingsRow("Keep screen on while brewing", "Hold the display awake during a shot.", last = true) { CremaSwitch(ui.keepScreenOnBrew, vm::setKeepScreenOnBrew) }
                         }
                         SetGroup("Units") {
-                            SetRow("Temperature", "Units for every temperature readout.") {
+                            CremaSettingsRow("Temperature", "Units for every temperature readout.") {
                                 CremaSegmentedButton(
                                     options = listOf(SegOption("C", "°C"), SegOption("F", "°F")),
                                     value = ui.tempUnit,
                                     onChange = vm::setTempUnit,
                                 )
                             }
-                            SetRow("Weight", "Units for dose and yield.") {
+                            CremaSettingsRow("Weight", "Units for dose and yield.") {
                                 CremaSegmentedButton(
                                     options = listOf(SegOption("g", "Grams"), SegOption("oz", "Ounces")),
                                     value = ui.weightUnit,
                                     onChange = vm::setWeightUnit,
                                 )
                             }
-                            SetRow("Pressure", "Units for the pressure channel.") {
+                            CremaSettingsRow("Pressure", "Units for the pressure channel.") {
                                 CremaSegmentedButton(
                                     options = listOf(SegOption("bar", "bar"), SegOption("psi", "psi")),
                                     value = ui.pressureUnit,
                                     onChange = vm::setPressureUnit,
                                 )
                             }
-                            SetRow("Volume", "Units for water and yield volume.", last = true) {
+                            CremaSettingsRow("Volume", "Units for water and yield volume.", last = true) {
                                 CremaSegmentedButton(
                                     options = listOf(SegOption("ml", "ml"), SegOption("floz", "fl oz")),
                                     value = ui.volumeUnit,
@@ -469,7 +470,7 @@ fun SettingsScreen(
                                 val lastSyncLabel = vz.lastShotSyncAt?.let {
                                     android.text.format.DateUtils.getRelativeTimeSpanString(it).toString()
                                 } ?: "never"
-                                SetRow(
+                                CremaSettingsRow(
                                     "Shots",
                                     "${ui.history.size} shot(s)" +
                                         (if (unsyncedCount > 0) " · $unsyncedCount unsynced" else "") +
@@ -486,10 +487,10 @@ fun SettingsScreen(
                                         onChange = vm.visualizer::setShotsDirection,
                                     )
                                 }
-                                SetRow("Auto-sync new shots", "Upload each shot as it finishes (needs a pushing direction).") {
+                                CremaSettingsRow("Auto-sync new shots", "Upload each shot as it finishes (needs a pushing direction).") {
                                     CremaSwitch(vz.autoSync, vm.visualizer::setAutoSync, enabled = vz.shotsDirection == "backup" || vz.shotsDirection == "two-way")
                                 }
-                                SetRow(
+                                CremaSettingsRow(
                                     "Sync now",
                                     if (unsyncedCount == 0) "All ${ui.history.size} local shots are on Visualizer."
                                     else "$unsyncedCount local shot(s) not uploaded yet.",
@@ -502,7 +503,7 @@ fun SettingsScreen(
                                         label = if (vz.syncing) "Syncing…" else "Sync now",
                                     )
                                 }
-                                SetRow("Re-sync shots", "Re-pull everything from Visualizer, de-duplicated.", last = true) {
+                                CremaSettingsRow("Re-sync shots", "Re-pull everything from Visualizer, de-duplicated.", last = true) {
                                     CremaButton(
                                         onClick = { confirm.pendingResync = true },
                                         variant = CremaButtonVariant.Outlined,
@@ -515,21 +516,21 @@ fun SettingsScreen(
                             // Upload options — defaults applied to every upload (web's
                             // separate group; per-shot privacy overrides live in History).
                             SetGroup("Upload options") {
-                                SetRow("Default privacy", "Public = community feed; unlisted = direct link only; private = just you. Shots can override this in History.") {
+                                CremaSettingsRow("Default privacy", "Public = community feed; unlisted = direct link only; private = just you. Shots can override this in History.") {
                                     CremaSegmentedButton(
                                         options = listOf(SegOption("public", "Public"), SegOption("unlisted", "Unlisted"), SegOption("private", "Private")),
                                         value = vz.privacy,
                                         onChange = vm.visualizer::setPrivacy,
                                     )
                                 }
-                                SetRow("Include profile", "Attach the full recipe (every segment) to uploads.") { CremaSwitch(vz.includeProfile, vm.visualizer::setIncludeProfile) }
-                                SetRow("Include tasting notes", "Attach your journal text to uploads. Ratings always ride along.", last = true) { CremaSwitch(vz.includeNotes, vm.visualizer::setIncludeNotes) }
+                                CremaSettingsRow("Include profile", "Attach the full recipe (every segment) to uploads.") { CremaSwitch(vz.includeProfile, vm.visualizer::setIncludeProfile) }
+                                CremaSettingsRow("Include tasting notes", "Attach your journal text to uploads. Ratings always ride along.", last = true) { CremaSwitch(vz.includeNotes, vm.visualizer::setIncludeNotes) }
                             }
                         }
                         if (vz.signedIn) {
                             var showLog by remember { mutableStateOf(false) }
                             SetGroup("Recent activity") {
-                                SetRow(
+                                CremaSettingsRow(
                                     "Sync log",
                                     if (vz.log.isEmpty()) "No sync activity yet."
                                     else "${vz.log.size} recent event(s).",
@@ -550,7 +551,7 @@ fun SettingsScreen(
                             }
                         }
                         SetGroup("Local export") {
-                            SetRow(
+                            CremaSettingsRow(
                                 "History export",
                                 "One-shot download of your entire shot history as JSON. Useful for spreadsheets and other tools.",
                                 last = true,
@@ -594,15 +595,15 @@ fun SettingsScreen(
                         SetGroup("Sensor calibration") {
                             // Temperature offset / pressure zero have no core setter
                             // (calibration writes are read-only over FFI) — placeholders.
-                            SetRow("Temperature", "Shift every temperature reading.", notImplemented = true) { CremaStepper(value = tempOffset, unit = "°C", step = 0.1, min = -5.0, max = 5.0, fmt = { "%+.1f".format(it) }, style = CremaStepperStyle.Bare, onChange = { tempOffset = it }) }
-                            SetRow("Pressure", "Re-zero the pressure sensor at idle.", notImplemented = true) { MonoReadout("0.0 bar", color = MaterialTheme.colorScheme.onSurface) }
+                            CremaSettingsRow("Temperature", "Shift every temperature reading.", notImplemented = true) { CremaStepper(value = tempOffset, unit = "°C", step = 0.1, min = -5.0, max = 5.0, fmt = { "%+.1f".format(it) }, style = CremaStepperStyle.Bare, onChange = { tempOffset = it }) }
+                            CremaSettingsRow("Pressure", "Re-zero the pressure sensor at idle.", notImplemented = true) { CremaMonoReadout("0.0 bar", color = MaterialTheme.colorScheme.onSurface) }
                             // Flow multiplier — the stepper edits a STAGED draft; the
                             // write happens only through Apply's type-to-confirm dialog
                             // (web parity: stray taps must not silently re-calibrate).
                             val mult = flowMultiplierValue(ui.de1MachineInfo) ?: 1.0
                             var flowDraft by remember(mult) { mutableStateOf(mult) }
                             val flowDirty = kotlin.math.abs(flowDraft - mult) > 0.0001
-                            SetRow("Flow", "Scale the flow-meter reading. Apply commits after a typed confirm.", needsConnection = !connected) {
+                            CremaSettingsRow("Flow", "Scale the flow-meter reading. Apply commits after a typed confirm.", needsConnection = !connected) {
                                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                                     CremaStepper(
                                         value = flowDraft, unit = "×", step = 0.01, min = 0.5, max = 1.5,
@@ -623,7 +624,7 @@ fun SettingsScreen(
                                     )
                                 }
                             }
-                            SetRow("Last read", "Flow multiplier reported by the DE1.", last = true) { MonoReadout(flowMultiplierValue(ui.de1MachineInfo)?.let { String.format("×%.2f", it) } ?: "—", color = MaterialTheme.colorScheme.onSurface) }
+                            CremaSettingsRow("Last read", "Flow multiplier reported by the DE1.", last = true) { CremaMonoReadout(flowMultiplierValue(ui.de1MachineInfo)?.let { String.format("×%.2f", it) } ?: "—", color = MaterialTheme.colorScheme.onSurface) }
                         }
                     }
                     "advanced" -> {
@@ -638,7 +639,7 @@ fun SettingsScreen(
                                 0.0f -> "auto"
                                 else -> "auto"
                             }
-                            SetRow("AC mains frequency", "Match your wall power for clean temperature control.", needsConnection = !connected) {
+                            CremaSettingsRow("AC mains frequency", "Match your wall power for clean temperature control.", needsConnection = !connected) {
                                 CremaSegmentedButton(
                                     options = listOf(SegOption("auto", "Auto"), SegOption("50", "50 Hz"), SegOption("60", "60 Hz")),
                                     value = freqValue,
@@ -648,13 +649,13 @@ fun SettingsScreen(
                                     enabled = connected,
                                 )
                             }
-                            SetRow("Smooth pressure curve", "Filter chart noise on the live readout.", last = true, notImplemented = true) { CremaSwitch(smoothPressure, { smoothPressure = it }) }
+                            CremaSettingsRow("Smooth pressure curve", "Filter chart noise on the live readout.", last = true, notImplemented = true) { CremaSwitch(smoothPressure, { smoothPressure = it }) }
                         }
                         SetGroup("Diagnostics") {
                             // Web parity: a persisted toggle revealing the event log
                             // INLINE (web DebugPanel) rather than a separate screen.
                             // The full Phase-0 console stays reachable from the panel.
-                            SetRow(
+                            CremaSettingsRow(
                                 "Show debug / event-log panel",
                                 "Surfaces the raw BLE event log below.",
                                 last = !ui.showDebugPanel,
@@ -696,7 +697,7 @@ fun SettingsScreen(
                             // confirm (staged in pendingHeaterVoltage). Reflects the live
                             // HeaterVoltage register; the VM guards 120/230 again.
                             val hv = heaterVoltageValue(ui.de1MachineInfo) ?: "230"
-                            SetRow("Mains heater voltage", "Wrong voltage damages the heater — service only.", last = true, needsConnection = !connected) {
+                            CremaSettingsRow("Mains heater voltage", "Wrong voltage damages the heater — service only.", last = true, needsConnection = !connected) {
                                 CremaSegmentedButton(
                                     options = listOf(SegOption("120", "120 V"), SegOption("230", "230 V")),
                                     value = hv,
@@ -711,8 +712,8 @@ fun SettingsScreen(
                             // action is impossible; a dead button would be misleading.
                         }
                         SetGroup("Reset") {
-                            SetRow("Reset preferences", "Restore Crema's settings to defaults.") { CremaButton(onClick = { confirm.confirmResetPrefs = true }, variant = CremaButtonVariant.Text, label = "Reset") }
-                            SetRow("Erase all data", "Delete every profile, bean and shot.", last = true) { CremaButton(onClick = { confirm.confirmErase = true }, variant = CremaButtonVariant.Text, danger = true, label = "Erase") }
+                            CremaSettingsRow("Reset preferences", "Restore Crema's settings to defaults.") { CremaButton(onClick = { confirm.confirmResetPrefs = true }, variant = CremaButtonVariant.Text, label = "Reset") }
+                            CremaSettingsRow("Erase all data", "Delete every profile, bean and shot.", last = true) { CremaButton(onClick = { confirm.confirmErase = true }, variant = CremaButtonVariant.Text, danger = true, label = "Erase") }
                         }
                     }
                     "about" -> {
@@ -722,10 +723,10 @@ fun SettingsScreen(
                                 val ctx = androidx.compose.ui.platform.LocalContext.current
                                 remember { runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull() ?: "dev" }
                             }
-                            SetRow("App") { MonoReadout(appVersion, color = MaterialTheme.colorScheme.onSurface) }
+                            CremaSettingsRow("App") { CremaMonoReadout(appVersion, color = MaterialTheme.colorScheme.onSurface) }
                             val coreVer = remember { runCatching { coffee.crema.core.coreVersion() }.getOrNull() ?: "—" }
-                            SetRow("Core") { MonoReadout("de1-core v$coreVer · UniFFI", color = MaterialTheme.colorScheme.onSurface) }
-                            SetRow("Machine", last = true) { MonoReadout("Decent DE1", color = MaterialTheme.colorScheme.onSurface) }
+                            CremaSettingsRow("Core") { CremaMonoReadout("de1-core v$coreVer · UniFFI", color = MaterialTheme.colorScheme.onSurface) }
+                            CremaSettingsRow("Machine", last = true) { CremaMonoReadout("Decent DE1", color = MaterialTheme.colorScheme.onSurface) }
                         }
                         val aboutContext = androidx.compose.ui.platform.LocalContext.current
                         val openLink: (String) -> Unit = { url ->
@@ -734,16 +735,16 @@ fun SettingsScreen(
                             )
                         }
                         SetGroup("Project") {
-                            SetRow("Project repository", "Source, issues, and release notes.") {
+                            CremaSettingsRow("Project repository", "Source, issues, and release notes.") {
                                 CremaButton(onClick = { openLink("https://github.com/geota/crema") }, variant = CremaButtonVariant.Outlined, icon = "arrow-square-out", label = "Open")
                             }
-                            SetRow("Decent Espresso", "The folks who make the DE1.") {
+                            CremaSettingsRow("Decent Espresso", "The folks who make the DE1.") {
                                 CremaButton(onClick = { openLink("https://decentespresso.com") }, variant = CremaButtonVariant.Outlined, icon = "arrow-square-out", label = "Visit")
                             }
-                            SetRow("Visualizer", "Optional cloud sync for shots and beans.") {
+                            CremaSettingsRow("Visualizer", "Optional cloud sync for shots and beans.") {
                                 CremaButton(onClick = { openLink("https://visualizer.coffee") }, variant = CremaButtonVariant.Outlined, icon = "arrow-square-out", label = "Visit")
                             }
-                            SetRow("pdf.maceiras.dev", "Also by the author — a browser-based PDF toolkit. Files never leave your device.", last = true) {
+                            CremaSettingsRow("pdf.maceiras.dev", "Also by the author — a browser-based PDF toolkit. Files never leave your device.", last = true) {
                                 CremaButton(onClick = { openLink("https://pdf.maceiras.dev") }, variant = CremaButtonVariant.Outlined, icon = "arrow-square-out", label = "Visit")
                             }
                         }
@@ -761,14 +762,14 @@ fun SettingsScreen(
                                 "Decent de1app & reaprime" to "Protocol documentation lineage",
                             )
                             libs.forEachIndexed { i, (name, desc) ->
-                                SetRow(name, desc, last = i == libs.lastIndex) {}
+                                CremaSettingsRow(name, desc, last = i == libs.lastIndex) {}
                             }
                         }
                         SetGroup("Legal") {
                             // The web ships /terms + /privacy in-app; the tablet has no
                             // hosted equivalents yet — pilled until those pages exist.
-                            SetRow("Terms of Service", "License, hardware-risk disclaimer, limitation of liability.", notImplemented = true) { SetSelect("Ships with 1.0") }
-                            SetRow("Privacy Policy", "Crema is local-only. No analytics, no tracking.", last = true, notImplemented = true) { SetSelect("Ships with 1.0") }
+                            CremaSettingsRow("Terms of Service", "License, hardware-risk disclaimer, limitation of liability.", notImplemented = true) { CremaSettingsSelect("Ships with 1.0") }
+                            CremaSettingsRow("Privacy Policy", "Crema is local-only. No analytics, no tracking.", last = true, notImplemented = true) { CremaSettingsSelect("Ships with 1.0") }
                         }
                     }
                 }
@@ -817,82 +818,6 @@ private fun SetGroup(title: String? = null, content: @Composable () -> Unit) {
             Column(Modifier.fillMaxWidth()) { content() }
         }
     }
-}
-
-// ── Settings row — title + optional sub (left), trailing control, bottom rule ─
-// `notImplemented` shows a "Not implemented yet" pill + dims the control (PWA
-// StRow.notImplemented); `needsConnection` shows a copper "Connect DE1" pill.
-@Composable
-private fun SetRow(
-    title: String,
-    sub: String? = null,
-    last: Boolean = false,
-    notImplemented: Boolean = false,
-    needsConnection: Boolean = false,
-    trailing: @Composable () -> Unit = {},
-) {
-    Row(
-        Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        Column(Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(title, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
-                if (notImplemented) SetPill("Not implemented yet")
-                else if (needsConnection) SetPill("Connect DE1", copper = true)
-            }
-            if (sub != null) {
-                Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 2.dp))
-            }
-        }
-        Box(Modifier.alpha(if (notImplemented) 0.5f else 1f)) { trailing() }
-    }
-    if (!last) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-}
-
-// ── Status pill on a settings row — neutral "Not implemented yet" or copper
-// "Connect DE1" (PWA .st-row-pill). ──────────────────────────────────────────
-@Composable
-private fun SetPill(text: String, copper: Boolean = false) {
-    val fg = if (copper) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-    val bg = if (copper) MaterialTheme.colorScheme.primary.copy(alpha = 0.08f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
-    val ring = if (copper) MaterialTheme.colorScheme.primary.copy(alpha = 0.22f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
-    Text(
-        text.uppercase(),
-        style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, letterSpacing = 0.5.sp),
-        color = fg,
-        modifier = Modifier
-            .clip(RoundedCornerShape(999.dp))
-            .background(bg)
-            .border(1.dp, ring, RoundedCornerShape(999.dp))
-            .padding(horizontal = 8.dp, vertical = 2.dp),
-    )
-}
-
-// ── Flat select pill (value + caret) — opens a menu (static for now) ─────────
-@Composable
-private fun SetSelect(value: String, onClick: () -> Unit = {}) {
-    Surface(
-        onClick = onClick,
-        shape = RoundedCornerShape(8.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-        modifier = Modifier.height(40.dp),
-    ) {
-        Row(Modifier.padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(value, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
-            PhIcon("caret-down", sizeDp = 16, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
-}
-
-// (SetStepper / StepBtn removed — settings rows route through CremaStepper / Bare.)
-
-// ── Tiny mono readout (diagnostics / versions) ───────────────────────────────
-@Composable
-private fun MonoReadout(text: String, color: Color = MaterialTheme.colorScheme.onSurfaceVariant) {
-    Text(text, style = TextStyle(fontFamily = JetBrainsMono, fontSize = 12.sp, fontFeatureSettings = "tnum"), color = color)
 }
 
 // ── Machine hero — artwork well + info inner card + firmware inner card ──────
@@ -1267,7 +1192,7 @@ private fun HeroMeta(key: String, value: String) {
         if (placeholder) {
             Text("—", style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp), color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f))
         } else {
-            MonoReadout(value, color = MaterialTheme.colorScheme.onSurface)
+            CremaMonoReadout(value, color = MaterialTheme.colorScheme.onSurface)
         }
     }
 }
