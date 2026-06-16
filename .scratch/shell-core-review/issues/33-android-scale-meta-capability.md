@@ -1,6 +1,6 @@
 # 33 — Share scale metadata + capability body
 
-- **Status:** ready-for-agent
+- **Status:** ⏳ partial 2026-06-15 — `scaleMeta` shared ✅; capability-body merge deferred (unverifiable w/o a scale + design call — see note)
 - **Severity:** P2
 - **Area:** Android phone + tablet — `ui/phone/PhoneScaleScreen.kt`, `ui/screens/ScaleScreen.kt`
 - **Punchlist:** T4-08 — `../PUNCHLIST.md`
@@ -63,3 +63,31 @@ Looked at both screens closely. Two distinct sub-tasks with very different risk:
 body behind a `showDisplayMode` flag, tablet currently `false` to stay
 value-preserving — or grant the tablet parity if the operator wants it). Verify
 behind a scale when hardware is available.
+
+### 2026-06-15 — part 1 DONE (`scaleMeta` shared); body-merge deferred per the handoff
+**`scaleMeta(ui)` shared.** Promoted the tablet's to non-private
+(`ScaleScreen.kt`); deleted the phone's byte-identical copy; phone imports
+`coffee.crema.ui.screens.scaleMeta`. `grep "fun scaleMeta"` → exactly 1. Build green.
+
+**Capability-body merge deferred — it is NOT a value-preserving hoist.** Read both
+closely post-26: merging forces ONE canonical presentation across choices that
+genuinely differ today, and the rows only render with a **connected scale** (no
+simulator), so the result is **unverifiable on the emulators**. The decision surface,
+captured for a session with a scale (or an operator design call):
+  | aspect | tablet `ScaleSettingsPanel` | phone `ConnectedBody` |
+  |---|---|---|
+  | container | `CremaCard` | `Surface(surfaceContainer)` |
+  | rows | `ToggleRow`/`SegRow` (custom, dividers) | public `SettingsRow` (no dividers) |
+  | caps model | mapped `ScaleCapabilities` (camelCase) + 11 params | core caps (snake_case) + `vm`/`ui` direct |
+  | auto-stop labels | "Flow-stop" / "Cup-removal" | "Flow" / "Cup" |
+  | display-mode row | **omitted** (`mapCaps` drops `modes`) | **included** (`set_scale_mode` wired) |
+  | footer | `CremaButton` Tonal/Text-danger | `FilledTonalButton`/`TextButton` |
+  | empty state | inline `CremaEmptyState` (`caps == null`) | n/a (body only when connected) |
+
+**Suggested canonical (for when it's done):** route both onto the now-unified
+`CremaSettingsRow` (issue 26; dense on phone, roomy on tablet — this also retires the
+public `SettingsRow`, the piece 26 deferred here), `CremaButton` footer, one label set,
+and a `showDisplayMode` flag (tablet `false` unless the operator wants parity — the VM
+already wires `set_scale_mode`/`scaleActiveMode`). **Left for a scale-equipped session**
+per the handoff ("verify behind a scale when hardware is available"); doing it blind
+would reshape a screen no one can see.

@@ -22,6 +22,7 @@ import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.effectiveBrew
 import coffee.crema.ui.components.*
 import coffee.crema.ui.phone.components.*
+import coffee.crema.ui.screens.scaleMeta
 import coffee.crema.ui.theme.CremaTheme
 import kotlinx.coroutines.delay
 
@@ -41,14 +42,6 @@ import kotlinx.coroutines.delay
  * Layout (whole body scrolls): header → weight hero + live pill → Tare/Peak/Timer
  * → dose helper → capability settings → recent activity.
  */
-
-/** The header meta line, built from the live scale identity (tablet parity). */
-private fun scaleMeta(ui: MainUiState): String =
-    buildList {
-        add("Connected")
-        ui.scaleBatteryPercent?.let { add("$it%") }
-        ui.scaleFirmware?.let { add("FW $it") }
-    }.joinToString(" · ")
 
 @Composable
 fun PhoneScaleScreen(

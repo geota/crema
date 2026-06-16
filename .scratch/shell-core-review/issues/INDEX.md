@@ -61,7 +61,7 @@ Sequencing lives at the bottom of `../PUNCHLIST.md`. Recommended first wave:
 | 30 | Hoist maintenance burn-down math (Android) | P2 | ✅ done |
 | 31 | Extract `applyBeanEdits(bean, draft)` + share bag presets | P2 | ✅ done |
 | 32 | Add `SegmentEdit` unit helpers + promote `toEdit` | P2 | ✅ done (SegmentEditExt: targetUnit/limiterUnit/exit unit + shared toEdit) |
-| 33 | Share scale metadata + capability body (Android) | P2 | ready-for-agent (do after 26+35; body-merge unverifiable w/o scale — see note) |
+| 33 | Share scale metadata + capability body (Android) | P2 | ⏳ partial (`scaleMeta` shared ✅; body-merge deferred — unverifiable w/o a scale + design call) |
 | 34 | Hoist the multi-channel spark chart (Android) | P2 | ✅ done |
 | 35 | Route all Android steppers through `CremaStepper` | P2 | ✅ done (5-preset `CremaStepperStyle`; 55 sites; folds 50's compare control) |
 | 36 | Extract `CremaStarRating(...)` | P2 | ✅ done |

@@ -72,8 +72,10 @@ private fun mapCaps(core: coffee.crema.core.ScaleCapabilities, name: String, met
         canBeep = core.can_beep,
     )
 
-/** The header meta line, built from the live scale identity. */
-private fun scaleMeta(ui: MainUiState): String =
+/** The header meta line, built from the live scale identity. Shared with the
+ *  phone scale screen (issue 33) — the established `coffee.crema.ui.screens.X`
+ *  cross-shell-helper pattern. */
+fun scaleMeta(ui: MainUiState): String =
     buildList {
         add("Connected")
         ui.scaleBatteryPercent?.let { add("$it%") }
