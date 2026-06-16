@@ -54,7 +54,7 @@ Sequencing lives at the bottom of `../PUNCHLIST.md`. Recommended first wave:
 
 | # | Title | Sev | Status |
 |---|-------|-----|--------|
-| 26 | Collapse the three Android settings-row systems | P2 | ready-for-agent |
+| 26 | Collapse the three Android settings-row systems | P2 | ✅ done (CremaSettingsRow + LocalSettingsRowDense; pill→"Soon"; SettingsRow→33) |
 | 27 | Extract `SettingsConfirmDialogs(...)` (copied verbatim phone↔tablet) | P2 | ✅ done |
 | 28 | Hoist per-domain filter/sort + brew-fallback helpers (Android) | P2 | ✅ done (4 helpers: effectiveBrew + Bean/Shot/ProfileFilter; phone "All" badge fixed) |
 | 29 | Reconcile low-tank threshold (phone 20f vs tablet 5f) | P3 | ✅ done (defer to machine `refill_threshold`; web parity; one `refillSoon`) |
