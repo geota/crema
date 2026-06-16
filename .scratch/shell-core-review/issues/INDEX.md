@@ -69,7 +69,7 @@ Sequencing lives at the bottom of `../PUNCHLIST.md`. Recommended first wave:
 | 38 | Route phone cards through `CremaCardSpec` | P2 | ✅ done |
 | 39 | Extract `useVisualizerConnection()` rune helper (web) | P2 | ✅ done (4 sites; +BeanSyncSection) |
 | 40 | Share `bestEffortRemoteDelete(ids)` (web) | P2 | ✅ done |
-| 41 | Factor a shared `useStepper` numeric core (web) | P3 | ready-for-agent |
+| 41 | Factor a shared `useStepper` numeric core (web) | P3 | ✅ done |
 
 ## Theme 3 — Design consistency across shells
 

@@ -8,11 +8,10 @@
 	 * the buttons to nudge, click the value to set a specific number.
 	 *
 	 * Shared across the Settings pages (Brew defaults, Water + maintenance,
-	 * Sound volume). The Quick-sheet `QuickStepper` and the Profile-editor
-	 * `PeNumber` have their own visual treatments (dark chrome and
-	 * labelled-box respectively) and keep their own components, but
-	 * share the click-to-type behaviour by mirroring this file's
-	 * `editing` / `draft` / `commit` logic.
+	 * Sound volume). The Quick-sheet `QuickStepper` shares this stepper's numeric
+	 * + click-to-type core via the {@link useStepper} helper, under its own dark
+	 * chrome; the Profile-editor `PeNumber` keeps a separate labelled-box
+	 * treatment with its own logic.
 	 *
 	 * The component owns no persistent state — it's a controlled input.
 	 * The parent passes `value` and an `onCommit` callback fired with the
@@ -25,14 +24,8 @@
 	 * canonical before invoking `onCommit`. `value` / `step` / `min` / `max`
 	 * always remain canonical (grams / °C / ml / bar).
 	 */
-	import {
-		canonicalToDisplay,
-		displayDecimals,
-		displayToCanonical,
-		unitLabel,
-		type Dimension
-	} from '$lib/settings/format';
-	import { getSettingsStore } from '$lib/settings/store.svelte';
+	import { type Dimension } from '$lib/settings/format';
+	import { useStepper } from '../useStepper.svelte';
 
 	let {
 		value,
@@ -95,81 +88,21 @@
 		onDot?: () => void;
 	} = $props();
 
-	const settings = getSettingsStore();
-
-	const effectiveUnit = $derived(dimension ? unitLabel(dimension, settings.current) : unit);
-	const effectiveDecimals = $derived(
-		dimension ? displayDecimals(dimension, settings.current) : decimals
-	);
-
-	/** Click-to-type editing state. */
-	let editing = $state(false);
-	let draft = $state('');
-	let inputEl = $state<HTMLInputElement | null>(null);
-
-	/** Convert a canonical value to its display-unit number. */
-	function toDisplay(canonical: number): number {
-		return dimension ? canonicalToDisplay(dimension, canonical, settings.current) : canonical;
-	}
-	/** Convert a display-unit number back to canonical. */
-	function fromDisplay(display: number): number {
-		return dimension ? displayToCanonical(dimension, display, settings.current) : display;
-	}
-
-	const display = $derived(toDisplay(value).toFixed(effectiveDecimals));
-
-	function clamp(n: number): number {
-		if (min !== undefined) n = Math.max(min, n);
-		if (max !== undefined) n = Math.min(max, n);
-		return n;
-	}
-
-	/**
-	 * Step by `dir`. With `dimension`, work in display units so each click
-	 * moves the visible digit — see {@link QuickStepper.inc} for the full
-	 * explanation. Without `dimension`, plain canonical arithmetic.
-	 */
-	function inc(dir: number): void {
-		if (dimension) {
-			const displayNow = toDisplay(value);
-			const grid = Math.pow(10, -effectiveDecimals);
-			const displayStep = Math.max(grid, toDisplay(value + step) - displayNow);
-			const nextDisplay = Math.round((displayNow + dir * displayStep) / grid) * grid;
-			const next = clamp(fromDisplay(nextDisplay));
-			if (next !== value) onCommit(next);
-			return;
-		}
-		const next = clamp(Number((value + dir * step).toFixed(4)));
-		if (next !== value) onCommit(next);
-	}
-
-	function beginEdit(): void {
-		draft = String(Number(toDisplay(value).toFixed(effectiveDecimals)));
-		editing = true;
-		queueMicrotask(() => {
-			inputEl?.focus();
-			inputEl?.select();
-		});
-	}
-
-	function commit(): void {
-		if (!editing) return;
-		editing = false;
-		const n = Number(draft);
-		if (!Number.isFinite(n)) return;
-		const next = clamp(fromDisplay(n));
-		if (next !== value) onCommit(next);
-	}
-
-	function onKey(e: KeyboardEvent): void {
-		if (e.key === 'Enter') {
-			e.preventDefault();
-			commit();
-		} else if (e.key === 'Escape') {
-			e.preventDefault();
-			editing = false;
-		}
-	}
+	// Numeric core (clamp + canonical↔display + grid-snapped inc + click-to-type)
+	// is shared with QuickStepper via `useStepper`. StStepper keeps `incPrecision:
+	// 4` and its explicit `decimals` prop; min/max stay optional. Presentation
+	// (size variants, the optional dot toggle) stays here.
+	const stepper = useStepper({
+		value: () => value,
+		commit: (n) => onCommit(n),
+		step: () => step,
+		min: () => min,
+		max: () => max,
+		dimension: () => dimension,
+		unit: () => unit,
+		decimals: () => decimals,
+		incPrecision: 4
+	});
 </script>
 
 <div class={`st-stepper st-stepper-${size}`}>
@@ -194,35 +127,35 @@
 		<button
 			type="button"
 			class="st-stepper-btn"
-			onclick={() => inc(-1)}
+			onclick={() => stepper.inc(-1)}
 			aria-label="Decrease {label ?? 'value'}"
 		>
 			<MinusIcon aria-hidden="true" />
 		</button>
 		<div class="st-stepper-val">
-			{#if editing}
+			{#if stepper.editing}
 				<input
-					bind:this={inputEl}
+					bind:this={stepper.inputEl}
 					class="st-stepper-input"
 					type="number"
-					bind:value={draft}
-					onblur={commit}
-					onkeydown={onKey}
+					bind:value={stepper.draft}
+					onblur={stepper.commit}
+					onkeydown={stepper.onKey}
 				/>
 			{:else}
 				<button
 					type="button"
 					class="st-stepper-num"
-					onclick={beginEdit}
+					onclick={stepper.beginEdit}
 					aria-label={`Edit ${label ?? 'value'}`}
-				>{display}</button>
-				<span class="st-stepper-unit">{effectiveUnit}</span>
+				>{stepper.display}</button>
+				<span class="st-stepper-unit">{stepper.unit}</span>
 			{/if}
 		</div>
 		<button
 			type="button"
 			class="st-stepper-btn"
-			onclick={() => inc(1)}
+			onclick={() => stepper.inc(1)}
 			aria-label="Increase {label ?? 'value'}"
 		>
 			<PlusIcon aria-hidden="true" />

@@ -6,19 +6,14 @@
 	 * `QuickStepper` in `quick-controls.jsx`. Reuses the `.qcs*` class names so the
 	 * design CSS applies verbatim.
 	 *
-	 * Presentation-only: it owns no state. The parent passes `value` and an
-	 * `onChange` callback; the buttons clamp to `[min, max]` so `onChange` only
-	 * ever fires with an in-range value.
+	 * Presentation + the shared `useStepper` numeric core (clamp + unit
+	 * conversion + click-to-type). The parent passes `value` and an `onChange`
+	 * callback; the buttons clamp to `[min, max]` so `onChange` only ever fires
+	 * with an in-range value.
 	 */
 	import type { Snippet } from 'svelte';
-	import {
-		canonicalToDisplay,
-		displayDecimals,
-		displayToCanonical,
-		unitLabel,
-		type Dimension
-	} from '$lib/settings/format';
-	import { getSettingsStore } from '$lib/settings/store.svelte';
+	import { type Dimension } from '$lib/settings/format';
+	import { useStepper } from '../useStepper.svelte';
 
 	let {
 		label,
@@ -83,84 +78,26 @@
 		overriddenTooltip?: string;
 	} = $props();
 
-	const settings = getSettingsStore();
-	const effectiveUnit = $derived(dimension ? unitLabel(dimension, settings.current) : unit);
-	const effectiveDecimals = $derived(
-		dimension ? displayDecimals(dimension, settings.current) : step < 1 ? 1 : 0
-	);
-
-	/** Canonical → display number. */
-	function toDisplay(canonical: number): number {
-		return dimension ? canonicalToDisplay(dimension, canonical, settings.current) : canonical;
-	}
-	/** Display → canonical number. */
-	function fromDisplay(display: number): number {
-		return dimension ? displayToCanonical(dimension, display, settings.current) : display;
-	}
+	// Numeric core (clamp + canonical↔display + grid-snapped inc + click-to-type)
+	// is shared with StStepper via `useStepper`. QuickStepper keeps `incPrecision:
+	// 2` and the step-aware decimal fallback; the value isn't editable when
+	// `onChange` is absent (`canEdit`). Presentation (`prefix`, the overridden
+	// drift cue, the `fmt` formatter) stays here.
+	const stepper = useStepper({
+		value: () => value,
+		commit: (n) => onChange?.(n),
+		step: () => step,
+		min: () => min,
+		max: () => max,
+		dimension: () => dimension,
+		unit: () => unit,
+		decimals: () => (step < 1 ? 1 : 0),
+		incPrecision: 2,
+		canEdit: () => !!onChange
+	});
 
 	/** Format a value (already in display units) — the supplied `fmt`, or step-aware default. */
-	const format = (v: number): string => (fmt ? fmt(v) : v.toFixed(effectiveDecimals));
-
-	/**
-	 * Step `value` by `dir × step`, clamped to `[min, max]`.
-	 *
-	 * Without `dimension`: pure canonical arithmetic — `value + dir × step`.
-	 *
-	 * With `dimension`: work in **display units** so every click changes
-	 * the visible digit. A canonical step that's finer than the display
-	 * decimal grid would otherwise produce hidden clicks — e.g. dose
-	 * `step=0.1 g` ≈ 0.0035 oz, which rounds away at 2 decimals so the
-	 * user clicks `+` twice before seeing anything happen. Convert the
-	 * canonical step into display units, floor at one visible grid step
-	 * (10^-decimals), then snap the next value to the grid so visited
-	 * display numbers stay round.
-	 */
-	function inc(dir: number): void {
-		if (dimension) {
-			const displayNow = toDisplay(value);
-			const grid = Math.pow(10, -effectiveDecimals);
-			const displayStep = Math.max(grid, toDisplay(value + step) - displayNow);
-			const nextDisplay = Math.round((displayNow + dir * displayStep) / grid) * grid;
-			const next = Math.max(min, Math.min(max, fromDisplay(nextDisplay)));
-			if (next !== value) onChange?.(next);
-			return;
-		}
-		const next = Math.max(min, Math.min(max, Number((value + dir * step).toFixed(2))));
-		if (next !== value) onChange?.(next);
-	}
-
-	// ── Click-to-type — mirrors StStepper's behaviour. The visible digits
-	//    become an inline number input on click; Enter / blur commit, Esc
-	//    cancels. The buttons keep working the same.
-	let editing = $state(false);
-	let draft = $state('');
-	let inputEl = $state<HTMLInputElement | null>(null);
-	function beginEdit(): void {
-		if (!onChange) return;
-		draft = String(Number(toDisplay(value).toFixed(effectiveDecimals)));
-		editing = true;
-		queueMicrotask(() => {
-			inputEl?.focus();
-			inputEl?.select();
-		});
-	}
-	function commit(): void {
-		if (!editing) return;
-		editing = false;
-		const n = Number(draft);
-		if (!Number.isFinite(n)) return;
-		const next = Math.max(min, Math.min(max, fromDisplay(n)));
-		if (next !== value) onChange?.(next);
-	}
-	function onKey(e: KeyboardEvent): void {
-		if (e.key === 'Enter') {
-			e.preventDefault();
-			commit();
-		} else if (e.key === 'Escape') {
-			e.preventDefault();
-			editing = false;
-		}
-	}
+	const format = (v: number): string => (fmt ? fmt(v) : v.toFixed(stepper.decimals));
 </script>
 
 <div class="qcs">
@@ -168,33 +105,33 @@
 		<div class="qcs-label">{label}</div>
 	{/if}
 	<div class="qcs-row">
-		<button class="qcs-btn" onclick={() => inc(-1)} aria-label="Decrease {label ?? 'value'}">
+		<button class="qcs-btn" onclick={() => stepper.inc(-1)} aria-label="Decrease {label ?? 'value'}">
 			<MinusIcon aria-hidden="true" />
 		</button>
 		<div class="qcs-val" class:is-overridden={overridden}>
 			{@render prefix?.()}
-			{#if editing}
+			{#if stepper.editing}
 				<input
-					bind:this={inputEl}
+					bind:this={stepper.inputEl}
 					class="qcs-num qcs-num-input"
 					type="number"
-					bind:value={draft}
-					onblur={commit}
-					onkeydown={onKey}
+					bind:value={stepper.draft}
+					onblur={stepper.commit}
+					onkeydown={stepper.onKey}
 				/>
 			{:else}
 				<button
 					type="button"
 					class="qcs-num qcs-num-btn"
-					onclick={beginEdit}
+					onclick={stepper.beginEdit}
 					title={overridden ? overriddenTooltip : undefined}
 				>
-					{format(toDisplay(value))}
+					{format(stepper.toDisplay(value))}
 				</button>
 			{/if}
-			<span class="qcs-unit">{effectiveUnit}</span>
+			<span class="qcs-unit">{stepper.unit}</span>
 		</div>
-		<button class="qcs-btn" onclick={() => inc(1)} aria-label="Increase {label ?? 'value'}">
+		<button class="qcs-btn" onclick={() => stepper.inc(1)} aria-label="Increase {label ?? 'value'}">
 			<PlusIcon aria-hidden="true" />
 		</button>
 	</div>
