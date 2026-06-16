@@ -19,6 +19,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coffee.crema.ble.ScaleBleManager
 import coffee.crema.ui.MainUiState
 import coffee.crema.ui.MainViewModel
+import coffee.crema.ui.effectiveBrew
 import coffee.crema.ui.components.*
 import coffee.crema.ui.phone.components.*
 import coffee.crema.ui.theme.CremaTheme
@@ -62,7 +63,7 @@ fun PhoneScaleScreen(
     val weight = (ui.scaleWeightG ?: 0f).toDouble()
     val activeProfile = ui.profiles.firstOrNull { it.id == ui.activeProfileId }
     // Dose target = the QC override when set, else the active profile's dose.
-    val target = (ui.brewParams?.dose ?: activeProfile?.dose?.toDouble() ?: 18.0)
+    val target = effectiveBrew(ui.brewParams, activeProfile).dose
 
     // Tare flashes the readout copper for ~500ms.
     var pulse by remember { mutableStateOf(false) }
@@ -223,9 +224,11 @@ private fun ConnectedBody(
                 // Quick-Controls override, not a profile edit) — same seam QC uses.
                 TextButton(onClick = {
                     val active = ui.profiles.firstOrNull { it.id == ui.activeProfileId }
-                    val dose = (ui.brewParams?.dose ?: active?.dose?.toDouble() ?: 18.0) + 0.5
+                    val base = effectiveBrew(ui.brewParams, active)
+                    val dose = base.dose + 0.5
+                    // Yield keeps its own dose-relative fallback (not the 36 g default).
                     val yieldOut = ui.brewParams?.yieldOut ?: active?.yieldOut?.toDouble() ?: (dose * 2)
-                    val temp = ui.brewParams?.brewTemp ?: active?.brewTemp?.toDouble() ?: 93.0
+                    val temp = base.brewTemp
                     vm.quickAdjustBrew(dose, yieldOut, temp)
                 }) {
                     PhIcon("plus", sizeDp = 16); Spacer(Modifier.width(4.dp)); Text("Add 0.5 g")

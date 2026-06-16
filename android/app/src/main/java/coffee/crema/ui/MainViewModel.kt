@@ -148,6 +148,26 @@ data class BrewParams(
     val preinf: Double? = null,
 )
 
+/**
+ * The brew parameters actually in effect: the live Quick-Controls override
+ * ([brewParams]) if present, else the active profile's recipe, else the seed
+ * defaults (18 g / 36 g / 93 °C). One source for the `brewParams ?: active ?:
+ * 18/36/93` triple that was copied across the brew & scale surfaces (issue 28).
+ * NB this is the 3-way override→profile→default fallback; it is deliberately
+ * distinct from the 2-way profile-only recipe (`active?.dose ?: 18f`) and the
+ * per-segment temperature default (`seg.temp ?: 93f`), which are not folded in.
+ */
+data class EffectiveBrew(val dose: Double, val yieldOut: Double, val brewTemp: Double)
+
+fun effectiveBrew(brewParams: BrewParams?, active: CremaProfile?): EffectiveBrew = EffectiveBrew(
+    dose = brewParams?.dose ?: active?.dose?.toDouble() ?: 18.0,
+    yieldOut = brewParams?.yieldOut ?: active?.yieldOut?.toDouble() ?: 36.0,
+    brewTemp = brewParams?.brewTemp ?: active?.brewTemp?.toDouble() ?: 93.0,
+)
+
+fun MainUiState.effectiveBrew(): EffectiveBrew =
+    effectiveBrew(brewParams, profiles.firstOrNull { it.id == activeProfileId })
+
 data class MainUiState(
     val bleState: De1BleManager.State = De1BleManager.State.IDLE,
     /** Coarse state of the scale connection. */
