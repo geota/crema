@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coffee.crema.history.StoredShot
 import coffee.crema.history.beanLabel
+import coffee.crema.history.filterAndSortShots
 import coffee.crema.history.historyStats
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.convertPressure
@@ -96,30 +97,7 @@ fun PhoneHistoryScreen(
         cal.set(java.util.Calendar.SECOND, 0); cal.set(java.util.Calendar.MILLISECOND, 0)
         cal.timeInMillis
     }
-    val filtered = ui.history.filter { s ->
-        val matchesSearch = query.isBlank() ||
-            (s.profileName?.contains(query, ignoreCase = true) == true) ||
-            (s.beanLabel?.contains(query, ignoreCase = true) == true) ||
-            (s.notes?.contains(query, ignoreCase = true) == true)
-        val matchesRange = when (range) {
-            "today" -> s.completedAtMs >= startOfDay
-            "7d" -> s.completedAtMs >= now - 7L * dayMs
-            "30d" -> s.completedAtMs >= now - 30L * dayMs
-            else -> true
-        }
-        val matchesProfile = profileFilter == null || s.profileName == profileFilter
-        matchesSearch && matchesRange && matchesProfile
-    }.let { list ->
-        val asc = when (sort) {
-            "rating" -> list.sortedBy { it.rating ?: 0 }
-            "profile" -> list.sortedBy { it.profileName?.lowercase() ?: "" }
-            "bean" -> list.sortedBy { it.beanLabel?.lowercase() ?: "" }
-            "yield" -> list.sortedBy { it.yieldG ?: 0f }
-            "time" -> list.sortedBy { it.durationMs }
-            else -> list.sortedBy { it.completedAtMs }
-        }
-        if (sortDesc) asc.reversed() else asc
-    }
+    val filtered = filterAndSortShots(ui.history, query, range, profileFilter, sort, sortDesc, now)
 
     val detail = detailId?.let { id -> ui.history.firstOrNull { it.id == id } }
 

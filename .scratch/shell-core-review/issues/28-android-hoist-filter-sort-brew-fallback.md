@@ -99,6 +99,18 @@ bean on phone correctly drops All 7→6 + surfaces it only under Archived=1, Res
 Aside still open: the roaster-list sort drift (phone sorts by name, tablet doesn't) and
 the shared SAF `launchSave` launcher — both out of this sub-task. **Remaining: 3, 4.**
 
+### 2026-06-15 — sub-task 3 of 4 done: history (commit tagged 28)
+New `coffee.crema.history.ShotFilter.kt` — pure `filterAndSortShots(history, query,
+range, profileFilter, sort, sortDesc, now)` (next to `StoredShot`; `now` passed in for
+testability). The predicate+sort were byte-identical (tablet 3-var, phone chained
+`.let`); hoisted both. Sort *fields* stay as `historySortKeys` (ui.screens). **Gotcha:**
+tablet also fed the pre-sort `filtered` to the export count + `StatsStrip` (issue 48) —
+repointed to `shots` (same set, order-irrelevant for size/stats). **Phone keeps its own
+`startOfDay`/`dayMs`** — they also drive the `dayLabel` day-grouping (THIS WEEK/EARLIER),
+not just the filter. Validated live: tablet 12 shots + stats + profile filter (12→4 for
+Default Espresso, stats rescope); phone list + matching stats/counts + day grouping
+intact. **Remaining: sub-task 4 (profiles) — mind the per-shell nuances.**
+
 (Aside, out of scope: `ProfilesScreen`/Beans/History each carry their own SAF
 `launchSave` launcher too — a sibling of the issue-27 Settings dedup. Worth a
 follow-up "share SAF export launcher" issue.)
