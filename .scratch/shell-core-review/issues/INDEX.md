@@ -78,7 +78,7 @@ Sequencing lives at the bottom of `../PUNCHLIST.md`. Recommended first wave:
 | 42 | Drop the phone roast→color map | P1 | ✅ done |
 | 43 | One relative-time vocabulary per shell | P2 | ✅ done |
 | 44 | Implement or hide Android °C/°F & g/oz unit toggles | P2 | ✅ done (readouts + toggles; editable steppers deferred) |
-| 45 | Reconcile design tokens (Copper300, paper-300, sheet radius) | P2 | ready-for-agent |
+| 45 | Reconcile design tokens (Copper300, paper-300, sheet radius) | P2 | ✅ done (Android→web; 28→24 radius) |
 | 46 | Standardize Android weight/temp formatting + move freshness hex to theme | P3 | ✅ done (formatting via #44; freshness hex → CremaFreshnessColors) |
 | 47 | Title-case the web ProfileCard roast chip | P3 | ✅ done |
 | 48 | Pick a canonical History stats set (tablet vs phone) | P3 | ✅ done |
