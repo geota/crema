@@ -19,6 +19,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coffee.crema.profiles.CremaProfile
+import coffee.crema.profiles.effectiveProfileFilter
+import coffee.crema.profiles.filterAndSortProfiles
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.convertTemp
 import coffee.crema.ui.convertWeight
@@ -60,30 +62,9 @@ fun PhoneProfilesScreen(
     }
 
     // Same facet model as the tablet: Hidden appears only when something is
-    // archived, and falls back to All once the last one is restored.
-    val effectiveFilter = if (filter == "hidden" && ui.hiddenProfileIds.isEmpty()) "all" else filter
-    val filtered = ui.profiles.filter { p ->
-        val isHidden = p.id in ui.hiddenProfileIds
-        (query.isBlank() ||
-            p.name.contains(query, ignoreCase = true) ||
-            p.tags.any { it.contains(query, ignoreCase = true) } ||
-            p.notes.contains(query, ignoreCase = true) ||
-            p.author.contains(query, ignoreCase = true) ||
-            (p.roast?.contains(query, ignoreCase = true) == true)) &&
-            when (effectiveFilter) {
-                "hidden" -> isHidden
-                "pinned" -> !isHidden && p.pinned
-                "all" -> !isHidden
-                else -> !isHidden && p.roast?.equals(effectiveFilter, ignoreCase = true) == true
-            }
-    }
-    val roastOrder = mapOf("light" to 0, "medium" to 1, "dark" to 2)
-    val sortedAsc = when (sort) {
-        "roast" -> filtered.sortedBy { roastOrder[it.roast?.lowercase()] ?: 3 }
-        "pinned" -> filtered.sortedBy { if (it.pinned) 0 else 1 }
-        else -> filtered.sortedBy { it.name.lowercase() }
-    }
-    val sorted = if (sortDesc) sortedAsc.reversed() else sortedAsc
+    // archived, and falls back to All once the last one is restored (issue 28).
+    val effectiveFilter = effectiveProfileFilter(filter, ui.hiddenProfileIds)
+    val sorted = filterAndSortProfiles(ui.profiles, ui.hiddenProfileIds, query, filter, sort, sortDesc)
 
     Scaffold(
         topBar = {

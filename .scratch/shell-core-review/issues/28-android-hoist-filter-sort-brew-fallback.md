@@ -1,6 +1,6 @@
 # 28 — Hoist per-domain filter/sort + brew-fallback helpers
 
-- **Status:** ready-for-agent
+- **Status:** ✅ done (4/4 sub-tasks; effectiveBrew + beans + history + profiles)
 - **Severity:** P2
 - **Area:** Android phone + tablet — `ui/phone/PhoneBeansScreen.kt`, `ui/phone/PhoneHistoryScreen.kt`, `ui/phone/PhoneProfilesScreen.kt`, `ui/phone/PhoneBrewScreen.kt`, `ui/phone/PhoneBrewSheets.kt`, `ui/phone/PhoneScaleScreen.kt`, `ui/screens/BeansScreen.kt`, `ui/screens/HistoryScreen.kt`, `ui/screens/ProfilesScreen.kt`, `ui/screens/QuickControlsSheet.kt`
 - **Punchlist:** T4-03 — `../PUNCHLIST.md`
@@ -110,6 +110,22 @@ repointed to `shots` (same set, order-irrelevant for size/stats). **Phone keeps 
 not just the filter. Validated live: tablet 12 shots + stats + profile filter (12→4 for
 Default Espresso, stats rescope); phone list + matching stats/counts + day grouping
 intact. **Remaining: sub-task 4 (profiles) — mind the per-shell nuances.**
+
+### 2026-06-15 — sub-task 4 of 4 done: profiles → issue 28 COMPLETE
+New `coffee.crema.profiles.ProfileFilter.kt` — `effectiveProfileFilter(filter,
+hiddenIds)` (the Hidden→All fallback) + `filterAndSortProfiles(profiles, hiddenIds,
+query, filter, sort, sortDesc)`. The predicate/sort were near-identical (the one diff,
+phone `roast?.equals(effectiveFilter)` vs tablet `…(filter)`, is a no-op since the two
+only differ on "hidden"). **Per-shell nuance handled:** both shells also key their
+selected filter chip off `effectiveFilter` (tablet:207, phone:117), so it's a separate
+exported helper the screens call for chips while `filterAndSortProfiles` applies the
+fallback internally. Validated live: tablet Dark → 10 dark profiles + chip selected;
+phone Light → 11 light profiles + chip selected.
+
+**Issue 28 complete.** Four pure helpers now own the cross-shell logic:
+`effectiveBrew` (MainViewModel), `BeanFilter`, `ShotFilter`, `ProfileFilter`.
+Loose ends left for follow-ups (out of scope): roaster-list sort drift (phone-only
+name sort) and the shared SAF `launchSave` export launcher (sibling of issue 27).
 
 (Aside, out of scope: `ProfilesScreen`/Beans/History each carry their own SAF
 `launchSave` launcher too — a sibling of the issue-27 Settings dedup. Worth a
