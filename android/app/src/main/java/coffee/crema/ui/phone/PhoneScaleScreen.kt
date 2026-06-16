@@ -226,7 +226,8 @@ private fun ConnectedBody(
                     val active = ui.profiles.firstOrNull { it.id == ui.activeProfileId }
                     val base = effectiveBrew(ui.brewParams, active)
                     val dose = base.dose + 0.5
-                    // Yield keeps its own dose-relative fallback (not the 36 g default).
+                    // Yield's last-ditch default tracks the *bumped* dose (dose * 2),
+                    // whereas effectiveBrew's tracks the base dose — so compute it here.
                     val yieldOut = ui.brewParams?.yieldOut ?: active?.yieldOut?.toDouble() ?: (dose * 2)
                     val temp = base.brewTemp
                     vm.quickAdjustBrew(dose, yieldOut, temp)
