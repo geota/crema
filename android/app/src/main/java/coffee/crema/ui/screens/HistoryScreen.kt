@@ -50,6 +50,7 @@ import coffee.crema.ui.formatRatio
 import coffee.crema.ui.formatWeight
 import coffee.crema.ui.relativeAgo
 import coffee.crema.history.StoredShot
+import coffee.crema.history.filterAndSortShots
 import coffee.crema.history.beanLabel
 import coffee.crema.history.historyStats
 import coffee.crema.ui.MainViewModel
@@ -138,38 +139,7 @@ fun HistoryScreen(
     // Client-side search + time-range filter + sort over the shot log. The stat
     // strip is scoped to the same filtered set (issue 48) — it reflects what the
     // current filter / range shows, not all-time.
-    val now = System.currentTimeMillis()
-    val dayMs = 24L * 60L * 60L * 1000L
-    val startOfDay = run {
-        val cal = java.util.Calendar.getInstance()
-        cal.timeInMillis = now
-        cal.set(java.util.Calendar.HOUR_OF_DAY, 0); cal.set(java.util.Calendar.MINUTE, 0)
-        cal.set(java.util.Calendar.SECOND, 0); cal.set(java.util.Calendar.MILLISECOND, 0)
-        cal.timeInMillis
-    }
-    val filtered = ui.history.filter { s ->
-        val matchesSearch = query.isBlank() ||
-            (s.profileName?.contains(query, ignoreCase = true) == true) ||
-            (s.beanLabel?.contains(query, ignoreCase = true) == true) ||
-            (s.notes?.contains(query, ignoreCase = true) == true)
-        val matchesRange = when (range) {
-            "today" -> s.completedAtMs >= startOfDay
-            "7d" -> s.completedAtMs >= now - 7L * dayMs
-            "30d" -> s.completedAtMs >= now - 30L * dayMs
-            else -> true
-        }
-        val matchesProfile = profileFilter == null || s.profileName == profileFilter
-        matchesSearch && matchesRange && matchesProfile
-    }
-    val sortedAsc = when (sort) {
-        "rating" -> filtered.sortedBy { it.rating ?: 0 }
-        "profile" -> filtered.sortedBy { it.profileName?.lowercase() ?: "" }
-        "bean" -> filtered.sortedBy { it.beanLabel?.lowercase() ?: "" }
-        "yield" -> filtered.sortedBy { it.yieldG ?: 0f }
-        "time" -> filtered.sortedBy { it.durationMs }
-        else -> filtered.sortedBy { it.completedAtMs }
-    }
-    val shots = if (sortDesc) sortedAsc.reversed() else sortedAsc
+    val shots = filterAndSortShots(ui.history, query, range, profileFilter, sort, sortDesc, System.currentTimeMillis())
     // Default the detail to the newest (top) shot until the user picks one.
     val selected = shots.firstOrNull { it.id == selectedId } ?: shots.firstOrNull()
 
@@ -222,7 +192,7 @@ fun HistoryScreen(
                             onPrimary = { launchSave("crema-history.json", vm.shotsJson(null)) },
                             items = listOf(
                                 SplitMenuItem("file-text", "All shots", "Every shot as one Crema JSON file. Re-importable in Crema.") { launchSave("crema-history.json", vm.shotsJson(null)) },
-                                SplitMenuItem("file-code", "Current filter", "Only the ${filtered.size} shot(s) matching your search and date range.") { launchSave("crema-history-filtered.json", vm.shotsJson(filtered.map { it.id })) },
+                                SplitMenuItem("file-code", "Current filter", "Only the ${shots.size} shot(s) matching your search and date range.") { launchSave("crema-history-filtered.json", vm.shotsJson(shots.map { it.id })) },
                             ),
                         )
                     }
@@ -247,7 +217,7 @@ fun HistoryScreen(
                     }
                 }
             } else {
-                StatsStrip(filtered, ui.weightUnit)
+                StatsStrip(shots, ui.weightUnit)
                 // Range filter chips (left) + sort split-button (right).
                 Row(
                     Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = 4.dp, bottom = 8.dp),
