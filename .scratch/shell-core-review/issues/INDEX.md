@@ -41,7 +41,7 @@ Sequencing lives at the bottom of `../PUNCHLIST.md`. Recommended first wave:
 
 | # | Title | Sev | Status |
 |---|-------|-----|--------|
-| 18 | Close non-domain FFI parity gaps (calibration-write, reset-defaults) | P2 | ready-for-agent |
+| 18 | Close non-domain FFI parity gaps (calibration-write, reset-defaults) | P2 | ✅ done (3 wrappers in de1-ffi; Kotlin bindings regen'd; 33 tests) |
 | 19 | Use the `f64_to_ms` helper everywhere in de1-wasm | P2 | ✅ done |
 | 20 | Align scale-command receivers `&mut self` → `&self` in WASM | P2 | ✅ done (6/7; tare mutates — exception) |
 | 21 | Fix `set_line_frequency_override` truncating cast | P3 | ✅ done |

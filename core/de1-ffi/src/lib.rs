@@ -1092,6 +1092,27 @@ impl CremaBridge {
         json(self.core().read_factory_calibration(sensor.into()))
     }
 
+    /// Build a [`CoreOutput`] (JSON) whose command writes a new calibration
+    /// for `sensor`: the DE1 reported `reported` while the externally-measured
+    /// true value was `measured`. Both arguments are in the sensor's canonical
+    /// units (°C / bar / ml·s⁻¹) — the shell converts at the I/O boundary
+    /// before calling. From then on the DE1 applies `measured / reported` as
+    /// a multiplier on that sensor.
+    pub fn write_calibration(&self, sensor: CalSensor, reported: f32, measured: f32) -> String {
+        json(
+            self.core()
+                .write_calibration(sensor.into(), reported, measured),
+        )
+    }
+
+    /// Build a [`CoreOutput`] (JSON) whose command resets `sensor` to its
+    /// factory calibration. The DE1 starts using the factory values immediately;
+    /// the shell should follow up with a `read_calibration` to surface the new
+    /// in-use value.
+    pub fn reset_calibration_to_factory(&self, sensor: CalSensor) -> String {
+        json(self.core().reset_calibration_to_factory(sensor.into()))
+    }
+
     /// Build a [`CoreOutput`] (JSON) whose command tares the connected scale.
     pub fn tare_scale(&self) -> String {
         json(self.core().tare_scale())
@@ -1473,6 +1494,25 @@ impl CremaBridge {
     pub fn set_heater_voltage(&self, volts: u8) -> Result<String, CremaError> {
         self.core()
             .set_heater_voltage(volts)
+            .map(json)
+            .map_err(crema_err)
+    }
+
+    /// Reset 8 machine settings to factory baseline — mirrors reaprime's
+    /// `DELETE /api/v1/machine/settings/reset`. Returns a [`CoreOutput`] (JSON)
+    /// with 8 sequential MMR writes (fan threshold, hot-water idle temp, heater
+    /// phase 1/2 flows, espresso warmup timeout, refill kit auto, flow-calibration
+    /// multiplier, steam purge mode). Profiles, history, and app preferences are
+    /// untouched. `Result` shape mirrors [`set_heater_voltage`](Self::set_heater_voltage)
+    /// for forward symmetry — the core is infallible here today.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`AppError`](de1_app::AppError) display string when the core
+    /// rejects the request (none today).
+    pub fn reset_machine_defaults(&self) -> Result<String, CremaError> {
+        self.core()
+            .reset_machine_defaults()
             .map(json)
             .map_err(crema_err)
     }
@@ -1959,10 +1999,19 @@ mod tests {
         for json in [
             bridge.read_calibration(CalSensor::Pressure),
             bridge.read_factory_calibration(CalSensor::Flow),
+            bridge.write_calibration(CalSensor::Temperature, 92.0, 93.0),
+            bridge.reset_calibration_to_factory(CalSensor::Pressure),
         ] {
             assert!(json.contains("WriteCharacteristic"));
             assert!(json.contains("De1Calibration"));
         }
+    }
+
+    #[test]
+    fn reset_machine_defaults_succeeds_with_write_commands() {
+        let bridge = CremaBridge::new();
+        let json = bridge.reset_machine_defaults().expect("infallible today");
+        assert!(json.contains("WriteCharacteristic"));
     }
 
     /// Every `NotificationSource` the FFI enum can name — used to fuzz the
