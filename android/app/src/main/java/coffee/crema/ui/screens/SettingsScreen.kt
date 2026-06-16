@@ -51,6 +51,7 @@ import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.components.CremaButton
 import coffee.crema.ui.components.CremaButtonVariant
 import coffee.crema.ui.components.CremaCard
+import coffee.crema.ui.components.CremaStatusDot
 import coffee.crema.ui.components.CremaStepper
 import coffee.crema.ui.components.CremaStepperStyle
 import coffee.crema.ui.components.CremaTextField
@@ -191,7 +192,7 @@ fun SettingsScreen(
                         }
                         SetGroup("Diagnostics") {
                             SetRow("Connection state") { MonoReadout(if (connected) "Ready" else "Disconnected", color = MaterialTheme.colorScheme.onSurface) }
-                            SetRow("GATT verified") { StatusDot(connected) }
+                            SetRow("GATT verified") { CremaStatusDot(connected) }
                             SetRow("Machine state") { MonoReadout(ui.machineState ?: "—", color = MaterialTheme.colorScheme.onSurface) }
                             // Readable error copy (core `subStateErrorMessage`, web parity),
                             // shown only while the substate is an error.
@@ -202,9 +203,9 @@ fun SettingsScreen(
                         }
                         SetGroup("Peripherals") {
                             SetRow("Scale", if (scaleConnected) (ui.scaleName ?: "Connected") else "Not paired") {
-                                if (scaleConnected) StatusDot(true) else CremaButton(onClick = { onConnect("scale") }, variant = CremaButtonVariant.Outlined, label = "Pair")
+                                if (scaleConnected) CremaStatusDot(true) else CremaButton(onClick = { onConnect("scale") }, variant = CremaButtonVariant.Outlined, label = "Pair")
                             }
-                            SetRow("Grinder", "No grinder support yet.") { StatusDot(false) }
+                            SetRow("Grinder", "No grinder support yet.") { CremaStatusDot(false) }
                             // Equipment-level grinder model (web `grinderModel`): free
                             // text, persisted, shown on Brew + sent to Visualizer.
                             SetRow("Grinder model", "Stamped on shots and Visualizer uploads.", last = true) {
@@ -893,17 +894,6 @@ private fun SetSelect(value: String, onClick: () -> Unit = {}) {
 
 // (SetStepper / StepBtn removed — settings rows route through CremaStepper / Bare.)
 
-// ── Status dot — 10dp; on = success fill + faint ring, off = hairline ring ───
-@Composable
-private fun StatusDot(on: Boolean) {
-    val success = CremaTheme.telemetry.success
-    if (on) {
-        Box(Modifier.size(10.dp).clip(CircleShape).background(success))
-    } else {
-        Box(Modifier.size(10.dp).clip(CircleShape).border(1.5.dp, MaterialTheme.colorScheme.outline, CircleShape))
-    }
-}
-
 // ── Tiny mono readout (diagnostics / versions) ───────────────────────────────
 @Composable
 private fun MonoReadout(text: String, color: Color = MaterialTheme.colorScheme.onSurfaceVariant) {
@@ -951,7 +941,7 @@ private fun MachineHeroCard(
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    StatusDot(connected)
+                    CremaStatusDot(connected)
                     Eyebrow(stateLabel, color = if (connected) CremaTheme.telemetry.success else MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 if (connected) {

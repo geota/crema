@@ -205,7 +205,7 @@ fun PhoneSettingsScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            PStatusDot(connected)
+                            CremaStatusDot(connected)
                             Text(
                                 if (connected) "Connected" else "Tap to connect",
                                 style = MaterialTheme.typography.labelMedium,
@@ -257,7 +257,7 @@ private fun MachineSection(
         Surface(shape = RoundedCornerShape(CremaCardSpec.phoneRadius), color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    PStatusDot(connected)
+                    CremaStatusDot(connected)
                     Text(
                         if (connected) "Connected · ${ui.machineState ?: "ready"}" else "Not connected",
                         style = MaterialTheme.typography.labelLarge,
@@ -301,7 +301,7 @@ private fun MachineSection(
     }
     SettingsGroup("Diagnostics") {
         PRow("Connection state") { PMono(if (connected) "Ready" else "Disconnected", strong = true) }
-        PRow("GATT verified") { PStatusDot(connected) }
+        PRow("GATT verified") { CremaStatusDot(connected) }
         PRow("Machine state", last = ui.machineError == null) { PMono(ui.machineState ?: "—", strong = true) }
         // Readable error copy (core `subStateErrorMessage`, web parity), only while erroring.
         ui.machineError?.let { err ->
@@ -338,7 +338,7 @@ private fun PeripheralsSection(
             last = true,
         ) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                PStatusDot(scaleConnected)
+                CremaStatusDot(scaleConnected)
                 if (scaleConnected) {
                     CremaButton(onClick = onOpenScale, variant = CremaButtonVariant.Outlined, label = "Open")
                 } else {
@@ -919,13 +919,6 @@ private fun PSelect(value: String, onClick: () -> Unit = {}) {
 }
 
 // (PStepper / PStepBtn removed — phone settings rows route through CremaStepper / BareCompact.)
-
-@Composable
-private fun PStatusDot(on: Boolean) {
-    val success = CremaTheme.telemetry.success
-    if (on) Box(Modifier.size(10.dp).clip(CircleShape).background(success))
-    else Box(Modifier.size(10.dp).clip(CircleShape).border(1.5.dp, MaterialTheme.colorScheme.outline, CircleShape))
-}
 
 @Composable
 private fun PMono(text: String, strong: Boolean = false, color: Color? = null) {
