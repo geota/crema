@@ -79,6 +79,7 @@ import coffee.crema.ui.components.CremaOverflowMenu
 import coffee.crema.ui.components.OverflowItem
 import coffee.crema.ui.components.CremaTabSwitch
 import coffee.crema.ui.components.TabOption
+import coffee.crema.ui.components.CremaEmptyState
 import coffee.crema.ui.components.CremaFilterChip
 import coffee.crema.ui.components.CremaFilterDivider
 import coffee.crema.ui.components.CremaFilterGroupLabel
@@ -248,11 +249,7 @@ fun BeansScreen(
             if (tab == "bags") {
                 if (sortedBeans.isEmpty()) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text(
-                            if (ui.beans.isEmpty()) "No beans yet — add a bag to get started." else "No beans match your search or filters.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                        CremaEmptyState(if (ui.beans.isEmpty()) "No beans yet — add a bag to get started." else "No beans match your search or filters.")
                     }
                 } else {
                     LazyVerticalGrid(
@@ -281,11 +278,7 @@ fun BeansScreen(
             } else {
                 if (visibleRoasters.isEmpty()) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text(
-                            if (ui.roasters.isEmpty()) "No roasters yet — add one to group your bags." else "No roasters match your search.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                        CremaEmptyState(if (ui.roasters.isEmpty()) "No roasters yet — add one to group your bags." else "No roasters match your search.")
                     }
                 } else {
                     LazyVerticalGrid(

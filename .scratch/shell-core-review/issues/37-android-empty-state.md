@@ -1,6 +1,6 @@
 # 37 — Extract `CremaEmptyState(...)` (+ Scale empty-state type-scale nit)
 
-- **Status:** ready-for-agent
+- **Status:** ✅ done
 - **Severity:** P3
 - **Area:** Android phone + tablet — `ui/screens/BeansScreen.kt`, `ui/screens/HistoryScreen.kt`, `ui/screens/ScaleScreen.kt`, `ui/phone/PhoneHistoryScreen.kt`, `ui/phone/PhoneScaleScreen.kt`, `ui/components/CremaComponents.kt`
 - **Punchlist:** T4-13 + T3-12 (empty-state half) — `../PUNCHLIST.md`
@@ -29,3 +29,15 @@ Extract a shared `CremaEmptyState(message, action?)` composable into `ui/compone
 
 ## Comments
 <!-- triage + progress notes append below -->
+
+### 2026-06-15 — done (one commit; live-validated both shells)
+Added `CremaEmptyState(message, modifier, icon?, description?, action?)` to
+`CremaComponents.kt` — optional icon disc, the message line, an optional description
+sentence, an optional action slot. Routed **9** sites: Beans ×2 + History (tablet),
+Beans ×2 + History ×2 + Scale (phone), Scale (tablet). **Nit resolved:** the message
+now renders `titleSmall` + Medium on BOTH shells (was `titleLarge` on tablet Scale vs
+`titleSmall` on phone); description unified to `bodyMedium`. Validated live: tablet &
+phone Scale "No settings yet" empty states now identical (gear disc + title + desc).
+Note: the simple message sites (Beans/History "No X") go from `bodyMedium` →
+`titleSmall`+Medium — same ~14sp size, slightly bolder; acceptable for the single
+shared type scale the issue asked for.

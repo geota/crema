@@ -65,7 +65,7 @@ Sequencing lives at the bottom of `../PUNCHLIST.md`. Recommended first wave:
 | 34 | Hoist the multi-channel spark chart (Android) | P2 | ✅ done |
 | 35 | Route all Android steppers through `CremaStepper` | P2 | ✅ done (5-preset `CremaStepperStyle`; 55 sites; folds 50's compare control) |
 | 36 | Extract `CremaStarRating(...)` | P2 | ✅ done |
-| 37 | Extract `CremaEmptyState(...)` (+ Scale empty-state type-scale nit) | P3 | ready-for-agent |
+| 37 | Extract `CremaEmptyState(...)` (+ Scale empty-state type-scale nit) | P3 | ✅ done (9 sites; titleLarge/titleSmall → one scale) |
 | 38 | Route phone cards through `CremaCardSpec` | P2 | ✅ done |
 | 39 | Extract `useVisualizerConnection()` rune helper (web) | P2 | ✅ done (4 sites; +BeanSyncSection) |
 | 40 | Share `bestEffortRemoteDelete(ids)` (web) | P2 | ✅ done |

@@ -319,21 +319,11 @@ private fun ScaleSettingsPanel(
             Eyebrow("Scale settings")
             if (caps == null) {
                 // Empty state — explains WHY the panel is blank (never a bug).
-                Column(
-                    Modifier.fillMaxSize().padding(vertical = 28.dp),
-                    verticalArrangement = Arrangement.Center,
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surfaceContainerHighest, modifier = Modifier.size(60.dp)) {
-                        Box(contentAlignment = Alignment.Center) { PhIcon("gear-six", sizeDp = 28, tint = MaterialTheme.colorScheme.onSurfaceVariant) }
-                    }
-                    Spacer(Modifier.height(12.dp))
-                    Text("No settings yet", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        "Connect a scale to adjust its settings — they'll appear here automatically, based on what the scale supports.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                Box(Modifier.fillMaxSize().padding(vertical = 28.dp), contentAlignment = Alignment.Center) {
+                    CremaEmptyState(
+                        icon = "gear-six",
+                        message = "No settings yet",
+                        description = "Connect a scale to adjust its settings — they'll appear here automatically, based on what the scale supports.",
                     )
                 }
             } else {

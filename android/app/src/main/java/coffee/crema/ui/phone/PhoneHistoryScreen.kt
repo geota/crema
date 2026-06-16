@@ -139,19 +139,17 @@ fun PhoneHistoryScreen(
         Column(Modifier.padding(inner).fillMaxSize()) {
             if (ui.history.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Text(
-                            "No shots yet — pull one on Brew.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        CremaButton(
-                            onClick = { importLauncher.launch(arrayOf("application/json", "text/*", "*/*")) },
-                            variant = CremaButtonVariant.Outlined,
-                            icon = "upload-simple",
-                            label = "Import shots",
-                        )
-                    }
+                    CremaEmptyState(
+                        message = "No shots yet — pull one on Brew.",
+                        action = {
+                            CremaButton(
+                                onClick = { importLauncher.launch(arrayOf("application/json", "text/*", "*/*")) },
+                                variant = CremaButtonVariant.Outlined,
+                                icon = "upload-simple",
+                                label = "Import shots",
+                            )
+                        },
+                    )
                 }
                 return@Column
             }
@@ -240,12 +238,7 @@ fun PhoneHistoryScreen(
                 }
                 if (filtered.isEmpty()) {
                     item {
-                        Text(
-                            "No shots match your filters.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(vertical = 24.dp),
-                        )
+                        CremaEmptyState("No shots match your filters.", modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp))
                     }
                 }
             }

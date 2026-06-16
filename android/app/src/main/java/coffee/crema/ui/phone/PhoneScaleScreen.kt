@@ -362,23 +362,11 @@ private fun DisconnectedBody(onConnect: () -> Unit) {
         shape = MaterialTheme.shapes.medium,
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Column(
-            Modifier.fillMaxWidth().padding(28.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surfaceContainerHighest, modifier = Modifier.size(56.dp)) {
-                Box(contentAlignment = Alignment.Center) {
-                    PhIcon("gear-six", sizeDp = 28, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
-            Text("No settings yet", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Medium)
-            Text(
-                "Connect a scale to adjust its settings — they'll appear here automatically, based on what the scale supports.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-            )
-        }
+        CremaEmptyState(
+            icon = "gear-six",
+            message = "No settings yet",
+            description = "Connect a scale to adjust its settings — they'll appear here automatically, based on what the scale supports.",
+            modifier = Modifier.fillMaxWidth().padding(28.dp),
+        )
     }
 }
