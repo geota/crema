@@ -11,7 +11,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coffee.crema.ble.De1BleManager
@@ -133,21 +132,12 @@ fun ScaleScreen(
                     DoseHelper(connected, weight, target, ui.weightUnit)
                     RecentActivity(connected, Modifier.weight(1f))
                 }
-                // Right column — capability-driven settings panel
+                // Right column — capability-driven settings panel (shared body)
                 ScaleSettingsPanel(
-                    caps = caps,
-                    flowSmoothing = ui.scaleFlowSmoothing,
-                    antiMistouch = ui.scaleAntiMistouch,
-                    autoStopMode = ui.scaleAutoStop,
-                    volume = ui.scaleVolume,
-                    standbyMinutes = ui.scaleStandbyMinutes,
-                    onFlowSmoothing = vm::setScaleFlowSmoothing,
-                    onAntiMistouch = vm::setScaleAntiMistouch,
-                    onAutoStop = vm::setScaleAutoStop,
-                    onVolume = vm::setScaleVolume,
-                    onStandby = vm::setScaleStandbyMinutes,
-                    onBeep = vm::beepScale,
-                    onDisconnect = vm::disconnectScale,
+                    vm = vm,
+                    ui = ui,
+                    coreCaps = coreCaps,
+                    connected = connected,
                     modifier = Modifier.width(372.dp).fillMaxHeight(),
                 )
             }
@@ -298,30 +288,93 @@ private fun RecentActivity(connected: Boolean, modifier: Modifier = Modifier) {
     }
 }
 
+/**
+ * The capability-gated scale settings rows, shared by both shells (issue 33).
+ * Renders only the rows the connected scale supports, each via [CremaSettingsRow]
+ * — so the phone gets dense rows under its `LocalSettingsRowDense`, the tablet the
+ * roomy default. [showDisplayMode] gates the on-scale display-mode row.
+ */
+@Composable
+fun ScaleCapabilityRows(
+    vm: MainViewModel,
+    ui: MainUiState,
+    caps: coffee.crema.core.ScaleCapabilities,
+    showDisplayMode: Boolean = true,
+) {
+    if (caps.flow_smoothing) CremaSettingsRow("Flow smoothing", "Smooths the live mass-flow readout.") {
+        CremaSwitch(ui.scaleFlowSmoothing, vm::setScaleFlowSmoothing)
+    }
+    if (caps.anti_mistouch) CremaSettingsRow("Anti-mistouch", "Ignore accidental taps on the scale.") {
+        CremaSwitch(ui.scaleAntiMistouch, vm::setScaleAntiMistouch)
+    }
+    if (caps.auto_stop) CremaSettingsRow("Auto-stop", "How the scale's built-in timer ends.") {
+        CremaSegmentedButton(
+            options = listOf(SegOption("0", "Flow"), SegOption("1", "Cup")),
+            value = (ui.scaleAutoStop ?: 0).toString(),
+            onChange = { vm.setScaleAutoStop(it.toInt()) },
+        )
+    }
+    if (showDisplayMode && caps.modes.isNotEmpty()) CremaSettingsRow("Display mode", "What the on-scale display reads out.") {
+        CremaSegmentedButton(
+            options = caps.modes.map { SegOption(it.id.toInt().toString(), it.name) },
+            value = (ui.scaleActiveMode ?: caps.modes.first().id.toInt()).toString(),
+            onChange = { vm.setScaleMode(it.toInt()) },
+        )
+    }
+    caps.standby?.let { standby ->
+        CremaSettingsRow("Auto-sleep", "Minutes of inactivity before the scale sleeps.") {
+            CremaStepper(
+                value = ui.scaleStandbyMinutes.toDouble(),
+                unit = "min",
+                onChange = { vm.setScaleStandbyMinutes(it.toInt()) },
+                step = 1.0,
+                min = standby.min.toDouble(),
+                max = standby.max.toDouble(),
+                fmt = { String.format("%.0f", it) },
+            )
+        }
+    }
+    caps.volume?.let { vol ->
+        CremaSettingsRow("Beeper volume", "Button & target tone loudness.") {
+            CremaSegmentedButton(
+                options = (vol.min.toInt()..vol.max.toInt()).map { SegOption(it.toString(), it.toString()) },
+                value = ui.scaleVolume.toString(),
+                onChange = { vm.setScaleVolume(it.toInt()) },
+            )
+        }
+    }
+}
+
+/** Beep + Disconnect actions for the scale settings panel, shared by both shells. */
+@Composable
+fun ScaleSettingsFooter(vm: MainViewModel, canBeep: Boolean, modifier: Modifier = Modifier) {
+    Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        if (canBeep) CremaButton(onClick = vm::beepScale, variant = CremaButtonVariant.Tonal, icon = "speaker-high", label = "Beep")
+        Spacer(Modifier.weight(1f))
+        CremaButton(onClick = vm::disconnectScale, variant = CremaButtonVariant.Text, icon = "link-break", danger = true, label = "Disconnect")
+    }
+}
+
+/**
+ * Tablet scale settings card: the shared capability body ([ScaleCapabilityRows] +
+ * [ScaleSettingsFooter]) in a [CremaCard], or an empty state when no scale is
+ * connected. The phone uses the same shared body in its own surface (issue 33).
+ */
 @Composable
 private fun ScaleSettingsPanel(
-    caps: ScaleCapabilities?,
-    flowSmoothing: Boolean,
-    antiMistouch: Boolean,
-    autoStopMode: Int?,
-    volume: Int,
-    standbyMinutes: Int,
-    onFlowSmoothing: (Boolean) -> Unit,
-    onAntiMistouch: (Boolean) -> Unit,
-    onAutoStop: (Int) -> Unit,
-    onVolume: (Int) -> Unit,
-    onStandby: (Int) -> Unit,
-    onBeep: () -> Unit,
-    onDisconnect: () -> Unit,
+    vm: MainViewModel,
+    ui: MainUiState,
+    coreCaps: coffee.crema.core.ScaleCapabilities?,
+    connected: Boolean,
     modifier: Modifier = Modifier,
 ) {
     val sp = CremaTheme.spacing
     CremaCard(modifier) {
-        Column(Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = sp.s4)) {
-            Eyebrow("Scale settings")
-            if (caps == null) {
+        Column(Modifier.fillMaxSize().padding(vertical = sp.s4)) {
+            Eyebrow("Scale settings", Modifier.padding(horizontal = 20.dp))
+            if (!connected || coreCaps == null) {
                 // Empty state — explains WHY the panel is blank (never a bug).
-                Box(Modifier.fillMaxSize().padding(vertical = 28.dp), contentAlignment = Alignment.Center) {
+                Box(Modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 28.dp), contentAlignment = Alignment.Center) {
                     CremaEmptyState(
                         icon = "gear-six",
                         message = "No settings yet",
@@ -330,88 +383,10 @@ private fun ScaleSettingsPanel(
                 }
             } else {
                 Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
-                    if (caps.flowSmoothing) {
-                        ToggleRow("Flow smoothing", "Smooths the live mass-flow readout. Calmer, slower to settle.", flowSmoothing, onFlowSmoothing)
-                    }
-                    if (caps.antiMistouch) {
-                        ToggleRow("Anti-mistouch", "Ignore accidental taps on the scale's buttons.", antiMistouch, onAntiMistouch)
-                    }
-                    if (caps.autoStop) {
-                        SegRow("Auto-stop", "How the scale's built-in timer ends.") {
-                            CremaSegmentedButton(
-                                options = listOf(SegOption("0", "Flow-stop"), SegOption("1", "Cup-removal")),
-                                value = (autoStopMode ?: 0).toString(),
-                                onChange = { onAutoStop(it.toInt()) },
-                            )
-                        }
-                    }
-                    val standby = caps.standby
-                    if (standby != null) {
-                        SegRow("Auto-sleep", "Minutes of inactivity before the scale sleeps.") {
-                            CremaStepper(
-                                value = standbyMinutes.toDouble(),
-                                unit = "min",
-                                onChange = { onStandby(it.toInt()) },
-                                step = 1.0,
-                                min = standby.first.toDouble(),
-                                max = standby.last.toDouble(),
-                                fmt = { String.format("%.0f", it) },
-                            )
-                        }
-                    }
-                    val vol = caps.volume
-                    if (vol != null) {
-                        SegRow("Beeper volume", "Button & target tone loudness.") {
-                            CremaSegmentedButton(
-                                options = vol.map { SegOption(it.toString(), it.toString()) },
-                                value = volume.toString(),
-                                onChange = { onVolume(it.toInt()) },
-                            )
-                        }
-                    }
+                    ScaleCapabilityRows(vm, ui, coreCaps)
                 }
-                // Action footer — pinned to the bottom of the panel.
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant, modifier = Modifier.padding(top = 6.dp))
-                Row(Modifier.fillMaxWidth().padding(top = sp.s3), verticalAlignment = Alignment.CenterVertically) {
-                    if (caps.canBeep) CremaButton(onClick = onBeep, variant = CremaButtonVariant.Tonal, icon = "speaker-high", label = "Beep")
-                    Spacer(Modifier.weight(1f))
-                    CremaButton(onClick = onDisconnect, variant = CremaButtonVariant.Text, icon = "link-break", danger = true, label = "Disconnect")
-                }
+                ScaleSettingsFooter(vm, coreCaps.can_beep, Modifier.padding(start = 20.dp, end = 20.dp, top = sp.s3))
             }
         }
     }
-}
-
-// A capability-gated toggle row: title + sub on the left, switch on the right.
-@Composable
-private fun ToggleRow(title: String, sub: String, checked: Boolean, onChange: (Boolean) -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().padding(vertical = 11.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium), color = MaterialTheme.colorScheme.onSurface)
-            Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        CremaSwitch(checked, onChange)
-    }
-    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-}
-
-// A row whose control sits on the right (segmented button or stepper).
-@Composable
-private fun SegRow(title: String, sub: String, control: @Composable () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().padding(vertical = 11.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium), color = MaterialTheme.colorScheme.onSurface)
-            Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        control()
-    }
-    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 }
