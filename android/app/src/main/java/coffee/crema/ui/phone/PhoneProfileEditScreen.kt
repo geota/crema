@@ -50,6 +50,10 @@ import coffee.crema.ui.theme.JetBrainsMono
  * phase collapses to name + summary, expands to the full field set) → Tags &
  * options.
  */
+
+/** Uniform width for the compact phase-editor segment pills so they line up. */
+private val SegmentPillWidth = 176.dp
+
 @Composable
 fun PhoneProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
     val ui by vm.ui.collectAsStateWithLifecycle()
@@ -334,6 +338,8 @@ private fun PhaseRow(
                     options = listOf(SegOption("pressure", "Pressure"), SegOption("flow", "Flow")),
                     value = seg.mode ?: "pressure",
                     onChange = { onChange(seg.copy(mode = it)) },
+                    compact = true,
+                    modifier = Modifier.width(SegmentPillWidth),
                 )
             }
             FieldRow("Transition") {
@@ -341,6 +347,8 @@ private fun PhaseRow(
                     options = listOf(SegOption("smooth", "Smooth"), SegOption("fast", "Fast")),
                     value = seg.ramp ?: "smooth",
                     onChange = { onChange(seg.copy(ramp = it)) },
+                    compact = true,
+                    modifier = Modifier.width(SegmentPillWidth),
                 )
             }
             FieldRow("Target") {
@@ -365,6 +373,8 @@ private fun PhaseRow(
                         options = listOf(SegOption("coffee", "Coffee"), SegOption("water", "Water")),
                         value = seg.tempSensor ?: "coffee",
                         onChange = { onChange(seg.copy(tempSensor = it)) },
+                        compact = true,
+                        modifier = Modifier.width(SegmentPillWidth),
                     )
                     CremaStepper(value = (seg.temp ?: 93f).toDouble(), unit = "°", step = 0.5, min = 70.0, max = bounds.maxTemperatureC.toDouble(), fmt = { "%.1f".format(it) }, style = CremaStepperStyle.BareCompact, onChange = {
                         onChange(seg.copy(temp = it.toFloat()))
@@ -405,6 +415,8 @@ private fun PhaseRow(
                         options = listOf(SegOption("pressure", "Pressure"), SegOption("flow", "Flow")),
                         value = exit.metric ?: "flow",
                         onChange = { onChange(seg.copy(exit = exit.copy(metric = it))) },
+                        compact = true,
+                        modifier = Modifier.width(SegmentPillWidth),
                     )
                     CremaStepper(
                         value = (exit.threshold ?: 1.5f).toDouble(), unit = null, step = 0.1, min = 0.0,

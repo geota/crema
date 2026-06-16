@@ -756,6 +756,11 @@ fun CremaSegmentedButton(
     onChange: (String) -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    /** Denser pill for tight rows (e.g. the phone phase editor): shorter, tighter
+     *  padding, smaller label, no check icon (selection reads from the fill), and
+     *  equal-width segments. Give the caller's [modifier] a fixed width (e.g.
+     *  `Modifier.width(176.dp)`) so a set of compact pills line up. */
+    compact: Boolean = false,
 ) {
     SingleChoiceSegmentedButtonRow(modifier) {
         options.forEachIndexed { i, o ->
@@ -764,7 +769,14 @@ fun CremaSegmentedButton(
                 selected = value == o.id,
                 onClick = { onChange(o.id) },
                 shape = SegmentedButtonDefaults.itemShape(i, options.size),
-            ) { Text(o.label, maxLines = 1) }
+                modifier = if (compact) Modifier.weight(1f).requiredHeight(32.dp) else Modifier,
+                contentPadding = if (compact) PaddingValues(horizontal = 10.dp, vertical = 0.dp) else SegmentedButtonDefaults.ContentPadding,
+                icon = if (compact) ({}) else ({ SegmentedButtonDefaults.Icon(value == o.id) }),
+                label = {
+                    if (compact) Text(o.label, maxLines = 1, style = MaterialTheme.typography.labelMedium)
+                    else Text(o.label, maxLines = 1)
+                },
+            )
         }
     }
 }
