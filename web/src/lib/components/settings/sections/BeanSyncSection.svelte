@@ -25,6 +25,7 @@
 		type SyncDirection
 	} from '$lib/visualizer';
 	import { getCremaAppContext } from '$lib/shell/app-context';
+	import { useVisualizerConnection } from '$lib/visualizer/useVisualizerConnection.svelte';
 	import type { PullOptions } from '$lib/services/shot-sync';
 	import StGroup from '../StGroup.svelte';
 	import StRow from '../StRow.svelte';
@@ -35,6 +36,7 @@
 	const library = getBeanStore();
 	const history = getHistoryStore();
 	const appCtx = getCremaAppContext();
+	const viz = useVisualizerConnection();
 
 	// ── Service seams (Option 3, T-16) ────────────────────────────────────
 	// Shot pull / push / queue drain run on the app runtime. The card only
@@ -70,7 +72,6 @@
 	let pullProgress = $state<{ fetched: number; page: number } | null>(null);
 
 	onMount(() => {
-		void refreshConnected();
 		// Refresh in case another tab edited it while this one was open.
 		config = readSyncConfig();
 		// Pick up writes from elsewhere in the app — most notably the
@@ -340,20 +341,10 @@
 		return 'Shot';
 	}
 
-	// Connection gate (Option 3): `TokenVault.getTokens !== null`, read through
-	// the runtime into a `$state`. Refreshed on mount (the card is already
-	// gated by SharingSection's connected check, so this is rarely false here).
-	let connected = $state(false);
-	async function refreshConnected(): Promise<void> {
-		connected = (await appCtx().services?.tokens.isConnected()) ?? false;
-	}
-	// SV1: a sign-in / sign-out from any surface propagates here (the
-	// subscription's first emission also seeds the current state).
-	$effect(() => appCtx().services?.tokens.onConnectionChange((c) => (connected = c)));
 	const unsyncedShotCount = $derived(history.all.filter((s) => !s.visualizerId).length);
 </script>
 
-{#if connected}
+{#if viz.connected}
 	<StGroup
 		title="Sync"
 		sub="Per-entity direction. Shots can backup or two-way sync regardless of premium; beans and roasters need Visualizer Premium for the push side."

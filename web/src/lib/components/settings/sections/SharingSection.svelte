@@ -26,6 +26,7 @@
 		type VisualizerAccount
 	} from '$lib/bean';
 	import { onSyncConfigChange, readSyncConfig } from '$lib/visualizer';
+	import { useVisualizerConnection } from '$lib/visualizer/useVisualizerConnection.svelte';
 	import { getCremaAppContext } from '$lib/shell/app-context';
 	import StSectionHead from '../StSectionHead.svelte';
 	import StGroup from '../StGroup.svelte';
@@ -38,10 +39,10 @@
 
 	const history = getHistoryStore();
 	const appCtx = getCremaAppContext();
+	const viz = useVisualizerConnection();
 	const settings = getSettingsStore();
 	const oauthConfigured = isVisualizerOauthConfigured();
 
-	let connected = $state(false);
 	let account = $state<VisualizerAccount | null>(null);
 	let accountError = $state<string | null>(null);
 	let signingIn = $state(false);
@@ -55,26 +56,16 @@
 	   the eyebrow line picks up Test results without a reload. */
 	let premium = $state<boolean | null>(readSyncConfig().premium);
 
-	/** Connection gate (Option 3): `TokenVault.getTokens !== null`, read once at
-	 *  mount. Sign-in arrives via a full-page OAuth redirect → this remounts and
-	 *  re-reads; sign-out is handled locally in `disconnect`. */
-	async function refreshConnected(): Promise<void> {
-		connected = (await appCtx().services?.tokens.isConnected()) ?? false;
-	}
-	// SV1: a sign-in / sign-out from any surface propagates here (the
-	// subscription's first emission also seeds the current state).
-	$effect(() => appCtx().services?.tokens.onConnectionChange((c) => (connected = c)));
-
-	onMount(() => {
-		void (async () => {
-			await refreshConnected();
-			if (connected) void loadAccount();
-		})();
-		const offConfig = onSyncConfigChange((next) => {
-			premium = next.premium;
-		});
-		return offConfig;
+	// Fetch the account the first time we observe a connection — the helper's
+	// mount seed or a later sign-in. Guarded on account/error so it loads once
+	// per connect and never retries a failure into a loop. (Replaces the old
+	// onMount seed-then-load; the connection gate itself now lives in
+	// `useVisualizerConnection`.)
+	$effect(() => {
+		if (viz.connected && account === null && accountError === null) void loadAccount();
 	});
+
+	onMount(() => onSyncConfigChange((next) => (premium = next.premium)));
 
 	async function loadAccount(): Promise<void> {
 		const api = appCtx().services;
@@ -108,8 +99,10 @@
 		// Tier flag is per-account — a fresh sign-in (or the same account
 		// after a tier change on visualizer.coffee) shouldn't inherit it.
 		clearVisualizerPremiumCache();
-		// Reflect the disconnect locally (we own this transition; no listener).
-		connected = false;
+		// Reflect the disconnect optimistically. `clearTokens` above also fires
+		// the connection subscription, but that echoes back a tick later; setting
+		// it here keeps the card snappy (the echo is then a redundant no-op).
+		viz.connected = false;
 		account = null;
 		accountError = null;
 		testStatus = { kind: 'idle' };
@@ -148,7 +141,7 @@
 	     and we omit the suffix in that case rather than show a
 	     potentially-wrong label. Click "Test" to populate it. */
 	const cardEyebrow = $derived.by(() => {
-		if (!connected) {
+		if (!viz.connected) {
 			return oauthConfigured ? 'Not connected' : 'OAuth not configured';
 		}
 		if (!account) {
@@ -167,7 +160,7 @@
 
 	/** Status message shown in the card meta line — transient. */
 	const cardStatus = $derived.by(() => {
-		if (!connected) {
+		if (!viz.connected) {
 			if (!oauthConfigured) {
 				return 'Set `VITE_VISUALIZER_CLIENT_ID` in `web/.env.local` and restart the dev server.';
 			}
@@ -216,7 +209,7 @@
 	<div class="st-visualizer-info">
 		<div
 			class="t-eyebrow"
-			style="color:{connected
+			style="color:{viz.connected
 				? 'var(--copper-400)'
 				: oauthConfigured
 					? 'rgba(var(--tint-rgb), 0.5)'
@@ -226,7 +219,7 @@
 		</div>
 		<div class="st-visualizer-name">visualizer.coffee</div>
 		<div class="st-visualizer-meta">
-			{#if !connected && !oauthConfigured}
+			{#if !viz.connected && !oauthConfigured}
 				Set <code>VITE_VISUALIZER_CLIENT_ID</code> in <code>web/.env.local</code> and restart the dev server.
 			{:else}
 				{cardStatus}
@@ -247,7 +240,7 @@
 		</div>
 	</div>
 	<div class="st-visualizer-actions">
-		{#if connected}
+		{#if viz.connected}
 			<StButton
 				label={testStatus.kind === 'testing' ? 'Testing…' : 'Test'}
 				icon="plugs-connected"
@@ -270,7 +263,7 @@
 </div>
 
 <!-- Connected-state sync controls + log. -->
-{#if connected}
+{#if viz.connected}
 	<BeanSyncSection />
 
 	<!-- Upload options — the three settings buildShotPayload has always

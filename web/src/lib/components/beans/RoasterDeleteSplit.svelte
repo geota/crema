@@ -15,10 +15,10 @@
 	 * store stays pure-local, and the free-tier skip + best-effort warn (plus
 	 * the bags-before-roaster order) live in that helper.
 	 */
-	import { onMount } from 'svelte';
 	import { getBeanStore } from '$lib/bean';
 	import { getCremaAppContext } from '$lib/shell/app-context';
 	import { bestEffortRemoteDelete } from '$lib/visualizer';
+	import { useVisualizerConnection } from '$lib/visualizer/useVisualizerConnection.svelte';
 	import SplitButton from '$lib/components/shared/SplitButton.svelte';
 	import { confirmDialog } from '$lib/components/shared/confirm-dialog.svelte';
 
@@ -40,24 +40,14 @@
 
 	const library = getBeanStore();
 	const appCtx = getCremaAppContext();
-
-	/** Connection gate (Option 3): `TokenVault.getTokens !== null`, read once. */
-	let connected = $state(false);
-	onMount(() => {
-		void (async () => {
-			connected = (await appCtx().services?.tokens.isConnected()) ?? false;
-		})();
-	});
-	// SV1: a sign-in / sign-out from any surface propagates here (the
-	// subscription's first emission also seeds the current state).
-	$effect(() => appCtx().services?.tokens.onConnectionChange((c) => (connected = c)));
+	const viz = useVisualizerConnection();
 
 	/**
 	 * Remote is meaningful when connected AND something here is on Visualizer —
 	 * the roaster itself, or (for the cascade) one of its linked bags.
 	 */
 	const remoteAvailable = $derived(
-		connected &&
+		viz.connected &&
 			(!!library.getRoaster(roasterId)?.visualizerId ||
 				library.beans.some((b) => b.roasterId === roasterId && !!b.visualizerId))
 	);

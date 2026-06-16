@@ -1,6 +1,6 @@
 # 39 — Extract `useVisualizerConnection()` rune helper
 
-- **Status:** ready-for-agent
+- **Status:** ✅ done
 - **Severity:** P2
 - **Area:** Web — `web/src/lib/components/beans/BeanDeleteSplit.svelte`, `web/src/lib/components/beans/RoasterDeleteSplit.svelte`, `web/src/lib/components/settings/sections/SharingSection.svelte`
 - **Punchlist:** T4-15 — `../PUNCHLIST.md`
@@ -25,3 +25,38 @@ Extract a `useVisualizerConnection()` rune helper (e.g. in `web/src/lib/visualiz
 
 ## Comments
 <!-- triage + progress notes append below -->
+
+### 2026-06-15 (session 5) — done
+
+Extracted `web/src/lib/visualizer/useVisualizerConnection.svelte.ts` — owns the
+`$state` + onMount `isConnected()` seed + `onConnectionChange` subscription, returns
+`{ get/set connected }`.
+
+**Settable on purpose.** It's a getter **and** setter: SharingSection's explicit
+Disconnect calls `clearTokens()` and wants the card to flip synchronously. (The
+subscription *does* echo the sign-out — see below — but a tick later via the
+forked runtime fiber; the setter keeps it snappy and the echo is then a no-op.)
+The two delete-splits only read it.
+
+**4 sites, not 3.** The issue/punchlist said "copy-pasted 3×". The acceptance grep
+(`onConnectionChange` over `web/src/lib/components`) surfaced a **4th**:
+`settings/sections/BeanSyncSection.svelte` carried the same block (with a redundant
+`refreshConnected` seed). All four now call the helper:
+`beans/BeanDeleteSplit`, `beans/RoasterDeleteSplit`, `settings/sections/SharingSection`,
+`settings/sections/BeanSyncSection`.
+
+**SharingSection nuances handled:**
+- Its bespoke `onMount` seed-then-load (`await refreshConnected(); if (connected) loadAccount()`)
+  became a guarded `$effect(() => { if (viz.connected && account===null && accountError===null) loadAccount() })`
+  — loads once per connect, never loops a failure. The leftover `onMount` keeps only the
+  `onSyncConfigChange` subscription.
+- Corrected a **stale comment**: disconnect said "we own this transition; no listener".
+  Not true — `TokenVault.clearTokens` does `Ref.set(changes, null)` on the same
+  `SubscriptionRef` that `onConnectionChange` consumes, so the sign-out *does* propagate.
+  Kept the local set (now via `viz.connected = false`) only as an optimistic snappiness
+  win, and said so.
+
+Verified: `grep onConnectionChange web/src/lib/components` → 0; helper + new-pattern probe
+pass `svelte-autofixer` (only the known "$effect assigns state" heuristic, which is a
+real external subscription / async loader, N/A); `pnpm run check` 0 errors/0 warnings;
+`pnpm exec vitest run` 261/261.

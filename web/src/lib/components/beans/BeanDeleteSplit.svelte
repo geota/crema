@@ -14,10 +14,10 @@
 	 * app runtime (Option 3, T-16) — the store stays pure-local; the free-tier
 	 * skip + best-effort warn live in that helper.
 	 */
-	import { onMount } from 'svelte';
 	import { getBeanStore } from '$lib/bean';
 	import { getCremaAppContext } from '$lib/shell/app-context';
 	import { bestEffortRemoteDelete } from '$lib/visualizer';
+	import { useVisualizerConnection } from '$lib/visualizer/useVisualizerConnection.svelte';
 	import SplitButton from '$lib/components/shared/SplitButton.svelte';
 	import { confirmDialog } from '$lib/components/shared/confirm-dialog.svelte';
 
@@ -39,21 +39,11 @@
 
 	const library = getBeanStore();
 	const appCtx = getCremaAppContext();
-
-	/** Connection gate (Option 3): `TokenVault.getTokens !== null`, read once. */
-	let connected = $state(false);
-	onMount(() => {
-		void (async () => {
-			connected = (await appCtx().services?.tokens.isConnected()) ?? false;
-		})();
-	});
-	// SV1: a sign-in / sign-out from any surface propagates here (the
-	// subscription's first emission also seeds the current state).
-	$effect(() => appCtx().services?.tokens.onConnectionChange((c) => (connected = c)));
+	const viz = useVisualizerConnection();
 
 	/** The remote option only shows when the bag is on Visualizer + connected. */
 	const remoteAvailable = $derived(
-		connected && !!library.getBean(beanId)?.visualizerId
+		viz.connected && !!library.getBean(beanId)?.visualizerId
 	);
 
 	async function run(remote: boolean): Promise<void> {
