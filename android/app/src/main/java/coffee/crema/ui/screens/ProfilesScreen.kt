@@ -61,6 +61,8 @@ import coffee.crema.ui.theme.CremaTheme
 import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager
 import coffee.crema.profiles.CremaProfile
+import coffee.crema.profiles.effectiveProfileFilter
+import coffee.crema.profiles.filterAndSortProfiles
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.components.CremaButton
 import coffee.crema.ui.components.CremaButtonVariant
@@ -107,34 +109,10 @@ fun ProfilesScreen(
         if (uri != null && t != null) vm.writeTextToUri(uri, t)
     }
     val launchSave: (String, String?) -> Unit = { name, content -> if (content != null) { pendingExport = content; saveLauncher.launch(name) } }
-    // Fall back off the Hidden facet once nothing is archived (e.g. the last one
-    // was just restored) so the grid never strands on an empty hidden view.
-    val effectiveFilter = if (filter == "hidden" && ui.hiddenProfileIds.isEmpty()) "all" else filter
-    val filtered = ui.profiles.filter { p ->
-        val isHidden = p.id in ui.hiddenProfileIds
-        (query.isBlank() ||
-            p.name.contains(query, ignoreCase = true) ||
-            p.tags.any { it.contains(query, ignoreCase = true) } ||
-            p.notes.contains(query, ignoreCase = true) ||
-            p.author.contains(query, ignoreCase = true) ||
-            (p.roast?.contains(query, ignoreCase = true) == true)) &&
-            when (effectiveFilter) {
-                // The Hidden facet draws only the archived built-ins; every other
-                // facet excludes them from the active grid.
-                "hidden" -> isHidden
-                "pinned" -> !isHidden && p.pinned
-                "all" -> !isHidden
-                else -> !isHidden && p.roast?.equals(filter, ignoreCase = true) == true
-            }
-    }
-    val roastOrder = mapOf("light" to 0, "medium" to 1, "dark" to 2)
-    // Ascending base per key; the direction toggle reverses it.
-    val sortedAsc = when (sort) {
-        "roast" -> filtered.sortedBy { roastOrder[it.roast?.lowercase()] ?: 3 }
-        "pinned" -> filtered.sortedBy { if (it.pinned) 0 else 1 }
-        else -> filtered.sortedBy { it.name.lowercase() }
-    }
-    val sorted = if (sortDesc) sortedAsc.reversed() else sortedAsc
+    // Hidden facet falls back to All when nothing is archived; both the chips and
+    // the grid key off effectiveFilter (issue 28).
+    val effectiveFilter = effectiveProfileFilter(filter, ui.hiddenProfileIds)
+    val sorted = filterAndSortProfiles(ui.profiles, ui.hiddenProfileIds, query, filter, sort, sortDesc)
 
     Row(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         CremaNavigationRail(
