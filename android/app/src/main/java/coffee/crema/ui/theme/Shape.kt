@@ -11,7 +11,7 @@ import androidx.compose.ui.unit.dp
  *   small       8dp  — buttons, small cards, inputs
  *   medium     12dp  — cards, panels
  *   large      16dp  — hero cards, modals, the TARE button
- *   extraLarge 28dp  — bottom sheets, large hero cards
+ *   extraLarge 24dp  — bottom sheets, large hero cards (web --radius-xl)
  *   (pill)    999dp  — pills, the start/stop control, avatars → use CircleShape
  *                      or RoundedCornerShape(50) per-component.
  *
@@ -23,5 +23,5 @@ val CremaShapes = Shapes(
     small = RoundedCornerShape(8.dp),
     medium = RoundedCornerShape(12.dp),
     large = RoundedCornerShape(16.dp),
-    extraLarge = RoundedCornerShape(28.dp),
+    extraLarge = RoundedCornerShape(24.dp),
 )

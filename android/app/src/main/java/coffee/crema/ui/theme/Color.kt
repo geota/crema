@@ -17,7 +17,7 @@ import androidx.compose.ui.graphics.Color
  */
 
 // ── Copper accent ramp (brand) ──────────────────────────────────────────────
-val Copper300 = Color(0xFFE8A876)
+val Copper300 = Color(0xFFE0A375)
 val Copper500 = Color(0xFFC7763B) // brand primary on dark
 val Copper600 = Color(0xFFA55F2A) // brand primary on light (reads on paper)
 val Copper700 = Color(0xFF82481C)
@@ -130,7 +130,7 @@ val CremaLightColors = lightColorScheme(
     surfaceContainerLow = Color(0xFFFBF6EE),
     surfaceContainer = Color(0xFFF4EDE0),       // paper-100
     surfaceContainerHigh = Color(0xFFECE2D1),   // paper-200
-    surfaceContainerHighest = Color(0xFFE5D9C3), // paper-300 (crema foam)
+    surfaceContainerHighest = Color(0xFFE8D9BC), // paper-300 (crema foam)
 
     outline = Color(0x3D1F1812),     // ink @ 24%
     outlineVariant = Color(0x1F1F1812), // ink @ 12%
