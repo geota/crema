@@ -12,10 +12,12 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coffee.crema.ble.De1BleManager
@@ -53,8 +55,6 @@ fun PhoneQuickSheet(
     val (dose, yieldOut, brewTemp) = ui.effectiveBrew()
 
     var tab by remember { mutableStateOf("dial") }
-    var showSave by remember { mutableStateOf(false) }
-    var presetName by remember { mutableStateOf("") }
     // Split-stepper modes + local (no-VM-seam) values — tablet QC parity.
     var doseGrindMode by remember { mutableStateOf("dose") }
     var grind by remember { mutableStateOf(4.2) }
@@ -62,8 +62,11 @@ fun PhoneQuickSheet(
     var piFlushMode by remember { mutableStateOf("preinf") }
     var preinf by remember { mutableStateOf(8.0) }
     var flushTime by remember { mutableStateOf(4.0) }
-    var steamTime by remember { mutableStateOf(90.0) }
-    var waterVolume by remember { mutableStateOf(250.0) }
+    // Steam / hot-water modes are local UI; the values they edit are the VM's
+    // persisted QC state (vm.setQcSteam* / vm.setQcHotWater*), shared with the
+    // tablet — no local stub.
+    var steamMode by remember { mutableStateOf("time") }
+    var waterMode by remember { mutableStateOf("volume") }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -192,24 +195,54 @@ fun PhoneQuickSheet(
                                 onChange = { if (piFlushMode == "preinf") preinf = it else flushTime = it },
                             )
                         }
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            QcCell(
-                                modifier = Modifier.weight(1f),
-                                header = { Eyebrow("Steam") },
-                                value = steamTime, unit = "s", step = 5.0, min = 0.0, max = 240.0,
-                                presets = listOf(30.0, 60.0, 90.0, 120.0),
-                                fmt = { "%.0f".format(it) },
-                                onChange = { steamTime = it },
-                            )
-                            QcCell(
-                                modifier = Modifier.weight(1f),
-                                header = { Eyebrow("Hot water") },
-                                value = waterVolume, unit = "ml", step = 10.0, min = 20.0, max = 500.0,
-                                presets = listOf(60.0, 120.0, 250.0, 350.0),
-                                fmt = { "%.0f".format(it) },
-                                onChange = { waterVolume = it },
-                            )
-                        }
+                        // Steam — Time | Flow | Temp, wired to the same persisted QC
+                        // state the tablet uses (vm.setQcSteam*). Temp 0 = heater off:
+                        // the dot arms/disarms it and greys the bar; the 135 floor keeps
+                        // the user out of the firmware's silent <135 → 0 snap band.
+                        // Full-width so the 3-way label + dot never crowd (sheet scrolls).
+                        QcCell(
+                            modifier = Modifier.fillMaxWidth(),
+                            header = {
+                                CremaSplitLabel(
+                                    prefix = "Steam",
+                                    options = listOf(SplitOption("time", "Time"), SplitOption("flow", "Flow"), SplitOption("temp", "Temp")),
+                                    value = steamMode, onChange = { steamMode = it },
+                                    dot = steamMode == "temp",
+                                    dotOn = ui.qcSteamTempC > 0,
+                                    onDot = { vm.setQcSteamTemp(if (ui.qcSteamTempC > 0) 0f else 148f) },
+                                )
+                            },
+                            value = when (steamMode) { "flow" -> ui.qcSteamFlowMlS.toDouble(); "temp" -> ui.qcSteamTempC.toDouble(); else -> ui.qcSteamTimeS.toDouble() },
+                            unit = when (steamMode) { "flow" -> "ml/s"; "temp" -> "°C"; else -> "s" },
+                            step = when (steamMode) { "flow" -> 0.1; "temp" -> 0.5; else -> 1.0 },
+                            min = when (steamMode) { "flow" -> 0.2; "temp" -> 135.0; else -> 1.0 },
+                            max = when (steamMode) { "flow" -> 3.0; "temp" -> 170.0; else -> 60.0 },
+                            presets = when (steamMode) { "flow" -> listOf(0.6, 0.9, 1.2, 1.6, 2.0); "temp" -> listOf(140.0, 145.0, 148.0, 150.0, 155.0); else -> listOf(5.0, 10.0, 15.0, 20.0, 30.0) },
+                            fmt = { if (it % 1.0 == 0.0) "%.0f".format(it) else "%.1f".format(it) },
+                            enabled = !(steamMode == "temp" && ui.qcSteamTempC <= 0f),
+                            onChange = { when (steamMode) { "flow" -> vm.setQcSteamFlow(it.toFloat()); "temp" -> vm.setQcSteamTemp(it.toFloat()); else -> vm.setQcSteamTime(it.toFloat()) } },
+                        )
+                        // Hot water — Temp | Volume, wired to the VM (tablet parity). No
+                        // disable dot: 0 isn't a clean "off" here (the de1app/Decenza
+                        // cross-check), so it stays a plain mode switch.
+                        QcCell(
+                            modifier = Modifier.fillMaxWidth(),
+                            header = {
+                                CremaSplitLabel(
+                                    prefix = "Hot water",
+                                    options = listOf(SplitOption("temp", "Temp"), SplitOption("volume", "Volume")),
+                                    value = waterMode, onChange = { waterMode = it },
+                                )
+                            },
+                            value = if (waterMode == "temp") ui.qcHotWaterTempC.toDouble() else ui.qcHotWaterVolumeMl.toDouble(),
+                            unit = if (waterMode == "temp") "°C" else "ml",
+                            step = if (waterMode == "temp") 1.0 else 10.0,
+                            min = if (waterMode == "temp") 40.0 else 20.0,
+                            max = if (waterMode == "temp") 98.0 else 500.0,
+                            presets = if (waterMode == "temp") listOf(60.0, 75.0, 85.0, 92.0, 96.0) else listOf(60.0, 120.0, 180.0, 250.0, 350.0),
+                            fmt = { "%.0f".format(it) },
+                            onChange = { if (waterMode == "temp") vm.setQcHotWaterTemp(it.toFloat()) else vm.setQcHotWaterVolume(it.toFloat()) },
+                        )
                     }
                 }
                 "chart" -> {
@@ -244,7 +277,11 @@ fun PhoneQuickSheet(
                 }
             }
 
-            // Foot: Reset + Save preset.
+            // Foot: Reset. Quick-control changes apply immediately — the dial is a
+            // per-shot override (baked into the next shot) and the Shot-tab toggles
+            // write global settings live (e.g. auto-tare flips the same setting the
+            // Settings page shows) — so there's no "save" step. Reset clears the
+            // per-shot dial override back to the active profile's values.
             Row(Modifier.fillMaxWidth().padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
                 CremaButton(
                     onClick = vm::resetBrewParams,
@@ -253,41 +290,10 @@ fun PhoneQuickSheet(
                     enabled = ui.brewParams != null,
                     label = "Reset",
                 )
-                Spacer(Modifier.weight(1f))
-                if (active != null) {
-                    CremaButton(
-                        onClick = { showSave = true },
-                        variant = CremaButtonVariant.Filled,
-                        icon = "bookmark-simple",
-                        label = "Save preset",
-                    )
-                }
             }
         }
     }
 
-    if (showSave) {
-        AlertDialog(
-            onDismissRequest = { showSave = false },
-            title = { Text("Save as preset") },
-            text = {
-                OutlinedTextField(
-                    value = presetName,
-                    onValueChange = { presetName = it },
-                    label = { Text("Preset name") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = { vm.saveQuickPreset(presetName); showSave = false; presetName = "" },
-                    enabled = presetName.isNotBlank(),
-                ) { Text("Save") }
-            },
-            dismissButton = { TextButton(onClick = { showSave = false }) { Text("Cancel") } },
-        )
-    }
 }
 
 // One Quick-Controls stepper cell (proto .pf-qc-step): header, − value +, presets.
@@ -303,16 +309,17 @@ private fun QcCell(
     presets: List<Double>,
     fmt: (Double) -> String,
     onChange: (Double) -> Unit,
+    enabled: Boolean = true,
 ) {
     Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceContainer, modifier = modifier) {
         Column(Modifier.padding(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             header()
             Row(
-                Modifier.fillMaxWidth(),
+                Modifier.fillMaxWidth().alpha(if (enabled) 1f else 0.4f),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                QcRoundBtn("minus") { onChange((value - step).coerceAtLeast(min)) }
+                QcRoundBtn("minus") { onChange((value - step).coerceIn(min, max)) }
                 Row(verticalAlignment = Alignment.Bottom) {
                     Text(
                         fmt(value),
@@ -325,9 +332,9 @@ private fun QcCell(
                         modifier = Modifier.padding(start = 2.dp, bottom = 2.dp),
                     )
                 }
-                QcRoundBtn("plus") { onChange((value + step).coerceAtMost(max)) }
+                QcRoundBtn("plus") { onChange((value + step).coerceIn(min, max)) }
             }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(Modifier.fillMaxWidth().alpha(if (enabled) 1f else 0.4f), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 presets.forEach { p ->
                     val on = kotlin.math.abs(p - value) < 0.001
                     Box(
@@ -455,6 +462,8 @@ fun PhoneDevicesSheet(
     connected: Boolean,
     scaleConnected: Boolean,
     onConnect: (String) -> Unit,
+    onDe1AutoConnect: (Boolean) -> Unit,
+    onScaleAutoConnect: (Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
     ModalBottomSheet(
@@ -488,6 +497,9 @@ fun PhoneDevicesSheet(
                 },
                 on = connected,
                 onAction = { onConnect("machine") },
+                autoConnect = ui.rememberedDe1Address != null,
+                autoConnectEnabled = connected || ui.rememberedDe1Address != null,
+                onAutoConnect = onDe1AutoConnect,
             )
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             DeviceRow(
@@ -509,6 +521,9 @@ fun PhoneDevicesSheet(
                 },
                 on = scaleConnected,
                 onAction = { onConnect("scale") },
+                autoConnect = ui.rememberedScaleAddress != null,
+                autoConnectEnabled = scaleConnected || ui.rememberedScaleAddress != null,
+                onAutoConnect = onScaleAutoConnect,
             )
             Spacer(Modifier.height(14.dp))
             OutlinedButton(
@@ -542,12 +557,18 @@ private fun DeviceRow(
     stat: String,
     on: Boolean,
     onAction: () -> Unit,
+    /** Per-device "Auto-connect" state + whether it's interactive. Greyed out
+     *  (disabled) when there's no device to control — neither connected nor
+     *  remembered — rather than hidden. */
+    autoConnect: Boolean = false,
+    autoConnectEnabled: Boolean = false,
+    onAutoConnect: (Boolean) -> Unit = {},
 ) {
     val tel = CremaTheme.telemetry
     Row(
         Modifier.fillMaxWidth().padding(vertical = 13.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(13.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Surface(
             shape = RoundedCornerShape(12.dp),
@@ -565,7 +586,7 @@ private fun DeviceRow(
                 style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, letterSpacing = 0.6.sp, fontWeight = FontWeight.SemiBold),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Text(name, style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp, fontWeight = FontWeight.Medium))
+            Text(name, style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp, fontWeight = FontWeight.Medium), maxLines = 1, overflow = TextOverflow.Ellipsis)
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Box(
                     Modifier.size(7.dp).clip(CircleShape)
@@ -575,8 +596,21 @@ private fun DeviceRow(
                     stat,
                     style = TextStyle(fontFamily = JetBrainsMono, fontSize = 12.sp, fontFeatureSettings = "tnum"),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
                 )
             }
+        }
+        // Per-device Auto-connect — a compact label-over-switch BESIDE the Pair
+        // pill (ON remembers the device; OFF forgets it). Always shown; greyed out
+        // when there's no device to control (neither connected nor remembered).
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            Text(
+                "Auto-connect",
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.5.sp, letterSpacing = 0.2.sp),
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (autoConnectEnabled) 1f else 0.5f),
+                maxLines = 1,
+            )
+            CremaSwitch(autoConnect, onAutoConnect, enabled = autoConnectEnabled)
         }
         Surface(
             onClick = onAction,

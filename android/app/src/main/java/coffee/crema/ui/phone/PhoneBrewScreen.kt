@@ -40,6 +40,8 @@ import coffee.crema.ui.formatWeight
 import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager
 import coffee.crema.profiles.CremaProfile
+import coffee.crema.profiles.rankProfilesForPicker
+import coffee.crema.beans.rankBeansForPicker
 import coffee.crema.ui.MainUiState
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.effectiveBrew
@@ -134,6 +136,7 @@ fun PhoneBrewScreen(
                     connected = connected,
                     scaleConnected = scaleConnected,
                     onOpenLastShot = { id -> vm.openShotInHistory(id); onNav("history") },
+                    onRate = { id, r -> vm.updateShot(id, r, ui.history.firstOrNull { it.id == id }?.notes ?: "") },
                     modifier = Modifier.weight(1f),
                 )
             }
@@ -169,6 +172,8 @@ fun PhoneBrewScreen(
             connected = connected,
             scaleConnected = scaleConnected,
             onConnect = onConnect,
+            onDe1AutoConnect = vm::setDe1AutoConnect,
+            onScaleAutoConnect = vm::setScaleAutoConnect,
             onDismiss = { devicesOpen = false },
         )
     }
@@ -270,9 +275,12 @@ private fun SwapDropdown(
         ) {
             Column(Modifier.padding(8.dp).verticalScroll(rememberScrollState())) {
                 DdSectionHead("Profile", "All profiles →", onAllProfiles)
-                // Pinned favourites lead; fall back to the first few profiles.
-                val faves = ui.profiles.filter { it.pinned }.take(4)
-                    .ifEmpty { ui.profiles.filter { it.id !in ui.hiddenProfileIds }.take(4) }
+                // Loaded profile leads, then pinned favourites, then store order
+                // (shared rank). Hidden stays hidden; the strip shows the top few.
+                val faves = rankProfilesForPicker(
+                    ui.profiles.filter { it.id !in ui.hiddenProfileIds },
+                    ui.activeProfileId,
+                ).take(4)
                 faves.forEach { p ->
                     val activeRow = p.id == ui.activeProfileId
                     DdRow(active = activeRow, onClick = { onSelectProfile(p.id) }) {
@@ -306,7 +314,11 @@ private fun SwapDropdown(
                 }
                 HorizontalDivider(Modifier.padding(horizontal = 8.dp, vertical = 6.dp), color = MaterialTheme.colorScheme.outlineVariant)
                 DdSectionHead("Bean", "All beans →", onAllBeans)
-                val beans = ui.beans.filter { it.archivedAt == null }.take(3)
+                // Loaded bean leads, then favourites, then store order (shared rank).
+                val beans = rankBeansForPicker(
+                    ui.beans.filter { it.archivedAt == null },
+                    ui.activeBeanId,
+                ).take(3)
                 beans.forEach { b ->
                     val activeRow = b.id == ui.activeBeanId
                     val roaster = ui.roasters.firstOrNull { it.id == b.roasterId }?.name
@@ -461,7 +473,11 @@ private fun RunningBody(ui: MainUiState, active: CremaProfile?, modifier: Modifi
                     style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp, letterSpacing = 0.6.sp, fontWeight = FontWeight.Medium),
                     color = MaterialTheme.colorScheme.primary,
                 )
-                Row(verticalAlignment = Alignment.Bottom) {
+                // Baseline-align the ".N" frac with the big MM:SS digits — the two
+                // share one text baseline (alignByBaseline on both children is the
+                // only reliable Row baseline-align in Compose), so the smaller frac
+                // no longer sits low against the readout. Mirrors the tablet TimerCard.
+                Row {
                     Text(
                         "$mm:$ss",
                         style = TextStyle(
@@ -469,6 +485,7 @@ private fun RunningBody(ui: MainUiState, active: CremaProfile?, modifier: Modifi
                             fontSize = 60.sp, lineHeight = 54.sp, letterSpacing = (-2).sp,
                             fontFeatureSettings = "tnum",
                         ),
+                        modifier = Modifier.alignByBaseline(),
                     )
                     Text(
                         ".$frac",
@@ -478,6 +495,7 @@ private fun RunningBody(ui: MainUiState, active: CremaProfile?, modifier: Modifi
                             fontFeatureSettings = "tnum",
                         ),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.alignByBaseline(),
                     )
                 }
                 // Yield row + bar.
@@ -635,6 +653,7 @@ private fun RestingBody(
     connected: Boolean,
     scaleConnected: Boolean,
     onOpenLastShot: (String?) -> Unit,
+    onRate: (String, Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val tel = CremaTheme.telemetry
@@ -725,6 +744,106 @@ private fun RestingBody(
             }
         }
 
+        // ── Last shot — full result card (sits below the active-profile card) ─
+        // Visibility matches the tablet/web: the *session's* completed shot — set on
+        // ShotCompleted, held until the next shot overwrites it, hidden while a shot
+        // runs (RestingBody isn't shown then), and gone on relaunch. The matching
+        // stored shot carries the recorded samples (curve) + the editable rating.
+        val last = ui.lastShot
+        if (last != null) {
+            val stored = ui.history.firstOrNull { it.id == last.id }
+            Surface(
+                onClick = { onOpenLastShot(last.id) },
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surfaceContainer,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(
+                    Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    val ago = remember(last.completedAtMs) {
+                        last.completedAtMs.takeIf { it > 0L }?.let {
+                            android.text.format.DateUtils.getRelativeTimeSpanString(
+                                it, System.currentTimeMillis(), android.text.format.DateUtils.MINUTE_IN_MILLIS,
+                            ).toString()
+                        }
+                    }
+                    // Header — "Last shot · N ago" over the profile · bean (when known);
+                    // chevron hints the tap-through to History.
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Eyebrow(if (ago != null) "Last shot · $ago" else "Last shot")
+                            val ctx = stored?.let { listOfNotNull(it.profileName, it.beanLabel).joinToString(" · ") }
+                                ?.takeIf { it.isNotBlank() }
+                            if (ctx != null) Text(
+                                ctx,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        PhIcon("caret-right", sizeDp = 16, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    // Actual extraction curve — recorded samples, mirroring the plan
+                    // curve in the Ready hero above (live = false: full shot, no cursor).
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(96.dp)
+                            .clip(MaterialTheme.shapes.medium)
+                            .background(MaterialTheme.colorScheme.surfaceContainerLowest),
+                    ) {
+                        val samples = stored?.samples.orEmpty()
+                        if (samples.isNotEmpty()) {
+                            CanvasShotChart(
+                                samples = samples,
+                                enabledChannels = ui.chartChannels,
+                                live = false,
+                                modifier = Modifier.fillMaxSize().padding(start = 2.dp, end = 8.dp, top = 8.dp, bottom = 2.dp),
+                            )
+                        } else {
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                Text(
+                                    "No curve recorded for this shot.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                    // Outcome — Time · Yield · Ratio · Peak (same stat treatment as the hero strip).
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        val y = convertWeight(last.yieldG, ui.weightUnit)
+                        val ratio = run {
+                            val yy = last.yieldG
+                            val d = stored?.doseG
+                            if (yy != null && d != null && d > 0f) formatRatio(d, yy) else "—"
+                        }
+                        val peak = convertPressure(last.peakPressure, ui.pressureUnit)
+                        ReadyParam("TIME", "%.1f".format(last.durationMs / 1000.0), "s", Modifier.weight(1f))
+                        ReadyParam("YIELD", if (last.yieldG != null) y.value else "—", if (last.yieldG != null) y.unit else "", Modifier.weight(1f))
+                        ReadyParam("RATIO", ratio, "", Modifier.weight(1f))
+                        ReadyParam("PEAK", if (last.peakPressure != null) peak.value else "—", if (last.peakPressure != null) peak.unit else "", Modifier.weight(1f))
+                    }
+                    // Tappable stars — inline quick-rate; persists to the stored shot. Its
+                    // own clickable, so a star tap doesn't also open History.
+                    if (stored != null) {
+                        CremaStarRating(
+                            stored.rating ?: 0,
+                            onChange = { r -> onRate(stored.id, r) },
+                            starDp = 18,
+                            emptyTint = MaterialTheme.colorScheme.outline,
+                        )
+                    }
+                }
+            }
+        }
+
         // ── Machine readiness strip — group temp · steam temp · tank · scale ─
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             val groupOk = connected && ui.headTemp != null &&
@@ -742,65 +861,6 @@ private fun RestingBody(
             MStat("Steam", "cloud", ui.steamTemp?.let { "${steamM.value}${steamM.unit}" } ?: "—", steamOk, Modifier.weight(1f))
             MStat("Tank", "drop-half", ui.waterLevelMm?.let { "%.0fmm".format(it) } ?: "—", tankOk, Modifier.weight(1f))
             MStat("Scale", "scales", if (scaleConnected) "${scaleM.value}${scaleM.unit}" else "—", scaleConnected, Modifier.weight(1f))
-        }
-
-        // ── Last shot peek ───────────────────────────────────────────────────
-        val last = ui.lastShot
-        if (last != null) {
-            val lastStored = ui.history.firstOrNull { it.id == last.id }
-            Surface(
-                onClick = { onOpenLastShot(last.id) },
-                shape = RoundedCornerShape(16.dp),
-                color = MaterialTheme.colorScheme.surfaceContainer,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Row(
-                    Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Eyebrow(
-                            "Last shot · " + remember(last.completedAtMs) {
-                                java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
-                                    .format(java.util.Date(last.completedAtMs))
-                            },
-                        )
-                        CremaStarRating(
-                            lastStored?.rating ?: 0,
-                            starDp = 13,
-                            spacingDp = 2,
-                            emptyTint = MaterialTheme.colorScheme.outline,
-                        )
-                        Text(
-                            listOfNotNull(lastStored?.profileName, lastStored?.beanLabel).joinToString(" · ").ifEmpty { "Shot" },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                    Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                        Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                            val lastYield = convertWeight(last.yieldG, ui.weightUnit)
-                            Text(
-                                lastYield.value,
-                                style = TextStyle(fontFamily = JetBrainsMono, fontWeight = FontWeight.Medium, fontSize = 20.sp, fontFeatureSettings = "tnum"),
-                            )
-                            Text(lastYield.unit, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        val ratio = lastStored?.let { s ->
-                            val y = s.yieldG; val d = s.doseG
-                            if (y != null && d != null && d > 0f) formatRatio(d, y) else null
-                        }
-                        Text(
-                            listOfNotNull(ratio, "%.0fs".format(last.durationMs / 1000.0)).joinToString(" · "),
-                            style = TextStyle(fontFamily = JetBrainsMono, fontSize = 11.sp),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    PhIcon("caret-right", sizeDp = 18, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
         }
     }
 }
