@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -268,9 +269,6 @@ fun PhIcon(name: String, modifier: Modifier = Modifier, tint: Color = LocalConte
         "wind" -> PhosphorIcons.Regular.Wind
         "target" -> PhosphorIcons.Regular.Target
         "play" -> PhosphorIcons.Regular.Play
-        "chats-circle" -> PhosphorIcons.Regular.ChatsCircle
-        "clock-counter-clockwise" -> PhosphorIcons.Regular.ClockCounterClockwise
-        "cloud" -> PhosphorIcons.Regular.Cloud
         "stop" -> PhosphorIcons.Regular.Stop
         // Phone (handset) chrome + screens.
         "scales-fill" -> PhosphorIcons.Fill.ScalesFilled
@@ -470,27 +468,33 @@ fun CremaSplitButton(
     val content = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
     Box(modifier) {
         Row(
-            Modifier.clip(shape).border(1.dp, border, shape),
+            // Pin to the M3 button height (40dp) so Export lines up with the
+            // OutlinedButton (Import) + filled button (Add) beside it. The halves
+            // fill the height, so only horizontal padding shapes them — the old
+            // top/bottom-9 padding rendered ~2dp short ("Export is smaller").
+            Modifier.clip(shape).border(1.dp, border, shape).height(40.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             // Primary half.
             Row(
                 Modifier
+                    .fillMaxHeight()
                     .clickable(enabled = enabled, onClick = onPrimary)
-                    .padding(start = 16.dp, end = 14.dp, top = 9.dp, bottom = 9.dp),
+                    .padding(start = 16.dp, end = 14.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(7.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                PhIcon(icon, sizeDp = 16, tint = content)
+                PhIcon(icon, sizeDp = 18, tint = content)
                 Text(label, style = MaterialTheme.typography.labelLarge, color = content)
             }
             Box(Modifier.width(1.dp).height(22.dp).background(border))
             // Caret half.
             Box(
                 Modifier
+                    .fillMaxHeight()
                     .clip(shape)
                     .clickable(enabled = enabled) { open = true }
-                    .padding(horizontal = 10.dp, vertical = 9.dp),
+                    .padding(horizontal = 10.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 PhIcon("caret-down", sizeDp = 13, tint = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -761,17 +765,38 @@ fun CremaSegmentedButton(
      *  equal-width segments. Give the caller's [modifier] a fixed width (e.g.
      *  `Modifier.width(176.dp)`) so a set of compact pills line up. */
     compact: Boolean = false,
+    /** Uniform segments. With [groupWidth] null the row self-sizes to its own
+     *  widest segment × count; pass a [groupWidth] to pin every toggle in a
+     *  settings group to one shared width so they all line up (the weighted
+     *  segments split it evenly). Either way the selection check icon is dropped
+     *  so the width never jitters. Used by the settings toggles. */
+    uniform: Boolean = false,
+    groupWidth: Dp? = null,
+    /** Stretch the segments to fill the available width — for a stacked settings
+     *  row where the pill sits full-width under its title. */
+    fillWidth: Boolean = false,
 ) {
-    SingleChoiceSegmentedButtonRow(modifier) {
+    val even = uniform || groupWidth != null || fillWidth
+    val rowMod = when {
+        fillWidth -> modifier.fillMaxWidth()
+        groupWidth != null -> modifier.width(groupWidth)
+        uniform -> modifier.width(IntrinsicSize.Max)
+        else -> modifier
+    }
+    SingleChoiceSegmentedButtonRow(rowMod) {
         options.forEachIndexed { i, o ->
             SegmentedButton(
                 enabled = enabled,
                 selected = value == o.id,
                 onClick = { onChange(o.id) },
                 shape = SegmentedButtonDefaults.itemShape(i, options.size),
-                modifier = if (compact) Modifier.weight(1f).requiredHeight(32.dp) else Modifier,
+                modifier = when {
+                    compact -> Modifier.weight(1f).requiredHeight(32.dp)
+                    even -> Modifier.weight(1f)
+                    else -> Modifier
+                },
                 contentPadding = if (compact) PaddingValues(horizontal = 10.dp, vertical = 0.dp) else SegmentedButtonDefaults.ContentPadding,
-                icon = if (compact) ({}) else ({ SegmentedButtonDefaults.Icon(value == o.id) }),
+                icon = if (compact || even) ({}) else ({ SegmentedButtonDefaults.Icon(value == o.id) }),
                 label = {
                     if (compact) Text(o.label, maxLines = 1, style = MaterialTheme.typography.labelMedium)
                     else Text(o.label, maxLines = 1)
@@ -1610,18 +1635,24 @@ private fun ConnectionPip(label: String, connected: Boolean, onClick: () -> Unit
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
     val pressed by interaction.collectIsPressedAsState()
-    // Proto .m3-rail-status-cta: the copper check badge appears ONLY on a
-    // CONNECTED pip while hovered (Android maps hover→hover-or-press). Never on a
-    // disconnected pip, and never at rest.
+    // CTA badges (proto .m3-rail-status-cta): a CONNECTED pip shows a copper check
+    // on hover/press (Android maps hover→hover-or-press; tap = disconnect). A
+    // DISCONNECTED pip shows a copper "bluetooth" connect cue at rest — Android has
+    // no hover, so the proto's hover-only CTA maps to always-on, and that badge is
+    // what tells you the grey dot is a tappable connect control.
     val showCheck = connected && (hovered || pressed)
     Column(
         modifier = Modifier
             .width(56.dp)
+            .heightIn(min = 48.dp) // M3 min touch target — this pip is the connect/disconnect control
             .clip(RoundedCornerShape(8.dp))
-            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+            // Ripple feedback (the app default indication) so a tap visibly
+            // registers. Was indication = null, which — with no disconnected CTA —
+            // made the pip read as a dead status light rather than a button.
+            .clickable(interactionSource = interaction, indication = LocalIndication.current, onClick = onClick)
             .padding(vertical = 6.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(3.dp),
+        verticalArrangement = Arrangement.spacedBy(3.dp, Alignment.CenterVertically),
     ) {
         // The status dot is centered; the connect-confirm badge sits just to its
         // right (proto cta at right:8) — beside, not overlapping.
@@ -1635,13 +1666,18 @@ private fun ConnectionPip(label: String, connected: Boolean, onClick: () -> Unit
                         .background(if (connected) tel.success else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.22f)),
                 )
             }
-            if (showCheck) {
+            val cta = when {
+                !connected -> "bluetooth" // tap-to-connect cue, always shown at rest
+                showCheck -> "check" // connected + hover/press → tap-to-disconnect
+                else -> null
+            }
+            if (cta != null) {
                 Box(
                     Modifier.align(Alignment.CenterEnd).padding(end = 6.dp).size(14.dp)
                         .clip(CircleShape).background(MaterialTheme.colorScheme.primary),
                     contentAlignment = Alignment.Center,
                 ) {
-                    PhIcon("check", sizeDp = 9, tint = MaterialTheme.colorScheme.onPrimary)
+                    PhIcon(cta, sizeDp = 9, tint = MaterialTheme.colorScheme.onPrimary)
                 }
             }
         }

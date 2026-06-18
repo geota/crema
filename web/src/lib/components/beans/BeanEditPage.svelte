@@ -1,5 +1,6 @@
 <script lang="ts">
 	import Icon from '$lib/icons/Icon.svelte';
+	import ArchiveIcon from 'phosphor-svelte/lib/ArchiveIcon';
 	import ArrowLeftIcon from 'phosphor-svelte/lib/ArrowLeftIcon';
 	import CheckCircleIcon from 'phosphor-svelte/lib/CheckCircleIcon';
 	import CheckIcon from 'phosphor-svelte/lib/CheckIcon';
@@ -543,12 +544,39 @@
 						</div>
 					</div>
 
+					<!-- Linked profile — auto-loads on activation (bean → profile). -->
+					<div class="be-frow be-frow-stack">
+						<div class="be-frow-l">
+							<div class="be-frow-label">Linked profile</div>
+							<div class="be-frow-sub">Auto-loads when this bean is selected on Brew.</div>
+						</div>
+						<div class="be-frow-r">
+							<select
+								class="be-input"
+								value={linkedProfileValue}
+								onchange={(e) => {
+									const v = (e.currentTarget as HTMLSelectElement).value;
+									patch({ linkedProfileId: v === '' ? null : v });
+								}}
+							>
+								<option value="">None</option>
+								{#each profileOptions as p (p.id)}
+									<option value={p.id}>{p.name}</option>
+								{/each}
+								{#if linkedMissing}
+									<option value={current.linkedProfileId}>(missing profile)</option>
+								{/if}
+							</select>
+						</div>
+					</div>
+
 					<div class="be-frow">
 						<div class="be-frow-l">
 							<div class="be-frow-label">Flags</div>
 							<div class="be-frow-sub">
-								Active selects this bag on Brew. Pin keeps it on the brew
-								strip; decaf is a filter facet.
+								Active selects this bag on Brew; pin keeps it on the brew
+								strip; decaf is a filter facet; archived hides it from the
+								active grid.
 							</div>
 						</div>
 						<div class="be-frow-r">
@@ -584,6 +612,15 @@
 										on={current.decaf}
 										onChange={(v) => patch({ decaf: v })}
 										label="Decaf"
+									/>
+								</div>
+								<div class="be-flag" class:is-on={current.archivedAt != null}>
+									<ArchiveIcon aria-hidden="true" />
+									<span>Archived</span>
+									<StToggle
+										on={current.archivedAt != null}
+										onChange={(v) => patch({ archivedAt: v ? Date.now() : null })}
+										label="Archived"
 									/>
 								</div>
 							</div>
@@ -819,23 +856,6 @@
 							</div>
 						</div>
 					{/if}
-					<div class="be-frow">
-						<div class="be-frow-l">
-							<div class="be-frow-label">Archived</div>
-							<div class="be-frow-sub">
-								Hide this bag from the active grid. Beanconqueror imports
-								flip this on for any bag marked `finished`.
-							</div>
-						</div>
-						<div class="be-frow-r">
-							<StToggle
-								on={current.archivedAt != null}
-								onChange={(v) =>
-									patch({ archivedAt: v ? Date.now() : null })}
-								label="Archived"
-							/>
-						</div>
-					</div>
 				</div>
 			</section>
 
@@ -942,31 +962,6 @@
 									step={0.1}
 									onChange={setGrind}
 								/>
-							</div>
-						</div>
-						<!-- Linked profile — auto-loads on activation (bean → profile). -->
-						<div class="be-frow be-frow-stack">
-							<div class="be-frow-l">
-								<div class="be-frow-label">Linked profile</div>
-								<div class="be-frow-sub">Auto-loads when this bean is selected on Brew.</div>
-							</div>
-							<div class="be-frow-r">
-								<select
-									class="be-input"
-									value={linkedProfileValue}
-									onchange={(e) => {
-										const v = (e.currentTarget as HTMLSelectElement).value;
-										patch({ linkedProfileId: v === '' ? null : v });
-									}}
-								>
-									<option value="">None</option>
-									{#each profileOptions as p (p.id)}
-										<option value={p.id}>{p.name}</option>
-									{/each}
-									{#if linkedMissing}
-										<option value={current.linkedProfileId}>(missing profile)</option>
-									{/if}
-								</select>
 							</div>
 						</div>
 					</div>

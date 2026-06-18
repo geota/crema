@@ -210,9 +210,9 @@
 	 */
 	// Same lazy-closure pattern as MODE_TARGET_SEC above. Precedence on
 	// each field: machine read > Quick Controls value (where it exists)
-	// > hardcoded legacy default. Steam *temp* has no QC analogue
-	// (Quick Sheet doesn't expose a steam-temp stepper); flush *temp*
-	// likewise — both keep their machine-or-hardcoded fallback.
+	// > hardcoded legacy default — including steam temp (the Steam card's
+	// Temp mode) and flush temp (the Flush bucket's Temp option), both of
+	// which now have QC analogues that write through to the DE1.
 	const MODE_TARGET_LABEL = $derived.by<
 		Record<'steaming' | 'dispensing' | 'flushing', string>
 	>(() => ({

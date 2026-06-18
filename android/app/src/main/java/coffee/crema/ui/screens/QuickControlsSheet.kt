@@ -279,15 +279,26 @@ fun QuickControlsSheet(
                     modifier = Modifier.weight(1f),
                     value = when (steamMode) { "flow" -> qcSteamFlowMlS; "temp" -> qcSteamTempC; else -> qcSteamTimeS },
                     unit = when (steamMode) { "flow" -> "ml/s"; "temp" -> "°C"; else -> "s" },
-                    min = when (steamMode) { "flow" -> 0.2; "temp" -> 120.0; else -> 1.0 },
+                    min = when (steamMode) { "flow" -> 0.2; "temp" -> 135.0; else -> 1.0 },
                     max = when (steamMode) { "flow" -> 3.0; "temp" -> 170.0; else -> 60.0 },
                     step = when (steamMode) { "flow" -> 0.1; "temp" -> 0.5; else -> 1.0 },
                     fmt = niceFmt,
                     chips = when (steamMode) { "flow" -> listOf(0.6, 0.9, 1.2, 1.6, 2.0); "temp" -> listOf(140.0, 145.0, 148.0, 150.0, 155.0); else -> listOf(5.0, 10.0, 15.0, 20.0, 30.0) },
                     onChange = { when (steamMode) { "flow" -> onSteamFlow(it); "temp" -> onSteamTemp(it); else -> onSteamTime(it) } },
                     style = CremaStepperStyle.Boxed,
+                    // Steam temp 0 = heater off (DE1 firmware snaps <135 → 0). The dot on
+                    // the Steam label arms/disarms it and greys the bar; the 135 floor
+                    // keeps the user out of the silent 120–134 snap-to-off band.
+                    enabled = !(steamMode == "temp" && qcSteamTempC <= 0.0),
                     header = {
-                        CremaSplitLabel(prefix = "Steam", options = listOf(SplitOption("time", "Time"), SplitOption("flow", "Flow"), SplitOption("temp", "Temp")), value = steamMode, onChange = { steamMode = it })
+                        CremaSplitLabel(
+                            prefix = "Steam",
+                            options = listOf(SplitOption("time", "Time"), SplitOption("flow", "Flow"), SplitOption("temp", "Temp")),
+                            value = steamMode, onChange = { steamMode = it },
+                            dot = steamMode == "temp",
+                            dotOn = qcSteamTempC > 0,
+                            onDot = { onSteamTemp(if (qcSteamTempC > 0) 0.0 else 148.0) },
+                        )
                     },
                 )
                 // 5 — Hot water temp | volume.

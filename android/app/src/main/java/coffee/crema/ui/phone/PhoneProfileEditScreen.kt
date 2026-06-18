@@ -13,6 +13,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.text.TextStyle
@@ -178,9 +179,9 @@ fun PhoneProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                     )
                 }
                 EdRow("Brew temp") { CremaStepper(value = brewTemp, unit = "°C", step = 0.5, min = 80.0, max = ProfileBounds.INSTANCE.maxTemperatureC.toDouble(), fmt = { "%.1f".format(it) }, onChange = { brewTemp = it }, style = CremaStepperStyle.BareCompact) }
-                EdRow("Max total volume", sub = "0 = no limit") { CremaStepper(value = maxVol, unit = "ml", step = 5.0, min = 0.0, max = 500.0, fmt = { "%.0f".format(it) }, onChange = { maxVol = it }, style = CremaStepperStyle.BareCompact) }
-                EdRow("Pre-infuse phases", sub = "Leading phases counted as pre-infusion") { CremaStepper(value = preinfuse, unit = null, step = 1.0, min = 0.0, max = segs.size.toDouble(), fmt = { "%.0f".format(it) }, onChange = { preinfuse = it }, style = CremaStepperStyle.BareCompact) }
-                EdRow("Tank temp", sub = "0 = unset") { CremaStepper(value = tankTemp, unit = "°C", step = 1.0, min = 0.0, max = 60.0, fmt = { "%.0f".format(it) }, onChange = { tankTemp = it }, style = CremaStepperStyle.BareCompact) }
+                EdRow("Max total volume", sub = "Cap the whole shot by volume", dot = true, dotOn = maxVol > 0, onDot = { maxVol = if (maxVol > 0) 0.0 else 50.0 }) { CremaStepper(value = maxVol, unit = "ml", step = 5.0, min = 0.0, max = 500.0, fmt = { "%.0f".format(it) }, onChange = { maxVol = it }, style = CremaStepperStyle.BareCompact) }
+                EdRow("Pre-infuse phases", sub = "Leading phases counted as pre-infusion", dot = true, dotOn = preinfuse > 0, onDot = { preinfuse = if (preinfuse > 0) 0.0 else 1.0 }) { CremaStepper(value = preinfuse, unit = null, step = 1.0, min = 0.0, max = segs.size.toDouble(), fmt = { "%.0f".format(it) }, onChange = { preinfuse = it }, style = CremaStepperStyle.BareCompact) }
+                EdRow("Tank temp", sub = "Override the machine tank setpoint", dot = true, dotOn = tankTemp > 0, onDot = { tankTemp = if (tankTemp > 0) 0.0 else 92.0 }) { CremaStepper(value = tankTemp, unit = "°C", step = 1.0, min = 0.0, max = 60.0, fmt = { "%.0f".format(it) }, onChange = { tankTemp = it }, style = CremaStepperStyle.BareCompact) }
             }
 
             // ── Pressure curve + phase accordion ────────────────────────────
@@ -469,17 +470,28 @@ internal fun EdGroup(title: String, content: @Composable ColumnScope.() -> Unit)
 }
 
 @Composable
-internal fun EdRow(title: String, sub: String? = null, control: @Composable () -> Unit) {
+internal fun EdRow(
+    title: String,
+    sub: String? = null,
+    dot: Boolean = false,
+    dotOn: Boolean = false,
+    onDot: (() -> Unit)? = null,
+    control: @Composable () -> Unit,
+) {
     Row(
         Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        // Optional enable dot for a 0-sentinel target (Max volume / Tank temp /
+        // Pre-infuse phases): toggles the feature and greys the stepper rather
+        // than relying on a "0 = off" subtitle.
+        if (dot) CremaDotToggle(dotOn, { onDot?.invoke() })
         Column(Modifier.weight(1f)) {
             Text(title, style = MaterialTheme.typography.bodyLarge)
             if (sub != null) Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        control()
+        Box(Modifier.alpha(if (dot && !dotOn) 0.4f else 1f)) { control() }
     }
 }
 
@@ -507,15 +519,23 @@ internal fun OptionalField(
         Row(
             Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
+            // Leading enable dot (was a trailing switch) + label — matches the
+            // tablet/PWA optional-config affordance so both shells read the same.
+            CremaDotToggle(on, onToggle)
             Column(Modifier.weight(1f)) {
-                Text(label, style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium))
+                Text(
+                    label,
+                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
+                    color = if (on) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                )
                 Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            CremaSwitch(on, { onToggle() })
         }
-        if (on) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) { content() }
+        // Always show the gated control, greyed when off (was hidden) — so the
+        // disabled state reads at a glance instead of vanishing.
+        Row(Modifier.fillMaxWidth().alpha(if (on) 1f else 0.4f), horizontalArrangement = Arrangement.End) { content() }
     }
 }
 

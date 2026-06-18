@@ -477,7 +477,7 @@
 			title="Plate temperature"
 			needsConnection={!connected}
 			sub={cupWarmerC === 0
-				? 'Off. Set above 0 to warm cups before pouring.'
+				? 'Off. Click the dot to warm cups before pouring.'
 				: 'The DE1 holds the cup-warmer plate at this temperature.'}
 		>
 			{#snippet control()}
@@ -490,6 +490,12 @@
 					onCommit={(v) => {
 						if (!connected) return;
 						void app?.setCupWarmerTemp(Math.round(v));
+					}}
+					dot
+					dotOn={cupWarmerC > 0}
+					onDot={() => {
+						if (!connected) return;
+						void app?.setCupWarmerTemp(cupWarmerC > 0 ? 0 : 55);
 					}}
 				/>
 			{/snippet}

@@ -119,6 +119,7 @@
 	<StRow title="Weight">
 		{#snippet control()}
 			<StSegment
+				equalWidth
 				value={prefs.weightUnit}
 				options={[
 					{ value: 'g', label: 'g' },
@@ -131,6 +132,7 @@
 	<StRow title="Temperature">
 		{#snippet control()}
 			<StSegment
+				equalWidth
 				value={prefs.tempUnit}
 				options={[
 					{ value: 'C', label: '°C' },
@@ -143,6 +145,7 @@
 	<StRow title="Volume">
 		{#snippet control()}
 			<StSegment
+				equalWidth
 				value={prefs.volumeUnit}
 				options={[
 					{ value: 'ml', label: 'ml' },
@@ -155,6 +158,7 @@
 	<StRow title="Pressure">
 		{#snippet control()}
 			<StSegment
+				equalWidth
 				value={prefs.pressureUnit}
 				options={[
 					{ value: 'bar', label: 'bar' },

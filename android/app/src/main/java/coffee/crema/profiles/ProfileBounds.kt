@@ -5,6 +5,9 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
+/** One lenient Json, reused — decoding the core's bounds JSON snapshot. */
+private val LenientJson = Json { ignoreUnknownKeys = true }
+
 /*
  * Hard wire-protocol bounds for DE1 profile fields, parsed once from the core's
  * `profileBoundsJson()` snapshot so the profile editors' steppers reject the same
@@ -36,7 +39,7 @@ data class ProfileBounds(
     companion object {
         /** The firmware caps, parsed once from the core JSON snapshot. */
         val INSTANCE: ProfileBounds by lazy {
-            Json { ignoreUnknownKeys = true }.decodeFromString(profileBoundsJson())
+            LenientJson.decodeFromString(profileBoundsJson())
         }
     }
 }

@@ -212,6 +212,16 @@
   border-radius: var(--radius-pill);
   padding: 3px;
 }
+/* Opt-in equal sizing: same-kind toggles in a group line up to one width (the
+   unit selectors g/oz, °C/°F, ml/fl oz, bar/psi). Variable-width groups like the
+   density picker keep their natural sizing so long labels don't wrap. */
+.st-segment.is-equal {
+  min-width: 112px;
+}
+.st-segment.is-equal > button {
+  flex: 1;
+  white-space: nowrap;
+}
 .st-segment > button {
   background: transparent; border: 0;
   font-family: var(--font-sans);
