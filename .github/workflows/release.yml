@@ -1,0 +1,303 @@
+# Crema RELEASE pipeline — builds the Android APK and the web PWA for a tagged
+# release, then publishes a GitHub Release with both artifacts attached.
+#
+# Trigger: push a version tag (e.g. `v0.2.0`) — cut a release by merging to the
+# release branch / main, tagging that commit, and pushing the tag:
+#
+#     git tag v0.2.0 && git push origin v0.2.0
+#
+# (Also runnable manually via "Run workflow" — those runs build artifacts but do
+# NOT publish a GitHub Release or deploy to Cloudflare.)
+#
+# Outputs:
+#   • Android  — a debug-signed installable APK (always) + a release-signed APK
+#                (when the keystore secrets below are set; otherwise unsigned).
+#   • Web PWA  — the static bundle (web/build) zipped, plus a `wrangler pages
+#                deploy` to Cloudflare (when the CF secrets below are set).
+#
+# Secrets (all optional — the pipeline degrades gracefully when absent):
+#   Android release signing:
+#     KEYSTORE_BASE64      base64 of your release .jks/.keystore  (`base64 -w0 release.keystore`)
+#     KEYSTORE_PASSWORD    keystore (store) password
+#     KEY_ALIAS            key alias
+#     KEY_PASSWORD         key password
+#   Web build + Cloudflare deploy:
+#     VITE_VISUALIZER_CLIENT_ID   prod Doorkeeper client UID (baked into the bundle)
+#     CLOUDFLARE_API_TOKEN        token with Pages:Edit
+#     CLOUDFLARE_ACCOUNT_ID       Cloudflare account id
+#
+# NOTE: for `push: tags` to run this, the workflow file must exist on the tagged
+# commit — merge it to the default branch before cutting the first release.
+
+name: release
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch: {}
+
+# One release at a time per ref; never cancel an in-flight release build.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write # create the GitHub Release + upload assets
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────
+  # Resolve the version once: name from the tag (v0.2.0 -> 0.2.0), code from
+  # the run number. Manual runs get a 0.0.0-<sha> dev version (no release).
+  # ─────────────────────────────────────────────────────────────────────
+  version:
+    name: version
+    runs-on: ubuntu-latest
+    outputs:
+      name: ${{ steps.v.outputs.name }}
+      code: ${{ steps.v.outputs.code }}
+    steps:
+      - id: v
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            NAME="${GITHUB_REF_NAME#v}"
+          else
+            NAME="0.0.0-${GITHUB_SHA::7}"
+          fi
+          # Reject anything but semver-ish characters so the value is safe to thread
+          # into later shell/Gradle steps (defence-in-depth atop env-var use).
+          if [[ ! "$NAME" =~ ^[0-9A-Za-z][0-9A-Za-z.+-]*$ ]]; then
+            echo "::error::Refusing unsafe version string '$NAME'"; exit 1
+          fi
+          # versionCode for Play: a strictly-increasing integer derived from the
+          # semver tag (M*1000000 + m*1000 + p) — deterministic and reset-proof,
+          # unlike the run number. Manual/dev runs fall back to the run number.
+          if [[ "$NAME" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
+            CODE=$(( BASH_REMATCH[1] * 1000000 + BASH_REMATCH[2] * 1000 + BASH_REMATCH[3] ))
+          else
+            CODE="$GITHUB_RUN_NUMBER"
+          fi
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+          echo "Building version $NAME (versionCode $CODE)"
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Web PWA — build the static bundle (wasm + vite), zip it, and (on a real
+  # tag, when CF secrets exist) deploy it to Cloudflare Pages. Mirrors the
+  # toolchain in ci.yml so caches are shared.
+  # ─────────────────────────────────────────────────────────────────────
+  web:
+    name: web (pwa)
+    needs: version
+    runs-on: ubuntu-latest
+    env:
+      CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain (wasm32)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo + target (shared with ci.yml)
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core -> target
+          shared-key: rust-core
+
+      - name: Install wasm-pack
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          package_json_file: web/package.json
+
+      - name: Install Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: pnpm install
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+
+      # `pnpm build` runs `pnpm wasm` (wasm-pack) then `vite build` — the Rust
+      # core's WebAssembly bundle is produced and bundled in one shot.
+      - name: Build PWA
+        working-directory: web
+        env:
+          VITE_VISUALIZER_CLIENT_ID: ${{ secrets.VITE_VISUALIZER_CLIENT_ID }}
+        run: pnpm build
+
+      - name: Package bundle
+        env:
+          VERSION_NAME: ${{ needs.version.outputs.name }}
+        run: |
+          cd web/build
+          zip -r "$GITHUB_WORKSPACE/crema-web-${VERSION_NAME}.zip" .
+
+      - name: Upload PWA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: crema-web
+          path: crema-web-*.zip
+          if-no-files-found: error
+
+      # Push the exact built bundle to Cloudflare Pages (production = `main`
+      # branch in the CF project). Skipped on manual runs and when no CF token.
+      - name: Deploy to Cloudflare Pages
+        if: startsWith(github.ref, 'refs/tags/') && env.CF_API_TOKEN != ''
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy web/build --project-name crema --branch main
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Android — build the APKs + a Play AAB. The Rust de1-ffi cdylib (arm64) is
+  # built by the Mullvad rust-android Gradle plugin + UniFFI bindgen, so the job
+  # needs the NDK, the android Rust target, and cargo on PATH. Produces a debug-
+  # signed APK always; a release APK + AAB signed iff the keystore secrets are set.
+  # ─────────────────────────────────────────────────────────────────────
+  android:
+    name: android (apk + aab)
+    needs: version
+    runs-on: ubuntu-latest
+    env:
+      PLAY_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install NDK (pinned to ndkVersion in build.gradle.kts)
+        run: sdkmanager "ndk;30.0.14904198"
+
+      - name: Install Rust toolchain (android target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Cache cargo + target (android)
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core -> target
+          shared-key: rust-android
+
+      - name: Set up Gradle (with cache)
+        uses: gradle/actions/setup-gradle@v4
+
+      # Decode the release keystore if configured; export its path so the Gradle
+      # signingConfig (build.gradle.kts) picks it up. Absent secret => unsigned.
+      - name: Decode release keystore (if configured)
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+            echo "KEYSTORE_FILE=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
+            echo "Release keystore decoded — release APK will be signed."
+          else
+            echo "No KEYSTORE_BASE64 — release APK will be UNSIGNED (debug APK still installable)."
+          fi
+
+      - name: Build debug APK + release APK & AAB
+        working-directory: android
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          VERSION_NAME: ${{ needs.version.outputs.name }}
+          VERSION_CODE: ${{ needs.version.outputs.code }}
+        run: |
+          # Debug APK — fast debug-profile native lib (installable test build).
+          ./gradlew :app:assembleDebug \
+            -PversionName="$VERSION_NAME" -PversionCode="$VERSION_CODE" \
+            --no-daemon --stacktrace
+          # Release APK + Play AAB — fully optimized release-profile native lib
+          # (LTO + opt-3), signed when a keystore is configured. One invocation so
+          # the cargo release build + bindgen run once for both outputs.
+          ./gradlew :app:assembleRelease :app:bundleRelease -PcargoProfile=release \
+            -PversionName="$VERSION_NAME" -PversionCode="$VERSION_CODE" \
+            --no-daemon --stacktrace
+
+      - name: Collect APKs + AAB
+        env:
+          VERSION_NAME: ${{ needs.version.outputs.name }}
+        run: |
+          mkdir -p dist
+          cp android/app/build/outputs/apk/debug/app-debug.apk "dist/crema-${VERSION_NAME}-debug.apk"
+          for rel in android/app/build/outputs/apk/release/*.apk; do
+            [ -e "$rel" ] && cp "$rel" "dist/crema-${VERSION_NAME}-release.apk"
+          done
+          for aab in android/app/build/outputs/bundle/release/*.aab; do
+            [ -e "$aab" ] && cp "$aab" "dist/crema-${VERSION_NAME}.aab"
+          done
+          ls -la dist
+
+      - name: Upload Android artifacts (APKs + AAB)
+        uses: actions/upload-artifact@v4
+        with:
+          name: crema-android
+          path: dist/*
+          if-no-files-found: error
+
+      # Optional: publish the AAB to Google Play's internal track as a draft. Runs
+      # only on a tag when PLAY_SERVICE_ACCOUNT_JSON is set. Prerequisites: the app
+      # already exists in the Play Console with >=1 manual upload, it's enrolled in
+      # Play App Signing, and the service account has the "Release manager" role.
+      # The AAB must be signed (set the keystore secrets too) or Play rejects it.
+      # The user-facing "What's new" notes come from android/distribution/whatsnew/
+      # (one file per locale, named `whatsnew-<locale>`, <=500 chars each) — edit
+      # those before cutting the release tag. See that dir's README.
+      - name: Publish AAB to Google Play (internal, draft)
+        if: startsWith(github.ref, 'refs/tags/') && env.PLAY_JSON != ''
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: coffee.crema
+          releaseFiles: android/app/build/outputs/bundle/release/app-release.aab
+          track: internal
+          status: draft
+          whatsNewDirectory: android/distribution/whatsnew
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Publish — gather both artifacts and cut a GitHub Release for the tag.
+  # Tag pushes only (manual runs just leave artifacts on the run).
+  # ─────────────────────────────────────────────────────────────────────
+  release:
+    name: github release
+    needs: [version, web, android]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Crema ${{ needs.version.outputs.name }}
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            artifacts/crema-android/*.apk
+            artifacts/crema-android/*.aab
+            artifacts/crema-web/*.zip
