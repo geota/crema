@@ -75,7 +75,7 @@ fun PhoneBeansScreen(
     }
 
     val roasterNameOf: (Bean) -> String? = { b -> ui.roasters.firstOrNull { it.id == b.roasterId }?.name }
-    val sortedBeans = filterAndSortBeans(ui.beans, ui.roasters, query, filter, sort, sortDesc)
+    val sortedBeans = filterAndSortBeans(ui.beans, ui.roasters, query, filter, sort, sortDesc, ui.activeBeanId)
     val visibleRoasters = ui.roasters.filter {
         query.isBlank() || it.name.contains(query, ignoreCase = true) ||
             (it.city?.contains(query, ignoreCase = true) == true) ||
@@ -149,41 +149,23 @@ fun PhoneBeansScreen(
                     CremaPhoneSearch(query = query, onQueryChange = { query = it }, placeholder = "Search beans & roasters")
                 }
                 if (tab == "bags") {
-                    val groups = listOf(
-                        Triple("active", "Active") { b: Bean -> b.archivedAt == null && !b.isFrozen },
-                        Triple("frozen", "Frozen") { b: Bean -> b.archivedAt == null && b.isFrozen },
-                        Triple("archived", "Archived") { b: Bean -> b.archivedAt != null },
-                    )
-                    groups.forEach { (key, label, predicate) ->
-                        val group = sortedBeans.filter(predicate)
-                        if (group.isEmpty()) return@forEach
-                        item(key = "sec-$key") {
-                            Row(
-                                Modifier.padding(start = 2.dp, top = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            ) {
-                                Eyebrow(label)
-                                Text(
-                                    "${group.size}",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                                )
-                            }
-                        }
-                        items(group, key = { it.id }) { bean ->
-                            PhoneBeanTile(
-                                bean = bean,
-                                roasterName = roasterNameOf(bean),
-                                isActive = bean.id == ui.activeBeanId,
-                                onPrimary = {
-                                    if (bean.archivedAt != null) vm.unarchiveBean(bean.id)
-                                    else vm.setActiveBean(bean.id)
-                                },
-                                onEdit = { vm.startEditBean(bean.id); onNav("bean-edit") },
-                                onMenu = { menuFor = bean },
-                            )
-                        }
+                    // Flat list ordered by the shared sort (loaded → favourites →
+                    // rest). The filter chips are the only grouping now — no
+                    // Active/Frozen/Archived status sections; a bean's state still
+                    // reads from its card pills.
+                    items(sortedBeans, key = { it.id }) { bean ->
+                        PhoneBeanTile(
+                            bean = bean,
+                            roasterName = roasterNameOf(bean),
+                            isActive = bean.id == ui.activeBeanId,
+                            onPrimary = {
+                                if (bean.archivedAt != null) vm.unarchiveBean(bean.id)
+                                else vm.setActiveBean(bean.id)
+                            },
+                            onEdit = { vm.startEditBean(bean.id); onNav("bean-edit") },
+                            onMenu = { menuFor = bean },
+                            onToggleFavourite = { vm.toggleBeanFavourite(bean.id) },
+                        )
                     }
                     if (sortedBeans.isEmpty()) {
                         item {
@@ -304,6 +286,7 @@ private fun PhoneBeanTile(
     onPrimary: () -> Unit,
     onEdit: () -> Unit,
     onMenu: () -> Unit,
+    onToggleFavourite: () -> Unit,
 ) {
     val tel = CremaTheme.telemetry
     val band = roastBand5(bean.roastLevel?.toInt())
@@ -349,27 +332,33 @@ private fun PhoneBeanTile(
                         modifier = Modifier.padding(top = 1.dp),
                     )
                 }
-                if (isActive) {
-                    Surface(shape = RoundedCornerShape(999.dp), color = MaterialTheme.colorScheme.primary) {
-                        Row(
-                            Modifier.height(24.dp).padding(horizontal = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(5.dp),
-                        ) {
-                            PhIcon("check", sizeDp = 11, tint = MaterialTheme.colorScheme.onPrimary)
-                            Text(
-                                "ACTIVE",
-                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, letterSpacing = 0.4.sp, fontWeight = FontWeight.SemiBold),
-                                color = MaterialTheme.colorScheme.onPrimary,
-                            )
+                // Top-right reserved for the favourite star (the clear, direct way to
+                // favourite — mirrors the tablet) + the ACTIVE badge when loaded. The
+                // rating moved down to sit with the other bean stats.
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                    if (isActive) {
+                        Surface(shape = RoundedCornerShape(999.dp), color = MaterialTheme.colorScheme.primary) {
+                            Row(
+                                Modifier.height(24.dp).padding(horizontal = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                            ) {
+                                PhIcon("check", sizeDp = 11, tint = MaterialTheme.colorScheme.onPrimary)
+                                Text(
+                                    "ACTIVE",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, letterSpacing = 0.4.sp, fontWeight = FontWeight.SemiBold),
+                                    color = MaterialTheme.colorScheme.onPrimary,
+                                )
+                            }
                         }
                     }
-                } else {
-                    CremaStarRating(
-                        bean.rating.toInt(),
-                        starDp = 14,
-                        emptyTint = MaterialTheme.colorScheme.outline,
-                    )
+                    IconButton(onClick = onToggleFavourite, modifier = Modifier.size(34.dp)) {
+                        PhIcon(
+                            if (bean.favourite) "star-fill" else "star",
+                            sizeDp = 20,
+                            tint = if (bean.favourite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
 
@@ -378,6 +367,12 @@ private fun PhoneBeanTile(
                 band?.let { RoastPill(it) }
                 if (frozen) FrozenPill()
                 if (bean.decaf) NeutralPill("DECAF")
+                // Rating now sits with the other bean stats (was the 5-star block top-right).
+                if (bean.rating.toInt() > 0) CremaStarRating(
+                    bean.rating.toInt(),
+                    starDp = 13,
+                    emptyTint = MaterialTheme.colorScheme.outline,
+                )
                 Spacer(Modifier.weight(1f))
                 val freshColor = freshnessColor(frozen, bean.roastLevel?.toInt(), days)
                 val freshLabel = when {

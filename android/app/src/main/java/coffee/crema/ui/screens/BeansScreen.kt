@@ -128,7 +128,7 @@ fun BeansScreen(
 
     val roasterNameOf: (Bean) -> String? = { b -> ui.roasters.firstOrNull { it.id == b.roasterId }?.name }
     // Bags — client-side search + filter + sort over the in-memory library.
-    val sortedBeans = filterAndSortBeans(ui.beans, ui.roasters, query, beanFilter, beanSort, beanSortDesc)
+    val sortedBeans = filterAndSortBeans(ui.beans, ui.roasters, query, beanFilter, beanSort, beanSortDesc, ui.activeBeanId)
     val visibleRoasters = ui.roasters.filter {
         query.isBlank() || it.name.contains(query, ignoreCase = true) ||
             (it.city?.contains(query, ignoreCase = true) == true) ||

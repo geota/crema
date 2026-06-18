@@ -1,6 +1,6 @@
 <script lang="ts">
 	import Icon from '$lib/icons/Icon.svelte';
-	import ArchiveIcon from 'phosphor-svelte/lib/ArchiveIcon';
+	import { pinActiveThenFavourite } from '$lib/library-order';
 	import CaretDownIcon from 'phosphor-svelte/lib/CaretDownIcon';
 	import CoffeeBeanIcon from 'phosphor-svelte/lib/CoffeeBeanIcon';
 	import FunnelXIcon from 'phosphor-svelte/lib/FunnelXIcon';
@@ -9,7 +9,6 @@
 	import ListChecksIcon from 'phosphor-svelte/lib/ListChecksIcon';
 	import MagnifyingGlassIcon from 'phosphor-svelte/lib/MagnifyingGlassIcon';
 	import PlusIcon from 'phosphor-svelte/lib/PlusIcon';
-	import SnowflakeIcon from 'phosphor-svelte/lib/SnowflakeIcon';
 	import StorefrontIcon from 'phosphor-svelte/lib/StorefrontIcon';
 	import UploadSimpleIcon from 'phosphor-svelte/lib/UploadSimpleIcon';
 	import XIcon from 'phosphor-svelte/lib/XIcon';
@@ -216,22 +215,11 @@
 			}
 		};
 		const dir = sortDir === 'asc' ? 1 : -1;
-		return arr.sort(
-			(a, b) => keyCmp(a, b) * dir || cmpName(a, b)
-		);
-	});
-
-	const sectionedBags = $derived.by(() => {
-		const active: Bean[] = [];
-		const frozen: Bean[] = [];
-		const archived: Bean[] = [];
-		for (const b of sorted) {
-			const s = bagState(b);
-			if (s === 'archived') archived.push(b);
-			else if (s === 'frozen') frozen.push(b);
-			else active.push(b);
-		}
-		return { active, frozen, archived };
+		arr.sort((a, b) => keyCmp(a, b) * dir || cmpName(a, b));
+		// Pin the loaded bean to the top, then favourites — primary grouping on
+		// every sort (the chosen sort above is the within-group order). Shared
+		// with the brew picker + the profiles page.
+		return pinActiveThenFavourite(arr, library.activeBeanId, (b) => b.favourite);
 	});
 
 	const counts = $derived.by(() => {
@@ -904,87 +892,32 @@
 			/>
 		{:else}
 			<div class="bn-grid-scroll">
-				{#if sectionedBags.active.length > 0}
-					<section class="bn-section">
-						<header class="bn-section-head">
-							<h2 class="bn-section-title">Active</h2>
-							<span class="bn-section-count">{sectionedBags.active.length}</span>
-							<span class="bn-section-rule"></span>
-						</header>
-						<div class="bn-grid">
-							{#each sectionedBags.active as b (b.id)}
-								<BeanTile
-									bean={b}
-									roaster={b.roasterId ? library.getRoaster(b.roasterId) : null}
-									isActive={library.activeBeanId === b.id}
-									onOpen={openTile}
-									onToggleFavourite={toggleFavourite}
-									onSetActive={setActive}
-									onDuplicate={duplicateBean}
-									onEdit={gotoEdit}
-															/>
-							{/each}
-							<button class="bn-tile-new" onclick={() => (quickAddOpen = true)}>
-								<div class="bn-tile-new-glyph"><PlusIcon aria-hidden="true" /></div>
-								<div class="bn-tile-new-label">Add a bean</div>
-								<div class="bn-tile-new-sub">
-									Or paste a Beanconqueror link, drop a label photo.
-								</div>
-							</button>
-						</div>
-					</section>
-				{/if}
-				{#if sectionedBags.frozen.length > 0}
-					<section class="bn-section">
-						<header class="bn-section-head">
-							<h2 class="bn-section-title">
-								<SnowflakeIcon style="color: var(--info)" aria-hidden="true" /> Frozen
-							</h2>
-							<span class="bn-section-count">{sectionedBags.frozen.length}</span>
-							<span class="bn-section-rule"></span>
-							<span class="bn-section-help">90 days frozen ≈ 1 day off roast</span>
-						</header>
-						<div class="bn-grid">
-							{#each sectionedBags.frozen as b (b.id)}
-								<BeanTile
-									bean={b}
-									roaster={b.roasterId ? library.getRoaster(b.roasterId) : null}
-									isActive={library.activeBeanId === b.id}
-									onOpen={openTile}
-									onToggleFavourite={toggleFavourite}
-									onSetActive={setActive}
-									onDuplicate={duplicateBean}
-									onEdit={gotoEdit}
-															/>
-							{/each}
-						</div>
-					</section>
-				{/if}
-				{#if sectionedBags.archived.length > 0}
-					<section class="bn-section bn-section-archived">
-						<header class="bn-section-head">
-							<h2 class="bn-section-title">
-								<ArchiveIcon style="color: rgba(var(--tint-rgb), 0.4)" aria-hidden="true" />
-								Archived
-							</h2>
-							<span class="bn-section-count">{sectionedBags.archived.length}</span>
-							<span class="bn-section-rule"></span>
-						</header>
-						<div class="bn-grid bn-grid-archived">
-							{#each sectionedBags.archived as b (b.id)}
-								<BeanTile
-									bean={b}
-									roaster={b.roasterId ? library.getRoaster(b.roasterId) : null}
-									isActive={library.activeBeanId === b.id}
-									onOpen={openTile}
-									onToggleFavourite={toggleFavourite}
-									onSetActive={setActive}
-									onDuplicate={duplicateBean}
-									onEdit={gotoEdit}
-															/>
-							{/each}
-						</div>
-					</section>
+				<!-- Flat grid: the filter chips above are now the only grouping —
+				     there are no Active / Frozen / Archived status sections. A
+				     bag's frozen / archived state still reads from its own
+				     BeanTile. -->
+				{#if sorted.length > 0}
+					<div class="bn-grid">
+						{#each sorted as b (b.id)}
+							<BeanTile
+								bean={b}
+								roaster={b.roasterId ? library.getRoaster(b.roasterId) : null}
+								isActive={library.activeBeanId === b.id}
+								onOpen={openTile}
+								onToggleFavourite={toggleFavourite}
+								onSetActive={setActive}
+								onDuplicate={duplicateBean}
+								onEdit={gotoEdit}
+							/>
+						{/each}
+						<button class="bn-tile-new" onclick={() => (quickAddOpen = true)}>
+							<div class="bn-tile-new-glyph"><PlusIcon aria-hidden="true" /></div>
+							<div class="bn-tile-new-label">Add a bean</div>
+							<div class="bn-tile-new-sub">
+								Or paste a Beanconqueror link, drop a label photo.
+							</div>
+						</button>
+					</div>
 				{/if}
 				{#if filtered.length === 0}
 					<div class="bn-empty-filter">
@@ -1190,15 +1123,20 @@
 		display: inline-flex;
 		align-items: center;
 		gap: 6px;
-		padding: 9px 16px;
+		padding: 7px 14px;
 		border-radius: var(--radius-pill);
 		font-family: var(--font-sans);
-		font-size: 13px;
+		font-size: 12px;
 		font-weight: 500;
 		cursor: pointer;
 		border: 1px solid transparent;
 		transition: all var(--dur-1) var(--ease);
 		white-space: nowrap;
+	}
+	/* Match the icon scale of the shared SplitButton (Export) and the
+	   Settings/History .st-btn so every toolbar pill is one size. */
+	.bn-btn :global(svg) {
+		font-size: 13px;
 	}
 	.bn-btn-ghost {
 		background: rgba(var(--tint-rgb), 0.04);
@@ -1455,21 +1393,10 @@
 		height: 1px;
 		background: rgba(var(--tint-rgb), 0.06);
 	}
-	.bn-section-help {
-		font-family: var(--font-sans);
-		font-size: 11px;
-		color: rgba(var(--tint-rgb), 0.4);
-	}
-	.bn-section-archived {
-		opacity: 0.85;
-	}
 	.bn-grid {
 		display: grid;
 		grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
 		gap: 14px;
-	}
-	.bn-grid-archived {
-		opacity: 0.85;
 	}
 	.bn-tile-new {
 		display: flex;
