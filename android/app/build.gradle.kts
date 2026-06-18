@@ -14,6 +14,26 @@ plugins {
     id("net.mullvad.rust-android")
 }
 
+// local.properties (gitignored): sdk.dir plus optional dev overrides
+// (visualizerClientId, rust.cargoCommand) and release signing (release.*). Read once.
+val localProps = Properties().apply {
+    val f = rootProject.file("local.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+
+// Release signing — from CI env (the release workflow base64-decodes the keystore to
+// a file and exports KEYSTORE_FILE / KEYSTORE_PASSWORD / KEY_ALIAS / KEY_PASSWORD) or
+// from local.properties (release.keystoreFile / .storePassword / .keyAlias /
+// .keyPassword). When none are present the `release` build stays UNSIGNED — CI still
+// publishes an installable debug-signed APK alongside it.
+val releaseKeystoreFile = (System.getenv("KEYSTORE_FILE") ?: localProps.getProperty("release.keystoreFile"))
+    ?.let { rootProject.file(it) }?.takeIf { it.exists() }
+val releaseStorePassword = System.getenv("KEYSTORE_PASSWORD") ?: localProps.getProperty("release.storePassword")
+val releaseKeyAlias = System.getenv("KEY_ALIAS") ?: localProps.getProperty("release.keyAlias")
+val releaseKeyPassword = System.getenv("KEY_PASSWORD") ?: localProps.getProperty("release.keyPassword")
+val hasReleaseSigning = releaseKeystoreFile != null &&
+    releaseStorePassword != null && releaseKeyAlias != null && releaseKeyPassword != null
+
 android {
     namespace = "coffee.crema"
     compileSdk = 36
@@ -30,8 +50,10 @@ android {
         // AGP 9 defaults targetSdk to compileSdk, but pin it explicitly so the
         // value is unambiguous and survives a compileSdk bump.
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1"
+        // CI derives these from the release tag (-PversionName=0.2.0 -PversionCode=<run>);
+        // local/dev builds fall back to the committed defaults.
+        versionCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 1
+        versionName = (project.findProperty("versionName") as String?) ?: "0.1"
 
     }
 
@@ -66,6 +88,19 @@ android {
         }
     }
 
+    // Created only when a keystore is available (CI env or local.properties) — see
+    // the `hasReleaseSigning` wiring above the `android {}` block.
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = releaseKeystoreFile
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
+    }
+
     buildTypes {
         debug {
             isMinifyEnabled = false
@@ -77,6 +112,9 @@ android {
         }
         release {
             isMinifyEnabled = false
+            // Signed when a release keystore is configured; otherwise an unsigned
+            // release APK is still produced (e.g. to sign locally).
+            if (hasReleaseSigning) signingConfig = signingConfigs.getByName("release")
             buildConfigField(
                 "String",
                 "VISUALIZER_CLIENT_ID",
@@ -200,6 +238,12 @@ dependencies {
 // below feeds that directory into AGP's `merge*JniLibFolders` tasks so it
 // ships in the APK. The NDK and the Rust target must be installed (see
 // android/README.md).
+//
+// Native-lib build profile: "debug" (fast — local dev default) or "release"
+// (LTO + codegen-units=1 + opt-3, per core's [profile.release]). CI's release
+// job passes -PcargoProfile=release so shippable APKs carry a fully optimized .so.
+val cargoProfile = (project.findProperty("cargoProfile") as String?) ?: "debug"
+
 cargo {
     // Path from this module to the Rust workspace member.
     module = "../../core/de1-ffi"
@@ -213,8 +257,7 @@ cargo {
     // Teclast P25T and the Pixel phone are both arm64. arm64-v8a is the only
     // ABI needed for real hardware; add "x86_64" here to also run on an emulator.
     targets = listOf("arm64")
-    // "debug" keeps the build fast; switch to "release" for shippable APKs.
-    profile = "debug"
+    profile = cargoProfile
     // The crate is part of a Cargo workspace; build just this package.
     extraCargoBuildArguments = listOf("--package", "de1-ffi")
 }
@@ -307,7 +350,7 @@ val generateUniffiBindings =
         workspaceDir.set(layout.projectDirectory.dir("../../core"))
         library.set(
             layout.projectDirectory.file(
-                "../../core/target/aarch64-linux-android/debug/libde1_ffi.so",
+                "../../core/target/aarch64-linux-android/$cargoProfile/libde1_ffi.so",
             ),
         )
         outputDirectory.set(layout.buildDirectory.dir("generated/uniffi"))
