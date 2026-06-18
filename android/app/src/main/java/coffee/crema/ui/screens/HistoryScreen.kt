@@ -23,6 +23,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -37,6 +38,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -50,6 +52,10 @@ import coffee.crema.ui.formatRatio
 import coffee.crema.ui.formatWeight
 import coffee.crema.ui.relativeAgo
 import coffee.crema.history.StoredShot
+import coffee.crema.ui.compare.CompareDialog
+import coffee.crema.ui.compare.RowCheck
+import coffee.crema.ui.compare.TabletCompareBar
+import coffee.crema.ui.compare.rememberCompareSelection
 import coffee.crema.history.filterAndSortShots
 import coffee.crema.history.beanLabel
 import coffee.crema.history.historyStats
@@ -82,6 +88,7 @@ import coffee.crema.ui.components.CremaOverflowMenu
 import coffee.crema.ui.components.OverflowItem
 import coffee.crema.ui.components.CremaConfirmDialog
 import coffee.crema.ui.theme.CremaTheme
+import androidx.core.net.toUri
 
 /*
  * History (shot log) — M4. A master-detail over the captured shots: the list on
@@ -116,6 +123,9 @@ fun HistoryScreen(
     var profileFilter by remember { mutableStateOf<String?>(null) }
     var sort by remember { mutableStateOf("date") }
     var sortDesc by remember { mutableStateOf(true) } // newest / highest first
+    // Compare: select 2–5 shots → overlay their curves in a modal (HistoryCompareHooks).
+    val sel = rememberCompareSelection()
+    var compareOpen by remember { mutableStateOf(false) }
     // Tapping Brew's "Last shot" card requests that shot here — select it + clear
     // any active range filter so it's guaranteed visible, then consume the request.
     LaunchedEffect(ui.pendingHistoryShotId) {
@@ -196,6 +206,15 @@ fun HistoryScreen(
                                 SplitMenuItem("file-code", "Current filter", "Only the ${shots.size} shot(s) matching your search and date range.") { launchSave("crema-history-filtered.json", vm.shotsJson(shots.map { it.id })) },
                             ),
                         )
+                        if (!sel.selecting) {
+                            CremaButton(
+                                onClick = sel::enter,
+                                variant = CremaButtonVariant.Outlined,
+                                icon = "arrows-left-right",
+                                label = "Compare",
+                                enabled = ui.history.size >= 2,
+                            )
+                        }
                     }
                 }
             }
@@ -269,6 +288,13 @@ fun HistoryScreen(
                         onToggleDirection = { sortDesc = !sortDesc },
                     )
                 }
+                if (sel.selecting) {
+                    TabletCompareBar(
+                        sel,
+                        onCompare = { compareOpen = true },
+                        modifier = Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 8.dp),
+                    )
+                }
                 Row(
                     Modifier.weight(1f).fillMaxWidth().padding(start = 24.dp, end = 24.dp, bottom = 12.dp),
                     horizontalArrangement = Arrangement.spacedBy(16.dp),
@@ -281,10 +307,13 @@ fun HistoryScreen(
                         items(shots, key = { it.id }) { shot ->
                             ShotRow(
                                 shot = shot,
-                                selected = shot.id == selected?.id,
+                                selected = if (sel.selecting) sel.isPicked(shot.id) else shot.id == selected?.id,
                                 syncing = shot.id in ui.visualizer.uploadingShotIds,
                                 weightUnit = ui.weightUnit,
-                                onClick = { selectedId = shot.id },
+                                selecting = sel.selecting,
+                                picked = sel.isPicked(shot.id),
+                                dimmed = sel.atCap(shot.id),
+                                onClick = { if (sel.selecting) sel.toggle(shot.id) else selectedId = shot.id },
                             )
                         }
                     }
@@ -314,7 +343,7 @@ fun HistoryScreen(
                                     detailContext.startActivity(
                                         android.content.Intent(
                                             android.content.Intent.ACTION_VIEW,
-                                            android.net.Uri.parse("https://visualizer.coffee/shots/$vid"),
+                                            "https://visualizer.coffee/shots/$vid".toUri(),
                                         ),
                                     )
                                 }
@@ -324,6 +353,21 @@ fun HistoryScreen(
                     }
                 }
             }
+        }
+    }
+
+    if (compareOpen) {
+        val compareShots = sel.picked.mapNotNull { id -> ui.history.firstOrNull { it.id == id } }
+        if (compareShots.size >= 2) {
+            CompareDialog(
+                shots = compareShots,
+                weightUnit = ui.weightUnit,
+                tempUnit = ui.tempUnit,
+                pressureUnit = ui.pressureUnit,
+                onDismiss = { compareOpen = false },
+            )
+        } else {
+            compareOpen = false
         }
     }
 }
@@ -370,17 +414,28 @@ private fun StatTile(label: String, value: String, unit: String?, modifier: Modi
 }
 
 @Composable
-private fun ShotRow(shot: StoredShot, selected: Boolean, syncing: Boolean, weightUnit: String, onClick: () -> Unit) {
+private fun ShotRow(
+    shot: StoredShot,
+    selected: Boolean,
+    syncing: Boolean,
+    weightUnit: String,
+    onClick: () -> Unit,
+    selecting: Boolean = false,
+    picked: Boolean = false,
+    dimmed: Boolean = false,
+) {
     Row(
         Modifier
             .fillMaxWidth()
+            .then(if (dimmed) Modifier.alpha(0.4f) else Modifier)
             .clip(MaterialTheme.shapes.medium)
             .then(if (selected) Modifier.background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)) else Modifier)
-            .clickable(onClick = onClick)
+            .clickable(enabled = !dimmed, onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
+        if (selecting) RowCheck(picked)
         // Time column — wall-clock HH:mm over a compact relative (PWA .hi-row-time).
         val timeH = remember(shot.completedAtMs) {
             java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date(shot.completedAtMs))
