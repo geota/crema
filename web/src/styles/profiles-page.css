@@ -61,17 +61,17 @@
 }
 
 .pp-btn {
-  display: inline-flex; align-items: center; gap: 7px;
-  padding: 9px 16px;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 7px 14px;
   border-radius: var(--radius-pill);
   font-family: var(--font-sans);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
   cursor: pointer;
   transition: all var(--dur-1) var(--ease);
   border: 1px solid transparent;
 }
-.pp-btn :is(i, svg) { font-size: 14px; }
+.pp-btn :is(i, svg) { font-size: 13px; }
 .pp-btn-secondary {
   background: rgba(var(--tint-rgb), 0.04);
   border-color: rgba(var(--tint-rgb), 0.10);

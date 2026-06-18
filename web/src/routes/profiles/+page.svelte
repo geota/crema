@@ -1,5 +1,6 @@
 <script lang="ts">
 	import Icon from '$lib/icons/Icon.svelte';
+	import { pinActiveThenFavourite } from '$lib/library-order';
 	import DownloadSimpleIcon from 'phosphor-svelte/lib/DownloadSimpleIcon';
 	import MagnifyingGlassIcon from 'phosphor-svelte/lib/MagnifyingGlassIcon';
 	import PlusIcon from 'phosphor-svelte/lib/PlusIcon';
@@ -314,22 +315,12 @@
 			const dir = sortDir === 'desc' ? -1 : 1;
 			return cmp * dir || a.name.localeCompare(b.name);
 		});
-		// Float the active profile to the top-left when the user hasn't
-		// explicitly chosen a sort — i.e. the page is on its default
-		// "Recent · descending" view. An explicit pick (any other key or
-		// the reversed Recent direction) means the user wants strict
-		// sort order; leave the active profile in its sorted slot.
-		// `store.activeId` may also be filtered out (wrong roast facet,
-		// hidden built-in, search miss) — in that case nothing moves.
-		const isDefaultSort = sort === 'recent' && sortDir === 'desc';
-		if (isDefaultSort && store.activeId) {
-			const idx = r.findIndex((p) => p.id === store.activeId);
-			if (idx > 0) {
-				const [active] = r.splice(idx, 1);
-				r.unshift(active);
-			}
-		}
-		return r;
+		// Pin the loaded profile to the top, then pinned favourites — primary
+		// grouping applied on EVERY sort now (the chosen sort above is the
+		// within-group order). `store.activeId` may be filtered out (wrong facet,
+		// hidden built-in, search miss), in which case nothing floats. Shared
+		// with the brew picker + the beans page.
+		return pinActiveThenFavourite(r, store.activeId, (p) => p.pinned);
 	});
 
 	// ── Card actions ─────────────────────────────────────────────────────

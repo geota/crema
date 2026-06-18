@@ -64,7 +64,7 @@ fun PhoneProfilesScreen(
     // Same facet model as the tablet: Hidden appears only when something is
     // archived, and falls back to All once the last one is restored (issue 28).
     val effectiveFilter = effectiveProfileFilter(filter, ui.hiddenProfileIds)
-    val sorted = filterAndSortProfiles(ui.profiles, ui.hiddenProfileIds, query, filter, sort, sortDesc)
+    val sorted = filterAndSortProfiles(ui.profiles, ui.hiddenProfileIds, query, filter, sort, sortDesc, ui.activeProfileId)
 
     Scaffold(
         topBar = {
@@ -131,6 +131,7 @@ fun PhoneProfilesScreen(
                             onNav("profile-edit")
                         },
                         onMenu = { menuFor = profile },
+                        onTogglePin = { vm.togglePinProfile(profile.id) },
                     )
                 }
                 if (sorted.isEmpty()) {
@@ -191,6 +192,7 @@ private fun PhoneProfileCard(
     onLoad: () -> Unit,
     onEdit: () -> Unit,
     onMenu: () -> Unit,
+    onTogglePin: () -> Unit,
 ) {
     val loadedBg =
         if (isLoaded) MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
@@ -206,18 +208,17 @@ private fun PhoneProfileCard(
             Modifier.padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 12.dp),
             verticalArrangement = Arrangement.spacedBy(11.dp),
         ) {
-            // Head: pin + name + sub, LOADED badge.
+            // Head: name + sub on the left; LOADED badge + a tappable Favourites
+            // star top-right — the star mirrors PhoneBeanCard's direct favourite
+            // toggle (was only reachable via the overflow sheet before).
             Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Column(Modifier.weight(1f)) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                        if (profile.pinned) PhIcon("star-fill", sizeDp = 14, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text(
-                            profile.name,
-                            style = MaterialTheme.typography.bodyLarge.copy(fontSize = 17.sp, fontWeight = FontWeight.Medium),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
+                    Text(
+                        profile.name,
+                        style = MaterialTheme.typography.bodyLarge.copy(fontSize = 17.sp, fontWeight = FontWeight.Medium),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                     Text(
                         if (profile.source == "custom") "Custom profile" else "Built-in profile",
                         style = MaterialTheme.typography.bodySmall,
@@ -227,23 +228,32 @@ private fun PhoneProfileCard(
                         modifier = Modifier.padding(top = 2.dp),
                     )
                 }
-                if (isLoaded) {
-                    Surface(
-                        shape = RoundedCornerShape(999.dp),
-                        color = MaterialTheme.colorScheme.primary,
-                    ) {
-                        Row(
-                            Modifier.height(24.dp).padding(horizontal = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(5.dp),
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                    if (isLoaded) {
+                        Surface(
+                            shape = RoundedCornerShape(999.dp),
+                            color = MaterialTheme.colorScheme.primary,
                         ) {
-                            PhIcon("check", sizeDp = 11, tint = MaterialTheme.colorScheme.onPrimary)
-                            Text(
-                                "LOADED",
-                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp, letterSpacing = 0.4.sp, fontWeight = FontWeight.SemiBold),
-                                color = MaterialTheme.colorScheme.onPrimary,
-                            )
+                            Row(
+                                Modifier.height(24.dp).padding(horizontal = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                            ) {
+                                PhIcon("check", sizeDp = 11, tint = MaterialTheme.colorScheme.onPrimary)
+                                Text(
+                                    "LOADED",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp, letterSpacing = 0.4.sp, fontWeight = FontWeight.SemiBold),
+                                    color = MaterialTheme.colorScheme.onPrimary,
+                                )
+                            }
                         }
+                    }
+                    IconButton(onClick = onTogglePin, modifier = Modifier.size(34.dp)) {
+                        PhIcon(
+                            if (profile.pinned) "star-fill" else "star",
+                            sizeDp = 20,
+                            tint = if (profile.pinned) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                 }
             }

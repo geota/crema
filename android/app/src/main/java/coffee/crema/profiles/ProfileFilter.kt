@@ -1,5 +1,7 @@
 package coffee.crema.profiles
 
+import coffee.crema.pinActiveThenFavourite
+
 /*
  * Profile-library filter + sort — the facet fallback, search predicate, facet
  * filter, and sort that the tablet (ProfilesScreen) and phone (PhoneProfilesScreen)
@@ -29,6 +31,7 @@ fun filterAndSortProfiles(
     filter: String,
     sort: String,
     sortDesc: Boolean,
+    activeId: String?,
 ): List<CremaProfile> {
     val effectiveFilter = effectiveProfileFilter(filter, hiddenProfileIds)
     val filtered = profiles.filter { p ->
@@ -53,5 +56,18 @@ fun filterAndSortProfiles(
         "pinned" -> filtered.sortedBy { if (it.pinned) 0 else 1 }
         else -> filtered.sortedBy { it.name.lowercase() }
     }
-    return if (sortDesc) asc.reversed() else asc
+    val sorted = if (sortDesc) asc.reversed() else asc
+    // Loaded profile to the top, then pinned favourites, then the rest; [sort]
+    // above is the within-group order. Shared with beans + the Brew pickers.
+    return sorted.pinActiveThenFavourite({ it.id == activeId }, { it.pinned })
 }
+
+/**
+ * Brew-PICKER order: the same active→pinned→rest grouping as the library
+ * [filterAndSortProfiles] (both via [pinActiveThenFavourite]), over a list the
+ * caller already filtered (non-hidden) — within-group order is store order. The
+ * phone Brew dropdown + tablet switch popup share it. "Surfaced differently,
+ * ranked the same." Mirrors the web HeaderPicker.
+ */
+fun rankProfilesForPicker(profiles: List<CremaProfile>, activeId: String?): List<CremaProfile> =
+    profiles.pinActiveThenFavourite({ it.id == activeId }, { it.pinned })

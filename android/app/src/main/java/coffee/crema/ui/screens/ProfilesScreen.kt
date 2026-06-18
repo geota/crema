@@ -112,7 +112,7 @@ fun ProfilesScreen(
     // Hidden facet falls back to All when nothing is archived; both the chips and
     // the grid key off effectiveFilter (issue 28).
     val effectiveFilter = effectiveProfileFilter(filter, ui.hiddenProfileIds)
-    val sorted = filterAndSortProfiles(ui.profiles, ui.hiddenProfileIds, query, filter, sort, sortDesc)
+    val sorted = filterAndSortProfiles(ui.profiles, ui.hiddenProfileIds, query, filter, sort, sortDesc, ui.activeProfileId)
 
     Row(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         CremaNavigationRail(

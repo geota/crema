@@ -1,5 +1,6 @@
 <script lang="ts" module>
 	import BooksIcon from 'phosphor-svelte/lib/BooksIcon';
+	import { pinActiveThenFavourite } from '$lib/library-order';
 	import CheckIcon from 'phosphor-svelte/lib/CheckIcon';
 	import MagnifyingGlassIcon from 'phosphor-svelte/lib/MagnifyingGlassIcon';
 	import PencilSimpleIcon from 'phosphor-svelte/lib/PencilSimpleIcon';
@@ -88,9 +89,9 @@
 				: items.filter((it) =>
 						(it.search ?? `${it.primary} ${it.secondary ?? ''}`).toLowerCase().includes(q)
 					);
-		// Active item first, then pinned/favourites; stable sort keeps store order.
-		const rank = (it: PickerItem) => (it.id === activeId ? 2 : 0) + (it.pinned ? 1 : 0);
-		return [...base].sort((x, y) => rank(y) - rank(x));
+		// Active item first, then pinned/favourites — shared library ordering
+		// (same primitive as the beans/profiles pages).
+		return pinActiveThenFavourite(base, activeId, (it) => it.pinned ?? false);
 	});
 
 	function choose(id: string): void {
