@@ -5,6 +5,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -16,6 +17,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
@@ -36,6 +38,11 @@ import coffee.crema.ui.formatRatio
 import coffee.crema.ui.relativeAgo
 import coffee.crema.ui.components.*
 import coffee.crema.ui.phone.components.*
+import coffee.crema.ui.compare.ComparePhoneScreen
+import coffee.crema.ui.compare.PhoneSelectBar
+import coffee.crema.ui.compare.PhoneSelectHint
+import coffee.crema.ui.compare.RowCheck
+import coffee.crema.ui.compare.rememberCompareSelection
 import coffee.crema.ui.screens.CanvasShotChart
 import coffee.crema.ui.screens.historySortKeys
 import coffee.crema.ui.theme.CremaTheme
@@ -65,6 +72,9 @@ fun PhoneHistoryScreen(
     var sort by remember { mutableStateOf("date") }
     var sortDesc by remember { mutableStateOf(true) } // newest / highest first
     var exportSheet by remember { mutableStateOf(false) }
+    // Compare: select 2–5 shots, then push the full-screen overlay (HistoryCompareHooks).
+    val sel = rememberCompareSelection()
+    var compareOpen by remember { mutableStateOf(false) }
 
     // Brew's "Last shot" peek deep-links here: open that shot's detail.
     LaunchedEffect(ui.pendingHistoryShotId) {
@@ -120,20 +130,44 @@ fun PhoneHistoryScreen(
         return
     }
 
+    // Compare PUSHES full-screen (same idiom as detail); ComparePhoneScreen owns its
+    // own back bar + channel selector + chart + legend cards.
+    val compareShots = sel.picked.mapNotNull { id -> ui.history.firstOrNull { it.id == id } }
+    if (compareOpen && compareShots.size >= 2) {
+        BackHandler { compareOpen = false }
+        Scaffold(containerColor = MaterialTheme.colorScheme.background) { inner ->
+            Box(Modifier.padding(inner)) {
+                ComparePhoneScreen(
+                    shots = compareShots,
+                    weightUnit = ui.weightUnit,
+                    tempUnit = ui.tempUnit,
+                    pressureUnit = ui.pressureUnit,
+                    onBack = { compareOpen = false },
+                )
+            }
+        }
+        return
+    }
+
     Scaffold(
         topBar = {
-            // Import / Export are separate bar actions — same pairing as the
-            // Profiles and Beans top bars.
-            CremaPhoneTopBar(
-                title = "History",
-                actions = listOf(
-                    BarAction("magnifying-glass") { searchOpen = !searchOpen },
-                    BarAction("upload-simple") { importLauncher.launch(arrayOf("application/json", "text/*", "*/*")) },
-                    BarAction("download-simple") { exportSheet = true },
-                    BarAction("gear-six") { onNav("settings") },
-                ),
-            )
+            if (sel.selecting) {
+                CremaPhoneTopBar(title = "Select shots", actions = listOf(BarAction("x") { sel.cancel() }))
+            } else {
+                // Import / Export are separate bar actions — same pairing as the
+                // Profiles and Beans top bars.
+                CremaPhoneTopBar(
+                    title = "History",
+                    actions = listOf(
+                        BarAction("magnifying-glass") { searchOpen = !searchOpen },
+                        BarAction("upload-simple") { importLauncher.launch(arrayOf("application/json", "text/*", "*/*")) },
+                        BarAction("download-simple") { exportSheet = true },
+                        BarAction("gear-six") { onNav("settings") },
+                    ),
+                )
+            }
         },
+        bottomBar = { if (sel.selecting) PhoneSelectBar(sel, onCompare = { compareOpen = true }) },
         containerColor = MaterialTheme.colorScheme.background,
     ) { inner ->
         Column(Modifier.padding(inner).fillMaxSize()) {
@@ -154,53 +188,67 @@ fun PhoneHistoryScreen(
                 return@Column
             }
 
-            // Stats strip — the three averages (ratio / time / rating), scoped to
-            // the filtered set (issue 48; tablet/PWA add count + weights).
-            PhoneStatsStrip(filtered)
+            // Stats strip (or, while selecting, the compare hint).
+            if (sel.selecting) {
+                PhoneSelectHint(Modifier.fillMaxWidth().padding(horizontal = CremaEdge, vertical = 6.dp))
+            } else {
+                PhoneStatsStrip(filtered)
+            }
 
-            // Filter chips: per-profile pills, then the date dropdown + sort.
-            val byProfile = ui.history.mapNotNull { it.profileName }
-                .groupingBy { it }.eachCount().entries.sortedByDescending { it.value }
-            CremaFilterChipRow(
-                chips = buildList {
-                    add(FilterChipSpec("all", "All", ui.history.size))
-                    byProfile.take(6).forEach { (name, count) -> add(FilterChipSpec("p:$name", name, count)) }
-                },
-                selected = profileFilter?.let { "p:$it" } ?: "all",
-                onSelect = { id ->
-                    when {
-                        id == "all" -> profileFilter = null
-                        id.startsWith("p:") -> profileFilter = id.removePrefix("p:")
-                    }
-                },
-                trailing = {
-                    // Date range as a split dropdown (tablet parity) — the
-                    // range pills crowded the profile chips out of the row.
-                    CremaFilterDropdown(
-                        icon = "calendar",
-                        keys = listOf(
-                            SortKey("all", "All time"),
-                            SortKey("30d", "30 days"),
-                            SortKey("7d", "7 days"),
-                            SortKey("today", "Today"),
-                        ),
-                        selectedKey = range,
-                        onKeyChange = { range = it },
-                    )
-                    CremaSortControl(
-                        keys = historySortKeys,
-                        selectedKey = sort,
-                        descending = sortDesc,
-                        onKeyChange = { key ->
-                            sort = key
-                            sortDesc = key !in setOf("profile", "bean")
+            if (!sel.selecting) {
+                // Filter chips: per-profile pills, then the date dropdown + sort;
+                // a compare entry pins to the right (web parity, same arrows icon).
+                val byProfile = ui.history.mapNotNull { it.profileName }
+                    .groupingBy { it }.eachCount().entries.sortedByDescending { it.value }
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    CremaFilterChipRow(
+                        modifier = Modifier.weight(1f),
+                        chips = buildList {
+                            add(FilterChipSpec("all", "All", ui.history.size))
+                            byProfile.take(6).forEach { (name, count) -> add(FilterChipSpec("p:$name", name, count)) }
                         },
-                        onToggleDirection = { sortDesc = !sortDesc },
+                        selected = profileFilter?.let { "p:$it" } ?: "all",
+                        onSelect = { id ->
+                            when {
+                                id == "all" -> profileFilter = null
+                                id.startsWith("p:") -> profileFilter = id.removePrefix("p:")
+                            }
+                        },
+                        trailing = {
+                            // Date range as a split dropdown (tablet parity) — the
+                            // range pills crowded the profile chips out of the row.
+                            CremaFilterDropdown(
+                                icon = "calendar",
+                                keys = listOf(
+                                    SortKey("all", "All time"),
+                                    SortKey("30d", "30 days"),
+                                    SortKey("7d", "7 days"),
+                                    SortKey("today", "Today"),
+                                ),
+                                selectedKey = range,
+                                onKeyChange = { range = it },
+                            )
+                            CremaSortControl(
+                                keys = historySortKeys,
+                                selectedKey = sort,
+                                descending = sortDesc,
+                                onKeyChange = { key ->
+                                    sort = key
+                                    sortDesc = key !in setOf("profile", "bean")
+                                },
+                                onToggleDirection = { sortDesc = !sortDesc },
+                            )
+                        },
                     )
-                },
-            )
+                    if (ui.history.size >= 2) {
+                        IconButton(onClick = sel::enter) {
+                            PhIcon("arrows-left-right", sizeDp = 20, tint = MaterialTheme.colorScheme.primary)
+                        }
+                    }
+                }
+            }
 
-            AnimatedVisibility(visible = searchOpen) {
+            AnimatedVisibility(visible = searchOpen && !sel.selecting) {
                 Box(Modifier.padding(horizontal = CremaEdge, vertical = 6.dp)) {
                     CremaPhoneSearch(query = query, onQueryChange = { query = it }, placeholder = "Search profile, bean, notes")
                 }
@@ -232,7 +280,10 @@ fun PhoneHistoryScreen(
                             shot = shot,
                             syncing = shot.id in ui.visualizer.uploadingShotIds,
                             weightUnit = ui.weightUnit,
-                            onOpen = { detailId = shot.id },
+                            selecting = sel.selecting,
+                            picked = sel.isPicked(shot.id),
+                            dimmed = sel.atCap(shot.id),
+                            onOpen = { if (sel.selecting) sel.toggle(shot.id) else detailId = shot.id },
                         )
                     }
                 }
@@ -308,17 +359,29 @@ private fun PhoneStatTile(label: String, value: String, modifier: Modifier = Mod
 
 // ── Shot row (proto .ph-row) ─────────────────────────────────────────────────
 @Composable
-private fun PhoneShotRow(shot: StoredShot, syncing: Boolean, weightUnit: String, onOpen: () -> Unit) {
+private fun PhoneShotRow(
+    shot: StoredShot,
+    syncing: Boolean,
+    weightUnit: String,
+    selecting: Boolean = false,
+    picked: Boolean = false,
+    dimmed: Boolean = false,
+    onOpen: () -> Unit,
+) {
     val tel = CremaTheme.telemetry
     Row(
         Modifier
             .fillMaxWidth()
+            .then(if (dimmed) Modifier.alpha(0.4f) else Modifier)
             .clip(MaterialTheme.shapes.medium)
-            .clickable(onClick = onOpen)
+            .background(if (picked) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else Color.Transparent)
+            .then(if (picked) Modifier.border(1.5.dp, MaterialTheme.colorScheme.primary, MaterialTheme.shapes.medium) else Modifier)
+            .clickable(enabled = !dimmed, onClick = onOpen)
             .padding(horizontal = 6.dp, vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        if (selecting) RowCheck(picked)
         CremaSparkChart(
             samples = shot.samples,
             insetDp = 3f,
