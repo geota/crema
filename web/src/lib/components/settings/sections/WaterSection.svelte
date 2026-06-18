@@ -251,7 +251,7 @@
 					{ value: 'tap', label: 'Tap' },
 					{ value: 'filtered', label: 'Filtered' },
 					{ value: 'bottled', label: 'Bottled' },
-					{ value: 'rpavlis', label: 'Custom (RPavlis)' }
+					{ value: 'rpavlis', label: 'RPavlis' }
 				]}
 				onChange={(v) => (waterSource = v)}
 			/>

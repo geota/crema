@@ -96,7 +96,10 @@
 			/>
 		{/snippet}
 	</StRow>
-	<StRow title="Default pre-infusion" sub="Pre-infusion time when no profile is loaded.">
+	<StRow
+		title="Default pre-infusion"
+		sub="Pre-infusion time when no profile is loaded. Click the dot to disable."
+	>
 		{#snippet control()}
 			<StStepper
 				value={prefs.defaultPreinfusionS}
@@ -105,6 +108,10 @@
 				min={0}
 				max={60}
 				onCommit={(v) => settings.set('defaultPreinfusionS', v)}
+				dot
+				dotOn={prefs.defaultPreinfusionS > 0}
+				onDot={() =>
+					settings.set('defaultPreinfusionS', prefs.defaultPreinfusionS > 0 ? 0 : 8)}
 			/>
 		{/snippet}
 	</StRow>

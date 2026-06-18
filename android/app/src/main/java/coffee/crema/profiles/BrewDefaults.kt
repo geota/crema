@@ -4,6 +4,9 @@ import coffee.crema.core.defaultBrewDefaultsJson
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
+/** One lenient Json, reused — decoding the core's seed JSON snapshot. */
+private val LenientJson = Json { ignoreUnknownKeys = true }
+
 /*
  * The out-of-box brew defaults — dose / ratio / brew temp / pre-infusion —
  * parsed once from the core's `defaultBrewDefaultsJson()` so the shell seeds new
@@ -25,7 +28,7 @@ data class BrewDefaults(
     companion object {
         /** The core's seed defaults, parsed once. */
         val INSTANCE: BrewDefaults by lazy {
-            Json { ignoreUnknownKeys = true }.decodeFromString(defaultBrewDefaultsJson())
+            LenientJson.decodeFromString(defaultBrewDefaultsJson())
         }
     }
 }

@@ -1,6 +1,7 @@
 package coffee.crema.ui.phone.components
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -16,10 +17,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coffee.crema.R
 import coffee.crema.ui.components.PhIcon          // shared with tablet — the Phosphor binding
 
 /*
@@ -107,11 +110,20 @@ data class BarAction(val icon: String, val accent: Boolean = false, val onClick:
 fun CremaPhoneTopBar(title: String, actions: List<BarAction> = emptyList()) {
     TopAppBar(
         title = {
-            // Proto .pf-appbar-title: 26px/30px Newsreader regular.
-            Text(
-                title,
-                style = MaterialTheme.typography.headlineMedium.copy(fontSize = 26.sp, lineHeight = 30.sp),
-            )
+            // Proto .pf-appbar-title: 26px/30px Newsreader regular — with the
+            // Crema "C" mark set just before it as a lightweight brand cue.
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Image(
+                    painter = painterResource(R.drawable.ic_crema_logo),
+                    contentDescription = "Crema",
+                    modifier = Modifier.size(26.dp),
+                )
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    title,
+                    style = MaterialTheme.typography.headlineMedium.copy(fontSize = 26.sp, lineHeight = 30.sp),
+                )
+            }
         },
         actions = {
             actions.forEach { a ->

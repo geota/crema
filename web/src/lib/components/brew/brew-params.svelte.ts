@@ -149,10 +149,10 @@ export class BrewParamState {
 
 	/** Set one parameter — the steppers' `onChange`. */
 	set<K extends keyof BrewParams>(key: K, value: BrewParams[K]): void {
-		// Most keys remain local-only UI for this porting step; specific
-		// keys (today: `flushTemp`) route through `onWrite` to push the
-		// value onto the DE1. Reassigning the `$derived` overrides the
-		// seed with a local edit either way.
+		// Most keys are local-only UI; the machine-facing keys (steam
+		// temp/time/flow, hot-water temp/volume, flush time/temp) route
+		// through `onWrite` to push the value onto the DE1. Reassigning the
+		// `$derived` overrides the seed with a local edit either way.
 		this.current = { ...this.current, [key]: value };
 		this.onWrite?.(key, value);
 	}

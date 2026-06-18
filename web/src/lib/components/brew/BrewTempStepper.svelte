@@ -34,6 +34,10 @@
 </script>
 
 <div>
+	<!-- The on/off dot rides only on the Pre-infuse mode (Brew temp has no
+	     "disabled" sentinel). It flips `preinf` between 0 (off) and the
+	     8 s brew-default, dimming the stepper + chips while off — the same
+	     affordance as the segment editor's optional groups. -->
 	<QuickSplitLabel
 		prefix="Brew"
 		options={[
@@ -42,6 +46,9 @@
 		]}
 		value={p.brewMode}
 		onChange={(v) => params.set('brewMode', v as 'temp' | 'preinf')}
+		dot={p.brewMode === 'preinf'}
+		dotOn={p.preinf > 0}
+		onDot={() => params.set('preinf', p.preinf > 0 ? 0 : 8)}
 	/>
 	{#if p.brewMode === 'temp'}
 		<QuickStepper
@@ -62,23 +69,38 @@
 			onChange={(v) => params.set('brewTemp', v)}
 		/>
 	{:else}
-		<QuickStepper
-			value={p.preinf}
-			unit="s"
-			min={0}
-			max={30}
-			step={1}
-			onChange={(v) => params.set('preinf', v)}
-			fmt={(v) => v.toFixed(0)}
-			overridden={preinfOverridden}
-			overriddenTooltip="Overriding default {preinfSeedLabel}"
-		/>
-		<div style="height:6px"></div>
-		<QuickChipRow
-			options={[0, 4, 8, 12, 16]}
-			value={p.preinf}
-			unit="s"
-			onChange={(v) => params.set('preinf', v)}
-		/>
+		<div class="bts-preinf" class:is-off={p.preinf === 0}>
+			<QuickStepper
+				value={p.preinf}
+				unit="s"
+				min={0}
+				max={30}
+				step={1}
+				onChange={(v) => params.set('preinf', v)}
+				fmt={(v) => v.toFixed(0)}
+				overridden={preinfOverridden}
+				overriddenTooltip="Overriding default {preinfSeedLabel}"
+			/>
+			<div style="height:6px"></div>
+			<QuickChipRow
+				options={[0, 4, 8, 12, 16]}
+				value={p.preinf}
+				unit="s"
+				onChange={(v) => params.set('preinf', v)}
+			/>
+		</div>
 	{/if}
 </div>
+
+<style>
+	/* Pre-infuse stepper + chips dim while off (preinf === 0) — the same
+	   `is-off` treatment the profile editor's optional segment groups use,
+	   so the disabled state reads at a glance. The label's dot stays lit /
+	   clickable to bring it back. */
+	.bts-preinf {
+		transition: opacity var(--dur-1) var(--ease);
+	}
+	.bts-preinf.is-off {
+		opacity: 0.4;
+	}
+</style>

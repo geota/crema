@@ -42,7 +42,9 @@ val LocalSettingsRowDense = staticCompositionLocalOf { false }
  * the left, a [trailing] control, and a bottom hairline unless [last].
  * [notImplemented] shows a neutral "Soon" pill and dims the control;
  * [needsConnection] shows a copper "Connect DE1" pill. Paddings/gap follow
- * [LocalSettingsRowDense].
+ * [LocalSettingsRowDense]. Set [dot] for a 0-sentinel setting: a leading enable
+ * dot ([dotOn]/[onDot]) toggles the feature and greys the [trailing] control
+ * when off, instead of making the user dial the value down to 0.
  */
 @Composable
 fun CremaSettingsRow(
@@ -51,41 +53,62 @@ fun CremaSettingsRow(
     last: Boolean = false,
     notImplemented: Boolean = false,
     needsConnection: Boolean = false,
+    stacked: Boolean = false,
+    dot: Boolean = false,
+    dotOn: Boolean = false,
+    onDot: (() -> Unit)? = null,
     trailing: @Composable () -> Unit = {},
 ) {
     val dense = LocalSettingsRowDense.current
-    Row(
-        Modifier.fillMaxWidth().padding(
-            horizontal = if (dense) 16.dp else 20.dp,
-            vertical = if (dense) 13.dp else 16.dp,
-        ),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(if (dense) 12.dp else 16.dp),
-    ) {
-        Column(Modifier.weight(1f)) {
-            // FlowRow so a too-narrow row drops the pill to its own line WHOLE
-            // (a plain Row squeezed it into letter-per-line wrapping on the phone);
-            // on the roomy tablet the pill stays inline, matching the old SetRow.
-            FlowRow(
-                verticalArrangement = Arrangement.Center,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                if (title.isNotEmpty()) Text(
-                    title,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-                if (notImplemented) CremaSettingsPill("Soon")
-                else if (needsConnection) CremaSettingsPill("Connect DE1", copper = true)
-            }
-            if (sub != null) Text(
-                sub,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 2.dp),
+    // FlowRow so a too-narrow row drops the pill to its own line WHOLE
+    // (a plain Row squeezed it into letter-per-line wrapping on the phone);
+    // on the roomy tablet the pill stays inline, matching the old SetRow.
+    val titleBlock: @Composable () -> Unit = {
+        FlowRow(
+            verticalArrangement = Arrangement.Center,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            // Optional leading enable dot — flips a 0-sentinel setting on/off
+            // (the trailing control greys out below) instead of forcing the user
+            // to dial the value to 0. Mirrors the PWA's StStepper dot.
+            if (dot) CremaDotToggle(dotOn, { onDot?.invoke() })
+            if (title.isNotEmpty()) Text(
+                title,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface,
             )
+            if (notImplemented) CremaSettingsPill("Soon")
+            else if (needsConnection) CremaSettingsPill("Connect DE1", copper = true)
         }
-        Box(Modifier.alpha(if (notImplemented) 0.5f else 1f)) { trailing() }
+        if (sub != null) Text(
+            sub,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 2.dp),
+        )
+    }
+    val hPad = if (dense) 16.dp else 20.dp
+    val vPad = if (dense) 13.dp else 16.dp
+    if (stacked) {
+        // Title above a full-width control — for controls too wide to sit beside
+        // the title (e.g. the 3-way Water source pill, which otherwise squeezes
+        // the title into wrapping on the narrow phone).
+        Column(
+            Modifier.fillMaxWidth().padding(horizontal = hPad, vertical = vPad),
+            verticalArrangement = Arrangement.spacedBy(if (dense) 10.dp else 12.dp),
+        ) {
+            Column { titleBlock() }
+            Box(Modifier.fillMaxWidth().alpha(if (notImplemented) 0.5f else if (dot && !dotOn) 0.4f else 1f)) { trailing() }
+        }
+    } else {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = hPad, vertical = vPad),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(if (dense) 12.dp else 16.dp),
+        ) {
+            Column(Modifier.weight(1f)) { titleBlock() }
+            Box(Modifier.alpha(if (notImplemented) 0.5f else if (dot && !dotOn) 0.4f else 1f)) { trailing() }
+        }
     }
     if (!last) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 }

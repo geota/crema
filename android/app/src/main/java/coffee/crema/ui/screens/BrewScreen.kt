@@ -72,6 +72,8 @@ import coffee.crema.core.Bean
 import coffee.crema.core.MaintenanceReadout
 import coffee.crema.core.Roaster
 import coffee.crema.profiles.CremaProfile
+import coffee.crema.profiles.rankProfilesForPicker
+import coffee.crema.beans.rankBeansForPicker
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.components.CremaAnchoredPopup
 import coffee.crema.ui.components.CremaCard
@@ -117,6 +119,10 @@ fun BrewScreen(
     val running = ui.shotInProgress
     val espressoActive = ui.machineStateName == "Espresso"
     var quickOpen by remember { mutableStateOf(false) }
+    // Maintenance categories the user dismissed *this session* (per-category,
+    // re-shown on relaunch). Lets the slim banner be cleared so the chart gets
+    // its height back — mirrors the PWA's session-only maintenance dismiss.
+    var maintDismissed by remember { mutableStateOf(setOf<String>()) }
 
     Row(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         CremaNavigationRail(
@@ -166,7 +172,12 @@ fun BrewScreen(
             // Slim amber maintenance banner — modelled on the PWA MachineErrorBanner.
             // Shown when any maintenance counter is past its interval (descale →
             // clean → filter, most-urgent first); hidden when all ok or no readout.
-            BrewHeadBanner(readout = ui.maintenanceReadout, onOpenWater = { onNav("settings") })
+            BrewHeadBanner(
+                readout = ui.maintenanceReadout,
+                dismissed = maintDismissed,
+                onDismiss = { cat -> maintDismissed = maintDismissed + cat },
+                onOpenWater = { onNav("settings") },
+            )
             Row(
                 modifier = Modifier
                     .weight(1f)
@@ -356,12 +367,20 @@ private fun BrewHeader(
 // tapping it routes to Settings (the Water & maintenance section). Hidden when
 // every counter is ok or the readout hasn't been computed yet.
 @Composable
-private fun BrewHeadBanner(readout: MaintenanceReadout?, onOpenWater: () -> Unit) {
+private fun BrewHeadBanner(
+    readout: MaintenanceReadout?,
+    dismissed: Set<String>,
+    onDismiss: (String) -> Unit,
+    onOpenWater: () -> Unit,
+) {
     if (readout == null) return
-    val message = when {
-        !readout.descaleOk -> "Descale due"
-        !readout.cleanOk -> "Clean due"
-        !readout.filterOk -> "Filter due"
+    // Most-urgent due item the user hasn't dismissed this session (descale →
+    // clean → filter). Each carries its category key so the ✕ clears just that
+    // one; a different category that comes due later still surfaces.
+    val (category, message) = when {
+        !readout.descaleOk && "descale" !in dismissed -> "descale" to "Descale due"
+        !readout.cleanOk && "clean" !in dismissed -> "clean" to "Clean due"
+        !readout.filterOk && "filter" !in dismissed -> "filter" to "Filter due"
         else -> return
     }
     val amber = Color(0xFFDBA764)
@@ -373,7 +392,7 @@ private fun BrewHeadBanner(readout: MaintenanceReadout?, onOpenWater: () -> Unit
             .background(amber.copy(alpha = 0.14f))
             .border(1.dp, amber.copy(alpha = 0.40f), RoundedCornerShape(10.dp))
             .clickable(onClick = onOpenWater)
-            .padding(horizontal = 14.dp, vertical = 8.dp),
+            .padding(start = 14.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
@@ -389,7 +408,17 @@ private fun BrewHeadBanner(readout: MaintenanceReadout?, onOpenWater: () -> Unit
             style = MaterialTheme.typography.labelSmall,
             color = amber.copy(alpha = 0.85f),
         )
-        PhIcon("caret-right", sizeDp = 14, tint = amber.copy(alpha = 0.85f))
+        // Dismiss ✕ — clears the banner for this session so it stops taking
+        // height from the chart. Its own clickable consumes the tap, so it
+        // doesn't also route to Settings like the banner body does.
+        Box(
+            modifier = Modifier
+                .clip(CircleShape)
+                .clickable { onDismiss(category) }
+                .padding(4.dp),
+        ) {
+            PhIcon("x", sizeDp = 14, tint = amber.copy(alpha = 0.85f))
+        }
     }
 }
 
@@ -494,10 +523,8 @@ private fun ProfileBlock(
                     modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
                     compact = true,
                 )
-                // Active first, then pinned, then store order (web HeaderPicker rank).
-                val sorted = profiles.sortedByDescending {
-                    (if (it.id == active?.id) 2 else 0) + (if (it.pinned) 1 else 0)
-                }
+                // Loaded profile first, then pinned, then store order (shared rank).
+                val sorted = rankProfilesForPicker(profiles, active?.id)
                 val shown = sorted.filter {
                     query.isBlank() || it.name.contains(query, ignoreCase = true) ||
                         it.author.contains(query, ignoreCase = true)
@@ -670,10 +697,8 @@ private fun BeanBlock(
                     modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
                     compact = true,
                 )
-                // Active first, then favourite, then store order (mirrors the profile rank).
-                val sorted = beans.sortedByDescending {
-                    (if (it.id == activeBean?.id) 2 else 0) + (if (it.favourite) 1 else 0)
-                }
+                // Loaded bean first, then favourite, then store order (shared rank).
+                val sorted = rankBeansForPicker(beans, activeBean?.id)
                 val shown = sorted.filter { b ->
                     query.isBlank() || b.name.contains(query, ignoreCase = true) ||
                         (roasterNameOf(b)?.contains(query, ignoreCase = true) ?: false) ||

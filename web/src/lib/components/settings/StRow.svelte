@@ -6,7 +6,7 @@
 	 * design's `StRow` (`settings-page.jsx`).
 	 *
 	 * Pass `notImplemented` to mark the row as a documented placeholder —
-	 * shows a "Not implemented yet" pill next to the title and dims the
+	 * shows a "Soon" pill next to the title and dims the
 	 * control. The row stays discoverable (so the user can see what's
 	 * coming) but honest about what doesn't work yet.
 	 */
@@ -24,7 +24,7 @@
 		sub?: string;
 		control: Snippet;
 		hint?: Snippet;
-		/** When true, show a "Not implemented yet" pill and dim the control. */
+		/** When true, show a "Soon" pill and dim the control. */
 		notImplemented?: boolean;
 		/** When true, show a "Connect a DE1" pill — the row's controls need a live device. */
 		needsConnection?: boolean;
@@ -39,7 +39,7 @@
 				<span
 					class="st-row-pill"
 					title="The control persists a value, but no part of the app reads it yet."
-					>Not implemented yet</span
+					>Soon</span
 				>
 			{:else if needsConnection}
 				<span
