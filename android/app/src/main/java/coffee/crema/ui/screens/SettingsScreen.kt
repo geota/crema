@@ -27,6 +27,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import kotlinx.coroutines.delay
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -156,10 +157,10 @@ fun SettingsScreen(
                             // BUG FIX: this row previously showed a hardcoded
                             // "v1352" (and even fell back to the SCALE firmware) —
                             // it must reflect the MACHINE firmware the DE1 reports.
-                            firmware = if (connected) ui.de1Firmware else null,
+                            firmware = if (connected) firmwareLabel(ui.de1MachineInfo, ui.de1Firmware).takeIf { it != "—" } else null,
                             model = if (connected) machineModelLabel(ui.de1MachineInfo).takeIf { it != "—" } else null,
                             board = if (connected) cpuBoardLabel(ui.de1MachineInfo).takeIf { it != "—" } else null,
-                            ble = if (connected) "Paired" else null,
+                            ble = if (connected) (ui.de1BluetoothAddress ?: "Paired") else null,
                             onConnect = { onConnect("machine") },
                             onUpdateFirmware = null,
                         )
@@ -169,6 +170,9 @@ fun SettingsScreen(
                             // heartbeat in the VM resets the DE1's sleep timer while on.
                             CremaSettingsRow("Keep DE1 awake while Crema is open", "Re-arms the DE1's sleep timer every minute so the machine stays ready.") {
                                 CremaSwitch(ui.suppressDe1Sleep, vm::setSuppressDe1Sleep)
+                            }
+                            CremaSettingsRow("Auto-connect", "Reconnect to this DE1 automatically after a dropout, and on launch. Turning it off forgets the device.") {
+                                CremaSwitch(ui.rememberedDe1Address != null, vm::setDe1AutoConnect, enabled = connected || ui.rememberedDe1Address != null)
                             }
                             // GHC start-from-machine mode — driven by the live GhcMode
                             // register; the toggle writes via the VM. Disabled until the
@@ -183,7 +187,7 @@ fun SettingsScreen(
                             CremaSettingsRow("Model") { CremaMonoReadout(machineModelLabel(ui.de1MachineInfo), color = MaterialTheme.colorScheme.onSurface) }
                             CremaSettingsRow("Serial number") { CremaMonoReadout(serialLabel(ui.de1MachineInfo), color = MaterialTheme.colorScheme.onSurface) }
                             CremaSettingsRow("CPU board") { CremaMonoReadout(cpuBoardLabel(ui.de1MachineInfo), color = MaterialTheme.colorScheme.onSurface) }
-                            CremaSettingsRow("Firmware") { CremaMonoReadout(ui.de1Firmware ?: "—", color = MaterialTheme.colorScheme.onSurface) }
+                            CremaSettingsRow("Firmware") { CremaMonoReadout(firmwareLabel(ui.de1MachineInfo, ui.de1Firmware), color = MaterialTheme.colorScheme.onSurface) }
                             CremaSettingsRow("Heater voltage", last = true) { CremaMonoReadout(heaterVoltageLabel(ui.de1MachineInfo), color = MaterialTheme.colorScheme.onSurface) }
                         }
                         SetGroup("Diagnostics") {
@@ -199,7 +203,8 @@ fun SettingsScreen(
                         }
                         SetGroup("Peripherals") {
                             CremaSettingsRow("Scale", if (scaleConnected) (ui.scaleName ?: "Connected") else "Not paired") {
-                                if (scaleConnected) CremaStatusDot(true) else CremaButton(onClick = { onConnect("scale") }, variant = CremaButtonVariant.Outlined, label = "Pair")
+                                if (scaleConnected) CremaStatusDot(true)
+                                else CremaButton(onClick = { onConnect("scale") }, variant = CremaButtonVariant.Outlined, label = "Pair")
                             }
                             CremaSettingsRow("Grinder", "No grinder support yet.") { CremaStatusDot(false) }
                             // Equipment-level grinder model (web `grinderModel`): free
@@ -219,7 +224,12 @@ fun SettingsScreen(
                         if (hasCupWarmerPlate(ui.de1MachineInfo)) {
                             SetGroup("Cup warmer") {
                                 val plate = cupWarmerTempValue(ui.de1MachineInfo) ?: 25
-                                CremaSettingsRow("Plate temperature", "The Bengle warming plate's target.", last = true, needsConnection = !connected) {
+                                CremaSettingsRow(
+                                    "Plate temperature", "The Bengle warming plate's target.", last = true,
+                                    needsConnection = !connected,
+                                    dot = true, dotOn = plate > 0,
+                                    onDot = { if (connected) vm.setCupWarmerTemp(if (plate > 0) 0 else 55) },
+                                ) {
                                     CremaStepper(
                                         value = plate.toDouble(), unit = "°C", step = 1.0, min = 0.0, max = 80.0,
                                         fmt = { "%.0f".format(it) }, style = CremaStepperStyle.Bare,
@@ -239,7 +249,7 @@ fun SettingsScreen(
                             CremaSettingsRow("Default dose", "Starting dose for a fresh shot.") { CremaStepper(value = dD.toDouble(), unit = "g", step = 0.1, min = 5.0, max = 30.0, fmt = { "%.1f".format(it) }, style = CremaStepperStyle.Bare, onChange = { setDefs(it.toFloat(), dR, dT, dP) }) }
                             CremaSettingsRow("Default ratio", "Target brew ratio (yield ÷ dose).") { CremaStepper(value = dR.toDouble(), unit = null, step = 0.1, min = 1.0, max = 5.0, fmt = { "1:%.1f".format(it) }, style = CremaStepperStyle.Bare, onChange = { setDefs(dD, it.toFloat(), dT, dP) }) }
                             CremaSettingsRow("Default brew temp", "Starting group temperature.") { CremaStepper(value = dT.toDouble(), unit = "°C", step = 0.5, min = 80.0, max = 100.0, fmt = { "%.1f".format(it) }, style = CremaStepperStyle.Bare, onChange = { setDefs(dD, dR, it.toFloat(), dP) }) }
-                            CremaSettingsRow("Default pre-infusion", "Low-pressure soak before the main shot.", last = true) { CremaStepper(value = dP.toDouble(), unit = "s", step = 1.0, min = 0.0, max = 60.0, fmt = { "%.0f".format(it) }, style = CremaStepperStyle.Bare, onChange = { setDefs(dD, dR, dT, it.toFloat()) }) }
+                            CremaSettingsRow("Default pre-infusion", "Low-pressure soak before the main shot.", last = true, dot = true, dotOn = dP > 0f, onDot = { setDefs(dD, dR, dT, if (dP > 0f) 0f else 8f) }) { CremaStepper(value = dP.toDouble(), unit = "s", step = 1.0, min = 0.0, max = 60.0, fmt = { "%.0f".format(it) }, style = CremaStepperStyle.Bare, onChange = { setDefs(dD, dR, dT, it.toFloat()) }) }
                         }
                         SetGroup("Shot behaviour") {
                             CremaSettingsRow("Auto-tare on shot start", "Zero the scale automatically when extraction begins.") { CremaSwitch(ui.autoTare, vm::setAutoTare) }
@@ -247,7 +257,11 @@ fun SettingsScreen(
                             // Max shot duration — persisted in AppPrefs + read from
                             // ui.maxShotDurationS so it survives + shows on Brew's stop
                             // conditions. The stepper pushes each change through the VM.
-                            CremaSettingsRow("Max shot duration", "Hard time cap — also a Brew stop condition.") {
+                            CremaSettingsRow(
+                                "Max shot duration", "Hard time cap — also a Brew stop condition.",
+                                dot = true, dotOn = ui.maxShotDurationS > 0f,
+                                onDot = { vm.setMaxShotDuration(if (ui.maxShotDurationS > 0f) 0f else 60f) },
+                            ) {
                                 val maxDur = ui.maxShotDurationS.toInt()
                                 CremaStepper(
                                     value = maxDur.toDouble(), unit = "s", step = 5.0, min = 0.0, max = 300.0,
@@ -383,6 +397,7 @@ fun SettingsScreen(
                                     options = listOf(SegOption("tap", "Tap"), SegOption("filtered", "Filtered"), SegOption("bottled", "Bottled"), SegOption("rpavlis", "RPavlis")),
                                     value = waterSource,
                                     onChange = { waterSource = it },
+                                    uniform = true,
                                 )
                             }
                             CremaSettingsRow("Hardness", "General hardness (GH).", notImplemented = true) {
@@ -401,6 +416,7 @@ fun SettingsScreen(
                                     options = listOf(SegOption("light", "Light"), SegOption("dark", "Dark")),
                                     value = if (ui.themeMode == "light") "light" else "dark",
                                     onChange = vm::setThemeMode,
+                                    uniform = true,
                                 )
                             }
                             CremaSettingsRow("Density", "Card padding and control sizing.", notImplemented = true) {
@@ -408,6 +424,7 @@ fun SettingsScreen(
                                     options = listOf(SegOption("compact", "Compact"), SegOption("comfortable", "Comfortable"), SegOption("spacious", "Spacious")),
                                     value = density,
                                     onChange = { density = it },
+                                    uniform = true,
                                 )
                             }
                             CremaSettingsRow("Screensaver", "Dim the display after a period idle.", notImplemented = true) { CremaSwitch(screensaver, { screensaver = it }) }
@@ -419,13 +436,15 @@ fun SettingsScreen(
                                     options = listOf(SegOption("C", "°C"), SegOption("F", "°F")),
                                     value = ui.tempUnit,
                                     onChange = vm::setTempUnit,
+                                    groupWidth = 172.dp,
                                 )
                             }
                             CremaSettingsRow("Weight", "Units for dose and yield.") {
                                 CremaSegmentedButton(
-                                    options = listOf(SegOption("g", "Grams"), SegOption("oz", "Ounces")),
+                                    options = listOf(SegOption("g", "g"), SegOption("oz", "oz")),
                                     value = ui.weightUnit,
                                     onChange = vm::setWeightUnit,
+                                    groupWidth = 172.dp,
                                 )
                             }
                             CremaSettingsRow("Pressure", "Units for the pressure channel.") {
@@ -433,6 +452,7 @@ fun SettingsScreen(
                                     options = listOf(SegOption("bar", "bar"), SegOption("psi", "psi")),
                                     value = ui.pressureUnit,
                                     onChange = vm::setPressureUnit,
+                                    groupWidth = 172.dp,
                                 )
                             }
                             CremaSettingsRow("Volume", "Units for water and yield volume.", last = true) {
@@ -440,6 +460,7 @@ fun SettingsScreen(
                                     options = listOf(SegOption("ml", "ml"), SegOption("floz", "fl oz")),
                                     value = ui.volumeUnit,
                                     onChange = vm::setVolumeUnit,
+                                    groupWidth = 172.dp,
                                 )
                             }
                         }
@@ -485,6 +506,7 @@ fun SettingsScreen(
                                         ),
                                         value = vz.shotsDirection,
                                         onChange = vm.visualizer::setShotsDirection,
+                                        uniform = true,
                                     )
                                 }
                                 CremaSettingsRow("Auto-sync new shots", "Upload each shot as it finishes (needs a pushing direction).") {
@@ -521,6 +543,7 @@ fun SettingsScreen(
                                         options = listOf(SegOption("public", "Public"), SegOption("unlisted", "Unlisted"), SegOption("private", "Private")),
                                         value = vz.privacy,
                                         onChange = vm.visualizer::setPrivacy,
+                                        uniform = true,
                                     )
                                 }
                                 CremaSettingsRow("Include profile", "Attach the full recipe (every segment) to uploads.") { CremaSwitch(vz.includeProfile, vm.visualizer::setIncludeProfile) }
@@ -630,16 +653,26 @@ fun SettingsScreen(
                     "advanced" -> {
                         SetHead("Power user", "Advanced", "Telemetry tuning, developer tools, and destructive resets.")
                         SetGroup("Telemetry") {
-                            // AC mains frequency override — the core accepts 0 (auto),
-                            // 50, or 60 Hz; the selection writes via the VM and the
-                            // resolved value is read back into ui.lineFreqHz.
-                            val freqValue = when (ui.lineFreqHz) {
+                            // AC mains frequency override — the toggle reflects the
+                            // user's OVERRIDE (auto/50/60), not the resolved value, so
+                            // it stays on "Auto" once the detector locks a frequency.
+                            val freqValue = when (ui.lineFreqOverride) {
                                 50.0f -> "50"
                                 60.0f -> "60"
-                                0.0f -> "auto"
                                 else -> "auto"
                             }
-                            CremaSettingsRow("AC mains frequency", "Match your wall power for clean temperature control.", needsConnection = !connected) {
+                            // On Auto, poll the resolved Hz live for the hint (web parity).
+                            if (connected && ui.lineFreqOverride == 0.0f) {
+                                LaunchedEffect(Unit) { while (true) { vm.refreshLineFrequency(); delay(1000) } }
+                            }
+                            val detectedHz = ui.lineFreqHz?.takeIf { it > 0f }?.toInt()
+                            val freqSub = if (ui.lineFreqOverride == 0.0f) {
+                                "Auto-detected from the DE1's sample stream. " +
+                                    (detectedHz?.let { "Currently locked at $it Hz." } ?: "Locks ~1s into the first shot.")
+                            } else {
+                                "Pinned at ${ui.lineFreqOverride.toInt()} Hz — switch to Auto to let the detector run."
+                            }
+                            CremaSettingsRow("AC mains frequency", freqSub, needsConnection = !connected) {
                                 CremaSegmentedButton(
                                     options = listOf(SegOption("auto", "Auto"), SegOption("50", "50 Hz"), SegOption("60", "60 Hz")),
                                     value = freqValue,
@@ -647,6 +680,7 @@ fun SettingsScreen(
                                     // (web MainsConfirmModal parity).
                                     onChange = { if (it == "auto") vm.setLineFrequency(0.0f) else confirm.pendingLineFreq = it },
                                     enabled = connected,
+                                    uniform = true,
                                 )
                             }
                             CremaSettingsRow("Smooth pressure curve", "Filter chart noise on the live readout.", last = true, notImplemented = true) { CremaSwitch(smoothPressure, { smoothPressure = it }) }
@@ -696,15 +730,19 @@ fun SettingsScreen(
                             // Mains heater voltage — service-grade, gated behind a danger
                             // confirm (staged in pendingHeaterVoltage). Reflects the live
                             // HeaterVoltage register; the VM guards 120/230 again.
-                            val hv = heaterVoltageValue(ui.de1MachineInfo) ?: "230"
+                            // null until the connected DE1 reports its mains voltage.
+                            val hv = heaterVoltageValue(ui.de1MachineInfo)
                             CremaSettingsRow("Mains heater voltage", "Wrong voltage damages the heater — service only.", last = true, needsConnection = !connected) {
                                 CremaSegmentedButton(
                                     options = listOf(SegOption("120", "120 V"), SegOption("230", "230 V")),
-                                    value = hv,
+                                    // No segment selected until the machine reports its voltage —
+                                    // matches the "—" Heater-voltage readout, not a default of 230.
+                                    value = hv ?: "",
                                     // Stages the type-to-confirm dialog; ignore re-taps on
                                     // the current value (web disables the matching button).
                                     onChange = { if (it != hv) confirm.pendingHeaterVoltage = it },
                                     enabled = connected,
+                                    uniform = true,
                                 )
                             }
                             // REMOVED: "Reset machine to factory" — there is no core /
@@ -1143,9 +1181,9 @@ private fun VisualizerGlyph(modifier: Modifier = Modifier) {
         fun p(v: Float) = v * sc
         val path = androidx.compose.ui.graphics.Path().apply {
             moveTo(p(4f), p(36f))
-            quadraticBezierTo(p(12f), p(8f), p(24f), p(24f))
+            quadraticTo(p(12f), p(8f), p(24f), p(24f))
             // The SVG's T (smooth quadratic): control = reflection of (12,8) about (24,24).
-            quadraticBezierTo(p(36f), p(40f), p(44f), p(12f))
+            quadraticTo(p(36f), p(40f), p(44f), p(12f))
         }
         drawPath(
             path,
@@ -1257,26 +1295,50 @@ private fun MaintenanceRow(
 internal fun machineModelLabel(info: Map<MmrRegister, UInt>): String =
     info[MmrRegister.MachineModel]?.let { machineModelName(it) } ?: "—"
 
-/** CPU-board revision — raw is `version × 1000` (raw 1100 → "v1.1"). */
+/** CPU-board revision — raw is `version × 1000` (raw 1300 → "PCB v1.3"). The
+ *  "PCB " prefix matches the web's machine readout. */
 internal fun cpuBoardLabel(info: Map<MmrRegister, UInt>): String {
     val raw = info[MmrRegister.CpuBoardVersion]?.toInt() ?: return "—"
     // raw/1000 = major, (raw%1000)/100 = minor — interpolate Ints, no %f.
-    return "v${raw / 1000}.${(raw % 1000) / 100}"
+    return "PCB v${raw / 1000}.${(raw % 1000) / 100}"
 }
+
+/**
+ * DE1 firmware version as the web shows it — the MMR FirmwareVersion BUILD
+ * NUMBER formatted "v<n>" (e.g. "v1352", web's `firmwareBuild`). Falls back to
+ * the BLE Version-characteristic string ([fallback] = `ui.de1Firmware`, e.g.
+ * "v0.0.598 (API 4)") until the build-number register lands, then "—".
+ */
+internal fun firmwareLabel(info: Map<MmrRegister, UInt>, fallback: String?): String =
+    info[MmrRegister.FirmwareVersion]?.let { "v$it" } ?: fallback ?: "—"
 
 /** Machine serial number — raw word, shown as-is. */
 internal fun serialLabel(info: Map<MmrRegister, UInt>): String =
     info[MmrRegister.SerialNumber]?.let { "$it" } ?: "—"
 
-/** Heater mains voltage — wire value is `volts + 1000` (raw 1230 → 230 V). */
-internal fun heaterVoltageLabel(info: Map<MmrRegister, UInt>): String {
-    val raw = info[MmrRegister.HeaterVoltage]?.toInt() ?: return "—"
-    return "${raw - 1000} V"
+/**
+ * Decode the raw HeaterVoltage MMR word (0x803834) to actual mains volts. The
+ * firmware stamps `+1000` on user-committed writes, but a raw read can come back
+ * as the actual volts (e.g. 120, not 1120) — so only un-stamp words ≥ 1000.
+ * Mirrors the web readout (`v >= 1000 ? v - 1000 : v`); blindly subtracting 1000
+ * turned a 120 V read into "−880 V". 0 = firmware not told yet; null = unread.
+ */
+private fun heaterVoltageVolts(info: Map<MmrRegister, UInt>): Int? {
+    val raw = info[MmrRegister.HeaterVoltage]?.toInt() ?: return null
+    return if (raw >= 1000) raw - 1000 else raw
 }
 
-/** The current heater-voltage selection ("120" / "230") for the segmented control, or null. */
+/** Heater mains voltage readout — "120 V" / "230 V", "Not set" (auto-detect), or "—" (unread). */
+internal fun heaterVoltageLabel(info: Map<MmrRegister, UInt>): String =
+    when (val v = heaterVoltageVolts(info)) {
+        null -> "—"
+        0 -> "Not set"
+        else -> "$v V"
+    }
+
+/** The current heater-voltage selection ("120" / "230") for the segmented control; null when unread or auto-detect (0). */
 internal fun heaterVoltageValue(info: Map<MmrRegister, UInt>): String? =
-    info[MmrRegister.HeaterVoltage]?.toInt()?.let { (it - 1000).toString() }
+    heaterVoltageVolts(info)?.takeIf { it > 0 }?.toString()
 
 /** Bengle cup-warmer plate present? Models 4–7 (core `has_cup_warmer`). */
 internal fun hasCupWarmerPlate(info: Map<MmrRegister, UInt>): Boolean =

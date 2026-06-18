@@ -316,6 +316,30 @@ class NordicBleTransport(context: Context) : BleTransport {
         remote.write(data)
     }
 
+    // ---- Read -------------------------------------------------------------
+
+    override suspend fun read(
+        device: BleTransport.DeviceHandle,
+        service: UUID,
+        characteristic: UUID,
+    ): ByteArray {
+        val handle = device as NordicDeviceHandle
+        val peripheral = peripherals[handle]
+            ?: error("read() for an unknown device handle ${handle.address}")
+        val serviceUuid = service.toKotlinUuid()
+        val charUuid = characteristic.toKotlinUuid()
+
+        val remote = peripheral.services()
+            .mapNotNull { (it as? RemoteServices.Discovered)?.services }
+            .first()
+            .firstOrNull { it.uuid == serviceUuid }
+            ?.characteristics
+            ?.firstOrNull { it.uuid == charUuid }
+            ?: error("Characteristic $characteristic not found in service $service")
+
+        return remote.read()
+    }
+
     // ---- Lifecycle --------------------------------------------------------
 
     /**

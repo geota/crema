@@ -130,9 +130,9 @@ data class LastShot(
  * Transient Quick-Controls brew override — the dose / yield / brew-temp the user
  * nudged in the Quick Controls sheet. NOT persisted to any profile (mirrors the
  * web shell's BrewParamState): it is baked into the NEXT shot's uploaded profile
- * at [MainViewModel.startShot] and cleared on profile switch / Reset. The live
- * mid-shot SAW dial (web `setShotTargetWeight`) needs a bridge FFI not yet
- * exposed — that's the documented Phase-B follow-up.
+ * at [MainViewModel.startShot] and cleared on profile switch / Reset. The yield
+ * is also pushed to the core as the stop-at-weight target (web
+ * `setShotTargetWeight`) by [MainViewModel.pushStopTargets], so SAW arms on it.
  */
 /**
  * The transient Quick-Controls brew override baked into the next shot's upload
@@ -264,6 +264,16 @@ data class MainUiState(
      * a connected DE1; the Settings machine rows show "—" otherwise.
      */
     val de1Firmware: String? = null,
+    /** The connected DE1's Bluetooth address, for the Settings "BLE" row (the
+     *  web shows the device id here); null when disconnected. */
+    val de1BluetoothAddress: String? = null,
+    // ── Auto-connect (per device = a remembered address) ──────────────────────
+    /** The remembered DE1 address; non-null ⟺ the DE1's "Auto-connect" is ON
+     *  (reconnect on drop + connect on launch). Distinct from the LIVE
+     *  [de1BluetoothAddress], which is set only while actually connected. */
+    val rememberedDe1Address: String? = null,
+    /** The remembered scale address; non-null ⟺ the scale's Auto-connect is ON. */
+    val rememberedScaleAddress: String? = null,
     /**
      * Raw MMR register values the DE1 reported, keyed by [MmrRegister]. Folded
      * from each `Event.MmrValue`; values are the **raw** 32-bit words — the UI
@@ -280,6 +290,10 @@ data class MainUiState(
      * mains-frequency selection in Settings → Advanced.
      */
     val lineFreqHz: Float? = null,
+    /** The user's AC-frequency OVERRIDE (0 = auto-detect, 50, 60) — kept apart
+     *  from the resolved [lineFreqHz] so the toggle reads "Auto" even after the
+     *  detector locks a value. */
+    val lineFreqOverride: Float = 0f,
     /** Summary of the last completed shot (Last-shot card), or null. */
     val lastShot: LastShot? = null,
     /**
@@ -751,7 +765,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             var wasReady = false
             ble.state.collect { state ->
-                _ui.update { it.copy(bleState = state) }
+                _ui.update { it.copy(bleState = state, de1BluetoothAddress = ble.connectedAddress) }
                 // Fire the machine read-sweep once per connection, on the first
                 // transition into READY (services discovered + subscribed). The
                 // reads emit read-request commands whose replies arrive later as
@@ -759,6 +773,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 if (state == De1BleManager.State.READY && !wasReady) {
                     wasReady = true
                     readMachineInfo()
+                    // Connecting auto-remembers the DE1 → its Auto-connect turns ON.
+                    ble.connectedAddress?.let { addr ->
+                        ble.autoReconnectEnabled = true
+                        if (_ui.value.rememberedDe1Address != addr) {
+                            _ui.update { it.copy(rememberedDe1Address = addr) }
+                            persistPrefs()
+                        }
+                    }
                 } else if (state != De1BleManager.State.READY) {
                     wasReady = false
                     // The DE1 no longer holds our profile — drop the upload-skip
@@ -771,6 +793,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             scale.state.collect { state ->
                 _ui.update { it.copy(scaleState = state) }
+                // Connecting auto-remembers the scale → its Auto-connect turns ON.
+                if (state == ScaleBleManager.State.READY) {
+                    scale.connectedAddress?.let { addr ->
+                        scale.autoReconnectEnabled = true
+                        if (_ui.value.rememberedScaleAddress != addr) {
+                            _ui.update { it.copy(rememberedScaleAddress = addr) }
+                            persistPrefs()
+                        }
+                    }
+                }
             }
         }
         loadBuiltinProfiles()
@@ -920,6 +952,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // Switching profiles clears any Quick-Controls override (re-seeds from new).
         _ui.update { it.copy(activeProfileId = id, brewParams = null) }
         persistPrefs()
+        pushStopTargets() // new profile's recipe yield/volume become the stop targets
     }
 
     /**
@@ -952,11 +985,37 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  not saved to the profile; baked into the next shot's upload by [startShot]. */
     fun quickAdjustBrew(dose: Double, yieldOut: Double, brewTemp: Double, preinf: Double? = null) {
         _ui.update { it.copy(brewParams = BrewParams(dose, yieldOut, brewTemp, preinf)) }
+        pushStopTargets() // the new yield override becomes the live stop-at-weight target
     }
 
     /** Reset the Quick-Controls override back to the active profile's recipe. */
     fun resetBrewParams() {
         _ui.update { it.copy(brewParams = null) }
+        pushStopTargets() // drop the per-shot override; the profile recipe target takes over
+    }
+
+    /**
+     * Push the stop-at-weight (SAW) / stop-at-volume (SAV) targets into the core
+     * so a shot actually auto-stops. The core arms its `AutoStop` from these on
+     * the next shot's first flowing phase and resolves the weight target as
+     * `shotTarget.or(profileTarget)` — with neither pushed it can't arm and the
+     * shot never stops on weight (the bug: Android never wired these, unlike the
+     * web's applyProfileTargetWeight / applyShotTargetWeight / applyProfileVolume-
+     * Limit). Profile yield + volume come from the active profile's recipe; the
+     * shot target is the Quick-Controls dial override (null when unset, so the
+     * profile recipe wins). Safe while disconnected — pure core state, no BLE.
+     */
+    private fun pushStopTargets() {
+        val s = _ui.value
+        val active = s.profiles.firstOrNull { it.id == s.activeProfileId }
+        val profileYield = active?.yieldOut?.takeIf { it.isFinite() && it > 0f }
+        val volumeLimit = active?.maxTotalVolumeMl?.takeIf { it > 0 }?.toFloat()
+        val shotYield = s.brewParams?.yieldOut?.toFloat()?.takeIf { it.isFinite() && it > 0f }
+        runCatching {
+            bridge.setProfileTargetWeight(profileYield)
+            bridge.setProfileVolumeLimit(volumeLimit)
+            bridge.setShotTargetWeight(shotYield)
+        }.onFailure { appendLog("Push stop targets failed: ${it.message}") }
     }
 
     /**
@@ -1402,6 +1461,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             notifyUser("Can\u2019t start shot \u2014 no profile selected")
             return
         }
+        // Make sure the core's stop-at-weight / volume targets are current before
+        // the shot arms its AutoStop \u2014 covers a profile restored at startup that
+        // never went through setActiveProfile (otherwise SAW silently never arms).
+        pushStopTargets()
         // Quick-Controls override: bake the transient dose/yield/brew-temp into the
         // uploaded profile (the web shell's lazy re-upload-with-overrides). The
         // library profile is untouched; only this one upload carries the override.
@@ -1525,6 +1588,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // Drop any outstanding scan want too — the user may disconnect mid-scan.
         bleScanner.cancel(SCAN_LABEL_DE1)
         ble.disconnect()
+        machineInfoJob?.cancel() // stop any in-flight connect-time register sweep
         pendingBrew = false
         _ui.update { it.copy(
             bleState = De1BleManager.State.DISCONNECTED,
@@ -1555,6 +1619,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             de1Firmware = null,
             de1MachineInfo = emptyMap(),
             lineFreqHz = null,
+            lineFreqOverride = 0f,
             profileUploading = false,
             profileUploadProgress = null,
         ) }
@@ -1588,6 +1653,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Stop a running shot (return to idle). */
     fun stopShot() = requestMachineState(MachineRequest.IDLE)
 
+    /** Connect-time machine-info sweep (see [readMachineInfo]); cancelled on reconnect/disconnect. */
+    private var machineInfoJob: kotlinx.coroutines.Job? = null
+
     /**
      * Read the DE1's identity + service registers once a connection is READY.
      * Each [CremaBridge.readMmr] emits a `Command.WriteCharacteristic` read
@@ -1595,15 +1663,25 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * DE1 answers later on its MMR / version notify characteristics, surfacing
      * as `Event.MmrValue` / `Event.Firmware` folded into [MainUiState].
      *
+     * Sequencing matters on real hardware: [De1BleManager] flips to READY the
+     * moment the notification flows are *launched* (startObserving → launchIn),
+     * not when their CCCD writes land — so firing all nine reads the instant we
+     * see READY races the subscriptions and the DE1's notify replies get
+     * dropped, stranding firmware / heater-voltage on "—". So we mirror the web
+     * connect program: let the subscriptions settle, issue the reads serially
+     * with a small gap (web uses concurrency:1), and re-read until the
+     * user-visible identity (firmware + heater voltage) has answered or the
+     * attempt budget is spent. Reads are idempotent — a re-request re-answers.
+     *
      * Also folds the two pure (no-BLE) core reads — the firmware-update status
      * and the resolved line frequency — straight into the snapshot. Safe to
      * call while disconnected: with no BLE link the read requests write nothing
      * and the pure reads still return; the UI just shows "—" until replies land.
      */
     private fun readMachineInfo() {
-        // Connect-time register sweep: identity (firmware / board / model /
-        // serial), GHC presence + mode, heater voltage, flow-calibration, and
-        // refill-kit presence. Match the generated MmrReg variant spellings.
+        // Identity (firmware / board / model / serial), GHC presence + mode,
+        // heater voltage, flow-calibration, refill-kit. Match the generated
+        // MmrReg variant spellings.
         val registers = listOf(
             MmrReg.FIRMWARE_VERSION,
             MmrReg.CPU_BOARD_VERSION,
@@ -1615,22 +1693,41 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             MmrReg.CALIBRATION_FLOW_MULTIPLIER,
             MmrReg.REFILL_KIT,
         )
-        registers.forEach { reg ->
-            val raw = runCatching { bridge.readMmr(reg) }.getOrElse {
-                appendLog("Read MMR $reg failed: ${it.message}")
-                return@forEach
+        machineInfoJob?.cancel()
+        machineInfoJob = viewModelScope.launch {
+            // Pacing/retry budget — generous enough for a real DE1's notify
+            // round-trips, cheap because it stops as soon as identity lands.
+            val settleMs = 400L     // let the just-launched CCCD writes go active
+            val readGapMs = 40L     // keep ~one outstanding GATT op at a time
+            val retryGapMs = 1_500L // wait for replies before re-reading gaps
+            val attempts = 3
+            delay(settleMs)
+            for (attempt in 0 until attempts) {
+                for (reg in registers) {
+                    val raw = runCatching { bridge.readMmr(reg) }.getOrElse {
+                        appendLog("Read MMR $reg failed: ${it.message}")
+                        null
+                    }
+                    if (raw != null) onCoreOutputJson(raw)
+                    delay(readGapMs)
+                }
+                // Stop once the identity the UI actually shows has answered.
+                if (_ui.value.de1Firmware != null &&
+                    MmrRegister.HeaterVoltage in _ui.value.de1MachineInfo
+                ) {
+                    break
+                }
+                delay(retryGapMs)
             }
-            onCoreOutputJson(raw)
+            // Pure reads — no BLE traffic. Resolved after the sweep so the line
+            // frequency reflects whatever the sweep just brought in; firmware-
+            // UpdateStatus() is logged and the de1Firmware label drives the row.
+            runCatching { bridge.firmwareUpdateStatus() }.onSuccess { status ->
+                appendLog("Firmware update status: $status")
+            }.onFailure { appendLog("Firmware update status failed: ${it.message}") }
+            val freq = runCatching { bridge.lineFrequencyHz() }.getOrNull()
+            _ui.update { it.copy(lineFreqHz = freq) }
         }
-        // Pure reads — no BLE traffic, safe anytime. firmwareUpdateStatus() is
-        // a JSON FirmwareUpdateStatus (logged for now; the de1Firmware label
-        // drives the Settings firmware row). lineFrequencyHz() resolves the
-        // mains frequency the core is using.
-        runCatching { bridge.firmwareUpdateStatus() }.onSuccess { status ->
-            appendLog("Firmware update status: $status")
-        }.onFailure { appendLog("Firmware update status failed: ${it.message}") }
-        val freq = runCatching { bridge.lineFrequencyHz() }.getOrNull()
-        _ui.update { it.copy(lineFreqHz = freq) }
     }
 
     // ── Settings: machine setters (Settings → Machine / Advanced / Service) ────
@@ -1645,10 +1742,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * GHC_MODE so the row reflects the machine's confirmed state.
      */
     fun setGhcMode(enabled: Boolean) {
-        // setGhcMode takes a UByte. A CONST `1.toUByte()` trips the const-eval
-        // backend bug (Unknown function: toUByte(kotlin.Int)) — derive the Int
-        // from the runtime `enabled` first so `.toUByte()` is a runtime call.
-        val modeInt = if (enabled) 1 else 0
+        // GHC_MODE "on" is 4 — the legacy de1app "all GHC buttons enabled" value
+        // the web writes (`setGhcMode(v ? 4 : 0)`). Writing 1 isn't a valid mode,
+        // so the DE1 ignored it and the GHC_MODE re-read snapped the toggle back
+        // off. (Derive the Int from the runtime `enabled` first so `.toUByte()` is
+        // a runtime call — a const `4.toUByte()` trips the const-eval backend bug.)
+        val modeInt = if (enabled) 4 else 0
         val mode: UByte = modeInt.toUByte()
         val raw = runCatching { bridge.setGhcMode(mode) }.getOrElse {
             appendLog("Set GHC mode failed: ${it.message}")
@@ -1658,7 +1757,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // Optimistically reflect the write so the toggle tracks immediately;
         // the GhcMode register reply (re-read below) then confirms it.
         _ui.update { it.copy(
-            de1MachineInfo = it.de1MachineInfo + (MmrRegister.GhcMode to (if (enabled) 1u else 0u)),
+            de1MachineInfo = it.de1MachineInfo + (MmrRegister.GhcMode to (if (enabled) 4u else 0u)),
         ) }
         runCatching { bridge.readMmr(MmrReg.GHC_MODE) }.getOrNull()?.let(::onCoreOutputJson)
     }
@@ -1697,6 +1796,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         val resolved = runCatching { bridge.lineFrequencyHz() }.getOrNull() ?: hz
+        _ui.update { it.copy(lineFreqHz = resolved, lineFreqOverride = hz) }
+    }
+
+    /** Re-read the auto-detector's current resolved line frequency so the AC-
+     *  frequency hint can show "Currently locked at X Hz" live while on Auto. */
+    fun refreshLineFrequency() {
+        val resolved = runCatching { bridge.lineFrequencyHz() }.getOrNull()
         _ui.update { it.copy(lineFreqHz = resolved) }
     }
 
@@ -1746,6 +1852,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         qcFlushTempC = _ui.value.qcFlushTempC,
         qcGrind = _ui.value.qcGrind,
         activeProfileId = _ui.value.activeProfileId,
+        de1Address = _ui.value.rememberedDe1Address,
+        scaleAddress = _ui.value.rememberedScaleAddress,
     )
 
     /** True once [loadPrefs] has hydrated the UI from disk — writes before that
@@ -1810,6 +1918,32 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         runCatching { bridge.setStopOnWeight(enabled) }.onFailure {
             appendLog("Set stop-on-weight failed: ${it.message}")
         }
+        persistPrefs()
+    }
+
+    // ── Auto-connect (per device) ─────────────────────────────────────────────
+
+    /** Per-device "Auto-connect" toggle for the DE1. ON remembers the device (so
+     *  the app reconnects on an unexpected drop and connects on launch); OFF
+     *  forgets it — clears the saved address and disarms reconnect, WITHOUT
+     *  dropping the current session. Mirrored into the manager immediately. */
+    fun setDe1AutoConnect(on: Boolean) {
+        val addr = if (on) (_ui.value.de1BluetoothAddress ?: _ui.value.rememberedDe1Address) else null
+        _ui.update { it.copy(rememberedDe1Address = addr) }
+        ble.autoReconnectEnabled = addr != null
+        // Turning it off while a (cold-start) scan/connect is still in flight cancels
+        // it, so a pending auto-connect can't immediately re-remember the device. A
+        // live (READY) session is left connected — off just means "don't reconnect".
+        if (!on && ble.state.value != De1BleManager.State.READY) disconnect()
+        persistPrefs()
+    }
+
+    /** Per-device "Auto-connect" toggle for the scale (the scale-side twin). */
+    fun setScaleAutoConnect(on: Boolean) {
+        val addr = if (on) (scale.connectedAddress ?: _ui.value.rememberedScaleAddress) else null
+        _ui.update { it.copy(rememberedScaleAddress = addr) }
+        scale.autoReconnectEnabled = addr != null
+        if (!on && scale.state.value != ScaleBleManager.State.READY) disconnectScale()
         persistPrefs()
     }
 
@@ -2129,7 +2263,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val wireRoaster = bean.roasterId?.let { wireRoasterById[it] }
             val libRoaster = wireRoaster?.name?.let { existingRoasterByLc[it.trim().lowercase()] }
             val resolved = when {
-                libRoaster != null && wireRoaster != null && wireRoaster.id != libRoaster.id -> bean.copy(roasterId = libRoaster.id)
+                libRoaster != null && wireRoaster.id != libRoaster.id -> bean.copy(roasterId = libRoaster.id)
                 else -> { if (wireRoaster != null) keptRoasterIds.add(wireRoaster.id); bean }
             }
             val tripleDupe = libRoaster != null && s.beans.any {
@@ -2604,13 +2738,27 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // Restore the last session's profile selection; refreshProfiles
             // self-heals if the id no longer resolves (e.g. deleted custom).
             activeProfileId = p.activeProfileId ?: it.activeProfileId,
+            rememberedDe1Address = p.de1Address,
+            rememberedScaleAddress = p.scaleAddress,
         ) }
         // Push the persisted cap + behaviour toggles to the core so they're live
         // from launch (the core doesn't echo these back as events).
         runCatching { bridge.setMaxShotDuration(p.maxShotDurationS) }
         runCatching { bridge.setAutoTare(p.autoTare) }
         runCatching { bridge.setStopOnWeight(p.stopOnWeight) }
+        // Per-device auto-connect = a remembered address: arm each manager's
+        // link-drop loop only for a device whose Auto-connect is ON.
+        ble.autoReconnectEnabled = p.de1Address != null
+        scale.autoReconnectEnabled = p.scaleAddress != null
         prefsLoaded = true
+        // Cold-start: auto-connect to each remembered device. Connects to the
+        // first DE1/scale matched by name — in the common single-machine setup
+        // that is the remembered one. Best-effort: a missing BLE permission (or no
+        // device in range) just no-ops.
+        runCatching {
+            if (p.de1Address != null && ble.state.value == De1BleManager.State.IDLE) connect()
+            if (p.scaleAddress != null && scale.state.value == ScaleBleManager.State.IDLE) connectScale()
+        }
     }
 
     /** Equipment-level grinder model (free text). Persisted; rides Visualizer

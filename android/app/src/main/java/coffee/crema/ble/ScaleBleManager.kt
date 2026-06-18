@@ -5,12 +5,15 @@ import android.util.Log
 import coffee.crema.core.CremaBridge
 import coffee.crema.core.NotificationSource
 import coffee.crema.core.ScaleUuids as CoreScaleUuids
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.onEach
@@ -101,6 +104,9 @@ class ScaleBleManager(
     /** The connected scale, or null when not connected. */
     private var device: BleTransport.DeviceHandle? = null
 
+    /** The connected scale's Bluetooth address (for remembering it), or null. */
+    val connectedAddress: String? get() = device?.address
+
     /** The job collecting the weight-notify stream. */
     private var observeJob: Job? = null
 
@@ -125,6 +131,26 @@ class ScaleBleManager(
     private var weightNotifyUuid: UUID? = null
     private var commandUuid: UUID? = null
 
+    /** The advertised name of the connected scale, kept so a reconnect can
+     *  re-identify the codec via [CremaBridge.connectScale]. */
+    private var advertisedName: String? = null
+
+    /**
+     * Whether to auto-reconnect after an *unexpected* link drop (M0). Kept in
+     * sync with the user's "Auto-reconnect" setting by
+     * [coffee.crema.ui.MainViewModel].
+     */
+    @Volatile
+    var autoReconnectEnabled: Boolean = true
+
+    /** Set when a user-initiated [disconnect] begins, so the reconnect [session]
+     *  loop knows a drop was intentional (don't reconnect). */
+    @Volatile
+    private var userInitiated = false
+
+    /** The connect-and-reconnect supervisor loop; cancelled on [disconnect]. */
+    private var sessionJob: Job? = null
+
     // ---- Connect ----------------------------------------------------------
 
     /**
@@ -146,87 +172,151 @@ class ScaleBleManager(
      */
     fun connect(device: BleTransport.DeviceHandle, advertisedName: String) {
         this.device = device
+        this.advertisedName = advertisedName
+        userInitiated = false
         _state.value = State.CONNECTING
         onStatus("Connecting to scale…")
-        scope.launch {
-            try {
-                // BleTransport.connect suspends until connected AND services
-                // are discovered.
-                transport.connect(device)
-                _state.value = State.DISCOVERING
-                onStatus("Scale connected — discovering services…")
+        // One supervisor coroutine owns connect → (drop → reconnect)*; a
+        // user-initiated disconnect() cancels it.
+        sessionJob?.cancel()
+        sessionJob = scope.launch { session(device, advertisedName) }
+    }
 
-                // Join the shared session recording; if this connection opened
-                // the capture file, surface its path once so the user can find
-                // it. A concurrent DE1 connection appends to the same file.
-                recording = true
-                recorder.open()?.let { onStatus("Recording session to $it") }
+    /**
+     * Establish the scale link, then watch for drops and auto-reconnect (M0) —
+     * the scale-side twin of [De1BleManager.session]. A clean teardown ends the
+     * session; an unexpected `FAILED` triggers a backoff reconnect on the same
+     * handle (re-identifying the codec each time), up to [MAX_RECONNECT_ATTEMPTS].
+     */
+    private suspend fun session(device: BleTransport.DeviceHandle, advertisedName: String) {
+        var attempt = 0
+        var everConnected = false
+        try {
+            while (true) {
+                val connected = try {
+                    establish(device, advertisedName, firstConnect = !everConnected)
+                    true
+                } catch (c: CancellationException) {
+                    throw c // never swallow cancellation
+                } catch (e: Exception) {
+                    Log.w(TAG, "Scale connect failed", e)
+                    onStatus("Scale connection failed: ${e.message}")
+                    false
+                }
 
-                // Identify the scale with the core so it selects the right codec.
-                // An unrecognised scale can't be decoded — bail rather than
-                // subscribe to a guessed characteristic.
-                val label = runCatching { bridge.connectScale(advertisedName) }.getOrNull()
-                    ?: error("Core did not recognise scale '$advertisedName'")
-                onStatus("Core recognised scale: $label")
-
-                // Source the GATT characteristics from the CONNECTED scale: the
-                // core knows them per model (`scaleUuids()`), so this manager no
-                // longer hardcodes one scale's UUIDs — it subscribes to whatever
-                // scale the core identified. (The web shell does the same.)
-                val coreUuids = json.decodeFromString(
-                    CoreScaleUuids.serializer(),
-                    bridge.scaleUuids() ?: error("Core reported no UUIDs for '$label'"),
-                )
-                serviceUuid = UUID.fromString(coreUuids.service)
-                weightNotifyUuid = UUID.fromString(coreUuids.weight_notify)
-                commandUuid = UUID.fromString(coreUuids.command_write)
-
-                // The core now knows the scale's codec; let the owner read its
-                // capabilities and render capability-gated config UI. The
-                // advertised name goes along so the owner can show the scale's
-                // identity in the card right away.
-                onScaleIdentified(advertisedName)
-
-                _state.value = State.SUBSCRIBING
-                onStatus("Subscribing to scale weight…")
-                // Observe the weight-notify characteristic, plus the command
-                // characteristic when it's distinct (some scales use a single
-                // characteristic for both — Bookoo splits them ff11 / ff12). The
-                // command channel also NOTIFYs the scale's serial / settings
-                // responses, fed to the core under SCALE_COMMAND — see
-                // handleCommandNotification. The streams merge into one collected
-                // flow so per-device notification ordering is preserved (see
-                // BleTransport.observe's contract).
-                val service = serviceUuid!!
-                val weight = weightNotifyUuid!!
-                val command = commandUuid!!
-                val notifications = if (command == weight) {
-                    transport.observe(device, service, weight)
+                if (connected) {
+                    everConnected = true
+                    attempt = 0
+                    _state.value = State.READY
+                    onStatus("Ready — receiving scale weight")
+                    transport.connectionState(device).first {
+                        it == BleTransport.ConnState.FAILED || it == BleTransport.ConnState.DISCONNECTED
+                    }
+                    if (userInitiated) return
+                    if (!autoReconnectEnabled) { onStatus("Scale disconnected"); break }
+                    onStatus("Scale connection lost — reconnecting…")
                 } else {
-                    merge(
-                        transport.observe(device, service, weight),
-                        transport.observe(device, service, command),
-                    )
+                    if (userInitiated) return
+                    if (!autoReconnectEnabled) break
                 }
-                observeJob = notifications.onEach { handleNotification(it) }.launchIn(scope)
 
-                _state.value = State.READY
-                onStatus("Ready — receiving scale weight")
-            } catch (e: Exception) {
-                Log.w(TAG, "Scale connect failed", e)
-                onStatus("Scale connection failed: ${e.message}")
-                _state.value = State.DISCONNECTED
-                // Leave the shared recording only if this connection had joined
-                // it (a failure during transport.connect never opened it).
-                if (recording) {
-                    recording = false
-                    recorder.close()
+                attempt++
+                if (attempt > MAX_RECONNECT_ATTEMPTS) {
+                    onStatus("Scale reconnect gave up after $MAX_RECONNECT_ATTEMPTS attempts")
+                    break
                 }
+                _state.value = State.CONNECTING
+                onStatus("Reconnecting to scale (attempt $attempt of $MAX_RECONNECT_ATTEMPTS)…")
+                delay(backoffMs(attempt))
+            }
+        } finally {
+            // Session end via a non-user path: clear the scale slice so a
+            // vanished scale leaves no stale weight. A user disconnect() does its
+            // own teardown, guarded by userInitiated.
+            if (!userInitiated) {
+                if (recording) { recording = false; recorder.close() }
+                this@ScaleBleManager.device = null
+                serviceUuid = null
+                weightNotifyUuid = null
+                commandUuid = null
+                bridge.disconnectScale()
+                _state.value = State.DISCONNECTED
             }
         }
     }
 
+    /** One connect attempt: connect + discover + identify codec + (re)subscribe.
+     *  Throws on failure so [session] can back off and retry. */
+    private suspend fun establish(
+        device: BleTransport.DeviceHandle,
+        advertisedName: String,
+        firstConnect: Boolean,
+    ) {
+        _state.value = State.CONNECTING
+        onStatus(if (firstConnect) "Connecting to scale…" else "Reconnecting to scale…")
+        // BleTransport.connect suspends until connected AND services discovered.
+        transport.connect(device)
+        _state.value = State.DISCOVERING
+        onStatus("Scale connected — discovering services…")
+
+        // Join the shared session recording ONCE per session (not per reconnect),
+        // so the recorder open/close ref-count stays balanced across drops.
+        if (!recording) {
+            recording = true
+            recorder.open()?.let { onStatus("Recording session to $it") }
+        }
+
+        // Identify the scale with the core so it selects the right codec. An
+        // unrecognised scale can't be decoded — bail rather than subscribe to a
+        // guessed characteristic.
+        val label = runCatching { bridge.connectScale(advertisedName) }.getOrNull()
+            ?: error("Core did not recognise scale '$advertisedName'")
+        onStatus("Core recognised scale: $label")
+
+        // Source the GATT characteristics from the CONNECTED scale: the core
+        // knows them per model (`scaleUuids()`), so this manager subscribes to
+        // whatever scale the core identified. (The web shell does the same.)
+        val coreUuids = json.decodeFromString(
+            CoreScaleUuids.serializer(),
+            bridge.scaleUuids() ?: error("Core reported no UUIDs for '$label'"),
+        )
+        serviceUuid = UUID.fromString(coreUuids.service)
+        weightNotifyUuid = UUID.fromString(coreUuids.weight_notify)
+        commandUuid = UUID.fromString(coreUuids.command_write)
+
+        // The core now knows the scale's codec; let the owner read its
+        // capabilities and render capability-gated config UI.
+        onScaleIdentified(advertisedName)
+
+        _state.value = State.SUBSCRIBING
+        onStatus("Subscribing to scale weight…")
+        // Observe the weight-notify characteristic, plus the command
+        // characteristic when it's distinct (Bookoo splits them ff11 / ff12). The
+        // command channel also NOTIFYs the scale's serial / settings responses,
+        // fed to the core under SCALE_COMMAND — see handleCommandNotification. The
+        // streams merge into one collected flow so per-device notification
+        // ordering is preserved (see BleTransport.observe's contract).
+        val service = serviceUuid!!
+        val weight = weightNotifyUuid!!
+        val command = commandUuid!!
+        observeJob?.cancel() // a reconnect re-subscribes on the same handle
+        val notifications = if (command == weight) {
+            transport.observe(device, service, weight)
+        } else {
+            merge(
+                transport.observe(device, service, weight),
+                transport.observe(device, service, command),
+            )
+        }
+        observeJob = notifications.onEach { handleNotification(it) }.launchIn(scope)
+    }
+
     fun disconnect() {
+        // Mark intentional BEFORE cancelling so the session loop knows not to
+        // reconnect.
+        userInitiated = true
+        sessionJob?.cancel()
+        sessionJob = null
         val d = device
         // Leave the shared recording; the capture file closes only once the
         // last device (DE1 or scale) has disconnected.
@@ -360,6 +450,13 @@ class ScaleBleManager(
 
     companion object {
         private const val TAG = "ScaleBleManager"
+
+        /** Reconnect attempts after an unexpected drop before giving up (~web's 8). */
+        private const val MAX_RECONNECT_ATTEMPTS = 8
+
+        /** Exponential backoff: 500 ms doubling, capped at 30 s (mirrors the web). */
+        private fun backoffMs(attempt: Int): Long =
+            (500L shl (attempt - 1).coerceIn(0, 10)).coerceAtMost(30_000L)
 
         /**
          * The advertised-name prefix a Bookoo scale is discovered by. This is a

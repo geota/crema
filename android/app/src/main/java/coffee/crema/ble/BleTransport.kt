@@ -140,6 +140,19 @@ interface BleTransport {
     )
 
     /**
+     * Read the current value of [characteristic] once (a GATT read), suspending
+     * until it arrives; throws on failure. Used for the connect-time seed reads
+     * (firmware / machine-state / shot-settings) the DE1 answers on a direct
+     * read but does NOT re-emit as a notification at connect — so subscribing
+     * alone never surfaces them.
+     */
+    suspend fun read(
+        device: DeviceHandle,
+        service: UUID,
+        characteristic: UUID,
+    ): ByteArray
+
+    /**
      * One characteristic-value notification.
      *
      * @property characteristic the source characteristic's UUID, so a manager

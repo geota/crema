@@ -10,6 +10,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import kotlinx.coroutines.delay
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -40,6 +41,7 @@ import coffee.crema.ui.screens.flowMultiplierValue
 import coffee.crema.ui.screens.ghcModeOn
 import coffee.crema.ui.screens.ghcPresent
 import coffee.crema.ui.screens.hasCupWarmerPlate
+import coffee.crema.ui.screens.firmwareLabel
 import coffee.crema.ui.screens.heaterVoltageLabel
 import coffee.crema.ui.screens.heaterVoltageValue
 import coffee.crema.ui.screens.machineModelLabel
@@ -203,7 +205,7 @@ fun PhoneSettingsScreen(
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Text("Decent DE1", style = MaterialTheme.typography.titleMedium)
                         Text(
-                            if (connected) listOfNotNull(ui.de1Firmware?.let { "Firmware $it" }, ui.headTemp?.let { formatTemp(it, ui.tempUnit) }).joinToString(" · ").ifEmpty { "Connected" }
+                            if (connected) listOfNotNull(firmwareLabel(ui.de1MachineInfo, ui.de1Firmware).takeIf { it != "—" }?.let { "Firmware $it" }, ui.headTemp?.let { formatTemp(it, ui.tempUnit) }).joinToString(" · ").ifEmpty { "Connected" }
                             else "Not connected",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -230,7 +232,7 @@ fun PhoneSettingsScreen(
                 )
                 items.forEach { (id, icon, title) ->
                     val sub = when (id) {
-                        "machine" -> if (connected) listOfNotNull("DE1", "connected", ui.de1Firmware?.let { "FW $it" }).joinToString(" · ") else "Not connected"
+                        "machine" -> if (connected) listOfNotNull("DE1", "connected", firmwareLabel(ui.de1MachineInfo, ui.de1Firmware).takeIf { it != "—" }?.let { "FW $it" }).joinToString(" · ") else "Not connected"
                         "peripherals" -> if (scaleConnected) (ui.scaleName ?: "Scale connected") else "Scale, grinder"
                         "brew" -> "Targets, shot behaviour"
                         "water" -> "Tank, cycles, reminders"
@@ -270,10 +272,10 @@ private fun MachineSection(
                 }
                 Text("DE1 · Crema", style = MaterialTheme.typography.titleMedium)
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    HeroKV("Firmware", if (connected) (ui.de1Firmware ?: "—") else "—")
+                    HeroKV("Firmware", if (connected) firmwareLabel(ui.de1MachineInfo, ui.de1Firmware) else "—")
                     HeroKV("Model", if (connected) machineModelLabel(ui.de1MachineInfo) else "—")
                     HeroKV("Board", if (connected) cpuBoardLabel(ui.de1MachineInfo) else "—")
-                    HeroKV("BLE", if (connected) "Paired" else "—")
+                    HeroKV("BLE", if (connected) (ui.de1BluetoothAddress ?: "Paired") else "—")
                 }
                 CremaButton(
                     onClick = { onConnect("machine") },
@@ -290,6 +292,9 @@ private fun MachineSection(
         CremaSettingsRow("Keep DE1 awake while Crema is open", "Re-arms the DE1's sleep timer every minute so the machine stays ready.") {
             CremaSwitch(ui.suppressDe1Sleep, vm::setSuppressDe1Sleep)
         }
+        CremaSettingsRow("Auto-connect", "Reconnect to this DE1 automatically after a dropout, and on launch. Turning it off forgets the device.") {
+            CremaSwitch(ui.rememberedDe1Address != null, vm::setDe1AutoConnect, enabled = connected || ui.rememberedDe1Address != null)
+        }
         val ghcOn = ghcModeOn(ui.de1MachineInfo) ?: false
         val ghcAvailable = connected && (ghcPresent(ui.de1MachineInfo) == true)
         CremaSettingsRow("Group Head Controller (GHC)", "Start shots from the machine's touch panel.", last = true, needsConnection = !connected) {
@@ -300,7 +305,7 @@ private fun MachineSection(
         CremaSettingsRow("Model") { CremaMonoReadout(machineModelLabel(ui.de1MachineInfo), strong = true) }
         CremaSettingsRow("Serial number") { CremaMonoReadout(serialLabel(ui.de1MachineInfo), strong = true) }
         CremaSettingsRow("CPU board") { CremaMonoReadout(cpuBoardLabel(ui.de1MachineInfo), strong = true) }
-        CremaSettingsRow("Firmware") { CremaMonoReadout(ui.de1Firmware ?: "—", strong = true) }
+        CremaSettingsRow("Firmware") { CremaMonoReadout(firmwareLabel(ui.de1MachineInfo, ui.de1Firmware), strong = true) }
         CremaSettingsRow("Heater voltage", last = true) { CremaMonoReadout(heaterVoltageLabel(ui.de1MachineInfo), strong = true) }
     }
     SettingsGroup("Diagnostics") {
@@ -315,7 +320,12 @@ private fun MachineSection(
     if (hasCupWarmerPlate(ui.de1MachineInfo)) {
         SettingsGroup("Cup warmer") {
             val plate = cupWarmerTempValue(ui.de1MachineInfo) ?: 25
-            CremaSettingsRow("Plate temperature", "The Bengle warming plate's target.", last = true, needsConnection = !connected) {
+            CremaSettingsRow(
+                "Plate temperature", "The Bengle warming plate's target.", last = true,
+                needsConnection = !connected,
+                dot = true, dotOn = plate > 0,
+                onDot = { if (connected) vm.setCupWarmerTemp(if (plate > 0) 0 else 55) },
+            ) {
                 CremaStepper(
                     value = plate.toDouble(), unit = "°C", step = 1.0, min = 0.0, max = 80.0,
                     fmt = { "%.0f".format(it) }, style = CremaStepperStyle.BareCompact,
@@ -378,14 +388,18 @@ private fun BrewDefaultsSection(vm: MainViewModel, ui: coffee.crema.ui.MainUiSta
         CremaSettingsRow("Default brew temp", "Starting group temperature.") {
             CremaStepper(value = dT.toDouble(), unit = "°C", step = 0.5, min = 80.0, max = 100.0, fmt = { "%.1f".format(it) }, style = CremaStepperStyle.BareCompact, onChange = { setDefs(dD, dR, it.toFloat(), dP) })
         }
-        CremaSettingsRow("Default pre-infusion", "Low-pressure soak before the main shot.", last = true) {
+        CremaSettingsRow("Default pre-infusion", "Low-pressure soak before the main shot.", last = true, dot = true, dotOn = dP > 0f, onDot = { setDefs(dD, dR, dT, if (dP > 0f) 0f else 8f) }) {
             CremaStepper(value = dP.toDouble(), unit = "s", step = 1.0, min = 0.0, max = 60.0, fmt = { "%.0f".format(it) }, style = CremaStepperStyle.BareCompact, onChange = { setDefs(dD, dR, dT, it.toFloat()) })
         }
     }
     SettingsGroup("Shot behaviour") {
         CremaSettingsRow("Auto-tare on shot start", "Zero the scale automatically when extraction begins.") { CremaSwitch(ui.autoTare, vm::setAutoTare) }
         CremaSettingsRow("Stop on weight", "End the shot once the target yield is reached.") { CremaSwitch(ui.stopOnWeight, vm::setStopOnWeight) }
-        CremaSettingsRow("Max shot duration", "Hard time cap — also a Brew stop condition.") {
+        CremaSettingsRow(
+            "Max shot duration", "Hard time cap — also a Brew stop condition.",
+            dot = true, dotOn = ui.maxShotDurationS > 0f,
+            onDot = { vm.setMaxShotDuration(if (ui.maxShotDurationS > 0f) 0f else 60f) },
+        ) {
             val maxDur = ui.maxShotDurationS.toInt()
             CremaStepper(
                 value = maxDur.toDouble(), unit = "s", step = 5.0, min = 0.0, max = 300.0,
@@ -483,11 +497,12 @@ private fun WaterSection(
         }
     }
     SettingsGroup("Water chemistry") {
-        CremaSettingsRow("Water source", "Your feed water — tunes descale intervals.", notImplemented = true) {
+        CremaSettingsRow("Water source", "Tunes descale intervals.", notImplemented = true, stacked = true) {
             CremaSegmentedButton(
-                options = listOf(SegOption("tap", "Tap"), SegOption("filtered", "Filtered"), SegOption("bottled", "Bottled")),
+                options = listOf(SegOption("tap", "Tap"), SegOption("filtered", "Filtered"), SegOption("bottled", "Bottled"), SegOption("rpavlis", "RPavlis")),
                 value = waterSource,
                 onChange = onWaterSource,
+                fillWidth = true,
             )
         }
         CremaSettingsRow("Hardness", "General hardness (GH).", notImplemented = true) {
@@ -517,6 +532,7 @@ private fun DisplaySection(
                 options = listOf(SegOption("light", "Light"), SegOption("dark", "Dark"), SegOption("system", "Auto")),
                 value = if (themeMode in setOf("light", "dark", "system")) themeMode else "dark",
                 onChange = vm::setThemeMode,
+                uniform = true,
             )
         }
         CremaSettingsRow("Density", "Card padding and control sizing.", notImplemented = true) {
@@ -524,6 +540,7 @@ private fun DisplaySection(
                 options = listOf(SegOption("compact", "Compact"), SegOption("comfortable", "Cozy")),
                 value = density,
                 onChange = onDensity,
+                uniform = true,
             )
         }
         CremaSettingsRow("Screensaver", "Dim the display after a period idle.", notImplemented = true) { CremaSwitch(screensaver, onScreensaver) }
@@ -535,6 +552,7 @@ private fun DisplaySection(
                 options = listOf(SegOption("C", "°C"), SegOption("F", "°F")),
                 value = tempUnit,
                 onChange = vm::setTempUnit,
+                groupWidth = 144.dp,
             )
         }
         CremaSettingsRow("Weight", "Units for dose and yield.") {
@@ -542,6 +560,7 @@ private fun DisplaySection(
                 options = listOf(SegOption("g", "g"), SegOption("oz", "oz")),
                 value = weightUnit,
                 onChange = vm::setWeightUnit,
+                groupWidth = 144.dp,
             )
         }
         CremaSettingsRow("Pressure", "Units for the pressure channel.") {
@@ -549,6 +568,7 @@ private fun DisplaySection(
                 options = listOf(SegOption("bar", "bar"), SegOption("psi", "psi")),
                 value = pressureUnit,
                 onChange = vm::setPressureUnit,
+                groupWidth = 144.dp,
             )
         }
         CremaSettingsRow("Volume", "Units for water and yield volume.", last = true) {
@@ -556,6 +576,7 @@ private fun DisplaySection(
                 options = listOf(SegOption("ml", "ml"), SegOption("floz", "fl oz")),
                 value = volumeUnit,
                 onChange = vm::setVolumeUnit,
+                groupWidth = 144.dp,
             )
         }
     }
@@ -607,6 +628,7 @@ private fun SharingSection(
                     options = listOf(SegOption("off", "Off"), SegOption("backup", "Push"), SegOption("pull", "Pull"), SegOption("two-way", "Both")),
                     value = vz.shotsDirection,
                     onChange = vm.visualizer::setShotsDirection,
+                    uniform = true,
                 )
             }
             CremaSettingsRow("Auto-sync new shots", "Upload each shot as it finishes (needs a pushing direction).") {
@@ -634,6 +656,7 @@ private fun SharingSection(
                     options = listOf(SegOption("public", "Public"), SegOption("unlisted", "Unlisted"), SegOption("private", "Private")),
                     value = vz.privacy,
                     onChange = vm.visualizer::setPrivacy,
+                    uniform = true,
                 )
             }
             CremaSettingsRow("Include profile", "Attach the full recipe (every segment) to uploads.") { CremaSwitch(vz.includeProfile, vm.visualizer::setIncludeProfile) }
@@ -728,17 +751,32 @@ private fun AdvancedSection(
     onErase: () -> Unit,
 ) {
     SettingsGroup("Telemetry") {
-        val freqValue = when (ui.lineFreqHz) {
+        // The toggle reflects the user's OVERRIDE (auto/50/60), not the resolved
+        // value — so it stays on "Auto" once the detector locks a frequency.
+        val freqValue = when (ui.lineFreqOverride) {
             50.0f -> "50"
             60.0f -> "60"
             else -> "auto"
         }
-        CremaSettingsRow("AC mains frequency", "Match your wall power for clean temperature control.", needsConnection = !connected) {
+        // On Auto, poll the resolved Hz (~1s; the DE1 locks ~1s into the first
+        // shot) so the hint shows it live — mirrors the web's auto-detect hint.
+        if (connected && ui.lineFreqOverride == 0.0f) {
+            LaunchedEffect(Unit) { while (true) { vm.refreshLineFrequency(); delay(1000) } }
+        }
+        val detectedHz = ui.lineFreqHz?.takeIf { it > 0f }?.toInt()
+        val freqSub = if (ui.lineFreqOverride == 0.0f) {
+            "Auto-detected from the DE1's sample stream. " +
+                (detectedHz?.let { "Currently locked at $it Hz." } ?: "Locks ~1s into the first shot.")
+        } else {
+            "Pinned at ${ui.lineFreqOverride.toInt()} Hz — switch to Auto to let the detector run."
+        }
+        CremaSettingsRow("AC mains frequency", freqSub, needsConnection = !connected) {
             CremaSegmentedButton(
                 options = listOf(SegOption("auto", "Auto"), SegOption("50", "50"), SegOption("60", "60")),
                 value = freqValue,
                 onChange = { if (it == "auto") vm.setLineFrequency(0.0f) else onStageLineFreq(it) },
                 enabled = connected,
+                uniform = true,
             )
         }
         CremaSettingsRow("Smooth pressure curve", "Filter chart noise on the live readout.", last = true, notImplemented = true) { CremaSwitch(smoothPressure, onSmoothPressure) }
@@ -780,13 +818,17 @@ private fun AdvancedSection(
         }
     }
     SettingsGroup("Service-grade") {
-        val hv = heaterVoltageValue(ui.de1MachineInfo) ?: "230"
+        // null until the connected DE1 reports its mains voltage (raw HeaterVoltage MMR).
+        val hv = heaterVoltageValue(ui.de1MachineInfo)
         CremaSettingsRow("Mains heater voltage", "Wrong voltage damages the heater — service only.", last = true, needsConnection = !connected) {
             CremaSegmentedButton(
                 options = listOf(SegOption("120", "120 V"), SegOption("230", "230 V")),
-                value = hv,
+                // No segment selected until the machine reports — matches the "—" in the
+                // Machine readout above, rather than misleadingly defaulting to 230 V.
+                value = hv ?: "",
                 onChange = { if (it != hv) onStageHeaterVoltage(it) },
                 enabled = connected,
+                uniform = true,
             )
         }
     }

@@ -79,6 +79,13 @@ data class AppPrefs(
     // ── Session restore ──────────────────────────────────────────────────────
     /** The last active profile id, restored on launch (web `crema.profiles.activeId`). */
     val activeProfileId: String? = null,
+    // ── Connection (auto-connect is per-device = a remembered address) ───────
+    /** Remembered DE1 Bluetooth address — the auto-connect target (reconnect on
+     *  an unexpected drop + connect on launch). Non-null ⟺ the DE1's
+     *  "Auto-connect" is ON; turning the toggle OFF clears it (forget). */
+    val de1Address: String? = null,
+    /** Remembered scale Bluetooth address (same per-device auto-connect rule). */
+    val scaleAddress: String? = null,
 )
 
 /** File-backed JSON persistence for [AppPrefs] (`filesDir/prefs.json`). */

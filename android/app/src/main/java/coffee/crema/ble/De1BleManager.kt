@@ -8,12 +8,15 @@ import coffee.crema.core.WriteTarget
 import coffee.crema.core.de1Uuids
 import kotlinx.serialization.json.Json
 import java.util.UUID
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.onEach
@@ -77,6 +80,9 @@ class De1BleManager(
     /** The connected DE1, or null when not connected. */
     private var device: BleTransport.DeviceHandle? = null
 
+    /** The connected DE1's Bluetooth address (for the Settings "BLE" row), or null. */
+    val connectedAddress: String? get() = device?.address
+
     /** The job collecting the merged StateInfo + ShotSample stream. */
     private var observeJob: Job? = null
 
@@ -87,6 +93,25 @@ class De1BleManager(
      * which path — success, connect failure, or [disconnect] — releases it.
      */
     private var recording = false
+
+    /**
+     * Whether to auto-reconnect after an *unexpected* link drop (issue: M0).
+     * Owned by the user's "Auto-reconnect" setting; [coffee.crema.ui.MainViewModel]
+     * keeps it in sync with [coffee.crema.settings.AppPrefs.autoReconnect].
+     */
+    @Volatile
+    var autoReconnectEnabled: Boolean = true
+
+    /**
+     * Set the instant a user-initiated [disconnect] begins, so the reconnect
+     * [session] loop knows a drop was intentional (don't reconnect) vs. a link
+     * loss (do). Reset to false at the start of each [connect].
+     */
+    @Volatile
+    private var userInitiated = false
+
+    /** The connect-and-reconnect supervisor loop; cancelled on [disconnect]. */
+    private var sessionJob: Job? = null
 
     // ---- Connect ----------------------------------------------------------
 
@@ -108,43 +133,119 @@ class De1BleManager(
      */
     fun connect(device: BleTransport.DeviceHandle) {
         this.device = device
+        userInitiated = false
         _state.value = State.CONNECTING
         onStatus("Connecting…")
-        scope.launch {
-            try {
-                // BleTransport.connect suspends until connected AND services
-                // are discovered.
-                transport.connect(device)
-                _state.value = State.DISCOVERING
-                onStatus("Connected — discovering services…")
+        // One supervisor coroutine owns the whole connect → (drop → reconnect)*
+        // lifecycle; a user-initiated disconnect() cancels it.
+        sessionJob?.cancel()
+        sessionJob = scope.launch { session(device) }
+    }
 
-                // Join the shared session recording; if this connection opened
-                // the capture file, surface its path once so the user can find
-                // it. A later scale connection appends to the same file.
-                recording = true
-                recorder.open()?.let { onStatus("Recording session to $it") }
-
-                _state.value = State.SUBSCRIBING
-                onStatus("Subscribing to StateInfo + ShotSample…")
-                startObserving(device)
-
-                _state.value = State.READY
-                onStatus("Ready — receiving DE1 notifications")
-            } catch (e: Exception) {
-                Log.w(TAG, "DE1 connect failed", e)
-                onStatus("Connection failed: ${e.message}")
-                _state.value = State.DISCONNECTED
-                // Leave the shared recording only if this connection had joined
-                // it (a failure during transport.connect never opened it).
-                if (recording) {
-                    recording = false
-                    recorder.close()
+    /**
+     * Establish the link, then watch for drops and auto-reconnect (M0).
+     *
+     * After a successful [establish] the loop suspends on the transport's
+     * [BleTransport.connectionState] until the link is gone. A clean teardown
+     * (`DISCONNECTED` — e.g. the user tapped Disconnect) ends the session; an
+     * unexpected loss (`FAILED`) triggers a backoff reconnect on the SAME
+     * peripheral handle (it survives in the transport), up to
+     * [MAX_RECONNECT_ATTEMPTS]. The DE1 keeps running its profile autonomously
+     * during the gap; on reconnect the seed reads re-sync machine state.
+     */
+    private suspend fun session(device: BleTransport.DeviceHandle) {
+        var attempt = 0
+        var everConnected = false
+        try {
+            while (true) {
+                val connected = try {
+                    establish(device, firstConnect = !everConnected)
+                    true
+                } catch (c: CancellationException) {
+                    throw c // never swallow cancellation (disconnect / onCleared)
+                } catch (e: Exception) {
+                    Log.w(TAG, "DE1 connect failed", e)
+                    onStatus("Connection failed: ${e.message}")
+                    false
                 }
+
+                if (connected) {
+                    everConnected = true
+                    attempt = 0
+                    _state.value = State.READY
+                    onStatus("Ready — receiving DE1 notifications")
+                    // Connect-time one-shot seed reads (firmware / machine-state /
+                    // shot-settings): the DE1 answers them on a direct GATT read
+                    // but does NOT notify them at connect, so subscribing alone
+                    // leaves those rows blank. Re-seeded on every (re)connect so a
+                    // reconnect re-syncs state. Best-effort, off the loop.
+                    scope.launch { seedReads(device) }
+                    // Suspend until the link drops. StateFlow.first() checks the
+                    // current value first, so a drop during the tiny
+                    // post-establish gap is not missed.
+                    transport.connectionState(device).first {
+                        it == BleTransport.ConnState.FAILED || it == BleTransport.ConnState.DISCONNECTED
+                    }
+                    if (userInitiated) return
+                    if (!autoReconnectEnabled) { onStatus("DE1 disconnected"); break }
+                    onStatus("DE1 connection lost — reconnecting…")
+                } else {
+                    if (userInitiated) return
+                    if (!autoReconnectEnabled) break
+                }
+
+                attempt++
+                if (attempt > MAX_RECONNECT_ATTEMPTS) {
+                    onStatus("DE1 reconnect gave up after $MAX_RECONNECT_ATTEMPTS attempts")
+                    break
+                }
+                _state.value = State.CONNECTING
+                onStatus("Reconnecting to DE1 (attempt $attempt of $MAX_RECONNECT_ATTEMPTS)…")
+                delay(backoffMs(attempt))
+            }
+        } finally {
+            // Session end via a non-user path (gave up / auto-reconnect off /
+            // cancellation that isn't disconnect()). A user disconnect() does its
+            // own teardown, guarded by userInitiated.
+            if (!userInitiated) {
+                if (recording) { recording = false; recorder.close() }
+                this@De1BleManager.device = null
+                _state.value = State.DISCONNECTED
             }
         }
     }
 
+    /**
+     * Bring the link up for one attempt: connect + discover, join the shared
+     * recording once per session, then (re)subscribe. Throws on failure so the
+     * [session] loop can back off and retry. [firstConnect] distinguishes the
+     * initial attempt (open the recorder, "Connecting…") from a reconnect
+     * ("Reconnecting…") so the recorder ref-count stays balanced across drops.
+     */
+    private suspend fun establish(device: BleTransport.DeviceHandle, firstConnect: Boolean) {
+        _state.value = State.CONNECTING
+        onStatus(if (firstConnect) "Connecting…" else "Reconnecting…")
+        // BleTransport.connect suspends until connected AND services discovered.
+        transport.connect(device)
+        _state.value = State.DISCOVERING
+        onStatus("Connected — discovering services…")
+        // Join the shared session recording ONCE per session (not per reconnect),
+        // so the recorder's open/close ref-count stays balanced across drops.
+        if (!recording) {
+            recording = true
+            recorder.open()?.let { onStatus("Recording session to $it") }
+        }
+        _state.value = State.SUBSCRIBING
+        onStatus("Subscribing to StateInfo + ShotSample…")
+        startObserving(device)
+    }
+
     fun disconnect() {
+        // Mark intentional BEFORE cancelling so the session loop's finally and
+        // any in-flight connectionState wait know not to reconnect.
+        userInitiated = true
+        sessionJob?.cancel()
+        sessionJob = null
         val d = device
         // Leave the shared recording; the capture file closes only once the
         // last device (DE1 or scale) has disconnected.
@@ -175,6 +276,10 @@ class De1BleManager(
      * arrival-stamped inside the transport.
      */
     private fun startObserving(device: BleTransport.DeviceHandle) {
+        // Drop any prior subscription job (a reconnect re-subscribes on the same
+        // handle); the old Nordic subscribe flows complete on the link drop, but
+        // cancelling here keeps exactly one merged collector alive.
+        observeJob?.cancel()
         val stateInfo = transport.observe(device, De1Uuids.SERVICE, De1Uuids.STATE_INFO)
         val shotSample = transport.observe(device, De1Uuids.SERVICE, De1Uuids.SHOT_SAMPLE)
         // The core needs these too: tank level, shot-settings read-backs, and
@@ -192,6 +297,39 @@ class De1BleManager(
         observeJob = merge(stateInfo, shotSample, waterLevels, shotSettings, mmr, version, calibration)
             .onEach { handleNotification(it) }
             .launchIn(scope)
+    }
+
+    /**
+     * Connect-time one-shot reads of the characteristics the DE1 answers on a
+     * direct GATT read but does NOT spontaneously notify at connect: Version
+     * (firmware string → `de1Firmware`), StateInfo (current machine state), and
+     * ShotSettings. The web connect program seeds these the same way; without
+     * them the Settings firmware row and machine-state readout stay blank even
+     * though the connection is healthy and the MMR identity sweep populated.
+     *
+     * Each read is best-effort + time-boxed: a failure (or a notify-only char on
+     * some firmware) just logs and the others still run. The read bytes are fed
+     * to the core through the same seam as a notification, so they decode and
+     * record identically.
+     */
+    private suspend fun seedReads(device: BleTransport.DeviceHandle) {
+        val seeds = listOf(
+            Triple(VERSION, NotificationSource.DE1_VERSION, "firmware version"),
+            Triple(De1Uuids.STATE_INFO, NotificationSource.DE1_STATE, "machine state"),
+            Triple(De1Uuids.SHOT_SETTINGS, NotificationSource.DE1_SHOT_SETTINGS, "shot-settings"),
+        )
+        for ((char, source, label) in seeds) {
+            runCatching {
+                val bytes = kotlinx.coroutines.withTimeoutOrNull(3_000) {
+                    transport.read(device, De1Uuids.SERVICE, char)
+                } ?: error("read timed out")
+                val tMs = SystemClock.elapsedRealtime()
+                recorder.recordInbound(source, bytes, tMs)
+                val json = bridge.onNotification(source, bytes, tMs.toULong())
+                onCoreOutput(json)
+                onStatus("DE1 $label read ✓")
+            }.onFailure { onStatus("DE1 $label seed read skipped: ${it.message}") }
+        }
     }
 
     // ---- Core integration -------------------------------------------------
@@ -251,6 +389,13 @@ class De1BleManager(
 
     companion object {
         private const val TAG = "De1BleManager"
+
+        /** Reconnect attempts after an unexpected drop before giving up (~web's 8). */
+        private const val MAX_RECONNECT_ATTEMPTS = 8
+
+        /** Exponential backoff: 500 ms doubling, capped at 30 s (mirrors the web). */
+        private fun backoffMs(attempt: Int): Long =
+            (500L shl (attempt - 1).coerceIn(0, 10)).coerceAtMost(30_000L)
 
         /**
          * The DE1 `Version` (`A001`) and `Calibration` (`A012`) characteristic
