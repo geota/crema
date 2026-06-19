@@ -66,6 +66,13 @@ class RelayHub(
      */
     private val controlHandler: suspend (method: String, args: String) -> Result<Unit> =
         { _, _ -> Result.failure(UnsupportedOperationException("relay has no control handler")) },
+    /**
+     * The primary's current session-config JSON (an app-level `ConfigSnapshot`),
+     * pushed to a secondary on attach and via [pushConfig] on change — the
+     * single-owner config a mirror snaps to (the settings-drift fix). Empty
+     * string = nothing to send (M1 / a normal relay / the unit tests).
+     */
+    private val configSource: () -> String = { "" },
 ) {
     private val clients = CopyOnWriteArrayList<ClientSession>()
 
@@ -99,6 +106,15 @@ class RelayHub(
         connStates[address] = state
         val frame = Frame.State(address, state)
         for (c in clients) if (c.isAttached(address)) deliver(c, frame)
+    }
+
+    /** Push the primary's current session config to every attached secondary —
+     *  called when the primary's config changes, so mirrors stay in sync between
+     *  attaches (the attach-time snapshot covers a fresh join). */
+    fun pushConfig() {
+        val json = configSource().takeIf { it.isNotEmpty() } ?: return
+        val frame = Frame.Config(json)
+        for (c in clients) deliver(c, frame)
     }
 
     // ---- One client connection --------------------------------------------
@@ -142,6 +158,9 @@ class RelayHub(
                 // device so the secondary converges to current machine state.
                 val prefix = frame.address + "|"
                 for ((key, cached) in cache) if (key.startsWith(prefix)) deliver(session, cached)
+                // Config snapshot: the secondary snaps to the primary's session
+                // config (active profile/bean, SAW, QC, units) — the drift fix.
+                configSource().takeIf { it.isNotEmpty() }?.let { deliver(session, Frame.Config(it)) }
             }
             is Frame.Detach -> {
                 session.detach(frame.address)

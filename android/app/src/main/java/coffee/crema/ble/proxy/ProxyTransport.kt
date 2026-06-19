@@ -55,6 +55,10 @@ class ProxyTransport(
     private val clientId: String,
     private val clientName: String,
     private val requestTimeoutMs: Long = 5_000L,
+    /** Invoked with the primary's [Frame.Config] JSON on attach + on every change
+     *  — the secondary applies it so its config mirrors the primary (single-owner
+     *  config; the settings-drift fix). Default no-op (tests / read-only path). */
+    private val onConfig: (json: String) -> Unit = {},
 ) : BleTransport {
 
     /** Devices the primary holds, from [Frame.Welcome] / [Frame.Roster]; drives [scan]. */
@@ -97,6 +101,7 @@ class ProxyTransport(
             is Frame.ControlErr -> pending.remove(frame.id)?.complete(frame)
             is Frame.Notify -> channelFor(frame.address, frame.char).trySend(frame)
             is Frame.State -> stateFlow(frame.address).value = parseState(frame.state)
+            is Frame.Config -> onConfig(frame.json)
             is Frame.Denied ->
                 if (!welcomed.isCompleted) welcomed.completeExceptionally(IllegalStateException("Proxy denied: ${frame.reason}"))
             else -> Log.w(TAG, "Secondary ignoring unexpected server frame: $frame")

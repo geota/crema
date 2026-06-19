@@ -107,6 +107,41 @@ data class AppPrefs(
     val proxyPrimaryPort: Int = 0,
 )
 
+/**
+ * The **single-owner session config** a primary pushes to its mirrors
+ * (multi-device M2 T2) — a config-only subset of [AppPrefs] plus the live
+ * `activeBeanId`. It deliberately EXCLUDES per-device identity
+ * (`de1Address`/`scaleAddress`) and UI-only prefs (theme, keep-screen-on, debug
+ * panel, chart channels): a secondary snaps its active profile/bean, SAW, QC and
+ * units to the primary on attach, but keeps its own device bindings and look.
+ * Ferried as JSON inside a `Frame.Config`. All fields default so an older mirror
+ * decodes a newer primary's snapshot cleanly.
+ */
+@Serializable
+data class ConfigSnapshot(
+    val activeProfileId: String? = null,
+    val activeBeanId: String? = null,
+    val stopOnWeight: Boolean = false,
+    val autoTare: Boolean = false,
+    val maxShotDurationS: Float = 45f,
+    val grinderModel: String = "",
+    val weightUnit: String = "g",
+    val tempUnit: String = "C",
+    val pressureUnit: String = "bar",
+    val volumeUnit: String = "ml",
+    val qcSteamTimeS: Float = 12f,
+    val qcSteamFlowMlS: Float = 1.2f,
+    val qcSteamTempC: Float = 148f,
+    val qcHotWaterTempC: Float = 80f,
+    val qcHotWaterVolumeMl: Float = 150f,
+    val qcFlushTimeS: Float = 4f,
+    val qcFlushTempC: Float = 95f,
+    val qcGrind: Float? = null,
+    /** Config owner — always `"primary"` from a primary; a secondary uses it to
+     *  flag that it is viewing as a read-only mirror. */
+    val authority: String = "primary",
+)
+
 /** File-backed JSON persistence for [AppPrefs] (`filesDir/prefs.json`). */
 class SettingsStore(private val context: Context, private val json: Json) {
     private val file get() = File(context.filesDir, FILE_NAME)
