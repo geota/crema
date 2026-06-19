@@ -55,6 +55,17 @@ class RelayHub(
      * primary.
      */
     private val clientCapacity: Int = Channel.UNLIMITED,
+    /**
+     * Dispatch a relayed user-intent [Frame.Control] from a secondary to the
+     * primary's command router (the VM's machine-control methods in production):
+     * `success` once dispatched on the real link — the effect returns to the
+     * secondary over the [Frame.Notify] stream — `failure` to reply
+     * [Frame.ControlErr]. The default rejects every control; the real handler is
+     * wired only on the primary (a normal/loopback relay has no machine to
+     * drive), so M1 and the unit tests keep a read-only mirror by construction.
+     */
+    private val controlHandler: suspend (method: String, args: String) -> Result<Unit> =
+        { _, _ -> Result.failure(UnsupportedOperationException("relay has no control handler")) },
 ) {
     private val clients = CopyOnWriteArrayList<ClientSession>()
 
@@ -103,9 +114,14 @@ class RelayHub(
         val pump = launch { for (frame in session.outbox) link.send(frame) }
         try {
             link.incoming().collect { frame ->
-                // Reads are suspend (they hit the real link); run them off the
-                // collect loop so they don't head-of-line-block later frames.
-                if (frame is Frame.Read) launch { handleRead(session, frame) } else handle(session, frame)
+                // Reads and controls are suspend (they hit the real link / drive
+                // the machine); run them off the collect loop so they don't
+                // head-of-line-block later frames.
+                when (frame) {
+                    is Frame.Read -> launch { handleRead(session, frame) }
+                    is Frame.Control -> launch { handleControl(session, frame) }
+                    else -> handle(session, frame)
+                }
             }
         } finally {
             clients.remove(session)
@@ -147,6 +163,19 @@ class RelayHub(
         } catch (e: Exception) {
             Frame.ReadErr(frame.id, e.message ?: "read failed")
         }
+        deliver(session, reply)
+    }
+
+    /** Dispatch a secondary's relayed user intent to the primary's command router
+     *  and reply [Frame.ControlOk] / [Frame.ControlErr]. The action drives the
+     *  primary's real link; its effect returns to every secondary as machine
+     *  state over the [Frame.Notify] stream, so the reply only confirms dispatch. */
+    private suspend fun handleControl(session: ClientSession, frame: Frame.Control) {
+        Log.i(TAG, "relayed control: ${frame.method}${if (frame.args.isEmpty()) "" else " (${frame.args})"}")
+        val reply = controlHandler(frame.method, frame.args).fold(
+            onSuccess = { Frame.ControlOk(frame.id) },
+            onFailure = { Frame.ControlErr(frame.id, it.message ?: "control failed") },
+        )
         deliver(session, reply)
     }
 
