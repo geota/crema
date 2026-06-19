@@ -726,6 +726,45 @@ fun SettingsScreen(
                                 }
                             }
                         }
+                        SetGroup("Multi-device (LAN proxy · debug)") {
+                            // M1: drive the DE1/scale from a second device over the LAN.
+                            // The transport is built at startup, so a change is
+                            // restart-to-apply (the sub-copy says so).
+                            val roleSub = when (ui.proxyRole) {
+                                "primary" -> "Owns the DE1 and relays it to others. Restart to apply."
+                                "secondary" -> "Mirrors a primary over the LAN. Restart to apply."
+                                else -> "Off — normal single-device use."
+                            }
+                            CremaSettingsRow("Role", roleSub, last = ui.proxyRole != "secondary") {
+                                CremaSegmentedButton(
+                                    options = listOf(SegOption("normal", "Off"), SegOption("primary", "Primary"), SegOption("secondary", "Secondary")),
+                                    value = ui.proxyRole,
+                                    onChange = vm::setProxyRole,
+                                    enabled = true,
+                                    uniform = true,
+                                )
+                            }
+                            if (ui.proxyRole == "secondary") {
+                                CremaSettingsRow("Primary host", "An IP, or 10.0.2.2 for an adb-forwarded emulator.") {
+                                    CremaTextField(
+                                        value = ui.proxyPrimaryHost,
+                                        onValueChange = vm::setProxyPrimaryHost,
+                                        placeholder = "10.0.2.2",
+                                        singleLine = true,
+                                        modifier = Modifier.width(200.dp),
+                                    )
+                                }
+                                CremaSettingsRow("Primary port", "The relay port — see the primary's log line.", last = true) {
+                                    CremaTextField(
+                                        value = if (ui.proxyPrimaryPort > 0) ui.proxyPrimaryPort.toString() else "",
+                                        onValueChange = { vm.setProxyPrimaryPort(it.filter(Char::isDigit).take(5).toIntOrNull() ?: 0) },
+                                        placeholder = "8080",
+                                        singleLine = true,
+                                        modifier = Modifier.width(120.dp),
+                                    )
+                                }
+                            }
+                        }
                         SetGroup("Service-grade") {
                             // Mains heater voltage — service-grade, gated behind a danger
                             // confirm (staged in pendingHeaterVoltage). Reflects the live

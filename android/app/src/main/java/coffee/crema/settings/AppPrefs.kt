@@ -95,6 +95,16 @@ data class AppPrefs(
     val de1Address: String? = null,
     /** Remembered scale Bluetooth address (same per-device auto-connect rule). */
     val scaleAddress: String? = null,
+    // ── Multi-device LAN proxy (M1, debug/demo) ──────────────────────────────
+    /** Proxy role — `"normal" | "primary" | "secondary"`. `normal` = today's
+     *  single-device behaviour. A debug/demo setting: the transport is built at
+     *  startup, so a change is **restart-to-apply**. */
+    val proxyRole: String = "normal",
+    /** For `secondary`: the primary's host — an IP, or `10.0.2.2` to reach an
+     *  `adb forward`ed port on the dev host from an emulator. */
+    val proxyPrimaryHost: String = "",
+    /** For `secondary`: the primary's relay port. */
+    val proxyPrimaryPort: Int = 0,
 )
 
 /** File-backed JSON persistence for [AppPrefs] (`filesDir/prefs.json`). */

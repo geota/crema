@@ -2,6 +2,7 @@ package coffee.crema.ui
 
 import android.app.Application
 import android.content.Intent
+import android.os.Build
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import coffee.crema.core.Command
@@ -44,6 +45,20 @@ import coffee.crema.ble.BleSessionRecorder
 import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.NordicBleTransport
 import coffee.crema.ble.ScaleBleManager
+import coffee.crema.ble.BleTransport
+import coffee.crema.ble.De1Uuids
+import coffee.crema.ble.proxy.DeviceInfo
+import coffee.crema.ble.proxy.LanRelayServer
+import coffee.crema.ble.proxy.Peer
+import coffee.crema.ble.proxy.PeerDiscovery
+import coffee.crema.ble.proxy.ProxyTransport
+import coffee.crema.ble.proxy.ReconnectingClientLink
+import coffee.crema.ble.proxy.RelayHub
+import coffee.crema.ble.proxy.ReplayBleTransport
+import coffee.crema.ble.proxy.SwitchableBleTransport
+import coffee.crema.ble.proxy.TappingBleTransport
+import java.io.File
+import java.util.UUID
 import coffee.crema.core.EventShotSettingsReadInner
 import coffee.crema.core.ShotBean
 import coffee.crema.core.SteamHotWaterSettings
@@ -435,6 +450,12 @@ data class MainUiState(
     val grinderModel: String = "",
     val suppressDe1Sleep: Boolean = true,
     val showDebugPanel: Boolean = false,
+    // Multi-device LAN proxy (M1/M2). Live mode switches via the device picker.
+    val proxyRole: String = "normal",
+    val proxyPrimaryHost: String = "",
+    val proxyPrimaryPort: Int = 0,
+    /** Crema instances discovered on the LAN (NSD) — the device picker's list. */
+    val peers: List<Peer> = emptyList(),
     /** Latest scale weight in grams, or null before the first reading. */
     val scaleWeightG: Float? = null,
     /**
@@ -715,7 +736,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * owns the Nordic `Environment` (a broadcast receiver that must be closed).
      * The scanner and both managers sit on top of it.
      */
-    private val bleTransport = NordicBleTransport(app)
+    // Multi-device proxy mode (M1/M2). In NORMAL, [nordicTransport] holds the real
+    // transport; [relayHub]/[relayServer] (PRIMARY) and [proxyLink] (SECONDARY) are
+    // the role-specific extras, torn down on a mode switch and in [onCleared].
+    private var nordicTransport: NordicBleTransport? = null
+    private var relayHub: RelayHub? = null
+    private var relayServer: LanRelayServer? = null
+    private var proxyLink: ReconnectingClientLink? = null
+
+    // The managers + scanner sit on this facade so the transport can be swapped at
+    // runtime — M2 mode switches (Mirror/Hand-off) with NO app restart. The startup
+    // delegate is the persisted role (see [buildInitialDelegate]); [applyMode] swaps it.
+    private val switchable = SwitchableBleTransport(buildInitialDelegate())
+    private val bleTransport: BleTransport = switchable
 
     /**
      * The one app-wide BLE scanner, shared by both managers. A single
@@ -761,7 +794,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         onScaleIdentified = ::refreshScaleCapabilities,
     )
 
+    /** Stable-per-launch id used to advertise + self-filter in NSD discovery. */
+    private val proxyDeviceId: String = UUID.randomUUID().toString()
+
+    /** LAN peer discovery (NSD) for the multi-device picker (M2) — advertises this
+     *  instance and browses for peers, exposed as [MainUiState.peers]. */
+    private val peerDiscovery = PeerDiscovery(app, viewModelScope, proxyDeviceId)
+
+    /** The primary relay's bound port (0 when not hosting) — advertised so a
+     *  secondary can dial it. */
+    private var relayPort: Int = 0
+
     init {
+        // Multi-device (M2): browse for peers + advertise this instance on the LAN.
+        viewModelScope.launch { peerDiscovery.peers.collect { p -> _ui.update { it.copy(peers = p) } } }
+        peerDiscovery.startDiscovery()
+        refreshAdvertisement()
         // Collect the managers' coarse connection-state flows so the UI
         // snapshot updates promptly when either advances — rather than only
         // when an unrelated event happens to call observeBleState().
@@ -784,12 +832,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                             persistPrefs()
                         }
                     }
+                    // Hosting now holds the DE1 — refresh our NSD advertisement.
+                    refreshAdvertisement()
                 } else if (state != De1BleManager.State.READY) {
                     wasReady = false
                     // The DE1 no longer holds our profile — drop the upload-skip
                     // cache so the next shot re-uploads (issue 11). Without this, a
                     // skip after a reconnect would brew against a stale/absent profile.
                     lastUploadedFingerprint = null
+                    refreshAdvertisement()
                 }
             }
         }
@@ -1856,6 +1907,176 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Build a full AppPrefs from the current UI state so each setter persists
      *  without clobbering the other fields. */
+    // ──────────────────────────────────────────────────────────────────────
+    // Multi-device LAN proxy (M1/M2). The STARTUP role is read SYNCHRONOUSLY from
+    // prefs (the transport is an eager field, built before async loadPrefs()); a
+    // later change is applied LIVE via [applyMode] — no app restart (M2).
+    //
+    //  - NORMAL    : today's NordicBleTransport, unchanged.
+    //  - PRIMARY   : tap the real link (or a replayed capture, for an emulator
+    //                with no Bluetooth) into a RelayHub + LanRelayServer so
+    //                secondaries can mirror it. The managers + core are untouched.
+    //  - SECONDARY : a network ProxyTransport against a primary's relay; the
+    //                managers + core run as if they held the radio.
+    // ──────────────────────────────────────────────────────────────────────
+
+    /** The startup transport delegate, from the persisted role. */
+    private fun buildInitialDelegate(): BleTransport {
+        val cfg = readProxyConfigSync()
+        return when (cfg.role) {
+            "secondary" -> startSecondaryMode(cfg.host, cfg.port)
+            "primary" -> startPrimaryMode()
+            else -> normalMode()
+        }
+    }
+
+    /** NORMAL: the one real Nordic transport (created lazily, reused across switches). */
+    private fun normalMode(): BleTransport =
+        nordicTransport ?: NordicBleTransport(getApplication()).also { nordicTransport = it }
+
+    /** PRIMARY: tap the real (or replayed) link into a relay + start the LAN server. */
+    private fun startPrimaryMode(): BleTransport {
+        val capture = newestCapture()
+        val real: BleTransport = if (capture != null) {
+            appendLog("Multi-device: PRIMARY (replay ${capture.name})")
+            ReplayBleTransport(
+                ReplayBleTransport.parse(capture.readText()),
+                viewModelScope, deviceName = "DE1", deviceAddress = "DE1:REPLAY", route = ::replayRoute,
+            )
+        } else {
+            appendLog("Multi-device: PRIMARY (live BLE)")
+            normalMode()
+        }
+        var tappingRef: TappingBleTransport? = null
+        val hub = RelayHub(
+            primaryId = deviceLabel(),
+            primaryName = deviceLabel(),
+            // The DE1 the primary holds (DE1-only mirror for now).
+            roster = {
+                ble.connectedAddress?.let { listOf(DeviceInfo(it, "DE1", "de1", "CONNECTED")) } ?: emptyList()
+            },
+            readSource = { a, s, c -> tappingRef!!.readByAddress(a, s, c) },
+            // Everything except the counted ShotSample stream is a latest-value
+            // state/identity char and is replayed on attach.
+            isSnapshotChar = { _, char -> char != De1Uuids.SHOT_SAMPLE },
+        )
+        relayHub = hub
+        val tapping = TappingBleTransport(real, hub, viewModelScope)
+        tappingRef = tapping
+        val server = LanRelayServer(hub)
+        relayServer = server
+        viewModelScope.launch {
+            runCatching {
+                relayPort = server.start()
+                appendLog("LAN relay listening on :$relayPort")
+                refreshAdvertisement()
+            }.onFailure { appendLog("LAN relay failed to start: ${it.message}") }
+        }
+        return tapping
+    }
+
+    /** SECONDARY: a self-connecting ProxyTransport to a primary's relay. */
+    private fun startSecondaryMode(host: String, port: Int): BleTransport {
+        val url = "ws://$host:$port${LanRelayServer.PATH}"
+        appendLog("Multi-device: SECONDARY → $url")
+        val link = ReconnectingClientLink(url, viewModelScope)
+        proxyLink = link
+        return ProxyTransport(link, viewModelScope, clientId = deviceLabel(), clientName = deviceLabel())
+    }
+
+    // ── Live mode switches (M2 — no restart) ────────────────────────────────
+
+    /** Stop relaying/mirroring: become a standalone NORMAL device. */
+    fun switchToNormal() = applyMode("normal", "", 0)
+
+    /** Hold the DE1 and relay it to others (becomes the primary). */
+    fun switchToPrimary() = applyMode("primary", "", 0)
+
+    /** Mirror the DE1 from a primary at [host]:[port] — the picker's "Mirror from X". */
+    fun switchToSecondary(host: String, port: Int) = applyMode("secondary", host, port)
+
+    /**
+     * Swap the transport at runtime: tear the managers' connections down, dispose
+     * the old mode's resources, install the new delegate, persist the role, and
+     * reconnect over it. The disconnect → [SwitchableBleTransport.setDelegate] →
+     * reconnect bracket keeps any notification flow from spanning the swap; the
+     * brief settle lets the managers' fire-and-forget transport release run
+     * against the OLD delegate before it is replaced.
+     */
+    private fun applyMode(role: String, host: String, port: Int) {
+        viewModelScope.launch {
+            ble.disconnect()
+            scale.disconnect()
+            kotlinx.coroutines.delay(150)
+            relayServer?.stop(); relayServer = null; relayHub = null
+            proxyLink?.dispose(); proxyLink = null
+            switchable.setDelegate(
+                when (role) {
+                    "secondary" -> startSecondaryMode(host, port)
+                    "primary" -> startPrimaryMode()
+                    else -> normalMode()
+                },
+            )
+            // Keep the secondary target sticky across mode changes: only a
+            // `secondary` switch updates host/port. Otherwise stopping a mirror
+            // (→ normal) would wipe the debug/manual peer from the picker, so on
+            // a network with no NSD you couldn't re-mirror without re-seeding it.
+            _ui.update {
+                it.copy(
+                    proxyRole = role,
+                    proxyPrimaryHost = if (role == "secondary") host else it.proxyPrimaryHost,
+                    proxyPrimaryPort = if (role == "secondary") port else it.proxyPrimaryPort,
+                )
+            }
+            persistPrefs()
+            // Reconnect the DE1 over the new delegate (a secondary attaches to the
+            // primary's DE1; primary/normal scan the real or replayed radio). The
+            // scale, if any, is reconnected by the user — DE1-only mirror for now.
+            connect()
+            refreshAdvertisement()
+        }
+    }
+
+    /** (Re)advertise this device's current role / DE1-hold / relay-port over NSD, so
+     *  other devices' pickers see it (and can "Mirror from" it when it's hosting). */
+    private fun refreshAdvertisement() {
+        val role = _ui.value.proxyRole
+        val holdsDe1 = role != "secondary" && ble.connectedAddress != null
+        val port = if (role == "primary") relayPort else 0
+        peerDiscovery.advertise(deviceLabel(), role, holdsDe1, port)
+    }
+
+    private data class ProxyConfig(val role: String, val host: String, val port: Int)
+
+    /** Read just the proxy role/host/port straight off `prefs.json`, synchronously,
+     *  for [buildInitialDelegate] (which runs before the async [loadPrefs]). */
+    private fun readProxyConfigSync(): ProxyConfig = runCatching {
+        val f = File(getApplication<Application>().filesDir, "prefs.json")
+        if (!f.exists()) return ProxyConfig("normal", "", 0)
+        val p = json.decodeFromString(AppPrefs.serializer(), f.readText())
+        ProxyConfig(p.proxyRole, p.proxyPrimaryHost, p.proxyPrimaryPort)
+    }.getOrDefault(ProxyConfig("normal", "", 0))
+
+    /** Newest `session-*.jsonl` capture in the app's captures dir, for the
+     *  replay-backed PRIMARY demo (push one via `adb` to an emulator). */
+    private fun newestCapture(): File? = runCatching {
+        File(getApplication<Application>().getExternalFilesDir(null), "captures")
+            .listFiles { f -> f.isFile && f.name.endsWith(".jsonl") }
+            ?.maxByOrNull { it.lastModified() }
+    }.getOrNull()
+
+    /** Map a capture `src` label to its DE1 `(service, characteristic)` for replay. */
+    private fun replayRoute(src: String): Pair<UUID, UUID>? = when (src) {
+        "DE1_STATE" -> De1Uuids.SERVICE to De1Uuids.STATE_INFO
+        "DE1_SHOT_SAMPLE" -> De1Uuids.SERVICE to De1Uuids.SHOT_SAMPLE
+        "DE1_WATER_LEVELS" -> De1Uuids.SERVICE to De1Uuids.WATER_LEVELS
+        "DE1_SHOT_SETTINGS" -> De1Uuids.SERVICE to De1Uuids.SHOT_SETTINGS
+        "DE1_MMR_READ" -> De1Uuids.SERVICE to De1Uuids.MMR_READ
+        else -> null
+    }
+
+    private fun deviceLabel(): String = Build.MODEL ?: "crema"
+
     private fun currentPrefs() = AppPrefs(
         themeMode = _ui.value.themeMode,
         maxShotDurationS = _ui.value.maxShotDurationS,
@@ -1888,6 +2109,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         activeProfileId = _ui.value.activeProfileId,
         de1Address = _ui.value.rememberedDe1Address,
         scaleAddress = _ui.value.rememberedScaleAddress,
+        proxyRole = _ui.value.proxyRole,
+        proxyPrimaryHost = _ui.value.proxyPrimaryHost,
+        proxyPrimaryPort = _ui.value.proxyPrimaryPort,
     )
 
     /** True once [loadPrefs] has hydrated the UI from disk — writes before that
@@ -2774,6 +2998,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             activeProfileId = p.activeProfileId ?: it.activeProfileId,
             rememberedDe1Address = p.de1Address,
             rememberedScaleAddress = p.scaleAddress,
+            proxyRole = p.proxyRole,
+            proxyPrimaryHost = p.proxyPrimaryHost,
+            proxyPrimaryPort = p.proxyPrimaryPort,
         ) }
         // Push the persisted cap + behaviour toggles to the core so they're live
         // from launch (the core doesn't echo these back as events).
@@ -2859,6 +3086,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Show/hide the inline debug panel (Settings → Advanced). Persisted. */
     fun setShowDebugPanel(on: Boolean) {
         _ui.update { it.copy(showDebugPanel = on) }
+        persistPrefs()
+    }
+
+    // ── Multi-device proxy (M1, debug). Restart-to-apply. ────────────────────
+    fun setProxyRole(role: String) {
+        _ui.update { it.copy(proxyRole = role) }
+        persistPrefs()
+    }
+
+    fun setProxyPrimaryHost(host: String) {
+        _ui.update { it.copy(proxyPrimaryHost = host.trim()) }
+        persistPrefs()
+    }
+
+    fun setProxyPrimaryPort(port: Int) {
+        _ui.update { it.copy(proxyPrimaryPort = port) }
         persistPrefs()
     }
 
@@ -3549,7 +3792,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // broadcast receiver and tears down the central manager. The managers'
         // disconnect() calls above are fire-and-forget coroutines; closing the
         // transport also cancels its scope, so any in-flight disconnect ends.
-        bleTransport.close()
+        // (Only one of these is non-null per proxy role; NORMAL has just the Nordic.)
+        nordicTransport?.close()
+        relayServer?.stop()
+        proxyLink?.dispose()
+        peerDiscovery.close()
     }
 
     private companion object {
