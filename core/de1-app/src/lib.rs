@@ -388,6 +388,18 @@ pub struct CremaCore {
     /// the scale for its power-off bytes and silently no-ops when the
     /// scale lacks one. Today that covers Decent / Eureka / Solo.
     auto_off_scale_on_sleep: bool,
+    /// Whether this core is a **read-only mirror** — a secondary device
+    /// mirroring a primary's DE1 over the LAN (the multi-device M2 feature).
+    /// When `true`, the autonomous machine/scale writes the core produces
+    /// while decoding the mirrored notification stream (SAW auto-stop,
+    /// frame-skip acks, steam-eco target rewrites, watchdog actions) are
+    /// dropped before they leave [`on_notification`](Self::on_notification) /
+    /// [`on_tick`](Self::on_tick) — the mirror still decodes telemetry and
+    /// fires every `Event` for the UI, but never drives hardware. The primary
+    /// owns control; the secondary relays user intent to it via Control
+    /// frames. Off by default; the shell flips it via
+    /// [`set_read_only`](Self::set_read_only) on entering secondary mode.
+    read_only: bool,
     /// Test-only override that flips [`firmware_locks_writes`](Self::firmware_locks_writes)
     /// to `true` so unit tests can verify the per-setter lockout-attribution
     /// path. v1's lockout state is a stub (always `false`); v2 will replace
@@ -466,6 +478,7 @@ impl CremaCore {
             capture: CaptureRecorder::default(),
             weight_unit_pref: WeightUnit::default(),
             auto_off_scale_on_sleep: false,
+            read_only: false,
             #[cfg(test)]
             firmware_lock_override: false,
         }
@@ -1933,6 +1946,29 @@ impl CremaCore {
     /// Kotlin shells naturally pass — and is converted to a [`Duration`] once
     /// here, then handed to the internal handlers and monitors that all speak
     /// `Duration`.
+    /// Mark this core as a read-only mirror (secondary) or restore it to a
+    /// normal authoritative core. See [`read_only`](Self::read_only).
+    pub fn set_read_only(&mut self, value: bool) {
+        self.read_only = value;
+    }
+
+    /// Whether this core is a read-only mirror — see [`set_read_only`](Self::set_read_only).
+    pub fn is_read_only(&self) -> bool {
+        self.read_only
+    }
+
+    /// Drop every machine/scale write from `out` when this core is a read-only
+    /// mirror, leaving its decoded events intact. The [`Command`] enum is
+    /// writes-only, so clearing it suppresses exactly the hardware-driving
+    /// effects — a secondary decodes the mirrored stream for its UI but never
+    /// drives the DE1/scale. A no-op on a normal (authoritative) core.
+    fn gate_read_only(&self, mut out: CoreOutput) -> CoreOutput {
+        if self.read_only {
+            out.commands.clear();
+        }
+        out
+    }
+
     pub fn on_notification(&mut self, source: Source, data: &[u8], now_ms: u64) -> CoreOutput {
         // Capture side-effect first — the recorder needs the raw notification
         // bytes regardless of whether the decode that follows succeeds, and
@@ -1956,7 +1992,7 @@ impl CremaCore {
             Source::De1ProfileHeader => self.handle_profile_header_read(data, &mut out),
             Source::De1FrameAck => self.handle_profile_frame_ack(data, now, &mut out),
         }
-        out
+        self.gate_read_only(out)
     }
 
     /// Feed a periodic clock tick. Drives the lost-scale watchdog (if a scale
@@ -1987,7 +2023,7 @@ impl CremaCore {
                 reason: ProfileUploadFailure::AckTimeout { awaiting },
             });
         }
-        out
+        self.gate_read_only(out)
     }
 
     /// Slice the rolling BLE-capture buffer to JSONL covering `[from_ms,
@@ -2020,7 +2056,14 @@ impl CremaCore {
     /// buffer is wiped (a fresh [`CaptureRecorder`] is part of
     /// [`CremaCore::new`]).
     pub fn reset(&mut self) {
+        // `read_only` is a device-role config (this core is a secondary mirror),
+        // not session/shot state — it must survive a reset, else a reconnect
+        // (the BLE manager resets the core on every disconnect) would turn the
+        // mirror back into an authoritative core mid-session and resume driving
+        // hardware. Carry it across the rebuild.
+        let read_only = self.read_only;
         *self = CremaCore::new();
+        self.read_only = read_only;
     }
 
     /// Decode and process a `StateInfo` notification.
@@ -3169,6 +3212,50 @@ mod tests {
                 .iter()
                 .any(|c| matches!(c, Command::WriteScale { .. }))
         );
+    }
+
+    // ----- Read-only mirror (multi-device secondary) ----------------------
+
+    #[test]
+    fn a_read_only_mirror_suppresses_commands_but_not_events() {
+        // The connect-time scale queries are a convenient autonomous command —
+        // a normal core emits them on the first capability-scale weight.
+        let packet = bookoo_packet(2_000);
+
+        let mut normal = CremaCore::new();
+        normal.connect_scale("BOOKOO_SC");
+        let normal_out = normal.on_notification(Source::ScaleWeight, &packet, 1_000);
+        assert!(
+            !normal_out.commands.is_empty(),
+            "baseline: a normal core drives hardware (emits the connect-time queries)",
+        );
+
+        // A read-only mirror (a secondary) fed the identical notification must
+        // emit zero commands — it decodes for its UI but never drives hardware —
+        // while producing exactly the same decoded events.
+        let mut mirror = CremaCore::new();
+        mirror.connect_scale("BOOKOO_SC");
+        mirror.set_read_only(true);
+        let mirror_out = mirror.on_notification(Source::ScaleWeight, &packet, 1_000);
+        assert!(
+            mirror_out.commands.is_empty(),
+            "a read-only mirror must emit no commands",
+        );
+        assert_eq!(
+            mirror_out.events, normal_out.events,
+            "read-only suppresses commands only — events are unaffected",
+        );
+    }
+
+    #[test]
+    fn read_only_survives_a_reset() {
+        // The BLE manager resets the core on every disconnect; the read-only
+        // role is device config, not session state, so it must persist — else a
+        // reconnect would turn the mirror back into an authoritative core.
+        let mut core = CremaCore::new();
+        core.set_read_only(true);
+        core.reset();
+        assert!(core.is_read_only(), "reset() must preserve the read-only role");
     }
 
     // ----- Decent Scale LCD + heartbeat -----------------------------------
