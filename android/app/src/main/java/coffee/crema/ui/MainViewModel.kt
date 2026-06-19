@@ -36,6 +36,7 @@ import coffee.crema.maintenance.MAINTENANCE_MAX_SAMPLE_DT_S
 import coffee.crema.maintenance.MAINTENANCE_MAX_SAMPLE_ML
 import coffee.crema.maintenance.defaultMaintenanceState
 import coffee.crema.settings.AppPrefs
+import coffee.crema.settings.ConfigSnapshot
 import coffee.crema.visualizer.VisualizerClient
 import coffee.crema.visualizer.VisualizerStore
 import coffee.crema.visualizer.VisualizerSync
@@ -1752,6 +1753,73 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** Build the primary's session-config snapshot JSON for a mirror (see
+     *  [ConfigSnapshot]) — sourced from the live [MainUiState] so it reflects any
+     *  unsaved in-session change. Fed to the [RelayHub] as its `configSource`. */
+    private fun configSnapshotJson(): String = runCatching {
+        val ui = _ui.value
+        json.encodeToString(
+            ConfigSnapshot.serializer(),
+            ConfigSnapshot(
+                activeProfileId = ui.activeProfileId,
+                activeBeanId = ui.activeBeanId,
+                stopOnWeight = ui.stopOnWeight,
+                autoTare = ui.autoTare,
+                maxShotDurationS = ui.maxShotDurationS,
+                grinderModel = ui.grinderModel,
+                weightUnit = ui.weightUnit,
+                tempUnit = ui.tempUnit,
+                pressureUnit = ui.pressureUnit,
+                volumeUnit = ui.volumeUnit,
+                qcSteamTimeS = ui.qcSteamTimeS,
+                qcSteamFlowMlS = ui.qcSteamFlowMlS,
+                qcSteamTempC = ui.qcSteamTempC,
+                qcHotWaterTempC = ui.qcHotWaterTempC,
+                qcHotWaterVolumeMl = ui.qcHotWaterVolumeMl,
+                qcFlushTimeS = ui.qcFlushTimeS,
+                qcFlushTempC = ui.qcFlushTempC,
+                qcGrind = ui.qcGrind,
+                authority = "primary",
+            ),
+        )
+    }.getOrDefault("")
+
+    /** Apply a primary's pushed [ConfigSnapshot] on a secondary — snap this
+     *  mirror's session config (active profile/bean, SAW, QC, units) to the
+     *  primary's: the settings-drift fix. Display-only (the read-only core needs
+     *  no command); per-device bindings (DE1/scale address) + UI prefs stay put.
+     *  The profile id is applied only if this device has that profile, so a mirror
+     *  never blanks its Brew screen on an unknown custom profile. */
+    private fun applyRemoteConfig(jsonStr: String) {
+        val cfg = runCatching { json.decodeFromString(ConfigSnapshot.serializer(), jsonStr) }.getOrElse {
+            appendLog("Config snapshot parse failed: ${it.message}")
+            return
+        }
+        _ui.update {
+            it.copy(
+                activeProfileId = cfg.activeProfileId?.takeIf { id -> profileJsonById.containsKey(id) } ?: it.activeProfileId,
+                activeBeanId = cfg.activeBeanId,
+                stopOnWeight = cfg.stopOnWeight,
+                autoTare = cfg.autoTare,
+                maxShotDurationS = cfg.maxShotDurationS,
+                grinderModel = cfg.grinderModel,
+                weightUnit = cfg.weightUnit,
+                tempUnit = cfg.tempUnit,
+                pressureUnit = cfg.pressureUnit,
+                volumeUnit = cfg.volumeUnit,
+                qcSteamTimeS = cfg.qcSteamTimeS,
+                qcSteamFlowMlS = cfg.qcSteamFlowMlS,
+                qcSteamTempC = cfg.qcSteamTempC,
+                qcHotWaterTempC = cfg.qcHotWaterTempC,
+                qcHotWaterVolumeMl = cfg.qcHotWaterVolumeMl,
+                qcFlushTimeS = cfg.qcFlushTimeS,
+                qcFlushTempC = cfg.qcFlushTempC,
+                qcGrind = cfg.qcGrind,
+            )
+        }
+        appendLog("Config from primary applied (pressure ${cfg.pressureUnit}, temp ${cfg.tempUnit}, profile ${cfg.activeProfileId})")
+    }
+
     private fun requestMachineState(state: MachineRequest) {
         if (relayIfSecondary("machineState", state.name)) return
         val raw = runCatching { bridge.requestMachineState(state) }.getOrElse {
@@ -1999,6 +2067,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             isSnapshotChar = { _, char -> char != De1Uuids.SHOT_SAMPLE },
             // Relayed user intent from a secondary → this primary's command router.
             controlHandler = { method, args -> handleRelayedControl(method, args) },
+            // The single-owner session config a mirror snaps to on attach (T2).
+            configSource = { configSnapshotJson() },
         )
         relayHub = hub
         val tapping = TappingBleTransport(real, hub, viewModelScope)
@@ -2021,7 +2091,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         appendLog("Multi-device: SECONDARY → $url")
         val link = ReconnectingClientLink(url, viewModelScope)
         proxyLink = link
-        return ProxyTransport(link, viewModelScope, clientId = deviceLabel(), clientName = deviceLabel())
+        return ProxyTransport(
+            link, viewModelScope, clientId = deviceLabel(), clientName = deviceLabel(),
+            // Snap this mirror's config to the primary's on every attach (T2).
+            onConfig = { applyRemoteConfig(it) },
+        )
     }
 
     // ── Live mode switches (M2 — no restart) ────────────────────────────────

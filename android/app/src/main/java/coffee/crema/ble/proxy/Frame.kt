@@ -246,6 +246,22 @@ sealed class Frame {
     @Serializable
     @SerialName("state")
     data class State(val address: String, val state: String) : Frame()
+
+    // ---- Config (M2 T2: single-owner session config) ----------------------
+
+    /**
+     * Primary → secondary: the primary's **session config** snapshot — pushed
+     * once on attach (right after the BLE-char snapshot burst) and again whenever
+     * it changes. Config has a single owner, the primary; a secondary mirrors it
+     * and never holds independent config, so this is the settings-drift fix: on
+     * every attach the secondary snaps to the primary's active profile / bean /
+     * SAW / QC / units. [json] is an opaque app-level blob (a `ConfigSnapshot`),
+     * ferried as a string so this wire layer stays decoupled from the shell's
+     * config shape.
+     */
+    @Serializable
+    @SerialName("config")
+    data class Config(val json: String) : Frame()
 }
 
 /**
