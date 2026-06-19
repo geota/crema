@@ -687,6 +687,15 @@ private fun RestingBody(
                             style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold, fontSize = 13.sp),
                             color = badgeColor,
                         )
+                        // Authority cue: this device mirrors a primary; its config +
+                        // controls are the primary's (single-owner config / control).
+                        if (ui.proxyRole == "secondary") {
+                            Text(
+                                "· Mirroring",
+                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Medium, fontSize = 11.5.sp),
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
                     }
                     Text(
                         ui.headTemp?.let { "Group ${formatTemp(it, ui.tempUnit)}" } ?: "Group —",

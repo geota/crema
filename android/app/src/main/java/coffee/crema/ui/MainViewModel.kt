@@ -1004,6 +1004,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  profile to the DE1 on Coffee is the M2 gated-start sequence.) Persisted
      *  (AppPrefs.activeProfileId) so the selection survives a restart. */
     fun setActiveProfile(id: String) {
+        if (relayIfSecondary("setActiveProfile", id)) return
         // Switching profiles clears any Quick-Controls override (re-seeds from new).
         _ui.update { it.copy(activeProfileId = id, brewParams = null) }
         persistPrefs()
@@ -1749,6 +1750,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             "machineState" -> requestMachineState(MachineRequest.valueOf(args))
             "startShot" -> startShot()
             "tareScale" -> tareScale()
+            // Config-authority verbs: the primary changes its (single-owner) config
+            // and `persistPrefs`/`setActiveBean` push the result back to mirrors.
+            "setActiveProfile" -> setActiveProfile(args)
+            "setActiveBean" -> setActiveBean(args.ifEmpty { null })
+            "setStopOnWeight" -> setStopOnWeight(args.toBoolean())
+            "setAutoTare" -> setAutoTare(args.toBoolean())
             else -> error("unknown relayed control: $method")
         }
     }
@@ -2244,6 +2251,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (!prefsLoaded) return
         val snapshot = currentPrefs()
         viewModelScope.launch { settingsStore.save(snapshot) }
+        // Multi-device: if we're hosting, push the updated session config to every
+        // mirror so a secondary tracks our config mid-session (the attach-time
+        // snapshot only covers a fresh join). No-op off-primary (relayHub null).
+        relayHub?.pushConfig()
     }
 
     /** Queue a user-facing message (snackbar) + keep it in the log. */
@@ -2279,6 +2290,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Enable/disable auto-tare at shot start (Quick Controls). Optimistic. Persisted. */
     fun setAutoTare(enabled: Boolean) {
+        if (relayIfSecondary("setAutoTare", enabled.toString())) return
         _ui.update { it.copy(autoTare = enabled) }
         runCatching { bridge.setAutoTare(enabled) }.onFailure {
             appendLog("Set auto-tare failed: ${it.message}")
@@ -2291,6 +2303,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * the active profile; this just arms/disarms the behaviour. Optimistic.
      */
     fun setStopOnWeight(enabled: Boolean) {
+        if (relayIfSecondary("setStopOnWeight", enabled.toString())) return
         _ui.update { it.copy(stopOnWeight = enabled) }
         runCatching { bridge.setStopOnWeight(enabled) }.onFailure {
             appendLog("Set stop-on-weight failed: ${it.message}")
@@ -2706,8 +2719,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Set (or with `null`, clear) the active bean (the Brew bean block). Persisted. */
     fun setActiveBean(id: String?) {
+        if (relayIfSecondary("setActiveBean", id ?: "")) return
         _ui.update { it.copy(activeBeanId = id) }
         persistLibrary()
+        relayHub?.pushConfig() // bean activation persists via the library, not prefs
         // Linked-profile auto-load (web activateBean parity). Only user acts
         // reach this fun — boot/library restore writes activeBeanId directly —
         // so firing here matches the "explicit activation only" rule.
