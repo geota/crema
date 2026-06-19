@@ -28,6 +28,7 @@
 //! *exports* differ, scoped to what each shell uses today. Keep this list in
 //! sync as the Android surface grows.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
 use de1_app::{CoreOutput, CremaCore, Event, ProfileUploadFailure, Source};
@@ -962,6 +963,12 @@ pub fn de1_write_target_uuid(target: String) -> Option<String> {
 #[derive(uniffi::Object)]
 pub struct CremaBridge {
     inner: Mutex<CremaCore>,
+    /// Lock-free mirror of the core's read-only flag. Read by [`emit`](Self::emit)
+    /// to drop machine/scale writes from a [`CoreOutput`] before it crosses to
+    /// the shell — an atomic (not the core mutex) so it can be consulted while
+    /// the guard that produced the output is still alive. Kept in sync by
+    /// [`set_read_only`](Self::set_read_only).
+    read_only: AtomicBool,
 }
 
 impl CremaBridge {
@@ -971,6 +978,21 @@ impl CremaBridge {
     /// Android shell would otherwise crash the app on a poisoned mutex.
     fn core(&self) -> MutexGuard<'_, CremaCore> {
         self.inner.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// Serialize a [`CoreOutput`] to JSON, first dropping every machine/scale
+    /// write when this bridge is a **read-only mirror** (a secondary). The core
+    /// also self-gates its *autonomous* (notification / tick) writes; this is
+    /// the comprehensive boundary that additionally suppresses shell-driven
+    /// command emission (e.g. the connect-time MMR read sweep), so a mirror
+    /// emits no writes from any path. Events always cross intact — the UI still
+    /// updates. The flag is read via an atomic, so this is safe even while the
+    /// core guard that produced `out` is still held by the caller.
+    fn emit(&self, mut out: CoreOutput) -> String {
+        if self.read_only.load(Ordering::Relaxed) {
+            out.commands.clear();
+        }
+        json(out)
     }
 }
 
@@ -987,6 +1009,7 @@ impl CremaBridge {
     pub fn new() -> CremaBridge {
         CremaBridge {
             inner: Mutex::new(CremaCore::new()),
+            read_only: AtomicBool::new(false),
         }
     }
 
@@ -997,12 +1020,12 @@ impl CremaBridge {
         data: Vec<u8>,
         now_ms: u64,
     ) -> String {
-        json(self.core().on_notification(source.into(), &data, now_ms))
+        self.emit(self.core().on_notification(source.into(), &data, now_ms))
     }
 
     /// Feed a periodic clock tick. Returns a JSON-encoded [`CoreOutput`].
     pub fn on_tick(&self, now_ms: u64) -> String {
-        json(self.core().on_tick(now_ms))
+        self.emit(self.core().on_tick(now_ms))
     }
 
     /// Discard all session state — e.g. on disconnect.
@@ -1033,6 +1056,19 @@ impl CremaBridge {
     /// Enable or disable stop-at-weight (SAW).
     pub fn set_stop_on_weight(&self, enabled: bool) {
         self.core().set_stop_on_weight(enabled);
+    }
+
+    /// Mark the core a **read-only mirror** (a secondary mirroring a primary's
+    /// DE1 over the LAN) or restore it to normal. When set, the core's
+    /// autonomous machine/scale writes (SAW, frame-skip, steam-eco, watchdogs)
+    /// are dropped — the mirror decodes telemetry and fires events for the UI
+    /// but never drives hardware; the primary owns control and the secondary
+    /// relays user intent to it. See [`de1_app::CremaCore::set_read_only`].
+    pub fn set_read_only(&self, value: bool) {
+        // Mirror into the atomic first (read lock-free by `emit`), then the core
+        // (its own autonomous gate + the shared field web will reuse in M4).
+        self.read_only.store(value, Ordering::Relaxed);
+        self.core().set_read_only(value);
     }
 
     /// Per-shot kill switch for the weight target. Independent of
@@ -1074,27 +1110,27 @@ impl CremaBridge {
     /// Build a [`CoreOutput`] (JSON) whose command asks the DE1 to enter
     /// `state`.
     pub fn request_machine_state(&self, state: MachineRequest) -> String {
-        json(self.core().request_machine_state(state.into()))
+        self.emit(self.core().request_machine_state(state.into()))
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command reads one DE1 memory-mapped
     /// register. The DE1 answers with a notification on the `De1MmrRead`
     /// characteristic, which decodes to an `MmrValue` event.
     pub fn read_mmr(&self, register: MmrReg) -> String {
-        json(self.core().read_mmr(register.into()))
+        self.emit(self.core().read_mmr(register.into()))
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command reads `sensor`'s current
     /// (in-use) calibration. The DE1 answers on the `De1Calibration`
     /// characteristic, which decodes to a `Calibration` event.
     pub fn read_calibration(&self, sensor: CalSensor) -> String {
-        json(self.core().read_calibration(sensor.into()))
+        self.emit(self.core().read_calibration(sensor.into()))
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command reads `sensor`'s factory
     /// calibration — the calibration the machine shipped with.
     pub fn read_factory_calibration(&self, sensor: CalSensor) -> String {
-        json(self.core().read_factory_calibration(sensor.into()))
+        self.emit(self.core().read_factory_calibration(sensor.into()))
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command writes a new calibration
@@ -1115,33 +1151,33 @@ impl CremaBridge {
     /// the shell should follow up with a `read_calibration` to surface the new
     /// in-use value.
     pub fn reset_calibration_to_factory(&self, sensor: CalSensor) -> String {
-        json(self.core().reset_calibration_to_factory(sensor.into()))
+        self.emit(self.core().reset_calibration_to_factory(sensor.into()))
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command tares the connected scale.
     pub fn tare_scale(&self) -> String {
-        json(self.core().tare_scale())
+        self.emit(self.core().tare_scale())
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command starts the connected
     /// scale's built-in timer. Capability-gated to scales that support
     /// software timer commands (the Bookoo today); empty otherwise.
     pub fn start_timer(&self) -> String {
-        json(self.core().start_timer())
+        self.emit(self.core().start_timer())
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command stops the connected
     /// scale's built-in timer. Capability-gated like
     /// [`start_timer`](Self::start_timer).
     pub fn stop_timer(&self) -> String {
-        json(self.core().stop_timer())
+        self.emit(self.core().stop_timer())
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command resets the connected
     /// scale's built-in timer to zero. Capability-gated like
     /// [`start_timer`](Self::start_timer).
     pub fn reset_timer(&self) -> String {
-        json(self.core().reset_timer())
+        self.emit(self.core().reset_timer())
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command enables a connected
@@ -1290,7 +1326,7 @@ impl CremaBridge {
     /// the connected scale exposes a settable volume. Empty otherwise. Wired
     /// exactly like [`tare_scale`](Self::tare_scale).
     pub fn set_scale_volume(&self, level: u8) -> String {
-        json(self.core().set_scale_volume(level))
+        self.emit(self.core().set_scale_volume(level))
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command sets the connected scale's
@@ -1302,7 +1338,7 @@ impl CremaBridge {
     /// configurable auto-standby. Empty otherwise. Wired exactly like
     /// [`set_scale_volume`](Self::set_scale_volume).
     pub fn set_scale_standby(&self, minutes: u8) -> String {
-        json(self.core().set_scale_standby(minutes))
+        self.emit(self.core().set_scale_standby(minutes))
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command enables or disables the
@@ -1312,7 +1348,7 @@ impl CremaBridge {
     /// supports flow smoothing. Empty otherwise. Wired exactly like
     /// [`set_scale_volume`](Self::set_scale_volume).
     pub fn set_scale_flow_smoothing(&self, enabled: bool) -> String {
-        json(self.core().set_scale_flow_smoothing(enabled))
+        self.emit(self.core().set_scale_flow_smoothing(enabled))
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command enables or disables the
@@ -1322,7 +1358,7 @@ impl CremaBridge {
     /// supports anti-mistouch. Empty otherwise. Wired exactly like
     /// [`set_scale_volume`](Self::set_scale_volume).
     pub fn set_scale_anti_mistouch(&self, enabled: bool) -> String {
-        json(self.core().set_scale_anti_mistouch(enabled))
+        self.emit(self.core().set_scale_anti_mistouch(enabled))
     }
 
     /// Build a [`CoreOutput`] (JSON) whose commands switch the connected scale
@@ -1334,7 +1370,7 @@ impl CremaBridge {
     /// order — the shell must perform them in that order. Empty otherwise.
     /// Wired exactly like [`set_scale_volume`](Self::set_scale_volume).
     pub fn set_scale_mode(&self, mode_id: u8) -> String {
-        json(self.core().set_scale_mode(mode_id))
+        self.emit(self.core().set_scale_mode(mode_id))
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command selects the connected
@@ -1345,7 +1381,7 @@ impl CremaBridge {
     /// out-of-range `mode_id` yields an empty `CoreOutput`. Wired exactly like
     /// [`set_scale_volume`](Self::set_scale_volume).
     pub fn set_scale_auto_stop(&self, mode_id: u8) -> String {
-        json(self.core().set_scale_auto_stop(mode_id))
+        self.emit(self.core().set_scale_auto_stop(mode_id))
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command queries the connected
@@ -1355,83 +1391,83 @@ impl CremaBridge {
     /// exposes a configurable setting. Empty otherwise. Wired exactly like
     /// [`tare_scale`](Self::tare_scale).
     pub fn query_scale_settings(&self) -> String {
-        json(self.core().query_scale_settings())
+        self.emit(self.core().query_scale_settings())
     }
 
     /// Write the DE1's steam / hot-water settings. Returns a JSON-encoded
     /// [`CoreOutput`] whose command applies them (with the legacy hot-water
     /// volume override when a scale is connected).
     pub fn set_steam_hotwater_settings(&self, settings: SteamHotWaterSettings) -> String {
-        json(self.core().set_steam_hotwater_settings(settings.into()))
+        self.emit(self.core().set_steam_hotwater_settings(settings.into()))
     }
 
     /// Enable or disable steam eco mode (the legacy `eco_steam` setting).
     /// Returns a JSON-encoded [`CoreOutput`].
     pub fn enable_steam_eco_mode(&self, enabled: bool, now_ms: u64) -> String {
-        json(self.core().enable_steam_eco_mode(enabled, now_ms))
+        self.emit(self.core().enable_steam_eco_mode(enabled, now_ms))
     }
 
     /// Write the DE1's water-tank refill threshold (`cuuid_11`). `threshold_mm`
     /// is the level at or below which the DE1 should ask for a refill.
     /// Returns a JSON-encoded [`CoreOutput`].
     pub fn set_refill_threshold(&self, threshold_mm: f32) -> String {
-        json(self.core().set_refill_threshold(threshold_mm))
+        self.emit(self.core().set_refill_threshold(threshold_mm))
     }
 
     /// Write one DE1 memory-mapped register. `value` is the raw little-endian
     /// word the register expects, already scaled. `byte_len` is 1, 2, or 4 —
     /// the wire `Len` byte of the resulting `WriteToMMR` packet.
     pub fn write_mmr(&self, register: MmrReg, value: u32, byte_len: u8) -> String {
-        json(self.core().write_mmr(register.into(), value, byte_len))
+        self.emit(self.core().write_mmr(register.into(), value, byte_len))
     }
 
     /// Set the fan-on temperature threshold, °C. Legacy
     /// `set_fan_temperature_threshold`; MMR `0x803808`, 1-byte.
     pub fn set_fan_threshold(&self, temp_c: u8) -> String {
-        json(self.core().set_fan_threshold(temp_c))
+        self.emit(self.core().set_fan_threshold(temp_c))
     }
 
     /// Set the tank desired water-temperature threshold, °C. Legacy
     /// `set_tank_temperature_threshold` (immediate value only); MMR
     /// `0x80380C`, 1-byte.
     pub fn set_tank_threshold(&self, temp_c: u8) -> String {
-        json(self.core().set_tank_threshold(temp_c))
+        self.emit(self.core().set_tank_threshold(temp_c))
     }
 
     /// Set the steam flow rate, ml/s. Scaled `int(10 × rate)`; MMR
     /// `0x803828`, 1-byte.
     pub fn set_steam_flow(&self, ml_per_s: f32) -> String {
-        json(self.core().set_steam_flow(ml_per_s))
+        self.emit(self.core().set_steam_flow(ml_per_s))
     }
 
     /// Set the seconds of high-flow steam at the start of a steam cycle.
     /// MMR `0x80382C`, 4-byte. Wire value is `seconds × 100`. `f32`
     /// to preserve sub-second precision (legacy default 0.7s).
     pub fn set_steam_highflow_start(&self, seconds: f32) -> String {
-        json(self.core().set_steam_highflow_start(seconds))
+        self.emit(self.core().set_steam_highflow_start(seconds))
     }
 
     /// Set the group-head-control mode. MMR `0x803820`, 1-byte.
     pub fn set_ghc_mode(&self, mode: u8) -> String {
-        json(self.core().set_ghc_mode(mode))
+        self.emit(self.core().set_ghc_mode(mode))
     }
 
     /// Set the hot-water flow rate, ml/s. Scaled `int(10 × rate)`; MMR
     /// `0x80384C`, 2-byte.
     pub fn set_hot_water_flow_rate(&self, ml_per_s: f32) -> String {
-        json(self.core().set_hot_water_flow_rate(ml_per_s))
+        self.emit(self.core().set_hot_water_flow_rate(ml_per_s))
     }
 
     /// Set the flush flow rate, ml/s. Scaled `int(10 × rate)`; MMR
     /// `0x803840`, 2-byte.
     pub fn set_flush_flow_rate(&self, ml_per_s: f32) -> String {
-        json(self.core().set_flush_flow_rate(ml_per_s))
+        self.emit(self.core().set_flush_flow_rate(ml_per_s))
     }
 
     /// Set the flush water target temperature, °C. Wire value is `°C × 10`;
     /// MMR `0x803844`, 4-byte.
     pub fn set_flush_temp(&self, temp_c: f32) -> String {
-        json(self.core().set_flush_temp(temp_c))
+        self.emit(self.core().set_flush_temp(temp_c))
     }
 
     /// Set the flush timeout. `ms` is milliseconds; the wire scale is
@@ -1446,26 +1482,26 @@ impl CremaBridge {
     /// Enable / disable the tablet's USB charging output. MMR `0x803854`,
     /// 1-byte.
     pub fn set_usb_charger_on(&self, enabled: bool) -> String {
-        json(self.core().set_usb_charger_on(enabled))
+        self.emit(self.core().set_usb_charger_on(enabled))
     }
 
     /// Tell the firmware whether the user is currently present at the
     /// machine. **Distinct register** from `set_feature_flags`. MMR
     /// `0x803860`, 1-byte.
     pub fn set_user_present(&self, present: bool) -> String {
-        json(self.core().set_user_present(present))
+        self.emit(self.core().set_user_present(present))
     }
 
     /// Set the firmware feature-flag bitmask. **Distinct register** from
     /// `set_user_present`. MMR `0x803858`, 2-byte.
     pub fn set_feature_flags(&self, flags: u16) -> String {
-        json(self.core().set_feature_flags(flags))
+        self.emit(self.core().set_feature_flags(flags))
     }
 
     /// Override the refill-kit presence flag (`0`/`1`/`2`). MMR `0x80385C`,
     /// 4-byte.
     pub fn set_refill_kit_present(&self, state: u8) -> String {
-        json(self.core().set_refill_kit_present(state))
+        self.emit(self.core().set_refill_kit_present(state))
     }
 
     /// Set the mains heater voltage. **Damaging if mis-set** — the shell
@@ -1510,34 +1546,34 @@ impl CremaBridge {
     /// Set the cup-warmer temperature, °C (Bengle models only). MMR
     /// `0x803874`, 2-byte.
     pub fn set_cup_warmer_temperature(&self, temp_c: u8) -> String {
-        json(self.core().set_cup_warmer_temperature(temp_c))
+        self.emit(self.core().set_cup_warmer_temperature(temp_c))
     }
 
     /// Set the flow-calibration multiplier. Scaled `int(1000 × multiplier)`;
     /// MMR `0x80383C`, 2-byte.
     pub fn set_calibration_flow_multiplier(&self, multiplier: f32) -> String {
-        json(self.core().set_calibration_flow_multiplier(multiplier))
+        self.emit(self.core().set_calibration_flow_multiplier(multiplier))
     }
 
     /// Set the hot-water phase-1 flow rate (legacy `heater_tweaks`
     /// `phase_1_flow_rate`). Scaled `int(10 × rate)`; MMR `0x803810`,
     /// 4-byte LE.
     pub fn set_phase_1_flow_rate(&self, rate_ml_per_s: f32) -> String {
-        json(self.core().set_phase_1_flow_rate(rate_ml_per_s))
+        self.emit(self.core().set_phase_1_flow_rate(rate_ml_per_s))
     }
 
     /// Set the hot-water phase-2 flow rate (legacy `heater_tweaks`
     /// `phase_2_flow_rate`). Scaled `int(10 × rate)`; MMR `0x803814`,
     /// 4-byte LE.
     pub fn set_phase_2_flow_rate(&self, rate_ml_per_s: f32) -> String {
-        json(self.core().set_phase_2_flow_rate(rate_ml_per_s))
+        self.emit(self.core().set_phase_2_flow_rate(rate_ml_per_s))
     }
 
     /// Set the hot-water boiler idle target temperature, °C (legacy
     /// `heater_tweaks` `hot_water_idle_temp`). MMR `0x803818`, 4-byte LE.
     /// Wire value is `°C × 10` (scaled by reaprime's `writeScale: 10.0`).
     pub fn set_hot_water_idle_temp(&self, temp_c: f32) -> String {
-        json(self.core().set_hot_water_idle_temp(temp_c))
+        self.emit(self.core().set_hot_water_idle_temp(temp_c))
     }
 
     /// Set the espresso group warmup timeout (legacy `heater_tweaks`
@@ -1557,14 +1593,14 @@ impl CremaBridge {
         } else {
             std::time::Duration::ZERO
         };
-        json(self.core().set_espresso_warmup_timeout(dur))
+        self.emit(self.core().set_espresso_warmup_timeout(dur))
     }
 
     /// Set the steam two-tap-stop (legacy `heater_tweaks`
     /// `steam_two_tap_stop`; reaprime `steamPurgeMode`). MMR `0x803850`,
     /// 4-byte LE int. `0` disables, `1` enables.
     pub fn set_steam_two_tap_stop(&self, value: u8) -> String {
-        json(self.core().set_steam_two_tap_stop(value))
+        self.emit(self.core().set_steam_two_tap_stop(value))
     }
 
     /// The standard DE1 profiles Crema ships built in, as a JSON array string.
@@ -1627,7 +1663,7 @@ impl CremaBridge {
 
     /// Cancel an in-progress profile upload.
     pub fn cancel_profile_upload(&self) -> String {
-        json(self.core().cancel_profile_upload())
+        self.emit(self.core().cancel_profile_upload())
     }
 
     /// `true` from `upload_profile` until the tail-ack / a failure /

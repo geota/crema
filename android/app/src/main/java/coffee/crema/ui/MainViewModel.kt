@@ -1923,6 +1923,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** The startup transport delegate, from the persisted role. */
     private fun buildInitialDelegate(): BleTransport {
         val cfg = readProxyConfigSync()
+        // A secondary's core mirrors the DE1 but must never drive it — make it a
+        // read-only observer from the start (preserved across session resets).
+        bridge.setReadOnly(cfg.role == "secondary")
         return when (cfg.role) {
             "secondary" -> startSecondaryMode(cfg.host, cfg.port)
             "primary" -> startPrimaryMode()
@@ -2029,6 +2032,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 )
             }
             persistPrefs()
+            // A secondary mirrors the machine but must never drive it: make its
+            // core a read-only observer so the autonomous writes it derives from
+            // the mirrored stream (SAW, frame-skip) are suppressed. normal/primary
+            // are authoritative. reset() preserves this across reconnects.
+            bridge.setReadOnly(role == "secondary")
             // Reconnect the DE1 over the new delegate (a secondary attaches to the
             // primary's DE1; primary/normal scan the real or replayed radio). The
             // scale, if any, is reconnected by the user — DE1-only mirror for now.
