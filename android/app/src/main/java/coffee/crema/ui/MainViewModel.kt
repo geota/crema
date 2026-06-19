@@ -1756,7 +1756,53 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             "setActiveBean" -> setActiveBean(args.ifEmpty { null })
             "setStopOnWeight" -> setStopOnWeight(args.toBoolean())
             "setAutoTare" -> setAutoTare(args.toBoolean())
+            // M3 handoff: a secondary asks to take the DE1. Idle-only; on grant we
+            // step down so the taker can acquire the radio.
+            "handoff" -> grantHandoff()
             else -> error("unknown relayed control: $method")
+        }
+    }
+
+    /** Machine states during which a [requestHandoff] must be refused — moving the
+     *  radio mid-dispense would abort the shot. Everything else (idle/sleep/
+     *  heating) is fair game. */
+    private val handoffBusyStates = setOf("Espresso", "Steam", "HotWater", "Flush")
+
+    /** Primary side of an M3 handoff: a secondary asked for the DE1. Refuse if
+     *  we're mid-shot (idle-only); otherwise grant by stepping down to NORMAL so
+     *  the taker can connect its own radio. The release is delayed a beat so this
+     *  grant (a `ControlOk`) flushes to the secondary before [applyMode] tears the
+     *  relay down. Throwing here becomes a `ControlErr` → the taker stays put. */
+    private fun grantHandoff() {
+        val state = _ui.value.machineStateName
+        require(state !in handoffBusyStates) { "machine busy ($state) — handoff is idle-only" }
+        appendLog("Handoff granted — stepping down to normal")
+        viewModelScope.launch {
+            kotlinx.coroutines.delay(400)
+            switchToNormal()
+        }
+    }
+
+    /** Secondary side of an M3 handoff (the picker's "Take over"): ask the primary
+     *  to release the DE1, and on grant become the host ourselves. Idle-only — the
+     *  primary refuses mid-shot. NOTE: the old primary stepping back as *our*
+     *  mirror needs an endpoint exchange / NSD (it doesn't know our relay), and on
+     *  a no-Bluetooth emulator "becoming primary" falls to a replay; the real radio
+     *  move is hardware-gated. Both are documented follow-ups. */
+    fun requestHandoff() {
+        viewModelScope.launch {
+            val proxy = switchable.delegate as? ProxyTransport
+            if (proxy == null) {
+                appendLog("Handoff: not currently mirroring a primary")
+                return@launch
+            }
+            proxy.control("handoff")
+                .onSuccess {
+                    appendLog("Handoff granted — acquiring the DE1")
+                    kotlinx.coroutines.delay(600) // let the primary release first
+                    switchToPrimary()
+                }
+                .onFailure { appendLog("Handoff refused: ${it.message}") }
         }
     }
 

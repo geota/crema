@@ -176,6 +176,7 @@ fun PhoneBrewScreen(
             onScaleAutoConnect = vm::setScaleAutoConnect,
             onMirrorFrom = { host, port -> vm.switchToSecondary(host, port); devicesOpen = false },
             onStopMirroring = { vm.switchToNormal(); devicesOpen = false },
+            onTakeOver = { vm.requestHandoff(); devicesOpen = false },
             onDismiss = { devicesOpen = false },
         )
     }
