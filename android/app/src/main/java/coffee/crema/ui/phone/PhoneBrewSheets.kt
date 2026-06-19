@@ -492,6 +492,7 @@ fun PhoneDevicesSheet(
     onScaleAutoConnect: (Boolean) -> Unit,
     onMirrorFrom: (host: String, port: Int) -> Unit,
     onStopMirroring: () -> Unit,
+    onTakeOver: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     ModalBottomSheet(
@@ -566,7 +567,7 @@ fun PhoneDevicesSheet(
                 Spacer(Modifier.width(9.dp))
                 Text("Scan for devices", style = MaterialTheme.typography.labelLarge.copy(fontSize = 14.sp, fontWeight = FontWeight.SemiBold))
             }
-            MultiDeviceSection(ui, onMirrorFrom, onStopMirroring)
+            MultiDeviceSection(ui, onMirrorFrom, onStopMirroring, onTakeOver)
             Text(
                 "Acaia, Bookoo, Decent, Felicita and more pair automatically.",
                 style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.5.sp),
@@ -585,6 +586,7 @@ private fun MultiDeviceSection(
     ui: MainUiState,
     onMirrorFrom: (host: String, port: Int) -> Unit,
     onStopMirroring: () -> Unit,
+    onTakeOver: () -> Unit,
 ) {
     Spacer(Modifier.height(18.dp))
     Text(
@@ -601,6 +603,14 @@ private fun MultiDeviceSection(
             sub = ui.proxyPrimaryHost.ifBlank { "a primary on the LAN" },
             action = "Stop",
             onClick = onStopMirroring,
+        )
+        // M3 handoff: pull the DE1 onto this device. Idle-only — the primary
+        // refuses mid-shot, so a running extraction is never interrupted.
+        MirrorRow(
+            title = "Take over the DE1",
+            sub = "Hold the machine here (idle only)",
+            action = "Take over",
+            onClick = onTakeOver,
         )
         return
     }
