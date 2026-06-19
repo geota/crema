@@ -93,6 +93,8 @@ class ProxyTransport(
             is Frame.ReadErr -> pending.remove(frame.id)?.complete(frame)
             is Frame.WriteOk -> pending.remove(frame.id)?.complete(frame)
             is Frame.WriteErr -> pending.remove(frame.id)?.complete(frame)
+            is Frame.ControlOk -> pending.remove(frame.id)?.complete(frame)
+            is Frame.ControlErr -> pending.remove(frame.id)?.complete(frame)
             is Frame.Notify -> channelFor(frame.address, frame.char).trySend(frame)
             is Frame.State -> stateFlow(frame.address).value = parseState(frame.state)
             is Frame.Denied ->
@@ -154,6 +156,26 @@ class ProxyTransport(
         if (reply is Frame.WriteErr) {
             // M1 read-only mirror: swallow rather than throw (see the class KDoc).
             Log.i(TAG, "write rejected (read-only mirror): ${reply.reason}")
+        }
+    }
+
+    /**
+     * Relay a **user-intent** control action to the primary (the secondary's own
+     * core is a read-only mirror and cannot drive the machine). Suspends until
+     * the primary acks dispatch via [Frame.ControlOk]; the action's *effect*
+     * arrives asynchronously over [observe] as the primary's machine state. Not
+     * part of [BleTransport] — the VM calls it directly when relaying a tap on a
+     * secondary's Brew controls. Returns failure on [Frame.ControlErr]/timeout so
+     * the caller can surface it, never throwing into the UI thread.
+     */
+    suspend fun control(method: String, args: String = ""): Result<Unit> {
+        val id = nextId.getAndIncrement()
+        return runCatching {
+            when (val reply = request(id) { Frame.Control(id, method, args) }) {
+                is Frame.ControlOk -> Unit
+                is Frame.ControlErr -> error("control rejected: ${reply.reason}")
+                else -> error("Unexpected reply to control: $reply")
+            }
         }
     }
 

@@ -185,6 +185,35 @@ sealed class Frame {
     @SerialName("writeErr")
     data class WriteErr(val id: Long, val reason: String) : Frame()
 
+    // ---- Control (M2: relayed user intent → primary's command router) ------
+
+    /**
+     * Secondary → primary: relay a **user-intent** control action to the
+     * primary's VM command router. A secondary's own core is a read-only mirror
+     * (it cannot drive the machine), so a tap on its Brew controls crosses as
+     * this frame; the primary — the sole authority — executes it on the real
+     * link. [method] names the action (`"machineState"`, `"startShot"`,
+     * `"tareScale"`, …) and [args] is its payload (e.g. a `MachineRequest` name,
+     * or empty for a no-arg action). The action's *effect* returns asynchronously
+     * as machine state over the mirrored [Notify] stream; this frame's reply only
+     * confirms the primary **dispatched** it. `startShot` deliberately relays as
+     * bare intent — the primary runs its own shot orchestration (profile upload
+     * guard, QC bake), so that complexity never crosses the wire.
+     */
+    @Serializable
+    @SerialName("control")
+    data class Control(val id: Long, val method: String, val args: String = "") : Frame()
+
+    /** Primary → secondary: the [Control] was dispatched on the real link. */
+    @Serializable
+    @SerialName("controlOk")
+    data class ControlOk(val id: Long) : Frame()
+
+    /** Primary → secondary: the [Control] was refused or failed to dispatch. */
+    @Serializable
+    @SerialName("controlErr")
+    data class ControlErr(val id: Long, val reason: String) : Frame()
+
     // ---- Push streams (drive observe / connectionState) --------------------
 
     /**

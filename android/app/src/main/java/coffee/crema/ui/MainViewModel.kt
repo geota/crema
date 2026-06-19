@@ -1530,6 +1530,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * pre-shot flush (no settings store on Android yet) — both are later refinements.
      */
     fun startShot() {
+        if (relayIfSecondary("startShot")) return
         val cremaJson = _ui.value.activeProfileId?.let { profileJsonById[it] }
         if (cremaJson == null) {
             notifyUser("Can\u2019t start shot \u2014 no profile selected")
@@ -1718,7 +1719,41 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * shared command path — the same path the scale writes use. The Brew screen
      * (M1/M2) builds its Coffee / Stop / mode controls on this.
      */
+    // ── Multi-device: relay a secondary's user intent to the primary ──────────
+
+    /**
+     * On a secondary (read-only mirror), relay user-intent control [method] to
+     * the primary instead of running it locally — the secondary's core can't
+     * drive the machine, so a tap on its Brew controls crosses the LAN to the
+     * primary's command router ([coffee.crema.ble.proxy.Frame.Control]). Returns
+     * `true` when relayed (the caller must `return`, skipping the local path);
+     * `false` on a normal/primary device, where the caller runs the action.
+     */
+    private fun relayIfSecondary(method: String, args: String = ""): Boolean {
+        if (_ui.value.proxyRole != "secondary") return false
+        val proxy = switchable.delegate as? ProxyTransport ?: return false
+        viewModelScope.launch {
+            proxy.control(method, args).onFailure { appendLog("Relay $method failed: ${it.message}") }
+        }
+        return true
+    }
+
+    /** Run a secondary's relayed control intent on this (primary) device — the
+     *  same verbs the primary's own UI calls. On a primary [relayIfSecondary] is
+     *  false, so each executes locally against the real link. Wired into the
+     *  [RelayHub] by [startPrimaryMode]; `startShot` runs the primary's full shot
+     *  orchestration, so that complexity never crosses the wire. */
+    private fun handleRelayedControl(method: String, args: String): Result<Unit> = runCatching {
+        when (method) {
+            "machineState" -> requestMachineState(MachineRequest.valueOf(args))
+            "startShot" -> startShot()
+            "tareScale" -> tareScale()
+            else -> error("unknown relayed control: $method")
+        }
+    }
+
     private fun requestMachineState(state: MachineRequest) {
+        if (relayIfSecondary("machineState", state.name)) return
         val raw = runCatching { bridge.requestMachineState(state) }.getOrElse {
             appendLog("requestMachineState failed: ${it.message}")
             return
@@ -1962,6 +1997,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // Everything except the counted ShotSample stream is a latest-value
             // state/identity char and is replayed on attach.
             isSnapshotChar = { _, char -> char != De1Uuids.SHOT_SAMPLE },
+            // Relayed user intent from a secondary → this primary's command router.
+            controlHandler = { method, args -> handleRelayedControl(method, args) },
         )
         relayHub = hub
         val tapping = TappingBleTransport(real, hub, viewModelScope)
@@ -3401,6 +3438,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * exact same code handles a manual tare and the core's auto-tare.
      */
     fun tareScale() {
+        if (relayIfSecondary("tareScale")) return
         val raw = runCatching { bridge.tareScale() }.getOrElse {
             appendLog("Tare failed: ${it.message}")
             return
