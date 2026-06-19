@@ -267,6 +267,21 @@ dependencies {
     implementation("no.nordicsemi.kotlin.ble:client-android:$nordicBle")
     implementation("no.nordicsemi.kotlin.ble:environment-android:$nordicBle")
 
+    // Ktor — the multi-device LAN proxy (M1). The PRIMARY embeds a small
+    // WebSocket server (`LanRelayServer`) so secondaries can mirror/drive the
+    // DE1 over the LAN; a SECONDARY dials it as a Ktor WebSocket client. CIO
+    // (coroutine IO) on both ends — pure-Kotlin, no Netty, light on Android.
+    // Server + client sessions are both `WebSocketSession`, so ONE
+    // `KtorWsFrameLink` backs both. The same framed protocol later serves the
+    // PWA (M4) and a cloud relay (M5); the JSON frames ride as WS text.
+    val ktor = "3.1.3"
+    implementation("io.ktor:ktor-server-core:$ktor")
+    implementation("io.ktor:ktor-server-cio:$ktor")
+    implementation("io.ktor:ktor-server-websockets:$ktor")
+    implementation("io.ktor:ktor-client-core:$ktor")
+    implementation("io.ktor:ktor-client-cio:$ktor")
+    implementation("io.ktor:ktor-client-websockets:$ktor")
+
     // JVM unit tests for pure shell logic (no device / FFI). kotlin-test mapped
     // onto the JUnit 4 runner AGP's unit-test task uses.
     testImplementation("org.jetbrains.kotlin:kotlin-test-junit:2.2.20")

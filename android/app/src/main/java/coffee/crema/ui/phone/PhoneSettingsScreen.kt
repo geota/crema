@@ -817,6 +817,44 @@ private fun AdvancedSection(
             }
         }
     }
+    SettingsGroup("Multi-device (LAN proxy · debug)") {
+        // M1: mirror/drive the DE1 from a second device over the LAN. The transport
+        // is built at startup, so a role change is restart-to-apply.
+        val roleSub = when (ui.proxyRole) {
+            "primary" -> "Owns the DE1 and relays it to others. Restart to apply."
+            "secondary" -> "Mirrors a primary over the LAN. Restart to apply."
+            else -> "Off — normal single-device use."
+        }
+        CremaSettingsRow("Role", roleSub, last = ui.proxyRole != "secondary") {
+            CremaSegmentedButton(
+                options = listOf(SegOption("normal", "Off"), SegOption("primary", "Primary"), SegOption("secondary", "Secondary")),
+                value = ui.proxyRole,
+                onChange = vm::setProxyRole,
+                enabled = true,
+                uniform = true,
+            )
+        }
+        if (ui.proxyRole == "secondary") {
+            CremaSettingsRow("Primary host", "An IP, or 10.0.2.2 for an adb-forwarded emulator.") {
+                CremaTextField(
+                    value = ui.proxyPrimaryHost,
+                    onValueChange = vm::setProxyPrimaryHost,
+                    placeholder = "10.0.2.2",
+                    singleLine = true,
+                    modifier = Modifier.width(160.dp),
+                )
+            }
+            CremaSettingsRow("Primary port", "The relay port — see the primary's log line.", last = true) {
+                CremaTextField(
+                    value = if (ui.proxyPrimaryPort > 0) ui.proxyPrimaryPort.toString() else "",
+                    onValueChange = { vm.setProxyPrimaryPort(it.filter(Char::isDigit).take(5).toIntOrNull() ?: 0) },
+                    placeholder = "8080",
+                    singleLine = true,
+                    modifier = Modifier.width(120.dp),
+                )
+            }
+        }
+    }
     SettingsGroup("Service-grade") {
         // null until the connected DE1 reports its mains voltage (raw HeaterVoltage MMR).
         val hv = heaterVoltageValue(ui.de1MachineInfo)

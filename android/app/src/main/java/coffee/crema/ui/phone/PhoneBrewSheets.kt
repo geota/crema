@@ -490,6 +490,8 @@ fun PhoneDevicesSheet(
     onConnect: (String) -> Unit,
     onDe1AutoConnect: (Boolean) -> Unit,
     onScaleAutoConnect: (Boolean) -> Unit,
+    onMirrorFrom: (host: String, port: Int) -> Unit,
+    onStopMirroring: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     ModalBottomSheet(
@@ -564,6 +566,7 @@ fun PhoneDevicesSheet(
                 Spacer(Modifier.width(9.dp))
                 Text("Scan for devices", style = MaterialTheme.typography.labelLarge.copy(fontSize = 14.sp, fontWeight = FontWeight.SemiBold))
             }
+            MultiDeviceSection(ui, onMirrorFrom, onStopMirroring)
             Text(
                 "Acaia, Bookoo, Decent, Felicita and more pair automatically.",
                 style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.5.sp),
@@ -571,6 +574,81 @@ fun PhoneDevicesSheet(
                 modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
             )
+        }
+    }
+}
+
+/* ── Multi-device: mirror another Crema on the LAN (M2) ─────────────────── */
+
+@Composable
+private fun MultiDeviceSection(
+    ui: MainUiState,
+    onMirrorFrom: (host: String, port: Int) -> Unit,
+    onStopMirroring: () -> Unit,
+) {
+    Spacer(Modifier.height(18.dp))
+    Text(
+        "Other devices",
+        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Spacer(Modifier.height(4.dp))
+
+    // If we're already a mirror, the only action is to stop.
+    if (ui.proxyRole == "secondary") {
+        MirrorRow(
+            title = "Mirroring",
+            sub = ui.proxyPrimaryHost.ifBlank { "a primary on the LAN" },
+            action = "Stop",
+            onClick = onStopMirroring,
+        )
+        return
+    }
+
+    // NSD-discovered hosts holding the DE1, plus the debug manual peer (for
+    // emulators / when NSD can't run).
+    val sources = ui.peers.filter { it.isMirrorSource }
+    val manualHost = ui.proxyPrimaryHost.takeIf { it.isNotBlank() }
+    if (sources.isEmpty() && manualHost == null) {
+        Text(
+            "No other Crema devices found on the network.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        return
+    }
+    sources.forEach { peer ->
+        MirrorRow(
+            title = peer.name,
+            sub = "Holds the DE1 · ${peer.host}",
+            action = "Mirror",
+            onClick = { onMirrorFrom(peer.host, peer.port) },
+        )
+    }
+    manualHost?.let { host ->
+        MirrorRow(
+            title = "Debug primary",
+            sub = "$host:${ui.proxyPrimaryPort}",
+            action = "Mirror",
+            onClick = { onMirrorFrom(host, ui.proxyPrimaryPort) },
+        )
+    }
+}
+
+@Composable
+private fun MirrorRow(title: String, sub: String, action: String, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        PhIcon("bluetooth", sizeDp = 20)
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold))
+            Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        OutlinedButton(onClick = onClick, shape = RoundedCornerShape(999.dp)) {
+            Text(action, style = MaterialTheme.typography.labelLarge.copy(fontSize = 13.sp, fontWeight = FontWeight.SemiBold))
         }
     }
 }
