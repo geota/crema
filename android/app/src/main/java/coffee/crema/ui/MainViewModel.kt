@@ -26,6 +26,8 @@ import coffee.crema.core.exportBeanconquerorMainJson
 import coffee.crema.core.maintenanceReadout
 import coffee.crema.beans.BeanLibrary
 import coffee.crema.beans.LibraryStore
+import coffee.crema.beans.daysOffRoast
+import coffee.crema.beans.isFrozen
 import coffee.crema.beans.newBean
 import coffee.crema.beans.newRoaster
 import coffee.crema.history.HistoryStore
@@ -188,8 +190,18 @@ fun effectiveBrew(brewParams: BrewParams?, active: CremaProfile?): EffectiveBrew
     )
 }
 
+/**
+ * The profile currently driving the Brew surface: the mirror overlay
+ * ([MainUiState.mirroredProfile]) when this device is showing a primary's custom
+ * profile it doesn't itself have (issue 05), else the library lookup by
+ * [MainUiState.activeProfileId]. One source so the header, curve, targets, and
+ * scale dose all agree on a secondary.
+ */
+fun MainUiState.activeProfile(): CremaProfile? =
+    mirroredProfile ?: profiles.firstOrNull { it.id == activeProfileId }
+
 fun MainUiState.effectiveBrew(): EffectiveBrew =
-    effectiveBrew(brewParams, profiles.firstOrNull { it.id == activeProfileId })
+    effectiveBrew(brewParams, activeProfile())
 
 /**
  * Headroom (mm) above the DE1's refill threshold at or below which the "refill
@@ -460,6 +472,20 @@ data class MainUiState(
      *  reconnecting mirror from a healthy one so a frozen view doesn't read as
      *  live (issue 03). Only meaningful while [proxyRole] == "secondary". */
     val mirrorReconnecting: Boolean = false,
+    /**
+     * Transient mirror overlay (issue 05): the primary's active profile, decoded
+     * for **display only**, when it's a custom profile this device's own library
+     * lacks. Preferred over the [activeProfileId] library lookup while mirroring so
+     * the Brew curve/targets/name match the primary exactly. Null = use the library
+     * (built-in, or not mirroring). Cleared on any mode switch. */
+    val mirroredProfile: CremaProfile? = null,
+    /** The raw wire JSON behind [mirroredProfile] — kept so a take-over (#01) can
+     *  promote it into the taker's real library (the thin [mirroredProfile] model
+     *  drops fields the upload needs). Set/cleared in lock-step with it. */
+    val mirroredProfileJson: String? = null,
+    /** A one-line summary of the primary's active bean (issue 05), shown on the bean
+     *  chip when that bean isn't in this device's library. Null = use the library. */
+    val mirroredBeanSummary: String? = null,
     /** Crema instances discovered on the LAN (NSD) — the device picker's list. */
     val peers: List<Peer> = emptyList(),
     /** Latest scale weight in grams, or null before the first reading. */
@@ -1842,6 +1868,24 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  mirror needs an endpoint exchange / NSD (it doesn't know our relay), and on
      *  a no-Bluetooth emulator "becoming primary" falls to a replay; the real radio
      *  move is hardware-gated. Both are documented follow-ups. */
+    /** On a take-over (#01) the taker becomes the primary and must be able to
+     *  actually drive shots with whatever profile it was mirroring — including a
+     *  primary's custom profile it never had locally (issue 05). Promote the
+     *  transient overlay JSON into this device's real library (de-duped by id) and
+     *  make it the active selection. Set directly, not via [setActiveProfile]: we're
+     *  still nominally a secondary at this point, so that path would relay instead. */
+    private fun promoteMirroredProfile() {
+        val raw = _ui.value.mirroredProfileJson ?: return
+        val id = profileIdOf(raw, json)?.takeIf { it.isNotEmpty() } ?: return
+        if (!profileJsonById.containsKey(id)) {
+            customProfilesJson = listOf(raw) + customProfilesJson
+            refreshProfiles()
+            persistCustomProfiles()
+            appendLog("Handoff: promoted mirrored profile into the library ($id)")
+        }
+        _ui.update { it.copy(activeProfileId = id, brewParams = null) }
+    }
+
     fun requestHandoff() {
         viewModelScope.launch {
             val proxy = switchable.delegate as? ProxyTransport
@@ -1853,6 +1897,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 .onSuccess {
                     appendLog("Handoff granted — acquiring the DE1")
                     notifyUser("Taking over the machine…")
+                    promoteMirroredProfile() // keep the mirrored custom profile (issue 05)
                     kotlinx.coroutines.delay(600) // let the primary release first
                     switchToPrimary()
                 }
@@ -1861,6 +1906,25 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     notifyUser("Can't take over — the machine is busy")
                 }
         }
+    }
+
+    /** A one-line roaster · name · freshness summary of the active bean for the
+     *  config snapshot (issue 05) so a mirror can render the bean chip even when
+     *  the bean isn't in its own library. Mirrors `beanLine` on the Brew screen. */
+    private fun activeBeanSummaryLine(): String? {
+        val ui = _ui.value
+        val bean = ui.beans.firstOrNull { it.id == ui.activeBeanId } ?: return null
+        val roaster = ui.roasters.firstOrNull { it.id == bean.roasterId }?.name
+        val days = daysOffRoast(bean.roastedOn)
+        return listOfNotNull(
+            roaster,
+            bean.name,
+            when {
+                bean.isFrozen -> "Frozen"
+                days != null -> "${days}d off roast"
+                else -> null
+            },
+        ).joinToString(" · ").ifBlank { null }
     }
 
     /** Build the primary's session-config snapshot JSON for a mirror (see
@@ -1872,7 +1936,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             ConfigSnapshot.serializer(),
             ConfigSnapshot(
                 activeProfileId = ui.activeProfileId,
+                // Custom profiles only (issue 05): a mirror already has every
+                // built-in by id, so we don't ship those — keeps the frame lean
+                // while still covering the profile a secondary couldn't otherwise show.
+                activeProfileJson = ui.activeProfileId
+                    ?.takeIf { it !in builtinProfileJson }
+                    ?.let { profileJsonById[it] },
                 activeBeanId = ui.activeBeanId,
+                activeBeanSummary = activeBeanSummaryLine(),
                 stopOnWeight = ui.stopOnWeight,
                 autoTare = ui.autoTare,
                 maxShotDurationS = ui.maxShotDurationS,
@@ -1905,9 +1976,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             appendLog("Config snapshot parse failed: ${it.message}")
             return
         }
+        // Decode the custom-profile overlay (issue 05) so the curve/targets/name
+        // match the primary even for a profile this mirror never saved. A built-in
+        // sends no JSON → overlay null → we fall back to the (guarded) library id.
+        val overlay = cfg.activeProfileJson?.let { raw ->
+            runCatching { json.decodeFromString(CremaProfile.serializer(), raw) }.getOrElse {
+                appendLog("Mirror profile overlay parse failed: ${it.message}")
+                null
+            }
+        }
         _ui.update {
             it.copy(
                 activeProfileId = cfg.activeProfileId?.takeIf { id -> profileJsonById.containsKey(id) } ?: it.activeProfileId,
+                mirroredProfile = overlay,
+                mirroredProfileJson = overlay?.let { cfg.activeProfileJson },
+                mirroredBeanSummary = cfg.activeBeanSummary,
                 activeBeanId = cfg.activeBeanId,
                 stopOnWeight = cfg.stopOnWeight,
                 autoTare = cfg.autoTare,
@@ -2257,6 +2340,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     proxyRole = role,
                     proxyPrimaryHost = if (role == "secondary") host else it.proxyPrimaryHost,
                     proxyPrimaryPort = if (role == "secondary") port else it.proxyPrimaryPort,
+                    // Drop any mirror overlay (issue 05); a fresh `secondary` attach
+                    // repopulates it from the primary's snapshot.
+                    mirroredProfile = null,
+                    mirroredProfileJson = null,
+                    mirroredBeanSummary = null,
                 )
             }
             persistPrefs()

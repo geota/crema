@@ -19,6 +19,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coffee.crema.ble.ScaleBleManager
 import coffee.crema.ui.MainUiState
 import coffee.crema.ui.MainViewModel
+import coffee.crema.ui.activeProfile
 import coffee.crema.ui.effectiveBrew
 import coffee.crema.ui.components.*
 import coffee.crema.ui.phone.components.*
@@ -56,7 +57,7 @@ fun PhoneScaleScreen(
     val connected = ui.scaleState == ScaleBleManager.State.READY
     val caps = if (connected) ui.scaleCapabilities else null
     val weight = (ui.scaleWeightG ?: 0f).toDouble()
-    val activeProfile = ui.profiles.firstOrNull { it.id == ui.activeProfileId }
+    val activeProfile = ui.activeProfile()
     // Dose target = the QC override when set, else the active profile's dose.
     val target = effectiveBrew(ui.brewParams, activeProfile).dose
 
@@ -218,7 +219,7 @@ private fun ConnectedBody(
                 // Nudges the next shot's dose target by +0.5 g (a transient
                 // Quick-Controls override, not a profile edit) — same seam QC uses.
                 TextButton(onClick = {
-                    val active = ui.profiles.firstOrNull { it.id == ui.activeProfileId }
+                    val active = ui.activeProfile()
                     val base = effectiveBrew(ui.brewParams, active)
                     val dose = base.dose + 0.5
                     // Yield's last-ditch default tracks the *bumped* dose (dose * 2),

@@ -1,6 +1,6 @@
 # 05 — Sync custom profiles to mirrors (id-only sync shows the wrong profile)
 
-- **Status:** ready-for-agent
+- **Status:** done (profile overlay + handoff-promote validated; bean-summary fallback build-verified)
 - **Severity:** P2
 - **Area:** Android (proxy config · MainViewModel · settings)
 - **Depends on:** none (builds on T2 `ConfigSnapshot`)
@@ -71,3 +71,33 @@ can start a shot on that profile.
 
 ## Comments
 <!-- triage + progress notes append below -->
+
+**2026-06-20 — done + 2-emulator validated.** Implemented the transient-overlay
+design (no library pollution):
+- `ConfigSnapshot` gained `activeProfileJson` (sent **custom-only** — built-ins are
+  on every install, covered by the id; keeps the frame lean) + `activeBeanSummary`
+  (a one-line roaster·name·freshness string).
+- `MainUiState` gained transient `mirroredProfile` (decoded, display), its raw
+  `mirroredProfileJson` (for promote), and `mirroredBeanSummary`. New
+  `MainUiState.activeProfile()` = `mirroredProfile ?: library lookup`; `effectiveBrew`
+  and the phone/tablet Brew + Scale screens route through it, so header, curve,
+  targets and scale dose all agree on a secondary. `beanLine` falls back to the
+  summary when the bean isn't local. Overlay is cleared on every `applyMode`.
+- **Handoff promote (option a):** `promoteMirroredProfile()` runs in
+  `requestHandoff`'s grant path (before `switchToPrimary`, set directly — we're still
+  a secondary so `setActiveProfile` would relay) — de-dupes by id, persists the JSON
+  into the taker's custom library, activates it.
+
+**Validation (tablet primary replay / phone secondary, phone has 0 customs):**
+- Tablet active = custom **"Londonium"** (phone lacks it). Phone mirror showed
+  header "Londonium", the curve, and the exact param strip — TEMP 191.3 °F, PRE-INF
+  2 s, PRESSURE 131 psi, EST. TIME ~356 s (all matching the profile's segments) — plus
+  the bean line "Sweet Bloom · Geometry · 8d off roast" from the summary.
+- **Stop** → reverted to the phone's own "7g basket" built-in (TEMP 194 °F / 109 psi /
+  ~24 s); `customProfiles.json` still **absent** → no leaked library entry.
+- **Take over** → `customProfiles.json` now holds exactly 1 profile (Londonium),
+  `activeProfileId`=Londonium, role=primary, relay up; the dropdown lists Londonium as
+  a real, active, selectable library entry → the new primary can drive shots with it.
+- Caveat: the `activeBeanSummary` *null-branch* wasn't force-exercised — the test bean
+  was present in both seeded libraries, so the chip rendered from the local bean. The
+  summary string does cross the wire; the fallback is a trivial `?:` and build-verified.

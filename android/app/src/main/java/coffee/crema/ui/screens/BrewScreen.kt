@@ -57,6 +57,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coffee.crema.beans.daysOffRoast
 import coffee.crema.beans.isFrozen
+import coffee.crema.ui.activeProfile
 import coffee.crema.ui.convertPressure
 import coffee.crema.ui.convertTemp
 import coffee.crema.ui.convertVolume
@@ -114,7 +115,7 @@ fun BrewScreen(
     val ui by vm.ui.collectAsStateWithLifecycle()
     val connected = ui.bleState == De1BleManager.State.READY
     val scaleConnected = ui.scaleState == ScaleBleManager.State.READY
-    val active = ui.profiles.firstOrNull { it.id == ui.activeProfileId }
+    val active = ui.activeProfile()
     val activeBean = ui.beans.firstOrNull { it.id == ui.activeBeanId }
     val running = ui.shotInProgress
     val espressoActive = ui.machineStateName == "Espresso"
