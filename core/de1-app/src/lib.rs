@@ -1976,7 +1976,13 @@ impl CremaCore {
         // means the recorder lives in one place and rides the same wasm
         // boundary crossing as the decode. Replay-driven bytes record too:
         // a replayed shot lands in history with its own faithful capture.
-        self.capture.record(source, data, now_ms);
+        // A read-only mirror (a secondary) does NOT record, though — the shot
+        // belongs to the primary, which records the authoritative session; a
+        // mirror recording every shot it watches just litters its captures dir
+        // and feeds the replay-primary's "newest capture" loop (issue 14).
+        if !self.read_only {
+            self.capture.record(source, data, now_ms);
+        }
         let now = ms_to_duration(now_ms);
         let mut out = CoreOutput::default();
         match source {

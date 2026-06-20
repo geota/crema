@@ -68,6 +68,14 @@ class BleSessionRecorder(private val context: Context) {
     var filePath: String? = null
         private set
 
+    /** When false (a read-only mirror — a multi-device secondary), recording is
+     *  suppressed: the connection counter still tracks, but no file opens and
+     *  nothing is written. A mirror has no business recording the primary's shot,
+     *  and doing so litters its captures dir + feeds the replay-primary's
+     *  newest-capture loop (issue 14). */
+    @Volatile
+    var enabled: Boolean = true
+
     /**
      * Register a device connection. On the first connection (0→1) this opens a
      * new capture file under `getExternalFilesDir(null)/captures/` and begins
@@ -105,7 +113,7 @@ class BleSessionRecorder(private val context: Context) {
      */
     private fun start() {
         synchronized(lock) {
-            if (writer != null) return
+            if (writer != null || !enabled) return
             try {
                 val dir = File(context.getExternalFilesDir(null), "captures")
                 if (!dir.exists() && !dir.mkdirs()) {
