@@ -218,6 +218,18 @@ sealed class Frame {
     @SerialName("controlErr")
     data class ControlErr(val id: Long, val reason: String) : Frame()
 
+    /**
+     * Primary → secondary: a **push** handoff offer (issue 07) — "I'd like to hand
+     * you the machine." [fromName] is the offering primary's label, for the
+     * secondary's prompt. The secondary, on accept, simply runs its normal pull
+     * ("Take over") back at the primary, so the existing idle-gated release +
+     * reclaim machinery (issue 01) handles the actual swap — this frame is just the
+     * nudge. Unsolicited (no reply frame); declining is a local no-op.
+     */
+    @Serializable
+    @SerialName("handoffOffer")
+    data class HandoffOffer(val fromName: String) : Frame()
+
     // ---- Push streams (drive observe / connectionState) --------------------
 
     /**

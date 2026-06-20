@@ -1,6 +1,6 @@
 # 07 — Push handoff ("hand off TO X") + the old primary re-mirrors the new host
 
-- **Status:** ready-for-agent
+- **Status:** done (push handoff validated; auto-re-mirror wired but NSD/hardware-gated)
 - **Severity:** P2
 - **Area:** Android (proxy · MainViewModel · picker UI)
 - **Depends on:** 01 (two-phase handoff frames + release/reclaim)
@@ -73,3 +73,38 @@ does the same from the other direction. Mid-shot offers/takes still refuse (#01/
 
 ## Comments
 <!-- triage + progress notes append below -->
+
+**2026-06-20 — done + 2-emulator validated (push); re-mirror hardware-gated.**
+
+Design choice: built ON the existing `"handoff"` control-verb path (issue 01's safety
+core), NOT a dedicated-frame refactor — **push = the primary nudges a specific
+secondary to run the normal "Take over."** So all of #01's idle-gate + release +
+reclaim machinery is reused; the only new wire is the nudge. (The dedicated
+`Handoff`/`Grant`/`Abort` frame refactor stays deferred — not needed for this.)
+
+- **Push:** new `Frame.HandoffOffer(fromName)` (S→C). `RelayHub` tracks per-session
+  client identity (clientId/clientName from Hello) + `onClientsChanged`; exposes
+  `handoffTargets()` (control-capable mirrors only — a view-only peer's take-over
+  would be refused anyway) + `offerHandoff(clientId)`. VM `offerHandoff` (primary) /
+  `onHandoffOffered`→`pendingHandoffOffer`→`acceptHandoffOffer`→`requestHandoff`
+  (secondary). UI: `MultiDeviceSection` gained a **primary branch** listing
+  `mirrorClients` with "Hand off" (shared → phone sheet + tablet Settings); a
+  `HandoffOfferDialog` in MainActivity ("Take the machine?").
+- **Re-mirror (no dark device):** `armHandoffReclaim`'s "DE1 taken" branch now calls
+  `autoMirrorDiscoveredPrimary()` — find the DE1-holding primary on NSD and
+  `switchToSecondary` to it. **NSD doesn't cross the emulator NAT, so the cross-device
+  re-mirror is hardware-gated** (like the radio-move in #01/#12); on the emulator
+  `peers` is empty → no-op, the former holder drops to normal.
+
+**Validation (tablet primary / phone secondary, paired+control):** the tablet's
+picker listed "sdk_gphone16k_arm64 · Mirroring this machine · Hand off"; tapping it
+raised the phone's "Take the machine?" prompt. **Mid-shot accept → REFUSED** (replay
+was at Espresso; idle-gate #09). After the shot (MACHINE Idle/Ready), re-offer +
+**accept → phone became primary** (LanRelayServer :33779, role=primary); the tablet
+stepped to normal and its `autoMirrorDiscoveredPrimary` no-op'd (no NSD peers).
+
+**Deferred / follow-ups:** (a) the cross-device auto-re-mirror needs hardware (NSD) or
+a reverse-`adb forward` + an endpoint-in-frame to demo on emulators — the former
+holder doesn't learn the taker's new relay port over the (torn-down) link, so the
+clean path is NSD; (b) the dedicated-frame handoff refactor (#01 deferred) if a
+stricter ack/multi-DE1 is later needed.

@@ -493,6 +493,7 @@ fun PhoneDevicesSheet(
     onMirrorFrom: (host: String, port: Int) -> Unit,
     onStopMirroring: () -> Unit,
     onTakeOver: () -> Unit,
+    onHandOff: (clientId: String) -> Unit,
     onDismiss: () -> Unit,
 ) {
     ModalBottomSheet(
@@ -567,7 +568,7 @@ fun PhoneDevicesSheet(
                 Spacer(Modifier.width(9.dp))
                 Text("Scan for devices", style = MaterialTheme.typography.labelLarge.copy(fontSize = 14.sp, fontWeight = FontWeight.SemiBold))
             }
-            MultiDeviceSection(ui, onMirrorFrom, onStopMirroring, onTakeOver)
+            MultiDeviceSection(ui, onMirrorFrom, onStopMirroring, onTakeOver, onHandOff)
             Text(
                 "Acaia, Bookoo, Decent, Felicita and more pair automatically.",
                 style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.5.sp),

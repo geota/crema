@@ -52,6 +52,7 @@ import coffee.crema.ble.ScaleBleManager
 import coffee.crema.ble.BleTransport
 import coffee.crema.ble.De1Uuids
 import coffee.crema.ble.proxy.DeviceInfo
+import coffee.crema.ble.proxy.HandoffTarget
 import coffee.crema.ble.proxy.LanRelayServer
 import coffee.crema.ble.proxy.LinkState
 import coffee.crema.ble.proxy.PairingDecision
@@ -497,6 +498,12 @@ data class MainUiState(
     /** Devices this host has approved to mirror it (issue 02) — shown in Settings ▸
      *  "Paired devices" for review/revoke. */
     val pairedDevices: List<PairedDevice> = emptyList(),
+    /** Secondaries currently mirroring THIS device while it's a primary (issue 07) —
+     *  the "hand off to <device>" targets shown in the picker. */
+    val mirrorClients: List<HandoffTarget> = emptyList(),
+    /** A pending **push** handoff offer (issue 07): a primary ([the name]) is offering
+     *  us the machine. Non-null ⟺ the Activity shows the "Take the machine?" dialog. */
+    val pendingHandoffOffer: String? = null,
     /**
      * Transient mirror overlay (issue 05): the primary's active profile, decoded
      * for **display only**, when it's a custom profile this device's own library
@@ -1946,10 +1953,26 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 appendLog("Handoff reclaim: DE1 was free — resuming as primary")
                 switchToPrimary()
             } else {
-                appendLog("Handoff reclaim: DE1 is taken — staying normal")
+                appendLog("Handoff reclaim: DE1 is taken — re-mirroring the new host")
                 disconnect() // cancel the pending scan
+                autoMirrorDiscoveredPrimary() // don't go dark: become the taker's mirror (issue 07)
             }
         }
+    }
+
+    /** After stepping down from a handoff, don't sit blank (issue 07): if a primary
+     *  holding the DE1 has appeared on NSD, mirror it — a true role-swap, not
+     *  A→primary/B→dark. NSD doesn't cross the emulator NAT, so the cross-device
+     *  re-mirror is hardware-validated; on the emulator [peers] is empty → no-op
+     *  (the user can still re-mirror via the picker's manual peer). */
+    private fun autoMirrorDiscoveredPrimary() {
+        if (_ui.value.proxyRole != "normal") return
+        val host = _ui.value.peers.firstOrNull { it.isMirrorSource && it.id != proxyDeviceId } ?: run {
+            appendLog("Re-mirror: no DE1-holding primary discovered yet (NSD)")
+            return
+        }
+        appendLog("Re-mirror: auto-mirroring ${host.name} (${host.host}:${host.port})")
+        switchToSecondary(host.host, host.port)
     }
 
     /** Secondary side of an M3 handoff (the picker's "Take over"): ask the primary
@@ -1996,6 +2019,42 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     notifyUser("Can't take over — the machine is busy")
                 }
         }
+    }
+
+    // ── Push handoff ("hand off TO X" — issue 07) ─────────────────────────────
+
+    /** Refresh the list of secondaries mirroring this primary (the push targets),
+     *  wired to [RelayHub.onClientsChanged]. No-op off-primary. */
+    private fun refreshMirrorClients() {
+        val targets = relayHub?.handoffTargets() ?: emptyList()
+        _ui.update { it.copy(mirrorClients = targets) }
+    }
+
+    /** Primary side: offer the machine to a specific mirroring secondary. The peer
+     *  prompts and, on accept, runs its normal "Take over" back at us — so the
+     *  idle-gated release + reclaim (issue 01) handles the swap. */
+    fun offerHandoff(clientId: String) {
+        if (relayHub?.offerHandoff(clientId) == true) {
+            notifyUser("Offered the machine — waiting for the other device")
+        } else {
+            appendLog("Handoff offer failed: $clientId not connected")
+        }
+    }
+
+    /** Secondary side: the host pushed us an offer. Raise the accept prompt. */
+    private fun onHandoffOffered(fromName: String) {
+        _ui.update { it.copy(pendingHandoffOffer = fromName) }
+    }
+
+    /** The user accepted a pushed offer → take the machine (the normal pull). */
+    fun acceptHandoffOffer() {
+        _ui.update { it.copy(pendingHandoffOffer = null) }
+        requestHandoff()
+    }
+
+    /** The user declined a pushed offer — a local no-op (the host keeps the DE1). */
+    fun declineHandoffOffer() {
+        _ui.update { it.copy(pendingHandoffOffer = null) }
     }
 
     /** A one-line roaster · name · freshness summary of the active bean for the
@@ -2437,6 +2496,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             configSource = { configSnapshotJson() },
             // TOFU gate (issue 02): prompt for an unknown peer, remember the choice.
             authorize = { id, name -> authorizePeer(id, name) },
+            // Keep the "hand off to <device>" list live as mirrors come/go (issue 07).
+            onClientsChanged = { refreshMirrorClients() },
         )
         relayHub = hub
         val tapping = TappingBleTransport(real, hub, viewModelScope)
@@ -2475,6 +2536,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             onWelcome = { scope -> _ui.update { it.copy(mirrorViewOnly = scope == "mirror") } },
             // Host declined/revoked us → stop mirroring with a message (issue 02).
             onDenied = { reason -> onProxyDenied(reason) },
+            // The host is pushing us the machine (issue 07) → prompt to accept.
+            onHandoffOffer = { fromName -> onHandoffOffered(fromName) },
             // Re-run the attach handshake when the link redials (issue 03).
             reconnects = link.reconnects,
         )
@@ -2529,6 +2592,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     mirroredBeanSummary = null,
                     mirroringPrimaryName = if (role == "secondary") it.mirroringPrimaryName else "",
                     mirrorViewOnly = if (role == "secondary") it.mirrorViewOnly else false,
+                    // Push-handoff state (issue 07): the client list only applies while
+                    // primary; a pending offer is dropped on any role change.
+                    mirrorClients = if (role == "primary") it.mirrorClients else emptyList(),
+                    pendingHandoffOffer = null,
                 )
             }
             persistPrefs()

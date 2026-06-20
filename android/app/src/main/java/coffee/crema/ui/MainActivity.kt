@@ -262,6 +262,14 @@ class MainActivity : ComponentActivity() {
                 ui.pendingPairing?.let { prompt ->
                     PairingDialog(prompt = prompt, onChoice = viewModel::resolvePairing)
                 }
+                // Push handoff (issue 07) — a primary is offering us the machine.
+                ui.pendingHandoffOffer?.let { fromName ->
+                    HandoffOfferDialog(
+                        fromName = fromName,
+                        onAccept = viewModel::acceptHandoffOffer,
+                        onDecline = viewModel::declineHandoffOffer,
+                    )
+                }
                 }
                 }
             }
@@ -869,5 +877,21 @@ private fun PairingDialog(prompt: PairingPrompt, onChoice: (PairingChoice) -> Un
                 TextButton(onClick = { onChoice(PairingChoice.DENY) }) { Text("Deny") }
             }
         },
+    )
+}
+
+/**
+ * Push-handoff offer (issue 07): a primary ([fromName]) is offering this device the
+ * machine. Accept → run the normal idle-gated take-over; dismiss / Not now = leave
+ * the machine where it is.
+ */
+@Composable
+private fun HandoffOfferDialog(fromName: String, onAccept: () -> Unit, onDecline: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDecline,
+        title = { Text("Take the machine?") },
+        text = { Text("“$fromName” wants to hand you the espresso machine. You'll become the host.") },
+        confirmButton = { TextButton(onClick = onAccept) { Text("Take over") } },
+        dismissButton = { TextButton(onClick = onDecline) { Text("Not now") } },
     )
 }

@@ -178,6 +178,7 @@ fun PhoneBrewScreen(
             onMirrorFrom = { host, port -> vm.switchToSecondary(host, port); devicesOpen = false },
             onStopMirroring = { vm.switchToNormal(); devicesOpen = false },
             onTakeOver = { vm.requestHandoff(); devicesOpen = false },
+            onHandOff = { id -> vm.offerHandoff(id); devicesOpen = false },
             onDismiss = { devicesOpen = false },
         )
     }

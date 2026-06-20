@@ -33,6 +33,8 @@ fun MultiDeviceSection(
     onMirrorFrom: (host: String, port: Int) -> Unit,
     onStopMirroring: () -> Unit,
     onTakeOver: () -> Unit,
+    // Primary side (issue 07): push the machine to a specific mirroring secondary.
+    onHandOff: (clientId: String) -> Unit = {},
     // The phone embeds this at the bottom of its Devices sheet, so it draws its own
     // "Other devices" header; the tablet hosts it under a Settings group title that
     // already serves as the header, so it suppresses this one (issue 13).
@@ -46,6 +48,27 @@ fun MultiDeviceSection(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.height(4.dp))
+    }
+
+    // Primary: we hold the DE1 → offer to hand it off to a mirroring device (issue 07).
+    if (ui.proxyRole == "primary") {
+        if (ui.mirrorClients.isEmpty()) {
+            Text(
+                "No devices are mirroring this machine.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            ui.mirrorClients.forEach { client ->
+                MirrorRow(
+                    title = client.clientName,
+                    sub = "Mirroring this machine",
+                    action = "Hand off",
+                    onClick = { onHandOff(client.clientId) },
+                )
+            }
+        }
+        return
     }
 
     // If we're already a mirror, the only action is to stop.

@@ -68,6 +68,9 @@ class ProxyTransport(
      *  issue 02) — on the initial handshake AND on a reconnect after a revoke — so
      *  the secondary can surface it and stop mirroring. Default no-op. */
     private val onDenied: (reason: String) -> Unit = {},
+    /** Invoked when the primary pushes a [Frame.HandoffOffer] (issue 07) — the host
+     *  is offering us the machine. The VM prompts; accept runs the normal pull. */
+    private val onHandoffOffer: (fromName: String) -> Unit = {},
     /** Fires when the link redials after a drop (from [ReconnectingClientLink]).
      *  Each emission re-runs the attach handshake so telemetry resumes instead of
      *  freezing on stale state (issue 03). Default empty for the in-memory links. */
@@ -138,6 +141,7 @@ class ProxyTransport(
                 onDenied(frame.reason)
                 if (!welcomed.isCompleted) welcomed.completeExceptionally(IllegalStateException("Proxy denied: ${frame.reason}"))
             }
+            is Frame.HandoffOffer -> onHandoffOffer(frame.fromName)
             else -> Log.w(TAG, "Secondary ignoring unexpected server frame: $frame")
         }
     }
