@@ -1788,10 +1788,40 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private fun grantHandoff() {
         val state = _ui.value.machineStateName
         require(state in handoffIdleStates) { "machine not idle (${state ?: "unknown"}) — handoff is idle-only" }
-        appendLog("Handoff granted — stepping down to normal")
+        appendLog("Handoff granted — releasing the DE1")
         viewModelScope.launch {
-            kotlinx.coroutines.delay(400)
-            switchToNormal()
+            kotlinx.coroutines.delay(400) // let this grant (ControlOk) flush before the relay tears down
+            // RELEASE: step down to normal but do NOT reconnect — the taker must be
+            // able to acquire the now-free DE1 (issue 01). The old path reconnected,
+            // so the "released" holder immediately re-grabbed the radio and the
+            // take-over could never land on real hardware.
+            applyMode("normal", "", 0, reconnect = false)
+            armHandoffReclaim()
+        }
+    }
+
+    /** After granting a handoff we release the DE1 without reconnecting. If the
+     *  taker never actually acquires it (BT off, a crash, out of range) the machine
+     *  would be orphaned — so after a grace period, probe: if the DE1 came **free**
+     *  the take-over didn't stick, so reclaim it and resume hosting; if it's
+     *  **taken**, the handoff succeeded and we stay a plain normal device. The
+     *  free/busy test is the real BLE scan, so this recovery is hardware-exercised
+     *  (on a no-Bluetooth emulator the probe always finds nothing → stays normal).
+     *  (issue 01 — release + reclaim-on-timeout: a failed take-over never orphans.) */
+    private fun armHandoffReclaim() {
+        viewModelScope.launch {
+            kotlinx.coroutines.delay(8_000L) // grace for the taker to acquire the radio
+            if (_ui.value.proxyRole != "normal" || ble.connectedAddress != null) return@launch
+            appendLog("Handoff reclaim: probing whether the DE1 came free")
+            connect() // scans + binds the DE1 only if it is free
+            kotlinx.coroutines.delay(3_000L) // give the probe scan time to bind
+            if (ble.connectedAddress != null) {
+                appendLog("Handoff reclaim: DE1 was free — resuming as primary")
+                switchToPrimary()
+            } else {
+                appendLog("Handoff reclaim: DE1 is taken — staying normal")
+                disconnect() // cancel the pending scan
+            }
         }
     }
 
@@ -2193,7 +2223,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * brief settle lets the managers' fire-and-forget transport release run
      * against the OLD delegate before it is replaced.
      */
-    private fun applyMode(role: String, host: String, port: Int) {
+    private fun applyMode(role: String, host: String, port: Int, reconnect: Boolean = true) {
         viewModelScope.launch {
             ble.disconnect()
             scale.disconnect()
@@ -2227,7 +2257,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // Reconnect the DE1 over the new delegate (a secondary attaches to the
             // primary's DE1; primary/normal scan the real or replayed radio). The
             // scale, if any, is reconnected by the user — DE1-only mirror for now.
-            connect()
+            // A handoff release passes reconnect=false so the stepped-down holder
+            // does NOT re-grab the DE1 — the taker needs it free (issue 01).
+            if (reconnect) connect()
             refreshAdvertisement()
         }
     }
