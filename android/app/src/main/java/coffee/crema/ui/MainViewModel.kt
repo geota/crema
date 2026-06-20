@@ -801,7 +801,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     )
 
     /** Stable-per-launch id used to advertise + self-filter in NSD discovery. */
-    private val proxyDeviceId: String = UUID.randomUUID().toString()
+    private val proxyDeviceId: String = run {
+        // Stable-per-install id, persisted in a tiny file so NSD self-filtering +
+        // (future) peer pairing survive a restart, rather than churning a new UUID
+        // each launch (issue 14).
+        val f = File(app.filesDir, "deviceId")
+        runCatching { f.takeIf { it.exists() }?.readText()?.trim()?.ifBlank { null } }.getOrNull()
+            ?: UUID.randomUUID().toString().also { runCatching { f.writeText(it) } }
+    }
 
     /** LAN peer discovery (NSD) for the multi-device picker (M2) — advertises this
      *  instance and browses for peers, exposed as [MainUiState.peers]. */
@@ -812,6 +819,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private var relayPort: Int = 0
 
     init {
+        // A secondary (read-only mirror) doesn't record the primary's shot (issue
+        // 14). Set here, not in buildInitialDelegate — that runs during the
+        // `switchable` field init, before `bleRecorder` exists.
+        bleRecorder.enabled = readProxyConfigSync().role != "secondary"
         // Multi-device (M2): browse for peers + advertise this instance on the LAN.
         viewModelScope.launch { peerDiscovery.peers.collect { p -> _ui.update { it.copy(peers = p) } } }
         peerDiscovery.startDiscovery()
@@ -2254,6 +2265,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // the mirrored stream (SAW, frame-skip) are suppressed. normal/primary
             // are authoritative. reset() preserves this across reconnects.
             bridge.setReadOnly(role == "secondary")
+            bleRecorder.enabled = role != "secondary" // a mirror doesn't record (issue 14)
             // Reconnect the DE1 over the new delegate (a secondary attaches to the
             // primary's DE1; primary/normal scan the real or replayed radio). The
             // scale, if any, is reconnected by the user — DE1-only mirror for now.

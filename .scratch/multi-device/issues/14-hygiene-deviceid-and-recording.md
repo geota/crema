@@ -1,6 +1,6 @@
 # 14 — Hygiene: persist device identity; stop a mirror recording every shot
 
-- **Status:** ready-for-agent
+- **Status:** done
 - **Severity:** P3
 - **Area:** Android (MainViewModel · core capture)
 - **Depends on:** none
@@ -43,3 +43,15 @@ demo no longer needs a manual `rm` to avoid replaying a re-recording.
 
 ## Comments
 <!-- triage + progress notes append below -->
+
+**2026-06-20 — done.** (1) `proxyDeviceId` now reads/generates/persists a stable
+UUID in `filesDir/deviceId` (was a fresh UUID each launch). (2) A read-only mirror
+records nothing: the core gates `capture.record` on `!read_only` (no mirrored shot
+in the secondary's history — it belongs to the primary), and the Kotlin
+`BleSessionRecorder` gained an `enabled` flag the VM sets to `role != "secondary"`
+(no `session-*.jsonl` files written while mirroring). Validated 2 emulators: the
+mirroring phone attached, wrote NO capture file, and persisted a stable deviceId;
+no crash (fixed a field-init-order NPE — set `bleRecorder.enabled` in `init{}`, not
+`buildInitialDelegate` which runs before `bleRecorder` exists). *Note:* the
+replay-PRIMARY re-recording its own replay (a demo-only emulator artifact; real
+primaries don't replay) is not gated — minor follow-up if the demo recipe wants it.
