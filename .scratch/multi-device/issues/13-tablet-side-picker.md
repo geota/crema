@@ -1,6 +1,6 @@
 # 13 — Tablet-side multi-device picker
 
-- **Status:** ready-for-agent
+- **Status:** done (live picker ported to the tablet; debug selector kept as the escape hatch)
 - **Severity:** P3
 - **Area:** Android (tablet UI)
 - **Depends on:** none (07 for the push action)
@@ -37,3 +37,28 @@ escape hatch.
 
 ## Comments
 <!-- triage + progress notes append below -->
+
+**2026-06-20 — done + 2-emulator validated.**
+- **Extracted** `MultiDeviceSection`/`MirrorRow` from `PhoneBrewSheets` into the
+  shared `coffee.crema.ui.components.MultiDevicePicker` (public, role-agnostic).
+  The phone's Devices sheet now uses the shared one (via its `components.*`
+  wildcard); a `showHeader` flag lets the tablet suppress the internal "Other
+  devices" header (its Settings group title serves instead). The "Mirroring" row
+  now names the primary (`mirroringPrimaryName`, issue 10).
+- **Tablet:** a live `SetGroup("Multi-device")` in Settings ▸ Advanced wires the
+  shared section to `vm.switchToSecondary` / `switchToNormal` / `requestHandoff`
+  — Mirror from / Stop / Take over, no restart. The old role selector is kept +
+  relabeled "Multi-device — manual override (debug)" as the escape hatch (and,
+  until a live "Host" action, the way to become a primary).
+
+**Validation (phone primary replay / tablet secondary, cross-forwarded via
+host:9099):** tablet Settings ▸ Advanced showed the live picker = "Mirroring
+sdk_gphone16k_arm64 / Stop / Take over" while live-mirroring the phone's shot;
+**Stop** flipped it to normal (no restart) → "Debug primary · Mirror"; **Mirror**
+flipped it back to secondary (no restart) → "Mirroring / Stop". Role in the
+relabeled debug group tracked Off↔Secondary live.
+
+**Follow-up:** the picker offers Mirror/Stop/Take over but not a live "Host the
+DE1 here" (become primary) — that still needs the restart-to-apply role selector;
+a live `switchToPrimary` affordance is a small add. "Hand off to <secondary>"
+(push) is #07.

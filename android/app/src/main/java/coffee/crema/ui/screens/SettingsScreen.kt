@@ -63,6 +63,7 @@ import coffee.crema.ui.components.Eyebrow
 import coffee.crema.ui.components.CremaSettingsRow
 import coffee.crema.ui.components.CremaSettingsSelect
 import coffee.crema.ui.components.CremaMonoReadout
+import coffee.crema.ui.components.MultiDeviceSection
 import coffee.crema.ui.components.PhIcon
 import coffee.crema.ui.components.SegOption
 import coffee.crema.ui.components.CremaConfirmDialog
@@ -726,10 +727,26 @@ fun SettingsScreen(
                                 }
                             }
                         }
-                        SetGroup("Multi-device (LAN proxy · debug)") {
-                            // M1: drive the DE1/scale from a second device over the LAN.
-                            // The transport is built at startup, so a change is
-                            // restart-to-apply (the sub-copy says so).
+                        // Live, no-restart picker (issue 13) — the same one the phone
+                        // uses: Mirror from a primary on the LAN, then Stop / Take over.
+                        // The tablet lives by the machine, so it's exactly the device
+                        // that wants this. The role selector below stays as the manual
+                        // (restart-to-apply) escape hatch + the way to host the DE1.
+                        SetGroup("Multi-device") {
+                            Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+                                MultiDeviceSection(
+                                    ui = ui,
+                                    onMirrorFrom = { host, port -> vm.switchToSecondary(host, port) },
+                                    onStopMirroring = vm::switchToNormal,
+                                    onTakeOver = vm::requestHandoff,
+                                    showHeader = false,
+                                )
+                            }
+                        }
+                        SetGroup("Multi-device — manual override (debug)") {
+                            // Restart-to-apply role override + the way to become a host.
+                            // The live picker above is the everyday path; this is the
+                            // escape hatch (and how to host until a live "Host" action).
                             val roleSub = when (ui.proxyRole) {
                                 "primary" -> "Owns the DE1 and relays it to others. Restart to apply."
                                 "secondary" -> "Mirrors a primary over the LAN. Restart to apply."
