@@ -472,6 +472,9 @@ data class MainUiState(
      *  reconnecting mirror from a healthy one so a frozen view doesn't read as
      *  live (issue 03). Only meaningful while [proxyRole] == "secondary". */
     val mirrorReconnecting: Boolean = false,
+    /** The primary's display name while mirroring (issue 10) — drives the app-wide
+     *  "Mirroring <primary>" authority banner. Blank when not a secondary. */
+    val mirroringPrimaryName: String = "",
     /**
      * Transient mirror overlay (issue 05): the primary's active profile, decoded
      * for **display only**, when it's a custom profile this device's own library
@@ -2018,6 +2021,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 brewYieldG = ui.brewParams?.yieldOut,
                 brewTempC = ui.brewParams?.brewTemp,
                 brewPreinfuseS = ui.brewParams?.preinf,
+                primaryName = deviceLabel(),
                 authority = "primary",
             ),
         )
@@ -2057,6 +2061,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 mirroredProfile = overlay,
                 mirroredProfileJson = overlay?.let { cfg.activeProfileJson },
                 mirroredBeanSummary = cfg.activeBeanSummary,
+                mirroringPrimaryName = cfg.primaryName,
                 brewParams = brew,
                 activeBeanId = cfg.activeBeanId,
                 stopOnWeight = cfg.stopOnWeight,
@@ -2407,11 +2412,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     proxyRole = role,
                     proxyPrimaryHost = if (role == "secondary") host else it.proxyPrimaryHost,
                     proxyPrimaryPort = if (role == "secondary") port else it.proxyPrimaryPort,
-                    // Drop any mirror overlay (issue 05); a fresh `secondary` attach
-                    // repopulates it from the primary's snapshot.
+                    // Drop any mirror overlay (issue 05) + authority cue (issue 10);
+                    // a fresh `secondary` attach repopulates them from the snapshot.
                     mirroredProfile = null,
                     mirroredProfileJson = null,
                     mirroredBeanSummary = null,
+                    mirroringPrimaryName = if (role == "secondary") it.mirroringPrimaryName else "",
                 )
             }
             persistPrefs()

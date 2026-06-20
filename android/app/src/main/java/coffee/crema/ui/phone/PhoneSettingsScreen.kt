@@ -129,8 +129,14 @@ fun PhoneSettingsScreen(
                 // Phone settings render in the dense row layout; the tablet keeps
                 // the default (roomy) — one CremaSettingsRow serves both (issue 26).
                 CompositionLocalProvider(LocalSettingsRowDense provides true) {
+                    // On a secondary the machine-write rows (GHC, heater voltage, line
+                    // frequency, flow calibration) aren't relayed — they'd hit the
+                    // read-only core and go nowhere — so they're disabled + annotated
+                    // here, and the app-wide banner already says we're mirroring (issue 10).
+                    val secondary = ui.proxyRole == "secondary"
+                    val primaryName = ui.mirroringPrimaryName
                     when (current) {
-                        "machine" -> MachineSection(vm, ui.let { it }, connected, onConnect)
+                        "machine" -> MachineSection(vm, ui.let { it }, connected, onConnect, secondary, primaryName)
                         "peripherals" -> PeripheralsSection(vm, scaleConnected, ui.scaleName, ui.grinderModel, onConnect, onOpenScale = { onNav("scale") })
                         "brew" -> BrewDefaultsSection(vm, ui.let { it })
                         "water" -> WaterSection(
@@ -154,6 +160,7 @@ fun PhoneSettingsScreen(
                             vm, ui.let { it }, connected,
                             tempOffset, { tempOffset = it },
                             onApplyFlow = { confirm.pendingFlowMultiplier = it },
+                            secondary = secondary,
                         )
                         "advanced" -> AdvancedSection(
                             vm, ui.let { it }, connected, onNav,
@@ -162,6 +169,7 @@ fun PhoneSettingsScreen(
                             onStageHeaterVoltage = { confirm.pendingHeaterVoltage = it },
                             onResetPrefs = { confirm.confirmResetPrefs = true },
                             onErase = { confirm.confirmErase = true },
+                            secondary = secondary,
                         )
                         "about" -> AboutSection()
                     }
@@ -251,13 +259,44 @@ fun PhoneSettingsScreen(
 
 /* ───────────────────────── section bodies ──────────────────────────────── */
 
+/** A note at the top of a settings section whose machine-write controls are
+ *  disabled because this device is mirroring (issue 10) — the writes apply on
+ *  the primary, not here. */
+@Composable
+private fun MirrorControlledNote(primaryName: String) {
+    val who = primaryName.ifBlank { "the primary" }
+    Surface(
+        shape = RoundedCornerShape(CremaCardSpec.phoneRadius),
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = CremaEdge, vertical = 8.dp),
+    ) {
+        Row(
+            Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            PhIcon("bluetooth", sizeDp = 18)
+            Text(
+                "Mirroring $who — machine settings are controlled there.",
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
+}
+
 @Composable
 private fun MachineSection(
     vm: MainViewModel,
     ui: coffee.crema.ui.MainUiState,
     connected: Boolean,
     onConnect: (String) -> Unit,
+    secondary: Boolean = false,
+    primaryName: String = "",
 ) {
+    // On a mirror, machine settings live on the host — say so up top (issue 10).
+    if (secondary) MirrorControlledNote(primaryName)
     // Machine hero (proto .pst-mhero): icon + state + identity key-values.
     Column(Modifier.padding(horizontal = CremaEdge, vertical = 8.dp)) {
         Surface(shape = RoundedCornerShape(CremaCardSpec.phoneRadius), color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth()) {
@@ -298,7 +337,7 @@ private fun MachineSection(
         val ghcOn = ghcModeOn(ui.de1MachineInfo) ?: false
         val ghcAvailable = connected && (ghcPresent(ui.de1MachineInfo) == true)
         CremaSettingsRow("Group Head Controller (GHC)", "Start shots from the machine's touch panel.", last = true, needsConnection = !connected) {
-            CremaSwitch(ghcOn, { vm.setGhcMode(it) }, enabled = ghcAvailable)
+            CremaSwitch(ghcOn, { vm.setGhcMode(it) }, enabled = ghcAvailable && !secondary)
         }
     }
     SettingsGroup("Identity") {
@@ -714,7 +753,9 @@ private fun CalibrationSection(
     connected: Boolean,
     tempOffset: Double, onTempOffset: (Double) -> Unit,
     onApplyFlow: (Float) -> Unit,
+    secondary: Boolean = false,
 ) {
+    if (secondary) MirrorControlledNote(ui.mirroringPrimaryName)
     SettingsGroup("Sensor calibration") {
         CremaSettingsRow("Temperature", "Shift every temperature reading.", notImplemented = true) {
             CremaStepper(value = tempOffset, unit = "°C", step = 0.1, min = -5.0, max = 5.0, fmt = { "%+.1f".format(it) }, style = CremaStepperStyle.BareCompact, onChange = onTempOffset)
@@ -728,8 +769,8 @@ private fun CalibrationSection(
         }
         CremaSettingsRow("", null) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                CremaButton(onClick = { onApplyFlow(flowDraft.toFloat()) }, variant = CremaButtonVariant.Filled, enabled = connected && flowDirty, label = "Apply")
-                CremaButton(onClick = { onApplyFlow(1.0f) }, variant = CremaButtonVariant.Outlined, enabled = connected && kotlin.math.abs(mult - 1.0) > 0.0001, label = "Reset")
+                CremaButton(onClick = { onApplyFlow(flowDraft.toFloat()) }, variant = CremaButtonVariant.Filled, enabled = connected && !secondary && flowDirty, label = "Apply")
+                CremaButton(onClick = { onApplyFlow(1.0f) }, variant = CremaButtonVariant.Outlined, enabled = connected && !secondary && kotlin.math.abs(mult - 1.0) > 0.0001, label = "Reset")
             }
         }
         CremaSettingsRow("Last read", "Flow multiplier reported by the DE1.", last = true) {
@@ -749,6 +790,7 @@ private fun AdvancedSection(
     onStageHeaterVoltage: (String) -> Unit,
     onResetPrefs: () -> Unit,
     onErase: () -> Unit,
+    secondary: Boolean = false,
 ) {
     SettingsGroup("Telemetry") {
         // The toggle reflects the user's OVERRIDE (auto/50/60), not the resolved
@@ -775,7 +817,7 @@ private fun AdvancedSection(
                 options = listOf(SegOption("auto", "Auto"), SegOption("50", "50"), SegOption("60", "60")),
                 value = freqValue,
                 onChange = { if (it == "auto") vm.setLineFrequency(0.0f) else onStageLineFreq(it) },
-                enabled = connected,
+                enabled = connected && !secondary,
                 uniform = true,
             )
         }
@@ -865,7 +907,7 @@ private fun AdvancedSection(
                 // Machine readout above, rather than misleadingly defaulting to 230 V.
                 value = hv ?: "",
                 onChange = { if (it != hv) onStageHeaterVoltage(it) },
-                enabled = connected,
+                enabled = connected && !secondary,
                 uniform = true,
             )
         }

@@ -188,6 +188,8 @@ class MainActivity : ComponentActivity() {
                 val isCompact = LocalConfiguration.current.screenWidthDp < 600
                 if (isCompact) {
                     PhoneNavHost(
+                        vm = viewModel,
+                        onConnect = onRailConnect,
                         brewContent = { navTo ->
                             PhoneBrewScreen(viewModel, onNav = navTo, onConnect = onRailConnect)
                         },
