@@ -1,6 +1,6 @@
 # 08 — Surface multi-device failures to the user (not just the event log)
 
-- **Status:** ready-for-agent
+- **Status:** done
 - **Severity:** P2
 - **Area:** Android (MainViewModel · UI)
 - **Depends on:** none
@@ -39,3 +39,9 @@ link, change a setting → a snackbar, not silence.
 
 ## Comments
 <!-- triage + progress notes append below -->
+
+**2026-06-20 — done.** `notifyUser` (the snackbar path) now fires on: a refused
+take-over ("Can't take over — the machine is busy"), a failed config relay
+("Couldn't reach the machine — change not applied"), and a granted take-over
+("Taking over the machine…"). Verbose detail still goes to `appendLog`. Refines the
+already-validated handoff/relay paths; compile-verified.

@@ -1,6 +1,6 @@
 # 09 — Handoff idle-gate: require *known*-idle, not "not-known-busy"
 
-- **Status:** ready-for-agent
+- **Status:** done
 - **Severity:** P2
 - **Area:** Android (MainViewModel)
 - **Depends on:** none (refines 01)
@@ -44,3 +44,9 @@ idle grants. Surface the refusal (#08).
 
 ## Comments
 <!-- triage + progress notes append below -->
+
+**2026-06-20 — done.** Flipped `grantHandoff` from a busy-denylist to an idle
+**allowlist** `{Sleep, GoingToSleep, Idle, SchedIdle}` (verified against the core
+`MachineState` enum in `de1-protocol/src/state.rs`) — `null`/unknown now refuses
+(was granting). Mid-shot refuse + idle grant unchanged (both validated in the M3
+run); the new null→refuse path is the fix. Compile-verified.
