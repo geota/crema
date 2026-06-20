@@ -1,6 +1,6 @@
 # 06 — Robust config write path (a failed relay silently eats the change)
 
-- **Status:** ready-for-agent
+- **Status:** done (optimistic relay + revert, all config verbs relayed, brew override round-trips; + a latent control-hang fix)
 - **Severity:** P2
 - **Area:** Android (MainViewModel · proxy)
 - **Depends on:** none (08 for the error surfacing)
@@ -64,3 +64,39 @@ change a setting → the change reverts + an error shows (#08), not a silent no-
 
 ## Comments
 <!-- triage + progress notes append below -->
+
+**2026-06-20 — done + 2-emulator validated.** All three edges addressed:
+- **Optimistic local apply + revert.** New `relayConfigOptimistic(method, args, revert)`:
+  the caller updates `_ui` at once (snappy), relays, and on **failure** runs `revert`
+  + a "change reverted" snackbar — no silent loss, no round-trip lag. Distinct from
+  `relayIfSecondary` (kept authority-first for start/stop/tare). Routed
+  setActiveProfile/Bean/StopOnWeight/AutoTare + all QC setters + quickAdjustBrew/
+  resetBrewParams through it (each captures its prev value for the revert).
+- **All config verbs now relayed.** Added handleRelayedControl cases for the 8 QC
+  setters (`setQc*`, float-as-string) + `quickAdjustBrew` (CSV "dose,yield,temp,preinf")
+  + `resetBrew`. Previously local-only on a secondary (diverged until re-attach).
+- **Brew override round-trips.** `ConfigSnapshot` gained `brewDoseG/brewYieldG/
+  brewTempC/brewPreinfuseS`; `configSnapshotJson` fills them from the live
+  `brewParams`, `applyRemoteConfig` re-arms it (all-null = no override). quickAdjust/
+  reset now `pushConfig()` so a mirror's targets track the primary's dial.
+
+**Latent bug found + fixed (`ProxyTransport.request`):** `control`/`read` did
+`link.send()` **outside** the 5 s `withTimeout`, but `ReconnectingClientLink.send()`
+SUSPENDS until reconnect — so on a dead/mid-reconnect link the request hung forever
+(no success, no failure, no revert). Moved the send inside the timeout → fails fast.
+This is what makes the revert actually fire (without it the optimistic value just
+stuck). The first revert attempt proved it: pre-fix the value stayed; post-fix it
+rolled back.
+
+**Validation (tablet primary replay / phone secondary):**
+- Steam-time preset on the phone → tablet logged `relayed control: setQcSteamTime
+  (20.0)`; phone updated instantly + reconciled. Dose preset → `relayed control:
+  quickAdjustBrew (20.0,36.0,79.0,)`; tablet's targets moved to 1.27 oz / 174.2 °F
+  (=36 g / 79 °C) — round-trip applied on the primary.
+- Fresh attach snapped the phone's steam to the primary's 30 (config sync intact);
+  brewParams pushed null → DOSE reset to 18 (primary→mirror override direction).
+- **Failure path:** force-stopped the primary, changed steam 30→10 → optimistic 10
+  shown, then **reverted to 30** after the 5 s timeout (+ snackbar via the same
+  onFailure path). Cue flipped to "Reconnecting…".
+- Caveat: rapid taps on the same field while the link is down can interleave reverts;
+  the next reconnect Config push reconciles. Best-effort, acceptable.

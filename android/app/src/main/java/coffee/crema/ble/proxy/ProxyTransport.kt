@@ -230,8 +230,16 @@ class ProxyTransport(
         val deferred = CompletableDeferred<Frame>()
         pending[id] = deferred
         return try {
-            link.send(build())
-            withTimeout(requestTimeoutMs) { deferred.await() }
+            // The send is inside the timeout too: ReconnectingClientLink.send()
+            // SUSPENDS until the link is back, so on a dead/mid-reconnect link an
+            // unbounded send would hang the request forever — the caller would
+            // neither succeed, fail, nor be able to revert (issue 06). Bounding the
+            // whole round-trip makes a control/read fail fast so the optimistic
+            // apply can be rolled back and surfaced.
+            withTimeout(requestTimeoutMs) {
+                link.send(build())
+                deferred.await()
+            }
         } finally {
             pending.remove(id)
         }

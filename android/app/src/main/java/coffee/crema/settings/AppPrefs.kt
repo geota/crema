@@ -147,6 +147,14 @@ data class ConfigSnapshot(
     val qcFlushTimeS: Float = 4f,
     val qcFlushTempC: Float = 95f,
     val qcGrind: Float? = null,
+    /** The live Quick-Controls **brew override** (issue 06) — the transient
+     *  dose/yield/brew-temp/preinfuse the primary dialled for the next shot, so a
+     *  mirror's Brew targets track it. All-null ⟺ no override (use the profile
+     *  recipe). dose/yield/temp travel together; preinfuse is optional. */
+    val brewDoseG: Double? = null,
+    val brewYieldG: Double? = null,
+    val brewTempC: Double? = null,
+    val brewPreinfuseS: Double? = null,
     /** Config owner — always `"primary"` from a primary; a secondary uses it to
      *  flag that it is viewing as a read-only mirror. */
     val authority: String = "primary",
