@@ -43,6 +43,7 @@ import coffee.crema.profiles.CremaProfile
 import coffee.crema.profiles.rankProfilesForPicker
 import coffee.crema.beans.rankBeansForPicker
 import coffee.crema.ui.MainUiState
+import coffee.crema.ui.activeProfile
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.effectiveBrew
 import coffee.crema.ui.refillSoon
@@ -76,7 +77,7 @@ fun PhoneBrewScreen(
     val ui by vm.ui.collectAsStateWithLifecycle()
     val connected = ui.bleState == De1BleManager.State.READY
     val scaleConnected = ui.scaleState == ScaleBleManager.State.READY
-    val active = ui.profiles.firstOrNull { it.id == ui.activeProfileId }
+    val active = ui.activeProfile()
     val activeBean = ui.beans.firstOrNull { it.id == ui.activeBeanId }
     val running = ui.shotInProgress
     val espressoActive = ui.machineStateName == "Espresso"
@@ -212,7 +213,10 @@ fun PhoneBrewScreen(
 
 /** "Roaster · Bean · Nd off roast" strip meta, or a quiet fallback. */
 private fun beanLine(ui: MainUiState): String {
-    val bean = ui.beans.firstOrNull { it.id == ui.activeBeanId } ?: return "No bean selected"
+    // Mirroring a primary whose active bean isn't in our library (issue 05): show
+    // the summary the primary sent so the chip isn't blank.
+    val bean = ui.beans.firstOrNull { it.id == ui.activeBeanId }
+        ?: return ui.mirroredBeanSummary ?: "No bean selected"
     val roaster = ui.roasters.firstOrNull { it.id == bean.roasterId }?.name
     val days = daysOffRoast(bean.roastedOn)
     return listOfNotNull(

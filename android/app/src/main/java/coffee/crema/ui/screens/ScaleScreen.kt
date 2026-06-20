@@ -17,6 +17,7 @@ import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager
 import coffee.crema.ui.MainUiState
 import coffee.crema.ui.MainViewModel
+import coffee.crema.ui.activeProfile
 import coffee.crema.ui.convertWeight
 import coffee.crema.ui.formatWeight
 import coffee.crema.ui.components.*
@@ -102,7 +103,7 @@ fun ScaleScreen(
     val weight = (ui.scaleWeightG ?: 0f).toDouble()
     // Dose target = the active profile's dose (what you're weighing to), not a
     // hardcoded 18 g — the dose helper now tracks the loaded recipe.
-    val target = (ui.profiles.firstOrNull { it.id == ui.activeProfileId }?.dose ?: 18f).toDouble()
+    val target = (ui.activeProfile()?.dose ?: 18f).toDouble()
 
     Row(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         CremaNavigationRail(

@@ -120,7 +120,17 @@ data class AppPrefs(
 @Serializable
 data class ConfigSnapshot(
     val activeProfileId: String? = null,
+    /** The active profile's full wire JSON, sent **only for a custom profile** the
+     *  mirror might lack (built-ins are present on every install, covered by the id).
+     *  A secondary shows it as a transient display overlay so the curve/targets/name
+     *  match the primary even for a profile it never saved — see
+     *  `MainViewModel.mirroredProfile`. Null ⟺ the active profile is a built-in. */
+    val activeProfileJson: String? = null,
     val activeBeanId: String? = null,
+    /** A one-line summary (roaster · name · freshness) of the active bean, so the
+     *  mirror's bean chip renders even when that bean isn't in its own library.
+     *  Full bean sync is out of scope — this is display only. */
+    val activeBeanSummary: String? = null,
     val stopOnWeight: Boolean = false,
     val autoTare: Boolean = false,
     val maxShotDurationS: Float = 45f,
