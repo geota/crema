@@ -10,6 +10,16 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 
 /**
+ * The host's verdict on a secondary's [Frame.Hello] (issue 02 — TOFU pairing):
+ * either [Denied] (no mirror) or [Allowed] with a capability scope —
+ * `canControl=false` is a view-only mirror whose `Control`/`Handoff` are refused.
+ */
+sealed class PairingDecision {
+    data class Allowed(val canControl: Boolean) : PairingDecision()
+    data class Denied(val reason: String) : PairingDecision()
+}
+
+/**
  * The primary-side relay: it forwards the one real BLE link out to N secondaries
  * over the proxy protocol. Transport-agnostic — it is fed the primary's
  * notification stream through [onInbound] / [onConnState] (in production by the
@@ -73,6 +83,18 @@ class RelayHub(
      * string = nothing to send (M1 / a normal relay / the unit tests).
      */
     private val configSource: () -> String = { "" },
+    /**
+     * TOFU authorization (issue 02): decide whether a connecting secondary may
+     * mirror, and with what scope. Called once per [Frame.Hello] with the peer's
+     * stable id + display name; the real handler (wired on the primary VM) checks
+     * the remembered set and otherwise raises a host-side "Allow this device?"
+     * prompt and suspends on the choice. The default **allows control** — it
+     * preserves M1 / loopback / unit-test behaviour (no UI to prompt with); the
+     * production primary always injects the gate, so the LAN consent layer is on
+     * wherever there's a real host.
+     */
+    private val authorize: suspend (clientId: String, clientName: String) -> PairingDecision =
+        { _, _ -> PairingDecision.Allowed(canControl = true) },
 ) {
     private val clients = CopyOnWriteArrayList<ClientSession>()
 
@@ -134,6 +156,11 @@ class RelayHub(
                 // the machine); run them off the collect loop so they don't
                 // head-of-line-block later frames.
                 when (frame) {
+                    // Hello is handled INLINE (suspending the collect loop) so the
+                    // TOFU decision lands before any later frame from this client is
+                    // served — an unapproved peer can't attach/read while its prompt
+                    // is still pending (issue 02).
+                    is Frame.Hello -> handleHello(session, frame)
                     is Frame.Read -> launch { handleRead(session, frame) }
                     is Frame.Control -> launch { handleControl(session, frame) }
                     else -> handle(session, frame)
@@ -146,10 +173,26 @@ class RelayHub(
         }
     }
 
+    /** TOFU gate (issue 02): authorize the peer, then Welcome (with its granted
+     *  scope) or Denied. On denial we close the outbox so the session ends — an
+     *  unapproved client gets no roster, snapshot, or stream. */
+    private suspend fun handleHello(session: ClientSession, frame: Frame.Hello) {
+        when (val decision = authorize(frame.clientId, frame.clientName)) {
+            is PairingDecision.Allowed -> {
+                session.canControl = decision.canControl
+                val scope = if (decision.canControl) SCOPE_CONTROL else SCOPE_MIRROR
+                deliver(session, Frame.Welcome(PROXY_PROTOCOL_VERSION, primaryId, primaryName, AUTHORITY_PRIMARY, roster(), scope))
+            }
+            is PairingDecision.Denied -> {
+                Log.i(TAG, "pairing denied for ${frame.clientName} (${frame.clientId}): ${decision.reason}")
+                deliver(session, Frame.Denied(decision.reason))
+                session.outbox.close()
+            }
+        }
+    }
+
     private fun handle(session: ClientSession, frame: Frame) {
         when (frame) {
-            is Frame.Hello ->
-                deliver(session, Frame.Welcome(PROXY_PROTOCOL_VERSION, primaryId, primaryName, AUTHORITY_PRIMARY, roster()))
             is Frame.Attach -> {
                 session.attach(frame.address)
                 val state = connStates[frame.address] ?: BleTransport.ConnState.CONNECTED.name
@@ -190,6 +233,13 @@ class RelayHub(
      *  primary's real link; its effect returns to every secondary as machine
      *  state over the [Frame.Notify] stream, so the reply only confirms dispatch. */
     private suspend fun handleControl(session: ClientSession, frame: Frame.Control) {
+        // Scope gate (issue 02): a view-only (mirror-only) peer may observe but not
+        // drive — refuse every Control/Handoff/config verb it sends.
+        if (!session.canControl) {
+            Log.i(TAG, "control refused (mirror-only peer): ${frame.method}")
+            deliver(session, Frame.ControlErr(frame.id, "not authorized"))
+            return
+        }
         Log.i(TAG, "relayed control: ${frame.method}${if (frame.args.isEmpty()) "" else " (${frame.args})"}")
         val reply = controlHandler(frame.method, frame.args).fold(
             onSuccess = { Frame.ControlOk(frame.id) },
@@ -213,6 +263,8 @@ class RelayHub(
     /** One connected secondary: its outbox and the set of devices it has attached. */
     private class ClientSession(@Suppress("unused") val link: FrameLink, capacity: Int) {
         val outbox = Channel<Frame>(capacity)
+        /** Granted control scope (issue 02): false = view-only mirror, set on Welcome. */
+        @Volatile var canControl: Boolean = false
         private val attached = ConcurrentHashMap.newKeySet<String>()
         fun isAttached(address: String): Boolean = attached.contains(address)
         fun attach(address: String) { attached.add(address) }
@@ -223,5 +275,7 @@ class RelayHub(
     private companion object {
         const val TAG = "RelayHub"
         const val AUTHORITY_PRIMARY = "primary"
+        const val SCOPE_CONTROL = "control"
+        const val SCOPE_MIRROR = "mirror"
     }
 }

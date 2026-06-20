@@ -83,6 +83,10 @@ sealed class Frame {
         val primaryName: String,
         val authority: String,
         val roster: List<DeviceInfo>,
+        /** The scope this peer was granted (issue 02 TOFU): `"control"` (may drive
+         *  the machine) or `"mirror"` (view-only — its Control/Handoff are refused).
+         *  Defaults to `"control"` so an older relay (pre-pairing) reads as full. */
+        val scope: String = "control",
     ) : Frame()
 
     /** The primary's rejection reply to [Hello] (TOFU declined / version

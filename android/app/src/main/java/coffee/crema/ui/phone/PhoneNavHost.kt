@@ -120,6 +120,7 @@ fun PhoneNavHost(
                 MirrorBanner(
                     primaryName = ui.mirroringPrimaryName,
                     reconnecting = ui.mirrorReconnecting,
+                    viewOnly = ui.mirrorViewOnly,
                     onClick = { devicesOpen = true },
                     modifier = Modifier.windowInsetsPadding(WindowInsets.statusBars),
                 )
@@ -179,6 +180,7 @@ fun PhoneNavHost(
 private fun MirrorBanner(
     primaryName: String,
     reconnecting: Boolean,
+    viewOnly: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -196,7 +198,11 @@ private fun MirrorBanner(
         ) {
             PhIcon("bluetooth", sizeDp = 15)
             Text(
-                if (reconnecting) "Reconnecting to $who…" else "Mirroring $who",
+                when {
+                    reconnecting -> "Reconnecting to $who…"
+                    viewOnly -> "Mirroring $who · view-only"
+                    else -> "Mirroring $who"
+                },
                 style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold, fontSize = 12.5.sp),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
