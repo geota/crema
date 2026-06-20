@@ -72,3 +72,25 @@ regression).
 
 ## Comments
 <!-- triage + progress notes append below -->
+
+**2026-06-20 — attempted, then reverted (genuinely hardware-gated).** Wrote the
+relay-side foundation and confirmed the design is sound, but **reverted rather than
+commit unvalidated** — there's no scale in the replay capture and no scale-replay
+harness (`replayRoute` has no SCALE_WEIGHT path), so neither the live weight nor the
+counted-stream **double-count** (the whole risk) can be verified on the emulator;
+only no-regression is checkable. Shipping it blind is exactly what this issue's note
+warns against. Re-do it in a hardware (or scale-replay) session — the worked-out plan:
+
+- **`ScaleBleManager`:** expose `connectedName` (= `advertisedName` when connected)
+  and `weightNotifyChar` (= `weightNotifyUuid`).
+- **`startPrimaryMode` roster:** `buildList { DE1; scale.connectedAddress?.let { add(DeviceInfo(addr, scale.connectedName ?: "Scale", "scale", "CONNECTED")) } }`.
+- **`isSnapshotChar`:** `char != De1Uuids.SHOT_SAMPLE && char != scale.weightNotifyChar`
+  (keep the counted weight stream live-only — the double-count fix).
+- **Secondary attach (the messy bit):** a mirror must attach the primary's scale,
+  but a *blind* `connectScale()` on a scaleless primary leaves the scale stuck on
+  "Scanning…" (a no-scale regression). Do it **roster-driven**: expose
+  `ProxyTransport.roster` and, on a secondary, `connectScale()` only once a
+  `kind == "scale"` entry appears (no scan → "Not paired" when the primary has none).
+- **Validate (needs a scale or a scale-replay):** secondary WEIGHT + scale-flow
+  populate live and match the primary; sample counts equal (no double-count);
+  scaleless primary → roster stays DE1-only, no "Scanning…" regression.
