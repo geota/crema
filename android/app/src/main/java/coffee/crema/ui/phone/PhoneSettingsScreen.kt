@@ -897,6 +897,23 @@ private fun AdvancedSection(
             }
         }
     }
+    SettingsGroup("Paired devices") {
+        // Devices this host has allowed to mirror it (issue 02). Forget → the peer
+        // is re-prompted on its next connect.
+        if (ui.pairedDevices.isEmpty()) {
+            CremaSettingsRow("No paired devices", "Devices you allow to mirror this machine appear here.", last = true) {}
+        } else {
+            ui.pairedDevices.forEachIndexed { i, d ->
+                CremaSettingsRow(
+                    d.name,
+                    if (d.canControl) "Mirror + control" else "Mirror only",
+                    last = i == ui.pairedDevices.lastIndex,
+                ) {
+                    CremaButton(onClick = { vm.forgetPairedDevice(d.id) }, variant = CremaButtonVariant.Text, label = "Forget")
+                }
+            }
+        }
+    }
     SettingsGroup("Service-grade") {
         // null until the connected DE1 reports its mains voltage (raw HeaterVoltage MMR).
         val hv = heaterVoltageValue(ui.de1MachineInfo)

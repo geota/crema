@@ -22,7 +22,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.ui.Alignment
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -255,6 +257,11 @@ class MainActivity : ComponentActivity() {
                     hostState = snackbarHostState,
                     modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 16.dp),
                 )
+                // Host-side TOFU pairing prompt (issue 02) — a new device wants to
+                // mirror this machine. Modal over any screen; dismiss = Deny.
+                ui.pendingPairing?.let { prompt ->
+                    PairingDialog(prompt = prompt, onChoice = viewModel::resolvePairing)
+                }
                 }
                 }
             }
@@ -828,4 +835,39 @@ private fun Field(label: String, value: String) {
             fontFamily = FontFamily.Monospace,
         )
     }
+}
+
+/**
+ * Host-side TOFU pairing prompt (issue 02): a new secondary ([prompt]) is asking
+ * to mirror this machine. Three explicit choices — full control, view-only, or
+ * deny — with dismiss (tap-outside / back) defaulting to **Deny**, so a prompt
+ * left unanswered never grants access.
+ */
+@Composable
+private fun PairingDialog(prompt: PairingPrompt, onChoice: (PairingChoice) -> Unit) {
+    AlertDialog(
+        onDismissRequest = { onChoice(PairingChoice.DENY) },
+        title = { Text("Allow this device?") },
+        text = {
+            Column {
+                Text("“${prompt.clientName}” wants to mirror and control this machine over the network.")
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "ID ${prompt.clientId.take(8)}",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onChoice(PairingChoice.ALLOW_CONTROL) }) { Text("Allow control") }
+        },
+        dismissButton = {
+            Row {
+                TextButton(onClick = { onChoice(PairingChoice.MIRROR_ONLY) }) { Text("Mirror only") }
+                TextButton(onClick = { onChoice(PairingChoice.DENY) }) { Text("Deny") }
+            }
+        },
+    )
 }

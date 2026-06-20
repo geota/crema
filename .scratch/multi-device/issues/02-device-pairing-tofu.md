@@ -1,6 +1,6 @@
 # 02 — Device pairing / authorization (TOFU): not just "anyone on the LAN"
 
-- **Status:** ready-for-human
+- **Status:** done (TOFU prompt + scope gate + remember/revoke; sensible defaults applied; token continuity deferred)
 - **Severity:** P1
 - **Area:** Android (proxy · RelayHub · new pairing UI) — security/trust
 - **Depends on:** none
@@ -72,3 +72,46 @@ Accept → mirrors, and reconnect is silent. A mirror-only peer's Stop is refuse
 ## Comments
 <!-- Needs a product call on: prompt copy, default scope (mirror-only vs full), whether
      to require pairing at all on a "home" network. Flagged ready-for-human for that. -->
+
+**2026-06-20 — done + 2-emulator validated. Product calls (applied defaults):**
+prompt copy = "Allow this device? — '<name>' wants to mirror and control this
+machine over the network. ID <8-char>"; three choices **Allow control / Mirror only
+/ Deny** with dismiss = Deny; pairing is **always required** (no "trusted home
+network" opt-out — the prompt is the whole gate); a peer is remembered per
+`clientId` until Forgotten. Tweak freely.
+
+**Implementation:**
+- **Wire:** `Frame.Welcome` gained `scope` ("control"/"mirror", defaults control for
+  back-compat). New `PairingDecision` (Allowed(canControl)/Denied).
+- **RelayHub:** no longer auto-Welcomes — an injected `authorize(clientId, clientName)`
+  decides (default still auto-allow, so loopback/unit tests stay read-only-by-
+  construction). Hello is handled **inline** (suspends the per-client collect loop) so
+  the verdict lands before any attach/read is served. `handleControl` is **scope-gated**:
+  a mirror-only session's Control/Handoff/config verb → `ControlErr("not authorized")`.
+- **ProxyTransport:** `onWelcome(scope)` (→ `mirrorViewOnly`) + `onDenied(reason)`.
+  **clientId is now the stable `proxyDeviceId`** (issue 14), not the model label, so
+  TOFU remembers THIS install.
+- **VM:** `authorizePeer` checks the persisted set, else raises `pendingPairing` +
+  suspends on the choice (a `Mutex` serializes concurrent prompts); `rememberPaired`/
+  `forgetPairedDevice`; `onProxyDenied` → notify + `switchToNormal` (no deny-retry
+  loop). `AppPrefs.pairedDevices: List<PairedDevice{id,name,canControl}>`.
+- **UI:** host-side `PairingDialog` in MainActivity (modal over any screen, dismiss=Deny);
+  "Paired devices" management (Forget) in BOTH phone + tablet Settings; the #10 banner
+  shows "· view-only"; a view-only control attempt maps to a clear "the host hasn't
+  allowed this device to control" message.
+- **Crash fix:** moved `proxyDeviceId`'s declaration ABOVE the `switchable` field —
+  `buildInitialDelegate`→`startSecondaryMode` reads it during that field's init, so a
+  later declaration was null (the documented field-init-order trap; caught at runtime).
+
+**Validation (tablet host / phone secondary):** unknown phone → host prompt; **Deny**
+→ phone got Denied + dropped to normal; re-connect re-prompted (not remembered);
+**Mirror only** → phone mirrored "· view-only", host persisted canControl=false, and
+the phone's Coffee was **refused server-side** ("control refused (mirror-only peer):
+startShot"); **restart → silent** (paired, no prompt); tablet "Paired devices" listed
+it, **Forget** → cleared → next connect re-prompted; **Allow control** → banner dropped
+"view-only", persisted canControl=true.
+
+**Deferred (follow-ups):** per-peer **token** mint/continuity (the M5/cloud bar-raiser;
+LAN-consent v1 keys on the persistent clientId); **immediate session drop** on Forget
+(today it re-prompts on next connect, the live session lingers); WSS/transport auth
+(the plaintext ws:// telemetry is still sniffable on a hostile LAN — the M5 story).

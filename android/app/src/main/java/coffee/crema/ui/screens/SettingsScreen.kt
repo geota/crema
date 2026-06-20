@@ -782,6 +782,23 @@ fun SettingsScreen(
                                 }
                             }
                         }
+                        SetGroup("Paired devices") {
+                            // Devices this host has allowed to mirror it (issue 02).
+                            // Forget → the peer is re-prompted on its next connect.
+                            if (ui.pairedDevices.isEmpty()) {
+                                CremaSettingsRow("No paired devices", "Devices you allow to mirror this machine appear here.", last = true) {}
+                            } else {
+                                ui.pairedDevices.forEachIndexed { i, d ->
+                                    CremaSettingsRow(
+                                        d.name,
+                                        if (d.canControl) "Mirror + control" else "Mirror only",
+                                        last = i == ui.pairedDevices.lastIndex,
+                                    ) {
+                                        CremaButton(onClick = { vm.forgetPairedDevice(d.id) }, variant = CremaButtonVariant.Text, label = "Forget")
+                                    }
+                                }
+                            }
+                        }
                         SetGroup("Service-grade") {
                             // Mains heater voltage — service-grade, gated behind a danger
                             // confirm (staged in pendingHeaterVoltage). Reflects the live

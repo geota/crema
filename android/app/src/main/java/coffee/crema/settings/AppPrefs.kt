@@ -105,6 +105,22 @@ data class AppPrefs(
     val proxyPrimaryHost: String = "",
     /** For `secondary`: the primary's relay port. */
     val proxyPrimaryPort: Int = 0,
+    /** Devices this host has approved to mirror it (issue 02 — TOFU pairing). A
+     *  remembered peer skips the "Allow this device?" prompt on reconnect; absence
+     *  ⟺ re-prompt. Host-side only — never pushed to mirrors (not in [ConfigSnapshot]). */
+    val pairedDevices: List<PairedDevice> = emptyList(),
+)
+
+/**
+ * A secondary this host has approved (issue 02). [id] is the peer's stable
+ * `clientId` (the TOFU key); [name] its display label; [canControl] = false marks
+ * a **view-only** mirror whose Control/Handoff the relay refuses.
+ */
+@Serializable
+data class PairedDevice(
+    val id: String,
+    val name: String,
+    val canControl: Boolean = true,
 )
 
 /**

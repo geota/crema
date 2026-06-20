@@ -60,6 +60,14 @@ class ProxyTransport(
      *  — the secondary applies it so its config mirrors the primary (single-owner
      *  config; the settings-drift fix). Default no-op (tests / read-only path). */
     private val onConfig: (json: String) -> Unit = {},
+    /** Invoked with the granted scope (`"control"` / `"mirror"`) from each
+     *  [Frame.Welcome] (issue 02) so the secondary can reflect view-only state.
+     *  Default no-op. */
+    private val onWelcome: (scope: String) -> Unit = {},
+    /** Invoked when the primary [Frame.Denied]s this peer (TOFU declined / revoked,
+     *  issue 02) — on the initial handshake AND on a reconnect after a revoke — so
+     *  the secondary can surface it and stop mirroring. Default no-op. */
+    private val onDenied: (reason: String) -> Unit = {},
     /** Fires when the link redials after a drop (from [ReconnectingClientLink]).
      *  Each emission re-runs the attach handshake so telemetry resumes instead of
      *  freezing on stale state (issue 03). Default empty for the in-memory links. */
@@ -108,6 +116,7 @@ class ProxyTransport(
         when (frame) {
             is Frame.Welcome -> {
                 applyRoster(frame.roster)
+                onWelcome(frame.scope)
                 if (!welcomed.isCompleted) welcomed.complete(Unit)
             }
             is Frame.Roster -> applyRoster(frame.devices)
@@ -125,8 +134,10 @@ class ProxyTransport(
             is Frame.Notify -> channelFor(frame.address, frame.char).trySend(frame)
             is Frame.State -> stateFlow(frame.address).value = parseState(frame.state)
             is Frame.Config -> onConfig(frame.json)
-            is Frame.Denied ->
+            is Frame.Denied -> {
+                onDenied(frame.reason)
                 if (!welcomed.isCompleted) welcomed.completeExceptionally(IllegalStateException("Proxy denied: ${frame.reason}"))
+            }
             else -> Log.w(TAG, "Secondary ignoring unexpected server frame: $frame")
         }
     }

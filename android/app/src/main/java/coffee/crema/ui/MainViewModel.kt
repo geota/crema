@@ -39,6 +39,7 @@ import coffee.crema.maintenance.MAINTENANCE_MAX_SAMPLE_ML
 import coffee.crema.maintenance.defaultMaintenanceState
 import coffee.crema.settings.AppPrefs
 import coffee.crema.settings.ConfigSnapshot
+import coffee.crema.settings.PairedDevice
 import coffee.crema.visualizer.VisualizerClient
 import coffee.crema.visualizer.VisualizerStore
 import coffee.crema.visualizer.VisualizerSync
@@ -53,6 +54,7 @@ import coffee.crema.ble.De1Uuids
 import coffee.crema.ble.proxy.DeviceInfo
 import coffee.crema.ble.proxy.LanRelayServer
 import coffee.crema.ble.proxy.LinkState
+import coffee.crema.ble.proxy.PairingDecision
 import coffee.crema.ble.proxy.Peer
 import coffee.crema.ble.proxy.PeerDiscovery
 import coffee.crema.ble.proxy.ProxyTransport
@@ -82,6 +84,8 @@ import coffee.crema.profiles.quickPresetJson
 import coffee.crema.profiles.profileIdOf
 import coffee.crema.profiles.SegmentEdit
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.update
@@ -166,6 +170,14 @@ data class BrewParams(
     val brewTemp: Double,
     val preinf: Double? = null,
 )
+
+/** A pending host-side "Allow this device?" pairing prompt (issue 02) — a secondary
+ *  with an unknown [clientId] is connecting; the UI shows it and the user's choice
+ *  resolves the held handshake. */
+data class PairingPrompt(val clientId: String, val clientName: String)
+
+/** The host's answer to a [PairingPrompt] (issue 02). */
+enum class PairingChoice { DENY, MIRROR_ONLY, ALLOW_CONTROL }
 
 /**
  * The brew parameters actually in effect: the live Quick-Controls override
@@ -475,6 +487,16 @@ data class MainUiState(
     /** The primary's display name while mirroring (issue 10) — drives the app-wide
      *  "Mirroring <primary>" authority banner. Blank when not a secondary. */
     val mirroringPrimaryName: String = "",
+    /** This secondary was granted **view-only** (mirror, not control) by the host
+     *  (issue 02) — its control attempts are refused, so the UI can say "view-only". */
+    val mirrorViewOnly: Boolean = false,
+    /** A pending host-side pairing prompt (issue 02): a new secondary is asking to
+     *  mirror this device. Non-null ⟺ the Activity shows the "Allow this device?"
+     *  dialog; the user's choice resolves the held handshake. */
+    val pendingPairing: PairingPrompt? = null,
+    /** Devices this host has approved to mirror it (issue 02) — shown in Settings ▸
+     *  "Paired devices" for review/revoke. */
+    val pairedDevices: List<PairedDevice> = emptyList(),
     /**
      * Transient mirror overlay (issue 05): the primary's active profile, decoded
      * for **display only**, when it's a custom profile this device's own library
@@ -779,6 +801,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private var relayServer: LanRelayServer? = null
     private var proxyLink: ReconnectingClientLink? = null
 
+    /** Stable per-install id (persisted in a tiny file — issue 14) used to advertise
+     *  + self-filter in NSD discovery AND as the secondary's `clientId` for the
+     *  host's TOFU pairing (issue 02). Declared BEFORE [switchable] because
+     *  [buildInitialDelegate] → [startSecondaryMode] reads it during that field's
+     *  init — a later declaration would be null there (the field-init-order trap). */
+    private val proxyDeviceId: String = run {
+        val f = File(app.filesDir, "deviceId")
+        runCatching { f.takeIf { it.exists() }?.readText()?.trim()?.ifBlank { null } }.getOrNull()
+            ?: UUID.randomUUID().toString().also { runCatching { f.writeText(it) } }
+    }
+
     // The managers + scanner sit on this facade so the transport can be swapped at
     // runtime — M2 mode switches (Mirror/Hand-off) with NO app restart. The startup
     // delegate is the persisted role (see [buildInitialDelegate]); [applyMode] swaps it.
@@ -828,16 +861,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         onStatus = { line -> _ui.update { it.copy(status = line) } },
         onScaleIdentified = ::refreshScaleCapabilities,
     )
-
-    /** Stable-per-launch id used to advertise + self-filter in NSD discovery. */
-    private val proxyDeviceId: String = run {
-        // Stable-per-install id, persisted in a tiny file so NSD self-filtering +
-        // (future) peer pairing survive a restart, rather than churning a new UUID
-        // each launch (issue 14).
-        val f = File(app.filesDir, "deviceId")
-        runCatching { f.takeIf { it.exists() }?.readText()?.trim()?.ifBlank { null } }.getOrNull()
-            ?: UUID.randomUUID().toString().also { runCatching { f.writeText(it) } }
-    }
 
     /** LAN peer discovery (NSD) for the multi-device picker (M2) — advertises this
      *  instance and browses for peers, exposed as [MainUiState.peers]. */
@@ -1795,11 +1818,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             proxy.control(method, args).onFailure {
                 appendLog("Relay $method failed: ${it.message}")
-                notifyUser("Couldn't reach the machine — change not applied")
+                notifyUser(relayFailureMessage(it, applied = false))
             }
         }
         return true
     }
+
+    /** User-facing copy for a failed relay: an authorization refusal (issue 02
+     *  view-only peer) reads differently from a dropped link. */
+    private fun relayFailureMessage(error: Throwable, applied: Boolean): String =
+        if (error.message?.contains("not authorized") == true) {
+            "View-only — the host hasn't allowed this device to control the machine"
+        } else if (applied) {
+            "Couldn't reach the machine — change reverted"
+        } else {
+            "Couldn't reach the machine — change not applied"
+        }
 
     /**
      * Relay a **config** verb from a secondary, optimistic-apply style (issue 06).
@@ -1818,7 +1852,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             proxy.control(method, args).onFailure {
                 appendLog("Relay $method failed: ${it.message}")
-                notifyUser("Couldn't reach the machine — change reverted")
+                notifyUser(relayFailureMessage(it, applied = true))
                 revert()
             }
         }
@@ -2085,6 +2119,73 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         appendLog("Config from primary applied (pressure ${cfg.pressureUnit}, temp ${cfg.tempUnit}, profile ${cfg.activeProfileId})")
     }
 
+    // ── Multi-device pairing (TOFU — issue 02) ────────────────────────────────
+    // The relay no longer auto-accepts: a connecting secondary is authorized here.
+    // One host-side prompt at a time; concurrent unknown peers queue on the mutex.
+    private val pairingMutex = Mutex()
+    private var pairingDeferred: CompletableDeferred<PairingChoice>? = null
+
+    /**
+     * Primary-side TOFU gate wired into [RelayHub]'s `authorize`. A remembered peer
+     * is admitted silently with its stored scope; an unknown one raises a host-side
+     * "Allow this device?" prompt ([MainUiState.pendingPairing]) and suspends until
+     * the user chooses. Accepting persists the peer so reconnects are silent. The
+     * mutex serializes prompts so two unknown peers don't fight over the dialog.
+     */
+    private suspend fun authorizePeer(clientId: String, clientName: String): PairingDecision {
+        _ui.value.pairedDevices.firstOrNull { it.id == clientId }?.let {
+            return PairingDecision.Allowed(it.canControl)
+        }
+        return pairingMutex.withLock {
+            // Re-check inside the lock: a peer approved while we queued is now known.
+            val known = _ui.value.pairedDevices.firstOrNull { it.id == clientId }
+            if (known != null) return@withLock PairingDecision.Allowed(known.canControl)
+            val deferred = CompletableDeferred<PairingChoice>()
+            pairingDeferred = deferred
+            _ui.update { it.copy(pendingPairing = PairingPrompt(clientId, clientName)) }
+            val choice = deferred.await()
+            pairingDeferred = null
+            _ui.update { it.copy(pendingPairing = null) }
+            when (choice) {
+                PairingChoice.DENY -> PairingDecision.Denied("not authorized")
+                PairingChoice.MIRROR_ONLY -> { rememberPaired(clientId, clientName, canControl = false); PairingDecision.Allowed(false) }
+                PairingChoice.ALLOW_CONTROL -> { rememberPaired(clientId, clientName, canControl = true); PairingDecision.Allowed(true) }
+            }
+        }
+    }
+
+    /** The Activity resolves a pending [PairingPrompt] with the user's choice. */
+    fun resolvePairing(choice: PairingChoice) {
+        pairingDeferred?.complete(choice)
+    }
+
+    private fun rememberPaired(id: String, name: String, canControl: Boolean) {
+        _ui.update {
+            it.copy(pairedDevices = it.pairedDevices.filterNot { d -> d.id == id } + PairedDevice(id, name, canControl))
+        }
+        persistPrefs()
+        appendLog("Paired device '$name' (${if (canControl) "control" else "mirror-only"})")
+    }
+
+    /** Revoke a paired device (Settings ▸ Paired devices). It re-prompts on its next
+     *  connect; a currently-attached peer keeps its live session until then (an
+     *  immediate cut would need to drop its session — a follow-up). */
+    fun forgetPairedDevice(id: String) {
+        _ui.update { it.copy(pairedDevices = it.pairedDevices.filterNot { d -> d.id == id }) }
+        persistPrefs()
+    }
+
+    /** Secondary side: the host declined (or revoked) this device (issue 02). Stop
+     *  mirroring and tell the user, rather than silently retry-looping a denied link. */
+    private fun onProxyDenied(reason: String) {
+        if (_ui.value.proxyRole != "secondary") return
+        viewModelScope.launch {
+            appendLog("Mirror denied by host: $reason")
+            notifyUser("The host hasn't allowed this device")
+            switchToNormal()
+        }
+    }
+
     private fun requestMachineState(state: MachineRequest) {
         if (relayIfSecondary("machineState", state.name)) return
         val raw = runCatching { bridge.requestMachineState(state) }.getOrElse {
@@ -2334,6 +2435,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             controlHandler = { method, args -> handleRelayedControl(method, args) },
             // The single-owner session config a mirror snaps to on attach (T2).
             configSource = { configSnapshotJson() },
+            // TOFU gate (issue 02): prompt for an unknown peer, remember the choice.
+            authorize = { id, name -> authorizePeer(id, name) },
         )
         relayHub = hub
         val tapping = TappingBleTransport(real, hub, viewModelScope)
@@ -2362,9 +2465,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             link.state.collect { s -> _ui.update { it.copy(mirrorReconnecting = s == LinkState.CONNECTING) } }
         }
         return ProxyTransport(
-            link, viewModelScope, clientId = deviceLabel(), clientName = deviceLabel(),
+            // clientId = the STABLE per-install id (issue 14) so the host's TOFU
+            // pairing (issue 02) remembers THIS device, not every same-model phone;
+            // clientName = the human label shown in the host's prompt.
+            link, viewModelScope, clientId = proxyDeviceId, clientName = deviceLabel(),
             // Snap this mirror's config to the primary's on every attach (T2).
             onConfig = { applyRemoteConfig(it) },
+            // Reflect the granted scope (issue 02): view-only mirrors can't control.
+            onWelcome = { scope -> _ui.update { it.copy(mirrorViewOnly = scope == "mirror") } },
+            // Host declined/revoked us → stop mirroring with a message (issue 02).
+            onDenied = { reason -> onProxyDenied(reason) },
             // Re-run the attach handshake when the link redials (issue 03).
             reconnects = link.reconnects,
         )
@@ -2418,6 +2528,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     mirroredProfileJson = null,
                     mirroredBeanSummary = null,
                     mirroringPrimaryName = if (role == "secondary") it.mirroringPrimaryName else "",
+                    mirrorViewOnly = if (role == "secondary") it.mirrorViewOnly else false,
                 )
             }
             persistPrefs()
@@ -2512,6 +2623,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         proxyRole = _ui.value.proxyRole,
         proxyPrimaryHost = _ui.value.proxyPrimaryHost,
         proxyPrimaryPort = _ui.value.proxyPrimaryPort,
+        pairedDevices = _ui.value.pairedDevices,
     )
 
     /** True once [loadPrefs] has hydrated the UI from disk — writes before that
@@ -3428,6 +3540,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             proxyRole = p.proxyRole,
             proxyPrimaryHost = p.proxyPrimaryHost,
             proxyPrimaryPort = p.proxyPrimaryPort,
+            pairedDevices = p.pairedDevices,
         ) }
         // Push the persisted cap + behaviour toggles to the core so they're live
         // from launch (the core doesn't echo these back as events).
