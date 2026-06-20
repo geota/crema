@@ -739,6 +739,7 @@ fun SettingsScreen(
                                     onMirrorFrom = { host, port -> vm.switchToSecondary(host, port) },
                                     onStopMirroring = vm::switchToNormal,
                                     onTakeOver = vm::requestHandoff,
+                                    onHandOff = vm::offerHandoff,
                                     showHeader = false,
                                 )
                             }

@@ -19,6 +19,10 @@ sealed class PairingDecision {
     data class Denied(val reason: String) : PairingDecision()
 }
 
+/** A secondary currently mirroring this primary, as a **push-handoff** target
+ *  (issue 07) — the primary's picker lists these so it can "hand off to <name>". */
+data class HandoffTarget(val clientId: String, val clientName: String)
+
 /**
  * The primary-side relay: it forwards the one real BLE link out to N secondaries
  * over the proxy protocol. Transport-agnostic — it is fed the primary's
@@ -95,6 +99,9 @@ class RelayHub(
      */
     private val authorize: suspend (clientId: String, clientName: String) -> PairingDecision =
         { _, _ -> PairingDecision.Allowed(canControl = true) },
+    /** Fired when a secondary attaches/detaches (issue 07) so the primary's UI can
+     *  refresh its "hand off to <device>" list. Default no-op (tests / loopback). */
+    private val onClientsChanged: () -> Unit = {},
 ) {
     private val clients = CopyOnWriteArrayList<ClientSession>()
 
@@ -139,6 +146,24 @@ class RelayHub(
         for (c in clients) deliver(c, frame)
     }
 
+    /** Control-capable secondaries currently mirroring this primary — the
+     *  "hand off to <device>" targets (issue 07). View-only peers are excluded:
+     *  their take-over would be refused by the scope gate anyway. */
+    fun handoffTargets(): List<HandoffTarget> =
+        clients.mapNotNull { c ->
+            val id = c.clientId
+            if (id != null && c.canControl) HandoffTarget(id, c.clientName ?: id) else null
+        }
+
+    /** Push a [Frame.HandoffOffer] to a specific mirroring secondary (issue 07).
+     *  The peer prompts and, on accept, runs its normal pull back at us. Returns
+     *  false if no such client is connected. */
+    fun offerHandoff(clientId: String): Boolean {
+        val session = clients.firstOrNull { it.clientId == clientId } ?: return false
+        deliver(session, Frame.HandoffOffer(primaryName))
+        return true
+    }
+
     // ---- One client connection --------------------------------------------
 
     /** Serve one secondary for the life of its [link]. Returns when the link
@@ -170,6 +195,7 @@ class RelayHub(
             clients.remove(session)
             session.outbox.close()
             pump.cancel()
+            onClientsChanged()
         }
     }
 
@@ -180,8 +206,11 @@ class RelayHub(
         when (val decision = authorize(frame.clientId, frame.clientName)) {
             is PairingDecision.Allowed -> {
                 session.canControl = decision.canControl
+                session.clientId = frame.clientId
+                session.clientName = frame.clientName
                 val scope = if (decision.canControl) SCOPE_CONTROL else SCOPE_MIRROR
                 deliver(session, Frame.Welcome(PROXY_PROTOCOL_VERSION, primaryId, primaryName, AUTHORITY_PRIMARY, roster(), scope))
+                onClientsChanged() // identity known → the primary's hand-off list can list it
             }
             is PairingDecision.Denied -> {
                 Log.i(TAG, "pairing denied for ${frame.clientName} (${frame.clientId}): ${decision.reason}")
@@ -265,6 +294,9 @@ class RelayHub(
         val outbox = Channel<Frame>(capacity)
         /** Granted control scope (issue 02): false = view-only mirror, set on Welcome. */
         @Volatile var canControl: Boolean = false
+        /** Peer identity from [Frame.Hello], for push-handoff targeting (issue 07). */
+        @Volatile var clientId: String? = null
+        @Volatile var clientName: String? = null
         private val attached = ConcurrentHashMap.newKeySet<String>()
         fun isAttached(address: String): Boolean = attached.contains(address)
         fun attach(address: String) { attached.add(address) }
