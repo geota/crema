@@ -1,6 +1,6 @@
 # 03 — Mid-session re-attach: a primary restart leaves a frozen "Connected" mirror
 
-- **Status:** ready-for-agent
+- **Status:** done
 - **Severity:** P1
 - **Area:** Android (proxy · ProxyTransport · ReconnectingClientLink)
 - **Depends on:** none
@@ -87,3 +87,17 @@ test (loopback: drop + re-pair the link, assert observe resumes + re-snapshot ar
 
 ## Comments
 <!-- triage + progress notes append below -->
+
+**2026-06-20 — done.** `ReconnectingClientLink` rewritten to truly reconnect (the
+old loop exited on first connect — it never redialed). Now: a persistent dial loop
+that pumps each session then redials on drop; `state: StateFlow<LinkState>` +
+`reconnects: Flow<Unit>` (fires on each non-first connect); backoff cap dropped
+30 s → 5 s. `ProxyTransport` gained a `reconnects` param + `onReconnect()` (re-`Hello`
++ re-`Attach` every tracked-attached address → relay re-snapshots → `observe`
+resumes) + `attached` set tracking. VM reflects `link.state` into
+`MainUiState.mirrorReconnecting`; PhoneBrewScreen badge shows "· Reconnecting…".
+**Validated on 2 emulators:** phone mirroring → tablet relay force-stopped + relaunched
+(new port) → phone (PID unchanged, no relaunch) logged `Primary link dropped → will
+redial` → backoff retries → on re-forward, `Connected to primary` (2nd) +
+`Link reconnected — re-handshaking (re-attach 1)` → **live telemetry resumed** (was a
+frozen "Connected"). No crash. Existing proxy tests green (default `emptyFlow` reconnects).
