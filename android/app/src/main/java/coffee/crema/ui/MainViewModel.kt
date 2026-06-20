@@ -1046,9 +1046,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  profile to the DE1 on Coffee is the M2 gated-start sequence.) Persisted
      *  (AppPrefs.activeProfileId) so the selection survives a restart. */
     fun setActiveProfile(id: String) {
-        if (relayIfSecondary("setActiveProfile", id)) return
+        val prev = _ui.value
         // Switching profiles clears any Quick-Controls override (re-seeds from new).
         _ui.update { it.copy(activeProfileId = id, brewParams = null) }
+        if (relayConfigOptimistic("setActiveProfile", id) {
+                _ui.update { it.copy(activeProfileId = prev.activeProfileId, brewParams = prev.brewParams) }
+            }
+        ) return
         persistPrefs()
         pushStopTargets() // new profile's recipe yield/volume become the stop targets
     }
@@ -1082,14 +1086,23 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Apply a Quick-Controls brew override (dose/yield/brew-temp). Transient —
      *  not saved to the profile; baked into the next shot's upload by [startShot]. */
     fun quickAdjustBrew(dose: Double, yieldOut: Double, brewTemp: Double, preinf: Double? = null) {
+        val prev = _ui.value.brewParams
         _ui.update { it.copy(brewParams = BrewParams(dose, yieldOut, brewTemp, preinf)) }
+        if (relayConfigOptimistic("quickAdjustBrew", "$dose,$yieldOut,$brewTemp,${preinf ?: ""}") {
+                _ui.update { it.copy(brewParams = prev) }
+            }
+        ) return
         pushStopTargets() // the new yield override becomes the live stop-at-weight target
+        relayHub?.pushConfig() // mirrors track the primary's live override (issue 06)
     }
 
     /** Reset the Quick-Controls override back to the active profile's recipe. */
     fun resetBrewParams() {
+        val prev = _ui.value.brewParams
         _ui.update { it.copy(brewParams = null) }
+        if (relayConfigOptimistic("resetBrew", "") { _ui.update { it.copy(brewParams = prev) } }) return
         pushStopTargets() // drop the per-shot override; the profile recipe target takes over
+        relayHub?.pushConfig() // mirrors drop their override too (issue 06)
     }
 
     /**
@@ -1785,6 +1798,30 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         return true
     }
 
+    /**
+     * Relay a **config** verb from a secondary, optimistic-apply style (issue 06).
+     * The caller has already updated [_ui] locally (snappy — no round-trip lag);
+     * this relays and, on failure, runs [revert] + surfaces it, so a dropped link
+     * never silently eats the change. On success the primary's authoritative
+     * `Config` push reconciles (usually a no-op). Returns true when handled as a
+     * secondary (the caller must `return`, skipping its persist + machine write).
+     *
+     * Distinct from [relayIfSecondary], which stays authority-first (no local
+     * apply) for machine-control verbs (start/stop/tare) where optimism is unsafe.
+     */
+    private fun relayConfigOptimistic(method: String, args: String, revert: () -> Unit): Boolean {
+        if (_ui.value.proxyRole != "secondary") return false
+        val proxy = switchable.delegate as? ProxyTransport ?: return false
+        viewModelScope.launch {
+            proxy.control(method, args).onFailure {
+                appendLog("Relay $method failed: ${it.message}")
+                notifyUser("Couldn't reach the machine — change reverted")
+                revert()
+            }
+        }
+        return true
+    }
+
     /** Run a secondary's relayed control intent on this (primary) device — the
      *  same verbs the primary's own UI calls. On a primary [relayIfSecondary] is
      *  false, so each executes locally against the real link. Wired into the
@@ -1801,6 +1838,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             "setActiveBean" -> setActiveBean(args.ifEmpty { null })
             "setStopOnWeight" -> setStopOnWeight(args.toBoolean())
             "setAutoTare" -> setAutoTare(args.toBoolean())
+            // Quick-Controls config verbs (issue 06): a secondary's edit drives the
+            // primary's single-owner config, which `persistPrefs` pushes back.
+            "setQcSteamTime" -> setQcSteamTime(args.toFloat())
+            "setQcSteamFlow" -> setQcSteamFlow(args.toFloat())
+            "setQcSteamTemp" -> setQcSteamTemp(args.toFloat())
+            "setQcHotWaterTemp" -> setQcHotWaterTemp(args.toFloat())
+            "setQcHotWaterVolume" -> setQcHotWaterVolume(args.toFloat())
+            "setQcFlushTime" -> setQcFlushTime(args.toFloat())
+            "setQcFlushTemp" -> setQcFlushTemp(args.toFloat())
+            "setQcGrind" -> setQcGrind(args.toFloat())
+            // The live Quick-Controls brew override (dose/yield/temp/preinf). CSV
+            // "dose,yield,temp,preinf" — preinf empty = null. resetBrew clears it.
+            "quickAdjustBrew" -> args.split(",").let { p ->
+                quickAdjustBrew(p[0].toDouble(), p[1].toDouble(), p[2].toDouble(), p.getOrNull(3)?.toDoubleOrNull())
+            }
+            "resetBrew" -> resetBrewParams()
             // M3 handoff: a secondary asks to take the DE1. Idle-only; on grant we
             // step down so the taker can acquire the radio.
             "handoff" -> grantHandoff()
@@ -1960,6 +2013,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 qcFlushTimeS = ui.qcFlushTimeS,
                 qcFlushTempC = ui.qcFlushTempC,
                 qcGrind = ui.qcGrind,
+                // Live brew override so a mirror's targets track the dial (issue 06).
+                brewDoseG = ui.brewParams?.dose,
+                brewYieldG = ui.brewParams?.yieldOut,
+                brewTempC = ui.brewParams?.brewTemp,
+                brewPreinfuseS = ui.brewParams?.preinf,
                 authority = "primary",
             ),
         )
@@ -1985,12 +2043,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 null
             }
         }
+        // Mirror the primary's live brew override (issue 06): the dose/yield/temp
+        // travel together, so a snapshot with them set re-arms the override here;
+        // all-null clears it (the profile recipe wins again).
+        val brew = if (cfg.brewDoseG != null && cfg.brewYieldG != null && cfg.brewTempC != null) {
+            BrewParams(cfg.brewDoseG!!, cfg.brewYieldG!!, cfg.brewTempC!!, cfg.brewPreinfuseS)
+        } else {
+            null
+        }
         _ui.update {
             it.copy(
                 activeProfileId = cfg.activeProfileId?.takeIf { id -> profileJsonById.containsKey(id) } ?: it.activeProfileId,
                 mirroredProfile = overlay,
                 mirroredProfileJson = overlay?.let { cfg.activeProfileJson },
                 mirroredBeanSummary = cfg.activeBeanSummary,
+                brewParams = brew,
                 activeBeanId = cfg.activeBeanId,
                 stopOnWeight = cfg.stopOnWeight,
                 autoTare = cfg.autoTare,
@@ -2491,8 +2558,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Enable/disable auto-tare at shot start (Quick Controls). Optimistic. Persisted. */
     fun setAutoTare(enabled: Boolean) {
-        if (relayIfSecondary("setAutoTare", enabled.toString())) return
+        val prev = _ui.value.autoTare
         _ui.update { it.copy(autoTare = enabled) }
+        if (relayConfigOptimistic("setAutoTare", enabled.toString()) { _ui.update { it.copy(autoTare = prev) } }) return
         runCatching { bridge.setAutoTare(enabled) }.onFailure {
             appendLog("Set auto-tare failed: ${it.message}")
         }
@@ -2504,8 +2572,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * the active profile; this just arms/disarms the behaviour. Optimistic.
      */
     fun setStopOnWeight(enabled: Boolean) {
-        if (relayIfSecondary("setStopOnWeight", enabled.toString())) return
+        val prev = _ui.value.stopOnWeight
         _ui.update { it.copy(stopOnWeight = enabled) }
+        if (relayConfigOptimistic("setStopOnWeight", enabled.toString()) { _ui.update { it.copy(stopOnWeight = prev) } }) return
         runCatching { bridge.setStopOnWeight(enabled) }.onFailure {
             appendLog("Set stop-on-weight failed: ${it.message}")
         }
@@ -2588,49 +2657,63 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Steam timeout, seconds (Quick Controls). Persisted; RMW write. */
     fun setQcSteamTime(seconds: Float) {
+        val prev = _ui.value.qcSteamTimeS
         _ui.update { it.copy(qcSteamTimeS = seconds) }
+        if (relayConfigOptimistic("setQcSteamTime", seconds.toString()) { _ui.update { it.copy(qcSteamTimeS = prev) } }) return
         persistPrefs()
         applySteamHotWater()
     }
 
     /** Steam flow rate, ml/s (Quick Controls). Persisted; standalone write. */
     fun setQcSteamFlow(mlPerS: Float) {
+        val prev = _ui.value.qcSteamFlowMlS
         _ui.update { it.copy(qcSteamFlowMlS = mlPerS) }
+        if (relayConfigOptimistic("setQcSteamFlow", mlPerS.toString()) { _ui.update { it.copy(qcSteamFlowMlS = prev) } }) return
         persistPrefs()
         routeWrite("Set steam flow") { bridge.setSteamFlow(mlPerS) }
     }
 
     /** Steam temperature, °C (Quick Controls). Persisted; RMW write. */
     fun setQcSteamTemp(tempC: Float) {
+        val prev = _ui.value.qcSteamTempC
         _ui.update { it.copy(qcSteamTempC = tempC) }
+        if (relayConfigOptimistic("setQcSteamTemp", tempC.toString()) { _ui.update { it.copy(qcSteamTempC = prev) } }) return
         persistPrefs()
         applySteamHotWater()
     }
 
     /** Hot-water temperature, °C (Quick Controls). Persisted; RMW write. */
     fun setQcHotWaterTemp(tempC: Float) {
+        val prev = _ui.value.qcHotWaterTempC
         _ui.update { it.copy(qcHotWaterTempC = tempC) }
+        if (relayConfigOptimistic("setQcHotWaterTemp", tempC.toString()) { _ui.update { it.copy(qcHotWaterTempC = prev) } }) return
         persistPrefs()
         applySteamHotWater()
     }
 
     /** Hot-water volume, ml (Quick Controls). Persisted; RMW write. */
     fun setQcHotWaterVolume(ml: Float) {
+        val prev = _ui.value.qcHotWaterVolumeMl
         _ui.update { it.copy(qcHotWaterVolumeMl = ml) }
+        if (relayConfigOptimistic("setQcHotWaterVolume", ml.toString()) { _ui.update { it.copy(qcHotWaterVolumeMl = prev) } }) return
         persistPrefs()
         applySteamHotWater()
     }
 
     /** Flush timeout, seconds (Quick Controls). Persisted; standalone write. */
     fun setQcFlushTime(seconds: Float) {
+        val prev = _ui.value.qcFlushTimeS
         _ui.update { it.copy(qcFlushTimeS = seconds) }
+        if (relayConfigOptimistic("setQcFlushTime", seconds.toString()) { _ui.update { it.copy(qcFlushTimeS = prev) } }) return
         persistPrefs()
         routeWrite("Set flush time") { bridge.setFlushTimeout((seconds * 1000f).toUInt()) }
     }
 
     /** Flush temperature, °C (Quick Controls). Persisted; standalone write. */
     fun setQcFlushTemp(tempC: Float) {
+        val prev = _ui.value.qcFlushTempC
         _ui.update { it.copy(qcFlushTempC = tempC) }
+        if (relayConfigOptimistic("setQcFlushTemp", tempC.toString()) { _ui.update { it.copy(qcFlushTempC = prev) } }) return
         persistPrefs()
         routeWrite("Set flush temp") { bridge.setFlushTemp(tempC) }
     }
@@ -2641,7 +2724,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * value — so there's no machine write, just persistence.
      */
     fun setQcGrind(clicks: Float) {
+        val prev = _ui.value.qcGrind
         _ui.update { it.copy(qcGrind = clicks) }
+        if (relayConfigOptimistic("setQcGrind", clicks.toString()) { _ui.update { it.copy(qcGrind = prev) } }) return
         persistPrefs()
     }
 
@@ -2920,8 +3005,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Set (or with `null`, clear) the active bean (the Brew bean block). Persisted. */
     fun setActiveBean(id: String?) {
-        if (relayIfSecondary("setActiveBean", id ?: "")) return
+        val prev = _ui.value.activeBeanId
         _ui.update { it.copy(activeBeanId = id) }
+        if (relayConfigOptimistic("setActiveBean", id ?: "") { _ui.update { it.copy(activeBeanId = prev) } }) return
         persistLibrary()
         relayHub?.pushConfig() // bean activation persists via the library, not prefs
         // Linked-profile auto-load (web activateBean parity). Only user acts
