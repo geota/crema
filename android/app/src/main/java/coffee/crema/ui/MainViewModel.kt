@@ -50,6 +50,7 @@ import coffee.crema.ble.BleTransport
 import coffee.crema.ble.De1Uuids
 import coffee.crema.ble.proxy.DeviceInfo
 import coffee.crema.ble.proxy.LanRelayServer
+import coffee.crema.ble.proxy.LinkState
 import coffee.crema.ble.proxy.Peer
 import coffee.crema.ble.proxy.PeerDiscovery
 import coffee.crema.ble.proxy.ProxyTransport
@@ -455,6 +456,10 @@ data class MainUiState(
     val proxyRole: String = "normal",
     val proxyPrimaryHost: String = "",
     val proxyPrimaryPort: Int = 0,
+    /** A secondary's link is mid-redial (primary dropped) — distinguishes a
+     *  reconnecting mirror from a healthy one so a frozen view doesn't read as
+     *  live (issue 03). Only meaningful while [proxyRole] == "secondary". */
+    val mirrorReconnecting: Boolean = false,
     /** Crema instances discovered on the LAN (NSD) — the device picker's list. */
     val peers: List<Peer> = emptyList(),
     /** Latest scale weight in grams, or null before the first reading. */
@@ -2144,10 +2149,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         appendLog("Multi-device: SECONDARY → $url")
         val link = ReconnectingClientLink(url, viewModelScope)
         proxyLink = link
+        // Reflect the link's CONNECTING/CONNECTED into the UI so a dropped primary
+        // shows "Reconnecting…", not a frozen "Mirroring" (issue 03).
+        viewModelScope.launch {
+            link.state.collect { s -> _ui.update { it.copy(mirrorReconnecting = s == LinkState.CONNECTING) } }
+        }
         return ProxyTransport(
             link, viewModelScope, clientId = deviceLabel(), clientName = deviceLabel(),
             // Snap this mirror's config to the primary's on every attach (T2).
             onConfig = { applyRemoteConfig(it) },
+            // Re-run the attach handshake when the link redials (issue 03).
+            reconnects = link.reconnects,
         )
     }
 

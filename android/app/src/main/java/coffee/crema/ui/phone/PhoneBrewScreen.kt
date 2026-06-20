@@ -692,7 +692,7 @@ private fun RestingBody(
                         // controls are the primary's (single-owner config / control).
                         if (ui.proxyRole == "secondary") {
                             Text(
-                                "· Mirroring",
+                                if (ui.mirrorReconnecting) "· Reconnecting…" else "· Mirroring",
                                 style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Medium, fontSize = 11.5.sp),
                                 color = MaterialTheme.colorScheme.primary,
                             )

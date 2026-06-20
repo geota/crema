@@ -6,6 +6,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -59,6 +60,10 @@ class ProxyTransport(
      *  — the secondary applies it so its config mirrors the primary (single-owner
      *  config; the settings-drift fix). Default no-op (tests / read-only path). */
     private val onConfig: (json: String) -> Unit = {},
+    /** Fires when the link redials after a drop (from [ReconnectingClientLink]).
+     *  Each emission re-runs the attach handshake so telemetry resumes instead of
+     *  freezing on stale state (issue 03). Default empty for the in-memory links. */
+    reconnects: Flow<Unit> = emptyFlow(),
 ) : BleTransport {
 
     /** Devices the primary holds, from [Frame.Welcome] / [Frame.Roster]; drives [scan]. */
@@ -70,6 +75,9 @@ class ProxyTransport(
     /** In-flight requests (attach/detach/read/write) awaiting a correlated reply. */
     private val pending = ConcurrentHashMap<Long, CompletableDeferred<Frame>>()
 
+    /** Addresses the managers have attached, so a reconnect can re-attach them all. */
+    private val attached = ConcurrentHashMap.newKeySet<String>()
+
     /** Per-`(address, char)` lossless inbound notification channels. */
     private val streams = ConcurrentHashMap<String, ConcurrentHashMap<String, Channel<Frame.Notify>>>()
 
@@ -79,6 +87,21 @@ class ProxyTransport(
     init {
         link.incoming().onEach { dispatch(it) }.launchIn(scope)
         scope.launch { link.send(Frame.Hello(PROXY_PROTOCOL_VERSION, ROLE_SECONDARY, clientId, clientName)) }
+        scope.launch { reconnects.collect { onReconnect() } }
+    }
+
+    /** Re-run the attach handshake after the link redials (issue 03): a fresh
+     *  [Frame.Hello] (the primary may have restarted), then re-[Frame.Attach] every
+     *  device the managers had attached — each re-attach triggers the relay's
+     *  snapshot burst, so the secondary's core re-converges and `observe` resumes. */
+    private suspend fun onReconnect() {
+        Log.i(TAG, "Link reconnected — re-handshaking (re-attach ${attached.size} device(s))")
+        runCatching { link.send(Frame.Hello(PROXY_PROTOCOL_VERSION, ROLE_SECONDARY, clientId, clientName)) }
+        for (address in attached.toList()) {
+            val id = nextId.getAndIncrement()
+            runCatching { request(id) { Frame.Attach(id, address) } }
+                .onFailure { Log.w(TAG, "re-attach $address failed: ${it.message}") }
+        }
     }
 
     private fun dispatch(frame: Frame) {
@@ -127,9 +150,11 @@ class ProxyTransport(
         val id = nextId.getAndIncrement()
         val reply = request(id) { Frame.Attach(id, device.address) }
         check(reply is Frame.Attached) { "Unexpected reply to attach: $reply" }
+        attached.add(device.address) // remember for re-attach on reconnect (issue 03)
     }
 
     override suspend fun disconnect(device: BleTransport.DeviceHandle) {
+        attached.remove(device.address)
         val id = nextId.getAndIncrement()
         runCatching { request(id) { Frame.Detach(id, device.address) } }
         streams.remove(device.address)?.values?.forEach { it.close() }
