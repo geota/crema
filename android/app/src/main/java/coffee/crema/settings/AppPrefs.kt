@@ -155,6 +155,9 @@ data class ConfigSnapshot(
     val brewYieldG: Double? = null,
     val brewTempC: Double? = null,
     val brewPreinfuseS: Double? = null,
+    /** The primary's display name (its device label), so a mirror's authority cue
+     *  can read "Mirroring <primary>" instead of a bare "Mirroring" (issue 10). */
+    val primaryName: String = "",
     /** Config owner — always `"primary"` from a primary; a secondary uses it to
      *  flag that it is viewing as a read-only mirror. */
     val authority: String = "primary",

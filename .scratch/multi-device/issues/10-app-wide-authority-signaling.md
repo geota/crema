@@ -1,6 +1,6 @@
 # 10 — App-wide "you're viewing a mirror" signaling
 
-- **Status:** ready-for-agent
+- **Status:** done (app-wide banner + primaryName + disabled machine-settings on a secondary)
 - **Severity:** P2
 - **Area:** Android (phone UI)
 - **Depends on:** none
@@ -39,3 +39,30 @@ don't relay are disabled/annotated; tapping the chip opens the Devices sheet.
 
 ## Comments
 <!-- triage + progress notes append below -->
+
+**2026-06-20 — done + 2-emulator validated.**
+- **App-wide banner.** A thin "Mirroring <primary>" bar lives in `PhoneNavHost`
+  (above the NavHost, so it's on every tab — Brew/Scale/Profiles/Beans/History/
+  Settings — not just Brew). It takes the status-bar inset and the content Box
+  below `consumeWindowInsets(statusBars)`, so each screen's own TopAppBar doesn't
+  re-pad (no double gap). Flips to "Reconnecting to <primary>…" on a link drop
+  (reuses `mirrorReconnecting`). Tappable → a hoisted Devices sheet (Stop / Take
+  over), so the picker is reachable from any tab. `PhoneNavHost` now takes `vm` +
+  `onConnect`; the Brew screen keeps its own bluetooth-icon sheet.
+- **primaryName.** `ConfigSnapshot.primaryName = deviceLabel()`; a secondary stores
+  it as `MainUiState.mirroringPrimaryName` (cleared on mode switch) → the banner
+  reads "Mirroring Kitchen tablet" instead of a bare label.
+- **Disabled machine settings on a secondary.** The non-relayed machine writes —
+  GHC (Machine), AC mains frequency + mains heater voltage (Advanced), flow
+  calibration Apply/Reset (Calibration) — are disabled when secondary (they'd hit
+  the read-only core and go nowhere), with a `MirrorControlledNote` card atop the
+  Machine + Calibration sections. Local prefs (keep-awake, auto-connect) stay live.
+
+**Validation:** phone secondary showed the banner on Brew, Beans, and Settings;
+banner tap from the Beans tab opened the Devices sheet; Settings ▸ Machine showed
+the note + a greyed GHC toggle while Keep-awake/Auto-connect stayed enabled. Insets
+correct across both the tab top bar and the Machine detail back-bar. (Advanced/
+Calibration disables use the identical `&& !secondary` guard — build-verified.)
+
+**Scope note:** phone shell only (the tablet uses `AppNavHost`/`NavigationRail` and
+has no secondary picker yet — that's #13; its authority cue rides along there).
