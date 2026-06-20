@@ -1,6 +1,6 @@
 # 01 — Two-phase handoff: a failed take-over must never orphan the machine
 
-- **Status:** ready-for-agent
+- **Status:** done (safety core; dedicated-frames refinement deferred)
 - **Severity:** P1
 - **Area:** Android (proxy · MainViewModel)
 - **Depends on:** none (07 depends on this)
@@ -94,3 +94,26 @@ re-binds + `LanRelayServer listening`), not orphaned. Mid-shot take-over still a
 
 ## Comments
 <!-- triage + progress notes append below -->
+
+**2026-06-20 — safety core done + validated.** Implemented the part that matters
+for the P1 (no orphaned machine), keeping the existing `"handoff"` control verb
+rather than adding the dedicated frames:
+- **Real release.** `applyMode` gained `reconnect: Boolean`; `grantHandoff` now
+  releases via `applyMode("normal", reconnect=false)` so the stepped-down holder
+  does NOT re-grab the DE1. (The old `switchToNormal` reconnected — so on real
+  hardware the "released" holder immediately re-grabbed the radio and the take-over
+  could never land. This was the latent killer bug.)
+- **Reclaim-on-timeout** (`armHandoffReclaim`): 8 s after releasing, probe via a
+  real `connect()`; if the DE1 came free (taker failed) → resume as primary; if it's
+  taken → stay normal. The free/busy test is the BLE scan, so recovery is
+  hardware-exercised.
+- Validated 2 emulators: idle take-over → tablet released (MACHINE "—", DE1
+  disconnected — it did NOT re-grab), phone became primary; reclaim probed, found no
+  DE1 (no BT on emulator), and correctly stayed normal (LanRelayServer=0, no wrong
+  reclaim). No crash.
+
+**Deferred (not safety-critical):** the dedicated `Handoff`/`HandoffGrant`/
+`HandoffAbort` frames + carrying `de1Address`/`de1Name` in the grant (multi-DE1
+targeting; today the taker scans for any DE1). Re-open as a follow-up if multi-DE1
+or a stricter ack handshake is needed. The orphan-recovery on a real taker-failure
+is hardware-gated for full validation (#12).
