@@ -134,7 +134,11 @@ pub struct StoredShot {
     pub profile: Option<Profile>,
     /// Why the shot stopped, if an [`AutoStop`](crate::AutoStop) drove it.
     pub stop_reason: Option<StopReason>,
-    /// Barista journal metadata.
+    /// Barista journal metadata. `#[serde(default)]` so a legacy shot that
+    /// predates this field (or a foreign import that omits it) still loads
+    /// rather than failing the whole history read; `ShotMetadata` is all-Option
+    /// behind a `Default`.
+    #[serde(default)]
     pub metadata: ShotMetadata,
     /// The recorded telemetry.
     pub record: ShotRecord,
@@ -329,6 +333,22 @@ mod tests {
             });
         let json = shot.to_json().unwrap();
         assert_eq!(StoredShot::from_json(&json), Ok(shot));
+    }
+
+    #[test]
+    fn legacy_shot_without_metadata_still_loads() {
+        // A shot persisted before the `metadata` field existed (or a foreign
+        // import that omits it) must still load — `#[serde(default)]` gives it an
+        // empty ShotMetadata rather than failing the whole history read.
+        let shot = StoredShot::new(1_700_000_000_000, sample_record());
+        let mut value = serde_json::to_value(&shot).unwrap();
+        assert!(
+            value.as_object_mut().unwrap().remove("metadata").is_some(),
+            "expected `metadata` in the serialized shape"
+        );
+        let json = serde_json::to_string(&value).unwrap();
+        let parsed = StoredShot::from_json(&json).expect("a shot missing metadata must still load");
+        assert_eq!(parsed.metadata, ShotMetadata::default());
     }
 
     #[test]

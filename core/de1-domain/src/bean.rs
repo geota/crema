@@ -422,22 +422,29 @@ pub struct Bean {
     #[serde(default)]
     pub roast_type: Option<BeanRoastType>,
     /// Decaf flag — `false` by default.
+    #[serde(default)]
     pub decaf: bool,
     /// Provenance metadata. Empty struct by default.
+    #[serde(default)]
     pub origin: BeanOrigin,
     /// Bag size, grams. `0.0` when unknown. Unit lives in the doc
     /// comment, not the field name, per the locked-in naming rule
     /// (`docs/44-pre-android-handoff.md`).
+    #[serde(default)]
     pub bag_size: f32,
     /// Remaining weight in the bag, grams. Auto-debited per shot when
     /// the shell enables `Track bag remaining weight`. `0.0` when
     /// unknown.
+    #[serde(default)]
     pub remaining: f32,
     /// Quality score — free text per Visualizer (`"88"`, `"A-"`).
+    #[serde(default)]
     pub quality_score: String,
     /// Tasting notes — multi-line free text.
+    #[serde(default)]
     pub tasting_notes: String,
     /// User star rating 0..5; `0` = unrated.
+    #[serde(default)]
     pub rating: u8,
     /// Where the bag was bought — `"Counter Culture · Durham"`.
     pub place_of_purchase: Option<String>,
@@ -449,8 +456,10 @@ pub struct Bean {
     /// URL to buy again — Visualizer / roaster / store link.
     pub url: Option<String>,
     /// Free-form notes (not the tasting box).
+    #[serde(default)]
     pub notes: String,
     /// Pinned to the brew-page bean picker strip.
+    #[serde(default)]
     pub favourite: bool,
     /// Unix epoch ms when the bag was archived; `None` = active.
     #[typeshare(serialized_as = "Option<I64>")]
@@ -458,8 +467,10 @@ pub struct Bean {
     /// Bean-scoped grinder name — `"Niche Zero"`. Bean-scoped because a
     /// grind setting only means something paired with the grinder it
     /// was measured on.
+    #[serde(default)]
     pub grinder: String,
     /// Bean-scoped grinder click / setting — `"1.2"`, `"6 + a tooth"`.
+    #[serde(default)]
     pub grinder_setting: String,
     /// Free-form user tags — e.g. `"daily-driver"`, `"comp"`, `"experimental"`.
     /// Defaults to an empty list. Serialised as `tags` so the JSON contract
@@ -970,6 +981,44 @@ mod tests {
         value.as_object_mut().unwrap().remove("tags");
         let parsed: Bean = serde_json::from_value(value).unwrap();
         assert!(parsed.tags.is_empty());
+    }
+
+    #[test]
+    fn bean_legacy_metadata_fields_default_when_missing() {
+        // Older persisted Bean records predate several non-Option metadata
+        // fields. Each now carries `#[serde(default)]`, so a record that omits
+        // them must still deserialise (only id + name stay required) rather than
+        // failing the whole bean-library load. Mirrors the real-profile fix.
+        let bean = Bean::new("bean:legacy".to_owned(), "x".to_owned(), 0);
+        let mut value = serde_json::to_value(&bean).unwrap();
+        {
+            let obj = value.as_object_mut().unwrap();
+            for field in [
+                "decaf",
+                "origin",
+                "bagSize",
+                "remaining",
+                "qualityScore",
+                "tastingNotes",
+                "rating",
+                "notes",
+                "favourite",
+                "grinder",
+                "grinderSetting",
+            ] {
+                assert!(
+                    obj.remove(field).is_some(),
+                    "expected `{field}` in the wire shape"
+                );
+            }
+        }
+        let parsed: Bean = serde_json::from_value(value)
+            .expect("a Bean missing legacy metadata fields must still deserialise");
+        assert_eq!(parsed.grinder, "");
+        assert_eq!(parsed.grinder_setting, "");
+        assert!(!parsed.favourite);
+        assert!(!parsed.decaf);
+        assert_eq!(parsed.rating, 0);
     }
 
     #[test]
