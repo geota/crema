@@ -324,8 +324,11 @@ data class MainUiState(
      * back as events, so these hold the last user choice (the same pattern the
      * scale config toggles use).
      */
-    val autoTare: Boolean = false,
-    val stopOnWeight: Boolean = false,
+    // Default ON to match [AppPrefs.autoTare] / [AppPrefs.stopOnWeight], the
+    // core's own defaults, and the web shell — loadPrefs() overwrites these with
+    // the persisted value at startup, but the pre-load default must not diverge.
+    val autoTare: Boolean = true,
+    val stopOnWeight: Boolean = true,
     val steamEco: Boolean = false,
     /** Persisted pre-shot flush / post-steam purge preferences (not yet consumed
      *  by the shot sequence — Settings rows carry the pill until then). */
@@ -1465,6 +1468,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // the shot arms its AutoStop \u2014 covers a profile restored at startup that
         // never went through setActiveProfile (otherwise SAW silently never arms).
         pushStopTargets()
+        // Re-assert the auto-tare / stop-on-weight flags from the saved setting on
+        // every shot, for the same reason as pushStopTargets above: bridge.reset()
+        // on a DE1 reconnect re-creates the core (CremaCore::new) back to its
+        // defaults, and nothing else re-applies these flags — so without this a
+        // reconnect could silently drop the user's choice before the next shot.
+        // The UI state + prefs already hold the truth; the core just needs to
+        // match it at shot time (direct bridge calls, like pushStopTargets).
+        runCatching { bridge.setAutoTare(_ui.value.autoTare) }
+            .onFailure { appendLog("Re-assert auto-tare failed: ${it.message}") }
+        runCatching { bridge.setStopOnWeight(_ui.value.stopOnWeight) }
+            .onFailure { appendLog("Re-assert stop-on-weight failed: ${it.message}") }
         // Quick-Controls override: bake the transient dose/yield/brew-temp into the
         // uploaded profile (the web shell's lazy re-upload-with-overrides). The
         // library profile is untouched; only this one upload carries the override.
