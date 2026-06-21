@@ -161,7 +161,7 @@ fun PhoneQuickSheet(
                                 min = if (yieldRatioMode == "yield") 10.0 else 1.0,
                                 max = if (yieldRatioMode == "yield") 80.0 else 5.0,
                                 presets = if (yieldRatioMode == "yield") listOf(32.0, 36.0, 40.0, 45.0) else listOf(1.5, 2.0, 2.5, 3.0),
-                                fmt = { if (yieldRatioMode == "yield") "%.0f".format(it) else "1:%.1f".format(it) },
+                                fmt = { if (yieldRatioMode == "yield") niceFmt(it) else "1:%.1f".format(it) },
                                 onChange = {
                                     if (yieldRatioMode == "yield") vm.quickAdjustBrew(dose, it, brewTemp)
                                     else vm.quickAdjustBrew(dose, dose * it, brewTemp)
@@ -277,18 +277,35 @@ fun PhoneQuickSheet(
                 }
             }
 
-            // Foot: Reset. Quick-control changes apply immediately — the dial is a
-            // per-shot override (baked into the next shot) and the Shot-tab toggles
-            // write global settings live (e.g. auto-tare flips the same setting the
-            // Settings page shows) — so there's no "save" step. Reset clears the
-            // per-shot dial override back to the active profile's values.
-            Row(Modifier.fillMaxWidth().padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+            // Foot: Reset + Save profile. The dial is a per-shot override (baked
+            // into the next shot) that never touches the saved profile — Reset
+            // clears it. Save profile persists the dialled dose/yield/temp: it
+            // updates the profile in place when it's user-defined, or saves a copy
+            // when it's a read-only built-in.
+            Row(
+                Modifier.fillMaxWidth().padding(top = 2.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 CremaButton(
                     onClick = vm::resetBrewParams,
                     variant = CremaButtonVariant.Tonal,
                     icon = "arrow-counter-clockwise",
                     enabled = ui.brewParams != null,
                     label = "Reset",
+                )
+                Spacer(Modifier.weight(1f))
+                CremaButton(
+                    onClick = {
+                        active?.let { a ->
+                            if (a.source == "custom") vm.saveQuickPreset(a.name)
+                            else vm.saveQuickPreset("${a.name} (copy)")
+                        }
+                    },
+                    variant = CremaButtonVariant.Filled,
+                    icon = "bookmark-simple",
+                    enabled = active != null,
+                    label = "Save profile",
                 )
             }
         }
@@ -321,10 +338,19 @@ private fun QcCell(
             ) {
                 QcRoundBtn("minus") { onChange((value - step).coerceIn(min, max)) }
                 Row(verticalAlignment = Alignment.Bottom) {
-                    Text(
-                        fmt(value),
-                        style = TextStyle(fontFamily = JetBrainsMono, fontWeight = FontWeight.Medium, fontSize = 23.sp, fontFeatureSettings = "tnum"),
-                    )
+                    TapToEditValue(
+                        value = value,
+                        min = min,
+                        max = max,
+                        onCommit = onChange,
+                        editStyle = TextStyle(fontFamily = JetBrainsMono, fontWeight = FontWeight.Medium, fontSize = 23.sp),
+                        enabled = enabled,
+                    ) {
+                        Text(
+                            fmt(value),
+                            style = TextStyle(fontFamily = JetBrainsMono, fontWeight = FontWeight.Medium, fontSize = 23.sp, fontFeatureSettings = "tnum"),
+                        )
+                    }
                     if (unit.isNotEmpty()) Text(
                         unit,
                         style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
