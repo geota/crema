@@ -29,16 +29,28 @@ use serde_json::Value;
 
 /// The fingerprint-relevant subset of a shell `CremaProfile`. Mirrors the
 /// camelCase JSON shape the web shell ships.
+///
+/// The non-identity fields carry `#[serde(default)]` for the same reason
+/// [`crate::CremaProfile`] does: an older or foreign profile (e.g. one persisted
+/// before `beverageType` / `tankTemperatureC` existed) must still fingerprint
+/// rather than throw — otherwise the shell's pre-shot fingerprint step fails and
+/// the shot never starts. Only `id` / `dose` / `yield_out` / `segments` stay
+/// required, matching `CremaProfile`'s identity + execution core.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ShellProfile {
     id: String,
     dose: f64,
     yield_out: f64,
+    #[serde(default)]
     brew_temp: f64,
+    #[serde(default)]
     preinfuse_step_count: u32,
+    #[serde(default)]
     max_total_volume_ml: u32,
+    #[serde(default)]
     tank_temperature_c: f64,
+    #[serde(default)]
     beverage_type: String,
     /// Segments stay as raw JSON — their fingerprint contribution is
     /// their serialized form, so passing them through untouched preserves
@@ -229,5 +241,24 @@ mod tests {
         // means the canonical form drifted; intentional change → bump
         // this string + note the cache-invalidation impact in the PR.
         assert_eq!(got, "1xwseiv");
+    }
+
+    #[test]
+    fn fingerprint_tolerates_old_shape_profile_missing_metadata() {
+        // A profile persisted before tankTemperatureC / beverageType (and other
+        // metadata) existed must still fingerprint — otherwise the shell's
+        // pre-shot fingerprint step throws and the shot never starts. Regression
+        // guard: this used to fail with "missing field tankTemperatureC". Only
+        // id / dose / yieldOut / segments are kept (the required core).
+        let old_shape = r#"{
+            "id": "pf-old",
+            "dose": 18.0,
+            "yieldOut": 36.0,
+            "segments": []
+        }"#;
+        assert!(
+            profile_fingerprint(old_shape, None).is_ok(),
+            "an old-shape profile missing metadata fields must still fingerprint"
+        );
     }
 }

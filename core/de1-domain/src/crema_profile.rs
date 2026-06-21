@@ -75,6 +75,7 @@ pub struct ProfileSegment {
     /// editor-added segments).
     pub id: String,
     /// Human-readable segment name.
+    #[serde(default)]
     pub name: String,
     /// Pressure- or flow-priority.
     pub mode: Pump,
@@ -92,6 +93,7 @@ pub struct ProfileSegment {
     /// Which temperature sensor the segment regulates.
     pub temp_sensor: TempSensor,
     /// Per-segment dispensed-volume limit, ml, 0–1023 (0 = no limit).
+    #[serde(default)]
     pub volume_limit_ml: u16,
     /// Advanced max-flow-or-pressure limiter, or `None`.
     pub limiter: Option<Limiter>,
@@ -117,14 +119,18 @@ pub struct CremaProfile {
     /// Whether this is a read-only built-in or a user-owned custom profile.
     pub source: ProfileSource,
     /// Display name (the wire [`Profile::title`]).
+    #[serde(default)]
     pub name: String,
     /// Free-text notes.
+    #[serde(default)]
     pub notes: String,
     /// Roast level the recipe is tuned for, or `None` when not clearly known.
     pub roast: Option<Roast>,
     /// Custom user tags (plus a synthesised `"Built-in"` / `"tea"` on import).
+    #[serde(default)]
     pub tags: Vec<String>,
     /// Pinned to the Quick Controls favorites strip.
+    #[serde(default)]
     pub pinned: bool,
     /// Human "last used" instant (ISO-8601), or `None` until loaded on Brew.
     pub last_used: Option<String>,
@@ -134,26 +140,61 @@ pub struct CremaProfile {
     pub yield_out: f32,
     /// Brew temperature, °C — a display default (the mean step temperature on
     /// import); per-segment temps are the real control.
+    #[serde(default)]
     pub brew_temp: f32,
     /// End the shot when the scale reaches the yield target. Shell behaviour
-    /// metadata — not written to the wire profile.
+    /// metadata — not written to the wire profile, so its absence must never
+    /// block the wire conversion: a profile that omits it (an older save, a
+    /// foreign import) still converts, defaulting to off.
+    #[serde(default)]
     pub stop_on_weight: bool,
     /// Zero the scale automatically when the shot begins. Shell behaviour
-    /// metadata — not written to the wire profile.
+    /// metadata — not written to the wire profile; absent → on (the core's
+    /// own default), and never blocks the wire conversion.
+    #[serde(default = "default_true")]
     pub auto_tare: bool,
     /// How many leading segments count as preinfusion (wire
     /// `preinfuse_step_count`).
+    #[serde(default)]
     pub preinfuse_step_count: u8,
     /// Whole-shot dispensed-volume limit, ml, 0–1023 (0 = no limit).
+    #[serde(default)]
     pub max_total_volume_ml: u16,
     /// The ordered pressure / flow segments.
     pub segments: Vec<ProfileSegment>,
     /// Profile author — free text. Round-trips through the wire `author`.
+    #[serde(default)]
     pub author: String,
-    /// What kind of beverage this profile produces.
+    /// What kind of beverage this profile produces. The shells model this as
+    /// nullable, so a profile can omit the key OR carry `"beverageType": null`;
+    /// both fall back to `Espresso` (the [`BeverageType`] default) rather than
+    /// failing the whole shot start.
+    #[serde(default, deserialize_with = "null_or_absent_default")]
     pub beverage_type: BeverageType,
     /// Target tank temperature, °C (0 = no override).
+    #[serde(default)]
     pub tank_temperature_c: f32,
+}
+
+/// Serde default for [`CremaProfile::auto_tare`] — matches the core's own
+/// `auto_tare` default (on), so a profile that predates the field still arrives
+/// with auto-tare enabled rather than silently off.
+fn default_true() -> bool {
+    true
+}
+
+/// Deserialize a field that may be absent OR explicitly `null`, falling back to
+/// `T::default()` in either case. Paired with `#[serde(default)]` (which covers
+/// the absent key), this also turns a present `null` into the default instead of
+/// an error — the shells persist nullable enum fields, and neither shape must
+/// break the wire conversion.
+fn null_or_absent_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Default + serde::Deserialize<'de>,
+{
+    use serde::Deserialize;
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 /// The user's brew defaults, passed in from the shell's settings store so a
@@ -671,5 +712,84 @@ mod tests {
         assert!(json.contains("\"ramp\":\"smooth\""));
         assert!(json.contains("\"metric\":\"flow\""));
         assert!(json.contains("\"compare\":\"over\""));
+    }
+
+    #[test]
+    fn conversion_survives_absent_shell_metadata_fields() {
+        // A complete, healthy CremaProfile JSON converts.
+        let full = from_wire(&wire_profile(vec![wire_step("a", 9.0)]));
+        let full_json = serde_json::to_string(&full).unwrap();
+        assert!(crema_profile_to_wire_json(&full_json).is_ok());
+
+        // Every metadata / cosmetic field carries `#[serde(default)]` so a
+        // profile that omits it (an older save, a foreign import) still converts
+        // — otherwise the shell reports "could not convert" and the shot never
+        // starts. Identity + execution fields (id, source, dose, yieldOut,
+        // segments) stay required. Repro + regression guard for the real-device
+        // 2026-06-20 bug (originally beverageType; the web audit later proved
+        // author + tankTemperatureC hit the same wall via old localStorage).
+        let defaultable = [
+            "name",
+            "notes",
+            "tags",
+            "pinned",
+            "brewTemp",
+            "stopOnWeight",
+            "autoTare",
+            "preinfuseStepCount",
+            "maxTotalVolumeMl",
+            "author",
+            "beverageType",
+            "tankTemperatureC",
+        ];
+        for field in defaultable {
+            let mut v: serde_json::Value = serde_json::from_str(&full_json).unwrap();
+            v.as_object_mut().unwrap().remove(field);
+            let stripped = serde_json::to_string(&v).unwrap();
+            assert!(
+                crema_profile_to_wire_json(&stripped).is_ok(),
+                "a profile missing `{field}` must still convert to the wire format"
+            );
+        }
+
+        // The worst case — an old profile missing ALL defaultable fields at once
+        // (plus the already-tolerant Option fields), reduced to identity +
+        // execution only — must still convert.
+        let mut v: serde_json::Value = serde_json::from_str(&full_json).unwrap();
+        {
+            let obj = v.as_object_mut().unwrap();
+            for field in defaultable {
+                obj.remove(field);
+            }
+            obj.remove("roast");
+            obj.remove("lastUsed");
+        }
+        let minimal = serde_json::to_string(&v).unwrap();
+        assert!(
+            crema_profile_to_wire_json(&minimal).is_ok(),
+            "a profile reduced to identity + execution fields must still convert"
+        );
+
+        // The defaults land where expected: auto-tare ON (matches the core's own
+        // default + the web shell), stop-on-weight OFF, beverageType → espresso,
+        // text → empty, tank temp → 0.
+        let cp: CremaProfile = serde_json::from_str(&minimal).unwrap();
+        assert!(cp.auto_tare, "auto_tare defaults on (core/web parity)");
+        assert!(!cp.stop_on_weight, "stop_on_weight defaults off");
+        assert_eq!(cp.beverage_type, BeverageType::Espresso);
+        assert_eq!(cp.author, "");
+        assert!(close(cp.tank_temperature_c, 0.0));
+
+        // The shells model beverageType as nullable, so it can also arrive as an
+        // explicit null (not just absent). That must convert too.
+        let mut v: serde_json::Value = serde_json::from_str(&full_json).unwrap();
+        v.as_object_mut()
+            .unwrap()
+            .insert("beverageType".into(), serde_json::Value::Null);
+        let nulled = serde_json::to_string(&v).unwrap();
+        assert!(
+            crema_profile_to_wire_json(&nulled).is_ok(),
+            "a profile with an explicit null beverageType must still convert"
+        );
     }
 }
