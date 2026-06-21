@@ -105,6 +105,13 @@ data class AppPrefs(
     val proxyPrimaryHost: String = "",
     /** For `secondary`: the primary's relay port. */
     val proxyPrimaryPort: Int = 0,
+    /** Debug/emulator only: when a `primary` starts, **replay the newest captured
+     *  shot as a fake DE1** instead of using live Bluetooth. Default OFF — a real
+     *  primary always uses the radio. This must be opt-in: otherwise a primary's
+     *  own session recordings (in `captures/`) get auto-replayed on the next launch,
+     *  hijacking it into a fake DE1 + blocking the real DE1/scale. Set it in
+     *  `prefs.json` for an emulator with no Bluetooth. */
+    val replayPrimary: Boolean = false,
     /** Devices this host has approved to mirror it (issue 02 — TOFU pairing). A
      *  remembered peer skips the "Allow this device?" prompt on reconnect; absence
      *  ⟺ re-prompt. Host-side only — never pushed to mirrors (not in [ConfigSnapshot]). */

@@ -6,8 +6,9 @@ P3 (nice-to-have). See each file for detail; the complex ones carry a `## Design
 
 **Progress (2026-06-20):** 11 of 14 done + emulator-validated — #01 #02 #03 #05 #06
 #07 #08 #09 #10 #13 #14. **The full pre-trust gate is closed** (#01 #02 #03 #08).
-**3 remain:** #04 (scale — hardware double-count risk), #11 (multi-controller —
-design), #12 (real-DE1 hardware). Branch unpushed.
+**3 remain:** #04 (scale — hardware double-count risk; implemented, validation pending),
+#11 (multi-controller — design), #12 (real-DE1 hardware). **+ #15 (real-device bug
+found + fixed during the #04 scale session).** Branch unpushed.
 
 | # | Issue | Sev | Status | One-liner |
 |---|---|---|---|---|
@@ -25,6 +26,7 @@ design), #12 (real-DE1 hardware). Branch unpushed.
 | [12](issues/12-real-de1-hardware-validation.md) | Real-DE1 hardware validation pass | P1 | ready-for-human | the one true gap — physical BLE write + radio-move never run against metal |
 | [13](issues/13-tablet-side-picker.md) | Tablet-side multi-device picker | P3 | done | only the phone can initiate mirror/handoff |
 | [14](issues/14-hygiene-deviceid-and-recording.md) | Hygiene: persist deviceId; stop mirror-recording | P3 | done | per-launch identity; a mirror records every shot it watches |
+| [15](issues/15-primary-replays-own-recording.md) | Primary replays its own recording as a fake DE1 | P1 | done | a real primary auto-replayed a leftover capture → phantom DE1 + scale couldn't connect; gated behind `replayPrimary` |
 
 **Pre-trust gate (do before this ships to an untrusted network):** ~~01~~, ~~02~~, ~~03~~, ~~08~~ — **all done.** (Caveat: ws:// telemetry is still plaintext; WSS is the M5 story.)
 **Completeness of the mirror:** ~~05~~, ~~06~~, 04. **Then:** ~~07~~, 12, 11.

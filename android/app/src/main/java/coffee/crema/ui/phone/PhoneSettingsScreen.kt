@@ -867,7 +867,7 @@ private fun AdvancedSection(
             "secondary" -> "Mirrors a primary over the LAN. Restart to apply."
             else -> "Off — normal single-device use."
         }
-        CremaSettingsRow("Role", roleSub, last = ui.proxyRole != "secondary") {
+        CremaSettingsRow("Role", roleSub, last = ui.proxyRole == "normal") {
             CremaSegmentedButton(
                 options = listOf(SegOption("normal", "Off"), SegOption("primary", "Primary"), SegOption("secondary", "Secondary")),
                 value = ui.proxyRole,
@@ -875,6 +875,11 @@ private fun AdvancedSection(
                 enabled = true,
                 uniform = true,
             )
+        }
+        if (ui.proxyRole == "primary") {
+            CremaSettingsRow("Replay capture as DE1", "Emulator only: replay the newest recorded shot as a fake DE1 instead of live Bluetooth. Restart to apply.", last = true) {
+                CremaSwitch(ui.replayPrimary, vm::setReplayPrimary)
+            }
         }
         if (ui.proxyRole == "secondary") {
             CremaSettingsRow("Primary host", "An IP, or 10.0.2.2 for an adb-forwarded emulator.") {
