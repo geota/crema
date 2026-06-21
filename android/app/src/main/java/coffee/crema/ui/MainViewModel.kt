@@ -1022,10 +1022,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * Save the current Quick-Controls dial values as a NEW custom profile (the web
-     * shell's "Save preset") — clones the active profile, overwrites dose/yield/
-     * brew-temp, upserts into the custom store, makes it active. Never mutates the
-     * source profile. Pure shell (reuses the duplicate + custom-store path).
+     * Persist the current Quick-Controls dial values into a profile. A user-defined
+     * (custom) active profile is UPDATED in place (id / name / segments preserved);
+     * a read-only built-in is COPIED to a new custom carrying the dialled dose /
+     * yield / brew-temp and made active. Either way the per-shot override is cleared
+     * afterwards (the values now live in the profile). Pure shell.
      */
     fun saveQuickPreset(name: String) {
         val activeId = _ui.value.activeProfileId ?: return
@@ -1036,14 +1037,33 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val y = bp?.yieldOut?.toFloat() ?: active?.yieldOut
             ?: (BrewDefaults.INSTANCE.doseG * BrewDefaults.INSTANCE.ratio)
         val t = bp?.brewTemp?.toFloat() ?: active?.brewTemp ?: BrewDefaults.INSTANCE.brewTempC
-        val preset = runCatching { quickPresetJson(base, name, d, y, t, json) }.getOrElse {
-            appendLog("Save preset failed: ${it.message}")
-            return
+        if (active?.source == "custom") {
+            // User-defined: bake the dialled dose/yield/temp into its own JSON in
+            // place (id / name / segments preserved), replace by id, persist — it
+            // stays active. overrideBrewParamsJson is the locale-safe patcher the
+            // shot-upload path uses, so a comma-decimal locale stays correct.
+            val updated = runCatching { overrideBrewParamsJson(base, d, y, t, json = json) }.getOrElse {
+                appendLog("Save profile failed: ${it.message}")
+                return
+            }
+            customProfilesJson = customProfilesJson.map { if (profileIdOf(it, json) == activeId) updated else it }
+            refreshProfiles()
+            persistCustomProfiles()
+            resetBrewParams()
+            notifyUser("Profile updated")
+        } else {
+            // Predefined (read-only): save a NEW custom copy carrying the dialled
+            // values, then make it active.
+            val preset = runCatching { quickPresetJson(base, name, d, y, t, json) }.getOrElse {
+                appendLog("Save profile failed: ${it.message}")
+                return
+            }
+            customProfilesJson = listOf(preset) + customProfilesJson
+            refreshProfiles()
+            persistCustomProfiles()
+            profileIdOf(preset, json)?.let { setActiveProfile(it) }
+            notifyUser("Profile saved")
         }
-        customProfilesJson = listOf(preset) + customProfilesJson
-        refreshProfiles()
-        persistCustomProfiles()
-        profileIdOf(preset, json)?.let { setActiveProfile(it) }
     }
 
     // ── Profile editor (the `profile-edit` route) ─────────────────────────────

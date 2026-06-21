@@ -176,7 +176,13 @@ fun QuickControlsSheet(
                 }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     if (active != null) {
-                        CremaButton(onClick = { showSave = true }, variant = CremaButtonVariant.Text, icon = "bookmark-simple", label = "Save preset")
+                        // Custom profile → update in place; read-only built-in → name + copy.
+                        CremaButton(
+                            onClick = { if (active.source == "custom") onSavePreset(active.name) else showSave = true },
+                            variant = CremaButtonVariant.Text,
+                            icon = "bookmark-simple",
+                            label = "Save profile",
+                        )
                     }
                     // Always visible like the web QuickSheet; enabled only once a
                     // tweak exists so it never reads as a dead control.
