@@ -23,8 +23,17 @@ data class AppPrefs(
      *  Time stop-condition on Brew. */
     val maxShotDurationS: Float = 45f,
     // ── Shot behaviour (re-applied to the core on launch) ────────────────────
-    val autoTare: Boolean = false,
-    val stopOnWeight: Boolean = false,
+    /** Auto-tare the scale on shot start. Defaults ON to match the core's own
+     *  default ([CremaCore] `auto_tare = true`) and the web shell (which
+     *  defaults `autoTareOnShotStart` true). Android historically defaulted
+     *  false, so a fresh install silently shipped auto-tare DISABLED — the scale
+     *  never zeroed at shot start, unlike web. Existing users keep their saved
+     *  value (this only changes the no-prefs / absent-key default). */
+    val autoTare: Boolean = true,
+    /** Stop the shot at the yield target (stop-on-weight). Defaults ON for the
+     *  same web/core parity reason as [autoTare] (web defaults `stopOnWeight`
+     *  true); a no-op when no scale or yield target is present. */
+    val stopOnWeight: Boolean = true,
     val steamEco: Boolean = false,
     /** Pre-shot group flush / post-steam purge requests. Persisted preference;
      *  the shot sequence does not consume them yet (Settings rows carry the
