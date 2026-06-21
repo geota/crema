@@ -9,7 +9,16 @@ import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
@@ -938,6 +947,68 @@ fun CremaValueUnit(
     }
 }
 
+/**
+ * Tap-to-edit number readout (web-shell parity — every stepper value is typeable).
+ * Shows [content] (the formatted value); tapping it swaps to an inline keyboard
+ * field pre-filled with the raw value. On Done or focus-loss it parses (comma-
+ * tolerant for es-ES and other comma-decimal locales), clamps to [min]..[max], and
+ * commits via [onCommit]. Used by [CremaStepper] and the phone Quick-Controls cell.
+ */
+@Composable
+fun TapToEditValue(
+    value: Double,
+    min: Double,
+    max: Double,
+    onCommit: (Double) -> Unit,
+    editStyle: TextStyle,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    content: @Composable () -> Unit,
+) {
+    var editing by remember { mutableStateOf(false) }
+    if (!editing) {
+        Box(
+            modifier.clickable(
+                enabled = enabled,
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+            ) { editing = true },
+        ) { content() }
+        return
+    }
+    val focus = remember { FocusRequester() }
+    // Only commit on focus LOSS once the field has actually held focus — the field
+    // gets an initial onFocusChanged(false) on attach, before requestFocus lands,
+    // which would otherwise immediately revert out of edit mode.
+    var hadFocus by remember { mutableStateOf(false) }
+    var text by remember {
+        mutableStateOf(
+            if (value == kotlin.math.floor(value)) "%.0f".format(value)
+            else (kotlin.math.round(value * 100) / 100.0).toString(),
+        )
+    }
+    fun commit() {
+        if (!editing) return
+        editing = false
+        text.trim().replace(',', '.').toDoubleOrNull()?.let { onCommit(it.coerceIn(min, max)) }
+    }
+    BasicTextField(
+        value = text,
+        onValueChange = { new -> text = new.filter { it.isDigit() || it == '.' || it == ',' } },
+        singleLine = true,
+        enabled = enabled,
+        textStyle = editStyle.copy(textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurface),
+        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
+        keyboardActions = KeyboardActions(onDone = { commit() }),
+        modifier = modifier
+            .widthIn(min = 56.dp)
+            .focusRequester(focus)
+            .onFocusChanged { st -> if (st.isFocused) hadFocus = true else if (hadFocus) commit() },
+    )
+    LaunchedEffect(Unit) { focus.requestFocus() }
+}
+
 // ── Filter-bar group label + divider (PWA `.pp-tag-grouplabel` / `.pp-tag-divider`)
 // A dimmed uppercase category label and a short vertical hairline between filter
 // groups (STATUS · ROAST · …).
@@ -1475,7 +1546,16 @@ fun CremaStepper(
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 FilledTonalIconButton(onClick = dec) { PhIcon("minus") }
                 Row(verticalAlignment = Alignment.Bottom) {
-                    Text(fmt(value), style = CremaTheme.readout.readoutSm, color = MaterialTheme.colorScheme.onSurface)
+                    TapToEditValue(
+                        value = value,
+                        min = min,
+                        max = max,
+                        onCommit = { onChange(snap(it)) },
+                        editStyle = CremaTheme.readout.readoutSm,
+                        enabled = enabled,
+                    ) {
+                        Text(fmt(value), style = CremaTheme.readout.readoutSm, color = MaterialTheme.colorScheme.onSurface)
+                    }
                     if (unit != null) Text(" $unit", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 FilledTonalIconButton(onClick = inc) { PhIcon("plus") }
@@ -1518,7 +1598,16 @@ fun CremaStepper(
                             modifier = (onCompare?.let { Modifier.clip(RoundedCornerShape(4.dp)).clickable(onClick = it) } ?: Modifier).padding(end = 3.dp),
                         )
                     }
-                    CremaValueUnit(fmt(value), unit, valueSize = style.valueSize)
+                    TapToEditValue(
+                        value = value,
+                        min = min,
+                        max = max,
+                        onCommit = { onChange(snap(it)) },
+                        editStyle = TextStyle(fontFamily = JetBrainsMono, fontSize = style.valueSize),
+                        enabled = enabled,
+                    ) {
+                        CremaValueUnit(fmt(value), unit, valueSize = style.valueSize)
+                    }
                 }
                 StepperCircleBtn("plus", style.buttonSize, style.iconSize, inc)
             }
