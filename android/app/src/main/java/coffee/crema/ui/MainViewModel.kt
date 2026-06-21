@@ -481,6 +481,9 @@ data class MainUiState(
     val proxyRole: String = "normal",
     val proxyPrimaryHost: String = "",
     val proxyPrimaryPort: Int = 0,
+    /** Debug: a primary replays the newest capture as a fake DE1 instead of using
+     *  live BT (emulator demos only; default off — see [AppPrefs.replayPrimary]). */
+    val replayPrimary: Boolean = false,
     /** A secondary's link is mid-redial (primary dropped) — distinguishes a
      *  reconnecting mirror from a healthy one so a frozen view doesn't read as
      *  live (issue 03). Only meaningful while [proxyRole] == "secondary". */
@@ -2467,7 +2470,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** PRIMARY: tap the real (or replayed) link into a relay + start the LAN server. */
     private fun startPrimaryMode(): BleTransport {
-        val capture = newestCapture()
+        // Replay a captured shot as a fake DE1 ONLY when explicitly opted in (an
+        // emulator with no Bluetooth). Otherwise live BT — without this gate a
+        // primary's own session recordings in `captures/` would be auto-replayed on
+        // the next launch, hijacking a real primary into a fake DE1 and starving the
+        // real DE1/scale scan (the transport would be the replay). Read from the
+        // prefs file so it's correct both at startup and on a live mode switch.
+        val capture = if (readProxyConfigSync().replayPrimary) newestCapture() else null
         val real: BleTransport = if (capture != null) {
             appendLog("Multi-device: PRIMARY (replay ${capture.name})")
             ReplayBleTransport(
@@ -2624,7 +2633,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         peerDiscovery.advertise(deviceLabel(), role, holdsDe1, port)
     }
 
-    private data class ProxyConfig(val role: String, val host: String, val port: Int)
+    private data class ProxyConfig(val role: String, val host: String, val port: Int, val replayPrimary: Boolean = false)
 
     /** Read just the proxy role/host/port straight off `prefs.json`, synchronously,
      *  for [buildInitialDelegate] (which runs before the async [loadPrefs]). */
@@ -2632,7 +2641,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val f = File(getApplication<Application>().filesDir, "prefs.json")
         if (!f.exists()) return ProxyConfig("normal", "", 0)
         val p = json.decodeFromString(AppPrefs.serializer(), f.readText())
-        ProxyConfig(p.proxyRole, p.proxyPrimaryHost, p.proxyPrimaryPort)
+        ProxyConfig(p.proxyRole, p.proxyPrimaryHost, p.proxyPrimaryPort, p.replayPrimary)
     }.getOrDefault(ProxyConfig("normal", "", 0))
 
     /** Newest `session-*.jsonl` capture in the app's captures dir, for the
@@ -2690,6 +2699,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         proxyRole = _ui.value.proxyRole,
         proxyPrimaryHost = _ui.value.proxyPrimaryHost,
         proxyPrimaryPort = _ui.value.proxyPrimaryPort,
+        replayPrimary = _ui.value.replayPrimary,
         pairedDevices = _ui.value.pairedDevices,
     )
 
@@ -3607,6 +3617,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             proxyRole = p.proxyRole,
             proxyPrimaryHost = p.proxyPrimaryHost,
             proxyPrimaryPort = p.proxyPrimaryPort,
+            replayPrimary = p.replayPrimary,
             pairedDevices = p.pairedDevices,
         ) }
         // Push the persisted cap + behaviour toggles to the core so they're live
@@ -3709,6 +3720,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setProxyPrimaryPort(port: Int) {
         _ui.update { it.copy(proxyPrimaryPort = port) }
+        persistPrefs()
+    }
+
+    /** Debug: replay a captured shot as a fake DE1 when primary (emulator demos).
+     *  Restart-to-apply (read at primary-start). Off = a real primary uses live BT. */
+    fun setReplayPrimary(enabled: Boolean) {
+        _ui.update { it.copy(replayPrimary = enabled) }
         persistPrefs()
     }
 
