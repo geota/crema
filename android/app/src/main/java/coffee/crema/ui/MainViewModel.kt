@@ -2930,7 +2930,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Scan for and connect to a Bookoo scale. Independent of the DE1. */
     fun connectScale() {
         scale.markScanning()
-        bleScanner.scanFor(SCAN_LABEL_SCALE, ScaleBleManager::isBookooName) { device, name ->
+        // AND6: scan for EVERY supported scale's advertised-name prefix (the
+        // core-owned registry), not a hardcoded Bookoo rule — the web shell does
+        // the same. Resolved once per scan; the connected model's codec + UUIDs
+        // come from the core in ScaleBleManager.establish(). Case-sensitive to
+        // match the core's `Scale::identify` (so a scan match implies identify).
+        val prefixes = scale.supportedScaleNamePrefixes()
+        bleScanner.scanFor(SCAN_LABEL_SCALE, { name -> prefixes.any { name.startsWith(it) } }) { device, name ->
             scale.connect(device, name)
         }
     }
