@@ -701,7 +701,8 @@
 			? pinnedSample.weight
 			: finalShotSample
 				? finalShotSample.weight
-				: ui.scaleWeight
+				// floor at 0: a post-stop cup-lift flips live weight crazy-negative (null stays null)
+				: ui.scaleWeight != null && ui.scaleWeight < 0 ? 0 : ui.scaleWeight
 	);
 	/** Weight readout, in the chosen weight unit. */
 	const weightM = $derived(convertWeight(weight, prefs.weightUnit));

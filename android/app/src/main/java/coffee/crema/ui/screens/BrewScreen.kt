@@ -300,10 +300,11 @@ fun BrewScreen(
     }
 }
 
-// Which weight feeds the Ratio card: the live scale weight while running, else
+// Which weight feeds the Ratio card: the live scale weight while running (floored
+// at 0 — lifting the cup during the post-stop drip flips it crazy-negative), else
 // the last shot's yield held until the next shot (web parity).
 private fun ratioWeight(ui: coffee.crema.ui.MainUiState, running: Boolean): Float? =
-    if (!running) (ui.lastShot?.yieldG ?: ui.scaleWeightG) else ui.scaleWeightG
+    if (!running) (ui.lastShot?.yieldG ?: ui.scaleWeightG) else ui.scaleWeightG?.coerceAtLeast(0f)
 
 // ── Header twin-block ───────────────────────────────────────────────────────
 
@@ -1161,7 +1162,8 @@ private fun PhaseRow(seg: coffee.crema.profiles.ProfileSegment, isActive: Boolea
 @Composable
 private fun LimitsCard(active: CremaProfile?, ui: coffee.crema.ui.MainUiState) {
     val tel = CremaTheme.telemetry
-    val weightG = ui.scaleWeightG
+    // Floor at 0: a post-stop cup-lift would otherwise read crazy-negative.
+    val weightG = ui.scaleWeightG?.coerceAtLeast(0f)
     val timeColor = MaterialTheme.colorScheme.primary
     val rows = buildList {
         if (active != null && active.yieldOut > 0f) {
@@ -1320,7 +1322,8 @@ private fun ChannelsRow(ui: coffee.crema.ui.MainUiState, active: CremaProfile?) 
         val water = convertVolume(ui.dispensedVolume, ui.volumeUnit)
         val coffeeTemp = convertTemp(ui.headTemp, ui.tempUnit)
         val mixTempM = convertTemp(ui.mixTemp, ui.tempUnit)
-        val weight = convertWeight(ui.scaleWeightG, ui.weightUnit)
+        // Floor at 0 (a post-stop cup-lift would read crazy-negative).
+        val weight = convertWeight(ui.scaleWeightG?.coerceAtLeast(0f), ui.weightUnit)
         ChannelCard(
             modifier = Modifier.weight(1f).fillMaxHeight(),
             primLabel = "Pressure", primIcon = "gauge", primColor = tel.pressure,
