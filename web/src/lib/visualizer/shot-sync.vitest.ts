@@ -33,7 +33,7 @@ import {
 	signatureForRoaster as wasmSignatureForRoaster,
 	reconcileShots as wasmReconcileShots
 } from '../wasm/de1_wasm.js';
-import { initTestWasm } from '../wasm/test-init.ts';
+import { initTestWasm } from '$lib/testing/test-init';
 import type { ShotBean, StoredShot } from '../history/model.ts';
 
 // ── Types (mirrored from shot-sync-signatures.ts) ────────────────────
@@ -211,7 +211,7 @@ function resolveGrinderModel(
 // ── Wasm bootstrap ────────────────────────────────────────────────────
 // The `--target web` bundle's default init `fetch`es the `.wasm` by URL, which
 // vitest can't do over `file://`; `initTestWasm` reads the bytes off disk and
-// hands them to the initializer (`$lib/wasm/test-init`).
+// hands them to the initializer (`$lib/testing/test-init`).
 beforeAll(initTestWasm);
 
 // ── Fixtures ─────────────────────────────────────────────────────────

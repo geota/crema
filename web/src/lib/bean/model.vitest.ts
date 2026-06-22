@@ -6,7 +6,7 @@
  */
 
 import { beforeAll, describe, expect, it } from 'vitest';
-import { initTestWasm } from '$lib/wasm/test-init';
+import { initTestWasm } from '$lib/testing/test-init';
 import { coerceBean, coerceRoaster } from './model.ts';
 
 beforeAll(async () => {

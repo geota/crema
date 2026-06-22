@@ -18,7 +18,7 @@ import { TokenVault } from './token-vault.ts';
 import { HttpStatusError } from '../effect/errors.ts';
 import { blankBean, blankRoaster } from '$lib/bean';
 import type { TokenSet } from '../visualizer/oauth.ts';
-import { initTestWasm } from '../wasm/test-init.ts';
+import { initTestWasm } from '$lib/testing/test-init';
 
 // `uploadBean` / `uploadRoaster` build their bodies through the wasm-backed
 // `beanToWire` / `roasterToWire` (CORE1), so init the bundle first.

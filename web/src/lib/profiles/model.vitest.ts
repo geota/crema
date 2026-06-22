@@ -12,7 +12,7 @@
 
 import { beforeAll, describe, expect, it } from 'vitest';
 import { newProfileId } from '../wasm/de1_wasm.js';
-import { initTestWasm } from '../wasm/test-init.ts';
+import { initTestWasm } from '$lib/testing/test-init';
 
 /** The canonical UUID v7 form — 8-4-4-4-12 lowercase hex with version nibble
  *  `7` and a `{8,9,a,b}` variant nibble. Mirrors the Rust unit-test regex. */

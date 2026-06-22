@@ -22,7 +22,7 @@ import { HttpClient, type HttpRequest } from './http-client.ts';
 import { TokenVault } from './token-vault.ts';
 import { HttpStatusError } from '../effect/errors.ts';
 import type { TokenSet } from '../visualizer/oauth.ts';
-import { initTestWasm } from '../wasm/test-init.ts';
+import { initTestWasm } from '$lib/testing/test-init';
 
 // `pullAllShotsSince` now materialises each row through the wasm-backed
 // `wireShotFromDetail` / `samplesFromVisualizerDetail` (CORE1), so the bundle
