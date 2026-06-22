@@ -781,6 +781,42 @@ pub fn import_crema_jsonl(text: &str) -> Result<String, String> {
     de1_domain::import_jsonl_to_plan_json(text)
 }
 
+/// Build a Crema **backup bundle** (`crema-backup/v1`) from an envelope
+/// JSON `{ "profiles": [...], "beans": [...], "roasters": [...],
+/// "shots": [...], "settings": {...} }`. A superset of `exportCremaJsonl`:
+/// adds custom-profile lines + a portable settings line, and a richer
+/// header (`deviceLabel`, profile count). One record per line, header
+/// first. The shell strips OAuth tokens + per-device/BLE state before
+/// building the envelope. See `de1_domain::export_backup_jsonl_from_json`.
+///
+/// # Errors
+///
+/// Returns the JSON parse error string when the envelope is malformed.
+#[wasm_bindgen(js_name = exportBackupJsonl)]
+pub fn export_backup_jsonl(
+    envelope_json: &str,
+    created_at_unix_ms: f64,
+    app_version: &str,
+    device_label: &str,
+) -> Result<String, String> {
+    let created_at = f64_to_ms(created_at_unix_ms);
+    de1_domain::export_backup_jsonl_from_json(envelope_json, created_at, app_version, device_label)
+}
+
+/// Parse a Crema backup bundle into a `BackupImportPlan` JSON — the
+/// library `ImportPlan` (beans / roasters / shots) plus `profiles` and
+/// `settings` sections, so the shell's reconcile + apply path is reused.
+/// See `de1_domain::import_backup_jsonl_to_plan_json`.
+///
+/// # Errors
+///
+/// Currently always Ok — an empty string parses cleanly to an empty
+/// plan. Reserved for future schema-version errors.
+#[wasm_bindgen(js_name = importBackupJsonl)]
+pub fn import_backup_jsonl(text: &str) -> Result<String, String> {
+    de1_domain::import_backup_jsonl_to_plan_json(text)
+}
+
 /// Import a Beanconqueror main export JSON, mapping the high-value
 /// subset into Crema's `Bean` / `Roaster` / `StoredShot` types. The
 /// shell unzips the BC archive (which packs `Beanconqueror.json` plus
