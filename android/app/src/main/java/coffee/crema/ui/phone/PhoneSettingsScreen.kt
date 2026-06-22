@@ -724,7 +724,7 @@ private fun CalibrationSection(
         var flowDraft by remember(mult) { mutableStateOf(mult) }
         val flowDirty = kotlin.math.abs(flowDraft - mult) > 0.0001
         CremaSettingsRow("Flow", "Scale the flow-meter reading. Apply commits after a typed confirm.", needsConnection = !connected) {
-            CremaStepper(value = flowDraft, unit = "×", step = 0.01, min = 0.5, max = 1.5, fmt = { "%.2f".format(it) }, style = CremaStepperStyle.BareCompact, onChange = { flowDraft = it })
+            CremaStepper(value = flowDraft, unit = "×", step = 0.01, min = 0.13, max = 2.0, fmt = { "%.2f".format(it) }, style = CremaStepperStyle.BareCompact, onChange = { flowDraft = it })
         }
         CremaSettingsRow("", null) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
