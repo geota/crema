@@ -387,11 +387,11 @@
 		const base = activeProfile;
 		if (!base) return;
 		const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
-		const suggested = `${base.name} — preset ${stamp}`;
+		const suggested = `${base.name} — profile ${stamp}`;
 		const name = (
 			await promptDialog({
-				title: 'Save preset',
-				message: 'Name for the new preset:',
+				title: 'Save profile',
+				message: 'Name for the new profile:',
 				initialValue: suggested,
 				confirmLabel: 'Save'
 			})
