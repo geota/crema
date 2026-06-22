@@ -873,7 +873,13 @@ private fun RestingBody(
             // glyph, no space — this dense 4-up strip can't fit "148.0 °C".
             val groupM = convertTemp(ui.headTemp, ui.tempUnit)
             val steamM = convertTemp(ui.steamTemp, ui.tempUnit)
-            val scaleM = convertWeight(ui.scaleWeightG ?: 0f, ui.weightUnit)
+            // After a shot, lifting the cup flips the scale crazy-negative (cup mass
+            // removed from the tared baseline). On this resting tile show the last
+            // shot's yield instead of a nonsense negative — web/tablet parity (they
+            // freeze the brew weight to the final post-shot rather than tracking live).
+            val liveScaleG = ui.scaleWeightG ?: 0f
+            val restScaleG = if (liveScaleG < 0f) (ui.lastShot?.yieldG ?: 0f) else liveScaleG
+            val scaleM = convertWeight(restScaleG, ui.weightUnit)
             MStat("Group", "thermometer", ui.headTemp?.let { "${groupM.value}${groupM.unit}" } ?: "—", groupOk, Modifier.weight(1f))
             MStat("Steam", "cloud", ui.steamTemp?.let { "${steamM.value}${steamM.unit}" } ?: "—", steamOk, Modifier.weight(1f))
             MStat("Tank", "drop-half", ui.waterLevelMm?.let { "%.0fmm".format(it) } ?: "—", tankOk, Modifier.weight(1f))
