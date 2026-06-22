@@ -114,23 +114,23 @@ data class Bean (
 	/// to `None`).
 	val roastType: BeanRoastType? = null,
 	/// Decaf flag — `false` by default.
-	val decaf: Boolean,
+	val decaf: Boolean? = null,
 	/// Provenance metadata. Empty struct by default.
-	val origin: BeanOrigin,
+	val origin: BeanOrigin? = null,
 	/// Bag size, grams. `0.0` when unknown. Unit lives in the doc
 	/// comment, not the field name, per the locked-in naming rule
 	/// (`docs/44-pre-android-handoff.md`).
-	val bagSize: Float,
+	val bagSize: Float? = null,
 	/// Remaining weight in the bag, grams. Auto-debited per shot when
 	/// the shell enables `Track bag remaining weight`. `0.0` when
 	/// unknown.
-	val remaining: Float,
+	val remaining: Float? = null,
 	/// Quality score — free text per Visualizer (`"88"`, `"A-"`).
-	val qualityScore: String,
+	val qualityScore: String? = null,
 	/// Tasting notes — multi-line free text.
-	val tastingNotes: String,
+	val tastingNotes: String? = null,
 	/// User star rating 0..5; `0` = unrated.
-	val rating: UByte,
+	val rating: UByte? = null,
 	/// Where the bag was bought — `"Counter Culture · Durham"`.
 	val placeOfPurchase: String? = null,
 	/// What the bag cost — currency-less number in the user's local
@@ -140,21 +140,28 @@ data class Bean (
 	/// URL to buy again — Visualizer / roaster / store link.
 	val url: String? = null,
 	/// Free-form notes (not the tasting box).
-	val notes: String,
+	val notes: String? = null,
 	/// Pinned to the brew-page bean picker strip.
-	val favourite: Boolean,
+	val favourite: Boolean? = null,
 	/// Unix epoch ms when the bag was archived; `None` = active.
 	val archivedAt: Long? = null,
 	/// Bean-scoped grinder name — `"Niche Zero"`. Bean-scoped because a
 	/// grind setting only means something paired with the grinder it
 	/// was measured on.
-	val grinder: String,
+	val grinder: String? = null,
 	/// Bean-scoped grinder click / setting — `"1.2"`, `"6 + a tooth"`.
-	val grinderSetting: String,
+	val grinderSetting: String? = null,
 	/// Free-form user tags — e.g. `"daily-driver"`, `"comp"`, `"experimental"`.
 	/// Defaults to an empty list. Serialised as `tags` so the JSON contract
 	/// matches the [`crate::Profile`] tag pattern.
 	val tags: List<String>? = null,
+	/// The profile auto-loaded when this bean is activated on the Brew
+	/// page (the "linked profile"). `None` = no link. Stores the profile
+	/// id only; a dangling id (profile deleted, cross-device import of a
+	/// device-local custom) is tolerated by every consumer. Local-only —
+	/// never pushed to Visualizer. Defaults so older Bean JSON
+	/// deserialises cleanly.
+	val linkedProfileId: String? = null,
 	/// Visualizer `coffee_bag.id` once pushed.
 	val visualizerId: String? = null,
 	/// Unix epoch ms when this bag was soft-deleted, or `None` when
