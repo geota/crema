@@ -1,0 +1,137 @@
+# Crema NIGHTLY pipeline — builds the develop APK on every push to `main` and
+# publishes it as a single rolling GitHub **prerelease** (tag `nightly`) for
+# Obtainium. Follow this train in Obtainium by adding the repo and enabling
+# "Include prereleases". The STABLE train is release.yml (tagged `v*.*.*`),
+# served via IzzyOnDroid + Obtainium-without-prereleases.
+#
+# The nightly app is a SEPARATE package — coffee.crema.nightly, "Crema Nightly"
+# (see the `nightly` buildType + src/nightly/res in android/app/build.gradle.kts)
+# — so it coexists with a stable install rather than fighting it.
+#
+# Signing: set repo secrets DEVELOP_KEYSTORE_BASE64 (+ DEVELOP_KEYSTORE_PASSWORD /
+# DEVELOP_KEY_ALIAS / DEVELOP_KEY_PASSWORD) for a STABLE nightly key so updates
+# install in place. Absent => debug-signed (installable, but a fresh key each CI
+# run means users reinstall rather than update between nightlies).
+
+name: nightly
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+# Only the latest commit on main matters for a rolling nightly; cancel older runs.
+concurrency:
+  group: nightly
+  cancel-in-progress: true
+
+permissions:
+  contents: write # replace the rolling `nightly` prerelease + its asset
+
+jobs:
+  nightly:
+    name: nightly (apk)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Compute nightly version
+        id: v
+        run: |
+          # Human-readable, sortable name; versionCode always sits above any stable
+          # semver code (M*1e6 + m*1e3 + p) and strictly increases via the run number.
+          NAME="$(date -u +%Y.%m.%d).${GITHUB_RUN_NUMBER}+g${GITHUB_SHA::7}"
+          CODE=$((1000000000 + GITHUB_RUN_NUMBER))
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+          echo "Nightly $NAME (versionCode $CODE)"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install NDK (pinned to ndkVersion in build.gradle.kts)
+        run: sdkmanager "ndk;30.0.14904198"
+
+      - name: Install Rust toolchain (android target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Cache cargo + target (android, shared with release.yml)
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core -> target
+          shared-key: rust-android
+
+      - name: Set up Gradle (with cache)
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Decode develop keystore (if configured)
+        env:
+          DEVELOP_KEYSTORE_BASE64: ${{ secrets.DEVELOP_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$DEVELOP_KEYSTORE_BASE64" ]; then
+            echo "$DEVELOP_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/develop.keystore"
+            echo "DEVELOP_KEYSTORE_FILE=$RUNNER_TEMP/develop.keystore" >> "$GITHUB_ENV"
+            echo "Develop keystore decoded — nightly APK will be develop-signed."
+          else
+            echo "::warning::No DEVELOP_KEYSTORE_BASE64 set — nightly APK is DEBUG-signed (a new key each run, so users must reinstall rather than update between nightlies). Set the secret for a stable nightly key."
+          fi
+
+      # Debug cargo profile => fast per-commit CI. Add `-PcargoProfile=release` for
+      # an optimized (slower-to-build) nightly if runtime perf matters more.
+      - name: Build nightly APK
+        working-directory: android
+        env:
+          DEVELOP_KEYSTORE_PASSWORD: ${{ secrets.DEVELOP_KEYSTORE_PASSWORD }}
+          DEVELOP_KEY_ALIAS: ${{ secrets.DEVELOP_KEY_ALIAS }}
+          DEVELOP_KEY_PASSWORD: ${{ secrets.DEVELOP_KEY_PASSWORD }}
+          VERSION_NAME: ${{ steps.v.outputs.name }}
+          VERSION_CODE: ${{ steps.v.outputs.code }}
+        run: |
+          ./gradlew :app:assembleNightly \
+            -PversionName="$VERSION_NAME" -PversionCode="$VERSION_CODE" \
+            --no-daemon --stacktrace
+
+      - name: Collect APK
+        env:
+          VERSION_NAME: ${{ steps.v.outputs.name }}
+        run: |
+          mkdir -p dist
+          cp android/app/build/outputs/apk/nightly/app-nightly.apk \
+            "dist/crema-nightly-${VERSION_NAME}.apk"
+          ls -la dist
+
+      # Roll the single `nightly` prerelease forward: delete the old one (+ its tag)
+      # so the new release points at this commit and Obtainium sees one clean entry.
+      - name: Remove previous nightly release + tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release delete nightly --yes --cleanup-tag || true
+
+      - name: Publish rolling nightly prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: nightly
+          target_commitish: ${{ github.sha }}
+          name: Crema Nightly
+          prerelease: true
+          make_latest: false
+          body: |
+            Rolling development build — **the latest commit on `main`**.
+
+            This is a separate app (`coffee.crema.nightly`, "Crema Nightly"), so it
+            installs alongside a stable Crema. Follow this train in **Obtainium** with
+            **Include prereleases** enabled. For the stable train, use IzzyOnDroid or
+            a tagged release.
+
+            Commit: ${{ github.sha }}
+          files: dist/*.apk
+          fail_on_unmatched_files: true
