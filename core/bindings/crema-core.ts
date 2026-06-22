@@ -124,27 +124,27 @@ export interface Bean {
 	 */
 	roastType?: BeanRoastType;
 	/** Decaf flag — `false` by default. */
-	decaf: boolean;
+	decaf?: boolean;
 	/** Provenance metadata. Empty struct by default. */
-	origin: BeanOrigin;
+	origin?: BeanOrigin;
 	/**
 	 * Bag size, grams. `0.0` when unknown. Unit lives in the doc
 	 * comment, not the field name, per the locked-in naming rule
 	 * (`docs/44-pre-android-handoff.md`).
 	 */
-	bagSize: number;
+	bagSize?: number;
 	/**
 	 * Remaining weight in the bag, grams. Auto-debited per shot when
 	 * the shell enables `Track bag remaining weight`. `0.0` when
 	 * unknown.
 	 */
-	remaining: number;
+	remaining?: number;
 	/** Quality score — free text per Visualizer (`"88"`, `"A-"`). */
-	qualityScore: string;
+	qualityScore?: string;
 	/** Tasting notes — multi-line free text. */
-	tastingNotes: string;
+	tastingNotes?: string;
 	/** User star rating 0..5; `0` = unrated. */
-	rating: number;
+	rating?: number;
 	/** Where the bag was bought — `"Counter Culture · Durham"`. */
 	placeOfPurchase?: string;
 	/**
@@ -156,9 +156,9 @@ export interface Bean {
 	/** URL to buy again — Visualizer / roaster / store link. */
 	url?: string;
 	/** Free-form notes (not the tasting box). */
-	notes: string;
+	notes?: string;
 	/** Pinned to the brew-page bean picker strip. */
-	favourite: boolean;
+	favourite?: boolean;
 	/** Unix epoch ms when the bag was archived; `None` = active. */
 	archivedAt?: number;
 	/**
@@ -166,15 +166,24 @@ export interface Bean {
 	 * grind setting only means something paired with the grinder it
 	 * was measured on.
 	 */
-	grinder: string;
+	grinder?: string;
 	/** Bean-scoped grinder click / setting — `"1.2"`, `"6 + a tooth"`. */
-	grinderSetting: string;
+	grinderSetting?: string;
 	/**
 	 * Free-form user tags — e.g. `"daily-driver"`, `"comp"`, `"experimental"`.
 	 * Defaults to an empty list. Serialised as `tags` so the JSON contract
 	 * matches the [`crate::Profile`] tag pattern.
 	 */
 	tags?: string[];
+	/**
+	 * The profile auto-loaded when this bean is activated on the Brew
+	 * page (the "linked profile"). `None` = no link. Stores the profile
+	 * id only; a dangling id (profile deleted, cross-device import of a
+	 * device-local custom) is tolerated by every consumer. Local-only —
+	 * never pushed to Visualizer. Defaults so older Bean JSON
+	 * deserialises cleanly.
+	 */
+	linkedProfileId?: string;
 	/** Visualizer `coffee_bag.id` once pushed. */
 	visualizerId?: string;
 	/**
