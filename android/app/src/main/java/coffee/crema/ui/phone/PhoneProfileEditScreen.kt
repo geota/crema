@@ -170,7 +170,7 @@ fun PhoneProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
             // ── Targets ─────────────────────────────────────────────────────
             EdGroup("Targets") {
                 EdRow("Dose") { CremaStepper(value = dose, unit = "g", step = 0.1, min = 5.0, max = 30.0, fmt = { "%.1f".format(it) }, onChange = { dose = it }, style = CremaStepperStyle.BareCompact) }
-                EdRow("Yield") { CremaStepper(value = yieldG, unit = "g", step = 0.5, min = 10.0, max = 120.0, fmt = { "%.0f".format(it) }, onChange = { yieldG = it }, style = CremaStepperStyle.BareCompact) }
+                EdRow("Yield") { CremaStepper(value = yieldG, unit = "g", step = 0.5, min = 10.0, max = 120.0, fmt = { "%.1f".format(it) }, onChange = { yieldG = it }, style = CremaStepperStyle.BareCompact) }
                 EdRow("Ratio", sub = "Computed") {
                     Text(
                         formatRatio(dose, yieldG),
