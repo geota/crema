@@ -4,7 +4,7 @@
 # "Include prereleases". The STABLE train is release.yml (tagged `v*.*.*`),
 # served via IzzyOnDroid + Obtainium-without-prereleases.
 #
-# The nightly app is a SEPARATE package — coffee.crema.nightly, "Crema Nightly"
+# The nightly app is a SEPARATE package — dev.maceiras.crema.nightly, "Crema Nightly"
 # (see the `nightly` buildType + src/nightly/res in android/app/build.gradle.kts)
 # — so it coexists with a stable install rather than fighting it.
 #
@@ -127,7 +127,7 @@ jobs:
           body: |
             Rolling development build — **the latest commit on `main`**.
 
-            This is a separate app (`coffee.crema.nightly`, "Crema Nightly"), so it
+            This is a separate app (`dev.maceiras.crema.nightly`, "Crema Nightly"), so it
             installs alongside a stable Crema. Follow this train in **Obtainium** with
             **Include prereleases** enabled. For the stable train, use IzzyOnDroid or
             a tagged release.

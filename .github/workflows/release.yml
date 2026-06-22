@@ -269,7 +269,7 @@ jobs:
         uses: r0adkll/upload-google-play@v1
         with:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
-          packageName: coffee.crema
+          packageName: dev.maceiras.crema
           releaseFiles: android/app/build/outputs/bundle/release/app-release.aab
           track: internal
           status: draft

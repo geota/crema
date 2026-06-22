@@ -43,7 +43,7 @@ Crema is a clean-room reimplementation of the DE1 tablet experience as a **fast,
 - **[Obtainium](https://github.com/ImranR98/Obtainium)** (recommended): add the app source `https://github.com/geota/crema`, turn on **Include prereleases**, and Obtainium tracks the rolling [`nightly`](https://github.com/geota/crema/releases/tag/nightly) prerelease.
 - Or download the APK from the [`nightly`](https://github.com/geota/crema/releases/tag/nightly) prerelease directly.
 
-Nightly installs as a **separate app** (`coffee.crema.nightly`, "Crema Nightly"), so it coexists with a stable install. Minimum Android 12 (API 31).
+Nightly installs as a **separate app** (`dev.maceiras.crema.nightly`, "Crema Nightly"), so it coexists with a stable install. Minimum Android 12 (API 31).
 
 ## Tech stack
 
