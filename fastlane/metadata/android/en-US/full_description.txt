@@ -1,0 +1,14 @@
+Crema is an open-source companion for the Decent Espresso DE1.
+
+Connect over Bluetooth to drive your espresso machine and a coffee scale, dial in shots with editable pressure/flow profiles, and keep a searchable history of every shot with live charts.
+
+Features:
+* Live brew control — pressure, flow, temperature and weight on a real-time chart
+* Profile editor — drag the pressure/flow curve, edit phases and limits, import/export
+* Bean & roaster library — track freshness, ratings and grind; import from Beanconqueror
+* Shot history — review, rate, compare and export your shots
+* Scale support — many BLE coffee scales, capability-driven (tare, timer, flow, settings)
+* Visualizer.coffee sync — upload and share your shots
+* Tablet and phone layouts
+
+Crema is not affiliated with Decent Espresso. "Decent" and "DE1" are trademarks of their respective owners.

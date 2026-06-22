@@ -29,6 +29,22 @@ Crema is a clean-room reimplementation of the DE1 tablet experience as a **fast,
 - **Maintenance tracking** — water filter, descale, and cleaning cycle reminders with one-click "Run" buttons that drive the DE1's built-in cycles.
 - **Replay capture** — record BLE traces of real sessions and replay them deterministically through the core for development and regression testing.
 
+## Install on Android
+
+> The native Android app is in active development. Builds ship on two **trains** — pick whichever you want to follow.
+
+**Stable** — tagged releases:
+
+- **[IzzyOnDroid](https://apt.izzysoft.de/)** (an F-Droid-compatible repo): add `https://apt.izzysoft.de/fdroid/repo` to your F-Droid client, then search for **Crema**. *(Pending the IzzyOnDroid inclusion request.)*
+- Or download the APK from the [latest release](https://github.com/geota/crema/releases/latest).
+
+**Nightly** — the latest commit on `main`, rebuilt on every push:
+
+- **[Obtainium](https://github.com/ImranR98/Obtainium)** (recommended): add the app source `https://github.com/geota/crema`, turn on **Include prereleases**, and Obtainium tracks the rolling [`nightly`](https://github.com/geota/crema/releases/tag/nightly) prerelease.
+- Or download the APK from the [`nightly`](https://github.com/geota/crema/releases/tag/nightly) prerelease directly.
+
+Nightly installs as a **separate app** (`coffee.crema.nightly`, "Crema Nightly"), so it coexists with a stable install. Minimum Android 12 (API 31).
+
 ## Tech stack
 
 | Layer | Technology |

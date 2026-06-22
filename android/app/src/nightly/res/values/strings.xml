@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Nightly train (coffee.crema.nightly): override the app label so a nightly
+         build is distinguishable from, and coexists with, a stable install on the
+         same device. The stable label ("Crema") lives in the main source set. -->
+    <string name="app_name">Crema Nightly</string>
+</resources>
