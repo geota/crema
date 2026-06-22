@@ -762,6 +762,46 @@ pub fn import_crema_jsonl(text: String) -> Result<String, CremaError> {
     de1_domain::import_jsonl_to_plan_json(&text).map_err(crema_err)
 }
 
+/// Build a Crema **backup bundle** (`crema-backup/v1`) from an envelope
+/// JSON `{ "profiles": [...], "beans": [...], "roasters": [...],
+/// "shots": [...], "settings": {...} }` — a superset of
+/// [`export_crema_jsonl`] that also carries custom profiles + a portable
+/// settings subset, plus a richer header (`deviceLabel`, profile count).
+/// The shell strips OAuth tokens + per-device/BLE state before building
+/// the envelope. See [`de1_domain::export_backup_jsonl_from_json`].
+///
+/// # Errors
+///
+/// Returns the JSON parse error string when the envelope is malformed.
+#[uniffi::export]
+pub fn export_backup_jsonl(
+    envelope_json: String,
+    created_at_unix_ms: i64,
+    app_version: String,
+    device_label: String,
+) -> Result<String, CremaError> {
+    de1_domain::export_backup_jsonl_from_json(
+        &envelope_json,
+        created_at_unix_ms,
+        &app_version,
+        &device_label,
+    )
+    .map_err(crema_err)
+}
+
+/// Parse a Crema backup bundle into a `BackupImportPlan` JSON — the
+/// library `ImportPlan` plus `profiles` + `settings` sections, so the
+/// shell's reconcile + apply path is reused. See
+/// [`de1_domain::import_backup_jsonl_to_plan_json`].
+///
+/// # Errors
+///
+/// Currently always Ok; reserved for future schema-version errors.
+#[uniffi::export]
+pub fn import_backup_jsonl(text: String) -> Result<String, CremaError> {
+    de1_domain::import_backup_jsonl_to_plan_json(&text).map_err(crema_err)
+}
+
 /// Export a Rust-shape `StoredShot` JSON (the same shape
 /// `import_v2_json_shot` returns) as a pretty-printed community-v2
 /// `.shot.json` document — the Visualizer upload / archive payload.
