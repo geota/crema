@@ -40,6 +40,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -178,8 +181,18 @@ class MainActivity : ComponentActivity() {
                         )
                     }
                 }
+                // Tap any empty space to drop focus from an inline number field
+                // (TapToEditValue commits on focus-loss) — a "tap away to confirm"
+                // that doesn't require the keyboard's Done. Child clickables /
+                // scrollables consume their own gestures, so only unhandled taps on
+                // empty space reach here.
+                val focusManager = LocalFocusManager.current
                 Surface(
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .pointerInput(Unit) {
+                            detectTapGestures(onTap = { focusManager.clearFocus() })
+                        },
                     color = MaterialTheme.colorScheme.background,
                     contentColor = MaterialTheme.colorScheme.onBackground,
                 ) {
