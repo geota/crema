@@ -629,7 +629,7 @@ fun SettingsScreen(
                             CremaSettingsRow("Flow", "Scale the flow-meter reading. Apply commits after a typed confirm.", needsConnection = !connected) {
                                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                                     CremaStepper(
-                                        value = flowDraft, unit = "×", step = 0.01, min = 0.5, max = 1.5,
+                                        value = flowDraft, unit = "×", step = 0.01, min = 0.13, max = 2.0,
                                         fmt = { "%.2f".format(it) }, style = CremaStepperStyle.Bare,
                                         onChange = { flowDraft = it },
                                     )
