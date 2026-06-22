@@ -5,6 +5,7 @@ import android.util.Log
 import coffee.crema.core.CremaBridge
 import coffee.crema.core.NotificationSource
 import coffee.crema.core.ScaleUuids as CoreScaleUuids
+import coffee.crema.core.scaleScanUuids
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -18,11 +19,12 @@ import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.util.UUID
 
 /**
- * BLE manager for a Bookoo coffee scale, on top of [BleTransport].
+ * BLE manager for a coffee scale, on top of [BleTransport].
  *
  * A close sibling of [De1BleManager] — same scope/observation model.
  * Responsibilities:
@@ -42,8 +44,9 @@ import java.util.UUID
  *     `Event.ScaleConfig`.
  *
  * Device discovery is not this manager's job: the shared [BleScanner] runs the
- * one app-wide scan and hands a matched scale to [connect]. The "is this a
- * Bookoo" name rule lives with the device — see [isBookooName].
+ * one app-wide scan and hands a matched scale to [connect]. Which advertised
+ * names count as a scale is the core's call — every supported model's prefix,
+ * see [supportedScaleNamePrefixes] (AND6) — not a hardcoded single-scale rule.
  *
  * The hand-rolled `BluetoothGatt` callback ladder and subscribe queue are gone:
  * [BleTransport] (Nordic-backed) serialises GATT operations itself.
@@ -120,6 +123,31 @@ class ScaleBleManager(
 
     /** Parses the core's `scaleUuids()` JSON into [CoreScaleUuids]. */
     private val json = Json { ignoreUnknownKeys = true }
+
+    /** JSON shape of the core's `scaleScanUuids()` (AND6) — the generic
+     *  pre-connect scan filter. `service_uuids` is for Web Bluetooth's
+     *  `optionalServices`; Android's name-scan uses only `name_prefixes`. */
+    @Serializable
+    private data class ScaleScanFilter(
+        val service_uuids: List<String> = emptyList(),
+        val name_prefixes: List<String> = emptyList(),
+    )
+
+    /**
+     * Every supported scale's advertised-name prefix, from the core's generic
+     * scan registry (`scaleScanUuids()`) — so discovery scans for ALL supported
+     * models instead of a hardcoded Bookoo rule (AND6). The connected model's
+     * codec + UUIDs are then resolved from the core in [establish]. Empty if the
+     * core call fails (fail-safe: match nothing rather than guess a scale).
+     */
+    fun supportedScaleNamePrefixes(): List<String> =
+        runCatching {
+            json.decodeFromString(ScaleScanFilter.serializer(), scaleScanUuids())
+                .name_prefixes
+        }.getOrElse {
+            Log.w(TAG, "scaleScanUuids() failed; no scales will be discovered", it)
+            emptyList()
+        }
 
     /**
      * The connected scale's GATT characteristics, sourced from the core
@@ -459,14 +487,6 @@ class ScaleBleManager(
             (500L shl (attempt - 1).coerceIn(0, 10)).coerceAtMost(30_000L)
 
         /**
-         * The advertised-name prefix a Bookoo scale is discovered by. This is a
-         * scan-discovery detail (not a GATT UUID — those come from the core's
-         * connected `scaleUuids()`); the core's generic `scale_scan_uuids()`
-         * carries the full multi-scale set for a future multi-scale scan (AND6).
-         */
-        private const val BOOKOO_NAME_PREFIX: String = "BOOKOO_SC"
-
-        /**
          * Capture `src` label for inbound notifications from the Bookoo command
          * characteristic (`ff12`). Distinct from the `SCALE_WEIGHT` label so the
          * replay tool can route it to the core's [NotificationSource.SCALE_COMMAND]
@@ -487,13 +507,5 @@ class ScaleBleManager(
             return sb.toString()
         }
 
-        /**
-         * Whether a scanned advertisement name identifies a Bookoo scale. The
-         * scale advertises a name starting "BOOKOO_SC"; the core then identifies
-         * the exact model from the full advertised name. The shared [BleScanner]
-         * stays device-agnostic, so this rule lives with the scale manager.
-         */
-        fun isBookooName(name: String): Boolean =
-            name.uppercase().startsWith(BOOKOO_NAME_PREFIX)
     }
 }
