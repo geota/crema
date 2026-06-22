@@ -634,7 +634,9 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> Option<i64> {
     let yoe = y - era * 400;
     let doy = (153 * (m + if m > 2 { -3 } else { 9 }) + 2) / 5 + d - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era.checked_mul(146_097)?.checked_add(doe)?.checked_sub(719_468)
+    era.checked_mul(146_097)?
+        .checked_add(doe)?
+        .checked_sub(719_468)
 }
 
 /// Inverse of [`days_from_civil`] — a day count since the epoch back to a
@@ -744,7 +746,10 @@ pub fn parse_iso_datetime_ms(s: &str) -> Option<i64> {
 ///
 /// # Errors
 /// The JSON parse / serialise error string on a malformed `bean_json`.
-pub fn bean_to_wire_json(bean_json: &str, roaster_remote_id: Option<&str>) -> Result<String, String> {
+pub fn bean_to_wire_json(
+    bean_json: &str,
+    roaster_remote_id: Option<&str>,
+) -> Result<String, String> {
     let bean: Bean = serde_json::from_str(bean_json).map_err(|e| e.to_string())?;
     let wire = bean_to_wire(&bean, roaster_remote_id);
     serde_json::to_string(&wire).map_err(|e| e.to_string())
@@ -841,8 +846,8 @@ mod tests {
     fn roast_level_lands_every_level_on_an_in_band_rep() {
         let reps = [2u8, 3, 5, 7, 9];
         for lvl in 1..=10 {
-            let back =
-                roast_level_from_wire(roast_level_to_wire(Some(f64::from(lvl))).as_deref()).unwrap();
+            let back = roast_level_from_wire(roast_level_to_wire(Some(f64::from(lvl))).as_deref())
+                .unwrap();
             assert!(reps.contains(&back), "level {lvl} → {back}");
         }
     }
@@ -850,10 +855,11 @@ mod tests {
     #[test]
     fn roast_level_is_idempotent_after_first_hop() {
         for lvl in 1..=10 {
-            let once =
-                roast_level_from_wire(roast_level_to_wire(Some(f64::from(lvl))).as_deref()).unwrap();
+            let once = roast_level_from_wire(roast_level_to_wire(Some(f64::from(lvl))).as_deref())
+                .unwrap();
             let twice =
-                roast_level_from_wire(roast_level_to_wire(Some(f64::from(once))).as_deref()).unwrap();
+                roast_level_from_wire(roast_level_to_wire(Some(f64::from(once))).as_deref())
+                    .unwrap();
             assert_eq!(once, twice, "level {lvl}");
         }
     }
@@ -878,7 +884,11 @@ mod tests {
     // ── bean wire round-trip (mirrors the TS vitest) ───────────────────
 
     fn round_trip_bean() -> Bean {
-        let mut bean = Bean::new("bean-1".to_owned(), "Yirgacheffe".to_owned(), 1_700_000_000_000);
+        let mut bean = Bean::new(
+            "bean-1".to_owned(),
+            "Yirgacheffe".to_owned(),
+            1_700_000_000_000,
+        );
         bean.roaster_id = Some("r-local".to_owned());
         bean.roasted_on = Some("2026-05-01".to_owned());
         bean.roast_level = Some(5); // a band rep, survives losslessly
@@ -970,7 +980,10 @@ mod tests {
         assert_eq!(back.name, "Onyx");
         assert_eq!(back.visualizer_id.as_deref(), Some("rv-7"));
         assert_eq!(back.website.as_deref(), Some("https://onyx.coffee"));
-        assert_eq!(back.image_url.as_deref(), Some("https://onyx.coffee/logo.png"));
+        assert_eq!(
+            back.image_url.as_deref(),
+            Some("https://onyx.coffee/logo.png")
+        );
         assert_eq!(back.canonical_roaster_id.as_deref(), Some("canon-3"));
     }
 

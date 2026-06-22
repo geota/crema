@@ -72,19 +72,58 @@ struct ScaleScanEntry {
 /// like Acaia Pyxis vs gen-1). Adding a scale = a row here + a
 /// [`Scale::from_label`] arm.
 const SCALE_SCAN: &[ScaleScanEntry] = &[
-    ScaleScanEntry { prefixes: &["Decent Scale", "ButtsHaus Scale"], label: "Decent Scale" },
-    ScaleScanEntry { prefixes: &["Skale"], label: "Skale II" },
-    ScaleScanEntry { prefixes: &["FELICITA"], label: "Felicita Arc" },
-    ScaleScanEntry { prefixes: &["BOOKOO_SC"], label: "Bookoo" },
-    ScaleScanEntry { prefixes: &["PEARLS", "PEARL-", "LUNAR", "PYXIS"], label: "Acaia Pyxis" },
-    ScaleScanEntry { prefixes: &["ACAIA", "PROCH"], label: "Acaia" },
-    ScaleScanEntry { prefixes: &["ECLAIR"], label: "Atomheart Eclair" },
-    ScaleScanEntry { prefixes: &["CFS-9002"], label: "Eureka Precisa" },
-    ScaleScanEntry { prefixes: &["LSJ-001"], label: "Solo Barista" },
-    ScaleScanEntry { prefixes: &["Microbalance"], label: "Difluid Microbalance" },
-    ScaleScanEntry { prefixes: &["smartchef"], label: "Smartchef" },
-    ScaleScanEntry { prefixes: &["HIROIA JIMMY"], label: "Hiroia Jimmy" },
-    ScaleScanEntry { prefixes: &["AKU MINI", "Varia AKU"], label: "Varia Aku" },
+    ScaleScanEntry {
+        prefixes: &["Decent Scale", "ButtsHaus Scale"],
+        label: "Decent Scale",
+    },
+    ScaleScanEntry {
+        prefixes: &["Skale"],
+        label: "Skale II",
+    },
+    ScaleScanEntry {
+        prefixes: &["FELICITA"],
+        label: "Felicita Arc",
+    },
+    ScaleScanEntry {
+        prefixes: &["BOOKOO_SC"],
+        label: "Bookoo",
+    },
+    ScaleScanEntry {
+        prefixes: &["PEARLS", "PEARL-", "LUNAR", "PYXIS"],
+        label: "Acaia Pyxis",
+    },
+    ScaleScanEntry {
+        prefixes: &["ACAIA", "PROCH"],
+        label: "Acaia",
+    },
+    ScaleScanEntry {
+        prefixes: &["ECLAIR"],
+        label: "Atomheart Eclair",
+    },
+    ScaleScanEntry {
+        prefixes: &["CFS-9002"],
+        label: "Eureka Precisa",
+    },
+    ScaleScanEntry {
+        prefixes: &["LSJ-001"],
+        label: "Solo Barista",
+    },
+    ScaleScanEntry {
+        prefixes: &["Microbalance"],
+        label: "Difluid Microbalance",
+    },
+    ScaleScanEntry {
+        prefixes: &["smartchef"],
+        label: "Smartchef",
+    },
+    ScaleScanEntry {
+        prefixes: &["HIROIA JIMMY"],
+        label: "Hiroia Jimmy",
+    },
+    ScaleScanEntry {
+        prefixes: &["AKU MINI", "Varia AKU"],
+        label: "Varia Aku",
+    },
 ];
 
 /// One decoded scale notification.

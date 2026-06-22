@@ -331,7 +331,11 @@ pub fn from_wire(profile: &Profile) -> CremaProfile {
         last_used: None,
         // The profile's own `dose` (the legacy `profile_grinder_dose_weight`),
         // falling back to a neutral 18 g for a profile that carries none.
-        dose: if profile.dose > 0.0 { profile.dose } else { 18.0 },
+        dose: if profile.dose > 0.0 {
+            profile.dose
+        } else {
+            18.0
+        },
         // The DE1 `target_weight`, falling back to a neutral 36 g.
         yield_out: if profile.target_weight > 0.0 {
             profile.target_weight
@@ -673,9 +677,11 @@ mod tests {
 
     #[test]
     fn json_facades_round_trip_segments() {
-        let wire_json =
-            serde_json::to_string(&wire_profile(vec![wire_step("a", 9.0), wire_step("b", 6.0)]))
-                .unwrap();
+        let wire_json = serde_json::to_string(&wire_profile(vec![
+            wire_step("a", 9.0),
+            wire_step("b", 6.0),
+        ]))
+        .unwrap();
         let crema_json = crema_profile_from_wire_json(&wire_json).unwrap();
         let back_wire_json = crema_profile_to_wire_json(&crema_json).unwrap();
         let back: Profile = serde_json::from_str(&back_wire_json).unwrap();
@@ -685,9 +691,10 @@ mod tests {
 
     #[test]
     fn blank_crema_profile_json_parses_camelcase_defaults() {
-        let out =
-            blank_crema_profile_json(r#"{"doseG":18.0,"ratio":2.0,"brewTempC":93.0,"preinfusionS":8.0}"#)
-                .unwrap();
+        let out = blank_crema_profile_json(
+            r#"{"doseG":18.0,"ratio":2.0,"brewTempC":93.0,"preinfusionS":8.0}"#,
+        )
+        .unwrap();
         let p: CremaProfile = serde_json::from_str(&out).unwrap();
         assert!(close(p.segments[0].time, 8.0));
         assert!(close(p.yield_out, 36.0));

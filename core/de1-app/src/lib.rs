@@ -16,10 +16,10 @@ pub mod error;
 pub mod event;
 pub mod firmware_info;
 
-pub use error::AppError;
 pub use de1_uuids::{
     De1Uuids, de1_uuids, de1_uuids_json, de1_write_target_uuid, de1_write_target_uuid_by_name,
 };
+pub use error::AppError;
 pub use event::{Command, CoreOutput, Event, ProfileUploadFailure, Source, WriteTarget};
 pub use firmware_info::{FirmwareUpdateStatus, LATEST_KNOWN_FIRMWARE_BUILD};
 

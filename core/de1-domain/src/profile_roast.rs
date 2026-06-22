@@ -90,7 +90,12 @@ fn roast_phrases() -> &'static [(Regex, &'static str)] {
             (r"\b(?:light(?:ly)?)[\s-]+roast(?:ed|s)?\b", "light"),
         ];
         p.iter()
-            .map(|(re, roast)| (Regex::new(re).expect("static roast phrase compiles"), *roast))
+            .map(|(re, roast)| {
+                (
+                    Regex::new(re).expect("static roast phrase compiles"),
+                    *roast,
+                )
+            })
             .collect()
     })
 }
@@ -173,7 +178,10 @@ mod tests {
 
     #[test]
     fn ranges_resolve_to_the_leading_end() {
-        assert_eq!(roast_from_profile("X", "medium to dark roast"), Some("dark"));
+        assert_eq!(
+            roast_from_profile("X", "medium to dark roast"),
+            Some("dark")
+        );
         assert_eq!(roast_from_profile("X", "medium-dark"), Some("dark"));
         assert_eq!(roast_from_profile("X", "dark to medium"), Some("dark"));
         assert_eq!(roast_from_profile("X", "medium to light"), Some("light"));
@@ -184,7 +192,10 @@ mod tests {
     #[test]
     fn single_roast_words() {
         assert_eq!(roast_from_profile("X", "a dark roast"), Some("dark"));
-        assert_eq!(roast_from_profile("X", "very dark roasted beans"), Some("dark"));
+        assert_eq!(
+            roast_from_profile("X", "very dark roasted beans"),
+            Some("dark")
+        );
         assert_eq!(roast_from_profile("X", "dark roasted"), Some("dark"));
         assert_eq!(roast_from_profile("X", "medium roast"), Some("medium"));
         assert_eq!(roast_from_profile("X", "medium roasts"), Some("medium"));
@@ -202,10 +213,16 @@ mod tests {
 
     #[test]
     fn no_clear_roast_is_none() {
-        assert_eq!(roast_from_profile("Best Overall", "great everyday shot"), None);
+        assert_eq!(
+            roast_from_profile("Best Overall", "great everyday shot"),
+            None
+        );
         assert_eq!(roast_from_profile("Blooming espresso", ""), None);
         // A bare "dark" with no "roast" word does NOT match a phrase.
-        assert_eq!(roast_from_profile("X", "this is a dark and stormy day"), None);
+        assert_eq!(
+            roast_from_profile("X", "this is a dark and stormy day"),
+            None
+        );
     }
 
     #[test]

@@ -128,14 +128,35 @@ mod tests {
     #[test]
     fn every_write_target_maps_to_its_matching_characteristic() {
         let u = de1_uuids();
-        assert_eq!(de1_write_target_uuid(WriteTarget::De1RequestedState), u.requested_state);
-        assert_eq!(de1_write_target_uuid(WriteTarget::De1ShotSettings), u.shot_settings);
-        assert_eq!(de1_write_target_uuid(WriteTarget::De1MmrRequest), u.mmr_read);
+        assert_eq!(
+            de1_write_target_uuid(WriteTarget::De1RequestedState),
+            u.requested_state
+        );
+        assert_eq!(
+            de1_write_target_uuid(WriteTarget::De1ShotSettings),
+            u.shot_settings
+        );
+        assert_eq!(
+            de1_write_target_uuid(WriteTarget::De1MmrRequest),
+            u.mmr_read
+        );
         assert_eq!(de1_write_target_uuid(WriteTarget::De1MmrWrite), u.mmr_write);
-        assert_eq!(de1_write_target_uuid(WriteTarget::De1Calibration), u.calibration);
-        assert_eq!(de1_write_target_uuid(WriteTarget::De1WaterLevels), u.water_levels);
-        assert_eq!(de1_write_target_uuid(WriteTarget::De1ProfileHeader), u.header_write);
-        assert_eq!(de1_write_target_uuid(WriteTarget::De1ProfileFrame), u.frame_write);
+        assert_eq!(
+            de1_write_target_uuid(WriteTarget::De1Calibration),
+            u.calibration
+        );
+        assert_eq!(
+            de1_write_target_uuid(WriteTarget::De1WaterLevels),
+            u.water_levels
+        );
+        assert_eq!(
+            de1_write_target_uuid(WriteTarget::De1ProfileHeader),
+            u.header_write
+        );
+        assert_eq!(
+            de1_write_target_uuid(WriteTarget::De1ProfileFrame),
+            u.frame_write
+        );
     }
 
     #[test]
