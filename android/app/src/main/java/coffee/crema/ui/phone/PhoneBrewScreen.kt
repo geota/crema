@@ -469,7 +469,10 @@ private fun RunningBody(ui: MainUiState, active: CremaProfile?, modifier: Modifi
         val eb = ui.effectiveBrew()
         val dose = eb.dose.toFloat()
         val target = eb.yieldOut.toFloat()
-        val weight = ui.scaleWeightG ?: 0f
+        // Floor at 0: lifting the cup during the post-stop drip (the shot stays
+        // "in progress" until the DE1 idles) flips live weight crazy-negative —
+        // keep it out of the yield readout + ratio (the bar already clamps at 525).
+        val weight = (ui.scaleWeightG ?: 0f).coerceAtLeast(0f)
         Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surfaceContainer) {
             Column(
                 Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 12.dp),
@@ -539,7 +542,7 @@ private fun RunningBody(ui: MainUiState, active: CremaProfile?, modifier: Modifi
         val cVolume = convertVolume(ui.dispensedVolume, ui.volumeUnit)
         val cCoffee = convertTemp(ui.headTemp, ui.tempUnit)
         val cWater = convertTemp(ui.mixTemp, ui.tempUnit)
-        val cWeight = convertWeight(ui.scaleWeightG, ui.weightUnit)
+        val cWeight = convertWeight(ui.scaleWeightG?.coerceAtLeast(0f), ui.weightUnit)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             DualChip(
                 Modifier.weight(1f),
