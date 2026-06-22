@@ -690,16 +690,21 @@ pub fn guess_scale_from_first_weight_packet(bytes: Vec<u8>) -> Option<String> {
     de1_app::ScaleId::guess_from_first_weight_packet(&bytes).map(str::to_owned)
 }
 
-// NOTE (AND2 redesign): a `bookoo_gatt_uuids` accessor was removed here. Baking
-// one specific scale into the core's public FFI surface was the wrong
-// abstraction — the core identifies ~13 scales (`Scale::identify`) and is
-// capability-driven, so the pre-connect scan filter belongs in a GENERIC
-// `Scale::scan_uuids()` (exposed to the web via the wasm `scaleScanUuids`). It
-// is intentionally NOT mirrored to FFI yet: the Android shell still subscribes
-// only to the Bookoo characteristics (its `ScaleUuids` holds them as documented
-// shell-side constants), and a UniFFI mirror would be a dead export until
-// Android's multi-scale pass (AND6) makes it scan via `scale_scan_uuids()` and
-// subscribe via the connected `scale_uuids()`.
+/// The generic pre-connect BLE scan filter — the union of every supported
+/// scale's advertised-name **prefixes** and GATT **service UUIDs** — as JSON
+/// `{"service_uuids":[…],"name_prefixes":[…]}`. The core owns the registry
+/// ([`de1_app::ScaleId::scan_uuids`]), so the shell never hardcodes one scale:
+/// Android scans every `name_prefixes` (AND6) and then resolves the *connected*
+/// model's characteristics from [`scale_uuids`]. Mirrors the wasm
+/// `scaleScanUuids` the web shell already consumes.
+///
+/// (AND6: this replaces the AND2-era, deliberately-deferred FFI mirror — the
+/// removed `bookoo_gatt_uuids` accessor was the wrong, single-scale abstraction.)
+#[uniffi::export]
+pub fn scale_scan_uuids() -> String {
+    serde_json::to_string(&de1_app::ScaleId::scan_uuids())
+        .unwrap_or_else(|_| r#"{"service_uuids":[],"name_prefixes":[]}"#.to_owned())
+}
 
 /// Fold a JSON array of `src:"META"` payload objects into a merged
 /// `ReplayMeta` JSON. See [`de1_domain::fold_meta_jsonl_json`] for
