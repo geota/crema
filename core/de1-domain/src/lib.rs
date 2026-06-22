@@ -86,7 +86,9 @@ pub use beanconqueror::{
 };
 pub use builtin::{BUILTIN_PROFILE_COUNT, builtin_profiles};
 pub use crema_jsonl::{
-    CremaExportHeader, export_jsonl, export_jsonl_from_json, import_jsonl_to_plan_json, parse_jsonl,
+    BackupHeader, BackupImportPlan, CremaExportHeader, export_backup_jsonl_from_json, export_jsonl,
+    export_jsonl_from_json, import_backup_jsonl_to_plan_json, import_jsonl_to_plan_json,
+    parse_backup_jsonl, parse_jsonl,
 };
 pub use crema_profile::{
     BrewDefaults, CremaProfile, ProfileSegment, ProfileSource, Roast, blank_crema_profile_json,

@@ -279,6 +279,166 @@ pub fn import_jsonl_to_plan_json(text: &str) -> Result<String, String> {
     serde_json::to_string(&plan).map_err(|e| e.to_string())
 }
 
+// ── Full-app backup bundle (profiles + library + history + settings) ────────
+//
+// A superset of the library JSONL above: same line-tagged format, plus
+// `profile` lines (verbatim custom-profile JSON) and a `settings` line (a
+// shell-owned portable subset). One core (de)serializer → web (wasm) and
+// Android (uniffi) emit/parse IDENTICAL bytes, so a backup moves between
+// devices/shells. Photos + OAuth tokens + per-device state are NOT here — the
+// shell strips tokens/per-device fields before building the envelope, and a
+// future `.crema.zip` wrapper carries photos.
+
+/// Header for a backup bundle — `kind` is `"crema-backup/v1"`. Adds a device
+/// label (multi-device disambiguation + the restore type-to-confirm) and a
+/// profile count on top of [`CremaExportHeader`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupHeader {
+    pub kind: String,
+    pub created_at: i64,
+    #[serde(default)]
+    pub app_version: String,
+    #[serde(default)]
+    pub device_label: String,
+    pub profile_count: usize,
+    pub bean_count: usize,
+    pub roaster_count: usize,
+    pub shot_count: usize,
+}
+
+/// The parsed contents of a backup bundle. Beans/roasters/shots reuse the
+/// [`ImportPlan`] shape so the shell's existing reconcile/apply path is shared;
+/// profiles + settings ride as verbatim JSON the shell owns. Output-only —
+/// serialised to JSON for the wasm / uniffi bridge; the shell parses it.
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupImportPlan {
+    /// Custom-profile JSON objects, verbatim (`kind` stripped). Kept untyped so
+    /// an evolving profile shape round-trips losslessly; the shell adopts/merges
+    /// by `id`.
+    pub profiles: Vec<serde_json::Value>,
+    /// The portable settings object (`kind` stripped) if present; the shell
+    /// applies the keys it recognises.
+    pub settings: Option<serde_json::Value>,
+    /// Beans + roasters + shots + diagnostics — same shape as a library import.
+    #[serde(flatten)]
+    pub library: ImportPlan,
+}
+
+/// Build a backup bundle (JSONL): `crema-backup/v1` header → settings →
+/// roasters → beans → shots → profiles. Profiles + settings ride as verbatim
+/// JSON; beans/roasters/shots are typed + lossless. The shell must EXCLUDE
+/// OAuth tokens, per-device/BLE state, and photos before building the envelope.
+///
+/// `envelope_json` = `{profiles:[…], beans:[Bean], roasters:[Roaster],
+/// shots:[StoredShot], settings:{…}}`.
+///
+/// # Errors
+/// Returns the JSON parse error string when the envelope is malformed.
+pub fn export_backup_jsonl_from_json(
+    envelope_json: &str,
+    created_at_unix_ms: i64,
+    app_version: &str,
+    device_label: &str,
+) -> Result<String, String> {
+    #[derive(Deserialize)]
+    struct In {
+        #[serde(default)]
+        profiles: Vec<serde_json::Value>,
+        #[serde(default)]
+        beans: Vec<Bean>,
+        #[serde(default)]
+        roasters: Vec<Roaster>,
+        #[serde(default)]
+        shots: Vec<StoredShot>,
+        #[serde(default)]
+        settings: serde_json::Value,
+    }
+    let inp: In = serde_json::from_str(envelope_json).map_err(|e| e.to_string())?;
+    let header = BackupHeader {
+        kind: "crema-backup/v1".to_owned(),
+        created_at: created_at_unix_ms,
+        app_version: app_version.to_owned(),
+        device_label: device_label.to_owned(),
+        profile_count: inp.profiles.len(),
+        bean_count: inp.beans.len(),
+        roaster_count: inp.roasters.len(),
+        shot_count: inp.shots.len(),
+    };
+    let mut out = String::new();
+    push_line(&mut out, &header);
+    if inp.settings.is_object() {
+        push_tagged_line(&mut out, "settings", &inp.settings);
+    }
+    for r in &inp.roasters {
+        push_tagged_line(&mut out, "roaster", r);
+    }
+    for b in &inp.beans {
+        push_tagged_line(&mut out, "bean", b);
+    }
+    for s in &inp.shots {
+        push_tagged_line(&mut out, "shot", s);
+    }
+    for p in &inp.profiles {
+        push_tagged_line(&mut out, "profile", p);
+    }
+    Ok(out)
+}
+
+/// Parse a backup bundle. Reuses [`parse_jsonl`] for beans/roasters/shots (it
+/// skips the `profile`/`settings` lines as unknown kinds), then a second pass
+/// collects the verbatim profile objects + the settings blob (`kind` removed).
+#[must_use]
+pub fn parse_backup_jsonl(text: &str) -> BackupImportPlan {
+    let library = parse_jsonl(text).unwrap_or_default();
+    let mut profiles = Vec::new();
+    let mut settings = None;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Ok(mut value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+            continue;
+        };
+        let kind = value
+            .get("kind")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_owned();
+        match kind.as_str() {
+            "profile" => {
+                if let Some(map) = value.as_object_mut() {
+                    map.remove("kind");
+                }
+                profiles.push(value);
+            }
+            "settings" => {
+                if let Some(map) = value.as_object_mut() {
+                    map.remove("kind");
+                }
+                settings = Some(value);
+            }
+            _ => {}
+        }
+    }
+    BackupImportPlan {
+        profiles,
+        settings,
+        library,
+    }
+}
+
+/// JSON-out adapter for the wasm + uniffi bridges — the [`BackupImportPlan`] as JSON.
+///
+/// # Errors
+/// Returns the serialise error string (effectively never).
+pub fn import_backup_jsonl_to_plan_json(text: &str) -> Result<String, String> {
+    let plan = parse_backup_jsonl(text);
+    serde_json::to_string(&plan).map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -307,6 +467,49 @@ mod tests {
         assert!(lines[1].contains(r#""name":"Onyx""#));
         assert!(lines[2].contains(r#""kind":"bean""#));
         assert!(lines[2].contains(r#""name":"Yirg""#));
+    }
+
+    #[test]
+    fn backup_bundle_round_trips_all_types() {
+        let roasters = vec![sample_roaster("roaster:r1", "Onyx")];
+        let beans = vec![sample_bean("bean:b1", "Yirg", Some("roaster:r1"))];
+        let envelope = serde_json::json!({
+            "profiles": [{ "id": "profile:p1", "title": "Londinium", "steps": [] }],
+            "beans": beans,
+            "roasters": roasters,
+            "shots": [],
+            "settings": { "weightUnit": "g", "themeMode": "dark" },
+        });
+        let jsonl =
+            export_backup_jsonl_from_json(&envelope.to_string(), 1_700_000_000_000, "0.1", "Pixel")
+                .unwrap();
+        assert!(
+            jsonl
+                .lines()
+                .next()
+                .unwrap()
+                .contains(r#""kind":"crema-backup/v1""#)
+        );
+        assert!(jsonl.contains(r#""deviceLabel":"Pixel""#));
+        assert!(jsonl.contains(r#""profileCount":1"#));
+        assert!(jsonl.contains(r#""kind":"settings""#));
+        assert!(jsonl.contains(r#""kind":"profile""#));
+
+        let plan = parse_backup_jsonl(&jsonl);
+        assert_eq!(plan.profiles.len(), 1);
+        assert_eq!(plan.profiles[0]["id"], "profile:p1");
+        assert!(
+            plan.profiles[0].get("kind").is_none(),
+            "kind stripped from profile"
+        );
+        assert_eq!(plan.library.beans.len(), 1);
+        assert_eq!(plan.library.roasters.len(), 1);
+        let settings = plan.settings.expect("settings present");
+        assert_eq!(settings["weightUnit"], "g");
+        assert!(
+            settings.get("kind").is_none(),
+            "kind stripped from settings"
+        );
     }
 
     #[test]
