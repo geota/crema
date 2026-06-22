@@ -21,7 +21,7 @@ import {
 	visualizerCall,
 	type VisualizerCallError
 } from './visualizer-call.ts';
-import { initTestWasm } from '../wasm/test-init.ts';
+import { initTestWasm } from '$lib/testing/test-init';
 
 // `isRecoverable` now delegates the retry policy to the wasm core (CORE5).
 beforeAll(async () => {

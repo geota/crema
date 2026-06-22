@@ -32,7 +32,7 @@ import { HttpStatusError } from '../effect/errors.ts';
 import { blankBean, blankRoaster, type Bean, type Roaster } from '$lib/bean';
 import type { BeanLibraryStore } from '$lib/bean/store.svelte';
 import type { TokenSet } from '../visualizer/oauth.ts';
-import { initTestWasm } from '../wasm/test-init.ts';
+import { initTestWasm } from '$lib/testing/test-init';
 
 // `runSync` decodes each remote row through the wasm-backed `beanFromWire` /
 // `roasterFromWire` and encodes pushes through `beanToWire` (CORE1), so the

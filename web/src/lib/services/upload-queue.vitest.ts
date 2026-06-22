@@ -30,7 +30,7 @@ import { ShotSync } from './shot-sync.ts';
 import { BeanSync } from './bean-sync.ts';
 import { HttpStatusError, NetworkError, VisualizerPremiumGatedError } from '../effect/errors.ts';
 import { enqueueEntry, readQueue } from './queue-store.ts';
-import { initTestWasm } from '../wasm/test-init.ts';
+import { initTestWasm } from '$lib/testing/test-init';
 
 // The drain's recoverable-vs-drop decision goes through the wasm-backed
 // `isRecoverable` (CORE5), so init the bundle first.
