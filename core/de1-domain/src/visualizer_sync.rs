@@ -475,7 +475,10 @@ pub enum BeanReconcileAction {
 /// [`RoasterReconcileAction::Bind`]; else [`RoasterReconcileAction::Add`].
 /// Remotes with no `id` are skipped (mirrors the TS `if (!wire.id) continue`).
 #[must_use]
-pub fn reconcile_roasters(local: &[Roaster], remote: &[RoasterWire]) -> Vec<RoasterReconcileAction> {
+pub fn reconcile_roasters(
+    local: &[Roaster],
+    remote: &[RoasterWire],
+) -> Vec<RoasterReconcileAction> {
     let mut actions = Vec::with_capacity(remote.len());
     for wire in remote {
         let Some(remote_id) = wire.id.as_deref() else {
@@ -504,7 +507,9 @@ pub fn reconcile_roasters(local: &[Roaster], remote: &[RoasterWire]) -> Vec<Roas
             if needle.is_empty() {
                 return None;
             }
-            local.iter().find(|r| r.name.trim().to_lowercase() == needle)
+            local
+                .iter()
+                .find(|r| r.name.trim().to_lowercase() == needle)
         });
         if let Some(m) = by_name {
             actions.push(RoasterReconcileAction::Bind {
@@ -1129,7 +1134,10 @@ mod tests {
             std::slice::from_ref(&decoded),
             &names,
         );
-        assert!(matches!(actions.as_slice(), [BeanReconcileAction::Add { .. }]));
+        assert!(matches!(
+            actions.as_slice(),
+            [BeanReconcileAction::Add { .. }]
+        ));
 
         // Same roaster name → signatures match → Replace.
         names.insert("roaster:b".to_owned(), "Acme".to_owned());
@@ -1146,7 +1154,10 @@ mod tests {
         local.deleted_at = Some(1);
         let decoded = bean("bean:remote", "Yirg", None);
         let actions = reconcile_beans(&[local], &[decoded], &HashMap::new());
-        assert!(matches!(actions.as_slice(), [BeanReconcileAction::Add { .. }]));
+        assert!(matches!(
+            actions.as_slice(),
+            [BeanReconcileAction::Add { .. }]
+        ));
     }
 
     #[test]

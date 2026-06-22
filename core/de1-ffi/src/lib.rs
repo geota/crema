@@ -1163,10 +1163,7 @@ impl CremaBridge {
     /// Build a [`CoreOutput`] (JSON) whose commands disable the connected
     /// scale's on-scale LCD. Capability-driven.
     pub fn disable_scale_lcd(&self) -> Result<String, CremaError> {
-        self.core()
-            .disable_scale_lcd()
-            .map(json)
-            .map_err(crema_err)
+        self.core().disable_scale_lcd().map(json).map_err(crema_err)
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command emits one keep-alive
@@ -1175,10 +1172,7 @@ impl CremaBridge {
     /// Capability-driven — returns an error when the scale doesn't need
     /// a heartbeat.
     pub fn scale_heartbeat(&self) -> Result<String, CremaError> {
-        self.core()
-            .scale_heartbeat()
-            .map(json)
-            .map_err(crema_err)
+        self.core().scale_heartbeat().map(json).map_err(crema_err)
     }
 
     /// Build a [`CoreOutput`] (JSON) whose commands power off the
@@ -1186,10 +1180,7 @@ impl CremaBridge {
     /// support it; every other scale errors with
     /// `UnsupportedOnHardware`.
     pub fn power_off_scale(&self) -> Result<String, CremaError> {
-        self.core()
-            .power_off_scale()
-            .map(json)
-            .map_err(crema_err)
+        self.core().power_off_scale().map(json).map_err(crema_err)
     }
 
     /// Cache the user's chosen weight unit on the core so the LCD-enable
@@ -1206,10 +1197,7 @@ impl CremaBridge {
     /// Build a [`CoreOutput`] (JSON) whose command fires a beep on the
     /// connected scale. Capability-driven — Eureka / Solo support it.
     pub fn scale_beep(&self) -> Result<String, CremaError> {
-        self.core()
-            .scale_beep()
-            .map(json)
-            .map_err(crema_err)
+        self.core().scale_beep().map(json).map_err(crema_err)
     }
 
     /// Build a [`CoreOutput`] (JSON) whose command sets the connected
@@ -1229,10 +1217,7 @@ impl CremaBridge {
     /// scale's display unit. Capability-driven — Hiroia is the only
     /// scale that exposes a toggle today.
     pub fn toggle_scale_unit(&self) -> Result<String, CremaError> {
-        self.core()
-            .toggle_scale_unit()
-            .map(json)
-            .map_err(crema_err)
+        self.core().toggle_scale_unit().map(json).map_err(crema_err)
     }
 
     /// Toggle whether the connected scale should be powered off on
