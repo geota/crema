@@ -57,7 +57,11 @@ android {
     ndkVersion = "30.0.14904198"
 
     defaultConfig {
-        applicationId = "coffee.crema"
+        // Published app identity — permanent once on Play. Intentionally differs
+        // from `namespace` ("coffee.crema", the compile-time R/BuildConfig package):
+        // AGP decouples the two, so the store id can change without a package-wide
+        // source refactor. Every `coffee.crema.*` Kotlin symbol stays put.
+        applicationId = "dev.maceiras.crema"
         // Teclast P25T tablet runs Android 12 (API 31); also the phone floor.
         minSdk = 31
         // AGP 9 defaults targetSdk to compileSdk, but pin it explicitly so the
@@ -142,7 +146,7 @@ android {
                 "\"${visualizerClientIdOverride ?: ""}\"",
             )
         }
-        // Nightly / dev train (APK pipeline): a SEPARATE app — coffee.crema.nightly,
+        // Nightly / dev train (APK pipeline): a SEPARATE app — dev.maceiras.crema.nightly,
         // labelled "Crema Nightly" (src/nightly/res) — so it coexists with a stable
         // install. Fast debug-profile native lib; develop-signed when the secret is
         // set, else debug-signed. Built per-commit by .github/workflows/nightly.yml

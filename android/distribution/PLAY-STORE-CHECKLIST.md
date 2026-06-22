@@ -10,7 +10,7 @@ work + credentials only you can create. Drafts for the Console forms are below.
 
 ## 0. Prerequisites (one-time)
 - ☐ **Play Developer account** ($25 one-off): <https://play.google.com/console/signup>
-- ⚠️ Listing name **"Crema"** — confirm it's free on Play and you're OK with it (the package id `coffee.crema` is permanent once published).
+- ✅ Listing title **"Crema — for Decent Espresso"** (launcher label stays plain "Crema") — disambiguates from the other Play "Crema" apps (e.g. `com.cremasocial.crema`); the **"for X"** framing keeps it a third-party client, not implying Decent authorship. Package id **`dev.maceiras.crema`** (reverse-DNS of a domain you own) — permanent once published.
 
 ## 1. Signing & keys
 - ✅ Release `signingConfig` wired in `android/app/build.gradle.kts` (reads `KEYSTORE_*` env or `local.properties`).
@@ -25,16 +25,16 @@ work + credentials only you can create. Drafts for the Console forms are below.
 - ☐ **Enroll in Play App Signing** (Console → Test and release → App integrity). Google holds the real signing key; you upload signed with the upload key above. Strongly recommended (recover if you ever lose the upload key).
 
 ## 2. Build config — ✅ audited, Play-ready
-- ✅ `applicationId = coffee.crema` (permanent after publish).
+- ✅ `applicationId = dev.maceiras.crema` (permanent after publish). `namespace` stays `coffee.crema` (the R/BuildConfig source package) — AGP decouples the published id from the code package, so no source refactor.
 - ✅ `minSdk 31`, `targetSdk 36`, `compileSdk 36`; AAB output; versionCode/Name from the `vX.Y.Z` tag.
 - ✅ Manifest is clean: `BLUETOOTH_SCAN` (`neverForLocation`), `BLUETOOTH_CONNECT`, `INTERNET` only — no location, no `debuggable`, no cleartext; BLE required.
 - ⚠️ **Verify `targetSdk = 36` is a STABLE released API** at submission time — Play rejects apps targeting a *preview* SDK. If Android 16 (API 36) is still preview, set `targetSdk`/`compileSdk = 35`.
 - ⚠️ Optional: enable R8 (`isMinifyEnabled = true` + `isShrinkResources = true`) for a smaller AAB. Currently off (see the note at `build.gradle.kts`). Not blocking; if you enable it, test a release build end-to-end (Compose + UniFFI keep-rules).
 
 ## 3. Store listing — text — ✅ prepared in `fastlane/metadata/android/en-US/`
-- ✅ `title.txt` "Crema" (6/30) · `short_description.txt` (74/80) · `full_description.txt` (863/4000, with the "not affiliated with Decent" disclaimer).
+- ✅ `title.txt` "Crema — for Decent Espresso" (27/30) · `short_description.txt` (74/80, leads with "Decent DE1") · `full_description.txt` (863/4000, with the "not affiliated with Decent" disclaimer).
 - ✅ Release notes: `android/distribution/whatsnew/whatsnew-en-US` (374/500).
-- ⚠️ **Trademark**: the description references "Decent"/"DE1". The disclaimer mitigates it; keep the app name "Crema" (never "Decent …"). If review flags it, attest you're a compatible third-party client for the DE1's public Bluetooth protocol.
+- ⚠️ **Trademark**: listing title uses the **"for Decent Espresso"** framing — marks it a third-party client (not implying Decent authorship/endorsement), the recognized safe-harbor pattern; the launcher label stays plain **"Crema"**. Avoid "Decent Crema" / "Crema - Decent Espresso" (no "for" → reads as first-party). Keep the "not affiliated with Decent" disclaimer in the full description. If review still flags it, attest you're a compatible third-party client for the DE1's public Bluetooth protocol.
 
 ## 4. Store listing — graphics
 - ✅ **App icon 512×512** — `brand/out/icon-512.png` (and the in-app adaptive icon is set).
