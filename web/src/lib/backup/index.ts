@@ -64,7 +64,17 @@ export function backupContents(): BackupContents {
  * would only create duplicates on restore. Returns the per-type counts (or
  * `null` when there's nothing to back up).
  */
-export function exportBackup(cremaVersion = '0.0.1'): BackupContents | null {
+export interface BuiltBackup {
+	jsonl: string;
+	contents: BackupContents;
+}
+
+/**
+ * Build the `crema-backup/v1` JSONL for everything local, WITHOUT downloading —
+ * custom profiles only (built-ins ship with the app). Shared by the local
+ * export and the Drive upload. Returns null when there's nothing to back up.
+ */
+export function buildBackupJsonl(cremaVersion = '0.0.1'): BuiltBackup | null {
 	const beanStore = getBeanStore();
 	const history = getHistoryStore();
 	const settings = getSettingsStore();
@@ -73,7 +83,12 @@ export function exportBackup(cremaVersion = '0.0.1'): BackupContents | null {
 	const roasters = beanStore.roasters;
 	const shots = history.all;
 
-	if (customProfiles.length === 0 && beans.length === 0 && roasters.length === 0 && shots.length === 0) {
+	if (
+		customProfiles.length === 0 &&
+		beans.length === 0 &&
+		roasters.length === 0 &&
+		shots.length === 0
+	) {
 		return null;
 	}
 
@@ -88,17 +103,28 @@ export function exportBackup(cremaVersion = '0.0.1'): BackupContents | null {
 		settings: { ...settings.current, _shell: 'web' }
 	});
 
-	const jsonl = exportBackupJsonl(envelope, Date.now(), cremaVersion, WEB_DEVICE_LABEL);
-	downloadBlob(
-		`crema-backup-web-${filenameStamp()}.crema`,
-		new Blob([jsonl], { type: 'application/x-ndjson' })
-	);
 	return {
-		profiles: customProfiles.length,
-		beans: beans.length,
-		roasters: roasters.length,
-		shots: shots.length
+		jsonl: exportBackupJsonl(envelope, Date.now(), cremaVersion, WEB_DEVICE_LABEL),
+		contents: {
+			profiles: customProfiles.length,
+			beans: beans.length,
+			roasters: roasters.length,
+			shots: shots.length
+		}
 	};
+}
+
+/** Filename for a `.crema` backup (local download + Drive upload share it). */
+export function backupFileName(): string {
+	return `crema-backup-web-${filenameStamp()}.crema`;
+}
+
+/** Build + download a `.crema` bundle of everything local. */
+export function exportBackup(cremaVersion = '0.0.1'): BackupContents | null {
+	const built = buildBackupJsonl(cremaVersion);
+	if (!built) return null;
+	downloadBlob(backupFileName(), new Blob([built.jsonl], { type: 'application/x-ndjson' }));
+	return built.contents;
 }
 
 export type RestoreMode = 'merge' | 'wipe';

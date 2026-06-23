@@ -36,7 +36,15 @@
 	import StToggle from '../StToggle.svelte';
 	import BeanSyncSection from './BeanSyncSection.svelte';
 	import { getSettingsStore, type SharingPrivacy } from '$lib/settings';
-	import { exportBackup, restoreBackup, type RestoreMode } from '$lib/backup';
+	import {
+		backupFileName,
+		buildBackupJsonl,
+		exportBackup,
+		restoreBackup,
+		type RestoreMode
+	} from '$lib/backup';
+	import { getDriveAuthStore } from '$lib/drive/store.svelte';
+	import { downloadBackup, listBackups, uploadBackup } from '$lib/drive/rest';
 
 	const history = getHistoryStore();
 	const appCtx = getCremaAppContext();
@@ -229,6 +237,63 @@
 			backupNote = err instanceof Error ? `Restore failed: ${err.message}` : 'Restore failed.';
 		}
 	}
+
+	// ── Google Drive backup ──────────────────────────────────────────────
+	const drive = getDriveAuthStore();
+	let driveNote = $state<string | null>(null);
+	let driveBusy = $state(false);
+
+	async function driveConnect(): Promise<void> {
+		try {
+			await drive.signIn('/settings');
+		} catch (err) {
+			driveNote = err instanceof Error ? err.message : 'Could not start Google sign-in.';
+		}
+	}
+
+	/** Build the bundle + upload a fresh (timestamped) copy to Drive. */
+	async function driveBackup(): Promise<void> {
+		const built = buildBackupJsonl();
+		if (!built) {
+			driveNote = 'Nothing to back up yet.';
+			return;
+		}
+		driveBusy = true;
+		driveNote = 'Backing up to Drive…';
+		try {
+			const token = await drive.accessToken();
+			await uploadBackup(token, backupFileName(), built.jsonl);
+			const c = built.contents;
+			driveNote = `Backed up to Drive — ${c.profiles} profile(s), ${c.beans} bean(s), ${c.shots} shot(s).`;
+		} catch (err) {
+			driveNote = err instanceof Error ? `Drive backup failed: ${err.message}` : 'Drive backup failed.';
+		} finally {
+			driveBusy = false;
+		}
+	}
+
+	/** Restore the most-recent Drive backup (merge). */
+	async function driveRestoreLatest(): Promise<void> {
+		driveBusy = true;
+		driveNote = 'Fetching from Drive…';
+		try {
+			const token = await drive.accessToken();
+			const files = await listBackups(token);
+			if (files.length === 0) {
+				driveNote = 'No backups found in Drive.';
+				return;
+			}
+			const text = await downloadBackup(token, files[0].id);
+			const r = restoreBackup(text, 'merge');
+			driveNote =
+				`Restored from Drive (${files[0].name}) — ${r.profiles} profile(s), ` +
+				`${r.beans} bean(s), ${r.shots} shot(s)${r.settingsApplied ? ' + settings.' : '.'}`;
+		} catch (err) {
+			driveNote = err instanceof Error ? `Drive restore failed: ${err.message}` : 'Drive restore failed.';
+		} finally {
+			driveBusy = false;
+		}
+	}
 </script>
 
 <StSectionHead
@@ -410,6 +475,60 @@
 	onchange={onRestoreFile}
 	style="display: none"
 />
+
+<StGroup
+	title="Google Drive"
+	sub={driveNote ??
+		(drive.connected
+			? 'Back up to your Drive or restore your most recent backup. Crema only sees the files it created.'
+			: drive.configured
+				? 'Connect Google Drive to back up online (drive.file — Crema only sees its own backups).'
+				: 'Set VITE_GOOGLE_DRIVE_CLIENT_ID in web/.env.local to enable Drive backup.')}
+>
+	{#if drive.connected}
+		<StRow title="Back up to Drive" sub="Upload a fresh bundle to your Google Drive.">
+			{#snippet control()}
+				<StButton
+					label={driveBusy ? 'Working…' : 'Back up'}
+					icon="cloud-arrow-up"
+					variant="primary"
+					disabled={driveBusy}
+					onClick={driveBackup}
+				/>
+			{/snippet}
+		</StRow>
+		<StRow
+			title="Restore latest from Drive"
+			sub="Merge your most-recent Drive backup into this device."
+		>
+			{#snippet control()}
+				<StButton
+					label={driveBusy ? 'Working…' : 'Restore'}
+					icon="cloud-arrow-down"
+					disabled={driveBusy}
+					onClick={driveRestoreLatest}
+				/>
+			{/snippet}
+		</StRow>
+		<StRow title="Disconnect Google Drive" sub="Forget the Drive sign-in on this device.">
+			{#snippet control()}
+				<StButton label="Disconnect" icon="sign-out" onClick={() => drive.signOut()} />
+			{/snippet}
+		</StRow>
+	{:else}
+		<StRow title="Connect Google Drive" sub="Sign in to enable online backup.">
+			{#snippet control()}
+				<StButton
+					label="Connect"
+					icon="sign-in"
+					variant="primary"
+					disabled={!drive.configured}
+					onClick={driveConnect}
+				/>
+			{/snippet}
+		</StRow>
+	{/if}
+</StGroup>
 
 <StGroup title="Local export" sub="Download a copy of your local data.">
 	<StRow
