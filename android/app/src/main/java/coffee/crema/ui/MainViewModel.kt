@@ -22,6 +22,7 @@ import coffee.crema.core.blankCremaProfile
 import coffee.crema.core.builtinCremaProfiles
 import coffee.crema.core.cremaProfileToWire
 import coffee.crema.core.importBeanconquerorJson
+import coffee.crema.core.exportBackupJsonl
 import coffee.crema.core.exportBeanconquerorMainJson
 import coffee.crema.core.maintenanceReadout
 import coffee.crema.beans.BeanLibrary
@@ -1555,6 +1556,181 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             notifyUser("Imported ${toAdd.size} shot(s)")
             historyStore.save(next)
         }
+    }
+
+    // ── Full-app backup & restore (crema-backup/v1) ──────────────────────────
+    // One portable bundle: custom profiles + beans/roasters + shot history + the
+    // portable settings subset, (de)serialised by the core (exportBackupJsonl /
+    // the line-tagged JSONL). OAuth tokens + per-device BLE/proxy state are
+    // stripped on export and preserved on import — a backup moves between devices
+    // without dragging this device's bindings along.
+
+    /** Restore strategy chosen in the UI. */
+    enum class RestoreMode { MERGE, WIPE }
+
+    /** Build the whole-app backup bundle as `crema-backup/v1` JSONL, or null + a
+     *  notice when there's nothing to back up. Custom profiles only — built-ins
+     *  ship with the app, so backing them up would only create duplicates. */
+    fun backupBundleJson(): String? {
+        val customs = customProfilesJson
+        val s = _ui.value
+        if (customs.isEmpty() && s.beans.isEmpty() && s.roasters.isEmpty() && s.history.isEmpty()) {
+            notifyUser("Nothing to back up yet"); return null
+        }
+        // Portable settings only — drop per-device identity (BLE addresses, LAN
+        // proxy, paired devices); they're meaningless on another device.
+        val portable = currentPrefs().copy(
+            de1Address = null,
+            scaleAddress = null,
+            proxyRole = "normal",
+            proxyPrimaryHost = "",
+            proxyPrimaryPort = 0,
+            replayPrimary = false,
+            pairedDevices = emptyList(),
+        )
+        val beansJson = runCatching { json.encodeToString(ListSerializer(Bean.serializer()), s.beans) }.getOrElse { "[]" }
+        val roastersJson = runCatching { json.encodeToString(ListSerializer(Roaster.serializer()), s.roasters) }.getOrElse { "[]" }
+        val shotsJson = runCatching { json.encodeToString(ListSerializer(StoredShot.serializer()), s.history) }.getOrElse { "[]" }
+        val settingsJson = runCatching { json.encodeToString(AppPrefs.serializer(), portable) }.getOrElse { "{}" }
+        val envelope = buildString {
+            append("{\"profiles\":[").append(customs.joinToString(","))
+            append("],\"beans\":").append(beansJson)
+            append(",\"roasters\":").append(roastersJson)
+            append(",\"shots\":").append(shotsJson)
+            append(",\"settings\":").append(settingsJson)
+            append("}")
+        }
+        return runCatching {
+            exportBackupJsonl(envelope, System.currentTimeMillis(), coffee.crema.BuildConfig.VERSION_NAME, deviceLabel())
+        }.getOrElse { appendLog("Backup failed: ${it.message}"); notifyUser("Backup failed"); null }
+    }
+
+    /** A suggested filename for the SAF create-document picker. */
+    fun backupFileName(): String {
+        val label = deviceLabel().replace(Regex("[^A-Za-z0-9._-]"), "_")
+        val c = java.util.Calendar.getInstance()
+        val stamp = "%04d%02d%02d-%02d%02d".format(
+            c.get(java.util.Calendar.YEAR), c.get(java.util.Calendar.MONTH) + 1, c.get(java.util.Calendar.DAY_OF_MONTH),
+            c.get(java.util.Calendar.HOUR_OF_DAY), c.get(java.util.Calendar.MINUTE),
+        )
+        return "crema-backup-$label-$stamp.crema"
+    }
+
+    /** Restore a `crema-backup` bundle from a SAF [uri]. [RestoreMode.MERGE] adds
+     *  only records whose ids aren't already present (lossless re-restore);
+     *  [RestoreMode.WIPE] clears the local library / history / custom profiles
+     *  first (destructive — the UI gates it behind a type-to-confirm). The
+     *  portable settings subset is applied in both modes; this device's BLE/proxy
+     *  bindings are always kept. */
+    fun restoreBackup(uri: Uri, mode: RestoreMode) {
+        viewModelScope.launch {
+            val text = readUriText(uri)?.trim()
+            if (text.isNullOrBlank()) { notifyUser("Restore failed — couldn't read that file"); return@launch }
+
+            val profiles = ArrayList<String>()
+            val beans = ArrayList<Bean>()
+            val roasters = ArrayList<Roaster>()
+            val shots = ArrayList<StoredShot>()
+            var restoredPrefs: AppPrefs? = null
+            var sawHeader = false
+            for (raw in text.lineSequence()) {
+                val line = raw.trim()
+                if (line.length < 2 || line[0] != '{') continue
+                val obj = runCatching { json.parseToJsonElement(line).jsonObject }.getOrNull() ?: continue
+                when ((obj["kind"] as? JsonPrimitive)?.content) {
+                    "crema-backup/v1" -> sawHeader = true
+                    "settings" -> restoredPrefs = runCatching { json.decodeFromString(AppPrefs.serializer(), stripKind(obj)) }.getOrNull()
+                    "roaster" -> runCatching { json.decodeFromString(Roaster.serializer(), stripKind(obj)) }.getOrNull()?.let(roasters::add)
+                    "bean" -> runCatching { json.decodeFromString(Bean.serializer(), stripKind(obj)) }.getOrNull()?.let(beans::add)
+                    "shot" -> runCatching { json.decodeFromString(StoredShot.serializer(), stripKind(obj)) }.getOrNull()?.let(shots::add)
+                    "profile" -> profiles.add(stripKind(obj))
+                    else -> {}
+                }
+            }
+            if (!sawHeader) { notifyUser("Restore failed — not a Crema backup"); return@launch }
+
+            if (mode == RestoreMode.WIPE) {
+                customProfilesJson = emptyList()
+                _ui.update { it.copy(beans = emptyList(), roasters = emptyList(), history = emptyList(), activeBeanId = null) }
+            }
+
+            // Profiles — add customs whose id isn't already known (built-in or custom).
+            val knownProfileIds = _ui.value.profiles.map { it.id }.toHashSet()
+            val newProfiles = profiles.filter { p -> profileIdOf(p, json)?.let { it !in knownProfileIds } ?: false }
+            customProfilesJson = customProfilesJson + newProfiles
+
+            // Beans / roasters / shots — id-union (preserves ids, so a re-restore dedups).
+            val s = _ui.value
+            val haveBeans = s.beans.map { it.id }.toHashSet()
+            val haveRoasters = s.roasters.map { it.id }.toHashSet()
+            val haveShots = s.history.map { it.id }.toHashSet()
+            val newBeans = beans.filterNot { it.id in haveBeans }
+            val newRoasters = roasters.filterNot { it.id in haveRoasters }
+            val newShots = shots.filterNot { it.id in haveShots }
+            _ui.update { it.copy(
+                beans = it.beans + newBeans,
+                roasters = it.roasters + newRoasters,
+                history = newShots + it.history,
+                activeBeanId = it.activeBeanId ?: newBeans.firstOrNull()?.id,
+            ) }
+
+            refreshProfiles()
+            persistCustomProfiles()
+            persistLibrary()
+            historyStore.save(_ui.value.history)
+            restoredPrefs?.let { applyRestoredSettings(it) }
+
+            notifyUser(
+                "Restored ${newProfiles.size} profile(s) · ${newBeans.size} bean(s) · " +
+                    "${newRoasters.size} roaster(s) · ${newShots.size} shot(s)",
+            )
+        }
+    }
+
+    /** Strip the `kind` discriminator off a tagged JSONL object → the bare record JSON. */
+    private fun stripKind(obj: JsonObject): String =
+        json.encodeToString(JsonObject.serializer(), JsonObject(obj.filterKeys { it != "kind" }))
+
+    /** Apply a restored backup's PORTABLE settings to the live UI + persist, while
+     *  preserving this device's per-device bindings (BLE addresses, LAN proxy,
+     *  paired devices). Mirrors loadPrefs' hydration for the portable fields;
+     *  activeProfileId is deliberately NOT restored, so a merge never hijacks the
+     *  current selection. */
+    private fun applyRestoredSettings(p: AppPrefs) {
+        _ui.update { it.copy(
+            themeMode = p.themeMode,
+            maxShotDurationS = p.maxShotDurationS,
+            autoTare = p.autoTare,
+            stopOnWeight = p.stopOnWeight,
+            steamEco = p.steamEco,
+            preFlush = p.preFlush,
+            steamPurge = p.steamPurge,
+            chartChannels = p.chartChannels,
+            keepScreenOnBrew = p.keepScreenOnBrew,
+            grinderModel = p.grinderModel,
+            suppressDe1Sleep = p.suppressDe1Sleep,
+            showDebugPanel = p.showDebugPanel,
+            defaultDoseG = p.defaultDoseG,
+            defaultRatio = p.defaultRatio,
+            defaultBrewTempC = p.defaultBrewTempC,
+            defaultPreinfuseS = p.defaultPreinfuseS,
+            weightUnit = p.weightUnit,
+            tempUnit = p.tempUnit,
+            pressureUnit = p.pressureUnit,
+            volumeUnit = p.volumeUnit,
+            qcSteamTimeS = p.qcSteamTimeS,
+            qcSteamFlowMlS = p.qcSteamFlowMlS,
+            qcSteamTempC = p.qcSteamTempC,
+            qcHotWaterTempC = p.qcHotWaterTempC,
+            qcHotWaterVolumeMl = p.qcHotWaterVolumeMl,
+            qcFlushTimeS = p.qcFlushTimeS,
+            qcFlushTempC = p.qcFlushTempC,
+            qcGrind = p.qcGrind,
+        ) }
+        runCatching { bridge.setMaxShotDuration(p.maxShotDurationS) }
+        runCatching { bridge.setAutoTare(p.autoTare) }
+        runCatching { bridge.setStopOnWeight(p.stopOnWeight) }
+        persistPrefs()
     }
 
     /** Remove a stored shot from the local history. Persisted. */

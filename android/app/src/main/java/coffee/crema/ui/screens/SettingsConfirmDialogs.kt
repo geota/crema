@@ -1,5 +1,6 @@
 package coffee.crema.ui.screens
 
+import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
@@ -34,7 +35,9 @@ class SettingsConfirmState(
     flowMultiplier: MutableState<Float?>,
     cycle: MutableState<String?>,
     resync: MutableState<Boolean>,
+    restoreWipe: MutableState<Uri?>,
     val launchSave: (name: String, content: String?) -> Unit,
+    val launchRestore: (mode: MainViewModel.RestoreMode) -> Unit,
 ) {
     var confirmResetPrefs by resetPrefs
     var confirmErase by erase
@@ -43,6 +46,10 @@ class SettingsConfirmState(
     var pendingFlowMultiplier by flowMultiplier
     var pendingCycle by cycle
     var pendingResync by resync
+
+    /** A backup file the user picked for a REPLACE (wipe) restore, awaiting the
+     *  type-to-confirm. Null ⟺ nothing pending. (Merge restores apply at once.) */
+    var pendingRestoreWipe by restoreWipe
 }
 
 /** Build the shared confirm-state holder (saveable flags + SAF export launcher). */
@@ -61,11 +68,26 @@ fun rememberSettingsConfirmState(vm: MainViewModel): SettingsConfirmState {
         val t = pendingExport.value; pendingExport.value = null
         if (uri != null && t != null) vm.writeTextToUri(uri, t)
     }
+    // SAF restore-from-file plumbing. A MERGE applies at once; a REPLACE (wipe)
+    // stashes the picked file so the dialog can gate it behind a typed confirm
+    // before anything is deleted.
+    val restoreWipe = remember { mutableStateOf<Uri?>(null) }
+    val pendingRestoreMode = remember { mutableStateOf(MainViewModel.RestoreMode.MERGE) }
+    val openLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            if (pendingRestoreMode.value == MainViewModel.RestoreMode.WIPE) restoreWipe.value = uri
+            else vm.restoreBackup(uri, MainViewModel.RestoreMode.MERGE)
+        }
+    }
     return remember(vm) {
         SettingsConfirmState(
-            resetPrefs, erase, heaterVoltage, lineFreq, flowMultiplier, cycle, resync,
+            resetPrefs, erase, heaterVoltage, lineFreq, flowMultiplier, cycle, resync, restoreWipe,
             launchSave = { name, content ->
                 if (content != null) { pendingExport.value = content; saveLauncher.launch(name) }
+            },
+            launchRestore = { mode ->
+                pendingRestoreMode.value = mode
+                openLauncher.launch(arrayOf("application/json", "application/octet-stream", "*/*"))
             },
         )
     }
@@ -174,4 +196,17 @@ fun SettingsConfirmDialogs(state: SettingsConfirmState, vm: MainViewModel, ui: M
         onConfirm = { vm.visualizer.resyncAllShots(ui.history); state.pendingResync = false },
         onDismiss = { state.pendingResync = false },
     )
+    // Replace-restore (wipe) — the same type-to-confirm gate as Erase all data.
+    state.pendingRestoreWipe?.let { uri ->
+        CremaConfirmDialog(
+            title = "Replace all data?",
+            body = "Every bean, roaster, shot and custom profile on this device is deleted and replaced with the backup. Built-in profiles remain. This can't be undone. Type ERASE to confirm.",
+            confirmLabel = "Replace everything",
+            icon = "trash",
+            danger = true,
+            requireTyped = "ERASE",
+            onConfirm = { vm.restoreBackup(uri, MainViewModel.RestoreMode.WIPE); state.pendingRestoreWipe = null },
+            onDismiss = { state.pendingRestoreWipe = null },
+        )
+    }
 }
