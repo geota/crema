@@ -3,11 +3,12 @@
  * cross-shell `crema-backup/v1` bundle (core `export_backup_jsonl_from_json` /
  * the line-tagged JSONL; mirrors Android's `MainViewModel.backupBundleJson`).
  *
- * One `.crema` file = custom profiles + beans/roasters + shot history + the
- * portable settings subset, serialised by the Rust core so web and Android
- * emit **identical bytes** — a backup moves between devices. Photos (IndexedDB
- * blobs) are NOT bundled here; they stay device-local (a future `.crema.zip`
- * wrapper can carry them, as `$lib/bean/export` already does for the library).
+ * One `.crema.jsonl` file (line-delimited JSON / NDJSON) = custom profiles +
+ * beans/roasters + shot history + the portable settings subset, serialised by
+ * the Rust core so web and Android emit **identical bytes** — a backup moves
+ * between devices. Photos (IndexedDB blobs) are NOT bundled here; they stay
+ * device-local (a future `.crema.zip` wrapper can carry the JSONL + images, as
+ * `$lib/bean/export` already does for the library).
  *
  * Excluded from the bundle: Visualizer OAuth tokens (separate storage) and any
  * per-device state. The web has no persisted BLE address (Web Bluetooth
@@ -23,11 +24,15 @@ import {
 	getSettingsStore,
 	settingsToCommon,
 	applyCommonToSettings,
-	settingsPlatformExtras
+	settingsPlatformExtras,
+	DEFAULT_SETTINGS,
+	type Settings
 } from '$lib/settings';
 import { getProfileStore } from '$lib/profiles';
 import { getMaintenanceStore } from '$lib/maintenance';
 import { visualizerSyncPrefs, applyVisualizerSyncPrefs } from '$lib/visualizer/sync-config';
+import { getBeanImageStore, refForBean } from '$lib/bean/image-storage';
+import { strToU8, strFromU8, zipSync, unzipSync } from 'fflate';
 import { readJson } from '$lib/utils/storage';
 import { downloadBlob, filenameStamp } from '$lib/utils/download';
 import type { Bean, Roaster } from '$lib/bean/model';
@@ -50,6 +55,14 @@ export interface BackupContents {
 	beans: number;
 	roasters: number;
 	shots: number;
+}
+
+/** A human one-liner for a completed backup. Falls back to "settings &
+ *  favourites" when there's no library data (settings / pins always ride along). */
+export function describeBackup(c: BackupContents): string {
+	return c.profiles || c.beans || c.roasters || c.shots
+		? `${c.profiles} profile(s), ${c.beans} bean(s), ${c.roasters} roaster(s), ${c.shots} shot(s)`
+		: 'settings & favourites';
 }
 
 /** Count what an export would include — lets the UI disable "Back up" / show a
@@ -77,6 +90,15 @@ export interface BuiltBackup {
 	contents: BackupContents;
 }
 
+/** Whether settings are still at their canonical defaults — used by the empty
+ *  check so a customised theme / units / brew default counts as backup-worthy
+ *  even before the user has created any profiles / beans / shots. */
+function settingsAreDefault(s: Settings): boolean {
+	const d = DEFAULT_SETTINGS as unknown as Record<string, unknown>;
+	const cur = s as unknown as Record<string, unknown>;
+	return Object.keys(d).every((k) => JSON.stringify(cur[k]) === JSON.stringify(d[k]));
+}
+
 /**
  * Build the `crema-backup/v1` JSONL for everything local, WITHOUT downloading —
  * custom profiles only (built-ins ship with the app). Shared by the local
@@ -90,13 +112,16 @@ export function buildBackupJsonl(cremaVersion = '0.0.1'): BuiltBackup | null {
 	const beans = beanStore.beans;
 	const roasters = beanStore.roasters;
 	const shots = history.all;
+	const meta = getProfileStore().backupMeta();
 
-	if (
-		customProfiles.length === 0 &&
-		beans.length === 0 &&
-		roasters.length === 0 &&
-		shots.length === 0
-	) {
+	// "Nothing to back up" only when EVERYTHING the bundle carries is empty/default —
+	// not just the four data types. Customised settings (theme, units, …) and
+	// pinned / hidden built-in profiles are backup-worthy on their own, even with no
+	// custom profiles / beans / shots yet.
+	const noData =
+		customProfiles.length === 0 && beans.length === 0 && roasters.length === 0 && shots.length === 0;
+	const noProfileOrg = meta.pinned.length === 0 && meta.hiddenBuiltins.length === 0;
+	if (noData && noProfileOrg && settingsAreDefault(settings.current)) {
 		return null;
 	}
 
@@ -138,16 +163,46 @@ export function buildBackupJsonl(cremaVersion = '0.0.1'): BuiltBackup | null {
 	};
 }
 
-/** Filename for a `.crema` backup (local download + Drive upload share it). */
+/** Filename for a backup (local download + Drive upload share it). A `.crema.zip`
+ *  is a real zip: `backup.jsonl` (line-delimited JSON) + `images/<beanId>` photo
+ *  blobs. The `crema` prefix keeps it recognisable + is what Drive lists on. */
 export function backupFileName(): string {
-	return `crema-backup-web-${filenameStamp()}.crema`;
+	return `crema-backup-web-${filenameStamp()}.crema.zip`;
 }
 
-/** Build + download a `.crema` bundle of everything local. */
-export function exportBackup(cremaVersion = '0.0.1'): BackupContents | null {
+/** The JSONL member name inside a `.crema.zip` (sits next to `images/<beanId>`). */
+const BACKUP_JSONL_MEMBER = 'backup.jsonl';
+
+/**
+ * Build the full `.crema.zip` bundle: the `crema-backup/v1` JSONL plus every
+ * bean photo (`images/<beanId>`, pulled from IndexedDB). A backup with no photos
+ * is still a single-member zip, so the restore path is uniform. Returns null when
+ * there's nothing to back up.
+ */
+export async function buildBackupZip(
+	cremaVersion = '0.0.1'
+): Promise<{ zip: Uint8Array; contents: BackupContents } | null> {
 	const built = buildBackupJsonl(cremaVersion);
 	if (!built) return null;
-	downloadBlob(backupFileName(), new Blob([built.jsonl], { type: 'application/x-ndjson' }));
+	const entries: Record<string, Uint8Array> = { [BACKUP_JSONL_MEMBER]: strToU8(built.jsonl) };
+	const imageStore = getBeanImageStore();
+	for (const bean of getBeanStore().beans) {
+		if (!bean.imageRef) continue;
+		try {
+			const blob = await imageStore.get(bean.imageRef);
+			if (blob) entries[`images/${bean.id}`] = new Uint8Array(await blob.arrayBuffer());
+		} catch {
+			// IDB miss / read error — skip this bean's photo, don't fail the backup.
+		}
+	}
+	return { zip: zipSync(entries), contents: built.contents };
+}
+
+/** Build + download a `.crema.zip` bundle of everything local (incl. bean photos). */
+export async function exportBackup(cremaVersion = '0.0.1'): Promise<BackupContents | null> {
+	const built = await buildBackupZip(cremaVersion);
+	if (!built) return null;
+	downloadBlob(backupFileName(), new Blob([built.zip as BlobPart], { type: 'application/zip' }));
 	return built.contents;
 }
 
@@ -319,4 +374,49 @@ export function restoreBackup(text: string, mode: RestoreMode): RestoreSummary {
 		shots: addedShots,
 		settingsApplied
 	};
+}
+
+/** Local-file `.crema.zip` magic: `PK\x03\x04`. */
+function isZip(bytes: Uint8Array): boolean {
+	return (
+		bytes.length >= 4 &&
+		bytes[0] === 0x50 &&
+		bytes[1] === 0x4b &&
+		bytes[2] === 0x03 &&
+		bytes[3] === 0x04
+	);
+}
+
+/**
+ * Restore a backup from raw bytes (or text) — the entry point the file picker +
+ * Drive download use. Detects a `.crema.zip` (unzips → restores `backup.jsonl` +
+ * replays bean photos into IndexedDB) vs a legacy `.crema.jsonl` / `.crema` text
+ * bundle. Photos key on bean id, so they survive a cross-device restore.
+ */
+export async function restoreBackupData(
+	data: ArrayBuffer | Uint8Array | string,
+	mode: RestoreMode
+): Promise<RestoreSummary> {
+	if (typeof data === 'string') return restoreBackup(data, mode);
+	const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
+	if (!isZip(bytes)) return restoreBackup(strFromU8(bytes), mode);
+
+	const files = unzipSync(bytes);
+	const jsonl = files[BACKUP_JSONL_MEMBER] ?? files['crema.jsonl'];
+	if (!jsonl) throw new Error('Not a Crema backup zip (no backup.jsonl inside).');
+	const summary = restoreBackup(strFromU8(jsonl), mode);
+
+	// Replay bean photos into IndexedDB, keyed by bean id (the restored bean's
+	// imageRef already points at this canonical web key for a web-origin backup).
+	const imageStore = getBeanImageStore();
+	for (const [path, fileBytes] of Object.entries(files)) {
+		if (!path.startsWith('images/') || fileBytes.length === 0) continue;
+		const beanId = path.slice('images/'.length);
+		try {
+			await imageStore.put(refForBean(beanId), new Blob([fileBytes as BlobPart]));
+		} catch {
+			// IDB write error — skip this photo, the rest of the restore stands.
+		}
+	}
+	return summary;
 }

@@ -32,7 +32,13 @@ const config = {
 			directives: {
 				'default-src': ['self'],
 				// SvelteKit appends the inline-bootstrap hash here automatically.
-				'script-src': ['self', 'wasm-unsafe-eval'],
+				// `accounts.google.com` serves the Google Identity Services (GIS)
+				// client library used by the Drive backup OAuth (token model).
+				'script-src': ['self', 'wasm-unsafe-eval', 'https://accounts.google.com'],
+				// GIS opens a popup AND (for the silent re-grant) a hidden iframe to
+				// accounts.google.com; frame-src otherwise inherits default-src 'self'
+				// and would block it. Drive backup only.
+				'frame-src': ['self', 'https://accounts.google.com'],
 				// 'unsafe-inline' covers static style="" attributes (e.g. the
 				// `display: contents` body wrapper); googleapis serves the
 				// Newsreader/Hanken/JetBrains @font-face stylesheet (see app.html).

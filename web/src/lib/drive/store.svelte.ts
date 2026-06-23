@@ -1,77 +1,83 @@
 /**
- * `$lib/drive/store` — the reactive Google Drive auth state + token lifecycle
- * for the backup feature. One process-wide singleton ({@link getDriveAuthStore}).
+ * `$lib/drive/store` — the reactive Google Drive auth state for the backup
+ * feature. One process-wide singleton ({@link getDriveAuthStore}).
  *
- * Holds the persisted {@link DriveTokenSet} and hands out a *valid* access
- * token on demand ({@link DriveAuthStore.accessToken}), transparently swapping
- * the refresh token for a fresh access token when the stored one is near
- * expiry. A failed refresh signs out so the UI re-prompts.
+ * Uses the GIS **token model** (see `$lib/drive/oauth`): no client secret, no
+ * refresh token, no redirect. {@link DriveAuthStore.connect} opens the consent
+ * popup; {@link DriveAuthStore.accessToken} hands out a valid token, silently
+ * re-granting one (no consent screen after the first authorization) when the
+ * held one is missing or near expiry.
  *
- * The token is the only Drive secret on-device; it is EXCLUDED from the local
- * backup bundle (like the Visualizer token) — restore re-auths.
+ * The token is short-lived and session-scoped — kept in `sessionStorage` (GIS's
+ * recommendation, NOT `localStorage`), so it's gone on tab close and re-acquired
+ * silently on the next backup. It is EXCLUDED from the local backup bundle.
  */
 
-import { readJson, writeJson } from '$lib/utils/storage';
-import {
-	isConfigured,
-	refreshGoogleDriveToken,
-	startGoogleDriveLogin,
-	type DriveTokenSet
-} from './oauth';
+import { isConfigured, requestDriveToken, revokeDriveToken, type DriveToken } from './oauth';
 
 const TOKEN_KEY = 'crema.drive.token.v1';
-/** Refresh this far before the hard expiry so an in-flight upload won't 401. */
+/** Re-grant this far before the hard expiry so an in-flight upload won't 401. */
 const EXPIRY_SKEW_MS = 60_000;
 
+function readToken(): DriveToken | null {
+	if (typeof sessionStorage === 'undefined') return null;
+	try {
+		const v = sessionStorage.getItem(TOKEN_KEY);
+		return v ? (JSON.parse(v) as DriveToken) : null;
+	} catch {
+		return null;
+	}
+}
+
+function writeToken(token: DriveToken | null): void {
+	if (typeof sessionStorage === 'undefined') return;
+	if (token) sessionStorage.setItem(TOKEN_KEY, JSON.stringify(token));
+	else sessionStorage.removeItem(TOKEN_KEY);
+}
+
 export class DriveAuthStore {
-	private token = $state.raw<DriveTokenSet | null>(
-		readJson<DriveTokenSet | null>(TOKEN_KEY, null)
-	);
+	private token = $state.raw<DriveToken | null>(readToken());
 
 	/** Whether this build has a Drive client_id configured. */
 	get configured(): boolean {
 		return isConfigured();
 	}
 
-	/** Whether a (possibly-expired but refreshable) Drive token is held. */
+	/** Whether a still-valid Drive token is held this session. */
 	get connected(): boolean {
-		return this.token !== null;
+		return this.token !== null && Date.now() < this.token.expiresAt;
 	}
 
-	/** Adopt + persist a freshly-exchanged token (called from the callback). */
-	set(token: DriveTokenSet): void {
+	/** Open the GIS consent popup and store the resulting access token. Must be
+	 *  called from a user gesture (button click). */
+	async connect(): Promise<void> {
+		const token = await requestDriveToken('consent');
 		this.token = token;
-		writeJson(TOKEN_KEY, token);
+		writeToken(token);
 	}
 
-	/** Begin the OAuth redirect (navigates away). */
-	signIn(returnTo = '/settings'): Promise<void> {
-		return startGoogleDriveLogin(returnTo);
-	}
-
-	/** Forget the token locally (does not revoke server-side). */
+	/** Forget the token locally + revoke the grant (best-effort). */
 	signOut(): void {
+		const t = this.token;
 		this.token = null;
-		writeJson(TOKEN_KEY, null);
+		writeToken(null);
+		if (t) void revokeDriveToken(t.accessToken);
 	}
 
 	/**
-	 * A valid access token for a Drive REST call — refreshes transparently when
-	 * the stored one is within the expiry skew. Signs out + rethrows when the
-	 * refresh is rejected, so the caller can prompt a re-sign-in.
+	 * A valid access token for a Drive REST call. Re-grants silently (no consent
+	 * screen after the first authorization) when the held token is missing or
+	 * within the expiry skew. Must be reached from a user gesture so the (rare)
+	 * fallback popup isn't blocked; throws if the grant needs interaction the
+	 * user declines, so the caller can prompt a reconnect.
 	 */
 	async accessToken(): Promise<string> {
 		const t = this.token;
-		if (!t) throw new Error('Not signed in to Google Drive.');
-		if (Date.now() < t.expiresAt - EXPIRY_SKEW_MS) return t.accessToken;
-		try {
-			const refreshed = await refreshGoogleDriveToken(t.refreshToken);
-			this.set(refreshed);
-			return refreshed.accessToken;
-		} catch (err) {
-			this.signOut();
-			throw err;
-		}
+		if (t && Date.now() < t.expiresAt - EXPIRY_SKEW_MS) return t.accessToken;
+		const fresh = await requestDriveToken('');
+		this.token = fresh;
+		writeToken(fresh);
+		return fresh.accessToken;
 	}
 }
 
