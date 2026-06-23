@@ -20,6 +20,7 @@
 
 import { defaultBrewDefaults } from '$lib/wasm/de1_wasm';
 import { readJson, writeJson } from '$lib/utils/storage';
+import { readSyncConfig } from '$lib/visualizer/sync-config';
 import type { CommonSettings } from '$lib/core/crema-core';
 
 /** localStorage key for the bundle of app preferences ({@link Settings}). */
@@ -456,6 +457,15 @@ function loadSettings(): Settings {
 			...platform
 		});
 	}
+	// Pre-unification FLAT blob (no `common`). The next persist() rewrites this key
+	// into the nested shape, which DROPS the legacy Visualizer upload options that
+	// used to live here (`visualizerAutoUpload` / `visualizerPrivacy` / …). The
+	// Visualizer-prefs migration reads them straight from this same localStorage key
+	// — so trigger it now (idempotent), before the rewrite, so a user's upload prefs
+	// can't be lost to a settings write that happens before the first sync read.
+	if (stored && typeof stored === 'object' && 'visualizerAutoUpload' in stored) {
+		readSyncConfig();
+	}
 	return { ...DEFAULT_SETTINGS, ...((stored as Partial<Settings> | null) ?? {}) };
 }
 
@@ -503,6 +513,17 @@ export class SettingsStore {
 	set<K extends keyof Settings>(key: K, value: Settings[K]): void {
 		this.current = { ...this.current, [key]: value };
 		if (key === 'theme') applyTheme(this.current.theme);
+		this.persist();
+	}
+
+	/**
+	 * Replace the whole preference bundle in a single write — for a backup restore
+	 * that has already assembled the full target {@link Settings}. Avoids the
+	 * per-key `set()` fan-out (one `persist()` instead of ~30 localStorage writes).
+	 */
+	replaceAll(next: Settings): void {
+		this.current = next;
+		applyTheme(this.current.theme);
 		this.persist();
 	}
 
