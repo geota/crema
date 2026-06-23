@@ -252,16 +252,19 @@ export function visualizerSyncPrefs(): VisualizerSyncPrefs {
  * never in the bundle.
  */
 export function applyVisualizerSyncPrefs(p: VisualizerSyncPrefs): void {
+	// Forward-compat: tolerate a partial blob (an older backup predating a field)
+	// by filling any missing field from the canonical defaults.
+	const d = DEFAULT_SYNC_CONFIG;
 	updateSyncConfig({
-		autoUpload: p.autoUpload,
-		autoSync: p.autoSync,
-		privacy: p.privacy as VisualizerSyncConfig['privacy'],
-		includeProfile: p.includeProfile,
-		includeNotes: p.includeNotes,
+		autoUpload: p.autoUpload ?? d.autoUpload,
+		autoSync: p.autoSync ?? d.autoSync,
+		privacy: (p.privacy ?? d.privacy) as VisualizerSyncConfig['privacy'],
+		includeProfile: p.includeProfile ?? d.includeProfile,
+		includeNotes: p.includeNotes ?? d.includeNotes,
 		direction: {
-			beans: p.beansDirection as SyncDirection,
-			roasters: p.roastersDirection as SyncDirection,
-			shots: p.shotsDirection as SyncDirection
+			beans: (p.beansDirection ?? d.direction.beans) as SyncDirection,
+			roasters: (p.roastersDirection ?? d.direction.roasters) as SyncDirection,
+			shots: (p.shotsDirection ?? d.direction.shots) as SyncDirection
 		}
 	});
 }

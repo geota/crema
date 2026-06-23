@@ -45,6 +45,7 @@ import coffee.crema.settings.ConfigSnapshot
 import coffee.crema.settings.PairedDevice
 import coffee.crema.settings.toCommonSettings
 import coffee.crema.settings.withCommonSettings
+import coffee.crema.visualizer.DEFAULT_VISUALIZER_SYNC_PREFS
 import coffee.crema.visualizer.VisualizerClient
 import coffee.crema.visualizer.VisualizerStore
 import coffee.crema.visualizer.VisualizerSync
@@ -99,6 +100,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
@@ -1689,7 +1691,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         if (commonObj != null) {
                             // Unified format: `common` is the cross-shell CommonSettings
                             // (apply from any shell); `qcGrind` is Android-only.
-                            restoredCommon = runCatching { json.decodeFromString(CommonSettings.serializer(), json.encodeToString(JsonObject.serializer(), commonObj)) }.getOrNull()
+                            restoredCommon = decodeFilled(CommonSettings.serializer(), AppPrefs().toCommonSettings(), commonObj)
                             if (shell == null || shell == "android") {
                                 restoredQcGrind = (obj["qcGrind"] as? JsonPrimitive)?.floatOrNull
                             }
@@ -1699,8 +1701,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         }
                     }
                     "profileMeta" -> restoredProfileMeta = obj
-                    "maintenance" -> restoredMaintenance = runCatching { json.decodeFromString(MaintenanceState.serializer(), stripKind(obj)) }.getOrNull()
-                    "visualizerPrefs" -> restoredVisualizerPrefs = runCatching { json.decodeFromString(VisualizerSyncPrefs.serializer(), stripKind(obj)) }.getOrNull()
+                    "maintenance" -> restoredMaintenance = decodeFilled(MaintenanceState.serializer(), defaultMaintenanceState(System.currentTimeMillis()), obj)
+                    "visualizerPrefs" -> restoredVisualizerPrefs = decodeFilled(VisualizerSyncPrefs.serializer(), DEFAULT_VISUALIZER_SYNC_PREFS, obj)
                     "roaster" -> runCatching { json.decodeFromString(Roaster.serializer(), stripKind(obj)) }.getOrNull()?.let(roasters::add)
                     "bean" -> runCatching { json.decodeFromString(Bean.serializer(), stripKind(obj)) }.getOrNull()?.let(beans::add)
                     "shot" -> runCatching { json.decodeFromString(StoredShot.serializer(), stripKind(obj)) }.getOrNull()?.let(shots::add)
@@ -1712,6 +1714,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
             if (mode == RestoreMode.WIPE) {
                 customProfilesJson = emptyList()
+                // Clear pin/hidden overlays too — a profileMeta line (if present)
+                // re-applies the bundle's below; a bundle without one leaves them cleared.
+                pinnedIds = emptySet()
+                hiddenIds = emptySet()
+                pinnedProfileStore.save(emptySet())
+                hiddenProfileStore.save(emptySet())
                 _ui.update { it.copy(beans = emptyList(), roasters = emptyList(), history = emptyList(), activeBeanId = null) }
             }
 
@@ -1779,6 +1787,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private fun stripKind(obj: JsonObject): String =
         json.encodeToString(JsonObject.serializer(), JsonObject(obj.filterKeys { it != "kind" }))
 
+    /** Decode a backup config blob with forward-compat tolerance: any field the
+     *  bundle omits (e.g. an older backup that predates a field a newer build added)
+     *  is filled from [defaults] rather than failing the whole decode. The typeshare
+     *  Kotlin classes carry no field defaults, so a plain decode would throw on a
+     *  missing field and silently drop the entire group. */
+    private fun <T> decodeFilled(serializer: KSerializer<T>, defaults: T, blob: JsonObject): T? = runCatching {
+        val defObj = json.parseToJsonElement(json.encodeToString(serializer, defaults)).jsonObject
+        val merged = JsonObject(defObj + blob.filterKeys { it != "kind" })
+        json.decodeFromString(serializer, json.encodeToString(JsonObject.serializer(), merged))
+    }.getOrNull()
+
     /** Apply a restored backup's PORTABLE settings to the live UI + persist, while
      *  preserving this device's per-device bindings (BLE addresses, LAN proxy,
      *  paired devices). Mirrors loadPrefs' hydration for the portable fields;
@@ -1818,6 +1837,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         runCatching { bridge.setMaxShotDuration(p.maxShotDurationS) }
         runCatching { bridge.setAutoTare(p.autoTare) }
         runCatching { bridge.setStopOnWeight(p.stopOnWeight) }
+        // Push the restored Quick-Controls steam / hot-water / flush params to the
+        // machine too, so a restore takes effect without waiting for the next QC
+        // edit. Each routes through routeWrite → a no-op when disconnected or
+        // off-primary (the writes read the just-updated _ui state).
+        applySteamHotWater()
+        routeWrite("Set steam flow") { bridge.setSteamFlow(p.qcSteamFlowMlS) }
+        routeWrite("Set flush time") { bridge.setFlushTimeout((p.qcFlushTimeS * 1000f).toUInt()) }
+        routeWrite("Set flush temp") { bridge.setFlushTemp(p.qcFlushTempC) }
         persistPrefs()
     }
 
