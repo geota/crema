@@ -19,6 +19,8 @@ import coffee.crema.core.Roaster
 import coffee.crema.core.CommonSettings
 import coffee.crema.core.MaintenanceState
 import coffee.crema.core.VisualizerSyncPrefs
+import coffee.crema.drive.DriveStore
+import coffee.crema.drive.DriveSync
 import coffee.crema.core.MaintenanceReadout
 import coffee.crema.core.blankCremaProfile
 import coffee.crema.core.builtinCremaProfiles
@@ -463,6 +465,9 @@ data class MainUiState(
     /** Visualizer sync state (account / prefs / in-flight uploads) — mirrored
      *  from [MainViewModel.visualizer]'s controller flow. */
     val visualizer: VisualizerSync.UiState = VisualizerSync.UiState(),
+    /** Google Drive backup state (configured / connected / busy) — mirrored from
+     *  [MainViewModel.drive]'s controller flow. */
+    val drive: DriveSync.UiState = DriveSync.UiState(),
     /** A shot id the History screen should select on next open (set when the Brew
      *  "Last shot" card is tapped). Consumed + cleared by HistoryScreen. */
     val pendingHistoryShotId: String? = null,
@@ -790,6 +795,23 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     )
 
     /**
+     * Google Drive backup controller — a self-contained sibling of [visualizer].
+     * Owns the Drive OAuth + token freshness + the upload/list/download calls; the
+     * backup BYTES come from this VM via the callbacks (the same `crema-backup/v1`
+     * JSONL the local SAF backup writes). [state] is mirrored into [MainUiState.drive].
+     */
+    val drive: DriveSync = DriveSync(
+        store = DriveStore(app, json),
+        json = json,
+        scope = viewModelScope,
+        clientId = coffee.crema.BuildConfig.GOOGLE_DRIVE_CLIENT_ID,
+        notify = { msg -> notifyUser(msg) },
+        backupJsonl = { backupBundleJson() },
+        backupFileName = { backupFileName() },
+        applyRestore = { text, wipe -> restoreBackupFromText(text, if (wipe) RestoreMode.WIPE else RestoreMode.MERGE) },
+    )
+
+    /**
      * The live integrated water total, litres — seeded from the loaded
      * [MaintenanceState.totalLitres] in [loadMaintenance] and advanced on every
      * `Event.Telemetry` (group_flow × Δseconds / 1000). Held in a `var` rather
@@ -960,12 +982,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             loadCustomProfiles()
             loadMaintenance()
             visualizer.load()
+            drive.load()
         }
         startDe1KeepAlive()
         // Mirror the Visualizer controller's state into the UI snapshot.
         viewModelScope.launch {
             visualizer.state.collect { vs ->
                 _ui.update { it.copy(visualizer = vs) }
+            }
+        }
+        // Mirror the Drive controller's state into the UI snapshot.
+        viewModelScope.launch {
+            drive.state.collect { ds ->
+                _ui.update { it.copy(drive = ds) }
             }
         }
     }
@@ -1667,7 +1696,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val text = readUriText(uri)?.trim()
             if (text.isNullOrBlank()) { notifyUser("Restore failed — couldn't read that file"); return@launch }
+            restoreBackupFromText(text, mode)
+        }
+    }
 
+    /** Parse + apply a `crema-backup` bundle's raw text — shared by the SAF restore
+     *  ([restoreBackup]) and the Google Drive restore (the downloaded `.crema`). */
+    fun restoreBackupFromText(text: String, mode: RestoreMode) {
+        viewModelScope.launch {
             val profiles = ArrayList<String>()
             val beans = ArrayList<Bean>()
             val roasters = ArrayList<Roaster>()
