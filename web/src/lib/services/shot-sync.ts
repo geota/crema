@@ -65,7 +65,7 @@ import {
 	storedShotFromWire,
 	type WireShot
 } from '$lib/visualizer/shot-sync-signatures';
-import { appendSyncLog } from '$lib/visualizer/sync-config';
+import { appendSyncLog, readSyncConfig } from '$lib/visualizer/sync-config';
 import {
 	samplesFromVisualizerDetail as wasmSamplesFromVisualizerDetail,
 	wireShotFromDetail as wasmWireShotFromDetail
@@ -91,21 +91,21 @@ export type { ShotSummary, ShotDetail, Paging };
  * round-trip back can re-bind.
  */
 function buildShotPayload(shot: StoredShot): Record<string, unknown> {
-	const settings = getSettingsStore().current;
+	const cfg = readSyncConfig();
 	const json = JSON.parse(exportStoredShotAsV2Json(shot)) as Record<string, unknown>;
 
-	if (!settings.visualizerIncludeProfile) {
+	if (!cfg.includeProfile) {
 		delete json.profile;
 	}
-	if (!settings.visualizerIncludeNotes) {
+	if (!cfg.includeNotes) {
 		const metadata = (json.metadata as Record<string, unknown> | undefined) ?? null;
 		if (metadata && 'notes' in metadata) {
 			metadata.notes = null;
 		}
 	}
 
-	// Per-shot override wins; absent/null inherits the settings default.
-	json.privacy = shot.privacy ?? settings.visualizerPrivacy;
+	// Per-shot override wins; absent/null inherits the sync-config default.
+	json.privacy = shot.privacy ?? cfg.privacy;
 	json.metadata = {
 		...((json.metadata as Record<string, unknown> | undefined) ?? {}),
 		crema: {
@@ -775,14 +775,15 @@ export const ShotSyncLive = Layer.effect(
 		 */
 		const buildEditPatch = (shot: StoredShot): ShotPatch => {
 			const settings = getSettingsStore().current;
+			const cfg = readSyncConfig();
 			const coffeeBagId = resolveCoffeeBagId(shot);
 			const tagList = resolveTagList(shot);
 			const inlineBean = inlineBeanPatch(shot.bean);
 			const grinderModel = resolveGrinderModel(shot, settings.grinderModel);
 			return {
 				rating: (shot.metadata.rating ?? 0) > 0 ? (shot.metadata.rating ?? null) : null,
-				...(settings.visualizerIncludeNotes ? { notes: shot.metadata.notes ?? '' } : {}),
-				privacy: shot.privacy ?? settings.visualizerPrivacy,
+				...(cfg.includeNotes ? { notes: shot.metadata.notes ?? '' } : {}),
+				privacy: shot.privacy ?? cfg.privacy,
 				...(coffeeBagId != null ? { coffeeBagId } : {}),
 				...(tagList != null && tagList.length > 0 ? { tagList } : {}),
 				...(Object.keys(inlineBean).length > 0 ? { inlineBean } : {}),

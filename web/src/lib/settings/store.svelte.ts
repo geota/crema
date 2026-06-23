@@ -190,16 +190,6 @@ export interface Settings {
 	/** Group-flush target temperature, °C. */
 	qcFlushTempC: number;
 
-	// ── Sharing (Visualizer) ─────────────────────────────────────────────
-	/** Auto-upload finished shots to Visualizer. */
-	visualizerAutoUpload: boolean;
-	/** Default privacy for uploaded shots. */
-	visualizerPrivacy: SharingPrivacy;
-	/** Send the profile JSON alongside each shot. */
-	visualizerIncludeProfile: boolean;
-	/** Send tasting notes alongside each shot. */
-	visualizerIncludeNotes: boolean;
-
 	// ── Live-chart channel toggles ───────────────────────────────────────
 	// The eight per-line on/off flags for the Brew dashboard's chart. The
 	// four "primary" channels default on; the four "secondary" channels
@@ -302,13 +292,6 @@ export const DEFAULT_SETTINGS: Settings = {
 	qcHotWaterVolumeMl: 150,
 	qcFlushTimeS: 4,
 	qcFlushTempC: 95,
-
-	// Read at upload time (`history/shot-persistence.ts`) — gates the auto-upload
-	// of a finished shot; surfaced as a toggle in Settings → Sharing. Default on.
-	visualizerAutoUpload: true,
-	visualizerPrivacy: 'unlisted',
-	visualizerIncludeProfile: true,
-	visualizerIncludeNotes: false,
 
 	// Chart channels — only Pressure, Flow, and Weight default on; the rest
 	// are opt-in via the Quick Sheet's "Chart" toggles.

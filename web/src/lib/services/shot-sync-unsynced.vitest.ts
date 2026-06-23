@@ -56,7 +56,11 @@ vi.mock('$lib/visualizer/shot-sync-signatures', () => ({
 
 // Capture queue + sync-log writes so we can assert "never enqueued a create".
 vi.mock('./queue-store.ts', () => ({ enqueueEntry: h.enqueueEntry }));
-vi.mock('$lib/visualizer/sync-config', () => ({ appendSyncLog: h.appendSyncLog }));
+// buildShotPayload reads the upload prefs from the sync-config (the unification).
+vi.mock('$lib/visualizer/sync-config', () => ({
+	appendSyncLog: h.appendSyncLog,
+	readSyncConfig: () => ({ includeProfile: true, includeNotes: true, privacy: 'unlisted' })
+}));
 
 import { ShotSync, ShotSyncLive } from './shot-sync.ts';
 import { HttpClient, type HttpRequest } from './http-client.ts';

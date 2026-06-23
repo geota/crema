@@ -852,6 +852,50 @@ data class MaintenanceState (
 	val cleanIntervalHours: Double
 )
 
+/// The user's Visualizer sync **preferences** — the portable, cross-shell
+/// subset a whole-app backup carries. One shared `#[typeshare]` shape so web
+/// and Android serialise byte-identical JSON: a backup's `visualizerPrefs`
+/// line restores on either shell (no per-shell tag), and the two devices can
+/// converge on one set of choices.
+///
+/// NOT here: OAuth tokens, the cached account, the in-flight PKCE handshake,
+/// pull cursors, the premium-tier cache, last-sync timestamps, and the sync
+/// activity log — those are per-device runtime state, kept shell-local and
+/// never backed up.
+///
+/// Two distinct auto gates (the web shell has both; Android today only honours
+/// `auto_upload`):
+///  - `auto_upload` — auto-push a shot to Visualizer as it completes.
+///  - `auto_sync` — fire background library (bean/roaster/shot) pushes on
+///    mutation; manual "Sync now" always works regardless.
+///
+/// `#[serde(default)]` on the whole struct (via [`Default`]) so a partial blob
+/// deserialises to the canonical defaults rather than failing — a shell that
+/// doesn't own a field (Android doesn't drive `beans_direction`) round-trips it
+/// untouched, and an older/partial line fills gaps from the defaults below.
+@Serializable
+data class VisualizerSyncPrefs (
+	/// Auto-push a finished shot to Visualizer (web `visualizerAutoUpload`;
+	/// Android's single auto gate). Default: true.
+	val autoUpload: Boolean,
+	/// Fire background bean/roaster/shot pushes on mutation (web sync-config
+	/// `autoSync`). Android doesn't background-sync the library yet, so it
+	/// carries the field but doesn't act on it. Default: true.
+	val autoSync: Boolean,
+	/// Upload privacy: `"public" | "unlisted" | "private"`. Default: unlisted.
+	val privacy: String,
+	/// Include the profile block in uploads. Default: true.
+	val includeProfile: Boolean,
+	/// Include tasting notes in uploads. Default: false.
+	val includeNotes: Boolean,
+	/// Shots sync direction: `"off" | "backup" | "pull" | "two-way"`. Default: backup.
+	val shotsDirection: String,
+	/// Beans sync direction. Web-driven; Android carries the default only. Default: two-way.
+	val beansDirection: String,
+	/// Roasters sync direction. Web-driven; Android carries the default only. Default: two-way.
+	val roastersDirection: String
+)
+
 /// One selectable display/behaviour mode a scale exposes.
 /// 
 /// A "first-class" scale (the Bookoo) lets the user switch the active display

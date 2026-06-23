@@ -321,18 +321,31 @@ pub struct BackupImportPlan {
     /// The portable settings object (`kind` stripped) if present; the shell
     /// applies the keys it recognises.
     pub settings: Option<serde_json::Value>,
+    /// Profile organisation (`kind` stripped): `{ pinned:[ids], hiddenBuiltins:[ids],
+    /// builtinOverrides?:{…} }`. The id sets are cross-shell (built-in ids match);
+    /// `builtinOverrides` is a web-only superset extra the shell can ignore.
+    pub profile_meta: Option<serde_json::Value>,
+    /// Maintenance counters (`MaintenanceState`, `kind` stripped) — a shared core
+    /// type, byte-identical on both shells, so fully portable.
+    pub maintenance: Option<serde_json::Value>,
+    /// Visualizer SYNC preferences (NOT tokens; `kind` stripped). Shell-native
+    /// shape, `_shell`-tagged; the shell applies it only on a matching shell.
+    pub visualizer_prefs: Option<serde_json::Value>,
     /// Beans + roasters + shots + diagnostics — same shape as a library import.
     #[serde(flatten)]
     pub library: ImportPlan,
 }
 
 /// Build a backup bundle (JSONL): `crema-backup/v1` header → settings →
-/// roasters → beans → shots → profiles. Profiles + settings ride as verbatim
-/// JSON; beans/roasters/shots are typed + lossless. The shell must EXCLUDE
-/// OAuth tokens, per-device/BLE state, and photos before building the envelope.
+/// profileMeta → maintenance → visualizerPrefs → roasters → beans → shots →
+/// profiles. Profiles + the four config blobs ride as verbatim JSON;
+/// beans/roasters/shots are typed + lossless. The shell must EXCLUDE OAuth
+/// tokens, per-device/BLE state, and photos before building the envelope.
 ///
 /// `envelope_json` = `{profiles:[…], beans:[Bean], roasters:[Roaster],
-/// shots:[StoredShot], settings:{…}}`.
+/// shots:[StoredShot], settings:{…}, profileMeta:{…}, maintenance:{…},
+/// visualizerPrefs:{…}}`. The last three are opaque to the core — it just
+/// line-tags and passes them through so both shells emit identical bytes.
 ///
 /// # Errors
 /// Returns the JSON parse error string when the envelope is malformed.
@@ -354,6 +367,12 @@ pub fn export_backup_jsonl_from_json(
         shots: Vec<StoredShot>,
         #[serde(default)]
         settings: serde_json::Value,
+        #[serde(default, rename = "profileMeta")]
+        profile_meta: serde_json::Value,
+        #[serde(default)]
+        maintenance: serde_json::Value,
+        #[serde(default, rename = "visualizerPrefs")]
+        visualizer_prefs: serde_json::Value,
     }
     let inp: In = serde_json::from_str(envelope_json).map_err(|e| e.to_string())?;
     let header = BackupHeader {
@@ -370,6 +389,18 @@ pub fn export_backup_jsonl_from_json(
     push_line(&mut out, &header);
     if inp.settings.is_object() {
         push_tagged_line(&mut out, "settings", &inp.settings);
+    }
+    // The three config blobs (profile organisation / maintenance counters /
+    // visualizer sync prefs) — opaque to the core, emitted only when the shell
+    // supplied a non-empty object.
+    if inp.profile_meta.is_object() {
+        push_tagged_line(&mut out, "profileMeta", &inp.profile_meta);
+    }
+    if inp.maintenance.is_object() {
+        push_tagged_line(&mut out, "maintenance", &inp.maintenance);
+    }
+    if inp.visualizer_prefs.is_object() {
+        push_tagged_line(&mut out, "visualizerPrefs", &inp.visualizer_prefs);
     }
     for r in &inp.roasters {
         push_tagged_line(&mut out, "roaster", r);
@@ -394,6 +425,9 @@ pub fn parse_backup_jsonl(text: &str) -> BackupImportPlan {
     let library = parse_jsonl(text).unwrap_or_default();
     let mut profiles = Vec::new();
     let mut settings = None;
+    let mut profile_meta = None;
+    let mut maintenance = None;
+    let mut visualizer_prefs = None;
     for line in text.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
@@ -420,12 +454,33 @@ pub fn parse_backup_jsonl(text: &str) -> BackupImportPlan {
                 }
                 settings = Some(value);
             }
+            "profileMeta" => {
+                if let Some(map) = value.as_object_mut() {
+                    map.remove("kind");
+                }
+                profile_meta = Some(value);
+            }
+            "maintenance" => {
+                if let Some(map) = value.as_object_mut() {
+                    map.remove("kind");
+                }
+                maintenance = Some(value);
+            }
+            "visualizerPrefs" => {
+                if let Some(map) = value.as_object_mut() {
+                    map.remove("kind");
+                }
+                visualizer_prefs = Some(value);
+            }
             _ => {}
         }
     }
     BackupImportPlan {
         profiles,
         settings,
+        profile_meta,
+        maintenance,
+        visualizer_prefs,
         library,
     }
 }
@@ -478,7 +533,10 @@ mod tests {
             "beans": beans,
             "roasters": roasters,
             "shots": [],
-            "settings": { "weightUnit": "g", "themeMode": "dark" },
+            "settings": { "weightUnit": "g", "themeMode": "dark", "_shell": "android" },
+            "profileMeta": { "pinned": ["builtin:londinium"], "hiddenBuiltins": ["builtin:flat-white"] },
+            "maintenance": { "totalLitres": 12.5, "filterCapacityLitres": 50.0 },
+            "visualizerPrefs": { "_shell": "android", "autoSync": true, "privacy": "unlisted" },
         });
         let jsonl =
             export_backup_jsonl_from_json(&envelope.to_string(), 1_700_000_000_000, "0.1", "Pixel")
@@ -494,6 +552,9 @@ mod tests {
         assert!(jsonl.contains(r#""profileCount":1"#));
         assert!(jsonl.contains(r#""kind":"settings""#));
         assert!(jsonl.contains(r#""kind":"profile""#));
+        assert!(jsonl.contains(r#""kind":"profileMeta""#));
+        assert!(jsonl.contains(r#""kind":"maintenance""#));
+        assert!(jsonl.contains(r#""kind":"visualizerPrefs""#));
 
         let plan = parse_backup_jsonl(&jsonl);
         assert_eq!(plan.profiles.len(), 1);
@@ -509,6 +570,22 @@ mod tests {
         assert!(
             settings.get("kind").is_none(),
             "kind stripped from settings"
+        );
+        // The three config blobs round-trip verbatim, `kind` stripped.
+        let pm = plan.profile_meta.expect("profileMeta present");
+        assert_eq!(pm["pinned"][0], "builtin:londinium");
+        assert!(pm.get("kind").is_none(), "kind stripped from profileMeta");
+        let maint = plan.maintenance.expect("maintenance present");
+        assert_eq!(maint["totalLitres"], 12.5);
+        assert!(
+            maint.get("kind").is_none(),
+            "kind stripped from maintenance"
+        );
+        let vp = plan.visualizer_prefs.expect("visualizerPrefs present");
+        assert_eq!(vp["_shell"], "android");
+        assert!(
+            vp.get("kind").is_none(),
+            "kind stripped from visualizerPrefs"
         );
     }
 

@@ -13,9 +13,12 @@
  */
 
 import { readJson, writeJson } from '$lib/utils/storage';
+import type { VisualizerSyncPrefs } from '$lib/core/crema-core';
 
 /** New unified persistence key. */
 const SYNC_KEY = 'crema.visualizer.sync.v1';
+/** Legacy app-settings key — the four upload-option prefs used to live here. */
+const SETTINGS_KEY = 'crema.settings.v1';
 /** Legacy bean-only key — read once for migration, then tombstoned. */
 const LEGACY_BEAN_KEY = 'crema.beans.sync.v1';
 
@@ -33,7 +36,18 @@ export interface SyncLogEntry {
 }
 
 export interface VisualizerSyncConfig {
+	/** Master gate for BACKGROUND library (bean/roaster/shot) pushes on mutation;
+	 *  manual "Sync now" always works regardless. Distinct from {@link autoUpload}. */
 	autoSync: boolean;
+	/** Auto-upload a finished shot to Visualizer as it completes (the shot-
+	 *  completion push gate). Was the app-settings `visualizerAutoUpload`. */
+	autoUpload: boolean;
+	/** Default privacy for uploaded shots. Was the app-settings `visualizerPrivacy`. */
+	privacy: 'public' | 'unlisted' | 'private';
+	/** Send the profile JSON alongside each shot. Was `visualizerIncludeProfile`. */
+	includeProfile: boolean;
+	/** Send tasting notes alongside each shot. Was `visualizerIncludeNotes`. */
+	includeNotes: boolean;
 	direction: {
 		beans: SyncDirection;
 		roasters: SyncDirection;
@@ -62,6 +76,10 @@ const MAX_LOG_ENTRIES = 20;
 
 export const DEFAULT_SYNC_CONFIG: VisualizerSyncConfig = {
 	autoSync: true,
+	autoUpload: true,
+	privacy: 'unlisted',
+	includeProfile: true,
+	includeNotes: false,
 	direction: {
 		beans: 'two-way',
 		roasters: 'two-way',
@@ -91,12 +109,47 @@ function migrateFromLegacy(legacy: LegacyBeanSyncShape): VisualizerSyncConfig {
 }
 
 /**
- * Read the persisted sync config, migrating the legacy bean-only shape
- * on first load. Always returns a fully-populated record; missing
- * fields fall back to the default.
+ * One-shot migration: the four upload-option prefs (`autoUpload`, `privacy`,
+ * `includeProfile`, `includeNotes`) used to live in the app Settings store
+ * (`crema.settings.v1`). When a pre-unification config lacks them, pull the
+ * persisted Settings values across (defaults if absent) and persist once so
+ * later reads are self-contained. Race-free: reads the raw Settings localStorage
+ * directly (those keys ride along untouched until this runs), never the store.
+ */
+function migrateUploadOptions(raw: Partial<VisualizerSyncConfig>): VisualizerSyncConfig {
+	const s = readJson<Record<string, unknown>>(SETTINGS_KEY, {});
+	const migrated: VisualizerSyncConfig = {
+		...DEFAULT_SYNC_CONFIG,
+		...raw,
+		autoUpload:
+			typeof s.visualizerAutoUpload === 'boolean'
+				? s.visualizerAutoUpload
+				: DEFAULT_SYNC_CONFIG.autoUpload,
+		privacy:
+			(s.visualizerPrivacy as VisualizerSyncConfig['privacy']) ?? DEFAULT_SYNC_CONFIG.privacy,
+		includeProfile:
+			typeof s.visualizerIncludeProfile === 'boolean'
+				? s.visualizerIncludeProfile
+				: DEFAULT_SYNC_CONFIG.includeProfile,
+		includeNotes:
+			typeof s.visualizerIncludeNotes === 'boolean'
+				? s.visualizerIncludeNotes
+				: DEFAULT_SYNC_CONFIG.includeNotes,
+		direction: { ...DEFAULT_SYNC_CONFIG.direction, ...(raw.direction ?? {}) },
+		lastSyncAt: { ...DEFAULT_SYNC_CONFIG.lastSyncAt, ...(raw.lastSyncAt ?? {}) },
+		log: Array.isArray(raw.log) ? raw.log.slice(0, MAX_LOG_ENTRIES) : []
+	};
+	writeJson(SYNC_KEY, migrated);
+	return migrated;
+}
+
+/**
+ * Read the persisted sync config, migrating the legacy bean-only shape and the
+ * Settings-resident upload options on first load. Always returns a
+ * fully-populated record; missing fields fall back to the default.
  */
 export function readSyncConfig(): VisualizerSyncConfig {
-	const raw = readJson<VisualizerSyncConfig | null>(SYNC_KEY, null);
+	const raw = readJson<Partial<VisualizerSyncConfig> | null>(SYNC_KEY, null);
 	if (!raw || typeof raw !== 'object') {
 		const legacy = readJson<LegacyBeanSyncShape | null>(LEGACY_BEAN_KEY, null);
 		if (legacy && typeof legacy === 'object') {
@@ -106,6 +159,10 @@ export function readSyncConfig(): VisualizerSyncConfig {
 		}
 		return DEFAULT_SYNC_CONFIG;
 	}
+	// Pull the four upload options across from app Settings the first time this
+	// config predates the unification (detected on the RAW value, before the
+	// default-fill below would mask the gap).
+	if (raw.autoUpload === undefined) return migrateUploadOptions(raw);
 	// Fill in any missing fields from the default — defensive deserialize.
 	return {
 		...DEFAULT_SYNC_CONFIG,
@@ -167,4 +224,44 @@ export function directionPushes(d: SyncDirection): boolean {
 /** Helper — does this direction include pull? */
 export function directionPulls(d: SyncDirection): boolean {
 	return d === 'pull' || d === 'two-way';
+}
+
+/**
+ * Project the persisted config to the shared cross-shell {@link VisualizerSyncPrefs}
+ * shape — the eight user preferences a whole-app backup carries. Runtime/device
+ * state (cursors, premium cache, log, lastSyncAt) is deliberately excluded.
+ */
+export function visualizerSyncPrefs(): VisualizerSyncPrefs {
+	const c = readSyncConfig();
+	return {
+		autoUpload: c.autoUpload,
+		autoSync: c.autoSync,
+		privacy: c.privacy,
+		includeProfile: c.includeProfile,
+		includeNotes: c.includeNotes,
+		shotsDirection: c.direction.shots,
+		beansDirection: c.direction.beans,
+		roastersDirection: c.direction.roasters
+	};
+}
+
+/**
+ * Apply restored {@link VisualizerSyncPrefs} (from a whole-app backup) into the
+ * persisted config — the shared shape both shells serialise identically, so a
+ * bundle from either device applies here verbatim. Tokens / runtime state are
+ * never in the bundle.
+ */
+export function applyVisualizerSyncPrefs(p: VisualizerSyncPrefs): void {
+	updateSyncConfig({
+		autoUpload: p.autoUpload,
+		autoSync: p.autoSync,
+		privacy: p.privacy as VisualizerSyncConfig['privacy'],
+		includeProfile: p.includeProfile,
+		includeNotes: p.includeNotes,
+		direction: {
+			beans: p.beansDirection as SyncDirection,
+			roasters: p.roastersDirection as SyncDirection,
+			shots: p.shotsDirection as SyncDirection
+		}
+	});
 }

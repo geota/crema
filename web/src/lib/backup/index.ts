@@ -21,11 +21,14 @@ import { getBeanStore } from '$lib/bean';
 import { getHistoryStore } from '$lib/history';
 import { getSettingsStore } from '$lib/settings';
 import { getProfileStore } from '$lib/profiles';
+import { getMaintenanceStore } from '$lib/maintenance';
+import { visualizerSyncPrefs, applyVisualizerSyncPrefs } from '$lib/visualizer/sync-config';
 import { readJson } from '$lib/utils/storage';
 import { downloadBlob, filenameStamp } from '$lib/utils/download';
 import type { Bean, Roaster } from '$lib/bean/model';
 import type { StoredShot } from '$lib/history';
 import type { CremaProfile } from '$lib/profiles/model';
+import type { MaintenanceState, VisualizerSyncPrefs } from '$lib/core/crema-core';
 
 /** localStorage key for the user's custom profiles (a `CremaProfile[]`). Mirror
  *  of `profiles/store`'s `CUSTOM_KEY` — read directly so the bundle carries the
@@ -100,7 +103,18 @@ export function buildBackupJsonl(cremaVersion = '0.0.1'): BuiltBackup | null {
 		// Whole settings bundle is portable on web; tag the source shell so a
 		// restore only re-applies it on web (Android's settings are a different
 		// shape). The DATA above is shared core types — fully cross-shell.
-		settings: { ...settings.current, _shell: 'web' }
+		settings: { ...settings.current, _shell: 'web' },
+		// Profile organisation — pinned + hidden built-in ids (cross-shell) plus
+		// the web-native overrides superset. Custom-profile pins ride in the
+		// profile JSON above.
+		profileMeta: getProfileStore().backupMeta(),
+		// Maintenance counters — a shared core type (`MaintenanceState`), fully
+		// portable between shells.
+		maintenance: getMaintenanceStore().current,
+		// Visualizer SYNC preferences (never the OAuth token) — the shared core
+		// `VisualizerSyncPrefs` shape both shells serialise identically, so this
+		// line restores on web or Android with no per-shell tag.
+		visualizerPrefs: visualizerSyncPrefs()
 	});
 
 	return {
@@ -157,6 +171,9 @@ export function restoreBackup(text: string, mode: RestoreMode): RestoreSummary {
 	const roasters: Roaster[] = [];
 	const shots: StoredShot[] = [];
 	let settings: Record<string, unknown> | null = null;
+	let profileMeta: Record<string, unknown> | null = null;
+	let maintenance: Record<string, unknown> | null = null;
+	let visualizerPrefs: Record<string, unknown> | null = null;
 	let sawHeader = false;
 
 	for (const rawLine of text.split('\n')) {
@@ -177,6 +194,15 @@ export function restoreBackup(text: string, mode: RestoreMode): RestoreSummary {
 				break;
 			case 'settings':
 				settings = rest;
+				break;
+			case 'profileMeta':
+				profileMeta = rest;
+				break;
+			case 'maintenance':
+				maintenance = rest;
+				break;
+			case 'visualizerPrefs':
+				visualizerPrefs = rest;
 				break;
 			case 'roaster':
 				roasters.push(rest as unknown as Roaster);
@@ -237,6 +263,21 @@ export function restoreBackup(text: string, mode: RestoreMode): RestoreSummary {
 			if (key in settings) setAny(key, settings[key]);
 		}
 		settingsApplied = true;
+	}
+
+	// Profile organisation — pins + hidden built-ins (cross-shell). A wipe
+	// restore replaces the sets; a merge unions them.
+	if (profileMeta) {
+		profileStore.applyBackupMeta(profileMeta, mode === 'wipe');
+	}
+	// Maintenance counters — a shared core type, applied verbatim either shell.
+	if (maintenance) {
+		getMaintenanceStore().replaceAll(maintenance as unknown as MaintenanceState);
+	}
+	// Visualizer sync prefs — a shared core type, applied verbatim either shell
+	// (no per-shell tag); never the OAuth token (re-authorise after a restore).
+	if (visualizerPrefs) {
+		applyVisualizerSyncPrefs(visualizerPrefs as unknown as VisualizerSyncPrefs);
 	}
 
 	return {

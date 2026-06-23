@@ -56,6 +56,7 @@ export { bestEffortRemoteDelete } from './bestEffortRemoteDelete';
 // ── Unified sync config ────────────────────────────────────────────
 export {
 	appendSyncLog,
+	applyVisualizerSyncPrefs,
 	clearSyncLog,
 	DEFAULT_SYNC_CONFIG,
 	directionPulls,
@@ -63,6 +64,7 @@ export {
 	onSyncConfigChange,
 	readSyncConfig,
 	updateSyncConfig,
+	visualizerSyncPrefs,
 	writeSyncConfig,
 	type SyncDirection,
 	type SyncLogEntry as VisualizerSyncLogEntry,

@@ -19,26 +19,30 @@ import { Effect, Layer } from 'effect';
 // `vi.mock` factories.
 const h = vi.hoisted(() => {
 	let direction: 'push' | 'off' = 'push';
+	let autoUpload = true;
 	return {
 		mockHistory: { get: vi.fn(), bindVisualizerId: vi.fn() },
-		mockSettings: { current: { visualizerAutoUpload: true } },
 		appendSyncLog: vi.fn(),
 		getDirection: () => direction,
 		setDirection: (d: 'push' | 'off') => {
 			direction = d;
+		},
+		getAutoUpload: () => autoUpload,
+		setAutoUpload: (v: boolean) => {
+			autoUpload = v;
 		}
 	};
 });
-const { mockHistory, mockSettings, appendSyncLog } = h;
+const { mockHistory, appendSyncLog } = h;
 
 // shot-persistence.ts imports `getHistoryStore` from `./store.svelte` (relative),
-// so the mock must target that path, not the `$lib/history` barrel.
+// so the mock must target that path, not the `$lib/history` barrel. The
+// auto-upload gate + shots direction both read the sync-config now.
 vi.mock('./store.svelte', () => ({ getHistoryStore: () => h.mockHistory }));
-vi.mock('$lib/settings', () => ({ getSettingsStore: () => h.mockSettings }));
 vi.mock('$lib/visualizer', () => ({
 	appendSyncLog: h.appendSyncLog,
 	directionPushes: (d: string) => d === 'push',
-	readSyncConfig: () => ({ direction: { shots: h.getDirection() } })
+	readSyncConfig: () => ({ direction: { shots: h.getDirection() }, autoUpload: h.getAutoUpload() })
 }));
 
 import { pushShotToVisualizer } from './shot-persistence.ts';
@@ -89,7 +93,7 @@ function run(uploadShot: (shot: unknown) => Effect.Effect<{ visualizerId: string
 beforeEach(() => {
 	vi.clearAllMocks();
 	h.setDirection('push');
-	mockSettings.current.visualizerAutoUpload = true;
+	h.setAutoUpload(true);
 	mockHistory.get.mockReturnValue({ id: 's1', profileName: 'Test', visualizerId: undefined });
 });
 
@@ -102,8 +106,8 @@ describe('pushShotToVisualizer — gating', () => {
 		expect(appendSyncLog).not.toHaveBeenCalled();
 	});
 
-	it('no-ops when visualizerAutoUpload is off', async () => {
-		mockSettings.current.visualizerAutoUpload = false;
+	it('no-ops when autoUpload is off', async () => {
+		h.setAutoUpload(false);
 		const uploadShot = vi.fn(() => Effect.succeed({ visualizerId: 'v1' }));
 		await run(uploadShot);
 		expect(uploadShot).not.toHaveBeenCalled();
