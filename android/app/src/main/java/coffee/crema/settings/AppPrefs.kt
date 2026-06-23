@@ -1,10 +1,12 @@
 package coffee.crema.settings
 
 import android.content.Context
+import coffee.crema.core.CommonSettings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
 import java.io.File
 
 /*
@@ -118,6 +120,118 @@ data class AppPrefs(
     val pairedDevices: List<PairedDevice> = emptyList(),
 )
 
+/** Map the portable subset of [AppPrefs] → the shared cross-shell [CommonSettings].
+ *  Android's field names + chart-channel vocabulary ARE the canonical shape, so
+ *  this is a near-identity projection (the web shell does the renaming). */
+fun AppPrefs.toCommonSettings(): CommonSettings = CommonSettings(
+    themeMode = themeMode,
+    maxShotDurationS = maxShotDurationS,
+    autoTare = autoTare,
+    stopOnWeight = stopOnWeight,
+    steamEco = steamEco,
+    preFlush = preFlush,
+    steamPurge = steamPurge,
+    weightUnit = weightUnit,
+    tempUnit = tempUnit,
+    pressureUnit = pressureUnit,
+    volumeUnit = volumeUnit,
+    chartChannels = chartChannels.toList(),
+    keepScreenOnBrew = keepScreenOnBrew,
+    showDebugPanel = showDebugPanel,
+    defaultDoseG = defaultDoseG,
+    defaultRatio = defaultRatio,
+    defaultBrewTempC = defaultBrewTempC,
+    defaultPreinfuseS = defaultPreinfuseS,
+    grinderModel = grinderModel,
+    suppressDe1Sleep = suppressDe1Sleep,
+    qcSteamTimeS = qcSteamTimeS,
+    qcSteamFlowMlS = qcSteamFlowMlS,
+    qcSteamTempC = qcSteamTempC,
+    qcHotWaterTempC = qcHotWaterTempC,
+    qcHotWaterVolumeMl = qcHotWaterVolumeMl,
+    qcFlushTimeS = qcFlushTimeS,
+    qcFlushTempC = qcFlushTempC,
+)
+
+/** Overlay a restored [CommonSettings] onto these prefs, keeping the platform
+ *  extras (BLE/proxy/qcGrind/activeProfileId) untouched. */
+fun AppPrefs.withCommonSettings(c: CommonSettings): AppPrefs = copy(
+    themeMode = c.themeMode,
+    maxShotDurationS = c.maxShotDurationS,
+    autoTare = c.autoTare,
+    stopOnWeight = c.stopOnWeight,
+    steamEco = c.steamEco,
+    preFlush = c.preFlush,
+    steamPurge = c.steamPurge,
+    weightUnit = c.weightUnit,
+    tempUnit = c.tempUnit,
+    pressureUnit = c.pressureUnit,
+    volumeUnit = c.volumeUnit,
+    chartChannels = c.chartChannels.toSet(),
+    keepScreenOnBrew = c.keepScreenOnBrew,
+    showDebugPanel = c.showDebugPanel,
+    defaultDoseG = c.defaultDoseG,
+    defaultRatio = c.defaultRatio,
+    defaultBrewTempC = c.defaultBrewTempC,
+    defaultPreinfuseS = c.defaultPreinfuseS,
+    grinderModel = c.grinderModel,
+    suppressDe1Sleep = c.suppressDe1Sleep,
+    qcSteamTimeS = c.qcSteamTimeS,
+    qcSteamFlowMlS = c.qcSteamFlowMlS,
+    qcSteamTempC = c.qcSteamTempC,
+    qcHotWaterTempC = c.qcHotWaterTempC,
+    qcHotWaterVolumeMl = c.qcHotWaterVolumeMl,
+    qcFlushTimeS = c.qcFlushTimeS,
+    qcFlushTempC = c.qcFlushTempC,
+)
+
+/**
+ * The on-disk shape of [AppPrefs] (`prefs.json`) — the shared cross-shell
+ * [CommonSettings] block plus this device's platform extras alongside it. "Storage
+ * IS the shared shape": both shells persist `common` identically, and a backup's
+ * settings line reuses it. Pre-unification files were a FLAT [AppPrefs]; [SettingsStore]
+ * detects the absence of `common` and migrates them forward.
+ */
+@Serializable
+private data class PersistedPrefs(
+    val common: CommonSettings,
+    // ── Platform extras (per-device / Android-only; never cross-shell) ────────
+    val qcGrind: Float? = null,
+    val activeProfileId: String? = null,
+    val de1Address: String? = null,
+    val scaleAddress: String? = null,
+    val proxyRole: String = "normal",
+    val proxyPrimaryHost: String = "",
+    val proxyPrimaryPort: Int = 0,
+    val replayPrimary: Boolean = false,
+    val pairedDevices: List<PairedDevice> = emptyList(),
+)
+
+private fun AppPrefs.toPersisted(): PersistedPrefs = PersistedPrefs(
+    common = toCommonSettings(),
+    qcGrind = qcGrind,
+    activeProfileId = activeProfileId,
+    de1Address = de1Address,
+    scaleAddress = scaleAddress,
+    proxyRole = proxyRole,
+    proxyPrimaryHost = proxyPrimaryHost,
+    proxyPrimaryPort = proxyPrimaryPort,
+    replayPrimary = replayPrimary,
+    pairedDevices = pairedDevices,
+)
+
+private fun PersistedPrefs.toAppPrefs(): AppPrefs = AppPrefs().withCommonSettings(common).copy(
+    qcGrind = qcGrind,
+    activeProfileId = activeProfileId,
+    de1Address = de1Address,
+    scaleAddress = scaleAddress,
+    proxyRole = proxyRole,
+    proxyPrimaryHost = proxyPrimaryHost,
+    proxyPrimaryPort = proxyPrimaryPort,
+    replayPrimary = replayPrimary,
+    pairedDevices = pairedDevices,
+)
+
 /**
  * A secondary this host has approved (issue 02). [id] is the peer's stable
  * `clientId` (the TOFU key); [name] its display label; [canControl] = false marks
@@ -192,14 +306,20 @@ class SettingsStore(private val context: Context, private val json: Json) {
 
     suspend fun load(): AppPrefs = withContext(Dispatchers.IO) {
         runCatching {
-            file.takeIf { it.exists() }?.readText()
-                ?.let { json.decodeFromString(AppPrefs.serializer(), it) }
+            val text = file.takeIf { it.exists() }?.readText() ?: return@runCatching null
+            if (json.parseToJsonElement(text).jsonObject["common"] != null) {
+                json.decodeFromString(PersistedPrefs.serializer(), text).toAppPrefs()
+            } else {
+                // Pre-unification file: a FLAT AppPrefs. Decode it directly; the next
+                // save() rewrites it in the nested `common` shape.
+                json.decodeFromString(AppPrefs.serializer(), text)
+            }
         }.getOrNull() ?: AppPrefs()
     }
 
     suspend fun save(prefs: AppPrefs) {
         withContext(Dispatchers.IO) {
-            runCatching { file.writeText(json.encodeToString(AppPrefs.serializer(), prefs)) }
+            runCatching { file.writeText(json.encodeToString(PersistedPrefs.serializer(), prefs.toPersisted())) }
         }
     }
 

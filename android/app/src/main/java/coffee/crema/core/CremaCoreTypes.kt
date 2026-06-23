@@ -896,6 +896,71 @@ data class VisualizerSyncPrefs (
 	val roastersDirection: String
 )
 
+/// The portable, cross-shell app-preferences subset. `#[serde(default)]` on the
+/// whole struct (via [`Default`]) so a partial blob — an older backup, or one
+/// shell omitting a field it shares — fills gaps from the canonical defaults
+/// rather than failing.
+@Serializable
+data class CommonSettings (
+	/// `"system" | "light" | "dark"`. Web `theme`.
+	val themeMode: String,
+	/// Global max shot duration, seconds (`0` = none).
+	val maxShotDurationS: Float,
+	/// Auto-tare the scale on shot start. Web `autoTareOnShotStart`.
+	val autoTare: Boolean,
+	/// Enable stop-at-weight. Web `stopOnWeight`.
+	val stopOnWeight: Boolean,
+	/// Steam eco mode. Web `steamEcoMode`.
+	val steamEco: Boolean,
+	/// Flush the group before each shot. Web `groupFlushBeforeShot`.
+	val preFlush: Boolean,
+	/// Run a short purge after steaming. Web `autoPurgeAfterSteam`.
+	val steamPurge: Boolean,
+	/// Weight unit `"g" | "oz"`.
+	val weightUnit: String,
+	/// Temperature unit `"C" | "F"`.
+	val tempUnit: String,
+	/// Pressure unit `"bar" | "psi"`.
+	val pressureUnit: String,
+	/// Volume unit `"ml" | "floz"`.
+	val volumeUnit: String,
+	/// Enabled live-chart channel keys (Android's vocabulary:
+	/// `pressure`/`flow`/`weight`/`headTemp`/`mixTemp`/`weightFlow`/`resistance`/
+	/// `dispensedVolume`). Web maps its eight `show*` booleans to/from this list
+	/// (its `volume` ↔ `dispensedVolume`).
+	val chartChannels: List<String>,
+	/// Hold the screen awake while a shot pulls.
+	val keepScreenOnBrew: Boolean,
+	/// Show the debug / event-log panel.
+	val showDebugPanel: Boolean,
+	/// Default dose for new profiles, grams.
+	val defaultDoseG: Float,
+	/// Default yield-to-dose ratio (the `x` in `1:x`).
+	val defaultRatio: Float,
+	/// Default group temperature, °C.
+	val defaultBrewTempC: Float,
+	/// Default pre-infusion time, seconds. Web `defaultPreinfusionS`.
+	val defaultPreinfuseS: Float,
+	/// Free-text equipment grinder model.
+	val grinderModel: String,
+	/// Keep the DE1 awake while Crema is open.
+	val suppressDe1Sleep: Boolean,
+	/// Quick-Controls steam duration, seconds.
+	val qcSteamTimeS: Float,
+	/// Quick-Controls steam flow, ml/s.
+	val qcSteamFlowMlS: Float,
+	/// Quick-Controls steam temperature, °C.
+	val qcSteamTempC: Float,
+	/// Quick-Controls hot-water temperature, °C.
+	val qcHotWaterTempC: Float,
+	/// Quick-Controls hot-water volume, ml.
+	val qcHotWaterVolumeMl: Float,
+	/// Quick-Controls group-flush duration, seconds.
+	val qcFlushTimeS: Float,
+	/// Quick-Controls group-flush temperature, °C.
+	val qcFlushTempC: Float
+)
+
 /// One selectable display/behaviour mode a scale exposes.
 /// 
 /// A "first-class" scale (the Bookoo) lets the user switch the active display

@@ -16,6 +16,7 @@ import coffee.crema.core.MmrRegister
 import coffee.crema.core.ScaleCapabilities
 import coffee.crema.core.Bean
 import coffee.crema.core.Roaster
+import coffee.crema.core.CommonSettings
 import coffee.crema.core.MaintenanceState
 import coffee.crema.core.VisualizerSyncPrefs
 import coffee.crema.core.MaintenanceReadout
@@ -42,6 +43,8 @@ import coffee.crema.maintenance.defaultMaintenanceState
 import coffee.crema.settings.AppPrefs
 import coffee.crema.settings.ConfigSnapshot
 import coffee.crema.settings.PairedDevice
+import coffee.crema.settings.toCommonSettings
+import coffee.crema.settings.withCommonSettings
 import coffee.crema.visualizer.VisualizerClient
 import coffee.crema.visualizer.VisualizerStore
 import coffee.crema.visualizer.VisualizerSync
@@ -107,6 +110,9 @@ import kotlinx.coroutines.withContext
 import android.net.Uri
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.floatOrNull
 
 /**
  * Default scale beeper-volume step shown before the first live reading.
@@ -1592,11 +1598,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val beansJson = runCatching { json.encodeToString(ListSerializer(Bean.serializer()), s.beans) }.getOrElse { "[]" }
         val roastersJson = runCatching { json.encodeToString(ListSerializer(Roaster.serializer()), s.roasters) }.getOrElse { "[]" }
         val shotsJson = runCatching { json.encodeToString(ListSerializer(StoredShot.serializer()), s.history) }.getOrElse { "[]" }
-        // Tag the settings with the source shell so a restore only re-applies them
-        // on Android — web's AppPrefs shape differs (see [restoreBackup]'s guard).
+        // Settings line: the shared cross-shell CommonSettings `common` block (both
+        // shells emit it identically, so common prefs restore web<->Android) + this
+        // shell's `_shell` tag + Android-only `qcGrind` (re-applied only on Android).
         val settingsJson = runCatching {
-            val base = json.parseToJsonElement(json.encodeToString(AppPrefs.serializer(), portable)).jsonObject
-            json.encodeToString(JsonObject.serializer(), JsonObject(base + ("_shell" to JsonPrimitive("android"))))
+            val common = json.parseToJsonElement(json.encodeToString(CommonSettings.serializer(), portable.toCommonSettings()))
+            json.encodeToString(
+                JsonObject.serializer(),
+                buildJsonObject {
+                    put("common", common)
+                    put("_shell", "android")
+                    portable.qcGrind?.let { put("qcGrind", it) }
+                },
+            )
         }.getOrElse { "{\"_shell\":\"android\"}" }
         // Profile organisation — pinned + hidden BUILT-IN ids (cross-shell; custom
         // pins ride inside the profile JSON). Maintenance — a shared core type,
@@ -1657,6 +1671,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val roasters = ArrayList<Roaster>()
             val shots = ArrayList<StoredShot>()
             var restoredPrefs: AppPrefs? = null
+            var restoredCommon: CommonSettings? = null
+            var restoredQcGrind: Float? = null
             var restoredProfileMeta: JsonObject? = null
             var restoredMaintenance: MaintenanceState? = null
             var restoredVisualizerPrefs: VisualizerSyncPrefs? = null
@@ -1667,11 +1683,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 val obj = runCatching { json.parseToJsonElement(line).jsonObject }.getOrNull() ?: continue
                 when ((obj["kind"] as? JsonPrimitive)?.content) {
                     "crema-backup/v1" -> sawHeader = true
-                    // Only re-apply settings from an Android (or untagged legacy) bundle —
-                    // a web bundle's AppPrefs shape differs and would reset us to defaults.
                     "settings" -> {
                         val shell = (obj["_shell"] as? JsonPrimitive)?.content
-                        if (shell == null || shell == "android") {
+                        val commonObj = obj["common"] as? JsonObject
+                        if (commonObj != null) {
+                            // Unified format: `common` is the cross-shell CommonSettings
+                            // (apply from any shell); `qcGrind` is Android-only.
+                            restoredCommon = runCatching { json.decodeFromString(CommonSettings.serializer(), json.encodeToString(JsonObject.serializer(), commonObj)) }.getOrNull()
+                            if (shell == null || shell == "android") {
+                                restoredQcGrind = (obj["qcGrind"] as? JsonPrimitive)?.floatOrNull
+                            }
+                        } else if (shell == null || shell == "android") {
+                            // Pre-unification Android backup — a flat AppPrefs settings line.
                             restoredPrefs = runCatching { json.decodeFromString(AppPrefs.serializer(), stripKind(obj)) }.getOrNull()
                         }
                     }
@@ -1729,6 +1752,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             persistLibrary()
             historyStore.save(_ui.value.history)
             restoredPrefs?.let { applyRestoredSettings(it) }
+            // Cross-shell common settings: overlay onto current prefs (keeping this
+            // device's platform extras), then apply. qcGrind rides only from Android.
+            restoredCommon?.let { c ->
+                val target = currentPrefs().withCommonSettings(c)
+                applyRestoredSettings(if (restoredQcGrind != null) target.copy(qcGrind = restoredQcGrind) else target)
+            }
 
             // Maintenance counters + Visualizer sync prefs — both shared core types,
             // applied verbatim on either shell (no per-shell tag); never the OAuth

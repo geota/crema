@@ -41,6 +41,7 @@
 //!   crate; custom profiles call this from the shell via the wasm /
 //!   UniFFI bridges.
 
+pub mod app_settings;
 pub mod bean;
 pub mod bean_coerce;
 pub mod beanconqueror;
