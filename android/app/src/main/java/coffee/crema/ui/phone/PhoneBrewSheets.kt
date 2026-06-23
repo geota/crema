@@ -42,8 +42,6 @@ import coffee.crema.ui.theme.JetBrainsMono
  *  • Chart tab → vm.toggleChartChannel; Shot tab → the five behaviour setters.
  */
 
-private val niceFmt: (Double) -> String = { v -> if (v == kotlin.math.floor(v)) "%.0f".format(v) else "%.1f".format(v) }
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PhoneQuickSheet(
@@ -161,7 +159,7 @@ fun PhoneQuickSheet(
                                 min = if (yieldRatioMode == "yield") 10.0 else 1.0,
                                 max = if (yieldRatioMode == "yield") 80.0 else 5.0,
                                 presets = if (yieldRatioMode == "yield") listOf(32.0, 36.0, 40.0, 45.0) else listOf(1.5, 2.0, 2.5, 3.0),
-                                fmt = { if (yieldRatioMode == "yield") niceFmt(it) else "1:%.1f".format(it) },
+                                fmt = { if (yieldRatioMode == "yield") "%.1f".format(it) else "1:%.1f".format(it) },
                                 onChange = {
                                     if (yieldRatioMode == "yield") vm.quickAdjustBrew(dose, it, brewTemp)
                                     else vm.quickAdjustBrew(dose, dose * it, brewTemp)
