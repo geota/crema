@@ -36,6 +36,7 @@
 	import StToggle from '../StToggle.svelte';
 	import BeanSyncSection from './BeanSyncSection.svelte';
 	import { getSettingsStore, type SharingPrivacy } from '$lib/settings';
+	import { exportBackup } from '$lib/backup';
 
 	const history = getHistoryStore();
 	const appCtx = getCremaAppContext();
@@ -180,6 +181,17 @@
 		});
 		downloadBlob('crema-history.json', blob);
 	}
+
+	/** Brief inline feedback for the Backup & restore actions. */
+	let backupNote = $state<string | null>(null);
+
+	/** Build + download a full `crema-backup/v1` bundle of everything local. */
+	function backUp(): void {
+		const result = exportBackup();
+		backupNote = result
+			? `Backed up ${result.profiles} profile(s), ${result.beans} bean(s), ${result.roasters} roaster(s), ${result.shots} shot(s).`
+			: 'Nothing to back up yet.';
+	}
 </script>
 
 <StSectionHead
@@ -323,6 +335,20 @@
 		</StRow>
 	</StGroup>
 {/if}
+
+<StGroup
+	title="Backup & restore"
+	sub="One file with all your custom profiles, beans, roasters, shots and settings — keep it safe or move it to another device."
+>
+	<StRow
+		title="Back up everything"
+		sub={backupNote ?? 'Download a .crema bundle of everything on this device. Photos stay local.'}
+	>
+		{#snippet control()}
+			<StButton label="Back up" icon="download-simple" variant="primary" onClick={backUp} />
+		{/snippet}
+	</StRow>
+</StGroup>
 
 <StGroup title="Local export" sub="Download a copy of your local data.">
 	<StRow
