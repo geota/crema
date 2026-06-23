@@ -145,6 +145,17 @@ export class MaintenanceStore {
 	}
 
 	/**
+	 * Replace the persisted maintenance state wholesale — a whole-app backup
+	 * restore adopting the bundle's water counters. `MaintenanceState` is a
+	 * shared core type, so a bundle from either shell applies directly;
+	 * {@link defaultState} backfills any field the bundle omitted.
+	 */
+	replaceAll(state: Partial<MaintenanceState>): void {
+		this.state = { ...defaultState(), ...state };
+		this.persist();
+	}
+
+	/**
 	 * Integrate one telemetry sample into the litre counter — the orchestrator
 	 * calls this from its `Telemetry` handler. `flowMlPerS` is the DE1's group
 	 * flow; `deltaSeconds` is the wall-clock time since the previous sample.

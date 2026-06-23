@@ -21,7 +21,6 @@ import type { CaptureEntry } from '$lib/capture';
 import { getCaptureStore } from '$lib/capture';
 import { getBeanStore } from '$lib/bean';
 import { getProfileStore } from '$lib/profiles';
-import { getSettingsStore } from '$lib/settings';
 import { getActiveShotStore, type ActiveShotData } from '$lib/state/active-shot.svelte';
 import { appendSyncLog, directionPushes, readSyncConfig } from '$lib/visualizer';
 import type { AppRuntime } from '$lib/effect/runtime';
@@ -347,7 +346,7 @@ export function pushShotToVisualizer(
 	return Effect.gen(function* () {
 		const config = readSyncConfig();
 		if (!directionPushes(config.direction.shots)) return;
-		if (!getSettingsStore().current.visualizerAutoUpload) return;
+		if (!config.autoUpload) return;
 		const shot = getHistoryStore().get(shotId);
 		if (!shot) return;
 

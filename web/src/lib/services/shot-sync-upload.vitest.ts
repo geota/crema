@@ -17,17 +17,23 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // Controllable settings + the wasm signature / v2 export, all hoisted so the
 // mock factories can close over them.
 const h = vi.hoisted(() => ({
-	settings: {
-		visualizerIncludeProfile: true,
-		visualizerIncludeNotes: true,
-		visualizerPrivacy: 'unlisted',
-		grinderModel: ''
+	// grinderModel stays in app settings; the visualizer upload prefs moved to
+	// the sync-config (the unification) — mocked separately below.
+	settings: { grinderModel: '' } as Record<string, unknown>,
+	cfg: {
+		includeProfile: true,
+		includeNotes: true,
+		privacy: 'unlisted'
 	} as Record<string, unknown>,
 	exportJson: JSON.stringify({ profile: { title: 'P' }, metadata: { notes: 'tasty' } }),
 	beanVisualizerId: null as string | null
 }));
 
 vi.mock('$lib/settings', () => ({ getSettingsStore: () => ({ current: h.settings }) }));
+vi.mock('$lib/visualizer/sync-config', async (importOriginal) => ({
+	...(await importOriginal<typeof import('$lib/visualizer/sync-config')>()),
+	readSyncConfig: () => h.cfg
+}));
 vi.mock('$lib/history/v2-export', () => ({ exportStoredShotAsV2Json: () => h.exportJson }));
 vi.mock('$lib/bean/store.svelte', () => ({
 	getBeanStore: () => ({ getBean: () => ({ visualizerId: h.beanVisualizerId }) })
@@ -102,12 +108,8 @@ const postBody = (calls: HttpRequest[]) =>
 const patchCall = (calls: HttpRequest[]) => calls.find((c) => c.method === 'PATCH');
 
 beforeEach(() => {
-	h.settings = {
-		visualizerIncludeProfile: true,
-		visualizerIncludeNotes: true,
-		visualizerPrivacy: 'unlisted',
-		grinderModel: ''
-	};
+	h.settings = { grinderModel: '' };
+	h.cfg = { includeProfile: true, includeNotes: true, privacy: 'unlisted' };
 	h.exportJson = JSON.stringify({ profile: { title: 'P' }, metadata: { notes: 'tasty' } });
 	h.beanVisualizerId = null;
 });
@@ -127,15 +129,15 @@ describe('ShotSync.uploadShot — payload shaping', () => {
 		expect((body.metadata as Record<string, unknown>).notes).toBe('tasty');
 	});
 
-	it('drops the profile when visualizerIncludeProfile is off', async () => {
-		h.settings.visualizerIncludeProfile = false;
+	it('drops the profile when includeProfile is off', async () => {
+		h.cfg.includeProfile = false;
 		const { layer, calls } = mkHttp(() => ({ ok: true, json: { id: 'viz-1' } }));
 		await run(ShotSync.pipe(Effect.flatMap((s) => s.uploadShot(shot()))), layer);
 		expect(postBody(calls).profile).toBeUndefined();
 	});
 
-	it('nulls the notes when visualizerIncludeNotes is off', async () => {
-		h.settings.visualizerIncludeNotes = false;
+	it('nulls the notes when includeNotes is off', async () => {
+		h.cfg.includeNotes = false;
 		const { layer, calls } = mkHttp(() => ({ ok: true, json: { id: 'viz-1' } }));
 		await run(ShotSync.pipe(Effect.flatMap((s) => s.uploadShot(shot()))), layer);
 		expect((postBody(calls).metadata as Record<string, unknown>).notes).toBeNull();

@@ -2,6 +2,7 @@ package coffee.crema.visualizer
 
 import coffee.crema.core.exportV2JsonShot
 import coffee.crema.core.signatureForShot
+import coffee.crema.core.VisualizerSyncPrefs
 import coffee.crema.history.StoredShot
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -103,12 +104,13 @@ class VisualizerSync(
                 configured = clientId.isNotBlank(),
                 signedIn = p.tokens != null,
                 account = p.account,
-                autoSync = p.autoSync,
-                privacy = p.privacy,
-                includeProfile = p.includeProfile,
-                includeNotes = p.includeNotes,
+                // Android's single auto gate is the shot auto-upload (`autoUpload`).
+                autoSync = p.prefs.autoUpload,
+                privacy = p.prefs.privacy,
+                includeProfile = p.prefs.includeProfile,
+                includeNotes = p.prefs.includeNotes,
                 lastShotSyncAt = p.lastShotSyncAt,
-                shotsDirection = p.shotsDirection,
+                shotsDirection = p.prefs.shotsDirection,
                 log = p.log,
             )
         }
@@ -120,6 +122,26 @@ class VisualizerSync(
             store.save(persisted)
         }
         fold()
+    }
+
+    // ── Whole-app backup (sync PREFERENCES only — never the token) ─────────────
+
+    /**
+     * The user's Visualizer sync preferences for a whole-app backup — the shared
+     * core [VisualizerSyncPrefs] shape, serialised byte-identically with the web
+     * shell so a backup's `visualizerPrefs` line moves between devices/shells.
+     * NEVER the OAuth token, account, in-flight handshake, cursors, or log —
+     * those are per-device runtime state (re-auth after a restore).
+     */
+    fun backupPrefs(): VisualizerSyncPrefs = persisted.prefs
+
+    /**
+     * Apply restored Visualizer sync preferences from a backup's `visualizerPrefs`
+     * line — overwrites [VisualizerState.prefs], preserving the current tokens /
+     * account / in-flight handshake / cursors / log.
+     */
+    suspend fun restorePrefs(prefs: VisualizerSyncPrefs) {
+        persist { it.copy(prefs = prefs) }
     }
 
     // ── Sign-in lifecycle ────────────────────────────────────────────────────
@@ -213,11 +235,11 @@ class VisualizerSync(
 
     // ── Preferences ──────────────────────────────────────────────────────────
 
-    fun setAutoSync(enabled: Boolean) = scope.launch { persist { it.copy(autoSync = enabled) } }
-    fun setShotsDirection(direction: String) = scope.launch { persist { it.copy(shotsDirection = direction) } }
-    fun setPrivacy(privacy: String) = scope.launch { persist { it.copy(privacy = privacy) } }
-    fun setIncludeProfile(enabled: Boolean) = scope.launch { persist { it.copy(includeProfile = enabled) } }
-    fun setIncludeNotes(enabled: Boolean) = scope.launch { persist { it.copy(includeNotes = enabled) } }
+    fun setAutoSync(enabled: Boolean) = scope.launch { persist { it.copy(prefs = it.prefs.copy(autoUpload = enabled)) } }
+    fun setShotsDirection(direction: String) = scope.launch { persist { it.copy(prefs = it.prefs.copy(shotsDirection = direction)) } }
+    fun setPrivacy(privacy: String) = scope.launch { persist { it.copy(prefs = it.prefs.copy(privacy = privacy)) } }
+    fun setIncludeProfile(enabled: Boolean) = scope.launch { persist { it.copy(prefs = it.prefs.copy(includeProfile = enabled)) } }
+    fun setIncludeNotes(enabled: Boolean) = scope.launch { persist { it.copy(prefs = it.prefs.copy(includeNotes = enabled)) } }
 
     private fun directionPushes(d: String) = d == "backup" || d == "two-way"
     private fun directionPulls(d: String) = d == "pull" || d == "two-way"
@@ -275,13 +297,13 @@ class VisualizerSync(
         val wire = wireShotJson(shot, grinderModel())
         val v2 = exportV2JsonShot(json.encodeToString(JsonObject.serializer(), wire))
         val doc = json.parseToJsonElement(v2).jsonObject.toMutableMap()
-        if (!persisted.includeProfile) doc.remove("profile")
+        if (!persisted.prefs.includeProfile) doc.remove("profile")
         val metadata = (doc["metadata"] as? JsonObject)?.toMutableMap() ?: mutableMapOf()
-        if (!persisted.includeNotes && metadata.containsKey("notes")) {
+        if (!persisted.prefs.includeNotes && metadata.containsKey("notes")) {
             metadata["notes"] = JsonNull
         }
         // Per-shot override wins; null inherits the Sharing default (web parity).
-        doc["privacy"] = JsonPrimitive(shot.privacy ?: persisted.privacy)
+        doc["privacy"] = JsonPrimitive(shot.privacy ?: persisted.prefs.privacy)
         metadata["crema"] = buildJsonObject {
             put("localId", JsonPrimitive(shot.id))
             put(
@@ -339,12 +361,12 @@ class VisualizerSync(
     fun patchEditedShot(shot: StoredShot) {
         val vid = shot.visualizerId ?: return
         if (persisted.tokens == null) return
-        if (!directionPushes(persisted.shotsDirection)) return
+        if (!directionPushes(persisted.prefs.shotsDirection)) return
         val body = buildJsonObject {
             val rating = shot.rating ?: 0
             if (rating > 0) put("flavor", JsonPrimitive((rating * 3).coerceIn(0, 15)))
-            if (persisted.includeNotes) put("private_notes", JsonPrimitive(shot.notes ?: ""))
-            put("privacy", JsonPrimitive(shot.privacy ?: persisted.privacy))
+            if (persisted.prefs.includeNotes) put("private_notes", JsonPrimitive(shot.notes ?: ""))
+            put("privacy", JsonPrimitive(shot.privacy ?: persisted.prefs.privacy))
             grinderModel()?.let { put("grinder_model", JsonPrimitive(it)) }
             // Inline bean from the structured snapshot frozen at shot time (issue 06).
             shot.bean?.let { snap ->
@@ -361,7 +383,7 @@ class VisualizerSync(
     /** Called on `ShotCompleted` — uploads when auto-sync is armed, signed in,
      *  and the shots direction pushes. */
     fun maybeAutoUpload(shot: StoredShot) {
-        if (persisted.autoSync && persisted.tokens != null && directionPushes(persisted.shotsDirection)) {
+        if (persisted.prefs.autoUpload && persisted.tokens != null && directionPushes(persisted.prefs.shotsDirection)) {
             uploadShot(shot, silent = true)
         }
     }
@@ -502,7 +524,7 @@ class VisualizerSync(
             notify("Sign in to Visualizer first (Settings → Sharing)")
             return
         }
-        val direction = persisted.shotsDirection
+        val direction = persisted.prefs.shotsDirection
         if (direction == "off") {
             notify("Shot sync is off — pick a direction first")
             return

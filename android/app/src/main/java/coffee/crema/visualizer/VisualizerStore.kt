@@ -1,10 +1,16 @@
 package coffee.crema.visualizer
 
 import android.content.Context
+import coffee.crema.core.VisualizerSyncPrefs
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
 import java.io.File
 
 /*
@@ -52,19 +58,16 @@ data class VisualizerState(
     val pendingState: String? = null,
     /** Cached `/me` projection; refreshed on sign-in and on Settings open. */
     val account: VisualizerAccount? = null,
-    // ── Sync preferences (web sync-config + settings defaults) ──────────────
-    /** Master auto-sync gate — new shots upload as they complete. Web default: true. */
-    val autoSync: Boolean = true,
-    /** Upload privacy: `"public" | "unlisted" | "private"`. Web default: unlisted. */
-    val privacy: String = "unlisted",
-    /** Include the profile block in uploads. Web default: true. */
-    val includeProfile: Boolean = true,
-    /** Include tasting notes in uploads. Web default: false. */
-    val includeNotes: Boolean = false,
+    /**
+     * Unified sync PREFERENCES — the shared core [VisualizerSyncPrefs] shape both
+     * shells serialise identically, so a backup's `visualizerPrefs` line moves
+     * between web and Android with no per-shell tag. Pre-unification builds stored
+     * these as flat fields (`autoSync`/`privacy`/…); [VisualizerStore.load]
+     * migrates such a file forward.
+     */
+    val prefs: VisualizerSyncPrefs = DEFAULT_VISUALIZER_SYNC_PREFS,
     /** Unix ms of the last successful shot push, or null. */
     val lastShotSyncAt: Long? = null,
-    /** Shots sync direction: `"off" | "backup" | "pull" | "two-way"` (web default: backup). */
-    val shotsDirection: String = "backup",
     /**
      * Incremental pull cursor (unix ms); null pulls everything. Advanced ONLY
      * by a successful pull — never by a push (the web learned this the hard
@@ -75,15 +78,52 @@ data class VisualizerState(
     val log: List<SyncLogEntry> = emptyList(),
 )
 
+/** The canonical default sync prefs — mirrors the core `VisualizerSyncPrefs::default`. */
+val DEFAULT_VISUALIZER_SYNC_PREFS: VisualizerSyncPrefs = VisualizerSyncPrefs(
+    autoUpload = true,
+    autoSync = true,
+    privacy = "unlisted",
+    includeProfile = true,
+    includeNotes = false,
+    shotsDirection = "backup",
+    beansDirection = "two-way",
+    roastersDirection = "two-way",
+)
+
 /** File-backed JSON persistence for [VisualizerState] (`filesDir/visualizer.json`). */
 class VisualizerStore(private val context: Context, private val json: Json) {
     private val file get() = File(context.filesDir, FILE_NAME)
 
     suspend fun load(): VisualizerState = withContext(Dispatchers.IO) {
         runCatching {
-            file.takeIf { it.exists() }?.readText()
-                ?.let { json.decodeFromString(VisualizerState.serializer(), it) }
+            val text = file.takeIf { it.exists() }?.readText() ?: return@runCatching null
+            val state = json.decodeFromString(VisualizerState.serializer(), text)
+            // Migrate a pre-unification file (flat `autoSync`/`privacy`/… fields and
+            // no `prefs` object) forward into the shared [VisualizerSyncPrefs] shape.
+            val obj = json.parseToJsonElement(text).jsonObject
+            if (obj["prefs"] == null && obj.keys.any { it in LEGACY_PREF_KEYS }) {
+                state.copy(prefs = migrateLegacyPrefs(obj))
+            } else {
+                state
+            }
         }.getOrNull() ?: VisualizerState()
+    }
+
+    /** Build [VisualizerSyncPrefs] from a pre-unification file's flat fields. The
+     *  legacy `autoSync` WAS the shot auto-upload gate (Android's single auto flag). */
+    private fun migrateLegacyPrefs(obj: JsonObject): VisualizerSyncPrefs {
+        fun bool(k: String, d: Boolean) = (obj[k] as? JsonPrimitive)?.booleanOrNull ?: d
+        fun str(k: String, d: String) = (obj[k] as? JsonPrimitive)?.contentOrNull ?: d
+        return VisualizerSyncPrefs(
+            autoUpload = bool("autoSync", true),
+            autoSync = true,
+            privacy = str("privacy", "unlisted"),
+            includeProfile = bool("includeProfile", true),
+            includeNotes = bool("includeNotes", false),
+            shotsDirection = str("shotsDirection", "backup"),
+            beansDirection = "two-way",
+            roastersDirection = "two-way",
+        )
     }
 
     suspend fun save(state: VisualizerState) {
@@ -94,5 +134,8 @@ class VisualizerStore(private val context: Context, private val json: Json) {
 
     private companion object {
         const val FILE_NAME = "visualizer.json"
+        val LEGACY_PREF_KEYS = setOf(
+            "autoSync", "privacy", "includeProfile", "includeNotes", "shotsDirection",
+        )
     }
 }

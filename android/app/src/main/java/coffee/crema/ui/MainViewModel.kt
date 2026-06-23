@@ -17,6 +17,7 @@ import coffee.crema.core.ScaleCapabilities
 import coffee.crema.core.Bean
 import coffee.crema.core.Roaster
 import coffee.crema.core.MaintenanceState
+import coffee.crema.core.VisualizerSyncPrefs
 import coffee.crema.core.MaintenanceReadout
 import coffee.crema.core.blankCremaProfile
 import coffee.crema.core.builtinCremaProfiles
@@ -1591,13 +1592,37 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val beansJson = runCatching { json.encodeToString(ListSerializer(Bean.serializer()), s.beans) }.getOrElse { "[]" }
         val roastersJson = runCatching { json.encodeToString(ListSerializer(Roaster.serializer()), s.roasters) }.getOrElse { "[]" }
         val shotsJson = runCatching { json.encodeToString(ListSerializer(StoredShot.serializer()), s.history) }.getOrElse { "[]" }
-        val settingsJson = runCatching { json.encodeToString(AppPrefs.serializer(), portable) }.getOrElse { "{}" }
+        // Tag the settings with the source shell so a restore only re-applies them
+        // on Android — web's AppPrefs shape differs (see [restoreBackup]'s guard).
+        val settingsJson = runCatching {
+            val base = json.parseToJsonElement(json.encodeToString(AppPrefs.serializer(), portable)).jsonObject
+            json.encodeToString(JsonObject.serializer(), JsonObject(base + ("_shell" to JsonPrimitive("android"))))
+        }.getOrElse { "{\"_shell\":\"android\"}" }
+        // Profile organisation — pinned + hidden BUILT-IN ids (cross-shell; custom
+        // pins ride inside the profile JSON). Maintenance — a shared core type,
+        // fully portable. Visualizer SYNC prefs — shell-tagged, token-free.
+        val profileMetaJson = json.encodeToString(
+            JsonObject.serializer(),
+            JsonObject(
+                mapOf(
+                    "pinned" to JsonArray(pinnedIds.map { JsonPrimitive(it) }),
+                    "hiddenBuiltins" to JsonArray(hiddenIds.map { JsonPrimitive(it) }),
+                ),
+            ),
+        )
+        val maintenanceJson = runCatching { json.encodeToString(MaintenanceState.serializer(), s.maintenance) }.getOrElse { "{}" }
+        val visualizerPrefsJson = runCatching {
+            json.encodeToString(VisualizerSyncPrefs.serializer(), visualizer.backupPrefs())
+        }.getOrElse { "{}" }
         val envelope = buildString {
             append("{\"profiles\":[").append(customs.joinToString(","))
             append("],\"beans\":").append(beansJson)
             append(",\"roasters\":").append(roastersJson)
             append(",\"shots\":").append(shotsJson)
             append(",\"settings\":").append(settingsJson)
+            append(",\"profileMeta\":").append(profileMetaJson)
+            append(",\"maintenance\":").append(maintenanceJson)
+            append(",\"visualizerPrefs\":").append(visualizerPrefsJson)
             append("}")
         }
         return runCatching {
@@ -1632,6 +1657,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val roasters = ArrayList<Roaster>()
             val shots = ArrayList<StoredShot>()
             var restoredPrefs: AppPrefs? = null
+            var restoredProfileMeta: JsonObject? = null
+            var restoredMaintenance: MaintenanceState? = null
+            var restoredVisualizerPrefs: VisualizerSyncPrefs? = null
             var sawHeader = false
             for (raw in text.lineSequence()) {
                 val line = raw.trim()
@@ -1639,7 +1667,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 val obj = runCatching { json.parseToJsonElement(line).jsonObject }.getOrNull() ?: continue
                 when ((obj["kind"] as? JsonPrimitive)?.content) {
                     "crema-backup/v1" -> sawHeader = true
-                    "settings" -> restoredPrefs = runCatching { json.decodeFromString(AppPrefs.serializer(), stripKind(obj)) }.getOrNull()
+                    // Only re-apply settings from an Android (or untagged legacy) bundle —
+                    // a web bundle's AppPrefs shape differs and would reset us to defaults.
+                    "settings" -> {
+                        val shell = (obj["_shell"] as? JsonPrimitive)?.content
+                        if (shell == null || shell == "android") {
+                            restoredPrefs = runCatching { json.decodeFromString(AppPrefs.serializer(), stripKind(obj)) }.getOrNull()
+                        }
+                    }
+                    "profileMeta" -> restoredProfileMeta = obj
+                    "maintenance" -> restoredMaintenance = runCatching { json.decodeFromString(MaintenanceState.serializer(), stripKind(obj)) }.getOrNull()
+                    "visualizerPrefs" -> restoredVisualizerPrefs = runCatching { json.decodeFromString(VisualizerSyncPrefs.serializer(), stripKind(obj)) }.getOrNull()
                     "roaster" -> runCatching { json.decodeFromString(Roaster.serializer(), stripKind(obj)) }.getOrNull()?.let(roasters::add)
                     "bean" -> runCatching { json.decodeFromString(Bean.serializer(), stripKind(obj)) }.getOrNull()?.let(beans::add)
                     "shot" -> runCatching { json.decodeFromString(StoredShot.serializer(), stripKind(obj)) }.getOrNull()?.let(shots::add)
@@ -1674,11 +1712,32 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 activeBeanId = it.activeBeanId ?: newBeans.firstOrNull()?.id,
             ) }
 
+            // Profile organisation — pinned + hidden BUILT-IN ids. WIPE replaces the
+            // sets; MERGE unions them. Applied BEFORE refreshProfiles so the star /
+            // hidden overlay reflects the restored choices on the next list build.
+            restoredProfileMeta?.let { pm ->
+                val bundledPinned = (pm["pinned"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.content }?.toSet().orEmpty()
+                val bundledHidden = (pm["hiddenBuiltins"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.content }?.toSet().orEmpty()
+                pinnedIds = if (mode == RestoreMode.WIPE) bundledPinned else pinnedIds + bundledPinned
+                hiddenIds = if (mode == RestoreMode.WIPE) bundledHidden else hiddenIds + bundledHidden
+                pinnedProfileStore.save(pinnedIds)
+                hiddenProfileStore.save(hiddenIds)
+            }
+
             refreshProfiles()
             persistCustomProfiles()
             persistLibrary()
             historyStore.save(_ui.value.history)
             restoredPrefs?.let { applyRestoredSettings(it) }
+
+            // Maintenance counters + Visualizer sync prefs — both shared core types,
+            // applied verbatim on either shell (no per-shell tag); never the OAuth
+            // token (re-auth after restore). Reseed the live water integrator.
+            restoredMaintenance?.let { m ->
+                maintenanceTotalLitres = m.totalLitres
+                saveMaintenance(m)
+            }
+            restoredVisualizerPrefs?.let { visualizer.restorePrefs(it) }
 
             notifyUser(
                 "Restored ${newProfiles.size} profile(s) · ${newBeans.size} bean(s) · " +

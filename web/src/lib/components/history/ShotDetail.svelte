@@ -31,6 +31,7 @@
 	import { daysOffRoast, roastBand, type Bean, type Roaster } from '$lib/bean';
 	import { getSettingsStore, convertWeight, convertTemp, convertPressure } from '$lib/settings';
 	import { getProfileStore } from '$lib/profiles';
+	import { onSyncConfigChange, readSyncConfig } from '$lib/visualizer';
 	import { getCremaAppContext } from '$lib/shell/app-context';
 	import { downloadBlob } from '$lib/utils/download';
 	import { getBeanStore } from '$lib/bean';
@@ -149,6 +150,10 @@
 
 	// Unit-aware metric readouts — driven by the Settings unit prefs (D1).
 	const settings = getSettingsStore();
+	// Default upload privacy now lives in the Visualizer sync-config; mirror it
+	// reactively so the "Default · …" chip tracks a Settings → Sharing change.
+	let defaultPrivacy = $state(readSyncConfig().privacy);
+	$effect(() => onSyncConfigChange((c) => (defaultPrivacy = c.privacy)));
 	/** Yield in the chosen weight unit. */
 	const yieldM = $derived(convertWeight(yieldOut, settings.current.weightUnit));
 	/** Peak weight in the chosen weight unit. */
@@ -544,7 +549,7 @@
 				onclick={() => onPrivacyChange(null)}
 				title="Follow the Settings → Sharing default"
 			>
-				Default · {settings.current.visualizerPrivacy}
+				Default · {defaultPrivacy}
 			</button>
 			{#each ['public', 'unlisted', 'private'] as const as p (p)}
 				<button

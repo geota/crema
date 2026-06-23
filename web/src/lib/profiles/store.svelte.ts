@@ -268,6 +268,67 @@ export class ProfileStore {
 		this.persistCustom();
 	}
 
+	/**
+	 * The profile-organisation metadata for a whole-app backup:
+	 *  - `pinned` / `hiddenBuiltins` — built-in profile ids (the user's pin +
+	 *    archive choices). These are cross-shell: built-in ids match on Android,
+	 *    so a backup carries them between devices/shells.
+	 *  - `builtinOverrides` — the full per-built-in override map (pin + lastUsed),
+	 *    a web-native superset Android ignores; web prefers it on restore so the
+	 *    `lastUsed` timestamps survive a round-trip.
+	 *
+	 * Custom-profile pins are NOT here — they ride inside each custom profile's
+	 * JSON (the `profiles` bundle lines), same as Android.
+	 */
+	backupMeta(): {
+		pinned: string[];
+		hiddenBuiltins: string[];
+		builtinOverrides: Record<string, BuiltinOverride>;
+	} {
+		const pinned = Object.entries(this.overrides)
+			.filter(([, ov]) => ov.pinned)
+			.map(([id]) => id);
+		return {
+			pinned,
+			hiddenBuiltins: Array.from(this.hiddenBuiltins),
+			builtinOverrides: this.overrides
+		};
+	}
+
+	/**
+	 * Apply restored profile-organisation metadata. `replace` (a wipe restore)
+	 * overwrites the pin / hidden sets wholesale; otherwise they union with the
+	 * existing state (a lossless re-restore). Prefers the web-native
+	 * `builtinOverrides` map when the bundle carries one (full fidelity); else
+	 * reconstructs pins from the cross-shell `pinned` id list (an Android bundle).
+	 * Existing `lastUsed` timestamps are preserved on merge.
+	 */
+	applyBackupMeta(
+		meta: {
+			pinned?: string[];
+			hiddenBuiltins?: string[];
+			builtinOverrides?: Record<string, BuiltinOverride>;
+		},
+		replace: boolean
+	): void {
+		const base: Record<string, BuiltinOverride> = replace ? {} : { ...this.overrides };
+		if (meta.builtinOverrides && typeof meta.builtinOverrides === 'object') {
+			for (const [id, ov] of Object.entries(meta.builtinOverrides)) {
+				base[id] = { pinned: !!ov?.pinned, lastUsed: ov?.lastUsed ?? base[id]?.lastUsed ?? null };
+			}
+		} else if (Array.isArray(meta.pinned)) {
+			for (const id of meta.pinned) {
+				base[id] = { pinned: true, lastUsed: base[id]?.lastUsed ?? null };
+			}
+		}
+		this.overrides = base;
+		this.persistOverrides();
+
+		if (replace) this.hiddenBuiltins.clear();
+		for (const id of meta.hiddenBuiltins ?? []) this.hiddenBuiltins.add(id);
+		this.persistHiddenBuiltins();
+	}
+
 	/** Persist the per-built-in overrides to localStorage. */
 	private persistOverrides(): void {
 		writeJson(OVERRIDES_KEY, this.overrides);

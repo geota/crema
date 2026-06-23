@@ -25,7 +25,7 @@
 		startVisualizerLogin,
 		type VisualizerAccount
 	} from '$lib/bean';
-	import { onSyncConfigChange, readSyncConfig } from '$lib/visualizer';
+	import { onSyncConfigChange, readSyncConfig, updateSyncConfig } from '$lib/visualizer';
 	import { useVisualizerConnection } from '$lib/visualizer/useVisualizerConnection.svelte';
 	import { getCremaAppContext } from '$lib/shell/app-context';
 	import StSectionHead from '../StSectionHead.svelte';
@@ -35,7 +35,7 @@
 	import StSelect from '../StSelect.svelte';
 	import StToggle from '../StToggle.svelte';
 	import BeanSyncSection from './BeanSyncSection.svelte';
-	import { getSettingsStore, type SharingPrivacy } from '$lib/settings';
+	import { type SharingPrivacy } from '$lib/settings';
 	import {
 		backupFileName,
 		buildBackupJsonl,
@@ -49,7 +49,6 @@
 	const history = getHistoryStore();
 	const appCtx = getCremaAppContext();
 	const viz = useVisualizerConnection();
-	const settings = getSettingsStore();
 	const oauthConfigured = isVisualizerOauthConfigured();
 
 	let account = $state<VisualizerAccount | null>(null);
@@ -64,6 +63,9 @@
 	/** Cached premium-tier flag, kept in sync with the persisted config so
 	   the eyebrow line picks up Test results without a reload. */
 	let premium = $state<boolean | null>(readSyncConfig().premium);
+	/** Reactive snapshot of the sync-config, so the Upload-options controls
+	   reflect a change made elsewhere (the prefs now live in the sync-config). */
+	let syncCfg = $state(readSyncConfig());
 
 	// Fetch the account the first time we observe a connection — the helper's
 	// mount seed or a later sign-in. Guarded on account/error so it loads once
@@ -74,7 +76,12 @@
 		if (viz.connected && account === null && accountError === null) void loadAccount();
 	});
 
-	onMount(() => onSyncConfigChange((next) => (premium = next.premium)));
+	onMount(() =>
+		onSyncConfigChange((next) => {
+			premium = next.premium;
+			syncCfg = next;
+		})
+	);
 
 	async function loadAccount(): Promise<void> {
 		const api = appCtx().services;
@@ -392,8 +399,8 @@
 		>
 			{#snippet control()}
 				<StToggle
-					on={settings.current.visualizerAutoUpload}
-					onChange={(v) => settings.set('visualizerAutoUpload', v)}
+					on={syncCfg.autoUpload}
+					onChange={(v) => updateSyncConfig({ autoUpload: v })}
 				/>
 			{/snippet}
 		</StRow>
@@ -403,13 +410,13 @@
 		>
 			{#snippet control()}
 				<StSelect
-					value={settings.current.visualizerPrivacy}
+					value={syncCfg.privacy}
 					options={[
 						{ value: 'public', label: 'Public' },
 						{ value: 'unlisted', label: 'Unlisted' },
 						{ value: 'private', label: 'Private' }
 					]}
-					onChange={(v) => settings.set('visualizerPrivacy', v as SharingPrivacy)}
+					onChange={(v) => updateSyncConfig({ privacy: v as SharingPrivacy })}
 				/>
 			{/snippet}
 		</StRow>
@@ -419,8 +426,8 @@
 		>
 			{#snippet control()}
 				<StToggle
-					on={settings.current.visualizerIncludeProfile}
-					onChange={(v) => settings.set('visualizerIncludeProfile', v)}
+					on={syncCfg.includeProfile}
+					onChange={(v) => updateSyncConfig({ includeProfile: v })}
 				/>
 			{/snippet}
 		</StRow>
@@ -430,8 +437,8 @@
 		>
 			{#snippet control()}
 				<StToggle
-					on={settings.current.visualizerIncludeNotes}
-					onChange={(v) => settings.set('visualizerIncludeNotes', v)}
+					on={syncCfg.includeNotes}
+					onChange={(v) => updateSyncConfig({ includeNotes: v })}
 				/>
 			{/snippet}
 		</StRow>
