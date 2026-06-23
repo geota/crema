@@ -114,8 +114,9 @@ suspend fun driveListBackups(accessToken: String, json: Json): List<DriveFile> =
         }
     }
 
-/** Download a backup file's raw `.crema` text by id. */
-suspend fun driveDownloadBackup(accessToken: String, fileId: String, json: Json): String =
+/** Download a backup file's raw bytes by id (a `.crema.zip`, or legacy text — the
+ *  caller sniffs the zip magic vs decoding it as text). */
+suspend fun driveDownloadBackup(accessToken: String, fileId: String, json: Json): ByteArray =
     withContext(Dispatchers.IO) {
         val url = "$FILES_URL/${URLEncoder.encode(fileId, "UTF-8")}?alt=media"
         val conn = (URL(url).openConnection() as HttpURLConnection).apply {
@@ -126,10 +127,12 @@ suspend fun driveDownloadBackup(accessToken: String, fileId: String, json: Json)
         }
         try {
             val status = conn.responseCode
-            val resp = (if (status in 200..299) conn.inputStream else conn.errorStream)
-                ?.use { String(it.readBytes(), Charsets.UTF_8) }.orEmpty()
-            if (status !in 200..299) throw IOException(errorMessage(json, resp, status, "download"))
-            resp
+            if (status in 200..299) {
+                conn.inputStream.use { it.readBytes() }
+            } else {
+                val err = conn.errorStream?.use { String(it.readBytes(), Charsets.UTF_8) }.orEmpty()
+                throw IOException(errorMessage(json, err, status, "download"))
+            }
         } finally {
             conn.disconnect()
         }

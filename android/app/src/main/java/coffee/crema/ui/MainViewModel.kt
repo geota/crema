@@ -808,7 +808,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         notify = { msg -> notifyUser(msg) },
         backupJsonl = { backupBundleJson() },
         backupFileName = { backupFileName() },
-        applyRestore = { text, wipe -> restoreBackupFromText(text, if (wipe) RestoreMode.WIPE else RestoreMode.MERGE) },
+        applyRestore = { bytes, wipe ->
+            viewModelScope.launch { restoreBackupBytes(bytes, if (wipe) RestoreMode.WIPE else RestoreMode.MERGE) }
+        },
     )
 
     /**
@@ -1536,6 +1538,51 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }.getOrNull()
     }
 
+    /** Read a SAF [uri]'s raw bytes, or null on failure. */
+    private suspend fun readUriBytes(uri: Uri): ByteArray? = withContext(Dispatchers.IO) {
+        runCatching {
+            getApplication<Application>().contentResolver.openInputStream(uri)?.use { it.readBytes() }
+        }.getOrNull()
+    }
+
+    /** `.crema.zip` local-file magic: `PK\x03\x04`. */
+    private fun isZip(bytes: ByteArray): Boolean =
+        bytes.size >= 4 && bytes[0] == 0x50.toByte() && bytes[1] == 0x4b.toByte() &&
+            bytes[2] == 0x03.toByte() && bytes[3] == 0x04.toByte()
+
+    /**
+     * Unzip a `.crema.zip`: return its `backup.jsonl` text, and stash each
+     * `images/<beanId>` blob to `filesDir/bean-images/<beanId>` so a web backup's
+     * bean photos are kept on disk, ready for when Android grows photo display (the
+     * data itself restores from the JSONL now). Null when there's no backup.jsonl.
+     */
+    private suspend fun extractBackupJsonl(bytes: ByteArray): String? = withContext(Dispatchers.IO) {
+        runCatching {
+            var jsonl: String? = null
+            val imagesDir = java.io.File(getApplication<Application>().filesDir, "bean-images").apply { mkdirs() }
+            java.util.zip.ZipInputStream(java.io.ByteArrayInputStream(bytes)).use { zis ->
+                var entry = zis.nextEntry
+                while (entry != null) {
+                    val name = entry.name
+                    when {
+                        !entry.isDirectory && (name == "backup.jsonl" || name == "crema.jsonl") ->
+                            jsonl = String(zis.readBytes(), Charsets.UTF_8)
+                        !entry.isDirectory && name.startsWith("images/") -> {
+                            val beanId = name.substringAfter("images/")
+                            if (beanId.isNotEmpty()) {
+                                val safe = beanId.replace(Regex("[^A-Za-z0-9._-]"), "_")
+                                runCatching { java.io.File(imagesDir, safe).writeBytes(zis.readBytes()) }
+                            }
+                        }
+                    }
+                    zis.closeEntry()
+                    entry = zis.nextEntry
+                }
+            }
+            jsonl
+        }.getOrNull()
+    }
+
     /** Re-stamp an exported profile's JSON as a fresh custom (new id, source,
      *  Built-in tag stripped) while preserving every other wire field. */
     private fun adoptProfileJson(raw: String): String? {
@@ -1683,7 +1730,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             c.get(java.util.Calendar.YEAR), c.get(java.util.Calendar.MONTH) + 1, c.get(java.util.Calendar.DAY_OF_MONTH),
             c.get(java.util.Calendar.HOUR_OF_DAY), c.get(java.util.Calendar.MINUTE),
         )
-        return "crema-backup-$label-$stamp.crema"
+        // `.jsonl` is honest about the format (line-delimited JSON); the `crema`
+        // prefix keeps it recognisable + is what the Drive list query matches on.
+        return "crema-backup-$label-$stamp.crema.jsonl"
     }
 
     /** Restore a `crema-backup` bundle from a SAF [uri]. [RestoreMode.MERGE] adds
@@ -1694,10 +1743,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  bindings are always kept. */
     fun restoreBackup(uri: Uri, mode: RestoreMode) {
         viewModelScope.launch {
-            val text = readUriText(uri)?.trim()
-            if (text.isNullOrBlank()) { notifyUser("Restore failed — couldn't read that file"); return@launch }
-            restoreBackupFromText(text, mode)
+            val bytes = readUriBytes(uri)
+            if (bytes == null || bytes.isEmpty()) { notifyUser("Restore failed — couldn't read that file"); return@launch }
+            restoreBackupBytes(bytes, mode)
         }
+    }
+
+    /** Apply a backup from raw bytes — a `.crema.zip` (web full backup: JSONL +
+     *  bean photos) or a bare `.crema.jsonl` / `.crema`. Shared by the SAF file
+     *  restore and the Google Drive restore. */
+    suspend fun restoreBackupBytes(bytes: ByteArray, mode: RestoreMode) {
+        val text = (if (isZip(bytes)) extractBackupJsonl(bytes) else String(bytes, Charsets.UTF_8))?.trim()
+        if (text.isNullOrBlank()) { notifyUser("Restore failed — not a Crema backup"); return }
+        restoreBackupFromText(text, mode)
     }
 
     /** Parse + apply a `crema-backup` bundle's raw text — shared by the SAF restore
