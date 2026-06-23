@@ -39,8 +39,9 @@ class DriveSync(
     private val backupJsonl: () -> String?,
     /** A suggested backup filename (the VM's `backupFileName()`). */
     private val backupFileName: () -> String,
-    /** Apply a downloaded backup's raw text. `wipe` = replace vs merge. */
-    private val applyRestore: (text: String, wipe: Boolean) -> Unit,
+    /** Apply a downloaded backup's raw bytes (a `.crema.zip` or legacy text).
+     *  `wipe` = replace vs merge. */
+    private val applyRestore: (bytes: ByteArray, wipe: Boolean) -> Unit,
 ) {
     /** What the Settings UI binds to (mirrored into MainUiState). */
     data class UiState(
@@ -170,7 +171,7 @@ class DriveSync(
                     ?: throw IOException("No Crema backups found in Google Drive")
                 driveDownloadBackup(token, newest.id, json)
             }
-                .onSuccess { text -> applyRestore(text, wipe) }
+                .onSuccess { bytes -> applyRestore(bytes, wipe) }
                 .onFailure { notify("Google Drive restore failed: ${it.message}") }
             _state.update { it.copy(busy = false) }
         }
