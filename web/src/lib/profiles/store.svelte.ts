@@ -261,6 +261,13 @@ export class ProfileStore {
 		writeJson(CUSTOM_KEY, this.custom);
 	}
 
+	/** Wipe all custom profiles (built-ins untouched) — for a "replace from
+	 *  backup" restore, which writes the bundle's customs fresh after. */
+	clearAllCustom(): void {
+		this.custom = [];
+		this.persistCustom();
+	}
+
 	/** Persist the per-built-in overrides to localStorage. */
 	private persistOverrides(): void {
 		writeJson(OVERRIDES_KEY, this.overrides);

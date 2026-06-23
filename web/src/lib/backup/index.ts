@@ -20,8 +20,12 @@ import { exportBackupJsonl } from '$lib/wasm/de1_wasm';
 import { getBeanStore } from '$lib/bean';
 import { getHistoryStore } from '$lib/history';
 import { getSettingsStore } from '$lib/settings';
+import { getProfileStore } from '$lib/profiles';
 import { readJson } from '$lib/utils/storage';
 import { downloadBlob, filenameStamp } from '$lib/utils/download';
+import type { Bean, Roaster } from '$lib/bean/model';
+import type { StoredShot } from '$lib/history';
+import type { CremaProfile } from '$lib/profiles/model';
 
 /** localStorage key for the user's custom profiles (a `CremaProfile[]`). Mirror
  *  of `profiles/store`'s `CUSTOM_KEY` — read directly so the bundle carries the
@@ -94,5 +98,126 @@ export function exportBackup(cremaVersion = '0.0.1'): BackupContents | null {
 		beans: beans.length,
 		roasters: roasters.length,
 		shots: shots.length
+	};
+}
+
+export type RestoreMode = 'merge' | 'wipe';
+
+export interface RestoreSummary {
+	profiles: number;
+	beans: number;
+	roasters: number;
+	shots: number;
+	settingsApplied: boolean;
+}
+
+/**
+ * Restore a `crema-backup` bundle. Parses the line-tagged JSONL directly into
+ * typed records (lossless — matching Android's restore), then applies it:
+ *
+ *  - **merge** — adds only records whose id isn't already present (a lossless
+ *    re-restore): `bulkAdd` dedups beans/roasters; profiles + shots key on id.
+ *  - **wipe** — clears the local library / history / custom profiles + resets
+ *    settings first (destructive — the caller gates it), then loads the bundle.
+ *
+ * Settings apply only from a `_shell: 'web'` bundle (Android's `AppPrefs` shape
+ * differs); the DATA restores cross-shell either way.
+ *
+ * @throws if the text has no `crema-backup/v1` header (not a Crema backup).
+ */
+export function restoreBackup(text: string, mode: RestoreMode): RestoreSummary {
+	const profiles: CremaProfile[] = [];
+	const beans: Bean[] = [];
+	const roasters: Roaster[] = [];
+	const shots: StoredShot[] = [];
+	let settings: Record<string, unknown> | null = null;
+	let sawHeader = false;
+
+	for (const rawLine of text.split('\n')) {
+		const line = rawLine.trim();
+		if (line.length < 2 || line[0] !== '{') continue;
+		let obj: Record<string, unknown>;
+		try {
+			obj = JSON.parse(line) as Record<string, unknown>;
+		} catch {
+			continue;
+		}
+		const kind = obj.kind;
+		const rest: Record<string, unknown> = { ...obj };
+		delete rest.kind;
+		switch (kind) {
+			case 'crema-backup/v1':
+				sawHeader = true;
+				break;
+			case 'settings':
+				settings = rest;
+				break;
+			case 'roaster':
+				roasters.push(rest as unknown as Roaster);
+				break;
+			case 'bean':
+				beans.push(rest as unknown as Bean);
+				break;
+			case 'shot':
+				shots.push(rest as unknown as StoredShot);
+				break;
+			case 'profile':
+				profiles.push(rest as unknown as CremaProfile);
+				break;
+		}
+	}
+	if (!sawHeader) throw new Error('Not a Crema backup file.');
+
+	const beanStore = getBeanStore();
+	const history = getHistoryStore();
+	const profileStore = getProfileStore();
+	const settingsStore = getSettingsStore();
+
+	if (mode === 'wipe') {
+		beanStore.clearAll();
+		history.clearAllShots();
+		profileStore.clearAllCustom();
+		settingsStore.reset();
+	}
+
+	// Profiles — add customs whose id isn't already known.
+	let addedProfiles = 0;
+	for (const p of profiles) {
+		if (p.id && !profileStore.get(p.id)) {
+			profileStore.save(p);
+			addedProfiles++;
+		}
+	}
+	// Beans + roasters — bulkAdd dedups by id (idempotent merge).
+	const beforeBeans = beanStore.beans.length;
+	const beforeRoasters = beanStore.roasters.length;
+	beanStore.bulkAdd(beans, roasters);
+	const addedBeans = beanStore.beans.length - beforeBeans;
+	const addedRoasters = beanStore.roasters.length - beforeRoasters;
+	// Shots — insert those not already present.
+	let addedShots = 0;
+	for (const s of shots) {
+		if (!history.get(s.id)) {
+			history.insertPulled(s);
+			addedShots++;
+		}
+	}
+	// Settings — only a web-tagged bundle (Android's AppPrefs shape differs).
+	let settingsApplied = false;
+	if (settings && settings._shell === 'web') {
+		const current = settingsStore.current as unknown as Record<string, unknown>;
+		const setAny = settingsStore.set.bind(settingsStore) as (k: string, v: unknown) => void;
+		for (const key of Object.keys(current)) {
+			if (key in settings) setAny(key, settings[key]);
+		}
+		settingsApplied = true;
+	}
+
+	return {
+		profiles: addedProfiles,
+		beans: addedBeans,
+		roasters: addedRoasters,
+		shots: addedShots,
+		settingsApplied
 	};
 }
