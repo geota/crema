@@ -40,25 +40,29 @@ async function failOn(res: Response, what: string): Promise<never> {
 export async function uploadBackup(
 	accessToken: string,
 	name: string,
-	content: string
+	content: string | Uint8Array,
+	mime: string = BACKUP_MIME
 ): Promise<DriveFile> {
 	const boundary = `crema-${Math.random().toString(36).slice(2)}`;
-	const metadata = { name, mimeType: BACKUP_MIME };
-	const body =
+	const enc = new TextEncoder();
+	// Build the multipart body as a Blob so a BINARY media part (a `.crema.zip`)
+	// rides through intact — a string body would mangle the zip bytes.
+	const head = enc.encode(
 		`--${boundary}\r\n` +
-		`Content-Type: application/json; charset=UTF-8\r\n\r\n` +
-		`${JSON.stringify(metadata)}\r\n` +
-		`--${boundary}\r\n` +
-		`Content-Type: ${BACKUP_MIME}\r\n\r\n` +
-		`${content}\r\n` +
-		`--${boundary}--`;
+			`Content-Type: application/json; charset=UTF-8\r\n\r\n` +
+			`${JSON.stringify({ name, mimeType: mime })}\r\n` +
+			`--${boundary}\r\n` +
+			`Content-Type: ${mime}\r\n\r\n`
+	);
+	const media = typeof content === 'string' ? enc.encode(content) : content;
+	const tail = enc.encode(`\r\n--${boundary}--`);
 	const res = await fetch(`${UPLOAD_URL}?uploadType=multipart&fields=id,name,modifiedTime,size`, {
 		method: 'POST',
 		headers: {
 			Authorization: `Bearer ${accessToken}`,
 			'Content-Type': `multipart/related; boundary=${boundary}`
 		},
-		body
+		body: new Blob([head, media, tail] as BlobPart[])
 	});
 	if (!res.ok) await failOn(res, 'upload');
 	return (await res.json()) as DriveFile;
@@ -77,11 +81,12 @@ export async function listBackups(accessToken: string): Promise<DriveFile[]> {
 	return data.files ?? [];
 }
 
-/** Download a backup file's raw `.crema` text by id. */
-export async function downloadBackup(accessToken: string, fileId: string): Promise<string> {
+/** Download a backup file's raw bytes by id (a `.crema.zip`, or legacy text). The
+ *  caller (`restoreBackupData`) sniffs the zip magic vs decoding it as text. */
+export async function downloadBackup(accessToken: string, fileId: string): Promise<ArrayBuffer> {
 	const res = await fetch(`${FILES_URL}/${encodeURIComponent(fileId)}?alt=media`, {
 		headers: { Authorization: `Bearer ${accessToken}` }
 	});
 	if (!res.ok) await failOn(res, 'download');
-	return res.text();
+	return res.arrayBuffer();
 }

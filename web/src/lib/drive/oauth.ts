@@ -1,62 +1,37 @@
 /**
- * `$lib/drive/oauth` — Google OAuth 2.0 Authorization-Code + PKCE for the
- * Drive backup feature. Crema is a static client-only PWA (no server to keep a
- * secret), so this is a **public client** (PKCE, RFC 7636) — same model as the
- * Visualizer flow, whose provider-agnostic crypto helpers we reuse.
+ * `$lib/drive/oauth` — Google Drive authorization via the Google Identity
+ * Services (GIS) **token model** (`google.accounts.oauth2`).
  *
- * Scope is **`drive.file`** (per-file consent): the app only ever sees the
- * backup files it created, never the user's wider Drive. That's the scope the
- * privacy policy commits to and the OAuth client is configured with.
+ * Crema's web shell is a static, client-only PWA — there is no server to hold a
+ * client secret, and Google's "Web application" client is *confidential* (its
+ * token-exchange endpoint requires the secret, which a static bundle can't keep).
+ * GIS's token model is Google's answer for browser apps: a popup (or silent)
+ * flow that returns an access token straight to JavaScript using ONLY the public
+ * `client_id`. Security is the OAuth client's **Authorized JavaScript origins**
+ * allowlist — Google refuses token requests from any origin not on it. No secret
+ * lives anywhere in the bundle.
  *
- * Flow:
- *   1. {@link startGoogleDriveLogin} stashes a fresh PKCE verifier + state in
- *      `sessionStorage` and redirects to Google's consent screen with
- *      `access_type=offline` (so we get a refresh token).
- *   2. Google bounces back to `/auth/google/callback?code=…&state=…`; that page
- *      calls {@link exchangeGoogleDriveCode}.
- *   3. The {@link DriveTokenSet} is persisted by `$lib/drive/store`.
- *   4. {@link refreshGoogleDriveToken} swaps the refresh token for a fresh
- *      access token when the REST layer hits a 401 / sees an expired token.
+ * Scope is `drive.file` (the app only ever sees the backups it created). Tokens
+ * are short-lived and there is **no refresh token** in this model — the store
+ * re-requests one on demand (silently after the first consent, while the user's
+ * Google session is valid). Nothing is persisted long-term.
  *
- * client_id comes from `VITE_GOOGLE_DRIVE_CLIENT_ID` (per-environment, like the
- * Visualizer id). The user registers each origin's `/auth/google/callback` in
- * the Google Cloud "Web application" OAuth client's redirect-URI list.
+ * The native Android shell keeps its own auth-code + PKCE + refresh flow (a true
+ * public *Android* OAuth client, also secret-less) — this module is web-only.
  */
 
-import {
-	codeChallengeFromVerifier,
-	generateCodeVerifier,
-	randomState
-} from '$lib/visualizer/oauth';
-
-// ── Endpoints + scope ──────────────────────────────────────────────────
-export const GOOGLE_AUTHORIZE_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
-export const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
-export const GOOGLE_REVOKE_URL = 'https://oauth2.googleapis.com/revoke';
 /** Per-file Drive access — the app sees only the backups it creates. */
 export const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
 
-// ── sessionStorage keys (one PKCE flight at a time) ─────────────────────
-const VERIFIER_KEY = 'crema.drive.oauth.pkce.v1';
-const STATE_KEY = 'crema.drive.oauth.state.v1';
-const RETURN_KEY = 'crema.drive.oauth.return.v1';
+/** The GIS client library. */
+const GIS_SRC = 'https://accounts.google.com/gsi/client';
 
-/** A successful exchange — what `$lib/drive/store` persists. */
-export interface DriveTokenSet {
+/** A short-lived Drive access token (the GIS token model issues no refresh token). */
+export interface DriveToken {
 	accessToken: string;
-	/** Present only on the FIRST consent (`access_type=offline` + `prompt=consent`);
-	 *  re-auth without consent omits it, so we keep the previously-stored one. */
-	refreshToken: string | null;
-	/** Absolute expiry, ms since epoch (best-effort from `expires_in`). */
+	/** Absolute expiry, ms since epoch (derived from `expires_in`). */
 	expiresAt: number;
 	scope: string;
-	tokenType: string;
-}
-
-/** Redirect URI — origin-derived so dev / prod / preview all work without env
- *  fiddling. Each origin's callback must be registered on the OAuth client. */
-export function redirectUri(): string {
-	return `${window.location.origin}/auth/google/callback`;
 }
 
 /** The Drive OAuth client_id (`VITE_GOOGLE_DRIVE_CLIENT_ID`), or '' if unset. */
@@ -70,126 +45,111 @@ export function isConfigured(): boolean {
 	return clientId().length > 0;
 }
 
-/** Read + clear the post-login return path (same-origin absolute paths only). */
-export function takeReturnPath(fallback = '/settings'): string {
-	if (typeof sessionStorage === 'undefined') return fallback;
-	const v = sessionStorage.getItem(RETURN_KEY);
-	if (v) sessionStorage.removeItem(RETURN_KEY);
-	return v && v.startsWith('/') && !v.startsWith('//') && !v.startsWith('/\\') ? v : fallback;
-}
-
-/**
- * Begin the Authorization-Code + PKCE flow — redirects the tab to Google's
- * consent screen. `access_type=offline` + `prompt=consent` ensure a refresh
- * token so backups keep working after the ~1h access-token expiry. Throws if
- * the client_id isn't configured (caller should surface a notice first).
- */
-export async function startGoogleDriveLogin(returnTo = '/settings'): Promise<void> {
-	const cid = clientId();
-	if (!cid) {
-		throw new Error('Drive OAuth client_id is not configured. Set VITE_GOOGLE_DRIVE_CLIENT_ID.');
-	}
-	const verifier = generateCodeVerifier();
-	const state = randomState();
-	const challenge = await codeChallengeFromVerifier(verifier);
-
-	sessionStorage.setItem(VERIFIER_KEY, verifier);
-	sessionStorage.setItem(STATE_KEY, state);
-	sessionStorage.setItem(RETURN_KEY, returnTo);
-
-	const params = new URLSearchParams({
-		response_type: 'code',
-		client_id: cid,
-		redirect_uri: redirectUri(),
-		scope: DRIVE_SCOPE,
-		state,
-		code_challenge: challenge,
-		code_challenge_method: 'S256',
-		access_type: 'offline',
-		// Force the consent prompt so a re-auth still returns a refresh token
-		// (Google omits it on silent re-auth, which would leave us unable to
-		// refresh once the first one is lost).
-		prompt: 'consent',
-		include_granted_scopes: 'true'
-	});
-	window.location.assign(`${GOOGLE_AUTHORIZE_URL}?${params.toString()}`);
-}
-
-interface TokenWire {
+// ── Minimal GIS typings (the library ships no bundled types) ────────────────
+interface GisTokenResponse {
 	access_token?: string;
-	token_type?: string;
 	expires_in?: number;
-	refresh_token?: string;
 	scope?: string;
+	token_type?: string;
 	error?: string;
 	error_description?: string;
 }
-
-/** Wire → {@link DriveTokenSet}. Throws on an error body (no access_token). */
-function tokenSetFromWire(wire: TokenWire, fallbackRefresh: string | null): DriveTokenSet {
-	if (!wire.access_token) {
-		const msg = wire.error_description ?? wire.error ?? 'Missing access_token.';
-		throw new Error(`Google token endpoint: ${msg}`);
+interface GisTokenClient {
+	requestAccessToken(overrides?: { prompt?: string }): void;
+}
+interface GisOAuth2 {
+	initTokenClient(config: {
+		client_id: string;
+		scope: string;
+		callback: (resp: GisTokenResponse) => void;
+		error_callback?: (err: { type?: string }) => void;
+	}): GisTokenClient;
+	revoke(accessToken: string, done?: () => void): void;
+}
+declare global {
+	interface Window {
+		google?: { accounts?: { oauth2?: GisOAuth2 } };
 	}
-	const expiresInMs = (wire.expires_in ?? 3600) * 1000;
-	return {
-		accessToken: wire.access_token,
-		refreshToken: wire.refresh_token ?? fallbackRefresh,
-		expiresAt: Date.now() + expiresInMs,
-		scope: wire.scope ?? DRIVE_SCOPE,
-		tokenType: wire.token_type ?? 'Bearer'
-	};
+}
+
+let gisLoad: Promise<GisOAuth2> | undefined;
+
+/** Inject + await the GIS client library once; resolves with `google.accounts.oauth2`. */
+function loadGis(): Promise<GisOAuth2> {
+	if (typeof window === 'undefined' || typeof document === 'undefined') {
+		return Promise.reject(new Error('Google Drive sign-in needs a browser.'));
+	}
+	const ready = window.google?.accounts?.oauth2;
+	if (ready) return Promise.resolve(ready);
+	if (gisLoad) return gisLoad;
+	gisLoad = new Promise<GisOAuth2>((resolve, reject) => {
+		const s = document.createElement('script');
+		s.src = GIS_SRC;
+		s.async = true;
+		s.defer = true;
+		s.onload = () => {
+			const oauth2 = window.google?.accounts?.oauth2;
+			if (oauth2) resolve(oauth2);
+			else reject(new Error('Google Identity Services loaded without the OAuth2 API.'));
+		};
+		s.onerror = () => {
+			gisLoad = undefined; // let a later attempt retry the load
+			reject(new Error('Could not load Google Identity Services.'));
+		};
+		document.head.appendChild(s);
+	});
+	return gisLoad;
 }
 
 /**
- * Exchange the `?code=…&state=…` from the callback for a {@link DriveTokenSet}.
- * Verifies the CSRF state + consumes the single-use PKCE verifier.
+ * Request a Drive access token via the GIS token model. `'consent'` forces the
+ * consent popup (the explicit "Connect"); `''` re-grants silently after the
+ * first authorization (used to refresh before a backup). MUST be called from a
+ * user gesture (button click) so the popup isn't blocked.
  *
- * @throws on state mismatch, a missing verifier, or a token-endpoint error.
+ * @throws if the client_id isn't configured, the user cancels the popup, or GIS
+ *   returns an error.
  */
-export async function exchangeGoogleDriveCode(code: string, state: string): Promise<DriveTokenSet> {
-	const verifier = sessionStorage.getItem(VERIFIER_KEY);
-	const expectedState = sessionStorage.getItem(STATE_KEY);
-	sessionStorage.removeItem(VERIFIER_KEY);
-	sessionStorage.removeItem(STATE_KEY);
-	if (!verifier) throw new Error('No PKCE verifier in this tab — restart the sign-in.');
-	if (!expectedState || expectedState !== state) {
-		throw new Error('OAuth state mismatch — sign-in could not be verified.');
+export async function requestDriveToken(prompt: 'consent' | ''): Promise<DriveToken> {
+	const cid = clientId();
+	if (!cid) {
+		throw new Error('Drive OAuth client_id is not configured (VITE_GOOGLE_DRIVE_CLIENT_ID).');
 	}
-	const body = new URLSearchParams({
-		grant_type: 'authorization_code',
-		code,
-		client_id: clientId(),
-		redirect_uri: redirectUri(),
-		code_verifier: verifier
+	const oauth2 = await loadGis();
+	return new Promise<DriveToken>((resolve, reject) => {
+		const client = oauth2.initTokenClient({
+			client_id: cid,
+			scope: DRIVE_SCOPE,
+			callback: (resp) => {
+				if (resp.error || !resp.access_token) {
+					reject(new Error(resp.error_description || resp.error || 'No access token returned.'));
+					return;
+				}
+				resolve({
+					accessToken: resp.access_token,
+					expiresAt: Date.now() + (resp.expires_in ?? 3600) * 1000,
+					scope: resp.scope ?? DRIVE_SCOPE
+				});
+			},
+			error_callback: (err) => {
+				reject(
+					new Error(
+						err?.type === 'popup_closed'
+							? 'Google sign-in was cancelled.'
+							: err?.type === 'popup_failed_to_open'
+								? 'Google sign-in popup was blocked — allow popups and retry.'
+								: 'Google sign-in failed.'
+					)
+				);
+			}
+		});
+		client.requestAccessToken({ prompt });
 	});
-	const res = await fetch(GOOGLE_TOKEN_URL, {
-		method: 'POST',
-		headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
-		body
-	});
-	return tokenSetFromWire((await res.json()) as TokenWire, null);
 }
 
-/**
- * Swap a refresh token for a fresh access token (the REST layer calls this when
- * a token is within the expiry skew or a request 401s). Google keeps the same
- * refresh token, so we carry it forward.
- *
- * @throws if there's no refresh token, or the refresh is rejected (the user
- *   must re-consent).
- */
-export async function refreshGoogleDriveToken(refreshToken: string | null): Promise<DriveTokenSet> {
-	if (!refreshToken) throw new Error('No refresh token — sign in to Google Drive again.');
-	const body = new URLSearchParams({
-		grant_type: 'refresh_token',
-		refresh_token: refreshToken,
-		client_id: clientId()
-	});
-	const res = await fetch(GOOGLE_TOKEN_URL, {
-		method: 'POST',
-		headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
-		body
-	});
-	return tokenSetFromWire((await res.json()) as TokenWire, refreshToken);
+/** Revoke an access token (best-effort — clears the grant server-side). */
+export async function revokeDriveToken(accessToken: string): Promise<void> {
+	const oauth2 = await loadGis().catch(() => undefined);
+	if (!oauth2) return;
+	await new Promise<void>((resolve) => oauth2.revoke(accessToken, () => resolve()));
 }

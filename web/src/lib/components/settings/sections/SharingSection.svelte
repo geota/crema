@@ -38,9 +38,10 @@
 	import { type SharingPrivacy } from '$lib/settings';
 	import {
 		backupFileName,
-		buildBackupJsonl,
+		buildBackupZip,
 		exportBackup,
-		restoreBackup,
+		describeBackup,
+		restoreBackupData,
 		type RestoreMode
 	} from '$lib/backup';
 	import { getDriveAuthStore } from '$lib/drive/store.svelte';
@@ -197,15 +198,17 @@
 		downloadBlob('crema-history.json', blob);
 	}
 
-	/** Brief inline feedback for the Backup & restore actions. */
+	/** Brief inline feedback for the Back-up action (shown under that row). */
 	let backupNote = $state<string | null>(null);
+	/** Brief inline feedback for a Restore (shown under the Merge / Replace rows,
+	 *  where the user clicks — not under "Back up everything"). */
+	let restoreNote = $state<string | null>(null);
 
 	/** Build + download a full `crema-backup/v1` bundle of everything local. */
-	function backUp(): void {
-		const result = exportBackup();
-		backupNote = result
-			? `Backed up ${result.profiles} profile(s), ${result.beans} bean(s), ${result.roasters} roaster(s), ${result.shots} shot(s).`
-			: 'Nothing to back up yet.';
+	async function backUp(): Promise<void> {
+		backupNote = 'Building backup…';
+		const result = await exportBackup();
+		backupNote = result ? `Backed up — ${describeBackup(result)}.` : 'Nothing to back up yet.';
 	}
 
 	let restoreInput = $state<HTMLInputElement | null>(null);
@@ -234,14 +237,14 @@
 		const file = (event.target as HTMLInputElement).files?.[0];
 		if (!file) return;
 		try {
-			const text = await file.text();
-			const r = restoreBackup(text, pendingRestoreMode);
-			backupNote =
-				`Restored ${r.profiles} profile(s), ${r.beans} bean(s), ` +
+			const r = await restoreBackupData(await file.arrayBuffer(), pendingRestoreMode);
+			const verb = pendingRestoreMode === 'wipe' ? 'Replaced —' : 'Merged —';
+			restoreNote =
+				`${verb} ${r.profiles} profile(s), ${r.beans} bean(s), ` +
 				`${r.roasters} roaster(s), ${r.shots} shot(s)` +
 				(r.settingsApplied ? ' + settings.' : '.');
 		} catch (err) {
-			backupNote = err instanceof Error ? `Restore failed: ${err.message}` : 'Restore failed.';
+			restoreNote = err instanceof Error ? `Restore failed: ${err.message}` : 'Restore failed.';
 		}
 	}
 
@@ -251,27 +254,32 @@
 	let driveBusy = $state(false);
 
 	async function driveConnect(): Promise<void> {
+		driveBusy = true;
+		driveNote = 'Connecting Google Drive…';
 		try {
-			await drive.signIn('/settings');
+			await drive.connect();
+			driveNote = null;
 		} catch (err) {
-			driveNote = err instanceof Error ? err.message : 'Could not start Google sign-in.';
+			driveNote = err instanceof Error ? err.message : 'Could not connect Google Drive.';
+		} finally {
+			driveBusy = false;
 		}
 	}
 
-	/** Build the bundle + upload a fresh (timestamped) copy to Drive. */
+	/** Build the .crema.zip bundle + upload a fresh (timestamped) copy to Drive. */
 	async function driveBackup(): Promise<void> {
-		const built = buildBackupJsonl();
-		if (!built) {
-			driveNote = 'Nothing to back up yet.';
-			return;
-		}
 		driveBusy = true;
-		driveNote = 'Backing up to Drive…';
+		driveNote = 'Building backup…';
 		try {
+			const built = await buildBackupZip();
+			if (!built) {
+				driveNote = 'Nothing to back up yet.';
+				return;
+			}
+			driveNote = 'Backing up to Drive…';
 			const token = await drive.accessToken();
-			await uploadBackup(token, backupFileName(), built.jsonl);
-			const c = built.contents;
-			driveNote = `Backed up to Drive — ${c.profiles} profile(s), ${c.beans} bean(s), ${c.shots} shot(s).`;
+			await uploadBackup(token, backupFileName(), built.zip, 'application/zip');
+			driveNote = `Backed up to Drive — ${describeBackup(built.contents)}.`;
 		} catch (err) {
 			driveNote = err instanceof Error ? `Drive backup failed: ${err.message}` : 'Drive backup failed.';
 		} finally {
@@ -279,8 +287,16 @@
 		}
 	}
 
-	/** Restore the most-recent Drive backup (merge). */
-	async function driveRestoreLatest(): Promise<void> {
+	/** Restore the most-recent Drive backup — merge (add) or replace (wipe first). */
+	async function driveRestore(mode: RestoreMode): Promise<void> {
+		if (
+			mode === 'wipe' &&
+			!window.confirm(
+				"Replace everything on this device with your latest Google Drive backup? Your current profiles, beans, roasters and shots are deleted first. This can't be undone."
+			)
+		) {
+			return;
+		}
 		driveBusy = true;
 		driveNote = 'Fetching from Drive…';
 		try {
@@ -290,8 +306,8 @@
 				driveNote = 'No backups found in Drive.';
 				return;
 			}
-			const text = await downloadBackup(token, files[0].id);
-			const r = restoreBackup(text, 'merge');
+			const bytes = await downloadBackup(token, files[0].id);
+			const r = await restoreBackupData(bytes, mode);
 			driveNote =
 				`Restored from Drive (${files[0].name}) — ${r.profiles} profile(s), ` +
 				`${r.beans} bean(s), ${r.shots} shot(s)${r.settingsApplied ? ' + settings.' : '.'}`;
@@ -451,7 +467,8 @@
 >
 	<StRow
 		title="Back up everything"
-		sub={backupNote ?? 'Download a .crema bundle of everything on this device. Photos stay local.'}
+		sub={backupNote ??
+			'Download a .crema.zip bundle of everything on this device — including bean photos.'}
 	>
 		{#snippet control()}
 			<StButton label="Back up" icon="download-simple" variant="primary" onClick={backUp} />
@@ -459,7 +476,8 @@
 	</StRow>
 	<StRow
 		title="Restore — merge"
-		sub="Add anything from a backup you don't already have; keeps your current data."
+		sub={restoreNote ??
+			"Add anything from a backup you don't already have; keeps your current data."}
 	>
 		{#snippet control()}
 			<StButton label="Merge" icon="upload-simple" onClick={() => pickRestore('merge')} />
@@ -467,7 +485,7 @@
 	</StRow>
 	<StRow
 		title="Restore — replace"
-		sub="Wipe this device, then restore fully from a backup. Can't be undone."
+		sub={restoreNote ?? "Wipe this device, then restore fully from a backup. Can't be undone."}
 	>
 		{#snippet control()}
 			<StButton label="Replace" icon="trash" onClick={() => pickRestore('wipe')} />
@@ -478,7 +496,7 @@
 <input
 	bind:this={restoreInput}
 	type="file"
-	accept=".crema,application/x-ndjson,application/json"
+	accept=".crema.zip,.zip,application/zip,.crema.jsonl,.jsonl,.ndjson,.crema,application/x-ndjson,application/json"
 	onchange={onRestoreFile}
 	style="display: none"
 />
@@ -505,15 +523,28 @@
 			{/snippet}
 		</StRow>
 		<StRow
-			title="Restore latest from Drive"
-			sub="Merge your most-recent Drive backup into this device."
+			title="Restore latest — merge"
+			sub="Add anything from your most-recent Drive backup; keeps your current data."
 		>
 			{#snippet control()}
 				<StButton
-					label={driveBusy ? 'Working…' : 'Restore'}
+					label={driveBusy ? 'Working…' : 'Merge'}
 					icon="cloud-arrow-down"
 					disabled={driveBusy}
-					onClick={driveRestoreLatest}
+					onClick={() => driveRestore('merge')}
+				/>
+			{/snippet}
+		</StRow>
+		<StRow
+			title="Restore latest — replace"
+			sub="Wipe this device, then restore fully from your most-recent Drive backup."
+		>
+			{#snippet control()}
+				<StButton
+					label={driveBusy ? 'Working…' : 'Replace'}
+					icon="trash"
+					disabled={driveBusy}
+					onClick={() => driveRestore('wipe')}
 				/>
 			{/snippet}
 		</StRow>
