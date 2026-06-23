@@ -23,9 +23,9 @@ import java.io.IOException
  * Owns the OAuth lifecycle (PKCE Authorization-Code via a Custom Tab, reusing the
  * Visualizer PKCE helpers), token freshness, and the three backup operations
  * (upload / list+download). The backup BYTES come from the VM (it owns the
- * library/history/settings) via the [backupJsonl] / [applyRestore] callbacks — the
- * same `crema-backup/v1` JSONL the local SAF backup writes, so a Drive backup is
- * interchangeable with a file one.
+ * library/history/settings) via the [backupZip] / [applyRestore] callbacks — the
+ * same `.crema.zip` (backup.jsonl + bean photos) the local SAF backup writes, so a
+ * Drive backup is interchangeable with a file one.
  */
 class DriveSync(
     private val store: DriveStore,
@@ -35,8 +35,8 @@ class DriveSync(
     private val clientId: String,
     /** Surface a user-facing message (the VM's snackbar channel). */
     private val notify: (String) -> Unit,
-    /** Produce the `crema-backup/v1` JSONL, or null (+ its own notice) when empty. */
-    private val backupJsonl: () -> String?,
+    /** Produce the `.crema.zip` backup bytes, or null (+ its own notice) when empty. */
+    private val backupZip: () -> ByteArray?,
     /** A suggested backup filename (the VM's `backupFileName()`). */
     private val backupFileName: () -> String,
     /** Apply a downloaded backup's raw bytes (a `.crema.zip` or legacy text).
@@ -152,9 +152,9 @@ class DriveSync(
     fun backupNow() {
         scope.launch {
             val token = freshToken() ?: run { notify("Connect Google Drive first"); return@launch }
-            val jsonl = backupJsonl() ?: return@launch // backupJsonl already notified "nothing to back up"
+            val zip = backupZip() ?: return@launch // backupZip already notified "nothing to back up"
             _state.update { it.copy(busy = true) }
-            runCatching { driveUploadBackup(token, backupFileName(), jsonl, json) }
+            runCatching { driveUploadBackup(token, backupFileName(), zip, json) }
                 .onSuccess { notify("Backed up to Google Drive") }
                 .onFailure { notify("Google Drive backup failed: ${it.message}") }
             _state.update { it.copy(busy = false) }

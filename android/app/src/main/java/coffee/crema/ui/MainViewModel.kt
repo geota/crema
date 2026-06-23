@@ -29,6 +29,8 @@ import coffee.crema.core.importBeanconquerorJson
 import coffee.crema.core.exportBackupJsonl
 import coffee.crema.core.exportBeanconquerorMainJson
 import coffee.crema.core.maintenanceReadout
+import androidx.core.content.FileProvider
+import coffee.crema.beans.BeanImageStore
 import coffee.crema.beans.BeanLibrary
 import coffee.crema.beans.LibraryStore
 import coffee.crema.beans.daysOffRoast
@@ -806,7 +808,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         scope = viewModelScope,
         clientId = coffee.crema.BuildConfig.GOOGLE_DRIVE_CLIENT_ID,
         notify = { msg -> notifyUser(msg) },
-        backupJsonl = { backupBundleJson() },
+        backupZip = { buildBackupZipBytes() },
         backupFileName = { backupFileName() },
         applyRestore = { bytes, wipe ->
             viewModelScope.launch { restoreBackupBytes(bytes, if (wipe) RestoreMode.WIPE else RestoreMode.MERGE) }
@@ -1531,6 +1533,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** Write raw [bytes] to a SAF document Uri — the binary backup save (a
+     *  `.crema.zip`). Off the main thread; large-payload safe. */
+    fun writeBytesToUri(uri: Uri, bytes: ByteArray) {
+        viewModelScope.launch {
+            val ok = withContext(Dispatchers.IO) {
+                runCatching {
+                    getApplication<Application>().contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
+                    true
+                }.getOrDefault(false)
+            }
+            notifyUser(if (ok) "Backed up to file" else "Backup failed — couldn't write")
+        }
+    }
+
     /** Read a content Uri as UTF-8 text, off the main thread. */
     private suspend fun readUriText(uri: Uri): String? = withContext(Dispatchers.IO) {
         runCatching {
@@ -1552,14 +1568,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /**
      * Unzip a `.crema.zip`: return its `backup.jsonl` text, and stash each
-     * `images/<beanId>` blob to `filesDir/bean-images/<beanId>` so a web backup's
-     * bean photos are kept on disk, ready for when Android grows photo display (the
-     * data itself restores from the JSONL now). Null when there's no backup.jsonl.
+     * `images/<beanId>` blob via [BeanImageStore] (keyed by the RAW bean id) so a
+     * backup's bean photos land exactly where the library display + the next
+     * backup resolve them. Null when there's no backup.jsonl.
      */
     private suspend fun extractBackupJsonl(bytes: ByteArray): String? = withContext(Dispatchers.IO) {
         runCatching {
             var jsonl: String? = null
-            val imagesDir = java.io.File(getApplication<Application>().filesDir, "bean-images").apply { mkdirs() }
+            val ctx = getApplication<Application>()
             java.util.zip.ZipInputStream(java.io.ByteArrayInputStream(bytes)).use { zis ->
                 var entry = zis.nextEntry
                 while (entry != null) {
@@ -1570,8 +1586,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         !entry.isDirectory && name.startsWith("images/") -> {
                             val beanId = name.substringAfter("images/")
                             if (beanId.isNotEmpty()) {
-                                val safe = beanId.replace(Regex("[^A-Za-z0-9._-]"), "_")
-                                runCatching { java.io.File(imagesDir, safe).writeBytes(zis.readBytes()) }
+                                runCatching { BeanImageStore.put(ctx, beanId, zis.readBytes()) }
                             }
                         }
                     }
@@ -1722,6 +1737,34 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }.getOrElse { appendLog("Backup failed: ${it.message}"); notifyUser("Backup failed"); null }
     }
 
+    /**
+     * Wrap [backupBundleJson]'s JSONL into a `.crema.zip`: `backup.jsonl` plus, for
+     * every bean with a stored photo, `images/<RAW bean id>` (the cross-shell key
+     * web + Android restore by). Photos resolve by file existence (not by parsing
+     * `imageRef`), so a web-restored bag's photo rides along too. Null + a notice
+     * when there's nothing to back up. Shared by the local SAF save + Drive upload.
+     */
+    fun buildBackupZipBytes(): ByteArray? {
+        val jsonl = backupBundleJson() ?: return null // already notified "nothing to back up"
+        val ctx = getApplication<Application>()
+        return runCatching {
+            val baos = java.io.ByteArrayOutputStream()
+            java.util.zip.ZipOutputStream(baos).use { zos ->
+                zos.putNextEntry(java.util.zip.ZipEntry("backup.jsonl"))
+                zos.write(jsonl.toByteArray(Charsets.UTF_8))
+                zos.closeEntry()
+                for (bean in _ui.value.beans) {
+                    if (!BeanImageStore.exists(ctx, bean.id)) continue
+                    val bytes = runCatching { BeanImageStore.beanImageFile(ctx, bean.id).readBytes() }.getOrNull() ?: continue
+                    zos.putNextEntry(java.util.zip.ZipEntry("images/${bean.id}"))
+                    zos.write(bytes)
+                    zos.closeEntry()
+                }
+            }
+            baos.toByteArray()
+        }.getOrElse { appendLog("Backup zip failed: ${it.message}"); notifyUser("Backup failed"); null }
+    }
+
     /** A suggested filename for the SAF create-document picker. */
     fun backupFileName(): String {
         val label = deviceLabel().replace(Regex("[^A-Za-z0-9._-]"), "_")
@@ -1730,9 +1773,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             c.get(java.util.Calendar.YEAR), c.get(java.util.Calendar.MONTH) + 1, c.get(java.util.Calendar.DAY_OF_MONTH),
             c.get(java.util.Calendar.HOUR_OF_DAY), c.get(java.util.Calendar.MINUTE),
         )
-        // `.jsonl` is honest about the format (line-delimited JSON); the `crema`
+        // `.crema.zip` (backup.jsonl + images/<beanId> photos); the `crema-backup`
         // prefix keeps it recognisable + is what the Drive list query matches on.
-        return "crema-backup-$label-$stamp.crema.jsonl"
+        return "crema-backup-$label-$stamp.crema.zip"
     }
 
     /** Restore a `crema-backup` bundle from a SAF [uri]. [RestoreMode.MERGE] adds
@@ -3583,6 +3626,58 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         persistLibrary()
     }
 
+    // ── Bean bag photos (Phase C) ────────────────────────────────────────────
+    /**
+     * A FileProvider content Uri for the camera (TakePicture) to write a freshly
+     * captured bag photo into — a temp JPEG under `cacheDir/bean-capture/`. The
+     * authority matches the manifest's `${'$'}{applicationId}.fileprovider`. Null
+     * only if the Uri can't be minted (no FileProvider configured).
+     */
+    fun newCameraOutputUri(beanId: String): Uri? = runCatching {
+        val ctx = getApplication<Application>()
+        val dir = java.io.File(ctx.cacheDir, "bean-capture").apply { mkdirs() }
+        val file = java.io.File(dir, BeanImageStore.sanitize(beanId) + ".jpg")
+        FileProvider.getUriForFile(ctx, "${coffee.crema.BuildConfig.APPLICATION_ID}.fileprovider", file)
+    }.getOrNull()
+
+    /**
+     * Store a captured / picked bag photo for [beanId]: read the [uri]'s bytes,
+     * write them via [BeanImageStore], and mark the bean (`imageRef` + `updatedAt`)
+     * so the library + editor show it without an app restart. Handles both a
+     * library bean and a not-yet-saved new-bean [MainUiState.draftBean]. Persisted.
+     */
+    fun setBeanImageFromUri(beanId: String, uri: Uri) {
+        viewModelScope.launch {
+            val bytes = readUriBytes(uri)
+            if (bytes == null || bytes.isEmpty()) { notifyUser("Couldn't read that image"); return@launch }
+            withContext(Dispatchers.IO) { BeanImageStore.put(getApplication<Application>(), beanId, bytes) }
+            val ref = BeanImageStore.refForBean(beanId)
+            val now = System.currentTimeMillis()
+            _ui.update { st ->
+                st.copy(
+                    beans = st.beans.map { if (it.id == beanId) it.copy(imageRef = ref, updatedAt = now) else it },
+                    draftBean = st.draftBean?.let { if (it.id == beanId) it.copy(imageRef = ref, updatedAt = now) else it },
+                )
+            }
+            persistLibrary()
+        }
+    }
+
+    /** Remove a bean's bag photo — delete the file + clear `imageRef`. Persisted. */
+    fun clearBeanImage(beanId: String) {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { BeanImageStore.delete(getApplication<Application>(), beanId) }
+            val now = System.currentTimeMillis()
+            _ui.update { st ->
+                st.copy(
+                    beans = st.beans.map { if (it.id == beanId) it.copy(imageRef = null, updatedAt = now) else it },
+                    draftBean = st.draftBean?.let { if (it.id == beanId) it.copy(imageRef = null, updatedAt = now) else it },
+                )
+            }
+            persistLibrary()
+        }
+    }
+
     /** Set (or with `null`, clear) the active bean (the Brew bean block). Persisted. */
     fun setActiveBean(id: String?) {
         val prev = _ui.value.activeBeanId
@@ -3628,6 +3723,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             beans = remaining,
             activeBeanId = if (wasActive) remaining.firstOrNull()?.id else it.activeBeanId,
         ) }
+        // Drop the bag's photo too, so a deleted bean leaves no orphan blob.
+        viewModelScope.launch(Dispatchers.IO) { BeanImageStore.delete(getApplication<Application>(), id) }
         persistLibrary()
     }
 

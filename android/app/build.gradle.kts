@@ -288,6 +288,17 @@ dependencies {
     // with isMinifyEnabled=false the full icon set ships in the APK; enabling R8
     // (release) prunes it to just the ~18 referenced glyphs.
     implementation("com.adamglin:phosphor-icon:1.0.0")
+    // Coil 3 (Compose-native image loading) — renders bean bag photos from
+    // filesDir/bean-images via AsyncImage/SubcomposeAsyncImage. Local files only,
+    // so coil-network-* is intentionally NOT included. The default singleton
+    // ImageLoader is used (no Application SingletonImageLoader.Factory needed).
+    //
+    // PINNED to 3.3.0 (Kotlin 2.2.0 → kotlin-stdlib 2.2.0): this AGP-9 build uses
+    // the Kotlin 2.2.0 compiler, which reads metadata only up to 2.3.0. Coil 3.5.0
+    // pulls kotlin-stdlib 2.4.0, whose metadata the compiler can't parse — the
+    // generated UniFFI bindings (de1_ffi.kt) then fail to compile. Bump this only
+    // alongside the project's Kotlin/AGP toolchain (keep stdlib ≤ 2.3.x).
+    implementation("io.coil-kt.coil3:coil-compose:3.3.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
 
     // UniFFI's generated Kotlin depends on JNA for the FFI calls and on
