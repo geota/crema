@@ -163,6 +163,15 @@ export class BeanLibraryStore {
 		writeJson(ACTIVE_KEY, this.activeId);
 	}
 
+	/** Wipe the entire library (beans + roasters + active pointer) — for a
+	 *  "replace from backup" restore, which writes the bundle fresh after. */
+	clearAll(): void {
+		this.envelope = { schemaVersion: LIBRARY_SCHEMA, beans: [], roasters: [] };
+		this.activeId = null;
+		this.persist();
+		this.persistActive();
+	}
+
 	// ── Bean CRUD ────────────────────────────────────────────────────
 
 	/** Insert a new bean (must have a unique id; replaces if id collides). */

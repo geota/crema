@@ -151,6 +151,12 @@ export class HistoryStore {
 		writeJson(HISTORY_KEY, this.shots);
 	}
 
+	/** Wipe all recorded shots — for a "replace from backup" restore. */
+	clearAllShots(): void {
+		this.shots = [];
+		this.persist();
+	}
+
 	/**
 	 * Record a finished shot. The peak / final metrics ride on the
 	 * `Event::ShotCompleted` payload — the core's `ShotMetricsAccumulator`

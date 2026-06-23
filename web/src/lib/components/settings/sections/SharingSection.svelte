@@ -36,7 +36,7 @@
 	import StToggle from '../StToggle.svelte';
 	import BeanSyncSection from './BeanSyncSection.svelte';
 	import { getSettingsStore, type SharingPrivacy } from '$lib/settings';
-	import { exportBackup } from '$lib/backup';
+	import { exportBackup, restoreBackup, type RestoreMode } from '$lib/backup';
 
 	const history = getHistoryStore();
 	const appCtx = getCremaAppContext();
@@ -191,6 +191,43 @@
 		backupNote = result
 			? `Backed up ${result.profiles} profile(s), ${result.beans} bean(s), ${result.roasters} roaster(s), ${result.shots} shot(s).`
 			: 'Nothing to back up yet.';
+	}
+
+	let restoreInput = $state<HTMLInputElement | null>(null);
+	let pendingRestoreMode = $state<RestoreMode>('merge');
+
+	/** Open the file picker for a restore. A REPLACE (wipe) is gated by a
+	 *  confirm first — it deletes everything before loading the backup. */
+	function pickRestore(mode: RestoreMode): void {
+		if (
+			mode === 'wipe' &&
+			!window.confirm(
+				"Replace everything on this device with a backup? Your current profiles, beans, roasters and shots are deleted first. This can't be undone."
+			)
+		) {
+			return;
+		}
+		pendingRestoreMode = mode;
+		if (restoreInput) {
+			restoreInput.value = '';
+			restoreInput.click();
+		}
+	}
+
+	/** Read the chosen `.crema` file + apply it (merge or replace). */
+	async function onRestoreFile(event: Event): Promise<void> {
+		const file = (event.target as HTMLInputElement).files?.[0];
+		if (!file) return;
+		try {
+			const text = await file.text();
+			const r = restoreBackup(text, pendingRestoreMode);
+			backupNote =
+				`Restored ${r.profiles} profile(s), ${r.beans} bean(s), ` +
+				`${r.roasters} roaster(s), ${r.shots} shot(s)` +
+				(r.settingsApplied ? ' + settings.' : '.');
+		} catch (err) {
+			backupNote = err instanceof Error ? `Restore failed: ${err.message}` : 'Restore failed.';
+		}
 	}
 </script>
 
@@ -348,7 +385,31 @@
 			<StButton label="Back up" icon="download-simple" variant="primary" onClick={backUp} />
 		{/snippet}
 	</StRow>
+	<StRow
+		title="Restore — merge"
+		sub="Add anything from a backup you don't already have; keeps your current data."
+	>
+		{#snippet control()}
+			<StButton label="Merge" icon="upload-simple" onClick={() => pickRestore('merge')} />
+		{/snippet}
+	</StRow>
+	<StRow
+		title="Restore — replace"
+		sub="Wipe this device, then restore fully from a backup. Can't be undone."
+	>
+		{#snippet control()}
+			<StButton label="Replace" icon="trash" onClick={() => pickRestore('wipe')} />
+		{/snippet}
+	</StRow>
 </StGroup>
+
+<input
+	bind:this={restoreInput}
+	type="file"
+	accept=".crema,application/x-ndjson,application/json"
+	onchange={onRestoreFile}
+	style="display: none"
+/>
 
 <StGroup title="Local export" sub="Download a copy of your local data.">
 	<StRow
