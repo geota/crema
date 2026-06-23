@@ -270,24 +270,28 @@ export function restoreBackup(text: string, mode: RestoreMode): RestoreSummary {
 	// to the old flat-apply, still web-tagged.
 	let settingsApplied = false;
 	if (settings) {
-		const setAny = settingsStore.set.bind(settingsStore) as (k: string, v: unknown) => void;
 		if (settings.common) {
+			// Assemble the full target Settings, then write once (replaceAll) rather
+			// than a persist() per key. `common` is cross-shell; the web-only platform
+			// extras apply only from a web bundle.
 			const next = applyCommonToSettings(
 				settings.common as unknown as CommonSettings,
 				settingsStore.current
-			);
-			for (const [key, value] of Object.entries(next)) setAny(key, value);
+			) as unknown as Record<string, unknown>;
 			if (settings._shell === 'web') {
 				for (const key of Object.keys(settingsPlatformExtras(settingsStore.current))) {
-					if (key in settings) setAny(key, settings[key]);
+					if (key in settings) next[key] = settings[key];
 				}
 			}
+			settingsStore.replaceAll(next as unknown as typeof settingsStore.current);
 			settingsApplied = true;
 		} else if (settings._shell === 'web') {
-			const current = settingsStore.current as unknown as Record<string, unknown>;
-			for (const key of Object.keys(current)) {
-				if (key in settings) setAny(key, settings[key]);
+			// Pre-unification flat line — overlay the recognised keys, write once.
+			const next = { ...settingsStore.current } as Record<string, unknown>;
+			for (const key of Object.keys(settingsStore.current)) {
+				if (key in settings) next[key] = settings[key];
 			}
+			settingsStore.replaceAll(next as unknown as typeof settingsStore.current);
 			settingsApplied = true;
 		}
 	}
