@@ -296,10 +296,11 @@ export function restoreBackup(text: string, mode: RestoreMode): RestoreSummary {
 		}
 	}
 
-	// Profile organisation — pins + hidden built-ins (cross-shell). A wipe
-	// restore replaces the sets; a merge unions them.
-	if (profileMeta) {
-		profileStore.applyBackupMeta(profileMeta, mode === 'wipe');
+	// Profile organisation — pins + hidden built-ins (cross-shell). A wipe restore
+	// replaces the sets; a merge unions them. On wipe with no profileMeta line (an
+	// older bundle), still clear the existing pins/hidden via an empty replace.
+	if (profileMeta || mode === 'wipe') {
+		profileStore.applyBackupMeta(profileMeta ?? {}, mode === 'wipe');
 	}
 	// Maintenance counters — a shared core type, applied verbatim either shell.
 	if (maintenance) {

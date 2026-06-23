@@ -398,7 +398,10 @@ export function settingsToCommon(s: Settings): CommonSettings {
 /** Overlay a restored {@link CommonSettings} onto a flat `Settings`, preserving
  *  the web-only platform fields. `themeMode: "system"` (Android-only) coerces to
  *  `dark` since the web shell has just light/dark. */
-export function applyCommonToSettings(c: CommonSettings, s: Settings): Settings {
+export function applyCommonToSettings(cIn: CommonSettings, s: Settings): Settings {
+	// Forward-compat: tolerate a partial blob (an older backup predating a field)
+	// by filling any missing field from the canonical web defaults.
+	const c: CommonSettings = { ...settingsToCommon(DEFAULT_SETTINGS), ...cIn };
 	const on = new Set(c.chartChannels);
 	return {
 		...s,
