@@ -20,6 +20,7 @@
 
 import { defaultBrewDefaults } from '$lib/wasm/de1_wasm';
 import { readJson, writeJson } from '$lib/utils/storage';
+import type { CommonSettings } from '$lib/core/crema-core';
 
 /** localStorage key for the bundle of app preferences ({@link Settings}). */
 const SETTINGS_KEY = 'crema.settings.v1';
@@ -319,6 +320,145 @@ export const DEFAULT_SETTINGS: Settings = {
 	showDebugPanel: false
 };
 
+// ── Cross-shell common-settings mapping ──────────────────────────────────────
+//
+// The web `Settings` shape is flat and web-named; the backup (and the persisted
+// store) carry the portable subset as the shared core `CommonSettings`, whose
+// field names + chart-channel vocabulary are Android's. These two helpers map
+// between them; the web-only extras (below) ride alongside, untouched.
+
+/** Web `show*` boolean ↔ canonical chart-channel key. Note `showVolume` maps to
+ *  the canonical `dispensedVolume` (Android's key), not `volume`. */
+const CHART_FLAG_TO_KEY: ReadonlyArray<readonly [keyof Settings, string]> = [
+	['showPressure', 'pressure'],
+	['showResistance', 'resistance'],
+	['showFlow', 'flow'],
+	['showVolume', 'dispensedVolume'],
+	['showHeadTemp', 'headTemp'],
+	['showMixTemp', 'mixTemp'],
+	['showWeight', 'weight'],
+	['showWeightFlow', 'weightFlow']
+];
+
+/** The web-only settings that are NOT part of the cross-shell `CommonSettings` —
+ *  persisted alongside `common` and `_shell:'web'`-tagged in a backup. */
+const PLATFORM_KEYS = [
+	'density',
+	'screensaver',
+	'telemetryRateHz',
+	'lineFrequencyHz',
+	'webhookEnabled',
+	'webhookUrl',
+	'webhookEvents',
+	'smoothPressure'
+] as const satisfies ReadonlyArray<keyof Settings>;
+
+/** The web-only settings (the non-`CommonSettings` extras) as a plain record —
+ *  for the persisted nested shape + the backup's `_shell:'web'` platform blob. */
+export function settingsPlatformExtras(s: Settings): Record<string, unknown> {
+	const out: Record<string, unknown> = {};
+	for (const k of PLATFORM_KEYS) out[k] = s[k];
+	return out;
+}
+
+/** Project the flat `Settings` onto the shared cross-shell {@link CommonSettings}. */
+export function settingsToCommon(s: Settings): CommonSettings {
+	return {
+		themeMode: s.theme,
+		maxShotDurationS: s.maxShotDurationS,
+		autoTare: s.autoTareOnShotStart,
+		stopOnWeight: s.stopOnWeight,
+		steamEco: s.steamEcoMode,
+		preFlush: s.groupFlushBeforeShot,
+		steamPurge: s.autoPurgeAfterSteam,
+		weightUnit: s.weightUnit,
+		tempUnit: s.tempUnit,
+		pressureUnit: s.pressureUnit,
+		volumeUnit: s.volumeUnit,
+		chartChannels: CHART_FLAG_TO_KEY.filter(([flag]) => s[flag]).map(([, key]) => key),
+		keepScreenOnBrew: s.keepScreenOnBrew,
+		showDebugPanel: s.showDebugPanel,
+		defaultDoseG: s.defaultDoseG,
+		defaultRatio: s.defaultRatio,
+		defaultBrewTempC: s.defaultBrewTempC,
+		defaultPreinfuseS: s.defaultPreinfusionS,
+		grinderModel: s.grinderModel,
+		suppressDe1Sleep: s.suppressDe1Sleep,
+		qcSteamTimeS: s.qcSteamTimeS,
+		qcSteamFlowMlS: s.qcSteamFlowMlS,
+		qcSteamTempC: s.qcSteamTempC,
+		qcHotWaterTempC: s.qcHotWaterTempC,
+		qcHotWaterVolumeMl: s.qcHotWaterVolumeMl,
+		qcFlushTimeS: s.qcFlushTimeS,
+		qcFlushTempC: s.qcFlushTempC
+	};
+}
+
+/** Overlay a restored {@link CommonSettings} onto a flat `Settings`, preserving
+ *  the web-only platform fields. `themeMode: "system"` (Android-only) coerces to
+ *  `dark` since the web shell has just light/dark. */
+export function applyCommonToSettings(c: CommonSettings, s: Settings): Settings {
+	const on = new Set(c.chartChannels);
+	return {
+		...s,
+		theme: c.themeMode === 'light' ? 'light' : 'dark',
+		maxShotDurationS: c.maxShotDurationS,
+		autoTareOnShotStart: c.autoTare,
+		stopOnWeight: c.stopOnWeight,
+		steamEcoMode: c.steamEco,
+		groupFlushBeforeShot: c.preFlush,
+		autoPurgeAfterSteam: c.steamPurge,
+		weightUnit: c.weightUnit as WeightUnit,
+		tempUnit: c.tempUnit as TempUnit,
+		pressureUnit: c.pressureUnit as PressureUnit,
+		volumeUnit: c.volumeUnit as VolumeUnit,
+		showPressure: on.has('pressure'),
+		showResistance: on.has('resistance'),
+		showFlow: on.has('flow'),
+		showVolume: on.has('dispensedVolume'),
+		showHeadTemp: on.has('headTemp'),
+		showMixTemp: on.has('mixTemp'),
+		showWeight: on.has('weight'),
+		showWeightFlow: on.has('weightFlow'),
+		keepScreenOnBrew: c.keepScreenOnBrew,
+		showDebugPanel: c.showDebugPanel,
+		defaultDoseG: c.defaultDoseG,
+		defaultRatio: c.defaultRatio,
+		defaultBrewTempC: c.defaultBrewTempC,
+		defaultPreinfusionS: c.defaultPreinfuseS,
+		grinderModel: c.grinderModel,
+		suppressDe1Sleep: c.suppressDe1Sleep,
+		qcSteamTimeS: c.qcSteamTimeS,
+		qcSteamFlowMlS: c.qcSteamFlowMlS,
+		qcSteamTempC: c.qcSteamTempC,
+		qcHotWaterTempC: c.qcHotWaterTempC,
+		qcHotWaterVolumeMl: c.qcHotWaterVolumeMl,
+		qcFlushTimeS: c.qcFlushTimeS,
+		qcFlushTempC: c.qcFlushTempC
+	};
+}
+
+/**
+ * Load the flat `Settings` from localStorage. The persisted shape is now
+ * `{ common: CommonSettings, <platform extras> }` — "storage IS the shared
+ * shape". A pre-unification FLAT blob (no `common` key) is read as-is and
+ * rewritten nested on the next persist.
+ */
+function loadSettings(): Settings {
+	const stored = readJson<Record<string, unknown> | null>(SETTINGS_KEY, null);
+	if (stored && typeof stored === 'object' && stored.common) {
+		const platform: Partial<Settings> = {};
+		for (const k of PLATFORM_KEYS) {
+			if (k in stored) (platform as Record<string, unknown>)[k] = stored[k];
+		}
+		return applyCommonToSettings(stored.common as CommonSettings, {
+			...DEFAULT_SETTINGS,
+			...platform
+		});
+	}
+	return { ...DEFAULT_SETTINGS, ...((stored as Partial<Settings> | null) ?? {}) };
+}
+
 /**
  * Apply the persisted theme to the document — sets (or, for the default dark,
  * leaves) `data-theme` on `<html>`. Called once at module load so a reload
@@ -339,10 +479,7 @@ export class SettingsStore {
 	 * Loaded from localStorage, with {@link DEFAULT_SETTINGS} filling any field
 	 * a stored older bundle is missing (forward-compatible merge).
 	 */
-	current = $state.raw<Settings>({
-		...DEFAULT_SETTINGS,
-		...readJson<Partial<Settings>>(SETTINGS_KEY, {})
-	});
+	current = $state.raw<Settings>(loadSettings());
 
 	constructor() {
 		// Paint the persisted theme straight away — the store is created the
@@ -350,9 +487,13 @@ export class SettingsStore {
 		applyTheme(this.current.theme);
 	}
 
-	/** Persist the preference bundle to localStorage. */
+	/** Persist the preference bundle to localStorage in the nested cross-shell
+	 *  shape: the shared `common` block + the web-only platform extras. */
 	private persist(): void {
-		writeJson(SETTINGS_KEY, this.current);
+		writeJson(SETTINGS_KEY, {
+			common: settingsToCommon(this.current),
+			...settingsPlatformExtras(this.current)
+		});
 	}
 
 	/**

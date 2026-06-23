@@ -19,7 +19,12 @@
 import { exportBackupJsonl } from '$lib/wasm/de1_wasm';
 import { getBeanStore } from '$lib/bean';
 import { getHistoryStore } from '$lib/history';
-import { getSettingsStore } from '$lib/settings';
+import {
+	getSettingsStore,
+	settingsToCommon,
+	applyCommonToSettings,
+	settingsPlatformExtras
+} from '$lib/settings';
 import { getProfileStore } from '$lib/profiles';
 import { getMaintenanceStore } from '$lib/maintenance';
 import { visualizerSyncPrefs, applyVisualizerSyncPrefs } from '$lib/visualizer/sync-config';
@@ -28,7 +33,7 @@ import { downloadBlob, filenameStamp } from '$lib/utils/download';
 import type { Bean, Roaster } from '$lib/bean/model';
 import type { StoredShot } from '$lib/history';
 import type { CremaProfile } from '$lib/profiles/model';
-import type { MaintenanceState, VisualizerSyncPrefs } from '$lib/core/crema-core';
+import type { CommonSettings, MaintenanceState, VisualizerSyncPrefs } from '$lib/core/crema-core';
 
 /** localStorage key for the user's custom profiles (a `CremaProfile[]`). Mirror
  *  of `profiles/store`'s `CUSTOM_KEY` — read directly so the bundle carries the
@@ -100,10 +105,15 @@ export function buildBackupJsonl(cremaVersion = '0.0.1'): BuiltBackup | null {
 		beans,
 		roasters,
 		shots,
-		// Whole settings bundle is portable on web; tag the source shell so a
-		// restore only re-applies it on web (Android's settings are a different
-		// shape). The DATA above is shared core types — fully cross-shell.
-		settings: { ...settings.current, _shell: 'web' },
+		// Settings line: the shared cross-shell `common` block (CommonSettings —
+		// both shells emit it identically, so common prefs restore web<->Android)
+		// + this shell's `_shell` tag + the web-only platform extras (webhooks,
+		// density, … — re-applied only on web).
+		settings: {
+			common: settingsToCommon(settings.current),
+			_shell: 'web',
+			...settingsPlatformExtras(settings.current)
+		},
 		// Profile organisation — pinned + hidden built-in ids (cross-shell) plus
 		// the web-native overrides superset. Custom-profile pins ride in the
 		// profile JSON above.
@@ -254,15 +264,32 @@ export function restoreBackup(text: string, mode: RestoreMode): RestoreSummary {
 			addedShots++;
 		}
 	}
-	// Settings — only a web-tagged bundle (Android's AppPrefs shape differs).
+	// Settings. The unified line carries `common` (shared CommonSettings — applied
+	// cross-shell, no tag) plus the web-only platform extras (applied only from a
+	// `_shell:'web'` bundle). A pre-unification line had no `common` key — fall back
+	// to the old flat-apply, still web-tagged.
 	let settingsApplied = false;
-	if (settings && settings._shell === 'web') {
-		const current = settingsStore.current as unknown as Record<string, unknown>;
+	if (settings) {
 		const setAny = settingsStore.set.bind(settingsStore) as (k: string, v: unknown) => void;
-		for (const key of Object.keys(current)) {
-			if (key in settings) setAny(key, settings[key]);
+		if (settings.common) {
+			const next = applyCommonToSettings(
+				settings.common as unknown as CommonSettings,
+				settingsStore.current
+			);
+			for (const [key, value] of Object.entries(next)) setAny(key, value);
+			if (settings._shell === 'web') {
+				for (const key of Object.keys(settingsPlatformExtras(settingsStore.current))) {
+					if (key in settings) setAny(key, settings[key]);
+				}
+			}
+			settingsApplied = true;
+		} else if (settings._shell === 'web') {
+			const current = settingsStore.current as unknown as Record<string, unknown>;
+			for (const key of Object.keys(current)) {
+				if (key in settings) setAny(key, settings[key]);
+			}
+			settingsApplied = true;
 		}
-		settingsApplied = true;
 	}
 
 	// Profile organisation — pins + hidden built-ins (cross-shell). A wipe

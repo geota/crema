@@ -218,6 +218,74 @@ export interface Bean {
 }
 
 /**
+ * The portable, cross-shell app-preferences subset. `#[serde(default)]` on the
+ * whole struct (via [`Default`]) so a partial blob — an older backup, or one
+ * shell omitting a field it shares — fills gaps from the canonical defaults
+ * rather than failing.
+ */
+export interface CommonSettings {
+	/** `"system" | "light" | "dark"`. Web `theme`. */
+	themeMode: string;
+	/** Global max shot duration, seconds (`0` = none). */
+	maxShotDurationS: number;
+	/** Auto-tare the scale on shot start. Web `autoTareOnShotStart`. */
+	autoTare: boolean;
+	/** Enable stop-at-weight. Web `stopOnWeight`. */
+	stopOnWeight: boolean;
+	/** Steam eco mode. Web `steamEcoMode`. */
+	steamEco: boolean;
+	/** Flush the group before each shot. Web `groupFlushBeforeShot`. */
+	preFlush: boolean;
+	/** Run a short purge after steaming. Web `autoPurgeAfterSteam`. */
+	steamPurge: boolean;
+	/** Weight unit `"g" | "oz"`. */
+	weightUnit: string;
+	/** Temperature unit `"C" | "F"`. */
+	tempUnit: string;
+	/** Pressure unit `"bar" | "psi"`. */
+	pressureUnit: string;
+	/** Volume unit `"ml" | "floz"`. */
+	volumeUnit: string;
+	/**
+	 * Enabled live-chart channel keys (Android's vocabulary:
+	 * `pressure`/`flow`/`weight`/`headTemp`/`mixTemp`/`weightFlow`/`resistance`/
+	 * `dispensedVolume`). Web maps its eight `show*` booleans to/from this list
+	 * (its `volume` ↔ `dispensedVolume`).
+	 */
+	chartChannels: string[];
+	/** Hold the screen awake while a shot pulls. */
+	keepScreenOnBrew: boolean;
+	/** Show the debug / event-log panel. */
+	showDebugPanel: boolean;
+	/** Default dose for new profiles, grams. */
+	defaultDoseG: number;
+	/** Default yield-to-dose ratio (the `x` in `1:x`). */
+	defaultRatio: number;
+	/** Default group temperature, °C. */
+	defaultBrewTempC: number;
+	/** Default pre-infusion time, seconds. Web `defaultPreinfusionS`. */
+	defaultPreinfuseS: number;
+	/** Free-text equipment grinder model. */
+	grinderModel: string;
+	/** Keep the DE1 awake while Crema is open. */
+	suppressDe1Sleep: boolean;
+	/** Quick-Controls steam duration, seconds. */
+	qcSteamTimeS: number;
+	/** Quick-Controls steam flow, ml/s. */
+	qcSteamFlowMlS: number;
+	/** Quick-Controls steam temperature, °C. */
+	qcSteamTempC: number;
+	/** Quick-Controls hot-water temperature, °C. */
+	qcHotWaterTempC: number;
+	/** Quick-Controls hot-water volume, ml. */
+	qcHotWaterVolumeMl: number;
+	/** Quick-Controls group-flush duration, seconds. */
+	qcFlushTimeS: number;
+	/** Quick-Controls group-flush temperature, °C. */
+	qcFlushTempC: number;
+}
+
+/**
  * Something the core observed that the UI may want to react to.
  * 
  * Serialized adjacently tagged — a JSON event reads `{"type":"ShotStarted"}`
