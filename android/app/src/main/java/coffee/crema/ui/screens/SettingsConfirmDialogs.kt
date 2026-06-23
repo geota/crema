@@ -37,6 +37,8 @@ class SettingsConfirmState(
     resync: MutableState<Boolean>,
     restoreWipe: MutableState<Uri?>,
     val launchSave: (name: String, content: String?) -> Unit,
+    /** Binary SAF export — the `.crema.zip` backup (bean photos ride along). */
+    val launchSaveBytes: (name: String, bytes: ByteArray?) -> Unit,
     val launchRestore: (mode: MainViewModel.RestoreMode) -> Unit,
 ) {
     var confirmResetPrefs by resetPrefs
@@ -68,6 +70,13 @@ fun rememberSettingsConfirmState(vm: MainViewModel): SettingsConfirmState {
         val t = pendingExport.value; pendingExport.value = null
         if (uri != null && t != null) vm.writeTextToUri(uri, t)
     }
+    // Binary SAF export — the `.crema.zip` backup. Held in plain `remember` (not
+    // saveable): the zip can be multi-MB and would blow the Binder cap on save.
+    val pendingExportBytes = remember { mutableStateOf<ByteArray?>(null) }
+    val saveBytesLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
+        val b = pendingExportBytes.value; pendingExportBytes.value = null
+        if (uri != null && b != null) vm.writeBytesToUri(uri, b)
+    }
     // SAF restore-from-file plumbing. A MERGE applies at once; a REPLACE (wipe)
     // stashes the picked file so the dialog can gate it behind a typed confirm
     // before anything is deleted.
@@ -84,6 +93,9 @@ fun rememberSettingsConfirmState(vm: MainViewModel): SettingsConfirmState {
             resetPrefs, erase, heaterVoltage, lineFreq, flowMultiplier, cycle, resync, restoreWipe,
             launchSave = { name, content ->
                 if (content != null) { pendingExport.value = content; saveLauncher.launch(name) }
+            },
+            launchSaveBytes = { name, bytes ->
+                if (bytes != null) { pendingExportBytes.value = bytes; saveBytesLauncher.launch(name) }
             },
             launchRestore = { mode ->
                 pendingRestoreMode.value = mode

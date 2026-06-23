@@ -73,6 +73,7 @@ import coffee.crema.ui.components.CremaNavigationRail
 import coffee.crema.ui.components.CremaSearchPill
 import coffee.crema.ui.components.Eyebrow
 import coffee.crema.ui.components.PhIcon
+import coffee.crema.ui.components.BeanAvatar
 import coffee.crema.ui.components.RoasterMarkAvatar
 import coffee.crema.ui.components.CremaConfirmDialog
 import coffee.crema.ui.components.CremaOverflowMenu
@@ -344,8 +345,11 @@ private fun BeanCard(
     ) {
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.Top) {
-                // Web: the mark is the roaster's; a roasterless bag renders "?".
-                BeanAvatar(roasterName)
+                // The bag photo if one's set, else the roaster's mark ("?" when roasterless).
+                BeanAvatar(
+                    beanId = bean.id, imageRef = bean.imageRef, updatedAt = bean.updatedAt,
+                    fallbackName = roasterName, sizeDp = 44, cornerDp = 12, fontSize = 16.sp,
+                )
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     if (roasterName != null) Eyebrow(roasterName)
                     Text(
@@ -484,13 +488,6 @@ private fun BeanStat(modifier: Modifier = Modifier, leading: @Composable () -> U
     }
 }
 
-// A 44dp roaster-mark avatar — the shared deterministic two-letter mark
-// (components/RoasterMark.kt, ported from web roaster-mark.ts).
-@Composable
-private fun BeanAvatar(seed: String?) {
-    RoasterMarkAvatar(name = seed, sizeDp = 44, cornerDp = 12, fontSize = 16.sp)
-}
-
 // A roaster directory card — avatar + name + "City · Country · N bags", with a
 // kebab (Edit / Visit website / Delete). Proto's kebab-only roaster pattern.
 @Composable
@@ -505,7 +502,7 @@ private fun RoasterCard(
     CremaCard(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.Top) {
-                BeanAvatar(roaster.name)
+                RoasterMarkAvatar(roaster.name, sizeDp = 44, cornerDp = 12, fontSize = 16.sp)
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(
                         roaster.name,

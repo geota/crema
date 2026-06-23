@@ -52,7 +52,10 @@ import coffee.crema.beans.BeanDraft
 import coffee.crema.beans.applyBeanEdits
 import coffee.crema.beans.isFrozen
 import coffee.crema.beans.roastBand5
+import coffee.crema.core.Bean
 import coffee.crema.ui.MainViewModel
+import coffee.crema.ui.components.BeanPhotoBox
+import coffee.crema.ui.components.rememberBeanPhotoPicker
 import coffee.crema.ui.components.roasterMark
 import coffee.crema.ui.components.roasterTone
 import coffee.crema.ui.components.CremaAnchoredPopup
@@ -189,7 +192,7 @@ fun BeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                 Modifier.width(280.dp).fillMaxHeight().verticalScroll(rememberScrollState()).padding(20.dp),
                 verticalArrangement = Arrangement.spacedBy(20.dp),
             ) {
-                BeanPhoto(roaster, name)
+                BeanPhotoEditor(vm, bean, roaster)
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     BE_TOC.forEachIndexed { i, label ->
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -407,25 +410,63 @@ private fun BeField(label: String, value: String, singleLine: Boolean = true, on
     )
 }
 
-/** Left-rail bag photo placeholder — full-bleed roaster mark (web hero) + caption. */
+/** Left-rail bag photo: the stored photo (web BeanEditPage hero), or the
+ *  roaster-mark well, with camera / gallery / remove controls. */
 @Composable
-private fun BeanPhoto(roaster: String, name: String) {
+private fun BeanPhotoEditor(vm: MainViewModel, bean: Bean, roaster: String) {
+    val picker = rememberBeanPhotoPicker(
+        beanId = bean.id,
+        newCameraUri = vm::newCameraOutputUri,
+        onPicked = vm::setBeanImageFromUri,
+    )
+    val hasPhoto = bean.imageRef != null
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        // Web BeanEditPage hero: the whole well IS the tone square with the big
-        // two-letter mark (shared roasterMark/roasterTone — see RoasterMark.kt).
-        Box(
-            Modifier.fillMaxWidth().height(120.dp).clip(RoundedCornerShape(14.dp))
-                .background(roasterTone(roaster.ifBlank { null })),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                roasterMark(roaster.ifBlank { null }),
-                style = MaterialTheme.typography.displayMedium.copy(fontWeight = FontWeight.SemiBold),
-                color = Color(0xFFF4EDE3),
+        BeanPhotoBox(
+            beanId = bean.id,
+            imageRef = bean.imageRef,
+            updatedAt = bean.updatedAt,
+            modifier = Modifier.fillMaxWidth().height(120.dp).clip(RoundedCornerShape(14.dp)),
+            fallback = { BeanMarkWell(roaster) },
+        )
+        Text(roaster.ifBlank { "No roaster" }, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            CremaButton(
+                onClick = { picker.takePhoto() },
+                modifier = Modifier.weight(1f),
+                variant = CremaButtonVariant.Tonal,
+                icon = "camera",
+                label = if (hasPhoto) "Retake" else "Camera",
+            )
+            CremaButton(
+                onClick = { picker.pickFromGallery() },
+                modifier = Modifier.weight(1f),
+                variant = CremaButtonVariant.Outlined,
+                icon = "image",
+                label = "Gallery",
             )
         }
-        Text(roaster.ifBlank { "No roaster" }, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface)
-        Text("Bag photo upload is coming soon.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (hasPhoto) {
+            CremaButton(onClick = { vm.clearBeanImage(bean.id) }, variant = CremaButtonVariant.Text, danger = true, icon = "trash", label = "Remove photo")
+        } else {
+            Text("Add a bag photo — take one or pick from your gallery.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+/** The roaster-mark hero well — the no-photo fallback (full-bleed tone square +
+ *  the big two-letter mark; shared roasterMark/roasterTone, see RoasterMark.kt). */
+@Composable
+private fun BeanMarkWell(roaster: String) {
+    Box(
+        Modifier.fillMaxWidth().height(120.dp).clip(RoundedCornerShape(14.dp))
+            .background(roasterTone(roaster.ifBlank { null })),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            roasterMark(roaster.ifBlank { null }),
+            style = MaterialTheme.typography.displayMedium.copy(fontWeight = FontWeight.SemiBold),
+            color = Color(0xFFF4EDE3),
+        )
     }
 }
 

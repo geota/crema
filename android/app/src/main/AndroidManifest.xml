@@ -61,6 +61,20 @@
                 <data android:scheme="${googleRedirectScheme}" />
             </intent-filter>
         </activity>
+
+        <!-- FileProvider — hands the camera app (TakePicture) a writable content
+             Uri for the bean-photo capture temp file. Authority tracks the build's
+             applicationId (incl. the .nightly suffix) so it matches
+             BuildConfig.APPLICATION_ID + ".fileprovider" in code. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 
 </manifest>

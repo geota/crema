@@ -155,7 +155,7 @@ fun PhoneSettingsScreen(
                             pressureUnit = ui.pressureUnit,
                             volumeUnit = ui.volumeUnit,
                         )
-                        "sharing" -> SharingSection(vm, ui.let { it }, confirm.launchSave, confirm.launchRestore, onResync = { confirm.pendingResync = true })
+                        "sharing" -> SharingSection(vm, ui.let { it }, confirm.launchSave, confirm.launchSaveBytes, confirm.launchRestore, onResync = { confirm.pendingResync = true })
                         "calibration" -> CalibrationSection(
                             vm, ui.let { it }, connected,
                             tempOffset, { tempOffset = it },
@@ -626,6 +626,7 @@ private fun SharingSection(
     vm: MainViewModel,
     ui: coffee.crema.ui.MainUiState,
     launchSave: (String, String?) -> Unit,
+    launchSaveBytes: (String, ByteArray?) -> Unit,
     launchRestore: (MainViewModel.RestoreMode) -> Unit,
     onResync: () -> Unit,
 ) {
@@ -741,8 +742,8 @@ private fun SharingSection(
         }
     }
     SettingsGroup("Backup & restore") {
-        CremaSettingsRow("Back up everything", "All custom profiles, beans, roasters, shots and settings in one file.") {
-            CremaButton(onClick = { launchSave(vm.backupFileName(), vm.backupBundleJson()) }, variant = CremaButtonVariant.Filled, icon = "download-simple", label = "Back up")
+        CremaSettingsRow("Back up everything", "All custom profiles, beans, roasters, shots, settings and bag photos in one .crema.zip.") {
+            CremaButton(onClick = { launchSaveBytes(vm.backupFileName(), vm.buildBackupZipBytes()) }, variant = CremaButtonVariant.Filled, icon = "download-simple", label = "Back up")
         }
         CremaSettingsRow("Restore — merge", "Add anything from a backup you don't already have; keeps your current data.") {
             CremaButton(onClick = { launchRestore(MainViewModel.RestoreMode.MERGE) }, variant = CremaButtonVariant.Outlined, icon = "upload-simple", label = "Merge")

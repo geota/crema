@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- FileProvider path map. The bean-photo camera capture writes a temp JPEG to
+     cacheDir/bean-capture/, then the VM copies it into filesDir/bean-images/. -->
+<paths>
+    <cache-path name="bean-capture" path="bean-capture/" />
+</paths>

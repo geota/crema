@@ -24,7 +24,6 @@ import java.net.URLEncoder
 
 private const val UPLOAD_URL = "https://www.googleapis.com/upload/drive/v3/files"
 private const val FILES_URL = "https://www.googleapis.com/drive/v3/files"
-private const val BACKUP_MIME = "application/x-ndjson"
 
 /** A backup file in Drive (the subset of fields we request; newest-first on list). */
 @Serializable
@@ -48,22 +47,29 @@ private fun errorMessage(json: Json, body: String, status: Int, what: String): S
  * create (timestamped names) rather than overwrite, so Drive keeps a short
  * backup history the user can pick from on restore.
  */
-suspend fun driveUploadBackup(accessToken: String, name: String, content: String, json: Json): DriveFile =
+suspend fun driveUploadBackup(
+    accessToken: String,
+    name: String,
+    content: ByteArray,
+    json: Json,
+    mime: String = "application/zip",
+): DriveFile =
     withContext(Dispatchers.IO) {
         val boundary = "crema" + System.nanoTime().toString(16)
         val meta = buildJsonObject {
             put("name", name)
-            put("mimeType", BACKUP_MIME)
+            put("mimeType", mime)
         }.toString()
-        val body = buildString {
-            append("--").append(boundary).append("\r\n")
-            append("Content-Type: application/json; charset=UTF-8\r\n\r\n")
-            append(meta).append("\r\n")
-            append("--").append(boundary).append("\r\n")
-            append("Content-Type: ").append(BACKUP_MIME).append("\r\n\r\n")
-            append(content).append("\r\n")
-            append("--").append(boundary).append("--")
-        }
+        // Build the multipart body in BYTES so the binary media part (the
+        // `.crema.zip`) rides through intact — a String body would mangle it.
+        val head = (
+            "--$boundary\r\n" +
+                "Content-Type: application/json; charset=UTF-8\r\n\r\n" +
+                "$meta\r\n" +
+                "--$boundary\r\n" +
+                "Content-Type: $mime\r\n\r\n"
+            ).toByteArray(Charsets.UTF_8)
+        val tail = "\r\n--$boundary--".toByteArray(Charsets.UTF_8)
         val conn = (
             URL("$UPLOAD_URL?uploadType=multipart&fields=id,name,modifiedTime,size")
                 .openConnection() as HttpURLConnection
@@ -76,7 +82,7 @@ suspend fun driveUploadBackup(accessToken: String, name: String, content: String
             setRequestProperty("Content-Type", "multipart/related; boundary=$boundary")
         }
         try {
-            conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+            conn.outputStream.use { out -> out.write(head); out.write(content); out.write(tail) }
             val status = conn.responseCode
             val resp = (if (status in 200..299) conn.inputStream else conn.errorStream)
                 ?.use { String(it.readBytes(), Charsets.UTF_8) }.orEmpty()

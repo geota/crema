@@ -307,7 +307,10 @@ private fun PhoneBeanTile(
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(11.dp)) {
             // Head: avatar + roaster/name/origin + Active badge or rating stars.
             Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                RoasterMarkAvatar(name = roasterName ?: bean.name, sizeDp = 46, cornerDp = 12, fontSize = 17.sp)
+                BeanAvatar(
+                    beanId = bean.id, imageRef = bean.imageRef, updatedAt = bean.updatedAt,
+                    fallbackName = roasterName ?: bean.name, sizeDp = 46, cornerDp = 12, fontSize = 17.sp,
+                )
                 Column(Modifier.weight(1f)) {
                     if (roasterName != null) Text(
                         roasterName,

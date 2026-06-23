@@ -25,7 +25,9 @@ import coffee.crema.beans.isFrozen
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.components.*
 import coffee.crema.ui.phone.components.CremaEdge
+import coffee.crema.ui.phone.components.CremaOverflowSheet
 import coffee.crema.ui.phone.components.CremaPhoneBackBar
+import coffee.crema.ui.phone.components.SheetItem
 
 /*
  * PhoneBeanEditScreen — the pushed bean editor (DESIGN §3.8; port of
@@ -85,6 +87,14 @@ fun PhoneBeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
     var url by remember(bean.id) { mutableStateOf(bean.url ?: "") }
     var notes by remember(bean.id) { mutableStateOf(bean.notes) }
 
+    // Bag photo capture (Phase C) — launchers + the action bottom sheet.
+    val photoPicker = rememberBeanPhotoPicker(
+        beanId = bean.id,
+        newCameraUri = vm::newCameraOutputUri,
+        onPicked = vm::setBeanImageFromUri,
+    )
+    var photoSheet by remember { mutableStateOf(false) }
+
     val datesValid = roasted.isBlank() || opened.isBlank() || opened >= roasted
 
     val save: () -> Unit = {
@@ -133,7 +143,24 @@ fun PhoneBeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
             // 01 · Identity
             NumberedGroup("01", "Identity") {
                 Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    RoasterMarkAvatar(name = roaster.ifBlank { name.ifBlank { "?" } }, sizeDp = 64, cornerDp = 14, fontSize = 22.sp)
+                    // Tap the avatar to take / pick / remove a bag photo.
+                    Box(
+                        Modifier.size(64.dp).clip(RoundedCornerShape(14.dp)).clickable { photoSheet = true },
+                        contentAlignment = Alignment.BottomEnd,
+                    ) {
+                        BeanAvatar(
+                            beanId = bean.id, imageRef = bean.imageRef, updatedAt = bean.updatedAt,
+                            fallbackName = roaster.ifBlank { name.ifBlank { "?" } },
+                            sizeDp = 64, cornerDp = 14, fontSize = 22.sp,
+                        )
+                        Box(
+                            Modifier.padding(3.dp).size(20.dp).clip(RoundedCornerShape(999.dp))
+                                .background(MaterialTheme.colorScheme.primary),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            PhIcon("camera", sizeDp = 12, tint = MaterialTheme.colorScheme.onPrimary)
+                        }
+                    }
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(9.dp)) {
                         CremaTextField(value = name, onValueChange = { name = it }, placeholder = "Bean name *")
                         CremaTextField(value = roaster, onValueChange = { roaster = it }, placeholder = "Roaster")
@@ -334,6 +361,20 @@ fun PhoneBeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                 )
             }
         }
+    }
+
+    // Bag photo — take / pick / remove (Phase C).
+    if (photoSheet) {
+        val hasPhoto = bean.imageRef != null
+        CremaOverflowSheet(
+            title = "Bag photo",
+            items = buildList {
+                add(SheetItem("camera", if (hasPhoto) "Retake photo" else "Take photo") { photoPicker.takePhoto() })
+                add(SheetItem("image", "Choose from gallery") { photoPicker.pickFromGallery() })
+                if (hasPhoto) add(SheetItem("trash", "Remove photo", danger = true) { vm.clearBeanImage(bean.id) })
+            },
+            onDismiss = { photoSheet = false },
+        )
     }
 }
 

@@ -135,6 +135,7 @@ import com.adamglin.phosphoricons.regular.BluetoothConnected
 import com.adamglin.phosphoricons.regular.BluetoothSlash
 import com.adamglin.phosphoricons.regular.CalendarBlank
 import com.adamglin.phosphoricons.regular.Camera
+import com.adamglin.phosphoricons.regular.Image
 import com.adamglin.phosphoricons.regular.CircleHalf
 import com.adamglin.phosphoricons.regular.DeviceMobile
 import com.adamglin.phosphoricons.regular.FloppyDisk
@@ -293,6 +294,7 @@ fun PhIcon(name: String, modifier: Modifier = Modifier, tint: Color = LocalConte
         "circle-half" -> PhosphorIcons.Regular.CircleHalf
         "device-mobile" -> PhosphorIcons.Regular.DeviceMobile
         "floppy-disk" -> PhosphorIcons.Regular.FloppyDisk
+        "image" -> PhosphorIcons.Regular.Image
         "list" -> PhosphorIcons.Regular.List
         "wifi-high" -> PhosphorIcons.Regular.WifiHigh
         else -> PhosphorIcons.Regular.Question // unknown-name fallback
