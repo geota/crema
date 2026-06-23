@@ -574,6 +574,17 @@ fun SettingsScreen(
                                 }
                             }
                         }
+                        SetGroup("Backup & restore") {
+                            CremaSettingsRow("Back up everything", "All custom profiles, beans, roasters, shots and settings in one file.") {
+                                CremaButton(onClick = { confirm.launchSave(vm.backupFileName(), vm.backupBundleJson()) }, variant = CremaButtonVariant.Filled, icon = "download-simple", label = "Back up")
+                            }
+                            CremaSettingsRow("Restore — merge", "Add anything from a backup you don't already have; keeps your current data.") {
+                                CremaButton(onClick = { confirm.launchRestore(MainViewModel.RestoreMode.MERGE) }, variant = CremaButtonVariant.Outlined, icon = "upload-simple", label = "Merge")
+                            }
+                            CremaSettingsRow("Restore — replace", "Wipe this device, then restore fully from a backup. Can't be undone.", last = true) {
+                                CremaButton(onClick = { confirm.launchRestore(MainViewModel.RestoreMode.WIPE) }, variant = CremaButtonVariant.Outlined, icon = "trash", label = "Replace")
+                            }
+                        }
                         SetGroup("Local export") {
                             CremaSettingsRow(
                                 "History export",

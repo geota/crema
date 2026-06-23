@@ -155,7 +155,7 @@ fun PhoneSettingsScreen(
                             pressureUnit = ui.pressureUnit,
                             volumeUnit = ui.volumeUnit,
                         )
-                        "sharing" -> SharingSection(vm, ui.let { it }, confirm.launchSave, onResync = { confirm.pendingResync = true })
+                        "sharing" -> SharingSection(vm, ui.let { it }, confirm.launchSave, confirm.launchRestore, onResync = { confirm.pendingResync = true })
                         "calibration" -> CalibrationSection(
                             vm, ui.let { it }, connected,
                             tempOffset, { tempOffset = it },
@@ -626,6 +626,7 @@ private fun SharingSection(
     vm: MainViewModel,
     ui: coffee.crema.ui.MainUiState,
     launchSave: (String, String?) -> Unit,
+    launchRestore: (MainViewModel.RestoreMode) -> Unit,
     onResync: () -> Unit,
 ) {
     val vz = ui.visualizer
@@ -737,6 +738,17 @@ private fun SharingSection(
                     if (i != vz.log.lastIndex) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 }
             }
+        }
+    }
+    SettingsGroup("Backup & restore") {
+        CremaSettingsRow("Back up everything", "All custom profiles, beans, roasters, shots and settings in one file.") {
+            CremaButton(onClick = { launchSave(vm.backupFileName(), vm.backupBundleJson()) }, variant = CremaButtonVariant.Filled, icon = "download-simple", label = "Back up")
+        }
+        CremaSettingsRow("Restore — merge", "Add anything from a backup you don't already have; keeps your current data.") {
+            CremaButton(onClick = { launchRestore(MainViewModel.RestoreMode.MERGE) }, variant = CremaButtonVariant.Outlined, icon = "upload-simple", label = "Merge")
+        }
+        CremaSettingsRow("Restore — replace", "Wipe this device, then restore fully from a backup. Can't be undone.", last = true) {
+            CremaButton(onClick = { launchRestore(MainViewModel.RestoreMode.WIPE) }, variant = CremaButtonVariant.Outlined, icon = "trash", label = "Replace")
         }
     }
     SettingsGroup("Local export") {
