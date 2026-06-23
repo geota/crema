@@ -585,6 +585,24 @@ fun SettingsScreen(
                                 CremaButton(onClick = { confirm.launchRestore(MainViewModel.RestoreMode.WIPE) }, variant = CremaButtonVariant.Outlined, icon = "trash", label = "Replace")
                             }
                         }
+                        val ds = ui.drive
+                        SetGroup("Google Drive") {
+                            if (!ds.connected) {
+                                CremaSettingsRow("Connect Google Drive", "Back up to and restore from your own Google Drive — only the backup files Crema creates (scope drive.file).", last = true) {
+                                    CremaButton(onClick = { vm.drive.beginSignIn(openUrl) }, variant = CremaButtonVariant.Filled, icon = "cloud", enabled = ds.configured && !ds.busy, label = "Connect")
+                                }
+                            } else {
+                                CremaSettingsRow("Back up to Drive", "Upload a fresh backup file to your Google Drive.") {
+                                    CremaButton(onClick = { vm.drive.backupNow() }, variant = CremaButtonVariant.Filled, icon = "cloud-arrow-up", enabled = !ds.busy, label = "Back up")
+                                }
+                                CremaSettingsRow("Restore latest", "Merge the newest Drive backup into your current data.") {
+                                    CremaButton(onClick = { vm.drive.restoreLatest(false) }, variant = CremaButtonVariant.Outlined, icon = "cloud-arrow-down", enabled = !ds.busy, label = "Restore")
+                                }
+                                CremaSettingsRow("Disconnect", "Forget the Google Drive connection on this device.", last = true) {
+                                    CremaButton(onClick = { vm.drive.disconnect() }, variant = CremaButtonVariant.Outlined, icon = "sign-out", enabled = !ds.busy, label = "Disconnect")
+                                }
+                            }
+                        }
                         SetGroup("Local export") {
                             CremaSettingsRow(
                                 "History export",

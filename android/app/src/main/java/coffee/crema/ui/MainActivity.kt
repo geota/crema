@@ -289,10 +289,11 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** singleTask re-entry — the Visualizer OAuth redirect lands here. */
+    /** singleTask re-entry — the Visualizer / Google Drive OAuth redirects land here. */
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleVisualizerCallback(intent)
+        handleDriveCallback(intent)
     }
 
     /** Route a `crema://visualizer/callback?code&state` redirect to the controller. */
@@ -300,6 +301,19 @@ class MainActivity : ComponentActivity() {
         val uri = intent?.data ?: return
         if (uri.scheme == "crema" && uri.host == "visualizer") {
             viewModel.visualizer.handleCallback(
+                code = uri.getQueryParameter("code"),
+                returnedState = uri.getQueryParameter("state"),
+                error = uri.getQueryParameter("error"),
+            )
+        }
+    }
+
+    /** Route a `com.googleusercontent.apps.<id>:/oauth2redirect?code&state` Google
+     *  Drive redirect (the reversed-client-id custom scheme) to the controller. */
+    private fun handleDriveCallback(intent: Intent?) {
+        val uri = intent?.data ?: return
+        if (uri.scheme?.startsWith("com.googleusercontent.apps") == true) {
+            viewModel.drive.handleCallback(
                 code = uri.getQueryParameter("code"),
                 returnedState = uri.getQueryParameter("state"),
                 error = uri.getQueryParameter("error"),
