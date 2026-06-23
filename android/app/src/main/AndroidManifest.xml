@@ -51,6 +51,15 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="crema" android:host="visualizer" />
             </intent-filter>
+            <!-- Google Drive OAuth callback: <reversed-client-id>:/oauth2redirect.
+                 The scheme is the build's googleRedirectScheme placeholder (derived
+                 from the resolved Drive client_id in build.gradle.kts). -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="${googleRedirectScheme}" />
+            </intent-filter>
         </activity>
     </application>
 
