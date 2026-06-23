@@ -72,6 +72,10 @@ android {
         versionCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 1
         versionName = (project.findProperty("versionName") as String?) ?: "0.1"
 
+        // Reversed-client-id redirect scheme for the Google Drive OAuth flow,
+        // overridden per build type from the resolved Drive client_id. A safe
+        // never-matching default keeps the manifest valid when unconfigured.
+        manifestPlaceholders["googleRedirectScheme"] = "com.googleusercontent.apps.unconfigured"
     }
 
     // JVM unit tests (`./gradlew :app:testDebugUnitTest`) for the pure shell logic
@@ -105,6 +109,23 @@ android {
         }
     }
 
+    // Google Drive OAuth client_id (drive.file backup) — a PUBLIC client, same
+    // resolution as the Visualizer id: -PgoogleDriveClientId → GOOGLE_DRIVE_CLIENT_ID
+    // env → (debug) googleDriveClientId in the gitignored local.properties.
+    val googleDriveClientIdOverride =
+        (project.findProperty("googleDriveClientId") as String?)
+            ?: System.getenv("GOOGLE_DRIVE_CLIENT_ID")
+    val googleDriveClientIdDev = run {
+        val f = rootProject.file("local.properties")
+        if (!f.exists()) {
+            ""
+        } else {
+            val props = Properties()
+            f.inputStream().use { props.load(it) }
+            props.getProperty("googleDriveClientId") ?: ""
+        }
+    }
+
     // Created only when a keystore is available (CI env or local.properties) — see
     // the `hasReleaseSigning` wiring above the `android {}` block.
     signingConfigs {
@@ -134,6 +155,19 @@ android {
                 "VISUALIZER_CLIENT_ID",
                 "\"${visualizerClientIdOverride ?: visualizerClientIdDev}\"",
             )
+            buildConfigField(
+                "String",
+                "GOOGLE_DRIVE_CLIENT_ID",
+                "\"${googleDriveClientIdOverride ?: googleDriveClientIdDev}\"",
+            )
+            manifestPlaceholders["googleRedirectScheme"] =
+                (googleDriveClientIdOverride ?: googleDriveClientIdDev).let { cid ->
+                    if (cid.endsWith(".apps.googleusercontent.com")) {
+                        "com.googleusercontent.apps." + cid.removeSuffix(".apps.googleusercontent.com")
+                    } else {
+                        "com.googleusercontent.apps.unconfigured"
+                    }
+                }
         }
         release {
             isMinifyEnabled = false
@@ -145,6 +179,19 @@ android {
                 "VISUALIZER_CLIENT_ID",
                 "\"${visualizerClientIdOverride ?: ""}\"",
             )
+            buildConfigField(
+                "String",
+                "GOOGLE_DRIVE_CLIENT_ID",
+                "\"${googleDriveClientIdOverride ?: ""}\"",
+            )
+            manifestPlaceholders["googleRedirectScheme"] =
+                (googleDriveClientIdOverride ?: "").let { cid ->
+                    if (cid.endsWith(".apps.googleusercontent.com")) {
+                        "com.googleusercontent.apps." + cid.removeSuffix(".apps.googleusercontent.com")
+                    } else {
+                        "com.googleusercontent.apps.unconfigured"
+                    }
+                }
         }
         // Nightly / dev train (APK pipeline): a SEPARATE app — dev.maceiras.crema.nightly,
         // labelled "Crema Nightly" (src/nightly/res) — so it coexists with a stable
@@ -167,6 +214,19 @@ android {
                 "VISUALIZER_CLIENT_ID",
                 "\"${visualizerClientIdOverride ?: visualizerClientIdDev}\"",
             )
+            buildConfigField(
+                "String",
+                "GOOGLE_DRIVE_CLIENT_ID",
+                "\"${googleDriveClientIdOverride ?: googleDriveClientIdDev}\"",
+            )
+            manifestPlaceholders["googleRedirectScheme"] =
+                (googleDriveClientIdOverride ?: googleDriveClientIdDev).let { cid ->
+                    if (cid.endsWith(".apps.googleusercontent.com")) {
+                        "com.googleusercontent.apps." + cid.removeSuffix(".apps.googleusercontent.com")
+                    } else {
+                        "com.googleusercontent.apps.unconfigured"
+                    }
+                }
         }
     }
 
