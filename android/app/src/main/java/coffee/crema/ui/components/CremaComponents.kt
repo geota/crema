@@ -1543,7 +1543,7 @@ data class CremaStepperStyle(
         /** Prominent boxed editor field — 30dp buttons, 18sp value (target tiles, Quick Controls). */
         val Boxed = CremaStepperStyle(box = StepperFill.High, boxShape = 10.dp, boxPadding = PaddingValues(horizontal = 6.dp, vertical = 5.dp), buttonSize = 30.dp, iconSize = 14, valueSize = 18.sp, fillWidth = true)
         /** Dense boxed editor field — 28dp buttons, 15sp value (profile segment rows). */
-        val BoxedDense = CremaStepperStyle(box = StepperFill.Highest, boxShape = 8.dp, boxPadding = PaddingValues(3.dp), buttonSize = 28.dp, iconSize = 12, valueSize = 15.sp, fillWidth = true)
+        val BoxedDense = CremaStepperStyle(box = StepperFill.Highest, boxShape = 8.dp, boxPadding = PaddingValues(horizontal = 2.dp, vertical = 3.dp), buttonSize = 26.dp, iconSize = 12, valueSize = 14.sp, fillWidth = true)
         /** Bare settings-row stepper — 36dp buttons, 16sp value (tablet settings). */
         val Bare = CremaStepperStyle(buttonSize = 36.dp, iconSize = 15, valueSize = 16.sp, spacedBy = 8.dp, valueMinWidth = 64.dp)
         /** Compact bare stepper — 34dp buttons, 15sp value (phone settings + editors). */

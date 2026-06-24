@@ -65,6 +65,8 @@ import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.freshnessColor
 import coffee.crema.ui.components.CremaButton
 import coffee.crema.ui.components.CremaButtonVariant
+import coffee.crema.ui.components.CremaIconButton
+import coffee.crema.ui.components.CremaIconTone
 import coffee.crema.ui.components.CremaStarRating
 import coffee.crema.ui.components.CremaSplitButton
 import coffee.crema.ui.components.SplitMenuItem
@@ -149,12 +151,14 @@ fun BeansScreen(
                 Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = 20.dp, bottom = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                val narrowBar = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 840
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Eyebrow("Library")
                     Text(
                         "Beans",
                         style = MaterialTheme.typography.headlineLarge,
                         color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
                     )
                     // Web /beans sub-header: status counts, not totals.
                     Text(
@@ -168,38 +172,50 @@ fun BeansScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+                Spacer(Modifier.width(12.dp))
                 // Compact search pill (matched to the 40dp button height), the
                 // command-bar sibling of Profiles' search.
                 CremaSearchPill(
                     query = query,
                     onQueryChange = { query = it },
                     placeholder = "Search beans, roasters…",
-                    modifier = Modifier.width(240.dp),
+                    modifier = if (narrowBar) Modifier.weight(1f) else Modifier.width(240.dp),
                 )
                 Spacer(Modifier.width(8.dp))
-                CremaButton(
-                    onClick = { importLauncher.launch(arrayOf("*/*")) },
-                    variant = CremaButtonVariant.Outlined,
-                    icon = "upload-simple",
-                    label = "Import",
-                )
-                Spacer(Modifier.width(8.dp))
-                CremaSplitButton(
-                    icon = "download-simple",
-                    label = "Export",
-                    menuHead = "Export as",
-                    onPrimary = { launchSave("crema-beans.json", vm.beansLibraryJson()) },
-                    items = listOf(
-                        SplitMenuItem("file-text", "Crema backup", "Lossless round-trip — beans and roasters. Re-importable in Crema.") { launchSave("crema-beans.json", vm.beansLibraryJson()) },
-                        SplitMenuItem("file-zip", "Beanconqueror", "For sharing with Beanconqueror users. Crema-only fields like tags don't survive.") { launchSave("crema-to-beanconqueror.json", vm.beansBeanconquerorJson()) },
-                    ),
-                )
-                Spacer(Modifier.width(8.dp))
-                CremaButton(
-                    onClick = { if (tab == "bags") { vm.startNewBean(); onNav("bean-edit") } else { roasterEditing = null; roasterDialogOpen = true } },
-                    icon = "plus",
-                    label = if (tab == "bags") "Add bean" else "Add roaster",
-                )
+                if (narrowBar) {
+                    // 7"/portrait: icon-only actions so the title + search keep their
+                    // width. The Export menu's secondary format (Beanconqueror) is a
+                    // landscape-only affordance; the icon runs the primary Crema backup.
+                    CremaIconButton("upload-simple", { importLauncher.launch(arrayOf("*/*")) }, tone = CremaIconTone.Tonal)
+                    Spacer(Modifier.width(4.dp))
+                    CremaIconButton("download-simple", { launchSave("crema-beans.json", vm.beansLibraryJson()) }, tone = CremaIconTone.Tonal)
+                    Spacer(Modifier.width(4.dp))
+                    CremaIconButton("plus", { if (tab == "bags") { vm.startNewBean(); onNav("bean-edit") } else { roasterEditing = null; roasterDialogOpen = true } }, tone = CremaIconTone.Filled)
+                } else {
+                    CremaButton(
+                        onClick = { importLauncher.launch(arrayOf("*/*")) },
+                        variant = CremaButtonVariant.Outlined,
+                        icon = "upload-simple",
+                        label = "Import",
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    CremaSplitButton(
+                        icon = "download-simple",
+                        label = "Export",
+                        menuHead = "Export as",
+                        onPrimary = { launchSave("crema-beans.json", vm.beansLibraryJson()) },
+                        items = listOf(
+                            SplitMenuItem("file-text", "Crema backup", "Lossless round-trip — beans and roasters. Re-importable in Crema.") { launchSave("crema-beans.json", vm.beansLibraryJson()) },
+                            SplitMenuItem("file-zip", "Beanconqueror", "For sharing with Beanconqueror users. Crema-only fields like tags don't survive.") { launchSave("crema-to-beanconqueror.json", vm.beansBeanconquerorJson()) },
+                        ),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    CremaButton(
+                        onClick = { if (tab == "bags") { vm.startNewBean(); onNav("bean-edit") } else { roasterEditing = null; roasterDialogOpen = true } },
+                        icon = "plus",
+                        label = if (tab == "bags") "Add bean" else "Add roaster",
+                    )
+                }
             }
             // Bags / Roasters — a split (segmented) button on its own row, above the
             // filters: it picks WHAT you're viewing, distinct from how you filter bags.
