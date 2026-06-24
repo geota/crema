@@ -82,6 +82,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import coffee.crema.ui.components.CremaButton
 import coffee.crema.ui.components.CremaButtonVariant
+import coffee.crema.ui.components.CremaIconButton
+import coffee.crema.ui.components.CremaIconTone
 import coffee.crema.ui.components.CremaSplitButton
 import coffee.crema.ui.components.SplitMenuItem
 import coffee.crema.ui.components.CremaOverflowMenu
@@ -180,40 +182,58 @@ fun HistoryScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+                val narrowBar = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 840
                 if (ui.history.isNotEmpty()) {
+                    Spacer(Modifier.width(12.dp))
                     CremaSearchPill(
                         query = query,
                         onQueryChange = { query = it },
                         placeholder = "Search profile, bean, notes…",
-                        modifier = Modifier.width(260.dp),
+                        modifier = if (narrowBar) Modifier.weight(1f) else Modifier.width(260.dp),
                     )
                 }
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(start = 8.dp)) {
-                    CremaButton(
-                        onClick = { importLauncher.launch(arrayOf("application/json", "text/*", "*/*")) },
-                        variant = CremaButtonVariant.Outlined,
-                        icon = "upload-simple",
-                        label = "Import",
-                    )
+                if (narrowBar) {
+                    // 7"/portrait: icon-only actions so the (long) title + search keep
+                    // their width. Export's secondary "current filter" format stays a
+                    // landscape affordance; the icon runs the primary all-shots export.
+                    Spacer(Modifier.width(8.dp))
+                    CremaIconButton("upload-simple", { importLauncher.launch(arrayOf("application/json", "text/*", "*/*")) }, tone = CremaIconTone.Tonal)
                     if (ui.history.isNotEmpty()) {
-                        CremaSplitButton(
-                            icon = "download-simple",
-                            label = "Export",
-                            menuHead = "Export as",
-                            onPrimary = { launchSave("crema-history.json", vm.shotsJson(null)) },
-                            items = listOf(
-                                SplitMenuItem("file-text", "All shots", "Every shot as one Crema JSON file. Re-importable in Crema.") { launchSave("crema-history.json", vm.shotsJson(null)) },
-                                SplitMenuItem("file-code", "Current filter", "Only the ${shots.size} shot(s) matching your search and date range.") { launchSave("crema-history-filtered.json", vm.shotsJson(shots.map { it.id })) },
-                            ),
+                        Spacer(Modifier.width(4.dp))
+                        CremaIconButton("download-simple", { launchSave("crema-history.json", vm.shotsJson(null)) }, tone = CremaIconTone.Tonal)
+                        if (!sel.selecting && ui.history.size >= 2) {
+                            Spacer(Modifier.width(4.dp))
+                            CremaIconButton("arrows-left-right", sel::enter, tone = CremaIconTone.Tonal)
+                        }
+                    }
+                } else {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(start = 8.dp)) {
+                        CremaButton(
+                            onClick = { importLauncher.launch(arrayOf("application/json", "text/*", "*/*")) },
+                            variant = CremaButtonVariant.Outlined,
+                            icon = "upload-simple",
+                            label = "Import",
                         )
-                        if (!sel.selecting) {
-                            CremaButton(
-                                onClick = sel::enter,
-                                variant = CremaButtonVariant.Outlined,
-                                icon = "arrows-left-right",
-                                label = "Compare",
-                                enabled = ui.history.size >= 2,
+                        if (ui.history.isNotEmpty()) {
+                            CremaSplitButton(
+                                icon = "download-simple",
+                                label = "Export",
+                                menuHead = "Export as",
+                                onPrimary = { launchSave("crema-history.json", vm.shotsJson(null)) },
+                                items = listOf(
+                                    SplitMenuItem("file-text", "All shots", "Every shot as one Crema JSON file. Re-importable in Crema.") { launchSave("crema-history.json", vm.shotsJson(null)) },
+                                    SplitMenuItem("file-code", "Current filter", "Only the ${shots.size} shot(s) matching your search and date range.") { launchSave("crema-history-filtered.json", vm.shotsJson(shots.map { it.id })) },
+                                ),
                             )
+                            if (!sel.selecting) {
+                                CremaButton(
+                                    onClick = sel::enter,
+                                    variant = CremaButtonVariant.Outlined,
+                                    icon = "arrows-left-right",
+                                    label = "Compare",
+                                    enabled = ui.history.size >= 2,
+                                )
+                            }
                         }
                     }
                 }

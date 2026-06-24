@@ -400,7 +400,9 @@ private fun SegmentRowFull(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             // Name column: number + name (top), then labelled Type / Ramp pills.
-            Column(Modifier.width(178.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            // 156dp (was 178) so the 7" tablet leaves the dense value cells enough
+            // width — Type/Ramp are 2-option pills that fit comfortably here.
+            Column(Modifier.width(156.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Box(
                         Modifier.size(20.dp).clip(CircleShape).background(MaterialTheme.colorScheme.secondaryContainer),

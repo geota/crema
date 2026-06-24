@@ -66,6 +66,8 @@ import coffee.crema.profiles.filterAndSortProfiles
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.components.CremaButton
 import coffee.crema.ui.components.CremaButtonVariant
+import coffee.crema.ui.components.CremaIconButton
+import coffee.crema.ui.components.CremaIconTone
 import coffee.crema.ui.components.CremaCard
 import coffee.crema.ui.components.CremaCardSpec
 import coffee.crema.ui.components.CremaNavigationRail
@@ -123,6 +125,12 @@ fun ProfilesScreen(
             onConnect = onConnect,
         )
         Column(Modifier.weight(1f).fillMaxHeight()) {
+            // Command bar: title · search · actions in one row. On a narrow 7"/
+            // portrait tablet (<840dp) the labelled buttons would crowd out the title
+            // (collapsing it to a 1-char column), so they switch to icon-only and the
+            // search flexes — everything still fits one row.
+            val pinned = ui.profiles.count { it.pinned }
+            val narrowBar = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 840
             Row(
                 Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = 20.dp, bottom = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -133,33 +141,35 @@ fun ProfilesScreen(
                         "Profiles",
                         style = MaterialTheme.typography.headlineLarge,
                         color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
                     )
-                    val pinned = ui.profiles.count { it.pinned }
                     Text(
                         "${ui.profiles.size} saved · $pinned pinned to favorites",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                // Compact search pill — matched to the 40dp button height so the
-                // command-bar row reads as one set (the stock 56dp OutlinedTextField
-                // towered over Import / New profile).
+                Spacer(Modifier.width(12.dp))
                 CremaSearchPill(
                     query = query,
                     onQueryChange = { query = it },
                     placeholder = "Search profiles…",
-                    modifier = Modifier.width(240.dp),
+                    modifier = if (narrowBar) Modifier.weight(1f) else Modifier.width(240.dp),
                 )
                 Spacer(Modifier.width(8.dp))
-                CremaButton(onClick = { importLauncher.launch(arrayOf("application/json", "text/*", "*/*")) }, variant = CremaButtonVariant.Outlined, icon = "upload-simple", label = "Import")
-                Spacer(Modifier.width(8.dp))
-                CremaButton(onClick = { launchSave("crema-profiles.json", vm.allProfilesJson()) }, variant = CremaButtonVariant.Outlined, icon = "download-simple", label = "Export")
-                Spacer(Modifier.width(8.dp))
-                CremaButton(
-                    onClick = { vm.startNewProfile(); onNav("profile-edit") },
-                    icon = "plus",
-                    label = "New profile",
-                )
+                if (narrowBar) {
+                    CremaIconButton("upload-simple", { importLauncher.launch(arrayOf("application/json", "text/*", "*/*")) }, tone = CremaIconTone.Tonal)
+                    Spacer(Modifier.width(4.dp))
+                    CremaIconButton("download-simple", { launchSave("crema-profiles.json", vm.allProfilesJson()) }, tone = CremaIconTone.Tonal)
+                    Spacer(Modifier.width(4.dp))
+                    CremaIconButton("plus", { vm.startNewProfile(); onNav("profile-edit") }, tone = CremaIconTone.Filled)
+                } else {
+                    CremaButton(onClick = { importLauncher.launch(arrayOf("application/json", "text/*", "*/*")) }, variant = CremaButtonVariant.Outlined, icon = "upload-simple", label = "Import")
+                    Spacer(Modifier.width(8.dp))
+                    CremaButton(onClick = { launchSave("crema-profiles.json", vm.allProfilesJson()) }, variant = CremaButtonVariant.Outlined, icon = "download-simple", label = "Export")
+                    Spacer(Modifier.width(8.dp))
+                    CremaButton(onClick = { vm.startNewProfile(); onNav("profile-edit") }, icon = "plus", label = "New profile")
+                }
             }
             // Filter chips (left) + sort selector (right) on one polished row.
             Row(
