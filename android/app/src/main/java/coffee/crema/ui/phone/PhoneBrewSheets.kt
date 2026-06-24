@@ -23,7 +23,12 @@ import androidx.compose.ui.unit.sp
 import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager
 import coffee.crema.profiles.CremaProfile
+import coffee.crema.ui.DoseGrindMode
 import coffee.crema.ui.MainUiState
+import coffee.crema.ui.PiFlushMode
+import coffee.crema.ui.SteamMode
+import coffee.crema.ui.WaterMode
+import coffee.crema.ui.YieldRatioMode
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.effectiveBrew
 import coffee.crema.ui.components.*
@@ -54,17 +59,17 @@ fun PhoneQuickSheet(
 
     var tab by remember { mutableStateOf("dial") }
     // Split-stepper modes + local (no-VM-seam) values — tablet QC parity.
-    var doseGrindMode by remember { mutableStateOf("dose") }
+    var doseGrindMode by remember { mutableStateOf(DoseGrindMode.Dose) }
     var grind by remember { mutableStateOf(4.2) }
-    var yieldRatioMode by remember { mutableStateOf("yield") }
-    var piFlushMode by remember { mutableStateOf("preinf") }
+    var yieldRatioMode by remember { mutableStateOf(YieldRatioMode.Yield) }
+    var piFlushMode by remember { mutableStateOf(PiFlushMode.Preinf) }
     var preinf by remember { mutableStateOf(8.0) }
     var flushTime by remember { mutableStateOf(4.0) }
     // Steam / hot-water modes are local UI; the values they edit are the VM's
     // persisted QC state (vm.setQcSteam* / vm.setQcHotWater*), shared with the
     // tablet — no local stub.
-    var steamMode by remember { mutableStateOf("time") }
-    var waterMode by remember { mutableStateOf("volume") }
+    var steamMode by remember { mutableStateOf(SteamMode.Time) }
+    var waterMode by remember { mutableStateOf(WaterMode.Volume) }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -131,17 +136,17 @@ fun PhoneQuickSheet(
                                     CremaSplitLabel(
                                         prefix = "",
                                         options = listOf(SplitOption("dose", "Dose"), SplitOption("grind", "Grind")),
-                                        value = doseGrindMode, onChange = { doseGrindMode = it },
+                                        value = doseGrindMode.value, onChange = { doseGrindMode = DoseGrindMode.of(it) },
                                     )
                                 },
-                                value = if (doseGrindMode == "dose") dose else grind,
-                                unit = if (doseGrindMode == "dose") "g" else "",
+                                value = if (doseGrindMode == DoseGrindMode.Dose) dose else grind,
+                                unit = if (doseGrindMode == DoseGrindMode.Dose) "g" else "",
                                 step = 0.1,
-                                min = if (doseGrindMode == "dose") 5.0 else 0.0,
-                                max = if (doseGrindMode == "dose") 30.0 else 20.0,
-                                presets = if (doseGrindMode == "dose") listOf(16.0, 18.0, 19.0, 20.0) else listOf(3.5, 4.0, 4.5, 5.0),
+                                min = if (doseGrindMode == DoseGrindMode.Dose) 5.0 else 0.0,
+                                max = if (doseGrindMode == DoseGrindMode.Dose) 30.0 else 20.0,
+                                presets = if (doseGrindMode == DoseGrindMode.Dose) listOf(16.0, 18.0, 19.0, 20.0) else listOf(3.5, 4.0, 4.5, 5.0),
                                 fmt = { "%.1f".format(it) },
-                                onChange = { if (doseGrindMode == "dose") vm.quickAdjustBrew(it, yieldOut, brewTemp) else grind = it },
+                                onChange = { if (doseGrindMode == DoseGrindMode.Dose) vm.quickAdjustBrew(it, yieldOut, brewTemp) else grind = it },
                             )
                             // Yield | Ratio.
                             QcCell(
@@ -150,18 +155,18 @@ fun PhoneQuickSheet(
                                     CremaSplitLabel(
                                         prefix = "",
                                         options = listOf(SplitOption("yield", "Yield"), SplitOption("ratio", "Ratio")),
-                                        value = yieldRatioMode, onChange = { yieldRatioMode = it },
+                                        value = yieldRatioMode.value, onChange = { yieldRatioMode = YieldRatioMode.of(it) },
                                     )
                                 },
-                                value = if (yieldRatioMode == "yield") yieldOut else (if (dose > 0) yieldOut / dose else 2.0),
-                                unit = if (yieldRatioMode == "yield") "g" else "",
-                                step = if (yieldRatioMode == "yield") 0.5 else 0.1,
-                                min = if (yieldRatioMode == "yield") 10.0 else 1.0,
-                                max = if (yieldRatioMode == "yield") 80.0 else 5.0,
-                                presets = if (yieldRatioMode == "yield") listOf(32.0, 36.0, 40.0, 45.0) else listOf(1.5, 2.0, 2.5, 3.0),
-                                fmt = { if (yieldRatioMode == "yield") "%.1f".format(it) else "1:%.1f".format(it) },
+                                value = if (yieldRatioMode == YieldRatioMode.Yield) yieldOut else (if (dose > 0) yieldOut / dose else 2.0),
+                                unit = if (yieldRatioMode == YieldRatioMode.Yield) "g" else "",
+                                step = if (yieldRatioMode == YieldRatioMode.Yield) 0.5 else 0.1,
+                                min = if (yieldRatioMode == YieldRatioMode.Yield) 10.0 else 1.0,
+                                max = if (yieldRatioMode == YieldRatioMode.Yield) 80.0 else 5.0,
+                                presets = if (yieldRatioMode == YieldRatioMode.Yield) listOf(32.0, 36.0, 40.0, 45.0) else listOf(1.5, 2.0, 2.5, 3.0),
+                                fmt = { if (yieldRatioMode == YieldRatioMode.Yield) "%.1f".format(it) else "1:%.1f".format(it) },
                                 onChange = {
-                                    if (yieldRatioMode == "yield") vm.quickAdjustBrew(dose, it, brewTemp)
+                                    if (yieldRatioMode == YieldRatioMode.Yield) vm.quickAdjustBrew(dose, it, brewTemp)
                                     else vm.quickAdjustBrew(dose, dose * it, brewTemp)
                                 },
                             )
@@ -182,15 +187,15 @@ fun PhoneQuickSheet(
                                     CremaSplitLabel(
                                         prefix = "",
                                         options = listOf(SplitOption("preinf", "Pre-inf"), SplitOption("flush", "Flush")),
-                                        value = piFlushMode, onChange = { piFlushMode = it },
+                                        value = piFlushMode.value, onChange = { piFlushMode = PiFlushMode.of(it) },
                                     )
                                 },
-                                value = if (piFlushMode == "preinf") preinf else flushTime,
+                                value = if (piFlushMode == PiFlushMode.Preinf) preinf else flushTime,
                                 unit = "s", step = 1.0,
-                                min = 0.0, max = if (piFlushMode == "preinf") 30.0 else 20.0,
-                                presets = if (piFlushMode == "preinf") listOf(0.0, 4.0, 8.0, 12.0) else listOf(2.0, 4.0, 6.0, 8.0),
+                                min = 0.0, max = if (piFlushMode == PiFlushMode.Preinf) 30.0 else 20.0,
+                                presets = if (piFlushMode == PiFlushMode.Preinf) listOf(0.0, 4.0, 8.0, 12.0) else listOf(2.0, 4.0, 6.0, 8.0),
                                 fmt = { "%.0f".format(it) },
-                                onChange = { if (piFlushMode == "preinf") preinf = it else flushTime = it },
+                                onChange = { if (piFlushMode == PiFlushMode.Preinf) preinf = it else flushTime = it },
                             )
                         }
                         // Steam — Time | Flow | Temp, wired to the same persisted QC
@@ -204,21 +209,21 @@ fun PhoneQuickSheet(
                                 CremaSplitLabel(
                                     prefix = "Steam",
                                     options = listOf(SplitOption("time", "Time"), SplitOption("flow", "Flow"), SplitOption("temp", "Temp")),
-                                    value = steamMode, onChange = { steamMode = it },
-                                    dot = steamMode == "temp",
+                                    value = steamMode.value, onChange = { steamMode = SteamMode.of(it) },
+                                    dot = steamMode == SteamMode.Temp,
                                     dotOn = ui.qcSteamTempC > 0,
                                     onDot = { vm.setQcSteamTemp(if (ui.qcSteamTempC > 0) 0f else 148f) },
                                 )
                             },
-                            value = when (steamMode) { "flow" -> ui.qcSteamFlowMlS.toDouble(); "temp" -> ui.qcSteamTempC.toDouble(); else -> ui.qcSteamTimeS.toDouble() },
-                            unit = when (steamMode) { "flow" -> "ml/s"; "temp" -> "°C"; else -> "s" },
-                            step = when (steamMode) { "flow" -> 0.1; "temp" -> 0.5; else -> 1.0 },
-                            min = when (steamMode) { "flow" -> 0.2; "temp" -> 135.0; else -> 1.0 },
-                            max = when (steamMode) { "flow" -> 3.0; "temp" -> 170.0; else -> 60.0 },
-                            presets = when (steamMode) { "flow" -> listOf(0.6, 0.9, 1.2, 1.6, 2.0); "temp" -> listOf(140.0, 145.0, 148.0, 150.0, 155.0); else -> listOf(5.0, 10.0, 15.0, 20.0, 30.0) },
+                            value = when (steamMode) { SteamMode.Flow -> ui.qcSteamFlowMlS.toDouble(); SteamMode.Temp -> ui.qcSteamTempC.toDouble(); SteamMode.Time -> ui.qcSteamTimeS.toDouble() },
+                            unit = when (steamMode) { SteamMode.Flow -> "ml/s"; SteamMode.Temp -> "°C"; SteamMode.Time -> "s" },
+                            step = when (steamMode) { SteamMode.Flow -> 0.1; SteamMode.Temp -> 0.5; SteamMode.Time -> 1.0 },
+                            min = when (steamMode) { SteamMode.Flow -> 0.2; SteamMode.Temp -> 135.0; SteamMode.Time -> 1.0 },
+                            max = when (steamMode) { SteamMode.Flow -> 3.0; SteamMode.Temp -> 170.0; SteamMode.Time -> 60.0 },
+                            presets = when (steamMode) { SteamMode.Flow -> listOf(0.6, 0.9, 1.2, 1.6, 2.0); SteamMode.Temp -> listOf(140.0, 145.0, 148.0, 150.0, 155.0); SteamMode.Time -> listOf(5.0, 10.0, 15.0, 20.0, 30.0) },
                             fmt = { if (it % 1.0 == 0.0) "%.0f".format(it) else "%.1f".format(it) },
-                            enabled = !(steamMode == "temp" && ui.qcSteamTempC <= 0f),
-                            onChange = { when (steamMode) { "flow" -> vm.setQcSteamFlow(it.toFloat()); "temp" -> vm.setQcSteamTemp(it.toFloat()); else -> vm.setQcSteamTime(it.toFloat()) } },
+                            enabled = !(steamMode == SteamMode.Temp && ui.qcSteamTempC <= 0f),
+                            onChange = { when (steamMode) { SteamMode.Flow -> vm.setQcSteamFlow(it.toFloat()); SteamMode.Temp -> vm.setQcSteamTemp(it.toFloat()); SteamMode.Time -> vm.setQcSteamTime(it.toFloat()) } },
                         )
                         // Hot water — Temp | Volume, wired to the VM (tablet parity). No
                         // disable dot: 0 isn't a clean "off" here (the de1app/Decenza
@@ -229,17 +234,17 @@ fun PhoneQuickSheet(
                                 CremaSplitLabel(
                                     prefix = "Hot water",
                                     options = listOf(SplitOption("temp", "Temp"), SplitOption("volume", "Volume")),
-                                    value = waterMode, onChange = { waterMode = it },
+                                    value = waterMode.value, onChange = { waterMode = WaterMode.of(it) },
                                 )
                             },
-                            value = if (waterMode == "temp") ui.qcHotWaterTempC.toDouble() else ui.qcHotWaterVolumeMl.toDouble(),
-                            unit = if (waterMode == "temp") "°C" else "ml",
-                            step = if (waterMode == "temp") 1.0 else 10.0,
-                            min = if (waterMode == "temp") 40.0 else 20.0,
-                            max = if (waterMode == "temp") 98.0 else 500.0,
-                            presets = if (waterMode == "temp") listOf(60.0, 75.0, 85.0, 92.0, 96.0) else listOf(60.0, 120.0, 180.0, 250.0, 350.0),
+                            value = if (waterMode == WaterMode.Temp) ui.qcHotWaterTempC.toDouble() else ui.qcHotWaterVolumeMl.toDouble(),
+                            unit = if (waterMode == WaterMode.Temp) "°C" else "ml",
+                            step = if (waterMode == WaterMode.Temp) 1.0 else 10.0,
+                            min = if (waterMode == WaterMode.Temp) 40.0 else 20.0,
+                            max = if (waterMode == WaterMode.Temp) 98.0 else 500.0,
+                            presets = if (waterMode == WaterMode.Temp) listOf(60.0, 75.0, 85.0, 92.0, 96.0) else listOf(60.0, 120.0, 180.0, 250.0, 350.0),
                             fmt = { "%.0f".format(it) },
-                            onChange = { if (waterMode == "temp") vm.setQcHotWaterTemp(it.toFloat()) else vm.setQcHotWaterVolume(it.toFloat()) },
+                            onChange = { if (waterMode == WaterMode.Temp) vm.setQcHotWaterTemp(it.toFloat()) else vm.setQcHotWaterVolume(it.toFloat()) },
                         )
                     }
                 }
