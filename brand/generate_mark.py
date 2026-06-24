@@ -23,7 +23,9 @@ Colours: disc #C7763B (copper-500), ink #1F1812 (fg-on-accent).
 
 Usage:  python3 generate_mark.py            # writes crema-mark*.svg + core/brand.rs
                                             #   + Android brand vectors (logo + launcher)
-        python3 generate_mark.py --assets   # + rsvg/magick → png/ico (needs both)
+        python3 generate_mark.py --assets   # + rsvg/magick → png/ico, incl. the
+                                            #   512×512 Google Play store icon
+                                            #   (needs both rsvg-convert + magick)
 
 Requires: fonttools (pip install fonttools). Downloads Newsreader VF on first run.
 """
@@ -34,6 +36,8 @@ FONT = os.path.join(HERE, "Newsreader.ttf")
 FONT_URL = "https://github.com/google/fonts/raw/main/ofl/newsreader/Newsreader%5Bopsz,wght%5D.ttf"
 DISC = 64.0
 COPPER, INK = "#C7763B", "#1F1812"
+CREAM, CREAM_MUTED = "#F4EDE0", "#E8DCC4"   # ink-50 / ink-100 — text on copper, coin face
+FEATURE_W, FEATURE_H = 1024, 500            # Google Play feature graphic dimensions
 
 def ensure_font():
     if not os.path.exists(FONT):
@@ -77,6 +81,48 @@ def svg_full(d):
     return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">'
             f'<rect width="64" height="64" fill="{COPPER}"/>'
             f'<path fill="{INK}" d="{d}"/></svg>\n')
+
+def bake_text(text, wght, opsz, size_px, *, tracking=0.0):
+    """Bake a whole string to one SVG path 'd' (font-INDEPENDENT — the same glyph-
+    outline trick the mark's "C" uses, so the wordmark needs no embedded font at
+    render time). Glyphs are laid out left-to-right by their own hmtx advances.
+    Baseline sits at y=0, left edge at x=0, y-down (SVG). Returns (d, advance_width)."""
+    from fontTools.ttLib import TTFont
+    from fontTools.varLib.instancer import instantiateVariableFont
+    from fontTools.pens.svgPathPen import SVGPathPen
+    from fontTools.pens.transformPen import TransformPen
+    f = TTFont(FONT); instantiateVariableFont(f, {"wght": wght, "opsz": opsz}, inplace=True)
+    upm = f["head"].unitsPerEm; s = size_px / upm
+    cmap = f.getBestCmap(); gs = f.getGlyphSet(); hmtx = f["hmtx"]
+    pen = SVGPathPen(gs); x = 0.0
+    for ch in text:
+        gname = cmap.get(ord(ch))
+        if gname is None:                            # space / unmapped → quarter-em gap
+            x += 0.25 * size_px + tracking; continue
+        gs[gname].draw(TransformPen(pen, (s, 0, 0, -s, x, 0.0)))
+        x += hmtx[gname][0] * s + tracking
+    return pen.getCommands(), x
+
+
+def feature_graphic_svg(d_mask):
+    """Google Play feature graphic (1024×500 listing banner): copper field, a cream
+    'coin' of the mark on the left, and the baked Newsreader wordmark + tagline.
+    No transparency. Reuses the centred maskable "C" path for the coin."""
+    coin_scale = 300.0 / DISC                        # 64-unit artboard → 300px coin
+    coin_tx = 250.0 - 32.0 * coin_scale              # centre the coin at (250,250)
+    crema_d, _ = bake_text("Crema", 500, 72, 132)
+    sub_d, _ = bake_text("for Decent Espresso", 500, 18, 40, tracking=0.5)
+    tx = 470                                          # left edge of the text block
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" width="{FEATURE_W}" height="{FEATURE_H}" '
+            f'viewBox="0 0 {FEATURE_W} {FEATURE_H}">'
+            f'<rect width="{FEATURE_W}" height="{FEATURE_H}" fill="{COPPER}"/>'
+            f'<g transform="translate({coin_tx},{coin_tx}) scale({coin_scale})">'
+            f'<circle cx="32" cy="32" r="32" fill="{CREAM}"/>'
+            f'<path fill="{COPPER}" d="{d_mask}"/></g>'
+            f'<path transform="translate({tx},258)" fill="{CREAM}" d="{crema_d}"/>'
+            f'<path transform="translate({tx},318)" fill="{CREAM_MUTED}" d="{sub_d}"/>'
+            f'</svg>\n')
+
 
 CORE_BRAND_RS = os.path.normpath(os.path.join(HERE, "..", "core", "de1-domain", "src", "brand.rs"))
 
@@ -283,8 +329,28 @@ def main():
         render(mask, 512, f"{out}/icon-maskable-512.png")
         render(mask, 180, f"{out}/apple-touch-icon.png")    # iOS home screen
         render(mask, 120, f"{out}/oauth-logo-120.png")      # Google OAuth consent (square, PNG)
+        # Google Play Store listing icon — the full-bleed mark the launcher shows,
+        # so the store icon matches the installed app 1:1. Play's spec: PNG/JPEG,
+        # 512×512, ≤1 MB. We flatten the alpha to a fully-opaque copper square
+        # (Play wants an opaque square and applies its own corner rounding); the
+        # flat copper+C is a few KB, far under the 1 MB cap.
+        render(mask, 512, f"{out}/play-store-icon-512.png")
+        subprocess.run(["magick", f"{out}/play-store-icon-512.png",
+                        "-background", COPPER, "-alpha", "remove", "-alpha", "off",
+                        f"{out}/play-store-icon-512.png"], check=True)
+        # Google Play feature graphic — 1024×500 listing banner (PNG, ≤1 MB). Built
+        # from the same baked mark + Newsreader wordmark (no embedded font needed),
+        # then flattened to an opaque banner.
+        feat_svg = os.path.join(out, "crema-feature-graphic.svg")
+        open(feat_svg, "w").write(feature_graphic_svg(d_mask))
+        subprocess.run(["rsvg-convert", "-w", str(FEATURE_W), "-h", str(FEATURE_H),
+                        feat_svg, "-o", f"{out}/play-feature-graphic-1024x500.png"], check=True)
+        subprocess.run(["magick", f"{out}/play-feature-graphic-1024x500.png",
+                        "-background", COPPER, "-alpha", "remove", "-alpha", "off",
+                        f"{out}/play-feature-graphic-1024x500.png"], check=True)
         print(f"rasterised → {out}/ : favicon.ico, favicon-32, icon-192/512, "
-              f"icon-maskable-192/512, apple-touch-icon, oauth-logo-120 (all opsz-34)")
+              f"icon-maskable-192/512, apple-touch-icon, oauth-logo-120, "
+              f"play-store-icon-512, play-feature-graphic-1024x500 (all opsz-34)")
 
 if __name__ == "__main__":
     main()
