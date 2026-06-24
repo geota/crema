@@ -7,71 +7,6 @@ package coffee.crema.core
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
 
-// ─── Profile mode enums ────────────────────────────────────────────────────
-// Manually synced from core/bindings/crema-core.kt (de1-domain exposes these via
-// #[typeshare]). The profile-JSON wire contract is each variant's lowercase
-// @SerialName; keep these in step with the generated bindings.
-
-/// Which quantity a step holds at its target ("pressure" / "flow").
-@Serializable
-enum class Pump(val string: String) {
-	@SerialName("pressure")
-	Pressure("pressure"),
-	@SerialName("flow")
-	Flow("flow"),
-}
-
-/// How a step moves to its target ("fast" / "smooth").
-@Serializable
-enum class Transition(val string: String) {
-	@SerialName("fast")
-	Fast("fast"),
-	@SerialName("smooth")
-	Smooth("smooth"),
-}
-
-/// Which temperature a step regulates ("coffee" / "water").
-@Serializable
-enum class TempSensor(val string: String) {
-	@SerialName("coffee")
-	Coffee("coffee"),
-	@SerialName("water")
-	Water("water"),
-}
-
-/// The metric an exit condition watches ("pressure" / "flow").
-@Serializable
-enum class ExitMetric(val string: String) {
-	@SerialName("pressure")
-	Pressure("pressure"),
-	@SerialName("flow")
-	Flow("flow"),
-}
-
-/// The direction of an exit comparison ("over" / "under").
-@Serializable
-enum class Compare(val string: String) {
-	@SerialName("over")
-	Over("over"),
-	@SerialName("under")
-	Under("under"),
-}
-
-/// What kind of beverage a profile produces (v2 "beverage_type"; default espresso).
-@Serializable
-enum class BeverageType(val string: String) {
-	@SerialName("espresso")
-	Espresso("espresso"),
-	@SerialName("calibrate")
-	Calibrate("calibrate"),
-	@SerialName("cleaning")
-	Cleaning("cleaning"),
-	@SerialName("manual")
-	Manual("manual"),
-	@SerialName("pourover")
-	Pourover("pourover"),
-}
-
 /// Whether a bag of coffee is a single-origin lot or a blend. `None` =
 /// unknown / unset. Serialises as the lowercase wire string
 /// (`"single"` / `"blend"`) to match the TS shell's typed string union.
@@ -179,23 +114,23 @@ data class Bean (
 	/// to `None`).
 	val roastType: BeanRoastType? = null,
 	/// Decaf flag — `false` by default.
-	val decaf: Boolean,
+	val decaf: Boolean? = null,
 	/// Provenance metadata. Empty struct by default.
-	val origin: BeanOrigin,
+	val origin: BeanOrigin? = null,
 	/// Bag size, grams. `0.0` when unknown. Unit lives in the doc
 	/// comment, not the field name, per the locked-in naming rule
 	/// (`docs/44-pre-android-handoff.md`).
-	val bagSize: Float,
+	val bagSize: Float? = null,
 	/// Remaining weight in the bag, grams. Auto-debited per shot when
 	/// the shell enables `Track bag remaining weight`. `0.0` when
 	/// unknown.
-	val remaining: Float,
+	val remaining: Float? = null,
 	/// Quality score — free text per Visualizer (`"88"`, `"A-"`).
-	val qualityScore: String,
+	val qualityScore: String? = null,
 	/// Tasting notes — multi-line free text.
-	val tastingNotes: String,
+	val tastingNotes: String? = null,
 	/// User star rating 0..5; `0` = unrated.
-	val rating: UByte,
+	val rating: UByte? = null,
 	/// Where the bag was bought — `"Counter Culture · Durham"`.
 	val placeOfPurchase: String? = null,
 	/// What the bag cost — currency-less number in the user's local
@@ -205,24 +140,27 @@ data class Bean (
 	/// URL to buy again — Visualizer / roaster / store link.
 	val url: String? = null,
 	/// Free-form notes (not the tasting box).
-	val notes: String,
+	val notes: String? = null,
 	/// Pinned to the brew-page bean picker strip.
-	val favourite: Boolean,
+	val favourite: Boolean? = null,
 	/// Unix epoch ms when the bag was archived; `None` = active.
 	val archivedAt: Long? = null,
 	/// Bean-scoped grinder name — `"Niche Zero"`. Bean-scoped because a
 	/// grind setting only means something paired with the grinder it
 	/// was measured on.
-	val grinder: String,
+	val grinder: String? = null,
 	/// Bean-scoped grinder click / setting — `"1.2"`, `"6 + a tooth"`.
-	val grinderSetting: String,
+	val grinderSetting: String? = null,
 	/// Free-form user tags — e.g. `"daily-driver"`, `"comp"`, `"experimental"`.
 	/// Defaults to an empty list. Serialised as `tags` so the JSON contract
 	/// matches the [`crate::Profile`] tag pattern.
 	val tags: List<String>? = null,
-	/// The profile auto-loaded when this bean is activated (the "linked
-	/// profile"); null = no link. Dangling ids tolerated. Local-only —
-	/// never pushed to Visualizer. Mirrors `de1_domain::Bean.linked_profile_id`.
+	/// The profile auto-loaded when this bean is activated on the Brew
+	/// page (the "linked profile"). `None` = no link. Stores the profile
+	/// id only; a dangling id (profile deleted, cross-device import of a
+	/// device-local custom) is tolerated by every consumer. Local-only —
+	/// never pushed to Visualizer. Defaults so older Bean JSON
+	/// deserialises cleanly.
 	val linkedProfileId: String? = null,
 	/// Visualizer `coffee_bag.id` once pushed.
 	val visualizerId: String? = null,
@@ -249,6 +187,71 @@ data class Bean (
 	val createdAt: Long,
 	/// Unix epoch ms when this bag was last updated.
 	val updatedAt: Long
+)
+
+/// The portable, cross-shell app-preferences subset. `#[serde(default)]` on the
+/// whole struct (via [`Default`]) so a partial blob — an older backup, or one
+/// shell omitting a field it shares — fills gaps from the canonical defaults
+/// rather than failing.
+@Serializable
+data class CommonSettings (
+	/// `"system" | "light" | "dark"`. Web `theme`.
+	val themeMode: String,
+	/// Global max shot duration, seconds (`0` = none).
+	val maxShotDurationS: Float,
+	/// Auto-tare the scale on shot start. Web `autoTareOnShotStart`.
+	val autoTare: Boolean,
+	/// Enable stop-at-weight. Web `stopOnWeight`.
+	val stopOnWeight: Boolean,
+	/// Steam eco mode. Web `steamEcoMode`.
+	val steamEco: Boolean,
+	/// Flush the group before each shot. Web `groupFlushBeforeShot`.
+	val preFlush: Boolean,
+	/// Run a short purge after steaming. Web `autoPurgeAfterSteam`.
+	val steamPurge: Boolean,
+	/// Weight unit `"g" | "oz"`.
+	val weightUnit: String,
+	/// Temperature unit `"C" | "F"`.
+	val tempUnit: String,
+	/// Pressure unit `"bar" | "psi"`.
+	val pressureUnit: String,
+	/// Volume unit `"ml" | "floz"`.
+	val volumeUnit: String,
+	/// Enabled live-chart channel keys (Android's vocabulary:
+	/// `pressure`/`flow`/`weight`/`headTemp`/`mixTemp`/`weightFlow`/`resistance`/
+	/// `dispensedVolume`). Web maps its eight `show*` booleans to/from this list
+	/// (its `volume` ↔ `dispensedVolume`).
+	val chartChannels: List<String>,
+	/// Hold the screen awake while a shot pulls.
+	val keepScreenOnBrew: Boolean,
+	/// Show the debug / event-log panel.
+	val showDebugPanel: Boolean,
+	/// Default dose for new profiles, grams.
+	val defaultDoseG: Float,
+	/// Default yield-to-dose ratio (the `x` in `1:x`).
+	val defaultRatio: Float,
+	/// Default group temperature, °C.
+	val defaultBrewTempC: Float,
+	/// Default pre-infusion time, seconds. Web `defaultPreinfusionS`.
+	val defaultPreinfuseS: Float,
+	/// Free-text equipment grinder model.
+	val grinderModel: String,
+	/// Keep the DE1 awake while Crema is open.
+	val suppressDe1Sleep: Boolean,
+	/// Quick-Controls steam duration, seconds.
+	val qcSteamTimeS: Float,
+	/// Quick-Controls steam flow, ml/s.
+	val qcSteamFlowMlS: Float,
+	/// Quick-Controls steam temperature, °C.
+	val qcSteamTempC: Float,
+	/// Quick-Controls hot-water temperature, °C.
+	val qcHotWaterTempC: Float,
+	/// Quick-Controls hot-water volume, ml.
+	val qcHotWaterVolumeMl: Float,
+	/// Quick-Controls group-flush duration, seconds.
+	val qcFlushTimeS: Float,
+	/// Quick-Controls group-flush temperature, °C.
+	val qcFlushTempC: Float
 )
 
 /// Generated type representing the anonymous struct variant `MachineStateChanged` of the `Event` Rust enum
@@ -917,115 +920,6 @@ data class MaintenanceState (
 	val cleanIntervalHours: Double
 )
 
-/// The user's Visualizer sync **preferences** — the portable, cross-shell
-/// subset a whole-app backup carries. One shared `#[typeshare]` shape so web
-/// and Android serialise byte-identical JSON: a backup's `visualizerPrefs`
-/// line restores on either shell (no per-shell tag), and the two devices can
-/// converge on one set of choices.
-///
-/// NOT here: OAuth tokens, the cached account, the in-flight PKCE handshake,
-/// pull cursors, the premium-tier cache, last-sync timestamps, and the sync
-/// activity log — those are per-device runtime state, kept shell-local and
-/// never backed up.
-///
-/// Two distinct auto gates (the web shell has both; Android today only honours
-/// `auto_upload`):
-///  - `auto_upload` — auto-push a shot to Visualizer as it completes.
-///  - `auto_sync` — fire background library (bean/roaster/shot) pushes on
-///    mutation; manual "Sync now" always works regardless.
-///
-/// `#[serde(default)]` on the whole struct (via [`Default`]) so a partial blob
-/// deserialises to the canonical defaults rather than failing — a shell that
-/// doesn't own a field (Android doesn't drive `beans_direction`) round-trips it
-/// untouched, and an older/partial line fills gaps from the defaults below.
-@Serializable
-data class VisualizerSyncPrefs (
-	/// Auto-push a finished shot to Visualizer (web `visualizerAutoUpload`;
-	/// Android's single auto gate). Default: true.
-	val autoUpload: Boolean,
-	/// Fire background bean/roaster/shot pushes on mutation (web sync-config
-	/// `autoSync`). Android doesn't background-sync the library yet, so it
-	/// carries the field but doesn't act on it. Default: true.
-	val autoSync: Boolean,
-	/// Upload privacy: `"public" | "unlisted" | "private"`. Default: unlisted.
-	val privacy: String,
-	/// Include the profile block in uploads. Default: true.
-	val includeProfile: Boolean,
-	/// Include tasting notes in uploads. Default: false.
-	val includeNotes: Boolean,
-	/// Shots sync direction: `"off" | "backup" | "pull" | "two-way"`. Default: backup.
-	val shotsDirection: String,
-	/// Beans sync direction. Web-driven; Android carries the default only. Default: two-way.
-	val beansDirection: String,
-	/// Roasters sync direction. Web-driven; Android carries the default only. Default: two-way.
-	val roastersDirection: String
-)
-
-/// The portable, cross-shell app-preferences subset. `#[serde(default)]` on the
-/// whole struct (via [`Default`]) so a partial blob — an older backup, or one
-/// shell omitting a field it shares — fills gaps from the canonical defaults
-/// rather than failing.
-@Serializable
-data class CommonSettings (
-	/// `"system" | "light" | "dark"`. Web `theme`.
-	val themeMode: String,
-	/// Global max shot duration, seconds (`0` = none).
-	val maxShotDurationS: Float,
-	/// Auto-tare the scale on shot start. Web `autoTareOnShotStart`.
-	val autoTare: Boolean,
-	/// Enable stop-at-weight. Web `stopOnWeight`.
-	val stopOnWeight: Boolean,
-	/// Steam eco mode. Web `steamEcoMode`.
-	val steamEco: Boolean,
-	/// Flush the group before each shot. Web `groupFlushBeforeShot`.
-	val preFlush: Boolean,
-	/// Run a short purge after steaming. Web `autoPurgeAfterSteam`.
-	val steamPurge: Boolean,
-	/// Weight unit `"g" | "oz"`.
-	val weightUnit: String,
-	/// Temperature unit `"C" | "F"`.
-	val tempUnit: String,
-	/// Pressure unit `"bar" | "psi"`.
-	val pressureUnit: String,
-	/// Volume unit `"ml" | "floz"`.
-	val volumeUnit: String,
-	/// Enabled live-chart channel keys (Android's vocabulary:
-	/// `pressure`/`flow`/`weight`/`headTemp`/`mixTemp`/`weightFlow`/`resistance`/
-	/// `dispensedVolume`). Web maps its eight `show*` booleans to/from this list
-	/// (its `volume` ↔ `dispensedVolume`).
-	val chartChannels: List<String>,
-	/// Hold the screen awake while a shot pulls.
-	val keepScreenOnBrew: Boolean,
-	/// Show the debug / event-log panel.
-	val showDebugPanel: Boolean,
-	/// Default dose for new profiles, grams.
-	val defaultDoseG: Float,
-	/// Default yield-to-dose ratio (the `x` in `1:x`).
-	val defaultRatio: Float,
-	/// Default group temperature, °C.
-	val defaultBrewTempC: Float,
-	/// Default pre-infusion time, seconds. Web `defaultPreinfusionS`.
-	val defaultPreinfuseS: Float,
-	/// Free-text equipment grinder model.
-	val grinderModel: String,
-	/// Keep the DE1 awake while Crema is open.
-	val suppressDe1Sleep: Boolean,
-	/// Quick-Controls steam duration, seconds.
-	val qcSteamTimeS: Float,
-	/// Quick-Controls steam flow, ml/s.
-	val qcSteamFlowMlS: Float,
-	/// Quick-Controls steam temperature, °C.
-	val qcSteamTempC: Float,
-	/// Quick-Controls hot-water temperature, °C.
-	val qcHotWaterTempC: Float,
-	/// Quick-Controls hot-water volume, ml.
-	val qcHotWaterVolumeMl: Float,
-	/// Quick-Controls group-flush duration, seconds.
-	val qcFlushTimeS: Float,
-	/// Quick-Controls group-flush temperature, °C.
-	val qcFlushTempC: Float
-)
-
 /// One selectable display/behaviour mode a scale exposes.
 /// 
 /// A "first-class" scale (the Bookoo) lets the user switch the active display
@@ -1282,6 +1176,50 @@ data class ShotBean (
 	val grinderSetting: String? = null
 )
 
+/// The user's Visualizer sync **preferences** — the portable, cross-shell
+/// subset a whole-app backup carries. One shared `#[typeshare]` shape so web
+/// and Android serialise byte-identical JSON: a backup's `visualizerPrefs`
+/// line restores on either shell (no per-shell tag), and the two devices can
+/// converge on one set of choices.
+/// 
+/// NOT here: OAuth tokens, the cached account, the in-flight PKCE handshake,
+/// pull cursors, the premium-tier cache, last-sync timestamps, and the sync
+/// activity log — those are per-device runtime state, kept shell-local and
+/// never backed up.
+/// 
+/// Two distinct auto gates (the web shell has both; Android today only honours
+/// `auto_upload`):
+/// - `auto_upload` — auto-push a shot to Visualizer as it completes.
+/// - `auto_sync` — fire background library (bean/roaster/shot) pushes on
+/// mutation; manual "Sync now" always works regardless.
+/// 
+/// `#[serde(default)]` on the whole struct (via [`Default`]) so a partial blob
+/// deserialises to the canonical defaults rather than failing — a shell that
+/// doesn't own a field (Android doesn't drive `beans_direction`) round-trips it
+/// untouched, and an older/partial line fills gaps from the defaults below.
+@Serializable
+data class VisualizerSyncPrefs (
+	/// Auto-push a finished shot to Visualizer (web `visualizerAutoUpload`;
+	/// Android's single auto gate). Default: true.
+	val autoUpload: Boolean,
+	/// Fire background bean/roaster/shot pushes on mutation (web sync-config
+	/// `autoSync`). Android doesn't background-sync the library yet, so it
+	/// carries the field but doesn't act on it. Default: true.
+	val autoSync: Boolean,
+	/// Upload privacy: `"public" | "unlisted" | "private"`. Default: unlisted.
+	val privacy: String,
+	/// Include the profile block in uploads. Default: true.
+	val includeProfile: Boolean,
+	/// Include tasting notes in uploads. Default: false.
+	val includeNotes: Boolean,
+	/// Shots sync direction: `"off" | "backup" | "pull" | "two-way"`. Default: backup.
+	val shotsDirection: String,
+	/// Beans sync direction. Web-driven; Android carries the default only. Default: two-way.
+	val beansDirection: String,
+	/// Roasters sync direction. Web-driven; Android carries the default only. Default: two-way.
+	val roastersDirection: String
+)
+
 /// The fields the planner reads from a remote shot row. Visualizer's
 /// API returns a superset; we only care about identity + the de-dup
 /// hash inputs + editable annotations. Mirrors the TS `WireShot` in
@@ -1320,6 +1258,31 @@ data class WireShot (
 	val tag_list: List<String>? = null
 )
 
+/// What kind of beverage a profile produces. Mirrors reaprime's
+/// `BeverageType` enum and the community v2 JSON contract's
+/// `beverage_type` field. Defaults to `Espresso` on import — both
+/// reaprime and Crema fall back lenient here (not strict) because the
+/// field is metadata, not execution.
+@Serializable
+enum class BeverageType(val string: String) {
+	/// Standard espresso shot. The default for absent / unknown values.
+	@SerialName("espresso")
+	Espresso("espresso"),
+	/// A calibration routine (flow / pressure cal profiles).
+	@SerialName("calibrate")
+	Calibrate("calibrate"),
+	/// A cleaning / backflush routine.
+	@SerialName("cleaning")
+	Cleaning("cleaning"),
+	/// Hand-controlled (manual) profile — the firmware honours user
+	/// adjustments mid-shot.
+	@SerialName("manual")
+	Manual("manual"),
+	/// Pour-over style profile (long, low-pressure).
+	@SerialName("pourover")
+	Pourover("pourover"),
+}
+
 /// What a calibration packet asks the DE1 to do.
 /// 
 /// `#[non_exhaustive]` so any future firmware-side calibration verb can
@@ -1353,6 +1316,30 @@ enum class CalTarget(val string: String) {
 	/// The temperature sensor.
 	@SerialName("Temperature")
 	Temperature("Temperature"),
+}
+
+/// The direction of an exit comparison. Lowercase wire spelling
+/// (`"over"` / `"under"`) per the v2 contract.
+@Serializable
+enum class Compare(val string: String) {
+	/// Exit when the metric rises above the threshold.
+	@SerialName("over")
+	Over("over"),
+	/// Exit when the metric falls below the threshold.
+	@SerialName("under")
+	Under("under"),
+}
+
+/// The metric an exit condition watches. Lowercase wire spelling
+/// (`"pressure"` / `"flow"`) per the v2 contract.
+@Serializable
+enum class ExitMetric(val string: String) {
+	/// Watch pressure (bar).
+	@SerialName("pressure")
+	Pressure("pressure"),
+	/// Watch flow (ml/s).
+	@SerialName("flow")
+	Flow("flow"),
 }
 
 /// Generated type representing the anonymous struct variant `UpToDate` of the `FirmwareUpdateStatus` Rust enum
@@ -1638,6 +1625,18 @@ sealed class ProfileUploadFailure {
 	data class Internal(val details: ProfileUploadFailureInternalInner): ProfileUploadFailure()
 }
 
+/// Which quantity a step holds at its target. Serializes as lowercase
+/// (`"pressure"` / `"flow"`) to match the community v2 JSON contract.
+@Serializable
+enum class Pump(val string: String) {
+	/// Pressure priority — the step targets a pressure in bar.
+	@SerialName("pressure")
+	Pressure("pressure"),
+	/// Flow priority — the step targets a flow rate in ml/s.
+	@SerialName("flow")
+	Flow("flow"),
+}
+
 /// Where an espresso shot is in its lifecycle.
 /// 
 /// `#[non_exhaustive]` so additional phases (e.g. a future post-shot
@@ -1795,6 +1794,38 @@ enum class SubState(val string: String) {
 	/// Front power switch is off.
 	@SerialName("ErrorNoAc")
 	ErrorNoAc("ErrorNoAc"),
+}
+
+/// Which temperature a step regulates. Variant names match the community
+/// v2 JSON contract used by the legacy de1app TCL + reaprime. The enum
+/// describes "what the step's temperature target represents," not which
+/// sensor it reads:
+/// - `Coffee` — regulate temperature of the coffee at the basket; the
+/// firmware holds `head_temp` to the step's target.
+/// - `Water` — regulate temperature of the water exiting the group; the
+/// firmware holds `mix_temp` to the step's target. Flips the
+/// wire-format `target_mix_temp` flag bit on each frame.
+@Serializable
+enum class TempSensor(val string: String) {
+	/// Regulate temperature of the coffee at the basket.
+	@SerialName("coffee")
+	Coffee("coffee"),
+	/// Regulate temperature of the water exiting the group.
+	@SerialName("water")
+	Water("water"),
+}
+
+/// How a step moves to its target value. Serializes as lowercase
+/// `"fast"` / `"smooth"` to match the community v2 profile JSON contract
+/// shared with the legacy de1app TCL and reaprime.
+@Serializable
+enum class Transition(val string: String) {
+	/// Jump straight to the target.
+	@SerialName("fast")
+	Fast("fast"),
+	/// Ramp smoothly to the target.
+	@SerialName("smooth")
+	Smooth("smooth"),
 }
 
 /// Which kind of water-dispensing session the DE1 is running.

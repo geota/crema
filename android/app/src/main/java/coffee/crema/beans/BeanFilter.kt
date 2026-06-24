@@ -35,11 +35,11 @@ fun filterAndSortBeans(
         val matchesSearch = query.isBlank() ||
             b.name.contains(query, ignoreCase = true) ||
             (roasterNameOf(b)?.contains(query, ignoreCase = true) == true) ||
-            (b.origin.country?.contains(query, ignoreCase = true) == true)
+            (b.origin?.country?.contains(query, ignoreCase = true) == true)
         val matchesFilter = when (filter) {
             "archived" -> b.archivedAt != null
             "active" -> b.archivedAt == null && !b.isFrozen
-            "favourite" -> b.archivedAt == null && b.favourite
+            "favourite" -> b.archivedAt == null && b.favourite == true
             "frozen" -> b.archivedAt == null && b.isFrozen
             "light", "medium", "dark" ->
                 b.archivedAt == null && roastBand(b.roastLevel?.toInt())?.equals(filter, ignoreCase = true) == true
@@ -50,14 +50,14 @@ fun filterAndSortBeans(
     val asc = when (sort) {
         "name" -> visible.sortedBy { it.name.lowercase() }
         "roast" -> visible.sortedBy { it.roastLevel?.toInt() ?: Int.MAX_VALUE }
-        "rating" -> visible.sortedBy { it.rating.toInt() }
+        "rating" -> visible.sortedBy { it.rating?.toInt() ?: 0 }
         "remaining" -> visible.sortedBy { it.remaining }
         else -> visible.sortedBy { daysOffRoast(it.roastedOn) ?: Int.MAX_VALUE } // freshest first
     }
     val sorted = if (sortDesc) asc.reversed() else asc
     // Loaded bean to the top, then favourites, then the rest; [sort] above is the
     // within-group order. Shared with profiles + the Brew pickers.
-    return sorted.pinActiveThenFavourite({ it.id == activeId }, { it.favourite })
+    return sorted.pinActiveThenFavourite({ it.id == activeId }, { it.favourite == true })
 }
 
 /**
@@ -66,7 +66,7 @@ fun filterAndSortBeans(
  * caller already filtered (non-archived) — within-group order is store order.
  */
 fun rankBeansForPicker(beans: List<Bean>, activeId: String?): List<Bean> =
-    beans.pinActiveThenFavourite({ it.id == activeId }, { it.favourite })
+    beans.pinActiveThenFavourite({ it.id == activeId }, { it.favourite == true })
 
 /**
  * Count for each filter chip, keyed by facet id. Every status/roast facet counts
@@ -80,7 +80,7 @@ fun beanFilterCounts(beans: List<Bean>): Map<String, Int> {
     return mapOf(
         "all" to nonArchived.size,
         "active" to nonArchived.count { !it.isFrozen },
-        "favourite" to nonArchived.count { it.favourite },
+        "favourite" to nonArchived.count { it.favourite == true },
         "frozen" to nonArchived.count { it.isFrozen },
         "archived" to beans.count { it.archivedAt != null },
         "light" to nonArchived.count { roastBand(it.roastLevel?.toInt()).equals("light", ignoreCase = true) },

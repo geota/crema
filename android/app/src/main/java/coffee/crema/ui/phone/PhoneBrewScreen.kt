@@ -345,7 +345,7 @@ private fun SwapDropdown(
                             Text(
                                 listOfNotNull(
                                     days?.let { "${it}d off roast" },
-                                    b.remaining.takeIf { b.bagSize > 0f }?.let { "${formatWeight(it, ui.weightUnit)} left" },
+                                    b.remaining?.takeIf { (b.bagSize ?: 0f) > 0f }?.let { "${formatWeight(it, ui.weightUnit)} left" },
                                 ).joinToString(" · ").ifEmpty { "—" },
                                 style = TextStyle(fontFamily = JetBrainsMono, fontSize = 11.sp),
                                 color = if (activeRow) LocalContentColor.current.copy(alpha = 0.8f) else MaterialTheme.colorScheme.onSurfaceVariant,
