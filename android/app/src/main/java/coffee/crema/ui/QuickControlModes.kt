@@ -74,3 +74,55 @@ enum class PiFlushMode(val value: String) {
         fun of(value: String): PiFlushMode = entries.firstOrNull { it.value == value } ?: Preinf
     }
 }
+
+/**
+ * Quick-Controls steam-temp constants — previously the magic `148` / `135` / `170`
+ * scattered across `MainViewModel` and both QC sheets (tablet + phone).
+ */
+object QcSteam {
+    /** Default steam-temp target (°C) the Steam dot arms to. */
+    const val DEFAULT_TEMP_C = 148.0
+
+    /**
+     * Steam-temp floor (°C). The DE1 firmware snaps anything below this to 0
+     * (heater off); the floor keeps the user out of that silent 120–134 snap band.
+     */
+    const val MIN_TEMP_C = 135.0
+
+    /** Steam-temp ceiling (°C). */
+    const val MAX_TEMP_C = 170.0
+
+    const val MIN_FLOW_ML_S = 0.2
+    const val MAX_FLOW_ML_S = 3.0
+    const val MIN_TIME_S = 1.0
+    const val MAX_TIME_S = 60.0
+}
+
+/**
+ * Min/max ranges for the remaining Quick-Controls steppers — previously magic
+ * numbers inlined in the tablet (`QuickControlsSheet`) and phone (`PhoneBrewSheets`)
+ * `if`/`when` expressions. (Per-layout preset/chip arrays stay in their sheets:
+ * they intentionally differ tablet vs phone.)
+ */
+object QcBounds {
+    const val DOSE_MIN_G = 5.0
+    const val DOSE_MAX_G = 30.0
+    const val GRIND_MIN = 0.0
+    const val GRIND_MAX = 20.0
+    const val YIELD_MIN_G = 10.0
+    const val YIELD_MAX_G = 80.0
+    const val RATIO_MIN = 1.0
+    const val RATIO_MAX = 5.0
+    const val BREW_TEMP_MIN_C = 80.0
+    const val BREW_TEMP_MAX_C = 100.0
+    const val PREINF_MIN_S = 0.0
+    const val PREINF_MAX_S = 30.0
+    const val WATER_TEMP_MIN_C = 40.0
+    const val WATER_TEMP_MAX_C = 98.0
+    const val WATER_VOL_MIN_ML = 20.0
+    const val WATER_VOL_MAX_ML = 500.0
+    const val FLUSH_TIME_MIN_S = 1.0
+    const val FLUSH_TIME_MAX_S = 20.0
+    const val FLUSH_TEMP_MIN_C = 60.0
+    const val FLUSH_TEMP_MAX_C = 100.0
+}
