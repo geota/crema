@@ -293,12 +293,10 @@ dependencies {
     // so coil-network-* is intentionally NOT included. The default singleton
     // ImageLoader is used (no Application SingletonImageLoader.Factory needed).
     //
-    // PINNED to 3.3.0 (Kotlin 2.2.0 → kotlin-stdlib 2.2.0): this AGP-9 build uses
-    // the Kotlin 2.2.0 compiler, which reads metadata only up to 2.3.0. Coil 3.5.0
-    // pulls kotlin-stdlib 2.4.0, whose metadata the compiler can't parse — the
-    // generated UniFFI bindings (de1_ffi.kt) then fail to compile. Bump this only
-    // alongside the project's Kotlin/AGP toolchain (keep stdlib ≤ 2.3.x).
-    implementation("io.coil-kt.coil3:coil-compose:3.3.0")
+    // Coil 3.5.0 pulls kotlin-stdlib 2.4.0 — fine now the project is on the Kotlin
+    // 2.4.0 compiler (reads ≤2.4.0 metadata). Keep Coil's transitive stdlib ≤ the
+    // project's Kotlin, or the generated UniFFI bindings (de1_ffi.kt) won't compile.
+    implementation("io.coil-kt.coil3:coil-compose:3.5.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
 
     // UniFFI's generated Kotlin depends on JNA for the FFI calls and on
@@ -307,14 +305,14 @@ dependencies {
     // 16 KB ELF page alignment — required by Android 15+ / API 36+ devices and
     // emulators (16 KB memory pages). Older JNA fails to dlopen on them.
     implementation("net.java.dev.jna:jna:5.17.0@aar")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
     // Visualizer HTTP — OkHttp because HttpURLConnection rejects the PATCH
     // verb (shot edits sync via PATCH /api/shots/{id}).
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
     // The de1-app `CoreOutput` JSON is deserialized with kotlinx.serialization.
     // The generated `core/bindings/crema-core.kt` types are @Serializable.
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
 
     // Charts are hand-rolled Compose Canvas (CanvasShotChart, ProfileCurveChart) —
     // a faithful port of the web PWA's uPlot design (shared 0–10 scale, temp/weight
@@ -359,7 +357,7 @@ dependencies {
 
     // JVM unit tests for pure shell logic (no device / FFI). kotlin-test mapped
     // onto the JUnit 4 runner AGP's unit-test task uses.
-    testImplementation("org.jetbrains.kotlin:kotlin-test-junit:2.2.20")
+    testImplementation("org.jetbrains.kotlin:kotlin-test-junit:2.4.0")
     testImplementation("junit:junit:4.13.2")
 }
 
