@@ -359,18 +359,18 @@ private fun BeanCard(
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    bean.origin.country?.let {
+                    bean.origin?.country?.let {
                         Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
                 IconButton(onClick = onToggleFavourite, modifier = Modifier.size(32.dp)) {
-                    PhIcon(if (bean.favourite) "star-fill" else "star", sizeDp = 18, tint = if (bean.favourite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+                    PhIcon(if (bean.favourite == true) "star-fill" else "star", sizeDp = 18, tint = if (bean.favourite == true) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
             val pills = buildList {
                 band?.let { add(it to true) }
                 if (frozen) add("Frozen" to false)
-                if (bean.decaf) add("Decaf" to false)
+                if (bean.decaf == true) add("Decaf" to false)
                 tagList.forEach { add(it to false) }
             }
             if (pills.isNotEmpty()) {
@@ -398,13 +398,13 @@ private fun BeanCard(
                     }
                 }
                 CremaStarRating(
-                    bean.rating.toInt(),
+                    bean.rating?.toInt() ?: 0,
                     starDp = 11,
                     emptyTint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f),
                 )
             }
-            if (bean.bagSize > 0f) {
-                val pct = (bean.remaining / bean.bagSize).coerceIn(0f, 1f)
+            if ((bean.bagSize ?: 0f) > 0f) {
+                val pct = ((bean.remaining ?: 0f) / (bean.bagSize ?: 0f)).coerceIn(0f, 1f)
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Box(
                         Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(999.dp))
@@ -413,7 +413,7 @@ private fun BeanCard(
                         Box(Modifier.fillMaxWidth(pct).height(6.dp).clip(RoundedCornerShape(999.dp)).background(MaterialTheme.colorScheme.primary))
                     }
                     Text(
-                        "${bean.remaining.toInt()} / ${bean.bagSize.toInt()} g",
+                        "${(bean.remaining ?: 0f).toInt()} / ${(bean.bagSize ?: 0f).toInt()} g",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

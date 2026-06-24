@@ -62,8 +62,8 @@ fun PhoneBeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
     var roaster by remember(bean.id) { mutableStateOf(roasterName0) }
     val tags = remember(bean.id) { mutableStateListOf<String>().apply { addAll(bean.tags.orEmpty()) } }
     var active by remember(bean.id) { mutableStateOf(bean.id == ui.activeBeanId) }
-    var pinned by remember(bean.id) { mutableStateOf(bean.favourite) }
-    var decaf by remember(bean.id) { mutableStateOf(bean.decaf) }
+    var pinned by remember(bean.id) { mutableStateOf(bean.favourite == true) }
+    var decaf by remember(bean.id) { mutableStateOf(bean.decaf == true) }
     var roast by remember(bean.id) { mutableStateOf(bean.roastLevel?.toInt() ?: 6) }
     var mixSel by remember(bean.id) { mutableStateOf(bean.mix?.string ?: "single") }
     var roastTypeSel by remember(bean.id) { mutableStateOf(bean.roastType?.string ?: "") }
@@ -71,21 +71,21 @@ fun PhoneBeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
     var opened by remember(bean.id) { mutableStateOf(bean.openedOn ?: "") }
     var frozen by remember(bean.id) { mutableStateOf(bean.isFrozen) }
     var archived by remember(bean.id) { mutableStateOf(bean.archivedAt != null) }
-    var bagSize by remember(bean.id) { mutableStateOf(bean.bagSize.toDouble()) }
-    var remaining by remember(bean.id) { mutableStateOf(bean.remaining.toDouble()) }
-    var grinder by remember(bean.id) { mutableStateOf(bean.grinder) }
+    var bagSize by remember(bean.id) { mutableStateOf((bean.bagSize ?: 0f).toDouble()) }
+    var remaining by remember(bean.id) { mutableStateOf((bean.remaining ?: 0f).toDouble()) }
+    var grinder by remember(bean.id) { mutableStateOf(bean.grinder ?: "") }
     var linkedProfileId by remember(bean.id) { mutableStateOf(bean.linkedProfileId) }
-    var grind by remember(bean.id) { mutableStateOf(bean.grinderSetting) }
-    var country by remember(bean.id) { mutableStateOf(bean.origin.country ?: "") }
-    var region by remember(bean.id) { mutableStateOf(bean.origin.region ?: "") }
-    var farm by remember(bean.id) { mutableStateOf(bean.origin.farm ?: "") }
-    var variety by remember(bean.id) { mutableStateOf(bean.origin.variety ?: "") }
-    var elevation by remember(bean.id) { mutableStateOf(bean.origin.elevation ?: "") }
-    var processing by remember(bean.id) { mutableStateOf(bean.origin.processing ?: "") }
-    var rating by remember(bean.id) { mutableStateOf(bean.rating.toInt()) }
-    var tastingNotes by remember(bean.id) { mutableStateOf(bean.tastingNotes) }
+    var grind by remember(bean.id) { mutableStateOf(bean.grinderSetting ?: "") }
+    var country by remember(bean.id) { mutableStateOf(bean.origin?.country ?: "") }
+    var region by remember(bean.id) { mutableStateOf(bean.origin?.region ?: "") }
+    var farm by remember(bean.id) { mutableStateOf(bean.origin?.farm ?: "") }
+    var variety by remember(bean.id) { mutableStateOf(bean.origin?.variety ?: "") }
+    var elevation by remember(bean.id) { mutableStateOf(bean.origin?.elevation ?: "") }
+    var processing by remember(bean.id) { mutableStateOf(bean.origin?.processing ?: "") }
+    var rating by remember(bean.id) { mutableStateOf(bean.rating?.toInt() ?: 0) }
+    var tastingNotes by remember(bean.id) { mutableStateOf(bean.tastingNotes ?: "") }
     var url by remember(bean.id) { mutableStateOf(bean.url ?: "") }
-    var notes by remember(bean.id) { mutableStateOf(bean.notes) }
+    var notes by remember(bean.id) { mutableStateOf(bean.notes ?: "") }
 
     // Bag photo capture (Phase C) — launchers + the action bottom sheet.
     val photoPicker = rememberBeanPhotoPicker(

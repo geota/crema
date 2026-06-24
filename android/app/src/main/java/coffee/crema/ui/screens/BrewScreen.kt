@@ -259,7 +259,7 @@ fun BrewScreen(
                     active = active,
                     brewParams = ui.brewParams,
                     pinnedProfiles = ui.profiles.filter { it.pinned },
-                    favBeans = ui.beans.filter { it.favourite },
+                    favBeans = ui.beans.filter { it.favourite == true },
                     activeProfileId = ui.activeProfileId,
                     activeBeanId = ui.activeBeanId,
                     autoTare = ui.autoTare,
@@ -645,9 +645,9 @@ private fun BeanBlock(
             if (activeBean != null) {
                 // .bh-meta — "{country} · {variety} · {process}".
                 val meta = listOfNotNull(
-                    activeBean.origin.country,
-                    activeBean.origin.variety,
-                    activeBean.origin.processing,
+                    activeBean.origin?.country,
+                    activeBean.origin?.variety,
+                    activeBean.origin?.processing,
                 ).joinToString(" · ")
                 if (meta.isNotBlank()) {
                     Text(
@@ -662,7 +662,7 @@ private fun BeanBlock(
                     roastBand(activeBean.roastLevel?.toInt()),
                     activeBean.roastType?.string?.replaceFirstChar { it.uppercase() },
                     activeBean.mix?.string?.replaceFirstChar { it.uppercase() },
-                    activeBean.grinderSetting.takeIf { it.isNotBlank() }?.let { "Grind $it" },
+                    activeBean.grinderSetting?.takeIf { it.isNotBlank() }?.let { "Grind $it" },
                 ).joinToString(" · ")
                 if (spec.isNotBlank()) {
                     Text(
@@ -706,7 +706,7 @@ private fun BeanBlock(
                 val shown = sorted.filter { b ->
                     query.isBlank() || b.name.contains(query, ignoreCase = true) ||
                         (roasterNameOf(b)?.contains(query, ignoreCase = true) ?: false) ||
-                        (b.origin.country?.contains(query, ignoreCase = true) ?: false)
+                        (b.origin?.country?.contains(query, ignoreCase = true) ?: false)
                 }
                 if (shown.isEmpty()) {
                     Text(
@@ -728,11 +728,11 @@ private fun BeanBlock(
                             // "roaster · name"; meta = origin (+ roast band if present).
                             name = listOfNotNull(rName, b.name).joinToString(" · "),
                             meta = listOfNotNull(
-                                b.origin.country,
-                                b.origin.processing,
+                                b.origin?.country,
+                                b.origin?.processing,
                                 roastBand(b.roastLevel?.toInt()),
                             ).joinToString(" · "),
-                            favourite = b.favourite,
+                            favourite = b.favourite == true,
                             linked = b.linkedProfileId != null,
                         )
                     }

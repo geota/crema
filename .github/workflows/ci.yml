@@ -74,17 +74,18 @@ jobs:
           cargo run -p de1-domain --bin gen-builtin-ids
           git diff --exit-code de1-domain/profiles/builtin.json
 
-      # The typeshare bindings (core/bindings/*.{kt,ts} and the web shell's
-      # generated copy web/src/lib/core/crema-core.ts) must match the current
-      # #[typeshare] Rust types. Re-running generate-bindings.sh is a no-op on a
-      # fresh tree; any diff means someone changed a Rust type without
-      # regenerating (so the web/Android type surface is stale). Pinned to the
-      # generator version stamped in the file headers so the output is stable.
+      # The typeshare bindings (core/bindings/*.{kt,ts}) and each shell's generated
+      # copy — web (web/src/lib/core/crema-core.ts) and Android
+      # (android/app/src/main/java/coffee/crema/core/CremaCoreTypes.kt) — must match
+      # the current #[typeshare] Rust types. Re-running generate-bindings.sh is a
+      # no-op on a fresh tree; any diff means someone changed a Rust type without
+      # regenerating (so a shell's type surface is stale). Pinned to the generator
+      # version stamped in the file headers so the output is stable.
       - name: typeshare bindings freshness
         run: |
           cargo install typeshare-cli --version 1.13.4 --locked
           core/generate-bindings.sh
-          git diff --exit-code core/bindings web/src/lib/core/crema-core.ts
+          git diff --exit-code core/bindings web/src/lib/core/crema-core.ts android/app/src/main/java/coffee/crema/core/CremaCoreTypes.kt
 
   # ─────────────────────────────────────────────────────────────────────
   # Web shell gates: install, build wasm bundle, svelte-check, build.

@@ -217,7 +217,7 @@ fun PhoneBeansScreen(
         CremaOverflowSheet(
             title = listOfNotNull(roasterNameOf(b), b.name).joinToString(" · "),
             items = buildList {
-                add(SheetItem("star", if (b.favourite) "Unfavourite" else "Favourite") { vm.toggleBeanFavourite(b.id) })
+                add(SheetItem("star", if (b.favourite == true) "Unfavourite" else "Favourite") { vm.toggleBeanFavourite(b.id) })
                 add(SheetItem("copy", "Duplicate bag") { vm.duplicateBean(b.id) })
                 add(SheetItem("snowflake", if (b.isFrozen) "Take out of freezer" else "Move to freezer") {
                     if (b.isFrozen) vm.defrostBean(b.id) else vm.freezeBean(b.id)
@@ -323,9 +323,9 @@ private fun PhoneBeanTile(
                         maxLines = 1, overflow = TextOverflow.Ellipsis,
                     )
                     val origin = listOfNotNull(
-                        bean.origin.country?.takeIf { it.isNotBlank() },
-                        bean.origin.region?.takeIf { it.isNotBlank() },
-                        bean.origin.processing?.takeIf { it.isNotBlank() },
+                        bean.origin?.country?.takeIf { it.isNotBlank() },
+                        bean.origin?.region?.takeIf { it.isNotBlank() },
+                        bean.origin?.processing?.takeIf { it.isNotBlank() },
                     ).joinToString(" · ")
                     if (origin.isNotEmpty()) Text(
                         origin,
@@ -357,9 +357,9 @@ private fun PhoneBeanTile(
                     }
                     IconButton(onClick = onToggleFavourite, modifier = Modifier.size(34.dp)) {
                         PhIcon(
-                            if (bean.favourite) "star-fill" else "star",
+                            if (bean.favourite == true) "star-fill" else "star",
                             sizeDp = 20,
-                            tint = if (bean.favourite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            tint = if (bean.favourite == true) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                 }
@@ -369,10 +369,10 @@ private fun PhoneBeanTile(
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 band?.let { RoastPill(it) }
                 if (frozen) FrozenPill()
-                if (bean.decaf) NeutralPill("DECAF")
+                if (bean.decaf == true) NeutralPill("DECAF")
                 // Rating now sits with the other bean stats (was the 5-star block top-right).
-                if (bean.rating.toInt() > 0) CremaStarRating(
-                    bean.rating.toInt(),
+                if ((bean.rating?.toInt() ?: 0) > 0) CremaStarRating(
+                    bean.rating?.toInt() ?: 0,
                     starDp = 13,
                     emptyTint = MaterialTheme.colorScheme.outline,
                 )
@@ -394,8 +394,8 @@ private fun PhoneBeanTile(
             }
 
             // Burn-down (only when the bag size is known).
-            if (bean.bagSize > 0f) {
-                val pct = (bean.remaining / bean.bagSize).coerceIn(0f, 1f)
+            if ((bean.bagSize ?: 0f) > 0f) {
+                val pct = ((bean.remaining ?: 0f) / (bean.bagSize ?: 0f)).coerceIn(0f, 1f)
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Bottom) {
                         Text(
@@ -404,13 +404,13 @@ private fun PhoneBeanTile(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                         Text(
-                            "${bean.remaining.toInt()} / ${bean.bagSize.toInt()} g",
+                            "${(bean.remaining ?: 0f).toInt()} / ${(bean.bagSize ?: 0f).toInt()} g",
                             style = TextStyle(fontFamily = JetBrainsMono, fontSize = 12.sp, fontWeight = FontWeight.Medium, fontFeatureSettings = "tnum"),
                             color = MaterialTheme.colorScheme.onSurface,
                         )
                     }
                     val barColor = when {
-                        bean.remaining <= 0f -> MaterialTheme.colorScheme.outline
+                        (bean.remaining ?: 0f) <= 0f -> MaterialTheme.colorScheme.outline
                         frozen -> tel.flow
                         else -> MaterialTheme.colorScheme.primary
                     }

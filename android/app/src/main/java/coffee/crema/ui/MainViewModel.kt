@@ -3769,7 +3769,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun unarchiveBean(id: String) = mutateBean(id) { it.copy(archivedAt = null) }
 
     /** Toggle the brew-page favourite star. Persisted. */
-    fun toggleBeanFavourite(id: String) = mutateBean(id) { it.copy(favourite = !it.favourite) }
+    fun toggleBeanFavourite(id: String) = mutateBean(id) { it.copy(favourite = !(it.favourite ?: false)) }
 
     /** Map a single bean through [transform], stamp `updatedAt`, persist. */
     private fun mutateBean(id: String, transform: (Bean) -> Bean) {
@@ -3879,7 +3879,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 roastedOn = b.roastedOn,
                 roastLevel = b.roastLevel,
                 tags = b.tags,
-                grinderSetting = b.grinderSetting.takeIf { it.isNotBlank() },
+                grinderSetting = b.grinderSetting?.takeIf { it.isNotBlank() },
             )
         }
         val shot = StoredShot(

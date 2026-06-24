@@ -2,6 +2,7 @@ package coffee.crema.beans
 
 import coffee.crema.core.Bean
 import coffee.crema.core.BeanMix
+import coffee.crema.core.BeanOrigin
 import coffee.crema.core.BeanRoastType
 
 /** Bag-size quick-pick presets (grams), shared by both bean editors (issue 31). */
@@ -74,7 +75,7 @@ fun applyBeanEdits(b: Bean, draft: BeanDraft): Bean = b.copy(
     favourite = draft.pinned,
     bagSize = draft.bagSize.toFloat(),
     remaining = draft.remaining.toFloat(),
-    origin = b.origin.copy(
+    origin = (b.origin ?: BeanOrigin()).copy(
         country = draft.country.ifBlank { null },
         region = draft.region.ifBlank { null },
         farm = draft.farm.ifBlank { null },
