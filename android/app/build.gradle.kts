@@ -301,14 +301,14 @@ dependencies {
 
     // UniFFI's generated Kotlin depends on JNA for the FFI calls and on
     // kotlinx-coroutines (its runtime helpers reference it).
-    // 5.17.0 is the first JNA whose Android libjnidispatch.so is built with
-    // 16 KB ELF page alignment — required by Android 15+ / API 36+ devices and
-    // emulators (16 KB memory pages). Older JNA fails to dlopen on them.
-    implementation("net.java.dev.jna:jna:5.17.0@aar")
+    // NEVER drop below 5.17.0 — that was the first JNA whose Android
+    // libjnidispatch.so ships 16 KB ELF page alignment, required by Android 15+ /
+    // API 36+ devices + emulators (16 KB pages); older JNA fails to dlopen there.
+    implementation("net.java.dev.jna:jna:5.19.1@aar")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
     // Visualizer HTTP — OkHttp because HttpURLConnection rejects the PATCH
     // verb (shot edits sync via PATCH /api/shots/{id}).
-    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("com.squareup.okhttp3:okhttp:5.4.0")
 
     // The de1-app `CoreOutput` JSON is deserialized with kotlinx.serialization.
     // The generated `core/bindings/crema-core.kt` types are @Serializable.
@@ -347,7 +347,7 @@ dependencies {
     // Server + client sessions are both `WebSocketSession`, so ONE
     // `KtorWsFrameLink` backs both. The same framed protocol later serves the
     // PWA (M4) and a cloud relay (M5); the JSON frames ride as WS text.
-    val ktor = "3.1.3"
+    val ktor = "3.5.0"
     implementation("io.ktor:ktor-server-core:$ktor")
     implementation("io.ktor:ktor-server-cio:$ktor")
     implementation("io.ktor:ktor-server-websockets:$ktor")
