@@ -1,6 +1,10 @@
 package coffee.crema.profiles
 
 import android.content.Context
+import coffee.crema.core.Compare
+import coffee.crema.core.ExitMetric
+import coffee.crema.core.Pump
+import coffee.crema.core.Transition
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
@@ -161,8 +165,8 @@ fun patchCremaProfileJson(
             val overlay = buildMap {
                 put("target", JsonPrimitive(edit.target))
                 put("time", JsonPrimitive(edit.time))
-                edit.mode?.let { put("mode", JsonPrimitive(it)) }
-                edit.ramp?.let { put("ramp", JsonPrimitive(it)) }
+                edit.mode?.let { put("mode", JsonPrimitive(it.string)) }
+                edit.ramp?.let { put("ramp", JsonPrimitive(it.string)) }
                 edit.temp?.let { put("temp", JsonPrimitive(it)) }
                 edit.tempSensor?.let { put("tempSensor", JsonPrimitive(it)) }
                 edit.volume?.let { put("volumeLimitMl", JsonPrimitive(it)) }
@@ -174,8 +178,8 @@ fun patchCremaProfileJson(
                     "exit",
                     edit.exit?.let { ex ->
                         buildJsonObject {
-                            put("metric", JsonPrimitive(ex.metric ?: "flow"))
-                            put("compare", JsonPrimitive(ex.compare ?: "over"))
+                            put("metric", JsonPrimitive((ex.metric ?: ExitMetric.Flow).string))
+                            put("compare", JsonPrimitive((ex.compare ?: Compare.Over).string))
                             put("threshold", JsonPrimitive(ex.threshold ?: 4f))
                         }
                     } ?: JsonNull,
@@ -229,8 +233,8 @@ fun patchCremaProfileJson(
  */
 data class SegmentEdit(
     val name: String,
-    val mode: String?,
-    val ramp: String?,
+    val mode: Pump?,
+    val ramp: Transition?,
     val target: Float,
     val time: Float,
     val temp: Float?,

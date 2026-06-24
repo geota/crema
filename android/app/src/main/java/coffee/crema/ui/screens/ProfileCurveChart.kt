@@ -25,6 +25,8 @@ import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coffee.crema.core.Pump
+import coffee.crema.core.Transition
 import coffee.crema.ui.theme.CremaTheme
 import coffee.crema.ui.theme.JetBrainsMono
 import kotlin.math.max
@@ -63,8 +65,8 @@ private const val TEMP_MAX = 105f
 fun ProfileCurveChart(
     targets: List<Float>,
     times: List<Float>,
-    modes: List<String?> = emptyList(),
-    ramps: List<String?> = emptyList(),
+    modes: List<Pump?> = emptyList(),
+    ramps: List<Transition?> = emptyList(),
     temps: List<Float?> = emptyList(),
     modifier: Modifier = Modifier,
     /** Non-null enables draggable handles: (segmentIndex, newTarget, newTime). */
@@ -205,12 +207,12 @@ fun ProfileCurveChart(
                 var path: Path? = null
                 targets.forEachIndexed { i, target ->
                     val dt = times.getOrElse(i) { 0f }
-                    if ((modes.getOrNull(i) == "flow") == wantFlow) {
+                    if ((modes.getOrNull(i) == Pump.Flow) == wantFlow) {
                         if (path == null) {
                             path = Path().apply { moveTo(xPx(t0), yPx(prev)) }
                         }
                         val p = path!!
-                        if (ramps.getOrNull(i) == "fast") {
+                        if (ramps.getOrNull(i) == Transition.Fast) {
                             p.lineTo(xPx(t0 + 0.001f), yPx(target))
                             p.lineTo(xPx(t0 + dt), yPx(target))
                         } else {
@@ -247,7 +249,7 @@ fun ProfileCurveChart(
                 drawCircle(handleRing, radius = 7.dp.toPx(), center = c)
                 val dot = when {
                     i == draggingIndex -> accent
-                    modes.getOrNull(i) == "flow" -> tel.flow
+                    modes.getOrNull(i) == Pump.Flow -> tel.flow
                     else -> tel.pressure
                 }
                 drawCircle(dot, radius = 5.dp.toPx(), center = c)

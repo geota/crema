@@ -7,6 +7,71 @@ package coffee.crema.core
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
 
+// ─── Profile mode enums ────────────────────────────────────────────────────
+// Manually synced from core/bindings/crema-core.kt (de1-domain exposes these via
+// #[typeshare]). The profile-JSON wire contract is each variant's lowercase
+// @SerialName; keep these in step with the generated bindings.
+
+/// Which quantity a step holds at its target ("pressure" / "flow").
+@Serializable
+enum class Pump(val string: String) {
+	@SerialName("pressure")
+	Pressure("pressure"),
+	@SerialName("flow")
+	Flow("flow"),
+}
+
+/// How a step moves to its target ("fast" / "smooth").
+@Serializable
+enum class Transition(val string: String) {
+	@SerialName("fast")
+	Fast("fast"),
+	@SerialName("smooth")
+	Smooth("smooth"),
+}
+
+/// Which temperature a step regulates ("coffee" / "water").
+@Serializable
+enum class TempSensor(val string: String) {
+	@SerialName("coffee")
+	Coffee("coffee"),
+	@SerialName("water")
+	Water("water"),
+}
+
+/// The metric an exit condition watches ("pressure" / "flow").
+@Serializable
+enum class ExitMetric(val string: String) {
+	@SerialName("pressure")
+	Pressure("pressure"),
+	@SerialName("flow")
+	Flow("flow"),
+}
+
+/// The direction of an exit comparison ("over" / "under").
+@Serializable
+enum class Compare(val string: String) {
+	@SerialName("over")
+	Over("over"),
+	@SerialName("under")
+	Under("under"),
+}
+
+/// What kind of beverage a profile produces (v2 "beverage_type"; default espresso).
+@Serializable
+enum class BeverageType(val string: String) {
+	@SerialName("espresso")
+	Espresso("espresso"),
+	@SerialName("calibrate")
+	Calibrate("calibrate"),
+	@SerialName("cleaning")
+	Cleaning("cleaning"),
+	@SerialName("manual")
+	Manual("manual"),
+	@SerialName("pourover")
+	Pourover("pourover"),
+}
+
 /// Whether a bag of coffee is a single-origin lot or a blend. `None` =
 /// unknown / unset. Serialises as the lowercase wire string
 /// (`"single"` / `"blend"`) to match the TS shell's typed string union.

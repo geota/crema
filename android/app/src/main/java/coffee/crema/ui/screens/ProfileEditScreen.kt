@@ -44,7 +44,14 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.ui.draw.clip
+import coffee.crema.core.Compare
+import coffee.crema.core.ExitMetric
+import coffee.crema.core.Pump
+import coffee.crema.core.Transition
 import coffee.crema.profiles.ProfileBounds
+import coffee.crema.profiles.exitMetricFromWire
+import coffee.crema.profiles.pumpFromWire
+import coffee.crema.profiles.transitionFromWire
 import coffee.crema.profiles.SegmentEdit
 import coffee.crema.profiles.SegmentExit
 import coffee.crema.profiles.limiterUnit
@@ -344,8 +351,8 @@ fun ProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                             segs.add(
                                 SegmentEdit(
                                     name = "New segment",
-                                    mode = last?.mode ?: "pressure",
-                                    ramp = last?.ramp ?: "smooth",
+                                    mode = last?.mode ?: Pump.Pressure,
+                                    ramp = last?.ramp ?: Transition.Smooth,
                                     target = last?.target ?: 6f,
                                     time = 6f,
                                     temp = last?.temp ?: brewTemp.toFloat(),
@@ -386,9 +393,9 @@ private fun SegmentRowFull(
     onEdit: (SegmentEdit) -> Unit,
     onDelete: () -> Unit,
 ) {
-    val isFlow = seg.mode == "flow"
+    val isFlow = seg.mode == Pump.Flow
     val exitOn = seg.exit != null
-    val exView = seg.exit ?: SegmentExit("flow", "over", 4f)
+    val exView = seg.exit ?: SegmentExit(ExitMetric.Flow, Compare.Over, 4f)
     val limOn = seg.limiter != null
     val lmView = seg.limiter ?: SegmentLimiter(6f, 0.6f)
     val segVolOn = (seg.volume ?: 0f) > 0f
@@ -423,11 +430,11 @@ private fun SegmentRowFull(
                 }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Eyebrow("Type", Modifier.width(34.dp))
-                    Box(Modifier.weight(1f)) { MiniSegmented(TYPE_OPTIONS, seg.mode ?: "pressure") { onEdit(seg.copy(mode = it)) } }
+                    Box(Modifier.weight(1f)) { MiniSegmented(TYPE_OPTIONS, (seg.mode ?: Pump.Pressure).string) { onEdit(seg.copy(mode = pumpFromWire(it))) } }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Eyebrow("Ramp", Modifier.width(34.dp))
-                    Box(Modifier.weight(1f)) { MiniSegmented(RAMP_OPTIONS, seg.ramp ?: "smooth") { onEdit(seg.copy(ramp = it)) } }
+                    Box(Modifier.weight(1f)) { MiniSegmented(RAMP_OPTIONS, (seg.ramp ?: Transition.Smooth).string) { onEdit(seg.copy(ramp = transitionFromWire(it))) } }
                 }
             }
 
@@ -452,27 +459,27 @@ private fun SegmentRowFull(
                     prefix = "Exit",
                     dot = true,
                     dotOn = exitOn,
-                    onDot = { onEdit(seg.copy(exit = if (exitOn) null else SegmentExit("flow", "over", 4f))) },
+                    onDot = { onEdit(seg.copy(exit = if (exitOn) null else SegmentExit(ExitMetric.Flow, Compare.Over, 4f))) },
                     options = listOf(SplitOption("pressure", "Pressure"), SplitOption("flow", "Flow")),
-                    value = exView.metric ?: "flow",
-                    onChange = { m -> if (exitOn) onEdit(seg.copy(exit = seg.exit?.copy(metric = m))) },
+                    value = (exView.metric ?: ExitMetric.Flow).string,
+                    onChange = { m -> if (exitOn) onEdit(seg.copy(exit = seg.exit?.copy(metric = exitMetricFromWire(m)))) },
                 )
                 CremaStepper(
                     value = (exView.threshold ?: 4f).toDouble(),
                     unit = exView.unit(),
-                    step = 0.1, min = 0.0, max = if (exView.metric == "pressure") bounds.maxPressureBar.toDouble() else bounds.maxFlowMlPerS.toDouble(),
+                    step = 0.1, min = 0.0, max = if (exView.metric == ExitMetric.Pressure) bounds.maxPressureBar.toDouble() else bounds.maxFlowMlPerS.toDouble(),
                     onChange = { v -> if (exitOn) onEdit(seg.copy(exit = seg.exit?.copy(threshold = v.toFloat()))) },
                     style = CremaStepperStyle.BoxedDense,
                     enabled = exitOn,
-                    compareSymbol = if ((exView.compare ?: "over") == "over") ">" else "<",
-                    onCompare = { if (exitOn) onEdit(seg.copy(exit = seg.exit?.copy(compare = if ((exView.compare ?: "over") == "over") "under" else "over"))) },
+                    compareSymbol = if ((exView.compare ?: Compare.Over) == Compare.Over) ">" else "<",
+                    onCompare = { if (exitOn) onEdit(seg.copy(exit = seg.exit?.copy(compare = if ((exView.compare ?: Compare.Over) == Compare.Over) Compare.Under else Compare.Over))) },
                 )
             }
             // Max + Tolerance — a paired, gated group in a faint copper card.
             SegCellGroup(2f) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     CremaOptionalHeader("Max", limOn, { onEdit(seg.copy(limiter = if (limOn) null else SegmentLimiter(6f, 0.6f))) })
-                    CremaStepper(value = lmView.value.toDouble(), unit = seg.limiterUnit(), step = 0.1, min = 0.0, max = if (seg.mode == "flow") bounds.maxPressureBar.toDouble() else bounds.maxFlowMlPerS.toDouble(), onChange = { v -> if (limOn) onEdit(seg.copy(limiter = seg.limiter?.copy(value = v.toFloat()))) }, style = CremaStepperStyle.BoxedDense, enabled = limOn)
+                    CremaStepper(value = lmView.value.toDouble(), unit = seg.limiterUnit(), step = 0.1, min = 0.0, max = if (seg.mode == Pump.Flow) bounds.maxPressureBar.toDouble() else bounds.maxFlowMlPerS.toDouble(), onChange = { v -> if (limOn) onEdit(seg.copy(limiter = seg.limiter?.copy(value = v.toFloat()))) }, style = CremaStepperStyle.BoxedDense, enabled = limOn)
                 }
                 // Tolerance is gated by the Max dot — fade the whole cell (eyebrow
                 // included) when Max is off.
