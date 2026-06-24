@@ -6,10 +6,13 @@
 	 * Console requires a TOS URL accessible without authentication). Kept
 	 * outside the main sidebar/Bluetooth-gate layout so reviewers on any
 	 * browser see it. Plain CSS so no design tokens are required.
+	 *
+	 * Shared by both shells: the web PWA links here in-app, and the Android
+	 * tablet/phone About screen opens this same hosted page.
 	 */
 	import pkg from '../../../package.json';
 	const version = pkg.version;
-	const lastUpdated = '2026-05-25';
+	const lastUpdated = '2026-06-24';
 </script>
 
 <main class="legal">
@@ -24,9 +27,9 @@
 		<p>
 			By accessing or using Crema (the "Service" — a web application and
 			Android client for the Decent Espresso DE1 machine, available at
-			<a href="https://crema.maceiras.dev">crema.maceiras.dev</a>), you agree
-			to these Terms of Service. If you do not agree, do not use the
-			Service.
+			<a href="https://crema.maceiras.dev">crema.maceiras.dev</a> and on
+			Google Play), you agree to these Terms of Service. If you do not
+			agree, do not use the Service.
 		</p>
 	</section>
 
@@ -76,6 +79,17 @@
 				>If you are unsure what a setting does, leave it alone.</strong
 			>
 		</p>
+		<p>
+			Crema is independent, best-effort hobbyist software provided free of
+			charge. <strong>You use it entirely at your own risk.</strong> The
+			author makes no commitment that Crema is safe, accurate, or fit to
+			control your equipment, and <strong>accepts no liability for any
+			damage to your DE1, grinder, scale, or other property, or for any
+			injury or loss, however caused,</strong> arising from your use of
+			Crema — including damage from a bug, an incorrect reading, or a
+			setting you choose to apply. If you are not willing to accept this
+			risk, do not use Crema to change machine settings.
+		</p>
 	</section>
 
 	<section>
@@ -93,11 +107,12 @@
 	<section>
 		<h2>5. Limitation of Liability</h2>
 		<p>
-			IN NO EVENT SHALL THE AUTHORS, CONTRIBUTORS, OR COPYRIGHT HOLDERS BE
-			LIABLE FOR ANY CLAIM, DAMAGES (INCLUDING DAMAGE TO HARDWARE, LOST
-			DATA, OR ECONOMIC LOSS), OR OTHER LIABILITY, WHETHER IN AN ACTION OF
-			CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF, OR IN CONNECTION
-			WITH THE SERVICE OR ITS USE.
+			TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, IN NO EVENT SHALL
+			THE AUTHORS, CONTRIBUTORS, OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+			CLAIM, DAMAGES (INCLUDING DAMAGE TO HARDWARE, LOST DATA, OR ECONOMIC
+			LOSS), OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR
+			OTHERWISE, ARISING FROM, OUT OF, OR IN CONNECTION WITH THE SERVICE OR
+			ITS USE.
 		</p>
 	</section>
 
@@ -135,6 +150,10 @@
 				policy.
 			</li>
 			<li>
+				<strong>Google Drive</strong> — optional backup and restore of your
+				own Crema data. Subject to Google's terms and privacy policy.
+			</li>
+			<li>
 				<strong>User-supplied webhook URLs</strong> — outbound POST
 				requests to addresses you configure.
 			</li>
@@ -151,7 +170,107 @@
 	</section>
 
 	<section>
-		<h2>8. Changes to These Terms</h2>
+		<h2>8. Assumption of Risk &amp; Best-Effort Software</h2>
+		<p>
+			Crema is maintained on a best-effort basis by a single author as a
+			free, open-source project. It is offered in the hope that it is
+			useful, but with <strong>no service-level commitment, no guarantee of
+			availability, and no obligation to provide support, updates, or
+			fixes.</strong> Features may change or be removed between releases. By
+			using Crema you accept these limitations and the hardware risks in
+			Section&nbsp;3.
+		</p>
+	</section>
+
+	<section>
+		<h2>9. Google Play &amp; the Android App</h2>
+		<p>
+			The Crema Android app is distributed through Google Play. Your
+			download and use of it are also subject to the
+			<a
+				href="https://play.google.com/about/play-terms/"
+				target="_blank"
+				rel="noreferrer noopener">Google Play Terms of Service</a
+			> and the applicable Google Play policies, in addition to these Terms.
+		</p>
+		<ul>
+			<li>
+				Crema is an independent, open-source project. It is
+				<strong>not created, sponsored, endorsed by, or affiliated with
+				Google LLC or Decent Espresso Inc.</strong> Google is not a party
+				to these Terms and bears no responsibility for the app or for
+				providing support for it.
+			</li>
+			<li>
+				The app requests device permissions you can grant or deny in
+				Android settings: <strong>Bluetooth</strong> (to discover and
+				communicate with your DE1 and scale) and <strong>camera / photo
+				access</strong> (only if you choose to attach a photo to a bean).
+				Denying Bluetooth disables machine control. How this data is
+				handled is described in the <a href="/privacy">Privacy Policy</a>.
+			</li>
+			<li>
+				The app contains no in-app purchases, no subscriptions, and no
+				advertising.
+			</li>
+		</ul>
+	</section>
+
+	<section>
+		<h2>10. Eligibility</h2>
+		<p>
+			You must be at least 13 years old, or the minimum age of digital
+			consent in your jurisdiction, to use Crema. Crema is intended for use
+			with consumer espresso equipment by the equipment's owner or an
+			authorised user.
+		</p>
+	</section>
+
+	<section>
+		<h2>11. Acceptable Use</h2>
+		<p>You agree not to use Crema to:</p>
+		<ul>
+			<li>violate any applicable law or regulation;</li>
+			<li>
+				access, scan, or interfere with any Bluetooth device, network, or
+				system you do not own or are not authorised to control;
+			</li>
+			<li>
+				remove, obscure, or misrepresent the GPL-3.0 license, copyright
+				notices, or authorship.
+			</li>
+		</ul>
+		<p>
+			Beyond the rights granted to you by the GPL-3.0 license
+			(Section&nbsp;2), no other rights are granted.
+		</p>
+	</section>
+
+	<section>
+		<h2>12. Indemnification</h2>
+		<p>
+			To the maximum extent permitted by law, you agree to indemnify and
+			hold harmless the authors, contributors, and copyright holders from
+			and against any claim, demand, loss, or expense (including reasonable
+			legal fees) arising out of your use or misuse of Crema, your violation
+			of these Terms, or your violation of any law or the rights of any
+			third party.
+		</p>
+	</section>
+
+	<section>
+		<h2>13. Term &amp; Termination</h2>
+		<p>
+			These Terms apply for as long as you use Crema; you may stop using it
+			at any time. The disclaimers, the limitation of liability, and the
+			indemnification provisions survive any termination. Nothing in this
+			section limits the rights granted to you in the source code under the
+			GPL-3.0 license.
+		</p>
+	</section>
+
+	<section>
+		<h2>14. Changes to These Terms</h2>
 		<p>
 			These Terms may be updated from time to time. The "Effective" date at
 			the top of this page indicates the date of the most recent change.
@@ -165,17 +284,23 @@
 	</section>
 
 	<section>
-		<h2>9. Governing Law</h2>
+		<h2>15. Governing Law &amp; Entire Agreement</h2>
 		<p>
 			These Terms are governed by the laws of the jurisdiction in which
 			the project maintainer resides, without regard to its conflict-of-law
 			provisions. Open-source contributions are governed by the GPL-3.0
 			license linked in Section&nbsp;2.
 		</p>
+		<p>
+			These Terms, together with the GPL-3.0 license, constitute the entire
+			agreement between you and the author regarding Crema and supersede any
+			prior understanding. If any provision is held unenforceable, the
+			remaining provisions remain in full effect.
+		</p>
 	</section>
 
 	<section>
-		<h2>10. Contact</h2>
+		<h2>16. Contact</h2>
 		<p>
 			Questions about these Terms can be raised as a GitHub issue at
 			<a

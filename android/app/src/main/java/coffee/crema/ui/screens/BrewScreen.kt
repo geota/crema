@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -1304,56 +1305,71 @@ private fun ChannelsRow(ui: coffee.crema.ui.MainUiState, active: CremaProfile?) 
     val tel = CremaTheme.telemetry
     val resist = ui.resistanceWeight ?: ui.resistance
     val resistUnit = if (ui.resistanceWeight != null) "bar·s²/g²" else "bar·s²/ml²"
-    // Proto .brew-channels: grid repeat(4,1fr) gap 9px — all four cards EQUAL
-    // width AND height (grid stretch). The Coffee/Weight cards carry a "target …"
-    // line the Pressure/Flow cards don't, so without an explicit height they'd be
-    // taller. IntrinsicSize.Max measures the tallest card; fillMaxHeight() then
-    // stretches the shorter two to match (the missing-line cards just gain height).
-    Row(
-        // Fixed 86dp = the timer card's height, so the top band is uniform and
-        // the cards read compact (proto .brew-channel is a slim row, not a stack).
-        Modifier.fillMaxWidth().height(86.dp),
-        horizontalArrangement = Arrangement.spacedBy(9.dp),
-    ) {
-        // Unit-aware readouts (issue 44): pressure / temp / weight / volume route
-        // through the canonical→display converters; flow (ml/s, g/s) and resistance
-        // are not user-toggled dimensions, so they stay as-is.
-        val pressure = convertPressure(ui.pressure, ui.pressureUnit)
-        val water = convertVolume(ui.dispensedVolume, ui.volumeUnit)
-        val coffeeTemp = convertTemp(ui.headTemp, ui.tempUnit)
-        val mixTempM = convertTemp(ui.mixTemp, ui.tempUnit)
-        // Floor at 0 (a post-stop cup-lift would read crazy-negative).
-        val weight = convertWeight(ui.scaleWeightG?.coerceAtLeast(0f), ui.weightUnit)
-        ChannelCard(
-            modifier = Modifier.weight(1f).fillMaxHeight(),
-            primLabel = "Pressure", primIcon = "gauge", primColor = tel.pressure,
-            primValue = pressure.value, primUnit = pressure.unit,
-            secLabel = "Resistance", secColor = tel.pressure2,
-            secValue = fmt(resist, 2), secUnit = resistUnit,
-        )
-        ChannelCard(
-            modifier = Modifier.weight(1f).fillMaxHeight(),
-            primLabel = "Flow", primIcon = "drop", primColor = tel.flow,
-            primValue = fmt(ui.flow), primUnit = "ml/s",
-            secLabel = "Water", secColor = tel.flow2,
-            secValue = water.value, secUnit = water.unit,
-        )
-        ChannelCard(
-            modifier = Modifier.weight(1f).fillMaxHeight(),
-            primLabel = "Coffee", primIcon = "thermometer", primColor = tel.temp,
-            primValue = coffeeTemp.value, primUnit = coffeeTemp.unit,
-            secLabel = "Water", secColor = tel.temp2,
-            secValue = mixTempM.value, secUnit = mixTempM.unit,
-            target = active?.let { "target ${formatTemp(it.brewTemp, ui.tempUnit)}" },
-        )
-        ChannelCard(
-            modifier = Modifier.weight(1f).fillMaxHeight(),
-            primLabel = "Weight", primIcon = "scales", primColor = tel.weight,
-            primValue = weight.value, primUnit = weight.unit,
-            secLabel = "Flow", secColor = tel.weight2,
-            secValue = fmt(ui.scaleFlowGPerS), secUnit = "g/s",
-            target = active?.let { "target ${formatWeight(it.yieldOut, ui.weightUnit)}" },
-        )
+    // Unit-aware readouts (issue 44): pressure / temp / weight / volume route
+    // through the canonical→display converters; flow (ml/s, g/s) and resistance
+    // are not user-toggled dimensions, so they stay as-is.
+    val pressure = convertPressure(ui.pressure, ui.pressureUnit)
+    val water = convertVolume(ui.dispensedVolume, ui.volumeUnit)
+    val coffeeTemp = convertTemp(ui.headTemp, ui.tempUnit)
+    val mixTempM = convertTemp(ui.mixTemp, ui.tempUnit)
+    // Floor at 0 (a post-stop cup-lift would read crazy-negative).
+    val weight = convertWeight(ui.scaleWeightG?.coerceAtLeast(0f), ui.weightUnit)
+    // The four telemetry cards as modifier-parameterised slots, so the same set
+    // renders 4-across on a wide tablet (10") OR 2×2 on a narrow one (7"), where
+    // four dual-value cards would starve each column and clip the labels/values.
+    val cards = listOf<@Composable (Modifier) -> Unit>(
+        { m ->
+            ChannelCard(
+                m, primLabel = "Pressure", primIcon = "gauge", primColor = tel.pressure,
+                primValue = pressure.value, primUnit = pressure.unit,
+                secLabel = "Resistance", secColor = tel.pressure2,
+                secValue = fmt(resist, 2), secUnit = resistUnit,
+            )
+        },
+        { m ->
+            ChannelCard(
+                m, primLabel = "Flow", primIcon = "drop", primColor = tel.flow,
+                primValue = fmt(ui.flow), primUnit = "ml/s",
+                secLabel = "Water", secColor = tel.flow2,
+                secValue = water.value, secUnit = water.unit,
+            )
+        },
+        { m ->
+            ChannelCard(
+                m, primLabel = "Coffee", primIcon = "thermometer", primColor = tel.temp,
+                primValue = coffeeTemp.value, primUnit = coffeeTemp.unit,
+                secLabel = "Water", secColor = tel.temp2,
+                secValue = mixTempM.value, secUnit = mixTempM.unit,
+                target = active?.let { "target ${formatTemp(it.brewTemp, ui.tempUnit)}" },
+            )
+        },
+        { m ->
+            ChannelCard(
+                m, primLabel = "Weight", primIcon = "scales", primColor = tel.weight,
+                primValue = weight.value, primUnit = weight.unit,
+                secLabel = "Flow", secColor = tel.weight2,
+                secValue = fmt(ui.scaleFlowGPerS), secUnit = "g/s",
+                target = active?.let { "target ${formatWeight(it.yieldOut, ui.weightUnit)}" },
+            )
+        },
+    )
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        if (maxWidth < 760.dp) {
+            // 2×2 grid — each card gets ~half the width, enough for dual values.
+            Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                Row(Modifier.fillMaxWidth().height(86.dp), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                    cards[0](Modifier.weight(1f).fillMaxHeight()); cards[1](Modifier.weight(1f).fillMaxHeight())
+                }
+                Row(Modifier.fillMaxWidth().height(86.dp), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                    cards[2](Modifier.weight(1f).fillMaxHeight()); cards[3](Modifier.weight(1f).fillMaxHeight())
+                }
+            }
+        } else {
+            // Wide tablet: original slim 4-across band (86dp uniform height).
+            Row(Modifier.fillMaxWidth().height(86.dp), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                cards.forEach { it(Modifier.weight(1f).fillMaxHeight()) }
+            }
+        }
     }
 }
 
@@ -1374,8 +1390,8 @@ private fun ChannelCard(
                     Eyebrow(primLabel, color = primColor)
                 }
                 Row(verticalAlignment = Alignment.Bottom) {
-                    Text(primValue, style = CremaTheme.readout.readoutSm.copy(fontSize = 24.sp, lineHeight = 26.sp), color = primColor)
-                    Text(" $primUnit", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(primValue, style = CremaTheme.readout.readoutSm.copy(fontSize = 24.sp, lineHeight = 26.sp), color = primColor, maxLines = 1, softWrap = false)
+                    Text(" $primUnit", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, softWrap = false)
                 }
                 if (target != null) {
                     Text(target, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f), maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -1385,8 +1401,8 @@ private fun ChannelCard(
             Column(Modifier.weight(1f), horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(5.dp)) {
                 Eyebrow(secLabel, color = secColor)
                 Row(verticalAlignment = Alignment.Bottom) {
-                    Text(secValue, style = CremaTheme.readout.readoutSm.copy(fontSize = 24.sp, lineHeight = 26.sp), color = secColor)
-                    Text(" $secUnit", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(secValue, style = CremaTheme.readout.readoutSm.copy(fontSize = 24.sp, lineHeight = 26.sp), color = secColor, maxLines = 1, softWrap = false)
+                    Text(" $secUnit", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, softWrap = false)
                 }
             }
         }
