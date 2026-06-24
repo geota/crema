@@ -403,7 +403,7 @@ data class MainUiState(
      *  seed the QC steppers + applied to the machine on change (read-modify-write). */
     val qcSteamTimeS: Float = 12f,
     val qcSteamFlowMlS: Float = 1.2f,
-    val qcSteamTempC: Float = 148f,
+    val qcSteamTempC: Float = QcSteam.DEFAULT_TEMP_C.toFloat(),
     val qcHotWaterTempC: Float = 80f,
     val qcHotWaterVolumeMl: Float = 150f,
     val qcFlushTimeS: Float = 4f,

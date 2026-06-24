@@ -25,6 +25,8 @@ import androidx.compose.ui.graphics.Color
 import coffee.crema.ui.BrewMode
 import coffee.crema.ui.DoseGrindMode
 import coffee.crema.ui.FlushMode
+import coffee.crema.ui.QcBounds
+import coffee.crema.ui.QcSteam
 import coffee.crema.ui.SteamMode
 import coffee.crema.ui.WaterMode
 import coffee.crema.ui.formatRatio
@@ -239,8 +241,8 @@ fun QuickControlsSheet(
                     modifier = Modifier.weight(1f),
                     value = if (doseGrindMode == DoseGrindMode.Dose) dose else grind,
                     unit = if (doseGrindMode == DoseGrindMode.Dose) "g" else null,
-                    min = if (doseGrindMode == DoseGrindMode.Dose) 5.0 else 0.0,
-                    max = if (doseGrindMode == DoseGrindMode.Dose) 30.0 else 20.0,
+                    min = if (doseGrindMode == DoseGrindMode.Dose) QcBounds.DOSE_MIN_G else QcBounds.GRIND_MIN,
+                    max = if (doseGrindMode == DoseGrindMode.Dose) QcBounds.DOSE_MAX_G else QcBounds.GRIND_MAX,
                     step = 0.1,
                     fmt = niceFmt,
                     chips = if (doseGrindMode == DoseGrindMode.Dose) listOf(16.0, 17.0, 18.0, 19.0, 20.0) else listOf(3.8, 4.0, 4.2, 4.4, 4.6),
@@ -255,7 +257,7 @@ fun QuickControlsSheet(
                 // profile (whichever is set). Greys out when the target is off.
                 CremaStepper(
                     modifier = Modifier.weight(1f),
-                    value = yieldOut, unit = "g", min = 10.0, max = 80.0, step = 0.5,
+                    value = yieldOut, unit = "g", min = QcBounds.YIELD_MIN_G, max = QcBounds.YIELD_MAX_G, step = 0.5,
                     fmt = niceFmt,
                     chips = listOf(28.0, 32.0, 36.0, 40.0, 45.0),
                     enabled = stopOnWeight,
@@ -274,8 +276,8 @@ fun QuickControlsSheet(
                     modifier = Modifier.weight(1f),
                     value = if (brewMode == BrewMode.Temp) brewTemp else preinf,
                     unit = if (brewMode == BrewMode.Temp) "°C" else "s",
-                    min = if (brewMode == BrewMode.Temp) 80.0 else 0.0,
-                    max = if (brewMode == BrewMode.Temp) 100.0 else 30.0,
+                    min = if (brewMode == BrewMode.Temp) QcBounds.BREW_TEMP_MIN_C else QcBounds.PREINF_MIN_S,
+                    max = if (brewMode == BrewMode.Temp) QcBounds.BREW_TEMP_MAX_C else QcBounds.PREINF_MAX_S,
                     step = if (brewMode == BrewMode.Temp) 0.5 else 1.0,
                     fmt = niceFmt,
                     chips = if (brewMode == BrewMode.Temp) listOf(88.0, 91.0, 93.0, 95.0, 97.0) else listOf(0.0, 4.0, 8.0, 12.0, 16.0),
@@ -290,8 +292,8 @@ fun QuickControlsSheet(
                     modifier = Modifier.weight(1f),
                     value = when (steamMode) { SteamMode.Flow -> qcSteamFlowMlS; SteamMode.Temp -> qcSteamTempC; SteamMode.Time -> qcSteamTimeS },
                     unit = when (steamMode) { SteamMode.Flow -> "ml/s"; SteamMode.Temp -> "°C"; SteamMode.Time -> "s" },
-                    min = when (steamMode) { SteamMode.Flow -> 0.2; SteamMode.Temp -> 135.0; SteamMode.Time -> 1.0 },
-                    max = when (steamMode) { SteamMode.Flow -> 3.0; SteamMode.Temp -> 170.0; SteamMode.Time -> 60.0 },
+                    min = when (steamMode) { SteamMode.Flow -> QcSteam.MIN_FLOW_ML_S; SteamMode.Temp -> QcSteam.MIN_TEMP_C; SteamMode.Time -> QcSteam.MIN_TIME_S },
+                    max = when (steamMode) { SteamMode.Flow -> QcSteam.MAX_FLOW_ML_S; SteamMode.Temp -> QcSteam.MAX_TEMP_C; SteamMode.Time -> QcSteam.MAX_TIME_S },
                     step = when (steamMode) { SteamMode.Flow -> 0.1; SteamMode.Temp -> 0.5; SteamMode.Time -> 1.0 },
                     fmt = niceFmt,
                     chips = when (steamMode) { SteamMode.Flow -> listOf(0.6, 0.9, 1.2, 1.6, 2.0); SteamMode.Temp -> listOf(140.0, 145.0, 148.0, 150.0, 155.0); SteamMode.Time -> listOf(5.0, 10.0, 15.0, 20.0, 30.0) },
@@ -308,7 +310,7 @@ fun QuickControlsSheet(
                             value = steamMode.value, onChange = { steamMode = SteamMode.of(it) },
                             dot = steamMode == SteamMode.Temp,
                             dotOn = qcSteamTempC > 0,
-                            onDot = { onSteamTemp(if (qcSteamTempC > 0) 0.0 else 148.0) },
+                            onDot = { onSteamTemp(if (qcSteamTempC > 0) 0.0 else QcSteam.DEFAULT_TEMP_C) },
                         )
                     },
                 )
@@ -317,8 +319,8 @@ fun QuickControlsSheet(
                     modifier = Modifier.weight(1f),
                     value = if (waterMode == WaterMode.Temp) qcHotWaterTempC else qcHotWaterVolumeMl,
                     unit = if (waterMode == WaterMode.Temp) "°C" else "ml",
-                    min = if (waterMode == WaterMode.Temp) 40.0 else 20.0,
-                    max = if (waterMode == WaterMode.Temp) 98.0 else 500.0,
+                    min = if (waterMode == WaterMode.Temp) QcBounds.WATER_TEMP_MIN_C else QcBounds.WATER_VOL_MIN_ML,
+                    max = if (waterMode == WaterMode.Temp) QcBounds.WATER_TEMP_MAX_C else QcBounds.WATER_VOL_MAX_ML,
                     step = if (waterMode == WaterMode.Temp) 1.0 else 10.0,
                     fmt = niceFmt,
                     chips = if (waterMode == WaterMode.Temp) listOf(60.0, 75.0, 85.0, 92.0, 96.0) else listOf(60.0, 120.0, 180.0, 250.0, 350.0),
@@ -333,8 +335,8 @@ fun QuickControlsSheet(
                     modifier = Modifier.weight(1f),
                     value = if (flushMode == FlushMode.Time) qcFlushTimeS else qcFlushTempC,
                     unit = if (flushMode == FlushMode.Time) "s" else "°C",
-                    min = if (flushMode == FlushMode.Time) 1.0 else 60.0,
-                    max = if (flushMode == FlushMode.Time) 20.0 else 100.0,
+                    min = if (flushMode == FlushMode.Time) QcBounds.FLUSH_TIME_MIN_S else QcBounds.FLUSH_TEMP_MIN_C,
+                    max = if (flushMode == FlushMode.Time) QcBounds.FLUSH_TIME_MAX_S else QcBounds.FLUSH_TEMP_MAX_C,
                     step = if (flushMode == FlushMode.Time) 1.0 else 0.5,
                     fmt = niceFmt,
                     chips = if (flushMode == FlushMode.Time) listOf(2.0, 4.0, 6.0, 8.0, 10.0) else listOf(88.0, 92.0, 95.0, 97.0, 99.0),
