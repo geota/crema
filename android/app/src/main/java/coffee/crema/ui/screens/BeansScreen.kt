@@ -254,7 +254,9 @@ fun BeansScreen(
                     }
                 } else {
                     LazyVerticalGrid(
-                        columns = GridCells.Fixed(3),
+                        // Adaptive: 2 columns on a narrow 7" tablet (wider cards →
+                        // "Set active" keeps its label), 3 on the 10".
+                        columns = GridCells.Adaptive(minSize = 320.dp),
                         modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 24.dp),
                         horizontalArrangement = Arrangement.spacedBy(16.dp),
                         verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -283,7 +285,9 @@ fun BeansScreen(
                     }
                 } else {
                     LazyVerticalGrid(
-                        columns = GridCells.Fixed(3),
+                        // Adaptive: 2 columns on a narrow 7" tablet (wider cards →
+                        // "Set active" keeps its label), 3 on the 10".
+                        columns = GridCells.Adaptive(minSize = 320.dp),
                         modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 24.dp),
                         horizontalArrangement = Arrangement.spacedBy(16.dp),
                         verticalArrangement = Arrangement.spacedBy(16.dp),

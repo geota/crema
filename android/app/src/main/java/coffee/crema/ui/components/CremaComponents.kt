@@ -6,6 +6,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.LocalIndication
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -401,6 +403,11 @@ fun Eyebrow(text: String, modifier: Modifier = Modifier, color: Color = Material
         text = text.uppercase(),
         style = MaterialTheme.typography.labelSmall.copy(fontSize = androidx.compose.ui.unit.TextUnit(10.5f, androidx.compose.ui.unit.TextUnitType.Sp)),
         color = color,
+        // Stay on ONE line when horizontally starved (narrow 7" tablet columns):
+        // clip the tail rather than wrap into a 1-char-wide vertical column.
+        maxLines = 1,
+        softWrap = false,
+        overflow = TextOverflow.Clip,
         modifier = modifier,
     )
 }
@@ -420,7 +427,9 @@ fun CremaButton(
 ) {
     val content: @Composable RowScope.() -> Unit = {
         if (icon != null) { PhIcon(icon, sizeDp = 18); Spacer(Modifier.width(8.dp)) }
-        Text(label, style = MaterialTheme.typography.labelLarge)
+        // One line, ellipsised — a narrow button slot (7" tablet cards) must not
+        // wrap "Loaded on Brew" onto a second line and overflow the button.
+        Text(label, style = MaterialTheme.typography.labelLarge, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
     }
     // Stock M3 pill shape (no shapes.small override) — the handset design uses
     // full pills everywhere, and the tablet now matches it instead of the PWA's
@@ -1133,7 +1142,7 @@ fun CremaOptionalHeader(label: String, on: Boolean, onToggle: () -> Unit, modifi
 // An eyebrow-style label that's also a selector: [dot?] PREFIX  OPT | OPT, where
 // the active option is copper-underlined. Used for the segment editor's Temp
 // (Coffee|Water), Exit (Pressure|Flow) etc. `dot` adds the optional enable toggle.
-data class SplitOption(val id: String, val label: String)
+data class SplitOption(val id: String, val label: String, val icon: String? = null)
 
 @Composable
 fun CremaSplitLabel(
@@ -1145,35 +1154,58 @@ fun CremaSplitLabel(
     dot: Boolean = false,
     dotOn: Boolean = false,
     onDot: (() -> Unit)? = null,
+    // When set, a leading icon stands in for the text [prefix] — saves width in
+    // tight cells (e.g. the 7" profile-segment row's Temp/Exit headers).
+    icon: String? = null,
 ) {
     val style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 0.5.sp)
     val copper = MaterialTheme.colorScheme.primary
     Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         if (dot) CremaDotToggle(dotOn, { onDot?.invoke() })
-        // The prefix carries the same 3dp bottom padding the options use to clear
-        // their underline, so prefix + options share a baseline (no high options).
-        // Blank prefix (e.g. the Dose|Grind header) renders options only.
-        if (prefix.isNotBlank()) Text(prefix.uppercase(), style = style, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f), modifier = Modifier.padding(bottom = 3.dp))
+        // A leading icon (when given) replaces the text prefix; otherwise the prefix
+        // carries the same 3dp bottom padding the options use to clear their
+        // underline, so prefix + options share a baseline (no high options). Blank
+        // prefix + no icon (e.g. the Dose|Grind header) renders options only.
+        when {
+            icon != null -> PhIcon(icon, sizeDp = 13, tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f), modifier = Modifier.padding(bottom = 2.dp))
+            prefix.isNotBlank() -> Text(prefix.uppercase(), style = style, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f), maxLines = 1, softWrap = false, modifier = Modifier.padding(bottom = 3.dp))
+        }
         if (options.isNotEmpty()) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 options.forEachIndexed { i, o ->
-                    if (i > 0) Text("|", style = style, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.18f), modifier = Modifier.padding(bottom = 3.dp))
                     val active = value == o.id
-                    Text(
-                        o.label.uppercase(),
-                        style = style,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = if (active) 0.85f else 0.32f),
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(2.dp))
-                            .clickable(enabled = !active && onChange != null) { onChange?.invoke(o.id) }
-                            .padding(bottom = 3.dp)
-                            .drawBehind {
-                                if (active) {
-                                    val sw = 1.5.dp.toPx()
-                                    drawLine(copper, Offset(0f, size.height - sw), Offset(size.width, size.height - sw), strokeWidth = sw)
-                                }
-                            },
-                    )
+                    if (o.icon != null) {
+                        // Icon option (segment-row Temp/Exit toggles) — far narrower
+                        // than text: active = copper, inactive = dim, no "|" rule.
+                        PhIcon(
+                            o.icon,
+                            sizeDp = 15,
+                            tint = if (active) copper else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.32f),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .clickable(enabled = !active && onChange != null) { onChange?.invoke(o.id) }
+                                .padding(2.dp),
+                        )
+                    } else {
+                        if (i > 0) Text("|", style = style, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.18f), modifier = Modifier.padding(bottom = 3.dp))
+                        Text(
+                            o.label.uppercase(),
+                            style = style,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = if (active) 0.85f else 0.32f),
+                            maxLines = 1,
+                            softWrap = false,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(2.dp))
+                                .clickable(enabled = !active && onChange != null) { onChange?.invoke(o.id) }
+                                .padding(bottom = 3.dp)
+                                .drawBehind {
+                                    if (active) {
+                                        val sw = 1.5.dp.toPx()
+                                        drawLine(copper, Offset(0f, size.height - sw), Offset(size.width, size.height - sw), strokeWidth = sw)
+                                    }
+                                },
+                        )
+                    }
                 }
             }
         }
@@ -1689,24 +1721,31 @@ fun CremaNavigationRail(
             )
         },
     ) {
-        Spacer(Modifier.height(8.dp))
-        cremaRailItems.forEach { item ->
-            NavigationRailItem(
-                selected = active == item.id,
-                onClick = { onNav(item.id) },
-                icon = { PhIcon(item.icon, sizeDp = 24) },
-                label = { Text(item.label, style = MaterialTheme.typography.labelMedium) },
-                colors = NavigationRailItemDefaults.colors(
-                    indicatorColor = MaterialTheme.colorScheme.secondaryContainer,
-                    selectedIconColor = MaterialTheme.colorScheme.onSecondaryContainer,
-                    selectedTextColor = MaterialTheme.colorScheme.onSurface,
-                    unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                    unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                ),
-            )
+        // The nav items scroll when the rail is short (7" landscape ≈ 600dp tall)
+        // so they never push the connection pips off the bottom edge (which clipped
+        // the "SCALE" pip). The pips below stay pinned + always visible.
+        Column(
+            modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Spacer(Modifier.height(8.dp))
+            cremaRailItems.forEach { item ->
+                NavigationRailItem(
+                    selected = active == item.id,
+                    onClick = { onNav(item.id) },
+                    icon = { PhIcon(item.icon, sizeDp = 24) },
+                    label = { Text(item.label, style = MaterialTheme.typography.labelMedium) },
+                    colors = NavigationRailItemDefaults.colors(
+                        indicatorColor = MaterialTheme.colorScheme.secondaryContainer,
+                        selectedIconColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                        selectedTextColor = MaterialTheme.colorScheme.onSurface,
+                        unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    ),
+                )
+            }
         }
-        Spacer(Modifier.weight(1f))
-        // Connection pips
+        // Connection pips — pinned at the bottom, always visible.
         ConnectionPip("DE1", machineConnected) { onConnect("machine") }
         ConnectionPip("Scale", scaleConnected) { onConnect("scale") }
         Spacer(Modifier.height(12.dp))

@@ -198,7 +198,9 @@ fun ProfilesScreen(
                 )
             }
             LazyVerticalGrid(
-                columns = GridCells.Fixed(3),
+                // Adaptive so a narrow 7" tablet drops to 2 columns (wider cards →
+                // the "Load on Brew" button keeps its label) while the 10" keeps 3.
+                columns = GridCells.Adaptive(minSize = 320.dp),
                 modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 24.dp),
                 horizontalArrangement = Arrangement.spacedBy(CremaCardSpec.gridGap),
                 verticalArrangement = Arrangement.spacedBy(CremaCardSpec.gridGap),
