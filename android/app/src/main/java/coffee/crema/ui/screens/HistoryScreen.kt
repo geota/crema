@@ -15,6 +15,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -82,6 +84,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import coffee.crema.ui.components.CremaButton
 import coffee.crema.ui.components.CremaButtonVariant
+import coffee.crema.ui.components.CremaIconButton
+import coffee.crema.ui.components.CremaIconTone
 import coffee.crema.ui.components.CremaSplitButton
 import coffee.crema.ui.components.SplitMenuItem
 import coffee.crema.ui.components.CremaOverflowMenu
@@ -180,40 +184,58 @@ fun HistoryScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+                val narrowBar = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 840
                 if (ui.history.isNotEmpty()) {
+                    Spacer(Modifier.width(12.dp))
                     CremaSearchPill(
                         query = query,
                         onQueryChange = { query = it },
                         placeholder = "Search profile, bean, notes…",
-                        modifier = Modifier.width(260.dp),
+                        modifier = if (narrowBar) Modifier.weight(1f) else Modifier.width(260.dp),
                     )
                 }
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(start = 8.dp)) {
-                    CremaButton(
-                        onClick = { importLauncher.launch(arrayOf("application/json", "text/*", "*/*")) },
-                        variant = CremaButtonVariant.Outlined,
-                        icon = "upload-simple",
-                        label = "Import",
-                    )
+                if (narrowBar) {
+                    // 7"/portrait: icon-only actions so the (long) title + search keep
+                    // their width. Export's secondary "current filter" format stays a
+                    // landscape affordance; the icon runs the primary all-shots export.
+                    Spacer(Modifier.width(8.dp))
+                    CremaIconButton("upload-simple", { importLauncher.launch(arrayOf("application/json", "text/*", "*/*")) }, tone = CremaIconTone.Tonal)
                     if (ui.history.isNotEmpty()) {
-                        CremaSplitButton(
-                            icon = "download-simple",
-                            label = "Export",
-                            menuHead = "Export as",
-                            onPrimary = { launchSave("crema-history.json", vm.shotsJson(null)) },
-                            items = listOf(
-                                SplitMenuItem("file-text", "All shots", "Every shot as one Crema JSON file. Re-importable in Crema.") { launchSave("crema-history.json", vm.shotsJson(null)) },
-                                SplitMenuItem("file-code", "Current filter", "Only the ${shots.size} shot(s) matching your search and date range.") { launchSave("crema-history-filtered.json", vm.shotsJson(shots.map { it.id })) },
-                            ),
+                        Spacer(Modifier.width(4.dp))
+                        CremaIconButton("download-simple", { launchSave("crema-history.json", vm.shotsJson(null)) }, tone = CremaIconTone.Tonal)
+                        if (!sel.selecting && ui.history.size >= 2) {
+                            Spacer(Modifier.width(4.dp))
+                            CremaIconButton("arrows-left-right", sel::enter, tone = CremaIconTone.Tonal)
+                        }
+                    }
+                } else {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(start = 8.dp)) {
+                        CremaButton(
+                            onClick = { importLauncher.launch(arrayOf("application/json", "text/*", "*/*")) },
+                            variant = CremaButtonVariant.Outlined,
+                            icon = "upload-simple",
+                            label = "Import",
                         )
-                        if (!sel.selecting) {
-                            CremaButton(
-                                onClick = sel::enter,
-                                variant = CremaButtonVariant.Outlined,
-                                icon = "arrows-left-right",
-                                label = "Compare",
-                                enabled = ui.history.size >= 2,
+                        if (ui.history.isNotEmpty()) {
+                            CremaSplitButton(
+                                icon = "download-simple",
+                                label = "Export",
+                                menuHead = "Export as",
+                                onPrimary = { launchSave("crema-history.json", vm.shotsJson(null)) },
+                                items = listOf(
+                                    SplitMenuItem("file-text", "All shots", "Every shot as one Crema JSON file. Re-importable in Crema.") { launchSave("crema-history.json", vm.shotsJson(null)) },
+                                    SplitMenuItem("file-code", "Current filter", "Only the ${shots.size} shot(s) matching your search and date range.") { launchSave("crema-history-filtered.json", vm.shotsJson(shots.map { it.id })) },
+                                ),
                             )
+                            if (!sel.selecting) {
+                                CremaButton(
+                                    onClick = sel::enter,
+                                    variant = CremaButtonVariant.Outlined,
+                                    icon = "arrows-left-right",
+                                    label = "Compare",
+                                    enabled = ui.history.size >= 2,
+                                )
+                            }
                         }
                     }
                 }
@@ -300,7 +322,11 @@ fun HistoryScreen(
                     horizontalArrangement = Arrangement.spacedBy(16.dp),
                 ) {
                     LazyColumn(
-                        modifier = Modifier.width(480.dp).fillMaxHeight(),
+                        // Narrow 7" tablet: a slimmer shot list leaves the detail
+                        // panel (7-metric row + chart) a usable width; 10" keeps 480.
+                        modifier = Modifier
+                            .width(if (androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 1100) 320.dp else 480.dp)
+                            .fillMaxHeight(),
                         verticalArrangement = Arrangement.spacedBy(2.dp),
                         contentPadding = PaddingValues(top = 4.dp, bottom = 12.dp),
                     ) {
@@ -383,18 +409,25 @@ private fun StatsStrip(history: List<StoredShot>, weightUnit: String) {
     // matching the web (PWA): count, total + average weight, then the three
     // averages (ratio / time / rating). The phone shows just the three averages.
     val s = historyStats(history)
+    // 6 tiles fill the width on a wide tablet; on a narrow 7"/portrait one they'd
+    // each be too thin (labels + values clip), so they take a readable fixed width
+    // and the strip scrolls horizontally instead.
+    val narrow = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 840
+    val scroll = rememberScrollState()
     Row(
-        Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 4.dp),
+        Modifier.fillMaxWidth()
+            .then(if (narrow) Modifier.horizontalScroll(scroll) else Modifier)
+            .padding(horizontal = 24.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         val totalWt = convertWeight(s.totalWeightG?.toFloat(), weightUnit)
         val avgWt = convertWeight(s.avgWeightG?.toFloat(), weightUnit)
-        StatTile("Shots", "${s.shots}", "shots", Modifier.weight(1f))
-        StatTile("Weight", totalWt.value, s.totalWeightG?.let { totalWt.unit }, Modifier.weight(1f))
-        StatTile("Avg weight", avgWt.value, s.avgWeightG?.let { avgWt.unit }, Modifier.weight(1f))
-        StatTile("Avg ratio", s.avgRatio?.let { "1:%.1f".format(it) } ?: "—", null, Modifier.weight(1f))
-        StatTile("Avg time", s.avgTimeS?.let { "%.0f".format(it) } ?: "—", s.avgTimeS?.let { "s" }, Modifier.weight(1f))
-        StatTile("Avg rating", s.avgRating?.let { "%.1f".format(it) } ?: "—", null, Modifier.weight(1f))
+        StatTile("Shots", "${s.shots}", "shots", if (narrow) Modifier.width(132.dp) else Modifier.weight(1f))
+        StatTile("Weight", totalWt.value, s.totalWeightG?.let { totalWt.unit }, if (narrow) Modifier.width(132.dp) else Modifier.weight(1f))
+        StatTile("Avg weight", avgWt.value, s.avgWeightG?.let { avgWt.unit }, if (narrow) Modifier.width(132.dp) else Modifier.weight(1f))
+        StatTile("Avg ratio", s.avgRatio?.let { "1:%.1f".format(it) } ?: "—", null, if (narrow) Modifier.width(132.dp) else Modifier.weight(1f))
+        StatTile("Avg time", s.avgTimeS?.let { "%.0f".format(it) } ?: "—", s.avgTimeS?.let { "s" }, if (narrow) Modifier.width(132.dp) else Modifier.weight(1f))
+        StatTile("Avg rating", s.avgRating?.let { "%.1f".format(it) } ?: "—", null, if (narrow) Modifier.width(132.dp) else Modifier.weight(1f))
     }
 }
 

@@ -407,7 +407,9 @@ private fun SegmentRowFull(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             // Name column: number + name (top), then labelled Type / Ramp pills.
-            Column(Modifier.width(178.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            // 156dp (was 178) so the 7" tablet leaves the dense value cells enough
+            // width — Type/Ramp are 2-option pills that fit comfortably here.
+            Column(Modifier.width(156.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Box(
                         Modifier.size(20.dp).clip(CircleShape).background(MaterialTheme.colorScheme.secondaryContainer),
@@ -447,7 +449,7 @@ private fun SegmentRowFull(
                 CremaStepper(value = seg.time.toDouble(), unit = "s", step = 0.5, min = 0.0, max = bounds.maxFrameSeconds.toDouble(), onChange = { onEdit(seg.copy(time = it.toFloat())) }, style = CremaStepperStyle.BoxedDense)
             }
             SegCell(1.15f) {
-                CremaSplitLabel(prefix = "Temp", options = listOf(SplitOption("coffee", "Coffee"), SplitOption("water", "Water")), value = seg.tempSensor ?: "coffee", onChange = { onEdit(seg.copy(tempSensor = it)) })
+                CremaSplitLabel(prefix = "Temp", icon = "thermometer", options = listOf(SplitOption("coffee", "Coffee", icon = "coffee"), SplitOption("water", "Water", icon = "drop")), value = seg.tempSensor ?: "coffee", onChange = { onEdit(seg.copy(tempSensor = it)) })
                 CremaStepper(value = (seg.temp ?: 93f).toDouble(), unit = "°C", step = 0.5, min = 20.0, max = bounds.maxTemperatureC.toDouble(), onChange = { onEdit(seg.copy(temp = it.toFloat())) }, style = CremaStepperStyle.BoxedDense)
             }
             SegCell(1f) {
@@ -457,10 +459,11 @@ private fun SegmentRowFull(
             SegCell(1.5f) {
                 CremaSplitLabel(
                     prefix = "Exit",
+                    icon = "sign-out",
                     dot = true,
                     dotOn = exitOn,
                     onDot = { onEdit(seg.copy(exit = if (exitOn) null else SegmentExit(ExitMetric.Flow, Compare.Over, 4f))) },
-                    options = listOf(SplitOption("pressure", "Pressure"), SplitOption("flow", "Flow")),
+                    options = listOf(SplitOption("pressure", "Pressure", icon = "gauge"), SplitOption("flow", "Flow", icon = "drop")),
                     value = (exView.metric ?: ExitMetric.Flow).string,
                     onChange = { m -> if (exitOn) onEdit(seg.copy(exit = seg.exit?.copy(metric = exitMetricFromWire(m)))) },
                 )

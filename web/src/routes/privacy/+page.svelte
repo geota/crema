@@ -6,10 +6,13 @@
 	 * Console requires a privacy-policy URL accessible without
 	 * authentication). Standalone layout — see the per-route
 	 * `+layout@.svelte`.
+	 *
+	 * Shared by both shells: the web PWA links here in-app, and the Android
+	 * tablet/phone About screen opens this same hosted page.
 	 */
 	import pkg from '../../../package.json';
 	const version = pkg.version;
-	const lastUpdated = '2026-05-25';
+	const lastUpdated = '2026-06-24';
 </script>
 
 <main class="legal">
@@ -23,8 +26,8 @@
 		<h2>Summary</h2>
 		<p>
 			<strong>Crema is a local-first application.</strong> All settings,
-			profiles, shot history, bean records, and Bluetooth-capture data
-			are stored on your own device, in your browser's IndexedDB and
+			profiles, shot history, bean records, bean photos, and Bluetooth-capture
+			data are stored on your own device, in your browser's IndexedDB and
 			localStorage (or, on Android, in app-private storage). Crema does
 			not operate any servers and does not collect, transmit, or aggregate
 			user data unless you explicitly enable an opt-in third-party
@@ -57,6 +60,12 @@
 			</li>
 			<li>
 				<strong>Bean and roaster library</strong> entries (localStorage).
+			</li>
+			<li>
+				<strong>Bean bag photos</strong> — optional images you capture with
+				the camera or pick from your photo library and attach to a bean
+				(IndexedDB on web; app-private storage on Android). They never leave
+				your device unless you include them in a backup you initiate.
 			</li>
 			<li>
 				<strong>Rolling Bluetooth-traffic capture</strong> — the last few
@@ -122,10 +131,10 @@
 			Crema offers an optional Google Drive integration so you can
 			back up and restore your local data: app preferences, custom
 			profiles, shot history (including telemetry curves), bean and
-			roaster library, and maintenance state. This is strictly
-			user-initiated: nothing is written to your Drive unless you
-			sign in and explicitly trigger a backup or enable scheduled
-			backups in Settings.
+			roaster library (including any bean photos), and maintenance state.
+			This is strictly user-initiated: nothing is written to your Drive
+			unless you sign in and explicitly trigger a backup or enable
+			scheduled backups in Settings.
 		</p>
 		<ul>
 			<li>
@@ -146,7 +155,7 @@
 			</li>
 			<li>
 				<strong>Payload</strong> consists solely of your own Crema data
-				exported as JSON / JSONL files (the same format the local
+				exported as a backup archive (the same format the local
 				export buttons produce). No analytics, no device identifiers,
 				no metrics — just the data you already see in the app.
 			</li>
@@ -187,15 +196,36 @@
 	</section>
 
 	<section>
-		<h2>4. Bluetooth Device Data</h2>
+		<h2>4. Device Permissions</h2>
 		<p>
-			When you pair a DE1 espresso machine or a compatible scale, Crema
-			subscribes to Bluetooth GATT characteristics on those devices.
-			Bluetooth payloads (state, telemetry, weight readings) are processed
-			locally and stored as part of your shot history. They are not
-			transmitted off-device by Crema. The OS-level Bluetooth permission
-			prompt is governed by your browser or Android system.
+			Crema requests the following device permissions only to provide
+			features you invoke. Everything they produce is processed locally and
+			is not transmitted off-device by Crema. You can grant or revoke each
+			one at any time in your browser or Android system settings.
 		</p>
+		<ul>
+			<li>
+				<strong>Bluetooth</strong> — to discover and pair a DE1 espresso
+				machine and a compatible scale and subscribe to their Bluetooth
+				GATT characteristics. Bluetooth payloads (state, telemetry, weight
+				readings) are processed locally and stored as part of your shot
+				history. On Android the scan is declared
+				<code>neverForLocation</code>; Crema does not use Bluetooth to
+				derive your physical location. Denying Bluetooth disables machine
+				control.
+			</li>
+			<li>
+				<strong>Camera</strong> (Android) — used only when you choose to
+				take a photo of a coffee bag. The captured image is written to
+				app-private storage and attached to that bean; it is not uploaded.
+			</li>
+			<li>
+				<strong>Photos / media</strong> — used only when you pick an
+				existing image for a bean through the system photo picker. Crema
+				receives only the single image you select; it does not browse or
+				index your library.
+			</li>
+		</ul>
 	</section>
 
 	<section>

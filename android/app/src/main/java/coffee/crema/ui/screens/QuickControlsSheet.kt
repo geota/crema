@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -234,118 +235,146 @@ fun QuickControlsSheet(
                 }
             }
 
-            // ── Six steppers — one full-width row (PWA qsheet-g-grid is-six). ──
-            Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            // ── Six steppers. One row on a wide tablet (10"); wraps to 3-per-row
+            //    on a 7" landscape and 2-per-row on 7" portrait / phone, so each
+            //    stepper keeps enough width for its split-label header + chips. ──
+            val steppers = listOf<@Composable (Modifier) -> Unit>(
                 // 1 — Dose | Grind (no prefix).
-                CremaStepper(
-                    modifier = Modifier.weight(1f),
-                    value = if (doseGrindMode == DoseGrindMode.Dose) dose else grind,
-                    unit = if (doseGrindMode == DoseGrindMode.Dose) "g" else null,
-                    min = if (doseGrindMode == DoseGrindMode.Dose) QcBounds.DOSE_MIN_G else QcBounds.GRIND_MIN,
-                    max = if (doseGrindMode == DoseGrindMode.Dose) QcBounds.DOSE_MAX_G else QcBounds.GRIND_MAX,
-                    step = 0.1,
-                    fmt = niceFmt,
-                    chips = if (doseGrindMode == DoseGrindMode.Dose) listOf(16.0, 17.0, 18.0, 19.0, 20.0) else listOf(3.8, 4.0, 4.2, 4.4, 4.6),
-                    onChange = { if (doseGrindMode == DoseGrindMode.Dose) onAdjustBrew(it, yieldOut, brewTemp, preinfOverride) else onGrind(it) },
-                    style = CremaStepperStyle.Boxed,
-                    header = {
-                        CremaSplitLabel(prefix = "", options = listOf(SplitOption("dose", "Dose"), SplitOption("grind", "Grind")), value = doseGrindMode.value, onChange = { doseGrindMode = DoseGrindMode.of(it) })
-                    },
-                )
+                { m ->
+                    CremaStepper(
+                        modifier = m,
+                        value = if (doseGrindMode == DoseGrindMode.Dose) dose else grind,
+                        unit = if (doseGrindMode == DoseGrindMode.Dose) "g" else null,
+                        min = if (doseGrindMode == DoseGrindMode.Dose) QcBounds.DOSE_MIN_G else QcBounds.GRIND_MIN,
+                        max = if (doseGrindMode == DoseGrindMode.Dose) QcBounds.DOSE_MAX_G else QcBounds.GRIND_MAX,
+                        step = 0.1,
+                        fmt = niceFmt,
+                        chips = if (doseGrindMode == DoseGrindMode.Dose) listOf(16.0, 17.0, 18.0, 19.0, 20.0) else listOf(3.8, 4.0, 4.2, 4.4, 4.6),
+                        onChange = { if (doseGrindMode == DoseGrindMode.Dose) onAdjustBrew(it, yieldOut, brewTemp, preinfOverride) else onGrind(it) },
+                        style = CremaStepperStyle.Boxed,
+                        header = {
+                            CremaSplitLabel(prefix = "", options = listOf(SplitOption("dose", "Dose"), SplitOption("grind", "Grind")), value = doseGrindMode.value, onChange = { doseGrindMode = DoseGrindMode.of(it) })
+                        },
+                    )
+                },
                 // 2 — Yield (+ live ratio). The dot toggles the weight target
                 // (stop-on-weight); the value resolves Quick Controls override →
                 // profile (whichever is set). Greys out when the target is off.
-                CremaStepper(
-                    modifier = Modifier.weight(1f),
-                    value = yieldOut, unit = "g", min = QcBounds.YIELD_MIN_G, max = QcBounds.YIELD_MAX_G, step = 0.5,
-                    fmt = niceFmt,
-                    chips = listOf(28.0, 32.0, 36.0, 40.0, 45.0),
-                    enabled = stopOnWeight,
-                    onChange = { onAdjustBrew(dose, it, brewTemp, preinfOverride) },
-                    style = CremaStepperStyle.Boxed,
-                    header = {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                            CremaDotToggle(stopOnWeight, { onStopOnWeight(!stopOnWeight) })
-                            Eyebrow("Yield", Modifier.weight(1f))
-                            Text(formatRatio(dose, yieldOut), style = MaterialTheme.typography.labelSmall.copy(fontFamily = JetBrainsMono), color = MaterialTheme.colorScheme.primary)
-                        }
-                    },
-                )
+                { m ->
+                    CremaStepper(
+                        modifier = m,
+                        value = yieldOut, unit = "g", min = QcBounds.YIELD_MIN_G, max = QcBounds.YIELD_MAX_G, step = 0.5,
+                        fmt = niceFmt,
+                        chips = listOf(28.0, 32.0, 36.0, 40.0, 45.0),
+                        enabled = stopOnWeight,
+                        onChange = { onAdjustBrew(dose, it, brewTemp, preinfOverride) },
+                        style = CremaStepperStyle.Boxed,
+                        header = {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                                CremaDotToggle(stopOnWeight, { onStopOnWeight(!stopOnWeight) })
+                                Eyebrow("Yield", Modifier.weight(1f))
+                                Text(formatRatio(dose, yieldOut), style = MaterialTheme.typography.labelSmall.copy(fontFamily = JetBrainsMono), color = MaterialTheme.colorScheme.primary)
+                            }
+                        },
+                    )
+                },
                 // 3 — Brew temp | pre-infuse.
-                CremaStepper(
-                    modifier = Modifier.weight(1f),
-                    value = if (brewMode == BrewMode.Temp) brewTemp else preinf,
-                    unit = if (brewMode == BrewMode.Temp) "°C" else "s",
-                    min = if (brewMode == BrewMode.Temp) QcBounds.BREW_TEMP_MIN_C else QcBounds.PREINF_MIN_S,
-                    max = if (brewMode == BrewMode.Temp) QcBounds.BREW_TEMP_MAX_C else QcBounds.PREINF_MAX_S,
-                    step = if (brewMode == BrewMode.Temp) 0.5 else 1.0,
-                    fmt = niceFmt,
-                    chips = if (brewMode == BrewMode.Temp) listOf(88.0, 91.0, 93.0, 95.0, 97.0) else listOf(0.0, 4.0, 8.0, 12.0, 16.0),
-                    onChange = { if (brewMode == BrewMode.Temp) onAdjustBrew(dose, yieldOut, it, preinfOverride) else onAdjustBrew(dose, yieldOut, brewTemp, it) },
-                    style = CremaStepperStyle.Boxed,
-                    header = {
-                        CremaSplitLabel(prefix = "Brew", options = listOf(SplitOption("temp", "Temp"), SplitOption("preinf", "Pre-infuse")), value = brewMode.value, onChange = { brewMode = BrewMode.of(it) })
-                    },
-                )
+                { m ->
+                    CremaStepper(
+                        modifier = m,
+                        value = if (brewMode == BrewMode.Temp) brewTemp else preinf,
+                        unit = if (brewMode == BrewMode.Temp) "°C" else "s",
+                        min = if (brewMode == BrewMode.Temp) QcBounds.BREW_TEMP_MIN_C else QcBounds.PREINF_MIN_S,
+                        max = if (brewMode == BrewMode.Temp) QcBounds.BREW_TEMP_MAX_C else QcBounds.PREINF_MAX_S,
+                        step = if (brewMode == BrewMode.Temp) 0.5 else 1.0,
+                        fmt = niceFmt,
+                        chips = if (brewMode == BrewMode.Temp) listOf(88.0, 91.0, 93.0, 95.0, 97.0) else listOf(0.0, 4.0, 8.0, 12.0, 16.0),
+                        onChange = { if (brewMode == BrewMode.Temp) onAdjustBrew(dose, yieldOut, it, preinfOverride) else onAdjustBrew(dose, yieldOut, brewTemp, it) },
+                        style = CremaStepperStyle.Boxed,
+                        header = {
+                            CremaSplitLabel(prefix = "Brew", options = listOf(SplitOption("temp", "Temp"), SplitOption("preinf", "Pre-infuse")), value = brewMode.value, onChange = { brewMode = BrewMode.of(it) })
+                        },
+                    )
+                },
                 // 4 — Steam time | flow | temp.
-                CremaStepper(
-                    modifier = Modifier.weight(1f),
-                    value = when (steamMode) { SteamMode.Flow -> qcSteamFlowMlS; SteamMode.Temp -> qcSteamTempC; SteamMode.Time -> qcSteamTimeS },
-                    unit = when (steamMode) { SteamMode.Flow -> "ml/s"; SteamMode.Temp -> "°C"; SteamMode.Time -> "s" },
-                    min = when (steamMode) { SteamMode.Flow -> QcSteam.MIN_FLOW_ML_S; SteamMode.Temp -> QcSteam.MIN_TEMP_C; SteamMode.Time -> QcSteam.MIN_TIME_S },
-                    max = when (steamMode) { SteamMode.Flow -> QcSteam.MAX_FLOW_ML_S; SteamMode.Temp -> QcSteam.MAX_TEMP_C; SteamMode.Time -> QcSteam.MAX_TIME_S },
-                    step = when (steamMode) { SteamMode.Flow -> 0.1; SteamMode.Temp -> 0.5; SteamMode.Time -> 1.0 },
-                    fmt = niceFmt,
-                    chips = when (steamMode) { SteamMode.Flow -> listOf(0.6, 0.9, 1.2, 1.6, 2.0); SteamMode.Temp -> listOf(140.0, 145.0, 148.0, 150.0, 155.0); SteamMode.Time -> listOf(5.0, 10.0, 15.0, 20.0, 30.0) },
-                    onChange = { when (steamMode) { SteamMode.Flow -> onSteamFlow(it); SteamMode.Temp -> onSteamTemp(it); SteamMode.Time -> onSteamTime(it) } },
-                    style = CremaStepperStyle.Boxed,
-                    // Steam temp 0 = heater off (DE1 firmware snaps <135 → 0). The dot on
-                    // the Steam label arms/disarms it and greys the bar; the 135 floor
-                    // keeps the user out of the silent 120–134 snap-to-off band.
-                    enabled = !(steamMode == SteamMode.Temp && qcSteamTempC <= 0.0),
-                    header = {
-                        CremaSplitLabel(
-                            prefix = "Steam",
-                            options = listOf(SplitOption("time", "Time"), SplitOption("flow", "Flow"), SplitOption("temp", "Temp")),
-                            value = steamMode.value, onChange = { steamMode = SteamMode.of(it) },
-                            dot = steamMode == SteamMode.Temp,
-                            dotOn = qcSteamTempC > 0,
-                            onDot = { onSteamTemp(if (qcSteamTempC > 0) 0.0 else QcSteam.DEFAULT_TEMP_C) },
-                        )
-                    },
-                )
+                { m ->
+                    CremaStepper(
+                        modifier = m,
+                        value = when (steamMode) { SteamMode.Flow -> qcSteamFlowMlS; SteamMode.Temp -> qcSteamTempC; SteamMode.Time -> qcSteamTimeS },
+                        unit = when (steamMode) { SteamMode.Flow -> "ml/s"; SteamMode.Temp -> "°C"; SteamMode.Time -> "s" },
+                        min = when (steamMode) { SteamMode.Flow -> QcSteam.MIN_FLOW_ML_S; SteamMode.Temp -> QcSteam.MIN_TEMP_C; SteamMode.Time -> QcSteam.MIN_TIME_S },
+                        max = when (steamMode) { SteamMode.Flow -> QcSteam.MAX_FLOW_ML_S; SteamMode.Temp -> QcSteam.MAX_TEMP_C; SteamMode.Time -> QcSteam.MAX_TIME_S },
+                        step = when (steamMode) { SteamMode.Flow -> 0.1; SteamMode.Temp -> 0.5; SteamMode.Time -> 1.0 },
+                        fmt = niceFmt,
+                        chips = when (steamMode) { SteamMode.Flow -> listOf(0.6, 0.9, 1.2, 1.6, 2.0); SteamMode.Temp -> listOf(140.0, 145.0, 148.0, 150.0, 155.0); SteamMode.Time -> listOf(5.0, 10.0, 15.0, 20.0, 30.0) },
+                        onChange = { when (steamMode) { SteamMode.Flow -> onSteamFlow(it); SteamMode.Temp -> onSteamTemp(it); SteamMode.Time -> onSteamTime(it) } },
+                        style = CremaStepperStyle.Boxed,
+                        // Steam temp 0 = heater off (DE1 firmware snaps <135 → 0). The dot on
+                        // the Steam label arms/disarms it and greys the bar; the 135 floor
+                        // keeps the user out of the silent 120–134 snap-to-off band.
+                        enabled = !(steamMode == SteamMode.Temp && qcSteamTempC <= 0.0),
+                        header = {
+                            CremaSplitLabel(
+                                prefix = "Steam",
+                                options = listOf(SplitOption("time", "Time"), SplitOption("flow", "Flow"), SplitOption("temp", "Temp")),
+                                value = steamMode.value, onChange = { steamMode = SteamMode.of(it) },
+                                dot = steamMode == SteamMode.Temp,
+                                dotOn = qcSteamTempC > 0,
+                                onDot = { onSteamTemp(if (qcSteamTempC > 0) 0.0 else QcSteam.DEFAULT_TEMP_C) },
+                            )
+                        },
+                    )
+                },
                 // 5 — Hot water temp | volume.
-                CremaStepper(
-                    modifier = Modifier.weight(1f),
-                    value = if (waterMode == WaterMode.Temp) qcHotWaterTempC else qcHotWaterVolumeMl,
-                    unit = if (waterMode == WaterMode.Temp) "°C" else "ml",
-                    min = if (waterMode == WaterMode.Temp) QcBounds.WATER_TEMP_MIN_C else QcBounds.WATER_VOL_MIN_ML,
-                    max = if (waterMode == WaterMode.Temp) QcBounds.WATER_TEMP_MAX_C else QcBounds.WATER_VOL_MAX_ML,
-                    step = if (waterMode == WaterMode.Temp) 1.0 else 10.0,
-                    fmt = niceFmt,
-                    chips = if (waterMode == WaterMode.Temp) listOf(60.0, 75.0, 85.0, 92.0, 96.0) else listOf(60.0, 120.0, 180.0, 250.0, 350.0),
-                    onChange = { if (waterMode == WaterMode.Temp) onHotWaterTemp(it) else onHotWaterVolume(it) },
-                    style = CremaStepperStyle.Boxed,
-                    header = {
-                        CremaSplitLabel(prefix = "Hot water", options = listOf(SplitOption("temp", "Temp"), SplitOption("volume", "Volume")), value = waterMode.value, onChange = { waterMode = WaterMode.of(it) })
-                    },
-                )
+                { m ->
+                    CremaStepper(
+                        modifier = m,
+                        value = if (waterMode == WaterMode.Temp) qcHotWaterTempC else qcHotWaterVolumeMl,
+                        unit = if (waterMode == WaterMode.Temp) "°C" else "ml",
+                        min = if (waterMode == WaterMode.Temp) QcBounds.WATER_TEMP_MIN_C else QcBounds.WATER_VOL_MIN_ML,
+                        max = if (waterMode == WaterMode.Temp) QcBounds.WATER_TEMP_MAX_C else QcBounds.WATER_VOL_MAX_ML,
+                        step = if (waterMode == WaterMode.Temp) 1.0 else 10.0,
+                        fmt = niceFmt,
+                        chips = if (waterMode == WaterMode.Temp) listOf(60.0, 75.0, 85.0, 92.0, 96.0) else listOf(60.0, 120.0, 180.0, 250.0, 350.0),
+                        onChange = { if (waterMode == WaterMode.Temp) onHotWaterTemp(it) else onHotWaterVolume(it) },
+                        style = CremaStepperStyle.Boxed,
+                        header = {
+                            CremaSplitLabel(prefix = "Hot water", options = listOf(SplitOption("temp", "Temp"), SplitOption("volume", "Volume")), value = waterMode.value, onChange = { waterMode = WaterMode.of(it) })
+                        },
+                    )
+                },
                 // 6 — Flush time | temp.
-                CremaStepper(
-                    modifier = Modifier.weight(1f),
-                    value = if (flushMode == FlushMode.Time) qcFlushTimeS else qcFlushTempC,
-                    unit = if (flushMode == FlushMode.Time) "s" else "°C",
-                    min = if (flushMode == FlushMode.Time) QcBounds.FLUSH_TIME_MIN_S else QcBounds.FLUSH_TEMP_MIN_C,
-                    max = if (flushMode == FlushMode.Time) QcBounds.FLUSH_TIME_MAX_S else QcBounds.FLUSH_TEMP_MAX_C,
-                    step = if (flushMode == FlushMode.Time) 1.0 else 0.5,
-                    fmt = niceFmt,
-                    chips = if (flushMode == FlushMode.Time) listOf(2.0, 4.0, 6.0, 8.0, 10.0) else listOf(88.0, 92.0, 95.0, 97.0, 99.0),
-                    onChange = { if (flushMode == FlushMode.Time) onFlushTime(it) else onFlushTemp(it) },
-                    style = CremaStepperStyle.Boxed,
-                    header = {
-                        CremaSplitLabel(prefix = "Flush", options = listOf(SplitOption("time", "Time"), SplitOption("temp", "Temp")), value = flushMode.value, onChange = { flushMode = FlushMode.of(it) })
-                    },
-                )
+                { m ->
+                    CremaStepper(
+                        modifier = m,
+                        value = if (flushMode == FlushMode.Time) qcFlushTimeS else qcFlushTempC,
+                        unit = if (flushMode == FlushMode.Time) "s" else "°C",
+                        min = if (flushMode == FlushMode.Time) QcBounds.FLUSH_TIME_MIN_S else QcBounds.FLUSH_TEMP_MIN_C,
+                        max = if (flushMode == FlushMode.Time) QcBounds.FLUSH_TIME_MAX_S else QcBounds.FLUSH_TEMP_MAX_C,
+                        step = if (flushMode == FlushMode.Time) 1.0 else 0.5,
+                        fmt = niceFmt,
+                        chips = if (flushMode == FlushMode.Time) listOf(2.0, 4.0, 6.0, 8.0, 10.0) else listOf(88.0, 92.0, 95.0, 97.0, 99.0),
+                        onChange = { if (flushMode == FlushMode.Time) onFlushTime(it) else onFlushTemp(it) },
+                        style = CremaStepperStyle.Boxed,
+                        header = {
+                            CremaSplitLabel(prefix = "Flush", options = listOf(SplitOption("time", "Time"), SplitOption("temp", "Temp")), value = flushMode.value, onChange = { flushMode = FlushMode.of(it) })
+                        },
+                    )
+                },
+            )
+            BoxWithConstraints(Modifier.fillMaxWidth().padding(top = 4.dp)) {
+                val perRow = when {
+                    maxWidth >= 1140.dp -> 6   // 10" tablet: original single row
+                    maxWidth >= 600.dp -> 3    // 7" landscape: two rows of three
+                    else -> 2                  // 7" portrait / phone: three rows of two
+                }
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    steppers.chunked(perRow).forEach { rowItems ->
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            rowItems.forEach { it(Modifier.weight(1f)) }
+                        }
+                    }
+                }
             }
 
             // ── Footer — Chart channel toggles (left) and Shot-behaviour toggles
