@@ -440,7 +440,7 @@ private fun SegmentRowFull(
                 CremaStepper(value = seg.time.toDouble(), unit = "s", step = 0.5, min = 0.0, max = bounds.maxFrameSeconds.toDouble(), onChange = { onEdit(seg.copy(time = it.toFloat())) }, style = CremaStepperStyle.BoxedDense)
             }
             SegCell(1.15f) {
-                CremaSplitLabel(prefix = "Temp", options = listOf(SplitOption("coffee", "Coffee"), SplitOption("water", "Water")), value = seg.tempSensor ?: "coffee", onChange = { onEdit(seg.copy(tempSensor = it)) })
+                CremaSplitLabel(prefix = "Temp", icon = "thermometer", options = listOf(SplitOption("coffee", "Coffee", icon = "coffee"), SplitOption("water", "Water", icon = "drop")), value = seg.tempSensor ?: "coffee", onChange = { onEdit(seg.copy(tempSensor = it)) })
                 CremaStepper(value = (seg.temp ?: 93f).toDouble(), unit = "°C", step = 0.5, min = 20.0, max = bounds.maxTemperatureC.toDouble(), onChange = { onEdit(seg.copy(temp = it.toFloat())) }, style = CremaStepperStyle.BoxedDense)
             }
             SegCell(1f) {
@@ -450,10 +450,11 @@ private fun SegmentRowFull(
             SegCell(1.5f) {
                 CremaSplitLabel(
                     prefix = "Exit",
+                    icon = "sign-out",
                     dot = true,
                     dotOn = exitOn,
                     onDot = { onEdit(seg.copy(exit = if (exitOn) null else SegmentExit("flow", "over", 4f))) },
-                    options = listOf(SplitOption("pressure", "Pressure"), SplitOption("flow", "Flow")),
+                    options = listOf(SplitOption("pressure", "Pressure", icon = "gauge"), SplitOption("flow", "Flow", icon = "drop")),
                     value = exView.metric ?: "flow",
                     onChange = { m -> if (exitOn) onEdit(seg.copy(exit = seg.exit?.copy(metric = m))) },
                 )

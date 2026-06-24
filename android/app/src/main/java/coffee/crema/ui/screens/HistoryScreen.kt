@@ -300,7 +300,11 @@ fun HistoryScreen(
                     horizontalArrangement = Arrangement.spacedBy(16.dp),
                 ) {
                     LazyColumn(
-                        modifier = Modifier.width(480.dp).fillMaxHeight(),
+                        // Narrow 7" tablet: a slimmer shot list leaves the detail
+                        // panel (7-metric row + chart) a usable width; 10" keeps 480.
+                        modifier = Modifier
+                            .width(if (androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 1100) 320.dp else 480.dp)
+                            .fillMaxHeight(),
                         verticalArrangement = Arrangement.spacedBy(2.dp),
                         contentPadding = PaddingValues(top = 4.dp, bottom = 12.dp),
                     ) {
