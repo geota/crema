@@ -20,6 +20,8 @@ import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -232,8 +234,15 @@ fun BeansScreen(
             // pinned right. IntrinsicSize.Min lets the divider stretch the row height
             // (PWA .bn-tabs-divider: align-self: stretch); group labels sit centered.
             if (tab == "bags") {
+                // Wide: one row, sort pinned right. Narrow 7"/portrait: the Status +
+                // Roast chip groups + sort overflow, so the row scrolls horizontally
+                // (the sort travels with it) instead of clipping the chip labels.
+                val narrowBar = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 840
+                val filterScroll = rememberScrollState()
                 Row(
-                    Modifier.fillMaxWidth().height(IntrinsicSize.Min).padding(start = 24.dp, end = 24.dp, bottom = 8.dp),
+                    Modifier.fillMaxWidth().height(IntrinsicSize.Min)
+                        .then(if (narrowBar) Modifier.horizontalScroll(filterScroll) else Modifier)
+                        .padding(start = 24.dp, end = 24.dp, bottom = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
@@ -247,7 +256,9 @@ fun BeansScreen(
                     listOf("light" to "Light", "medium" to "Medium", "dark" to "Dark").forEach { (id, label) ->
                         CremaFilterChip(label = label, selected = beanFilter == id, count = counts[id] ?: 0, onClick = { beanFilter = id })
                     }
-                    Spacer(Modifier.weight(1f))
+                    // weight(1f) can't live inside a horizontalScroll; at narrow the
+                    // sort just trails the chips (reachable by scrolling).
+                    if (narrowBar) Spacer(Modifier.width(12.dp)) else Spacer(Modifier.weight(1f))
                     CremaSortControl(
                         keys = listOf(
                             SortKey("freshest", "Freshest", "clock"),

@@ -15,6 +15,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -407,18 +409,25 @@ private fun StatsStrip(history: List<StoredShot>, weightUnit: String) {
     // matching the web (PWA): count, total + average weight, then the three
     // averages (ratio / time / rating). The phone shows just the three averages.
     val s = historyStats(history)
+    // 6 tiles fill the width on a wide tablet; on a narrow 7"/portrait one they'd
+    // each be too thin (labels + values clip), so they take a readable fixed width
+    // and the strip scrolls horizontally instead.
+    val narrow = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 840
+    val scroll = rememberScrollState()
     Row(
-        Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 4.dp),
+        Modifier.fillMaxWidth()
+            .then(if (narrow) Modifier.horizontalScroll(scroll) else Modifier)
+            .padding(horizontal = 24.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         val totalWt = convertWeight(s.totalWeightG?.toFloat(), weightUnit)
         val avgWt = convertWeight(s.avgWeightG?.toFloat(), weightUnit)
-        StatTile("Shots", "${s.shots}", "shots", Modifier.weight(1f))
-        StatTile("Weight", totalWt.value, s.totalWeightG?.let { totalWt.unit }, Modifier.weight(1f))
-        StatTile("Avg weight", avgWt.value, s.avgWeightG?.let { avgWt.unit }, Modifier.weight(1f))
-        StatTile("Avg ratio", s.avgRatio?.let { "1:%.1f".format(it) } ?: "—", null, Modifier.weight(1f))
-        StatTile("Avg time", s.avgTimeS?.let { "%.0f".format(it) } ?: "—", s.avgTimeS?.let { "s" }, Modifier.weight(1f))
-        StatTile("Avg rating", s.avgRating?.let { "%.1f".format(it) } ?: "—", null, Modifier.weight(1f))
+        StatTile("Shots", "${s.shots}", "shots", if (narrow) Modifier.width(132.dp) else Modifier.weight(1f))
+        StatTile("Weight", totalWt.value, s.totalWeightG?.let { totalWt.unit }, if (narrow) Modifier.width(132.dp) else Modifier.weight(1f))
+        StatTile("Avg weight", avgWt.value, s.avgWeightG?.let { avgWt.unit }, if (narrow) Modifier.width(132.dp) else Modifier.weight(1f))
+        StatTile("Avg ratio", s.avgRatio?.let { "1:%.1f".format(it) } ?: "—", null, if (narrow) Modifier.width(132.dp) else Modifier.weight(1f))
+        StatTile("Avg time", s.avgTimeS?.let { "%.0f".format(it) } ?: "—", s.avgTimeS?.let { "s" }, if (narrow) Modifier.width(132.dp) else Modifier.weight(1f))
+        StatTile("Avg rating", s.avgRating?.let { "%.1f".format(it) } ?: "—", null, if (narrow) Modifier.width(132.dp) else Modifier.weight(1f))
     }
 }
 
