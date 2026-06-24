@@ -70,6 +70,8 @@ import coffee.crema.beans.roastBand
 import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager
 import coffee.crema.core.Bean
+import coffee.crema.core.ExitMetric
+import coffee.crema.core.MachineState
 import coffee.crema.core.MaintenanceReadout
 import coffee.crema.core.Roaster
 import coffee.crema.profiles.CremaProfile
@@ -118,7 +120,7 @@ fun BrewScreen(
     val active = ui.activeProfile()
     val activeBean = ui.beans.firstOrNull { it.id == ui.activeBeanId }
     val running = ui.shotInProgress
-    val espressoActive = ui.machineStateName == "Espresso"
+    val espressoActive = ui.machineStateName == MachineState.Espresso
     var quickOpen by remember { mutableStateOf(false) }
     // Maintenance categories the user dismissed *this session* (per-category,
     // re-shown on relaunch). Lets the slim banner be cleared so the chart gets
@@ -244,9 +246,9 @@ fun BrewScreen(
                 connected = connected,
                 scaleConnected = scaleConnected,
                 espressoActive = espressoActive,
-                onPower = { if (ui.machineStateName == "Sleep") vm.wake() else vm.sleep() },
-                onSteam = { if (ui.machineStateName == "Steam") vm.stopShot() else vm.steam() },
-                onHotWater = { if (ui.machineStateName == "HotWater") vm.stopShot() else vm.hotWater() },
+                onPower = { if (ui.machineStateName == MachineState.Sleep) vm.wake() else vm.sleep() },
+                onSteam = { if (ui.machineStateName == MachineState.Steam) vm.stopShot() else vm.steam() },
+                onHotWater = { if (ui.machineStateName == MachineState.HotWater) vm.stopShot() else vm.hotWater() },
                 onFlush = vm::flush,
                 // Gated start: upload the active profile, await completion, guard,
                 // then Espresso (vm.startShot). Stop is a direct Idle request.
@@ -1144,10 +1146,8 @@ private fun PhaseRow(seg: coffee.crema.profiles.ProfileSegment, isActive: Boolea
         // Early-exit metric icon (channel-coloured), when the frame can exit early.
         seg.exit?.metric?.let { metric ->
             val (icon, color) = when (metric) {
-                "pressure" -> "gauge" to tel.pressure
-                "flow", "volume" -> "drop" to tel.flow
-                "weight" -> "scales" to tel.weight
-                else -> "timer" to MaterialTheme.colorScheme.onSurfaceVariant
+                ExitMetric.Pressure -> "gauge" to tel.pressure
+                ExitMetric.Flow -> "drop" to tel.flow
             }
             PhIcon(icon, sizeDp = 14, tint = color)
         }
@@ -1416,7 +1416,7 @@ private fun BrewFoot(
         ) {
             // Left meta cluster.
             Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                PowerButton(connected = connected, asleep = ui.machineStateName == "Sleep", onClick = onPower)
+                PowerButton(connected = connected, asleep = ui.machineStateName == MachineState.Sleep, onClick = onPower)
                 FootMeta("Machine", ui.machineState ?: "—")
                 FootDivider()
                 FootMeta("Scale", if (scaleConnected) (ui.scaleName ?: "Scale") else "—")
@@ -1427,8 +1427,8 @@ private fun BrewFoot(
             }
             // Right actions.
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ModeChip("Steam", "148 °C · 90 s", "cloud", CremaTheme.telemetry.modeSteam, active = ui.machineStateName == "Steam", enabled = connected, onTap = onSteam)
-                ModeChip("Hot water", "90 °C · 250 ml", "drop", CremaTheme.telemetry.modeWater, active = ui.machineStateName == "HotWater", enabled = connected, onTap = onHotWater)
+                ModeChip("Steam", "148 °C · 90 s", "cloud", CremaTheme.telemetry.modeSteam, active = ui.machineStateName == MachineState.Steam, enabled = connected, onTap = onSteam)
+                ModeChip("Hot water", "90 °C · 250 ml", "drop", CremaTheme.telemetry.modeWater, active = ui.machineStateName == MachineState.HotWater, enabled = connected, onTap = onHotWater)
                 ModeChip("Flush", "91 °C · 4 s", "sparkle", CremaTheme.telemetry.modeFlush, active = false, enabled = connected, onTap = onFlush)
                 CoffeeButton(running = espressoActive, uploading = ui.profileUploading, enabled = connected, onClick = onCoffee)
             }

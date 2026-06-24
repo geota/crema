@@ -89,6 +89,7 @@ import coffee.crema.profiles.PinnedProfileStore
 import coffee.crema.profiles.setProfilePinnedJson
 import coffee.crema.profiles.brewDefaultsJson
 import coffee.crema.profiles.duplicatedCustomProfileJson
+import coffee.crema.core.MachineState
 import coffee.crema.profiles.patchCremaProfileJson
 import coffee.crema.profiles.overrideBrewParamsJson
 import coffee.crema.profiles.quickPresetJson
@@ -298,7 +299,7 @@ data class MainUiState(
      */
     val shotTelemetry: List<TelemetrySample> = emptyList(),
     /** Raw machine-state name (e.g. `"Espresso"`) for `==` comparisons, or null. */
-    val machineStateName: String? = null,
+    val machineStateName: MachineState? = null,
     /** Raw machine-substate name (e.g. `"Pouring"`), or null. */
     val machineSubstate: String? = null,
     /** Human-readable message when the current substate is an *error* (e.g.
@@ -666,7 +667,14 @@ data class MainUiState(
  */
 class MainViewModel(app: Application) : AndroidViewModel(app) {
 
-    private val json = Json { ignoreUnknownKeys = true }
+    // coerceInputValues: an unknown enum string (e.g. an out-of-contract profile
+    // `mode`/`metric` or a version-skewed peer frame) coerces to the property
+    // default (null) rather than throwing — preserves the lenient profile decode
+    // after the mode/ramp/metric/compare fields became typed enums.
+    private val json = Json {
+        ignoreUnknownKeys = true
+        coerceInputValues = true
+    }
 
     /** The Rust core, behind the UniFFI bridge. */
     private val bridge: CremaBridge = CremaBridge()
@@ -2352,7 +2360,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  relay down. Throwing here becomes a `ControlErr` → the taker stays put. */
     private fun grantHandoff() {
         val state = _ui.value.machineStateName
-        require(state in handoffIdleStates) { "machine not idle (${state ?: "unknown"}) — handoff is idle-only" }
+        require(state?.string in handoffIdleStates) { "machine not idle (${state?.string ?: "unknown"}) — handoff is idle-only" }
         appendLog("Handoff granted — releasing the DE1")
         viewModelScope.launch {
             kotlinx.coroutines.delay(400) // let this grant (ControlOk) flush before the relay tears down
@@ -4597,7 +4605,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 val c = event.content
                 _ui.update { it.copy(
                     machineState = "${c.state.string} / ${c.substate.string}",
-                    machineStateName = c.state.string,
+                    machineStateName = c.state,
                     machineSubstate = c.substate.string,
                     // Readable error copy for an error substate (null otherwise),
                     // from core so it matches web. Healthy substates clear it.

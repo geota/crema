@@ -22,10 +22,17 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coffee.crema.core.Compare
+import coffee.crema.core.ExitMetric
+import coffee.crema.core.Pump
+import coffee.crema.core.Transition
 import coffee.crema.profiles.ProfileBounds
 import coffee.crema.profiles.SegmentEdit
 import coffee.crema.profiles.SegmentExit
+import coffee.crema.profiles.exitMetricFromWire
 import coffee.crema.profiles.isPressure
+import coffee.crema.profiles.pumpFromWire
+import coffee.crema.profiles.transitionFromWire
 import coffee.crema.profiles.limiterUnit
 import coffee.crema.profiles.targetUnit
 import coffee.crema.profiles.toEdit
@@ -235,8 +242,8 @@ fun PhoneProfileEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                         segs.add(
                             SegmentEdit(
                                 name = "Phase ${segs.size + 1}",
-                                mode = "pressure",
-                                ramp = "smooth",
+                                mode = Pump.Pressure,
+                                ramp = Transition.Smooth,
                                 target = 9.0f,
                                 time = 10f,
                                 temp = brewTemp.toFloat(),
@@ -288,7 +295,7 @@ private fun PhaseRow(
         append(if (isPressure) "Pressure" else "Flow")
         append(" · %.1f %s · %.0fs".format(seg.target, tUnit, seg.time))
         seg.exit?.metric?.let { m ->
-            append(" · exit $m ${if (seg.exit?.compare == "under") "<" else ">"} ${"%.1f".format(seg.exit?.threshold ?: 0f)}")
+            append(" · exit ${m.string} ${if (seg.exit?.compare == Compare.Under) "<" else ">"} ${"%.1f".format(seg.exit?.threshold ?: 0f)}")
         }
     }
 
@@ -337,8 +344,8 @@ private fun PhaseRow(
             FieldRow("Type") {
                 CremaSegmentedButton(
                     options = listOf(SegOption("pressure", "Pressure"), SegOption("flow", "Flow")),
-                    value = seg.mode ?: "pressure",
-                    onChange = { onChange(seg.copy(mode = it)) },
+                    value = (seg.mode ?: Pump.Pressure).string,
+                    onChange = { onChange(seg.copy(mode = pumpFromWire(it))) },
                     compact = true,
                     modifier = Modifier.width(SegmentPillWidth),
                 )
@@ -346,8 +353,8 @@ private fun PhaseRow(
             FieldRow("Transition") {
                 CremaSegmentedButton(
                     options = listOf(SegOption("smooth", "Smooth"), SegOption("fast", "Fast")),
-                    value = seg.ramp ?: "smooth",
-                    onChange = { onChange(seg.copy(ramp = it)) },
+                    value = (seg.ramp ?: Transition.Smooth).string,
+                    onChange = { onChange(seg.copy(ramp = transitionFromWire(it))) },
                     compact = true,
                     modifier = Modifier.width(SegmentPillWidth),
                 )
@@ -402,29 +409,29 @@ private fun PhaseRow(
                     onChange(
                         seg.copy(
                             exit = if (seg.exit == null) {
-                                SegmentExit(metric = if (isPressure) "flow" else "pressure", compare = "over", threshold = 1.5f)
+                                SegmentExit(metric = if (isPressure) ExitMetric.Flow else ExitMetric.Pressure, compare = Compare.Over, threshold = 1.5f)
                             } else null,
                         ),
                     )
                 },
             ) {
-                val exit = seg.exit ?: SegmentExit("flow", "over", 1.5f)
+                val exit = seg.exit ?: SegmentExit(ExitMetric.Flow, Compare.Over, 1.5f)
                 // Over/under renders as a tappable >/< INSIDE the threshold field (issue 50 —
                 // matching the tablet + PWA), so the metric selector + value share one row.
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     CremaSegmentedButton(
                         options = listOf(SegOption("pressure", "Pressure"), SegOption("flow", "Flow")),
-                        value = exit.metric ?: "flow",
-                        onChange = { onChange(seg.copy(exit = exit.copy(metric = it))) },
+                        value = (exit.metric ?: ExitMetric.Flow).string,
+                        onChange = { onChange(seg.copy(exit = exit.copy(metric = exitMetricFromWire(it)))) },
                         compact = true,
                         modifier = Modifier.width(SegmentPillWidth),
                     )
                     CremaStepper(
                         value = (exit.threshold ?: 1.5f).toDouble(), unit = null, step = 0.1, min = 0.0,
-                        max = if (exit.metric == "pressure") bounds.maxPressureBar.toDouble() else bounds.maxFlowMlPerS.toDouble(),
+                        max = if (exit.metric == ExitMetric.Pressure) bounds.maxPressureBar.toDouble() else bounds.maxFlowMlPerS.toDouble(),
                         fmt = { "%.1f".format(it) }, style = CremaStepperStyle.BareCompact,
-                        compareSymbol = if ((exit.compare ?: "over") == "over") ">" else "<",
-                        onCompare = { onChange(seg.copy(exit = exit.copy(compare = if ((exit.compare ?: "over") == "over") "under" else "over"))) },
+                        compareSymbol = if ((exit.compare ?: Compare.Over) == Compare.Over) ">" else "<",
+                        onCompare = { onChange(seg.copy(exit = exit.copy(compare = if ((exit.compare ?: Compare.Over) == Compare.Over) Compare.Under else Compare.Over))) },
                         onChange = { onChange(seg.copy(exit = exit.copy(threshold = it.toFloat()))) },
                     )
                 }

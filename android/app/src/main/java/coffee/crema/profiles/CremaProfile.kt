@@ -1,5 +1,9 @@
 package coffee.crema.profiles
 
+import coffee.crema.core.Compare
+import coffee.crema.core.ExitMetric
+import coffee.crema.core.Pump
+import coffee.crema.core.Transition
 import coffee.crema.core.brewRatio
 import kotlinx.serialization.Serializable
 
@@ -72,13 +76,13 @@ data class ProfileSegment(
     /** Human-readable segment name. */
     val name: String = "",
     /** Pressure- or flow-priority — `"pressure"` | `"flow"` (wire `Pump`). */
-    val mode: String? = null,
+    val mode: Pump? = null,
     /** Target value — bar (pressure) or ml/s (flow), per [mode]. Drives the
      *  profile-card curve preview. */
     val target: Float = 0f,
     /** How the segment ramps to its target — `"smooth"` (cubic ease) | `"fast"`
      *  (near-vertical step). Drives the sampled curve shape (web `sampleCurve`). */
-    val ramp: String? = null,
+    val ramp: Transition? = null,
     /** Segment duration, seconds (float — the DE1 carries 0.1 s frames). */
     val time: Float = 0f,
     /** Target temperature, °C — drives the preview's stepped temperature line. */
@@ -101,9 +105,9 @@ data class ProfileSegment(
 @Serializable
 data class SegmentExit(
     /** `"pressure"` | `"flow"` — the only v2 wire exit metrics — or null. */
-    val metric: String? = null,
+    val metric: ExitMetric? = null,
     /** `"over"` | `"under"` — exit when the metric rises above / falls below [threshold]. */
-    val compare: String? = null,
+    val compare: Compare? = null,
     /** Threshold value — bar (pressure) or ml/s (flow), per [metric]. */
     val threshold: Float? = null,
 )

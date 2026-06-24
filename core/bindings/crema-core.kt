@@ -1258,6 +1258,31 @@ data class WireShot (
 	val tag_list: List<String>? = null
 )
 
+/// What kind of beverage a profile produces. Mirrors reaprime's
+/// `BeverageType` enum and the community v2 JSON contract's
+/// `beverage_type` field. Defaults to `Espresso` on import — both
+/// reaprime and Crema fall back lenient here (not strict) because the
+/// field is metadata, not execution.
+@Serializable
+enum class BeverageType(val string: String) {
+	/// Standard espresso shot. The default for absent / unknown values.
+	@SerialName("espresso")
+	Espresso("espresso"),
+	/// A calibration routine (flow / pressure cal profiles).
+	@SerialName("calibrate")
+	Calibrate("calibrate"),
+	/// A cleaning / backflush routine.
+	@SerialName("cleaning")
+	Cleaning("cleaning"),
+	/// Hand-controlled (manual) profile — the firmware honours user
+	/// adjustments mid-shot.
+	@SerialName("manual")
+	Manual("manual"),
+	/// Pour-over style profile (long, low-pressure).
+	@SerialName("pourover")
+	Pourover("pourover"),
+}
+
 /// What a calibration packet asks the DE1 to do.
 /// 
 /// `#[non_exhaustive]` so any future firmware-side calibration verb can
@@ -1291,6 +1316,30 @@ enum class CalTarget(val string: String) {
 	/// The temperature sensor.
 	@SerialName("Temperature")
 	Temperature("Temperature"),
+}
+
+/// The direction of an exit comparison. Lowercase wire spelling
+/// (`"over"` / `"under"`) per the v2 contract.
+@Serializable
+enum class Compare(val string: String) {
+	/// Exit when the metric rises above the threshold.
+	@SerialName("over")
+	Over("over"),
+	/// Exit when the metric falls below the threshold.
+	@SerialName("under")
+	Under("under"),
+}
+
+/// The metric an exit condition watches. Lowercase wire spelling
+/// (`"pressure"` / `"flow"`) per the v2 contract.
+@Serializable
+enum class ExitMetric(val string: String) {
+	/// Watch pressure (bar).
+	@SerialName("pressure")
+	Pressure("pressure"),
+	/// Watch flow (ml/s).
+	@SerialName("flow")
+	Flow("flow"),
 }
 
 /// Generated type representing the anonymous struct variant `UpToDate` of the `FirmwareUpdateStatus` Rust enum
@@ -1576,6 +1625,18 @@ sealed class ProfileUploadFailure {
 	data class Internal(val details: ProfileUploadFailureInternalInner): ProfileUploadFailure()
 }
 
+/// Which quantity a step holds at its target. Serializes as lowercase
+/// (`"pressure"` / `"flow"`) to match the community v2 JSON contract.
+@Serializable
+enum class Pump(val string: String) {
+	/// Pressure priority — the step targets a pressure in bar.
+	@SerialName("pressure")
+	Pressure("pressure"),
+	/// Flow priority — the step targets a flow rate in ml/s.
+	@SerialName("flow")
+	Flow("flow"),
+}
+
 /// Where an espresso shot is in its lifecycle.
 /// 
 /// `#[non_exhaustive]` so additional phases (e.g. a future post-shot
@@ -1733,6 +1794,38 @@ enum class SubState(val string: String) {
 	/// Front power switch is off.
 	@SerialName("ErrorNoAc")
 	ErrorNoAc("ErrorNoAc"),
+}
+
+/// Which temperature a step regulates. Variant names match the community
+/// v2 JSON contract used by the legacy de1app TCL + reaprime. The enum
+/// describes "what the step's temperature target represents," not which
+/// sensor it reads:
+/// - `Coffee` — regulate temperature of the coffee at the basket; the
+/// firmware holds `head_temp` to the step's target.
+/// - `Water` — regulate temperature of the water exiting the group; the
+/// firmware holds `mix_temp` to the step's target. Flips the
+/// wire-format `target_mix_temp` flag bit on each frame.
+@Serializable
+enum class TempSensor(val string: String) {
+	/// Regulate temperature of the coffee at the basket.
+	@SerialName("coffee")
+	Coffee("coffee"),
+	/// Regulate temperature of the water exiting the group.
+	@SerialName("water")
+	Water("water"),
+}
+
+/// How a step moves to its target value. Serializes as lowercase
+/// `"fast"` / `"smooth"` to match the community v2 profile JSON contract
+/// shared with the legacy de1app TCL and reaprime.
+@Serializable
+enum class Transition(val string: String) {
+	/// Jump straight to the target.
+	@SerialName("fast")
+	Fast("fast"),
+	/// Ramp smoothly to the target.
+	@SerialName("smooth")
+	Smooth("smooth"),
 }
 
 /// Which kind of water-dispensing session the DE1 is running.

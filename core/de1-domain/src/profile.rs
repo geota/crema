@@ -3,6 +3,7 @@
 use de1_protocol::{
     ExtensionFrame, FrameFlags, SHOT_FRAME_LEN, SHOT_HEADER_LEN, ShotFrame, ShotHeader, ShotTail,
 };
+use typeshare::typeshare;
 
 use crate::error::DomainError;
 
@@ -11,6 +12,7 @@ const MAX_STEPS: usize = 32;
 
 /// Which quantity a step holds at its target. Serializes as lowercase
 /// (`"pressure"` / `"flow"`) to match the community v2 JSON contract.
+#[typeshare]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Pump {
@@ -23,6 +25,7 @@ pub enum Pump {
 /// How a step moves to its target value. Serializes as lowercase
 /// `"fast"` / `"smooth"` to match the community v2 profile JSON contract
 /// shared with the legacy de1app TCL and reaprime.
+#[typeshare]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Transition {
@@ -41,6 +44,7 @@ pub enum Transition {
 /// - `Water` — regulate temperature of the water exiting the group; the
 ///   firmware holds `mix_temp` to the step's target. Flips the
 ///   wire-format `target_mix_temp` flag bit on each frame.
+#[typeshare]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TempSensor {
@@ -55,6 +59,7 @@ pub enum TempSensor {
 /// `beverage_type` field. Defaults to `Espresso` on import — both
 /// reaprime and Crema fall back lenient here (not strict) because the
 /// field is metadata, not execution.
+#[typeshare]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum BeverageType {
@@ -74,6 +79,7 @@ pub enum BeverageType {
 
 /// The metric an exit condition watches. Lowercase wire spelling
 /// (`"pressure"` / `"flow"`) per the v2 contract.
+#[typeshare]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ExitMetric {
@@ -85,6 +91,7 @@ pub enum ExitMetric {
 
 /// The direction of an exit comparison. Lowercase wire spelling
 /// (`"over"` / `"under"`) per the v2 contract.
+#[typeshare]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Compare {

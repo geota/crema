@@ -18,6 +18,7 @@ import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coffee.crema.core.Transition
 import coffee.crema.profiles.ProfileSegment
 import coffee.crema.ui.theme.CremaTheme
 import coffee.crema.ui.theme.JetBrainsMono
@@ -61,7 +62,7 @@ private fun sampleCurve(
     var prev = 0f
     for (s in segments) {
         val target = damp?.invoke(s.target) ?: s.target
-        if (s.ramp == "fast") {
+        if (s.ramp == Transition.Fast) {
             time.add(t + STEP_EPS); value.add(target)
             time.add(t + s.time); value.add(target)
         } else {

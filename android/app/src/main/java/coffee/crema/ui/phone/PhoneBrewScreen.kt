@@ -39,6 +39,9 @@ import coffee.crema.ui.formatTemp
 import coffee.crema.ui.formatWeight
 import coffee.crema.ble.De1BleManager
 import coffee.crema.ble.ScaleBleManager
+import coffee.crema.core.MachineState
+import coffee.crema.core.Pump
+import coffee.crema.core.Transition
 import coffee.crema.profiles.CremaProfile
 import coffee.crema.profiles.rankProfilesForPicker
 import coffee.crema.beans.rankBeansForPicker
@@ -80,7 +83,7 @@ fun PhoneBrewScreen(
     val active = ui.activeProfile()
     val activeBean = ui.beans.firstOrNull { it.id == ui.activeBeanId }
     val running = ui.shotInProgress
-    val espressoActive = ui.machineStateName == "Espresso"
+    val espressoActive = ui.machineStateName == MachineState.Espresso
 
     var quickOpen by remember { mutableStateOf(false) }
     var devicesOpen by remember { mutableStateOf(false) }
@@ -146,8 +149,8 @@ fun PhoneBrewScreen(
             ModeCluster(
                 ui = ui,
                 connected = connected,
-                onSteam = { if (ui.machineStateName == "Steam") vm.stopShot() else vm.steam() },
-                onWater = { if (ui.machineStateName == "HotWater") vm.stopShot() else vm.hotWater() },
+                onSteam = { if (ui.machineStateName == MachineState.Steam) vm.stopShot() else vm.steam() },
+                onWater = { if (ui.machineStateName == MachineState.HotWater) vm.stopShot() else vm.hotWater() },
                 onFlush = vm::flush,
             )
             CoffeeCta(
@@ -201,10 +204,10 @@ fun PhoneBrewScreen(
                 add(SheetItem(divider = true))
                 add(
                     SheetItem(
-                        if (ui.machineStateName == "Sleep") "sun" else "moon",
-                        if (ui.machineStateName == "Sleep") "Wake machine" else "Sleep machine",
+                        if (ui.machineStateName == MachineState.Sleep) "sun" else "moon",
+                        if (ui.machineStateName == MachineState.Sleep) "Wake machine" else "Sleep machine",
                         sub = if (connected) null else "Connect the DE1 first",
-                    ) { if (connected) { if (ui.machineStateName == "Sleep") vm.wake() else vm.sleep() } },
+                    ) { if (connected) { if (ui.machineStateName == MachineState.Sleep) vm.wake() else vm.sleep() } },
                 )
             },
             onDismiss = { menuOpen = false },
@@ -422,14 +425,14 @@ private fun MiniProfileSpark(profile: CremaProfile, active: Boolean, modifier: M
         var t = 0f
         var lastY = size.height * 0.95f
         segs.forEach { s ->
-            val isFlow = s.mode == "flow"
+            val isFlow = s.mode == Pump.Flow
             val x0 = (t / total) * size.width
             t += s.time
             val x1 = (t / total) * size.width
             val y = yOf(s.target)
             val path = Path()
             path.moveTo(x0, lastY)
-            if (s.ramp == "fast") {
+            if (s.ramp == Transition.Fast) {
                 path.lineTo(x0, y)
             } else {
                 // Quick ease into the new level over the first ~20% of the phase.
@@ -676,8 +679,8 @@ private fun RestingBody(
                 verticalArrangement = Arrangement.spacedBy(11.dp),
             ) {
                 // Badge + group temp.
-                val asleep = ui.machineStateName == "Sleep"
-                val heating = ui.machineStateName == "Heating" || ui.machineSubstate == "Heating"
+                val asleep = ui.machineStateName == MachineState.Sleep
+                val heating = ui.machineSubstate == "Heating"
                 val (badge, badgeColor) = when {
                     !connected -> "Not connected" to MaterialTheme.colorScheme.onSurfaceVariant
                     asleep -> "Asleep — tap Coffee to wake" to MaterialTheme.colorScheme.onSurfaceVariant
@@ -751,7 +754,7 @@ private fun RestingBody(
                     }
                 }
                 // 4-up param strip.
-                val peakBar = active?.segments?.filter { it.mode != "flow" }?.maxOfOrNull { it.target }
+                val peakBar = active?.segments?.filter { it.mode != Pump.Flow }?.maxOfOrNull { it.target }
                 val estTime = active?.segments?.sumOf { it.time.toDouble() }?.toInt()
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     val readyTemp = convertTemp(ui.effectiveBrew().brewTemp.toFloat(), ui.tempUnit)
@@ -978,12 +981,12 @@ private fun ModeCluster(
         ModePill(
             "Steam", ui.steamTemp?.let { "%.0f° · 90s".format(it) } ?: "148° · 90s",
             "cloud", tel.modeSteam,
-            active = ui.machineStateName == "Steam",
+            active = ui.machineStateName == MachineState.Steam,
             enabled = connected, onTap = onSteam, modifier = Modifier.weight(1f),
         )
         ModePill(
             "Water", "250ml · 90°", "drop", tel.modeWater,
-            active = ui.machineStateName == "HotWater",
+            active = ui.machineStateName == MachineState.HotWater,
             enabled = connected, onTap = onWater, modifier = Modifier.weight(1f),
         )
         ModePill(

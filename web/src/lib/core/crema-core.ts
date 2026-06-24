@@ -1287,6 +1287,29 @@ export interface WireShot {
 }
 
 /**
+ * What kind of beverage a profile produces. Mirrors reaprime's
+ * `BeverageType` enum and the community v2 JSON contract's
+ * `beverage_type` field. Defaults to `Espresso` on import — both
+ * reaprime and Crema fall back lenient here (not strict) because the
+ * field is metadata, not execution.
+ */
+export enum BeverageType {
+	/** Standard espresso shot. The default for absent / unknown values. */
+	Espresso = "espresso",
+	/** A calibration routine (flow / pressure cal profiles). */
+	Calibrate = "calibrate",
+	/** A cleaning / backflush routine. */
+	Cleaning = "cleaning",
+	/**
+	 * Hand-controlled (manual) profile — the firmware honours user
+	 * adjustments mid-shot.
+	 */
+	Manual = "manual",
+	/** Pour-over style profile (long, low-pressure). */
+	Pourover = "pourover",
+}
+
+/**
  * What a calibration packet asks the DE1 to do.
  * 
  * `#[non_exhaustive]` so any future firmware-side calibration verb can
@@ -1312,6 +1335,28 @@ export enum CalTarget {
 	Pressure = "Pressure",
 	/** The temperature sensor. */
 	Temperature = "Temperature",
+}
+
+/**
+ * The direction of an exit comparison. Lowercase wire spelling
+ * (`"over"` / `"under"`) per the v2 contract.
+ */
+export enum Compare {
+	/** Exit when the metric rises above the threshold. */
+	Over = "over",
+	/** Exit when the metric falls below the threshold. */
+	Under = "under",
+}
+
+/**
+ * The metric an exit condition watches. Lowercase wire spelling
+ * (`"pressure"` / `"flow"`) per the v2 contract.
+ */
+export enum ExitMetric {
+	/** Watch pressure (bar). */
+	Pressure = "pressure",
+	/** Watch flow (ml/s). */
+	Flow = "flow",
 }
 
 /**
@@ -1530,6 +1575,17 @@ export type ProfileUploadFailure =
 }};
 
 /**
+ * Which quantity a step holds at its target. Serializes as lowercase
+ * (`"pressure"` / `"flow"`) to match the community v2 JSON contract.
+ */
+export enum Pump {
+	/** Pressure priority — the step targets a pressure in bar. */
+	Pressure = "pressure",
+	/** Flow priority — the step targets a flow rate in ml/s. */
+	Flow = "flow",
+}
+
+/**
  * Where an espresso shot is in its lifecycle.
  * 
  * `#[non_exhaustive]` so additional phases (e.g. a future post-shot
@@ -1641,6 +1697,36 @@ export enum SubState {
 	ErrorBootFill = "ErrorBootFill",
 	/** Front power switch is off. */
 	ErrorNoAc = "ErrorNoAc",
+}
+
+/**
+ * Which temperature a step regulates. Variant names match the community
+ * v2 JSON contract used by the legacy de1app TCL + reaprime. The enum
+ * describes "what the step's temperature target represents," not which
+ * sensor it reads:
+ * - `Coffee` — regulate temperature of the coffee at the basket; the
+ * firmware holds `head_temp` to the step's target.
+ * - `Water` — regulate temperature of the water exiting the group; the
+ * firmware holds `mix_temp` to the step's target. Flips the
+ * wire-format `target_mix_temp` flag bit on each frame.
+ */
+export enum TempSensor {
+	/** Regulate temperature of the coffee at the basket. */
+	Coffee = "coffee",
+	/** Regulate temperature of the water exiting the group. */
+	Water = "water",
+}
+
+/**
+ * How a step moves to its target value. Serializes as lowercase
+ * `"fast"` / `"smooth"` to match the community v2 profile JSON contract
+ * shared with the legacy de1app TCL and reaprime.
+ */
+export enum Transition {
+	/** Jump straight to the target. */
+	Fast = "fast",
+	/** Ramp smoothly to the target. */
+	Smooth = "smooth",
 }
 
 /**
