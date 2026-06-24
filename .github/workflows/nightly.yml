@@ -56,8 +56,8 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install NDK (pinned to ndkVersion in build.gradle.kts)
-        run: sdkmanager "ndk;30.0.14904198"
+      - name: Install NDK + compileSdk platform (pinned to build.gradle.kts)
+        run: sdkmanager "ndk;30.0.14904198" "platforms;android-37.0"
 
       - name: Install Rust toolchain (android target)
         uses: dtolnay/rust-toolchain@stable
