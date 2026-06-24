@@ -49,7 +49,7 @@ val hasDevelopSigning = developKeystoreFile != null &&
 
 android {
     namespace = "coffee.crema"
-    compileSdk = 36
+    compileSdk = 37
     // Pinned to the NDK installed via the SDK Manager ("NDK (Side by side)").
     // AGP's built-in default NDK version differs, so without an explicit pin
     // Gradle looks for a version that isn't installed and fails with
@@ -262,15 +262,15 @@ kotlin {
 }
 
 dependencies {
-    val composeBom = platform("androidx.compose:compose-bom:2026.04.01")
+    val composeBom = platform("androidx.compose:compose-bom:2026.06.00")
     implementation(composeBom)
 
-    implementation("androidx.core:core-ktx:1.15.0")
-    implementation("androidx.activity:activity-compose:1.9.3")
-    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
-    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
+    implementation("androidx.core:core-ktx:1.19.0")
+    implementation("androidx.activity:activity-compose:1.13.0")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.11.0")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.11.0")
     // collectAsStateWithLifecycle — lifecycle-aware Flow collection (pauses at STOPPED).
-    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.11.0")
 
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
@@ -281,7 +281,7 @@ dependencies {
     // system families and the type scale still renders.
     implementation("androidx.compose.ui:ui-text-google-fonts")
     // Navigation for the 6-destination rail + 2 pushed editors (AppNavHost).
-    implementation("androidx.navigation:navigation-compose:2.8.5")
+    implementation("androidx.navigation:navigation-compose:2.9.8")
     // Phosphor icons as Compose ImageVectors — the PhIcon binding in
     // CremaComponents maps each screen's kebab-case glyph name to a regular-weight
     // vector. Pure-Kotlin vector lib (no Compose-compiler version coupling). NOTE:
