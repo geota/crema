@@ -903,8 +903,10 @@ fun SettingsScreen(
                                 "Nordic Kotlin-BLE-Library" to "The BLE stack under the DE1 link",
                                 "UniFFI & JNA" to "Rust core bindings + FFI dispatch",
                                 "Rust, serde, thiserror" to "The shared de1 core",
+                                "Coil" to "Bean bag photo loading",
                                 "phosphor-icon" to "Icon set (Compose ImageVectors)",
                                 "OkHttp" to "Visualizer HTTP client",
+                                "Ktor" to "WebSocket LAN proxy (multi-device)",
                                 "Decent de1app & reaprime" to "Protocol documentation lineage",
                             )
                             libs.forEachIndexed { i, (name, desc) ->
@@ -912,10 +914,13 @@ fun SettingsScreen(
                             }
                         }
                         SetGroup("Legal") {
-                            // The web ships /terms + /privacy in-app; the tablet has no
-                            // hosted equivalents yet — pilled until those pages exist.
-                            CremaSettingsRow("Terms of Service", "License, hardware-risk disclaimer, limitation of liability.", notImplemented = true) { CremaSettingsSelect("Ships with 1.0") }
-                            CremaSettingsRow("Privacy Policy", "Crema is local-only. No analytics, no tracking.", last = true, notImplemented = true) { CremaSettingsSelect("Ships with 1.0") }
+                            // Shared with the web PWA, hosted at crema.maceiras.dev.
+                            CremaSettingsRow("Terms of Service", "License, hardware-risk disclaimer, limitation of liability.") {
+                                CremaButton(onClick = { openLink("https://crema.maceiras.dev/terms") }, variant = CremaButtonVariant.Outlined, icon = "arrow-square-out", label = "Read")
+                            }
+                            CremaSettingsRow("Privacy Policy", "Crema is local-only. No analytics, no tracking.", last = true) {
+                                CremaButton(onClick = { openLink("https://crema.maceiras.dev/privacy") }, variant = CremaButtonVariant.Outlined, icon = "arrow-square-out", label = "Read")
+                            }
                         }
                     }
                 }
