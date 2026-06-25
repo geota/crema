@@ -787,9 +787,7 @@ private fun RestingBody(
                 ) {
                     val ago = remember(last.completedAtMs) {
                         last.completedAtMs.takeIf { it > 0L }?.let {
-                            android.text.format.DateUtils.getRelativeTimeSpanString(
-                                it, System.currentTimeMillis(), android.text.format.DateUtils.MINUTE_IN_MILLIS,
-                            ).toString()
+                            coffee.crema.ui.relativeAgo(it)
                         }
                     }
                     // Header — "Last shot · N ago" over the profile · bean (when known);

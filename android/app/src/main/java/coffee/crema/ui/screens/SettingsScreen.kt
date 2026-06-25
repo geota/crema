@@ -490,7 +490,7 @@ fun SettingsScreen(
                             SetGroup("Sync") {
                                 val unsyncedCount = ui.history.count { it.visualizerId == null }
                                 val lastSyncLabel = vz.lastShotSyncAt?.let {
-                                    android.text.format.DateUtils.getRelativeTimeSpanString(it).toString()
+                                    coffee.crema.ui.relativeAgo(it)
                                 } ?: "never"
                                 CremaSettingsRow(
                                     "Shots",
@@ -1088,7 +1088,7 @@ private fun SyncLogRow(entry: coffee.crema.visualizer.SyncLogEntry, last: Boolea
                 maxLines = 1,
             )
             Text(
-                "${entry.direction} · ${android.text.format.DateUtils.getRelativeTimeSpanString(entry.at)}",
+                "${entry.direction} · ${coffee.crema.ui.relativeAgo(entry.at)}",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
