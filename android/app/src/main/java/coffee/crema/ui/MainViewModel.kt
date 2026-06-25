@@ -1,7 +1,12 @@
 package coffee.crema.ui
 
 import android.app.Application
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothManager
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.os.Build
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -29,6 +34,7 @@ import coffee.crema.core.importBeanconquerorJson
 import coffee.crema.core.exportBackupJsonl
 import coffee.crema.core.exportBeanconquerorMainJson
 import coffee.crema.core.maintenanceReadout
+import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import coffee.crema.beans.BeanImageStore
 import coffee.crema.beans.BeanLibrary
@@ -258,6 +264,10 @@ data class MainUiState(
     val bleState: De1BleManager.State = De1BleManager.State.IDLE,
     /** Coarse state of the scale connection. */
     val scaleState: ScaleBleManager.State = ScaleBleManager.State.IDLE,
+    /** Whether the phone's Bluetooth adapter is on. Drives the Devices sheet's
+     *  "Bluetooth is off" banner + greyed Pair buttons; a transition to ON
+     *  re-triggers auto-connect for remembered devices. */
+    val bluetoothOn: Boolean = true,
     /** Most recent status line (scan / connect / error transitions). */
     val status: String = "Idle",
     /** Latest decoded machine state + substate, or null before the first one. */
@@ -924,6 +934,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  secondary can dial it. */
     private var relayPort: Int = 0
 
+    /** Receiver for the system Bluetooth on/off broadcast — registered in [init],
+     *  unregistered in [onCleared]. Reflects adapter state into the UI and, on a
+     *  transition to ON, recovers any remembered device whose reconnect loop gave
+     *  up while the adapter was off. */
+    private val bluetoothReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action != BluetoothAdapter.ACTION_STATE_CHANGED) return
+            val on = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR) ==
+                BluetoothAdapter.STATE_ON
+            _ui.update { it.copy(bluetoothOn = on) }
+            if (on) onBluetoothEnabled()
+        }
+    }
+
     init {
         // A secondary (read-only mirror) doesn't record the primary's shot (issue
         // 14). Set here, not in buildInitialDelegate — that runs during the
@@ -933,6 +957,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { peerDiscovery.peers.collect { p -> _ui.update { it.copy(peers = p) } } }
         peerDiscovery.startDiscovery()
         refreshAdvertisement()
+        // Track the Bluetooth adapter: drive the "Bluetooth is off" UI and, when it
+        // returns, re-trigger auto-connect — a BT-off drop otherwise exhausts the
+        // managers' reconnect budget and never retries once the adapter is back.
+        observeBluetoothAdapter()
         // Collect the managers' coarse connection-state flows so the UI
         // snapshot updates promptly when either advances — rather than only
         // when an unrelated event happens to call observeBleState().
@@ -4162,6 +4190,38 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** Seed [MainUiState.bluetoothOn] from the adapter and subscribe to its on/off
+     *  broadcast for the life of the VM. */
+    private fun observeBluetoothAdapter() {
+        val app = getApplication<Application>()
+        val adapter = (app.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
+        _ui.update { it.copy(bluetoothOn = adapter?.isEnabled == true) }
+        ContextCompat.registerReceiver(
+            app, bluetoothReceiver,
+            IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED),
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
+    }
+
+    /** Bluetooth came back ON: kick a fresh connect for any remembered device that
+     *  isn't already connecting/connected. Its reconnect loop may have given up
+     *  (MAX_RECONNECT_ATTEMPTS) while the adapter was off, so nothing else retries. */
+    private fun onBluetoothEnabled() {
+        // Re-kick anything not already connected or mid-handshake. SCANNING is
+        // included on purpose: a scan in flight when the adapter went off is left
+        // suspended on the (now-silent) shared scan, so without a fresh connect it
+        // would sit on "Scanning…" forever once BT returns. connectScale/connect
+        // cancel+replace the stale want, so this is safe to call in that state.
+        fun stale(s: De1BleManager.State) =
+            s == De1BleManager.State.IDLE || s == De1BleManager.State.DISCONNECTED || s == De1BleManager.State.SCANNING
+        fun stale(s: ScaleBleManager.State) =
+            s == ScaleBleManager.State.IDLE || s == ScaleBleManager.State.DISCONNECTED || s == ScaleBleManager.State.SCANNING
+        runCatching {
+            if (_ui.value.rememberedDe1Address != null && stale(ble.state.value)) connect()
+            if (_ui.value.rememberedScaleAddress != null && stale(scale.state.value)) connectScale()
+        }
+    }
+
     /** Equipment-level grinder model (free text). Persisted; rides Visualizer
      *  uploads/patches as `grinder_model`. */
     fun setGrinderModel(model: String) {
@@ -4932,6 +4992,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     override fun onCleared() {
         super.onCleared()
+        runCatching { getApplication<Application>().unregisterReceiver(bluetoothReceiver) }
         bleScanner.cancel(SCAN_LABEL_DE1)
         bleScanner.cancel(SCAN_LABEL_SCALE)
         ble.disconnect()

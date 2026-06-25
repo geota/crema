@@ -517,6 +517,26 @@ fun PhoneDevicesSheet(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            if (!ui.bluetoothOn) {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+                ) {
+                    Row(
+                        Modifier.padding(horizontal = 14.dp, vertical = 11.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        PhIcon("bluetooth-slash", sizeDp = 18, tint = MaterialTheme.colorScheme.onErrorContainer)
+                        Text(
+                            "Bluetooth is off — turn it on to connect a machine or scale.",
+                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp),
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                        )
+                    }
+                }
+            }
             DeviceRow(
                 kind = "Machine",
                 name = if (connected) "Decent DE1" else "Decent DE1",
@@ -532,6 +552,7 @@ fun PhoneDevicesSheet(
                 },
                 on = connected,
                 onAction = { onConnect("machine") },
+                actionEnabled = ui.bluetoothOn,
                 autoConnect = ui.rememberedDe1Address != null,
                 autoConnectEnabled = connected || ui.rememberedDe1Address != null,
                 onAutoConnect = onDe1AutoConnect,
@@ -556,6 +577,7 @@ fun PhoneDevicesSheet(
                 },
                 on = scaleConnected,
                 onAction = { onConnect("scale") },
+                actionEnabled = ui.bluetoothOn,
                 autoConnect = ui.rememberedScaleAddress != null,
                 autoConnectEnabled = scaleConnected || ui.rememberedScaleAddress != null,
                 onAutoConnect = onScaleAutoConnect,
@@ -566,6 +588,7 @@ fun PhoneDevicesSheet(
                     if (!connected) onConnect("machine")
                     if (!scaleConnected) onConnect("scale")
                 },
+                enabled = ui.bluetoothOn,
                 shape = RoundedCornerShape(999.dp),
                 modifier = Modifier.fillMaxWidth().height(48.dp),
             ) {
@@ -596,6 +619,9 @@ private fun DeviceRow(
     stat: String,
     on: Boolean,
     onAction: () -> Unit,
+    /** Whether the Pair/Disconnect action is live. Greyed out (disabled) when the
+     *  Bluetooth adapter is off — there's nothing to scan/connect against. */
+    actionEnabled: Boolean = true,
     /** Per-device "Auto-connect" state + whether it's interactive. Greyed out
      *  (disabled) when there's no device to control — neither connected nor
      *  remembered — rather than hidden. */
@@ -653,15 +679,24 @@ private fun DeviceRow(
         }
         Surface(
             onClick = onAction,
+            enabled = actionEnabled,
             shape = RoundedCornerShape(999.dp),
-            color = if (on) MaterialTheme.colorScheme.surfaceContainerHighest else MaterialTheme.colorScheme.primary,
+            color = when {
+                !actionEnabled -> MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.4f)
+                on -> MaterialTheme.colorScheme.surfaceContainerHighest
+                else -> MaterialTheme.colorScheme.primary
+            },
             modifier = Modifier.height(36.dp),
         ) {
             Box(Modifier.padding(horizontal = 15.dp), contentAlignment = Alignment.Center) {
                 Text(
                     if (on) "Disconnect" else "Pair",
                     style = MaterialTheme.typography.labelLarge.copy(fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold),
-                    color = if (on) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onPrimary,
+                    color = when {
+                        !actionEnabled -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                        on -> MaterialTheme.colorScheme.onSurfaceVariant
+                        else -> MaterialTheme.colorScheme.onPrimary
+                    },
                 )
             }
         }

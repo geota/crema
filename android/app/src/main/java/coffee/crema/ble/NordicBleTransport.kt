@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.mapNotNull
@@ -129,6 +130,14 @@ class NordicBleTransport(context: Context) : BleTransport {
      */
     private val rawScan =
         centralManager.scan { /* no filter — see above */ }
+            // Nordic's scan throws (e.g. BluetoothUnavailableException when BT is
+            // off) from INSIDE this shared upstream. Without a catch here the
+            // failure kills the shareIn collector on `scope` — an uncaught
+            // coroutine crash — and never reaches a per-want `.catch` downstream
+            // (shareIn isolates upstream errors from subscribers). Swallow + log
+            // so a BT-off tap on "Pair" degrades to "no scan", not an app crash;
+            // WhileSubscribed restarts the scan on the next subscribe once BT is on.
+            .catch { t -> Log.w(TAG, "BLE scan stopped (Bluetooth off/unavailable?): ${t.message}", t) }
             .shareIn(scope, SharingStarted.WhileSubscribed(), replay = 0)
 
     override fun scan(matches: (name: String) -> Boolean): Flow<BleTransport.ScanMatch> =
