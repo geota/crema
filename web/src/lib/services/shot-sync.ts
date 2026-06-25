@@ -1,8 +1,7 @@
 /**
  * `$lib/services/shot-sync` — the `ShotSync` service (docs/53 §1.3, §2.4, T-12).
  *
- * The Effect-native home for what `visualizer/shot-sync.ts` does today: sync
- * Crema's local shot library against Visualizer's `/shots*` endpoints (per the
+ * Syncs Crema's local shot library against Visualizer's `/shots*` endpoints (per the
  * vendored OpenAPI spec at `../visualizer/openapi.json`). It consumes
  * `HttpClient` + `TokenVault`:
  *
@@ -23,9 +22,7 @@
  * from the old module; the pinned-digest signature helpers stay in
  * `../visualizer/shot-sync-signatures.ts` (untouched).
  *
- * This service is NOT wired into production yet — `visualizer/shot-sync.ts`
- * remains the live implementation until the T-16 facade swap. `ShotSyncLive`
- * only needs to compose into `AppLayer`.
+ * `ShotSyncLive` is the production implementation, composed into `AppLayer`.
  *
  * **No automated behavioral coverage**: `shot-sync.test.ts` drives the wasm
  * bundle directly, not this module, and `ShotSync` is store-coupled

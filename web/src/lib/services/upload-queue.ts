@@ -2,8 +2,8 @@
  * `$lib/services/upload-queue` — persistent retry queue for Visualizer sync
  * operations (docs/53 §1.3, §2.4 PR 3.5, T-14).
  *
- * The Effect-native home for `visualizer/upload-queue.ts`. Every push that
- * fails for a *recoverable* reason (network / 5xx / 408) is enqueued; the queue
+ * Every push that fails for a *recoverable* reason (network / 5xx / 408) is
+ * enqueued; the queue
  * persists to localStorage so a tab refresh doesn't drop it, and drains on
  * launch / `online` / the 5-min foreground tick / each sync tail.
  *
@@ -24,11 +24,10 @@
  *    failing recoverable op is retried a full 3 times before it's dropped.
  *    `enqueue()` no longer touches `attempts`.
  *
- * NOT wired into production — `visualizer/upload-queue.ts` stays the live impl
- * until the T-16 facade swap; `UploadQueueLive` only composes into `AppLayer`.
+ * `UploadQueueLive` is the production implementation, composed into `AppLayer`.
  * Store-coupled (`$lib/history` in `runEntry`), so not node:test-able — the
- * attempts-ceiling test lands with the Phase 7 `@effect/vitest` migration
- * (`TestClock` drives the backoff deterministically).
+ * attempts-ceiling test rides `@effect/vitest` (`TestClock` drives the backoff
+ * deterministically).
  */
 
 import { Context, Effect, Layer, Ref, Schedule } from 'effect';
@@ -37,10 +36,8 @@ import { BeanSync } from './bean-sync.ts';
 import type { ResponseDecodeError } from '../effect/errors.ts';
 import { describeVisualizerError, isRecoverable, type VisualizerCallError } from './visualizer-call.ts';
 import {
-	clearQueue as clearQueueStore,
 	dequeueEntry,
 	enqueueEntry,
-	isPendingId,
 	MAX_ATTEMPTS,
 	persistRetry,
 	readQueue,
@@ -76,15 +73,6 @@ export class UploadQueue extends Context.Tag('crema/UploadQueue')<
 		 * refreshed — the drain owns the attempt counter + schedule.
 		 */
 		readonly enqueue: (input: EnqueueInput) => Effect.Effect<void>;
-		readonly dequeue: (
-			entity: QueueEntry['entity'],
-			id: string,
-			op: QueueEntry['op']
-		) => Effect.Effect<void>;
-		readonly isPending: (entity: QueueEntry['entity'], id: string) => Effect.Effect<boolean>;
-		/** Current queue snapshot for the sync UI. */
-		readonly getQueue: Effect.Effect<readonly QueueEntry[]>;
-		readonly clearQueue: Effect.Effect<void>;
 		/** Drain every ready entry once. Concurrent calls coalesce to `deferred`. */
 		readonly drain: Effect.Effect<DrainResult>;
 		/** Arm the on-launch + 5-min-tick drain loop. Idempotent. */
@@ -108,12 +96,6 @@ export const UploadQueueLive = Layer.effect(
 			id: string,
 			op: QueueEntry['op']
 		): Effect.Effect<void> => Effect.sync(() => dequeueEntry(entity, id, op));
-
-		const isPending = (entity: QueueEntry['entity'], id: string): Effect.Effect<boolean> =>
-			Effect.sync(() => isPendingId(entity, id));
-
-		const getQueue = Effect.sync(() => readQueue().entries as readonly QueueEntry[]);
-		const clearQueue = Effect.sync(() => clearQueueStore());
 
 		/** Perform the actual sync call for one entry. */
 		const runEntry = (entry: QueueEntry): Effect.Effect<void, UploadError> =>
@@ -208,10 +190,6 @@ export const UploadQueueLive = Layer.effect(
 
 		return UploadQueue.of({
 			enqueue,
-			dequeue,
-			isPending,
-			getQueue,
-			clearQueue,
 			drain,
 			armLifecycle
 		});

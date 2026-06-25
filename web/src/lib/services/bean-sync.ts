@@ -16,9 +16,8 @@
  * primitive will PATCH when given an id so the future orchestrator can choose.
  * A 404 on delete is treated as success (already gone), like `ShotSync`.
  *
- * NOT wired into production — `bean/visualizer-sync.ts`'s `runSync` stays the
- * live implementation until a later facade swap; `BeanSyncLive` only needs to
- * compose into `AppLayer`. Store-coupled (`$lib/bean`), so not node:test-able.
+ * `BeanSyncLive` is the production implementation, composed into `AppLayer`.
+ * Store-coupled (`$lib/bean`), so not node:test-able.
  */
 
 import { Context, Effect, Layer } from 'effect';

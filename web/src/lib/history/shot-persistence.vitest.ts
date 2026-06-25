@@ -75,10 +75,6 @@ const fakeUploadQueue = Layer.succeed(
 	UploadQueue,
 	UploadQueue.of({
 		enqueue: enqueue as never,
-		dequeue: die('dequeue') as never,
-		isPending: die('isPending') as never,
-		getQueue: die('getQueue') as never,
-		clearQueue: die('clearQueue') as never,
 		drain: die('drain') as never,
 		armLifecycle: die('armLifecycle') as never
 	})

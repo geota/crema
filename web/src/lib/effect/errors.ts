@@ -9,7 +9,7 @@
  * matched with `Effect.catchTag` / `Match.tag` without `instanceof`.
  *
  * These are pure data declarations — no runtime is required to import them,
- * and they are tree-shakeable. Call sites are wired in later phases.
+ * and they are tree-shakeable.
  */
 
 import { Data } from 'effect';
@@ -77,40 +77,5 @@ export class De1ConnectStepFailed extends Data.TaggedError('De1ConnectStepFailed
 
 export class ScaleConnectStepFailed extends Data.TaggedError('ScaleConnectStepFailed')<{
 	readonly step: string;
-	readonly cause: unknown;
-}> {}
-
-export class De1WriteRefusedError extends Data.TaggedError('De1WriteRefusedError')<{
-	readonly target: string;
-	readonly reason: 'no-uuid' | 'not-connected';
-}> {}
-
-// ── Replay ──────────────────────────────────────────────────────────────
-
-export class ReplayAbortedError extends Data.TaggedError('ReplayAbortedError')<{}> {}
-
-export class ReplayParseError extends Data.TaggedError('ReplayParseError')<{
-	readonly fileName: string;
-	readonly cause: unknown;
-}> {}
-
-export class ReplayAlreadyRunningError extends Data.TaggedError('ReplayAlreadyRunningError')<{}> {}
-
-// ── Persistence boundary ────────────────────────────────────────────────
-
-export class PersistenceDecodeError extends Data.TaggedError('PersistenceDecodeError')<{
-	readonly key: string;
-	/** A `ParseError` from `Schema.decode`. */
-	readonly cause: unknown;
-}> {}
-
-export class PersistenceQuotaError extends Data.TaggedError('PersistenceQuotaError')<{
-	readonly key: string;
-}> {}
-
-// ── Webhook fire-and-forget (still typed so logs are queryable) ─────────
-
-export class WebhookFailedError extends Data.TaggedError('WebhookFailedError')<{
-	readonly url: string;
 	readonly cause: unknown;
 }> {}
