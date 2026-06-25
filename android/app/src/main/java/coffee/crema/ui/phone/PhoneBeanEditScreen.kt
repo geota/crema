@@ -12,7 +12,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -403,35 +402,6 @@ private fun NumberedGroup(n: String, title: String, content: @Composable ColumnS
             modifier = Modifier.fillMaxWidth(),
         ) {
             Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(14.dp), content = content)
-        }
-    }
-}
-
-// 1–10 roast pip track with Light / Medium / Dark bands (proto RoastPicker).
-@Composable
-private fun RoastPicker(value: Int, onChange: (Int) -> Unit) {
-    val bandColor = when {
-        value <= 3 -> Color(0xFFC99A5B)
-        value <= 7 -> Color(0xFFA56A39)
-        else -> Color(0xFF6E4326)
-    }
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-            (1..10).forEach { i ->
-                Box(
-                    Modifier
-                        .weight(1f)
-                        .height(26.dp)
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(if (i <= value) bandColor else MaterialTheme.colorScheme.surfaceContainerHighest)
-                        .clickable { onChange(i) },
-                )
-            }
-        }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("Light", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text("Medium", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text("Dark", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }

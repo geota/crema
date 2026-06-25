@@ -45,16 +45,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import coffee.crema.beans.BAG_PRESETS
 import coffee.crema.beans.BeanDraft
 import coffee.crema.beans.applyBeanEdits
 import coffee.crema.beans.isFrozen
-import coffee.crema.beans.roastBand5
 import coffee.crema.core.Bean
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.components.BeanPhotoBox
+import coffee.crema.ui.components.RoastPicker
 import coffee.crema.ui.components.rememberBeanPhotoPicker
 import coffee.crema.ui.components.roasterMark
 import coffee.crema.ui.components.roasterTone
@@ -467,68 +466,6 @@ private fun BeanMarkWell(roaster: String) {
             style = MaterialTheme.typography.displayMedium.copy(fontWeight = FontWeight.SemiBold),
             color = Color(0xFFF4EDE3),
         )
-    }
-}
-
-/** 10-pip roast-level picker with Light / Medium / Dark band labels. */
-@Composable
-private fun RoastPicker(value: Int, onChange: (Int) -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-            (1..10).forEach { n ->
-                val current = n == value
-                // Selected pip = solid copper (proto); pips below it = copper wash; rest = well.
-                val bg = when {
-                    current -> MaterialTheme.colorScheme.primary
-                    n < value -> MaterialTheme.colorScheme.primary.copy(alpha = 0.30f)
-                    else -> MaterialTheme.colorScheme.surfaceContainerLowest
-                }
-                Box(
-                    Modifier
-                        .weight(1f)
-                        .height(36.dp)
-                        .clip(RoundedCornerShape(7.dp))
-                        .background(bg)
-                        .clickable { onChange(n) },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        "$n",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = if (current) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
-                    )
-                }
-            }
-        }
-        // Web RoastSlider: FIVE band anchors under the 1..10 track, weighted to
-        // sit under their pip spans (1-2 / 3-4 / 5 / 6-7 / 8-10).
-        val band5 = roastBand5(value)
-        Row(Modifier.fillMaxWidth()) {
-            listOf(
-                Triple("Light", 2f, false),
-                Triple("Med-light", 2f, false),
-                Triple("Medium", 1f, true),
-                Triple("Med-dark", 2f, true),
-                Triple("Dark", 3f, true),
-            ).forEach { (lbl, w, center) ->
-                Text(
-                    lbl.uppercase(),
-                    modifier = Modifier.weight(w),
-                    style = MaterialTheme.typography.labelSmall,
-                    textAlign = if (center) TextAlign.Center else TextAlign.Start,
-                    color = if (band5 == lbl) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                )
-            }
-        }
-        // Current readout (web "2 /10 · Light").
-        Row(verticalAlignment = Alignment.Bottom) {
-            Text("$value", style = MaterialTheme.typography.titleMedium.copy(fontFamily = JetBrainsMono), color = MaterialTheme.colorScheme.onSurface)
-            Text(
-                "/10${band5?.let { " · $it" }.orEmpty()}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
     }
 }
 

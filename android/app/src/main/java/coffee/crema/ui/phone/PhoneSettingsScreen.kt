@@ -662,7 +662,7 @@ private fun SharingSection(
         SettingsGroup("Sync") {
             val unsyncedCount = ui.history.count { it.visualizerId == null }
             val lastSyncLabel = vz.lastShotSyncAt?.let {
-                android.text.format.DateUtils.getRelativeTimeSpanString(it).toString()
+                coffee.crema.ui.relativeAgo(it)
             } ?: "never"
             CremaSettingsRow("Shots", "${ui.history.size} shot(s)" + (if (unsyncedCount > 0) " · $unsyncedCount unsynced" else "") + ". Last sync: $lastSyncLabel.") {
                 CremaSegmentedButton(
@@ -731,7 +731,7 @@ private fun SharingSection(
                             }
                         }
                         Text(
-                            android.text.format.DateUtils.getRelativeTimeSpanString(entry.at).toString(),
+                            coffee.crema.ui.relativeAgo(entry.at),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )

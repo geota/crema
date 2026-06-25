@@ -1259,11 +1259,7 @@ private fun LastShotCard(
         ) {
             // "Last shot · N min ago" eyebrow + a chevron hinting the tap-through.
             val ago = last.completedAtMs.takeIf { it > 0L }?.let {
-                android.text.format.DateUtils.getRelativeTimeSpanString(
-                    it,
-                    System.currentTimeMillis(),
-                    android.text.format.DateUtils.MINUTE_IN_MILLIS,
-                ).toString()
+                coffee.crema.ui.relativeAgo(it)
             }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                 Eyebrow(if (ago != null) "Last shot · $ago" else "Last shot")
