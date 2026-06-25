@@ -71,6 +71,10 @@ class ProxyTransport(
     /** Invoked when the primary pushes a [Frame.HandoffOffer] (issue 07) — the host
      *  is offering us the machine. The VM prompts; accept runs the normal pull. */
     private val onHandoffOffer: (fromName: String) -> Unit = {},
+    /** Invoked with a primary [Frame.Event] — a transient "<who> drove the machine"
+     *  notice (issue 11, loose multi-controller). Display-only; the VM surfaces it
+     *  as a snackbar. Default no-op. */
+    private val onEvent: (text: String) -> Unit = {},
     /** Fires when the link redials after a drop (from [ReconnectingClientLink]).
      *  Each emission re-runs the attach handshake so telemetry resumes instead of
      *  freezing on stale state (issue 03). Default empty for the in-memory links. */
@@ -141,6 +145,7 @@ class ProxyTransport(
             is Frame.Notify -> channelFor(frame.address, frame.char).trySend(frame)
             is Frame.State -> stateFlow(frame.address).value = parseState(frame.state)
             is Frame.Config -> onConfig(frame.json)
+            is Frame.Event -> onEvent(frame.text)
             is Frame.Denied -> {
                 onDenied(frame.reason)
                 if (!welcomed.isCompleted) welcomed.completeExceptionally(IllegalStateException("Proxy denied: ${frame.reason}"))

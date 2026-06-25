@@ -278,6 +278,16 @@ sealed class Frame {
     @Serializable
     @SerialName("config")
     data class Config(val json: String) : Frame()
+
+    // ---- Multi-controller "who's driving" (issue 11) ----------------------
+
+    /** Primary → secondary, **display-only**: a transient "<who> <did what>" notice
+     *  fanned to the OTHER mirrors when a secondary drives the machine (shot
+     *  start/stop, steam, …) — the "loose" multi-controller model. Surfaced as a
+     *  snackbar; never touches state. */
+    @Serializable
+    @SerialName("event")
+    data class Event(val text: String) : Frame()
 }
 
 /**
@@ -299,7 +309,7 @@ data class DeviceInfo(
 /** Current proxy wire-protocol version. The handshake ([Frame.Hello] /
  *  [Frame.Welcome]) carries it so peers can refuse a mismatch; bump on any
  *  breaking frame change. */
-const val PROXY_PROTOCOL_VERSION: Int = 1
+const val PROXY_PROTOCOL_VERSION: Int = 2 // 2: + Frame.Event (issue 11 who's-driving)
 
 /**
  * Encodes/decodes [Frame]s to/from the JSON wire text. Always (de)serialises via
