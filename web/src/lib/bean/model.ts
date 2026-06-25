@@ -357,6 +357,46 @@ export function roastFreshness(
 }
 
 /**
+ * The bean's freshness verdict for the status pip — band-aware + frozen-gated.
+ * The single source for all three consumers (BeanTile / BeanDrawer /
+ * BeanContextCard, previously each re-derived it). Mirrors Android's
+ * `freshnessVerdict` (BeanFormat.kt) step-for-step:
+ *  1. a frozen bag (`frozenOn` set, not yet defrosted) pauses the window → `'frozen'`;
+ *  2. no roast date → unknown (`null`);
+ *  3. else rate days-off-roast against the roast band, defaulting an unset roast
+ *     level to `'medium'` — the medium-band fallback web was missing, so a
+ *     roast-dated but level-less bag now gets a coloured pip like Android.
+ */
+export function beanFreshness(
+	bean: Pick<Bean, 'roastLevel' | 'roastedOn'> & Partial<Pick<Bean, 'frozenOn' | 'defrostedOn'>>
+): Freshness | 'frozen' | null {
+	if (bean.frozenOn && !bean.defrostedOn) return 'frozen';
+	const days = daysOffRoast(bean.roastedOn);
+	if (days == null) return null;
+	return roastFreshness(roastBand(bean.roastLevel) ?? 'medium', days);
+}
+
+/**
+ * The status-dot colour token for a [beanFreshness] verdict, matching Android's
+ * `freshnessColor` semantics: best → green, ok → amber, bad → red, frozen → icy
+ * blue (`--info`), unknown → neutral tint.
+ */
+export function freshnessColor(f: Freshness | 'frozen' | null): string {
+	switch (f) {
+		case 'best':
+			return 'var(--success)';
+		case 'ok':
+			return 'var(--warning)';
+		case 'bad':
+			return 'var(--danger)';
+		case 'frozen':
+			return 'var(--info)';
+		default:
+			return 'rgba(var(--tint-rgb), 0.4)';
+	}
+}
+
+/**
  * One-line label summarising a bag — `"Yirgacheffe · Counter Culture · 14d off
  * roast"`. Pieces that are unset are omitted; the dot-separator collapses.
  * Mirrors `de1_domain::Bean::display_summary`.

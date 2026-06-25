@@ -49,7 +49,8 @@
 		roasterMarkTone,
 		daysOffRoast,
 		roastBand,
-		roastFreshness,
+		beanFreshness,
+		freshnessColor,
 		type Bean,
 		type Roaster, activateBean } from '$lib/bean';
 	import { getMaintenanceStore } from '$lib/maintenance';
@@ -966,17 +967,9 @@
 	const headerFreshLabel = $derived(
 		headerBeanDaysOff != null ? `${headerBeanDaysOff}d off roast` : null
 	);
-	const headerFreshColor = $derived.by(() => {
-		const b = beanLibrary.activeBean;
-		const f = b ? roastFreshness(roastBand(b.roastLevel), headerBeanDaysOff) : null;
-		return f === 'best'
-			? 'var(--success)'
-			: f === 'ok'
-				? 'var(--warning)'
-				: f === 'bad'
-					? 'var(--danger)'
-					: 'rgba(var(--tint-rgb), 0.4)';
-	});
+	const headerFreshColor = $derived.by(() =>
+		freshnessColor(beanLibrary.activeBean ? beanFreshness(beanLibrary.activeBean) : null)
+	);
 	const headerBeanMeta = $derived.by(() => {
 		const b = beanLibrary.activeBean;
 		if (!b) return 'Tap ▾ to choose a bag';

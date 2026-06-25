@@ -24,6 +24,8 @@ export {
 	roastBand,
 	roastBand5,
 	roastFreshness,
+	beanFreshness,
+	freshnessColor,
 	bagState,
 	type BagState,
 	ROAST_PILL_LEVEL

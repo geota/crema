@@ -22,7 +22,8 @@
 		getBeanStore,
 		ROAST_PILL_LEVEL,
 		roastBand,
-		roastFreshness,
+		beanFreshness,
+		freshnessColor,
 		type Roaster, activateBean } from '$lib/bean';
 	import RoasterAutocomplete from '$lib/components/beans/RoasterAutocomplete.svelte';
 	import QuickStepper from './QuickStepper.svelte';
@@ -87,18 +88,8 @@
 		return band ? band[0].toUpperCase() + band.slice(1) : '—';
 	});
 	const daysOff = $derived(display ? daysOffRoast(display.roastedOn) : null);
-	const freshness = $derived(
-		display ? roastFreshness(roastBand(display.roastLevel), daysOff) : null
-	);
-	const freshColor = $derived(
-		freshness === 'best'
-			? 'var(--success)'
-			: freshness === 'ok'
-				? 'var(--warning)'
-				: freshness === 'bad'
-					? 'var(--danger)'
-					: 'rgba(var(--tint-rgb), 0.4)'
-	);
+	const freshness = $derived(display ? beanFreshness(display) : null);
+	const freshColor = $derived(freshnessColor(freshness));
 	const roastDate = $derived.by(() => {
 		if (!display?.roastedOn) return '—';
 		const d = new Date(`${display.roastedOn}T00:00:00`);
