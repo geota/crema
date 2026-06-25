@@ -30,10 +30,10 @@
 	 */
 	import {
 		daysOffRoast,
-		roastBand,
 		roastBand5,
-		roastFreshness,
 		roasterMarkTone,
+		beanFreshness,
+		freshnessColor,
 		type Bean,
 		type Roaster
 	} from '$lib/bean';
@@ -64,17 +64,8 @@
 	const mt = $derived(roasterMarkTone(roaster));
 
 	const days = $derived(daysOffRoast(bean.roastedOn));
-	const band = $derived(roastBand(bean.roastLevel));
-	const freshness = $derived(roastFreshness(band, days));
-	const freshColor = $derived(
-		freshness === 'best'
-			? 'var(--success)'
-			: freshness === 'ok'
-				? 'var(--warning)'
-				: freshness === 'bad'
-					? 'var(--danger)'
-					: 'rgba(var(--tint-rgb), 0.4)'
-	);
+	const freshness = $derived(beanFreshness(bean));
+	const freshColor = $derived(freshnessColor(freshness));
 
 	const isFrozen = $derived(!!bean.frozenOn && !bean.defrostedOn);
 	const isArchived = $derived(bean.archivedAt != null);
