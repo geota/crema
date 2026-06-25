@@ -1,5 +1,6 @@
 <script lang="ts">
 	import Icon from '$lib/icons/Icon.svelte';
+	import StarRating from '$lib/components/common/StarRating.svelte';
 	import BookmarkSimpleIcon from 'phosphor-svelte/lib/BookmarkSimpleIcon';
 	import CheckIcon from 'phosphor-svelte/lib/CheckIcon';
 	import CoffeeIcon from 'phosphor-svelte/lib/CoffeeIcon';
@@ -523,17 +524,7 @@
 	<div class="hi-rating">
 		<span class="t-eyebrow" style="color:rgba(var(--tint-rgb), 0.55)">Rating</span>
 		<div class="hi-stars">
-			{#each [1, 2, 3, 4, 5] as n (n)}
-				<button
-					class="hi-star"
-					class:is-on={n <= rating}
-					onclick={() => setStar(n)}
-					aria-label="{n} star{n === 1 ? '' : 's'}"
-				>
-					<Icon cls={n <= rating ? 'ph-fill ph-star' : 'ph ph-star'} aria-hidden="true"
-					 />
-				</button>
-			{/each}
+				<StarRating rating={rating} interactive onRate={setStar} size={18} emptyColor="rgba(var(--tint-rgb), 0.3)" />
 		</div>
 	</div>
 
@@ -912,23 +903,6 @@
 		display: flex;
 		gap: 2px;
 	}
-	.hi-star {
-		background: transparent;
-		border: 0;
-		padding: 2px;
-		cursor: pointer;
-		color: rgba(var(--tint-rgb), 0.3);
-		font-size: 18px;
-		line-height: 1;
-		transition: color var(--dur-1) var(--ease);
-	}
-	.hi-star:hover {
-		color: var(--copper-300);
-	}
-	.hi-star.is-on {
-		color: var(--copper-400);
-	}
-
 	.hi-notes {
 		background: var(--bg-page);
 		border-radius: var(--radius-md);

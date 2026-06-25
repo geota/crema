@@ -1,5 +1,6 @@
 <script lang="ts">
 	import Icon from '$lib/icons/Icon.svelte';
+	import StarRating from '$lib/components/common/StarRating.svelte';
 	import ArchiveIcon from 'phosphor-svelte/lib/ArchiveIcon';
 	import ArrowLeftIcon from 'phosphor-svelte/lib/ArrowLeftIcon';
 	import CheckCircleIcon from 'phosphor-svelte/lib/CheckCircleIcon';
@@ -1125,19 +1126,7 @@
 							</div>
 							<div class="be-frow-r">
 								<div class="be-rating">
-									{#each [1, 2, 3, 4, 5] as i (i)}
-										<button
-											type="button"
-											class="be-rating-btn"
-											onclick={() => setRating(i)}
-											aria-label="{i} of 5"
-										>
-											<Icon
-												cls={i <= current.rating ? 'ph-fill ph-star' : 'ph ph-star'}
-												color={i <= current.rating ? 'var(--copper-400)' : 'rgba(var(--tint-rgb), 0.18)'}
-											/>
-										</button>
-									{/each}
+									<StarRating rating={current.rating} interactive onRate={setRating} size={22} emptyColor="rgba(var(--tint-rgb), 0.18)" />
 								</div>
 							</div>
 						</div>
@@ -1891,23 +1880,6 @@
 		display: inline-flex;
 		gap: 2px;
 	}
-	.be-rating-btn {
-		background: transparent;
-		border: 0;
-		padding: 2px;
-		color: var(--copper-400);
-		cursor: pointer;
-		font-size: 22px;
-		display: inline-flex;
-		align-items: center;
-	}
-	.be-rating-btn :global(svg) {
-		color: rgba(var(--tint-rgb), 0.18);
-	}
-	.be-rating-btn:hover {
-		transform: scale(1.05);
-	}
-
 	/* Foot */
 	.be-foot {
 		display: flex;

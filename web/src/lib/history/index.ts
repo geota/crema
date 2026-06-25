@@ -14,7 +14,6 @@ export {
 	type ShotPeaks,
 	shotId,
 	ratioLabel,
-	stars,
 	shotFilename,
 	snapshotFromBean,
 	peaksOf,
