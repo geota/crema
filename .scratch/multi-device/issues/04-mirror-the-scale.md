@@ -1,6 +1,6 @@
 # 04 — Mirror the scale, not just the DE1 (WEIGHT card is always "—")
 
-- **Status:** ready-for-agent
+- **Status:** done
 - **Severity:** P1
 - **Area:** Android (proxy · RelayHub) + Core (snapshot rule)
 - **Depends on:** none
@@ -94,3 +94,17 @@ warns against. Re-do it in a hardware (or scale-replay) session — the worked-o
 - **Validate (needs a scale or a scale-replay):** secondary WEIGHT + scale-flow
   populate live and match the primary; sample counts equal (no double-count);
   scaleless primary → roster stays DE1-only, no "Scanning…" regression.
+
+**2026-06-25 — DONE. Validated on real hardware** (real-phone primary → emulator
+secondary over the LAN proxy, a BOOKOO_SC scale): the secondary's WEIGHT mirrors the
+primary **live and exact** — 554.6 g → 554.6 g (not 1109.2 → counted **once**, the
+`isSnapshotChar` weight exclusion holds), tracks up and back to 0, scale-derived flow
+sane. Implemented as the plan above: `ScaleBleManager.connectedName`/`weightNotifyChar`,
+roster-driven secondary attach via `ProxyTransport.deviceRoster`, scaleless primary →
+no "Scanning…" regression.
+
+Gap found + fixed in the same session: the roster was only sent in `Frame.Welcome`
+(attach-time), so a secondary that attached **before** the scale was connected never
+saw it (had to reconnect). Added `RelayHub.pushRoster()` + triggers on scale/DE1
+connect-disconnect in `MainViewModel` — validated: connecting the scale **after** the
+secondary is already mirroring now surfaces it with **no reconnect**.

@@ -146,6 +146,18 @@ class RelayHub(
         for (c in clients) deliver(c, frame)
     }
 
+    /** Push the primary's current device roster to every connected secondary —
+     *  called when a device connects/disconnects (issue 04). The [Frame.Welcome]
+     *  roster only covers the set present at attach, so a mirror that joined
+     *  before a scale was connected (or after one left) would never see the
+     *  change; this re-push keeps every mirror's scan/roster live without a
+     *  reconnect. [Frame.Roster] is the standalone update the secondary's
+     *  `ProxyTransport` already folds into its `deviceRoster`. */
+    fun pushRoster() {
+        val frame = Frame.Roster(roster())
+        for (c in clients) deliver(c, frame)
+    }
+
     /** Control-capable secondaries currently mirroring this primary — the
      *  "hand off to <device>" targets (issue 07). View-only peers are excluded:
      *  their take-over would be refused by the scope gate anyway. */

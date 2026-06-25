@@ -80,6 +80,10 @@ class ProxyTransport(
     /** Devices the primary holds, from [Frame.Welcome] / [Frame.Roster]; drives [scan]. */
     private val roster = MutableStateFlow<List<DeviceInfo>>(emptyList())
 
+    /** The primary's device roster (issue 04) — the VM watches it on a secondary to
+     *  attach the scale only once the primary actually advertises one (no blind scan). */
+    val deviceRoster: StateFlow<List<DeviceInfo>> get() = roster.asStateFlow()
+
     /** Per-device connection state, driven by [Frame.State] / [Frame.Attached]. */
     private val connStates = ConcurrentHashMap<String, MutableStateFlow<BleTransport.ConnState>>()
 

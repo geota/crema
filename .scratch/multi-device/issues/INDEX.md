@@ -6,16 +6,17 @@ P3 (nice-to-have). See each file for detail; the complex ones carry a `## Design
 
 **Progress (2026-06-20):** 11 of 14 done + emulator-validated — #01 #02 #03 #05 #06
 #07 #08 #09 #10 #13 #14. **The full pre-trust gate is closed** (#01 #02 #03 #08).
-**3 remain:** #04 (scale — hardware double-count risk; implemented, validation pending),
-#11 (multi-controller — design), #12 (real-DE1 hardware). **+ #15 (real-device bug
-found + fixed during the #04 scale session).** Branch unpushed.
+**#04 done 2026-06-25** (scale mirror — hardware-validated: live weight mirrors exact,
+no double-count; + a roster re-push fix so a late-attached scale needs no reconnect).
+**2 remain:** #11 (multi-controller — design), #12 (real-DE1 hardware). **+ #15
+(real-device bug found + fixed during the #04 scale session).** Branch unpushed.
 
 | # | Issue | Sev | Status | One-liner |
 |---|---|---|---|---|
 | [01](issues/01-two-phase-handoff.md) | Two-phase handoff (no orphaned machine) | P1 | done | release→reclaim-on-timeout so a failed take-over can't leave the DE1 owned by no one |
 | [02](issues/02-device-pairing-tofu.md) | Device pairing / authorization (TOFU) | P1 | done | today *anyone* on the LAN can mirror + drive your machine; add an "Allow this device?" gate |
 | [03](issues/03-mid-session-reattach.md) | Mid-session re-attach (frozen-mirror fix) | P1 | done | a primary restart leaves the mirror "Connected" but frozen; re-run the attach handshake on link re-up |
-| [04](issues/04-mirror-the-scale.md) | Mirror the scale, not just the DE1 | P1 | ready-for-agent | a secondary's WEIGHT card is always "—"; the scale isn't in the roster |
+| [04](issues/04-mirror-the-scale.md) | Mirror the scale, not just the DE1 | P1 | done | a secondary's WEIGHT card is always "—"; the scale isn't in the roster |
 | [05](issues/05-sync-custom-profiles.md) | Sync custom profiles to mirrors | P2 | done | config sends the profile *id*; a mirror missing that custom profile shows a different one |
 | [06](issues/06-robust-config-write-path.md) | Robust config write path | P2 | done | a failed config relay silently eats the change; relay the remaining verbs; optimistic apply |
 | [07](issues/07-push-handoff-and-failback.md) | Push handoff + bidirectional re-mirror | P2 | done | "hand off TO X"; the old primary should re-mirror the new host, not go dark (needs 01) |
@@ -29,7 +30,11 @@ found + fixed during the #04 scale session).** Branch unpushed.
 | [15](issues/15-primary-replays-own-recording.md) | Primary replays its own recording as a fake DE1 | P1 | done | a real primary auto-replayed a leftover capture → phantom DE1 + scale couldn't connect; gated behind `replayPrimary` |
 
 **Pre-trust gate (do before this ships to an untrusted network):** ~~01~~, ~~02~~, ~~03~~, ~~08~~ — **all done.** (Caveat: ws:// telemetry is still plaintext; WSS is the M5 story.)
-**Completeness of the mirror:** ~~05~~, ~~06~~, 04. **Then:** ~~07~~, 12, 11.
+**Completeness of the mirror:** ~~05~~, ~~06~~, ~~04~~. **Then:** ~~07~~, 12, 11.
 
 Context: `../M1-PROTOCOL.md` (wire spec), `../RESEARCH.md` (locked design),
-`../HANDOFF-M2-2026-06-19.md` (state), memory `multi-device-m1-progress`.
+`../HANDOFF-2026-06-21.md` (latest state + what's next), memory `multi-device-m1-progress`.
+
+**Update 2026-06-21:** branch rebased onto `main` (`c09d6cf`) so it now also carries the
+profile-conversion / auto-tare / QC fixes; still unpushed; #04 implemented-but-uncommitted.
+Next: validate+commit #04 (real scale now available) → #12 real-DE1 → #11 design → push.
