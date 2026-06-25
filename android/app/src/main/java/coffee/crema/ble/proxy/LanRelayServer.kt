@@ -32,7 +32,7 @@ class LanRelayServer(
      *  immediately after this returns. */
     suspend fun start(): Int {
         val s = embeddedServer(CIO, port = requestedPort) {
-            install(WebSockets)
+            install(WebSockets) { maxFrameSize = PROXY_MAX_FRAME_BYTES }
             routing {
                 webSocket(path) {
                     // `this` is a DefaultWebSocketServerSession (a WebSocketSession).

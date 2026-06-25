@@ -126,7 +126,7 @@ class RelayHub(
     ) {
         val frame = Frame.Notify(address, service.toString(), char.toString(), Hex.encode(data), atMs, src)
         if (isSnapshotChar(service, char)) cache[cacheKey(address, char)] = frame
-        for (c in clients) if (c.isAttached(address)) deliver(c, frame)
+        for (c in clients) if (c.approved && c.isAttached(address)) deliver(c, frame)
     }
 
     /** A device's connection state changed: fan a [Frame.State] out to attached
@@ -134,7 +134,7 @@ class RelayHub(
     fun onConnState(address: String, state: String) {
         connStates[address] = state
         val frame = Frame.State(address, state)
-        for (c in clients) if (c.isAttached(address)) deliver(c, frame)
+        for (c in clients) if (c.approved && c.isAttached(address)) deliver(c, frame)
     }
 
     /** Push the primary's current session config to every attached secondary —
@@ -143,7 +143,7 @@ class RelayHub(
     fun pushConfig() {
         val json = configSource().takeIf { it.isNotEmpty() } ?: return
         val frame = Frame.Config(json)
-        for (c in clients) deliver(c, frame)
+        for (c in clients) if (c.approved) deliver(c, frame)
     }
 
     /** Push the primary's current device roster to every connected secondary —
@@ -155,7 +155,7 @@ class RelayHub(
      *  `ProxyTransport` already folds into its `deviceRoster`. */
     fun pushRoster() {
         val frame = Frame.Roster(roster())
-        for (c in clients) deliver(c, frame)
+        for (c in clients) if (c.approved) deliver(c, frame)
     }
 
     /** Fan a transient "who's driving" notice (issue 11) to every connected
@@ -163,7 +163,7 @@ class RelayHub(
      *  (and sees the resulting telemetry). Display-only. */
     fun broadcastEvent(text: String, exceptClientId: String?) {
         val frame = Frame.Event(text)
-        for (c in clients) if (c.clientId != exceptClientId) deliver(c, frame)
+        for (c in clients) if (c.approved && c.clientId != exceptClientId) deliver(c, frame)
     }
 
     /** Control-capable secondaries currently mirroring this primary — the
@@ -197,15 +197,22 @@ class RelayHub(
         val pump = launch { for (frame in session.outbox) link.send(frame) }
         try {
             link.incoming().collect { frame ->
-                // Reads and controls are suspend (they hit the real link / drive
-                // the machine); run them off the collect loop so they don't
-                // head-of-line-block later frames.
+                // Hello is handled INLINE (suspending the collect loop) so the TOFU
+                // decision lands before any later frame from this client is served
+                // (issue 02).
+                if (frame is Frame.Hello) { handleHello(session, frame); return@collect }
+                // Pre-pairing gate (issue 03): until a Hello has been APPROVED, an
+                // unapproved peer may not attach, read, or observe. A peer that skips
+                // Hello (or whose prompt is still pending, or that was denied) gets
+                // nothing — no attach, no snapshot, no read, no stream.
+                if (!session.approved) {
+                    Log.w(TAG, "Ignoring ${frame::class.simpleName} from unapproved peer (no approved Hello)")
+                    return@collect
+                }
+                // Reads and controls are suspend (they hit the real link / drive the
+                // machine); run them off the collect loop so they don't head-of-line-
+                // block later frames.
                 when (frame) {
-                    // Hello is handled INLINE (suspending the collect loop) so the
-                    // TOFU decision lands before any later frame from this client is
-                    // served — an unapproved peer can't attach/read while its prompt
-                    // is still pending (issue 02).
-                    is Frame.Hello -> handleHello(session, frame)
                     is Frame.Read -> launch { handleRead(session, frame) }
                     is Frame.Control -> launch { handleControl(session, frame) }
                     else -> handle(session, frame)
@@ -225,6 +232,7 @@ class RelayHub(
     private suspend fun handleHello(session: ClientSession, frame: Frame.Hello) {
         when (val decision = authorize(frame.clientId, frame.clientName)) {
             is PairingDecision.Allowed -> {
+                session.approved = true
                 session.canControl = decision.canControl
                 session.clientId = frame.clientId
                 session.clientName = frame.clientName
@@ -312,6 +320,10 @@ class RelayHub(
     /** One connected secondary: its outbox and the set of devices it has attached. */
     private class ClientSession(@Suppress("unused") val link: FrameLink, capacity: Int) {
         val outbox = Channel<Frame>(capacity)
+        /** Set true once this peer's Hello has been APPROVED (issue 03). Until then it
+         *  may not attach, read, or observe, and the fan-out methods skip it — a peer
+         *  that never sent (or was denied) a Hello gets no roster, snapshot, or stream. */
+        @Volatile var approved: Boolean = false
         /** Granted control scope (issue 02): false = view-only mirror, set on Welcome. */
         @Volatile var canControl: Boolean = false
         /** Peer identity from [Frame.Hello], for push-handoff targeting (issue 07). */

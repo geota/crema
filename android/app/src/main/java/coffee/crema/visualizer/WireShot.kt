@@ -30,8 +30,13 @@ fun shotFinalWeight(shot: StoredShot): Float? {
 }
 
 /** Assemble the Rust wire `StoredShot` JSON for [shot]. [grinderModel] is the
- *  equipment-level settings cascade value (web `resolveGrinderModel`). */
-fun wireShotJson(shot: StoredShot, grinderModel: String? = null): JsonObject {
+ *  equipment-level settings cascade value (web `resolveGrinderModel`).
+ *
+ *  [forBackup] preserves the locally-held identity fields the Visualizer UPLOAD
+ *  path intentionally nulls (the server assigns `visualizerId`; the upload omits
+ *  the per-shot grind) so a whole-app backup round-trips them (issue 01). Leave
+ *  it false for the upload path. */
+fun wireShotJson(shot: StoredShot, grinderModel: String? = null, forBackup: Boolean = false): JsonObject {
     return buildJsonObject {
         put("formatVersion", 3)
         put("id", shot.id)
@@ -46,7 +51,10 @@ fun wireShotJson(shot: StoredShot, grinderModel: String? = null): JsonObject {
                 put("dose", shot.doseG)
                 put("yieldOut", shot.yieldG)
                 put("beans", shot.beanLabel)
-                put("grinderSetting", JsonNull)
+                // The dial used for this shot. Nulled on upload (Android doesn't push
+                // it); preserved for a backup so it round-trips (`put(k, String?)`
+                // emits JsonNull for null).
+                if (forBackup) put("grinderSetting", shot.grindSetting?.toString()) else put("grinderSetting", JsonNull)
                 put("notes", shot.notes)
                 put("rating", shot.rating ?: 0)
                 put("tds", JsonNull)
@@ -118,7 +126,9 @@ fun wireShotJson(shot: StoredShot, grinderModel: String? = null): JsonObject {
         put("preinfuseTarget", JsonNull)
         put("stopOnWeight", false)
         put("autoTare", false)
-        put("visualizerId", JsonNull)
+        // Server-assigned on upload (rides as null); preserved for a backup so a
+        // restore PATCHes the same Visualizer row instead of duplicating it.
+        if (forBackup) put("visualizerId", shot.visualizerId) else put("visualizerId", JsonNull)
         put("deletedAt", JsonNull)
     }
 }
@@ -147,6 +157,48 @@ fun storedShotFromWire(wire: JsonObject, samplesJson: String?, json: kotlinx.ser
         notes = str("notes"),
         samples = coffee.crema.history.downsampleForStorage(samples),
         visualizerId = vid,
+    )
+}
+
+/**
+ * Inverse of [wireShotJson]: materialise a backup/core-shape `StoredShot` JSON
+ * object (the shape the core backup exporter emits and the web shell persists
+ * natively — `formatVersion` / `completedAt` / nested `record.samples`) back into
+ * Android's flat [StoredShot], for whole-app backup RESTORE (issue 01). Distinct
+ * from [storedShotFromWire], which parses the Visualizer *detail* shape
+ * (`clock` / `duration_ms`), not this. Peaks are re-derived from the samples
+ * (the core stores none). Returns null only when `id` is absent.
+ */
+fun storedShotFromBackupJson(o: JsonObject, json: kotlinx.serialization.json.Json): StoredShot? {
+    fun str(k: String) = (o[k] as? JsonPrimitive)?.contentOrNull
+    fun longOf(s: String?): Long? = s?.toLongOrNull() ?: s?.toDoubleOrNull()?.toLong()
+    val id = str("id") ?: return null
+    val meta = o["metadata"] as? JsonObject
+    fun metaStr(k: String) = (meta?.get(k) as? JsonPrimitive)?.contentOrNull
+    val record = o["record"] as? JsonObject
+    val durationMs = longOf((record?.get("duration") as? JsonPrimitive)?.contentOrNull) ?: 0L
+    val samples = record?.get("samples")?.let { parseTimedSamples(it.toString(), json) } ?: emptyList()
+    // Decode the bean snapshot with the generated serializer (its wire keys match
+    // what wireShotJson emits); fall back to null rather than dropping the shot.
+    val bean = (o["bean"] as? JsonObject)?.let {
+        runCatching { json.decodeFromString(coffee.crema.core.ShotBean.serializer(), it.toString()) }.getOrNull()
+    }
+    return StoredShot(
+        id = id,
+        completedAtMs = longOf(str("completedAt")) ?: 0L,
+        durationMs = durationMs,
+        yieldG = metaStr("yieldOut")?.toFloatOrNull(),
+        doseG = metaStr("dose")?.toFloatOrNull(),
+        grindSetting = metaStr("grinderSetting")?.toFloatOrNull(),
+        peakPressure = samples.maxOfOrNull { it.pressure },
+        peakTemp = samples.maxOfOrNull { it.headTemp },
+        profileName = str("profileName"),
+        bean = bean,
+        rating = metaStr("rating")?.toIntOrNull()?.takeIf { it > 0 },
+        notes = metaStr("notes"),
+        samples = coffee.crema.history.downsampleForStorage(samples),
+        privacy = str("privacy"),
+        visualizerId = str("visualizerId"),
     )
 }
 
