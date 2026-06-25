@@ -1,5 +1,6 @@
 <script lang="ts">
 	import Icon from '$lib/icons/Icon.svelte';
+	import StarRating from '$lib/components/common/StarRating.svelte';
 	import CoffeeIcon from 'phosphor-svelte/lib/CoffeeIcon';
 	import PencilSimpleIcon from 'phosphor-svelte/lib/PencilSimpleIcon';
 	import SnowflakeIcon from 'phosphor-svelte/lib/SnowflakeIcon';
@@ -213,13 +214,8 @@
 					{#if bean.decaf}
 						<span class="bn-tile-pill">Decaf</span>
 					{/if}
-					<span class="bn-drawer-rating" aria-label="{bean.rating} of 5">
-						{#each [1, 2, 3, 4, 5] as i (i)}
-							<Icon
-									cls={i <= bean.rating ? 'ph-fill ph-star' : 'ph ph-star'}
-									color={i <= bean.rating ? 'var(--copper-400)' : 'rgba(var(--tint-rgb), 0.2)'}
-								/>
-						{/each}
+					<span class="bn-drawer-rating">
+						<StarRating rating={bean.rating} />
 					</span>
 				</div>
 			</div>
@@ -391,12 +387,8 @@
 				<div class="bn-group-body">
 					<div class="bn-row"><div class="bn-row-label">Score</div><div class="bn-row-val">{bean.qualityScore || '—'}</div></div>
 					<div class="bn-row"><div class="bn-row-label">Rating</div><div class="bn-row-val bn-row-rating">
-						{#each [1, 2, 3, 4, 5] as i (i)}
-							<Icon
-									cls={i <= bean.rating ? 'ph-fill ph-star' : 'ph ph-star'}
-									color={i <= bean.rating ? 'var(--copper-400)' : 'rgba(var(--tint-rgb), 0.2)'}
-								/>
-						{/each}
+							<StarRating rating={bean.rating} />
+						
 					</div></div>
 					{#if bean.tastingNotes}
 						<div class="bn-row bn-row-stack">
@@ -471,13 +463,8 @@
 									<div class="bn-shotrow-meta">
 										<span class="bn-shotrow-profile">{s.profileName ?? '—'}</span>
 									</div>
-									<div class="bn-shotrow-rating" aria-label="{sRating} of 5">
-										{#each [1, 2, 3, 4, 5] as i (i)}
-											<Icon
-											cls={i <= sRating ? 'ph-fill ph-star' : 'ph ph-star'}
-											color={i <= sRating ? 'var(--copper-400)' : 'rgba(var(--tint-rgb), 0.2)'}
-										/>
-										{/each}
+									<div class="bn-shotrow-rating">
+											<StarRating rating={sRating} />
 									</div>
 								</div>
 							{/each}

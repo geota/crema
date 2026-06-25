@@ -5,7 +5,8 @@
 	 * profile name, the ratio + yield metrics and a star rating.
 	 */
 	import type { StoredShot } from '$lib/history';
-	import { ratioLabel, stars, peaksOf, flatSamplesOf } from '$lib/history';
+	import { ratioLabel, peaksOf, flatSamplesOf } from '$lib/history';
+	import StarRating from '$lib/components/common/StarRating.svelte';
 	import { getSettingsStore, convertWeight } from '$lib/settings';
 	import MiniShotChart from './MiniShotChart.svelte';
 	import Icon from '$lib/icons/Icon.svelte';
@@ -74,12 +75,6 @@
 
 	/** Star rating (0..5); coerce undefined/null to 0 (unrated). */
 	const rating = $derived(shot.metadata.rating ?? 0);
-	/**
-	 * The always-5-glyph star string — filled glyphs for the rating, empty for
-	 * the rest. An unrated shot (`rating === 0`) shows five empty stars, so the
-	 * column keeps a consistent rhythm rather than collapsing to a lone dash.
-	 */
-	const starString = $derived(stars(rating));
 </script>
 
 <button
@@ -116,13 +111,9 @@
 		</div>
 		<div class="hi-row-metric-l">yield</div>
 	</div>
-	<div
-		class="hi-row-stars"
-		class:is-unrated={rating <= 0}
-		aria-label="{Math.max(0, Math.min(5, Math.round(rating)))} of 5 stars"
-	>
-		{starString}
-	</div>
+	<div class="hi-row-stars" class:is-unrated={rating <= 0}>
+			<StarRating rating={rating} />
+		</div>
 	<div
 		class="hi-row-pip hi-pip-{syncPip}"
 		title={syncPip === 'uploaded'

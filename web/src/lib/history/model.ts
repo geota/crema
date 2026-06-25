@@ -397,11 +397,6 @@ export function ratioLabel(record: StoredShot): string {
 	return formatRatio(dose, yieldOut);
 }
 
-/** A star string `★★★★☆` for a 0–5 rating. */
-export function stars(rating: number): string {
-	const n = Math.max(0, Math.min(5, Math.round(rating)));
-	return '★'.repeat(n) + '☆'.repeat(5 - n);
-}
 
 /** A timestamped `.shot.json` filename for a v2-JSON-exported shot. */
 export function shotFilename(record: StoredShot): string {

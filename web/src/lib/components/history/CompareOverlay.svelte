@@ -1,5 +1,6 @@
 <script lang="ts">
 	import Icon from '$lib/icons/Icon.svelte';
+	import StarRating from '$lib/components/common/StarRating.svelte';
 	import XIcon from 'phosphor-svelte/lib/XIcon';
 	/**
 	 * `CompareOverlay` — full-screen modal that overlays multiple recorded
@@ -458,9 +459,7 @@
 							<td>{shotYield(shot)}</td>
 							<td>{ratioLabel(shot)}</td>
 							<td>
-								<span class="cmp-stars" class:is-unrated={rowRating <= 0}>
-									{'★'.repeat(Math.max(0, Math.min(5, Math.round(rowRating))))}
-								</span>
+								<span class="cmp-stars" class:is-unrated={rowRating <= 0}><StarRating rating={rowRating} /></span>
 							</td>
 						</tr>
 					{/each}

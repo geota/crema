@@ -1,5 +1,6 @@
 <script lang="ts">
 	import Icon from '$lib/icons/Icon.svelte';
+	import StarRating from '$lib/components/common/StarRating.svelte';
 	import CopyIcon from 'phosphor-svelte/lib/CopyIcon';
 	import PackageIcon from 'phosphor-svelte/lib/PackageIcon';
 	import PencilIcon from 'phosphor-svelte/lib/PencilIcon';
@@ -199,14 +200,8 @@
 					<span class="bn-tile-stat-empty" aria-hidden="true">—</span>
 				{/if}
 			</div>
-			<div class="bn-tile-stat bn-tile-stat-rating" aria-label="{bean.rating} of 5">
-				{#each [1, 2, 3, 4, 5] as i (i)}
-					<Icon
-						cls={i <= bean.rating ? 'ph-fill ph-star' : 'ph ph-star'}
-						color={i <= bean.rating ? 'var(--copper-400)' : 'rgba(var(--tint-rgb), 0.2)'}
-						aria-hidden="true"
-					 />
-				{/each}
+			<div class="bn-tile-stat bn-tile-stat-rating">
+				<StarRating rating={bean.rating} />
 			</div>
 		</div>
 
