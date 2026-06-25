@@ -113,6 +113,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
@@ -866,6 +870,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private var relayHub: RelayHub? = null
     private var relayServer: LanRelayServer? = null
     private var proxyLink: ReconnectingClientLink? = null
+    /** Child scope for the SECONDARY mode's collectors + its [ProxyTransport],
+     *  cancelled on every mode switch and in [onCleared] so they don't leak across
+     *  secondary→x→secondary cycles (issue 10). */
+    private var secondaryScope: CoroutineScope? = null
 
     /** Stable per-install id (persisted in a tiny file — issue 14) used to advertise
      *  + self-filter in NSD discovery AND as the secondary's `clientId` for the
@@ -3063,18 +3071,24 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private fun startSecondaryMode(host: String, port: Int): BleTransport {
         val url = "ws://$host:$port${LanRelayServer.PATH}"
         appendLog("Multi-device: SECONDARY → $url")
-        val link = ReconnectingClientLink(url, viewModelScope)
+        // A child scope for everything this mode launches (the link-state + roster
+        // collectors AND the ProxyTransport's own init collectors), so applyMode can
+        // cancel them ALL on the next switch instead of leaking ~4 coroutines + a dead
+        // ProxyTransport/link per secondary→x→secondary cycle (issue 10).
+        val modeScope = CoroutineScope(viewModelScope.coroutineContext + SupervisorJob(viewModelScope.coroutineContext[Job]))
+        secondaryScope = modeScope
+        val link = ReconnectingClientLink(url, modeScope)
         proxyLink = link
         // Reflect the link's CONNECTING/CONNECTED into the UI so a dropped primary
         // shows "Reconnecting…", not a frozen "Mirroring" (issue 03).
-        viewModelScope.launch {
+        modeScope.launch {
             link.state.collect { s -> _ui.update { it.copy(mirrorReconnecting = s == LinkState.CONNECTING) } }
         }
         val proxy = ProxyTransport(
             // clientId = the STABLE per-install id (issue 14) so the host's TOFU
             // pairing (issue 02) remembers THIS device, not every same-model phone;
             // clientName = the human label shown in the host's prompt.
-            link, viewModelScope, clientId = proxyDeviceId, clientName = deviceLabel(),
+            link, modeScope, clientId = proxyDeviceId, clientName = deviceLabel(),
             // Snap this mirror's config to the primary's on every attach (T2).
             onConfig = { applyRemoteConfig(it) },
             // Reflect the granted scope (issue 02): view-only mirrors can't control.
@@ -3092,7 +3106,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // the primary actually advertises one — no blind scan, so a scaleless primary
         // leaves us on "Not paired" (not a stuck "Scanning…"). connectScale's scan is
         // satisfied by the same roster, so this just times the trigger.
-        viewModelScope.launch {
+        modeScope.launch {
             proxy.deviceRoster.collect { devices ->
                 val hasScale = devices.any { it.kind == "scale" }
                 if (hasScale && scale.state.value.let { it != ScaleBleManager.State.READY && it != ScaleBleManager.State.SCANNING }) {
@@ -3129,6 +3143,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             scale.disconnect()
             kotlinx.coroutines.delay(150)
             relayServer?.stop(); relayServer = null; relayHub = null
+            // Cancel the previous SECONDARY mode's collectors + ProxyTransport before
+            // releasing the link, so nothing leaks across the switch (issue 10).
+            secondaryScope?.cancel(); secondaryScope = null
             proxyLink?.dispose(); proxyLink = null
             switchable.setDelegate(
                 when (role) {
@@ -5078,6 +5095,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // (Only one of these is non-null per proxy role; NORMAL has just the Nordic.)
         nordicTransport?.close()
         relayServer?.stop()
+        secondaryScope?.cancel()
         proxyLink?.dispose()
         peerDiscovery.close()
     }
