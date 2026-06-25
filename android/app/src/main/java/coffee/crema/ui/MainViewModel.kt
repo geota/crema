@@ -2348,7 +2348,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  false, so each executes locally against the real link. Wired into the
      *  [RelayHub] by [startPrimaryMode]; `startShot` runs the primary's full shot
      *  orchestration, so that complexity never crosses the wire. */
-    private fun handleRelayedControl(method: String, args: String): Result<Unit> = runCatching {
+    private fun handleRelayedControl(
+        method: String,
+        args: String,
+        originId: String? = null,
+        originName: String? = null,
+    ): Result<Unit> = runCatching {
+        // "Who's driving" notice (issue 11, loose model): compute BEFORE dispatch so
+        // an IDLE request reads as stop-vs-wake against the PRE-action machine state.
+        // Only a secondary-initiated control carries an originId.
+        val phrase = if (originId != null) controlPhrase(method, args) else null
         when (method) {
             "machineState" -> requestMachineState(MachineRequest.valueOf(args))
             "startShot" -> startShot()
@@ -2380,6 +2389,35 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             "handoff" -> grantHandoff()
             else -> error("unknown relayed control: $method")
         }
+        // Dispatch succeeded (a throw above is caught by runCatching, skipping this):
+        // fan the notice to the OTHER mirrors + surface it on this primary, so
+        // everyone but the originator learns who drove the machine (issue 11).
+        if (phrase != null) {
+            val text = "${originName ?: "A mirror"} $phrase"
+            relayHub?.broadcastEvent(text, exceptClientId = originId)
+            notifyUser(text)
+        }
+    }
+
+    /** A short human phrase for a relayed machine-control verb (issue 11) — the
+     *  predicate of "<who> …". Returns null for verbs not worth announcing (config
+     *  edits, unknowns). IDLE is read against the current state: stop while running,
+     *  otherwise wake. */
+    private fun controlPhrase(method: String, args: String): String? = when (method) {
+        "startShot" -> "started a shot"
+        "tareScale" -> "tared the scale"
+        "machineState" -> when (args) {
+            MachineRequest.ESPRESSO.name -> "started a shot"
+            MachineRequest.STEAM.name, MachineRequest.STEAM_RINSE.name -> "started steam"
+            MachineRequest.HOT_WATER.name -> "started hot water"
+            MachineRequest.FLUSH.name -> "started a flush"
+            MachineRequest.SLEEP.name -> "put the machine to sleep"
+            MachineRequest.IDLE.name ->
+                if (_ui.value.machineStateName?.string in handoffIdleStates) "woke the machine"
+                else "stopped the machine"
+            else -> null
+        }
+        else -> null
     }
 
     /** Machine states during which a [requestHandoff] must be refused — moving the
@@ -2982,7 +3020,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // the mirror's core double-counts (issue 04; M1-PROTOCOL §5).
             isSnapshotChar = { _, char -> char != De1Uuids.SHOT_SAMPLE && char != scale.weightNotifyChar },
             // Relayed user intent from a secondary → this primary's command router.
-            controlHandler = { method, args -> handleRelayedControl(method, args) },
+            controlHandler = { method, args, originId, originName ->
+                handleRelayedControl(method, args, originId, originName)
+            },
             // The single-owner session config a mirror snaps to on attach (T2).
             configSource = { configSnapshotJson() },
             // TOFU gate (issue 02): prompt for an unknown peer, remember the choice.
@@ -3029,6 +3069,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             onDenied = { reason -> onProxyDenied(reason) },
             // The host is pushing us the machine (issue 07) → prompt to accept.
             onHandoffOffer = { fromName -> onHandoffOffered(fromName) },
+            // "Who's driving" (issue 11): another mirror drove the machine → toast.
+            onEvent = { text -> notifyUser(text) },
             // Re-run the attach handshake when the link redials (issue 03).
             reconnects = link.reconnects,
         )

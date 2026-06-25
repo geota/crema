@@ -36,7 +36,7 @@ class ProxyControlTest {
                 roster = { listOf(DeviceInfo(addr, "DE1", "de1", "CONNECTED")) },
                 readSource = { _, _, _ -> error("no read in this test") },
                 isSnapshotChar = { _, _ -> true },
-                controlHandler = { method, args ->
+                controlHandler = { method, args, _, _ ->
                     relayed.add(method to args)
                     if (method == "boom") Result.failure(IllegalStateException("nope")) else Result.success(Unit)
                 },
@@ -53,6 +53,57 @@ class ProxyControlTest {
             // into the UI thread).
             val err = withTimeout(2_000) { proxy.control("boom") }
             assertTrue(err.isFailure, "a refused control returns failure, not an exception")
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    /**
+     * Issue 11 (loose "who's driving"): the relay threads the originating mirror's
+     * id+name into `controlHandler`, and [RelayHub.broadcastEvent] fans the notice
+     * to the OTHER mirrors but never the originator. Two clients, in-process.
+     */
+    @Test
+    fun `a relayed control fans a who-drove event to other mirrors but not the originator`() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            lateinit var hub: RelayHub
+            val seenOrigin = CopyOnWriteArrayList<Pair<String?, String?>>()
+            hub = RelayHub(
+                primaryId = "primary-1",
+                primaryName = "Kitchen tablet",
+                roster = { emptyList() },
+                readSource = { _, _, _ -> error("no read in this test") },
+                isSnapshotChar = { _, _ -> true },
+                controlHandler = { method, _, originId, originName ->
+                    seenOrigin.add(originId to originName)
+                    // Mimic the VM: only the machine action announces; the sync helper
+                    // below ("tareScale") must not, or it would pollute the assertion.
+                    if (method == "machineState") hub.broadcastEvent("$originName drove", exceptClientId = originId)
+                    Result.success(Unit)
+                },
+            )
+            val (aClient, aServer) = InMemoryFrameLink.pair()
+            val (bClient, bServer) = InMemoryFrameLink.pair()
+            scope.launch { hub.serve(aServer) }
+            scope.launch { hub.serve(bServer) }
+            val eventsA = CopyOnWriteArrayList<String>()
+            val eventsB = CopyOnWriteArrayList<String>()
+            val proxyA = ProxyTransport(aClient, scope, clientId = "phone-A", clientName = "Phone A", onEvent = { eventsA.add(it) })
+            val proxyB = ProxyTransport(bClient, scope, clientId = "phone-B", clientName = "Phone B", onEvent = { eventsB.add(it) })
+
+            // Round-trip B once so it's fully attached (Welcome done → in the client list).
+            withTimeout(2_000) { proxyB.control("tareScale") }
+
+            // A drives the machine → the notice is enqueued to B.
+            withTimeout(2_000) { proxyA.control("machineState", "ESPRESSO") }
+            // A second B round-trip drains B's FIFO outbox PAST the event (deterministic,
+            // no sleep): when this ack returns, B's onEvent has already fired.
+            withTimeout(2_000) { proxyB.control("tareScale") }
+
+            assertTrue(("phone-A" to "Phone A") in seenOrigin, "the relay threads the originator id+name to the handler")
+            assertEquals(listOf("Phone A drove"), eventsB.toList(), "another mirror is told who drove the machine")
+            assertTrue(eventsA.isEmpty(), "the originator gets no event for its own action")
         } finally {
             scope.cancel()
         }

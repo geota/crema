@@ -1,6 +1,6 @@
 # 11 — Multi-secondary / "who's driving" UX
 
-- **Status:** needs-triage
+- **Status:** done (loose model)
 - **Severity:** P3
 - **Area:** Design + Android (proxy · UI)
 - **Depends on:** none
@@ -44,3 +44,11 @@ no crash/inconsistent state (already holds); chosen feedback model implemented.
 ## Comments
 <!-- Needs a product call: is concurrent multi-user *control* a goal, or is mirror-many +
      control-one enough? That decides loose-vs-lease. -->
+
+**2026-06-25 — DONE, "loose" model** (product call: casual-home → keep last-write-wins,
+add the originator toast). Implemented:
+- New display-only `Frame.Event(text)` (`PROXY_PROTOCOL_VERSION` → 2). `RelayHub.broadcastEvent(text, exceptClientId)` fans it to every mirror EXCEPT the originator.
+- The relay threads the originating mirror's id+name into `controlHandler`; `MainViewModel.handleRelayedControl` builds a "<who> <did what>" phrase from the **pre-action** state (so IDLE reads as stop-vs-wake) and, on a successful dispatch, fans the notice to the other mirrors + surfaces it on the primary via `notifyUser`. The originating secondary shows nothing (it already sees the telemetry).
+- `ProxyTransport.onEvent` → a secondary surfaces it as a snackbar (the existing #08 path).
+- Scope: machine-control verbs only (start shot/steam/water/flush, stop, sleep, tare); config edits stay quiet. **Primary**-initiated actions aren't announced to mirrors in v1 (they see the telemetry) — easy to add later. Concurrency-safe: originator is a per-call param, not shared state, so two mirrors acting at once attribute correctly (last-write-wins on the machine, as designed).
+- **Unit-validated** (`ProxyControlTest`): the relay threads the originator, and the event reaches another mirror but **not** the originator (2 clients, in-process). Full 2-device on-device demo not run this session — the control-relay (#T1b) and snackbar (#08) paths it composes are independently hardware-validated. The **lease** model stays the documented alternative if exclusive multi-user control is ever needed.

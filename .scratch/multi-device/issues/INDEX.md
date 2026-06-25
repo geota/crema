@@ -8,7 +8,8 @@ P3 (nice-to-have). See each file for detail; the complex ones carry a `## Design
 #07 #08 #09 #10 #13 #14. **The full pre-trust gate is closed** (#01 #02 #03 #08).
 **#04 done 2026-06-25** (scale mirror — hardware-validated: live weight mirrors exact,
 no double-count; + a roster re-push fix so a late-attached scale needs no reconnect).
-**2 remain:** #11 (multi-controller — design), #12 (real-DE1 hardware). **+ #15
+**#11 done 2026-06-25** (loose "who's driving" — originator toast fanned to other mirrors;
+unit-validated). **1 remains:** #12 (real-DE1 hardware — the one true gap). **+ #15
 (real-device bug found + fixed during the #04 scale session).** Branch unpushed.
 
 | # | Issue | Sev | Status | One-liner |
@@ -23,14 +24,14 @@ no double-count; + a roster re-push fix so a late-attached scale needs no reconn
 | [08](issues/08-surface-failures-to-user.md) | Surface multi-device failures to the user | P2 | done | refusals/relay-fails go to a debug log, not a snackbar — they read as "nothing happened" |
 | [09](issues/09-handoff-idle-gate-known-idle.md) | Handoff idle-gate: require *known*-idle | P2 | done | an undecoded (null) machine state currently grants; flip to allowlist |
 | [10](issues/10-app-wide-authority-signaling.md) | App-wide "you're a mirror" signaling | P2 | done | the cue is Brew-only; Settings/Profiles on a secondary look local |
-| [11](issues/11-multi-controller-ux.md) | Multi-secondary / who's-driving UX | P3 | needs-triage | N mirrors is safe but unmodeled — no notion of who's in control |
+| [11](issues/11-multi-controller-ux.md) | Multi-secondary / who's-driving UX | P3 | done | N mirrors is safe but unmodeled — no notion of who's in control |
 | [12](issues/12-real-de1-hardware-validation.md) | Real-DE1 hardware validation pass | P1 | ready-for-human | the one true gap — physical BLE write + radio-move never run against metal |
 | [13](issues/13-tablet-side-picker.md) | Tablet-side multi-device picker | P3 | done | only the phone can initiate mirror/handoff |
 | [14](issues/14-hygiene-deviceid-and-recording.md) | Hygiene: persist deviceId; stop mirror-recording | P3 | done | per-launch identity; a mirror records every shot it watches |
 | [15](issues/15-primary-replays-own-recording.md) | Primary replays its own recording as a fake DE1 | P1 | done | a real primary auto-replayed a leftover capture → phantom DE1 + scale couldn't connect; gated behind `replayPrimary` |
 
 **Pre-trust gate (do before this ships to an untrusted network):** ~~01~~, ~~02~~, ~~03~~, ~~08~~ — **all done.** (Caveat: ws:// telemetry is still plaintext; WSS is the M5 story.)
-**Completeness of the mirror:** ~~05~~, ~~06~~, ~~04~~. **Then:** ~~07~~, 12, 11.
+**Completeness of the mirror:** ~~05~~, ~~06~~, ~~04~~. **Then:** ~~07~~, 12, ~~11~~.
 
 Context: `../M1-PROTOCOL.md` (wire spec), `../RESEARCH.md` (locked design),
 `../HANDOFF-2026-06-21.md` (latest state + what's next), memory `multi-device-m1-progress`.

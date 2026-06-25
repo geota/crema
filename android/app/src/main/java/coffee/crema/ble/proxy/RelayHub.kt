@@ -78,8 +78,8 @@ class RelayHub(
      * wired only on the primary (a normal/loopback relay has no machine to
      * drive), so M1 and the unit tests keep a read-only mirror by construction.
      */
-    private val controlHandler: suspend (method: String, args: String) -> Result<Unit> =
-        { _, _ -> Result.failure(UnsupportedOperationException("relay has no control handler")) },
+    private val controlHandler: suspend (method: String, args: String, originId: String?, originName: String?) -> Result<Unit> =
+        { _, _, _, _ -> Result.failure(UnsupportedOperationException("relay has no control handler")) },
     /**
      * The primary's current session-config JSON (an app-level `ConfigSnapshot`),
      * pushed to a secondary on attach and via [pushConfig] on change — the
@@ -156,6 +156,14 @@ class RelayHub(
     fun pushRoster() {
         val frame = Frame.Roster(roster())
         for (c in clients) deliver(c, frame)
+    }
+
+    /** Fan a transient "who's driving" notice (issue 11) to every connected
+     *  secondary EXCEPT [exceptClientId] — the originator already knows it acted
+     *  (and sees the resulting telemetry). Display-only. */
+    fun broadcastEvent(text: String, exceptClientId: String?) {
+        val frame = Frame.Event(text)
+        for (c in clients) if (c.clientId != exceptClientId) deliver(c, frame)
     }
 
     /** Control-capable secondaries currently mirroring this primary — the
@@ -282,7 +290,7 @@ class RelayHub(
             return
         }
         Log.i(TAG, "relayed control: ${frame.method}${if (frame.args.isEmpty()) "" else " (${frame.args})"}")
-        val reply = controlHandler(frame.method, frame.args).fold(
+        val reply = controlHandler(frame.method, frame.args, session.clientId, session.clientName).fold(
             onSuccess = { Frame.ControlOk(frame.id) },
             onFailure = { Frame.ControlErr(frame.id, it.message ?: "control failed") },
         )
