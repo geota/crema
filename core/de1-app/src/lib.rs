@@ -3261,7 +3261,10 @@ mod tests {
         let mut core = CremaCore::new();
         core.set_read_only(true);
         core.reset();
-        assert!(core.is_read_only(), "reset() must preserve the read-only role");
+        assert!(
+            core.is_read_only(),
+            "reset() must preserve the read-only role"
+        );
     }
 
     // ----- Decent Scale LCD + heartbeat -----------------------------------

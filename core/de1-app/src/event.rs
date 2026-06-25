@@ -474,6 +474,29 @@ pub enum ProfileUploadFailure {
     },
 }
 
+impl From<AppError> for ProfileUploadFailure {
+    /// Classify an upload [`AppError`] into the shell-facing failure reason.
+    /// Shared by both bridges (wasm + uniffi) so their mappings can't drift
+    /// (issue 15 / F27).
+    fn from(err: AppError) -> ProfileUploadFailure {
+        match err {
+            AppError::ProfileUpload(de1_domain::DomainError::NoSteps) => {
+                ProfileUploadFailure::Empty
+            }
+            AppError::ProfileUpload(de1_domain::DomainError::TooManySteps { count }) => {
+                ProfileUploadFailure::TooManySteps {
+                    count: u32::try_from(count).unwrap_or(u32::MAX),
+                }
+            }
+            // Any other `DomainError` or `AppError` shouldn't reach this path;
+            // surface its `Display` rather than silently coercing to `Empty`.
+            e => ProfileUploadFailure::Internal {
+                message: e.to_string(),
+            },
+        }
+    }
+}
+
 /// A writable DE1 GATT characteristic. The shell maps this to a UUID.
 ///
 /// `#[non_exhaustive]`: profile-upload targets arrive later.

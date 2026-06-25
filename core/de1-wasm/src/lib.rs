@@ -644,15 +644,6 @@ pub fn coerce_roaster(raw_json: &str, now_ms: f64) -> Option<String> {
     de1_domain::coerce_roaster_json(raw_json, f64_to_ms(now_ms))
 }
 
-/// Classify a profile's roast suitability from its `title` + `notes` (CORE3) →
-/// `"light"` / `"medium"` / `"dark"`, or `null` when no roast is clearly known.
-/// See `de1_domain::roast_from_profile`.
-#[wasm_bindgen(js_name = roastFromProfile)]
-#[must_use]
-pub fn roast_from_profile(title: &str, notes: &str) -> Option<String> {
-    de1_domain::roast_from_profile(title, notes).map(str::to_owned)
-}
-
 /// The Visualizer-call retry policy (CORE5): whether an error tagged `tag`
 /// (with `status` for the HTTP case) is worth a time-based retry. The shell
 /// marshals its tagged error into `(tag, status)`. See
@@ -1745,29 +1736,7 @@ impl CremaBridge {
             Ok(out) => json(out),
             Err(err) => {
                 let mut out = CoreOutput::default();
-                let reason = match err {
-                    de1_app::AppError::ProfileUpload(domain) => match domain {
-                        de1_domain::DomainError::NoSteps => ProfileUploadFailure::Empty,
-                        de1_domain::DomainError::TooManySteps { count } => {
-                            ProfileUploadFailure::TooManySteps {
-                                count: u32::try_from(count).unwrap_or(u32::MAX),
-                            }
-                        }
-                        // Any other `DomainError` (e.g. the Serialization
-                        // variant used for shot history) shouldn't reach this
-                        // path. Surface its `Display` rather than silently
-                        // coercing to `Empty`.
-                        e => ProfileUploadFailure::Internal {
-                            message: e.to_string(),
-                        },
-                    },
-                    // Other AppError variants (e.g. Serialization) similarly
-                    // shouldn't reach this path. Surface the underlying cause
-                    // so the shell's toast / log carries the real reason.
-                    e => ProfileUploadFailure::Internal {
-                        message: e.to_string(),
-                    },
-                };
+                let reason = ProfileUploadFailure::from(err);
                 out.events.push(Event::ProfileUploadFailed { reason });
                 json(out)
             }
