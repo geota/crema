@@ -207,7 +207,6 @@ async function persistCaptureSlice(
 	const shotMeta = buildAtShotStartMeta(toMs);
 	const jsonl = await sliceJsonl(fromMs, toMs);
 	if (!jsonl) {
-		console.log('[capture gate] captureSliceJsonl returned empty', { fromMs, toMs, shotId });
 		return;
 	}
 	// GEN3: parse per-line so ONE malformed JSONL line can't throw out of the
@@ -224,13 +223,10 @@ async function persistCaptureSlice(
 	}
 	if (shotMeta) entries.push(shotMeta);
 	if (entries.length > 0) {
-		console.log('[capture gate] persisting', { shotId, entryCount: entries.length });
 		// GEN3: surface a rejected `put` instead of dropping it on the floor.
 		void getCaptureStore()
 			.put(shotId, entries)
 			.catch((err) => console.warn('[capture gate] failed to persist capture', { shotId, err }));
-	} else {
-		console.log('[capture gate] parsed entries empty', { shotId });
 	}
 }
 

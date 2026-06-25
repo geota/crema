@@ -148,8 +148,8 @@
 	 * `.jsonl` files. Shots with no capture (imports + pre-recorder
 	 * shots) are SKIPPED so the archive stays a pure replay bundle —
 	 * mixing v2 JSON in would confuse downstream tools that expect
-	 * `.jsonl` everywhere. The skipped count surfaces in the export
-	 * banner so the user knows which shots are missing.
+	 * `.jsonl` everywhere. The skipped count surfaces in a toast so the
+	 * user knows how many shots had no replayable bytes.
 	 *
 	 * Filename inside the zip is `{shotStamp}.jsonl`, where the stamp
 	 * comes from `shotFilename` minus its `.shot.json` suffix.
@@ -172,10 +172,10 @@
 		}
 		const included = Object.keys(files).length;
 		if (included === 0) {
-			console.log(
-				`[history export] No replayable captures found. ${skipped} shot${
+			toast.info(
+				`No replayable captures found — ${skipped} shot${
 					skipped === 1 ? '' : 's'
-				} have no raw bytes — use the Export dropdown's "Community v2" option to export them.`
+				} have no raw bytes. Use the Export menu's "Community v2" option for those.`
 			);
 			return;
 		}
@@ -184,8 +184,8 @@
 		});
 		const blob = new Blob([new Uint8Array(zipped)], { type: 'application/zip' });
 		downloadBlob(`crema-history-${filenameStamp()}.zip`, blob);
-		console.log(
-			`[history export] Exported ${included} replayable shot${included === 1 ? '' : 's'}` +
+		toast.success(
+			`Exported ${included} replayable shot${included === 1 ? '' : 's'}` +
 				(skipped > 0
 					? `; skipped ${skipped} without raw bytes (imported or pre-recorder).`
 					: '.')

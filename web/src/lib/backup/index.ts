@@ -3,12 +3,14 @@
  * cross-shell `crema-backup/v1` bundle (core `export_backup_jsonl_from_json` /
  * the line-tagged JSONL; mirrors Android's `MainViewModel.backupBundleJson`).
  *
- * One `.crema.jsonl` file (line-delimited JSON / NDJSON) = custom profiles +
- * beans/roasters + shot history + the portable settings subset, serialised by
- * the Rust core so web and Android emit **identical bytes** — a backup moves
- * between devices. Photos (IndexedDB blobs) are NOT bundled here; they stay
- * device-local (a future `.crema.zip` wrapper can carry the JSONL + images, as
- * `$lib/bean/export` already does for the library).
+ * A `.crema.zip` bundles two parts:
+ * - `backup.jsonl` — line-delimited JSON (NDJSON) = custom profiles +
+ *   beans/roasters + shot history + the portable settings subset, serialised by
+ *   the Rust core so web and Android emit **identical bytes** — a backup moves
+ *   between devices.
+ * - `images/<beanId>` — every bean's photo blob (from IndexedDB). Photos ARE
+ *   bundled; restore unzips them and replays each back into IndexedDB keyed by
+ *   the bean id.
  *
  * Excluded from the bundle: Visualizer OAuth tokens (separate storage) and any
  * per-device state. The web has no persisted BLE address (Web Bluetooth

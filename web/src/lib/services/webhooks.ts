@@ -17,9 +17,9 @@
  *    the opaque `no-cors` delivery when CORS is blocked. Always succeeds at the
  *    Effect level (returns a `{ ok, message }` outcome).
  *
- * NOT wired into production — `app.svelte.ts` keeps firing webhooks until the
- * T-15/T-23 integration; `WebhooksLive` only composes into `AppLayer`. Reads
- * the settings store (`$lib/settings`), so not node:test-able.
+ * `WebhooksLive` is the production implementation, composed into `AppLayer`;
+ * `app.svelte.ts` calls `Webhooks.fire()` / `Webhooks.sendTest()`. Reads the
+ * settings store (`$lib/settings`), so not node:test-able.
  */
 
 import { Context, Effect, Layer } from 'effect';

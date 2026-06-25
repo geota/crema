@@ -211,127 +211,6 @@
 .qmini-tog.on { background: var(--copper-500); }
 .qmini-tog.on::after { transform: translateX(12px); }
 
-/* ───────────────────────────────────────────────── Variant B: Tap Readout */
-/* In the readout itself: a small target row that becomes an active stepper */
-.qbtarget {
-  display: flex; align-items: center; justify-content: space-between;
-  gap: 6px;
-  margin-top: 6px;
-  padding: 5px 8px;
-  border-radius: var(--radius-sm);
-  background: rgba(var(--tint-rgb), 0.03);
-  cursor: pointer;
-  transition: background var(--dur-1) var(--ease);
-  font-family: var(--font-sans); font-size: 11px;
-  color: rgba(var(--tint-rgb), 0.55);
-}
-.qbtarget:hover { background: rgba(var(--tint-rgb), 0.06); }
-.qbtarget-val {
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
-  color: var(--fg-1);
-}
-.qbtarget :is(i, svg) { font-size: 12px; opacity: 0.4; }
-
-.qbedit { /* expanded inline-edit panel */
-  margin-top: 8px;
-  background: var(--bg-surface-2);
-  border: 1px solid rgba(var(--tint-rgb), 0.08);
-  border-radius: var(--radius-md);
-  padding: 10px;
-  display: flex; flex-direction: column; gap: 8px;
-  animation: qbgrow 200ms var(--ease) forwards;
-}
-@keyframes qbgrow { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
-.qbedit-head { display: flex; justify-content: space-between; align-items: baseline; font-family: var(--font-sans); }
-.qbedit-name { font-size: 11px; letter-spacing: var(--track-allcaps); text-transform: uppercase; font-weight: 600; color: rgba(var(--tint-rgb), 0.55); }
-.qbedit-close { background: transparent; border: 0; color: rgba(var(--tint-rgb), 0.55); cursor: pointer; padding: 2px 4px; font-size: 14px; }
-
-/* ───────────────────────────────────────────────── Variant C: Favorites Rail */
-.qrail {
-  position: absolute; left: 0; right: 0; bottom: 0;
-  background: var(--bg-surface);
-  border-top: 1px solid rgba(var(--tint-rgb), 0.06);
-  padding: 14px 24px 18px;
-  display: flex; flex-direction: column; gap: 0;
-  transition: transform var(--dur-3) var(--ease);
-  z-index: 9;
-}
-.qrail-handle {
-  display: flex; align-items: center; justify-content: space-between;
-  padding-bottom: 12px;
-}
-.qrail-favs {
-  display: flex; gap: 10px;
-  flex: 1 1 auto;
-  overflow-x: auto;
-}
-.qfav {
-  flex: 0 0 auto;
-  min-width: 132px;
-  background: var(--bg-surface-2);
-  border: 1px solid rgba(var(--tint-rgb), 0.05);
-  border-radius: var(--radius-md);
-  padding: 10px 12px;
-  display: flex; flex-direction: column; gap: 6px;
-  cursor: pointer;
-  transition: all var(--dur-1) var(--ease);
-  text-align: left;
-  color: var(--fg-1);
-}
-.qfav:hover { border-color: rgba(var(--tint-rgb), 0.15); transform: translateY(-1px); }
-.qfav.is-active {
-  background: rgba(var(--tint-rgb), 0.06);
-  border-color: var(--copper-500);
-  box-shadow: 0 0 0 1px var(--copper-500);
-}
-.qfav-row1 {
-  display: flex; align-items: center; justify-content: space-between; gap: 6px;
-}
-.qfav-name { font-family: var(--font-sans); font-size: 12px; font-weight: 500; }
-.qfav-ratio {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: rgba(var(--tint-rgb), 0.55);
-}
-.qfav-row2 {
-  display: flex; align-items: center; gap: 6px;
-}
-.qfav-key { font-family: var(--font-sans); font-size: 10px; color: rgba(var(--tint-rgb), 0.4); margin-left: auto; }
-
-.qrail-toggle {
-  display: inline-flex; align-items: center; gap: 6px;
-  border: 1px solid rgba(var(--tint-rgb), 0.08);
-  background: transparent;
-  color: rgba(var(--tint-rgb), 0.65);
-  padding: 6px 10px;
-  border-radius: var(--radius-sm);
-  font-family: var(--font-sans); font-size: 11px; font-weight: 500;
-  cursor: pointer;
-  text-transform: uppercase;
-  letter-spacing: var(--track-allcaps);
-  transition: all var(--dur-1) var(--ease);
-  margin-left: 12px;
-}
-.qrail-toggle:hover { background: rgba(var(--tint-rgb), 0.04); }
-.qrail-toggle :is(i, svg) { font-size: 14px; transition: transform var(--dur-2) var(--ease); }
-.qrail-toggle.is-open :is(i, svg) { transform: rotate(180deg); }
-
-.qrail-steppers {
-  display: grid; grid-template-columns: repeat(5, 1fr);
-  gap: 14px;
-  padding-top: 14px;
-  margin-top: 4px;
-  border-top: 1px solid rgba(var(--tint-rgb), 0.06);
-  max-height: 200px;
-  opacity: 1;
-  overflow: hidden;
-  transition: max-height var(--dur-3) var(--ease), opacity var(--dur-2) var(--ease), padding var(--dur-3) var(--ease);
-}
-.qrail-steppers.is-collapsed {
-  max-height: 0; opacity: 0; padding-top: 0; margin-top: 0; border-top-color: transparent;
-}
-
 /* ───────────────────────────────────────────────── Phone-specific overrides */
 .qsheet.is-phone {
   padding: 20px 16px 20px;
@@ -348,10 +227,6 @@
 .qsheet.is-phone .qsheet-cta { justify-content: center; }
 .qsheet.is-phone .qcs-num { font-size: 18px; }
 .qsheet.is-phone .qcs-btn { width: 32px; flex-basis: 32px; }
-
-.qrail.is-phone { padding: 10px 16px 14px; }
-.qrail.is-phone .qfav { min-width: 116px; padding: 8px 10px; }
-.qrail.is-phone .qrail-steppers { grid-template-columns: 1fr 1fr; gap: 10px; padding-top: 10px; }
 
 /* Tablet-specific tighter spacing */
 .qsheet.is-tablet { padding: 22px 28px 24px; }

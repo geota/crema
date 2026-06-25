@@ -12,9 +12,8 @@
  *    math, scope/type defaults, Doorkeeper rotation),
  *  - the sessionStorage PKCE stash/take helpers.
  *
- * The exact form-encoded request bodies are copied verbatim from the existing
- * `oauth.ts` so the wire bytes are unchanged. Those existing Promise functions
- * stay live until the T-16 facade swap.
+ * The exact form-encoded request bodies are copied verbatim from the prior
+ * `visualizer/oauth.ts` so the wire bytes are unchanged.
  */
 
 import { Context, Effect, Layer, Schema } from 'effect';
