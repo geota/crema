@@ -12,21 +12,16 @@
 //!
 //! ## Intentional parity gaps vs `de1-wasm` (RS3)
 //!
-//! The web (`de1-wasm`) bridge exposes two surfaces this FFI bridge deliberately
-//! does NOT mirror yet, because the Android shell has no feature that consumes
-//! them — mirroring them now would be dead exports (and uniffi scaffolding the
-//! Kotlin side would never call):
+//! `MachineRequest` IS mirrored here and functional — Android drives machine-state
+//! transitions through `request_machine_state` (`MachineRequest::Idle` / `Sleep` /
+//! `Espresso` / …). The one remaining export gap is the two diagnostic request
+//! variants the web bridge carries but this one withholds: `ShortCal` / `SelfTest`
+//! (`de1-wasm`'s `MachineRequest`). They are factory / diagnostic surfaces with no
+//! Android UX; add them when one appears.
 //!
-//! - **`MachineRequest` / machine-state requests** (`ShortCal`, `SelfTest`,
-//!   Sleep/Idle/Espresso/… transitions). Android has no machine-control surface
-//!   yet — its `WriteCharacteristic` path is unimplemented (tracked as AND5) —
-//!   so the request enum + command plumbing has no caller. Mirror it when
-//!   Android gains machine control.
-//!
-//! These are tracked divergences, not oversights: the shared `de1-app` /
-//! `de1-domain` logic is identical across shells — only the thin per-shell
-//! *exports* differ, scoped to what each shell uses today. Keep this list in
-//! sync as the Android surface grows.
+//! Otherwise the shared `de1-app` / `de1-domain` logic is identical across shells —
+//! only the thin per-shell *exports* differ, scoped to what each shell uses today.
+//! Keep this list in sync as the Android surface grows.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard};
@@ -1180,7 +1175,7 @@ impl CremaBridge {
     /// before calling. From then on the DE1 applies `measured / reported` as
     /// a multiplier on that sensor.
     pub fn write_calibration(&self, sensor: CalSensor, reported: f32, measured: f32) -> String {
-        json(
+        self.emit(
             self.core()
                 .write_calibration(sensor.into(), reported, measured),
         )
@@ -1513,7 +1508,7 @@ impl CremaBridge {
     /// Set the flush timeout. `ms` is milliseconds; the wire scale is
     /// `int(10 × seconds)`. MMR `0x803848`, 2-byte.
     pub fn set_flush_timeout(&self, ms: u32) -> String {
-        json(
+        self.emit(
             self.core()
                 .set_flush_timeout(std::time::Duration::from_millis(u64::from(ms))),
         )
@@ -1672,29 +1667,10 @@ impl CremaBridge {
         };
         let now = std::time::Duration::from_millis(now_ms);
         match self.core().upload_profile(&profile, now) {
-            Ok(out) => json(out),
+            Ok(out) => self.emit(out),
             Err(err) => {
                 let mut out = CoreOutput::default();
-                let reason = match err {
-                    de1_app::AppError::ProfileUpload(domain) => match domain {
-                        de1_domain::DomainError::NoSteps => ProfileUploadFailure::Empty,
-                        de1_domain::DomainError::TooManySteps { count } => {
-                            ProfileUploadFailure::TooManySteps {
-                                count: u32::try_from(count).unwrap_or(u32::MAX),
-                            }
-                        }
-                        // Any other `DomainError` shouldn't reach this path;
-                        // surface its `Display` rather than coercing to `Empty`.
-                        e => ProfileUploadFailure::Internal {
-                            message: e.to_string(),
-                        },
-                    },
-                    // Other AppError variants shouldn't reach this path either;
-                    // surface the underlying cause.
-                    e => ProfileUploadFailure::Internal {
-                        message: e.to_string(),
-                    },
-                };
+                let reason = ProfileUploadFailure::from(err);
                 out.events.push(Event::ProfileUploadFailed { reason });
                 json(out)
             }
@@ -1837,6 +1813,86 @@ mod tests {
         let json = bridge.request_machine_state(MachineRequest::Idle);
         assert!(json.contains("\"commands\""));
         assert!(json.contains("WriteCharacteristic"));
+    }
+
+    #[test]
+    fn read_only_strips_writes_from_the_newly_gated_methods() {
+        // issue 04: write_calibration / set_flush_timeout / upload_profile used to
+        // bypass the read-only-mirror gate. Now that they route through `emit`, a
+        // read-only secondary emits no hardware-write command from any of them.
+        fn command_count(json: &str) -> usize {
+            let out: serde_json::Value = serde_json::from_str(json).unwrap();
+            out["commands"].as_array().map_or(0, Vec::len)
+        }
+        // set_flush_timeout normally emits an MMR write…
+        let live = CremaBridge::new();
+        assert!(command_count(&live.set_flush_timeout(5_000)) > 0);
+        // …but a read-only mirror strips the command from the formerly-bypassing paths.
+        let mirror = CremaBridge::new();
+        mirror.set_read_only(true);
+        assert_eq!(
+            command_count(&mirror.write_calibration(CalSensor::Flow, 1.0, 1.1)),
+            0
+        );
+        assert_eq!(command_count(&mirror.set_flush_timeout(5_000)), 0);
+    }
+
+    #[test]
+    fn mmr_reg_mirror_covers_every_mmr_register() {
+        // `MmrReg` is a hand-maintained mirror of `MmrRegister` (issue 15 / F25).
+        // The exhaustive match fails to compile if a core register lacks a mirror
+        // variant; the round-trip catches a transposition (e.g. a copy-paste slip).
+        let mirror: Vec<(MmrReg, MmrRegister)> = MmrRegister::ALL
+            .into_iter()
+            .map(|core_reg| {
+                let mirror = match core_reg {
+                    MmrRegister::CpuBoardVersion => MmrReg::CpuBoardVersion,
+                    MmrRegister::MachineModel => MmrReg::MachineModel,
+                    MmrRegister::FirmwareVersion => MmrReg::FirmwareVersion,
+                    MmrRegister::GhcInfo => MmrReg::GhcInfo,
+                    MmrRegister::TankTempThreshold => MmrReg::TankTempThreshold,
+                    MmrRegister::FanThreshold => MmrReg::FanThreshold,
+                    MmrRegister::SerialNumber => MmrReg::SerialNumber,
+                    MmrRegister::SteamFlow => MmrReg::SteamFlow,
+                    MmrRegister::RefillKit => MmrReg::RefillKit,
+                    MmrRegister::FlushFlowRate => MmrReg::FlushFlowRate,
+                    MmrRegister::FlushTemp => MmrReg::FlushTemp,
+                    MmrRegister::HotWaterFlowRate => MmrReg::HotWaterFlowRate,
+                    MmrRegister::Phase1FlowRate => MmrReg::Phase1FlowRate,
+                    MmrRegister::Phase2FlowRate => MmrReg::Phase2FlowRate,
+                    MmrRegister::HotWaterIdleTemp => MmrReg::HotWaterIdleTemp,
+                    MmrRegister::GhcMode => MmrReg::GhcMode,
+                    MmrRegister::SteamHighFlowStart => MmrReg::SteamHighFlowStart,
+                    MmrRegister::HeaterVoltage => MmrReg::HeaterVoltage,
+                    MmrRegister::EspressoWarmupTimeout => MmrReg::EspressoWarmupTimeout,
+                    MmrRegister::CalibrationFlowMultiplier => MmrReg::CalibrationFlowMultiplier,
+                    MmrRegister::FlushTimeout => MmrReg::FlushTimeout,
+                    MmrRegister::UsbChargerOn => MmrReg::UsbChargerOn,
+                    MmrRegister::FeatureFlags => MmrReg::FeatureFlags,
+                    MmrRegister::UserPresent => MmrReg::UserPresent,
+                    MmrRegister::SteamTwoTapStop => MmrReg::SteamTwoTapStop,
+                    MmrRegister::CupWarmerTemp => MmrReg::CupWarmerTemp,
+                };
+                (mirror, core_reg)
+            })
+            .collect();
+        assert_eq!(mirror.len(), MmrRegister::ALL.len());
+        for (mirror_reg, core_reg) in mirror {
+            assert_eq!(MmrRegister::from(mirror_reg), core_reg);
+        }
+    }
+
+    #[test]
+    fn cal_sensor_mirror_covers_every_cal_target() {
+        // As above, for `CalSensor` / `CalTarget` (issue 15 / F25).
+        for target in [CalTarget::Flow, CalTarget::Pressure, CalTarget::Temperature] {
+            let mirror = match target {
+                CalTarget::Flow => CalSensor::Flow,
+                CalTarget::Pressure => CalSensor::Pressure,
+                CalTarget::Temperature => CalSensor::Temperature,
+            };
+            assert_eq!(CalTarget::from(mirror), target);
+        }
     }
 
     #[test]
