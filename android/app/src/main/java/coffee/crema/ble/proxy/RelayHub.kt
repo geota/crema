@@ -230,6 +230,16 @@ class RelayHub(
      *  scope) or Denied. On denial we close the outbox so the session ends — an
      *  unapproved client gets no roster, snapshot, or stream. */
     private suspend fun handleHello(session: ClientSession, frame: Frame.Hello) {
+        // Refuse a protocol-version skew up front (issue 05): ignoreUnknownKeys
+        // already absorbs additive changes, so a different PROXY_PROTOCOL_VERSION
+        // means a structurally breaking change — deny rather than risk mis-decoding a
+        // later frame. (Secondaries do the mirror check on Frame.Welcome.v.)
+        if (frame.v != PROXY_PROTOCOL_VERSION) {
+            Log.i(TAG, "denied ${frame.clientName}: protocol v${frame.v} != v$PROXY_PROTOCOL_VERSION")
+            deliver(session, Frame.Denied("version mismatch"))
+            session.outbox.close()
+            return
+        }
         when (val decision = authorize(frame.clientId, frame.clientName)) {
             is PairingDecision.Allowed -> {
                 session.approved = true

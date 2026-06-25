@@ -126,9 +126,21 @@ class ProxyTransport(
     private fun dispatch(frame: Frame) {
         when (frame) {
             is Frame.Welcome -> {
-                applyRoster(frame.roster)
-                onWelcome(frame.scope)
-                if (!welcomed.isCompleted) welcomed.complete(Unit)
+                // Reject a primary on a different protocol version (issue 05): the
+                // primary normally denies our Hello, but an OLDER primary won't know
+                // to, so the secondary refuses here and surfaces "please update".
+                if (frame.v != PROXY_PROTOCOL_VERSION) {
+                    onDenied("version mismatch — update Crema on both devices")
+                    if (!welcomed.isCompleted) {
+                        welcomed.completeExceptionally(
+                            IllegalStateException("Proxy version mismatch: primary v${frame.v} != v$PROXY_PROTOCOL_VERSION"),
+                        )
+                    }
+                } else {
+                    applyRoster(frame.roster)
+                    onWelcome(frame.scope)
+                    if (!welcomed.isCompleted) welcomed.complete(Unit)
+                }
             }
             is Frame.Roster -> applyRoster(frame.devices)
             is Frame.Attached -> {
