@@ -3140,12 +3140,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         ProxyConfig(p.proxyRole, p.proxyPrimaryHost, p.proxyPrimaryPort, p.replayPrimary)
     }.getOrDefault(ProxyConfig("normal", "", 0))
 
-    /** Newest `session-*.jsonl` capture in the app's captures dir, for the
-     *  replay-backed PRIMARY demo (push one via `adb` to an emulator). */
+    /** Newest `session-*.jsonl` capture for the replay-backed PRIMARY demo. Checks the
+     *  app's INTERNAL `filesDir/captures` FIRST — a newer-Android emulator (scoped
+     *  storage) blocks the app from reading `adb push`ed files in its external dir, so
+     *  `run-as <pkg> cp` a capture into internal storage there — then falls back to the
+     *  EXTERNAL `getExternalFilesDir/captures`, where the app's own session recordings
+     *  land on a real device. Internal-first also means a hand-placed demo capture wins
+     *  over the replay's own auto-recordings (which write to external). */
     private fun newestCapture(): File? = runCatching {
-        File(getApplication<Application>().getExternalFilesDir(null), "captures")
-            .listFiles { f -> f.isFile && f.name.endsWith(".jsonl") }
-            ?.maxByOrNull { it.lastModified() }
+        val app = getApplication<Application>()
+        listOfNotNull(
+            File(app.filesDir, "captures"),
+            app.getExternalFilesDir(null)?.let { File(it, "captures") },
+        ).firstNotNullOfOrNull { dir ->
+            dir.listFiles { f -> f.isFile && f.name.endsWith(".jsonl") }?.maxByOrNull { it.lastModified() }
+        }
     }.getOrNull()
 
     /** Map a capture `src` label to its DE1 `(service, characteristic)` for replay. */
