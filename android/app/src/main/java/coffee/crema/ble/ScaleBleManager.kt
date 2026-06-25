@@ -110,6 +110,15 @@ class ScaleBleManager(
     /** The connected scale's Bluetooth address (for remembering it), or null. */
     val connectedAddress: String? get() = device?.address
 
+    /** The connected scale's advertised name, or null — what a mirror's roster
+     *  advertises so a secondary's scale manager scan-matches it (issue 04). */
+    val connectedName: String? get() = device?.let { advertisedName }
+
+    /** The connected scale's weight-notify characteristic, or null until resolved —
+     *  a **counted stream** the relay must NOT snapshot (it'd double-count in the
+     *  mirror's core, same hazard as the DE1 ShotSample); issue 04. */
+    val weightNotifyChar: UUID? get() = weightNotifyUuid
+
     /** The job collecting the weight-notify stream. */
     private var observeJob: Job? = null
 

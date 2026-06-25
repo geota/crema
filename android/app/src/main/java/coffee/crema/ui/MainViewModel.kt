@@ -940,6 +940,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             var wasReady = false
             ble.state.collect { state ->
                 _ui.update { it.copy(bleState = state, de1BluetoothAddress = ble.connectedAddress) }
+                // A DE1 connect/disconnect changes the roster this primary
+                // advertises to its mirrors (issue 04) — re-push so a secondary
+                // that attached earlier tracks the change without reconnecting.
+                relayHub?.pushRoster()
                 // Fire the machine read-sweep once per connection, on the first
                 // transition into READY (services discovered + subscribed). The
                 // reads emit read-request commands whose replies arrive later as
@@ -980,6 +984,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         }
                     }
                 }
+                // A scale connect/disconnect changes the roster this primary
+                // advertises to its mirrors (issue 04) — re-push so a secondary
+                // that attached BEFORE the scale was connected attaches it now,
+                // without needing to reconnect (the Welcome roster is attach-time
+                // only). This closes the gap the issue-04 demo surfaced.
+                relayHub?.pushRoster()
             }
         }
         loadBuiltinProfiles()
@@ -2927,14 +2937,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val hub = RelayHub(
             primaryId = deviceLabel(),
             primaryName = deviceLabel(),
-            // The DE1 the primary holds (DE1-only mirror for now).
+            // The devices the primary holds: the DE1, plus the scale when one is
+            // connected (issue 04) — its advertised name lets a secondary's scale
+            // manager scan-match + re-derive the codec via connectScale.
             roster = {
-                ble.connectedAddress?.let { listOf(DeviceInfo(it, "DE1", "de1", "CONNECTED")) } ?: emptyList()
+                buildList {
+                    ble.connectedAddress?.let { add(DeviceInfo(it, "DE1", "de1", "CONNECTED")) }
+                    scale.connectedAddress?.let { addr ->
+                        add(DeviceInfo(addr, scale.connectedName ?: "Scale", "scale", "CONNECTED"))
+                    }
+                }
             },
             readSource = { a, s, c -> tappingRef!!.readByAddress(a, s, c) },
-            // Everything except the counted ShotSample stream is a latest-value
-            // state/identity char and is replayed on attach.
-            isSnapshotChar = { _, char -> char != De1Uuids.SHOT_SAMPLE },
+            // Latest-value state/identity chars snapshot on attach; the COUNTED
+            // streams — the DE1 ShotSample and the scale weight — stay live-only or
+            // the mirror's core double-counts (issue 04; M1-PROTOCOL §5).
+            isSnapshotChar = { _, char -> char != De1Uuids.SHOT_SAMPLE && char != scale.weightNotifyChar },
             // Relayed user intent from a secondary → this primary's command router.
             controlHandler = { method, args -> handleRelayedControl(method, args) },
             // The single-owner session config a mirror snaps to on attach (T2).
@@ -2970,7 +2988,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             link.state.collect { s -> _ui.update { it.copy(mirrorReconnecting = s == LinkState.CONNECTING) } }
         }
-        return ProxyTransport(
+        val proxy = ProxyTransport(
             // clientId = the STABLE per-install id (issue 14) so the host's TOFU
             // pairing (issue 02) remembers THIS device, not every same-model phone;
             // clientName = the human label shown in the host's prompt.
@@ -2986,6 +3004,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // Re-run the attach handshake when the link redials (issue 03).
             reconnects = link.reconnects,
         )
+        // Mirror the primary's SCALE (issue 04), roster-driven: attach it only once
+        // the primary actually advertises one — no blind scan, so a scaleless primary
+        // leaves us on "Not paired" (not a stuck "Scanning…"). connectScale's scan is
+        // satisfied by the same roster, so this just times the trigger.
+        viewModelScope.launch {
+            proxy.deviceRoster.collect { devices ->
+                val hasScale = devices.any { it.kind == "scale" }
+                if (hasScale && scale.state.value.let { it != ScaleBleManager.State.READY && it != ScaleBleManager.State.SCANNING }) {
+                    appendLog("Mirror: primary has a scale — attaching")
+                    connectScale()
+                }
+            }
+        }
+        return proxy
     }
 
     // ── Live mode switches (M2 — no restart) ────────────────────────────────
