@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.flow.onCompletion
@@ -98,6 +99,11 @@ class NordicBleTransport(context: Context) : BleTransport {
     /** Per-device mirror of the coarse [BleTransport.ConnState]. */
     private val states = ConcurrentHashMap<NordicDeviceHandle, MutableStateFlow<BleTransport.ConnState>>()
 
+    /** Per-device job mirroring [Peripheral.state] into [states]; cancelled + replaced
+     *  on every [connect] so repeated connects (each reconnect attempt) don't stack
+     *  duplicate collectors all racing to write the same state (issue 10). */
+    private val stateMirrorJobs = ConcurrentHashMap<NordicDeviceHandle, Job>()
+
     /** A [BleTransport.DeviceHandle] backed by a Nordic [Peripheral]. */
     private class NordicDeviceHandle(
         override val name: String?,
@@ -170,10 +176,12 @@ class NordicBleTransport(context: Context) : BleTransport {
             MutableStateFlow(BleTransport.ConnState.DISCONNECTED)
         }
 
-        // Mirror the Nordic ConnectionState into the coarse ConnState flow for
-        // as long as this transport lives. Launched on the transport scope so
-        // it survives the connect() call and tracks later link loss.
-        peripheral.state
+        // Mirror the Nordic ConnectionState into the coarse ConnState flow for as
+        // long as this transport lives. Cancel any prior mirror for this handle first
+        // so repeated connect()s (every reconnect attempt) don't stack duplicate
+        // collectors all racing to write the same state (issue 10).
+        stateMirrorJobs.remove(handle)?.cancel()
+        stateMirrorJobs[handle] = peripheral.state
             .onEach { stateFlow.value = it.toConnState() }
             .launchIn(scope)
 

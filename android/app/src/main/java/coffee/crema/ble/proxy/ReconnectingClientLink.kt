@@ -106,6 +106,7 @@ class ReconnectingClientLink(
         loop.cancel()
         runCatching { live?.close() }
         client.close()
+        inbox.close()
     }
 
     /** Synchronous teardown for non-suspend call sites (e.g. `ViewModel.onCleared`).
@@ -113,6 +114,9 @@ class ReconnectingClientLink(
     fun dispose() {
         loop.cancel()
         runCatching { client.close() }
+        // Close the inbox so a consumer of incoming() (the ProxyTransport's dispatch
+        // flow) completes instead of suspending forever on a dead link (issue 10).
+        inbox.close()
     }
 
     private companion object {
