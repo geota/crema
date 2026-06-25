@@ -293,8 +293,9 @@ sealed class Frame {
 /**
  * A device the primary holds, as advertised in the [Frame.Roster] /
  * [Frame.Welcome]. [name] is the BLE advertised name — the secondary's managers
- * re-apply their own `isDe1Name` / `isBookooName` rule to it and, for a scale,
- * re-derive the codec/UUIDs locally via `bridge.connectScale(name)`, so no scale
+ * re-apply their own `isDe1Name` rule (DE1) or `scaleScanUuids()` UUID match
+ * (scales, post-AND6), re-deriving the scale codec/UUIDs locally via
+ * `bridge.connectScale(name)`, so no scale
  * UUIDs need cross the wire. [kind] (`"de1"` / `"scale"`) is an informational
  * hint; [state] is a `BleTransport.ConnState` name.
  */

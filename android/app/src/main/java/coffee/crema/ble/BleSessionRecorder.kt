@@ -2,6 +2,7 @@ package coffee.crema.ble
 
 import android.content.Context
 import android.util.Log
+import coffee.crema.ble.proxy.Hex
 import coffee.crema.core.NotificationSource
 import java.io.BufferedWriter
 import java.io.File
@@ -191,7 +192,7 @@ class BleSessionRecorder(private val context: Context) {
         synchronized(lock) {
             val w = writer ?: return
             try {
-                w.write("""{"t":$tMs,"dir":"$dir","src":"$src","hex":"${data.toHex()}"}""")
+                w.write("""{"t":$tMs,"dir":"$dir","src":"$src","hex":"${Hex.encode(data)}"}""")
                 w.newLine()
                 w.flush()
             } catch (e: Exception) {
@@ -200,18 +201,7 @@ class BleSessionRecorder(private val context: Context) {
         }
     }
 
-    /** Lowercase hex with no separators — the capture format's `hex` field. */
-    private fun ByteArray.toHex(): String {
-        val sb = StringBuilder(size * 2)
-        for (b in this) {
-            sb.append(HEX[(b.toInt() ushr 4) and 0xF])
-            sb.append(HEX[b.toInt() and 0xF])
-        }
-        return sb.toString()
-    }
-
     companion object {
         private const val TAG = "BleSessionRecorder"
-        private val HEX = "0123456789abcdef".toCharArray()
     }
 }

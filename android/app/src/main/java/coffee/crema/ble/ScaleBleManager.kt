@@ -2,6 +2,7 @@ package coffee.crema.ble
 
 import android.os.SystemClock
 import android.util.Log
+import coffee.crema.ble.proxy.Hex
 import coffee.crema.core.CremaBridge
 import coffee.crema.core.NotificationSource
 import coffee.crema.core.ScaleUuids as CoreScaleUuids
@@ -475,7 +476,7 @@ class ScaleBleManager(
     private fun handleCommandNotification(notification: BleTransport.Notification) {
         val tMs = notification.atMs
         recorder.recordInbound(FF12_SRC, notification.data, tMs)
-        Log.d(TAG, "$FF12_SRC notification: ${notification.data.toHex()}")
+        Log.d(TAG, "$FF12_SRC notification: ${Hex.encode(notification.data)}")
         // CremaBridge.onNotification returns the CoreOutput as a JSON string.
         val json = bridge.onNotification(
             NotificationSource.SCALE_COMMAND,
@@ -503,18 +504,6 @@ class ScaleBleManager(
          * responses.
          */
         private const val FF12_SRC = "SCALE_FF12"
-
-        /** Lowercase hex with no separators — for Logcat dumps of raw payloads. */
-        private val HEX = "0123456789abcdef".toCharArray()
-
-        private fun ByteArray.toHex(): String {
-            val sb = StringBuilder(size * 2)
-            for (b in this) {
-                sb.append(HEX[(b.toInt() ushr 4) and 0xF])
-                sb.append(HEX[b.toInt() and 0xF])
-            }
-            return sb.toString()
-        }
 
     }
 }
