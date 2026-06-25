@@ -58,6 +58,8 @@ import coffee.crema.settings.withCommonSettings
 import coffee.crema.visualizer.DEFAULT_VISUALIZER_SYNC_PREFS
 import coffee.crema.visualizer.VisualizerClient
 import coffee.crema.visualizer.VisualizerStore
+import coffee.crema.visualizer.wireShotJson
+import coffee.crema.visualizer.storedShotFromBackupJson
 import coffee.crema.visualizer.VisualizerSync
 import coffee.crema.settings.SettingsStore
 import coffee.crema.ble.BleScanner
@@ -1736,7 +1738,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         )
         val beansJson = runCatching { json.encodeToString(ListSerializer(Bean.serializer()), s.beans) }.getOrElse { "[]" }
         val roastersJson = runCatching { json.encodeToString(ListSerializer(Roaster.serializer()), s.roasters) }.getOrElse { "[]" }
-        val shotsJson = runCatching { json.encodeToString(ListSerializer(StoredShot.serializer()), s.history) }.getOrElse { "[]" }
+        // Shots ride in the canonical core `StoredShot` wire shape (the SAME shape
+        // the Visualizer path emits via `export_v2_json_shot`), NOT Android's flat
+        // store shape: the core backup exporter parses `shots:[StoredShot]`, so the
+        // flat shape fails the whole envelope's deserialization → the entire backup
+        // aborts once any shot exists (issue 01). `wireShotJson` emits
+        // formatVersion/completedAt/record; restore inverts via storedShotFromBackupJson.
+        val shotsJson = runCatching {
+            JsonArray(s.history.map { wireShotJson(it, forBackup = true) }).toString()
+        }.getOrElse { "[]" }
         // Settings line: the shared cross-shell CommonSettings `common` block (both
         // shells emit it identically, so common prefs restore web<->Android) + this
         // shell's `_shell` tag + Android-only `qcGrind` (re-applied only on Android).
@@ -1888,7 +1898,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     "visualizerPrefs" -> restoredVisualizerPrefs = decodeFilled(VisualizerSyncPrefs.serializer(), DEFAULT_VISUALIZER_SYNC_PREFS, obj)
                     "roaster" -> runCatching { json.decodeFromString(Roaster.serializer(), stripKind(obj)) }.getOrNull()?.let(roasters::add)
                     "bean" -> runCatching { json.decodeFromString(Bean.serializer(), stripKind(obj)) }.getOrNull()?.let(beans::add)
-                    "shot" -> runCatching { json.decodeFromString(StoredShot.serializer(), stripKind(obj)) }.getOrNull()?.let(shots::add)
+                    // Shots are core-shape (formatVersion/completedAt/record) on the wire
+                    // — both from a fixed Android backup and from any web-origin backup —
+                    // so invert via storedShotFromBackupJson, NOT the flat serializer
+                    // (which MissingFieldException'd and silently dropped them) (issue 01).
+                    "shot" -> storedShotFromBackupJson(obj, json)?.let(shots::add)
                     "profile" -> profiles.add(stripKind(obj))
                     else -> {}
                 }
@@ -3698,11 +3712,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             notifyUser(if (skipped > 0) "Already imported — nothing new to add" else "No beans found in that file")
             return
         }
-        _ui.value = s.copy(
-            beans = s.beans + newBeans,
-            roasters = s.roasters + newRoasters,
-            activeBeanId = s.activeBeanId ?: newBeans.firstOrNull()?.id,
-        )
+        // Apply onto the CURRENT state (not the snapshot `s`) so a concurrent
+        // high-rate telemetry / scale update isn't clobbered (issue 11).
+        _ui.update { cur ->
+            cur.copy(
+                beans = cur.beans + newBeans,
+                roasters = cur.roasters + newRoasters,
+                activeBeanId = cur.activeBeanId ?: newBeans.firstOrNull()?.id,
+            )
+        }
         persistLibrary()
         val bn = newBeans.size; val rn = newRoasters.size
         _ui.update { it.copy(
@@ -3849,8 +3867,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Duplicate a bag into a fresh row (new id, "name (copy)", not favourite). Persisted. */
     fun duplicateBean(id: String) {
-        val s = _ui.value
-        val base = s.beans.firstOrNull { it.id == id } ?: return
+        val base = _ui.value.beans.firstOrNull { it.id == id } ?: return
         val now = System.currentTimeMillis()
         val copy = base.copy(
             id = "bean:" + java.util.UUID.randomUUID(),
@@ -3859,7 +3876,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             createdAt = now,
             updatedAt = now,
         )
-        _ui.value = s.copy(beans = s.beans + copy)
+        _ui.update { it.copy(beans = it.beans + copy) }
         persistLibrary()
     }
 
@@ -3884,9 +3901,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Map a single bean through [transform], stamp `updatedAt`, persist. */
     private fun mutateBean(id: String, transform: (Bean) -> Bean) {
-        val s = _ui.value
         val now = System.currentTimeMillis()
-        _ui.value = s.copy(beans = s.beans.map { if (it.id == id) transform(it).copy(updatedAt = now) else it })
+        _ui.update { s -> s.copy(beans = s.beans.map { if (it.id == id) transform(it).copy(updatedAt = now) else it }) }
         persistLibrary()
     }
 
@@ -3940,11 +3956,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Delete a roaster; detach its bags (clear their `roasterId`). Persisted. */
     fun deleteRoaster(id: String) {
-        val s = _ui.value
-        _ui.value = s.copy(
-            roasters = s.roasters.filterNot { it.id == id },
-            beans = s.beans.map { if (it.roasterId == id) it.copy(roasterId = null) else it },
-        )
+        _ui.update { s ->
+            s.copy(
+                roasters = s.roasters.filterNot { it.id == id },
+                beans = s.beans.map { if (it.roasterId == id) it.copy(roasterId = null) else it },
+            )
+        }
         persistLibrary()
     }
 
@@ -4782,57 +4799,63 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
             is Event.Telemetry -> {
                 val t = event.content
-                val prev = _ui.value
                 // Integrate group flow into the running water total (the DE1 has no
                 // cumulative counter). In-memory only — NOT persisted/recomputed per
                 // sample (~25–40 Hz); flushed on shot / water-session completion.
+                // SIDE EFFECT — stays OUTSIDE the update lambda so it accumulates
+                // exactly once per frame even if the CAS retries (issue 11).
                 accumulateMaintenance(t.group_flow, System.currentTimeMillis())
                 val line = "t=%dms  P=%.1fbar  flow=%.1fmL/s  head=%.1f°C".format(
                     t.elapsed.toLong(), t.group_pressure, t.group_flow, t.head_temp,
                 )
-                // Append a chart sample while a shot is running (the buffer fills
-                // only during extraction, like the web). Fold in the latest scale
-                // weight/flow so the WEIGHT curves track the cup. FIFO-capped.
-                val nextBuffer = if (prev.shotInProgress) {
-                    val sample = TelemetrySample(
-                        elapsedMs = t.elapsed.toLong(),
+                // Atomic read-modify-write: build the chart buffer from the lambda's
+                // `prev` (the live state), so a concurrent Event.ScaleReading update{}
+                // landing mid-frame isn't clobbered (issue 11).
+                _ui.update { prev ->
+                    // Append a chart sample while a shot is running (the buffer fills
+                    // only during extraction, like the web). Fold in the latest scale
+                    // weight/flow so the WEIGHT curves track the cup. FIFO-capped.
+                    val nextBuffer = if (prev.shotInProgress) {
+                        val sample = TelemetrySample(
+                            elapsedMs = t.elapsed.toLong(),
+                            pressure = t.group_pressure,
+                            flow = t.group_flow,
+                            headTemp = t.head_temp,
+                            mixTemp = t.mix_temp,
+                            weight = prev.scaleWeightG,
+                            weightFlow = prev.scaleFlowGPerS,
+                            dispensedVolume = t.dispensed_volume,
+                            resistance = t.resistance,
+                            resistanceWeight = t.resistance_weight,
+                            setHeadTemp = t.set_head_temp,
+                            setGroupPressure = t.set_group_pressure,
+                            setGroupFlow = t.set_group_flow,
+                        )
+                        val appended = prev.shotTelemetry + sample
+                        if (appended.size > SHOT_TELEMETRY_CAP) {
+                            appended.takeLast(SHOT_TELEMETRY_CAP)
+                        } else {
+                            appended
+                        }
+                    } else {
+                        prev.shotTelemetry
+                    }
+                    // Keep the debug string AND project the structured channels the
+                    // Brew dashboard reads. High-rate; no log line.
+                    prev.copy(
+                        telemetry = line,
                         pressure = t.group_pressure,
                         flow = t.group_flow,
                         headTemp = t.head_temp,
                         mixTemp = t.mix_temp,
-                        weight = prev.scaleWeightG,
-                        weightFlow = prev.scaleFlowGPerS,
+                        steamTemp = t.steam_temp,
                         dispensedVolume = t.dispensed_volume,
                         resistance = t.resistance,
                         resistanceWeight = t.resistance_weight,
-                        setHeadTemp = t.set_head_temp,
-                        setGroupPressure = t.set_group_pressure,
-                        setGroupFlow = t.set_group_flow,
+                        shotElapsedMs = t.elapsed.toLong(),
+                        shotTelemetry = nextBuffer,
                     )
-                    val appended = prev.shotTelemetry + sample
-                    if (appended.size > SHOT_TELEMETRY_CAP) {
-                        appended.takeLast(SHOT_TELEMETRY_CAP)
-                    } else {
-                        appended
-                    }
-                } else {
-                    prev.shotTelemetry
                 }
-                // Keep the debug string AND project the structured channels the
-                // Brew dashboard reads. High-rate; no log line.
-                _ui.value = prev.copy(
-                    telemetry = line,
-                    pressure = t.group_pressure,
-                    flow = t.group_flow,
-                    headTemp = t.head_temp,
-                    mixTemp = t.mix_temp,
-                    steamTemp = t.steam_temp,
-                    dispensedVolume = t.dispensed_volume,
-                    resistance = t.resistance,
-                    resistanceWeight = t.resistance_weight,
-                    shotElapsedMs = t.elapsed.toLong(),
-                    shotTelemetry = nextBuffer,
-                )
             }
             is Event.ScaleReading -> {
                 val r = event.content

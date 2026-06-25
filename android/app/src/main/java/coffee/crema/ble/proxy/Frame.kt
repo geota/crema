@@ -311,6 +311,13 @@ data class DeviceInfo(
  *  breaking frame change. */
 const val PROXY_PROTOCOL_VERSION: Int = 2 // 2: + Frame.Event (issue 11 who's-driving)
 
+/** Hard cap on a single proxy WebSocket frame (issue 03). Protocol frames are
+ *  small JSON (well under 1 KiB; a snapshot burst is many small frames, not one
+ *  big one), so 256 KiB is ample headroom while preventing an unauthenticated LAN
+ *  peer from buffering an unbounded frame to OOM the primary mid-shot. Applied to
+ *  both the relay server and the client link's WebSocket install. */
+const val PROXY_MAX_FRAME_BYTES: Long = 256L * 1024
+
 /**
  * Encodes/decodes [Frame]s to/from the JSON wire text. Always (de)serialises via
  * the sealed [Frame] serializer so the `"type"` discriminator is written and

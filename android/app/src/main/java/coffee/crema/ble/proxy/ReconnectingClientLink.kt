@@ -47,7 +47,7 @@ class ReconnectingClientLink(
     scope: CoroutineScope,
 ) : FrameLink {
 
-    private val client = HttpClient(CIO) { install(WebSockets) }
+    private val client = HttpClient(CIO) { install(WebSockets) { maxFrameSize = PROXY_MAX_FRAME_BYTES } }
 
     /** One continuous inbound stream across all sessions. */
     private val inbox = Channel<Frame>(Channel.UNLIMITED)
