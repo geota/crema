@@ -105,12 +105,14 @@ impl ShotPhase {
 /// pre-dating this PR carry none of them, and a shot pulled without a
 /// scale paired carries no `scale_*` values. `#[serde(default)]` so an
 /// older record deserialises cleanly with the new fields absent.
+#[typeshare]
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TimedSample {
     /// Time since the shot started. Serialises as a millisecond
     /// integer (`u32`) on the wire so the JSON shape is JS-friendly
     /// — Rust keeps the internal `Duration` for arithmetic.
+    #[typeshare(serialized_as = "I64")]
     #[serde(with = "duration_ms")]
     pub elapsed: Duration,
     /// The telemetry sample.

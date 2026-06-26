@@ -21,7 +21,7 @@
  * Mirrors the role of the Android shell's `CremaBridge` Kotlin binding.
  */
 
-import type { CoreOutput, ScaleCapabilities, ScaleUuids } from './crema-core';
+import type { CoreOutput, ScaleCapabilities, ScaleUuids, TimedSample } from './crema-core';
 import type { CalTarget, MmrRegister, FirmwareUpdateStatus } from './crema-core';
 
 /**
@@ -179,42 +179,13 @@ export interface Profile {
  */
 export type RustDuration = number;
 
-/** One telemetry sample as the Rust core emits it. */
-export interface RustShotSample {
-	sampleTime: number;
-	groupPressure: number;
-	groupFlow: number;
-	headTemp: number;
-	mixTemp: number;
-	setHeadTemp: number;
-	setMixTemp: number;
-	setGroupPressure: number;
-	setGroupFlow: number;
-	frameNumber: number;
-	steamTemp: number;
-}
-
-/** One timestamped sample in a `RustStoredShot.record.samples` array. */
-export interface RustTimedSample {
-	elapsed: RustDuration;
-	sample: RustShotSample;
-	/**
-	 * Overlay channels added in the telemetry-bundle PR. Each rides on a
-	 * `TimedSample` only when known: a shot pulled without a scale paired
-	 * (and any legacy `.shot.json` parsed before this PR's exporter
-	 * touched it) carries none. The Rust side emits these as a
-	 * same-length series of floats in the v2 doc (`None` → `0.0`), so a
-	 * re-import sees `Some(0.0)` for absent values; the shell treats both
-	 * `undefined` and `0` as "no signal" for the resistance / scale
-	 * fallback path. Wire shape is `camelCase` (Rust struct uses
-	 * `#[serde(rename_all = "camelCase")]`).
-	 */
-	scaleWeight?: number;
-	scaleFlowWeight?: number;
-	dispensedVolume?: number;
-	resistance?: number;
-	resistanceWeight?: number;
-}
+// `ShotSample` + `TimedSample` are now the typeshare-generated bindings
+// (re-exported below from `./crema-core`): the Rust structs carry `#[typeshare]`,
+// so the wire shape rides the bindings diff-gate instead of being hand-declared
+// here (review #01 F24). `TimedSample`'s overlay fields (`scaleWeight?`, …) are
+// `Option<f32>` with `skip_serializing_if`, so they're optional on the wire — a
+// shot pulled without a scale carries none; the shell treats `undefined`/`0` as
+// "no signal" for the resistance / scale fallback.
 
 /** Barista journal metadata as the Rust core emits it. */
 export interface RustShotMetadata {
@@ -244,7 +215,7 @@ export interface RustStoredShot {
 	metadata: RustShotMetadata;
 	record: {
 		duration: RustDuration;
-		samples: RustTimedSample[];
+		samples: TimedSample[];
 	};
 }
 
@@ -1175,6 +1146,9 @@ async function createCore(): Promise<CremaCore> {
 
 export type { CoreOutput, ScaleCapabilities, ScaleUuids, FirmwareUpdateStatus } from './crema-core';
 export type { Event, Command, ModeInfo, RangeCapability } from './crema-core';
+// Telemetry wire types — now typeshare-generated (review #01 F24); replaced the
+// hand-written `RustShotSample` / `RustTimedSample`.
+export type { TimedSample, ShotSample } from './crema-core';
 // Re-export the wire enums so consumers comparing snapshot fields don't have
 // to deep-import from `./crema-core`. These are the discriminant strings
 // produced by typeshare; values matter (consumers `===` them).

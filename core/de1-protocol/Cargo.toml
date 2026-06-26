@@ -10,14 +10,12 @@ authors.workspace = true
 [dependencies]
 # Derive macro for the crate error type.
 thiserror.workspace = true
-# Optional: `serde` derives on packet types, behind the `serde` feature.
-serde = { workspace = true, optional = true }
+# `serde` derives on packet types. Non-optional (un-gated) so `typeshare` sees the
+# camelCase `rename_all` on the packet structs — typeshare doesn't evaluate
+# `cfg_attr`, so a feature-gated rename emits the wrong snake_case (review #01 F24).
+# Every workspace consumer enabled the old `serde` feature anyway.
+serde = { workspace = true }
 typeshare = "1.0.5"
-
-[features]
-# Adds `serde::{Serialize, Deserialize}` to packet types — enabled by de1-domain
-# for shot-history persistence.
-serde = ["dep:serde"]
 
 [lints]
 workspace = true

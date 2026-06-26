@@ -17,7 +17,7 @@
  * {@link getHistoryStore}. It loads synchronously from `localStorage`.
  */
 
-import type { RustStoredShot, RustTimedSample } from '$lib/core';
+import type { RustStoredShot, TimedSample } from '$lib/core';
 import type { TelemetrySample } from '$lib/state';
 import { toWire } from './telemetry-wire';
 import { readJson, writeJson } from '$lib/utils/storage';
@@ -33,7 +33,7 @@ import type { Bean, Roaster } from '$lib/bean';
 /** Current persisted-shot schema version — matches Rust's `STORED_SHOT_FORMAT_VERSION`. */
 const STORED_SHOT_FORMAT_VERSION = 3;
 
-// `toWire` (the TelemetrySample → RustTimedSample mapper) lives in
+// `toWire` (the TelemetrySample → TimedSample mapper) lives in
 // `./telemetry-wire` alongside its inverse `fromWire`. A round-trip
 // test pins the two as a forward/inverse pair so a new sample channel
 // can't drift between record and read paths.
@@ -397,7 +397,7 @@ export class HistoryStore {
 	 * has samples — never clobber a locally-recorded curve with a pulled
 	 * one.
 	 */
-	backfillTelemetry(id: string, samples: readonly RustTimedSample[], durationMs: number): void {
+	backfillTelemetry(id: string, samples: readonly TimedSample[], durationMs: number): void {
 		if (samples.length === 0) return;
 		const idx = this.shots.findIndex((s) => s.id === id);
 		if (idx < 0) return;
@@ -680,7 +680,7 @@ function loadShots(): StoredShot[] {
  *
  *  - `dose` / `rating` / `notes` move under `metadata`.
  *  - `series` (`TelemetrySample[]`) becomes `record.samples`
- *    (`RustTimedSample[]`) via `toWire` from `./telemetry-wire`.
+ *    (`TimedSample[]`) via `toWire` from `./telemetry-wire`.
  *  - `duration` moves under `record.duration`.
  *  - `brewTemp` renames to `brewTempTarget`.
  *  - The pre-derived peaks are dropped — re-derived on demand by

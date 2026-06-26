@@ -20,8 +20,7 @@ const WRITE_KEY_READ: u32 = 1;
 
 /// Which sensor a calibration applies to.
 #[typeshare]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[repr(u8)]
 pub enum CalTarget {
     /// The flow-rate sensor.
@@ -54,8 +53,7 @@ impl TryFrom<u8> for CalTarget {
 /// land here without breaking the FFI surface — this enum is the payload
 /// of `Event::Calibration` alongside `CalTarget`.
 #[typeshare]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[repr(u8)]
 #[non_exhaustive]
 pub enum CalCommand {
