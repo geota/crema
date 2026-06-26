@@ -1,7 +1,6 @@
-# Generated locally — see README "The Gradle wrapper".
-/gradlew
-/gradlew.bat
-/gradle/wrapper/gradle-wrapper.jar
+# The Gradle wrapper (gradlew / gradlew.bat / gradle-wrapper.jar) IS committed —
+# CI (nightly.yml + release.yml) runs `./gradlew` from a fresh checkout, so the
+# wrapper must be in the repo. Pinned alongside gradle-wrapper.properties.
 
 # Build / IDE artifacts (also covered by the repo-root .gitignore).
 .gradle/
