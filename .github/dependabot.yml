@@ -1,0 +1,71 @@
+# Dependabot version updates — keep each ecosystem current on a weekly cadence.
+# Minor+patch bumps are grouped into ONE PR per ecosystem to cut noise; majors
+# open individually for review. PR titles use a `chore(deps…)` / `ci(deps…)`
+# prefix with `include: scope` so they pass the `pr-title` workflow's
+# Conventional-Commits check (feat|fix|chore|docs|refactor|test|ci).
+#
+# NOTE: this file only configures *version* updates. Dependabot *security*
+# updates (auto-PRs for known CVEs — what would have caught the vite advisory)
+# are a separate toggle: Settings → Code security → "Dependabot security
+# updates" (or `gh api -X PUT /repos/geota/crema/automated-security-fixes`).
+# Docs: https://docs.github.com/code-security/dependabot/dependabot-version-updates
+version: 2
+updates:
+  # ── Rust core (Cargo workspace at /core) ─────────────────────────────
+  - package-ecosystem: cargo
+    directory: /core
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      cargo-minor-patch:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  # ── Web PWA (pnpm at /web) ───────────────────────────────────────────
+  - package-ecosystem: npm
+    directory: /web
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      npm-minor-patch:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  # ── Android (Gradle at /android — build.gradle.kts + version catalog) ─
+  - package-ecosystem: gradle
+    directory: /android
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      gradle-minor-patch:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  # ── GitHub Actions (workflow `uses:` pins) ───────────────────────────
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: ci
+      include: scope
+    groups:
+      actions:
+        patterns: ["*"]
