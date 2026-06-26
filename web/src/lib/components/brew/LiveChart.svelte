@@ -28,6 +28,7 @@
 	import type { TelemetrySample } from '$lib/state';
 	import { sampleCurve, type ProfileSegment } from '$lib/profiles';
 	import { theme } from '$lib/theme.svelte';
+	import { cssVar, xRange, yRange, sharedAxes } from '$lib/components/charts/chartHelpers';
 
 	let {
 		series,
@@ -119,12 +120,6 @@
 
 	/** The default x-window, seconds, before any telemetry has arrived. */
 	const BASE_WINDOW_SEC = 60;
-
-	/** Resolve a CSS custom property to a concrete colour string. */
-	function cssVar(name: string): string {
-		if (typeof window === 'undefined') return '#888';
-		return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || '#888';
-	}
 
 	/**
 	 * The pressure-goal line, sampled from the active profile's segments. Only
@@ -305,8 +300,14 @@
 	 */
 	let pluginPinnedT: number | null = null;
 
-	/** uPlot draw plugin: the now-marker, the pin-marker, per-channel end-dots. */
-	function markerPlugin(): uPlot.Plugin {
+	/** uPlot draw plugin: the now-marker, the pin-marker, per-channel end-dots.
+	 * Colours are passed in pre-resolved (see `buildOpts`) so the draw hook,
+	 * which runs on every redraw, never calls `getComputedStyle`. */
+	function markerPlugin(
+		copperColor: string,
+		bgPageColor: string,
+		dotColors: readonly [number, string, number][]
+	): uPlot.Plugin {
 		return {
 			hooks: {
 				draw: (u: uPlot) => {
@@ -324,7 +325,7 @@
 					// reset it explicitly or the marker comes out dotted.
 					ctx.setLineDash([]);
 					ctx.beginPath();
-					ctx.strokeStyle = cssVar('--copper-500');
+					ctx.strokeStyle = copperColor;
 					ctx.globalAlpha = 0.7;
 					ctx.lineWidth = 1.5 * devicePixelRatio;
 					ctx.moveTo(cx, top);
@@ -334,12 +335,12 @@
 
 					// One end-dot per channel, sitting on the now-marker. Every
 					// channel rides the shared 'y' scale.
-					for (const [col, varName, r] of DOTS) {
+					for (const [col, color, r] of dotColors) {
 						const v = u.data[col][n - 1];
 						if (v == null) continue;
 						const cy = u.valToPos(v as number, 'y', true);
 						ctx.beginPath();
-						ctx.fillStyle = cssVar(varName);
+						ctx.fillStyle = color;
 						ctx.arc(cx, cy, r * devicePixelRatio, 0, Math.PI * 2);
 						ctx.fill();
 					}
@@ -350,7 +351,7 @@
 					if (pluginPinnedT !== null) {
 						const px = u.valToPos(pluginPinnedT, 'x', true);
 						ctx.beginPath();
-						ctx.strokeStyle = cssVar('--copper-500');
+						ctx.strokeStyle = copperColor;
 						ctx.lineWidth = 2 * devicePixelRatio;
 						ctx.moveTo(px, top);
 						ctx.lineTo(px, bot);
@@ -366,17 +367,17 @@
 								bestI = i;
 							}
 						}
-						for (const [col, varName, r] of DOTS) {
+						for (const [col, color, r] of dotColors) {
 							const v = u.data[col][bestI];
 							if (v == null) continue;
 							const cy = u.valToPos(v as number, 'y', true);
 							ctx.beginPath();
-							ctx.fillStyle = cssVar(varName);
+							ctx.fillStyle = color;
 							ctx.arc(px, cy, (r + 1) * devicePixelRatio, 0, Math.PI * 2);
 							ctx.fill();
 							// White ring to distinguish from the now-dot.
 							ctx.beginPath();
-							ctx.strokeStyle = cssVar('--bg-page');
+							ctx.strokeStyle = bgPageColor;
 							ctx.lineWidth = 1.5 * devicePixelRatio;
 							ctx.arc(px, cy, (r + 1) * devicePixelRatio, 0, Math.PI * 2);
 							ctx.stroke();
@@ -395,21 +396,31 @@
 	let chart: uPlot | null = null;
 	let resizeObs: ResizeObserver | null = null;
 
-	/** Round-numbered second marks inside the window — design uses 10 s steps. */
-	function timeSplits(max: number): number[] {
-		const incr = max <= 90 ? 10 : max <= 180 ? 20 : 30;
-		const out: number[] = [];
-		for (let t = incr; t < max; t += incr) out.push(t);
-		return out;
-	}
-
 	function buildOpts(w: number, h: number): uPlot.Options {
-		// Canvas strokes can't resolve `var()` — resolve the chart tokens to
-		// concrete colours here. `cssVar` re-reads on every rebuild, so a theme
-		// flip (which triggers `redraw()` below) picks up the new values.
+		// Canvas strokes can't resolve `var()` — resolve every chart token to a
+		// concrete colour here, at build time. uPlot calls each series `stroke`
+		// and the marker plugin's `draw` hook on every frame (the data effect
+		// fires at ~25 Hz), so resolving `var()` per draw meant ~18
+		// `getComputedStyle` calls × ~25 fps on the most latency-sensitive
+		// screen. The theme-flip `$effect` below rebuilds the chart, so these
+		// cached values refresh when the theme changes.
 		const gridColor = cssVar('--chart-grid');
 		const labelColor = cssVar('--chart-axis-label');
-		const yFont = '11px "JetBrains Mono", monospace';
+		const telPressure = cssVar('--tel-pressure');
+		const telFlow = cssVar('--tel-flow');
+		const telTemp = cssVar('--tel-temp');
+		const telWeight = cssVar('--tel-weight');
+		const telPressure2 = cssVar('--tel-pressure-2');
+		const telFlow2 = cssVar('--tel-flow-2');
+		const telTemp2 = cssVar('--tel-temp-2');
+		const telWeight2 = cssVar('--tel-weight-2');
+		const copperColor = cssVar('--copper-500');
+		const bgPageColor = cssVar('--bg-page');
+		// Per-channel end-dot colours, resolved from the DOTS layout and handed
+		// to the marker plugin so its draw hook never touches `getComputedStyle`.
+		const dotColors = DOTS.map(
+			([col, token, r]) => [col, cssVar(token), r] as [number, string, number]
+		);
 		return {
 			width: w,
 			height: h,
@@ -417,91 +428,39 @@
 			cursor: { show: false },
 			legend: { show: false },
 			scales: {
-				// The x-window starts at 60 s and grows to the shot's length —
-				// a pull past a minute simply extends the axis to the right
-				// rather than clipping. Data-driven, like the y scale below.
-				x: {
-					time: false,
-					range: (_u, _min, dataMax) => [
-						0,
-						Number.isFinite(dataMax)
-							? Math.max(BASE_WINDOW_SEC, Math.ceil(dataMax))
-							: BASE_WINDOW_SEC
-					]
-				},
-				// One shared scale for all four channels. The top floats from 10
-				// upward so a mid-shot flow / pressure spike grows both axes.
-				y: {
-					// A hair of headroom (+0.3) keeps a peak that lands on a round
-					// number off the very top edge — so its dot never half-clips.
-					range: (_u, _min, dataMax) => [
-						0,
-						Number.isFinite(dataMax) ? Math.max(10, Math.ceil(dataMax + 0.3)) : 10
-					]
-				}
+				x: { time: false, range: xRange(BASE_WINDOW_SEC) },
+				y: { range: yRange }
 			},
-			axes: [
-				{
-					scale: 'x',
-					stroke: labelColor,
-					grid: { stroke: gridColor, width: 1, dash: [2, 4] },
-					ticks: { show: false },
-					font: '11px "JetBrains Mono", monospace',
-					splits: (u) => timeSplits((u.scales.x.max ?? BASE_WINDOW_SEC) as number),
-					values: (_u, splits) => splits.map((v) => `${v}s`)
-				},
-				{
-					// Left axis: the scale value as-is — bar (pressure) / ml·s (flow).
-					scale: 'y',
-					side: 3,
-					stroke: labelColor,
-					grid: { stroke: gridColor, width: 1 },
-					ticks: { show: false },
-					font: yFont,
-					size: 34,
-					values: (_u, splits) => splits.map((v) => `${v}`)
-				},
-				{
-					// Right axis: the same ticks ×10 — °C (temp) / g (weight).
-					scale: 'y',
-					side: 1,
-					stroke: labelColor,
-					grid: { show: false },
-					ticks: { show: false },
-					font: yFont,
-					size: 38,
-					values: (_u, splits) => splits.map((v) => `${v * 10}`)
-				}
-			],
+			axes: sharedAxes({ gridColor, labelColor, baseWindowSec: BASE_WINDOW_SEC }),
 			series: [
 				{},
 				{
 					scale: 'y',
-					stroke: () => cssVar('--tel-pressure'),
+					stroke: telPressure,
 					width: 2.6,
 					points: { show: false }
 				},
 				{
 					scale: 'y',
-					stroke: () => cssVar('--tel-flow'),
+					stroke: telFlow,
 					width: 2.2,
 					points: { show: false }
 				},
 				{
 					scale: 'y',
-					stroke: () => cssVar('--tel-temp'),
+					stroke: telTemp,
 					width: 2.2,
 					points: { show: false }
 				},
 				{
 					scale: 'y',
-					stroke: () => cssVar('--tel-weight'),
+					stroke: telWeight,
 					width: 2.2,
 					points: { show: false }
 				},
 				{
 					scale: 'y',
-					stroke: () => cssVar('--chart-axis-label'),
+					stroke: labelColor,
 					width: 1.5,
 					dash: [4, 4],
 					points: { show: false }
@@ -512,7 +471,7 @@
 				// straight from `ShotSample.set_*` per Telemetry event.
 				{
 					scale: 'y',
-					stroke: () => cssVar('--tel-pressure'),
+					stroke: telPressure,
 					width: 1.2,
 					dash: [3, 3],
 					alpha: 0.6,
@@ -520,7 +479,7 @@
 				},
 				{
 					scale: 'y',
-					stroke: () => cssVar('--tel-flow'),
+					stroke: telFlow,
 					width: 1.2,
 					dash: [3, 3],
 					alpha: 0.6,
@@ -528,7 +487,7 @@
 				},
 				{
 					scale: 'y',
-					stroke: () => cssVar('--tel-temp'),
+					stroke: telTemp,
 					width: 1.2,
 					dash: [3, 3],
 					alpha: 0.6,
@@ -540,30 +499,30 @@
 				// "bold siblings" set in `tokens.css`.
 				{
 					scale: 'y',
-					stroke: () => cssVar('--tel-pressure-2'),
+					stroke: telPressure2,
 					width: 1.5,
 					points: { show: false }
 				},
 				{
 					scale: 'y',
-					stroke: () => cssVar('--tel-flow-2'),
+					stroke: telFlow2,
 					width: 1.5,
 					points: { show: false }
 				},
 				{
 					scale: 'y',
-					stroke: () => cssVar('--tel-temp-2'),
+					stroke: telTemp2,
 					width: 1.5,
 					points: { show: false }
 				},
 				{
 					scale: 'y',
-					stroke: () => cssVar('--tel-weight-2'),
+					stroke: telWeight2,
 					width: 1.5,
 					points: { show: false }
 				}
 			],
-			plugins: [markerPlugin()]
+			plugins: [markerPlugin(copperColor, bgPageColor, dotColors)]
 		};
 	}
 

@@ -33,6 +33,7 @@
 	} from '$lib/profiles';
 	import { theme } from '$lib/theme.svelte';
 	import { getSettingsStore, unitLabel } from '$lib/settings';
+	import { cssVar } from '$lib/components/charts/chartHelpers';
 
 	const settings = getSettingsStore();
 	const pressureUnitLabel = $derived(unitLabel('pressure', settings.current));
@@ -56,12 +57,6 @@
 	/** The damping the design applies to derive the "estimated flow" ghost. */
 	function dampFlow(target: number): number {
 		return Math.min(4, target * 0.35 + 0.5);
-	}
-
-	/** Resolve a CSS custom property to a concrete colour string. */
-	function cssVar(name: string): string {
-		if (typeof window === 'undefined') return '#888';
-		return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || '#888';
 	}
 
 	/** The temperature axis range, °C — the per-segment editable bounds. */

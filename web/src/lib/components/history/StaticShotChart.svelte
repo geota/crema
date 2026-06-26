@@ -16,6 +16,7 @@
 	import type { TelemetrySample } from '$lib/state';
 	import { theme } from '$lib/theme.svelte';
 	import { getSettingsStore } from '$lib/settings';
+	import { cssVar, xRange, yRange, sharedAxes } from '$lib/components/charts/chartHelpers';
 
 	let {
 		series,
@@ -38,12 +39,6 @@
 
 	/** The default x-window, seconds, for a very short recorded shot. */
 	const BASE_WINDOW_SEC = 30;
-
-	/** Resolve a CSS custom property to a concrete colour string. */
-	function cssVar(name: string): string {
-		if (typeof window === 'undefined') return '#888';
-		return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || '#888';
-	}
 
 	/**
 	 * Build the [x, pressure, flow, temp, weight] column arrays uPlot wants.
@@ -132,19 +127,11 @@
 	let chart: uPlot | null = null;
 	let resizeObs: ResizeObserver | null = null;
 
-	/** Round-numbered second marks inside the window — design uses 10 s steps. */
-	function timeSplits(max: number): number[] {
-		const incr = max <= 90 ? 10 : max <= 180 ? 20 : 30;
-		const out: number[] = [];
-		for (let t = incr; t < max; t += incr) out.push(t);
-		return out;
-	}
-
 	function buildOpts(w: number, h: number): uPlot.Options {
-		// Canvas strokes can't resolve `var()` — resolve the chart tokens here.
+		// Canvas strokes can't resolve `var()` — resolve the axis/grid tokens
+		// here; a theme flip rebuilds the chart against fresh values.
 		const gridColor = cssVar('--chart-grid');
 		const labelColor = cssVar('--chart-axis-label');
-		const yFont = '11px "JetBrains Mono", monospace';
 		return {
 			width: w,
 			height: h,
@@ -152,57 +139,10 @@
 			cursor: { show: false },
 			legend: { show: false },
 			scales: {
-				// The x-window fits the recorded shot's length.
-				x: {
-					time: false,
-					range: (_u, _min, dataMax) => [
-						0,
-						Number.isFinite(dataMax)
-							? Math.max(BASE_WINDOW_SEC, Math.ceil(dataMax))
-							: BASE_WINDOW_SEC
-					]
-				},
-				// One shared scale for all four channels — see `toData`.
-				y: {
-					range: (_u, _min, dataMax) => [
-						0,
-						Number.isFinite(dataMax) ? Math.max(10, Math.ceil(dataMax + 0.3)) : 10
-					]
-				}
+				x: { time: false, range: xRange(BASE_WINDOW_SEC) },
+				y: { range: yRange }
 			},
-			axes: [
-				{
-					scale: 'x',
-					stroke: labelColor,
-					grid: { stroke: gridColor, width: 1, dash: [2, 4] },
-					ticks: { show: false },
-					font: yFont,
-					splits: (u) => timeSplits((u.scales.x.max ?? BASE_WINDOW_SEC) as number),
-					values: (_u, splits) => splits.map((v) => `${v}s`)
-				},
-				{
-					// Left axis: the scale value as-is — bar (pressure) / ml·s (flow).
-					scale: 'y',
-					side: 3,
-					stroke: labelColor,
-					grid: { stroke: gridColor, width: 1 },
-					ticks: { show: false },
-					font: yFont,
-					size: 34,
-					values: (_u, splits) => splits.map((v) => `${v}`)
-				},
-				{
-					// Right axis: the same ticks ×10 — °C (temp) / g (weight).
-					scale: 'y',
-					side: 1,
-					stroke: labelColor,
-					grid: { show: false },
-					ticks: { show: false },
-					font: yFont,
-					size: 38,
-					values: (_u, splits) => splits.map((v) => `${v * 10}`)
-				}
-			],
+			axes: sharedAxes({ gridColor, labelColor, baseWindowSec: BASE_WINDOW_SEC }),
 			series: [
 				{},
 				{
