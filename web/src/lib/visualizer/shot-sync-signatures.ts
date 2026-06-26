@@ -28,7 +28,7 @@ import {
 	signatureForRoaster as wasmSignatureForRoaster,
 	reconcileShots as wasmReconcileShots
 } from '$lib/wasm/de1_wasm';
-import type { RustTimedSample } from '$lib/core';
+import type { TimedSample } from '$lib/core';
 import { peaksOf, type StoredShot } from '$lib/history/model';
 
 // ── Types ─────────────────────────────────────────────────────────────
@@ -213,7 +213,7 @@ export function reconcileShots(
  */
 export function storedShotFromWire(
 	remote: WireShot,
-	samples?: readonly RustTimedSample[]
+	samples?: readonly TimedSample[]
 ): StoredShot {
 	const id = `shot:remote:${remote.id}`;
 	return {

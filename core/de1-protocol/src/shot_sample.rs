@@ -2,6 +2,7 @@
 
 use crate::error::ProtocolError;
 use crate::fixed_point::{u8p0_decode, u8p4_decode, u16p8_decode, u24p16_decode};
+use typeshare::typeshare;
 
 /// Wire length of the current ("new BLE spec") [`ShotSample`] packet.
 pub const SHOT_SAMPLE_LEN: usize = 19;
@@ -12,9 +13,9 @@ pub const SHOT_SAMPLE_LEN: usize = 19;
 /// Temperatures are °C, pressure is bar, flow is ml/s. This type is `Clone` but
 /// deliberately not `Copy`: it is large enough (a dozen fields) that implicit
 /// copies are not a good default — pass it by reference.
-#[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
+#[typeshare]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ShotSample {
     /// Free-running 16-bit AC half-cycle counter; wraps at 65536 (protocol §3.3).
     pub sample_time: u16,

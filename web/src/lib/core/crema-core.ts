@@ -1225,6 +1225,107 @@ export interface ShotPeaks {
 }
 
 /**
+ * One decoded telemetry sample from the DE1, notified at ~4–10 Hz during a
+ * shot (see protocol §3).
+ * 
+ * Temperatures are °C, pressure is bar, flow is ml/s. This type is `Clone` but
+ * deliberately not `Copy`: it is large enough (a dozen fields) that implicit
+ * copies are not a good default — pass it by reference.
+ */
+export interface ShotSample {
+	/** Free-running 16-bit AC half-cycle counter; wraps at 65536 (protocol §3.3). */
+	sampleTime: number;
+	/** Measured group pressure, bar. */
+	groupPressure: number;
+	/** Measured group flow, ml/s. */
+	groupFlow: number;
+	/** Measured group head temperature, °C. */
+	headTemp: number;
+	/** Measured mix temperature, °C. */
+	mixTemp: number;
+	/** Target mix temperature, °C. */
+	setMixTemp: number;
+	/** Target head temperature, °C. */
+	setHeadTemp: number;
+	/** Target group pressure, bar. */
+	setGroupPressure: number;
+	/** Target group flow, ml/s. */
+	setGroupFlow: number;
+	/** Index of the profile frame currently executing. */
+	frameNumber: number;
+	/** Steam heater temperature, °C. */
+	steamTemp: number;
+}
+
+/**
+ * A telemetry sample tagged with its time since the shot began.
+ * 
+ * The DE1's [`ShotSample`] is the raw protocol decode (pressure, flow,
+ * temperatures, setpoints). The overlay fields below carry data that
+ * rides *with* a DE1 sample but isn't on the wire:
+ * 
+ * - the scale's smoothed weight + flow at this instant (`scale_weight`,
+ * `scale_flow_weight`) — only present when a scale was paired;
+ * - the running pump-side dispensed volume (`dispensed_volume`) —
+ * the DE1's integrated `group_flow × Δt`, computed core-side;
+ * - the two puck-resistance signals (`resistance`,
+ * `resistance_weight`) — pre-computed by [`crate::lib::puck_resistance`]
+ * / `puck_resistance_weight` so every shell consumes the identical
+ * value without re-deriving the formula or threshold.
+ * 
+ * All overlays are `Option<f32>`: legacy `.shot.json` imports
+ * pre-dating this PR carry none of them, and a shot pulled without a
+ * scale paired carries no `scale_*` values. `#[serde(default)]` so an
+ * older record deserialises cleanly with the new fields absent.
+ */
+export interface TimedSample {
+	/**
+	 * Time since the shot started. Serialises as a millisecond
+	 * integer (`u32`) on the wire so the JSON shape is JS-friendly
+	 * — Rust keeps the internal `Duration` for arithmetic.
+	 */
+	elapsed: number;
+	/** The telemetry sample. */
+	sample: ShotSample;
+	/**
+	 * Scale-derived cumulative weight at this instant, grams. `None`
+	 * when no scale was paired. Maps to the legacy de1app `espresso_weight`
+	 * channel + the Visualizer `totals.weight` upload field.
+	 */
+	scaleWeight?: number;
+	/**
+	 * Scale-derived mass-flow rate at this instant, grams per second
+	 * (`dW/dt`). `None` when no scale was paired. The truer espresso
+	 * flow during the pour — measures what exits the puck. Maps to
+	 * `espresso_flow_weight` + Visualizer `flow.by_weight`.
+	 */
+	scaleFlowWeight?: number;
+	/**
+	 * Running pump-side dispensed volume at this instant, millilitres.
+	 * `None` for legacy imports that didn't record it; live captures
+	 * always populate it from the DE1's integrator. Maps to
+	 * `espresso_water_dispensed` + Visualizer `totals.water_dispensed`.
+	 */
+	dispensedVolume?: number;
+	/**
+	 * DE1-flow-derived puck resistance, `bar / (ml/s)²`. `None` near
+	 * zero flow (the `puck_resistance` floor). NOT uploaded to
+	 * Visualizer — the spec accepts no `espresso_resistance` field;
+	 * Visualizer derives the same series server-side from pressure +
+	 * flow. Carried on the sample only so the chart can render it
+	 * without re-deriving per render pass.
+	 */
+	resistance?: number;
+	/**
+	 * Scale-flow-derived puck resistance, `bar / (g/s)²`. `None` when
+	 * no scale was paired or scale flow is sub-floor. The chart prefers
+	 * this over `resistance` per-sample when present. Same
+	 * non-upload story as `resistance`.
+	 */
+	resistanceWeight?: number;
+}
+
+/**
  * The user's Visualizer sync **preferences** — the portable, cross-shell
  * subset a whole-app backup carries. One shared `#[typeshare]` shape so web
  * and Android serialise byte-identical JSON: a backup's `visualizerPrefs`

@@ -51,7 +51,7 @@ import {
 import { getBeanStore } from '$lib/bean/store.svelte';
 import { roastLevelToWire } from '$lib/bean/visualizer-sync';
 import { exportStoredShotAsV2Json } from '$lib/history/v2-export';
-import type { RustTimedSample } from '$lib/core';
+import type { TimedSample } from '$lib/core';
 import type { ShotBean, StoredShot } from '$lib/history/model';
 import type { HistoryStore } from '$lib/history/store.svelte';
 import { getSettingsStore } from '$lib/settings';
@@ -140,14 +140,14 @@ function wireShotFromDetail(summary: ShotSummary, detail: ShotDetail): WireShot 
  * Reconstruct Crema's per-sample telemetry from a Visualizer shot detail.
  *
  * Visualizer stores the curve as parallel columns — a time axis plus one array
- * per channel — zipped by index into the row-shaped {@link RustTimedSample} the
+ * per channel — zipped by index into the row-shaped {@link TimedSample} the
  * history chart + peak derivation consume (time axis SECONDS → ms). A detail
  * with no time axis (a Beanconqueror row, or a curveless shot) yields `[]`.
  * Delegates to `de1_domain::visualizer_wire::samples_from_visualizer_detail`
  * (CORE1) so every shell zips the columns identically.
  */
-function samplesFromVisualizerDetail(detail: ShotDetail): RustTimedSample[] {
-	return JSON.parse(wasmSamplesFromVisualizerDetail(JSON.stringify(detail))) as RustTimedSample[];
+function samplesFromVisualizerDetail(detail: ShotDetail): TimedSample[] {
+	return JSON.parse(wasmSamplesFromVisualizerDetail(JSON.stringify(detail))) as TimedSample[];
 }
 
 // ── PATCH-body resolvers (copied verbatim from the old module) ────────────
@@ -323,7 +323,7 @@ export interface PullOptions {
 export interface PullResult {
 	shots: WireShot[];
 	/** Per-shot telemetry keyed by Visualizer id — applied on the `add` step. */
-	samplesById: Map<string, RustTimedSample[]>;
+	samplesById: Map<string, TimedSample[]>;
 	truncated: boolean;
 }
 
@@ -364,7 +364,7 @@ export class ShotSync extends Context.Tag('crema/ShotSync')<
 		readonly applyShotReconciliation: (
 			history: HistoryStore,
 			remote: WireShot[],
-			samplesById?: ReadonlyMap<string, RustTimedSample[]>
+			samplesById?: ReadonlyMap<string, TimedSample[]>
 		) => Effect.Effect<void>;
 		readonly pullAndReconcileShots: (
 			history: HistoryStore,
@@ -543,7 +543,7 @@ export const ShotSyncLive = Layer.effect(
 			const maxPages = opts.maxPages ?? 200;
 			const cursorSec = Math.floor(sinceMs / 1000);
 			const wireShots: WireShot[] = [];
-			const samplesById = new Map<string, RustTimedSample[]>();
+			const samplesById = new Map<string, TimedSample[]>();
 
 			const initial: PullState = { page: 1, totalPages: 1, reachedOlder: false, keepGoing: true };
 			const finalState = yield* Effect.iterate(initial, {
@@ -601,7 +601,7 @@ export const ShotSyncLive = Layer.effect(
 		const applyShotReconciliation = (
 			history: HistoryStore,
 			remote: WireShot[],
-			samplesById?: ReadonlyMap<string, RustTimedSample[]>
+			samplesById?: ReadonlyMap<string, TimedSample[]>
 		): Effect.Effect<void> =>
 			Effect.sync(() => {
 				const local = history.all;

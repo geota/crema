@@ -21,7 +21,7 @@ import type { Bean, Roaster } from '$lib/bean';
 import type {
 	RustShotMetadata,
 	RustStoredShot,
-	RustTimedSample
+	TimedSample
 } from '$lib/core';
 import { peaksForShot as wasmPeaksForShot } from '$lib/wasm/de1_wasm';
 import type { TelemetrySample } from '$lib/state';
@@ -235,7 +235,7 @@ export interface StoredShot {
 	 */
 	readonly record: {
 		readonly duration: number;
-		readonly samples: readonly RustTimedSample[];
+		readonly samples: readonly TimedSample[];
 	};
 	/** Frozen-at-completion bean snapshot, or `null` if none was logged. */
 	bean?: ShotBean | null;

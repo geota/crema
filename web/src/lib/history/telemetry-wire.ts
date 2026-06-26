@@ -1,7 +1,7 @@
 /**
  * `$lib/history/telemetry-wire` — bidirectional codec between the
  * chart-friendly {@link TelemetrySample} shape and the wire-shape
- * {@link RustTimedSample}.
+ * {@link TimedSample}.
  *
  * The shell persists history in the Rust wire shape (camelCase, nested
  * `sample`, ms `elapsed`) — same bytes the wasm bridge emits and the
@@ -17,7 +17,7 @@
  * other will fail the test.
  *
  * **Known hazard** (out of scope here, flagged for the Rust side):
- * `RustShotSample` declares `setHeadTemp` / `setGroupPressure` /
+ * `ShotSample` declares `setHeadTemp` / `setGroupPressure` /
  * `setGroupFlow` as `number` (not nullable), so {@link toWire} zero-
  * fills any absent value. A truly absent setpoint becomes `0` on
  * round-trip rather than staying absent. Fixing this means relaxing
@@ -26,7 +26,7 @@
  * declared today.
  */
 
-import type { RustShotSample, RustTimedSample } from '$lib/core';
+import type { ShotSample, TimedSample } from '$lib/core';
 import type { TelemetrySample } from '$lib/state';
 
 /**
@@ -39,8 +39,8 @@ import type { TelemetrySample } from '$lib/state';
  * bearing for chart playback, only present for v2 `.shot.json` cross-
  * app compatibility (where they're optional / zero on the wire).
  */
-export function toWire(t: TelemetrySample): RustTimedSample {
-	const sample: RustShotSample = {
+export function toWire(t: TelemetrySample): TimedSample {
+	const sample: ShotSample = {
 		sampleTime: 0,
 		groupPressure: t.pressure,
 		groupFlow: t.flow,
@@ -53,7 +53,7 @@ export function toWire(t: TelemetrySample): RustTimedSample {
 		frameNumber: 0,
 		steamTemp: t.steamTemp
 	};
-	const out: RustTimedSample = { elapsed: t.elapsed, sample };
+	const out: TimedSample = { elapsed: t.elapsed, sample };
 	if (t.weight != null) out.scaleWeight = t.weight;
 	if (t.weightFlow != null) out.scaleFlowWeight = t.weightFlow;
 	if (t.dispensedVolume != null) out.dispensedVolume = t.dispensedVolume;
@@ -63,7 +63,7 @@ export function toWire(t: TelemetrySample): RustTimedSample {
 }
 
 /**
- * Project a persisted {@link RustTimedSample} back onto the chart-
+ * Project a persisted {@link TimedSample} back onto the chart-
  * friendly {@link TelemetrySample} shape. Pure inverse of {@link toWire}:
  * the resistance-from-pressure-and-flow fallback that the history
  * chart applies lives in `flatSamplesOf`, NOT here — this is strictly
@@ -74,7 +74,7 @@ export function toWire(t: TelemetrySample): RustTimedSample {
  * legacy data flows through with `0` as a sentinel for "no signal";
  * the chart treats `null` and `0` the same).
  */
-export function fromWire(t: RustTimedSample): TelemetrySample {
+export function fromWire(t: TimedSample): TelemetrySample {
 	const sw = t.scaleWeight;
 	const sfw = t.scaleFlowWeight;
 	const dv = t.dispensedVolume;

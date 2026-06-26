@@ -127,8 +127,7 @@ impl MmrReadReply {
 /// [`address`](Self::address) gives the raw 24-bit address to pass to
 /// [`read_request`] / [`write_request`].
 #[typeshare]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum MmrRegister {
     /// CPU-board revision, encoded `cpu_board_version × 1000` (e.g. raw
     /// `1100` → PCB v1.1, raw `1300` → PCB v1.3). Read at connect time

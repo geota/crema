@@ -175,8 +175,7 @@ pub const VERSION_LEN: usize = 18;
 
 /// One firmware block of a [`Version`] reply — the BLE API firmware and the CPU
 /// firmware share this layout (`version_spec`, `binary.tcl:425`).
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct VersionBlock {
     /// API version of this firmware block.
     pub api_version: u8,
@@ -195,8 +194,7 @@ pub struct VersionBlock {
 /// The packet is two [`VersionBlock`]s back to back: the BLE-interface firmware
 /// then the CPU-board firmware. The Machine settings panel reads
 /// [`firmware_string`](Self::firmware_string) for a display label.
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Version {
     /// The BLE-interface firmware block.
     pub ble: VersionBlock,
