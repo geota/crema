@@ -18,6 +18,7 @@
 	import 'uplot/dist/uPlot.min.css';
 	import { sampleCurve, preinfuseSeconds, type ProfileSegment } from '$lib/profiles';
 	import { theme } from '$lib/theme.svelte';
+	import { cssVar } from '$lib/components/charts/chartHelpers';
 
 	let {
 		segments,
@@ -54,11 +55,6 @@
 	/** Leading pre-infusion seconds — shown as the top-right chip. */
 	const preinf = $derived(preinfuseSeconds(segments));
 
-	/** Resolve a CSS custom property to a concrete colour string. */
-	function cssVar(name: string): string {
-		if (typeof window === 'undefined') return '#888';
-		return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || '#888';
-	}
 
 	/** Flow-ghost damping — matches the curve editor's `dampFlow`. */
 	function dampFlow(target: number): number {
