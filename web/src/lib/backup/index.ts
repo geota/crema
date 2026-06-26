@@ -106,7 +106,7 @@ function settingsAreDefault(s: Settings): boolean {
  * custom profiles only (built-ins ship with the app). Shared by the local
  * export and the Drive upload. Returns null when there's nothing to back up.
  */
-export function buildBackupJsonl(cremaVersion = '0.0.1'): BuiltBackup | null {
+export function buildBackupJsonl(cremaVersion = __APP_VERSION__): BuiltBackup | null {
 	const beanStore = getBeanStore();
 	const history = getHistoryStore();
 	const settings = getSettingsStore();
@@ -182,7 +182,7 @@ const BACKUP_JSONL_MEMBER = 'backup.jsonl';
  * there's nothing to back up.
  */
 export async function buildBackupZip(
-	cremaVersion = '0.0.1'
+	cremaVersion = __APP_VERSION__
 ): Promise<{ zip: Uint8Array; contents: BackupContents } | null> {
 	const built = buildBackupJsonl(cremaVersion);
 	if (!built) return null;
@@ -201,7 +201,7 @@ export async function buildBackupZip(
 }
 
 /** Build + download a `.crema.zip` bundle of everything local (incl. bean photos). */
-export async function exportBackup(cremaVersion = '0.0.1'): Promise<BackupContents | null> {
+export async function exportBackup(cremaVersion = __APP_VERSION__): Promise<BackupContents | null> {
 	const built = await buildBackupZip(cremaVersion);
 	if (!built) return null;
 	downloadBlob(backupFileName(), new Blob([built.zip as BlobPart], { type: 'application/zip' }));
@@ -243,6 +243,14 @@ export function restoreBackup(text: string, mode: RestoreMode): RestoreSummary {
 	let visualizerPrefs: Record<string, unknown> | null = null;
 	let sawHeader = false;
 
+	// F1 note (review #06): the core exposes `importBackupJsonl`
+	// (parse_backup_jsonl → BackupImportPlan) and the EXPORT side funnels through
+	// the core, but each shell still maps the plan's records onto its own store
+	// shape (Android inverts to its flat StoredShot; web's StoredShot already
+	// matches core's). Routing this just-stabilised restore path through the core
+	// would move only the line-split + kind-switch below, not the per-record
+	// mapping — kept shell-side intentionally until a focused pass lands with the
+	// #07 cross-shell round-trip test as a safety net.
 	for (const rawLine of text.split('\n')) {
 		const line = rawLine.trim();
 		if (line.length < 2 || line[0] !== '{') continue;

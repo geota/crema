@@ -22,7 +22,16 @@ function devHttpsCert(): { key: Buffer; cert: Buffer } | undefined {
 	return { key: fs.readFileSync(keyPath), cert: fs.readFileSync(certPath) };
 }
 
+// App version for the backup header (`__APP_VERSION__`), sourced from
+// package.json so it can't silently drift from the real release (review #06 F35).
+const pkgVersion: string = JSON.parse(
+	fs.readFileSync(path.resolve('./package.json'), 'utf-8')
+).version;
+
 export default defineConfig(({ command }) => ({
+	define: {
+		__APP_VERSION__: JSON.stringify(pkgVersion)
+	},
 	server:
 		command === 'serve'
 			? {
