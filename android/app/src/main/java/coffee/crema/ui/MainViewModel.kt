@@ -1731,7 +1731,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun backupBundleJson(): String? {
         val customs = customProfilesJson
         val s = _ui.value
-        if (customs.isEmpty() && s.beans.isEmpty() && s.roasters.isEmpty() && s.history.isEmpty()) {
+        // "Nothing to back up" only when EVERYTHING the bundle carries is empty /
+        // default — not just the four data types. Customised settings (theme,
+        // units, …) and pinned / hidden built-ins are backup-worthy on their own,
+        // even with no custom profiles / beans / shots. Match web's
+        // `settingsAreDefault` gate so the same app state gives the same answer on
+        // both shells (issue 06 F2; web previously said "back up", Android "nothing").
+        val noData = customs.isEmpty() && s.beans.isEmpty() && s.roasters.isEmpty() && s.history.isEmpty()
+        val noProfileOrg = pinnedIds.isEmpty() && hiddenIds.isEmpty()
+        val settingsDefault =
+            currentPrefs().toCommonSettings() == AppPrefs().toCommonSettings() && currentPrefs().qcGrind == null
+        if (noData && noProfileOrg && settingsDefault) {
             notifyUser("Nothing to back up yet"); return null
         }
         // Portable settings only — drop per-device identity (BLE addresses, LAN
@@ -1786,17 +1796,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val visualizerPrefsJson = runCatching {
             json.encodeToString(VisualizerSyncPrefs.serializer(), visualizer.backupPrefs())
         }.getOrElse { "{}" }
-        val envelope = buildString {
-            append("{\"profiles\":[").append(customs.joinToString(","))
-            append("],\"beans\":").append(beansJson)
-            append(",\"roasters\":").append(roastersJson)
-            append(",\"shots\":").append(shotsJson)
-            append(",\"settings\":").append(settingsJson)
-            append(",\"profileMeta\":").append(profileMetaJson)
-            append(",\"maintenance\":").append(maintenanceJson)
-            append(",\"visualizerPrefs\":").append(visualizerPrefsJson)
-            append("}")
-        }
+        // Assemble the envelope as a JsonObject rather than raw string concat so a
+        // dropped brace / comma can't silently corrupt it (issue 06 F5). Each piece
+        // is already a serialized JSON string; parse it back into the tree. The core
+        // re-serialises the envelope when it emits the JSONL, so formatting here is
+        // immaterial — this only hardens assembly.
+        val envelope = buildJsonObject {
+            put("profiles", JsonArray(customs.map { json.parseToJsonElement(it) }))
+            put("beans", json.parseToJsonElement(beansJson))
+            put("roasters", json.parseToJsonElement(roastersJson))
+            put("shots", json.parseToJsonElement(shotsJson))
+            put("settings", json.parseToJsonElement(settingsJson))
+            put("profileMeta", json.parseToJsonElement(profileMetaJson))
+            put("maintenance", json.parseToJsonElement(maintenanceJson))
+            put("visualizerPrefs", json.parseToJsonElement(visualizerPrefsJson))
+        }.toString()
         return runCatching {
             exportBackupJsonl(envelope, System.currentTimeMillis(), coffee.crema.BuildConfig.VERSION_NAME, deviceLabel())
         }.getOrElse { appendLog("Backup failed: ${it.message}"); notifyUser("Backup failed"); null }
@@ -1881,6 +1895,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             var restoredMaintenance: MaintenanceState? = null
             var restoredVisualizerPrefs: VisualizerSyncPrefs? = null
             var sawHeader = false
+            // F1 note (issue 06): the core's `importBackupJsonl`
+            // (parse_backup_jsonl → BackupImportPlan) exists and the EXPORT side
+            // funnels through the core, but the plan's shots come back in the core
+            // StoredShot wire shape — Android still has to invert them to its flat
+            // store shape (storedShotFromBackupJson) below. Routing through the core
+            // would move only the line-split + kind-switch, not that per-record
+            // mapping, so this just-stabilised restore loop is kept shell-side until
+            // a focused pass lands with the #07 round-trip test guarding it.
             for (raw in text.lineSequence()) {
                 val line = raw.trim()
                 if (line.length < 2 || line[0] != '{') continue
