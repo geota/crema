@@ -307,9 +307,13 @@ pub struct BackupHeader {
     pub shot_count: usize,
 }
 
-/// The parsed contents of a backup bundle. Beans/roasters/shots reuse the
-/// [`ImportPlan`] shape so the shell's existing reconcile/apply path is shared;
-/// profiles + settings ride as verbatim JSON the shell owns. Output-only —
+/// The parsed contents of a backup bundle. Beans + roasters reuse the library
+/// import types; shots are the FULL core [`StoredShot`] (the `bean` snapshot and
+/// all), parsed straight off the `shot` lines — NOT the library importer's
+/// [`ImportedShot`](crate::beanconqueror::ImportedShot) wrapper, which buries the
+/// StoredShot under `storedShot` and re-flattens the bean into loose strings
+/// (lossy for a verbatim restore).
+/// Profiles + the config blobs ride as verbatim JSON the shell owns. Output-only —
 /// serialised to JSON for the wasm / uniffi bridge; the shell parses it.
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -331,9 +335,13 @@ pub struct BackupImportPlan {
     /// Visualizer SYNC preferences (NOT tokens; `kind` stripped). Shell-native
     /// shape, `_shell`-tagged; the shell applies it only on a matching shell.
     pub visualizer_prefs: Option<serde_json::Value>,
-    /// Beans + roasters + shots + diagnostics — same shape as a library import.
-    #[serde(flatten)]
-    pub library: ImportPlan,
+    /// Bean library — same typed shape as a library import.
+    pub beans: Vec<Bean>,
+    /// Roaster directory — same typed shape as a library import.
+    pub roasters: Vec<Roaster>,
+    /// Shot history — the full [`StoredShot`] wire shape (including the `bean`
+    /// snapshot), parsed straight off the `shot` lines so a restore is verbatim.
+    pub shots: Vec<StoredShot>,
 }
 
 /// Build a backup bundle (JSONL): `crema-backup/v1` header → settings →
@@ -422,12 +430,18 @@ pub fn export_backup_jsonl_from_json(
 /// collects the verbatim profile objects + the settings blob (`kind` removed).
 #[must_use]
 pub fn parse_backup_jsonl(text: &str) -> BackupImportPlan {
+    // Reuse the library parser for beans + roasters only — its `shots` are
+    // `ImportedShot` wrappers that flatten the bean into loose strings (lossy for
+    // a verbatim restore), so we re-parse the `shot` lines into full StoredShots
+    // below instead. The double-parse of shot lines is cheap next to the
+    // correctness win on a rare, user-initiated restore.
     let library = parse_jsonl(text).unwrap_or_default();
     let mut profiles = Vec::new();
     let mut settings = None;
     let mut profile_meta = None;
     let mut maintenance = None;
     let mut visualizer_prefs = None;
+    let mut shots = Vec::new();
     for line in text.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
@@ -472,6 +486,15 @@ pub fn parse_backup_jsonl(text: &str) -> BackupImportPlan {
                 }
                 visualizer_prefs = Some(value);
             }
+            "shot" => {
+                // The full core wire shape, incl. the `bean` snapshot. Parse
+                // straight into StoredShot (the `kind` field is ignored as an
+                // unknown key) so the restore keeps every shot verbatim — unlike
+                // the library importer's lossy ImportedShot wrapper.
+                if let Ok(s) = serde_json::from_value::<StoredShot>(value) {
+                    shots.push(s);
+                }
+            }
             _ => {}
         }
     }
@@ -481,7 +504,9 @@ pub fn parse_backup_jsonl(text: &str) -> BackupImportPlan {
         profile_meta,
         maintenance,
         visualizer_prefs,
-        library,
+        beans: library.beans,
+        roasters: library.roasters,
+        shots,
     }
 }
 
@@ -563,8 +588,8 @@ mod tests {
             plan.profiles[0].get("kind").is_none(),
             "kind stripped from profile"
         );
-        assert_eq!(plan.library.beans.len(), 1);
-        assert_eq!(plan.library.roasters.len(), 1);
+        assert_eq!(plan.beans.len(), 1);
+        assert_eq!(plan.roasters.len(), 1);
         let settings = plan.settings.expect("settings present");
         assert_eq!(settings["weightUnit"], "g");
         assert!(
@@ -587,6 +612,50 @@ mod tests {
             vp.get("kind").is_none(),
             "kind stripped from visualizerPrefs"
         );
+    }
+
+    #[test]
+    fn backup_plan_keeps_full_storedshot() {
+        // A shot carrying a `bean` snapshot — the enrichment the library
+        // importer's ImportedShot wrapper buries under `storedShot` and reflattens
+        // into loose strings. A backup restore must keep the whole StoredShot, so
+        // `plan.shots` is `Vec<StoredShot>` parsed straight off the `shot` lines.
+        let envelope = serde_json::json!({
+            "profiles": [],
+            "beans": [],
+            "roasters": [],
+            "shots": [{
+                "formatVersion": 3,
+                "id": "shot:rt-1",
+                "completedAt": 1_700_000_000_000_i64,
+                "profileName": "Londinium",
+                "profile": null,
+                "stopReason": null,
+                "record": { "duration": 30_000, "samples": [] },
+                "bean": {
+                    "beanId": "bean:b1",
+                    "name": "Yirg",
+                    "roasterName": "Onyx",
+                    "roastLevel": 4,
+                },
+            }],
+        });
+        let jsonl =
+            export_backup_jsonl_from_json(&envelope.to_string(), 1_700_000_000_000, "0.1", "Pixel")
+                .unwrap();
+
+        let plan = parse_backup_jsonl(&jsonl);
+        assert_eq!(plan.shots.len(), 1);
+        let shot = &plan.shots[0];
+        // Typed access — proves the entry is a full StoredShot, not an
+        // ImportedShot wrapper (which would have no `id` / `bean` at top level).
+        assert_eq!(shot.id, "shot:rt-1");
+        assert_eq!(shot.profile_name.as_deref(), Some("Londinium"));
+        let bean = shot.bean.as_ref().expect("shot keeps its bean snapshot");
+        assert_eq!(bean.name, "Yirg");
+        assert_eq!(bean.bean_id.as_deref(), Some("bean:b1"));
+        assert_eq!(bean.roaster_name.as_deref(), Some("Onyx"));
+        assert_eq!(bean.roast_level, Some(4));
     }
 
     #[test]

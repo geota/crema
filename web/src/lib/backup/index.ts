@@ -19,7 +19,7 @@
  * (the cross-shell DATA still restores either way).
  */
 
-import { exportBackupJsonl } from '$lib/wasm/de1_wasm';
+import { exportBackupJsonl, importBackupJsonl } from '$lib/wasm/de1_wasm';
 import { getBeanStore } from '$lib/bean';
 import { getHistoryStore } from '$lib/history';
 import {
@@ -233,67 +233,37 @@ export interface RestoreSummary {
  * @throws if the text has no `crema-backup/v1` header (not a Crema backup).
  */
 export function restoreBackup(text: string, mode: RestoreMode): RestoreSummary {
-	const profiles: CremaProfile[] = [];
-	const beans: Bean[] = [];
-	const roasters: Roaster[] = [];
-	const shots: StoredShot[] = [];
-	let settings: Record<string, unknown> | null = null;
-	let profileMeta: Record<string, unknown> | null = null;
-	let maintenance: Record<string, unknown> | null = null;
-	let visualizerPrefs: Record<string, unknown> | null = null;
-	let sawHeader = false;
-
-	// F1 (review #06) was attempted and reverted: the core's `importBackupJsonl`
-	// → BackupImportPlan reuses the Beanconqueror library-import parser, whose
-	// `shots` are `ImportedShot` wrappers carrying the StoredShot *sans the
-	// ShotBean snapshot* (a shell-side enrichment the core drops). Routing restore
-	// through it silently loses each shot's logged bean — verified empirically.
-	// The hand-rolled verbatim parse below preserves the full StoredShot; the #07
-	// round-trip test guards it. Unblocking F1 needs a core backup-specific plan
-	// that keeps the whole StoredShot (out of #06's scope).
-	for (const rawLine of text.split('\n')) {
-		const line = rawLine.trim();
-		if (line.length < 2 || line[0] !== '{') continue;
-		let obj: Record<string, unknown>;
-		try {
-			obj = JSON.parse(line) as Record<string, unknown>;
-		} catch {
-			continue;
-		}
-		const kind = obj.kind;
-		const rest: Record<string, unknown> = { ...obj };
-		delete rest.kind;
-		switch (kind) {
-			case 'crema-backup/v1':
-				sawHeader = true;
-				break;
-			case 'settings':
-				settings = rest;
-				break;
-			case 'profileMeta':
-				profileMeta = rest;
-				break;
-			case 'maintenance':
-				maintenance = rest;
-				break;
-			case 'visualizerPrefs':
-				visualizerPrefs = rest;
-				break;
-			case 'roaster':
-				roasters.push(rest as unknown as Roaster);
-				break;
-			case 'bean':
-				beans.push(rest as unknown as Bean);
-				break;
-			case 'shot':
-				shots.push(rest as unknown as StoredShot);
-				break;
-			case 'profile':
-				profiles.push(rest as unknown as CremaProfile);
-				break;
-		}
+	// Guard the header ourselves: the core parser is tolerant (a foreign or empty
+	// file parses to an empty plan), so it can't distinguish "not a Crema backup"
+	// from "an empty one". The header line is the sole carrier of `crema-backup/v1`.
+	if (!/"kind"\s*:\s*"crema-backup\/v1"/.test(text)) {
+		throw new Error('Not a Crema backup file.');
 	}
-	if (!sawHeader) throw new Error('Not a Crema backup file.');
+
+	// F1 (review #06): parse through the shared core (`parse_backup_jsonl`) instead
+	// of a hand-rolled line loop. Beans/roasters/shots come back typed + lossless —
+	// each shot keeps its full `bean` snapshot (the library importer's ImportedShot
+	// wrapper would bury it under `storedShot` and reflatten it to loose strings) —
+	// while profiles + the config blobs ride as the verbatim JSON the shell owns.
+	// Android's restore parses the IDENTICAL bytes off this same core function.
+	const plan = JSON.parse(importBackupJsonl(text)) as {
+		profiles?: CremaProfile[];
+		beans?: Bean[];
+		roasters?: Roaster[];
+		shots?: StoredShot[];
+		settings?: Record<string, unknown> | null;
+		profileMeta?: Record<string, unknown> | null;
+		maintenance?: Record<string, unknown> | null;
+		visualizerPrefs?: Record<string, unknown> | null;
+	};
+	const profiles = plan.profiles ?? [];
+	const beans = plan.beans ?? [];
+	const roasters = plan.roasters ?? [];
+	const shots = plan.shots ?? [];
+	const settings = plan.settings ?? null;
+	const profileMeta = plan.profileMeta ?? null;
+	const maintenance = plan.maintenance ?? null;
+	const visualizerPrefs = plan.visualizerPrefs ?? null;
 
 	const beanStore = getBeanStore();
 	const history = getHistoryStore();

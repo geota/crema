@@ -33,7 +33,18 @@ function makeShot(id: string): StoredShot {
 			extractionYield: null
 		},
 		record: { duration: 30_000, samples: [] },
-		bean: null
+		// A frozen bean snapshot — the shell-side enrichment that routing restore
+		// through the core's library importer (ImportedShot) would have dropped.
+		// Asserting it survives the round-trip guards F1 (review #06).
+		bean: {
+			beanId: 'bean-1',
+			name: 'Ethiopia',
+			roasterName: 'Test Roaster',
+			roastedOn: '2026-01-01',
+			roastLevel: 4,
+			tags: ['fruity'],
+			grinderSetting: '2.5'
+		}
 	};
 }
 
@@ -73,6 +84,15 @@ describe('backup round-trip (review #07)', () => {
 		expect(getBeanStore().roasters.map((r) => r.id)).toContain(ids.roasterId);
 		expect(getHistoryStore().get(ids.shotId)?.id).toBe(ids.shotId);
 		expect(getProfileStore().get(ids.profileId)?.id).toBe(ids.profileId);
+
+		// The shot's frozen bean snapshot must survive restore (F1, review #06) —
+		// it would be lost if restore routed through the library importer's
+		// ImportedShot wrapper instead of the full StoredShot.
+		const restoredBean = getHistoryStore().get(ids.shotId)?.bean;
+		expect(restoredBean?.name).toBe('Ethiopia');
+		expect(restoredBean?.beanId).toBe('bean-1');
+		expect(restoredBean?.roasterName).toBe('Test Roaster');
+		expect(restoredBean?.roastLevel).toBe(4);
 	});
 
 	it('merge adds new records but preserves existing ones', () => {
