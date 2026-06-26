@@ -1195,6 +1195,36 @@ export interface ShotBean {
 }
 
 /**
+ * Pre-computed summary peaks over a [`ShotRecord`]'s telemetry —
+ * what the History list and detail readouts surface above the chart.
+ * Returned by [`ShotRecord::peaks`] so each shell consumes the
+ * identical numbers without re-deriving the formula or threshold.
+ * 
+ * Distinct from [`ShotMetrics`]: this struct adds the scale-derived
+ * `peak_weight` / `final_weight` (which `ShotMetrics` skips because
+ * they depend on a paired scale) and surfaces `peak_temp`, which
+ * `ShotMetrics` doesn't track.
+ */
+export interface ShotPeaks {
+	/**
+	 * Peak scale weight reached during the shot, grams. `None` when
+	 * no scale was paired (no sample carried a `scale_weight`).
+	 */
+	peakWeight?: number;
+	/**
+	 * Final scale weight at shot end, grams. `None` for the same
+	 * reason. NOT the same as `peak_weight`: a long drip-off makes
+	 * `final_weight` exceed `peak_weight` after the user pulls the
+	 * cup away.
+	 */
+	finalWeight?: number;
+	/** Peak group pressure reached, bar. */
+	peakPressure: number;
+	/** Peak group-head temperature reached, °C. */
+	peakTemp: number;
+}
+
+/**
  * The user's Visualizer sync **preferences** — the portable, cross-shell
  * subset a whole-app backup carries. One shared `#[typeshare]` shape so web
  * and Android serialise byte-identical JSON: a backup's `visualizerPrefs`
