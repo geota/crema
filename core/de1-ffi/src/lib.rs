@@ -342,6 +342,17 @@ pub fn new_profile_id() -> String {
     de1_domain::new_profile_id()
 }
 
+/// Mint a fresh stored-shot id — a UUID v7 carrying the `shot:` prefix, the
+/// same minter the web wasm bridge uses. Exposed so Android stops producing
+/// zero-entropy `shot:<epoch-ms>` ids (two shots finishing in the same
+/// millisecond collide, and the format diverges from web's UUID-v7 ids in a
+/// mixed history). See [`de1_domain::new_shot_id`] for the canonical
+/// implementation.
+#[uniffi::export]
+pub fn new_shot_id() -> String {
+    de1_domain::new_shot_id()
+}
+
 /// Compute the brew ratio (yield ÷ dose) for a pair of weights in grams.
 /// Returns `None` when the ratio is undefined — non-positive dose,
 /// non-finite operand, or non-finite quotient. The shell formats the
