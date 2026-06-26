@@ -189,6 +189,7 @@ pub struct ShotMetrics {
 /// `peak_weight` / `final_weight` (which `ShotMetrics` skips because
 /// they depend on a paired scale) and surfaces `peak_temp`, which
 /// `ShotMetrics` doesn't track.
+#[typeshare]
 #[derive(Debug, Clone, Copy, PartialEq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ShotPeaks {
