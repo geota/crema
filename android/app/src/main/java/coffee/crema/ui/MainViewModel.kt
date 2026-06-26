@@ -118,7 +118,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.serialization.KSerializer
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
@@ -132,7 +131,6 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
-import kotlinx.serialization.json.floatOrNull
 
 /**
  * Default scale beeper-volume step shown before the first live reading.
@@ -1884,61 +1882,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      *  ([restoreBackup]) and the Google Drive restore (the downloaded `.crema`). */
     fun restoreBackupFromText(text: String, mode: RestoreMode) {
         viewModelScope.launch {
-            val profiles = ArrayList<String>()
-            val beans = ArrayList<Bean>()
-            val roasters = ArrayList<Roaster>()
-            val shots = ArrayList<StoredShot>()
-            var restoredPrefs: AppPrefs? = null
-            var restoredCommon: CommonSettings? = null
-            var restoredQcGrind: Float? = null
-            var restoredProfileMeta: JsonObject? = null
-            var restoredMaintenance: MaintenanceState? = null
-            var restoredVisualizerPrefs: VisualizerSyncPrefs? = null
-            var sawHeader = false
-            // F1 note (issue 06): the core's `importBackupJsonl`
-            // (parse_backup_jsonl → BackupImportPlan) exists and the EXPORT side
-            // funnels through the core, but the plan's shots come back in the core
-            // StoredShot wire shape — Android still has to invert them to its flat
-            // store shape (storedShotFromBackupJson) below. Routing through the core
-            // would move only the line-split + kind-switch, not that per-record
-            // mapping, so this just-stabilised restore loop is kept shell-side until
-            // a focused pass lands with the #07 round-trip test guarding it.
-            for (raw in text.lineSequence()) {
-                val line = raw.trim()
-                if (line.length < 2 || line[0] != '{') continue
-                val obj = runCatching { json.parseToJsonElement(line).jsonObject }.getOrNull() ?: continue
-                when ((obj["kind"] as? JsonPrimitive)?.content) {
-                    "crema-backup/v1" -> sawHeader = true
-                    "settings" -> {
-                        val shell = (obj["_shell"] as? JsonPrimitive)?.content
-                        val commonObj = obj["common"] as? JsonObject
-                        if (commonObj != null) {
-                            // Unified format: `common` is the cross-shell CommonSettings
-                            // (apply from any shell); `qcGrind` is Android-only.
-                            restoredCommon = decodeFilled(CommonSettings.serializer(), AppPrefs().toCommonSettings(), commonObj)
-                            if (shell == null || shell == "android") {
-                                restoredQcGrind = (obj["qcGrind"] as? JsonPrimitive)?.floatOrNull
-                            }
-                        } else if (shell == null || shell == "android") {
-                            // Pre-unification Android backup — a flat AppPrefs settings line.
-                            restoredPrefs = runCatching { json.decodeFromString(AppPrefs.serializer(), stripKind(obj)) }.getOrNull()
-                        }
-                    }
-                    "profileMeta" -> restoredProfileMeta = obj
-                    "maintenance" -> restoredMaintenance = decodeFilled(MaintenanceState.serializer(), defaultMaintenanceState(System.currentTimeMillis()), obj)
-                    "visualizerPrefs" -> restoredVisualizerPrefs = decodeFilled(VisualizerSyncPrefs.serializer(), DEFAULT_VISUALIZER_SYNC_PREFS, obj)
-                    "roaster" -> runCatching { json.decodeFromString(Roaster.serializer(), stripKind(obj)) }.getOrNull()?.let(roasters::add)
-                    "bean" -> runCatching { json.decodeFromString(Bean.serializer(), stripKind(obj)) }.getOrNull()?.let(beans::add)
-                    // Shots are core-shape (formatVersion/completedAt/record) on the wire
-                    // — both from a fixed Android backup and from any web-origin backup —
-                    // so invert via storedShotFromBackupJson, NOT the flat serializer
-                    // (which MissingFieldException'd and silently dropped them) (issue 01).
-                    "shot" -> storedShotFromBackupJson(obj, json)?.let(shots::add)
-                    "profile" -> profiles.add(stripKind(obj))
-                    else -> {}
-                }
-            }
-            if (!sawHeader) { notifyUser("Restore failed — not a Crema backup"); return@launch }
+            // The line-parser lives in the pure, unit-tested `parseBackupRecords`
+            // (review #07); re-bind its result to the names the apply block uses.
+            val parsed = parseBackupRecords(text, json, System.currentTimeMillis())
+            val profiles = parsed.profiles
+            val beans = parsed.beans
+            val roasters = parsed.roasters
+            val shots = parsed.shots
+            val restoredPrefs = parsed.prefs
+            val restoredCommon = parsed.common
+            val restoredQcGrind = parsed.qcGrind
+            val restoredProfileMeta = parsed.profileMeta
+            val restoredMaintenance = parsed.maintenance
+            val restoredVisualizerPrefs = parsed.visualizerPrefs
+            if (!parsed.sawHeader) { notifyUser("Restore failed — not a Crema backup"); return@launch }
 
             if (mode == RestoreMode.WIPE) {
                 customProfilesJson = emptyList()
@@ -2010,21 +1967,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             )
         }
     }
-
-    /** Strip the `kind` discriminator off a tagged JSONL object → the bare record JSON. */
-    private fun stripKind(obj: JsonObject): String =
-        json.encodeToString(JsonObject.serializer(), JsonObject(obj.filterKeys { it != "kind" }))
-
-    /** Decode a backup config blob with forward-compat tolerance: any field the
-     *  bundle omits (e.g. an older backup that predates a field a newer build added)
-     *  is filled from [defaults] rather than failing the whole decode. The typeshare
-     *  Kotlin classes carry no field defaults, so a plain decode would throw on a
-     *  missing field and silently drop the entire group. */
-    private fun <T> decodeFilled(serializer: KSerializer<T>, defaults: T, blob: JsonObject): T? = runCatching {
-        val defObj = json.parseToJsonElement(json.encodeToString(serializer, defaults)).jsonObject
-        val merged = JsonObject(defObj + blob.filterKeys { it != "kind" })
-        json.decodeFromString(serializer, json.encodeToString(JsonObject.serializer(), merged))
-    }.getOrNull()
 
     /** Apply a restored backup's PORTABLE settings to the live UI + persist, while
      *  preserving this device's per-device bindings (BLE addresses, LAN proxy,
