@@ -14,6 +14,7 @@ import coffee.crema.core.Command
 import coffee.crema.core.CoreOutput
 import coffee.crema.core.CremaBridge
 import coffee.crema.core.Event
+import coffee.crema.core.newShotId
 import coffee.crema.core.MachineRequest
 import coffee.crema.core.WaterSessionKind
 import coffee.crema.core.MmrReg
@@ -171,8 +172,8 @@ data class LastShot(
     val peakTemp: Float?,
     /** Unix epoch ms the shot completed — drives the card's "· N min ago" eyebrow. */
     val completedAtMs: Long = 0,
-    /** The matching [StoredShot] id (same `"shot:$now"`), so tapping the card opens
-     *  it in History. Null for the pre-first-shot default. */
+    /** The matching [StoredShot] id (a shared UUID-v7 `newShotId()`), so tapping
+     *  the card opens it in History. Null for the pre-first-shot default. */
     val id: String? = null,
 )
 
@@ -4009,6 +4010,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         peakPressure: Float?,
         peakTemp: Float?,
         now: Long = System.currentTimeMillis(),
+        shotId: String = newShotId(),
     ) {
         val s = _ui.value
         val profile = s.profiles.firstOrNull { it.id == s.activeProfileId }
@@ -4028,7 +4030,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             )
         }
         val shot = StoredShot(
-            id = "shot:$now",
+            id = shotId,
             completedAtMs = now,
             durationMs = durationMs,
             yieldG = yieldG,
@@ -4915,6 +4917,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             is Event.ShotCompleted -> {
                 val c = event.content
                 val now = System.currentTimeMillis()
+                // One UUID-v7 shot id (core minter), shared by the "Last shot"
+                // card and the StoredShot captureCompletedShot persists, so
+                // tapping the card opens the stored shot.
+                val shotId = newShotId()
                 // Leaving a shot: clear the extracting flag and capture the
                 // summary for the Brew "Last shot" card.
                 _ui.update { it.copy(
@@ -4925,12 +4931,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         peakPressure = c.peak_pressure,
                         peakTemp = c.peak_temp,
                         completedAtMs = now,
-                        // Same id captureCompletedShot stamps, so the card links to it.
-                        id = "shot:$now",
+                        id = shotId,
                     ),
                 ) }
                 appendLog("Shot completed: ${c.duration}ms, ${c.sample_count} samples")
-                captureCompletedShot(c.duration.toLong(), c.final_weight, c.peak_pressure, c.peak_temp, now)
+                captureCompletedShot(c.duration.toLong(), c.final_weight, c.peak_pressure, c.peak_temp, now, shotId)
                 // A pour just finished: flush the integrated water into the persisted
                 // maintenance state and recompute the filter / descale / clean readout.
                 flushMaintenance()
