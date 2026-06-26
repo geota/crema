@@ -243,14 +243,14 @@ export function restoreBackup(text: string, mode: RestoreMode): RestoreSummary {
 	let visualizerPrefs: Record<string, unknown> | null = null;
 	let sawHeader = false;
 
-	// F1 note (review #06): the core exposes `importBackupJsonl`
-	// (parse_backup_jsonl → BackupImportPlan) and the EXPORT side funnels through
-	// the core, but each shell still maps the plan's records onto its own store
-	// shape (Android inverts to its flat StoredShot; web's StoredShot already
-	// matches core's). Routing this just-stabilised restore path through the core
-	// would move only the line-split + kind-switch below, not the per-record
-	// mapping — kept shell-side intentionally until a focused pass lands with the
-	// #07 cross-shell round-trip test as a safety net.
+	// F1 (review #06) was attempted and reverted: the core's `importBackupJsonl`
+	// → BackupImportPlan reuses the Beanconqueror library-import parser, whose
+	// `shots` are `ImportedShot` wrappers carrying the StoredShot *sans the
+	// ShotBean snapshot* (a shell-side enrichment the core drops). Routing restore
+	// through it silently loses each shot's logged bean — verified empirically.
+	// The hand-rolled verbatim parse below preserves the full StoredShot; the #07
+	// round-trip test guards it. Unblocking F1 needs a core backup-specific plan
+	// that keeps the whole StoredShot (out of #06's scope).
 	for (const rawLine of text.split('\n')) {
 		const line = rawLine.trim();
 		if (line.length < 2 || line[0] !== '{') continue;
