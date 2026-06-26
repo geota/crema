@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { defineConfig } from 'vitest/config';
@@ -17,7 +18,15 @@ import { defineConfig } from 'vitest/config';
  * files (those import `node:test` and would fail here). The two runners
  * coexist until a full migration; `pnpm test` runs both.
  */
+// `__APP_VERSION__` (the backup-header version) is injected by vite.config.ts's
+// `define` in the app build; mirror it here so vitest can run code that reads it
+// — e.g. `buildBackupJsonl` (review #06 F35 / #07).
+const pkgVersion: string = JSON.parse(
+	fs.readFileSync(path.resolve('./package.json'), 'utf-8')
+).version;
+
 export default defineConfig({
+	define: { __APP_VERSION__: JSON.stringify(pkgVersion) },
 	plugins: [svelte({ compilerOptions: { hmr: false } })],
 	resolve: {
 		alias: { $lib: path.resolve('./src/lib') },
