@@ -7,11 +7,9 @@ import coffee.crema.core.CremaBridge
 import coffee.crema.core.NotificationSource
 import coffee.crema.core.ScaleUuids as CoreScaleUuids
 import coffee.crema.core.scaleScanUuids
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -224,63 +222,44 @@ class ScaleBleManager(
      * Establish the scale link, then watch for drops and auto-reconnect (M0) —
      * the scale-side twin of [De1BleManager.session]. A clean teardown ends the
      * session; an unexpected `FAILED` triggers a backoff reconnect on the same
-     * handle (re-identifying the codec each time), up to [MAX_RECONNECT_ATTEMPTS].
+     * handle (re-identifying the codec each time), up to the shared
+     * [reconnectingSession] cap.
      */
     private suspend fun session(device: BleTransport.DeviceHandle, advertisedName: String) {
-        var attempt = 0
-        var everConnected = false
-        try {
-            while (true) {
-                val connected = try {
-                    establish(device, advertisedName, firstConnect = !everConnected)
-                    true
-                } catch (c: CancellationException) {
-                    throw c // never swallow cancellation
-                } catch (e: Exception) {
-                    Log.w(TAG, "Scale connect failed", e)
-                    onStatus("Scale connection failed: ${e.message}")
-                    false
+        reconnectingSession(
+            label = "Scale",
+            logTag = TAG,
+            status = onStatus,
+            isUserInitiated = { userInitiated },
+            isAutoReconnectEnabled = { autoReconnectEnabled },
+            establish = { firstConnect ->
+                establish(device, advertisedName, firstConnect = firstConnect)
+            },
+            awaitDrop = {
+                transport.connectionState(device).first {
+                    it == BleTransport.ConnState.FAILED || it == BleTransport.ConnState.DISCONNECTED
                 }
-
-                if (connected) {
-                    everConnected = true
-                    attempt = 0
-                    _state.value = State.READY
-                    onStatus("Ready — receiving scale weight")
-                    transport.connectionState(device).first {
-                        it == BleTransport.ConnState.FAILED || it == BleTransport.ConnState.DISCONNECTED
-                    }
-                    if (userInitiated) return
-                    if (!autoReconnectEnabled) { onStatus("Scale disconnected"); break }
-                    onStatus("Scale connection lost — reconnecting…")
-                } else {
-                    if (userInitiated) return
-                    if (!autoReconnectEnabled) break
+            },
+            onConnected = {
+                _state.value = State.READY
+                onStatus("Ready — receiving scale weight")
+            },
+            onConnecting = { _state.value = State.CONNECTING },
+            teardown = {
+                // Clear the scale slice so a vanished scale leaves no stale weight
+                // (the DE1 manager resets the whole core on its own teardown).
+                if (recording) {
+                    recording = false
+                    recorder.close()
                 }
-
-                attempt++
-                if (attempt > MAX_RECONNECT_ATTEMPTS) {
-                    onStatus("Scale reconnect gave up after $MAX_RECONNECT_ATTEMPTS attempts")
-                    break
-                }
-                _state.value = State.CONNECTING
-                onStatus("Reconnecting to scale (attempt $attempt of $MAX_RECONNECT_ATTEMPTS)…")
-                delay(backoffMs(attempt))
-            }
-        } finally {
-            // Session end via a non-user path: clear the scale slice so a
-            // vanished scale leaves no stale weight. A user disconnect() does its
-            // own teardown, guarded by userInitiated.
-            if (!userInitiated) {
-                if (recording) { recording = false; recorder.close() }
                 this@ScaleBleManager.device = null
                 serviceUuid = null
                 weightNotifyUuid = null
                 commandUuid = null
                 bridge.disconnectScale()
                 _state.value = State.DISCONNECTED
-            }
-        }
+            },
+        )
     }
 
     /** One connect attempt: connect + discover + identify codec + (re)subscribe.
@@ -488,13 +467,6 @@ class ScaleBleManager(
 
     companion object {
         private const val TAG = "ScaleBleManager"
-
-        /** Reconnect attempts after an unexpected drop before giving up (~web's 8). */
-        private const val MAX_RECONNECT_ATTEMPTS = 8
-
-        /** Exponential backoff: 500 ms doubling, capped at 30 s (mirrors the web). */
-        private fun backoffMs(attempt: Int): Long =
-            (500L shl (attempt - 1).coerceIn(0, 10)).coerceAtMost(30_000L)
 
         /**
          * Capture `src` label for inbound notifications from the Bookoo command
