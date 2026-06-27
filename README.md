@@ -18,6 +18,8 @@
 
 Crema is a clean-room reimplementation of the DE1 tablet experience as a **fast, type-safe, testable, browser-based PWA** with parallel native Android development. The codebase is split into a sans-IO Rust core that owns the protocol and a SvelteKit-based web shell that owns the UI and transport.
 
+> **▶ Try the live web app: [crema.maceiras.dev](https://crema.maceiras.dev)** — it runs entirely in your browser, nothing to install. Pairing a DE1 or scale needs a **Chromium** browser (Chrome, Edge, Brave) for Web Bluetooth; add it to your home screen to install it as an offline PWA. Prefer a native app? See **[Install on Android](#install-on-android)** below.
+
 ## Features
 
 - **Live brew dashboard** — real-time pressure / flow / temperature / weight telemetry, four-channel chart, phase indicator, and shot-completion metrics.
@@ -40,8 +42,12 @@ Crema is a clean-room reimplementation of the DE1 tablet experience as a **fast,
 
 **Nightly** — the latest commit on `main`, rebuilt on every push:
 
-- **[Obtainium](https://github.com/ImranR98/Obtainium)** (recommended): add the app source `https://github.com/geota/crema`, turn on **Include prereleases**, and Obtainium tracks the rolling [`nightly`](https://github.com/geota/crema/releases/tag/nightly) prerelease.
-- Or download the APK from the [`nightly`](https://github.com/geota/crema/releases/tag/nightly) prerelease directly.
+- **[Obtainium](https://github.com/ImranR98/Obtainium)** (recommended — installs *and* auto-updates straight from GitHub):
+  1. Install Obtainium itself, from its [GitHub releases](https://github.com/ImranR98/Obtainium/releases).
+  2. Tap **Add App** and paste the source URL `https://github.com/geota/crema`.
+  3. Turn on **Include prereleases** — the nightly build is published as a GitHub *prerelease*.
+  4. Tap **Add**, then **Install**. Obtainium updates it in place whenever a new nightly ships.
+- Or download the APK straight from the [`nightly`](https://github.com/geota/crema/releases/tag/nightly) prerelease and sideload it.
 
 Nightly installs as a **separate app** (`dev.maceiras.crema.nightly`, "Crema Nightly"), so it coexists with a stable install. Minimum Android 12 (API 31).
 
