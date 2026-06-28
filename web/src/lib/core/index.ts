@@ -613,8 +613,6 @@ export interface CremaCore {
 	setSteamFlow(mlPerS: number): Promise<CoreOutput>;
 	/** Set the seconds of high-flow steam at the start of a steam cycle. */
 	setSteamHighflowStart(seconds: number): Promise<CoreOutput>;
-	/** Set the group-head-control mode. */
-	setGhcMode(mode: number): Promise<CoreOutput>;
 	/** Set the hot-water flow rate, ml/s. */
 	setHotWaterFlowRate(mlPerS: number): Promise<CoreOutput>;
 	/** Set the flush flow rate, ml/s. */
@@ -1040,9 +1038,6 @@ async function createCore(): Promise<CremaCore> {
 		},
 		async setSteamHighflowStart(seconds) {
 			return parseOutput(bridge.set_steam_highflow_start(seconds));
-		},
-		async setGhcMode(mode) {
-			return parseOutput(bridge.set_ghc_mode(mode));
 		},
 		async setHotWaterFlowRate(mlPerS) {
 			return parseOutput(bridge.set_hot_water_flow_rate(mlPerS));

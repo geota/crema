@@ -87,7 +87,7 @@ describe('de1ConnectProgram — happy path', () => {
 		// Three connect-time one-shot reads (version / state / shot-settings).
 		expect(device.readCharacteristic).toHaveBeenCalledTimes(3);
 
-		// FirmwareVersion first, then the 9-register sweep in declaration order.
+		// FirmwareVersion first, then the 8-register sweep in declaration order.
 		const sweptRegs = (deps.core.readMmr as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
 		expect(sweptRegs[0]).toBe(MmrRegister.FirmwareVersion);
 		expect(sweptRegs.slice(1)).toEqual([
@@ -98,7 +98,6 @@ describe('de1ConnectProgram — happy path', () => {
 			MmrRegister.SerialNumber,
 			MmrRegister.HeaterVoltage,
 			MmrRegister.FlushTemp,
-			MmrRegister.GhcMode,
 			MmrRegister.CalibrationFlowMultiplier
 		]);
 	});
@@ -156,7 +155,7 @@ describe('de1ConnectProgram — non-fatal reads/sweep', () => {
 		const deps = mkDeps(mkDevice(), core);
 		const exit = await run(deps);
 		expect(Exit.isSuccess(exit)).toBe(true);
-		// FirmwareVersion + 9 sweep regs all attempted (serial), one failure included.
-		expect((core.readMmr as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(10);
+		// FirmwareVersion + 8 sweep regs all attempted (serial), one failure included.
+		expect((core.readMmr as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(9);
 	});
 });

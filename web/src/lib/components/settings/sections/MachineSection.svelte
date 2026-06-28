@@ -46,6 +46,7 @@
 	import StSelect from '../StSelect.svelte';
 	import StStepper from '../StStepper.svelte';
 	import StButton from '../StButton.svelte';
+	import StStatusDot from '../StStatusDot.svelte';
 	import FirmwareUpdateModal from '../FirmwareUpdateModal.svelte';
 
 	let {
@@ -434,30 +435,34 @@
 		{/snippet}
 	</StRow>
 	<!--
-		Group Head Controller — the firmware setting that determines whether
-		host-initiated shot / steam / hot-water starts require a touch on the
-		on-machine button to confirm. Real machine setting (writes through
-		MMR `0x803820` via `app.setGhcMode`); the toggle reads the current
-		value off `de1MachineInfo[GhcMode]`. ON = 4 (legacy de1app's "all
-		on"); OFF = 0. The connect-time MMR sweep populates the initial
-		state.
+		Group Head Controller (GHC) — READ-ONLY status. Whether a GHC gates
+		shot / steam / hot-water starts is decided by the machine's firmware and
+		reported via MMR `0x80381C` (GhcInfo); it is NOT app-writable. When a GHC
+		is "required" (de1app `ghc_required`, `vars.tcl:3476`: GhcInfo value not in
+		{0,1,2,4}) the firmware only starts from the group-head touch and ignores
+		tablet/app starts — a UL safety limit the app cannot override (verified
+		against de1app + reaprime; see register-audit AUDIT.md F2/F3). The old
+		write-toggle (MMR `0x803820`) was removed: that register is dead in de1app
+		and absent in reaprime, so writing it never changed the gate — the toggle
+		always snapped back.
 	-->
 	<StRow
 		title="Group head controller (GHC)"
 		needsConnection={!connected}
-		sub="When on, the DE1 lights up its front buttons and waits for you to
-		tap one to confirm any host-initiated shot, steam, or hot-water start.
-		Turn off to let Crema start sessions directly from the Coffee button."
+		sub={!machine.ghcPresent
+			? 'No group head controller is fitted to this machine.'
+			: machine.ghcRequired
+				? "Shots must be started at the group head — Crema can't start them remotely (a UL safety limit, set by the firmware)."
+				: 'A group head controller is fitted. Crema can still start shots directly.'}
 	>
 		{#snippet control()}
-			{@const ghcOn = machine.ghcOn}
-			<StToggle
-				on={ghcOn}
-				disabled={!connected}
-				onChange={(v) => {
-					void app?.setGhcMode(v ? 4 : 0);
-				}}
-				label="GHC mode"
+			<StStatusDot
+				ok={machine.ghcPresent}
+				label={machine.ghcPresent
+					? machine.ghcRequired
+						? 'Required'
+						: 'Installed'
+					: 'Not installed'}
 			/>
 		{/snippet}
 	</StRow>

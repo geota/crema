@@ -79,7 +79,6 @@ const CONNECT_MMR_SWEEP: ReadonlyArray<MmrRegister> = [
 	MmrRegister.SerialNumber,
 	MmrRegister.HeaterVoltage,
 	MmrRegister.FlushTemp,
-	MmrRegister.GhcMode,
 	MmrRegister.CalibrationFlowMultiplier
 ];
 

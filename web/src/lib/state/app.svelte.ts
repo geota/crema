@@ -1088,25 +1088,6 @@ export class CremaApp {
 	}
 
 	/**
-	 * Write the Group Head Controller mode (MMR `0x803820`). `0` disables
-	 * the touch-to-confirm gate on host-initiated state changes so Crema
-	 * can start a shot from the dashboard without a physical button tap;
-	 * any non-zero value re-enables it (legacy de1app uses `4` for "on").
-	 *
-	 * After the write, the core re-reads `GhcMode` so the Settings toggle
-	 * reflects the firmware's new state. The user-visible row is a
-	 * real-machine setting (writes through to the DE1), so the toggle's
-	 * commit only fires through this wrapper, not through any local cache.
-	 */
-	async setGhcMode(mode: number): Promise<void> {
-		this.applyCoreOutput(await this.core.setGhcMode(mode));
-		// Read back to confirm + refresh the snapshot's de1MachineInfo
-		// (the toggle binds against `ui.de1MachineInfo[MmrRegister.GhcMode]`,
-		// which is populated by MmrValue events the read fires).
-		this.applyCoreOutput(await this.core.readMmr(MmrRegister.GhcMode));
-	}
-
-	/**
 	 * Set the flush water target temperature, °C — the MMR `FlushTemp`
 	 * register (`0x803844`) the firmware holds during a group-flush. Real
 	 * write; the brew page's Flush stepper calls this on commit so the

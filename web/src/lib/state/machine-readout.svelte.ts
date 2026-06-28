@@ -11,7 +11,7 @@
  * shape leaked to the UI.
  *
  * Behind this seam, the map stays private and consumers read named
- * properties — `cupWarmerTempC`, `flushTempC`, `ghcOn`, etc. Adding
+ * properties — `cupWarmerTempC`, `flushTempC`, `ghcPresent`, etc. Adding
  * a register the UI needs is a one-line getter here; renaming or
  * restructuring `de1MachineInfo` itself touches one file instead of
  * four.
@@ -99,17 +99,33 @@ export class MachineReadout {
 	}
 
 	/**
-	 * Raw GHC info bitmask from MMR `0x803818`. `0` = no GHC, non-zero
-	 * = GHC present and possibly active. See {@link ghcOn} for the
-	 * boolean view.
+	 * Raw GHC Info bitmask from MMR `0x80381C` (read-only — set by the machine's
+	 * firmware, never written by the app). Per the DE1 spec (reaprime
+	 * `de1.models.dart`): `0x1` = LED controller present, `0x2` = touch controller
+	 * present, `0x4` = active, `0x80000000` = factory mode. `0` = no GHC fitted.
 	 */
-	get ghcMode(): number {
-		return this.snapshot.de1MachineInfo[MmrRegister.GhcMode] ?? 0;
+	get ghcInfo(): number {
+		return this.snapshot.de1MachineInfo[MmrRegister.GhcInfo] ?? 0;
 	}
 
-	/** True when GHC mode is non-zero (touch-on-the-machine enabled). */
-	get ghcOn(): boolean {
-		return this.ghcMode > 0;
+	/**
+	 * True when a Group Head Controller is fitted — any non-zero {@link ghcInfo},
+	 * matching de1app's `ghc_is_installed != 0` (`de1_comms.tcl:827`).
+	 */
+	get ghcPresent(): boolean {
+		return this.ghcInfo !== 0;
+	}
+
+	/**
+	 * True when the firmware enforces start-from-the-group-head and ignores
+	 * tablet/app-initiated starts (UL safety — the app cannot override it). Mirrors
+	 * de1app's `ghc_required` (`vars.tcl:3476`): any `GhcInfo` value NOT in
+	 * {0, 1, 2, 4}. When true, the UI must tell the user to tap the group head to
+	 * start rather than offer a Start button.
+	 */
+	get ghcRequired(): boolean {
+		const v = this.ghcInfo;
+		return v !== 0 && v !== 1 && v !== 2 && v !== 4;
 	}
 
 	/**
