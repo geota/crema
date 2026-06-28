@@ -2794,8 +2794,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * and the pure reads still return; the UI just shows "—" until replies land.
      */
     private fun readMachineInfo() {
-        // Identity (firmware / board / model / serial), GHC presence,
-        // heater voltage, flow-calibration, refill-kit. Match the generated
+        // Identity (firmware / board / model / serial), GHC presence, heater
+        // voltage, flush temp, flow-calibration, refill-kit. Match the generated
         // MmrReg variant spellings. (GhcMode 0x803820 is intentionally NOT read:
         // it's dead in de1app + absent in reaprime — see audit F2/F3.)
         val registers = listOf(
@@ -2805,6 +2805,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             MmrReg.SERIAL_NUMBER,
             MmrReg.GHC_INFO,
             MmrReg.HEATER_VOLTAGE,
+            // FlushTemp (0x803844): web reads it to show the live flush setpoint;
+            // read it here too so the sweeps match (audit F5). reaprime-only register.
+            MmrReg.FLUSH_TEMP,
             MmrReg.CALIBRATION_FLOW_MULTIPLIER,
             MmrReg.REFILL_KIT,
         )
