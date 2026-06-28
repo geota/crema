@@ -947,9 +947,11 @@ impl CremaCore {
     /// `register` selects the address; `value` is the raw little-endian word
     /// the register expects, **already scaled** per the register's
     /// documentation (the typed helpers below apply each register's scale
-    /// before calling this). `byte_len` is how many of the four LE bytes the
-    /// register actually consumes — 1, 2, or 4 — which controls the wire
-    /// `Len` byte of the `WriteToMMR` packet.
+    /// before calling this). `byte_len` should be **4**: every DE1 MMR register
+    /// is a 32-bit word, and a sub-word write is silently dropped by firmware
+    /// (the GHC-toggle snap-back + the historical FanThreshold/SteamFlow
+    /// short-packet bugs — `.scratch/register-audit/AUDIT.md` F1). It sets the
+    /// wire `Len` byte of the `WriteToMMR` packet.
     ///
     /// Refused while a firmware upload is in progress
     /// (see [`firmware_locks_writes`](Self::firmware_locks_writes)) — emits
@@ -990,7 +992,10 @@ impl CremaCore {
         if let Some(out) = self.refuse_if_firmware_locked("set_tank_threshold") {
             return out;
         }
-        mmr_write_command(MmrRegister::TankTempThreshold, u32::from(temp_c), 1)
+        // 4-byte word: every DE1 MMR write must carry a full 32-bit LE word; de1app
+        // (Len="04") + reaprime (setUint32 LE) always do, and a sub-word write is dropped
+        // by firmware (.scratch/register-audit/AUDIT.md F1). Value zero-extends, so 4 is safe.
+        mmr_write_command(MmrRegister::TankTempThreshold, u32::from(temp_c), 4)
     }
 
     /// Set the steam flow rate. `ml_per_s` is scaled by ×100 per the
@@ -1109,7 +1114,7 @@ impl CremaCore {
         if let Some(out) = self.refuse_if_firmware_locked("set_usb_charger_on") {
             return out;
         }
-        mmr_write_command(MmrRegister::UsbChargerOn, u32::from(enabled), 1)
+        mmr_write_command(MmrRegister::UsbChargerOn, u32::from(enabled), 4)
     }
 
     /// Tell the firmware whether the user is currently present at the machine
@@ -1140,7 +1145,7 @@ impl CremaCore {
         if let Some(out) = self.refuse_if_firmware_locked("set_feature_flags") {
             return out;
         }
-        mmr_write_command(MmrRegister::FeatureFlags, u32::from(flags), 2)
+        mmr_write_command(MmrRegister::FeatureFlags, u32::from(flags), 4)
     }
 
     /// Override the refill-kit presence flag (legacy `set_refill_kit_present`,
@@ -1313,7 +1318,7 @@ impl CremaCore {
         }
         // Range 0..=80 °C — matches shell stepper bounds.
         let clamped = temp_c.min(80);
-        mmr_write_command(MmrRegister::CupWarmerTemp, u32::from(clamped), 2)
+        mmr_write_command(MmrRegister::CupWarmerTemp, u32::from(clamped), 4)
     }
 
     /// Set the flow-calibration multiplier (legacy
@@ -4968,10 +4973,11 @@ mod tests {
     #[test]
     fn set_user_present_and_set_feature_flags_target_distinct_registers() {
         // Confirmed by user: 0x803860 (UserPresent) and 0x803858 (FeatureFlags)
-        // are distinct registers, not aliases. UserPresent byte_len
-        // normalised from 1 → 4 to match TCL + reaprime. The wire bytes
-        // for the boolean payload are the same; only the Len byte
-        // changes.
+        // are distinct registers, not aliases. UserPresent AND FeatureFlags
+        // byte_len are both 4 — every DE1 MMR write is a full 32-bit word
+        // (de1app Len="04" + reaprime setUint32 LE; a sub-word write is dropped
+        // by firmware — AUDIT.md F1). The wire value bytes are unchanged (small
+        // values zero-extend); only the Len byte changes.
         let core = CremaCore::new();
         let up = core.set_user_present(true);
         let ff = core.set_feature_flags(0x1234);
@@ -4984,9 +4990,18 @@ mod tests {
         assert_eq!(&up_data[1..4], &[0x80, 0x38, 0x60], "UserPresent address");
         assert_eq!(&ff_data[1..4], &[0x80, 0x38, 0x58], "FeatureFlags address");
         assert_eq!(up_data[0], 4, "UserPresent Len=4 (matches TCL + reaprime)");
-        assert_eq!(ff_data[0], 2, "FeatureFlags is 2-byte");
+        assert_eq!(
+            ff_data[0], 4,
+            "FeatureFlags Len=4 — full 32-bit word (AUDIT.md F1)"
+        );
         // Boolean payload: low byte = 1, high bytes zero.
         assert_eq!(&up_data[4..8], &[0x01, 0x00, 0x00, 0x00]);
+        // 16-bit FeatureFlags value 0x1234 rides the low two bytes, LE, zero-extended.
+        assert_eq!(
+            &ff_data[4..8],
+            &[0x34, 0x12, 0x00, 0x00],
+            "FeatureFlags value preserved"
+        );
     }
 
     #[test]
