@@ -174,8 +174,12 @@ pub enum MmrRegister {
     SteamHighFlowStart,
     /// Mains heater voltage.
     HeaterVoltage,
-    /// Espresso warmup timeout.
-    EspressoWarmupTimeout,
+    /// "HeaterUp Phase 2 Timeout" — the firmware/spec name (reaprime
+    /// `heaterUp2Timeout`, MMR `0x803838`, ×10 deciseconds). de1app calls the
+    /// user-facing *setting* `espresso_warmup_timeout` (written inline in
+    /// `set_heater_tweaks`); crema's setter keeps that de1app name, but the
+    /// register itself is named after the firmware here (audit F9).
+    HeaterUp2Timeout,
     /// Calibration flow multiplier (`int(1000 * multiplier)`).
     CalibrationFlowMultiplier,
     /// Flush timeout (`int(10 * seconds)`).
@@ -220,7 +224,7 @@ impl MmrRegister {
             MmrRegister::GhcMode => 0x80_3820,
             MmrRegister::SteamHighFlowStart => 0x80_382C,
             MmrRegister::HeaterVoltage => 0x80_3834,
-            MmrRegister::EspressoWarmupTimeout => 0x80_3838,
+            MmrRegister::HeaterUp2Timeout => 0x80_3838,
             MmrRegister::CalibrationFlowMultiplier => 0x80_383C,
             MmrRegister::FlushTimeout => 0x80_3848,
             MmrRegister::UsbChargerOn => 0x80_3854,
@@ -255,7 +259,7 @@ impl MmrRegister {
             | MmrRegister::FlushFlowRate
             | MmrRegister::FlushTemp
             | MmrRegister::FlushTimeout
-            | MmrRegister::EspressoWarmupTimeout => 0.1,
+            | MmrRegister::HeaterUp2Timeout => 0.1,
 
             // ×0.01 — steam flow / steam-high-flow-start.
             MmrRegister::SteamFlow | MmrRegister::SteamHighFlowStart => 0.01,
@@ -306,7 +310,7 @@ impl MmrRegister {
         MmrRegister::GhcMode,
         MmrRegister::SteamHighFlowStart,
         MmrRegister::HeaterVoltage,
-        MmrRegister::EspressoWarmupTimeout,
+        MmrRegister::HeaterUp2Timeout,
         MmrRegister::CalibrationFlowMultiplier,
         MmrRegister::FlushTimeout,
         MmrRegister::UsbChargerOn,
@@ -390,7 +394,7 @@ mod tests {
         assert_eq!(MmrRegister::GhcMode.address(), 0x80_3820);
         assert_eq!(MmrRegister::SteamHighFlowStart.address(), 0x80_382C);
         assert_eq!(MmrRegister::HeaterVoltage.address(), 0x80_3834);
-        assert_eq!(MmrRegister::EspressoWarmupTimeout.address(), 0x80_3838);
+        assert_eq!(MmrRegister::HeaterUp2Timeout.address(), 0x80_3838);
         assert_eq!(MmrRegister::CalibrationFlowMultiplier.address(), 0x80_383C);
         assert_eq!(MmrRegister::FlushTimeout.address(), 0x80_3848);
         assert_eq!(MmrRegister::UsbChargerOn.address(), 0x80_3854);
@@ -448,7 +452,7 @@ mod tests {
                 | MmrRegister::GhcMode
                 | MmrRegister::SteamHighFlowStart
                 | MmrRegister::HeaterVoltage
-                | MmrRegister::EspressoWarmupTimeout
+                | MmrRegister::HeaterUp2Timeout
                 | MmrRegister::CalibrationFlowMultiplier
                 | MmrRegister::FlushTimeout
                 | MmrRegister::UsbChargerOn
@@ -480,7 +484,7 @@ mod tests {
             (MmrRegister::FlushFlowRate, 0.1),
             (MmrRegister::FlushTemp, 0.1),
             (MmrRegister::FlushTimeout, 0.1),
-            (MmrRegister::EspressoWarmupTimeout, 0.1),
+            (MmrRegister::HeaterUp2Timeout, 0.1),
             (MmrRegister::SteamFlow, 0.01),
             (MmrRegister::SteamHighFlowStart, 0.01),
             (MmrRegister::CalibrationFlowMultiplier, 0.001),

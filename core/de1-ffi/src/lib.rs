@@ -162,7 +162,7 @@ pub enum MmrReg {
     /// Mains heater voltage.
     HeaterVoltage,
     /// Espresso warmup timeout.
-    EspressoWarmupTimeout,
+    HeaterUp2Timeout,
     /// Calibration flow multiplier.
     CalibrationFlowMultiplier,
     /// Flush timeout.
@@ -200,7 +200,7 @@ impl From<MmrReg> for MmrRegister {
             MmrReg::GhcMode => MmrRegister::GhcMode,
             MmrReg::SteamHighFlowStart => MmrRegister::SteamHighFlowStart,
             MmrReg::HeaterVoltage => MmrRegister::HeaterVoltage,
-            MmrReg::EspressoWarmupTimeout => MmrRegister::EspressoWarmupTimeout,
+            MmrReg::HeaterUp2Timeout => MmrRegister::HeaterUp2Timeout,
             MmrReg::CalibrationFlowMultiplier => MmrRegister::CalibrationFlowMultiplier,
             MmrReg::FlushTimeout => MmrRegister::FlushTimeout,
             MmrReg::UsbChargerOn => MmrRegister::UsbChargerOn,
@@ -1875,7 +1875,7 @@ mod tests {
                     MmrRegister::GhcMode => MmrReg::GhcMode,
                     MmrRegister::SteamHighFlowStart => MmrReg::SteamHighFlowStart,
                     MmrRegister::HeaterVoltage => MmrReg::HeaterVoltage,
-                    MmrRegister::EspressoWarmupTimeout => MmrReg::EspressoWarmupTimeout,
+                    MmrRegister::HeaterUp2Timeout => MmrReg::HeaterUp2Timeout,
                     MmrRegister::CalibrationFlowMultiplier => MmrReg::CalibrationFlowMultiplier,
                     MmrRegister::FlushTimeout => MmrReg::FlushTimeout,
                     MmrRegister::UsbChargerOn => MmrReg::UsbChargerOn,

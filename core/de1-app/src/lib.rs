@@ -1267,7 +1267,7 @@ impl CremaCore {
             (MmrRegister::Phase1FlowRate, RESET_PHASE_1_FLOW_RAW, 4),
             (MmrRegister::Phase2FlowRate, RESET_PHASE_2_FLOW_RAW, 4),
             (
-                MmrRegister::EspressoWarmupTimeout,
+                MmrRegister::HeaterUp2Timeout,
                 RESET_ESPRESSO_WARMUP_TIMEOUT_RAW,
                 4,
             ),
@@ -1445,7 +1445,7 @@ impl CremaCore {
         // RS6: `try_from` over `as` (the `.min(65_535)` bounds it); drops the cast
         // + the `#[allow]`.
         let raw = u32::try_from((timeout.as_millis() / 100).min(65_535)).unwrap_or(u32::MAX);
-        mmr_write_command(MmrRegister::EspressoWarmupTimeout, raw, 4)
+        mmr_write_command(MmrRegister::HeaterUp2Timeout, raw, 4)
     }
 
     /// Set the steam two-tap-stop (legacy `heater_tweaks`
@@ -5423,7 +5423,7 @@ mod tests {
             (0x0080_3810, 4, &[0x14, 0x00, 0x00, 0x00]),
             // Phase2FlowRate: 4.0 × 10 = 40 = 0x28.
             (0x0080_3814, 4, &[0x28, 0x00, 0x00, 0x00]),
-            // EspressoWarmupTimeout: 4.0 s × 10 = 40 = 0x28.
+            // HeaterUp2Timeout: 4.0 s × 10 = 40 = 0x28.
             (0x0080_3838, 4, &[0x28, 0x00, 0x00, 0x00]),
             // RefillKit: 2 (auto).
             (0x0080_385C, 4, &[0x02, 0x00, 0x00, 0x00]),
@@ -5515,7 +5515,7 @@ mod tests {
         // reaprime `heaterUp2Timeout writeScale 10.0`.
         assert_single_mmr_write(
             &out,
-            MmrRegister::EspressoWarmupTimeout,
+            MmrRegister::HeaterUp2Timeout,
             &[0x1E, 0x00, 0x00, 0x00],
         );
     }
@@ -5705,7 +5705,7 @@ mod tests {
             ),
             (
                 core.set_espresso_warmup_timeout(Duration::from_secs(3)),
-                MmrRegister::EspressoWarmupTimeout,
+                MmrRegister::HeaterUp2Timeout,
             ),
             (core.set_steam_two_tap_stop(1), MmrRegister::SteamTwoTapStop),
             (

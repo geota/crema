@@ -1618,8 +1618,14 @@ export enum MmrRegister {
 	SteamHighFlowStart = "SteamHighFlowStart",
 	/** Mains heater voltage. */
 	HeaterVoltage = "HeaterVoltage",
-	/** Espresso warmup timeout. */
-	EspressoWarmupTimeout = "EspressoWarmupTimeout",
+	/**
+	 * "HeaterUp Phase 2 Timeout" — the firmware/spec name (reaprime
+	 * `heaterUp2Timeout`, MMR `0x803838`, ×10 deciseconds). de1app calls the
+	 * user-facing *setting* `espresso_warmup_timeout` (written inline in
+	 * `set_heater_tweaks`); crema's setter keeps that de1app name, but the
+	 * register itself is named after the firmware here (audit F9).
+	 */
+	HeaterUp2Timeout = "HeaterUp2Timeout",
 	/** Calibration flow multiplier (`int(1000 * multiplier)`). */
 	CalibrationFlowMultiplier = "CalibrationFlowMultiplier",
 	/** Flush timeout (`int(10 * seconds)`). */
