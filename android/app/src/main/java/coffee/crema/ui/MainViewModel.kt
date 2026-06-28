@@ -2794,16 +2794,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * and the pure reads still return; the UI just shows "—" until replies land.
      */
     private fun readMachineInfo() {
-        // Identity (firmware / board / model / serial), GHC presence + mode,
+        // Identity (firmware / board / model / serial), GHC presence,
         // heater voltage, flow-calibration, refill-kit. Match the generated
-        // MmrReg variant spellings.
+        // MmrReg variant spellings. (GhcMode 0x803820 is intentionally NOT read:
+        // it's dead in de1app + absent in reaprime — see audit F2/F3.)
         val registers = listOf(
             MmrReg.FIRMWARE_VERSION,
             MmrReg.CPU_BOARD_VERSION,
             MmrReg.MACHINE_MODEL,
             MmrReg.SERIAL_NUMBER,
             MmrReg.GHC_INFO,
-            MmrReg.GHC_MODE,
             MmrReg.HEATER_VOLTAGE,
             MmrReg.CALIBRATION_FLOW_MULTIPLIER,
             MmrReg.REFILL_KIT,
@@ -2850,32 +2850,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // theme / scale-config pattern) rather than the bridge directly. Reads /
     // setters are safe while disconnected — the bridge returns a command JSON
     // and with no BLE link nothing is written.
-
-    /**
-     * Enable / disable the Group Head Controller (start-shots-from-the-machine).
-     * Routes the resulting MMR write through the shared command path. Re-reads
-     * GHC_MODE so the row reflects the machine's confirmed state.
-     */
-    fun setGhcMode(enabled: Boolean) {
-        // GHC_MODE "on" is 4 — the legacy de1app "all GHC buttons enabled" value
-        // the web writes (`setGhcMode(v ? 4 : 0)`). Writing 1 isn't a valid mode,
-        // so the DE1 ignored it and the GHC_MODE re-read snapped the toggle back
-        // off. (Derive the Int from the runtime `enabled` first so `.toUByte()` is
-        // a runtime call — a const `4.toUByte()` trips the const-eval backend bug.)
-        val modeInt = if (enabled) 4 else 0
-        val mode: UByte = modeInt.toUByte()
-        val raw = runCatching { bridge.setGhcMode(mode) }.getOrElse {
-            appendLog("Set GHC mode failed: ${it.message}")
-            return
-        }
-        onCoreOutputJson(raw)
-        // Optimistically reflect the write so the toggle tracks immediately;
-        // the GhcMode register reply (re-read below) then confirms it.
-        _ui.update { it.copy(
-            de1MachineInfo = it.de1MachineInfo + (MmrRegister.GhcMode to (if (enabled) 4u else 0u)),
-        ) }
-        runCatching { bridge.readMmr(MmrReg.GHC_MODE) }.getOrNull()?.let(::onCoreOutputJson)
-    }
 
     /**
      * Set the mains heater voltage. The core @Throws unless [volts] is 120 or

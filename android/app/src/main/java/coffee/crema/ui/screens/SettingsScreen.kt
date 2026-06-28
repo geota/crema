@@ -175,13 +175,19 @@ fun SettingsScreen(
                             CremaSettingsRow("Auto-connect", "Reconnect to this DE1 automatically after a dropout, and on launch. Turning it off forgets the device.") {
                                 CremaSwitch(ui.rememberedDe1Address != null, vm::setDe1AutoConnect, enabled = connected || ui.rememberedDe1Address != null)
                             }
-                            // GHC start-from-machine mode — driven by the live GhcMode
-                            // register; the toggle writes via the VM. Disabled until the
-                            // machine is connected and the GHC is reported present.
-                            val ghcOn = ghcModeOn(ui.de1MachineInfo) ?: false
-                            val ghcAvailable = connected && (ghcPresent(ui.de1MachineInfo) == true)
-                            CremaSettingsRow("Group Head Controller (GHC)", "Start shots from the machine's touch panel.", last = true, needsConnection = !connected) {
-                                CremaSwitch(ghcOn, { vm.setGhcMode(it) }, enabled = ghcAvailable)
+                            // GHC status is READ-ONLY: whether the firmware gates
+                            // shot-start on the group-head touch is machine-owned
+                            // (GhcInfo 0x80381C), not app-writable. The old write-toggle
+                            // wrote the dead GhcMode 0x803820 and always snapped back
+                            // (audit F2/F3, verified vs de1app + reaprime).
+                            val ghcInstalled = ghcPresent(ui.de1MachineInfo) == true
+                            val ghcReq = ghcRequired(ui.de1MachineInfo) == true
+                            val ghcLabel = if (!ghcInstalled) "Not installed" else if (ghcReq) "Required" else "Installed"
+                            val ghcSub = if (!ghcInstalled) "No group head controller is fitted to this machine."
+                                else if (ghcReq) "Shots must be started at the group head — Crema can't start them remotely (a UL safety limit, set by the firmware)."
+                                else "A group head controller is fitted. Crema can still start shots directly."
+                            CremaSettingsRow("Group Head Controller (GHC)", ghcSub, last = true, needsConnection = !connected) {
+                                CremaMonoReadout(ghcLabel, color = MaterialTheme.colorScheme.onSurface)
                             }
                         }
                         SetGroup("Identity") {
@@ -1465,10 +1471,13 @@ internal fun cupWarmerTempValue(info: Map<MmrRegister, UInt>): Int? =
 internal fun flowMultiplierValue(info: Map<MmrRegister, UInt>): Double? =
     info[MmrRegister.CalibrationFlowMultiplier]?.let { it.toInt() / 1000.0 }
 
-/** Whether the GHC is present (GhcInfo bit 0). Null when the register is unread. */
+/** Whether a Group Head Controller is fitted — any non-zero GhcInfo, matching
+ *  de1app's `ghc_is_installed != 0` (de1_comms.tcl:827). Null when unread. */
 internal fun ghcPresent(info: Map<MmrRegister, UInt>): Boolean? =
-    info[MmrRegister.GhcInfo]?.let { (it.toInt() and 0x1) != 0 }
+    info[MmrRegister.GhcInfo]?.let { it.toInt() != 0 }
 
-/** Whether GHC start-from-machine mode is on (GhcMode != 0). Null when unread. */
-internal fun ghcModeOn(info: Map<MmrRegister, UInt>): Boolean? =
-    info[MmrRegister.GhcMode]?.let { it.toInt() != 0 }
+/** Whether the firmware enforces start-from-the-group-head and ignores tablet/app
+ *  starts (UL safety — the app cannot override it). Mirrors de1app `ghc_required`
+ *  (vars.tcl:3476): any GhcInfo value NOT in {0,1,2,4}. Null when unread. */
+internal fun ghcRequired(info: Map<MmrRegister, UInt>): Boolean? =
+    info[MmrRegister.GhcInfo]?.let { v -> v.toInt().let { it != 0 && it != 1 && it != 2 && it != 4 } }

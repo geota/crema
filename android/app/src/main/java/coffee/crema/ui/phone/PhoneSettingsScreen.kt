@@ -38,8 +38,8 @@ import coffee.crema.ui.screens.descaleRow
 import coffee.crema.ui.screens.filterRow
 import coffee.crema.ui.screens.cupWarmerTempValue
 import coffee.crema.ui.screens.flowMultiplierValue
-import coffee.crema.ui.screens.ghcModeOn
 import coffee.crema.ui.screens.ghcPresent
+import coffee.crema.ui.screens.ghcRequired
 import coffee.crema.ui.screens.hasCupWarmerPlate
 import coffee.crema.ui.screens.firmwareLabel
 import coffee.crema.ui.screens.heaterVoltageLabel
@@ -334,10 +334,15 @@ private fun MachineSection(
         CremaSettingsRow("Auto-connect", "Reconnect to this DE1 automatically after a dropout, and on launch. Turning it off forgets the device.") {
             CremaSwitch(ui.rememberedDe1Address != null, vm::setDe1AutoConnect, enabled = connected || ui.rememberedDe1Address != null)
         }
-        val ghcOn = ghcModeOn(ui.de1MachineInfo) ?: false
-        val ghcAvailable = connected && (ghcPresent(ui.de1MachineInfo) == true)
-        CremaSettingsRow("Group Head Controller (GHC)", "Start shots from the machine's touch panel.", last = true, needsConnection = !connected) {
-            CremaSwitch(ghcOn, { vm.setGhcMode(it) }, enabled = ghcAvailable && !secondary)
+        // GHC status is READ-ONLY (machine-owned GhcInfo 0x80381C; audit F2/F3).
+        val ghcInstalled = ghcPresent(ui.de1MachineInfo) == true
+        val ghcReq = ghcRequired(ui.de1MachineInfo) == true
+        val ghcLabel = if (!ghcInstalled) "Not installed" else if (ghcReq) "Required" else "Installed"
+        val ghcSub = if (!ghcInstalled) "No group head controller is fitted to this machine."
+            else if (ghcReq) "Shots must be started at the group head — Crema can't start them remotely (a UL safety limit, set by the firmware)."
+            else "A group head controller is fitted. Crema can still start shots directly."
+        CremaSettingsRow("Group Head Controller (GHC)", ghcSub, last = true, needsConnection = !connected) {
+            CremaMonoReadout(ghcLabel, strong = true)
         }
     }
     SettingsGroup("Identity") {
