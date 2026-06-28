@@ -130,6 +130,22 @@ export const de1ConnectProgram = (d: De1ConnectDeps): Effect.Effect<void, De1Con
 		d.onGattVerified();
 		d.onStatus('DE1 GATT verified ✓ — A000 + StateInfo/ShotSample/WaterLevels resolved');
 
+		// 3b) Calibration (A012) NOTIFY — best-effort, NOT part of the structural DE1
+		//     proof (a hiccup here must not fail an already-verified link). Without
+		//     it the DE1's replies to `readCalibration` can't be delivered, so the
+		//     Settings → Calibration panel stays blank (audit F4). Mirrors Android,
+		//     which merges A012 into its observe stream.
+		yield* Effect.gen(function* () {
+			yield* Effect.tryPromise(() =>
+				d.device.startNotifications(De1Uuids.SERVICE, De1Uuids.CALIBRATION)
+			);
+			d.onStatus('Calibration A012 subscribed ✓');
+		}).pipe(
+			Effect.catchAll((e) =>
+				Effect.sync(() => d.onStatus(`DE1 Calibration A012 subscribe skipped: ${describeError(e)}`))
+			)
+		);
+
 		// 4) Connect-time one-shot reads to seed the dashboard (all non-fatal).
 		yield* readSeed('De1Version', De1Uuids.VERSION, 'firmware version');
 		yield* readSeed('De1State', De1Uuids.STATE_INFO, 'machine state');

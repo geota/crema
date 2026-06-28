@@ -43,6 +43,7 @@ type De1NotificationSource = Extract<
 	| 'De1MmrRead'
 	| 'De1ShotSettings'
 	| 'De1FrameAck'
+	| 'De1Calibration'
 >;
 
 /**
@@ -351,6 +352,8 @@ function sourceFor(characteristicUuid: string): De1NotificationSource | null {
 			return 'De1ShotSettings';
 		case De1Uuids.FRAME_WRITE:
 			return 'De1FrameAck';
+		case De1Uuids.CALIBRATION:
+			return 'De1Calibration';
 		default:
 			return null;
 	}
@@ -368,6 +371,7 @@ function freshCounts(): Record<De1NotificationSource, number> {
 		De1WaterLevels: 0,
 		De1MmrRead: 0,
 		De1ShotSettings: 0,
-		De1FrameAck: 0
+		De1FrameAck: 0,
+		De1Calibration: 0
 	};
 }
