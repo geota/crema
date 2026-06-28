@@ -153,11 +153,9 @@ crema/
 └── android/                  # Native Kotlin shell (in progress)
 ```
 
-## Coming soon
+## Native Android tablet + phone apps
 
-### Native Android tablet + phone apps
-
-A parallel **Jetpack Compose** shell for Android is in active development. It reuses the same Rust `de1-core` workspace via [UniFFI](https://github.com/mozilla/uniffi-rs) bindings — the protocol codecs, shot state machine, profile model, bean/roaster store, and Visualizer reconciliation logic all share **one source of truth across web and Android**.
+A parallel **Jetpack Compose** shell for Android — with dedicated tablet and phone layouts — is available alongside the web app ([install it above](#install-on-android)). It reuses the same Rust `de1-core` workspace via [UniFFI](https://github.com/mozilla/uniffi-rs) bindings — the protocol codecs, shot state machine, profile model, bean/roaster store, and Visualizer reconciliation logic all share **one source of truth across web and Android**.
 
 Why both shells:
 
