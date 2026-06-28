@@ -25,7 +25,9 @@ use crate::fixed_point::{f8_1_7_decode, u24p0_decode, u24p0_encode};
 /// Wire length of a [`FWMapRequest`] packet (`maprequest_spec`).
 pub const FW_MAP_REQUEST_LEN: usize = 7;
 
-/// Wire length of a firmware-frame upload packet — a `WriteToMMR` packet.
+/// Wire length of a *full* firmware-frame upload packet — a length byte, a 3-byte
+/// offset, and one 16-byte chunk. The final short chunk's packet is shorter (the
+/// data is not zero-padded — see [`firmware_write_frame`]).
 pub const FIRMWARE_FRAME_LEN: usize = 20;
 
 /// Number of firmware-image bytes carried by one [`firmware_write_frame`]
@@ -65,11 +67,17 @@ pub struct FWMapRequest {
 
 impl FWMapRequest {
     /// A request to erase firmware slot `slot` before an upload.
+    ///
+    /// Byte-matches de1app `start_firmware_update` (`de1_comms.tcl:888-894`) and
+    /// reaprime `_updateFirmware` (`unified_de1.firmware.dart:61-71`): `FWToErase=slot`,
+    /// **`FWToMap=1`** (crema previously sent 0 — both references set 1). The
+    /// `FirstError` triple is a firmware-ignored don't-care on the *request*: reaprime
+    /// (and crema) send `0xFFFFFF`, de1app sends `0x000000`. See `AUDIT.md` F6.
     pub fn erase(slot: u8) -> FWMapRequest {
         FWMapRequest {
             window_increment: 0,
             fw_to_erase: slot,
-            fw_to_map: 0,
+            fw_to_map: 1,
             first_error: FIRST_ERROR_REQUEST,
         }
     }
@@ -138,35 +146,39 @@ impl FWMapRequest {
     }
 }
 
-/// Pack one chunk of a firmware image into a 20-byte `WriteToMMR` packet
-/// (`cuuid_06`) for upload.
+/// Pack one chunk of a firmware image into a `WriteToMMR` packet (`cuuid_06`)
+/// for upload.
 ///
-/// The DE1 streams firmware through the memory-mapped-register write
-/// characteristic: each packet is a length byte (always `0x10` = 16, the chunk
-/// size), the 24-bit big-endian byte `offset` into the firmware image, then up
-/// to [`FIRMWARE_FRAME_DATA_LEN`] image bytes (zero-padded if `chunk` is
-/// shorter, truncated if longer).
+/// Byte-matches de1app (`firmware_upload_next`, `de1_comms.tcl:985`:
+/// `"\x10" + make_U24P0(offset) + string range …`) and reaprime (`uploadFW`,
+/// `unified_de1.firmware.dart:113-129`): a length byte, the 24-bit big-endian
+/// byte `offset` into the image, then the chunk data with **NO zero-padding**.
+/// A full chunk is 20 bytes ([`FIRMWARE_FRAME_LEN`]); the final short chunk emits
+/// `4 + chunk.len()` bytes — neither reference pads the tail (crema previously
+/// padded to a fixed 20). The length byte is the **actual chunk length** (matching
+/// reaprime `uploadFW`'s `data[0] = chunkLength`, `unified_de1.firmware.dart:118-122`);
+/// **de1app** instead hard-codes 16 (`\x10`, `de1_comms.tcl:985`) — a
+/// firmware-tolerated don't-care that only differs on a non-16-aligned final chunk.
+/// Crema follows reaprime here. See `AUDIT.md` F6.
 ///
-/// The shell is responsible for slicing the image into 16-byte chunks and
-/// advancing `offset` by 16 each step; this function only encodes one packet.
+/// The shell slices the image into 16-byte chunks and advances `offset` by 16
+/// each step; this function encodes one packet (truncating an over-long `chunk`).
 ///
 /// # Errors
 ///
 /// [`ProtocolError::FirmwareOffsetOutOfRange`] if `offset` does not fit in the
 /// 24-bit address field.
-pub fn firmware_write_frame(
-    offset: u32,
-    chunk: &[u8],
-) -> Result<[u8; FIRMWARE_FRAME_LEN], ProtocolError> {
+pub fn firmware_write_frame(offset: u32, chunk: &[u8]) -> Result<Vec<u8>, ProtocolError> {
     if offset > 0xFF_FFFF {
         return Err(ProtocolError::FirmwareOffsetOutOfRange(offset));
     }
-    let mut packet = [0u8; FIRMWARE_FRAME_LEN];
-    // FIRMWARE_FRAME_DATA_LEN is the compile-time constant 16 — fits a u8.
-    packet[0] = u8::try_from(FIRMWARE_FRAME_DATA_LEN).unwrap_or(u8::MAX);
-    packet[1..4].copy_from_slice(&u24p0_encode(offset));
     let len = chunk.len().min(FIRMWARE_FRAME_DATA_LEN);
-    packet[4..4 + len].copy_from_slice(&chunk[..len]);
+    let mut packet = Vec::with_capacity(4 + len);
+    // Length byte = the ACTUAL chunk length (reaprime); de1app hard-codes 16.
+    // `len` is clamped to <= 16 above, so it always fits a u8.
+    packet.push(u8::try_from(len).unwrap_or(u8::MAX));
+    packet.extend_from_slice(&u24p0_encode(offset));
+    packet.extend_from_slice(&chunk[..len]);
     Ok(packet)
 }
 
@@ -268,7 +280,7 @@ mod tests {
         let packet = FWMapRequest::erase(1).encode();
         assert_eq!(&packet[0..2], &[0, 0]); // WindowIncrement
         assert_eq!(packet[2], 1); // FWToErase
-        assert_eq!(packet[3], 0); // FWToMap
+        assert_eq!(packet[3], 1); // FWToMap=1 (de1app + reaprime erase request)
         assert_eq!(&packet[4..7], &[0xFF, 0xFF, 0xFF]); // FirstError request
     }
 
@@ -342,10 +354,13 @@ mod tests {
     }
 
     #[test]
-    fn firmware_write_frame_zero_pads_a_short_final_chunk() {
+    fn firmware_write_frame_does_not_pad_a_short_final_chunk() {
+        // de1app/reaprime emit 4 + actual bytes — no zero-padding to a fixed 20.
         let packet = firmware_write_frame(0, &[1, 2, 3]).unwrap();
-        assert_eq!(&packet[4..7], &[1, 2, 3]);
-        assert_eq!(&packet[7..20], &[0u8; 13]);
+        assert_eq!(packet.len(), 7); // 1 len byte + 3 offset + 3 data
+        assert_eq!(packet[0], 3); // length byte = actual chunk length (reaprime); de1app would write 16
+        assert_eq!(&packet[1..4], &[0, 0, 0]); // offset
+        assert_eq!(&packet[4..], &[1, 2, 3]); // data, unpadded
     }
 
     #[test]
