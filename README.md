@@ -57,7 +57,7 @@ Crema is a clean-room reimplementation of the DE1 tablet experience as a **fast,
 **Stable** — tagged releases:
 
 - **[IzzyOnDroid](https://apt.izzysoft.de/)** (an F-Droid-compatible repo): add `https://apt.izzysoft.de/fdroid/repo` to your F-Droid client, then search for **Crema**. *(Pending the IzzyOnDroid inclusion request.)*
-- Or download the APK from the [latest release](https://github.com/geota/crema/releases/latest).
+- Or download the APK from the [latest release](https://github.com/geota/crema/releases/latest). See the **[changelog](CHANGELOG.md)** for what each release includes.
 
 **Nightly** — the latest commit on `main`, rebuilt on every push:
 
