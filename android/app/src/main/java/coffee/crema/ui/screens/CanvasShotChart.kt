@@ -1,8 +1,11 @@
 package coffee.crema.ui.screens
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -94,6 +97,19 @@ fun CanvasShotChart(
         if ("pressure" in enabledChannels) add(setpoint)
     }
 
+    // X-window TARGET: auto-grows with the shot (de1app-style). LIVE snaps up in
+    // clean 10 s steps (10→20→30…); a finished shot fits its length to 5 s. Floor 10 s.
+    val lastSec = (samples.lastOrNull()?.elapsedMs ?: 0L) / 1000f
+    val targetXMax = if (live) max(10f, ceil(lastSec / 10f) * 10f) else max(10f, ceil(lastSec / 5f) * 5f)
+    // Ease each live step over 300 ms (reaprime-style) so the window glides instead
+    // of snapping; a finished shot is static, so it takes the target directly.
+    val animatedXMax by animateFloatAsState(
+        targetValue = targetXMax,
+        animationSpec = tween(durationMillis = 300),
+        label = "shotChartXMax",
+    )
+    val xMax = if (live) animatedXMax else targetXMax
+
     Canvas(modifier) {
         val padL = 30.dp.toPx()
         val padR = 34.dp.toPx()
@@ -106,14 +122,7 @@ fun CanvasShotChart(
         val plotW = (plotR - plotL).coerceAtLeast(1f)
         val plotH = (plotB - plotT).coerceAtLeast(1f)
 
-        // Ranges (mirror uPlot: y floors at 10 + 0.3 headroom). The x-window
-        // auto-grows with the shot (de1app-style) rather than sitting at a fixed
-        // width: LIVE it snaps up in clean 10 s steps (10→20→30…) as the pour
-        // crosses each boundary — the curve fills the width from the start with
-        // only a few jumps (no per-frame rescale); a FINISHED shot fits its length
-        // to the nearest 5 s. Both floor at 10 s.
-        val lastSec = (samples.lastOrNull()?.elapsedMs ?: 0L) / 1000f
-        val xMax = if (live) max(10f, ceil(lastSec / 10f) * 10f) else max(10f, ceil(lastSec / 5f) * 5f)
+        // y floors at 10 + 0.3 headroom; xMax is the animated x-window from above.
         var dataMax = 0f
         samples.forEach { s -> active.forEach { ch -> ch.valueOf(s)?.let { if (it > dataMax) dataMax = it } } }
         val yMax = max(10f, ceil(dataMax + 0.3f))

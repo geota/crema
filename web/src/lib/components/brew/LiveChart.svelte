@@ -28,7 +28,7 @@
 	import type { TelemetrySample } from '$lib/state';
 	import { sampleCurve, type ProfileSegment } from '$lib/profiles';
 	import { theme } from '$lib/theme.svelte';
-	import { cssVar, xRangeStep, yRange, sharedAxes } from '$lib/components/charts/chartHelpers';
+	import { cssVar, yRange, sharedAxes } from '$lib/components/charts/chartHelpers';
 
 	let {
 		series,
@@ -396,6 +396,35 @@
 	let chart: uPlot | null = null;
 	let resizeObs: ResizeObserver | null = null;
 
+	// X-window tween: the live x-scale eases to its next 10 s step over ~300 ms
+	// (reaprime-style) rather than snapping. uPlot has no scale animation, so we
+	// drive it — the x `range` callback reports `xMaxAnim`, and a rAF loop eases it
+	// toward `xMaxTarget` via `setScale`. Plain `let` (imperative handles read in
+	// the range cb + rAF, never in markup).
+	let xMaxAnim = 30;
+	let xMaxTarget = 30;
+	let xMaxRaf: number | null = null;
+
+	/** Ease `xMaxAnim` → `xMaxTarget` over 300 ms (easeOutCubic), redrawing via
+	 *  `setScale` each frame; restarts cleanly if the target moves mid-tween. */
+	function tweenXMax(): void {
+		if (xMaxRaf != null) cancelAnimationFrame(xMaxRaf);
+		const from = xMaxAnim;
+		const start = performance.now();
+		const frame = (now: number): void => {
+			const t = Math.min(1, (now - start) / 300);
+			xMaxAnim = from + (xMaxTarget - from) * (1 - Math.pow(1 - t, 3));
+			chart?.setScale('x', { min: 0, max: xMaxAnim });
+			if (t < 1) {
+				xMaxRaf = requestAnimationFrame(frame);
+			} else {
+				xMaxAnim = xMaxTarget;
+				xMaxRaf = null;
+			}
+		};
+		xMaxRaf = requestAnimationFrame(frame);
+	}
+
 	function buildOpts(w: number, h: number): uPlot.Options {
 		// Canvas strokes can't resolve `var()` — resolve every chart token to a
 		// concrete colour here, at build time. uPlot calls each series `stroke`
@@ -428,7 +457,7 @@
 			cursor: { show: false },
 			legend: { show: false },
 			scales: {
-				x: { time: false, range: xRangeStep(10) },
+				x: { time: false, range: () => [0, xMaxAnim] },
 				y: { range: yRange }
 			},
 			axes: sharedAxes({ gridColor, labelColor, baseWindowSec: BASE_WINDOW_SEC }),
@@ -647,11 +676,22 @@
 	 */
 	const data = $derived(toData(series));
 
-	// Push new telemetry into the existing chart instance. `setData` re-runs
-	// the x/y `range` callbacks, so the x-window auto-grows past 60 s and the
-	// y-axis auto-grows with the data — no manual `setScale` needed.
+	// Push new telemetry into the existing chart instance. `setData` re-runs the
+	// y `range` callback (y auto-grows with the data). The x-window is owned by the
+	// tween: each new 10 s step eases in over 300 ms via `tweenXMax()`.
 	$effect(() => {
 		chart?.setData(data);
+		const lastSec = series.length ? series[series.length - 1].elapsed / 1000 : 0;
+		const target = Math.max(10, Math.ceil(lastSec / 10) * 10);
+		if (target !== xMaxTarget) {
+			xMaxTarget = target;
+			tweenXMax();
+		}
+	});
+
+	// Cancel any in-flight x-window tween when the chart unmounts.
+	$effect(() => () => {
+		if (xMaxRaf != null) cancelAnimationFrame(xMaxRaf);
 	});
 
 	// Repaint on theme flip. Axis/grid colours are baked into `buildOpts` at
