@@ -12,7 +12,7 @@
 	 */
 	import pkg from '../../../package.json';
 	const version = pkg.version;
-	const lastUpdated = '2026-06-24';
+	const lastUpdated = '2026-06-29';
 </script>
 
 <main class="legal">
@@ -179,6 +179,16 @@
 			fixes.</strong> Features may change or be removed between releases. By
 			using Crema you accept these limitations and the hardware risks in
 			Section&nbsp;3.
+		</p>
+		<p>
+			<strong>AI-assisted development.</strong> Crema was built with heavy use
+			of AI / large-language-model (LLM)-assisted development — including
+			Anthropic's Claude (via Claude Code) for a substantial portion of its
+			code, design, and documentation. While the project is reviewed and
+			tested, AI-assisted software can contain subtle or non-obvious errors.
+			This reinforces the <strong>"as is"</strong>, no-warranty basis
+			(Sections&nbsp;4–5) and the hardware-risk and assumption-of-risk
+			disclaimers above: <strong>you use Crema entirely at your own risk.</strong>
 		</p>
 	</section>
 

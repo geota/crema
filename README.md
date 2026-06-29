@@ -189,6 +189,10 @@ cd ../web && pnpm check && pnpm build
 - **[Visualizer](https://visualizer.coffee/)** for the shot-sharing service and its public API.
 - **The Decent community** — Diaspora forum, Discord, and r/decentespresso — for collective wisdom on shot dynamics, profile design, and the protocol's many undocumented quirks.
 
+## Built with AI assistance
+
+Crema was built with heavy use of **large-language-model (LLM)-assisted development** — including Anthropic's [Claude](https://www.anthropic.com/claude) (via [Claude Code](https://www.claude.com/claude-code)) for a substantial portion of its code, design, and documentation. The project is reviewed and tested, but AI-assisted software can carry subtle or non-obvious defects — please mind the [no-warranty, use-at-your-own-risk Terms](https://crema.maceiras.dev/terms) (especially around machine control), and report anything that looks off via a [GitHub issue](https://github.com/geota/crema/issues).
+
 ## License
 
 Crema is licensed under the **GNU General Public License v3.0 or later** — see [`LICENSE`](LICENSE). This matches the DE1 ecosystem (`de1app` is GPL-3.0), so GPL-licensed code may be referenced and adapted freely.

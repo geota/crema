@@ -12,7 +12,7 @@
 	 */
 	import pkg from '../../../package.json';
 	const version = pkg.version;
-	const lastUpdated = '2026-06-24';
+	const lastUpdated = '2026-06-29';
 </script>
 
 <main class="legal">
@@ -279,6 +279,14 @@
 				rel="noreferrer noopener">github.com/geota/crema</a
 			>. You can audit exactly what the application does, build your own
 			copy from source, or host it under your own domain.
+		</p>
+		<p>
+			Crema was built with heavy use of AI / large-language-model
+			(LLM)-assisted development — including Anthropic's Claude (via Claude
+			Code) for a substantial portion of its code and design. This concerns
+			how the software was <em>written</em>, not how it <em>runs</em>: no AI
+			or LLM service is involved in operating Crema or processing your data,
+			and the local-first, no-collection handling described above is unchanged.
 		</p>
 	</section>
 
