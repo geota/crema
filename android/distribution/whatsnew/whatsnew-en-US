@@ -1,6 +1,9 @@
-What's new in Crema:
-• Reliable DE1 connect — firmware, mains voltage, and machine state now read on connect.
-• Stop-on-weight ends the shot automatically at your target yield.
-• Quick Controls apply instantly as live global overrides — no save step.
-• Settings cleanups: aligned firmware / board / BLE readouts and AC-frequency auto-detect.
-• Brew-screen polish on phones.
+Welcome to Crema — a fast, open-source companion for the Decent Espresso DE1.
+
+• Live brew dashboard: real-time pressure, flow, temperature & weight
+• 88 built-in profiles, plus create and edit your own
+• Shot history with bean tracking and overlay compare
+• Bluetooth scales: Bookoo, Acaia, Decent & more
+• Optional Visualizer sync and Google Drive backup
+
+Local-first and free. Unofficial; not affiliated with Decent Espresso.
