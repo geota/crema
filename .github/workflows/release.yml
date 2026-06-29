@@ -256,16 +256,19 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
-      # Optional: publish the AAB to Google Play's internal track as a draft. Runs
-      # only on a tag when PLAY_SERVICE_ACCOUNT_JSON is set. Prerequisites: the app
-      # already exists in the Play Console with >=1 manual upload, it's enrolled in
+      # Optional: publish the AAB to Google Play's internal track as a draft.
+      # GATED so the first release stays manual — runs only when the repo variable
+      # PLAY_AUTO_UPLOAD == 'true' (Settings → Secrets and variables → Actions →
+      # Variables). Google Play rejects the FIRST upload via API, so leave this
+      # unset for the initial release (do that one upload by hand in the Play
+      # Console), then set it to 'true' to automate every release after.
+      # Other prerequisites: the app exists in the Play Console, is enrolled in
       # Play App Signing, and the service account has the "Release manager" role.
-      # The AAB must be signed (set the keystore secrets too) or Play rejects it.
-      # The user-facing "What's new" notes come from android/distribution/whatsnew/
-      # (one file per locale, named `whatsnew-<locale>`, <=500 chars each) — edit
-      # those before cutting the release tag. See that dir's README.
+      # The AAB must be signed (keystore secrets) or Play rejects it. The "What's
+      # new" notes come from android/distribution/whatsnew/ (whatsnew-<locale>,
+      # <=500 chars each) — edit those before cutting the tag. See that dir's README.
       - name: Publish AAB to Google Play (internal, draft)
-        if: startsWith(github.ref, 'refs/tags/') && env.PLAY_JSON != ''
+        if: startsWith(github.ref, 'refs/tags/') && env.PLAY_JSON != '' && vars.PLAY_AUTO_UPLOAD == 'true'
         uses: r0adkll/upload-google-play@v1
         with:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
