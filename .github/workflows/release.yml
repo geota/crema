@@ -93,7 +93,7 @@ jobs:
       CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Install Rust toolchain (wasm32)
         uses: dtolnay/rust-toolchain@stable
@@ -143,7 +143,7 @@ jobs:
           zip -r "$GITHUB_WORKSPACE/crema-web-${VERSION_NAME}.zip" .
 
       - name: Upload PWA artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: crema-web
           path: crema-web-*.zip
@@ -153,7 +153,7 @@ jobs:
       # branch in the CF project). Skipped on manual runs and when no CF token.
       - name: Deploy to Cloudflare Pages
         if: startsWith(github.ref, 'refs/tags/') && env.CF_API_TOKEN != ''
-        uses: cloudflare/wrangler-action@v3
+        uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -173,16 +173,16 @@ jobs:
       PLAY_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
 
       - name: Install NDK + compileSdk platform (pinned to build.gradle.kts)
         run: sdkmanager "ndk;30.0.14904198" "platforms;android-37.0"
@@ -199,7 +199,7 @@ jobs:
           shared-key: rust-android
 
       - name: Set up Gradle (with cache)
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
 
       # Decode the release keystore if configured; export its path so the Gradle
       # signingConfig (build.gradle.kts) picks it up. Absent secret => unsigned.
@@ -250,7 +250,7 @@ jobs:
           ls -la dist
 
       - name: Upload Android artifacts (APKs + AAB)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: crema-android
           path: dist/*
@@ -286,12 +286,12 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
     steps:
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
 
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           name: Crema ${{ needs.version.outputs.name }}
           tag_name: ${{ github.ref_name }}
