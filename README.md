@@ -20,6 +20,25 @@ Crema is a clean-room reimplementation of the DE1 tablet experience as a **fast,
 
 > **▶ Try the live web app: [crema.maceiras.dev](https://crema.maceiras.dev)** — it runs entirely in your browser, nothing to install. Pairing a DE1 or scale needs a **Chromium** browser (Chrome, Edge, Brave) for Web Bluetooth; add it to your home screen to install it as an offline PWA. Prefer a native app? See **[Install on Android](#install-on-android)** below.
 
+## Screenshots
+
+<div align="center">
+<img src="android/distribution/play-listing/en-US/images/phoneScreenshots/01-brew-dashboard.png" width="200" alt="Live brew dashboard" />
+<img src="android/distribution/play-listing/en-US/images/phoneScreenshots/02-profiles.png" width="200" alt="Profile library" />
+<img src="android/distribution/play-listing/en-US/images/phoneScreenshots/03-history.png" width="200" alt="Shot history" />
+<img src="android/distribution/play-listing/en-US/images/phoneScreenshots/04-beans.png" width="200" alt="Bean library" />
+<br/>
+<sub><b>Android phone</b> — live brew dashboard · profile library · shot history · bean library</sub>
+<br/><br/>
+<sub><b>10&Prime; tablet:</b>
+<a href="android/distribution/play-listing/en-US/images/tenInchScreenshots/01-brew-dashboard.png">Brew</a> ·
+<a href="android/distribution/play-listing/en-US/images/tenInchScreenshots/02-profiles.png">Profiles</a> ·
+<a href="android/distribution/play-listing/en-US/images/tenInchScreenshots/03-history.png">History</a> ·
+<a href="android/distribution/play-listing/en-US/images/tenInchScreenshots/04-beans.png">Beans</a> ·
+<a href="android/distribution/play-listing/en-US/images/tenInchScreenshots/05-settings.png">Settings</a>
+</sub>
+</div>
+
 ## Features
 
 - **Live brew dashboard** — real-time pressure / flow / temperature / weight telemetry, four-channel chart, phase indicator, and shot-completion metrics.
