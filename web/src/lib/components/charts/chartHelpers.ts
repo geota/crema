@@ -27,28 +27,21 @@ export function timeSplits(max: number): number[] {
 }
 
 /**
- * The x-scale `range` callback: the window opens at `baseWindowSec` and grows
- * to fit the shot — a pull past the base simply extends the axis to the right
- * rather than clipping. Data-driven, like {@link yRange}.
+ * The telemetry x-scale `range`: the time window **auto-grows with the shot**
+ * (de1app-style) instead of sitting at a fixed width. The axis snaps up to the
+ * next `stepSec` boundary as the shot crosses it — so the curve fills the width
+ * from the start, the window changes only a few times (no per-frame rescale,
+ * which is what we'd otherwise need an animation to hide), and the second-tick
+ * gridlines always land cleanly. A 10 s floor keeps a brief flush from being a
+ * sliver.
+ *
+ * Live charts pass a coarse `stepSec` (10) for few, unobtrusive jumps as the
+ * pour runs; a finished history shot passes a finer 5 for a tight final fit.
  */
-export function xRange(baseWindowSec: number): uPlot.Scale.Range {
+export function xRangeStep(stepSec: number): uPlot.Scale.Range {
 	return (_u, _min, dataMax) => [
 		0,
-		Number.isFinite(dataMax) ? Math.max(baseWindowSec, Math.ceil(dataMax)) : baseWindowSec
-	];
-}
-
-/**
- * The HISTORY x-scale `range`: a finished shot, so fit its recorded length
- * rather than flooring to a fixed live window — the axis shrinks / expands with
- * the actual shot. Rounded up to a clean 5 s for tidy ticks, with a small floor
- * so a brief flush isn't a sliver. (cf. {@link xRange}, the live fixed-window
- * variant.)
- */
-export function xRangeFit(): uPlot.Scale.Range {
-	return (_u, _min, dataMax) => [
-		0,
-		Number.isFinite(dataMax) ? Math.max(10, Math.ceil(dataMax / 5) * 5) : 30
+		Number.isFinite(dataMax) ? Math.max(10, Math.ceil(dataMax / stepSec) * stepSec) : 30
 	];
 }
 

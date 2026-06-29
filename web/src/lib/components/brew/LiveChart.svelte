@@ -28,7 +28,7 @@
 	import type { TelemetrySample } from '$lib/state';
 	import { sampleCurve, type ProfileSegment } from '$lib/profiles';
 	import { theme } from '$lib/theme.svelte';
-	import { cssVar, xRange, yRange, sharedAxes } from '$lib/components/charts/chartHelpers';
+	import { cssVar, xRangeStep, yRange, sharedAxes } from '$lib/components/charts/chartHelpers';
 
 	let {
 		series,
@@ -428,7 +428,7 @@
 			cursor: { show: false },
 			legend: { show: false },
 			scales: {
-				x: { time: false, range: xRange(BASE_WINDOW_SEC) },
+				x: { time: false, range: xRangeStep(10) },
 				y: { range: yRange }
 			},
 			axes: sharedAxes({ gridColor, labelColor, baseWindowSec: BASE_WINDOW_SEC }),
