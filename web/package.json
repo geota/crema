@@ -22,7 +22,7 @@
     "@sveltejs/kit": "^2.68.0",
     "@sveltejs/vite-plugin-svelte": "^7.1.2",
     "@tailwindcss/vite": "^4.3.1",
-    "@types/node": "^25.8.0",
+    "@types/node": "^26.0.1",
     "@types/web-bluetooth": "^0.0.21",
     "@vite-pwa/sveltekit": "^1.1.0",
     "jsdom": "^29.1.1",
