@@ -287,6 +287,8 @@ jobs:
     steps:
       - name: Checkout # for CHANGELOG.md (release-notes source)
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0 # fetch tags so we can tell the first release from later ones
 
       - name: Download artifacts
         uses: actions/download-artifact@v4
@@ -294,12 +296,12 @@ jobs:
           path: artifacts
 
       - name: Extract release notes from CHANGELOG
+        id: notes
         env:
           VERSION: ${{ needs.version.outputs.name }}
         run: |
           # The release body IS the curated "## [<version>]" section from
-          # CHANGELOG.md — the new features we already wrote, nothing static.
-          # generate_release_notes then appends the raw commit/PR list below it.
+          # CHANGELOG.md — the features we already wrote, nothing auto-summarised.
           awk -v ver="$VERSION" '
             index($0, "## [" ver "]") == 1 { p = 1; next }   # section start (header dropped — release is titled already)
             p && /^## \[/                  { exit }          # next version section → stop
@@ -307,9 +309,16 @@ jobs:
             p                              { print }
           ' CHANGELOG.md > release-notes.md
           if [ ! -s release-notes.md ]; then
-            echo "::warning::No CHANGELOG.md section for $VERSION — using auto-generated notes only."
+            echo "::warning::No CHANGELOG.md section for $VERSION."
             printf 'See [CHANGELOG.md](https://github.com/%s/blob/main/CHANGELOG.md) for details.\n' "$GITHUB_REPOSITORY" > release-notes.md
           fi
+          # Append GitHub's auto commit/PR list ONLY when a prior release tag exists.
+          # The first release has no predecessor, so auto-notes would summarise the
+          # whole ~1000-commit history — keep that one curated-only.
+          PRIOR=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | grep -vx "$GITHUB_REF_NAME" | head -n1 || true)
+          [ -n "$PRIOR" ] && GEN=true || GEN=false
+          echo "gen=$GEN" >> "$GITHUB_OUTPUT"
+          echo "prior release tag: ${PRIOR:-<none — first release>} -> generate_release_notes=$GEN"
           echo "----- release body -----"; cat release-notes.md
 
       - name: Publish GitHub Release
@@ -318,7 +327,7 @@ jobs:
           name: Crema ${{ needs.version.outputs.name }}
           tag_name: ${{ github.ref_name }}
           body_path: release-notes.md
-          generate_release_notes: true
+          generate_release_notes: ${{ steps.notes.outputs.gen }}
           fail_on_unmatched_files: true
           files: |
             artifacts/crema-android/*.apk
