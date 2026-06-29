@@ -39,6 +39,20 @@ export function xRange(baseWindowSec: number): uPlot.Scale.Range {
 }
 
 /**
+ * The HISTORY x-scale `range`: a finished shot, so fit its recorded length
+ * rather than flooring to a fixed live window — the axis shrinks / expands with
+ * the actual shot. Rounded up to a clean 5 s for tidy ticks, with a small floor
+ * so a brief flush isn't a sliver. (cf. {@link xRange}, the live fixed-window
+ * variant.)
+ */
+export function xRangeFit(): uPlot.Scale.Range {
+	return (_u, _min, dataMax) => [
+		0,
+		Number.isFinite(dataMax) ? Math.max(10, Math.ceil(dataMax / 5) * 5) : 30
+	];
+}
+
+/**
  * The shared y-scale `range` callback — one scale for all four channels. The
  * top floats from 10 upward so a mid-shot flow / pressure spike grows both
  * axes together. A hair of headroom (+0.3) keeps a peak landing on a round

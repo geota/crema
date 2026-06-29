@@ -106,9 +106,13 @@ fun CanvasShotChart(
         val plotW = (plotR - plotL).coerceAtLeast(1f)
         val plotH = (plotB - plotT).coerceAtLeast(1f)
 
-        // Ranges (mirror uPlot: y floors at 10 + 0.3 headroom, x floors at 60 s).
+        // Ranges (mirror uPlot: y floors at 10 + 0.3 headroom). The x-window is a
+        // stable 60 s while LIVE (so the curve doesn't rescale as the shot grows),
+        // but a FINISHED shot fits its recorded length — rounded up to a clean 5 s,
+        // min 10 s — so the axis shrinks / expands with the actual shot instead of
+        // sitting at a fixed 60.
         val lastSec = (samples.lastOrNull()?.elapsedMs ?: 0L) / 1000f
-        val xMax = max(60f, ceil(lastSec))
+        val xMax = if (live) max(60f, ceil(lastSec)) else max(10f, ceil(lastSec / 5f) * 5f)
         var dataMax = 0f
         samples.forEach { s -> active.forEach { ch -> ch.valueOf(s)?.let { if (it > dataMax) dataMax = it } } }
         val yMax = max(10f, ceil(dataMax + 0.3f))

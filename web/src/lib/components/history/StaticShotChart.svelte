@@ -16,7 +16,7 @@
 	import type { TelemetrySample } from '$lib/state';
 	import { theme } from '$lib/theme.svelte';
 	import { getSettingsStore } from '$lib/settings';
-	import { cssVar, xRange, yRange, sharedAxes } from '$lib/components/charts/chartHelpers';
+	import { cssVar, xRangeFit, yRange, sharedAxes } from '$lib/components/charts/chartHelpers';
 
 	let {
 		series,
@@ -37,7 +37,8 @@
 	 */
 	const settings = getSettingsStore();
 
-	/** The default x-window, seconds, for a very short recorded shot. */
+	/** Fallback x-window (seconds) for the axis ticks before the shot data lands;
+	 *  the real window fits the recorded length via `xRangeFit()`. */
 	const BASE_WINDOW_SEC = 30;
 
 	/**
@@ -139,7 +140,7 @@
 			cursor: { show: false },
 			legend: { show: false },
 			scales: {
-				x: { time: false, range: xRange(BASE_WINDOW_SEC) },
+				x: { time: false, range: xRangeFit() },
 				y: { range: yRange }
 			},
 			axes: sharedAxes({ gridColor, labelColor, baseWindowSec: BASE_WINDOW_SEC }),
