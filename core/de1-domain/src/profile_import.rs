@@ -1534,14 +1534,14 @@ mod tests {
             max_total_volume_ml: 0,
             target_weight: 0.0,
             dose: 0.0,
-            author: "Adrian".into(),
+            author: "Sam".into(),
             beverage_type: BeverageType::Pourover,
             tank_temperature: 60.0,
             version: "2".into(),
         };
         let exported = export_v2_json(&original).unwrap();
         // Each new key must appear in the emitted JSON.
-        assert!(exported.contains("\"author\": \"Adrian\""));
+        assert!(exported.contains("\"author\": \"Sam\""));
         assert!(exported.contains("\"beverage_type\": \"pourover\""));
         assert!(exported.contains("\"tank_temperature\": 60"));
         assert!(exported.contains("\"version\": \"2\""));

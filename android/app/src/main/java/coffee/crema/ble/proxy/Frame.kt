@@ -57,7 +57,7 @@ sealed class Frame {
     /**
      * First frame a secondary sends on connect. [v] is [PROXY_PROTOCOL_VERSION];
      * [clientId] is a stable per-device id (for TOFU remembering), [clientName]
-     * a display name ("Adrian's phone"). [token] is reserved for the later
+     * a display name ("Sam's phone"). [token] is reserved for the later
      * cloud-relay path; null on the LAN.
      */
     @Serializable

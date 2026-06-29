@@ -2,6 +2,12 @@
 /target/
 **/target/
 
+# Internal agent workbench (handoffs, audits, issue trackers) + signing keys —
+# kept local, never published.
+.scratch
+*.keystore
+**/__pycache__/
+
 # Android / Gradle
 .gradle/
 build/
@@ -25,15 +31,22 @@ android/.kotlin
 .DS_Store
 Thumbs.db
 
-# Claude Code agent worktrees + local settings
-.claude/worktrees/
-.claude/settings.local.json
+# Claude Code agent worktrees + local settings (at any directory level)
+**/.claude/worktrees/
+**/.claude/settings.local.json
 
 # Internal design docs / audits / handoffs — kept locally for development
 # reference but not part of the public repo. The README in the repo root
 # is the public-facing project description; everything under docs/ is
 # implementation history, design rationale, and migration notes.
 docs/
+
+# Internal meta / agent + planning docs — kept locally, not part of the public
+# repo (also removed from history during the open-source cleanup).
+/CLAUDE.md
+/CONTEXT-MAP.md
+**/CONTEXT.md
+/android/IMPLEMENTATION-PLAN.md
 
 # Defensive env-file pattern — covers any future subdirectory that might
 # carry secrets. The web/ shell already excludes `.env.local` via its own

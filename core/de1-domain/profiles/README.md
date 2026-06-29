@@ -9,8 +9,10 @@ The profiles are the 88 standard espresso/tea/cleaning profiles shipped by the
 **de1app** project — the original Decent Espresso DE1 tablet application
 (`de1plus/profiles/`). Each upstream `*.tcl` file was converted once via
 `de1_domain::import_legacy_tcl`, then all the resulting `Profile`s were
-serialized into `builtin.json`. The upstream `.tcl` files are *not* vendored;
-`builtin.json` is the only embedded data file.
+serialized into `builtin.json`. The upstream `.tcl` files are *not* vendored as
+shipped data; `builtin.json` is the only embedded data file. (Two upstream `.tcl`
+profiles are retained under `tests/fixtures/` purely as legacy-import parser test
+inputs — see [`THIRD-PARTY-NOTICES.md`](../../../THIRD-PARTY-NOTICES.md).)
 
 ## Origin
 

@@ -65,10 +65,9 @@ fn decode_hex(hex: &str) -> Result<Vec<u8>, String> {
 
 #[test]
 fn recorded_session_decodes_to_pinned_event_sequence() {
-    // The fixture lives at the repo root, not inside the crate. `CARGO_MANIFEST_DIR`
-    // is `core/de1-app`, so climb two levels to reach `captures/`.
+    // The fixture lives alongside this test. `CARGO_MANIFEST_DIR` is `core/de1-app`.
     let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../captures/session-20260517-122732-shot-pull.jsonl");
+        .join("tests/fixtures/session-20260517-122732-shot-pull.jsonl");
 
     let file = File::open(&fixture)
         .unwrap_or_else(|e| panic!("opening fixture {}: {e}", fixture.display()));
