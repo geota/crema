@@ -66,6 +66,20 @@ pub struct BcExport {
     pub mills: Vec<BcMill>,
     #[serde(rename = "PREPARATION", default)]
     pub preparations: Vec<BcPreparation>,
+    #[serde(rename = "VERSION", default)]
+    pub version: Vec<BcVersion>,
+}
+
+/// The export's `VERSION` record — lets the importer report which Beanconqueror
+/// app version (hence schema era) the export came from.
+/// `alreadyDisplayedVersions` is the chronological list of app versions the
+/// user has run; its last entry is the export's app version. There is no
+/// dedicated schema-version field in BC, so this is the best available signal —
+/// the actual field-shape handling is presence-based, not version-gated.
+#[derive(Debug, Default, Clone, Deserialize)]
+pub struct BcVersion {
+    #[serde(default, rename = "alreadyDisplayedVersions")]
+    pub already_displayed_versions: Vec<String>,
 }
 
 /// The `config` wrapper that BC stamps on every entity — UUID + the
@@ -76,7 +90,7 @@ pub struct BcConfig {
     pub uuid: String,
     /// BC stores this as Unix seconds. Multiply by 1000 to get Crema's
     /// epoch-ms convention.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_i64")]
     pub unix_timestamp: i64,
 }
 
@@ -92,7 +106,7 @@ pub struct BcBean {
     pub roast: BcRoast,
     /// Crema's 1..10 roast scale lives in the BC `roast_range` field.
     /// When present and in range, we prefer it over the named `roast`.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_i32")]
     pub roast_range: i32,
     #[serde(default)]
     pub note: String,
@@ -105,7 +119,7 @@ pub struct BcBean {
     /// lives in app-level settings (we drop those, so the bare number
     /// rides through). `0.0` (BC's "unset" sentinel) maps to `None` on
     /// the Crema side via the `cost > 0.0` guard in the mapper.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_f32")]
     pub cost: f32,
     #[serde(default, rename = "beanMix")]
     pub bean_mix: BcBeanMix,
@@ -121,9 +135,9 @@ pub struct BcBean {
     pub favourite: bool,
     #[serde(default)]
     pub finished: bool,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_f32")]
     pub weight: f32,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_f32")]
     pub rating: f32,
     #[serde(default, rename = "roastingDate")]
     pub roasting_date: String,
@@ -149,6 +163,21 @@ pub struct BcBean {
     /// IndexedDB pipeline isn't wired yet).
     #[serde(default)]
     pub attachments: Vec<String>,
+    /// Legacy (pre-v5.2.0) single-image path. BC's UPDATE_1 moved this into
+    /// `attachments[]`; recovered as a photo when `attachments` is empty.
+    #[serde(default, rename = "filePath")]
+    pub file_path: String,
+    /// Legacy (pre-v5.2.0) flat origin fields. BC's UPDATE_1 moved
+    /// `country` / `variety` / `processing` off the bean and into
+    /// `bean_information[]`; recovered as the bean's origin when that array is
+    /// absent. Newer exports don't carry these top-level keys, so they default
+    /// empty and the `bean_information[]` path wins.
+    #[serde(default)]
+    pub country: String,
+    #[serde(default)]
+    pub variety: String,
+    #[serde(default)]
+    pub processing: String,
     /// Catch-all for fields we don't model (cupping form, frozen-group
     /// tracking, EAN, …). Surface in diagnostics, drop on
     /// the Crema side.
@@ -192,6 +221,44 @@ fn string_or_number<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error>
     })
 }
 
+/// Coerce a Beanconqueror numeric field that may arrive as a JSON number OR a
+/// numeric **string**. Pre-v5.2-era exports predate BC's `fixDataTypes()`
+/// (which coerced cost / weight / grind_weight / brew_temperature from
+/// string→number), and — BC being a JS app — any numeric field can show up
+/// quoted. A non-numeric string, null, or other value coerces to 0, matching
+/// the `#[serde(default)]` BC import already relies on. Without this, a single
+/// stringified number aborts the entire parse (cf. the `grind_size` regression).
+fn num_value(v: &Value) -> f64 {
+    match v {
+        Value::Number(n) => n.as_f64().unwrap_or(0.0),
+        Value::String(s) => s.trim().parse::<f64>().unwrap_or(0.0),
+        _ => 0.0,
+    }
+}
+
+#[allow(clippy::cast_possible_truncation)]
+fn de_f32<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+    Ok(num_value(&Value::deserialize(d)?) as f32)
+}
+
+fn de_f64<'de, D: Deserializer<'de>>(d: D) -> Result<f64, D::Error> {
+    Ok(num_value(&Value::deserialize(d)?))
+}
+
+#[allow(clippy::cast_possible_truncation)]
+fn de_i32<'de, D: Deserializer<'de>>(d: D) -> Result<i32, D::Error> {
+    Ok(num_value(&Value::deserialize(d)?) as i32)
+}
+
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss
+)]
+fn de_i64<'de, D: Deserializer<'de>>(d: D) -> Result<i64, D::Error> {
+    Ok(num_value(&Value::deserialize(d)?) as i64)
+}
+
 #[derive(Debug, Default, Clone, Deserialize)]
 pub struct BcBrew {
     #[serde(default)]
@@ -207,23 +274,31 @@ pub struct BcBrew {
     pub method_of_preparation: String,
     #[serde(default, deserialize_with = "string_or_number")]
     pub grind_size: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_f32")]
     pub grind_weight: f32,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_f64")]
     pub brew_time: f64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_f64")]
     pub brew_time_milliseconds: f64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_f32")]
     pub brew_temperature: f32,
     /// Recipe input weight (grams).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_f32")]
     pub bean_weight_in: f32,
     /// Beverage output (grams when `brew_beverage_quantity_type == "gr"`).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_f32")]
     pub brew_beverage_quantity: f32,
     #[serde(default)]
     pub brew_beverage_quantity_type: BcQuantityKind,
+    /// Legacy (pre-v5.2.0) beverage output. BC's UPDATE_1 renamed
+    /// `brew_quantity` → `brew_beverage_quantity` for espresso preparations;
+    /// older exports still carry the value here. The mapper falls back to this
+    /// when `brew_beverage_quantity` is 0 (mirrors BC's migration).
+    #[serde(default, deserialize_with = "de_f32")]
+    pub brew_quantity: f32,
     #[serde(default)]
+    pub brew_quantity_type: BcQuantityKind,
+    #[serde(default, deserialize_with = "de_f32")]
     pub rating: f32,
     #[serde(default)]
     pub note: String,
@@ -250,10 +325,16 @@ pub struct BcPreparation {
     pub name: String,
     /// The `style_type` field carries the espresso-vs-pour-over
     /// classification (`"ESPRESSO"` / `"POUR OVER"` / `"FULL_IMMERSION"` /
-    /// `"PERCOLATION"`). Older exports may omit it; we treat an absent
-    /// style as non-espresso and skip it.
+    /// `"PERCOLATION"`). Added in BC v5.2.0; older exports omit it, so the
+    /// mapper derives espresso-ness from [`BcPreparation::prep_type`] instead
+    /// (see [`is_espresso_type`]).
     #[serde(default, rename = "style_type")]
     pub style_type: String,
+    /// The preparation `type` (a `PREPARATION_TYPES` value like `"PORTAFILTER"`
+    /// or `"V60"`). Used to derive espresso-ness for pre-v5.2.0 exports that
+    /// have no `style_type`, mirroring BC's `getPresetStyleType()`.
+    #[serde(default, rename = "type")]
+    pub prep_type: String,
 }
 
 // ── Defensive enums ──────────────────────────────────────────────────
@@ -517,6 +598,11 @@ pub struct ImportedShot {
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportDiagnostics {
+    /// The Beanconqueror app version the export came from (the last entry of
+    /// `VERSION[0].alreadyDisplayedVersions`), e.g. `"8.6.0"`. `None` when the
+    /// export carries no VERSION record. Surfaced so the import summary can note
+    /// the source schema era — the importer tolerates every shape back to v4.0.
+    pub source_app_version: Option<String>,
     /// Number of brews skipped because their preparation wasn't espresso.
     pub non_espresso_brews_skipped: usize,
     /// Number of brews skipped because their preparation reference
@@ -987,6 +1073,16 @@ where
 {
     let mut plan = ImportPlan::default();
 
+    // Schema-awareness: report the source app version (best-effort). The
+    // field-shape handling below is presence-based, not gated on this — BC has
+    // no dedicated schema-version field.
+    plan.diagnostics.source_app_version = export
+        .version
+        .first()
+        .and_then(|v| v.already_displayed_versions.last())
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty());
+
     // ── Beans + Roasters ──
     // Dedup roasters case-insensitively. Each unique non-empty
     // `bean.roaster` string becomes one Roaster row; subsequent beans
@@ -1072,6 +1168,23 @@ where
                 processing: opt_nonempty(&first.processing),
                 harvest_time: opt_nonempty(&first.harvest_time),
             };
+        } else if !bc_bean.country.trim().is_empty()
+            || !bc_bean.variety.trim().is_empty()
+            || !bc_bean.processing.trim().is_empty()
+        {
+            // Pre-v5.2.0 exports kept origin in flat `country` / `variety` /
+            // `processing` fields on the bean (UPDATE_1 moved them into
+            // `bean_information[]`). Recover them when the array is absent.
+            bean.origin = BeanOrigin {
+                country: opt_nonempty(&bc_bean.country),
+                region: None,
+                farm: None,
+                farmer: None,
+                variety: opt_nonempty(&bc_bean.variety),
+                elevation: None,
+                processing: opt_nonempty(&bc_bean.processing),
+                harvest_time: None,
+            };
         }
         // Provenance — round-trip the BC UUID so a re-import skips us.
         bean.beanconqueror_id = Some(bc_bean.config.uuid.clone());
@@ -1103,12 +1216,17 @@ where
         //     frozenNote), ean_article_number, roast_custom, plus
         //     anything BC adds in future versions. Survives a round-
         //     trip without us having to enumerate the schema.
-        let photos: Vec<String> = bc_bean
+        let mut photos: Vec<String> = bc_bean
             .attachments
             .iter()
             .map(|s| s.trim().to_owned())
             .filter(|s| !s.is_empty())
             .collect();
+        // Pre-v5.2.0 exports kept a single image in `filePath` (UPDATE_1 moved
+        // it into `attachments[]`). Recover it when `attachments` is empty.
+        if photos.is_empty() && !bc_bean.file_path.trim().is_empty() {
+            photos.push(bc_bean.file_path.trim().to_owned());
+        }
         let mut bc_meta = serde_json::Map::new();
         if !photos.is_empty() {
             for p in &photos {
@@ -1169,7 +1287,17 @@ where
     let prep_is_espresso: HashMap<&str, bool> = export
         .preparations
         .iter()
-        .map(|p| (p.config.uuid.as_str(), is_espresso_style(&p.style_type)))
+        .map(|p| {
+            // v5.2.0+ exports carry `style_type`; pre-v5.2.0 ones don't, so
+            // derive espresso-ness from the preparation `type` instead —
+            // otherwise every brew from an old export is skipped as "non-espresso".
+            let espresso = if p.style_type.trim().is_empty() {
+                is_espresso_type(&p.prep_type)
+            } else {
+                is_espresso_style(&p.style_type)
+            };
+            (p.config.uuid.as_str(), espresso)
+        })
         .collect();
     let mill_by_uuid: HashMap<&str, &BcMill> = export
         .mills
@@ -1237,13 +1365,18 @@ where
         } else {
             bc_brew.grind_weight
         };
-        let yield_out = if matches!(bc_brew.brew_beverage_quantity_type, BcQuantityKind::Grams)
-            && bc_brew.brew_beverage_quantity > 0.0
-        {
-            Some(bc_brew.brew_beverage_quantity)
+        // Espresso yield. v5.2.0+ exports use `brew_beverage_quantity` (+ type);
+        // older ones store it in `brew_quantity` (+ type). Mirror BC's UPDATE_1
+        // fallback: when `brew_beverage_quantity` is 0, use `brew_quantity`.
+        let (qty, qty_type) = if bc_brew.brew_beverage_quantity > 0.0 {
+            (
+                bc_brew.brew_beverage_quantity,
+                bc_brew.brew_beverage_quantity_type,
+            )
         } else {
-            None
+            (bc_brew.brew_quantity, bc_brew.brew_quantity_type)
         };
+        let yield_out = (matches!(qty_type, BcQuantityKind::Grams) && qty > 0.0).then_some(qty);
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let rating_u = if bc_brew.rating >= 0.5 && bc_brew.rating <= 5.0 {
             Some(bc_brew.rating.round().min(5.0) as u8)
@@ -1370,6 +1503,27 @@ fn is_espresso_style(style: &str) -> bool {
     upper == "ESPRESSO"
 }
 
+/// Derive espresso-ness from a BC preparation `type` for pre-v5.2.0 exports
+/// that carry no `style_type`. Mirrors `Preparation.getPresetStyleType()`
+/// (preparation.ts): these `PREPARATION_TYPES` map to
+/// `PREPARATION_STYLE_TYPE.ESPRESSO`; everything else defaults to pour-over.
+fn is_espresso_type(prep_type: &str) -> bool {
+    matches!(
+        prep_type.trim().to_ascii_uppercase().as_str(),
+        "CUSTOM_PREPARATION"
+            | "PORTAFILTER"
+            | "CAFELAT"
+            | "FLAIR"
+            | "HAND_LEVER"
+            | "DECENT_ESPRESSO"
+            | "ROK"
+            | "METICULOUS"
+            | "XENIA"
+            | "SANREMO_YOU"
+            | "GAGGIUINO"
+    )
+}
+
 fn brew_duration_ms(b: &BcBrew) -> u64 {
     // Prefer the high-precision `brew_time_milliseconds` (ms float when
     // BC writes it); else fall back to `brew_time` (seconds). Both are
@@ -1431,6 +1585,88 @@ mod tests {
             settings,
             vec![Some("5"), Some("5.5"), Some("7.5"), None, None]
         );
+    }
+
+    #[test]
+    fn pre_v5_2_legacy_schema_imports_fully() {
+        // A pre-v5.2.0 Beanconqueror export: no `style_type` (derive espresso
+        // from `type`), origin in flat `country`/`variety`/`processing`, a
+        // single image in `filePath`, yield in legacy `brew_quantity`, numeric
+        // fields stored as STRINGS (pre-`fixDataTypes`), and a numeric
+        // `grind_size`. Every one of these used to lose data or abort the parse.
+        let json = r#"{
+            "VERSION": [
+                {"config":{"uuid":"v","unix_timestamp":1600000000},"alreadyDisplayedVersions":["4.0.0"]}
+            ],
+            "PREPARATION": [
+                {"config":{"uuid":"prep-pf","unix_timestamp":1600000000},"name":"Portafilter","type":"PORTAFILTER"}
+            ],
+            "BEANS": [
+                {"config":{"uuid":"bean-old","unix_timestamp":1600000000},"name":"Old Bean","roaster":"Old Roaster",
+                 "cost":"20","weight":"250","rating":"4",
+                 "country":"Colombia","variety":"Caturra","processing":"Washed","filePath":"photo_old.jpg"}
+            ],
+            "BREWS": [
+                {"config":{"uuid":"brew-old","unix_timestamp":1600000100},"bean":"bean-old","method_of_preparation":"prep-pf",
+                 "grind_size":5,"brew_temperature":"93","brew_quantity":36,"brew_quantity_type":"gr","brew_time":28}
+            ]
+        }"#;
+        let export =
+            parse_export(json).expect("a pre-v5.2 export (string numerics, no style_type) parses");
+        let plan = bc_to_crema(&export, 1_700_000_000_000, seq_id());
+
+        // Schema-awareness: source version detected.
+        assert_eq!(plan.diagnostics.source_app_version.as_deref(), Some("4.0.0"));
+
+        // Bean: string numerics coerced (D), flat origin recovered (C), filePath
+        // photo recovered (E).
+        assert_eq!(plan.beans.len(), 1);
+        let bean = &plan.beans[0];
+        assert_eq!(bean.cost, Some(20.0), "string cost coerced");
+        assert_eq!(bean.bag_size, 250.0, "string weight coerced");
+        assert_eq!(bean.rating, 4, "string rating coerced");
+        assert_eq!(bean.origin.country.as_deref(), Some("Colombia"));
+        assert_eq!(bean.origin.variety.as_deref(), Some("Caturra"));
+        assert_eq!(bean.origin.processing.as_deref(), Some("Washed"));
+        assert!(
+            plan.diagnostics
+                .bag_photo_filenames
+                .iter()
+                .any(|f| f == "photo_old.jpg"),
+            "filePath recovered as a photo"
+        );
+
+        // Brew: espresso derived from PORTAFILTER `type` (A) so the shot is NOT
+        // skipped; yield recovered from legacy brew_quantity (B); numeric
+        // grind_size stringified (D).
+        assert_eq!(plan.shots.len(), 1, "espresso derived from type → shot kept");
+        let shot = &plan.shots[0];
+        assert_eq!(shot.stored_shot.metadata.yield_out, Some(36.0), "legacy yield");
+        assert_eq!(
+            shot.stored_shot.metadata.grinder_setting.as_deref(),
+            Some("5")
+        );
+    }
+
+    #[test]
+    fn legacy_non_espresso_type_is_skipped() {
+        // No style_type, and the `type` (V60) maps to pour-over → the brew is
+        // correctly skipped, proving the type-derivation discriminates.
+        let json = r#"{
+            "PREPARATION": [
+                {"config":{"uuid":"prep-v60","unix_timestamp":1600000000},"name":"V60","type":"V60"}
+            ],
+            "BEANS": [{"config":{"uuid":"b","unix_timestamp":1600000000},"name":"B"}],
+            "BREWS": [
+                {"config":{"uuid":"br","unix_timestamp":1600000100},"bean":"b","method_of_preparation":"prep-v60","grind_size":"medium"}
+            ]
+        }"#;
+        let export = parse_export(json).expect("parses");
+        let plan = bc_to_crema(&export, 1_700_000_000_000, seq_id());
+        assert_eq!(plan.shots.len(), 0, "V60 is pour-over → skipped");
+        assert_eq!(plan.diagnostics.non_espresso_brews_skipped, 1);
+        // No VERSION record → no source version.
+        assert_eq!(plan.diagnostics.source_app_version, None);
     }
 
     fn seq_id() -> impl FnMut() -> String {
