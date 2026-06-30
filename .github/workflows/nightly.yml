@@ -1,17 +1,14 @@
-# Crema NIGHTLY pipeline — builds the develop APK on every push to `main` and
-# publishes it as a single rolling GitHub **prerelease** (tag `nightly`) for
-# Obtainium. Follow this train in Obtainium by adding the repo and enabling
-# "Include prereleases". The STABLE train is release.yml (tagged `v*.*.*`),
-# served via IzzyOnDroid + Obtainium-without-prereleases.
+# Crema NIGHTLY pipeline — builds the app on every push to `main` and publishes it
+# as a single rolling GitHub **prerelease** (tag `nightly`) for Obtainium. Follow
+# this train in Obtainium by adding the repo and enabling "Include prereleases".
+# The STABLE train is release.yml (tagged `v*.*.*`), served via IzzyOnDroid +
+# Obtainium-without-prereleases.
 #
-# The nightly app is a SEPARATE package — dev.maceiras.crema.nightly, "Crema Nightly"
-# (see the `nightly` buildType + src/nightly/res in android/app/build.gradle.kts)
-# — so it coexists with a stable install rather than fighting it.
-#
-# Signing: set repo secrets DEVELOP_KEYSTORE_BASE64 (+ DEVELOP_KEYSTORE_PASSWORD /
-# DEVELOP_KEY_ALIAS / DEVELOP_KEY_PASSWORD) for a STABLE nightly key so updates
-# install in place. Absent => debug-signed (installable, but a fresh key each CI
-# run means users reinstall rather than update between nightlies).
+# SAME package as stable — dev.maceiras.crema (the `nightly` buildType inherits
+# `release`; NOT a separate ".nightly" app). It is RELEASE-signed with the same
+# KEYSTORE_BASE64 secret release.yml uses, so Obtainium updates in place between a
+# nightly prerelease and a tagged release. Absent the secret => debug-signed
+# (installable, but a fresh key each run means users reinstall rather than update).
 
 name: nightly
 
@@ -73,16 +70,16 @@ jobs:
       - name: Set up Gradle (with cache)
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Decode develop keystore (if configured)
+      - name: Decode release keystore (if configured)
         env:
-          DEVELOP_KEYSTORE_BASE64: ${{ secrets.DEVELOP_KEYSTORE_BASE64 }}
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
         run: |
-          if [ -n "$DEVELOP_KEYSTORE_BASE64" ]; then
-            echo "$DEVELOP_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/develop.keystore"
-            echo "DEVELOP_KEYSTORE_FILE=$RUNNER_TEMP/develop.keystore" >> "$GITHUB_ENV"
-            echo "Develop keystore decoded — nightly APK will be develop-signed."
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+            echo "KEYSTORE_FILE=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
+            echo "Release keystore decoded — nightly APK will be release-signed (shares the stable signature)."
           else
-            echo "::warning::No DEVELOP_KEYSTORE_BASE64 set — nightly APK is DEBUG-signed (a new key each run, so users must reinstall rather than update between nightlies). Set the secret for a stable nightly key."
+            echo "::warning::No KEYSTORE_BASE64 set — nightly APK is DEBUG-signed (a new key each run, so users must reinstall rather than update between nightlies). Set the secret so the nightly shares the stable signature."
           fi
 
       # Debug cargo profile => fast per-commit CI. Add `-PcargoProfile=release` for
@@ -90,9 +87,9 @@ jobs:
       - name: Build nightly APK
         working-directory: android
         env:
-          DEVELOP_KEYSTORE_PASSWORD: ${{ secrets.DEVELOP_KEYSTORE_PASSWORD }}
-          DEVELOP_KEY_ALIAS: ${{ secrets.DEVELOP_KEY_ALIAS }}
-          DEVELOP_KEY_PASSWORD: ${{ secrets.DEVELOP_KEY_PASSWORD }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
           VERSION_NAME: ${{ steps.v.outputs.name }}
           VERSION_CODE: ${{ steps.v.outputs.code }}
         run: |
@@ -127,10 +124,11 @@ jobs:
           body: |
             Rolling development build — **the latest commit on `main`**.
 
-            This is a separate app (`dev.maceiras.crema.nightly`, "Crema Nightly"), so it
-            installs alongside a stable Crema. Follow this train in **Obtainium** with
-            **Include prereleases** enabled. For the stable train, use IzzyOnDroid or
-            a tagged release.
+            Same app as stable (`dev.maceiras.crema`), release-signed — so **Obtainium**
+            updates it in place. Follow this train with **Include prereleases** enabled;
+            for stable only, leave that off (or use IzzyOnDroid / a tagged release).
+            Moving from a nightly *back* to stable is a downgrade, so it needs a manual
+            reinstall.
 
             Commit: ${{ github.sha }}
           files: dist/*.apk

@@ -45,19 +45,6 @@ val releaseKeyPassword = System.getenv("KEY_PASSWORD") ?: localProps.getProperty
 val hasReleaseSigning = releaseKeystoreFile != null &&
     releaseStorePassword != null && releaseKeyAlias != null && releaseKeyPassword != null
 
-// Develop signing for the nightly train — a SEPARATE key from release, so the
-// per-commit nightly build never handles the production keystore. Same resolution
-// (CI env DEVELOP_KEYSTORE_* or local.properties develop.*). Absent => the nightly
-// APK is debug-signed: installable, but not updatable in place across CI runners,
-// so set the secret for a stable nightly key.
-val developKeystoreFile = (System.getenv("DEVELOP_KEYSTORE_FILE") ?: localProps.getProperty("develop.keystoreFile"))
-    ?.let { rootProject.file(it) }?.takeIf { it.exists() }
-val developStorePassword = System.getenv("DEVELOP_KEYSTORE_PASSWORD") ?: localProps.getProperty("develop.storePassword")
-val developKeyAlias = System.getenv("DEVELOP_KEY_ALIAS") ?: localProps.getProperty("develop.keyAlias")
-val developKeyPassword = System.getenv("DEVELOP_KEY_PASSWORD") ?: localProps.getProperty("develop.keyPassword")
-val hasDevelopSigning = developKeystoreFile != null &&
-    developStorePassword != null && developKeyAlias != null && developKeyPassword != null
-
 android {
     namespace = "coffee.crema"
     compileSdk = 37
@@ -150,14 +137,6 @@ android {
                 keyPassword = releaseKeyPassword
             }
         }
-        if (hasDevelopSigning) {
-            create("develop") {
-                storeFile = developKeystoreFile
-                storePassword = developStorePassword
-                keyAlias = developKeyAlias
-                keyPassword = developKeyPassword
-            }
-        }
     }
 
     buildTypes {
@@ -206,39 +185,26 @@ android {
                     }
                 }
         }
-        // Nightly / dev train (APK pipeline): a SEPARATE app — dev.maceiras.crema.nightly,
-        // labelled "Crema Nightly" (src/nightly/res) — so it coexists with a stable
-        // install. Fast debug-profile native lib; develop-signed when the secret is
-        // set, else debug-signed. Built per-commit by .github/workflows/nightly.yml
-        // and published as a rolling prerelease for Obtainium.
+        // Nightly / dev train (APK pipeline): the SAME app as stable —
+        // dev.maceiras.crema, NOT a separate package. Inherits `release` wholesale
+        // (prod OAuth clients, redirect scheme, unminified), so the only deltas are
+        // a "-nightly" version marker and the signing fallback below. Built
+        // per-commit from `main` by .github/workflows/nightly.yml (fast debug cargo
+        // profile) and published as a rolling prerelease; because it shares the
+        // release signature, Obtainium updates in place between a nightly and a
+        // tagged stable release. versionCode (set by the workflow) sits far above
+        // any stable semver code, so nightly→stable is a downgrade Obtainium won't
+        // auto-apply — that direction needs a manual reinstall.
         create("nightly") {
-            initWith(getByName("debug"))
-            applicationIdSuffix = ".nightly"
+            initWith(getByName("release"))
             versionNameSuffix = "-nightly"
-            isMinifyEnabled = false
+            // Release-signed in CI (KEYSTORE_BASE64) so it shares a signature with
+            // the tagged release; debug-signed locally so a dev build still installs.
             signingConfig =
-                if (hasDevelopSigning) {
-                    signingConfigs.getByName("develop")
+                if (hasReleaseSigning) {
+                    signingConfigs.getByName("release")
                 } else {
                     signingConfigs.getByName("debug")
-                }
-            buildConfigField(
-                "String",
-                "VISUALIZER_CLIENT_ID",
-                "\"${visualizerClientIdOverride ?: visualizerClientIdDev}\"",
-            )
-            buildConfigField(
-                "String",
-                "GOOGLE_DRIVE_CLIENT_ID",
-                "\"${googleDriveClientIdOverride ?: googleDriveClientIdDev}\"",
-            )
-            manifestPlaceholders["googleRedirectScheme"] =
-                (googleDriveClientIdOverride ?: googleDriveClientIdDev).let { cid ->
-                    if (cid.endsWith(".apps.googleusercontent.com")) {
-                        "com.googleusercontent.apps." + cid.removeSuffix(".apps.googleusercontent.com")
-                    } else {
-                        "com.googleusercontent.apps.unconfigured"
-                    }
                 }
         }
     }
