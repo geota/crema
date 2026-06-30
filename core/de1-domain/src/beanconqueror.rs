@@ -1616,7 +1616,10 @@ mod tests {
         let plan = bc_to_crema(&export, 1_700_000_000_000, seq_id());
 
         // Schema-awareness: source version detected.
-        assert_eq!(plan.diagnostics.source_app_version.as_deref(), Some("4.0.0"));
+        assert_eq!(
+            plan.diagnostics.source_app_version.as_deref(),
+            Some("4.0.0")
+        );
 
         // Bean: string numerics coerced (D), flat origin recovered (C), filePath
         // photo recovered (E).
@@ -1639,9 +1642,17 @@ mod tests {
         // Brew: espresso derived from PORTAFILTER `type` (A) so the shot is NOT
         // skipped; yield recovered from legacy brew_quantity (B); numeric
         // grind_size stringified (D).
-        assert_eq!(plan.shots.len(), 1, "espresso derived from type → shot kept");
+        assert_eq!(
+            plan.shots.len(),
+            1,
+            "espresso derived from type → shot kept"
+        );
         let shot = &plan.shots[0];
-        assert_eq!(shot.stored_shot.metadata.yield_out, Some(36.0), "legacy yield");
+        assert_eq!(
+            shot.stored_shot.metadata.yield_out,
+            Some(36.0),
+            "legacy yield"
+        );
         assert_eq!(
             shot.stored_shot.metadata.grinder_setting.as_deref(),
             Some("5")

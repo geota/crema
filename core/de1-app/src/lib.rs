@@ -3207,7 +3207,10 @@ mod tests {
         // at zero forever.
         let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(3_500), 2_600);
         let w = scale_reading_weight(&out).expect("a reading");
-        assert!((w - 35.0).abs() < 0.5, "weight resumes after the timeout (got {w})");
+        assert!(
+            (w - 35.0).abs() < 0.5,
+            "weight resumes after the timeout (got {w})"
+        );
     }
 
     #[test]
@@ -3220,7 +3223,10 @@ mod tests {
         core.on_notification(Source::De1State, &[4, 5], 1_000);
         let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(3_500), 1_100);
         let w = scale_reading_weight(&out).expect("a reading");
-        assert!((w - 35.0).abs() < 0.5, "no gate when auto-tare is off (got {w})");
+        assert!(
+            (w - 35.0).abs() < 0.5,
+            "no gate when auto-tare is off (got {w})"
+        );
     }
 
     #[test]
