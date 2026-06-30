@@ -48,6 +48,7 @@ import coffee.crema.core.hasCupWarmer
 import coffee.crema.core.machineModelName
 import coffee.crema.ui.MainViewModel
 import coffee.crema.ui.refillSoon
+import coffee.crema.ui.components.CopyDiagnosticsRow
 import coffee.crema.ui.components.CremaButton
 import coffee.crema.ui.components.CremaButtonVariant
 import coffee.crema.ui.components.CremaCard
@@ -728,7 +729,6 @@ fun SettingsScreen(
                             CremaSettingsRow(
                                 "Show debug / event-log panel",
                                 "Surfaces the raw BLE event log below.",
-                                last = !ui.showDebugPanel,
                             ) { CremaSwitch(ui.showDebugPanel, vm::setShowDebugPanel) }
                             if (ui.showDebugPanel) {
                                 Column(
@@ -761,6 +761,7 @@ fun SettingsScreen(
                                     CremaButton(onClick = { onNav("debug") }, variant = CremaButtonVariant.Text, icon = "bug", label = "Open full console")
                                 }
                             }
+                            CopyDiagnosticsRow(last = true)
                         }
                         // Live, no-restart picker (issue 13) — the same one the phone
                         // uses: Mirror from a primary on the LAN, then Stop / Take over.

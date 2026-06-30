@@ -571,20 +571,20 @@ private fun DisplaySection(
     volumeUnit: String,
 ) {
     SettingsGroup("Appearance") {
-        CremaSettingsRow("Theme", "Crema defaults to dark — the machine app is dark-skinned.") {
+        CremaSettingsRow("Theme", "Crema defaults to dark — the machine app is dark-skinned.", stacked = true) {
             CremaSegmentedButton(
                 options = listOf(SegOption("light", "Light"), SegOption("dark", "Dark"), SegOption("system", "Auto")),
                 value = if (themeMode in setOf("light", "dark", "system")) themeMode else "dark",
                 onChange = vm::setThemeMode,
-                uniform = true,
+                fillWidth = true,
             )
         }
-        CremaSettingsRow("Density", "Card padding and control sizing.", notImplemented = true) {
+        CremaSettingsRow("Density", "Card padding and control sizing.", notImplemented = true, stacked = true) {
             CremaSegmentedButton(
                 options = listOf(SegOption("compact", "Compact"), SegOption("comfortable", "Cozy")),
                 value = density,
                 onChange = onDensity,
-                uniform = true,
+                fillWidth = true,
             )
         }
         CremaSettingsRow("Screensaver", "Dim the display after a period idle.", notImplemented = true) { CremaSwitch(screensaver, onScreensaver) }
@@ -669,12 +669,12 @@ private fun SharingSection(
             val lastSyncLabel = vz.lastShotSyncAt?.let {
                 coffee.crema.ui.relativeAgo(it)
             } ?: "never"
-            CremaSettingsRow("Shots", "${ui.history.size} shot(s)" + (if (unsyncedCount > 0) " · $unsyncedCount unsynced" else "") + ". Last sync: $lastSyncLabel.") {
+            CremaSettingsRow("Shots", "${ui.history.size} shot(s)" + (if (unsyncedCount > 0) " · $unsyncedCount unsynced" else "") + ". Last sync: $lastSyncLabel.", stacked = true) {
                 CremaSegmentedButton(
                     options = listOf(SegOption("off", "Off"), SegOption("backup", "Push"), SegOption("pull", "Pull"), SegOption("two-way", "Both")),
                     value = vz.shotsDirection,
                     onChange = vm.visualizer::setShotsDirection,
-                    uniform = true,
+                    fillWidth = true,
                 )
             }
             CremaSettingsRow("Auto-sync new shots", "Upload each shot as it finishes (needs a pushing direction).") {
@@ -697,12 +697,12 @@ private fun SharingSection(
             }
         }
         SettingsGroup("Upload options") {
-            CremaSettingsRow("Default privacy", "Public = community feed; unlisted = link only; private = just you. Shots can override this in History.") {
+            CremaSettingsRow("Default privacy", "Public = community feed; unlisted = link only; private = just you. Shots can override this in History.", stacked = true) {
                 CremaSegmentedButton(
                     options = listOf(SegOption("public", "Public"), SegOption("unlisted", "Unlisted"), SegOption("private", "Private")),
                     value = vz.privacy,
                     onChange = vm.visualizer::setPrivacy,
-                    uniform = true,
+                    fillWidth = true,
                 )
             }
             CremaSettingsRow("Include profile", "Attach the full recipe (every segment) to uploads.") { CremaSwitch(vz.includeProfile, vm.visualizer::setIncludeProfile) }
@@ -848,19 +848,19 @@ private fun AdvancedSection(
         } else {
             "Pinned at ${ui.lineFreqOverride.toInt()} Hz — switch to Auto to let the detector run."
         }
-        CremaSettingsRow("AC mains frequency", freqSub, needsConnection = !connected) {
+        CremaSettingsRow("AC mains frequency", freqSub, needsConnection = !connected, stacked = true) {
             CremaSegmentedButton(
                 options = listOf(SegOption("auto", "Auto"), SegOption("50", "50"), SegOption("60", "60")),
                 value = freqValue,
                 onChange = { if (it == "auto") vm.setLineFrequency(0.0f) else onStageLineFreq(it) },
                 enabled = connected && !secondary,
-                uniform = true,
+                fillWidth = true,
             )
         }
         CremaSettingsRow("Smooth pressure curve", "Filter chart noise on the live readout.", last = true, notImplemented = true) { CremaSwitch(smoothPressure, onSmoothPressure) }
     }
     SettingsGroup("Diagnostics") {
-        CremaSettingsRow("Show debug / event-log panel", "Surfaces the raw BLE event log below.", last = !ui.showDebugPanel) {
+        CremaSettingsRow("Show debug / event-log panel", "Surfaces the raw BLE event log below.") {
             CremaSwitch(ui.showDebugPanel, vm::setShowDebugPanel)
         }
         if (ui.showDebugPanel) {
@@ -894,6 +894,7 @@ private fun AdvancedSection(
                 CremaButton(onClick = { onNav("debug") }, variant = CremaButtonVariant.Text, icon = "bug", label = "Open full console")
             }
         }
+        CopyDiagnosticsRow(last = true)
     }
     SettingsGroup("Multi-device (LAN proxy · debug)") {
         // M1: mirror/drive the DE1 from a second device over the LAN. The transport
@@ -903,13 +904,16 @@ private fun AdvancedSection(
             "secondary" -> "Mirrors a primary over the LAN. Restart to apply."
             else -> "Off — normal single-device use."
         }
-        CremaSettingsRow("Role", roleSub, last = ui.proxyRole == "normal") {
+        // stacked: the 3-way Off/Primary/Secondary control is too wide to sit
+        // beside the title on the narrow phone — without this the "Role" label
+        // squeezes into letter-per-line wrapping (same fix as Water source).
+        CremaSettingsRow("Role", roleSub, last = ui.proxyRole == "normal", stacked = true) {
             CremaSegmentedButton(
                 options = listOf(SegOption("normal", "Off"), SegOption("primary", "Primary"), SegOption("secondary", "Secondary")),
                 value = ui.proxyRole,
                 onChange = vm::setProxyRole,
                 enabled = true,
-                uniform = true,
+                fillWidth = true,
             )
         }
         if (ui.proxyRole == "primary") {
@@ -958,7 +962,7 @@ private fun AdvancedSection(
     SettingsGroup("Service-grade") {
         // null until the connected DE1 reports its mains voltage (raw HeaterVoltage MMR).
         val hv = heaterVoltageValue(ui.de1MachineInfo)
-        CremaSettingsRow("Mains heater voltage", "Wrong voltage damages the heater — service only.", last = true, needsConnection = !connected) {
+        CremaSettingsRow("Mains heater voltage", "Wrong voltage damages the heater — service only.", last = true, needsConnection = !connected, stacked = true) {
             CremaSegmentedButton(
                 options = listOf(SegOption("120", "120 V"), SegOption("230", "230 V")),
                 // No segment selected until the machine reports — matches the "—" in the
@@ -966,7 +970,7 @@ private fun AdvancedSection(
                 value = hv ?: "",
                 onChange = { if (it != hv) onStageHeaterVoltage(it) },
                 enabled = connected && !secondary,
-                uniform = true,
+                fillWidth = true,
             )
         }
     }
