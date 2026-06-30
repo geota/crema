@@ -166,9 +166,18 @@
 			(f) => f.name.toLowerCase().endsWith('.zip')
 		);
 		if (!zip) {
+			// No ZIP — a bare Beanconqueror `.json` (the extracted main file,
+			// optionally with its `Beanconqueror_{Beans,Brews}_N.json` chunk
+			// siblings) is also a valid export. BC ships a ZIP, but users often
+			// hand us the unzipped JSON; the core parser is identical.
+			const jsons = files.filter((f) => f.name.toLowerCase().endsWith('.json'));
+			if (jsons.length > 0) {
+				await ingestBcJson(jsons, files);
+				return;
+			}
 			step = 'error';
 			errorMessage =
-				'Pick a Crema .crema.zip / .jsonl export or a Beanconqueror .zip. ' +
+				'Pick a Crema .crema.zip / .jsonl export or a Beanconqueror .zip / .json. ' +
 				'Drop the whole export folder for BC with photos.';
 			return;
 		}
@@ -297,6 +306,58 @@
 			step = 'error';
 			errorMessage =
 				e instanceof Error ? e.message : 'Could not read the file.';
+		}
+	}
+
+	/**
+	 * Ingest a bare Beanconqueror `.json` export — the extracted main
+	 * `Beanconqueror.json`, optionally alongside its
+	 * `Beanconqueror_{Beans,Brews}_N.json` chunk siblings. BC's native
+	 * export is a ZIP, but users frequently hand us the unzipped JSON; the
+	 * core parser is identical, so we reuse `mergeBcArchive` by building the
+	 * same filename→bytes map the ZIP path produces. A single `.json` with a
+	 * non-standard name is used verbatim (the core validates it).
+	 */
+	async function ingestBcJson(jsonFiles: File[], allFiles: File[]): Promise<void> {
+		step = 'parsing';
+		errorMessage = '';
+		try {
+			const entries: Record<string, Uint8Array> = {};
+			for (const f of jsonFiles) {
+				entries[f.name] = new Uint8Array(await f.arrayBuffer());
+			}
+			let mergedJson = mergeBcArchive(entries);
+			if (mergedJson === null && jsonFiles.length === 1) {
+				// Single .json without the `Beanconqueror.json` name — assume
+				// it's the main export and hand it over verbatim.
+				mergedJson = strFromU8(entries[jsonFiles[0].name]);
+			}
+			if (mergedJson === null) {
+				step = 'error';
+				errorMessage =
+					'No Beanconqueror.json found. Expected the main Beanconqueror.json export.';
+				return;
+			}
+			// Capture any sibling photo files dropped alongside (same as the ZIP path).
+			droppedPhotoFiles = allFiles.filter(
+				(f) =>
+					f.type.startsWith('image/') ||
+					/\.(jpe?g|png|webp|heic|gif)$/i.test(f.name)
+			);
+			let planJson: string;
+			try {
+				planJson = wasmImportBeanconquerorJson(mergedJson, Date.now());
+			} catch (e) {
+				step = 'error';
+				errorMessage = `Core parser rejected the file: ${e instanceof Error ? e.message : String(e)}`;
+				return;
+			}
+			const plan = JSON.parse(planJson) as CorePlan;
+			preview = buildPreview(plan, jsonFiles[0].name);
+			step = 'preview';
+		} catch (e) {
+			step = 'error';
+			errorMessage = e instanceof Error ? e.message : 'Could not read the file.';
 		}
 	}
 
@@ -708,13 +769,13 @@
 			<FileDropZone
 				icon="ph-duotone ph-file-zip"
 				title="Drop a Crema or Beanconqueror export"
-				accept=".zip,.jsonl,application/zip,application/jsonl,image/*"
+				accept=".zip,.jsonl,.json,application/zip,application/jsonl,application/json,image/*"
 				onFiles={ingestFiles}
 			>
 				{#snippet subtitle()}
 					A Crema <code>.crema.zip</code> bundles beans + roasters + shots + photos for
 					lossless round-trip (a bare <code>.jsonl</code> also works — photos stay
-					device-local). A Beanconqueror <code>.zip</code> imports the high-value subset;
+					device-local). A Beanconqueror <code>.zip</code> (or a bare <code>.json</code>) imports the high-value subset;
 					drop the photo files alongside for the "with photos" variant. Crema is
 					espresso-only — BC V60 / AeroPress brews are skipped + counted.
 				{/snippet}

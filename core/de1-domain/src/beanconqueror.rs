@@ -176,6 +176,22 @@ pub struct BcBeanInformation {
     pub harvest_time: String,
 }
 
+/// Deserialize a field Beanconqueror may store as either a JSON string or
+/// a number. `grind_size` is the known offender: numeric on stepped
+/// grinders (`5`), a string on others (`"5.5"`, `"fine"`). Numbers are
+/// stringified; null / absent / non-scalar yield an empty string (which
+/// the mapper's `opt_nonempty` then treats as "unset"). Without this,
+/// serde hard-errors ("invalid type: integer `5`, expected a string") on
+/// the first numeric `grind_size` and the entire import — every bean and
+/// brew — is lost.
+fn string_or_number<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    Ok(match Value::deserialize(d)? {
+        Value::String(s) => s,
+        Value::Number(n) => n.to_string(),
+        _ => String::new(),
+    })
+}
+
 #[derive(Debug, Default, Clone, Deserialize)]
 pub struct BcBrew {
     #[serde(default)]
@@ -189,7 +205,7 @@ pub struct BcBrew {
     /// UUID reference into `PREPARATION[]`.
     #[serde(default)]
     pub method_of_preparation: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "string_or_number")]
     pub grind_size: String,
     #[serde(default)]
     pub grind_weight: f32,
@@ -1379,6 +1395,43 @@ fn brew_duration_ms(b: &BcBrew) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn grind_size_accepts_number_or_string() {
+        // Regression (real Beanconqueror v8.6 export): `grind_size` is stored
+        // numerically on stepped grinders and as a string elsewhere. A numeric
+        // grind_size used to hard-fail the ENTIRE import with
+        // "invalid type: integer `5`, expected a string" — losing every bean
+        // and brew. All shapes below must now import, stringifying numbers.
+        let json = r#"{
+            "PREPARATION": [
+                {"config":{"uuid":"prep-esp","unix_timestamp":1700000000},"name":"Espresso","style_type":"ESPRESSO"}
+            ],
+            "BEANS": [
+                {"config":{"uuid":"bean-1","unix_timestamp":1700000000},"name":"Test Bean","roaster":"Test Roaster"}
+            ],
+            "BREWS": [
+                {"config":{"uuid":"b-int","unix_timestamp":1700000100},"bean":"bean-1","method_of_preparation":"prep-esp","grind_size":5},
+                {"config":{"uuid":"b-str","unix_timestamp":1700000200},"bean":"bean-1","method_of_preparation":"prep-esp","grind_size":"5.5"},
+                {"config":{"uuid":"b-float","unix_timestamp":1700000300},"bean":"bean-1","method_of_preparation":"prep-esp","grind_size":7.5},
+                {"config":{"uuid":"b-null","unix_timestamp":1700000400},"bean":"bean-1","method_of_preparation":"prep-esp","grind_size":null},
+                {"config":{"uuid":"b-absent","unix_timestamp":1700000500},"bean":"bean-1","method_of_preparation":"prep-esp"}
+            ]
+        }"#;
+        let export = parse_export(json).expect("numeric grind_size must not break the parse");
+        let plan = bc_to_crema(&export, 1_700_000_000_000, seq_id());
+        assert_eq!(plan.shots.len(), 5, "all five espresso brews import");
+        let settings: Vec<Option<&str>> = plan
+            .shots
+            .iter()
+            .map(|s| s.stored_shot.metadata.grinder_setting.as_deref())
+            .collect();
+        // Numbers stringify; null / absent grind_size stays unset.
+        assert_eq!(
+            settings,
+            vec![Some("5"), Some("5.5"), Some("7.5"), None, None]
+        );
+    }
 
     fn seq_id() -> impl FnMut() -> String {
         let mut n = 0u32;
