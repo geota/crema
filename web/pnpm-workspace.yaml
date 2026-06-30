@@ -1,0 +1,10 @@
+# pnpm settings. pnpm 11 stopped reading the "pnpm" field in package.json and
+# moved settings here (https://pnpm.io/settings).
+#
+# Security overrides: force patched versions of vulnerable *transitive* deps
+# that the direct parent hasn't picked up yet. Drop an entry once the parent
+# ships a release pulling the patched version itself.
+overrides:
+  undici: '^7.28.0' # <7.28.0 advisories, via jsdom (test dep)
+  js-yaml: '^4.1.2' # <4.1.2 advisory, via @redocly/openapi-core (codegen)
+  cookie: '^0.7.0' # <0.7.0 advisory, via @sveltejs/kit
