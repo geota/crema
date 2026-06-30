@@ -205,59 +205,11 @@ pub struct BcBeanInformation {
     pub harvest_time: String,
 }
 
-/// Deserialize a field Beanconqueror may store as either a JSON string or
-/// a number. `grind_size` is the known offender: numeric on stepped
-/// grinders (`5`), a string on others (`"5.5"`, `"fine"`). Numbers are
-/// stringified; null / absent / non-scalar yield an empty string (which
-/// the mapper's `opt_nonempty` then treats as "unset"). Without this,
-/// serde hard-errors ("invalid type: integer `5`, expected a string") on
-/// the first numeric `grind_size` and the entire import — every bean and
-/// brew — is lost.
-fn string_or_number<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
-    Ok(match Value::deserialize(d)? {
-        Value::String(s) => s,
-        Value::Number(n) => n.to_string(),
-        _ => String::new(),
-    })
-}
-
-/// Coerce a Beanconqueror numeric field that may arrive as a JSON number OR a
-/// numeric **string**. Pre-v5.2-era exports predate BC's `fixDataTypes()`
-/// (which coerced cost / weight / grind_weight / brew_temperature from
-/// string→number), and — BC being a JS app — any numeric field can show up
-/// quoted. A non-numeric string, null, or other value coerces to 0, matching
-/// the `#[serde(default)]` BC import already relies on. Without this, a single
-/// stringified number aborts the entire parse (cf. the `grind_size` regression).
-fn num_value(v: &Value) -> f64 {
-    match v {
-        Value::Number(n) => n.as_f64().unwrap_or(0.0),
-        Value::String(s) => s.trim().parse::<f64>().unwrap_or(0.0),
-        _ => 0.0,
-    }
-}
-
-#[allow(clippy::cast_possible_truncation)]
-fn de_f32<'de, D: Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
-    Ok(num_value(&Value::deserialize(d)?) as f32)
-}
-
-fn de_f64<'de, D: Deserializer<'de>>(d: D) -> Result<f64, D::Error> {
-    Ok(num_value(&Value::deserialize(d)?))
-}
-
-#[allow(clippy::cast_possible_truncation)]
-fn de_i32<'de, D: Deserializer<'de>>(d: D) -> Result<i32, D::Error> {
-    Ok(num_value(&Value::deserialize(d)?) as i32)
-}
-
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::cast_precision_loss
-)]
-fn de_i64<'de, D: Deserializer<'de>>(d: D) -> Result<i64, D::Error> {
-    Ok(num_value(&Value::deserialize(d)?) as i64)
-}
+// Number-or-string coercion is shared with the v2 shot + profile importers
+// (de1app/Tcl and Beanconqueror/JS both quote numbers inconsistently) — see
+// `crate::coerce`. The `deserialize_with = "de_*"` / `"string_or_number"`
+// call-sites below resolve to these imports.
+use crate::coerce::{de_f32, de_f64, de_i32, de_i64, string_or_number};
 
 #[derive(Debug, Default, Clone, Deserialize)]
 pub struct BcBrew {

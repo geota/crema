@@ -393,11 +393,19 @@ fn combine_bean_label(brand: Option<&str>, kind: Option<&str>) -> Option<String>
 // v2 JSON shape (deserialize-only)
 // ---------------------------------------------------------------------------
 
+// The v2 shot's scalars + telemetry arrays come from de1app's `huddle jsondump`,
+// which quotes every number (`"clock":"0"`, `"elapsed":["0.0",...]`); the
+// community/visualizer `.shot.json` uses real numbers. The shared `crate::coerce`
+// helpers accept either. (The embedded `profile` is already lenient — its
+// numerics go through `profile_import`'s `Scalar`.)
+use crate::coerce::{de_opt_f32, de_u64, de_vec_f32};
+
 #[derive(Deserialize)]
 struct V2ShotJson {
     /// Unix epoch seconds.
+    #[serde(deserialize_with = "de_u64")]
     clock: u64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_vec_f32")]
     elapsed: Vec<f32>,
     #[serde(default)]
     pressure: V2Pressure,
@@ -419,42 +427,42 @@ struct V2ShotJson {
 
 #[derive(Deserialize, Default)]
 struct V2Pressure {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_vec_f32")]
     pressure: Vec<f32>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_vec_f32")]
     goal: Vec<f32>,
 }
 
 #[derive(Deserialize, Default)]
 struct V2Flow {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_vec_f32")]
     flow: Vec<f32>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_vec_f32")]
     goal: Vec<f32>,
     /// Scale-derived flow rate, sample-aligned to `elapsed`. Empty when
     /// the source export had no scale paired (or pre-PR placeholder
     /// zeros — same shape, just no useful values).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_vec_f32")]
     by_weight: Vec<f32>,
 }
 
 #[derive(Deserialize, Default)]
 struct V2Totals {
     /// Cumulative scale weight, grams.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_vec_f32")]
     weight: Vec<f32>,
     /// Cumulative pump-dispensed water, millilitres.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_vec_f32")]
     water_dispensed: Vec<f32>,
 }
 
 #[derive(Deserialize, Default)]
 struct V2Temperature {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_vec_f32")]
     basket: Vec<f32>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_vec_f32")]
     mix: Vec<f32>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_vec_f32")]
     goal: Vec<f32>,
 }
 
@@ -468,9 +476,9 @@ struct V2Meta {
     grinder: Option<V2Grinder>,
     /// `in` is a reserved word in Rust — rename for serde so the field
     /// can still be named `in` on the wire (= dose grams).
-    #[serde(default, rename = "in")]
+    #[serde(default, rename = "in", deserialize_with = "de_opt_f32")]
     dose_in: Option<f32>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_opt_f32")]
     out: Option<f32>,
 }
 
@@ -484,13 +492,13 @@ struct V2Bean {
 
 #[derive(Deserialize)]
 struct V2Shot {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_opt_f32")]
     enjoyment: Option<f32>,
     #[serde(default)]
     notes: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_opt_f32")]
     tds: Option<f32>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_opt_f32")]
     ey: Option<f32>,
 }
 
@@ -700,5 +708,44 @@ settings {
         let s = &shot.record.samples[1];
         assert!((s.sample.group_pressure - 9.0).abs() < 1e-6);
         assert!((s.sample.head_temp - 93.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn v2_json_shot_imports_de1app_stringified_numbers() {
+        // de1app's history_v2 export runs through `huddle jsondump`, which never
+        // types numbers — so `clock` AND every telemetry-array element come out
+        // quoted. This mirrors the user's `19691231T190000.json` (clock "0" =
+        // Unix epoch). Pre-fix it aborted: `invalid type: string "0", expected
+        // u64 at line 3 column 14`.
+        let json = r#"{
+            "version": "2",
+            "clock": "0",
+            "elapsed": ["0.0", "1.0", "2.0"],
+            "pressure": {"pressure": ["0.0", "6.0", "9.0"], "goal": ["9.0", "9.0", "9.0"]},
+            "flow": {"flow": ["0.0", "1.5", "2.0"], "goal": ["2.0", "2.0", "2.0"], "by_weight": ["0.0", "0.5", "1.5"]},
+            "temperature": {"basket": ["90.0", "92.0", "93.0"], "mix": ["90.0", "92.0", "93.0"], "goal": ["93.0", "93.0", "93.0"]},
+            "totals": {"weight": ["0.0", "5.0", "18.0"], "water_dispensed": ["0.0", "10.0", "30.0"]},
+            "profile": {"version": "2", "title": "Best Practice", "author": "Decent", "beverage_type": "espresso", "steps": [{"name": "pour", "pump": "pressure", "transition": "fast", "sensor": "coffee", "volume": "0", "seconds": "30", "temperature": "93", "pressure": "9"}], "target_weight": "36"},
+            "meta": {"shot": {"tds": "8.5", "ey": "20.5", "enjoyment": "75", "notes": "Good body"}, "grinder": {"setting": "15"}, "in": "18.0", "out": "36.0", "bean": {"brand": "Banibeans", "type": "Ethiopia Yirgacheffe"}}
+        }"#;
+        let shot = import_v2_json_shot(json).expect("a fully-stringified de1app v2 shot imports");
+        // clock "0" → epoch (the 1969 filename). No more "expected u64" abort.
+        assert_eq!(shot.completed_at, 0);
+        // Telemetry arrays coerced from their string elements.
+        assert_eq!(shot.record.samples.len(), 3);
+        let s = &shot.record.samples[2];
+        assert!((s.sample.group_pressure - 9.0).abs() < 1e-6);
+        assert!((s.sample.head_temp - 93.0).abs() < 1e-6);
+        // Stringified metadata scalars coerced.
+        assert_eq!(shot.metadata.dose, Some(18.0));
+        assert_eq!(shot.metadata.yield_out, Some(36.0));
+        assert_eq!(shot.metadata.tds, Some(8.5));
+        assert_eq!(shot.metadata.extraction_yield, Some(20.5));
+        assert_eq!(shot.metadata.grinder_setting.as_deref(), Some("15"));
+        // The embedded profile (also all-strings, via `Scalar`) still imports.
+        assert_eq!(
+            shot.profile.expect("profile present").title,
+            "Best Practice"
+        );
     }
 }

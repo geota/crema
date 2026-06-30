@@ -47,6 +47,8 @@ pub mod bean_coerce;
 pub mod beanconqueror;
 pub mod brand;
 pub mod builtin;
+/// Lenient number-or-string deserialization shared by the JSON importers.
+mod coerce;
 pub mod crema_jsonl;
 pub mod crema_profile;
 pub mod error;
