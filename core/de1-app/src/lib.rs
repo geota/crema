@@ -251,9 +251,16 @@ pub struct CremaCore {
     /// The eco-mode steam target temperature, °C.
     steam_eco_temp: f32,
     last_state: Option<StateInfo>,
-    /// Timestamp the in-progress shot began — stamps telemetry elapsed time.
-    /// `None` when no shot is in progress.
+    /// Timestamp the in-progress shot began (Espresso-state entry). `None` when
+    /// no shot is in progress. Gates shot-metrics + drives the auto-tare; the
+    /// telemetry elapsed clock is `flow_started`, not this.
     shot_started: Option<Duration>,
+    /// Timestamp the shot's FLOW began — the first preinfusion/pouring substate
+    /// (pump on). `None` until flow starts. `Event::Telemetry.elapsed` runs from
+    /// here, not `shot_started`, so the pre-pour heating/stabilising phase isn't
+    /// counted in the displayed shot time — matching de1app and the recorded
+    /// `ShotRecord.duration` (the `ShotMonitor` times the same window).
+    flow_started: Option<Duration>,
     /// The connected scale's codec, once identified.
     scale: Option<Scale>,
     /// Smooths the scale stream into weight + flow for display.
@@ -463,6 +470,7 @@ impl CremaCore {
             steam_eco_temp: STEAM_ECO_TEMPERATURE_C,
             last_state: None,
             shot_started: None,
+            flow_started: None,
             scale: None,
             flow: FlowEstimator::new(FlowAlgorithm::default()),
             auto_tare: true,
@@ -2194,8 +2202,11 @@ impl CremaCore {
         Self::push_stop(reason, out);
         // `Event::Telemetry.elapsed` is `u32` milliseconds — what the FFI
         // surface carries — so convert the `Duration` once at this boundary.
+        // Elapsed runs from FLOW start (pump on), not shot start (which begins
+        // in the heating phase) — so the displayed shot time excludes the
+        // pre-pour preheat, matching de1app + the recorded shot duration.
         let elapsed = duration_to_u32_ms(
-            self.shot_started
+            self.flow_started
                 .map_or(Duration::ZERO, |start| now.saturating_sub(start)),
         );
         // Update the in-progress shot's running peaks. Only contributes
@@ -2752,6 +2763,10 @@ impl CremaCore {
         match event {
             ShotEvent::Started => {
                 self.shot_started = Some(now);
+                // Flow hasn't begun yet (the shot opens in the heating phase) —
+                // the elapsed clock is zeroed at the first preinfusion/pouring
+                // phase below, so the preheat isn't counted. See `flow_started`.
+                self.flow_started = None;
                 self.flow.reset();
                 // Fresh shot → fresh running volume. The integrator keeps
                 // its `last_sample_time` / `last_host_time` so the first
@@ -2782,12 +2797,21 @@ impl CremaCore {
                 out.events.push(Event::ShotStarted);
             }
             ShotEvent::PhaseChanged(phase) => {
+                // First flow (pump on) zeroes the elapsed clock; the pre-pour
+                // heating/stabilising phases don't. Matches the recorded
+                // `ShotRecord.duration` (the ShotMonitor times the same window).
+                if self.flow_started.is_none()
+                    && matches!(phase, ShotPhase::Preinfusion | ShotPhase::Pouring)
+                {
+                    self.flow_started = Some(now);
+                }
                 self.arm_auto_stop_if_flowing(phase, now);
                 out.events.push(Event::ShotPhaseChanged { phase });
             }
             ShotEvent::FrameChanged(frame) => out.events.push(Event::ShotFrameChanged { frame }),
             ShotEvent::Completed(record) => {
                 self.shot_started = None;
+                self.flow_started = None;
                 self.auto_stop = None;
                 // Close any tare gate that never saw its confirmation reading.
                 self.tare_gate = None;
@@ -3033,6 +3057,35 @@ mod tests {
             unreachable!("filtered for Telemetry");
         };
         assert_eq!(*elapsed, 2_500);
+    }
+
+    #[test]
+    fn telemetry_elapsed_excludes_the_preheat_phase() {
+        let mut core = CremaCore::new();
+        // Enter Espresso in the HEATING substate (pump off): a shot starts, but
+        // the elapsed clock has not — telemetry here reads elapsed 0.
+        core.on_notification(Source::De1State, &[4, 1], 1_000); // 4=Espresso, 1=Heating
+        let out = core.on_notification(Source::De1ShotSample, &SAMPLE, 5_000); // 4s into heating
+        assert!(
+            out.events
+                .iter()
+                .any(|e| matches!(e, Event::Telemetry { elapsed: 0, .. })),
+            "heating-phase telemetry reads elapsed 0"
+        );
+        // Flow begins (pouring) 10s after the shot started — the clock zeroes here.
+        core.on_notification(Source::De1State, &[4, 5], 11_000); // 5=Pouring
+        let out = core.on_notification(Source::De1ShotSample, &SAMPLE, 13_000); // 2s into flow
+        let Some(Event::Telemetry { elapsed, .. }) = out
+            .events
+            .iter()
+            .find(|e| matches!(e, Event::Telemetry { .. }))
+        else {
+            panic!("a Telemetry event");
+        };
+        assert_eq!(
+            *elapsed, 2_000,
+            "elapsed runs from flow start, not shot start"
+        );
     }
 
     #[test]

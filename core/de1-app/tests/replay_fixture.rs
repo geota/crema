@@ -196,9 +196,13 @@ fn recorded_session_decodes_to_pinned_event_sequence() {
         Event::ShotPhaseChanged {
             phase: ShotPhase::Idle,
         },
+        // Duration + sample_count cover the FLOW window only (preinfusion +
+        // pouring): the ~9.6 s pre-pour heating phase and the trailing ending
+        // phase are excluded, matching de1app. (Pre-fix this read 81_074 ms /
+        // 389 samples — the heating phase was wrongly counted.)
         Event::ShotCompleted {
-            duration: 81_074,
-            sample_count: 389,
+            duration: 71_472,
+            sample_count: 343,
             peak_pressure: None,
             peak_temp: None,
             peak_weight: None,
@@ -217,7 +221,7 @@ fn recorded_session_decodes_to_pinned_event_sequence() {
 
     // Pin the derived-metrics shape on `ShotCompleted`: the replay carries
     // no scale source so both weight fields are `None`; the DE1 telemetry
-    // arrived (389 samples) so both pressure / temperature peaks must be
+    // arrived (343 flow samples) so both pressure / temperature peaks must be
     // `Some` and within plausible espresso-shot bands. Specific maxima are
     // intentionally not pinned — they're floats produced by the smoothed
     // telemetry path and need not be byte-identical across smoothing

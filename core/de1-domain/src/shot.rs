@@ -150,11 +150,12 @@ pub struct TimedSample {
     pub resistance_weight: Option<f32>,
 }
 
-/// A completed espresso shot — its duration and full telemetry series.
+/// A completed espresso shot — its duration and telemetry series.
 ///
-/// The samples span the whole `Espresso` machine state, including the heating
-/// phase before flow; consumers can use the [`ShotEvent::PhaseChanged`] stream
-/// to locate flow-start.
+/// The duration and samples cover the FLOW window only (preinfusion + pouring).
+/// The pre-pour heating/stabilising phase (pump off) and the trailing ending
+/// phase are neither timed nor recorded, so `duration` is the real extraction
+/// time — matching de1app's "during"-only shot timing.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ShotRecord {
@@ -294,6 +295,11 @@ struct ShotInProgress {
     timer: SessionTimer,
     last_frame: Option<u8>,
     samples: Vec<TimedSample>,
+    /// The shot's measured duration — the flow window only. The timer is zeroed
+    /// at first flow and this is frozen at the flow→non-flow transition, so
+    /// neither the pre-pour heating/stabilising phase nor the trailing ending
+    /// phase is counted (de1app's "during"-only timing). `ZERO` until flow ends.
+    flow_duration: Duration,
 }
 
 /// Observes the DE1's notification stream and tracks one espresso shot at a time.
@@ -331,25 +337,43 @@ impl ShotMonitor {
         let mut events = Vec::new();
         let in_espresso = info.state == MachineState::Espresso;
 
-        // A shot starts when the machine enters the Espresso state.
+        // Recording begins when the machine enters Espresso — `Started` fires
+        // here so the shell's auto-tare runs during heating and settles before
+        // the pour. The shot CLOCK, though, only starts at first flow (below);
+        // the heating/stabilising phase is not timed.
         if in_espresso && self.shot.is_none() {
-            let mut shot = ShotInProgress::default();
-            shot.timer.start(now);
-            self.shot = Some(shot);
+            self.shot = Some(ShotInProgress::default());
             events.push(ShotEvent::Started);
         }
 
+        let old_phase = self.phase;
         let new_phase = ShotPhase::classify(info.state, info.substate);
-        if new_phase != self.phase {
+        if new_phase != old_phase {
             self.phase = new_phase;
             events.push(ShotEvent::PhaseChanged(new_phase));
         }
 
+        // The shot clock is the FLOW window. de1app sorts substates into a
+        // `flow_phase`: heating / final heating / stabilising = "before" (pump
+        // off, not timed); preinfusion / pouring = "during" (timed); ending =
+        // "after". Mirror that — zero the timer at the first flow substate, and
+        // freeze the duration when flow ends — so neither the pre-pour heating
+        // nor the trailing ending is counted in the measured shot time.
+        let was_flowing = matches!(old_phase, ShotPhase::Preinfusion | ShotPhase::Pouring);
+        let now_flowing = matches!(new_phase, ShotPhase::Preinfusion | ShotPhase::Pouring);
+        if let Some(shot) = &mut self.shot {
+            if now_flowing {
+                shot.timer.start(now); // idempotent — only the first flow phase zeroes it
+            }
+            if was_flowing && !now_flowing {
+                shot.flow_duration = shot.timer.elapsed(now);
+            }
+        }
+
         // A shot ends when the machine leaves the Espresso state.
-        if !in_espresso && let Some(mut shot) = self.shot.take() {
-            let duration = shot.timer.finish(now).unwrap_or(Duration::ZERO);
+        if !in_espresso && let Some(shot) = self.shot.take() {
             events.push(ShotEvent::Completed(ShotRecord {
-                duration,
+                duration: shot.flow_duration,
                 samples: shot.samples,
             }));
         }
@@ -362,6 +386,13 @@ impl ShotMonitor {
     /// Returns the events this sample produced — empty if nothing notable.
     pub fn on_sample(&mut self, sample: &ShotSample, now: Duration) -> Vec<ShotEvent> {
         let mut events = Vec::new();
+        // Telemetry samples are recorded only once flow has begun (preinfusion /
+        // pouring); heating / stabilising samples (pump off) are dropped, so the
+        // saved shot's series begins at first flow like its duration — matching
+        // de1app, which appends to its graph only during the "during" phase. The
+        // frame-change signal still fires through the heat-up so the live frame
+        // indicator stays in sync.
+        let flowing = matches!(self.phase, ShotPhase::Preinfusion | ShotPhase::Pouring);
         if let Some(shot) = &mut self.shot {
             if shot.last_frame != Some(sample.frame_number) {
                 shot.last_frame = Some(sample.frame_number);
@@ -369,7 +400,7 @@ impl ShotMonitor {
             }
             // Drop samples past the cap so an over-long stream cannot grow the
             // heap without bound; see [`MAX_SHOT_SAMPLES`].
-            if shot.samples.len() < MAX_SHOT_SAMPLES {
+            if flowing && shot.samples.len() < MAX_SHOT_SAMPLES {
                 shot.samples.push(TimedSample {
                     elapsed: shot.timer.elapsed(now),
                     sample: sample.clone(),
@@ -507,6 +538,37 @@ mod tests {
         assert_eq!(record.samples[0].elapsed, ms(200)); // 1200 - 1000
         assert_eq!(record.samples[1].elapsed, ms(2000)); // 3000 - 1000
         assert!(!monitor.is_shot_in_progress());
+    }
+
+    #[test]
+    fn heating_phase_is_excluded_from_duration_and_samples() {
+        let mut monitor = ShotMonitor::new();
+        // Shot starts in the heating phase (pump off): `Started` fires, but the
+        // clock does NOT run yet.
+        let started =
+            monitor.on_state_info(state(MachineState::Espresso, SubState::Heating), ms(1_000));
+        assert!(started.contains(&ShotEvent::Started));
+        // A heating-phase telemetry sample (2s in) is NOT recorded.
+        monitor.on_sample(&sample(0), ms(3_000));
+        // Flow begins 10s after the shot started — the clock zeroes here.
+        monitor.on_state_info(
+            state(MachineState::Espresso, SubState::Preinfusion),
+            ms(11_000),
+        );
+        monitor.on_sample(&sample(0), ms(11_500)); // 0.5s into flow
+        monitor.on_state_info(state(MachineState::Espresso, SubState::Pouring), ms(12_000));
+        monitor.on_sample(&sample(0), ms(16_000)); // 5s into flow
+        let done = monitor.on_state_info(state(MachineState::Idle, SubState::Ready), ms(17_000));
+
+        let record = completed_record(done);
+        // Duration is the flow window (11_000 → 17_000 = 6s), NOT from shot
+        // start (1_000), which would be 16s — the 10s preheat is excluded.
+        assert_eq!(record.duration, ms(6_000));
+        // Only the two flow samples survive; the heating sample is dropped, and
+        // their elapsed is measured from first flow.
+        assert_eq!(record.samples.len(), 2);
+        assert_eq!(record.samples[0].elapsed, ms(500));
+        assert_eq!(record.samples[1].elapsed, ms(5_000));
     }
 
     /// A `TimedSample` at `elapsed_ms` ms carrying the given pressure and flow.
