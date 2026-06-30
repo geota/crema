@@ -123,17 +123,19 @@ fn fold_one(acc: &mut ReplayMeta, obj: &serde_json::Map<String, Value>) {
     if let Some(s) = obj.get("scaleName").and_then(Value::as_str) {
         acc.scale_name = Some(s.to_owned());
     }
-    if let Some(n) = obj.get("de1FirmwareVersion").and_then(Value::as_f64)
+    if let Some(n) = obj
+        .get("de1FirmwareVersion")
+        .and_then(crate::coerce::as_f64)
         && n.is_finite()
     {
         acc.de1_firmware_version = Some(n);
     }
-    if let Some(n) = obj.get("de1MachineModel").and_then(Value::as_f64)
+    if let Some(n) = obj.get("de1MachineModel").and_then(crate::coerce::as_f64)
         && n.is_finite()
     {
         acc.de1_machine_model = Some(n);
     }
-    if let Some(n) = obj.get("de1SerialNumber").and_then(Value::as_f64)
+    if let Some(n) = obj.get("de1SerialNumber").and_then(crate::coerce::as_f64)
         && n.is_finite()
     {
         acc.de1_serial_number = Some(n);
@@ -144,17 +146,17 @@ fn fold_one(acc: &mut ReplayMeta, obj: &serde_json::Map<String, Value>) {
     if let Some(s) = obj.get("profileBytesHex").and_then(Value::as_str) {
         acc.profile_bytes_hex = Some(s.to_owned());
     }
-    if let Some(n) = obj.get("yieldTarget").and_then(Value::as_f64)
+    if let Some(n) = obj.get("yieldTarget").and_then(crate::coerce::as_f64)
         && n.is_finite()
     {
         acc.yield_target = Some(n);
     }
-    if let Some(n) = obj.get("brewTemp").and_then(Value::as_f64)
+    if let Some(n) = obj.get("brewTemp").and_then(crate::coerce::as_f64)
         && n.is_finite()
     {
         acc.brew_temp = Some(n);
     }
-    if let Some(n) = obj.get("preinfuseTarget").and_then(Value::as_f64)
+    if let Some(n) = obj.get("preinfuseTarget").and_then(crate::coerce::as_f64)
         && n.is_finite()
     {
         acc.preinfuse_target = Some(n);
@@ -185,7 +187,7 @@ fn fold_one(acc: &mut ReplayMeta, obj: &serde_json::Map<String, Value>) {
         if let Some(s) = raw.get("roastedOn").and_then(Value::as_str) {
             bean.roasted_on = Some(s.to_owned());
         }
-        if let Some(n) = raw.get("roastLevel").and_then(Value::as_f64)
+        if let Some(n) = raw.get("roastLevel").and_then(crate::coerce::as_f64)
             && n.is_finite()
         {
             bean.roast_level = Some(n);

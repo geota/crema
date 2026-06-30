@@ -66,7 +66,7 @@ pub fn coerce_bean(raw: &Value, now_ms: i64) -> Option<Bean> {
     }
     if let Some(n) = obj
         .get("roastLevel")
-        .and_then(Value::as_f64)
+        .and_then(crate::coerce::as_f64)
         .filter(|n| n.is_finite())
     {
         bean.roast_level = Some(n as u8);
@@ -98,14 +98,14 @@ pub fn coerce_bean(raw: &Value, now_ms: i64) -> Option<Bean> {
         };
     }
     // Accept the new name, else the legacy `*G` key (records pre-rename).
-    if let Some(n) = obj.get("bagSize").and_then(Value::as_f64) {
+    if let Some(n) = obj.get("bagSize").and_then(crate::coerce::as_f64) {
         bean.bag_size = n as f32;
-    } else if let Some(n) = obj.get("bagSizeG").and_then(Value::as_f64) {
+    } else if let Some(n) = obj.get("bagSizeG").and_then(crate::coerce::as_f64) {
         bean.bag_size = n as f32;
     }
-    if let Some(n) = obj.get("remaining").and_then(Value::as_f64) {
+    if let Some(n) = obj.get("remaining").and_then(crate::coerce::as_f64) {
         bean.remaining = n as f32;
-    } else if let Some(n) = obj.get("remainingG").and_then(Value::as_f64) {
+    } else if let Some(n) = obj.get("remainingG").and_then(crate::coerce::as_f64) {
         bean.remaining = n as f32;
     }
     if let Some(v) = str_field(obj, "qualityScore") {
@@ -116,7 +116,7 @@ pub fn coerce_bean(raw: &Value, now_ms: i64) -> Option<Bean> {
     }
     if let Some(n) = obj
         .get("rating")
-        .and_then(Value::as_f64)
+        .and_then(crate::coerce::as_f64)
         .filter(|n| n.is_finite())
     {
         bean.rating = n as u8;
@@ -162,7 +162,7 @@ pub fn coerce_bean(raw: &Value, now_ms: i64) -> Option<Bean> {
     }
     if let Some(n) = obj
         .get("cost")
-        .and_then(Value::as_f64)
+        .and_then(crate::coerce::as_f64)
         .filter(|n| n.is_finite() && *n >= 0.0)
     {
         bean.cost = Some(n as f32);
@@ -295,6 +295,25 @@ mod tests {
         assert_eq!(bean.tags, vec!["a", "b"]);
         assert_eq!(bean.mix, None);
         assert_eq!(bean.cost, None);
+    }
+
+    #[test]
+    fn coerces_stringified_numeric_fields() {
+        // A hand-edited or older record may carry numbers as strings. Via the
+        // shared `coerce::as_f64`, they coerce rather than silently dropping to
+        // defaults (the strict `Value::as_f64` used to drop them).
+        let bean = coerce_bean(
+            &serde_json::json!({
+                "id": "b1", "name": "House",
+                "roastLevel": "5", "bagSize": "340", "remaining": "200", "rating": "4"
+            }),
+            0,
+        )
+        .unwrap();
+        assert_eq!(bean.roast_level, Some(5));
+        assert_eq!(bean.bag_size, 340.0);
+        assert_eq!(bean.remaining, 200.0);
+        assert_eq!(bean.rating, 4);
     }
 
     #[test]
