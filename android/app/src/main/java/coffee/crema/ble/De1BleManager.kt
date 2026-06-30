@@ -3,11 +3,13 @@ package coffee.crema.ble
 import android.os.SystemClock
 import android.util.Log
 import coffee.crema.core.CremaBridge
+import coffee.crema.ble.proxy.Hex
 import coffee.crema.core.NotificationSource
 import coffee.crema.core.WriteTarget
 import coffee.crema.core.de1Uuids
 import kotlinx.serialization.json.Json
 import java.util.UUID
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -72,8 +74,16 @@ class De1BleManager(
     private val _state = MutableStateFlow(State.IDLE)
     val state: StateFlow<State> = _state.asStateFlow()
 
-    /** The manager's coroutine scope; connection + observation jobs run here. */
-    private val scope = CoroutineScope(SupervisorJob())
+    /** The manager's coroutine scope; connection + observation jobs run here. The
+     *  CoroutineExceptionHandler is a last-resort backstop: an uncaught exception
+     *  in any connect/observe job — e.g. a UniFFI-rethrown Rust panic that slips
+     *  past the per-notification guards — is logged, never allowed to crash the
+     *  process. (handleNotification catches its own FFI call so the stream
+     *  survives; this only catches what it doesn't.) */
+    private val scope = CoroutineScope(
+        SupervisorJob() +
+            CoroutineExceptionHandler { _, e -> Log.e(TAG, "Uncaught in DE1 BLE scope", e) },
+    )
 
     /** The connected DE1, or null when not connected. */
     private var device: BleTransport.DeviceHandle? = null
@@ -328,9 +338,27 @@ class De1BleManager(
         // decodes identically to the live session.
         val tMs = notification.atMs
         recorder.recordInbound(source, notification.data, tMs)
-        // CremaBridge.onNotification returns the CoreOutput as a JSON string.
-        val json = bridge.onNotification(source, notification.data, tMs.toULong())
-        onCoreOutput(json)
+        feedCore(source, notification.data, tMs, "DE1 ${source.name}")
+    }
+
+    /**
+     * Hand [bytes] to the core under [source] and forward the `CoreOutput` JSON.
+     * The FFI call can throw — a UniFFI-rethrown Rust panic from anywhere in the
+     * core would otherwise escape this flow collector uncaught and crash the
+     * process. Catch it, log the offending bytes ([what] names the stream; the
+     * Rust panic hook has already written file:line to the diagnostics log), and
+     * drop just this one notification so the stream survives a single bad packet.
+     */
+    private fun feedCore(source: NotificationSource, bytes: ByteArray, tMs: Long, what: String) {
+        // Guard decode AND the onCoreOutput forward together: a failure in either
+        // skips only THIS notification — feedCore returns normally, so the onEach
+        // collector continues with the NEXT packet. It is not a permanent stop.
+        runCatching {
+            onCoreOutput(bridge.onNotification(source, bytes, tMs.toULong()))
+        }.onFailure {
+            Log.e(TAG, "$what failed — skipping this notification (${Hex.encode(bytes)})", it)
+            onStatus("$what error — skipped (see diagnostics)")
+        }
     }
 
     // ---- Machine control (AND5) -------------------------------------------
@@ -352,9 +380,7 @@ class De1BleManager(
         }
         transport.write(d, De1Uuids.SERVICE, De1Uuids.forWriteTarget(target), bytes)
         if (target == WriteTarget.De1ProfileFrame) {
-            val tMs = SystemClock.elapsedRealtime()
-            val json = bridge.onNotification(NotificationSource.DE1_FRAME_ACK, bytes, tMs.toULong())
-            onCoreOutput(json)
+            feedCore(NotificationSource.DE1_FRAME_ACK, bytes, SystemClock.elapsedRealtime(), "DE1 frame-ACK")
         }
     }
 

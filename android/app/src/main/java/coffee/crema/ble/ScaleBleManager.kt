@@ -7,6 +7,7 @@ import coffee.crema.core.CremaBridge
 import coffee.crema.core.NotificationSource
 import coffee.crema.core.ScaleUuids as CoreScaleUuids
 import coffee.crema.core.scaleScanUuids
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -100,8 +101,16 @@ class ScaleBleManager(
     private val _state = MutableStateFlow(State.IDLE)
     val state: StateFlow<State> = _state.asStateFlow()
 
-    /** The manager's coroutine scope; connection + observation jobs run here. */
-    private val scope = CoroutineScope(SupervisorJob())
+    /** The manager's coroutine scope; connection + observation jobs run here. The
+     *  CoroutineExceptionHandler is a last-resort backstop: an uncaught exception
+     *  in any connect/observe job — e.g. a UniFFI-rethrown Rust panic that slips
+     *  past the per-notification guards — is logged, never allowed to crash the
+     *  process. (The weight/command handlers below catch their own FFI calls so
+     *  the stream survives; this only catches what they don't.) */
+    private val scope = CoroutineScope(
+        SupervisorJob() +
+            CoroutineExceptionHandler { _, e -> Log.e(TAG, "Uncaught in scale BLE scope", e) },
+    )
 
     /** The connected scale, or null when not connected. */
     private var device: BleTransport.DeviceHandle? = null
@@ -297,9 +306,16 @@ class ScaleBleManager(
             CoreScaleUuids.serializer(),
             bridge.scaleUuids() ?: error("Core reported no UUIDs for '$label'"),
         )
-        serviceUuid = UUID.fromString(coreUuids.service)
-        weightNotifyUuid = UUID.fromString(coreUuids.weight_notify)
-        commandUuid = UUID.fromString(coreUuids.command_write)
+        // Build the UUIDs into locals, then publish them to the fields. The
+        // observe below subscribes with the LOCALS, so a concurrent disconnect()
+        // nulling the fields can't NPE this in-flight establish — the old
+        // `serviceUuid!!` re-reads raced disconnect()'s field clears.
+        val service = UUID.fromString(coreUuids.service)
+        val weight = UUID.fromString(coreUuids.weight_notify)
+        val command = UUID.fromString(coreUuids.command_write)
+        serviceUuid = service
+        weightNotifyUuid = weight
+        commandUuid = command
 
         // The core now knows the scale's codec; let the owner read its
         // capabilities and render capability-gated config UI.
@@ -313,9 +329,6 @@ class ScaleBleManager(
         // fed to the core under SCALE_COMMAND — see handleCommandNotification. The
         // streams merge into one collected flow so per-device notification
         // ordering is preserved (see BleTransport.observe's contract).
-        val service = serviceUuid!!
-        val weight = weightNotifyUuid!!
-        val command = commandUuid!!
         observeJob?.cancel() // a reconnect re-subscribes on the same handle
         val notifications = if (command == weight) {
             transport.observe(device, service, weight)
@@ -428,13 +441,7 @@ class ScaleBleManager(
         // decodes identically to the live session.
         val tMs = notification.atMs
         recorder.recordInbound(NotificationSource.SCALE_WEIGHT, notification.data, tMs)
-        // CremaBridge.onNotification returns the CoreOutput as a JSON string.
-        val json = bridge.onNotification(
-            NotificationSource.SCALE_WEIGHT,
-            notification.data,
-            tMs.toULong(),
-        )
-        onCoreOutput(json)
+        feedCore(NotificationSource.SCALE_WEIGHT, notification.data, tMs, "Scale weight")
     }
 
     /**
@@ -456,13 +463,28 @@ class ScaleBleManager(
         val tMs = notification.atMs
         recorder.recordInbound(FF12_SRC, notification.data, tMs)
         Log.d(TAG, "$FF12_SRC notification: ${Hex.encode(notification.data)}")
-        // CremaBridge.onNotification returns the CoreOutput as a JSON string.
-        val json = bridge.onNotification(
-            NotificationSource.SCALE_COMMAND,
-            notification.data,
-            tMs.toULong(),
-        )
-        onCoreOutput(json)
+        feedCore(NotificationSource.SCALE_COMMAND, notification.data, tMs, "Scale command")
+    }
+
+    /**
+     * Hand [bytes] to the core under [source] and forward the `CoreOutput` JSON.
+     * The FFI call can throw — a UniFFI-rethrown Rust panic from ANYWHERE in the
+     * core (not just the length-guarded scale codec) would otherwise escape this
+     * flow collector uncaught and crash the process. Catch it, log the offending
+     * bytes ([what] names the stream; the Rust panic hook has already written the
+     * file:line to the diagnostics log), and drop just this one notification so
+     * the stream survives a single bad packet.
+     */
+    private fun feedCore(source: NotificationSource, bytes: ByteArray, tMs: Long, what: String) {
+        // Guard decode AND the onCoreOutput forward together: a failure in either
+        // skips only THIS notification — feedCore returns normally, so the onEach
+        // collector continues with the NEXT packet. It is not a permanent stop.
+        runCatching {
+            onCoreOutput(bridge.onNotification(source, bytes, tMs.toULong()))
+        }.onFailure {
+            Log.e(TAG, "$what failed — skipping this notification (${Hex.encode(bytes)})", it)
+            onStatus("$what error — skipped (see diagnostics)")
+        }
     }
 
     companion object {
