@@ -21,6 +21,17 @@ val localProps = Properties().apply {
     if (f.exists()) f.inputStream().use { load(it) }
 }
 
+// Short git SHA stamped into BuildConfig.GIT_SHA so a crash report names the
+// exact build that failed (debug builds all share versionName "0.1"). Best-effort.
+val gitSha: String = runCatching {
+    ProcessBuilder("git", "rev-parse", "--short", "HEAD")
+        .directory(rootProject.projectDir)
+        .redirectErrorStream(true)
+        .start()
+        .inputStream.bufferedReader().use { it.readText().trim() }
+        .ifEmpty { "unknown" }
+}.getOrDefault("unknown")
+
 // Release signing — from CI env (the release workflow base64-decodes the keystore to
 // a file and exports KEYSTORE_FILE / KEYSTORE_PASSWORD / KEY_ALIAS / KEY_PASSWORD) or
 // from local.properties (release.keystoreFile / .storePassword / .keyAlias /
@@ -71,6 +82,8 @@ android {
         // local/dev builds fall back to the committed defaults.
         versionCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 1
         versionName = (project.findProperty("versionName") as String?) ?: "0.1"
+        // Stamped into the crash report so it names the exact build that failed.
+        buildConfigField("String", "GIT_SHA", "\"$gitSha\"")
 
         // Reversed-client-id redirect scheme for the Google Drive OAuth flow,
         // overridden per build type from the resolved Drive client_id. A safe

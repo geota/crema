@@ -25,6 +25,7 @@
         android:required="true" />
 
     <application
+        android:name=".CremaApplication"
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
@@ -64,8 +65,8 @@
 
         <!-- FileProvider — hands the camera app (TakePicture) a writable content
              Uri for the bean-photo capture temp file. Authority tracks the build's
-             applicationId (incl. the .nightly suffix) so it matches
-             BuildConfig.APPLICATION_ID + ".fileprovider" in code. -->
+             applicationId so it matches BuildConfig.APPLICATION_ID + ".fileprovider"
+             in code. -->
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

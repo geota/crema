@@ -39,6 +39,9 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.input.pointer.pointerInput
@@ -71,7 +74,10 @@ import coffee.crema.ui.screens.ProfileEditScreen
 import coffee.crema.ui.screens.ProfilesScreen
 import coffee.crema.ui.screens.ScaleScreen
 import coffee.crema.ui.screens.SettingsScreen
+import coffee.crema.ui.screens.CrashRecoveryScreen
 import coffee.crema.ui.theme.CremaTheme
+import coffee.crema.diag.CrashReporter
+import coffee.crema.diag.SafeMode
 
 /**
  * The app's current single screen: a Connect button and a live readout of the
@@ -111,7 +117,44 @@ class MainActivity : ComponentActivity() {
         // A cold start can itself be the OAuth redirect (process died while
         // the user was in the browser).
         handleVisualizerCallback(intent)
+        // Crash-recovery / safe-mode gate. Read BEFORE the ViewModel is touched:
+        // if the last launch crashed (report) or didn't stabilise (marker — which
+        // also catches a native crash the JVM handler can't), show the recovery
+        // screen first and DON'T construct the ViewModel, so its startup
+        // auto-connect can't re-crash the user into a loop.
+        val crashReport = CrashReporter.pending(this)
+        val bootStalled = SafeMode.beginBoot(this)
         setContent {
+            var showRecovery by rememberSaveable { mutableStateOf(crashReport != null || bootStalled) }
+            if (showRecovery) {
+                val recoveryScope = rememberCoroutineScope()
+                // Wrap in CremaTheme (defaults to the dark brand scheme) — the gate
+                // runs before the ViewModel, so without this the screen falls back
+                // to bare Material You (off-brand purple/light).
+                CremaTheme {
+                    CrashRecoveryScreen(
+                        report = crashReport,
+                        onReset = {
+                            recoveryScope.launch {
+                                SafeMode.resetDevices(this@MainActivity)
+                                CrashReporter.clear(this@MainActivity)
+                                showRecovery = false
+                            }
+                        },
+                        onContinue = {
+                            CrashReporter.clear(this@MainActivity)
+                            showRecovery = false
+                        },
+                    )
+                }
+                return@setContent
+            }
+            // Past the gate: clear the boot marker once we've run stably for a
+            // few seconds — a connect crash happens within the first seconds.
+            LaunchedEffect(Unit) {
+                kotlinx.coroutines.delay(8_000)
+                SafeMode.bootStable(this@MainActivity)
+            }
             val ui by viewModel.ui.collectAsStateWithLifecycle()
             // Theme mode is a persisted app pref (Settings → Display).
             val darkTheme = when (ui.themeMode) {

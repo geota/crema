@@ -5023,6 +5023,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             android.text.format.DateFormat.format("HH:mm:ss", System.currentTimeMillis()),
             line,
         )
+        // Mirror into the crash-report ring buffer — it outlives the UI's
+        // eventLog (which dies with the process). See coffee.crema.diag.DiagLog.
+        coffee.crema.diag.DiagLog.add(stamped)
         val log = (listOf(stamped) + _ui.value.eventLog).take(MAX_LOG_LINES)
         _ui.update { it.copy(eventLog = log) }
     }

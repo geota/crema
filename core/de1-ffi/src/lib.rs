@@ -364,6 +364,61 @@ pub fn brew_ratio(dose: f32, yield_out: f32) -> Option<f32> {
     de1_domain::brew_ratio(dose, yield_out)
 }
 
+/// Install a process-wide Rust panic hook that appends each panic — message,
+/// `file:line:col`, thread, and a backtrace — to `log_path`.
+///
+/// The Android shell calls this once at startup (`CremaApplication.onCreate`),
+/// so a panic in the core leaves a Rust-level breadcrumb the crash report can
+/// bundle — including the file/line/backtrace that UniFFI's `catch_unwind`
+/// strips when it converts the panic into a Kotlin exception. Idempotent (a
+/// second call is a no-op). Best-effort: IO errors are swallowed and the hook
+/// never re-panics. Also echoes a one-line summary to logcat via `eprintln!`.
+#[uniffi::export]
+pub fn install_panic_logger(log_path: String) {
+    static INSTALLED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    if INSTALLED.set(()).is_err() {
+        return;
+    }
+    std::panic::set_hook(Box::new(move |info| {
+        eprintln!("[crema] rust panic: {info}");
+        let _ = write_panic_record(&log_path, info);
+    }));
+}
+
+/// Append one panic record to `log_path` (best-effort). Separated out so the
+/// hook closure stays small and the `?` early-returns are contained.
+fn write_panic_record(path: &str, info: &std::panic::PanicHookInfo<'_>) -> std::io::Result<()> {
+    use std::io::Write;
+    let ts_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis());
+    let loc = info.location().map_or_else(
+        || "<unknown>".to_owned(),
+        |l| format!("{}:{}:{}", l.file(), l.line(), l.column()),
+    );
+    // The payload is a `&str` for `panic!("literal")` and a `String` for
+    // `panic!("{}", x)` / formatted messages; fall back for anything else.
+    let payload = info.payload();
+    let msg = payload
+        .downcast_ref::<&str>()
+        .map(|s| (*s).to_owned())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "<non-string panic payload>".to_owned());
+    let thread = std::thread::current()
+        .name()
+        .unwrap_or("<unnamed>")
+        .to_owned();
+    let backtrace = std::backtrace::Backtrace::force_capture();
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    writeln!(
+        f,
+        "[unix_ms={ts_ms}] thread={thread} at {loc}\n{msg}\n{backtrace}\n---"
+    )
+}
+
 /// Classify a 1..10 roast level into a named band — the lowercase wire
 /// string (`"light"` / `"medium"` / `"dark"`), or `None` for a missing
 /// level. Values outside 1..10 are clamped first. Mirrors the wasm
