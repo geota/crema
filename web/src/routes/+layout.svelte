@@ -8,9 +8,10 @@
 	 *     one BLE connection. Created **once here**, in `onMount`, and published
 	 *     via Svelte context (`setCremaAppContext`) so every route shares the
 	 *     same core + connection across navigation.
-	 *  2. The Web-Bluetooth support gate — Crema talks to the DE1 and scale over
-	 *     Web Bluetooth, which is Chromium-only. An unsupported browser gets a
-	 *     clear notice instead of dead UI.
+	 *  2. The Web-Bluetooth notice — Crema talks to the DE1 and scale over Web
+	 *     Bluetooth, which is Chromium-only. An unsupported browser (Firefox /
+	 *     Safari / iOS) still loads the whole app — everything that doesn't need a
+	 *     machine works — and just gets a toast that connecting won't work here.
 	 *  3. The chrome — the fixed `CremaSidebar` rail plus the page content area,
 	 *     which is inset by the rail's 72px width.
 	 */
@@ -20,6 +21,7 @@
 	import { CremaSidebar } from '$lib/components';
 	import DebugPanel from '$lib/shell/DebugPanel.svelte';
 	import ToastHost from '$lib/components/shared/ToastHost.svelte';
+	import { toast } from '$lib/components/shared/toast.svelte';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import { describeError } from '$lib/utils/error';
 	import { setCremaAppContext, type CoreLoadState } from '$lib/shell/app-context';
@@ -53,13 +55,15 @@
 	let onVisibility: (() => void) | null = null;
 
 	onMount(async () => {
-		// `createCremaApp()` dynamic-imports and instantiates the wasm core —
-		// genuinely async. Skip it entirely on browsers without Web Bluetooth:
-		// the app cannot connect anything there.
+		// Web Bluetooth is Chromium-only. The app still loads on Firefox / Safari /
+		// iOS — history, beans, profiles and Visualizer sync all work without a
+		// machine — but connecting to a DE1 or scale won't, so warn once on launch.
 		if (!bluetoothSupported) {
-			loadState = 'failed';
-			loadError = 'Web Bluetooth unavailable';
-			return;
+			toast.error(
+				"This browser doesn't support Web Bluetooth, so Crema can't connect to a " +
+					'machine or scale. Use Chrome, Edge or Opera on desktop or Android.',
+				12000
+			);
 		}
 		// Mount the Effect runtime here, in onMount — never module scope — so
 		// adapter-static's build-time evaluation never touches localStorage /
@@ -119,56 +123,22 @@
 	<title>Crema</title>
 </svelte:head>
 
-{#if !bluetoothSupported}
-	<!-- Browser-support gate: Web Bluetooth is Chromium-only. The whole app is
-	     replaced by this notice on Firefox / Safari / iOS. -->
-	<main class="shell-gate">
-		<div class="gate-card">
-			<h1 class="t-h3">Web Bluetooth is unavailable</h1>
-			<p class="t-body-sm">
-				Crema talks to the DE1 and the scale over Web Bluetooth, which only
-				works in a Chromium-based browser — Chrome, Edge or Opera on desktop or
-				Android. This browser (or iOS, where no browser supports it) cannot
-				connect.
-			</p>
-		</div>
-	</main>
-{:else}
-	<CremaSidebar {app} />
-	<DebugPanel {app} />
-	<div class="shell-content">
-		{@render children?.()}
-	</div>
-	<!-- App-wide in-app dialog + toast hosts (FD4) — replace native
-	     confirm/alert/prompt. Single instances, driven by the shared stores. -->
-	<ConfirmDialog />
-	<ToastHost />
-{/if}
+<!-- The app loads on every browser; the Web-Bluetooth notice is a toast (see
+     onMount), and the connect actions guard themselves on unsupported browsers. -->
+<CremaSidebar {app} />
+<DebugPanel {app} />
+<div class="shell-content">
+	{@render children?.()}
+</div>
+<!-- App-wide in-app dialog + toast hosts (FD4) — replace native
+     confirm/alert/prompt. Single instances, driven by the shared stores. -->
+<ConfirmDialog />
+<ToastHost />
 
 <style>
 	/* The content area clears the fixed side rail (--sidebar-w wide). */
 	.shell-content {
 		padding-left: var(--sidebar-w);
 		min-height: 100vh;
-	}
-
-	/* Centred full-screen notice for the unsupported-browser gate. */
-	.shell-gate {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		min-height: 100vh;
-		padding: var(--space-6);
-	}
-	.gate-card {
-		max-width: 420px;
-		display: flex;
-		flex-direction: column;
-		gap: var(--space-3);
-		background: var(--bg-surface);
-		border: 1px solid var(--hairline);
-		border-radius: var(--radius-lg);
-		box-shadow: var(--shadow-md);
-		padding: var(--space-6);
 	}
 </style>

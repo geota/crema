@@ -16,7 +16,8 @@
 	import { resolve } from '$app/paths';
 	import type { CremaApp } from '$lib/state';
 	import CremaMark from './CremaMark.svelte';
-	import type { De1State, ScaleState } from '$lib/ble';
+	import { isWebBluetoothSupported, type De1State, type ScaleState } from '$lib/ble';
+	import { toast } from '$lib/components/shared/toast.svelte';
 
 	let { app }: { app: CremaApp | null } = $props();
 
@@ -53,18 +54,39 @@
 	const scaleConnected = $derived(ui !== null && liveStates.includes(ui.scaleState));
 
 	/**
+	 * Toast + bail when the browser can't do Web Bluetooth — connecting would
+	 * otherwise reject unhandled (the chooser never opens). Disconnect stays
+	 * allowed (it touches no Bluetooth). Returns true when it's safe to connect.
+	 */
+	function canConnect(): boolean {
+		if (isWebBluetoothSupported()) return true;
+		toast.error(
+			"This browser can't connect over Bluetooth — use Chrome, Edge or Opera on desktop or Android."
+		);
+		return false;
+	}
+
+	/**
 	 * Toggle the DE1 connection — the bottom status button. Connecting needs a
 	 * Web-Bluetooth user gesture, which a click satisfies.
 	 */
 	function toggleMachine(): void {
 		if (!app) return;
-		void (machineConnected ? app.disconnectDe1() : app.connectDe1());
+		if (machineConnected) {
+			void app.disconnectDe1();
+		} else if (canConnect()) {
+			void app.connectDe1();
+		}
 	}
 
 	/** Toggle the scale connection — the other bottom status button. */
 	function toggleScale(): void {
 		if (!app) return;
-		void (scaleConnected ? app.disconnectScale() : app.connectScale());
+		if (scaleConnected) {
+			void app.disconnectScale();
+		} else if (canConnect()) {
+			void app.connectScale();
+		}
 	}
 
 	/** Keys 1–5 navigate to the matching route — design parity. */
