@@ -28,7 +28,6 @@
 		peaksOf,
 		flatSamplesOf
 	} from '$lib/history';
-	import { ensureShotRecipe } from '$lib/history/recipe-backfill';
 	import { getCaptureStore, captureJsonl } from '$lib/capture';
 	import { daysOffRoast, roastBand, type Bean, type Roaster } from '$lib/bean';
 	import { getSettingsStore, convertWeight, convertTemp, convertPressure } from '$lib/settings';
@@ -257,17 +256,11 @@
 	 * telemetry, user-readable. The default action on the Download
 	 * split-button.
 	 */
-	async function downloadCommunity(): Promise<void> {
+	function downloadCommunity(): void {
 		try {
-			// A pulled shot arrives with a name but no recipe; lazily fetch + cache
-			// it so the exported file is a complete, importable profile (#12).
-			const app = ctx().app;
-			const withRecipe = app
-				? await ensureShotRecipe(shot, (v2) => app.parseV2JsonProfile(v2))
-				: shot;
-			const json = exportStoredShotAsV2Json(withRecipe);
+			const json = exportStoredShotAsV2Json(shot);
 			const blob = new Blob([json], { type: 'application/json' });
-			downloadBlob(shotFilename(withRecipe), blob);
+			downloadBlob(shotFilename(shot), blob);
 		} catch (err) {
 			console.error('Shot export failed', err);
 			toast.error(`Export failed: ${err instanceof Error ? err.message : String(err)}`);

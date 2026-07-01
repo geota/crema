@@ -225,22 +225,6 @@ export class HistoryStore {
 	}
 
 	/**
-	 * Attach a back-filled recipe to a shot and persist (#12) — used by the lazy
-	 * recipe back-fill for pulled shots (which arrive with a name but no steps).
-	 * A thin replace-and-persist, mirroring {@link setNotes}.
-	 */
-	setProfile(id: string, profile: unknown): void {
-		const idx = this.shots.findIndex((s) => s.id === id);
-		if (idx < 0) return;
-		this.shots = [
-			...this.shots.slice(0, idx),
-			{ ...this.shots[idx], profile },
-			...this.shots.slice(idx + 1)
-		];
-		this.persist();
-	}
-
-	/**
 	 * Update a shot's equipment-level grinder-model override and persist.
 	 * Pass `null` (or call with an empty string after trimming) to clear
 	 * the override — the upload-time cascade then falls back to the
