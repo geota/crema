@@ -1027,6 +1027,20 @@
 						</div>
 						<div class="be-frow be-frow-stack">
 							<div class="be-frow-l">
+								<div class="be-frow-label">Farmer</div>
+							</div>
+							<div class="be-frow-r">
+								<input
+									class="be-input"
+									value={current.origin.farmer ?? ''}
+									placeholder="Tarekech Geleta"
+									oninput={(e) =>
+										setOrigin('farmer', (e.currentTarget as HTMLInputElement).value)}
+								/>
+							</div>
+						</div>
+						<div class="be-frow be-frow-stack">
+							<div class="be-frow-l">
 								<div class="be-frow-label">Variety</div>
 							</div>
 							<div class="be-frow-r">

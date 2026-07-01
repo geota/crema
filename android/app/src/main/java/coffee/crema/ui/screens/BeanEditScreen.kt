@@ -129,6 +129,7 @@ fun BeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
     var country by remember(bean.id) { mutableStateOf(bean.origin?.country ?: "") }
     var region by remember(bean.id) { mutableStateOf(bean.origin?.region ?: "") }
     var farm by remember(bean.id) { mutableStateOf(bean.origin?.farm ?: "") }
+    var farmer by remember(bean.id) { mutableStateOf(bean.origin?.farmer ?: "") }
     var variety by remember(bean.id) { mutableStateOf(bean.origin?.variety ?: "") }
     var elevation by remember(bean.id) { mutableStateOf(bean.origin?.elevation ?: "") }
     var processing by remember(bean.id) { mutableStateOf(bean.origin?.processing ?: "") }
@@ -146,7 +147,7 @@ fun BeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                 name = name, roast = roast, mixSel = mixSel, roastTypeSel = roastTypeSel,
                 roasted = roasted, opened = opened, frozen = frozen, archived = archived,
                 decaf = decaf, pinned = pinned, bagSize = bagSize, remaining = remaining,
-                country = country, region = region, farm = farm, variety = variety,
+                country = country, region = region, farm = farm, farmer = farmer, variety = variety,
                 elevation = elevation, processing = processing, grinder = grinder, grind = grind,
                 linkedProfileId = linkedProfileId, rating = rating, tastingNotes = tastingNotes,
                 url = url, notes = notes, tags = tags.toList(),
@@ -330,6 +331,7 @@ fun BeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                         Box(Modifier.weight(1f)) { BeField("Farm / co-op", farm) { farm = it } }
                         Box(Modifier.weight(1f)) { BeField("Variety", variety) { variety = it } }
                     }
+                    BeField("Farmer", farmer) { farmer = it }
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         Box(Modifier.weight(1f)) { BeField("Elevation", elevation) { elevation = it } }
                         Box(Modifier.weight(1f)) { BeField("Processing", processing) { processing = it } }

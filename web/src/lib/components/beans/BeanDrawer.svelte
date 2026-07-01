@@ -353,6 +353,7 @@
 					<div class="bn-row"><div class="bn-row-label">Country</div><div class="bn-row-val">{bean.origin.country || '—'}</div></div>
 					<div class="bn-row"><div class="bn-row-label">Region</div><div class="bn-row-val">{bean.origin.region || '—'}</div></div>
 					<div class="bn-row"><div class="bn-row-label">Farm</div><div class="bn-row-val">{bean.origin.farm || '—'}</div></div>
+					<div class="bn-row"><div class="bn-row-label">Farmer</div><div class="bn-row-val">{bean.origin.farmer || '—'}</div></div>
 					<div class="bn-row"><div class="bn-row-label">Variety</div><div class="bn-row-val">{bean.origin.variety || '—'}</div></div>
 					<div class="bn-row"><div class="bn-row-label">Elevation</div><div class="bn-row-val">{bean.origin.elevation || '—'}</div></div>
 					<div class="bn-row"><div class="bn-row-label">Processing</div><div class="bn-row-val">{bean.origin.processing || '—'}</div></div>

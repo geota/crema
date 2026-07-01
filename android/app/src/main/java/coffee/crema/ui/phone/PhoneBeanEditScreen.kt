@@ -78,6 +78,7 @@ fun PhoneBeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
     var country by remember(bean.id) { mutableStateOf(bean.origin?.country ?: "") }
     var region by remember(bean.id) { mutableStateOf(bean.origin?.region ?: "") }
     var farm by remember(bean.id) { mutableStateOf(bean.origin?.farm ?: "") }
+    var farmer by remember(bean.id) { mutableStateOf(bean.origin?.farmer ?: "") }
     var variety by remember(bean.id) { mutableStateOf(bean.origin?.variety ?: "") }
     var elevation by remember(bean.id) { mutableStateOf(bean.origin?.elevation ?: "") }
     var processing by remember(bean.id) { mutableStateOf(bean.origin?.processing ?: "") }
@@ -102,7 +103,7 @@ fun PhoneBeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                 name = name, roast = roast, mixSel = mixSel, roastTypeSel = roastTypeSel,
                 roasted = roasted, opened = opened, frozen = frozen, archived = archived,
                 decaf = decaf, pinned = pinned, bagSize = bagSize, remaining = remaining,
-                country = country, region = region, farm = farm, variety = variety,
+                country = country, region = region, farm = farm, farmer = farmer, variety = variety,
                 elevation = elevation, processing = processing, grinder = grinder, grind = grind,
                 linkedProfileId = linkedProfileId, rating = rating, tastingNotes = tastingNotes,
                 url = url, notes = notes, tags = tags.toList(),
@@ -323,6 +324,7 @@ fun PhoneBeanEditScreen(vm: MainViewModel, onBack: () -> Unit) {
                     CremaTextField(value = farm, onValueChange = { farm = it }, label = "Farm / co-op", placeholder = "Halo Hartume", modifier = Modifier.weight(1f))
                     CremaTextField(value = variety, onValueChange = { variety = it }, label = "Variety", placeholder = "Heirloom", modifier = Modifier.weight(1f))
                 }
+                CremaTextField(value = farmer, onValueChange = { farmer = it }, label = "Farmer", placeholder = "Tarekech Geleta", modifier = Modifier.fillMaxWidth())
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     CremaTextField(value = elevation, onValueChange = { elevation = it }, label = "Elevation", placeholder = "1900 masl", modifier = Modifier.weight(1f))
                     CremaTextField(value = processing, onValueChange = { processing = it }, label = "Process", placeholder = "Natural", modifier = Modifier.weight(1f))
