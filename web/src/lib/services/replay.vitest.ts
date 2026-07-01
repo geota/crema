@@ -95,7 +95,7 @@ describe('replayCaptureProgram — happy path', () => {
 		const core = mkCore();
 		const deps = mkDeps(mkParsed(mkEvents([0, 50]), { scaleName: 'BOOKOO_SC' }), core);
 		await Effect.runPromise(replayCaptureProgram(deps));
-		expect(core.connectScale).toHaveBeenCalledWith('BOOKOO_SC');
+		expect(core.connectScale).toHaveBeenCalledWith('BOOKOO_SC', []);
 	});
 
 	it('treats a connectScale failure as non-fatal (replay still completes)', async () => {
