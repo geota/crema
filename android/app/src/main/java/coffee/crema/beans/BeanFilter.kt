@@ -35,7 +35,12 @@ fun filterAndSortBeans(
         val matchesSearch = query.isBlank() ||
             b.name.contains(query, ignoreCase = true) ||
             (roasterNameOf(b)?.contains(query, ignoreCase = true) == true) ||
-            (b.origin?.country?.contains(query, ignoreCase = true) == true)
+            (b.origin?.country?.contains(query, ignoreCase = true) == true) ||
+            (b.origin?.region?.contains(query, ignoreCase = true) == true) ||
+            (b.origin?.farm?.contains(query, ignoreCase = true) == true) ||
+            (b.origin?.farmer?.contains(query, ignoreCase = true) == true) ||
+            (b.origin?.variety?.contains(query, ignoreCase = true) == true) ||
+            (b.tastingNotes?.contains(query, ignoreCase = true) == true)
         val matchesFilter = when (filter) {
             "archived" -> b.archivedAt != null
             "active" -> b.archivedAt == null && !b.isFrozen

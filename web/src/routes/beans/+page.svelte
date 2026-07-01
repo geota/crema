@@ -171,6 +171,9 @@
 				r?.name.toLowerCase().includes(query) ||
 				b.origin.country?.toLowerCase().includes(query) ||
 				b.origin.region?.toLowerCase().includes(query) ||
+				b.origin.farm?.toLowerCase().includes(query) ||
+				b.origin.farmer?.toLowerCase().includes(query) ||
+				b.origin.variety?.toLowerCase().includes(query) ||
 				b.tastingNotes.toLowerCase().includes(query) ||
 				b.tags.some((t) => t.toLowerCase().includes(query))
 			);
