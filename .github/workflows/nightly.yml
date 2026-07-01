@@ -32,17 +32,34 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0 # full history + tags: the versionCode is derived from the last release
+          fetch-tags: true
 
       - name: Compute nightly version
         id: v
         run: |
-          # Human-readable, sortable name; versionCode always sits above any stable
-          # semver code (M*1e6 + m*1e3 + p) and strictly increases via the run number.
-          NAME="$(date -u +%Y.%m.%d).${GITHUB_RUN_NUMBER}+g${GITHUB_SHA::7}"
-          CODE=$((1000000000 + GITHUB_RUN_NUMBER))
+          # Slot the nightly BETWEEN its base release and the next one, using the
+          # SAME scheme as release.yml (M*1e8 + m*1e6 + p*1e4). The 4 low digits
+          # carry commits-since-the-last-tag, so a nightly is always > its base
+          # release and < the next tagged release — every future release then
+          # upgrades in place with no manual reinstall. (One-time exception: an
+          # install from the OLD 1e9-based nightly is a downgrade and reinstalls
+          # once.)
+          LAST="$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -1)"
+          LAST="${LAST:-v0.0.0}"
+          if [[ "${LAST#v}" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
+            MAJ=${BASH_REMATCH[1]}; MIN=${BASH_REMATCH[2]}; PAT=${BASH_REMATCH[3]}
+          else
+            MAJ=0; MIN=0; PAT=0
+          fi
+          C="$(git rev-list --count "${LAST}..HEAD" 2>/dev/null || git rev-list --count HEAD)"
+          [ "$C" -gt 9999 ] && C=9999 # never overflow into the patch digit
+          CODE=$(( MAJ * 100000000 + MIN * 1000000 + PAT * 10000 + C ))
+          NAME="${LAST#v}-nightly.${C}+g${GITHUB_SHA::7}"
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
           echo "code=$CODE" >> "$GITHUB_OUTPUT"
-          echo "Nightly $NAME (versionCode $CODE)"
+          echo "Nightly $NAME (versionCode $CODE) — base $LAST + $C commit(s)"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4

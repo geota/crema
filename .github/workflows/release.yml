@@ -69,10 +69,13 @@ jobs:
             echo "::error::Refusing unsafe version string '$NAME'"; exit 1
           fi
           # versionCode for Play: a strictly-increasing integer derived from the
-          # semver tag (M*1000000 + m*1000 + p) — deterministic and reset-proof,
-          # unlike the run number. Manual/dev runs fall back to the run number.
+          # semver tag as M*1e8 + m*1e6 + p*1e4 — deterministic and reset-proof.
+          # The 4 low digits are RESERVED (0 for a release) so a nightly can slot
+          # ABOVE its base release yet BELOW the next one (see nightly.yml), making
+          # every release an in-place upgrade over the preceding nightlies. Fits a
+          # signed 32-bit versionCode for MAJOR <= 20. Dev runs fall back to the run number.
           if [[ "$NAME" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
-            CODE=$(( BASH_REMATCH[1] * 1000000 + BASH_REMATCH[2] * 1000 + BASH_REMATCH[3] ))
+            CODE=$(( BASH_REMATCH[1] * 100000000 + BASH_REMATCH[2] * 1000000 + BASH_REMATCH[3] * 10000 ))
           else
             CODE="$GITHUB_RUN_NUMBER"
           fi
