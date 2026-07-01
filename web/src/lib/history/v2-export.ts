@@ -98,7 +98,12 @@ function toRustStoredShot(shot: StoredShot): RustStoredShot {
 	return {
 		formatVersion: shot.formatVersion,
 		completedAt: shot.completedAt,
-		profile: profileFromName(shot.profileName, finalYield, shot.metadata.dose ?? null),
+		// Prefer the recipe snapshotted at capture (#12) so the export carries the
+		// real steps; fall back to a name-only stub for legacy / pulled shots that
+		// never captured one.
+		profile:
+			(shot.profile as Profile | null) ??
+			profileFromName(shot.profileName, finalYield, shot.metadata.dose ?? null),
 		stopReason: shot.stopReason ?? null,
 		metadata: {
 			dose: shot.metadata.dose ?? null,
