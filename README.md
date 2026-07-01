@@ -45,7 +45,7 @@ Crema is a clean-room reimplementation of the DE1 tablet experience as a **fast,
 - **Profile library** — pin favorites, edit frames, sync to/from [visualizer.coffee](https://visualizer.coffee), and live-preview each profile's intent.
 - **Shot history** — record every pour locally with full telemetry, link shots to beans/roasters, multi-shot overlay comparison, and round-trip community v2 `.shot.json` import/export.
 - **Bean + roaster library** — track bags, roast levels, grinder settings, and per-shot retroactive bean rebinding with snapshot semantics.
-- **Bluetooth scales** — first-class support for Bookoo Themis, Decent Scale, Acaia (Lunar / Pyxis / Pearl), Skale, Eureka Precisa, Hiroia Jimmy, Difluid, Felicita, Atomheart Eclair, Varia Aku, and Smartchef.
+- **Bluetooth scales** — first-class support for Bookoo Themis, Decent Scale, Acaia (Lunar / Pyxis / Pearl), Skale, Eureka Precisa, Solo Barista, Hiroia Jimmy, Difluid, Felicita, Atomheart Eclair, Varia Aku, and Smartchef.
 - **Visualizer integration** — OAuth 2.0 + PKCE auth, full two-way sync of shots, beans, and roasters with LWW conflict resolution.
 - **Maintenance tracking** — water filter, descale, and cleaning cycle reminders with one-click "Run" buttons that drive the DE1's built-in cycles.
 - **Replay capture** — record BLE traces of real sessions and replay them deterministically through the core for development and regression testing.
@@ -68,7 +68,7 @@ Crema is a clean-room reimplementation of the DE1 tablet experience as a **fast,
   4. Tap **Add**, then **Install**. Obtainium updates it in place whenever a new nightly ships.
 - Or download the APK straight from the [`nightly`](https://github.com/geota/crema/releases/tag/nightly) prerelease and sideload it.
 
-Stable and nightly are the **same app** (`dev.maceiras.crema`), signed with the same key — so Obtainium updates between them in place; the **Include prereleases** switch just picks which lane you follow. (Going from a nightly *back* to stable is a version downgrade, so that direction needs a manual reinstall.) Minimum Android 12 (API 31).
+Stable and nightly are the **same app** (`dev.maceiras.crema`), signed with the same key and sharing one strictly-increasing version scheme: a nightly's version code sits just above the release it builds on and below the next one, so **every tagged release is an in-place upgrade over the nightlies that preceded it** — no manual reinstall. The **Include prereleases** switch just picks which lane you follow. Minimum Android 12 (API 31).
 
 ## Tech stack
 
@@ -76,17 +76,16 @@ Stable and nightly are the **same app** (`dev.maceiras.crema`), signed with the 
 |---|---|
 | **Core** | Rust (sans-IO), compiled to WebAssembly via `wasm-bindgen`. Pure protocol codecs, shot state machine, profile model, and signature/reconciliation helpers. No I/O, no UI — fully testable without hardware. |
 | **Web shell** | SvelteKit 2 + Svelte 5 (runes), TypeScript, adapter-static. Web Bluetooth API for DE1 + scale transports. PWA with offline install. |
-| **Bindings** | `typeshare` for Rust ↔ TypeScript type generation. `openapi-typescript` for the Visualizer API. |
+| **Bindings** | `typeshare` generates the shared Rust types for both shells (TypeScript **and** Kotlin); `UniFFI` bridges the core to Android; `openapi-typescript` types the Visualizer API. |
 | **Storage** | `localStorage` for shots / beans / profiles, `IndexedDB` for binary captures, vanilla content-negotiated JSON for export. |
 
 ## Quick start
 
 ### Prerequisites
 
-- **Node.js** 20+
-- **[pnpm](https://pnpm.io/)** 9+
-- **Rust** 1.80+ with `wasm-pack` (`cargo install wasm-pack`)
-- Node.js 24 (an `.nvmrc` is committed — `nvm use` / `fnm use` will pick it up).
+- **Rust** 1.95+ (2024 edition) with `wasm-pack` (`cargo install wasm-pack`)
+- **Node.js** 24 — an `.nvmrc` is committed, so `nvm use` / `fnm use` picks it up
+- **[pnpm](https://pnpm.io/)** — the repo pins `pnpm@11` via `packageManager`; run `corepack enable` and the matching version is used automatically
 - A browser with [Web Bluetooth](https://caniuse.com/web-bluetooth) support — Chrome / Edge / Opera. Brave works after enabling the flag (see below).
 
 <details>
@@ -105,7 +104,7 @@ After the restart, Brave will prompt for device-picker permissions like Chrome d
 ### Run the dev server
 
 ```bash
-git clone https://github.com/<your-user>/crema.git
+git clone https://github.com/geota/crema.git
 cd crema/web
 pnpm install
 pnpm wasm     # one-time wasm build of the Rust core
@@ -138,18 +137,18 @@ pnpm build         # static site → web/build/
 cd core
 cargo test --workspace
 
-# Web shell type-check + lint
+# Web shell type-check + unit tests
 cd web
-pnpm check
-pnpm test
+pnpm check       # svelte-check (type-check)
+pnpm test        # vitest unit tests
 ```
 
-### Git hooks (optional, recommended)
+### Git hooks
 
-A pre-push hook that mirrors the CI workflow (fmt, clippy, tests, svelte-check, build) lives in `.githooks/`. Install once per clone:
+A pre-push hook that mirrors CI (fmt, clippy, tests, svelte-check, build) lives in `.githooks/`. `pnpm install` wires it up automatically (via the `prepare` script) — usually there's nothing to do. To (re)install it by hand:
 
 ```bash
-scripts/install-hooks.sh
+scripts/install-hooks.sh   # or: git config core.hooksPath .githooks
 ```
 
 Bypass for a one-off push with `SKIP_CI_CHECKS=1 git push` — CI will still run on the remote.
@@ -158,18 +157,22 @@ Bypass for a one-off push with `SKIP_CI_CHECKS=1 git push` — CI will still run
 
 ```
 crema/
-├── core/                     # Rust workspace
-│   ├── de1-protocol/         #   BLE wire codec (sans-IO)
-│   ├── de1-domain/           #   Shot model, profiles, beans, sync helpers
-│   ├── de1-scale/            #   Per-scale codecs (12 supported)
-│   ├── de1-app/              #   The orchestrator — `CremaCore` facade
-│   ├── de1-wasm/             #   wasm-bindgen FFI for the web shell
-│   └── de1-ffi/              #   UniFFI bindings for the Android shell
+├── core/                     # Rust workspace (sans-IO, edition 2024)
+│   ├── de1-protocol/         #   DE1 BLE wire codec
+│   ├── de1-scale/            #   Per-scale BLE codecs (13 models)
+│   ├── de1-domain/           #   Shot model, profiles, beans, sync/reconciliation
+│   ├── de1-app/              #   Orchestrator — the `CremaCore` facade + event stream
+│   ├── de1-wasm/             #   wasm-bindgen bridge for the web shell
+│   ├── de1-ffi/              #   UniFFI bridge for the Android shell
+│   └── bindings/             #   Generated shared types (typeshare → .ts + .kt)
 ├── web/                      # SvelteKit PWA
-│   ├── src/lib/              #   Stores, components, BLE transports
-│   ├── src/routes/           #   Routes: /brew, /history, /beans, /profiles, /settings
+│   ├── src/lib/              #   Core wrapper, stores, components, BLE transports, Effect services
+│   ├── src/routes/           #   / (brew), /profiles, /beans, /history, /scale, /settings
 │   └── static/               #   Icons, manifest, PWA assets
-└── android/                  # Native Kotlin shell (in progress)
+├── android/                  # Native Jetpack Compose shell (phone + tablet)
+│   └── app/src/main/java/coffee/crema/   #   ble/ · ui/ (screens) · core/ (UniFFI) · diag/
+├── .githooks/                # Pre-push hook mirroring CI
+└── .github/workflows/        # ci · nightly · release pipelines
 ```
 
 ## Native Android tablet + phone apps
