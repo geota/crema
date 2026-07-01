@@ -258,6 +258,15 @@ pub fn brew_ratio(dose: f32, yield_out: f32) -> Option<f32> {
     de1_domain::brew_ratio(dose, yield_out)
 }
 
+/// The bag's remaining grams after a pulled shot debits `dose_g`, floored at 0
+/// — shared `de1_domain::debit_remaining`. `undefined` means nothing to debit
+/// (already empty / bad dose): don't persist or touch `updatedAt`. The shell
+/// owns the empty-bag + rating prompts.
+#[wasm_bindgen]
+pub fn debit_remaining(remaining: f32, dose_g: f32) -> Option<f32> {
+    de1_domain::debit_remaining(remaining, dose_g)
+}
+
 // ─── Unit conversions (audit #1) ────────────────────────────────────────
 //
 // Pure `f32 → f32` math, mirroring `de1_domain::units`. The shell's

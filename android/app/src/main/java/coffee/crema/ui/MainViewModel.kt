@@ -88,6 +88,7 @@ import java.util.UUID
 import coffee.crema.core.EventShotSettingsReadInner
 import coffee.crema.core.ShotBean
 import coffee.crema.core.SteamHotWaterSettings
+import coffee.crema.core.debitRemaining
 import coffee.crema.core.profileFingerprint
 import coffee.crema.core.subStateErrorMessage
 import coffee.crema.profiles.BrewDefaults
@@ -3991,6 +3992,24 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { historyStore.save(next) }
         // Auto-sync: push the fresh shot to Visualizer when armed + signed in.
         visualizer.maybeAutoUpload(shot)
+
+        // Burn this shot's dose down from its bag's remaining weight — live
+        // shots only (a replay-demo must never touch real inventory). The core
+        // `debitRemaining` owns the rule + its no-ops: it returns null when
+        // there's nothing to debit (bag already empty / bad dose), so we persist
+        // — and touch updatedAt — ONLY on a real debit. If it just emptied the
+        // bag, surface it so the user can switch / archive / rate.
+        val dose = profile?.dose
+        if (!s.replayPrimary && bean != null && dose != null) {
+            val debited = debitRemaining(bean.remaining ?: 0f, dose)
+            if (debited != null) {
+                mutateBean(bean.id) { it.copy(remaining = debited) }
+                if (debited == 0f) {
+                    val rateHint = if ((bean.rating?.toInt() ?: 0) == 0) " — rate it in Beans" else ""
+                    notifyUser("That was the last of ${bean.name}; bag empty$rateHint")
+                }
+            }
+        }
     }
 
     /** Apply a user rating / tasting-notes edit to a logged shot. Persisted.

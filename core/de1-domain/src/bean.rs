@@ -517,6 +517,26 @@ pub struct Bean {
     pub updated_at: i64,
 }
 
+/// The bag's `remaining` (grams) after a pulled shot debits `dose_g`, floored
+/// at 0 — or `None` when there is **nothing to debit**: the bag is already
+/// empty (`remaining <= 0`), or the dose / remaining is non-positive or
+/// non-finite. A `None` result is the caller's signal to do nothing at all — in
+/// particular not to re-persist the bag or touch its `updated_at`.
+///
+/// The single source of truth for the burn-down + run-out (clamp-to-0) rule
+/// *and* its no-op cases; both shells call it through the FFI (`de1_ffi` /
+/// `de1_wasm`) so nothing drifts. It is deliberately unaware of bag size — that
+/// is a "is this bag tracked?" display concern, and a positive `remaining`
+/// already means a tracked, non-empty bag. Detecting the empty transition
+/// (`Some(0.0)`) and the unrated-bag prompt stay the shell's job (UI).
+#[must_use]
+pub fn debit_remaining(remaining: f32, dose_g: f32) -> Option<f32> {
+    if !remaining.is_finite() || remaining <= 0.0 || !dose_g.is_finite() || dose_g <= 0.0 {
+        return None;
+    }
+    Some((remaining - dose_g).max(0.0))
+}
+
 impl Bean {
     /// Build a brand-new bag with a freshly minted id and `name`. Every
     /// other field starts at its default (empty / `None` / `false` / `0`).
@@ -1175,5 +1195,26 @@ mod tests {
             "\"single\""
         );
         assert_eq!(serde_json::to_string(&BeanMix::Blend).unwrap(), "\"blend\"");
+    }
+
+    #[test]
+    fn debit_remaining_burns_down_and_floors_at_zero() {
+        // Normal debit.
+        assert_eq!(debit_remaining(200.0, 18.0), Some(182.0));
+        // Exact empty → Some(0) (the run-out case).
+        assert_eq!(debit_remaining(18.0, 18.0), Some(0.0));
+        // Overshoot floors at 0, never negative.
+        assert_eq!(debit_remaining(10.0, 18.0), Some(0.0));
+    }
+
+    #[test]
+    fn debit_remaining_is_none_when_nothing_to_debit() {
+        // Already empty → None: the caller must not re-persist / touch updated_at.
+        assert_eq!(debit_remaining(0.0, 18.0), None);
+        // Non-positive / non-finite dose → None.
+        assert_eq!(debit_remaining(200.0, 0.0), None);
+        assert_eq!(debit_remaining(200.0, f32::NAN), None);
+        // Non-finite remaining → None.
+        assert_eq!(debit_remaining(f32::NAN, 18.0), None);
     }
 }

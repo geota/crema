@@ -19,6 +19,7 @@
  */
 
 import { readJson, writeJson } from '$lib/utils/storage';
+import { debit_remaining } from '$lib/wasm/de1_wasm';
 import {
 	type Bean,
 	type Roaster,
@@ -276,16 +277,27 @@ export class BeanLibraryStore {
 	}
 
 	/**
-	 * Auto-debit `doseG` from the active bean's `remaining` when a shot
-	 * completes. Floors at `0` so the readout never goes negative. No-op
-	 * when there is no active bean or the bag size is unset.
+	 * Auto-debit `doseG` from a specific bean's `remaining` when a shot
+	 * completes, via the shared core rule (`de1_domain::debit_remaining` over
+	 * the wasm bridge): floors at 0 so the readout never goes negative, and
+	 * no-ops (no write, no `updatedAt` touch) when the bag is already empty.
+	 * Debits the shot's *own* bean (not whatever is active now), so switching
+	 * the active bag after pulling can't bill the wrong bag.
+	 *
+	 * Returns `true` when this shot just **emptied** the bag (remaining went
+	 * from > 0 to exactly 0) — the caller's cue to prompt switch / archive /
+	 * rate.
 	 */
-	debitFromActive(doseG: number): void {
-		const bean = this.activeBean;
-		if (!bean || !(doseG > 0)) return;
-		if (bean.bagSize <= 0) return; // no bag size set → no burn-down to track
-		const remaining = Math.max(0, bean.remaining - doseG);
-		this.updateBean(bean.id, { remaining: remaining });
+	debitBean(beanId: string, doseG: number): boolean {
+		const bean = this.envelope.beans.find((b) => b.id === beanId);
+		if (!bean) return false;
+		// The core decides whether there is anything to debit (returns `undefined`
+		// when the bag is already empty or the dose is bad), so we persist — and
+		// touch `updatedAt` — ONLY on a real debit.
+		const next = debit_remaining(bean.remaining, doseG);
+		if (next === undefined) return false;
+		this.updateBean(bean.id, { remaining: next });
+		return next === 0;
 	}
 
 	// ── Roaster CRUD ─────────────────────────────────────────────────

@@ -20,6 +20,7 @@ import { Effect } from 'effect';
 import type { CaptureEntry } from '$lib/capture';
 import { getCaptureStore } from '$lib/capture';
 import { getBeanStore } from '$lib/bean';
+import { promptBagEmpty } from '$lib/bean/bag-empty-prompt';
 import { getProfileStore } from '$lib/profiles';
 import { getActiveShotStore, type ActiveShotData } from '$lib/state/active-shot.svelte';
 import { appendSyncLog, directionPushes, readSyncConfig } from '$lib/visualizer';
@@ -173,7 +174,8 @@ function runLiveOnlySideEffects(
 	fireWebhook: (eventType: string, payload: object) => void
 ): void {
 	if (activeShot?.bean?.beanId && activeShot.dose) {
-		getBeanStore().debitFromActive(activeShot.dose);
+		const emptied = getBeanStore().debitBean(activeShot.bean.beanId, activeShot.dose);
+		if (emptied) void promptBagEmpty(activeShot.bean.beanId);
 	}
 	const finalWeight = event.content.final_weight ?? null;
 	const dose = activeShot?.dose ?? null;

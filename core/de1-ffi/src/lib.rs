@@ -364,6 +364,16 @@ pub fn brew_ratio(dose: f32, yield_out: f32) -> Option<f32> {
     de1_domain::brew_ratio(dose, yield_out)
 }
 
+/// The bag's remaining grams after a pulled shot debits `dose_g`, floored at 0
+/// — `de1_domain::debit_remaining` so web + Android share one burn-down +
+/// run-out rule. `None` means nothing to debit (already empty / bad dose): the
+/// caller must not persist or touch `updated_at`. The shell owns the empty-bag
+/// + rating prompts.
+#[uniffi::export]
+pub fn debit_remaining(remaining: f32, dose_g: f32) -> Option<f32> {
+    de1_domain::debit_remaining(remaining, dose_g)
+}
+
 /// Install a process-wide Rust panic hook that appends each panic — message,
 /// `file:line:col`, thread, and a backtrace — to `log_path`.
 ///
