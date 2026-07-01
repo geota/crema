@@ -396,10 +396,13 @@ class VisualizerSync(
      * Stops at the cursor, page exhaustion, or the 200-page cap. One failed
      * detail fetch skips that row (auth failures abort — no point continuing).
      */
-    private suspend fun pullAllShotsSince(sinceMs: Long): Pair<List<JsonObject>, Map<String, String>> {
+    private suspend fun pullAllShotsSince(
+        sinceMs: Long,
+    ): Triple<List<JsonObject>, Map<String, String>, Map<String, JsonObject>> {
         val cursorSec = sinceMs / 1000
         val wires = mutableListOf<JsonObject>()
         val samplesById = mutableMapOf<String, String>()
+        val profilesById = mutableMapOf<String, JsonObject>()
         var page = 1
         var totalPages = 1
         var reachedOlder = false
@@ -438,10 +441,18 @@ class VisualizerSync(
                 wires += wire
                 runCatching { coffee.crema.core.samplesFromVisualizerDetail(detailStr) }
                     .getOrNull()?.let { samplesById[summary.id] = it }
+                // Pull the recipe too (the detail carries no step list) so the shot
+                // is self-contained (#12); a profile-less stub / error → name-only.
+                runCatching {
+                    val v2 = withFreshToken {
+                        client.request("GET", "/shots/${summary.id}/profile?format=json", it)
+                    } ?: return@runCatching null
+                    json.parseToJsonElement(coffee.crema.core.parseV2Profile(v2.toString())).jsonObject
+                }.getOrNull()?.let { profilesById[summary.id] = it }
             }
             page++
         }
-        return wires to samplesById
+        return Triple(wires, samplesById, profilesById)
     }
 
     /**
@@ -449,7 +460,7 @@ class VisualizerSync(
      * (`reconcile_shots` over the FFI — the identical algorithm the web runs)
      * and apply the actions through the VM callbacks. Returns pulled-count.
      */
-    private suspend fun reconcileAndApply(localShots: List<StoredShot>, wires: List<JsonObject>, samplesById: Map<String, String>): Int {
+    private suspend fun reconcileAndApply(localShots: List<StoredShot>, wires: List<JsonObject>, samplesById: Map<String, String>, profilesById: Map<String, JsonObject>): Int {
         if (wires.isEmpty()) return 0
         val payload = buildJsonObject {
             put(
@@ -487,7 +498,10 @@ class VisualizerSync(
                     val remote = action["remote"] as? JsonObject ?: continue
                     val vid = (remote["id"] as? JsonPrimitive)?.contentOrNull
                     storedShotFromWire(remote, vid?.let { samplesById[it] }, json)?.let { stub ->
-                        stubs += stub
+                        // Attach the recipe fetched at pull time (#12) so the shot is
+                        // self-contained; absent for profile-less remotes.
+                        val withProfile = vid?.let { profilesById[it] }?.let { stub.copy(profile = it) } ?: stub
+                        stubs += withProfile
                         pulled++
                         logSync("pull", stub.id, stub.profileName ?: "Shot")
                     }
@@ -537,8 +551,8 @@ class VisualizerSync(
             if (directionPulls(direction)) {
                 runCatching {
                     val since = persisted.shotPullCursor ?: 0L
-                    val (wires, samples) = pullAllShotsSince(since)
-                    pulled = reconcileAndApply(shots, wires, samples)
+                    val (wires, samples, profiles) = pullAllShotsSince(since)
+                    pulled = reconcileAndApply(shots, wires, samples, profiles)
                     persist { it.copy(shotPullCursor = System.currentTimeMillis()) }
                 }.onFailure { e ->
                     failed = true

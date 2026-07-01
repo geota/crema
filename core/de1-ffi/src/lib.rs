@@ -928,6 +928,21 @@ pub fn wire_shot_from_detail(payload_json: String) -> Result<String, CremaError>
     de1_domain::wire_shot_from_detail_json(&payload_json).map_err(crema_err)
 }
 
+/// Parse a community-v2 `.json` profile into the wire `Profile` JSON — the
+/// free-function form of the bridge's `import_v2_json_profile`, callable from the
+/// sync layer so a shot pulled from Visualizer carries its recipe (#12). Mirrors
+/// the wasm `parseV2Profile`.
+///
+/// # Errors
+///
+/// [`CremaError`] when `content` is not a valid v2 profile.
+#[uniffi::export]
+pub fn parse_v2_profile(content: String) -> Result<String, CremaError> {
+    de1_domain::import_v2_json(&content)
+        .map_err(crema_err)
+        .and_then(|p| serde_json::to_string(&p).map_err(crema_err))
+}
+
 /// Reconstruct per-sample telemetry (`TimedSample[]` JSON) from a Visualizer
 /// `ShotDetail` JSON. Mirrors the wasm `samplesFromVisualizerDetail`.
 ///

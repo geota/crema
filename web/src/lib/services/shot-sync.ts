@@ -65,7 +65,8 @@ import {
 import { appendSyncLog, readSyncConfig } from '$lib/visualizer/sync-config';
 import {
 	samplesFromVisualizerDetail as wasmSamplesFromVisualizerDetail,
-	wireShotFromDetail as wasmWireShotFromDetail
+	wireShotFromDetail as wasmWireShotFromDetail,
+	parseV2Profile as wasmParseV2Profile
 } from '$lib/wasm/de1_wasm';
 import { enqueueEntry as enqueueSyncOp } from './queue-store.ts';
 
@@ -324,6 +325,9 @@ export interface PullResult {
 	shots: WireShot[];
 	/** Per-shot telemetry keyed by Visualizer id — applied on the `add` step. */
 	samplesById: Map<string, TimedSample[]>;
+	/** Per-shot recipe (core `Profile` JSON) keyed by Visualizer id — fetched at
+	 *  pull time so a pulled shot carries its recipe (#12). */
+	profilesById: Map<string, unknown>;
 	truncated: boolean;
 }
 
@@ -364,7 +368,8 @@ export class ShotSync extends Context.Tag('crema/ShotSync')<
 		readonly applyShotReconciliation: (
 			history: HistoryStore,
 			remote: WireShot[],
-			samplesById?: ReadonlyMap<string, TimedSample[]>
+			samplesById?: ReadonlyMap<string, TimedSample[]>,
+			profilesById?: ReadonlyMap<string, unknown>
 		) => Effect.Effect<void>;
 		readonly pullAndReconcileShots: (
 			history: HistoryStore,
@@ -528,6 +533,24 @@ export const ShotSyncLive = Layer.effect(
 		});
 
 		/**
+		 * Fetch a shot's recipe from `/shots/{id}/profile` (the shot detail has no
+		 * step list) and convert it to the core `Profile` JSON. Used at pull time so
+		 * a pulled shot is self-contained (#12). Throws on a profile-less stub (the
+		 * v2 parser rejects an empty step list) — the caller skips it.
+		 */
+		const fetchShotProfile = Effect.fn('ShotSync.fetchShotProfile')(function* (id: string) {
+			yield* requireConnected;
+			const v2 = yield* call(`/shots/${id}/profile?format=json`);
+			// `parseV2Profile` throws on a profile-less stub / invalid v2; swallow it
+			// (the shot stays name-only) so a sync defect can't escape the pull walk.
+			try {
+				return JSON.parse(wasmParseV2Profile(JSON.stringify(v2))) as unknown;
+			} catch {
+				return null;
+			}
+		});
+
+		/**
 		 * Pull every remote shot updated since `sinceMs` (Crema-side unix-ms
 		 * cursor). Walks pages of `/shots?sort=updated_at` until either the server
 		 * runs out OR a summary's `updated_at` is older than the cursor. **Safety
@@ -544,6 +567,7 @@ export const ShotSyncLive = Layer.effect(
 			const cursorSec = Math.floor(sinceMs / 1000);
 			const wireShots: WireShot[] = [];
 			const samplesById = new Map<string, TimedSample[]>();
+			const profilesById = new Map<string, unknown>();
 
 			const initial: PullState = { page: 1, totalPages: 1, reachedOlder: false, keepGoing: true };
 			const finalState = yield* Effect.iterate(initial, {
@@ -574,6 +598,16 @@ export const ShotSyncLive = Layer.effect(
 								const detail = detailOpt.value;
 								wireShots.push(wireShotFromDetail(summary, detail));
 								samplesById.set(summary.id, samplesFromVisualizerDetail(detail));
+								// Pull the recipe too so the shot is self-contained (#12); a
+								// profile-less stub / fetch error just leaves it name-only.
+								const profileOpt = yield* fetchShotProfile(summary.id).pipe(
+									Effect.map(Option.fromNullable),
+									Effect.catchIf(
+										(e) => !isAuthError(e),
+										() => Effect.succeedNone
+									)
+								);
+								if (Option.isSome(profileOpt)) profilesById.set(summary.id, profileOpt.value);
 							}
 						}
 						const hasMore = !reachedOlder && s.page < totalPages && summaries.length > 0;
@@ -589,7 +623,7 @@ export const ShotSyncLive = Layer.effect(
 
 			// `keepGoing` is still true only when the loop exited because the
 			// `maxPages` cap was hit — i.e. more pages remained.
-			return { shots: wireShots, samplesById, truncated: finalState.keepGoing };
+			return { shots: wireShots, samplesById, profilesById, truncated: finalState.keepGoing };
 		});
 
 		/**
@@ -601,7 +635,8 @@ export const ShotSyncLive = Layer.effect(
 		const applyShotReconciliation = (
 			history: HistoryStore,
 			remote: WireShot[],
-			samplesById?: ReadonlyMap<string, TimedSample[]>
+			samplesById?: ReadonlyMap<string, TimedSample[]>,
+			profilesById?: ReadonlyMap<string, unknown>
 		): Effect.Effect<void> =>
 			Effect.sync(() => {
 				const local = history.all;
@@ -609,7 +644,12 @@ export const ShotSyncLive = Layer.effect(
 				for (const action of actions) {
 					if (action.kind === 'add') {
 						const stored = storedShotFromWire(action.remote, samplesById?.get(action.remote.id));
-						if (stored) history.insertPulled(stored);
+						if (stored) {
+							// Attach the recipe fetched at pull time so the shot is
+							// self-contained (#12); absent for profile-less remotes.
+							const profile = profilesById?.get(action.remote.id);
+							history.insertPulled(profile != null ? { ...stored, profile } : stored);
+						}
 						appendSyncLog({
 							direction: 'pull',
 							entity: 'shot',
@@ -651,8 +691,12 @@ export const ShotSyncLive = Layer.effect(
 			sinceMs: number,
 			opts: PullOptions = {}
 		) {
-			const { shots, samplesById, truncated } = yield* pullAllShotsSince(sinceMs, opts);
-			if (shots.length > 0) yield* applyShotReconciliation(history, shots, samplesById);
+			const { shots, samplesById, profilesById, truncated } = yield* pullAllShotsSince(
+				sinceMs,
+				opts
+			);
+			if (shots.length > 0)
+				yield* applyShotReconciliation(history, shots, samplesById, profilesById);
 			return { pulled: shots.length, truncated };
 		});
 

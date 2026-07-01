@@ -411,6 +411,21 @@ pub fn crema_profile_from_wire(wire_json: &str) -> Result<String, String> {
     de1_domain::crema_profile_from_wire_json(wire_json)
 }
 
+/// Parse a community-v2 `.json` profile into the wire `Profile` JSON — the
+/// free-function form of the bridge's `import_v2_json_profile`, callable from
+/// the sync layer (which holds no bridge instance) so a shot pulled from
+/// Visualizer can have its recipe attached at pull time (#12).
+///
+/// # Errors
+///
+/// Returns the error string when `content` is not a valid v2 profile.
+#[wasm_bindgen(js_name = parseV2Profile)]
+pub fn parse_v2_profile(content: &str) -> Result<String, String> {
+    de1_domain::import_v2_json(content)
+        .map_err(|e| e.to_string())
+        .and_then(|p| serde_json::to_string(&p).map_err(|e| e.to_string()))
+}
+
 /// Build a fresh, empty custom `CremaProfile` (JSON) seeded from the user's
 /// brew defaults (`{doseG, ratio, brewTempC, preinfusionS}` JSON) — replacing
 /// the web's former TypeScript `blankProfile`. See
