@@ -449,6 +449,14 @@ private fun BeanCard(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+            } else if ((bean.remaining ?: 0f) > 0f) {
+                // Tolerant of a missing bag size (imports): show the remaining
+                // number alone — no burn bar, since there's no full/empty range.
+                Text(
+                    "${(bean.remaining ?: 0f).toInt()} g left",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 CremaButton(

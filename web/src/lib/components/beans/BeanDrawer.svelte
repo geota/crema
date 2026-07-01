@@ -328,7 +328,7 @@
 			{#if openBag}
 				<div class="bn-group-body">
 					<div class="bn-row"><div class="bn-row-label">Bag size</div><div class="bn-row-val">{bean.bagSize > 0 ? `${bean.bagSize.toFixed(0)}g` : '—'}</div></div>
-					<div class="bn-row"><div class="bn-row-label">Remaining</div><div class="bn-row-val">{bean.bagSize > 0 ? `${bean.remaining.toFixed(0)}g` : '—'}</div></div>
+					<div class="bn-row"><div class="bn-row-label">Remaining</div><div class="bn-row-val">{bean.bagSize > 0 || bean.remaining > 0 ? `${bean.remaining.toFixed(0)}g` : '—'}</div></div>
 					<div class="bn-row"><div class="bn-row-label">Grinder</div><div class="bn-row-val">{bean.grinder || '—'}</div></div>
 					<div class="bn-row"><div class="bn-row-label">Setting</div><div class="bn-row-val">{bean.grinderSetting || '—'}</div></div>
 				</div>

@@ -106,9 +106,10 @@
 	const grinder = $derived(display?.grinder.trim() || defaultGrinder);
 	/** Burn-down: "2 shots left" warning when bag is near empty. */
 	const reorderHint = $derived.by<string | null>(() => {
-		const bagSize = display?.bagSize ?? 0;
 		const remaining = display?.remaining ?? 0;
-		if (bagSize <= 0 || remaining <= 0) return null;
+		// Tolerant of a missing bag size (e.g. an import): a positive remaining is
+		// enough to warn — bag size only drives the burn bar, not this hint.
+		if (remaining <= 0) return null;
 		// Threshold: 2 doses' worth (the brew-page default dose isn't reachable
 		// here without the param state, so use 18g as the proxy — same default
 		// the history ratio uses).

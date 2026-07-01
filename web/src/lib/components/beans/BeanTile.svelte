@@ -217,6 +217,11 @@
 					<span class="bn-tile-burn-total"
 						>/ {bean.bagSize.toFixed(0)}<em>g</em></span
 					>
+				{:else if bean.remaining > 0}
+					<!-- Tolerant of a missing bag size (imports): show remaining
+					     alone, no bar/total (there's no full range to draw). -->
+					<span class="bn-tile-burn-rem">{bean.remaining.toFixed(0)}<em>g</em></span>
+					<span class="bn-tile-burn-total">left</span>
 				{:else}
 					<span class="bn-tile-burn-total">No bag size</span>
 				{/if}
