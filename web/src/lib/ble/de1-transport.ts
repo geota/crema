@@ -91,6 +91,15 @@ export interface De1Transport {
 	connectGatt(): Promise<void>;
 
 	/**
+	 * The GATT service UUIDs discovered on the connected device, lowercased.
+	 * Handed to `core.connectScale` so a distinctive service can identify the
+	 * scale when the advertised name doesn't (Acaia generation, a rebrand, or
+	 * mixed-case the name filter missed). Optional — a transport that can't
+	 * enumerate services omits it and identification falls back to the name.
+	 */
+	discoveredServiceUuids?(): Promise<readonly string[]>;
+
+	/**
 	 * Subscribe to notifications on `(serviceUuid, characteristicUuid)`.
 	 * Multiple calls for the same pair are idempotent. USB transports
 	 * map the characteristic UUID's low nibble to the firmware's

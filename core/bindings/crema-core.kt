@@ -1135,7 +1135,15 @@ data class ScaleUuids (
 	val weight_notify: String,
 	/// Characteristic commands are written to — equal to `weight_notify` for
 	/// scales that use a single characteristic for both.
-	val command_write: String
+	val command_write: String,
+	/// Whether `command_write` ALSO delivers notifications, so the shell should
+	/// subscribe to it (beyond `weight_notify`). True only for a scale whose
+	/// command characteristic pushes data back — today just the Bookoo (`ff12`,
+	/// its serial / settings frames). False for a write-only command
+	/// characteristic: enabling notifications on one (e.g. the Decent's `36f5`)
+	/// fails at the GATT layer and crashes the connect, so the shell must skip
+	/// it. Capability-driven — the core, which owns the protocol, decides.
+	val command_notifies: Boolean
 )
 
 /// A snapshot of the active bean at the moment a shot was pulled.

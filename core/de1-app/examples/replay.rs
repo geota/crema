@@ -144,7 +144,7 @@ fn replay(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 // `connect_scale` call — without it the core has no codec and
                 // silently drops every weight packet.
                 if source == Source::ScaleWeight && !scale_connected {
-                    core.connect_scale("BOOKOO_SC");
+                    core.connect_scale("BOOKOO_SC", &[]);
                     scale_connected = true;
                 }
                 // `Event::ScaleReading` now carries the Bookoo's native flow

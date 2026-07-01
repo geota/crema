@@ -201,7 +201,8 @@ export function replayCaptureProgram(d: ReplayCaptureDeps): Effect.Effect<void> 
 		// Non-fatal: a failure just leaves the weight series empty.
 		const scaleName = scaleNameToConnect(d.parsed);
 		if (scaleName) {
-			yield* Effect.tryPromise(() => d.core.connectScale(scaleName)).pipe(Effect.ignore);
+			// Replay has no live GATT services — identify by name only.
+			yield* Effect.tryPromise(() => d.core.connectScale(scaleName, [])).pipe(Effect.ignore);
 		}
 
 		// Replay starts from a clean session — clear the readout + fingerprint

@@ -294,8 +294,11 @@ class ScaleBleManager(
 
         // Identify the scale with the core so it selects the right codec. An
         // unrecognised scale can't be decoded — bail rather than subscribe to a
-        // guessed characteristic.
-        val label = runCatching { bridge.connectScale(advertisedName) }.getOrNull()
+        // guessed characteristic. The discovered GATT services help when the
+        // advertised name is ambiguous (Acaia generation) or mixed-case — a
+        // distinctive service names the codec; empty falls back to the name.
+        val services = runCatching { transport.discoveredServices(device) }.getOrDefault(emptyList())
+        val label = runCatching { bridge.connectScale(advertisedName, services) }.getOrNull()
             ?: error("Core did not recognise scale '$advertisedName'")
         onStatus("Core recognised scale: $label")
 
@@ -324,19 +327,21 @@ class ScaleBleManager(
         _state.value = State.SUBSCRIBING
         onStatus("Subscribing to scale weight…")
         // Observe the weight-notify characteristic, plus the command
-        // characteristic when it's distinct (Bookoo splits them ff11 / ff12). The
-        // command channel also NOTIFYs the scale's serial / settings responses,
-        // fed to the core under SCALE_COMMAND — see handleCommandNotification. The
-        // streams merge into one collected flow so per-device notification
-        // ordering is preserved (see BleTransport.observe's contract).
+        // characteristic ONLY when the core says it also notifies — the Bookoo's
+        // ff12 pushes serial / settings responses (→ SCALE_COMMAND, see
+        // handleCommandNotification). For a WRITE-ONLY command char (e.g. the
+        // Decent's 36f5) enabling notifications fails at the GATT layer and
+        // crashes the connect, so subscribe to weight only there; writes still go
+        // to commandUuid. The streams merge into one collected flow so per-device
+        // notification ordering is preserved (see BleTransport.observe's contract).
         observeJob?.cancel() // a reconnect re-subscribes on the same handle
-        val notifications = if (command == weight) {
-            transport.observe(device, service, weight)
-        } else {
+        val notifications = if (coreUuids.command_notifies && command != weight) {
             merge(
                 transport.observe(device, service, weight),
                 transport.observe(device, service, command),
             )
+        } else {
+            transport.observe(device, service, weight)
         }
         observeJob = notifications.onEach { handleNotification(it) }.launchIn(scope)
     }

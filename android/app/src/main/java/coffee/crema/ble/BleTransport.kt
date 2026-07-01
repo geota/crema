@@ -128,6 +128,16 @@ interface BleTransport {
     ): Flow<Notification>
 
     /**
+     * The GATT service UUIDs discovered on the connected [device], lowercased —
+     * or an empty list if none / not applicable. Passed to the core's
+     * `connectScale` so a distinctive service can identify the scale when the
+     * advertised name doesn't (Acaia generation, a rebrand, or mixed-case the
+     * name filter missed). The default is empty: a transport that can't
+     * enumerate services (e.g. replay) falls back to name-only identification.
+     */
+    fun discoveredServices(device: DeviceHandle): List<String> = emptyList()
+
+    /**
      * Write [data] to the [characteristic] of [service] on [device]. Suspends
      * until the write completes; throws on failure. Used for scale tare /
      * timer commands.

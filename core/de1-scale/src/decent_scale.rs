@@ -175,14 +175,16 @@ impl DecentScaleFirmwareVersion {
 /// for both the live weight stream and replies to commands the host has
 /// written; weight packets are handled by [`parse_weight`], while a `0x0A`
 /// (LCD / heartbeat) reply carries battery and firmware-version fields and
-/// is decoded here. The legacy app reads `data5` as the battery byte and
-/// `data6` as the firmware-version byte
-/// (`de1plus/bluetooth.tcl:2738-2749`).
+/// is decoded here. The references read the battery from byte index 4 and the
+/// firmware version from byte index 5 — de1app calls these `data5` / `data6`
+/// (`de1plus/bluetooth.tcl:2738-2749`), but its 1-based-ish field spec
+/// (`binary.tcl:299-309`) makes `data5` == byte index 4; reaprime reads battery
+/// at `data[4]` (`scale.dart:252`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandResponse {
     /// A `0x0A` LCD / heartbeat reply.
     ///
-    /// The packet is 7 bytes; bytes `[5]` and `[6]` are the battery
+    /// The packet is 7 bytes; bytes `[4]` and `[5]` are the battery
     /// percentage and the firmware-version sentinel byte respectively.
     /// The same reply arrives both to an LCD-enable write and to a
     /// heartbeat write, so the host learns the firmware version shortly
@@ -226,9 +228,14 @@ pub fn parse_command_response(data: &[u8]) -> Option<CommandResponse> {
     if data[0] != 0x03 || data[1] != 0x0A {
         return None;
     }
+    // Battery is byte index 4, firmware-version byte index 5. de1app's field
+    // spec (binary.tcl:299-309) names them `data5` / `data6`, but in its
+    // 1-based-ish scheme `data5` IS byte index 4 — reaprime confirms, reading
+    // battery at `data[4]` (scale.dart:252). The old data[5]/data[6] read the
+    // firmware byte as the battery and the XOR checksum as the firmware.
     Some(CommandResponse::LcdAck {
-        battery_raw: data[5],
-        firmware_version: DecentScaleFirmwareVersion::from_raw_byte(data[6]),
+        battery_raw: data[4],
+        firmware_version: DecentScaleFirmwareVersion::from_raw_byte(data[5]),
     })
 }
 
@@ -444,11 +451,10 @@ mod tests {
 
     #[test]
     fn parse_command_response_decodes_a_0x0a_lcd_ack() {
-        // A 7-byte 0x0A reply with battery = 78%, firmware sentinel = 0x12
-        // (v1.2). Bytes [2-4] are the raw command payload echoed back;
-        // bytes [5-6] carry the battery and firmware bytes per the legacy
-        // app's `data5` / `data6` mapping.
-        let frame = [0x03, 0x0A, 0x01, 0x01, 0x00, 0x4E, 0x12, 0x00];
+        // A 7-byte 0x0A reply with battery = 78% and firmware sentinel = 0x12
+        // (v1.2). Byte [4] is the battery, byte [5] the firmware version (the
+        // references' `data5` / `data6`), byte [6] the XOR checksum.
+        let frame = [0x03, 0x0A, 0x01, 0x01, 0x4E, 0x12, 0x6C];
         let response = parse_command_response(&frame).expect("0x0A reply");
         match response {
             CommandResponse::LcdAck {

@@ -339,6 +339,24 @@ export class BleDevice implements De1Transport {
 	}
 
 	/**
+	 * The connected device's primary GATT service UUIDs (lowercased) — passed to
+	 * `core.connectScale` so a distinctive service can identify the scale when
+	 * the advertised name doesn't. Best-effort: some platforms reject
+	 * `getPrimaryServices` if nothing is cached/accessible, in which case
+	 * identification falls back to the name.
+	 */
+	async discoveredServiceUuids(): Promise<readonly string[]> {
+		const gatt = this.device.gatt;
+		if (!gatt?.connected) return [];
+		try {
+			const services = await gatt.getPrimaryServices();
+			return services.map((s) => s.uuid.toLowerCase());
+		} catch {
+			return [];
+		}
+	}
+
+	/**
 	 * The raw queued `gatt.connect()` — used by both {@link connectGatt} and
 	 * the reconnect loop, so it does not touch {@link connectionState} itself.
 	 */

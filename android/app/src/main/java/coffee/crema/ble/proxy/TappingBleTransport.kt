@@ -85,6 +85,9 @@ class TappingBleTransport(
         characteristic: UUID,
     ): ByteArray = delegate.read(device, service, characteristic)
 
+    override fun discoveredServices(device: BleTransport.DeviceHandle): List<String> =
+        delegate.discoveredServices(device)
+
     /** Serve a hub read by address: resolve the handle and read through the
      *  delegate. This backs [RelayHub]'s `readSource`. */
     suspend fun readByAddress(address: String, service: UUID, char: UUID): ByteArray {

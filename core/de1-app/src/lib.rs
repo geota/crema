@@ -581,8 +581,17 @@ impl CremaCore {
     /// ([`Scale::guess_from_first_weight_packet`]), which a replay can do
     /// just as well. Round-trip preserves the canonical scale type, not a
     /// user-customised BLE name.
-    pub fn connect_scale(&mut self, advertised_name: &str) -> Option<String> {
-        self.scale = Scale::identify(advertised_name);
+    /// `discovered_services` are the GATT service UUIDs the shell found on the
+    /// connected device (empty is fine — falls back to a name-only match). A
+    /// distinctive service identifies the scale even when the advertised name
+    /// doesn't (Acaia generation, a rebrand, or mixed-case). See
+    /// [`Scale::identify`].
+    pub fn connect_scale(
+        &mut self,
+        advertised_name: &str,
+        discovered_services: &[String],
+    ) -> Option<String> {
+        self.scale = Scale::identify(advertised_name, discovered_services);
         // A newly connected scale has not yet been asked for its serial /
         // settings; re-arm the one-shot connect-time queries.
         self.scale_config_queried = false;
@@ -1855,16 +1864,20 @@ impl CremaCore {
         self.scale_config_queried = true;
     }
 
-    /// Build a [`Command`] that queries the connected scale's settings.
-    /// Returns an empty [`CoreOutput`] when no scale is connected or the
-    /// scale has no settings query. The scale answers on the command
-    /// characteristic (decoded by `handle_scale_command`).
+    /// The post-subscribe connect handshake the shells run once, right after
+    /// subscribing: the scale's connect-init writes (e.g. the Difluid's
+    /// [`Scale::connect_writes`] `ENABLE_NOTIFICATIONS` — it streams no weight
+    /// until enabled) followed by its settings query. Empty for a weight-only
+    /// scale that needs neither. (Kept named `query_scale_settings` for FFI /
+    /// shell compatibility — it has always been the post-connect hook; the
+    /// connect-init writes ride the same call.)
     pub fn query_scale_settings(&self) -> CoreOutput {
         let mut out = CoreOutput::default();
-        if let Some(scale) = &self.scale
-            && let Some(bytes) = scale.query_settings_command()
-        {
-            Self::push_scale_write(&mut out, bytes);
+        if let Some(scale) = &self.scale {
+            Self::push_scale_writes(&mut out, scale.connect_writes());
+            if let Some(bytes) = scale.query_settings_command() {
+                Self::push_scale_write(&mut out, bytes);
+            }
         }
         out
     }
@@ -3120,7 +3133,7 @@ mod tests {
     #[test]
     fn on_tick_does_nothing_before_the_scale_first_reports() {
         let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC");
+        core.connect_scale("BOOKOO_SC", &[]);
         // No reading yet — the watchdog has nothing to time against.
         let out = core.on_tick(1_000_000);
         assert!(out.events.is_empty());
@@ -3129,7 +3142,7 @@ mod tests {
     #[test]
     fn on_tick_emits_scale_stale_once_per_stale_episode() {
         let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC");
+        core.connect_scale("BOOKOO_SC", &[]);
         core.on_notification(Source::ScaleWeight, &bookoo_packet(2_000), 1_000);
         // Within the timeout: no warning yet.
         assert!(core.on_tick(1_500).events.is_empty());
@@ -3142,7 +3155,7 @@ mod tests {
     #[test]
     fn a_fresh_scale_reading_re_arms_the_watchdog() {
         let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC");
+        core.connect_scale("BOOKOO_SC", &[]);
         core.on_notification(Source::ScaleWeight, &bookoo_packet(2_000), 1_000);
         assert!(core.on_tick(2_500).events.contains(&Event::ScaleStale));
         // A new reading re-arms the watchdog; staleness can be reported again.
@@ -3154,7 +3167,7 @@ mod tests {
     #[test]
     fn disconnect_scale_clears_the_scale_slice_but_not_user_prefs() {
         let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC");
+        core.connect_scale("BOOKOO_SC", &[]);
         core.on_notification(Source::ScaleWeight, &bookoo_packet(2_000), 1_000);
         // The scale slice is populated.
         assert!(core.scale_capabilities().is_some());
@@ -3192,17 +3205,17 @@ mod tests {
         let mut core = CremaCore::new();
         // A matched scale returns its display label.
         assert_eq!(
-            core.connect_scale("BOOKOO_SC 1234"),
+            core.connect_scale("BOOKOO_SC 1234", &[]),
             Some("Bookoo".to_owned())
         );
         // An unrecognised name returns None.
-        assert_eq!(core.connect_scale("Some Random Device"), None);
+        assert_eq!(core.connect_scale("Some Random Device", &[]), None);
     }
 
     #[test]
     fn a_scale_weight_notification_emits_a_reading() {
         let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC");
+        core.connect_scale("BOOKOO_SC", &[]);
         let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(2_000), 1_000);
         assert!(
             out.events
@@ -3222,7 +3235,7 @@ mod tests {
     #[test]
     fn auto_tare_suppresses_the_pre_tare_weight_spike() {
         let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC");
+        core.connect_scale("BOOKOO_SC", &[]);
         // Auto-tare is on by default; entering Espresso starts a shot, which
         // sends the tare and opens the settling gate.
         let out = core.on_notification(Source::De1State, &[4, 5], 1_000);
@@ -3250,7 +3263,7 @@ mod tests {
     #[test]
     fn tare_gate_times_out_so_weight_is_never_lost() {
         let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC");
+        core.connect_scale("BOOKOO_SC", &[]);
         core.on_notification(Source::De1State, &[4, 5], 1_000); // gate opens at t=1000
         // The scale never reaches zero (e.g. the tare failed). Before the
         // fallback timeout the weight is still suppressed...
@@ -3269,7 +3282,7 @@ mod tests {
     #[test]
     fn no_tare_gate_when_auto_tare_is_disabled() {
         let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC");
+        core.connect_scale("BOOKOO_SC", &[]);
         core.set_auto_tare(false);
         // No auto-tare → no gate: weight is recorded as-is from the first
         // reading (the user is expected to tare manually).
@@ -3300,7 +3313,7 @@ mod tests {
     #[test]
     fn a_scale_command_serial_response_emits_a_scale_config_event() {
         let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC");
+        core.connect_scale("BOOKOO_SC", &[]);
         // A real 03 0c serial response: fw 1.4.1, anti-mistouch on.
         let frame = hex("030c008d534e32343030643636613839653701ce");
         let out = core.on_notification(Source::ScaleCommand, &frame, 1_000);
@@ -3316,7 +3329,7 @@ mod tests {
     #[test]
     fn a_scale_command_settings_response_emits_a_scale_config_event() {
         let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC");
+        core.connect_scale("BOOKOO_SC", &[]);
         // A real 03 0e settings response: Auto active, only Auto enabled.
         let frame = hex("030e02040000000000000000000000000000000b");
         let out = core.on_notification(Source::ScaleCommand, &frame, 1_000);
@@ -3340,7 +3353,7 @@ mod tests {
     #[test]
     fn an_unrecognised_scale_command_frame_is_dropped_silently() {
         let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC");
+        core.connect_scale("BOOKOO_SC", &[]);
         // A 03 0b weight-notification frame is not a command response — it is
         // dropped without a DecodeError, as it is not modelled here.
         let frame = hex("030b000000012b0000002b0000640096010000fa");
@@ -3351,7 +3364,7 @@ mod tests {
     #[test]
     fn the_first_weight_notification_issues_the_connect_time_queries() {
         let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC");
+        core.connect_scale("BOOKOO_SC", &[]);
         // The first weight notification stands in for a connect hook: it must
         // emit the 0x0a serial query and the 0x0f settings query, once.
         let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(2_000), 1_000);
@@ -3370,7 +3383,7 @@ mod tests {
     #[test]
     fn the_connect_time_queries_are_issued_only_once() {
         let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC");
+        core.connect_scale("BOOKOO_SC", &[]);
         core.on_notification(Source::ScaleWeight, &bookoo_packet(2_000), 1_000);
         // A second weight notification must not re-issue the connect queries.
         let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(2_100), 2_000);
@@ -3384,10 +3397,10 @@ mod tests {
     #[test]
     fn the_connect_time_queries_are_re_armed_by_a_fresh_connect() {
         let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC");
+        core.connect_scale("BOOKOO_SC", &[]);
         core.on_notification(Source::ScaleWeight, &bookoo_packet(2_000), 1_000);
         // Reconnecting a scale re-arms the one-shot queries.
-        core.connect_scale("BOOKOO_SC");
+        core.connect_scale("BOOKOO_SC", &[]);
         let out = core.on_notification(Source::ScaleWeight, &bookoo_packet(2_100), 2_000);
         assert!(
             out.commands
@@ -3401,7 +3414,7 @@ mod tests {
         let mut core = CremaCore::new();
         // A weight-only scale has no configurable settings — the connect-time
         // queries are capability-gated, so nothing is emitted.
-        core.connect_scale("Decent Scale ABC");
+        core.connect_scale("Decent Scale ABC", &[]);
         let frame = [0x03, 0xCE, 0x07, 0xD0, 0x00, 0x00, 0x00];
         let out = core.on_notification(Source::ScaleWeight, &frame, 1_000);
         assert!(
@@ -3420,7 +3433,7 @@ mod tests {
         let packet = bookoo_packet(2_000);
 
         let mut normal = CremaCore::new();
-        normal.connect_scale("BOOKOO_SC");
+        normal.connect_scale("BOOKOO_SC", &[]);
         let normal_out = normal.on_notification(Source::ScaleWeight, &packet, 1_000);
         assert!(
             !normal_out.commands.is_empty(),
@@ -3431,7 +3444,7 @@ mod tests {
         // emit zero commands — it decodes for its UI but never drives hardware —
         // while producing exactly the same decoded events.
         let mut mirror = CremaCore::new();
-        mirror.connect_scale("BOOKOO_SC");
+        mirror.connect_scale("BOOKOO_SC", &[]);
         mirror.set_read_only(true);
         let mirror_out = mirror.on_notification(Source::ScaleWeight, &packet, 1_000);
         assert!(
@@ -3478,7 +3491,7 @@ mod tests {
     #[test]
     fn enable_scale_lcd_on_decent_emits_the_known_wire_bytes() {
         let mut core = CremaCore::new();
-        core.connect_scale("Decent Scale ABC");
+        core.connect_scale("Decent Scale ABC", &[]);
         let out = core
             .enable_scale_lcd(WeightUnit::Grams)
             .expect("decent scale supports lcd");
@@ -3488,7 +3501,7 @@ mod tests {
     #[test]
     fn enable_scale_lcd_on_decent_in_ounces_emits_the_ounces_packet() {
         let mut core = CremaCore::new();
-        core.connect_scale("Decent Scale ABC");
+        core.connect_scale("Decent Scale ABC", &[]);
         let out = core
             .enable_scale_lcd(WeightUnit::Ounces)
             .expect("decent scale supports lcd");
@@ -3498,7 +3511,7 @@ mod tests {
     #[test]
     fn disable_scale_lcd_on_decent_emits_the_known_wire_bytes() {
         let mut core = CremaCore::new();
-        core.connect_scale("Decent Scale ABC");
+        core.connect_scale("Decent Scale ABC", &[]);
         let out = core.disable_scale_lcd().expect("decent scale supports lcd");
         assert_eq!(the_only_scale_write(&out), decent_scale::LCD_DISABLE);
     }
@@ -3506,7 +3519,7 @@ mod tests {
     #[test]
     fn scale_heartbeat_on_decent_emits_the_known_wire_bytes() {
         let mut core = CremaCore::new();
-        core.connect_scale("Decent Scale ABC");
+        core.connect_scale("Decent Scale ABC", &[]);
         let out = core
             .scale_heartbeat()
             .expect("decent scale needs heartbeat");
@@ -3539,7 +3552,7 @@ mod tests {
         // Bookoo has no settable on-scale LCD — every LCD method must
         // surface `UnsupportedOnHardware` rather than silently no-op.
         let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC");
+        core.connect_scale("BOOKOO_SC", &[]);
         assert!(matches!(
             core.enable_scale_lcd(WeightUnit::Grams).unwrap_err(),
             AppError::UnsupportedOnHardware { .. }
@@ -3557,7 +3570,7 @@ mod tests {
     #[test]
     fn power_off_scale_errors_for_a_scale_without_power_off() {
         let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC");
+        core.connect_scale("BOOKOO_SC", &[]);
         let err = core.power_off_scale().unwrap_err();
         assert!(matches!(err, AppError::UnsupportedOnHardware { .. }));
     }
@@ -3567,7 +3580,7 @@ mod tests {
         // The byte sequence is sent unconditionally on any connected
         // Decent Scale — older firmware versions silently no-op on it.
         let mut core = CremaCore::new();
-        core.connect_scale("Decent Scale ABC");
+        core.connect_scale("Decent Scale ABC", &[]);
         let out = core
             .power_off_scale()
             .expect("decent scale supports power-off");
@@ -3587,7 +3600,7 @@ mod tests {
         // The auto-policy in handle_state reads the cached pref so an Idle
         // entry matches the unit the shell is showing.
         let mut core = CremaCore::new();
-        core.connect_scale("Decent Scale ABC");
+        core.connect_scale("Decent Scale ABC", &[]);
         core.set_weight_unit_pref(WeightUnit::Ounces);
         core.on_notification(Source::De1State, &[MachineState::Sleep as u8, 0], 1_000);
         let out = core.on_notification(Source::De1State, &[MachineState::Idle as u8, 0], 2_000);
@@ -3608,7 +3621,7 @@ mod tests {
     #[test]
     fn entering_idle_auto_enables_the_decent_scale_lcd() {
         let mut core = CremaCore::new();
-        core.connect_scale("Decent Scale ABC");
+        core.connect_scale("Decent Scale ABC", &[]);
         // Transition Sleep -> Idle. The first state notification doesn't
         // emit (no prior state) but the second one — entering Idle from
         // Sleep — must fire the LCD-enable write.
@@ -3631,7 +3644,7 @@ mod tests {
     #[test]
     fn entering_sleep_auto_disables_the_decent_scale_lcd() {
         let mut core = CremaCore::new();
-        core.connect_scale("Decent Scale ABC");
+        core.connect_scale("Decent Scale ABC", &[]);
         // Transition Idle -> Sleep. The second notification — entering
         // Sleep from Idle — must fire the LCD-disable write.
         core.on_notification(Source::De1State, &[MachineState::Idle as u8, 0], 1_000);
@@ -3655,7 +3668,7 @@ mod tests {
         // The auto-policy is Decent-Scale-only; a Bookoo (or no scale)
         // sees no LCD writes on the same state transitions.
         let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC");
+        core.connect_scale("BOOKOO_SC", &[]);
         core.on_notification(Source::De1State, &[MachineState::Sleep as u8, 0], 1_000);
         let out = core.on_notification(Source::De1State, &[MachineState::Idle as u8, 0], 2_000);
         let lcd_writes: Vec<&[u8]> = out
@@ -3694,7 +3707,7 @@ mod tests {
     #[test]
     fn enable_scale_lcd_on_skale_emits_screen_on_and_display_weight() {
         let mut core = CremaCore::new();
-        core.connect_scale("Skale-9");
+        core.connect_scale("Skale-9", &[]);
         let out = core
             .enable_scale_lcd(WeightUnit::Grams)
             .expect("skale supports lcd");
@@ -3714,7 +3727,7 @@ mod tests {
     #[test]
     fn enable_scale_lcd_on_skale_skips_the_unit_write_when_pref_is_ounces() {
         let mut core = CremaCore::new();
-        core.connect_scale("Skale-9");
+        core.connect_scale("Skale-9", &[]);
         let out = core
             .enable_scale_lcd(WeightUnit::Ounces)
             .expect("skale supports lcd");
@@ -3728,7 +3741,7 @@ mod tests {
     #[test]
     fn disable_scale_lcd_on_skale_emits_screen_off() {
         let mut core = CremaCore::new();
-        core.connect_scale("Skale-9");
+        core.connect_scale("Skale-9", &[]);
         let out = core.disable_scale_lcd().expect("skale supports lcd");
         let writes = scale_writes(&out);
         assert_eq!(writes, vec![[skale::CMD_SCREEN_OFF].as_slice()]);
@@ -3737,7 +3750,7 @@ mod tests {
     #[test]
     fn entering_idle_auto_enables_the_skale_lcd() {
         let mut core = CremaCore::new();
-        core.connect_scale("Skale-9");
+        core.connect_scale("Skale-9", &[]);
         core.on_notification(Source::De1State, &[MachineState::Sleep as u8, 0], 1_000);
         let out = core.on_notification(Source::De1State, &[MachineState::Idle as u8, 0], 2_000);
         let writes = scale_writes(&out);
@@ -3748,7 +3761,7 @@ mod tests {
     #[test]
     fn entering_sleep_auto_disables_the_skale_lcd() {
         let mut core = CremaCore::new();
-        core.connect_scale("Skale-9");
+        core.connect_scale("Skale-9", &[]);
         core.on_notification(Source::De1State, &[MachineState::Idle as u8, 0], 1_000);
         let out = core.on_notification(Source::De1State, &[MachineState::Sleep as u8, 0], 2_000);
         let writes = scale_writes(&out);
@@ -3760,7 +3773,7 @@ mod tests {
     #[test]
     fn power_off_scale_on_eureka_emits_the_known_bytes() {
         let mut core = CremaCore::new();
-        core.connect_scale("CFS-9002");
+        core.connect_scale("CFS-9002", &[]);
         let out = core.power_off_scale().expect("eureka supports power-off");
         let writes = scale_writes(&out);
         assert_eq!(writes, vec![eureka_precisa::TURN_OFF.as_slice()]);
@@ -3771,7 +3784,7 @@ mod tests {
         // Solo Barista is codec-identical to Eureka Precisa — the same
         // bytes go out via the capability dispatch.
         let mut core = CremaCore::new();
-        core.connect_scale("LSJ-001");
+        core.connect_scale("LSJ-001", &[]);
         let out = core
             .power_off_scale()
             .expect("solo barista supports power-off");
@@ -3782,7 +3795,7 @@ mod tests {
     #[test]
     fn scale_beep_on_eureka_emits_the_known_bytes() {
         let mut core = CremaCore::new();
-        core.connect_scale("CFS-9002");
+        core.connect_scale("CFS-9002", &[]);
         let out = core.scale_beep().expect("eureka supports beep");
         let writes = scale_writes(&out);
         assert_eq!(writes, vec![eureka_precisa::BEEP.as_slice()]);
@@ -3791,7 +3804,7 @@ mod tests {
     #[test]
     fn set_scale_unit_grams_on_eureka_emits_the_set_unit_bytes() {
         let mut core = CremaCore::new();
-        core.connect_scale("CFS-9002");
+        core.connect_scale("CFS-9002", &[]);
         let out = core
             .set_scale_unit_grams()
             .expect("eureka supports set-unit-grams");
@@ -3802,7 +3815,7 @@ mod tests {
     #[test]
     fn beep_and_set_unit_error_for_a_scale_without_them() {
         let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC");
+        core.connect_scale("BOOKOO_SC", &[]);
         assert!(matches!(
             core.scale_beep().unwrap_err(),
             AppError::UnsupportedOnHardware { .. }
@@ -3822,7 +3835,7 @@ mod tests {
     #[test]
     fn entering_sleep_fires_scale_power_off_when_the_opt_in_is_on() {
         let mut core = CremaCore::new();
-        core.connect_scale("CFS-9002");
+        core.connect_scale("CFS-9002", &[]);
         core.set_auto_off_scale_on_sleep(true);
         core.on_notification(Source::De1State, &[MachineState::Idle as u8, 0], 1_000);
         let out = core.on_notification(Source::De1State, &[MachineState::Sleep as u8, 0], 2_000);
@@ -3833,7 +3846,7 @@ mod tests {
     #[test]
     fn entering_sleep_does_not_fire_scale_power_off_when_the_opt_in_is_off() {
         let mut core = CremaCore::new();
-        core.connect_scale("CFS-9002");
+        core.connect_scale("CFS-9002", &[]);
         core.on_notification(Source::De1State, &[MachineState::Idle as u8, 0], 1_000);
         let out = core.on_notification(Source::De1State, &[MachineState::Sleep as u8, 0], 2_000);
         let writes = scale_writes(&out);
@@ -3845,7 +3858,7 @@ mod tests {
     #[test]
     fn toggle_scale_unit_on_hiroia_emits_the_known_bytes() {
         let mut core = CremaCore::new();
-        core.connect_scale("HIROIA JIMMY-X");
+        core.connect_scale("HIROIA JIMMY-X", &[]);
         let out = core
             .toggle_scale_unit()
             .expect("hiroia supports toggle-unit");
@@ -3856,7 +3869,7 @@ mod tests {
     #[test]
     fn toggle_scale_unit_errors_for_a_scale_without_toggle() {
         let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC");
+        core.connect_scale("BOOKOO_SC", &[]);
         assert!(matches!(
             core.toggle_scale_unit().unwrap_err(),
             AppError::UnsupportedOnHardware { .. }
@@ -3866,7 +3879,7 @@ mod tests {
     #[test]
     fn a_hiroia_non_grams_frame_triggers_an_auto_recovery_toggle() {
         let mut core = CremaCore::new();
-        core.connect_scale("HIROIA JIMMY-X");
+        core.connect_scale("HIROIA JIMMY-X", &[]);
         // Mode byte > 0x08 = non-grams unit; reaprime fires TOGGLE_UNIT.
         let frame = [0x09u8, 0, 0, 0, 0xB4, 0x00, 0x00];
         let out = core.on_notification(Source::ScaleWeight, &frame, 1_000);
@@ -3877,7 +3890,7 @@ mod tests {
     #[test]
     fn a_hiroia_grams_frame_does_not_trigger_an_auto_recovery() {
         let mut core = CremaCore::new();
-        core.connect_scale("HIROIA JIMMY-X");
+        core.connect_scale("HIROIA JIMMY-X", &[]);
         // Mode byte 0x00 = grams; no recovery write.
         let frame = [0x00u8, 0, 0, 0, 0xB4, 0x00, 0x00];
         let out = core.on_notification(Source::ScaleWeight, &frame, 1_000);
@@ -3890,7 +3903,7 @@ mod tests {
     #[test]
     fn set_scale_unit_grams_on_difluid_emits_the_known_bytes() {
         let mut core = CremaCore::new();
-        core.connect_scale("Microbalance-X");
+        core.connect_scale("Microbalance-X", &[]);
         let out = core
             .set_scale_unit_grams()
             .expect("difluid supports set-unit-grams");
@@ -3901,7 +3914,7 @@ mod tests {
     #[test]
     fn a_difluid_non_grams_frame_triggers_an_auto_recovery_set_unit() {
         let mut core = CremaCore::new();
-        core.connect_scale("Microbalance-X");
+        core.connect_scale("Microbalance-X", &[]);
         // 19-byte frame, byte [17] = 0x01 (non-grams unit).
         let mut frame = [0u8; 19];
         frame[17] = 0x01;
@@ -3913,7 +3926,7 @@ mod tests {
     #[test]
     fn a_difluid_grams_frame_does_not_trigger_an_auto_recovery() {
         let mut core = CremaCore::new();
-        core.connect_scale("Microbalance-X");
+        core.connect_scale("Microbalance-X", &[]);
         // 19-byte frame, byte [17] = 0x00 (grams unit).
         let frame = [0u8; 19];
         let out = core.on_notification(Source::ScaleWeight, &frame, 1_000);
@@ -4165,7 +4178,7 @@ mod tests {
     fn tare_scale_emits_a_write_only_when_a_scale_is_connected() {
         let mut core = CremaCore::new();
         assert!(core.tare_scale().commands.is_empty());
-        core.connect_scale("BOOKOO_SC");
+        core.connect_scale("BOOKOO_SC", &[]);
         let out = core.tare_scale();
         assert!(matches!(
             out.commands.first(),
@@ -4182,7 +4195,7 @@ mod tests {
     #[test]
     fn scale_capabilities_reports_a_bookoo_as_first_class() {
         let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC");
+        core.connect_scale("BOOKOO_SC", &[]);
         let caps = core.scale_capabilities().expect("a connected scale");
         assert!(caps.volume.is_some());
         assert!(caps.reports_flow);
@@ -4192,7 +4205,7 @@ mod tests {
     #[test]
     fn scale_capabilities_reports_a_weight_only_scale_as_having_none() {
         let mut core = CremaCore::new();
-        core.connect_scale("Decent Scale ABC");
+        core.connect_scale("Decent Scale ABC", &[]);
         let caps = core.scale_capabilities().expect("a connected scale");
         assert!(caps.volume.is_none());
         assert!(!caps.reports_flow);
@@ -4202,7 +4215,7 @@ mod tests {
     #[test]
     fn set_scale_volume_emits_a_write_for_a_capable_scale() {
         let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC");
+        core.connect_scale("BOOKOO_SC", &[]);
         let out = core.set_scale_volume(3);
         assert!(matches!(
             out.commands.first(),
@@ -4213,7 +4226,7 @@ mod tests {
     #[test]
     fn set_scale_volume_clamps_the_level_to_the_capability_range() {
         let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC");
+        core.connect_scale("BOOKOO_SC", &[]);
         // An out-of-range request clamps to the Bookoo's volume max of 5
         // before the command bytes are built.
         let Some(Command::WriteScale { data: clamped }) =
@@ -4240,14 +4253,14 @@ mod tests {
         let mut core = CremaCore::new();
         // A weight-only scale has no `volume` capability — the command is
         // capability-gated, so nothing is emitted.
-        core.connect_scale("Decent Scale ABC");
+        core.connect_scale("Decent Scale ABC", &[]);
         assert!(core.set_scale_volume(3).commands.is_empty());
     }
 
     #[test]
     fn set_scale_standby_emits_a_write_for_a_capable_scale() {
         let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC");
+        core.connect_scale("BOOKOO_SC", &[]);
         let out = core.set_scale_standby(15);
         assert!(matches!(
             out.commands.first(),
@@ -4258,7 +4271,7 @@ mod tests {
     #[test]
     fn set_scale_standby_clamps_to_the_capability_range() {
         let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC");
+        core.connect_scale("BOOKOO_SC", &[]);
         // An out-of-range request clamps to the Bookoo's 5..=30 minute range.
         let Some(Command::WriteScale { data: clamped }) =
             core.set_scale_standby(99).commands.into_iter().next()
@@ -4276,14 +4289,14 @@ mod tests {
     #[test]
     fn set_scale_standby_emits_nothing_for_a_weight_only_scale() {
         let mut core = CremaCore::new();
-        core.connect_scale("Decent Scale ABC");
+        core.connect_scale("Decent Scale ABC", &[]);
         assert!(core.set_scale_standby(15).commands.is_empty());
     }
 
     #[test]
     fn set_scale_flow_smoothing_emits_a_write_for_a_capable_scale() {
         let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC");
+        core.connect_scale("BOOKOO_SC", &[]);
         assert!(matches!(
             core.set_scale_flow_smoothing(true).commands.first(),
             Some(Command::WriteScale { .. })
@@ -4293,7 +4306,7 @@ mod tests {
     #[test]
     fn set_scale_flow_smoothing_emits_nothing_for_a_weight_only_scale() {
         let mut core = CremaCore::new();
-        core.connect_scale("Decent Scale ABC");
+        core.connect_scale("Decent Scale ABC", &[]);
         assert!(core.set_scale_flow_smoothing(true).commands.is_empty());
         assert!(core.set_scale_flow_smoothing(true).commands.is_empty());
     }
@@ -4301,7 +4314,7 @@ mod tests {
     #[test]
     fn set_scale_anti_mistouch_emits_a_write_for_a_capable_scale() {
         let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC");
+        core.connect_scale("BOOKOO_SC", &[]);
         assert!(matches!(
             core.set_scale_anti_mistouch(false).commands.first(),
             Some(Command::WriteScale { .. })
@@ -4311,14 +4324,14 @@ mod tests {
     #[test]
     fn set_scale_anti_mistouch_emits_nothing_for_a_weight_only_scale() {
         let mut core = CremaCore::new();
-        core.connect_scale("Decent Scale ABC");
+        core.connect_scale("Decent Scale ABC", &[]);
         assert!(core.set_scale_anti_mistouch(true).commands.is_empty());
     }
 
     #[test]
     fn set_scale_mode_emits_three_writes_in_order_for_a_capable_scale() {
         let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC");
+        core.connect_scale("BOOKOO_SC", &[]);
         // Selecting a mode is three writes (target on, then the other two off),
         // followed by the appended 0x0f settings query.
         let out = core.set_scale_mode(1);
@@ -4346,7 +4359,7 @@ mod tests {
     #[test]
     fn set_scale_mode_emits_nothing_for_an_unknown_mode_id() {
         let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC");
+        core.connect_scale("BOOKOO_SC", &[]);
         // 7 is not a listed Bookoo mode — capability-gated, so nothing emitted.
         assert!(core.set_scale_mode(7).commands.is_empty());
     }
@@ -4354,7 +4367,7 @@ mod tests {
     #[test]
     fn set_scale_mode_emits_nothing_for_a_weight_only_scale() {
         let mut core = CremaCore::new();
-        core.connect_scale("Decent Scale ABC");
+        core.connect_scale("Decent Scale ABC", &[]);
         assert!(core.set_scale_mode(0).commands.is_empty());
     }
 
@@ -4367,7 +4380,7 @@ mod tests {
     #[test]
     fn set_scale_auto_stop_emits_a_write_for_a_capable_scale() {
         let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC");
+        core.connect_scale("BOOKOO_SC", &[]);
         assert!(matches!(
             core.set_scale_auto_stop(1).commands.first(),
             Some(Command::WriteScale { .. })
@@ -4377,7 +4390,7 @@ mod tests {
     #[test]
     fn set_scale_auto_stop_maps_each_mode_id_to_its_command() {
         let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC");
+        core.connect_scale("BOOKOO_SC", &[]);
         let Some(Command::WriteScale { data: flow_stop }) =
             core.set_scale_auto_stop(0).commands.into_iter().next()
         else {
@@ -4401,7 +4414,7 @@ mod tests {
     #[test]
     fn set_scale_auto_stop_emits_nothing_for_an_out_of_range_mode_id() {
         let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC");
+        core.connect_scale("BOOKOO_SC", &[]);
         // 2 is not a valid auto-stop mode — rejected gracefully, empty output.
         assert!(core.set_scale_auto_stop(2).commands.is_empty());
     }
@@ -4409,7 +4422,7 @@ mod tests {
     #[test]
     fn set_scale_auto_stop_emits_nothing_for_a_weight_only_scale() {
         let mut core = CremaCore::new();
-        core.connect_scale("Decent Scale ABC");
+        core.connect_scale("Decent Scale ABC", &[]);
         assert!(core.set_scale_auto_stop(0).commands.is_empty());
     }
 
@@ -4430,7 +4443,7 @@ mod tests {
     #[test]
     fn set_scale_volume_appends_a_settings_query_after_the_config_write() {
         let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC");
+        core.connect_scale("BOOKOO_SC", &[]);
         let out = core.set_scale_volume(3);
         // Config write, then the 0x0f settings query.
         assert_eq!(out.commands.len(), 2);
@@ -4440,7 +4453,7 @@ mod tests {
     #[test]
     fn set_scale_standby_appends_a_settings_query() {
         let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC");
+        core.connect_scale("BOOKOO_SC", &[]);
         let out = core.set_scale_standby(15);
         assert_eq!(out.commands.len(), 2);
         assert_eq!(last_write_scale(&out), bookoo::QUERY_SETTINGS);
@@ -4449,7 +4462,7 @@ mod tests {
     #[test]
     fn set_scale_flow_smoothing_appends_a_settings_query() {
         let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC");
+        core.connect_scale("BOOKOO_SC", &[]);
         let out = core.set_scale_flow_smoothing(true);
         assert_eq!(out.commands.len(), 2);
         assert_eq!(last_write_scale(&out), bookoo::QUERY_SETTINGS);
@@ -4458,7 +4471,7 @@ mod tests {
     #[test]
     fn set_scale_anti_mistouch_appends_a_settings_query() {
         let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC");
+        core.connect_scale("BOOKOO_SC", &[]);
         let out = core.set_scale_anti_mistouch(false);
         assert_eq!(out.commands.len(), 2);
         assert_eq!(last_write_scale(&out), bookoo::QUERY_SETTINGS);
@@ -4467,7 +4480,7 @@ mod tests {
     #[test]
     fn set_scale_auto_stop_appends_a_settings_query() {
         let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC");
+        core.connect_scale("BOOKOO_SC", &[]);
         let out = core.set_scale_auto_stop(1);
         // Config write, then the 0x0f settings query.
         assert_eq!(out.commands.len(), 2);
@@ -4477,7 +4490,7 @@ mod tests {
     #[test]
     fn set_scale_mode_appends_a_settings_query_after_the_three_writes() {
         let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC");
+        core.connect_scale("BOOKOO_SC", &[]);
         let out = core.set_scale_mode(1);
         // Three mode writes, then the 0x0f settings query.
         assert_eq!(out.commands.len(), 4);
@@ -4487,7 +4500,7 @@ mod tests {
     #[test]
     fn set_scale_methods_append_no_query_for_a_weight_only_scale() {
         let mut core = CremaCore::new();
-        core.connect_scale("Decent Scale ABC");
+        core.connect_scale("Decent Scale ABC", &[]);
         // An unsupported scale emits nothing at all — not even the query.
         assert!(core.set_scale_volume(3).commands.is_empty());
         assert!(core.set_scale_standby(15).commands.is_empty());
@@ -4500,7 +4513,7 @@ mod tests {
     #[test]
     fn query_scale_settings_emits_the_query_for_a_bookoo() {
         let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC");
+        core.connect_scale("BOOKOO_SC", &[]);
         let out = core.query_scale_settings();
         assert_eq!(out.commands.len(), 1);
         assert_eq!(last_write_scale(&out), bookoo::QUERY_SETTINGS);
@@ -4509,7 +4522,7 @@ mod tests {
     #[test]
     fn query_scale_settings_emits_nothing_for_a_weight_only_scale() {
         let mut core = CremaCore::new();
-        core.connect_scale("Decent Scale ABC");
+        core.connect_scale("Decent Scale ABC", &[]);
         assert!(core.query_scale_settings().commands.is_empty());
     }
 
@@ -4522,7 +4535,7 @@ mod tests {
     #[test]
     fn a_profile_target_weight_triggers_saw_and_a_stop_command() {
         let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC");
+        core.connect_scale("BOOKOO_SC", &[]);
         // Default settings (auto_tare=true, stop_on_weight=true) — push only
         // the profile recipe target.
         core.set_profile_target_weight(Some(30.0));
@@ -4544,7 +4557,7 @@ mod tests {
     #[test]
     fn a_shot_dial_override_wins_over_the_profile_target() {
         let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC");
+        core.connect_scale("BOOKOO_SC", &[]);
         // Profile says 30 g; dial overrides to 50 g.
         core.set_profile_target_weight(Some(30.0));
         core.set_shot_target_weight(Some(50.0));
@@ -4562,7 +4575,7 @@ mod tests {
     #[test]
     fn stop_on_weight_disabled_suppresses_saw_even_with_a_target() {
         let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC");
+        core.connect_scale("BOOKOO_SC", &[]);
         core.set_profile_target_weight(Some(30.0));
         core.set_stop_on_weight(false);
         core.on_notification(Source::De1State, &[4, 5], 0);
@@ -4625,7 +4638,7 @@ mod tests {
     #[test]
     fn a_shot_start_auto_tares_a_connected_scale() {
         let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC");
+        core.connect_scale("BOOKOO_SC", &[]);
         let out = core.on_notification(Source::De1State, &[4, 5], 1_000);
         assert!(out.events.contains(&Event::ShotStarted));
         // The shot start emits a tare-scale command for the connected scale.
@@ -4654,7 +4667,7 @@ mod tests {
         // WriteScale commands. With auto_tare disabled we expect two writes
         // (reset + start) rather than three.
         let mut on_core = CremaCore::new();
-        on_core.connect_scale("BOOKOO_SC");
+        on_core.connect_scale("BOOKOO_SC", &[]);
         let on_out = on_core.on_notification(Source::De1State, &[4, 5], 1_000);
         let on_writes = on_out
             .commands
@@ -4663,7 +4676,7 @@ mod tests {
             .count();
 
         let mut off_core = CremaCore::new();
-        off_core.connect_scale("BOOKOO_SC");
+        off_core.connect_scale("BOOKOO_SC", &[]);
         off_core.set_auto_tare(false);
         let off_out = off_core.on_notification(Source::De1State, &[4, 5], 1_000);
         let off_writes = off_out
@@ -4726,7 +4739,7 @@ mod tests {
     #[test]
     fn set_steam_hotwater_settings_requests_250ml_when_a_scale_is_connected() {
         let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC");
+        core.connect_scale("BOOKOO_SC", &[]);
         let out = core.set_steam_hotwater_settings(hotwater_settings(50.0));
         let Some(Command::WriteCharacteristic { data, .. }) = out.commands.first() else {
             panic!("expected a WriteCharacteristic command");
@@ -4739,11 +4752,11 @@ mod tests {
     #[test]
     fn steam_hotwater_volume_override_lifts_when_the_scale_disconnects() {
         let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC");
+        core.connect_scale("BOOKOO_SC", &[]);
         // The user configures 50 ml while a scale is connected.
         core.set_steam_hotwater_settings(hotwater_settings(50.0));
         // The scale disconnects (an unrecognised name clears `scale`).
-        assert_eq!(core.connect_scale("Some Random Device"), None);
+        assert_eq!(core.connect_scale("Some Random Device", &[]), None);
         // An eco transition rewrites the settings; the hot-water volume must
         // now be the user's original 50 ml, not the 250 ml scale override.
         core.enable_steam_eco_mode(true, 0);
@@ -4879,7 +4892,7 @@ mod tests {
         // scale's built-in timer is reset (clearing any residual from the
         // previous shot) then started.
         let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC");
+        core.connect_scale("BOOKOO_SC", &[]);
         let out = core.on_notification(Source::De1State, &[4, 5], 1_000);
         let scale_writes: Vec<&[u8]> = out
             .commands
@@ -4905,7 +4918,7 @@ mod tests {
     #[test]
     fn a_shot_completion_auto_stops_a_capable_scale_timer() {
         let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC");
+        core.connect_scale("BOOKOO_SC", &[]);
         // Start an espresso shot.
         core.on_notification(Source::De1State, &[4, 5], 1_000);
         // Transition to Idle to complete the shot.
@@ -4963,7 +4976,7 @@ mod tests {
     #[test]
     fn a_shot_with_a_scale_completes_with_peak_and_final_weight() {
         let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC");
+        core.connect_scale("BOOKOO_SC", &[]);
         // Start an espresso shot.
         core.on_notification(Source::De1State, &[4, 5], 1_000);
         // The auto-tare lands: the scale reports ~zero, clearing the settling
@@ -5049,7 +5062,7 @@ mod tests {
     fn a_shot_start_without_a_timer_capable_scale_emits_no_timer_writes() {
         let mut core = CremaCore::new();
         // Acaia has tare but no software timer.
-        core.connect_scale("ACAIA-X");
+        core.connect_scale("ACAIA-X", &[]);
         let out = core.on_notification(Source::De1State, &[4, 5], 1_000);
         let scale_writes: Vec<&[u8]> = out
             .commands
@@ -5074,7 +5087,7 @@ mod tests {
         // No scale: empty.
         assert!(core.start_timer().commands.is_empty());
         // Bookoo: a WriteScale command.
-        core.connect_scale("BOOKOO_SC");
+        core.connect_scale("BOOKOO_SC", &[]);
         let out = core.start_timer();
         let Some(Command::WriteScale { data }) = out.commands.first() else {
             panic!("expected a WriteScale command");
@@ -5085,7 +5098,7 @@ mod tests {
     #[test]
     fn stop_and_reset_timer_emit_their_writes_for_a_capable_scale() {
         let mut core = CremaCore::new();
-        core.connect_scale("BOOKOO_SC");
+        core.connect_scale("BOOKOO_SC", &[]);
         let stop = core.stop_timer();
         let reset = core.reset_timer();
         let Some(Command::WriteScale { data: stop_data }) = stop.commands.first() else {
@@ -5103,7 +5116,7 @@ mod tests {
         let mut core = CremaCore::new();
         // The Acaia is in `Scale::supports_timer`'s exclusion list — no
         // software timer commands; capability-gated to nothing.
-        core.connect_scale("ACAIA-X");
+        core.connect_scale("ACAIA-X", &[]);
         assert!(core.start_timer().commands.is_empty());
         assert!(core.stop_timer().commands.is_empty());
         assert!(core.reset_timer().commands.is_empty());

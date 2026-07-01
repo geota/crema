@@ -15,7 +15,13 @@ import type { CoreOutput, CremaCore, ScaleUuids } from '$lib/core';
 
 const EMPTY_OUTPUT = {} as CoreOutput;
 const UUIDS = (over: Partial<ScaleUuids> = {}) =>
-	({ service: 'svc', weight_notify: 'wn', command_write: 'cw', ...over }) as ScaleUuids;
+	({
+		service: 'svc',
+		weight_notify: 'wn',
+		command_write: 'cw',
+		command_notifies: true,
+		...over
+	}) as ScaleUuids;
 
 function mkDevice(over: Partial<De1Transport> = {}): De1Transport {
 	return {
@@ -72,7 +78,7 @@ describe('scaleConnectProgram — happy path', () => {
 
 		expect(Exit.isSuccess(exit)).toBe(true);
 		expect(device.connectGatt).toHaveBeenCalledOnce();
-		expect(deps.core.connectScale).toHaveBeenCalledWith('BOOKOO_SC');
+		expect(deps.core.connectScale).toHaveBeenCalledWith('BOOKOO_SC', []);
 		expect(deps.onUuidsResolved).toHaveBeenCalledOnce();
 		// Distinct command characteristic → two subscriptions (weight + command).
 		expect((device.startNotifications as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[1])).toEqual([
@@ -84,6 +90,15 @@ describe('scaleConnectProgram — happy path', () => {
 		expect(deps.onCoreOutput).toHaveBeenCalledOnce();
 	});
 
+	it('passes the discovered GATT services to the core for identification', async () => {
+		const svc = '00001820-0000-1000-8000-00805f9b34fb';
+		const device = mkDevice({ discoveredServiceUuids: vi.fn(() => Promise.resolve([svc])) });
+		const deps = mkDeps(device);
+		const exit = await run(deps);
+		expect(Exit.isSuccess(exit)).toBe(true);
+		expect(deps.core.connectScale).toHaveBeenCalledWith('BOOKOO_SC', [svc]);
+	});
+
 	it('subscribes only once when command == weight characteristic', async () => {
 		const core = mkCore({
 			scaleUuids: vi.fn(() => Promise.resolve(UUIDS({ command_write: 'wn' })))
@@ -92,6 +107,22 @@ describe('scaleConnectProgram — happy path', () => {
 		const exit = await run(mkDeps(device, core));
 		expect(Exit.isSuccess(exit)).toBe(true);
 		expect(device.startNotifications).toHaveBeenCalledTimes(1);
+	});
+
+	it('subscribes only to weight when the command characteristic is write-only', async () => {
+		// The Decent Scale: command_write (e.g. 36f5) is distinct from
+		// weight_notify but WRITE-ONLY — enabling notifications on it fails and
+		// crashes the connect, so the shell must subscribe to weight only.
+		const core = mkCore({
+			scaleUuids: vi.fn(() =>
+				Promise.resolve(UUIDS({ command_write: 'cw', command_notifies: false }))
+			)
+		});
+		const device = mkDevice();
+		const exit = await run(mkDeps(device, core));
+		expect(Exit.isSuccess(exit)).toBe(true);
+		expect(device.startNotifications).toHaveBeenCalledTimes(1);
+		expect((device.startNotifications as ReturnType<typeof vi.fn>).mock.calls[0][1]).toBe('wn');
 	});
 });
 

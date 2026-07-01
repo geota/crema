@@ -315,11 +315,12 @@ export interface CremaCore {
 	/** True while a replay shadow core is installed. */
 	inReplay(): Promise<boolean>;
 	/**
-	 * Identify and connect a scale from its BLE advertised name. Resolves to
-	 * the scale's display label, or `undefined` if the name matched no
-	 * supported scale.
+	 * Identify and connect a scale from its discovered GATT `serviceUuids` and
+	 * BLE `advertisedName`. Resolves to the scale's display label, or
+	 * `undefined` if nothing matched. A distinctive discovered service wins over
+	 * the name (Acaia generation, rebrand, mixed-case); pass `[]` for name-only.
 	 */
-	connectScale(advertisedName: string): Promise<string | undefined>;
+	connectScale(advertisedName: string, serviceUuids: readonly string[]): Promise<string | undefined>;
 	/**
 	 * Disconnect the scale: reset the core's scale slice (the identified codec +
 	 * every scale-derived reading) without touching user prefs or the shot /
@@ -843,8 +844,8 @@ async function createCore(): Promise<CremaCore> {
 		async inReplay() {
 			return bridge.in_replay();
 		},
-		async connectScale(advertisedName) {
-			return bridge.connect_scale(advertisedName);
+		async connectScale(advertisedName, serviceUuids) {
+			return bridge.connect_scale(advertisedName, [...serviceUuids]);
 		},
 		async disconnectScale() {
 			bridge.disconnect_scale();

@@ -37,10 +37,11 @@ pub fn parse_weight(data: &[u8]) -> Option<f32> {
 }
 
 /// Minimum raw battery byte value — the scale reports `[15]` between
-/// `MIN_BATTERY_RAW` (empty) and `MAX_BATTERY_RAW` (full). Reaprime
-/// (`arc.dart:122-138`) interpolates `[15]` from this range into a 0–100
-/// percentage; legacy de1app reads it raw without rescaling. Crema mirrors
-/// reaprime: the user-facing field is a percentage.
+/// `MIN_BATTERY_RAW` (empty) and `MAX_BATTERY_RAW` (full). Both references
+/// rescale from this range: reaprime (`arc.dart:122-138`) to a 0–100
+/// percentage, de1app (`bluetooth.tcl:428`) to a coarser 0–10 level
+/// (`(raw - 129) / 29.0 * 10`). Crema follows reaprime: the user-facing field
+/// is a percentage.
 const MIN_BATTERY_RAW: u8 = 129;
 /// Maximum raw battery byte value — see [`MIN_BATTERY_RAW`].
 const MAX_BATTERY_RAW: u8 = 158;
@@ -49,9 +50,10 @@ const MAX_BATTERY_RAW: u8 = 158;
 ///
 /// Reaprime extracts byte `[15]` of an 18-byte frame and linearly maps it
 /// from the scale's `[129..=158]` reporting range to `0..=100`
-/// (`arc.dart:122-138`). Legacy de1app reads the same byte raw without
-/// rescaling — Crema adopts reaprime's rescaling so the percentage matches
-/// what the scale's own indicator shows.
+/// (`arc.dart:122-138`). Legacy de1app rescales the same byte too, but to a
+/// coarser 0–10 level (`(raw - 129) / 29.0 * 10`, `bluetooth.tcl:428`). Crema
+/// adopts reaprime's 0–100 mapping so the percentage matches what the scale's
+/// own indicator shows.
 ///
 /// Returns `None` for a packet that is not at least 18 bytes (i.e. doesn't
 /// carry the battery byte) or that fails the [`parse_weight`] header gate.

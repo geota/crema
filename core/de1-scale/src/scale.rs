@@ -33,6 +33,14 @@ pub struct ScaleUuids {
     /// Characteristic commands are written to — equal to `weight_notify` for
     /// scales that use a single characteristic for both.
     pub command_write: &'static str,
+    /// Whether `command_write` ALSO delivers notifications, so the shell should
+    /// subscribe to it (beyond `weight_notify`). True only for a scale whose
+    /// command characteristic pushes data back — today just the Bookoo (`ff12`,
+    /// its serial / settings frames). False for a write-only command
+    /// characteristic: enabling notifications on one (e.g. the Decent's `36f5`)
+    /// fails at the GATT layer and crashes the connect, so the shell must skip
+    /// it. Capability-driven — the core, which owns the protocol, decides.
+    pub command_notifies: bool,
 }
 
 /// The **pre-connect** BLE scan filter set, shared across shells: the union of
@@ -369,6 +377,12 @@ pub enum UnitRecovery {
 #[derive(Debug)]
 pub struct Scale {
     inner: Inner,
+    /// Last battery percentage seen on any frame, carried forward so a scale
+    /// that reports battery on a SEPARATE frame from weight — the Varia AKU
+    /// (weight on cmd `0x01`, battery on cmd `0x85`) — still surfaces battery on
+    /// every weight reading, mirroring reaprime storing `_batteryLevel` and
+    /// re-attaching it to every snapshot. `None` until the first battery frame.
+    last_battery_percent: Option<u8>,
 }
 
 /// Per-scale variant and any runtime state it needs.
@@ -399,24 +413,62 @@ enum Inner {
 }
 
 impl Scale {
-    /// Identify a scale from its BLE advertised name, returning a ready-to-use
-    /// [`Scale`], or `None` if the name matches no supported scale.
+    /// Identify a connected scale from its GATT services and advertised name,
+    /// returning a ready-to-use [`Scale`], or `None` if nothing matches.
+    ///
+    /// A **distinctive** discovered service (one that belongs to exactly one
+    /// scale) wins first: it separates the Acaia generations (gen-1 `1820` vs
+    /// Pyxis `49535343…`) and recognises a device whose advertised name doesn't
+    /// match the expected prefix (a rebrand, or mixed-case the name filter
+    /// missed). The generic `0000fff0` service is shared (Decent / Eureka /
+    /// Smartchef / Varia), so it never wins on service alone — those fall
+    /// through to a case-insensitive advertised-name match. Pass an empty
+    /// `discovered_services` for name-only identification.
     ///
     /// # Examples
     ///
     /// ```
     /// # use de1_scale::Scale;
-    /// assert_eq!(Scale::identify("BOOKOO_SC1234").unwrap().label(), "Bookoo");
-    /// assert!(Scale::identify("Some Phone").is_none());
+    /// assert_eq!(Scale::identify("BOOKOO_SC1234", &[]).unwrap().label(), "Bookoo");
+    /// assert!(Scale::identify("Some Phone", &[]).is_none());
     /// ```
-    pub fn identify(advertised_name: &str) -> Option<Scale> {
-        // First prefix match wins, in registry order — then build via the same
-        // `from_label` the rest of the codebase uses, so identification and the
-        // scan filter set (below) share one source of truth.
+    pub fn identify(advertised_name: &str, discovered_services: &[String]) -> Option<Scale> {
+        // 1. Distinctive-service match — authoritative when present.
+        for entry in SCALE_SCAN {
+            if let Some(scale) = Self::from_label(entry.label) {
+                let service = scale.uuids().service;
+                if Self::service_is_distinctive(service)
+                    && discovered_services
+                        .iter()
+                        .any(|s| s.eq_ignore_ascii_case(service))
+                {
+                    return Some(scale);
+                }
+            }
+        }
+        // 2. Case-insensitive advertised-name prefix, first match wins in
+        //    registry order (order is load-bearing for overlapping families).
+        let name_upper = advertised_name.to_ascii_uppercase();
         SCALE_SCAN
             .iter()
-            .find(|e| e.prefixes.iter().any(|p| advertised_name.starts_with(p)))
+            .find(|e| {
+                e.prefixes
+                    .iter()
+                    .any(|p| name_upper.starts_with(&p.to_ascii_uppercase()))
+            })
             .and_then(|e| Self::from_label(e.label))
+    }
+
+    /// Whether a GATT service UUID belongs to exactly one registry entry — the
+    /// signal that a service match uniquely identifies a scale. The generic
+    /// `0000fff0` is shared by four scales, so it is not distinctive.
+    fn service_is_distinctive(service: &str) -> bool {
+        SCALE_SCAN
+            .iter()
+            .filter_map(|e| Self::from_label(e.label))
+            .filter(|s| s.uuids().service.eq_ignore_ascii_case(service))
+            .count()
+            == 1
     }
 
     /// The pre-connect BLE scan filter set across **all** supported scales —
@@ -497,7 +549,10 @@ impl Scale {
             "Varia Aku" => Inner::VariaAku,
             _ => return None,
         };
-        Some(Scale { inner })
+        Some(Scale {
+            inner,
+            last_battery_percent: None,
+        })
     }
 
     /// A stable, human-readable name for this scale — suitable for display and
@@ -522,67 +577,80 @@ impl Scale {
 
     /// The BLE service and characteristic UUIDs for this scale.
     pub fn uuids(&self) -> ScaleUuids {
-        match &self.inner {
-            Inner::Decent(_) => ScaleUuids {
-                service: decent_scale::SERVICE_UUID,
-                weight_notify: decent_scale::READ_NOTIFY_UUID,
-                command_write: decent_scale::WRITE_UUID,
-            },
-            Inner::Skale => ScaleUuids {
-                service: skale::SERVICE_UUID,
-                weight_notify: skale::WEIGHT_NOTIFY_UUID,
-                command_write: skale::COMMAND_UUID,
-            },
-            Inner::Felicita => ScaleUuids {
-                service: felicita::SERVICE_UUID,
-                weight_notify: felicita::NOTIFY_COMMAND_UUID,
-                command_write: felicita::NOTIFY_COMMAND_UUID,
-            },
-            Inner::Bookoo => ScaleUuids {
-                service: bookoo::SERVICE_UUID,
-                weight_notify: bookoo::NOTIFY_UUID,
-                command_write: bookoo::COMMAND_UUID,
-            },
-            Inner::AcaiaGen1(_) => ScaleUuids {
-                service: acaia::GEN1_SERVICE_UUID,
-                weight_notify: acaia::GEN1_NOTIFY_COMMAND_UUID,
-                command_write: acaia::GEN1_NOTIFY_COMMAND_UUID,
-            },
-            Inner::AcaiaPyxis(_) => ScaleUuids {
-                service: acaia::PYXIS_SERVICE_UUID,
-                weight_notify: acaia::PYXIS_STATUS_UUID,
-                command_write: acaia::PYXIS_COMMAND_UUID,
-            },
-            Inner::AtomheartEclair => ScaleUuids {
-                service: atomheart_eclair::SERVICE_UUID,
-                weight_notify: atomheart_eclair::NOTIFY_UUID,
-                command_write: atomheart_eclair::COMMAND_UUID,
-            },
-            Inner::EurekaPrecisa | Inner::SoloBarista => ScaleUuids {
-                service: eureka_precisa::SERVICE_UUID,
-                weight_notify: eureka_precisa::STATUS_UUID,
-                command_write: eureka_precisa::COMMAND_UUID,
-            },
-            Inner::Difluid => ScaleUuids {
-                service: difluid::SERVICE_UUID,
-                weight_notify: difluid::NOTIFY_COMMAND_UUID,
-                command_write: difluid::NOTIFY_COMMAND_UUID,
-            },
-            Inner::Smartchef(_) => ScaleUuids {
-                service: smartchef::SERVICE_UUID,
-                weight_notify: smartchef::STATUS_UUID,
-                command_write: smartchef::COMMAND_UUID,
-            },
-            Inner::HiroiaJimmy => ScaleUuids {
-                service: hiroia_jimmy::SERVICE_UUID,
-                weight_notify: hiroia_jimmy::STATUS_UUID,
-                command_write: hiroia_jimmy::COMMAND_UUID,
-            },
-            Inner::VariaAku => ScaleUuids {
-                service: varia_aku::SERVICE_UUID,
-                weight_notify: varia_aku::STATUS_UUID,
-                command_write: varia_aku::COMMAND_UUID,
-            },
+        // Only the Bookoo's command characteristic (`ff12`) ALSO notifies — it
+        // pushes the scale's serial / settings frames, decoded by
+        // `parse_command_response`. Every other scale's `command_write` is
+        // write-only (or the same characteristic as `weight_notify`), and its
+        // command-channel notifications — even if the hardware sends any — are
+        // never decoded, so the shell must not subscribe to it.
+        let command_notifies = matches!(&self.inner, Inner::Bookoo);
+        let (service, weight_notify, command_write) = match &self.inner {
+            Inner::Decent(_) => (
+                decent_scale::SERVICE_UUID,
+                decent_scale::READ_NOTIFY_UUID,
+                decent_scale::WRITE_UUID,
+            ),
+            Inner::Skale => (
+                skale::SERVICE_UUID,
+                skale::WEIGHT_NOTIFY_UUID,
+                skale::COMMAND_UUID,
+            ),
+            Inner::Felicita => (
+                felicita::SERVICE_UUID,
+                felicita::NOTIFY_COMMAND_UUID,
+                felicita::NOTIFY_COMMAND_UUID,
+            ),
+            Inner::Bookoo => (
+                bookoo::SERVICE_UUID,
+                bookoo::NOTIFY_UUID,
+                bookoo::COMMAND_UUID,
+            ),
+            Inner::AcaiaGen1(_) => (
+                acaia::GEN1_SERVICE_UUID,
+                acaia::GEN1_NOTIFY_COMMAND_UUID,
+                acaia::GEN1_NOTIFY_COMMAND_UUID,
+            ),
+            Inner::AcaiaPyxis(_) => (
+                acaia::PYXIS_SERVICE_UUID,
+                acaia::PYXIS_STATUS_UUID,
+                acaia::PYXIS_COMMAND_UUID,
+            ),
+            Inner::AtomheartEclair => (
+                atomheart_eclair::SERVICE_UUID,
+                atomheart_eclair::NOTIFY_UUID,
+                atomheart_eclair::COMMAND_UUID,
+            ),
+            Inner::EurekaPrecisa | Inner::SoloBarista => (
+                eureka_precisa::SERVICE_UUID,
+                eureka_precisa::STATUS_UUID,
+                eureka_precisa::COMMAND_UUID,
+            ),
+            Inner::Difluid => (
+                difluid::SERVICE_UUID,
+                difluid::NOTIFY_COMMAND_UUID,
+                difluid::NOTIFY_COMMAND_UUID,
+            ),
+            Inner::Smartchef(_) => (
+                smartchef::SERVICE_UUID,
+                smartchef::STATUS_UUID,
+                smartchef::COMMAND_UUID,
+            ),
+            Inner::HiroiaJimmy => (
+                hiroia_jimmy::SERVICE_UUID,
+                hiroia_jimmy::STATUS_UUID,
+                hiroia_jimmy::COMMAND_UUID,
+            ),
+            Inner::VariaAku => (
+                varia_aku::SERVICE_UUID,
+                varia_aku::STATUS_UUID,
+                varia_aku::COMMAND_UUID,
+            ),
+        };
+        ScaleUuids {
+            service,
+            weight_notify,
+            command_write,
+            command_notifies,
         }
     }
 
@@ -737,6 +805,25 @@ impl Scale {
                 heartbeat_interval_ms,
                 ..ScaleCapabilities::default()
             },
+        }
+    }
+
+    /// The writes a scale needs the instant it connects, before any weight can
+    /// flow — the core emits these on the post-subscribe connect handshake
+    /// ([`crate::Scale`]'s owner calls them once after subscribing). The Difluid
+    /// Microbalance streams nothing until its [`difluid::ENABLE_NOTIFICATIONS`]
+    /// is written, then is forced to grams (mirrors reaprime
+    /// `difluid_scale.dart:122-139` + de1app `bluetooth.tcl:1466-1469`). Empty
+    /// for every other scale — they report on the weight-notify subscription
+    /// alone.
+    #[must_use]
+    pub fn connect_writes(&self) -> Vec<&'static [u8]> {
+        match &self.inner {
+            Inner::Difluid => vec![
+                &difluid::ENABLE_NOTIFICATIONS[..],
+                &difluid::SET_UNIT_GRAMS[..],
+            ],
+            _ => Vec::new(),
         }
     }
 
@@ -982,12 +1069,9 @@ impl Scale {
             .flatten()
             .and_then(|d| u32::try_from(d.as_millis()).ok());
         // Varia AKU's notifications come in two shapes — weight (command
-        // 0x01) and battery (command 0x85). The latter does not carry
-        // weight, so the unified path returns `None` from `parse_weight`,
-        // and the caller is meant to keep going for the next frame.
-        // Capture the battery here so a battery-only frame still surfaces
-        // the field; pair it with weight = 0 only if a weight frame also
-        // matches.
+        // 0x01) and battery (command 0x85). The battery frame carries no
+        // weight, so `parse_weight` returns `None`; the value is folded into
+        // the carry-forward cache below so it re-attaches to the next weight.
         let varia_battery = matches!(&self.inner, Inner::VariaAku)
             .then(|| varia_aku::parse_battery_percent(data))
             .flatten();
@@ -998,13 +1082,23 @@ impl Scale {
             Inner::AcaiaGen1(decoder) | Inner::AcaiaPyxis(decoder) => decoder.battery_percent(),
             _ => None,
         };
+        // Fold every per-frame battery source into one, cache it, and carry it
+        // forward. The Varia AKU reports battery on a battery-ONLY frame (cmd
+        // 0x85, no weight): without a cache that frame yields no reading and the
+        // field never surfaces. Caching re-attaches it to the next weight frame
+        // (reaprime does the same with `_batteryLevel`).
+        let frame_battery = felicita_battery.or(varia_battery).or(acaia_battery);
+        if frame_battery.is_some() {
+            self.last_battery_percent = frame_battery;
+        }
+        let battery_percent = self.last_battery_percent;
         self.parse_weight(data).map(|weight_g| ScaleReading {
             weight_g,
             flow_g_per_s: None,
             timer_ms: atomheart_timer_ms,
             volume: None,
             standby_minutes: None,
-            battery_percent: felicita_battery.or(varia_battery).or(acaia_battery),
+            battery_percent,
             flow_smoothing: None,
             auto_stop: None,
         })
@@ -1385,18 +1479,60 @@ mod tests {
 
     #[test]
     fn identifies_scales_from_scan_names() {
-        assert_eq!(Scale::identify("BOOKOO_SC1234").unwrap().label(), "Bookoo");
+        // Name-only (no discovered services): case-insensitive prefix match.
         assert_eq!(
-            Scale::identify("Decent Scale ABC").unwrap().label(),
+            Scale::identify("BOOKOO_SC1234", &[]).unwrap().label(),
+            "Bookoo"
+        );
+        assert_eq!(
+            Scale::identify("Decent Scale ABC", &[]).unwrap().label(),
             "Decent Scale"
         );
-        assert_eq!(Scale::identify("PYXIS-9").unwrap().label(), "Acaia Pyxis");
-        assert_eq!(Scale::identify("ACAIA-X").unwrap().label(), "Acaia");
+        assert_eq!(
+            Scale::identify("PYXIS-9", &[]).unwrap().label(),
+            "Acaia Pyxis"
+        );
+        assert_eq!(Scale::identify("ACAIA-X", &[]).unwrap().label(), "Acaia");
+        // Case-insensitive: a mixed-case advertisement still matches the
+        // (lowercase) `smartchef` registry prefix.
+        assert_eq!(
+            Scale::identify("SmartChef Scale", &[]).unwrap().label(),
+            "Smartchef"
+        );
+    }
+
+    #[test]
+    fn a_distinctive_service_wins_over_a_mismatched_name() {
+        // Acaia mixed-generation: the distinctive gen-1 service (1820) corrects
+        // a Pyxis-looking name, and the Pyxis service (49535343…) corrects an
+        // ACAIA name — the service is authoritative for the generation.
+        let gen1 = [crate::acaia::GEN1_SERVICE_UUID.to_owned()];
+        assert_eq!(Scale::identify("LUNAR-1", &gen1).unwrap().label(), "Acaia");
+        let pyxis = [crate::acaia::PYXIS_SERVICE_UUID.to_owned()];
+        assert_eq!(
+            Scale::identify("ACAIA-X", &pyxis).unwrap().label(),
+            "Acaia Pyxis"
+        );
+    }
+
+    #[test]
+    fn the_shared_fff0_service_defers_to_the_name() {
+        // fff0 is shared by four scales, so it never wins on service alone —
+        // the advertised name disambiguates (here Varia vs Decent).
+        let fff0 = [crate::varia_aku::SERVICE_UUID.to_owned()];
+        assert_eq!(
+            Scale::identify("Varia AKU 1", &fff0).unwrap().label(),
+            "Varia Aku"
+        );
+        assert_eq!(
+            Scale::identify("Decent Scale X", &fff0).unwrap().label(),
+            "Decent Scale"
+        );
     }
 
     #[test]
     fn an_unknown_scan_name_is_not_identified() {
-        assert!(Scale::identify("Random Phone").is_none());
+        assert!(Scale::identify("Random Phone", &[]).is_none());
     }
 
     #[test]
@@ -1406,7 +1542,7 @@ mod tests {
         // set actually identifies a scale (both read the SCALE_SCAN registry).
         for prefix in &scan.name_prefixes {
             assert!(
-                Scale::identify(prefix).is_some(),
+                Scale::identify(prefix, &[]).is_some(),
                 "scan prefix {prefix:?} should identify a scale"
             );
         }
@@ -1439,7 +1575,7 @@ mod tests {
             "smartchef-1",
             "ACAIA-1",
         ] {
-            let label = Scale::identify(name).unwrap().label();
+            let label = Scale::identify(name, &[]).unwrap().label();
             assert_eq!(Scale::from_label(label).unwrap().label(), label);
         }
     }
@@ -1666,6 +1802,39 @@ mod tests {
             }
             other => panic!("expected Continue, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn varia_battery_frame_carries_forward_to_the_next_weight() {
+        let mut scale = Scale::from_label("Varia Aku").unwrap();
+        // A battery-only frame (cmd 0x85, 78%) yields no reading but caches it.
+        assert!(scale.parse_reading(&[0x00, 0x85, 0x01, 78, 0x00]).is_none());
+        // The next weight frame (cmd 0x01, 18.0 g) surfaces the cached battery —
+        // without the cache the field would stay None (separate frame shapes).
+        let reading = scale
+            .parse_reading(&[0x00, 0x01, 0x03, 0x00, 0x07, 0x08, 0x00])
+            .expect("weight reading");
+        assert_eq!(reading.weight_g, 18.0);
+        assert_eq!(reading.battery_percent, Some(78));
+    }
+
+    #[test]
+    fn difluid_connect_writes_enable_then_force_grams() {
+        let scale = Scale::from_label("Difluid Microbalance").unwrap();
+        assert_eq!(
+            scale.connect_writes(),
+            vec![
+                &difluid::ENABLE_NOTIFICATIONS[..],
+                &difluid::SET_UNIT_GRAMS[..]
+            ]
+        );
+        // Every other scale reports on the weight subscription alone.
+        assert!(
+            Scale::from_label("Bookoo")
+                .unwrap()
+                .connect_writes()
+                .is_empty()
+        );
     }
 
     #[test]

@@ -47,8 +47,17 @@ export const scaleConnectProgram = (d: ScaleConnectDeps): Effect.Effect<void, Sc
 		d.onStatus(`Connecting to ${d.advertisedName}…`);
 		yield* fatal('GATT connect', () => d.device.connectGatt());
 
+		// Discovered GATT services help the core identify the scale when the
+		// advertised name is ambiguous (Acaia generation) or mixed-case.
+		// Best-effort — an empty list falls back to a name-only match.
+		const services = yield* Effect.promise(
+			(): Promise<readonly string[]> => d.device.discoveredServiceUuids?.() ?? Promise.resolve([])
+		);
+
 		// Identify the scale with the core so it picks the right codec.
-		const label = yield* fatal('scale identification', () => d.core.connectScale(d.advertisedName));
+		const label = yield* fatal('scale identification', () =>
+			d.core.connectScale(d.advertisedName, services)
+		);
 		if (label === undefined) {
 			return yield* new ScaleConnectStepFailed({
 				step: 'scale identification',
@@ -72,9 +81,15 @@ export const scaleConnectProgram = (d: ScaleConnectDeps): Effect.Effect<void, Sc
 		yield* fatal('weight subscription', () =>
 			d.device.startNotifications(uuids.service, uuids.weight_notify)
 		);
-		// The Bookoo's command characteristic also NOTIFYs (its `ff12` serial /
-		// settings responses) — subscribe too, unless it's the same characteristic.
-		if (uuids.command_write.toLowerCase() !== uuids.weight_notify.toLowerCase()) {
+		// Subscribe to the command characteristic ONLY when the core says it also
+		// NOTIFYs (the Bookoo's `ff12` serial / settings responses). A write-only
+		// command char (e.g. the Decent's `36f5`) rejects startNotifications and
+		// fails the connect — gate on the capability so we never try. Writes still
+		// go to command_write regardless.
+		if (
+			uuids.command_notifies &&
+			uuids.command_write.toLowerCase() !== uuids.weight_notify.toLowerCase()
+		) {
 			yield* fatal('command subscription', () =>
 				d.device.startNotifications(uuids.service, uuids.command_write)
 			);

@@ -1,10 +1,9 @@
 //! Difluid Microbalance BLE codec (`scale_type` `difluid`).
 //!
-//! **Caution — unverified.** The legacy Tcl parser is hex-string based and the
-//! byte offset (bytes 5–8) and lack of sign handling were flagged as needing
-//! confirmation against real hardware. This module follows the documented
-//! behaviour (big-endian `u32`, no sign) but should be checked against a
-//! physical scale before being relied upon.
+//! **Caution — unverified.** Decoding follows reaprime (signed big-endian
+//! `i32`, gated on `data[3] == 0`) and de1app, but the byte offsets (weight at
+//! bytes 5–8) are still best confirmed against physical hardware. The scale
+//! streams no weight until [`ENABLE_NOTIFICATIONS`] is written at connect.
 
 // Raw integer weight fields are decoded into `f32` grams; precision loss past
 // 2^23 is inherent to representing a wire reading as the codec's `f32` weight,
@@ -32,14 +31,17 @@ pub const SET_UNIT_GRAMS: [u8; 7] = [0xDF, 0xDF, 0x01, 0x04, 0x01, 0x00, 0xC4];
 
 /// Decode a weight notification into grams.
 ///
-/// Bytes 5–8 are read as an unsigned big-endian 32-bit value in units of
-/// 0.1 g. The legacy parser has no sign handling, so negative weights are not
-/// represented. Requires at least 19 bytes.
+/// Bytes 5–8 are a **signed** big-endian 32-bit value in units of 0.1 g, so a
+/// below-tare reading decodes as a small negative (reaprime
+/// `difluid_scale.dart:158` reads `getInt32` big-endian; de1app reads the same
+/// field). Gated on `data[3] == 0`: weight and command share one characteristic,
+/// so a non-weight ack (`data[3] != 0`) must not be mis-read as a weight
+/// (reaprime `difluid_scale.dart:143`). Requires at least 19 bytes.
 pub fn parse_weight(data: &[u8]) -> Option<f32> {
-    if data.len() < 19 {
+    if data.len() < 19 || data[3] != 0 {
         return None;
     }
-    let raw = u32::from_be_bytes([data[5], data[6], data[7], data[8]]);
+    let raw = i32::from_be_bytes([data[5], data[6], data[7], data[8]]);
     Some(raw as f32 / 10.0)
 }
 
@@ -58,7 +60,7 @@ pub fn parse_weight(data: &[u8]) -> Option<f32> {
 /// reaprime's behaviour at the shell layer (see `CremaCore::on_notification`).
 #[must_use]
 pub fn is_grams_unit(data: &[u8]) -> Option<bool> {
-    if data.len() < 19 {
+    if data.len() < 19 || data[3] != 0 {
         return None;
     }
     Some(data[17] == 0)
@@ -90,13 +92,13 @@ mod tests {
     }
 
     #[test]
-    fn decodes_a_large_unsigned_weight() {
-        // The codec reads bytes 5–8 as an unsigned big-endian u32: a value
-        // with the top bit set stays positive (no two's-complement sign).
+    fn rejects_a_non_weight_frame() {
+        // data[3] != 0 marks a command ack on the shared characteristic — not a
+        // weight, even at full length (reaprime difluid_scale.dart:143).
         let mut packet = [0u8; 19];
-        packet[5] = 0x80;
-        let raw = 0x8000_0000u32;
-        assert_eq!(parse_weight(&packet), Some(raw as f32 / 10.0));
+        packet[3] = 0x01;
+        assert_eq!(parse_weight(&packet), None);
+        assert_eq!(is_grams_unit(&packet), None);
     }
 
     #[test]
@@ -104,9 +106,6 @@ mod tests {
         assert_eq!(parse_weight(&[0u8; 18]), None);
     }
 
-    /// The Difluid protocol has no sign field — bytes 5–8 are an unsigned
-    /// `u32`, so a negative weight cannot be represented and the largest count
-    /// `0xFFFFFFFF` decodes as a large positive number rather than wrapping.
     #[test]
     fn is_grams_unit_true_for_zero_byte_17() {
         // Reaprime's `data[17] != 0` check: byte [17] == 0 means grams.
@@ -131,14 +130,14 @@ mod tests {
     }
 
     #[test]
-    fn the_protocol_cannot_represent_a_negative_weight() {
+    fn decodes_a_negative_below_tare_reading() {
+        // Signed: bytes 5–8 = 0xFFFFFFFF (-1) → -0.1 g, a real below-tare
+        // reading — not the ~4.29e8 g garbage an unsigned decode produced.
         let mut packet = [0u8; 19];
         packet[5] = 0xFF;
         packet[6] = 0xFF;
         packet[7] = 0xFF;
         packet[8] = 0xFF;
-        let decoded = parse_weight(&packet).unwrap();
-        assert!(decoded > 0.0, "an all-ones payload must decode as positive");
-        assert_eq!(decoded, u32::MAX as f32 / 10.0);
+        assert_eq!(parse_weight(&packet), Some(-0.1));
     }
 }

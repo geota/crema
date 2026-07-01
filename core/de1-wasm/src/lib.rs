@@ -1085,11 +1085,17 @@ impl CremaBridge {
         self.core.capture_clear();
     }
 
-    /// Identify and connect a scale from its BLE advertised name. Returns the
-    /// connected scale's display label, or `undefined` if the name matched no
-    /// supported scale.
-    pub fn connect_scale(&mut self, advertised_name: String) -> Option<String> {
-        self.core.connect_scale(&advertised_name)
+    /// Identify and connect a scale from its discovered GATT `service_uuids`
+    /// and BLE `advertised_name`. Returns the connected scale's display label,
+    /// or `undefined` if nothing matched. A distinctive discovered service wins
+    /// over the name (Acaia generation, rebrand, mixed-case); pass an empty
+    /// array for name-only identification.
+    pub fn connect_scale(
+        &mut self,
+        advertised_name: String,
+        service_uuids: Vec<String>,
+    ) -> Option<String> {
+        self.core.connect_scale(&advertised_name, &service_uuids)
     }
 
     /// Disconnect the scale: reset the core's scale slice (the identified
@@ -1986,10 +1992,10 @@ mod tests {
     fn connect_scale_identifies_a_known_scale() {
         let mut bridge = CremaBridge::new();
         assert_eq!(
-            bridge.connect_scale("BOOKOO_SC".to_owned()),
+            bridge.connect_scale("BOOKOO_SC".to_owned(), vec![]),
             Some("Bookoo".to_owned())
         );
-        assert_eq!(bridge.connect_scale("Not A Scale".to_owned()), None);
+        assert_eq!(bridge.connect_scale("Not A Scale".to_owned(), vec![]), None);
     }
 
     /// Replay swap: live core's identity (scale name, weight unit pref)
@@ -1998,7 +2004,7 @@ mod tests {
     fn replay_swap_preserves_live_core_state() {
         let mut bridge = CremaBridge::new();
         // Establish some live-core state.
-        let scale = bridge.connect_scale("BOOKOO_SC".to_owned());
+        let scale = bridge.connect_scale("BOOKOO_SC".to_owned(), vec![]);
         assert_eq!(scale, Some("Bookoo".to_owned()));
         // Enter replay. The shadow core has no scale; calling
         // scale_capabilities should return None.
@@ -2010,7 +2016,7 @@ mod tests {
             "shadow core has no scale"
         );
         // Pretend a replay connected a scale to the shadow core.
-        bridge.connect_scale("ACAIA_LUNAR_001".to_owned());
+        bridge.connect_scale("ACAIA_LUNAR_001".to_owned(), vec![]);
         // End replay. Live core must be restored intact.
         bridge.end_replay();
         assert!(!bridge.in_replay());
@@ -2138,7 +2144,7 @@ mod tests {
     #[test]
     fn scale_capabilities_reports_a_bookoo_as_first_class() {
         let mut bridge = CremaBridge::new();
-        bridge.connect_scale("BOOKOO_SC".to_owned());
+        bridge.connect_scale("BOOKOO_SC".to_owned(), vec![]);
         let json = bridge.scale_capabilities().expect("a connected scale");
         let caps: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(caps["volume"]["min"], 0);
@@ -2156,7 +2162,7 @@ mod tests {
     #[test]
     fn scale_uuids_reports_the_connected_scales_gatt_uuids() {
         let mut bridge = CremaBridge::new();
-        bridge.connect_scale("BOOKOO_SC".to_owned());
+        bridge.connect_scale("BOOKOO_SC".to_owned(), vec![]);
         let json = bridge.scale_uuids().expect("a connected scale");
         let uuids: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert!(uuids["service"].is_string());
@@ -2167,7 +2173,7 @@ mod tests {
     #[test]
     fn set_scale_volume_produces_a_write_scale_command_for_a_capable_scale() {
         let mut bridge = CremaBridge::new();
-        bridge.connect_scale("BOOKOO_SC".to_owned());
+        bridge.connect_scale("BOOKOO_SC".to_owned(), vec![]);
         let json = bridge.set_scale_volume(3);
         assert!(json.contains("\"commands\""));
         assert!(json.contains("WriteScale"));
@@ -2176,7 +2182,7 @@ mod tests {
     #[test]
     fn set_scale_mode_produces_three_write_scale_commands_for_a_capable_scale() {
         let mut bridge = CremaBridge::new();
-        bridge.connect_scale("BOOKOO_SC".to_owned());
+        bridge.connect_scale("BOOKOO_SC".to_owned(), vec![]);
         let json = bridge.set_scale_mode(1);
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         // Three mode writes plus the appended 0x0f settings query.
@@ -2186,7 +2192,7 @@ mod tests {
     #[test]
     fn query_scale_settings_produces_a_write_scale_command_for_a_capable_scale() {
         let mut bridge = CremaBridge::new();
-        bridge.connect_scale("BOOKOO_SC".to_owned());
+        bridge.connect_scale("BOOKOO_SC".to_owned(), vec![]);
         let json = bridge.query_scale_settings();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         let commands = parsed["commands"].as_array().unwrap();
@@ -2197,7 +2203,7 @@ mod tests {
     #[test]
     fn scale_config_methods_produce_no_command_for_a_weight_only_scale() {
         let mut bridge = CremaBridge::new();
-        bridge.connect_scale("Decent Scale ABC".to_owned());
+        bridge.connect_scale("Decent Scale ABC".to_owned(), vec![]);
         for json in [
             bridge.set_scale_volume(3),
             bridge.set_scale_standby(15),
@@ -2215,7 +2221,7 @@ mod tests {
     #[test]
     fn scale_lcd_and_heartbeat_bridge_methods_produce_a_write_for_a_decent_scale() {
         let mut bridge = CremaBridge::new();
-        bridge.connect_scale("Decent Scale ABC".to_owned());
+        bridge.connect_scale("Decent Scale ABC".to_owned(), vec![]);
         for json in [
             bridge.enable_scale_lcd("grams").unwrap(),
             bridge.disable_scale_lcd().unwrap(),
@@ -2233,7 +2239,7 @@ mod tests {
         // Bookoo has no settable LCD and doesn't need a heartbeat — every
         // capability call surfaces an UnsupportedOnHardware error string.
         let mut bridge = CremaBridge::new();
-        bridge.connect_scale("BOOKOO_SC".to_owned());
+        bridge.connect_scale("BOOKOO_SC".to_owned(), vec![]);
         for err in [
             bridge.enable_scale_lcd("grams").unwrap_err(),
             bridge.disable_scale_lcd().unwrap_err(),
@@ -2249,7 +2255,7 @@ mod tests {
     #[test]
     fn enable_scale_lcd_on_decent_in_ounces_emits_the_ounces_packet() {
         let mut bridge = CremaBridge::new();
-        bridge.connect_scale("Decent Scale ABC".to_owned());
+        bridge.connect_scale("Decent Scale ABC".to_owned(), vec![]);
         let json = bridge.enable_scale_lcd("ounces").unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         let commands = parsed["commands"].as_array().unwrap();
@@ -2273,14 +2279,14 @@ mod tests {
     #[test]
     fn enable_scale_lcd_with_unknown_unit_errors() {
         let mut bridge = CremaBridge::new();
-        bridge.connect_scale("Decent Scale ABC".to_owned());
+        bridge.connect_scale("Decent Scale ABC".to_owned(), vec![]);
         assert!(bridge.enable_scale_lcd("kilograms").is_err());
     }
 
     #[test]
     fn power_off_scale_on_decent_emits_the_power_off_packet() {
         let mut bridge = CremaBridge::new();
-        bridge.connect_scale("Decent Scale ABC".to_owned());
+        bridge.connect_scale("Decent Scale ABC".to_owned(), vec![]);
         // Power-off is sent unconditionally on a Decent Scale; older
         // firmware silently no-ops on the byte sequence.
         let json = bridge.power_off_scale().expect("decent scale connected");
@@ -2303,7 +2309,7 @@ mod tests {
     #[test]
     fn power_off_scale_errors_for_a_scale_without_power_off() {
         let mut bridge = CremaBridge::new();
-        bridge.connect_scale("BOOKOO_SC".to_owned());
+        bridge.connect_scale("BOOKOO_SC".to_owned(), vec![]);
         let err = bridge.power_off_scale().unwrap_err();
         assert!(
             err.contains("scale_power_off"),
@@ -2422,7 +2428,7 @@ mod tests {
             let mut bridge = CremaBridge::new();
             // A scale is connected so the ScaleWeight decode path is exercised
             // rather than being skipped for want of a scale.
-            bridge.connect_scale("BOOKOO_SC".to_owned());
+            bridge.connect_scale("BOOKOO_SC".to_owned(), vec![]);
             let out = bridge.on_notification(source, Vec::new(), 1_000.0);
             let parsed: serde_json::Value =
                 serde_json::from_str(&out).expect("bridge returned malformed JSON");
@@ -2436,7 +2442,7 @@ mod tests {
         let garbage = vec![0xFF, 0x00, 0xAB, 0xCD, 0xEF, 0x13, 0x37];
         for source in every_source() {
             let mut bridge = CremaBridge::new();
-            bridge.connect_scale("BOOKOO_SC".to_owned());
+            bridge.connect_scale("BOOKOO_SC".to_owned(), vec![]);
             let out = bridge.on_notification(source, garbage.clone(), 2_000.0);
             let parsed: serde_json::Value =
                 serde_json::from_str(&out).expect("bridge returned malformed JSON");

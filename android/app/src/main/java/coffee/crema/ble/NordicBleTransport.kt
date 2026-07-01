@@ -99,6 +99,10 @@ class NordicBleTransport(context: Context) : BleTransport {
     /** Per-device mirror of the coarse [BleTransport.ConnState]. */
     private val states = ConcurrentHashMap<NordicDeviceHandle, MutableStateFlow<BleTransport.ConnState>>()
 
+    /** Per-device discovered GATT service UUIDs (lowercased), captured once at
+     *  [connect] and served by [discoveredServices] for scale identification. */
+    private val serviceUuids = ConcurrentHashMap<NordicDeviceHandle, List<String>>()
+
     /** Per-device job mirroring [Peripheral.state] into [states]; cancelled + replaced
      *  on every [connect] so repeated connects (each reconnect attempt) don't stack
      *  duplicate collectors all racing to write the same state (issue 10). */
@@ -206,6 +210,10 @@ class NordicBleTransport(context: Context) : BleTransport {
         ) {
             is RemoteServices.Failed -> error("Service discovery failed: ${resolved.reason}")
             is RemoteServices.Discovered -> {
+                // Capture the discovered service UUIDs for scale identification
+                // (a distinctive service names the codec when the advertised
+                // name can't — Acaia generation, rebrand, mixed-case).
+                serviceUuids[handle] = resolved.services.map { it.uuid.toString().lowercase() }
                 // Dump the full GATT table to Logcat. This is how Bookoo
                 // characteristics beyond the weight-notify one (e.g. a
                 // battery/timer/command channel) get discovered without a
@@ -215,6 +223,9 @@ class NordicBleTransport(context: Context) : BleTransport {
             else -> Unit // Unknown/Discovering can't reach here (see first{} above)
         }
     }
+
+    override fun discoveredServices(device: BleTransport.DeviceHandle): List<String> =
+        serviceUuids[device as? NordicDeviceHandle] ?: emptyList()
 
     /**
      * Log every discovered GATT service and, under each, every characteristic

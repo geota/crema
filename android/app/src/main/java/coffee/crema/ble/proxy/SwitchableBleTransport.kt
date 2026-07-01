@@ -73,4 +73,7 @@ class SwitchableBleTransport(initial: BleTransport) : BleTransport {
         service: UUID,
         characteristic: UUID,
     ): ByteArray = current.read(device, service, characteristic)
+
+    override fun discoveredServices(device: BleTransport.DeviceHandle): List<String> =
+        current.discoveredServices(device)
 }
