@@ -68,6 +68,14 @@ export interface ShotCompletion {
 	duration: number;
 	/** The active profile's name at the time of the shot, or `null`. */
 	profileName: string | null;
+	/**
+	 * A snapshot of the active profile's *recipe* (the core `Profile`, steps
+	 * included) at shot time, or `null`. Persisted onto {@link StoredShot.profile}
+	 * so an uploaded shot carries its recipe and round-trips through Visualizer
+	 * as a real, importable profile (#12) — `profileName` alone can't rebuild the
+	 * steps. Absent for headless/replay completions with no live profile.
+	 */
+	profile?: unknown | null;
 	/** The active profile's brew dose (grams) at the time of the shot, or `null`. */
 	dose: number | null;
 	/** The buffered telemetry series snapshotted at shot completion. */
@@ -183,6 +191,7 @@ export class HistoryStore {
 			id: shotId(),
 			completedAt: Date.now(),
 			profileName: completion.profileName,
+			profile: completion.profile ?? null,
 			metadata,
 			record: {
 				duration: completion.duration,

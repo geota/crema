@@ -115,6 +115,7 @@ fn build_v2_document(shot: &StoredShot) -> V2DocumentOut {
 
     let profile = profile_out(
         shot.profile.as_ref(),
+        shot.profile_name.as_deref(),
         shot.metadata.yield_out.unwrap_or(0.0),
     );
 
@@ -214,7 +215,11 @@ fn bean_out(label: Option<&str>) -> Option<V2BeanOut> {
     })
 }
 
-fn profile_out(profile: Option<&Profile>, fallback_target_weight: f32) -> V2ProfileSlotOut {
+fn profile_out(
+    profile: Option<&Profile>,
+    profile_name: Option<&str>,
+    fallback_target_weight: f32,
+) -> V2ProfileSlotOut {
     match profile {
         Some(p) => V2ProfileSlotOut {
             version: p.version.clone(),
@@ -228,12 +233,10 @@ fn profile_out(profile: Option<&Profile>, fallback_target_weight: f32) -> V2Prof
                 BeverageType::Manual => "manual",
                 BeverageType::Pourover => "pourover",
             },
-            // StoredShot doesn't persist the per-sample profile step
-            // list (the `profile_title` is recorded, the recipe isn't);
-            // the legacy shell exporter also emits `[]` here, and a
-            // v2 reader that wants step detail pairs the export with a
-            // separate profile JSON.
-            steps: Vec::new(),
+            // Embed the recipe so an uploaded shot round-trips through
+            // Visualizer as a real, importable profile (#12) — not the
+            // empty-steps stub this exporter used to emit.
+            steps: crate::profile_import::steps_to_v2_values(&p.steps),
             target_volume: f32::from(p.max_total_volume_ml),
             target_weight: if p.target_weight > 0.0 {
                 p.target_weight
@@ -243,9 +246,16 @@ fn profile_out(profile: Option<&Profile>, fallback_target_weight: f32) -> V2Prof
             target_volume_count_start: p.preinfuse_step_count,
             tank_temperature: p.tank_temperature,
         },
+        // No recipe snapshot (a legacy shot, or one recorded before the
+        // profile was attached): fall back to the recorded profile name for
+        // the title rather than the opaque "Unknown profile".
         None => V2ProfileSlotOut {
             version: "2".to_string(),
-            title: "Unknown profile".to_string(),
+            title: profile_name
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or("Unknown profile")
+                .to_string(),
             notes: String::new(),
             author: String::new(),
             beverage_type: "espresso",
@@ -668,6 +678,31 @@ mod tests {
         assert!(
             parsed.profile.is_none() || parsed.profile.as_ref().unwrap().title == "Unknown profile"
         );
+    }
+
+    /// A shot that carries its profile must export the *recipe* steps, not the
+    /// empty stub the exporter used to emit — otherwise a profile downloaded
+    /// back from Visualizer re-imports as `NoSteps` (#12).
+    #[test]
+    fn export_embeds_the_profile_recipe() {
+        let profile = crate::profile_import::import_v2_json(
+            r#"{ "title": "Test recipe", "notes": "", "steps": [
+                { "name": "infuse", "pump": "flow", "flow": "4", "seconds": "10",
+                  "temperature": "92",
+                  "exit": { "type": "pressure", "value": "4", "condition": "over" } },
+                { "name": "pour", "pump": "pressure", "pressure": "9",
+                  "seconds": "25", "temperature": "93" }
+            ] }"#,
+        )
+        .expect("profile imports");
+        let shot = fixture().with_profile(profile);
+        let doc: serde_json::Value =
+            serde_json::from_str(&export_v2_json_shot(&shot).expect("exports")).unwrap();
+        let steps = doc["profile"]["steps"]
+            .as_array()
+            .expect("profile has a steps array");
+        assert_eq!(steps.len(), 2, "the recipe must be embedded, not dropped");
+        assert_eq!(doc["profile"]["title"], "Test recipe");
     }
 
     /// A shot with no metadata fields populated still emits a valid v2

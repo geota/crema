@@ -390,6 +390,18 @@ pub fn export_v2_json(profile: &Profile) -> Result<String, serde_json::Error> {
     serde_json::to_string_pretty(&out)
 }
 
+/// Serialize a profile's steps into the community-v2 step shape (the same shape
+/// [`export_v2_json`] emits) as generic JSON values. Used by the shot exporter
+/// (`crate::history_export::profile_out`) to embed the *recipe* — not just the
+/// title — in an uploaded shot, so a profile downloaded back from Visualizer
+/// imports as a real profile instead of an empty stub (#12).
+pub(crate) fn steps_to_v2_values(steps: &[ProfileStep]) -> Vec<serde_json::Value> {
+    steps
+        .iter()
+        .map(|s| serde_json::to_value(step_to_v2(s)).unwrap_or(serde_json::Value::Null))
+        .collect()
+}
+
 /// Convert one [`ProfileStep`] into its emitted v2 JSON step.
 fn step_to_v2(step: &ProfileStep) -> V2StepOut {
     // Only the field matching the pump priority carries the target value.
@@ -455,6 +467,27 @@ fn step_to_v2(step: &ProfileStep) -> V2StepOut {
 /// - [`ImportError::TooManySteps`] if it has more than 32.
 pub fn import_legacy_tcl(tcl: &str) -> Result<Profile, ImportError> {
     let dict = TclDict::parse(tcl)?;
+
+    // A Visualizer export of a shot that was uploaded *without* its profile is a
+    // dict of blank fields (`advanced_shot {}`, `espresso_pressure {}`, …) — only
+    // `profile_notes` carries "Downloaded from Visualizer". The simple builders
+    // below would otherwise fabricate a placeholder `empty_frame` step, so a
+    // profile-less source imports as a junk 1-step profile instead of failing.
+    // Guard here so the Tcl path rejects it exactly like the v2-JSON path rejects
+    // `"steps": []` (both -> `NoSteps`).
+    let has_profile_data = !dict.get("advanced_shot").unwrap_or("").trim().is_empty()
+        || [
+            "espresso_pressure",
+            "espresso_temperature",
+            "flow_profile_preinfusion",
+            "espresso_hold_time",
+            "espresso_decline_time",
+        ]
+        .iter()
+        .any(|k| dict.get(k).is_some_and(|v| !v.trim().is_empty()));
+    if !has_profile_data {
+        return Err(ImportError::NoSteps);
+    }
 
     let profile_type = dict.get("settings_profile_type").unwrap_or("settings_2a");
     let profile_type = fix_profile_type(profile_type);
@@ -1362,6 +1395,18 @@ mod tests {
     fn v2_json_rejects_an_empty_step_list() {
         let json = r#"{ "title": "x", "notes": "", "steps": [] }"#;
         assert_eq!(import_v2_json(json), Err(ImportError::NoSteps));
+    }
+
+    #[test]
+    fn legacy_tcl_rejects_a_profileless_visualizer_export() {
+        // Visualizer emits this when a shot was uploaded without its profile:
+        // every field blank, only the notes marker set. It must not import as a
+        // fabricated 1-step profile — reject it like the empty v2-JSON case.
+        let tcl = "advanced_shot {}\nauthor {}\nbeverage_type {}\nespresso_pressure {}\n\
+                   espresso_temperature {}\nflow_profile_preinfusion {}\nespresso_hold_time {}\n\
+                   espresso_decline_time {}\nprofile_notes {\n\nDownloaded from Visualizer}\n\
+                   profile_title {}\nsettings_profile_type {}";
+        assert_eq!(import_legacy_tcl(tcl), Err(ImportError::NoSteps));
     }
 
     #[test]

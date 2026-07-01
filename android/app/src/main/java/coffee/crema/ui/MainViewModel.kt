@@ -30,6 +30,7 @@ import coffee.crema.drive.DriveSync
 import coffee.crema.core.MaintenanceReadout
 import coffee.crema.core.blankCremaProfile
 import coffee.crema.core.builtinCremaProfiles
+import coffee.crema.core.cremaProfileFromWire
 import coffee.crema.core.cremaProfileToWire
 import coffee.crema.core.importBeanconquerorJson
 import coffee.crema.core.exportBackupJsonl
@@ -1667,8 +1668,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         return runCatching { json.encodeToString(JsonObject.serializer(), JsonObject(obj)) }.getOrNull()
     }
 
-    /** Import profiles from a Crema .json export (array / single object / .jsonl).
-     *  Each becomes a new custom profile. */
+    /** Import profiles — Crema's own `.json`/`.jsonl` export, plus external
+     *  community-v2 `.json` and legacy `.tcl` profiles (Visualizer / de1app),
+     *  routed through the core importers → CremaProfile → adopted as custom (#12). */
     fun importProfiles(uri: Uri) {
         viewModelScope.launch {
             val text = readUriText(uri)?.trim()
@@ -1680,8 +1682,27 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     else -> text.lineSequence().map { it.trim() }.filter { it.startsWith("{") }.toList()
                 }
             }.getOrElse { emptyList() }
-            val adopted = elements.mapNotNull { adoptProfileJson(it) }
-            if (adopted.isEmpty()) { notifyUser("No profiles imported — unrecognised file"); return@launch }
+            val adopted = elements.mapNotNull { adoptProfileJson(it) }.toMutableList()
+            // Not Crema's own shape? Try the external single-file formats via the
+            // core: a `{`-leading file is community-v2 JSON, otherwise legacy TCL.
+            // Convert the parsed wire Profile to a CremaProfile, then adopt it.
+            if (adopted.isEmpty()) {
+                val ext = runCatching {
+                    val wire = if (text.startsWith("{")) bridge.importV2JsonProfile(text)
+                    else bridge.importLegacyTclProfile(text)
+                    adoptProfileJson(cremaProfileFromWire(wire))
+                }
+                ext.getOrNull()?.let { adopted.add(it) }
+                if (adopted.isEmpty()) {
+                    // Surface the core's reason (e.g. "imported profile has no steps"
+                    // for a profile-less Visualizer shot) instead of a blanket
+                    // "unrecognised file".
+                    val why = ext.exceptionOrNull()?.message?.takeIf { it.isNotBlank() }
+                    notifyUser(why?.let { "Couldn’t import profile — $it" }
+                        ?: "No profiles imported — unrecognised file")
+                    return@launch
+                }
+            }
             customProfilesJson = adopted + customProfilesJson
             refreshProfiles()
             persistCustomProfiles()
@@ -1695,7 +1716,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val text = readUriText(uri)?.trim()
             if (text.isNullOrBlank()) { notifyUser("Import failed — couldn't read that file"); return@launch }
-            val shots = runCatching {
+            var shots = runCatching {
                 if (text.startsWith("[")) json.decodeFromString(ListSerializer(StoredShot.serializer()), text)
                 else listOf(json.decodeFromString(StoredShot.serializer(), text))
             }.getOrElse {
@@ -1704,7 +1725,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         .map { json.decodeFromString(StoredShot.serializer(), it) }.toList()
                 }.getOrElse { emptyList() }
             }
-            if (shots.isEmpty()) { notifyUser("No shots imported — unrecognised file"); return@launch }
+            // Not Crema's own shape? Try external shot files via the core: a de1app
+            // v2 `.shot.json` (`{`-leading) or a legacy `.tcl`/`.shot`.
+            if (shots.isEmpty()) {
+                val ext = runCatching {
+                    val wire = if (text.startsWith("{")) bridge.importV2JsonShot(text)
+                    else bridge.importLegacyTclShot(text)
+                    storedShotFromBackupJson(json.parseToJsonElement(wire).jsonObject, json)
+                }
+                ext.getOrNull()?.let { shots = listOf(it) }
+                if (shots.isEmpty()) {
+                    val why = ext.exceptionOrNull()?.message?.takeIf { it.isNotBlank() }
+                    notifyUser(why?.let { "Couldn’t import shot — $it" }
+                        ?: "No shots imported — unrecognised file")
+                    return@launch
+                }
+            }
             val existing = _ui.value.history.map { it.id }.toHashSet()
             val toAdd = shots.filterNot { it.id in existing }
             val next = toAdd + _ui.value.history
@@ -3956,6 +3992,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     ) {
         val s = _ui.value
         val profile = s.profiles.firstOrNull { it.id == s.activeProfileId }
+        // Snapshot the recipe (as-run) as the core wire Profile so the upload
+        // embeds real steps (#12) — not just the name. You can't switch profiles
+        // mid-pour, so the active profile is the one that ran.
+        val profileWire: JsonObject? = profile?.let { p ->
+            runCatching {
+                json.parseToJsonElement(
+                    cremaProfileToWire(json.encodeToString(CremaProfile.serializer(), p)),
+                ) as? JsonObject
+            }.getOrNull()
+        }
         val bean = s.beans.firstOrNull { it.id == s.activeBeanId }
         val roasterName = bean?.roasterId?.let { rid -> s.roasters.firstOrNull { it.id == rid }?.name }
         // Freeze a full bean snapshot (the core wire shape) at shot time — the
@@ -3982,6 +4028,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             peakPressure = peakPressure,
             peakTemp = peakTemp,
             profileName = profile?.name,
+            profile = profileWire,
             bean = beanSnapshot,
             // The buffer still holds the just-finished shot (cleared on the next
             // ShotStarted); downsample it for the detail chart.

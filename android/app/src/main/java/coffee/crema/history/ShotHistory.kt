@@ -8,6 +8,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 import java.io.File
 
 /*
@@ -44,6 +45,13 @@ data class StoredShot(
     val peakTemp: Float? = null,
     /** Active profile name at capture, or null. */
     val profileName: String? = null,
+    /**
+     * The active profile's *recipe* (the core wire `Profile` shape) snapshotted at
+     * capture, or null. Embedded into the Visualizer upload (#12) so a profile
+     * downloaded back imports as a real profile, not an empty stub — `profileName`
+     * alone can't rebuild the steps. Additive; older records deserialise as null.
+     */
+    val profile: JsonObject? = null,
     /**
      * Full bean snapshot at capture (the core wire shape) — roaster, roast date,
      * and roast level frozen at shot time. The single source for both the

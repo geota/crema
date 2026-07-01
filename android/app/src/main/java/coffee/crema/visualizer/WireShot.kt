@@ -45,6 +45,10 @@ fun wireShotJson(shot: StoredShot, grinderModel: String? = null, forBackup: Bool
         // `?.let { put } ?: put(JsonNull)` form silently overwrote a set value
         // with null (put returns the previous value, so the elvis always fired).
         put("profileName", shot.profileName)
+        // Embed the recipe (#12) so the uploaded shot round-trips through Visualizer
+        // as a real, importable profile — not an empty stub. Absent for shots
+        // captured before this field existed (older records ride without it).
+        shot.profile?.let { put("profile", it) }
         put(
             "metadata",
             buildJsonObject {

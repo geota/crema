@@ -21,7 +21,7 @@ import type { CaptureEntry } from '$lib/capture';
 import { getCaptureStore } from '$lib/capture';
 import { getBeanStore } from '$lib/bean';
 import { promptBagEmpty } from '$lib/bean/bag-empty-prompt';
-import { getProfileStore } from '$lib/profiles';
+import { getProfileStore, toCoreProfile } from '$lib/profiles';
 import { getActiveShotStore, type ActiveShotData } from '$lib/state/active-shot.svelte';
 import { appendSyncLog, directionPushes, readSyncConfig } from '$lib/visualizer';
 import type { AppRuntime } from '$lib/effect/runtime';
@@ -139,9 +139,15 @@ function recordShotHistory(
 	const bean = activeShot?.bean ?? null;
 	const brewParams = activeShot?.brewParams ?? null;
 	const liveBeanForTags = bean?.beanId ? getBeanStore().getBean(bean.beanId) : null;
+	// Snapshot the active profile's recipe (as-run) so the upload embeds real
+	// steps, not just a name (#12). You can't switch profiles mid-pour, so the
+	// currently-active profile is the one that ran.
+	const profiles = getProfileStore();
+	const activeProfile = profiles.activeId ? profiles.get(profiles.activeId) : undefined;
 	return getHistoryStore().record({
 		duration: event.content.duration,
 		profileName: activeShot?.profileName ?? snapshot.activeProfileName,
+		profile: activeProfile ? toCoreProfile(activeProfile) : null,
 		dose: activeShot?.dose ?? null,
 		series: snapshot.shotTelemetry,
 		grinderModel: activeShot?.grinderModel ?? null,
