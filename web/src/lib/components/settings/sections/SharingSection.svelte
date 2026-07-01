@@ -44,6 +44,7 @@
 		restoreBackupData,
 		type RestoreMode
 	} from '$lib/backup';
+	import { backfillShotRecipes } from '$lib/history/recipe-backfill';
 	import { getDriveAuthStore } from '$lib/drive/store.svelte';
 	import { downloadBackup, listBackups, uploadBackup } from '$lib/drive/rest';
 
@@ -204,9 +205,17 @@
 	 *  where the user clicks — not under "Back up everything"). */
 	let restoreNote = $state<string | null>(null);
 
+	/** Fill in any pulled shots' recipes before a backup so the archive is
+	 *  self-contained + re-importable (#12). Best-effort; needs the wasm bridge. */
+	async function completePulledRecipes(): Promise<void> {
+		const app = appCtx().app;
+		if (app) await backfillShotRecipes((v2) => app.parseV2JsonProfile(v2));
+	}
+
 	/** Build + download a full `crema-backup/v1` bundle of everything local. */
 	async function backUp(): Promise<void> {
 		backupNote = 'Building backup…';
+		await completePulledRecipes();
 		const result = await exportBackup();
 		backupNote = result ? `Backed up — ${describeBackup(result)}.` : 'Nothing to back up yet.';
 	}
@@ -271,6 +280,7 @@
 		driveBusy = true;
 		driveNote = 'Building backup…';
 		try {
+			await completePulledRecipes();
 			const built = await buildBackupZip();
 			if (!built) {
 				driveNote = 'Nothing to back up yet.';
