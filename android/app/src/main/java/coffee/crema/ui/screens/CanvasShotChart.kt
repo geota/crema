@@ -3,11 +3,23 @@ package coffee.crema.ui.screens
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import coffee.crema.ui.components.PhIcon
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -201,6 +213,51 @@ fun CanvasShotChart(
                 if (!ch.dashed) {
                     ch.valueOf(last)?.let { v ->
                         drawCircle(ch.color, radius = 3.5.dp.toPx(), center = Offset(nx, yPx(v)))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Wraps a shot chart with tap-to-enlarge (issue #11): the inline chart shows a
+ * corner "expand" affordance and opens the same chart in a full-screen dialog on
+ * tap. `chart` is rendered inline AND in the dialog, so a live chart keeps
+ * updating in both (it re-reads the same telemetry state on recomposition).
+ */
+@Composable
+fun EnlargeableChart(
+    modifier: Modifier = Modifier,
+    chart: @Composable (Modifier) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box(modifier.clickable { expanded = true }) {
+        chart(Modifier.fillMaxSize())
+        PhIcon(
+            "arrows-out",
+            sizeDp = 16,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+            modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
+        )
+    }
+    if (expanded) {
+        Dialog(
+            onDismissRequest = { expanded = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false),
+        ) {
+            Surface(
+                modifier = Modifier.fillMaxSize().padding(16.dp),
+                shape = MaterialTheme.shapes.large,
+                color = MaterialTheme.colorScheme.surface,
+            ) {
+                Box(Modifier.fillMaxSize().padding(12.dp)) {
+                    chart(Modifier.fillMaxSize())
+                    IconButton(
+                        onClick = { expanded = false },
+                        modifier = Modifier.align(Alignment.TopEnd),
+                    ) {
+                        PhIcon("x", sizeDp = 20)
                     }
                 }
             }

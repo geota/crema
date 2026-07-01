@@ -166,6 +166,7 @@ import com.adamglin.phosphoricons.regular.Storefront
 import com.adamglin.phosphoricons.regular.Monitor
 import com.adamglin.phosphoricons.regular.ArrowCircleUp
 import com.adamglin.phosphoricons.regular.ArrowSquareOut
+import com.adamglin.phosphoricons.regular.ArrowsOut
 import com.adamglin.phosphoricons.regular.ArrowsClockwise
 import com.adamglin.phosphoricons.regular.ArrowsLeftRight
 import com.adamglin.phosphoricons.regular.DownloadSimple
@@ -274,6 +275,7 @@ fun PhIcon(name: String, modifier: Modifier = Modifier, tint: Color = LocalConte
         "arrow-square-out" -> PhosphorIcons.Regular.ArrowSquareOut
         "arrows-clockwise" -> PhosphorIcons.Regular.ArrowsClockwise
         "arrows-left-right" -> PhosphorIcons.Regular.ArrowsLeftRight
+        "arrows-out" -> PhosphorIcons.Regular.ArrowsOut
         "download-simple" -> PhosphorIcons.Regular.DownloadSimple
         "paper-plane-tilt" -> PhosphorIcons.Regular.PaperPlaneTilt
         "funnel" -> PhosphorIcons.Regular.Funnel

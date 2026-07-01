@@ -41,6 +41,7 @@
 	import SplitButton from '$lib/components/shared/SplitButton.svelte';
 	import { toast } from '$lib/components/shared/toast.svelte';
 	import StaticShotChart from './StaticShotChart.svelte';
+	import ChartModal from '$lib/components/shared/ChartModal.svelte';
 	import BeanPicker from './BeanPicker.svelte';
 
 	let {
@@ -96,6 +97,8 @@
 
 	/** Whether the notes block is in edit mode. */
 	let editing = $state(false);
+	/** Tap-to-enlarge: the shot chart in a full-viewport modal (issue #11). */
+	let chartExpanded = $state(false);
 	/** The draft notes text while editing. */
 	let draft = $state('');
 	/** Whether the bean-picker modal is open. */
@@ -451,8 +454,20 @@
 	</div>
 
 	<!-- Chart -->
+	{#snippet shotChart(height: number)}
+		<StaticShotChart series={flatSeries} {height} />
+	{/snippet}
 	<div class="hi-chart">
-		<StaticShotChart series={flatSeries} height={380} />
+		{@render shotChart(380)}
+		<button
+			type="button"
+			class="hi-chart-expand"
+			onclick={() => (chartExpanded = true)}
+			aria-label="Enlarge chart"
+			title="Enlarge chart"
+		>
+			<Icon cls="ph ph-arrows-out" aria-hidden="true" />
+		</button>
 		<!--
 			Legend grouped into 4 channel families — mirrors the brew
 			dashboard's Quick Controls "Chart" toggle layout. Each group
@@ -487,6 +502,12 @@
 			</span>
 		</div>
 	</div>
+
+	{#if chartExpanded}
+		<ChartModal onclose={() => (chartExpanded = false)}>
+			{@render shotChart(700)}
+		</ChartModal>
+	{/if}
 
 	<!-- Metric strip -->
 	<div class="hi-metrics">
@@ -721,6 +742,28 @@
 		border-radius: var(--radius-md);
 		padding: 14px 14px 10px;
 		position: relative;
+	}
+	/* Tap-to-enlarge affordance (issue #11). */
+	.hi-chart-expand {
+		position: absolute;
+		top: 8px;
+		right: 8px;
+		z-index: 2;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 28px;
+		height: 28px;
+		border: 1px solid var(--hairline, rgba(128, 128, 128, 0.25));
+		border-radius: 8px;
+		background: var(--bg-surface, rgba(20, 20, 20, 0.66));
+		color: var(--text-muted, rgba(160, 160, 160, 0.95));
+		cursor: pointer;
+		opacity: 0.65;
+		transition: opacity 120ms ease;
+	}
+	.hi-chart-expand:hover {
+		opacity: 1;
 	}
 	.hi-chart-legend {
 		display: flex;

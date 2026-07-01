@@ -232,13 +232,13 @@ fun BrewScreen(
                         shape = MaterialTheme.shapes.medium,
                         color = MaterialTheme.colorScheme.surfaceContainer,
                     ) {
-                        CanvasShotChart(
-                            samples = ui.shotTelemetry,
-                            enabledChannels = ui.chartChannels,
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(start = 4.dp, end = 8.dp, top = 8.dp, bottom = 4.dp),
-                        )
+                        EnlargeableChart(Modifier.fillMaxSize()) { m ->
+                            CanvasShotChart(
+                                samples = ui.shotTelemetry,
+                                enabledChannels = ui.chartChannels,
+                                modifier = m.padding(start = 4.dp, end = 8.dp, top = 8.dp, bottom = 4.dp),
+                            )
+                        }
                     }
                 }
             }

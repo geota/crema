@@ -64,6 +64,7 @@
 	import BrewHeader from './BrewHeader.svelte';
 	import { type PickerItem } from './HeaderPicker.svelte';
 	import LiveChart from './LiveChart.svelte';
+	import ChartModal from '$lib/components/shared/ChartModal.svelte';
 	import QuickSheet from './QuickSheet.svelte';
 	import LastShotCard from './LastShotCard.svelte';
 	import PowerButton from '$lib/components/PowerButton.svelte';
@@ -572,6 +573,8 @@
 	 * a stale pin from the previous shot doesn't outlive its data.
 	 */
 	let pinnedTimeSec = $state<number | null>(null);
+	/** Tap-to-enlarge: the live chart in a full-viewport modal (issue #11). */
+	let chartExpanded = $state(false);
 	// Plain `let` (not `$state`) so the rising-edge effect only tracks the prop.
 	let lastShotInProgress = false;
 	$effect(() => {
@@ -1363,10 +1366,7 @@
 						secondaryColor="var(--tel-weight-2)"
 					/>
 				</div>
-				<div class="crema-chart">
-					<!-- Always mounted: an empty series renders bare axes + grid (the
-					     "ready" state); a finished shot's curve stays until the next
-					     shot starts. -->
+				{#snippet liveChart()}
 					<LiveChart
 						series={ui.shotTelemetry}
 						goalSegments={activeProfile?.segments}
@@ -1383,7 +1383,28 @@
 						{pinnedTimeSec}
 						onPin={(t) => (pinnedTimeSec = t)}
 					/>
+				{/snippet}
+				<div class="crema-chart">
+					<!-- Always mounted: an empty series renders bare axes + grid (the
+					     "ready" state); a finished shot's curve stays until the next
+					     shot starts. The same snippet renders in the enlarge modal
+					     (issue #11), so the live chart isn't re-mounted mid-shot. -->
+					{@render liveChart()}
+					<button
+						type="button"
+						class="crema-chart-expand"
+						onclick={() => (chartExpanded = true)}
+						aria-label="Enlarge chart"
+						title="Enlarge chart"
+					>
+						<Icon cls="ph ph-arrows-out" aria-hidden="true" />
+					</button>
 				</div>
+				{#if chartExpanded}
+					<ChartModal onclose={() => (chartExpanded = false)}>
+						{@render liveChart()}
+					</ChartModal>
+				{/if}
 			</div>
 		</div>
 
@@ -1531,7 +1552,30 @@
 	/* The pinned moment renders as a vertical line on the chart itself
 	   (drawn by LiveChart's marker plugin); no chrome on the wrapper. */
 	.crema-chart {
+		position: relative;
 		cursor: crosshair;
+	}
+	/* Tap-to-enlarge affordance (issue #11) — corner button over the chart. */
+	.crema-chart-expand {
+		position: absolute;
+		top: 6px;
+		right: 6px;
+		z-index: 2;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 28px;
+		height: 28px;
+		border: 1px solid var(--hairline, rgba(128, 128, 128, 0.25));
+		border-radius: 8px;
+		background: var(--bg-surface, rgba(20, 20, 20, 0.66));
+		color: var(--text-muted, rgba(160, 160, 160, 0.95));
+		cursor: pointer;
+		opacity: 0.65;
+		transition: opacity 120ms ease;
+	}
+	.crema-chart-expand:hover {
+		opacity: 1;
 	}
 /* Coffee-button sync state — visually mirrors the profile-sync chip
 	   in the header (subtle copper hue, spinning icon) so the same

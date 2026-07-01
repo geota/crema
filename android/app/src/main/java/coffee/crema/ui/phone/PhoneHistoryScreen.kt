@@ -44,6 +44,7 @@ import coffee.crema.ui.compare.PhoneSelectHint
 import coffee.crema.ui.compare.RowCheck
 import coffee.crema.ui.compare.rememberCompareSelection
 import coffee.crema.ui.screens.CanvasShotChart
+import coffee.crema.ui.screens.EnlargeableChart
 import coffee.crema.ui.screens.historySortKeys
 import coffee.crema.ui.theme.CremaTheme
 import coffee.crema.ui.theme.JetBrainsMono
@@ -539,12 +540,14 @@ private fun PhoneShotDetail(
                             )
                         }
                     } else {
-                        CanvasShotChart(
-                            samples = shot.samples,
-                            enabledChannels = setOf("pressure", "flow", "headTemp", "weight"),
-                            live = false,
-                            modifier = Modifier.fillMaxWidth().height(190.dp),
-                        )
+                        EnlargeableChart(Modifier.fillMaxWidth().height(190.dp)) { m ->
+                            CanvasShotChart(
+                                samples = shot.samples,
+                                enabledChannels = setOf("pressure", "flow", "headTemp", "weight"),
+                                live = false,
+                                modifier = m,
+                            )
+                        }
                     }
                 }
             }

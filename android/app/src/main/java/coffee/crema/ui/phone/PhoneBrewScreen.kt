@@ -54,6 +54,7 @@ import coffee.crema.ui.components.*
 import coffee.crema.ui.phone.components.*
 import coffee.crema.ui.screens.CanvasProfilePreview
 import coffee.crema.ui.screens.CanvasShotChart
+import coffee.crema.ui.screens.EnlargeableChart
 import coffee.crema.ui.theme.CremaTheme
 import coffee.crema.ui.theme.JetBrainsMono
 
@@ -577,11 +578,13 @@ private fun RunningBody(ui: MainUiState, active: CremaProfile?, modifier: Modifi
             shape = RoundedCornerShape(16.dp),
             color = MaterialTheme.colorScheme.surfaceContainer,
         ) {
-            CanvasShotChart(
-                samples = ui.shotTelemetry,
-                enabledChannels = ui.chartChannels,
-                modifier = Modifier.fillMaxSize().padding(start = 2.dp, end = 8.dp, top = 8.dp, bottom = 2.dp),
-            )
+            EnlargeableChart(Modifier.fillMaxSize()) { m ->
+                CanvasShotChart(
+                    samples = ui.shotTelemetry,
+                    enabledChannels = ui.chartChannels,
+                    modifier = m.padding(start = 2.dp, end = 8.dp, top = 8.dp, bottom = 2.dp),
+                )
+            }
         }
     }
 }
@@ -821,12 +824,14 @@ private fun RestingBody(
                     ) {
                         val samples = stored?.samples.orEmpty()
                         if (samples.isNotEmpty()) {
-                            CanvasShotChart(
-                                samples = samples,
-                                enabledChannels = ui.chartChannels,
-                                live = false,
-                                modifier = Modifier.fillMaxSize().padding(start = 2.dp, end = 8.dp, top = 8.dp, bottom = 2.dp),
-                            )
+                            EnlargeableChart(Modifier.fillMaxSize()) { m ->
+                                CanvasShotChart(
+                                    samples = samples,
+                                    enabledChannels = ui.chartChannels,
+                                    live = false,
+                                    modifier = m.padding(start = 2.dp, end = 8.dp, top = 8.dp, bottom = 2.dp),
+                                )
+                            }
                         } else {
                             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                                 Text(
