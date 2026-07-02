@@ -39,6 +39,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
@@ -76,6 +77,8 @@ import coffee.crema.ui.phone.TabletDevicesSheet
 import coffee.crema.ui.screens.BeanEditScreen
 import coffee.crema.ui.screens.BeansScreen
 import coffee.crema.ui.screens.BrewScreen
+import coffee.crema.ui.screens.ChartExpandOverlay
+import coffee.crema.ui.screens.LocalChartExpander
 import coffee.crema.ui.screens.HistoryScreen
 import coffee.crema.ui.screens.ProfileEditScreen
 import coffee.crema.ui.screens.ProfilesScreen
@@ -277,6 +280,11 @@ class MainActivity : ComponentActivity() {
                     color = MaterialTheme.colorScheme.background,
                     contentColor = MaterialTheme.colorScheme.onBackground,
                 ) {
+                // A deep EnlargeableChart hands its chart up here so the fullscreen
+                // expanded view lives in the main window — a Dialog's window is torn
+                // down by the expand-to-landscape rotation, bouncing it closed.
+                var fullscreenChart by remember { mutableStateOf<(@Composable (Modifier) -> Unit)?>(null) }
+                CompositionLocalProvider(LocalChartExpander provides { c -> fullscreenChart = c }) {
                 Box(Modifier.fillMaxSize()) {
                 // ONE adaptive APK. The tablet rail layout is multi-pane (rail +
                 // list + detail, side-by-side cards) and only has room to breathe on
@@ -388,6 +396,11 @@ class MainActivity : ComponentActivity() {
                         onAccept = viewModel::acceptHandoffOffer,
                         onDecline = viewModel::declineHandoffOffer,
                     )
+                }
+                // Fullscreen expanded chart — drawn last, over everything.
+                fullscreenChart?.let { fc ->
+                    ChartExpandOverlay(chart = fc, onClose = { fullscreenChart = null })
+                }
                 }
                 }
                 }

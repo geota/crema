@@ -28,8 +28,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
+import androidx.activity.compose.BackHandler
+import androidx.compose.runtime.staticCompositionLocalOf
 import coffee.crema.ui.components.PhIcon
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -237,13 +237,20 @@ fun CanvasShotChart(
  * tap. `chart` is rendered inline AND in the dialog, so a live chart keeps
  * updating in both (it re-reads the same telemetry state on recomposition).
  */
+/** Set by the activity root — hands a deep [EnlargeableChart]'s chart up to the
+ *  root-level [ChartExpandOverlay]. The overlay lives in the main window on
+ *  purpose: a Compose `Dialog` here has its window torn down by the
+ *  expand-to-landscape config-change, which dismisses it and bounces the
+ *  orientation straight back to portrait. */
+val LocalChartExpander = staticCompositionLocalOf<((@Composable (Modifier) -> Unit)?) -> Unit> { {} }
+
 @Composable
 fun EnlargeableChart(
     modifier: Modifier = Modifier,
     chart: @Composable (Modifier) -> Unit,
 ) {
-    var expanded by remember { mutableStateOf(false) }
-    Box(modifier.clickable { expanded = true }) {
+    val expand = LocalChartExpander.current
+    Box(modifier.clickable { expand(chart) }) {
         // Inset the plot's top by the chip's height so the expand affordance sits in
         // a clear strip on the card ABOVE the chart, never on the top y-axis value it
         // used to cover (#11).
@@ -260,48 +267,50 @@ fun EnlargeableChart(
             PhIcon("arrows-out", sizeDp = 14, tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
-    if (expanded) {
-        // A phone's fullscreen chart looks cramped stretched vertically — rotate to
-        // landscape while expanded, restoring the prior orientation on close. No-op
-        // on a tablet (already wide). Needs the manifest's `configChanges` so the
-        // rotation recomposes rather than recreating the activity.
-        val context = LocalContext.current
-        // Latch phone-ness at expand time and key the effect on Unit: once we rotate
-        // to landscape screenWidthDp jumps >600, so re-reading it (or keying on it)
-        // would flip isPhone false, dispose the effect, and revert orientation the
-        // instant it rotated — the reported bounce. Unit = run once on open, revert
-        // once on close.
-        val widthDp = LocalConfiguration.current.screenWidthDp
-        val startedOnPhone = remember { widthDp < 600 }
-        DisposableEffect(Unit) {
-            val activity = context.findActivity()
-            val previous = activity?.requestedOrientation
+}
+
+/** The fullscreen expanded chart, hosted by the activity root so it survives the
+ *  phone's expand-to-landscape rotation (see [LocalChartExpander]). A phone rotates
+ *  to landscape — a wide chart is cramped stretched vertically — restoring the prior
+ *  orientation on close; a tablet is already wide, so it just goes fullscreen. Needs
+ *  the manifest's `configChanges` so the rotation recomposes, not recreates. */
+@Composable
+fun ChartExpandOverlay(
+    chart: @Composable (Modifier) -> Unit,
+    onClose: () -> Unit,
+) {
+    val context = LocalContext.current
+    // Latch phone-ness at open time: screenWidthDp jumps >600 the instant we're in
+    // landscape, so re-reading it would flip the guard mid-rotation.
+    val widthDp = LocalConfiguration.current.screenWidthDp
+    val startedOnPhone = remember { widthDp < 600 }
+    DisposableEffect(Unit) {
+        val activity = context.findActivity()
+        val previous = activity?.requestedOrientation
+        if (startedOnPhone && activity != null) {
+            activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+        }
+        onDispose {
             if (startedOnPhone && activity != null) {
-                activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
-            }
-            onDispose {
-                if (startedOnPhone && activity != null) {
-                    activity.requestedOrientation = previous ?: ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
-                }
+                activity.requestedOrientation = previous ?: ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
             }
         }
-        Dialog(
-            onDismissRequest = { expanded = false },
-            properties = DialogProperties(usePlatformDefaultWidth = false),
+    }
+    BackHandler(onBack = onClose)
+    // Opaque full-bleed backdrop so the underlying screen doesn't show at the margin.
+    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+        Surface(
+            modifier = Modifier.fillMaxSize().padding(16.dp),
+            shape = MaterialTheme.shapes.large,
+            color = MaterialTheme.colorScheme.surface,
         ) {
-            Surface(
-                modifier = Modifier.fillMaxSize().padding(16.dp),
-                shape = MaterialTheme.shapes.large,
-                color = MaterialTheme.colorScheme.surface,
-            ) {
-                Box(Modifier.fillMaxSize().padding(12.dp)) {
-                    chart(Modifier.fillMaxSize())
-                    IconButton(
-                        onClick = { expanded = false },
-                        modifier = Modifier.align(Alignment.TopEnd),
-                    ) {
-                        PhIcon("x", sizeDp = 20)
-                    }
+            Box(Modifier.fillMaxSize().padding(12.dp)) {
+                chart(Modifier.fillMaxSize())
+                IconButton(
+                    onClick = onClose,
+                    modifier = Modifier.align(Alignment.TopEnd),
+                ) {
+                    PhIcon("x", sizeDp = 20)
                 }
             }
         }
