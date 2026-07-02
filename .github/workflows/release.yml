@@ -224,6 +224,11 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          # Prod Android OAuth clients — the release buildType falls back to "" (+
+          # the "unconfigured" Drive redirect scheme) without them, leaving
+          # Visualizer / Google Drive sign-in dead in the shipped APK/AAB.
+          VISUALIZER_CLIENT_ID: ${{ secrets.VISUALIZER_CLIENT_ID }}
+          GOOGLE_DRIVE_CLIENT_ID: ${{ secrets.GOOGLE_DRIVE_CLIENT_ID }}
           VERSION_NAME: ${{ needs.version.outputs.name }}
           VERSION_CODE: ${{ needs.version.outputs.code }}
         run: |

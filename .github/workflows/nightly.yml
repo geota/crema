@@ -107,6 +107,12 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          # Prod Android OAuth clients — the nightly shares dev.maceiras.crema and
+          # the release signature, so it uses the same registered clients. Without
+          # these the `release` buildType falls back to "" (+ the "unconfigured"
+          # Drive redirect scheme) and Visualizer / Google Drive sign-in is dead.
+          VISUALIZER_CLIENT_ID: ${{ secrets.VISUALIZER_CLIENT_ID }}
+          GOOGLE_DRIVE_CLIENT_ID: ${{ secrets.GOOGLE_DRIVE_CLIENT_ID }}
           VERSION_NAME: ${{ steps.v.outputs.name }}
           VERSION_CODE: ${{ steps.v.outputs.code }}
         run: |
