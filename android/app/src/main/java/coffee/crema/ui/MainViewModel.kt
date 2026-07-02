@@ -4772,7 +4772,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 val bytes = command.content.data
                     .map { it.toByte() }
                     .toByteArray()
-                viewModelScope.launch { scale.writeCommand(bytes) }
+                // Fire-and-forget: a BLE write can fail (peer dropped, transient
+                // stack error → Nordic throws OperationFailedException). Log it here
+                // rather than let it escape the launch and crash the app; the
+                // reconnect supervisor handles an actual disconnect on its own.
+                viewModelScope.launch {
+                    try {
+                        scale.writeCommand(bytes)
+                    } catch (ce: kotlinx.coroutines.CancellationException) {
+                        throw ce
+                    } catch (e: Exception) {
+                        appendLog("Scale write failed: ${e.message}")
+                    }
+                }
             }
             is Command.WriteCharacteristic -> {
                 // The core hands the exact bytes + which DE1 characteristic to
@@ -4782,7 +4794,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 val bytes = command.content.data
                     .map { it.toByte() }
                     .toByteArray()
-                viewModelScope.launch { ble.writeCharacteristic(command.content.target, bytes) }
+                // Same guard: a failed machine write (e.g. the keep-alive poke as
+                // the DE1 drops) must not become an uncaught crash.
+                viewModelScope.launch {
+                    try {
+                        ble.writeCharacteristic(command.content.target, bytes)
+                    } catch (ce: kotlinx.coroutines.CancellationException) {
+                        throw ce
+                    } catch (e: Exception) {
+                        appendLog("DE1 write failed (${command.content.target}): ${e.message}")
+                    }
+                }
             }
         }
     }
