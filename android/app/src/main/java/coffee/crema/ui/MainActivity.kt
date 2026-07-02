@@ -294,7 +294,23 @@ class MainActivity : ComponentActivity() {
                 // breakpoint (840dp) gets the phone shell — bottom nav + single
                 // column + push details — which reflows cleanly at any width. A
                 // tablet in landscape (≥840dp) still gets the full rail layout.
-                val isCompact = LocalConfiguration.current.screenWidthDp < 840
+                // A chart expand forces landscape, which pushes screenWidthDp past the
+                // 840dp breakpoint and would swap phone↔tablet nav hosts mid-flight —
+                // and they hold independent back stacks, so you'd land on Brew instead
+                // of the shot you opened. Hold the decision from the moment a chart
+                // expands until the close-rotation has settled back to the pre-expand
+                // width (not a timed delay — keyed off the width agreeing again), so
+                // the nav host is never torn down and you return exactly where you were.
+                val rawCompact = LocalConfiguration.current.screenWidthDp < 840
+                var stableCompact by remember { mutableStateOf(rawCompact) }
+                var chartHold by remember { mutableStateOf(false) }
+                LaunchedEffect(fullscreenChart, rawCompact) {
+                    if (fullscreenChart != null) chartHold = true
+                    else if (rawCompact == stableCompact) chartHold = false
+                    // else: mid-revert — width still landscape — keep holding.
+                }
+                if (!chartHold) stableCompact = rawCompact
+                val isCompact = stableCompact
                 if (isCompact) {
                     PhoneNavHost(
                         vm = viewModel,
