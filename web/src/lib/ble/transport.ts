@@ -366,9 +366,27 @@ export class BleDevice implements De1Transport {
 			if (gatt === undefined) {
 				throw new Error('Device exposes no GATT server');
 			}
-			if (!gatt.connected) {
-				await gatt.connect();
+			if (gatt.connected) return;
+			// Web Bluetooth's `gatt.connect()` fails intermittently for some
+			// peripherals ("Connection attempt failed" / NetworkError) — several
+			// scales (Bookoo included) are notorious for it — where an immediate
+			// retry succeeds. Try a few times with a short backoff before surfacing
+			// the failure; the DE1 path benefits from the same resilience.
+			const attempts = 3;
+			const backoffMs = 400;
+			let lastError: unknown;
+			for (let attempt = 1; attempt <= attempts; attempt++) {
+				try {
+					await gatt.connect();
+					return;
+				} catch (error) {
+					lastError = error;
+					if (attempt < attempts) {
+						await new Promise((resolve) => setTimeout(resolve, backoffMs));
+					}
+				}
 			}
+			throw lastError;
 		});
 	}
 
