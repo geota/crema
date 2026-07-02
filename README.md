@@ -52,6 +52,15 @@ Crema is a clean-room reimplementation of the DE1 tablet experience as a **fast,
 
 ## Install on Android
 
+<p align="center">
+  <a href="https://f-droid.org/packages/dev.maceiras.crema/"><img alt="Get it on F-Droid" height="56" src="https://fdroid.gitlab.io/artwork/badge/get-it-on.png"></a>
+  <a href="https://apt.izzysoft.de/fdroid/index/apk/dev.maceiras.crema"><img alt="Get it on IzzyOnDroid" height="56" src="https://gitlab.com/IzzyOnDroid/repo/-/raw/master/assets/IzzyOnDroid.png"></a>
+  <a href="https://apps.obtainium.imranr.dev/redirect?r=obtainium://add/https://github.com/geota/crema"><img alt="Get it on Obtainium" height="56" src="https://github.com/ImranR98/Obtainium/blob/main/assets/graphics/badge_obtainium.png?raw=true"></a>
+  <a href="https://github.com/geota/crema/releases/latest"><img alt="Get it on GitHub" height="56" src="https://raw.githubusercontent.com/andOTP/andOTP/master/assets/badges/get-it-on-github.png"></a>
+</p>
+
+<sub>F-Droid + IzzyOnDroid are pending inclusion; Obtainium (recommended) and GitHub work today.</sub>
+
 > The native Android app is in active development. Builds ship on two **trains** — pick whichever you want to follow.
 
 **Stable** — tagged releases:
