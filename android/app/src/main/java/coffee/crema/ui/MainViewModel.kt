@@ -3277,8 +3277,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         relayHub?.pushConfig()
     }
 
-    /** Queue a user-facing message (snackbar) + keep it in the log. */
-    private fun notifyUser(message: String) {
+    /** Queue a user-facing message (snackbar) + keep it in the log. Public so the
+     *  Activity can surface e.g. a denied BLE permission — a connect tap must never
+     *  fail silently. */
+    fun notifyUser(message: String) {
         appendLog(message)
         _ui.update { it.copy(userMessages = it.userMessages + message, status = message) }
     }

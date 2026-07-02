@@ -2,6 +2,8 @@ package coffee.crema.ui
 
 import android.Manifest
 import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
 import android.content.pm.PackageManager
 import android.view.WindowManager
 import android.os.Bundle
@@ -49,6 +51,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.launch
 import coffee.crema.ble.De1BleManager
@@ -107,8 +110,21 @@ class MainActivity : ComponentActivity() {
     ) { grants ->
         if (grants.values.all { it }) {
             pendingPermissionAction?.invoke()
+        } else {
+            // Never silently do nothing (the tablet scale-connect bug): a soft deny
+            // can be retried; a permanent deny ("don't ask again") returns denied
+            // with no dialog and Android won't re-prompt, so send the user to the
+            // app's Settings page where they can grant it.
+            val canRetry = blePermissions.any {
+                ActivityCompat.shouldShowRequestPermissionRationale(this, it)
+            }
+            if (canRetry) {
+                viewModel.notifyUser("Bluetooth permission is needed to connect — tap Connect again to allow.")
+            } else {
+                viewModel.notifyUser("Bluetooth is off for Crema — enable Nearby devices in Settings to connect.")
+                openAppSettings()
+            }
         }
-        // If denied, the UI status simply stays "Idle"; the user can retry.
         pendingPermissionAction = null
     }
 
@@ -374,6 +390,20 @@ class MainActivity : ComponentActivity() {
             permissionLauncher.launch(blePermissions)
         } else {
             action()
+        }
+    }
+
+    /** Open this app's system settings page (its runtime permissions live there) —
+     *  used when a BLE permission is permanently denied and can no longer be
+     *  requested in-app, so a Connect tap always leads somewhere. */
+    private fun openAppSettings() {
+        runCatching {
+            startActivity(
+                Intent(
+                    Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    Uri.fromParts("package", packageName, null),
+                ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
         }
     }
 }
