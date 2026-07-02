@@ -244,19 +244,20 @@ fun EnlargeableChart(
 ) {
     var expanded by remember { mutableStateOf(false) }
     Box(modifier.clickable { expanded = true }) {
-        chart(Modifier.fillMaxSize())
-        // A distinct tonal button in the corner rather than a bare icon that merges
-        // into the y-axis labels — the filled chip reads as card chrome (#11).
+        // Inset the plot's top by the chip's height so the expand affordance sits in
+        // a clear strip on the card ABOVE the chart, never on the top y-axis value it
+        // used to cover (#11).
+        chart(Modifier.fillMaxSize().padding(top = 30.dp))
         Box(
             Modifier
                 .align(Alignment.TopEnd)
-                .padding(6.dp)
-                .size(28.dp)
+                .padding(top = 3.dp, end = 6.dp)
+                .size(24.dp)
                 .clip(CircleShape)
                 .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.9f)),
             contentAlignment = Alignment.Center,
         ) {
-            PhIcon("arrows-out", sizeDp = 15, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            PhIcon("arrows-out", sizeDp = 14, tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
     if (expanded) {
@@ -265,15 +266,21 @@ fun EnlargeableChart(
         // on a tablet (already wide). Needs the manifest's `configChanges` so the
         // rotation recomposes rather than recreating the activity.
         val context = LocalContext.current
-        val isPhone = LocalConfiguration.current.screenWidthDp < 600
-        DisposableEffect(isPhone) {
+        // Latch phone-ness at expand time and key the effect on Unit: once we rotate
+        // to landscape screenWidthDp jumps >600, so re-reading it (or keying on it)
+        // would flip isPhone false, dispose the effect, and revert orientation the
+        // instant it rotated — the reported bounce. Unit = run once on open, revert
+        // once on close.
+        val widthDp = LocalConfiguration.current.screenWidthDp
+        val startedOnPhone = remember { widthDp < 600 }
+        DisposableEffect(Unit) {
             val activity = context.findActivity()
             val previous = activity?.requestedOrientation
-            if (isPhone && activity != null) {
+            if (startedOnPhone && activity != null) {
                 activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
             }
             onDispose {
-                if (isPhone && activity != null) {
+                if (startedOnPhone && activity != null) {
                     activity.requestedOrientation = previous ?: ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
                 }
             }
