@@ -1,22 +1,33 @@
 package coffee.crema.ui.screens
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
+import android.content.pm.ActivityInfo
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import coffee.crema.ui.components.PhIcon
@@ -234,14 +245,39 @@ fun EnlargeableChart(
     var expanded by remember { mutableStateOf(false) }
     Box(modifier.clickable { expanded = true }) {
         chart(Modifier.fillMaxSize())
-        PhIcon(
-            "arrows-out",
-            sizeDp = 16,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-            modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
-        )
+        // A distinct tonal button in the corner rather than a bare icon that merges
+        // into the y-axis labels — the filled chip reads as card chrome (#11).
+        Box(
+            Modifier
+                .align(Alignment.TopEnd)
+                .padding(6.dp)
+                .size(28.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.9f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            PhIcon("arrows-out", sizeDp = 15, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
     if (expanded) {
+        // A phone's fullscreen chart looks cramped stretched vertically — rotate to
+        // landscape while expanded, restoring the prior orientation on close. No-op
+        // on a tablet (already wide). Needs the manifest's `configChanges` so the
+        // rotation recomposes rather than recreating the activity.
+        val context = LocalContext.current
+        val isPhone = LocalConfiguration.current.screenWidthDp < 600
+        DisposableEffect(isPhone) {
+            val activity = context.findActivity()
+            val previous = activity?.requestedOrientation
+            if (isPhone && activity != null) {
+                activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+            }
+            onDispose {
+                if (isPhone && activity != null) {
+                    activity.requestedOrientation = previous ?: ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                }
+            }
+        }
         Dialog(
             onDismissRequest = { expanded = false },
             properties = DialogProperties(usePlatformDefaultWidth = false),
@@ -263,4 +299,12 @@ fun EnlargeableChart(
             }
         }
     }
+}
+
+/** Unwrap a Compose [Context] to its host [Activity] (or null) — needed to drive
+ *  `requestedOrientation` for the expand-to-landscape chart. */
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
 }
