@@ -174,67 +174,101 @@ private fun ScaleHeroRow(
     onStartTimer: () -> Unit,
 ) {
     val sp = CremaTheme.spacing
-    Row(horizontalArrangement = Arrangement.spacedBy(sp.s4)) {
-        // Readout card — fills remaining width
-        CremaCard(Modifier.weight(1f)) {
-            Box(Modifier.fillMaxWidth().padding(sp.s5), contentAlignment = Alignment.Center) {
-                // Number + unit are inline baseline siblings (never absolute) so the
-                // unit can't collide with a wide value — the bug the PWA avoids too.
-                Row(verticalAlignment = Alignment.Bottom) {
-                    // Hero readout in the chosen unit. The unit gets the full word
-                    // for grams (the design's spelled-out hero label); oz stays short.
-                    val hero = convertWeight((if (connected) weight else 0.0).toFloat(), weightUnit)
-                    Text(
-                        hero.value,
-                        style = CremaTheme.readout.readoutHero,
-                        color = if (connected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline,
-                    )
-                    Text(
-                        if (weightUnit == "oz") "oz" else "grams",
-                        style = MaterialTheme.typography.bodyLarge.copy(fontSize = 28.sp, lineHeight = 32.sp),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(start = 8.dp, bottom = 24.dp),
-                    )
-                }
+    // Readout + actions sit side-by-side when the column is wide, but on a narrower
+    // tablet (an 8" tablet, or landscape once the 372dp settings panel takes its
+    // share) that starves the hero readout until "grams" wraps a letter at a time —
+    // so below ~620dp they stack, giving the readout the full width.
+    BoxWithConstraints {
+        if (maxWidth < 620.dp) {
+            Column(verticalArrangement = Arrangement.spacedBy(sp.s4)) {
+                ScaleReadoutCard(connected, weight, weightUnit, Modifier.fillMaxWidth().height(176.dp))
+                ScaleActionColumn(connected, weightUnit, onTare, onConnect, onResetPeak, onStartTimer, stacked = true, modifier = Modifier.fillMaxWidth())
+            }
+        } else {
+            Row(horizontalArrangement = Arrangement.spacedBy(sp.s4)) {
+                ScaleReadoutCard(connected, weight, weightUnit, Modifier.weight(1f))
+                ScaleActionColumn(connected, weightUnit, onTare, onConnect, onResetPeak, onStartTimer, stacked = false, modifier = Modifier.width(280.dp))
             }
         }
-        // Tare column (connected) OR Connect column (disconnected) — fixed width
-        Column(Modifier.width(280.dp), verticalArrangement = Arrangement.spacedBy(sp.s3)) {
-            if (connected) {
-                Surface(
-                    onClick = onTare,
-                    shape = MaterialTheme.shapes.large,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.weight(1f).fillMaxWidth(),
-                ) {
-                    Column(Modifier.padding(horizontal = sp.s5, vertical = 22.dp), verticalArrangement = Arrangement.Center) {
-                        Eyebrow("Tare", color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.8f))
-                        Row(verticalAlignment = Alignment.Bottom) {
-                            val tareZero = convertWeight(0f, weightUnit)
-                            Text(tareZero.value, style = CremaTheme.readout.readoutLg, color = MaterialTheme.colorScheme.onPrimary)
-                            Text(
-                                " ${tareZero.unit}",
-                                style = MaterialTheme.typography.bodyLarge.copy(fontSize = 20.sp),
-                                color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.75f),
-                                modifier = Modifier.padding(start = 4.dp, bottom = 4.dp),
-                            )
-                        }
-                    }
-                }
-                ScalePillButton(icon = "arrow-counter-clockwise", label = "Reset peak", onClick = onResetPeak)
-                ScalePillButton(icon = "timer", label = "Start timer", onClick = onStartTimer)
-            } else {
-                // FIXED spacers — a weighted Spacer makes this Column expand to the
-                // incoming max height, which inflates the whole hero Row and shoves
-                // the Dose helper + Recent activity cards off screen.
-                Spacer(Modifier.height(40.dp))
-                CremaButton(onClick = onConnect, modifier = Modifier.height(52.dp), variant = CremaButtonVariant.Filled, icon = "bluetooth", label = "Connect scale")
+    }
+}
+
+@Composable
+private fun ScaleReadoutCard(connected: Boolean, weight: Double, weightUnit: String, modifier: Modifier) {
+    val sp = CremaTheme.spacing
+    CremaCard(modifier) {
+        Box(Modifier.fillMaxWidth().padding(sp.s5), contentAlignment = Alignment.Center) {
+            // Number + unit are inline baseline siblings (never absolute) so the
+            // unit can't collide with a wide value — the bug the PWA avoids too.
+            Row(verticalAlignment = Alignment.Bottom) {
+                val hero = convertWeight((if (connected) weight else 0.0).toFloat(), weightUnit)
                 Text(
-                    "Acaia, Bookoo, Decent, Felicita and more pair automatically.",
-                    style = MaterialTheme.typography.bodySmall,
+                    hero.value,
+                    style = CremaTheme.readout.readoutHero,
+                    color = if (connected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline,
+                    maxLines = 1,
+                )
+                Text(
+                    if (weightUnit == "oz") "oz" else "grams",
+                    style = MaterialTheme.typography.bodyLarge.copy(fontSize = 28.sp, lineHeight = 32.sp),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    softWrap = false,
+                    modifier = Modifier.padding(start = 8.dp, bottom = 24.dp),
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun ScaleActionColumn(
+    connected: Boolean,
+    weightUnit: String,
+    onTare: () -> Unit,
+    onConnect: () -> Unit,
+    onResetPeak: () -> Unit,
+    onStartTimer: () -> Unit,
+    stacked: Boolean,
+    modifier: Modifier,
+) {
+    val sp = CremaTheme.spacing
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(sp.s3)) {
+        if (connected) {
+            Surface(
+                onClick = onTare,
+                shape = MaterialTheme.shapes.large,
+                color = MaterialTheme.colorScheme.primary,
+                // Fills the row height when beside the readout; a fixed block when stacked.
+                modifier = (if (stacked) Modifier.height(132.dp) else Modifier.weight(1f)).fillMaxWidth(),
+            ) {
+                Column(Modifier.padding(horizontal = sp.s5, vertical = 22.dp), verticalArrangement = Arrangement.Center) {
+                    Eyebrow("Tare", color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.8f))
+                    Row(verticalAlignment = Alignment.Bottom) {
+                        val tareZero = convertWeight(0f, weightUnit)
+                        Text(tareZero.value, style = CremaTheme.readout.readoutLg, color = MaterialTheme.colorScheme.onPrimary)
+                        Text(
+                            " ${tareZero.unit}",
+                            style = MaterialTheme.typography.bodyLarge.copy(fontSize = 20.sp),
+                            color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.75f),
+                            modifier = Modifier.padding(start = 4.dp, bottom = 4.dp),
+                        )
+                    }
+                }
+            }
+            ScalePillButton(icon = "arrow-counter-clockwise", label = "Reset peak", onClick = onResetPeak)
+            ScalePillButton(icon = "timer", label = "Start timer", onClick = onStartTimer)
+        } else {
+            // FIXED spacers — a weighted Spacer makes this Column expand to the
+            // incoming max height, which inflates the whole hero Row and shoves
+            // the Dose helper + Recent activity cards off screen.
+            if (!stacked) Spacer(Modifier.height(40.dp))
+            CremaButton(onClick = onConnect, modifier = Modifier.height(52.dp), variant = CremaButtonVariant.Filled, icon = "bluetooth", label = "Connect scale")
+            Text(
+                "Acaia, Bookoo, Decent, Felicita and more pair automatically.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }

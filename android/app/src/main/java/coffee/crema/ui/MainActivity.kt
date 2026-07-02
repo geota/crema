@@ -7,6 +7,9 @@ import android.provider.Settings
 import android.content.pm.PackageManager
 import android.view.WindowManager
 import android.os.Bundle
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -129,8 +132,25 @@ class MainActivity : ComponentActivity() {
         pendingPermissionAction = null
     }
 
+    /** Full-screen immersive — hide the status + navigation bars (and the Samsung
+     *  One UI taskbar); they reappear transiently on an edge swipe. Re-applied on
+     *  focus gain because the system restores them after dialogs / the OAuth tab. */
+    private fun applyImmersiveMode() {
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        WindowInsetsControllerCompat(window, window.decorView).apply {
+            hide(WindowInsetsCompat.Type.systemBars())
+            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) applyImmersiveMode()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        applyImmersiveMode()
         // A cold start can itself be the OAuth redirect (process died while
         // the user was in the browser).
         handleVisualizerCallback(intent)
@@ -214,9 +234,10 @@ class MainActivity : ComponentActivity() {
                         snackbarScope.launch { snackbarHostState.showSnackbar(msg) }
                     }
                 }
-                // "Keep screen on while brewing" (Settings → Display): hold
-                // FLAG_KEEP_SCREEN_ON only while a shot is actually pulling.
-                val keepOn = ui.keepScreenOnBrew && ui.shotInProgress
+                // "Keep screen on" (Settings → Display): hold FLAG_KEEP_SCREEN_ON
+                // the whole time Crema is in the foreground so the display never
+                // dims mid-use (the flag only applies while this window is visible).
+                val keepOn = ui.keepScreenOnBrew
                 LaunchedEffect(keepOn) {
                     if (keepOn) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                     else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -257,10 +278,15 @@ class MainActivity : ComponentActivity() {
                     contentColor = MaterialTheme.colorScheme.onBackground,
                 ) {
                 Box(Modifier.fillMaxSize()) {
-                // ONE adaptive APK: compact width (< 600dp — a handset, or a
-                // tiny split-screen window) gets the phone shell (bottom nav +
-                // push details); anything wider keeps the tablet rail layout.
-                val isCompact = LocalConfiguration.current.screenWidthDp < 600
+                // ONE adaptive APK. The tablet rail layout is multi-pane (rail +
+                // list + detail, side-by-side cards) and only has room to breathe on
+                // an expanded window; below that the fixed-width panes starve and
+                // text wraps a character at a time (e.g. a 7"/8" tablet in portrait,
+                // ~600–800dp). So anything narrower than Material's expanded
+                // breakpoint (840dp) gets the phone shell — bottom nav + single
+                // column + push details — which reflows cleanly at any width. A
+                // tablet in landscape (≥840dp) still gets the full rail layout.
+                val isCompact = LocalConfiguration.current.screenWidthDp < 840
                 if (isCompact) {
                     PhoneNavHost(
                         vm = viewModel,

@@ -588,7 +588,7 @@ private fun DisplaySection(
             )
         }
         CremaSettingsRow("Screensaver", "Dim the display after a period idle.", notImplemented = true) { CremaSwitch(screensaver, onScreensaver) }
-        CremaSettingsRow("Keep screen on while brewing", "Hold the display awake during a shot.", last = true) { CremaSwitch(keepScreenOnBrew, vm::setKeepScreenOnBrew) }
+        CremaSettingsRow("Keep screen on", "Hold the display awake while Crema is open.", last = true) { CremaSwitch(keepScreenOnBrew, vm::setKeepScreenOnBrew) }
     }
     SettingsGroup("Units") {
         CremaSettingsRow("Temperature", "Units for every temperature readout.") {
