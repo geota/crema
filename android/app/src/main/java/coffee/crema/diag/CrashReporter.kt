@@ -86,6 +86,8 @@ object CrashReporter {
                 "device:  ${Build.MODEL} · ${Build.MANUFACTURER} · " +
                     "Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})",
             )
+            appendLine("hw:      ${Build.HARDWARE} · board ${Build.BOARD} · ${Build.SUPPORTED_ABIS.joinToString(",")}")
+            appendLine("bt:      ${btSummary(ctx)}")
             appendLine("time:    $ts")
             appendLine("trigger: $trigger")
             if (exception != null) {
@@ -103,4 +105,23 @@ object CrashReporter {
             recent.forEach { appendLine(it) }
         }
     }
+
+    /** BLE-stack characteristics for bug reports — how capable/modern the chip is,
+     *  which correlates with connect flakiness (GATT 133) on cheap combo chips.
+     *  No personal data: never the adapter name or MAC (those need a permission and
+     *  Android returns a fake MAC anyway). Wrapped so a hostile OEM stack can't take
+     *  the whole diagnostics dump down with it. */
+    private fun btSummary(ctx: Context): String = runCatching {
+        val a = (ctx.getSystemService(Context.BLUETOOTH_SERVICE) as? android.bluetooth.BluetoothManager)?.adapter
+        if (a == null) {
+            "no adapter"
+        } else {
+            "enabled=${a.isEnabled}" +
+                " · le2M=${a.isLe2MPhySupported}" +
+                " · leCoded=${a.isLeCodedPhySupported}" +
+                " · extAdv=${a.isLeExtendedAdvertisingSupported}" +
+                " · offloadFilter=${a.isOffloadedFilteringSupported}" +
+                " · offloadBatch=${a.isOffloadedScanBatchingSupported}"
+        }
+    }.getOrElse { "unavailable (${it.javaClass.simpleName})" }
 }
