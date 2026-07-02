@@ -86,20 +86,37 @@ fun MultiDeviceSection(
 
     // If we're already a mirror, the only action is to stop.
     if (ui.proxyRole == "secondary") {
+        // Reflect the ACTUAL link, not just the role: mirroringPrimaryName is only
+        // populated once the primary's config snapshot arrives (a real connection);
+        // mirrorReconnecting means the socket is still dialing. Setting the role via
+        // the Settings selector is restart-to-apply, so it can be "secondary" with no
+        // transport built at all — don't claim "Mirroring" in that case.
+        val connected = ui.mirroringPrimaryName.isNotBlank()
+        val target = ui.mirroringPrimaryName.ifBlank { ui.proxyPrimaryHost.ifBlank { "a primary on the LAN" } }
         MirrorRow(
-            title = "Mirroring",
-            sub = ui.mirroringPrimaryName.ifBlank { ui.proxyPrimaryHost.ifBlank { "a primary on the LAN" } },
+            title = when {
+                connected -> "Mirroring $target"
+                ui.mirrorReconnecting -> "Connecting to $target…"
+                else -> "Not connected"
+            },
+            sub = when {
+                connected -> "Connected — showing this machine's live shots."
+                ui.mirrorReconnecting -> "Reaching the primary over the LAN…"
+                else -> "Set to secondary, but nothing is linked yet. Pick a primary below — or, if you switched roles in Settings, restart the app to apply."
+            },
             action = "Stop",
             onClick = onStopMirroring,
         )
-        // M3 handoff: pull the DE1 onto this device. Idle-only — the primary
-        // refuses mid-shot, so a running extraction is never interrupted.
-        MirrorRow(
-            title = "Take over the DE1",
-            sub = "Hold the machine here (idle only)",
-            action = "Take over",
-            onClick = onTakeOver,
-        )
+        // M3 handoff: pull the DE1 onto this device — only meaningful once we're
+        // actually mirroring a primary. Idle-only; the primary refuses mid-shot.
+        if (connected) {
+            MirrorRow(
+                title = "Take over the DE1",
+                sub = "Hold the machine here (idle only)",
+                action = "Take over",
+                onClick = onTakeOver,
+            )
+        }
         return
     }
 
