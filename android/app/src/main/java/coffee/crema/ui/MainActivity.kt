@@ -69,6 +69,7 @@ import coffee.crema.ui.phone.PhoneProfilesScreen
 import coffee.crema.ui.phone.PhoneRoasterEditScreen
 import coffee.crema.ui.phone.PhoneScaleScreen
 import coffee.crema.ui.phone.PhoneSettingsScreen
+import coffee.crema.ui.phone.TabletDevicesSheet
 import coffee.crema.ui.screens.BeanEditScreen
 import coffee.crema.ui.screens.BeansScreen
 import coffee.crema.ui.screens.BrewScreen
@@ -294,27 +295,32 @@ class MainActivity : ComponentActivity() {
                         debugContent = debugSlot,
                     )
                 } else {
+                // Tablet: tapping a rail connection pip opens the shared Devices
+                // sheet (scale + DE1 status, connect/disconnect, auto-connect)
+                // instead of connecting directly — its buttons run onRailConnect (#2).
+                var showDevices by remember { mutableStateOf(false) }
+                val openDevices: (String) -> Unit = { showDevices = true }
                 AppNavHost(
                     machineConnected = machineConnected,
                     scaleConnected = scaleConnected,
-                    onRailConnect = onRailConnect,
+                    onRailConnect = openDevices,
                     brewContent = { navTo ->
-                        BrewScreen(viewModel, onNav = navTo, onConnect = onRailConnect)
+                        BrewScreen(viewModel, onNav = navTo, onConnect = openDevices)
                     },
                     profilesContent = { navTo ->
-                        ProfilesScreen(viewModel, onNav = navTo, onConnect = onRailConnect)
+                        ProfilesScreen(viewModel, onNav = navTo, onConnect = openDevices)
                     },
                     beansContent = { navTo ->
-                        BeansScreen(viewModel, onNav = navTo, onConnect = onRailConnect)
+                        BeansScreen(viewModel, onNav = navTo, onConnect = openDevices)
                     },
                     historyContent = { navTo ->
-                        HistoryScreen(viewModel, onNav = navTo, onConnect = onRailConnect)
+                        HistoryScreen(viewModel, onNav = navTo, onConnect = openDevices)
                     },
                     scaleContent = { navTo ->
-                        ScaleScreen(viewModel, onNav = navTo, onConnect = onRailConnect)
+                        ScaleScreen(viewModel, onNav = navTo, onConnect = openDevices)
                     },
                     settingsContent = { navTo ->
-                        SettingsScreen(viewModel, onNav = navTo, onConnect = onRailConnect)
+                        SettingsScreen(viewModel, onNav = navTo, onConnect = openDevices)
                     },
                     beanEditContent = { back ->
                         BeanEditScreen(viewModel, onBack = back)
@@ -324,6 +330,21 @@ class MainActivity : ComponentActivity() {
                     },
                     debugContent = debugSlot,
                 )
+                if (showDevices) {
+                    TabletDevicesSheet(
+                        ui = ui,
+                        connected = machineConnected,
+                        scaleConnected = scaleConnected,
+                        onConnect = onRailConnect,
+                        onDe1AutoConnect = viewModel::setDe1AutoConnect,
+                        onScaleAutoConnect = viewModel::setScaleAutoConnect,
+                        onMirrorFrom = { host, port -> viewModel.switchToSecondary(host, port); showDevices = false },
+                        onStopMirroring = { viewModel.switchToNormal(); showDevices = false },
+                        onTakeOver = { viewModel.requestHandoff(); showDevices = false },
+                        onHandOff = { id -> viewModel.offerHandoff(id); showDevices = false },
+                        onDismiss = { showDevices = false },
+                    )
+                }
                 }
                 SnackbarHost(
                     hostState = snackbarHostState,

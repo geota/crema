@@ -505,10 +505,43 @@ fun PhoneDevicesSheet(
         onDismissRequest = onDismiss,
         containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
     ) {
-        Column(
-            Modifier.fillMaxWidth().padding(horizontal = CremaEdge).padding(bottom = 20.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
-        ) {
+        DevicesPanel(
+            ui = ui,
+            connected = connected,
+            scaleConnected = scaleConnected,
+            onConnect = onConnect,
+            onDe1AutoConnect = onDe1AutoConnect,
+            onScaleAutoConnect = onScaleAutoConnect,
+            onMirrorFrom = onMirrorFrom,
+            onStopMirroring = onStopMirroring,
+            onTakeOver = onTakeOver,
+            onHandOff = onHandOff,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = CremaEdge).padding(bottom = 20.dp),
+        )
+    }
+}
+
+/** The Devices panel body — DE1 + scale rows, auto-connect toggles, scan, and the
+ *  multi-device section — shared by the phone bottom-sheet and the tablet surfaces
+ *  (#2), so both form factors show the identical connection controls. */
+@Composable
+fun DevicesPanel(
+    ui: MainUiState,
+    connected: Boolean,
+    scaleConnected: Boolean,
+    onConnect: (String) -> Unit,
+    onDe1AutoConnect: (Boolean) -> Unit,
+    onScaleAutoConnect: (Boolean) -> Unit,
+    onMirrorFrom: (host: String, port: Int) -> Unit,
+    onStopMirroring: () -> Unit,
+    onTakeOver: () -> Unit,
+    onHandOff: (clientId: String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier,
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
             Column(Modifier.padding(bottom = 8.dp)) {
                 Text("Devices", style = MaterialTheme.typography.headlineSmall.copy(fontSize = 21.sp))
                 Text(
@@ -604,6 +637,282 @@ fun PhoneDevicesSheet(
                 modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
             )
+        }
+}
+
+/** Tablet Devices bottom-sheet — the shorter, side-by-side [DevicesPanelWide] (#2). */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun TabletDevicesSheet(
+    ui: MainUiState,
+    connected: Boolean,
+    scaleConnected: Boolean,
+    onConnect: (String) -> Unit,
+    onDe1AutoConnect: (Boolean) -> Unit,
+    onScaleAutoConnect: (Boolean) -> Unit,
+    onMirrorFrom: (host: String, port: Int) -> Unit,
+    onStopMirroring: () -> Unit,
+    onTakeOver: () -> Unit,
+    onHandOff: (clientId: String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        sheetMaxWidth = 820.dp,
+    ) {
+        DevicesPanelWide(
+            ui = ui,
+            connected = connected,
+            scaleConnected = scaleConnected,
+            onConnect = onConnect,
+            onDe1AutoConnect = onDe1AutoConnect,
+            onScaleAutoConnect = onScaleAutoConnect,
+            onMirrorFrom = onMirrorFrom,
+            onStopMirroring = onStopMirroring,
+            onTakeOver = onTakeOver,
+            onHandOff = onHandOff,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = CremaEdge).padding(top = 2.dp, bottom = 10.dp),
+        )
+    }
+}
+
+/** Wide (tablet) Devices layout — Machine | Scale | Other devices side by side, so
+ *  the sheet stays short (about the Quick Controls height) instead of a tall stack.
+ *  Reuses the same [DeviceRow] the phone sheet uses, one per card (#2). */
+@Composable
+fun DevicesPanelWide(
+    ui: MainUiState,
+    connected: Boolean,
+    scaleConnected: Boolean,
+    onConnect: (String) -> Unit,
+    onDe1AutoConnect: (Boolean) -> Unit,
+    onScaleAutoConnect: (Boolean) -> Unit,
+    onMirrorFrom: (host: String, port: Int) -> Unit,
+    onStopMirroring: () -> Unit,
+    onTakeOver: () -> Unit,
+    onHandOff: (clientId: String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val machineStat = if (connected) {
+        listOfNotNull("Connected", ui.de1Firmware).joinToString(" · ")
+    } else when (ui.bleState) {
+        De1BleManager.State.SCANNING -> "Scanning…"
+        De1BleManager.State.CONNECTING, De1BleManager.State.DISCOVERING, De1BleManager.State.SUBSCRIBING -> "Connecting…"
+        else -> "Not connected"
+    }
+    val scaleStat = if (scaleConnected) {
+        buildList {
+            add("Connected")
+            ui.scaleBatteryPercent?.let { add("$it%") }
+            ui.scaleFirmware?.let { add("FW $it") }
+        }.joinToString(" · ")
+    } else when (ui.scaleState) {
+        ScaleBleManager.State.SCANNING -> "Scanning…"
+        ScaleBleManager.State.CONNECTING, ScaleBleManager.State.DISCOVERING, ScaleBleManager.State.SUBSCRIBING -> "Connecting…"
+        else -> "Not paired"
+    }
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column {
+                Text("Devices", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onSurface)
+                Text(
+                    "Bluetooth connections",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            CremaButton(
+                onClick = {
+                    if (!connected) onConnect("machine")
+                    if (!scaleConnected) onConnect("scale")
+                },
+                variant = CremaButtonVariant.Tonal,
+                icon = "bluetooth",
+                label = "Scan for devices",
+                enabled = ui.bluetoothOn,
+            )
+        }
+        if (!ui.bluetoothOn) {
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.errorContainer,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Row(
+                    Modifier.padding(horizontal = 14.dp, vertical = 11.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    PhIcon("bluetooth-slash", sizeDp = 18, tint = MaterialTheme.colorScheme.onErrorContainer)
+                    Text(
+                        "Bluetooth is off — turn it on to connect a machine or scale.",
+                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp),
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                    )
+                }
+            }
+        }
+        // Machine / Scale / Other-devices as reusable tiles, laid out adaptively.
+        val machineTile: @Composable (Modifier) -> Unit = { m ->
+            WideDeviceTile(
+                name = "Decent DE1", icon = "sliders-horizontal",
+                stat = machineStat, on = connected,
+                actionLabel = if (connected) "Disconnect" else "Connect",
+                actionIcon = if (connected) "sign-out" else "bluetooth",
+                onAction = { onConnect("machine") }, actionEnabled = ui.bluetoothOn,
+                autoConnect = ui.rememberedDe1Address != null,
+                autoConnectEnabled = connected || ui.rememberedDe1Address != null,
+                onAutoConnect = onDe1AutoConnect,
+                modifier = m,
+            )
+        }
+        val scaleTile: @Composable (Modifier) -> Unit = { m ->
+            WideDeviceTile(
+                name = ui.scaleName ?: "Scale", icon = "scales",
+                stat = scaleStat, on = scaleConnected,
+                actionLabel = if (scaleConnected) "Disconnect" else "Pair",
+                actionIcon = if (scaleConnected) "sign-out" else "bluetooth",
+                onAction = { onConnect("scale") }, actionEnabled = ui.bluetoothOn,
+                autoConnect = ui.rememberedScaleAddress != null,
+                autoConnectEnabled = scaleConnected || ui.rememberedScaleAddress != null,
+                onAutoConnect = onScaleAutoConnect,
+                modifier = m,
+            )
+        }
+        val otherCard: @Composable (Modifier) -> Unit = { m ->
+            WideDeviceCard(m) {
+                Column(Modifier.padding(vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        "Other devices",
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    MultiDeviceSection(ui, onMirrorFrom, onStopMirroring, onTakeOver, onHandOff, showHeader = false)
+                }
+            }
+        }
+        // Three across when there's room; on a narrow sheet (a 7" tablet in portrait,
+        // ~600dp) Machine + Scale share a row and Other devices spans below — otherwise
+        // the third column crushes the mirroring text to one character per line.
+        BoxWithConstraints {
+            if (maxWidth >= 720.dp) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.Top) {
+                    machineTile(Modifier.weight(1f))
+                    scaleTile(Modifier.weight(1f))
+                    otherCard(Modifier.weight(1f))
+                }
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.Top) {
+                        machineTile(Modifier.weight(1f))
+                        scaleTile(Modifier.weight(1f))
+                    }
+                    otherCard(Modifier.fillMaxWidth())
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun WideDeviceCard(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHighest,
+    ) {
+        Box(Modifier.padding(horizontal = 14.dp)) { content() }
+    }
+}
+
+/** One vertical device tile for the tablet's side-by-side Devices layout — icon +
+ *  kind, name, status, then Auto-connect + a Connect/Pair/Disconnect pill (#2). */
+@Composable
+private fun WideDeviceTile(
+    name: String,
+    icon: String,
+    stat: String,
+    on: Boolean,
+    actionLabel: String,
+    actionIcon: String,
+    onAction: () -> Unit,
+    actionEnabled: Boolean,
+    autoConnect: Boolean,
+    autoConnectEnabled: Boolean,
+    onAutoConnect: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val tel = CremaTheme.telemetry
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHighest,
+    ) {
+        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = if (on) tel.success.copy(alpha = 0.18f).compositeOver(MaterialTheme.colorScheme.surfaceContainerHighest) else MaterialTheme.colorScheme.surfaceContainer,
+                    modifier = Modifier.size(36.dp),
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        PhIcon(icon, sizeDp = 19, tint = if (on) tel.success else MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(name, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Box(Modifier.size(6.dp).clip(CircleShape).background(if (on) tel.success else MaterialTheme.colorScheme.outline))
+                        Text(
+                            stat,
+                            style = MaterialTheme.typography.labelMedium.copy(fontFamily = JetBrainsMono, fontFeatureSettings = "tnum"),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+            }
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    CremaSwitch(autoConnect, onAutoConnect, enabled = autoConnectEnabled)
+                    Text(
+                        "Auto",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (autoConnectEnabled) 1f else 0.5f),
+                    )
+                }
+                Surface(
+                    onClick = onAction,
+                    enabled = actionEnabled,
+                    shape = RoundedCornerShape(999.dp),
+                    color = if (on) MaterialTheme.colorScheme.surfaceContainer else MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        PhIcon(actionIcon, sizeDp = 15, tint = if (on) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onPrimary)
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            actionLabel,
+                            style = MaterialTheme.typography.labelLarge,
+                            color = if (on) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onPrimary,
+                            maxLines = 1,
+                        )
+                    }
+                }
+            }
         }
     }
 }
