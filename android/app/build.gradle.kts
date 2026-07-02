@@ -135,6 +135,10 @@ android {
                 storePassword = releaseStorePassword
                 keyAlias = releaseKeyAlias
                 keyPassword = releaseKeyPassword
+                // Emit the APK Signature Scheme v4 `.apk.idsig` sidecar alongside
+                // the signed APK — the incremental-install signature Obtainium and
+                // fdroidcl publish/verify next to the APK.
+                enableV4Signing = true
             }
         }
     }

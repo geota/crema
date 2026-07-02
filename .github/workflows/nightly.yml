@@ -125,8 +125,13 @@ jobs:
           VERSION_NAME: ${{ steps.v.outputs.name }}
         run: |
           mkdir -p dist
-          cp android/app/build/outputs/apk/nightly/app-nightly.apk \
-            "dist/crema-nightly-${VERSION_NAME}.apk"
+          out=android/app/build/outputs/apk/nightly
+          base="crema-nightly-${VERSION_NAME}"
+          cp "$out/app-nightly.apk" "dist/$base.apk"
+          # v4 signature sidecar (incremental install / Obtainium), when present.
+          [ -f "$out/app-nightly.apk.idsig" ] && cp "$out/app-nightly.apk.idsig" "dist/$base.apk.idsig" || true
+          # SHA-256 checksum for verification, next to the APK.
+          ( cd dist && sha256sum "$base.apk" > "$base.apk.sha256" )
           ls -la dist
 
       # Roll the single `nightly` prerelease forward: delete the old one (+ its tag)
@@ -154,5 +159,10 @@ jobs:
             reinstall.
 
             Commit: ${{ github.sha }}
-          files: dist/*.apk
-          fail_on_unmatched_files: true
+          # APK + its v4 `.idsig` + `.sha256`; GitHub adds the source-code archives
+          # for the `nightly` tag automatically.
+          files: |
+            dist/*.apk
+            dist/*.idsig
+            dist/*.sha256
+          fail_on_unmatched_files: false

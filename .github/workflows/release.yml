@@ -250,11 +250,16 @@ jobs:
           mkdir -p dist
           cp android/app/build/outputs/apk/debug/app-debug.apk "dist/crema-${VERSION_NAME}-debug.apk"
           for rel in android/app/build/outputs/apk/release/*.apk; do
-            [ -e "$rel" ] && cp "$rel" "dist/crema-${VERSION_NAME}-release.apk"
+            [ -e "$rel" ] || continue
+            cp "$rel" "dist/crema-${VERSION_NAME}-release.apk"
+            # v4 signature sidecar (incremental install / Obtainium), when present.
+            [ -f "$rel.idsig" ] && cp "$rel.idsig" "dist/crema-${VERSION_NAME}-release.apk.idsig" || true
           done
           for aab in android/app/build/outputs/bundle/release/*.aab; do
             [ -e "$aab" ] && cp "$aab" "dist/crema-${VERSION_NAME}.aab"
           done
+          # SHA-256 checksums next to each APK / AAB.
+          ( cd dist && for f in *.apk *.aab; do [ -e "$f" ] && sha256sum "$f" > "$f.sha256"; done )
           ls -la dist
 
       - name: Upload Android artifacts (APKs + AAB)
@@ -339,8 +344,12 @@ jobs:
           tag_name: ${{ github.ref_name }}
           body_path: release-notes.md
           generate_release_notes: ${{ steps.notes.outputs.gen }}
-          fail_on_unmatched_files: true
+          # `.idsig` may be absent (unsigned build); GitHub adds the source-code
+          # archives for the tag automatically.
+          fail_on_unmatched_files: false
           files: |
             artifacts/crema-android/*.apk
             artifacts/crema-android/*.aab
+            artifacts/crema-android/*.idsig
+            artifacts/crema-android/*.sha256
             artifacts/crema-web/*.zip
