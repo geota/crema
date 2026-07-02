@@ -897,6 +897,18 @@ private fun AdvancedSection(
         CopyDiagnosticsRow(last = true)
     }
     SettingsGroup("Multi-device (LAN proxy · debug)") {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(bottom = 6.dp),
+        ) {
+            CremaSettingsPill("Alpha")
+            Text(
+                "Experimental — still being validated on hardware.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         // M1: mirror/drive the DE1 from a second device over the LAN. The transport
         // is built at startup, so a role change is restart-to-apply.
         val roleSub = when (ui.proxyRole) {

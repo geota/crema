@@ -50,6 +50,19 @@ fun MultiDeviceSection(
         Spacer(Modifier.height(4.dp))
     }
 
+    // LAN mirror / hand-off is still experimental and unvalidated on real
+    // hardware — flag it alpha wherever these controls surface (Settings + the
+    // Devices sheet, phone + tablet), shown regardless of [showHeader].
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        CremaSettingsPill("Alpha")
+        Text(
+            "Experimental — still being validated on hardware.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+    Spacer(Modifier.height(8.dp))
+
     // Primary: we hold the DE1 → offer to hand it off to a mirroring device (issue 07).
     if (ui.proxyRole == "primary") {
         if (ui.mirrorClients.isEmpty()) {
