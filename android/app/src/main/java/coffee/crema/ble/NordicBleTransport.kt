@@ -190,13 +190,19 @@ class NordicBleTransport(context: Context) : BleTransport {
             .launchIn(scope)
 
         stateFlow.value = BleTransport.ConnState.CONNECTING
-        // Direct connection; Nordic applies its own connect timeout + retries.
+        // Direct connection; Nordic applies its own connect timeout + retries,
+        // closing the GATT client between attempts. Cheap/older BLE stacks (e.g. an
+        // Allwinner combo chip on a budget tablet) routinely storm GATT_ERROR(133)
+        // — "Connection Failed to be Established" — on the first few attempts before
+        // one takes, so retry generously with a longer settle delay between tries.
+        // The DE1 and mainstream scales still connect on the first attempt, so this
+        // only lengthens the tail for the devices that need it.
         centralManager.connect(
             peripheral = peripheral,
             options = CentralManager.ConnectionOptions.Direct(
                 timeout = 10.seconds,
-                retry = 2,
-                retryDelay = 1.seconds,
+                retry = 6,
+                retryDelay = 2.seconds,
             ),
         )
 
