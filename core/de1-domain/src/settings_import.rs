@@ -149,8 +149,11 @@ pub fn import_settings_tdb(content: &str) -> Result<ImportedDe1AppSettings, Impo
 
     let keep_awake_minutes = match (wake_seconds, sleep_seconds) {
         (Some(wake), Some(sleep)) => {
-            // Wrap at 24 h when sleep is the next day.
+            // Wrap at 24 h when sleep is the next day. Reduce first: the
+            // fields parse as arbitrary u32, and a corrupt value near
+            // u32::MAX would overflow `sleep + day` (review #31).
             let day = 86_400u32;
+            let (wake, sleep) = (wake % day, sleep % day);
             let diff = (sleep + day - wake) % day;
             Some(diff / 60)
         }

@@ -352,4 +352,15 @@ mod tests {
             assert_eq!(u24p0_encode(0x0012_3456), [0x12, 0x34, 0x56]);
         }
     }
+
+    #[test]
+    fn nan_encodes_to_zero_explicitly() {
+        // NaN slips through f32::clamp (all NaN comparisons are false) and
+        // `as` saturates it to 0 — the guard makes that fallback explicit
+        // instead of accidental (review #31).
+        assert_eq!(u8p4_encode(f32::NAN), 0);
+        assert_eq!(u8p1_encode(f32::NAN), 0);
+        assert_eq!(u8p0_encode(f32::NAN), 0);
+        assert_eq!(u10p0_encode(f32::NAN), 0);
+    }
 }

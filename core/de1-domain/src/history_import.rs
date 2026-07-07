@@ -285,8 +285,14 @@ fn derive_resistance(pressure: f32, flow: f32) -> Option<f32> {
 }
 
 fn duration_from_seconds(s: f32) -> Duration {
-    let s = s.max(0.0);
-    Duration::from_secs_f32(s)
+    // Total over hostile input (review #31): `from_secs_f32` PANICS on a
+    // non-finite value, and both import paths accept the token "inf" from
+    // f32::from_str — one corrupt .shot file must not abort the whole
+    // import (wasm trap / FFI panic). NaN and negatives coerce to zero.
+    if !s.is_finite() {
+        return Duration::ZERO;
+    }
+    Duration::from_secs_f32(s.max(0.0))
 }
 
 /// Round + clamp a recorded frame-index float into the byte range the
@@ -314,7 +320,7 @@ fn tcl_metadata(settings: &TclDict) -> ShotMetadata {
     let tds = settings.get_f32("drink_tds");
     let extraction_yield = settings.get_f32("drink_ey");
     let enjoyment = settings.get_f32("espresso_enjoyment");
-    let rating = enjoyment.map(enjoyment_to_rating);
+    let rating = enjoyment.and_then(enjoyment_to_rating);
     let notes = settings
         .get("espresso_notes")
         .map(str::trim)
@@ -372,9 +378,15 @@ fn tcl_profile(settings: &TclDict, metadata: &ShotMetadata) -> Option<Profile> {
 /// its history rollup (`history.tcl`): 0 → 1, 100 → 5, linear in
 /// between, rounded.
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-fn enjoyment_to_rating(enj: f32) -> u8 {
+fn enjoyment_to_rating(enj: f32) -> Option<u8> {
+    // de1app's enjoyment slider defaults to 0 = never rated — importing
+    // that as a fabricated 1-star polluted the rating rollup (review #31).
+    // Only a positive enjoyment carries an actual opinion.
+    if enj.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater) {
+        return None;
+    }
     let scaled = (enj.clamp(0.0, 100.0) / 25.0).round() as u8;
-    scaled.saturating_add(1).clamp(1, 5)
+    Some(scaled.saturating_add(1).clamp(1, 5))
 }
 
 /// Concatenate `bean_brand` + `bean_type` into a single human label.
@@ -524,7 +536,7 @@ fn v2_metadata(raw: &V2ShotJson) -> ShotMetadata {
         .filter(|s| !s.is_empty());
     let (rating, tds, extraction_yield, notes) = match &raw.meta.shot {
         Some(s) => (
-            s.enjoyment.map(enjoyment_to_rating),
+            s.enjoyment.and_then(enjoyment_to_rating),
             s.tds,
             s.ey,
             s.notes.clone().filter(|s| !s.trim().is_empty()),
@@ -636,14 +648,20 @@ settings {
     #[test]
     fn enjoyment_to_rating_maps_legacy_slider_to_five_stars() {
         // 0 → 1, 25 → 2, 50 → 3, 75 → 4, 100 → 5.
-        assert_eq!(enjoyment_to_rating(0.0), 1);
-        assert_eq!(enjoyment_to_rating(25.0), 2);
-        assert_eq!(enjoyment_to_rating(50.0), 3);
-        assert_eq!(enjoyment_to_rating(75.0), 4);
-        assert_eq!(enjoyment_to_rating(100.0), 5);
+        // A corrupt "inf"/"infinity" token must not panic the import
+        // (Duration::from_secs_f32 traps on non-finite — review #31).
+        assert_eq!(duration_from_seconds(f32::INFINITY), Duration::ZERO);
+        assert_eq!(duration_from_seconds(f32::NAN), Duration::ZERO);
+        assert_eq!(duration_from_seconds(-3.0), Duration::ZERO);
+        // 0 = the de1app slider default = never rated (review #31).
+        assert_eq!(enjoyment_to_rating(0.0), None);
+        assert_eq!(enjoyment_to_rating(25.0), Some(2));
+        assert_eq!(enjoyment_to_rating(50.0), Some(3));
+        assert_eq!(enjoyment_to_rating(75.0), Some(4));
+        assert_eq!(enjoyment_to_rating(100.0), Some(5));
         // Out-of-range values clamp.
-        assert_eq!(enjoyment_to_rating(-10.0), 1);
-        assert_eq!(enjoyment_to_rating(500.0), 5);
+        assert_eq!(enjoyment_to_rating(-10.0), None);
+        assert_eq!(enjoyment_to_rating(500.0), Some(5));
     }
 
     #[test]
