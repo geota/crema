@@ -856,8 +856,17 @@
 	 * when the dot is toggled off for the current shot.
 	 */
 	const yieldCardVisible = $derived((activeProfile?.yieldOut ?? 0) > 0 && p.yield > 0);
-	/** Whether to render the Max Volume target card. */
-	const maxVolumeCardVisible = $derived((activeProfile?.maxTotalVolumeMl ?? 0) > 0);
+	/**
+	 * Whether to render the Max Volume target card — only when the volume
+	 * stop will actually arm: with a scale connected it's a dormant no-scale
+	 * fallback (stop-on-weight owns the stop) unless the user opted into both
+	 * caps via Settings → "Volume stop with scale". Mirrors the core's arming
+	 * rule and the Android LimitsCard.
+	 */
+	const maxVolumeCardVisible = $derived(
+		(activeProfile?.maxTotalVolumeMl ?? 0) > 0 &&
+			(!scaleConnected || prefs.volumeStopWithScale)
+	);
 	/** Volume progress as 0..100 % for the max-volume card's bar. */
 	const maxVolumePct = $derived.by(() => {
 		const cap = activeProfile?.maxTotalVolumeMl ?? 0;
