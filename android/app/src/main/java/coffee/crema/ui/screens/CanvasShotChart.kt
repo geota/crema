@@ -9,22 +9,26 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -250,24 +254,56 @@ fun EnlargeableChart(
     chart: @Composable (Modifier) -> Unit,
 ) {
     val expand = LocalChartExpander.current
+    // No permanent expand chip and no plot inset: the chip cost the chart
+    // 30 dp of height (and before that sat on the y-axis). The whole chart
+    // is the tap target; discoverability is a one-shot fading hint that
+    // OVERLAYS the plot (below the curves' usual path) instead of resizing
+    // it, shown once per app session then never again.
+    var showHint by remember { mutableStateOf(!chartExpandHintShown) }
+    val hintAlpha by animateFloatAsState(
+        targetValue = if (showHint) 1f else 0f,
+        animationSpec = tween(durationMillis = 450),
+        label = "chartHintAlpha",
+    )
+    if (showHint) {
+        LaunchedEffect(Unit) {
+            chartExpandHintShown = true
+            kotlinx.coroutines.delay(2_800)
+            showHint = false
+        }
+    }
     Box(modifier.clickable { expand(chart) }) {
-        // Inset the plot's top by the chip's height so the expand affordance sits in
-        // a clear strip on the card ABOVE the chart, never on the top y-axis value it
-        // used to cover (#11).
-        chart(Modifier.fillMaxSize().padding(top = 30.dp))
-        Box(
-            Modifier
-                .align(Alignment.TopEnd)
-                .padding(top = 3.dp, end = 6.dp)
-                .size(24.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.9f)),
-            contentAlignment = Alignment.Center,
-        ) {
-            PhIcon("arrows-out", sizeDp = 14, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        chart(Modifier.fillMaxSize())
+        if (hintAlpha > 0f) {
+            Surface(
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.9f),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 8.dp)
+                    .alpha(hintAlpha),
+            ) {
+                Row(
+                    Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                ) {
+                    PhIcon("arrows-out", sizeDp = 12, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        "Tap to expand",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
         }
     }
 }
+
+/** One-shot, session-scoped teaching flag for the chart's tap-to-expand —
+ *  deliberately NOT persisted: a brief reminder once per launch is cheap,
+ *  and it saves a prefs field for what is pure onboarding chrome. */
+private var chartExpandHintShown = false
 
 /** The fullscreen expanded chart, hosted by the activity root so it survives the
  *  phone's expand-to-landscape rotation (see [LocalChartExpander]). A phone rotates
@@ -297,21 +333,24 @@ fun ChartExpandOverlay(
         }
     }
     BackHandler(onBack = onClose)
-    // Opaque full-bleed backdrop so the underlying screen doesn't show at the margin.
-    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+    // Opaque full-bleed backdrop so the underlying screen doesn't show at the
+    // margin. The whole overlay is the close target (tap toggles, like open).
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .clickable(onClickLabel = "Close expanded chart") { onClose() },
+    ) {
         Surface(
             modifier = Modifier.fillMaxSize().padding(16.dp),
             shape = MaterialTheme.shapes.large,
             color = MaterialTheme.colorScheme.surface,
         ) {
             Box(Modifier.fillMaxSize().padding(12.dp)) {
+                // No close X — it sat on the y-axis. Tap anywhere (or the
+                // system back, handled above) collapses; the chart itself has
+                // no gestures to conflict with.
                 chart(Modifier.fillMaxSize())
-                IconButton(
-                    onClick = onClose,
-                    modifier = Modifier.align(Alignment.TopEnd),
-                ) {
-                    PhIcon("x", sizeDp = 20)
-                }
             }
         }
     }
